@@ -22,7 +22,7 @@ import { Readable, Writable } from "node:stream";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   DELEGATION_REPORT_RETRY_INSTRUCTION,
   runPackHookPreToolUseCli,
@@ -49,6 +49,45 @@ import {
 } from "../../src/runtime/approval-signing.js";
 import type { LedgerWriteArgs } from "../../src/runtime/ledger-writer.js";
 import { parseManifest, type Manifest } from "../../src/schema/index.js";
+
+// Mutable seam for the (w4) single-read pin below. `vi.spyOn` cannot
+// target `readRegularFileRejectingSymlink` directly: Vitest's ESM module
+// namespace objects are non-configurable, so `vi.spyOn(mod, "name")`
+// throws "Module namespace is not configurable" for an own-source module
+// (see tests/runtime/intercept-cli.test.ts's own comment on the same
+// limitation, and project memory `reference_vitest_spyon_esm_named_export`).
+// The established workaround is a call-through `vi.mock` of the module
+// itself; `readRegularFileSpyState` is the `vi.hoisted` seam that lets a
+// single test opt individual paths into custom behaviour while every
+// other call (every other test in this file, and every OTHER path within
+// the (w4) test itself) falls straight through to the real
+// implementation.
+const readRegularFileSpyState = vi.hoisted(() => ({
+  targetPath: null as string | null,
+  tamperedContent: null as string | null,
+  callsForTarget: 0,
+}));
+
+vi.mock("../../src/io/read-regular-file.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../src/io/read-regular-file.js")>();
+  return {
+    ...actual,
+    readRegularFileRejectingSymlink: (filePath: string): ReturnType<
+      typeof actual.readRegularFileRejectingSymlink
+    > => {
+      if (
+        readRegularFileSpyState.targetPath !== null &&
+        filePath === readRegularFileSpyState.targetPath
+      ) {
+        readRegularFileSpyState.callsForTarget += 1;
+        if (readRegularFileSpyState.callsForTarget > 1 && readRegularFileSpyState.tamperedContent !== null) {
+          return { kind: "ok", content: readRegularFileSpyState.tamperedContent };
+        }
+      }
+      return actual.readRegularFileRejectingSymlink(filePath);
+    },
+  };
+});
 
 const CHILD = "child-4444-5555";
 const PARENT = "parent-1111-2222";
@@ -139,6 +178,19 @@ const CHILD_REPORT_MARKDOWN = [
   "",
   "- searched harness for an existing same-turn capture path; the approve stdin persister is reused",
 ].join("\n");
+
+/**
+ * A parseable variant of {@link CHILD_REPORT_MARKDOWN} used ONLY by the
+ * (w4) single-read pin below, as the content a hypothetical SECOND read
+ * of the conventional launcher-report file would see. Deliberately kept
+ * fully parseable (not garbage) so a regression that reintroduces a
+ * second read is caught by a CONTENT mismatch against the bound fixture,
+ * not by an unrelated parse failure.
+ */
+const TAMPERED_REPORT_MARKDOWN = CHILD_REPORT_MARKDOWN.replace(
+  "The parent delegated this child session and the child must state its own understanding.",
+  "TAMPERED: a second, unchecked read of the conventional file must never reach the persisted report.",
+);
 
 /** One transcript JSONL entry in the shape Claude Code writes. */
 function transcriptEntry(over: Record<string, unknown> = {}): string {
@@ -319,6 +371,11 @@ beforeEach(() => {
   fs.mkdirSync(path.dirname(transcriptPath), { recursive: true });
   fs.mkdirSync(reportsDir, { recursive: true });
   ledgerCalls = [];
+  // (w4)'s seam: null/0 means "no test has opted a path into custom
+  // read behaviour", i.e. every call falls through to the real reader.
+  readRegularFileSpyState.targetPath = null;
+  readRegularFileSpyState.tamperedContent = null;
+  readRegularFileSpyState.callsForTarget = 0;
 
   savedClaude = process.env.CLAUDE_SESSION_ID;
   savedClaudeCode = process.env.CLAUDE_CODE_SESSION_ID;
@@ -800,6 +857,38 @@ describe("pack hook pre-tool-use: delegation path (ADR slice 3)", () => {
       expect(listPersistedReports(reportsDir)).toEqual([]);
     });
 
+    it("(w5) a report-bound delegation whose launcher file does not parse: adopted, nothing persisted, blocked, no retry instruction", async () => {
+      // Mirrors (q) for the REPORT-BOUND channel, hook-pre-tool-use.ts
+      // around 1069-1076 (previously uncovered). `harness delegate
+      // --report` refuses to stage a file like this at STAGE time
+      // (`report-unparseable`, round-3 fix), so a report reaching this
+      // branch unparseable had to arrive some other way (a hand-crafted
+      // delegation, or one that predates the stage-time check); the
+      // hook's own persist-time refusal is the last line of defense.
+      // Adoption is recorded FIRST, same ordering as (q)'s transcript
+      // path, so the entry stays adopted: the launcher's report is fixed
+      // content, so re-reading it would fail to parse identically
+      // forever, and unlike (q) there is no retry instruction, because
+      // `reportScanTimedOut` is only ever set inside the transcript-scan
+      // branch, which never runs for a report-bound delegation.
+      const unparseable = "# Understanding Report\n\nJust prose. No sections at all.";
+      issueReportBoundDelegation(unparseable);
+      writeTranscript([userTurn()]);
+
+      const result = await call();
+
+      expect(result.blocked).toBe(true);
+      expect(result.stderr).toMatch(
+        new RegExp(`the launcher-supplied report for session ${CHILD} did not parse`),
+      );
+      expect(listPersistedReports(reportsDir)).toEqual([]);
+      expect(markerExists()).toBe(false);
+      expect(ledgerCalls).toEqual([]);
+      const adoptedRaw = fs.readFileSync(adoptedLedgerPath(), "utf8");
+      expect(adoptedRaw).toMatch(/^report:[0-9a-f]{64}\n$/);
+      expect(result.stdout).not.toContain(DELEGATION_REPORT_RETRY_INSTRUCTION);
+    });
+
     it("(p) a read-only Bash call is allowed by the step-6 exemption and never reaches the delegation branch", async () => {
       // DECISION-ORDER control. The delegation capture is part of step 9,
       // deliberately last, so a call one of the earlier exemptions already
@@ -986,6 +1075,65 @@ describe("pack hook pre-tool-use: delegation path (ADR slice 3)", () => {
 
       expect(ledgerCalls).toHaveLength(1);
       expect(ledgerCalls[0]?.content).toBe(`understanding-auto-approved:${CHILD}`);
+    });
+
+    it("(w4) pins the single-read persist path: bytes from a SECOND read of the conventional file must never reach the persisted report", async () => {
+      // agent-tasks 49d1ee41, review round 3 finding E. `verifyDelegation`
+      // reads the conventional launcher-report file exactly once and
+      // returns the bytes it verified (`reportContent`); the hook
+      // persists THOSE bytes, with no second read. That design cannot be
+      // observed from the outside on its own (a second read of an
+      // UNCHANGED file is indistinguishable from one read), so this test
+      // makes a second read observable: the module-level `vi.mock` of
+      // `readRegularFileRejectingSymlink` above returns the REAL bound
+      // bytes on the FIRST read of the conventional path and
+      // {@link TAMPERED_REPORT_MARKDOWN} on every read after that.
+      // Under the current, correct single-read code this is green: only
+      // one read happens, and the persisted report matches the bound
+      // fixture field for field. Reintroducing a second, unchecked read
+      // (mutation probe E) hands the hook the tampered bytes on that
+      // second read and turns every assertion below red.
+      issueReportBoundDelegation(CHILD_REPORT_MARKDOWN);
+      writeTranscript([userTurn()]);
+      readRegularFileSpyState.targetPath = delegationReportPathFor(generatedDir, CHILD);
+      readRegularFileSpyState.tamperedContent = TAMPERED_REPORT_MARKDOWN;
+      readRegularFileSpyState.callsForTarget = 0;
+
+      const result = await call();
+
+      expect(result.blocked).toBe(false);
+      expect(result.source).toBe("marker");
+      // Direct pin on the mechanism itself: exactly one read of the
+      // conventional path, however many reads the hook's OTHER logic
+      // performs of OTHER files.
+      expect(readRegularFileSpyState.callsForTarget).toBe(1);
+
+      const reports = listPersistedReports(reportsDir);
+      expect(reports).toHaveLength(1);
+      const persisted = JSON.parse(fs.readFileSync(reports[0]!.filePath, "utf8")) as Record<
+        string,
+        unknown
+      >;
+      expect(persisted["sessionId"]).toBe(CHILD);
+      expect(persisted["taskId"]).toBe("t-37ad0b05");
+      expect(persisted["mode"]).toBe("grill_me");
+      expect(persisted["riskLevel"]).toBe("low");
+      expect(persisted["currentUnderstanding"]).toBe(
+        "The parent delegated this child session and the child must state its own understanding.",
+      );
+      expect(persisted["intendedOutcome"]).toBe(
+        "The child auto-approves through the delegation plus its own report, never the delegation alone.",
+      );
+      expect(persisted["derivedTodos"]).toEqual(["capture the report from the session transcript"]);
+      expect(persisted["acceptanceCriteria"]).toEqual(["the minted marker carries the parent linkage"]);
+      expect(persisted["assumptions"]).toEqual(["the transcript read is the file the payload names"]);
+      expect(persisted["openQuestions"]).toEqual(["none"]);
+      expect(persisted["outOfScope"]).toEqual(["the delegate verb itself"]);
+      expect(persisted["risks"]).toEqual(["the transcript write races the hook"]);
+      expect(persisted["verificationPlan"]).toEqual(["vitest over the real hook entry point"]);
+      expect(persisted["priorArt"]).toEqual([
+        "searched harness for an existing same-turn capture path; the approve stdin persister is reused",
+      ]);
     });
 
     it("(m) a pending report already on disk skips the scan entirely and still allows", async () => {

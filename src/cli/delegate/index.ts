@@ -71,6 +71,7 @@ import {
   writeDelegationMarker,
 } from "../../policy-packs/builtin/understanding-before-execution-runtime.js";
 import { readRegularFileRejectingSymlink } from "../../io/read-regular-file.js";
+import { resolveMode, toPackageMode } from "../../policy-packs/builtin/understanding-before-execution.js";
 import type { Manifest } from "../../schema/index.js";
 import { loadDeclaredUnderstandingPack, writeLedgerTag } from "../approve/understanding.js";
 import { resolvePaths, type LoaderOptions } from "../loader.js";
@@ -375,22 +376,26 @@ export async function issueDelegation(
     }
     reportContentHash = sha256Hex(read.content);
 
-    // Validate parseability NOW, with the SAME parser
-    // `persistStdinReport` applies when the child's hook later tries to
-    // mint from this report (`stdin-report.ts`'s own `parseReport` call).
-    // Refusing an unparseable `--report` file here, before anything is
-    // signed or staged, matters because a failure caught only at mint
-    // time is not cheaply retryable: the adoption ledger records the
-    // report's content hash as spent BEFORE `persistStdinReport` even
-    // runs, so a bad report permanently burns that child session id, and
-    // this verb's own `report-conflict` refusal then blocks re-staging
-    // different content at the same conventional path until the file is
-    // removed by hand. Catching it here costs nothing and needs no
-    // manual cleanup.
+    // Validate parseability NOW, with the SAME parser AND the SAME
+    // gap-fill mode `persistStdinReport` applies when the child's hook
+    // later tries to mint from this report (`stdin-report.ts`'s own
+    // `parseReport` call, `mode: toPackageMode(resolveMode(declared).mode)`
+    // at hook-pre-tool-use.ts). A hardcoded `"fast_confirm"` here would
+    // let a short-form report pass staging and then fail persist under
+    // an operator's actually-configured `grill_me`, blocking the child
+    // with no retry available (see below). Refusing an unparseable
+    // `--report` file here, before anything is signed or staged, matters
+    // because a failure caught only at mint time is not cheaply
+    // retryable: the adoption ledger records the report's content hash
+    // as spent BEFORE `persistStdinReport` even runs, so a bad report
+    // permanently spends that content hash, and this verb's own
+    // `report-conflict` refusal then blocks re-staging different content
+    // at the same conventional path until the file is removed by hand.
+    // Catching it here costs nothing and needs no manual cleanup.
     const parsed = parseReport(read.content, {
       taskId: opts.childSessionId,
       createdAt: now.toISOString(),
-      mode: "fast_confirm",
+      mode: toPackageMode(resolveMode(declaredPack).mode),
       riskLevel: "medium",
     });
     if (!parsed.ok) {

@@ -57,6 +57,77 @@ const VALID_REPORT_MARKDOWN = [
   "- Assumptions: the file exists and is readable at delegation time.",
 ].join("\n");
 
+/**
+ * A full, all-sections Understanding Report (the grill_me / `full` prompt
+ * shape), used by the round-3 stage-time mode-parity tests below. Unlike
+ * {@link VALID_REPORT_MARKDOWN} (fast_confirm's relaxed 5-bullet shape,
+ * which only parses when the gap-fill default is `fast_confirm`), every
+ * section required by the STRICT schema is present, so this fixture
+ * parses under either mode's validator regardless of which one the
+ * caller's `defaults.mode` resolves to.
+ */
+const FULL_REPORT_MARKDOWN = [
+  "# Understanding Report",
+  "",
+  "**Current Understanding**",
+  "",
+  "The stage-time parse must use the pack's configured mode, not a hardcoded one.",
+  "",
+  "**Intended Outcome**",
+  "",
+  "A short-form report is refused at stage time under grill_me, before anything is signed.",
+  "",
+  "**Derived Todos**",
+  "",
+  "- mirror the hook's own mode resolution at stage time",
+  "",
+  "**Acceptance Criteria**",
+  "",
+  "- a fast_confirm-shaped report is refused under a grill_me-configured pack",
+  "",
+  "**Assumptions**",
+  "",
+  "- the pack's declared config is the same one the child hook resolves",
+  "",
+  "**Open Questions**",
+  "",
+  "- none",
+  "",
+  "**Out Of Scope**",
+  "",
+  "- the transcript-scan channel",
+  "",
+  "**Risks**",
+  "",
+  "- a stale gap-fill default reintroducing the mismatch",
+  "",
+  "**Verification Plan**",
+  "",
+  "- vitest over issueDelegation with an explicit mode-declaring manifest",
+  "",
+  "**Prior Art**",
+  "",
+  "- mirrors the child hook's toPackageMode(resolveMode(declared).mode) call",
+].join("\n");
+
+/**
+ * {@link FULL_REPORT_MARKDOWN} with an explicit `## Metadata` block
+ * declaring its OWN mode. The parser's merge order gives an inline
+ * Metadata declaration precedence over the caller-supplied gap-fill
+ * default for schema-validator selection (`understanding-gate`'s
+ * `parseReport`, `merged["mode"] ?? defaults.mode`), so this fixture
+ * stages successfully under a manifest configured for the OPPOSITE mode.
+ */
+const FULL_REPORT_MARKDOWN_DECLARING_FAST_CONFIRM = [
+  "# Understanding Report",
+  "",
+  "**Metadata**",
+  "",
+  "mode: fast_confirm",
+  "",
+  ...FULL_REPORT_MARKDOWN.split("\n").slice(2),
+].join("\n");
+
 let tmp: string;
 let generatedDir: string;
 let childCwd: string;
@@ -109,6 +180,19 @@ function manifestWithMaxAge(maxAge: string): Manifest {
       {
         name: "understanding-before-execution",
         config: { approval_lifecycle: { max_age: maxAge } },
+      },
+    ],
+  });
+}
+
+/** A manifest declaring only `config.mode`, for the stage-time mode-parity tests below. */
+function manifestWithMode(mode: string): Manifest {
+  return parseManifest({
+    version: 1,
+    policy_packs: [
+      {
+        name: "understanding-before-execution",
+        config: { mode },
       },
     ],
   });
@@ -360,6 +444,105 @@ describe("issueDelegation - refusals", () => {
     const conventionalPath = delegationReportPathFor(generatedDir, CHILD);
     expect(fs.existsSync(conventionalPath)).toBe(false);
     expect(fs.existsSync(delegationMarkerPathFor(generatedDir, CHILD))).toBe(false);
+  });
+
+  it("refuses at STAGE time a fast_confirm-shaped --report when the applied pack declares mode: grill_me, and stages nothing (round-3 fix, agent-tasks 49d1ee41)", async () => {
+    // Before this fix the stage-time parse always gap-filled
+    // `mode: "fast_confirm"`, regardless of what the pack's own config
+    // declared. Every shipped init template sets `mode: grill_me`, so a
+    // short-form report like this one used to pass staging here and only
+    // fail later, at the child hook's persist-time parse (which DOES
+    // resolve the pack's real mode) — after the adoption ledger had
+    // already recorded the report's content hash as spent, with no cheap
+    // retry. The fix mirrors the hook's own resolution
+    // (`toPackageMode(resolveMode(declared).mode)`) at stage time too, so
+    // this now refuses up front, before anything is signed or staged.
+    approveParent();
+    const { ledgerAdd } = fakeLedger();
+    const reportPath = path.join(tmp, "fast-confirm-report.md");
+    fs.writeFileSync(reportPath, VALID_REPORT_MARKDOWN);
+
+    const result = await issueDelegation({
+      childSessionId: CHILD,
+      cwd: childCwd,
+      parentSessionId: PARENT,
+      generatedDir,
+      reportPath,
+      manifest: manifestWithMode("grill_me"),
+      ledgerAdd,
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("expected refusal");
+    expect(result.reason).toBe("report-unparseable");
+    expect(result.detail).toMatch(/did not parse/);
+
+    // Nothing was staged: no conventional file, no delegation marker, no
+    // adoption-ledger entry spent.
+    const conventionalPath = delegationReportPathFor(generatedDir, CHILD);
+    expect(fs.existsSync(conventionalPath)).toBe(false);
+    expect(fs.existsSync(delegationMarkerPathFor(generatedDir, CHILD))).toBe(false);
+  });
+
+  it("stages a --report that declares its OWN mode in its Metadata block, unaffected by the applied pack's configured mode (agent-tasks 49d1ee41)", async () => {
+    // The pack is configured for grill_me, but the report explicitly
+    // declares `mode: fast_confirm` in its own `## Metadata` block. The
+    // parser's merge order gives that declaration precedence over the
+    // caller-supplied gap-fill default (`understanding-gate`'s
+    // `parseReport`: `merged["mode"] ?? defaults.mode`), so staging must
+    // still succeed: mirroring the pack's configured mode at stage time
+    // (this task's own fix) only changes the GAP-FILL default a report
+    // with no declaration of its own falls back to, never a report that
+    // states its mode itself.
+    approveParent();
+    const { ledgerAdd } = fakeLedger();
+    const reportPath = path.join(tmp, "declares-own-mode-report.md");
+    fs.writeFileSync(reportPath, FULL_REPORT_MARKDOWN_DECLARING_FAST_CONFIRM);
+
+    const result = await issueDelegation({
+      childSessionId: CHILD,
+      cwd: childCwd,
+      parentSessionId: PARENT,
+      generatedDir,
+      reportPath,
+      manifest: manifestWithMode("grill_me"),
+      ledgerAdd,
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("expected success (the report declares its own mode)");
+
+    const conventionalPath = delegationReportPathFor(generatedDir, CHILD);
+    expect(fs.readFileSync(conventionalPath, "utf8")).toBe(
+      FULL_REPORT_MARKDOWN_DECLARING_FAST_CONFIRM,
+    );
+  });
+
+  it("stages a grill_me-shaped --report when the applied pack declares mode: grill_me (agent-tasks 49d1ee41)", async () => {
+    // The positive control for the round-3 fix: a report that actually
+    // matches the pack's configured mode stages successfully. Mutation
+    // probe A (task brief): reverting the stage-time mode to the
+    // hardcoded `"fast_confirm"` literal does not turn THIS test red on
+    // its own (a full-shaped report parses under either validator); it
+    // turns the grill_me-refusal test above red instead, which is the
+    // discriminating probe.
+    approveParent();
+    const { ledgerAdd } = fakeLedger();
+    const reportPath = path.join(tmp, "grill-me-report.md");
+    fs.writeFileSync(reportPath, FULL_REPORT_MARKDOWN);
+
+    const result = await issueDelegation({
+      childSessionId: CHILD,
+      cwd: childCwd,
+      parentSessionId: PARENT,
+      generatedDir,
+      reportPath,
+      manifest: manifestWithMode("grill_me"),
+      ledgerAdd,
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("expected success (the report matches the configured mode)");
+
+    const conventionalPath = delegationReportPathFor(generatedDir, CHILD);
+    expect(fs.readFileSync(conventionalPath, "utf8")).toBe(FULL_REPORT_MARKDOWN);
   });
 
   it("refuses --task 'a=b' (an unsafe delegation-segment delimiter) with reason invalid-task (L1)", async () => {
@@ -655,6 +838,14 @@ describe("issueDelegation - happy path", () => {
       parentSessionId: PARENT,
       generatedDir,
       reportPath,
+      // `VALID_REPORT_MARKDOWN` is fast_confirm-shaped (5 bullets); this
+      // test is about the copy/hash/verify mechanics, not mode matching,
+      // so it declares the fixture's own shape explicitly rather than
+      // riding the no-manifest DEFAULT_MODE (grill_me), which the
+      // fixture would fail to parse against (round-3 fix, agent-tasks
+      // 49d1ee41: stage-time validation now uses the resolved pack mode,
+      // same as the child hook's persist-time validation).
+      manifest: manifestWithMode("fast_confirm"),
       ledgerAdd,
     });
     expect(result.ok).toBe(true);
@@ -715,6 +906,8 @@ describe("issueDelegation - happy path", () => {
       parentSessionId: PARENT,
       generatedDir,
       reportPath,
+      // See the mode-shape note on the preceding test.
+      manifest: manifestWithMode("fast_confirm"),
       ledgerAdd,
     });
     expect(result.ok).toBe(false);
@@ -741,6 +934,8 @@ describe("issueDelegation - happy path", () => {
       parentSessionId: PARENT,
       generatedDir,
       reportPath,
+      // See the mode-shape note two tests up.
+      manifest: manifestWithMode("fast_confirm"),
       ledgerAdd,
     });
     expect(result.ok).toBe(true);
@@ -768,6 +963,8 @@ describe("issueDelegation - happy path", () => {
       parentSessionId: PARENT,
       generatedDir,
       reportPath,
+      // See the mode-shape note above.
+      manifest: manifestWithMode("fast_confirm"),
       ledgerAdd,
     });
     expect(result.ok).toBe(true);
@@ -1003,7 +1200,14 @@ describe("harness delegate - CLI wiring", () => {
       stderr: () => {},
     });
     const configPath = path.join(generatedDir, "..", "harness.yaml");
-    fs.writeFileSync(configPath, "version: 1\n");
+    // `VALID_REPORT_MARKDOWN` is fast_confirm-shaped; declares the pack's
+    // mode explicitly so the stage-time parse (which now resolves mode
+    // the same way the config file does) matches the fixture's shape
+    // instead of falling through to DEFAULT_MODE (grill_me).
+    fs.writeFileSync(
+      configPath,
+      "version: 1\npolicy_packs:\n  - name: understanding-before-execution\n    config:\n      mode: fast_confirm\n",
+    );
     await program.parseAsync(
       [
         "delegate",
