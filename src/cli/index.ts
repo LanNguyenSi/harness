@@ -2063,9 +2063,11 @@ export function buildProgram(opts: RunOptions = {}): Command {
       "Issue a signed delegation for a headless `claude -p` child session, bound to " +
         "an already-approved parent session (pre-authorization, not an approval: the " +
         "child still writes and gets its own Understanding Report checked). Writes " +
-        "harness.generated/.delegations/<child-sid>, never .approvals/. Claude Code " +
-        "adapter only; the Codex adapter has no delegation consumer. See " +
-        "docs/decisions/2026-08-27-ug-auto-mode-approval.md.",
+        "harness.generated/.delegations/<child-sid>, never .approvals/. Consumption is " +
+        "Claude Code only: the Codex adapter has no delegation consumer, so a Codex " +
+        "session cannot be the delegated child. A Codex session CAN be the delegating " +
+        "parent today (parent resolution reads $CODEX_SESSION_ID and accepts any " +
+        "validly signed marker). See docs/decisions/2026-08-27-ug-auto-mode-approval.md.",
     )
     .requiredOption(
       "--child-session <uuid>",
