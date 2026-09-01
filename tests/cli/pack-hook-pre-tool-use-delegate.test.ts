@@ -758,9 +758,9 @@ describe("pack hook pre-tool-use: delegation path (ADR slice 3)", () => {
       // every platform: the path check PASSES on the now-missing file
       // and the failure lands on the read, pinning the reason to
       // `report_content_mismatch` deterministically (never the removed
-      // "not yet consumed" special case, and never `report_path_mismatch`
-      // — that would only fire if the realpath/`path.resolve` disagreed,
-      // which the realpathed root rules out).
+      // "not yet consumed" special case, and never `report_path_mismatch`,
+      // which would only fire if the realpath/`path.resolve` disagreed,
+      // and the realpathed root rules that out).
       issueReportBoundDelegation(CHILD_REPORT_MARKDOWN);
       fs.rmSync(delegationReportPathFor(generatedDir, CHILD));
       writeTranscript([userTurn(), transcriptEntry()]);
@@ -1038,7 +1038,7 @@ describe("pack hook pre-tool-use: delegation path (ADR slice 3)", () => {
       // report DIFFERENT content from the launcher file: if the capture
       // branch ran anyway, the persisted report's content would change
       // to the launcher's, and the adoption ledger would record the
-      // launcher file's content hash — neither happens here.
+      // launcher file's content hash; neither happens here.
       issueReportBoundDelegation(CHILD_REPORT_MARKDOWN);
       fs.writeFileSync(
         path.join(reportsDir, "2026-08-28T09-30-00-000Z-child-1111aaaa.json"),

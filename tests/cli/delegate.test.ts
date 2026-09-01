@@ -333,7 +333,7 @@ describe("issueDelegation - refusals", () => {
     // Before this fix an unparseable `--report` file was only hashed,
     // never validated: it would be staged, signed, and adopted by the
     // child hook, which would then fail to parse it at mint time
-    // AFTER already recording the adoption — permanently burning that
+    // AFTER already recording the adoption, permanently burning that
     // child session id, with no cheap retry (a corrected `--report`
     // rerun would hit `report-conflict` against the garbage already
     // staged). Refusing here, before anything is written, avoids all of
