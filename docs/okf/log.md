@@ -2,6 +2,58 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-09-01T08:26:00Z, task `49d1ee41` (delegation launcher-report
+  channel; three implementation rounds plus a master merge; this
+  branch: `CHANGELOG.md`, `docs/CLI.md`,
+  `docs/decisions/2026-08-27-ug-auto-mode-approval.md`,
+  `docs/policy-packs/understanding-before-execution.md`,
+  `src/cli/delegate/index.ts`, `src/cli/index.ts`,
+  `src/cli/pack/hook-pre-tool-use.ts`,
+  `src/policy-packs/builtin/understanding-before-execution/delegation-markers.ts`,
+  `src/policy-packs/builtin/understanding-before-execution/index.ts`,
+  `tests/cli/delegate.test.ts`,
+  `tests/cli/pack-hook-pre-tool-use-delegate.test.ts`,
+  `tests/policy-packs/ube-export-surface.test.ts`): round 1 (`be1ae89`)
+  wired the child hook to consume a `harness delegate --report`-staged
+  launcher report through the conventional
+  `.delegation-reports/<child-sid>.md` path; round 2 (`df66f11`) bound
+  the persisted report to the delegation's content hash, added
+  stage-time `parseReport` validation, and made the missing-file reason
+  deterministic, closing a verify-then-persist race by having the hook
+  persist exactly the bytes `verifyDelegation` proved (`reportContent`)
+  instead of re-reading the file; a follow-up (`ece9985`) dropped em
+  dashes introduced in round-2 prose. Round 3 (`402d0bb`) fixed the
+  stage-time gap-fill mode to mirror the hook's own
+  `toPackageMode(resolveMode(declaredPack).mode)` resolution instead of
+  a hardcoded `fast_confirm` literal (every shipped init template sets
+  `mode: grill_me`, so a short-form report used to pass staging and
+  only fail at the hook after the adoption ledger had already recorded
+  it spent), narrowed the pack doc's STAGE-time claim to what holds,
+  corrected a "burns the child session id" overclaim (the ledger is
+  keyed by content hash; a fresh report re-arms the sid, per the
+  existing (r2) test), restated the CHANGELOG's third mutation probe to
+  name what actually discriminates, and added two hook tests: (w4)
+  pins the single-read persist path via a call-through `vi.mock` of
+  `readRegularFileRejectingSymlink`, (w5) covers the
+  previously-uncovered report-bound parse-failure-at-mint branch. Each
+  round re-stamped the seven bundle docs whose `sources:` list the
+  touched files (`f08a06a` after round 1, `7b47bd9` after round 2,
+  `65f7d76` after the em-dash cleanup); merging master (`10b5217`)
+  pulled in an unrelated ADR expansion that shifted four of this ADR's
+  own citations, re-anchored in `733b9f8`
+  (`hook-pre-tool-use.ts:866->882` and `:1087->1198`,
+  `delegate/index.ts:256->276` and `:285->305`); round 3's own edit
+  shifted two of those same `delegate/index.ts` anchors again
+  (`:276->277`, `:305->306`), re-anchored in the round-3 commit
+  itself. `npx -y okf-kit@0.8.0 check docs/okf` after the round-3 fix
+  commit (`402d0bb`) flagged the same seven bundle docs STALE
+  (`docs/policy-packs/understanding-before-execution.md` and
+  `CHANGELOG.md` both changed); re-verified each against the current
+  tree (none describes the stage-time mode bug or the mutation-probe
+  wording, no content change needed) and re-stamped all seven in this
+  second, timestamp-only commit. Verdict after the re-stamp: `okf-kit:
+  clean, no findings`.
+
 - 2026-09-01T07:21:52Z, task `be9faf70` (two review rounds; this branch:
   `docs/decisions/2026-08-27-ug-auto-mode-approval.md`,
   `docs/okf/codex-adapter-parity-gaps.md`,
