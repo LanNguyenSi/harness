@@ -36,6 +36,21 @@
 //     failed capture, through the same `persistStdinReport` the operator
 //     path uses. That log is what the block envelope's malformed-sections
 //     notice is rendered from, so the per-capture write is deliberate.
+//
+// FOLLOW-UP (agent-tasks 49d1ee41) adds the second report channel the
+// ADR's "Report capture under `-p`" fallback describes: a report-bound
+// delegation (one `harness delegate --report <path>` minted) is verified
+// against the CONVENTIONAL launcher-report path
+// (`delegationReportPathFor`, a plain function of the child session id,
+// never a value read from the payload), and on success that file's
+// content is persisted the same way a transcript hit is: adopted once
+// (this time keyed by the report's CONTENT hash, in the same
+// `.delegation-adoptions/` ledger, so the same launcher report cannot
+// mint a second marker once the first one expires), persisted `pending`
+// via `persistStdinReport`, and left for the auto path below to consume.
+// The transcript scan never runs for a report-bound delegation: the two
+// channels are mutually exclusive per delegation, decided by whether
+// `verifyDelegation` returns a `reportPathHash`.
 
 import { appendFileSync, existsSync, lstatSync, mkdirSync } from "node:fs";
 import * as path from "node:path";
@@ -52,6 +67,7 @@ import {
   checkPersistedReport,
   defaultReportsDir,
   delegationMarkerPathFor,
+  delegationReportPathFor,
   harnessAllowed,
   listPersistedReports,
   matchLedgerEntries,
@@ -66,7 +82,7 @@ import {
   resolveMode,
   toPackageMode,
 } from "../../policy-packs/builtin/understanding-before-execution.js";
-import { signingKeyExists } from "../../runtime/approval-signing.js";
+import { sha256Hex, signingKeyExists } from "../../runtime/approval-signing.js";
 import { findLatestParseError, renderMalformedSectionsNotice } from "../approve/understanding.js";
 import { persistStdinReport } from "../approve/stdin-report.js";
 import { attemptAutoApproval, AUTO_APPROVE_LEDGER_SOURCE } from "./auto-approve-path.js";
@@ -919,6 +935,14 @@ export async function runPackHookPreToolUseCli(
           "harness pack hook: delegation present but signing key absent; not verified\n",
         );
       } else {
+        // The conventional launcher-report path (a plain function of
+        // `childSessionId`, never a value read from the payload or from
+        // the delegation file itself): offered unconditionally, exactly
+        // as `verifyDelegation` expects. It only affects the outcome when
+        // the delegation actually binds a `report=` segment; for every
+        // other delegation it is read and then never consulted (see the
+        // `reportPathHash !== undefined` guard inside `verifyDelegation`).
+        const launcherReportPath = delegationReportPathFor(generatedDir, childSessionId);
         const verified = verifyDelegation({
           generatedDir,
           childSessionId,
@@ -935,33 +959,23 @@ export async function runPackHookPreToolUseCli(
           // so there is no resolved value to reuse without widening that
           // shared runtime's return shape for one caller.
           taskId: readActiveClaim(generatedDir),
+          launcherReportPath,
         });
         if (!verified.ok) {
-          if (verified.reason === "report_path_mismatch") {
-            // This hook never passes `launcherReportPath` to
-            // `verifyDelegation`, so a delegation that binds one (the
-            // `--report` fallback shape) is refused here every time,
-            // not merely on a path/content mismatch. Name the actual
-            // limitation instead of the generic `report_path_mismatch`
-            // wording `verified.detail` carries: the fallback shape is
-            // issued and signature-verifiable by `harness delegate`, it
-            // is just not yet consumed by THIS hook (a named
-            // follow-up); the transcript scan below is the only report
-            // channel this hook acts on today.
-            stderr.write(
-              `harness pack hook: delegation for ${childSessionId} refused: it binds a launcher-supplied report file (the --report fallback shape), which is issued and verifiable but not yet consumed by the child hook (a named follow-up); the transcript scan is the only report channel this hook acts on\n`,
-            );
-          } else {
-            stderr.write(
-              `harness pack hook: delegation for ${childSessionId} refused: ${verified.reason}: ${verified.detail}\n`,
-            );
-          }
+          // A missing, moved, or content-modified launcher report surfaces
+          // here through the verifier's own distinct reasons
+          // (`report_path_mismatch` / `report_content_mismatch`), same as
+          // every other refusal: no special-casing needed now that this
+          // hook actually checks the fallback shape against a file.
+          stderr.write(
+            `harness pack hook: delegation for ${childSessionId} refused: ${verified.reason}: ${verified.detail}\n`,
+          );
         } else {
           delegation = { parentSessionId: verified.parentSessionId };
           // Key two: the child's own report. Already on disk and pending
           // (the child was denied once and its report has since been
-          // captured) means there is nothing to scan for, so the
-          // transcript is not read at all.
+          // captured) means there is nothing to scan for, so neither
+          // channel below is read at all.
           // `childSessionId`, not the outer `sessionId`: this whole block
           // decides the PAYLOAD's session, and the two only coincide
           // because the env fallback never wins on a path that carries a
@@ -972,103 +986,200 @@ export async function runPackHookPreToolUseCli(
             listPersistedReports(reportsDir),
             childSessionId,
           );
+          // A report-bound delegation (the `--report` fallback shape,
+          // `verified.reportPathHash !== undefined`) never falls through
+          // to the transcript scan: the launcher already supplied and
+          // proved (via the verify call above) the report the child would
+          // otherwise have to emit into its own transcript, so scanning
+          // for a second copy would be pointless and would let a
+          // report-bound delegation ALSO be satisfied by whatever the
+          // child happens to write, which defeats the point of the
+          // launcher fixing the content.
           if (existing === null || existing.approvalStatus !== "pending") {
-            const transcriptPath =
-              typeof event.transcript_path === "string" && event.transcript_path.length > 0
-                ? event.transcript_path
-                : null;
-            // The once-per-session adoption ledger, read only on the path
-            // that can actually capture something.
-            const adoptedPath = adoptedEntriesPathFor(generatedDir, childSessionId);
-            const adopted: AdoptedEntriesRead =
-              transcriptPath === null
-                ? { ok: true, ids: new Set<string>() }
-                : readAdoptedEntries(adoptedPath);
-            if (transcriptPath === null) {
-              stderr.write(
-                `harness pack hook: delegation for ${childSessionId} is valid but the payload carries no transcript_path; the child's report cannot be captured\n`,
-              );
-            } else if (!adopted.ok) {
-              // Fail closed: without the ledger we cannot tell a fresh
-              // report from one this session already spent.
-              stderr.write(
-                `harness pack hook: the adopted-entry ledger at ${adoptedPath} could not be read (${adopted.detail}); refusing to capture a transcript entry that may already have been adopted for session ${childSessionId}\n`,
-              );
-            } else {
-              const scan = await scanTranscriptForReport({
-                transcriptPath,
-                sessionId: childSessionId,
-                maxWaitMs: autoCfg.reportScan.maxWaitMs,
-                adopted: adopted.ids,
-                ...(opts.reportScanClock?.now !== undefined
-                  ? { now: opts.reportScanClock.now }
-                  : {}),
-                ...(opts.reportScanClock?.sleep !== undefined
-                  ? { sleep: opts.reportScanClock.sleep }
-                  : {}),
-                ...(opts.reportScanClock?.pollMs !== undefined
-                  ? { pollMs: opts.reportScanClock.pollMs }
-                  : {}),
-              });
-              if (scan.found) {
-                // RECORD THE ADOPTION FIRST, then persist. In this order a
-                // failed ledger write costs one blocked call and leaves the
-                // entry re-scannable, while the reverse order would leave a
-                // persisted, mintable report behind an unrecorded adoption:
-                // exactly the replay this ledger exists to stop.
-                const recorded = recordAdoptedEntry(adoptedPath, scan.entryId);
-                if (!recorded.ok) {
-                  stderr.write(
-                    `harness pack hook: could not record transcript entry ${scan.entryId} as adopted for session ${childSessionId} (${recorded.detail}); nothing was persisted\n`,
-                  );
-                } else {
-                  // Reuses the SAME persister `harness approve
-                  // understanding` uses for a heredoc-attached report, so
-                  // the capture is session-bound, `pending`, and validated
-                  // by one parser rather than a second one written here.
-                  // A real `new Date()` on purpose: the persisted report
-                  // must sort as the newest strict-session report against
-                  // whatever is already on disk, which a caller-injected
-                  // clock could not guarantee.
-                  const persisted = persistStdinReport({
-                    markdown: scan.markdown,
-                    reportsDir,
-                    sessionId: childSessionId,
-                    now: new Date(),
-                    mode: toPackageMode(resolveMode(declared).mode),
-                  });
-                  if (persisted.ok) {
-                    stderr.write(
-                      `harness pack hook: captured the Understanding Report for session ${childSessionId} from its own transcript (line ${scan.lineIndex}, after ${scan.waitedMs}ms) and persisted it pending at ${persisted.filePath}\n`,
-                    );
-                  } else {
-                    // The entry stays adopted: re-reading a report that
-                    // does not parse would fail identically forever, so
-                    // the child needs a NEW one, which is what the block's
-                    // retry instruction asks for. Set the same flag the
-                    // timeout branch sets, for that reason: the retry
-                    // sentence reads correctly for this case too, and
-                    // without it the block below would ask for a retry
-                    // implicitly while never saying so.
-                    reportScanTimedOut = true;
-                    stderr.write(
-                      `harness pack hook: the transcript report for session ${childSessionId} did not parse (${persisted.reason}); nothing was persisted\n`,
-                    );
-                  }
-                }
-              } else if (scan.reason === "timeout") {
-                reportScanTimedOut = true;
+            if (verified.reportPathHash !== undefined) {
+              // The bytes `verifyDelegation` already proved present,
+              // path-matched, and content-matched against the bound
+              // hash, returned verbatim on its ok shape. There is NO
+              // second read of `launcherReportPath` here on purpose: a
+              // second read would be a second trust decision, reopening
+              // the exact race (a rewrite between verification and
+              // persist) that returning the verified bytes closes
+              // structurally instead of by re-checking a hash.
+              const reportContent = verified.reportContent;
+              if (reportContent === undefined) {
+                // Cannot happen given the invariant `reportContent` is
+                // set whenever `reportPathHash` is (see the type's own
+                // doc comment); fail closed rather than persist nothing
+                // we can vouch for.
                 stderr.write(
-                  scan.adoptedOnly === true
-                    ? `harness pack hook: the newest Understanding Report entry in the transcript for session ${childSessionId} was already adopted; emit a fresh report\n`
-                    : `harness pack hook: no Understanding Report for session ${childSessionId} reached its transcript within ${autoCfg.reportScan.maxWaitMs}ms (waited ${scan.waitedMs}ms); blocking and asking the child to re-emit and retry\n`,
+                  `harness pack hook: the launcher-supplied report for session ${childSessionId} at ${launcherReportPath} was verified but no content was returned; nothing was persisted\n`,
                 );
               } else {
+                const contentHash = sha256Hex(reportContent);
+                // Adoption keyed by the report's CONTENT hash, in the
+                // SAME once-per-session ledger the transcript scan uses,
+                // namespaced with a `report:` prefix so the two id shapes
+                // (`uuid:...` / `digest:...` for a transcript entry,
+                // `report:...` here) can never collide. Without this a
+                // launcher report could mint a fresh marker every time an
+                // earlier one expired, for as long as the delegation
+                // itself stayed valid: the delegation's TTL would
+                // silently become the report's own re-mint budget instead
+                // of a one-shot authorization.
+                const adoptedPath = adoptedEntriesPathFor(generatedDir, childSessionId);
+                const adopted: AdoptedEntriesRead = readAdoptedEntries(adoptedPath);
+                const entryId = `report:${contentHash}`;
+                if (!adopted.ok) {
+                  // Fail closed: without the ledger we cannot tell a
+                  // fresh report from one this session already spent.
+                  stderr.write(
+                    `harness pack hook: the adopted-entry ledger at ${adoptedPath} could not be read (${adopted.detail}); refusing to adopt a launcher-supplied report that may already have been adopted for session ${childSessionId}\n`,
+                  );
+                } else if (adopted.ids.has(entryId)) {
+                  stderr.write(
+                    `harness pack hook: the launcher-supplied report for session ${childSessionId} was already adopted by an earlier mint; refusing to re-mint from the same report (issue a fresh delegation with a new report to authorize another mint)\n`,
+                  );
+                } else {
+                  // RECORD THE ADOPTION FIRST, then persist, same ordering
+                  // and same reasoning as the transcript-scan path below:
+                  // a failed ledger write costs one blocked call and
+                  // leaves the report re-adoptable, while the reverse
+                  // order would leave a persisted, mintable report behind
+                  // an unrecorded adoption.
+                  const recorded = recordAdoptedEntry(adoptedPath, entryId);
+                  if (!recorded.ok) {
+                    stderr.write(
+                      `harness pack hook: could not record the launcher-supplied report as adopted for session ${childSessionId} (${recorded.detail}); nothing was persisted\n`,
+                    );
+                  } else {
+                    const persisted = persistStdinReport({
+                      markdown: reportContent,
+                      reportsDir,
+                      sessionId: childSessionId,
+                      now: new Date(),
+                      mode: toPackageMode(resolveMode(declared).mode),
+                    });
+                    if (persisted.ok) {
+                      stderr.write(
+                        `harness pack hook: adopted the launcher-supplied report for session ${childSessionId} from ${launcherReportPath} and persisted it pending at ${persisted.filePath}\n`,
+                      );
+                    } else {
+                      // The entry stays adopted: the launcher's report is
+                      // fixed content, so re-reading it would fail to
+                      // parse identically forever. Unlike the transcript
+                      // path this is not recoverable by a child retry
+                      // (the child does not control the launcher's file),
+                      // so no retry instruction is set here.
+                      stderr.write(
+                        `harness pack hook: the launcher-supplied report for session ${childSessionId} did not parse (${persisted.reason}); nothing was persisted\n`,
+                      );
+                    }
+                  }
+                }
+              }
+              // The transcript scan below never runs for a report-bound
+              // delegation: this `if` branch is its own complete
+              // report-capture attempt.
+            } else {
+              const transcriptPath =
+                typeof event.transcript_path === "string" && event.transcript_path.length > 0
+                  ? event.transcript_path
+                  : null;
+              // The once-per-session adoption ledger, read only on the path
+              // that can actually capture something.
+              const adoptedPath = adoptedEntriesPathFor(generatedDir, childSessionId);
+              const adopted: AdoptedEntriesRead =
+                transcriptPath === null
+                  ? { ok: true, ids: new Set<string>() }
+                  : readAdoptedEntries(adoptedPath);
+              if (transcriptPath === null) {
                 stderr.write(
-                  `harness pack hook: the transcript at ${transcriptPath} exists but could not be read; the report for session ${childSessionId} cannot be captured\n`,
+                  `harness pack hook: delegation for ${childSessionId} is valid but the payload carries no transcript_path; the child's report cannot be captured\n`,
                 );
+              } else if (!adopted.ok) {
+                // Fail closed: without the ledger we cannot tell a fresh
+                // report from one this session already spent.
+                stderr.write(
+                  `harness pack hook: the adopted-entry ledger at ${adoptedPath} could not be read (${adopted.detail}); refusing to capture a transcript entry that may already have been adopted for session ${childSessionId}\n`,
+                );
+              } else {
+                const scan = await scanTranscriptForReport({
+                  transcriptPath,
+                  sessionId: childSessionId,
+                  maxWaitMs: autoCfg.reportScan.maxWaitMs,
+                  adopted: adopted.ids,
+                  ...(opts.reportScanClock?.now !== undefined
+                    ? { now: opts.reportScanClock.now }
+                    : {}),
+                  ...(opts.reportScanClock?.sleep !== undefined
+                    ? { sleep: opts.reportScanClock.sleep }
+                    : {}),
+                  ...(opts.reportScanClock?.pollMs !== undefined
+                    ? { pollMs: opts.reportScanClock.pollMs }
+                    : {}),
+                });
+                if (scan.found) {
+                  // RECORD THE ADOPTION FIRST, then persist. In this order a
+                  // failed ledger write costs one blocked call and leaves the
+                  // entry re-scannable, while the reverse order would leave a
+                  // persisted, mintable report behind an unrecorded adoption:
+                  // exactly the replay this ledger exists to stop.
+                  const recorded = recordAdoptedEntry(adoptedPath, scan.entryId);
+                  if (!recorded.ok) {
+                    stderr.write(
+                      `harness pack hook: could not record transcript entry ${scan.entryId} as adopted for session ${childSessionId} (${recorded.detail}); nothing was persisted\n`,
+                    );
+                  } else {
+                    // Reuses the SAME persister `harness approve
+                    // understanding` uses for a heredoc-attached report, so
+                    // the capture is session-bound, `pending`, and validated
+                    // by one parser rather than a second one written here.
+                    // A real `new Date()` on purpose: the persisted report
+                    // must sort as the newest strict-session report against
+                    // whatever is already on disk, which a caller-injected
+                    // clock could not guarantee.
+                    const persisted = persistStdinReport({
+                      markdown: scan.markdown,
+                      reportsDir,
+                      sessionId: childSessionId,
+                      now: new Date(),
+                      mode: toPackageMode(resolveMode(declared).mode),
+                    });
+                    if (persisted.ok) {
+                      stderr.write(
+                        `harness pack hook: captured the Understanding Report for session ${childSessionId} from its own transcript (line ${scan.lineIndex}, after ${scan.waitedMs}ms) and persisted it pending at ${persisted.filePath}\n`,
+                      );
+                    } else {
+                      // The entry stays adopted: re-reading a report that
+                      // does not parse would fail identically forever, so
+                      // the child needs a NEW one, which is what the block's
+                      // retry instruction asks for. Set the same flag the
+                      // timeout branch sets, for that reason: the retry
+                      // sentence reads correctly for this case too, and
+                      // without it the block below would ask for a retry
+                      // implicitly while never saying so.
+                      reportScanTimedOut = true;
+                      stderr.write(
+                        `harness pack hook: the transcript report for session ${childSessionId} did not parse (${persisted.reason}); nothing was persisted\n`,
+                      );
+                    }
+                  }
+                } else if (scan.reason === "timeout") {
+                  reportScanTimedOut = true;
+                  stderr.write(
+                    scan.adoptedOnly === true
+                      ? `harness pack hook: the newest Understanding Report entry in the transcript for session ${childSessionId} was already adopted; emit a fresh report\n`
+                      : `harness pack hook: no Understanding Report for session ${childSessionId} reached its transcript within ${autoCfg.reportScan.maxWaitMs}ms (waited ${scan.waitedMs}ms); blocking and asking the child to re-emit and retry\n`,
+                  );
+                } else {
+                  stderr.write(
+                    `harness pack hook: the transcript at ${transcriptPath} exists but could not be read; the report for session ${childSessionId} cannot be captured\n`,
+                  );
+                }
               }
             }
+            // Closes the `if (verified.reportPathHash !== undefined) { ... }
+            // else { <transcript scan> }` branch opened above.
           }
         }
       }

@@ -2087,7 +2087,7 @@ export function buildProgram(opts: RunOptions = {}): Command {
     )
     .option(
       "--report <path>",
-      "fallback shape: bind the child's Understanding Report by content + path hash at spawn time; not yet consumed by the child hook, see the pack doc",
+      "fallback shape: copy the child's Understanding Report to harness.generated/.delegation-reports/<child-sid>.md and bind it by content + that conventional path's hash at spawn time; the child's PreToolUse hook reads it back from there, see the pack doc",
     )
     .option(
       "--session-id <id>",

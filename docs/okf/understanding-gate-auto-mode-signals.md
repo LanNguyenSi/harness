@@ -3,7 +3,7 @@ type: overview
 title: Understanding gate, auto-mode signal sources (measured)
 description: What signals exist for detecting an agent's own permission/auto-approval mode across Claude Code, Codex, and opencode, measured where possible, doc-only where not, with a trust-class table. Covers both launch shapes for Claude Code, headless and interactive, plus how a hook ask resolves in each and what a subagent's tool call looks like to the same hook. The rule and the decision on which signals gate anything live in the ADR, not here.
 tags: [understanding-gate, permission-mode, auto-mode, hooks, measurement, trust-boundary]
-timestamp: 2026-09-01T07:15:40Z
+timestamp: 2026-09-01T08:26:00Z
 sources:
   - src/cli/pack/auto-approve-path.ts
   - dogfood/ug-auto-mode-signals/README.md
@@ -455,21 +455,28 @@ report far shorter than a real one.
   anchored to the real-report data instead of the shorter probe
   reports. The real-report lag distribution at n >= 10 is not measured
   here; see the follow-up bullet below.
-- **Verdict (iv), interactive: does NOT hold, unchanged.** Section (q)
-  found the report unreachable within 5 s in 3/3 interactive runs, and
-  the transcript-shape fixture shows why a longer bound would not
+- **Verdict (iv), interactive: does NOT hold for the transcript scan;
+  the fallback channel is now live (agent-tasks 49d1ee41).** Section
+  (q) found the report unreachable within 5 s in 3/3 interactive runs,
+  and the transcript-shape fixture shows why a longer bound would not
   obviously fix it: the assistant's own turn had written zero entries
   to the transcript file by the bound, even though the pane fixture
   confirms the turn had already completed content-wise. No bound
-  measured in this round covers the interactive case. Per the ADR's
-  own fallback clause ("If no bound satisfies both, this slice
-  switches to the launcher-supplied report file"): the
-  launcher-supplied report file, bound by hash in the delegation's
-  `reportContentHash`, is the intended channel for the interactive
-  case rather than the transcript scan; wiring it into the child's
-  PreToolUse hook is a named follow-up (the hook does not yet read
-  `--report` back, see the pack doc). The `-p` case keeps the bounded
-  poll (2 s default, 5 s ceiling) as retuned above.
+  measured in this round covers the interactive case, and this remains
+  true of the transcript-scan channel specifically. Per the ADR's own
+  fallback clause ("If no bound satisfies both, this slice switches to
+  the launcher-supplied report file"): the launcher-supplied report
+  file, bound by hash in the delegation's `reportContentHash` and by
+  path in the conventional `harness.generated/.delegation-reports/<child-sid>.md`
+  location, is the intended channel for the interactive case rather
+  than the transcript scan, and the child's PreToolUse hook now reads
+  it back from that conventional path (`harness delegate --report`
+  stages it there); this was a named follow-up here and is closed by
+  the ADR's "Amendment: the launcher-report channel is consumed by the
+  child hook". The `-p` case keeps the bounded poll (2 s default, 5 s
+  ceiling) as retuned above; the two channels remain independent
+  (`-p` on the transcript scan, interactive on the launcher-report
+  channel, decided per delegation).
 - **Not measured here: the real-report lag distribution at n >= 10.**
   The real end-to-end runs above are n=6 (a)/(b) first attempts, all
   against the same fixture report; a larger sample of real-report

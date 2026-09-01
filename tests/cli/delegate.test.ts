@@ -14,6 +14,7 @@ import { HarnessExitError } from "../../src/cli/exit-codes.js";
 import {
   approvalMarkerPathFor,
   delegationMarkerPathFor,
+  delegationReportPathFor,
   hashDelegationCwd,
   REPORTS_DIR_ENV,
   verifyDelegation,
@@ -36,6 +37,96 @@ import { parseManifest, type Manifest } from "../../src/schema/index.js";
 
 const CHILD = "11111111-1111-4111-8111-111111111111";
 const PARENT = "parent-session-0001";
+
+/**
+ * A real, parseable Understanding Report: the exact 5-bullet shape
+ * `@lannguyensi/understanding-gate`'s fast_confirm prompt emits (mirrors
+ * `approve-stdin-report.test.ts`'s `FAST_CONFIRM_BULLETS`). Round-2 fix
+ * (agent-tasks 49d1ee41): `issueDelegation` now validates a `--report`
+ * file's content with the SAME parser `persistStdinReport` applies, so
+ * every `--report` fixture in this suite that expects staging to SUCCEED
+ * needs content that actually parses; the arbitrary JSON blob these
+ * fixtures used before this fix only ever exercised the copy/mode/
+ * conflict mechanics, never validity.
+ */
+const VALID_REPORT_MARKDOWN = [
+  "- I understood the task as: bind a launcher-supplied report by content and path.",
+  "- I will do: stage the conventional copy and let the child's hook read it back.",
+  "- I will not touch: the transcript-scan channel.",
+  "- I will verify by: issuing a delegation and verifying it end to end.",
+  "- Assumptions: the file exists and is readable at delegation time.",
+].join("\n");
+
+/**
+ * A full, all-sections Understanding Report (the grill_me / `full` prompt
+ * shape), used by the round-3 stage-time mode-parity tests below. Unlike
+ * {@link VALID_REPORT_MARKDOWN} (fast_confirm's relaxed 5-bullet shape,
+ * which only parses when the gap-fill default is `fast_confirm`), every
+ * section required by the STRICT schema is present, so this fixture
+ * parses under either mode's validator regardless of which one the
+ * caller's `defaults.mode` resolves to.
+ */
+const FULL_REPORT_MARKDOWN = [
+  "# Understanding Report",
+  "",
+  "**Current Understanding**",
+  "",
+  "The stage-time parse must use the pack's configured mode, not a hardcoded one.",
+  "",
+  "**Intended Outcome**",
+  "",
+  "A short-form report is refused at stage time under grill_me, before anything is signed.",
+  "",
+  "**Derived Todos**",
+  "",
+  "- mirror the hook's own mode resolution at stage time",
+  "",
+  "**Acceptance Criteria**",
+  "",
+  "- a fast_confirm-shaped report is refused under a grill_me-configured pack",
+  "",
+  "**Assumptions**",
+  "",
+  "- the pack's declared config is the same one the child hook resolves",
+  "",
+  "**Open Questions**",
+  "",
+  "- none",
+  "",
+  "**Out Of Scope**",
+  "",
+  "- the transcript-scan channel",
+  "",
+  "**Risks**",
+  "",
+  "- a stale gap-fill default reintroducing the mismatch",
+  "",
+  "**Verification Plan**",
+  "",
+  "- vitest over issueDelegation with an explicit mode-declaring manifest",
+  "",
+  "**Prior Art**",
+  "",
+  "- mirrors the child hook's toPackageMode(resolveMode(declared).mode) call",
+].join("\n");
+
+/**
+ * {@link FULL_REPORT_MARKDOWN} with an explicit `## Metadata` block
+ * declaring its OWN mode. The parser's merge order gives an inline
+ * Metadata declaration precedence over the caller-supplied gap-fill
+ * default for schema-validator selection (`understanding-gate`'s
+ * `parseReport`, `merged["mode"] ?? defaults.mode`), so this fixture
+ * stages successfully under a manifest configured for the OPPOSITE mode.
+ */
+const FULL_REPORT_MARKDOWN_DECLARING_FAST_CONFIRM = [
+  "# Understanding Report",
+  "",
+  "**Metadata**",
+  "",
+  "mode: fast_confirm",
+  "",
+  ...FULL_REPORT_MARKDOWN.split("\n").slice(2),
+].join("\n");
 
 let tmp: string;
 let generatedDir: string;
@@ -89,6 +180,19 @@ function manifestWithMaxAge(maxAge: string): Manifest {
       {
         name: "understanding-before-execution",
         config: { approval_lifecycle: { max_age: maxAge } },
+      },
+    ],
+  });
+}
+
+/** A manifest declaring only `config.mode`, for the stage-time mode-parity tests below. */
+function manifestWithMode(mode: string): Manifest {
+  return parseManifest({
+    version: 1,
+    policy_packs: [
+      {
+        name: "understanding-before-execution",
+        config: { mode },
       },
     ],
   });
@@ -307,6 +411,138 @@ describe("issueDelegation - refusals", () => {
     expect(result.ok).toBe(false);
     if (result.ok) throw new Error("expected refusal");
     expect(result.reason).toBe("report-unreadable");
+  });
+
+  it("refuses at STAGE time when --report points at a file that is readable but does not parse as an Understanding Report, and stages nothing (round-2 fix, agent-tasks 49d1ee41)", async () => {
+    // Before this fix an unparseable `--report` file was only hashed,
+    // never validated: it would be staged, signed, and adopted by the
+    // child hook, which would then fail to parse it at mint time
+    // AFTER already recording the adoption, permanently burning that
+    // child session id, with no cheap retry (a corrected `--report`
+    // rerun would hit `report-conflict` against the garbage already
+    // staged). Refusing here, before anything is written, avoids all of
+    // that.
+    approveParent();
+    const { ledgerAdd } = fakeLedger();
+    const reportPath = path.join(tmp, "unparseable-report.md");
+    fs.writeFileSync(reportPath, "not an understanding report at all, just prose\n");
+
+    const result = await issueDelegation({
+      childSessionId: CHILD,
+      cwd: childCwd,
+      parentSessionId: PARENT,
+      generatedDir,
+      reportPath,
+      ledgerAdd,
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("expected refusal");
+    expect(result.reason).toBe("report-unparseable");
+    expect(result.detail).toMatch(/did not parse/);
+
+    // Nothing was staged: no conventional file, no delegation marker.
+    const conventionalPath = delegationReportPathFor(generatedDir, CHILD);
+    expect(fs.existsSync(conventionalPath)).toBe(false);
+    expect(fs.existsSync(delegationMarkerPathFor(generatedDir, CHILD))).toBe(false);
+  });
+
+  it("refuses at STAGE time a fast_confirm-shaped --report when the applied pack declares mode: grill_me, and stages nothing (round-3 fix, agent-tasks 49d1ee41)", async () => {
+    // Before this fix the stage-time parse always gap-filled
+    // `mode: "fast_confirm"`, regardless of what the pack's own config
+    // declared. Every shipped init template sets `mode: grill_me`, so a
+    // short-form report like this one used to pass staging here and only
+    // fail later, at the child hook's persist-time parse (which DOES
+    // resolve the pack's real mode): after the adoption ledger had
+    // already recorded the report's content hash as spent, with no cheap
+    // retry. The fix mirrors the hook's own resolution
+    // (`toPackageMode(resolveMode(declared).mode)`) at stage time too, so
+    // this now refuses up front, before anything is signed or staged.
+    approveParent();
+    const { ledgerAdd } = fakeLedger();
+    const reportPath = path.join(tmp, "fast-confirm-report.md");
+    fs.writeFileSync(reportPath, VALID_REPORT_MARKDOWN);
+
+    const result = await issueDelegation({
+      childSessionId: CHILD,
+      cwd: childCwd,
+      parentSessionId: PARENT,
+      generatedDir,
+      reportPath,
+      manifest: manifestWithMode("grill_me"),
+      ledgerAdd,
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("expected refusal");
+    expect(result.reason).toBe("report-unparseable");
+    expect(result.detail).toMatch(/did not parse/);
+
+    // Nothing was staged: no conventional file, no delegation marker, no
+    // adoption-ledger entry spent.
+    const conventionalPath = delegationReportPathFor(generatedDir, CHILD);
+    expect(fs.existsSync(conventionalPath)).toBe(false);
+    expect(fs.existsSync(delegationMarkerPathFor(generatedDir, CHILD))).toBe(false);
+  });
+
+  it("stages a --report that declares its OWN mode in its Metadata block, unaffected by the applied pack's configured mode (agent-tasks 49d1ee41)", async () => {
+    // The pack is configured for grill_me, but the report explicitly
+    // declares `mode: fast_confirm` in its own `## Metadata` block. The
+    // parser's merge order gives that declaration precedence over the
+    // caller-supplied gap-fill default (`understanding-gate`'s
+    // `parseReport`: `merged["mode"] ?? defaults.mode`), so staging must
+    // still succeed: mirroring the pack's configured mode at stage time
+    // (this task's own fix) only changes the GAP-FILL default a report
+    // with no declaration of its own falls back to, never a report that
+    // states its mode itself.
+    approveParent();
+    const { ledgerAdd } = fakeLedger();
+    const reportPath = path.join(tmp, "declares-own-mode-report.md");
+    fs.writeFileSync(reportPath, FULL_REPORT_MARKDOWN_DECLARING_FAST_CONFIRM);
+
+    const result = await issueDelegation({
+      childSessionId: CHILD,
+      cwd: childCwd,
+      parentSessionId: PARENT,
+      generatedDir,
+      reportPath,
+      manifest: manifestWithMode("grill_me"),
+      ledgerAdd,
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("expected success (the report declares its own mode)");
+
+    const conventionalPath = delegationReportPathFor(generatedDir, CHILD);
+    expect(fs.readFileSync(conventionalPath, "utf8")).toBe(
+      FULL_REPORT_MARKDOWN_DECLARING_FAST_CONFIRM,
+    );
+  });
+
+  it("stages a grill_me-shaped --report when the applied pack declares mode: grill_me (agent-tasks 49d1ee41)", async () => {
+    // The positive control for the round-3 fix: a report that actually
+    // matches the pack's configured mode stages successfully. Mutation
+    // probe A (task brief): reverting the stage-time mode to the
+    // hardcoded `"fast_confirm"` literal does not turn THIS test red on
+    // its own (a full-shaped report parses under either validator); it
+    // turns the grill_me-refusal test above red instead, which is the
+    // discriminating probe.
+    approveParent();
+    const { ledgerAdd } = fakeLedger();
+    const reportPath = path.join(tmp, "grill-me-report.md");
+    fs.writeFileSync(reportPath, FULL_REPORT_MARKDOWN);
+
+    const result = await issueDelegation({
+      childSessionId: CHILD,
+      cwd: childCwd,
+      parentSessionId: PARENT,
+      generatedDir,
+      reportPath,
+      manifest: manifestWithMode("grill_me"),
+      ledgerAdd,
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("expected success (the report matches the configured mode)");
+
+    const conventionalPath = delegationReportPathFor(generatedDir, CHILD);
+    expect(fs.readFileSync(conventionalPath, "utf8")).toBe(FULL_REPORT_MARKDOWN);
   });
 
   it("refuses --task 'a=b' (an unsafe delegation-segment delimiter) with reason invalid-task (L1)", async () => {
@@ -591,35 +827,58 @@ describe("issueDelegation - happy path", () => {
     );
   });
 
-  it("--report populates both hashes; verifyDelegation with the same launcherReportPath passes, a moved copy fails", async () => {
+  it("--report copies the file to the conventional harness.generated/.delegation-reports/<child-sid>.md location (mode 0600), binds both hashes to THAT path, and a copy at a non-conventional path fails path verification", async () => {
     approveParent();
     const { ledgerAdd } = fakeLedger();
     const reportPath = path.join(tmp, "child-report.json");
-    fs.writeFileSync(reportPath, '{"mode":"grill_me"}\n');
+    fs.writeFileSync(reportPath, VALID_REPORT_MARKDOWN);
     const result = await issueDelegation({
       childSessionId: CHILD,
       cwd: childCwd,
       parentSessionId: PARENT,
       generatedDir,
       reportPath,
+      // `VALID_REPORT_MARKDOWN` is fast_confirm-shaped (5 bullets); this
+      // test is about the copy/hash/verify mechanics, not mode matching,
+      // so it declares the fixture's own shape explicitly rather than
+      // riding the no-manifest DEFAULT_MODE (grill_me), which the
+      // fixture would fail to parse against (round-3 fix, agent-tasks
+      // 49d1ee41: stage-time validation now uses the resolved pack mode,
+      // same as the child hook's persist-time validation).
+      manifest: manifestWithMode("fast_confirm"),
       ledgerAdd,
     });
     expect(result.ok).toBe(true);
     if (!result.ok) throw new Error("expected success");
 
+    // The conventional copy exists, carries the same bytes as the
+    // operator's original file, and is mode 0600 (agent-tasks 49d1ee41,
+    // AC1: "copy the operator's file there, mode 0600").
+    const conventionalPath = delegationReportPathFor(generatedDir, CHILD);
+    expect(fs.existsSync(conventionalPath)).toBe(true);
+    expect(fs.readFileSync(conventionalPath, "utf8")).toBe(VALID_REPORT_MARKDOWN);
+    expect(fs.statSync(conventionalPath).mode & 0o777).toBe(0o600);
+
+    // The delegation binds the CONVENTIONAL path's hash, not the
+    // operator's original --report argument: the child's hook has no
+    // channel to learn that argument, only the conventional path it can
+    // derive itself from the child session id.
     const okVerify = verifyDelegation({
       generatedDir,
       childSessionId: CHILD,
       cwd: childCwd,
       taskId: null,
-      launcherReportPath: reportPath,
+      launcherReportPath: conventionalPath,
     });
     expect(okVerify.ok).toBe(true);
-    if (!okVerify.ok) throw new Error("expected the same-path report to verify");
-    expect(okVerify.reportPathHash).toBe(hashDelegationCwd(reportPath));
+    if (!okVerify.ok) throw new Error("expected the conventional-path report to verify");
+    expect(okVerify.reportPathHash).toBe(hashDelegationCwd(conventionalPath));
 
+    // Verifying against a DIFFERENT path (even one with identical bytes)
+    // still fails path verification: WHERE the parent put the report is
+    // part of what was signed, not just what it contains.
     const movedPath = path.join(tmp, "moved-report.json");
-    fs.copyFileSync(reportPath, movedPath);
+    fs.copyFileSync(conventionalPath, movedPath);
     const movedVerify = verifyDelegation({
       generatedDir,
       childSessionId: CHILD,
@@ -630,6 +889,116 @@ describe("issueDelegation - happy path", () => {
     expect(movedVerify.ok).toBe(false);
     if (movedVerify.ok) throw new Error("expected the moved-copy report to fail verification");
     expect(movedVerify.reason).toBe("report_path_mismatch");
+  });
+
+  it("--report refuses when the conventional path holds a symlink, leaving the link and its target untouched", async () => {
+    approveParent();
+    const { ledgerAdd } = fakeLedger();
+    const conventionalPath = delegationReportPathFor(generatedDir, CHILD);
+    fs.mkdirSync(path.dirname(conventionalPath), { recursive: true });
+    const target = path.join(tmp, "symlink-target.md");
+    fs.writeFileSync(target, "untouched target\n");
+    fs.symlinkSync(target, conventionalPath);
+
+    const reportPath = path.join(tmp, "child-report.json");
+    fs.writeFileSync(reportPath, VALID_REPORT_MARKDOWN);
+    const result = await issueDelegation({
+      childSessionId: CHILD,
+      cwd: childCwd,
+      parentSessionId: PARENT,
+      generatedDir,
+      reportPath,
+      manifest: manifestWithMode("fast_confirm"),
+      ledgerAdd,
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("expected a refusal");
+    expect(result.reason).toBe("report-conflict");
+    // The link is neither followed nor replaced, and its target is not written.
+    expect(fs.lstatSync(conventionalPath).isSymbolicLink()).toBe(true);
+    expect(fs.readFileSync(target, "utf8")).toBe("untouched target\n");
+  });
+
+  it("--report refuses to silently overwrite a DIFFERENT report already staged at the conventional path for the same child session", async () => {
+    approveParent();
+    const { ledgerAdd } = fakeLedger();
+    const conventionalPath = delegationReportPathFor(generatedDir, CHILD);
+    fs.mkdirSync(path.dirname(conventionalPath), { recursive: true });
+    fs.writeFileSync(conventionalPath, '{"mode":"already-staged"}\n', { mode: 0o600 });
+
+    const reportPath = path.join(tmp, "child-report.json");
+    fs.writeFileSync(reportPath, VALID_REPORT_MARKDOWN);
+    const result = await issueDelegation({
+      childSessionId: CHILD,
+      cwd: childCwd,
+      parentSessionId: PARENT,
+      generatedDir,
+      reportPath,
+      // See the mode-shape note on the preceding test.
+      manifest: manifestWithMode("fast_confirm"),
+      ledgerAdd,
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("expected a refusal");
+    expect(result.reason).toBe("report-conflict");
+    // The already-staged file is untouched, not clobbered.
+    expect(fs.readFileSync(conventionalPath, "utf8")).toBe('{"mode":"already-staged"}\n');
+    // No delegation was minted from a half-completed report stage.
+    expect(fs.existsSync(delegationMarkerPathFor(generatedDir, CHILD))).toBe(false);
+  });
+
+  it("--report is idempotent when the SAME content is already staged at the conventional path (re-delegating the same child with the same report)", async () => {
+    approveParent();
+    const { ledgerAdd } = fakeLedger();
+    const reportPath = path.join(tmp, "child-report.json");
+    fs.writeFileSync(reportPath, VALID_REPORT_MARKDOWN);
+    const conventionalPath = delegationReportPathFor(generatedDir, CHILD);
+    fs.mkdirSync(path.dirname(conventionalPath), { recursive: true });
+    fs.writeFileSync(conventionalPath, VALID_REPORT_MARKDOWN, { mode: 0o600 });
+
+    const result = await issueDelegation({
+      childSessionId: CHILD,
+      cwd: childCwd,
+      parentSessionId: PARENT,
+      generatedDir,
+      reportPath,
+      // See the mode-shape note two tests up.
+      manifest: manifestWithMode("fast_confirm"),
+      ledgerAdd,
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("expected success (identical content is not a conflict)");
+    expect(fs.readFileSync(conventionalPath, "utf8")).toBe(VALID_REPORT_MARKDOWN);
+  });
+
+  it("--report brings a pre-existing IDENTICAL conventional file to mode 0600 on restage, even though nothing is written", async () => {
+    // Round-2 fix: the identical-restage branch used to leave the mode
+    // as-is, while the pack doc promises 0600 for the conventional copy
+    // unconditionally. A pre-existing file at a looser mode (left by
+    // something other than this verb) must still end at 0600.
+    approveParent();
+    const { ledgerAdd } = fakeLedger();
+    const reportPath = path.join(tmp, "child-report.json");
+    fs.writeFileSync(reportPath, VALID_REPORT_MARKDOWN);
+    const conventionalPath = delegationReportPathFor(generatedDir, CHILD);
+    fs.mkdirSync(path.dirname(conventionalPath), { recursive: true });
+    fs.writeFileSync(conventionalPath, VALID_REPORT_MARKDOWN, { mode: 0o644 });
+    expect(fs.statSync(conventionalPath).mode & 0o777).toBe(0o644);
+
+    const result = await issueDelegation({
+      childSessionId: CHILD,
+      cwd: childCwd,
+      parentSessionId: PARENT,
+      generatedDir,
+      reportPath,
+      // See the mode-shape note above.
+      manifest: manifestWithMode("fast_confirm"),
+      ledgerAdd,
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("expected success (identical content is not a conflict)");
+    expect(fs.readFileSync(conventionalPath, "utf8")).toBe(VALID_REPORT_MARKDOWN);
+    expect(fs.statSync(conventionalPath).mode & 0o777).toBe(0o600);
   });
 
   it("binds by --task alone (no --cwd) and verifyDelegation accepts the matching task with no cwd offered", async () => {
@@ -850,7 +1219,7 @@ describe("harness delegate - CLI wiring", () => {
   it("--report reaches issueDelegation end to end through the CLI action, binding both hashes", async () => {
     approveParent();
     const reportPath = path.join(tmp, "child-report.json");
-    fs.writeFileSync(reportPath, '{"mode":"grill_me"}\n');
+    fs.writeFileSync(reportPath, VALID_REPORT_MARKDOWN);
     let out = "";
     const program = buildProgram({
       stdout: (s: string) => {
@@ -859,7 +1228,14 @@ describe("harness delegate - CLI wiring", () => {
       stderr: () => {},
     });
     const configPath = path.join(generatedDir, "..", "harness.yaml");
-    fs.writeFileSync(configPath, "version: 1\n");
+    // `VALID_REPORT_MARKDOWN` is fast_confirm-shaped; declares the pack's
+    // mode explicitly so the stage-time parse (which now resolves mode
+    // the same way the config file does) matches the fixture's shape
+    // instead of falling through to DEFAULT_MODE (grill_me).
+    fs.writeFileSync(
+      configPath,
+      "version: 1\npolicy_packs:\n  - name: understanding-before-execution\n    config:\n      mode: fast_confirm\n",
+    );
     await program.parseAsync(
       [
         "delegate",
@@ -877,16 +1253,18 @@ describe("harness delegate - CLI wiring", () => {
       { from: "user" },
     );
     expect(out).toMatch(/delegation: ✓/);
+    const conventionalPath = delegationReportPathFor(generatedDir, CHILD);
+    expect(fs.readFileSync(conventionalPath, "utf8")).toBe(VALID_REPORT_MARKDOWN);
     const verified = verifyDelegation({
       generatedDir,
       childSessionId: CHILD,
       cwd: childCwd,
       taskId: null,
-      launcherReportPath: reportPath,
+      launcherReportPath: conventionalPath,
     });
     expect(verified.ok).toBe(true);
-    if (!verified.ok) throw new Error("expected the same-path report to verify");
-    expect(verified.reportPathHash).toBe(hashDelegationCwd(reportPath));
+    if (!verified.ok) throw new Error("expected the conventional-path report to verify");
+    expect(verified.reportPathHash).toBe(hashDelegationCwd(conventionalPath));
   });
 
   it("--cwd '' --task <id> does not silently drop the cwd: the CLI passes it through and issueDelegation refuses it with invalid-cwd (L3)", async () => {

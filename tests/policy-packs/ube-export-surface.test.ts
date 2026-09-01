@@ -70,6 +70,16 @@ import * as ubeShim from "../../src/policy-packs/builtin/understanding-before-ex
 // listPermissionModeObservations. 65 -> 69. The module's two type-only
 // exports (PermissionModeObservation, PermissionModeObservationsResult)
 // are absent from this list for the same reason.
+// Widened a ninth time (agent-tasks 49d1ee41, follow-up to slice 3): the
+// two VALUE exports of the report-fallback CONVENTIONAL path helper
+// (delegation-markers.ts), DELEGATION_REPORT_DIRNAME and
+// delegationReportPathFor, added so `harness delegate --report` and the
+// child's PreToolUse hook derive the same
+// `harness.generated/.delegation-reports/<child-sid>.md` location from
+// nothing but the child session id. 70 -> 72; stated against the actual
+// pre-widening count (an earlier entry in this chain undercounted by
+// one, so the running totals through the eighth widening summed to 69
+// rather than the 70 already present at HEAD before this change).
 //
 // Mutation-verified: temporarily re-adding `export { safeJsonParse } from
 // "./persisted-reports.js";` to
@@ -89,6 +99,7 @@ const EXPECTED_EXPORTS = [
   "DEFAULT_BASH_TOOL_NAMES",
   "DEFAULT_REPORT_SCAN_MAX_WAIT_MS",
   "DELEGATION_MARKER_DIRNAME",
+  "DELEGATION_REPORT_DIRNAME",
   "REPORTS_DIR_ENV",
   "REPORT_SCAN_MAX_WAIT_CEILING_MS",
   "TOLERANT_FALLBACK_FUTURE_SKEW_MS",
@@ -112,6 +123,7 @@ const EXPECTED_EXPORTS = [
   "defaultReportsDir",
   "delegationMarkerIdFor",
   "delegationMarkerPathFor",
+  "delegationReportPathFor",
   "describePostToolUseExpiry",
   "expirePersistedReport",
   "extractBashCommandFromToolInput",
@@ -150,9 +162,9 @@ const EXPECTED_EXPORTS = [
 ] as const;
 
 describe("understanding-before-execution-runtime shim export surface", () => {
-  it("exports exactly the pinned 70-name surface, sorted", () => {
+  it("exports exactly the pinned 72-name surface, sorted", () => {
     const actual = Object.keys(ubeShim).sort();
-    expect(EXPECTED_EXPORTS).toHaveLength(70);
+    expect(EXPECTED_EXPORTS).toHaveLength(72);
     expect(actual).toEqual([...EXPECTED_EXPORTS].sort());
   });
 

@@ -3,7 +3,7 @@ type: runbook
 title: Understanding-gate lockout recovery
 description: Operator procedure to unblock a session locked by the understanding-before-execution PreToolUse gate via `harness approve understanding`, including the 6-tier session-id resolution and the expiry semantics that re-arm the gate.
 tags: [runbook, understanding-gate, lockout, recovery, operator]
-timestamp: 2026-09-01T07:15:40Z
+timestamp: 2026-09-01T08:26:00Z
 sources:
   - src/cli/pack/auto-approve-path.ts
   - src/cli/approve/understanding.ts
@@ -60,7 +60,7 @@ Recovery is **operator-only**, from a shell the hooks do not gate (the `!`-shell
    2. `$CLAUDE_CODE_SESSION_ID` (the variable Claude Code actually exports; read first so the runtime's id beats a hand-exported legacy value)
    3. `$CLAUDE_SESSION_ID` (legacy peer)
    4. `$CODEX_SESSION_ID` (live Codex session)
-   5. `<generatedDir>/.pending-approval`, staged by the PreToolUse blocker on every block/ask (Claude path: `src/cli/pack/hook-pre-tool-use.ts:772#"writePendingApproval(generatedDir, sessionId);"`; Codex path: `src/cli/pack/hook-codex-pre-tool-use.ts:499#"writePendingApproval(generatedDir, sessionId);"`) and by `harness session-start preflight` on every run with a resolved id (`src/cli/session-start/index.ts`). Deleted after a successful resolve **and** marker write, so a stale id cannot be revived; a failed marker write keeps it for retry.
+   5. `<generatedDir>/.pending-approval`, staged by the PreToolUse blocker on every block/ask (Claude path: `src/cli/pack/hook-pre-tool-use.ts:788#"writePendingApproval(generatedDir, sessionId);"`; Codex path: `src/cli/pack/hook-codex-pre-tool-use.ts:499#"writePendingApproval(generatedDir, sessionId);"`) and by `harness session-start preflight` on every run with a resolved id (`src/cli/session-start/index.ts`). Deleted after a successful resolve **and** marker write, so a stale id cannot be revived; a failed marker write keeps it for retry.
    6. the freshest persisted report under the reports dir whose JSON `sessionId` is non-null **and** whose `approvalStatus` is `pending` (approved/expired reports belong to finished cycles and are never adopted, harness/56f51f2b). The CLI prints a loud "session id was GUESSED" warning naming the report file — verify it is your live session before trusting the marker.
 
    All six empty → `HarnessExitError`, no guess. Fastest fix per the error text: run `harness preflight` once (it stages `.pending-approval` as a side effect), then re-run `harness approve understanding`.
