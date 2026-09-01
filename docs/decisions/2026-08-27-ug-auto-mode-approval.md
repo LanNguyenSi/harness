@@ -507,6 +507,79 @@ Reconsider this decision if any of the following become true:
 
 `auto_approve` ships ACTIVE, not commented out, in the `understanding-before-execution` pack config of every `harness init` template that enables this pack (`full`, `solo`, `team`), and `harness pack upgrade understanding-before-execution` offers the same block to an existing manifest as an explicit operator verb. Four points anchor this as a rule-level change to the install default, not a change to the auto-mode design itself: (1) under `bypassPermissions` the permission system is off by the operator's own launch choice; a human prompt there is exactly the friction that mode exists to remove, so an install that prompts anyway does not do what the operator selected. (2) The report precondition is unchanged: `require_report: true` remains the only schema-valid value, and every template shipping this block also ships `mode: grill_me`, so the report the auto path consumes is checked, not merely present. (3) The opt-in stays a visible, deletable config key; this document's threat model is unchanged by where the default originates, because the running session still cannot control the opt-in before approval: the invariants above (the signed marker as sole authority, fail-closed on ambiguity, the report staying mandatory) hold identically whether the block was hand-typed or shipped by `init`. (4) Existing installs are never changed silently: the upgrade path is an explicit operator verb (`harness pack upgrade understanding-before-execution`), never invoked by `apply` or `doctor` on their own, mirroring `pack reseed`'s precedent for `config.ux` drift. `harness doctor` gained a companion advisory (`bypassPermissions` observed via a hook-written, unsigned observation (evidence that the hook was invoked with such a payload, not proof of the session's mode; advisory only, never a gate input), `auto_approve` missing or not covering it) so an install that predates this default is visible rather than silently under-protected. The originating incident is recorded in `CHANGELOG.md`'s `[Unreleased]` entry for task `8f637efd`; this amendment states the rule it motivated, not the measurement itself.
 
+## Amendment: Platform scope, `claude -p` delegation (2026-09-01, task `be9faf70`)
+
+**Consuming a delegation (slice 3: `harness delegate`'s CHILD side, the `.delegations/` marker read, the adoption ledger, the PreToolUse key-one-by-delegation branch) stays Claude Code only.** It is not ported to Codex now, and it is not wontfix either: the boundary is named here, and correspondingly in the pack doc, `docs/CLI.md`, and the `delegate` verb's own `--help` text, because leaving the gap an OKF re-verification pass found (`docs/okf/codex-adapter-parity-gaps.md`, gap 14) undocumented would read as an oversight rather than a decision. Consuming and issuing are separate questions, and only consuming is restricted: see the cross-runtime issuing surface below, which this amendment records as an accepted consequence rather than closes.
+
+Three premises this amendment started from do not hold as stated once checked against the current tree, and the correction is recorded rather than carried forward silently. First, Codex is not without an auto-mode surface: slice 2 (gap 13) already ships a shared `attemptAutoApproval` call on the Codex hook, gated behind `auto_approve.harnesses` naming `codex`, minting `approvedBy: auto-mode:codex:<mode>` (`src/cli/pack/hook-codex-pre-tool-use.ts:468-473#"harness: CODEX_HARNESS,"`). What Codex lacks is delegation specifically: `hook-codex-pre-tool-use.ts` imports neither the delegation-marker module nor the transcript-report-scan module and carries no branch analogous to the Claude hook's key-one-by-delegation step (`src/cli/pack/hook-pre-tool-use.ts:866#"Step 9's key-one-by-delegation branch"`). Second, Codex's block contract already IS a deny-with-reason: every refusal is a non-zero exit plus a stderr reason string, the same shape a delegation refusal would need. What Codex has never carried is Claude's structured JSON decision envelope or an `ask`-defer-to-an-interactive-prompt branch; the Codex hook's own header states plainly that the JSON-decision shape Claude Code reads "is not part of Codex's hook contract today" (`src/cli/pack/hook-codex-pre-tool-use.ts:13-16#"is not part of Codex's hook contract today)."`). That particular absence matters less for delegation than it would for the escape path, because a delegation targets a headless, non-interactive child by definition; there is nobody for an `ask` to prompt in that shape on either runtime. Third, and the correction this round of review forced: delegation is not symmetrically Claude-only. `issueDelegation`'s parent-session resolution runs the same chain `harness approve understanding` uses (flag > `$CLAUDE_CODE_SESSION_ID` > `$CLAUDE_SESSION_ID` > `$CODEX_SESSION_ID` > staged `.pending-approval`), and its 4th tier reads `$CODEX_SESSION_ID` directly (`src/cli/delegate/index.ts:256#"const resolvedParent = resolveApprovalSessionId({"`, chain defined at `src/runtime/session-id.ts:264-268#"CODEX_SESSION_ID, sessionSource:"`). The parent-marker check that follows verifies signature, JSON structure and expiry only; its options accept `maxAgeMs` and `now`, nothing that names a harness or filters on `approvedBy` (`src/cli/delegate/index.ts:285#"const parentCheck = checkApprovalMarker(generatedDir, parentSessionId, {"`, checked function at `src/policy-packs/builtin/understanding-before-execution/markers.ts:100-138#"): MarkerCheck {"`). Markers are cross-runtime shared by design (gap 2), so a Codex session holding a valid signed marker, including one auto-minted by the Codex hook under `auto_approve.harnesses`, can issue a delegation for a Claude `-p` child TODAY, with no code change.
+
+For a Codex session to ever be the delegated CHILD, both keys of the ADR's two-key design are still missing, not one. Key one is a verified `harness.generated/.delegations/<child-sid>` marker: without a `codex-pre-tool-use` branch that reads and verifies it, a Codex child has no pre-authorization signal to check at all, so the call falls through to whatever `attemptAutoApproval`'s own single-session check already resolves; nothing opens for lack of key one, the child simply cannot be delegated to, which is a fail-closed absence rather than a fail-open gap. Key two is the child's own Understanding Report, which for a delegated child must be captured through a channel that survives that child's own execution model's report-visibility lag; without a MEASURED capture channel for Codex, the honest choices are fail closed (no consumer at all, which is what ships today) or fail open on an unmeasured assumption (reusing Claude's bounded transcript poll against a differently-shaped Codex transcript/session model), and this amendment is what refuses the second option. The cross-runtime issuing surface above also inherits Codex's own weaker session-consistency evidence: gap 13's `attemptAutoApproval` call on the Codex hook authenticates a marker via the transcript file's own name and existence, not an environment variable, because Codex exports no session-id variable to hook processes (`src/cli/pack/hook-codex-pre-tool-use.ts:479#"sessionConsistency: { kind:"`). `checkApprovalMarker` does not distinguish how a marker was minted, so a marker minted through that weaker check is, today, a fully sufficient key one for `issueDelegation`.
+
+The reason a port is a whole second auto-mode surface rather than a parity patch is therefore not "Codex has nothing to mint into" (it does, since slice 2). It is that delegation is a materially different mechanism from slice 2's single-session, `permission_mode`-gated approval: it binds a signed pre-authorization to a PARENT session, and the child side of it depends on a report-capture channel that survives that child's own execution model's report-visibility lag. The bounded transcript poll slice 3 ships (see "Report capture under `-p`" above) is calibrated to a lag measured only for Claude `-p`; Codex's own transcript/session shape has never been probed for an equivalent lag, and nothing here assumes the number, or even the existence of a bounded lag, transfers. Porting delegation to Codex would mean designing and measuring a Codex-specific child-report capture channel from a cold start, writing a Codex-specific delegation verifier, and re-deriving the fail-closed guarantees for that Codex-specific consumer from a cold start, not adapting the three pieces slice 3 already wrote for Claude. That is the shape of a second slice 3, not a follow-up patch, which is why this amendment records a documented consumption-side boundary rather than opening a port task.
+
+**Decision on the cross-runtime issuing surface.** The Codex-parent, Claude-child issuing path named above is an accepted, understood consequence of gap 2's shared marker contract, not a defect: any marker that authenticates a parent session at all, on either runtime, already opens that runtime's own gate, so a Codex marker authorizing a Claude delegation extends an existing shared-trust boundary rather than opening a new one. No parent-runtime refusal (rejecting `$CODEX_SESSION_ID`-resolved parents in `issueDelegation`) is added under this task; the verb's behaviour is unchanged. Closing it, if a future decision wants to, is a separate task, since it would change `issueDelegation`'s refusal surface rather than only its documentation.
+
+**Reopen criterion.** Revisit this scope decision when the Codex adapter gains BOTH of the following, not either alone: (1) a delegation-marker consumer, a `codex-pre-tool-use` branch that reads `harness.generated/.delegations/<child-sid>` and verifies it the way the Claude hook's delegation check does today, and (2) a measured report-capture channel for Codex's own child/session model backing that consumer, since the existing bounded poll's calibration is Claude-`-p`-specific and does not transfer on its own. Codex's pre-existing deny-with-reason exit contract and its pre-existing signed-marker consumption (shared with Claude since gap 2) are NOT the missing signal: both already exist today, so naming either as the reopen trigger would read as already satisfied and reopen this decision on the spot, which is not the intent.
+
+## Amendment: permission-mode observation stays unsigned
+
+**Decision.** The per-session permission-mode observation
+(`recordPermissionModeObservation`, writing to
+`harness.generated/.permission-mode-observations/<sessionId>`) stays
+unsigned. `harness doctor`'s `bypassPermissions`-without-`auto_approve`
+finding (`checkBypassWithoutAutoApprove`) keeps reading it as advisory
+evidence only, exactly as shipped; signing it the way the approval
+marker is signed was considered and rejected.
+
+**Reasoning.** The write point is the hook process itself: it takes
+`session_id` and `permission_mode` verbatim off the PreToolUse payload
+on stdin and persists them without any further attestation
+(`src/cli/pack/hook-pre-tool-use.ts:1087#"event.permission_mode, stderr);"`).
+Any actor able to invoke the hook binary with a stdin payload of its own
+choosing, an already-approved session included, therefore obtains a
+hook-written observation carrying whatever `session_id` /
+`permission_mode` it supplies; nothing on the write path distinguishes a
+genuine PreToolUse invocation from a crafted one. Signing that record
+with the marker-signing key would not close that gap: an HMAC over
+attacker-chosen input still only certifies that the hook signed the
+record, not that the named session actually ran under the claimed
+permission mode, which is the property the doctor finding needs. It
+would also open a second, unconditional signing surface for the
+marker-signing key (not a path to mint an approval marker, which stays
+namespaced by markerId), the exact widening the threat model above
+already names as a residue under "Slice 1 turns the PreToolUse hook
+into a marker-signing oracle": today the hook mints an approval marker
+only when the auto-approve preconditions hold, and a signed observation
+write would give the same reachable caller a second signing surface
+gated on nothing, for no gain against the stdin-forgery threat just
+described.
+The finding this record feeds also stays advisory only: it can never
+gate a tool call or mint an approval
+(`src/cli/doctor/index.ts:1127#"if (report.ugBypassWithoutAutoApprove) warningCount++;"`),
+so the operator remains the one who decides what the evidence means,
+and a signature on the record would not change that division of
+authority either. Marker signing does close a narrow class on its own
+side of the boundary, a write primitive without a matching key read
+(`src/runtime/approval-signing.ts:32-45#"distinguishable event; a bare unsigned-JSON write no longer is)."`);
+leaving that class open for this record is accepted here because the
+observation is advisory only, never a gate input, and the finding's own
+message already tells the operator to confirm it against their own
+launch settings before acting on it.
+
+**Reopen criterion.** Reconsider this decision if the observation ever
+moves from advisory doctor output into anything that gates a decision,
+for example an allow/deny input or an auto-approval precondition. At
+that point the record needs an evidence source the invoking process
+cannot author on its own stdin, not a signature over the same
+self-report: signing an already-forgeable input does not supply the
+missing property. The candidate to evaluate first is transcript-side
+corroboration: the `transcript_path` consistency check the Codex
+auto-approve path already uses (see the "Understanding gate" paragraph
+in `docs/okf/evidence-ledger-trust-boundary.md`) and the transcript's
+own permission-mode line the repo already parses in
+`src/cli/session-export/transcript.ts`; honestly, that raises the cost
+of forging the record rather than removing its forgeability.
+
 ## Amendment: the launcher-report channel is consumed by the child hook (2026-09-01, agent-tasks `49d1ee41`)
 
 Slice 3 shipped `harness delegate --report` minting a fully signed, verifiable fallback-shape delegation, but the child's PreToolUse hook refused every report-bound delegation unconditionally: it never offered `verifyDelegation` a `launcherReportPath`, because the delegation stored only a hash of the operator's own `--report` argument, a path the hook has no channel to learn. This amendment closes that gap with a CONVENTIONAL path both sides derive from nothing but the child session id, which `harness delegate` already takes as a required argument at delegation time (never learned only when the child starts): `harness.generated/.delegation-reports/<child-sid>.md`. `harness delegate --report <path>` copies the operator's file there, mode 0600, refusing (a distinct refusal reason, never a silent overwrite) when a DIFFERENT file is already staged at that location for the same child session; an identical restage is a no-op. The `report=` segment of the signed `approvedBy` string then binds the sha256 of that CONVENTIONAL file's realpath, through the same `hashDelegationCwd` the cwd binding already uses, and `reportContentHash` binds its bytes, exactly as "Delegation marker shape" specifies; only WHERE the parent staged the copy changed, not what is signed or how.
