@@ -1884,8 +1884,6 @@ describe("intercept — task 2929c5b7: gate-prod-destructive unclassified-fallba
     ["sed -n", "sed -n '1,20p' notes/memory.md"],
     ["grep", "grep TODO notes/memory.md"],
     ["curl (no -X/-d)", "curl https://api.example.com/status"],
-    ["ssh <host> <cmd>", 'ssh prod-host "cat /etc/hosts"'],
-    ["node -e", "node -e \"console.log(1+1)\""],
   ])("does NOT deny %s in a production cwd, and it is explicitly classified `low`, not merely unclassified", async (_label, command) => {
     const result = await runInProdCwd(command);
     expect(result.blockJson).toBeNull();
@@ -1897,6 +1895,65 @@ describe("intercept — task 2929c5b7: gate-prod-destructive unclassified-fallba
     const risk = classifyRisk(envelope, realClassifiers());
     expect(risk.classified).toBe(true);
     expect(risk.severity).toBe("low");
+  });
+
+  // D-011 (fix round 2): `ssh <host> <cmd>` and `node -e`/`--eval` do NOT
+  // get an explicit `low` floor. The local head cannot see the remote
+  // command or the eval'd code, so a `low` floor there would remove Risk
+  // Gate coverage entirely for those shapes (neither `severity_at_least:
+  // critical` nor `severity_at_least: high` fires on a `low` action).
+  // Instead they stay genuinely unclassified and ride prong (b)'s fallback:
+  // not hard-denied by the critical gate, but still approval-gated by the
+  // high-severity gate. Mutation probe A (re-add a `low` floor for ssh):
+  // this test's `classified: false` assertion goes red. Mutation probe B
+  // (restore old when-eval.ts fallback semantics, unclassified satisfies
+  // every severity_at_least): the "not denied by gate-prod-destructive"
+  // assertion below goes red.
+  it.each([
+    ["ssh <host> <cmd>", 'ssh prod-host "cat /etc/hosts"'],
+    ["node -e", "node -e \"console.log(1+1)\""],
+  ])("%s stays unclassified: NOT denied by gate-prod-destructive (critical), but IS approval-gated by gate-prod-destructive-approval (high) via the fallback", async (_label, command) => {
+    const envelope = buildActionEnvelope(
+      { hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: { command } } as ToolEvent,
+      ENVELOPE_CTX,
+    );
+    const risk = classifyRisk(envelope, realClassifiers());
+    expect(risk.classified).toBe(false);
+    expect(risk.severity).toBeNull();
+
+    const critical = await runInProdCwd(command);
+    expect(critical.blockJson).toBeNull();
+
+    const ledger = makeLedger({ kind: "ok", entries: [] });
+    const approval = await intercept({
+      manifest: makeManifest({
+        policies: [
+          {
+            name: "gate-prod-destructive-approval",
+            description:
+              "require operator approval for high-severity destructive shell actions against a production target",
+            trigger: { event: "PreToolUse", match: "Bash" },
+            when: {
+              "risk.severity_at_least": "high",
+              "environment.name": "production",
+            },
+            requires: { ledger_tag: "risk-approved:${SESSION_ID}" },
+            hook: "risk-gate",
+            enforcement: "require_approval",
+          } as Policy,
+        ],
+        classifiers: realClassifiers(),
+        resolvers: [PROD_RESOLVER],
+      }),
+      event: bashEvent(command),
+      ledger,
+      builtins: BUILTINS,
+      now: NOW,
+      riskContext: riskCtx("main"),
+    });
+    expect(approval.blockJson).not.toBeNull();
+    // Denied via the fallback, not a real pattern match.
+    expect(approval.decisions[0]?.whenUnclassifiedFallback).toBe(true);
   });
 
   // Prong (b) itself, directly: a command NO classifier pattern

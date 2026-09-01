@@ -35,8 +35,6 @@ import { expandToolNameAliases, extractShellCommand } from "./tool-name-aliases.
 import {
   isReadOnlyBashCommand,
   isReadOnlyKubectlCommand,
-  isReadOnlyNodeEvalRiskFloor,
-  isReadOnlySshRiskFloor,
 } from "./read-only-bash.js";
 
 // Ordered severity scale: a value's index here is the comparison key
@@ -282,27 +280,6 @@ export function classifyRisk(
         severityIdx = lowIdx;
         reasons.push(
           "built-in: provably read-only kubectl verb recognized (severity low)",
-        );
-      } else if (isReadOnlySshRiskFloor(shellCommand)) {
-        // ssh local-head-only floor (task 2929c5b7), same Risk-
-        // Classifier-only scoping as the kubectl floor above: the
-        // remote command is NOT inspected, a deliberate, disclosed
-        // boundary — see `isReadOnlySshRiskFloor`'s doc comment in
-        // read-only-bash.ts and docs/risk-gate.md.
-        severityIdx = lowIdx;
-        reasons.push(
-          "built-in: ssh invocation recognized (local head only, remote command not inspected; severity low)",
-        );
-      } else if (isReadOnlyNodeEvalRiskFloor(shellCommand)) {
-        // node -e / --eval floor (task 2929c5b7), same Risk-Classifier-
-        // only scoping: the code argument is arbitrary and unexamined,
-        // a deliberate, disclosed boundary — the Risk Gate polices
-        // production-destructive shell actions, not code execution. See
-        // `isReadOnlyNodeEvalRiskFloor`'s doc comment in
-        // read-only-bash.ts and docs/risk-gate.md.
-        severityIdx = lowIdx;
-        reasons.push(
-          "built-in: node -e/--eval invocation recognized (code argument not inspected; severity low)",
         );
       }
     }

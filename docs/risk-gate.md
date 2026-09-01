@@ -622,61 +622,6 @@ observed to fail exactly the tests named above, then restored — see the
 blocks above (this file's own record of what was measured, rather than
 a pointer to a subagent report that does not live in this repository).
 
-#### `ssh` / `node -e` local-head-only floors (task `2929c5b7`)
-
-Two more Risk-Classifier-only floors, same scoping precedent as the
-kubectl floor above (`isReadOnlySshRiskFloor` / `isReadOnlyNodeEvalRiskFloor`
-in `src/runtime/read-only-bash.ts`, wired into `classifyRisk` in
-`risk-classifier.ts`; NEVER folded into `isReadOnlyBashCommand` /
-`isReadOnlyBashPipeline`, so the understanding-gate PreToolUse blocker and
-the solution-acceptance write-guard keep treating `ssh` and `node -e` as
-non-read-only, unchanged by either floor). Both are a DELIBERATE,
-DISCLOSED risk-acceptance for the Risk Gate specifically, not a claim
-that the action is actually read-only:
-
-- **`ssh <host> <cmd>`**: classified by the LOCAL head token (`ssh`)
-  ONLY. The remote command is NOT inspected — `ssh prod-host "rm -rf /"`
-  floors to `low` exactly like `ssh prod-host "cat /etc/hosts"` does.
-  This is the honest boundary the task explicitly asked for: the Risk
-  Gate reasons about the LOCAL shell command it can see, and a quoted
-  remote payload is opaque to it by construction. Still fail-safe on the
-  LOCAL side: any shell metacharacter, chain, or substitution in the
-  OUTER command (`ssh host "x"; rm -rf /`) is refused up front by the
-  same `hasUnsafeShellMetachar` guard every other floor in this module
-  uses, so a local write cannot be laundered behind the `ssh` head
-  either.
-- **`node -e <code>` / `node --eval <code>`**: the code argument is
-  arbitrary and unexamined. Justified narrowly: `gate-prod-destructive(-approval)`
-  exist to catch production-DESTRUCTIVE shell actions, not to be a
-  code-execution sandbox — an agent that can run `node -e` can already
-  run equivalent JS via a script file, `python3 -c`, etc., none of which
-  this floor (or the general read-only floor) claims to police. A bare
-  `node script.js` (no `-e`/`--eval`) does NOT match — this floor is
-  scoped to the literal eval flags, not to every node invocation.
-
-**This is a genuine, disclosed security tradeoff, not a claim of actual
-read-only-ness — flag it in review.** Both floors remove the Risk
-Gate's coverage entirely for their shape (not just the hard-block: an
-`ssh <host> <destructive-cmd>` or `node -e <destructive-code>` also
-skips `gate-prod-destructive-approval`'s operator-approval requirement,
-since `low` severity does not satisfy `severity_at_least: high` either).
-The task that added them (`2929c5b7`) named both explicitly in its
-"read-only heads to classify low" list, reasoning that the four
-consecutive read-only investigation commands the fix responds to
-included exactly this shape (`sshpass ssh`, `node -e`) and that the
-alternative — parsing or sandboxing the remote/evaluated content — is
-out of scope for a regex-and-argv-token classifier. Compare this to the
-`risk.severity_at_least` fallback change below, which still leaves an
-UNCLASSIFIED action risk-bearing at `high`: these two floors instead
-grant `low`, the strongest exemption, to a head whose actual behavior is
-unbounded. If a deployment wants `ssh`/`node -e` gated instead of
-floored, the fix is to NOT ship these two floors (they are additive,
-easily reverted) or to add an explicit `high`/`critical` classifier
-pattern for the specific `ssh`/`node` invocation shapes that deployment
-cares about (an operator classifier composes with — and can only RAISE
-above — a built-in floor, same rule as every other floor in this
-document).
-
 ### Environment resolvers (`environments:`)
 
 *Status: parsed and validated (Phase 7 #1). Consumed by the Context
@@ -874,18 +819,38 @@ fallback does not silently reopen a bypass for a mutating head that
 simply has no classifier pattern:
 
 1. **The common read-only heads are now explicitly floored to `low`**
-   (see "Built-in read-only commands" above, and the new `ssh`/`node -e`
-   subsection): `cat`, `sed` without `-i`, `grep`/`rg`, `ls`, `head`,
-   `tail`, `wc`, `stat`, `file`, `less`/`more`, `diff`, `curl` without
-   `-X`/`-d`/`--upload-file`, `ssh <host> <cmd>` (local head only), `node
-   -e`/`--eval` (Risk-Classifier-only floor), and the existing `git` read
-   verbs (`status`, `log`, `rev-parse`, `rev-list`, `show`, `diff`,
-   `branch` without `-D`/`-d`, `ls-files`, `remote -v`, `fetch`). Being
-   explicitly `low` (not merely unclassified) is what actually removes
-   these from `gate-prod-destructive`'s scope — the softened fallback
-   alone would already do that for the critical threshold, but a floor
-   also removes them from any `severity_at_least: high`/`medium`/`low`
-   policy, which the softened fallback does NOT.
+   (see "Built-in read-only commands" above): `cat`, `sed` without `-i`,
+   `grep`/`rg`, `ls`, `head`, `tail`, `wc`, `stat`, `file`, `less`/`more`,
+   `diff`, `curl` without `-X`/`-d`/`--upload-file`, and the existing
+   `git` read verbs (`status`, `log`, `rev-parse`, `rev-list`, `show`,
+   `diff`, `branch` without `-D`/`-d`, `ls-files`, `remote -v`, `fetch`).
+   Being explicitly `low` (not merely unclassified) is what actually
+   removes these from `gate-prod-destructive`'s scope: the softened
+   fallback alone would already do that for the critical threshold, but
+   a floor also removes them from any `severity_at_least:
+   high`/`medium`/`low` policy, which the softened fallback does NOT.
+
+   `ssh <host> <cmd>` and `node -e`/`--eval` are deliberately NOT given
+   this floor, even though the incident that motivated this task
+   included exactly this shape (`sshpass ssh`, `node -e`). Their payload
+   is opaque to a regex-and-argv-token classifier: the remote command in
+   `ssh <host> "<cmd>"` and the evaluated code in `node -e "<code>"` are
+   both unexamined strings the classifier cannot reason about, so a
+   `low` floor would grant the strongest exemption (removed from every
+   `severity_at_least` tier, not just `critical`) to a head whose actual
+   behavior is unbounded: `ssh prod-host "rm -rf /"` or `node -e
+   "<destructive JS>"` would then pass with zero friction. They stay
+   genuinely unclassified instead, and ride prong 2's fallback alone: a
+   production-scoped `gate-prod-destructive` (`severity_at_least:
+   critical`) does not hard-block them (an unclassified action sits at
+   the "high" rung, not "critical"), but a production-scoped
+   `gate-prod-destructive-approval` (`severity_at_least: high`) still
+   requires operator approval before either runs. Approval-gated, never
+   hard-blocked, never silently allowed. If a deployment wants `ssh`/
+   `node -e` hard-blocked instead, add an explicit `critical` classifier
+   pattern for the specific invocation shapes that deployment cares
+   about (an operator classifier composes with, and can only RAISE
+   above, the fail-closed fallback).
 2. **The comparably-destructive mutating heads are now explicitly
    classified**, at the severity the shipped classifiers already use for
    a comparable action (`docs/examples/full-manifest.yaml` /
