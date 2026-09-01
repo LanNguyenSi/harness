@@ -9,7 +9,7 @@ import {
   delegationLedgerFactFor,
   issueDelegation,
 } from "../../src/cli/delegate/index.js";
-import { buildProgram } from "../../src/cli/index.js";
+import { buildProgram, run } from "../../src/cli/index.js";
 import { HarnessExitError } from "../../src/cli/exit-codes.js";
 import {
   approvalMarkerPathFor,
@@ -739,6 +739,27 @@ describe("harness delegate - CLI wiring", () => {
         `expected --${long} to be registered`,
       ).toBe(true);
     }
+  });
+
+  // Pins the corrected boundary sentence (docs/decisions/2026-08-27-ug-auto-mode-approval.md,
+  // "Platform scope" amendment, and the round-2 correction to it, agent-tasks
+  // be9faf70): consumption of a delegation is Claude Code only (no Codex
+  // delegation-marker consumer), but ISSUING one is not restricted the same
+  // way (a Codex session can be the delegating parent today). Asserting on
+  // the distinctive "no delegation consumer" fragment keeps `--help` and the
+  // docs from drifting apart silently.
+  it("--help states the boundary as consumption-side, not a blanket Claude-only claim", async () => {
+    let stdout = "";
+    const code = await run({
+      argv: ["delegate", "--help"],
+      stdout: (s) => {
+        stdout += s;
+      },
+      stderr: () => {},
+    });
+    expect(code).toBe(0);
+    expect(stdout).toMatch(/no delegation consumer/);
+    expect(stdout).toMatch(/delegating\s+parent today/i);
   });
 
   it("exits 1 with the exact ADR-pinned message when neither --cwd nor --task is given", async () => {
