@@ -76,7 +76,10 @@ import * as ubeShim from "../../src/policy-packs/builtin/understanding-before-ex
 // delegationReportPathFor, added so `harness delegate --report` and the
 // child's PreToolUse hook derive the same
 // `harness.generated/.delegation-reports/<child-sid>.md` location from
-// nothing but the child session id. 69 -> 71.
+// nothing but the child session id. 70 -> 72; stated against the actual
+// pre-widening count (an earlier entry in this chain undercounted by
+// one, so the running totals through the eighth widening summed to 69
+// rather than the 70 already present at HEAD before this change).
 //
 // Mutation-verified: temporarily re-adding `export { safeJsonParse } from
 // "./persisted-reports.js";` to

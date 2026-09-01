@@ -304,7 +304,13 @@ function readMarkerRaw(): Record<string, unknown> {
 }
 
 beforeEach(() => {
-  tmp = fs.mkdtempSync(path.join(os.tmpdir(), "ug-delegate-hook-"));
+  // realpathSync: on macOS `os.tmpdir()` resolves under a symlink
+  // (`/var/...` -> `/private/var/...`), which otherwise makes the (w)
+  // moved/absent case's missing-path fallback in `hashDelegationCwd`
+  // disagree with the write-time realpath and non-deterministically flip
+  // between `report_path_mismatch` and `report_content_mismatch`.
+  // Realpathing the fixture root up front pins the reason for good.
+  tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "ug-delegate-hook-")));
   generatedDir = path.join(tmp, "harness.generated");
   reportsDir = path.join(tmp, "reports");
   childCwd = path.join(tmp, "child-cwd");
@@ -746,15 +752,15 @@ describe("pack hook pre-tool-use: delegation path (ADR slice 3)", () => {
       // the file that WAS staged there at delegation time is gone by the
       // time the child's hook runs (renamed away, deleted, swapped for a
       // symlink, ...): nothing readable sits at the one path both sides
-      // derive from the child session id. Which of the verifier's two
-      // report-fallback reasons fires (`report_path_mismatch` — the
-      // realpath-vs-`path.resolve` fallback for a now-missing target can
-      // itself disagree with the write-time realpath on a symlinked temp
-      // root — or `report_content_mismatch`, "could not be read") is a
-      // platform detail of `hashDelegationCwd`'s missing-path fallback,
-      // not part of this contract; either is one of the verifier's
-      // EXISTING distinct reasons, never the removed "not yet consumed"
-      // special case.
+      // derive from the child session id. `beforeEach` realpaths the
+      // fixture root, so `hashDelegationCwd`'s missing-path fallback
+      // (`path.resolve`) agrees with the write-time `realpathSync` on
+      // every platform: the path check PASSES on the now-missing file
+      // and the failure lands on the read, pinning the reason to
+      // `report_content_mismatch` deterministically (never the removed
+      // "not yet consumed" special case, and never `report_path_mismatch`
+      // — that would only fire if the realpath/`path.resolve` disagreed,
+      // which the realpathed root rules out).
       issueReportBoundDelegation(CHILD_REPORT_MARKDOWN);
       fs.rmSync(delegationReportPathFor(generatedDir, CHILD));
       writeTranscript([userTurn(), transcriptEntry()]);
@@ -764,7 +770,7 @@ describe("pack hook pre-tool-use: delegation path (ADR slice 3)", () => {
       expect(result.blocked).toBe(true);
       expect(markerExists()).toBe(false);
       expect(result.stderr).toMatch(
-        new RegExp(`delegation for ${CHILD} refused: report_(path|content)_mismatch: `),
+        new RegExp(`delegation for ${CHILD} refused: report_content_mismatch: `),
       );
       expect(result.stderr).not.toMatch(/not yet consumed/);
       expect(ledgerCalls).toEqual([]);
@@ -938,6 +944,35 @@ describe("pack hook pre-tool-use: delegation path (ADR slice 3)", () => {
       >;
       expect(persisted["sessionId"]).toBe(CHILD);
       expect(persisted["approvalStatus"]).toBe("approved");
+      // Persisted-bytes pin (round-2 fix, agent-tasks 49d1ee41): every
+      // field the parser derives from the markdown body matches the
+      // fixture's OWN content exactly, field by field. `verifyDelegation`
+      // returns the exact bytes it hashed and matched, and the hook
+      // persists THOSE bytes with no second read of the conventional
+      // file; this pin is what a mutation that persisted a different (or
+      // extra-content) copy of the report would break. Declared metadata
+      // (taskId/mode/riskLevel) wins over the hook's gap-fill defaults,
+      // which is itself proof the launcher's markdown, not a default, is
+      // what got parsed and persisted.
+      expect(persisted["taskId"]).toBe("t-37ad0b05");
+      expect(persisted["mode"]).toBe("grill_me");
+      expect(persisted["riskLevel"]).toBe("low");
+      expect(persisted["currentUnderstanding"]).toBe(
+        "The parent delegated this child session and the child must state its own understanding.",
+      );
+      expect(persisted["intendedOutcome"]).toBe(
+        "The child auto-approves through the delegation plus its own report, never the delegation alone.",
+      );
+      expect(persisted["derivedTodos"]).toEqual(["capture the report from the session transcript"]);
+      expect(persisted["acceptanceCriteria"]).toEqual(["the minted marker carries the parent linkage"]);
+      expect(persisted["assumptions"]).toEqual(["the transcript read is the file the payload names"]);
+      expect(persisted["openQuestions"]).toEqual(["none"]);
+      expect(persisted["outOfScope"]).toEqual(["the delegate verb itself"]);
+      expect(persisted["risks"]).toEqual(["the transcript write races the hook"]);
+      expect(persisted["verificationPlan"]).toEqual(["vitest over the real hook entry point"]);
+      expect(persisted["priorArt"]).toEqual([
+        "searched harness for an existing same-turn capture path; the approve stdin persister is reused",
+      ]);
 
       const check = checkApprovalMarker(generatedDir, CHILD);
       expect(check.matched).toBe(true);
@@ -987,6 +1022,66 @@ describe("pack hook pre-tool-use: delegation path (ADR slice 3)", () => {
       expect(result.stderr).not.toMatch(/reached its transcript within/);
       // No second report was persisted from the transcript.
       expect(listPersistedReports(reportsDir)).toHaveLength(1);
+      const check = checkApprovalMarker(generatedDir, CHILD);
+      expect(check.matched).toBe(true);
+      expect(check.marker?.approvedBy).toContain(`;delegated:${PARENT}`);
+      expect(ledgerCalls).toHaveLength(1);
+    });
+
+    it("(m2) a REPORT-BOUND delegation whose child already has a pending persisted report mints from the pending report and never captures the launcher file (round-2 fix, agent-tasks 49d1ee41)", async () => {
+      // The precedence guard proven by (m) for the transcript-scan
+      // channel sits ABOVE the report-bound/transcript-scan split
+      // itself, not just above the scan: a report-bound delegation whose
+      // launcher file verifies fine must still defer to an already
+      // pending persisted report rather than adopt-and-persist the
+      // launcher's file a second time. Proven by giving the pending
+      // report DIFFERENT content from the launcher file: if the capture
+      // branch ran anyway, the persisted report's content would change
+      // to the launcher's, and the adoption ledger would record the
+      // launcher file's content hash — neither happens here.
+      issueReportBoundDelegation(CHILD_REPORT_MARKDOWN);
+      fs.writeFileSync(
+        path.join(reportsDir, "2026-08-28T09-30-00-000Z-child-1111aaaa.json"),
+        `${JSON.stringify(
+          {
+            sessionId: CHILD,
+            approvalStatus: "pending",
+            createdAt: "2026-08-28T09:30:00.000Z",
+            mode: "grill_me",
+            currentUnderstanding: "already captured on an earlier, denied call, NOT the launcher's report",
+            priorArt: ["searched the reports directory first; a pending report is already there"],
+          },
+          null,
+          2,
+        )}\n`,
+      );
+      writeTranscript([userTurn()]);
+
+      const result = await call();
+
+      expect(result.blocked).toBe(false);
+      expect(result.source).toBe("marker");
+      // Neither report channel's outcome line appears: the launcher file
+      // was never adopted, and the transcript was never scanned.
+      expect(result.stderr).not.toMatch(/adopted the launcher-supplied report/);
+      expect(result.stderr).not.toMatch(/its own transcript/);
+
+      const reports = listPersistedReports(reportsDir);
+      expect(reports).toHaveLength(1);
+      const persisted = JSON.parse(fs.readFileSync(reports[0]!.filePath, "utf8")) as Record<
+        string,
+        unknown
+      >;
+      expect(persisted["approvalStatus"]).toBe("approved");
+      // Still the PENDING report's own content, not the launcher's.
+      expect(persisted["currentUnderstanding"]).toBe(
+        "already captured on an earlier, denied call, NOT the launcher's report",
+      );
+
+      // No adoption was recorded for the launcher's content hash (or at
+      // all): the capture branch that writes the ledger never ran.
+      expect(fs.existsSync(adoptedLedgerPath())).toBe(false);
+
       const check = checkApprovalMarker(generatedDir, CHILD);
       expect(check.matched).toBe(true);
       expect(check.marker?.approvedBy).toContain(`;delegated:${PARENT}`);

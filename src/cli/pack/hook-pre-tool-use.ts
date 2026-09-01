@@ -997,17 +997,25 @@ export async function runPackHookPreToolUseCli(
           // launcher fixing the content.
           if (existing === null || existing.approvalStatus !== "pending") {
             if (verified.reportPathHash !== undefined) {
-              // The file has already been proven present, path-matched,
-              // and content-matched by `verifyDelegation` above; this
-              // read is a defensive re-check against a race between that
-              // verification and this line, not a second trust decision.
-              const reportRead = readRegularFileRejectingSymlink(launcherReportPath);
-              if (reportRead.kind !== "ok") {
+              // The bytes `verifyDelegation` already proved present,
+              // path-matched, and content-matched against the bound
+              // hash, returned verbatim on its ok shape. There is NO
+              // second read of `launcherReportPath` here on purpose: a
+              // second read would be a second trust decision, reopening
+              // the exact race (a rewrite between verification and
+              // persist) that returning the verified bytes closes
+              // structurally instead of by re-checking a hash.
+              const reportContent = verified.reportContent;
+              if (reportContent === undefined) {
+                // Cannot happen given the invariant `reportContent` is
+                // set whenever `reportPathHash` is (see the type's own
+                // doc comment); fail closed rather than persist nothing
+                // we can vouch for.
                 stderr.write(
-                  `harness pack hook: the launcher-supplied report for session ${childSessionId} at ${launcherReportPath} could not be read (${reportRead.kind}) even though verification just succeeded; nothing was persisted\n`,
+                  `harness pack hook: the launcher-supplied report for session ${childSessionId} at ${launcherReportPath} was verified but no content was returned; nothing was persisted\n`,
                 );
               } else {
-                const contentHash = sha256Hex(reportRead.content);
+                const contentHash = sha256Hex(reportContent);
                 // Adoption keyed by the report's CONTENT hash, in the
                 // SAME once-per-session ledger the transcript scan uses,
                 // namespaced with a `report:` prefix so the two id shapes
@@ -1045,7 +1053,7 @@ export async function runPackHookPreToolUseCli(
                     );
                   } else {
                     const persisted = persistStdinReport({
-                      markdown: reportRead.content,
+                      markdown: reportContent,
                       reportsDir,
                       sessionId: childSessionId,
                       now: new Date(),

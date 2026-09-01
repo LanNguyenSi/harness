@@ -573,6 +573,15 @@ export type DelegationVerification =
       boundCwdHash: string | null;
       boundTaskId: string | null;
       reportPathHash?: string;
+      /**
+       * Set exactly when `reportPathHash` is set: the launcher report's
+       * bytes as read and content-hash-checked by THIS call, verbatim.
+       * The caller (the hook) persists these bytes directly instead of
+       * re-reading the file itself; a second read would reopen the race
+       * this field exists to close (the file could be rewritten between
+       * verification and a later read).
+       */
+      reportContent?: string;
     }
   | { ok: false; reason: DelegationRefusalReason; detail: string };
 
@@ -778,6 +787,10 @@ export function verifyDelegation(opts: VerifyDelegationOptions): DelegationVerif
     }
   }
 
+  // Set only inside the `reportPathHash !== undefined` branch below, and
+  // only after the content hash has matched: the exact bytes returned to
+  // the caller in the ok shape's `reportContent`.
+  let reportContent: string | undefined;
   if (reportPathHash !== undefined) {
     if (opts.launcherReportPath === undefined) {
       return {
@@ -819,6 +832,11 @@ export function verifyDelegation(opts: VerifyDelegationOptions): DelegationVerif
         detail: `launcher-supplied report at ${opts.launcherReportPath} does not match the bound content hash (bound ${boundContentHash}, got ${actualContentHash})`,
       };
     }
+    // The exact bytes this call just hashed and matched against the
+    // bound hash: returned so the caller persists THESE bytes rather
+    // than opening the file a second time (a second read would be a
+    // second trust decision, and the very race this closes).
+    reportContent = reportRead.content;
   }
 
   return {
@@ -827,6 +845,6 @@ export function verifyDelegation(opts: VerifyDelegationOptions): DelegationVerif
     expiresAt,
     boundCwdHash: cwdHash,
     boundTaskId: taskId,
-    ...(reportPathHash !== undefined ? { reportPathHash } : {}),
+    ...(reportPathHash !== undefined ? { reportPathHash, reportContent: reportContent as string } : {}),
   };
 }

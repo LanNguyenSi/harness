@@ -38,6 +38,25 @@ import { parseManifest, type Manifest } from "../../src/schema/index.js";
 const CHILD = "11111111-1111-4111-8111-111111111111";
 const PARENT = "parent-session-0001";
 
+/**
+ * A real, parseable Understanding Report: the exact 5-bullet shape
+ * `@lannguyensi/understanding-gate`'s fast_confirm prompt emits (mirrors
+ * `approve-stdin-report.test.ts`'s `FAST_CONFIRM_BULLETS`). Round-2 fix
+ * (agent-tasks 49d1ee41): `issueDelegation` now validates a `--report`
+ * file's content with the SAME parser `persistStdinReport` applies, so
+ * every `--report` fixture in this suite that expects staging to SUCCEED
+ * needs content that actually parses; the arbitrary JSON blob these
+ * fixtures used before this fix only ever exercised the copy/mode/
+ * conflict mechanics, never validity.
+ */
+const VALID_REPORT_MARKDOWN = [
+  "- I understood the task as: bind a launcher-supplied report by content and path.",
+  "- I will do: stage the conventional copy and let the child's hook read it back.",
+  "- I will not touch: the transcript-scan channel.",
+  "- I will verify by: issuing a delegation and verifying it end to end.",
+  "- Assumptions: the file exists and is readable at delegation time.",
+].join("\n");
+
 let tmp: string;
 let generatedDir: string;
 let childCwd: string;
@@ -308,6 +327,39 @@ describe("issueDelegation - refusals", () => {
     expect(result.ok).toBe(false);
     if (result.ok) throw new Error("expected refusal");
     expect(result.reason).toBe("report-unreadable");
+  });
+
+  it("refuses at STAGE time when --report points at a file that is readable but does not parse as an Understanding Report, and stages nothing (round-2 fix, agent-tasks 49d1ee41)", async () => {
+    // Before this fix an unparseable `--report` file was only hashed,
+    // never validated: it would be staged, signed, and adopted by the
+    // child hook, which would then fail to parse it at mint time
+    // AFTER already recording the adoption — permanently burning that
+    // child session id, with no cheap retry (a corrected `--report`
+    // rerun would hit `report-conflict` against the garbage already
+    // staged). Refusing here, before anything is written, avoids all of
+    // that.
+    approveParent();
+    const { ledgerAdd } = fakeLedger();
+    const reportPath = path.join(tmp, "unparseable-report.md");
+    fs.writeFileSync(reportPath, "not an understanding report at all, just prose\n");
+
+    const result = await issueDelegation({
+      childSessionId: CHILD,
+      cwd: childCwd,
+      parentSessionId: PARENT,
+      generatedDir,
+      reportPath,
+      ledgerAdd,
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("expected refusal");
+    expect(result.reason).toBe("report-unparseable");
+    expect(result.detail).toMatch(/did not parse/);
+
+    // Nothing was staged: no conventional file, no delegation marker.
+    const conventionalPath = delegationReportPathFor(generatedDir, CHILD);
+    expect(fs.existsSync(conventionalPath)).toBe(false);
+    expect(fs.existsSync(delegationMarkerPathFor(generatedDir, CHILD))).toBe(false);
   });
 
   it("refuses --task 'a=b' (an unsafe delegation-segment delimiter) with reason invalid-task (L1)", async () => {
@@ -596,7 +648,7 @@ describe("issueDelegation - happy path", () => {
     approveParent();
     const { ledgerAdd } = fakeLedger();
     const reportPath = path.join(tmp, "child-report.json");
-    fs.writeFileSync(reportPath, '{"mode":"grill_me"}\n');
+    fs.writeFileSync(reportPath, VALID_REPORT_MARKDOWN);
     const result = await issueDelegation({
       childSessionId: CHILD,
       cwd: childCwd,
@@ -613,7 +665,7 @@ describe("issueDelegation - happy path", () => {
     // AC1: "copy the operator's file there, mode 0600").
     const conventionalPath = delegationReportPathFor(generatedDir, CHILD);
     expect(fs.existsSync(conventionalPath)).toBe(true);
-    expect(fs.readFileSync(conventionalPath, "utf8")).toBe('{"mode":"grill_me"}\n');
+    expect(fs.readFileSync(conventionalPath, "utf8")).toBe(VALID_REPORT_MARKDOWN);
     expect(fs.statSync(conventionalPath).mode & 0o777).toBe(0o600);
 
     // The delegation binds the CONVENTIONAL path's hash, not the
@@ -656,7 +708,7 @@ describe("issueDelegation - happy path", () => {
     fs.writeFileSync(conventionalPath, '{"mode":"already-staged"}\n', { mode: 0o600 });
 
     const reportPath = path.join(tmp, "child-report.json");
-    fs.writeFileSync(reportPath, '{"mode":"grill_me"}\n');
+    fs.writeFileSync(reportPath, VALID_REPORT_MARKDOWN);
     const result = await issueDelegation({
       childSessionId: CHILD,
       cwd: childCwd,
@@ -678,10 +730,10 @@ describe("issueDelegation - happy path", () => {
     approveParent();
     const { ledgerAdd } = fakeLedger();
     const reportPath = path.join(tmp, "child-report.json");
-    fs.writeFileSync(reportPath, '{"mode":"grill_me"}\n');
+    fs.writeFileSync(reportPath, VALID_REPORT_MARKDOWN);
     const conventionalPath = delegationReportPathFor(generatedDir, CHILD);
     fs.mkdirSync(path.dirname(conventionalPath), { recursive: true });
-    fs.writeFileSync(conventionalPath, '{"mode":"grill_me"}\n', { mode: 0o600 });
+    fs.writeFileSync(conventionalPath, VALID_REPORT_MARKDOWN, { mode: 0o600 });
 
     const result = await issueDelegation({
       childSessionId: CHILD,
@@ -693,7 +745,35 @@ describe("issueDelegation - happy path", () => {
     });
     expect(result.ok).toBe(true);
     if (!result.ok) throw new Error("expected success (identical content is not a conflict)");
-    expect(fs.readFileSync(conventionalPath, "utf8")).toBe('{"mode":"grill_me"}\n');
+    expect(fs.readFileSync(conventionalPath, "utf8")).toBe(VALID_REPORT_MARKDOWN);
+  });
+
+  it("--report brings a pre-existing IDENTICAL conventional file to mode 0600 on restage, even though nothing is written", async () => {
+    // Round-2 fix: the identical-restage branch used to leave the mode
+    // as-is, while the pack doc promises 0600 for the conventional copy
+    // unconditionally. A pre-existing file at a looser mode (left by
+    // something other than this verb) must still end at 0600.
+    approveParent();
+    const { ledgerAdd } = fakeLedger();
+    const reportPath = path.join(tmp, "child-report.json");
+    fs.writeFileSync(reportPath, VALID_REPORT_MARKDOWN);
+    const conventionalPath = delegationReportPathFor(generatedDir, CHILD);
+    fs.mkdirSync(path.dirname(conventionalPath), { recursive: true });
+    fs.writeFileSync(conventionalPath, VALID_REPORT_MARKDOWN, { mode: 0o644 });
+    expect(fs.statSync(conventionalPath).mode & 0o777).toBe(0o644);
+
+    const result = await issueDelegation({
+      childSessionId: CHILD,
+      cwd: childCwd,
+      parentSessionId: PARENT,
+      generatedDir,
+      reportPath,
+      ledgerAdd,
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("expected success (identical content is not a conflict)");
+    expect(fs.readFileSync(conventionalPath, "utf8")).toBe(VALID_REPORT_MARKDOWN);
+    expect(fs.statSync(conventionalPath).mode & 0o777).toBe(0o600);
   });
 
   it("binds by --task alone (no --cwd) and verifyDelegation accepts the matching task with no cwd offered", async () => {
@@ -893,7 +973,7 @@ describe("harness delegate - CLI wiring", () => {
   it("--report reaches issueDelegation end to end through the CLI action, binding both hashes", async () => {
     approveParent();
     const reportPath = path.join(tmp, "child-report.json");
-    fs.writeFileSync(reportPath, '{"mode":"grill_me"}\n');
+    fs.writeFileSync(reportPath, VALID_REPORT_MARKDOWN);
     let out = "";
     const program = buildProgram({
       stdout: (s: string) => {
@@ -921,7 +1001,7 @@ describe("harness delegate - CLI wiring", () => {
     );
     expect(out).toMatch(/delegation: ✓/);
     const conventionalPath = delegationReportPathFor(generatedDir, CHILD);
-    expect(fs.readFileSync(conventionalPath, "utf8")).toBe('{"mode":"grill_me"}\n');
+    expect(fs.readFileSync(conventionalPath, "utf8")).toBe(VALID_REPORT_MARKDOWN);
     const verified = verifyDelegation({
       generatedDir,
       childSessionId: CHILD,

@@ -57,6 +57,8 @@
 // a changed report is a caller error to surface loudly, not a quiet
 // clobber of whatever the hook may already be mid-verification against.
 
+import * as fs from "node:fs";
+import { parseReport } from "@lannguyensi/understanding-gate";
 import { sha256Hex, signingKeyExists, signingKeyPathFor } from "../../runtime/approval-signing.js";
 import { atomicWriteFile } from "../../io/atomic-write.js";
 import { resolveGeneratedDir } from "../../runtime/pending-approval.js";
@@ -127,6 +129,7 @@ export type IssueDelegationRefusalReason =
   | "parent-marker-expired"
   | "signing-key-absent"
   | "report-unreadable"
+  | "report-unparseable"
   | "report-conflict"
   | "invalid-input"
   | "write-failed";
@@ -359,6 +362,38 @@ export async function issueDelegation(
     }
     reportContentHash = sha256Hex(read.content);
 
+    // Validate parseability NOW, with the SAME parser
+    // `persistStdinReport` applies when the child's hook later tries to
+    // mint from this report (`stdin-report.ts`'s own `parseReport` call).
+    // Refusing an unparseable `--report` file here, before anything is
+    // signed or staged, matters because a failure caught only at mint
+    // time is not cheaply retryable: the adoption ledger records the
+    // report's content hash as spent BEFORE `persistStdinReport` even
+    // runs, so a bad report permanently burns that child session id, and
+    // this verb's own `report-conflict` refusal then blocks re-staging
+    // different content at the same conventional path until the file is
+    // removed by hand. Catching it here costs nothing and needs no
+    // manual cleanup.
+    const parsed = parseReport(read.content, {
+      taskId: opts.childSessionId,
+      createdAt: now.toISOString(),
+      mode: "fast_confirm",
+      riskLevel: "medium",
+    });
+    if (!parsed.ok) {
+      const summary =
+        parsed.error.message.length > 0
+          ? parsed.error.message
+          : `${parsed.error.reason}${
+              parsed.error.missing.length > 0 ? ` (missing: ${parsed.error.missing.join(", ")})` : ""
+            }`;
+      return {
+        ok: false,
+        reason: "report-unparseable",
+        detail: `--report ${opts.reportPath} did not parse: ${summary}`,
+      };
+    }
+
     // Stage the conventional copy the child's hook will read back from.
     // Never a silent overwrite: a DIFFERENT file already staged there
     // (a stale copy from an earlier `--report` targeting the same
@@ -400,9 +435,25 @@ export async function issueDelegation(
           }`,
         };
       }
+    } else {
+      // `existingAtConventional.kind === "ok"` with matching content:
+      // already staged, nothing to WRITE, but the pack doc promises mode
+      // 0600 for the conventional copy unconditionally, not only on
+      // first write, so a pre-existing identical file left at a looser
+      // mode by something other than this verb is still brought to 0600
+      // on restage.
+      try {
+        fs.chmodSync(conventionalPath, 0o600);
+      } catch (err) {
+        return {
+          ok: false,
+          reason: "write-failed",
+          detail: `could not set mode 0600 on the already-staged report at ${conventionalPath}: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        };
+      }
     }
-    // `existingAtConventional.kind === "ok"` with matching content:
-    // already staged, nothing to write.
 
     reportPathHash = hashDelegationCwd(conventionalPath);
   }
