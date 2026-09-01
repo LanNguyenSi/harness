@@ -452,7 +452,7 @@ describe("issueDelegation - refusals", () => {
     // declared. Every shipped init template sets `mode: grill_me`, so a
     // short-form report like this one used to pass staging here and only
     // fail later, at the child hook's persist-time parse (which DOES
-    // resolve the pack's real mode) — after the adoption ledger had
+    // resolve the pack's real mode): after the adoption ledger had
     // already recorded the report's content hash as spent, with no cheap
     // retry. The fix mirrors the hook's own resolution
     // (`toPackageMode(resolveMode(declared).mode)`) at stage time too, so
@@ -889,6 +889,34 @@ describe("issueDelegation - happy path", () => {
     expect(movedVerify.ok).toBe(false);
     if (movedVerify.ok) throw new Error("expected the moved-copy report to fail verification");
     expect(movedVerify.reason).toBe("report_path_mismatch");
+  });
+
+  it("--report refuses when the conventional path holds a symlink, leaving the link and its target untouched", async () => {
+    approveParent();
+    const { ledgerAdd } = fakeLedger();
+    const conventionalPath = delegationReportPathFor(generatedDir, CHILD);
+    fs.mkdirSync(path.dirname(conventionalPath), { recursive: true });
+    const target = path.join(tmp, "symlink-target.md");
+    fs.writeFileSync(target, "untouched target\n");
+    fs.symlinkSync(target, conventionalPath);
+
+    const reportPath = path.join(tmp, "child-report.json");
+    fs.writeFileSync(reportPath, VALID_REPORT_MARKDOWN);
+    const result = await issueDelegation({
+      childSessionId: CHILD,
+      cwd: childCwd,
+      parentSessionId: PARENT,
+      generatedDir,
+      reportPath,
+      manifest: manifestWithMode("fast_confirm"),
+      ledgerAdd,
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("expected a refusal");
+    expect(result.reason).toBe("report-conflict");
+    // The link is neither followed nor replaced, and its target is not written.
+    expect(fs.lstatSync(conventionalPath).isSymbolicLink()).toBe(true);
+    expect(fs.readFileSync(target, "utf8")).toBe("untouched target\n");
   });
 
   it("--report refuses to silently overwrite a DIFFERENT report already staged at the conventional path for the same child session", async () => {

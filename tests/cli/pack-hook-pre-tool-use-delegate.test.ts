@@ -1006,7 +1006,7 @@ describe("pack hook pre-tool-use: delegation path (ADR slice 3)", () => {
       // "Report capture under `-p`" fallback describes. Mirrors (l)'s
       // shape, but key two arrives via the launcher's file instead of
       // the transcript. The transcript here carries NO report entry at
-      // all (`userTurn()` only) — proof that this path never falls back
+      // all (`userTurn()` only): proof that this path never falls back
       // to scanning it.
       issueReportBoundDelegation(CHILD_REPORT_MARKDOWN);
       writeTranscript([userTurn()]);
