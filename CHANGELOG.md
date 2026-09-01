@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.54.0] - 2026-09-01
+
 ### Added
 
 - **The child's PreToolUse hook now consumes the launcher-supplied Understanding Report the `--report` fallback shape of `harness delegate` mints** (agent-tasks `49d1ee41`, follow-up to UG auto-mode slice 3, agent-tasks `37ad0b05`). Previously `harness delegate --report <path>` minted a fully signed, verifiable delegation, but the child's hook never passed `verifyDelegation` a `launcherReportPath`, so every report-bound delegation was refused (`report_path_mismatch`) unconditionally and the transcript scan was the only report channel this release actually acted on, documented in the pack doc as "issued and verifiable, not yet consumed".
