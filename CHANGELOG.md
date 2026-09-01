@@ -25,6 +25,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 - **`docs/decisions/*.md` source citations re-pointed and anchored** (agent-tasks `6f719bb4`). Every citation in the ADRs now names a repo-relative path with an anchor verified against the current tree; several had drifted onto unrelated lines after later changes (an unrelated constant move, new slice-1/slice-3 code) moved the code they described. A "Citation convention" note at the top of `docs/decisions/2026-08-27-ug-auto-mode-approval.md` records the grammar and the guard test that enforces it going forward.
 
+- **`claude -p` delegation (slice 3) is decided Claude Code only, and the platform boundary is now documented rather than left implicit** (agent-tasks `be9faf70`). The Codex adapter already shares slice 2's `permission_mode`-based auto-approval, but carries no delegation-marker consumer; a Codex-shaped port would need its own measured child-report capture channel and delegation verifier, not a code port of the three Claude-side pieces. Recorded as a "Platform scope" amendment to `docs/decisions/2026-08-27-ug-auto-mode-approval.md` with a reopen criterion, gap 14 in `docs/okf/codex-adapter-parity-gaps.md`, and the boundary named in the pack doc, `docs/CLI.md`, and the `harness delegate` `--help` text.
+
 ## [0.53.0] - 2026-08-30
 
 ### Added

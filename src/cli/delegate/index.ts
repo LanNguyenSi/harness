@@ -167,6 +167,13 @@ function validateTaskId(taskId: string): string | null {
  * calls `process.exit`; every failure mode is a `{ ok: false }` result
  * with a distinct `reason` (ADR slice plan format rule: every refusal is
  * a block with a distinct diagnostic, never a fall-through to allow).
+ *
+ * Claude Code adapter only: the Codex adapter has no delegation consumer
+ * (`hook-codex-pre-tool-use.ts` reads neither `.delegations/` nor a child
+ * report through this mechanism), a decided platform boundary, not an
+ * oversight — see the "Platform scope" amendment in
+ * `docs/decisions/2026-08-27-ug-auto-mode-approval.md` and gap 14 in
+ * `docs/okf/codex-adapter-parity-gaps.md`.
  */
 export async function issueDelegation(
   opts: IssueDelegationOptions,
