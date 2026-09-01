@@ -127,6 +127,18 @@ describe("curl has NO read-only floor (decision D-013, task 2929c5b7)", () => {
     expect(profile.classified).toBe(false);
     expect(profile.severity).toBeNull();
   });
+
+  // curl gets no curl-SPECIFIC floor, but it is not "never floored": the
+  // generic two-token `--help`/`--version` shape `isReadOnlyBashCommand`
+  // already recognises for EVERY binary applies to curl too, exactly as
+  // it did before this task (D-013 only removed the curl-specific
+  // allowlist, not this pre-existing shared shape).
+  it("floors curl --help to low via the generic --help/--version shape, unchanged by D-013", () => {
+    expect(isReadOnlyBashCommand("curl --help")).toBe(true);
+    const profile = floorOnly("curl --help");
+    expect(profile.classified).toBe(true);
+    expect(profile.severity).toBe("low");
+  });
 });
 
 describe("the sed floor stays OUT of the shared read-only predicate", () => {

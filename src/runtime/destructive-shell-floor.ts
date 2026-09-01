@@ -482,15 +482,21 @@ const CURL_BODY_LONG_FLAGS: ReadonlySet<string> = new Set([
 const CURL_BODY_SHORT_CHARS: readonly string[] = ["d", "F", "T"];
 
 /**
- * Long flags whose VALUE curl reads from a local file when it starts with
- * `@`: `-H @/etc/passwd` sends that file's lines as request headers,
- * `-b @/etc/cookies` sends it as cookies. Paired with their short
- * spellings below.
+ * `-H`/`--header`: curl reads the VALUE from a local file when it starts
+ * with `@` (`-H @/etc/passwd` sends that file's lines as request
+ * headers).
  */
-const CURL_AT_FILE_FLAGS: ReadonlyArray<{ long: string; short: string }> = [
-  { long: "--header", short: "H" },
-  { long: "--cookie", short: "b" },
-];
+const CURL_HEADER_FLAG: { long: string; short: string } = { long: "--header", short: "H" };
+
+/**
+ * `-b`/`--cookie` uses a DIFFERENT rule than `-H`, measured on curl 8.7.1:
+ * a value containing no `=` is read as a cookie-jar FILENAME, `@`-prefixed
+ * or not (`curl -b jar.txt` reads the jar; `curl -b @jar.txt` opens a file
+ * literally named `@jar.txt` — the `@` is not a file marker for this
+ * flag). A value containing `=` is sent as inline cookie data
+ * (`-b 'name=value'`) and stays inert.
+ */
+const CURL_COOKIE_FLAG: { long: string; short: string } = { long: "--cookie", short: "b" };
 
 /**
  * The value curl reads for one flag, whichever of the three ways it is
@@ -553,15 +559,30 @@ function scanCurl(args: readonly string[], hits: DestructiveFloorHit[]): void {
     localWrite = true;
   }
 
-  // `-H @FILE` / `-b @FILE`: a LOCAL file read into the outgoing request.
-  // Unlike the format string above, the `@` sits at the very start of the
-  // value, so the first token of the value is always the right place to
-  // look and the precise per-flag extraction is hole-free here.
+  // `-H @FILE`: a LOCAL file read into the outgoing request. The `@` sits
+  // at the very start of the value, so the first token of the value is
+  // always the right place to look and the precise per-flag extraction is
+  // hole-free here.
+  //
+  // `-b`/`--cookie` is checked separately, by its own rule (see
+  // CURL_COOKIE_FLAG above): a value with no `=` is a filename curl reads,
+  // regardless of an `@` prefix.
   for (let i = 0; i < args.length; i += 1) {
-    for (const { long, short } of CURL_AT_FILE_FLAGS) {
-      const value = curlFlagValue(decoded[i]!, args[i + 1], long, short);
-      if (value !== undefined && value.startsWith("@")) atFile = true;
-    }
+    const headerValue = curlFlagValue(
+      decoded[i]!,
+      args[i + 1],
+      CURL_HEADER_FLAG.long,
+      CURL_HEADER_FLAG.short,
+    );
+    if (headerValue !== undefined && headerValue.startsWith("@")) atFile = true;
+
+    const cookieValue = curlFlagValue(
+      decoded[i]!,
+      args[i + 1],
+      CURL_COOKIE_FLAG.long,
+      CURL_COOKIE_FLAG.short,
+    );
+    if (cookieValue !== undefined && !cookieValue.includes("=")) atFile = true;
   }
 
   for (let i = 0; i < args.length; i += 1) {
@@ -617,7 +638,7 @@ function scanCurl(args: readonly string[], hits: DestructiveFloorHit[]): void {
       severity: "high",
       categories: ["network_exfiltration"],
       reason:
-        "built-in destructive floor: curl reads a local file into the request (@ value on -H/-b)",
+        "built-in destructive floor: curl reads a local file into the request (@ value on -H, or a no-= value on -b)",
     });
   }
 }

@@ -385,8 +385,12 @@ Examples that keep the floor: `sed -n '1,5p' f`, `sed -E 's/a/b/' f`,
 
 #### No `curl` read-only floor, by design (decision D-013, task `2929c5b7`)
 
-`curl` has no `low` floor and is never floored. Task `2929c5b7` shipped one
-twice and it leaked twice:
+`curl` gets no curl-specific floor; the only way a curl command classifies
+`low` is the generic two-token `--help`/`--version` shape the shared
+read-only predicate (`isReadOnlyBashCommand`) already recognises for
+EVERY binary (`curl --help`, `curl -h`, `curl --version`, `curl -V`), and
+that shape is trivially fine — it destroys and exfiltrates nothing.
+Task `2929c5b7` shipped a curl-specific one twice and it leaked twice:
 
 - Round 2 used a DENYLIST of write flags. Every flag nobody had
   enumerated passed: `-o`, `-O`, `-D`, `-c`, `-K`, `--create-dirs`.
@@ -462,9 +466,13 @@ invocation of them destroys something. The one exception is an invocation
 whose ONLY argument is `--help`, `--version`, `-h`, `-V` or `-v`, which
 cannot destroy anything; `shred -v secret.txt` keeps its `critical`.
 
-**What the floor recognizes for `curl`, in full**, since curl is the head
-with no read-only floor to fall back on (see "No `curl` read-only floor"
-above):
+**What the floor recognizes for `curl`**, since curl is the head with no
+read-only floor to fall back on (see "No `curl` read-only floor" above).
+Named here are the specific flags and value shapes this scan knows about
+(`-o`/`-O`/`-D`/`-c`/`-K`/`-w`/`-d`/`-F`/`-T`/`-X`/`-H`/`-b` and their long
+spellings) — not a claim that this is curl's entire write-capable
+surface; a shape the scan does not name (like `-w`'s format string
+itself coming from a FILE) stays unclassified, see the gap below:
 
 - **Writes a local file** (`high`, `destructive`+`data_loss`): `-o`,
   `-O`, `-D`, `-c`, `-K` (also inside a short cluster), `--output`,
@@ -483,12 +491,31 @@ above):
   `--form-escape`, `--upload-file`; and `-X`/`--request` naming anything
   but GET/HEAD.
 - **Reads a local file into the outgoing request** (`high`,
-  `network_exfiltration` alone): `-H`/`--header` or `-b`/`--cookie` whose
-  value starts with `@`, in every spelling of the value (next token,
-  glued, `=`-joined). Not the request-body category pair: shipping a file
-  out is exfiltration, but it does not by itself mutate the remote
-  resource, and without an irreversible category the profile stays
-  `reversible: true`.
+  `network_exfiltration` alone): `-H`/`--header` whose value starts with
+  `@` (`-H @/etc/passwd`), and `-b`/`--cookie` whose value contains no
+  `=` (`-b jar.txt`; `-b @jar.txt` also matches, but not because of the
+  `@` — curl opens whatever filename follows it, `@` included, since
+  the `@` file-marker rule is `-H`'s, not `-b`'s), in every spelling of
+  the value (next token, glued, `=`-joined). `-b 'name=value'` (a `=`
+  present) sends inline cookie data and stays inert. Not the
+  request-body category pair: shipping a file out is exfiltration, but
+  it does not by itself mutate the remote resource, and without an
+  irreversible category the profile stays `reversible: true`.
+  `network_exfiltration` alone is the pair that holds for a separated or
+  `=`-joined spelling; a FULLY GLUED short-flag cluster
+  (`-H@/etc/passwd`) may additionally trip the short-cluster character
+  scan on its own value text and pick up further categories beyond
+  `network_exfiltration` alone — an accepted over-block, in the same
+  raise-severity direction as every other floor over-block.
+
+**A gap this scan does not close.** `-w`/`--write-out`'s format string
+can itself be supplied FROM A FILE (`-w @fmt.txt`), and that file can
+carry the same `%output{FILE}` directive as an inline format string
+(confirmed to write on curl 8.7.1). This scan only inspects argv text; it
+never opens a file to look inside it, so `curl -w @fmt.txt URL` is not
+recognized here and stays unclassified — approval-gated at the "high"
+rung by the fail-close rule, not silently allowed. See the "Not
+recognized, by design" table below.
 
 Categories follow the shipped patterns: `destructive`+`data_loss` for the
 filesystem and git shapes (`irreversible_action` for `shred`,
@@ -524,10 +551,11 @@ third `curl` pattern covers the local-write flags
 `-w`/`--write-out` with `%output`). They stay
 narrower than the floor for the spellings a raw-string regex cannot follow
 (path-qualified, wrapper-wrapped, and `sh -c`-nested invocations, the
-`git checkout .` form without `--`, and the `@FILE` value on
-`-H`/`-b`, whose `@` a raw-string pattern cannot tell from an `@` anywhere
-else in the line), which is acceptable BECAUSE the floor
-covers them. `tests/runtime/destructive-shell-floor.test.ts` pins that
+`git checkout .` form without `--`, the `@FILE` value on `-H`, whose `@`
+a raw-string pattern cannot tell from an `@` anywhere else in the line,
+and the no-`=` filename value on `-b`, which a raw-string pattern has no
+reliable way to tell from inline cookie data), which is acceptable
+BECAUSE the floor covers them. `tests/runtime/destructive-shell-floor.test.ts` pins that
 every template pattern's canonical spelling is also caught by the floor at
 the same severity or higher, so the mirror can only be narrower, never
 divergent.
@@ -551,6 +579,14 @@ a future change cannot move one silently):
 | `find . -exec sh -c '<cmd>' {} +` | only a DIRECT `-exec rm` payload is recognized, not a nested shell whose command string is one quoted argument |
 | `git -c k=v push --force` | `-c` is deliberately absent from the git global-flag skip list (config injection can execute code), so the subcommand walk stops before `push` |
 
+One row below is a different KIND of gap: not a missed head, but a value
+this scan cannot see into, because the value lives in a file rather than
+in the command text itself:
+
+| Spelling | Why it is missed |
+| --- | --- |
+| `curl -w @fmt.txt URL` | `-w`/`--write-out`'s format string can be read from a FILE (`@fmt.txt`); this scan inspects only argv text, so a `%output{FILE}` directive hidden inside that file is invisible to it. Stays unclassified and approval-gated. |
+
 None of these is silently allowed: each stays UNCLASSIFIED, which the
 `when:` evaluator treats as risk-bearing at the "high" rung, so a
 production-scoped approval gate still fires on them. What they lose is the
@@ -558,20 +594,41 @@ production-scoped approval gate still fires on them. What they lose is the
 parser in the classifier, which is out of scope for a floor whose whole
 contract is "decidable from argv tokens alone".
 
-**A built-in floor sets SEVERITY only; `categories` stays empty.** This
-matters for one specific policy shape. While an action is unclassified,
-"unknown is not safe" makes it satisfy every `risk.category_in` clause
-automatically. Once a floor classifies it, that fallback no longer
-applies, and `risk.category_in` becomes a real set test against an EMPTY
-category list, which nothing can match. So a policy scoped by
-`risk.category_in` alone silently stops covering a head the moment that
-head gains a `low` floor: `sed -n '1,5p' f` no longer matches
-`risk.category_in: [network_exfiltration]`, though it did while
-unclassified. This is the correct reading of a proven-read-only action and
-it already held for the pre-existing `cat`/`ls` floors; `sed` just joins
-them. If you need such a policy to keep firing, scope it by
-`risk.severity_at_least` as the shipped `gate-prod-destructive` policies
-do, or classify the shape explicitly with your own pattern. Pinned in
+**A built-in floor classifies — which retires the "unknown is not safe"
+fallback for `risk.category_in` and `action.reversible`, not just
+severity.** This matters for one specific policy shape. While an action
+is unclassified, "unknown is not safe" makes it satisfy every
+`risk.category_in` clause AND every `action.reversible` clause
+automatically. Once ANY floor classifies it, that fallback no longer
+applies to either clause, and both become real tests against the floor's
+actual values, not the blanket assumption. Two shapes lose coverage, for
+different reasons:
+
+- **The benign floors' EMPTY category list.** `sed -n '1,5p' f` no longer
+  matches `risk.category_in: [network_exfiltration]` once it floors to
+  `low`, though it did while unclassified: `sed`'s (and `cat`'s/`ls`'s)
+  read-only floor sets severity only and leaves `categories: []`, so
+  `category_in` becomes a set test against nothing.
+- **The destructive floor's NON-EMPTY but NARROW category list.** A
+  destructive-floor hit does carry categories, but only the ones that
+  shape's own recognition names, which can be narrower than a policy
+  assumes. `chmod -R 777 /srv` classifies `high` with
+  `categories: [mass_update]` and `reversible: true`, so it does NOT
+  match `risk.category_in: [destructive]` nor `action.reversible: false`,
+  though both clauses passed while it was unclassified. `curl -X POST
+  https://h/x` similarly classifies with `[production_mutation,
+  network_exfiltration]`, never `destructive`; and the `-H @FILE` /
+  no-`=` `-b` cookie-file shape classifies with `[network_exfiltration]`
+  alone and stays `reversible: true`.
+
+This is the correct reading of a proven-narrower action, not a bug: a
+floor that classifies is making a real, bounded claim, and a
+`risk.category_in`/`action.reversible` policy that assumed the blanket
+"unknown is not safe" coverage was relying on the fallback rather than on
+what the floor actually recognizes. If you need such a policy to keep
+firing regardless, scope it by `risk.severity_at_least` as the shipped
+`gate-prod-destructive` policies do, or classify the shape explicitly
+with your own pattern that names the category you need. Pinned in
 `tests/runtime/when-eval.test.ts`.
 
 #### Kubectl read-only verb floor (decision record, task `da823721`)

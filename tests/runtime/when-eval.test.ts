@@ -326,20 +326,28 @@ describe("evaluateWhen — Friction-log #38/#40/#43/#50 regression (read-only fl
   });
 });
 
-describe("evaluateWhen: a built-in floor sets severity only, so `risk.category_in` STOPS matching (task 2929c5b7, review round 3)", () => {
+describe("evaluateWhen: a built-in floor classifies, which retires the unclassified fallback for `risk.category_in`/`action.reversible` (task 2929c5b7, review round 3; corrected round 5)", () => {
   // A behaviour change worth its own pin, and the one direction of this
-  // task that TIGHTENS rather than loosens. A built-in floor assigns a
-  // SEVERITY and no categories, so a floored action's `categories` is `[]`.
-  // While the same action was UNCLASSIFIED, "unknown is not safe" made it
-  // satisfy EVERY `risk.category_in` clause automatically. Once floored it
-  // is classified, the fallback no longer applies, and a `category_in`
-  // clause is a real set test against an empty set: it can never match.
+  // task that TIGHTENS rather than loosens. While an action is
+  // UNCLASSIFIED, "unknown is not safe" makes it satisfy EVERY
+  // `risk.category_in` clause and every `action.reversible` clause
+  // automatically. Once ANY floor classifies it, that fallback no longer
+  // applies to either clause, and both become real tests against the
+  // floor's actual values. Two shapes below, for different reasons: the
+  // BENIGN floors (sed/cat) assign a severity and leave `categories: []`,
+  // so `category_in` becomes a set test against nothing; the DESTRUCTIVE
+  // floor's chmod/chown recognition DOES assign a category, just a
+  // narrower one (`mass_update`, not `destructive`) with `reversible:
+  // true`, so both `category_in: [destructive]` and
+  // `action.reversible: false` stop matching too, for the same
+  // fallback-retirement reason rather than an empty-set one.
   //
-  // So an operator policy scoped by `risk.category_in` alone silently
-  // stops covering a newly floored head. That is the correct reading of a
-  // proven-read-only action, but it is not obvious, so it is documented in
-  // docs/risk-gate.md and pinned here. The same already held for the
-  // pre-existing `cat`/`ls` floors; `sed` just joins them.
+  // So an operator policy scoped by `risk.category_in` or
+  // `action.reversible` alone silently stops covering a newly floored
+  // head. That is the correct reading of a proven-narrower action, but it
+  // is not obvious, so it is documented in docs/risk-gate.md and pinned
+  // here. The same already held for the pre-existing `cat`/`ls` floors;
+  // `sed` just joins them.
   const ENVELOPE_CTX: EnvelopeContext = {
     cwd: "/work/repo",
     git: { repo: "repo", branch: "main", sha: "" },
@@ -385,6 +393,60 @@ describe("evaluateWhen: a built-in floor sets severity only, so `risk.category_i
     });
     expect(result.matched).toBe(true);
     expect(result.unclassifiedFallback).toBe(true);
+  });
+
+  // The SAME retirement holds for a floor whose category list is
+  // NON-EMPTY but NARROWER than a policy might assume, not just for the
+  // benign floors' empty list above. The destructive floor's chmod/chown
+  // recognition assigns `categories: [mass_update]` only (deliberately
+  // not `destructive`, because a recursive mode/owner change is
+  // reversible by the inverse command) and `reversible: true`, so BOTH
+  // `risk.category_in: [destructive]` and `action.reversible: false`
+  // stop matching once it floors, exactly as `category_in` stopped
+  // matching the benign floors above.
+  it("a floored chmod -R (destructive floor, non-empty but NARROW categories) does NOT match risk.category_in: [destructive] nor action.reversible: false", () => {
+    const risk = classifyRisk(bashEnvelope("chmod -R 777 /srv"), []);
+    expect(risk.classified).toBe(true);
+    expect(risk.severity).toBe("high");
+    expect(risk.categories).toEqual(["mass_update"]);
+    expect(risk.reversible).toBe(true);
+
+    const categoryResult = evaluateWhen(when({ "risk.category_in": ["destructive"] }), {
+      risk,
+      environment: env("production"),
+    });
+    expect(categoryResult.matched).toBe(false);
+    expect(categoryResult.unclassifiedFallback).toBe(false);
+
+    const reversibleResult = evaluateWhen(when({ "action.reversible": false }), {
+      risk,
+      environment: env("production"),
+    });
+    expect(reversibleResult.matched).toBe(false);
+    expect(reversibleResult.unclassifiedFallback).toBe(false);
+  });
+
+  it("the SAME two clauses DO match while a chmod the floor does not reach is unclassified (negative control beside the case above)", () => {
+    // A NON-recursive chmod: no floor recognizes it (not `-R`/`--recursive`
+    // for the destructive floor, and it writes, so not read-only either).
+    // Without this, a `category_in`/`reversible` pair that never matched
+    // anything would satisfy the assertion above just as well.
+    const risk = classifyRisk(bashEnvelope("chmod 644 f"), []);
+    expect(risk.classified).toBe(false);
+
+    const categoryResult = evaluateWhen(when({ "risk.category_in": ["destructive"] }), {
+      risk,
+      environment: env("production"),
+    });
+    expect(categoryResult.matched).toBe(true);
+    expect(categoryResult.unclassifiedFallback).toBe(true);
+
+    const reversibleResult = evaluateWhen(when({ "action.reversible": false }), {
+      risk,
+      environment: env("production"),
+    });
+    expect(reversibleResult.matched).toBe(true);
+    expect(reversibleResult.unclassifiedFallback).toBe(true);
   });
 });
 
