@@ -14,6 +14,7 @@ import { HarnessExitError } from "../../src/cli/exit-codes.js";
 import {
   approvalMarkerPathFor,
   delegationMarkerPathFor,
+  delegationReportPathFor,
   hashDelegationCwd,
   REPORTS_DIR_ENV,
   verifyDelegation,
@@ -591,7 +592,7 @@ describe("issueDelegation - happy path", () => {
     );
   });
 
-  it("--report populates both hashes; verifyDelegation with the same launcherReportPath passes, a moved copy fails", async () => {
+  it("--report copies the file to the conventional harness.generated/.delegation-reports/<child-sid>.md location (mode 0600), binds both hashes to THAT path, and a copy at a non-conventional path fails path verification", async () => {
     approveParent();
     const { ledgerAdd } = fakeLedger();
     const reportPath = path.join(tmp, "child-report.json");
@@ -607,19 +608,34 @@ describe("issueDelegation - happy path", () => {
     expect(result.ok).toBe(true);
     if (!result.ok) throw new Error("expected success");
 
+    // The conventional copy exists, carries the same bytes as the
+    // operator's original file, and is mode 0600 (agent-tasks 49d1ee41,
+    // AC1: "copy the operator's file there, mode 0600").
+    const conventionalPath = delegationReportPathFor(generatedDir, CHILD);
+    expect(fs.existsSync(conventionalPath)).toBe(true);
+    expect(fs.readFileSync(conventionalPath, "utf8")).toBe('{"mode":"grill_me"}\n');
+    expect(fs.statSync(conventionalPath).mode & 0o777).toBe(0o600);
+
+    // The delegation binds the CONVENTIONAL path's hash, not the
+    // operator's original --report argument: the child's hook has no
+    // channel to learn that argument, only the conventional path it can
+    // derive itself from the child session id.
     const okVerify = verifyDelegation({
       generatedDir,
       childSessionId: CHILD,
       cwd: childCwd,
       taskId: null,
-      launcherReportPath: reportPath,
+      launcherReportPath: conventionalPath,
     });
     expect(okVerify.ok).toBe(true);
-    if (!okVerify.ok) throw new Error("expected the same-path report to verify");
-    expect(okVerify.reportPathHash).toBe(hashDelegationCwd(reportPath));
+    if (!okVerify.ok) throw new Error("expected the conventional-path report to verify");
+    expect(okVerify.reportPathHash).toBe(hashDelegationCwd(conventionalPath));
 
+    // Verifying against a DIFFERENT path (even one with identical bytes)
+    // still fails path verification: WHERE the parent put the report is
+    // part of what was signed, not just what it contains.
     const movedPath = path.join(tmp, "moved-report.json");
-    fs.copyFileSync(reportPath, movedPath);
+    fs.copyFileSync(conventionalPath, movedPath);
     const movedVerify = verifyDelegation({
       generatedDir,
       childSessionId: CHILD,
@@ -630,6 +646,54 @@ describe("issueDelegation - happy path", () => {
     expect(movedVerify.ok).toBe(false);
     if (movedVerify.ok) throw new Error("expected the moved-copy report to fail verification");
     expect(movedVerify.reason).toBe("report_path_mismatch");
+  });
+
+  it("--report refuses to silently overwrite a DIFFERENT report already staged at the conventional path for the same child session", async () => {
+    approveParent();
+    const { ledgerAdd } = fakeLedger();
+    const conventionalPath = delegationReportPathFor(generatedDir, CHILD);
+    fs.mkdirSync(path.dirname(conventionalPath), { recursive: true });
+    fs.writeFileSync(conventionalPath, '{"mode":"already-staged"}\n', { mode: 0o600 });
+
+    const reportPath = path.join(tmp, "child-report.json");
+    fs.writeFileSync(reportPath, '{"mode":"grill_me"}\n');
+    const result = await issueDelegation({
+      childSessionId: CHILD,
+      cwd: childCwd,
+      parentSessionId: PARENT,
+      generatedDir,
+      reportPath,
+      ledgerAdd,
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("expected a refusal");
+    expect(result.reason).toBe("report-conflict");
+    // The already-staged file is untouched, not clobbered.
+    expect(fs.readFileSync(conventionalPath, "utf8")).toBe('{"mode":"already-staged"}\n');
+    // No delegation was minted from a half-completed report stage.
+    expect(fs.existsSync(delegationMarkerPathFor(generatedDir, CHILD))).toBe(false);
+  });
+
+  it("--report is idempotent when the SAME content is already staged at the conventional path (re-delegating the same child with the same report)", async () => {
+    approveParent();
+    const { ledgerAdd } = fakeLedger();
+    const reportPath = path.join(tmp, "child-report.json");
+    fs.writeFileSync(reportPath, '{"mode":"grill_me"}\n');
+    const conventionalPath = delegationReportPathFor(generatedDir, CHILD);
+    fs.mkdirSync(path.dirname(conventionalPath), { recursive: true });
+    fs.writeFileSync(conventionalPath, '{"mode":"grill_me"}\n', { mode: 0o600 });
+
+    const result = await issueDelegation({
+      childSessionId: CHILD,
+      cwd: childCwd,
+      parentSessionId: PARENT,
+      generatedDir,
+      reportPath,
+      ledgerAdd,
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("expected success (identical content is not a conflict)");
+    expect(fs.readFileSync(conventionalPath, "utf8")).toBe('{"mode":"grill_me"}\n');
   });
 
   it("binds by --task alone (no --cwd) and verifyDelegation accepts the matching task with no cwd offered", async () => {
@@ -856,16 +920,18 @@ describe("harness delegate - CLI wiring", () => {
       { from: "user" },
     );
     expect(out).toMatch(/delegation: ✓/);
+    const conventionalPath = delegationReportPathFor(generatedDir, CHILD);
+    expect(fs.readFileSync(conventionalPath, "utf8")).toBe('{"mode":"grill_me"}\n');
     const verified = verifyDelegation({
       generatedDir,
       childSessionId: CHILD,
       cwd: childCwd,
       taskId: null,
-      launcherReportPath: reportPath,
+      launcherReportPath: conventionalPath,
     });
     expect(verified.ok).toBe(true);
-    if (!verified.ok) throw new Error("expected the same-path report to verify");
-    expect(verified.reportPathHash).toBe(hashDelegationCwd(reportPath));
+    if (!verified.ok) throw new Error("expected the conventional-path report to verify");
+    expect(verified.reportPathHash).toBe(hashDelegationCwd(conventionalPath));
   });
 
   it("--cwd '' --task <id> does not silently drop the cwd: the CLI passes it through and issueDelegation refuses it with invalid-cwd (L3)", async () => {

@@ -38,6 +38,7 @@ import {
 } from "../../src/policy-packs/builtin/understanding-before-execution-runtime.js";
 import {
   delegationMarkerPathFor,
+  delegationReportPathFor,
   hashDelegationCwd,
   writeDelegationMarker,
 } from "../../src/policy-packs/builtin/understanding-before-execution/delegation-markers.js";
@@ -231,6 +232,36 @@ function issueDelegation(
     cwdHash: over.cwdHash === undefined ? hashDelegationCwd(childCwd) : over.cwdHash,
     taskId: over.taskId ?? null,
     expiresAt: over.expiresAt ?? new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+  });
+  expect(result.ok).toBe(true);
+}
+
+/**
+ * Issue a REPORT-BOUND delegation (the `--report` fallback shape):
+ * writes the conventional launcher-report file
+ * (`delegationReportPathFor`) with `markdown`, mode 0600, and binds the
+ * delegation to it by both hashes, mirroring what `harness delegate
+ * --report` does end to end (tested separately in delegate.test.ts).
+ * Kept a separate helper from `issueDelegation` (rather than an option on
+ * it) because every report-bound fixture needs the file staged FIRST,
+ * before the marker can be signed against its hashes.
+ */
+function issueReportBoundDelegation(
+  markdown: string,
+  over: { cwdHash?: string | null; taskId?: string | null; expiresAt?: string } = {},
+): void {
+  const conventionalPath = delegationReportPathFor(generatedDir, CHILD);
+  fs.mkdirSync(path.dirname(conventionalPath), { recursive: true });
+  fs.writeFileSync(conventionalPath, markdown, { mode: 0o600 });
+  const result = writeDelegationMarker({
+    generatedDir,
+    childSessionId: CHILD,
+    parentSessionId: PARENT,
+    cwdHash: over.cwdHash === undefined ? hashDelegationCwd(childCwd) : over.cwdHash,
+    taskId: over.taskId ?? null,
+    expiresAt: over.expiresAt ?? new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+    reportPathHash: hashDelegationCwd(conventionalPath),
+    reportContentHash: sha256Hex(markdown),
   });
   expect(result.ok).toBe(true);
 }
@@ -708,30 +739,24 @@ describe("pack hook pre-tool-use: delegation path (ADR slice 3)", () => {
       expect(listPersistedReports(reportsDir)).toEqual([]);
     });
 
-    it("(w) a delegation that binds a launcher-supplied report file (the --report fallback shape): block, no marker, and the stderr names the unconsumed fallback shape", async () => {
-      // H1 (integrated review, ADR slice 3 follow-up): this hook never
-      // passes `launcherReportPath` to `verifyDelegation`, so a
-      // report-bound delegation is refused here EVERY time
-      // (`report_path_mismatch`), never actually checked against the
-      // file. This pins that the refusal names the real limitation
-      // (the fallback shape is issued and signature-verifiable by
-      // `harness delegate`, just not yet consumed by this hook, a named
-      // follow-up) rather than the generic "no report path was
-      // offered" wording `verifyDelegation`'s own detail string carries,
-      // which would misleadingly read as a caller bug.
-      const reportPath = path.join(tmp, "launcher-report.md");
-      fs.writeFileSync(reportPath, CHILD_REPORT_MARKDOWN);
-      const written = writeDelegationMarker({
-        generatedDir,
-        childSessionId: CHILD,
-        parentSessionId: PARENT,
-        cwdHash: hashDelegationCwd(childCwd),
-        taskId: null,
-        expiresAt: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
-        reportPathHash: hashDelegationCwd(reportPath),
-        reportContentHash: sha256Hex(CHILD_REPORT_MARKDOWN),
-      });
-      expect(written.ok).toBe(true);
+    it("(w) a delegation bound to a MOVED (absent from the conventional path) launcher report: block, no marker, distinct verifier reason", async () => {
+      // agent-tasks 49d1ee41: the child hook now checks the fallback
+      // shape against the conventional `.delegation-reports/<sid>.md`
+      // file instead of refusing it unconditionally. "Moved" here means
+      // the file that WAS staged there at delegation time is gone by the
+      // time the child's hook runs (renamed away, deleted, swapped for a
+      // symlink, ...): nothing readable sits at the one path both sides
+      // derive from the child session id. Which of the verifier's two
+      // report-fallback reasons fires (`report_path_mismatch` — the
+      // realpath-vs-`path.resolve` fallback for a now-missing target can
+      // itself disagree with the write-time realpath on a symlinked temp
+      // root — or `report_content_mismatch`, "could not be read") is a
+      // platform detail of `hashDelegationCwd`'s missing-path fallback,
+      // not part of this contract; either is one of the verifier's
+      // EXISTING distinct reasons, never the removed "not yet consumed"
+      // special case.
+      issueReportBoundDelegation(CHILD_REPORT_MARKDOWN);
+      fs.rmSync(delegationReportPathFor(generatedDir, CHILD));
       writeTranscript([userTurn(), transcriptEntry()]);
 
       const result = await call();
@@ -739,9 +764,31 @@ describe("pack hook pre-tool-use: delegation path (ADR slice 3)", () => {
       expect(result.blocked).toBe(true);
       expect(markerExists()).toBe(false);
       expect(result.stderr).toMatch(
-        new RegExp(
-          `delegation for ${CHILD} refused: it binds a launcher-supplied report file \\(the --report fallback shape\\), which is issued and verifiable but not yet consumed by the child hook`,
-        ),
+        new RegExp(`delegation for ${CHILD} refused: report_(path|content)_mismatch: `),
+      );
+      expect(result.stderr).not.toMatch(/not yet consumed/);
+      expect(ledgerCalls).toEqual([]);
+      expect(listPersistedReports(reportsDir)).toEqual([]);
+      // The transcript scan never ran either: a report-bound delegation
+      // never falls through to it, refused or not.
+      expect(result.stderr).not.toMatch(/its own transcript/);
+    });
+
+    it("(w2) a delegation bound to a launcher report whose CONTENT was modified after issuance (path unchanged): block, distinct verifier reason, deterministic across platforms", async () => {
+      // Unlike (w), the conventional path stays present and readable
+      // throughout, so the path-hash check passes deterministically
+      // (same realpath both times, no missing-path fallback involved) and
+      // the failure is pinned to content: `report_content_mismatch`.
+      issueReportBoundDelegation(CHILD_REPORT_MARKDOWN);
+      fs.writeFileSync(delegationReportPathFor(generatedDir, CHILD), `${CHILD_REPORT_MARKDOWN}\ntampered`);
+      writeTranscript([userTurn(), transcriptEntry()]);
+
+      const result = await call();
+
+      expect(result.blocked).toBe(true);
+      expect(markerExists()).toBe(false);
+      expect(result.stderr).toMatch(
+        new RegExp(`delegation for ${CHILD} refused: report_content_mismatch: `),
       );
       expect(ledgerCalls).toEqual([]);
       expect(listPersistedReports(reportsDir)).toEqual([]);
@@ -857,6 +904,53 @@ describe("pack hook pre-tool-use: delegation path (ADR slice 3)", () => {
       expect(ledgerCalls).toHaveLength(1);
       expect(ledgerCalls[0]?.content).toBe(`understanding-auto-approved:${CHILD}`);
       expect(ledgerCalls[0]?.sessionId).toBe(CHILD);
+    });
+
+    it("(w3) a report-bound delegation (the --report fallback shape): the launcher-supplied report is adopted, persisted pending, consumed, and the same call allows; the transcript is never scanned", async () => {
+      // agent-tasks 49d1ee41: the second live report channel the ADR's
+      // "Report capture under `-p`" fallback describes. Mirrors (l)'s
+      // shape, but key two arrives via the launcher's file instead of
+      // the transcript. The transcript here carries NO report entry at
+      // all (`userTurn()` only) — proof that this path never falls back
+      // to scanning it.
+      issueReportBoundDelegation(CHILD_REPORT_MARKDOWN);
+      writeTranscript([userTurn()]);
+
+      const result = await call();
+
+      expect(result.blocked).toBe(false);
+      expect(result.source).toBe("marker");
+      expect(result.stderr).toMatch(
+        new RegExp(`auto-approval key one: valid delegation from parent session ${PARENT}`),
+      );
+      expect(result.stderr).toMatch(
+        new RegExp(
+          `adopted the launcher-supplied report for session ${CHILD} from .*\\.delegation-reports.${CHILD}\\.md and persisted it pending`,
+        ),
+      );
+      expect(result.stderr).not.toMatch(/its own transcript/);
+
+      const reports = listPersistedReports(reportsDir);
+      expect(reports).toHaveLength(1);
+      const persisted = JSON.parse(fs.readFileSync(reports[0]!.filePath, "utf8")) as Record<
+        string,
+        unknown
+      >;
+      expect(persisted["sessionId"]).toBe(CHILD);
+      expect(persisted["approvalStatus"]).toBe("approved");
+
+      const check = checkApprovalMarker(generatedDir, CHILD);
+      expect(check.matched).toBe(true);
+      const approvedBy = check.marker?.approvedBy ?? "";
+      expect(approvedBy).toBe(`auto-mode:claude-code:delegated;delegated:${PARENT}`);
+
+      // The adoption ledger recorded the report's CONTENT hash, namespaced
+      // `report:`, never a transcript `uuid:`/`digest:` id.
+      const adoptedRaw = fs.readFileSync(adoptedLedgerPath(), "utf8");
+      expect(adoptedRaw).toMatch(/^report:[0-9a-f]{64}\n$/);
+
+      expect(ledgerCalls).toHaveLength(1);
+      expect(ledgerCalls[0]?.content).toBe(`understanding-auto-approved:${CHILD}`);
     });
 
     it("(m) a pending report already on disk skips the scan entirely and still allows", async () => {
@@ -1012,6 +1106,63 @@ describe("pack hook pre-tool-use: delegation path (ADR slice 3)", () => {
       // Appended, not rewritten: both spent entries stay recorded.
       expect(fs.readFileSync(adoptedLedgerPath(), "utf8")).toBe(
         "uuid:uuid-report\nuuid:uuid-report-2\n",
+      );
+    });
+
+    it("(r2) a report-bound delegation cannot mint a second marker from the SAME launcher report once the first expired, but a fresh delegation + report can (agent-tasks 49d1ee41)", async () => {
+      // The mirror image of (r) for the report channel: the launcher
+      // report authorizes exactly ONE mint, not a re-mint every time the
+      // auto-marker's own (short) TTL ages out while the delegation
+      // itself (long TTL) is still valid and the same file still sits at
+      // the conventional path, unchanged.
+      const manifest = manifestWithAutoApprove({}, { approval_lifecycle: { max_age: "1h" } });
+      issueReportBoundDelegation(CHILD_REPORT_MARKDOWN);
+      writeTranscript([userTurn()]);
+
+      const first = await call({ manifest });
+      expect(first.blocked).toBe(false);
+      expect(first.source).toBe("marker");
+      expect(listPersistedReports(reportsDir)).toHaveLength(1);
+      const firstContentHash = sha256Hex(CHILD_REPORT_MARKDOWN);
+      expect(fs.readFileSync(adoptedLedgerPath(), "utf8")).toBe(`report:${firstContentHash}\n`);
+      const mintedBy = String(readMarkerRaw()["approvedBy"]);
+
+      // Age the marker out (same technique as (r): re-sign through the
+      // real writer with a backdated `approvedAt` rather than hand-edit,
+      // so this stays a genuinely valid-but-expired marker, not a forged
+      // one).
+      const backdated = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
+      writeApprovalMarker(generatedDir, CHILD, { approvedAt: backdated, approvedBy: mintedBy });
+      expect(checkApprovalMarker(generatedDir, CHILD).forged).toBe(false);
+
+      // The delegation and its conventional report file are UNCHANGED:
+      // still valid, still the same bytes.
+      const second = await call({ manifest });
+
+      expect(second.blocked).toBe(true);
+      expect(second.stderr).toMatch(
+        new RegExp(
+          `the launcher-supplied report for session ${CHILD} was already adopted by an earlier mint`,
+        ),
+      );
+      expect(readMarkerRaw()["approvedAt"]).toBe(backdated);
+      // No second report was persisted from the same, already-adopted
+      // file.
+      expect(listPersistedReports(reportsDir)).toHaveLength(1);
+
+      // The intended re-arm: a FRESH delegation binding a DIFFERENT
+      // report is adopted normally, exactly like a fresh transcript entry
+      // is in (r).
+      issueReportBoundDelegation(`${CHILD_REPORT_MARKDOWN}\n\nrevision 2`);
+      const third = await call({ manifest });
+
+      expect(third.blocked).toBe(false);
+      expect(third.source).toBe("marker");
+      expect(readMarkerRaw()["approvedAt"]).not.toBe(backdated);
+      expect(listPersistedReports(reportsDir)).toHaveLength(2);
+      const secondContentHash = sha256Hex(`${CHILD_REPORT_MARKDOWN}\n\nrevision 2`);
+      expect(fs.readFileSync(adoptedLedgerPath(), "utf8")).toBe(
+        `report:${firstContentHash}\nreport:${secondContentHash}\n`,
       );
     });
   });

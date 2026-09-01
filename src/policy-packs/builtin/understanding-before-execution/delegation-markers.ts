@@ -78,6 +78,23 @@ export const DELEGATION_MARKER_DIRNAME = ".delegations";
  */
 export const ADOPTION_LEDGER_DIRNAME = ".delegation-adoptions";
 
+/**
+ * Directory holding the CONVENTIONAL launcher-report copies for the
+ * `--report` fallback shape, a SIBLING of `.delegations/` and
+ * `.delegation-adoptions/` (same reasoning: a reader that only needs the
+ * path convention, such as a future gc sweep, has no business importing
+ * the CLI module that writes into it). `harness delegate --report` copies
+ * the operator's file here, at `<childSessionId>.md`, and the child's own
+ * PreToolUse hook reads back from exactly this path (never the operator's
+ * original `--report` argument, which the hook has no way to learn): the
+ * conventional path is what lets both sides derive the SAME location from
+ * nothing but the child session id, closing the gap that used to leave a
+ * report-bound delegation issued and signature-verifiable but never
+ * actually checked against a file (agent-tasks 49d1ee41, follow-up to
+ * slice 3, agent-tasks 37ad0b05).
+ */
+export const DELEGATION_REPORT_DIRNAME = ".delegation-reports";
+
 /** Prefix of the signed markerId, mirroring `task-<id>` for task markers. */
 const DELEGATION_MARKER_ID_PREFIX = "delegation-";
 
@@ -118,6 +135,22 @@ export function delegationMarkerIdFor(childSessionId: string): string {
 export function delegationMarkerPathFor(generatedDir: string, childSessionId: string): string {
   rejectMalformedSessionId(childSessionId);
   return path.join(generatedDir, DELEGATION_MARKER_DIRNAME, childSessionId);
+}
+
+/**
+ * Filesystem path of a child session's CONVENTIONAL launcher-report copy:
+ * `<generatedDir>/.delegation-reports/<childSessionId>.md`. Always `.md`,
+ * regardless of the extension the operator's original `--report` file
+ * carried: the point of the convention is that both `harness delegate`
+ * (the writer) and the child's PreToolUse hook (the reader) derive the
+ * SAME path from nothing but the child session id, so a preserved
+ * extension would only reintroduce a value the hook has no way to learn.
+ * Rejects a malformed session id the same way {@link delegationMarkerPathFor}
+ * does (the value lands in a `path.join` verbatim).
+ */
+export function delegationReportPathFor(generatedDir: string, childSessionId: string): string {
+  rejectMalformedSessionId(childSessionId);
+  return path.join(generatedDir, DELEGATION_REPORT_DIRNAME, `${childSessionId}.md`);
 }
 
 /**

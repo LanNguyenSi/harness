@@ -41,13 +41,29 @@
 // REPORT FALLBACK (`--report <path>`): binds the launcher-supplied
 // report by BOTH its content (`reportContentHash`) and its path
 // (`reportPathHash`, via the same `hashDelegationCwd` the cwd binding
-// uses, so both sides of the delegation hash paths the same way).
+// uses, so both sides of the delegation hash paths the same way). The
+// path bound is NOT the operator's original `--report` argument: this
+// verb COPIES the file (mode 0600) to the conventional location
+// `delegationReportPathFor` derives from the child session id
+// (`harness.generated/.delegation-reports/<child-sid>.md`) and hashes
+// THAT path instead. The child's PreToolUse hook has no channel to learn
+// an arbitrary operator-chosen path, so binding the original path would
+// leave the hook unable to derive it, exactly the gap agent-tasks
+// 49d1ee41 closes; the conventional path is the one location both the
+// writer here and the hook can compute from nothing but a session id.
+// The copy step never silently overwrites a DIFFERENT file already
+// staged there (see `report-conflict` below): the conventional location
+// is per-child, not per-delegation, so re-delegating the same child with
+// a changed report is a caller error to surface loudly, not a quiet
+// clobber of whatever the hook may already be mid-verification against.
 
 import { sha256Hex, signingKeyExists, signingKeyPathFor } from "../../runtime/approval-signing.js";
+import { atomicWriteFile } from "../../io/atomic-write.js";
 import { resolveGeneratedDir } from "../../runtime/pending-approval.js";
 import { resolveApprovalSessionId } from "../../runtime/session-id.js";
 import {
   checkApprovalMarker,
+  delegationReportPathFor,
   hashDelegationCwd,
   parseApprovalLifecycle,
   writeDelegationMarker,
@@ -81,7 +97,7 @@ export interface IssueDelegationOptions extends LoaderOptions {
   taskId?: string;
   /** Delegation lifetime in seconds (already parsed, e.g. via `parseDurationSeconds`). Default: the applied pack's `approval_lifecycle.max_age` when set, else {@link DEFAULT_DELEGATION_TTL_SECONDS}. */
   ttlSeconds?: number;
-  /** Fallback shape: path to the launcher-supplied Understanding Report file, bound by content AND path hash. */
+  /** Fallback shape: path to the launcher-supplied Understanding Report file. Copied to the conventional `harness.generated/.delegation-reports/<child-sid>.md` location (mode 0600) and bound by content AND that conventional path's hash; the child's PreToolUse hook reads it back from there. */
   reportPath?: string;
   /** Explicit parent session id. Resolved exactly like `harness approve understanding` (flag > env > `.pending-approval`; no newest-report fallback) when omitted. */
   parentSessionId?: string;
@@ -111,6 +127,7 @@ export type IssueDelegationRefusalReason =
   | "parent-marker-expired"
   | "signing-key-absent"
   | "report-unreadable"
+  | "report-conflict"
   | "invalid-input"
   | "write-failed";
 
@@ -326,7 +343,9 @@ export async function issueDelegation(
 
   // Fallback shape: bind the launcher-supplied report by BOTH its
   // content and its path (delegation-markers.ts, "Delegation marker
-  // shape" table: half a binding is worse than none).
+  // shape" table: half a binding is worse than none). The path bound is
+  // the CONVENTIONAL copy this verb writes, not the operator's original
+  // `--report` argument (module header, "REPORT FALLBACK").
   let reportPathHash: string | undefined;
   let reportContentHash: string | undefined;
   if (opts.reportPath !== undefined) {
@@ -339,7 +358,53 @@ export async function issueDelegation(
       };
     }
     reportContentHash = sha256Hex(read.content);
-    reportPathHash = hashDelegationCwd(opts.reportPath);
+
+    // Stage the conventional copy the child's hook will read back from.
+    // Never a silent overwrite: a DIFFERENT file already staged there
+    // (a stale copy from an earlier `--report` targeting the same
+    // child session id, or anything else) is a refusal, not a clobber.
+    // An IDENTICAL file already staged there is left as-is (idempotent
+    // re-delegation of the same child with the same report).
+    const conventionalPath = delegationReportPathFor(generatedDir, opts.childSessionId);
+    const existingAtConventional = readRegularFileRejectingSymlink(conventionalPath);
+    if (existingAtConventional.kind === "symlink" || existingAtConventional.kind === "not-regular") {
+      return {
+        ok: false,
+        reason: "report-conflict",
+        detail: `${conventionalPath} exists and is not a plain file; refusing to write the launcher-supplied report through it`,
+      };
+    }
+    if (existingAtConventional.kind === "unreadable") {
+      return {
+        ok: false,
+        reason: "report-conflict",
+        detail: `${conventionalPath} exists but could not be read (I/O error); refusing to overwrite it without first confirming its content matches`,
+      };
+    }
+    if (existingAtConventional.kind === "ok" && existingAtConventional.content !== read.content) {
+      return {
+        ok: false,
+        reason: "report-conflict",
+        detail: `a different report is already staged at ${conventionalPath} for child session ${opts.childSessionId}; refusing to overwrite it (no silent overwrite). Remove it first if the new --report content is intentional.`,
+      };
+    }
+    if (existingAtConventional.kind === "missing") {
+      try {
+        atomicWriteFile(conventionalPath, read.content, { mode: 0o600 });
+      } catch (err) {
+        return {
+          ok: false,
+          reason: "write-failed",
+          detail: `could not stage the launcher-supplied report at ${conventionalPath}: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        };
+      }
+    }
+    // `existingAtConventional.kind === "ok"` with matching content:
+    // already staged, nothing to write.
+
+    reportPathHash = hashDelegationCwd(conventionalPath);
   }
 
   const cwdHash = opts.cwd !== undefined ? hashDelegationCwd(opts.cwd) : null;
