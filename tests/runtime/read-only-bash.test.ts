@@ -3,6 +3,7 @@ import {
   isReadOnlyBashCommand,
   isReadOnlyBashPipeline,
   isReadOnlyKubectlCommand,
+  isReadOnlySedCommand,
 } from "../../src/runtime/read-only-bash.js";
 import { GIT_GLOBAL_NO_VALUE_FLAGS, GIT_GLOBAL_VALUE_TAKING_FLAGS } from "../../src/runtime/command-normalize.js";
 
@@ -550,6 +551,27 @@ describe("read-only Bash classifier", () => {
     ])("blocks %s (chaining/redirection/substitution)", (cmd) => {
       expect(isReadOnlyBashCommand(cmd)).toBe(false);
     });
+
+    // A bare carriage return (round 2, task fdaad781): reaches curl's
+    // wire unmodified and a lenient downstream parser can read it as a
+    // line break, so `hasUnsafeShellMetachar` refuses it for every
+    // consumer of the shared preamble, not curl alone. Pinned directly
+    // (round 3): the property was previously exercised only through
+    // curl-specific fixtures in read-only-floors.test.ts, leaving the
+    // shared guard itself unpinned for the other two consumers below.
+    it("blocks a bare carriage return anywhere in the command (isReadOnlyBashCommand)", () => {
+      expect(isReadOnlyBashCommand("cat f\rx")).toBe(false);
+    });
+
+    // Same shared preamble (`hasUnsafeShellMetachar`, consumed via
+    // `floorArgv`) also guards the Risk-Classifier-only `sed` floor
+    // (round 3 pin, task fdaad781); `isReadOnlySedCommand` is exercised
+    // in tests/runtime/read-only-floors.test.ts, but that file never
+    // pinned the `\r` case, so pin it here next to the shared guard's
+    // other metachar cases.
+    it("blocks a bare carriage return anywhere in the command (isReadOnlySedCommand)", () => {
+      expect(isReadOnlySedCommand("sed -n '1p' f\rx")).toBe(false);
+    });
   });
 
   describe("find write-flag rejection (the only SIMPLE bin with mutating own flags)", () => {
@@ -794,6 +816,14 @@ describe("read-only Bash pipeline classifier (isReadOnlyBashPipeline)", () => {
       "", // empty
     ])("blocks %s", (cmd) => {
       expect(isReadOnlyBashPipeline(cmd)).toBe(false);
+    });
+
+    // A bare carriage return inside one stage (round 3 pin, task
+    // fdaad781): `isReadOnlyBashPipeline` has no `\r` check of its own,
+    // but each stage is handed to `isReadOnlyBashCommand`, whose shared
+    // `hasUnsafeShellMetachar` preamble refuses it there.
+    it("blocks a bare carriage return inside a pipeline stage", () => {
+      expect(isReadOnlyBashPipeline("cat f\rx | head")).toBe(false);
     });
   });
 

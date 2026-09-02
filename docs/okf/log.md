@@ -2,6 +2,201 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-09-02T08:47:11Z, task `fdaad781` curl SHAPE floor round-5 (review of round
+  4): commit `2433c75` reworded the CHANGELOG's as-shipped shape label
+  (revised twice, narrowed once; round 3 changed no accepted language).
+  `CHANGELOG.md` is a source of the same eight bundle docs; their citing
+  passages are untouched by a label wording, timestamp-only re-stamp,
+  measured after this commit.
+
+- 2026-09-02T08:44:04Z, task `fdaad781` curl SHAPE floor round-4 (review of round
+  3): commit `5ced4d0` moved the `-H` value `@` check onto the shape
+  (`isAllowedCurlFlagValue` trims leading whitespace before testing for
+  `@`, so `-H ' @/etc/passwd'` forfeits instead of flooring low; the
+  round-3 positive became two negatives, `--location`/`--insecure` got
+  their own negatives) and corrected CHANGELOG/test-preamble wording. Full
+  gate green (7210 passed, 1 skipped); `okf-kit check --json docs/okf`
+  then flagged the same 8 docs stale for `docs/risk-gate.md`,
+  `CHANGELOG.md` and/or `src/runtime/read-only-bash.ts`. Re-read the
+  citing passages: `quote-model-divergence.md` and
+  `debug-verb-selection.md` describe the shape without naming the header
+  `@` rule or the long flag spellings, the other six cite CHANGELOG or
+  risk-gate passages the round did not touch; timestamp-only re-stamp of
+  all 8, measured after this commit. The round-4 reviewer then caught the
+  first cut of the source commit without a task reference (the
+  changelog-coverage gate had been run before that commit, not after), so
+  both commits were rebuilt: the source commit now cites the task, the
+  as-shipped shape bullet in the CHANGELOG is labelled as narrowed since,
+  and this re-stamp was redone after the rebuilt source commit.
+
+- 2026-09-02T08:17:53Z, task `fdaad781` curl SHAPE floor round-3
+  (pinning the round-2 hardening with discriminating tests: the
+  `-q`-must-be-SECOND-word property, the `\r` clause in the shared
+  `hasUnsafeShellMetachar` preamble for all three of its other
+  consumers, and a `-H ' @/etc/passwd'` positive fixture; plus fixing
+  round-2 doc/comment claims that had drifted from the round-2 code --
+  no grammar change), commits `4faeeae` (src/runtime/read-only-bash.ts
+  + tests/runtime/read-only-bash.test.ts +
+  tests/runtime/read-only-floors.test.ts), `47aa02d` (docs/risk-
+  gate.md + CHANGELOG.md + docs/examples/full-manifest.yaml +
+  docs/okf/debug-verb-selection.md): `okf-kit check --json docs/okf`
+  flagged 7 docs stale for `docs/risk-gate.md` and/or `CHANGELOG.md`
+  and/or `src/runtime/read-only-bash.ts` and/or
+  `docs/examples/full-manifest.yaml`: `codex-adapter-parity-gaps.md`,
+  `evidence-ledger-trust-boundary.md`, `gate-fail-posture-matrix.md`,
+  `pause-vs-gate-kill-switch.md`, `policy-engine-producer-wiring.md`,
+  `quote-model-divergence.md`, `understanding-gate-auto-mode-
+  signals.md` -- the same 7 files the round-1/round-2 entries below
+  already staled for the same reason, staled again by this round's
+  edits to the same source files. Each re-verified before re-stamping.
+  Six of the seven carry no claim this round touched: their
+  `CHANGELOG.md` citations name a specific PRIOR-VERSION entry
+  (`f86b2425`, `63fefe3a`/`1432e053`, `98ad072f`, `7bf47554`), or their
+  `docs/risk-gate.md` citation is generic with no line pin
+  (`codex-adapter-parity-gaps.md`'s own comment already disclaims
+  trusting a stale line number; `gate-fail-posture-matrix.md` names
+  the file only by section), or (`understanding-gate-auto-mode-
+  signals.md`) cites `src/runtime/read-only-bash.ts` only in its
+  `sources:` list, no body mention of `isReadOnly*`/"read-only" at all
+  -- timestamp-only re-stamp for all six. `quote-model-divergence.md`
+  DID need content: its curl paragraph carried the same "proven to
+  name neither a file nor a method" claim the English docs had (fixed
+  in the two commits above) -- corrected to say HEAD is the one
+  selectable method, itself read-only -- plus a short addendum naming
+  round 3's grammar-preserving changes. `debug-verb-selection.md` (task
+  `fdaad781`'s own explicit round-3 doc target) also got its content
+  fix here (same "no file or method" phrasing corrected the same way),
+  though it was NOT flagged stale by `okf-kit check`: its own file
+  mtime was already newer than its sources' by the time this check
+  ran, an artifact of editing it in the earlier of the two commits
+  above -- re-stamped anyway for consistency with the rest of this
+  bundle re-point. Commit `31cdb69` (`docs/okf/*.md`, all eight files
+  including `debug-verb-selection.md`): `okf-kit check --json docs/okf`
+  on the committed tree: 0 errors, 0 warnings after this round's
+  re-point.
+- 2026-09-02T07:37:08Z, task `fdaad781` curl SHAPE floor round-2
+  hardening (orchestrator decision D-028, following an adversarial
+  review of the round-1 shipment logged below: HIGH/MEDIUM findings on
+  the curlrc auto-load, `-L`'s cross-host header forwarding, `-k`, a
+  bare-CR header injection, and the excluded `?`/`*` in the URL path;
+  distinct from the round-2 DOC RE-POINT entry logged next, which was
+  part of the original shipment, not this hardening pass), commit
+  `65dd323` (docs/risk-gate.md + CHANGELOG.md + docs/examples/full-manifest.yaml):
+  `okf-kit check --json docs/okf` flagged 6 docs stale for
+  `docs/risk-gate.md` and/or `CHANGELOG.md`: `codex-adapter-parity-gaps.md`,
+  `debug-verb-selection.md`, `evidence-ledger-trust-boundary.md`,
+  `gate-fail-posture-matrix.md`, `pause-vs-gate-kill-switch.md`,
+  `policy-engine-producer-wiring.md` -- the same 6 the round-1 doc
+  re-point below already named, staled again by this round's edits to
+  the same two source files. Each re-verified before re-stamping.
+  Five of the six carry no curl-specific claim: their citations of the
+  two files are either by SECTION TITLE (unaffected by a line-number
+  shift: "Unclassified actions and the fail-close rule", "Dev-context
+  deletion gate"), a specific PRIOR-VERSION CHANGELOG entry this round
+  did not touch (`f86b2425`, `63fefe3a`/`1432e053`, `98ad072f`,
+  `f1aea826`, `cf3dff51`), or (in `codex-adapter-parity-gaps.md`) a
+  risk-gate.md reference that already disclaims its own line number.
+  `gate-fail-posture-matrix.md` cites `docs/risk-gate.md` only
+  generically, no line pin, no curl mention. `debug-verb-selection.md`
+  DID need a content fix: its `test-risk` row's curl-SHAPE-floor
+  parenthetical still described the round-1 grammar ("a bare `curl`, a
+  single single-quoted `https://` URL, and a closed set of flags
+  proven incapable of naming a file or a method"), which round 2 made
+  wrong on two counts (no mention of the now-mandatory `-q`/`--disable`,
+  and the un-narrowed "proven incapable" wording); rewritten to name
+  `-q`/`--disable` as the mandatory next word and to match this round's
+  narrower "proven to name no file or method on the command line"
+  phrasing. Its two risk-gate.md LINE-NUMBER citations (144-145,
+  129-132) sit inside "Built-in benign harness commands", entirely
+  before this round's edits (which start at the `curl` SHAPE-floor
+  section, further down); re-read against the current file and
+  confirmed unchanged. `okf-kit check --json docs/okf` on the
+  committed tree: 0 errors, 0 warnings after this round's re-point.
+- 2026-09-02T07:34:40Z, task `fdaad781` curl SHAPE floor round-2
+  hardening, commit `d332753`/`e2bd3f3` (`src/runtime/read-only-bash.ts`,
+  `src/runtime/risk-classifier.ts`, `tests/runtime/read-only-floors.test.ts`):
+  `okf-kit check --json docs/okf` flagged 2 docs stale for
+  `src/runtime/read-only-bash.ts`: `quote-model-divergence.md` and
+  `understanding-gate-auto-mode-signals.md`, the same 2 the round-1
+  entry below already named, staled again by this round's edits to the
+  same source file. Both re-verified. `understanding-gate-auto-mode-signals.md`
+  still cites the file only in its `sources:` list, no body citation
+  of `isReadOnly*`/"read-only" (re-checked, unchanged from the
+  round-1 finding) -- timestamp-only re-stamp. `quote-model-divergence.md`
+  DID need content: its curl paragraph described the round-1 SHAPE
+  grammar only; added a short addendum naming this round's changes
+  (mandatory `-q`, dropped `-L`/`-k`, admitted `?`/`*`, rejected `\r`,
+  narrowed `splitCurlWords`' separator class), and added a new row plus
+  a full paragraph for `splitCurlWords` as a FOURTH independent
+  shell-word model (it was previously undercounted: the doc's own
+  frontmatter `description` said "three independent shell-word
+  models", and the comparison table listed only
+  `command-normalize`/`bash-prefix-parse`/`read-only-bash`; count
+  corrected to four, and the new paragraph states explicitly why
+  `splitCurlWords` sits OUTSIDE the K1/K2/K3 comparison matrix rather
+  than becoming a fourth column in it -- it decodes no values, so none
+  of the three measured divergence axes apply to it). `okf-kit check
+  --json docs/okf` on the committed tree: 0 errors, 0 warnings after
+  this round's re-point.
+- 2026-09-02T06:52:02Z, task `fdaad781` round 2 (docs/risk-gate.md and
+  CHANGELOG.md, edited to document the curl SHAPE floor and re-point
+  the round-1 entry below, changed on disk after their commit):
+  `okf-kit check` flagged 6 MORE docs stale for `docs/risk-gate.md`
+  and/or `CHANGELOG.md`: `codex-adapter-parity-gaps.md`,
+  `debug-verb-selection.md`, `evidence-ledger-trust-boundary.md`,
+  `gate-fail-posture-matrix.md`, `pause-vs-gate-kill-switch.md`,
+  `policy-engine-producer-wiring.md`. Each re-verified before
+  re-stamping, not blindly bumped. Five of the six carried no curl-
+  specific claim: their `docs/risk-gate.md`/`CHANGELOG.md` citations
+  either name a section by title only (unaffected by this task's
+  edits, e.g. "Unclassified actions and the fail-close rule", which
+  still exists under that name) or a specific PRIOR-VERSION CHANGELOG
+  entry (0.35.0/0.39.0/0.44.0/0.45.0), none of which this task
+  touched (only `[Unreleased]` gained a new bullet at the top);
+  `codex-adapter-parity-gaps.md` additionally already carries its own
+  "line number not pinned here ... re-grep rather than trust a stale
+  line number" caveat for its one risk-gate.md citation. Those five:
+  timestamp-only re-stamp. `debug-verb-selection.md` DID need a
+  content fix: its verb-selection table's `test-risk` row repeated
+  the same since-superseded D-013 "curl deliberately has NO floor"
+  claim this round-1 entry already fixed in `quote-model-divergence.md`,
+  including a link to the risk-gate.md section this task renamed. Its
+  two risk-gate.md LINE-NUMBER citations (144-145, 129-132) sit inside
+  "Built-in benign harness commands", entirely before this task's
+  first edit (which starts at the `sed`-floor section further down);
+  re-read against the current file and confirmed unchanged, so only
+  the curl sentence itself needed rewriting, not the line numbers.
+  `okf-kit check --json docs/okf` on the committed tree: 0 errors, 0
+  warnings after this round's re-point.
+- 2026-09-02T06:49:55Z, task `fdaad781` (curl read-only SHAPE floor,
+  decision D-026, reintroducing `isReadOnlyCurlCommand` in
+  `src/runtime/read-only-bash.ts` after decision D-013 removed the
+  previous flag-list floor entirely): `okf-kit check --json docs/okf`
+  flagged 2 docs stale for `src/runtime/read-only-bash.ts`:
+  `quote-model-divergence.md` and `understanding-gate-auto-mode-signals.md`.
+  Both re-verified, not blindly re-stamped.
+  `understanding-gate-auto-mode-signals.md` cites the file only in its
+  `sources:` list, with no body citation of `isReadOnly*` or "read-only"
+  prose referring to it (`grep -in "read-only\|isReadOnly"` across the
+  whole doc: the only body hits are unrelated Codex `sandbox_mode`
+  mentions) -- timestamp-only re-stamp, no content changed.
+  `quote-model-divergence.md` DID need a content fix: its "Ungemessen
+  gegen echtes bash" paragraph carried a since-superseded claim, "Der
+  gleichzeitig gebaute `curl`-Floor (`isReadOnlyCurlCommand`) existiert
+  NICHT mehr" (task `2929c5b7`, decision D-013), which this task's own
+  reintroduction of `isReadOnlyCurlCommand` makes false as written. The
+  paragraph now keeps the D-013 history (why the flag-list floor
+  leaked and was removed) and adds that decision D-026 (this task)
+  brought the predicate back as a SHAPE grammar instead of a flag list,
+  cross-referencing docs/risk-gate.md's "curl read-only SHAPE floor"
+  section (renamed from "No `curl` read-only floor, by design", the
+  section this doc used to cite). The wiring table row
+  ("`read-only-bash.ts` | Boolean | Risk-Floor, ...") was re-checked
+  and needed no change: the new predicate is Risk-Floor-only, already
+  covered by the existing "Risk-Floor" entry, and
+  `src/runtime/risk-classifier.ts`'s wiring confirms it (verified by
+  reading the diff, not assumed). `okf-kit check --json docs/okf` on
+  the committed tree: 0 errors, 0 warnings after the re-point.
 - 2026-09-02T06:04:54Z, task `204efc56` round 4 (further review fixes
   for the `report_missing` delegation refusal reason: extracted the
   shared `lstatOrNull` helper in `src/io/read-regular-file.ts` so the

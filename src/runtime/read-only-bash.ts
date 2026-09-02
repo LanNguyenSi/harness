@@ -638,18 +638,26 @@ const VERSION_OR_HELP_FLAGS: ReadonlySet<string> = new Set([
 
 /**
  * True when `trimmed` contains a shell chaining (`;`, `&`, `|`),
- * redirection (`<`, `>`), or command-substitution (backtick, `$(`)
- * metacharacter that could hide a write behind an otherwise-provable
- * read. Shared by `isReadOnlyBashCommand` and `isReadOnlyKubectlCommand`
- * below (extracted, task da823721, to keep their identical preamble
- * from being flagged as new copy-paste by the duplication gate). NOT
- * reused by `isReadOnlyBashPipeline`, which deliberately admits a bare
- * `|` (see its own doc comment) and so needs a narrower reject set.
+ * redirection (`<`, `>`), command-substitution (backtick, `$(`), or a
+ * bare carriage return that could hide a write (or, for `curl`'s `-H`
+ * values, a header-injection newline a lenient parser folds on) behind
+ * an otherwise-provable read. Shared by `isReadOnlyBashCommand` and
+ * `isReadOnlyKubectlCommand` below (extracted, task da823721, to keep
+ * their identical preamble from being flagged as new copy-paste by the
+ * duplication gate), by `floorArgv` (`isReadOnlySedCommand`'s own
+ * preamble -- `floorArgv`'s only caller since D-013 removed the curl
+ * floor it used to also serve), and directly by `isReadOnlyCurlCommand`
+ * (task fdaad781, round 2:
+ * added `\r` after a measured bare-CR header-injection reaching curl's
+ * wire, see docs/risk-gate.md's curl section). NOT reused by
+ * `isReadOnlyBashPipeline`, which deliberately admits a bare `|` (see
+ * its own doc comment) and so needs a narrower reject set.
  */
 function hasUnsafeShellMetachar(trimmed: string): boolean {
   return (
     /[;&|<>]/.test(trimmed) ||
     trimmed.includes("\n") ||
+    trimmed.includes("\r") ||
     trimmed.includes("`") ||
     trimmed.includes("$(")
   );
@@ -1473,6 +1481,299 @@ function readSedTwoPartCommand(s: string, start: number, isSubstitution: boolean
     break;
   }
   return i;
+}
+
+// --- curl (read-only SHAPE floor) -------------------------------------
+
+/**
+ * One shell word from `splitCurlWords`. Meaningful only for a
+ * non-`composite` word: `quote` says how it was written (`none` for an
+ * unquoted run, `single`/`double` for a run fully wrapped in that quote
+ * character) and `content` is the word's literal text with that one
+ * quote pair stripped (or the raw text, for `none`). A `composite` word
+ * is more than one quoted/unquoted RUN glued into a single shell word
+ * with no separating whitespace (`-H'X: y'`, two adjacent quoted runs
+ * `'a''b'`); `content`/`quote` carry no useful meaning for one and every
+ * reader below forfeits on `composite` before looking at them.
+ */
+interface CurlWord {
+  content: string;
+  quote: "single" | "double" | "none";
+  composite: boolean;
+}
+
+/**
+ * Word separator `splitCurlWords` honors: space and tab only, not JS
+ * `\s` (which also matches NBSP, vertical tab, form feed, ideographic
+ * space, and line terminators). Round 2 (task fdaad781) narrowed this
+ * from `\s`: a non-ASCII or exotic whitespace character bash does not
+ * treat as IFS -- an NBSP between `curl` and `-q`, say -- must not glue
+ * two argv words into one here the way bash never would. `\n`/`\r`
+ * never reach this splitter: `isReadOnlyCurlCommand`'s
+ * `hasUnsafeShellMetachar` guard refuses both for the whole command
+ * first.
+ */
+const CURL_WORD_SEPARATOR_RE = /[ \t]/;
+
+/**
+ * Quote-aware word splitter built ONLY for `isReadOnlyCurlCommand`. Unlike
+ * every other floor in this file, which treats `trimmed.split(/\s+/)` as
+ * "the" tokenizer, this floor cannot: that split tears a quoted value
+ * containing a space (`-H 'Accept: application/json'`) into the two raw
+ * fragments `'Accept:` and `application/json'`, which this floor's own
+ * positive fixtures require to parse as ONE quoted header value.
+ *
+ * Supports single and double quotes only; no backslash-escape or
+ * expansion handling of any kind. Fails closed (`null`) on anything it
+ * cannot cleanly resolve: an unterminated quote, or a bare unquoted
+ * backslash outside any quote (this splitter has no escape model for it,
+ * so refusing the whole command is the safe answer, not guessing one).
+ * A word built from more than one quoted/unquoted run glued together with
+ * no separating whitespace comes back `composite: true` rather than being
+ * rejected outright here: it is a real, distinct shell word (bash would
+ * concatenate the runs into one argv entry), just one this floor's shape
+ * never allows, so the caller forfeits on it explicitly.
+ */
+function splitCurlWords(s: string): CurlWord[] | null {
+  const words: CurlWord[] = [];
+  const n = s.length;
+  let i = 0;
+  while (i < n) {
+    while (i < n && CURL_WORD_SEPARATOR_RE.test(s[i]!)) i += 1;
+    if (i >= n) break;
+    const runs: { quote: "single" | "double" | "none"; text: string }[] = [];
+    while (i < n && !CURL_WORD_SEPARATOR_RE.test(s[i]!)) {
+      const ch = s[i]!;
+      if (ch === "'" || ch === '"') {
+        const close = s.indexOf(ch, i + 1);
+        if (close === -1) return null; // unterminated quote: fail closed
+        runs.push({ quote: ch === "'" ? "single" : "double", text: s.slice(i + 1, close) });
+        i = close + 1;
+        continue;
+      }
+      if (ch === "\\") return null; // unmodelled escape: fail closed
+      const start = i;
+      while (
+        i < n &&
+        !CURL_WORD_SEPARATOR_RE.test(s[i]!) &&
+        s[i] !== "'" &&
+        s[i] !== '"' &&
+        s[i] !== "\\"
+      ) {
+        i += 1;
+      }
+      runs.push({ quote: "none", text: s.slice(start, i) });
+    }
+    if (runs.length === 0) continue;
+    if (runs.length === 1) {
+      words.push({ content: runs[0]!.text, quote: runs[0]!.quote, composite: false });
+    } else {
+      words.push({ content: "", quote: "none", composite: true });
+    }
+  }
+  return words;
+}
+
+/**
+ * curl short-flag cluster characters that take no value: no flag on
+ * this list names a file, and the only method any of them selects is
+ * HEAD (`-I`), which is read-only (`-s -S -f -I`, in any combination).
+ * Round 2 (task fdaad781) dropped `-L` (`--location`) and `-k`
+ * (`--insecure`) from this set: `-L` follows a redirect and forwards a
+ * custom `-H` header cross-host over plaintext; `-k` is a deliberate
+ * TLS-verification bypass that should stay approval-gated. Both now
+ * forfeit the shape. See docs/risk-gate.md's curl section for the
+ * measurement behind the `-L` finding.
+ */
+const CURL_NO_VALUE_SHORT_CHARS: ReadonlySet<string> = new Set(["s", "S", "f", "I"]);
+/** curl long flags that take no value: no flag on this list names a file, and the only method any of them selects is HEAD (`--head`), which is read-only. See `CURL_NO_VALUE_SHORT_CHARS` for why `--location` and `--insecure` are not on it. */
+const CURL_NO_VALUE_LONG_FLAGS: ReadonlySet<string> = new Set([
+  "--silent", "--show-error", "--fail", "--head",
+]);
+/**
+ * curl long flags whose value is admitted ONLY in the separate-token
+ * form (`--header VALUE`, never `--header=VALUE`, checked and rejected
+ * before this map is consulted). Value maps to the same key as the
+ * matching short flag below, so a repeat count is shared across spellings.
+ */
+const CURL_VALUE_LONG_FLAGS: ReadonlyMap<string, string> = new Map([
+  ["--header", "header"],
+  ["--max-time", "maxtime"],
+  ["--connect-timeout", "connecttimeout"],
+]);
+
+/**
+ * Shape for the ONE operand this floor admits: `https://`, a host made
+ * of letters, digits, `.` and `-` only, an optional `:PORT`, and an
+ * optional path with none of curl's globbing characters (`{}[]`), no
+ * whitespace, backslash, backtick or `$`. No userinfo (`user:pw@`) is
+ * reachable through this shape: the host class has no `:`/`@`, so
+ * `https://user:pw@x` cannot match end-to-end. Round 2 (task fdaad781)
+ * admits `?` and `*` in the path (previously excluded): the operand is
+ * single-quoted, so the shell cannot glob on either character, and
+ * curl's own URL-globbing syntax uses only `{}`/`[]`, never `?`/`*`,
+ * so admitting them widens no shape gap and closes the most common
+ * single-parameter read-only query-string spelling this floor used to
+ * forfeit (a MULTI-parameter query string joined by `&` still forfeits
+ * even single-quoted -- see docs/risk-gate.md's Residuals for why that
+ * stays out of scope). See docs/risk-gate.md's curl section for the
+ * measurement behind admitting `?`/`*`. Do not "clean up" further
+ * without re-deriving it.
+ */
+const CURL_SHAPE_URL_RE = /^https:\/\/[A-Za-z0-9.-]+(:[0-9]+)?(\/[^'\s{}[\]\\`$]*)?$/;
+
+/**
+ * `true` when `value` is an admissible VALUE for the value-taking flag
+ * `key` (`"header"` or one of the two timeout keys). `composite` always
+ * forfeits (a glued flag+value pair like `-H'X: y'` never reaches a
+ * legitimate value this way). A header value must be quoted (either
+ * quote character), must not start with `@` after quote-stripping and
+ * leading-whitespace trimming (a local-file read; the trim keeps the
+ * ALLOW decision on the shape rather than on curl's own header parser,
+ * round 4), and must carry no `$` or backtick. A bare `\n` or
+ * `\r` can never reach here: `isReadOnlyCurlCommand`'s whole-command
+ * `hasUnsafeShellMetachar` guard already refuses both for the entire
+ * command before any word is split out, so this function forfeits on
+ * neither character itself (round 3, task fdaad781: they were dropped
+ * from this regex as dead, unreachable code; see docs/risk-gate.md's
+ * curl section for the measurement that motivated the `\r` guard in
+ * the first place). A timeout value must be a bare non-negative
+ * integer, `^[0-9]+$` exactly.
+ */
+function isAllowedCurlFlagValue(key: string, value: CurlWord): boolean {
+  if (value.composite) return false;
+  if (key === "header") {
+    if (value.quote === "none") return false;
+    if (value.content.trimStart().startsWith("@")) return false;
+    return !/[\x60$]/.test(value.content);
+  }
+  return /^[0-9]+$/.test(value.content);
+}
+
+/**
+ * Consume a value-taking flag's value at `words[i + 1]` (the shape
+ * requires the separate-token form): validates it and enforces "never
+ * repeated" for `key`, updating `valueFlagCounts` in place. Returns the
+ * loop index to resume at (`i + 1`, the value's own index, since the
+ * `for` loop's own `i += 1` then advances past it), or `null` to forfeit
+ * the whole command. Shared by both value-taking-flag call sites in
+ * `isReadOnlyCurlCommand` (the long-flag branch and the standalone
+ * `-H`/`-m` branch) so the repeat-count bookkeeping has one home.
+ */
+function consumeCurlFlagValue(
+  words: readonly CurlWord[],
+  i: number,
+  key: string,
+  valueFlagCounts: Map<string, number>,
+): number | null {
+  const value = words[i + 1];
+  if (value === undefined || !isAllowedCurlFlagValue(key, value)) return null;
+  const count = (valueFlagCounts.get(key) ?? 0) + 1;
+  if (count > 1) return null; // repeated value-taking flag: forfeit
+  valueFlagCounts.set(key, count);
+  return i + 1;
+}
+
+/**
+ * curl read-only SHAPE floor for the Risk Classifier ONLY (task fdaad781,
+ * decision D-026, round 2 hardening). Composes exactly like the sed and
+ * kubectl floors above: it never sinks below an operator classifier,
+ * and only the DESTRUCTIVE floor (evaluated first in
+ * `risk-classifier.ts`) can raise above it. This comment states only
+ * the grammar; see docs/risk-gate.md's "curl read-only SHAPE floor"
+ * section for the full history (D-013's two leaked flag lists), the
+ * round-2 changes (mandatory `-q`, dropped `-L`/`-k`, the `\r`/query-
+ * string fixes), the residuals, and the operator escape hatch.
+ *
+ * `true` requires ALL of: no shell chaining, redirection, substitution,
+ * or background `&` anywhere in the whole command (the same whole-string
+ * guard every other floor in this file uses); the head word is exactly
+ * `curl` (unquoted, not composite -- no path prefix, no `env`/`command`/
+ * `sudo`/other wrapper, those are other heads and forfeit here); the
+ * SECOND word is exactly `-q` or `--disable` (unquoted, not composite,
+ * not inside a cluster, not merely present later -- curl only honors it
+ * as the first argument, and skipping it leaves `$CURL_HOME/.curlrc` /
+ * `$XDG_CONFIG_HOME/curlrc` / `~/.curlrc` free to set `output`,
+ * `request`, `data`, or `upload-file` underneath every other spelling
+ * this shape would otherwise accept -- see docs/risk-gate.md's curl
+ * section for the measurement); every remaining word is either a flag
+ * drawn from the closed allowlists above (no flag on this list names a
+ * file, and the only method any of them selects is HEAD, which is
+ * read-only; curl's config surface is closed off by the mandatory
+ * `-q`; a value-taking flag consumed only in its separate-token form,
+ * and never repeated) or the SINGLE operand, which must be a single-quoted,
+ * unbroken word matching `CURL_SHAPE_URL_RE`. Any composite word, any
+ * unknown flag, any `=`-glued flag, any second operand, or a missing
+ * operand forfeits the whole command.
+ */
+export function isReadOnlyCurlCommand(command: string): boolean {
+  const trimmed = command.trim();
+  if (trimmed === "") return false;
+  if (hasUnsafeShellMetachar(trimmed)) return false;
+
+  const words = splitCurlWords(trimmed);
+  if (words === null || words.length === 0) return false;
+
+  const head = words[0]!;
+  if (head.composite || head.quote !== "none" || head.content !== "curl") return false;
+
+  // Mandatory `-q`/`--disable` as the SECOND word (curl only honors it
+  // as the first argument): closes the curlrc auto-load residual, see
+  // this function's docstring above.
+  const disableWord = words[1];
+  if (
+    disableWord === undefined ||
+    disableWord.composite ||
+    disableWord.quote !== "none" ||
+    (disableWord.content !== "-q" && disableWord.content !== "--disable")
+  ) {
+    return false;
+  }
+
+  let urlWord: CurlWord | null = null;
+  const valueFlagCounts = new Map<string, number>();
+
+  for (let i = 2; i < words.length; i += 1) {
+    const w = words[i]!;
+    if (w.composite) return false;
+
+    if (w.quote === "none" && w.content.startsWith("-") && w.content !== "-") {
+      const t = w.content;
+      if (t.startsWith("--")) {
+        if (t.includes("=")) return false; // `--flag=value` glued form: forfeit
+        if (CURL_NO_VALUE_LONG_FLAGS.has(t)) continue;
+        const key = CURL_VALUE_LONG_FLAGS.get(t);
+        if (key === undefined) return false; // not on the closed list
+        const next = consumeCurlFlagValue(words, i, key, valueFlagCounts);
+        if (next === null) return false;
+        i = next;
+        continue;
+      }
+      if (t === "-H" || t === "-m") {
+        const key = t === "-H" ? "header" : "maxtime";
+        const next = consumeCurlFlagValue(words, i, key, valueFlagCounts);
+        if (next === null) return false;
+        i = next;
+        continue;
+      }
+      // Any other short flag or cluster: every character must be a
+      // no-value char. `-H`/`-m` are recognised only as a WHOLE token
+      // above, never as a cluster member, so `-sH` and `-mS` forfeit here.
+      const clusterChars = t.slice(1);
+      if (clusterChars.length === 0) return false;
+      if (![...clusterChars].every((c) => CURL_NO_VALUE_SHORT_CHARS.has(c))) return false;
+      continue;
+    }
+
+    // Not a recognised flag token: the operand. A second operand (or a
+    // quoted/mis-spelled flag that fell through to here) forfeits.
+    if (urlWord !== null) return false;
+    urlWord = w;
+  }
+
+  if (urlWord === null) return false;
+  if (urlWord.composite || urlWord.quote !== "single") return false;
+  return CURL_SHAPE_URL_RE.test(urlWord.content);
 }
 
 /**

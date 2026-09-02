@@ -933,10 +933,16 @@ risk:
         # these same heads (`sed` without `-i`, `git status`/`log`/
         # `rev-list`/...) are handled by the Risk Classifier's built-in
         # read-only floors (`read-only-bash.ts`), not by a pattern here.
-        # `curl` deliberately has NO read-only floor (decision D-013): its
-        # flag surface cannot be allowlisted robustly, so a read-only curl
-        # stays unclassified and approval-gated rather than floored. See
-        # docs/risk-gate.md, "No `curl` read-only floor, by design".
+        # `curl` gets a `low` read-only floor for ONE narrow SHAPE only
+        # (task fdaad781, decision D-026, superseding decision D-013,
+        # round 2 hardened): a bare `curl`, mandatory `-q`/`--disable`
+        # as the next word, a single single-quoted `https://` URL, and a
+        # closed set of flags proven to name no file, with the only
+        # selectable method being HEAD (`-I`/`--head`), which is
+        # read-only. Every other curl spelling, including any flag
+        # nobody has reasoned about here, stays unclassified and
+        # approval-gated rather than floored. See docs/risk-gate.md,
+        # "curl read-only SHAPE floor".
         #
         # These patterns are the OPERATOR-EDITABLE MIRROR of the built-in
         # destructive floor (`src/runtime/destructive-shell-floor.ts`),

