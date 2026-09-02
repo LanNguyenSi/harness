@@ -14,6 +14,15 @@ export type RegularFileRead =
   | { kind: "unreadable" };
 
 /**
+ * Result of a stat-only existence probe (see `probeRegularFilePresence`). No
+ * `content`: this never reads the file, only classifies what lstat sees at
+ * the path. `present` covers a symlink, a directory, or any other non-regular
+ * node the caller wants to treat as "something is there" without yet reading
+ * it or deciding whether it is a valid regular file.
+ */
+export type RegularFilePresence = { kind: "missing" } | { kind: "present" };
+
+/**
  * Read a marker/verdict file as utf8, refusing symlinks and non-regular
  * files. lstat (NOT stat): defense-in-depth against a symlink at the marker
  * path pointing at an arbitrary target the agent controls. In today's threat
@@ -24,7 +33,13 @@ export type RegularFileRead =
  *
  * This is THE shared implementation for every gate-marker read; a future
  * defensive fix (e.g. closing the lstat/read race with O_NOFOLLOW, ENOTDIR
- * handling) belongs here and nowhere else.
+ * handling) belongs here and nowhere else. Its lighter-weight sibling
+ * `probeRegularFilePresence`, below, shares this file for the same reason:
+ * both stand on the same single `fs.lstatSync` call, and a caller that only
+ * needs to know "is anything there" before deciding whether to pay for the
+ * full read (e.g. `verifyDelegation`'s existence-before-path-hash check in
+ * `src/policy-packs/builtin/understanding-before-execution/delegation-markers.ts`)
+ * gets that from here instead of hand-rolling its own `lstatSync` try/catch.
  */
 export function readRegularFileRejectingSymlink(filePath: string): RegularFileRead {
   let stat: fs.Stats;
@@ -39,5 +54,26 @@ export function readRegularFileRejectingSymlink(filePath: string): RegularFileRe
     return { kind: "ok", content: fs.readFileSync(filePath, "utf8") };
   } catch {
     return { kind: "unreadable" };
+  }
+}
+
+/**
+ * Stat-only existence probe: "is anything there", nothing more. Uses the
+ * same `lstatSync` (not `stat`) as `readRegularFileRejectingSymlink` so a
+ * symlink or a directory answers `present`, not `missing` — this probe
+ * cannot and does not classify WHAT is there (regular file, symlink,
+ * directory), only whether lstat can see anything at all. A path lstat
+ * cannot reach for any reason (absent, or unreachable: `EACCES`, `ENOTDIR`,
+ * ...) comes back `missing`; lstat cannot distinguish those cases, so
+ * neither does this probe. Callers that need the file-type distinction
+ * (symlink vs directory vs regular) read the file instead, through
+ * `readRegularFileRejectingSymlink`.
+ */
+export function probeRegularFilePresence(filePath: string): RegularFilePresence {
+  try {
+    fs.lstatSync(filePath);
+    return { kind: "present" };
+  } catch {
+    return { kind: "missing" };
   }
 }

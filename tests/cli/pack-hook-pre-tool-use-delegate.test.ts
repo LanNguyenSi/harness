@@ -818,14 +818,18 @@ describe("pack hook pre-tool-use: delegation path (ADR slice 3)", () => {
       // `.delegation-reports/<sid>.md` file instead of refusing it
       // unconditionally. "Moved" here means the file that WAS staged
       // there at delegation time is gone by the time the child's hook
-      // runs (renamed away, deleted, swapped for a symlink, ...): nothing
-      // readable sits at the one path both sides derive from the child
-      // session id. `verifyDelegation` now checks existence BEFORE the
-      // path hash, so this pins to the dedicated `report_missing` reason
-      // deterministically, on every platform, whether or not the fixture
-      // root is realpathed (see the sibling fixture in
-      // understanding-before-execution-delegation.test.ts that pins it on
-      // both a realpathed and a non-realpathed root).
+      // runs (renamed away, deleted, ...): nothing sits at the one path
+      // both sides derive from the child session id, so lstat itself
+      // finds nothing there. A symlink is deliberately NOT one of the
+      // cases this fixture covers: a resolvable symlink is caught one
+      // step later, at the path-hash comparison, as
+      // `report_path_mismatch` (see the sibling symlink fixture in
+      // understanding-before-execution-delegation.test.ts). `verifyDelegation`
+      // now checks existence BEFORE the path hash, so this pins to the
+      // dedicated `report_missing` reason deterministically, on every
+      // platform, whether or not the fixture root is realpathed (see the
+      // sibling fixture in understanding-before-execution-delegation.test.ts
+      // that pins it on both a realpathed and a non-realpathed root).
       issueReportBoundDelegation(CHILD_REPORT_MARKDOWN);
       fs.rmSync(delegationReportPathFor(generatedDir, CHILD));
       writeTranscript([userTurn(), transcriptEntry()]);
