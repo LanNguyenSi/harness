@@ -453,11 +453,12 @@ grammar below:
 
 Every "proven incapable of naming a file or a method" claim in this
 floor now reads more narrowly, and means: no flag on this closed list
-names a file or a method on the command line, and curl's config-file
-surface (the one channel that could set one without appearing on argv
-at all) is closed off by the mandatory `-q`. That is a claim about the
-one shape this floor accepts, not a claim that curl as a whole has no
-other config surface -- see "Residuals" below for what stays open.
+names a file, and the only method any of them selects is HEAD
+(`-I`/`--head`), which is read-only; curl's config-file surface (the
+one channel that could set one without appearing on argv at all) is
+closed off by the mandatory `-q`. That is a claim about the one shape
+this floor accepts, not a claim that curl as a whole has no other
+config surface -- see "Residuals" below for what stays open.
 
 This floor inverts the burden instead of re-litigating the list. It
 recognizes ONE narrow invocation SHAPE and forfeits (stays unclassified)
@@ -467,8 +468,10 @@ which is precisely the shape of both D-013 leaks. `true` requires ALL of:
 
 - No shell chaining, redirection, command substitution, background `&`,
   or a bare carriage return anywhere in the command (the same
-  whole-string guard every floor in this file uses; the `\r` clause was
-  added this round, see the header-value bullet below).
+  whole-string guard every floor in this file uses except
+  `isReadOnlyBashPipeline`, which keeps its own narrower reject set so
+  a bare `|` stays admissible there; the `\r` clause was added this
+  round, see the header-value bullet below).
 - The head is exactly `curl`: unquoted, no path prefix, no `env`/
   `command`/`sudo`/other wrapper. A wrapped or path-qualified head is a
   different spelling and forfeits here (it may still floor via
@@ -484,20 +487,25 @@ which is precisely the shape of both D-013 leaks. `true` requires ALL of:
   `:PORT`, and an optional path excluding exactly: a single quote,
   whitespace, `{`, `}`, `[`, `]`, backslash, backtick, and `$`. `?` and
   `*` are NOT excluded (round 2: previously excluded, which forfeited
-  the single most common read-only spelling, a URL with a query
-  string). No userinfo (`user:pw@`) is reachable through this shape:
+  the most common SINGLE-parameter read-only query-string spelling, a
+  URL with one `?param=value`; a MULTI-parameter query string joined
+  by `&` still forfeits even single-quoted -- see "Residuals" below).
+  No userinfo (`user:pw@`) is reachable through this shape:
   the host class has no `:`/`@`, so `https://user:pw@x` cannot match
   end-to-end. An unquoted URL, a double-quoted URL, `http://`, a second
   operand, or a missing operand all forfeit.
 - Every other word is a flag drawn from a closed allowlist, each PROVEN
-  to name no file or method on the command line: `-s`/`-S`/`-f`/`-I`
-  (any combination in a cluster), `--silent`/`--show-error`/`--fail`/
-  `--head`, and `-H`/`--header` or `-m`/`--max-time`/`--connect-timeout`
-  -- each ONLY in the separate-token form (never glued, never
-  `=`-joined, never repeated), with the header value quoted, not
-  `@`-prefixed, and free of `$`, backtick, newline, or carriage return
-  (round 2: added carriage return, see the header-value paragraph
-  below), and the timeout value a bare `^[0-9]+$`. `-L`/`--location`
+  to name no file, with the only selectable method being HEAD
+  (read-only): `-s`/`-S`/`-f`/`-I` (any combination in a cluster),
+  `--silent`/`--show-error`/`--fail`/`--head`, and `-H`/`--header` or
+  `-m`/`--max-time`/`--connect-timeout` -- each ONLY in the
+  separate-token form (never glued, never `=`-joined, never repeated),
+  with the header value quoted, not `@`-prefixed, and free of `$` or
+  backtick. A `\n`/`\r` in the header value never reaches this
+  per-value check at all: the whole-command guard above refuses either
+  character anywhere in the command first (round 3: the per-value
+  check's own now-redundant `\n`/`\r` clause was removed as dead code),
+  and the timeout value is a bare `^[0-9]+$`. `-L`/`--location`
   and `-k`/`--insecure` are OFF this list now (round 2, see above).
   Anything off the list -- `-o`, `-O`, `-w`/`--write-out` in any
   spelling, `-d`/`-F`/`-T`/`-X`/`--request`, `-H`/`-b` with an `@FILE`
@@ -511,10 +519,17 @@ reaches curl's wire completely unmodified (`X-Foo: bar\rX-Injected:
 evil\r\n`, byte for byte). A lenient downstream parser that treats a
 bare `\r` as a line terminator reads that as two headers, which is
 header injection through a value this floor's own quoting rules would
-otherwise have accepted. `\r` is now refused twice over: once in the
-whole-command guard above (so a `\r` anywhere forfeits the entire
-command, not just the flag it sits inside), and once in the per-value
-check for `-H`/`--header` specifically.
+otherwise have accepted. `\r` is refused in the whole-command guard
+above, so a `\r` anywhere -- inside a `-H` value or not -- forfeits the
+entire command before any word is even split out; only leading or
+trailing whitespace escapes that guard, stripped first by
+`command.trim()`. Round 2 also added a duplicate `\r` (and `\n`) check
+inside the per-value check for `-H`/`--header` specifically; round 3
+removed that duplicate as unreachable dead code, since the
+whole-command guard already forfeits before that check would ever run
+(pinned directly in tests/runtime/read-only-bash.test.ts, next to the
+shared guard's other metachar cases, so a regression that narrows the
+one guard that actually matters is still caught).
 
 Quoting is handled by a splitter built ONLY for this floor
 (`splitCurlWords`), because the shape's own positive fixtures require a
@@ -590,6 +605,22 @@ close, even after round 2:
   below's write-flag scan. Both are silent on them by omission, which
   is the intended fail-safe for an unnamed flag: they stay unclassified
   (approval-gated), never floored to `low`.
+- **A `&` in the query string forfeits the WHOLE command, even
+  single-quoted.** `CURL_SHAPE_URL_RE` does admit `&` in its path/query
+  class, but `hasUnsafeShellMetachar` -- the whole-command guard every
+  floor in this file shares (`isReadOnlyBashPipeline` excepted) --
+  rejects any bare `&` in the raw command string with no quote
+  awareness at all, the same guard that rejects the chained `&&`
+  fixture. So a MULTI-parameter query string joined by `&`
+  (`'https://x/search?q=abc&limit=10'`) never reaches
+  `CURL_SHAPE_URL_RE` and stays unclassified, even though the operand
+  is single-quoted and the shell itself cannot split on that `&`.
+  Closing this would mean making the shared whole-command guard
+  quote-aware, which every other floor in this file also relies on
+  staying a simple, cheap raw-string scan; deliberately out of scope
+  for this round. Round 2's `?`/`*` admission above therefore closes
+  only the single-parameter query-string spelling, not the more common
+  multi-parameter one.
 
 #### Built-in destructive floor (task `2929c5b7`)
 
@@ -1265,7 +1296,8 @@ simply has no classifier pattern:
    invocation, a read-only-SHAPE `curl` invocation (task `fdaad781`,
    decision D-026, round 2 hardened: a bare `curl`, mandatory `-q`/
    `--disable` as the next word, a single single-quoted `https://` URL,
-   and only flags proven to name no file or method on the command line),
+   and only flags proven to name no file, with the only selectable
+   method being HEAD, which is read-only),
    and the existing `git` read verbs
    (`status`, `log`, `rev-parse`, `rev-list`, `show`, `diff`, `branch`
    without `-D`/`-d`, `ls-files`, `remote -v`, `fetch`), including their
