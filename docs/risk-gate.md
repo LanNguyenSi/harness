@@ -500,7 +500,8 @@ which is precisely the shape of both D-013 leaks. `true` requires ALL of:
   `--silent`/`--show-error`/`--fail`/`--head`, and `-H`/`--header` or
   `-m`/`--max-time`/`--connect-timeout` -- each ONLY in the
   separate-token form (never glued, never `=`-joined, never repeated),
-  with the header value quoted, not `@`-prefixed, and free of `$` or
+  with the header value quoted, not `@`-prefixed once leading
+  whitespace is trimmed (round 4), and free of `$` or
   backtick. A `\n`/`\r` in the header value never reaches this
   per-value check at all: the whole-command guard above refuses either
   character anywhere in the command first (round 3: the per-value
@@ -596,7 +597,9 @@ close, even after round 2:
   reads. Entirely outside this shape's scope: it only ever looks at the
   argv text of one curl invocation.
 - **Version skew.** The closed flag list was proven inert against curl
-  8.7.1, the version measured throughout this task. A different
+  8.7.1, the version measured throughout this task, and the `?`/`*`
+  URL admission rests on the same measurement (the one remaining
+  positive that depends on curl's own parsing rather than on the shape). A different
   installed curl version could in principle attach new behavior to one
   of these flags; the D-013 history above is exactly this failure mode
   once already, for `-w`/`--write-out`.

@@ -88,7 +88,8 @@ describe("sed read-only floor (Risk Classifier only, task 2929c5b7)", () => {
 // SHAPE, not a per-flag list: a bare, unwrapped `curl` invocation, `-q`
 // or `--disable` as the mandatory FIRST argument, exactly one
 // single-quoted `https://` URL operand, and a closed set of flags proven
-// to name no file or method on the command line. Every other spelling
+// to name no file, with the only selectable method being HEAD
+// (`-I`/`--head`), which is read-only. Every other spelling
 // forfeits (stays unclassified, approval-gated), never floors. Round 2
 // (this file's own history: adversarial review of round 1) made `-q`
 // mandatory (a bare `curl -s <url>` could otherwise write a file via
@@ -112,10 +113,6 @@ describe("curl read-only SHAPE floor (Risk Classifier only, task fdaad781, decis
     ["bare URL, no flags at all", "curl -q 'https://example.test'"],
     ["--disable long form, in place of -q", "curl --disable -s 'https://example.test'"],
     ["query string in the path", "curl -q -s 'https://api.example.test/search?q=abc'"],
-    [
-      "-H with a leading-space value that does not start with @ (round 3 pin: `isAllowedCurlFlagValue`'s @-prefix check runs on the quote-stripped value, so a value that MERELY CONTAINS an @ after a leading space does not forfeit; measured against curl 8.7.1 against a local echo server: curl sends no header at all for ' @/etc/passwd' -- it fails curl's own 'Name: Value' header-syntax parse and is silently dropped, so this floors low with no header-injection or local-file-read capability actually reaching the wire)",
-      "curl -q -s -H ' @/etc/passwd' 'https://api.example.test/status'",
-    ],
   ])("floors %s to low", (_label, command) => {
     expect(isReadOnlyCurlCommand(command)).toBe(true);
     const profile = floorOnly(command);
@@ -145,6 +142,22 @@ describe("curl read-only SHAPE floor (Risk Classifier only, task fdaad781, decis
       [
         "-k (round 2: a deliberate TLS-verification bypass, kept approval-gated)",
         "curl -q -sk 'https://api.example.test/status'",
+      ],
+      [
+        "--location (round 4: the long spelling of -L, pinned separately so re-admitting only the long form cannot ship green)",
+        "curl -q -s --location 'https://api.example.test/status'",
+      ],
+      [
+        "--insecure (round 4: the long spelling of -k, pinned separately)",
+        "curl -q -s --insecure 'https://api.example.test/status'",
+      ],
+      [
+        "-H value that starts with @ after leading whitespace (round 4: the @ check trims first, so the ALLOW decision rests on the shape rather than on curl's own header parser; curl 8.7.1 happens to drop such a header unsent, a later curl might not)",
+        "curl -q -s -H ' @/etc/passwd' 'https://api.example.test/status'",
+      ],
+      [
+        "-H value that starts with @ after a leading tab (round 4, same rule)",
+        "curl -q -s -H '\t@/etc/passwd' 'https://api.example.test/status'",
       ],
       [
         "single-quoted literal $ in the path (still excluded from CURL_SHAPE_URL_RE)",

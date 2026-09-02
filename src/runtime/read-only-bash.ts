@@ -1627,8 +1627,10 @@ const CURL_SHAPE_URL_RE = /^https:\/\/[A-Za-z0-9.-]+(:[0-9]+)?(\/[^'\s{}[\]\\`$]
  * `key` (`"header"` or one of the two timeout keys). `composite` always
  * forfeits (a glued flag+value pair like `-H'X: y'` never reaches a
  * legitimate value this way). A header value must be quoted (either
- * quote character), must not start with `@` after quote-stripping (a
- * local-file read), and must carry no `$` or backtick. A bare `\n` or
+ * quote character), must not start with `@` after quote-stripping and
+ * leading-whitespace trimming (a local-file read; the trim keeps the
+ * ALLOW decision on the shape rather than on curl's own header parser,
+ * round 4), and must carry no `$` or backtick. A bare `\n` or
  * `\r` can never reach here: `isReadOnlyCurlCommand`'s whole-command
  * `hasUnsafeShellMetachar` guard already refuses both for the entire
  * command before any word is split out, so this function forfeits on
@@ -1642,7 +1644,7 @@ function isAllowedCurlFlagValue(key: string, value: CurlWord): boolean {
   if (value.composite) return false;
   if (key === "header") {
     if (value.quote === "none") return false;
-    if (value.content.startsWith("@")) return false;
+    if (value.content.trimStart().startsWith("@")) return false;
     return !/[\x60$]/.test(value.content);
   }
   return /^[0-9]+$/.test(value.content);
