@@ -112,6 +112,10 @@ describe("curl read-only SHAPE floor (Risk Classifier only, task fdaad781, decis
     ["bare URL, no flags at all", "curl -q 'https://example.test'"],
     ["--disable long form, in place of -q", "curl --disable -s 'https://example.test'"],
     ["query string in the path", "curl -q -s 'https://api.example.test/search?q=abc'"],
+    [
+      "-H with a leading-space value that does not start with @ (round 3 pin: `isAllowedCurlFlagValue`'s @-prefix check runs on the quote-stripped value, so a value that MERELY CONTAINS an @ after a leading space does not forfeit; measured against curl 8.7.1 against a local echo server: curl sends no header at all for ' @/etc/passwd' -- it fails curl's own 'Name: Value' header-syntax parse and is silently dropped, so this floors low with no header-injection or local-file-read capability actually reaching the wire)",
+      "curl -q -s -H ' @/etc/passwd' 'https://api.example.test/status'",
+    ],
   ])("floors %s to low", (_label, command) => {
     expect(isReadOnlyCurlCommand(command)).toBe(true);
     const profile = floorOnly(command);
@@ -187,6 +191,18 @@ describe("curl read-only SHAPE floor (Risk Classifier only, task fdaad781, decis
       ["sudo-wrapped head", "sudo curl -q 'https://x'"],
       ["no operand at all", "curl"],
       ["flags but no operand", "curl -q -s"],
+      [
+        "-q present but not FIRST, after another flag (round 3 pin: the position property was previously unpinned -- accepting -q anywhere would leave the curlrc auto-load residual open again, since curl only honors -q as its own first argument)",
+        "curl -s -q 'https://api.example.test/status'",
+      ],
+      [
+        "-q present but not FIRST, after the URL (round 3 pin, same position property as above)",
+        "curl 'https://api.example.test/status' -q",
+      ],
+      [
+        "-qs as the first argument: curl DOES honor a leading -q inside a cluster, but this floor deliberately does not -- the SECOND-word check requires an exact, unclustered '-q'/'--disable' token, so a cluster forfeits here even though curl itself would still skip the curlrc load (round 3 pin: an intentional divergence from curl's own parsing, not a gap)",
+        "curl -qs 'https://api.example.test/status'",
+      ],
     ])("%s does NOT floor and stays unclassified", (_label, command) => {
       expect(isReadOnlyCurlCommand(command)).toBe(false);
       const profile = floorOnly(command);
@@ -246,9 +262,13 @@ describe("curl read-only SHAPE floor (Risk Classifier only, task fdaad781, decis
   // parser can read as a line break and treat the text after it as an
   // injected header. `hasUnsafeShellMetachar`'s whole-command guard
   // refuses any `\r` anywhere in the command (round 2), so this forfeits
-  // before `isAllowedCurlFlagValue`'s own `\r` check would even run; both
-  // guards are load-bearing for different reasons (the shell guard also
-  // covers a `\r` outside any flag value), so this is pinned directly.
+  // before `isAllowedCurlFlagValue` is ever consulted. Round 3: the
+  // per-value `\r` check `isAllowedCurlFlagValue` used to also carry was
+  // removed as unreachable dead code -- the whole-command guard already
+  // refuses every `\r`, inside a flag value or not, before any word is
+  // split out, so the per-value copy could never be the one that fires.
+  // Pinned directly here so a regression that narrows the shared guard
+  // (rather than the removed per-value copy) still turns this fixture red.
   it("does NOT floor a curl command carrying a literal CR in a header value", () => {
     const command = "curl -q -s -H 'X-Foo: bar\rX-Injected: evil' 'https://api.example.test/status'";
     expect(isReadOnlyCurlCommand(command)).toBe(false);

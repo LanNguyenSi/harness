@@ -644,8 +644,10 @@ const VERSION_OR_HELP_FLAGS: ReadonlySet<string> = new Set([
  * an otherwise-provable read. Shared by `isReadOnlyBashCommand` and
  * `isReadOnlyKubectlCommand` below (extracted, task da823721, to keep
  * their identical preamble from being flagged as new copy-paste by the
- * duplication gate), by `floorArgv` (the `sed`/`curl` floors' shared
- * preamble), and by `isReadOnlyCurlCommand` (task fdaad781, round 2:
+ * duplication gate), by `floorArgv` (`isReadOnlySedCommand`'s own
+ * preamble -- `floorArgv`'s only caller since D-013 removed the curl
+ * floor it used to also serve), and directly by `isReadOnlyCurlCommand`
+ * (task fdaad781, round 2:
  * added `\r` after a measured bare-CR header-injection reaching curl's
  * wire, see docs/risk-gate.md's curl section). NOT reused by
  * `isReadOnlyBashPipeline`, which deliberately admits a bare `|` (see
@@ -1501,6 +1503,19 @@ interface CurlWord {
 }
 
 /**
+ * Word separator `splitCurlWords` honors: space and tab only, not JS
+ * `\s` (which also matches NBSP, vertical tab, form feed, ideographic
+ * space, and line terminators). Round 2 (task fdaad781) narrowed this
+ * from `\s`: a non-ASCII or exotic whitespace character bash does not
+ * treat as IFS -- an NBSP between `curl` and `-q`, say -- must not glue
+ * two argv words into one here the way bash never would. `\n`/`\r`
+ * never reach this splitter: `isReadOnlyCurlCommand`'s
+ * `hasUnsafeShellMetachar` guard refuses both for the whole command
+ * first.
+ */
+const CURL_WORD_SEPARATOR_RE = /[ \t]/;
+
+/**
  * Quote-aware word splitter built ONLY for `isReadOnlyCurlCommand`. Unlike
  * every other floor in this file, which treats `trimmed.split(/\s+/)` as
  * "the" tokenizer, this floor cannot: that split tears a quoted value
@@ -1519,19 +1534,6 @@ interface CurlWord {
  * concatenate the runs into one argv entry), just one this floor's shape
  * never allows, so the caller forfeits on it explicitly.
  */
-/**
- * Word separator `splitCurlWords` honors: space and tab only, not JS
- * `\s` (which also matches NBSP, vertical tab, form feed, ideographic
- * space, and line terminators). Round 2 (task fdaad781) narrowed this
- * from `\s`: a non-ASCII or exotic whitespace character bash does not
- * treat as IFS -- an NBSP between `curl` and `-q`, say -- must not glue
- * two argv words into one here the way bash never would. `\n`/`\r`
- * never reach this splitter: `isReadOnlyCurlCommand`'s
- * `hasUnsafeShellMetachar` guard refuses both for the whole command
- * first.
- */
-const CURL_WORD_SEPARATOR_RE = /[ \t]/;
-
 function splitCurlWords(s: string): CurlWord[] | null {
   const words: CurlWord[] = [];
   const n = s.length;
@@ -1574,17 +1576,17 @@ function splitCurlWords(s: string): CurlWord[] | null {
 
 /**
  * curl short-flag cluster characters that take no value: no flag on
- * this list names a file or a method on the command line (`-s -S -f
- * -I`, in any combination). Round 2 (task fdaad781) dropped `-L`
- * (`--location`) and `-k` (`--insecure`) from this set:
- * `-L` follows a redirect and forwards a custom `-H` header cross-host
- * over plaintext, measured against curl 8.7.1 (docs/risk-gate.md's
- * curl section has the reproduction); `-k` is a deliberate
+ * this list names a file, and the only method any of them selects is
+ * HEAD (`-I`), which is read-only (`-s -S -f -I`, in any combination).
+ * Round 2 (task fdaad781) dropped `-L` (`--location`) and `-k`
+ * (`--insecure`) from this set: `-L` follows a redirect and forwards a
+ * custom `-H` header cross-host over plaintext; `-k` is a deliberate
  * TLS-verification bypass that should stay approval-gated. Both now
- * forfeit the shape.
+ * forfeit the shape. See docs/risk-gate.md's curl section for the
+ * measurement behind the `-L` finding.
  */
 const CURL_NO_VALUE_SHORT_CHARS: ReadonlySet<string> = new Set(["s", "S", "f", "I"]);
-/** curl long flags that take no value: no flag on this list names a file or a method on the command line. See `CURL_NO_VALUE_SHORT_CHARS` for why `--location` and `--insecure` are not on it. */
+/** curl long flags that take no value: no flag on this list names a file, and the only method any of them selects is HEAD (`--head`), which is read-only. See `CURL_NO_VALUE_SHORT_CHARS` for why `--location` and `--insecure` are not on it. */
 const CURL_NO_VALUE_LONG_FLAGS: ReadonlySet<string> = new Set([
   "--silent", "--show-error", "--fail", "--head",
 ]);
@@ -1609,12 +1611,14 @@ const CURL_VALUE_LONG_FLAGS: ReadonlyMap<string, string> = new Map([
  * `https://user:pw@x` cannot match end-to-end. Round 2 (task fdaad781)
  * admits `?` and `*` in the path (previously excluded): the operand is
  * single-quoted, so the shell cannot glob on either character, and
- * curl's own URL-globbing syntax uses only `{}`/`[]`, never `?`/`*`
- * (measured against curl 8.7.1 -- a query string with `?`/`&` and a
- * literal `*` both reach the wire unexpanded), so admitting them widens
- * no shape gap and closes the most common read-only spelling this
- * floor used to forfeit. Do not "clean up" further without
- * re-deriving it.
+ * curl's own URL-globbing syntax uses only `{}`/`[]`, never `?`/`*`,
+ * so admitting them widens no shape gap and closes the most common
+ * single-parameter read-only query-string spelling this floor used to
+ * forfeit (a MULTI-parameter query string joined by `&` still forfeits
+ * even single-quoted -- see docs/risk-gate.md's Residuals for why that
+ * stays out of scope). See docs/risk-gate.md's curl section for the
+ * measurement behind admitting `?`/`*`. Do not "clean up" further
+ * without re-deriving it.
  */
 const CURL_SHAPE_URL_RE = /^https:\/\/[A-Za-z0-9.-]+(:[0-9]+)?(\/[^'\s{}[\]\\`$]*)?$/;
 
@@ -1624,19 +1628,22 @@ const CURL_SHAPE_URL_RE = /^https:\/\/[A-Za-z0-9.-]+(:[0-9]+)?(\/[^'\s{}[\]\\`$]
  * forfeits (a glued flag+value pair like `-H'X: y'` never reaches a
  * legitimate value this way). A header value must be quoted (either
  * quote character), must not start with `@` after quote-stripping (a
- * local-file read), and must carry no `$`, backtick, newline or
- * carriage return. Round 2 (task fdaad781) added the carriage return:
- * a bare `\r` (no paired `\n`) reaches curl's wire unmodified (measured
- * against curl 8.7.1), which a lenient header parser can read as a
- * line break and treat the text after it as an injected header. A
- * timeout value must be a bare non-negative integer, `^[0-9]+$` exactly.
+ * local-file read), and must carry no `$` or backtick. A bare `\n` or
+ * `\r` can never reach here: `isReadOnlyCurlCommand`'s whole-command
+ * `hasUnsafeShellMetachar` guard already refuses both for the entire
+ * command before any word is split out, so this function forfeits on
+ * neither character itself (round 3, task fdaad781: they were dropped
+ * from this regex as dead, unreachable code; see docs/risk-gate.md's
+ * curl section for the measurement that motivated the `\r` guard in
+ * the first place). A timeout value must be a bare non-negative
+ * integer, `^[0-9]+$` exactly.
  */
 function isAllowedCurlFlagValue(key: string, value: CurlWord): boolean {
   if (value.composite) return false;
   if (key === "header") {
     if (value.quote === "none") return false;
     if (value.content.startsWith("@")) return false;
-    return !/[\x60$\n\r]/.test(value.content);
+    return !/[\x60$]/.test(value.content);
   }
   return /^[0-9]+$/.test(value.content);
 }
@@ -1686,12 +1693,13 @@ function consumeCurlFlagValue(
  * as the first argument, and skipping it leaves `$CURL_HOME/.curlrc` /
  * `$XDG_CONFIG_HOME/curlrc` / `~/.curlrc` free to set `output`,
  * `request`, `data`, or `upload-file` underneath every other spelling
- * this shape would otherwise accept, measured against curl 8.7.1); every
- * remaining word is either a flag drawn from the closed allowlists above
- * (no flag on this list names a file or a method on the command line;
- * curl's config surface is closed off by the mandatory `-q`; a
- * value-taking flag consumed only in its separate-token form, and never
- * repeated) or the SINGLE operand, which must be a single-quoted,
+ * this shape would otherwise accept -- see docs/risk-gate.md's curl
+ * section for the measurement); every remaining word is either a flag
+ * drawn from the closed allowlists above (no flag on this list names a
+ * file, and the only method any of them selects is HEAD, which is
+ * read-only; curl's config surface is closed off by the mandatory
+ * `-q`; a value-taking flag consumed only in its separate-token form,
+ * and never repeated) or the SINGLE operand, which must be a single-quoted,
  * unbroken word matching `CURL_SHAPE_URL_RE`. Any composite word, any
  * unknown flag, any `=`-glued flag, any second operand, or a missing
  * operand forfeits the whole command.
