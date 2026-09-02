@@ -2,6 +2,12 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-09-02T05:04:08Z, task `44ee799a` fleet pin sweep: the okf-staleness
+  workflow pin moved from okf-kit@0.6.0 to 0.9.0 for parity with the other
+  bundle repos. Measured on the committed tree before and after: `okf-kit
+  check --json docs/okf` reports 0 errors, 0 warnings, 0 notices at 0.6.0,
+  0.8.0 and 0.9.0, so no doc needed a re-point or a re-stamp.
+
 - 2026-09-01T09:15:00Z, task `2929c5b7` review round 4 (decision D-013:
   the `curl` read-only floor is REMOVED, not extended; `curl` stays
   unclassified and approval-gated, and only its write-capable spellings
