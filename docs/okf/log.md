@@ -2,6 +2,51 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-09-02T08:17:53Z, task `fdaad781` curl SHAPE floor round-3
+  (pinning the round-2 hardening with discriminating tests: the
+  `-q`-must-be-SECOND-word property, the `\r` clause in the shared
+  `hasUnsafeShellMetachar` preamble for all three of its other
+  consumers, and a `-H ' @/etc/passwd'` positive fixture; plus fixing
+  round-2 doc/comment claims that had drifted from the round-2 code --
+  no grammar change), commits `4faeeae` (src/runtime/read-only-bash.ts
+  + tests/runtime/read-only-bash.test.ts +
+  tests/runtime/read-only-floors.test.ts), `47aa02d` (docs/risk-
+  gate.md + CHANGELOG.md + docs/examples/full-manifest.yaml +
+  docs/okf/debug-verb-selection.md): `okf-kit check --json docs/okf`
+  flagged 7 docs stale for `docs/risk-gate.md` and/or `CHANGELOG.md`
+  and/or `src/runtime/read-only-bash.ts` and/or
+  `docs/examples/full-manifest.yaml`: `codex-adapter-parity-gaps.md`,
+  `evidence-ledger-trust-boundary.md`, `gate-fail-posture-matrix.md`,
+  `pause-vs-gate-kill-switch.md`, `policy-engine-producer-wiring.md`,
+  `quote-model-divergence.md`, `understanding-gate-auto-mode-
+  signals.md` -- the same 7 files the round-1/round-2 entries below
+  already staled for the same reason, staled again by this round's
+  edits to the same source files. Each re-verified before re-stamping.
+  Six of the seven carry no claim this round touched: their
+  `CHANGELOG.md` citations name a specific PRIOR-VERSION entry
+  (`f86b2425`, `63fefe3a`/`1432e053`, `98ad072f`, `7bf47554`), or their
+  `docs/risk-gate.md` citation is generic with no line pin
+  (`codex-adapter-parity-gaps.md`'s own comment already disclaims
+  trusting a stale line number; `gate-fail-posture-matrix.md` names
+  the file only by section), or (`understanding-gate-auto-mode-
+  signals.md`) cites `src/runtime/read-only-bash.ts` only in its
+  `sources:` list, no body mention of `isReadOnly*`/"read-only" at all
+  -- timestamp-only re-stamp for all six. `quote-model-divergence.md`
+  DID need content: its curl paragraph carried the same "proven to
+  name neither a file nor a method" claim the English docs had (fixed
+  in the two commits above) -- corrected to say HEAD is the one
+  selectable method, itself read-only -- plus a short addendum naming
+  round 3's grammar-preserving changes. `debug-verb-selection.md` (task
+  `fdaad781`'s own explicit round-3 doc target) also got its content
+  fix here (same "no file or method" phrasing corrected the same way),
+  though it was NOT flagged stale by `okf-kit check`: its own file
+  mtime was already newer than its sources' by the time this check
+  ran, an artifact of editing it in the earlier of the two commits
+  above -- re-stamped anyway for consistency with the rest of this
+  bundle re-point. Commit `31cdb69` (`docs/okf/*.md`, all eight files
+  including `debug-verb-selection.md`): `okf-kit check --json docs/okf`
+  on the committed tree: 0 errors, 0 warnings after this round's
+  re-point.
 - 2026-09-02T07:37:08Z, task `fdaad781` curl SHAPE floor round-2
   hardening (orchestrator decision D-028, following an adversarial
   review of the round-1 shipment logged below: HIGH/MEDIUM findings on
