@@ -333,22 +333,12 @@ export function classifyRisk(
           "built-in: provably read-only sed invocation recognized (severity low)",
         );
       } else if (isReadOnlyCurlCommand(shellCommand)) {
-        // curl read-only SHAPE floor (task fdaad781, decision D-026),
-        // superseding D-013 (task 2929c5b7, review round 3), which
-        // removed a curl floor entirely after two per-flag-list attempts
-        // each leaked (a write-flag denylist that missed `-o`, then a
-        // flag allowlist that still admitted `-w '%output{FILE}'`, a
-        // local-file write curl added in 8.3.0). Rather than reasoning
-        // about every curl flag's write capability across every curl
-        // version, this floor recognizes one narrow invocation SHAPE (a
-        // bare `curl`, a single single-quoted `https://` URL, and a
-        // closed set of flags proven incapable of naming a file or a
-        // method) and forfeits on every other spelling -- a flag nobody
-        // has reasoned about here can only widen the unclassified
-        // (approval-gated) set, never slip into `low`. See
-        // `isReadOnlyCurlCommand`'s own docstring in `read-only-bash.ts`
-        // and docs/risk-gate.md's curl section for the shape and the
-        // URL-exfiltration residual it still accepts.
+        // curl read-only SHAPE floor (task fdaad781, decision D-026,
+        // round 2 hardening: mandatory `-q`, dropped `-L`/`-k`),
+        // superseding D-013's two leaked flag lists. See
+        // `isReadOnlyCurlCommand`'s docstring in `read-only-bash.ts`
+        // and docs/risk-gate.md's "curl read-only SHAPE floor" section
+        // for the grammar, the residuals, and the operator escape hatch.
         severityIdx = lowIdx;
         reasons.push(
           "built-in: provably read-only curl invocation recognized (severity low)",
