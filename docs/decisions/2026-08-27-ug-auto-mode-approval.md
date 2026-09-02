@@ -144,7 +144,7 @@ Where the auto path sits in the hook's existing decision order (`src/cli/pack/ho
 | 7. recovery-commit exemption (`markerExpired` plus a bare `git commit`) | allows the consolidating commit after a `max_age` overrun (`src/cli/pack/hook-pre-tool-use.ts:815-829#"hard-gated regardless."`) | unchanged, and ahead of the auto path, so it keeps deciding off step 3's `markerExpired` |
 | 8. escape `ask` for a bare `harness approve ...` | defers to the interactive permission prompt (`src/cli/pack/hook-pre-tool-use.ts:842-848#"ASK: operator-approval command, deferring to the interactive permission prompt"`) | unchanged, and ahead of the auto path: under `-p` it keeps the resolution measured for it (a denial), and the auto path never converts an escape call into an approval |
 | 9. **new: auto-approval attempt** | not present | runs here, on a call every branch above has declined, which is exactly a call that would otherwise reach the final block. On success it consumes the report, writes the marker and the ledger fact, and re-checks the marker through the same `checkOperatorApprovalMarkers` path, which is what produces the allow. On any failure, AND whenever step 3 reported `markerForged` (condition 6), it does nothing and falls through to step 10 with step 3's `markerExpired` / `markerForged` intact, so the forged file and its distinct diagnostic survive. On a successful auto-approval it also clears the step 5 `.pending-approval` entry for this session, so a later env-less operator `harness approve ...` cannot resolve to the stale auto-approved id |
-| 10. final block | the block and its reason string (`src/cli/pack/hook-pre-tool-use.ts:1250#"harness pack hook: BLOCK"`) | unchanged; it is what a failed auto path falls through to |
+| 10. final block | the block and its reason string (`src/cli/pack/hook-pre-tool-use.ts:1257#"harness pack hook: BLOCK"`) | unchanged; it is what a failed auto path falls through to |
 
 Placing the auto path at step 9 rather than beside the marker check is deliberate, and it is the ordering the slice 1 acceptance criteria and controls encode. At step 9 the call in hand is one the gate was about to block, so the first read-only `ls` or `git status` of a session, a recovery `git commit`, and a bare `harness approve understanding` mint no marker, write no ledger fact and consume no report. Three consequences follow that an earlier position would have given away: the single report is spent on the first call that actually needed an approval rather than on whatever read-only call happened to come first; `max_age` starts counting from that call, so the approval window covers gated work instead of being eaten by reconnaissance; and the escape `ask` keeps the behaviour measured for it under `-p` (a denial, hardening item 7) instead of being overtaken by an auto-approval on the same call.
 
@@ -534,7 +534,7 @@ marker is signed was considered and rejected.
 **Reasoning.** The write point is the hook process itself: it takes
 `session_id` and `permission_mode` verbatim off the PreToolUse payload
 on stdin and persists them without any further attestation
-(`src/cli/pack/hook-pre-tool-use.ts:1200#"event.permission_mode, stderr);"`).
+(`src/cli/pack/hook-pre-tool-use.ts:1207#"event.permission_mode, stderr);"`).
 Any actor able to invoke the hook binary with a stdin payload of its own
 choosing, an already-approved session included, therefore obtains a
 hook-written observation carrying whatever `session_id` /

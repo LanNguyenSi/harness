@@ -412,13 +412,18 @@ describe("verifyDelegation", () => {
     expect(noReport.reason).toBe("report_path_mismatch");
   });
 
-  it("a report-bound delegation whose launcher report file is absent is refused as report_missing, not report_path_mismatch, on a non-realpathed temp root", () => {
+  it("a report-bound delegation whose launcher report file is absent is refused as report_missing, not report_content_mismatch, on a non-realpathed temp root", () => {
     // `tmp` here is `beforeEach`'s plain `mkdtempSync` result, unrealpathed:
     // on macOS that sits under a symlink (`os.tmpdir()` -> `/var/...` ->
-    // `/private/var/...`). Nothing is ever written at `reportPath`, so
-    // `hashDelegationCwd`'s missing-path fallback (`path.resolve`) would
-    // disagree with the write-time `realpathSync` on this platform if the
-    // existence check did not run first.
+    // `/private/var/...`). `reportPath` is never written, at bind time or
+    // verify time, so `hashDelegationCwd`'s missing-path fallback
+    // (`path.resolve`) runs identically both times and the path hash
+    // always agrees here, realpathed root or not: this fixture does not
+    // exercise the realpath/fallback divergence (see the staged-then-
+    // deleted fixture below for that). Measured: before this task's fix,
+    // this landed on `report_content_mismatch` (the pre-fix code read the
+    // file, got `missing`, and only checked that against `report_missing`
+    // never), not `report_path_mismatch`.
     const reportPath = path.join(tmp, "never-written-report.json");
     const written = writeDelegationMarker({
       generatedDir,
@@ -447,10 +452,13 @@ describe("verifyDelegation", () => {
   it("a report-bound delegation whose launcher report file is absent is refused as report_missing on a realpathed temp root too", () => {
     // The mirror-image fixture: realpathing the root up front (the way
     // the hook test suite does) removes the platform ambiguity entirely,
-    // and the reason must still land on `report_missing`, not on
-    // `report_path_mismatch` (which the pre-fix code produced here,
-    // since the resolved missing-path fallback happened to agree with
-    // the write-time realpath on a realpathed root).
+    // and the reason must still land on `report_missing`. Measured: the
+    // pre-fix reason here was also `report_content_mismatch`, same as the
+    // non-realpathed sibling above, since `reportPath` is never written
+    // at bind or verify time either, so the path hash always agreed
+    // (realpathed or not) and the old code fell through to the read
+    // failing. Neither of these two fixtures exercises the realpath
+    // divergence itself; the staged-then-deleted fixture below does.
     const realRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "ug-delegation-real-")));
     try {
       const realGeneratedDir = path.join(realRoot, "harness.generated");
@@ -483,6 +491,156 @@ describe("verifyDelegation", () => {
     } finally {
       fs.rmSync(realRoot, { recursive: true, force: true });
     }
+  });
+
+  it("a report STAGED at bind time then deleted before verify is report_missing, not report_path_mismatch, on a symlinked temp root (review finding 2)", () => {
+    // This is the fixture the two "never written" tests above cannot be:
+    // there, the path hash always agreed because the file never existed
+    // at either point in time, so `hashDelegationCwd` took the same
+    // `path.resolve` fallback both times regardless of platform. Here the
+    // report file genuinely EXISTS at bind time, so `hashDelegationCwd`
+    // resolves it through `fs.realpathSync` (which, under `tmp`'s
+    // symlinked root on macOS, differs from the un-realpathed literal
+    // path). It is then deleted before verify, so the verify-time hash
+    // falls back to `path.resolve` on the same un-realpathed literal
+    // path, and the two disagree: pre-fix (no existence probe before the
+    // path hash) that mismatch surfaced as `report_path_mismatch`. Post
+    // fix, the existence probe runs first and reports `report_missing`
+    // regardless of what the (now moot) path hash would have said.
+    const reportPath = path.join(tmp, "staged-then-deleted-report.json");
+    const reportBody = "staged report body";
+    fs.writeFileSync(reportPath, reportBody);
+    const reportPathHash = hashDelegationCwd(reportPath); // bind-time: file exists, realpathSync resolves.
+    const written = writeDelegationMarker({
+      generatedDir,
+      childSessionId: CHILD,
+      parentSessionId: PARENT,
+      cwdHash: hashDelegationCwd(childCwd),
+      taskId: TASK,
+      expiresAt: futureIso(),
+      reportPathHash,
+      reportContentHash: sha256Hex(reportBody),
+    });
+    expect(written.ok).toBe(true);
+
+    fs.rmSync(reportPath);
+
+    const result = verifyDelegation({
+      generatedDir,
+      childSessionId: CHILD,
+      cwd: childCwd,
+      taskId: TASK,
+      launcherReportPath: reportPath, // verify-time: file gone, path.resolve fallback.
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("unreachable");
+    expect(result.reason).toBe("report_missing");
+  });
+
+  it("a SYMLINK at the conventional report path is not report_missing", () => {
+    // Existence alone decides `report_missing`; an lstat sees a symlink
+    // as "something is there" and lets verification continue past the
+    // existence probe. Measured: `hashDelegationCwd`'s `realpathSync`
+    // follows the symlink to its target when computing the verify-time
+    // hash, which the bind-time hash (taken when nothing sat at
+    // `reportPath` yet, so it used the `path.resolve` fallback on the
+    // literal symlink path) does not match; the mismatch is caught at the
+    // path-hash step, so the reason is `report_path_mismatch`, not
+    // `report_missing` and not `report_content_mismatch`. Either way, the
+    // point this fixture pins is that it is not `report_missing`.
+    const reportPath = path.join(tmp, "symlinked-report.json");
+    const reportBody = "real report body";
+    const realTargetPath = path.join(tmp, "symlink-target.json");
+    fs.writeFileSync(realTargetPath, reportBody);
+    const written = writeDelegationMarker({
+      generatedDir,
+      childSessionId: CHILD,
+      parentSessionId: PARENT,
+      cwdHash: hashDelegationCwd(childCwd),
+      taskId: TASK,
+      expiresAt: futureIso(),
+      reportPathHash: hashDelegationCwd(reportPath),
+      reportContentHash: sha256Hex(reportBody),
+    });
+    expect(written.ok).toBe(true);
+    fs.symlinkSync(realTargetPath, reportPath);
+
+    const result = verifyDelegation({
+      generatedDir,
+      childSessionId: CHILD,
+      cwd: childCwd,
+      taskId: TASK,
+      launcherReportPath: reportPath,
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("unreachable");
+    expect(result.reason).not.toBe("report_missing");
+    expect(result.reason).toBe("report_path_mismatch");
+  });
+
+  it("a DIRECTORY at the conventional report path is not report_missing", () => {
+    // Same shape as the symlink case: an lstat sees a directory as
+    // "something is there", so it is not `report_missing`; the full read
+    // later refuses the non-regular file and it lands on
+    // `report_content_mismatch`.
+    const reportPath = path.join(tmp, "directory-report.json");
+    fs.mkdirSync(reportPath);
+    const written = writeDelegationMarker({
+      generatedDir,
+      childSessionId: CHILD,
+      parentSessionId: PARENT,
+      cwdHash: hashDelegationCwd(childCwd),
+      taskId: TASK,
+      expiresAt: futureIso(),
+      reportPathHash: hashDelegationCwd(reportPath),
+      reportContentHash: sha256Hex("irrelevant"),
+    });
+    expect(written.ok).toBe(true);
+
+    const result = verifyDelegation({
+      generatedDir,
+      childSessionId: CHILD,
+      cwd: childCwd,
+      taskId: TASK,
+      launcherReportPath: reportPath,
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("unreachable");
+    expect(result.reason).not.toBe("report_missing");
+    expect(result.reason).toBe("report_content_mismatch");
+  });
+
+  it("a bound report path with no reportContentHash and an absent file is report_missing, not report_content_mismatch (review finding 7)", () => {
+    // `writeDelegationMarker` itself refuses to mint a half-binding (path
+    // hash without a content hash; see the "refuses half a report
+    // binding" test above), so this hand-signs the marker the way the
+    // unparseable-bindings fixtures do, to reach the verify-side
+    // defensive branch a well-formed writer can never produce. Decision
+    // (orchestrator, review finding 7): the existence probe runs before
+    // ANY of the binding-shape checks, so an absent file at a bound path
+    // is always `report_missing` regardless of whether a content hash
+    // was ever bound; only the "no report path offered at all" case (no
+    // path to check existence for) stays `report_path_mismatch`.
+    const reportPath = path.join(tmp, "half-bound-absent-report.json");
+    const approvedBy = buildDelegationApprovedBy({
+      parentSessionId: PARENT,
+      cwdHash: hashDelegationCwd(childCwd),
+      taskId: TASK,
+      expiresAt: futureIso(),
+      reportPathHash: hashDelegationCwd(reportPath),
+    });
+    writeSignedDelegationWithApprovedBy(CHILD, approvedBy);
+
+    const result = verifyDelegation({
+      generatedDir,
+      childSessionId: CHILD,
+      cwd: childCwd,
+      taskId: TASK,
+      launcherReportPath: reportPath,
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("unreachable");
+    expect(result.reason).toBe("report_missing");
   });
 
   it("expired delegation is refused", () => {

@@ -359,12 +359,19 @@ beforeEach(() => {
   // realpathSync: on macOS `os.tmpdir()` resolves under a symlink
   // (`/var/...` -> `/private/var/...`); other fixtures in this file
   // compare the bound cwd hash against the actual cwd's, and realpathing
-  // the root up front keeps those two derivations consistent. The (w)
-  // absent-report case no longer needs this workaround: `report_missing`
-  // is decided by existence alone, checked before the path hash, so it
-  // is deterministic on a non-realpathed root too (see the sibling
-  // fixture in understanding-before-execution-delegation.test.ts that
-  // pins it on both).
+  // the root up front keeps those two derivations consistent. This root
+  // is already realpathed for that unrelated reason, so the (w)
+  // absent-report case never exercises the realpath/`path.resolve`
+  // fallback divergence at all here: the conventional report path never
+  // existed at the deleted point either way, so its bind-time and
+  // verify-time path hashes always agreed on this root even before this
+  // task's fix. Measured: pre-fix, (w) landed on `report_content_mismatch`
+  // (the old code read the deleted file, got `missing`, and only checked
+  // that against the bound content hash), not `report_path_mismatch`. The
+  // realpath-divergence case itself (a report staged, hashed while
+  // present, then deleted, on a NON-realpathed root) is pinned in
+  // understanding-before-execution-delegation.test.ts instead, since this
+  // file's `tmp` is realpathed before either fixture in it ever runs.
   tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "ug-delegate-hook-")));
   generatedDir = path.join(tmp, "harness.generated");
   reportsDir = path.join(tmp, "reports");
@@ -830,6 +837,9 @@ describe("pack hook pre-tool-use: delegation path (ADR slice 3)", () => {
       expect(result.stderr).toMatch(
         new RegExp(`delegation for ${CHILD} refused: report_missing: `),
       );
+      // Not just the `report_missing:` token: the operator reading the
+      // refusal needs to know WHICH path was checked and found absent.
+      expect(result.stderr).toContain(delegationReportPathFor(generatedDir, CHILD));
       expect(result.stderr).not.toMatch(/not yet consumed/);
       expect(ledgerCalls).toEqual([]);
       expect(listPersistedReports(reportsDir)).toEqual([]);

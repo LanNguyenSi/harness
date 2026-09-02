@@ -11,7 +11,7 @@
 - 2026-09-02T04:54:26Z, task `204efc56` (`report_missing` delegation
   refusal reason, follow-up to `49d1ee41`): `okf-kit check` flagged 7
   docs stale for `src/cli/pack/hook-pre-tool-use.ts` and/or
-  `CHANGELOG.md` after this task's edits — `codex-adapter-parity-gaps.md`,
+  `CHANGELOG.md` after this task's edits: `codex-adapter-parity-gaps.md`,
   `evidence-ledger-trust-boundary.md`, `gate-fail-posture-matrix.md`,
   `pause-vs-gate-kill-switch.md`, `policy-engine-producer-wiring.md`,
   `understanding-gate-auto-mode-signals.md`,

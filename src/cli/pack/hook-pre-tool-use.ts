@@ -968,7 +968,14 @@ export async function runPackHookPreToolUseCli(
           // `report_content_mismatch`), same as every other refusal: no
           // special-casing needed now that this hook actually checks the
           // fallback shape against a file. `verified.detail` names the
-          // expected path in all three cases.
+          // expected path for the three file-state cases this hook can
+          // actually reach (absent / wrong path / wrong bytes); it does
+          // not for the binding-shape branches inside `verifyDelegation`
+          // that are unreachable here because this call always offers a
+          // `launcherReportPath` (no report path offered, no
+          // reportContentHash to check against), which name only the
+          // delegation marker's own path since there is no report path
+          // yet to name.
           stderr.write(
             `harness pack hook: delegation for ${childSessionId} refused: ${verified.reason}: ${verified.detail}\n`,
           );
