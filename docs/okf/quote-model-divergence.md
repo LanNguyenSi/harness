@@ -1,9 +1,9 @@
 ---
 type: overview
 title: Shell quote models, measured divergence against bash
-description: The policy engine has three independent shell-word models plus a raw-regex trigger layer. This records what each actually extracts, measured against real bash, which divergences are fail-open, and the evidence-led ordering for closing them.
+description: The policy engine has four independent shell-word models plus a raw-regex trigger layer. This records what each actually extracts, measured against real bash, which divergences are fail-open, and the evidence-led ordering for closing them.
 tags: [policy-engine, bash-match, quote-model, fail-open, measurement]
-timestamp: 2026-09-02T06:49:55Z
+timestamp: 2026-09-02T07:36:28Z
 sources:
   - src/runtime/command-normalize.ts
   - src/cli/init/composer.ts
@@ -130,8 +130,14 @@ Flags, faellt weiter auf unklassifiziert zurueck statt auf `low`
 gehoben zu werden. `curl` bleibt fuer alles ausserhalb dieser Form
 unklassifiziert (approval-gated ueber den Fallback), und nur seine
 schreibfaehigen Schreibweisen werden vom `destructive-shell-floor.ts`
-auf `high` gehoben. Siehe docs/risk-gate.md, "curl read-only SHAPE
-floor". Das schließt K5s drei gemessenen Fail-opens
+auf `high` gehoben. **Runde 2 desselben Tasks (Stand dieser
+Aktualisierung) haertete die Form nach: `-q`/`--disable` als
+Pflicht-Zweitwort (schliesst einen `~/.curlrc`-Autoload-Fund), `-L`
+und `-k` aus dem geschlossenen Flag-Set entfernt, `?`/`*` im
+URL-Pfad neu zugelassen, `\r` in Header-Werten abgelehnt, und die
+Trenner-Klasse von `splitCurlWords` (dem vierten Shell-Wort-Modell,
+siehe unten) auf Leerzeichen/Tab verengt.** Siehe docs/risk-gate.md,
+"curl read-only SHAPE floor". Das schließt K5s drei gemessenen Fail-opens
 punktgenau: `find . -"delete"`, `find . -'delete'`, `find . -\delete`
 (plus, laut Fix-Beleg, zwei weitere Schreibweisen und die `sort`/`file`-
 Geschwisterfälle) klassifizieren nicht mehr als read-only. **Was das
@@ -224,9 +230,38 @@ Ausgaben und sind nur paarweise überlappend messbar.
 | | `targetDir`/`targetBase` | nichts (grep-verifiziert) |
 | `bash-prefix-parse.ts` | `inlineEnv`, `cdTarget` | Risk-Gate-Kontext (`src/cli/policy/intercept.ts:1026-1056`) |
 | `read-only-bash.ts` | Boolean | Risk-Floor, Understanding-Gate-PreToolUse (2 Hooks), Write-Guard |
+| `read-only-bash.ts`, `splitCurlWords` | `CurlWord[] \| null` | Risk-Floor NUR (`isReadOnlyCurlCommand`, task `fdaad781`) |
 
 Die Matrix ist daher als **drei überlappende Zwei-Wege-Vergleiche**
-geführt. Das ist ein Ergebnis, kein Scope-Cut.
+geführt. Das ist ein Ergebnis, kein Scope-Cut. **Ein VIERTES Modell,
+`splitCurlWords`, ist nicht Teil dieser Matrix** (task `fdaad781`,
+Entscheidung D-026, hier ergaenzt in Runde 2 dieses Tasks): ein
+eigener, quote-bewusster Wortsplitter, gebaut NUR fuer
+`isReadOnlyCurlCommand` und von keinem der drei oben verglichenen
+Module wiederverwendet. Er unterstuetzt einfache und doppelte
+Anfuehrungszeichen, keinerlei Backslash-Escape oder Expansion
+(`$VAR`, `` `...` ``, `~`, Glob -- alles bleibt woertlich stehen), und
+faellt fail-closed (`null`, das gesamte Kommando verwirft) auf: ein
+nicht geschlossenes Anfuehrungszeichen, oder einen blossen
+unquotierten Backslash ausserhalb jeder Quote (kein Escape-Modell
+dafuer). Ein Wort aus mehreren aneinandergeklebten quotierten/
+unquotierten Laeufen ohne trennendes Leerzeichen (`-H'X: y'`, `'a''b'`)
+kommt als `composite: true` zurueck statt verworfen zu werden -- ein
+echtes, distinktes Shell-Wort, das die Form dieses Floors aber nie
+zulaesst, sodass der Aufrufer explizit darauf verfaellt. Trennzeichen-
+Klasse: Leerzeichen und Tabulator NUR (Runde 2 dieses Tasks verengte
+das von JS `\s`, das eine Obermenge von bashs Standard-IFS ist --
+NBSP, vertikaler Tab, Seitenvorschub, ideografisches Leerzeichen und
+Zeilenumbrueche gehoeren nicht dazu); Zeilenumbruch und Wagenruecklauf
+erreichen den Splitter ohnehin nie, weil `isReadOnlyCurlCommand`s
+eigener `hasUnsafeShellMetachar`-Vorfilter beide fuer das gesamte
+Kommando zuerst verwirft. Anders als die drei oben verglichenen
+Module ist dieses NICHT mit der `decodeShellWord`-Primitive aus
+Empfehlung 2 verwandt (siehe "Status seit dieser Messung" oben): es
+loest keine Werte auf, sondern zerlegt nur in Woerter, und es ist an
+keiner der drei K1/K2/K3-Messachsen beteiligt, deshalb bleibt es
+ausserhalb der Vergleichsmatrix, statt eine vierte Spalte darin zu
+werden.
 
 ## Messdisziplin
 

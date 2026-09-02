@@ -2,6 +2,70 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-09-02T07:37:08Z, task `fdaad781` curl SHAPE floor round-2
+  hardening (orchestrator decision D-028, following an adversarial
+  review of the round-1 shipment logged below: HIGH/MEDIUM findings on
+  the curlrc auto-load, `-L`'s cross-host header forwarding, `-k`, a
+  bare-CR header injection, and the excluded `?`/`*` in the URL path;
+  distinct from the round-2 DOC RE-POINT entry logged next, which was
+  part of the original shipment, not this hardening pass), commit
+  `65dd323` (docs/risk-gate.md + CHANGELOG.md + docs/examples/full-manifest.yaml):
+  `okf-kit check --json docs/okf` flagged 6 docs stale for
+  `docs/risk-gate.md` and/or `CHANGELOG.md`: `codex-adapter-parity-gaps.md`,
+  `debug-verb-selection.md`, `evidence-ledger-trust-boundary.md`,
+  `gate-fail-posture-matrix.md`, `pause-vs-gate-kill-switch.md`,
+  `policy-engine-producer-wiring.md` -- the same 6 the round-1 doc
+  re-point below already named, staled again by this round's edits to
+  the same two source files. Each re-verified before re-stamping.
+  Five of the six carry no curl-specific claim: their citations of the
+  two files are either by SECTION TITLE (unaffected by a line-number
+  shift: "Unclassified actions and the fail-close rule", "Dev-context
+  deletion gate"), a specific PRIOR-VERSION CHANGELOG entry this round
+  did not touch (`f86b2425`, `63fefe3a`/`1432e053`, `98ad072f`,
+  `f1aea826`, `cf3dff51`), or (in `codex-adapter-parity-gaps.md`) a
+  risk-gate.md reference that already disclaims its own line number.
+  `gate-fail-posture-matrix.md` cites `docs/risk-gate.md` only
+  generically, no line pin, no curl mention. `debug-verb-selection.md`
+  DID need a content fix: its `test-risk` row's curl-SHAPE-floor
+  parenthetical still described the round-1 grammar ("a bare `curl`, a
+  single single-quoted `https://` URL, and a closed set of flags
+  proven incapable of naming a file or a method"), which round 2 made
+  wrong on two counts (no mention of the now-mandatory `-q`/`--disable`,
+  and the un-narrowed "proven incapable" wording); rewritten to name
+  `-q`/`--disable` as the mandatory next word and to match this round's
+  narrower "proven to name no file or method on the command line"
+  phrasing. Its two risk-gate.md LINE-NUMBER citations (144-145,
+  129-132) sit inside "Built-in benign harness commands", entirely
+  before this round's edits (which start at the `curl` SHAPE-floor
+  section, further down); re-read against the current file and
+  confirmed unchanged. `okf-kit check --json docs/okf` on the
+  committed tree: 0 errors, 0 warnings after this round's re-point.
+- 2026-09-02T07:34:40Z, task `fdaad781` curl SHAPE floor round-2
+  hardening, commit `d332753`/`e2bd3f3` (`src/runtime/read-only-bash.ts`,
+  `src/runtime/risk-classifier.ts`, `tests/runtime/read-only-floors.test.ts`):
+  `okf-kit check --json docs/okf` flagged 2 docs stale for
+  `src/runtime/read-only-bash.ts`: `quote-model-divergence.md` and
+  `understanding-gate-auto-mode-signals.md`, the same 2 the round-1
+  entry below already named, staled again by this round's edits to the
+  same source file. Both re-verified. `understanding-gate-auto-mode-signals.md`
+  still cites the file only in its `sources:` list, no body citation
+  of `isReadOnly*`/"read-only" (re-checked, unchanged from the
+  round-1 finding) -- timestamp-only re-stamp. `quote-model-divergence.md`
+  DID need content: its curl paragraph described the round-1 SHAPE
+  grammar only; added a short addendum naming this round's changes
+  (mandatory `-q`, dropped `-L`/`-k`, admitted `?`/`*`, rejected `\r`,
+  narrowed `splitCurlWords`' separator class), and added a new row plus
+  a full paragraph for `splitCurlWords` as a FOURTH independent
+  shell-word model (it was previously undercounted: the doc's own
+  frontmatter `description` said "three independent shell-word
+  models", and the comparison table listed only
+  `command-normalize`/`bash-prefix-parse`/`read-only-bash`; count
+  corrected to four, and the new paragraph states explicitly why
+  `splitCurlWords` sits OUTSIDE the K1/K2/K3 comparison matrix rather
+  than becoming a fourth column in it -- it decodes no values, so none
+  of the three measured divergence axes apply to it). `okf-kit check
+  --json docs/okf` on the committed tree: 0 errors, 0 warnings after
+  this round's re-point.
 - 2026-09-02T06:52:02Z, task `fdaad781` round 2 (docs/risk-gate.md and
   CHANGELOG.md, edited to document the curl SHAPE floor and re-point
   the round-1 entry below, changed on disk after their commit):
