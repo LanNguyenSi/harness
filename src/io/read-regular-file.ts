@@ -14,13 +14,29 @@ export type RegularFileRead =
   | { kind: "unreadable" };
 
 /**
- * Result of a stat-only existence probe (see `probeRegularFilePresence`). No
+ * Result of a stat-only existence probe (see `probePathPresence`). No
  * `content`: this never reads the file, only classifies what lstat sees at
  * the path. `present` covers a symlink, a directory, or any other non-regular
  * node the caller wants to treat as "something is there" without yet reading
  * it or deciding whether it is a valid regular file.
  */
-export type RegularFilePresence = { kind: "missing" } | { kind: "present" };
+export type PathPresence = { kind: "missing" } | { kind: "present" };
+
+/**
+ * The single `fs.lstatSync` call both exports below stand on. Returns `null`
+ * on any lstat failure (absent path, or unreachable for another reason:
+ * `EACCES`, `ENOTDIR`, ...); lstat cannot distinguish those cases from each
+ * other, so neither export tries to. A future defensive fix here (e.g.
+ * closing the lstat/read race with `O_NOFOLLOW`, `ENOTDIR` handling) lands in
+ * this one place and is inherited by both callers.
+ */
+function lstatOrNull(filePath: string): fs.Stats | null {
+  try {
+    return fs.lstatSync(filePath);
+  } catch {
+    return null;
+  }
+}
 
 /**
  * Read a marker/verdict file as utf8, refusing symlinks and non-regular
@@ -32,22 +48,18 @@ export type RegularFilePresence = { kind: "missing" } | { kind: "present" };
  * (agent-tasks/d39f160e).
  *
  * This is THE shared implementation for every gate-marker read; a future
- * defensive fix (e.g. closing the lstat/read race with O_NOFOLLOW, ENOTDIR
- * handling) belongs here and nowhere else. Its lighter-weight sibling
- * `probeRegularFilePresence`, below, shares this file for the same reason:
- * both stand on the same single `fs.lstatSync` call, and a caller that only
- * needs to know "is anything there" before deciding whether to pay for the
- * full read (e.g. `verifyDelegation`'s existence-before-path-hash check in
+ * defensive fix belongs in `lstatOrNull`, above, and nowhere else. Its
+ * lighter-weight sibling `probePathPresence`, below, shares this file for
+ * the same reason: both stand on the same `lstatOrNull` helper, and a
+ * caller that only needs to know "is anything there" before deciding
+ * whether to pay for the full read (e.g. `verifyDelegation`'s
+ * existence-before-path-hash check in
  * `src/policy-packs/builtin/understanding-before-execution/delegation-markers.ts`)
  * gets that from here instead of hand-rolling its own `lstatSync` try/catch.
  */
 export function readRegularFileRejectingSymlink(filePath: string): RegularFileRead {
-  let stat: fs.Stats;
-  try {
-    stat = fs.lstatSync(filePath);
-  } catch {
-    return { kind: "missing" };
-  }
+  const stat = lstatOrNull(filePath);
+  if (stat === null) return { kind: "missing" };
   if (stat.isSymbolicLink()) return { kind: "symlink" };
   if (!stat.isFile()) return { kind: "not-regular" };
   try {
@@ -59,8 +71,8 @@ export function readRegularFileRejectingSymlink(filePath: string): RegularFileRe
 
 /**
  * Stat-only existence probe: "is anything there", nothing more. Uses the
- * same `lstatSync` (not `stat`) as `readRegularFileRejectingSymlink` so a
- * symlink or a directory answers `present`, not `missing` — this probe
+ * same `lstatOrNull` helper (not `stat`) as `readRegularFileRejectingSymlink`
+ * so a symlink or a directory answers `present`, not `missing`; this probe
  * cannot and does not classify WHAT is there (regular file, symlink,
  * directory), only whether lstat can see anything at all. A path lstat
  * cannot reach for any reason (absent, or unreachable: `EACCES`, `ENOTDIR`,
@@ -69,11 +81,6 @@ export function readRegularFileRejectingSymlink(filePath: string): RegularFileRe
  * (symlink vs directory vs regular) read the file instead, through
  * `readRegularFileRejectingSymlink`.
  */
-export function probeRegularFilePresence(filePath: string): RegularFilePresence {
-  try {
-    fs.lstatSync(filePath);
-    return { kind: "present" };
-  } catch {
-    return { kind: "missing" };
-  }
+export function probePathPresence(filePath: string): PathPresence {
+  return lstatOrNull(filePath) === null ? { kind: "missing" } : { kind: "present" };
 }

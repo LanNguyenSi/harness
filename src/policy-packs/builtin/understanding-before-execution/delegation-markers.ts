@@ -50,7 +50,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { atomicWriteFile } from "../../../io/atomic-write.js";
 import {
-  probeRegularFilePresence,
+  probePathPresence,
   readRegularFileRejectingSymlink,
 } from "../../../io/read-regular-file.js";
 import { safeJsonParse } from "../../../io/safe-json-parse.js";
@@ -564,7 +564,7 @@ export type DelegationRefusalReason =
   /** Binds neither a cwd nor a task, so it would authorize the child anywhere, for anything. */
   | "no_binding"
   /**
-   * Fallback shape: a stat-only existence probe (`probeRegularFilePresence`,
+   * Fallback shape: a stat-only existence probe (`probePathPresence`,
    * `lstat` under the hood) found nothing at the launcher-supplied path.
    * Covers both a genuinely absent path and one lstat cannot reach for any
    * other reason (e.g. EACCES, ENOTDIR): lstat cannot distinguish "nothing
@@ -837,7 +837,7 @@ export function verifyDelegation(opts: VerifyDelegationOptions): DelegationVerif
     // symlinked temp root (macOS `os.tmpdir()`) that fallback can
     // disagree with the write-time `realpathSync`, which would otherwise
     // surface a plain "the file is gone" as `report_path_mismatch`
-    // instead of naming what actually happened. `probeRegularFilePresence`
+    // instead of naming what actually happened. `probePathPresence`
     // (shared home: `src/io/read-regular-file.ts`, same `lstatSync` as
     // `readRegularFileRejectingSymlink` below) is a cheap stat-only probe,
     // not the full read: it only asks "is anything there", so the ok path
@@ -849,7 +849,7 @@ export function verifyDelegation(opts: VerifyDelegationOptions): DelegationVerif
     // directory reaches the full read and fails there instead
     // (`report_content_mismatch`) once it cannot produce matching bytes.
     // It is deliberately not treated as missing.
-    if (probeRegularFilePresence(opts.launcherReportPath).kind === "missing") {
+    if (probePathPresence(opts.launcherReportPath).kind === "missing") {
       return {
         ok: false,
         reason: "report_missing",

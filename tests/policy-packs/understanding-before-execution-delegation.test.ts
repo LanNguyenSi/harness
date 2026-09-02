@@ -31,7 +31,7 @@ import {
 // child's hook will check.
 
 // Read-order / single-read seam for the (a) and (b) fixtures below, task
-// 204efc56 round 3. `vi.spyOn` cannot target `readRegularFileRejectingSymlink`
+// 204efc56. `vi.spyOn` cannot target `readRegularFileRejectingSymlink`
 // directly: Vitest's ESM module namespace objects are non-configurable, so
 // `vi.spyOn(mod, "name")` throws "Module namespace is not configurable" for
 // an own-source module (see tests/cli/pack-hook-pre-tool-use-delegate.test.ts's
@@ -642,11 +642,11 @@ describe("verifyDelegation", () => {
     // hash without a content hash; see the "refuses half a report
     // binding" test above), so this hand-signs the marker the way the
     // unparseable-bindings fixtures do, to reach the verify-side
-    // defensive branch a well-formed writer can never produce. Decision
-    // (orchestrator, review finding 7): the existence probe runs before
-    // ANY of the binding-shape checks, so an absent file at a bound path
-    // is always `report_missing` regardless of whether a content hash
-    // was ever bound; only the "no report path offered at all" case (no
+    // defensive branch a well-formed writer can never produce. The
+    // existence probe runs before ANY of the binding-shape checks, so an
+    // absent file at a bound path is always `report_missing` regardless
+    // of whether a content hash was ever bound; only the "no report path
+    // offered at all" case (no
     // path to check existence for) stays `report_path_mismatch`.
     const reportPath = path.join(tmp, "half-bound-absent-report.json");
     const approvedBy = buildDelegationApprovedBy({
@@ -671,8 +671,8 @@ describe("verifyDelegation", () => {
   });
 
   it("never reads the report's bytes when the path hash mismatches (read order pinned)", () => {
-    // Round 3, missing test (a): a mutant that hoists the full read above
-    // the path hash, while leaving its `kind` check intact, would still
+    // A mutant that hoists the full read above the path hash, while
+    // leaving its `kind` check intact, would still
     // pass every existing assertion on `result.reason` here (the read's
     // "symlink"/"not-regular" kinds are not at play; the file is a plain
     // regular file the read would succeed on, and nothing downstream
@@ -707,10 +707,9 @@ describe("verifyDelegation", () => {
   });
 
   it("reads the report's bytes exactly once on the ok path", () => {
-    // Round 3, missing test (b): the single-read property the module
-    // header and the inline comment above the read both claim ("no
-    // second read, no second trust decision") but nothing previously
-    // pinned by a call count.
+    // The single-read property the module header and the inline comment
+    // above the read both claim ("no second read, no second trust
+    // decision") but nothing previously pinned by a call count.
     const reportPath = path.join(tmp, "single-read-report.json");
     const reportBody = "counted exactly once";
     fs.writeFileSync(reportPath, reportBody);
@@ -739,13 +738,14 @@ describe("verifyDelegation", () => {
     expect(readRegularFileCallLog.paths.filter((p) => p === reportPath)).toHaveLength(1);
   });
 
-  it("an EACCES containing directory yields report_missing with the new detail wording", () => {
-    // Round 3, missing test (c). Skipped as root: root bypasses directory
-    // permission bits entirely, so `lstat` would succeed and the fixture
-    // would not exercise the EACCES arm at all.
-    if (typeof process.geteuid === "function" && process.geteuid() === 0) {
-      return;
-    }
+  it.skipIf(
+    process.platform === "win32" ||
+      (typeof process.geteuid === "function" && process.geteuid() === 0),
+  )("an EACCES containing directory yields report_missing with the new detail wording", () => {
+    // Skipped as root: root bypasses directory permission bits entirely,
+    // so `lstat` would succeed and the fixture would not exercise the
+    // EACCES arm at all. Skipped on Windows: chmod-based permission
+    // denial does not apply there.
     const lockedDir = path.join(tmp, "locked-dir");
     fs.mkdirSync(lockedDir);
     const reportPath = path.join(lockedDir, "report.json");
@@ -783,8 +783,7 @@ describe("verifyDelegation", () => {
   });
 
   it("a DANGLING symlink at the conventional report path (realpathed root) is report_content_mismatch, not report_missing", () => {
-    // Round 3, missing test (d), pinning the corrected comment: a
-    // RESOLVABLE symlink is caught at the path-hash step
+    // A RESOLVABLE symlink is caught at the path-hash step
     // (`report_path_mismatch`, pinned above); a DANGLING symlink's
     // `realpathSync` fails at BOTH bind and verify time, so
     // `hashDelegationCwd` falls back to `path.resolve` on the literal
