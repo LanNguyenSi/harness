@@ -8,6 +8,24 @@
   check --json docs/okf` reports 0 errors, 0 warnings, 0 notices at 0.6.0,
   0.8.0 and 0.9.0, so no doc needed a re-point or a re-stamp.
 
+- 2026-09-02T04:54:26Z, task `204efc56` (`report_missing` delegation
+  refusal reason, follow-up to `49d1ee41`): `okf-kit check` flagged 7
+  docs stale for `src/cli/pack/hook-pre-tool-use.ts` and/or
+  `CHANGELOG.md` after this task's edits — `codex-adapter-parity-gaps.md`,
+  `evidence-ledger-trust-boundary.md`, `gate-fail-posture-matrix.md`,
+  `pause-vs-gate-kill-switch.md`, `policy-engine-producer-wiring.md`,
+  `understanding-gate-auto-mode-signals.md`,
+  `understanding-gate-lockout-recovery.md`. The task's only change to
+  `hook-pre-tool-use.ts` was a comment reword (naming the new
+  `report_missing` reason alongside the two existing report reasons in
+  the stderr comment, no behavior change), and the CHANGELOG addition
+  describes only the new reason itself; neither touches any claim or
+  cited span in these 7 docs (the one line-numbered citation among them,
+  `understanding-gate-lockout-recovery.md`'s
+  `hook-pre-tool-use.ts:788#"writePendingApproval(generatedDir, sessionId);"`,
+  sits well before the edited comment and still resolves). Timestamp-only
+  re-stamp on all 7; no content changed. `okf-kit check --json docs/okf`
+  on the committed tree shows 0 errors, 0 warnings after the re-stamp.
 - 2026-09-01T09:15:00Z, task `2929c5b7` review round 4 (decision D-013:
   the `curl` read-only floor is REMOVED, not extended; `curl` stays
   unclassified and approval-gated, and only its write-capable spellings
