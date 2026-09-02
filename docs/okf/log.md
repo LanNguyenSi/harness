@@ -91,12 +91,6 @@
   before every edit this round touched and still resolves. Timestamp-only
   re-stamp on all 5; no content changed. `okf-kit check --json docs/okf`
   on the committed tree shows 0 errors, 0 warnings after the re-stamp.
-  among them (`understanding-gate-lockout-recovery.md`'s
-  `hook-pre-tool-use.ts:788#"writePendingApproval(generatedDir,
-  sessionId);"`) sits before every edit this round touched and still
-  resolves at line 788. Timestamp-only re-stamp on all 5; no content
-  changed. `okf-kit check --json docs/okf` on the committed tree shows 0
-  errors, 0 warnings after the re-stamp.
 - 2026-09-02T05:04:08Z, task `44ee799a` fleet pin sweep: the okf-staleness
   workflow pin moved from okf-kit@0.6.0 to 0.9.0 for parity with the other
   bundle repos. Measured on the committed tree before and after: `okf-kit
