@@ -962,11 +962,28 @@ export async function runPackHookPreToolUseCli(
           launcherReportPath,
         });
         if (!verified.ok) {
-          // A missing, moved, or content-modified launcher report surfaces
+          // An absent, moved, or content-modified launcher report surfaces
           // here through the verifier's own distinct reasons
-          // (`report_path_mismatch` / `report_content_mismatch`), same as
-          // every other refusal: no special-casing needed now that this
-          // hook actually checks the fallback shape against a file.
+          // (`report_missing` / `report_path_mismatch` /
+          // `report_content_mismatch`), same as every other refusal: no
+          // special-casing needed now that this hook actually checks the
+          // fallback shape against a file. `verified.detail` names the
+          // expected path for the three file-state cases this hook can
+          // actually reach (absent / wrong path / wrong bytes). Two of
+          // `verifyDelegation`'s binding-shape branches are unreachable
+          // from here for different reasons, so their details are worth
+          // spelling out separately rather than lumping them together:
+          // "no report path offered" never fires from this call site,
+          // since this hook always offers the conventional path
+          // (`launcherReportPath` above is unconditional); "no
+          // reportContentHash to check against" IS reachable here, just
+          // not from a delegation this hook itself minted, since
+          // `writeDelegationMarker` refuses to produce that half-binding
+          // shape (a hand-signed marker can still carry it, as the
+          // half-binding test in
+          // understanding-before-execution-delegation.test.ts shows), and
+          // its detail names the delegation marker's own path, not the
+          // report path, since there is no report path yet to name.
           stderr.write(
             `harness pack hook: delegation for ${childSessionId} refused: ${verified.reason}: ${verified.detail}\n`,
           );

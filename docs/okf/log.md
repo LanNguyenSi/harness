@@ -2,12 +2,119 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-09-02T06:04:54Z, task `204efc56` round 4 (further review fixes
+  for the `report_missing` delegation refusal reason: extracted the
+  shared `lstatOrNull` helper in `src/io/read-regular-file.ts` so the
+  reader and the probe stand on one `fs.lstatSync` call instead of two
+  independent ones, renamed `probeRegularFilePresence`/`RegularFilePresence`
+  to `probePathPresence`/`PathPresence`, added direct probe unit tests,
+  made the EACCES fixture's skip visible via `it.skipIf`, dropped
+  review-round bookkeeping from test comments, and corrected the
+  "moved" reason mapping in `CHANGELOG.md`, `docs/policy-packs/understanding-before-execution.md`,
+  and `docs/decisions/2026-08-27-ug-auto-mode-approval.md`): `okf-kit
+  check` flagged the same 6 docs stale as round 3, this time for
+  `docs/policy-packs/understanding-before-execution.md` and/or
+  `CHANGELOG.md`: `codex-adapter-parity-gaps.md`,
+  `gate-fail-posture-matrix.md` (both sources), `pause-vs-gate-kill-switch.md`,
+  `policy-engine-producer-wiring.md` (both `CHANGELOG.md` only),
+  `understanding-gate-auto-mode-signals.md`,
+  `understanding-gate-lockout-recovery.md`. None of these 6 docs mention
+  `report_missing`, `report_path_mismatch`, `report_content_mismatch`,
+  `probeRegularFilePresence`, or `probePathPresence`; each names
+  `docs/policy-packs/understanding-before-execution.md` and/or
+  `CHANGELOG.md` only in its own `sources:` list or in unrelated prose
+  (`grep` across all 6 confirmed no citation of this round's edited
+  regions). Timestamp-only re-stamp on the 6 flagged docs; no content
+  changed on them. `evidence-ledger-trust-boundary.md` was NOT flagged
+  stale this round, for the same reason as round 3: it was itself
+  edited (the shared-reader paragraph now names the one `lstatOrNull`
+  helper and points at "the importers of `src/io/read-regular-file.ts`"
+  instead of an incomplete enumeration) ahead of `okf-kit check`, so it
+  was re-verified against the actual code rather than re-stamped blind.
+  Correction to the round-3 entry above (not a rewrite: that entry's
+  claim was checked against the wrong hunk): the round-3
+  `hook-pre-tool-use.ts` edit it names as "lines ~940-978" actually
+  landed at lines 969-990 (`git show b24af93 -- src/cli/pack/hook-pre-tool-use.ts`
+  confirms the hunk starts at line 969); the round-3 entry's own
+  freshness conclusion is unaffected, since `understanding-gate-lockout-recovery.md`'s
+  citation at `hook-pre-tool-use.ts:788` is well before either range.
+  `okf-kit check --json docs/okf` on the committed tree shows 0 errors,
+  0 warnings after the re-stamp.
+- 2026-09-02T05:44:14Z, task `204efc56` round 3 (further review fixes
+  for the `report_missing` delegation refusal reason: CHANGELOG wording
+  corrected to the shipped existence-probe/single-read shape, the
+  resolvable-vs-dangling-symlink comments corrected in three places, the
+  existence probe moved into a new `probeRegularFilePresence` export in
+  `src/io/read-regular-file.ts` alongside the shared reader, the
+  `report_missing` detail/type-doc wording narrowed to what stat
+  actually proves, a `hook-pre-tool-use.ts` comment split into its two
+  distinct unreachable-branch reasons, and four missing tests added):
+  `okf-kit check` flagged 6 docs stale for `src/cli/pack/hook-pre-tool-use.ts`
+  and/or `CHANGELOG.md` after this round's edits: `codex-adapter-parity-gaps.md`,
+  `gate-fail-posture-matrix.md` (both sources), `pause-vs-gate-kill-switch.md`,
+  `policy-engine-producer-wiring.md` (both `CHANGELOG.md` only),
+  `understanding-gate-auto-mode-signals.md`,
+  `understanding-gate-lockout-recovery.md`. None of these 6 docs mention
+  `report_missing`, `report_path_mismatch`, `report_content_mismatch`,
+  `probeRegularFilePresence`, or cite a span of `hook-pre-tool-use.ts`
+  inside this round's edited region (lines ~940-978): `grep` across all 6
+  for those terms found only `understanding-gate-lockout-recovery.md`'s
+  pre-existing citation at `hook-pre-tool-use.ts:788#"writePendingApproval(generatedDir, sessionId);"`,
+  well before the edited region, still resolving. `evidence-ledger-trust-boundary.md`
+  was NOT flagged stale this round: it was itself edited (new
+  `probeRegularFilePresence` paragraph, `delegation-markers.ts` added to
+  `sources:`) as part of this same round's changes, ahead of `okf-kit
+  check`, so its shared-reader invariant was re-verified against the
+  actual code (both exports now live in `src/io/read-regular-file.ts`,
+  confirmed by reading the file) rather than re-stamped blind. Timestamp-only
+  re-stamp on the 6 flagged docs; no content changed on them. `okf-kit
+  check --json docs/okf` on the committed tree shows 0 errors, 0
+  warnings after the re-stamp.
+- 2026-09-02T05:17:40Z, task `204efc56` round 2 (review fixes for the
+  `report_missing` delegation refusal reason): `okf-kit check` flagged 5
+  docs stale for `src/cli/pack/hook-pre-tool-use.ts` and/or
+  `docs/policy-packs/understanding-before-execution.md` after this
+  round's edits: `codex-adapter-parity-gaps.md`,
+  `evidence-ledger-trust-boundary.md`, `gate-fail-posture-matrix.md`,
+  `understanding-gate-auto-mode-signals.md`,
+  `understanding-gate-lockout-recovery.md`. This round's changes to
+  `hook-pre-tool-use.ts` restructured `verifyDelegation`'s report check
+  (existence probe before the path hash, single read moved after) and
+  qualified one comment (review finding 6); the doc change enumerated
+  the three fallback-shape reasons in a paragraph that previously named
+  none. Checked: none of these 5 docs mention `report_missing`,
+  `report_path_mismatch`, `report_content_mismatch`, or the `--report
+  <path>` paragraph at all (`grep` across all 5 for those terms: no
+  hits), and the one line-numbered citation into `hook-pre-tool-use.ts`
+  among them, in `understanding-gate-lockout-recovery.md` (anchored on
+  `writePendingApproval(generatedDir, sessionId);` at line 788), sits
+  before every edit this round touched and still resolves. Timestamp-only
+  re-stamp on all 5; no content changed. `okf-kit check --json docs/okf`
+  on the committed tree shows 0 errors, 0 warnings after the re-stamp.
 - 2026-09-02T05:04:08Z, task `44ee799a` fleet pin sweep: the okf-staleness
   workflow pin moved from okf-kit@0.6.0 to 0.9.0 for parity with the other
   bundle repos. Measured on the committed tree before and after: `okf-kit
   check --json docs/okf` reports 0 errors, 0 warnings, 0 notices at 0.6.0,
   0.8.0 and 0.9.0, so no doc needed a re-point or a re-stamp.
 
+- 2026-09-02T04:54:26Z, task `204efc56` (`report_missing` delegation
+  refusal reason, follow-up to `49d1ee41`): `okf-kit check` flagged 7
+  docs stale for `src/cli/pack/hook-pre-tool-use.ts` and/or
+  `CHANGELOG.md` after this task's edits: `codex-adapter-parity-gaps.md`,
+  `evidence-ledger-trust-boundary.md`, `gate-fail-posture-matrix.md`,
+  `pause-vs-gate-kill-switch.md`, `policy-engine-producer-wiring.md`,
+  `understanding-gate-auto-mode-signals.md`,
+  `understanding-gate-lockout-recovery.md`. The task's only change to
+  `hook-pre-tool-use.ts` was a comment reword (naming the new
+  `report_missing` reason alongside the two existing report reasons in
+  the stderr comment, no behavior change), and the CHANGELOG addition
+  describes only the new reason itself; neither touches any claim or
+  cited span in these 7 docs (the one line-numbered citation among them,
+  `understanding-gate-lockout-recovery.md`'s
+  `hook-pre-tool-use.ts:788#"writePendingApproval(generatedDir, sessionId);"`,
+  sits well before the edited comment and still resolves). Timestamp-only
+  re-stamp on all 7; no content changed. `okf-kit check --json docs/okf`
+  on the committed tree shows 0 errors, 0 warnings after the re-stamp.
 - 2026-09-01T09:15:00Z, task `2929c5b7` review round 4 (decision D-013:
   the `curl` read-only floor is REMOVED, not extended; `curl` stays
   unclassified and approval-gated, and only its write-capable spellings

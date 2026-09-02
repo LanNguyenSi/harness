@@ -357,11 +357,21 @@ function readMarkerRaw(): Record<string, unknown> {
 
 beforeEach(() => {
   // realpathSync: on macOS `os.tmpdir()` resolves under a symlink
-  // (`/var/...` -> `/private/var/...`), which otherwise makes the (w)
-  // moved/absent case's missing-path fallback in `hashDelegationCwd`
-  // disagree with the write-time realpath and non-deterministically flip
-  // between `report_path_mismatch` and `report_content_mismatch`.
-  // Realpathing the fixture root up front pins the reason for good.
+  // (`/var/...` -> `/private/var/...`); other fixtures in this file
+  // compare the bound cwd hash against the actual cwd's, and realpathing
+  // the root up front keeps those two derivations consistent. This root
+  // is already realpathed for that unrelated reason, so the (w)
+  // absent-report case never exercises the realpath/`path.resolve`
+  // fallback divergence at all here: the conventional report path never
+  // existed at the deleted point either way, so its bind-time and
+  // verify-time path hashes always agreed on this root even before this
+  // task's fix. Measured: pre-fix, (w) landed on `report_content_mismatch`
+  // (the old code read the deleted file, got `missing`, and only checked
+  // that against the bound content hash), not `report_path_mismatch`. The
+  // realpath-divergence case itself (a report staged, hashed while
+  // present, then deleted, on a NON-realpathed root) is pinned in
+  // understanding-before-execution-delegation.test.ts instead, since this
+  // file's `tmp` is realpathed before either fixture in it ever runs.
   tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "ug-delegate-hook-")));
   generatedDir = path.join(tmp, "harness.generated");
   reportsDir = path.join(tmp, "reports");
@@ -803,21 +813,23 @@ describe("pack hook pre-tool-use: delegation path (ADR slice 3)", () => {
     });
 
     it("(w) a delegation bound to a MOVED (absent from the conventional path) launcher report: block, no marker, distinct verifier reason", async () => {
-      // agent-tasks 49d1ee41: the child hook now checks the fallback
-      // shape against the conventional `.delegation-reports/<sid>.md`
-      // file instead of refusing it unconditionally. "Moved" here means
-      // the file that WAS staged there at delegation time is gone by the
-      // time the child's hook runs (renamed away, deleted, swapped for a
-      // symlink, ...): nothing readable sits at the one path both sides
-      // derive from the child session id. `beforeEach` realpaths the
-      // fixture root, so `hashDelegationCwd`'s missing-path fallback
-      // (`path.resolve`) agrees with the write-time `realpathSync` on
-      // every platform: the path check PASSES on the now-missing file
-      // and the failure lands on the read, pinning the reason to
-      // `report_content_mismatch` deterministically (never the removed
-      // "not yet consumed" special case, and never `report_path_mismatch`,
-      // which would only fire if the realpath/`path.resolve` disagreed,
-      // and the realpathed root rules that out).
+      // agent-tasks 49d1ee41 / 204efc56: the child hook now checks the
+      // fallback shape against the conventional
+      // `.delegation-reports/<sid>.md` file instead of refusing it
+      // unconditionally. "Moved" here means the file that WAS staged
+      // there at delegation time is gone by the time the child's hook
+      // runs (renamed away, deleted, ...): nothing sits at the one path
+      // both sides derive from the child session id, so lstat itself
+      // finds nothing there. A symlink is deliberately NOT one of the
+      // cases this fixture covers: a resolvable symlink is caught one
+      // step later, at the path-hash comparison, as
+      // `report_path_mismatch` (see the sibling symlink fixture in
+      // understanding-before-execution-delegation.test.ts). `verifyDelegation`
+      // now checks existence BEFORE the path hash, so this pins to the
+      // dedicated `report_missing` reason deterministically, on every
+      // platform, whether or not the fixture root is realpathed (see the
+      // sibling fixture in understanding-before-execution-delegation.test.ts
+      // that pins it on both a realpathed and a non-realpathed root).
       issueReportBoundDelegation(CHILD_REPORT_MARKDOWN);
       fs.rmSync(delegationReportPathFor(generatedDir, CHILD));
       writeTranscript([userTurn(), transcriptEntry()]);
@@ -827,8 +839,11 @@ describe("pack hook pre-tool-use: delegation path (ADR slice 3)", () => {
       expect(result.blocked).toBe(true);
       expect(markerExists()).toBe(false);
       expect(result.stderr).toMatch(
-        new RegExp(`delegation for ${CHILD} refused: report_content_mismatch: `),
+        new RegExp(`delegation for ${CHILD} refused: report_missing: `),
       );
+      // Not just the `report_missing:` token: the operator reading the
+      // refusal needs to know WHICH path was checked and found absent.
+      expect(result.stderr).toContain(delegationReportPathFor(generatedDir, CHILD));
       expect(result.stderr).not.toMatch(/not yet consumed/);
       expect(ledgerCalls).toEqual([]);
       expect(listPersistedReports(reportsDir)).toEqual([]);

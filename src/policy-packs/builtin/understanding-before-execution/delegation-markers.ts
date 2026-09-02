@@ -49,7 +49,10 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { atomicWriteFile } from "../../../io/atomic-write.js";
-import { readRegularFileRejectingSymlink } from "../../../io/read-regular-file.js";
+import {
+  probePathPresence,
+  readRegularFileRejectingSymlink,
+} from "../../../io/read-regular-file.js";
 import { safeJsonParse } from "../../../io/safe-json-parse.js";
 import {
   sha256Hex,
@@ -560,9 +563,37 @@ export type DelegationRefusalReason =
   | "task_mismatch"
   /** Binds neither a cwd nor a task, so it would authorize the child anywhere, for anything. */
   | "no_binding"
-  /** Fallback shape: the launcher report is not at the path the parent signed. */
+  /**
+   * Fallback shape: a stat-only existence probe (`probePathPresence`,
+   * `lstat` under the hood) found nothing at the launcher-supplied path.
+   * Covers both a genuinely absent path and one lstat cannot reach for any
+   * other reason (e.g. EACCES, ENOTDIR): lstat cannot distinguish "nothing
+   * is there" from "something is there but unreachable to us", so this
+   * reason does not claim to either. A symlink or a directory sitting there
+   * IS something lstat can see, so it is not this reason: verification
+   * continues past the existence probe. From there a RESOLVABLE symlink is
+   * normally caught one step later, at the path-hash comparison
+   * (`hashDelegationCwd` resolves it through `realpathSync`, which disagrees
+   * with the bind-time hash taken before anything existed at that path), and
+   * lands on `report_path_mismatch`; only a DANGLING or looping symlink (or
+   * a directory) reaches the full read and lands on `report_content_mismatch`
+   * once it cannot produce matching bytes. Checked BEFORE the path hash, so
+   * a symlinked temp root (where the missing-path fallback of
+   * `hashDelegationCwd` can disagree with the write-time realpath) never
+   * turns a plain "the file is gone" into a `report_path_mismatch`. This
+   * existence-first order also decides the case where a delegation binds a
+   * report path but no `reportContentHash` (a malformed half-binding
+   * `writeDelegationMarker` itself refuses to produce, but a hand-signed
+   * marker can still carry): an absent file at that path is still
+   * `report_missing`, not `report_content_mismatch`, because existence is
+   * checked first regardless of what the rest of the binding contains. The
+   * mirror case (no report path offered at all) has nothing to lstat and
+   * stays `report_path_mismatch`.
+   */
+  | "report_missing"
+  /** Fallback shape: the launcher report is not at the path the parent signed (including when no report path was offered at all). */
   | "report_path_mismatch"
-  /** Fallback shape: the launcher report's content is not what the parent signed (including a report that cannot be read). */
+  /** Fallback shape: the launcher report's content is not what the parent signed (including a report that exists but is a symlink, a directory, or otherwise cannot be read as regular file bytes). */
   | "report_content_mismatch";
 
 export type DelegationVerification =
@@ -610,8 +641,10 @@ export interface VerifyDelegationOptions {
  *   5. it has not expired,
  *   6. the bound cwd hash-matches the caller's cwd,
  *   7. the bound task equals the caller's task,
- *   8. in the fallback shape, the launcher report sits at the bound path
- *      AND hashes to the bound content.
+ *   8. in the fallback shape, the launcher report EXISTS at the offered
+ *      path, sits at the bound path, AND hashes to the bound content
+ *      (in that order: existence before the path hash, so a missing
+ *      file is always `report_missing`, never `report_path_mismatch`).
  *
  * Reads only `.delegations/`; an artifact in `.approvals/` is `missing`
  * here, whatever it contains.
@@ -799,6 +832,30 @@ export function verifyDelegation(opts: VerifyDelegationOptions): DelegationVerif
         detail: `delegation at ${filePath} binds a launcher-supplied report but no report path was offered`,
       };
     }
+    // Existence, BEFORE the path hash: `hashDelegationCwd` falls back to
+    // `path.resolve` for a path that does not exist, and under a
+    // symlinked temp root (macOS `os.tmpdir()`) that fallback can
+    // disagree with the write-time `realpathSync`, which would otherwise
+    // surface a plain "the file is gone" as `report_path_mismatch`
+    // instead of naming what actually happened. `probePathPresence`
+    // (shared home: `src/io/read-regular-file.ts`, same `lstatSync` as
+    // `readRegularFileRejectingSymlink` below) is a cheap stat-only probe,
+    // not the full read: it only asks "is anything there", so the ok path
+    // still reads the file's bytes exactly once, below, after the path
+    // hash and the content-hash presence have both already passed. A
+    // symlink or a directory here answers `present` and falls through to
+    // the path/content checks: a resolvable symlink is normally caught at
+    // the next step (`report_path_mismatch`); a dangling symlink or a
+    // directory reaches the full read and fails there instead
+    // (`report_content_mismatch`) once it cannot produce matching bytes.
+    // It is deliberately not treated as missing.
+    if (probePathPresence(opts.launcherReportPath).kind === "missing") {
+      return {
+        ok: false,
+        reason: "report_missing",
+        detail: `delegation at ${filePath} binds a launcher-supplied report but nothing could be stat'ed at ${opts.launcherReportPath} (absent, or not reachable: EACCES, ENOTDIR)`,
+      };
+    }
     const actualPathHash = hashDelegationCwd(opts.launcherReportPath);
     if (actualPathHash !== reportPathHash) {
       return {
@@ -816,6 +873,11 @@ export function verifyDelegation(opts: VerifyDelegationOptions): DelegationVerif
         detail: `delegation at ${filePath} carries a report path binding but no reportContentHash to check the file against`,
       };
     }
+    // The single full read of the launcher report on the ok path: done
+    // only now, after the path hash and the content-hash presence have
+    // both already passed, so the bytes hashed below are the bytes
+    // returned to the caller in `reportContent` (no second read, no
+    // second trust decision on a file the child does not control).
     const reportRead = readRegularFileRejectingSymlink(opts.launcherReportPath);
     if (reportRead.kind !== "ok") {
       return {

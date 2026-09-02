@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   checkApprovalMarker,
   writeApprovalMarker,
@@ -29,6 +29,32 @@ import {
 // and a real signing key created through the existing operator-side
 // helper, so a "valid" delegation here is valid in exactly the sense the
 // child's hook will check.
+
+// Read-order / single-read seam for the (a) and (b) fixtures below, task
+// 204efc56. `vi.spyOn` cannot target `readRegularFileRejectingSymlink`
+// directly: Vitest's ESM module namespace objects are non-configurable, so
+// `vi.spyOn(mod, "name")` throws "Module namespace is not configurable" for
+// an own-source module (see tests/cli/pack-hook-pre-tool-use-delegate.test.ts's
+// own comment on the same limitation, and project memory
+// `reference_vitest_spyon_esm_named_export`). The established workaround is a
+// call-through `vi.mock` of the module itself, recording every call's path
+// so a test can assert both ordering (a call that should never happen did
+// not) and count (a call that should happen exactly once did not happen
+// twice).
+const readRegularFileCallLog = vi.hoisted(() => ({ paths: [] as string[] }));
+
+vi.mock("../../src/io/read-regular-file.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../src/io/read-regular-file.js")>();
+  return {
+    ...actual,
+    readRegularFileRejectingSymlink: (filePath: string): ReturnType<
+      typeof actual.readRegularFileRejectingSymlink
+    > => {
+      readRegularFileCallLog.paths.push(filePath);
+      return actual.readRegularFileRejectingSymlink(filePath);
+    },
+  };
+});
 
 const CHILD = "child-0000-1111";
 const PARENT = "parent-2222-3333";
@@ -83,6 +109,7 @@ beforeEach(() => {
   // The operator-side act, done explicitly: every test that expects a
   // delegation to be minted needs the key to exist BEFORE the writer runs.
   getOrCreateSigningKey(generatedDir);
+  readRegularFileCallLog.paths = [];
 });
 
 afterEach(() => {
@@ -410,6 +437,394 @@ describe("verifyDelegation", () => {
     expect(noReport.ok).toBe(false);
     if (noReport.ok) throw new Error("unreachable");
     expect(noReport.reason).toBe("report_path_mismatch");
+  });
+
+  it("a report-bound delegation whose launcher report file is absent is refused as report_missing, not report_content_mismatch, on a non-realpathed temp root", () => {
+    // `tmp` here is `beforeEach`'s plain `mkdtempSync` result, unrealpathed:
+    // on macOS that sits under a symlink (`os.tmpdir()` -> `/var/...` ->
+    // `/private/var/...`). `reportPath` is never written, at bind time or
+    // verify time, so `hashDelegationCwd`'s missing-path fallback
+    // (`path.resolve`) runs identically both times and the path hash
+    // always agrees here, realpathed root or not: this fixture does not
+    // exercise the realpath/fallback divergence (see the staged-then-
+    // deleted fixture below for that). Measured: the pre-fix code read
+    // the file, got kind `missing`, and mapped that straight to
+    // `report_content_mismatch`; there was no `report_missing` reason to
+    // land on.
+    const reportPath = path.join(tmp, "never-written-report.json");
+    const written = writeDelegationMarker({
+      generatedDir,
+      childSessionId: CHILD,
+      parentSessionId: PARENT,
+      cwdHash: hashDelegationCwd(childCwd),
+      taskId: TASK,
+      expiresAt: futureIso(),
+      reportPathHash: hashDelegationCwd(reportPath),
+      reportContentHash: sha256Hex("never written"),
+    });
+    expect(written.ok).toBe(true);
+
+    const result = verifyDelegation({
+      generatedDir,
+      childSessionId: CHILD,
+      cwd: childCwd,
+      taskId: TASK,
+      launcherReportPath: reportPath,
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("unreachable");
+    expect(result.reason).toBe("report_missing");
+  });
+
+  it("a report-bound delegation whose launcher report file is absent is refused as report_missing on a realpathed temp root too", () => {
+    // The mirror-image fixture: realpathing the root up front (the way
+    // the hook test suite does) removes the platform ambiguity entirely,
+    // and the reason must still land on `report_missing`. Measured: the
+    // pre-fix reason here was also `report_content_mismatch`, same as the
+    // non-realpathed sibling above, since `reportPath` is never written
+    // at bind or verify time either, so the path hash always agreed
+    // (realpathed or not) and the old code fell through to the read
+    // failing. Neither of these two fixtures exercises the realpath
+    // divergence itself; the staged-then-deleted fixture below does.
+    const realRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "ug-delegation-real-")));
+    try {
+      const realGeneratedDir = path.join(realRoot, "harness.generated");
+      const realChildCwd = path.join(realRoot, "child-cwd");
+      fs.mkdirSync(realChildCwd, { recursive: true });
+      getOrCreateSigningKey(realGeneratedDir);
+      const reportPath = path.join(realRoot, "never-written-report.json");
+      const written = writeDelegationMarker({
+        generatedDir: realGeneratedDir,
+        childSessionId: CHILD,
+        parentSessionId: PARENT,
+        cwdHash: hashDelegationCwd(realChildCwd),
+        taskId: TASK,
+        expiresAt: futureIso(),
+        reportPathHash: hashDelegationCwd(reportPath),
+        reportContentHash: sha256Hex("never written"),
+      });
+      expect(written.ok).toBe(true);
+
+      const result = verifyDelegation({
+        generatedDir: realGeneratedDir,
+        childSessionId: CHILD,
+        cwd: realChildCwd,
+        taskId: TASK,
+        launcherReportPath: reportPath,
+      });
+      expect(result.ok).toBe(false);
+      if (result.ok) throw new Error("unreachable");
+      expect(result.reason).toBe("report_missing");
+    } finally {
+      fs.rmSync(realRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("a report STAGED at bind time then deleted before verify is report_missing, not report_path_mismatch, on a symlinked temp root", () => {
+    // This is the fixture the two "never written" tests above cannot be:
+    // there, the path hash always agreed because the file never existed
+    // at either point in time, so `hashDelegationCwd` took the same
+    // `path.resolve` fallback both times regardless of platform. Here the
+    // report file genuinely EXISTS at bind time, so `hashDelegationCwd`
+    // resolves it through `fs.realpathSync` (which, under `tmp`'s
+    // symlinked root on macOS, differs from the un-realpathed literal
+    // path). It is then deleted before verify, so the verify-time hash
+    // falls back to `path.resolve` on the same un-realpathed literal
+    // path, and the two disagree: pre-fix (no existence probe before the
+    // path hash) that mismatch surfaced as `report_path_mismatch`. Post
+    // fix, the existence probe runs first and reports `report_missing`
+    // regardless of what the (now moot) path hash would have said.
+    const reportPath = path.join(tmp, "staged-then-deleted-report.json");
+    const reportBody = "staged report body";
+    fs.writeFileSync(reportPath, reportBody);
+    const reportPathHash = hashDelegationCwd(reportPath); // bind-time: file exists, realpathSync resolves.
+    const written = writeDelegationMarker({
+      generatedDir,
+      childSessionId: CHILD,
+      parentSessionId: PARENT,
+      cwdHash: hashDelegationCwd(childCwd),
+      taskId: TASK,
+      expiresAt: futureIso(),
+      reportPathHash,
+      reportContentHash: sha256Hex(reportBody),
+    });
+    expect(written.ok).toBe(true);
+
+    fs.rmSync(reportPath);
+
+    const result = verifyDelegation({
+      generatedDir,
+      childSessionId: CHILD,
+      cwd: childCwd,
+      taskId: TASK,
+      launcherReportPath: reportPath, // verify-time: file gone, path.resolve fallback.
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("unreachable");
+    expect(result.reason).toBe("report_missing");
+  });
+
+  it("a SYMLINK at the conventional report path is not report_missing", () => {
+    // Existence alone decides `report_missing`; an lstat sees a symlink
+    // as "something is there" and lets verification continue past the
+    // existence probe. Measured: `hashDelegationCwd`'s `realpathSync`
+    // follows the symlink to its target when computing the verify-time
+    // hash, which the bind-time hash (taken when nothing sat at
+    // `reportPath` yet, so it used the `path.resolve` fallback on the
+    // literal symlink path) does not match; the mismatch is caught at the
+    // path-hash step, so the reason is `report_path_mismatch`, not
+    // `report_missing` and not `report_content_mismatch`. Either way, the
+    // point this fixture pins is that it is not `report_missing`.
+    const reportPath = path.join(tmp, "symlinked-report.json");
+    const reportBody = "real report body";
+    const realTargetPath = path.join(tmp, "symlink-target.json");
+    fs.writeFileSync(realTargetPath, reportBody);
+    const written = writeDelegationMarker({
+      generatedDir,
+      childSessionId: CHILD,
+      parentSessionId: PARENT,
+      cwdHash: hashDelegationCwd(childCwd),
+      taskId: TASK,
+      expiresAt: futureIso(),
+      reportPathHash: hashDelegationCwd(reportPath),
+      reportContentHash: sha256Hex(reportBody),
+    });
+    expect(written.ok).toBe(true);
+    fs.symlinkSync(realTargetPath, reportPath);
+
+    const result = verifyDelegation({
+      generatedDir,
+      childSessionId: CHILD,
+      cwd: childCwd,
+      taskId: TASK,
+      launcherReportPath: reportPath,
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("unreachable");
+    expect(result.reason).not.toBe("report_missing");
+    expect(result.reason).toBe("report_path_mismatch");
+  });
+
+  it("a DIRECTORY at the conventional report path is not report_missing", () => {
+    // Same shape as the symlink case: an lstat sees a directory as
+    // "something is there", so it is not `report_missing`; the full read
+    // later refuses the non-regular file and it lands on
+    // `report_content_mismatch`.
+    const reportPath = path.join(tmp, "directory-report.json");
+    fs.mkdirSync(reportPath);
+    const written = writeDelegationMarker({
+      generatedDir,
+      childSessionId: CHILD,
+      parentSessionId: PARENT,
+      cwdHash: hashDelegationCwd(childCwd),
+      taskId: TASK,
+      expiresAt: futureIso(),
+      reportPathHash: hashDelegationCwd(reportPath),
+      reportContentHash: sha256Hex("irrelevant"),
+    });
+    expect(written.ok).toBe(true);
+
+    const result = verifyDelegation({
+      generatedDir,
+      childSessionId: CHILD,
+      cwd: childCwd,
+      taskId: TASK,
+      launcherReportPath: reportPath,
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("unreachable");
+    expect(result.reason).not.toBe("report_missing");
+    expect(result.reason).toBe("report_content_mismatch");
+  });
+
+  it("a bound report path with no reportContentHash and an absent file is report_missing, not report_content_mismatch", () => {
+    // `writeDelegationMarker` itself refuses to mint a half-binding (path
+    // hash without a content hash; see the "refuses half a report
+    // binding" test above), so this hand-signs the marker the way the
+    // unparseable-bindings fixtures do, to reach the verify-side
+    // defensive branch a well-formed writer can never produce. The
+    // existence probe runs before ANY of the binding-shape checks, so an
+    // absent file at a bound path is always `report_missing` regardless
+    // of whether a content hash was ever bound; only the "no report path
+    // offered at all" case (no
+    // path to check existence for) stays `report_path_mismatch`.
+    const reportPath = path.join(tmp, "half-bound-absent-report.json");
+    const approvedBy = buildDelegationApprovedBy({
+      parentSessionId: PARENT,
+      cwdHash: hashDelegationCwd(childCwd),
+      taskId: TASK,
+      expiresAt: futureIso(),
+      reportPathHash: hashDelegationCwd(reportPath),
+    });
+    writeSignedDelegationWithApprovedBy(CHILD, approvedBy);
+
+    const result = verifyDelegation({
+      generatedDir,
+      childSessionId: CHILD,
+      cwd: childCwd,
+      taskId: TASK,
+      launcherReportPath: reportPath,
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("unreachable");
+    expect(result.reason).toBe("report_missing");
+  });
+
+  it("never reads the report's bytes when the path hash mismatches (read order pinned)", () => {
+    // A mutant that hoists the full read above the path hash, while
+    // leaving its `kind` check intact, would still
+    // pass every existing assertion on `result.reason` here (the read's
+    // "symlink"/"not-regular" kinds are not at play; the file is a plain
+    // regular file the read would succeed on, and nothing downstream
+    // re-checks whether the read happened before or after the hash). Only
+    // a direct assertion on call order catches that reordering.
+    const boundPath = path.join(tmp, "bound-report.json");
+    const actualPath = path.join(tmp, "actual-report.json");
+    fs.writeFileSync(actualPath, "the child never sees these bytes checked");
+    const written = writeDelegationMarker({
+      generatedDir,
+      childSessionId: CHILD,
+      parentSessionId: PARENT,
+      cwdHash: hashDelegationCwd(childCwd),
+      taskId: TASK,
+      expiresAt: futureIso(),
+      reportPathHash: hashDelegationCwd(boundPath), // bound to a DIFFERENT path than offered below.
+      reportContentHash: sha256Hex("irrelevant, the path hash never lets this get checked"),
+    });
+    expect(written.ok).toBe(true);
+
+    const result = verifyDelegation({
+      generatedDir,
+      childSessionId: CHILD,
+      cwd: childCwd,
+      taskId: TASK,
+      launcherReportPath: actualPath,
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("unreachable");
+    expect(result.reason).toBe("report_path_mismatch");
+    expect(readRegularFileCallLog.paths).not.toContain(actualPath);
+  });
+
+  it("reads the report's bytes exactly once on the ok path", () => {
+    // The single-read property the module header and the inline comment
+    // above the read both claim ("no second read, no second trust
+    // decision") but nothing previously pinned by a call count.
+    const reportPath = path.join(tmp, "single-read-report.json");
+    const reportBody = "counted exactly once";
+    fs.writeFileSync(reportPath, reportBody);
+    const written = writeDelegationMarker({
+      generatedDir,
+      childSessionId: CHILD,
+      parentSessionId: PARENT,
+      cwdHash: hashDelegationCwd(childCwd),
+      taskId: TASK,
+      expiresAt: futureIso(),
+      reportPathHash: hashDelegationCwd(reportPath),
+      reportContentHash: sha256Hex(reportBody),
+    });
+    expect(written.ok).toBe(true);
+
+    const result = verifyDelegation({
+      generatedDir,
+      childSessionId: CHILD,
+      cwd: childCwd,
+      taskId: TASK,
+      launcherReportPath: reportPath,
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("unreachable");
+    expect(result.reportContent).toBe(reportBody);
+    expect(readRegularFileCallLog.paths.filter((p) => p === reportPath)).toHaveLength(1);
+  });
+
+  it.skipIf(
+    process.platform === "win32" ||
+      (typeof process.geteuid === "function" && process.geteuid() === 0),
+  )("an EACCES containing directory yields report_missing with the new detail wording", () => {
+    // Skipped as root: root bypasses directory permission bits entirely,
+    // so `lstat` would succeed and the fixture would not exercise the
+    // EACCES arm at all. Skipped on Windows: chmod-based permission
+    // denial does not apply there.
+    const lockedDir = path.join(tmp, "locked-dir");
+    fs.mkdirSync(lockedDir);
+    const reportPath = path.join(lockedDir, "report.json");
+    fs.writeFileSync(reportPath, "unreachable once the directory is locked");
+    const reportPathHash = hashDelegationCwd(reportPath); // computed while still readable.
+    const written = writeDelegationMarker({
+      generatedDir,
+      childSessionId: CHILD,
+      parentSessionId: PARENT,
+      cwdHash: hashDelegationCwd(childCwd),
+      taskId: TASK,
+      expiresAt: futureIso(),
+      reportPathHash,
+      reportContentHash: sha256Hex("irrelevant"),
+    });
+    expect(written.ok).toBe(true);
+
+    fs.chmodSync(lockedDir, 0o000); // no execute bit: lstat on a child path now fails EACCES.
+    try {
+      const result = verifyDelegation({
+        generatedDir,
+        childSessionId: CHILD,
+        cwd: childCwd,
+        taskId: TASK,
+        launcherReportPath: reportPath,
+      });
+      expect(result.ok).toBe(false);
+      if (result.ok) throw new Error("unreachable");
+      expect(result.reason).toBe("report_missing");
+      expect(result.detail).toContain("nothing could be stat'ed at");
+      expect(result.detail).toContain("EACCES");
+    } finally {
+      fs.chmodSync(lockedDir, 0o755); // restore before afterEach's recursive rmSync.
+    }
+  });
+
+  it("a DANGLING symlink at the conventional report path (realpathed root) is report_content_mismatch, not report_missing", () => {
+    // A RESOLVABLE symlink is caught at the path-hash step
+    // (`report_path_mismatch`, pinned above); a DANGLING symlink's
+    // `realpathSync` fails at BOTH bind and verify time, so
+    // `hashDelegationCwd` falls back to `path.resolve` on the literal
+    // symlink path both times and the path hash agrees. It only fails
+    // later, at the reader's own symlink rejection.
+    const realRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "ug-delegation-dangling-")));
+    try {
+      const realGeneratedDir = path.join(realRoot, "harness.generated");
+      const realChildCwd = path.join(realRoot, "child-cwd");
+      fs.mkdirSync(realChildCwd, { recursive: true });
+      getOrCreateSigningKey(realGeneratedDir);
+      const reportPath = path.join(realRoot, "dangling-report.json");
+      fs.symlinkSync(path.join(realRoot, "never-created-target.json"), reportPath);
+      const reportPathHash = hashDelegationCwd(reportPath); // realpathSync fails (ENOENT); falls back to path.resolve.
+      const written = writeDelegationMarker({
+        generatedDir: realGeneratedDir,
+        childSessionId: CHILD,
+        parentSessionId: PARENT,
+        cwdHash: hashDelegationCwd(realChildCwd),
+        taskId: TASK,
+        expiresAt: futureIso(),
+        reportPathHash,
+        reportContentHash: sha256Hex("irrelevant, the read rejects the symlink before hashing"),
+      });
+      expect(written.ok).toBe(true);
+
+      const result = verifyDelegation({
+        generatedDir: realGeneratedDir,
+        childSessionId: CHILD,
+        cwd: realChildCwd,
+        taskId: TASK,
+        launcherReportPath: reportPath,
+      });
+      expect(result.ok).toBe(false);
+      if (result.ok) throw new Error("unreachable");
+      expect(result.reason).not.toBe("report_missing");
+      expect(result.reason).not.toBe("report_path_mismatch");
+      expect(result.reason).toBe("report_content_mismatch");
+    } finally {
+      fs.rmSync(realRoot, { recursive: true, force: true });
+    }
   });
 
   it("expired delegation is refused", () => {
