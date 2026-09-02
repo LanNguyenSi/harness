@@ -19,8 +19,11 @@
 // The built-in exceptions are floors, not overrides, and each composes
 // under the same highest-severity-wins rule as an operator pattern:
 // harness's own benign meta-commands (see BENIGN_HARNESS_COMMAND below),
-// the read-only-command / kubectl / sed `low` floors, and (since
-// task 2929c5b7) the DESTRUCTIVE floor (`destructive-shell-floor.ts`),
+// the read-only-command / kubectl / sed / curl-SHAPE `low` floors (the
+// last added task fdaad781, decision D-026 -- see `isReadOnlyCurlCommand`
+// in read-only-bash.ts for why it is a SHAPE floor, not the per-flag
+// list decision D-013 removed), and (since task 2929c5b7) the
+// DESTRUCTIVE floor (`destructive-shell-floor.ts`),
 // which recognizes `dd of=`, `truncate -s`, `shred`, `mkfs`, `find
 // -delete` and friends in the binary so an install that never adopts the
 // new `dangerous-shell` template patterns still classifies them.
@@ -38,6 +41,7 @@ import type { ActionEnvelope } from "./action-envelope.js";
 import { expandToolNameAliases, extractShellCommand } from "./tool-name-aliases.js";
 import {
   isReadOnlyBashCommand,
+  isReadOnlyCurlCommand,
   isReadOnlyKubectlCommand,
   isReadOnlySedCommand,
 } from "./read-only-bash.js";
@@ -328,16 +332,28 @@ export function classifyRisk(
         reasons.push(
           "built-in: provably read-only sed invocation recognized (severity low)",
         );
+      } else if (isReadOnlyCurlCommand(shellCommand)) {
+        // curl read-only SHAPE floor (task fdaad781, decision D-026),
+        // superseding D-013 (task 2929c5b7, review round 3), which
+        // removed a curl floor entirely after two per-flag-list attempts
+        // each leaked (a write-flag denylist that missed `-o`, then a
+        // flag allowlist that still admitted `-w '%output{FILE}'`, a
+        // local-file write curl added in 8.3.0). Rather than reasoning
+        // about every curl flag's write capability across every curl
+        // version, this floor recognizes one narrow invocation SHAPE (a
+        // bare `curl`, a single single-quoted `https://` URL, and a
+        // closed set of flags proven incapable of naming a file or a
+        // method) and forfeits on every other spelling -- a flag nobody
+        // has reasoned about here can only widen the unclassified
+        // (approval-gated) set, never slip into `low`. See
+        // `isReadOnlyCurlCommand`'s own docstring in `read-only-bash.ts`
+        // and docs/risk-gate.md's curl section for the shape and the
+        // URL-exfiltration residual it still accepts.
+        severityIdx = lowIdx;
+        reasons.push(
+          "built-in: provably read-only curl invocation recognized (severity low)",
+        );
       }
-      // NOTE, decision D-013 (task 2929c5b7, review round 3): there is
-      // deliberately NO `curl` branch here. Two rounds of this task shipped
-      // one and both leaked (a write-flag denylist that missed `-o`, then a
-      // flag allowlist that still admitted `-w '%output{FILE}'`, which
-      // writes a local file since curl 8.3.0). `curl` stays UNCLASSIFIED
-      // like `ssh` and `node -e`: approval-gated by prong (b), never
-      // hard-blocked, never floored. Its write-capable spellings are raised
-      // to `high` by the destructive floor above instead. See
-      // `read-only-bash.ts`'s floor section header.
     }
   }
 
