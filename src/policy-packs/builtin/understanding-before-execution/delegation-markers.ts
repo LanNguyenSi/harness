@@ -560,6 +560,15 @@ export type DelegationRefusalReason =
   | "task_mismatch"
   /** Binds neither a cwd nor a task, so it would authorize the child anywhere, for anything. */
   | "no_binding"
+  /**
+   * Fallback shape: nothing exists at the launcher-supplied path at all
+   * (a symlink or non-regular file there is `unreadable`, not this).
+   * Checked BEFORE the path hash, so a symlinked temp root (where the
+   * missing-path fallback of `hashDelegationCwd` can disagree with the
+   * write-time realpath) never turns a plain "the file is gone" into a
+   * `report_path_mismatch`.
+   */
+  | "report_missing"
   /** Fallback shape: the launcher report is not at the path the parent signed. */
   | "report_path_mismatch"
   /** Fallback shape: the launcher report's content is not what the parent signed (including a report that cannot be read). */
@@ -610,8 +619,10 @@ export interface VerifyDelegationOptions {
  *   5. it has not expired,
  *   6. the bound cwd hash-matches the caller's cwd,
  *   7. the bound task equals the caller's task,
- *   8. in the fallback shape, the launcher report sits at the bound path
- *      AND hashes to the bound content.
+ *   8. in the fallback shape, the launcher report EXISTS at the offered
+ *      path, sits at the bound path, AND hashes to the bound content
+ *      (in that order: existence before the path hash, so a missing
+ *      file is always `report_missing`, never `report_path_mismatch`).
  *
  * Reads only `.delegations/`; an artifact in `.approvals/` is `missing`
  * here, whatever it contains.
@@ -799,6 +810,24 @@ export function verifyDelegation(opts: VerifyDelegationOptions): DelegationVerif
         detail: `delegation at ${filePath} binds a launcher-supplied report but no report path was offered`,
       };
     }
+    // Existence, BEFORE the path hash: `hashDelegationCwd` falls back to
+    // `path.resolve` for a path that does not exist, and under a
+    // symlinked temp root (macOS `os.tmpdir()`) that fallback can
+    // disagree with the write-time `realpathSync`, which would otherwise
+    // surface a plain "the file is gone" as `report_path_mismatch`
+    // instead of naming what actually happened. Reading here once and
+    // reusing the result below (rather than a second
+    // `readRegularFileRejectingSymlink` call after the hash checks) also
+    // avoids a second read of a file the child does not control between
+    // the two checks.
+    const reportRead = readRegularFileRejectingSymlink(opts.launcherReportPath);
+    if (reportRead.kind === "missing") {
+      return {
+        ok: false,
+        reason: "report_missing",
+        detail: `delegation at ${filePath} binds a launcher-supplied report but nothing exists at ${opts.launcherReportPath}`,
+      };
+    }
     const actualPathHash = hashDelegationCwd(opts.launcherReportPath);
     if (actualPathHash !== reportPathHash) {
       return {
@@ -816,7 +845,6 @@ export function verifyDelegation(opts: VerifyDelegationOptions): DelegationVerif
         detail: `delegation at ${filePath} carries a report path binding but no reportContentHash to check the file against`,
       };
     }
-    const reportRead = readRegularFileRejectingSymlink(opts.launcherReportPath);
     if (reportRead.kind !== "ok") {
       return {
         ok: false,

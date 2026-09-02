@@ -412,6 +412,79 @@ describe("verifyDelegation", () => {
     expect(noReport.reason).toBe("report_path_mismatch");
   });
 
+  it("a report-bound delegation whose launcher report file is absent is refused as report_missing, not report_path_mismatch, on a non-realpathed temp root", () => {
+    // `tmp` here is `beforeEach`'s plain `mkdtempSync` result, unrealpathed:
+    // on macOS that sits under a symlink (`os.tmpdir()` -> `/var/...` ->
+    // `/private/var/...`). Nothing is ever written at `reportPath`, so
+    // `hashDelegationCwd`'s missing-path fallback (`path.resolve`) would
+    // disagree with the write-time `realpathSync` on this platform if the
+    // existence check did not run first.
+    const reportPath = path.join(tmp, "never-written-report.json");
+    const written = writeDelegationMarker({
+      generatedDir,
+      childSessionId: CHILD,
+      parentSessionId: PARENT,
+      cwdHash: hashDelegationCwd(childCwd),
+      taskId: TASK,
+      expiresAt: futureIso(),
+      reportPathHash: hashDelegationCwd(reportPath),
+      reportContentHash: sha256Hex("never written"),
+    });
+    expect(written.ok).toBe(true);
+
+    const result = verifyDelegation({
+      generatedDir,
+      childSessionId: CHILD,
+      cwd: childCwd,
+      taskId: TASK,
+      launcherReportPath: reportPath,
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("unreachable");
+    expect(result.reason).toBe("report_missing");
+  });
+
+  it("a report-bound delegation whose launcher report file is absent is refused as report_missing on a realpathed temp root too", () => {
+    // The mirror-image fixture: realpathing the root up front (the way
+    // the hook test suite does) removes the platform ambiguity entirely,
+    // and the reason must still land on `report_missing`, not on
+    // `report_path_mismatch` (which the pre-fix code produced here,
+    // since the resolved missing-path fallback happened to agree with
+    // the write-time realpath on a realpathed root).
+    const realRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "ug-delegation-real-")));
+    try {
+      const realGeneratedDir = path.join(realRoot, "harness.generated");
+      const realChildCwd = path.join(realRoot, "child-cwd");
+      fs.mkdirSync(realChildCwd, { recursive: true });
+      getOrCreateSigningKey(realGeneratedDir);
+      const reportPath = path.join(realRoot, "never-written-report.json");
+      const written = writeDelegationMarker({
+        generatedDir: realGeneratedDir,
+        childSessionId: CHILD,
+        parentSessionId: PARENT,
+        cwdHash: hashDelegationCwd(realChildCwd),
+        taskId: TASK,
+        expiresAt: futureIso(),
+        reportPathHash: hashDelegationCwd(reportPath),
+        reportContentHash: sha256Hex("never written"),
+      });
+      expect(written.ok).toBe(true);
+
+      const result = verifyDelegation({
+        generatedDir: realGeneratedDir,
+        childSessionId: CHILD,
+        cwd: realChildCwd,
+        taskId: TASK,
+        launcherReportPath: reportPath,
+      });
+      expect(result.ok).toBe(false);
+      if (result.ok) throw new Error("unreachable");
+      expect(result.reason).toBe("report_missing");
+    } finally {
+      fs.rmSync(realRoot, { recursive: true, force: true });
+    }
+  });
+
   it("expired delegation is refused", () => {
     // One second in the past, every other binding valid: the expiry check
     // is the only thing standing between this fixture and an `ok` result.

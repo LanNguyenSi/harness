@@ -962,11 +962,13 @@ export async function runPackHookPreToolUseCli(
           launcherReportPath,
         });
         if (!verified.ok) {
-          // A missing, moved, or content-modified launcher report surfaces
+          // An absent, moved, or content-modified launcher report surfaces
           // here through the verifier's own distinct reasons
-          // (`report_path_mismatch` / `report_content_mismatch`), same as
-          // every other refusal: no special-casing needed now that this
-          // hook actually checks the fallback shape against a file.
+          // (`report_missing` / `report_path_mismatch` /
+          // `report_content_mismatch`), same as every other refusal: no
+          // special-casing needed now that this hook actually checks the
+          // fallback shape against a file. `verified.detail` names the
+          // expected path in all three cases.
           stderr.write(
             `harness pack hook: delegation for ${childSessionId} refused: ${verified.reason}: ${verified.detail}\n`,
           );

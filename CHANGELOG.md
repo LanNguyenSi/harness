@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **`verifyDelegation` now distinguishes an absent conventional launcher report from a moved or content-modified one, with a dedicated `report_missing` reason** (agent-tasks `204efc56`, follow-up to `49d1ee41`). Previously an absent `harness.generated/.delegation-reports/<child-sid>.md` surfaced as `report_content_mismatch` (or, non-deterministically under a symlinked temp root such as macOS `os.tmpdir()`, `report_path_mismatch`), which told the operator the report was wrong rather than that it did not exist.
+  - `DelegationRefusalReason` (`src/policy-packs/builtin/understanding-before-execution/delegation-markers.ts`) gains `report_missing`, checked via `readRegularFileRejectingSymlink` BEFORE the path hash: existence is decided independently of `hashDelegationCwd`'s missing-path fallback (`path.resolve`), so a symlinked temp root can no longer flip the reason. The same read is reused for the later content check, so this closes the gap without an extra filesystem call.
+  - `src/cli/pack/hook-pre-tool-use.ts` stderr wording (already dynamic on `verified.reason`/`verified.detail`) now names `report_missing` in its comment; no behavior change there beyond the new reason value flowing through.
+  - Docs: `docs/decisions/2026-08-27-ug-auto-mode-approval.md` (the launcher-report-channel paragraph now names all three distinct reasons and their check order).
+  - **Tests**: `tests/policy-packs/understanding-before-execution-delegation.test.ts` pins `report_missing` on both a non-realpathed and an explicitly realpathed temp root; `tests/cli/pack-hook-pre-tool-use-delegate.test.ts` case (w) (moved/absent conventional report) now expects `report_missing` instead of the previous `report_content_mismatch`. Mutation probe: removing the existence check (restoring the fall-through straight into the path-hash comparison) turns the new report_missing-pinned tests red; restoring the check turns them green again.
+
 ## [0.54.0] - 2026-09-01
 
 ### Added
