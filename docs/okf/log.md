@@ -2,6 +2,36 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-09-02T05:44:14Z, task `204efc56` round 3 (further review fixes
+  for the `report_missing` delegation refusal reason: CHANGELOG wording
+  corrected to the shipped existence-probe/single-read shape, the
+  resolvable-vs-dangling-symlink comments corrected in three places, the
+  existence probe moved into a new `probeRegularFilePresence` export in
+  `src/io/read-regular-file.ts` alongside the shared reader, the
+  `report_missing` detail/type-doc wording narrowed to what stat
+  actually proves, a `hook-pre-tool-use.ts` comment split into its two
+  distinct unreachable-branch reasons, and four missing tests added):
+  `okf-kit check` flagged 6 docs stale for `src/cli/pack/hook-pre-tool-use.ts`
+  and/or `CHANGELOG.md` after this round's edits: `codex-adapter-parity-gaps.md`,
+  `gate-fail-posture-matrix.md` (both sources), `pause-vs-gate-kill-switch.md`,
+  `policy-engine-producer-wiring.md` (both `CHANGELOG.md` only),
+  `understanding-gate-auto-mode-signals.md`,
+  `understanding-gate-lockout-recovery.md`. None of these 6 docs mention
+  `report_missing`, `report_path_mismatch`, `report_content_mismatch`,
+  `probeRegularFilePresence`, or cite a span of `hook-pre-tool-use.ts`
+  inside this round's edited region (lines ~940-978): `grep` across all 6
+  for those terms found only `understanding-gate-lockout-recovery.md`'s
+  pre-existing citation at `hook-pre-tool-use.ts:788#"writePendingApproval(generatedDir, sessionId);"`,
+  well before the edited region, still resolving. `evidence-ledger-trust-boundary.md`
+  was NOT flagged stale this round: it was itself edited (new
+  `probeRegularFilePresence` paragraph, `delegation-markers.ts` added to
+  `sources:`) as part of this same round's changes, ahead of `okf-kit
+  check`, so its shared-reader invariant was re-verified against the
+  actual code (both exports now live in `src/io/read-regular-file.ts`,
+  confirmed by reading the file) rather than re-stamped blind. Timestamp-only
+  re-stamp on the 6 flagged docs; no content changed on them. `okf-kit
+  check --json docs/okf` on the committed tree shows 0 errors, 0
+  warnings after the re-stamp.
 - 2026-09-02T05:17:40Z, task `204efc56` round 2 (review fixes for the
   `report_missing` delegation refusal reason): `okf-kit check` flagged 5
   docs stale for `src/cli/pack/hook-pre-tool-use.ts` and/or
