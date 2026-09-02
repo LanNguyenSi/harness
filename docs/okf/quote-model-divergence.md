@@ -3,7 +3,7 @@ type: overview
 title: Shell quote models, measured divergence against bash
 description: The policy engine has three independent shell-word models plus a raw-regex trigger layer. This records what each actually extracts, measured against real bash, which divergences are fail-open, and the evidence-led ordering for closing them.
 tags: [policy-engine, bash-match, quote-model, fail-open, measurement]
-timestamp: 2026-09-01T09:15:00Z
+timestamp: 2026-09-02T06:49:55Z
 sources:
   - src/runtime/command-normalize.ts
   - src/cli/init/composer.ts
@@ -115,16 +115,23 @@ unveraendert zurueck, matcht damit keinen Allowlist-Eintrag und laesst
 den Floor verfallen; (2) ein Token, das nur in EINER der beiden Lesarten
 wie ein Flag aussieht (`"-i"`), wird unter keiner der beiden Lesarten
 klassifiziert, sondern verworfen. Ungemessen gegen echtes bash, wie die
-uebrigen Anwendungen dieser Primitive auch. Der gleichzeitig gebaute
-`curl`-Floor (`isReadOnlyCurlCommand`) existiert NICHT mehr: Review-Runde
-3 desselben Tasks mass, dass die Flag-Allowlist `-w`/`--write-out` als
-inert fuehrte, obwohl dessen `%output{FILE}`-Direktive seit curl 8.3.0
-eine lokale Datei schreibt; Entscheidung D-013 hat den Floor darauf
-ersatzlos entfernt, statt die Liste erneut zu erweitern. `curl` bleibt
+uebrigen Anwendungen dieser Primitive auch. Der gleichzeitig gebaute `curl`-Floor existierte danach eine Zeit lang
+NICHT mehr: Review-Runde 3 desselben Tasks mass, dass die Flag-Allowlist
+`-w`/`--write-out` als inert fuehrte, obwohl dessen `%output{FILE}`-
+Direktive seit curl 8.3.0 eine lokale Datei schreibt; Entscheidung
+D-013 hat den Floor darauf ersatzlos entfernt, statt die Liste erneut
+zu erweitern. Aktualisiert (Task `fdaad781`, Entscheidung D-026,
+2026-09-02): `isReadOnlyCurlCommand` existiert wieder, aber als
+SHAPE-Grammatik statt als Flag-Liste: bloßes `curl`, genau eine
+single-quoted `https://`-URL, und ein geschlossenes Set an Flags, die
+nachweislich weder eine Datei noch eine Methode benennen koennen; jede
+andere Schreibweise, einschliesslich jedes hier nicht durchdachten
+Flags, faellt weiter auf unklassifiziert zurueck statt auf `low`
+gehoben zu werden. `curl` bleibt fuer alles ausserhalb dieser Form
 unklassifiziert (approval-gated ueber den Fallback), und nur seine
 schreibfaehigen Schreibweisen werden vom `destructive-shell-floor.ts`
-auf `high` gehoben. Siehe docs/risk-gate.md, "No `curl` read-only floor,
-by design". Das schließt K5s drei gemessenen Fail-opens
+auf `high` gehoben. Siehe docs/risk-gate.md, "curl read-only SHAPE
+floor". Das schließt K5s drei gemessenen Fail-opens
 punktgenau: `find . -"delete"`, `find . -'delete'`, `find . -\delete`
 (plus, laut Fix-Beleg, zwei weitere Schreibweisen und die `sort`/`file`-
 Geschwisterfälle) klassifizieren nicht mehr als read-only. **Was das

@@ -2,6 +2,35 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-09-02T06:49:55Z, task `fdaad781` (curl read-only SHAPE floor,
+  decision D-026, reintroducing `isReadOnlyCurlCommand` in
+  `src/runtime/read-only-bash.ts` after decision D-013 removed the
+  previous flag-list floor entirely): `okf-kit check --json docs/okf`
+  flagged 2 docs stale for `src/runtime/read-only-bash.ts`:
+  `quote-model-divergence.md` and `understanding-gate-auto-mode-signals.md`.
+  Both re-verified, not blindly re-stamped.
+  `understanding-gate-auto-mode-signals.md` cites the file only in its
+  `sources:` list, with no body citation of `isReadOnly*` or "read-only"
+  prose referring to it (`grep -in "read-only\|isReadOnly"` across the
+  whole doc: the only body hits are unrelated Codex `sandbox_mode`
+  mentions) -- timestamp-only re-stamp, no content changed.
+  `quote-model-divergence.md` DID need a content fix: its "Ungemessen
+  gegen echtes bash" paragraph carried a since-superseded claim, "Der
+  gleichzeitig gebaute `curl`-Floor (`isReadOnlyCurlCommand`) existiert
+  NICHT mehr" (task `2929c5b7`, decision D-013), which this task's own
+  reintroduction of `isReadOnlyCurlCommand` makes false as written. The
+  paragraph now keeps the D-013 history (why the flag-list floor
+  leaked and was removed) and adds that decision D-026 (this task)
+  brought the predicate back as a SHAPE grammar instead of a flag list,
+  cross-referencing docs/risk-gate.md's "curl read-only SHAPE floor"
+  section (renamed from "No `curl` read-only floor, by design", the
+  section this doc used to cite). The wiring table row
+  ("`read-only-bash.ts` | Boolean | Risk-Floor, ...") was re-checked
+  and needed no change: the new predicate is Risk-Floor-only, already
+  covered by the existing "Risk-Floor" entry, and
+  `src/runtime/risk-classifier.ts`'s wiring confirms it (verified by
+  reading the diff, not assumed). `okf-kit check --json docs/okf` on
+  the committed tree: 0 errors, 0 warnings after the re-point.
 - 2026-09-02T06:04:54Z, task `204efc56` round 4 (further review fixes
   for the `report_missing` delegation refusal reason: extracted the
   shared `lstatOrNull` helper in `src/io/read-regular-file.ts` so the
