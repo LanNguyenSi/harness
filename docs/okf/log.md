@@ -2,6 +2,28 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-09-02T05:17:40Z, task `204efc56` round 2 (review fixes for the
+  `report_missing` delegation refusal reason): `okf-kit check` flagged 5
+  docs stale for `src/cli/pack/hook-pre-tool-use.ts` and/or
+  `docs/policy-packs/understanding-before-execution.md` after this
+  round's edits: `codex-adapter-parity-gaps.md`,
+  `evidence-ledger-trust-boundary.md`, `gate-fail-posture-matrix.md`,
+  `understanding-gate-auto-mode-signals.md`,
+  `understanding-gate-lockout-recovery.md`. This round's changes to
+  `hook-pre-tool-use.ts` restructured `verifyDelegation`'s report check
+  (existence probe before the path hash, single read moved after) and
+  qualified one comment (review finding 6); the doc change enumerated
+  the three fallback-shape reasons in a paragraph that previously named
+  none. Checked: none of these 5 docs mention `report_missing`,
+  `report_path_mismatch`, `report_content_mismatch`, or the `--report
+  <path>` paragraph at all (`grep` across all 5 for those terms: no
+  hits), and the one line-numbered citation into `hook-pre-tool-use.ts`
+  among them (`understanding-gate-lockout-recovery.md`'s
+  `hook-pre-tool-use.ts:788#"writePendingApproval(generatedDir,
+  sessionId);"`) sits before every edit this round touched and still
+  resolves at line 788. Timestamp-only re-stamp on all 5; no content
+  changed. `okf-kit check --json docs/okf` on the committed tree shows 0
+  errors, 0 warnings after the re-stamp.
 - 2026-09-02T05:04:08Z, task `44ee799a` fleet pin sweep: the okf-staleness
   workflow pin moved from okf-kit@0.6.0 to 0.9.0 for parity with the other
   bundle repos. Measured on the committed tree before and after: `okf-kit
