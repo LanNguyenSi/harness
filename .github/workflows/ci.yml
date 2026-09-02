@@ -12,14 +12,14 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           # Full history + tags: check:changelog-coverage compares
           # `git log <last-tag>..HEAD` against CHANGELOG.md's Unreleased
           # section, so it needs the tag and the commits since it.
           fetch-depth: 0
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           # 22 = active LTS, matching publish-npm.yml; node 20 went EOL
           # 2026-04 and dependency-cruiser 18 (check:boundaries) requires
