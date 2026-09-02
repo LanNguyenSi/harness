@@ -2,6 +2,13 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-09-02T08:47:11Z, task `fdaad781` curl SHAPE floor round-5 (review of round
+  4): commit `2433c75` reworded the CHANGELOG's as-shipped shape label
+  (revised twice, narrowed once; round 3 changed no accepted language).
+  `CHANGELOG.md` is a source of the same eight bundle docs; their citing
+  passages are untouched by a label wording, timestamp-only re-stamp,
+  measured after this commit.
+
 - 2026-09-02T08:44:04Z, task `fdaad781` curl SHAPE floor round-4 (review of round
   3): commit `5ced4d0` moved the `-H` value `@` check onto the shape
   (`isAllowedCurlFlagValue` trims leading whitespace before testing for
