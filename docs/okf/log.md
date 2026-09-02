@@ -2,6 +2,36 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-09-02T06:52:02Z, task `fdaad781` round 2 (docs/risk-gate.md and
+  CHANGELOG.md, edited to document the curl SHAPE floor and re-point
+  the round-1 entry below, changed on disk after their commit):
+  `okf-kit check` flagged 6 MORE docs stale for `docs/risk-gate.md`
+  and/or `CHANGELOG.md`: `codex-adapter-parity-gaps.md`,
+  `debug-verb-selection.md`, `evidence-ledger-trust-boundary.md`,
+  `gate-fail-posture-matrix.md`, `pause-vs-gate-kill-switch.md`,
+  `policy-engine-producer-wiring.md`. Each re-verified before
+  re-stamping, not blindly bumped. Five of the six carried no curl-
+  specific claim: their `docs/risk-gate.md`/`CHANGELOG.md` citations
+  either name a section by title only (unaffected by this task's
+  edits, e.g. "Unclassified actions and the fail-close rule", which
+  still exists under that name) or a specific PRIOR-VERSION CHANGELOG
+  entry (0.35.0/0.39.0/0.44.0/0.45.0), none of which this task
+  touched (only `[Unreleased]` gained a new bullet at the top);
+  `codex-adapter-parity-gaps.md` additionally already carries its own
+  "line number not pinned here ... re-grep rather than trust a stale
+  line number" caveat for its one risk-gate.md citation. Those five:
+  timestamp-only re-stamp. `debug-verb-selection.md` DID need a
+  content fix: its verb-selection table's `test-risk` row repeated
+  the same since-superseded D-013 "curl deliberately has NO floor"
+  claim this round-1 entry already fixed in `quote-model-divergence.md`,
+  including a link to the risk-gate.md section this task renamed. Its
+  two risk-gate.md LINE-NUMBER citations (144-145, 129-132) sit inside
+  "Built-in benign harness commands", entirely before this task's
+  first edit (which starts at the `sed`-floor section further down);
+  re-read against the current file and confirmed unchanged, so only
+  the curl sentence itself needed rewriting, not the line numbers.
+  `okf-kit check --json docs/okf` on the committed tree: 0 errors, 0
+  warnings after this round's re-point.
 - 2026-09-02T06:49:55Z, task `fdaad781` (curl read-only SHAPE floor,
   decision D-026, reintroducing `isReadOnlyCurlCommand` in
   `src/runtime/read-only-bash.ts` after decision D-013 removed the
