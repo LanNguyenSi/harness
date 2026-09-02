@@ -18,6 +18,11 @@
   `report_path_mismatch`, `report_content_mismatch`, or the `--report
   <path>` paragraph at all (`grep` across all 5 for those terms: no
   hits), and the one line-numbered citation into `hook-pre-tool-use.ts`
+  among them, in `understanding-gate-lockout-recovery.md` (anchored on
+  `writePendingApproval(generatedDir, sessionId);` at line 788), sits
+  before every edit this round touched and still resolves. Timestamp-only
+  re-stamp on all 5; no content changed. `okf-kit check --json docs/okf`
+  on the committed tree shows 0 errors, 0 warnings after the re-stamp.
   among them (`understanding-gate-lockout-recovery.md`'s
   `hook-pre-tool-use.ts:788#"writePendingApproval(generatedDir,
   sessionId);"`) sits before every edit this round touched and still
