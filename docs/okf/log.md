@@ -2,6 +2,26 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-09-02T08:44:04Z, task `fdaad781` curl SHAPE floor round-4 (review of round
+  3): commit `5ced4d0` moved the `-H` value `@` check onto the shape
+  (`isAllowedCurlFlagValue` trims leading whitespace before testing for
+  `@`, so `-H ' @/etc/passwd'` forfeits instead of flooring low; the
+  round-3 positive became two negatives, `--location`/`--insecure` got
+  their own negatives) and corrected CHANGELOG/test-preamble wording. Full
+  gate green (7210 passed, 1 skipped); `okf-kit check --json docs/okf`
+  then flagged the same 8 docs stale for `docs/risk-gate.md`,
+  `CHANGELOG.md` and/or `src/runtime/read-only-bash.ts`. Re-read the
+  citing passages: `quote-model-divergence.md` and
+  `debug-verb-selection.md` describe the shape without naming the header
+  `@` rule or the long flag spellings, the other six cite CHANGELOG or
+  risk-gate passages the round did not touch; timestamp-only re-stamp of
+  all 8, measured after this commit. The round-4 reviewer then caught the
+  first cut of the source commit without a task reference (the
+  changelog-coverage gate had been run before that commit, not after), so
+  both commits were rebuilt: the source commit now cites the task, the
+  as-shipped shape bullet in the CHANGELOG is labelled as narrowed since,
+  and this re-stamp was redone after the rebuilt source commit.
+
 - 2026-09-02T08:17:53Z, task `fdaad781` curl SHAPE floor round-3
   (pinning the round-2 hardening with discriminating tests: the
   `-q`-must-be-SECOND-word property, the `\r` clause in the shared
