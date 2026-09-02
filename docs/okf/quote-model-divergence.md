@@ -3,7 +3,7 @@ type: overview
 title: Shell quote models, measured divergence against bash
 description: The policy engine has four independent shell-word models plus a raw-regex trigger layer. This records what each actually extracts, measured against real bash, which divergences are fail-open, and the evidence-led ordering for closing them.
 tags: [policy-engine, bash-match, quote-model, fail-open, measurement]
-timestamp: 2026-09-02T07:36:28Z
+timestamp: 2026-09-02T08:17:53Z
 sources:
   - src/runtime/command-normalize.ts
   - src/cli/init/composer.ts
@@ -124,7 +124,8 @@ zu erweitern. Aktualisiert (Task `fdaad781`, Entscheidung D-026,
 2026-09-02): `isReadOnlyCurlCommand` existiert wieder, aber als
 SHAPE-Grammatik statt als Flag-Liste: bloßes `curl`, genau eine
 single-quoted `https://`-URL, und ein geschlossenes Set an Flags, die
-nachweislich weder eine Datei noch eine Methode benennen koennen; jede
+nachweislich keine Datei benennen; die einzige davon waehlbare Methode
+ist HEAD (`-I`/`--head`), die selbst read-only ist. Jede
 andere Schreibweise, einschliesslich jedes hier nicht durchdachten
 Flags, faellt weiter auf unklassifiziert zurueck statt auf `low`
 gehoben zu werden. `curl` bleibt fuer alles ausserhalb dieser Form
@@ -137,7 +138,12 @@ und `-k` aus dem geschlossenen Flag-Set entfernt, `?`/`*` im
 URL-Pfad neu zugelassen, `\r` in Header-Werten abgelehnt, und die
 Trenner-Klasse von `splitCurlWords` (dem vierten Shell-Wort-Modell,
 siehe unten) auf Leerzeichen/Tab verengt.** Siehe docs/risk-gate.md,
-"curl read-only SHAPE floor". Das schließt K5s drei gemessenen Fail-opens
+"curl read-only SHAPE floor". **Runde 3 (Stand dieser Aktualisierung)
+aendert die akzeptierte Grammatik NICHT**: sie pinnt die `-q`-Position
+(Zweitwort, nicht irgendwo) und die `\r`-Haertung mit dedizierten
+Tests, entfernt eine unerreichbare doppelte `\n`/`\r`-Pruefung aus
+`isAllowedCurlFlagValue` (die geteilte `hasUnsafeShellMetachar`-Pruefung
+greift bereits vorher), und korrigiert Kommentar-/Doku-Drift. Das schließt K5s drei gemessenen Fail-opens
 punktgenau: `find . -"delete"`, `find . -'delete'`, `find . -\delete`
 (plus, laut Fix-Beleg, zwei weitere Schreibweisen und die `sort`/`file`-
 Geschwisterfälle) klassifizieren nicht mehr als read-only. **Was das
