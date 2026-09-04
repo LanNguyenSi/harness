@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.55.0] - 2026-09-04
+
 ### Added
 
 - **A curl read-only SHAPE floor for the Risk Classifier** (task `fdaad781`, decision D-026), reintroducing a `low`-severity `curl` recognition after decision D-013 (task `2929c5b7`) removed one entirely, following a per-flag DENYLIST and then a per-flag ALLOWLIST that each leaked (round 2 missed `-o`; round 3 admitted `-w`/`--write-out`, whose format string writes a local file via curl 8.3.0's `%output{FILE}` directive). Both leaks shared one root cause: a per-flag list is only as correct as the last reasoner's enumeration of every flag's write capability across every curl version. This floor inverts the burden instead: it recognizes ONE narrow invocation SHAPE and forfeits (stays unclassified) on every other spelling, so a flag nobody has reasoned about here can only widen the unclassified, approval-gated set; it can never slip into `low` by omission.
