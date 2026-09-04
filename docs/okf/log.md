@@ -2,6 +2,12 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-09-04T06:23:17Z, task `0b4144ba` release 0.55.0 review correction:
+  removed the point-in-time `package.json` version observation from
+  `policy-engine-producer-wiring.md`. The reusable invariant now retains only
+  the durable direction to consult `CHANGELOG.md` for later releases; its
+  semantic claims and CHANGELOG source were re-verified before re-stamping.
+
 - 2026-09-04T06:13:24Z, task `0b4144ba` release 0.55.0: moved the unchanged
   `[Unreleased]` contents (the curl read-only SHAPE floor and the
   `report_missing` delegation refusal reason) into the dated `[0.55.0]`
