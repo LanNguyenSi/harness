@@ -2,6 +2,30 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-09-04T06:23:17Z, task `0b4144ba` release 0.55.0 review correction:
+  removed the point-in-time `package.json` version observation from
+  `policy-engine-producer-wiring.md`. The reusable invariant now retains only
+  the durable direction to consult `CHANGELOG.md` for later releases; its
+  semantic claims and CHANGELOG source were re-verified before re-stamping.
+
+- 2026-09-04T06:13:24Z, task `0b4144ba` release 0.55.0: moved the unchanged
+  `[Unreleased]` contents (the curl read-only SHAPE floor and the
+  `report_missing` delegation refusal reason) into the dated `[0.55.0]`
+  section and bumped `package.json`/`package-lock.json` to 0.55.0. The five
+  bundle docs sourcing `CHANGELOG.md` were re-read against the unchanged
+  cited entries. Four needed timestamp-only re-stamps;
+  `policy-engine-producer-wiring.md` also updated its explicitly observed
+  package version from 0.54.0 to 0.55.0. Release verification: build,
+  typecheck, and test typecheck passed; the full suite passed outside the
+  filesystem sandbox (226 files, 7210 passed, 1 skipped) after the sandboxed
+  run's loopback listener failed with `EPERM`. `npm pack` produced
+  `lannguyensi-harness-0.55.0.tgz`, and a fresh temp install reported
+  `harness --version` as `0.55.0`. Against that installed tarball,
+  `curl -q -s 'https://example.com'` classified `low`; the otherwise matching
+  spelling without `-q`, and the spelling with `-L`, both stayed unclassified
+  (not low). A signed delegation bound to a never-written report verified as
+  `{ok:false, reason:"report_missing"}`.
+
 - 2026-09-02T08:47:11Z, task `fdaad781` curl SHAPE floor round-5 (review of round
   4): commit `2433c75` reworded the CHANGELOG's as-shipped shape label
   (revised twice, narrowed once; round 3 changed no accepted language).
