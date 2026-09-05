@@ -41,6 +41,16 @@ function replaceRootWithSymlink(root: string): string {
   return outside;
 }
 
+function replaceRootWithNonDirectory(root: string, kind: "regular file" | "dangling symlink"): void {
+  const outside = `${root}-outside`;
+  fs.renameSync(root, outside);
+  if (kind === "regular file") {
+    fs.writeFileSync(root, "not a directory");
+    return;
+  }
+  fs.symlinkSync(`${root}-missing`, root, "dir");
+}
+
 describe("understanding-gate authority root containment", () => {
   it("refuses a validly signed session marker reachable only through a symlinked .approvals root", () => {
     writeApprovalMarker(generatedDir, "session-1", {
@@ -70,6 +80,22 @@ describe("understanding-gate authority root containment", () => {
     expect(result.taskCheckDetail).toMatch(/containment refusal/);
   });
 
+  it.each(["regular file", "dangling symlink"] as const)(
+    "refuses a validly signed session marker when .approvals is a %s",
+    (kind) => {
+      writeApprovalMarker(generatedDir, "session-1", {
+        approvedAt: "2026-09-05T09:00:00.000Z",
+        approvedBy: "operator",
+      });
+      const approvalsDir = path.join(generatedDir, ".approvals");
+      replaceRootWithNonDirectory(approvalsDir, kind);
+
+      const result = checkApprovalMarker(generatedDir, "session-1");
+      expect(result).toMatchObject({ matched: false, forged: false, expired: false, marker: null });
+      expect(result.detail).toMatch(/containment refusal/);
+    },
+  );
+
   it("refuses a validly signed delegation reachable only through a symlinked .delegations root", () => {
     const expiresAt = new Date(Date.now() + 60 * 60 * 1000).toISOString();
     const written = writeDelegationMarker({
@@ -95,4 +121,31 @@ describe("understanding-gate authority root containment", () => {
     expect(result.detail).toMatch(/containment refusal/);
     expect(result.detail).toContain(delegationsDir);
   });
+
+  it.each(["regular file", "dangling symlink"] as const)(
+    "refuses a validly signed delegation when .delegations is a %s",
+    (kind) => {
+      const written = writeDelegationMarker({
+        generatedDir,
+        childSessionId: "child-1",
+        parentSessionId: "parent-1",
+        cwdHash: hashDelegationCwd(childCwd),
+        taskId: null,
+        expiresAt: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+      });
+      expect(written.ok).toBe(true);
+      const delegationsDir = path.join(generatedDir, ".delegations");
+      replaceRootWithNonDirectory(delegationsDir, kind);
+
+      const result = verifyDelegation({
+        generatedDir,
+        childSessionId: "child-1",
+        cwd: childCwd,
+        taskId: null,
+      });
+      expect(result).toMatchObject({ ok: false, reason: "missing" });
+      if (result.ok) throw new Error("unreachable");
+      expect(result.detail).toMatch(/containment refusal/);
+    },
+  );
 });
