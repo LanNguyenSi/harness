@@ -5,7 +5,9 @@ import { describe, expect, it } from "vitest";
 
 // Guard for task `6f719bb4` (agent-tasks): every source citation in
 // docs/decisions/*.md must resolve to the code it describes, on the
-// CURRENT tree, in anchored, repo-relative form. Written after a sweep
+// CURRENT tree, in anchored, repo-relative form. It also checks the
+// anchored citations in docs/okf/*.md, including the historical entries in
+// log.md; bare path:N references in that bundle remain out of scope. Written after a sweep
 // found citations pointing at whitespace hints and envelope comments
 // instead of the code the sentence actually named, plus an 11-line
 // shift from an unrelated constant move, drift a bare `path:N` citation
@@ -51,6 +53,7 @@ import { describe, expect, it } from "vitest";
 
 const REPO_ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 const DECISIONS_DIR = path.join(REPO_ROOT, "docs", "decisions");
+const OKF_DIR = path.join(REPO_ROOT, "docs", "okf");
 
 const CITED_EXTENSIONS = ["ts", "md", "js", "sh", "mjs"] as const;
 
@@ -72,9 +75,9 @@ interface Citation {
   anchor: string | undefined;
 }
 
-function listDecisionDocs(): string[] {
+function listDocs(dir: string): string[] {
   return fs
-    .readdirSync(DECISIONS_DIR)
+    .readdirSync(dir)
     .filter((f) => f.endsWith(".md"))
     .sort();
 }
@@ -102,15 +105,24 @@ function extractCitations(adrFile: string, text: string): Citation[] {
 }
 
 describe("docs/decisions citations resolve on the current tree", () => {
-  const docFiles = listDecisionDocs();
+  const docFiles = listDocs(DECISIONS_DIR);
   const allCitations: Citation[] = [];
   for (const f of docFiles) {
     const text = fs.readFileSync(path.join(DECISIONS_DIR, f), "utf8");
     allCitations.push(...extractCitations(f, text));
   }
+  // log.md is intentionally included: its historical citations are maintained
+  // as repo-relative anchored references when the cited source moves.
+  for (const f of listDocs(OKF_DIR)) {
+    const text = fs.readFileSync(path.join(OKF_DIR, f), "utf8");
+    allCitations.push(
+      ...extractCitations(`docs/okf/${f}`, text).filter((citation) => citation.anchor !== undefined),
+    );
+  }
 
-  it("finds at least one citation to check (guards against a vacuous pass)", () => {
+  it("finds citations to check, including anchored OKF citations from log.md", () => {
     expect(allCitations.length).toBeGreaterThan(0);
+    expect(allCitations.some((citation) => citation.file === "docs/okf/log.md")).toBe(true);
   });
 
   it.each(allCitations.map((c) => [`${c.file}:${c.adrLine} ${c.raw}`, c] as const))(
