@@ -24,13 +24,11 @@
 // there on markerId mismatch, mirroring the delegation module's own
 // two-way argument.
 //
-// CONTAINMENT: `verifyInflightRecord` lstats both the `.inflight/` root
-// and the session directory before ever touching the leaf file, so a
-// symlinked root or session directory (reached only by following a link
-// out of `.inflight/`) reads as no record rather than being followed.
-// `.approvals/`'s own reader has the same pre-existing gap (it lstats
-// neither its root nor a session-scoped subdirectory the same way); left
-// as a follow-up there rather than fixed in this module.
+// CONTAINMENT: an authority artifact is read only when every directory
+// segment this reader owns is a plain directory according to `lstat`.
+// A symlinked or non-directory root reads as absent/fail-closed; following
+// a link out of an authority directory never opens the gate. This applies
+// to approval markers, delegations, adoption ledgers, and in-flight records.
 //
 // WHY EVERY BINDING TRAVELS INSIDE `approvedBy`. `signMarker` signs
 // exactly the tuple `(markerId, approvedAt, approvedBy,

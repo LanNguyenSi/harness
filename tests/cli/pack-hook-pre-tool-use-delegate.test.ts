@@ -812,6 +812,28 @@ describe("pack hook pre-tool-use: delegation path (ADR slice 3)", () => {
       expect(listPersistedReports(reportsDir)).toEqual([]);
     });
 
+    it("(v2) a symlinked adoption-ledger root fails closed before it can follow an outside ledger", async () => {
+      const ledgerDir = path.join(generatedDir, ".delegation-adoptions");
+      fs.mkdirSync(ledgerDir, { recursive: true });
+      fs.writeFileSync(path.join(ledgerDir, CHILD), "");
+      const outsideLedgerDir = `${ledgerDir}-outside`;
+      fs.renameSync(ledgerDir, outsideLedgerDir);
+      fs.symlinkSync(outsideLedgerDir, ledgerDir, "dir");
+      writeTranscript([userTurn(), transcriptEntry()]);
+
+      const result = await call();
+
+      expect(result.blocked).toBe(true);
+      expect(result.stderr).toContain("the adopted-entry ledger at");
+      expect(result.stderr).toContain(`containment refusal: ${ledgerDir} is not a plain directory`);
+      expect(result.stderr).toContain(
+        `refusing to capture a transcript entry that may already have been adopted for session ${CHILD}`,
+      );
+      expect(markerExists()).toBe(false);
+      expect(ledgerCalls).toEqual([]);
+      expect(listPersistedReports(reportsDir)).toEqual([]);
+    });
+
     it("(w) a delegation bound to a MOVED (absent from the conventional path) launcher report: block, no marker, distinct verifier reason", async () => {
       // agent-tasks 49d1ee41 / 204efc56: the child hook now checks the
       // fallback shape against the conventional

@@ -171,6 +171,13 @@ function staleFilesByMtime(
   nowMs: number,
   category: GcCategory,
 ): { candidates: GcCandidate[]; kept: number } {
+  let dirStat: fs.Stats;
+  try {
+    dirStat = fs.lstatSync(dir);
+  } catch {
+    return { candidates: [], kept: 0 };
+  }
+  if (!dirStat.isDirectory()) return { candidates: [], kept: 0 };
   let names: string[];
   try {
     names = fs.readdirSync(dir);
@@ -305,12 +312,22 @@ function sweepDelegations(
   // from "absent" from "still valid" without re-reading the file.
   const statusBySessionId = new Map<string, DelegationFileStatus>();
 
-  let delegationNames: string[];
-  try {
-    delegationNames = fs.readdirSync(delegationsDir);
-  } catch {
-    delegationNames = [];
-  }
+  const readRootNames = (dir: string): string[] => {
+    let dirStat: fs.Stats;
+    try {
+      dirStat = fs.lstatSync(dir);
+    } catch {
+      return [];
+    }
+    if (!dirStat.isDirectory()) return [];
+    try {
+      return fs.readdirSync(dir);
+    } catch {
+      return [];
+    }
+  };
+
+  const delegationNames = readRootNames(delegationsDir);
   for (const name of delegationNames) {
     if (!SESSION_ID_BASENAME_RE.test(name)) continue;
     const full = path.join(delegationsDir, name);
@@ -326,12 +343,7 @@ function sweepDelegations(
     }
   }
 
-  let ledgerNames: string[];
-  try {
-    ledgerNames = fs.readdirSync(ledgerDir);
-  } catch {
-    ledgerNames = [];
-  }
+  const ledgerNames = readRootNames(ledgerDir);
   for (const name of ledgerNames) {
     if (!SESSION_ID_BASENAME_RE.test(name)) continue;
     const full = path.join(ledgerDir, name);

@@ -77,6 +77,22 @@ describe("buildUgDelegations: pure function", () => {
     expect(result).toEqual({ delegationsDirPresent: false, total: 0, expired: 0, unreadable: 0 });
   });
 
+  it("a symlinked .delegations/ root reads as absent, even when it points at delegations", () => {
+    const generatedDir = tempGeneratedDir();
+    writeDelegation(generatedDir, "child-1", VALID_FUTURE);
+    const delegationsDir = path.join(generatedDir, ".delegations");
+    const outsideDir = `${delegationsDir}-outside`;
+    fs.renameSync(delegationsDir, outsideDir);
+    fs.symlinkSync(outsideDir, delegationsDir, "dir");
+
+    expect(buildUgDelegations(generatedDir)).toEqual({
+      delegationsDirPresent: false,
+      total: 0,
+      expired: 0,
+      unreadable: 0,
+    });
+  });
+
   it("one unexpired delegation: total 1, expired 0", () => {
     const generatedDir = tempGeneratedDir();
     writeDelegation(generatedDir, "child-1", VALID_FUTURE);

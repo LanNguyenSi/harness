@@ -80,6 +80,14 @@ export function buildUgDelegations(
   const now = opts.now ?? new Date();
   const dir = path.join(generatedDir, DELEGATION_MARKER_DIRNAME);
 
+  let dirStat: fs.Stats;
+  try {
+    dirStat = fs.lstatSync(dir);
+  } catch {
+    return emptySection();
+  }
+  if (!dirStat.isDirectory()) return emptySection();
+
   let dirents: fs.Dirent[];
   try {
     dirents = fs.readdirSync(dir, { withFileTypes: true });

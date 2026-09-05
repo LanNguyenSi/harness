@@ -271,7 +271,18 @@ type AdoptedEntriesRead = { ok: true; ids: Set<string> } | { ok: false; detail: 
  * missing target there would read as "nothing adopted yet", the same
  * open the delegation and approval marker reads already close.
  */
-function readAdoptedEntries(filePath: string): AdoptedEntriesRead {
+function readAdoptedEntries(generatedDir: string, childSessionId: string): AdoptedEntriesRead {
+  const ledgerDir = path.join(generatedDir, ADOPTION_LEDGER_DIRNAME);
+  let ledgerDirStat: ReturnType<typeof lstatSync>;
+  try {
+    ledgerDirStat = lstatSync(ledgerDir);
+  } catch {
+    return { ok: true, ids: new Set() };
+  }
+  if (!ledgerDirStat.isDirectory()) {
+    return { ok: false, detail: `containment refusal: ${ledgerDir} is not a plain directory` };
+  }
+  const filePath = adoptedEntriesPathFor(generatedDir, childSessionId);
   const read = readRegularFileRejectingSymlink(filePath);
   if (read.kind === "missing") return { ok: true, ids: new Set() };
   if (read.kind === "symlink") {
@@ -304,10 +315,26 @@ function readAdoptedEntries(filePath: string): AdoptedEntriesRead {
  * arbitrary target, same class of defense as the read side above.
  */
 function recordAdoptedEntry(
-  filePath: string,
+  generatedDir: string,
+  childSessionId: string,
   entryId: string,
 ): { ok: true } | { ok: false; detail: string } {
   try {
+    const ledgerDir = path.join(generatedDir, ADOPTION_LEDGER_DIRNAME);
+    let ledgerDirStat: ReturnType<typeof lstatSync> | undefined;
+    try {
+      ledgerDirStat = lstatSync(ledgerDir);
+    } catch {
+      mkdirSync(ledgerDir, { recursive: true });
+      ledgerDirStat = lstatSync(ledgerDir);
+    }
+    if (!ledgerDirStat.isDirectory()) {
+      return {
+        ok: false,
+        detail: `containment refusal: ${ledgerDir} is not a plain directory`,
+      };
+    }
+    const filePath = adoptedEntriesPathFor(generatedDir, childSessionId);
     let priorStat: ReturnType<typeof lstatSync> | undefined;
     try {
       priorStat = lstatSync(filePath);
@@ -320,7 +347,6 @@ function recordAdoptedEntry(
         detail: `${filePath} exists and is not a regular file, refusing to append through it`,
       };
     }
-    mkdirSync(path.dirname(filePath), { recursive: true });
     appendFileSync(filePath, `${entryId}\n`, { mode: 0o600 });
     return { ok: true };
   } catch (err) {
@@ -1174,7 +1200,7 @@ export async function runPackHookPreToolUseCli(
                 // silently become the report's own re-mint budget instead
                 // of a one-shot authorization.
                 const adoptedPath = adoptedEntriesPathFor(generatedDir, childSessionId);
-                const adopted: AdoptedEntriesRead = readAdoptedEntries(adoptedPath);
+                const adopted: AdoptedEntriesRead = readAdoptedEntries(generatedDir, childSessionId);
                 const entryId = `report:${contentHash}`;
                 if (!adopted.ok) {
                   // Fail closed: without the ledger we cannot tell a
@@ -1193,7 +1219,7 @@ export async function runPackHookPreToolUseCli(
                   // leaves the report re-adoptable, while the reverse
                   // order would leave a persisted, mintable report behind
                   // an unrecorded adoption.
-                  const recorded = recordAdoptedEntry(adoptedPath, entryId);
+                  const recorded = recordAdoptedEntry(generatedDir, childSessionId, entryId);
                   if (!recorded.ok) {
                     stderr.write(
                       `harness pack hook: could not record the launcher-supplied report as adopted for session ${childSessionId} (${recorded.detail}); nothing was persisted\n`,
@@ -1238,7 +1264,7 @@ export async function runPackHookPreToolUseCli(
               const adopted: AdoptedEntriesRead =
                 transcriptPath === null
                   ? { ok: true, ids: new Set<string>() }
-                  : readAdoptedEntries(adoptedPath);
+                  : readAdoptedEntries(generatedDir, childSessionId);
               if (transcriptPath === null) {
                 stderr.write(
                   `harness pack hook: delegation for ${childSessionId} is valid but the payload carries no transcript_path; the child's report cannot be captured\n`,
@@ -1271,7 +1297,7 @@ export async function runPackHookPreToolUseCli(
                   // entry re-scannable, while the reverse order would leave a
                   // persisted, mintable report behind an unrecorded adoption:
                   // exactly the replay this ledger exists to stop.
-                  const recorded = recordAdoptedEntry(adoptedPath, scan.entryId);
+                  const recorded = recordAdoptedEntry(generatedDir, childSessionId, scan.entryId);
                   if (!recorded.ok) {
                     stderr.write(
                       `harness pack hook: could not record transcript entry ${scan.entryId} as adopted for session ${childSessionId} (${recorded.detail}); nothing was persisted\n`,

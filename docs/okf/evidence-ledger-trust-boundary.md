@@ -3,7 +3,7 @@ type: invariant
 title: Evidence-ledger trust boundary
 description: The agent-writable evidence ledger is audit-only for the builtin enforcement gates; only operator- or trusted-process-authored filesystem markers (read via the shared symlink-rejecting reader in src/io/read-regular-file.ts) open them, while custom requires.ledger_tag policies are process gates by design.
 tags: [evidence-ledger, trust-boundary, approvals, security]
-timestamp: 2026-09-05T09:48:35Z
+timestamp: 2026-09-05T10:05:42Z
 sources:
   - src/cli/pack/hook-pre-tool-use.ts
   - src/cli/pack/auto-approve-path.ts
@@ -28,7 +28,7 @@ sources:
 
 ## The invariant
 
-No evidence sink the gated agent can write — above all the evidence ledger, reachable directly via `mcp__grounding-mcp__ledger_add` — is sufficient to open a builtin enforcement gate; those gates open only on evidence authored by an actor the agent does not control (an operator-written marker under `harness.generated/.approvals/` or a trusted-producer verdict marker), each read through the single symlink-rejecting reader.
+No evidence sink the gated agent can write — above all the evidence ledger, reachable directly via `mcp__grounding-mcp__ledger_add` — is sufficient to open a builtin enforcement gate; those gates open only on evidence authored by an actor the agent does not control (an operator-written marker under `harness.generated/.approvals/` or a trusted-producer verdict marker), each read through the single symlink-rejecting reader. The understanding-gate approval, delegation, adoption-ledger, and in-flight readers also require their authority directories to be plain directories checked with `lstat`: a symlinked or non-directory authority root is refused before any artifact can be read.
 
 ## Where it's enforced
 
