@@ -327,7 +327,7 @@
   `probeRegularFilePresence`, or cite a span of `hook-pre-tool-use.ts`
   inside this round's edited region (lines ~940-978): `grep` across all 6
   for those terms found only `understanding-gate-lockout-recovery.md`'s
-  pre-existing citation at `hook-pre-tool-use.ts:939#"writePendingApproval(generatedDir, sessionId);"`,
+  pre-existing citation at `src/cli/pack/hook-pre-tool-use.ts:939#"writePendingApproval(generatedDir, sessionId);"`,
   well before the edited region, still resolving. `evidence-ledger-trust-boundary.md`
   was NOT flagged stale this round: it was itself edited (new
   `probeRegularFilePresence` paragraph, `delegation-markers.ts` added to
@@ -379,7 +379,7 @@
   describes only the new reason itself; neither touches any claim or
   cited span in these 7 docs (the one line-numbered citation among them,
   `understanding-gate-lockout-recovery.md`'s
-  `hook-pre-tool-use.ts:939#"writePendingApproval(generatedDir, sessionId);"`,
+  `src/cli/pack/hook-pre-tool-use.ts:939#"writePendingApproval(generatedDir, sessionId);"`,
   sits well before the edited comment and still resolves). Timestamp-only
   re-stamp on all 7; no content changed. `okf-kit check --json docs/okf`
   on the committed tree shows 0 errors, 0 warnings after the re-stamp.

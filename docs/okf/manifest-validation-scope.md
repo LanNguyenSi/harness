@@ -24,7 +24,7 @@ sources:
 
 `harness remove` runs **no asset checks at all** — only the schema gate (`src/cli/remove/index.ts:186-192`) plus a schema-only recheck after lock acquisition (`:223-229`). Add has the same schema-only post-lock recheck (`src/cli/add/index.ts:147-159`); asset checks are not repeated under the lock.
 
-What the asset gate actually checks (`runAssetChecks`, `src/cli/validate/checks.ts:1424-1450#"export function runAssetChecks("`), all against the whole manifest:
+What the asset gate actually checks (`runAssetChecks`, `src/cli/validate/checks.ts:1424#"export function runAssetChecks("`), all against the whole manifest:
 - `checkMcp` (`:121-138`): for every `tools.mcp[]` entry whose command's **first token is a rooted path** (absolute or `~/`), `statSync` the path (after `expandHome` against `opts.homeDir`); missing path → error `tools.mcp[<name>].command: path does not exist: <resolved>`. Note the bracket key is the **tool name, not an index**.
 - `checkCli` (`:140-191`): binary resolvable (absolute-and-executable, or found on `PATH`); `required: true` missing binary is an error; `min_version` below installed version is an error.
 - `checkSkills` (`:193-216`): every `tools.skills.required[]` name must have a `SKILL.md` under some `source_dirs` entry.

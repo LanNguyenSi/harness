@@ -7,6 +7,10 @@ references, see `docs/` one level up (ARCHITECTURE, risk-gate,
 writing-custom-policies, the policy-pack references, CLI); these docs
 deliberately do not duplicate them.
 
+Anchored source citations in this bundle, including historical `log.md`
+entries, are resolved against the current tree by
+`tests/decisions-citations-resolve.test.ts`.
+
 ## Overview
 
 - [Gate fail-posture matrix](gate-fail-posture-matrix.md), which enforcement
