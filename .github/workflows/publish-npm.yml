@@ -35,7 +35,7 @@ jobs:
         run: echo "name=${RESOLVED_TAG}" >> "$GITHUB_OUTPUT"
 
       - name: Install dependencies
-        run: npm ci
+        run: npm ci --no-audit --no-fund
 
       - name: Verify package.json version matches tag
         env:
@@ -60,7 +60,7 @@ jobs:
         # (permissions.id-token: write above) matched against the package's
         # Trusted Publisher entry on npmjs.com (repo LanNguyenSi/harness,
         # workflow publish-npm.yml) — no NPM_TOKEN secret involved.
-        run: npm install -g npm@11
+        run: npm install -g npm@11 --no-audit --no-fund
 
       - name: Publish
         env:
