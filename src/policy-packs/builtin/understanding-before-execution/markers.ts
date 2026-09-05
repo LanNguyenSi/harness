@@ -154,6 +154,28 @@ export function checkApprovalMarker(
       forged: false,
     };
   }
+  const approvalsDir = path.join(generatedDir, APPROVAL_MARKER_DIRNAME);
+  let approvalsDirStat: fs.Stats;
+  try {
+    approvalsDirStat = fs.lstatSync(approvalsDir);
+  } catch {
+    return {
+      matched: false,
+      detail: `no approval marker at ${filePath}`,
+      marker: null,
+      expired: false,
+      forged: false,
+    };
+  }
+  if (!approvalsDirStat.isDirectory()) {
+    return {
+      matched: false,
+      detail: `approval marker containment refusal: ${approvalsDir} is not a plain directory`,
+      marker: null,
+      expired: false,
+      forged: false,
+    };
+  }
   // Shared symlink-rejecting read (src/io/read-regular-file.ts): the lstat
   // reject is defense-in-depth against a planted symlink
   // (agent-tasks/d39f160e); each failure mode keeps its distinct detail.

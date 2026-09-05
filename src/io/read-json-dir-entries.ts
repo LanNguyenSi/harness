@@ -44,6 +44,15 @@ export function readJsonDirEntriesRejectingSymlinks<T>(
   dir: string,
   opts: ReadJsonDirEntriesOptions<T>,
 ): ReadJsonDirEntriesResult<T> {
+  let dirStat: fs.Stats;
+  try {
+    dirStat = fs.lstatSync(dir);
+  } catch {
+    return { dirPresent: false, entries: [], unreadableCount: 0 };
+  }
+  if (!dirStat.isDirectory()) {
+    return { dirPresent: false, entries: [], unreadableCount: 0 };
+  }
   let dirents: fs.Dirent[];
   try {
     dirents = fs.readdirSync(dir, { withFileTypes: true });

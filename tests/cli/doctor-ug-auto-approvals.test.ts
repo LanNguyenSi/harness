@@ -50,6 +50,28 @@ describe("buildUgAutoApprovals — pure function", () => {
     });
   });
 
+  it("a symlinked .approvals/ root reads as absent, even when it points at markers", () => {
+    const generatedDir = tempGeneratedDir();
+    writeMarker(generatedDir, "sess-auto", {
+      approvedAt: "2026-08-27T10:00:00.000Z",
+      approvedBy: "auto-mode:claude-code:bypassPermissions",
+    });
+    const approvalsDir = path.join(generatedDir, ".approvals");
+    const outsideDir = `${approvalsDir}-outside`;
+    fs.renameSync(approvalsDir, outsideDir);
+    fs.symlinkSync(outsideDir, approvalsDir, "dir");
+
+    expect(buildUgAutoApprovals(generatedDir, { recentSessions: 20 })).toEqual({
+      approvalsDirPresent: false,
+      windowSize: 20,
+      autoApprovedCount: 0,
+      byMode: {},
+      byHarness: {},
+      entries: [],
+      unreadableCount: 0,
+    });
+  });
+
   it("counts only the auto marker among an auto + human + task + branch-protection marker (P1 target)", () => {
     const generatedDir = tempGeneratedDir();
     writeMarker(generatedDir, "sess-auto", {

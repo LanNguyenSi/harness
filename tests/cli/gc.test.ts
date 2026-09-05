@@ -617,6 +617,43 @@ describe("gc - in-flight subagent records (subagent-gate slice 1)", () => {
     expect(r.candidates.some((c) => c.category === "in-flight-record")).toBe(false);
     expect(fs.existsSync(outsideRecord)).toBe(true);
   });
+
+  it("does not sweep approval, delegation, or adoption artifacts through symlinked authority roots", () => {
+    const outsideApprovals = path.join(tmp, "outside-approvals");
+    const outsideDelegations = path.join(tmp, "outside-delegations");
+    const outsideLedgers = path.join(tmp, "outside-adoption-ledgers");
+    fs.mkdirSync(outsideApprovals, { recursive: true });
+    fs.mkdirSync(outsideDelegations, { recursive: true });
+    fs.mkdirSync(outsideLedgers, { recursive: true });
+    const oldApproval = writeAged(outsideApprovals, "old-session", 45);
+    const expiredDelegation = path.join(outsideDelegations, "child-1");
+    fs.writeFileSync(
+      expiredDelegation,
+      JSON.stringify({
+        approvedAt: isoDaysAgo(1),
+        approvedBy: buildDelegationApprovedBy({
+          parentSessionId: "parent-1",
+          cwdHash: null,
+          taskId: null,
+          expiresAt: isoDaysAgo(45),
+        }),
+      }),
+    );
+    const oldLedger = writeAged(outsideLedgers, "child-1", 45);
+    fs.rmSync(approvalsDir, { recursive: true, force: true });
+    fs.rmSync(delegationsDir, { recursive: true, force: true });
+    fs.rmSync(adoptionLedgerDir, { recursive: true, force: true });
+    fs.symlinkSync(outsideApprovals, approvalsDir, "dir");
+    fs.symlinkSync(outsideDelegations, delegationsDir, "dir");
+    fs.symlinkSync(outsideLedgers, adoptionLedgerDir, "dir");
+
+    const result = run({ apply: true });
+    expect(result.candidates.filter((candidate) => candidate.category === "approval-marker")).toEqual([]);
+    expect(result.candidates.filter((candidate) => candidate.category === "delegation")).toEqual([]);
+    expect(fs.existsSync(oldApproval)).toBe(true);
+    expect(fs.existsSync(expiredDelegation)).toBe(true);
+    expect(fs.existsSync(oldLedger)).toBe(true);
+  });
 });
 
 describe("gc — non-conventional reports dir", () => {

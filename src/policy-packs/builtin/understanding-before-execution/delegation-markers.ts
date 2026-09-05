@@ -680,6 +680,21 @@ export function verifyDelegation(opts: VerifyDelegationOptions): DelegationVerif
     };
   }
 
+  const delegationsDir = path.join(generatedDir, DELEGATION_MARKER_DIRNAME);
+  let delegationsDirStat: fs.Stats;
+  try {
+    delegationsDirStat = fs.lstatSync(delegationsDir);
+  } catch {
+    return { ok: false, reason: "missing", detail: `no delegation marker at ${filePath}` };
+  }
+  if (!delegationsDirStat.isDirectory()) {
+    return {
+      ok: false,
+      reason: "missing",
+      detail: `delegation marker containment refusal: ${delegationsDir} is not a plain directory`,
+    };
+  }
+
   const read = readRegularFileRejectingSymlink(filePath);
   if (read.kind === "missing") {
     return { ok: false, reason: "missing", detail: `no delegation marker at ${filePath}` };

@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Authority-directory containment is enforced for understanding-gate markers and delegations** (task `6cb8aa2e-083c-4996-bc7e-26f8841b7acf`). Approval, delegation, and adoption-ledger readers now refuse a symlinked or non-directory authority root; `harness doctor` and `harness gc` use the same root rule and do not follow linked `.approvals/`, `.delegations/`, or `.delegation-adoptions/` directories.
+
 ## [0.56.0] - 2026-09-05
 
 ### Added
