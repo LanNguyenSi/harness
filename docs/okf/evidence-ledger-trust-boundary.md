@@ -28,7 +28,7 @@ sources:
 
 ## The invariant
 
-No evidence sink the gated agent can write — above all the evidence ledger, reachable directly via `mcp__grounding-mcp__ledger_add` — is sufficient to open a builtin enforcement gate; those gates open only on evidence authored by an actor the agent does not control (an operator-written marker under `harness.generated/.approvals/` or a trusted-producer verdict marker), each read through the single symlink-rejecting reader. Authority readers also require every directory segment they own to be a plain `lstat` directory: a symlinked or non-directory authority root is refused before any artifact can be read.
+No evidence sink the gated agent can write — above all the evidence ledger, reachable directly via `mcp__grounding-mcp__ledger_add` — is sufficient to open a builtin enforcement gate; those gates open only on evidence authored by an actor the agent does not control (an operator-written marker under `harness.generated/.approvals/` or a trusted-producer verdict marker), each read through the single symlink-rejecting reader. The understanding-gate approval, delegation, adoption-ledger, and in-flight readers also require their authority directories to be plain directories checked with `lstat`: a symlinked or non-directory authority root is refused before any artifact can be read.
 
 ## Where it's enforced
 
