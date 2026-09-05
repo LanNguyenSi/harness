@@ -1,0 +1,4 @@
+Session id PREFIXES only (8 hex chars); full session ids are never
+committed. These are the values every log above shows as the sid.
+SID_A_prefix=c1b22f74
+SID_B_prefix=db1e4ca8

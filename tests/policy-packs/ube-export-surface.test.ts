@@ -80,6 +80,16 @@ import * as ubeShim from "../../src/policy-packs/builtin/understanding-before-ex
 // pre-widening count (an earlier entry in this chain undercounted by
 // one, so the running totals through the eighth widening summed to 69
 // rather than the 70 already present at HEAD before this change).
+// Widened a tenth time (subagent-gate slice 1) by the nine VALUE exports
+// of the signed in-flight-record artifact (inflight-records.ts):
+// INFLIGHT_RECORD_DIRNAME, DEFAULT_INFLIGHT_STALE_AFTER_MS,
+// rejectMalformedAgentId, inflightMarkerIdFor, inflightRecordPathFor,
+// writeInflightRecord, verifyInflightRecord, clearInflightRecord,
+// listInflightRecords. 72 -> 81. The module's six type-only exports
+// (InflightParentSource, WriteInflightRecordOptions, WriteInflightRecordResult,
+// VerifyInflightRecordOptions, InflightRecordVerification,
+// InflightRecordsSummary) are absent from this list for the same reason
+// the delegation module's own type-only exports are.
 //
 // Mutation-verified: temporarily re-adding `export { safeJsonParse } from
 // "./persisted-reports.js";` to
@@ -97,9 +107,11 @@ const EXPECTED_EXPORTS = [
   "CLAUDE_CODE_HARNESS",
   "DEFAULT_AUTO_APPROVE_HARNESSES",
   "DEFAULT_BASH_TOOL_NAMES",
+  "DEFAULT_INFLIGHT_STALE_AFTER_MS",
   "DEFAULT_REPORT_SCAN_MAX_WAIT_MS",
   "DELEGATION_MARKER_DIRNAME",
   "DELEGATION_REPORT_DIRNAME",
+  "INFLIGHT_RECORD_DIRNAME",
   "REPORTS_DIR_ENV",
   "REPORT_SCAN_MAX_WAIT_CEILING_MS",
   "TOLERANT_FALLBACK_FUTURE_SKEW_MS",
@@ -118,6 +130,7 @@ const EXPECTED_EXPORTS = [
   "checkPersistedReport",
   "clearActiveClaim",
   "clearApprovalMarker",
+  "clearInflightRecord",
   "clearTaskApprovalMarker",
   "defaultAutoApproveConfig",
   "defaultReportsDir",
@@ -132,7 +145,10 @@ const EXPECTED_EXPORTS = [
   "findLatestReportForSession",
   "harnessAllowed",
   "hashDelegationCwd",
+  "inflightMarkerIdFor",
+  "inflightRecordPathFor",
   "isPolicyDecisionRow",
+  "listInflightRecords",
   "listPermissionModeObservations",
   "listPersistedReports",
   "matchLedgerEntries",
@@ -147,6 +163,7 @@ const EXPECTED_EXPORTS = [
   "permissionModeObservationPathFor",
   "readActiveClaim",
   "recordPermissionModeObservation",
+  "rejectMalformedAgentId",
   "renderAutoApproveSnippet",
   "sanitizeForDisplay",
   "reportsDirForManifest",
@@ -155,16 +172,18 @@ const EXPECTED_EXPORTS = [
   "taskApprovalMarkerPathFor",
   "toolNameMatchesAny",
   "verifyDelegation",
+  "verifyInflightRecord",
   "writeActiveClaim",
   "writeApprovalMarker",
   "writeDelegationMarker",
+  "writeInflightRecord",
   "writeTaskApprovalMarker",
 ] as const;
 
 describe("understanding-before-execution-runtime shim export surface", () => {
-  it("exports exactly the pinned 72-name surface, sorted", () => {
+  it("exports exactly the pinned 81-name surface, sorted", () => {
     const actual = Object.keys(ubeShim).sort();
-    expect(EXPECTED_EXPORTS).toHaveLength(72);
+    expect(EXPECTED_EXPORTS).toHaveLength(81);
     expect(actual).toEqual([...EXPECTED_EXPORTS].sort());
   });
 

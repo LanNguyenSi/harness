@@ -641,6 +641,21 @@ describe("checkOperatorApprovalMarkers — expired signal (task 6e888423)", () =
     expect(r.expired).toBe(false);
   });
 
+  it("expired:true under mode: session + max_age — a 5h-old marker is stale even in legacy mode (task 496660c5)", () => {
+    // Regression guard for the lifecycle.ts fix: `mode: session` must not
+    // silently drop `max_age`. A mutant that hardcodes the consumer's own
+    // ageOpts wiring in checkOperatorApprovalMarkers must fail here.
+    writeApprovalMarker(tmp, "sess-1", {
+      approvedAt: new Date(Date.now() - 5 * 60 * 60 * 1000).toISOString(),
+      approvedBy: "test-operator",
+    });
+    const r = checkOperatorApprovalMarkers(tmp, "sess-1", {
+      approval_lifecycle: { mode: "session", max_age: "4h" },
+    });
+    expect(r.matched).toBe(false);
+    expect(r.expired).toBe(true);
+  });
+
   it("MIXED MARKERS (review LOW 1): the active-claim's own task marker is EXPIRED but the session marker is FRESH — matched:true must carry expired:false, not expired:true", () => {
     // This is the exact scenario the review flagged: an active-claim IS
     // recorded, its own task-scoped marker has aged past max_age (so the

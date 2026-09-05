@@ -2,6 +2,23 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-09-05T08:06:16Z, task `496660c5` (subagent-gate T-004): fixed
+  `parseApprovalLifecycle` dropping `max_age` under `mode: session`
+  (both branches now share a `parseMaxAge` helper). Re-verified
+  `understanding-gate-lockout-recovery.md`'s "Expiry semantics" and
+  added a new "In-flight subagent records" paragraph documenting the
+  signed `.inflight/` records the earlier slices of this task shipped
+  (`SubagentStart`/`SubagentStop` hooks, the `PreToolUse` consult, the
+  doctor line, the gc sweep) and the recommended `mode: session` +
+  `max_age` lifecycle for orchestrator-led batch sessions; added
+  `lifecycle.ts`, `inflight-records.ts`, `hook-subagent-start.ts`,
+  `hook-subagent-stop.ts`, `ug-inflight.ts`, and `gc/index.ts` to the
+  bundle's `sources`. Added gap 15 to `codex-adapter-parity-gaps.md`:
+  in-flight records and the two subagent hooks are Claude Code only,
+  same shape as gap 14's delegation boundary; added the three new
+  sources. `okf-kit check --json docs/okf` reports both docs fresh
+  with no errors after the re-stamp.
+
 - 2026-09-04T06:23:17Z, task `0b4144ba` release 0.55.0 review correction:
   removed the point-in-time `package.json` version observation from
   `policy-engine-producer-wiring.md`. The reusable invariant now retains only
@@ -256,7 +273,7 @@
   landed at lines 969-990 (`git show b24af93 -- src/cli/pack/hook-pre-tool-use.ts`
   confirms the hunk starts at line 969); the round-3 entry's own
   freshness conclusion is unaffected, since `understanding-gate-lockout-recovery.md`'s
-  citation at `hook-pre-tool-use.ts:788` is well before either range.
+  citation at `hook-pre-tool-use.ts:902` is well before either range.
   `okf-kit check --json docs/okf` on the committed tree shows 0 errors,
   0 warnings after the re-stamp.
 - 2026-09-02T05:44:14Z, task `204efc56` round 3 (further review fixes
@@ -278,7 +295,7 @@
   `probeRegularFilePresence`, or cite a span of `hook-pre-tool-use.ts`
   inside this round's edited region (lines ~940-978): `grep` across all 6
   for those terms found only `understanding-gate-lockout-recovery.md`'s
-  pre-existing citation at `hook-pre-tool-use.ts:788#"writePendingApproval(generatedDir, sessionId);"`,
+  pre-existing citation at `hook-pre-tool-use.ts:913#"writePendingApproval(generatedDir, sessionId);"`,
   well before the edited region, still resolving. `evidence-ledger-trust-boundary.md`
   was NOT flagged stale this round: it was itself edited (new
   `probeRegularFilePresence` paragraph, `delegation-markers.ts` added to
@@ -330,7 +347,7 @@
   describes only the new reason itself; neither touches any claim or
   cited span in these 7 docs (the one line-numbered citation among them,
   `understanding-gate-lockout-recovery.md`'s
-  `hook-pre-tool-use.ts:788#"writePendingApproval(generatedDir, sessionId);"`,
+  `hook-pre-tool-use.ts:913#"writePendingApproval(generatedDir, sessionId);"`,
   sits well before the edited comment and still resolves). Timestamp-only
   re-stamp on all 7; no content changed. `okf-kit check --json docs/okf`
   on the committed tree shows 0 errors, 0 warnings after the re-stamp.

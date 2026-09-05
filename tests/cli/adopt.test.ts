@@ -103,6 +103,25 @@ describe("derive — pure functions", () => {
     ]);
   });
 
+  it("parseSettingsHooks derives a hooks.SubagentStart group (task 496660c5)", () => {
+    // Pins KNOWN_EVENTS carrying "SubagentStart" verbatim: a mutant that
+    // renames or drops that entry makes this settings-root group vanish
+    // from the flattened output instead of surfacing as drift.
+    const flat = parseSettingsHooks({
+      hooks: {
+        SubagentStart: [
+          {
+            matcher: "",
+            hooks: [{ type: "command", command: "harness pack hook subagent-start" }],
+          },
+        ],
+      },
+    });
+    expect(flat).toEqual([
+      { event: "SubagentStart", command: "harness pack hook subagent-start" },
+    ]);
+  });
+
   it("parseSettingsHooks ignores unknown event keys and malformed entries", () => {
     const flat = parseSettingsHooks({
       hooks: {

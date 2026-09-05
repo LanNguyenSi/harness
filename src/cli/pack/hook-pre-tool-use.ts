@@ -74,8 +74,10 @@ import {
   parseAutoApprove,
   readActiveClaim,
   recordPermissionModeObservation,
+  sanitizeForDisplay,
   selectNewestStrictSessionReport,
   verifyDelegation,
+  verifyInflightRecord,
   type ApprovalCheckResult,
 } from "../../policy-packs/builtin/understanding-before-execution-runtime.js";
 import {
@@ -207,6 +209,19 @@ interface ToolEventLite {
    * capture under `-p`").
    */
   transcript_path?: unknown;
+  /**
+   * An Agent-tool subagent's own id, carried on every PreToolUse call it
+   * makes (measured: docs/okf/understanding-gate-auto-mode-signals.md
+   * "Measured: subagents"). Subagents share the PARENT's `session_id`, so
+   * this field is the only thing that distinguishes a subagent's call
+   * from a main-line one: a non-empty string marks a subagent call and is
+   * held against its in-flight record (see the in-flight consult below);
+   * anything else (absent, empty, non-string) is a main-line call, which
+   * never consults `.inflight/` at all.
+   */
+  agent_id?: unknown;
+  /** Claude Code's subagent-type label; unused here, kept for shape parity with the SubagentStart payload. */
+  agent_type?: unknown;
 }
 
 /**
@@ -708,6 +723,12 @@ export async function runPackHookPreToolUseCli(
   // distinct phrase from "no approval marker" so an operator/auditor can
   // tell a forgery attempt apart from the routine "never approved" case.
   let markerForged = false;
+  // `markers.detail` itself, hoisted alongside `markerForged` so the
+  // in-flight consult below can still surface it: a forged SESSION/TASK
+  // marker sitting next to a genuinely valid in-flight record (ADR "TTL,
+  // cwd, and subagents") is a forgery attempt the operator should see
+  // even though the in-flight record is what ends up opening the gate.
+  let markerForgedDetail: string | undefined;
   if (generatedDir !== undefined) {
     // Source 1a/1b: task-scoped marker for the currently-claimed task
     // (harness/1ee26e77 + PR #198 correctness fix), then the
@@ -723,6 +744,20 @@ export async function runPackHookPreToolUseCli(
     );
     markerExpired = markers.expired;
     markerForged = markers.forged;
+    if (markerForged) {
+      // `markers.detail` is only ever the SESSION marker's detail on the
+      // unmatched path (see OperatorMarkerApproval.detail); when it is
+      // the TASK marker that failed verification, that fact is buried
+      // inside `taskCheckDetail`'s wrapping instead. Detect which one
+      // actually carries the forgery phrase so this line names the
+      // marker that was actually tampered with, not always the session
+      // one (review T-003 R3 L1: a forged task marker next to an intact
+      // session marker used to report the session's unrelated "no
+      // approval marker" detail here).
+      const taskMarkerIsForged = /forged\/unsigned marker rejected/.test(markers.taskCheckDetail);
+      const forgedMarkerDetail = taskMarkerIsForged ? markers.taskCheckDetail : markers.detail;
+      markerForgedDetail = `harness pack hook: forged/unsigned marker rejected for session ${sessionId}; ${forgedMarkerDetail}`;
+    }
     if (markers.source !== "task") {
       // Trace the task-marker miss to stderr so an operator chasing
       // "why isn't my approval working?" sees the active-claim vs marker
@@ -736,6 +771,66 @@ export async function runPackHookPreToolUseCli(
         exitCode: 0,
         blocked: false,
         approvalCheck: { approved: true, source: "marker", detail: markers.detail },
+        diagnostic,
+      };
+    }
+  }
+
+  // Source 1c: in-flight subagent record (ADR "TTL, cwd, and subagents").
+  // An Agent-tool subagent shares its parent's
+  // `session_id`, so the marker check above cannot tell a subagent's call
+  // apart from the parent's own — the payload's `agent_id` is what does.
+  // Consulted ONLY here, ONLY when the marker check just missed AND the
+  // payload names a non-empty `agent_id`: a main-line call (no
+  // `agent_id`) never reaches `verifyInflightRecord` at all, so no record
+  // on disk for any agent can ever open the gate for a main-line call.
+  const agentId =
+    typeof event.agent_id === "string" && event.agent_id.length > 0
+      ? event.agent_id
+      : undefined;
+  // Sanitized copy for every surface a human or the agent itself reads
+  // (the block suffix, the forged phrase, this allow diagnostic): the raw
+  // `agentId` above is what verification and path-building use, but an
+  // attacker-controlled `agent_id` is otherwise interpolated verbatim
+  // into stderr and the agent-facing deny text (review finding: newline
+  // injection, unbounded length).
+  const displayAgentId = agentId !== undefined ? sanitizeForDisplay(agentId) : undefined;
+  // True SPECIFICALLY when a record FILE existed but failed verification
+  // (bad signature, or its body disagreed with its own path) — the same
+  // distinction `markerForged` draws for the operator marker. Folded into
+  // the auto-approval gating below so a forged record is declined the
+  // same way a forged marker is, without duplicating that enforcement.
+  let inflightForged = false;
+  // True SPECIFICALLY when the record verified and agreed with its own
+  // path but aged past the staleness window — distinct from `forged` and
+  // from a record simply never existing, so the subagent sentence below
+  // can name the actual cause instead of always saying "no record".
+  let inflightStale = false;
+  if (generatedDir !== undefined && agentId !== undefined) {
+    const record = verifyInflightRecord(
+      generatedDir,
+      sessionId,
+      agentId,
+      opts.now !== undefined ? { now: opts.now } : {},
+    );
+    inflightForged = record.forged;
+    inflightStale = record.stale;
+    if (record.matched) {
+      // A forged SESSION/TASK marker sitting next to this valid record is
+      // a distinct forgery attempt: surfaced to stderr BEFORE the allow
+      // diagnostic, but never gating it — the in-flight record is its
+      // own, independently-verified approval authority (ADR "TTL, cwd,
+      // and subagents"), so a forged copy of a DIFFERENT authority must
+      // not turn this allow into a block.
+      if (markerForgedDetail !== undefined) {
+        stderr.write(`${markerForgedDetail}\n`);
+      }
+      const diagnostic = `harness pack hook: in-flight subagent record for agent ${displayAgentId} (${record.detail}), allowing.`;
+      stderr.write(`${diagnostic}\n`);
+      return {
+        exitCode: 0,
+        blocked: false,
+        approvalCheck: { approved: true, source: "inflight", detail: record.detail },
         diagnostic,
       };
     }
@@ -766,16 +861,46 @@ export async function runPackHookPreToolUseCli(
   // allow/block decision.
   const ledger = await checkLedger(manifest, sessionId, opts);
 
+  // A subagent call (non-empty `agent_id`) that reached this point had no
+  // matching in-flight record — missing, for a different agent, forged,
+  // stale, or naming a malformed id (`verifyInflightRecord` never throws
+  // on any of those; it just reports `matched: false`). Branched on the
+  // actual verification outcome rather than always naming "no record": a
+  // forged or stale record is a materially different signal than one
+  // that never existed — the parent DID hold a valid approval at some
+  // point — and conflating them misdirects the agent's next action.
+  // Gated on `generatedDir !== undefined`: when it
+  // is not resolvable (test/injection path), `verifyInflightRecord` was
+  // never consulted at all (see `inflightForged`/`inflightStale` staying
+  // at their `false` initializers above), so there is no verification
+  // outcome to report. Named explicitly so an agent reading the deny
+  // text knows to stop rather than retry: unlike the operator-approval
+  // case, nothing this session can do mints a new record — only the
+  // parent's NEXT `subagent-start` call can.
+  const subagentRecordSentence =
+    generatedDir !== undefined && displayAgentId !== undefined
+      ? inflightForged
+        ? ` subagent ${displayAgentId}: the in-flight record for this subagent failed verification; stop cleanly and report to the orchestrator instead of retrying.`
+        : inflightStale
+          ? ` subagent ${displayAgentId}: the in-flight record for this subagent is older than the staleness window; stop cleanly and report to the orchestrator instead of retrying.`
+          : ` subagent ${displayAgentId}: no in-flight approval record (the parent session held no valid approval when this subagent started, or the record was removed); stop cleanly and report to the orchestrator instead of retrying.`
+      : "";
+
   // Neither operator source approved. When a marker FILE existed but
   // failed signature verification, use a distinct reason phrase
   // ("forged/unsigned marker rejected") instead of the routine "no
   // approval marker" — audit/operator surfaces can then tell an active
   // forgery attempt (or a pre-signing legacy marker) apart from a session
-  // that simply never approved (harness/f9485cc7).
+  // that simply never approved (harness/f9485cc7). A forged in-flight
+  // record gets its own distinct phrase for the same reason, checked
+  // second so a forged SESSION/TASK marker (the higher-authority forgery)
+  // is never masked by a merely-forged copy of it.
   const reason = generatedDir !== undefined
     ? markerForged
       ? `forged/unsigned marker rejected for session ${sessionId}; ${report.detail}; ${ledger.detail}`
-      : `no approval marker for session ${sessionId}; ${report.detail}; ${ledger.detail}`
+      : inflightForged
+        ? `forged/unsigned in-flight record for agent ${displayAgentId} rejected for session ${sessionId}; ${report.detail}; ${ledger.detail}`
+        : `no approval marker for session ${sessionId}; ${report.detail}; ${ledger.detail}${subagentRecordSentence}`
     : `generatedDir not resolvable (test/injection path); ${report.detail}; ${ledger.detail}`;
 
   // Stage the session id so `harness approve`, run from the operator's
@@ -902,7 +1027,12 @@ export async function runPackHookPreToolUseCli(
   // simply still in flight. That is the one case where the deny text asks
   // for a retry, so it is the one case that sets this flag.
   let reportScanTimedOut = false;
-  if (generatedDir !== undefined && !markerForged) {
+  // `!inflightForged` added alongside `!markerForged`: a forged in-flight
+  // record is the same posture as a forged marker (ADR condition 6, "a
+  // forgery detected is never laundered into an approval") — no point
+  // spending a delegation resolution on a call already known to end in a
+  // decline.
+  if (generatedDir !== undefined && !markerForged && !inflightForged) {
     // `null` stderr on purpose: `attemptAutoApproval` parses the same
     // block a few lines below and writes the malformed-config line
     // itself, so passing this hook's stderr here would double it.
@@ -1242,7 +1372,18 @@ export async function runPackHookPreToolUseCli(
     sessionConsistency: { kind: "env", variable: "CLAUDE_CODE_SESSION_ID" },
     packConfig: declared.config,
     reportsDir,
-    markerForged,
+    // Folded with `inflightForged`: `attemptAutoApproval`'s own guard on
+    // this flag is the ACTUAL enforcement point for "a forgery is never
+    // laundered into an approval" (the `!inflightForged` added to the
+    // block above only skips a doomed delegation resolution; it does not
+    // by itself stop this call).
+    markerForged: markerForged || inflightForged,
+    // Names which of the two the flag above actually folds together, so
+    // the decline diagnostic says the right artifact. A real marker
+    // forgery keeps the plain "marker" wording even when both happen to
+    // be true, matching the higher-authority precedence `reason` above
+    // already gives it.
+    forgedKind: markerForged ? "marker" : inflightForged ? "inflight" : undefined,
     // Slice 3: present only when the branch above verified a delegation
     // for this child session. It supplies key ONE in place of a
     // `when`-listed `permission_mode`; every other condition, key two
@@ -1294,6 +1435,26 @@ export async function runPackHookPreToolUseCli(
     report.report === null
       ? findLatestParseError(path.join(path.dirname(reportsDir), "parse-errors"), sessionId)
       : null;
+  // The subagent record sentence, delivered to the AGENT through the
+  // same channel the slice-3 retry instruction uses (appended after both
+  // the `ux:` and legacy envelopes, so it survives either one) rather
+  // than staying stderr/audit-only, reaching only `reason` /
+  // `approvalCheck.detail` and never the agent-facing stdout JSON. A
+  // main-line block (`displayAgentId` undefined) never carries it.
+  //
+  // The retry instruction takes PRECEDENCE when both would apply: nothing
+  // stops a delegated session (ADR "Report capture under `-p`") from also
+  // being the parent of an in-flight subagent, but the two instructions
+  // disagree on what the agent should do next — the subagent sentence
+  // says stop, the retry instruction says retry — and the delegation
+  // path can still succeed on the very next retry regardless of the
+  // subagent record's own state, so telling the agent to stop here would
+  // be wrong.
+  const agentInstruction = reportScanTimedOut
+    ? DELEGATION_REPORT_RETRY_INSTRUCTION
+    : displayAgentId !== undefined && subagentRecordSentence.length > 0
+      ? subagentRecordSentence.trim()
+      : null;
   stdout.write(
     `${blockJson(
       toolName,
@@ -1303,7 +1464,7 @@ export async function runPackHookPreToolUseCli(
       sessionId,
       escapeHint,
       latestParseError?.malformedSections,
-      reportScanTimedOut ? DELEGATION_REPORT_RETRY_INSTRUCTION : null,
+      agentInstruction,
     )}\n`,
   );
   return {

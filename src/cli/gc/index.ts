@@ -18,6 +18,7 @@
 //       <generatedDir>/.delegation-adoptions   once-per-session adoption ledgers
 //       <generatedDir>/.permission-mode-observations   per-session PreToolUse
 //                                          permission_mode observations (task 8f637efd)
+//       <generatedDir>/.inflight       signed in-flight subagent records (subagent-gate slice 1)
 //     The evidence ledger (grounding-mcp) and solution-acceptance
 //     verdict dirs (producer-owned) are out of scope by design.
 //   - Deletion failures are surfaced loudly per file, never swallowed.
@@ -41,6 +42,24 @@
 // sibling (if any) stays too, since "this delegation is dead" cannot be
 // established for one gc cannot read.
 //
+// IN-FLIGHT RECORDS SWEEP (subagent-gate slice 1): a record's SIGNED
+// `approvedAt` decides staleness (never the unsigned `startedAt`
+// convenience copy — gc does not verify signatures, so it must not let
+// an editable field decide), on a FIXED 24h window
+// (`DEFAULT_INFLIGHT_STALE_AFTER_MS`) plus a small future-skew
+// tolerance, independent of `--retention-days` — the same "the marker's
+// own signed timestamp decides, not gc's generic cutoff" shape the
+// delegation sweep already uses for `expires`, but a record has no
+// operator-chosen lifetime to honour, so gc does not let
+// `--retention-days` extend or shrink it. `verifyInflightRecord` itself
+// exposes a `staleAfterMs` override, but that is a test seam only — no
+// production caller passes it, so this sweep's window is, in practice,
+// as fixed as the runtime gate's own. A record gc cannot parse is
+// never a deletion candidate (same fail-closed posture as an
+// unparseable delegation): it is surfaced in `GcResult.unparseable`
+// instead. Deleting a session's last record also removes that now-empty
+// session directory, best effort, mirroring `clearInflightRecord`.
+//
 // PERMISSION-MODE OBSERVATIONS SWEEP (task 8f637efd review round 2 F5):
 // `.permission-mode-observations/` (one small per-session file, see
 // permission-mode-observations.ts) grows the same way `.approvals/` and
@@ -58,13 +77,17 @@ import { safeJsonParse } from "../../io/safe-json-parse.js";
 import {
   ADOPTION_LEDGER_DIRNAME,
   APPROVAL_MARKER_DIRNAME,
+  DEFAULT_INFLIGHT_STALE_AFTER_MS,
   DELEGATION_MARKER_DIRNAME,
+  INFLIGHT_RECORD_DIRNAME,
   PERMISSION_MODE_OBSERVATION_DIRNAME,
   defaultReportsDir,
   listPersistedReports,
   parseDelegationApprovedBy,
+  rejectMalformedAgentId,
 } from "../../policy-packs/builtin/understanding-before-execution-runtime.js";
 import { resolveGeneratedDir } from "../../runtime/pending-approval.js";
+import { rejectMalformedSessionId } from "../../runtime/reject-malformed-session-id.js";
 import { resolvePaths, type LoaderOptions } from "../loader.js";
 
 export const DEFAULT_RETENTION_DAYS = 30;
@@ -91,7 +114,8 @@ export type GcCategory =
   | "parse-error"
   | "approval-marker"
   | "delegation"
-  | "permission-mode-observation";
+  | "permission-mode-observation"
+  | "in-flight-record";
 
 export interface GcCandidate {
   filePath: string;
@@ -123,6 +147,7 @@ export interface GcResult {
   delegationsDir: string;
   adoptionLedgerDir: string;
   permissionModeObservationsDir: string;
+  inflightRecordsDir: string;
   candidates: GcCandidate[];
   /** Delegation-sweep files inspected but left in place because they could not be parsed. */
   unparseable: GcUnparseable[];
@@ -191,6 +216,28 @@ function staleFilesByMtime(
  */
 const SESSION_ID_BASENAME_RE = /^[A-Za-z0-9][A-Za-z0-9_-]*$/;
 
+/**
+ * Shared preamble every gc status reader below stands on: read a
+ * candidate file (rejecting a symlink the same way every marker read in
+ * this pack does) and parse it as a JSON object. Both the delegation and
+ * in-flight-record readers apply their own, artifact-specific
+ * classification on top of this; a file that fails here is `unparseable`
+ * to both, uniformly, before either ever looks at its fields.
+ */
+function readJsonRecordOrUnparseable(
+  filePath: string,
+): { ok: true; body: Record<string, unknown> } | { ok: false; reason: string } {
+  const read = readRegularFileRejectingSymlink(filePath);
+  if (read.kind !== "ok") {
+    return { ok: false, reason: `could not read ${filePath} (${read.kind})` };
+  }
+  const parsed = safeJsonParse(read.content);
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return { ok: false, reason: "not a JSON object" };
+  }
+  return { ok: true, body: parsed as Record<string, unknown> };
+}
+
 type DelegationFileStatus =
   | { kind: "expired"; reason: string }
   | { kind: "valid" }
@@ -206,15 +253,11 @@ type DelegationFileStatus =
  * marker gc cannot understand is never deleted (mutation probe M2).
  */
 function readDelegationStatus(filePath: string, cutoffMs: number, nowMs: number): DelegationFileStatus {
-  const read = readRegularFileRejectingSymlink(filePath);
-  if (read.kind !== "ok") {
-    return { kind: "unparseable", reason: `could not read ${filePath} (${read.kind})` };
+  const read = readJsonRecordOrUnparseable(filePath);
+  if (!read.ok) {
+    return { kind: "unparseable", reason: read.reason };
   }
-  const parsed = safeJsonParse(read.content);
-  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
-    return { kind: "unparseable", reason: "not a JSON object" };
-  }
-  const segments = parseDelegationApprovedBy((parsed as Record<string, unknown>)["approvedBy"]);
+  const segments = parseDelegationApprovedBy(read.body["approvedBy"]);
   if (!segments.ok) {
     return { kind: "unparseable", reason: segments.reason };
   }
@@ -338,6 +381,143 @@ function sweepDelegations(
   return { candidates, unparseable, kept };
 }
 
+type InflightRecordStatus =
+  | { kind: "stale"; reason: string }
+  | { kind: "fresh" }
+  | { kind: "unparseable"; reason: string };
+
+/**
+ * Clock-skew tolerance for a record's `approvedAt`, mirroring
+ * `verifyInflightRecord`'s own tolerance in inflight-records.ts (not
+ * re-exported through the pack barrel, so this stays a small duplicated
+ * literal rather than a cross-file import): a record dated further in
+ * the future than this is treated the same as an aged one, a candidate
+ * for the sweep, since gc does not distinguish "clock skew" from
+ * "genuinely old" — it only asks "is this instant far from now".
+ */
+const INFLIGHT_FUTURE_SKEW_MS = 5 * 60 * 1000;
+
+/**
+ * Read a `.inflight/<sessionId>/<agentId>` record and classify it
+ * against the FIXED staleness window, without verifying its signature
+ * — mirrors `readDelegationStatus`'s own "gc decides deletion, not
+ * trust" posture. Reads the SIGNED `approvedAt` field, never the
+ * unsigned `startedAt` convenience copy: gc does not check the
+ * signature, so it must not let an editable, unsigned field decide
+ * whether a record looks fresh.
+ */
+function readInflightRecordStatus(filePath: string, nowMs: number): InflightRecordStatus {
+  const read = readJsonRecordOrUnparseable(filePath);
+  if (!read.ok) {
+    return { kind: "unparseable", reason: read.reason };
+  }
+  const approvedAtRaw = read.body["approvedAt"];
+  if (typeof approvedAtRaw !== "string") {
+    return { kind: "unparseable", reason: "missing approvedAt" };
+  }
+  const approvedAtMs = Date.parse(approvedAtRaw);
+  if (!Number.isFinite(approvedAtMs)) {
+    return {
+      kind: "unparseable",
+      reason: `approvedAt is not a valid instant: ${JSON.stringify(approvedAtRaw)}`,
+    };
+  }
+  if (nowMs - approvedAtMs > DEFAULT_INFLIGHT_STALE_AFTER_MS) {
+    return {
+      kind: "stale",
+      reason: `approved ${ageDays(nowMs, approvedAtMs)}d ago (past the 24h in-flight window)`,
+    };
+  }
+  if (approvedAtMs - nowMs > INFLIGHT_FUTURE_SKEW_MS) {
+    return {
+      kind: "stale",
+      reason: `approved at ${approvedAtRaw}, more than ${INFLIGHT_FUTURE_SKEW_MS / 60_000} minutes in the future`,
+    };
+  }
+  return { kind: "fresh" };
+}
+
+/**
+ * Sweep `.inflight/<sessionId>/<agentId>` (stale records, fixed 24h
+ * window). One category (`"in-flight-record"`), keyed off the record's
+ * own `approvedAt` rather than gc's general `cutoffMs`/mtime — see the
+ * module header for why this window is not `--retention-days`-tunable.
+ * Applies the SAME id-shape predicates `listInflightRecords` uses
+ * (`rejectMalformedSessionId`/`rejectMalformedAgentId`, imported rather
+ * than gc's own looser `SESSION_ID_BASENAME_RE`) so this sweep and that
+ * listing never disagree about what counts as a session directory or an
+ * agent record — a symlinked or non-directory session entry, or an
+ * agent basename outside the allowlist, is skipped by both, not just
+ * one.
+ */
+function sweepInflightRecords(
+  generatedDir: string,
+  nowMs: number,
+): { candidates: GcCandidate[]; unparseable: GcUnparseable[]; kept: number } {
+  const inflightDir = path.join(generatedDir, INFLIGHT_RECORD_DIRNAME);
+
+  const candidates: GcCandidate[] = [];
+  const unparseable: GcUnparseable[] = [];
+  let kept = 0;
+
+  // lstat, not the readdir-then-catch shape every sweep above uses on
+  // its own root: a symlinked `.inflight/` must read as absent, the
+  // same defensive posture the record-level reader already takes one
+  // level down for a symlinked record file.
+  let rootStat: fs.Stats;
+  try {
+    rootStat = fs.lstatSync(inflightDir);
+  } catch {
+    return { candidates, unparseable, kept };
+  }
+  if (!rootStat.isDirectory()) {
+    return { candidates, unparseable, kept };
+  }
+
+  let sessionDirents: fs.Dirent[];
+  try {
+    sessionDirents = fs.readdirSync(inflightDir, { withFileTypes: true });
+  } catch {
+    sessionDirents = [];
+  }
+
+  for (const sessionDirent of sessionDirents) {
+    try {
+      rejectMalformedSessionId(sessionDirent.name);
+    } catch {
+      continue;
+    }
+    if (!sessionDirent.isDirectory()) continue;
+    const sessionDir = path.join(inflightDir, sessionDirent.name);
+    let agentDirents: fs.Dirent[];
+    try {
+      agentDirents = fs.readdirSync(sessionDir, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const agentDirent of agentDirents) {
+      if (!agentDirent.isFile()) continue;
+      try {
+        rejectMalformedAgentId(agentDirent.name);
+      } catch {
+        continue;
+      }
+      const full = path.join(sessionDir, agentDirent.name);
+      const status = readInflightRecordStatus(full, nowMs);
+      if (status.kind === "stale") {
+        candidates.push({ filePath: full, category: "in-flight-record", reason: status.reason });
+      } else if (status.kind === "unparseable") {
+        unparseable.push({ filePath: full, category: "in-flight-record", reason: status.reason });
+        kept += 1;
+      } else {
+        kept += 1;
+      }
+    }
+  }
+
+  return { candidates, unparseable, kept };
+}
+
 export function gc(opts: GcOptions = {}): GcResult {
   const retentionDays = opts.retentionDays ?? DEFAULT_RETENTION_DAYS;
   if (!Number.isFinite(retentionDays) || retentionDays < 1) {
@@ -374,6 +554,7 @@ export function gc(opts: GcOptions = {}): GcResult {
     generatedDir,
     PERMISSION_MODE_OBSERVATION_DIRNAME,
   );
+  const inflightRecordsDir = path.join(generatedDir, INFLIGHT_RECORD_DIRNAME);
 
   const candidates: GcCandidate[] = [];
   const unparseable: GcUnparseable[] = [];
@@ -421,6 +602,11 @@ export function gc(opts: GcOptions = {}): GcResult {
   candidates.push(...permissionModeObservations.candidates);
   keptCount += permissionModeObservations.kept;
 
+  const inflightRecords = sweepInflightRecords(generatedDir, nowMs);
+  candidates.push(...inflightRecords.candidates);
+  unparseable.push(...inflightRecords.unparseable);
+  keptCount += inflightRecords.kept;
+
   const removed: string[] = [];
   const failures: Array<{ filePath: string; reason: string }> = [];
   if (opts.apply === true) {
@@ -430,6 +616,19 @@ export function gc(opts: GcOptions = {}): GcResult {
         removed.push(c.filePath);
       } catch (err) {
         failures.push({ filePath: c.filePath, reason: (err as Error).message });
+      }
+    }
+    // Best-effort session-directory cleanup, mirroring
+    // `clearInflightRecord`: a removed in-flight record can leave its
+    // `.inflight/<sessionId>/` parent empty, and nothing else ever
+    // clears that directory.
+    for (const c of candidates) {
+      if (c.category !== "in-flight-record") continue;
+      if (!removed.includes(c.filePath)) continue;
+      try {
+        fs.rmdirSync(path.dirname(c.filePath));
+      } catch {
+        /* not empty, or already gone */
       }
     }
   }
@@ -443,6 +642,7 @@ export function gc(opts: GcOptions = {}): GcResult {
     delegationsDir,
     adoptionLedgerDir,
     permissionModeObservationsDir,
+    inflightRecordsDir,
     candidates,
     unparseable,
     removed,

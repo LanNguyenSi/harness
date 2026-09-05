@@ -80,6 +80,10 @@ function formatEnvironmentSection(report: DoctorReport): string[] {
   // present-but-empty directory still renders the zero-count line
   // (ug-delegations.ts's own doc comment on `delegationsDirPresent`).
   const showUgDeleg = ugDeleg !== undefined && ugDeleg.delegationsDirPresent;
+  const ugInflight = report.ugInflight;
+  // Same "no line for a check that found nothing" convention as
+  // showUgAuto / showUgDeleg: silent unless `.inflight/` actually exists.
+  const showUgInflight = ugInflight !== undefined && ugInflight.inflightDirPresent;
   const drift = report.settingsDrift;
   const hasDriftContent = drift !== undefined && (drift.notes.length > 0 || drift.warnings.length > 0);
   const codexDrift = report.codexConfigDrift;
@@ -91,6 +95,7 @@ function formatEnvironmentSection(report: DoctorReport): string[] {
     !bypassWithoutAutoApprove &&
     !showUgAuto &&
     !showUgDeleg &&
+    !showUgInflight &&
     !hasDriftContent &&
     !hasCodexDriftContent
   )
@@ -148,6 +153,9 @@ function formatEnvironmentSection(report: DoctorReport): string[] {
         ? `  ${marker} delegations on disk: 0`
         : `  ${marker} delegations on disk: ${ugDeleg.total} (${ugDeleg.expired} expired, ${ugDeleg.unreadable} unreadable)`;
     out.push(line);
+  }
+  if (showUgInflight && ugInflight) {
+    out.push(`  ℹ in-flight subagent records on disk: ${ugInflight.total} (${ugInflight.stale} stale)`);
   }
   if (drift) {
     for (const n of drift.notes) out.push(`  ℹ ${n}`);

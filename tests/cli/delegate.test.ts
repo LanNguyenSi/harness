@@ -185,6 +185,26 @@ function manifestWithMaxAge(maxAge: string): Manifest {
   });
 }
 
+/**
+ * `{ mode: session, max_age }` (task 496660c5 review finding): `parseApprovalLifecycle`'s mode-session branch used to return
+ * before `max_age` was ever parsed, so this config silently kept no TTL
+ * at all. `issueDelegation` is the second consumer of the shared parser
+ * (the gate's own `checkOperatorApprovalMarkers` is the first); the fix
+ * reaches its parent-marker check, its default `--ttl`, and its
+ * explicit-`--ttl` ceiling the same way it reaches the gate.
+ */
+function manifestWithModeSessionMaxAge(maxAge: string): Manifest {
+  return parseManifest({
+    version: 1,
+    policy_packs: [
+      {
+        name: "understanding-before-execution",
+        config: { approval_lifecycle: { mode: "session", max_age: maxAge } },
+      },
+    ],
+  });
+}
+
 /** A manifest declaring only `config.mode`, for the stage-time mode-parity tests below. */
 function manifestWithMode(mode: string): Manifest {
   return parseManifest({
@@ -1038,6 +1058,70 @@ describe("issueDelegation - happy path", () => {
       reason: "grounding-mcp unreachable",
     });
     expect(fs.existsSync(result.filePath)).toBe(true);
+  });
+});
+
+describe("issueDelegation under { mode: session, max_age } (task 496660c5 review finding)", () => {
+  // `parseApprovalLifecycle`'s mode-session branch used to return before
+  // `max_age` was ever parsed, so `harness delegate`'s parent-marker
+  // check, default `--ttl`, and explicit-`--ttl` ceiling all silently
+  // saw `maxAgeMs: undefined` under this config, same as no config at
+  // all. Mutation probe P1: reverting `issueDelegation` to ignore
+  // `lifecycle.maxAgeMs` under `legacyMode` (or forcing the parser to
+  // drop `max_age` again on the mode-session branch) turns every test
+  // below red.
+  it("defaults the ttl from max_age under mode: session, not the hardcoded default", async () => {
+    approveParent();
+    const { ledgerAdd } = fakeLedger();
+    const now = new Date("2026-08-28T00:00:00.000Z");
+    const result = await issueDelegation({
+      childSessionId: CHILD,
+      cwd: childCwd,
+      parentSessionId: PARENT,
+      generatedDir,
+      manifest: manifestWithModeSessionMaxAge("2h"),
+      now,
+      ledgerAdd,
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("expected success");
+    expect(result.expiresAt).toBe(new Date(now.getTime() + 2 * 60 * 60 * 1000).toISOString());
+  });
+
+  it("refuses an explicit --ttl above max_age's ceiling under mode: session", async () => {
+    approveParent();
+    const { ledgerAdd } = fakeLedger();
+    const result = await issueDelegation({
+      childSessionId: CHILD,
+      cwd: childCwd,
+      parentSessionId: PARENT,
+      generatedDir,
+      manifest: manifestWithModeSessionMaxAge("1h"),
+      ttlSeconds: 2 * 60 * 60,
+      ledgerAdd,
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("expected refusal");
+    expect(result.reason).toBe("ttl-above-max-age");
+    expect(result.detail).toContain("3600");
+    expect(fs.existsSync(delegationMarkerPathFor(generatedDir, CHILD))).toBe(false);
+  });
+
+  it("refuses with parent-marker-expired when the parent marker has aged past max_age under mode: session", async () => {
+    approveParent({ approvedAt: new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString() });
+    const { ledgerAdd } = fakeLedger();
+    const result = await issueDelegation({
+      childSessionId: CHILD,
+      cwd: childCwd,
+      parentSessionId: PARENT,
+      generatedDir,
+      manifest: manifestWithModeSessionMaxAge("1h"),
+      ledgerAdd,
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("expected refusal");
+    expect(result.reason).toBe("parent-marker-expired");
+    expect(fs.existsSync(delegationMarkerPathFor(generatedDir, CHILD))).toBe(false);
   });
 });
 

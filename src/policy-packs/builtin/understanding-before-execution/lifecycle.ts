@@ -29,7 +29,12 @@ import { InvalidDurationError, parseDurationSeconds } from "../../../policies/in
 //
 // All three fields are optional. An empty list means no per-tool or
 // per-command expiry; an omitted max_age means no TTL. `{ mode: "session" }`
-// is the documented opt-out for operators who want the legacy behaviour.
+// is the documented opt-out for operators who want the legacy behaviour —
+// but it opts out of the tool/bash boundary expiry only. `max_age` still
+// applies under `mode: session` (task 496660c5): a session-scoped install
+// that never hits a listed tool or bash pattern still wants a TTL safety
+// net, and an in-flight subagent's inherited approval (see
+// inflight-records.ts) is checked against the same TTL either way.
 
 export interface ApprovalLifecycle {
   /** Tool-name patterns whose successful PostToolUse expires the marker. */
@@ -68,7 +73,13 @@ export function parseApprovalLifecycle(
   }
   const obj = raw as Record<string, unknown>;
   if (obj["mode"] === "session") {
-    return { expireOnToolMatch: [], expireOnBashMatch: [], legacyMode: true };
+    const maxAgeMs = parseMaxAge(obj["max_age"], stderr);
+    return {
+      expireOnToolMatch: [],
+      expireOnBashMatch: [],
+      ...(maxAgeMs !== undefined && { maxAgeMs }),
+      legacyMode: true,
+    };
   }
   const expireOnToolMatch: string[] = [];
   const list = obj["expire_on_tool_match"];
@@ -99,24 +110,37 @@ export function parseApprovalLifecycle(
       `harness pack hook: config.approval_lifecycle.expire_on_bash_match ignored (expected string[], got ${typeof bashList})\n`,
     );
   }
-  let maxAgeMs: number | undefined;
-  const maxAgeRaw = obj["max_age"];
-  if (typeof maxAgeRaw === "string" && maxAgeRaw.length > 0) {
-    try {
-      maxAgeMs = parseDurationSeconds(maxAgeRaw) * 1_000;
-    } catch (err) {
-      const msg = err instanceof InvalidDurationError ? err.message : String(err);
-      stderr?.write(`harness pack hook: config.approval_lifecycle.max_age ignored: ${msg}\n`);
-    }
-  } else if (maxAgeRaw !== undefined) {
-    stderr?.write(
-      `harness pack hook: config.approval_lifecycle.max_age ignored (expected duration string like "4h", got ${typeof maxAgeRaw})\n`,
-    );
-  }
+  const maxAgeMs = parseMaxAge(obj["max_age"], stderr);
   return {
     expireOnToolMatch,
     expireOnBashMatch,
     ...(maxAgeMs !== undefined && { maxAgeMs }),
     legacyMode: false,
   };
+}
+
+/**
+ * Parse `approval_lifecycle.max_age` into milliseconds. Shared by both the
+ * boundary-lifecycle branch and the `{ mode: "session" }` branch (task
+ * 496660c5) so a malformed value warns identically in either mode.
+ */
+function parseMaxAge(
+  maxAgeRaw: unknown,
+  stderr?: { write: (s: string) => void } | null,
+): number | undefined {
+  if (typeof maxAgeRaw === "string" && maxAgeRaw.length > 0) {
+    try {
+      return parseDurationSeconds(maxAgeRaw) * 1_000;
+    } catch (err) {
+      const msg = err instanceof InvalidDurationError ? err.message : String(err);
+      stderr?.write(`harness pack hook: config.approval_lifecycle.max_age ignored: ${msg}\n`);
+      return undefined;
+    }
+  }
+  if (maxAgeRaw !== undefined) {
+    stderr?.write(
+      `harness pack hook: config.approval_lifecycle.max_age ignored (expected duration string like "4h", got ${typeof maxAgeRaw})\n`,
+    );
+  }
+  return undefined;
 }

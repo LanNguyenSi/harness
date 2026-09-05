@@ -1,0 +1,1 @@
+harness pack hook post-tool-use: expired approval marker for session db1e4ca8 after Bash (bash regex /^echo BOUNDARY/); persisted-report expiry skipped (no reports under <scratch>/tmp.5rId8CSyaj/.understanding-gate/reports)

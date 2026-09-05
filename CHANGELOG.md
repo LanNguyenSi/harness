@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **In-flight subagent records close the mid-session re-arm gap for Agent-tool subagents** (task `496660c5`, ADR amendment "in-flight subagent records close the mid-session re-arm gap" in `docs/decisions/2026-08-27-ug-auto-mode-approval.md`). An Agent-tool subagent shares its parent's `session_id` and cannot itself call `harness approve understanding`; a re-arm trigger firing on the parent mid-task (a boundary tool, a Bash match, or `max_age`) used to delete the parent's marker out from under every subagent still running, stranding it with no way to retry into an approval. Claude Code's `SubagentStart` hook (`harness pack hook subagent-start`) now copies the parent's matched operator approval, at the instant it matches, into a signed record at `<generatedDir>/.inflight/<sessionId>/<agentId>`; `harness pack hook subagent-stop` clears it on `SubagentStop`. `PreToolUse` consults the record only after the operator-marker check has missed and only when the payload names a non-empty `agent_id`, so no record can ever open the gate for a main-line call. A subagent started after the parent re-armed gets no record, this closes the mid-session re-arm stranding subagents without opening a bypass: an orchestrator cannot launder new work through freshly-spawned subagents by re-arming itself, since each record is pinned to the approval state at its own subagent's start, not to whatever the parent holds later. When a subagent's record does not open the gate, the deny text names which of the three verification outcomes actually happened, absent (no record, or one removed), forged (a record present but failing signature verification), or stale (verified but older than the staleness window), instead of always saying "no record", so the agent's next action is informed by the real cause. When the same session is ALSO a delegated child of another parent, the delegation's own retry instruction takes precedence over this subagent sentence: the agent gets exactly one agent-facing instruction, never both stacked together.
+- `harness doctor` reports `in-flight subagent records on disk: N (M stale)` from `<generatedDir>/.inflight/` (`src/cli/doctor/ug-inflight.ts`).
+- `harness gc` sweeps in-flight records older than 24 hours or dated implausibly far in the future, independent of `--retention-days`.
+
+### Fixed
+
+- **`approval_lifecycle.max_age` was silently dropped under `mode: session`** (task `496660c5`). `parseApprovalLifecycle`'s mode-session branch returned before `max_age` was ever parsed, so `{ mode: session, max_age: "4h" }` kept no TTL at all even though the config named one. Both branches now share a `parseMaxAge` helper; `mode: session` still opts out of `expire_on_tool_match`/`expire_on_bash_match` only, exactly as documented, and `max_age` now applies either way. `parseApprovalLifecycle` has two consumers, and both are affected: the gate's own `checkOperatorApprovalMarkers`, and `harness delegate`'s `issueDelegation`, whose parent-marker check, default `--ttl`, and explicit-`--ttl` ceiling all thread through the same `lifecycle.maxAgeMs`, under `{ mode: session, max_age }` this fix also changes `harness delegate`'s default TTL and ceiling, and makes the `parent-marker-expired` refusal reachable where before an over-age parent marker under `mode: session` was accepted indefinitely. This is also the recommended lifecycle for an orchestrator dispatching Agent-tool subagents across a batch of tasks (`mode: session` + `max_age`, with batch `--task` pre-approval as the alternative).
+
+### Changed
+
+- `HookEventSchema` now recognizes `SubagentStart` alongside the existing Claude Code hook events, for the in-flight-record hook above.
+
 ## [0.55.0] - 2026-09-04
 
 ### Added

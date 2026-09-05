@@ -13,6 +13,7 @@ const KNOWN_EVENTS = new Set([
   "PreToolUse",
   "PostToolUse",
   "Stop",
+  "SubagentStart",
   "SubagentStop",
   "PreCompact",
 ]);

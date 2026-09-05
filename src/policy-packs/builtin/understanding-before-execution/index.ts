@@ -40,7 +40,14 @@ export type ApprovalSource =
   | "marker"
   | "ledger"
   | "none"
-  | "recovery-commit";
+  | "recovery-commit"
+  // A subagent's own in-flight record (ADR "TTL, cwd, and subagents",
+  // docs/decisions/2026-08-27-ug-auto-mode-approval.md): the copy of its
+  // parent's approval taken at spawn time, consulted only when the
+  // marker check misses and the payload names an `agent_id` — see
+  // hook-pre-tool-use.ts's in-flight consult and inflight-records.ts's
+  // module header.
+  | "inflight";
 
 export interface ApprovalCheckResult {
   approved: boolean;
@@ -195,3 +202,29 @@ export {
   type VerifyDelegationOptions,
   verifyDelegation,
 } from "./delegation-markers.js";
+
+// Slice 1 of the subagent-gate work: signed records that let an
+// Agent-tool subagent keep the approval its parent held at spawn time,
+// independent of what happens to the parent's own marker afterwards.
+// Own directory, own verifier — same "not consumable by
+// `checkApprovalMarker`" argument as the delegation export above; see
+// inflight-records.ts's module header. Exported through the shim for
+// the same reason: later consumers (SubagentStart/SubagentStop hooks,
+// the PreToolUse blocker) import every sibling gate symbol through it.
+export {
+  INFLIGHT_RECORD_DIRNAME,
+  DEFAULT_INFLIGHT_STALE_AFTER_MS,
+  rejectMalformedAgentId,
+  inflightMarkerIdFor,
+  inflightRecordPathFor,
+  type InflightParentSource,
+  type WriteInflightRecordOptions,
+  type WriteInflightRecordResult,
+  writeInflightRecord,
+  type VerifyInflightRecordOptions,
+  type InflightRecordVerification,
+  verifyInflightRecord,
+  clearInflightRecord,
+  type InflightRecordsSummary,
+  listInflightRecords,
+} from "./inflight-records.js";

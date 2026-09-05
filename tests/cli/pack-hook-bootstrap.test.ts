@@ -11,8 +11,14 @@ import {
   checkHookPause,
   loadManifestOrInjected,
   readStdin,
+  resolveSessionAndAgentIds,
+  resolveSubagentHookContext,
 } from "../../src/cli/pack/hook-bootstrap.js";
 import { parseManifest, type Manifest } from "../../src/schema/index.js";
+
+function noopValidateAgentId(): void {
+  /* accepts anything: only session-id validation ordering is under test */
+}
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -172,6 +178,97 @@ describe("loadManifestOrInjected", () => {
     expect(() =>
       loadManifestOrInjected({ homeDir: tmp }, undefined),
     ).toThrow();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 4. resolveSessionAndAgentIds — validation order
+// ---------------------------------------------------------------------------
+
+describe("resolveSessionAndAgentIds", () => {
+  it("rejects a malformed session_id before ever reporting a missing agent_id, and never echoes the raw id (task 496660c5)", () => {
+    // sessionId is malformed (path traversal) AND agent_id is missing.
+    // rejectMalformedSessionId must run before the agent_id emptiness
+    // check, so the failure is "malformed session_id", not "missing
+    // agent_id" with the raw traversal string echoed back in `sessionId`.
+    const result = resolveSessionAndAgentIds(
+      "harness pack hook: subagent-start",
+      { session_id: "../escape", agent_id: undefined },
+      noopValidateAgentId,
+    );
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("unreachable");
+    expect(result.diagnostic).toMatch(/malformed session_id/);
+    expect(result.diagnostic).not.toMatch(/missing agent_id/);
+    expect(result.sessionId).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 5. resolveSubagentHookContext
+// ---------------------------------------------------------------------------
+
+describe("resolveSubagentHookContext", () => {
+  let tmp: string;
+
+  beforeEach(() => {
+    tmp = fs.mkdtempSync(path.join(os.tmpdir(), "bootstrap-subagent-ctx-"));
+  });
+  afterEach(() => {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  });
+
+  function manifestWithPack(): Manifest {
+    return parseManifest({
+      version: 1,
+      policy_packs: [{ name: "understanding-before-execution", enabled: true, config: {} }],
+    });
+  }
+
+  it("honours the pause sentinel before resolving ids or pack context", () => {
+    const generatedDir = path.join(tmp, "harness.generated");
+    fs.mkdirSync(generatedDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(generatedDir, ".harness-paused"),
+      pauseSentinelBody(null),
+    );
+    const stderr = makeStderr();
+
+    const result = resolveSubagentHookContext(
+      "harness pack hook: subagent-start",
+      "subagent-start",
+      "understanding-before-execution",
+      { session_id: "sess-1", agent_id: "agent-1" },
+      noopValidateAgentId,
+      { manifest: manifestWithPack(), generatedDir, stderr: stderr.stream },
+    );
+
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("unreachable");
+    expect(result.diagnostic).toMatch(/paused/);
+    expect(result.sessionId).toBeNull();
+    expect(result.agentId).toBeNull();
+  });
+
+  it("resolves sessionId, agentId, declared pack, and generatedDir when unpaused and ids/context are valid", () => {
+    const generatedDir = path.join(tmp, "harness.generated");
+    const stderr = makeStderr();
+
+    const result = resolveSubagentHookContext(
+      "harness pack hook: subagent-start",
+      "subagent-start",
+      "understanding-before-execution",
+      { session_id: "sess-1", agent_id: "agent-1" },
+      noopValidateAgentId,
+      { manifest: manifestWithPack(), generatedDir, stderr: stderr.stream },
+    );
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("unreachable");
+    expect(result.context.sessionId).toBe("sess-1");
+    expect(result.context.agentId).toBe("agent-1");
+    expect(result.context.generatedDir).toBe(generatedDir);
+    expect(result.context.declared.name).toBe("understanding-before-execution");
   });
 });
 

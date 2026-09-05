@@ -1,0 +1,20 @@
+2026-09-05T07:24:33Z [pre-tool-use] harness pack hook: task-scoped check: no active-claim recorded; task-scoped check skipped
+2026-09-05T07:24:33Z [pre-tool-use] harness pack hook: approved via marker db1e4ca8: approved at 2026-09-05T07:24:01.260Z by harness-approve-cli, signature verified, allowing.
+2026-09-05T07:24:34Z [post-tool-use] harness pack hook post-tool-use: Bash command did not match any expire_on_bash_match regex, skipping
+2026-09-05T07:24:37Z [pre-tool-use] harness pack hook: task-scoped check: no active-claim recorded; task-scoped check skipped
+2026-09-05T07:24:37Z [pre-tool-use] harness pack hook: approved via marker db1e4ca8: approved at 2026-09-05T07:24:01.260Z by harness-approve-cli, signature verified, allowing.
+2026-09-05T07:24:41Z [subagent-start] harness pack hook: subagent-start: wrote in-flight record for agent a9e89f95ef1b4b5f5 (parent=session)
+2026-09-05T07:24:41Z [post-tool-use] harness pack hook post-tool-use: expired approval marker for session db1e4ca8 after Bash (bash regex /^echo BOUNDARY/); persisted-report expiry skipped (no reports under <scratch>/tmp.5rId8CSyaj/.understanding-gate/reports)
+2026-09-05T07:24:43Z [pre-tool-use] harness pack hook: task-scoped check: no active-claim recorded; task-scoped check skipped
+2026-09-05T07:24:43Z [pre-tool-use] harness pack hook: in-flight subagent record for agent a9e89f95ef1b4b5f5 (in-flight record matched: agent a9e89f95ef1b4b5f5 (general-purpose), parent=session, approved at 2026-09-05T07:24:41.252Z), allowing.
+2026-09-05T07:24:51Z [post-tool-use] harness pack hook post-tool-use: Bash command did not match any expire_on_bash_match regex, skipping
+2026-09-05T07:24:56Z [pre-tool-use] harness pack hook: task-scoped check: no active-claim recorded; task-scoped check skipped
+2026-09-05T07:24:56Z [pre-tool-use] harness pack hook: in-flight subagent record for agent a9e89f95ef1b4b5f5 (in-flight record matched: agent a9e89f95ef1b4b5f5 (general-purpose), parent=session, approved at 2026-09-05T07:24:41.252Z), allowing.
+2026-09-05T07:24:56Z [post-tool-use] harness pack hook post-tool-use: Bash command did not match any expire_on_bash_match regex, skipping
+2026-09-05T07:25:02Z [pre-tool-use] harness pack hook: task-scoped check: no active-claim recorded; task-scoped check skipped
+2026-09-05T07:25:02Z [pre-tool-use] harness pack hook: in-flight subagent record for agent a9e89f95ef1b4b5f5 (in-flight record matched: agent a9e89f95ef1b4b5f5 (general-purpose), parent=session, approved at 2026-09-05T07:24:41.252Z), allowing.
+2026-09-05T07:25:07Z [subagent-stop] harness pack hook: subagent-stop: cleared in-flight record for agent a9e89f95ef1b4b5f5
+2026-09-05T07:25:08Z [pre-tool-use] harness pack hook: task-scoped check: no active-claim recorded; task-scoped check skipped
+2026-09-05T07:25:08Z [pre-tool-use] harness pack hook: BLOCK — no approval marker for session db1e4ca8; no reports found at <scratch>/tmp.5rId8CSyaj/.understanding-gate/reports; grounding-mcp not declared in manifest
+2026-09-05T07:25:22Z [pre-tool-use] harness pack hook: task-scoped check: no active-claim recorded; task-scoped check skipped
+2026-09-05T07:25:22Z [pre-tool-use] harness pack hook: ASK: operator-approval command, deferring to the interactive permission prompt
