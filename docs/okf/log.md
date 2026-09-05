@@ -2,6 +2,38 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-09-05T09:48:35Z, release 0.56.0 (commit `a64e5ea`) re-verification:
+  the release commit only moved `[Unreleased]` into a dated `[0.56.0]`
+  section (no wording change), and the immediately preceding merge
+  `0199615` (task `496660c5`, in-flight subagent records) had already
+  changed `docs/CLI.md`, `src/cli/index.ts`, `src/cli/doctor/index.ts`,
+  `src/cli/pack/hook-pre-tool-use.ts`, `auto-approve-path.ts`, and
+  `hook-bootstrap.ts` without re-verifying three docs that list them as
+  sources. Seven docs went STALE for one or the other reason:
+  `codex-adapter-parity-gaps.md`, `gate-fail-posture-matrix.md`,
+  `pause-vs-gate-kill-switch.md`, and `policy-engine-producer-wiring.md`
+  cite only `CHANGELOG.md`, whose cited historical entries (up to
+  0.45.0) are untouched by the release commit; timestamp-only re-stamp.
+  `debug-verb-selection.md` and `understanding-gate-auto-mode-signals.md`
+  were re-read against every changed source (`docs/CLI.md`'s new `gc`
+  and `subagent-start`/`subagent-stop` rows, the new CLI subcommands,
+  the doctor `ugInflight` line, `hook-bootstrap.ts`'s new helpers): none
+  of their claims (debug verbs, `permission_mode` read sites) reference
+  any of the new code; timestamp-only re-stamp. `evidence-ledger-trust-boundary.md`
+  DID drift: its "Understanding gate" paragraph enumerated the marker
+  and the auto-approval marker as the only two ways the gate opens, but
+  `hook-pre-tool-use.ts` now also consults a third, signed in-flight
+  subagent record (`inflight-records.ts`, added to `sources`) copied
+  from a valid parent approval by `harness pack hook subagent-start`;
+  added one sentence naming it as a third gate-opener whose authority
+  still traces back to a trusted-process-written marker, preserving the
+  stated invariant, and re-stamped. `policy-engine-producer-wiring.md`'s
+  `src/cli/validate/checks.ts:306-337` citation was checked and stayed
+  (`checkSolutionAcceptanceProducer` still spans those lines), so only its
+  timestamp moved.
+  `okf-kit check --json docs/okf` reports 0 errors, 0 warnings after
+  this commit.
+
 - 2026-09-05T08:06:16Z, task `496660c5` (subagent-gate T-004): fixed
   `parseApprovalLifecycle` dropping `max_age` under `mode: session`
   (both branches now share a `parseMaxAge` helper). Re-verified
