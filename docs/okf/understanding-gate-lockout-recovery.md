@@ -3,7 +3,7 @@ type: runbook
 title: Understanding-gate lockout recovery
 description: Operator procedure to unblock a session locked by the understanding-before-execution PreToolUse gate via `harness approve understanding`, including the 6-tier session-id resolution and the expiry semantics that re-arm the gate.
 tags: [runbook, understanding-gate, lockout, recovery, operator]
-timestamp: 2026-09-02T06:04:54Z
+timestamp: 2026-09-05T08:06:16Z
 sources:
   - src/cli/pack/auto-approve-path.ts
   - src/cli/approve/understanding.ts
@@ -15,10 +15,16 @@ sources:
   - src/io/generated-dir.ts
   - src/policy-packs/builtin/understanding-before-execution/task-markers.ts
   - src/policy-packs/builtin/understanding-before-execution/persisted-reports.ts
+  - src/policy-packs/builtin/understanding-before-execution/lifecycle.ts
+  - src/policy-packs/builtin/understanding-before-execution/inflight-records.ts
   - src/policy-packs/builtin/understanding-before-execution.ts
   - src/cli/pack/hook-post-tool-use.ts
   - src/cli/pack/hook-pre-tool-use.ts
   - src/cli/pack/hook-codex-pre-tool-use.ts
+  - src/cli/pack/hook-subagent-start.ts
+  - src/cli/pack/hook-subagent-stop.ts
+  - src/cli/doctor/ug-inflight.ts
+  - src/cli/gc/index.ts
   - docs/policy-packs/understanding-before-execution.md
 ---
 
@@ -60,7 +66,7 @@ Recovery is **operator-only**, from a shell the hooks do not gate (the `!`-shell
    2. `$CLAUDE_CODE_SESSION_ID` (the variable Claude Code actually exports; read first so the runtime's id beats a hand-exported legacy value)
    3. `$CLAUDE_SESSION_ID` (legacy peer)
    4. `$CODEX_SESSION_ID` (live Codex session)
-   5. `<generatedDir>/.pending-approval`, staged by the PreToolUse blocker on every block/ask (Claude path: `src/cli/pack/hook-pre-tool-use.ts:788#"writePendingApproval(generatedDir, sessionId);"`; Codex path: `src/cli/pack/hook-codex-pre-tool-use.ts:499#"writePendingApproval(generatedDir, sessionId);"`) and by `harness session-start preflight` on every run with a resolved id (`src/cli/session-start/index.ts`). Deleted after a successful resolve **and** marker write, so a stale id cannot be revived; a failed marker write keeps it for retry.
+   5. `<generatedDir>/.pending-approval`, staged by the PreToolUse blocker on every block/ask (Claude path: `src/cli/pack/hook-pre-tool-use.ts:913#"writePendingApproval(generatedDir, sessionId);"`; Codex path: `src/cli/pack/hook-codex-pre-tool-use.ts:499#"writePendingApproval(generatedDir, sessionId);"`) and by `harness session-start preflight` on every run with a resolved id (`src/cli/session-start/index.ts`). Deleted after a successful resolve **and** marker write, so a stale id cannot be revived; a failed marker write keeps it for retry.
    6. the freshest persisted report under the reports dir whose JSON `sessionId` is non-null **and** whose `approvalStatus` is `pending` (approved/expired reports belong to finished cycles and are never adopted, harness/56f51f2b). The CLI prints a loud "session id was GUESSED" warning naming the report file — verify it is your live session before trusting the marker.
 
    All six empty → `HarnessExitError`, no guess. Fastest fix per the error text: run `harness preflight` once (it stages `.pending-approval` as a side effect), then re-run `harness approve understanding`.
@@ -85,7 +91,9 @@ Configured per pack via `config.approval_lifecycle` (parsed by `parseApprovalLif
 - **`expire_on_tool_match`** (exact MCP tool names, no wildcards): when a listed tool completes, the `harness pack hook post-tool-use` PostToolUse hook deletes the **session** marker, deletes the finished task's **`task-<taskId>`** marker (when `tool_input.taskId` is present), and flips the persisted report `approved` → `expired` so the audit record agrees with the cleared marker (since task 7402301d the report carries no gate authority, so this flip is audit hygiene, not a second closure). Default list when the block is absent (`DEFAULT_EXPIRE_ON_TOOL_MATCH`, `src/policy-packs/builtin/understanding-before-execution.ts:510-519`): `mcp__agent-tasks__task_finish`, `task_abandon`, `pull_requests_merge`, `tasks_transition` (transition only expires when `tool_input.status === "done"`). PostToolUse fires only for tools that actually ran.
 - **`expire_on_bash_match`** (regex list vs `Bash` `tool_input.command`, e.g. `gh pr merge`): same expiry effects; an invalid regex is skipped with a warning.
 - **`max_age`** (duration string like `"4h"`): `checkApprovalMarker` treats a marker whose `approvedAt` is older as expired (`matched:false`, detail `expired: age Xm > max Ym`). Applies uniformly to task-scoped and session-scoped markers (`checkOperatorApprovalMarkers` is shared by the Claude and Codex hooks). Omitted = no TTL. A marker with an unreadable body skips the freshness check (existence wins).
-- **`{ mode: "session" }`**: explicit legacy opt-out — no expiry hook is emitted at all; one approval lasts the session.
+- **`{ mode: "session" }`**: explicit legacy opt-out from `expire_on_tool_match` / `expire_on_bash_match` only, no boundary-tool or Bash-match expiry hook is emitted. **`max_age` still applies under `mode: session`**: a `{ mode: "session", max_age: "4h" }` config expires on schedule same as the boundary-lifecycle branch, via the same `parseMaxAge` helper both branches call (task `496660c5`, `CHANGELOG.md` and the ADR amendment "in-flight subagent records close the mid-session re-arm gap" in `docs/decisions/2026-08-27-ug-auto-mode-approval.md`).
 
 **Scope summary.** The *session* marker is session-scoped: one per `sessionId`, expired by boundary tools/commands or `max_age`. *Task* markers are task-scoped and expire independently: each is keyed to one agent-tasks id, cleared when that task finishes, and inert for the next task because the gate only consults the marker matching the **current** `active-claim` (v1's "any task marker" scan was removed in PR #198). This is why a multi-task session re-locks after every `task_finish` — and why `harness approve understanding --task a b c` (variadic batch pre-approval) is the sanctioned way to approve a homogeneous batch in one operator action: each later `task_start` finds its own marker already present. `harness apply` never touches `.approvals/` or `.pending-approval`, so re-applies do not revoke a live approval.
+
+**In-flight subagent records (task `496660c5`).** An Agent-tool subagent shares its parent's `session_id` and cannot itself hold an approval marker; any of the four re-arm triggers above firing on the parent mid-task would otherwise strand every subagent it had spawned. Claude Code's `SubagentStart` hook (`harness pack hook subagent-start`, `src/cli/pack/hook-subagent-start.ts`) copies the parent's approval, only at the instant it matches `checkOperatorApprovalMarkers`, into a signed record at `<generatedDir>/.inflight/<sessionId>/<agentId>` (`src/policy-packs/builtin/understanding-before-execution/inflight-records.ts`). `PreToolUse` (`src/cli/pack/hook-pre-tool-use.ts`) consults this record, but only after the operator-marker check has already missed AND only when the payload names a non-empty `agent_id`, a main-line call never carries one, so no record ever opens the gate for the orchestrator's own calls. A subagent started after the parent's marker was re-armed gets no record (nothing valid to copy at that moment), which is what stops a re-armed session from laundering new work through freshly-spawned subagents. `SubagentStop` (`harness pack hook subagent-stop`) clears the record when the subagent finishes; absent that, it dies on its own after 24 hours (`DEFAULT_INFLIGHT_STALE_AFTER_MS`). `harness doctor` reports `in-flight subagent records on disk: N (M stale)` (`src/cli/doctor/ug-inflight.ts`); `harness gc` sweeps records older than 24h or implausibly future-dated (`src/cli/gc/index.ts`). Codex has no `SubagentStart`/`SubagentStop` analogue and no record path; its `PreToolUse` hook is unchanged and stays fail-closed. For an orchestrator dispatching subagents across a batch, the recommended lifecycle is `approval_lifecycle: { mode: session, max_age: "4h" }`, one approval for the whole batch, still bounded by a TTL, with batch `--task` pre-approval (above) as the alternative; see `docs/policy-packs/understanding-before-execution.md` "Lifecycle re-arm triggers and in-flight subagents" and the ADR amendment in `docs/decisions/2026-08-27-ug-auto-mode-approval.md` for the full threat model and the rejected alternatives (inherit-without-hardening, exempt subagent sessions, arm-at-start-only by default).
 

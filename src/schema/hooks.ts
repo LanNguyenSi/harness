@@ -8,6 +8,7 @@ export const HookEventSchema = z.enum([
   "PreToolUse",
   "PostToolUse",
   "Stop",
+  "SubagentStart",
   "SubagentStop",
   "PreCompact",
 ]);

@@ -7,7 +7,10 @@ import { runPackHookPostToolUseCli } from "../../src/cli/pack/hook-post-tool-use
 import {
   approvalMarkerPathFor,
   taskApprovalMarkerPathFor,
+  type OperatorMarkerApproval,
+  verifyInflightRecord,
   writeApprovalMarker,
+  writeInflightRecord,
   writeTaskApprovalMarker,
 } from "../../src/policy-packs/builtin/understanding-before-execution-runtime.js";
 import { expandPolicyPacks } from "../../src/policy-packs/expand.js";
@@ -102,6 +105,48 @@ describe("pack hook post-tool-use marker-expiry (agent-tasks/d8ee60ca)", () => {
     expect(result.markerCleared).toBe(true);
     expect(fs.existsSync(markerPath)).toBe(false);
     expect(stderr.read()).toMatch(/expired approval marker for session sess-1/);
+  });
+
+  // Task 496660c5 (subagent-gate slice 3): a boundary crossing must clear
+  // the PARENT's own approval state without touching a still-running
+  // subagent's copy of it. `.inflight/` is a sibling of `.approvals/` /
+  // `.delegations/` for exactly this reason (inflight-records.ts's module
+  // header); this pins that `applyPostToolUseExpiry` never reaches into
+  // it, however many other artifact kinds it clears.
+  it("clears the session marker but leaves .inflight/ records untouched (subagent-gate isolation)", async () => {
+    const generatedDir = path.join(tmp, "harness.generated");
+    writeApprovalMarker(generatedDir, "sess-1", {
+      approvedAt: "2026-05-17T08:00:00Z",
+      approvedBy: "test-operator",
+    });
+    const parentApproval: OperatorMarkerApproval = {
+      matched: true,
+      source: "session",
+      detail: "test parent approval",
+      taskCheckDetail: "",
+      expired: false,
+      forged: false,
+    };
+    const written = writeInflightRecord({
+      generatedDir,
+      sessionId: "sess-1",
+      agentId: "agent-x",
+      agentType: "general-purpose",
+      parent: parentApproval,
+    });
+    expect(written.ok).toBe(true);
+
+    const stderr = bufferStream();
+    const result = await runPackHookPostToolUseCli({
+      manifest: manifestWithPack({ approval_lifecycle: DEFAULT_LIFECYCLE }),
+      stdin: readableFromString(eventBody()),
+      stderr: stderr.stream,
+      generatedDir,
+    });
+    expect(result.matchedExpiry).toBe(true);
+    expect(result.markerCleared).toBe(true);
+    expect(fs.existsSync(approvalMarkerPathFor(generatedDir, "sess-1"))).toBe(false);
+    expect(verifyInflightRecord(generatedDir, "sess-1", "agent-x").matched).toBe(true);
   });
 
   it("logs but does not blow up when the tool matches and no marker is present", async () => {

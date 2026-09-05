@@ -62,6 +62,7 @@ import {
 } from "./toolchain-parity.js";
 import { buildUgAutoApprovals, DEFAULT_RECENT_SESSIONS } from "./ug-auto-approvals.js";
 import { buildUgDelegations } from "./ug-delegations.js";
+import { buildUgInflight } from "./ug-inflight.js";
 import { buildSettingsDrift } from "./settings-drift.js";
 import { buildCodexConfigDrift, isCodexOptedIntoAutoApprove } from "./codex-config-drift.js";
 import { LOCK_BASENAME } from "../../io/harness-lock.js";
@@ -1125,6 +1126,13 @@ function countDiagnostics(report: Omit<DoctorReport, "errorCount" | "warningCoun
   // 8f637efd): always advisory, never an error, see
   // bypass-without-auto-approve.ts.
   if (report.ugBypassWithoutAutoApprove) warningCount++;
+  // ugInflight is informational only (ℹ) and never contributes here: a
+  // stale or skipped record is exactly what `harness gc` sweeps, not a
+  // tampering signal (see ug-inflight.ts / types.ts). Placed after every
+  // line this function's own docs citation anchors rather than beside
+  // its ugDelegations sibling above, for the same reason format.ts's
+  // ugInflight local moved: docs/decisions/2026-08-27-ug-auto-mode-approval.md
+  // cites a line here by exact number.
   if (report.settingsDrift) warningCount += report.settingsDrift.warnings.length;
   if (report.codexConfigDrift) warningCount += report.codexConfigDrift.warnings.length;
   if (report.memory.routerExecutable && !report.memory.routerExecutable.exists) errorCount++;
@@ -1303,6 +1311,13 @@ export async function doctor(opts: DoctorOptions = {}): Promise<DoctorReport> {
   const ugDelegations = understandingPackEnabled
     ? buildUgDelegations(generatedDir, { ...(opts.now !== undefined ? { now: opts.now } : {}) })
     : undefined;
+  // Subagent-gate slice 1: in-flight-records-on-disk metric from
+  // `.inflight/`, same gate and "computed even when the directory is
+  // absent" posture as `ugDelegations` immediately above; see
+  // ug-inflight.ts.
+  const ugInflight = understandingPackEnabled
+    ? buildUgInflight(generatedDir, { ...(opts.now !== undefined ? { now: opts.now } : {}) })
+    : undefined;
   // Task 8f637efd ("Amendment: install default"): bypassPermissions
   // observed (hook-side) but auto_approve missing/mismatched. Same gate
   // and same recentSessions window as ugAutoApprovals, reading a
@@ -1393,6 +1408,7 @@ export async function doctor(opts: DoctorOptions = {}): Promise<DoctorReport> {
     ...(understandingModeEnv !== undefined ? { understandingModeEnv } : {}),
     ...(ugAutoApprovals !== undefined ? { ugAutoApprovals } : {}),
     ...(ugDelegations !== undefined ? { ugDelegations } : {}),
+    ...(ugInflight !== undefined ? { ugInflight } : {}),
     ...(ugBypassWithoutAutoApprove !== undefined ? { ugBypassWithoutAutoApprove } : {}),
     ...(ugAutoApproveMode !== undefined ? { ugAutoApproveMode } : {}),
     ...(settingsDrift !== undefined ? { settingsDrift } : {}),

@@ -40,6 +40,8 @@ import { runPackHookPreToolUseCli } from "./pack/hook-pre-tool-use.js";
 import { runPackHookPostToolUseCli } from "./pack/hook-post-tool-use.js";
 import { runPackHookTrackActiveClaimCli } from "./pack/hook-track-active-claim.js";
 import { runPackHookStayInScopeCli } from "./pack/hook-stay-in-scope.js";
+import { runPackHookSubagentStartCli } from "./pack/hook-subagent-start.js";
+import { runPackHookSubagentStopCli } from "./pack/hook-subagent-stop.js";
 import { runPackHookCodexPreToolUseCli } from "./pack/hook-codex-pre-tool-use.js";
 import { runPackHookCodexPostToolUseCli } from "./pack/hook-codex-post-tool-use.js";
 import { runPackHookCodexStopCli } from "./pack/hook-codex-stop.js";
@@ -1336,6 +1338,42 @@ export function buildProgram(opts: RunOptions = {}): Command {
         if (options.config) cliOpts.configPath = options.config;
         if (options.project) cliOpts.project = options.project;
         await runPackHookStayInScopeCli(cliOpts);
+      },
+    );
+
+  packHookCmd
+    .command("subagent-start")
+    .description(
+      "SubagentStart: read event JSON from stdin, write a signed in-flight record for this (session_id, agent_id) when the parent session currently holds a valid understanding-gate approval (docs/decisions/2026-08-27-ug-auto-mode-approval.md).",
+    )
+    .option("--config <path>", "manifest path (default: ~/.harness/harness.yaml; legacy fallback ~/.claude/harness.yaml)")
+    .option("--project <name>", "apply per-project overrides")
+    .option("--pack <name>", "pack name to evaluate (default: understanding-before-execution)")
+    .action(
+      async (options: { config?: string; project?: string; pack?: string }) => {
+        const cliOpts: Parameters<typeof runPackHookSubagentStartCli>[0] = {};
+        if (options.config) cliOpts.configPath = options.config;
+        if (options.project) cliOpts.project = options.project;
+        if (options.pack) cliOpts.pack = options.pack;
+        await runPackHookSubagentStartCli(cliOpts);
+      },
+    );
+
+  packHookCmd
+    .command("subagent-stop")
+    .description(
+      "SubagentStop: read event JSON from stdin, remove the in-flight record written for this (session_id, agent_id) by subagent-start.",
+    )
+    .option("--config <path>", "manifest path (default: ~/.harness/harness.yaml; legacy fallback ~/.claude/harness.yaml)")
+    .option("--project <name>", "apply per-project overrides")
+    .option("--pack <name>", "pack name to evaluate (default: understanding-before-execution)")
+    .action(
+      async (options: { config?: string; project?: string; pack?: string }) => {
+        const cliOpts: Parameters<typeof runPackHookSubagentStopCli>[0] = {};
+        if (options.config) cliOpts.configPath = options.config;
+        if (options.project) cliOpts.project = options.project;
+        if (options.pack) cliOpts.pack = options.pack;
+        await runPackHookSubagentStopCli(cliOpts);
       },
     );
 
@@ -3017,10 +3055,12 @@ export function buildProgram(opts: RunOptions = {}): Command {
         "(approved/expired) understanding-gate reports, parse-error logs, " +
         "approval markers, expired delegation markers, orphaned delegation " +
         "adoption ledgers, and stale permission-mode observations older than " +
-        "the retention window. Pending reports and anything outside the " +
-        "enumerated harness-owned dirs are never touched (the evidence " +
-        "ledger and solution-acceptance verdict dirs are owned by their " +
-        "producers). Dry-run by default; pass --apply to delete.",
+        "the retention window, plus stale in-flight subagent records (fixed " +
+        "24h window, independent of --retention-days). Pending reports and " +
+        "anything outside the enumerated harness-owned dirs are never " +
+        "touched (the evidence ledger and solution-acceptance verdict dirs " +
+        "are owned by their producers). Dry-run by default; pass --apply " +
+        "to delete.",
     )
     .option("--config <path>", "manifest path (default: ~/.harness/harness.yaml; legacy fallback ~/.claude/harness.yaml)")
     .option(
@@ -3048,6 +3088,7 @@ export function buildProgram(opts: RunOptions = {}): Command {
         result.delegationsDir,
         result.adoptionLedgerDir,
         result.permissionModeObservationsDir,
+        result.inflightRecordsDir,
       ];
       if (result.parseErrorsDir === null) {
         stderr(
@@ -3056,7 +3097,7 @@ export function buildProgram(opts: RunOptions = {}): Command {
       }
       if (result.unparseable.length > 0) {
         stderr(
-          `gc: ${result.unparseable.length} delegation file(s) could not be parsed and were left in place:\n` +
+          `gc: ${result.unparseable.length} file(s) could not be parsed and were left in place:\n` +
             result.unparseable.map((u) => `  [${u.category}] ${u.filePath} (${u.reason})\n`).join(""),
         );
       }

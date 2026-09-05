@@ -1,0 +1,6 @@
+applied 3 file(s):
+  <scratch>/tmp.5rId8CSyaj/harness.generated/settings.json
+  <scratch>/tmp.5rId8CSyaj/harness.generated/MEMORY.md
+  <scratch>/tmp.5rId8CSyaj/harness.generated/policy-packs/understanding-before-execution/instructions.md
+wrote target: <scratch>/tmp.v4DBEmQGJu/settings.json
+harness.lock written to <scratch>/tmp.5rId8CSyaj/harness.lock

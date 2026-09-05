@@ -16,6 +16,7 @@ let approvalsDir: string;
 let delegationsDir: string;
 let adoptionLedgerDir: string;
 let permissionModeObservationsDir: string;
+let inflightRecordsDir: string;
 
 beforeEach(() => {
   tmp = fs.mkdtempSync(path.join(os.tmpdir(), "harness-gc-"));
@@ -26,6 +27,7 @@ beforeEach(() => {
   delegationsDir = path.join(generatedDir, ".delegations");
   adoptionLedgerDir = path.join(generatedDir, ".delegation-adoptions");
   permissionModeObservationsDir = path.join(generatedDir, ".permission-mode-observations");
+  inflightRecordsDir = path.join(generatedDir, ".inflight");
   for (const d of [
     reportsDir,
     parseErrorsDir,
@@ -33,6 +35,7 @@ beforeEach(() => {
     delegationsDir,
     adoptionLedgerDir,
     permissionModeObservationsDir,
+    inflightRecordsDir,
   ]) {
     fs.mkdirSync(d, { recursive: true });
   }
@@ -91,6 +94,28 @@ function writeAgedLedger(sid: string, agedDays: number, entries: string[] = ["en
   const full = writeLedger(sid, entries);
   const then = new Date(NOW.getTime() - agedDays * DAY_MS);
   fs.utimesSync(full, then, then);
+  return full;
+}
+
+/**
+ * A minimal, unsigned in-flight record: gc reads `approvedAt` only,
+ * never a signature. `startedAt` is included too (matching the real
+ * writer's shape) but deliberately set to the SAME instant, since gc no
+ * longer consults it at all.
+ */
+function writeInflightRecord(sid: string, agentId: string, approvedAtAgeHours: number): string {
+  const dir = path.join(inflightRecordsDir, sid);
+  fs.mkdirSync(dir, { recursive: true });
+  const full = path.join(dir, agentId);
+  const approvedAt = new Date(NOW.getTime() - approvedAtAgeHours * 3_600_000).toISOString();
+  fs.writeFileSync(
+    full,
+    `${JSON.stringify(
+      { sessionId: sid, agentId, agentType: "general-purpose", startedAt: approvedAt, approvedAt },
+      null,
+      2,
+    )}\n`,
+  );
   return full;
 }
 
@@ -394,6 +419,206 @@ describe("gc - delegations", () => {
   });
 });
 
+describe("gc - in-flight subagent records (subagent-gate slice 1)", () => {
+  it("ages out a record older than the fixed 24h window, keeps a fresh one", () => {
+    const stale = writeInflightRecord("sid-1", "agent-stale", 25);
+    const fresh = writeInflightRecord("sid-1", "agent-fresh", 1);
+
+    const r = run();
+    const files = r.candidates.filter((c) => c.category === "in-flight-record").map((c) => c.filePath);
+    expect(files).toEqual([stale]);
+    expect(fs.existsSync(fresh)).toBe(true);
+  });
+
+  it("a record dated an hour in the future is a candidate and is removed under --apply (clock skew tolerance)", () => {
+    // Negative age hours puts `approvedAt` in the future.
+    const futureDated = writeInflightRecord("sid-future", "agent-a", -1);
+
+    const dryRun = run();
+    const candidateFiles = dryRun.candidates
+      .filter((c) => c.category === "in-flight-record")
+      .map((c) => c.filePath);
+    expect(candidateFiles).toEqual([futureDated]);
+
+    const r = run({ apply: true });
+    expect(r.removed).toContain(futureDated);
+    expect(fs.existsSync(futureDated)).toBe(false);
+  });
+
+  it("a record dated only 4 minutes in the future stays fresh (inside the skew tolerance)", () => {
+    const nearFuture = writeInflightRecord("sid-near-future", "agent-a", -4 / 60);
+
+    const r = run();
+    const inflightCandidates = r.candidates.filter((c) => c.category === "in-flight-record");
+    expect(inflightCandidates).toEqual([]);
+    expect(fs.existsSync(nearFuture)).toBe(true);
+  });
+
+  it("a record with an unparseable (non-date) approvedAt is reported unparseable, never a candidate", () => {
+    const dir = path.join(inflightRecordsDir, "sid-bad-date");
+    fs.mkdirSync(dir, { recursive: true });
+    const full = path.join(dir, "agent-bad-date");
+    fs.writeFileSync(
+      full,
+      `${JSON.stringify(
+        { sessionId: "sid-bad-date", agentId: "agent-bad-date", agentType: "general-purpose", startedAt: "not-a-date", approvedAt: "not-a-date" },
+        null,
+        2,
+      )}\n`,
+    );
+
+    const r = run({ apply: true });
+    expect(r.candidates.some((c) => c.filePath === full)).toBe(false);
+    expect(r.unparseable.some((u) => u.filePath === full && u.category === "in-flight-record")).toBe(true);
+    expect(fs.existsSync(full)).toBe(true);
+  });
+
+  it("apply removes exactly the stale record (and its now-empty session dir), keeps the fresh one on disk", () => {
+    const stale = writeInflightRecord("sid-stale", "agent-a", 30);
+    const fresh = writeInflightRecord("sid-fresh", "agent-b", 2);
+
+    const r = run({ apply: true });
+    expect(r.removed).toContain(stale);
+    expect(fs.existsSync(stale)).toBe(false);
+    expect(fs.existsSync(path.dirname(stale))).toBe(false); // orphaned session dir cleaned up
+    expect(fs.existsSync(fresh)).toBe(true);
+  });
+
+  it("keys staleness off approvedAt: a record with a refreshed unsigned startedAt but an aged signed approvedAt IS swept by --apply", () => {
+    const dir = path.join(inflightRecordsDir, "sid-tampered");
+    fs.mkdirSync(dir, { recursive: true });
+    const full = path.join(dir, "agent-tampered");
+    fs.writeFileSync(
+      full,
+      JSON.stringify({
+        sessionId: "sid-tampered",
+        agentId: "agent-tampered",
+        agentType: "general-purpose",
+        startedAt: NOW.toISOString(), // refreshed, looks fresh
+        approvedAt: isoDaysAgo(2), // signed field: genuinely aged
+      }),
+    );
+
+    const r = run({ apply: true });
+    expect(r.removed).toContain(full);
+    expect(fs.existsSync(full)).toBe(false);
+  });
+
+  it("a record gc cannot parse is reported as unparseable, never deleted", () => {
+    const dir = path.join(inflightRecordsDir, "sid-corrupt");
+    fs.mkdirSync(dir, { recursive: true });
+    const full = path.join(dir, "agent-corrupt");
+    fs.writeFileSync(full, "not json{{{");
+
+    const r = run({ apply: true });
+    expect(r.candidates.some((c) => c.filePath === full)).toBe(false);
+    expect(r.unparseable.some((u) => u.filePath === full && u.category === "in-flight-record")).toBe(true);
+    expect(fs.existsSync(full)).toBe(true);
+  });
+
+  it("dry-run lists the stale record as a candidate but deletes nothing", () => {
+    const stale = writeInflightRecord("sid-dry", "agent-c", 48);
+    const r = run();
+    expect(r.applied).toBe(false);
+    expect(r.candidates.some((c) => c.filePath === stale)).toBe(true);
+    expect(fs.existsSync(stale)).toBe(true);
+  });
+
+  it("reports inflightRecordsDir in the result", () => {
+    const r = run();
+    expect(r.inflightRecordsDir).toBe(inflightRecordsDir);
+  });
+
+  it("never sweeps a non-session-shaped directory, a stray file, or an agent basename outside the id allowlist", () => {
+    // A directory whose name is not a valid session id (contains "..").
+    const nonSessionDir = path.join(inflightRecordsDir, "sess..bad");
+    fs.mkdirSync(nonSessionDir, { recursive: true });
+    const nonSessionRecord = path.join(nonSessionDir, "agent-x");
+    fs.writeFileSync(
+      nonSessionRecord,
+      JSON.stringify({
+        sessionId: "sess..bad",
+        agentId: "agent-x",
+        agentType: "general-purpose",
+        startedAt: isoDaysAgo(2),
+        approvedAt: isoDaysAgo(2),
+      }),
+    );
+
+    // A stray regular file sitting directly under `.inflight/`, not inside any session directory.
+    const strayFile = path.join(inflightRecordsDir, "stray.txt");
+    fs.writeFileSync(strayFile, "not a session directory");
+
+    // An agent basename outside `rejectMalformedAgentId`'s allowlist (a space).
+    const agentDir = path.join(inflightRecordsDir, "sid-a");
+    fs.mkdirSync(agentDir, { recursive: true });
+    const badAgentRecord = path.join(agentDir, "agent with spaces");
+    fs.writeFileSync(
+      badAgentRecord,
+      JSON.stringify({
+        sessionId: "sid-a",
+        agentId: "agent with spaces",
+        agentType: "general-purpose",
+        startedAt: isoDaysAgo(2),
+        approvedAt: isoDaysAgo(2),
+      }),
+    );
+
+    const r = run({ apply: true });
+    const inflightCandidates = r.candidates.filter((c) => c.category === "in-flight-record");
+    expect(inflightCandidates).toEqual([]);
+    expect(fs.existsSync(nonSessionRecord)).toBe(true);
+    expect(fs.existsSync(strayFile)).toBe(true);
+    expect(fs.existsSync(badAgentRecord)).toBe(true);
+  });
+
+  it("never sweeps through a symlinked session directory: same predicate the listing uses", () => {
+    // The actual record lives OUTSIDE `.inflight/` entirely; the only
+    // path a naive sweep could reach it through is the symlink below.
+    const outsideDir = path.join(tmp, "outside-inflight-sessions", "sid-linked");
+    fs.mkdirSync(outsideDir, { recursive: true });
+    const linkedRecord = path.join(outsideDir, "agent-linked");
+    fs.writeFileSync(
+      linkedRecord,
+      JSON.stringify({
+        sessionId: "sid-linked",
+        agentId: "agent-linked",
+        agentType: "general-purpose",
+        startedAt: isoDaysAgo(2),
+        approvedAt: isoDaysAgo(2),
+      }),
+    );
+    fs.symlinkSync(outsideDir, path.join(inflightRecordsDir, "sid-linked"));
+
+    const r = run({ apply: true });
+    expect(r.candidates.some((c) => c.category === "in-flight-record")).toBe(false);
+    expect(fs.existsSync(linkedRecord)).toBe(true); // the real file, reached only through the symlink, survives
+  });
+
+  it("a symlinked .inflight/ root reads as absent: no candidates, nothing removed", () => {
+    const outsideRoot = path.join(tmp, "outside-inflight-root");
+    const outsideSessionDir = path.join(outsideRoot, "sid-a");
+    fs.mkdirSync(outsideSessionDir, { recursive: true });
+    const outsideRecord = path.join(outsideSessionDir, "agent-a");
+    fs.writeFileSync(
+      outsideRecord,
+      JSON.stringify({
+        sessionId: "sid-a",
+        agentId: "agent-a",
+        agentType: "general-purpose",
+        startedAt: isoDaysAgo(2),
+        approvedAt: isoDaysAgo(2),
+      }),
+    );
+    fs.rmSync(inflightRecordsDir, { recursive: true, force: true }); // drop the real (empty) dir from beforeEach
+    fs.symlinkSync(outsideRoot, inflightRecordsDir);
+
+    const r = run({ apply: true });
+    expect(r.candidates.some((c) => c.category === "in-flight-record")).toBe(false);
+    expect(fs.existsSync(outsideRecord)).toBe(true);
+  });
+});
+
 describe("gc — non-conventional reports dir", () => {
   it("skips the parse-errors sweep when reportsDir is not .understanding-gate/reports", () => {
     // A custom UNDERSTANDING_GATE_REPORT_DIR can point anywhere; the
@@ -507,10 +732,11 @@ describe("gc — CLI wiring", () => {
     await program.parseAsync(["gc", "--config", path.join(tmp, "harness.yaml")], {
       from: "user",
     });
-    expect(err).toMatch(/1 delegation file\(s\) could not be parsed and were left in place/);
+    expect(err).toMatch(/1 file\(s\) could not be parsed and were left in place/);
     expect(err).toMatch(/bad-json-sid/);
     expect(out).toMatch(/\.delegations/);
     expect(out).toMatch(/\.delegation-adoptions/);
     expect(out).toMatch(/\.permission-mode-observations/);
+    expect(out).toMatch(/\.inflight/);
   });
 });

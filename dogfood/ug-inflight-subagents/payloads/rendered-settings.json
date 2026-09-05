@@ -1,0 +1,92 @@
+{
+    "hooks": {
+        "PostToolUse": [
+            {
+                "matcher": "^(?:mcp__agent-tasks__task_create|mcp__agent-tasks__tasks_create|mcp__agent-tasks__tasks_update)$",
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "harness pack hook stay-in-scope",
+                        "timeout": 2
+                    }
+                ]
+            },
+            {
+                "matcher": "^(?:mcp__agent-tasks__task_finish|mcp__agent-tasks__task_abandon|mcp__agent-tasks__pull_requests_merge|mcp__agent-tasks__tasks_transition|Bash)$",
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "UNDERSTANDING_GATE_REPORT_DIR='<scratch>/T/tmp.5rId8CSyaj/.understanding-gate/reports' harness pack hook post-tool-use",
+                        "timeout": 2
+                    }
+                ]
+            },
+            {
+                "matcher": "^(?:mcp__agent-tasks__task_start|mcp__agent-tasks__task_finish|mcp__agent-tasks__task_abandon|mcp__agent-tasks__tasks_transition)$",
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "harness pack hook track-active-claim",
+                        "timeout": 2
+                    }
+                ]
+            }
+        ],
+        "PreToolUse": [
+            {
+                "matcher": "Edit|Write|Bash",
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "UNDERSTANDING_GATE_REPORT_DIR='<scratch>/T/tmp.5rId8CSyaj/.understanding-gate/reports' harness pack hook pre-tool-use",
+                        "timeout": 15
+                    }
+                ]
+            }
+        ],
+        "Stop": [
+            {
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "UNDERSTANDING_GATE_MODE='grill_me' UNDERSTANDING_GATE_REPORT_DIR='<scratch>/T/tmp.5rId8CSyaj/.understanding-gate/reports' understanding-gate-claude-stop",
+                        "timeout": 5
+                    }
+                ]
+            }
+        ],
+        "SubagentStart": [
+            {
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "harness pack hook subagent-start",
+                        "timeout": 2
+                    }
+                ]
+            }
+        ],
+        "SubagentStop": [
+            {
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "harness pack hook subagent-stop",
+                        "timeout": 2
+                    }
+                ]
+            }
+        ],
+        "UserPromptSubmit": [
+            {
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "UNDERSTANDING_GATE_MODE='grill_me' UNDERSTANDING_GATE_PAUSE_FILE='<scratch>/T/tmp.5rId8CSyaj/harness.generated/.harness-paused' understanding-gate-claude-hook",
+                        "timeout": 5
+                    }
+                ]
+            }
+        ]
+    }
+}

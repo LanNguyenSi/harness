@@ -171,6 +171,17 @@ export interface AutoApproveAttemptArgs {
   /** Step 3's verdict: a marker FILE existed and failed signature verification. */
   markerForged: boolean;
   /**
+   * Names WHICH artifact tripped `markerForged` above, so the decline
+   * diagnostic can say what was actually forged instead of always saying
+   * "marker" (review finding: the flag already folds a forged in-flight
+   * subagent record into `markerForged`, but the wording never said so).
+   * Optional and defaults to `"marker"` when `markerForged` is true and
+   * this is omitted, matching the wording every caller produced before
+   * this field existed — the Codex hook still passes only `markerForged`
+   * and is unaffected.
+   */
+  forgedKind?: "marker" | "inflight";
+  /**
    * Slice 3 (agent-tasks 37ad0b05, ADR "Decision: two-key design"): a
    * VALID, unexpired, cwd/task-matching delegation the calling hook has
    * already verified for this child session. Present means key one is
@@ -320,8 +331,10 @@ export async function attemptAutoApproval(
   // its distinct `forged/unsigned marker rejected` diagnostic on disk —
   // `writeApprovalMarker` would atomically overwrite that exact path.
   if (args.markerForged) {
-    note("auto-approval declined: forged/unsigned marker present");
-    return decline("forged marker present");
+    const forgedKind = args.forgedKind ?? "marker";
+    const forgedNoun = forgedKind === "inflight" ? "in-flight record" : "marker";
+    note(`auto-approval declined: forged/unsigned ${forgedNoun} present`);
+    return decline(`forged ${forgedNoun} present`);
   }
 
   // (4) Session consistency (hardening item 1): the PAYLOAD's own

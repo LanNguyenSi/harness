@@ -1520,10 +1520,13 @@ describe("apply — policy_packs expansion (Phase 6 #2)", () => {
     );
     expect(trackActiveClaimCommand).toBe("harness pack hook track-active-claim");
     // v0.18 default-on PostToolUse marker-expiry hook (agent-tasks/d8ee60ca).
+    // Subagent-gate work (task 496660c5) adds SubagentStart/SubagentStop.
     expect(Object.keys(settings.hooks).sort()).toEqual([
       "PostToolUse",
       "PreToolUse",
       "Stop",
+      "SubagentStart",
+      "SubagentStop",
       "UserPromptSubmit",
     ]);
 

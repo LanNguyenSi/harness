@@ -1,0 +1,12 @@
+2026-09-05T07:24:08Z [pre-tool-use] harness pack hook: task-scoped check: no active-claim recorded; task-scoped check skipped
+2026-09-05T07:24:08Z [pre-tool-use] harness pack hook: approved via marker c1b22f74: approved at 2026-09-05T07:24:01.091Z by harness-approve-cli, signature verified, allowing.
+2026-09-05T07:24:08Z [post-tool-use] harness pack hook post-tool-use: Bash command did not match any expire_on_bash_match regex, skipping
+2026-09-05T07:24:11Z [pre-tool-use] harness pack hook: task-scoped check: no active-claim recorded; task-scoped check skipped
+2026-09-05T07:24:11Z [pre-tool-use] harness pack hook: approved via marker c1b22f74: approved at 2026-09-05T07:24:01.091Z by harness-approve-cli, signature verified, allowing.
+2026-09-05T07:24:14Z [subagent-start] harness pack hook: subagent-start: wrote in-flight record for agent a53a0f8ae1694c9be (parent=session)
+2026-09-05T07:24:17Z [pre-tool-use] harness pack hook: task-scoped check: no active-claim recorded; task-scoped check skipped
+2026-09-05T07:24:17Z [pre-tool-use] harness pack hook: approved via marker c1b22f74: approved at 2026-09-05T07:24:01.091Z by harness-approve-cli, signature verified, allowing.
+2026-09-05T07:24:17Z [post-tool-use] harness pack hook post-tool-use: Bash command did not match any expire_on_bash_match regex, skipping
+2026-09-05T07:24:22Z [pre-tool-use] harness pack hook: task-scoped check: no active-claim recorded; task-scoped check skipped
+2026-09-05T07:24:22Z [pre-tool-use] harness pack hook: approved via marker c1b22f74: approved at 2026-09-05T07:24:01.091Z by harness-approve-cli, signature verified, allowing.
+2026-09-05T07:24:25Z [subagent-stop] harness pack hook: subagent-stop: cleared in-flight record for agent a53a0f8ae1694c9be

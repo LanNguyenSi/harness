@@ -11,6 +11,7 @@ import type { UnderstandingModeEnvDivergence } from "./understanding-mode-env.js
 import type { ToolchainParitySection } from "./toolchain-parity.js";
 import type { UgAutoApprovalsSection } from "./ug-auto-approvals.js";
 import type { UgDelegationsSection } from "./ug-delegations.js";
+import type { UgInflightSection } from "./ug-inflight.js";
 import type { SettingsDriftSection } from "./settings-drift.js";
 import type { AutoApproveModeWarning } from "./auto-approve-mode.js";
 import type { BypassWithoutAutoApproveFinding } from "./bypass-without-auto-approve.js";
@@ -440,6 +441,20 @@ export interface DoctorReport {
    */
   ugDelegations?: UgDelegationsSection;
   /**
+   * In-flight subagent records (subagent-gate slice 1) from
+   * `harness.generated/.inflight/`, distinct from both `ugDelegations`
+   * (`.delegations/`) and `ugAutoApprovals` (`.approvals/`). Present
+   * only when the `understanding-before-execution` pack is declared and
+   * enabled (mirrors `ugDelegations`'s gate). `inflightDirPresent`
+   * mirrors `ugDelegations`'s `delegationsDirPresent`: the rendered
+   * line stays silent when `.inflight/` does not exist at all, and
+   * shows the zero-count line when it exists but is empty. Purely
+   * informational (`ℹ`) — an unreadable/skipped entry never rolls a
+   * warning here, since a record aging out unread is exactly what
+   * `harness gc` is for, not a signal of tampering.
+   */
+  ugInflight?: UgInflightSection;
+  /**
    * `bypassPermissions` observed (hook-side, `.permission-mode-
    * observations/`) but `auto_approve` does not cover it (task 8f637efd,
    * "Amendment: install default"). Present only when the pack is
@@ -584,6 +599,7 @@ export type { ClaudeMcpRegistrationSection, ClaudeMcpEntryReport } from "./claud
 export type { UnderstandingModeEnvDivergence } from "./understanding-mode-env.js";
 export type { UgAutoApprovalsSection, AutoApprovalListingEntry } from "./ug-auto-approvals.js";
 export type { UgDelegationsSection } from "./ug-delegations.js";
+export type { UgInflightSection } from "./ug-inflight.js";
 export type { AutoApproveModeWarning } from "./auto-approve-mode.js";
 export type { BypassWithoutAutoApproveFinding } from "./bypass-without-auto-approve.js";
 export type { SettingsDriftSection } from "./settings-drift.js";

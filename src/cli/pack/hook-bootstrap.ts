@@ -20,6 +20,24 @@
 //      Codex shim that sends `raw_input` instead — the exact shape
 //      `hook-codex-post-tool-use.ts`'s own private `resolveToolInput`
 //      already handles).
+//   7. `resolveHookPackContext` — the declared-pack-lookup / enabled-check /
+//      generatedDir-resolution trio that follows manifest load in nearly
+//      every hook. Its shape is closely mirrored by hook-post-tool-use.ts,
+//      hook-track-active-claim.ts, hook-pre-tool-use.ts and the Codex
+//      siblings, which were deliberately left calling their own inline
+//      copies rather than switched over here (out of scope for the task
+//      that added this helper); it was extracted for the
+//      subagent-start/subagent-stop pair, which would otherwise have
+//      re-duplicated it a further two times.
+//   8. `resolveSessionAndAgentIds` — session_id + agent_id parse and
+//      validation shared by subagent-start/subagent-stop. Pack-agnostic
+//      by construction: the agent-id validator is injected by the caller
+//      rather than imported here, so this module stays free of any
+//      understanding-before-execution-specific dependency.
+//   9. `resolveSubagentHookContext` — the pause-check / id-resolution /
+//      pack-context preamble shared verbatim by subagent-start and
+//      subagent-stop, up to the point where their bodies diverge (write
+//      vs. clear). Composes 2, 7, and 8 above.
 //
 // Not used by:
 //   - hook-runtime-reality.ts: its stdin reader uses async iteration + an
@@ -38,6 +56,8 @@
 
 import { checkPauseFromLoader } from "../pause-check.js";
 import { loadManifest, type LoaderOptions } from "../loader.js";
+import { resolveGeneratedDir } from "../../runtime/pending-approval.js";
+import { rejectMalformedSessionId } from "../../runtime/reject-malformed-session-id.js";
 import { PolicyUxSchema, type Manifest, type PolicyUx } from "../../schema/index.js";
 
 // ---------------------------------------------------------------------------
@@ -203,4 +223,223 @@ export function parseConfigUx(
     return undefined;
   }
   return result.data;
+}
+
+// ---------------------------------------------------------------------------
+// 7. Declared-pack-lookup / enabled-check / generatedDir-resolution trio
+// ---------------------------------------------------------------------------
+
+export interface ResolveHookPackContextOptions extends LoaderOptions {
+  pack?: string;
+  generatedDir?: string;
+  manifest?: Manifest;
+}
+
+export interface ResolvedHookPackContext {
+  manifest: Manifest;
+  declared: Manifest["policy_packs"][number];
+  generatedDir: string;
+}
+
+export type ResolveHookPackContextResult =
+  | { ok: true; context: ResolvedHookPackContext }
+  | { ok: false; diagnostic: string };
+
+/**
+ * Load the manifest (or use injection), confirm `packName` is declared and
+ * enabled, and resolve `generatedDir` — the fixed sequence that follows
+ * `loadManifestOrInjected` in nearly every pack hook. Returns a single
+ * failure shape with a ready-to-emit `${hookLabel}: ...` diagnostic instead
+ * of three separate early-return blocks, so a caller wires it as:
+ *
+ *   const ctx = resolveHookPackContext(hookLabel, packName, opts);
+ *   if (!ctx.ok) return noop(ctx.diagnostic, stderr, ...);
+ */
+export function resolveHookPackContext(
+  hookLabel: string,
+  packName: string,
+  opts: ResolveHookPackContextOptions,
+): ResolveHookPackContextResult {
+  let manifest: Manifest;
+  let manifestPath: string | undefined;
+  try {
+    ({ manifest, manifestPath } = loadManifestOrInjected(opts, opts.manifest));
+  } catch (err) {
+    return {
+      ok: false,
+      diagnostic: `${hookLabel}: manifest load failed (${(err as Error).message}), skipping`,
+    };
+  }
+
+  const declared = manifest.policy_packs.find((p) => p.name === packName);
+  if (!declared) {
+    return {
+      ok: false,
+      diagnostic: `${hookLabel}: pack "${packName}" not declared in manifest, skipping`,
+    };
+  }
+  if (!declared.enabled) {
+    return {
+      ok: false,
+      diagnostic: `${hookLabel}: pack "${packName}" is enabled:false, skipping`,
+    };
+  }
+
+  const generatedDir =
+    opts.generatedDir ??
+    (manifestPath !== undefined
+      ? resolveGeneratedDir({
+          ...(opts.homeDir !== undefined ? { homeDir: opts.homeDir } : {}),
+          manifestPath,
+        })
+      : undefined);
+  if (generatedDir === undefined) {
+    return {
+      ok: false,
+      diagnostic: `${hookLabel}: generatedDir unresolvable, skipping`,
+    };
+  }
+
+  return { ok: true, context: { manifest, declared, generatedDir } };
+}
+
+// ---------------------------------------------------------------------------
+// 8. session_id + agent_id parse and validation
+// ---------------------------------------------------------------------------
+
+export interface ResolvedSessionAndAgentIds {
+  sessionId: string;
+  agentId: string;
+}
+
+export type ResolveSessionAndAgentIdsResult =
+  | { ok: true; ids: ResolvedSessionAndAgentIds }
+  | { ok: false; diagnostic: string; sessionId: string | null };
+
+/**
+ * Parse and validate `session_id` + `agent_id` off an event body (the
+ * subagent-start/subagent-stop shared shape). `validateAgentId` is
+ * injected rather than imported here — the agent-id allowlist lives with
+ * the understanding-before-execution pack's in-flight records
+ * (`rejectMalformedAgentId`), and this module stays pack-agnostic on
+ * purpose (see the module header).
+ */
+export function resolveSessionAndAgentIds(
+  hookLabel: string,
+  event: { session_id?: unknown; agent_id?: unknown },
+  validateAgentId: (agentId: string) => void,
+): ResolveSessionAndAgentIdsResult {
+  const sessionId = pickString(event.session_id) ?? "";
+  const agentId = pickString(event.agent_id) ?? "";
+
+  if (sessionId === "") {
+    return { ok: false, diagnostic: `${hookLabel}: missing session_id, skipping`, sessionId: null };
+  }
+  // Validate sessionId right after the emptiness check, before any other
+  // early return, so every ok:false path below carries an already-rejected
+  // (never a raw, unvalidated) sessionId — a caller that echoes `sessionId`
+  // into a diagnostic or a path.join can never see an unvalidated value.
+  try {
+    rejectMalformedSessionId(sessionId);
+  } catch (err) {
+    return {
+      ok: false,
+      diagnostic: `${hookLabel}: malformed session_id (${(err as Error).message}), skipping`,
+      sessionId: null,
+    };
+  }
+  if (agentId === "") {
+    return { ok: false, diagnostic: `${hookLabel}: missing agent_id, skipping`, sessionId };
+  }
+  try {
+    validateAgentId(agentId);
+  } catch (err) {
+    return {
+      ok: false,
+      diagnostic: `${hookLabel}: malformed agent_id (${(err as Error).message}), skipping`,
+      sessionId,
+    };
+  }
+
+  return { ok: true, ids: { sessionId, agentId } };
+}
+
+// ---------------------------------------------------------------------------
+// 9. subagent-start/subagent-stop shared preamble: pause check +
+//    session/agent id resolution + pack-context resolution
+// ---------------------------------------------------------------------------
+
+export interface ResolveSubagentHookContextOptions extends ResolveHookPackContextOptions {
+  stderr: NodeJS.WritableStream;
+}
+
+export interface ResolvedSubagentHookContext {
+  sessionId: string;
+  agentId: string;
+  declared: Manifest["policy_packs"][number];
+  generatedDir: string;
+}
+
+export type ResolveSubagentHookContextResult =
+  | { ok: true; context: ResolvedSubagentHookContext }
+  | { ok: false; diagnostic: string; sessionId: string | null; agentId: string | null };
+
+/**
+ * The three-step preamble subagent-start and subagent-stop both ran
+ * verbatim before the point where their bodies diverge (write vs. clear):
+ * pause-sentinel check, session_id/agent_id resolution, then pack-context
+ * resolution. Extracted to close the residual clone between the two hook
+ * files (review finding, subagent-gate). `verb` names the hook for both
+ * the pause check's own stderr label and the caller-facing "paused,
+ * skipping" diagnostic (e.g. "subagent-start"); `hookLabel` is the fuller
+ * `harness pack hook: <verb>` prefix used in every other diagnostic.
+ *
+ * Each ok:false case reports a `sessionId`/`agentId` pair matching exactly
+ * what the pre-extraction call sites passed to their own `noop()`: both
+ * null on a pause, `sessionId` non-null (once past validation) on a
+ * missing/malformed agent_id, and both non-null once ids resolved but the
+ * pack context failed.
+ */
+export function resolveSubagentHookContext(
+  hookLabel: string,
+  verb: string,
+  packName: string,
+  event: { session_id?: unknown; agent_id?: unknown },
+  validateAgentId: (agentId: string) => void,
+  opts: ResolveSubagentHookContextOptions,
+): ResolveSubagentHookContextResult {
+  if (checkHookPause(verb, opts.stderr, opts, opts.generatedDir).paused) {
+    return {
+      ok: false,
+      diagnostic: `harness paused; ${verb} skipping without evaluating.`,
+      sessionId: null,
+      agentId: null,
+    };
+  }
+
+  const idsResult = resolveSessionAndAgentIds(hookLabel, event, validateAgentId);
+  if (!idsResult.ok) {
+    return {
+      ok: false,
+      diagnostic: idsResult.diagnostic,
+      sessionId: idsResult.sessionId,
+      agentId: null,
+    };
+  }
+  const { sessionId, agentId } = idsResult.ids;
+
+  const ctx = resolveHookPackContext(hookLabel, packName, opts);
+  if (!ctx.ok) {
+    return { ok: false, diagnostic: ctx.diagnostic, sessionId, agentId };
+  }
+
+  return {
+    ok: true,
+    context: {
+      sessionId,
+      agentId,
+      declared: ctx.context.declared,
+      generatedDir: ctx.context.generatedDir,
+    },
+  };
 }

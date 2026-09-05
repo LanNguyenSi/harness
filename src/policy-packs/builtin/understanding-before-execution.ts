@@ -280,7 +280,11 @@ export const configSchema = z
         expire_on_bash_match: z.array(z.string().min(1)).optional(),
         // Safety net for sessions that never hit a listed tool/Bash
         // boundary. Duration strings like `1h`, `4h`, `30m` are parsed
-        // by the post-tool-use hook; format validation lives there.
+        // by `parseApprovalLifecycle`; enforced by the marker freshness
+        // check on PreToolUse (`checkApprovalMarker`'s `max_age`
+        // comparison), not by a PostToolUse hook — `max_age` still
+        // applies under `mode: session`, which only opts out of the
+        // PostToolUse boundary hooks.
         max_age: z.string().min(1).optional(),
       })
       .strict()
@@ -519,6 +523,16 @@ const DEFAULT_EXPIRE_ON_TOOL_MATCH: ReadonlyArray<string> = [
 ];
 
 const POST_TOOL_USE_COMMAND_CLAUDE = "harness pack hook post-tool-use";
+
+// Slice 2 of the subagent-gate work (docs/decisions/2026-08-27-ug-auto-
+// mode-approval.md "TTL, cwd, and subagents"): Claude-only for now (an
+// Agent-tool subagent is a Claude Code concept; Codex has no equivalent
+// event to emit these against). Always emitted alongside the PreToolUse
+// blocker, independent of `approval_lifecycle.mode` — an in-flight
+// record is a copy of whatever approval the parent holds at spawn time,
+// not itself governed by the marker-expiry opt-out.
+const SUBAGENT_START_COMMAND = "harness pack hook subagent-start";
+const SUBAGENT_STOP_COMMAND = "harness pack hook subagent-stop";
 
 // Task cf4cdc93 (Codex parity gap #3): unlike stop/pre-tool-use/
 // post-tool-use, the active-claim tracker and stay-in-scope reminder
@@ -972,6 +986,36 @@ function buildHooks(
       budget_ms: 15000,
       description:
         "Block Edit/Write/Bash until the operator has approved the session's Understanding Report via harness approve understanding. Opens only on the signed approval marker; the persisted JSON report and the evidence-ledger tag (understanding-approved:${SESSION_ID}) are audit evidence.",
+    },
+    // In-flight subagent records (slice 2, docs/decisions/2026-08-27-ug-
+    // auto-mode-approval.md "TTL, cwd, and subagents"). An Agent-tool
+    // subagent shares its parent's session_id but cannot itself call
+    // `harness approve understanding`; SubagentStart copies whatever
+    // approval the parent holds AT SPAWN TIME into a signed record the
+    // subagent can present later even if the parent's own marker expires
+    // mid-flight, and SubagentStop removes it when the subagent finishes.
+    // Always emitted alongside the PreToolUse blocker above — never
+    // gated behind `approval_lifecycle.mode` the way the marker-expiry
+    // hook below is, since a record is a copy of authority, not itself
+    // subject to that opt-out. Claude-only: the Agent tool (and its
+    // SubagentStart/SubagentStop events) has no Codex equivalent.
+    {
+      name: `${HOOK_NAME_PREFIX}:subagent-start`,
+      event: "SubagentStart",
+      command: SUBAGENT_START_COMMAND,
+      blocking: false,
+      budget_ms: 2000,
+      description:
+        "Write a signed in-flight record for a newly-started Agent-tool subagent when the parent session currently holds a valid understanding-gate approval, so the subagent can keep that approval independent of what happens to the parent's own marker afterwards.",
+    },
+    {
+      name: `${HOOK_NAME_PREFIX}:subagent-stop`,
+      event: "SubagentStop",
+      command: SUBAGENT_STOP_COMMAND,
+      blocking: false,
+      budget_ms: 2000,
+      description:
+        "Remove the in-flight record written for this subagent by subagent-start when it finishes.",
     },
     // PostToolUse marker-expiry hook (agent-tasks/d8ee60ca). Fires on the
     // configured task-boundary tools, and (task bea04a03) on a Bash call

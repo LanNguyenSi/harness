@@ -1,0 +1,4 @@
+session: db1e4ca8
+marker:  ✓ <scratch>/tmp.5rId8CSyaj/harness.generated/.approvals/db1e4ca8 (canonical gate signal)
+ledger:  ⚠ skipped (grounding-mcp not declared in manifest) (audit only)
+report:  ⚠ skipped (no reports found at <scratch>/tmp.5rId8CSyaj/.understanding-gate/reports)

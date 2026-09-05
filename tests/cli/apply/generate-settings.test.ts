@@ -490,6 +490,24 @@ describe("generateSettings", () => {
     expect(out.hooks.SessionStart).toHaveLength(1);
     expect(out.hooks.SessionStart?.[0]).not.toHaveProperty("matcher");
   });
+
+  it("accepts a SubagentStart hook and renders it into hooks.SubagentStart (task 496660c5)", () => {
+    const m = manifestOf([
+      {
+        name: "h",
+        event: "SubagentStart",
+        command: "harness pack hook subagent-start",
+        blocking: false,
+        budget_ms: 2000,
+      },
+    ]);
+    const out = generateSettings(m);
+    expect(out.hooks.SubagentStart).toHaveLength(1);
+    expect(out.hooks.SubagentStart?.[0]?.hooks[0]?.command).toBe(
+      "harness pack hook subagent-start",
+    );
+    expect(out.hooks.SubagentStart?.[0]).not.toHaveProperty("matcher");
+  });
 });
 
 // task 7bf47554: Claude Code's settings.json hook `timeout` is documented

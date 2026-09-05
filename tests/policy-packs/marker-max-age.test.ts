@@ -197,6 +197,43 @@ describe("parseApprovalLifecycle (agent-tasks/d8ee60ca)", () => {
     expect(lc.expireOnToolMatch).toEqual([]);
     expect(lc.expireOnBashMatch).toEqual([]);
   });
+
+  it("mode: session keeps max_age as a TTL safety net (task 496660c5)", () => {
+    // Before this fix, the mode-session branch returned early and never
+    // looked at max_age at all, so `{ mode: "session", max_age: "4h" }`
+    // silently dropped the TTL — a session-scoped install had no way to
+    // force re-approval on a schedule.
+    const lc = parseApprovalLifecycle({ mode: "session", max_age: "4h" }, null);
+    expect(lc.legacyMode).toBe(true);
+    expect(lc.maxAgeMs).toBe(4 * 60 * 60 * 1000);
+    expect(lc.expireOnToolMatch).toEqual([]);
+    expect(lc.expireOnBashMatch).toEqual([]);
+  });
+
+  it("mode: session warns on an invalid max_age exactly like the boundary-lifecycle branch", () => {
+    const err = noopStderr();
+    const lc = parseApprovalLifecycle(
+      { mode: "session", max_age: "not-a-duration" },
+      err,
+    );
+    expect(lc.legacyMode).toBe(true);
+    expect(lc.maxAgeMs).toBeUndefined();
+    expect(err.lines.some((l) => l.includes("max_age ignored"))).toBe(true);
+  });
+
+  it("mode: session's invalid-max_age warning is byte-identical to the boundary branch's, not merely similar (task 496660c5 review finding)", () => {
+    // Both branches call the same `parseMaxAge` helper on the same
+    // invalid input; this pins that the two call sites produce the
+    // EXACT same stderr line, not just a matching substring. A future
+    // change that special-cases one branch's wording (e.g. naming
+    // "mode: session" in the warning) would pass every other test in
+    // this file yet break this one.
+    const sessionErr = noopStderr();
+    parseApprovalLifecycle({ mode: "session", max_age: "not-a-duration" }, sessionErr);
+    const boundaryErr = noopStderr();
+    parseApprovalLifecycle({ max_age: "not-a-duration" }, boundaryErr);
+    expect(sessionErr.lines).toEqual(boundaryErr.lines);
+  });
 });
 
 describe("approvalMarkerPathFor — sessionId validation (H5)", () => {
