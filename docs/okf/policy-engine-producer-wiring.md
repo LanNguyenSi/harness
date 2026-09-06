@@ -3,7 +3,7 @@ type: invariant
 title: Policy engine needs its producers wired
 description: "A policy with `requires:` can only be positively satisfied if grounding-mcp is wired under `tools.mcp[]`; an `operator_only: true` policy denies without querying evidence. An unwired evidence producer makes block/require_approval policies DENY every matching event (deny-degraded) unless `risk.degraded_fail_posture: fail_open` is set, while warn policies degrade non-blocking; `harness apply` hard-refuses that misconfiguration."
 tags: [policies, grounding-mcp, degraded-fail-posture, footgun, versions, bash_match, per-repo-attribution]
-timestamp: 2026-09-06T18:54:07Z
+timestamp: 2026-09-06T21:50:34Z
 sources:
   - src/cli/validate/checks.ts
   - src/cli/apply/apply.ts

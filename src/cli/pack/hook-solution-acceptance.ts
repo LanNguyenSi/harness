@@ -37,6 +37,7 @@ import {
   VERDICT_ID_ENV,
   verdictDir as resolveVerdictDir,
 } from "../../policy-packs/builtin/solution-acceptance-runtime.js";
+import { renderReconnectDenyParagraph } from "../../policy-packs/builtin/solution-acceptance-reconnect.js";
 import { resolveGeneratedDir } from "../../io/generated-dir.js";
 import { resolveGitContext } from "../../runtime/git-context.js";
 import { renderAgentFacing } from "../../runtime/agent-facing.js";
@@ -117,6 +118,30 @@ function completionActionLabel(
 }
 
 
+/**
+ * Reconnect-vs-retry guidance appended to the default deny text only when
+ * `showReconnectGuidance` is set (the `gate.verdict === null` case: no
+ * READABLE verdict marker for this id). That single condition covers THREE
+ * readings, deliberately left unresolved here: "solution_evaluate was never
+ * called for this id"; "a solution_evaluate attempt for this id is still
+ * running in the background" (grounding-mcp >= 0.11.0's `{status: "running"}`
+ * reply, or a call that timed out before it ever returned a handle); and "a
+ * marker exists but `readVerdict` rejected it" (an invalid id, a symlinked
+ * marker, a non-regular file, an unreadable file, malformed JSON, or a body
+ * missing `id`/`head`/`ready`; see `readVerdict`,
+ * solution-acceptance-runtime.ts). The paragraph itself is rendered from
+ * `solution-acceptance-reconnect.ts`, the SAME fact source the pack's
+ * `instructions.md` "Reconnecting vs. retrying" section renders from (see
+ * that module's header for the attempt-lock-anchor scope decision this
+ * hook does not read), so the two surfaces cannot silently drift apart;
+ * see docs/policy-packs/solution-acceptance.md, "Agent-facing surface for
+ * the in-flight case", for the decision record.
+ */
+function reconnectGuidanceFor(taskId: string, showReconnectGuidance: boolean): string {
+  if (!showReconnectGuidance) return "";
+  return renderReconnectDenyParagraph(taskId);
+}
+
 function blockJson(
   actionLabel: string,
   toolName: string,
@@ -124,6 +149,7 @@ function blockJson(
   detail: string,
   ux: PolicyUx | undefined,
   sessionId: string,
+  showReconnectGuidance = false,
 ): string {
   let reasonText: string;
   if (ux) {
@@ -139,6 +165,7 @@ function blockJson(
       `  1. If the working tree is dirty, COMMIT first. The verdict is pinned to the HEAD it was evaluated at, so any commit you make afterward makes it stale; commit the change before evaluating so the verdict pins to the final HEAD.\n` +
       `  2. mcp__grounding-mcp__solution_evaluate({ id: "${taskId}" }) — runs \`preflight run --json\` (lint/typecheck/test/audit/secret) and records a HEAD-pinned verdict. A clean run at the current HEAD unblocks this tool; a failing run lists the blockers to fix (then back to step 1).\n` +
       `  3. For \`git push\` / \`gh pr merge\`: the separate preflight-before-push gate is satisfied by a preflight at the current HEAD (its \`at_head\` rule), so refresh it at this same commit with \`harness preflight\` before retrying. Satisfy both push-gates at one HEAD.\n` +
+      reconnectGuidanceFor(taskId, showReconnectGuidance) +
       `\n` +
       `Operator override: \`harness pause\` (yields this and every other gate).`;
   }
@@ -321,6 +348,8 @@ export async function runPackHookSolutionAcceptanceCli(
   const forgedTag = gate.forged ? " [audit: forged/unsigned verdict marker rejected]" : "";
   const diagnostic = `BLOCK — ${gate.reason}${forgedTag}`;
   note(diagnostic);
-  stdout.write(`${blockJson(actionLabel, toolName, taskId, gate.reason, configUx, sessionId)}\n`);
+  stdout.write(
+    `${blockJson(actionLabel, toolName, taskId, gate.reason, configUx, sessionId, gate.verdict === null)}\n`,
+  );
   return { exitCode: 0, blocked: true, diagnostic };
 }
