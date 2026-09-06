@@ -2,6 +2,24 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-09-06T21:06:00Z, task `5c9cad05` round 2 follow-up re-stamp: a
+  style-only fix-up commit (removing em dashes introduced by the round
+  2 re-verification below, no wording or behavior change) touched
+  `src/cli/pack/hook-solution-acceptance.ts` and
+  `docs/policy-packs/solution-acceptance.md` again, so
+  `gate-fail-posture-matrix.md`'s citations of both went stale a second
+  time. Re-verified against the current content: its
+  `src/cli/pack/hook-solution-acceptance.ts` citation (lines 19-22) and
+  its `docs/policy-packs/solution-acceptance.md` citation (lines 56-60)
+  are both still untouched by the punctuation-only edit, which lands
+  entirely inside the `reconnectGuidanceFor` block (source) and the
+  "Agent-facing surface" subsection (doc), well after both cited
+  ranges. `git log -1 --format=%cI` for both files from this worktree
+  reads `2026-09-06T21:04:51Z`; re-stamped to `2026-09-06T21:06:00Z`.
+  `policy-engine-producer-wiring.md` and `pause-vs-gate-kill-switch.md`
+  are untouched this round (neither cites either edited file, only
+  `CHANGELOG.md`, which the style fix-up did not touch).
+
 - 2026-09-06T21:01:47Z, task `5c9cad05` round 2 re-verification (review
   round 1 fix round: `src/cli/pack/hook-solution-acceptance.ts`'s
   reconnect-guidance jsdoc and its `reconnectGuidanceFor` deny text
