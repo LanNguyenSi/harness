@@ -57,9 +57,19 @@
 
 import {
   clearActiveClaim,
-  toolNameMatchesAny,
   writeActiveClaim,
 } from "../../policy-packs/builtin/understanding-before-execution-runtime.js";
+import {
+  ACTIVE_CLAIM_TOOL_NAMES,
+  claimEffectForAgentTasksTool,
+  matchesAgentTasksRuntimeVerb,
+  taskIdFromInput,
+  tasksTransitionStatusFromInput,
+  TASK_ABANDON_TOOL,
+  TASK_FINISH_TOOL,
+  TASK_START_TOOL,
+  TASKS_TRANSITION_TOOL,
+} from "../../runtime/task-providers/agent-tasks.js";
 import { resolveGeneratedDir } from "../../runtime/pending-approval.js";
 import type { Manifest } from "../../schema/index.js";
 import { type LoaderOptions } from "../loader.js";
@@ -73,9 +83,9 @@ import {
 
 const PACK_NAME = "understanding-before-execution";
 
-export const TOOL_NAME_TASK_START = "mcp__agent-tasks__task_start";
-export const TOOL_NAME_TASK_FINISH = "mcp__agent-tasks__task_finish";
-export const TOOL_NAME_TASK_ABANDON = "mcp__agent-tasks__task_abandon";
+export const TOOL_NAME_TASK_START = TASK_START_TOOL;
+export const TOOL_NAME_TASK_FINISH = TASK_FINISH_TOOL;
+export const TOOL_NAME_TASK_ABANDON = TASK_ABANDON_TOOL;
 // Legacy v1 verb: takes an explicit `status` param ("open" | "in_progress" |
 // "review" | "done"). Only `done` is a terminal "work claim released" state
 // in v2 semantics (per task_finish docs: "The work claim is cleared when
@@ -83,29 +93,9 @@ export const TOOL_NAME_TASK_ABANDON = "mcp__agent-tasks__task_abandon";
 // keep the claim, so the hook treats them as no-op (PR #200, agent-tasks
 // 9e06175f). Adding this verb closes the marker-GC gap left by PR #198,
 // which fixed the auto-bypass but did not GC the stale markers themselves.
-export const TOOL_NAME_TASKS_TRANSITION = "mcp__agent-tasks__tasks_transition";
+export const TOOL_NAME_TASKS_TRANSITION = TASKS_TRANSITION_TOOL;
 
-export const TRACK_ACTIVE_CLAIM_TOOLS: readonly string[] = [
-  TOOL_NAME_TASK_START,
-  TOOL_NAME_TASK_FINISH,
-  TOOL_NAME_TASK_ABANDON,
-  TOOL_NAME_TASKS_TRANSITION,
-];
-
-/** Status values that cause `tasks_transition` to behave like task_finish→done. */
-const TASKS_TRANSITION_CLEAR_STATUSES: ReadonlySet<string> = new Set(["done"]);
-
-function extractStatus(toolInput: unknown): string {
-  if (
-    typeof toolInput !== "object" ||
-    toolInput === null ||
-    Array.isArray(toolInput)
-  ) {
-    return "";
-  }
-  const s = (toolInput as Record<string, unknown>)["status"];
-  return typeof s === "string" ? s : "";
-}
+export const TRACK_ACTIVE_CLAIM_TOOLS: readonly string[] = ACTIVE_CLAIM_TOOL_NAMES;
 
 export interface PackHookTrackActiveClaimOptions extends LoaderOptions {
   pack?: string;
@@ -137,18 +127,6 @@ interface ToolEventLite {
   // Codex-shim fallback tolerated alongside tool_input (mirrors the
   // sibling codex-post-tool-use hook's `resolveToolInput`).
   raw_input?: unknown;
-}
-
-function extractTaskId(toolInput: unknown): string {
-  if (
-    typeof toolInput !== "object" ||
-    toolInput === null ||
-    Array.isArray(toolInput)
-  ) {
-    return "";
-  }
-  const tid = (toolInput as Record<string, unknown>)["taskId"];
-  return typeof tid === "string" ? tid : "";
 }
 
 function noop(
@@ -243,9 +221,10 @@ export async function runPackHookTrackActiveClaimCli(
   }
 
   const toolInput = resolveToolInput(event);
-  const taskId = extractTaskId(toolInput);
+  const taskId = taskIdFromInput(toolInput);
+  const claimEffect = claimEffectForAgentTasksTool(toolName, toolInput);
 
-  if (toolNameMatchesAny(toolName, [TOOL_NAME_TASK_START])) {
+  if (claimEffect === "acquire") {
     if (taskId === "") {
       return noop(
         `harness pack hook track-active-claim: task_start without tool_input.taskId, skipping`,
@@ -271,9 +250,8 @@ export async function runPackHookTrackActiveClaimCli(
     };
   }
 
-  if (
-    toolNameMatchesAny(toolName, [TOOL_NAME_TASK_FINISH, TOOL_NAME_TASK_ABANDON])
-  ) {
+  if (claimEffect === "release" &&
+    !matchesTransition(toolName)) {
     clearActiveClaim(generatedDir);
     const diagnostic = `harness pack hook track-active-claim: cleared active-claim after ${toolName}`;
     stderr.write(`${diagnostic}\n`);
@@ -286,9 +264,9 @@ export async function runPackHookTrackActiveClaimCli(
     };
   }
 
-  if (toolNameMatchesAny(toolName, [TOOL_NAME_TASKS_TRANSITION])) {
-    const status = extractStatus(toolInput);
-    if (!TASKS_TRANSITION_CLEAR_STATUSES.has(status)) {
+  if (matchesTransition(toolName)) {
+    const status = tasksTransitionStatusFromInput(toolInput);
+    if (claimEffect !== "release") {
       // open / in_progress / review keep the work claim per v2 semantics
       // (see task_finish docs). Malformed / missing status also falls
       // here, since we cannot prove the agent meant to release.
@@ -313,4 +291,8 @@ export async function runPackHookTrackActiveClaimCli(
     `harness pack hook track-active-claim: tool ${toolName} not tracked, skipping`,
     stderr,
   );
+}
+
+function matchesTransition(toolName: string): boolean {
+  return matchesAgentTasksRuntimeVerb(toolName, ["tasks_transition"]);
 }

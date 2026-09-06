@@ -81,6 +81,10 @@ import {
   verifyMarkerSignature,
   type SignatureVerification,
 } from "../../runtime/approval-signing.js";
+import {
+  DEFAULT_PROTECTED_COMPLETION_TOOLS as ADAPTER_DEFAULT_PROTECTED_COMPLETION_TOOLS,
+  resolveProtectedCompletionTools as resolveAdapterProtectedCompletionTools,
+} from "../../runtime/task-providers/agent-tasks.js";
 import type { PolicyPack } from "../../schema/index.js";
 
 export const PACK_NAME = "solution-acceptance";
@@ -91,12 +95,7 @@ export const PACK_NAME = "solution-acceptance";
  * choke points are reliable: unlike the bash matcher they cannot be evaded
  * by shell indirection.
  */
-export const DEFAULT_PROTECTED_COMPLETION_TOOLS = [
-  "task_finish",
-  "task_submit_pr",
-  "task_merge",
-  "pull_requests_merge",
-] as const;
+export const DEFAULT_PROTECTED_COMPLETION_TOOLS = ADAPTER_DEFAULT_PROTECTED_COMPLETION_TOOLS;
 
 /**
  * Belt-and-suspenders bash matcher for `git push` / `gh pr merge`. Regex on
@@ -130,15 +129,9 @@ export const DEFAULT_PUSH_BASH_RE =
  * surface (mirrors `resolveProtectedBranches` in branch-protection-runtime).
  */
 export function resolveProtectedCompletionTools(pack: PolicyPack): string[] {
-  const raw = (pack.config as Record<string, unknown>)["protected_completion_tools"];
-  if (
-    Array.isArray(raw) &&
-    raw.length > 0 &&
-    raw.every((t) => typeof t === "string" && t.length > 0)
-  ) {
-    return raw as string[];
-  }
-  return [...DEFAULT_PROTECTED_COMPLETION_TOOLS];
+  return resolveAdapterProtectedCompletionTools(
+    (pack.config as Record<string, unknown>)["protected_completion_tools"],
+  );
 }
 
 // ── Verdict marker contract (mirror of grounding-mcp solution-verdict.ts) ──

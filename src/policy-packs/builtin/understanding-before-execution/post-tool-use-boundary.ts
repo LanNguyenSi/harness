@@ -6,6 +6,12 @@
 
 import * as fs from "node:fs";
 import { expandToolNameAliases } from "../../../runtime/tool-name-aliases.js";
+import {
+  matchesAgentTasksRuntimeVerb,
+  taskIdFromInput,
+  tasksTransitionStatusFromInput,
+  tasksTransitionReleasesClaim,
+} from "../../../runtime/task-providers/agent-tasks.js";
 import { type ApprovalLifecycle } from "./lifecycle.js";
 import { approvalMarkerPathFor, clearApprovalMarker } from "./markers.js";
 import { expirePersistedReport } from "./persisted-reports.js";
@@ -31,13 +37,6 @@ import { clearTaskApprovalMarker, taskApprovalMarkerPathFor } from "./task-marke
  * `exec_command` / `functions.exec_command`) passes its own set.
  */
 export const DEFAULT_BASH_TOOL_NAMES: ReadonlySet<string> = new Set(["Bash"]);
-
-/** Canonical agent-tasks v1 tool name whose `tool_input.status` gates
- * marker expiry (see `matchPostToolUseBoundary` below). Not imported
- * from `hook-track-active-claim.ts`'s own `TOOL_NAME_TASKS_TRANSITION`
- * constant: `policy-packs/` may not import from `cli/` (layering rule,
- * `.dependency-cruiser.cjs`). */
-const TASKS_TRANSITION_TOOL_NAME = "mcp__agent-tasks__tasks_transition";
 
 /**
  * Tool-name membership test against `expire_on_tool_match`. No GLOB
@@ -105,8 +104,7 @@ export function extractBashCommandFromToolInput(toolInput: unknown): string {
  * malformed). Task-boundary agent-tasks verbs carry this as a
  * top-level string field. */
 export function extractTaskIdFromToolInput(toolInput: unknown): string {
-  const tid = toolInputRecord(toolInput)?.["taskId"];
-  return typeof tid === "string" ? tid : "";
+  return taskIdFromInput(toolInput);
 }
 
 /** Pull the legacy v1 `tasks_transition` `status` field out of a
@@ -114,8 +112,7 @@ export function extractTaskIdFromToolInput(toolInput: unknown): string {
  * releases the work claim; the caller treats any other value as
  * keep-claim. */
 export function extractTasksTransitionStatusFromToolInput(toolInput: unknown): string {
-  const s = toolInputRecord(toolInput)?.["status"];
-  return typeof s === "string" ? s : "";
+  return tasksTransitionStatusFromInput(toolInput);
 }
 
 export interface PostToolUseBoundaryMatch {
@@ -154,10 +151,8 @@ export function matchPostToolUseBoundary(
   // would fall through to the unconditional `true` branch below and
   // clear the marker on ANY status — a worse bug than a missed match
   // (review finding on task a1348c89).
-  const tasksTransitionStatusOk = toolNameMatchesAny(toolName, [
-    TASKS_TRANSITION_TOOL_NAME,
-  ])
-    ? extractTasksTransitionStatusFromToolInput(toolInput) === "done"
+  const tasksTransitionStatusOk = matchesAgentTasksRuntimeVerb(toolName, ["tasks_transition"])
+    ? tasksTransitionReleasesClaim(toolInput)
     : true;
   const toolNameMatched = rawToolNameMatched && tasksTransitionStatusOk;
   // Bash check only runs when the event is actually a Bash(-alias) call;
