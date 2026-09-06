@@ -210,14 +210,14 @@ pre-existing pack behavior, unchanged here). `instructions.md`
 (`buildInstructions`) stays the audit copy documented above; it renders
 its own "Reconnecting vs. retrying" section verbatim, but that section
 is no longer written by hand separately from this deny paragraph (see
-"Round 2 redesign: one shared fact source" below). Pinned by
+"Round 3 redesign (fixing the round-2 findings): one shared fact source" below). Pinned by
 `tests/cli/pack-hook-solution-acceptance.test.ts` ("the no-verdict deny
 carries the reconnect-vs-retry facts...", including the "joins"
 assertion added in review round 2 against the earlier "refuses a second
 call" misstatement, plus the not-ready/stale/no-verdict-id/
 manifest-load-failure tests' negative assertions).
 
-### Round 2 redesign: one shared fact source (harness/5c9cad05)
+### Round 3 redesign (fixing the round-2 findings): one shared fact source (harness/5c9cad05)
 
 The recurring review-round class above was hand-written deny text
 asserting producer semantics that drift from `instructions.md` and the
