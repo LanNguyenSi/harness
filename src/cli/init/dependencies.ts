@@ -267,8 +267,8 @@ export function dependenciesForCustom(sel: CustomSelection): ProfileDependency[]
     if (dep) push(dep);
   }
   // grounding-mcp auto-add mirror: composeCustom auto-wires grounding-mcp
-  // into tools.mcp whenever policies are selected without it (H3 gate
-  // auto-repair, see composer.ts). Mirror the exact same predicate here so
+  // into tools.mcp whenever its current evidence-consuming policy selections
+  // are chosen without it (see composer.ts). Mirror the exact same predicate here so
   // the dependency-install prompt also covers the binary — without it,
   // policies land in BLOCK mode with a possibly-absent producer binary,
   // causing a fail-closed deadlock the operator was never warned about.

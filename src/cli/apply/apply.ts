@@ -603,9 +603,10 @@ export async function apply(opts: ApplyOptions = {}): Promise<ApplyResult> {
     );
   }
 
-  // grounding-mcp policy-degradation gate (discovery H3): a manifest with
+  // grounding-mcp policy-degradation gate: a manifest with evidence-consuming
   // policies but no grounding-mcp under tools.mcp deploys policies whose
-  // every evaluation degrades at runtime. Since task f1aea826 that means
+  // requires evaluation degrades at runtime. operator_only policies never
+  // query the ledger and do not need this provider. Since task f1aea826 that means
   // warn policies degrade non-blocking while block/require_approval
   // policies DENY every matching event (deny-degraded) — no longer the
   // pre-0.45 allow-everything footgun, but a config that hard-blocks
@@ -621,7 +622,7 @@ export async function apply(opts: ApplyOptions = {}): Promise<ApplyResult> {
           "; ",
         )}. This count includes policies derived from workflows[] (a review_subagent step ` +
         `with spawn: "required" before a merge step) as well as hand-authored ones under ` +
-        `policies:. Wire grounding-mcp under tools.mcp, or remove the policies (for a derived ` +
+        `policies:. Wire grounding-mcp under tools.mcp, or remove the evidence-consuming policies (for a derived ` +
         `policy, set the workflow's spawn to "optional" or "skip" instead). Run \`harness ` +
         "validate` for the full report.",
       EX_FAIL,

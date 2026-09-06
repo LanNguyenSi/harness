@@ -437,13 +437,14 @@ export function composeCustom(sel: CustomSelection): ComposeResult {
   const mcpSet = new Set(sel.mcps);
 
   // H3 gate auto-repair: `harness apply` hard-fails (checkPolicyGroundingMcp)
-  // when manifest.policies.length > 0 AND grounding-mcp is absent from
+  // when evidence-consuming policies are selected AND grounding-mcp is absent from
   // tools.mcp — every policy evaluation would degrade at runtime (since
   // task f1aea826 that means block/require_approval policies DENY every
   // matching event, warn policies degrade non-blocking; before 0.45 it
   // was the universal warn-mode allow-everything footgun). Mirror the
-  // exact same predicate here: if the Custom selection carries any
-  // policy and the operator did not pick grounding-mcp explicitly,
+  // exact same predicate here: all current Custom selections carry
+  // `requires:` evidence, so if a selection carries any policy and the
+  // operator did not pick grounding-mcp explicitly,
   // auto-wire it so the emitted manifest passes apply without a
   // HarnessExitError. An informational advisory replaces the per-policy
   // "requires a producer" warnings that would otherwise fire for the

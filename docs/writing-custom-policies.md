@@ -26,19 +26,21 @@ These four things bite people who skip ahead to the YAML:
    in v1, see [`policy-packs/understanding-before-execution.md`](policy-packs/understanding-before-execution.md)
    for the future contract.
 
-2. **`grounding-mcp` must be wired in `tools.mcp[]`, or every policy
-   evaluation degrades — and what that means depends on the policy's
-   `enforcement:` tier (task f1aea826).** The `requires` evaluator
+2. **Evidence-consuming policies must wire `grounding-mcp` in `tools.mcp[]`,
+   or their evaluation degrades — and what that means depends on the policy's
+   `enforcement:` tier.** The `requires` evaluator
    queries the evidence ledger through grounding-mcp; without it, a
    `warn` policy degrades to the non-blocking `warn-degraded`, while a
    `block`/`require_approval` policy fails CLOSED (`deny-degraded`) and
    DENIES every matching event until the producer is wired — see
    docs/okf/gate-fail-posture-matrix.md. Since `v0.35.0`, `harness
-   apply` refuses outright when the manifest declares `policies:`
-   without `grounding-mcp` wired under `tools.mcp` (in the pre-0.35 era
-   it applied and every policy silently degraded to the then-universal
-   warn-mode, with only a `harness validate` warning to catch it);
-   wire `grounding-mcp` or drop the policies.
+   apply` refuses outright when the manifest declares a policy with
+   `requires:` without `grounding-mcp` wired under `tools.mcp`;
+   `operator_only: true` policies deny without querying the ledger and
+   do not need grounding-mcp. Wire `grounding-mcp` or drop the
+   evidence-consuming policies. Before the tier-aware posture, every
+   unwired evidence policy fell back to the universal non-blocking
+   warn-mode.
 
 3. **Hook wiring is not auto-generated for custom policies.** The
    `harness init` wizard only knows about its five named patterns

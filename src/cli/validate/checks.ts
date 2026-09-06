@@ -267,21 +267,22 @@ function checkBuiltinDrift(manifest: Manifest, opts: CheckOptions): Diagnostic[]
 }
 
 export function checkPolicyGroundingMcp(manifest: Manifest): Diagnostic[] {
-  if (manifest.policies.length === 0) return [];
+  if (!manifest.policies.some((policy) => policy.requires !== undefined)) return [];
   const wired = manifest.tools.mcp.some((m) => m.name === "grounding-mcp");
   if (wired) return [];
+  // This only applies to policies that consume `requires:` evidence.
   // Tier-aware wording since task f1aea826: this is the LAST surface
-  // before an operator ships a manifest whose block/require_approval
-  // policies will hard-deny every matching event (deny-degraded), the
-  // inverse of the pre-0.45 silent non-blocking fallback this message
-  // used to describe. The wording is pinned by a test so it cannot
-  // drift from the runtime contract again (review 2026-08-08, round 2).
+  // before an operator ships a manifest whose evidence-consuming
+  // block/require_approval policies will hard-deny every matching event
+  // (deny-degraded), the inverse of the pre-0.45 silent non-blocking
+  // fallback this message used to describe. operator_only policies deny
+  // without a ledger query and need no grounding-mcp provider.
   return [
     {
       severity: "warning",
       path: "policies",
       message:
-        "policies declared but grounding-mcp not wired: warn policies degrade non-blocking (warn-degraded), but block/require_approval policies will DENY every matching event (deny-degraded) until the producer is wired; risk.degraded_fail_posture: fail_open restores the availability-first behaviour — see docs/okf/gate-fail-posture-matrix.md",
+        "evidence-consuming policies declared but grounding-mcp not wired: warn policies degrade non-blocking (warn-degraded), but block/require_approval policies will DENY every matching event (deny-degraded) until the producer is wired; risk.degraded_fail_posture: fail_open restores the availability-first behaviour — see docs/okf/gate-fail-posture-matrix.md",
     },
   ];
 }
