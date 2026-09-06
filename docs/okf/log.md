@@ -2,7 +2,7 @@
 
 <!-- Add new entries at the top, newest first. -->
 
-- 2026-09-06T13:12:12Z, task `529e85ea` re-verification (reconnect-vs-retry
+- 2026-09-06T13:14:11Z, task `529e85ea` re-verification (reconnect-vs-retry
   prompt/doc addition to the `solution-acceptance` pack): two bundle docs
   cite the two edited files as sources. `codex-adapter-parity-gaps.md`
   cites `src/policy-packs/builtin/solution-acceptance.ts` (its only body
@@ -15,13 +15,29 @@
   verdict" block, well past line 104; the new `.md` section after the
   anti-forgery paragraph, well past line 60), so re-read both citations
   against the changed files: both still match verbatim, no line-number or
-  content drift. Timestamp-only re-stamp on both (`gate-fail-posture-matrix.md`,
-  `codex-adapter-parity-gaps.md`). Verified: `npx okf-kit@0.9.0 check
-  docs/okf --require-anchors` against this branch, run after the commit
-  (harness worktree at branch head), reported the same finding set as an
-  `npx okf-kit@0.9.0 check docs/okf --require-anchors` run against a scratch
-  clone of `origin/master` (`aa4aca6`) with no unrelated diff between the
-  two runs' output.
+  content drift. Timestamp-only re-stamp on both.
+
+  A CHANGELOG.md `[Unreleased]` entry for this same task made
+  `npx okf-kit@0.9.0 check docs/okf --require-anchors`, measured after the
+  commit against this branch (`5a8a89a`) and diffed against the same
+  command run in a scratch clone of `origin/master` (`aa4aca6`), report 3
+  additional `sources-fresh` STALE findings absent from the master
+  baseline: `evidence-ledger-trust-boundary.md`, `pause-vs-gate-kill-
+  switch.md`, `policy-engine-producer-wiring.md` (all three list only
+  `CHANGELOG.md` among sources not already covered above). Re-read each
+  doc's CHANGELOG-citing passages: all cite historical, already-released
+  entries (0.35.0, 0.39.0, 0.44.0, 0.45.0 and named tasks), none touched
+  by the new Unreleased entry; timestamp-only re-stamp on all three.
+  After all 5 re-stamps (`gate-fail-posture-matrix.md`,
+  `codex-adapter-parity-gaps.md`, `evidence-ledger-trust-boundary.md`,
+  `pause-vs-gate-kill-switch.md`, `policy-engine-producer-wiring.md`, all
+  at `2026-09-06T13:14:11Z`), `npx okf-kit@0.9.0 check docs/okf
+  --require-anchors` against this branch reports 80 findings (0 errors, 80
+  warnings, 0 notices), a line-for-line identical finding set (`diff` shows
+  no delta) to the same command run against the `origin/master` scratch
+  clone baseline (`aa4aca6`, also 80 findings): the remaining 80 are
+  pre-existing `anchor-required`/`anchor-required-continuation` warnings,
+  none newly introduced or newly resolved by this task.
 
 - 2026-09-05T09:48:35Z, release 0.56.0 (commit `a64e5ea`) re-verification:
   the release commit only moved `[Unreleased]` into a dated `[0.56.0]`
