@@ -3,7 +3,7 @@ type: runbook
 title: Kill switches — pause vs gate disable
 description: harness has two distinct operator kill switches — `harness pause` (sentinel file, silences ALL hooks temporarily, operator-only enforced in code) vs `harness gate disable` (surgically removes matching hook groups from settings.json with a reversible snapshot); when to use which, exact flags, restore paths, and trust caveats.
 tags: [runbook, pause, gate-disable, kill-switch, operator]
-timestamp: 2026-09-06T20:38:23Z
+timestamp: 2026-09-06T21:01:47Z
 sources:
   - src/runtime/pause-sentinel.ts
   - src/runtime/command-normalize.ts
