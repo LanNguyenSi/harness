@@ -2,6 +2,40 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-09-06T20:38:23Z, task `5c9cad05` re-verification (agent-facing
+  surface for the in-flight reconnect-vs-retry guidance: `blockJson` in
+  `src/cli/pack/hook-solution-acceptance.ts` now carries the three facts
+  on the `gate.verdict === null` deny, gated so it never fires on a
+  not-ready/stale verdict deny; `docs/policy-packs/solution-acceptance.md`
+  gained the decision-record subsection; `CHANGELOG.md` gained one
+  `[Unreleased]` bullet). `gate-fail-posture-matrix.md` cites
+  `src/cli/pack/hook-solution-acceptance.ts` (its body citation, lines
+  19-22, quotes the header's fail-closed contract paragraph, and the
+  table/prose rows naming the file and its deny behavior) and
+  `docs/policy-packs/solution-acceptance.md` (via
+  `docs/policy-packs/solution-acceptance.md` in its `sources:` list): the
+  new `blockJson` logic and the new doc subsection both land after every
+  range this doc quotes, so re-read all citations against the changed
+  files, no line-number or content drift, timestamp-only re-stamp.
+  `policy-engine-producer-wiring.md` and `pause-vs-gate-kill-switch.md`
+  both list only `CHANGELOG.md` among sources this task's files touch;
+  both cite only historical, already-released CHANGELOG entries (0.35.0,
+  0.39.0, 0.43.0-0.45.0 and named tasks), none touched by the new
+  `[Unreleased]` bullet, timestamp-only re-stamp on both. All three
+  re-stamped to `2026-09-06T20:38:23Z`.
+
+  `codex-adapter-parity-gaps.md` and `evidence-ledger-trust-boundary.md`
+  also list `CHANGELOG.md` among their sources but are NOT re-stamped
+  here: their own primary citations (`src/policy-packs/builtin/
+  solution-acceptance.ts` and `src/policy-packs/builtin/
+  solution-acceptance-runtime.ts`, respectively) are untouched by this
+  task and unverified by it (that work belongs to the in-flight,
+  unmerged harness PR #507, `docs/task-adapter-knowledge`); re-stamping
+  either doc's single `timestamp:` field would read as a full
+  re-verification this task did not do. Both therefore keep reporting
+  `sources-fresh` STALE for `CHANGELOG.md` after this task's commit;
+  left for the orchestrator to resolve alongside the PR #507 merge.
+
 - 2026-09-06T13:31:16Z, task `529e85ea` round 2 re-verification (review
   round 1 fix round: version corrections in the pack file, the doc page,
   and CHANGELOG.md; the payload-shape and terminal-and-lock-free rewording
