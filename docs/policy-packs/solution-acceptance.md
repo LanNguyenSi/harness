@@ -178,9 +178,9 @@ this id is still running in the background"; and "a marker exists but
 non-regular file, an unreadable file, malformed JSON, or a body missing
 `id`/`head`/`ready`). grounding-mcp >= 0.11.0's README documents an
 attempt-lock anchor that would let the hook rule out the "still running"
-reading — `<verdict dir>/<id>.attempt-lock` (mode `0600`), beside the
+reading (`<verdict dir>/<id>.attempt-lock`, mode `0600`, beside the
 `<id>.attempt-lock.lock` directory `proper-lockfile` manages, from which
-the producer itself derives its own `running-unconfirmed` status — but
+the producer itself derives its own `running-unconfirmed` status), but
 this change does not read it: doing so is a second cross-repo coupling to
 the producer's lock-file layout, with its own stale-lock semantics to
 absorb, out of scope for a text-surface change (follow-up: narrow this
@@ -203,7 +203,7 @@ The guidance does NOT appear on a not-ready or stale verdict deny: both
 mean a run already completed and produced a marker, so there is no
 "is it still running" ambiguity to resolve there. It also does not appear
 when no verdict id resolved at all (no active claim and
-`SOLUTION_VERDICT_ID` unset) — there is no id to poll for yet — nor on the
+`SOLUTION_VERDICT_ID` unset, so there is no id to poll for yet), nor on the
 manifest-load-failure failsafe deny, nor when an operator has configured a
 custom `ux` block, which replaces the default deny text entirely (a
 pre-existing pack behavior, unchanged here). `instructions.md`
