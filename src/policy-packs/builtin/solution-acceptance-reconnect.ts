@@ -21,8 +21,8 @@
 // Scope: this module documents grounding-mcp's ATTEMPT lifecycle
 // (`solution_evaluate_status` / `solution_evaluate_result`, `attemptId`,
 // `pollAfterMs`, retention), which the pack's producer floor (>= 0.3.2)
-// does not itself guarantee — that lifecycle shipped in grounding-mcp
-// 0.11.0, so every rendering below is explicitly qualified with
+// does not itself guarantee (that lifecycle shipped in grounding-mcp
+// 0.11.0), so every rendering below is explicitly qualified with
 // `RECONNECT_VERSION_QUALIFIER` rather than stated as if it held
 // unconditionally under the pack's own (older) producer floor.
 //
