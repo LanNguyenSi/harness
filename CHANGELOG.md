@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- **`solution-acceptance` policy pack teaches reconnect-vs-retry for `solution_evaluate`** (task `529e85ea-c491-43e9-b871-eb6a51d42e8b`), per grounding-mcp's shipped attempt lifecycle (grounding-mcp >= 0.11.0). The pack's emitted operator instructions (audit copy, `policy-packs/solution-acceptance/instructions.md`, built by `src/policy-packs/builtin/solution-acceptance.ts`) and its human-facing doc (`docs/policy-packs/solution-acceptance.md`) now describe: a `{status:"running", attemptId, id, pollAfterMs}` handle (or a request that timed out with nothing) is polled with `mcp__grounding-mcp__solution_evaluate_status` / `mcp__grounding-mcp__solution_evaluate_result` for the SAME `id` (`attemptId` omitted resolves the latest attempt for that id); `running-unconfirmed` still means keep polling; a new attempt is started only once the previous one is terminal AND the id's lock is free again; `solution_evaluate` is never re-called as a stall workaround, and a human is never escalated to before the advertised `pollAfterMs` has elapsed. The agent-facing channel for this guidance today is grounding-mcp's own tool descriptions (`solution_evaluate_status` / `solution_evaluate_result`, installed 0.11.0); this pack's instructions.md is an operator audit copy, not injected into the solving agent's own prompt. No claim is made that grounding-mcp's separate progress-notification pings solve any specific client's own request timeout; the tool-call lifecycle above is the only mechanism this pack documents as guaranteed.
+  - Pinned by a new test in `tests/policy-packs/solution-acceptance-expand.test.ts` ("teaches reconnect-vs-retry..."): asserts both new tool names appear in the emitted `instructions.md` and that the "Never re-call `solution_evaluate` as a stall workaround" sentence is present, so a mutant dropping either the poll sentence or its "Never" fails this test.
+  - No gate semantics changed: this is prompt/doc text only, `solution-acceptance-runtime.ts` is untouched.
+
 ### Fixed
 
 - **Authority-directory containment is enforced for understanding-gate markers and delegations** (task `6cb8aa2e-083c-4996-bc7e-26f8841b7acf`). Approval, delegation, and adoption-ledger readers now refuse a symlinked or non-directory authority root; `harness doctor` and `harness gc` use the same root rule and do not follow linked `.approvals/`, `.delegations/`, or `.delegation-adoptions/` directories.

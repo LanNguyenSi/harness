@@ -2,6 +2,63 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-09-06T13:31:16Z, task `529e85ea` round 2 re-verification (review
+  round 1 fix round: version corrections in the pack file, the doc page,
+  and CHANGELOG.md; the payload-shape and terminal-and-lock-free rewording
+  in the pack file and the doc page; the CHANGELOG audience wording; the
+  doc-page `running-unconfirmed` wording; three new pinning assertions in
+  the test file). The same 5 docs re-stamped for round 1
+  (`gate-fail-posture-matrix.md`, `codex-adapter-parity-gaps.md`,
+  `evidence-ledger-trust-boundary.md`, `pause-vs-gate-kill-switch.md`,
+  `policy-engine-producer-wiring.md`) cite only the files this round
+  edited again (the two round-1-cited ranges in
+  `src/policy-packs/builtin/solution-acceptance.ts` and
+  `docs/policy-packs/solution-acceptance.md`, both still before this
+  round's edit points; CHANGELOG.md's historical, already-released
+  entries for the other three, still untouched by this round's
+  `[Unreleased]` edit): re-read all citations against the changed files,
+  no line-number or content drift, timestamp-only re-stamp on all 5.
+  Verified: `npx okf-kit@0.9.0 check docs/okf --require-anchors` against
+  this branch reports a line-for-line identical finding set (`diff` shows
+  no delta) to the same command run against a scratch clone of
+  `origin/master` (`aa4aca6`).
+
+- 2026-09-06T13:14:11Z, task `529e85ea` re-verification (reconnect-vs-retry
+  prompt/doc addition to the `solution-acceptance` pack): two bundle docs
+  cite the two edited files as sources. `codex-adapter-parity-gaps.md`
+  cites `src/policy-packs/builtin/solution-acceptance.ts` (its only body
+  citation, finding 6, quotes `completionMatch` lines 100-104 and the
+  write-guard match constants lines 90-91) and `gate-fail-posture-matrix.md`
+  cites `docs/policy-packs/solution-acceptance.md` (its body citation
+  quotes lines 56-60, the `ready && head === current HEAD` deny-set
+  paragraph). This task's new prose was inserted after both cited ranges
+  (the new `.ts` section after `buildInstructions`'s existing "Earning a
+  verdict" block, well past line 104; the new `.md` section after the
+  anti-forgery paragraph, well past line 60), so re-read both citations
+  against the changed files: both still match verbatim, no line-number or
+  content drift. Timestamp-only re-stamp on both.
+
+  A CHANGELOG.md `[Unreleased]` entry for this same task made
+  `npx okf-kit@0.9.0 check docs/okf --require-anchors`, measured after the
+  commit against this branch (`5a8a89a`) and diffed against the same
+  command run in a scratch clone of `origin/master` (`aa4aca6`), report 3
+  additional `sources-fresh` STALE findings absent from the master
+  baseline: `evidence-ledger-trust-boundary.md`, `pause-vs-gate-kill-
+  switch.md`, `policy-engine-producer-wiring.md` (all three list only
+  `CHANGELOG.md` among sources not already covered above). Re-read each
+  doc's CHANGELOG-citing passages: all cite historical, already-released
+  entries (0.35.0, 0.39.0, 0.44.0, 0.45.0 and named tasks), none touched
+  by the new Unreleased entry; timestamp-only re-stamp on all three.
+  After all 5 re-stamps (`gate-fail-posture-matrix.md`,
+  `codex-adapter-parity-gaps.md`, `evidence-ledger-trust-boundary.md`,
+  `pause-vs-gate-kill-switch.md`, `policy-engine-producer-wiring.md`, all
+  at `2026-09-06T13:14:11Z`), `npx okf-kit@0.9.0 check docs/okf
+  --require-anchors` against this branch reports a line-for-line identical
+  finding set (`diff` shows no delta) to the same command run against the
+  `origin/master` scratch clone baseline (`aa4aca6`): the remaining
+  findings are pre-existing `anchor-required`/`anchor-required-continuation`
+  warnings, none newly introduced or newly resolved by this task.
+
 - 2026-09-05T09:48:35Z, release 0.56.0 (commit `a64e5ea`) re-verification:
   the release commit only moved `[Unreleased]` into a dated `[0.56.0]`
   section (no wording change), and the immediately preceding merge

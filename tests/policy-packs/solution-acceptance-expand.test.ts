@@ -69,6 +69,34 @@ describe("solution-acceptance pack — hook expansion", () => {
     expect(file).toBeDefined();
     expect(file!.content).toMatch(/solution_evaluate/);
   });
+
+  it("teaches reconnect-vs-retry: poll status/result with the same id, never re-call solution_evaluate as a stall workaround", () => {
+    const { contribution } = resolve(pack(), "claude-code");
+    const file = contribution.files.find((f) =>
+      f.relativePath.endsWith("policy-packs/solution-acceptance/instructions.md"),
+    );
+    const content = file!.content;
+    // Pins the poll sentence: naming both lookup tools by name. A mutant
+    // that drops this sentence (or either tool name) fails here.
+    expect(content).toMatch(/mcp__grounding-mcp__solution_evaluate_status/);
+    expect(content).toMatch(/mcp__grounding-mcp__solution_evaluate_result/);
+    // Pins the never-re-call-as-a-stall-workaround guidance. A mutant that
+    // rewords this into "re-call solution_evaluate" (dropping the "Never")
+    // fails here.
+    expect(content).toMatch(/Never re-call .solution_evaluate. as a stall workaround/);
+    // Pins the pollAfterMs wait rule. A mutant that inverts it (e.g. "at
+    // most" instead of "at least") fails here.
+    expect(content).toMatch(/Wait at least the returned/);
+    // Pins the terminal-and-lock-free gate. A mutant that reworks the
+    // condition into an unconditional "whenever" (dropping the lock-free
+    // requirement) fails here.
+    expect(content).toMatch(
+      /only once the previous one is terminal and\s+the id.s lock is free/,
+    );
+    // Pins the running-unconfirmed keep-polling rule. A mutant that
+    // rewords it into an escalation instruction fails here.
+    expect(content).toMatch(/running-unconfirmed. still means keep\s+polling, not stall or escalate/);
+  });
 });
 
 describe("solution-acceptance pack — solutionVerdictDir opt (SOLUTION_VERDICT_DIR projection)", () => {
