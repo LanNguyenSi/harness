@@ -159,7 +159,21 @@ describe("generateCodexConfig", () => {
     // (task bea04a03 closed it).
     const m = parseManifest({
       version: 1,
-      policy_packs: [{ name: "understanding-before-execution" }],
+      policy_packs: [{
+        name: "understanding-before-execution",
+        config: {
+          stay_in_scope: {
+            enabled: true,
+            tools: ["mcp__demo_tasks__create"],
+            label_markers: ["review-followup"],
+            description_markers: [],
+            description_window: null,
+            parent_reference_pattern: null,
+            parent_url_pattern: null,
+            messages: { reminder: "Check the current work item.", second_order: "Keep related work together." },
+          },
+        },
+      }],
     });
     const { hooks } = expandPolicyPacks(m, "codex");
     const { content } = generateCodexConfig(parseManifest({ version: 1, hooks }));
@@ -242,7 +256,21 @@ describe("generateCodexConfig", () => {
   it("routes MCP task_create/tasks_update calls (and their variant forms) through the real emitted Codex stay-in-scope matcher (task cf4cdc93 generator-layer pin)", () => {
     const m = parseManifest({
       version: 1,
-      policy_packs: [{ name: "understanding-before-execution" }],
+      policy_packs: [{
+        name: "understanding-before-execution",
+        config: {
+          stay_in_scope: {
+            enabled: true,
+            tools: ["mcp__demo_tasks__create"],
+            label_markers: ["review-followup"],
+            description_markers: [],
+            description_window: null,
+            parent_reference_pattern: null,
+            parent_url_pattern: null,
+            messages: { reminder: "Check the current work item.", second_order: "Keep related work together." },
+          },
+        },
+      }],
     });
     const { hooks } = expandPolicyPacks(m, "codex");
     const { content } = generateCodexConfig(parseManifest({ version: 1, hooks }));
@@ -255,9 +283,9 @@ describe("generateCodexConfig", () => {
     expect(matcher).toBeDefined();
 
     const re = new RegExp(matcher!);
-    expect(re.test("mcp__agent-tasks__task_create")).toBe(true); // canonical
-    expect(re.test("mcp__agent-tasks__.task_create")).toBe(true); // dotted
-    expect(re.test("mcp__agent_tasks__task_create")).toBe(true); // underscore-server
+    expect(re.test("mcp__demo_tasks__create")).toBe(true); // canonical
+    expect(re.test("mcp__demo_tasks__.create")).toBe(true); // dotted
+    expect(re.test("mcp__demo-tasks__create")).toBe(true); // hyphen-server
     expect(re.test("Read")).toBe(false); // negative control: unrelated tool
   });
 

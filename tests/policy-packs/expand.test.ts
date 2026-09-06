@@ -9,14 +9,83 @@ function buildManifest(
   packs: unknown[],
   extraHooks: unknown[] = [],
 ): ReturnType<typeof parseManifest> {
+  // Existing expansion cases exercise unrelated pack mechanics. Give those
+  // fixtures one generic explicit opt-in while dedicated cases below pin the
+  // product's default-off behavior.
+  const withReminder = packs.map((pack) => {
+    if (typeof pack !== "object" || pack === null || (pack as { name?: unknown }).name !== "understanding-before-execution") return pack;
+    const record = pack as { config?: Record<string, unknown> };
+    return {
+      ...record,
+      config: {
+        ...record.config,
+        stay_in_scope: {
+          enabled: true,
+          tools: ["mcp__demo_tasks__create"],
+          label_markers: ["review-followup"],
+          description_markers: [],
+          description_window: null,
+          parent_reference_pattern: null,
+          parent_url_pattern: null,
+          messages: { reminder: "Check the current work item.", second_order: "Keep related work together." },
+        },
+      },
+    };
+  });
   return parseManifest({
     version: 1,
     hooks: extraHooks,
-    policy_packs: packs,
+    policy_packs: withReminder,
   });
 }
 
 describe("expandPolicyPacks", () => {
+  it("does not emit stay-in-scope hooks without an explicit enabled configuration", () => {
+    const manifest = parseManifest({ version: 1, policy_packs: [{ name: "understanding-before-execution" }] });
+    for (const runtime of ["claude-code", "codex"] as const) {
+      expect(expandPolicyPacks(manifest, runtime).hooks.some((hook) => hook.name.includes("stay-in-scope"))).toBe(false);
+    }
+  });
+
+  it("keeps the default Claude and Codex hook rosters distinct", () => {
+    const manifest = parseManifest({ version: 1, policy_packs: [{ name: "understanding-before-execution" }] });
+    const claude = expandPolicyPacks(manifest).hooks;
+    const codex = expandPolicyPacks(manifest, "codex").hooks;
+    expect(claude).toHaveLength(7);
+    expect(claude.map((hook) => hook.event).sort()).toEqual([
+      "PostToolUse", "PostToolUse", "PreToolUse", "Stop", "SubagentStart", "SubagentStop", "UserPromptSubmit",
+    ]);
+    expect(codex).toHaveLength(5);
+    expect(codex.map((hook) => hook.event).sort()).toEqual([
+      "PostToolUse", "PostToolUse", "PreToolUse", "Stop", "UserPromptSubmit",
+    ]);
+  });
+
+  it("escapes configured literal tool names in the Claude matcher", () => {
+    const manifest = parseManifest({
+      version: 1,
+      policy_packs: [{
+        name: "understanding-before-execution",
+        config: {
+          stay_in_scope: {
+            enabled: true,
+            tools: ["mcp__demo_tasks__demo.create"],
+            label_markers: ["review-followup"],
+            description_markers: [],
+            description_window: null,
+            parent_reference_pattern: null,
+            parent_url_pattern: null,
+            messages: { reminder: "Check the current work item.", second_order: "Keep related work together." },
+          },
+        },
+      }],
+    });
+    const scope = expandPolicyPacks(manifest).hooks.find((hook) => hook.name.endsWith(":stay-in-scope"));
+    const matcher = new RegExp(scope?.match ?? "");
+    expect(matcher.test("mcp__demo_tasks__demo.create")).toBe(true);
+    expect(matcher.test("mcp__demo_tasks__demoXcreate")).toBe(false);
+  });
+
   it("returns an empty result when policy_packs is empty", () => {
     const m = parseManifest({ version: 1 });
     const r = expandPolicyPacks(m);
@@ -137,9 +206,8 @@ describe("expandPolicyPacks", () => {
     ]);
     const r = expandPolicyPacks(m);
     const postToolUseHooks = r.hooks.filter((h) => h.event === "PostToolUse");
-    // 2 emit unconditionally (track-active-claim + stay-in-scope); the
-    // marker-expiry post-tool-use is the only one suppressed by the
-    // session-mode opt-out.
+    // The active-claim hook emits unconditionally; this fixture explicitly
+    // enables stay-in-scope, while marker expiry is suppressed by session mode.
     expect(postToolUseHooks).toHaveLength(2);
     const postToolUseNames = postToolUseHooks.map((h) => h.name).sort();
     expect(postToolUseNames).toEqual([
@@ -559,12 +627,9 @@ describe("expandPolicyPacks", () => {
   it("Codex adapter contributes a PostToolUse marker-expiry hook (task a1348c89 — closes the parity gap)", () => {
     // Before task a1348c89 the Codex branch of buildHooks emitted exactly
     // 3 hooks (UserPromptSubmit + Stop + PreToolUse); approval_lifecycle
-    // boundaries never fired in Codex sessions. Task cf4cdc93 then added
-    // the active-claim tracker + stay-in-scope reminder (2 more
-    // always-on PostToolUse hooks), growing the default expansion to 6
-    // — same total as the Claude sibling. This test pins the
-    // marker-expiry hook specifically; the two newer hooks are pinned
-    // below.
+    // boundaries never fired in Codex sessions. The active-claim tracker is
+    // always emitted; this test fixture also explicitly enables the optional
+    // stay-in-scope reminder. This test pins marker expiry specifically.
     const m = buildManifest([{ name: "understanding-before-execution" }]);
     const r = expandPolicyPacks(m, "codex");
     expect(r.hooks).toHaveLength(6);
@@ -584,7 +649,7 @@ describe("expandPolicyPacks", () => {
     );
   });
 
-  it("Codex adapter contributes the active-claim tracker + stay-in-scope reminder hooks (task cf4cdc93 — closes parity gap #3)", () => {
+  it("Codex adapter contributes the active-claim tracker and configured stay-in-scope reminder hooks (task cf4cdc93 — closes parity gap #3)", () => {
     // Before task cf4cdc93 the Codex branch never emitted these two
     // hooks at all: a Codex session honored an existing task-scoped
     // marker (gap 2) but could never PRODUCE the active-claim file
@@ -624,7 +689,7 @@ describe("expandPolicyPacks", () => {
     expect(scope?.blocking).toBe(false);
     expect(scope?.command).toBe("harness pack hook stay-in-scope");
     expect(scope?.match).toBe(
-      "mcp__agent-tasks__task_create|mcp__agent-tasks__tasks_create|mcp__agent-tasks__tasks_update",
+      "mcp__demo_tasks__create",
     );
   });
 
@@ -649,12 +714,12 @@ describe("expandPolicyPacks", () => {
     expect(claimRe.test("mcp__agent_tasks__task_start")).toBe(true); // underscore-server
     expect(claimRe.test("Read")).toBe(false); // negative control
     const scopeRe = new RegExp(expandedScope);
-    expect(scopeRe.test("mcp__agent-tasks__task_create")).toBe(true);
-    expect(scopeRe.test("mcp__agent_tasks__.task_create")).toBe(true);
+    expect(scopeRe.test("mcp__demo_tasks__create")).toBe(true);
+    expect(scopeRe.test("mcp__demo_tasks__.create")).toBe(true);
     expect(scopeRe.test("Read")).toBe(false);
   });
 
-  it("track-active-claim and stay-in-scope always emit on Codex regardless of approval_lifecycle config (parity with the Claude opt-out)", () => {
+  it("track-active-claim and explicitly configured stay-in-scope emit on Codex regardless of approval_lifecycle config (parity with the Claude opt-out)", () => {
     // Mirrors the Claude-side "marker-expiry PostToolUse hook is
     // suppressed when approval_lifecycle.mode = session (but
     // track-active-claim still emits)" test above: these two hooks are
@@ -684,8 +749,8 @@ describe("expandPolicyPacks", () => {
       },
     ]);
     const r = expandPolicyPacks(m, "codex");
-    // 5, not 3: track-active-claim + stay-in-scope (task cf4cdc93) are
-    // always-on and are not suppressed by the marker-expiry opt-out.
+    // This fixture explicitly enables stay-in-scope; neither it nor the
+    // always-on track-active-claim hook is suppressed by marker-expiry opt-out.
     expect(r.hooks).toHaveLength(5);
     expect(
       r.hooks.find((h) => h.command === "harness pack hook codex-post-tool-use"),
