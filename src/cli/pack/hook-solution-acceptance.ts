@@ -117,6 +117,41 @@ function completionActionLabel(
 }
 
 
+/**
+ * Reconnect-vs-retry guidance appended to the default deny text only when
+ * `showReconnectGuidance` is set (the `gate.verdict === null` case: no
+ * verdict marker on record for this id). That single condition is
+ * DELIBERATELY ambiguous between "solution_evaluate was never called for
+ * this id" and "a solution_evaluate attempt for this id is still running
+ * in the background" (grounding-mcp >= 0.11.0's `{status: "running"}`
+ * reply, or a call that timed out before it ever returned a handle): the
+ * verdict marker is written only once an attempt finishes, so this hook
+ * has no signal that distinguishes the two (no attempt-log read, no
+ * `running` status visibility from here). Rather than let the agent read
+ * "no verdict recorded" as licence to retry, the SAME deny message covers
+ * both readings with the facts an agent needs either way (see
+ * docs/policy-packs/solution-acceptance.md, "Agent-facing surface for the
+ * in-flight case", for the decision and this limitation).
+ */
+function reconnectGuidanceFor(taskId: string, showReconnectGuidance: boolean): string {
+  if (!showReconnectGuidance) return "";
+  return (
+    `\n` +
+    `Reconnecting vs. retrying: this same "no verdict recorded" message fires whether ` +
+    `solution_evaluate for "${taskId}" was never called, or a call for it is still running ` +
+    `in the background (the verdict marker only appears once an attempt finishes, so this ` +
+    `hook cannot tell the two apart from here). If you already called solution_evaluate for ` +
+    `this id, do not call it again: poll \`mcp__grounding-mcp__solution_evaluate_status\` / ` +
+    `\`mcp__grounding-mcp__solution_evaluate_result\` for the SAME id, passing the attemptId ` +
+    `you were given (or omitting it to resolve the latest attempt, the recovery path when your ` +
+    `own call timed out before it ever returned one), waiting at least the returned pollAfterMs ` +
+    `(advertised as 5000ms) between polls. A live attempt's lock refuses a second ` +
+    `solution_evaluate call and refuses forceNewAttempt while it holds; attempt records are ` +
+    `retained 24h by default (always at least 100x pollAfterMs), and a pruned terminal attempt ` +
+    `reads "expired".\n`
+  );
+}
+
 function blockJson(
   actionLabel: string,
   toolName: string,
@@ -124,6 +159,7 @@ function blockJson(
   detail: string,
   ux: PolicyUx | undefined,
   sessionId: string,
+  showReconnectGuidance = false,
 ): string {
   let reasonText: string;
   if (ux) {
@@ -139,6 +175,7 @@ function blockJson(
       `  1. If the working tree is dirty, COMMIT first. The verdict is pinned to the HEAD it was evaluated at, so any commit you make afterward makes it stale; commit the change before evaluating so the verdict pins to the final HEAD.\n` +
       `  2. mcp__grounding-mcp__solution_evaluate({ id: "${taskId}" }) — runs \`preflight run --json\` (lint/typecheck/test/audit/secret) and records a HEAD-pinned verdict. A clean run at the current HEAD unblocks this tool; a failing run lists the blockers to fix (then back to step 1).\n` +
       `  3. For \`git push\` / \`gh pr merge\`: the separate preflight-before-push gate is satisfied by a preflight at the current HEAD (its \`at_head\` rule), so refresh it at this same commit with \`harness preflight\` before retrying. Satisfy both push-gates at one HEAD.\n` +
+      reconnectGuidanceFor(taskId, showReconnectGuidance) +
       `\n` +
       `Operator override: \`harness pause\` (yields this and every other gate).`;
   }
@@ -321,6 +358,8 @@ export async function runPackHookSolutionAcceptanceCli(
   const forgedTag = gate.forged ? " [audit: forged/unsigned verdict marker rejected]" : "";
   const diagnostic = `BLOCK — ${gate.reason}${forgedTag}`;
   note(diagnostic);
-  stdout.write(`${blockJson(actionLabel, toolName, taskId, gate.reason, configUx, sessionId)}\n`);
+  stdout.write(
+    `${blockJson(actionLabel, toolName, taskId, gate.reason, configUx, sessionId, gate.verdict === null)}\n`,
+  );
   return { exitCode: 0, blocked: true, diagnostic };
 }
