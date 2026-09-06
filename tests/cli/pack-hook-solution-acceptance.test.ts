@@ -200,13 +200,41 @@ describe("completion-gate — decision matrix", () => {
     expect(env.reason).toMatch(/no solution-acceptance verdict/);
   });
 
+  it("the no-verdict deny carries the reconnect-vs-retry facts (attempt id, no-retry-while-locked, poll/retention bounds)", async () => {
+    // Regression for the agent-facing surface added for the reconnect-vs-
+    // retry guidance (grounding-mcp >= 0.11.0): `gate.verdict === null` is
+    // ambiguous between "never evaluated" and "an attempt is still running
+    // in the background" (the hook has no attempt-log visibility), so this
+    // exact deny must carry the three facts an agent needs either way.
+    const { res, out } = await run({ cwd: repoAtHead(HEAD), verdictDir: verdictDirWith(null) });
+    expect(res.blocked).toBe(true);
+    const { reason } = JSON.parse(out) as { reason: string };
+    // Fact 1: reconnect by attempt id via the status/result tools.
+    expect(reason).toMatch(/solution_evaluate_status/);
+    expect(reason).toMatch(/solution_evaluate_result/);
+    expect(reason).toMatch(/attemptId/);
+    // Fact 2: do not retry while the lock is held.
+    expect(reason).toMatch(/do not call it again/);
+    expect(reason).toMatch(/forceNewAttempt/);
+    // Fact 3: poll interval and retention bounds from the released grounding-mcp version.
+    expect(reason).toMatch(/pollAfterMs/);
+    expect(reason).toMatch(/5000ms/);
+    expect(reason).toMatch(/24h/);
+    expect(reason).toMatch(/100x pollAfterMs/);
+  });
+
   it("BLOCKS a not-ready verdict and surfaces the blockers", async () => {
     const { res, out } = await run({
       cwd: repoAtHead(HEAD),
       verdictDir: verdictDirWith(TASK, { ready: false, blockers: ["2 tests failing"] }),
     });
     expect(res.blocked).toBe(true);
-    expect(JSON.parse(out).reason).toMatch(/not ready: 2 tests failing/);
+    const { reason } = JSON.parse(out) as { reason: string };
+    expect(reason).toMatch(/not ready: 2 tests failing/);
+    // A not-ready verdict means a run already completed and produced a
+    // marker: there is no "is it still running" ambiguity here, so the
+    // reconnect-vs-retry guidance does not apply.
+    expect(reason).not.toMatch(/Reconnecting vs\. retrying/);
   });
 
   it("BLOCKS a verdict recorded at a different HEAD (drift)", async () => {
@@ -215,7 +243,11 @@ describe("completion-gate — decision matrix", () => {
       verdictDir: verdictDirWith(TASK, { head: OTHER, ready: true }),
     });
     expect(res.blocked).toBe(true);
-    expect(JSON.parse(out).reason).toMatch(/stale/);
+    const { reason } = JSON.parse(out) as { reason: string };
+    expect(reason).toMatch(/stale/);
+    // Same rationale as the not-ready case: a stale verdict is a completed
+    // run, not an in-flight one.
+    expect(reason).not.toMatch(/Reconnecting vs\. retrying/);
   });
 
   it("the deny names the full convergence recipe (commit-first + both push-gates)", async () => {

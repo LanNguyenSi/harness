@@ -141,6 +141,66 @@ them) and are not part of this pack's contract, and this pack makes no
 claim that they resolve a client's own request timeout for any specific
 client.
 
+### Agent-facing surface for the in-flight case (decision, harness/5c9cad05)
+
+The section above lived only in `instructions.md`, this pack's operator
+audit copy (rendered once by `buildInstructions` and never re-read by the
+agent mid-session). Nothing surfaced it to the agent at the one moment it
+actually matters: the completion-gate denies a completion verb, and the
+agent needs to know whether to reconnect or to wait, not to re-call
+`solution_evaluate` as a "fix".
+
+Two candidate surfaces were considered:
+
+- **The completion-gate's deny text** (`harness pack hook
+  solution-acceptance`, `blockJson` in
+  `src/cli/pack/hook-solution-acceptance.ts`): fires exactly when the
+  agent is blocked on a completion verb with no ready verdict, which is
+  exactly the moment this guidance is needed.
+- **A pack MEMORY.md contribution**: rejected. `PackContribution`
+  (`src/policy-packs/types.ts`) has exactly two fields, `hooks` and
+  `files` (written under `harness.generated/policy-packs/<name>/`);
+  neither reaches the generated `MEMORY.md`. `generate-memory-index.ts`
+  builds that index solely from user-authored markdown files under
+  `manifest.memory.directories[]` (frontmatter `name`/`type`/
+  `description`) — packs have no contribution path into it today, and
+  adding one would be a new mechanism, out of scope for this pack and
+  out of bounds for this change (the memory-contract worktrees own that
+  file).
+
+Decision: the completion-gate's deny text is the surface. Implemented in
+`blockJson`, gated on `gate.verdict === null` (the `evaluateGate` branch
+whose reason is `no solution-acceptance verdict recorded for "<id>"`).
+That single condition is DELIBERATELY ambiguous between "`solution_evaluate`
+was never called for this id" and "an attempt for this id is still running
+in the background": the verdict marker is written only once an attempt
+finishes, so the hook has no attempt-log or `running`-status visibility
+that would tell the two apart. Rather than let an agent read "no verdict
+recorded" as licence to call `solution_evaluate` again, the SAME deny
+carries the reconnect-vs-retry facts either way: reconnect with
+`solution_evaluate_status` / `solution_evaluate_result` by `attemptId`
+(omit it to resolve the latest attempt); never retry `solution_evaluate`
+while the id's lock is held (a second call joins the live attempt,
+`forceNewAttempt` is refused while it holds); the poll interval and
+retention bounds from the released grounding-mcp version this pack
+requires (>= 0.3.2, verified against grounding-mcp v0.11.0's README):
+`pollAfterMs` is advertised as `5000` in the README's example handle,
+retention is 24h by default and always at least 100x `pollAfterMs`, and a
+pruned terminal attempt reads `expired`.
+
+The guidance does NOT appear on a not-ready or stale verdict deny: both
+mean a run already completed and produced a marker, so there is no
+"is it still running" ambiguity to resolve there. It also does not appear
+when no verdict id resolved at all (no active claim and
+`SOLUTION_VERDICT_ID` unset) — there is no id to poll for yet — nor when
+an operator has configured a custom `ux` block, which replaces the
+default deny text entirely (a pre-existing pack behavior, unchanged
+here). `instructions.md` (`buildInstructions`) is unchanged: it stays the
+audit copy documented above. Pinned by
+`tests/cli/pack-hook-solution-acceptance.test.ts` ("the no-verdict deny
+carries the reconnect-vs-retry facts...", plus the not-ready/stale tests'
+negative assertions).
+
 ### Marker signing (harness/c7c3f606)
 
 The verdict now carries an HMAC-SHA256 signature, reusing the SAME
