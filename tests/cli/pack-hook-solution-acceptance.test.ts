@@ -138,6 +138,51 @@ async function run(over: {
 }
 
 describe("completion-gate — decision matrix", () => {
+  it.each([
+    "task_finish",
+    "task_submit_pr",
+    "task_merge",
+    "pull_requests_merge",
+  ])("blocks each canonical default completion verb without a verdict: %s", async (verb) => {
+    const { res, out } = await run({
+      toolName: `mcp__agent-tasks__${verb}`,
+      cwd: repoAtHead(HEAD),
+      verdictDir: verdictDirWith(null),
+    });
+    expect(res.blocked).toBe(true);
+    expect(JSON.parse(out).reason).toContain(`agent-tasks ${verb}`);
+  });
+
+  it("honors an arbitrary configured completion verb", async () => {
+    const customManifest = parseManifest({
+      version: 1,
+      policy_packs: [
+        {
+          name: "solution-acceptance",
+          enabled: true,
+          config: { protected_completion_tools: ["custom_close"] },
+        },
+      ],
+    });
+    const { res, out } = await run({
+      toolName: "mcp__agent-tasks__custom_close",
+      cwd: repoAtHead(HEAD),
+      verdictDir: verdictDirWith(null),
+      manifest: customManifest,
+    });
+    expect(res.blocked).toBe(true);
+    expect(JSON.parse(out).reason).toContain("agent-tasks custom_close");
+  });
+
+  it("does not broaden canonical completion matching to MCP aliases", async () => {
+    const { res } = await run({
+      toolName: "mcp__agent-tasks__.task_finish",
+      cwd: repoAtHead(HEAD),
+      verdictDir: verdictDirWith(null),
+    });
+    expect(res.blocked).toBe(false);
+  });
+
   it("ALLOWS a completion verb when a ready verdict exists at the current HEAD", async () => {
     const { res, out } = await run({
       cwd: repoAtHead(HEAD),

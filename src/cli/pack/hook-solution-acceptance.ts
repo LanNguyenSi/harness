@@ -40,6 +40,10 @@ import {
 import { resolveGeneratedDir } from "../../io/generated-dir.js";
 import { resolveGitContext } from "../../runtime/git-context.js";
 import { renderAgentFacing } from "../../runtime/agent-facing.js";
+import {
+  canonicalAgentTasksVerb,
+  DEFAULT_PROTECTED_COMPLETION_TOOLS,
+} from "../../runtime/task-providers/agent-tasks.js";
 import { type Manifest, type PolicyUx } from "../../schema/index.js";
 import { type LoaderOptions } from "../loader.js";
 import {
@@ -48,8 +52,6 @@ import {
   parseConfigUx,
   readStdin,
 } from "./hook-bootstrap.js";
-
-const MCP_AGENT_TASKS_PREFIX = "mcp__agent-tasks__";
 
 export interface PackHookSolutionAcceptanceOptions extends LoaderOptions {
   /** Defaults to process.stdin. */
@@ -102,10 +104,9 @@ function completionActionLabel(
   toolInput: unknown,
   protectedVerbs: readonly string[],
 ): string | null {
-  if (toolName.startsWith(MCP_AGENT_TASKS_PREFIX)) {
-    const verb = toolName.slice(MCP_AGENT_TASKS_PREFIX.length);
-    if (protectedVerbs.includes(verb)) return `agent-tasks ${verb}`;
-    return null;
+  const agentTasksVerb = canonicalAgentTasksVerb(toolName, protectedVerbs);
+  if (agentTasksVerb !== null) {
+    return `agent-tasks ${agentTasksVerb}`;
   }
   if (toolName === "Bash") {
     const command = bashCommandOf(toolInput);
@@ -205,12 +206,11 @@ export async function runPackHookSolutionAcceptanceCli(
     // manifest load failure should not block unrelated tool calls. Only
     // the completion verbs / push commands are ever gated, so classify
     // by tool name with the DEFAULT verb set as a failsafe.
-    const label = completionActionLabel(toolName, event.tool_input, [
-      "task_finish",
-      "task_submit_pr",
-      "task_merge",
-      "pull_requests_merge",
-    ]);
+    const label = completionActionLabel(
+      toolName,
+      event.tool_input,
+      DEFAULT_PROTECTED_COMPLETION_TOOLS,
+    );
     if (label === null) {
       const diagnostic = `manifest load failed (${(err as Error).message}) but ${toolName} is not a completion action; allowing`;
       note(diagnostic);

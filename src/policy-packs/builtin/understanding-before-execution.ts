@@ -42,6 +42,10 @@ import {
 import { parseReportScanMaxWait } from "./understanding-before-execution/index.js";
 import { SHELL_ALIASES } from "../../runtime/tool-name-aliases.js";
 import {
+  ACTIVE_CLAIM_TOOL_NAMES,
+  DEFAULT_BOUNDARY_TOOL_NAMES,
+} from "../../runtime/task-providers/agent-tasks.js";
+import {
   resolveStayInScopeConfig,
   StayInScopeConfigSchema,
 } from "./understanding-before-execution/stay-in-scope-config.js";
@@ -516,16 +520,7 @@ export function toPackageMode(mode: Mode): "fast_confirm" | "grill_me" {
 // other task systems override the list in their manifest. Kept here so
 // the PostToolUse hook always emits a sensible match pattern even when
 // the operator hasn't set the config explicitly.
-const DEFAULT_EXPIRE_ON_TOOL_MATCH: ReadonlyArray<string> = [
-  "mcp__agent-tasks__task_finish",
-  "mcp__agent-tasks__task_abandon",
-  "mcp__agent-tasks__pull_requests_merge",
-  // Legacy v1 verb; the post-tool-use hook applies a status filter so only
-  // `tool_input.status === "done"` actually clears the marker (PR #200,
-  // agent-tasks 9e06175f). Listed here so settings.json fires the hook
-  // at all; the status refinement happens in TypeScript.
-  "mcp__agent-tasks__tasks_transition",
-];
+const DEFAULT_EXPIRE_ON_TOOL_MATCH: ReadonlyArray<string> = DEFAULT_BOUNDARY_TOOL_NAMES;
 
 const POST_TOOL_USE_COMMAND_CLAUDE = "harness pack hook post-tool-use";
 
@@ -556,7 +551,7 @@ const TRACK_ACTIVE_CLAIM_COMMAND = "harness pack hook track-active-claim";
 // this hook (the matcher won't fire for their tools). A config-driven
 // extension can land later if a second tasking system asks for it.
 const TRACK_ACTIVE_CLAIM_MATCH =
-  "^(?:mcp__agent-tasks__task_start|mcp__agent-tasks__task_finish|mcp__agent-tasks__task_abandon|mcp__agent-tasks__tasks_transition)$";
+  `^(?:${ACTIVE_CLAIM_TOOL_NAMES.join("|")})$`;
 
 // Codex sibling of TRACK_ACTIVE_CLAIM_MATCH above (task cf4cdc93): a
 // bare, unescaped `|`-joined list, NOT the anchored `^(?:...)$` form —
@@ -570,8 +565,7 @@ const TRACK_ACTIVE_CLAIM_MATCH =
 // even reach the hook. This bare form lets the emitted `config.toml`
 // matcher — and therefore Codex's own dispatcher — recognize those
 // variants, exactly like `PRE_TOOL_USE_MATCH_CODEX` already does.
-const TRACK_ACTIVE_CLAIM_MATCH_CODEX =
-  "mcp__agent-tasks__task_start|mcp__agent-tasks__task_finish|mcp__agent-tasks__task_abandon|mcp__agent-tasks__tasks_transition";
+const TRACK_ACTIVE_CLAIM_MATCH_CODEX = ACTIVE_CLAIM_TOOL_NAMES.join("|");
 
 const STAY_IN_SCOPE_COMMAND = "harness pack hook stay-in-scope";
 

@@ -1,4 +1,12 @@
 import type { Manifest, Policy, Workflow } from "../schema/index.js";
+import {
+  TASK_FINISH_AUTOMERGE_INPUT_MATCH as ADAPTER_TASK_FINISH_AUTOMERGE_INPUT_MATCH,
+  TASK_FINISH_TOOL,
+  TASK_ID_EXTRACT as ADAPTER_TASK_ID_EXTRACT,
+  TASK_MERGE_TOOL,
+  PULL_REQUESTS_MERGE_TOOL,
+  PR_NUMBER_EXTRACT as ADAPTER_PR_NUMBER_EXTRACT,
+} from "./task-providers/agent-tasks.js";
 
 /**
  * Runtime enforcement for `workflows:` (99f47307, Slice 1).
@@ -106,7 +114,7 @@ export const REVIEW_EVIDENCE_HOOK_TASK_FINISH = "require-review-evidence-task-fi
 // derivation binds to, instead of trusting the hook name alone. See
 // `checkWorkflowGateWiring`'s header for the "right name, wrong trigger"
 // gap this closes.
-export const MERGE_MCP_MATCH = "mcp__agent-tasks__pull_requests_merge";
+export const MERGE_MCP_MATCH = PULL_REQUESTS_MERGE_TOOL;
 // Byte-identical to templates.ts's `review-before-merge-bash` trigger
 // (verified against the parsed FULL_TEMPLATE at authoring time; pinned
 // by tests/runtime/workflow-policies.test.ts's parity assertion so the
@@ -117,8 +125,8 @@ export const MERGE_BASH_MATCH = "(^|\\n|;|\\||&|\\()\\s*(\\w+=\\S+\\s+)*gh pr me
 // here the same way `MERGE_MCP_MATCH` / `MERGE_BASH_MATCH` are and held
 // byte-identical to templates.ts by this module's parity assertion in
 // tests/runtime/workflow-policies.test.ts.
-export const TASK_MERGE_MCP_MATCH = "mcp__agent-tasks__task_merge";
-export const TASK_FINISH_MCP_MATCH = "mcp__agent-tasks__task_finish";
+export const TASK_MERGE_MCP_MATCH = TASK_MERGE_TOOL;
+export const TASK_FINISH_MCP_MATCH = TASK_FINISH_TOOL;
 
 /**
  * The `trigger.input_match` predicate that separates the merging mode of
@@ -128,12 +136,11 @@ export const TASK_FINISH_MCP_MATCH = "mcp__agent-tasks__task_finish";
  * missing path never satisfies an `input_match` entry, so the gate stays
  * out of the way of the non-merging call.
  */
-export const TASK_FINISH_AUTOMERGE_INPUT_MATCH: Record<string, boolean> = {
-  "toolArgs.autoMerge": true,
-};
+export const TASK_FINISH_AUTOMERGE_INPUT_MATCH = ADAPTER_TASK_FINISH_AUTOMERGE_INPUT_MATCH;
 
 /** `toolArgs.taskId` is the only identifier either task-scoped verb carries. */
-export const TASK_ID_EXTRACT: Record<string, string> = { TASK_ID: "toolArgs.taskId" };
+export const TASK_ID_EXTRACT = ADAPTER_TASK_ID_EXTRACT;
+export const PR_NUMBER_EXTRACT = ADAPTER_PR_NUMBER_EXTRACT;
 
 /**
  * True when `workflow.steps` contains a `review_subagent` step with
@@ -299,7 +306,7 @@ function buildMcpMergeGatePolicy(workflowName: string): Policy {
     trigger: {
       event: "PreToolUse",
       match: MERGE_MCP_MATCH,
-      extract: { PR_NUMBER: "toolArgs.prNumber" },
+      extract: { ...PR_NUMBER_EXTRACT },
     },
     requires: { ledger_tag: "review:${PR_NUMBER}" },
     hook: REVIEW_EVIDENCE_HOOK_MCP,

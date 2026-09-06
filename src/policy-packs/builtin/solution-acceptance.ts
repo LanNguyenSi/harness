@@ -48,6 +48,7 @@ import {
   resolveProtectedCompletionTools,
   VERDICT_DIR_ENV,
 } from "./solution-acceptance-runtime.js";
+import { agentTasksToolName } from "../../runtime/task-providers/agent-tasks.js";
 import {
   shellQuoteSingle,
   type ResolvePackOptions,
@@ -99,8 +100,7 @@ const WRITEGUARD_MATCH_CODEX = "apply_patch|Bash";
  */
 function completionMatch(runtime: Runtime, tools: readonly string[]): string {
   if (runtime === "codex") return "Bash";
-  const mcp = tools.map((t) => `mcp__agent-tasks__${t}`).join("|");
-  return `Bash|${mcp}`;
+  return `Bash|${tools.map(agentTasksToolName).join("|")}`;
 }
 
 function buildHooks(
