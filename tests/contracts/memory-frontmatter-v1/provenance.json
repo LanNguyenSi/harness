@@ -1,0 +1,8 @@
+{
+  "repository": "https://github.com/LanNguyenSi/agent-memory",
+  "revision": "993827576b386289e97927a8b6afd4754077ff5d",
+  "contractPath": "packages/memory-router/contracts/memory-frontmatter-v1",
+  "hashAlgorithm": "sha256-path-filehash-lines-v1",
+  "sha256": "d18dea96ae81dcfd393b2ff64d20a7e38d8404f4834fe97f13ebbc108f896fee",
+  "fileCount": 26
+}

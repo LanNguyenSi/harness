@@ -91,3 +91,8 @@ jobs:
         # so a stale gate block message can't silently ship.
         # Depends on Build (consumes dist/cli/pack/...).
         run: npm run check:ug-schema-drift
+
+      - name: Memory frontmatter contract integrity
+        # Local-only verification of the pinned producer corpus. It never
+        # fetches a producer revision or resolves a moving upstream version.
+        run: npm run check:memory-frontmatter-contract

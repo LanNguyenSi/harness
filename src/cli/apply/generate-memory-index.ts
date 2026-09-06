@@ -12,12 +12,12 @@
 // caller (Phase 3 #4 `harness apply`) can render a doctor-style report
 // without aborting.
 //
-// Frontmatter shape mirrors agent-memory's `MemoryFrontmatter`: `name` and
-// `type` are required (matches the canonical loader at
-// `agent-memory/packages/memory-router/src/memory/loader.ts`, which rejects
-// on `!fm.name || !fm.type`). `description` is recommended (its absence is
-// a warning but not a hard skip). `topics` and other fields are not
-// surfaced in the index.
+// Frontmatter shape mirrors agent-memory's `MemoryFrontmatter`: `name` is
+// required and `type` resolves with the producer's truthy fallback from the
+// top-level value to `metadata.type`. The selected value must be one of the
+// supported memory types. `description` is recommended (its absence is a
+// warning but not a hard skip). `topics` and other fields are not surfaced in
+// the index.
 //
 // `name` and `description` are passed through verbatim into the markdown
 // output. The user authors their own frontmatter, so we trust it; no
@@ -74,14 +74,24 @@ function resolveDirPath(
 }
 
 interface ParsedFrontmatter {
-  name?: string;
-  description?: string;
-  type?: string;
+  name?: unknown;
+  description?: unknown;
+  type?: unknown;
+  metadata?: unknown;
   // tolerated/ignored:
   topics?: unknown;
   severity?: unknown;
   triggers?: unknown;
   verify?: unknown;
+}
+
+const MEMORY_TYPES = new Set(["user", "feedback", "project", "reference"]);
+
+function nestedMetadataType(metadata: unknown): unknown {
+  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) {
+    return undefined;
+  }
+  return (metadata as { type?: unknown }).type;
 }
 
 function parseFrontmatter(raw: string): ParsedFrontmatter | null {
@@ -119,10 +129,15 @@ function readEntry(
     warnings.push(`${fullPath}: frontmatter missing required \`name\` field`);
     return null;
   }
-  if (typeof fm.type !== "string" || fm.type.length === 0) {
-    // Matches the canonical loader's strict requirement; a memory missing
-    // `type` is rejected by the router at runtime and would advertise a
-    // memory the index promises but the router won't surface.
+  // Keep the producer's truthy fallback semantics: any truthy top-level type
+  // wins over metadata.type, including a value that is later rejected.
+  const resolvedType = fm.type || nestedMetadataType(fm.metadata);
+  if (
+    typeof resolvedType !== "string" ||
+    !MEMORY_TYPES.has(resolvedType)
+  ) {
+    // A rejected type would otherwise advertise a memory the router will not
+    // surface. Preserve the existing missing-type warning for callers.
     warnings.push(`${fullPath}: frontmatter missing required \`type\` field`);
     return null;
   }
