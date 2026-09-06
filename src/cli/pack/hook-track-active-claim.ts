@@ -35,7 +35,7 @@
 // Codex adapter (`understanding-before-execution.ts`, `runtime ===
 // "codex"` branch), reusing this exact command — no Codex-specific
 // CLI verb needed. The tool-name comparisons below are alias-aware
-// (`toolNameMatchesAny`, not raw `===`): a Codex session can emit an
+// (through the task-provider adapter): a Codex session can emit an
 // MCP tool name in a variant form for the identical tool (server
 // hyphen/underscore swap, the `mcp__server__.tool` dotted form), and
 // the emitted Codex matcher is alias-EXPANDED at `harness apply` time

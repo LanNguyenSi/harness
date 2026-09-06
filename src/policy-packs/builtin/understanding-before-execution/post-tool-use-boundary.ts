@@ -144,9 +144,9 @@ export function matchPostToolUseBoundary(
   // Legacy v1 `tasks_transition`: only `status=done` releases the work
   // claim (per task_finish docs: "The work claim is cleared when going
   // to done and kept when going to review"). open / in_progress /
-  // review / missing status keep the marker. Detected via the same
-  // alias-aware `toolNameMatchesAny` as the general match above (not a
-  // raw `===`): a Codex dotted/server-variant `tasks_transition`
+  // review / missing status keep the marker. The task-provider adapter
+  // applies the same alias expansion as the general match above:
+  // a Codex dotted/server-variant `tasks_transition`
   // tool_name must still get the status filter applied, otherwise it
   // would fall through to the unconditional `true` branch below and
   // clear the marker on ANY status — a worse bug than a missed match
