@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
-- **Memory index routing now follows the versioned `memory-frontmatter/v1` contract.** It falls back from a falsy top-level `type` to `metadata.type`, then includes only `user`, `feedback`, `project`, or `reference` memories. Refresh the pinned contract with `npm run sync:memory-frontmatter-contract` and verify it with `npm run check:memory-frontmatter-contract`.
+- **Memory index routing now follows the versioned `memory-frontmatter/v1` contract.** (commit `dd8ee788a852a76dab73ed2177802999fa84ca3d`). It falls back from a falsy top-level `type` to `metadata.type`, then includes only `user`, `feedback`, `project`, or `reference` memories. Refresh the pinned contract with `npm run sync:memory-frontmatter-contract` and verify it with `npm run check:memory-frontmatter-contract`.
 
 - **Stay-in-scope reminders are now an explicit optional pack integration.** (commit `ad33ff1f3f9eba2dac738d08c429e9ca8a9d6fbc`). `config.stay_in_scope` is default-off and requires complete, validated tool names, literal detectors, optional parent patterns, and message text when enabled. Both runtime generators and the live hook read the same resolver; a stale generated hook no-ops after configuration is absent, disabled, or invalid. Existing generated configuration must be refreshed with `harness apply` after opting in or changing tools.
 
