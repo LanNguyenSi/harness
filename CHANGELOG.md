@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
-- **Stay-in-scope reminders are now an explicit optional pack integration.** `config.stay_in_scope` is default-off and requires complete, validated tool names, literal detectors, optional parent patterns, and message text when enabled. Both runtime generators and the live hook read the same resolver; a stale generated hook no-ops after configuration is absent, disabled, or invalid. Existing generated configuration must be refreshed with `harness apply` after opting in or changing tools.
+- **Stay-in-scope reminders are now an explicit optional pack integration.** (commit `ad33ff1f3f9eba2dac738d08c429e9ca8a9d6fbc`). `config.stay_in_scope` is default-off and requires complete, validated tool names, literal detectors, optional parent patterns, and message text when enabled. Both runtime generators and the live hook read the same resolver; a stale generated hook no-ops after configuration is absent, disabled, or invalid. Existing generated configuration must be refreshed with `harness apply` after opting in or changing tools.
 
 - **Operator-only policies no longer require the evidence provider at deployment.** (commit `8e6e35d2a15838b05f29cae520255f659e0acf9e`). `harness validate` and `harness apply` require `grounding-mcp` only when at least one policy declares `requires:`. A manifest containing only `operator_only: true` policies now validates and applies without that MCP, while retaining generated hooks; mixed manifests and workflow-derived evidence policies remain refused or warned when the provider is absent. Runtime evaluation is unchanged: operator-only actions still deny without an evidence-ledger query.
 

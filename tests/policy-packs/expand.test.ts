@@ -103,8 +103,8 @@ describe("expandPolicyPacks", () => {
     // drop the first PostToolUse hook but keep the active-claim tracker
     // (covered by a dedicated test below). The subagent-gate work adds
     // SubagentStart/SubagentStop (in-flight record write/clear), always
-    // emitted alongside the PreToolUse blocker, growing the default
-    // expansion to 8.
+    // emitted alongside the PreToolUse blocker. The product default is
+    // seven hooks; this fixture explicitly enables the reminder for eight.
     const m = buildManifest([{ name: "understanding-before-execution" }]);
     const r = expandPolicyPacks(m);
     expect(r.hooks).toHaveLength(8);
