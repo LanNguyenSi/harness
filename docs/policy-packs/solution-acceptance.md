@@ -171,35 +171,48 @@ Two candidate surfaces were considered:
 Decision: the completion-gate's deny text is the surface. Implemented in
 `blockJson`, gated on `gate.verdict === null` (the `evaluateGate` branch
 whose reason is `no solution-acceptance verdict recorded for "<id>"`).
-That single condition is DELIBERATELY ambiguous between "`solution_evaluate`
-was never called for this id" and "an attempt for this id is still running
-in the background": the verdict marker is written only once an attempt
-finishes, so the hook has no attempt-log or `running`-status visibility
-that would tell the two apart. Rather than let an agent read "no verdict
-recorded" as licence to call `solution_evaluate` again, the SAME deny
-carries the reconnect-vs-retry facts either way: reconnect with
+That single condition covers THREE readings, deliberately left unresolved
+here: "`solution_evaluate` was never called for this id"; "an attempt for
+this id is still running in the background"; and "a marker exists but
+`readVerdict` rejected it" (an invalid id, a symlinked marker, a
+non-regular file, an unreadable file, malformed JSON, or a body missing
+`id`/`head`/`ready`). grounding-mcp >= 0.11.0's README documents an
+attempt-lock anchor that would let the hook rule out the "still running"
+reading — `<verdict dir>/<id>.attempt-lock` (mode `0600`), beside the
+`<id>.attempt-lock.lock` directory `proper-lockfile` manages, from which
+the producer itself derives its own `running-unconfirmed` status — but
+this change does not read it: doing so is a second cross-repo coupling to
+the producer's lock-file layout, with its own stale-lock semantics to
+absorb, out of scope for a text-surface change (follow-up: narrow this
+paragraph to the in-flight case by reading that lock anchor). Rather than
+let an agent read "no readable verdict marker" as licence to call
+`solution_evaluate` again, the SAME deny carries the reconnect-vs-retry
+facts regardless of which reading applies: reconnect with
 `solution_evaluate_status` / `solution_evaluate_result` by `attemptId`
 (omit it to resolve the latest attempt); never retry `solution_evaluate`
-while the id's lock is held (a second call joins the live attempt,
-`forceNewAttempt` is refused while it holds); the poll interval and
-retention bounds from the released grounding-mcp version this pack
-requires (>= 0.3.2, verified against grounding-mcp v0.11.0's README):
-`pollAfterMs` is advertised as `5000` in the README's example handle,
-retention is 24h by default and always at least 100x `pollAfterMs`, and a
-pruned terminal attempt reads `expired`.
+while the id's lock is held (a second call for a live attempt just joins
+it and returns its `attemptId`, never starting a second `preflight` run;
+only `forceNewAttempt` is refused while that attempt's lock holds); the
+poll interval and retention bounds from the released grounding-mcp version
+this pack requires (>= 0.3.2, verified against grounding-mcp v0.11.0's
+README): `pollAfterMs` is advertised as `5000` in the README's example
+handle, retention is 24h by default and always at least 100x
+`pollAfterMs`, and a pruned terminal attempt reads `expired`.
 
 The guidance does NOT appear on a not-ready or stale verdict deny: both
 mean a run already completed and produced a marker, so there is no
 "is it still running" ambiguity to resolve there. It also does not appear
 when no verdict id resolved at all (no active claim and
-`SOLUTION_VERDICT_ID` unset) — there is no id to poll for yet — nor when
-an operator has configured a custom `ux` block, which replaces the
-default deny text entirely (a pre-existing pack behavior, unchanged
-here). `instructions.md` (`buildInstructions`) is unchanged: it stays the
-audit copy documented above. Pinned by
-`tests/cli/pack-hook-solution-acceptance.test.ts` ("the no-verdict deny
-carries the reconnect-vs-retry facts...", plus the not-ready/stale tests'
-negative assertions).
+`SOLUTION_VERDICT_ID` unset) — there is no id to poll for yet — nor on the
+manifest-load-failure failsafe deny, nor when an operator has configured a
+custom `ux` block, which replaces the default deny text entirely (a
+pre-existing pack behavior, unchanged here). `instructions.md`
+(`buildInstructions`) is unchanged: it stays the audit copy documented
+above. Pinned by `tests/cli/pack-hook-solution-acceptance.test.ts` ("the
+no-verdict deny carries the reconnect-vs-retry facts...", including the
+"joins" assertion added in review round 2 against the earlier "refuses a
+second call" misstatement, plus the not-ready/stale/no-verdict-id/
+manifest-load-failure tests' negative assertions).
 
 ### Marker signing (harness/c7c3f606)
 

@@ -213,8 +213,12 @@ describe("completion-gate — decision matrix", () => {
     expect(reason).toMatch(/solution_evaluate_status/);
     expect(reason).toMatch(/solution_evaluate_result/);
     expect(reason).toMatch(/attemptId/);
-    // Fact 2: do not retry while the lock is held.
+    // Fact 2: do not retry while the lock is held (a second call JOINS the
+    // live attempt, review round 1 finding: the deny used to claim a second
+    // call is refused, which is false against grounding-mcp's join semantics;
+    // only forceNewAttempt is refused while the lock holds).
     expect(reason).toMatch(/do not call it again/);
+    expect(reason).toMatch(/joins/i);
     expect(reason).toMatch(/forceNewAttempt/);
     // Fact 3: poll interval and retention bounds from the released grounding-mcp version.
     expect(reason).toMatch(/pollAfterMs/);
@@ -294,6 +298,37 @@ describe("completion-gate — decision matrix", () => {
       activeClaim: TASK,
     });
     expect(res.blocked).toBe(true);
+  });
+
+  it("does not carry the reconnect-vs-retry guidance on the manifest-load-failure failsafe deny", async () => {
+    // Review round 1 finding (LOW, tests): the reconnect paragraph must not
+    // appear on the manifest-load-failure failsafe path either (blockJson's
+    // `showReconnectGuidance` defaults to `false` there, same as the
+    // no-verdict-id path). Force a real load failure (no injected manifest,
+    // a `configPath` naming a file that does not exist) rather than
+    // asserting against the default-parameter plumbing indirectly.
+    const stdout = captureStream();
+    const stderr = captureStream();
+    const res = await runPackHookSolutionAcceptanceCli({
+      stdin: streamFrom(
+        JSON.stringify({
+          session_id: "sess-1",
+          tool_name: TASK_FINISH,
+          cwd: repoAtHead(HEAD),
+        }),
+      ),
+      stdout: stdout.stream,
+      stderr: stderr.stream,
+      configPath: path.join(
+        fs.mkdtempSync(path.join(os.tmpdir(), "sa-hook-no-manifest-")),
+        "harness.yaml",
+      ),
+      env: {},
+    });
+    expect(res.blocked).toBe(true);
+    const reason = JSON.parse(stdout.output()).reason as string;
+    expect(reason).toMatch(/manifest load failed/);
+    expect(reason).not.toMatch(/Reconnecting vs\. retrying/);
   });
 });
 
@@ -636,6 +671,13 @@ describe("completion-gate — solo / non-agent-tasks verdict id (SOLUTION_VERDIC
     expect(reason).toMatch(/no active-claim/);
     expect(reason).toMatch(/SOLUTION_VERDICT_ID/);
     expect(reason).toMatch(/task_start/);
+    // Review round 1 finding (LOW, tests): the reconnect-vs-retry guidance
+    // is gated on `showReconnectGuidance`, which defaults to `false` at
+    // every OTHER call site (this one included) — there is no id to poll
+    // for yet, so the paragraph must not appear here. Unpinned before this
+    // assertion: flipping the default to `true` survived every existing
+    // test.
+    expect(reason).not.toMatch(/Reconnecting vs\. retrying/);
   });
 
   it("distinguishes agent-tasks vs solo-session paths in the no-verdict-id deny message", async () => {
