@@ -2,6 +2,27 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-09-06T13:31:16Z, task `529e85ea` round 2 re-verification (review
+  round 1 fix round: version corrections in the pack file, the doc page,
+  and CHANGELOG.md; the payload-shape and terminal-and-lock-free rewording
+  in the pack file and the doc page; the CHANGELOG audience wording; the
+  doc-page `running-unconfirmed` wording; three new pinning assertions in
+  the test file). The same 5 docs re-stamped for round 1
+  (`gate-fail-posture-matrix.md`, `codex-adapter-parity-gaps.md`,
+  `evidence-ledger-trust-boundary.md`, `pause-vs-gate-kill-switch.md`,
+  `policy-engine-producer-wiring.md`) cite only the files this round
+  edited again (the two round-1-cited ranges in
+  `src/policy-packs/builtin/solution-acceptance.ts` and
+  `docs/policy-packs/solution-acceptance.md`, both still before this
+  round's edit points; CHANGELOG.md's historical, already-released
+  entries for the other three, still untouched by this round's
+  `[Unreleased]` edit): re-read all citations against the changed files,
+  no line-number or content drift, timestamp-only re-stamp on all 5.
+  Verified: `npx okf-kit@0.9.0 check docs/okf --require-anchors` against
+  this branch reports a line-for-line identical finding set (`diff` shows
+  no delta) to the same command run against a scratch clone of
+  `origin/master` (`aa4aca6`).
+
 - 2026-09-06T13:14:11Z, task `529e85ea` re-verification (reconnect-vs-retry
   prompt/doc addition to the `solution-acceptance` pack): two bundle docs
   cite the two edited files as sources. `codex-adapter-parity-gaps.md`
@@ -32,12 +53,11 @@
   `codex-adapter-parity-gaps.md`, `evidence-ledger-trust-boundary.md`,
   `pause-vs-gate-kill-switch.md`, `policy-engine-producer-wiring.md`, all
   at `2026-09-06T13:14:11Z`), `npx okf-kit@0.9.0 check docs/okf
-  --require-anchors` against this branch reports 80 findings (0 errors, 80
-  warnings, 0 notices), a line-for-line identical finding set (`diff` shows
-  no delta) to the same command run against the `origin/master` scratch
-  clone baseline (`aa4aca6`, also 80 findings): the remaining 80 are
-  pre-existing `anchor-required`/`anchor-required-continuation` warnings,
-  none newly introduced or newly resolved by this task.
+  --require-anchors` against this branch reports a line-for-line identical
+  finding set (`diff` shows no delta) to the same command run against the
+  `origin/master` scratch clone baseline (`aa4aca6`): the remaining
+  findings are pre-existing `anchor-required`/`anchor-required-continuation`
+  warnings, none newly introduced or newly resolved by this task.
 
 - 2026-09-05T09:48:35Z, release 0.56.0 (commit `a64e5ea`) re-verification:
   the release commit only moved `[Unreleased]` into a dated `[0.56.0]`

@@ -84,6 +84,18 @@ describe("solution-acceptance pack — hook expansion", () => {
     // rewords this into "re-call solution_evaluate" (dropping the "Never")
     // fails here.
     expect(content).toMatch(/Never re-call .solution_evaluate. as a stall workaround/);
+    // Pins the pollAfterMs wait rule. A mutant that inverts it (e.g. "at
+    // most" instead of "at least") fails here.
+    expect(content).toMatch(/Wait at least the returned/);
+    // Pins the terminal-and-lock-free gate. A mutant that reworks the
+    // condition into an unconditional "whenever" (dropping the lock-free
+    // requirement) fails here.
+    expect(content).toMatch(
+      /only once the previous one is terminal and\s+the id.s lock is free/,
+    );
+    // Pins the running-unconfirmed keep-polling rule. A mutant that
+    // rewords it into an escalation instruction fails here.
+    expect(content).toMatch(/running-unconfirmed. still means keep\s+polling, not stall or escalate/);
   });
 });
 

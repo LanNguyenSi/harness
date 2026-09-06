@@ -81,7 +81,7 @@ writer is the producer.
 Anti-forgery scope is v1-honest: it closes the enumerated-write-path
 residual, not arbitrary same-uid forgery.
 
-### Reconnecting vs. retrying a call (grounding-mcp >= 0.6.0)
+### Reconnecting vs. retrying a call (grounding-mcp >= 0.11.0)
 
 `solution_evaluate` waits only up to an internal bound before returning; a
 large repo's `preflight` run can outlive that bound and keeps running in
@@ -104,21 +104,32 @@ latest attempt for that id (the recovery path for a caller with no
 handle at all, because its own call timed out with nothing). Wait at
 least the returned `pollAfterMs` between polls.
 
-Once the attempt finishes, the two lookup tools return the SAME shape
-`solution_evaluate` itself would have: today's verdict payload plus
-`status` (`completed` or `failed`) and `attemptId`. A `running-unconfirmed`
-status means the id's lock is held but no attempt row names it yet; it
-still means keep polling, not stall or escalate, and it resolves by
-itself into `running` or clears once the lock is reclaimed as stale.
+Once the attempt finishes, the payload the two lookup tools return
+depends on which process answers. When the SAME process that ran the
+attempt still holds it in memory, the response is today's verdict
+payload plus `status` (`completed` or `failed`) and `attemptId`, exactly
+what `solution_evaluate` itself would have returned. When a DIFFERENT
+process answers (another session, or this one after a restart), the
+response is a reduced payload instead: `outcomeClass`, `summary`, and the
+persisted `error` (a size-bounded copy, not the full diagnostics), with
+`verdict`/`markerPath` included only when the attempt is still the
+latest recorded for the id and its marker file is present. A
+`running-unconfirmed` status means the id's lock is held but no attempt
+row names it yet; it still means keep polling, not stall or escalate,
+and it resolves by itself into `running` or clears once the lock is
+reclaimed as stale.
 
 Re-calling `solution_evaluate` for an id whose attempt is still live
 joins that attempt rather than starting a second one; `forceNewAttempt`
-is refused while an attempt is live. A genuinely new attempt is possible
-only once the previous one reaches a terminal status (`completed`,
-`failed`, `unknown`, or `expired`); an `unknown` status means the
-attempt's fate was never established, not that it is safe to assume
-success. Never escalate to a human before the advertised `pollAfterMs`
-has elapsed.
+is refused while an attempt is live. A prior attempt's reported status
+(`completed`, `failed`, `unknown`, or `expired`) is informational, not
+the gate: `unknown`/`expired` never license a new attempt by themselves
+while another process still holds the id's lock. A genuinely new attempt
+becomes possible only once the previous one is terminal AND the id's
+lock is free again, at which point an ordinary `solution_evaluate` call
+starts one; an `unknown` status means the attempt's fate was never
+established, not that it is safe to assume success. Never escalate to a
+human before the advertised `pollAfterMs` has elapsed.
 
 The ordinary tool-call lifecycle above (poll with `solution_evaluate_status`
 / `solution_evaluate_result`) is the only mechanism this pack relies on or

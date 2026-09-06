@@ -209,7 +209,7 @@ not-ready run (failing checks, dirty tree) records a not-ready verdict; any
 commit after a green run shifts HEAD and invalidates it, so re-run after
 every change.
 
-## Reconnecting vs. retrying (grounding-mcp >= 0.6.0)
+## Reconnecting vs. retrying (grounding-mcp >= 0.11.0)
 
 A large repo can outlive the call: \`solution_evaluate\` may hand back
 \`{status: "running", attemptId, id, pollAfterMs}\` instead of a verdict, or
@@ -223,13 +223,19 @@ passing the \`attemptId\` you were given, or omitting it to resolve the
 latest attempt for that id (the recovery path when your own call timed
 out before it ever returned a handle). Wait at least the returned
 \`pollAfterMs\` between polls. \`running-unconfirmed\` still means keep
-polling, not stall or escalate: it resolves into \`running\` on its own.
+polling, not stall or escalate: it resolves by itself, into \`running\`
+or once the lock is reclaimed as stale.
 
 Never re-call \`solution_evaluate\` as a stall workaround: a second call
 for a still-live attempt just joins it, and \`forceNewAttempt\` is refused
-while an attempt is live. Start a genuinely new attempt only once the
-previous one is terminal (\`completed\`, \`failed\`, \`unknown\`, or
-\`expired\`). Never escalate to a human before the poll hint has elapsed.
+while an attempt is live. A prior attempt's reported status
+(\`completed\`, \`failed\`, \`unknown\`, or \`expired\`) is informational,
+not the gate: \`unknown\`/\`expired\` never license a new attempt by
+themselves while another process still holds the id's lock. A genuinely
+new attempt becomes possible only once the previous one is terminal and
+the id's lock is free again, at which point an ordinary
+\`solution_evaluate\` call starts one. Never escalate to a human before
+the poll hint has elapsed.
 
 ## Orchestrator-workflow process arm (grounding-mcp >= 0.5.0)
 
