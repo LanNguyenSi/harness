@@ -37,6 +37,7 @@ import {
   VERDICT_ID_ENV,
   verdictDir as resolveVerdictDir,
 } from "../../policy-packs/builtin/solution-acceptance-runtime.js";
+import { renderReconnectDenyParagraph } from "../../policy-packs/builtin/solution-acceptance-reconnect.js";
 import { resolveGeneratedDir } from "../../io/generated-dir.js";
 import { resolveGitContext } from "../../runtime/git-context.js";
 import { renderAgentFacing } from "../../runtime/agent-facing.js";
@@ -128,39 +129,17 @@ function completionActionLabel(
  * marker exists but `readVerdict` rejected it" (an invalid id, a symlinked
  * marker, a non-regular file, an unreadable file, malformed JSON, or a body
  * missing `id`/`head`/`ready`; see `readVerdict`,
- * solution-acceptance-runtime.ts). grounding-mcp >= 0.11.0's README documents
- * an attempt-lock anchor that would let this hook rule out the "still
- * running" reading (`<verdict dir>/<id>.attempt-lock`, mode 0600, beside
- * the `<id>.attempt-lock.lock` directory `proper-lockfile` manages, from
- * which the producer itself derives `running-unconfirmed`), but this change
- * does not read it: doing so is a second cross-repo coupling to the
- * producer's lock-file layout, with its own stale-lock semantics to absorb,
- * out of scope for a text-surface change. Rather than let the agent read "no
- * verdict recorded" as licence to retry, the SAME deny message covers all
- * three readings with the facts an agent needs regardless (see
- * docs/policy-packs/solution-acceptance.md, "Agent-facing surface for the
- * in-flight case", for the decision, this limitation, and the follow-up to
- * narrow it by reading the lock anchor).
+ * solution-acceptance-runtime.ts). The paragraph itself is rendered from
+ * `solution-acceptance-reconnect.ts`, the SAME fact source the pack's
+ * `instructions.md` "Reconnecting vs. retrying" section renders from (see
+ * that module's header for the attempt-lock-anchor scope decision this
+ * hook does not read), so the two surfaces cannot silently drift apart;
+ * see docs/policy-packs/solution-acceptance.md, "Agent-facing surface for
+ * the in-flight case", for the decision record.
  */
 function reconnectGuidanceFor(taskId: string, showReconnectGuidance: boolean): string {
   if (!showReconnectGuidance) return "";
-  return (
-    `\n` +
-    `Reconnecting vs. retrying: this same "no readable verdict marker" message fires whether ` +
-    `solution_evaluate for "${taskId}" was never called, a call for it is still running in the ` +
-    `background, or a marker exists but could not be read or parsed (the verdict marker only ` +
-    `appears once an attempt finishes, and is validated on read, so this hook cannot tell these ` +
-    `apart from here). If you already called solution_evaluate for this id, do not call it ` +
-    `again: poll \`mcp__grounding-mcp__solution_evaluate_status\` / ` +
-    `\`mcp__grounding-mcp__solution_evaluate_result\` for the SAME id, passing the attemptId ` +
-    `you were given (or omitting it to resolve the latest attempt, the recovery path when your ` +
-    `own call timed out before it ever returned one), waiting at least the returned pollAfterMs ` +
-    `(advertised as 5000ms) between polls. A second solution_evaluate call for an id whose ` +
-    `attempt is still live just joins that attempt and returns its attemptId, never starting a ` +
-    `second preflight run; only forceNewAttempt is refused while that attempt's lock holds. ` +
-    `Attempt records are retained 24h by default (always at least 100x pollAfterMs), and a ` +
-    `pruned terminal attempt reads "expired".\n`
-  );
+  return renderReconnectDenyParagraph(taskId);
 }
 
 function blockJson(
