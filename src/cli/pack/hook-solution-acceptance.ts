@@ -120,35 +120,46 @@ function completionActionLabel(
 /**
  * Reconnect-vs-retry guidance appended to the default deny text only when
  * `showReconnectGuidance` is set (the `gate.verdict === null` case: no
- * verdict marker on record for this id). That single condition is
- * DELIBERATELY ambiguous between "solution_evaluate was never called for
- * this id" and "a solution_evaluate attempt for this id is still running
- * in the background" (grounding-mcp >= 0.11.0's `{status: "running"}`
- * reply, or a call that timed out before it ever returned a handle): the
- * verdict marker is written only once an attempt finishes, so this hook
- * has no signal that distinguishes the two (no attempt-log read, no
- * `running` status visibility from here). Rather than let the agent read
- * "no verdict recorded" as licence to retry, the SAME deny message covers
- * both readings with the facts an agent needs either way (see
+ * READABLE verdict marker for this id). That single condition covers THREE
+ * readings, deliberately left unresolved here: "solution_evaluate was never
+ * called for this id"; "a solution_evaluate attempt for this id is still
+ * running in the background" (grounding-mcp >= 0.11.0's `{status: "running"}`
+ * reply, or a call that timed out before it ever returned a handle); and "a
+ * marker exists but `readVerdict` rejected it" (an invalid id, a symlinked
+ * marker, a non-regular file, an unreadable file, malformed JSON, or a body
+ * missing `id`/`head`/`ready` — see `readVerdict`,
+ * solution-acceptance-runtime.ts). grounding-mcp >= 0.11.0's README documents
+ * an attempt-lock anchor that would let this hook rule out the "still
+ * running" reading — `<verdict dir>/<id>.attempt-lock` (mode 0600), beside
+ * the `<id>.attempt-lock.lock` directory `proper-lockfile` manages, from
+ * which the producer itself derives `running-unconfirmed` — but this change
+ * does not read it: doing so is a second cross-repo coupling to the
+ * producer's lock-file layout, with its own stale-lock semantics to absorb,
+ * out of scope for a text-surface change. Rather than let the agent read "no
+ * verdict recorded" as licence to retry, the SAME deny message covers all
+ * three readings with the facts an agent needs regardless (see
  * docs/policy-packs/solution-acceptance.md, "Agent-facing surface for the
- * in-flight case", for the decision and this limitation).
+ * in-flight case", for the decision, this limitation, and the follow-up to
+ * narrow it by reading the lock anchor).
  */
 function reconnectGuidanceFor(taskId: string, showReconnectGuidance: boolean): string {
   if (!showReconnectGuidance) return "";
   return (
     `\n` +
-    `Reconnecting vs. retrying: this same "no verdict recorded" message fires whether ` +
-    `solution_evaluate for "${taskId}" was never called, or a call for it is still running ` +
-    `in the background (the verdict marker only appears once an attempt finishes, so this ` +
-    `hook cannot tell the two apart from here). If you already called solution_evaluate for ` +
-    `this id, do not call it again: poll \`mcp__grounding-mcp__solution_evaluate_status\` / ` +
+    `Reconnecting vs. retrying: this same "no readable verdict marker" message fires whether ` +
+    `solution_evaluate for "${taskId}" was never called, a call for it is still running in the ` +
+    `background, or a marker exists but could not be read or parsed (the verdict marker only ` +
+    `appears once an attempt finishes, and is validated on read, so this hook cannot tell these ` +
+    `apart from here). If you already called solution_evaluate for this id, do not call it ` +
+    `again: poll \`mcp__grounding-mcp__solution_evaluate_status\` / ` +
     `\`mcp__grounding-mcp__solution_evaluate_result\` for the SAME id, passing the attemptId ` +
     `you were given (or omitting it to resolve the latest attempt, the recovery path when your ` +
     `own call timed out before it ever returned one), waiting at least the returned pollAfterMs ` +
-    `(advertised as 5000ms) between polls. A live attempt's lock refuses a second ` +
-    `solution_evaluate call and refuses forceNewAttempt while it holds; attempt records are ` +
-    `retained 24h by default (always at least 100x pollAfterMs), and a pruned terminal attempt ` +
-    `reads "expired".\n`
+    `(advertised as 5000ms) between polls. A second solution_evaluate call for an id whose ` +
+    `attempt is still live just joins that attempt and returns its attemptId, never starting a ` +
+    `second preflight run; only forceNewAttempt is refused while that attempt's lock holds. ` +
+    `Attempt records are retained 24h by default (always at least 100x pollAfterMs), and a ` +
+    `pruned terminal attempt reads "expired".\n`
   );
 }
 
