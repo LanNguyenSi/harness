@@ -1328,7 +1328,7 @@ export function buildProgram(opts: RunOptions = {}): Command {
   packHookCmd
     .command("stay-in-scope")
     .description(
-      "PostToolUse: read tool-event JSON from stdin, emit a one-line stderr reminder and JSONL audit row when an agent-tasks task_create / tasks_create / tasks_update payload looks like a review-derived follow-up. Soft reminder (does not block); enforces user-memory feedback_reviewer_findings_stay_in_scope. Disable via STAY_IN_SCOPE_DISABLED=1; override log path via STAY_IN_SCOPE_LOG.",
+      "PostToolUse: read tool-event JSON from stdin and, when explicitly configured, emit a non-blocking reminder and JSONL audit row for configured task-tool payloads. Current manifest configuration controls matching; STAY_IN_SCOPE_DISABLED=1 disables a live hook and STAY_IN_SCOPE_LOG overrides its log path.",
     )
     .option("--config <path>", "manifest path (default: ~/.harness/harness.yaml; legacy fallback ~/.claude/harness.yaml)")
     .option("--project <name>", "apply per-project overrides")

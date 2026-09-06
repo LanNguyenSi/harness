@@ -41,6 +41,10 @@ import {
 // which this file only names in comments and so does not import.
 import { parseReportScanMaxWait } from "./understanding-before-execution/index.js";
 import { SHELL_ALIASES } from "../../runtime/tool-name-aliases.js";
+import {
+  resolveStayInScopeConfig,
+  StayInScopeConfigSchema,
+} from "./understanding-before-execution/stay-in-scope-config.js";
 
 // Env var the npm-backed `understanding-gate-claude-hook` bin reads to find
 // the harness pause sentinel (`src/runtime/pause-sentinel.ts`,
@@ -340,6 +344,7 @@ export const configSchema = z
     // policy-layer `ux:` / `producers:` keys.
     ux: PolicyUxSchema.optional(),
     producers: z.array(ProducerSchema).min(1).optional(),
+    stay_in_scope: StayInScopeConfigSchema.optional(),
   })
   .strict();
 
@@ -568,20 +573,11 @@ const TRACK_ACTIVE_CLAIM_MATCH =
 const TRACK_ACTIVE_CLAIM_MATCH_CODEX =
   "mcp__agent-tasks__task_start|mcp__agent-tasks__task_finish|mcp__agent-tasks__task_abandon|mcp__agent-tasks__tasks_transition";
 
-// Hardcoded matcher for the stay-in-scope reminder (harness/2ba06030).
-// Fires on the three task-mutation verbs that can carry labels and
-// description fields. tasks_update is included so a label added
-// post-hoc (e.g. `tasks_update { labels: ["from-review"] }`) still
-// surfaces the reminder.
-const STAY_IN_SCOPE_MATCH =
-  "^(?:mcp__agent-tasks__task_create|mcp__agent-tasks__tasks_create|mcp__agent-tasks__tasks_update)$";
-
-// Codex sibling of STAY_IN_SCOPE_MATCH above (task cf4cdc93), same
-// bare-unanchored-list rationale as TRACK_ACTIVE_CLAIM_MATCH_CODEX.
-const STAY_IN_SCOPE_MATCH_CODEX =
-  "mcp__agent-tasks__task_create|mcp__agent-tasks__tasks_create|mcp__agent-tasks__tasks_update";
-
 const STAY_IN_SCOPE_COMMAND = "harness pack hook stay-in-scope";
+
+function escapeMatcherLiteral(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
 
 // Bash tool name used to widen the PostToolUse matcher when
 // `expire_on_bash_match` is configured (task bea04a03). Matches the
@@ -916,19 +912,19 @@ function buildHooks(
         description:
           "Codex adapter: track the active agent-tasks claim by writing/clearing <generatedDir>/active-claim on task_start / task_finish / task_abandon. Lets `harness approve understanding` auto-resolve the task id (harness/494fd1e5, Codex parity task cf4cdc93).",
       },
-      // Stay-in-scope reminder (harness/2ba06030), Codex parity task
-      // cf4cdc93 (parity-gaps doc gap #3). Same always-on / soft-only
-      // semantics as the Claude sibling below.
-      {
-        name: `${HOOK_NAME_PREFIX}:codex:stay-in-scope`,
-        event: "PostToolUse",
-        match: STAY_IN_SCOPE_MATCH_CODEX,
-        command: STAY_IN_SCOPE_COMMAND,
-        blocking: false,
-        budget_ms: 2000,
-        description:
-          "Codex adapter: emit a soft reminder + audit row when a review-derived follow-up task gets created. Surfaces user-memory feedback_reviewer_findings_stay_in_scope. Disable: STAY_IN_SCOPE_DISABLED=1 (harness/2ba06030, Codex parity task cf4cdc93).",
-      },
+      ...((): Hook[] => {
+        const stayInScope = resolveStayInScopeConfig(pack.config["stay_in_scope"]);
+        if (stayInScope === null) return [];
+        return [{
+          name: `${HOOK_NAME_PREFIX}:codex:stay-in-scope`,
+          event: "PostToolUse",
+          match: stayInScope.tools.join("|"),
+          command: STAY_IN_SCOPE_COMMAND,
+          blocking: false,
+          budget_ms: 2000,
+          description: "Codex adapter: emit the configured soft stay-in-scope reminder and audit row.",
+        }];
+      })(),
     ];
   }
   // `min_version` floor on the npm-backed bins: 0.4.0 ships the
@@ -1073,26 +1069,19 @@ function buildHooks(
       description:
         "Track the active agent-tasks claim by writing/clearing <generatedDir>/active-claim on task_start / task_finish / task_abandon. Lets `harness approve understanding` auto-resolve the task id (harness/494fd1e5).",
     },
-    // Stay-in-scope reminder (harness/2ba06030). PostToolUse hook on
-    // agent-tasks task_create / tasks_create / tasks_update. Emits a
-    // one-line stderr reminder + JSONL audit row when the new task's
-    // labels or description suggest it was carved out of a review
-    // finding that may have been inline-fixable. Soft (no block);
-    // enforces user-memory feedback_reviewer_findings_stay_in_scope.
-    // Bundled with this pack for operational convenience — operators
-    // on non-agent-tasks tasking systems are unaffected (matcher
-    // won't fire). Disable via STAY_IN_SCOPE_DISABLED=1 in the hook's
-    // env; override audit log path via STAY_IN_SCOPE_LOG.
-    {
-      name: `${HOOK_NAME_PREFIX}:stay-in-scope`,
-      event: "PostToolUse",
-      match: STAY_IN_SCOPE_MATCH,
-      command: STAY_IN_SCOPE_COMMAND,
-      blocking: false,
-      budget_ms: 2000,
-      description:
-        "Emit a soft reminder + audit row when a review-derived follow-up task gets created. Surfaces user-memory feedback_reviewer_findings_stay_in_scope. Disable: STAY_IN_SCOPE_DISABLED=1.",
-    },
+    ...((): Hook[] => {
+      const stayInScope = resolveStayInScopeConfig(pack.config["stay_in_scope"]);
+      if (stayInScope === null) return [];
+      return [{
+        name: `${HOOK_NAME_PREFIX}:stay-in-scope`,
+        event: "PostToolUse",
+        match: `^(?:${stayInScope.tools.map(escapeMatcherLiteral).join("|")})$`,
+        command: STAY_IN_SCOPE_COMMAND,
+        blocking: false,
+        budget_ms: 2000,
+        description: "Emit the configured soft stay-in-scope reminder and audit row.",
+      }];
+    })(),
   ];
 }
 

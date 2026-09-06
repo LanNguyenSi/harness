@@ -10,6 +10,32 @@ function manifestWith(packs: unknown[]) {
 }
 
 describe("checkPolicyPackConfigs — understanding-before-execution", () => {
+  it("accepts a complete enabled stay-in-scope integration and a merged disable override", () => {
+    const enabled = {
+      enabled: true,
+      tools: ["mcp__demo_tasks__create"],
+      label_markers: ["review-followup"],
+      description_markers: [],
+      description_window: null,
+      parent_reference_pattern: "Parent: #([0-9]+)",
+      parent_url_pattern: null,
+      messages: { reminder: "Check this work item.", second_order: "Keep related work together." },
+    };
+    expect(checkPolicyPackConfigs(manifestWith([{ name: "understanding-before-execution", config: { stay_in_scope: enabled } }]))).toEqual([]);
+    expect(checkPolicyPackConfigs(manifestWith([{ name: "understanding-before-execution", config: { stay_in_scope: { ...enabled, enabled: false } } }]))).toEqual([]);
+  });
+
+  it("rejects incomplete enabled, invalid matcher or regular expression, and unknown stay-in-scope configuration", () => {
+    const incomplete = checkPolicyPackConfigs(manifestWith([{ name: "understanding-before-execution", config: { stay_in_scope: { enabled: true } } }]));
+    expect(incomplete.length).toBeGreaterThan(1);
+    const invalid = checkPolicyPackConfigs(manifestWith([{ name: "understanding-before-execution", config: { stay_in_scope: { enabled: true, tools: ["bad|name"], label_markers: ["review"], description_markers: [], description_window: null, parent_reference_pattern: null, parent_url_pattern: null, messages: { reminder: "one", second_order: "two" } } } }]));
+    expect(invalid.some((issue) => issue.configPath === "stay_in_scope.tools[0]")).toBe(true);
+    const invalidRegex = checkPolicyPackConfigs(manifestWith([{ name: "understanding-before-execution", config: { stay_in_scope: { enabled: true, tools: ["mcp__demo_tasks__create"], label_markers: ["review"], description_markers: [], description_window: null, parent_reference_pattern: "(", parent_url_pattern: "(", messages: { reminder: "one", second_order: "two" } } } }]));
+    expect(invalidRegex.some((issue) => issue.configPath === "stay_in_scope.parent_reference_pattern")).toBe(true);
+    expect(invalidRegex.some((issue) => issue.configPath === "stay_in_scope.parent_url_pattern")).toBe(true);
+    const unknown = checkPolicyPackConfigs(manifestWith([{ name: "understanding-before-execution", config: { stay_in_scope: { enabled: false, accidental: true } } }]));
+    expect(unknown.some((issue) => issue.code === "unrecognized_keys")).toBe(true);
+  });
   it("clean config produces no issues", () => {
     const m = manifestWith([
       {

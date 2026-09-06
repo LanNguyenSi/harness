@@ -43,7 +43,8 @@
 //   - hook-runtime-reality.ts: its stdin reader uses async iteration + an
 //     isTTY guard, which is a legitimately different contract.
 //   - hook-solution-acceptance-writeguard.ts: loads no manifest.
-//   - hook-stay-in-scope.ts: loads no manifest.
+//   - hook-stay-in-scope.ts: loads the current manifest so a generated hook
+//     can no-op after an operator changes its optional configuration.
 //
 // hook-codex-stop.ts and hook-codex-user-prompt-submit.ts now also call
 // the pause check (2, `checkHookPause`), on top of the stdin reader (1) and

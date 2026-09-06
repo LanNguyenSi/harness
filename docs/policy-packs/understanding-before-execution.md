@@ -618,7 +618,7 @@ The `PostToolUse` group (task a1348c89) is the Codex parity counterpart of the C
 
 **`expire_on_bash_match` routing (task bea04a03, fixed):** the trigger's `match` field is now widened with the Codex shell-tool aliases (`Bash`/`shell`/`exec_command`/`functions.exec_command`) whenever `approval_lifecycle.expire_on_bash_match` carries at least one pattern, so a real shell call actually reaches this hook, whose body evaluates `expire_on_bash_match` against the command via `matchPostToolUseBoundary`. Before this fix the trigger was built only from `expire_on_tool_match`, so a shell call never reached the hook at all regardless of `expire_on_bash_match` — the hook body's bash-regex check was correct but unreachable. The widened aliases are never folded into `expire_on_tool_match`'s own tool-name semantics.
 
-**Active-claim tracker + stay-in-scope reminder on Codex (task cf4cdc93, closed the former "Out of scope for v1" residual):** the Codex branch now also emits `[[hooks.PostToolUse]]` groups running `harness pack hook track-active-claim` and `harness pack hook stay-in-scope` — the SAME command as the Claude branch (see "What the pack ships at apply time" below); no Codex-specific CLI verb was needed. Their `match` fields use Codex-specific bare `|`-joined sibling constants (`TRACK_ACTIVE_CLAIM_MATCH_CODEX`, `STAY_IN_SCOPE_MATCH_CODEX`), not the Claude anchored `^(?:...)$` forms, for the same `expandCodexHookMatchPattern` alias-expansion reason as the marker-expiry hook above; both hook bodies were also made alias-aware (`toolNameMatchesAny`) so an MCP tool-name variant that the widened matcher routes to the hook is recognized once inside it too. Both hook bodies also tolerate the same field-name synonyms as `codex-post-tool-use` (task cf4cdc93 review finding, MEDIUM): `tool` alongside `tool_name`, and `raw_input` alongside `tool_input` (see the wire-format block below) — a Codex shim sending either synonym used to silently no-op in these two hooks even though the marker-expiry hook already tolerated it; both now resolve them via the same shared `pickString` / `resolveToolInput` helpers (`src/cli/pack/hook-bootstrap.ts`). `stay-in-scope`'s `tool_response` taskId fallback (a Claude-side convenience) is unaffected: the Codex envelope may not carry that field at all, and the fallback correctly stays a no-op in that case.
+**Optional stay-in-scope reminder on Codex:** `harness pack hook stay-in-scope` is emitted on either runtime only when `config.stay_in_scope.enabled: true` supplies a complete configuration. Its Codex matcher is a bare `|`-joined configured tool list so normal Codex alias expansion remains available; the hook also accepts `tool`/`tool_name` and `raw_input`/`tool_input` aliases. It reloads the current manifest at invocation time, so an already-generated hook safely no-ops after the block is removed, disabled, or made invalid.
 
 Wire format for the Codex adapter scripts (stdin):
 
@@ -679,15 +679,16 @@ After capture, `harness approve understanding --session <id>` flips `approvalSta
 
 `harness apply` against a manifest with this pack enabled writes:
 
-- Six hooks in the harness-managed `settings.json`:
+- Seven hooks in the harness-managed `settings.json` by default:
   - `UserPromptSubmit` injector: bare bin `understanding-gate-claude-hook` (from the npm package; user must `npm i -g`).
   - `Stop` capture: bare bin `understanding-gate-claude-stop` (same).
   - `PreToolUse` blocker on `Edit|Write|Bash`: `harness pack hook pre-tool-use` (Phase 6 #4). The harness-side blocker opens only on the signed approval marker `harness.generated/.approvals/${SESSION_ID}` (or the task-scoped `task-<id>` twin; agent-tasks/88ca4bb3, harness/f9485cc7); the persisted JSON report under `.understanding-gate/reports/` is consulted for the block diagnostic only and never grants approval (task 7402301d, see "Approval state"). The npm package's standalone `understanding-gate-claude-pre-tool-use` blocker remains available for solo users without harness. The blocker also probes the evidence ledger for the historic `understanding-approved:${SESSION_ID}` tag as forensics; that probe never grants approval but surfaces in the diagnostic so an operator can see the audit trail. On every block or ask it stages the session id to `harness.generated/.pending-approval` so `harness approve` can resolve it without a flag (see [Session-id resolution](#session-id-resolution)).
   - `PostToolUse` marker-expiry: `harness pack hook post-tool-use` clears the approval marker (and expires the persisted report) after a configurable task-boundary tool fires (default: agent-tasks `task_finish` / `task_abandon` / `pull_requests_merge` / `tasks_transition`), or after a Bash call whose command matches `approval_lifecycle.expire_on_bash_match` — the emitted `matcher` widens to include `Bash` whenever that list is configured (task bea04a03) so a real `gh pr merge` / `git push` actually reaches the hook.
   - `PostToolUse` active-claim tracker: `harness pack hook track-active-claim` writes `harness.generated/active-claim` on `task_start` and clears it on `task_finish` / `task_abandon` (harness/494fd1e5). Lets `harness approve understanding` auto-resolve the current task id without `--task`.
-  - `PostToolUse` stay-in-scope reminder: `harness pack hook stay-in-scope` emits a one-line stderr reminder + JSONL audit row when a `task_create` / `tasks_create` / `tasks_update` payload looks like a review-derived follow-up. Soft (does not block); surfaces the rule that small reviewer findings should be fixed inline in the parent PR rather than carved out as separate tasks. See [Stay-in-scope reminder](#stay-in-scope-reminder).
+  - `SubagentStart` / `SubagentStop`: `harness pack hook subagent-start` and `harness pack hook subagent-stop` record and clear Claude subagent state.
+  - Optional `PostToolUse` stay-in-scope reminder: emitted only for an explicitly enabled `stay_in_scope` block. See [Stay-in-scope reminder](#stay-in-scope-reminder).
   - Hook names are namespaced (`policy-pack:understanding-before-execution:<role>`) to avoid collisions with operator-authored hooks.
-- Six hooks in the harness-managed `codex/config.toml` (`--runtime codex`), same roster as the Claude branch above: `UserPromptSubmit` injector, `Stop` capture, `PreToolUse` blocker, the `PostToolUse` marker-expiry hook (`harness pack hook codex-post-tool-use`, task a1348c89) — same default task-boundary tool list as the Claude `post-tool-use` hook above, widened with the Codex shell-tool aliases when `expire_on_bash_match` is configured (task bea04a03, see "Adapter notes / Codex" above) — and, as of task cf4cdc93, the `PostToolUse` active-claim tracker and stay-in-scope reminder, running the exact same commands (`harness pack hook track-active-claim` / `harness pack hook stay-in-scope`) as the Claude branch, with Codex-specific alias-expandable matchers (see "Adapter notes / Codex" above).
+- The Codex managed configuration has five default hooks: `UserPromptSubmit`, `Stop`, `PreToolUse`, marker-expiry `PostToolUse`, and active-claim `PostToolUse`. It has no Claude `SubagentStart`/`SubagentStop` companions. An enabled `stay_in_scope` block adds a sixth configured `PostToolUse` reminder using the same command and alias-expandable matcher rules as Claude.
 - An operator audit copy at `harness.generated/policy-packs/understanding-before-execution/instructions.md`. This file documents what the pack is doing in the operator's voice (mode, hook list, approval flow); the agent-facing prompt is injected at runtime by the `UserPromptSubmit` hook and lives in the npm package, not here. Drift on the audit copy means an operator edited something they shouldn't have, and `harness diff --since-apply` flags it.
 
 ## Approving an Understanding Report
@@ -762,51 +763,27 @@ Phase 6 #2 follow-ups still queued: an automatically-injected stanza into the pe
 
 ## Stay-in-scope reminder
 
-A small soft hook bundled with this pack (harness/2ba06030). When the agent creates or updates a task whose payload looks like a follow-up carved out of a code review, the hook writes one stderr line and appends one JSONL row to an audit log. It does not block, decline, or alter the task in any way.
+This informational reminder is off by default. Enable it under the pack's `config:` block with every field explicit:
 
-The intent: surface the rule that small reviewer findings should be fixed inline in the parent PR, while leaving the agent (and the operator) to judge whether a given follow-up is genuinely scope-out (trigger-bound work, larger refactors, hypotheticals waiting for data). The audit log answers, after a few weeks of dogfood, whether the reminder ever changes behaviour or whether the rule needs a harder enforcement layer.
-
-**When it fires.** PostToolUse on one of `mcp__agent-tasks__task_create`, `mcp__agent-tasks__tasks_create`, `mcp__agent-tasks__tasks_update`, when EITHER:
-
-1. `tool_input.labels` contains a token matching `/(from-review|followup|reviewer-finding|review-finding)/i`, OR
-2. `tool_input.description` contains an explicit marker (`Vorgaenger-PR:`, `Vorgänger-PR:`, `Review-Subagent`), OR
-3. `tool_input.description` contains `## Hintergrund` with `Review` mentioned inside the next 200 characters.
-
-**Second-order escalation.** When both a review-shaped label AND a `Vorgaenger-PR.*#<n>` reference are present, the stderr prefix upgrades to `[stay-in-scope: SECOND-ORDER]`. A follow-up that traces back to another follow-up violates the explicit rule that follow-ups must not spawn further follow-ups.
-
-**Audit log.** One JSONL row per fire, default location `~/.harness/reminders/stay-in-scope.log`. Schema:
-
-```json
-{
-  "ts": "2026-05-26T11:55:07.820Z",
-  "taskId": "44269f36-...",
-  "title": "fix cosmetic phase_status thing",
-  "labels": ["from-review", "cosmetic"],
-  "parentPrUrl": "https://github.com/owner/repo/pull/91",
-  "secondOrder": false,
-  "matchedRule": "label"
-}
+```yaml
+stay_in_scope:
+  enabled: true
+  tools: [mcp__demo_tasks__create]
+  label_markers: [review-followup]
+  description_markers: ["Review follow-up:"]
+  description_window: { marker: "## Context", contains: review, max_chars: 160 }
+  parent_reference_pattern: "Parent work: #([0-9]+)"
+  parent_url_pattern: 'https://example\.test/\S+'
+  messages:
+    reminder: "Decide whether this belongs in the current work item."
+    second_order: "This follow-up references another follow-up; keep the work together."
 ```
 
-`parentPrUrl` is best-effort: a fully qualified GitHub PR URL when present in the description, otherwise the `#<n>` shorthand pulled from a `Vorgaenger-PR` line, otherwise `null`.
+`tools` is a nonempty list of simple tool names. Label markers are literal and case-insensitive; description markers are literal and case-sensitive. The optional window starts at the first case-sensitive `marker`, includes that marker in `max_chars`, and finds `contains` case-insensitively. At least one of these three detectors must be present. A parent-reference expression uses its first ASCII-digit capture for second-order detection and the `#<n>` audit shorthand; a parent URL expression returns its first full match and takes precedence in the audit row. Both patterns may be `null`.
 
-**Knobs.**
+The hook reads only the fixed task-shaped fields `labels`, `description`, `title`, and `taskId` (plus the existing create-response task-id fallback). It writes a configured reminder after the fixed prefix and one separating space, always exits 0, and writes audit rows best-effort to `~/.harness/reminders/stay-in-scope.log` unless `STAY_IN_SCOPE_LOG` overrides the path. `STAY_IN_SCOPE_DISABLED=1` and `harness pause` suppress it without changing the hook's soft behavior.
 
-- `STAY_IN_SCOPE_DISABLED=1` in the hook's env short-circuits to no-op after the pause sentinel is evaluated. Use this if the reminder noise is unhelpful in a specific run; the operator pause path (`harness pause`) silences it the same way it silences every other hook.
-- `STAY_IN_SCOPE_LOG=/path/to/audit.jsonl` overrides the log path. Use for separating per-project logs.
-
-**Analyzing the log.**
-
-```sh
-# Hit profile by match rule.
-jq -s 'group_by(.matchedRule) | map({rule: .[0].matchedRule, count: length})' \
-  ~/.harness/reminders/stay-in-scope.log
-
-# Second-order hits only (the ones that violate the no-cascade rule).
-jq -c 'select(.secondOrder)' ~/.harness/reminders/stay-in-scope.log
-```
-
-To act on a hit: cross-reference the logged `taskId` against agent-tasks to see whether the task was later abandoned (suggesting the reminder worked) or completed (suggesting the follow-up was legitimately scope-out, OR the agent ignored the reminder; the description body answers which).
+Unknown fields, blank values, invalid regular expressions, malformed tool names, and incomplete enabled blocks are rejected by validation. `enabled: false` may retain the known fields, allowing a merged override to turn off a complete base configuration. After changing this block, rerun `harness apply`; a previously generated hook also reloads current configuration and safely no-ops while absent, disabled, or invalid.
 
 ## See also
 
