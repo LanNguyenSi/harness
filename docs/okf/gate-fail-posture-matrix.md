@@ -3,7 +3,7 @@ type: overview
 title: Gate fail-posture matrix
 description: Which harness enforcement gates fail OPEN vs fail CLOSED when their evidence source (grounding-mcp ledger, approval markers, verdict files, probes) is unreachable or errors, with the exact code paths and override knobs.
 tags: [gates, fail-open, fail-closed, enforcement]
-timestamp: 2026-09-06T18:54:07Z
+timestamp: 2026-09-06T20:12:56Z
 sources:
   - src/cli/pack/auto-approve-path.ts
   - src/cli/pack/hook-codex-pre-tool-use.ts
@@ -19,6 +19,7 @@ sources:
   - src/cli/pack/hook-pre-tool-use.ts
   - src/cli/pack/hook-branch-protection.ts
   - src/cli/pack/hook-solution-acceptance.ts
+  - src/runtime/task-providers/agent-tasks.ts
   - src/cli/pack/hook-runtime-reality.ts
   - src/policy-packs/builtin/understanding-before-execution/inflight-records.ts
   - CHANGELOG.md
@@ -52,7 +53,7 @@ The header contract in `src/cli/pack/hook-pre-tool-use.ts` (lines 17-20): "any e
 
 ## solution-acceptance: fail closed, scoped to completion actions
 
-Header contract in `src/cli/pack/hook-solution-acceptance.ts` (lines 19–22): any error in load / parse / HEAD-resolution / verdict-read resolves to BLOCK ("branch-protection's fail-closed posture, not understanding-gate's fail-open"). `docs/policy-packs/solution-acceptance.md` (lines 56–60) enumerates the deny set: missing verdict, not-ready verdict, HEAD drift (`ready && head === current HEAD` is the whole decision), unresolvable HEAD, and no-claim/no-id; a malformed `SOLUTION_VERDICT_ID` env value also fails closed, and a sessionId fallback is intentionally absent. The blast radius is bounded: on manifest load failure the hook blocks only when the tool is a completion action per the DEFAULT verb set (`task_finish`, `task_submit_pr`, `task_merge`, `pull_requests_merge`, Bash `git push` / `gh pr merge`); non-completion tools still allow ("manifest load failed (...) but <tool> is not a completion action; allowing"). The pack is a pure consumer that reads the verdict marker file directly and has no runtime dependency on grounding-mcp, so "grounding-mcp unreachable" here means the producer can never write a verdict: the gate becomes a permanent deny that looks protective. Both deadlock misconfigurations (grounding-mcp absent from `tools.mcp` = hard error; relative `SOLUTION_VERDICT_DIR` = warning) are surfaced by `harness validate` and `harness doctor` via `checkSolutionAcceptanceProducer` (`src/cli/validate/checks.ts`, per the pack doc).
+Header contract in `src/cli/pack/hook-solution-acceptance.ts` (lines 19–22): any error in load / parse / HEAD-resolution / verdict-read resolves to BLOCK ("branch-protection's fail-closed posture, not understanding-gate's fail-open"). `docs/policy-packs/solution-acceptance.md` (lines 56–60) enumerates the deny set: missing verdict, not-ready verdict, HEAD drift (`ready && head === current HEAD` is the whole decision), unresolvable HEAD, and no-claim/no-id; a malformed `SOLUTION_VERDICT_ID` env value also fails closed, and a sessionId fallback is intentionally absent. The blast radius is bounded: on manifest load failure the hook blocks only when the tool is a completion action per the default completion matchers: the provider adapter's MCP verb set (`task_finish`, `task_submit_pr`, `task_merge`, `pull_requests_merge`) and `DEFAULT_PUSH_BASH_RE` in `src/policy-packs/builtin/solution-acceptance-runtime.ts` for Bash `git push` / `gh pr merge`; non-completion tools still allow ("manifest load failed (...) but <tool> is not a completion action; allowing"). `src/runtime/task-providers/agent-tasks.ts` owns the MCP default and the canonical agent-tasks event match; the hook retains the fail-posture and verdict decisions. The pack is a pure consumer that reads the verdict marker file directly and has no runtime dependency on grounding-mcp, so "grounding-mcp unreachable" here means the producer can never write a verdict: the gate becomes a permanent deny that looks protective. Both deadlock misconfigurations (grounding-mcp absent from `tools.mcp` = hard error; relative `SOLUTION_VERDICT_DIR` = warning) are surfaced by `harness validate` and `harness doctor` via `checkSolutionAcceptanceProducer` (`src/cli/validate/checks.ts`, per the pack doc).
 
 ## runtime-reality: fail open, with an opt-in fail-closed knob
 
