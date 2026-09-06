@@ -2,6 +2,65 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-09-06T21:31:26Z, task `5c9cad05` round 3 redesign re-stamp: round 3
+  moved the reconnect-vs-retry facts out of hand-written prose in
+  `src/cli/pack/hook-solution-acceptance.ts`'s `reconnectGuidanceFor` and
+  `src/policy-packs/builtin/solution-acceptance.ts`'s `buildInstructions`
+  into one shared module, `src/policy-packs/builtin/solution-acceptance-reconnect.ts`
+  (new file, not yet a cited source of any bundle doc), and amended the
+  same `[Unreleased]` `CHANGELOG.md` entry again (task `5c9cad05` bullet:
+  two residues reworded, "a condition the hook cannot further
+  distinguish" to "does not read the documented attempt-lock anchor
+  (scope decision, see the follow-up)"; `PackContribution`'s field count
+  corrected from two to three, `hooks`/`files`/optional `permissions`).
+  Source commits this round: `ebdbb82dc0fdc0e8facc7f2f657a478f1b1b9dfd`
+  (code + tests), `6340f16` (CHANGELOG.md + `docs/policy-packs/solution-acceptance.md`).
+  `git log -1 --format=%cI -- src/cli/pack/hook-solution-acceptance.ts
+  docs/policy-packs/solution-acceptance.md CHANGELOG.md
+  src/policy-packs/builtin/solution-acceptance.ts
+  src/policy-packs/builtin/solution-acceptance-reconnect.ts` from this
+  worktree at HEAD reads `2026-09-06T21:28:18+02:00`
+  (`2026-09-06T19:28:18Z`), confirming every citer below is re-verified
+  after the actual last change to its cited files, not just after this
+  doc's own edit.
+
+  `gate-fail-posture-matrix.md` re-verified against the current file:
+  its `src/cli/pack/hook-solution-acceptance.ts` citation (lines 19-22,
+  the header fail-closed-contract paragraph) is untouched, this round's
+  only edit there being one new import line well below (the doc-cited
+  behavior, the failure-mode contract, is unchanged); its
+  `docs/policy-packs/solution-acceptance.md` citation (lines 56-60, the
+  deny-set enumeration) is likewise untouched, this round's doc edits
+  landing entirely inside the "Agent-facing surface" subsection (line
+  ~144 onward) and a new "Round 2 redesign" subsection after it. No
+  line-number or content drift on either citation, timestamp-only
+  re-stamp. `policy-engine-producer-wiring.md` and
+  `pause-vs-gate-kill-switch.md` again list only `CHANGELOG.md` among
+  sources this round's files touch, and again cite only historical
+  already-released entries (`98ad072f`, `cf3dff51`, `d834a065`,
+  `63fefe3a`/`1432e053`, `aabbad63`, `76671e5a`), none anywhere near the
+  amended `[Unreleased]` `5c9cad05` bullet: timestamp-only re-stamp on
+  both, same rationale as rounds 1 and 2. All three re-stamped to
+  `2026-09-06T21:31:26Z`.
+
+  **New citation drift found, not caused by a doc edit but by the code
+  redesign itself, reported per task instruction (not re-pointed, not
+  re-stamped: `codex-adapter-parity-gaps.md` is deferred to the PR #507
+  merge, per the round-1/round-2 decision below):**
+  `codex-adapter-parity-gaps.md` cites `src/policy-packs/builtin/solution-acceptance.ts`
+  at "lines 90-91" (`WRITEGUARD_MATCH_CLAUDE`/`WRITEGUARD_MATCH_CODEX`)
+  and "lines 100-104" (`completionMatch`). At commit `d778592` (the last
+  commit before this round touched the file), the actual lines were
+  91-92 and 101-104 respectively (a 1-line drift already present before
+  this round, unrelated to it). This round's one new import line
+  (`renderReconnectInstructionsSection`, added directly below the
+  existing `solution-acceptance-runtime.js` import block) shifts every
+  later line down by exactly 1: at current HEAD, `WRITEGUARD_MATCH_CLAUDE`/
+  `WRITEGUARD_MATCH_CODEX` are now lines 92-93, and `completionMatch`'s
+  full declaration (signature line through closing brace) is now lines
+  102-105. Neither cited construct's own body text changed, only its
+  position in the file.
+
 - 2026-09-06T21:06:00Z, task `5c9cad05` round 2 follow-up re-stamp: a
   style-only fix-up commit (removing em dashes introduced by the round
   2 re-verification below, no wording or behavior change) touched
