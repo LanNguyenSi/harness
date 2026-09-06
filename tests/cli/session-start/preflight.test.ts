@@ -1133,7 +1133,7 @@ describe("sub-ms collision suffix (task a48b9729, the single src change)", () =>
 describe("multiple failing checks (task a48b9729)", () => {
   it("caps each failing check at 3 detail lines and joins them under one '; failing:' list", async () => {
     const repo = makeRepoFixture("multi-fail");
-    const logDir = makeLogDirFixture();
+    const logDir = path.join(makeLogDirFixture(), "s4-t4");
     const { stream: err, output: errOut } = captureStream();
     const result = await runSessionStartPreflight({
       stdin: streamFrom(JSON.stringify({ session_id: "s", cwd: repo })),
@@ -1161,9 +1161,14 @@ describe("multiple failing checks (task a48b9729)", () => {
     expect(result.reason).toContain(
       "; failing: npm-test (t1 | t2 | t3), secret-scan (s1 | s2 | s3), lint",
     );
-    expect(result.reason).not.toContain("t4");
-    expect(result.reason).not.toContain("s4");
-    expect(result.reason).not.toContain("ok-check");
+    // Detail tokens in the persisted log path must not affect summary checks.
+    const summary = result.reason?.split("; log:")[0];
+    expect(summary).not.toContain("t4");
+    expect(summary).not.toContain("s4");
+    expect(summary).not.toContain("ok-check");
+    const logFiles = fs.readdirSync(logDir);
+    expect(logFiles).toHaveLength(1);
+    expect(result.reason).toContain(`; log: ${path.join(logDir, logFiles[0]!)}`);
     expect((result.reason?.match(/; failing:/g) ?? []).length).toBe(1);
     expect(errOut()).toContain("npm-test (t1 | t2 | t3), secret-scan (s1 | s2 | s3), lint");
   });
