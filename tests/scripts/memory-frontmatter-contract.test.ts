@@ -1,7 +1,8 @@
-import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { execFileSync, spawnSync } from "node:child_process";
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   checkContract,
@@ -10,6 +11,7 @@ import {
 } from "../../scripts/memory-frontmatter-contract.mjs";
 
 const SHA = "0123456789abcdef0123456789abcdef01234567";
+const scriptPath = resolve(dirname(fileURLToPath(import.meta.url)), "../../scripts/memory-frontmatter-contract.mjs");
 const dirs: string[] = [];
 function temp(prefix: string) { const dir = mkdtempSync(join(tmpdir(), prefix)); dirs.push(dir); return dir; }
 function git(repo: string, args: string[]) { return execFileSync("git", ["-C", repo, ...args], { encoding: "utf8" }).trim(); }
@@ -42,6 +44,9 @@ function pinnedUpdatedFixture() {
   const source = producer(); const target = consumer();
   syncContract({ source: source.repo, revision: source.revision, consumerRoot: target });
   return { source, target, updatedRevision: nextRevision(source) };
+}
+function cli(consumerRoot: string, args: string[], cwd: string) {
+  return spawnSync(process.execPath, [join(consumerRoot, "scripts/memory-frontmatter-contract.mjs"), ...args], { cwd, encoding: "utf8" });
 }
 afterEach(() => { while (dirs.length) rmSync(dirs.pop()!, { recursive: true, force: true }); });
 
@@ -106,6 +111,14 @@ describe("memory-frontmatter contract tooling", () => {
     writeFileSync(join(contract, "provenance.json"), "{}\n");
     expect(() => checkContract(target)).toThrow(/provenance/);
     syncContract({ source: source.repo, revision: source.revision, consumerRoot: target });
+    const validProvenance = readFileSync(join(contract, "provenance.json"), "utf8");
+    const malformedValues: Array<[string, unknown]> = [["revision", [source.revision]], ["sha256", ["a".repeat(64)]]];
+    for (const [field, value] of malformedValues) {
+      const malformed = JSON.parse(validProvenance) as Record<string, unknown>; malformed[field] = value;
+      writeFileSync(join(contract, "provenance.json"), `${JSON.stringify(malformed)}\n`);
+      expect(() => checkContract(target)).toThrow(/invalid fields/);
+      writeFileSync(join(contract, "provenance.json"), validProvenance);
+    }
     const vendor = join(contract, "vendor");
     writeFileSync(join(vendor, "manifest.json"), JSON.stringify({ schema: "memory-frontmatter/v1", cases: [{ file: "cases/../escape.md", accepted: false }] }));
     expect(() => validateCorpus(vendor)).toThrow(/invalid case/);
@@ -157,6 +170,17 @@ describe("memory-frontmatter contract tooling", () => {
     const original = process.cwd();
     process.chdir(elsewhere);
     try { expect(checkContract(root).fileCount).toBe(4); } finally { process.chdir(original); }
+    const cliRoot = consumer(); const cliCwd = temp("memory-cli-cwd-");
+    mkdirSync(join(cliRoot, "scripts"), { recursive: true }); copyFileSync(scriptPath, join(cliRoot, "scripts/memory-frontmatter-contract.mjs"));
+    const cliSync = cli(cliRoot, ["sync", "--source", source.repo, "--revision", source.revision], cliCwd);
+    const cliCheck = cli(cliRoot, ["check"], cliCwd);
+    expect(cliSync.status).toBe(0);
+    expect(cliCheck.status).toBe(0);
+    const cliProvenance = join(cliRoot, "tests/contracts/memory-frontmatter-v1/provenance.json");
+    const beforeCliFailure = readFileSync(cliProvenance);
+    expect(cli(cliRoot, ["sync"], cliCwd).status).toBe(1);
+    expect(cli(cliRoot, ["sync", "--source", source.repo, "--revision", source.revision.slice(0, 7)], cliCwd).status).toBe(1);
+    expect(readFileSync(cliProvenance)).toEqual(beforeCliFailure);
     const installFaults = [
       (from: string, to: string, vendor: string, _provenance: string) => from === vendor && to.endsWith("/vendor-backup"),
       (from: string, to: string, vendor: string, _provenance: string) => from !== vendor && from.endsWith("/vendor") && to === vendor,

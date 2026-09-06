@@ -115,8 +115,8 @@ export function readProvenance(path) {
   try { provenance = JSON.parse(readFileSync(path, "utf8")); } catch { fail("provenance.json is malformed JSON"); }
   const allowed = ["repository", "revision", "contractPath", "hashAlgorithm", "sha256", "fileCount"];
   if (!isObject(provenance) || Object.keys(provenance).length !== allowed.length || allowed.some((key) => !Object.hasOwn(provenance, key)) ||
-    provenance.repository !== "https://github.com/LanNguyenSi/agent-memory" || !REVISION_RE.test(provenance.revision) ||
-    provenance.contractPath !== CONTRACT_PATH || provenance.hashAlgorithm !== HASH_ALGORITHM || !HASH_RE.test(provenance.sha256) ||
+    provenance.repository !== "https://github.com/LanNguyenSi/agent-memory" || typeof provenance.revision !== "string" || !REVISION_RE.test(provenance.revision) ||
+    provenance.contractPath !== CONTRACT_PATH || provenance.hashAlgorithm !== HASH_ALGORITHM || typeof provenance.sha256 !== "string" || !HASH_RE.test(provenance.sha256) ||
     !Number.isInteger(provenance.fileCount) || provenance.fileCount < 2) {
     fail("provenance.json has invalid fields");
   }
@@ -242,7 +242,7 @@ function main(argv) {
   fail("usage: memory-frontmatter-contract.mjs check | sync --source <local producer repo> --revision <full SHA>");
 }
 
-if (process.argv[1] && resolve(fileURLToPath(import.meta.url)) === resolve(process.argv[1])) {
+if (process.argv[1] && realpathSync(fileURLToPath(import.meta.url)) === realpathSync(process.argv[1])) {
   try { const result = main(process.argv.slice(2)); console.log(`memory-frontmatter-contract: OK (${result.fileCount} files, ${result.sha256})`); }
   catch (error) { console.error(error.message); process.exitCode = 1; }
 }
