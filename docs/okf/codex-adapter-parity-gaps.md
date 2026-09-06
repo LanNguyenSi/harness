@@ -3,7 +3,7 @@ type: module
 title: Codex runtime adapter — parity gaps vs Claude Code
 description: "What harness's Codex runtime adapter is, the enumerated behavioral gaps vs the Claude Code first-class target (former headline gap, no Codex PostToolUse hook, closed by task a1348c89; the active-claim tracker / stay-in-scope reminder gap closed by task cf4cdc93; the opt-in auto-approval gap closed by agent-tasks 57058364, slice 2, gap 13; current top gap is the un-translated permission-profile / sandbox stanza, gap 4; the claude -p delegation gap 14 is decided (task be9faf70): stays Claude Code only, documented, not ported), and the Codex wire-format contract."
 tags: [codex, runtime-adapter, parity, hooks]
-timestamp: 2026-09-06T18:54:07Z
+timestamp: 2026-09-06T20:04:40Z
 sources:
   - src/cli/pack/hook-pre-tool-use.ts
   - src/cli/pack/hook-subagent-start.ts
@@ -24,6 +24,7 @@ sources:
   - src/cli/pack/hook-track-active-claim.ts
   - src/cli/pack/hook-stay-in-scope.ts
   - src/cli/pack/hook-bootstrap.ts
+  - src/runtime/task-providers/agent-tasks.ts
   - src/cli/apply/apply.ts
   - src/cli/apply/generate-codex-config.ts
   - src/cli/apply/install-codex-config.ts
@@ -59,7 +60,7 @@ Cross-runtime approval state is shared by design: both runtimes persist reports 
 
    **Why this was feasible with no dispatcher-level wire-format gap, unlike gap 4 (permission profiles):** both hooks (`src/cli/pack/hook-track-active-claim.ts`, `src/cli/pack/hook-stay-in-scope.ts`) needed no new Codex-specific CLI verb, no session-id resolution, and no shell-command extraction the way `codex-post-tool-use`/`codex-pre-tool-use` need; `harness pack hook track-active-claim` and `harness pack hook stay-in-scope` are the SAME command on both runtimes now (avoids reintroducing the Claude/Codex drift class task e7c2ec3c fixed on the PreToolUse side).
 
-   **Codex matcher handling:** an enabled reminder uses its configured simple tool names as a bare `|`-joined list, allowing `expandCodexHookMatchPattern` to add MCP server-name aliases. Its hook body uses the same alias-aware matching and `tool_name`/`tool`, `tool_input`/`raw_input` resolution as the rest of the adapter.
+   **Codex matcher handling:** an enabled reminder uses its configured simple tool names as a bare `|`-joined list, allowing `expandCodexHookMatchPattern` to add MCP server-name aliases. Its hook body uses the same alias-aware matching and `tool_name`/`tool`, `tool_input`/`raw_input` resolution as the rest of the adapter. The provider-specific task vocabulary, alias-aware runtime matching, payload extraction, and claim effects are owned by `src/runtime/task-providers/agent-tasks.ts`; the hooks remain envelope-specific consumers.
 
    **Sub-finding fixed in the same task (review, empirically confirmed, MEDIUM):** the initial cf4cdc93 landing left both hook bodies reading ONLY `event.tool_name` / `event.tool_input`, even though the documented Codex envelope (see "Wire-format differences" below) also tolerates `tool` as a `tool_name` synonym and `raw_input` as a `tool_input` synonym — the exact pair `codex-post-tool-use` already handles via its own `pickString(event.tool_name, event.tool)` / `resolveToolInput`. A reviewer probe confirmed both `{ tool_name, raw_input: { taskId } }` and `{ tool, tool_input: { taskId } }` silently no-op'd in `track-active-claim` and `stay-in-scope` while the sibling hook worked. Fixed by extracting the sibling's two helpers into shared `src/cli/pack/hook-bootstrap.ts` functions (`pickString`, already there from task a1348c89; new `resolveToolInput`) and consuming them from both hooks, rather than hand-copying a third and fourth private copy. `stay-in-scope`'s `tool_response` taskId fallback (a Claude-side convention the Codex envelope may not carry at all) was deliberately left untouched — it is read as-is, not folded into the `tool_input`/`raw_input` resolution. New tests in `tests/cli/pack-hook-track-active-claim.test.ts` and `tests/cli/pack-hook-stay-in-scope.test.ts` cover the `raw_input`-only shape, the `tool`-only shape, tool_input-over-raw_input precedence, the still-working `tool_response` fallback, and a negative control (neither name field present still skips).
 
