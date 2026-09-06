@@ -203,12 +203,26 @@ describe("completion-gate — decision matrix", () => {
   it("the no-verdict deny carries the reconnect-vs-retry facts (attempt id, no-retry-while-locked, poll/retention bounds)", async () => {
     // Regression for the agent-facing surface added for the reconnect-vs-
     // retry guidance (grounding-mcp >= 0.11.0): `gate.verdict === null` is
-    // ambiguous between "never evaluated" and "an attempt is still running
-    // in the background" (the hook has no attempt-log visibility), so this
-    // exact deny must carry the three facts an agent needs either way.
+    // ambiguous between "never evaluated", "an attempt is still running in
+    // the background", and "a marker exists but could not be read or
+    // parsed" (this hook does not read the documented attempt-lock anchor,
+    // scope decision, see the follow-up in
+    // solution-acceptance-reconnect.ts), so this exact deny must carry all
+    // three readings and the facts an agent needs either way.
     const { res, out } = await run({ cwd: repoAtHead(HEAD), verdictDir: verdictDirWith(null) });
     expect(res.blocked).toBe(true);
     const { reason } = JSON.parse(out) as { reason: string };
+    // The producer-version qualifier: this reconnect lifecycle is verified
+    // against grounding-mcp >= 0.11.0, not the pack's own (older) producer
+    // floor (>= 0.3.2), so the deny must not assert it unconditionally.
+    expect(reason).toMatch(/With grounding-mcp >= 0\.11\.0:/);
+    // The "no readable verdict marker" wording, and all three readings
+    // pinned (round 2 finding: the third reading's exact wording had
+    // drifted unpinned).
+    expect(reason).toMatch(/no readable verdict marker/);
+    expect(reason).toMatch(/was never called/);
+    expect(reason).toMatch(/still running in the background/);
+    expect(reason).toMatch(/could not be read or parsed/);
     // Fact 1: reconnect by attempt id via the status/result tools.
     expect(reason).toMatch(/solution_evaluate_status/);
     expect(reason).toMatch(/solution_evaluate_result/);
@@ -309,6 +323,8 @@ describe("completion-gate — decision matrix", () => {
     // asserting against the default-parameter plumbing indirectly.
     const stdout = captureStream();
     const stderr = captureStream();
+    const noManifestDir = fs.mkdtempSync(path.join(os.tmpdir(), "sa-hook-no-manifest-"));
+    cleanups.push(() => fs.rmSync(noManifestDir, { recursive: true, force: true }));
     const res = await runPackHookSolutionAcceptanceCli({
       stdin: streamFrom(
         JSON.stringify({
@@ -319,10 +335,7 @@ describe("completion-gate — decision matrix", () => {
       ),
       stdout: stdout.stream,
       stderr: stderr.stream,
-      configPath: path.join(
-        fs.mkdtempSync(path.join(os.tmpdir(), "sa-hook-no-manifest-")),
-        "harness.yaml",
-      ),
+      configPath: path.join(noManifestDir, "harness.yaml"),
       env: {},
     });
     expect(res.blocked).toBe(true);
