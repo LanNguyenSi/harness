@@ -2,6 +2,17 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-09-06T21:50:34Z, task 5c9cad05 ship preparation (orchestrator, docs-only delta): after
+  rebasing the branch onto master 8e79a8c the two release-notable commits were
+  reworded to name the task id and `CHANGELOG.md`'s review sub-bullets now cite
+  the task instead of commit SHAs (a rebase rewrites SHAs, a task id survives
+  it); the redesign sub-bullet and the pack doc subsection now use the same
+  "round 3" label as this log. `gate-fail-posture-matrix.md`,
+  `policy-engine-producer-wiring.md` and `pause-vs-gate-kill-switch.md` cite
+  `CHANGELOG.md`; their CHANGELOG-citing passages re-read against the edited
+  entry (no claim depends on the reworded sub-bullet text) and re-stamped.
+  `npm run check:changelog-coverage` is green on the reworded branch.
+
 - 2026-09-06T21:31:26Z, task `5c9cad05` round 3 redesign re-stamp: round 3
   moved the reconnect-vs-retry facts out of hand-written prose in
   `src/cli/pack/hook-solution-acceptance.ts`'s `reconnectGuidanceFor` and
