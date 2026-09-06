@@ -81,6 +81,55 @@ writer is the producer.
 Anti-forgery scope is v1-honest: it closes the enumerated-write-path
 residual, not arbitrary same-uid forgery.
 
+### Reconnecting vs. retrying a call (grounding-mcp >= 0.6.0)
+
+`solution_evaluate` waits only up to an internal bound before returning; a
+large repo's `preflight` run can outlive that bound and keeps running in
+the background regardless. When the run does not finish inside the
+bound, the call returns a running handle instead of a verdict:
+
+```json
+{ "status": "running", "attemptId": "<server-generated uuid>", "id": "task-42", "pollAfterMs": 5000 }
+```
+
+A caller whose own request timed out before ever seeing a response is in
+the same situation: nothing to read yet, an attempt possibly still live.
+Either way, poll for the result; do not treat the wait as a stall and
+call `solution_evaluate` again to "unstick" it.
+
+Poll `mcp__grounding-mcp__solution_evaluate_status` or
+`mcp__grounding-mcp__solution_evaluate_result` for the SAME `id`. Pass
+the `attemptId` from the running handle, or omit it to resolve the
+latest attempt for that id (the recovery path for a caller with no
+handle at all, because its own call timed out with nothing). Wait at
+least the returned `pollAfterMs` between polls.
+
+Once the attempt finishes, the two lookup tools return the SAME shape
+`solution_evaluate` itself would have: today's verdict payload plus
+`status` (`completed` or `failed`) and `attemptId`. A `running-unconfirmed`
+status means the id's lock is held but no attempt row names it yet; it
+still means keep polling, not stall or escalate, and it resolves by
+itself into `running` or clears once the lock is reclaimed as stale.
+
+Re-calling `solution_evaluate` for an id whose attempt is still live
+joins that attempt rather than starting a second one; `forceNewAttempt`
+is refused while an attempt is live. A genuinely new attempt is possible
+only once the previous one reaches a terminal status (`completed`,
+`failed`, `unknown`, or `expired`); an `unknown` status means the
+attempt's fate was never established, not that it is safe to assume
+success. Never escalate to a human before the advertised `pollAfterMs`
+has elapsed.
+
+The ordinary tool-call lifecycle above (poll with `solution_evaluate_status`
+/ `solution_evaluate_result`) is the only mechanism this pack relies on or
+documents as guaranteed. grounding-mcp separately sends
+`notifications/progress` pings while a call is pending, when the caller
+supplies a progress token; those pings are a caller-side, per-client
+convenience (see the grounding-mcp README for what each client does with
+them) and are not part of this pack's contract, and this pack makes no
+claim that they resolve a client's own request timeout for any specific
+client.
+
 ### Marker signing (harness/c7c3f606)
 
 The verdict now carries an HMAC-SHA256 signature, reusing the SAME

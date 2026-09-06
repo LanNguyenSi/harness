@@ -2,6 +2,27 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-09-06T13:12:12Z, task `529e85ea` re-verification (reconnect-vs-retry
+  prompt/doc addition to the `solution-acceptance` pack): two bundle docs
+  cite the two edited files as sources. `codex-adapter-parity-gaps.md`
+  cites `src/policy-packs/builtin/solution-acceptance.ts` (its only body
+  citation, finding 6, quotes `completionMatch` lines 100-104 and the
+  write-guard match constants lines 90-91) and `gate-fail-posture-matrix.md`
+  cites `docs/policy-packs/solution-acceptance.md` (its body citation
+  quotes lines 56-60, the `ready && head === current HEAD` deny-set
+  paragraph). This task's new prose was inserted after both cited ranges
+  (the new `.ts` section after `buildInstructions`'s existing "Earning a
+  verdict" block, well past line 104; the new `.md` section after the
+  anti-forgery paragraph, well past line 60), so re-read both citations
+  against the changed files: both still match verbatim, no line-number or
+  content drift. Timestamp-only re-stamp on both (`gate-fail-posture-matrix.md`,
+  `codex-adapter-parity-gaps.md`). Verified: `npx okf-kit@0.9.0 check
+  docs/okf --require-anchors` against this branch, run after the commit
+  (harness worktree at branch head), reported the same finding set as an
+  `npx okf-kit@0.9.0 check docs/okf --require-anchors` run against a scratch
+  clone of `origin/master` (`aa4aca6`) with no unrelated diff between the
+  two runs' output.
+
 - 2026-09-05T09:48:35Z, release 0.56.0 (commit `a64e5ea`) re-verification:
   the release commit only moved `[Unreleased]` into a dated `[0.56.0]`
   section (no wording change), and the immediately preceding merge
