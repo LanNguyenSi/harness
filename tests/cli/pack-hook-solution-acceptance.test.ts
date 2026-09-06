@@ -673,10 +673,10 @@ describe("completion-gate — solo / non-agent-tasks verdict id (SOLUTION_VERDIC
     expect(reason).toMatch(/task_start/);
     // Review round 1 finding (LOW, tests): the reconnect-vs-retry guidance
     // is gated on `showReconnectGuidance`, which defaults to `false` at
-    // every OTHER call site (this one included) — there is no id to poll
-    // for yet, so the paragraph must not appear here. Unpinned before this
-    // assertion: flipping the default to `true` survived every existing
-    // test.
+    // every OTHER call site (this one included, since there is no id to
+    // poll for yet), so the paragraph must not appear here. Unpinned
+    // before this assertion: flipping the default to `true` survived
+    // every existing test.
     expect(reason).not.toMatch(/Reconnecting vs\. retrying/);
   });
 

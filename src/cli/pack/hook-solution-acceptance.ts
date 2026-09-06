@@ -127,12 +127,12 @@ function completionActionLabel(
  * reply, or a call that timed out before it ever returned a handle); and "a
  * marker exists but `readVerdict` rejected it" (an invalid id, a symlinked
  * marker, a non-regular file, an unreadable file, malformed JSON, or a body
- * missing `id`/`head`/`ready` — see `readVerdict`,
+ * missing `id`/`head`/`ready`; see `readVerdict`,
  * solution-acceptance-runtime.ts). grounding-mcp >= 0.11.0's README documents
  * an attempt-lock anchor that would let this hook rule out the "still
- * running" reading — `<verdict dir>/<id>.attempt-lock` (mode 0600), beside
+ * running" reading (`<verdict dir>/<id>.attempt-lock`, mode 0600, beside
  * the `<id>.attempt-lock.lock` directory `proper-lockfile` manages, from
- * which the producer itself derives `running-unconfirmed` — but this change
+ * which the producer itself derives `running-unconfirmed`), but this change
  * does not read it: doing so is a second cross-repo coupling to the
  * producer's lock-file layout, with its own stale-lock semantics to absorb,
  * out of scope for a text-surface change. Rather than let the agent read "no
