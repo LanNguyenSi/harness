@@ -580,7 +580,7 @@ ${withinBlock}${countBlock}    hook: h
     ).toBe(true);
   });
 
-  it("warns (does not error) when policies declared but grounding-mcp is missing", () => {
+  it("warns (does not error) when evidence-consuming policies declared but grounding-mcp is missing", () => {
     const home = manifestWithPolicy({ withGroundingMcp: false });
     const result = validate({
       homeDir: home,
@@ -2024,13 +2024,39 @@ policies:
     ).toBeUndefined();
   });
 
+  it("operator_only-only policies do not warn when grounding-mcp is absent", () => {
+    const home = buildOperatorOnlyFixture();
+    const result = validate({
+      homeDir: home,
+      configPath: path.join(home, "harness.yaml"),
+      ...NOOP_PROBES,
+    });
+    expect(result.errorCount).toBe(0);
+    expect(
+      result.diagnostics.find((d) => /grounding-mcp not wired/.test(d.message)),
+    ).toBeUndefined();
+  });
+
+  it("mixed operator_only and evidence-consuming policies still warn without grounding-mcp", () => {
+    const home = buildOperatorOnlyFixture();
+    fs.appendFileSync(
+      path.join(home, "harness.yaml"),
+      `\n  - name: evidence-policy\n    description: consumes ledger evidence\n    trigger:\n      event: PreToolUse\n      match: Read\n    requires:\n      ledger_tag: "review:\${SESSION_ID}"\n    hook: gate-hook\n    enforcement: block\n`,
+    );
+    const result = validate({
+      homeDir: home,
+      configPath: path.join(home, "harness.yaml"),
+      ...NOOP_PROBES,
+    });
+    expect(
+      result.diagnostics.find((d) => /grounding-mcp not wired/.test(d.message)),
+    ).toMatchObject({ severity: "warning", path: "policies" });
+  });
+
   it("--strict does not turn the (absent) warning into an error for operator_only: true", () => {
-    // Note: this fixture (like its siblings above) wires no grounding-mcp,
-    // so it always trips the unrelated "policies declared but
-    // grounding-mcp not wired" hard error regardless of operator_only —
-    // that check is orthogonal to self-attestation. The assertion here is
-    // scoped to the self-attestation diagnostic specifically: it must be
-    // absent under --strict exactly as it is without it.
+    // operator_only policies consume no evidence, so they do not need
+    // grounding-mcp. The assertion remains scoped to the self-attestation
+    // diagnostic: it must be absent under --strict exactly as it is without it.
     const home = buildOperatorOnlyFixture();
     const result = validate({
       homeDir: home,

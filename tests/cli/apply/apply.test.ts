@@ -1965,7 +1965,10 @@ describe("apply: preserves sibling state under harness.generated/ (agent-tasks/b
 });
 
 describe("apply — grounding-mcp policy-degradation gate (discovery H3)", () => {
-  function writePolicyManifest(withGroundingMcp: boolean): void {
+  function writePolicyManifest(
+    withGroundingMcp: boolean,
+    kind: "evidence" | "operator_only" | "mixed" = "evidence",
+  ): void {
     const manifest = {
       version: 1,
       tools: {
@@ -1979,19 +1982,31 @@ describe("apply — grounding-mcp policy-degradation gate (discovery H3)", () =>
         {
           name: "h",
           event: "PreToolUse",
-          command: path.join(tmpHome, "hooks", "h.sh"),
+          command: "harness policy intercept",
           blocking: false,
         },
       ],
       policies: [
-        {
-          name: "p",
-          description: "test",
-          trigger: { event: "PreToolUse" },
-          requires: { ledger_tag: "review:${SESSION_ID}" },
-          hook: "h",
-          enforcement: "block",
-        },
+        ...(kind !== "operator_only"
+          ? [{
+              name: "p",
+              description: "consumes ledger evidence",
+              trigger: { event: "PreToolUse" },
+              requires: { ledger_tag: "review:${SESSION_ID}" },
+              hook: "h",
+              enforcement: "block",
+            }]
+          : []),
+        ...(kind !== "evidence"
+          ? [{
+              name: "operator-only-p",
+              description: "unconditional operator-only deny",
+              trigger: { event: "PreToolUse" },
+              operator_only: true,
+              hook: "h",
+              enforcement: "block",
+            }]
+          : []),
       ],
     };
     fs.writeFileSync(path.join(tmpHome, "harness.yaml"), yamlStringify(manifest));
@@ -2023,6 +2038,31 @@ describe("apply — grounding-mcp policy-degradation gate (discovery H3)", () =>
     const r = await apply({ homeDir: tmpHome });
     expect(r.outcome).toBe("applied");
   });
+
+  it("applies an operator_only-only manifest without grounding-mcp and preserves its hook", async () => {
+    writePolicyManifest(false, "operator_only");
+    const r = await apply({ homeDir: tmpHome });
+    expect(r.outcome).toBe("applied");
+    const settings = JSON.parse(fs.readFileSync(settingsPath(), "utf8"));
+    expect(settings.hooks.PreToolUse).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          hooks: expect.arrayContaining([
+            expect.objectContaining({ command: "harness policy intercept" }),
+          ]),
+        }),
+      ]),
+    );
+  });
+
+  it("refuses a mixed operator_only and evidence-consuming manifest without grounding-mcp", async () => {
+    writePolicyManifest(false, "mixed");
+    await expect(apply({ homeDir: tmpHome })).rejects.toMatchObject({
+      name: "HarnessExitError",
+      exitCode: 1,
+      message: expect.stringMatching(/evidence-consuming policies declared but grounding-mcp not wired/),
+    });
+  });
 });
 
 // Review round 3 (99f47307 Slice 1): the `.last-apply` manifest snapshot
@@ -2032,15 +2072,15 @@ describe("apply — grounding-mcp policy-degradation gate (discovery H3)", () =>
 // code and a snapshot written before the derivation existed cannot emit
 // a one-time phantom "hooks changed" hint.
 describe("apply — workflows[]-derived policies and the .last-apply snapshot (review round 3)", () => {
-  function writeWorkflowManifest(): void {
+  function writeWorkflowManifest(withGroundingMcp = true): void {
+    const groundingMcp = withGroundingMcp
+      ? "  mcp:\n    - name: grounding-mcp\n      command: [node, /x/grounding.js]\n"
+      : "  mcp: []\n";
     fs.writeFileSync(
       path.join(tmpHome, "harness.yaml"),
       `version: 1
 tools:
-  mcp:
-    - name: grounding-mcp
-      command: [node, /x/grounding.js]
-  cli: []
+${groundingMcp}  cli: []
   skills: {enabled: [], source_dirs: []}
   builtin: {known: []}
 memory:
@@ -2074,6 +2114,16 @@ policies: []
       "utf8",
     );
   }
+
+  it("refuses a required workflow-derived evidence gate without grounding-mcp before writing settings", async () => {
+    writeWorkflowManifest(false);
+    await expect(apply({ homeDir: tmpHome })).rejects.toMatchObject({
+      name: "HarnessExitError",
+      exitCode: 1,
+      message: expect.stringMatching(/evidence-consuming policies declared but grounding-mcp not wired/),
+    });
+    expect(fs.existsSync(settingsPath())).toBe(false);
+  });
 
   it("stores only hand-authored policies in the snapshot, and a second apply emits no restart hint", async () => {
     writeWorkflowManifest();
