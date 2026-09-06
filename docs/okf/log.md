@@ -2,6 +2,52 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-09-06T21:01:47Z, task `5c9cad05` round 2 re-verification (review
+  round 1 fix round: `src/cli/pack/hook-solution-acceptance.ts`'s
+  reconnect-guidance jsdoc and its `reconnectGuidanceFor` deny text
+  corrected (the deny wrongly claimed a live attempt's lock "refuses a
+  second `solution_evaluate` call"; grounding-mcp's actual semantics are
+  that a second call for a live attempt JOINS it, only `forceNewAttempt`
+  is refused; "no verdict marker on record" reworded to "no readable
+  verdict marker" and a third `gate.verdict === null` reading, an
+  unreadable/unparseable marker, named alongside the other two);
+  `docs/policy-packs/solution-acceptance.md`'s "Agent-facing surface for
+  the in-flight case" subsection reworded the same way, plus named the
+  grounding-mcp-documented attempt-lock anchor and the follow-up to read
+  it (review round 1 finding: the subsection had overclaimed no in-flight
+  signal exists at all); `CHANGELOG.md`'s task `5c9cad05` bullet amended
+  in place (same `[Unreleased]` entry, not a new one) to match. `git log
+  -1 --format=%cI -- src/cli/pack/hook-solution-acceptance.ts
+  docs/policy-packs/solution-acceptance.md CHANGELOG.md` from this
+  worktree at commit `3edc8ac` (the fix commit) reads
+  `2026-09-06T20:59:51Z` for all three, confirming every citer below is
+  re-verified after the actual last change to its cited files, not just
+  after this doc's own edit.
+
+  `gate-fail-posture-matrix.md` re-verified against the current file:
+  its `src/cli/pack/hook-solution-acceptance.ts` citation (lines 19-22,
+  the header fail-closed-contract paragraph) is untouched by this
+  round's edits, which land entirely below line 118; its
+  `docs/policy-packs/solution-acceptance.md` citation (lines 56-60, the
+  deny-set enumeration) is likewise untouched, the reworded subsection
+  starting at line 171. No line-number or content drift on either
+  citation, timestamp-only re-stamp. `policy-engine-producer-wiring.md`
+  and `pause-vs-gate-kill-switch.md` again list only `CHANGELOG.md`
+  among sources this round's files touch, and again cite only historical
+  already-released entries (unchanged from the round-1 entry below),
+  none touched by the amended `[Unreleased]` bullet: timestamp-only
+  re-stamp on both, same rationale as round 1. All three re-stamped to
+  `2026-09-06T21:01:47Z`.
+
+  `codex-adapter-parity-gaps.md` and `evidence-ledger-trust-boundary.md`
+  again list `CHANGELOG.md` among their sources and are again NOT
+  re-stamped, same rationale as round 1 below (their own primary
+  citations remain untouched and unverified by this task, deferred to
+  the PR #507 merge); `understanding-gate-lockout-recovery.md`'s
+  reported staleness (`src/policy-packs/builtin/
+  understanding-before-execution.ts`) is unrelated to this task, no file
+  this task touches names or cites it.
+
 - 2026-09-06T20:38:23Z, task `5c9cad05` re-verification (agent-facing
   surface for the in-flight reconnect-vs-retry guidance: `blockJson` in
   `src/cli/pack/hook-solution-acceptance.ts` now carries the three facts
