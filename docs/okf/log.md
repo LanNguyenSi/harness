@@ -2,6 +2,66 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-09-07T08:48:20Z, task 419ecfad (implementer): decided the recurring
+  `CHANGELOG.md`-source re-stale (every CHANGELOG edit anywhere in the repo
+  re-staled both docs that listed it under `sources:`, and the author of an
+  unrelated CHANGELOG change could not honestly re-stamp a doc whose
+  passages they had not actually re-verified). `okf-kit@0.10.0`'s
+  `sources-fresh` check flags a `sources:` entry by file path and commit
+  recency alone, with no per-section scoping (confirmed against the
+  installed package's README: "Staleness (sources-fresh)"), so keeping
+  `CHANGELOG.md` listed there was never going to stop re-staling regardless
+  of citation form used in the body. `citations-resolve`, a separate
+  check, does support a heading-section citation (grammar
+  target-path/hash/heading, `.md`
+  targets only, README "Heading-section citations") that resolves to a
+  whole Markdown section and is immune to line-number drift from new
+  releases prepended above it. Decision for both docs: drop `CHANGELOG.md`
+  from `sources:` and cite the specific release by heading instead.
+  - `codex-adapter-parity-gaps.md` (`docs/okf/codex-adapter-parity-gaps.md`):
+    three passages rested a claim on CHANGELOG content: gap 1's "PR #211 ...
+    the real Codex 0.131.0 `hook_config.rs` schema" claim, re-pointed from
+    prose `` CHANGELOG `[0.24.0]` `` to `` `CHANGELOG.md:#0.24.0` ``; gap 1's
+    "buried residual of the ... task e7c2ec3c fix", re-pointed from prose
+    `` CHANGELOG `[0.39.0]` `` to `` `CHANGELOG.md:#0.39.0` ``; gap 2's "five
+    parity tests", re-pointed from prose `CHANGELOG 0.39.0` to
+    `` `CHANGELOG.md:#0.39.0` ``. Re-verified against `CHANGELOG.md`: the
+    `[0.24.0]` section's Fixed entry (PR #211) confirms the Codex hook
+    schema fix against Codex 0.131.0's `hook_config.rs`; the `[0.39.0]`
+    section's task-`f86b2425`-slice-1 bullet and task-`e7c2ec3c` bullet
+    (five parity tests: expired blocks / fresh allows / task-scoped allows
+    / different-task marker blocks / stale task marker blocks) both match
+    the doc's claims. Doc re-stamped (`timestamp: 2026-09-07T08:48:20Z`).
+    `CHANGELOG.md` dropped from `sources:`.
+  - `evidence-ledger-trust-boundary.md`
+    (`docs/okf/evidence-ledger-trust-boundary.md`): one passage rested a
+    claim on CHANGELOG content: "Extracted as one copy in 0.39.0, task
+    f86b2425 slice 1", re-pointed from a bare `` `CHANGELOG.md` `` mention
+    to `` `CHANGELOG.md:#0.39.0` ``. Re-verified against the `[0.39.0]`
+    section's task-`f86b2425`-slice-1 bullet, which matches. Doc re-stamped
+    (`timestamp: 2026-09-07T08:48:20Z`). `CHANGELOG.md` dropped from
+    `sources:`.
+  - `docs/okf/index.md` gained one sentence in the maintenance note above
+    "## Overview" recording this rule for future docs: do not list
+    `CHANGELOG.md` under `sources:`, cite the release inline with a
+    heading-section citation such as `CHANGELOG.md:#0.24.0` instead.
+  - Measured after the change: `npx okf-kit@0.10.0 check --json docs/okf`
+    reports 0 errors, 0 `sources-fresh` findings for either doc (2
+    `sources-fresh-future` warnings on the pre-commit tree only, from the
+    fresh `timestamp` being ahead of the doc files' last commit before this
+    change was committed; gone once committed). `npx vitest run
+    tests/decisions-citations-resolve.test.ts` (the repo's anchor guard
+    for `path:N[-M]` citations) stays green; that guard does not parse
+    the heading-section form at all, so the check that guards the new
+    citations is okf-kit's own `citations-resolve` rule, which reports a
+    renamed heading as `heading-section-not-found` (replayed in review
+    by renaming the `[0.24.0]` heading, uncommitted, and restoring it).
+    Negative control: appended a throwaway line to `CHANGELOG.md`
+    in the worktree (uncommitted), re-ran the check, confirmed neither doc
+    reported a `sources-fresh` finding caused by it (0 STALE findings for
+    either doc, since neither doc's `sources:` lists `CHANGELOG.md` any
+    more), then reverted with `git checkout -- CHANGELOG.md`.
+
 - 2026-09-07T07:33:55Z, task 30183330 (orchestrator): re-verified and re-stamped the docs that list `docs/CLI.md` among their sources after the Notes bullet above was added (`debug-verb-selection.md`, `evidence-ledger-trust-boundary.md`, `policy-engine-producer-wiring.md`); their `docs/CLI.md` references are section names and producer names, unchanged by the bullet.
 
 - 2026-09-07T07:32:32Z, task 30183330 (orchestrator), review round 3 notes, docs and
