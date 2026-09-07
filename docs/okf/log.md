@@ -56,7 +56,7 @@
     and the 0.45.0 bullet, likewise given a trailing
     `` `CHANGELOG.md:#0.45.0` `` pointer (the `f1aea826` entry). Left
     unconverted: the 0.45.0 bullet's closing "Consult `CHANGELOG.md`
-    directly for anything shipped after 0.45.0 not named in this bundle" —
+    directly for anything shipped after 0.45.0 not named in this bundle",
     a forward pointer to content this bundle does not name, not a claim
     resting on a specific section, so there is no section to anchor it to.
     Re-verified against `CHANGELOG.md`: the `[0.44.0]` section's
