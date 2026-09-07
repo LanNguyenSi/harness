@@ -368,6 +368,76 @@ tools:
     );
     expect(preflightVersionCalls).toHaveLength(1);
   });
+
+  // task 6993d9b5, round 3 F1: the test above only covers checkHooks and
+  // this module's own floor check (both wired to `dedupedVersionProbe`
+  // directly in `doctor()`), because its fixture has `policies: []`.
+  // `buildPolicyPacks` (which calls `checkPolicyPackVersions`) and
+  // `checkPolicyPackHookVersions` are wired to the SAME
+  // `dedupedVersionProbe`, but nothing here drove a policy pack that
+  // spawns a version probe, so a revert of either of those two wirings
+  // back to a fresh `memoizeVersionProbe(...)` call (or to the raw,
+  // un-memoized `opts.versionProbe`) would pass every test in this file
+  // silently. This fixture adds an enabled `understanding-before-execution`
+  // pack with a pack-level `min_version`, alongside the git-preflight hook
+  // and `session_start_preflight.setup: true` from the test above, so all
+  // four `dedupedVersionProbe` callers in `doctor()` fire on ONE report:
+  //   - checkHooks                    -> ["preflight", "--version"]
+  //   - checkSessionStartPreflightSetupVersion -> ["preflight", "--version"]
+  //   - buildPolicyPacks (checkPolicyPackVersions)   -> ["understanding-gate", "--version"]
+  //   - checkPolicyPackHookVersions (pack's own hooks) -> ["understanding-gate", "--version"]
+  // Two distinct argvs, each expected to spawn exactly once despite four
+  // call sites splitting across the two argvs 2-and-2.
+  it("shares one spawn per distinct argv across all four version-probe callers", async () => {
+    const home = makeFixture({
+      "harness.yaml": `version: 1
+hooks:
+  - name: git-preflight
+    event: SessionStart
+    command: harness session-start preflight
+    blocking: false
+    min_version: "0.6.0"
+    version_command: ["preflight", "--version"]
+session_start_preflight:
+  setup: true
+policy_packs:
+  - name: understanding-before-execution
+    source: builtin
+    enabled: true
+    min_version: "0.5.0"
+tools:
+  builtin:
+    known: []
+`,
+    });
+    const recordedArgv: Array<readonly string[]> = [];
+    const versionProbe = (cmd: readonly string[]): string | null => {
+      recordedArgv.push(cmd);
+      if (cmd[0] === "preflight") return "preflight 0.7.1\n";
+      if (cmd[0] === "understanding-gate") return "understanding-gate 0.9.0\n";
+      return null;
+    };
+    const report = await doctor({
+      configPath: path.join(home, "harness.yaml"),
+      homeOverride: home,
+      versionProbe,
+      pathEnv: "",
+      npmBinExec: STUB_NPM_BIN_EXEC_UNKNOWN,
+    });
+    // Both floors are satisfied (0.7.1 ≥ 0.6.0, 0.9.0 ≥ 0.5.0); the pin
+    // below is the per-argv spawn COUNT, not either check's verdict.
+    expect(report.hooks.find((h) => h.name === "git-preflight")?.version?.status).toBe("ok");
+    expect(report.sessionStartPreflightSetupVersion).toBeUndefined();
+    expect(report.policyPacks.versionGaps).toEqual([]);
+    const argvKey = (cmd: readonly string[]) => JSON.stringify(cmd);
+    const counts = new Map<string, number>();
+    for (const cmd of recordedArgv) {
+      const key = argvKey(cmd);
+      counts.set(key, (counts.get(key) ?? 0) + 1);
+    }
+    expect(counts.get(JSON.stringify(["preflight", "--version"]))).toBe(1);
+    expect(counts.get(JSON.stringify(["understanding-gate", "--version"]))).toBe(1);
+  });
 });
 
 // task 6993d9b5, round 2 F4: on a manifest shaped like FULL_TEMPLATE (a
