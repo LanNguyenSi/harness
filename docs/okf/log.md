@@ -2,6 +2,31 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-09-07T06:31:17Z, task 30183330 (implementer), follow-up to the
+  entry directly below (the review round 2 fix commit): `npx
+  okf-kit@0.10.0 check docs/okf`, run after that commit, reported 6
+  `sources-fresh` STALE warnings, one each for `codex-adapter-parity-gaps.md`,
+  `debug-verb-selection.md`, `evidence-ledger-trust-boundary.md`,
+  `gate-fail-posture-matrix.md`, `pause-vs-gate-kill-switch.md`, and
+  `policy-engine-producer-wiring.md`, the SAME 6 docs the round-1
+  follow-up entry further below already re-verified against this same
+  `docs/CLI.md` row / `CHANGELOG.md` `[Unreleased]` entry, because the
+  round 2 commit only EXPANDED that already-checked row/entry (added
+  trust/security, host-global-scope, and timeout-interplay prose to the
+  existing `harness session-start preflight` surface) rather than citing
+  anything new. Re-confirmed each doc's specific citation is still
+  accurate: `codex-adapter-parity-gaps.md`'s `docs/CLI.md` citation is
+  still the unrelated hook-entrypoints table and the line-65 2s-timeout
+  note; `debug-verb-selection.md` and `policy-engine-producer-wiring.md`
+  still list `docs/CLI.md` / `src/cli/explain-policy.ts` only in
+  `sources:`, no line-pinned prose citation into either;
+  `evidence-ledger-trust-boundary.md`'s `docs/CLI.md` mention is still
+  the bare producer-name reference; `gate-fail-posture-matrix.md` and
+  `pause-vs-gate-kill-switch.md` still cite only already-tagged, older
+  `CHANGELOG.md` version sections, untouched by the `[Unreleased]`
+  entry's expansion. Re-stamped all 6 to `2026-09-07T06:31:17Z`. Re-ran
+  the check after committing the re-stamps: 0 errors, 0 warnings.
+
 - 2026-09-07T06:28:08Z, task 30183330 (implementer), review round 2 fixes:
   touched `CHANGELOG.md` (expanded the `[Unreleased]` entry with the
   re-measured four-cell `--setup`/gitignore table, the trust/security and
@@ -17,9 +42,9 @@
   surface the entry below already checked against every `sources:`-listing
   doc, and `src/cli/explain-policy.ts` gained no new line other than the
   em-dash cleanup below (no shift). Ran `npx okf-kit@0.10.0 check docs/okf`
-  after this commit; see the entry immediately following this one (added
-  after actually running that check) for the result and any re-stamps it
-  required.
+  after this commit; see the entry directly above this one (added after
+  actually running that check, so it sits newer/higher in this
+  newest-first log) for the result and the re-stamps it required.
   - Also fixed a review-round-2 style finding (`no em dashes`) across this
     task's own prior additions in `CHANGELOG.md`, `docs/CLI.md`,
     `src/schema/session-start-preflight.ts`, `src/cli/session-start/index.ts`,
