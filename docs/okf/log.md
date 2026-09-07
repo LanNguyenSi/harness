@@ -2,6 +2,50 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-09-07T04:12:56Z, task 5c9cad05 final (rebase onto the merged KB-001 master):
+  rebased this branch onto master `c6e8933` (PR #507, docs refresh that
+  re-verified and re-stamped `codex-adapter-parity-gaps.md`,
+  `gate-fail-posture-matrix.md`, `evidence-ledger-trust-boundary.md`, and
+  `understanding-gate-lockout-recovery.md`; PR #508, the unrelated
+  memory-frontmatter-conformance fix, whose only bundle-relevant effect is
+  a `CHANGELOG.md` edit at 20:34Z). The only textual conflict, in
+  `gate-fail-posture-matrix.md`'s `timestamp:` line, was resolved by
+  keeping the incoming (later) value; the doc is re-stamped again below
+  regardless, so the interim pick carries no consequence.
+
+  Re-pointed the citation drift the round-3 entry below predicted:
+  `codex-adapter-parity-gaps.md` (finding 6) cited
+  `src/policy-packs/builtin/solution-acceptance.ts` `completionMatch` at
+  "lines 100-104" and `WRITEGUARD_MATCH_CLAUDE`/`WRITEGUARD_MATCH_CODEX`
+  at "lines 90-91"; verified at HEAD (post-rebase) the one new import
+  line shifted both down by exactly one, `completionMatch`'s full
+  declaration is now lines 102-105 and the two `WRITEGUARD_MATCH_*`
+  constants are now lines 92-93. Neither cited construct's own body text
+  changed, only its position in the file. Both citations updated in
+  place.
+
+  Re-stamped `codex-adapter-parity-gaps.md` and
+  `evidence-ledger-trust-boundary.md` to this entry's own timestamp:
+  `npx okf-kit@0.10.0 check --json docs/okf`, run against the rebased
+  tree before this commit, flagged both stale (
+  `codex-adapter-parity-gaps.md` against both
+  `src/policy-packs/builtin/solution-acceptance.ts` and `CHANGELOG.md`;
+  `evidence-ledger-trust-boundary.md` against `CHANGELOG.md` only).
+  `evidence-ledger-trust-boundary.md`'s `CHANGELOG.md` citations (the
+  task `f86b2425` slice 1 extraction note and the task `204efc56`
+  `report_missing` doc-list mention) both name already-released entries;
+  neither PR #508's memory-frontmatter bullet nor this branch's own
+  reconnect-vs-retry bullet touch either cited passage, so this is a
+  timestamp-only re-stamp with no content drift. `gate-fail-posture-matrix.md`,
+  `pause-vs-gate-kill-switch.md`, and `policy-engine-producer-wiring.md`
+  were already re-stamped past PR #508's `CHANGELOG.md` edit by this
+  branch's own round-3 commit below and needed no further action; the
+  check confirms none of the three shows a `sources-fresh` finding after
+  the rebase.
+
+  `npx okf-kit@0.10.0 check --json docs/okf` on the tree this log entry
+  commits with reports 0 errors and 0 warnings.
+
 - 2026-09-06T21:50:34Z, task 5c9cad05 ship preparation (orchestrator, docs-only delta): after
   rebasing the branch onto master 8e79a8c the two release-notable commits were
   reworded to name the task id and `CHANGELOG.md`'s review sub-bullets now cite
