@@ -790,5 +790,7 @@ toolchain_parity:
   enabled: false
 stale_base_check:
   enabled: false
+session_start_preflight:
+  setup: false
 doctor:
   ignore_template_drift: []

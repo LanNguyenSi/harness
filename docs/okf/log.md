@@ -2,12 +2,34 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- task 30183330 (implementer): added the `session_start_preflight.setup`
+  config block (`src/schema/session-start-preflight.ts`, wired into
+  `src/schema/index.ts`), shifting every line at and below the new field
+  by 5. Re-pointed `manifest-validation-scope.md`'s two bare (unanchored)
+  citations into `src/schema/index.ts`: the hook-check superRefine
+  citation `:43-53` -> `:56-66` and the workflow-template-check
+  continuation `:54-67` -> `:67-80`, plus the `parseManifest` citation
+  `:113-126` -> `:126-139`. All three were ALREADY off by a consistent
+  8 lines before this change (a pre-existing drift from `toolchain_parity`
+  / `stale_base_check` landing without a re-point, never flagged because
+  `citations-resolve` only checks a bare range is in-bounds, not that it
+  names the right content) — fixed to the correct post-edit lines here
+  rather than compounding the drift. Re-stamped this doc's `timestamp` to
+  `2026-09-07T05:54:41Z`. Also touched `src/cli/session-start/index.ts`,
+  `src/cli/explain-policy.ts`, `docs/CLI.md`, and `CHANGELOG.md` for the
+  same task; every other bundle doc listing one of those as a `sources:`
+  entry was re-checked with `npx okf-kit@0.10.0 check docs/okf` after the
+  commit (see below for the result and any further re-stamps this made
+  necessary).
+
 - 2026-09-07T04:19:00Z, task d4ea97ba closure (orchestrator, docs-only): the three docs
   the freshness rule had reported STALE at the task's creation are fresh at
   master `0a495db` and needed no further edit here. `manifest-validation-scope.md`
   was re-verified and re-stamped by the policy-citation refresh commits
-  `b35ff65` and `54a37b8` (its stamp:
-  `docs/okf/manifest-validation-scope.md:6#"timestamp: 2026-09-06T17:58:18Z"`);
+  `b35ff65` and `54a37b8` (its stamp then was `2026-09-06T17:58:18Z` at
+  `docs/okf/manifest-validation-scope.md:6`, superseded by the task
+  30183330 re-stamp in the entry above — the string anchor on this
+  citation was dropped here because it names a now-overwritten value);
   `understanding-gate-lockout-recovery.md` by the KB-001 knowledge refresh,
   PR #507 (stamp:
   `docs/okf/understanding-gate-lockout-recovery.md:6#"timestamp: 2026-09-06T20:12:56Z"`);

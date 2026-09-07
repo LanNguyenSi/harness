@@ -40,7 +40,10 @@ const NON_BASH_EVENT = JSON.stringify({
   tool_input: { file_path: "/etc/hosts" },
 });
 
-const MANIFEST: Manifest = parseManifest({
+// Shared raw manifest input (task 30183330 adds MANIFEST_WITH_SETUP, a
+// variant of the SAME config plus `session_start_preflight.setup: true`,
+// below).
+const MANIFEST_INPUT = {
   version: 1,
   hooks: [
     { name: "risk-gate", event: "PreToolUse", command: "/usr/bin/true", blocking: false },
@@ -61,6 +64,14 @@ const MANIFEST: Manifest = parseManifest({
     {
       name: "plain-bash-gate",
       description: "a no-when: policy, Phase 4 shape",
+      trigger: { event: "PreToolUse", match: "Bash" },
+      requires: { ledger_tag: "preflight:${REPO}" },
+      hook: "risk-gate",
+      enforcement: "block",
+    },
+    {
+      name: "preflight-before-investigation",
+      description: "require a fresh preflight tag before git investigation (task 30183330 fixture)",
       trigger: { event: "PreToolUse", match: "Bash" },
       requires: { ledger_tag: "preflight:${REPO}" },
       hook: "risk-gate",
@@ -91,6 +102,16 @@ const MANIFEST: Manifest = parseManifest({
       },
     ],
   },
+};
+
+const MANIFEST: Manifest = parseManifest(MANIFEST_INPUT);
+
+// Same config as MANIFEST, plus `session_start_preflight.setup: true`
+// (task 30183330) — used to prove `explain-policy` shows the flag's
+// TRUE value too, not just its default.
+const MANIFEST_WITH_SETUP: Manifest = parseManifest({
+  ...MANIFEST_INPUT,
+  session_start_preflight: { setup: true },
 });
 
 // Deterministic seams: the branch drives environment resolution.
@@ -206,5 +227,38 @@ describe("explainPolicy — errors", () => {
     }
     expect(caught).toBeInstanceOf(HarnessExitError);
     expect((caught as HarnessExitError).exitCode).toBe(66);
+  });
+});
+
+describe("explainPolicy — session_start_preflight (task 30183330)", () => {
+  it("shows session_start_preflight.setup:false for a preflight-before-* policy by default", () => {
+    const file = writeEvent(DESTROY_EVENT);
+    const { projection } = explainPolicy("preflight-before-investigation", {
+      ...seams("main"),
+      eventPath: file,
+      manifest: MANIFEST,
+    });
+    expect(projection.session_start_preflight).toEqual({ setup: false });
+  });
+
+  it("shows session_start_preflight.setup:true when the manifest enables it", () => {
+    const file = writeEvent(DESTROY_EVENT);
+    const { projection } = explainPolicy("preflight-before-investigation", {
+      ...seams("main"),
+      eventPath: file,
+      manifest: MANIFEST_WITH_SETUP,
+    });
+    expect(projection.session_start_preflight).toEqual({ setup: true });
+  });
+
+  it("omits session_start_preflight for a non-preflight policy", () => {
+    const file = writeEvent(DESTROY_EVENT);
+    const { projection } = explainPolicy("gate-prod-destructive", {
+      ...seams("main"),
+      eventPath: file,
+      manifest: MANIFEST_WITH_SETUP,
+    });
+    expect(projection.session_start_preflight).toBeUndefined();
+    expect(Object.keys(projection)).not.toContain("session_start_preflight");
   });
 });

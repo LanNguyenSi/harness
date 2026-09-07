@@ -31,10 +31,12 @@ afterAll(() => {
 });
 
 import {
+  buildPreflightArgv,
   preflightChildEnv,
   runSessionStartPreflight,
   type RunPreflightResult,
 } from "../../../src/cli/session-start/index.js";
+import { parseManifest } from "../../../src/schema/index.js";
 
 let cleanups: Array<() => void> = [];
 afterEach(() => {
@@ -1171,5 +1173,149 @@ describe("multiple failing checks (task a48b9729)", () => {
     expect(result.reason).toContain(`; log: ${path.join(logDir, logFiles[0]!)}`);
     expect((result.reason?.match(/; failing:/g) ?? []).length).toBe(1);
     expect(errOut()).toContain("npm-test (t1 | t2 | t3), secret-scan (s1 | s2 | s3), lint");
+  });
+});
+
+// ===========================================================================
+// `--setup` passthrough (task 30183330)
+// ===========================================================================
+
+describe("buildPreflightArgv (task 30183330)", () => {
+  it("renders the base argv with no --setup when setup is false", () => {
+    expect(buildPreflightArgv("/repo", false)).toEqual(["run", "--json", "/repo"]);
+  });
+
+  it("inserts --setup before the cwd positional when setup is true", () => {
+    expect(buildPreflightArgv("/repo", true)).toEqual(["run", "--json", "--setup", "/repo"]);
+  });
+});
+
+describe("SessionStartPreflightSchema — manifest parsing (task 30183330)", () => {
+  it("defaults to setup:false when the block is absent entirely", () => {
+    const m = parseManifest({ version: 1 });
+    expect(m.session_start_preflight).toEqual({ setup: false });
+  });
+
+  it("defaults to setup:false when the block is an empty object", () => {
+    const m = parseManifest({ version: 1, session_start_preflight: {} });
+    expect(m.session_start_preflight).toEqual({ setup: false });
+  });
+
+  it("parses an explicit setup:true", () => {
+    const m = parseManifest({ version: 1, session_start_preflight: { setup: true } });
+    expect(m.session_start_preflight).toEqual({ setup: true });
+  });
+
+  it("rejects unknown keys (.strict())", () => {
+    expect(() =>
+      parseManifest({ version: 1, session_start_preflight: { setup: true, bogus_key: 1 } }),
+    ).toThrow();
+  });
+
+  it("rejects a non-boolean setup value", () => {
+    expect(() =>
+      parseManifest({ version: 1, session_start_preflight: { setup: "yes" } }),
+    ).toThrow();
+  });
+});
+
+describe("runSessionStartPreflight — setup:true manifest wiring (task 30183330)", () => {
+  it("passes setup:true through to runPreflight when an injected manifest enables it", async () => {
+    const repo = makeRepoFixture("setup-on-service");
+    const manifest = parseManifest({ version: 1, session_start_preflight: { setup: true } });
+    const seenArgs: Array<{ cwd: string; timeoutMs: number; setup: boolean }> = [];
+    const result = await runSessionStartPreflight({
+      stdin: streamFrom(JSON.stringify({ session_id: "s", cwd: repo })),
+      stderr: captureStream().stream,
+      manifest,
+      runPreflight: async (cwd, timeoutMs, setup) => {
+        seenArgs.push({ cwd, timeoutMs, setup });
+        return { ok: true, json: { ready: true, confidence: 0.9, checks: [] } };
+      },
+      writeLedger: async () => ({ ok: true }),
+    });
+    expect(result.wrote).toBe(true);
+    expect(seenArgs).toEqual([{ cwd: repo, timeoutMs: 60_000, setup: true }]);
+  });
+
+  it("passes setup:false through to runPreflight when the manifest omits the block", async () => {
+    const repo = makeRepoFixture("setup-off-service");
+    const manifest = parseManifest({ version: 1 });
+    const seenArgs: Array<{ cwd: string; timeoutMs: number; setup: boolean }> = [];
+    const result = await runSessionStartPreflight({
+      stdin: streamFrom(JSON.stringify({ session_id: "s", cwd: repo })),
+      stderr: captureStream().stream,
+      manifest,
+      runPreflight: async (cwd, timeoutMs, setup) => {
+        seenArgs.push({ cwd, timeoutMs, setup });
+        return { ok: true, json: { ready: true, confidence: 0.9, checks: [] } };
+      },
+      writeLedger: async () => ({ ok: true }),
+    });
+    expect(result.wrote).toBe(true);
+    expect(seenArgs).toEqual([{ cwd: repo, timeoutMs: 60_000, setup: false }]);
+  });
+
+  it("degrades to setup:false (never aborts the run) when no manifest is injected and loadManifest fails", async () => {
+    // Unlike the ledger-writer's own loadManifest call (which ABORTS the
+    // whole run on a load failure, see "reports a manifest load failure"
+    // above), a failure to resolve `session_start_preflight.setup` must
+    // NOT abort: the preflight run proceeds with setup:false, matching
+    // the sibling companions' "not configured -> skip" contract.
+    const repo = makeRepoFixture("setup-degrade-service");
+    const seenArgs: Array<{ cwd: string; timeoutMs: number; setup: boolean }> = [];
+    const result = await runSessionStartPreflight({
+      stdin: streamFrom(JSON.stringify({ session_id: "s", cwd: repo })),
+      stderr: captureStream().stream,
+      // No `manifest` injected AND no homeDir/configPath: loadManifest(opts)
+      // throws (resolvePaths' throw-on-real-home-dir guard), so this
+      // exercises the catch-swallow-to-false path for setup resolution.
+      runPreflight: async (cwd, timeoutMs, setup) => {
+        seenArgs.push({ cwd, timeoutMs, setup });
+        return { ok: true, json: { ready: true, confidence: 0.9, checks: [] } };
+      },
+      writeLedger: async () => ({ ok: true }),
+    });
+    expect(result.wrote).toBe(true);
+    expect(seenArgs).toEqual([{ cwd: repo, timeoutMs: 60_000, setup: false }]);
+  });
+});
+
+describe("HEAD-binding order (task 30183330, guards preflight tag semantics)", () => {
+  it("resolves the HEAD sha BEFORE invoking runPreflight, not after", async () => {
+    // Regression guard for a reorder that runs `runPreflight` before (or
+    // resolves HEAD after) the sha capture: the injected runPreflight
+    // mutates the loose ref file in place (simulating work done DURING
+    // the `preflight` child, e.g. a --setup build/checkout step touching
+    // the tree) before returning ready:true. If the producer captured
+    // the HEAD sha AFTER runPreflight instead of before, the recorded
+    // `head:<sha>` would be the MUTATED value, not the original one.
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "harness-sspf-headorder-"));
+    cleanups.push(() => fs.rmSync(root, { recursive: true, force: true }));
+    const repo = path.join(root, "headorder");
+    fs.mkdirSync(path.join(repo, ".git", "refs", "heads"), { recursive: true });
+    fs.writeFileSync(path.join(repo, ".git", "HEAD"), "ref: refs/heads/main\n");
+    const refPath = path.join(repo, ".git", "refs", "heads", "main");
+    const originalSha = "1111111111111111111111111111111111111111";
+    const mutatedSha = "2222222222222222222222222222222222222222";
+    fs.writeFileSync(refPath, `${originalSha}\n`);
+
+    const writes: string[] = [];
+    const result = await runSessionStartPreflight({
+      stdin: streamFrom(JSON.stringify({ session_id: "s", cwd: repo })),
+      stderr: captureStream().stream,
+      runPreflight: async () => {
+        fs.writeFileSync(refPath, `${mutatedSha}\n`);
+        return { ok: true, json: { ready: true, confidence: 0.9, checks: [] } };
+      },
+      writeLedger: async (args) => {
+        writes.push(args.content);
+        return { ok: true };
+      },
+    });
+    expect(result.wrote).toBe(true);
+    expect(writes).toHaveLength(1);
+    expect(writes[0]).toContain(`head:${originalSha}`);
+    expect(writes[0]).not.toContain(mutatedSha);
   });
 });
