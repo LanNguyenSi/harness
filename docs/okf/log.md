@@ -2,6 +2,16 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-09-07T10:52:27Z, task 4f0abbc8 (implementer): negative control for
+  the 2026-09-07T10:50:36Z entry below (commit `e060323`). Appended one
+  throwaway line to `CHANGELOG.md` (uncommitted), ran `npx
+  okf-kit@0.10.0 check --json docs/okf`: 0 findings, 0 errors/warnings/
+  notices across the whole bundle. None of the five docs that used to
+  list `CHANGELOG.md` under `sources:` (the two task 419ecfad converted,
+  the three this task converted) went `sources-fresh` STALE from the
+  edit, confirming the recurring class is closed for all of them.
+  Reverted with `git checkout -- CHANGELOG.md`.
+
 - 2026-09-07T10:50:36Z, task 4f0abbc8 (implementer): finished the removal
   task 419ecfad started (`docs/okf/log.md`'s 2026-09-07T08:48:20Z entry) for
   the three remaining bundle docs that still listed `CHANGELOG.md` under
