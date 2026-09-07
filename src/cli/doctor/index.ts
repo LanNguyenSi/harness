@@ -56,6 +56,7 @@ import {
 } from "./understanding-mode-env.js";
 import { checkAutoApproveMode } from "./auto-approve-mode.js";
 import { checkBypassWithoutAutoApprove } from "./bypass-without-auto-approve.js";
+import { checkSessionStartPreflightSetupVersion } from "./session-start-preflight-setup-version.js";
 import {
   runDoctorToolchainParity,
   type RunDoctorToolchainParityOptions,
@@ -1126,6 +1127,10 @@ function countDiagnostics(report: Omit<DoctorReport, "errorCount" | "warningCoun
   // 8f637efd): always advisory, never an error, see
   // bypass-without-auto-approve.ts.
   if (report.ugBypassWithoutAutoApprove) warningCount++;
+  // session_start_preflight.setup below the build-capable preflight
+  // floor (task 6993d9b5): always advisory, never an error, see
+  // session-start-preflight-setup-version.ts.
+  if (report.sessionStartPreflightSetupVersion) warningCount++;
   // ugInflight is informational only (ℹ) and never contributes here: a
   // stale or skipped record is exactly what `harness gc` sweeps, not a
   // tampering signal (see ug-inflight.ts / types.ts). Placed after every
@@ -1228,17 +1233,34 @@ export async function doctor(opts: DoctorOptions = {}): Promise<DoctorReport> {
     ...(opts.versionProbe !== undefined ? { versionProbe: opts.versionProbe } : {}),
   });
 
-  const hooks = checkHooks(manifest, home, opts);
+  // One memoized probe shared across every doctor check that spawns
+  // `<binary> --version` (task 6993d9b5, round 2 F3/F4): `checkHooks`,
+  // `buildPolicyPacks`, the policy-pack-expanded hook walk
+  // (`checkPolicyPackHookVersions`, which already deduped internally but
+  // started from its own fresh cache) and the new
+  // session_start_preflight.setup check below all probe the same
+  // `["preflight", "--version"]` argv on a `min_version: 0.6.0` manifest.
+  // Without a shared cache that argv would spawn once per caller, per
+  // `doctor` run. `memoizeVersionProbe` (above) already existed for
+  // this; it just was not wired to the callers that predate the new
+  // check.
+  const dedupedVersionProbe = memoizeVersionProbe(opts.versionProbe ?? (() => null));
+  const hooks = checkHooks(manifest, home, { versionProbe: dedupedVersionProbe });
+  // task 6993d9b5: independent of the generic hooks[] min_version walk
+  // above, see session-start-preflight-setup-version.ts for why.
+  const sessionStartPreflightSetupVersion = checkSessionStartPreflightSetupVersion(
+    manifest,
+    dedupedVersionProbe,
+  );
   const policies = buildPolicies(manifest);
-  const policyPacksVersionProbe = opts.versionProbe ?? (() => null);
   const policyPacks = buildPolicyPacks(
     manifest,
-    policyPacksVersionProbe,
+    dedupedVersionProbe,
     resolveGitIgnoreProbe(opts),
   );
   const policyPackHookVersions = checkPolicyPackHookVersions(
     manifest,
-    policyPacksVersionProbe,
+    dedupedVersionProbe,
   );
   const workflows = buildWorkflows(manifest);
   const riskGate = buildRiskGate(manifest);
@@ -1410,6 +1432,9 @@ export async function doctor(opts: DoctorOptions = {}): Promise<DoctorReport> {
     ...(ugDelegations !== undefined ? { ugDelegations } : {}),
     ...(ugInflight !== undefined ? { ugInflight } : {}),
     ...(ugBypassWithoutAutoApprove !== undefined ? { ugBypassWithoutAutoApprove } : {}),
+    ...(sessionStartPreflightSetupVersion !== undefined
+      ? { sessionStartPreflightSetupVersion }
+      : {}),
     ...(ugAutoApproveMode !== undefined ? { ugAutoApproveMode } : {}),
     ...(settingsDrift !== undefined ? { settingsDrift } : {}),
     ...(codexConfigDrift !== undefined ? { codexConfigDrift } : {}),

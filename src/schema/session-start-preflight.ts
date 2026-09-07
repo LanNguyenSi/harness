@@ -54,6 +54,17 @@ import { z } from "zod";
 // The full scope, degradation, timeout and version notes live in ONE place,
 // docs/CLI.md under `session_start_preflight.setup`, pinned by the tests
 // named there; this header deliberately does not repeat them.
+//
+// VERSION CAVEAT (task 6993d9b5): agent-preflight 0.5.0's `--setup` was
+// install-only (no conditional build, see the prose above). The build
+// step described above shipped in agent-preflight 0.6.0 (tag v0.6.0,
+// merge commit 2062831). `SESSION_START_PREFLIGHT_SETUP_BUILD_MIN_VERSION`
+// below is the ONE floor both `harness doctor`
+// (src/cli/doctor/session-start-preflight-setup-version.ts) and the
+// `init` template's `git-preflight` hook `min_version`
+// (src/cli/init/templates.ts) read, so the two cannot drift apart.
+export const SESSION_START_PREFLIGHT_SETUP_BUILD_MIN_VERSION = "0.6.0";
+
 export const SessionStartPreflightSchema = z
   .object({
     setup: z.boolean().default(false),

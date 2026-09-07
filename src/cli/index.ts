@@ -9,7 +9,7 @@ import { HermeticSpawnViolationError } from "../runtime/hermetic-spawn-guard.js"
 // Production version probe for `harness doctor`: synchronous --version
 // invocation with a 5s timeout. Tests inject their own probe; the CLI
 // entrypoint wires this default. Same shape as `cli/doctor/codex.ts`.
-function defaultVersionProbe(cmd: readonly string[]): string | null {
+export function defaultVersionProbe(cmd: readonly string[]): string | null {
   if (cmd.length === 0) return null;
   try {
     const result = spawnSync(cmd[0]!, cmd.slice(1), {

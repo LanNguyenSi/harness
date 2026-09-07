@@ -2,6 +2,58 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-09-07T09:48:18Z, task 6993d9b5 (implementer), round 3 review fixes
+  (F1-F6): the round-3 commit touches `src/cli/index.ts` (exports
+  `defaultVersionProbe`, single-line change), `src/cli/doctor/index.ts`
+  (F2 test, F3 wires `dedupedVersionProbe` into `buildPolicyPacks` and
+  expands its memoization comment by one line), `src/cli/doctor/session-
+  start-preflight-setup-version.ts` (F4 adds a 7-line "BY DESIGN" comment
+  block), `src/cli/init/templates.ts` and `docs/examples/full-manifest.yaml`
+  (F5 drops the task id from an existing comment line, no line-count
+  change) and `docs/CLI.md` (F4 appends one sentence to the VERSION
+  CAVEAT paragraph, still a single physical line). `npx okf-kit@0.10.0
+  check docs/okf` flagged `codex-adapter-parity-gaps.md`,
+  `debug-verb-selection.md`, `evidence-ledger-trust-boundary.md`,
+  `pause-vs-gate-kill-switch.md`, `policy-engine-producer-wiring.md`,
+  `quote-model-divergence.md` and `understanding-gate-lockout-recovery.md`
+  `sources-fresh` STALE against these files. Checked every line-numbered
+  citation these seven docs make into the five touched files
+  (`src/cli/index.ts:1686-1701`, `:2957-2961`, `:3330-3429`,
+  `:3332-3337`; `src/cli/init/templates.ts:928`): all still match their
+  quoted text verbatim (sibling-line check), since none of this round's
+  edits added or removed a line above a cited line in any file a
+  line-numbered citation targets. No citation needed re-pointing;
+  re-stamped all seven `timestamp:` fields in the same commit as the fix.
+
+- 2026-09-07T09:25:47Z, task 6993d9b5 (implementer), round 2 review fixes
+  (F1-F5, commit `0fef632`): `src/cli/doctor/index.ts` (F4 memoized
+  version-probe sharing), `CHANGELOG.md` (F3 wording fix plus the round-2
+  summary paragraph) and `docs/examples/full-manifest.yaml` (F3
+  min_version bump 0.2.0 -> 0.6.0) each re-triggered `sources-fresh`
+  STALE on five docs (the recurring `docs/CLI.md`/`CHANGELOG.md`-class
+  task 419ecfad tracks): `debug-verb-selection.md` (cites
+  `doctor/index.ts` generically, module-level, no line numbers; the
+  memoization refactor is internal caching only and does not change any
+  behavior the doc describes), `gate-fail-posture-matrix.md` and
+  `policy-engine-producer-wiring.md` (both cite `CHANGELOG.md` for
+  historic entries by task id/version, e.g. `0.44.0`/`0.45.0`, none of
+  which the new `[Unreleased]` material touches), `pause-vs-gate-kill-
+  switch.md` (cites both `doctor/index.ts`, generic, and `CHANGELOG.md`
+  for the `63fefe3a`/`1432e053`/`d834a065` historic entries, also
+  untouched), and `quote-model-divergence.md` (cites `full-manifest.yaml`
+  generically for its bash_match kill-switch measurements, not the
+  git-preflight `min_version` comment block F3 edited). Re-verified: no
+  cited passage in any of the five was moved or contradicted; re-stamped
+  their `timestamp:` fields to this entry's timestamp, no citation
+  re-pointing needed.
+
+- 2026-09-07T09:10:00Z, task 6993d9b5 (implementer): the second (template-bump) commit's own `CHANGELOG.md` and `src/cli/init/templates.ts` edits re-triggered `sources-fresh` STALE on the same five docs the first commit already re-stamped (the recurring class task 419ecfad tracks), plus `evidence-ledger-trust-boundary.md` and `pause-vs-gate-kill-switch.md` newly against `templates.ts` (both cite it without a line number, generically, so nothing to re-point). Re-verified all five citations are unaffected historic/generic references and re-stamped their `timestamp:` fields in this follow-up commit; this is a deviation from the task's stated two-commit plan, made to avoid leaving docs/okf stale rather than folding a fix into an already-made commit (amending is disallowed by this session's git policy).
+
+- 2026-09-07T09:05:00Z, task 6993d9b5 (implementer): the `git-preflight` template `min_version` bump commit adds a 7-line import plus 6 net new comment lines above/within `src/cli/init/templates.ts`'s template literals, shifting every line-numbered citation into it downward. `docs/okf/quote-model-divergence.md:419` cited `src/cli/init/templates.ts:821` for the "bash_match's regex coverage of exotic shell shapes" sentence; that citation was ALREADY stale before this task's edit (the sentence sat at line 914 pre-edit, not 821: a pre-existing drift, unrelated to this task, not otherwise investigated). Re-pointed to the correct post-edit line 928 (sibling-line check: the quoted sentence text matches verbatim at that line) and re-stamped the doc's timestamp. No other line-numbered `templates.ts` citation was found in docs/okf.
+
+- 2026-09-07T08:57:30Z, task 6993d9b5 (implementer): after committing the doctor-check commit above, `npx okf-kit@0.10.0 check docs/okf` flagged `debug-verb-selection.md` `sources-fresh` STALE against both `docs/CLI.md` and `src/cli/doctor/index.ts` (the same recurring class). Re-verified: its citations of both files (the `min_version` probe description, the doctor verb's general purpose paragraph) are unaffected by the new session_start_preflight.setup check; re-stamped its `timestamp:` field, no citation re-pointing needed.
+
+- 2026-09-07T08:56:00Z, task 6993d9b5 (implementer): added the `harness doctor` `session_start_preflight.setup` version-floor warning (`src/cli/doctor/session-start-preflight-setup-version.ts`, wired into `index.ts`/`types.ts`/`format.ts`), the shared `SESSION_START_PREFLIGHT_SETUP_BUILD_MIN_VERSION` constant (`src/schema/session-start-preflight.ts`), rewrote `docs/CLI.md`'s VERSION CAVEAT bullet for the now-released agent-preflight 0.6.0, and added a CHANGELOG `[Unreleased]` entry. `npx okf-kit@0.10.0 check docs/okf` flagged five docs `sources-fresh` STALE against the CHANGELOG.md edit alone (the recurring `docs/CLI.md`/`CHANGELOG.md` class task 419ecfad tracks): `codex-adapter-parity-gaps.md`, `evidence-ledger-trust-boundary.md`, `gate-fail-posture-matrix.md`, `pause-vs-gate-kill-switch.md`, `policy-engine-producer-wiring.md`. Re-verified: each cites `CHANGELOG.md` for a historic entry (a prior task id / version), none of which the new bullet touches or contradicts; re-stamped their `timestamp:` field to this entry's timestamp, no citation re-pointing needed (no cited line numbers moved).
 - 2026-09-07T08:48:20Z, task 419ecfad (implementer): decided the recurring
   `CHANGELOG.md`-source re-stale (every CHANGELOG edit anywhere in the repo
   re-staled both docs that listed it under `sources:`, and the author of an

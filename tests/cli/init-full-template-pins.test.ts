@@ -5,6 +5,8 @@ import { SOLO_TEMPLATE, TEAM_TEMPLATE } from "../../src/cli/init/profiles.js";
 import { composeCustom } from "../../src/cli/init/composer.js";
 import { FULL_TEMPLATE } from "../../src/cli/init/templates.js";
 import { parseManifest } from "../../src/schema/index.js";
+import { SESSION_START_PREFLIGHT_SETUP_BUILD_MIN_VERSION } from "../../src/schema/session-start-preflight.js";
+import { PREFLIGHT_SETUP_VERSION_COMMAND } from "../../src/cli/doctor/session-start-preflight-setup-version.js";
 
 // Module-scope helper (hoisted out of two describe blocks that each used
 // to define their own copy — task fb80b5bb round 2): extracts the
@@ -32,22 +34,38 @@ function bashMatchers(templateSource: string): RegExp[] {
 // in tests/policy-packs/expand.test.ts:132-155.
 
 describe("FULL_TEMPLATE: npm-bin hook pins", () => {
-  it("git-preflight (agent-preflight) floors at 0.2.0 with `preflight --version` probe", () => {
-    // Floor at agent-preflight 0.2.0: the release that makes secret
-    // detection git-aware and diff-scoped. Pre-0.2.0 installs hard-fail
-    // preflight on the normal correct state (a gitignored .env holding
-    // real credentials), so the SessionStart producer never writes a
-    // `preflight:` tag and the preflight-before-* policies stay closed
-    // forever on any repo with a local .env. The version_command points
-    // at the source-of-truth `preflight` binary, not at the `harness
-    // session-start preflight` wrapper, so the floor checks the actual
-    // upstream release.
+  it("git-preflight (agent-preflight) floors at 0.6.0 with `preflight --version` probe", () => {
+    // Floor raised 0.2.0 -> 0.6.0 (task 6993d9b5, second commit): 0.6.0
+    // is the agent-preflight release that made `--setup` build code, not
+    // only install dependencies (agent-preflight PR #72, tag v0.6.0).
+    // The version_command points at the source-of-truth `preflight`
+    // binary, not at the `harness session-start preflight` wrapper, so
+    // the floor checks the actual upstream release. Shares
+    // SESSION_START_PREFLIGHT_SETUP_BUILD_MIN_VERSION with `harness
+    // doctor`'s session_start_preflight.setup version check
+    // (src/cli/doctor/session-start-preflight-setup-version.ts) so the
+    // two floors cannot drift apart; asserted directly below.
     const m = parseManifest(parseYaml(FULL_TEMPLATE));
     const gitPreflight = m.hooks.find((h) => h.name === "git-preflight");
     expect(gitPreflight, "FULL_TEMPLATE must declare a git-preflight SessionStart hook").toBeDefined();
     expect(gitPreflight?.event).toBe("SessionStart");
-    expect(gitPreflight?.min_version).toBe("0.2.0");
+    expect(gitPreflight?.min_version).toBe(SESSION_START_PREFLIGHT_SETUP_BUILD_MIN_VERSION);
+    expect(gitPreflight?.min_version).toBe("0.6.0");
     expect(gitPreflight?.version_command).toEqual(["preflight", "--version"]);
+  });
+
+  // Task 6993d9b5, round 2 F5: `PREFLIGHT_SETUP_VERSION_COMMAND`
+  // (src/cli/doctor/session-start-preflight-setup-version.ts) is built
+  // from the SessionStart preflight producer's own `PREFLIGHT_BIN`
+  // constant (src/cli/session-start/index.ts), not an independent
+  // "preflight" string literal, so it cannot silently drift from the
+  // binary the producer actually spawns. This asserts it also stays
+  // byte-identical to the FULL_TEMPLATE git-preflight hook's
+  // `version_command`, already parsed above.
+  it("PREFLIGHT_SETUP_VERSION_COMMAND matches the FULL_TEMPLATE git-preflight hook's version_command", () => {
+    const m = parseManifest(parseYaml(FULL_TEMPLATE));
+    const gitPreflight = m.hooks.find((h) => h.name === "git-preflight");
+    expect(gitPreflight?.version_command).toEqual([...PREFLIGHT_SETUP_VERSION_COMMAND]);
   });
 });
 

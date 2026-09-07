@@ -15,6 +15,7 @@ import type { UgInflightSection } from "./ug-inflight.js";
 import type { SettingsDriftSection } from "./settings-drift.js";
 import type { AutoApproveModeWarning } from "./auto-approve-mode.js";
 import type { BypassWithoutAutoApproveFinding } from "./bypass-without-auto-approve.js";
+import type { SessionStartPreflightSetupVersionFinding } from "./session-start-preflight-setup-version.js";
 import type { CodexConfigDriftSection } from "./codex-config-drift.js";
 
 /**
@@ -465,6 +466,16 @@ export interface DoctorReport {
   ugBypassWithoutAutoApprove?: BypassWithoutAutoApproveFinding;
 
   /**
+   * `session_start_preflight.setup: true` against a `preflight` binary
+   * below the build-capable release (task 6993d9b5). Present only when
+   * `setup` is enabled AND the probed/parsed version is below
+   * `SESSION_START_PREFLIGHT_SETUP_BUILD_MIN_VERSION` (or the probe
+   * failed/could not be parsed); always a warning (`⚠`) when present,
+   * see session-start-preflight-setup-version.ts.
+   */
+  sessionStartPreflightSetupVersion?: SessionStartPreflightSetupVersionFinding;
+
+  /**
    * `auto_approve` configured without `mode: grill_me` (agent-tasks
    * abfad738, follow-up of ADR
    * docs/decisions/2026-08-27-ug-auto-mode-approval.md slice 1).
@@ -595,6 +606,7 @@ export interface DoctorReport {
 }
 
 export type { NpmBinReport } from "./npm-bin-path.js";
+export type { SessionStartPreflightSetupVersionFinding } from "./session-start-preflight-setup-version.js";
 export type { ClaudeMcpRegistrationSection, ClaudeMcpEntryReport } from "./claude-mcp.js";
 export type { UnderstandingModeEnvDivergence } from "./understanding-mode-env.js";
 export type { UgAutoApprovalsSection, AutoApprovalListingEntry } from "./ug-auto-approvals.js";
