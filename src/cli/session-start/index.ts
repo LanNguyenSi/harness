@@ -651,10 +651,10 @@ export async function runSessionStartPreflight(
       // `opts.manifest`: a failure here ABORTS the whole run (the catch
       // below returns early with no ledger write attempted), while the
       // `setupEnabled` call's failure degrades to `setup: false` and lets
-      // the run proceed. Loading once and sharing the result would either
-      // abort on a config error the setup resolution is meant to
-      // tolerate, or silently swallow a real load failure this branch
-      // must surface, so the two calls keep their own try/catch.
+      // the run proceed. One shared load could carry both outcomes (a
+      // captured result plus its error), but two local try/catch blocks
+      // keep each site's failure handling obvious where it is read, and
+      // the second load is cheap; that is the whole reason for the repeat.
       manifest = loadManifest(opts).manifest;
     } catch (err) {
       const reason = `manifest load failed: ${(err as Error).message}`;

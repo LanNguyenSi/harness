@@ -2,6 +2,21 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-09-07T07:32:32Z, task 30183330 (orchestrator), review round 3 notes, docs and
+  comments only: `docs/okf/pause-vs-gate-kill-switch.md` re-pointed its
+  commands citation from a range that started inside an earlier command
+  body to `src/cli/index.ts:3330-3429` (the `pause` and `resume`
+  registrations); `docs/okf/codex-adapter-parity-gaps.md` corrected the
+  docs/CLI.md line reference for the 2s Codex hook timeout note (line 67, a
+  pre-existing off-by-two, measured equal at the base commit); the
+  `src/schema/session-start-preflight.ts` header no longer repeats the
+  scope, degradation and timeout notes and points at docs/CLI.md as the one
+  place they live; the second `loadManifest` comment in
+  `src/cli/session-start/index.ts` states the true reason for the repeated
+  load instead of asserting a shared load could not carry both outcomes;
+  docs/CLI.md's Notes name that `explain-policy` shows the key only for
+  `preflight-before-*` policies. No source semantics changed.
+
 - 2026-09-07T07:09:46Z, task 30183330 (implementer), review round 3 fixes:
   commit `eeb8029` touched `src/cli/index.ts` (two commander descriptions),
   `docs/CLI.md` (the `harness session-start preflight` row rewritten in

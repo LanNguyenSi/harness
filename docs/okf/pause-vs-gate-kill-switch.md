@@ -3,7 +3,7 @@ type: runbook
 title: Kill switches — pause vs gate disable
 description: harness has two distinct operator kill switches — `harness pause` (sentinel file, silences ALL hooks temporarily, operator-only enforced in code) vs `harness gate disable` (surgically removes matching hook groups from settings.json with a reversible snapshot); when to use which, exact flags, restore paths, and trust caveats.
 tags: [runbook, pause, gate-disable, kill-switch, operator]
-timestamp: 2026-09-07T07:09:46Z
+timestamp: 2026-09-07T07:32:32Z
 sources:
   - src/runtime/pause-sentinel.ts
   - src/runtime/command-normalize.ts
@@ -44,7 +44,7 @@ harness has TWO separate kill-switch mechanisms. Do not conflate them: `pause` i
 
 **History note: closed 2026-08-25 (tasks `63fefe3a`, `1432e053`).** The Codex `UserPromptSubmit` injector and the Codex `Stop` capture now both honour the sentinel; earlier they did not, so an active pause silenced every gate except these two. Both now call `checkHookPause` first, same ordering as `hook-pre-tool-use.ts`. All four `hook-codex-*.ts` files import `checkHookPause`, pinned by a source-grep test. Measurement and dogfood detail: CHANGELOG.md, `63fefe3a` and `1432e053` entries.
 
-**Commands** (registered in `src/cli/index.ts:3289-3388`):
+**Commands** (registered in `src/cli/index.ts:3330-3429`):
 - `harness pause --for <duration>` — e.g. `5m`, `1h`, `PT30S`; default 15 minutes (`DEFAULT_PAUSE_SECONDS = 15 * 60`, `src/cli/pause/index.ts:36`).
 - `harness pause --indefinite` — refuses unless the separate verbose flag `--i-am-the-operator-and-accept-no-auto-resume` is also passed; the flag's verbosity is deliberate friction (`src/cli/pause/index.ts:269-281`).
 - `--reason <text>` — recorded in the sentinel and announced on each hook fire.
