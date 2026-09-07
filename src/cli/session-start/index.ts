@@ -4,7 +4,7 @@
 // the SessionStart event JSON from stdin, runs `agent-preflight`
 // (`preflight run --json [--setup] <cwd>`; `--setup` is opt-in via the
 // manifest's `session_start_preflight.setup` key, default `false`, task
-// 30183330 — see ./src/schema/session-start-preflight.ts), and on a
+// 30183330, see ./src/schema/session-start-preflight.ts), and on a
 // `ready:true` result writes a `preflight:${REPO}` fact to the evidence
 // ledger so the `preflight-before-investigation` / `preflight-before-push`
 // policies have a fresh tag to match within their `within` windows.
@@ -103,7 +103,7 @@ export interface SessionStartPreflightOptions extends LoaderOptions {
    * Unlike the ledger-writer's own `loadManifest` call further down
    * (used only when `writeLedger` is not injected, whose failure
    * ABORTS the whole preflight run), a failure to resolve `setup` here
-   * — an injected manifest is absent AND `loadManifest(opts)` throws —
+   * (an injected manifest is absent AND `loadManifest(opts)` throws)
    * degrades to `setup: false` (matches the sibling SessionStart
    * companions' "not configured -> skip" contract) rather than
    * aborting the entire preflight run over this one unrelated knob.
@@ -643,6 +643,15 @@ export async function runSessionStartPreflight(
   if (!writeLedger) {
     let manifest: Manifest;
     try {
+      // Second `loadManifest(opts)` call of this run (task 30183330); see
+      // the `setupEnabled` resolution above (~line 588) for the first.
+      // Deliberately NOT reused: a failure here ABORTS the whole run (the
+      // catch below returns early with no ledger write attempted), while
+      // the earlier call's failure degrades to `setup: false` and lets
+      // the run proceed. Loading once and sharing the result would either
+      // abort on a config error the setup resolution is meant to
+      // tolerate, or silently swallow a real load failure this branch
+      // must surface, so the two calls keep their own try/catch.
       manifest = opts.manifest ?? loadManifest(opts).manifest;
     } catch (err) {
       const reason = `manifest load failed: ${(err as Error).message}`;

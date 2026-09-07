@@ -107,7 +107,7 @@ const MANIFEST_INPUT = {
 const MANIFEST: Manifest = parseManifest(MANIFEST_INPUT);
 
 // Same config as MANIFEST, plus `session_start_preflight.setup: true`
-// (task 30183330) — used to prove `explain-policy` shows the flag's
+// (task 30183330), used to prove `explain-policy` shows the flag's
 // TRUE value too, not just its default.
 const MANIFEST_WITH_SETUP: Manifest = parseManifest({
   ...MANIFEST_INPUT,
@@ -230,7 +230,7 @@ describe("explainPolicy — errors", () => {
   });
 });
 
-describe("explainPolicy — session_start_preflight (task 30183330)", () => {
+describe("explainPolicy: session_start_preflight (task 30183330)", () => {
   it("shows session_start_preflight.setup:false for a preflight-before-* policy by default", () => {
     const file = writeEvent(DESTROY_EVENT);
     const { projection } = explainPolicy("preflight-before-investigation", {

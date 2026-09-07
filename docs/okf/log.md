@@ -2,12 +2,40 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-09-07T06:28:08Z, task 30183330 (implementer), review round 2 fixes:
+  touched `CHANGELOG.md` (expanded the `[Unreleased]` entry with the
+  re-measured four-cell `--setup`/gitignore table, the trust/security and
+  host-global-scope wording, and the timeout/process-isolation caveat),
+  `docs/CLI.md` (same three additions folded into the
+  `harness session-start preflight` row), `src/schema/session-start-preflight.ts`
+  (header comment gained the same security/scope/timeout text) and
+  `src/cli/session-start/index.ts` (one-line comment at the second
+  `loadManifest(opts)` call site, no functional change). No content this
+  bundle's other docs cite was touched beyond what the entry below already
+  re-verified: `docs/CLI.md`'s row and `CHANGELOG.md`'s entry both stay
+  additions to the SAME `harness session-start preflight` / `[Unreleased]`
+  surface the entry below already checked against every `sources:`-listing
+  doc, and `src/cli/explain-policy.ts` gained no new line other than the
+  em-dash cleanup below (no shift). Ran `npx okf-kit@0.10.0 check docs/okf`
+  after this commit; see the entry immediately following this one (added
+  after actually running that check) for the result and any re-stamps it
+  required.
+  - Also fixed a review-round-2 style finding (`no em dashes`) across this
+    task's own prior additions in `CHANGELOG.md`, `docs/CLI.md`,
+    `src/schema/session-start-preflight.ts`, `src/cli/session-start/index.ts`,
+    `src/cli/explain-policy.ts`, `tests/cli/explain-policy.test.ts`,
+    `tests/cli/session-start/preflight.test.ts`, and this doc's own
+    round-1 entries below (rewording only, no citation or fact changed);
+    left `docs/okf/manifest-validation-scope.md`'s one pre-existing
+    em-dash (in prose this task did not author, only its line-number
+    citations) untouched as out of scope.
+
 - task 30183330 (implementer), follow-up to the entry below: `npx
   okf-kit@0.10.0 check docs/okf` run after commit `9c0d386` (the
   `session_start_preflight.setup` commit) reported 10 `sources-fresh`
   STALE warnings across 6 docs, each because one of `docs/CLI.md`,
   `CHANGELOG.md`, or `src/cli/explain-policy.ts` changed in that commit
-  without also re-stamping the doc — the same recurring
+  without also re-stamping the doc, the same recurring
   CHANGELOG/CLI.md-driven staleness class task 419ecfad tracks (see the
   2026-09-07T04:19:00Z entry further below). Content re-verified as
   still accurate for all 6 (none cites the specific lines/sections this
@@ -38,7 +66,7 @@
   8 lines before this change (a pre-existing drift from `toolchain_parity`
   / `stale_base_check` landing without a re-point, never flagged because
   `citations-resolve` only checks a bare range is in-bounds, not that it
-  names the right content) — fixed to the correct post-edit lines here
+  names the right content), fixed to the correct post-edit lines here
   rather than compounding the drift. Re-stamped this doc's `timestamp` to
   `2026-09-07T05:54:41Z`. Also touched `src/cli/session-start/index.ts`,
   `src/cli/explain-policy.ts`, `docs/CLI.md`, and `CHANGELOG.md` for the
@@ -53,7 +81,7 @@
   was re-verified and re-stamped by the policy-citation refresh commits
   `b35ff65` and `54a37b8` (its stamp then was `2026-09-06T17:58:18Z` at
   `docs/okf/manifest-validation-scope.md:6`, superseded by the task
-  30183330 re-stamp in the entry above — the string anchor on this
+  30183330 re-stamp in the entry above, the string anchor on this
   citation was dropped here because it names a now-overwritten value);
   `understanding-gate-lockout-recovery.md` by the KB-001 knowledge refresh,
   PR #507 (stamp:
@@ -61,7 +89,7 @@
   `policy-engine-producer-wiring.md` by the same commits and again by the
   task 5c9cad05 rounds, since it cites `CHANGELOG.md` (stamp then was
   `2026-09-06T21:50:34Z` at `docs/okf/policy-engine-producer-wiring.md:6`,
-  superseded by the task 30183330 re-stamp in the entry above — anchor
+  superseded by the task 30183330 re-stamp in the entry above, anchor
   dropped for the same now-overwritten-value reason).
   Verdict, measured on master `0a495db` before this entry and again on the
   committed tree after it: `npx okf-kit@0.10.0 check --json docs/okf` reports

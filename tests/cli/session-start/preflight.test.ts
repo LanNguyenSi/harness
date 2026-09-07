@@ -1190,7 +1190,7 @@ describe("buildPreflightArgv (task 30183330)", () => {
   });
 });
 
-describe("SessionStartPreflightSchema — manifest parsing (task 30183330)", () => {
+describe("SessionStartPreflightSchema: manifest parsing (task 30183330)", () => {
   it("defaults to setup:false when the block is absent entirely", () => {
     const m = parseManifest({ version: 1 });
     expect(m.session_start_preflight).toEqual({ setup: false });
@@ -1219,7 +1219,7 @@ describe("SessionStartPreflightSchema — manifest parsing (task 30183330)", () 
   });
 });
 
-describe("runSessionStartPreflight — setup:true manifest wiring (task 30183330)", () => {
+describe("runSessionStartPreflight: setup:true manifest wiring (task 30183330)", () => {
   it("passes setup:true through to runPreflight when an injected manifest enables it", async () => {
     const repo = makeRepoFixture("setup-on-service");
     const manifest = parseManifest({ version: 1, session_start_preflight: { setup: true } });
@@ -1278,6 +1278,144 @@ describe("runSessionStartPreflight — setup:true manifest wiring (task 30183330
     });
     expect(result.wrote).toBe(true);
     expect(seenArgs).toEqual([{ cwd: repo, timeoutMs: 60_000, setup: false }]);
+  });
+
+  it("resolves setup:true from a real on-disk manifest via configPath, not only an injected manifest", async () => {
+    // Review round 2: every wiring test above injects `manifest` directly,
+    // bypassing the real `loadManifest(opts)` parse-and-merge path. This
+    // drives that real path with a temp harness.yaml on disk instead.
+    const repo = makeRepoFixture("setup-real-config");
+    const manifestPath = path.join(repo, "harness.yaml");
+    fs.writeFileSync(
+      manifestPath,
+      [
+        "version: 1",
+        "hooks: []",
+        "policies: []",
+        "tools:",
+        "  builtin:",
+        "    known: [Read, Edit]",
+        "session_start_preflight:",
+        "  setup: true",
+        "",
+      ].join("\n"),
+    );
+    const seenArgs: Array<{ cwd: string; timeoutMs: number; setup: boolean }> = [];
+    const result = await runSessionStartPreflight({
+      stdin: streamFrom(JSON.stringify({ session_id: "s", cwd: repo })),
+      stderr: captureStream().stream,
+      configPath: manifestPath,
+      // No `manifest` injected: `setupEnabled` resolution must go through
+      // the real `loadManifest(opts)` call to pick up `setup: true` from
+      // this on-disk file.
+      runPreflight: async (cwd, timeoutMs, setup) => {
+        seenArgs.push({ cwd, timeoutMs, setup });
+        return { ok: true, json: { ready: true, confidence: 0.9, checks: [] } };
+      },
+      writeLedger: async () => ({ ok: true }),
+    });
+    expect(result.wrote).toBe(true);
+    expect(seenArgs).toEqual([{ cwd: repo, timeoutMs: 60_000, setup: true }]);
+  });
+});
+
+describe(
+  "runSessionStartPreflight: ready:false from --setup (task 30183330, review round 2)",
+  () => {
+    it(
+      "does NOT write the ledger tag when a ready:false result's failing check is " +
+        "clean-worktree (the --setup degradation shape measured on agent-preflight's own " +
+        "tests/fixtures/monorepo-build-required fixture)",
+      async () => {
+        const repo = makeRepoFixture("setup-dirties-worktree");
+        const { stream: err, output: errOut } = captureStream();
+        const writes: string[] = [];
+        const result = await runSessionStartPreflight({
+          stdin: streamFrom(JSON.stringify({ session_id: "s", cwd: repo })),
+          stderr: err,
+          logDir: makeLogDirFixture(),
+          // Simulates the measured shape: `--setup` writes an untracked
+          // build artifact into the worktree, flipping clean-worktree
+          // from pass to fail and the overall verdict to ready:false.
+          runPreflight: async () => ({
+            ok: true,
+            json: {
+              ready: false,
+              confidence: 0.62,
+              checks: [
+                {
+                  name: "clean-worktree",
+                  status: "fail",
+                  message: "Repository has uncommitted changes",
+                },
+              ],
+            },
+          }),
+          writeLedger: async (args) => {
+            writes.push(args.content);
+            return { ok: true };
+          },
+        });
+        expect(result.wrote).toBe(false);
+        expect(writes).toEqual([]);
+        expect(result.reason).toContain("clean-worktree (Repository has uncommitted changes)");
+        expect(errOut()).toContain("clean-worktree (Repository has uncommitted changes)");
+        expect(errOut()).toContain("leaving the preflight tag unwritten so the gate stays closed");
+      },
+    );
+  },
+);
+
+describe("spawnPreflight argv (real spawn, fake binary) (task 30183330, review round 2)", () => {
+  // Round 2 gap: every argv assertion above (`buildPreflightArgv` and the
+  // manifest-wiring tests) goes through an injected `runPreflight`, never
+  // the real `spawnPreflight` -> `execFile` path. This drives that real
+  // path against a fake `preflight` binary on PATH that dumps its own
+  // received argv to a file, proving `buildPreflightArgv`'s output is
+  // what actually reaches the spawned child.
+  async function spawnedArgvFor(setup: boolean): Promise<string[]> {
+    const repo = makeRepoFixture(`argv-probe-${setup ? "on" : "off"}`, "main");
+    const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "harness-fakebin-argv-"));
+    cleanups.push(() => fs.rmSync(binDir, { recursive: true, force: true }));
+    const argvDump = path.join(binDir, "argv.json");
+    const fakeBin = path.join(binDir, "preflight");
+    fs.writeFileSync(
+      fakeBin,
+      [
+        "#!/bin/sh",
+        `node -e 'require("fs").writeFileSync(${JSON.stringify(argvDump)}, JSON.stringify(process.argv.slice(1)))' -- "$@"`,
+        `printf '%s' '{"ready":true,"confidence":0.5,"checks":[]}'`,
+        "",
+      ].join("\n"),
+      { mode: 0o755 },
+    );
+    const priorPath = process.env["PATH"];
+    process.env["PATH"] = `${binDir}${path.delimiter}${priorPath ?? ""}`;
+    try {
+      const manifest = parseManifest({ version: 1, session_start_preflight: { setup } });
+      await runSessionStartPreflight({
+        stdin: streamFrom(JSON.stringify({ session_id: "s", cwd: repo })),
+        stderr: captureStream().stream,
+        manifest,
+        writeLedger: async () => ({ ok: true }),
+        // `runPreflight` intentionally NOT injected: exercises the real
+        // `spawnPreflight` default.
+      });
+    } finally {
+      if (priorPath === undefined) delete process.env["PATH"];
+      else process.env["PATH"] = priorPath;
+    }
+    return JSON.parse(fs.readFileSync(argvDump, "utf8")) as string[];
+  }
+
+  it("includes --setup in the spawned argv when setup:true", async () => {
+    const argv = await spawnedArgvFor(true);
+    expect(argv).toEqual(["run", "--json", "--setup", expect.any(String)]);
+  });
+
+  it("omits --setup from the spawned argv when setup:false", async () => {
+    const argv = await spawnedArgvFor(false);
+    expect(argv).toEqual(["run", "--json", expect.any(String)]);
   });
 });
 

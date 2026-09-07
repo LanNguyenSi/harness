@@ -70,7 +70,7 @@ interface ExplainPolicyProjection {
    * this is the knob that decides whether the `harness session-start
    * preflight` / `harness preflight` producer passes `--setup` to the
    * `preflight run` invocation whose `ready:true` result these policies
-   * gate on. Omitted for every other policy — it has no bearing on
+   * gate on. Omitted for every other policy; it has no bearing on
    * their evaluation.
    */
   session_start_preflight?: { setup: boolean };
