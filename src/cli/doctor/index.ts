@@ -56,6 +56,7 @@ import {
 } from "./understanding-mode-env.js";
 import { checkAutoApproveMode } from "./auto-approve-mode.js";
 import { checkBypassWithoutAutoApprove } from "./bypass-without-auto-approve.js";
+import { checkSessionStartPreflightSetupVersion } from "./session-start-preflight-setup-version.js";
 import {
   runDoctorToolchainParity,
   type RunDoctorToolchainParityOptions,
@@ -1126,6 +1127,10 @@ function countDiagnostics(report: Omit<DoctorReport, "errorCount" | "warningCoun
   // 8f637efd): always advisory, never an error, see
   // bypass-without-auto-approve.ts.
   if (report.ugBypassWithoutAutoApprove) warningCount++;
+  // session_start_preflight.setup below the build-capable preflight
+  // floor (task 6993d9b5): always advisory, never an error, see
+  // session-start-preflight-setup-version.ts.
+  if (report.sessionStartPreflightSetupVersion) warningCount++;
   // ugInflight is informational only (ℹ) and never contributes here: a
   // stale or skipped record is exactly what `harness gc` sweeps, not a
   // tampering signal (see ug-inflight.ts / types.ts). Placed after every
@@ -1229,6 +1234,12 @@ export async function doctor(opts: DoctorOptions = {}): Promise<DoctorReport> {
   });
 
   const hooks = checkHooks(manifest, home, opts);
+  // task 6993d9b5: independent of the generic hooks[] min_version walk
+  // above, see session-start-preflight-setup-version.ts for why.
+  const sessionStartPreflightSetupVersion = checkSessionStartPreflightSetupVersion(
+    manifest,
+    opts.versionProbe ?? (() => null),
+  );
   const policies = buildPolicies(manifest);
   const policyPacksVersionProbe = opts.versionProbe ?? (() => null);
   const policyPacks = buildPolicyPacks(
@@ -1410,6 +1421,9 @@ export async function doctor(opts: DoctorOptions = {}): Promise<DoctorReport> {
     ...(ugDelegations !== undefined ? { ugDelegations } : {}),
     ...(ugInflight !== undefined ? { ugInflight } : {}),
     ...(ugBypassWithoutAutoApprove !== undefined ? { ugBypassWithoutAutoApprove } : {}),
+    ...(sessionStartPreflightSetupVersion !== undefined
+      ? { sessionStartPreflightSetupVersion }
+      : {}),
     ...(ugAutoApproveMode !== undefined ? { ugAutoApproveMode } : {}),
     ...(settingsDrift !== undefined ? { settingsDrift } : {}),
     ...(codexConfigDrift !== undefined ? { codexConfigDrift } : {}),

@@ -2,6 +2,7 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-09-07T08:56:00Z, task 6993d9b5 (implementer): added the `harness doctor` `session_start_preflight.setup` version-floor warning (`src/cli/doctor/session-start-preflight-setup-version.ts`, wired into `index.ts`/`types.ts`/`format.ts`), the shared `SESSION_START_PREFLIGHT_SETUP_BUILD_MIN_VERSION` constant (`src/schema/session-start-preflight.ts`), rewrote `docs/CLI.md`'s VERSION CAVEAT bullet for the now-released agent-preflight 0.6.0, and added a CHANGELOG `[Unreleased]` entry. `npx okf-kit@0.10.0 check docs/okf` flagged five docs `sources-fresh` STALE against the CHANGELOG.md edit alone (the recurring `docs/CLI.md`/`CHANGELOG.md` class task 419ecfad tracks): `codex-adapter-parity-gaps.md`, `evidence-ledger-trust-boundary.md`, `gate-fail-posture-matrix.md`, `pause-vs-gate-kill-switch.md`, `policy-engine-producer-wiring.md`. Re-verified: each cites `CHANGELOG.md` for a historic entry (a prior task id / version), none of which the new bullet touches or contradicts; re-stamped their `timestamp:` field to this entry's timestamp, no citation re-pointing needed (no cited line numbers moved).
 - 2026-09-07T08:48:20Z, task 419ecfad (implementer): decided the recurring
   `CHANGELOG.md`-source re-stale (every CHANGELOG edit anywhere in the repo
   re-staled both docs that listed it under `sources:`, and the author of an
