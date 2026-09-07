@@ -98,13 +98,20 @@ hooks:
     # (default subprocess timeout is 60s in the bundled wrapper since
     # agent-tasks/7265599e); leave 10s headroom for ledger write.
     budget_ms: 70000
-    # Floor at agent-preflight 0.2.0, the release that makes secret
-    # detection git-aware and diff-scoped. Pre-0.2.0 installs hard-fail
+    # Floor raised to agent-preflight 0.6.0 (task 6993d9b5, was 0.2.0):
+    # 0.2.0 was the release that made secret detection git-aware and
+    # diff-scoped (a gitignored+untracked .env, a .md doc, a non-git
+    # dir, or a secret in a tracked file the branch never touched is a
+    # non-blocking warn, not a hard fail); pre-0.2.0 installs hard-fail
     # preflight on the normal correct state (a gitignored .env holding
     # real credentials), so this SessionStart producer never writes a
     # preflight: tag and the preflight-before-* policies stay closed
-    # forever on any repo with a local .env.
-    min_version: "0.2.0"
+    # forever on any repo with a local .env. 0.6.0 is the release that
+    # made session_start_preflight.setup build code, not only install
+    # dependencies (agent-preflight PR #72, tag v0.6.0); harness doctor
+    # warns independently when an existing manifest's own floor is
+    # stale (src/cli/doctor/session-start-preflight-setup-version.ts).
+    min_version: "0.6.0"
     version_command: ["preflight", "--version"]
     description: "Run agent-preflight on session start; record ready + confidence into the ledger as preflight:${REPO}."
 

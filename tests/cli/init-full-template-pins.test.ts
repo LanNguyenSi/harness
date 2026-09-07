@@ -6,6 +6,7 @@ import { composeCustom } from "../../src/cli/init/composer.js";
 import { FULL_TEMPLATE } from "../../src/cli/init/templates.js";
 import { parseManifest } from "../../src/schema/index.js";
 import { SESSION_START_PREFLIGHT_SETUP_BUILD_MIN_VERSION } from "../../src/schema/session-start-preflight.js";
+import { PREFLIGHT_SETUP_VERSION_COMMAND } from "../../src/cli/doctor/session-start-preflight-setup-version.js";
 
 // Module-scope helper (hoisted out of two describe blocks that each used
 // to define their own copy — task fb80b5bb round 2): extracts the
@@ -51,6 +52,20 @@ describe("FULL_TEMPLATE: npm-bin hook pins", () => {
     expect(gitPreflight?.min_version).toBe(SESSION_START_PREFLIGHT_SETUP_BUILD_MIN_VERSION);
     expect(gitPreflight?.min_version).toBe("0.6.0");
     expect(gitPreflight?.version_command).toEqual(["preflight", "--version"]);
+  });
+
+  // Task 6993d9b5, round 2 F5: `PREFLIGHT_SETUP_VERSION_COMMAND`
+  // (src/cli/doctor/session-start-preflight-setup-version.ts) is built
+  // from the SessionStart preflight producer's own `PREFLIGHT_BIN`
+  // constant (src/cli/session-start/index.ts), not an independent
+  // "preflight" string literal, so it cannot silently drift from the
+  // binary the producer actually spawns. This asserts it also stays
+  // byte-identical to the FULL_TEMPLATE git-preflight hook's
+  // `version_command`, already parsed above.
+  it("PREFLIGHT_SETUP_VERSION_COMMAND matches the FULL_TEMPLATE git-preflight hook's version_command", () => {
+    const m = parseManifest(parseYaml(FULL_TEMPLATE));
+    const gitPreflight = m.hooks.find((h) => h.name === "git-preflight");
+    expect(gitPreflight?.version_command).toEqual([...PREFLIGHT_SETUP_VERSION_COMMAND]);
   });
 });
 

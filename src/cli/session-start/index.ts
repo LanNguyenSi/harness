@@ -37,7 +37,11 @@ import { loadManifest, resolvePaths, type LoaderOptions } from "../loader.js";
 
 const FALLBACK_SESSION = "default";
 
-const PREFLIGHT_BIN = "preflight";
+// Exported (task 6993d9b5, round 2 F5) so
+// `session-start-preflight-setup-version.ts`'s `PREFLIGHT_SETUP_VERSION_COMMAND`
+// derives from this producer's own binary name instead of carrying an
+// independent "preflight" string literal that could silently drift from it.
+export const PREFLIGHT_BIN = "preflight";
 // Default upper bound on `preflight run --json <cwd>` for the
 // SessionStart producer. Was 25s through v0.17.4; bumped to 60s after
 // the agent-grounding dogfood (agent-tasks/7265599e) where a healthy

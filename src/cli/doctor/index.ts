@@ -1233,12 +1233,22 @@ export async function doctor(opts: DoctorOptions = {}): Promise<DoctorReport> {
     ...(opts.versionProbe !== undefined ? { versionProbe: opts.versionProbe } : {}),
   });
 
-  const hooks = checkHooks(manifest, home, opts);
+  // One memoized probe shared across every doctor check that spawns
+  // `<binary> --version` (task 6993d9b5, round 2 F4): `checkHooks`, the
+  // policy-pack-expanded hook walk (`checkPolicyPackHookVersions`, which
+  // already deduped internally but started from its own fresh cache) and
+  // the new session_start_preflight.setup check below all probe the same
+  // `["preflight", "--version"]` argv on a `min_version: 0.6.0` manifest.
+  // Without a shared cache that argv spawned twice per `doctor` run.
+  // `memoizeVersionProbe` (above) already existed for this; it just was
+  // not wired to the two callers that predate the new check.
+  const dedupedVersionProbe = memoizeVersionProbe(opts.versionProbe ?? (() => null));
+  const hooks = checkHooks(manifest, home, { versionProbe: dedupedVersionProbe });
   // task 6993d9b5: independent of the generic hooks[] min_version walk
   // above, see session-start-preflight-setup-version.ts for why.
   const sessionStartPreflightSetupVersion = checkSessionStartPreflightSetupVersion(
     manifest,
-    opts.versionProbe ?? (() => null),
+    dedupedVersionProbe,
   );
   const policies = buildPolicies(manifest);
   const policyPacksVersionProbe = opts.versionProbe ?? (() => null);
@@ -1249,7 +1259,7 @@ export async function doctor(opts: DoctorOptions = {}): Promise<DoctorReport> {
   );
   const policyPackHookVersions = checkPolicyPackHookVersions(
     manifest,
-    policyPacksVersionProbe,
+    dedupedVersionProbe,
   );
   const workflows = buildWorkflows(manifest);
   const riskGate = buildRiskGate(manifest);

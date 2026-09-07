@@ -10,6 +10,7 @@ import {
   installPackagesGlobally,
 } from "../../src/cli/init/dependencies.js";
 import { HermeticSpawnViolationError } from "../../src/runtime/hermetic-spawn-guard.js";
+import { SESSION_START_PREFLIGHT_SETUP_BUILD_MIN_VERSION } from "../../src/schema/session-start-preflight.js";
 
 let tmpBin: string;
 
@@ -58,6 +59,19 @@ describe("dependenciesForProfile — chain composition", () => {
     expect(fullBins).not.toContain("codebase-oracle");
     const preflight = dependenciesForProfile("full").find((d) => d.binary === "preflight");
     expect(preflight?.npmPackage).toBe("@lannguyensi/agent-preflight");
+  });
+
+  // Task 6993d9b5, round 2 F2: the wizard's own minVersion floor for
+  // `preflight` must share the same 0.6.0 build-capable floor as the
+  // FULL_TEMPLATE git-preflight hook and `harness doctor`'s
+  // session_start_preflight.setup check, so `harness init --template
+  // full` never tells an operator that a pre-build-step preflight
+  // suffices while the generated manifest's min_version (and the next
+  // `harness doctor` run) says otherwise.
+  it("full's preflight dep shares SESSION_START_PREFLIGHT_SETUP_BUILD_MIN_VERSION, not a stale floor", () => {
+    const preflight = dependenciesForProfile("full").find((d) => d.binary === "preflight");
+    expect(preflight?.minVersion).toBe(SESSION_START_PREFLIGHT_SETUP_BUILD_MIN_VERSION);
+    expect(preflight?.minVersion).toBe("0.6.0");
   });
 });
 

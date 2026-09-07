@@ -20,6 +20,7 @@ import { spawn } from "node:child_process";
 import { existsSync, accessSync, constants } from "node:fs";
 import * as path from "node:path";
 import { assertNoRealSpawnInTests } from "../../runtime/hermetic-spawn-guard.js";
+import { SESSION_START_PREFLIGHT_SETUP_BUILD_MIN_VERSION } from "../../schema/session-start-preflight.js";
 
 import type { ProfileChoice } from "./interactive.js";
 import type { CustomSelection } from "./composer.js";
@@ -112,13 +113,15 @@ export const PROFILE_DEPENDENCIES: Record<Exclude<ProfileChoice, "custom">, Prof
       binary: "preflight",
       npmPackage: "@lannguyensi/agent-preflight",
       description: "agent-preflight (SessionStart preflight producer)",
-      // Mirrors the FULL_TEMPLATE git-preflight hook's `min_version`
-      // floor. 0.2.0 made secret detection git-aware and diff-scoped;
-      // pre-0.2.0 installs hard-fail preflight on the normal correct
-      // state (a gitignored .env with real credentials), so the
-      // SessionStart producer never writes a `preflight:` tag and the
-      // preflight-before-* policies stay closed forever.
-      minVersion: "0.2.0",
+      // Shares SESSION_START_PREFLIGHT_SETUP_BUILD_MIN_VERSION with the
+      // FULL_TEMPLATE git-preflight hook's `min_version` (task 6993d9b5)
+      // and `harness doctor`'s session_start_preflight.setup version
+      // check (src/cli/doctor/session-start-preflight-setup-version.ts),
+      // so this wizard-facing table can never advertise a floor lower
+      // than what the generated manifest declares and the next `harness
+      // doctor` run enforces. 0.6.0 is the agent-preflight release that
+      // made `--setup` build code, not only install dependencies.
+      minVersion: SESSION_START_PREFLIGHT_SETUP_BUILD_MIN_VERSION,
     },
   ],
 };

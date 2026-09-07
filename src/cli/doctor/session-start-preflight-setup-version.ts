@@ -25,6 +25,7 @@
 // doctor check's "no opinion when the feature isn't in use" gate.
 
 import { compareNumericVersions } from "../../io/version-compare.js";
+import { PREFLIGHT_BIN } from "../session-start/index.js";
 import { SESSION_START_PREFLIGHT_SETUP_BUILD_MIN_VERSION } from "../../schema/session-start-preflight.js";
 import type { Manifest } from "../../schema/index.js";
 
@@ -37,7 +38,7 @@ import type { Manifest } from "../../schema/index.js";
  * stays on, and the check should still probe the binary the producer
  * (`harness session-start preflight`) actually spawns.
  */
-export const PREFLIGHT_SETUP_VERSION_COMMAND = ["preflight", "--version"] as const;
+export const PREFLIGHT_SETUP_VERSION_COMMAND = [PREFLIGHT_BIN, "--version"] as const;
 
 export interface SessionStartPreflightSetupVersionFinding {
   kind: "below_floor" | "probe_failed" | "parse_failed";
