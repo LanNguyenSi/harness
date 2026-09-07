@@ -50,8 +50,13 @@
     `sources-fresh-future` warnings on the pre-commit tree only, from the
     fresh `timestamp` being ahead of the doc files' last commit before this
     change was committed; gone once committed). `npx vitest run
-    tests/decisions-citations-resolve.test.ts` (the anchor guard): 158
-    passed. Negative control: appended a throwaway line to `CHANGELOG.md`
+    tests/decisions-citations-resolve.test.ts` (the repo's anchor guard
+    for `path:N[-M]` citations) stays green; that guard does not parse
+    the heading-section form at all, so the check that guards the new
+    citations is okf-kit's own `citations-resolve` rule, which reports a
+    renamed heading as `heading-section-not-found` (replayed in review
+    by renaming the `[0.24.0]` heading, uncommitted, and restoring it).
+    Negative control: appended a throwaway line to `CHANGELOG.md`
     in the worktree (uncommitted), re-ran the check, confirmed neither doc
     reported a `sources-fresh` finding caused by it (0 STALE findings for
     either doc, since neither doc's `sources:` lists `CHANGELOG.md` any
