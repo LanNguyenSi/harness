@@ -2,6 +2,26 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-09-07T04:19:00Z, task d4ea97ba closure (orchestrator, docs-only): the three docs
+  the freshness rule had reported STALE at the task's creation are fresh at
+  master `0a495db` and needed no further edit here. `manifest-validation-scope.md`
+  was re-verified and re-stamped by the policy-citation refresh commits
+  `b35ff65` and `54a37b8` (its stamp:
+  `docs/okf/manifest-validation-scope.md:6#"timestamp: 2026-09-06T17:58:18Z"`);
+  `understanding-gate-lockout-recovery.md` by the KB-001 knowledge refresh,
+  PR #507 (stamp:
+  `docs/okf/understanding-gate-lockout-recovery.md:6#"timestamp: 2026-09-06T20:12:56Z"`);
+  `policy-engine-producer-wiring.md` by the same commits and again by the
+  task 5c9cad05 rounds, since it cites `CHANGELOG.md` (stamp:
+  `docs/okf/policy-engine-producer-wiring.md:6#"timestamp: 2026-09-06T21:50:34Z"`).
+  Verdict, measured on master `0a495db` before this entry and again on the
+  committed tree after it: `npx okf-kit@0.10.0 check --json docs/okf` reports
+  no `sources-fresh` or `sources-fresh-future` finding and no
+  `citations-resolve` finding; the warn-only staleness job body replayed
+  under `bash --noprofile --norc -eo pipefail` prints "Clean, no findings.".
+  The one structural cause behind the recurring CHANGELOG-driven staleness
+  of five docs in this bundle is tracked separately (task 419ecfad).
+
 - 2026-09-07T04:12:56Z, task 5c9cad05 final (rebase onto the merged KB-001 master):
   rebased this branch onto master `c6e8933` (PR #507, docs refresh that
   re-verified and re-stamped `codex-adapter-parity-gaps.md`,
