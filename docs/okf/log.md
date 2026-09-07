@@ -2,6 +2,8 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-09-07T07:33:55Z, task 30183330 (orchestrator): re-verified and re-stamped the docs that list `docs/CLI.md` among their sources after the Notes bullet above was added (`debug-verb-selection.md`, `evidence-ledger-trust-boundary.md`, `policy-engine-producer-wiring.md`); their `docs/CLI.md` references are section names and producer names, unchanged by the bullet.
+
 - 2026-09-07T07:32:32Z, task 30183330 (orchestrator), review round 3 notes, docs and
   comments only: `docs/okf/pause-vs-gate-kill-switch.md` re-pointed its
   commands citation from a range that started inside an earlier command
