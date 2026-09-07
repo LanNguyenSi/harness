@@ -5,6 +5,13 @@
 // missing-auto_approve finding cannot drift on the snippet's shape or
 // wording. See auto-approve-default.ts for the rationale.
 import { renderAutoApproveSnippet } from "../../policy-packs/builtin/understanding-before-execution-runtime.js";
+// task 6993d9b5: the git-preflight hook's own `min_version` floor below
+// shares this constant with `harness doctor`'s
+// session_start_preflight.setup version check
+// (src/cli/doctor/session-start-preflight-setup-version.ts), so the two
+// cannot drift apart. See that module and src/schema/session-start-
+// preflight.ts's VERSION CAVEAT for the full rationale.
+import { SESSION_START_PREFLIGHT_SETUP_BUILD_MIN_VERSION } from "../../schema/session-start-preflight.js";
 
 // Every template below nests `auto_approve:` at 6 spaces, a sibling of
 // `mode:` / `approval_lifecycle:` under the pack's `config:` key.
@@ -163,7 +170,8 @@ hooks:
     # blew through it. Bumped together with DEFAULT_PREFLIGHT_TIMEOUT_MS
     # (agent-tasks/7265599e).
     budget_ms: 70000
-    # Floor at agent-preflight 0.2.0, the release that makes secret
+    # Floor raised to agent-preflight ${SESSION_START_PREFLIGHT_SETUP_BUILD_MIN_VERSION}
+    # (task 6993d9b5, was 0.2.0): 0.2.0 was the release that made secret
     # detection git-aware and diff-scoped: a gitignored+untracked .env,
     # a .md doc, a non-git dir, or a secret in a tracked file the branch
     # never touched is a non-blocking warn, not a hard fail. Pre-0.2.0
@@ -172,9 +180,15 @@ hooks:
     # producer never writes a preflight: tag and the preflight-before-*
     # policies stay closed forever on any repo with a local .env. (0.1.1
     # had already fixed the wrapper-script "tool not installed" false
-    # positive.) version_command points at the source-of-truth preflight
+    # positive.) ${SESSION_START_PREFLIGHT_SETUP_BUILD_MIN_VERSION} is
+    # the release that made \`session_start_preflight.setup\` build code,
+    # not only install dependencies (agent-preflight PR #72, tag v0.6.0);
+    # \`harness doctor\` warns independently when an existing manifest's
+    # own floor is stale (src/cli/doctor/session-start-preflight-setup-
+    # version.ts), this template bump only affects a freshly generated
+    # manifest. version_command points at the source-of-truth preflight
     # binary, not at the \`harness session-start preflight\` wrapper.
-    min_version: "0.2.0"
+    min_version: "${SESSION_START_PREFLIGHT_SETUP_BUILD_MIN_VERSION}"
     version_command: ["preflight", "--version"]
 
   # toolchain-parity (PATH-shim incident 2026-07-22 follow-up): writes THIS
