@@ -188,6 +188,35 @@ describe("generateMemoryIndex", () => {
     expect(result.warnings.find((w) => w.includes("no-type.md"))).toMatch(/missing required `type`/);
   });
 
+  it("uses metadata.type only when top-level type is falsy and accepts only contract types", () => {
+    const dir = path.join(tmpHome, "memory");
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(
+      path.join(dir, "metadata-type.md"),
+      "---\nname: MetadataType\ndescription: nested type\nmetadata:\n  type: project\n---\nbody\n",
+    );
+    fs.writeFileSync(
+      path.join(dir, "empty-top-level.md"),
+      "---\nname: EmptyTopLevel\ndescription: fallback\ntype: \"\"\nmetadata:\n  type: reference\n---\nbody\n",
+    );
+    fs.writeFileSync(
+      path.join(dir, "invalid-top-level.md"),
+      "---\nname: InvalidTopLevel\ndescription: no fallback\ntype: unsupported\nmetadata:\n  type: user\n---\nbody\n",
+    );
+    fs.writeFileSync(
+      path.join(dir, "invalid-nested.md"),
+      "---\nname: InvalidNested\ndescription: no entry\nmetadata:\n  type: unsupported\n---\nbody\n",
+    );
+
+    const result = generateMemoryIndex(manifestWithDir("~/memory"), { homeDir: tmpHome });
+    expect(result.entries.map((entry) => entry.basename)).toEqual([
+      "empty-top-level.md",
+      "metadata-type.md",
+    ]);
+    expect(result.warnings).toHaveLength(2);
+    expect(result.warnings.every((warning) => /missing required `type`/.test(warning))).toBe(true);
+  });
+
   it("parses CRLF-encoded frontmatter (Windows / editor-normalised files)", () => {
     const dir = path.join(tmpHome, "memory");
     fs.mkdirSync(dir, { recursive: true });

@@ -1,0 +1,29 @@
+{
+  "schema": "memory-frontmatter/v1",
+  "cases": [
+    { "file": "cases/top-level.md", "accepted": true, "resolvedType": "feedback" },
+    { "file": "cases/metadata-only.md", "accepted": true, "resolvedType": "reference" },
+    { "file": "cases/mixed-conflict.md", "accepted": true, "resolvedType": "project" },
+    { "file": "cases/no-type.md", "accepted": false },
+    { "file": "cases/canonical-user.md", "accepted": true, "resolvedType": "user" },
+    { "file": "cases/fallback-missing.md", "accepted": true, "resolvedType": "reference" },
+    { "file": "cases/fallback-empty.md", "accepted": true, "resolvedType": "feedback" },
+    { "file": "cases/fallback-false.md", "accepted": true, "resolvedType": "user" },
+    { "file": "cases/fallback-zero.md", "accepted": true, "resolvedType": "project" },
+    { "file": "cases/fallback-null.md", "accepted": true, "resolvedType": "reference" },
+    { "file": "cases/top-valid-meta-invalid.md", "accepted": true, "resolvedType": "feedback" },
+    { "file": "cases/top-invalid-meta-valid.md", "accepted": false },
+    { "file": "cases/unknown-type.md", "accepted": false },
+    { "file": "cases/top-number.md", "accepted": false },
+    { "file": "cases/top-number-meta-valid.md", "accepted": false },
+    { "file": "cases/meta-list.md", "accepted": false },
+    { "file": "cases/meta-unknown.md", "accepted": false },
+    { "file": "cases/malformed-yaml.md", "accepted": false },
+    { "file": "cases/scalar-yaml.md", "accepted": false },
+    { "file": "cases/array-yaml.md", "accepted": false },
+    { "file": "cases/null-yaml.md", "accepted": false },
+    { "file": "cases/empty-yaml.md", "accepted": false },
+    { "file": "cases/missing-delimiters.md", "accepted": false },
+    { "file": "cases/crlf.md", "accepted": true, "resolvedType": "reference" }
+  ]
+}
