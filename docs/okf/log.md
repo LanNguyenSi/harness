@@ -2,6 +2,218 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-09-07T04:12:56Z, task 5c9cad05 final (rebase onto the merged KB-001 master):
+  rebased this branch onto master `c6e8933` (PR #507, docs refresh that
+  re-verified and re-stamped `codex-adapter-parity-gaps.md`,
+  `gate-fail-posture-matrix.md`, `evidence-ledger-trust-boundary.md`, and
+  `understanding-gate-lockout-recovery.md`; PR #508, the unrelated
+  memory-frontmatter-conformance fix, whose only bundle-relevant effect is
+  a `CHANGELOG.md` edit at 20:34Z). The only textual conflict, in
+  `gate-fail-posture-matrix.md`'s `timestamp:` line, was resolved by
+  keeping the incoming (later) value; the doc is re-stamped again below
+  regardless, so the interim pick carries no consequence.
+
+  Re-pointed the citation drift the round-3 entry below predicted:
+  `codex-adapter-parity-gaps.md` (finding 6) cited
+  `src/policy-packs/builtin/solution-acceptance.ts` `completionMatch` at
+  "lines 100-104" and `WRITEGUARD_MATCH_CLAUDE`/`WRITEGUARD_MATCH_CODEX`
+  at "lines 90-91"; verified at HEAD (post-rebase) the one new import
+  line shifted both down by exactly one, `completionMatch`'s full
+  declaration is now lines 102-105 and the two `WRITEGUARD_MATCH_*`
+  constants are now lines 92-93. Neither cited construct's own body text
+  changed, only its position in the file. Both citations updated in
+  place.
+
+  Re-stamped `codex-adapter-parity-gaps.md` and
+  `evidence-ledger-trust-boundary.md` to this entry's own timestamp:
+  `npx okf-kit@0.10.0 check --json docs/okf`, run against the rebased
+  tree before this commit, flagged both stale (
+  `codex-adapter-parity-gaps.md` against both
+  `src/policy-packs/builtin/solution-acceptance.ts` and `CHANGELOG.md`;
+  `evidence-ledger-trust-boundary.md` against `CHANGELOG.md` only).
+  `evidence-ledger-trust-boundary.md`'s `CHANGELOG.md` citations (the
+  task `f86b2425` slice 1 extraction note and the task `204efc56`
+  `report_missing` doc-list mention) both name already-released entries;
+  neither PR #508's memory-frontmatter bullet nor this branch's own
+  reconnect-vs-retry bullet touch either cited passage, so this is a
+  timestamp-only re-stamp with no content drift. `gate-fail-posture-matrix.md`,
+  `pause-vs-gate-kill-switch.md`, and `policy-engine-producer-wiring.md`
+  were already re-stamped past PR #508's `CHANGELOG.md` edit by this
+  branch's own round-3 commit below and needed no further action; the
+  check confirms none of the three shows a `sources-fresh` finding after
+  the rebase.
+
+  `npx okf-kit@0.10.0 check --json docs/okf` on the tree this log entry
+  commits with reports 0 errors and 0 warnings.
+
+- 2026-09-06T21:50:34Z, task 5c9cad05 ship preparation (orchestrator, docs-only delta): after
+  rebasing the branch onto master 8e79a8c the two release-notable commits were
+  reworded to name the task id and `CHANGELOG.md`'s review sub-bullets now cite
+  the task instead of commit SHAs (a rebase rewrites SHAs, a task id survives
+  it); the redesign sub-bullet and the pack doc subsection now use the same
+  "round 3" label as this log. `gate-fail-posture-matrix.md`,
+  `policy-engine-producer-wiring.md` and `pause-vs-gate-kill-switch.md` cite
+  `CHANGELOG.md`; their CHANGELOG-citing passages re-read against the edited
+  entry (no claim depends on the reworded sub-bullet text) and re-stamped.
+  `npm run check:changelog-coverage` is green on the reworded branch.
+
+- 2026-09-06T21:31:26Z, task `5c9cad05` round 3 redesign re-stamp: round 3
+  moved the reconnect-vs-retry facts out of hand-written prose in
+  `src/cli/pack/hook-solution-acceptance.ts`'s `reconnectGuidanceFor` and
+  `src/policy-packs/builtin/solution-acceptance.ts`'s `buildInstructions`
+  into one shared module, `src/policy-packs/builtin/solution-acceptance-reconnect.ts`
+  (new file, not yet a cited source of any bundle doc), and amended the
+  same `[Unreleased]` `CHANGELOG.md` entry again (task `5c9cad05` bullet:
+  two residues reworded, "a condition the hook cannot further
+  distinguish" to "does not read the documented attempt-lock anchor
+  (scope decision, see the follow-up)"; `PackContribution`'s field count
+  corrected from two to three, `hooks`/`files`/optional `permissions`).
+  Source commits this round: `ebdbb82dc0fdc0e8facc7f2f657a478f1b1b9dfd`
+  (code + tests), `6340f16` (CHANGELOG.md + `docs/policy-packs/solution-acceptance.md`).
+  `git log -1 --format=%cI -- src/cli/pack/hook-solution-acceptance.ts
+  docs/policy-packs/solution-acceptance.md CHANGELOG.md
+  src/policy-packs/builtin/solution-acceptance.ts
+  src/policy-packs/builtin/solution-acceptance-reconnect.ts` from this
+  worktree at HEAD reads `2026-09-06T21:28:18+02:00`
+  (`2026-09-06T19:28:18Z`), confirming every citer below is re-verified
+  after the actual last change to its cited files, not just after this
+  doc's own edit.
+
+  `gate-fail-posture-matrix.md` re-verified against the current file:
+  its `src/cli/pack/hook-solution-acceptance.ts` citation (lines 19-22,
+  the header fail-closed-contract paragraph) is untouched, this round's
+  only edit there being one new import line well below (the doc-cited
+  behavior, the failure-mode contract, is unchanged); its
+  `docs/policy-packs/solution-acceptance.md` citation (lines 56-60, the
+  deny-set enumeration) is likewise untouched, this round's doc edits
+  landing entirely inside the "Agent-facing surface" subsection (line
+  ~144 onward) and a new "Round 2 redesign" subsection after it. No
+  line-number or content drift on either citation, timestamp-only
+  re-stamp. `policy-engine-producer-wiring.md` and
+  `pause-vs-gate-kill-switch.md` again list only `CHANGELOG.md` among
+  sources this round's files touch, and again cite only historical
+  already-released entries (`98ad072f`, `cf3dff51`, `d834a065`,
+  `63fefe3a`/`1432e053`, `aabbad63`, `76671e5a`), none anywhere near the
+  amended `[Unreleased]` `5c9cad05` bullet: timestamp-only re-stamp on
+  both, same rationale as rounds 1 and 2. All three re-stamped to
+  `2026-09-06T21:31:26Z`.
+
+  **New citation drift found, not caused by a doc edit but by the code
+  redesign itself, reported per task instruction (not re-pointed, not
+  re-stamped: `codex-adapter-parity-gaps.md` is deferred to the PR #507
+  merge, per the round-1/round-2 decision below):**
+  `codex-adapter-parity-gaps.md` cites `src/policy-packs/builtin/solution-acceptance.ts`
+  at "lines 90-91" (`WRITEGUARD_MATCH_CLAUDE`/`WRITEGUARD_MATCH_CODEX`)
+  and "lines 100-104" (`completionMatch`). At commit `d778592` (the last
+  commit before this round touched the file), the actual lines were
+  91-92 and 101-104 respectively (a 1-line drift already present before
+  this round, unrelated to it). This round's one new import line
+  (`renderReconnectInstructionsSection`, added directly below the
+  existing `solution-acceptance-runtime.js` import block) shifts every
+  later line down by exactly 1: at current HEAD, `WRITEGUARD_MATCH_CLAUDE`/
+  `WRITEGUARD_MATCH_CODEX` are now lines 92-93, and `completionMatch`'s
+  full declaration (signature line through closing brace) is now lines
+  102-105. Neither cited construct's own body text changed, only its
+  position in the file.
+
+- 2026-09-06T21:06:00Z, task `5c9cad05` round 2 follow-up re-stamp: a
+  style-only fix-up commit (removing em dashes introduced by the round
+  2 re-verification below, no wording or behavior change) touched
+  `src/cli/pack/hook-solution-acceptance.ts` and
+  `docs/policy-packs/solution-acceptance.md` again, so
+  `gate-fail-posture-matrix.md`'s citations of both went stale a second
+  time. Re-verified against the current content: its
+  `src/cli/pack/hook-solution-acceptance.ts` citation (lines 19-22) and
+  its `docs/policy-packs/solution-acceptance.md` citation (lines 56-60)
+  are both still untouched by the punctuation-only edit, which lands
+  entirely inside the `reconnectGuidanceFor` block (source) and the
+  "Agent-facing surface" subsection (doc), well after both cited
+  ranges. `git log -1 --format=%cI` for both files from this worktree
+  reads `2026-09-06T21:04:51Z`; re-stamped to `2026-09-06T21:06:00Z`.
+  `policy-engine-producer-wiring.md` and `pause-vs-gate-kill-switch.md`
+  are untouched this round (neither cites either edited file, only
+  `CHANGELOG.md`, which the style fix-up did not touch).
+
+- 2026-09-06T21:01:47Z, task `5c9cad05` round 2 re-verification (review
+  round 1 fix round: `src/cli/pack/hook-solution-acceptance.ts`'s
+  reconnect-guidance jsdoc and its `reconnectGuidanceFor` deny text
+  corrected (the deny wrongly claimed a live attempt's lock "refuses a
+  second `solution_evaluate` call"; grounding-mcp's actual semantics are
+  that a second call for a live attempt JOINS it, only `forceNewAttempt`
+  is refused; "no verdict marker on record" reworded to "no readable
+  verdict marker" and a third `gate.verdict === null` reading, an
+  unreadable/unparseable marker, named alongside the other two);
+  `docs/policy-packs/solution-acceptance.md`'s "Agent-facing surface for
+  the in-flight case" subsection reworded the same way, plus named the
+  grounding-mcp-documented attempt-lock anchor and the follow-up to read
+  it (review round 1 finding: the subsection had overclaimed no in-flight
+  signal exists at all); `CHANGELOG.md`'s task `5c9cad05` bullet amended
+  in place (same `[Unreleased]` entry, not a new one) to match. `git log
+  -1 --format=%cI -- src/cli/pack/hook-solution-acceptance.ts
+  docs/policy-packs/solution-acceptance.md CHANGELOG.md` from this
+  worktree at commit `3edc8ac` (the fix commit) reads
+  `2026-09-06T20:59:51Z` for all three, confirming every citer below is
+  re-verified after the actual last change to its cited files, not just
+  after this doc's own edit.
+
+  `gate-fail-posture-matrix.md` re-verified against the current file:
+  its `src/cli/pack/hook-solution-acceptance.ts` citation (lines 19-22,
+  the header fail-closed-contract paragraph) is untouched by this
+  round's edits, which land entirely below line 118; its
+  `docs/policy-packs/solution-acceptance.md` citation (lines 56-60, the
+  deny-set enumeration) is likewise untouched, the reworded subsection
+  starting at line 171. No line-number or content drift on either
+  citation, timestamp-only re-stamp. `policy-engine-producer-wiring.md`
+  and `pause-vs-gate-kill-switch.md` again list only `CHANGELOG.md`
+  among sources this round's files touch, and again cite only historical
+  already-released entries (unchanged from the round-1 entry below),
+  none touched by the amended `[Unreleased]` bullet: timestamp-only
+  re-stamp on both, same rationale as round 1. All three re-stamped to
+  `2026-09-06T21:01:47Z`.
+
+  `codex-adapter-parity-gaps.md` and `evidence-ledger-trust-boundary.md`
+  again list `CHANGELOG.md` among their sources and are again NOT
+  re-stamped, same rationale as round 1 below (their own primary
+  citations remain untouched and unverified by this task, deferred to
+  the PR #507 merge); `understanding-gate-lockout-recovery.md`'s
+  reported staleness (`src/policy-packs/builtin/
+  understanding-before-execution.ts`) is unrelated to this task, no file
+  this task touches names or cites it.
+
+- 2026-09-06T20:38:23Z, task `5c9cad05` re-verification (agent-facing
+  surface for the in-flight reconnect-vs-retry guidance: `blockJson` in
+  `src/cli/pack/hook-solution-acceptance.ts` now carries the three facts
+  on the `gate.verdict === null` deny, gated so it never fires on a
+  not-ready/stale verdict deny; `docs/policy-packs/solution-acceptance.md`
+  gained the decision-record subsection; `CHANGELOG.md` gained one
+  `[Unreleased]` bullet). `gate-fail-posture-matrix.md` cites
+  `src/cli/pack/hook-solution-acceptance.ts` (its body citation, lines
+  19-22, quotes the header's fail-closed contract paragraph, and the
+  table/prose rows naming the file and its deny behavior) and
+  `docs/policy-packs/solution-acceptance.md` (via
+  `docs/policy-packs/solution-acceptance.md` in its `sources:` list): the
+  new `blockJson` logic and the new doc subsection both land after every
+  range this doc quotes, so re-read all citations against the changed
+  files, no line-number or content drift, timestamp-only re-stamp.
+  `policy-engine-producer-wiring.md` and `pause-vs-gate-kill-switch.md`
+  both list only `CHANGELOG.md` among sources this task's files touch;
+  both cite only historical, already-released CHANGELOG entries (0.35.0,
+  0.39.0, 0.43.0-0.45.0 and named tasks), none touched by the new
+  `[Unreleased]` bullet, timestamp-only re-stamp on both. All three
+  re-stamped to `2026-09-06T20:38:23Z`.
+
+  `codex-adapter-parity-gaps.md` and `evidence-ledger-trust-boundary.md`
+  also list `CHANGELOG.md` among their sources but are NOT re-stamped
+  here: their own primary citations (`src/policy-packs/builtin/
+  solution-acceptance.ts` and `src/policy-packs/builtin/
+  solution-acceptance-runtime.ts`, respectively) are untouched by this
+  task and unverified by it (that work belongs to the in-flight,
+  unmerged harness PR #507, `docs/task-adapter-knowledge`); re-stamping
+  either doc's single `timestamp:` field would read as a full
+  re-verification this task did not do. Both therefore keep reporting
+  `sources-fresh` STALE for `CHANGELOG.md` after this task's commit;
+  left for the orchestrator to resolve alongside the PR #507 merge.
+
 - 2026-09-06T13:31:16Z, task `529e85ea` round 2 re-verification (review
   round 1 fix round: version corrections in the pack file, the doc page,
   and CHANGELOG.md; the payload-shape and terminal-and-lock-free rewording

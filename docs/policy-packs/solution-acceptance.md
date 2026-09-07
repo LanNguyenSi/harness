@@ -141,6 +141,125 @@ them) and are not part of this pack's contract, and this pack makes no
 claim that they resolve a client's own request timeout for any specific
 client.
 
+### Agent-facing surface for the in-flight case (decision, harness/5c9cad05)
+
+The section above lived only in `instructions.md`, this pack's operator
+audit copy (rendered once by `buildInstructions` and never re-read by the
+agent mid-session). Nothing surfaced it to the agent at the one moment it
+actually matters: the completion-gate denies a completion verb, and the
+agent needs to know whether to reconnect or to wait, not to re-call
+`solution_evaluate` as a "fix".
+
+Two candidate surfaces were considered:
+
+- **The completion-gate's deny text** (`harness pack hook
+  solution-acceptance`, `blockJson` in
+  `src/cli/pack/hook-solution-acceptance.ts`): fires exactly when the
+  agent is blocked on a completion verb with no ready verdict, which is
+  exactly the moment this guidance is needed.
+- **A pack MEMORY.md contribution**: rejected. `PackContribution`
+  (`src/policy-packs/types.ts`) has `hooks`, `files` (written under
+  `harness.generated/policy-packs/<name>/`), and an optional
+  `permissions` contribution; none of the three reaches the generated
+  `MEMORY.md`. `generate-memory-index.ts` builds that index solely from
+  user-authored markdown files under `manifest.memory.directories[]`
+  (frontmatter `name`/`type`/`description`), packs have no contribution
+  path into it today, and adding one would be a new mechanism, out of
+  scope for this pack and out of bounds for this change (the
+  memory-contract worktrees own that file).
+
+Decision: the completion-gate's deny text is the surface. Implemented in
+`blockJson`, gated on `gate.verdict === null` (the `evaluateGate` branch
+whose reason is `no solution-acceptance verdict recorded for "<id>"`).
+That single condition covers THREE readings, deliberately left unresolved
+here: "`solution_evaluate` was never called for this id"; "an attempt for
+this id is still running in the background"; and "a marker exists but
+`readVerdict` rejected it" (an invalid id, a symlinked marker, a
+non-regular file, an unreadable file, malformed JSON, or a body missing
+`id`/`head`/`ready`). grounding-mcp >= 0.11.0's README documents an
+attempt-lock anchor that would let the hook rule out the "still running"
+reading (`<verdict dir>/<id>.attempt-lock`, mode `0600`, beside the
+`<id>.attempt-lock.lock` directory `proper-lockfile` manages, from which
+the producer itself derives its own `running-unconfirmed` status), but
+this change does not read it: doing so is a second cross-repo coupling to
+the producer's lock-file layout, with its own stale-lock semantics to
+absorb, out of scope for a text-surface change (follow-up: narrow this
+paragraph to the in-flight case by reading that lock anchor). Rather than
+let an agent read "no readable verdict marker" as licence to call
+`solution_evaluate` again, the SAME deny carries the reconnect-vs-retry
+facts regardless of which reading applies: reconnect with
+`solution_evaluate_status` / `solution_evaluate_result` by `attemptId`
+(omit it to resolve the latest attempt); never retry `solution_evaluate`
+while the id's lock is held (a second call for a live attempt just joins
+it and returns its `attemptId`, never starting a second `preflight` run;
+only `forceNewAttempt` is refused while that attempt's lock holds); the
+poll interval and retention bounds from the released grounding-mcp version
+this pack requires (>= 0.3.2, verified against grounding-mcp v0.11.0's
+README): `pollAfterMs` is advertised as `5000` in the README's example
+handle, retention is 24h by default and always at least 100x
+`pollAfterMs`, and a pruned terminal attempt reads `expired`.
+
+The guidance does NOT appear on a not-ready or stale verdict deny: both
+mean a run already completed and produced a marker, so there is no
+"is it still running" ambiguity to resolve there. It also does not appear
+when no verdict id resolved at all (no active claim and
+`SOLUTION_VERDICT_ID` unset, so there is no id to poll for yet), nor on the
+manifest-load-failure failsafe deny, nor when an operator has configured a
+custom `ux` block, which replaces the default deny text entirely (a
+pre-existing pack behavior, unchanged here). `instructions.md`
+(`buildInstructions`) stays the audit copy documented above; it renders
+its own "Reconnecting vs. retrying" section verbatim, but that section
+is no longer written by hand separately from this deny paragraph (see
+"Round 3 redesign (fixing the round-2 findings): one shared fact source" below). Pinned by
+`tests/cli/pack-hook-solution-acceptance.test.ts` ("the no-verdict deny
+carries the reconnect-vs-retry facts...", including the "joins"
+assertion added in review round 2 against the earlier "refuses a second
+call" misstatement, plus the not-ready/stale/no-verdict-id/
+manifest-load-failure tests' negative assertions).
+
+### Round 3 redesign (fixing the round-2 findings): one shared fact source (harness/5c9cad05)
+
+The recurring review-round class above was hand-written deny text
+asserting producer semantics that drift from `instructions.md` and the
+source: round 1 shipped the wrong join semantics in the deny text but
+not (yet) in `instructions.md`; round 2 then found the deny text
+asserting the reconnect lifecycle unconditionally, when it only holds
+under grounding-mcp >= 0.11.0, the pack's own producer floor being
+>= 0.3.2. Both symptoms come from the same root cause: two hand-written
+prose surfaces stating the same facts independently, with no mechanism
+keeping them in sync.
+
+`src/policy-packs/builtin/solution-acceptance-reconnect.ts` now owns the
+reconnect facts as exported data (`RECONNECT_FACT_RECONNECT_BY_ID`,
+`RECONNECT_FACT_JOIN_NOT_RETRY`, `RECONNECT_FACT_POLL_AND_RETENTION`,
+`RECONNECT_VERSION_QUALIFIER`), with two renderers:
+`renderReconnectDenyParagraph` (consumed by `blockJson`, the deny
+paragraph documented above) and `renderReconnectInstructionsSection`
+(consumed by `buildInstructions`, this pack's `instructions.md` section).
+Both renderers interpolate the SAME fact constants verbatim, and every
+rendering opens with `RECONNECT_VERSION_QUALIFIER` ("With grounding-mcp
+>= 0.11.0:") instead of stating the lifecycle as if the pack's own
+producer floor guaranteed it. `tests/policy-packs/solution-acceptance-reconnect.test.ts`
+asserts each fact constant appears verbatim in both rendered surfaces
+(the deny paragraph and the emitted `instructions.md`), so an edit that
+updates one surface but not the other fails that test instead of
+shipping a silent drift.
+
+This module also does not read the documented attempt-lock anchor (the
+same scope decision described above): it names all three
+`gate.verdict === null` readings rather than claiming the hook has no
+signal at all to distinguish them.
+
+The rendered `instructions.md` "Reconnecting vs. retrying" section's
+wording changed where the shared source now renders it (the surrounding
+headings, the producer-required section, and every other section are
+untouched): the section still teaches reconnecting by `attemptId`, never
+retrying while the lock is held (the "Never re-call `solution_evaluate`
+as a stall workaround" sentence stays pinned by
+`tests/policy-packs/solution-acceptance-expand.test.ts`), and the poll
+interval / retention bounds, now phrased through the shared fact
+constants instead of restated by hand.
+
 ### Marker signing (harness/c7c3f606)
 
 The verdict now carries an HMAC-SHA256 signature, reusing the SAME

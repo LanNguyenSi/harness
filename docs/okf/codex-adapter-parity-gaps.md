@@ -3,7 +3,7 @@ type: module
 title: Codex runtime adapter — parity gaps vs Claude Code
 description: "What harness's Codex runtime adapter is, the enumerated behavioral gaps vs the Claude Code first-class target (former headline gap, no Codex PostToolUse hook, closed by task a1348c89; the active-claim tracker / stay-in-scope reminder gap closed by task cf4cdc93; the opt-in auto-approval gap closed by agent-tasks 57058364, slice 2, gap 13; current top gap is the un-translated permission-profile / sandbox stanza, gap 4; the claude -p delegation gap 14 is decided (task be9faf70): stays Claude Code only, documented, not ported), and the Codex wire-format contract."
 tags: [codex, runtime-adapter, parity, hooks]
-timestamp: 2026-09-06T20:12:56Z
+timestamp: 2026-09-07T04:12:56Z
 sources:
   - src/cli/pack/hook-pre-tool-use.ts
   - src/cli/pack/hook-subagent-start.ts
@@ -70,7 +70,7 @@ Cross-runtime approval state is shared by design: both runtimes persist reports 
 
 5. **`--target` and `--runtime codex` are mutually exclusive.** `apply.ts` lines 687–695: `--target` wires the generated Claude-Code settings.json to a destination path; the codex branch produces no settings.json, so the combination throws `HarnessExitError("--target is incompatible with --runtime codex (target wires Claude Code's settings.json)", EX_NOINPUT)`. The two runtimes are mutually exclusive per apply invocation; covering one manifest under both requires two invocations into separate generated trees (docs pack file, "Adapter notes / Codex").
 
-6. **solution-acceptance completion-gate loses its MCP choke points on Codex.** `completionMatch` in `src/policy-packs/builtin/solution-acceptance.ts` (lines 100–104) returns just `"Bash"` for codex because "Codex has no agent-tasks MCP surface here, so it gets the Bash arm only (documented limitation)"; Claude gets `Bash|mcp__agent-tasks__<verb>|...`. The write-guard match is also narrower: `apply_patch|Bash` vs Claude's `Edit|Write|MultiEdit|NotebookEdit|Bash` (lines 90–91).
+6. **solution-acceptance completion-gate loses its MCP choke points on Codex.** `completionMatch` in `src/policy-packs/builtin/solution-acceptance.ts` (lines 102–105) returns just `"Bash"` for codex because "Codex has no agent-tasks MCP surface here, so it gets the Bash arm only (documented limitation)"; Claude gets `Bash|mcp__agent-tasks__<verb>|...`. The write-guard match is also narrower: `apply_patch|Bash` vs Claude's `Edit|Write|MultiEdit|NotebookEdit|Bash` (lines 92–93).
 
 7. **branch-protection blocker maps to `apply_patch` only on Codex** (`src/policy-packs/builtin/branch-protection.ts` lines 89–90: `PRE_TOOL_USE_MATCH_CLAUDE = "Write|Edit"`, `PRE_TOOL_USE_MATCH_CODEX = "apply_patch"`). Structural mapping rather than a hole, but note asymmetry with the understanding gate, whose Codex match also covers shell tools (`apply_patch|Bash|shell|exec_command|functions.exec_command`, `understanding-before-execution.ts` lines 195–197).
 
