@@ -2,6 +2,31 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- task 30183330 (implementer), follow-up to the entry below: `npx
+  okf-kit@0.10.0 check docs/okf` run after commit `9c0d386` (the
+  `session_start_preflight.setup` commit) reported 10 `sources-fresh`
+  STALE warnings across 6 docs, each because one of `docs/CLI.md`,
+  `CHANGELOG.md`, or `src/cli/explain-policy.ts` changed in that commit
+  without also re-stamping the doc — the same recurring
+  CHANGELOG/CLI.md-driven staleness class task 419ecfad tracks (see the
+  2026-09-07T04:19:00Z entry further below). Content re-verified as
+  still accurate for all 6 (none cites the specific lines/sections this
+  task's diff touched: `codex-adapter-parity-gaps.md`'s `docs/CLI.md`
+  citation is the hook-entrypoints table and the unrelated line-65 2s
+  timeout note; `debug-verb-selection.md` and
+  `policy-engine-producer-wiring.md` list `docs/CLI.md` /
+  `src/cli/explain-policy.ts` only in `sources:`, no line-pinned prose
+  citation into either; `evidence-ledger-trust-boundary.md`'s
+  `docs/CLI.md` mention is the bare producer-name reference, still
+  true; `gate-fail-posture-matrix.md` and `pause-vs-gate-kill-switch.md`
+  cite only already-tagged, older `CHANGELOG.md` version sections,
+  untouched by the new `[Unreleased]` entry). Re-stamped all 6 to
+  `2026-09-07T06:00:38Z`: `codex-adapter-parity-gaps.md`,
+  `debug-verb-selection.md`, `evidence-ledger-trust-boundary.md`,
+  `gate-fail-posture-matrix.md`, `pause-vs-gate-kill-switch.md`,
+  `policy-engine-producer-wiring.md`. Re-ran the check after these
+  re-stamps: 0 errors, 0 warnings.
+
 - task 30183330 (implementer): added the `session_start_preflight.setup`
   config block (`src/schema/session-start-preflight.ts`, wired into
   `src/schema/index.ts`), shifting every line at and below the new field
@@ -34,8 +59,10 @@
   PR #507 (stamp:
   `docs/okf/understanding-gate-lockout-recovery.md:6#"timestamp: 2026-09-06T20:12:56Z"`);
   `policy-engine-producer-wiring.md` by the same commits and again by the
-  task 5c9cad05 rounds, since it cites `CHANGELOG.md` (stamp:
-  `docs/okf/policy-engine-producer-wiring.md:6#"timestamp: 2026-09-06T21:50:34Z"`).
+  task 5c9cad05 rounds, since it cites `CHANGELOG.md` (stamp then was
+  `2026-09-06T21:50:34Z` at `docs/okf/policy-engine-producer-wiring.md:6`,
+  superseded by the task 30183330 re-stamp in the entry above — anchor
+  dropped for the same now-overwritten-value reason).
   Verdict, measured on master `0a495db` before this entry and again on the
   committed tree after it: `npx okf-kit@0.10.0 check --json docs/okf` reports
   no `sources-fresh` or `sources-fresh-future` finding and no
