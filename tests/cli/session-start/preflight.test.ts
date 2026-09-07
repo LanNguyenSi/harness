@@ -1317,27 +1317,86 @@ describe("runSessionStartPreflight: setup:true manifest wiring (task 30183330)",
     expect(result.wrote).toBe(true);
     expect(seenArgs).toEqual([{ cwd: repo, timeoutMs: 60_000, setup: true }]);
   });
+
+  it("honours a machine-override layer that flips setup back off (task 30183330, review round 3)", async () => {
+    // Review round 3: machine-override layers are the ONLY layer besides
+    // the base manifest that reaches this key on the hook path (the
+    // generated SessionStart hook passes no `--project`, so no project
+    // layer is ever resolved; see tests/cli/loader-project-layer.test.ts).
+    // This drives that real scoping surface end to end: base manifest
+    // says `setup: true`, the machine layer turns it back off, and the
+    // value the producer hands to the runner must be the merged `false`.
+    const repo = makeRepoFixture("setup-machine-override");
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "harness-sspf-home-"));
+    cleanups.push(() => fs.rmSync(home, { recursive: true, force: true }));
+    fs.writeFileSync(
+      path.join(home, "harness.yaml"),
+      [
+        "version: 1",
+        "hooks: []",
+        "policies: []",
+        "tools:",
+        "  builtin:",
+        "    known: [Read, Edit]",
+        "session_start_preflight:",
+        "  setup: true",
+        "",
+      ].join("\n"),
+    );
+    fs.mkdirSync(path.join(home, "machines"), { recursive: true });
+    // `default` is always a machine-override candidate, on every host and
+    // platform (`machineOverrideCandidates`), so this layer applies here
+    // without pinning a hostname or platform discriminator.
+    fs.writeFileSync(
+      path.join(home, "machines", "default.harness.overrides.yaml"),
+      ["session_start_preflight:", "  setup: false", ""].join("\n"),
+    );
+    const seenArgs: Array<{ cwd: string; timeoutMs: number; setup: boolean }> = [];
+    const result = await runSessionStartPreflight({
+      stdin: streamFrom(JSON.stringify({ session_id: "s", cwd: repo })),
+      stderr: captureStream().stream,
+      homeDir: home,
+      runPreflight: async (cwd, timeoutMs, setup) => {
+        seenArgs.push({ cwd, timeoutMs, setup });
+        return { ok: true, json: { ready: true, confidence: 0.9, checks: [] } };
+      },
+      writeLedger: async () => ({ ok: true }),
+    });
+    expect(result.wrote).toBe(true);
+    expect(seenArgs).toEqual([{ cwd: repo, timeoutMs: 60_000, setup: false }]);
+  });
 });
 
-describe(
-  "runSessionStartPreflight: ready:false from --setup (task 30183330, review round 2)",
-  () => {
-    it(
-      "does NOT write the ledger tag when a ready:false result's failing check is " +
-        "clean-worktree (the --setup degradation shape measured on agent-preflight's own " +
-        "tests/fixtures/monorepo-build-required fixture)",
-      async () => {
-        const repo = makeRepoFixture("setup-dirties-worktree");
-        const { stream: err, output: errOut } = captureStream();
-        const writes: string[] = [];
-        const result = await runSessionStartPreflight({
-          stdin: streamFrom(JSON.stringify({ session_id: "s", cwd: repo })),
-          stderr: err,
-          logDir: makeLogDirFixture(),
-          // Simulates the measured shape: `--setup` writes an untracked
-          // build artifact into the worktree, flipping clean-worktree
-          // from pass to fail and the overall verdict to ready:false.
-          runPreflight: async () => ({
+// Review round 3: the round-2 version of this block never set
+// `session_start_preflight.setup` at all, so it drove the plain
+// not-ready branch and no `--setup` mutant could kill it. Both tests
+// below now DRIVE the feature: the first pins that `setup: true` from
+// the manifest is what reaches the runner before the ready:false result
+// comes back, the second spawns a fake `preflight` binary that returns
+// the degraded result ONLY when `--setup` is in its own argv, so the
+// whole chain (manifest key -> setupEnabled -> buildPreflightArgv ->
+// execFile argv) is load-bearing for the assertion.
+describe("ready:false from --setup (task 30183330, review round 3)", () => {
+  it(
+    "receives setup:true and, on the clean-worktree failure that causes, leaves the " +
+      "ledger tag unwritten (the degradation shape measured on agent-preflight's " +
+      "own monorepo build-required fixture)",
+    async () => {
+      const repo = makeRepoFixture("setup-dirties-worktree");
+      const { stream: err, output: errOut } = captureStream();
+      const writes: string[] = [];
+      const seenSetup: boolean[] = [];
+      const result = await runSessionStartPreflight({
+        stdin: streamFrom(JSON.stringify({ session_id: "s", cwd: repo })),
+        stderr: err,
+        logDir: makeLogDirFixture(),
+        manifest: parseManifest({ version: 1, session_start_preflight: { setup: true } }),
+        // Simulates the measured shape: with `--setup`, the child writes
+        // an untracked build artifact into the worktree, flipping
+        // clean-worktree from pass to fail and the verdict to ready:false.
+        runPreflight: async (_cwd, _timeoutMs, setup) => {
+          seenSetup.push(setup);
+          return {
             ok: true,
             json: {
               ready: false,
@@ -1350,21 +1409,82 @@ describe(
                 },
               ],
             },
-          }),
+          };
+        },
+        writeLedger: async (args) => {
+          writes.push(args.content);
+          return { ok: true };
+        },
+      });
+      // The feature is what produced this result: setup:true reached the
+      // runner (kills a resolver that ignores the manifest) ...
+      expect(seenSetup).toEqual([true]);
+      // ... and the degraded verdict it caused leaves the gate closed.
+      expect(result.wrote).toBe(false);
+      expect(writes).toEqual([]);
+      expect(result.reason).toContain("clean-worktree (Repository has uncommitted changes)");
+      expect(errOut()).toContain("clean-worktree (Repository has uncommitted changes)");
+      expect(errOut()).toContain("leaving the preflight tag unwritten so the gate stays closed");
+    },
+  );
+
+  it(
+    "leaves the tag unwritten against a fake preflight binary that only degrades when " +
+      "--setup is in its argv (whole chain: manifest key to spawned argv)",
+    async () => {
+      const repo = makeRepoFixture("setup-dirties-worktree-real-spawn");
+      const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "harness-fakebin-setupdegrade-"));
+      cleanups.push(() => fs.rmSync(binDir, { recursive: true, force: true }));
+      const fakeBin = path.join(binDir, "preflight");
+      // Emits the degraded (ready:false, clean-worktree fail) payload ONLY
+      // when `--setup` reaches it, and a clean ready:true payload
+      // otherwise. Any mutant that drops `--setup` anywhere between the
+      // manifest key and the execFile argv therefore flips this test's
+      // outcome instead of being invisible to it.
+      fs.writeFileSync(
+        fakeBin,
+        [
+          "#!/bin/sh",
+          'for a in "$@"; do',
+          '  if [ "$a" = "--setup" ]; then',
+          `    printf '%s' '{"ready":false,"confidence":0.62,"checks":[{"name":"clean-worktree","status":"fail","message":"Repository has uncommitted changes"}]}'`,
+          "    exit 1",
+          "  fi",
+          "done",
+          `printf '%s' '{"ready":true,"confidence":0.5,"checks":[]}'`,
+          "",
+        ].join("\n"),
+        { mode: 0o755 },
+      );
+      const { stream: err, output: errOut } = captureStream();
+      const writes: string[] = [];
+      const priorPath = process.env["PATH"];
+      process.env["PATH"] = `${binDir}${path.delimiter}${priorPath ?? ""}`;
+      let result: Awaited<ReturnType<typeof runSessionStartPreflight>>;
+      try {
+        result = await runSessionStartPreflight({
+          stdin: streamFrom(JSON.stringify({ session_id: "s", cwd: repo })),
+          stderr: err,
+          logDir: makeLogDirFixture(),
+          manifest: parseManifest({ version: 1, session_start_preflight: { setup: true } }),
+          // `runPreflight` intentionally NOT injected: exercises the real
+          // `spawnPreflight` -> `buildPreflightArgv` -> execFile path.
           writeLedger: async (args) => {
             writes.push(args.content);
             return { ok: true };
           },
         });
-        expect(result.wrote).toBe(false);
-        expect(writes).toEqual([]);
-        expect(result.reason).toContain("clean-worktree (Repository has uncommitted changes)");
-        expect(errOut()).toContain("clean-worktree (Repository has uncommitted changes)");
-        expect(errOut()).toContain("leaving the preflight tag unwritten so the gate stays closed");
-      },
-    );
-  },
-);
+      } finally {
+        if (priorPath === undefined) delete process.env["PATH"];
+        else process.env["PATH"] = priorPath;
+      }
+      expect(result.wrote).toBe(false);
+      expect(writes).toEqual([]);
+      expect(result.reason).toContain("clean-worktree (Repository has uncommitted changes)");
+      expect(errOut()).toContain("leaving the preflight tag unwritten so the gate stays closed");
+    },
+  );
+});
 
 describe("spawnPreflight argv (real spawn, fake binary) (task 30183330, review round 2)", () => {
   // Round 2 gap: every argv assertion above (`buildPreflightArgv` and the

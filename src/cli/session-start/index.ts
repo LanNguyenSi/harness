@@ -97,16 +97,18 @@ export interface SessionStartPreflightOptions extends LoaderOptions {
   /** Inject the preflight runner (tests). */
   runPreflight?: (cwd: string, timeoutMs: number, setup: boolean) => Promise<RunPreflightResult>;
   /**
-   * Inject the resolved manifest (tests); bypasses `loadManifest` for
-   * resolving `session_start_preflight.setup` (task 30183330), same
-   * seam shape as `harness explain-policy`'s own `manifest` option.
-   * Unlike the ledger-writer's own `loadManifest` call further down
-   * (used only when `writeLedger` is not injected, whose failure
-   * ABORTS the whole preflight run), a failure to resolve `setup` here
-   * (an injected manifest is absent AND `loadManifest(opts)` throws)
-   * degrades to `setup: false` (matches the sibling SessionStart
-   * companions' "not configured -> skip" contract) rather than
-   * aborting the entire preflight run over this one unrelated knob.
+   * Inject the resolved manifest (tests). Scope is EXACTLY one call
+   * site: the `setupEnabled` resolution of
+   * `session_start_preflight.setup` (task 30183330), same seam shape as
+   * `harness explain-policy`'s own `manifest` option. The
+   * ledger-writer's own `loadManifest` call further down (used only
+   * when `writeLedger` is not injected) deliberately does NOT read this
+   * field, so injecting a manifest never suppresses that call's
+   * run-aborting failure path. A failure to resolve `setup` here (this
+   * field is absent AND `loadManifest(opts)` throws) degrades to
+   * `setup: false` (matches the sibling SessionStart companions' "not
+   * configured -> skip" contract) rather than aborting the entire
+   * preflight run over this one unrelated knob.
    */
   manifest?: Manifest;
   /**
@@ -643,16 +645,17 @@ export async function runSessionStartPreflight(
   if (!writeLedger) {
     let manifest: Manifest;
     try {
-      // Second `loadManifest(opts)` call of this run (task 30183330); see
-      // the `setupEnabled` resolution above (~line 588) for the first.
-      // Deliberately NOT reused: a failure here ABORTS the whole run (the
-      // catch below returns early with no ledger write attempted), while
-      // the earlier call's failure degrades to `setup: false` and lets
+      // Second `loadManifest(opts)` call of this run (task 30183330); the
+      // `setupEnabled` resolution earlier in this function is the first.
+      // Deliberately NOT reused, and deliberately NOT reading
+      // `opts.manifest`: a failure here ABORTS the whole run (the catch
+      // below returns early with no ledger write attempted), while the
+      // `setupEnabled` call's failure degrades to `setup: false` and lets
       // the run proceed. Loading once and sharing the result would either
       // abort on a config error the setup resolution is meant to
       // tolerate, or silently swallow a real load failure this branch
       // must surface, so the two calls keep their own try/catch.
-      manifest = opts.manifest ?? loadManifest(opts).manifest;
+      manifest = loadManifest(opts).manifest;
     } catch (err) {
       const reason = `manifest load failed: ${(err as Error).message}`;
       note(reason);

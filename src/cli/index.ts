@@ -2578,7 +2578,9 @@ export function buildProgram(opts: RunOptions = {}): Command {
     .command("preflight")
     .description(
       "Alias for `harness session-start preflight`: run agent-preflight against the session cwd " +
-        "and, on a ready:true result, record a `preflight:${REPO}` fact to the evidence ledger.",
+        "and, on a ready:true result, record a `preflight:${REPO}` fact to the evidence ledger. " +
+        "Opt-in `session_start_preflight.setup: true` (default off) passes --setup through; " +
+        "see docs/CLI.md for the trust and scope caveats.",
     )
     .option("--config <path>", "manifest path (default: ~/.harness/harness.yaml; legacy fallback ~/.claude/harness.yaml)")
     .option("--project <name>", "apply per-project overrides")
@@ -2798,6 +2800,8 @@ export function buildProgram(opts: RunOptions = {}): Command {
       "SessionStart producer: run agent-preflight against the session cwd and, on a ready:true result, " +
         "record a `preflight:${REPO}` fact to the evidence ledger so the preflight-before-* policies have a " +
         "fresh tag to match. Reads SessionStart event JSON from stdin ({ session_id, cwd, hook_event_name }). " +
+        "Opt-in `session_start_preflight.setup: true` (default off) passes --setup through; " +
+        "see docs/CLI.md for the trust and scope caveats. " +
         "blocking:false — every failure path logs to stderr and exits 0.",
     )
     .option("--config <path>", "manifest path (default: ~/.harness/harness.yaml; legacy fallback ~/.claude/harness.yaml)")

@@ -49,17 +49,24 @@ import { z } from "zod";
 // repositories you already trust to run"). Enable this knob only for
 // repositories you already trust to run their own install/build.
 //
-// SCOPE: this key is HOST-GLOBAL, not per-repo. It is read from the base
-// manifest plus whatever machine-override layers apply
-// (`src/cli/loader.ts`'s `resolvePaths`/`applyLayers`), and the
-// generated `git-preflight` SessionStart hook invokes `harness
-// session-start preflight` with no `--project` flag
-// (`src/cli/init/templates.ts`), so a single `setup: true` here applies
-// to EVERY repository the operator opens a Claude Code session in from
-// this host, not just the one it was enabled for. The only scoping
-// available today is a project override layer that sets `setup: false`
-// back for repositories that should not get it; there is no allowlist
-// or per-repo opt-in mechanism yet.
+// SCOPE: this key is a HOST-WIDE on/off switch. NO per-repo scoping
+// exists today. What resolves it is the base manifest plus whatever
+// machine-override layers apply (`src/cli/loader.ts`'s
+// `resolvePaths`/`applyLayers`), so a single `setup: true` applies to
+// EVERY repository the operator opens a Claude Code session in from this
+// host. A project override layer does NOT narrow that: `resolvePaths`
+// looks for one only when `LoaderOptions.project` is set
+// (`src/cli/loader.ts`, the `if (opts.project)` branch), that value comes
+// solely from the `--project <name>` flag, and the generated
+// `git-preflight` SessionStart hook invokes `harness session-start
+// preflight` with no `--project` (`src/cli/init/templates.ts`), so no
+// project layer is ever consulted on the hook path. Hardcoding a
+// `--project <name>` into that hook would not help either: the hook
+// command is one static string, so it would apply the same single
+// project name to every repository. Making the producer derive a project
+// name from its own cwd would be the follow-up that turns this into a
+// per-repo knob; until then the only supported way to keep a repository
+// out is to leave `setup` off for the whole host.
 export const SessionStartPreflightSchema = z
   .object({
     setup: z.boolean().default(false),

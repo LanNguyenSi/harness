@@ -262,3 +262,59 @@ describe("explainPolicy: session_start_preflight (task 30183330)", () => {
     expect(Object.keys(projection)).not.toContain("session_start_preflight");
   });
 });
+
+// Review round 3: the projection is gated on the exact
+// `preflight-before-` name prefix (`src/cli/explain-policy.ts`), not on
+// "consumes a preflight: tag" and not on a looser `preflight` prefix.
+// The test above only rules out a policy that neither starts with
+// `preflight` nor consumes the tag, so a widened prefix would survive it.
+// These two cases pin the boundary itself.
+const MANIFEST_PREFIX_BOUNDARY: Manifest = parseManifest({
+  ...MANIFEST_INPUT,
+  session_start_preflight: { setup: true },
+  policies: [
+    ...MANIFEST_INPUT.policies,
+    {
+      // Starts with `preflight` and CONSUMES the preflight tag, but is not
+      // one of the init-generated `preflight-before-*` gates.
+      name: "preflight-custom-audit",
+      description: "a custom policy consuming preflight: evidence outside the generated naming",
+      trigger: { event: "PreToolUse", match: "Bash" },
+      requires: { ledger_tag: "preflight:${REPO}" },
+      hook: "risk-gate",
+      enforcement: "block",
+    },
+    {
+      // The bare prefix itself: the shortest name the rule must still match.
+      name: "preflight-before-",
+      description: "bare-prefix boundary fixture for the preflight-before- name rule",
+      trigger: { event: "PreToolUse", match: "Bash" },
+      requires: { ledger_tag: "preflight:${REPO}" },
+      hook: "risk-gate",
+      enforcement: "block",
+    },
+  ],
+});
+
+describe("explainPolicy: session_start_preflight name-prefix boundary (task 30183330)", () => {
+  it("omits the field for a custom policy that requires preflight: facts but is not named preflight-before-*", () => {
+    const file = writeEvent(DESTROY_EVENT);
+    const { projection } = explainPolicy("preflight-custom-audit", {
+      ...seams("main"),
+      eventPath: file,
+      manifest: MANIFEST_PREFIX_BOUNDARY,
+    });
+    expect(projection.session_start_preflight).toBeUndefined();
+    expect(Object.keys(projection)).not.toContain("session_start_preflight");
+  });
+
+  it("shows the field for a bare `preflight-before-` prefixed policy", () => {
+    const file = writeEvent(DESTROY_EVENT);
+    const { projection } = explainPolicy("preflight-before-", {
+      ...seams("main"),
+      eventPath: file,
+      manifest: MANIFEST_PREFIX_BOUNDARY,
+    });
+    expect(projection.session_start_preflight).toEqual({ setup: true });
+  });
+});
