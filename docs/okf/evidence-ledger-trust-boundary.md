@@ -3,7 +3,7 @@ type: invariant
 title: Evidence-ledger trust boundary
 description: The agent-writable evidence ledger is audit-only for the builtin enforcement gates; only operator- or trusted-process-authored filesystem markers (read via the shared symlink-rejecting reader in src/io/read-regular-file.ts) open them, while custom requires.ledger_tag policies are process gates by design.
 tags: [evidence-ledger, trust-boundary, approvals, security]
-timestamp: 2026-09-06T18:54:07Z
+timestamp: 2026-09-06T20:12:56Z
 sources:
   - src/cli/pack/hook-pre-tool-use.ts
   - src/cli/pack/auto-approve-path.ts
@@ -16,6 +16,7 @@ sources:
   - src/policy-packs/builtin/understanding-before-execution/inflight-records.ts
   - src/policy-packs/builtin/branch-protection-runtime.ts
   - src/policy-packs/builtin/solution-acceptance-runtime.ts
+  - src/runtime/task-providers/agent-tasks.ts
   - src/policies/requires.ts
   - src/cli/init/templates.ts
   - src/cli/init/composer.ts
@@ -38,7 +39,7 @@ No evidence sink the gated agent can write — above all the evidence ledger, re
 
 **Branch-protection gate.** Same mechanism, namespaced filename: `checkBranchProtectionMarker` delegates to `checkApprovalMarker` with `branchProtectionMarkerName(sessionId)` = `branch-protection-<sessionId>` in the same `.approvals/` dir (`src/policy-packs/builtin/branch-protection-runtime.ts`). Per audit finding #39 (docs/policy-packs/branch-protection.md, "Security"): a `branch-protection-ack:<reason>` ledger tag (`ACK_TAG_PREFIX = "branch-protection-ack"`) is NO LONGER a sufficient override because the agent could self-write it via `ledger_add`; `harness approve branch-protection` still records it as a best-effort audit echo, but only the marker file opens the gate.
 
-**Solution-acceptance gate.** The trusted actor here is a process, not the operator: grounding-mcp (`solution_evaluate` / `solution_gate`, >= 0.3.2) runs a real preflight and writes a HEAD-pinned verdict marker "outside the agent-writable evidence ledger", by default under `$XDG_STATE_HOME`-resolved `agent-grounding/solution-verdicts` (`VERDICT_DIR_TAIL`, overridable via `SOLUTION_VERDICT_DIR`). Harness consumes it via `readVerdict` (shared reader; any non-`ok` kind closes the gate) and a write-guard blocks the agent's enumerated Bash/Edit/Write paths into the verdict dir. Explicitly NOT closed in v1: arbitrary same-uid forgery (module header, operator decision 2026-05-30).
+**Solution-acceptance gate.** The trusted actor here is a process, not the operator: grounding-mcp (`solution_evaluate` / `solution_gate`, >= 0.3.2) runs a real preflight and writes a HEAD-pinned verdict marker "outside the agent-writable evidence ledger", by default under `$XDG_STATE_HOME`-resolved `agent-grounding/solution-verdicts` (`VERDICT_DIR_TAIL`, overridable via `SOLUTION_VERDICT_DIR`). Harness consumes it via `readVerdict` (shared reader; any non-`ok` kind closes the gate) and a write-guard blocks the agent's enumerated Bash/Edit/Write paths into the verdict dir. The adapter owns only the gate's agent-tasks completion vocabulary and canonical matching (`src/runtime/task-providers/agent-tasks.ts`); it does not affect verdict authority or marker trust. Explicitly NOT closed in v1: arbitrary same-uid forgery (module header, operator decision 2026-05-30).
 
 **Custom `requires.ledger_tag` policies are process gates BY DESIGN.** docs/writing-custom-policies.md tripwire 4: "whoever can write the ledger can open the gate" — a custom `block` policy is advisory against the agent it gates; it forces a deliberate step but does not survive an agent that writes the tag directly. Enforcement requires an `ask`-kind producer, CI, or a distinct trusted process. The evaluator side (`evaluateRequires` machinery in `src/policies/requires.ts`) substring-matches ledger entries but skips `policy_decision` rows (`LedgerEntry.type`; `isPolicyDecisionRow` in the understanding runtime does the same) so audit rows can't pollute matches, and its `recordHint` deliberately never names the recording verb (agent-tasks/88ca4bb3 rationale in the doc comment).
 
