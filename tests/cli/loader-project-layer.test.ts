@@ -1,0 +1,86 @@
+// Loader half of the `session_start_preflight.setup` scope claim (task
+// 30183330, review round 3).
+//
+// The docs state that the key is HOST-WIDE and that a project override
+// layer does NOT scope it per repository. That rests on two facts, one
+// per side of the pair: the generated SessionStart hook passes no
+// `--project` (pinned by tests/cli/init-preflight-hook-project-scope.test.ts),
+// and `resolvePaths` resolves a project layer ONLY when
+// `LoaderOptions.project` is set. This file pins the loader side: without
+// `project`, a project override layer that sits on disk is neither
+// resolved nor merged, so its `session_start_preflight.setup: false`
+// cannot influence what the hook path reads. The same layer IS honoured
+// when `project` is passed explicitly, which is what keeps this a scope
+// statement about the hook path rather than a claim that the mechanism
+// does not exist at all.
+
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { loadManifest, resolvePaths } from "../../src/cli/loader.js";
+
+const PROJECT_NAME = "scoped-repo";
+
+let tmpHome: string;
+let priorEnv: string | undefined;
+
+const BASE_MANIFEST = [
+  "version: 1",
+  "hooks: []",
+  "policies: []",
+  "tools:",
+  "  builtin:",
+  "    known: [Read, Edit]",
+  "session_start_preflight:",
+  "  setup: true",
+  "",
+].join("\n");
+
+const PROJECT_LAYER = ["session_start_preflight:", "  setup: false", ""].join("\n");
+
+beforeEach(() => {
+  tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), "loader-project-layer-"));
+  priorEnv = process.env["HARNESS_ALLOW_REAL_GENERATED_DIR"];
+  delete process.env["HARNESS_ALLOW_REAL_GENERATED_DIR"];
+  fs.writeFileSync(path.join(tmpHome, "harness.yaml"), BASE_MANIFEST);
+  const projectDir = path.join(tmpHome, "projects", PROJECT_NAME);
+  fs.mkdirSync(projectDir, { recursive: true });
+  fs.writeFileSync(path.join(projectDir, "harness.overrides.yaml"), PROJECT_LAYER);
+});
+
+afterEach(() => {
+  fs.rmSync(tmpHome, { recursive: true, force: true });
+  if (priorEnv === undefined) delete process.env["HARNESS_ALLOW_REAL_GENERATED_DIR"];
+  else process.env["HARNESS_ALLOW_REAL_GENERATED_DIR"] = priorEnv;
+});
+
+describe("resolvePaths: project layer requires an explicit project (task 30183330)", () => {
+  it("resolves NO project layer when opts.project is absent, even though one exists on disk", () => {
+    const resolved = resolvePaths({ homeDir: tmpHome });
+    expect(resolved.projectLayer).toBeNull();
+  });
+
+  it("resolves the project layer when opts.project names it", () => {
+    const resolved = resolvePaths({ homeDir: tmpHome, project: PROJECT_NAME });
+    expect(resolved.projectLayer).toBe(
+      path.join(tmpHome, "projects", PROJECT_NAME, "harness.overrides.yaml"),
+    );
+  });
+});
+
+describe("loadManifest: a project layer cannot scope session_start_preflight.setup without --project", () => {
+  it("keeps the base manifest's setup:true when opts.project is absent", () => {
+    const { manifest, resolved } = loadManifest({ homeDir: tmpHome });
+    expect(resolved.projectLayer).toBeNull();
+    // The on-disk project layer says `setup: false`. If it were merged,
+    // this would read false, and the documented host-wide scope claim
+    // would be wrong.
+    expect(manifest.session_start_preflight).toEqual({ setup: true });
+  });
+
+  it("applies the project layer's setup:false when opts.project names it", () => {
+    const { manifest } = loadManifest({ homeDir: tmpHome, project: PROJECT_NAME });
+    expect(manifest.session_start_preflight).toEqual({ setup: false });
+  });
+});

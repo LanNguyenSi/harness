@@ -63,6 +63,17 @@ interface ExplainPolicyProjection {
   /** Static deletion-target verdict (task d03af8f6); null when the
    *  event's command is not a recognized deletion verb. */
   deletion_target: DeletionTargetVerdict | null;
+  /**
+   * Resolved `session_start_preflight` config (task 30183330), shown
+   * only when the explained policy is one of the init-generated
+   * `preflight-before-*` gates (name starts with `preflight-before-`):
+   * this is the knob that decides whether the `harness session-start
+   * preflight` / `harness preflight` producer passes `--setup` to the
+   * `preflight run` invocation whose `ready:true` result these policies
+   * gate on. Omitted for every other policy; it has no bearing on
+   * their evaluation.
+   */
+  session_start_preflight?: { setup: boolean };
   when:
     | { declared: false }
     | {
@@ -160,6 +171,9 @@ export function explainPolicy(
     classifier,
     environment,
     deletion_target: deletionTarget,
+    ...(policy.name.startsWith("preflight-before-") && {
+      session_start_preflight: { setup: manifest.session_start_preflight.setup },
+    }),
     when: whenEval
       ? {
           declared: true,

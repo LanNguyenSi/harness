@@ -31,10 +31,12 @@ afterAll(() => {
 });
 
 import {
+  buildPreflightArgv,
   preflightChildEnv,
   runSessionStartPreflight,
   type RunPreflightResult,
 } from "../../../src/cli/session-start/index.js";
+import { parseManifest } from "../../../src/schema/index.js";
 
 let cleanups: Array<() => void> = [];
 afterEach(() => {
@@ -1171,5 +1173,407 @@ describe("multiple failing checks (task a48b9729)", () => {
     expect(result.reason).toContain(`; log: ${path.join(logDir, logFiles[0]!)}`);
     expect((result.reason?.match(/; failing:/g) ?? []).length).toBe(1);
     expect(errOut()).toContain("npm-test (t1 | t2 | t3), secret-scan (s1 | s2 | s3), lint");
+  });
+});
+
+// ===========================================================================
+// `--setup` passthrough (task 30183330)
+// ===========================================================================
+
+describe("buildPreflightArgv (task 30183330)", () => {
+  it("renders the base argv with no --setup when setup is false", () => {
+    expect(buildPreflightArgv("/repo", false)).toEqual(["run", "--json", "/repo"]);
+  });
+
+  it("inserts --setup before the cwd positional when setup is true", () => {
+    expect(buildPreflightArgv("/repo", true)).toEqual(["run", "--json", "--setup", "/repo"]);
+  });
+});
+
+describe("SessionStartPreflightSchema: manifest parsing (task 30183330)", () => {
+  it("defaults to setup:false when the block is absent entirely", () => {
+    const m = parseManifest({ version: 1 });
+    expect(m.session_start_preflight).toEqual({ setup: false });
+  });
+
+  it("defaults to setup:false when the block is an empty object", () => {
+    const m = parseManifest({ version: 1, session_start_preflight: {} });
+    expect(m.session_start_preflight).toEqual({ setup: false });
+  });
+
+  it("parses an explicit setup:true", () => {
+    const m = parseManifest({ version: 1, session_start_preflight: { setup: true } });
+    expect(m.session_start_preflight).toEqual({ setup: true });
+  });
+
+  it("rejects unknown keys (.strict())", () => {
+    expect(() =>
+      parseManifest({ version: 1, session_start_preflight: { setup: true, bogus_key: 1 } }),
+    ).toThrow();
+  });
+
+  it("rejects a non-boolean setup value", () => {
+    expect(() =>
+      parseManifest({ version: 1, session_start_preflight: { setup: "yes" } }),
+    ).toThrow();
+  });
+});
+
+describe("runSessionStartPreflight: setup:true manifest wiring (task 30183330)", () => {
+  it("passes setup:true through to runPreflight when an injected manifest enables it", async () => {
+    const repo = makeRepoFixture("setup-on-service");
+    const manifest = parseManifest({ version: 1, session_start_preflight: { setup: true } });
+    const seenArgs: Array<{ cwd: string; timeoutMs: number; setup: boolean }> = [];
+    const result = await runSessionStartPreflight({
+      stdin: streamFrom(JSON.stringify({ session_id: "s", cwd: repo })),
+      stderr: captureStream().stream,
+      manifest,
+      runPreflight: async (cwd, timeoutMs, setup) => {
+        seenArgs.push({ cwd, timeoutMs, setup });
+        return { ok: true, json: { ready: true, confidence: 0.9, checks: [] } };
+      },
+      writeLedger: async () => ({ ok: true }),
+    });
+    expect(result.wrote).toBe(true);
+    expect(seenArgs).toEqual([{ cwd: repo, timeoutMs: 60_000, setup: true }]);
+  });
+
+  it("passes setup:false through to runPreflight when the manifest omits the block", async () => {
+    const repo = makeRepoFixture("setup-off-service");
+    const manifest = parseManifest({ version: 1 });
+    const seenArgs: Array<{ cwd: string; timeoutMs: number; setup: boolean }> = [];
+    const result = await runSessionStartPreflight({
+      stdin: streamFrom(JSON.stringify({ session_id: "s", cwd: repo })),
+      stderr: captureStream().stream,
+      manifest,
+      runPreflight: async (cwd, timeoutMs, setup) => {
+        seenArgs.push({ cwd, timeoutMs, setup });
+        return { ok: true, json: { ready: true, confidence: 0.9, checks: [] } };
+      },
+      writeLedger: async () => ({ ok: true }),
+    });
+    expect(result.wrote).toBe(true);
+    expect(seenArgs).toEqual([{ cwd: repo, timeoutMs: 60_000, setup: false }]);
+  });
+
+  it("degrades to setup:false (never aborts the run) when no manifest is injected and loadManifest fails", async () => {
+    // Unlike the ledger-writer's own loadManifest call (which ABORTS the
+    // whole run on a load failure, see "reports a manifest load failure"
+    // above), a failure to resolve `session_start_preflight.setup` must
+    // NOT abort: the preflight run proceeds with setup:false, matching
+    // the sibling companions' "not configured -> skip" contract.
+    const repo = makeRepoFixture("setup-degrade-service");
+    const seenArgs: Array<{ cwd: string; timeoutMs: number; setup: boolean }> = [];
+    const result = await runSessionStartPreflight({
+      stdin: streamFrom(JSON.stringify({ session_id: "s", cwd: repo })),
+      stderr: captureStream().stream,
+      // No `manifest` injected AND no homeDir/configPath: loadManifest(opts)
+      // throws (resolvePaths' throw-on-real-home-dir guard), so this
+      // exercises the catch-swallow-to-false path for setup resolution.
+      runPreflight: async (cwd, timeoutMs, setup) => {
+        seenArgs.push({ cwd, timeoutMs, setup });
+        return { ok: true, json: { ready: true, confidence: 0.9, checks: [] } };
+      },
+      writeLedger: async () => ({ ok: true }),
+    });
+    expect(result.wrote).toBe(true);
+    expect(seenArgs).toEqual([{ cwd: repo, timeoutMs: 60_000, setup: false }]);
+  });
+
+  it("resolves setup:true from a real on-disk manifest via configPath, not only an injected manifest", async () => {
+    // Review round 2: every wiring test above injects `manifest` directly,
+    // bypassing the real `loadManifest(opts)` parse-and-merge path. This
+    // drives that real path with a temp harness.yaml on disk instead.
+    const repo = makeRepoFixture("setup-real-config");
+    const manifestPath = path.join(repo, "harness.yaml");
+    fs.writeFileSync(
+      manifestPath,
+      [
+        "version: 1",
+        "hooks: []",
+        "policies: []",
+        "tools:",
+        "  builtin:",
+        "    known: [Read, Edit]",
+        "session_start_preflight:",
+        "  setup: true",
+        "",
+      ].join("\n"),
+    );
+    const seenArgs: Array<{ cwd: string; timeoutMs: number; setup: boolean }> = [];
+    const result = await runSessionStartPreflight({
+      stdin: streamFrom(JSON.stringify({ session_id: "s", cwd: repo })),
+      stderr: captureStream().stream,
+      configPath: manifestPath,
+      // No `manifest` injected: `setupEnabled` resolution must go through
+      // the real `loadManifest(opts)` call to pick up `setup: true` from
+      // this on-disk file.
+      runPreflight: async (cwd, timeoutMs, setup) => {
+        seenArgs.push({ cwd, timeoutMs, setup });
+        return { ok: true, json: { ready: true, confidence: 0.9, checks: [] } };
+      },
+      writeLedger: async () => ({ ok: true }),
+    });
+    expect(result.wrote).toBe(true);
+    expect(seenArgs).toEqual([{ cwd: repo, timeoutMs: 60_000, setup: true }]);
+  });
+
+  it("honours a machine-override layer that flips setup back off (task 30183330, review round 3)", async () => {
+    // Review round 3: machine-override layers are the ONLY layer besides
+    // the base manifest that reaches this key on the hook path (the
+    // generated SessionStart hook passes no `--project`, so no project
+    // layer is ever resolved; see tests/cli/loader-project-layer.test.ts).
+    // This drives that real scoping surface end to end: base manifest
+    // says `setup: true`, the machine layer turns it back off, and the
+    // value the producer hands to the runner must be the merged `false`.
+    const repo = makeRepoFixture("setup-machine-override");
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "harness-sspf-home-"));
+    cleanups.push(() => fs.rmSync(home, { recursive: true, force: true }));
+    fs.writeFileSync(
+      path.join(home, "harness.yaml"),
+      [
+        "version: 1",
+        "hooks: []",
+        "policies: []",
+        "tools:",
+        "  builtin:",
+        "    known: [Read, Edit]",
+        "session_start_preflight:",
+        "  setup: true",
+        "",
+      ].join("\n"),
+    );
+    fs.mkdirSync(path.join(home, "machines"), { recursive: true });
+    // `default` is always a machine-override candidate, on every host and
+    // platform (`machineOverrideCandidates`), so this layer applies here
+    // without pinning a hostname or platform discriminator.
+    fs.writeFileSync(
+      path.join(home, "machines", "default.harness.overrides.yaml"),
+      ["session_start_preflight:", "  setup: false", ""].join("\n"),
+    );
+    const seenArgs: Array<{ cwd: string; timeoutMs: number; setup: boolean }> = [];
+    const result = await runSessionStartPreflight({
+      stdin: streamFrom(JSON.stringify({ session_id: "s", cwd: repo })),
+      stderr: captureStream().stream,
+      homeDir: home,
+      runPreflight: async (cwd, timeoutMs, setup) => {
+        seenArgs.push({ cwd, timeoutMs, setup });
+        return { ok: true, json: { ready: true, confidence: 0.9, checks: [] } };
+      },
+      writeLedger: async () => ({ ok: true }),
+    });
+    expect(result.wrote).toBe(true);
+    expect(seenArgs).toEqual([{ cwd: repo, timeoutMs: 60_000, setup: false }]);
+  });
+});
+
+// Review round 3: the round-2 version of this block never set
+// `session_start_preflight.setup` at all, so it drove the plain
+// not-ready branch and no `--setup` mutant could kill it. Both tests
+// below now DRIVE the feature: the first pins that `setup: true` from
+// the manifest is what reaches the runner before the ready:false result
+// comes back, the second spawns a fake `preflight` binary that returns
+// the degraded result ONLY when `--setup` is in its own argv, so the
+// whole chain (manifest key -> setupEnabled -> buildPreflightArgv ->
+// execFile argv) is load-bearing for the assertion.
+describe("ready:false from --setup (task 30183330, review round 3)", () => {
+  it(
+    "receives setup:true and, on the clean-worktree failure that causes, leaves the " +
+      "ledger tag unwritten (the degradation shape measured on agent-preflight's " +
+      "own monorepo build-required fixture)",
+    async () => {
+      const repo = makeRepoFixture("setup-dirties-worktree");
+      const { stream: err, output: errOut } = captureStream();
+      const writes: string[] = [];
+      const seenSetup: boolean[] = [];
+      const result = await runSessionStartPreflight({
+        stdin: streamFrom(JSON.stringify({ session_id: "s", cwd: repo })),
+        stderr: err,
+        logDir: makeLogDirFixture(),
+        manifest: parseManifest({ version: 1, session_start_preflight: { setup: true } }),
+        // Simulates the measured shape: with `--setup`, the child writes
+        // an untracked build artifact into the worktree, flipping
+        // clean-worktree from pass to fail and the verdict to ready:false.
+        runPreflight: async (_cwd, _timeoutMs, setup) => {
+          seenSetup.push(setup);
+          return {
+            ok: true,
+            json: {
+              ready: false,
+              confidence: 0.62,
+              checks: [
+                {
+                  name: "clean-worktree",
+                  status: "fail",
+                  message: "Repository has uncommitted changes",
+                },
+              ],
+            },
+          };
+        },
+        writeLedger: async (args) => {
+          writes.push(args.content);
+          return { ok: true };
+        },
+      });
+      // The feature is what produced this result: setup:true reached the
+      // runner (kills a resolver that ignores the manifest) ...
+      expect(seenSetup).toEqual([true]);
+      // ... and the degraded verdict it caused leaves the gate closed.
+      expect(result.wrote).toBe(false);
+      expect(writes).toEqual([]);
+      expect(result.reason).toContain("clean-worktree (Repository has uncommitted changes)");
+      expect(errOut()).toContain("clean-worktree (Repository has uncommitted changes)");
+      expect(errOut()).toContain("leaving the preflight tag unwritten so the gate stays closed");
+    },
+  );
+
+  it(
+    "leaves the tag unwritten against a fake preflight binary that only degrades when " +
+      "--setup is in its argv (whole chain: manifest key to spawned argv)",
+    async () => {
+      const repo = makeRepoFixture("setup-dirties-worktree-real-spawn");
+      const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "harness-fakebin-setupdegrade-"));
+      cleanups.push(() => fs.rmSync(binDir, { recursive: true, force: true }));
+      const fakeBin = path.join(binDir, "preflight");
+      // Emits the degraded (ready:false, clean-worktree fail) payload ONLY
+      // when `--setup` reaches it, and a clean ready:true payload
+      // otherwise. Any mutant that drops `--setup` anywhere between the
+      // manifest key and the execFile argv therefore flips this test's
+      // outcome instead of being invisible to it.
+      fs.writeFileSync(
+        fakeBin,
+        [
+          "#!/bin/sh",
+          'for a in "$@"; do',
+          '  if [ "$a" = "--setup" ]; then',
+          `    printf '%s' '{"ready":false,"confidence":0.62,"checks":[{"name":"clean-worktree","status":"fail","message":"Repository has uncommitted changes"}]}'`,
+          "    exit 1",
+          "  fi",
+          "done",
+          `printf '%s' '{"ready":true,"confidence":0.5,"checks":[]}'`,
+          "",
+        ].join("\n"),
+        { mode: 0o755 },
+      );
+      const { stream: err, output: errOut } = captureStream();
+      const writes: string[] = [];
+      const priorPath = process.env["PATH"];
+      process.env["PATH"] = `${binDir}${path.delimiter}${priorPath ?? ""}`;
+      let result: Awaited<ReturnType<typeof runSessionStartPreflight>>;
+      try {
+        result = await runSessionStartPreflight({
+          stdin: streamFrom(JSON.stringify({ session_id: "s", cwd: repo })),
+          stderr: err,
+          logDir: makeLogDirFixture(),
+          manifest: parseManifest({ version: 1, session_start_preflight: { setup: true } }),
+          // `runPreflight` intentionally NOT injected: exercises the real
+          // `spawnPreflight` -> `buildPreflightArgv` -> execFile path.
+          writeLedger: async (args) => {
+            writes.push(args.content);
+            return { ok: true };
+          },
+        });
+      } finally {
+        if (priorPath === undefined) delete process.env["PATH"];
+        else process.env["PATH"] = priorPath;
+      }
+      expect(result.wrote).toBe(false);
+      expect(writes).toEqual([]);
+      expect(result.reason).toContain("clean-worktree (Repository has uncommitted changes)");
+      expect(errOut()).toContain("leaving the preflight tag unwritten so the gate stays closed");
+    },
+  );
+});
+
+describe("spawnPreflight argv (real spawn, fake binary) (task 30183330, review round 2)", () => {
+  // Round 2 gap: every argv assertion above (`buildPreflightArgv` and the
+  // manifest-wiring tests) goes through an injected `runPreflight`, never
+  // the real `spawnPreflight` -> `execFile` path. This drives that real
+  // path against a fake `preflight` binary on PATH that dumps its own
+  // received argv to a file, proving `buildPreflightArgv`'s output is
+  // what actually reaches the spawned child.
+  async function spawnedArgvFor(setup: boolean): Promise<string[]> {
+    const repo = makeRepoFixture(`argv-probe-${setup ? "on" : "off"}`, "main");
+    const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "harness-fakebin-argv-"));
+    cleanups.push(() => fs.rmSync(binDir, { recursive: true, force: true }));
+    const argvDump = path.join(binDir, "argv.json");
+    const fakeBin = path.join(binDir, "preflight");
+    fs.writeFileSync(
+      fakeBin,
+      [
+        "#!/bin/sh",
+        `node -e 'require("fs").writeFileSync(${JSON.stringify(argvDump)}, JSON.stringify(process.argv.slice(1)))' -- "$@"`,
+        `printf '%s' '{"ready":true,"confidence":0.5,"checks":[]}'`,
+        "",
+      ].join("\n"),
+      { mode: 0o755 },
+    );
+    const priorPath = process.env["PATH"];
+    process.env["PATH"] = `${binDir}${path.delimiter}${priorPath ?? ""}`;
+    try {
+      const manifest = parseManifest({ version: 1, session_start_preflight: { setup } });
+      await runSessionStartPreflight({
+        stdin: streamFrom(JSON.stringify({ session_id: "s", cwd: repo })),
+        stderr: captureStream().stream,
+        manifest,
+        writeLedger: async () => ({ ok: true }),
+        // `runPreflight` intentionally NOT injected: exercises the real
+        // `spawnPreflight` default.
+      });
+    } finally {
+      if (priorPath === undefined) delete process.env["PATH"];
+      else process.env["PATH"] = priorPath;
+    }
+    return JSON.parse(fs.readFileSync(argvDump, "utf8")) as string[];
+  }
+
+  it("includes --setup in the spawned argv when setup:true", async () => {
+    const argv = await spawnedArgvFor(true);
+    expect(argv).toEqual(["run", "--json", "--setup", expect.any(String)]);
+  });
+
+  it("omits --setup from the spawned argv when setup:false", async () => {
+    const argv = await spawnedArgvFor(false);
+    expect(argv).toEqual(["run", "--json", expect.any(String)]);
+  });
+});
+
+describe("HEAD-binding order (task 30183330, guards preflight tag semantics)", () => {
+  it("resolves the HEAD sha BEFORE invoking runPreflight, not after", async () => {
+    // Regression guard for a reorder that runs `runPreflight` before (or
+    // resolves HEAD after) the sha capture: the injected runPreflight
+    // mutates the loose ref file in place (simulating work done DURING
+    // the `preflight` child, e.g. a --setup build/checkout step touching
+    // the tree) before returning ready:true. If the producer captured
+    // the HEAD sha AFTER runPreflight instead of before, the recorded
+    // `head:<sha>` would be the MUTATED value, not the original one.
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "harness-sspf-headorder-"));
+    cleanups.push(() => fs.rmSync(root, { recursive: true, force: true }));
+    const repo = path.join(root, "headorder");
+    fs.mkdirSync(path.join(repo, ".git", "refs", "heads"), { recursive: true });
+    fs.writeFileSync(path.join(repo, ".git", "HEAD"), "ref: refs/heads/main\n");
+    const refPath = path.join(repo, ".git", "refs", "heads", "main");
+    const originalSha = "1111111111111111111111111111111111111111";
+    const mutatedSha = "2222222222222222222222222222222222222222";
+    fs.writeFileSync(refPath, `${originalSha}\n`);
+
+    const writes: string[] = [];
+    const result = await runSessionStartPreflight({
+      stdin: streamFrom(JSON.stringify({ session_id: "s", cwd: repo })),
+      stderr: captureStream().stream,
+      runPreflight: async () => {
+        fs.writeFileSync(refPath, `${mutatedSha}\n`);
+        return { ok: true, json: { ready: true, confidence: 0.9, checks: [] } };
+      },
+      writeLedger: async (args) => {
+        writes.push(args.content);
+        return { ok: true };
+      },
+    });
+    expect(result.wrote).toBe(true);
+    expect(writes).toHaveLength(1);
+    expect(writes[0]).toContain(`head:${originalSha}`);
+    expect(writes[0]).not.toContain(mutatedSha);
   });
 });

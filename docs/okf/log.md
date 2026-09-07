@@ -2,18 +2,229 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-09-07T07:33:55Z, task 30183330 (orchestrator): re-verified and re-stamped the docs that list `docs/CLI.md` among their sources after the Notes bullet above was added (`debug-verb-selection.md`, `evidence-ledger-trust-boundary.md`, `policy-engine-producer-wiring.md`); their `docs/CLI.md` references are section names and producer names, unchanged by the bullet.
+
+- 2026-09-07T07:32:32Z, task 30183330 (orchestrator), review round 3 notes, docs and
+  comments only: `docs/okf/pause-vs-gate-kill-switch.md` re-pointed its
+  commands citation from a range that started inside an earlier command
+  body to `src/cli/index.ts:3330-3429` (the `pause` and `resume`
+  registrations); `docs/okf/codex-adapter-parity-gaps.md` corrected the
+  docs/CLI.md line reference for the 2s Codex hook timeout note (line 67, a
+  pre-existing off-by-two, measured equal at the base commit); the
+  `src/schema/session-start-preflight.ts` header no longer repeats the
+  scope, degradation and timeout notes and points at docs/CLI.md as the one
+  place they live; the second `loadManifest` comment in
+  `src/cli/session-start/index.ts` states the true reason for the repeated
+  load instead of asserting a shared load could not carry both outcomes;
+  docs/CLI.md's Notes name that `explain-policy` shows the key only for
+  `preflight-before-*` policies. No source semantics changed.
+
+- 2026-09-07T07:09:46Z, task 30183330 (implementer), review round 3 fixes:
+  commit `eeb8029` touched `src/cli/index.ts` (two commander descriptions),
+  `docs/CLI.md` (the `harness session-start preflight` row rewritten in
+  place plus a new Notes subsection appended at the end of the file),
+  `CHANGELOG.md` (the `[Unreleased]` entry, one round-2 sentence corrected
+  and a round-3 block added), `src/cli/session-start/index.ts`,
+  `src/schema/session-start-preflight.ts`, four test files, and
+  `docs/okf/pause-vs-gate-kill-switch.md`. `npx okf-kit@0.10.0 check
+  docs/okf`, run on that commit, reported 12 `sources-fresh` STALE
+  warnings across 7 docs (0 errors): `codex-adapter-parity-gaps.md`,
+  `debug-verb-selection.md`, `evidence-ledger-trust-boundary.md`,
+  `gate-fail-posture-matrix.md`, `pause-vs-gate-kill-switch.md`,
+  `policy-engine-producer-wiring.md` (the recurring
+  `docs/CLI.md`/`CHANGELOG.md` class task 419ecfad tracks) and, new this
+  round because `src/cli/index.ts` changed,
+  `understanding-gate-lockout-recovery.md`.
+  - Re-points made IN commit `eeb8029` itself, because the two commander
+    descriptions add 4 lines above them: this doc bundle's three
+    `src/cli/index.ts` citations in `pause-vs-gate-kill-switch.md`,
+    `:2953-2957#"offending hook group out of settings.json with a
+    reversible snapshot."` -> `:2957-2961`, `:3328-3333#"in the
+    manifest."` -> `:3332-3337`, and the bare `:3285-3384` -> `:3289-3388`.
+    Sibling-line check at both bounds of each range: the content at the
+    old start/end lines is byte-identical to the content at the new
+    start/end lines (verified by diffing `git show HEAD~1:src/cli/index.ts`
+    against the working file at those offsets), and
+    `tests/decisions-citations-resolve.test.ts` passes on the re-pointed
+    anchors.
+  - Re-verified each of the 7 STALE docs against the specific sources that
+    changed. Five needed no content edit and are re-stamped as accurate:
+    `debug-verb-selection.md` lists `docs/CLI.md` only under `sources:` and
+    references `src/cli/index.ts` without line pins, none of them for the
+    preflight command this task edited; `evidence-ledger-trust-boundary.md`
+    cites `docs/CLI.md` only by producer name and by the
+    "Evidence-ledger producers" section title, both still present;
+    `gate-fail-posture-matrix.md` and `pause-vs-gate-kill-switch.md` cite
+    only older, already-tagged `CHANGELOG.md` version sections, untouched
+    by the `[Unreleased]` edits; `policy-engine-producer-wiring.md` lists
+    `docs/CLI.md` under `sources:` only and cites the 0.45.0 section of
+    `CHANGELOG.md`.
+  - Two citations were found WRONG during that re-verification. BOTH
+    predate this task: each is equally wrong at this branch's base commit
+    `3a966bb`, and neither range was shifted by anything this task did, so
+    neither is a re-point this task owes. They are recorded here so the
+    re-stamps above are not read as asserting them correct.
+    - FIXED: `understanding-gate-lockout-recovery.md` attributed the
+      `approve understanding` flag list to `src/cli/index.ts:1648-1663`.
+      That range is the `harness pack list` subcommand; the seven flags the
+      doc enumerates (`--config`, `--project`, `--session`, `--task`,
+      `--reports-dir`, `--approved-by`, `--force`) are declared at
+      `src/cli/index.ts:1686-1701`, which the doc now cites (sibling
+      check: line 1685 closes the preceding `.description(` call and line
+      1702 opens `.action(`, so the range covers exactly the option
+      declarations). This doc is one of
+      the 7 re-stamped here, so leaving a citation known to be wrong inside
+      a fresh stamp was not an option.
+    - STILL OPEN: `codex-adapter-parity-gaps.md` says the 2s Codex-hook
+      timeout floor is "noted in `docs/CLI.md` line 65". Line 65 is the
+      `harness pack hook post-merge-gate` row; the 2s note is on line 67
+      (`harness pack hook codex-pre-tool-use`). Measured on both `3a966bb`
+      and the current tree, so it is a pre-existing off-by-2, not drift
+      from this task (this task's `docs/CLI.md` edits are an in-place
+      rewrite of line 71 and an append at the end of the file, neither of
+      which moves line 65 or 67). It is left unfixed here because the only
+      line carrying it also carries an em dash in prose this task never
+      authored, and this task's own review constraint forbids adding such
+      a line to its diff, the same reason
+      `docs/okf/manifest-validation-scope.md`'s em dash was left alone in
+      round 2. Tracked for a follow-up.
+    Earlier entries in this log that described these two citations as
+    re-verified were repeating an inherited claim, not a measurement.
+  - The 2026-09-07T04:19:00Z entry carried a string-anchored citation on
+    `understanding-gate-lockout-recovery.md`'s own `timestamp:` line, and
+    the value that anchor quoted is what this round's re-stamp overwrites.
+    The anchor is dropped there and the old value written as prose
+    instead, the same treatment its two sibling citations in that entry
+    already got.
+  - The two round-1 entries further below carried no ISO timestamp; they
+    are prefixed here with the commit times of the commits they describe,
+    `9c0d386` (2026-09-07T05:59:59Z) and `508d3f1` (2026-09-07T06:01:42Z).
+  - All 7 docs re-stamped to `2026-09-07T07:09:46Z`. The re-run of `npx
+    okf-kit@0.10.0 check docs/okf` after committing these re-stamps is
+    reported in the implementer's own output for this round.
+
+- 2026-09-07T06:31:17Z, task 30183330 (implementer), follow-up to the
+  entry directly below (the review round 2 fix commit): `npx
+  okf-kit@0.10.0 check docs/okf`, run after that commit, reported 6
+  `sources-fresh` STALE warnings, one each for `codex-adapter-parity-gaps.md`,
+  `debug-verb-selection.md`, `evidence-ledger-trust-boundary.md`,
+  `gate-fail-posture-matrix.md`, `pause-vs-gate-kill-switch.md`, and
+  `policy-engine-producer-wiring.md`, the SAME 6 docs the round-1
+  follow-up entry further below already re-verified against this same
+  `docs/CLI.md` row / `CHANGELOG.md` `[Unreleased]` entry, because the
+  round 2 commit only EXPANDED that already-checked row/entry (added
+  trust/security, host-global-scope, and timeout-interplay prose to the
+  existing `harness session-start preflight` surface) rather than citing
+  anything new. Re-confirmed each doc's specific citation is still
+  accurate: `codex-adapter-parity-gaps.md`'s `docs/CLI.md` citation is
+  still the unrelated hook-entrypoints table and the line-65 2s-timeout
+  note; `debug-verb-selection.md` and `policy-engine-producer-wiring.md`
+  still list `docs/CLI.md` / `src/cli/explain-policy.ts` only in
+  `sources:`, no line-pinned prose citation into either;
+  `evidence-ledger-trust-boundary.md`'s `docs/CLI.md` mention is still
+  the bare producer-name reference; `gate-fail-posture-matrix.md` and
+  `pause-vs-gate-kill-switch.md` still cite only already-tagged, older
+  `CHANGELOG.md` version sections, untouched by the `[Unreleased]`
+  entry's expansion. Re-stamped all 6 to `2026-09-07T06:31:17Z`. Re-ran
+  the check after committing the re-stamps: 0 errors, 0 warnings.
+
+- 2026-09-07T06:28:08Z, task 30183330 (implementer), review round 2 fixes:
+  touched `CHANGELOG.md` (expanded the `[Unreleased]` entry with the
+  re-measured four-cell `--setup`/gitignore table, the trust/security and
+  host-global-scope wording, and the timeout/process-isolation caveat),
+  `docs/CLI.md` (same three additions folded into the
+  `harness session-start preflight` row), `src/schema/session-start-preflight.ts`
+  (header comment gained the same security/scope/timeout text) and
+  `src/cli/session-start/index.ts` (one-line comment at the second
+  `loadManifest(opts)` call site, no functional change). No content this
+  bundle's other docs cite was touched beyond what the entry below already
+  re-verified: `docs/CLI.md`'s row and `CHANGELOG.md`'s entry both stay
+  additions to the SAME `harness session-start preflight` / `[Unreleased]`
+  surface the entry below already checked against every `sources:`-listing
+  doc, and `src/cli/explain-policy.ts` gained no new line other than the
+  em-dash cleanup below (no shift). Ran `npx okf-kit@0.10.0 check docs/okf`
+  after this commit; see the entry directly above this one (added after
+  actually running that check, so it sits newer/higher in this
+  newest-first log) for the result and the re-stamps it required.
+  - Also fixed a review-round-2 style finding (`no em dashes`) across this
+    task's own prior additions in `CHANGELOG.md`, `docs/CLI.md`,
+    `src/schema/session-start-preflight.ts`, `src/cli/session-start/index.ts`,
+    `src/cli/explain-policy.ts`, `tests/cli/explain-policy.test.ts`,
+    `tests/cli/session-start/preflight.test.ts`, and this doc's own
+    round-1 entries below (rewording only, no citation or fact changed);
+    left `docs/okf/manifest-validation-scope.md`'s one pre-existing
+    em-dash (in prose this task did not author, only its line-number
+    citations) untouched as out of scope.
+
+- 2026-09-07T06:01:42Z, task 30183330 (implementer), follow-up to the
+  entry below: `npx
+  okf-kit@0.10.0 check docs/okf` run after commit `9c0d386` (the
+  `session_start_preflight.setup` commit) reported 10 `sources-fresh`
+  STALE warnings across 6 docs, each because one of `docs/CLI.md`,
+  `CHANGELOG.md`, or `src/cli/explain-policy.ts` changed in that commit
+  without also re-stamping the doc, the same recurring
+  CHANGELOG/CLI.md-driven staleness class task 419ecfad tracks (see the
+  2026-09-07T04:19:00Z entry further below). Content re-verified as
+  still accurate for all 6 (none cites the specific lines/sections this
+  task's diff touched: `codex-adapter-parity-gaps.md`'s `docs/CLI.md`
+  citation is the hook-entrypoints table and the unrelated line-65 2s
+  timeout note; `debug-verb-selection.md` and
+  `policy-engine-producer-wiring.md` list `docs/CLI.md` /
+  `src/cli/explain-policy.ts` only in `sources:`, no line-pinned prose
+  citation into either; `evidence-ledger-trust-boundary.md`'s
+  `docs/CLI.md` mention is the bare producer-name reference, still
+  true; `gate-fail-posture-matrix.md` and `pause-vs-gate-kill-switch.md`
+  cite only already-tagged, older `CHANGELOG.md` version sections,
+  untouched by the new `[Unreleased]` entry). Re-stamped all 6 to
+  `2026-09-07T06:00:38Z`: `codex-adapter-parity-gaps.md`,
+  `debug-verb-selection.md`, `evidence-ledger-trust-boundary.md`,
+  `gate-fail-posture-matrix.md`, `pause-vs-gate-kill-switch.md`,
+  `policy-engine-producer-wiring.md`. Re-ran the check after these
+  re-stamps: 0 errors, 0 warnings.
+
+- 2026-09-07T05:59:59Z, task 30183330 (implementer): added the
+  `session_start_preflight.setup`
+  config block (`src/schema/session-start-preflight.ts`, wired into
+  `src/schema/index.ts`), shifting every line at and below the new field
+  by 5. Re-pointed `manifest-validation-scope.md`'s two bare (unanchored)
+  citations into `src/schema/index.ts`: the hook-check superRefine
+  citation from lines 43-53 to `src/schema/index.ts:56-66` and the
+  workflow-template-check continuation from lines 54-67 to
+  `src/schema/index.ts:67-80`, plus the `parseManifest` citation from
+  lines 113-126 to `src/schema/index.ts:126-139`. (The superseded values
+  are written as prose rather than as citations: they name line ranges
+  that no longer hold, so resolving them against the current tree would
+  be meaningless.) All three were ALREADY off by a consistent
+  8 lines before this change (a pre-existing drift from `toolchain_parity`
+  / `stale_base_check` landing without a re-point, never flagged because
+  `citations-resolve` only checks a bare range is in-bounds, not that it
+  names the right content), fixed to the correct post-edit lines here
+  rather than compounding the drift. Re-stamped this doc's `timestamp` to
+  `2026-09-07T05:54:41Z`. Also touched `src/cli/session-start/index.ts`,
+  `src/cli/explain-policy.ts`, `docs/CLI.md`, and `CHANGELOG.md` for the
+  same task; every other bundle doc listing one of those as a `sources:`
+  entry was re-checked with `npx okf-kit@0.10.0 check docs/okf` after the
+  commit (see below for the result and any further re-stamps this made
+  necessary).
+
 - 2026-09-07T04:19:00Z, task d4ea97ba closure (orchestrator, docs-only): the three docs
   the freshness rule had reported STALE at the task's creation are fresh at
   master `0a495db` and needed no further edit here. `manifest-validation-scope.md`
   was re-verified and re-stamped by the policy-citation refresh commits
-  `b35ff65` and `54a37b8` (its stamp:
-  `docs/okf/manifest-validation-scope.md:6#"timestamp: 2026-09-06T17:58:18Z"`);
+  `b35ff65` and `54a37b8` (its stamp then was `2026-09-06T17:58:18Z` at
+  `docs/okf/manifest-validation-scope.md:6`, superseded by the task
+  30183330 re-stamp in the entry above, the string anchor on this
+  citation was dropped here because it names a now-overwritten value);
   `understanding-gate-lockout-recovery.md` by the KB-001 knowledge refresh,
-  PR #507 (stamp:
-  `docs/okf/understanding-gate-lockout-recovery.md:6#"timestamp: 2026-09-06T20:12:56Z"`);
+  PR #507 (stamp then was `2026-09-06T20:12:56Z` at
+  `docs/okf/understanding-gate-lockout-recovery.md:6`, superseded by the
+  task 30183330 round-3 re-stamp in the entry above, anchor dropped for
+  the same now-overwritten-value reason);
   `policy-engine-producer-wiring.md` by the same commits and again by the
-  task 5c9cad05 rounds, since it cites `CHANGELOG.md` (stamp:
-  `docs/okf/policy-engine-producer-wiring.md:6#"timestamp: 2026-09-06T21:50:34Z"`).
+  task 5c9cad05 rounds, since it cites `CHANGELOG.md` (stamp then was
+  `2026-09-06T21:50:34Z` at `docs/okf/policy-engine-producer-wiring.md:6`,
+  superseded by the task 30183330 re-stamp in the entry above, anchor
+  dropped for the same now-overwritten-value reason).
   Verdict, measured on master `0a495db` before this entry and again on the
   committed tree after it: `npx okf-kit@0.10.0 check --json docs/okf` reports
   no `sources-fresh` or `sources-fresh-future` finding and no

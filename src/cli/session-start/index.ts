@@ -2,10 +2,12 @@
 //
 // Wired by the Full template's `git-preflight` SessionStart hook. Reads
 // the SessionStart event JSON from stdin, runs `agent-preflight`
-// (`preflight run --json <cwd>`), and on a `ready:true` result writes a
-// `preflight:${REPO}` fact to the evidence ledger so the
-// `preflight-before-investigation` / `preflight-before-push` policies
-// have a fresh tag to match within their `within` windows.
+// (`preflight run --json [--setup] <cwd>`; `--setup` is opt-in via the
+// manifest's `session_start_preflight.setup` key, default `false`, task
+// 30183330, see ./src/schema/session-start-preflight.ts), and on a
+// `ready:true` result writes a `preflight:${REPO}` fact to the evidence
+// ledger so the `preflight-before-investigation` / `preflight-before-push`
+// policies have a fresh tag to match within their `within` windows.
 //
 // SessionStart hooks are `blocking:false`: this command MUST NOT break
 // the session loop. Every failure path — `preflight` not on PATH, a
@@ -93,7 +95,22 @@ export interface SessionStartPreflightOptions extends LoaderOptions {
   /** Per-call ledger timeout in ms. */
   ledgerTimeoutMs?: number;
   /** Inject the preflight runner (tests). */
-  runPreflight?: (cwd: string, timeoutMs: number) => Promise<RunPreflightResult>;
+  runPreflight?: (cwd: string, timeoutMs: number, setup: boolean) => Promise<RunPreflightResult>;
+  /**
+   * Inject the resolved manifest (tests). Scope is EXACTLY one call
+   * site: the `setupEnabled` resolution of
+   * `session_start_preflight.setup` (task 30183330), same seam shape as
+   * `harness explain-policy`'s own `manifest` option. The
+   * ledger-writer's own `loadManifest` call further down (used only
+   * when `writeLedger` is not injected) deliberately does NOT read this
+   * field, so injecting a manifest never suppresses that call's
+   * run-aborting failure path. A failure to resolve `setup` here (this
+   * field is absent AND `loadManifest(opts)` throws) degrades to
+   * `setup: false` (matches the sibling SessionStart companions' "not
+   * configured -> skip" contract) rather than aborting the entire
+   * preflight run over this one unrelated knob.
+   */
+  manifest?: Manifest;
   /**
    * Directory the not-ready diagnostic JSON is persisted to (task
    * T-001). Test seam — production defaults to the dirname of the
@@ -196,15 +213,32 @@ export function preflightChildEnv(
 }
 
 /**
- * Default `preflight` runner: spawn `preflight run --json <cwd>` and
- * parse its stdout. Resolves `{ ok: false }` (never throws) for the
- * not-installed / timeout / unparseable cases so the caller can degrade.
+ * Build the argv passed to the `preflight` child (task 30183330). Pure
+ * and exported so a test can pin the rendered command directly, with
+ * and without `setup`, instead of only exercising the injected
+ * `runPreflight` seam. `--setup` is inserted before the positional
+ * `cwd` argument, matching agent-preflight's own `preflight run
+ * [options] [repoPath]` usage.
  */
-function spawnPreflight(cwd: string, timeoutMs: number): Promise<RunPreflightResult> {
+export function buildPreflightArgv(cwd: string, setup: boolean): string[] {
+  return setup ? ["run", "--json", "--setup", cwd] : ["run", "--json", cwd];
+}
+
+/**
+ * Default `preflight` runner: spawn `preflight run --json [--setup]
+ * <cwd>` and parse its stdout. Resolves `{ ok: false }` (never throws)
+ * for the not-installed / timeout / unparseable cases so the caller can
+ * degrade.
+ */
+function spawnPreflight(
+  cwd: string,
+  timeoutMs: number,
+  setup: boolean,
+): Promise<RunPreflightResult> {
   return new Promise((resolve) => {
     execFile(
       PREFLIGHT_BIN,
-      ["run", "--json", cwd],
+      buildPreflightArgv(cwd, setup),
       {
         timeout: timeoutMs,
         maxBuffer: 16 * 1024 * 1024,
@@ -543,8 +577,25 @@ export async function runSessionStartPreflight(
     }
   }
 
+  // Resolve `--setup` (task 30183330) BEFORE spawning `preflight` so the
+  // flag reaches the very first invocation. Best-effort, independent of
+  // the ledger-writer's own `loadManifest` call further down: a
+  // config/parse failure here degrades to `setup: false` (matches the
+  // sibling companions' "not configured -> skip" contract) rather than
+  // aborting the whole preflight run over an unrelated manifest problem,
+  // whereas the ledger-writer's later load failure DOES abort (existing
+  // behavior, unrelated to this change).
+  const setupEnabled = (() => {
+    try {
+      const manifest = opts.manifest ?? loadManifest(opts).manifest;
+      return manifest.session_start_preflight.setup;
+    } catch {
+      return false;
+    }
+  })();
+
   const runPreflight = opts.runPreflight ?? spawnPreflight;
-  const preflight = await runPreflight(cwd, preflightTimeoutMs);
+  const preflight = await runPreflight(cwd, preflightTimeoutMs, setupEnabled);
   if (!preflight.ok) {
     note(preflight.reason);
     return done(false, repo, branch, sessionId, sessionSource, preflight.reason);
@@ -594,6 +645,16 @@ export async function runSessionStartPreflight(
   if (!writeLedger) {
     let manifest: Manifest;
     try {
+      // Second `loadManifest(opts)` call of this run (task 30183330); the
+      // `setupEnabled` resolution earlier in this function is the first.
+      // Deliberately NOT reused, and deliberately NOT reading
+      // `opts.manifest`: a failure here ABORTS the whole run (the catch
+      // below returns early with no ledger write attempted), while the
+      // `setupEnabled` call's failure degrades to `setup: false` and lets
+      // the run proceed. One shared load could carry both outcomes (a
+      // captured result plus its error), but two local try/catch blocks
+      // keep each site's failure handling obvious where it is read, and
+      // the second load is cheap; that is the whole reason for the repeat.
       manifest = loadManifest(opts).manifest;
     } catch (err) {
       const reason = `manifest load failed: ${(err as Error).message}`;
