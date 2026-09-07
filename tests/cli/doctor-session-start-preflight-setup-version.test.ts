@@ -191,7 +191,7 @@ describe("doctor — session_start_preflight.setup version floor (task 6993d9b5)
   });
 
   // task 6993d9b5, criterion 1: "tests with a fake preflight on PATH for
-  // both cases" — this pair drives a real spawn against a genuine
+  // both cases": this pair drives a real spawn against a genuine
   // executable placed on the process's PATH (via `realVersionProbe`,
   // matching production's `defaultVersionProbe`), not an injected
   // return-value stub.
@@ -302,7 +302,7 @@ describe("doctor — session_start_preflight.setup version floor (task 6993d9b5)
 // memoized probe across both call sites, that argv spawned twice per
 // `doctor` run; `memoizeVersionProbe` (src/cli/doctor/index.ts) existed
 // already but was only wired into the policy-pack-hook walk.
-describe("doctor — shared version-probe memoization across checks (task 6993d9b5, round 2 F4)", () => {
+describe("doctor: shared version-probe memoization across checks (task 6993d9b5, round 2 F4)", () => {
   it("spawns the preflight --version probe once even though two checks need it", async () => {
     const home = makeFixture({
       "harness.yaml": `version: 1
