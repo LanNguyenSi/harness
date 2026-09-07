@@ -2,6 +2,63 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-09-07T10:50:36Z, task 4f0abbc8 (implementer): finished the removal
+  task 419ecfad started (`docs/okf/log.md`'s 2026-09-07T08:48:20Z entry) for
+  the three remaining bundle docs that still listed `CHANGELOG.md` under
+  `sources:`.
+  - `gate-fail-posture-matrix.md`
+    (`docs/okf/gate-fail-posture-matrix.md`): one passage rested a claim on
+    CHANGELOG content: "since v0.39.0 (task a2589fa3) one pooled
+    grounding-mcp session per intercept invocation replaces two subprocess
+    spawns per policy", re-pointed to
+    `` `CHANGELOG.md:#0.39.0` ``. Re-verified against the `[0.39.0]`
+    section's task-`a2589fa3` bullet ("The PreToolUse runtime gate no
+    longer spawns two grounding-mcp subprocesses per matching policy"),
+    which matches. Doc re-stamped (`timestamp: 2026-09-07T10:50:36Z`).
+    `CHANGELOG.md` dropped from `sources:`.
+  - `pause-vs-gate-kill-switch.md`
+    (`docs/okf/pause-vs-gate-kill-switch.md`): three passages rested a
+    claim on CHANGELOG content: the "History note" paragraph's "Measurement
+    and dogfood detail: CHANGELOG.md, `63fefe3a` and `1432e053` entries",
+    re-pointed to `` `CHANGELOG.md:#0.48.0` ``; "Fixed in v0.43.0 (task
+    `d834a065`)", which cited no section at all, given
+    `` `CHANGELOG.md:#0.43.0` ``; and "same subsumes-`&&` treatment as the
+    template fix above (CHANGELOG.md 0.44.0 entry; commit `6d1cf50`, PR
+    #390, ...)", re-pointed to `` `CHANGELOG.md:#0.44.0` ``. Re-verified:
+    the `[0.48.0]` section's `63fefe3a`/`1432e053` entries confirm both
+    Codex hooks now call `checkHookPause`; the `[0.43.0]` section's
+    `d834a065` entry confirms `&` became a boundary in every shipped
+    `policies[].trigger.bash_match`; the `[0.44.0]` section's entry
+    confirms `CURATED_MUTATION_BASH_RE`/`GH_PR_MERGE_BASH_RE`/
+    `DEFAULT_PUSH_BASH_RE` and the dogfood-recency trigger gained the same
+    bare-`&` boundary. Doc re-stamped (`timestamp: 2026-09-07T10:50:36Z`).
+    `CHANGELOG.md` dropped from `sources:`.
+  - `policy-engine-producer-wiring.md`
+    (`docs/okf/policy-engine-producer-wiring.md`): five passages rested a
+    claim on CHANGELOG content: "The invariant"'s "`CHANGELOG.md`'s
+    `98ad072f` entry (0.44.0) for the complete four-pass history",
+    re-pointed to `` `CHANGELOG.md:#0.44.0` ``; "What breaks it" item 3's
+    "(CHANGELOG [0.39.0], task a2589fa3)", re-pointed to
+    `` `CHANGELOG.md:#0.39.0` ``; the 0.35.0 bullet's "CHANGELOG operator
+    action: \"wire grounding-mcp or remove the policies.\"", re-pointed to
+    `` `CHANGELOG.md:#0.35.0` ``; the 0.44.0 bullet, which cited no
+    section at all, given a trailing `` `CHANGELOG.md:#0.44.0` `` pointer;
+    and the 0.45.0 bullet, likewise given a trailing
+    `` `CHANGELOG.md:#0.45.0` `` pointer (the `f1aea826` entry). Left
+    unconverted: the 0.45.0 bullet's closing "Consult `CHANGELOG.md`
+    directly for anything shipped after 0.45.0 not named in this bundle" —
+    a forward pointer to content this bundle does not name, not a claim
+    resting on a specific section, so there is no section to anchor it to.
+    Re-verified against `CHANGELOG.md`: the `[0.44.0]` section's
+    `98ad072f` bullet (four-pass per-repository attribution history)
+    matches "The invariant"'s claim and the version-history bullet; the
+    `[0.39.0]` section's `a2589fa3` bullet matches "What breaks it" item
+    3's pooled-session claim; the `[0.35.0]` section's headline quotes
+    "wire grounding-mcp or remove the policies." verbatim; the `[0.45.0]`
+    section's `f1aea826` bullet matches the degraded_fail_posture claim.
+    Doc re-stamped (`timestamp: 2026-09-07T10:50:36Z`). `CHANGELOG.md`
+    dropped from `sources:`.
+
 - 2026-09-07T09:48:18Z, task 6993d9b5 (implementer), round 3 review fixes
   (F1-F6): the round-3 commit touches `src/cli/index.ts` (exports
   `defaultVersionProbe`, single-line change), `src/cli/doctor/index.ts`
