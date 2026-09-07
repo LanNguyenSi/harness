@@ -19,6 +19,14 @@
 // unregenerated manifest still gets the warning the moment they flip
 // `setup: true`, rather than only after re-running `harness init`.
 //
+// BY DESIGN: on a freshly generated manifest with `setup: true` probed
+// against a stale preflight, this check and the generic `hooks[]`
+// `min_version` walk both fire and both count toward `warningCount` (see
+// `docs/CLI.md`'s VERSION CAVEAT). The two are not a duplicate of the
+// same finding: the hook floor guards the `git-preflight` hook itself,
+// this check guards the `--setup` build-step feature specifically, and
+// a stale preflight breaks both independently.
+//
 // Silent (returns `undefined`) whenever `session_start_preflight.setup`
 // is `false`/absent: the trust exposure and the install/build cost only
 // exist once the knob is actually on, mirroring every other advisory
@@ -32,8 +40,8 @@ import type { Manifest } from "../../schema/index.js";
 /**
  * The probe command run against the `preflight` binary on PATH. Matches
  * the `version_command` the shipped `git-preflight` hook template
- * declares (src/cli/init/templates.ts) — same binary, same `--version`
- * flag — but is not read FROM the manifest's hook entry: an operator
+ * declares (src/cli/init/templates.ts), same binary and `--version`
+ * flag, but is not read FROM the manifest's hook entry: an operator
  * could rename/remove that hook while `session_start_preflight.setup`
  * stays on, and the check should still probe the binary the producer
  * (`harness session-start preflight`) actually spawns.

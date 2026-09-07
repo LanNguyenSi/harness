@@ -1,8 +1,8 @@
-import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { defaultVersionProbe } from "../../src/cli/index.js";
 import { doctor } from "../../src/cli/doctor/index.js";
 import { format } from "../../src/cli/doctor/format.js";
 import {
@@ -39,8 +39,8 @@ function makeFixture(files: Record<string, string>): string {
 // prepends that dir to the process's real PATH for the duration of the
 // test (restored via `cleanups`, same afterEach as makeFixture). Unlike
 // the injected-`versionProbe` cases below, this drives a genuine spawn
-// through `realVersionProbe`, matching production's `defaultVersionProbe`
-// (src/cli/index.ts) rather than stubbing the return value directly.
+// through production's `defaultVersionProbe` (src/cli/index.ts, imported
+// above) rather than stubbing the return value directly.
 function putFakePreflightOnPath(version: string): void {
   const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "harness-doctor-ssp-fakebin-"));
   const fakeBin = path.join(binDir, "preflight");
@@ -54,22 +54,6 @@ function putFakePreflightOnPath(version: string): void {
     else process.env["PATH"] = priorPath;
     fs.rmSync(binDir, { recursive: true, force: true });
   });
-}
-
-// Same shape as production's `defaultVersionProbe` (src/cli/index.ts):
-// a real synchronous spawn resolved against the process's real PATH, not
-// an injected stub. Passed as `versionProbe` so the check under test
-// still receives it as a callback, but the callback itself executes the
-// fake binary on PATH instead of returning a canned string.
-function realVersionProbe(cmd: readonly string[]): string | null {
-  if (cmd.length === 0) return null;
-  try {
-    const result = spawnSync(cmd[0]!, cmd.slice(1), { encoding: "utf8", timeout: 5_000 });
-    if (result.status !== 0 || result.error) return null;
-    return (result.stdout ?? "").trim() || null;
-  } catch {
-    return null;
-  }
 }
 
 function buildManifest(setupLine: string): string {
@@ -165,7 +149,7 @@ describe("checkSessionStartPreflightSetupVersion (task 6993d9b5)", () => {
   });
 });
 
-describe("doctor — session_start_preflight.setup version floor (task 6993d9b5)", () => {
+describe("doctor: session_start_preflight.setup version floor (task 6993d9b5)", () => {
   it("renders the warning end-to-end through doctor()/format() with a stubbed version probe returning preflight 0.5.0", async () => {
     const home = makeFixture({
       "harness.yaml": buildManifest("session_start_preflight:\n  setup: true"),
@@ -192,9 +176,9 @@ describe("doctor — session_start_preflight.setup version floor (task 6993d9b5)
 
   // task 6993d9b5, criterion 1: "tests with a fake preflight on PATH for
   // both cases": this pair drives a real spawn against a genuine
-  // executable placed on the process's PATH (via `realVersionProbe`,
-  // matching production's `defaultVersionProbe`), not an injected
-  // return-value stub.
+  // executable placed on the process's PATH via production's
+  // `defaultVersionProbe` (imported above), not an injected return-value
+  // stub.
   it("warns end-to-end through doctor()/format() with a real fake preflight 0.5.0 binary on PATH", async () => {
     const home = makeFixture({
       "harness.yaml": buildManifest("session_start_preflight:\n  setup: true"),
@@ -203,7 +187,7 @@ describe("doctor — session_start_preflight.setup version floor (task 6993d9b5)
     const report = await doctor({
       configPath: path.join(home, "harness.yaml"),
       homeOverride: home,
-      versionProbe: realVersionProbe,
+      versionProbe: defaultVersionProbe,
       pathEnv: "",
       npmBinExec: STUB_NPM_BIN_EXEC_UNKNOWN,
     });
@@ -226,7 +210,7 @@ describe("doctor — session_start_preflight.setup version floor (task 6993d9b5)
     const report = await doctor({
       configPath: path.join(home, "harness.yaml"),
       homeOverride: home,
-      versionProbe: realVersionProbe,
+      versionProbe: defaultVersionProbe,
       pathEnv: "",
       npmBinExec: STUB_NPM_BIN_EXEC_UNKNOWN,
     });
@@ -294,6 +278,46 @@ describe("doctor — session_start_preflight.setup version floor (task 6993d9b5)
   });
 });
 
+// task 6993d9b5, round 2 F2: `agent-primitives probe` mutated
+// `if (report.sessionStartPreflightSetupVersion) warningCount++;` to
+// `if (false) warningCount++;` at src/cli/doctor/index.ts and the mutant
+// SURVIVED both tests/cli and tests/integration, because the only
+// touching assertion was `toBeGreaterThanOrEqual(1)`, which the mutant
+// also satisfies whenever some other check independently warns. This
+// test instead runs doctor() twice on the SAME fixture, differing only
+// in `session_start_preflight.setup`, and asserts the warningCount
+// DELTA is exactly 1: a mutant that drops the `warningCount++` collapses
+// the delta to 0 and fails this assertion.
+describe("doctor: warningCount delta for session_start_preflight.setup (task 6993d9b5, round 2 F2)", () => {
+  it("counts exactly one more warning when setup is true than when it is false, same probe", async () => {
+    const versionProbe = (cmd: readonly string[]) =>
+      cmd[0] === "preflight" ? "preflight 0.5.0\n" : null;
+    const homeWithSetup = makeFixture({
+      "harness.yaml": buildManifest("session_start_preflight:\n  setup: true"),
+    });
+    const homeWithoutSetup = makeFixture({
+      "harness.yaml": buildManifest("session_start_preflight:\n  setup: false"),
+    });
+    const withSetup = await doctor({
+      configPath: path.join(homeWithSetup, "harness.yaml"),
+      homeOverride: homeWithSetup,
+      versionProbe,
+      pathEnv: "",
+      npmBinExec: STUB_NPM_BIN_EXEC_UNKNOWN,
+    });
+    const withoutSetup = await doctor({
+      configPath: path.join(homeWithoutSetup, "harness.yaml"),
+      homeOverride: homeWithoutSetup,
+      versionProbe,
+      pathEnv: "",
+      npmBinExec: STUB_NPM_BIN_EXEC_UNKNOWN,
+    });
+    expect(withSetup.sessionStartPreflightSetupVersion).toBeDefined();
+    expect(withoutSetup.sessionStartPreflightSetupVersion).toBeUndefined();
+    expect(withSetup.warningCount - withoutSetup.warningCount).toBe(1);
+  });
+});
+
 // task 6993d9b5, round 2 F4: on a manifest that both declares a
 // `git-preflight`-shaped hook (min_version + version_command, checked by
 // the generic `hooks[]` walk) AND has `session_start_preflight.setup:
@@ -343,5 +367,64 @@ tools:
       (cmd) => cmd.length === 2 && cmd[0] === "preflight" && cmd[1] === "--version",
     );
     expect(preflightVersionCalls).toHaveLength(1);
+  });
+});
+
+// task 6993d9b5, round 2 F4: on a manifest shaped like FULL_TEMPLATE (a
+// git-preflight hook with min_version 0.6.0 alongside
+// session_start_preflight.setup: true) probed against an installed
+// preflight 0.5.0, the generic hooks[] min_version walk and this
+// module's own floor check both fire, and BOTH count toward
+// warningCount. This is by design (documented in docs/CLI.md's VERSION
+// CAVEAT and this module's header): the hook floor guards the hook
+// itself, the setup check guards the --setup build-step feature
+// specifically, and a stale preflight breaks both independently.
+describe("doctor: both the hook floor and the setup-version floor fire on a stale preflight (task 6993d9b5, round 2 F4)", () => {
+  it("reports both warnings, not a deduplicated one, on a FULL_TEMPLATE-shaped manifest", async () => {
+    const home = makeFixture({
+      "harness.yaml": `version: 1
+hooks:
+  - name: git-preflight
+    event: SessionStart
+    command: harness session-start preflight
+    blocking: false
+    min_version: "0.6.0"
+    version_command: ["preflight", "--version"]
+session_start_preflight:
+  setup: true
+policies: []
+tools:
+  builtin:
+    known: []
+`,
+    });
+    const report = await doctor({
+      configPath: path.join(home, "harness.yaml"),
+      homeOverride: home,
+      versionProbe: (cmd) => (cmd[0] === "preflight" ? "preflight 0.5.0\n" : null),
+      pathEnv: "",
+      npmBinExec: STUB_NPM_BIN_EXEC_UNKNOWN,
+    });
+    const hookVersion = report.hooks.find((h) => h.name === "git-preflight")?.version;
+    expect(hookVersion?.status).toBe("warn");
+    if (hookVersion?.status === "warn") {
+      expect(hookVersion.kind).toBe("below_floor");
+    }
+    expect(report.sessionStartPreflightSetupVersion).toEqual({
+      kind: "below_floor",
+      actualVersion: "0.5.0",
+      requiredVersion: "0.6.0",
+      message: expect.stringContaining("v0.5.0 < 0.6.0"),
+    });
+    // Both fire independently: a doctor() that deduplicated the two
+    // warnings into one would fail this count.
+    const baseline = await doctor({
+      configPath: path.join(home, "harness.yaml"),
+      homeOverride: home,
+      versionProbe: () => "preflight 0.7.1\n",
+      pathEnv: "",
+      npmBinExec: STUB_NPM_BIN_EXEC_UNKNOWN,
+    });
+    expect(report.warningCount - baseline.warningCount).toBe(2);
   });
 });

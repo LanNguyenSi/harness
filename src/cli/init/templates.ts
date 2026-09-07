@@ -171,7 +171,7 @@ hooks:
     # (agent-tasks/7265599e).
     budget_ms: 70000
     # Floor raised to agent-preflight ${SESSION_START_PREFLIGHT_SETUP_BUILD_MIN_VERSION}
-    # (task 6993d9b5, was 0.2.0): 0.2.0 was the release that made secret
+    # (was 0.2.0): 0.2.0 was the release that made secret
     # detection git-aware and diff-scoped: a gitignored+untracked .env,
     # a .md doc, a non-git dir, or a secret in a tracked file the branch
     # never touched is a non-blocking warn, not a hard fail. Pre-0.2.0

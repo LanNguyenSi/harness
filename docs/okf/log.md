@@ -2,6 +2,29 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-09-07T09:48:18Z, task 6993d9b5 (implementer), round 3 review fixes
+  (F1-F6): the round-3 commit touches `src/cli/index.ts` (exports
+  `defaultVersionProbe`, single-line change), `src/cli/doctor/index.ts`
+  (F2 test, F3 wires `dedupedVersionProbe` into `buildPolicyPacks` and
+  expands its memoization comment by one line), `src/cli/doctor/session-
+  start-preflight-setup-version.ts` (F4 adds a 7-line "BY DESIGN" comment
+  block), `src/cli/init/templates.ts` and `docs/examples/full-manifest.yaml`
+  (F5 drops the task id from an existing comment line, no line-count
+  change) and `docs/CLI.md` (F4 appends one sentence to the VERSION
+  CAVEAT paragraph, still a single physical line). `npx okf-kit@0.10.0
+  check docs/okf` flagged `codex-adapter-parity-gaps.md`,
+  `debug-verb-selection.md`, `evidence-ledger-trust-boundary.md`,
+  `pause-vs-gate-kill-switch.md`, `policy-engine-producer-wiring.md`,
+  `quote-model-divergence.md` and `understanding-gate-lockout-recovery.md`
+  `sources-fresh` STALE against these files. Checked every line-numbered
+  citation these seven docs make into the five touched files
+  (`src/cli/index.ts:1686-1701`, `:2957-2961`, `:3330-3429`,
+  `:3332-3337`; `src/cli/init/templates.ts:928`): all still match their
+  quoted text verbatim (sibling-line check), since none of this round's
+  edits added or removed a line above a cited line in any file a
+  line-numbered citation targets. No citation needed re-pointing;
+  re-stamped all seven `timestamp:` fields in the same commit as the fix.
+
 - 2026-09-07T09:25:47Z, task 6993d9b5 (implementer), round 2 review fixes
   (F1-F5, commit `0fef632`): `src/cli/doctor/index.ts` (F4 memoized
   version-probe sharing), `CHANGELOG.md` (F3 wording fix plus the round-2

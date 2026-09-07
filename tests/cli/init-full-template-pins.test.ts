@@ -44,7 +44,7 @@ describe("FULL_TEMPLATE: npm-bin hook pins", () => {
     // SESSION_START_PREFLIGHT_SETUP_BUILD_MIN_VERSION with `harness
     // doctor`'s session_start_preflight.setup version check
     // (src/cli/doctor/session-start-preflight-setup-version.ts) so the
-    // two floors cannot drift apart — asserted directly below.
+    // two floors cannot drift apart; asserted directly below.
     const m = parseManifest(parseYaml(FULL_TEMPLATE));
     const gitPreflight = m.hooks.find((h) => h.name === "git-preflight");
     expect(gitPreflight, "FULL_TEMPLATE must declare a git-preflight SessionStart hook").toBeDefined();
