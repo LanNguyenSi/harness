@@ -12,7 +12,8 @@
   installed package's README: "Staleness (sources-fresh)"), so keeping
   `CHANGELOG.md` listed there was never going to stop re-staling regardless
   of citation form used in the body. `citations-resolve`, a separate
-  check, does support a `path:#heading` heading-section citation (`.md`
+  check, does support a heading-section citation (grammar
+  target-path/hash/heading, `.md`
   targets only, README "Heading-section citations") that resolves to a
   whole Markdown section and is immune to line-number drift from new
   releases prepended above it. Decision for both docs: drop `CHANGELOG.md`
@@ -43,7 +44,7 @@
   - `docs/okf/index.md` gained one sentence in the maintenance note above
     "## Overview" recording this rule for future docs: do not list
     `CHANGELOG.md` under `sources:`, cite the release inline with a
-    `CHANGELOG.md:#0.x.y`-style heading-section citation instead.
+    heading-section citation such as `CHANGELOG.md:#0.24.0` instead.
   - Measured after the change: `npx okf-kit@0.10.0 check --json docs/okf`
     reports 0 errors, 0 `sources-fresh` findings for either doc (2
     `sources-fresh-future` warnings on the pre-commit tree only, from the
