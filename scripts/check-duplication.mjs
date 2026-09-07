@@ -219,7 +219,10 @@ import * as path from "node:path";
 // `readStdin` pair (11 lines) also still appears in the report at a
 // shifted line offset — same file, same content, re-windowed by the
 // unrelated insertions above it, not a new pair.
-const MAX_CLONES = 115;
+// Lowered to 114 (task ff34bde0): the check reported 114 clones against
+// the pin of 115 (measured on master, 2026-09-07), one entry of slack;
+// the pin follows the measured count so the next new clone is caught.
+const MAX_CLONES = 114;
 
 // Sets process.exitCode instead of calling process.exit so the caller's
 // finally-cleanup runs on every path (process.exit skips stack unwinding).
