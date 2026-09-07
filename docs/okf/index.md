@@ -11,6 +11,14 @@ Anchored source citations in this bundle, including historical `log.md`
 entries, are resolved against the current tree by
 `tests/decisions-citations-resolve.test.ts`.
 
+Do not list `CHANGELOG.md` under a doc's frontmatter `sources:`: `okf-kit`'s
+`sources-fresh` check flags a `sources:` entry by file path and commit
+recency alone, with no per-section scoping, so every CHANGELOG edit
+anywhere in the repo would re-stale the doc; cite the specific release
+inline instead with a `CHANGELOG.md:#0.24.0`-style heading-section
+citation, which `citations-resolve` checks and which stays accurate as
+new releases are prepended above it (task `419ecfad`).
+
 ## Overview
 
 - [Gate fail-posture matrix](gate-fail-posture-matrix.md), which enforcement
