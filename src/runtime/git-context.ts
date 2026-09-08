@@ -361,6 +361,18 @@ export function resolveCommonDir(gitDir: string): string {
  * `""`, `"."`, `".."`, or one containing a path separator, since every
  * consumer joins it straight into a filesystem path,
  * `resolvePaths`/`src/cli/loader.ts`). Never throws.
+ *
+ * REALPATH (task c88461c1, review round 3 residual, decision D-006 of
+ * the follow-up run): the common dir is resolved through
+ * `fs.realpathSync` BEFORE taking its basename, so a checkout reached
+ * through a symlink (an operator's own convenience symlink, or a
+ * second clone path) derives the SAME project name as the real
+ * directory it points at, matching D-021a's "repository identity is
+ * the common dir" rule: two paths to one repository must resolve one
+ * project layer, not two. Best-effort: `realpathSync` failing (a
+ * dangling symlink, a permissions error) falls back to the
+ * un-resolved common dir rather than throwing, so a repository that
+ * was reachable before this change stays reachable.
  */
 export function deriveProjectName(cwd: string): string | null {
   if (typeof cwd !== "string" || cwd.length === 0) return null;
@@ -370,7 +382,12 @@ export function deriveProjectName(cwd: string): string | null {
     const fallback = path.basename(entry.worktreeRoot);
     return isValidProjectName(fallback) ? fallback : null;
   }
-  const commonDir = resolveCommonDir(entry.gitDir);
+  let commonDir = resolveCommonDir(entry.gitDir);
+  try {
+    commonDir = fs.realpathSync(commonDir);
+  } catch {
+    /* dangling symlink or unreadable target, keep the un-resolved commonDir */
+  }
   const commonDirBase = path.basename(commonDir);
   const projectDir = commonDirBase === ".git" ? path.dirname(commonDir) : commonDir;
   const name = path.basename(projectDir);
@@ -390,8 +407,16 @@ export function deriveProjectName(cwd: string): string | null {
  * check may still not exist on disk (`resolvePaths` already handles
  * that with `fs.existsSync`); this only guards against the value
  * escaping the single path segment it is meant to occupy.
+ *
+ * Exported (task c88461c1, review round 3 residual, decision D-006 of
+ * the follow-up run) so `resolvePaths` (`src/cli/loader.ts`) can apply
+ * the SAME guard at its own `path.join` sink, defense in depth: this
+ * function already rejects an unsafe name at every `deriveProjectName`
+ * exit, but an `opts.project` reaching `resolvePaths` from anywhere
+ * else (a caller building `LoaderOptions` by hand, a future producer)
+ * had no equivalent check of its own until now.
  */
-function isValidProjectName(name: string): boolean {
+export function isValidProjectName(name: string): boolean {
   if (name.length === 0) return false;
   if (name === "." || name === "..") return false;
   return !name.includes("/") && !name.includes("\\") && !name.includes("\0");
