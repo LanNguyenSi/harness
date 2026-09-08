@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -10,6 +11,7 @@ import {
   installPackagesGlobally,
 } from "../../src/cli/init/dependencies.js";
 import { HermeticSpawnViolationError } from "../../src/runtime/hermetic-spawn-guard.js";
+import { GIT_PREFLIGHT_HOOK_MIN_VERSION } from "../../src/cli/init/templates.js";
 import { SESSION_START_PREFLIGHT_SETUP_BUILD_MIN_VERSION } from "../../src/schema/session-start-preflight.js";
 
 let tmpBin: string;
@@ -63,15 +65,41 @@ describe("dependenciesForProfile — chain composition", () => {
 
   // Task 6993d9b5, round 2 F2: the wizard's own minVersion floor for
   // `preflight` must share the same 0.6.0 build-capable floor as the
-  // FULL_TEMPLATE git-preflight hook and `harness doctor`'s
-  // session_start_preflight.setup check, so `harness init --template
+  // FULL_TEMPLATE git-preflight hook, so `harness init --template
   // full` never tells an operator that a pre-build-step preflight
   // suffices while the generated manifest's min_version (and the next
-  // `harness doctor` run) says otherwise.
-  it("full's preflight dep shares SESSION_START_PREFLIGHT_SETUP_BUILD_MIN_VERSION, not a stale floor", () => {
+  // `harness doctor` run) says otherwise. Task 65952a0c
+  // (docs/decisions/2026-09-08-preflight-floors.md) split the shared
+  // constant this used to read into a hook floor
+  // (GIT_PREFLIGHT_HOOK_MIN_VERSION, src/cli/init/templates.ts) and a
+  // separate setup floor (SESSION_START_PREFLIGHT_SETUP_BUILD_MIN_VERSION,
+  // src/schema/session-start-preflight.ts); this table must track the
+  // HOOK floor, since that is what the generated manifest's own
+  // min_version declares.
+  it("full's preflight dep shares GIT_PREFLIGHT_HOOK_MIN_VERSION, not a stale floor", () => {
     const preflight = dependenciesForProfile("full").find((d) => d.binary === "preflight");
-    expect(preflight?.minVersion).toBe(SESSION_START_PREFLIGHT_SETUP_BUILD_MIN_VERSION);
+    expect(preflight?.minVersion).toBe(GIT_PREFLIGHT_HOOK_MIN_VERSION);
     expect(preflight?.minVersion).toBe("0.6.0");
+  });
+
+  // Discriminates by source identity, not value: GIT_PREFLIGHT_HOOK_MIN_VERSION
+  // and SESSION_START_PREFLIGHT_SETUP_BUILD_MIN_VERSION are both "0.6.0"
+  // today, so a mutant that swaps which constant dependencies.ts's
+  // `minVersion:` field reads would pass the value-only assertion above
+  // unnoticed. Reading the source text and asserting which identifier
+  // the `minVersion:` line interpolates is what catches that swap.
+  it("dependencies.ts's minVersion field reads the HOOK floor identifier, not the setup floor", () => {
+    const src = readFileSync(new URL("../../src/cli/init/dependencies.ts", import.meta.url), "utf8");
+    const minVersionLine = src
+      .split("\n")
+      .find((line) => line.trim().startsWith("minVersion:") && line.includes("MIN_VERSION"));
+    expect(minVersionLine, "minVersion: field not found in dependencies.ts").toBeDefined();
+    expect(minVersionLine).toContain("GIT_PREFLIGHT_HOOK_MIN_VERSION");
+    expect(minVersionLine).not.toContain("SESSION_START_PREFLIGHT_SETUP_BUILD_MIN_VERSION");
+  });
+
+  it("the split hook and setup floors still agree in value today", () => {
+    expect(GIT_PREFLIGHT_HOOK_MIN_VERSION).toBe(SESSION_START_PREFLIGHT_SETUP_BUILD_MIN_VERSION);
   });
 });
 

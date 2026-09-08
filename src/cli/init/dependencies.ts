@@ -20,7 +20,7 @@ import { spawn } from "node:child_process";
 import { existsSync, accessSync, constants } from "node:fs";
 import * as path from "node:path";
 import { assertNoRealSpawnInTests } from "../../runtime/hermetic-spawn-guard.js";
-import { SESSION_START_PREFLIGHT_SETUP_BUILD_MIN_VERSION } from "../../schema/session-start-preflight.js";
+import { GIT_PREFLIGHT_HOOK_MIN_VERSION } from "./templates.js";
 
 import type { ProfileChoice } from "./interactive.js";
 import type { CustomSelection } from "./composer.js";
@@ -113,15 +113,18 @@ export const PROFILE_DEPENDENCIES: Record<Exclude<ProfileChoice, "custom">, Prof
       binary: "preflight",
       npmPackage: "@lannguyensi/agent-preflight",
       description: "agent-preflight (SessionStart preflight producer)",
-      // Shares SESSION_START_PREFLIGHT_SETUP_BUILD_MIN_VERSION with the
-      // FULL_TEMPLATE git-preflight hook's `min_version` (task 6993d9b5)
-      // and `harness doctor`'s session_start_preflight.setup version
-      // check (src/cli/doctor/session-start-preflight-setup-version.ts),
-      // so this wizard-facing table can never advertise a floor lower
-      // than what the generated manifest declares and the next `harness
-      // doctor` run enforces. 0.6.0 is the agent-preflight release that
-      // made `--setup` build code, not only install dependencies.
-      minVersion: SESSION_START_PREFLIGHT_SETUP_BUILD_MIN_VERSION,
+      // Reads the SAME constant as FULL_TEMPLATE's git-preflight hook
+      // `min_version` (GIT_PREFLIGHT_HOOK_MIN_VERSION,
+      // src/cli/init/templates.ts), the hook floor, not the separate
+      // setup floor `harness doctor`'s session_start_preflight.setup
+      // check enforces
+      // (src/cli/doctor/session-start-preflight-setup-version.ts) —
+      // split by task 65952a0c
+      // (docs/decisions/2026-09-08-preflight-floors.md), both "0.6.0"
+      // today. This wizard-facing table must never advertise a floor
+      // lower than what the generated manifest's own `min_version`
+      // declares, which is the hook floor.
+      minVersion: GIT_PREFLIGHT_HOOK_MIN_VERSION,
     },
   ],
 };
