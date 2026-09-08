@@ -1288,10 +1288,10 @@ export async function doctor(opts: DoctorOptions = {}): Promise<DoctorReport> {
   // project-unaware (see the doctor() top comment); folding a derived
   // layer into it would let it silently reach checks it was never
   // meant to touch. Best-effort: a config/parse failure here degrades
-  // to the plain `manifest`'s own (project-unaware) value, mirroring
-  // the producer's own `setupEnabled` resolution's "not configured ->
-  // skip" contract, rather than failing this whole report over an
-  // unrelated derivation problem.
+  // to the plain `manifest`'s own (project-unaware) value. NOTE this
+  // is NOT the producer's own fallback (its `setupEnabled` catch
+  // degrades to `setup: false`), so on a layer that fails to load
+  // this report and the producer can disagree (CHANGELOG follow-up).
   let sessionStartPreflightManifest = manifest;
   try {
     sessionStartPreflightManifest = loadManifest({

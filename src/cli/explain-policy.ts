@@ -233,10 +233,10 @@ export function explainPolicy(
   // carries no per-layer provenance to re-derive from and always
   // reports "base" (unchanged from before this task). Best-effort: a
   // config/parse failure here degrades to the plain load's own
-  // (project-unaware) values, mirroring the producer's own
-  // `setupEnabled` resolution's "not configured -> skip" contract,
-  // rather than aborting this verb over an unrelated derivation
-  // problem.
+  // (project-unaware) values; NOTE this is NOT the producer's own
+  // fallback (its `setupEnabled` catch degrades to `setup: false`),
+  // so on a layer that fails to load this verb and the producer
+  // can disagree; see the CHANGELOG entry for the follow-up.
   let sessionStartPreflightSetup = manifest.session_start_preflight.setup;
   let sessionStartPreflightSource: SessionStartPreflightLayerSource = resolvedPaths
     ? resolveSessionStartPreflightSource(resolvedPaths)
