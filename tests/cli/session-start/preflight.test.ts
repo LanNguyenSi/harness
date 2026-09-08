@@ -1829,14 +1829,14 @@ describe("HEAD-binding order (task 30183330, guards preflight tag semantics)", (
 });
 
 // Residual of task c88461c1's review round 3 (T-004 of the follow-up
-// batch, decision D-006): the `setupEnabled` catch degraded to `setup:
+// batch, tracker 1c4eb3ea): the `setupEnabled` catch degraded to `setup:
 // false` with NO trace anywhere of why, even though the scoped-load
 // failure is exactly the shape an operator debugging "why did my
 // project layer not apply" would want a pointer for. This drives that
 // catch into a genuine failure (a malformed cwd-derived project layer)
 // and asserts ONE stderr line naming the layer's path, while the run
 // still proceeds (never aborts) with setup:false.
-describe("runSessionStartPreflight: setupEnabled catch names the failed layer path on stderr (task c88461c1, review round 3 residual, decision D-006)", () => {
+describe("runSessionStartPreflight: setupEnabled catch names the failed layer path on stderr (task c88461c1, review round 3 residual, tracker 1c4eb3ea)", () => {
   function writeBaseManifest(home: string, setup: boolean): void {
     fs.writeFileSync(
       path.join(home, "harness.yaml"),
@@ -1963,5 +1963,14 @@ describe("runSessionStartPreflight: setupEnabled catch names the failed layer pa
     expect(errOut()).toContain("the project-scoped manifest load for project");
     expect(errOut()).toContain("degrading to setup: false");
     expect(errOut()).toContain(projectLayerPath);
+    // Review round 3, fix 8 (positive half): the message must also
+    // name the ACTUAL failing MACHINE layer path, not just decline to
+    // blame the (fine) project layer. `readYamlFile`'s own error
+    // (src/cli/loader.ts) embeds the file path it failed to parse into
+    // its message, which this diagnostic's `errFirstLine` carries
+    // through verbatim.
+    expect(errOut()).toContain(
+      path.join(home, "machines", "default.harness.overrides.yaml"),
+    );
   });
 });

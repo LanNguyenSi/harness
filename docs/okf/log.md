@@ -41,7 +41,7 @@
   `tools.cli[]`/`tools.mcp[]` regex extractions, from lines 261/331 to
   265/335); and this file's own lines 21 and 23 above (the
   `layer_unresolvable` kind, from line 64 to line 72 in the setup-
-  version module, and from line 1381 to line 1385 in doctor's
+  version module, and from line 1381 to line 1396 in doctor's
   index.ts). Swept `rg -no "src/[A-Za-z0-9/._-]+\.ts:
   [0-9]+" docs | sort -u` against every merged file (`doctor/index.ts`,
   `format.ts`, `session-start-preflight-setup-version.ts`, `explain-
@@ -66,7 +66,49 @@
   goes silent" and "`doctor()` always passes the same name" in the
   present tense, after round 2 reversed both, now each carry a
   superseded-by clause pointing at the round-2 bullet that reverses
-  them.
+  them. Fix 3 (reviewer, low, maintainability): `doctor/index.ts`'s
+  scoped-load catch comment, which opened with "KNOWN UNREACHABLE
+  TODAY" and labeled the whole catch block, is narrowed: the catch
+  itself IS reached in every shipped run with a malformed project
+  layer, only the `unresolvableLayerPath === null` sub-path is
+  unreachable today, and only the manifest-degrade assignment right
+  below the comment is unobservable (its value is discarded by the
+  `??` that prefers `sessionStartPreflightLayerUnresolvable` in every
+  real invocation). Fix 4 (reviewer, low, tests): a new test in
+  `tests/cli/doctor-session-start-preflight-setup-version.test.ts`
+  pins the `layer_unresolvable` finding's `warningCount` delta
+  directly (same fixture, `setup: false` at the base, once with and
+  once without the malformed project layer, asserting an exact +1),
+  since the pre-existing `toBeGreaterThanOrEqual(1)` assertion is
+  satisfiable by unrelated environment warnings. Fix 5 (reviewer, low,
+  maintainability): fourteen bare `D-006` citations left in five test
+  files after the round-1 fix (which covered only `src` files and
+  `docs/CLI.md`, completely, so that entry's lead-in did not overclaim)
+  replaced by the tracker id `1c4eb3ea`; batch-43's `D-021a`/`D-021b`/
+  `D-028` citations untouched. Fix 6 (reviewer, low, docs):
+  `docs/CLI.md`'s VERSION CAVEAT now states that `layer_unresolvable`
+  covers only the cwd-derived path; an explicit `--project <name>`
+  against a malformed layer for that name hard-fails at doctor's plain
+  top-level `loadManifest(opts)` instead, unchanged, never reaching
+  this check. Fix 7 (reviewer, low, docs): the same paragraph's
+  `projectName` description corrected from "absent" to `null`: every
+  `doctor()`-produced finding on the base/machine-decided path carries
+  `projectName: null`; the field is OMITTED only for a direct
+  unit-test call to `checkSessionStartPreflightSetupVersion` that never
+  passes the argument. Fix 8 (reviewer, missing test): the
+  machine-layer-failure test in `tests/cli/session-start/
+  preflight.test.ts` now also asserts the positive half of its own
+  claim, that the failing MACHINE layer's own path (not the fine
+  project layer's) appears in the producer's diagnostic. `npm run
+  build`, `typecheck`, `typecheck:tests`, `check:boundaries`,
+  `check:duplication` (114, unchanged), `check:changelog-coverage`,
+  `check:no-only` all clean; `npx vitest run tests/cli/doctor.test.ts
+  tests/cli/doctor-session-start-preflight-setup-version.test.ts
+  tests/cli/session-start/preflight.test.ts tests/cli/explain-
+  policy.test.ts tests/runtime/git-context.test.ts tests/cli/loader-
+  project-layer.test.ts tests/decisions-citations-resolve.test.ts`: 7
+  files / 484 tests passed. `npx okf-kit@0.10.0 check --json docs/okf`
+  re-run against this commit: 0 findings.
 
 - 2026-09-08T09:52:55Z, task 65952a0c (implementer, review round 3, decision D-036): applied all seven round-2 mediums/lows I own. The ok-path pin: added a `doctor.test.ts` case (`min_version: "0.6.0"` against a probed `my-hook-bin v0.7.0-rc.1`) asserting `report.hooks[0].version` equals `{ status: "ok", message: "v0.7.0-rc.1 ≥ 0.6.0" }` (the source's own `≥` character, not ASCII `>=`), killing the `${token}` -> `${actual}` ok-message mutant. The second-interpolation pin: extended the existing multi-hyphen assertion in `doctor-session-start-preflight-setup-version.test.ts` with `expect(finding?.message).toContain("--setup on v0.6.0-4-gabc123 is dependency-install only")`, killing the below_floor message's second `${token}` -> `${actual}` mutant. `CHANGELOG.md:76`'s stale 6993d9b5-era sentence ("Both this check's floor and the template bump below read one exported constant... pinned by a test asserting the constant's value") now ends with a superseded-by clause naming task `65952a0c` and the split. Reordered this file: the `9fec3839` entry (08:58:05Z) now sits above the T-006 round-1 entry (08:53:51Z), restoring newest-first order; both directional cross-references between the two T-006 entries flipped to match ("see below" in the round-2 entry, "above" in the round-1 entry); the round-2 entry's false self-verification claim ("log.md entries reconciled newest-first below") corrected to state the reordering was left undone in round 2 and fixed here. The ADR's Reopen-criteria third bullet now names "any of the five prerelease-blind min_version floor checks listed in the scope note above," not only `tools.cli[]`/`tools.mcp[]`. Both the ADR Consequences bullet and `docs/CLI.md`'s VERSION CAVEAT accepted-cost sentence now qualify the git-describe/platform-suffix false-positive class with "when its numeric run exactly equals the floor" (`compareVersionFloor` returns the numeric comparison outright whenever it is non-zero; the prerelease tie-break only bites on an exact numeric tie). The setup-floor pin test in `doctor-session-start-preflight-setup-version.test.ts` retitled from "pins the required floor to the shared constant" to "pins the setup floor's value," its leading comment rewritten to describe a single-constant value pin (the shared-constant framing predates the split). `tests/cli/init-dependencies.test.ts`'s duplicate `node:fs` import dropped; its one `readFileSync` call now goes through the existing `import * as fs from "node:fs"`. `npm run build`, `typecheck`, `typecheck:tests`, `check:changelog-coverage`, `check:no-only` all clean; `npx vitest run tests/cli/doctor.test.ts tests/cli/doctor-session-start-preflight-setup-version.test.ts tests/cli/init-dependencies.test.ts tests/cli/init-full-template-pins.test.ts tests/decisions-citations-resolve.test.ts`: 5 files / 397 tests passed; full `npm test`: 239 files / 7567 tests passed, 2 skipped. The `docs/CLI.md` VERSION CAVEAT edit above then flagged four docs `sources-fresh` STALE on the next `check` run: `codex-adapter-parity-gaps.md`, `debug-verb-selection.md`, `evidence-ledger-trust-boundary.md`, `policy-engine-producer-wiring.md`. Re-verified: none of the four cite the accepted-cost sentence or any other content this round's edits touch (they cite `docs/CLI.md` as a whole file or unrelated sections: the hook-entrypoints table, the `delegate` row, the ledger-producers section, or no line-anchored content at all); re-stamped their `timestamp:` field to this entry's timestamp. `npx okf-kit@0.10.0 check --json docs/okf` re-run against this commit: 0 stale / 0 warnings / 0 errors.
 
@@ -86,7 +128,7 @@
   `SessionStartPreflightSetupVersionFinding`
   (`src/cli/doctor/session-start-preflight-setup-version.ts:72#"layer_unresolvable"`,
   built directly by `doctor()` at
-  `src/cli/doctor/index.ts:1385#"layer_unresolvable"`), naming the
+  `src/cli/doctor/index.ts:1396#"layer_unresolvable"`), naming the
   layer path and the FIRST LINE of the parse error, counted in
   `warningCount`, rendered by `format.ts` as one warning line; round 1
   first shipped full silence here, round 1's own review found the

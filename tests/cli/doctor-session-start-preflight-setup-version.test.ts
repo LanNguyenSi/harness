@@ -242,7 +242,7 @@ describe("doctor: session_start_preflight.setup version floor (task 6993d9b5)", 
       homeOverride: home,
       // Not inside a git work tree, so the scoped load's derived
       // project name is deterministically null (task c88461c1, review
-      // round 3 residual, decision D-006's projectName field);
+      // round 3 residual, tracker 1c4eb3ea's projectName field);
       // without pinning `cwd`, this would fall back to the real
       // process.cwd() and assert an environment-dependent value.
       cwd: home,
@@ -648,7 +648,7 @@ describe("doctor: session_start_preflight per-repo effective value (task c88461c
       actualVersion: "0.5.0",
       requiredVersion: "0.6.0",
       message: expect.stringContaining("v0.5.0 < 0.6.0"),
-      // task c88461c1, review round 3 residual, decision D-006: the
+      // task c88461c1, review round 3 residual, tracker 1c4eb3ea: the
       // cwd-derived project name this check's own verdict came from,
       // carried on the finding.
       projectName: repoName,
@@ -799,7 +799,7 @@ tools:
 });
 
 // Residual of task c88461c1's review round 3 (T-004 of the follow-up
-// batch, decision D-006): a scoped-load failure used to keep the PLAIN
+// batch, tracker 1c4eb3ea): a scoped-load failure used to keep the PLAIN
 // `manifest`'s own `setup` value (a comment claimed this was NOT a
 // mismatch with the producer, but the producer's own `setupEnabled`
 // catch degrades to `setup: false`, see src/cli/session-start/
@@ -867,5 +867,56 @@ describe("doctor: session_start_preflight.setup reports a layer_unresolvable war
     const text = format(report);
     expect(text).toContain(layerPath);
     expect(text).toContain(`(project: ${repoName})`);
+  });
+
+  // Review round 3, fix 4: `toBeGreaterThanOrEqual(1)` above is
+  // satisfied by unrelated environment warnings and does not actually
+  // discriminate the `layer_unresolvable` finding's own contribution
+  // to `warningCount`. This pins the DELTA instead: the same fixture,
+  // once with the malformed project layer and once with no project
+  // layer at all, differ in `warningCount` by exactly one. `setup:
+  // false` at the base keeps every OTHER setup-related finding
+  // (`below_floor`, `probe_failed`, `parse_failed`) silent in BOTH
+  // runs, so the only warning `layer_unresolvable` can be trading
+  // against is a genuine absence, not a different setup-related kind.
+  it("contributes exactly one warning to warningCount: the same fixture with vs. without the malformed project layer differ by exactly 1", async () => {
+    const repoName = "doctor-unresolvable-delta-repo";
+    const buildHome = () =>
+      makeFixture({
+        "harness.yaml": buildManifest("session_start_preflight:\n  setup: false"),
+      });
+    const runDoctor = (home: string, repo: string) =>
+      doctor({
+        configPath: path.join(home, "harness.yaml"),
+        homeDir: home,
+        homeOverride: home,
+        cwd: repo,
+        versionProbe: (cmd) => (cmd[0] === "preflight" ? "preflight 0.6.0\n" : null),
+        pathEnv: "",
+        npmBinExec: STUB_NPM_BIN_EXEC_UNKNOWN,
+      });
+
+    // Baseline: no project layer at all for this repo name, `setup:
+    // false` at the base, so `session_start_preflight.setup` stays
+    // silent.
+    const baselineHome = buildHome();
+    const baselineRepo = makeRepoFixture(repoName);
+    const baselineReport = await runDoctor(baselineHome, baselineRepo);
+    expect(baselineReport.sessionStartPreflightSetupVersion).toBeUndefined();
+
+    // Same repo name, same base manifest, but a malformed project
+    // layer now sits on disk for it.
+    const malformedHome = buildHome();
+    const malformedRepo = makeRepoFixture(repoName);
+    const projectDir = path.join(malformedHome, "projects", repoName);
+    fs.mkdirSync(projectDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(projectDir, "harness.overrides.yaml"),
+      "session_start_preflight: {setup: true\n",
+    );
+    const malformedReport = await runDoctor(malformedHome, malformedRepo);
+    expect(malformedReport.sessionStartPreflightSetupVersion?.kind).toBe("layer_unresolvable");
+
+    expect(malformedReport.warningCount).toBe(baselineReport.warningCount + 1);
   });
 });

@@ -596,13 +596,13 @@ describe("deriveProjectName: submodule and --separate-git-dir shapes (task c8846
 });
 
 // Residual of task c88461c1's review round 3 (T-004 of the follow-up
-// batch, decision D-006): before the `fs.realpathSync` step added to
+// batch, tracker 1c4eb3ea): before the `fs.realpathSync` step added to
 // `deriveProjectName` above, a checkout reached through a symlink
 // derived the SYMLINK's own basename, not the real directory's, so two
 // paths to the SAME repository (the real checkout, and a symlink
 // pointing at it) resolved two DIFFERENT project layers, contradicting
 // D-021a's "repository identity is the common dir" rule.
-describe("deriveProjectName: symlinked checkout resolves the real directory's name (task c88461c1, review round 3 residual, decision D-006)", () => {
+describe("deriveProjectName: symlinked checkout resolves the real directory's name (task c88461c1, review round 3 residual, tracker 1c4eb3ea)", () => {
   it("derives the real directory's basename through a symlinked checkout, matching the real path directly", () => {
     const root = tmpDir();
     const realRepo = makeRepo(root, "real-project", "ref: refs/heads/main");

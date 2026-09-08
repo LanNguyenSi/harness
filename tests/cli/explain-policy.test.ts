@@ -423,7 +423,7 @@ describe("explainPolicy: session_start_preflight.source (task c88461c1)", () => 
   });
 
   // Residual of task c88461c1's review round 3 (T-004 of the follow-up
-  // batch, decision D-006): `layerDeclaresSetup`'s WHOLE-BLOCK
+  // batch, tracker 1c4eb3ea): `layerDeclaresSetup`'s WHOLE-BLOCK
   // tombstone branch (`session_start_preflight: null`, distinct from
   // the per-key `{setup: null}` tombstone above) had no test. A whole
   // top-level `null` deletes the ENTIRE key when merged (`mergeValue`,
@@ -604,7 +604,7 @@ describe("explainPolicy: session_start_preflight name-prefix boundary (task 3018
 });
 
 // Residual of task c88461c1's review round 3 (T-004 of the follow-up
-// batch, decision D-006): the cwd-derived, project-scoped SECOND
+// batch, tracker 1c4eb3ea): the cwd-derived, project-scoped SECOND
 // `loadManifest` call ran unconditionally, before the named policy was
 // even looked up, even though its result is rendered only for a
 // `preflight-before-*` policy (see
@@ -625,7 +625,7 @@ vi.mock("../../src/cli/loader.js", async (importOriginal) => {
   return { ...actual, loadManifest: vi.fn(actual.loadManifest) };
 });
 
-describe("explainPolicy: the scoped SECOND load runs only for a preflight-before-* policy (task c88461c1, review round 3 residual, decision D-006)", () => {
+describe("explainPolicy: the scoped SECOND load runs only for a preflight-before-* policy (task c88461c1, review round 3 residual, tracker 1c4eb3ea)", () => {
   function makeHome(): string {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "harness-explain-policy-loadcount-"));
     cleanups.push(() => fs.rmSync(dir, { recursive: true, force: true }));
@@ -666,14 +666,14 @@ describe("explainPolicy: the scoped SECOND load runs only for a preflight-before
 });
 
 // Residual of task c88461c1's review round 3 (T-004 of the follow-up
-// batch, decision D-006): a scoped-load failure used to keep the PLAIN
+// batch, tracker 1c4eb3ea): a scoped-load failure used to keep the PLAIN
 // load's `setup`/`source` values (a comment claimed this mirrored the
 // producer's own catch, but the producer degrades to `setup: false`
 // instead, see src/cli/session-start/index.ts). This drives the
 // scoped load into a genuine failure (a malformed project layer file)
 // and asserts the degrade decided for this residual: `setup: false`,
 // `source: "unresolvable"`, never the plain load's own value.
-describe("explainPolicy: session_start_preflight degrades to setup:false/source:unresolvable on a scoped-load failure (task c88461c1, review round 3 residual, decision D-006)", () => {
+describe("explainPolicy: session_start_preflight degrades to setup:false/source:unresolvable on a scoped-load failure (task c88461c1, review round 3 residual, tracker 1c4eb3ea)", () => {
   /** Create `<tmp>/<name>/.git/HEAD` and return the work-tree path. */
   function makeRepoFixture(name: string): string {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "harness-explain-policy-unresolvable-repo-"));

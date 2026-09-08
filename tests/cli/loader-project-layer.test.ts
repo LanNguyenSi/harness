@@ -99,7 +99,7 @@ describe("loadManifest: a project layer cannot scope session_start_preflight.set
 });
 
 // Residual of task c88461c1's review round 3 (T-004 of the follow-up
-// batch, decision D-006): `isValidProjectName` (`src/runtime/
+// batch, tracker 1c4eb3ea): `isValidProjectName` (`src/runtime/
 // git-context.ts`) already guards every `deriveProjectName` exit, but
 // `resolvePaths`' own `path.join` sink had no equivalent check of its
 // own, defense in depth for an `opts.project` reaching this function
@@ -107,7 +107,7 @@ describe("loadManifest: a project layer cannot scope session_start_preflight.set
 // `commondir` used to produce before `deriveProjectName`'s own fix
 // (`tests/runtime/git-context.test.ts`); here it is passed straight to
 // `resolvePaths` as if a caller had bypassed derivation entirely.
-describe("resolvePaths: rejects an unsafe opts.project at its own path.join sink (task c88461c1, review round 3 residual, decision D-006)", () => {
+describe("resolvePaths: rejects an unsafe opts.project at its own path.join sink (task c88461c1, review round 3 residual, tracker 1c4eb3ea)", () => {
   it("resolves NO project layer for opts.project: '..', even though a matching directory exists one level up", () => {
     // `path.join(home, "projects", "..", "harness.overrides.yaml")`
     // resolves to `<home>/harness.overrides.yaml`; write a file there
