@@ -7,6 +7,8 @@ references, see `docs/` one level up (ARCHITECTURE, risk-gate,
 writing-custom-policies, the policy-pack references, CLI); these docs
 deliberately do not duplicate them.
 
+## Maintenance
+
 Anchored source citations in this bundle, including historical `log.md`
 entries, are resolved against the current tree by
 `tests/decisions-citations-resolve.test.ts`.
@@ -18,6 +20,17 @@ anywhere in the repo would re-stale the doc; cite the specific release
 inline instead with a `CHANGELOG.md:#0.24.0`-style heading-section
 citation, which `citations-resolve` checks and which stays accurate as
 new releases are prepended above it (task `419ecfad`).
+
+`tests/decisions-citations-resolve.test.ts` also blocks (not just warns)
+on this bundle's heading-section citations themselves (the
+`path.md`-plus-`#heading` form, e.g. `CHANGELOG.md:#0.24.0` above; task
+`ee494719`): it resolves each one against the target's own Markdown
+heading structure, mirroring okf-kit's `citations-resolve` heading-form
+semantics, and additionally requires a `CHANGELOG.md` target's matching
+heading to take this repo's own exact `## [x.y.z]` bracket form. Before
+this guard, only okf-kit's warn-only `citations-resolve` rule (run
+through the `okf-staleness` CI job) checked these citations, so a renamed
+or removed release heading only warned; a CI failure here now blocks.
 
 ## Overview
 

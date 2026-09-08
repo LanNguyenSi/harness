@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **`tests/decisions-citations-resolve.test.ts` now blocks on `docs/okf`'s heading-section (`path.md:#heading`) citations, not just its `path:N[-M]` ones** (task `ee494719`). Tasks `419ecfad` and `4f0abbc8` replaced `CHANGELOG.md` frontmatter `sources:` entries on five bundle docs with 28 `` `CHANGELOG.md:#0.x.y` `` heading-section citations, resolved only by okf-kit's warn-only `citations-resolve` rule (the `okf-staleness` CI job), so a renamed or removed `## [x.y.z]` release section only warned, never blocked. A new guard, mirroring okf-kit's heading-form semantics (`src/rules/citations-resolve.ts`'s `findHeadingSection`), extracts every `path.md:#heading` citation in `docs/okf`, resolves it against the target's own Markdown heading structure (level <= 2, fence-aware), and, for a `CHANGELOG.md` target specifically, additionally requires the matching heading to take this repo's exact `## [x.y.z]` bracket form. `docs/okf/index.md` gains a Maintenance section naming this coverage.
+  - Pinned by two new fixture tests (isolated temp `CHANGELOG.md`, not the real one): a citation to a version with no heading at all (only present in prose) fails, discriminating a mutant that widens matching to a whole-file substring search; a citation to a heading that names the version but is not the exact `## [x.y.z]` form fails, discriminating a mutant that drops the CHANGELOG-specific exact-form check.
+
 ### Changed
 
 - **`check:duplication` pin lowered 115 -> 114** (task `ff34bde0`): the
