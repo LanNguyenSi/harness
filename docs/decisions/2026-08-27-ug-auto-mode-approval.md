@@ -555,7 +555,7 @@ gated on nothing, for no gain against the stdin-forgery threat just
 described.
 The finding this record feeds also stays advisory only: it can never
 gate a tool call or mint an approval
-(`src/cli/doctor/index.ts:1136#"if (report.ugBypassWithoutAutoApprove) warningCount++;"`),
+(`src/cli/doctor/index.ts:1140#"if (report.ugBypassWithoutAutoApprove) warningCount++;"`),
 so the operator remains the one who decides what the evidence means,
 and a signature on the record would not change that division of
 authority either. Marker signing does close a narrow class on its own
@@ -623,4 +623,4 @@ Two residues remain, both named rather than silently accepted: the conventional 
 
 **Recommended lifecycle for orchestrator-led sessions.** `approval_lifecycle: { mode: session, max_age: "4h" }` (or a duration matched to the batch's expected wall-clock length): one approval covers the whole batch without re-arming on every agent-tasks boundary tool the orchestrator itself calls between subagent dispatches, while `max_age` still forces periodic re-approval so the session cannot stay approved indefinitely. Batch `--task` pre-approval (`harness approve understanding --task a b c`, "Pre-approving a batch of tasks" in `docs/policy-packs/understanding-before-execution.md`) is the alternative for an orchestrator that would rather keep per-task-boundary re-arming and pre-approve every task id up front instead.
 
-**Doctor and gc, for completeness.** `harness doctor` reports `in-flight subagent records on disk: N (M stale)` (`src/cli/doctor/format.ts:173#"in-flight subagent records on disk:"`, sourced from `src/cli/doctor/ug-inflight.ts`), silent when `.inflight/` is absent, matching the `.delegations/`/`.approvals/` sections' own convention. `harness gc` sweeps records older than 24 hours or dated more than 5 minutes into the future (`src/cli/gc/index.ts:410#"const INFLIGHT_FUTURE_SKEW_MS = 5 * 60 * 1000;"`), a fixed window independent of `--retention-days`, mirroring `verifyInflightRecord`'s own fixed staleness check.
+**Doctor and gc, for completeness.** `harness doctor` reports `in-flight subagent records on disk: N (M stale)` (`src/cli/doctor/format.ts:174#"in-flight subagent records on disk:"`, sourced from `src/cli/doctor/ug-inflight.ts`), silent when `.inflight/` is absent, matching the `.delegations/`/`.approvals/` sections' own convention. `harness gc` sweeps records older than 24 hours or dated more than 5 minutes into the future (`src/cli/gc/index.ts:410#"const INFLIGHT_FUTURE_SKEW_MS = 5 * 60 * 1000;"`), a fixed window independent of `--retention-days`, mirroring `verifyInflightRecord`'s own fixed staleness check.

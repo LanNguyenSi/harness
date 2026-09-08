@@ -2,6 +2,67 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-09-08T09:37:13Z, task `c88461c1` (review round 3 residual;
+  task `1c4eb3ea`, rounds 1-2 of the batch-44 follow-up run,
+  `.ai/runs/2026-09-08-open-pool-batch44`): REVERSES this file's own
+  06:13:41Z entry below on one point, and adds the round-2 review
+  fixes on top of what round 1 shipped without a log entry. That
+  06:13:41Z entry described a scoped-load failure in `explain-policy`
+  and `doctor` as "degrading to the plain load's own value on a
+  config/parse failure"; both now degrade to `setup: false` instead,
+  matching the producer's own `setupEnabled` catch. `explain-policy`
+  reports a new `source: "unresolvable"` value alongside `setup:
+  false` rather than misattributing the result to `"base"`. `doctor`
+  no longer goes silent on the same failure either: it now reports its
+  own `kind: "layer_unresolvable"` warning on
+  `SessionStartPreflightSetupVersionFinding`
+  (`src/cli/doctor/session-start-preflight-setup-version.ts:64#"layer_unresolvable"`,
+  built directly by `doctor()` at
+  `src/cli/doctor/index.ts:1359#"layer_unresolvable"`), naming the
+  layer path and the FIRST LINE of the parse error, counted in
+  `warningCount`, rendered by `format.ts` as one warning line; round 1
+  first shipped full silence here, round 1's own review found the
+  silence itself was the residual gap the task's goal named ("no
+  diagnostic anywhere"), closed in round 2. The producer's own stderr
+  diagnostic (`src/cli/session-start/index.ts:668#"the project-scoped"`)
+  no longer blames "the project layer" for a
+  base- or machine-layer parse failure (round 1's lead-in did); both
+  this diagnostic and the new `doctor` finding now collapse a
+  multi-line YAML parse error to its FIRST LINE, so the "one line"
+  claim documented for the producer's diagnostic actually holds.
+  `resolvePaths` (`src/cli/loader.ts:96#"isValidProjectName(opts.project)"`)
+  gained a second-time `isValidProjectName` sink guard, defense in
+  depth for an `opts.project` reaching that ONE sink from anywhere
+  other than `deriveProjectName`; round 2 narrowed the docs framing
+  this as broader coverage, since it does NOT guard `substituteProject`
+  (`src/probes/memory.ts`) or `generate-memory-index.ts`'s own
+  `{project}` substitution, both left unvalidated and out of scope.
+  `deriveProjectName` now resolves the common dir through
+  `fs.realpathSync` before taking its basename
+  (`src/runtime/git-context.ts:387#"fs.realpathSync(commonDir)"`), so a
+  symlinked checkout resolves the SAME project layer as the real
+  directory (decision D-021a's "repository identity is the common dir"
+  rule); best-effort, a realpath failure falls back to the un-resolved
+  value. `doctor`'s `sessionStartPreflightProjectName` (and the
+  finding's `projectName`,
+  `src/cli/doctor/format.ts:134#"sessionStartPreflightSetupVersion.projectName"`
+  renders it as a `(project: X)` suffix) fires only when the scoped
+  load actually RESOLVED a project layer file, not merely whenever a
+  name was derivable for the cwd; round 1 set it unconditionally,
+  round 1's own review found the suffix untested and docs/CLI.md's
+  "distinguishable from a base/machine-decided value" claim false for
+  it. `npx okf-kit@0.10.0 check --json docs/okf` re-run against this
+  commit: 0 findings; the five docs flagged stale by task `c88461c1`'s
+  earlier rounds (`codex-adapter-parity-gaps.md`,
+  `debug-verb-selection.md`, `evidence-ledger-trust-boundary.md`,
+  `pause-vs-gate-kill-switch.md`, `policy-engine-producer-wiring.md`)
+  were re-verified again against round 1's and round 2's edits and
+  re-stamped; none describes this behavior. A
+  `docs/decisions/2026-08-27-ug-auto-mode-approval.md` citation into
+  `format.ts` drifted after round 1's new `projectName` suffix lines
+  and was re-anchored, re-verified green via `tests/decisions-
+  citations-resolve.test.ts`.
+
 - 2026-09-08T08:58:05Z, task `9fec3839` (implementer, review round 2,
   decision D-009): applied all seven low findings from `T-003` review
   round 1 to the `heading-section-empty` mirror added in `tests/decisions-
