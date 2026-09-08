@@ -422,6 +422,35 @@ describe("explainPolicy: session_start_preflight.source (task c88461c1)", () => 
     expect(projection.session_start_preflight).toEqual({ setup: false, source: "project" });
   });
 
+  // Residual of task c88461c1's review round 3 (T-004 of the follow-up
+  // batch, decision D-006): `layerDeclaresSetup`'s WHOLE-BLOCK
+  // tombstone branch (`session_start_preflight: null`, distinct from
+  // the per-key `{setup: null}` tombstone above) had no test. A whole
+  // top-level `null` deletes the ENTIRE key when merged (`mergeValue`,
+  // `src/overrides/merge.ts`), same end result as the per-key form, but
+  // `layerDeclaresSetup` reaches it through a different branch
+  // (`block === null`, returning `true` directly instead of checking
+  // `"setup" in block`).
+  it("attributes a project layer's WHOLE-BLOCK tombstone (`session_start_preflight: null`) as source:project", () => {
+    const home = makeHome();
+    writeBaseManifest(home, true);
+    writeMachineLayer(home, true);
+    const projectDir = path.join(home, "projects", "whole-block-tombstone-project");
+    fs.mkdirSync(projectDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(projectDir, "harness.overrides.yaml"),
+      ["session_start_preflight: null", ""].join("\n"),
+    );
+    const file = writeEvent(DESTROY_EVENT);
+    const { projection } = explainPolicy("preflight-before-investigation", {
+      ...seams("main"),
+      eventPath: file,
+      homeDir: home,
+      project: "whole-block-tombstone-project",
+    });
+    expect(projection.session_start_preflight).toEqual({ setup: false, source: "project" });
+  });
+
   // Review round 3, decision D-028: two machine layers plus a project
   // layer that does NOT declare `setup` itself. `resolveSessionStartPreflightSource`
   // walks `resolved.machineLayers` from the LAST entry backwards
