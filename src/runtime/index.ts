@@ -37,7 +37,11 @@ export {
   renderAgentFacing,
   type AgentFacingBlock,
 } from "./agent-facing.js";
-export { resolveGitContext, type GitRepoContext } from "./git-context.js";
+export {
+  resolveGitContext,
+  deriveProjectName,
+  type GitRepoContext,
+} from "./git-context.js";
 export {
   buildActionEnvelope,
   type ActionEnvelope,

@@ -2,6 +2,82 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-09-08T06:13:41Z, task c88461c1 (implementer, review round 3,
+  decision D-028): scoped the derived project layer to
+  `session_start_preflight.setup` alone. Round 2 fed the cwd-derived
+  project into `explain-policy` and `doctor`'s FULL `loadManifest` call,
+  so a project layer also silently reached policy trigger matching and
+  every other doctor check; both verbs now do a PLAIN `loadManifest(opts)`
+  load for everything else and a SEPARATE, project-scoped load used only
+  for `setup`/`source`, degrading to the plain load's own value on a
+  config/parse failure (mirrors the producer's `setupEnabled` "not
+  configured -> skip" contract). Security fix: `resolveCommonDir`
+  (`src/runtime/git-context.ts`) now `path.normalize`s its absolute
+  branch (a crafted `commondir` with unresolved `..` segments previously
+  reached `deriveProjectName` un-normalized) and `deriveProjectName`
+  rejects (`null`) an empty, `"."`, `".."`, or separator/NUL-containing
+  resolved name before handing it to `resolvePaths`. Docs: two stale
+  test comments fixed (`tests/cli/session-start/preflight.test.ts`,
+  `tests/cli/loader-project-layer.test.ts`'s describe title); two more
+  real-git shapes documented and pinned (submodule -> own name,
+  `--separate-git-dir` -> gitdir basename); a stray space before a comma
+  fixed in two files. `docs/CLI.md`'s PER-REPO SCOPING Notes and
+  `CHANGELOG.md`'s Unreleased entry gained a "Review round 3 fixes"
+  sub-bullet. `npx okf-kit@0.10.0 check --json docs/okf` re-run against
+  this commit: the same five docs flagged stale by round 2
+  (`codex-adapter-parity-gaps.md`, `debug-verb-selection.md`,
+  `evidence-ledger-trust-boundary.md`, `pause-vs-gate-kill-switch.md`,
+  `policy-engine-producer-wiring.md`, all listing `docs/CLI.md` and/or
+  `src/cli/explain-policy.ts` / `src/cli/doctor/index.ts` in `sources:`)
+  re-verified: none makes a claim about `session_start_preflight`, the
+  D-028 boundary, or the commondir/name-validation fix; `timestamp:`
+  re-stamped on all five regardless. `docs/decisions/2026-08-27-ug-auto-
+  mode-approval.md` line 558's `src/cli/doctor/index.ts:1136` anchor
+  (`if (report.ugBypassWithoutAutoApprove) warningCount++;`) is
+  unaffected: this round's doctor edits land after that line (the top of
+  `doctor()` and the `session_start_preflight.setup` version-check site
+  further down), verified unchanged and green via `tests/decisions-
+  citations-resolve.test.ts`.
+
+- 2026-09-08T05:36:06Z, task c88461c1 (implementer, review round 2):
+  repository identity + one shared helper for `session_start_preflight.
+  setup`'s per-repo scoping. Added `deriveProjectName` to `src/runtime/
+  git-context.ts` (basename of the directory containing the repository's
+  shared git common dir, not the checkout directory `resolveGitContext`'s
+  own `repo` field names, decision D-021a) and wired all three
+  consumers (`src/cli/session-start/index.ts`, `src/cli/explain-policy.ts`,
+  `src/cli/doctor/index.ts`) through it when `--project` is absent
+  (decision D-021b); also fixed `explain-policy.ts`'s `layerDeclaresSetup`
+  to attribute a tombstone (`session_start_preflight: null` / `{setup:
+  null}`) by key presence rather than requiring a literal boolean. Edited
+  `docs/CLI.md` (the PER-REPO SCOPING, VERSION CAVEAT and `explain-policy`
+  Notes bullets), `src/schema/session-start-preflight.ts`'s SCOPE header,
+  and `CHANGELOG.md`. `npx okf-kit@0.10.0 check --json docs/okf` (measured
+  baseline on this task's own prior commit `f5b72fe`: 0 findings) flags
+  five docs `sources-fresh` STALE after this commit, against `docs/CLI.md`
+  (`codex-adapter-parity-gaps.md`, `debug-verb-selection.md`, `evidence-
+  ledger-trust-boundary.md`, `policy-engine-producer-wiring.md`) and
+  against `src/cli/doctor/index.ts` (`pause-vs-gate-kill-switch.md`,
+  `debug-verb-selection.md` again, it lists both `src/cli/explain-
+  policy.ts` and `src/cli/doctor/index.ts` in `sources:`). Re-verified
+  each: none describes `session_start_preflight.setup`, the repository-
+  identity rule, or the tombstone attribution fix; `debug-verb-selection.md`
+  and `pause-vs-gate-kill-switch.md` describe `doctor`'s general health-
+  summary pillars and its unrelated kill-switch drift checks, generic file
+  mentions only, no pinned lines inside the edited region (the top of
+  `doctor()`, before those checks run); `codex-adapter-parity-gaps.md`,
+  `evidence-ledger-trust-boundary.md` and `policy-engine-producer-wiring.md`
+  cite `docs/CLI.md` generically for unrelated sections (Codex hook table,
+  ledger-tag producer mention, `when:`/`requires:` evaluation order). One
+  exact-line citation DID drift and needed re-pointing (not an OKF-bundle
+  doc): `docs/decisions/2026-08-27-ug-auto-mode-approval.md` line 558
+  pinned the `if (report.ugBypassWithoutAutoApprove) warningCount++;`
+  anchor in `src/cli/doctor/index.ts` at what this task's own comment
+  insertions shifted from line 1129 to line 1136; re-pointed to the new
+  line and re-verified green via `tests/decisions-citations-resolve.
+  test.ts`. Re-stamped all five OKF docs' `timestamp:` fields; no other
+  citation re-pointing needed.
+
 - 2026-09-08T05:04:09Z, task ee494719 (implementer, review round 2): fixed
   all eight round-1 review findings on the heading-citation guard (this
   bundle's Maintenance section above and `CHANGELOG.md`'s Unreleased
@@ -35,6 +111,31 @@
   after committing: `npx okf-kit@0.10.0 check --json docs/okf` reported 0
   errors/warnings/notices; `npx vitest run
   tests/decisions-citations-resolve.test.ts` passed all 198 tests.
+
+- 2026-09-08T04:52:43Z, task c88461c1 (implementer): per-repo scoping for
+  `session_start_preflight.setup`. Edited `src/cli/session-start/index.ts`,
+  `src/cli/explain-policy.ts`, `src/schema/session-start-preflight.ts`,
+  `docs/CLI.md` (the `session_start_preflight.setup` Notes bullet and the
+  `explain-policy` `source` bullet), and `CHANGELOG.md`. `npx
+  okf-kit@0.10.0 check --json docs/okf` (measured baseline on 4865e63,
+  the commit before this task's changes: 0 findings) flagged four docs
+  `sources-fresh` STALE after the commit, all against the `docs/CLI.md`
+  edit alone (`codex-adapter-parity-gaps.md`, `debug-verb-selection.md`,
+  also against `src/cli/explain-policy.ts`, `evidence-ledger-trust-
+  boundary.md`, `policy-engine-producer-wiring.md`). Re-verified each:
+  none cites the two sections this task edited (the `session_start_
+  preflight.setup` Notes bullet or the `explain-policy` `source`
+  bullet) by content or line number. `codex-adapter-parity-gaps.md`
+  pins `docs/CLI.md` line 67 (the Codex hook timeout-floor note); that
+  line sits well before this task's edit point and is unmoved.
+  `debug-verb-selection.md` lists `src/cli/explain-policy.ts` in
+  `sources:` only, describing the trigger/classifier/environment/`when:`
+  discriminator this task did not touch (only an orthogonal
+  `session_start_preflight` field was added). `evidence-ledger-trust-
+  boundary.md` and `policy-engine-producer-wiring.md` cite `docs/CLI.md`
+  generically (no pinned line numbers) for unrelated sections. Re-
+  stamped all four `timestamp:` fields; no citation re-pointing needed.
+
 
 - 2026-09-07T10:52:27Z, task 4f0abbc8 (implementer): negative control for
   the 2026-09-07T10:50:36Z entry below (commit `e060323`). Appended one
@@ -1918,13 +2019,13 @@
   negative control: pre-change clone 35 warnings, post-change 0.
 - 2026-07-18T05:00:00Z, scoped re-verification (task init-mcp-wiring-claude-code/T-004):
   `okf-kit check` flagged 2 files stale (source mtime after doc timestamp).
-  `debug-verb-selection.md` — flagged for `src/cli/doctor/index.ts`, which
+  `debug-verb-selection.md`, flagged for `src/cli/doctor/index.ts`, which
   changed under the same run (T-003, additive `claudeMcp` field, no
   existing-section behavior change). Diffed against the doc's `doctor`
   section; content held except for the new "Claude Code MCP Registration"
   check, now documented; re-stamped. The other 15 sources are unchanged
   since the 2026-07-16 sweep and were not re-audited beyond that diff.
-  `policy-engine-producer-wiring.md` — flagged for `src/policies/ledger-client.ts`,
+  `policy-engine-producer-wiring.md`, flagged for `src/policies/ledger-client.ts`,
   which this task's changes never touched (pre-existing/unrelated drift);
   left un-stamped, out of scope for this task, noted as an open follow-up.
 - 2026-07-16T02:26:27Z, re-verification sweep (task 93c004a6): all 8 docs re-checked

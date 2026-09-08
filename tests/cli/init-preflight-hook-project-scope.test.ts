@@ -1,20 +1,29 @@
 // Scope guard for `session_start_preflight.setup` (task 30183330, review
-// round 3).
+// round 3; task `c88461c1` builds per-repo scoping on top of this
+// contract, see below).
 //
-// `docs/CLI.md`, `src/schema/session-start-preflight.ts` and the
-// CHANGELOG all state that the key is HOST-WIDE, with no per-repo
-// scoping, and the load-bearing half of that claim is what the GENERATED
-// hook actually invokes: `harness session-start preflight` with no
-// `--project`. `src/cli/loader.ts` resolves a project override layer only
-// when `LoaderOptions.project` is set (pinned separately by
-// tests/cli/loader-project-layer.test.ts), and `--project <name>` is the
-// only source of that value, so as long as the shipped hook command
-// carries no `--project` no project layer can narrow the key on the hook
-// path. This test pins the hook side of that pair against the same
-// rendered-template seam tests/cli/init-full-template-pins.test.ts uses,
-// so an edit that adds a `--project` to the hook (which would silently
-// turn a documented host-wide switch into a single hardcoded project
-// name for every repository) fails here.
+// The GENERATED SessionStart hook is one static command string, written
+// once by `harness init` and then invoked unchanged on every session,
+// in every repository that shares the same `~/.harness/harness.yaml`.
+// A single hardcoded `--project <name>` baked into that string could
+// therefore only ever name ONE project, the same one for every
+// repository the hook runs in, which is worse than no scoping at all;
+// see the entry these two facts justify (`resolvePaths`, `src/cli/
+// loader.ts`, resolves a project override layer only when
+// `LoaderOptions.project` is set, pinned separately by
+// tests/cli/loader-project-layer.test.ts, and `--project <name>` is the
+// only source of that value). So the hook stays `--project`-free, and
+// per-repo scoping instead comes from the PRODUCER itself
+// (`harness session-start preflight`, `src/cli/session-start/index.ts`)
+// deriving a project name from its own cwd at runtime (task `c88461c1`,
+// pinned by tests/cli/session-start/preflight.test.ts's "per-repo
+// scoping via cwd-derived project name" describe block) and feeding it
+// through this SAME `LoaderOptions.project` seam. This test pins the
+// hook side of that pair against the same rendered-template seam
+// tests/cli/init-full-template-pins.test.ts uses, so an edit that adds
+// a literal `--project` to the hook (which would silently turn the
+// per-repo cwd-derived scoping into a single hardcoded project name for
+// every repository) fails here.
 
 import { describe, expect, it } from "vitest";
 import { parse as parseYaml } from "yaml";

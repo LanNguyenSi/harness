@@ -264,10 +264,135 @@ export function resolveCommonDir(gitDir: string): string {
   try {
     const raw = fs.readFileSync(path.join(gitDir, "commondir"), "utf8").trim();
     if (raw.length > 0) {
-      return path.isAbsolute(raw) ? raw : path.resolve(gitDir, raw);
+      // `path.normalize` on the absolute branch (review round 3,
+      // decision D-028's security finding): the relative branch already
+      // normalizes via `path.resolve`, but an absolute `commondir`
+      // value was returned verbatim, `..` segments and all. A crafted
+      // `.git` FILE pointing at a private gitdir whose `commondir` file
+      // holds an absolute path ending in unresolved `..` segments (e.g.
+      // `<gitDir>/../..`) then reached `deriveProjectName` below with
+      // those segments still literally present, `path.basename` textually
+      // returning `..` instead of the intended ancestor directory's real
+      // name. Normalizing here closes that off at the source, before
+      // either caller (`resolveOriginHeadBase`, `deriveProjectName`)
+      // ever sees the raw value.
+      return path.isAbsolute(raw) ? path.normalize(raw) : path.resolve(gitDir, raw);
     }
   } catch {
     /* no commondir file — gitDir already IS the common dir */
   }
   return gitDir;
+}
+
+// ---------------------------------------------------------------------------
+// Repository-identity derivation for per-repo config scoping (task
+// c88461c1, review round 2, decision D-021a).
+//
+// Round 1 fed `resolveGitContext(cwd).repo` (the WORK-TREE basename)
+// into the `session_start_preflight.setup` project-layer lookup. That
+// is wrong for a linked worktree: `git worktree add ../foo` gives the
+// linked checkout its OWN directory name, so two worktrees of the SAME
+// repository resolved two DIFFERENT project layers, and neither one
+// matched the name an operator would naturally pick for the shared
+// project override file. `repo` stays exactly as-is for its existing
+// consumer (the `preflight:${REPO}` ledger tag, `src/cli/session-start/
+// index.ts`), a ledger tag namespaced per CHECKOUT is a defensible,
+// unrelated design choice, and changing it is out of this task's scope.
+// This is a SEPARATE derivation for a SEPARATE purpose: naming the
+// `<home>/projects/<name>/harness.overrides.yaml` layer that should
+// apply to every linked worktree of one repository alike.
+// ---------------------------------------------------------------------------
+
+/**
+ * Derive the project-layer name for `cwd`: the basename of the
+ * directory that CONTAINS the repository's shared git common dir (the
+ * main checkout), so every linked worktree of one repository resolves
+ * the same name, unlike `resolveGitContext(cwd).repo`, which names the
+ * checkout directory itself and therefore differs per worktree. Feeds
+ * `LoaderOptions.project` (the same seam every command's own
+ * `--project <name>` flag already uses) for `harness session-start
+ * preflight`, `harness explain-policy`, and `harness doctor` alike (one
+ * helper, three consumers, so the three cannot silently disagree on
+ * what "this repository's project name" means).
+ *
+ * Resolution:
+ *  - `findGitEntry(cwd)` walks up to the `.git` entry, exactly like
+ *    `resolveGitContext`.
+ *  - `resolveCommonDir(entry.gitDir)` follows a linked worktree's
+ *    `commondir` file to the shared common dir (a no-op for the main
+ *    checkout, which has none).
+ *  - The COMMON DIR's basename is normally literally `.git` (a
+ *    directory or, in a linked worktree's private gitdir, the resolved
+ *    target of a `.git` FILE): in that shape the project name is one
+ *    level further up, the basename of the directory THAT CONTAINS the
+ *    common dir, i.e. the main checkout's own directory name.
+ *  - For a BARE repository (`git init --bare`, or a linked worktree
+ *    created FROM one), there is no `.git` wrapper at all, the common
+ *    dir IS the bare directory itself (its basename is not `.git`), so
+ *    that basename is the project name directly, with no extra `..`
+ *    step. This is the one shape where going up an extra level would
+ *    be wrong (it would name the bare directory's PARENT instead), and
+ *    the `.git` SUFFIX in a conventionally-named bare directory (e.g.
+ *    `myrepo.git`) is kept, not stripped.
+ *  - A SUBMODULE checkout (`git submodule add`) derives the submodule's
+ *    OWN name, not its superproject's: a submodule's `.git` FILE points
+ *    at a private gitdir under the superproject's `.git/modules/<name>/`
+ *    tree, which has no `commondir` file of its own (that mechanism is
+ *    for linked worktrees, not submodules), so `resolveCommonDir` is a
+ *    no-op and the submodule's own checkout directory basename applies
+ *    directly, same as a normal (non-worktree) repo.
+ *  - A `git init --separate-git-dir=<dir>` checkout derives the GIT
+ *    DIR's own basename, NOT the work tree's: the `.git` file at the
+ *    work tree root points at `<dir>` with no `commondir` file either
+ *    (again a linked-worktree-only mechanism), so `resolveCommonDir` is
+ *    a no-op and `<dir>`'s own basename (e.g. `sepgit.git`) is the
+ *    derived name, exactly like the bare-repository shape above; the
+ *    work tree's own directory name never enters into it.
+ *
+ * Returns `null` when `cwd` is not inside a git work tree (mirrors
+ * `resolveGitContext`'s "" for the same case), when `entry.gitDir`
+ * could not be resolved at all (an unreadable `.git` FILE, see
+ * `findGitEntry`'s doc comment; in that case this falls back to the
+ * checkout directory's own basename, the same value `repo` would
+ * carry, rather than guessing at a common dir it has no path to), or
+ * when the resolved name fails {@link isValidProjectName} (review
+ * round 3, decision D-028's security finding: an untrusted on-disk
+ * `commondir`/`.git` FILE value must never hand a caller a name like
+ * `""`, `"."`, `".."`, or one containing a path separator, since every
+ * consumer joins it straight into a filesystem path,
+ * `resolvePaths`/`src/cli/loader.ts`). Never throws.
+ */
+export function deriveProjectName(cwd: string): string | null {
+  if (typeof cwd !== "string" || cwd.length === 0) return null;
+  const entry = findGitEntry(cwd);
+  if (!entry) return null;
+  if (!entry.gitDir) {
+    const fallback = path.basename(entry.worktreeRoot);
+    return isValidProjectName(fallback) ? fallback : null;
+  }
+  const commonDir = resolveCommonDir(entry.gitDir);
+  const commonDirBase = path.basename(commonDir);
+  const projectDir = commonDirBase === ".git" ? path.dirname(commonDir) : commonDir;
+  const name = path.basename(projectDir);
+  return isValidProjectName(name) ? name : null;
+}
+
+/**
+ * Is `name` safe to join into `<home>/projects/<name>/harness.overrides.yaml`
+ * (`resolvePaths`, `src/cli/loader.ts`) as an on-disk directory
+ * component? Rejects the empty string, `"."`, and `".."` (the two
+ * `path.join` special-cases that either no-op or climb a level, `".."`
+ * being exactly the shape a crafted, un-normalized `commondir` used to
+ * produce before the fix above), plus any name containing a forward
+ * slash, a backslash (Windows separator; POSIX permits a literal
+ * backslash IN a directory name, so this is not redundant with the
+ * platform's own path parsing), or a NUL byte. A name that passes this
+ * check may still not exist on disk (`resolvePaths` already handles
+ * that with `fs.existsSync`); this only guards against the value
+ * escaping the single path segment it is meant to occupy.
+ */
+function isValidProjectName(name: string): boolean {
+  if (name.length === 0) return false;
+  if (name === "." || name === "..") return false;
+  return !name.includes("/") && !name.includes("\\") && !name.includes("\0");
 }

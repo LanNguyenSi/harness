@@ -1,18 +1,27 @@
-// Loader half of the `session_start_preflight.setup` scope claim (task
-// 30183330, review round 3).
+// Loader-level primitive underneath the `session_start_preflight.setup`
+// per-repo scoping story (task 30183330, review round 3; task
+// `c88461c1` builds per-repo scoping on top of this contract).
 //
-// The docs state that the key is HOST-WIDE and that a project override
-// layer does NOT scope it per repository. That rests on two facts, one
-// per side of the pair: the generated SessionStart hook passes no
-// `--project` (pinned by tests/cli/init-preflight-hook-project-scope.test.ts),
-// and `resolvePaths` resolves a project layer ONLY when
-// `LoaderOptions.project` is set. This file pins the loader side: without
-// `project`, a project override layer that sits on disk is neither
-// resolved nor merged, so its `session_start_preflight.setup: false`
-// cannot influence what the hook path reads. The same layer IS honoured
-// when `project` is passed explicitly, which is what keeps this a scope
-// statement about the hook path rather than a claim that the mechanism
-// does not exist at all.
+// `resolvePaths` resolves a project override layer ONLY when
+// `LoaderOptions.project` is explicitly set; it never inspects cwd or
+// any other ambient signal on its own. This file pins that low-level
+// contract in isolation: without `project`, a project override layer
+// that sits on disk is neither resolved nor merged, so its
+// `session_start_preflight.setup: false` cannot influence what a caller
+// reads. The same layer IS honoured when `project` is passed
+// explicitly.
+//
+// This is no longer the full scope story for the hook path: the
+// generated SessionStart hook itself still passes no `--project`
+// (pinned by tests/cli/init-preflight-hook-project-scope.test.ts), but
+// `harness session-start preflight` (src/cli/session-start/index.ts)
+// now derives a project name from its own cwd and feeds it through
+// this EXACT `LoaderOptions.project` seam, so a project layer DOES
+// scope the key per repository on the hook path today (see
+// tests/cli/session-start/preflight.test.ts, "per-repo scoping via
+// cwd-derived project name"). What this file pins is the shared
+// primitive that derivation depends on, not a claim that the mechanism
+// is unreachable from the hook.
 
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -55,7 +64,7 @@ afterEach(() => {
   else process.env["HARNESS_ALLOW_REAL_GENERATED_DIR"] = priorEnv;
 });
 
-describe("resolvePaths: project layer requires an explicit project (task 30183330)", () => {
+describe("resolvePaths: a project layer requires opts.project to be SET (task 30183330); this loader never derives it from cwd itself, a caller does (see the file header)", () => {
   it("resolves NO project layer when opts.project is absent, even though one exists on disk", () => {
     const resolved = resolvePaths({ homeDir: tmpHome });
     expect(resolved.projectLayer).toBeNull();
@@ -74,8 +83,12 @@ describe("loadManifest: a project layer cannot scope session_start_preflight.set
     const { manifest, resolved } = loadManifest({ homeDir: tmpHome });
     expect(resolved.projectLayer).toBeNull();
     // The on-disk project layer says `setup: false`. If it were merged,
-    // this would read false, and the documented host-wide scope claim
-    // would be wrong.
+    // this would read false, but a project layer only ever narrows the
+    // key when a caller derives or passes a `LoaderOptions.project`
+    // (`harness session-start preflight`'s cwd-derived name, or an
+    // explicit `--project`), pinned separately below and in
+    // tests/cli/session-start/preflight.test.ts; a bare `resolvePaths`/
+    // `loadManifest` call with no `project` never reaches it.
     expect(manifest.session_start_preflight).toEqual({ setup: true });
   });
 
