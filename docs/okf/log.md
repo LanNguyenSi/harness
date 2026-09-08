@@ -2,6 +2,74 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-09-08T10:16:41Z, task `1c4eb3ea` (implementer, round 3 of the
+  batch-44 follow-up run, `.ai/runs/2026-09-08-open-pool-batch44`):
+  merged `origin/master` (task `65952a0c`, `336eed3`) onto this
+  branch's round-2 head (`5efb3a5e`). Conflicts: `docs/CLI.md`'s
+  VERSION CAVEAT paragraph (both sides edited the same paragraph;
+  kept master's two-independent-floors/prerelease-handling content
+  and this branch's `projectName`/`layer_unresolvable` residual
+  content, in that order, and applied this round's docs fix 1 to the
+  merged text, see below), `src/cli/doctor/session-start-preflight-
+  setup-version.ts` (both the interface's `kind` union and the
+  `checkSessionStartPreflightSetupVersion` body; kept this branch's
+  `layer_unresolvable` kind and `projectName`/`withProjectName`
+  wrapper AND master's `parseProbedVersion`/`compareVersionFloor`
+  prerelease-aware parsing, wrapping every return in `withProjectName`
+  including master's two), `docs/okf/log.md` (two newest-first entries
+  on each side; reordered to master's 09:52:55Z entry, then this
+  branch's 09:37:13Z entry, then master's 09:35:00Z entry, newest
+  first), five bundle docs conflicted only on their `timestamp:`
+  frontmatter line (`codex-adapter-parity-gaps.md`,
+  `debug-verb-selection.md`, `evidence-ledger-trust-boundary.md`,
+  `pause-vs-gate-kill-switch.md`, `policy-engine-producer-wiring.md`;
+  all cite `src/cli/doctor/index.ts` and/or `docs/CLI.md`, both
+  touched by this merge, so re-stamped fresh below rather than picking
+  either side's stamp). `docs/decisions/2026-08-27-ug-auto-mode-
+  approval.md` and `docs/decisions/2026-09-08-preflight-floors.md`
+  (new on master) auto-merged without conflict but both carried line
+  citations into doctor's `index.ts` and `session-start-preflight-
+  setup-version.ts` that drifted once the two sides' independent
+  edits to those files landed in the same tree; re-anchored eight
+  citations: the ug-auto-mode-approval ADR's line 558 (moved from
+  line 1140 to line 1144 in doctor's index.ts, the `warningCount++`
+  bullet); the preflight-floors ADR's lines 29 (`checkHookVersion`,
+  from lines 466-505 to 470-509), 32 (`checkSessionStartPreflightSetupVersion`,
+  from lines 96-135 to 145-182, narrowed to keep the trailing `return
+  undefined;` anchor unique), 111 (the `compareVersions` alias, from
+  lines 359-361 to 363-365), and 139/140 (the two prerelease-blind
+  `tools.cli[]`/`tools.mcp[]` regex extractions, from lines 261/331 to
+  265/335); and this file's own lines 21 and 23 above (the
+  `layer_unresolvable` kind, from line 64 to line 72 in the setup-
+  version module, and from line 1381 to line 1385 in doctor's
+  index.ts). Swept `rg -no "src/[A-Za-z0-9/._-]+\.ts:
+  [0-9]+" docs | sort -u` against every merged file (`doctor/index.ts`,
+  `format.ts`, `session-start-preflight-setup-version.ts`, `explain-
+  policy.ts`, `loader.ts`, `git-context.ts`, `session-start/index.ts`,
+  `templates.ts`, `version-compare.ts`, `docs/CLI.md`); no further
+  drift found beyond the eight fixed above. `npm run build`,
+  `typecheck`, `typecheck:tests` clean; `npx vitest run tests/cli/
+  doctor.test.ts tests/cli/doctor-session-start-preflight-setup-
+  version.test.ts tests/decisions-citations-resolve.test.ts`: 3 files
+  / 348 tests passed. `npx okf-kit@0.10.0 check --json docs/okf`
+  re-run against this commit: 0 findings. This round's docs fix 1
+  (reviewer, medium): `docs/CLI.md`'s VERSION CAVEAT sentence claiming
+  a `layer_unresolvable` finding "still degrades setup to false for
+  the manifest every OTHER check in this report reads" was false; the
+  degraded manifest is a local copy fed only to
+  `checkSessionStartPreflightSetupVersion`, unconsumed on the
+  `layer_unresolvable` path itself (the check reports the load failure
+  instead), and every other doctor check reads the untouched plain
+  base/machine manifest; corrected in place during the merge above.
+  This round's docs fix 2 (reviewer, medium): the round-3-residual
+  sub-bullets in `CHANGELOG.md`'s Unreleased section describing "doctor
+  goes silent" and "`doctor()` always passes the same name" in the
+  present tense, after round 2 reversed both, now each carry a
+  superseded-by clause pointing at the round-2 bullet that reverses
+  them.
+
+- 2026-09-08T09:52:55Z, task 65952a0c (implementer, review round 3, decision D-036): applied all seven round-2 mediums/lows I own. The ok-path pin: added a `doctor.test.ts` case (`min_version: "0.6.0"` against a probed `my-hook-bin v0.7.0-rc.1`) asserting `report.hooks[0].version` equals `{ status: "ok", message: "v0.7.0-rc.1 ≥ 0.6.0" }` (the source's own `≥` character, not ASCII `>=`), killing the `${token}` -> `${actual}` ok-message mutant. The second-interpolation pin: extended the existing multi-hyphen assertion in `doctor-session-start-preflight-setup-version.test.ts` with `expect(finding?.message).toContain("--setup on v0.6.0-4-gabc123 is dependency-install only")`, killing the below_floor message's second `${token}` -> `${actual}` mutant. `CHANGELOG.md:76`'s stale 6993d9b5-era sentence ("Both this check's floor and the template bump below read one exported constant... pinned by a test asserting the constant's value") now ends with a superseded-by clause naming task `65952a0c` and the split. Reordered this file: the `9fec3839` entry (08:58:05Z) now sits above the T-006 round-1 entry (08:53:51Z), restoring newest-first order; both directional cross-references between the two T-006 entries flipped to match ("see below" in the round-2 entry, "above" in the round-1 entry); the round-2 entry's false self-verification claim ("log.md entries reconciled newest-first below") corrected to state the reordering was left undone in round 2 and fixed here. The ADR's Reopen-criteria third bullet now names "any of the five prerelease-blind min_version floor checks listed in the scope note above," not only `tools.cli[]`/`tools.mcp[]`. Both the ADR Consequences bullet and `docs/CLI.md`'s VERSION CAVEAT accepted-cost sentence now qualify the git-describe/platform-suffix false-positive class with "when its numeric run exactly equals the floor" (`compareVersionFloor` returns the numeric comparison outright whenever it is non-zero; the prerelease tie-break only bites on an exact numeric tie). The setup-floor pin test in `doctor-session-start-preflight-setup-version.test.ts` retitled from "pins the required floor to the shared constant" to "pins the setup floor's value," its leading comment rewritten to describe a single-constant value pin (the shared-constant framing predates the split). `tests/cli/init-dependencies.test.ts`'s duplicate `node:fs` import dropped; its one `readFileSync` call now goes through the existing `import * as fs from "node:fs"`. `npm run build`, `typecheck`, `typecheck:tests`, `check:changelog-coverage`, `check:no-only` all clean; `npx vitest run tests/cli/doctor.test.ts tests/cli/doctor-session-start-preflight-setup-version.test.ts tests/cli/init-dependencies.test.ts tests/cli/init-full-template-pins.test.ts tests/decisions-citations-resolve.test.ts`: 5 files / 397 tests passed; full `npm test`: 239 files / 7567 tests passed, 2 skipped. The `docs/CLI.md` VERSION CAVEAT edit above then flagged four docs `sources-fresh` STALE on the next `check` run: `codex-adapter-parity-gaps.md`, `debug-verb-selection.md`, `evidence-ledger-trust-boundary.md`, `policy-engine-producer-wiring.md`. Re-verified: none of the four cite the accepted-cost sentence or any other content this round's edits touch (they cite `docs/CLI.md` as a whole file or unrelated sections: the hook-entrypoints table, the `delegate` row, the ledger-producers section, or no line-anchored content at all); re-stamped their `timestamp:` field to this entry's timestamp. `npx okf-kit@0.10.0 check --json docs/okf` re-run against this commit: 0 stale / 0 warnings / 0 errors.
+
 - 2026-09-08T09:37:13Z, task `c88461c1` (review round 3 residual;
   task `1c4eb3ea`, rounds 1-2 of the batch-44 follow-up run,
   `.ai/runs/2026-09-08-open-pool-batch44`): REVERSES this file's own
@@ -16,9 +84,9 @@
   no longer goes silent on the same failure either: it now reports its
   own `kind: "layer_unresolvable"` warning on
   `SessionStartPreflightSetupVersionFinding`
-  (`src/cli/doctor/session-start-preflight-setup-version.ts:64#"layer_unresolvable"`,
+  (`src/cli/doctor/session-start-preflight-setup-version.ts:72#"layer_unresolvable"`,
   built directly by `doctor()` at
-  `src/cli/doctor/index.ts:1381#"layer_unresolvable"`), naming the
+  `src/cli/doctor/index.ts:1385#"layer_unresolvable"`), naming the
   layer path and the FIRST LINE of the parse error, counted in
   `warningCount`, rendered by `format.ts` as one warning line; round 1
   first shipped full silence here, round 1's own review found the
@@ -63,6 +131,8 @@
   and was re-anchored, re-verified green via `tests/decisions-
   citations-resolve.test.ts`.
 
+- 2026-09-08T09:35:00Z, task 65952a0c (implementer, review round 2, decision D-023): merged origin/master (task `9fec3839`'s `heading-section-empty` guard) first; this entry's own claim that the log was reconciled newest-first was false at the time (the `9fec3839` entry was left misordered beneath the round-1 entry below) and was fixed in round 3 (see the T-006 round-3 entry above). Fixed the round-1 HIGH: `quote-model-divergence.md:419`'s citation of `src/cli/init/templates.ts:928` was stale (this task's own template-literal edit moved the quoted sentence to `:940`); re-pointed, verified the quoted text ("bash_match's regex coverage of exotic shell shapes...") sits there verbatim, and corrected the round-1 entry's false "no cited line numbers moved" sentence in place (see below). Swept `rg -no "src/[A-Za-z0-9/._-]+\.ts:[0-9]+" docs/okf` against every file this task touches (`templates.ts`, `dependencies.ts`, `doctor/index.ts`, `session-start-preflight-setup-version.ts`, `session-start-preflight.ts`, `version-compare.ts`, `docs/CLI.md`): the only other line-numbered citations into those files live in `docs/decisions/2026-09-08-preflight-floors.md` itself (not this bundle), all re-verified/re-pointed there in the same commit; no further docs/okf drift found. `npx okf-kit@0.10.0 check docs/okf` flagged the same four docs `sources-fresh` STALE again against this round's `src/cli/doctor/index.ts` (message text) and `docs/CLI.md` (VERSION CAVEAT paragraph) edits as round 1 did, plus the two `docs/CLI.md`-citing docs: `codex-adapter-parity-gaps.md`, `debug-verb-selection.md`, `evidence-ledger-trust-boundary.md`, `pause-vs-gate-kill-switch.md`, `policy-engine-producer-wiring.md`, `quote-model-divergence.md` (the last already re-stamped above for its own citation fix). Re-verified: none of the six make a prose claim this round's edits touch (the message-string token-capture fix, the ADR's five-check enumeration, and the double-report/prerelease qualifier sentences are all new text these docs do not cite); `timestamp:` re-stamped on all six to this entry's timestamp. Other round-2 fixes per D-023: dropped both copies of the "the split hook and setup floors still agree in value today" cross-constant equality test (`tests/cli/init-dependencies.test.ts`, `tests/cli/init-full-template-pins.test.ts`; the source-identity pins already discriminate a swap) and reworded their assertion-failure messages, along with the third source-identity pin's message (`tests/cli/doctor-session-start-preflight-setup-version.test.ts`), to state the ADR-update intent instead of a bare "not found"; enumerated the five other prerelease-blind `min_version` floor checks (`tools.cli[]`/`tools.mcp[]` in `harness doctor`, `tools.cli[]` in `harness validate`, `memory.router`, policy-pack floors) by path in the ADR's scope note and the CHANGELOG's scope sentence, boundary stated as "hooks[] only, for now"; `parseProbedVersion` (`src/io/version-compare.ts`) now also returns a `token` field (the full probed version text up to whitespace, unlike `raw`, which the regex's `[0-9A-Za-z.]` suffix class truncates at a second hyphen), and both `checkHookVersion`'s warn/ok messages and `checkSessionStartPreflightSetupVersion`'s warn message quote `token` instead of `raw`/`actual`; `actualVersion` stays the numeric run (no new JSON field), documented on `HookVersionReport` and `SessionStartPreflightSetupVersionFinding`; a dotless-prerelease case (`0.6.0-beta`) and a multi-hyphen full-token case (`0.6.0-4-gabc123`) added to both `tests/cli/doctor.test.ts` and `tests/cli/doctor-session-start-preflight-setup-version.test.ts`; one ADR Consequences bullet and one `docs/CLI.md` sentence name the git-describe/platform-suffix false-positive class and its workaround; `docs/CLI.md`'s "regardless of whether the two floors' values happen to agree" sentence qualified to state when both fire vs. only one. Mutation probes via `agent-primitives probe --pre 'npm run build'`: the round-1 survivor (`version-compare.ts`'s suffix regex tightened to require an inner dot) now killed by the new dotless-prerelease tests; two new probes (the below_floor/ok messages reverted to the numeric run, and the `token` capture reverted to stop at the second hyphen) killed by the new multi-hyphen tests; the four round-1 killed probes (the two `templates.ts`/`session-start-preflight-setup-version.ts` floor-identifier swaps, the two `compareVersionFloor(actual, isPrerelease, ...)` -> `(actual, false, ...)` reversions) replayed and still killed. `npx okf-kit@0.10.0 check --json docs/okf` re-run against this commit: 0 stale / 0 warnings / 0 errors.
+
 - 2026-09-08T08:58:05Z, task `9fec3839` (implementer, review round 2,
   decision D-009): applied all seven low findings from `T-003` review
   round 1 to the `heading-section-empty` mirror added in `tests/decisions-
@@ -95,6 +165,8 @@
   disabled, the body-end boundary widened past the next heading)
   replayed and still killed. `npx okf-kit@0.10.0 check --json docs/okf`
   re-run against this commit: 0 stale / 0 warnings / 0 errors.
+
+- 2026-09-08T08:53:51Z, task 65952a0c (implementer): split the shared `SESSION_START_PREFLIGHT_SETUP_BUILD_MIN_VERSION` (task 6993d9b5) into two independent constants, `GIT_PREFLIGHT_HOOK_MIN_VERSION` (`src/cli/init/templates.ts`, feeds FULL_TEMPLATE's git-preflight hook `min_version` and `src/cli/init/dependencies.ts`'s wizard table) and `SESSION_START_PREFLIGHT_SETUP_BUILD_MIN_VERSION` (`src/schema/session-start-preflight.ts`, feeds only `harness doctor`'s session_start_preflight.setup check); both `"0.6.0"` today, decision `docs/decisions/2026-09-08-preflight-floors.md`. Also fixed both checks' version-probe parsing to reject a prerelease of the floor (`preflight 0.6.0-rc.1` previously parsed to `0.6.0` and silently passed a `0.6.0` floor): new `parseProbedVersion`/`compareVersionFloor` in `src/io/version-compare.ts`, wired into `checkHookVersion` (`src/cli/doctor/index.ts`, generic across every `hooks[]` entry) and `checkSessionStartPreflightSetupVersion`. `npx okf-kit@0.10.0 check docs/okf` flagged four docs `sources-fresh` STALE against the `src/cli/init/templates.ts`/`src/cli/doctor/index.ts` edits: `debug-verb-selection.md`, `evidence-ledger-trust-boundary.md`, `pause-vs-gate-kill-switch.md`, `quote-model-divergence.md`. Re-verified: none of the four cite prose this change touches (kill-switch policies, ledger-tag trust boundary, bash_match trigger patterns, and the generic doctor-pillars overview all describe unrelated behaviour, and the one shared prose claim, "installed vX < required Y" for a below-floor `min_version`, still holds verbatim); re-stamped their `timestamp:` field to this entry's timestamp. This sentence originally claimed "no citation re-pointing needed (no cited line numbers moved)"; that was false, corrected by the review-round-2 entry above: `quote-model-divergence.md:419` cites `src/cli/init/templates.ts:928` for the "bash_match's regex coverage of exotic shell shapes" sentence, and this task's own template-literal edit (12 net new lines above it) moved that sentence to `:940`, a drift this sweep missed. The docs/CLI.md VERSION CAVEAT edit that landed in the same task then flagged two MORE docs stale on the next `check` run (`codex-adapter-parity-gaps.md`, `policy-engine-producer-wiring.md`, both citing `docs/CLI.md`, the recurring `docs/CLI.md`/`CHANGELOG.md` class task `419ecfad` tracks): re-verified (the VERSION CAVEAT bullet is one logical line before and after the edit, so no other docs/CLI.md line shifted, and neither doc cites that bullet's content), re-stamped.
 
 - 2026-09-08T06:13:41Z, task c88461c1 (implementer, review round 3,
   decision D-028): scoped the derived project layer to

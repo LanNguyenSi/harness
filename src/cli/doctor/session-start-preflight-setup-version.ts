@@ -12,10 +12,10 @@
 // `min_version`/`version_command` (checked generically by
 // `checkHookVersion` in ./index.ts): that floor is whatever the
 // operator's own manifest declares, and existing manifests generated
-// before this task still carry the pre-existing 0.2.0 floor (bumped to
-// `SESSION_START_PREFLIGHT_SETUP_BUILD_MIN_VERSION` in the `init`
-// template only going forward, task 6993d9b5's second commit). This
-// check hardcodes the build-capable floor so an operator on an
+// before task 6993d9b5 still carry the pre-existing 0.2.0 floor (bumped
+// to `GIT_PREFLIGHT_HOOK_MIN_VERSION`, src/cli/init/templates.ts, in the
+// `init` template only going forward, task 6993d9b5's second commit).
+// This check hardcodes the build-capable floor so an operator on an
 // unregenerated manifest still gets the warning the moment they flip
 // `setup: true`, rather than only after re-running `harness init`.
 //
@@ -27,12 +27,20 @@
 // this check guards the `--setup` build-step feature specifically, and
 // a stale preflight breaks both independently.
 //
+// SPLIT FROM THE HOOK FLOOR (task 65952a0c, docs/decisions/2026-09-08-
+// preflight-floors.md): this check's floor,
+// `SESSION_START_PREFLIGHT_SETUP_BUILD_MIN_VERSION`, and the hook
+// floor above, `GIT_PREFLIGHT_HOOK_MIN_VERSION`, were ONE shared
+// constant through task 6993d9b5. Both are `"0.6.0"` today and can
+// diverge on a future bump that applies to only one rationale; see the
+// ADR for the bump rule each carries.
+//
 // Silent (returns `undefined`) whenever `session_start_preflight.setup`
 // is `false`/absent: the trust exposure and the install/build cost only
 // exist once the knob is actually on, mirroring every other advisory
 // doctor check's "no opinion when the feature isn't in use" gate.
 
-import { compareNumericVersions } from "../../io/version-compare.js";
+import { parseProbedVersion, compareVersionFloor } from "../../io/version-compare.js";
 import { PREFLIGHT_BIN } from "../session-start/index.js";
 import { SESSION_START_PREFLIGHT_SETUP_BUILD_MIN_VERSION } from "../../schema/session-start-preflight.js";
 import type { Manifest } from "../../schema/index.js";
@@ -62,7 +70,20 @@ export interface SessionStartPreflightSetupVersionFinding {
    * silence this kind replaces.
    */
   kind: "below_floor" | "probe_failed" | "parse_failed" | "layer_unresolvable";
-  /** Parsed installed version, when the probe succeeded and parsed. Null otherwise. */
+  /**
+   * Parsed installed version, when the probe succeeded and parsed.
+   * Null otherwise. Always the NUMERIC run (`parseProbedVersion`'s
+   * `version` field, e.g. "0.6.0"), never the probed prerelease/build
+   * suffix: for a `below_floor` finding caused by a prerelease of the
+   * floor (e.g. probed "0.6.0-rc.1" against a "0.6.0" `requiredVersion`),
+   * `actualVersion` therefore equals `requiredVersion` even though
+   * `kind` is `"below_floor"`: the numeric components tie, and
+   * `compareVersionFloor`'s prerelease tie-break is what actually
+   * failed the floor. `message` carries the full probed token
+   * (including the suffix) for the human-facing distinction; this
+   * field's JSON shape does not gain a new field for it. See
+   * docs/decisions/2026-09-08-preflight-floors.md.
+   */
   actualVersion: string | null;
   /** Always `SESSION_START_PREFLIGHT_SETUP_BUILD_MIN_VERSION` today; carried on the finding so format.ts never re-imports the constant. */
   requiredVersion: string;
@@ -132,8 +153,11 @@ export function checkSessionStartPreflightSetupVersion(
         `build step needs preflight >= ${required}`,
     });
   }
-  const m = stdout.match(/(\d+(?:\.\d+){0,3})/);
-  if (!m || !m[1]) {
+  // parseProbedVersion/compareVersionFloor (not plain compareNumericVersions):
+  // a preflight release candidate of the floor (e.g. "0.6.0-rc.1") must not
+  // count as build-capable. See docs/decisions/2026-09-08-preflight-floors.md.
+  const parsed = parseProbedVersion(stdout);
+  if (!parsed) {
     return withProjectName({
       kind: "parse_failed",
       actualVersion: null,
@@ -143,15 +167,15 @@ export function checkSessionStartPreflightSetupVersion(
         `be parsed from "${stdout.trim()}"; the build step needs preflight >= ${required}`,
     });
   }
-  const actual = m[1];
-  if (compareNumericVersions(actual, required) < 0) {
+  const { version: actual, isPrerelease, token } = parsed;
+  if (compareVersionFloor(actual, isPrerelease, required) < 0) {
     return withProjectName({
       kind: "below_floor",
       actualVersion: actual,
       requiredVersion: required,
       message:
-        `session_start_preflight.setup is enabled but installed preflight v${actual} < ${required}: ` +
-        `--setup on v${actual} is dependency-install only (no build step); upgrade preflight ` +
+        `session_start_preflight.setup is enabled but installed preflight v${token} < ${required}: ` +
+        `--setup on v${token} is dependency-install only (no build step); upgrade preflight ` +
         `(npm i -g @lannguyensi/agent-preflight) or set session_start_preflight.setup: false`,
     });
   }
