@@ -9,6 +9,7 @@ import {
 } from "../overrides/machines.js";
 import { ManifestParseError, parseManifest, type Manifest } from "../schema/index.js";
 import { resolveHomeDir } from "../runtime/home-dir.js";
+import { isValidProjectName } from "../runtime/git-context.js";
 import { withDerivedPolicies } from "../runtime/workflow-policies.js";
 import { EX_NOINPUT, HarnessExitError } from "./exit-codes.js";
 
@@ -77,8 +78,22 @@ export function resolvePaths(opts: LoaderOptions = {}): ResolvedPaths {
     if (fs.existsSync(candidatePath)) machineLayers.push(candidatePath);
   }
 
+  // Defense in depth (task c88461c1, review round 3 residual, decision
+  // D-006 of the follow-up run): `deriveProjectName`
+  // (`src/runtime/git-context.ts`) already validates the name it
+  // returns with the SAME `isValidProjectName` guard at every one of
+  // its own exits, so a value reaching this sink through that helper
+  // is already safe. This check guards the sink itself, for an
+  // `opts.project` that reaches `resolvePaths` from anywhere else (a
+  // caller building `LoaderOptions` by hand, a future producer that
+  // feeds an unvalidated string through `--project`), so a name like
+  // `".."` or one containing a path separator can never be joined into
+  // `<home>/projects/<name>/harness.overrides.yaml` regardless of
+  // where it came from. An invalid name is treated exactly like "no
+  // project layer on disk" (`projectLayer: null`), matching the
+  // existing "file does not exist" degrade below, not a thrown error.
   let projectLayer: string | null = null;
-  if (opts.project) {
+  if (opts.project && isValidProjectName(opts.project)) {
     const projectPath = path.join(
       home,
       "projects",

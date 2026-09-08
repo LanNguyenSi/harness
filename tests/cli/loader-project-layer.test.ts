@@ -97,3 +97,36 @@ describe("loadManifest: a project layer cannot scope session_start_preflight.set
     expect(manifest.session_start_preflight).toEqual({ setup: false });
   });
 });
+
+// Residual of task c88461c1's review round 3 (T-004 of the follow-up
+// batch, decision D-006): `isValidProjectName` (`src/runtime/
+// git-context.ts`) already guards every `deriveProjectName` exit, but
+// `resolvePaths`' own `path.join` sink had no equivalent check of its
+// own, defense in depth for an `opts.project` reaching this function
+// from anywhere else. `".."` is the shape a crafted/un-normalized
+// `commondir` used to produce before `deriveProjectName`'s own fix
+// (`tests/runtime/git-context.test.ts`); here it is passed straight to
+// `resolvePaths` as if a caller had bypassed derivation entirely.
+describe("resolvePaths: rejects an unsafe opts.project at its own path.join sink (task c88461c1, review round 3 residual, decision D-006)", () => {
+  it("resolves NO project layer for opts.project: '..', even though a matching directory exists one level up", () => {
+    // `path.join(home, "projects", "..", "harness.overrides.yaml")`
+    // resolves to `<home>/harness.overrides.yaml`; write a file there
+    // so an un-guarded sink would find something to point at.
+    fs.writeFileSync(path.join(tmpHome, "harness.overrides.yaml"), PROJECT_LAYER);
+    const resolved = resolvePaths({ homeDir: tmpHome, project: ".." });
+    expect(resolved.projectLayer).toBeNull();
+  });
+
+  it("keeps loadManifest on the base manifest's value for opts.project: '..'", () => {
+    fs.writeFileSync(path.join(tmpHome, "harness.overrides.yaml"), PROJECT_LAYER);
+    const { manifest } = loadManifest({ homeDir: tmpHome, project: ".." });
+    expect(manifest.session_start_preflight).toEqual({ setup: true });
+  });
+
+  it("still resolves a valid opts.project name, unaffected by the new guard", () => {
+    const resolved = resolvePaths({ homeDir: tmpHome, project: PROJECT_NAME });
+    expect(resolved.projectLayer).toBe(
+      path.join(tmpHome, "projects", PROJECT_NAME, "harness.overrides.yaml"),
+    );
+  });
+});
