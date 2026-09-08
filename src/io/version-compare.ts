@@ -78,7 +78,7 @@ export function parseProbedVersion(
  * `checkSessionStartPreflightSetupVersion`
  * (src/cli/doctor/session-start-preflight-setup-version.ts).
  * Deliberately NOT wired into the `tools.cli[]` / `tools.mcp[]` version
- * checks in the same file — see the ADR's scope note.
+ * checks in the same file; see the ADR's scope note.
  */
 export function compareVersionFloor(a: string, aIsPrerelease: boolean, b: string): number {
   const cmp = compareNumericVersions(a, b);

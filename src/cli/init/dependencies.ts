@@ -118,7 +118,7 @@ export const PROFILE_DEPENDENCIES: Record<Exclude<ProfileChoice, "custom">, Prof
       // src/cli/init/templates.ts), the hook floor, not the separate
       // setup floor `harness doctor`'s session_start_preflight.setup
       // check enforces
-      // (src/cli/doctor/session-start-preflight-setup-version.ts) —
+      // (src/cli/doctor/session-start-preflight-setup-version.ts),
       // split by task 65952a0c
       // (docs/decisions/2026-09-08-preflight-floors.md), both "0.6.0"
       // today. This wizard-facing table must never advertise a floor
