@@ -1340,6 +1340,28 @@ export async function doctor(opts: DoctorOptions = {}): Promise<DoctorReport> {
       sessionStartPreflightProjectName = attemptedSessionStartPreflightProjectName;
     }
   } catch (err) {
+    // KNOWN UNREACHABLE TODAY, kept as defense-in-depth (task
+    // `1c4eb3ea`, round 2 mutation-probe replay found the round-1
+    // probe on this exact line now SURVIVES, traced to this
+    // invariant): `doctor()`'s own PLAIN, unscoped `loadManifest(opts)`
+    // call at the very top of this function already reads the base
+    // manifest and every applicable machine-override layer
+    // `scopedLoadOpts` below ALSO reads (`scopedLoadOpts` differs from
+    // `opts` ONLY by adding `project`); that call has already
+    // succeeded by the time this line runs (a base/machine parse
+    // failure would have made `doctor()` itself reject before this
+    // point), so a throw reaching this catch can only come from the
+    // project layer scopedLoadOpts.project adds. `resolvePaths(scopedLoadOpts).projectLayer`
+    // therefore always resolves non-null here in every real
+    // invocation; the null-check below (and this degrade) exist only
+    // so a FUTURE change to that "plain load first" invariant fails
+    // safe (silent, matching the producer's own `setupEnabled` catch)
+    // instead of leaking a stale pre-failure value, not because any
+    // fixture in this task's own suite can exercise it: constructing
+    // one would require the scoped load to fail for a reason the
+    // already-successful plain load could not also have hit, which is
+    // structurally impossible given the two calls read the identical
+    // base/machine layers.
     sessionStartPreflightManifest = {
       ...manifest,
       session_start_preflight: { ...manifest.session_start_preflight, setup: false },
