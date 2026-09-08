@@ -172,9 +172,10 @@ here.
   to warrant collapsing the generic hook floor check for
   `git-preflight` specifically into the setup check (would need its own
   design, not assumed here).
-- The `tools.cli[]` / `tools.mcp[]` checks are asked to also reject
-  prereleases; revisit the scope note above rather than assuming the
-  same fix applies unexamined.
+- Any of the five prerelease-blind min_version floor checks listed in
+  the scope note above is asked to also reject prereleases; revisit the
+  scope note above rather than assuming the same fix applies
+  unexamined.
 
 ## Consequences
 
@@ -204,7 +205,11 @@ here.
 - Accepted cost: a `hooks[]` entry whose `version_command` reports a
   git-describe suffix (`0.6.0-4-gabc123`) or a platform suffix
   (`0.6.0-linux-x64`) now also reads `below_floor` even when the
-  underlying release genuinely meets the floor, since both shapes carry
-  a `-` suffix the same way a real prerelease does. Workaround: lower
-  that hook's `min_version` below its currently-installed version, or
-  drop `version_command`/`min_version` from that hook entry entirely.
+  underlying release genuinely meets the floor, when its numeric run
+  exactly equals the floor (`compareVersionFloor` returns the numeric
+  comparison outright whenever it is non-zero, so the prerelease
+  tie-break only bites on an exact numeric tie), since both shapes
+  carry a `-` suffix the same way a real prerelease does. Workaround:
+  lower that hook's `min_version` below its currently-installed
+  version, or drop `version_command`/`min_version` from that hook entry
+  entirely.

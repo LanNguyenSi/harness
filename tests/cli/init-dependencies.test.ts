@@ -1,4 +1,3 @@
-import { readFileSync } from "node:fs";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -88,7 +87,7 @@ describe("dependenciesForProfile — chain composition", () => {
   // unnoticed. Reading the source text and asserting which identifier
   // the `minVersion:` line interpolates is what catches that swap.
   it("dependencies.ts's minVersion field reads the HOOK floor identifier, not the setup floor", () => {
-    const src = readFileSync(new URL("../../src/cli/init/dependencies.ts", import.meta.url), "utf8");
+    const src = fs.readFileSync(new URL("../../src/cli/init/dependencies.ts", import.meta.url), "utf8");
     const minVersionLine = src
       .split("\n")
       .find((line) => line.trim().startsWith("minVersion:") && line.includes("MIN_VERSION"));

@@ -2094,6 +2094,36 @@ tools:
     });
   });
 
+  // Reviewer round 2 (T-006 R2, medium): the ok path was unpinned.
+  // Mutating the `status: "ok"` message from `v${token} ...` to
+  // `v${actual} ...` survived every existing test because none probed
+  // a token whose `token` (full probed suffix) diverges from `actual`
+  // (the numeric run `parseProbedVersion` returns). A prerelease of
+  // the floor that still meets it (`min_version` below the probed
+  // numeric run) exercises exactly that divergence.
+  it("emits ok using the full probed token, not just the numeric run, when the probed hook version is a prerelease above min_version", async () => {
+    const home = makeFixture({
+      "harness.yaml": buildManifest(`  - name: ok-hook-prerelease
+    event: SessionStart
+    command: /usr/bin/true
+    blocking: false
+    min_version: "0.6.0"
+    version_command: [my-hook-bin, "--version"]`),
+    });
+    const report = await doctor({
+      configPath: path.join(home, "harness.yaml"),
+      homeOverride: home,
+      mcpProbe: new FakeProbe({}),
+      versionProbe: () => "my-hook-bin v0.7.0-rc.1\n",
+      pathEnv: "",
+      npmBinExec: STUB_NPM_BIN_EXEC_UNKNOWN,
+    });
+    expect(report.hooks[0]?.version).toEqual({
+      status: "ok",
+      message: "v0.7.0-rc.1 ≥ 0.6.0",
+    });
+  });
+
   // Prerelease decision (task 65952a0c, docs/decisions/2026-09-08-
   // preflight-floors.md): checkHookVersion is the generic hooks[]
   // min_version check, shared across every hook that declares one

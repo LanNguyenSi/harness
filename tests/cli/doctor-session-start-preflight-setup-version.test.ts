@@ -66,12 +66,11 @@ tools:
 `;
 }
 
-// task 6993d9b5, criterion 1: the shared floor constant this whole check
-// (and the init template's git-preflight min_version, in the sibling
-// bump commit) hangs off. Pinned here so a drift between the two
-// literals shows up as a failing assertion, not a silent divergence.
+// task 6993d9b5, criterion 1, split by task 65952a0c: the SETUP floor
+// constant this check hangs off. Pinned here so a change to its value
+// shows up as a failing assertion, not a silent drift.
 describe("checkSessionStartPreflightSetupVersion (task 6993d9b5)", () => {
-  it("pins the required floor to the shared constant", () => {
+  it("pins the setup floor's value", () => {
     expect(SESSION_START_PREFLIGHT_SETUP_BUILD_MIN_VERSION).toBe("0.6.0");
   });
 
@@ -205,6 +204,11 @@ describe("checkSessionStartPreflightSetupVersion (task 6993d9b5)", () => {
     expect(finding?.actualVersion).toBe("0.6.0");
     expect(finding?.message).toContain("v0.6.0-4-gabc123 <");
     expect(finding?.message).not.toContain("v0.6.0-4 <");
+    // Reviewer round 2 (T-006 R2, low): the pin above only covers the
+    // first of the message's two `${token}` interpolations. The
+    // second, in the "--setup on v${token} is dependency-install only"
+    // clause, is unpinned by the first assertion alone.
+    expect(finding?.message).toContain("--setup on v0.6.0-4-gabc123 is dependency-install only");
   });
 
   it("warns fail-loud (not silent) when setup is true and the probe returns nothing", () => {
