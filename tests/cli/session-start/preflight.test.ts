@@ -1827,3 +1827,64 @@ describe("HEAD-binding order (task 30183330, guards preflight tag semantics)", (
     expect(writes[0]).not.toContain(mutatedSha);
   });
 });
+
+// Residual of task c88461c1's review round 3 (T-004 of the follow-up
+// batch, decision D-006): the `setupEnabled` catch degraded to `setup:
+// false` with NO trace anywhere of why, even though the scoped-load
+// failure is exactly the shape an operator debugging "why did my
+// project layer not apply" would want a pointer for. This drives that
+// catch into a genuine failure (a malformed cwd-derived project layer)
+// and asserts ONE stderr line naming the layer's path, while the run
+// still proceeds (never aborts) with setup:false.
+describe("runSessionStartPreflight: setupEnabled catch names the failed layer path on stderr (task c88461c1, review round 3 residual, decision D-006)", () => {
+  function writeBaseManifest(home: string, setup: boolean): void {
+    fs.writeFileSync(
+      path.join(home, "harness.yaml"),
+      [
+        "version: 1",
+        "hooks: []",
+        "policies: []",
+        "tools:",
+        "  builtin:",
+        "    known: [Read, Edit]",
+        "session_start_preflight:",
+        `  setup: ${setup}`,
+        "",
+      ].join("\n"),
+    );
+  }
+
+  it("names the project layer path on stderr and degrades to setup:false, never aborting the run", async () => {
+    const repoName = "setup-unresolvable-repo";
+    const repo = makeRepoFixture(repoName);
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "harness-sspf-unresolvable-home-"));
+    cleanups.push(() => fs.rmSync(home, { recursive: true, force: true }));
+    // The base manifest says setup:true; if the failed scoped load
+    // somehow still let this value through, the assertion below on
+    // seenArgs would see setup:true instead.
+    writeBaseManifest(home, true);
+    const projectDir = path.join(home, "projects", repoName);
+    fs.mkdirSync(projectDir, { recursive: true });
+    const layerPath = path.join(projectDir, "harness.overrides.yaml");
+    // Malformed YAML (an unterminated flow mapping): the scoped
+    // `loadManifest` call throws while parsing this layer.
+    fs.writeFileSync(layerPath, "session_start_preflight: {setup: true\n");
+
+    const seenArgs: Array<{ cwd: string; timeoutMs: number; setup: boolean }> = [];
+    const { stream: err, output: errOut } = captureStream();
+    const result = await runSessionStartPreflight({
+      stdin: streamFrom(JSON.stringify({ session_id: "s", cwd: repo })),
+      stderr: err,
+      homeDir: home,
+      runPreflight: async (cwd, timeoutMs, setup) => {
+        seenArgs.push({ cwd, timeoutMs, setup });
+        return { ok: true, json: { ready: true, confidence: 0.9, checks: [] } };
+      },
+      writeLedger: async () => ({ ok: true }),
+    });
+    expect(result.wrote).toBe(true);
+    expect(seenArgs).toEqual([{ cwd: repo, timeoutMs: 60_000, setup: false }]);
+    expect(errOut()).toContain(layerPath);
+    expect(errOut()).toContain("degrading to setup: false");
+  });
+});

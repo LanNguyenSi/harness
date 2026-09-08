@@ -622,14 +622,41 @@ export async function runSessionStartPreflight(
   // `fs.existsSync` check), so nothing extra is merged in that case.
   // See docs/CLI.md's `session_start_preflight.setup` Notes for the
   // full rule.
+  const sessionStartPreflightProjectName = opts.project ?? deriveProjectName(cwd) ?? repo;
   const setupEnabled = (() => {
     try {
       const manifest =
         opts.manifest ??
-        loadManifest({ ...opts, project: opts.project ?? deriveProjectName(cwd) ?? repo })
-          .manifest;
+        loadManifest({ ...opts, project: sessionStartPreflightProjectName }).manifest;
       return manifest.session_start_preflight.setup;
-    } catch {
+    } catch (err) {
+      // One diagnostic line naming the layer path (task c88461c1,
+      // review round 3 residual, decision D-006): a scoped-load
+      // failure here was silent everywhere before this task, degrading
+      // straight to `setup: false` with no trace of WHY. Best-effort:
+      // only fires when `!opts.manifest` (an injected manifest never
+      // reaches `loadManifest` above, so a throw from THAT branch would
+      // be a caller bug, not a layer failure) and only names the layer
+      // path when `resolvePaths` itself can resolve one (its own
+      // "refused to fall back to the real harness home dir" test-safety
+      // throw, see loader.ts, is swallowed here rather than surfaced as
+      // a misleading "layer failed to load" line).
+      if (!opts.manifest) {
+        try {
+          const layerPath = resolvePaths({
+            ...opts,
+            project: sessionStartPreflightProjectName,
+          }).projectLayer;
+          if (layerPath !== null) {
+            note(
+              `session_start_preflight.setup: project layer ${layerPath} failed to load ` +
+                `(${err instanceof Error ? err.message : String(err)}); degrading to setup: false`,
+            );
+          }
+        } catch {
+          /* best-effort diagnostic only; setup:false below still happens */
+        }
+      }
       return false;
     }
   })();
