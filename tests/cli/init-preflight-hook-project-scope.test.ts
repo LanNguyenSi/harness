@@ -6,8 +6,8 @@
 // once by `harness init` and then invoked unchanged on every session,
 // in every repository that shares the same `~/.harness/harness.yaml`.
 // A single hardcoded `--project <name>` baked into that string could
-// therefore only ever name ONE project — the same one for every
-// repository the hook runs in — which is worse than no scoping at all;
+// therefore only ever name ONE project, the same one for every
+// repository the hook runs in, which is worse than no scoping at all;
 // see the entry these two facts justify (`resolvePaths`, `src/cli/
 // loader.ts`, resolves a project override layer only when
 // `LoaderOptions.project` is set, pinned separately by

@@ -600,8 +600,8 @@ export async function runSessionStartPreflight(
   // CLI's `--project <name>`) still wins outright. Otherwise this
   // producer derives a project name from `cwd` via the shared
   // `deriveProjectName` helper (review round 2, decision D-021a:
-  // resolves to the MAIN checkout's directory name — the basename of
-  // the directory containing the repository's shared git common dir —
+  // resolves to the MAIN checkout's directory name, the basename of
+  // the directory containing the repository's shared git common dir ,
   // so every linked worktree of one repository shares the same
   // project layer, unlike `repo` above, which names the checkout
   // directory itself and differs per worktree) and feeds it through

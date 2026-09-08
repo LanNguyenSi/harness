@@ -284,7 +284,7 @@ export function resolveCommonDir(gitDir: string): string {
 // matched the name an operator would naturally pick for the shared
 // project override file. `repo` stays exactly as-is for its existing
 // consumer (the `preflight:${REPO}` ledger tag, `src/cli/session-start/
-// index.ts`) — a ledger tag namespaced per CHECKOUT is a defensible,
+// index.ts`), a ledger tag namespaced per CHECKOUT is a defensible,
 // unrelated design choice, and changing it is out of this task's scope.
 // This is a SEPARATE derivation for a SEPARATE purpose: naming the
 // `<home>/projects/<name>/harness.overrides.yaml` layer that should
@@ -295,7 +295,7 @@ export function resolveCommonDir(gitDir: string): string {
  * Derive the project-layer name for `cwd`: the basename of the
  * directory that CONTAINS the repository's shared git common dir (the
  * main checkout), so every linked worktree of one repository resolves
- * the same name — unlike `resolveGitContext(cwd).repo`, which names the
+ * the same name, unlike `resolveGitContext(cwd).repo`, which names the
  * checkout directory itself and therefore differs per worktree. Feeds
  * `LoaderOptions.project` (the same seam every command's own
  * `--project <name>` flag already uses) for `harness session-start
@@ -312,10 +312,10 @@ export function resolveCommonDir(gitDir: string): string {
  *  - The COMMON DIR's basename is normally literally `.git` (a
  *    directory or, in a linked worktree's private gitdir, the resolved
  *    target of a `.git` FILE): in that shape the project name is one
- *    level further up — the basename of the directory THAT CONTAINS the
+ *    level further up, the basename of the directory THAT CONTAINS the
  *    common dir, i.e. the main checkout's own directory name.
  *  - For a BARE repository (`git init --bare`, or a linked worktree
- *    created FROM one), there is no `.git` wrapper at all — the common
+ *    created FROM one), there is no `.git` wrapper at all, the common
  *    dir IS the bare directory itself (its basename is not `.git`), so
  *    that basename is the project name directly, with no extra `..`
  *    step. This is the one shape where going up an extra level would
@@ -323,7 +323,7 @@ export function resolveCommonDir(gitDir: string): string {
  *
  * Returns `null` when `cwd` is not inside a git work tree (mirrors
  * `resolveGitContext`'s "" for the same case) or when `entry.gitDir`
- * could not be resolved at all (an unreadable `.git` FILE — see
+ * could not be resolved at all (an unreadable `.git` FILE, see
  * `findGitEntry`'s doc comment); in the latter case this falls back to
  * the checkout directory's own basename (the same value `repo` would
  * carry), rather than guessing at a common dir it has no path to.

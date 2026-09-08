@@ -65,7 +65,7 @@ import { z } from "zod";
 // name is the basename of the MAIN checkout (the directory containing
 // the repository's shared git common dir, `resolveCommonDir` /
 // `deriveProjectName` in `src/runtime/git-context.ts`), NOT the cwd's
-// own checkout directory — every linked worktree (`git worktree add`)
+// own checkout directory, every linked worktree (`git worktree add`)
 // of one repository resolves the identical project layer this way. A
 // bare repository has no `.git` wrapper to step up from, so its own
 // directory's basename applies directly. This is deliberately a

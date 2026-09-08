@@ -83,7 +83,7 @@ describe("loadManifest: a project layer cannot scope session_start_preflight.set
     const { manifest, resolved } = loadManifest({ homeDir: tmpHome });
     expect(resolved.projectLayer).toBeNull();
     // The on-disk project layer says `setup: false`. If it were merged,
-    // this would read false — but a project layer only ever narrows the
+    // this would read false, but a project layer only ever narrows the
     // key when a caller derives or passes a `LoaderOptions.project`
     // (`harness session-start preflight`'s cwd-derived name, or an
     // explicit `--project`), pinned separately below and in

@@ -355,7 +355,7 @@ describe("explainPolicy: session_start_preflight.source (task c88461c1)", () => 
   // `explain-policy` printing `source: base` / `setup: false` in the
   // SAME cwd where the producer (`harness session-start preflight`)
   // actually read a project layer and passed `--setup true`, because
-  // `explainPolicy` never derived a project name from its own cwd —
+  // `explainPolicy` never derived a project name from its own cwd ,
   // only an explicit `--project` reached the loader. This test drives
   // `explainPolicy` with NO `project` opt, only `cwd`, in a repo that
   // HAS a matching project layer on disk, and asserts it now agrees
@@ -394,7 +394,7 @@ describe("explainPolicy: session_start_preflight.source (task c88461c1)", () => 
   // Review round 2, finding: a layer that TOMBSTONES the key (`{setup:
   // null}`, honoured by `mergeValue` in src/overrides/merge.ts as
   // "delete the merged key, letting the schema default win") is just as
-  // much a declaration by that layer as `setup: true`/`false` — round-1's
+  // much a declaration by that layer as `setup: true`/`false`, round-1's
   // `layerDeclaresSetup` only recognized a literal boolean, so it would
   // have attributed this decision to whichever LOWER layer happens to
   // also set a boolean (here, the machine layer), naming the wrong
@@ -417,7 +417,7 @@ describe("explainPolicy: session_start_preflight.source (task c88461c1)", () => 
       project: "tombstone-project",
     });
     // The tombstone deletes the merged key entirely, so the schema
-    // default (false) wins — but the PROJECT layer is what decided that,
+    // default (false) wins, but the PROJECT layer is what decided that,
     // not the machine layer underneath it (which said `true`).
     expect(projection.session_start_preflight).toEqual({ setup: false, source: "project" });
   });

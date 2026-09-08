@@ -1178,7 +1178,7 @@ export async function doctor(opts: DoctorOptions = {}): Promise<DoctorReport> {
   // `checkSessionStartPreflightSetupVersion` further down: without this,
   // that check judged only the base/machine-override value, so it could
   // warn (or stay silent) against the WRONG effective value for a repo
-  // whose cwd-derived project layer flips `setup` the other way — the
+  // whose cwd-derived project layer flips `setup` the other way, the
   // exact drift the producer (src/cli/session-start/index.ts) and
   // `explain-policy` do not have, since both already derive from cwd.
   const { manifest, resolved } = loadManifest({

@@ -1496,7 +1496,7 @@ describe("runSessionStartPreflight: per-repo scoping via cwd-derived project nam
     expect(seenArgs).toEqual([{ cwd: repo, timeoutMs: 60_000, setup: true }]);
     // Review round 2: a repo with no matching project layer degrades
     // silently, per the documented "no error, no warning" contract
-    // (docs/CLI.md's PER-REPO SCOPING note) — the ONLY stderr line is
+    // (docs/CLI.md's PER-REPO SCOPING note), the ONLY stderr line is
     // the normal success note every ready:true run writes, with no
     // additional warning/error line about the missing project layer.
     expect(errOut()).toBe(

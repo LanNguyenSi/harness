@@ -1,7 +1,8 @@
 import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it } from "vitest";
 
 // Guard for task `6f719bb4` (agent-tasks): every source citation in
 // docs/decisions/*.md must resolve to the code it describes, on the
@@ -245,6 +246,456 @@ describe("CITATION_RE does not extract citation-shaped non-citations", () => {
     expect(
       found,
       `expected zero citations in the negative-grammar fixture, found: ${JSON.stringify(found)}`,
+    ).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Heading-section citation guard (task `ee494719`).
+//
+// Tasks `419ecfad` (PR #514) and `4f0abbc8` (PR #516) replaced `CHANGELOG.md`
+// as a frontmatter `sources:` entry on five bundle docs with okf-kit's
+// heading-section citation form, `` `CHANGELOG.md:#0.x.y` `` (see
+// docs/okf/index.md's "Do not list CHANGELOG.md under a doc's frontmatter
+// sources:" note). CITATION_RE above only extracts `path:N[-M]` citations,
+// so none of these 28 heading citations was covered by a BLOCKING check;
+// only okf-kit's `citations-resolve` rule, run through the warn-only
+// `okf-staleness` CI job, resolves them, so a renamed or removed
+// `## [x.y.z]` CHANGELOG section only warns, never blocks. This section
+// closes that gap in-repo.
+//
+// Grammar mirrored from okf-kit (agent-dx/packages/okf-kit's
+// src/rules/citations-resolve.ts, `HEADING_SECTION_CITATION_RE` and
+// `findHeadingSection`): a backtick-wrapped `path.md:#heading` citation,
+// where `heading` is a bare or single-`[...]`-wrapped token. Resolution
+// mirrors that rule's semantics: the target's nearest Markdown heading of
+// level <= 2 (subsection headings are transparent, same
+// `ANCHOR_HEADING_MAX_LEVEL` reasoning: a Keep-a-Changelog CHANGELOG.md
+// nests identically-named `### Added`/`### Changed`/`### Fixed`
+// subsections inside every `## [x.y.z]` release) whose text CONTAINS the
+// anchor text, scanning only actual heading lines (never a whole-file
+// substring search, which would also match the anchor text sitting in
+// ordinary prose that is not a heading at all).
+//
+// STRICTER-THAN-OKF-KIT rule, deliberately scoped to this guard only: for
+// a target file whose basename is exactly `CHANGELOG.md`, the matched
+// heading line must additionally take the file's own canonical
+// `## [x.y.z]` bracket form (optionally followed by more text, e.g. a
+// trailing " - 2026-09-05" date). okf-kit's own "contains" semantics stay
+// deliberately loose across the whole OKF spec (a heading-section
+// citation can point at any `.md` target, not just a CHANGELOG), so this
+// extra check lives here, not upstream: it is specific to how THIS repo's
+// CHANGELOG.md is shaped, not a spec-level requirement every heading-form
+// consumer must satisfy.
+//
+// MIRROR PIN: this section mirrors okf-kit@0.10.0's
+// `HEADING_SECTION_CITATION_RE` / `findHeadingSection` /
+// `checkHeadingSectionTarget` (agent-dx's `packages/okf-kit`, the exact
+// version this repo's `.github/workflows/okf-staleness.yml` pins via
+// `npx okf-kit@0.10.0`), not "okf-kit" generically; a future okf-kit bump
+// that changes this rule's semantics does not automatically update this
+// guard.
+//
+// SCOPE CUT vs okf-kit (a real, deliberate gap, not an oversight): path
+// resolution here is repo-root-relative ONLY. okf-kit instead tries, in
+// order, the citing doc's own frontmatter `sources:`, doc-relative, each
+// ancestor directory up to the repo root, repo-root-relative, and finally
+// a repo-wide suffix search -- so a sibling-relative citation written
+// from inside `docs/okf/`, e.g. `` `log.md:#Overview` `` referring to
+// `docs/okf/log.md`, resolves upstream (through the doc-relative /
+// ancestor steps) but is reported `missing file` here, since this guard
+// never tries anything but the literal repo-root-relative path. Every
+// heading citation actually written in this bundle already uses a full
+// repo-root-relative path (or a bare `CHANGELOG.md`, which needs no
+// resolving either way), so this gap has not yet produced a false
+// `missing-file` in practice; it would if a future citation used a
+// sibling-relative form instead.
+//
+// COVERAGE ADDED THIS ROUND: the optional content anchor,
+// `` `path.md:#heading#"text"` ``, is now also extracted and checked --
+// the quoted text must occur on exactly one line inside the resolved
+// heading's section body, mirroring okf-kit's
+// `heading-section-content-anchor-not-found` /
+// `-ambiguous` findings. Before this round, a content-anchored citation
+// silently matched nothing (the regex required the closing backtick
+// immediately after the heading token) and so was never checked here at
+// all -- a doc author reaching for the stronger, content-anchored form
+// silently LOST this guard's blocking coverage rather than gaining
+// precision.
+const HEADING_CITATION_RE =
+  /`([A-Za-z0-9_./-]+\.md):#(\[?[\w.-]+\]?)(?:#("[^"\n`]+"))?`/g;
+const HEADING_LINE_RE = /^(#{1,6})\s+(.*)$/;
+const HEADING_MAX_LEVEL = 2;
+const MD_FENCE_DELIM_RE = /^(?:`{3,}\S*|~{3,}\S*)$/;
+
+interface HeadingCitation {
+  file: string; // citing doc, repo-relative, for error messages
+  docLine: number; // 1-based line number within the citing doc
+  raw: string; // the full matched token, for error messages
+  citedPath: string; // repo-relative path the citation names
+  headingText: string; // anchor text with a single wrapping [...] stripped
+  contentAnchor: string | undefined; // quoted text with quotes stripped, if given
+}
+
+function parseHeadingAnchorText(raw: string): string {
+  return raw.startsWith("[") && raw.endsWith("]") ? raw.slice(1, -1) : raw;
+}
+
+function parseContentAnchorText(raw: string | undefined): string | undefined {
+  if (raw === undefined) return undefined;
+  // raw is the quoted match INCLUDING its surrounding double quotes.
+  return raw.slice(1, -1);
+}
+
+function extractHeadingCitations(docFile: string, text: string): HeadingCitation[] {
+  const citations: HeadingCitation[] = [];
+  const lines = text.split("\n");
+  lines.forEach((lineText, idx) => {
+    HEADING_CITATION_RE.lastIndex = 0;
+    let m: RegExpExecArray | null;
+    while ((m = HEADING_CITATION_RE.exec(lineText)) !== null) {
+      const [raw, citedPath, anchorRaw, contentAnchorRaw] = m;
+      citations.push({
+        file: docFile,
+        docLine: idx + 1,
+        raw: raw ?? "",
+        citedPath: citedPath ?? "",
+        headingText: parseHeadingAnchorText(anchorRaw ?? ""),
+        contentAnchor: parseContentAnchorText(contentAnchorRaw),
+      });
+    }
+  });
+  return citations;
+}
+
+// True per line for every line lying inside a fenced code block (``` or
+// ~~~, delimiters included), so a `#`-led comment inside a fenced example
+// is never mistaken for a real Markdown heading -- mirrors okf-kit's own
+// `computeFencedLineIndices`/`scanFenceLines`.
+function computeFencedLines(lines: string[]): boolean[] {
+  const fenced: boolean[] = [];
+  let marker: string | undefined;
+  for (const lineText of lines) {
+    const trimmed = lineText.trim();
+    if (!marker && MD_FENCE_DELIM_RE.test(trimmed)) {
+      marker = trimmed.slice(0, 3);
+      fenced.push(true);
+    } else if (marker && trimmed.startsWith(marker)) {
+      fenced.push(true);
+      marker = undefined;
+    } else {
+      fenced.push(marker !== undefined);
+    }
+  }
+  return fenced;
+}
+
+interface HeadingLine {
+  level: number;
+  text: string;
+  lineNo: number; // 1-based
+}
+
+// Every Markdown heading up to HEADING_MAX_LEVEL, outside fenced code
+// blocks, in document order.
+function collectHeadings(lines: string[], fencedLines: boolean[]): HeadingLine[] {
+  const headings: HeadingLine[] = [];
+  lines.forEach((lineText, idx) => {
+    if (fencedLines[idx]) return;
+    const m = lineText.match(HEADING_LINE_RE);
+    if (m && m[1]!.length <= HEADING_MAX_LEVEL) {
+      headings.push({ level: m[1]!.length, text: m[2]!.trim(), lineNo: idx + 1 });
+    }
+  });
+  return headings;
+}
+
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+// Section body of a matched heading: from the line right after the
+// heading up to (not including) the next heading at or above the same
+// level, or EOF -- mirrors okf-kit's `findHeadingSection` bodyEnd scan,
+// which walks EVERY heading level (not just the level <= HEADING_MAX_LEVEL
+// ones `collectHeadings` returns), since a level-3+ subheading still ends
+// the section just as surely as another level-2 one would.
+function findSectionBody(
+  lines: string[],
+  fencedLines: boolean[],
+  heading: HeadingLine,
+): { bodyStart: number; bodyEnd: number } {
+  const bodyStart = heading.lineNo; // 0-based index of the first body line
+  let bodyEnd = lines.length;
+  for (let i = heading.lineNo; i < lines.length; i++) {
+    if (fencedLines[i]) continue;
+    const m = (lines[i] ?? "").match(HEADING_LINE_RE);
+    if (m && m[1]!.length <= heading.level) {
+      bodyEnd = i;
+      break;
+    }
+  }
+  return { bodyStart, bodyEnd };
+}
+
+// Count of lines in `[bodyStart, bodyEnd)` containing `text` -- a content
+// anchor must occur on exactly one such line, mirroring okf-kit's
+// `countAnchorOccurrences` for `heading-section-content-anchor-*`.
+function countSectionAnchorOccurrences(
+  lines: string[],
+  bodyStart: number,
+  bodyEnd: number,
+  text: string,
+): number {
+  let count = 0;
+  for (let i = bodyStart; i < bodyEnd; i++) {
+    if ((lines[i] ?? "").includes(text)) count++;
+  }
+  return count;
+}
+
+/**
+ * Resolves and checks one heading-section citation against `repoRoot`.
+ * Returns `null` when it resolves cleanly, else a human-readable problem
+ * string naming exactly one of: a `..` path segment (rejected outright,
+ * never resolved), missing target file, no matching heading, an
+ * ambiguous (>1) match, (CHANGELOG.md targets only) a matching heading
+ * that is not the file's own exact `## [x.y.z]` bracket form, or (when a
+ * content anchor was given) the anchor text missing from, or ambiguous
+ * within, the resolved section's body.
+ */
+function checkHeadingCitation(repoRoot: string, c: HeadingCitation): string | null {
+  if (c.citedPath.split("/").includes("..")) {
+    return `${c.citedPath} contains a ".." path segment and is rejected without resolution`;
+  }
+  const abs = path.join(repoRoot, c.citedPath);
+  if (!fs.existsSync(abs) || !fs.statSync(abs).isFile()) {
+    return `${c.citedPath} does not exist relative to the repo root`;
+  }
+  const lines = fs.readFileSync(abs, "utf8").split("\n");
+  const fencedLines = computeFencedLines(lines);
+  const headings = collectHeadings(lines, fencedLines);
+  const matches = headings.filter((h) => h.text.includes(c.headingText));
+  if (matches.length === 0) {
+    return `no heading (level <= ${HEADING_MAX_LEVEL}) in ${c.citedPath} contains "${c.headingText}"`;
+  }
+  if (matches.length > 1) {
+    return `heading "${c.headingText}" is ambiguous in ${c.citedPath} (${matches.length} matching headings, at lines ${matches
+      .map((h) => h.lineNo)
+      .join(", ")})`;
+  }
+  const heading = matches[0]!;
+  if (path.basename(c.citedPath) === "CHANGELOG.md") {
+    const exactFormRe = new RegExp(`^## \\[${escapeRegExp(c.headingText)}\\]`);
+    const headingLineText = (lines[heading.lineNo - 1] ?? "").trim();
+    if (!exactFormRe.test(headingLineText)) {
+      return `CHANGELOG.md heading at line ${heading.lineNo} ("${headingLineText}") is not the exact "## [${c.headingText}]" form this guard requires for CHANGELOG.md sections`;
+    }
+  }
+  if (c.contentAnchor !== undefined) {
+    const { bodyStart, bodyEnd } = findSectionBody(lines, fencedLines, heading);
+    const count = countSectionAnchorOccurrences(lines, bodyStart, bodyEnd, c.contentAnchor);
+    if (count === 0) {
+      return `content anchor "${c.contentAnchor}" does not occur in the section under heading "${heading.text}" (line ${heading.lineNo}) of ${c.citedPath}`;
+    }
+    if (count > 1) {
+      return `content anchor "${c.contentAnchor}" occurs on ${count} lines in the section under heading "${heading.text}" (line ${heading.lineNo}) of ${c.citedPath}; expected exactly one`;
+    }
+  }
+  return null;
+}
+
+describe("docs/okf heading-section (`path.md:#heading`) citations resolve", () => {
+  const headingCitations: HeadingCitation[] = [];
+  for (const f of listDocs(OKF_DIR)) {
+    const text = fs.readFileSync(path.join(OKF_DIR, f), "utf8");
+    headingCitations.push(...extractHeadingCitations(`docs/okf/${f}`, text));
+  }
+
+  it("finds heading-section citations to check", () => {
+    expect(headingCitations.length).toBeGreaterThan(0);
+  });
+
+  it.each(headingCitations.map((c) => [`${c.file}:${c.docLine} ${c.raw}`, c] as const))(
+    "%s",
+    (_label, c) => {
+      const problem = checkHeadingCitation(REPO_ROOT, c);
+      expect(problem, problem ?? undefined).toBeNull();
+    },
+  );
+});
+
+describe("heading-section citation guard: fixtures pinning discriminating checks", () => {
+  // Isolated fixture tree (own repoRoot), so these checks never depend on
+  // the real CHANGELOG.md's exact content -- only on this guard's own
+  // matching logic.
+  const tmpDir = fs.mkdtempSync(
+    path.join(os.tmpdir(), "heading-citation-guard-fixtures-"),
+  );
+  afterAll(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+  const fixtureChangelog = [
+    "# Changelog",
+    "",
+    "## [Unreleased]",
+    "",
+    "Nothing yet.",
+    "",
+    "## [1.2.4] - 2026-01-02",
+    "",
+    "Mentions version 9.9.9 in prose here, but 9.9.9 is not a heading",
+    "in this fixture: it only ever appears inside this paragraph.",
+    "",
+    "## [1.2.3] - 2026-01-01",
+    "",
+    "Real content for the 1.2.3 release. The word canary appears exactly",
+    "once in this section, for the content-anchor fixtures below.",
+    "",
+    "## Version 1.2.5 notes",
+    "",
+    "A heading that names 1.2.5 but not in the file's own exact",
+    "`## [x.y.z]` bracket form.",
+    "",
+    "```",
+    "## [1.2.6] - fenced, not a real heading",
+    "```",
+    "",
+    "Mentioning 1.2.6 in prose here does not make the fenced line above",
+    "a real heading either.",
+    "",
+    "### [1.2.7] - 2026-01-03",
+    "",
+    "A level-3 heading naming 1.2.7; above HEADING_MAX_LEVEL, so this",
+    "must not resolve as a match.",
+    "",
+    "## Release 1.2.8 (part one)",
+    "",
+    "First of two level-2 headings mentioning 1.2.8.",
+    "",
+    "## Also about 1.2.8 (part two)",
+    "",
+    "Second of two level-2 headings mentioning 1.2.8: ambiguous.",
+    "",
+    "../escape.md fixture path segment lives only in the test string below,",
+    "not in this file.",
+    "",
+  ].join("\n");
+  fs.writeFileSync(path.join(tmpDir, "CHANGELOG.md"), fixtureChangelog, "utf8");
+
+  it("resolves a citation to a real, exact-form `## [x.y.z]` CHANGELOG section", () => {
+    const c = extractHeadingCitations(
+      "fixture.md",
+      "See `CHANGELOG.md:#1.2.3`.",
+    )[0]!;
+    expect(checkHeadingCitation(tmpDir, c)).toBeNull();
+  });
+
+  it("fails a citation to a version with no heading at all (mutation probe (a)/(b) target: heading extraction/matching must be restricted to real heading lines, not a whole-file substring search)", () => {
+    const c = extractHeadingCitations(
+      "fixture.md",
+      "See `CHANGELOG.md:#9.9.9`.",
+    )[0]!;
+    const problem = checkHeadingCitation(tmpDir, c);
+    expect(problem).not.toBeNull();
+    expect(problem).toContain("no heading");
+  });
+
+  it("fails a citation to a CHANGELOG.md heading that names the version but is not the exact `## [x.y.z]` bracket form", () => {
+    const c = extractHeadingCitations(
+      "fixture.md",
+      "See `CHANGELOG.md:#1.2.5`.",
+    )[0]!;
+    const problem = checkHeadingCitation(tmpDir, c);
+    expect(problem).not.toBeNull();
+    expect(problem).toContain("is not the exact");
+  });
+
+  it("fails a citation to a version whose only heading sits inside a fenced code block (mutation probe (c) target: the fence guard must exclude a fenced `#`-led line from heading matching)", () => {
+    const c = extractHeadingCitations(
+      "fixture.md",
+      "See `CHANGELOG.md:#1.2.6`.",
+    )[0]!;
+    const problem = checkHeadingCitation(tmpDir, c);
+    expect(problem).not.toBeNull();
+    expect(problem).toContain("no heading");
+  });
+
+  it("fails a citation to a version present only as a level-3 heading (mutation probe (d) target: HEADING_MAX_LEVEL must stay 2, not widen to include level-3+ headings)", () => {
+    const c = extractHeadingCitations(
+      "fixture.md",
+      "See `CHANGELOG.md:#1.2.7`.",
+    )[0]!;
+    const problem = checkHeadingCitation(tmpDir, c);
+    expect(problem).not.toBeNull();
+    expect(problem).toContain("no heading");
+  });
+
+  it("fails a citation to a version named by two level-2 headings (mutation probe (e) target: the ambiguity check must fire, never silently pick the first match)", () => {
+    const c = extractHeadingCitations(
+      "fixture.md",
+      "See `CHANGELOG.md:#1.2.8`.",
+    )[0]!;
+    const problem = checkHeadingCitation(tmpDir, c);
+    expect(problem).not.toBeNull();
+    expect(problem).toContain("is ambiguous");
+  });
+
+  it("resolves a content-anchored citation whose quoted text occurs exactly once in the resolved section", () => {
+    const c = extractHeadingCitations(
+      "fixture.md",
+      'See `CHANGELOG.md:#1.2.3#"canary"`.',
+    )[0]!;
+    expect(checkHeadingCitation(tmpDir, c)).toBeNull();
+  });
+
+  it("fails a content-anchored citation whose quoted text does not occur in the resolved section (mutation probe (f) target: the content-anchor check must run when a content anchor is given)", () => {
+    const c = extractHeadingCitations(
+      "fixture.md",
+      'See `CHANGELOG.md:#1.2.3#"does-not-occur-anywhere"`.',
+    )[0]!;
+    const problem = checkHeadingCitation(tmpDir, c);
+    expect(problem).not.toBeNull();
+    expect(problem).toContain("does not occur");
+  });
+
+  it("rejects a citedPath containing a \"..\" path segment outright, without resolving it (mutation probe (g) target)", () => {
+    const c = extractHeadingCitations(
+      "fixture.md",
+      "See `../escape.md:#1.2.3`.",
+    )[0]!;
+    const problem = checkHeadingCitation(tmpDir, c);
+    expect(problem).not.toBeNull();
+    expect(problem).toContain('".."');
+  });
+});
+
+// Negative-grammar fixture: pins HEADING_CITATION_RE against future
+// loosening, mirroring the CITATION_RE negative-grammar fixture above.
+// Each line below looks heading-citation-adjacent (a `.md` path, a `#`,
+// a heading-ish token) but must NOT be extracted, because none supplies
+// the exact shape HEADING_CITATION_RE requires: a backtick-wrapped
+// `path.md:#heading` token.
+describe("HEADING_CITATION_RE does not extract heading-citation-shaped non-citations", () => {
+  const fixtureLines = [
+    "A Markdown link fragment, [x](docs/okf/log.md#Overview), has a `.md`",
+    "path and a `#`-led fragment but is not backtick-wrapped and has no",
+    "`:` before the `#`, so it must not resolve as a heading citation.",
+    "",
+    "A non-.md path with the same shape, `src/example.ts:#Overview`, has",
+    "no `.md` extension immediately before the `:#`, so it must not",
+    "resolve either.",
+    "",
+    "An unbackticked CHANGELOG.md:#0.1.0 in prose has no backtick",
+    "delimiters of its own, so it must not resolve.",
+  ];
+  const fixtureText = fixtureLines.join("\n");
+
+  it("finds zero heading citations in the fixture (guards HEADING_CITATION_RE against loosening)", () => {
+    const found = extractHeadingCitations("fixture.md", fixtureText);
+    expect(
+      found,
+      `expected zero heading citations in the negative-grammar fixture, found: ${JSON.stringify(found)}`,
     ).toHaveLength(0);
   });
 });

@@ -373,11 +373,11 @@ describe("resolveOriginHeadBase in a linked worktree", () => {
 
 /**
  * Create a linked-worktree layout of a BARE repository: `<root>/<bareDirName>`
- * IS the git dir itself (no `.git` wrapper — a bare repo's top-level
+ * IS the git dir itself (no `.git` wrapper, a bare repo's top-level
  * directory holds `HEAD`/`objects`/`refs`/`worktrees` directly), with a
  * private per-worktree gitdir under `<bareDirName>/worktrees/<name>`
  * whose `commondir` file (`../..`) resolves straight back to
- * `<bareDirName>` — there is no further `.git` to go up from, unlike a
+ * `<bareDirName>`, there is no further `.git` to go up from, unlike a
  * non-bare main checkout's `<main>/.git`.
  */
 function makeLinkedWorktreeOfBareRepo(

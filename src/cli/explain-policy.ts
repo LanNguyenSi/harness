@@ -81,10 +81,10 @@ export type SessionStartPreflightLayerSource = "base" | "machine" | "project";
  * Does `filePath`'s raw YAML explicitly declare `session_start_preflight.setup`?
  *
  * "Declare" means KEY PRESENCE, not "holds a boolean" (review round 2,
- * finding: a tombstone — `session_start_preflight: null` or `{setup:
+ * finding: a tombstone, `session_start_preflight: null` or `{setup:
  * null}`, both honoured by `mergeValue` in src/overrides/merge.ts as
  * "delete whatever a lower layer set, falling back to the schema
- * default" — is exactly as much a deliberate declaration by THIS layer
+ * default", is exactly as much a deliberate declaration by THIS layer
  * as `setup: true`/`false` is; it just resolves to a different final
  * value. Attributing a tombstoned layer's decision to whichever lower
  * layer happens to also declare the key (or to "base" when none does)
@@ -157,7 +157,7 @@ interface ExplainPolicyProjection {
    * (review round 2, decision D-021b: without this, an operator running
    * `explain-policy` with no `--project` in a repo that DOES have a
    * project layer would see the base/machine value while the producer
-   * itself reads the project layer — see src/cli/session-start/
+   * itself reads the project layer, see src/cli/session-start/
    * index.ts).
    */
   session_start_preflight?: { setup: boolean; source: SessionStartPreflightLayerSource };

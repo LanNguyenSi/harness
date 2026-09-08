@@ -7,7 +7,7 @@
   setup`'s per-repo scoping. Added `deriveProjectName` to `src/runtime/
   git-context.ts` (basename of the directory containing the repository's
   shared git common dir, not the checkout directory `resolveGitContext`'s
-  own `repo` field names — decision D-021a) and wired all three
+  own `repo` field names, decision D-021a) and wired all three
   consumers (`src/cli/session-start/index.ts`, `src/cli/explain-policy.ts`,
   `src/cli/doctor/index.ts`) through it when `--project` is absent
   (decision D-021b); also fixed `explain-policy.ts`'s `layerDeclaresSetup`
@@ -21,7 +21,7 @@
   (`codex-adapter-parity-gaps.md`, `debug-verb-selection.md`, `evidence-
   ledger-trust-boundary.md`, `policy-engine-producer-wiring.md`) and
   against `src/cli/doctor/index.ts` (`pause-vs-gate-kill-switch.md`,
-  `debug-verb-selection.md` again — it lists both `src/cli/explain-
+  `debug-verb-selection.md` again, it lists both `src/cli/explain-
   policy.ts` and `src/cli/doctor/index.ts` in `sources:`). Re-verified
   each: none describes `session_start_preflight.setup`, the repository-
   identity rule, or the tombstone attribution fix; `debug-verb-selection.md`
@@ -40,6 +40,40 @@
   line and re-verified green via `tests/decisions-citations-resolve.
   test.ts`. Re-stamped all five OKF docs' `timestamp:` fields; no other
   citation re-pointing needed.
+
+- 2026-09-08T05:04:09Z, task ee494719 (implementer, review round 2): fixed
+  all eight round-1 review findings on the heading-citation guard (this
+  bundle's Maintenance section above and `CHANGELOG.md`'s Unreleased
+  entry describe the resulting guard; this entry closes the round-1
+  thread). Three findings pinned previously-inert branches with new
+  isolated fixtures in `tests/decisions-citations-resolve.test.ts`: a
+  citation to a heading inside a fenced code block, a citation to a
+  version present only as a level-3 heading (above the level-2 cap), and
+  a citation matching two level-2 headings (ambiguous). A fourth added
+  the optional content-anchor form (a `path.md` target, `#heading`, then
+  a quoted `#"text"`) to `HEADING_CITATION_RE` and its resolution,
+  requiring the quoted text to occur on exactly one line of the resolved
+  section, mirroring okf-kit's
+  `heading-section-content-anchor-*` findings; before this fix a
+  content-anchored citation matched nothing and was silently unchecked.
+  A fifth added a sibling negative-grammar fixture for
+  `HEADING_CITATION_RE` (an unbackticked heading-shaped path in prose, a
+  Markdown link fragment, a non-`.md` path). A sixth anchored the fence
+  predicate to the whole trimmed line (`MD_FENCE_DELIM_RE`) instead of a
+  prefix test. A seventh rejects a `citedPath` containing a `..` segment
+  outright. An eighth removes the fixture temp directory in an `afterAll`.
+  The mirrored-from doc comment now names the pinned okf-kit version
+  (0.10.0, matching `.github/workflows/okf-staleness.yml`), states the
+  repo-root-relative-only resolution scope cut against okf-kit's fuller
+  resolution chain, and names the new content-anchor coverage; this
+  bundle's Maintenance section above carries the same two points. The
+  `CHANGELOG.md` Unreleased entry was reworded count-free, naming the
+  seven cited release sections (`[0.24.0]`, `[0.35.0]`, `[0.39.0]`,
+  `[0.43.0]`, `[0.44.0]`, `[0.45.0]`, `[0.48.0]`) instead of a citation
+  count that had already drifted from the actual number at HEAD. Verified
+  after committing: `npx okf-kit@0.10.0 check --json docs/okf` reported 0
+  errors/warnings/notices; `npx vitest run
+  tests/decisions-citations-resolve.test.ts` passed all 198 tests.
 
 - 2026-09-08T04:52:43Z, task c88461c1 (implementer): per-repo scoping for
   `session_start_preflight.setup`. Edited `src/cli/session-start/index.ts`,
@@ -64,6 +98,7 @@
   boundary.md` and `policy-engine-producer-wiring.md` cite `docs/CLI.md`
   generically (no pinned line numbers) for unrelated sections. Re-
   stamped all four `timestamp:` fields; no citation re-pointing needed.
+
 
 - 2026-09-07T10:52:27Z, task 4f0abbc8 (implementer): negative control for
   the 2026-09-07T10:50:36Z entry below (commit `e060323`). Appended one
@@ -1947,13 +1982,13 @@
   negative control: pre-change clone 35 warnings, post-change 0.
 - 2026-07-18T05:00:00Z, scoped re-verification (task init-mcp-wiring-claude-code/T-004):
   `okf-kit check` flagged 2 files stale (source mtime after doc timestamp).
-  `debug-verb-selection.md` — flagged for `src/cli/doctor/index.ts`, which
+  `debug-verb-selection.md`, flagged for `src/cli/doctor/index.ts`, which
   changed under the same run (T-003, additive `claudeMcp` field, no
   existing-section behavior change). Diffed against the doc's `doctor`
   section; content held except for the new "Claude Code MCP Registration"
   check, now documented; re-stamped. The other 15 sources are unchanged
   since the 2026-07-16 sweep and were not re-audited beyond that diff.
-  `policy-engine-producer-wiring.md` — flagged for `src/policies/ledger-client.ts`,
+  `policy-engine-producer-wiring.md`, flagged for `src/policies/ledger-client.ts`,
   which this task's changes never touched (pre-existing/unrelated drift);
   left un-stamped, out of scope for this task, noted as an open follow-up.
 - 2026-07-16T02:26:27Z, re-verification sweep (task 93c004a6): all 8 docs re-checked
