@@ -36,7 +36,7 @@ import {
 import type { Diagnostic } from "../validate/types.js";
 import { isDerivedPolicy } from "../../runtime/workflow-policies.js";
 import { deriveProjectName } from "../../runtime/git-context.js";
-import { loadManifest, type LoaderOptions } from "../loader.js";
+import { loadManifest, resolvePaths, type LoaderOptions } from "../loader.js";
 import {
   countCodexDiagnostics,
   findOnPath,
@@ -57,7 +57,11 @@ import {
 } from "./understanding-mode-env.js";
 import { checkAutoApproveMode } from "./auto-approve-mode.js";
 import { checkBypassWithoutAutoApprove } from "./bypass-without-auto-approve.js";
-import { checkSessionStartPreflightSetupVersion } from "./session-start-preflight-setup-version.js";
+import {
+  checkSessionStartPreflightSetupVersion,
+  type SessionStartPreflightSetupVersionFinding,
+} from "./session-start-preflight-setup-version.js";
+import { SESSION_START_PREFLIGHT_SETUP_BUILD_MIN_VERSION } from "../../schema/session-start-preflight.js";
 import {
   runDoctorToolchainParity,
   type RunDoctorToolchainParityOptions,
@@ -1290,38 +1294,86 @@ export async function doctor(opts: DoctorOptions = {}): Promise<DoctorReport> {
   // meant to touch.
   //
   // `sessionStartPreflightProjectName` (task c88461c1, review round 3
-  // residual, decision D-006) is the SAME name fed into the scoped
-  // load below, carried onto the finding so a report whose `setup:
-  // true` verdict came from a per-repo project layer is
-  // distinguishable from one that came from the base/machine value
-  // (the report's own top-level `project` field only ever reflects an
-  // EXPLICIT `--project`, never this derived name).
+  // residual; narrowed by task 1c4eb3ea's round 2, D-027 item 2) is
+  // carried onto the finding ONLY when the scoped load below actually
+  // RESOLVED a project layer file (`resolved.projectLayer !== null`,
+  // the same signal `resolvePaths` already returns), not merely
+  // whenever `deriveProjectName`/`opts.project` produced a name to
+  // TRY. Round 1 set this to the attempted name unconditionally, so
+  // the `(project: X)` suffix `format.ts` renders was byte-identical
+  // whether or not a layer actually existed on disk: `projectName` is
+  // present for every cwd inside any git work tree, layer or no
+  // layer, which made docs/CLI.md's "distinguishable from a
+  // base/machine-decided value" claim false. This version instead
+  // only names the project when the base/machine value was genuinely
+  // overridden by (or the failed load genuinely attempted) that
+  // project's own layer file.
   //
   // Best-effort: a config/parse failure here degrades to `setup:
-  // false` (review round 3 residual, decision D-006), matching the
+  // false` (review round 3 residual; task `1c4eb3ea`), matching the
   // producer's own `setupEnabled` catch (`src/cli/session-start/
-  // index.ts`) instead of keeping the plain `manifest`'s own
-  // (project-unaware) value, a mismatch a round-3 comment used to
-  // claim did NOT exist between this check and the producer.
-  const sessionStartPreflightProjectName =
+  // index.ts`). Task 1c4eb3ea's round 2 (D-027 item 3) additionally
+  // reports this failure as its own `layer_unresolvable` warning
+  // (below) instead of going fully silent, but ONLY when a project
+  // layer FILE actually exists to be unresolvable about; a failure
+  // that instead comes from the base/machine layers (no project layer
+  // on disk for this cwd at all) stays silent here exactly as before,
+  // since attributing it to "the project layer" would be wrong and
+  // `doctor()`'s own top-level `loadManifest(opts)` call above already
+  // surfaces a genuine base/machine parse failure by throwing before
+  // this point is ever reached.
+  const attemptedSessionStartPreflightProjectName =
     opts.project ?? deriveProjectName(opts.cwd ?? process.cwd()) ?? null;
+  const scopedLoadOpts: LoaderOptions = {
+    ...opts,
+    project: attemptedSessionStartPreflightProjectName ?? undefined,
+  };
   let sessionStartPreflightManifest = manifest;
+  let sessionStartPreflightProjectName: string | null = null;
+  let sessionStartPreflightLayerUnresolvable:
+    | SessionStartPreflightSetupVersionFinding
+    | undefined;
   try {
-    sessionStartPreflightManifest = loadManifest({
-      ...opts,
-      project: sessionStartPreflightProjectName ?? undefined,
-    }).manifest;
-  } catch {
+    const scopedLoad = loadManifest(scopedLoadOpts);
+    sessionStartPreflightManifest = scopedLoad.manifest;
+    if (scopedLoad.resolved.projectLayer !== null) {
+      sessionStartPreflightProjectName = attemptedSessionStartPreflightProjectName;
+    }
+  } catch (err) {
     sessionStartPreflightManifest = {
       ...manifest,
       session_start_preflight: { ...manifest.session_start_preflight, setup: false },
     };
+    // Same call the producer's own diagnostic makes
+    // (src/cli/session-start/index.ts): only names/warns about the
+    // project layer when `resolvePaths` itself can resolve one for
+    // this attempted name; otherwise the thrown error came from the
+    // base/machine layers, unrelated to project scoping, and this
+    // scoped-load catch stays silent about it (see the comment above).
+    const unresolvableLayerPath = resolvePaths(scopedLoadOpts).projectLayer;
+    if (unresolvableLayerPath !== null) {
+      sessionStartPreflightProjectName = attemptedSessionStartPreflightProjectName;
+      const errMessage = err instanceof Error ? err.message : String(err);
+      const errFirstLine = errMessage.split("\n")[0];
+      sessionStartPreflightLayerUnresolvable = {
+        kind: "layer_unresolvable",
+        actualVersion: null,
+        requiredVersion: SESSION_START_PREFLIGHT_SETUP_BUILD_MIN_VERSION,
+        message:
+          `session_start_preflight.setup: the project-scoped manifest load failed ` +
+          `(${errFirstLine}); the effective setup value for this repo could not be ` +
+          `determined (project layer: ${unresolvableLayerPath})`,
+        projectName: sessionStartPreflightProjectName,
+      };
+    }
   }
-  const sessionStartPreflightSetupVersion = checkSessionStartPreflightSetupVersion(
-    sessionStartPreflightManifest,
-    dedupedVersionProbe,
-    sessionStartPreflightProjectName,
-  );
+  const sessionStartPreflightSetupVersion =
+    sessionStartPreflightLayerUnresolvable ??
+    checkSessionStartPreflightSetupVersion(
+      sessionStartPreflightManifest,
+      dedupedVersionProbe,
+      sessionStartPreflightProjectName,
+    );
   const policies = buildPolicies(manifest);
   const policyPacks = buildPolicyPacks(
     manifest,

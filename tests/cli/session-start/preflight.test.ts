@@ -1886,5 +1886,75 @@ describe("runSessionStartPreflight: setupEnabled catch names the failed layer pa
     expect(seenArgs).toEqual([{ cwd: repo, timeoutMs: 60_000, setup: false }]);
     expect(errOut()).toContain(layerPath);
     expect(errOut()).toContain("degrading to setup: false");
+    // Task 1c4eb3ea, round 2, D-027 item 5: the YAML parse error this
+    // fixture triggers is genuinely multi-line (measured: 6 lines from
+    // `yaml`'s own error message alone); the diagnostic must collapse
+    // it to its first line, so the note() call carrying it is ONE
+    // stderr line, matching the "one line" claim in docs/CLI.md
+    // (scoped to this one diagnostic; a later, unrelated note() call
+    // for the successful ledger write also lands in errOut()).
+    const diagnosticLines = errOut()
+      .split("\n")
+      .filter((line) => line.includes("session_start_preflight.setup: the project-scoped"));
+    expect(diagnosticLines).toHaveLength(1);
+  });
+
+  // Task 1c4eb3ea, round 2, D-027 item 4: round 1's message named "project
+  // layer <path> failed to load" unconditionally once ANY project layer
+  // file existed on disk, even when the actual parse failure came from a
+  // DIFFERENT layer the same `loadManifest` call also merges (base or a
+  // machine-override layer). This drives the throw from a malformed
+  // MACHINE layer while a VALID project layer sits on disk for the same
+  // repo, and asserts the diagnostic no longer blames that (perfectly
+  // fine) project layer file for a failure it did not cause.
+  it("does not blame a valid project layer for a machine-layer parse failure", async () => {
+    const repoName = "setup-machine-layer-unresolvable-repo";
+    const repo = makeRepoFixture(repoName);
+    const home = fs.mkdtempSync(
+      path.join(os.tmpdir(), "harness-sspf-machine-unresolvable-home-"),
+    );
+    cleanups.push(() => fs.rmSync(home, { recursive: true, force: true }));
+    writeBaseManifest(home, true);
+    const projectDir = path.join(home, "projects", repoName);
+    fs.mkdirSync(projectDir, { recursive: true });
+    const projectLayerPath = path.join(projectDir, "harness.overrides.yaml");
+    // A VALID project layer: this file parses fine on its own.
+    fs.writeFileSync(
+      projectLayerPath,
+      ["session_start_preflight:", "  setup: true", ""].join("\n"),
+    );
+    // The MACHINE layer is what actually fails to parse. `default` is
+    // always a machine-override candidate (machineOverrideCandidates),
+    // so this layer applies without pinning a hostname/platform
+    // discriminator, and the one scoped `loadManifest` call that merges
+    // base + machine + project throws from THIS file, not the project
+    // layer above.
+    fs.mkdirSync(path.join(home, "machines"), { recursive: true });
+    fs.writeFileSync(
+      path.join(home, "machines", "default.harness.overrides.yaml"),
+      "session_start_preflight: {setup: true\n",
+    );
+
+    const seenArgs: Array<{ cwd: string; timeoutMs: number; setup: boolean }> = [];
+    const { stream: err, output: errOut } = captureStream();
+    const result = await runSessionStartPreflight({
+      stdin: streamFrom(JSON.stringify({ session_id: "s", cwd: repo })),
+      stderr: err,
+      homeDir: home,
+      runPreflight: async (cwd, timeoutMs, setup) => {
+        seenArgs.push({ cwd, timeoutMs, setup });
+        return { ok: true, json: { ready: true, confidence: 0.9, checks: [] } };
+      },
+      writeLedger: async () => ({ ok: true }),
+    });
+    expect(result.wrote).toBe(true);
+    expect(seenArgs).toEqual([{ cwd: repo, timeoutMs: 60_000, setup: false }]);
+    // The message must not claim the (fine) project layer FILE failed
+    // to load; it describes the scoped LOAD failing instead, with the
+    // layer path kept only as context.
+    expect(errOut()).not.toContain(`project layer ${projectLayerPath} failed to load`);
+    expect(errOut()).toContain("the project-scoped manifest load for project");
+    expect(errOut()).toContain("degrading to setup: false");
+    expect(errOut()).toContain(projectLayerPath);
   });
 });

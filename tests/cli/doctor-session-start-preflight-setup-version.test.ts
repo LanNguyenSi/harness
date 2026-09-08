@@ -570,6 +570,46 @@ describe("doctor: session_start_preflight per-repo effective value (task c88461c
       // carried on the finding.
       projectName: repoName,
     });
+    // Task 1c4eb3ea, round 2, D-027 item 2: format.ts renders the
+    // carried projectName as a `(project: X)` suffix on the warning
+    // line. Round 1 shipped this rendering with no test asserting it
+    // (a probe forcing the suffix condition to `false` survived).
+    const text = format(report);
+    expect(text).toContain(`(project: ${repoName})`);
+  });
+
+  it("does NOT render the (project: X) suffix when no project layer decided the value (negative control)", async () => {
+    // Task 1c4eb3ea, round 2, D-027 items 1 and 2: a cwd inside a git
+    // work tree still ATTEMPTS a project-name derivation even when no
+    // matching `<home>/projects/<name>/harness.overrides.yaml` exists
+    // on disk; the finding's `projectName` (and therefore format.ts's
+    // suffix) must stay absent in that case, not name the attempted
+    // derivation, so the suffix is genuinely distinguishable from a
+    // base/machine-decided warning.
+    const repoName = "doctor-scope-no-layer-repo";
+    const repo = makeRepoFixture(repoName);
+    const home = makeFixture({
+      "harness.yaml": buildManifest("session_start_preflight:\n  setup: true"),
+    });
+    // No `<home>/projects/<repoName>/...` layer written at all.
+    const report = await doctor({
+      configPath: path.join(home, "harness.yaml"),
+      homeDir: home,
+      homeOverride: home,
+      cwd: repo,
+      versionProbe: (cmd) => (cmd[0] === "preflight" ? "preflight 0.5.0\n" : null),
+      pathEnv: "",
+      npmBinExec: STUB_NPM_BIN_EXEC_UNKNOWN,
+    });
+    expect(report.sessionStartPreflightSetupVersion).toEqual({
+      kind: "below_floor",
+      actualVersion: "0.5.0",
+      requiredVersion: "0.6.0",
+      message: expect.stringContaining("v0.5.0 < 0.6.0"),
+      projectName: null,
+    });
+    const text = format(report);
+    expect(text).not.toContain("(project:");
   });
 
   it("stays silent when the base is true but the cwd-derived project layer turns setup off (the inverse), even with an ancient preflight", async () => {
@@ -682,9 +722,16 @@ tools:
 // catch degrades to `setup: false`, see src/cli/session-start/
 // index.ts). This drives the scoped load into a genuine failure (a
 // malformed project layer file) against a base manifest that says
-// `setup: true`, and asserts this check now goes SILENT (matching
-// setup:false), not warning against the plain load's own value.
-describe("doctor: session_start_preflight.setup degrades to false on a scoped-load failure (task c88461c1, review round 3 residual, decision D-006)", () => {
+// `setup: true`.
+//
+// Task 1c4eb3ea, round 2, D-027 item 3: round 1 fixed the degrade
+// itself (this check no longer warns against the PLAIN load's
+// setup:true) but left the failure fully silent, indistinguishable
+// from a genuinely off `setup`, which the task's own goal named as
+// the residual gap ("no diagnostic anywhere"). This check now reports
+// its own `layer_unresolvable` warning naming the layer path and the
+// first line of the parse error instead of going silent.
+describe("doctor: session_start_preflight.setup reports a layer_unresolvable warning on a scoped-load failure (task c88461c1 round 3 residual; task 1c4eb3ea round 2, D-027 item 3)", () => {
   function makeRepoFixture(name: string): string {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "harness-doctor-ssp-unresolvable-repo-"));
     cleanups.push(() => fs.rmSync(root, { recursive: true, force: true }));
@@ -694,7 +741,7 @@ describe("doctor: session_start_preflight.setup degrades to false on a scoped-lo
     return repo;
   }
 
-  it("goes silent (no finding) when the cwd-derived project layer fails to parse, even with an ancient preflight and setup:true at the base", async () => {
+  it("warns layer_unresolvable (not silent, not below_floor against the plain value) when the cwd-derived project layer fails to parse, even with an ancient preflight and setup:true at the base", async () => {
     const repoName = "doctor-unresolvable-repo";
     const repo = makeRepoFixture(repoName);
     const home = makeFixture({
@@ -702,12 +749,12 @@ describe("doctor: session_start_preflight.setup degrades to false on a scoped-lo
     });
     const projectDir = path.join(home, "projects", repoName);
     fs.mkdirSync(projectDir, { recursive: true });
+    const layerPath = path.join(projectDir, "harness.overrides.yaml");
     // Malformed YAML (an unterminated flow mapping): the scoped
-    // `loadManifest` call throws while parsing this layer.
-    fs.writeFileSync(
-      path.join(projectDir, "harness.overrides.yaml"),
-      "session_start_preflight: {setup: true\n",
-    );
+    // `loadManifest` call throws while parsing this layer. The message
+    // this produces is genuinely multi-line; the finding's own message
+    // must collapse it to its first line (D-027 item 5).
+    fs.writeFileSync(layerPath, "session_start_preflight: {setup: true\n");
     const report = await doctor({
       configPath: path.join(home, "harness.yaml"),
       homeDir: home,
@@ -719,7 +766,23 @@ describe("doctor: session_start_preflight.setup degrades to false on a scoped-lo
     });
     // If the pre-fix "keep the plain manifest's value" degrade were
     // still in place, this would warn `below_floor` against the base
-    // manifest's setup:true instead.
-    expect(report.sessionStartPreflightSetupVersion).toBeUndefined();
+    // manifest's setup:true instead; if round 2's own "goes silent"
+    // fix were still in place unchanged, this would be `undefined`.
+    expect(report.sessionStartPreflightSetupVersion?.kind).toBe("layer_unresolvable");
+    expect(report.sessionStartPreflightSetupVersion?.actualVersion).toBeNull();
+    expect(report.sessionStartPreflightSetupVersion?.projectName).toBe(repoName);
+    expect(report.sessionStartPreflightSetupVersion?.message).toContain(layerPath);
+    // The message carries only the FIRST line of the underlying parse
+    // error, not the full multi-line YAML diagnostic (measured: the
+    // raw `yaml` error message alone is 6 lines).
+    expect(report.sessionStartPreflightSetupVersion?.message.split("\n")).toHaveLength(1);
+    expect(report.sessionStartPreflightSetupVersion?.message).not.toContain("^");
+    // Counted in warningCount (D-027 item 3); other environment-derived
+    // warnings from this doctor() run (e.g. npm bin path) are not this
+    // test's concern, so this only pins that the count is non-zero.
+    expect(report.warningCount).toBeGreaterThanOrEqual(1);
+    const text = format(report);
+    expect(text).toContain(layerPath);
+    expect(text).toContain(`(project: ${repoName})`);
   });
 });

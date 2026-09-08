@@ -49,7 +49,19 @@ import type { Manifest } from "../../schema/index.js";
 export const PREFLIGHT_SETUP_VERSION_COMMAND = [PREFLIGHT_BIN, "--version"] as const;
 
 export interface SessionStartPreflightSetupVersionFinding {
-  kind: "below_floor" | "probe_failed" | "parse_failed";
+  /**
+   * `layer_unresolvable` (task `1c4eb3ea`, round 2, D-027 item 3):
+   * `doctor()`'s own project-scoped SECOND `loadManifest` call threw
+   * (a malformed or unreadable cwd-derived project layer), so this
+   * check could not even determine whether `setup` is on. Built
+   * directly by `doctor()` (`src/cli/doctor/index.ts`), never by this
+   * module's own `checkSessionStartPreflightSetupVersion`: that
+   * function only ever sees a manifest that already degraded to
+   * `setup: false` on such a failure, and bails out before producing
+   * ANY finding for a `setup: false` manifest, which is exactly the
+   * silence this kind replaces.
+   */
+  kind: "below_floor" | "probe_failed" | "parse_failed" | "layer_unresolvable";
   /** Parsed installed version, when the probe succeeded and parsed. Null otherwise. */
   actualVersion: string | null;
   /** Always `SESSION_START_PREFLIGHT_SETUP_BUILD_MIN_VERSION` today; carried on the finding so format.ts never re-imports the constant. */
@@ -59,18 +71,21 @@ export interface SessionStartPreflightSetupVersionFinding {
    * The cwd-derived (or explicit `--project`) project name `doctor`
    * fed its scoped, project-aware `loadManifest` call from when this
    * finding's `manifest` was resolved (task c88461c1, review round 3
-   * residual, decision D-006): `null` when no project name was
-   * derivable for that cwd (not inside a git work tree, and no
-   * explicit `--project`). Present only when the CALLER passes a
+   * residual). `null` when no project layer FILE actually decided the
+   * result: no project name was derivable for that cwd (not inside a
+   * git work tree, and no explicit `--project`), OR a name WAS
+   * derivable but no matching `<home>/projects/<name>/harness.overrides.yaml`
+   * exists on disk (task `1c4eb3ea`, round 2, D-027 item 1: `doctor()`
+   * only sets this to a non-null name when `resolvePaths(...).projectLayer`
+   * resolved, not merely whenever a name was attempted, so a
+   * base/machine-decided warning stays genuinely distinguishable from
+   * a project-decided one). Present only when the CALLER passes a
    * `projectName` argument (see below); `checkSessionStartPreflightSetupVersion`'s
    * own unit tests call it with just `manifest`/`versionProbe`, so
    * their findings carry no `projectName` key at all, not an
-   * `undefined` value. Without this, a report whose `setup: true`
-   * verdict came from a per-repo project layer looked identical to one
-   * that came from the base/machine value, and the report's own
-   * top-level `project` field only ever reflects an EXPLICIT
-   * `--project` (`opts.project ?? null`, `doctor/index.ts`), never the
-   * derived name this check actually used.
+   * `undefined` value. The report's own top-level `project` field only
+   * ever reflects an EXPLICIT `--project` (`opts.project ?? null`,
+   * `doctor/index.ts`), never this derived name.
    */
   projectName?: string | null;
 }
@@ -84,8 +99,8 @@ export interface SessionStartPreflightSetupVersionFinding {
  * index.ts (which would create a cycle back into this module's own
  * caller).
  *
- * `projectName` (task c88461c1, review round 3 residual, decision
- * D-006): OPTIONAL third argument, carried onto every returned finding
+ * `projectName` (task c88461c1, review round 3 residual; task
+ * `1c4eb3ea`): OPTIONAL third argument, carried onto every returned finding
  * unchanged (see {@link SessionStartPreflightSetupVersionFinding.projectName}'s
  * doc comment). `doctor()` always passes it (the SAME name it derived
  * for its own scoped load, or `null`); every pre-existing direct call

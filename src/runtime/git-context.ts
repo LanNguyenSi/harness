@@ -362,8 +362,8 @@ export function resolveCommonDir(gitDir: string): string {
  * consumer joins it straight into a filesystem path,
  * `resolvePaths`/`src/cli/loader.ts`). Never throws.
  *
- * REALPATH (task c88461c1, review round 3 residual, decision D-006 of
- * the follow-up run): the common dir is resolved through
+ * REALPATH (task c88461c1, review round 3 residual; task `1c4eb3ea`
+ * of the batch-44 follow-up run): the common dir is resolved through
  * `fs.realpathSync` BEFORE taking its basename, so a checkout reached
  * through a symlink (an operator's own convenience symlink, or a
  * second clone path) derives the SAME project name as the real
@@ -408,13 +408,21 @@ export function deriveProjectName(cwd: string): string | null {
  * that with `fs.existsSync`); this only guards against the value
  * escaping the single path segment it is meant to occupy.
  *
- * Exported (task c88461c1, review round 3 residual, decision D-006 of
- * the follow-up run) so `resolvePaths` (`src/cli/loader.ts`) can apply
- * the SAME guard at its own `path.join` sink, defense in depth: this
- * function already rejects an unsafe name at every `deriveProjectName`
- * exit, but an `opts.project` reaching `resolvePaths` from anywhere
- * else (a caller building `LoaderOptions` by hand, a future producer)
- * had no equivalent check of its own until now.
+ * Exported (task c88461c1, review round 3 residual; task `1c4eb3ea`
+ * of the batch-44 follow-up run) so `resolvePaths` (`src/cli/loader.ts`)
+ * can apply the SAME guard at its own `path.join` sink, defense in
+ * depth: this function already rejects an unsafe name at every
+ * `deriveProjectName` exit, but an `opts.project` reaching
+ * `resolvePaths`' OWN sink from anywhere else (a caller building
+ * `LoaderOptions` by hand, a future producer) had no equivalent check
+ * of its own until now. Scoped to that ONE sink (task `1c4eb3ea`,
+ * round 2, D-027 item 8): this guard covers neither `substituteProject`
+ * (`src/probes/memory.ts`) nor `generate-memory-index.ts`'s own
+ * `{project}` substitution, both of which still interpolate an
+ * operator-supplied `--project` value into a path unvalidated (reached
+ * only via the explicit CLI flag, not this module's derivation); a
+ * caller reading this comment should not assume this function guards
+ * every `{project}`-shaped sink in the codebase.
  */
 export function isValidProjectName(name: string): boolean {
   if (name.length === 0) return false;

@@ -78,8 +78,8 @@ export function resolvePaths(opts: LoaderOptions = {}): ResolvedPaths {
     if (fs.existsSync(candidatePath)) machineLayers.push(candidatePath);
   }
 
-  // Defense in depth (task c88461c1, review round 3 residual, decision
-  // D-006 of the follow-up run): `deriveProjectName`
+  // Defense in depth (task c88461c1, review round 3 residual; task
+  // `1c4eb3ea` of the batch-44 follow-up run): `deriveProjectName`
   // (`src/runtime/git-context.ts`) already validates the name it
   // returns with the SAME `isValidProjectName` guard at every one of
   // its own exits, so a value reaching this sink through that helper

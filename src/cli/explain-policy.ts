@@ -75,8 +75,8 @@ export interface ExplainPolicyOptions extends EventInputSeams, LoaderOptions {
  * it is the highest-precedence layer, then machine layers from the
  * last-applied (highest-precedence) one back to the first.
  *
- * "unresolvable" (task c88461c1, review round 3 residual, decision
- * D-006 of the follow-up run): the cwd-derived project-scoped SECOND
+ * "unresolvable" (task c88461c1, review round 3 residual; task
+ * `1c4eb3ea` of the batch-44 follow-up run): the cwd-derived project-scoped SECOND
  * load itself threw (a malformed project layer, an unreadable file).
  * Deliberately NOT "base": the base/machine values were never actually
  * re-read on this path (the plain load above them; see the round-3
@@ -158,7 +158,7 @@ interface ExplainPolicyProjection {
    * preflight` / `harness preflight` producer passes `--setup` to the
    * `preflight run` invocation whose `ready:true` result these policies
    * gate on. Omitted for every other policy; it has no bearing on
-   * their evaluation (review round 3 residual, decision D-006: the
+   * their evaluation (review round 3 residual; task `1c4eb3ea`: the
    * scoped SECOND load below this field's assignment site runs ONLY
    * when this condition is already true, so a policy this block is
    * never rendered for never pays for that extra load either).
@@ -166,7 +166,7 @@ interface ExplainPolicyProjection {
    * value: `"base"` (also covers an injected `opts.manifest`, which
    * carries no per-layer provenance to attribute), `"machine"`,
    * `"project"` (the cwd-derived per-repo layer), or `"unresolvable"`
-   * (review round 3 residual, decision D-006: the scoped load itself
+   * (review round 3 residual; task `1c4eb3ea`: the scoped load itself
    * threw, `setup` degrades to `false` alongside it). This function
    * derives that project name itself, from `opts.cwd`, via the SAME
    * `deriveProjectName` helper `harness session-start preflight` feeds
@@ -248,7 +248,7 @@ export function explainPolicy(
   // `session_start_preflight.setup` / `source` (task c88461c1, review
   // round 2 decision D-021b; scope narrowed to this one key, review
   // round 3 decision D-028; gated on the name-prefix check below,
-  // review round 3 residual, decision D-006): an explicit
+  // review round 3 residual, task `1c4eb3ea`): an explicit
   // `opts.project` still wins outright; otherwise derive the project
   // name from `opts.cwd` (defaulting to `process.cwd()`) via the SAME
   // shared `deriveProjectName` helper `harness session-start preflight`
@@ -260,7 +260,7 @@ export function explainPolicy(
   // and always reports "base" (unchanged from before this task).
   //
   // ONLY COMPUTED FOR `preflight-before-*` POLICIES (moved behind this
-  // check, review round 3 residual, decision D-006): the block below
+  // check, review round 3 residual, task `1c4eb3ea`): the block below
   // is rendered into the projection ONLY for those policies (see
   // `ExplainPolicyProjection.session_start_preflight`'s doc comment),
   // so a caller explaining any OTHER policy no longer pays for a
@@ -281,7 +281,7 @@ export function explainPolicy(
         sessionStartPreflightSetup = scoped.manifest.session_start_preflight.setup;
         sessionStartPreflightSource = resolveSessionStartPreflightSource(scoped.resolved);
       } catch {
-        // Review round 3 residual, decision D-006: degrade to
+        // Review round 3 residual, task `1c4eb3ea`: degrade to
         // setup:false / source:"unresolvable" rather than keeping the
         // plain load's values, matching the producer's own
         // `setupEnabled` catch (`src/cli/session-start/index.ts`),
