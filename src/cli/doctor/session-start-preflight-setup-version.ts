@@ -55,6 +55,24 @@ export interface SessionStartPreflightSetupVersionFinding {
   /** Always `SESSION_START_PREFLIGHT_SETUP_BUILD_MIN_VERSION` today; carried on the finding so format.ts never re-imports the constant. */
   requiredVersion: string;
   message: string;
+  /**
+   * The cwd-derived (or explicit `--project`) project name `doctor`
+   * fed its scoped, project-aware `loadManifest` call from when this
+   * finding's `manifest` was resolved (task c88461c1, review round 3
+   * residual, decision D-006): `null` when no project name was
+   * derivable for that cwd (not inside a git work tree, and no
+   * explicit `--project`). Present only when the CALLER passes a
+   * `projectName` argument (see below); `checkSessionStartPreflightSetupVersion`'s
+   * own unit tests call it with just `manifest`/`versionProbe`, so
+   * their findings carry no `projectName` key at all, not an
+   * `undefined` value. Without this, a report whose `setup: true`
+   * verdict came from a per-repo project layer looked identical to one
+   * that came from the base/machine value, and the report's own
+   * top-level `project` field only ever reflects an EXPLICIT
+   * `--project` (`opts.project ?? null`, `doctor/index.ts`), never the
+   * derived name this check actually used.
+   */
+  projectName?: string | null;
 }
 
 /**
@@ -65,17 +83,31 @@ export interface SessionStartPreflightSetupVersionFinding {
  * parsing stay consistent across both checks, without importing from
  * index.ts (which would create a cycle back into this module's own
  * caller).
+ *
+ * `projectName` (task c88461c1, review round 3 residual, decision
+ * D-006): OPTIONAL third argument, carried onto every returned finding
+ * unchanged (see {@link SessionStartPreflightSetupVersionFinding.projectName}'s
+ * doc comment). `doctor()` always passes it (the SAME name it derived
+ * for its own scoped load, or `null`); every pre-existing direct call
+ * to this pure function in its own unit tests omits it, so those
+ * findings' shape is unchanged.
  */
 export function checkSessionStartPreflightSetupVersion(
   manifest: Manifest,
   versionProbe: (cmd: readonly string[]) => string | null,
+  projectName?: string | null,
 ): SessionStartPreflightSetupVersionFinding | undefined {
   if (!manifest.session_start_preflight.setup) return undefined;
+
+  const withProjectName = (
+    finding: Omit<SessionStartPreflightSetupVersionFinding, "projectName">,
+  ): SessionStartPreflightSetupVersionFinding =>
+    projectName !== undefined ? { ...finding, projectName } : finding;
 
   const required = SESSION_START_PREFLIGHT_SETUP_BUILD_MIN_VERSION;
   const stdout = versionProbe(PREFLIGHT_SETUP_VERSION_COMMAND);
   if (stdout === null) {
-    return {
+    return withProjectName({
       kind: "probe_failed",
       actualVersion: null,
       requiredVersion: required,
@@ -83,22 +115,22 @@ export function checkSessionStartPreflightSetupVersion(
         `session_start_preflight.setup is enabled but the installed preflight version could not ` +
         `be determined (probe for "${PREFLIGHT_SETUP_VERSION_COMMAND.join(" ")}" failed); the ` +
         `build step needs preflight >= ${required}`,
-    };
+    });
   }
   const m = stdout.match(/(\d+(?:\.\d+){0,3})/);
   if (!m || !m[1]) {
-    return {
+    return withProjectName({
       kind: "parse_failed",
       actualVersion: null,
       requiredVersion: required,
       message:
         `session_start_preflight.setup is enabled but the installed preflight version could not ` +
         `be parsed from "${stdout.trim()}"; the build step needs preflight >= ${required}`,
-    };
+    });
   }
   const actual = m[1];
   if (compareNumericVersions(actual, required) < 0) {
-    return {
+    return withProjectName({
       kind: "below_floor",
       actualVersion: actual,
       requiredVersion: required,
@@ -106,7 +138,7 @@ export function checkSessionStartPreflightSetupVersion(
         `session_start_preflight.setup is enabled but installed preflight v${actual} < ${required}: ` +
         `--setup on v${actual} is dependency-install only (no build step); upgrade preflight ` +
         `(npm i -g @lannguyensi/agent-preflight) or set session_start_preflight.setup: false`,
-    };
+    });
   }
   return undefined;
 }

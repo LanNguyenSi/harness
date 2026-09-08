@@ -1287,23 +1287,40 @@ export async function doctor(opts: DoctorOptions = {}): Promise<DoctorReport> {
   // that load feeds every OTHER check in this report and must stay
   // project-unaware (see the doctor() top comment); folding a derived
   // layer into it would let it silently reach checks it was never
-  // meant to touch. Best-effort: a config/parse failure here degrades
-  // to the plain `manifest`'s own (project-unaware) value. NOTE this
-  // is NOT the producer's own fallback (its `setupEnabled` catch
-  // degrades to `setup: false`), so on a layer that fails to load
-  // this report and the producer can disagree (CHANGELOG follow-up).
+  // meant to touch.
+  //
+  // `sessionStartPreflightProjectName` (task c88461c1, review round 3
+  // residual, decision D-006) is the SAME name fed into the scoped
+  // load below, carried onto the finding so a report whose `setup:
+  // true` verdict came from a per-repo project layer is
+  // distinguishable from one that came from the base/machine value
+  // (the report's own top-level `project` field only ever reflects an
+  // EXPLICIT `--project`, never this derived name).
+  //
+  // Best-effort: a config/parse failure here degrades to `setup:
+  // false` (review round 3 residual, decision D-006), matching the
+  // producer's own `setupEnabled` catch (`src/cli/session-start/
+  // index.ts`) instead of keeping the plain `manifest`'s own
+  // (project-unaware) value, a mismatch a round-3 comment used to
+  // claim did NOT exist between this check and the producer.
+  const sessionStartPreflightProjectName =
+    opts.project ?? deriveProjectName(opts.cwd ?? process.cwd()) ?? null;
   let sessionStartPreflightManifest = manifest;
   try {
     sessionStartPreflightManifest = loadManifest({
       ...opts,
-      project: opts.project ?? deriveProjectName(opts.cwd ?? process.cwd()) ?? undefined,
+      project: sessionStartPreflightProjectName ?? undefined,
     }).manifest;
   } catch {
-    /* keep the plain manifest's own value */
+    sessionStartPreflightManifest = {
+      ...manifest,
+      session_start_preflight: { ...manifest.session_start_preflight, setup: false },
+    };
   }
   const sessionStartPreflightSetupVersion = checkSessionStartPreflightSetupVersion(
     sessionStartPreflightManifest,
     dedupedVersionProbe,
+    sessionStartPreflightProjectName,
   );
   const policies = buildPolicies(manifest);
   const policyPacks = buildPolicyPacks(

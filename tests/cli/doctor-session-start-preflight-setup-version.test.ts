@@ -157,6 +157,12 @@ describe("doctor: session_start_preflight.setup version floor (task 6993d9b5)", 
     const report = await doctor({
       configPath: path.join(home, "harness.yaml"),
       homeOverride: home,
+      // Not inside a git work tree, so the scoped load's derived
+      // project name is deterministically null (task c88461c1, review
+      // round 3 residual, decision D-006's projectName field);
+      // without pinning `cwd`, this would fall back to the real
+      // process.cwd() and assert an environment-dependent value.
+      cwd: home,
       versionProbe: (cmd) => (cmd[0] === "preflight" ? "preflight 0.5.0\n" : null),
       pathEnv: "",
       npmBinExec: STUB_NPM_BIN_EXEC_UNKNOWN,
@@ -166,6 +172,7 @@ describe("doctor: session_start_preflight.setup version floor (task 6993d9b5)", 
       actualVersion: "0.5.0",
       requiredVersion: "0.6.0",
       message: expect.stringContaining("v0.5.0 < 0.6.0"),
+      projectName: null,
     });
     expect(report.warningCount).toBeGreaterThanOrEqual(1);
     const text = format(report);
@@ -187,6 +194,8 @@ describe("doctor: session_start_preflight.setup version floor (task 6993d9b5)", 
     const report = await doctor({
       configPath: path.join(home, "harness.yaml"),
       homeOverride: home,
+      // See the projectName comment on the sibling test above.
+      cwd: home,
       versionProbe: defaultVersionProbe,
       pathEnv: "",
       npmBinExec: STUB_NPM_BIN_EXEC_UNKNOWN,
@@ -196,6 +205,7 @@ describe("doctor: session_start_preflight.setup version floor (task 6993d9b5)", 
       actualVersion: "0.5.0",
       requiredVersion: "0.6.0",
       message: expect.stringContaining("v0.5.0 < 0.6.0"),
+      projectName: null,
     });
     const text = format(report);
     expect(text).toContain("0.5.0");
@@ -471,6 +481,9 @@ tools:
     const report = await doctor({
       configPath: path.join(home, "harness.yaml"),
       homeOverride: home,
+      // See the projectName comment in the version-floor describe
+      // block above.
+      cwd: home,
       versionProbe: (cmd) => (cmd[0] === "preflight" ? "preflight 0.5.0\n" : null),
       pathEnv: "",
       npmBinExec: STUB_NPM_BIN_EXEC_UNKNOWN,
@@ -485,6 +498,7 @@ tools:
       actualVersion: "0.5.0",
       requiredVersion: "0.6.0",
       message: expect.stringContaining("v0.5.0 < 0.6.0"),
+      projectName: null,
     });
     // Both fire independently: a doctor() that deduplicated the two
     // warnings into one would fail this count.
@@ -551,6 +565,10 @@ describe("doctor: session_start_preflight per-repo effective value (task c88461c
       actualVersion: "0.5.0",
       requiredVersion: "0.6.0",
       message: expect.stringContaining("v0.5.0 < 0.6.0"),
+      // task c88461c1, review round 3 residual, decision D-006: the
+      // cwd-derived project name this check's own verdict came from,
+      // carried on the finding.
+      projectName: repoName,
     });
   });
 
@@ -654,5 +672,54 @@ tools:
       }),
     ]);
     expect(report.errorCount).toBeGreaterThanOrEqual(1);
+  });
+});
+
+// Residual of task c88461c1's review round 3 (T-004 of the follow-up
+// batch, decision D-006): a scoped-load failure used to keep the PLAIN
+// `manifest`'s own `setup` value (a comment claimed this was NOT a
+// mismatch with the producer, but the producer's own `setupEnabled`
+// catch degrades to `setup: false`, see src/cli/session-start/
+// index.ts). This drives the scoped load into a genuine failure (a
+// malformed project layer file) against a base manifest that says
+// `setup: true`, and asserts this check now goes SILENT (matching
+// setup:false), not warning against the plain load's own value.
+describe("doctor: session_start_preflight.setup degrades to false on a scoped-load failure (task c88461c1, review round 3 residual, decision D-006)", () => {
+  function makeRepoFixture(name: string): string {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "harness-doctor-ssp-unresolvable-repo-"));
+    cleanups.push(() => fs.rmSync(root, { recursive: true, force: true }));
+    const repo = path.join(root, name);
+    fs.mkdirSync(path.join(repo, ".git"), { recursive: true });
+    fs.writeFileSync(path.join(repo, ".git", "HEAD"), "ref: refs/heads/main\n");
+    return repo;
+  }
+
+  it("goes silent (no finding) when the cwd-derived project layer fails to parse, even with an ancient preflight and setup:true at the base", async () => {
+    const repoName = "doctor-unresolvable-repo";
+    const repo = makeRepoFixture(repoName);
+    const home = makeFixture({
+      "harness.yaml": buildManifest("session_start_preflight:\n  setup: true"),
+    });
+    const projectDir = path.join(home, "projects", repoName);
+    fs.mkdirSync(projectDir, { recursive: true });
+    // Malformed YAML (an unterminated flow mapping): the scoped
+    // `loadManifest` call throws while parsing this layer.
+    fs.writeFileSync(
+      path.join(projectDir, "harness.overrides.yaml"),
+      "session_start_preflight: {setup: true\n",
+    );
+    const report = await doctor({
+      configPath: path.join(home, "harness.yaml"),
+      homeDir: home,
+      homeOverride: home,
+      cwd: repo,
+      versionProbe: (cmd) => (cmd[0] === "preflight" ? "preflight 0.1.0\n" : null),
+      pathEnv: "",
+      npmBinExec: STUB_NPM_BIN_EXEC_UNKNOWN,
+    });
+    // If the pre-fix "keep the plain manifest's value" degrade were
+    // still in place, this would warn `below_floor` against the base
+    // manifest's setup:true instead.
+    expect(report.sessionStartPreflightSetupVersion).toBeUndefined();
   });
 });
