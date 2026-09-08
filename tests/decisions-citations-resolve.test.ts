@@ -311,7 +311,17 @@ describe("CITATION_RE does not extract citation-shaped non-citations", () => {
 // `missing-file` in practice; it would if a future citation used a
 // sibling-relative form instead.
 //
-// COVERAGE ADDED THIS ROUND: the optional content anchor,
+// SECOND SCOPE CUT vs okf-kit: malformed heading-section forms are
+// extracted-and-reported upstream (`HEADING_SECTION_MALFORMED_RE` /
+// `collectHeadingSectionMalformedMatches` flags an unterminated
+// content-anchor quote, an unquoted third segment, or a non-`.md`
+// target), silently ignored here -- `HEADING_CITATION_RE` below simply
+// does not match those shapes, so a malformed citation extracts zero
+// heading citations rather than one flagged problem (the negative-
+// grammar fixture at the bottom of this file pins exactly that: zero
+// extractions for citation-shaped-but-not-quite text).
+//
+// COVERAGE ADDED IN task `ee494719`: the optional content anchor,
 // `` `path.md:#heading#"text"` ``, is now also extracted and checked --
 // the quoted text must occur on exactly one line inside the resolved
 // heading's section body, mirroring okf-kit's
@@ -430,9 +440,12 @@ function escapeRegExp(s: string): string {
 // Section body of a matched heading: from the line right after the
 // heading up to (not including) the next heading at or above the same
 // level, or EOF -- mirrors okf-kit's `findHeadingSection` bodyEnd scan,
-// which walks EVERY heading level (not just the level <= HEADING_MAX_LEVEL
-// ones `collectHeadings` returns), since a level-3+ subheading still ends
-// the section just as surely as another level-2 one would.
+// which matches heading lines of ANY level (not just the level <=
+// HEADING_MAX_LEVEL ones `collectHeadings` returns) but breaks only at
+// one whose level is <= the cited heading's own level; a deeper
+// subheading (e.g. a `### Added` under a `## [2.0.0]`) does NOT end the
+// section -- it is body content, so a section whose only body is such a
+// subheading is still non-empty.
 function findSectionBody(
   lines: string[],
   fencedLines: boolean[],
@@ -716,7 +729,7 @@ describe("heading-section citation guard: fixtures pinning discriminating checks
     expect(problem).toContain('".."');
   });
 
-  it("fails a citation to a heading whose section body has no non-blank content before the next heading (mutation probe (h) target: the empty-section check must run and reject a blank body)", () => {
+  it("fails a citation to a heading whose section body has no non-blank content before the next heading (mutation probe (h) target: the empty-section check must run and reject a blank body; mutation probe (i) target: the body-end boundary must stop at the NEXT heading, not read past it into a later section's content)", () => {
     const c = extractHeadingCitations(
       "fixture.md",
       "See `CHANGELOG.md:#1.2.9`.",
@@ -726,12 +739,22 @@ describe("heading-section citation guard: fixtures pinning discriminating checks
     expect(problem).toContain("no non-blank content");
   });
 
-  it("resolves a citation to a heading whose section body has real, non-blank content (control paired with the 1.2.9 empty-section fixture; mutation probe (i) target: the body-end boundary must stop at the NEXT heading, not read past it into a later section's content)", () => {
+  it("resolves a citation to a heading whose section body has real, non-blank content (control paired with the 1.2.9 empty-section fixture; mutation probe (j) target: the empty-section check must not fire on a real, non-blank section -- the false-positive direction)", () => {
     const c = extractHeadingCitations(
       "fixture.md",
       "See `CHANGELOG.md:#1.2.10`.",
     )[0]!;
     expect(checkHeadingCitation(tmpDir, c)).toBeNull();
+  });
+
+  it("fails a content-anchored citation to a heading whose section body has no non-blank content, with the empty-section problem (not the content-anchor problem), mirroring okf-kit's own check order (mutation probe (k) target: the empty-section check must run before the content-anchor check even when a content anchor is given, not be gated behind `c.contentAnchor === undefined`)", () => {
+    const c = extractHeadingCitations(
+      "fixture.md",
+      'See `CHANGELOG.md:#1.2.9#"anything"`.',
+    )[0]!;
+    const problem = checkHeadingCitation(tmpDir, c);
+    expect(problem).not.toBeNull();
+    expect(problem).toContain("no non-blank content");
   });
 });
 

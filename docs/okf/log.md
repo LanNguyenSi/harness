@@ -2,6 +2,39 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-09-08T08:58:05Z, task `9fec3839` (implementer, review round 2,
+  decision D-009): applied all seven low findings from `T-003` review
+  round 1 to the `heading-section-empty` mirror added in `tests/decisions-
+  citations-resolve.test.ts` (task `9fec3839`) on top of task
+  `ee494719`'s guard. New fixture pinning the check order: a content-
+  anchored citation to the already-empty `## [1.2.9]` section now asserts
+  the "no non-blank content" problem, not "does not occur" -- kills the
+  reviewer's surviving mutant that gated `isHeadingSectionEmpty` behind
+  `c.contentAnchor === undefined`. Test titles fixed: the mutation-probe
+  (i) body-end-boundary attribution moved from the `## [1.2.10]` control
+  onto the `## [1.2.9]` empty-section test (which actually kills that
+  mutant), and the `## [1.2.10]` control retitled to name what it pins,
+  the false-positive direction (the empty check must not fire on a real,
+  non-blank section). Docs: the older "COVERAGE ADDED THIS ROUND" comment
+  paragraph (task `ee494719`) reheaded "COVERAGE ADDED IN task
+  `ee494719`:" so only the new paragraph claims "this round"; a second
+  scope cut named in both the test file's SCOPE CUT comment and
+  `docs/okf/index.md`'s Maintenance section (malformed heading-section
+  forms -- an unterminated content-anchor quote, an unquoted third
+  segment, a non-`.md` target -- are extracted-and-reported by okf-kit,
+  silently ignored by this guard); the `findSectionBody` comment's wrong
+  rationale fixed (the scan matches headings of any level but breaks only
+  at one whose level is `<=` the cited heading's own level, so a deeper
+  subheading is body content, not a section end); `CHANGELOG.md`'s
+  "Round 2 addition" reworded to "Follow-up" (`9fec3839` is a separate
+  tracker task, not a review round of `ee494719`). Mutation probes via
+  `agent-primitives probe --pre 'npm run build' -t 'npx vitest run
+  tests/decisions-citations-resolve.test.ts'`: the new order-gate mutant
+  killed by the new fixture; both round-1 probes (the empty-check
+  disabled, the body-end boundary widened past the next heading)
+  replayed and still killed. `npx okf-kit@0.10.0 check --json docs/okf`
+  re-run against this commit: 0 stale / 0 warnings / 0 errors.
+
 - 2026-09-08T06:13:41Z, task c88461c1 (implementer, review round 3,
   decision D-028): scoped the derived project layer to
   `session_start_preflight.setup` alone. Round 2 fed the cwd-derived

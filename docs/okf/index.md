@@ -42,7 +42,9 @@ okf-kit's full sources/doc-relative/ancestor/repo-wide resolution chain,
 so a sibling-relative citation (e.g. a bare "log.md:#Overview" written
 from inside this same directory) that upstream would resolve fails here; every
 citation actually written in this bundle already uses a full
-repo-root-relative path, so this has not yet caused a false failure.
+repo-root-relative path, so this has not yet caused a false failure. A
+second scope cut: malformed heading-section forms are extracted-and-
+reported upstream, silently ignored here.
 
 ## Overview
 
