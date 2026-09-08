@@ -2,6 +2,40 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-09-08T05:04:09Z, task ee494719 (implementer, review round 2): fixed
+  all eight round-1 review findings on the heading-citation guard (this
+  bundle's Maintenance section above and `CHANGELOG.md`'s Unreleased
+  entry describe the resulting guard; this entry closes the round-1
+  thread). Three findings pinned previously-inert branches with new
+  isolated fixtures in `tests/decisions-citations-resolve.test.ts`: a
+  citation to a heading inside a fenced code block, a citation to a
+  version present only as a level-3 heading (above the level-2 cap), and
+  a citation matching two level-2 headings (ambiguous). A fourth added
+  the optional content-anchor form (a `path.md` target, `#heading`, then
+  a quoted `#"text"`) to `HEADING_CITATION_RE` and its resolution,
+  requiring the quoted text to occur on exactly one line of the resolved
+  section, mirroring okf-kit's
+  `heading-section-content-anchor-*` findings; before this fix a
+  content-anchored citation matched nothing and was silently unchecked.
+  A fifth added a sibling negative-grammar fixture for
+  `HEADING_CITATION_RE` (an unbackticked heading-shaped path in prose, a
+  Markdown link fragment, a non-`.md` path). A sixth anchored the fence
+  predicate to the whole trimmed line (`MD_FENCE_DELIM_RE`) instead of a
+  prefix test. A seventh rejects a `citedPath` containing a `..` segment
+  outright. An eighth removes the fixture temp directory in an `afterAll`.
+  The mirrored-from doc comment now names the pinned okf-kit version
+  (0.10.0, matching `.github/workflows/okf-staleness.yml`), states the
+  repo-root-relative-only resolution scope cut against okf-kit's fuller
+  resolution chain, and names the new content-anchor coverage; this
+  bundle's Maintenance section above carries the same two points. The
+  `CHANGELOG.md` Unreleased entry was reworded count-free, naming the
+  seven cited release sections (`[0.24.0]`, `[0.35.0]`, `[0.39.0]`,
+  `[0.43.0]`, `[0.44.0]`, `[0.45.0]`, `[0.48.0]`) instead of a citation
+  count that had already drifted from the actual number at HEAD. Verified
+  after committing: `npx okf-kit@0.10.0 check --json docs/okf` reported 0
+  errors/warnings/notices; `npx vitest run
+  tests/decisions-citations-resolve.test.ts` passed all 198 tests.
+
 - 2026-09-07T10:52:27Z, task 4f0abbc8 (implementer): negative control for
   the 2026-09-07T10:50:36Z entry below (commit `e060323`). Appended one
   throwaway line to `CHANGELOG.md` (uncommitted), ran `npx

@@ -23,14 +23,23 @@ new releases are prepended above it (task `419ecfad`).
 
 `tests/decisions-citations-resolve.test.ts` also blocks (not just warns)
 on this bundle's heading-section citations themselves (the
-`path.md`-plus-`#heading` form, e.g. `CHANGELOG.md:#0.24.0` above; task
+`path.md`-plus-`#heading` form, e.g. `CHANGELOG.md:#0.24.0` above, and its
+optional content-anchor variant (a `path.md` target, `#heading`, then a
+quoted `#"text"`); task
 `ee494719`): it resolves each one against the target's own Markdown
-heading structure, mirroring okf-kit's `citations-resolve` heading-form
-semantics, and additionally requires a `CHANGELOG.md` target's matching
+heading structure, mirroring okf-kit@0.10.0's `citations-resolve`
+heading-form semantics (the version this repo's `okf-staleness` CI job
+pins), and additionally requires a `CHANGELOG.md` target's matching
 heading to take this repo's own exact `## [x.y.z]` bracket form. Before
 this guard, only okf-kit's warn-only `citations-resolve` rule (run
 through the `okf-staleness` CI job) checked these citations, so a renamed
 or removed release heading only warned; a CI failure here now blocks.
+Scope cut vs okf-kit: path resolution here is repo-root-relative only, not
+okf-kit's full sources/doc-relative/ancestor/repo-wide resolution chain,
+so a sibling-relative citation (e.g. a bare "log.md:#Overview" written
+from inside this same directory) that upstream would resolve fails here; every
+citation actually written in this bundle already uses a full
+repo-root-relative path, so this has not yet caused a false failure.
 
 ## Overview
 
