@@ -622,14 +622,58 @@ export async function runSessionStartPreflight(
   // `fs.existsSync` check), so nothing extra is merged in that case.
   // See docs/CLI.md's `session_start_preflight.setup` Notes for the
   // full rule.
+  const sessionStartPreflightProjectName = opts.project ?? deriveProjectName(cwd) ?? repo;
   const setupEnabled = (() => {
     try {
       const manifest =
         opts.manifest ??
-        loadManifest({ ...opts, project: opts.project ?? deriveProjectName(cwd) ?? repo })
-          .manifest;
+        loadManifest({ ...opts, project: sessionStartPreflightProjectName }).manifest;
       return manifest.session_start_preflight.setup;
-    } catch {
+    } catch (err) {
+      // One diagnostic line naming the layer path (task c88461c1,
+      // review round 3 residual; task `1c4eb3ea`): a scoped-load
+      // failure here was silent everywhere before this task, degrading
+      // straight to `setup: false` with no trace of WHY. Best-effort:
+      // only fires when `!opts.manifest` (an injected manifest never
+      // reaches `loadManifest` above, so a throw from THAT branch would
+      // be a caller bug, not a layer failure) and only names the layer
+      // path when `resolvePaths` itself can resolve one (its own
+      // "refused to fall back to the real harness home dir" test-safety
+      // throw, see loader.ts, is swallowed here rather than surfaced as
+      // a misleading "layer failed to load" line).
+      //
+      // Lead-in describes the SCOPED LOAD, not "the project layer"
+      // (task 1c4eb3ea, round 2, D-027 item 5): `loadManifest` above
+      // merges the base manifest, every applicable machine-override
+      // layer, AND the project layer in one call, so a throw here can
+      // come from any of the three; `layerPath` below is only ever
+      // used to DECIDE whether to emit this line at all (a project
+      // layer must actually exist on disk to attribute the failure to
+      // project scoping at all) and as context in the message, never
+      // as the claimed culprit, so a base- or machine-layer parse
+      // failure with a valid, existing project layer no longer reads
+      // as "the project layer failed to load" when it did not.
+      // Multi-line YAML parse errors are collapsed to their FIRST line
+      // (D-027 item 5) so this stays the promised one diagnostic line.
+      if (!opts.manifest) {
+        try {
+          const layerPath = resolvePaths({
+            ...opts,
+            project: sessionStartPreflightProjectName,
+          }).projectLayer;
+          if (layerPath !== null) {
+            const errMessage = err instanceof Error ? err.message : String(err);
+            const errFirstLine = errMessage.split("\n")[0];
+            note(
+              `session_start_preflight.setup: the project-scoped manifest load for ` +
+                `project ${sessionStartPreflightProjectName} failed (${errFirstLine}); ` +
+                `degrading to setup: false (project layer: ${layerPath})`,
+            );
+          }
+        } catch {
+          /* best-effort diagnostic only; setup:false below still happens */
+        }
+      }
       return false;
     }
   })();

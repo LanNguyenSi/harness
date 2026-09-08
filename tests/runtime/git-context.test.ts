@@ -594,3 +594,47 @@ describe("deriveProjectName: submodule and --separate-git-dir shapes (task c8846
     expect(deriveProjectName(workTree)).not.toBe(path.basename(workTree));
   });
 });
+
+// Residual of task c88461c1's review round 3 (T-004 of the follow-up
+// batch, tracker 1c4eb3ea): before the `fs.realpathSync` step added to
+// `deriveProjectName` above, a checkout reached through a symlink
+// derived the SYMLINK's own basename, not the real directory's, so two
+// paths to the SAME repository (the real checkout, and a symlink
+// pointing at it) resolved two DIFFERENT project layers, contradicting
+// D-021a's "repository identity is the common dir" rule.
+describe("deriveProjectName: symlinked checkout resolves the real directory's name (task c88461c1, review round 3 residual, tracker 1c4eb3ea)", () => {
+  it("derives the real directory's basename through a symlinked checkout, matching the real path directly", () => {
+    const root = tmpDir();
+    const realRepo = makeRepo(root, "real-project", "ref: refs/heads/main");
+    const symlinkPath = path.join(root, "symlinked-project");
+    fs.symlinkSync(realRepo, symlinkPath, "dir");
+
+    expect(deriveProjectName(realRepo)).toBe("real-project");
+    expect(deriveProjectName(symlinkPath)).toBe("real-project");
+    expect(deriveProjectName(symlinkPath)).not.toBe("symlinked-project");
+  });
+
+  it("falls back to the un-resolved common dir when realpath fails, rather than throwing", () => {
+    // `findGitEntry` never verifies a `.git` FILE's `gitdir:` target
+    // exists (see its doc comment): it just resolves the pointer path
+    // textually. A `gitdir:` line pointing at a nonexistent absolute
+    // path reaches `deriveProjectName`'s `fs.realpathSync` call with a
+    // path that genuinely does not exist on disk, exercising the
+    // catch branch directly (unlike the symlink case above, where
+    // `findGitEntry`'s own `fs.statSync` calls already require the
+    // target to exist).
+    const root = tmpDir();
+    const worktree = path.join(root, "broken-gitdir-project");
+    fs.mkdirSync(worktree, { recursive: true });
+    const missingGitDir = path.join(root, "does-not-exist", "gitdir");
+    fs.writeFileSync(path.join(worktree, ".git"), `gitdir: ${missingGitDir}\n`);
+
+    expect(() => deriveProjectName(worktree)).not.toThrow();
+    // `resolveCommonDir` finds no `commondir` file under the missing
+    // path (its own read throws and is caught), so it returns
+    // `missingGitDir` unchanged; `realpathSync` on that then also
+    // throws and is caught, falling back to the SAME un-resolved
+    // value used before this task's realpath step existed.
+    expect(deriveProjectName(worktree)).toBe(path.basename(missingGitDir));
+  });
+});

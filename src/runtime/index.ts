@@ -40,6 +40,7 @@ export {
 export {
   resolveGitContext,
   deriveProjectName,
+  isValidProjectName,
   type GitRepoContext,
 } from "./git-context.js";
 export {

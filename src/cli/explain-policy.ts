@@ -74,8 +74,19 @@ export interface ExplainPolicyOptions extends EventInputSeams, LoaderOptions {
  * `src/overrides/merge.ts`): the project layer is checked first since
  * it is the highest-precedence layer, then machine layers from the
  * last-applied (highest-precedence) one back to the first.
+ *
+ * "unresolvable" (task c88461c1, review round 3 residual; task
+ * `1c4eb3ea` of the batch-44 follow-up run): the cwd-derived project-scoped SECOND
+ * load itself threw (a malformed project layer, an unreadable file).
+ * Deliberately NOT "base": the base/machine values were never actually
+ * re-read on this path (the plain load above them; see the round-3
+ * comment this residual corrected), so attributing the result to
+ * "base" would claim a value the base layer may not carry. `setup`
+ * degrades to `false` alongside it, matching the producer's own
+ * `setupEnabled` catch (`src/cli/session-start/index.ts`), so the two
+ * agree on a scoped-load failure instead of only on a healthy load.
  */
-export type SessionStartPreflightLayerSource = "base" | "machine" | "project";
+export type SessionStartPreflightLayerSource = "base" | "machine" | "project" | "unresolvable";
 
 /**
  * Does `filePath`'s raw YAML explicitly declare `session_start_preflight.setup`?
@@ -147,18 +158,23 @@ interface ExplainPolicyProjection {
    * preflight` / `harness preflight` producer passes `--setup` to the
    * `preflight run` invocation whose `ready:true` result these policies
    * gate on. Omitted for every other policy; it has no bearing on
-   * their evaluation. `source` (task c88461c1) names which resolved
-   * layer decided the value: `"base"` (also covers an injected
-   * `opts.manifest`, which carries no per-layer provenance to
-   * attribute), `"machine"`, or `"project"` (the cwd-derived per-repo
-   * layer). This function derives that project name itself, from
-   * `opts.cwd`, via the SAME `deriveProjectName` helper `harness
-   * session-start preflight` feeds through `LoaderOptions.project`
-   * (review round 2, decision D-021b: without this, an operator running
-   * `explain-policy` with no `--project` in a repo that DOES have a
-   * project layer would see the base/machine value while the producer
-   * itself reads the project layer, see src/cli/session-start/
-   * index.ts).
+   * their evaluation (review round 3 residual; task `1c4eb3ea`: the
+   * scoped SECOND load below this field's assignment site runs ONLY
+   * when this condition is already true, so a policy this block is
+   * never rendered for never pays for that extra load either).
+   * `source` (task c88461c1) names which resolved layer decided the
+   * value: `"base"` (also covers an injected `opts.manifest`, which
+   * carries no per-layer provenance to attribute), `"machine"`,
+   * `"project"` (the cwd-derived per-repo layer), or `"unresolvable"`
+   * (review round 3 residual; task `1c4eb3ea`: the scoped load itself
+   * threw, `setup` degrades to `false` alongside it). This function
+   * derives that project name itself, from `opts.cwd`, via the SAME
+   * `deriveProjectName` helper `harness session-start preflight` feeds
+   * through `LoaderOptions.project` (review round 2, decision D-021b:
+   * without this, an operator running `explain-policy` with no
+   * `--project` in a repo that DOES have a project layer would see the
+   * base/machine value while the producer itself reads the project
+   * layer, see src/cli/session-start/index.ts).
    */
   session_start_preflight?: { setup: boolean; source: SessionStartPreflightLayerSource };
   when:
@@ -220,39 +236,6 @@ export function explainPolicy(
     manifest = loaded.manifest;
     resolvedPaths = loaded.resolved;
   }
-  // `session_start_preflight.setup` / `source` (task c88461c1, review
-  // round 2 decision D-021b; scope narrowed to this one key, review
-  // round 3 decision D-028): an explicit `opts.project` still wins
-  // outright; otherwise derive the project name from `opts.cwd`
-  // (defaulting to `process.cwd()`) via the SAME shared
-  // `deriveProjectName` helper `harness session-start preflight` and
-  // `harness doctor` feed their own SECOND load from, so this verb's
-  // `setup`/`source` reflect the layer the producer itself would
-  // actually read for this cwd -- WITHOUT letting that derived layer
-  // reach the policy evaluation above. An injected `opts.manifest`
-  // carries no per-layer provenance to re-derive from and always
-  // reports "base" (unchanged from before this task). Best-effort: a
-  // config/parse failure here degrades to the plain load's own
-  // (project-unaware) values; NOTE this is NOT the producer's own
-  // fallback (its `setupEnabled` catch degrades to `setup: false`),
-  // so on a layer that fails to load this verb and the producer
-  // can disagree; see the CHANGELOG entry for the follow-up.
-  let sessionStartPreflightSetup = manifest.session_start_preflight.setup;
-  let sessionStartPreflightSource: SessionStartPreflightLayerSource = resolvedPaths
-    ? resolveSessionStartPreflightSource(resolvedPaths)
-    : "base";
-  if (!opts.manifest) {
-    try {
-      const scoped = loadManifest({
-        ...opts,
-        project: opts.project ?? deriveProjectName(opts.cwd ?? process.cwd()) ?? undefined,
-      });
-      sessionStartPreflightSetup = scoped.manifest.session_start_preflight.setup;
-      sessionStartPreflightSource = resolveSessionStartPreflightSource(scoped.resolved);
-    } catch {
-      /* keep the plain load's values computed above */
-    }
-  }
   const policy = manifest.policies.find((p) => p.name === policyName);
   if (!policy) {
     const available = manifest.policies.map((p) => p.name).join(", ") || "(none)";
@@ -260,6 +243,56 @@ export function explainPolicy(
       `no policy named "${policyName}" declared; available: ${available}`,
       EX_USAGE,
     );
+  }
+
+  // `session_start_preflight.setup` / `source` (task c88461c1, review
+  // round 2 decision D-021b; scope narrowed to this one key, review
+  // round 3 decision D-028; gated on the name-prefix check below,
+  // review round 3 residual, task `1c4eb3ea`): an explicit
+  // `opts.project` still wins outright; otherwise derive the project
+  // name from `opts.cwd` (defaulting to `process.cwd()`) via the SAME
+  // shared `deriveProjectName` helper `harness session-start preflight`
+  // and `harness doctor` feed their own SECOND load from, so this
+  // verb's `setup`/`source` reflect the layer the producer itself
+  // would actually read for this cwd -- WITHOUT letting that derived
+  // layer reach the policy evaluation above. An injected
+  // `opts.manifest` carries no per-layer provenance to re-derive from
+  // and always reports "base" (unchanged from before this task).
+  //
+  // ONLY COMPUTED FOR `preflight-before-*` POLICIES (moved behind this
+  // check, review round 3 residual, task `1c4eb3ea`): the block below
+  // is rendered into the projection ONLY for those policies (see
+  // `ExplainPolicyProjection.session_start_preflight`'s doc comment),
+  // so a caller explaining any OTHER policy no longer pays for a
+  // second manifest load whose result it can never see.
+  let sessionStartPreflightSetup = false;
+  let sessionStartPreflightSource: SessionStartPreflightLayerSource = "base";
+  if (policy.name.startsWith("preflight-before-")) {
+    sessionStartPreflightSetup = manifest.session_start_preflight.setup;
+    sessionStartPreflightSource = resolvedPaths
+      ? resolveSessionStartPreflightSource(resolvedPaths)
+      : "base";
+    if (!opts.manifest) {
+      try {
+        const scoped = loadManifest({
+          ...opts,
+          project: opts.project ?? deriveProjectName(opts.cwd ?? process.cwd()) ?? undefined,
+        });
+        sessionStartPreflightSetup = scoped.manifest.session_start_preflight.setup;
+        sessionStartPreflightSource = resolveSessionStartPreflightSource(scoped.resolved);
+      } catch {
+        // Review round 3 residual, task `1c4eb3ea`: degrade to
+        // setup:false / source:"unresolvable" rather than keeping the
+        // plain load's values, matching the producer's own
+        // `setupEnabled` catch (`src/cli/session-start/index.ts`),
+        // which degrades to `setup: false` on the identical failure
+        // instead of falling back to a base/machine value it never
+        // actually re-read on this path. "base" would misattribute
+        // the result to a layer this function never consulted here.
+        sessionStartPreflightSetup = false;
+        sessionStartPreflightSource = "unresolvable";
+      }
+    }
   }
 
   const { event, envelope } = loadEventEnvelope(

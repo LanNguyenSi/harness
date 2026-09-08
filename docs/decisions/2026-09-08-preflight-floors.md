@@ -26,10 +26,10 @@ of that task named three residuals:
 2. **Double report by design.** A freshly generated manifest with
    `setup: true`, probed against a preflight below the shared floor,
    fires BOTH the generic `hooks[]` `min_version` walk
-   (`checkHookVersion`, `src/cli/doctor/index.ts:466-505#"message: `v${token} ≥ ${hook.min_version}` };"`)
+   (`checkHookVersion`, `src/cli/doctor/index.ts:470-509#"message: `v${token} ≥ ${hook.min_version}` };"`)
    and the setup-specific check
    (`checkSessionStartPreflightSetupVersion`,
-   `src/cli/doctor/session-start-preflight-setup-version.ts:96-135#"return undefined;"`).
+   `src/cli/doctor/session-start-preflight-setup-version.ts:145-182#"return undefined;"`).
    Documented in `docs/CLI.md`'s VERSION CAVEAT, not a bug, but worth
    naming as a design cost of one constant feeding two independently
    fired findings.
@@ -108,7 +108,7 @@ prerelease below its release (`0.6.0-rc.1 < 0.6.0`).
 Both checks (`checkHookVersion` and
 `checkSessionStartPreflightSetupVersion`) already share the same
 underlying comparator, `compareNumericVersions` (aliased `compareVersions`
-in `src/cli/doctor/index.ts:359-361#"const compareVersions = compareNumericVersions;"`),
+in `src/cli/doctor/index.ts:363-365#"const compareVersions = compareNumericVersions;"`),
 and both duplicate the same `/(\d+(?:\.\d+){0,3})/` extraction regex.
 The fix is made ONCE in the shared leaf module,
 `src/io/version-compare.ts`: a new `parseProbedVersion` extracts the
@@ -136,8 +136,8 @@ prerelease-blind (a probed `X.Y.Z-rc.1` still parses as `X.Y.Z` and can
 satisfy an `X.Y.Z` floor on every one of them):
 
 - `tools.cli[]` and `tools.mcp[]` in `harness doctor`
-  (`src/cli/doctor/index.ts:261#"const m = stdout.match"` and
-  `src/cli/doctor/index.ts:331#"const m = stdout.match"`).
+  (`src/cli/doctor/index.ts:265#"const m = stdout.match"` and
+  `src/cli/doctor/index.ts:335#"const m = stdout.match"`).
 - `tools.cli[]` in `harness validate`
   (`src/cli/validate/checks.ts:161-186#"message: `installed version ${match[1]} is less than required ${cli.min_version}`,"`),
   a separate implementation of the same `tools.cli[]` contract for a

@@ -123,7 +123,18 @@ function formatEnvironmentSection(report: DoctorReport): string[] {
     for (const line of bypassWithoutAutoApprove.detail) out.push(`      ${line}`);
   }
   if (sessionStartPreflightSetupVersion) {
-    out.push(`  ⚠ ${sessionStartPreflightSetupVersion.message}`);
+    // task c88461c1, review round 3 residual; task `1c4eb3ea` (round 2,
+    // D-027 item 2): name the project whose layer actually DECIDED
+    // this verdict, when one was in play (only when a layer file
+    // resolved, not merely attempted, see `doctor()`), so a warning
+    // that came from a per-repo project layer is distinguishable from
+    // one that came from the base/machine value (the header's own
+    // `project:` clause above only ever reflects an EXPLICIT
+    // `--project`, never this derived name).
+    const project = sessionStartPreflightSetupVersion.projectName
+      ? ` (project: ${sessionStartPreflightSetupVersion.projectName})`
+      : "";
+    out.push(`  ⚠ ${sessionStartPreflightSetupVersion.message}${project}`);
   }
   if (showUgAuto && ugAuto) {
     const modeParts = Object.keys(ugAuto.byMode)

@@ -7,7 +7,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import { explainPolicy } from "../../src/cli/explain-policy.js";
 import { HarnessExitError } from "../../src/cli/exit-codes.js";
@@ -422,6 +422,35 @@ describe("explainPolicy: session_start_preflight.source (task c88461c1)", () => 
     expect(projection.session_start_preflight).toEqual({ setup: false, source: "project" });
   });
 
+  // Residual of task c88461c1's review round 3 (T-004 of the follow-up
+  // batch, tracker 1c4eb3ea): `layerDeclaresSetup`'s WHOLE-BLOCK
+  // tombstone branch (`session_start_preflight: null`, distinct from
+  // the per-key `{setup: null}` tombstone above) had no test. A whole
+  // top-level `null` deletes the ENTIRE key when merged (`mergeValue`,
+  // `src/overrides/merge.ts`), same end result as the per-key form, but
+  // `layerDeclaresSetup` reaches it through a different branch
+  // (`block === null`, returning `true` directly instead of checking
+  // `"setup" in block`).
+  it("attributes a project layer's WHOLE-BLOCK tombstone (`session_start_preflight: null`) as source:project", () => {
+    const home = makeHome();
+    writeBaseManifest(home, true);
+    writeMachineLayer(home, true);
+    const projectDir = path.join(home, "projects", "whole-block-tombstone-project");
+    fs.mkdirSync(projectDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(projectDir, "harness.overrides.yaml"),
+      ["session_start_preflight: null", ""].join("\n"),
+    );
+    const file = writeEvent(DESTROY_EVENT);
+    const { projection } = explainPolicy("preflight-before-investigation", {
+      ...seams("main"),
+      eventPath: file,
+      homeDir: home,
+      project: "whole-block-tombstone-project",
+    });
+    expect(projection.session_start_preflight).toEqual({ setup: false, source: "project" });
+  });
+
   // Review round 3, decision D-028: two machine layers plus a project
   // layer that does NOT declare `setup` itself. `resolveSessionStartPreflightSource`
   // walks `resolved.machineLayers` from the LAST entry backwards
@@ -571,5 +600,122 @@ describe("explainPolicy: session_start_preflight name-prefix boundary (task 3018
       manifest: MANIFEST_PREFIX_BOUNDARY,
     });
     expect(projection.session_start_preflight).toEqual({ setup: true, source: "base" });
+  });
+});
+
+// Residual of task c88461c1's review round 3 (T-004 of the follow-up
+// batch, tracker 1c4eb3ea): the cwd-derived, project-scoped SECOND
+// `loadManifest` call ran unconditionally, before the named policy was
+// even looked up, even though its result is rendered only for a
+// `preflight-before-*` policy (see
+// `ExplainPolicyProjection.session_start_preflight`'s doc comment).
+// Wraps the loader's own `loadManifest` with a call-counting spy
+// (`vi.mock` + `importOriginal`, the same idiom
+// tests/cli/manifest-view-parity.test.ts uses for an ESM named export
+// that cannot be `vi.spyOn`-ed directly, see
+// reference_vitest_spyon_esm_named_export) to prove the SECOND load is
+// skipped entirely for a policy this field is never rendered for, not
+// merely computed and discarded. `vi.mock` factory calls are hoisted
+// by Vitest above every import in this file regardless of where they
+// are written, so placing it here (at the file's end, per this task's
+// "new tests at the end" convention) does not change when it takes
+// effect.
+vi.mock("../../src/cli/loader.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../src/cli/loader.js")>();
+  return { ...actual, loadManifest: vi.fn(actual.loadManifest) };
+});
+
+describe("explainPolicy: the scoped SECOND load runs only for a preflight-before-* policy (task c88461c1, review round 3 residual, tracker 1c4eb3ea)", () => {
+  function makeHome(): string {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "harness-explain-policy-loadcount-"));
+    cleanups.push(() => fs.rmSync(dir, { recursive: true, force: true }));
+    fs.writeFileSync(path.join(dir, "harness.yaml"), stringifyYaml(MANIFEST_INPUT));
+    return dir;
+  }
+
+  async function loadManifestMock(): Promise<ReturnType<typeof vi.fn>> {
+    const { loadManifest } = await import("../../src/cli/loader.js");
+    return loadManifest as unknown as ReturnType<typeof vi.fn>;
+  }
+
+  it("calls loadManifest exactly once (the plain load only) for a policy outside the preflight-before- prefix", async () => {
+    const mockFn = await loadManifestMock();
+    mockFn.mockClear();
+    const home = makeHome();
+    const file = writeEvent(DESTROY_EVENT);
+    explainPolicy("plain-bash-gate", {
+      ...seams("main"),
+      eventPath: file,
+      homeDir: home,
+    });
+    expect(mockFn).toHaveBeenCalledTimes(1);
+  });
+
+  it("calls loadManifest twice (the plain load, then the scoped load) for a preflight-before-* policy", async () => {
+    const mockFn = await loadManifestMock();
+    mockFn.mockClear();
+    const home = makeHome();
+    const file = writeEvent(DESTROY_EVENT);
+    explainPolicy("preflight-before-investigation", {
+      ...seams("main"),
+      eventPath: file,
+      homeDir: home,
+    });
+    expect(mockFn).toHaveBeenCalledTimes(2);
+  });
+});
+
+// Residual of task c88461c1's review round 3 (T-004 of the follow-up
+// batch, tracker 1c4eb3ea): a scoped-load failure used to keep the PLAIN
+// load's `setup`/`source` values (a comment claimed this mirrored the
+// producer's own catch, but the producer degrades to `setup: false`
+// instead, see src/cli/session-start/index.ts). This drives the
+// scoped load into a genuine failure (a malformed project layer file)
+// and asserts the degrade decided for this residual: `setup: false`,
+// `source: "unresolvable"`, never the plain load's own value.
+describe("explainPolicy: session_start_preflight degrades to setup:false/source:unresolvable on a scoped-load failure (task c88461c1, review round 3 residual, tracker 1c4eb3ea)", () => {
+  /** Create `<tmp>/<name>/.git/HEAD` and return the work-tree path. */
+  function makeRepoFixture(name: string): string {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "harness-explain-policy-unresolvable-repo-"));
+    cleanups.push(() => fs.rmSync(root, { recursive: true, force: true }));
+    const repo = path.join(root, name);
+    fs.mkdirSync(path.join(repo, ".git"), { recursive: true });
+    fs.writeFileSync(path.join(repo, ".git", "HEAD"), "ref: refs/heads/main\n");
+    return repo;
+  }
+
+  it("reports setup:false, source:unresolvable when the CWD-DERIVED project layer fails to parse, not the plain load's setup:true", () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "harness-explain-policy-unresolvable-"));
+    cleanups.push(() => fs.rmSync(home, { recursive: true, force: true }));
+    // The PLAIN load (no explicit --project, so it never touches the
+    // project layer below) says setup:true; if the scoped-load failure
+    // kept this value (the pre-fix behavior), the assertion below
+    // would see {setup: true, source: "base"} instead.
+    fs.writeFileSync(
+      path.join(home, "harness.yaml"),
+      stringifyYaml({ ...MANIFEST_INPUT, session_start_preflight: { setup: true } }),
+    );
+    const repo = makeRepoFixture("explain-cwd-unresolvable-repo");
+    const projectDir = path.join(home, "projects", "explain-cwd-unresolvable-repo");
+    fs.mkdirSync(projectDir, { recursive: true });
+    // Malformed YAML (an unterminated flow mapping): the CWD-DERIVED
+    // scoped `loadManifest` call throws while parsing this layer; no
+    // explicit `--project` is passed, so the PLAIN load above never
+    // reaches this file at all (see the D-028 boundary tests).
+    fs.writeFileSync(
+      path.join(projectDir, "harness.overrides.yaml"),
+      "session_start_preflight: {setup: true\n",
+    );
+    const file = writeEvent(DESTROY_EVENT);
+    const { projection } = explainPolicy("preflight-before-investigation", {
+      ...seams("main"),
+      eventPath: file,
+      homeDir: home,
+      cwd: repo,
+    });
+    expect(projection.session_start_preflight).toEqual({
+      setup: false,
+      source: "unresolvable",
+    });
   });
 });

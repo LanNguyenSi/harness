@@ -1827,3 +1827,150 @@ describe("HEAD-binding order (task 30183330, guards preflight tag semantics)", (
     expect(writes[0]).not.toContain(mutatedSha);
   });
 });
+
+// Residual of task c88461c1's review round 3 (T-004 of the follow-up
+// batch, tracker 1c4eb3ea): the `setupEnabled` catch degraded to `setup:
+// false` with NO trace anywhere of why, even though the scoped-load
+// failure is exactly the shape an operator debugging "why did my
+// project layer not apply" would want a pointer for. This drives that
+// catch into a genuine failure (a malformed cwd-derived project layer)
+// and asserts ONE stderr line naming the layer's path, while the run
+// still proceeds (never aborts) with setup:false.
+describe("runSessionStartPreflight: setupEnabled catch names the failed layer path on stderr (task c88461c1, review round 3 residual, tracker 1c4eb3ea)", () => {
+  function writeBaseManifest(home: string, setup: boolean): void {
+    fs.writeFileSync(
+      path.join(home, "harness.yaml"),
+      [
+        "version: 1",
+        "hooks: []",
+        "policies: []",
+        "tools:",
+        "  builtin:",
+        "    known: [Read, Edit]",
+        "session_start_preflight:",
+        `  setup: ${setup}`,
+        "",
+      ].join("\n"),
+    );
+  }
+
+  it("names the project layer path on stderr and degrades to setup:false, never aborting the run", async () => {
+    const repoName = "setup-unresolvable-repo";
+    const repo = makeRepoFixture(repoName);
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "harness-sspf-unresolvable-home-"));
+    cleanups.push(() => fs.rmSync(home, { recursive: true, force: true }));
+    // The base manifest says setup:true; if the failed scoped load
+    // somehow still let this value through, the assertion below on
+    // seenArgs would see setup:true instead.
+    writeBaseManifest(home, true);
+    const projectDir = path.join(home, "projects", repoName);
+    fs.mkdirSync(projectDir, { recursive: true });
+    const layerPath = path.join(projectDir, "harness.overrides.yaml");
+    // Malformed YAML (an unterminated flow mapping): the scoped
+    // `loadManifest` call throws while parsing this layer.
+    fs.writeFileSync(layerPath, "session_start_preflight: {setup: true\n");
+
+    const seenArgs: Array<{ cwd: string; timeoutMs: number; setup: boolean }> = [];
+    const { stream: err, output: errOut } = captureStream();
+    const result = await runSessionStartPreflight({
+      stdin: streamFrom(JSON.stringify({ session_id: "s", cwd: repo })),
+      stderr: err,
+      homeDir: home,
+      runPreflight: async (cwd, timeoutMs, setup) => {
+        seenArgs.push({ cwd, timeoutMs, setup });
+        return { ok: true, json: { ready: true, confidence: 0.9, checks: [] } };
+      },
+      writeLedger: async () => ({ ok: true }),
+    });
+    expect(result.wrote).toBe(true);
+    expect(seenArgs).toEqual([{ cwd: repo, timeoutMs: 60_000, setup: false }]);
+    expect(errOut()).toContain(layerPath);
+    expect(errOut()).toContain("degrading to setup: false");
+    // Task 1c4eb3ea, round 2, D-027 item 5: the YAML parse error this
+    // fixture triggers is genuinely multi-line (measured: 6 lines from
+    // `yaml`'s own error message alone, including a blank line and a
+    // trailing `^` caret marker) and must be collapsed to its first
+    // line before interpolating. A count of lines MATCHING the
+    // diagnostic's own prefix does not discriminate an un-collapsed
+    // regression: the prefix only ever appears once regardless, since
+    // it precedes the (possibly multi-line) error text, not after it.
+    // Assert directly on total non-blank stderr line count instead
+    // (this producer writes exactly one other note() line, for the
+    // successful ledger write, so the correct total is 2, not 1) and
+    // that the caret marker unique to the RAW, un-collapsed `yaml`
+    // error never reaches stderr.
+    const nonBlankLines = errOut()
+      .split("\n")
+      .filter((line) => line.length > 0);
+    expect(nonBlankLines).toHaveLength(2);
+    expect(errOut()).not.toContain("^");
+  });
+
+  // Task 1c4eb3ea, round 2, D-027 item 4: round 1's message named "project
+  // layer <path> failed to load" unconditionally once ANY project layer
+  // file existed on disk, even when the actual parse failure came from a
+  // DIFFERENT layer the same `loadManifest` call also merges (base or a
+  // machine-override layer). This drives the throw from a malformed
+  // MACHINE layer while a VALID project layer sits on disk for the same
+  // repo, and asserts the diagnostic no longer blames that (perfectly
+  // fine) project layer file for a failure it did not cause.
+  it("does not blame a valid project layer for a machine-layer parse failure", async () => {
+    const repoName = "setup-machine-layer-unresolvable-repo";
+    const repo = makeRepoFixture(repoName);
+    const home = fs.mkdtempSync(
+      path.join(os.tmpdir(), "harness-sspf-machine-unresolvable-home-"),
+    );
+    cleanups.push(() => fs.rmSync(home, { recursive: true, force: true }));
+    writeBaseManifest(home, true);
+    const projectDir = path.join(home, "projects", repoName);
+    fs.mkdirSync(projectDir, { recursive: true });
+    const projectLayerPath = path.join(projectDir, "harness.overrides.yaml");
+    // A VALID project layer: this file parses fine on its own.
+    fs.writeFileSync(
+      projectLayerPath,
+      ["session_start_preflight:", "  setup: true", ""].join("\n"),
+    );
+    // The MACHINE layer is what actually fails to parse. `default` is
+    // always a machine-override candidate (machineOverrideCandidates),
+    // so this layer applies without pinning a hostname/platform
+    // discriminator, and the one scoped `loadManifest` call that merges
+    // base + machine + project throws from THIS file, not the project
+    // layer above.
+    fs.mkdirSync(path.join(home, "machines"), { recursive: true });
+    fs.writeFileSync(
+      path.join(home, "machines", "default.harness.overrides.yaml"),
+      "session_start_preflight: {setup: true\n",
+    );
+
+    const seenArgs: Array<{ cwd: string; timeoutMs: number; setup: boolean }> = [];
+    const { stream: err, output: errOut } = captureStream();
+    const result = await runSessionStartPreflight({
+      stdin: streamFrom(JSON.stringify({ session_id: "s", cwd: repo })),
+      stderr: err,
+      homeDir: home,
+      runPreflight: async (cwd, timeoutMs, setup) => {
+        seenArgs.push({ cwd, timeoutMs, setup });
+        return { ok: true, json: { ready: true, confidence: 0.9, checks: [] } };
+      },
+      writeLedger: async () => ({ ok: true }),
+    });
+    expect(result.wrote).toBe(true);
+    expect(seenArgs).toEqual([{ cwd: repo, timeoutMs: 60_000, setup: false }]);
+    // The message must not claim the (fine) project layer FILE failed
+    // to load; it describes the scoped LOAD failing instead, with the
+    // layer path kept only as context.
+    expect(errOut()).not.toContain(`project layer ${projectLayerPath} failed to load`);
+    expect(errOut()).toContain("the project-scoped manifest load for project");
+    expect(errOut()).toContain("degrading to setup: false");
+    expect(errOut()).toContain(projectLayerPath);
+    // Review round 3, fix 8 (positive half): the message must also
+    // name the ACTUAL failing MACHINE layer path, not just decline to
+    // blame the (fine) project layer. `readYamlFile`'s own error
+    // (src/cli/loader.ts) embeds the file path it failed to parse into
+    // its message, which this diagnostic's `errFirstLine` carries
+    // through verbatim.
+    expect(errOut()).toContain(
+      path.join(home, "machines", "default.harness.overrides.yaml"),
+    );
+  });
+});
