@@ -8,7 +8,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { parse as parseYaml } from "yaml";
+import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import { explainPolicy } from "../../src/cli/explain-policy.js";
 import { HarnessExitError } from "../../src/cli/exit-codes.js";
 import type { GitRepoContext } from "../../src/runtime/git-context.js";
@@ -238,7 +238,11 @@ describe("explainPolicy: session_start_preflight (task 30183330)", () => {
       eventPath: file,
       manifest: MANIFEST,
     });
-    expect(projection.session_start_preflight).toEqual({ setup: false });
+    // `source` defaults to "base" for an injected `manifest`: it carries
+    // no per-layer provenance to re-derive from (task c88461c1, see
+    // "explainPolicy: session_start_preflight.source" below for the
+    // real-layer cases).
+    expect(projection.session_start_preflight).toEqual({ setup: false, source: "base" });
   });
 
   it("shows session_start_preflight.setup:true when the manifest enables it", () => {
@@ -248,7 +252,7 @@ describe("explainPolicy: session_start_preflight (task 30183330)", () => {
       eventPath: file,
       manifest: MANIFEST_WITH_SETUP,
     });
-    expect(projection.session_start_preflight).toEqual({ setup: true });
+    expect(projection.session_start_preflight).toEqual({ setup: true, source: "base" });
   });
 
   it("omits session_start_preflight for a non-preflight policy", () => {
@@ -260,6 +264,81 @@ describe("explainPolicy: session_start_preflight (task 30183330)", () => {
     });
     expect(projection.session_start_preflight).toBeUndefined();
     expect(Object.keys(projection)).not.toContain("session_start_preflight");
+  });
+});
+
+describe("explainPolicy: session_start_preflight.source (task c88461c1)", () => {
+  function makeHome(): string {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "harness-explain-policy-home-"));
+    cleanups.push(() => fs.rmSync(dir, { recursive: true, force: true }));
+    return dir;
+  }
+
+  function writeBaseManifest(home: string, setup: boolean): void {
+    fs.writeFileSync(
+      path.join(home, "harness.yaml"),
+      stringifyYaml({ ...MANIFEST_INPUT, session_start_preflight: { setup } }),
+    );
+  }
+
+  function writeMachineLayer(home: string, setup: boolean): void {
+    fs.mkdirSync(path.join(home, "machines"), { recursive: true });
+    // "default" is always a machine-override candidate (see
+    // tests/cli/session-start/preflight.test.ts's identical idiom), so
+    // this layer applies with no hostname/platform discriminator to pin.
+    fs.writeFileSync(
+      path.join(home, "machines", "default.harness.overrides.yaml"),
+      ["session_start_preflight:", `  setup: ${setup}`, ""].join("\n"),
+    );
+  }
+
+  function writeProjectLayer(home: string, projectName: string, setup: boolean): void {
+    const projectDir = path.join(home, "projects", projectName);
+    fs.mkdirSync(projectDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(projectDir, "harness.overrides.yaml"),
+      ["session_start_preflight:", `  setup: ${setup}`, ""].join("\n"),
+    );
+  }
+
+  it("names source:base when only the base manifest declares setup (no layer on disk)", () => {
+    const home = makeHome();
+    writeBaseManifest(home, false);
+    const file = writeEvent(DESTROY_EVENT);
+    const { projection } = explainPolicy("preflight-before-investigation", {
+      ...seams("main"),
+      eventPath: file,
+      homeDir: home,
+    });
+    expect(projection.session_start_preflight).toEqual({ setup: false, source: "base" });
+  });
+
+  it("names source:machine when a machine-override layer decides the value", () => {
+    const home = makeHome();
+    writeBaseManifest(home, true);
+    writeMachineLayer(home, false);
+    const file = writeEvent(DESTROY_EVENT);
+    const { projection } = explainPolicy("preflight-before-investigation", {
+      ...seams("main"),
+      eventPath: file,
+      homeDir: home,
+    });
+    expect(projection.session_start_preflight).toEqual({ setup: false, source: "machine" });
+  });
+
+  it("names source:project when a project-override layer decides the value, over both base and a machine layer", () => {
+    const home = makeHome();
+    writeBaseManifest(home, false);
+    writeMachineLayer(home, false);
+    writeProjectLayer(home, "demo-project", true);
+    const file = writeEvent(DESTROY_EVENT);
+    const { projection } = explainPolicy("preflight-before-investigation", {
+      ...seams("main"),
+      eventPath: file,
+      homeDir: home,
+      project: "demo-project",
+    });
+    expect(projection.session_start_preflight).toEqual({ setup: true, source: "project" });
   });
 });
 
@@ -315,6 +394,6 @@ describe("explainPolicy: session_start_preflight name-prefix boundary (task 3018
       eventPath: file,
       manifest: MANIFEST_PREFIX_BOUNDARY,
     });
-    expect(projection.session_start_preflight).toEqual({ setup: true });
+    expect(projection.session_start_preflight).toEqual({ setup: true, source: "base" });
   });
 });

@@ -13,7 +13,8 @@
 // LAST recorded decision from the evidence ledger; `explain-policy`
 // evaluates a hypothetical event live and reads nothing from the ledger.
 
-import { stringify as stringifyYaml } from "yaml";
+import * as fs from "node:fs";
+import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import {
   classifyRisk,
   evaluateWhen,
@@ -31,7 +32,7 @@ import type { Manifest } from "../schema/index.js";
 import { DEFAULT_SAFE_DELETION_ROOTS } from "../schema/risk.js";
 import { loadEventEnvelope, type EventInputSeams } from "./event-input.js";
 import { EX_USAGE, HarnessExitError } from "./exit-codes.js";
-import { loadManifest, type LoaderOptions } from "./loader.js";
+import { loadManifest, type LoaderOptions, type ResolvedPaths } from "./loader.js";
 
 export interface ExplainPolicyOptions extends EventInputSeams, LoaderOptions {
   /** Path to the tool-event JSON file (the `--event` argument). */
@@ -46,6 +47,49 @@ export interface ExplainPolicyOptions extends EventInputSeams, LoaderOptions {
   kubeContext?: string;
   /** Inject the kube namespace (tests); bypasses `~/.kube/config`. */
   kubeNamespace?: string;
+}
+
+/**
+ * Which resolved layer decided `session_start_preflight.setup` (task
+ * c88461c1): "project" when the resolved project-override layer
+ * itself declares the key, "machine" when a resolved machine-override
+ * layer declares it (and no project layer does), "base" otherwise
+ * (the base manifest, or the schema default when nothing declares the
+ * key at all). Mirrors the loader's own last-wins precedence
+ * (`applyLayers(baseRaw, ...machineLayers, projectLayer)`,
+ * `src/overrides/merge.ts`): the project layer is checked first since
+ * it is the highest-precedence layer, then machine layers from the
+ * last-applied (highest-precedence) one back to the first.
+ */
+export type SessionStartPreflightLayerSource = "base" | "machine" | "project";
+
+/** Does `filePath`'s raw YAML explicitly declare `session_start_preflight.setup`? */
+function layerDeclaresSetup(filePath: string): boolean {
+  try {
+    const raw = fs.readFileSync(filePath, "utf8");
+    const parsed = parseYaml(raw) as { session_start_preflight?: { setup?: unknown } } | null;
+    return typeof parsed?.session_start_preflight?.setup === "boolean";
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Re-reads the resolved layer files (independent of the already-merged
+ * `manifest` object, which no longer carries per-layer provenance once
+ * `applyLayers` has folded them together) to attribute the decided
+ * `session_start_preflight.setup` value to the layer that set it.
+ */
+function resolveSessionStartPreflightSource(
+  resolved: ResolvedPaths,
+): SessionStartPreflightLayerSource {
+  if (resolved.projectLayer !== null && layerDeclaresSetup(resolved.projectLayer)) {
+    return "project";
+  }
+  for (let i = resolved.machineLayers.length - 1; i >= 0; i--) {
+    if (layerDeclaresSetup(resolved.machineLayers[i]!)) return "machine";
+  }
+  return "base";
 }
 
 interface ExplainPolicyProjection {
@@ -71,9 +115,14 @@ interface ExplainPolicyProjection {
    * preflight` / `harness preflight` producer passes `--setup` to the
    * `preflight run` invocation whose `ready:true` result these policies
    * gate on. Omitted for every other policy; it has no bearing on
-   * their evaluation.
+   * their evaluation. `source` (task c88461c1) names which resolved
+   * layer decided the value: `"base"` (also covers an injected
+   * `opts.manifest`, which carries no per-layer provenance to
+   * attribute), `"machine"`, or `"project"` (the cwd-derived per-repo
+   * layer `harness session-start preflight` itself now feeds through
+   * `LoaderOptions.project`, see src/cli/session-start/index.ts).
    */
-  session_start_preflight?: { setup: boolean };
+  session_start_preflight?: { setup: boolean; source: SessionStartPreflightLayerSource };
   when:
     | { declared: false }
     | {
@@ -102,7 +151,19 @@ export function explainPolicy(
   policyName: string,
   opts: ExplainPolicyOptions,
 ): ExplainPolicyResult {
-  const manifest = opts.manifest ?? loadManifest(opts).manifest;
+  // `resolved` is only available on the real `loadManifest(opts)` path:
+  // an injected `opts.manifest` already IS the merged result and
+  // carries no per-layer provenance, so `session_start_preflight.source`
+  // falls back to "base" in that case (see the field's doc comment).
+  let manifest: Manifest;
+  let resolvedPaths: ResolvedPaths | undefined;
+  if (opts.manifest) {
+    manifest = opts.manifest;
+  } else {
+    const loaded = loadManifest(opts);
+    manifest = loaded.manifest;
+    resolvedPaths = loaded.resolved;
+  }
   const policy = manifest.policies.find((p) => p.name === policyName);
   if (!policy) {
     const available = manifest.policies.map((p) => p.name).join(", ") || "(none)";
@@ -172,7 +233,10 @@ export function explainPolicy(
     environment,
     deletion_target: deletionTarget,
     ...(policy.name.startsWith("preflight-before-") && {
-      session_start_preflight: { setup: manifest.session_start_preflight.setup },
+      session_start_preflight: {
+        setup: manifest.session_start_preflight.setup,
+        source: resolvedPaths ? resolveSessionStartPreflightSource(resolvedPaths) : "base",
+      },
     }),
     when: whenEval
       ? {

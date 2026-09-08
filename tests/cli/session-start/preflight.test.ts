@@ -1319,13 +1319,15 @@ describe("runSessionStartPreflight: setup:true manifest wiring (task 30183330)",
   });
 
   it("honours a machine-override layer that flips setup back off (task 30183330, review round 3)", async () => {
-    // Review round 3: machine-override layers are the ONLY layer besides
-    // the base manifest that reaches this key on the hook path (the
-    // generated SessionStart hook passes no `--project`, so no project
-    // layer is ever resolved; see tests/cli/loader-project-layer.test.ts).
-    // This drives that real scoping surface end to end: base manifest
-    // says `setup: true`, the machine layer turns it back off, and the
-    // value the producer hands to the runner must be the merged `false`.
+    // Review round 3: machine-override layers are one of two layers
+    // besides the base manifest that can reach this key on the hook
+    // path; the other is the cwd-derived project layer added in task
+    // `c88461c1` (see the "per-repo scoping" describe block below).
+    // This test drives the machine-layer half of that scoping surface
+    // end to end, with no project layer on disk for this repo's
+    // derived name: base manifest says `setup: true`, the machine
+    // layer turns it back off, and the value the producer hands to the
+    // runner must be the merged `false`.
     const repo = makeRepoFixture("setup-machine-override");
     const home = fs.mkdtempSync(path.join(os.tmpdir(), "harness-sspf-home-"));
     cleanups.push(() => fs.rmSync(home, { recursive: true, force: true }));
@@ -1356,6 +1358,135 @@ describe("runSessionStartPreflight: setup:true manifest wiring (task 30183330)",
       stdin: streamFrom(JSON.stringify({ session_id: "s", cwd: repo })),
       stderr: captureStream().stream,
       homeDir: home,
+      runPreflight: async (cwd, timeoutMs, setup) => {
+        seenArgs.push({ cwd, timeoutMs, setup });
+        return { ok: true, json: { ready: true, confidence: 0.9, checks: [] } };
+      },
+      writeLedger: async () => ({ ok: true }),
+    });
+    expect(result.wrote).toBe(true);
+    expect(seenArgs).toEqual([{ cwd: repo, timeoutMs: 60_000, setup: false }]);
+  });
+});
+
+describe("runSessionStartPreflight: per-repo scoping via cwd-derived project name (task c88461c1)", () => {
+  function writeBaseManifest(home: string, setup: boolean): void {
+    fs.writeFileSync(
+      path.join(home, "harness.yaml"),
+      [
+        "version: 1",
+        "hooks: []",
+        "policies: []",
+        "tools:",
+        "  builtin:",
+        "    known: [Read, Edit]",
+        "session_start_preflight:",
+        `  setup: ${setup}`,
+        "",
+      ].join("\n"),
+    );
+  }
+
+  function writeProjectLayer(home: string, projectName: string, setup: boolean): void {
+    const projectDir = path.join(home, "projects", projectName);
+    fs.mkdirSync(projectDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(projectDir, "harness.overrides.yaml"),
+      ["session_start_preflight:", `  setup: ${setup}`, ""].join("\n"),
+    );
+  }
+
+  it("applies the cwd repo's project layer (setup:true) over a base setup:false", async () => {
+    // `repo`'s basename ("scope-on-repo") is the project name this
+    // producer derives from cwd via `resolveGitContext`; no `project`
+    // opt is passed here, only `homeDir`.
+    const repoName = "scope-on-repo";
+    const repo = makeRepoFixture(repoName);
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "harness-sspf-projhome-"));
+    cleanups.push(() => fs.rmSync(home, { recursive: true, force: true }));
+    writeBaseManifest(home, false);
+    writeProjectLayer(home, repoName, true);
+
+    const seenArgs: Array<{ cwd: string; timeoutMs: number; setup: boolean }> = [];
+    const result = await runSessionStartPreflight({
+      stdin: streamFrom(JSON.stringify({ session_id: "s", cwd: repo })),
+      stderr: captureStream().stream,
+      homeDir: home,
+      runPreflight: async (cwd, timeoutMs, setup) => {
+        seenArgs.push({ cwd, timeoutMs, setup });
+        return { ok: true, json: { ready: true, confidence: 0.9, checks: [] } };
+      },
+      writeLedger: async () => ({ ok: true }),
+    });
+    expect(result.wrote).toBe(true);
+    expect(seenArgs).toEqual([{ cwd: repo, timeoutMs: 60_000, setup: true }]);
+  });
+
+  it("applies the cwd repo's project layer (setup:false) over a base setup:true (the inverse)", async () => {
+    const repoName = "scope-off-repo";
+    const repo = makeRepoFixture(repoName);
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "harness-sspf-projhome-"));
+    cleanups.push(() => fs.rmSync(home, { recursive: true, force: true }));
+    writeBaseManifest(home, true);
+    writeProjectLayer(home, repoName, false);
+
+    const seenArgs: Array<{ cwd: string; timeoutMs: number; setup: boolean }> = [];
+    const result = await runSessionStartPreflight({
+      stdin: streamFrom(JSON.stringify({ session_id: "s", cwd: repo })),
+      stderr: captureStream().stream,
+      homeDir: home,
+      runPreflight: async (cwd, timeoutMs, setup) => {
+        seenArgs.push({ cwd, timeoutMs, setup });
+        return { ok: true, json: { ready: true, confidence: 0.9, checks: [] } };
+      },
+      writeLedger: async () => ({ ok: true }),
+    });
+    expect(result.wrote).toBe(true);
+    expect(seenArgs).toEqual([{ cwd: repo, timeoutMs: 60_000, setup: false }]);
+  });
+
+  it("keeps the base value when cwd's repo has no matching project layer on disk", async () => {
+    const repo = makeRepoFixture("scope-no-layer-repo");
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "harness-sspf-projhome-"));
+    cleanups.push(() => fs.rmSync(home, { recursive: true, force: true }));
+    writeBaseManifest(home, true);
+    // A project layer exists on disk, but under a DIFFERENT name than
+    // this repo's basename; it must not be picked up.
+    writeProjectLayer(home, "some-other-repo", false);
+
+    const seenArgs: Array<{ cwd: string; timeoutMs: number; setup: boolean }> = [];
+    const result = await runSessionStartPreflight({
+      stdin: streamFrom(JSON.stringify({ session_id: "s", cwd: repo })),
+      stderr: captureStream().stream,
+      homeDir: home,
+      runPreflight: async (cwd, timeoutMs, setup) => {
+        seenArgs.push({ cwd, timeoutMs, setup });
+        return { ok: true, json: { ready: true, confidence: 0.9, checks: [] } };
+      },
+      writeLedger: async () => ({ ok: true }),
+    });
+    expect(result.wrote).toBe(true);
+    expect(seenArgs).toEqual([{ cwd: repo, timeoutMs: 60_000, setup: true }]);
+  });
+
+  it("an explicit --project still wins over the cwd-derived repo name", async () => {
+    // cwd's own basename ("scope-explicit-repo") has a project layer
+    // saying `setup: true`, but an explicit `project` opt names a
+    // DIFFERENT project whose layer says `setup: false`. The explicit
+    // name must win.
+    const repo = makeRepoFixture("scope-explicit-repo");
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "harness-sspf-projhome-"));
+    cleanups.push(() => fs.rmSync(home, { recursive: true, force: true }));
+    writeBaseManifest(home, true);
+    writeProjectLayer(home, "scope-explicit-repo", true);
+    writeProjectLayer(home, "explicit-project-name", false);
+
+    const seenArgs: Array<{ cwd: string; timeoutMs: number; setup: boolean }> = [];
+    const result = await runSessionStartPreflight({
+      stdin: streamFrom(JSON.stringify({ session_id: "s", cwd: repo })),
+      stderr: captureStream().stream,
+      homeDir: home,
+      project: "explicit-project-name",
       runPreflight: async (cwd, timeoutMs, setup) => {
         seenArgs.push({ cwd, timeoutMs, setup });
         return { ok: true, json: { ready: true, confidence: 0.9, checks: [] } };

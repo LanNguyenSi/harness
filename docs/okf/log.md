@@ -2,6 +2,30 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-09-08T04:52:43Z, task c88461c1 (implementer): per-repo scoping for
+  `session_start_preflight.setup`. Edited `src/cli/session-start/index.ts`,
+  `src/cli/explain-policy.ts`, `src/schema/session-start-preflight.ts`,
+  `docs/CLI.md` (the `session_start_preflight.setup` Notes bullet and the
+  `explain-policy` `source` bullet), and `CHANGELOG.md`. `npx
+  okf-kit@0.10.0 check --json docs/okf` (measured baseline on 4865e63,
+  the commit before this task's changes: 0 findings) flagged four docs
+  `sources-fresh` STALE after the commit, all against the `docs/CLI.md`
+  edit alone (`codex-adapter-parity-gaps.md`, `debug-verb-selection.md`,
+  also against `src/cli/explain-policy.ts`, `evidence-ledger-trust-
+  boundary.md`, `policy-engine-producer-wiring.md`). Re-verified each:
+  none cites the two sections this task edited (the `session_start_
+  preflight.setup` Notes bullet or the `explain-policy` `source`
+  bullet) by content or line number. `codex-adapter-parity-gaps.md`
+  pins `docs/CLI.md` line 67 (the Codex hook timeout-floor note); that
+  line sits well before this task's edit point and is unmoved.
+  `debug-verb-selection.md` lists `src/cli/explain-policy.ts` in
+  `sources:` only, describing the trigger/classifier/environment/`when:`
+  discriminator this task did not touch (only an orthogonal
+  `session_start_preflight` field was added). `evidence-ledger-trust-
+  boundary.md` and `policy-engine-producer-wiring.md` cite `docs/CLI.md`
+  generically (no pinned line numbers) for unrelated sections. Re-
+  stamped all four `timestamp:` fields; no citation re-pointing needed.
+
 - 2026-09-07T10:52:27Z, task 4f0abbc8 (implementer): negative control for
   the 2026-09-07T10:50:36Z entry below (commit `e060323`). Appended one
   throwaway line to `CHANGELOG.md` (uncommitted), ran `npx

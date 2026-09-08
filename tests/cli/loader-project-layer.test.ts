@@ -1,18 +1,27 @@
-// Loader half of the `session_start_preflight.setup` scope claim (task
-// 30183330, review round 3).
+// Loader-level primitive underneath the `session_start_preflight.setup`
+// per-repo scoping story (task 30183330, review round 3; task
+// `c88461c1` builds per-repo scoping on top of this contract).
 //
-// The docs state that the key is HOST-WIDE and that a project override
-// layer does NOT scope it per repository. That rests on two facts, one
-// per side of the pair: the generated SessionStart hook passes no
-// `--project` (pinned by tests/cli/init-preflight-hook-project-scope.test.ts),
-// and `resolvePaths` resolves a project layer ONLY when
-// `LoaderOptions.project` is set. This file pins the loader side: without
-// `project`, a project override layer that sits on disk is neither
-// resolved nor merged, so its `session_start_preflight.setup: false`
-// cannot influence what the hook path reads. The same layer IS honoured
-// when `project` is passed explicitly, which is what keeps this a scope
-// statement about the hook path rather than a claim that the mechanism
-// does not exist at all.
+// `resolvePaths` resolves a project override layer ONLY when
+// `LoaderOptions.project` is explicitly set; it never inspects cwd or
+// any other ambient signal on its own. This file pins that low-level
+// contract in isolation: without `project`, a project override layer
+// that sits on disk is neither resolved nor merged, so its
+// `session_start_preflight.setup: false` cannot influence what a caller
+// reads. The same layer IS honoured when `project` is passed
+// explicitly.
+//
+// This is no longer the full scope story for the hook path: the
+// generated SessionStart hook itself still passes no `--project`
+// (pinned by tests/cli/init-preflight-hook-project-scope.test.ts), but
+// `harness session-start preflight` (src/cli/session-start/index.ts)
+// now derives a project name from its own cwd and feeds it through
+// this EXACT `LoaderOptions.project` seam, so a project layer DOES
+// scope the key per repository on the hook path today (see
+// tests/cli/session-start/preflight.test.ts, "per-repo scoping via
+// cwd-derived project name"). What this file pins is the shared
+// primitive that derivation depends on, not a claim that the mechanism
+// is unreachable from the hook.
 
 import * as fs from "node:fs";
 import * as os from "node:os";

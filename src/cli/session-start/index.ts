@@ -112,7 +112,12 @@ export interface SessionStartPreflightOptions extends LoaderOptions {
    * field is absent AND `loadManifest(opts)` throws) degrades to
    * `setup: false` (matches the sibling SessionStart companions' "not
    * configured -> skip" contract) rather than aborting the entire
-   * preflight run over this one unrelated knob.
+   * preflight run over this one unrelated knob. Injecting this field
+   * also bypasses the cwd-derived project layer that resolution
+   * otherwise feeds through the loader (task c88461c1, see the
+   * `setupEnabled` block itself): an injected manifest already IS the
+   * merged result, so there is nothing left for a project layer to
+   * apply to.
    */
   manifest?: Manifest;
   /**
@@ -589,9 +594,26 @@ export async function runSessionStartPreflight(
   // aborting the whole preflight run over an unrelated manifest problem,
   // whereas the ledger-writer's later load failure DOES abort (existing
   // behavior, unrelated to this change).
+  //
+  // Per-repo scoping (task c88461c1): an explicit `opts.project` (the
+  // CLI's `--project <name>`) still wins outright. Otherwise this
+  // producer derives a project name from `repo` (already resolved a
+  // few lines above via `resolveGitContext(cwd)` as the git work-tree
+  // root's basename, and guaranteed non-empty here, since an empty
+  // `repo` already returned early above) and feeds it through the
+  // loader's EXISTING `LoaderOptions.project` mechanism
+  // (src/cli/loader.ts's `resolvePaths`/`applyLayers`), the same seam
+  // every other command's own `--project <name>` flag already uses.
+  // A repo with no `<home>/projects/<repo>/harness.overrides.yaml` on
+  // disk keeps the host-wide (base plus machine-layer) value: the
+  // loader resolves `projectLayer: null` when that file does not exist
+  // (loader.ts's `fs.existsSync` check), so nothing extra is merged in
+  // that case. See docs/CLI.md's `session_start_preflight.setup` Notes
+  // for the full rule.
   const setupEnabled = (() => {
     try {
-      const manifest = opts.manifest ?? loadManifest(opts).manifest;
+      const manifest =
+        opts.manifest ?? loadManifest({ ...opts, project: opts.project ?? repo }).manifest;
       return manifest.session_start_preflight.setup;
     } catch {
       return false;

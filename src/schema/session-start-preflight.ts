@@ -49,11 +49,22 @@ import { z } from "zod";
 // repositories you already trust to run"). Enable this knob only for
 // repositories you already trust to run their own install/build.
 //
-// SCOPE: a HOST-WIDE on/off switch; no per-repo scoping exists today (the
-// generated hook passes no `--project`, so no project layer is consulted).
-// The full scope, degradation, timeout and version notes live in ONE place,
-// docs/CLI.md under `session_start_preflight.setup`, pinned by the tests
-// named there; this header deliberately does not repeat them.
+// SCOPE (task c88461c1): resolved from the base manifest, any applicable
+// machine-override layers, and a per-repo project-override layer. The
+// generated hook still invokes `harness session-start preflight` with no
+// `--project` (one static hook command cannot name a different project
+// per repository), but the producer itself derives a project name from
+// its own cwd (the git work-tree root's basename, the same value the
+// `preflight:${REPO}` ledger tag already uses) and feeds it through the
+// EXISTING `LoaderOptions.project` mechanism `--project <name>` also
+// uses, so `<home>/projects/<repo>/harness.overrides.yaml`, when
+// present, narrows this key to that one repository. An explicit
+// `--project` (where a caller passes one) still wins outright; a repo
+// with no such layer on disk keeps the host-wide base/machine-override
+// value unchanged. The full scope, degradation, timeout and version
+// notes live in ONE place, docs/CLI.md under
+// `session_start_preflight.setup`, pinned by the tests named there;
+// this header deliberately does not repeat them.
 //
 // VERSION CAVEAT (task 6993d9b5): agent-preflight 0.5.0's `--setup` was
 // install-only (no conditional build, see the prose above). The build
