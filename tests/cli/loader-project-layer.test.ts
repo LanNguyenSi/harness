@@ -83,8 +83,12 @@ describe("loadManifest: a project layer cannot scope session_start_preflight.set
     const { manifest, resolved } = loadManifest({ homeDir: tmpHome });
     expect(resolved.projectLayer).toBeNull();
     // The on-disk project layer says `setup: false`. If it were merged,
-    // this would read false, and the documented host-wide scope claim
-    // would be wrong.
+    // this would read false — but a project layer only ever narrows the
+    // key when a caller derives or passes a `LoaderOptions.project`
+    // (`harness session-start preflight`'s cwd-derived name, or an
+    // explicit `--project`), pinned separately below and in
+    // tests/cli/session-start/preflight.test.ts; a bare `resolvePaths`/
+    // `loadManifest` call with no `project` never reaches it.
     expect(manifest.session_start_preflight).toEqual({ setup: true });
   });
 

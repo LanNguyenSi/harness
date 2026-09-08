@@ -271,3 +271,75 @@ export function resolveCommonDir(gitDir: string): string {
   }
   return gitDir;
 }
+
+// ---------------------------------------------------------------------------
+// Repository-identity derivation for per-repo config scoping (task
+// c88461c1, review round 2, decision D-021a).
+//
+// Round 1 fed `resolveGitContext(cwd).repo` (the WORK-TREE basename)
+// into the `session_start_preflight.setup` project-layer lookup. That
+// is wrong for a linked worktree: `git worktree add ../foo` gives the
+// linked checkout its OWN directory name, so two worktrees of the SAME
+// repository resolved two DIFFERENT project layers, and neither one
+// matched the name an operator would naturally pick for the shared
+// project override file. `repo` stays exactly as-is for its existing
+// consumer (the `preflight:${REPO}` ledger tag, `src/cli/session-start/
+// index.ts`) — a ledger tag namespaced per CHECKOUT is a defensible,
+// unrelated design choice, and changing it is out of this task's scope.
+// This is a SEPARATE derivation for a SEPARATE purpose: naming the
+// `<home>/projects/<name>/harness.overrides.yaml` layer that should
+// apply to every linked worktree of one repository alike.
+// ---------------------------------------------------------------------------
+
+/**
+ * Derive the project-layer name for `cwd`: the basename of the
+ * directory that CONTAINS the repository's shared git common dir (the
+ * main checkout), so every linked worktree of one repository resolves
+ * the same name — unlike `resolveGitContext(cwd).repo`, which names the
+ * checkout directory itself and therefore differs per worktree. Feeds
+ * `LoaderOptions.project` (the same seam every command's own
+ * `--project <name>` flag already uses) for `harness session-start
+ * preflight`, `harness explain-policy`, and `harness doctor` alike (one
+ * helper, three consumers, so the three cannot silently disagree on
+ * what "this repository's project name" means).
+ *
+ * Resolution:
+ *  - `findGitEntry(cwd)` walks up to the `.git` entry, exactly like
+ *    `resolveGitContext`.
+ *  - `resolveCommonDir(entry.gitDir)` follows a linked worktree's
+ *    `commondir` file to the shared common dir (a no-op for the main
+ *    checkout, which has none).
+ *  - The COMMON DIR's basename is normally literally `.git` (a
+ *    directory or, in a linked worktree's private gitdir, the resolved
+ *    target of a `.git` FILE): in that shape the project name is one
+ *    level further up — the basename of the directory THAT CONTAINS the
+ *    common dir, i.e. the main checkout's own directory name.
+ *  - For a BARE repository (`git init --bare`, or a linked worktree
+ *    created FROM one), there is no `.git` wrapper at all — the common
+ *    dir IS the bare directory itself (its basename is not `.git`), so
+ *    that basename is the project name directly, with no extra `..`
+ *    step. This is the one shape where going up an extra level would
+ *    be wrong (it would name the bare directory's PARENT instead).
+ *
+ * Returns `null` when `cwd` is not inside a git work tree (mirrors
+ * `resolveGitContext`'s "" for the same case) or when `entry.gitDir`
+ * could not be resolved at all (an unreadable `.git` FILE — see
+ * `findGitEntry`'s doc comment); in the latter case this falls back to
+ * the checkout directory's own basename (the same value `repo` would
+ * carry), rather than guessing at a common dir it has no path to.
+ * Never throws.
+ */
+export function deriveProjectName(cwd: string): string | null {
+  if (typeof cwd !== "string" || cwd.length === 0) return null;
+  const entry = findGitEntry(cwd);
+  if (!entry) return null;
+  if (!entry.gitDir) {
+    const fallback = path.basename(entry.worktreeRoot);
+    return fallback.length > 0 ? fallback : null;
+  }
+  const commonDir = resolveCommonDir(entry.gitDir);
+  const commonDirBase = path.basename(commonDir);
+  const projectDir = commonDirBase === ".git" ? path.dirname(commonDir) : commonDir;
+  const name = path.basename(projectDir);
+  return name.length > 0 ? name : null;
+}

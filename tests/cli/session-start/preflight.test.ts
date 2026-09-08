@@ -1396,6 +1396,32 @@ describe("runSessionStartPreflight: per-repo scoping via cwd-derived project nam
     );
   }
 
+  /**
+   * Create a real `git worktree add`-shaped linked worktree: a main
+   * checkout named `mainRepoName` (its `.git` is a directory) plus a
+   * SEPARATE checkout directory, always named
+   * "linked-worktree-checkout", whose `.git` is a FILE pointing at the
+   * main checkout's private per-worktree gitdir
+   * (`<mainRepoName>/.git/worktrees/wt1`), with a `commondir` file
+   * routing back to the main checkout's `.git` (review round 2,
+   * decision D-021a: `deriveProjectName` must resolve `mainRepoName`
+   * from a cwd inside this linked worktree, not
+   * "linked-worktree-checkout").
+   */
+  function makeLinkedWorktreeFixture(mainRepoName: string, branch = "main"): { worktreeCwd: string } {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "harness-sspf-wt-"));
+    cleanups.push(() => fs.rmSync(root, { recursive: true, force: true }));
+    const mainGitDir = path.join(root, mainRepoName, ".git");
+    const perWorktreeDir = path.join(mainGitDir, "worktrees", "wt1");
+    fs.mkdirSync(perWorktreeDir, { recursive: true });
+    fs.writeFileSync(path.join(perWorktreeDir, "HEAD"), `ref: refs/heads/${branch}\n`);
+    fs.writeFileSync(path.join(perWorktreeDir, "commondir"), "../..\n");
+    const worktreeCwd = path.join(root, "linked-worktree-checkout");
+    fs.mkdirSync(worktreeCwd, { recursive: true });
+    fs.writeFileSync(path.join(worktreeCwd, ".git"), `gitdir: ${perWorktreeDir}\n`);
+    return { worktreeCwd };
+  }
+
   it("applies the cwd repo's project layer (setup:true) over a base setup:false", async () => {
     // `repo`'s basename ("scope-on-repo") is the project name this
     // producer derives from cwd via `resolveGitContext`; no `project`
@@ -1455,9 +1481,10 @@ describe("runSessionStartPreflight: per-repo scoping via cwd-derived project nam
     writeProjectLayer(home, "some-other-repo", false);
 
     const seenArgs: Array<{ cwd: string; timeoutMs: number; setup: boolean }> = [];
+    const { stream: err, output: errOut } = captureStream();
     const result = await runSessionStartPreflight({
       stdin: streamFrom(JSON.stringify({ session_id: "s", cwd: repo })),
-      stderr: captureStream().stream,
+      stderr: err,
       homeDir: home,
       runPreflight: async (cwd, timeoutMs, setup) => {
         seenArgs.push({ cwd, timeoutMs, setup });
@@ -1467,6 +1494,15 @@ describe("runSessionStartPreflight: per-repo scoping via cwd-derived project nam
     });
     expect(result.wrote).toBe(true);
     expect(seenArgs).toEqual([{ cwd: repo, timeoutMs: 60_000, setup: true }]);
+    // Review round 2: a repo with no matching project layer degrades
+    // silently, per the documented "no error, no warning" contract
+    // (docs/CLI.md's PER-REPO SCOPING note) — the ONLY stderr line is
+    // the normal success note every ready:true run writes, with no
+    // additional warning/error line about the missing project layer.
+    expect(errOut()).toBe(
+      "harness session-start preflight: recorded preflight:scope-no-layer-repo " +
+        "preflight:main ready:true confidence:0.90 for session s\n",
+    );
   });
 
   it("an explicit --project still wins over the cwd-derived repo name", async () => {
@@ -1495,6 +1531,86 @@ describe("runSessionStartPreflight: per-repo scoping via cwd-derived project nam
     });
     expect(result.wrote).toBe(true);
     expect(seenArgs).toEqual([{ cwd: repo, timeoutMs: 60_000, setup: false }]);
+  });
+
+  // Review round 2, decision D-021a: round 1 derived the project name
+  // from the CHECKOUT directory's own basename, which differs per
+  // linked worktree of the same repository. These three tests drive
+  // the producer end to end from a cwd INSIDE a linked worktree,
+  // pinning that the resolved project layer is the MAIN checkout's
+  // name in both merge directions, and that the worktree's own
+  // directory name is never consulted.
+  it("applies the MAIN checkout's project layer (setup:true) over a base setup:false, from inside a linked worktree", async () => {
+    const mainRepoName = "wt-scope-on-repo";
+    const { worktreeCwd } = makeLinkedWorktreeFixture(mainRepoName);
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "harness-sspf-projhome-"));
+    cleanups.push(() => fs.rmSync(home, { recursive: true, force: true }));
+    writeBaseManifest(home, false);
+    writeProjectLayer(home, mainRepoName, true);
+
+    const seenArgs: Array<{ cwd: string; timeoutMs: number; setup: boolean }> = [];
+    const result = await runSessionStartPreflight({
+      stdin: streamFrom(JSON.stringify({ session_id: "s", cwd: worktreeCwd })),
+      stderr: captureStream().stream,
+      homeDir: home,
+      runPreflight: async (cwd, timeoutMs, setup) => {
+        seenArgs.push({ cwd, timeoutMs, setup });
+        return { ok: true, json: { ready: true, confidence: 0.9, checks: [] } };
+      },
+      writeLedger: async () => ({ ok: true }),
+    });
+    expect(result.wrote).toBe(true);
+    expect(seenArgs).toEqual([{ cwd: worktreeCwd, timeoutMs: 60_000, setup: true }]);
+  });
+
+  it("applies the MAIN checkout's project layer (setup:false) over a base setup:true, from inside a linked worktree (the inverse)", async () => {
+    const mainRepoName = "wt-scope-off-repo";
+    const { worktreeCwd } = makeLinkedWorktreeFixture(mainRepoName);
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "harness-sspf-projhome-"));
+    cleanups.push(() => fs.rmSync(home, { recursive: true, force: true }));
+    writeBaseManifest(home, true);
+    writeProjectLayer(home, mainRepoName, false);
+
+    const seenArgs: Array<{ cwd: string; timeoutMs: number; setup: boolean }> = [];
+    const result = await runSessionStartPreflight({
+      stdin: streamFrom(JSON.stringify({ session_id: "s", cwd: worktreeCwd })),
+      stderr: captureStream().stream,
+      homeDir: home,
+      runPreflight: async (cwd, timeoutMs, setup) => {
+        seenArgs.push({ cwd, timeoutMs, setup });
+        return { ok: true, json: { ready: true, confidence: 0.9, checks: [] } };
+      },
+      writeLedger: async () => ({ ok: true }),
+    });
+    expect(result.wrote).toBe(true);
+    expect(seenArgs).toEqual([{ cwd: worktreeCwd, timeoutMs: 60_000, setup: false }]);
+  });
+
+  it("does NOT resolve a project layer named after the linked worktree's own checkout directory", async () => {
+    const mainRepoName = "wt-scope-name-repo";
+    const { worktreeCwd } = makeLinkedWorktreeFixture(mainRepoName);
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "harness-sspf-projhome-"));
+    cleanups.push(() => fs.rmSync(home, { recursive: true, force: true }));
+    writeBaseManifest(home, true);
+    // A project layer exists, but named after the linked worktree's OWN
+    // checkout directory ("linked-worktree-checkout",
+    // makeLinkedWorktreeFixture's fixed name), not the main checkout it
+    // belongs to ("wt-scope-name-repo"); it must not be picked up.
+    writeProjectLayer(home, path.basename(worktreeCwd), false);
+
+    const seenArgs: Array<{ cwd: string; timeoutMs: number; setup: boolean }> = [];
+    const result = await runSessionStartPreflight({
+      stdin: streamFrom(JSON.stringify({ session_id: "s", cwd: worktreeCwd })),
+      stderr: captureStream().stream,
+      homeDir: home,
+      runPreflight: async (cwd, timeoutMs, setup) => {
+        seenArgs.push({ cwd, timeoutMs, setup });
+        return { ok: true, json: { ready: true, confidence: 0.9, checks: [] } };
+      },
+      writeLedger: async () => ({ ok: true }),
+    });
+    expect(result.wrote).toBe(true);
+    expect(seenArgs).toEqual([{ cwd: worktreeCwd, timeoutMs: 60_000, setup: true }]);
   });
 });
 

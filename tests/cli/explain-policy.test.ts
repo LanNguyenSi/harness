@@ -340,6 +340,87 @@ describe("explainPolicy: session_start_preflight.source (task c88461c1)", () => 
     });
     expect(projection.session_start_preflight).toEqual({ setup: true, source: "project" });
   });
+
+  /** Create `<tmp>/<name>/.git/HEAD` and return the work-tree path. */
+  function makeRepoFixture(name: string): string {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "harness-explain-policy-repo-"));
+    cleanups.push(() => fs.rmSync(root, { recursive: true, force: true }));
+    const repo = path.join(root, name);
+    fs.mkdirSync(path.join(repo, ".git"), { recursive: true });
+    fs.writeFileSync(path.join(repo, ".git", "HEAD"), "ref: refs/heads/main\n");
+    return repo;
+  }
+
+  // Review round 2, decision D-021b: the round-1 reviewer reproduced
+  // `explain-policy` printing `source: base` / `setup: false` in the
+  // SAME cwd where the producer (`harness session-start preflight`)
+  // actually read a project layer and passed `--setup true`, because
+  // `explainPolicy` never derived a project name from its own cwd —
+  // only an explicit `--project` reached the loader. This test drives
+  // `explainPolicy` with NO `project` opt, only `cwd`, in a repo that
+  // HAS a matching project layer on disk, and asserts it now agrees
+  // with the producer.
+  it("names source:project from a cwd-derived project name, with no explicit --project (review round 2)", () => {
+    const home = makeHome();
+    writeBaseManifest(home, false);
+    const repo = makeRepoFixture("explain-cwd-project-repo");
+    writeProjectLayer(home, "explain-cwd-project-repo", true);
+    const file = writeEvent(DESTROY_EVENT);
+    const { projection } = explainPolicy("preflight-before-investigation", {
+      ...seams("main"),
+      eventPath: file,
+      homeDir: home,
+      cwd: repo,
+    });
+    expect(projection.session_start_preflight).toEqual({ setup: true, source: "project" });
+  });
+
+  it("keeps source:base from a cwd-derived lookup when no project layer matches the repo's name", () => {
+    const home = makeHome();
+    writeBaseManifest(home, true);
+    const repo = makeRepoFixture("explain-cwd-no-layer-repo");
+    // A project layer exists, but under a DIFFERENT name.
+    writeProjectLayer(home, "some-other-project", false);
+    const file = writeEvent(DESTROY_EVENT);
+    const { projection } = explainPolicy("preflight-before-investigation", {
+      ...seams("main"),
+      eventPath: file,
+      homeDir: home,
+      cwd: repo,
+    });
+    expect(projection.session_start_preflight).toEqual({ setup: true, source: "base" });
+  });
+
+  // Review round 2, finding: a layer that TOMBSTONES the key (`{setup:
+  // null}`, honoured by `mergeValue` in src/overrides/merge.ts as
+  // "delete the merged key, letting the schema default win") is just as
+  // much a declaration by that layer as `setup: true`/`false` — round-1's
+  // `layerDeclaresSetup` only recognized a literal boolean, so it would
+  // have attributed this decision to whichever LOWER layer happens to
+  // also set a boolean (here, the machine layer), naming the wrong
+  // layer as the one that decided the merged result.
+  it("attributes a project layer's tombstone (`{setup: null}`) as source:project, not the machine layer underneath it", () => {
+    const home = makeHome();
+    writeBaseManifest(home, true);
+    writeMachineLayer(home, true);
+    const projectDir = path.join(home, "projects", "tombstone-project");
+    fs.mkdirSync(projectDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(projectDir, "harness.overrides.yaml"),
+      ["session_start_preflight:", "  setup: null", ""].join("\n"),
+    );
+    const file = writeEvent(DESTROY_EVENT);
+    const { projection } = explainPolicy("preflight-before-investigation", {
+      ...seams("main"),
+      eventPath: file,
+      homeDir: home,
+      project: "tombstone-project",
+    });
+    // The tombstone deletes the merged key entirely, so the schema
+    // default (false) wins — but the PROJECT layer is what decided that,
+    // not the machine layer underneath it (which said `true`).
+    expect(projection.session_start_preflight).toEqual({ setup: false, source: "project" });
+  });
 });
 
 // Review round 3: the projection is gated on the exact

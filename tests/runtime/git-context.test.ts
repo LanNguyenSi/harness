@@ -3,6 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  deriveProjectName,
   resolveCommonDir,
   resolveGitContext,
   resolveOriginHeadBase,
@@ -367,5 +368,113 @@ describe("resolveOriginHeadBase in a linked worktree", () => {
     expect(resolveOriginHeadBase(resolveCommonDir(wtGitDir))).toBe("main");
     // Without the commondir indirection the lookup misses entirely.
     expect(resolveOriginHeadBase(wtGitDir)).toBeNull();
+  });
+});
+
+/**
+ * Create a linked-worktree layout of a BARE repository: `<root>/<bareDirName>`
+ * IS the git dir itself (no `.git` wrapper — a bare repo's top-level
+ * directory holds `HEAD`/`objects`/`refs`/`worktrees` directly), with a
+ * private per-worktree gitdir under `<bareDirName>/worktrees/<name>`
+ * whose `commondir` file (`../..`) resolves straight back to
+ * `<bareDirName>` — there is no further `.git` to go up from, unlike a
+ * non-bare main checkout's `<main>/.git`.
+ */
+function makeLinkedWorktreeOfBareRepo(
+  root: string,
+  bareDirName: string,
+  opts: { head?: string } = {},
+): { worktree: string; bareDir: string } {
+  const bareDir = path.join(root, bareDirName);
+  const perWorktreeDir = path.join(bareDir, "worktrees", "wt");
+  fs.mkdirSync(perWorktreeDir, { recursive: true });
+  if (opts.head !== undefined) {
+    fs.writeFileSync(path.join(perWorktreeDir, "HEAD"), `${opts.head}\n`);
+  }
+  fs.writeFileSync(path.join(perWorktreeDir, "commondir"), "../..\n");
+  const worktree = path.join(root, "bare-linked-worktree");
+  fs.mkdirSync(worktree, { recursive: true });
+  fs.writeFileSync(path.join(worktree, ".git"), `gitdir: ${perWorktreeDir}\n`);
+  return { worktree, bareDir };
+}
+
+describe("deriveProjectName (task c88461c1, review round 2, decision D-021a)", () => {
+  it("derives the main checkout's own basename for a normal (non-worktree) repo", () => {
+    const repo = makeRepo(tmpDir(), "solo-project", "ref: refs/heads/main");
+    expect(deriveProjectName(repo)).toBe("solo-project");
+  });
+
+  it("walks up from a nested cwd to the main checkout's basename", () => {
+    const repo = makeRepo(tmpDir(), "deep-project", "ref: refs/heads/main");
+    const nested = path.join(repo, "src", "cli");
+    fs.mkdirSync(nested, { recursive: true });
+    expect(deriveProjectName(nested)).toBe("deep-project");
+  });
+
+  it("resolves a linked worktree to the MAIN checkout's basename, not its own directory name", () => {
+    const root = tmpDir();
+    const { worktree } = makeLinkedWorktree(root, {
+      head: "ref: refs/heads/wt-branch",
+      commondir: "../..",
+    });
+    // makeLinkedWorktree names the main checkout "main-repo" and the
+    // linked worktree itself "linked-worktree" (see its doc comment
+    // above); the derived name must be the FORMER, matching every
+    // other worktree of the same repository, never the latter.
+    expect(deriveProjectName(worktree)).toBe("main-repo");
+    expect(deriveProjectName(worktree)).not.toBe(path.basename(worktree));
+  });
+
+  it("resolves the identical project name from the main checkout and a linked worktree of it", () => {
+    // Build a MAIN checkout via makeRepo (a real `.git/HEAD`, unlike
+    // makeLinkedWorktree's own hardcoded "main-repo", which only ever
+    // populates the PER-WORKTREE side and leaves the main checkout's own
+    // `.git/HEAD` absent), then hand-add a linked worktree pointing at
+    // its gitdir, mirroring `git worktree add`'s real layout.
+    const root = tmpDir();
+    const mainCheckout = makeRepo(root, "main-repo", "ref: refs/heads/main");
+    const mainGitDir = path.join(mainCheckout, ".git");
+    const perWorktreeDir = path.join(mainGitDir, "worktrees", "wt1");
+    fs.mkdirSync(perWorktreeDir, { recursive: true });
+    fs.writeFileSync(path.join(perWorktreeDir, "HEAD"), "ref: refs/heads/wt-branch\n");
+    fs.writeFileSync(path.join(perWorktreeDir, "commondir"), "../..\n");
+    const worktree = path.join(root, "linked-worktree");
+    fs.mkdirSync(worktree, { recursive: true });
+    fs.writeFileSync(path.join(worktree, ".git"), `gitdir: ${perWorktreeDir}\n`);
+
+    expect(deriveProjectName(mainCheckout)).toBe("main-repo");
+    expect(deriveProjectName(worktree)).toBe("main-repo");
+  });
+
+  it("applies the bare directory's own basename directly for a linked worktree of a bare repository", () => {
+    // A bare repo has no `.git` wrapper: `resolveCommonDir` resolves
+    // straight to the bare directory itself, whose basename is NOT
+    // literally ".git", so there is no extra `..` step to take (taking
+    // one would wrongly name the bare directory's PARENT instead).
+    const root = tmpDir();
+    const { worktree } = makeLinkedWorktreeOfBareRepo(root, "myrepo.git", {
+      head: "ref: refs/heads/wt-branch",
+    });
+    expect(deriveProjectName(worktree)).toBe("myrepo.git");
+    expect(deriveProjectName(worktree)).not.toBe(path.basename(worktree));
+  });
+
+  it("falls back to the checkout's own basename when a `.git` file is unparseable (gitDir unresolved)", () => {
+    const root = tmpDir();
+    const worktree = path.join(root, "broken-worktree");
+    fs.mkdirSync(worktree, { recursive: true });
+    fs.writeFileSync(path.join(worktree, ".git"), "not a gitdir pointer\n");
+    expect(deriveProjectName(worktree)).toBe("broken-worktree");
+  });
+
+  it("returns null when cwd is not inside a git work tree", () => {
+    const root = tmpDir();
+    const plain = path.join(root, "just", "some", "dirs");
+    fs.mkdirSync(plain, { recursive: true });
+    expect(deriveProjectName(plain)).toBeNull();
+  });
+
+  it("returns null for an empty cwd", () => {
+    expect(deriveProjectName("")).toBeNull();
   });
 });

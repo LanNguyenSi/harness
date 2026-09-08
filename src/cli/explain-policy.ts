@@ -17,6 +17,7 @@ import * as fs from "node:fs";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import {
   classifyRisk,
+  deriveProjectName,
   evaluateWhen,
   policyMatchesEvent,
   resolveDeletionTarget,
@@ -47,6 +48,19 @@ export interface ExplainPolicyOptions extends EventInputSeams, LoaderOptions {
   kubeContext?: string;
   /** Inject the kube namespace (tests); bypasses `~/.kube/config`. */
   kubeNamespace?: string;
+  /**
+   * cwd `session_start_preflight.setup`'s per-repo project layer is
+   * derived from when `opts.project` is absent (task c88461c1, review
+   * round 2, decision D-021b): the same `deriveProjectName` helper
+   * `harness session-start preflight` and `harness doctor` also feed
+   * their own `loadManifest` call from, so all three consumers agree on
+   * which project layer applies to a given cwd instead of `explain-
+   * policy` silently reporting the base/machine value for a repo whose
+   * producer is actually reading a project layer. Defaults to
+   * `process.cwd()`; tests inject a fixture repo dir to stay hermetic
+   * against the real cwd.
+   */
+  cwd?: string;
 }
 
 /**
@@ -63,12 +77,30 @@ export interface ExplainPolicyOptions extends EventInputSeams, LoaderOptions {
  */
 export type SessionStartPreflightLayerSource = "base" | "machine" | "project";
 
-/** Does `filePath`'s raw YAML explicitly declare `session_start_preflight.setup`? */
+/**
+ * Does `filePath`'s raw YAML explicitly declare `session_start_preflight.setup`?
+ *
+ * "Declare" means KEY PRESENCE, not "holds a boolean" (review round 2,
+ * finding: a tombstone — `session_start_preflight: null` or `{setup:
+ * null}`, both honoured by `mergeValue` in src/overrides/merge.ts as
+ * "delete whatever a lower layer set, falling back to the schema
+ * default" — is exactly as much a deliberate declaration by THIS layer
+ * as `setup: true`/`false` is; it just resolves to a different final
+ * value. Attributing a tombstoned layer's decision to whichever lower
+ * layer happens to also declare the key (or to "base" when none does)
+ * would name the WRONG layer as the one that decided the merged
+ * result.
+ */
 function layerDeclaresSetup(filePath: string): boolean {
   try {
     const raw = fs.readFileSync(filePath, "utf8");
-    const parsed = parseYaml(raw) as { session_start_preflight?: { setup?: unknown } } | null;
-    return typeof parsed?.session_start_preflight?.setup === "boolean";
+    const parsed = parseYaml(raw) as { session_start_preflight?: unknown } | null;
+    if (parsed === null || typeof parsed !== "object") return false;
+    if (!("session_start_preflight" in parsed)) return false;
+    const block = parsed.session_start_preflight;
+    if (block === null) return true; // whole-block tombstone
+    if (typeof block !== "object" || Array.isArray(block)) return false;
+    return "setup" in (block as Record<string, unknown>);
   } catch {
     return false;
   }
@@ -119,8 +151,14 @@ interface ExplainPolicyProjection {
    * layer decided the value: `"base"` (also covers an injected
    * `opts.manifest`, which carries no per-layer provenance to
    * attribute), `"machine"`, or `"project"` (the cwd-derived per-repo
-   * layer `harness session-start preflight` itself now feeds through
-   * `LoaderOptions.project`, see src/cli/session-start/index.ts).
+   * layer). This function derives that project name itself, from
+   * `opts.cwd`, via the SAME `deriveProjectName` helper `harness
+   * session-start preflight` feeds through `LoaderOptions.project`
+   * (review round 2, decision D-021b: without this, an operator running
+   * `explain-policy` with no `--project` in a repo that DOES have a
+   * project layer would see the base/machine value while the producer
+   * itself reads the project layer — see src/cli/session-start/
+   * index.ts).
    */
   session_start_preflight?: { setup: boolean; source: SessionStartPreflightLayerSource };
   when:
@@ -160,7 +198,17 @@ export function explainPolicy(
   if (opts.manifest) {
     manifest = opts.manifest;
   } else {
-    const loaded = loadManifest(opts);
+    // Per-repo scoping (task c88461c1, review round 2, decision
+    // D-021b): an explicit `opts.project` still wins outright;
+    // otherwise derive the project name from `opts.cwd` (defaulting to
+    // `process.cwd()`) via the SAME shared helper `harness
+    // session-start preflight` and `harness doctor` feed their own
+    // `loadManifest` calls from, so this verb's `source` attribution
+    // reflects the layer the producer itself would actually read.
+    const loaded = loadManifest({
+      ...opts,
+      project: opts.project ?? deriveProjectName(opts.cwd ?? process.cwd()) ?? undefined,
+    });
     manifest = loaded.manifest;
     resolvedPaths = loaded.resolved;
   }

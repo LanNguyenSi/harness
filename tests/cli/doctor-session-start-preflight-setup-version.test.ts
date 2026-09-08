@@ -498,3 +498,97 @@ tools:
     expect(report.warningCount - baseline.warningCount).toBe(2);
   });
 });
+
+// Review round 2, decision D-021b: round 1's `checkSessionStartPreflightSetupVersion`
+// judged only the manifest `doctor()` loaded from `opts` DIRECTLY (base
+// plus machine-override layers), never a per-repo project layer, because
+// `doctor()`'s own `loadManifest(opts)` call never derived a project name
+// from `opts.cwd`. The round-1 reviewer reproduced this: a stub preflight
+// below the floor warned/stayed-silent against the BASE value while the
+// producer (`harness session-start preflight`) actually read a DIFFERENT,
+// project-layer-scoped effective value for the same repo. These two tests
+// drive `doctor()` with a `cwd` pointing at a fixture repo that has a
+// matching `<home>/projects/<name>/harness.overrides.yaml`, in both merge
+// directions, and assert the check now judges the EFFECTIVE per-repo
+// value, not the base/machine one.
+describe("doctor: session_start_preflight per-repo effective value (task c88461c1, review round 2, decision D-021b)", () => {
+  function makeRepoFixture(name: string): string {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "harness-doctor-ssp-repo-"));
+    cleanups.push(() => fs.rmSync(root, { recursive: true, force: true }));
+    const repo = path.join(root, name);
+    fs.mkdirSync(path.join(repo, ".git"), { recursive: true });
+    fs.writeFileSync(path.join(repo, ".git", "HEAD"), "ref: refs/heads/main\n");
+    return repo;
+  }
+
+  function writeProjectLayer(home: string, projectName: string, setup: boolean): void {
+    const projectDir = path.join(home, "projects", projectName);
+    fs.mkdirSync(projectDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(projectDir, "harness.overrides.yaml"),
+      ["session_start_preflight:", `  setup: ${setup}`, ""].join("\n"),
+    );
+  }
+
+  it("warns against a stale preflight when the base is false but the cwd-derived project layer turns setup on", async () => {
+    const repoName = "doctor-scope-on-repo";
+    const repo = makeRepoFixture(repoName);
+    const home = makeFixture({
+      "harness.yaml": buildManifest("session_start_preflight:\n  setup: false"),
+    });
+    writeProjectLayer(home, repoName, true);
+    const report = await doctor({
+      configPath: path.join(home, "harness.yaml"),
+      homeDir: home,
+      homeOverride: home,
+      cwd: repo,
+      versionProbe: (cmd) => (cmd[0] === "preflight" ? "preflight 0.5.0\n" : null),
+      pathEnv: "",
+      npmBinExec: STUB_NPM_BIN_EXEC_UNKNOWN,
+    });
+    expect(report.sessionStartPreflightSetupVersion).toEqual({
+      kind: "below_floor",
+      actualVersion: "0.5.0",
+      requiredVersion: "0.6.0",
+      message: expect.stringContaining("v0.5.0 < 0.6.0"),
+    });
+  });
+
+  it("stays silent when the base is true but the cwd-derived project layer turns setup off (the inverse), even with an ancient preflight", async () => {
+    const repoName = "doctor-scope-off-repo";
+    const repo = makeRepoFixture(repoName);
+    const home = makeFixture({
+      "harness.yaml": buildManifest("session_start_preflight:\n  setup: true"),
+    });
+    writeProjectLayer(home, repoName, false);
+    const report = await doctor({
+      configPath: path.join(home, "harness.yaml"),
+      homeDir: home,
+      homeOverride: home,
+      cwd: repo,
+      versionProbe: (cmd) => (cmd[0] === "preflight" ? "preflight 0.5.0\n" : null),
+      pathEnv: "",
+      npmBinExec: STUB_NPM_BIN_EXEC_UNKNOWN,
+    });
+    expect(report.sessionStartPreflightSetupVersion).toBeUndefined();
+  });
+
+  it("does not pick up a project layer named after an unrelated repo", async () => {
+    const repoName = "doctor-scope-unrelated-repo";
+    const repo = makeRepoFixture(repoName);
+    const home = makeFixture({
+      "harness.yaml": buildManifest("session_start_preflight:\n  setup: false"),
+    });
+    writeProjectLayer(home, "some-other-repo", true);
+    const report = await doctor({
+      configPath: path.join(home, "harness.yaml"),
+      homeDir: home,
+      homeOverride: home,
+      cwd: repo,
+      versionProbe: (cmd) => (cmd[0] === "preflight" ? "preflight 0.5.0\n" : null),
+      pathEnv: "",
+      npmBinExec: STUB_NPM_BIN_EXEC_UNKNOWN,
+    });
+    expect(report.sessionStartPreflightSetupVersion).toBeUndefined();
+  });
+});

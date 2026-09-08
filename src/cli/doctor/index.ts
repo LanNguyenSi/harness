@@ -35,6 +35,7 @@ import {
 } from "../validate/checks.js";
 import type { Diagnostic } from "../validate/types.js";
 import { isDerivedPolicy } from "../../runtime/workflow-policies.js";
+import { deriveProjectName } from "../../runtime/git-context.js";
 import { loadManifest, type LoaderOptions } from "../loader.js";
 import {
   countCodexDiagnostics,
@@ -174,6 +175,12 @@ export interface DoctorOptions extends LoaderOptions {
    * resolves its own target (`resolveTargetPath` in apply.ts, which
    * calls bare `path.resolve`). Defaults to `process.cwd()`; tests
    * inject a fixture dir to stay hermetic against the real cwd.
+   *
+   * Also the cwd `session_start_preflight.setup`'s per-repo project
+   * layer is derived from when `opts.project` is absent (task
+   * c88461c1, review round 2, decision D-021b), via the same
+   * `deriveProjectName` helper `harness session-start preflight` and
+   * `harness explain-policy` feed their own `loadManifest` calls from.
    */
   cwd?: string;
 }
@@ -1162,7 +1169,22 @@ function countDiagnostics(report: Omit<DoctorReport, "errorCount" | "warningCoun
 }
 
 export async function doctor(opts: DoctorOptions = {}): Promise<DoctorReport> {
-  const { manifest, resolved } = loadManifest(opts);
+  // Per-repo scoping (task c88461c1, review round 2, decision D-021b):
+  // an explicit `opts.project` still wins outright; otherwise derive
+  // the project name from `opts.cwd` (defaulting to `process.cwd()`)
+  // via the SAME shared helper `harness session-start preflight` and
+  // `harness explain-policy` feed their own `loadManifest` calls from.
+  // This single `manifest` load feeds every check below, including
+  // `checkSessionStartPreflightSetupVersion` further down: without this,
+  // that check judged only the base/machine-override value, so it could
+  // warn (or stay silent) against the WRONG effective value for a repo
+  // whose cwd-derived project layer flips `setup` the other way — the
+  // exact drift the producer (src/cli/session-start/index.ts) and
+  // `explain-policy` do not have, since both already derive from cwd.
+  const { manifest, resolved } = loadManifest({
+    ...opts,
+    project: opts.project ?? deriveProjectName(opts.cwd ?? process.cwd()) ?? undefined,
+  });
   const home = opts.homeOverride ?? opts.homeDir ?? os.homedir();
   const probe = opts.mcpProbe ?? new RealMcpProbe();
 

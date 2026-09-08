@@ -24,6 +24,7 @@ import { randomBytes } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import {
+  deriveProjectName,
   resolveGitContext,
 } from "../../runtime/index.js";
 import { resolveManifestLedgerWriter } from "../../runtime/ledger-writer.js";
@@ -597,23 +598,36 @@ export async function runSessionStartPreflight(
   //
   // Per-repo scoping (task c88461c1): an explicit `opts.project` (the
   // CLI's `--project <name>`) still wins outright. Otherwise this
-  // producer derives a project name from `repo` (already resolved a
-  // few lines above via `resolveGitContext(cwd)` as the git work-tree
-  // root's basename, and guaranteed non-empty here, since an empty
-  // `repo` already returned early above) and feeds it through the
-  // loader's EXISTING `LoaderOptions.project` mechanism
+  // producer derives a project name from `cwd` via the shared
+  // `deriveProjectName` helper (review round 2, decision D-021a:
+  // resolves to the MAIN checkout's directory name — the basename of
+  // the directory containing the repository's shared git common dir —
+  // so every linked worktree of one repository shares the same
+  // project layer, unlike `repo` above, which names the checkout
+  // directory itself and differs per worktree) and feeds it through
+  // the loader's EXISTING `LoaderOptions.project` mechanism
   // (src/cli/loader.ts's `resolvePaths`/`applyLayers`), the same seam
   // every other command's own `--project <name>` flag already uses.
-  // A repo with no `<home>/projects/<repo>/harness.overrides.yaml` on
-  // disk keeps the host-wide (base plus machine-layer) value: the
-  // loader resolves `projectLayer: null` when that file does not exist
-  // (loader.ts's `fs.existsSync` check), so nothing extra is merged in
-  // that case. See docs/CLI.md's `session_start_preflight.setup` Notes
-  // for the full rule.
+  // `explain-policy` and `doctor` derive the SAME name from the SAME
+  // helper (review round 2, decision D-021b), so all three consumers
+  // of `session_start_preflight.setup` agree on which layer applies to
+  // a given cwd. The `?? repo` fallback only matters when
+  // `deriveProjectName` returns null (an unreadable `.git` file); `cwd`
+  // is already known to sit inside a git work tree at this point (an
+  // empty `repo` already returned early above), so in practice this
+  // reduces to the checkout basename either way. A repo with no
+  // `<home>/projects/<name>/harness.overrides.yaml` on disk keeps the
+  // host-wide (base plus machine-layer) value: the loader resolves
+  // `projectLayer: null` when that file does not exist (loader.ts's
+  // `fs.existsSync` check), so nothing extra is merged in that case.
+  // See docs/CLI.md's `session_start_preflight.setup` Notes for the
+  // full rule.
   const setupEnabled = (() => {
     try {
       const manifest =
-        opts.manifest ?? loadManifest({ ...opts, project: opts.project ?? repo }).manifest;
+        opts.manifest ??
+        loadManifest({ ...opts, project: opts.project ?? deriveProjectName(cwd) ?? repo })
+          .manifest;
       return manifest.session_start_preflight.setup;
     } catch {
       return false;
@@ -681,6 +695,15 @@ export async function runSessionStartPreflight(
       // captured result plus its error), but two local try/catch blocks
       // keep each site's failure handling obvious where it is read, and
       // the second load is cheap; that is the whole reason for the repeat.
+      //
+      // Deliberately plain `opts` here (no `project: deriveProjectName(cwd)
+      // ?? repo`, unlike the `setupEnabled` load above, task c88461c1):
+      // this manifest only feeds `resolveManifestLedgerWriter` below, which
+      // reads the ledger-writer wiring (`tools.mcp[]` / grounding config),
+      // not `session_start_preflight`. The per-repo project layer exists
+      // to scope THAT key; routing it through this unrelated load would
+      // let a project layer silently reach ledger-writer config it was
+      // never meant to touch, for zero benefit to this call site.
       manifest = loadManifest(opts).manifest;
     } catch (err) {
       const reason = `manifest load failed: ${(err as Error).message}`;

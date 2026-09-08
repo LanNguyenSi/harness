@@ -2,6 +2,45 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-09-08T05:36:06Z, task c88461c1 (implementer, review round 2):
+  repository identity + one shared helper for `session_start_preflight.
+  setup`'s per-repo scoping. Added `deriveProjectName` to `src/runtime/
+  git-context.ts` (basename of the directory containing the repository's
+  shared git common dir, not the checkout directory `resolveGitContext`'s
+  own `repo` field names — decision D-021a) and wired all three
+  consumers (`src/cli/session-start/index.ts`, `src/cli/explain-policy.ts`,
+  `src/cli/doctor/index.ts`) through it when `--project` is absent
+  (decision D-021b); also fixed `explain-policy.ts`'s `layerDeclaresSetup`
+  to attribute a tombstone (`session_start_preflight: null` / `{setup:
+  null}`) by key presence rather than requiring a literal boolean. Edited
+  `docs/CLI.md` (the PER-REPO SCOPING, VERSION CAVEAT and `explain-policy`
+  Notes bullets), `src/schema/session-start-preflight.ts`'s SCOPE header,
+  and `CHANGELOG.md`. `npx okf-kit@0.10.0 check --json docs/okf` (measured
+  baseline on this task's own prior commit `f5b72fe`: 0 findings) flags
+  five docs `sources-fresh` STALE after this commit, against `docs/CLI.md`
+  (`codex-adapter-parity-gaps.md`, `debug-verb-selection.md`, `evidence-
+  ledger-trust-boundary.md`, `policy-engine-producer-wiring.md`) and
+  against `src/cli/doctor/index.ts` (`pause-vs-gate-kill-switch.md`,
+  `debug-verb-selection.md` again — it lists both `src/cli/explain-
+  policy.ts` and `src/cli/doctor/index.ts` in `sources:`). Re-verified
+  each: none describes `session_start_preflight.setup`, the repository-
+  identity rule, or the tombstone attribution fix; `debug-verb-selection.md`
+  and `pause-vs-gate-kill-switch.md` describe `doctor`'s general health-
+  summary pillars and its unrelated kill-switch drift checks, generic file
+  mentions only, no pinned lines inside the edited region (the top of
+  `doctor()`, before those checks run); `codex-adapter-parity-gaps.md`,
+  `evidence-ledger-trust-boundary.md` and `policy-engine-producer-wiring.md`
+  cite `docs/CLI.md` generically for unrelated sections (Codex hook table,
+  ledger-tag producer mention, `when:`/`requires:` evaluation order). One
+  exact-line citation DID drift and needed re-pointing (not an OKF-bundle
+  doc): `docs/decisions/2026-08-27-ug-auto-mode-approval.md` line 558
+  pinned the `if (report.ugBypassWithoutAutoApprove) warningCount++;`
+  anchor in `src/cli/doctor/index.ts` at what this task's own comment
+  insertions shifted from line 1129 to line 1136; re-pointed to the new
+  line and re-verified green via `tests/decisions-citations-resolve.
+  test.ts`. Re-stamped all five OKF docs' `timestamp:` fields; no other
+  citation re-pointing needed.
+
 - 2026-09-08T04:52:43Z, task c88461c1 (implementer): per-repo scoping for
   `session_start_preflight.setup`. Edited `src/cli/session-start/index.ts`,
   `src/cli/explain-policy.ts`, `src/schema/session-start-preflight.ts`,
