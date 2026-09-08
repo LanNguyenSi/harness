@@ -29,8 +29,11 @@ quoted `#"text"`); task
 `ee494719`): it resolves each one against the target's own Markdown
 heading structure, mirroring okf-kit@0.10.0's `citations-resolve`
 heading-form semantics (the version this repo's `okf-staleness` CI job
-pins), and additionally requires a `CHANGELOG.md` target's matching
-heading to take this repo's own exact `## [x.y.z]` bracket form. Before
+pins) including its `heading-section-empty` check (a resolved section
+whose body is entirely blank up to the next heading of the same or
+higher level, or EOF, fails, task `9fec3839`), and additionally requires
+a `CHANGELOG.md` target's matching heading to take this repo's own exact
+`## [x.y.z]` bracket form. Before
 this guard, only okf-kit's warn-only `citations-resolve` rule (run
 through the `okf-staleness` CI job) checked these citations, so a renamed
 or removed release heading only warned; a CI failure here now blocks.
@@ -39,7 +42,9 @@ okf-kit's full sources/doc-relative/ancestor/repo-wide resolution chain,
 so a sibling-relative citation (e.g. a bare "log.md:#Overview" written
 from inside this same directory) that upstream would resolve fails here; every
 citation actually written in this bundle already uses a full
-repo-root-relative path, so this has not yet caused a false failure.
+repo-root-relative path, so this has not yet caused a false failure. A
+second scope cut: malformed heading-section forms are extracted-and-
+reported upstream, silently ignored here.
 
 ## Overview
 
