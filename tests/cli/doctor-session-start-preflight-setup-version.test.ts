@@ -75,6 +75,27 @@ describe("checkSessionStartPreflightSetupVersion (task 6993d9b5)", () => {
     expect(SESSION_START_PREFLIGHT_SETUP_BUILD_MIN_VERSION).toBe("0.6.0");
   });
 
+  // Task 65952a0c (docs/decisions/2026-09-08-preflight-floors.md) split
+  // the constant this check used to share with FULL_TEMPLATE's
+  // git-preflight hook into two independent constants: this check must
+  // keep reading SESSION_START_PREFLIGHT_SETUP_BUILD_MIN_VERSION (the
+  // SETUP floor), never GIT_PREFLIGHT_HOOK_MIN_VERSION (the HOOK floor,
+  // src/cli/init/templates.ts). Both are "0.6.0" today, so a
+  // value-only assertion (as in the test above, and the `required:
+  // "0.6.0"` checks throughout this file) cannot tell the two apart;
+  // this reads the source text and asserts which identifier the
+  // `const required =` line actually binds.
+  it("reads the SETUP floor identifier, not the hook floor, for `required`", () => {
+    const src = fs.readFileSync(
+      new URL("../../src/cli/doctor/session-start-preflight-setup-version.ts", import.meta.url),
+      "utf8",
+    );
+    const requiredLine = src.split("\n").find((line) => line.trim().startsWith("const required ="));
+    expect(requiredLine, "const required = ... line not found").toBeDefined();
+    expect(requiredLine).toContain("SESSION_START_PREFLIGHT_SETUP_BUILD_MIN_VERSION");
+    expect(requiredLine).not.toContain("GIT_PREFLIGHT_HOOK_MIN_VERSION");
+  });
+
   it("is silent when session_start_preflight.setup is absent, even with an ancient preflight", () => {
     const manifest = loadManifestFromYaml(buildManifest(""));
     const finding = checkSessionStartPreflightSetupVersion(manifest, () => "preflight 0.1.0\n");
@@ -126,6 +147,25 @@ describe("checkSessionStartPreflightSetupVersion (task 6993d9b5)", () => {
     );
     const finding = checkSessionStartPreflightSetupVersion(manifest, () => "preflight 0.7.1\n");
     expect(finding).toBeUndefined();
+  });
+
+  // Prerelease decision (task 65952a0c, docs/decisions/2026-09-08-
+  // preflight-floors.md): a release candidate of the floor version does
+  // NOT satisfy it. "0.6.0-rc.1" does not carry the build step this
+  // check exists to guarantee (a real 0.6.0 does), matching semver
+  // precedence (0.6.0-rc.1 < 0.6.0). Before this task, the version-probe
+  // regex only ever captured the leading numeric run, so this exact
+  // input parsed to "0.6.0" and was silently treated as meeting the
+  // floor; this pins the fix.
+  it("is below_floor when setup is true and preflight reports a prerelease of the floor version", () => {
+    const manifest = loadManifestFromYaml(
+      buildManifest("session_start_preflight:\n  setup: true"),
+    );
+    const finding = checkSessionStartPreflightSetupVersion(manifest, () => "preflight 0.6.0-rc.1\n");
+    expect(finding?.kind).toBe("below_floor");
+    expect(finding?.actualVersion).toBe("0.6.0");
+    expect(finding?.requiredVersion).toBe("0.6.0");
+    expect(finding?.message).toContain("0.6.0-rc.1");
   });
 
   it("warns fail-loud (not silent) when setup is true and the probe returns nothing", () => {

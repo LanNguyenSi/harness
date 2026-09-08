@@ -37,3 +37,51 @@ export function compareNumericVersions(a: string, b: string): number {
   }
   return 0;
 }
+
+/**
+ * Extracts a numeric-semver-shape version from free-form `--version`
+ * probe output (e.g. "preflight 0.6.0-rc.1\n"), plus whether the
+ * matched numeric run was immediately followed by a `-` prerelease/
+ * build suffix. Matches ONLY the leading numeric run itself (mirrors
+ * the pre-existing `/(\d+(?:\.\d+){0,3})/` extraction every version
+ * floor check used before task 65952a0c), so `version` here is exactly
+ * what a plain, non-prerelease-aware caller would have parsed; the
+ * `isPrerelease` flag is the new information a caller can act on.
+ *
+ * Returns `null` when no numeric run is found at all (unparseable
+ * probe output), matching the pre-existing "no match" contract.
+ */
+export function parseProbedVersion(
+  stdout: string,
+): { version: string; isPrerelease: boolean; raw: string } | null {
+  const m = stdout.match(/(\d+(?:\.\d+){0,3})(-[0-9A-Za-z.]+)?/);
+  if (!m || !m[1]) return null;
+  return { version: m[1], isPrerelease: m[2] !== undefined, raw: m[0] };
+}
+
+/**
+ * `compareNumericVersions`, but a prerelease `a` (as reported by
+ * `parseProbedVersion`'s `isPrerelease`) is treated as strictly BELOW
+ * a numerically-equal `b` floor, matching semver precedence
+ * (`0.6.0-rc.1 < 0.6.0`) and the intent every `min_version` floor in
+ * this codebase already carries: `NUMERIC_VERSION_PATTERN` rejects a
+ * prerelease shape for `b` itself (a `min_version` field can never
+ * BE a prerelease), so `aIsPrerelease` is the only side this can ever
+ * apply to. When the base numeric comparison is not a tie, the
+ * prerelease flag is irrelevant and the numeric result wins outright
+ * (a genuinely older release, prerelease or not, is still older).
+ *
+ * Decision: docs/decisions/2026-09-08-preflight-floors.md. Used by the
+ * two floor checks that must reject a release candidate of their own
+ * floor version: `checkHookVersion` (src/cli/doctor/index.ts, generic
+ * across every `hooks[]` entry with `min_version`) and
+ * `checkSessionStartPreflightSetupVersion`
+ * (src/cli/doctor/session-start-preflight-setup-version.ts).
+ * Deliberately NOT wired into the `tools.cli[]` / `tools.mcp[]` version
+ * checks in the same file — see the ADR's scope note.
+ */
+export function compareVersionFloor(a: string, aIsPrerelease: boolean, b: string): number {
+  const cmp = compareNumericVersions(a, b);
+  if (cmp !== 0) return cmp;
+  return aIsPrerelease ? -1 : 0;
+}

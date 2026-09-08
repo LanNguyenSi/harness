@@ -2094,6 +2094,41 @@ tools:
     });
   });
 
+  // Prerelease decision (task 65952a0c, docs/decisions/2026-09-08-
+  // preflight-floors.md): checkHookVersion is the generic hooks[]
+  // min_version check, shared across every hook that declares one
+  // (not only git-preflight). A release candidate of the floor version
+  // does not meet it: "0.6.0-rc.1" is below "0.6.0" (semver
+  // precedence), matching the same fix applied to
+  // checkSessionStartPreflightSetupVersion. Before this task, the
+  // version-probe regex only captured the leading numeric run, so this
+  // exact input parsed to "0.6.0" and silently passed the floor.
+  it("warns below_floor when the probed hook version is a prerelease of min_version", async () => {
+    const home = makeFixture({
+      "harness.yaml": buildManifest(`  - name: rc-hook
+    event: SessionStart
+    command: /usr/bin/true
+    blocking: false
+    min_version: "0.6.0"
+    version_command: [my-hook-bin, "--version"]`),
+    });
+    const report = await doctor({
+      configPath: path.join(home, "harness.yaml"),
+      homeOverride: home,
+      mcpProbe: new FakeProbe({}),
+      versionProbe: () => "my-hook-bin v0.6.0-rc.1\n",
+      pathEnv: "",
+      npmBinExec: STUB_NPM_BIN_EXEC_UNKNOWN,
+    });
+    expect(report.hooks[0]?.version).toEqual({
+      status: "warn",
+      kind: "below_floor",
+      actualVersion: "0.6.0",
+      message: "outdated: installed v0.6.0-rc.1 < required 0.6.0",
+    });
+    expect(report.warningCount).toBeGreaterThanOrEqual(1);
+  });
+
   it("rejects min_version without version_command at schema-validation time", async () => {
     const home = makeFixture({
       "harness.yaml": buildManifest(`  - name: bad-hook
