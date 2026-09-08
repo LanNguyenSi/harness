@@ -4,6 +4,39 @@
 
 - 2026-09-08T08:53:51Z, task 65952a0c (implementer): split the shared `SESSION_START_PREFLIGHT_SETUP_BUILD_MIN_VERSION` (task 6993d9b5) into two independent constants, `GIT_PREFLIGHT_HOOK_MIN_VERSION` (`src/cli/init/templates.ts`, feeds FULL_TEMPLATE's git-preflight hook `min_version` and `src/cli/init/dependencies.ts`'s wizard table) and `SESSION_START_PREFLIGHT_SETUP_BUILD_MIN_VERSION` (`src/schema/session-start-preflight.ts`, feeds only `harness doctor`'s session_start_preflight.setup check); both `"0.6.0"` today, decision `docs/decisions/2026-09-08-preflight-floors.md`. Also fixed both checks' version-probe parsing to reject a prerelease of the floor (`preflight 0.6.0-rc.1` previously parsed to `0.6.0` and silently passed a `0.6.0` floor): new `parseProbedVersion`/`compareVersionFloor` in `src/io/version-compare.ts`, wired into `checkHookVersion` (`src/cli/doctor/index.ts`, generic across every `hooks[]` entry) and `checkSessionStartPreflightSetupVersion`. `npx okf-kit@0.10.0 check docs/okf` flagged four docs `sources-fresh` STALE against the `src/cli/init/templates.ts`/`src/cli/doctor/index.ts` edits: `debug-verb-selection.md`, `evidence-ledger-trust-boundary.md`, `pause-vs-gate-kill-switch.md`, `quote-model-divergence.md`. Re-verified: none of the four cite prose this change touches (kill-switch policies, ledger-tag trust boundary, bash_match trigger patterns, and the generic doctor-pillars overview all describe unrelated behaviour, and the one shared prose claim, "installed vX < required Y" for a below-floor `min_version`, still holds verbatim); re-stamped their `timestamp:` field to this entry's timestamp, no citation re-pointing needed (no cited line numbers moved). The docs/CLI.md VERSION CAVEAT edit that landed in the same task then flagged two MORE docs stale on the next `check` run (`codex-adapter-parity-gaps.md`, `policy-engine-producer-wiring.md`, both citing `docs/CLI.md`, the recurring `docs/CLI.md`/`CHANGELOG.md` class task `419ecfad` tracks): re-verified (the VERSION CAVEAT bullet is one logical line before and after the edit, so no other docs/CLI.md line shifted, and neither doc cites that bullet's content), re-stamped.
 
+- 2026-09-08T08:58:05Z, task `9fec3839` (implementer, review round 2,
+  decision D-009): applied all seven low findings from `T-003` review
+  round 1 to the `heading-section-empty` mirror added in `tests/decisions-
+  citations-resolve.test.ts` (task `9fec3839`) on top of task
+  `ee494719`'s guard. New fixture pinning the check order: a content-
+  anchored citation to the already-empty `## [1.2.9]` section now asserts
+  the "no non-blank content" problem, not "does not occur" -- kills the
+  reviewer's surviving mutant that gated `isHeadingSectionEmpty` behind
+  `c.contentAnchor === undefined`. Test titles fixed: the mutation-probe
+  (i) body-end-boundary attribution moved from the `## [1.2.10]` control
+  onto the `## [1.2.9]` empty-section test (which actually kills that
+  mutant), and the `## [1.2.10]` control retitled to name what it pins,
+  the false-positive direction (the empty check must not fire on a real,
+  non-blank section). Docs: the older "COVERAGE ADDED THIS ROUND" comment
+  paragraph (task `ee494719`) reheaded "COVERAGE ADDED IN task
+  `ee494719`:" so only the new paragraph claims "this round"; a second
+  scope cut named in both the test file's SCOPE CUT comment and
+  `docs/okf/index.md`'s Maintenance section (malformed heading-section
+  forms -- an unterminated content-anchor quote, an unquoted third
+  segment, a non-`.md` target -- are extracted-and-reported by okf-kit,
+  silently ignored by this guard); the `findSectionBody` comment's wrong
+  rationale fixed (the scan matches headings of any level but breaks only
+  at one whose level is `<=` the cited heading's own level, so a deeper
+  subheading is body content, not a section end); `CHANGELOG.md`'s
+  "Round 2 addition" reworded to "Follow-up" (`9fec3839` is a separate
+  tracker task, not a review round of `ee494719`). Mutation probes via
+  `agent-primitives probe --pre 'npm run build' -t 'npx vitest run
+  tests/decisions-citations-resolve.test.ts'`: the new order-gate mutant
+  killed by the new fixture; both round-1 probes (the empty-check
+  disabled, the body-end boundary widened past the next heading)
+  replayed and still killed. `npx okf-kit@0.10.0 check --json docs/okf`
+  re-run against this commit: 0 stale / 0 warnings / 0 errors.
+
 - 2026-09-08T06:13:41Z, task c88461c1 (implementer, review round 3,
   decision D-028): scoped the derived project layer to
   `session_start_preflight.setup` alone. Round 2 fed the cwd-derived
