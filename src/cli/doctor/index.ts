@@ -1387,6 +1387,12 @@ export async function doctor(opts: DoctorOptions = {}): Promise<DoctorReport> {
     // this attempted name; otherwise the thrown error came from the
     // base/machine layers, unrelated to project scoping, and this
     // scoped-load catch stays silent about it (see the comment above).
+    // Deliberately unguarded, unlike the producer's copy: `resolvePaths`
+    // throws only on the HARNESS_ALLOW_REAL_GENERATED_DIR test-safety
+    // path, which the plain load at the top of doctor() has already
+    // passed; if that plain-load-first invariant ever moves, this line
+    // throws instead of degrading silently, and the producer's try/catch
+    // is the shape to copy.
     const unresolvableLayerPath = resolvePaths(scopedLoadOpts).projectLayer;
     if (unresolvableLayerPath !== null) {
       sessionStartPreflightProjectName = attemptedSessionStartPreflightProjectName;

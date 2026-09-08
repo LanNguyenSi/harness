@@ -39,7 +39,7 @@
   undefined;` anchor unique), 111 (the `compareVersions` alias, from
   lines 359-361 to 363-365), and 139/140 (the two prerelease-blind
   `tools.cli[]`/`tools.mcp[]` regex extractions, from lines 261/331 to
-  265/335); and this file's own lines 21 and 23 above (the
+  265/335); and this file's own two `layer_unresolvable` citations in the round-2 entry below (the
   `layer_unresolvable` kind, from line 64 to line 72 in the setup-
   version module, and from line 1381 to line 1396 in doctor's
   index.ts). Swept `rg -no "src/[A-Za-z0-9/._-]+\.ts:
@@ -52,7 +52,7 @@
   doctor.test.ts tests/cli/doctor-session-start-preflight-setup-
   version.test.ts tests/decisions-citations-resolve.test.ts`: 3 files
   / 348 tests passed. `npx okf-kit@0.10.0 check --json docs/okf`
-  re-run against this commit: 0 findings. This round's docs fix 1
+  was re-run against this commit and reported six `sources-fresh` warnings, because the five docs were stamped in the merge commit before this commit edited docs/CLI.md and src/cli/doctor/index.ts; the orchestrator re-verified and re-stamped them in the closure commit that follows and re-ran okf-kit after it (result in the run file, not claimed here). This round's docs fix 1
   (reviewer, medium): `docs/CLI.md`'s VERSION CAVEAT sentence claiming
   a `layer_unresolvable` finding "still degrades setup to false for
   the manifest every OTHER check in this report reads" was false; the
@@ -128,7 +128,7 @@
   `SessionStartPreflightSetupVersionFinding`
   (`src/cli/doctor/session-start-preflight-setup-version.ts:72#"layer_unresolvable"`,
   built directly by `doctor()` at
-  `src/cli/doctor/index.ts:1396#"layer_unresolvable"`), naming the
+  `src/cli/doctor/index.ts:1402#"layer_unresolvable"`), naming the
   layer path and the FIRST LINE of the parse error, counted in
   `warningCount`, rendered by `format.ts` as one warning line; round 1
   first shipped full silence here, round 1's own review found the
