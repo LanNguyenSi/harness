@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { compareNumericVersions } from "../../io/version-compare.js";
+import { compareNumericVersions, parseProbedVersion, compareVersionFloor } from "../../io/version-compare.js";
 import { resolveGeneratedDir } from "../../io/generated-dir.js";
 import { inspectMemory } from "../../probes/memory.js";
 import {
@@ -480,8 +480,12 @@ function checkHookVersion(
       message: `version probe failed for ${hook.version_command.join(" ")}`,
     };
   }
-  const m = stdout.match(/(\d+(?:\.\d+){0,3})/);
-  if (!m || !m[1]) {
+  // parseProbedVersion (not the plain compareVersions/compareNumericVersions
+  // pair used by the cli[]/mcp[] checks below): a hook's own release
+  // candidate (e.g. "0.6.0-rc.1") must not satisfy an equal-numeric
+  // min_version floor. See docs/decisions/2026-09-08-preflight-floors.md.
+  const parsed = parseProbedVersion(stdout);
+  if (!parsed) {
     return {
       status: "warn",
       kind: "parse_failed",
@@ -489,16 +493,16 @@ function checkHookVersion(
       message: `could not parse a version from "${stdout.trim()}"`,
     };
   }
-  const actual = m[1];
-  const cmp = compareVersions(actual, hook.min_version);
+  const { version: actual, isPrerelease, token } = parsed;
+  const cmp = compareVersionFloor(actual, isPrerelease, hook.min_version);
   return cmp < 0
     ? {
         status: "warn",
         kind: "below_floor",
         actualVersion: actual,
-        message: `outdated: installed v${actual} < required ${hook.min_version}`,
+        message: `outdated: installed v${token} < required ${hook.min_version}`,
       }
-    : { status: "ok", message: `v${actual} ≥ ${hook.min_version}` };
+    : { status: "ok", message: `v${token} ≥ ${hook.min_version}` };
 }
 
 /**

@@ -66,13 +66,36 @@ tools:
 `;
 }
 
-// task 6993d9b5, criterion 1: the shared floor constant this whole check
-// (and the init template's git-preflight min_version, in the sibling
-// bump commit) hangs off. Pinned here so a drift between the two
-// literals shows up as a failing assertion, not a silent divergence.
+// task 6993d9b5, criterion 1, split by task 65952a0c: the SETUP floor
+// constant this check hangs off. Pinned here so a change to its value
+// shows up as a failing assertion, not a silent drift.
 describe("checkSessionStartPreflightSetupVersion (task 6993d9b5)", () => {
-  it("pins the required floor to the shared constant", () => {
+  it("pins the setup floor's value", () => {
     expect(SESSION_START_PREFLIGHT_SETUP_BUILD_MIN_VERSION).toBe("0.6.0");
+  });
+
+  // Task 65952a0c (docs/decisions/2026-09-08-preflight-floors.md) split
+  // the constant this check used to share with FULL_TEMPLATE's
+  // git-preflight hook into two independent constants: this check must
+  // keep reading SESSION_START_PREFLIGHT_SETUP_BUILD_MIN_VERSION (the
+  // SETUP floor), never GIT_PREFLIGHT_HOOK_MIN_VERSION (the HOOK floor,
+  // src/cli/init/templates.ts). Both are "0.6.0" today, so a
+  // value-only assertion (as in the test above, and the `required:
+  // "0.6.0"` checks throughout this file) cannot tell the two apart;
+  // this reads the source text and asserts which identifier the
+  // `const required =` line actually binds.
+  it("reads the SETUP floor identifier, not the hook floor, for `required`", () => {
+    const src = fs.readFileSync(
+      new URL("../../src/cli/doctor/session-start-preflight-setup-version.ts", import.meta.url),
+      "utf8",
+    );
+    const requiredLine = src.split("\n").find((line) => line.trim().startsWith("const required ="));
+    expect(
+      requiredLine,
+      "no const required = ... line interpolating a *_MIN_VERSION identifier found in session-start-preflight-setup-version.ts; if you aliased or wrapped the constant, update this pin per the ADR (docs/decisions/2026-09-08-preflight-floors.md), not the source",
+    ).toBeDefined();
+    expect(requiredLine).toContain("SESSION_START_PREFLIGHT_SETUP_BUILD_MIN_VERSION");
+    expect(requiredLine).not.toContain("GIT_PREFLIGHT_HOOK_MIN_VERSION");
   });
 
   it("is silent when session_start_preflight.setup is absent, even with an ancient preflight", () => {
@@ -126,6 +149,66 @@ describe("checkSessionStartPreflightSetupVersion (task 6993d9b5)", () => {
     );
     const finding = checkSessionStartPreflightSetupVersion(manifest, () => "preflight 0.7.1\n");
     expect(finding).toBeUndefined();
+  });
+
+  // Prerelease decision (task 65952a0c, docs/decisions/2026-09-08-
+  // preflight-floors.md): a release candidate of the floor version does
+  // NOT satisfy it. "0.6.0-rc.1" does not carry the build step this
+  // check exists to guarantee (a real 0.6.0 does), matching semver
+  // precedence (0.6.0-rc.1 < 0.6.0). Before this task, the version-probe
+  // regex only ever captured the leading numeric run, so this exact
+  // input parsed to "0.6.0" and was silently treated as meeting the
+  // floor; this pins the fix.
+  it("is below_floor when setup is true and preflight reports a prerelease of the floor version", () => {
+    const manifest = loadManifestFromYaml(
+      buildManifest("session_start_preflight:\n  setup: true"),
+    );
+    const finding = checkSessionStartPreflightSetupVersion(manifest, () => "preflight 0.6.0-rc.1\n");
+    expect(finding?.kind).toBe("below_floor");
+    expect(finding?.actualVersion).toBe("0.6.0");
+    expect(finding?.requiredVersion).toBe("0.6.0");
+    expect(finding?.message).toContain("0.6.0-rc.1");
+  });
+
+  // Reviewer round 1 (T-006 R1, low): the prerelease suffix regex
+  // (`src/io/version-compare.ts`'s `parseProbedVersion`) was pinned
+  // only with a DOTTED suffix ("-rc.1") above; a mutant tightening the
+  // suffix group to require an inner dot survived every existing test.
+  // A dotless suffix ("-beta") must still be detected as a prerelease.
+  it("is below_floor when setup is true and preflight reports a dotless prerelease of the floor version", () => {
+    const manifest = loadManifestFromYaml(
+      buildManifest("session_start_preflight:\n  setup: true"),
+    );
+    const finding = checkSessionStartPreflightSetupVersion(manifest, () => "preflight 0.6.0-beta\n");
+    expect(finding?.kind).toBe("below_floor");
+    expect(finding?.actualVersion).toBe("0.6.0");
+    expect(finding?.requiredVersion).toBe("0.6.0");
+    expect(finding?.message).toContain("0.6.0-beta");
+  });
+
+  // Reviewer round 1 (T-006 R1, medium): `parseProbedVersion`'s `raw`
+  // field truncates a multi-hyphen suffix at the first character
+  // outside `[0-9A-Za-z.]` (a git-describe suffix like
+  // "0.6.0-4-gabc123" would truncate to "0.6.0-4" at the second `-`).
+  // The below_floor message must quote the FULL probed token
+  // (`parseProbedVersion`'s `token` field), not the truncated `raw`.
+  it("quotes the full multi-hyphen probed token in the below_floor message, not a truncated one", () => {
+    const manifest = loadManifestFromYaml(
+      buildManifest("session_start_preflight:\n  setup: true"),
+    );
+    const finding = checkSessionStartPreflightSetupVersion(
+      manifest,
+      () => "preflight 0.6.0-4-gabc123\n",
+    );
+    expect(finding?.kind).toBe("below_floor");
+    expect(finding?.actualVersion).toBe("0.6.0");
+    expect(finding?.message).toContain("v0.6.0-4-gabc123 <");
+    expect(finding?.message).not.toContain("v0.6.0-4 <");
+    // Reviewer round 2 (T-006 R2, low): the pin above only covers the
+    // first of the message's two `${token}` interpolations. The
+    // second, in the "--setup on v${token} is dependency-install only"
+    // clause, is unpinned by the first assertion alone.
+    expect(finding?.message).toContain("--setup on v0.6.0-4-gabc123 is dependency-install only");
   });
 
   it("warns fail-loud (not silent) when setup is true and the probe returns nothing", () => {

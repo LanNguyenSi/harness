@@ -83,11 +83,21 @@ import { z } from "zod";
 // VERSION CAVEAT (task 6993d9b5): agent-preflight 0.5.0's `--setup` was
 // install-only (no conditional build, see the prose above). The build
 // step described above shipped in agent-preflight 0.6.0 (tag v0.6.0,
-// merge commit 2062831). `SESSION_START_PREFLIGHT_SETUP_BUILD_MIN_VERSION`
-// below is the ONE floor both `harness doctor`
-// (src/cli/doctor/session-start-preflight-setup-version.ts) and the
-// `init` template's `git-preflight` hook `min_version`
-// (src/cli/init/templates.ts) read, so the two cannot drift apart.
+// merge commit 2062831).
+//
+// SPLIT (task 65952a0c, docs/decisions/2026-09-08-preflight-floors.md):
+// through task 6993d9b5, `SESSION_START_PREFLIGHT_SETUP_BUILD_MIN_VERSION`
+// below was ALSO the `init` template's `git-preflight` hook `min_version`
+// (src/cli/init/templates.ts). The two are now independent constants:
+// this one is the SETUP floor, read only by `harness doctor`'s
+// session_start_preflight.setup version check
+// (src/cli/doctor/session-start-preflight-setup-version.ts) and by the
+// `init` wizard's dependency table (src/cli/init/dependencies.ts, via
+// the hook floor, not this one). The hook floor itself,
+// `GIT_PREFLIGHT_HOOK_MIN_VERSION`, now lives in
+// src/cli/init/templates.ts. Both are `"0.6.0"` today; bump each only
+// per its own rationale in the ADR, they are free to diverge on a
+// future agent-preflight release that touches only one of the two.
 export const SESSION_START_PREFLIGHT_SETUP_BUILD_MIN_VERSION = "0.6.0";
 
 export const SessionStartPreflightSchema = z

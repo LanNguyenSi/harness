@@ -37,3 +37,69 @@ export function compareNumericVersions(a: string, b: string): number {
   }
   return 0;
 }
+
+/**
+ * Extracts a numeric-semver-shape version from free-form `--version`
+ * probe output (e.g. "preflight 0.6.0-rc.1\n"), plus whether the
+ * matched numeric run was immediately followed by a `-` prerelease/
+ * build suffix. Matches ONLY the leading numeric run itself (mirrors
+ * the pre-existing `/(\d+(?:\.\d+){0,3})/` extraction every version
+ * floor check used before task 65952a0c), so `version` here is exactly
+ * what a plain, non-prerelease-aware caller would have parsed; the
+ * `isPrerelease` flag is the new information a caller can act on.
+ *
+ * Returns `null` when no numeric run is found at all (unparseable
+ * probe output), matching the pre-existing "no match" contract.
+ *
+ * Two suffix strings are returned, deliberately different:
+ * - `raw` is the regex's own match (`m[0]`): the numeric run plus a
+ *   `-` suffix restricted to `[0-9A-Za-z.]`, so it TRUNCATES a suffix
+ *   containing any other character (a git-describe suffix's second
+ *   hyphen, e.g. "0.6.0-4-gabc123" matches only as far as "0.6.0-4";
+ *   a platform suffix, e.g. "0.6.0-linux-x64" matches only as far as
+ *   "0.6.0-linux"). Kept only because `isPrerelease` is derived from
+ *   whether `m[2]` (the restricted suffix group) matched at all.
+ * - `token` is the full probed version token as printed: everything
+ *   from the start of the numeric run up to the next whitespace
+ *   character (or end of string), with no character-class
+ *   restriction. This is what a human-facing message should quote;
+ *   `raw`'s truncation would otherwise misreport what the probe
+ *   actually printed. See docs/decisions/2026-09-08-preflight-floors.md.
+ */
+export function parseProbedVersion(
+  stdout: string,
+): { version: string; isPrerelease: boolean; raw: string; token: string } | null {
+  const m = stdout.match(/(\d+(?:\.\d+){0,3})(-[0-9A-Za-z.]+)?/);
+  if (!m || !m[1] || m.index === undefined) return null;
+  const rest = stdout.slice(m.index);
+  const wsIndex = rest.search(/\s/);
+  const token = wsIndex === -1 ? rest : rest.slice(0, wsIndex);
+  return { version: m[1], isPrerelease: m[2] !== undefined, raw: m[0], token };
+}
+
+/**
+ * `compareNumericVersions`, but a prerelease `a` (as reported by
+ * `parseProbedVersion`'s `isPrerelease`) is treated as strictly BELOW
+ * a numerically-equal `b` floor, matching semver precedence
+ * (`0.6.0-rc.1 < 0.6.0`) and the intent every `min_version` floor in
+ * this codebase already carries: `NUMERIC_VERSION_PATTERN` rejects a
+ * prerelease shape for `b` itself (a `min_version` field can never
+ * BE a prerelease), so `aIsPrerelease` is the only side this can ever
+ * apply to. When the base numeric comparison is not a tie, the
+ * prerelease flag is irrelevant and the numeric result wins outright
+ * (a genuinely older release, prerelease or not, is still older).
+ *
+ * Decision: docs/decisions/2026-09-08-preflight-floors.md. Used by the
+ * two floor checks that must reject a release candidate of their own
+ * floor version: `checkHookVersion` (src/cli/doctor/index.ts, generic
+ * across every `hooks[]` entry with `min_version`) and
+ * `checkSessionStartPreflightSetupVersion`
+ * (src/cli/doctor/session-start-preflight-setup-version.ts).
+ * Deliberately NOT wired into the `tools.cli[]` / `tools.mcp[]` version
+ * checks in the same file; see the ADR's scope note.
+ */
+export function compareVersionFloor(a: string, aIsPrerelease: boolean, b: string): number {
+  const cmp = compareNumericVersions(a, b);
+  if (cmp !== 0) return cmp;
+  return aIsPrerelease ? -1 : 0;
+}

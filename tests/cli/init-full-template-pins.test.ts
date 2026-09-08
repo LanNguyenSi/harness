@@ -3,9 +3,8 @@ import { describe, expect, it } from "vitest";
 import { parse as parseYaml } from "yaml";
 import { SOLO_TEMPLATE, TEAM_TEMPLATE } from "../../src/cli/init/profiles.js";
 import { composeCustom } from "../../src/cli/init/composer.js";
-import { FULL_TEMPLATE } from "../../src/cli/init/templates.js";
+import { FULL_TEMPLATE, GIT_PREFLIGHT_HOOK_MIN_VERSION } from "../../src/cli/init/templates.js";
 import { parseManifest } from "../../src/schema/index.js";
-import { SESSION_START_PREFLIGHT_SETUP_BUILD_MIN_VERSION } from "../../src/schema/session-start-preflight.js";
 import { PREFLIGHT_SETUP_VERSION_COMMAND } from "../../src/cli/doctor/session-start-preflight-setup-version.js";
 
 // Module-scope helper (hoisted out of two describe blocks that each used
@@ -40,18 +39,46 @@ describe("FULL_TEMPLATE: npm-bin hook pins", () => {
     // only install dependencies (agent-preflight PR #72, tag v0.6.0).
     // The version_command points at the source-of-truth `preflight`
     // binary, not at the `harness session-start preflight` wrapper, so
-    // the floor checks the actual upstream release. Shares
-    // SESSION_START_PREFLIGHT_SETUP_BUILD_MIN_VERSION with `harness
-    // doctor`'s session_start_preflight.setup version check
-    // (src/cli/doctor/session-start-preflight-setup-version.ts) so the
-    // two floors cannot drift apart; asserted directly below.
+    // the floor checks the actual upstream release. Task 65952a0c
+    // (docs/decisions/2026-09-08-preflight-floors.md) split the shared
+    // constant this hook's `min_version` used to read into two: this
+    // hook now reads GIT_PREFLIGHT_HOOK_MIN_VERSION (the HOOK floor,
+    // src/cli/init/templates.ts), not
+    // SESSION_START_PREFLIGHT_SETUP_BUILD_MIN_VERSION (the SETUP floor
+    // `harness doctor`'s session_start_preflight.setup check reads,
+    // src/cli/doctor/session-start-preflight-setup-version.ts). Both
+    // are "0.6.0" today, so a value-only `toBe` comparison against
+    // EITHER constant would pass even if this hook were wired to the
+    // wrong one; the next test below discriminates the two by source
+    // identity instead.
     const m = parseManifest(parseYaml(FULL_TEMPLATE));
     const gitPreflight = m.hooks.find((h) => h.name === "git-preflight");
     expect(gitPreflight, "FULL_TEMPLATE must declare a git-preflight SessionStart hook").toBeDefined();
     expect(gitPreflight?.event).toBe("SessionStart");
-    expect(gitPreflight?.min_version).toBe(SESSION_START_PREFLIGHT_SETUP_BUILD_MIN_VERSION);
+    expect(gitPreflight?.min_version).toBe(GIT_PREFLIGHT_HOOK_MIN_VERSION);
     expect(gitPreflight?.min_version).toBe("0.6.0");
     expect(gitPreflight?.version_command).toEqual(["preflight", "--version"]);
+  });
+
+  // Discriminates which of the two now-independent constants FULL_TEMPLATE's
+  // `min_version:` line actually interpolates, at the SOURCE level, not
+  // just by value: both GIT_PREFLIGHT_HOOK_MIN_VERSION and
+  // SESSION_START_PREFLIGHT_SETUP_BUILD_MIN_VERSION are "0.6.0" today, so
+  // a mutant that swaps the identifier `templates.ts`'s `min_version:`
+  // line interpolates (hook floor -> setup floor, or vice versa) would
+  // pass every value-only assertion above unnoticed. Reading the actual
+  // template literal's source text and asserting which `${...}`
+  // identifier appears on the `min_version:` line is what catches that
+  // swap.
+  it("FULL_TEMPLATE's git-preflight min_version line interpolates the HOOK floor identifier, not the setup floor", () => {
+    const src = readFileSync(new URL("../../src/cli/init/templates.ts", import.meta.url), "utf8");
+    const minVersionLine = src.split("\n").find((line) => line.includes('min_version: "${'));
+    expect(
+      minVersionLine,
+      "no min_version: line interpolating a *_MIN_VERSION identifier found in templates.ts; if you aliased or wrapped the constant, update this pin per the ADR (docs/decisions/2026-09-08-preflight-floors.md), not the source",
+    ).toBeDefined();
+    expect(minVersionLine).toContain("${GIT_PREFLIGHT_HOOK_MIN_VERSION}");
+    expect(minVersionLine).not.toContain("SESSION_START_PREFLIGHT_SETUP_BUILD_MIN_VERSION");
   });
 
   // Task 6993d9b5, round 2 F5: `PREFLIGHT_SETUP_VERSION_COMMAND`

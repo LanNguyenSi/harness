@@ -5,17 +5,28 @@
 // missing-auto_approve finding cannot drift on the snippet's shape or
 // wording. See auto-approve-default.ts for the rationale.
 import { renderAutoApproveSnippet } from "../../policy-packs/builtin/understanding-before-execution-runtime.js";
-// task 6993d9b5: the git-preflight hook's own `min_version` floor below
-// shares this constant with `harness doctor`'s
-// session_start_preflight.setup version check
-// (src/cli/doctor/session-start-preflight-setup-version.ts), so the two
-// cannot drift apart. See that module and src/schema/session-start-
-// preflight.ts's VERSION CAVEAT for the full rationale.
-import { SESSION_START_PREFLIGHT_SETUP_BUILD_MIN_VERSION } from "../../schema/session-start-preflight.js";
-
 // Every template below nests `auto_approve:` at 6 spaces, a sibling of
 // `mode:` / `approval_lifecycle:` under the pack's `config:` key.
 const AUTO_APPROVE_SNIPPET = renderAutoApproveSnippet(6);
+
+// The `git-preflight` SessionStart hook's own generic `min_version`
+// floor, rendered below into FULL_TEMPLATE. Through task 6993d9b5 this
+// was the SAME constant as `harness doctor`'s
+// session_start_preflight.setup version check
+// (SESSION_START_PREFLIGHT_SETUP_BUILD_MIN_VERSION,
+// src/cli/doctor/session-start-preflight-setup-version.ts); split into
+// two independent constants by task 65952a0c
+// (docs/decisions/2026-09-08-preflight-floors.md) because the two
+// floors answer different questions and a future bump to one need not
+// move the other. Bump THIS constant when an agent-preflight release
+// changes something the `git-preflight` hook needs GENERICALLY
+// (independent of the opt-in `--setup` build step); bump the setup
+// floor instead when the change is `--setup`-specific. Both are
+// `"0.6.0"` today. `src/cli/init/dependencies.ts`'s wizard-facing
+// `preflight` dependency entry reads this SAME constant (not the setup
+// floor), so the wizard table can never advertise a floor lower than
+// what the generated manifest itself declares.
+export const GIT_PREFLIGHT_HOOK_MIN_VERSION = "0.6.0";
 
 export const MINIMAL_TEMPLATE = `# ~/.harness/harness.yaml (legacy: ~/.claude/harness.yaml)
 #
@@ -170,7 +181,7 @@ hooks:
     # blew through it. Bumped together with DEFAULT_PREFLIGHT_TIMEOUT_MS
     # (agent-tasks/7265599e).
     budget_ms: 70000
-    # Floor raised to agent-preflight ${SESSION_START_PREFLIGHT_SETUP_BUILD_MIN_VERSION}
+    # Floor raised to agent-preflight ${GIT_PREFLIGHT_HOOK_MIN_VERSION}
     # (was 0.2.0): 0.2.0 was the release that made secret
     # detection git-aware and diff-scoped: a gitignored+untracked .env,
     # a .md doc, a non-git dir, or a secret in a tracked file the branch
@@ -180,15 +191,16 @@ hooks:
     # producer never writes a preflight: tag and the preflight-before-*
     # policies stay closed forever on any repo with a local .env. (0.1.1
     # had already fixed the wrapper-script "tool not installed" false
-    # positive.) ${SESSION_START_PREFLIGHT_SETUP_BUILD_MIN_VERSION} is
-    # the release that made \`session_start_preflight.setup\` build code,
-    # not only install dependencies (agent-preflight PR #72, tag v0.6.0);
-    # \`harness doctor\` warns independently when an existing manifest's
-    # own floor is stale (src/cli/doctor/session-start-preflight-setup-
-    # version.ts), this template bump only affects a freshly generated
-    # manifest. version_command points at the source-of-truth preflight
-    # binary, not at the \`harness session-start preflight\` wrapper.
-    min_version: "${SESSION_START_PREFLIGHT_SETUP_BUILD_MIN_VERSION}"
+    # positive.) ${GIT_PREFLIGHT_HOOK_MIN_VERSION} is also the release
+    # that made \`session_start_preflight.setup\` build code, not only
+    # install dependencies (agent-preflight PR #72, tag v0.6.0);
+    # \`harness doctor\` warns independently, off its own floor, when an
+    # existing manifest's own floor is stale
+    # (src/cli/doctor/session-start-preflight-setup-version.ts), this
+    # template bump only affects a freshly generated manifest.
+    # version_command points at the source-of-truth preflight binary,
+    # not at the \`harness session-start preflight\` wrapper.
+    min_version: "${GIT_PREFLIGHT_HOOK_MIN_VERSION}"
     version_command: ["preflight", "--version"]
 
   # toolchain-parity (PATH-shim incident 2026-07-22 follow-up): writes THIS
