@@ -5,7 +5,6 @@ import { SOLO_TEMPLATE, TEAM_TEMPLATE } from "../../src/cli/init/profiles.js";
 import { composeCustom } from "../../src/cli/init/composer.js";
 import { FULL_TEMPLATE, GIT_PREFLIGHT_HOOK_MIN_VERSION } from "../../src/cli/init/templates.js";
 import { parseManifest } from "../../src/schema/index.js";
-import { SESSION_START_PREFLIGHT_SETUP_BUILD_MIN_VERSION } from "../../src/schema/session-start-preflight.js";
 import { PREFLIGHT_SETUP_VERSION_COMMAND } from "../../src/cli/doctor/session-start-preflight-setup-version.js";
 
 // Module-scope helper (hoisted out of two describe blocks that each used
@@ -74,18 +73,12 @@ describe("FULL_TEMPLATE: npm-bin hook pins", () => {
   it("FULL_TEMPLATE's git-preflight min_version line interpolates the HOOK floor identifier, not the setup floor", () => {
     const src = readFileSync(new URL("../../src/cli/init/templates.ts", import.meta.url), "utf8");
     const minVersionLine = src.split("\n").find((line) => line.includes('min_version: "${'));
-    expect(minVersionLine, "min_version interpolation line not found in templates.ts").toBeDefined();
+    expect(
+      minVersionLine,
+      "no min_version: line interpolating a *_MIN_VERSION identifier found in templates.ts; if you aliased or wrapped the constant, update this pin per the ADR (docs/decisions/2026-09-08-preflight-floors.md), not the source",
+    ).toBeDefined();
     expect(minVersionLine).toContain("${GIT_PREFLIGHT_HOOK_MIN_VERSION}");
     expect(minVersionLine).not.toContain("SESSION_START_PREFLIGHT_SETUP_BUILD_MIN_VERSION");
-  });
-
-  // SESSION_START_PREFLIGHT_SETUP_BUILD_MIN_VERSION stays imported above
-  // only to prove, via the assertion right here, that the split did not
-  // silently let the two floors diverge in VALUE today (independent
-  // identifiers, same "0.6.0" value); the source-identity test above is
-  // what actually pins which identifier the template uses.
-  it("the split hook and setup floors still agree in value today", () => {
-    expect(GIT_PREFLIGHT_HOOK_MIN_VERSION).toBe(SESSION_START_PREFLIGHT_SETUP_BUILD_MIN_VERSION);
   });
 
   // Task 6993d9b5, round 2 F5: `PREFLIGHT_SETUP_VERSION_COMMAND`

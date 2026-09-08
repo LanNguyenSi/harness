@@ -58,7 +58,20 @@ export const PREFLIGHT_SETUP_VERSION_COMMAND = [PREFLIGHT_BIN, "--version"] as c
 
 export interface SessionStartPreflightSetupVersionFinding {
   kind: "below_floor" | "probe_failed" | "parse_failed";
-  /** Parsed installed version, when the probe succeeded and parsed. Null otherwise. */
+  /**
+   * Parsed installed version, when the probe succeeded and parsed.
+   * Null otherwise. Always the NUMERIC run (`parseProbedVersion`'s
+   * `version` field, e.g. "0.6.0"), never the probed prerelease/build
+   * suffix: for a `below_floor` finding caused by a prerelease of the
+   * floor (e.g. probed "0.6.0-rc.1" against a "0.6.0" `requiredVersion`),
+   * `actualVersion` therefore equals `requiredVersion` even though
+   * `kind` is `"below_floor"`: the numeric components tie, and
+   * `compareVersionFloor`'s prerelease tie-break is what actually
+   * failed the floor. `message` carries the full probed token
+   * (including the suffix) for the human-facing distinction; this
+   * field's JSON shape does not gain a new field for it. See
+   * docs/decisions/2026-09-08-preflight-floors.md.
+   */
   actualVersion: string | null;
   /** Always `SESSION_START_PREFLIGHT_SETUP_BUILD_MIN_VERSION` today; carried on the finding so format.ts never re-imports the constant. */
   requiredVersion: string;
@@ -107,15 +120,15 @@ export function checkSessionStartPreflightSetupVersion(
         `be parsed from "${stdout.trim()}"; the build step needs preflight >= ${required}`,
     };
   }
-  const { version: actual, isPrerelease, raw } = parsed;
+  const { version: actual, isPrerelease, token } = parsed;
   if (compareVersionFloor(actual, isPrerelease, required) < 0) {
     return {
       kind: "below_floor",
       actualVersion: actual,
       requiredVersion: required,
       message:
-        `session_start_preflight.setup is enabled but installed preflight v${raw} < ${required}: ` +
-        `--setup on v${raw} is dependency-install only (no build step); upgrade preflight ` +
+        `session_start_preflight.setup is enabled but installed preflight v${token} < ${required}: ` +
+        `--setup on v${token} is dependency-install only (no build step); upgrade preflight ` +
         `(npm i -g @lannguyensi/agent-preflight) or set session_start_preflight.setup: false`,
     };
   }

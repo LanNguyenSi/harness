@@ -2129,6 +2129,68 @@ tools:
     expect(report.warningCount).toBeGreaterThanOrEqual(1);
   });
 
+  // Reviewer round 1 (T-006 R1, low): the prerelease suffix regex
+  // (`src/io/version-compare.ts`'s `parseProbedVersion`) was pinned
+  // only with a DOTTED suffix ("-rc.1"); a mutant tightening the suffix
+  // group to require an inner dot survived every existing test. A
+  // dotless suffix ("-beta") must still be detected as a prerelease.
+  it("warns below_floor when the probed hook version is a dotless prerelease of min_version", async () => {
+    const home = makeFixture({
+      "harness.yaml": buildManifest(`  - name: beta-hook
+    event: SessionStart
+    command: /usr/bin/true
+    blocking: false
+    min_version: "0.6.0"
+    version_command: [my-hook-bin, "--version"]`),
+    });
+    const report = await doctor({
+      configPath: path.join(home, "harness.yaml"),
+      homeOverride: home,
+      mcpProbe: new FakeProbe({}),
+      versionProbe: () => "my-hook-bin v0.6.0-beta\n",
+      pathEnv: "",
+      npmBinExec: STUB_NPM_BIN_EXEC_UNKNOWN,
+    });
+    expect(report.hooks[0]?.version).toEqual({
+      status: "warn",
+      kind: "below_floor",
+      actualVersion: "0.6.0",
+      message: "outdated: installed v0.6.0-beta < required 0.6.0",
+    });
+    expect(report.warningCount).toBeGreaterThanOrEqual(1);
+  });
+
+  // Reviewer round 1 (T-006 R1, medium): `parseProbedVersion`'s `raw`
+  // field truncates a multi-hyphen suffix at the first character
+  // outside `[0-9A-Za-z.]` (a git-describe suffix like
+  // "0.6.0-4-gabc123" would truncate to "0.6.0-4" at the second `-`).
+  // The below_floor message must quote the FULL probed token
+  // (`parseProbedVersion`'s `token` field), not the truncated `raw`.
+  it("quotes the full multi-hyphen probed token in the below_floor message, not a truncated one", async () => {
+    const home = makeFixture({
+      "harness.yaml": buildManifest(`  - name: describe-hook
+    event: SessionStart
+    command: /usr/bin/true
+    blocking: false
+    min_version: "0.6.0"
+    version_command: [my-hook-bin, "--version"]`),
+    });
+    const report = await doctor({
+      configPath: path.join(home, "harness.yaml"),
+      homeOverride: home,
+      mcpProbe: new FakeProbe({}),
+      versionProbe: () => "my-hook-bin v0.6.0-4-gabc123\n",
+      pathEnv: "",
+      npmBinExec: STUB_NPM_BIN_EXEC_UNKNOWN,
+    });
+    expect(report.hooks[0]?.version).toEqual({
+      status: "warn",
+      kind: "below_floor",
+      actualVersion: "0.6.0",
+      message: "outdated: installed v0.6.0-4-gabc123 < required 0.6.0",
+    });
+  });
+
   it("rejects min_version without version_command at schema-validation time", async () => {
     const home = makeFixture({
       "harness.yaml": buildManifest(`  - name: bad-hook

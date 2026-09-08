@@ -493,16 +493,16 @@ function checkHookVersion(
       message: `could not parse a version from "${stdout.trim()}"`,
     };
   }
-  const { version: actual, isPrerelease, raw } = parsed;
+  const { version: actual, isPrerelease, token } = parsed;
   const cmp = compareVersionFloor(actual, isPrerelease, hook.min_version);
   return cmp < 0
     ? {
         status: "warn",
         kind: "below_floor",
         actualVersion: actual,
-        message: `outdated: installed v${raw} < required ${hook.min_version}`,
+        message: `outdated: installed v${token} < required ${hook.min_version}`,
       }
-    : { status: "ok", message: `v${actual} ≥ ${hook.min_version}` };
+    : { status: "ok", message: `v${token} ≥ ${hook.min_version}` };
 }
 
 /**

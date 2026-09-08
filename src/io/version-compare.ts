@@ -50,13 +50,31 @@ export function compareNumericVersions(a: string, b: string): number {
  *
  * Returns `null` when no numeric run is found at all (unparseable
  * probe output), matching the pre-existing "no match" contract.
+ *
+ * Two suffix strings are returned, deliberately different:
+ * - `raw` is the regex's own match (`m[0]`): the numeric run plus a
+ *   `-` suffix restricted to `[0-9A-Za-z.]`, so it TRUNCATES a suffix
+ *   containing any other character (a git-describe suffix's second
+ *   hyphen, e.g. "0.6.0-4-gabc123" matches only as far as "0.6.0-4";
+ *   a platform suffix, e.g. "0.6.0-linux-x64" matches only as far as
+ *   "0.6.0-linux"). Kept only because `isPrerelease` is derived from
+ *   whether `m[2]` (the restricted suffix group) matched at all.
+ * - `token` is the full probed version token as printed: everything
+ *   from the start of the numeric run up to the next whitespace
+ *   character (or end of string), with no character-class
+ *   restriction. This is what a human-facing message should quote;
+ *   `raw`'s truncation would otherwise misreport what the probe
+ *   actually printed. See docs/decisions/2026-09-08-preflight-floors.md.
  */
 export function parseProbedVersion(
   stdout: string,
-): { version: string; isPrerelease: boolean; raw: string } | null {
+): { version: string; isPrerelease: boolean; raw: string; token: string } | null {
   const m = stdout.match(/(\d+(?:\.\d+){0,3})(-[0-9A-Za-z.]+)?/);
-  if (!m || !m[1]) return null;
-  return { version: m[1], isPrerelease: m[2] !== undefined, raw: m[0] };
+  if (!m || !m[1] || m.index === undefined) return null;
+  const rest = stdout.slice(m.index);
+  const wsIndex = rest.search(/\s/);
+  const token = wsIndex === -1 ? rest : rest.slice(0, wsIndex);
+  return { version: m[1], isPrerelease: m[2] !== undefined, raw: m[0], token };
 }
 
 /**

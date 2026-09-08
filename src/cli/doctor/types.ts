@@ -96,7 +96,21 @@ export type HookVersionReport =
        * classifies its outcome, so there is no warn case without one.
        */
       kind: "below_floor" | "probe_failed" | "parse_failed";
-      /** Parsed installed version, when the probe succeeded. Null when the probe failed or its stdout didn't parse. */
+      /**
+       * Parsed installed version, when the probe succeeded. Null when
+       * the probe failed or its stdout didn't parse. Always the
+       * NUMERIC run (`parseProbedVersion`'s `version` field, e.g.
+       * "0.6.0"), never the probed prerelease/build suffix: for a
+       * `below_floor` finding caused by a prerelease of the floor
+       * (e.g. probed "0.6.0-rc.1" against a "0.6.0" `min_version`),
+       * `actualVersion` therefore equals `hook.min_version` even
+       * though `kind` is `"below_floor"`: the numeric components tie,
+       * and `compareVersionFloor`'s prerelease tie-break is what
+       * actually failed the floor. `message` carries the full probed
+       * token (including the suffix) for the human-facing distinction;
+       * this field's JSON shape does not gain a new field for it. See
+       * docs/decisions/2026-09-08-preflight-floors.md.
+       */
       actualVersion: string | null;
       message: string;
     };

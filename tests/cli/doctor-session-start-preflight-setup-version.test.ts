@@ -91,7 +91,10 @@ describe("checkSessionStartPreflightSetupVersion (task 6993d9b5)", () => {
       "utf8",
     );
     const requiredLine = src.split("\n").find((line) => line.trim().startsWith("const required ="));
-    expect(requiredLine, "const required = ... line not found").toBeDefined();
+    expect(
+      requiredLine,
+      "no const required = ... line interpolating a *_MIN_VERSION identifier found in session-start-preflight-setup-version.ts; if you aliased or wrapped the constant, update this pin per the ADR (docs/decisions/2026-09-08-preflight-floors.md), not the source",
+    ).toBeDefined();
     expect(requiredLine).toContain("SESSION_START_PREFLIGHT_SETUP_BUILD_MIN_VERSION");
     expect(requiredLine).not.toContain("GIT_PREFLIGHT_HOOK_MIN_VERSION");
   });
@@ -166,6 +169,42 @@ describe("checkSessionStartPreflightSetupVersion (task 6993d9b5)", () => {
     expect(finding?.actualVersion).toBe("0.6.0");
     expect(finding?.requiredVersion).toBe("0.6.0");
     expect(finding?.message).toContain("0.6.0-rc.1");
+  });
+
+  // Reviewer round 1 (T-006 R1, low): the prerelease suffix regex
+  // (`src/io/version-compare.ts`'s `parseProbedVersion`) was pinned
+  // only with a DOTTED suffix ("-rc.1") above; a mutant tightening the
+  // suffix group to require an inner dot survived every existing test.
+  // A dotless suffix ("-beta") must still be detected as a prerelease.
+  it("is below_floor when setup is true and preflight reports a dotless prerelease of the floor version", () => {
+    const manifest = loadManifestFromYaml(
+      buildManifest("session_start_preflight:\n  setup: true"),
+    );
+    const finding = checkSessionStartPreflightSetupVersion(manifest, () => "preflight 0.6.0-beta\n");
+    expect(finding?.kind).toBe("below_floor");
+    expect(finding?.actualVersion).toBe("0.6.0");
+    expect(finding?.requiredVersion).toBe("0.6.0");
+    expect(finding?.message).toContain("0.6.0-beta");
+  });
+
+  // Reviewer round 1 (T-006 R1, medium): `parseProbedVersion`'s `raw`
+  // field truncates a multi-hyphen suffix at the first character
+  // outside `[0-9A-Za-z.]` (a git-describe suffix like
+  // "0.6.0-4-gabc123" would truncate to "0.6.0-4" at the second `-`).
+  // The below_floor message must quote the FULL probed token
+  // (`parseProbedVersion`'s `token` field), not the truncated `raw`.
+  it("quotes the full multi-hyphen probed token in the below_floor message, not a truncated one", () => {
+    const manifest = loadManifestFromYaml(
+      buildManifest("session_start_preflight:\n  setup: true"),
+    );
+    const finding = checkSessionStartPreflightSetupVersion(
+      manifest,
+      () => "preflight 0.6.0-4-gabc123\n",
+    );
+    expect(finding?.kind).toBe("below_floor");
+    expect(finding?.actualVersion).toBe("0.6.0");
+    expect(finding?.message).toContain("v0.6.0-4-gabc123 <");
+    expect(finding?.message).not.toContain("v0.6.0-4 <");
   });
 
   it("warns fail-loud (not silent) when setup is true and the probe returns nothing", () => {

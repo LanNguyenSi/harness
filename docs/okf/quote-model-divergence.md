@@ -3,7 +3,7 @@ type: overview
 title: Shell quote models, measured divergence against bash
 description: The policy engine has four independent shell-word models plus a raw-regex trigger layer. This records what each actually extracts, measured against real bash, which divergences are fail-open, and the evidence-led ordering for closing them.
 tags: [policy-engine, bash-match, quote-model, fail-open, measurement]
-timestamp: 2026-09-08T08:53:36Z
+timestamp: 2026-09-08T09:35:00Z
 sources:
   - src/runtime/command-normalize.ts
   - src/cli/init/composer.ts
@@ -416,7 +416,7 @@ keine Session-Evidenz erfüllbar. Ein einzelnes `&` umging ihn zum
 Zeitpunkt dieser Messung (seither geschlossen, siehe "Einordnung je
 Klasse" unten). Zwei Einordnungen dazu, damit die Schwere nicht
 überlesen wird:
-`src/cli/init/templates.ts:928` benennt "bash_match's regex coverage of
+`src/cli/init/templates.ts:940` benennt "bash_match's regex coverage of
 exotic shell shapes" bereits als bekannte Restlücke, neu ist, dass ein
 einzelnes `&` dazugehört. Und `A=x&harness pause` ist nicht read-only,
 das Understanding-Gate blockt es in einer nicht approvten Session

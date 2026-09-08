@@ -26,10 +26,10 @@ of that task named three residuals:
 2. **Double report by design.** A freshly generated manifest with
    `setup: true`, probed against a preflight below the shared floor,
    fires BOTH the generic `hooks[]` `min_version` walk
-   (`checkHookVersion`, `src/cli/doctor/index.ts:466-506#": { status: \"ok\", message: \`v${actual} ≥ ${hook.min_version}\` };"`)
+   (`checkHookVersion`, `src/cli/doctor/index.ts:466-505#"message: `v${token} ≥ ${hook.min_version}` };"`)
    and the setup-specific check
    (`checkSessionStartPreflightSetupVersion`,
-   `src/cli/doctor/session-start-preflight-setup-version.ts:83-122#"return undefined;"`).
+   `src/cli/doctor/session-start-preflight-setup-version.ts:96-135#"return undefined;"`).
    Documented in `docs/CLI.md`'s VERSION CAVEAT, not a bug, but worth
    naming as a design cost of one constant feeding two independently
    fired findings.
@@ -126,16 +126,41 @@ every `hooks[]` entry that declares `min_version` + `version_command`
 at an equal-numeric floor. This is an intentional, in-scope behaviour
 change for the shared hook-version check (asked for by this task's
 brief: "if the existing hook-version comparison is shared code, fix it
-once and cover both consumers"), not limited to `git-preflight`. It is
-NOT extended to the `tools.cli[]` and `tools.mcp[]` version checks in
-the same file (`src/cli/doctor/index.ts:261#"const m = stdout.match"`
-and `src/cli/doctor/index.ts:331#"const m = stdout.match"`), which keep
-the old extraction/comparison unchanged: those are a different, out-of-scope
-feature surface for this task, and their own operators may rely on a
+once and cover both consumers"), not limited to `git-preflight`.
+
+**Boundary: `hooks[]` only, for now.** Prerelease rejection is NOT
+extended to any of the other five `min_version` floor checks in this
+codebase, which all keep their pre-existing raw-regex extraction and
+`compareNumericVersions` comparison, unchanged, and so stay
+prerelease-blind (a probed `X.Y.Z-rc.1` still parses as `X.Y.Z` and can
+satisfy an `X.Y.Z` floor on every one of them):
+
+- `tools.cli[]` and `tools.mcp[]` in `harness doctor`
+  (`src/cli/doctor/index.ts:261#"const m = stdout.match"` and
+  `src/cli/doctor/index.ts:331#"const m = stdout.match"`).
+- `tools.cli[]` in `harness validate`
+  (`src/cli/validate/checks.ts:161-186#"message: `installed version ${match[1]} is less than required ${cli.min_version}`,"`),
+  a separate implementation of the same `tools.cli[]` contract for a
+  different verb.
+- `memory.router`'s version floor
+  (`src/probes/memory.ts:153-195#"message: `v${actual} ≥ ${minVersion}` };"`).
+- Policy-pack-level floors
+  (`src/policy-packs/version-check.ts:90-112#"message: `outdated: installed v${actual} < required ${pack.min_version}`,"`).
+
+One consequence today: a single `harness doctor` run against a probed
+`0.6.0-rc.1` rejects it for the `git-preflight` hook (and any other
+`hooks[]` entry with a `min_version`) but accepts it for `tools.mcp[]`,
+`memory.router`, and any `policy_packs[]` floor: the same probed
+version reads `below_floor` on one check and clean on another,
+side-by-side in the same report. That inconsistency is an accepted cost
+of this task's narrow scope (see Who pays above), not a bug; a future
+task deciding to make prerelease rejection universal (or reject it as
+un-universal by design) should read the reopen criterion below rather
+than assume this ADR settled it. Their own operators may rely on a
 `-rc`/`-beta` version passing (npm prerelease tags are common for CLI
-tools in a way agent-preflight's release process is not). Extending
-prerelease rejection to those two checks, if desired, is future work,
-not decided here.
+tools in a way agent-preflight's release process is not); extending
+rejection to any of the five, if desired, is future work, not decided
+here.
 
 ## Reopen criteria
 
@@ -176,3 +201,10 @@ not decided here.
 - New tests pin the prerelease decision for both `checkHookVersion` and
   `checkSessionStartPreflightSetupVersion` (`0.6.0-rc.1` reported as
   `below_floor` against a `0.6.0` floor on both).
+- Accepted cost: a `hooks[]` entry whose `version_command` reports a
+  git-describe suffix (`0.6.0-4-gabc123`) or a platform suffix
+  (`0.6.0-linux-x64`) now also reads `below_floor` even when the
+  underlying release genuinely meets the floor, since both shapes carry
+  a `-` suffix the same way a real prerelease does. Workaround: lower
+  that hook's `min_version` below its currently-installed version, or
+  drop `version_command`/`min_version` from that hook entry entirely.
