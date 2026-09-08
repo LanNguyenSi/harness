@@ -1169,22 +1169,22 @@ function countDiagnostics(report: Omit<DoctorReport, "errorCount" | "warningCoun
 }
 
 export async function doctor(opts: DoctorOptions = {}): Promise<DoctorReport> {
-  // Per-repo scoping (task c88461c1, review round 2, decision D-021b):
-  // an explicit `opts.project` still wins outright; otherwise derive
-  // the project name from `opts.cwd` (defaulting to `process.cwd()`)
-  // via the SAME shared helper `harness session-start preflight` and
-  // `harness explain-policy` feed their own `loadManifest` calls from.
-  // This single `manifest` load feeds every check below, including
-  // `checkSessionStartPreflightSetupVersion` further down: without this,
-  // that check judged only the base/machine-override value, so it could
-  // warn (or stay silent) against the WRONG effective value for a repo
-  // whose cwd-derived project layer flips `setup` the other way, the
-  // exact drift the producer (src/cli/session-start/index.ts) and
-  // `explain-policy` do not have, since both already derive from cwd.
-  const { manifest, resolved } = loadManifest({
-    ...opts,
-    project: opts.project ?? deriveProjectName(opts.cwd ?? process.cwd()) ?? undefined,
-  });
+  // PLAIN load (task c88461c1, review round 3, decision D-028): every
+  // check this report builds from `manifest` below -- MCP/CLI/hook
+  // probes, memory, policies, policy packs, workflows, the risk gate,
+  // template and trigger-boundary drift, grounding, and everything
+  // else -- reads the base/machine/explicit-`--project` manifest only,
+  // an explicit `opts.project` still wins outright but NOTHING is
+  // derived from cwd here. This mirrors `harness policy intercept`
+  // (src/cli/policy/intercept.ts) and `harness dry-run`
+  // (src/cli/dry-run.ts), which never consult a derived project layer
+  // either, so `doctor` never reports this repo healthier or unhealthier
+  // than what actually enforces. Only `checkSessionStartPreflightSetupVersion`
+  // further down gets a project-scoped SECOND load: routing a derived
+  // layer through THIS one, unrelated load would let it silently reach
+  // every other check in this report, for zero benefit to the one key
+  // that needs it.
+  const { manifest, resolved } = loadManifest(opts);
   const home = opts.homeOverride ?? opts.homeDir ?? os.homedir();
   const probe = opts.mcpProbe ?? new RealMcpProbe();
 
@@ -1270,8 +1270,39 @@ export async function doctor(opts: DoctorOptions = {}): Promise<DoctorReport> {
   const hooks = checkHooks(manifest, home, { versionProbe: dedupedVersionProbe });
   // task 6993d9b5: independent of the generic hooks[] min_version walk
   // above, see session-start-preflight-setup-version.ts for why.
+  //
+  // Per-repo scoping (task c88461c1, review round 2, decision D-021b;
+  // scope narrowed to THIS check only, review round 3, decision D-028):
+  // an explicit `opts.project` still wins outright; otherwise derive
+  // the project name from `opts.cwd` (defaulting to `process.cwd()`)
+  // via the SAME shared `deriveProjectName` helper `harness
+  // session-start preflight` and `harness explain-policy` feed their
+  // own SECOND load from. Without this, the check judged only the
+  // base/machine-override value, so it could warn (or stay silent)
+  // against the WRONG effective value for a repo whose cwd-derived
+  // project layer flips `setup` the other way, the exact drift the
+  // producer (src/cli/session-start/index.ts) and `explain-policy` do
+  // not have, since both already derive from cwd for this same key.
+  // Deliberately a SEPARATE load from `manifest` above, not a reuse:
+  // that load feeds every OTHER check in this report and must stay
+  // project-unaware (see the doctor() top comment); folding a derived
+  // layer into it would let it silently reach checks it was never
+  // meant to touch. Best-effort: a config/parse failure here degrades
+  // to the plain `manifest`'s own (project-unaware) value, mirroring
+  // the producer's own `setupEnabled` resolution's "not configured ->
+  // skip" contract, rather than failing this whole report over an
+  // unrelated derivation problem.
+  let sessionStartPreflightManifest = manifest;
+  try {
+    sessionStartPreflightManifest = loadManifest({
+      ...opts,
+      project: opts.project ?? deriveProjectName(opts.cwd ?? process.cwd()) ?? undefined,
+    }).manifest;
+  } catch {
+    /* keep the plain manifest's own value */
+  }
   const sessionStartPreflightSetupVersion = checkSessionStartPreflightSetupVersion(
-    manifest,
+    sessionStartPreflightManifest,
     dedupedVersionProbe,
   );
   const policies = buildPolicies(manifest);

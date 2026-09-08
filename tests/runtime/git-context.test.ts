@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -476,5 +477,120 @@ describe("deriveProjectName (task c88461c1, review round 2, decision D-021a)", (
 
   it("returns null for an empty cwd", () => {
     expect(deriveProjectName("")).toBeNull();
+  });
+});
+
+// Review round 3, decision D-028's security finding: `deriveProjectName`
+// feeds an untrusted, on-disk-controlled string straight into
+// `resolvePaths` (`src/cli/loader.ts`), which joins it into
+// `<home>/projects/<name>/harness.overrides.yaml`. A crafted `.git`
+// FILE plus gitdir whose `commondir` file holds an absolute path with
+// unresolved `..` segments could hand that path.join a `".."`
+// component (a directory-traversal shape), before `resolveCommonDir`
+// normalized its absolute branch and `deriveProjectName` validated the
+// resolved name.
+describe("deriveProjectName: hardening against a crafted commondir / gitdir (task c88461c1, review round 3, decision D-028)", () => {
+  it("normalizes an absolute commondir with unresolved `..` segments to the real ancestor directory, not a literal `..`", () => {
+    const root = tmpDir();
+    // The MAIN checkout's real per-worktree gitdir, laid out exactly
+    // like a genuine `git worktree add` (`.git/worktrees/<name>/`).
+    const mainCheckout = path.join(root, "real-project");
+    const mainWorktreeDir = path.join(mainCheckout, ".git", "worktrees", "wt1");
+    fs.mkdirSync(mainWorktreeDir, { recursive: true });
+    fs.writeFileSync(path.join(mainWorktreeDir, "HEAD"), "ref: refs/heads/main\n");
+    // A crafted `commondir`: an ABSOLUTE path built with string
+    // concatenation (not `path.join`, which would normalize it away)
+    // so the `..` segments reach `resolveCommonDir` unresolved, exactly
+    // the shape a hostile `.git` FILE target could produce.
+    const linkedGitDir = path.join(root, "linked-private-gitdir");
+    fs.mkdirSync(linkedGitDir, { recursive: true });
+    fs.writeFileSync(path.join(linkedGitDir, "commondir"), `${mainWorktreeDir}/../..\n`);
+    const linkedCheckout = path.join(root, "linked-checkout");
+    fs.mkdirSync(linkedCheckout, { recursive: true });
+    fs.writeFileSync(path.join(linkedCheckout, ".git"), `gitdir: ${linkedGitDir}\n`);
+
+    // Pre-fix, `resolveCommonDir` returned the raw, un-normalized
+    // string, whose textual basename is `".."`, and `deriveProjectName`
+    // returned that literal `".."` unvalidated. Post-fix, normalizing
+    // collapses the crafted `..` segments back to the real common dir
+    // (`<mainCheckout>/.git`), and `deriveProjectName` derives the
+    // MAIN checkout's real name from it, exactly as an unmangled
+    // `commondir` value would.
+    expect(resolveCommonDir(linkedGitDir)).toBe(path.join(mainCheckout, ".git"));
+    expect(deriveProjectName(linkedCheckout)).toBe("real-project");
+    expect(deriveProjectName(linkedCheckout)).not.toBe("..");
+  });
+
+  it("returns null for a resolved name containing a path separator, rather than handing an unvalidated string to resolvePaths", () => {
+    const root = tmpDir();
+    // POSIX permits a literal backslash IN a directory name (only `/`
+    // and NUL are forbidden by the filesystem); `path.basename` never
+    // strips it, so this main-checkout directory name reaches
+    // `deriveProjectName`'s final `path.basename` call carrying a
+    // character `resolvePaths`' `path.join` would otherwise treat as a
+    // Windows path separator.
+    const evilName = "evil\\name";
+    const mainCheckout = path.join(root, evilName);
+    fs.mkdirSync(path.join(mainCheckout, ".git"), { recursive: true });
+    fs.writeFileSync(path.join(mainCheckout, ".git", "HEAD"), "ref: refs/heads/main\n");
+
+    expect(deriveProjectName(mainCheckout)).toBeNull();
+  });
+});
+
+// Review round 3, decision D-028's docs finding: two more real-git
+// shapes `deriveProjectName` was never pinned against. Both use actual
+// `git` subprocesses (unlike the hand-built `.git` FILE fixtures
+// above) so the derivation is checked against genuine on-disk layouts,
+// not this file's own model of them.
+describe("deriveProjectName: submodule and --separate-git-dir shapes (task c88461c1, review round 3, decision D-028)", () => {
+  function initRepo(dir: string): void {
+    fs.mkdirSync(dir, { recursive: true });
+    execFileSync("git", ["init", "-q", "-b", "main"], { cwd: dir });
+    execFileSync("git", ["config", "user.email", "test@example.com"], { cwd: dir });
+    execFileSync("git", ["config", "user.name", "Test"], { cwd: dir });
+    execFileSync("git", ["config", "commit.gpgsign", "false"], { cwd: dir });
+  }
+
+  it("derives the SUBMODULE's own name, not its superproject's", () => {
+    const root = tmpDir();
+    const subSource = path.join(root, "sub-source");
+    initRepo(subSource);
+    fs.writeFileSync(path.join(subSource, "file.txt"), "x\n");
+    execFileSync("git", ["add", "-A"], { cwd: subSource });
+    execFileSync("git", ["commit", "-q", "-m", "init"], { cwd: subSource });
+
+    const superRoot = path.join(root, "super-project");
+    initRepo(superRoot);
+    // `-c protocol.file.allow=always`: newer git refuses a bare `file://`
+    // submodule source by default (CVE-2022-39253); this fixture's
+    // source is local and trusted, so the allowance is scoped to this
+    // one command only.
+    execFileSync(
+      "git",
+      ["-c", "protocol.file.allow=always", "submodule", "add", "-q", subSource, "sub"],
+      { cwd: superRoot },
+    );
+
+    expect(deriveProjectName(path.join(superRoot, "sub"))).toBe("sub");
+    expect(deriveProjectName(path.join(superRoot, "sub"))).not.toBe("super-project");
+  });
+
+  it("derives the GIT DIR's own basename for a `git init --separate-git-dir` checkout, not the work tree's", () => {
+    const root = tmpDir();
+    const workTree = path.join(root, "sepgit-worktree");
+    const gitDir = path.join(root, "sepgit.git");
+    fs.mkdirSync(workTree, { recursive: true });
+    execFileSync("git", [
+      "init",
+      "-q",
+      "-b",
+      "main",
+      `--separate-git-dir=${gitDir}`,
+      workTree,
+    ]);
+
+    expect(deriveProjectName(workTree)).toBe("sepgit.git");
+    expect(deriveProjectName(workTree)).not.toBe(path.basename(workTree));
   });
 });

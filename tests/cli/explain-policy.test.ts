@@ -355,7 +355,7 @@ describe("explainPolicy: session_start_preflight.source (task c88461c1)", () => 
   // `explain-policy` printing `source: base` / `setup: false` in the
   // SAME cwd where the producer (`harness session-start preflight`)
   // actually read a project layer and passed `--setup true`, because
-  // `explainPolicy` never derived a project name from its own cwd ,
+  // `explainPolicy` never derived a project name from its own cwd,
   // only an explicit `--project` reached the loader. This test drives
   // `explainPolicy` with NO `project` opt, only `cwd`, in a repo that
   // HAS a matching project layer on disk, and asserts it now agrees
@@ -420,6 +420,101 @@ describe("explainPolicy: session_start_preflight.source (task c88461c1)", () => 
     // default (false) wins, but the PROJECT layer is what decided that,
     // not the machine layer underneath it (which said `true`).
     expect(projection.session_start_preflight).toEqual({ setup: false, source: "project" });
+  });
+
+  // Review round 3, decision D-028: two machine layers plus a project
+  // layer that does NOT declare `setup` itself. `resolveSessionStartPreflightSource`
+  // walks `resolved.machineLayers` from the LAST entry backwards
+  // (highest precedence first), so the hostname-discriminated layer
+  // (applied after "default", see `machineOverrideCandidates`) must
+  // decide both the value AND the `source` label, not the "default"
+  // layer underneath it, even though a (non-declaring) project layer
+  // also exists on disk.
+  it("attributes the LAST machine layer's value/source when two machine layers exist and the project layer does not declare setup", () => {
+    const home = makeHome();
+    writeBaseManifest(home, true);
+    writeMachineLayer(home, true); // "default": setup:true
+    fs.mkdirSync(path.join(home, "machines"), { recursive: true });
+    fs.writeFileSync(
+      path.join(home, "machines", "sspf-test-host.harness.overrides.yaml"),
+      ["session_start_preflight:", "  setup: false", ""].join("\n"),
+    );
+    // A project layer that exists on disk but declares NOTHING (an
+    // empty YAML object): it must not be picked as the source, and it
+    // must not block the last-machine-layer attribution above it
+    // either.
+    const projectDir = path.join(home, "projects", "unrelated-key-project");
+    fs.mkdirSync(projectDir, { recursive: true });
+    fs.writeFileSync(path.join(projectDir, "harness.overrides.yaml"), "{}\n");
+    const file = writeEvent(DESTROY_EVENT);
+    const { projection } = explainPolicy("preflight-before-investigation", {
+      ...seams("main"),
+      eventPath: file,
+      homeDir: home,
+      project: "unrelated-key-project",
+      discriminator: { hostname: "sspf-test-host", platform: "linux" },
+    });
+    expect(projection.session_start_preflight).toEqual({ setup: false, source: "machine" });
+  });
+});
+
+// Review round 3, decision D-028: the derived project layer this task
+// wires through `explain-policy`'s SECOND load must be scoped to
+// `session_start_preflight.setup` (and its `source` attribution) ONLY.
+// A project layer that changes any OTHER key must never reach the
+// POLICY EVALUATION above (trigger matching, the Risk Classifier,
+// environment resolution, the `when:` verdict): that manifest is loaded
+// PLAIN (base/machine/explicit `--project` only), exactly the manifest
+// `harness policy intercept` and `harness dry-run` enforce a real tool
+// call against.
+describe("explainPolicy: the derived project layer never reaches policy evaluation (task c88461c1, review round 3, decision D-028)", () => {
+  function makeHome(): string {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "harness-explain-policy-boundary-home-"));
+    cleanups.push(() => fs.rmSync(dir, { recursive: true, force: true }));
+    return dir;
+  }
+
+  function makeRepoFixture(name: string): string {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "harness-explain-policy-boundary-repo-"));
+    cleanups.push(() => fs.rmSync(root, { recursive: true, force: true }));
+    const repo = path.join(root, name);
+    fs.mkdirSync(path.join(repo, ".git"), { recursive: true });
+    fs.writeFileSync(path.join(repo, ".git", "HEAD"), "ref: refs/heads/main\n");
+    return repo;
+  }
+
+  it("keeps trigger.matched:true when a cwd-derived project layer adds a bash_match that the command never satisfies", () => {
+    const home = makeHome();
+    fs.writeFileSync(
+      path.join(home, "harness.yaml"),
+      stringifyYaml(MANIFEST_INPUT),
+    );
+    const repoName = "explain-boundary-repo";
+    const repo = makeRepoFixture(repoName);
+    const projectDir = path.join(home, "projects", repoName);
+    fs.mkdirSync(projectDir, { recursive: true });
+    // If this layer reached the POLICY-evaluation load, "terraform
+    // destroy" would fail this bash_match and trigger.matched would
+    // flip to false.
+    fs.writeFileSync(
+      path.join(projectDir, "harness.overrides.yaml"),
+      [
+        "policies:",
+        "  - name: preflight-before-investigation",
+        "    trigger:",
+        '      bash_match: "^this-pattern-never-matches-anything$"',
+        "",
+      ].join("\n"),
+    );
+    const file = writeEvent(DESTROY_EVENT);
+    const { projection } = explainPolicy("preflight-before-investigation", {
+      ...seams("main"),
+      eventPath: file,
+      homeDir: home,
+      cwd: repo,
+    });
+    expect(projection.trigger.matched).toBe(true);
+    expect(projection.applies).toBe(true);
   });
 });
 

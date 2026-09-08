@@ -64,7 +64,7 @@ afterEach(() => {
   else process.env["HARNESS_ALLOW_REAL_GENERATED_DIR"] = priorEnv;
 });
 
-describe("resolvePaths: project layer requires an explicit project (task 30183330)", () => {
+describe("resolvePaths: a project layer requires opts.project to be SET (task 30183330); this loader never derives it from cwd itself, a caller does (see the file header)", () => {
   it("resolves NO project layer when opts.project is absent, even though one exists on disk", () => {
     const resolved = resolvePaths({ homeDir: tmpHome });
     expect(resolved.projectLayer).toBeNull();

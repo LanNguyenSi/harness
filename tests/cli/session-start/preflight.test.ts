@@ -1424,8 +1424,11 @@ describe("runSessionStartPreflight: per-repo scoping via cwd-derived project nam
 
   it("applies the cwd repo's project layer (setup:true) over a base setup:false", async () => {
     // `repo`'s basename ("scope-on-repo") is the project name this
-    // producer derives from cwd via `resolveGitContext`; no `project`
-    // opt is passed here, only `homeDir`.
+    // producer derives from cwd via `deriveProjectName` (the MAIN
+    // checkout's own directory name, not the per-worktree basename `git
+    // worktree add` would give a linked checkout, see the "linked
+    // worktree" tests below); no `project` opt is passed here, only
+    // `homeDir`.
     const repoName = "scope-on-repo";
     const repo = makeRepoFixture(repoName);
     const home = fs.mkdtempSync(path.join(os.tmpdir(), "harness-sspf-projhome-"));

@@ -2,6 +2,43 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-09-08T06:13:41Z, task c88461c1 (implementer, review round 3,
+  decision D-028): scoped the derived project layer to
+  `session_start_preflight.setup` alone. Round 2 fed the cwd-derived
+  project into `explain-policy` and `doctor`'s FULL `loadManifest` call,
+  so a project layer also silently reached policy trigger matching and
+  every other doctor check; both verbs now do a PLAIN `loadManifest(opts)`
+  load for everything else and a SEPARATE, project-scoped load used only
+  for `setup`/`source`, degrading to the plain load's own value on a
+  config/parse failure (mirrors the producer's `setupEnabled` "not
+  configured -> skip" contract). Security fix: `resolveCommonDir`
+  (`src/runtime/git-context.ts`) now `path.normalize`s its absolute
+  branch (a crafted `commondir` with unresolved `..` segments previously
+  reached `deriveProjectName` un-normalized) and `deriveProjectName`
+  rejects (`null`) an empty, `"."`, `".."`, or separator/NUL-containing
+  resolved name before handing it to `resolvePaths`. Docs: two stale
+  test comments fixed (`tests/cli/session-start/preflight.test.ts`,
+  `tests/cli/loader-project-layer.test.ts`'s describe title); two more
+  real-git shapes documented and pinned (submodule -> own name,
+  `--separate-git-dir` -> gitdir basename); a stray space before a comma
+  fixed in two files. `docs/CLI.md`'s PER-REPO SCOPING Notes and
+  `CHANGELOG.md`'s Unreleased entry gained a "Review round 3 fixes"
+  sub-bullet. `npx okf-kit@0.10.0 check --json docs/okf` re-run against
+  this commit: the same five docs flagged stale by round 2
+  (`codex-adapter-parity-gaps.md`, `debug-verb-selection.md`,
+  `evidence-ledger-trust-boundary.md`, `pause-vs-gate-kill-switch.md`,
+  `policy-engine-producer-wiring.md`, all listing `docs/CLI.md` and/or
+  `src/cli/explain-policy.ts` / `src/cli/doctor/index.ts` in `sources:`)
+  re-verified: none makes a claim about `session_start_preflight`, the
+  D-028 boundary, or the commondir/name-validation fix; `timestamp:`
+  re-stamped on all five regardless. `docs/decisions/2026-08-27-ug-auto-
+  mode-approval.md` line 558's `src/cli/doctor/index.ts:1136` anchor
+  (`if (report.ugBypassWithoutAutoApprove) warningCount++;`) is
+  unaffected: this round's doctor edits land after that line (the top of
+  `doctor()` and the `session_start_preflight.setup` version-check site
+  further down), verified unchanged and green via `tests/decisions-
+  citations-resolve.test.ts`.
+
 - 2026-09-08T05:36:06Z, task c88461c1 (implementer, review round 2):
   repository identity + one shared helper for `session_start_preflight.
   setup`'s per-repo scoping. Added `deriveProjectName` to `src/runtime/

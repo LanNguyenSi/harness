@@ -193,24 +193,65 @@ export function explainPolicy(
   // an injected `opts.manifest` already IS the merged result and
   // carries no per-layer provenance, so `session_start_preflight.source`
   // falls back to "base" in that case (see the field's doc comment).
+  //
+  // PLAIN load (task c88461c1, review round 3, decision D-028): every
+  // check this verb performs against `manifest` below -- finding the
+  // named policy, trigger matching, the Risk Classifier, environment
+  // resolution, deletion-target resolution, and the `when:` evaluation
+  // -- reads the base/machine/explicit-`--project` manifest only, an
+  // explicit `opts.project` still wins outright but NOTHING is derived
+  // from cwd here. This mirrors `harness policy intercept`
+  // (src/cli/policy/intercept.ts) and `harness dry-run`
+  // (src/cli/dry-run.ts), the two enforcement-facing verbs that decide
+  // a policy's real trigger verdict: neither ever consults a derived
+  // project layer, so this manifest must not either, or an operator's
+  // "would this apply" answer could disagree with what actually
+  // enforces. Only `session_start_preflight.setup` (and its `source`
+  // attribution) below get a project-scoped SECOND load: routing a
+  // derived layer through THIS one, unrelated load would let it
+  // silently reach the policy engine this verb evaluates, for zero
+  // benefit to the one key that needs it.
   let manifest: Manifest;
   let resolvedPaths: ResolvedPaths | undefined;
   if (opts.manifest) {
     manifest = opts.manifest;
   } else {
-    // Per-repo scoping (task c88461c1, review round 2, decision
-    // D-021b): an explicit `opts.project` still wins outright;
-    // otherwise derive the project name from `opts.cwd` (defaulting to
-    // `process.cwd()`) via the SAME shared helper `harness
-    // session-start preflight` and `harness doctor` feed their own
-    // `loadManifest` calls from, so this verb's `source` attribution
-    // reflects the layer the producer itself would actually read.
-    const loaded = loadManifest({
-      ...opts,
-      project: opts.project ?? deriveProjectName(opts.cwd ?? process.cwd()) ?? undefined,
-    });
+    const loaded = loadManifest(opts);
     manifest = loaded.manifest;
     resolvedPaths = loaded.resolved;
+  }
+  // `session_start_preflight.setup` / `source` (task c88461c1, review
+  // round 2 decision D-021b; scope narrowed to this one key, review
+  // round 3 decision D-028): an explicit `opts.project` still wins
+  // outright; otherwise derive the project name from `opts.cwd`
+  // (defaulting to `process.cwd()`) via the SAME shared
+  // `deriveProjectName` helper `harness session-start preflight` and
+  // `harness doctor` feed their own SECOND load from, so this verb's
+  // `setup`/`source` reflect the layer the producer itself would
+  // actually read for this cwd -- WITHOUT letting that derived layer
+  // reach the policy evaluation above. An injected `opts.manifest`
+  // carries no per-layer provenance to re-derive from and always
+  // reports "base" (unchanged from before this task). Best-effort: a
+  // config/parse failure here degrades to the plain load's own
+  // (project-unaware) values, mirroring the producer's own
+  // `setupEnabled` resolution's "not configured -> skip" contract,
+  // rather than aborting this verb over an unrelated derivation
+  // problem.
+  let sessionStartPreflightSetup = manifest.session_start_preflight.setup;
+  let sessionStartPreflightSource: SessionStartPreflightLayerSource = resolvedPaths
+    ? resolveSessionStartPreflightSource(resolvedPaths)
+    : "base";
+  if (!opts.manifest) {
+    try {
+      const scoped = loadManifest({
+        ...opts,
+        project: opts.project ?? deriveProjectName(opts.cwd ?? process.cwd()) ?? undefined,
+      });
+      sessionStartPreflightSetup = scoped.manifest.session_start_preflight.setup;
+      sessionStartPreflightSource = resolveSessionStartPreflightSource(scoped.resolved);
+    } catch {
+      /* keep the plain load's values computed above */
+    }
   }
   const policy = manifest.policies.find((p) => p.name === policyName);
   if (!policy) {
@@ -282,8 +323,8 @@ export function explainPolicy(
     deletion_target: deletionTarget,
     ...(policy.name.startsWith("preflight-before-") && {
       session_start_preflight: {
-        setup: manifest.session_start_preflight.setup,
-        source: resolvedPaths ? resolveSessionStartPreflightSource(resolvedPaths) : "base",
+        setup: sessionStartPreflightSetup,
+        source: sessionStartPreflightSource,
       },
     }),
     when: whenEval
