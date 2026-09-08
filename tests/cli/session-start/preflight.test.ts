@@ -1888,15 +1888,22 @@ describe("runSessionStartPreflight: setupEnabled catch names the failed layer pa
     expect(errOut()).toContain("degrading to setup: false");
     // Task 1c4eb3ea, round 2, D-027 item 5: the YAML parse error this
     // fixture triggers is genuinely multi-line (measured: 6 lines from
-    // `yaml`'s own error message alone); the diagnostic must collapse
-    // it to its first line, so the note() call carrying it is ONE
-    // stderr line, matching the "one line" claim in docs/CLI.md
-    // (scoped to this one diagnostic; a later, unrelated note() call
-    // for the successful ledger write also lands in errOut()).
-    const diagnosticLines = errOut()
+    // `yaml`'s own error message alone, including a blank line and a
+    // trailing `^` caret marker) and must be collapsed to its first
+    // line before interpolating. A count of lines MATCHING the
+    // diagnostic's own prefix does not discriminate an un-collapsed
+    // regression: the prefix only ever appears once regardless, since
+    // it precedes the (possibly multi-line) error text, not after it.
+    // Assert directly on total non-blank stderr line count instead
+    // (this producer writes exactly one other note() line, for the
+    // successful ledger write, so the correct total is 2, not 1) and
+    // that the caret marker unique to the RAW, un-collapsed `yaml`
+    // error never reaches stderr.
+    const nonBlankLines = errOut()
       .split("\n")
-      .filter((line) => line.includes("session_start_preflight.setup: the project-scoped"));
-    expect(diagnosticLines).toHaveLength(1);
+      .filter((line) => line.length > 0);
+    expect(nonBlankLines).toHaveLength(2);
+    expect(errOut()).not.toContain("^");
   });
 
   // Task 1c4eb3ea, round 2, D-027 item 4: round 1's message named "project
