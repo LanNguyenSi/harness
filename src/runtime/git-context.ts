@@ -394,6 +394,38 @@ export function deriveProjectName(cwd: string): string | null {
   return isValidProjectName(name) ? name : null;
 }
 
+export interface ResolveScopedProjectNameOptions<T> {
+  /** An explicit `--project <name>` value, when the caller has one. Wins outright. */
+  project?: string;
+  /** The cwd to derive a project name from via {@link deriveProjectName}. */
+  cwd: string;
+  /**
+   * What to return when neither `project` nor `deriveProjectName(cwd)`
+   * produced a name. Callers disagreed on this value before this helper
+   * existed: `harness doctor` used `null`, the `session_start_preflight`
+   * producer used its own already-resolved `repo` basename. Naming it
+   * here makes that difference a visible, per-call-site argument instead
+   * of an accident of two copies of the same expression drifting apart
+   * (task `f1eb1c5c`; see docs/CLI.md's PER-REPO SCOPING section).
+   */
+  fallback: T;
+}
+
+/**
+ * Shared `opts.project ?? deriveProjectName(cwd) ?? fallback` resolution,
+ * used by every producer of a per-repo-scoped `session_start_preflight`
+ * project name (`harness doctor`'s second, project-scoped load and the
+ * `session_start_preflight` producer). Both surfaces agree on the first
+ * two terms (an explicit `--project`, then the cwd-derived name); only
+ * the fallback differs by call site, and this helper takes it as an
+ * explicit argument so that difference is named rather than duplicated
+ * inline. No behavior change versus either surface's own prior inline
+ * expression: this only extracts the shared shape.
+ */
+export function resolveScopedProjectName<T>(opts: ResolveScopedProjectNameOptions<T>): string | T {
+  return opts.project ?? deriveProjectName(opts.cwd) ?? opts.fallback;
+}
+
 /**
  * Is `name` safe to join into `<home>/projects/<name>/harness.overrides.yaml`
  * (`resolvePaths`, `src/cli/loader.ts`) as an on-disk directory

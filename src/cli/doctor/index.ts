@@ -35,7 +35,7 @@ import {
 } from "../validate/checks.js";
 import type { Diagnostic } from "../validate/types.js";
 import { isDerivedPolicy } from "../../runtime/workflow-policies.js";
-import { deriveProjectName } from "../../runtime/git-context.js";
+import { resolveScopedProjectName } from "../../runtime/git-context.js";
 import { loadManifest, resolvePaths, type LoaderOptions } from "../loader.js";
 import {
   countCodexDiagnostics,
@@ -1331,8 +1331,11 @@ export async function doctor(opts: DoctorOptions = {}): Promise<DoctorReport> {
   // `doctor()`'s own top-level `loadManifest(opts)` call above already
   // surfaces a genuine base/machine parse failure by throwing before
   // this point is ever reached.
-  const attemptedSessionStartPreflightProjectName =
-    opts.project ?? deriveProjectName(opts.cwd ?? process.cwd()) ?? null;
+  const attemptedSessionStartPreflightProjectName = resolveScopedProjectName({
+    project: opts.project,
+    cwd: opts.cwd ?? process.cwd(),
+    fallback: null,
+  });
   const scopedLoadOpts: LoaderOptions = {
     ...opts,
     project: attemptedSessionStartPreflightProjectName ?? undefined,
