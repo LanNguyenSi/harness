@@ -104,7 +104,7 @@ export function checkPolicyPackVersions(
       });
       return;
     }
-    const { version: actual, isPrerelease } = parsed;
+    const { version: actual, isPrerelease, token } = parsed;
     if (compareVersionFloor(actual, isPrerelease, pack.min_version) < 0) {
       gaps.push({
         packIndex,
@@ -113,7 +113,7 @@ export function checkPolicyPackVersions(
         versionCommand,
         actualVersion: actual,
         kind: "below_floor",
-        message: `outdated: installed v${actual} < required ${pack.min_version}`,
+        message: `outdated: installed v${token} < required ${pack.min_version}`,
       });
     }
   });

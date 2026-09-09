@@ -3,7 +3,7 @@ type: invariant
 title: Policy engine needs its producers wired
 description: "A policy with `requires:` can only be positively satisfied if grounding-mcp is wired under `tools.mcp[]`; an `operator_only: true` policy denies without querying evidence. An unwired evidence producer makes block/require_approval policies DENY every matching event (deny-degraded) unless `risk.degraded_fail_posture: fail_open` is set, while warn policies degrade non-blocking; `harness apply` hard-refuses that misconfiguration."
 tags: [policies, grounding-mcp, degraded-fail-posture, footgun, versions, bash_match, per-repo-attribution]
-timestamp: 2026-09-09T05:01:16Z
+timestamp: 2026-09-09T05:30:26Z
 sources:
   - src/cli/validate/checks.ts
   - src/cli/apply/apply.ts
@@ -32,7 +32,7 @@ Since task `cf3dff51` (shipped 0.45.0) `policyMatchesEvent` gained a FOURTH matc
 
 - **`harness validate` — warning only.** `checkPolicyGroundingMcp` (`src/cli/validate/checks.ts`) emits a severity `warning` only when at least one policy declares `requires:` and no `tools.mcp` entry is named `grounding-mcp`. Its message states the tier-split consequence (warn policies degrade non-blocking, block/require_approval policies DENY every matching event until the producer is wired, `risk.degraded_fail_posture: fail_open` as the availability opt-out) and points at this bundle's gate-fail-posture-matrix.md. An `operator_only: true` policy is an unconditional deny before the requires pipeline, so an operator-only-only manifest has no grounding diagnostic.
 - **`harness apply` — hard refusal.** `src/cli/apply/apply.ts` runs the same `checkPolicyGroundingMcp` in apply's gate phase and throws `HarnessExitError` only for an unwired evidence-consuming policy. A manifest containing only `operator_only: true` policies applies normally and its hooks remain generated.
-- **Adjacent, stricter check for the consumer pack:** `checkSolutionAcceptanceProducer` (`src/cli/validate/checks.ts:312#"export function checkSolutionAcceptanceProducer("`) makes solution-acceptance-enabled-without-grounding-mcp a validate **error**, because there the failure direction inverts: the producer (`solution_evaluate`) can never write a verdict, so the completion-gate deadlocks on a permanent deny (fail-closed), rather than fail-open.
+- **Adjacent, stricter check for the consumer pack:** `checkSolutionAcceptanceProducer` (`src/cli/validate/checks.ts:298#"export function checkSolutionAcceptanceProducer("`) makes solution-acceptance-enabled-without-grounding-mcp a validate **error**, because there the failure direction inverts: the producer (`solution_evaluate`) can never write a verdict, so the completion-gate deadlocks on a permanent deny (fail-closed), rather than fail-open.
 
 Name matching is by `name === "grounding-mcp"` only; neither the checks nor `findGroundingMcp` consult `enabled` (`enabled: z.boolean().default(true)` on MCP entries, `src/schema/tools.ts:20`). An `enabled: false` grounding-mcp entry therefore satisfies the apply gate while not being projected into the runtime's `mcpServers` — the agent-side producer verbs (`mcp__grounding-mcp__ledger_add` etc.) are then unavailable even though the gate side can still spawn the server from the manifest command.
 

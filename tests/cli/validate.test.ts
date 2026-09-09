@@ -1648,13 +1648,6 @@ describe("validate — createDefaultGitIgnoreProbe (real git)", () => {
 });
 
 describe("validate — internal helpers", () => {
-  it("compareVersions handles dotted numeric versions", () => {
-    expect(__testables.compareVersions("1.2.3", "1.2.0")).toBe(1);
-    expect(__testables.compareVersions("1.2.0", "1.2.3")).toBe(-1);
-    expect(__testables.compareVersions("2.0.0", "2.0.0")).toBe(0);
-    expect(__testables.compareVersions("0.10.0", "0.2.0")).toBe(1);
-  });
-
   it("expandHome resolves ~ and ~/ prefixes", () => {
     expect(__testables.expandHome("~", "/home/x")).toBe("/home/x");
     expect(__testables.expandHome("~/foo/bar", "/home/x")).toBe("/home/x/foo/bar");
@@ -2512,13 +2505,13 @@ policies: []
   it("errors below_floor when the probed cli version is a dotted prerelease of min_version", () => {
     const hit = diagnosticFor("fake 1.2.3-rc.1");
     expect(hit?.severity).toBe("error");
-    expect(hit?.message).toBe("installed version 1.2.3 is less than required 1.2.3");
+    expect(hit?.message).toBe("installed version 1.2.3-rc.1 is less than required 1.2.3");
   });
 
   it("errors below_floor when the probed cli version is a dotless prerelease of min_version", () => {
     const hit = diagnosticFor("fake 1.2.3-beta");
     expect(hit?.severity).toBe("error");
-    expect(hit?.message).toBe("installed version 1.2.3 is less than required 1.2.3");
+    expect(hit?.message).toBe("installed version 1.2.3-beta is less than required 1.2.3");
   });
 
   it("still passes a real release meeting the floor (no regression)", () => {

@@ -3038,7 +3038,7 @@ ${cliBlock}
     });
     const cli = report.tools.cli.find((c) => c.name === "fake");
     expect(cli?.status).toBe("error");
-    expect(cli?.message).toBe("installed v1.2.3 < required 1.2.3");
+    expect(cli?.message).toBe("installed v1.2.3-rc.1 < required 1.2.3");
   });
 
   it("errors below_floor when the probed cli version is a dotless prerelease of min_version", async () => {
@@ -3058,7 +3058,7 @@ ${cliBlock}
     });
     const cli = report.tools.cli.find((c) => c.name === "fake");
     expect(cli?.status).toBe("error");
-    expect(cli?.message).toBe("installed v1.2.3 < required 1.2.3");
+    expect(cli?.message).toBe("installed v1.2.3-beta < required 1.2.3");
   });
 
   it("still passes a real release meeting the floor (no regression)", async () => {
@@ -3113,7 +3113,7 @@ ${mcpBlock}
       npmBinExec: STUB_NPM_BIN_EXEC_UNKNOWN,
     });
     expect(report.tools.mcpVersions).toEqual([
-      { name: "fake-mcp", status: "warn", message: "outdated: installed v1.2.3 < required 1.2.3" },
+      { name: "fake-mcp", status: "warn", message: "outdated: installed v1.2.3-rc.1 < required 1.2.3" },
     ]);
   });
 
@@ -3133,7 +3133,7 @@ ${mcpBlock}
       npmBinExec: STUB_NPM_BIN_EXEC_UNKNOWN,
     });
     expect(report.tools.mcpVersions).toEqual([
-      { name: "fake-mcp", status: "warn", message: "outdated: installed v1.2.3 < required 1.2.3" },
+      { name: "fake-mcp", status: "warn", message: "outdated: installed v1.2.3-beta < required 1.2.3" },
     ]);
   });
 

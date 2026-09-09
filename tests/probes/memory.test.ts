@@ -232,14 +232,14 @@ describe("inspectMemory: memory.router min_version prerelease (task db44ab46)", 
   it("warns below_floor when the probed router version is a dotted prerelease of min_version", () => {
     expect(routerVersionFor("memory-router 1.2.3-rc.1\n")).toEqual({
       status: "warn",
-      message: "outdated: installed v1.2.3 < required 1.2.3",
+      message: "outdated: installed v1.2.3-rc.1 < required 1.2.3",
     });
   });
 
   it("warns below_floor when the probed router version is a dotless prerelease of min_version", () => {
     expect(routerVersionFor("memory-router 1.2.3-beta\n")).toEqual({
       status: "warn",
-      message: "outdated: installed v1.2.3 < required 1.2.3",
+      message: "outdated: installed v1.2.3-beta < required 1.2.3",
     });
   });
 

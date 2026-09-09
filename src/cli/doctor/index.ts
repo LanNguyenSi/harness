@@ -276,13 +276,13 @@ function checkCli(manifest: Manifest, opts: DoctorOptions, npmBinDir: string | u
       });
       continue;
     }
-    const { version: actual, isPrerelease } = parsed;
+    const { version: actual, isPrerelease, token } = parsed;
     const cmp = compareVersionFloor(actual, isPrerelease, cli.min_version);
     if (cmp < 0) {
       out.push({
         name: cli.name,
         status: "error",
-        message: `installed v${actual} < required ${cli.min_version}`,
+        message: `installed v${token} < required ${cli.min_version}`,
       });
     } else {
       out.push({
@@ -350,13 +350,13 @@ function checkMcpVersions(manifest: Manifest, opts: DoctorOptions): McpVersionRe
       });
       continue;
     }
-    const { version: actual, isPrerelease } = parsed;
+    const { version: actual, isPrerelease, token } = parsed;
     const cmp = compareVersionFloor(actual, isPrerelease, mcp.min_version);
     if (cmp < 0) {
       out.push({
         name: mcp.name,
         status: "warn",
-        message: `outdated: installed v${actual} < required ${mcp.min_version}`,
+        message: `outdated: installed v${token} < required ${mcp.min_version}`,
       });
     } else {
       out.push({

@@ -188,13 +188,13 @@ export function inspectMemory(manifest: Manifest, opts: MemoryOptions = {}): Mem
           message: `could not parse a version from "${stdout.trim()}"`,
         };
       } else {
-        const { version: actual, isPrerelease } = parsed;
+        const { version: actual, isPrerelease, token } = parsed;
         const cmp = compareVersionFloor(actual, isPrerelease, minVersion);
         routerVersion =
           cmp < 0
             ? {
                 status: "warn",
-                message: `outdated: installed v${actual} < required ${minVersion}`,
+                message: `outdated: installed v${token} < required ${minVersion}`,
               }
             : { status: "ok", message: `v${actual} ≥ ${minVersion}` };
       }

@@ -2,6 +2,39 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-09-09T05:30:00Z, task `db44ab46` (implementer, review round 1
+  fix, decision D-021): fixed the five new below_floor messages to
+  quote `token` (the printed version) instead of `actual` (the numeric
+  run), so a prerelease reads e.g. "installed v1.2.3-rc.1 < required
+  1.2.3" instead of misreporting the installed version as identical to
+  the floor; updated the pinned expectations in
+  `tests/cli/doctor.test.ts`, `tests/cli/validate.test.ts`, and
+  `tests/probes/memory.test.ts`. Deleted validate's now-fully-dead
+  `compareVersions` (already unreachable in production since the
+  earlier switch to `compareVersionFloor`, but still exported via
+  `__testables` and unit-tested), which shifted every later line in
+  `src/cli/validate/checks.ts` by -14; re-pointed the drifted anchors
+  in this ADR (`parseProbedVersion` call site) and in
+  `manifest-validation-scope.md` (`runAssetChecks`, `checkMcp`) and
+  `policy-engine-producer-wiring.md` (`checkSolutionAcceptanceProducer`),
+  re-stamped both `docs/okf/*.md` files' `timestamp:`, and lowered the
+  duplication pin 114 -> 113 (measured). Named the per-surface severity
+  in this ADR's Update section and the CHANGELOG (error on both
+  `tools.cli[]` paths, warning on `tools.mcp[]`/`memory.router`, a
+  `below_floor` gap on the pack floor). Fixed the CHANGELOG's
+  "see the entry below" cross-reference to "above" (the referenced
+  entry sits above it), noted in `docs/CLI.md` that a `+build` metadata
+  suffix is not a prerelease under this rule, and replaced this file's
+  own prior entry's bare aggregate ("215/215 passed") with what was
+  established. Added `tests/io/version-compare.test.ts` (direct unit
+  coverage for `parseProbedVersion`/`compareVersionFloor`) and, per
+  surface, a higher-version-prerelease-passes case plus git-describe-
+  and platform-suffix accepted-cost cases, closing the "reject every
+  prerelease regardless of the numeric comparison" mutant survivors at
+  `validate/checks.ts` and `probes/memory.ts`.
+  `npx vitest run tests/decisions-citations-resolve.test.ts` passed:
+  every re-pointed anchor above resolves to its quoted text.
+
 - 2026-09-09T05:05:00Z, task `db44ab46` (implementer): extended the
   `hooks[]` prerelease-rejection rule (`parseProbedVersion`/
   `compareVersionFloor`, `src/io/version-compare.ts`) to the five
@@ -42,8 +75,8 @@
   `codex-adapter-parity-gaps.md`, `pause-vs-gate-kill-switch.md`,
   `evidence-ledger-trust-boundary.md`); `gate-fail-posture-matrix.md`
   mentions `checks.ts` in prose only, not in its `sources:` frontmatter,
-  so left alone. `npx vitest run tests/decisions-citations-resolve.test.ts`:
-  215/215 passed.
+  so left alone. `npx vitest run tests/decisions-citations-resolve.test.ts`
+  passed: every re-pointed anchor above resolves to its quoted text.
 
 - 2026-09-08T10:16:41Z, task `1c4eb3ea` (implementer, round 3 of the
   batch-44 follow-up run, `.ai/runs/2026-09-08-open-pool-batch44`):
