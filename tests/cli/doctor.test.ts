@@ -3157,6 +3157,32 @@ ${cliBlock}
     });
     expect(report.errorCount).toBeGreaterThan(0);
   });
+
+  // Residual (task 62d9778c): docs/CLI.md states a `+build` metadata
+  // suffix is not a prerelease under this rule (only covered directly by
+  // the parseProbedVersion unit test in tests/io/version-compare.test.ts
+  // before this); this pins the claim through the surface itself, so a
+  // comparator that bypassed parseProbedVersion and read `+build` as a
+  // prerelease would be caught here too.
+  it("passes a +build metadata suffix at an equal-numeric floor (not a prerelease)", async () => {
+    const home = makeFixture({
+      "harness.yaml": buildManifest(`    - name: fake
+      binary: /usr/bin/true
+      min_version: "1.2.3"`),
+    });
+    const report = await doctor({
+      configPath: path.join(home, "harness.yaml"),
+      homeOverride: home,
+      mcpProbe: new FakeProbe({}),
+      versionProbe: () => "true 1.2.3+build.7\n",
+      pathEnv: "",
+      claudeMcpExec: NO_CLAUDE_CLI,
+      npmBinExec: STUB_NPM_BIN_EXEC_UNKNOWN,
+    });
+    const cli = report.tools.cli.find((c) => c.name === "fake");
+    expect(cli?.status).toBe("ok");
+    expect(cli?.message).toBe("v1.2.3+build.7 ≥ 1.2.3");
+  });
 });
 
 describe("doctor - tools.mcp[] min_version prerelease (task db44ab46)", () => {
@@ -3301,5 +3327,79 @@ ${mcpBlock}
         message: "outdated: installed v1.2.3-linux-x64 < required 1.2.3",
       },
     ]);
+  });
+
+  // Residual (task 62d9778c), see the matching tools.cli[] case above for
+  // why this is pinned at the surface rather than only at the parser.
+  it("passes a +build metadata suffix at an equal-numeric floor (not a prerelease)", async () => {
+    const home = makeFixture({
+      "harness.yaml": buildManifest(`    - name: fake-mcp
+      command: [my-mcp-bin]
+      min_version: "1.2.3"`),
+    });
+    const report = await doctor({
+      configPath: path.join(home, "harness.yaml"),
+      homeOverride: home,
+      mcpProbe: new FakeProbe({ "fake-mcp": { kind: "missing-verb" } }),
+      versionProbe: () => "my-mcp-bin v1.2.3+build.7\n",
+      pathEnv: "",
+      claudeMcpExec: NO_CLAUDE_CLI,
+      npmBinExec: STUB_NPM_BIN_EXEC_UNKNOWN,
+    });
+    expect(report.tools.mcpVersions).toEqual([
+      { name: "fake-mcp", status: "ok", message: "v1.2.3+build.7 ≥ 1.2.3" },
+    ]);
+  });
+});
+
+// Residual (task 62d9778c): the who-pays statement (docs/decisions/
+// 2026-09-08-preflight-floors.md, round-3 fix, and the CHANGELOG entry
+// for task db44ab46) that a pack-level below_floor gap is counted into
+// doctor's warningCount and leaves errorCount untouched rested on prose
+// alone; countDiagnostics (src/cli/doctor/index.ts) rolls
+// `report.policyPacks.versionGaps.length` into warningCount only (see
+// the comment immediately above that line). This pins the classification
+// by comparing a floor met against a floor missed: the gap count (n)
+// moves from 0 to 1, warningCount rises by exactly that much, and
+// errorCount does not move. A mutant that reclassified the gap into
+// errorCount instead of warningCount (P1) flips the errorCount side of
+// this comparison and fails the test.
+describe("doctor - pack-level below_floor gap report-level counts (task 62d9778c)", () => {
+  const SILENCE_DRIFT_PACK = `doctor:
+  ignore_template_drift:
+    - deny-kill-switch-bypass
+    - deny-session-env-strip
+    - deny-pause-sentinel-forgery
+`;
+
+  async function reportFor(minVersion: string) {
+    const home = makeFixture({
+      "harness.yaml": `version: 1
+hooks: []
+policies: []
+${SILENCE_DRIFT_PACK}policy_packs:
+  - name: understanding-before-execution
+    source: builtin
+    min_version: "${minVersion}"
+`,
+    });
+    return doctor({
+      configPath: path.join(home, "harness.yaml"),
+      shallow: true,
+      versionProbe: () => "understanding-gate 0.3.1",
+    });
+  }
+
+  it("increments warningCount by the gap count and leaves errorCount unchanged when the floor moves from met to missed", async () => {
+    const metFloor = await reportFor("0.3.0");
+    const missedFloor = await reportFor("0.99.0");
+
+    expect(metFloor.policyPacks.versionGaps).toHaveLength(0);
+    expect(missedFloor.policyPacks.versionGaps).toHaveLength(1);
+
+    const n = missedFloor.policyPacks.versionGaps.length - metFloor.policyPacks.versionGaps.length;
+    expect(n).toBe(1);
+    expect(missedFloor.warningCount - metFloor.warningCount).toBe(n);
+    expect(missedFloor.errorCount).toBe(metFloor.errorCount);
   });
 });
