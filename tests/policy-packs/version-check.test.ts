@@ -190,4 +190,14 @@ describe("checkPolicyPackVersions - min_version prerelease (task db44ab46)", () 
     });
     expect(gaps[0]?.message).toBe("outdated: installed v0.3.1-linux-x64 < required 0.3.1");
   });
+
+  // Residual (task 62d9778c): pins the +build-is-not-a-prerelease claim
+  // (docs/CLI.md) through this surface, not only through the
+  // parseProbedVersion unit test.
+  it("passes a +build metadata suffix at an equal-numeric floor (not a prerelease)", () => {
+    const m = manifestWith([
+      { name: "understanding-before-execution", min_version: "0.3.1" },
+    ]);
+    expect(checkPolicyPackVersions(m, probe("understanding-gate 0.3.1+build.7"))).toEqual([]);
+  });
 });

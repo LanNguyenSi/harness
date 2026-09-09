@@ -2533,4 +2533,11 @@ policies: []
     expect(hit?.severity).toBe("error");
     expect(hit?.message).toBe("installed version 1.2.3-linux-x64 is less than required 1.2.3");
   });
+
+  // Residual (task 62d9778c): pins the +build-is-not-a-prerelease claim
+  // (docs/CLI.md) through this surface, not only through the
+  // parseProbedVersion unit test.
+  it("passes a +build metadata suffix at an equal-numeric floor (not a prerelease)", () => {
+    expect(diagnosticFor("fake 1.2.3+build.7")).toBeUndefined();
+  });
 });

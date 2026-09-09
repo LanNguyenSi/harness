@@ -270,4 +270,14 @@ describe("inspectMemory: memory.router min_version prerelease (task db44ab46)", 
       message: "outdated: installed v1.2.3-linux-x64 < required 1.2.3",
     });
   });
+
+  // Residual (task 62d9778c): pins the +build-is-not-a-prerelease claim
+  // (docs/CLI.md) through this surface, not only through the
+  // parseProbedVersion unit test.
+  it("passes a +build metadata suffix at an equal-numeric floor (not a prerelease)", () => {
+    expect(routerVersionFor("memory-router 1.2.3+build.7\n")).toEqual({
+      status: "ok",
+      message: "v1.2.3+build.7 ≥ 1.2.3",
+    });
+  });
 });
