@@ -888,14 +888,25 @@ describe("docs/okf line-citation guard: fixture pinning discrimination against a
   });
 });
 
+// Shared predicate: a citation is "bare into a non-Markdown source" when it
+// carries no anchor AND its cited path is not itself a `.md` file (a bare
+// `path.md:N` heading-shaped reference is out of THIS guard's scope; only
+// heading-section (`path.md:#heading`) citations reach it, checked further
+// above). Factored out (rather than inlined per call site) so the mutation
+// probe P2 fixture below shares the EXACT SAME predicate the real ratchet
+// loop uses: a mutant that neutralises this function (e.g. always returning
+// `false`) is caught by the fixture alone, without depending on the live
+// bundle carrying a planted bare citation.
+function isBareNonMdCitation(c: Citation): boolean {
+  return c.anchor === undefined && !c.citedPath.endsWith(".md");
+}
+
 describe("docs/okf bare (unanchored) line citations into non-Markdown sources: ratchet", () => {
   const bareNonMdOutsideLog: Citation[] = [];
   let logMdBareNonMdCount = 0;
   for (const f of listDocs(OKF_DIR)) {
     const text = fs.readFileSync(path.join(OKF_DIR, f), "utf8");
-    const bare = extractCitations(`docs/okf/${f}`, text).filter(
-      (c) => c.anchor === undefined && !c.citedPath.endsWith(".md"),
-    );
+    const bare = extractCitations(`docs/okf/${f}`, text).filter(isBareNonMdCitation);
     if (f === "log.md") {
       // log.md is historical prose narrating past re-points (docs/okf/index.md's
       // Maintenance section states the exemption); its bare count is reported
@@ -936,9 +947,7 @@ describe("docs/okf bare (unanchored) line citations into non-Markdown sources: r
   // bundle carries zero live bare citations.
   it("fixture: the bare-citation filter still catches a planted bare non-md citation in a scratch doc (mutation probe P2 target)", () => {
     const plantedDocText = 'Planted drift: see `src/planted-example.ts:12` for detail.\n';
-    const planted = extractCitations("fixture-scratch.md", plantedDocText).filter(
-      (c) => c.anchor === undefined && !c.citedPath.endsWith(".md"),
-    );
+    const planted = extractCitations("fixture-scratch.md", plantedDocText).filter(isBareNonMdCitation);
     expect(
       planted,
       "expected the planted bare non-md citation to be found by the ratchet's own filter",
