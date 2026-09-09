@@ -11,7 +11,10 @@
 // pack-level config-schema mismatch (a `config:` key only the newer
 // package honours). Both can fire in the same doctor run.
 
-import { compareNumericVersions } from "../io/version-compare.js";
+import {
+  parseProbedVersion,
+  compareVersionFloor,
+} from "../io/version-compare.js";
 import { isBuiltinPackName, resolveBuiltinVersionCommand } from "./registry.js";
 import type { Manifest } from "../schema/index.js";
 
@@ -35,7 +38,14 @@ export interface PolicyPackVersionGap {
    * Empty array when no probe is registered for the pack.
    */
   versionCommand: readonly string[];
-  /** Parsed version string when the probe succeeded; otherwise null. */
+  /**
+   * Parsed version when the probe succeeded; otherwise null. Always the
+   * NUMERIC run (`parseProbedVersion`'s `version` field), never the probed
+   * prerelease or build suffix: for a `below_floor` gap caused by a
+   * prerelease of the floor (probed "0.3.1-rc.1" against a "0.3.1"
+   * `min_version`) this field equals `declaredMinVersion`; `message`
+   * carries the full probed token for the human-facing distinction.
+   */
   actualVersion: string | null;
   kind: PolicyPackVersionGapKind;
   message: string;
@@ -87,8 +97,12 @@ export function checkPolicyPackVersions(
       });
       return;
     }
-    const match = stdout.match(/(\d+(?:\.\d+){0,3})/);
-    if (!match || !match[1]) {
+    // parseProbedVersion + compareVersionFloor (task db44ab46, extending
+    // the hooks[] prerelease rule to the pack-level floor): a release
+    // candidate of the pack's bin must not satisfy an equal-numeric
+    // min_version floor. See docs/decisions/2026-09-08-preflight-floors.md.
+    const parsed = parseProbedVersion(stdout);
+    if (!parsed) {
       gaps.push({
         packIndex,
         packName: pack.name,
@@ -100,8 +114,8 @@ export function checkPolicyPackVersions(
       });
       return;
     }
-    const actual = match[1];
-    if (compareNumericVersions(actual, pack.min_version) < 0) {
+    const { version: actual, isPrerelease, token } = parsed;
+    if (compareVersionFloor(actual, isPrerelease, pack.min_version) < 0) {
       gaps.push({
         packIndex,
         packName: pack.name,
@@ -109,7 +123,7 @@ export function checkPolicyPackVersions(
         versionCommand,
         actualVersion: actual,
         kind: "below_floor",
-        message: `outdated: installed v${actual} < required ${pack.min_version}`,
+        message: `outdated: installed v${token} < required ${pack.min_version}`,
       });
     }
   });

@@ -2,6 +2,102 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-09-09T06:12:00Z, task `db44ab46` (review round 3 fix, decision
+  D-036, and the round-3 review's docs closure): the ok-branch messages
+  of doctor tools.cli[] and tools.mcp[] (`src/cli/doctor/index.ts`) and
+  memory.router (`src/probes/memory.ts`) now quote the probed token like
+  the hooks[] site, with their pinned expectations updated; the pack
+  floor's below_floor message is pinned in three cases
+  (`tests/policy-packs/version-check.test.ts`); the ADR and CHANGELOG
+  state that a pack version gap is counted into doctor's warningCount;
+  the two pack-level `actualVersion` doc comments carry the numeric-run
+  caveat the hook-level field already had. Bundle docs listing the
+  touched sources re-verified and re-stamped in the same commit.
+
+- 2026-09-09T05:30:00Z, task `db44ab46` (implementer, review round 1
+  fix, decision D-021): fixed the five new below_floor messages to
+  quote `token` (the printed version) instead of `actual` (the numeric
+  run), so a prerelease reads e.g. "installed v1.2.3-rc.1 < required
+  1.2.3" instead of misreporting the installed version as identical to
+  the floor; updated the pinned expectations in
+  `tests/cli/doctor.test.ts`, `tests/cli/validate.test.ts`, and
+  `tests/probes/memory.test.ts`. Deleted validate's now-fully-dead
+  `compareVersions` (already unreachable in production since the
+  earlier switch to `compareVersionFloor`, but still exported via
+  `__testables` and unit-tested), which shifted every later line in
+  `src/cli/validate/checks.ts` by -14; re-pointed the drifted anchors
+  in this ADR (`parseProbedVersion` call site) and in
+  `manifest-validation-scope.md` (`runAssetChecks`, `checkMcp`) and
+  `policy-engine-producer-wiring.md` (`checkSolutionAcceptanceProducer`),
+  re-stamped both `docs/okf/*.md` files' `timestamp:`. Also re-stamped
+  four further docs whose `sources:` list `src/cli/doctor/index.ts`,
+  `src/cli/validate/checks.ts`, or `docs/CLI.md` without citing a
+  specific line (`codex-adapter-parity-gaps.md`,
+  `debug-verb-selection.md`, `evidence-ledger-trust-boundary.md`,
+  `pause-vs-gate-kill-switch.md`), after `okf-kit check` flagged them
+  `sources-fresh: STALE` once those three files' content moved past
+  the docs' recorded timestamp; none of the four cite a changed line.
+  Lowered the duplication pin 114 -> 113 (measured). Named the
+  per-surface severity
+  in this ADR's Update section and the CHANGELOG (error on both
+  `tools.cli[]` paths, warning on `tools.mcp[]`/`memory.router`, a
+  `below_floor` gap on the pack floor). Fixed the CHANGELOG's
+  "see the entry below" cross-reference to "above" (the referenced
+  entry sits above it), noted in `docs/CLI.md` that a `+build` metadata
+  suffix is not a prerelease under this rule, and replaced this file's
+  own prior entry's bare aggregate ("215/215 passed") with what was
+  established. Added `tests/io/version-compare.test.ts` (direct unit
+  coverage for `parseProbedVersion`/`compareVersionFloor`) and, per
+  surface, a higher-version-prerelease-passes case plus git-describe-
+  and platform-suffix accepted-cost cases, closing the "reject every
+  prerelease regardless of the numeric comparison" mutant survivors at
+  `validate/checks.ts` and `probes/memory.ts`.
+  `npx vitest run tests/decisions-citations-resolve.test.ts` passed:
+  every re-pointed anchor above resolves to its quoted text.
+
+- 2026-09-09T05:05:00Z, task `db44ab46` (implementer): extended the
+  `hooks[]` prerelease-rejection rule (`parseProbedVersion`/
+  `compareVersionFloor`, `src/io/version-compare.ts`) to the five
+  previously prerelease-blind `min_version` floor checks named in
+  `docs/decisions/2026-09-08-preflight-floors.md`'s scope note:
+  `checkCli`/`checkMcpVersions` (`tools.cli[]`/`tools.mcp[]` in
+  `src/cli/doctor/index.ts`), `harness validate`'s `tools.cli[]` check
+  (`src/cli/validate/checks.ts`), `memory.router`'s version probe
+  (`src/probes/memory.ts`), and the pack-level floor
+  (`src/policy-packs/version-check.ts`); one commit per surface, a
+  dotted- and dotless-prerelease test per surface. Removed the now-dead
+  `compareVersions` alias and `compareNumericVersions` import from
+  `src/cli/doctor/index.ts` (no remaining call sites once both its
+  checks moved to the new pair) and the unused `SEMVER_RE` regex from
+  `src/cli/validate/checks.ts`. Added the ADR's "Update (task
+  `db44ab46`)" section recording the extension decision, resolved its
+  Reopen-criteria third bullet, and reworded the Boundary/consequence
+  prose to past tense (superseded, not deleted, for the audit trail).
+  This shifted line counts in `src/cli/doctor/index.ts` and
+  `src/cli/validate/checks.ts`, which broke anchored citations found by
+  `tests/decisions-citations-resolve.test.ts`. Re-pointed: the
+  `2026-08-27-ug-auto-mode-approval.md` citation into
+  `src/cli/doctor/index.ts` (previously line 1144, now 1149); this
+  file's own citation into the same source file (previously line 1402,
+  now 1407); `docs/okf/manifest-validation-scope.md`'s two anchors into
+  `src/cli/validate/checks.ts` (previously lines 1425 and 121, now 1430
+  and 120, plus four bare continuation ranges in the same doc nudged by
+  the same shift); and `docs/okf/policy-engine-producer-wiring.md`'s one
+  anchor into the same source file (previously line 307, now 312); the
+  ADR's own internal anchors (five, all into the functions this task
+  edited) re-pointed or rewritten in the same edit. Generalised
+  `docs/CLI.md`'s VERSION CAVEAT prerelease-handling and accepted-cost
+  sentences from `hooks[]`-only to all `min_version` floor checks
+  (single-line replace, no line-count shift). Re-verified and re-stamped
+  six docs listing a touched file as a source whose own prose does not
+  cite any changed line (`manifest-validation-scope.md`,
+  `policy-engine-producer-wiring.md`, `debug-verb-selection.md`,
+  `codex-adapter-parity-gaps.md`, `pause-vs-gate-kill-switch.md`,
+  `evidence-ledger-trust-boundary.md`); `gate-fail-posture-matrix.md`
+  mentions `checks.ts` in prose only, not in its `sources:` frontmatter,
+  so left alone. `npx vitest run tests/decisions-citations-resolve.test.ts`
+  passed: every re-pointed anchor above resolves to its quoted text.
+
 - 2026-09-08T10:16:41Z, task `1c4eb3ea` (implementer, round 3 of the
   batch-44 follow-up run, `.ai/runs/2026-09-08-open-pool-batch44`):
   merged `origin/master` (task `65952a0c`, `336eed3`) onto this
@@ -128,7 +224,7 @@
   `SessionStartPreflightSetupVersionFinding`
   (`src/cli/doctor/session-start-preflight-setup-version.ts:72#"layer_unresolvable"`,
   built directly by `doctor()` at
-  `src/cli/doctor/index.ts:1402#"layer_unresolvable"`), naming the
+  `src/cli/doctor/index.ts:1407#"layer_unresolvable"`), naming the
   layer path and the FIRST LINE of the parse error, counted in
   `warningCount`, rendered by `format.ts` as one warning line; round 1
   first shipped full silence here, round 1's own review found the

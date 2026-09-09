@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { compareNumericVersions, parseProbedVersion, compareVersionFloor } from "../../io/version-compare.js";
+import { parseProbedVersion, compareVersionFloor } from "../../io/version-compare.js";
 import { resolveGeneratedDir } from "../../io/generated-dir.js";
 import { inspectMemory } from "../../probes/memory.js";
 import {
@@ -262,8 +262,13 @@ function checkCli(manifest: Manifest, opts: DoctorOptions, npmBinDir: string | u
       });
       continue;
     }
-    const m = stdout.match(/(\d+(?:\.\d+){0,3})/);
-    if (!m || !m[1]) {
+    // parseProbedVersion + compareVersionFloor (not the plain
+    // compareVersions/compareNumericVersions pair this check used
+    // before task db44ab46): a release candidate of the required
+    // binary (e.g. "1.2.3-rc.1") must not satisfy an equal-numeric
+    // min_version floor. See docs/decisions/2026-09-08-preflight-floors.md.
+    const parsed = parseProbedVersion(stdout);
+    if (!parsed) {
       out.push({
         name: cli.name,
         status: "warn",
@@ -271,19 +276,19 @@ function checkCli(manifest: Manifest, opts: DoctorOptions, npmBinDir: string | u
       });
       continue;
     }
-    const actual = m[1];
-    const cmp = compareVersions(actual, cli.min_version);
+    const { version: actual, isPrerelease, token } = parsed;
+    const cmp = compareVersionFloor(actual, isPrerelease, cli.min_version);
     if (cmp < 0) {
       out.push({
         name: cli.name,
         status: "error",
-        message: `installed v${actual} < required ${cli.min_version}`,
+        message: `installed v${token} < required ${cli.min_version}`,
       });
     } else {
       out.push({
         name: cli.name,
         status: "ok",
-        message: `v${actual} ≥ ${cli.min_version}`,
+        message: `v${token} ≥ ${cli.min_version}`,
       });
     }
   }
@@ -332,8 +337,12 @@ function checkMcpVersions(manifest: Manifest, opts: DoctorOptions): McpVersionRe
       });
       continue;
     }
-    const m = stdout.match(/(\d+(?:\.\d+){0,3})/);
-    if (!m || !m[1]) {
+    // parseProbedVersion + compareVersionFloor (task db44ab46, extending
+    // the hooks[] prerelease rule to tools.mcp[]): a release candidate of
+    // the MCP server binary must not satisfy an equal-numeric min_version
+    // floor. See docs/decisions/2026-09-08-preflight-floors.md.
+    const parsed = parseProbedVersion(stdout);
+    if (!parsed) {
       out.push({
         name: mcp.name,
         status: "warn",
@@ -341,28 +350,24 @@ function checkMcpVersions(manifest: Manifest, opts: DoctorOptions): McpVersionRe
       });
       continue;
     }
-    const actual = m[1];
-    const cmp = compareVersions(actual, mcp.min_version);
+    const { version: actual, isPrerelease, token } = parsed;
+    const cmp = compareVersionFloor(actual, isPrerelease, mcp.min_version);
     if (cmp < 0) {
       out.push({
         name: mcp.name,
         status: "warn",
-        message: `outdated: installed v${actual} < required ${mcp.min_version}`,
+        message: `outdated: installed v${token} < required ${mcp.min_version}`,
       });
     } else {
       out.push({
         name: mcp.name,
         status: "ok",
-        message: `v${actual} ≥ ${mcp.min_version}`,
+        message: `v${token} ≥ ${mcp.min_version}`,
       });
     }
   }
   return out;
 }
-
-// `compareVersions` aliases the shared helper to avoid renaming every
-// existing call site in this file.
-const compareVersions = compareNumericVersions;
 
 /** One unresolved `tools.mcp[]` / `tools.cli[]` binary from `checkBinResolution`. */
 export interface BinResolutionIssue {
@@ -484,10 +489,10 @@ function checkHookVersion(
       message: `version probe failed for ${hook.version_command.join(" ")}`,
     };
   }
-  // parseProbedVersion (not the plain compareVersions/compareNumericVersions
-  // pair used by the cli[]/mcp[] checks below): a hook's own release
+  // parseProbedVersion + compareVersionFloor: a hook's own release
   // candidate (e.g. "0.6.0-rc.1") must not satisfy an equal-numeric
-  // min_version floor. See docs/decisions/2026-09-08-preflight-floors.md.
+  // min_version floor. Since task db44ab46 the cli[]/mcp[] checks below
+  // use the same pair. See docs/decisions/2026-09-08-preflight-floors.md.
   const parsed = parseProbedVersion(stdout);
   if (!parsed) {
     return {

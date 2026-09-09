@@ -9,6 +9,7 @@ import {
   resolveBuiltin,
 } from "../../policy-packs/index.js";
 import { expandHome } from "../../io/expand-home.js";
+import { parseProbedVersion, compareVersionFloor } from "../../io/version-compare.js";
 import {
   extractBashMatchBoundary,
   shippedBashMatchBoundaries,
@@ -102,22 +103,6 @@ function resolveOnPath(binary: string, pathEnv: string): string | null {
   return null;
 }
 
-const SEMVER_RE = /(\d+(?:\.\d+){0,3})/;
-
-function compareVersions(actual: string, required: string): number {
-  const a = actual.split(".").map((n) => Number.parseInt(n, 10));
-  const r = required.split(".").map((n) => Number.parseInt(n, 10));
-  const len = Math.max(a.length, r.length);
-  for (let i = 0; i < len; i++) {
-    const ai = a[i] ?? 0;
-    const ri = r[i] ?? 0;
-    if (Number.isNaN(ai) || Number.isNaN(ri)) return 0;
-    if (ai > ri) return 1;
-    if (ai < ri) return -1;
-  }
-  return 0;
-}
-
 function checkMcp(manifest: Manifest, home: string): Diagnostic[] {
   const diags: Diagnostic[] = [];
   manifest.tools.mcp.forEach((mcp) => {
@@ -170,8 +155,13 @@ function checkCli(manifest: Manifest, opts: CheckOptions): Diagnostic[] {
       });
       return;
     }
-    const match = stdout.match(SEMVER_RE);
-    if (!match || !match[1]) {
+    // parseProbedVersion + compareVersionFloor (task db44ab46, extending
+    // the hooks[] prerelease rule to validate's tools.cli[] check): a
+    // release candidate of the required binary (e.g. "1.2.3-rc.1") must
+    // not satisfy an equal-numeric min_version floor. See
+    // docs/decisions/2026-09-08-preflight-floors.md.
+    const parsed = parseProbedVersion(stdout);
+    if (!parsed) {
       diags.push({
         severity: "warning",
         path: `tools.cli[${cli.name}].min_version`,
@@ -179,11 +169,12 @@ function checkCli(manifest: Manifest, opts: CheckOptions): Diagnostic[] {
       });
       return;
     }
-    if (compareVersions(match[1], cli.min_version) < 0) {
+    const { version: actual, isPrerelease, token } = parsed;
+    if (compareVersionFloor(actual, isPrerelease, cli.min_version) < 0) {
       diags.push({
         severity: "error",
         path: `tools.cli[${cli.name}].min_version`,
-        message: `installed version ${match[1]} is less than required ${cli.min_version}`,
+        message: `installed version ${token} is less than required ${cli.min_version}`,
       });
     }
   });
@@ -1454,7 +1445,6 @@ export const __testables = {
   expandHome,
   isRootedPath,
   firstToken,
-  compareVersions,
   resolveOnPath,
   DEFAULT_RUNTIME_BUILTINS,
 };

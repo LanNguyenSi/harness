@@ -222,7 +222,12 @@ import * as path from "node:path";
 // Lowered to 114 (task ff34bde0): the check reported 114 clones against
 // the pin of 115 (measured on master, 2026-09-07), one entry of slack;
 // the pin follows the measured count so the next new clone is caught.
-const MAX_CLONES = 114;
+// Lowered to 113 (task db44ab46): deleting validate/checks.ts's dead
+// `compareVersions` (unreachable since the five surfaces switched to
+// the shared `compareVersionFloor`) removed its clone against the
+// sibling numeric comparators; the check reported 113, so the pin
+// follows.
+const MAX_CLONES = 113;
 
 // Sets process.exitCode instead of calling process.exit so the caller's
 // finally-cleanup runs on every path (process.exit skips stack unwinding).
