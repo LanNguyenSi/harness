@@ -262,8 +262,13 @@ function checkCli(manifest: Manifest, opts: DoctorOptions, npmBinDir: string | u
       });
       continue;
     }
-    const m = stdout.match(/(\d+(?:\.\d+){0,3})/);
-    if (!m || !m[1]) {
+    // parseProbedVersion + compareVersionFloor (not the plain
+    // compareVersions/compareNumericVersions pair this check used
+    // before task db44ab46): a release candidate of the required
+    // binary (e.g. "1.2.3-rc.1") must not satisfy an equal-numeric
+    // min_version floor. See docs/decisions/2026-09-08-preflight-floors.md.
+    const parsed = parseProbedVersion(stdout);
+    if (!parsed) {
       out.push({
         name: cli.name,
         status: "warn",
@@ -271,8 +276,8 @@ function checkCli(manifest: Manifest, opts: DoctorOptions, npmBinDir: string | u
       });
       continue;
     }
-    const actual = m[1];
-    const cmp = compareVersions(actual, cli.min_version);
+    const { version: actual, isPrerelease } = parsed;
+    const cmp = compareVersionFloor(actual, isPrerelease, cli.min_version);
     if (cmp < 0) {
       out.push({
         name: cli.name,

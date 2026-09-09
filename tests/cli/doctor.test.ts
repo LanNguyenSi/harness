@@ -3003,3 +3003,80 @@ describe("checkTemplatePolicyDrift — cross-profile floor (task adf037c1)", () 
     expect(drift("full")).toBe(0);
   });
 });
+
+describe("doctor - tools.cli[] min_version prerelease (task db44ab46)", () => {
+  // Task db44ab46 (docs/decisions/2026-09-08-preflight-floors.md, Reopen
+  // criteria) extends the hooks[]-only prerelease-rejection rule to
+  // tools.cli[]: a release candidate of the required binary must not
+  // satisfy an equal-numeric min_version floor, matching checkHookVersion.
+  function buildManifest(cliBlock: string): string {
+    return `version: 1
+hooks: []
+policies: []
+tools:
+  cli:
+${cliBlock}
+  builtin:
+    known: []
+`;
+  }
+
+  it("errors below_floor when the probed cli version is a dotted prerelease of min_version", async () => {
+    const home = makeFixture({
+      "harness.yaml": buildManifest(`    - name: fake
+      binary: /usr/bin/true
+      min_version: "1.2.3"`),
+    });
+    const report = await doctor({
+      configPath: path.join(home, "harness.yaml"),
+      homeOverride: home,
+      mcpProbe: new FakeProbe({}),
+      versionProbe: () => "true 1.2.3-rc.1\n",
+      pathEnv: "",
+      claudeMcpExec: NO_CLAUDE_CLI,
+      npmBinExec: STUB_NPM_BIN_EXEC_UNKNOWN,
+    });
+    const cli = report.tools.cli.find((c) => c.name === "fake");
+    expect(cli?.status).toBe("error");
+    expect(cli?.message).toBe("installed v1.2.3 < required 1.2.3");
+  });
+
+  it("errors below_floor when the probed cli version is a dotless prerelease of min_version", async () => {
+    const home = makeFixture({
+      "harness.yaml": buildManifest(`    - name: fake
+      binary: /usr/bin/true
+      min_version: "1.2.3"`),
+    });
+    const report = await doctor({
+      configPath: path.join(home, "harness.yaml"),
+      homeOverride: home,
+      mcpProbe: new FakeProbe({}),
+      versionProbe: () => "true 1.2.3-beta\n",
+      pathEnv: "",
+      claudeMcpExec: NO_CLAUDE_CLI,
+      npmBinExec: STUB_NPM_BIN_EXEC_UNKNOWN,
+    });
+    const cli = report.tools.cli.find((c) => c.name === "fake");
+    expect(cli?.status).toBe("error");
+    expect(cli?.message).toBe("installed v1.2.3 < required 1.2.3");
+  });
+
+  it("still passes a real release meeting the floor (no regression)", async () => {
+    const home = makeFixture({
+      "harness.yaml": buildManifest(`    - name: fake
+      binary: /usr/bin/true
+      min_version: "1.2.3"`),
+    });
+    const report = await doctor({
+      configPath: path.join(home, "harness.yaml"),
+      homeOverride: home,
+      mcpProbe: new FakeProbe({}),
+      versionProbe: () => "true 1.2.3\n",
+      pathEnv: "",
+      claudeMcpExec: NO_CLAUDE_CLI,
+      npmBinExec: STUB_NPM_BIN_EXEC_UNKNOWN,
+    });
+    const cli = report.tools.cli.find((c) => c.name === "fake");
+    expect(cli?.status).toBe("ok");
+  });
+});
