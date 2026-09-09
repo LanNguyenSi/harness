@@ -256,3 +256,140 @@ describe("resolvePaths/loadManifest via explainPolicy's cwd-derivation seam: a s
     expect(projection.session_start_preflight).toEqual({ setup: true, source: "project" });
   });
 });
+
+// Loader-level pin for the PR #522 migration note's CASING rule, LAYER
+// DIRECTORY half (task 6c8c1bae round 2, LOW finding): docs/CLI.md:155's
+// MIGRATION note says "A DIFFERENTLY-CASED layer directory resolves or
+// not according to the filesystem HARNESS_HOME itself lives on", this
+// is about the PROJECT LAYER DIRECTORY's own on-disk name differing in
+// case from the derived project name, a shape the producer-level CASING
+// fixture in tests/cli/session-start/preflight.test.ts never exercises
+// (that fixture varies the CWD's access-path casing, not the layer
+// directory's own spelling, and its own derived name always matches its
+// layer's spelling exactly). Here the cwd is a plain, non-symlinked
+// checkout with no casing games of its own, so `deriveProjectName`
+// returns the on-disk basename verbatim; only the LAYER DIRECTORY on
+// disk is spelled differently. `resolvePaths`' own lookup
+// (`fs.existsSync`, src/cli/loader.ts) is exactly as case-insensitive as
+// the filesystem HARNESS_HOME lives on, so this still resolves on a
+// case-insensitive home. Self-skips on a case-sensitive HARNESS_HOME
+// (CI's ext4), mirroring tests/runtime/git-context.test.ts's own
+// case-differing test's `ctx.skip` guard: on that filesystem the exact
+// on-disk-differing spelling would simply not be found, and this
+// assertion would not hold.
+describe("resolvePaths/loadManifest via explainPolicy's cwd-derivation seam: a differently-cased project layer DIRECTORY still resolves on a case-insensitive HARNESS_HOME (task 6c8c1bae round 2, PR #522 CASING rule, docs/CLI.md:155 layer-directory half)", () => {
+  let casingScratchRoot: string;
+  let casingHome: string;
+
+  const CASING_FIXTURE_MANIFEST_INPUT = {
+    version: 1,
+    hooks: [{ name: "risk-gate", event: "PreToolUse", command: "/usr/bin/true", blocking: false }],
+    policies: [
+      {
+        name: "preflight-before-casing-fixture",
+        description: "loader-level layer-directory-casing fixture (task 6c8c1bae round 2)",
+        trigger: { event: "PreToolUse", match: "Bash" },
+        requires: { ledger_tag: "preflight:${REPO}" },
+        hook: "risk-gate",
+        enforcement: "block",
+      },
+    ],
+  };
+
+  function writeCasingHomeManifest(home: string): void {
+    fs.writeFileSync(
+      path.join(home, "harness.yaml"),
+      JSON.stringify({ ...CASING_FIXTURE_MANIFEST_INPUT, session_start_preflight: { setup: false } }),
+    );
+  }
+
+  function writeCasingProjectLayer(home: string, projectDirName: string): void {
+    const dir = path.join(home, "projects", projectDirName);
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(
+      path.join(dir, "harness.overrides.yaml"),
+      ["session_start_preflight:", "  setup: true", ""].join("\n"),
+    );
+  }
+
+  function makeCasingRepo(root: string, name: string): string {
+    const dir = path.join(root, name);
+    fs.mkdirSync(path.join(dir, ".git"), { recursive: true });
+    fs.writeFileSync(path.join(dir, ".git", "HEAD"), "ref: refs/heads/main\n");
+    return dir;
+  }
+
+  function writeCasingEvent(dir: string): string {
+    const file = path.join(dir, "event.json");
+    fs.writeFileSync(
+      file,
+      JSON.stringify({
+        hook_event_name: "PreToolUse",
+        tool_name: "Bash",
+        tool_input: { command: "echo hi" },
+      }),
+    );
+    return file;
+  }
+
+  // Mirrors tests/runtime/git-context.test.ts's own case-differing
+  // test's guard (write a lowercase marker, stat the uppercase spelling,
+  // compare inodes).
+  function isCaseInsensitiveFilesystem(dir: string): boolean {
+    const markerLower = path.join(dir, "case-probe-marker");
+    fs.writeFileSync(markerLower, "x");
+    const markerUpper = path.join(dir, "CASE-PROBE-MARKER");
+    let caseInsensitive: boolean;
+    try {
+      caseInsensitive = fs.statSync(markerUpper).ino === fs.statSync(markerLower).ino;
+    } catch {
+      caseInsensitive = false;
+    }
+    fs.rmSync(markerLower, { force: true });
+    return caseInsensitive;
+  }
+
+  const casingSeams = {
+    now: new Date("2026-09-09T00:00:00.000Z"),
+    host: "h",
+    user: "u",
+    resolveGit: (): GitRepoContext => ({ repo: "r", branch: "main", sha: "" }),
+    cwdFallback: "/fallback",
+    env: {},
+    kubeContext: "",
+    kubeNamespace: "",
+  };
+
+  beforeEach(() => {
+    casingScratchRoot = fs.mkdtempSync(path.join(os.tmpdir(), "loader-casing-fixture-"));
+    casingHome = path.join(casingScratchRoot, "home");
+    fs.mkdirSync(casingHome, { recursive: true });
+    writeCasingHomeManifest(casingHome);
+  });
+
+  afterEach(() => {
+    fs.rmSync(casingScratchRoot, { recursive: true, force: true });
+  });
+
+  it("resolves a project layer directory whose on-disk name differs in case from the derived project name, on a case-insensitive HARNESS_HOME", (ctx) => {
+    if (!isCaseInsensitiveFilesystem(casingHome)) {
+      ctx.skip(
+        "this filesystem is case-sensitive, so a differently-cased layer directory does not resolve (matches tests/runtime/git-context.test.ts's own case-differing test's skip guard)",
+      );
+    }
+
+    const repoDir = makeCasingRepo(casingScratchRoot, "casing-layer-repo");
+    // Layer directory deliberately spelled in a DIFFERENT case than the
+    // derived project name ("casing-layer-repo", the repo's own,
+    // unvaried basename).
+    writeCasingProjectLayer(casingHome, "CASING-LAYER-REPO");
+    const eventFile = writeCasingEvent(casingScratchRoot);
+    const { projection } = explainPolicy("preflight-before-casing-fixture", {
+      ...casingSeams,
+      eventPath: eventFile,
+      homeDir: casingHome,
+      cwd: repoDir,
+    });
+    expect(projection.session_start_preflight).toEqual({ setup: true, source: "project" });
+  });
+});

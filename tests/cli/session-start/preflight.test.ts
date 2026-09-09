@@ -2052,52 +2052,111 @@ describe("runSessionStartPreflight: symlinked and differently-cased event.cwd (t
     expect(seenArgs).toEqual([{ cwd: linkRepo, timeoutMs: 60_000, setup: true }]);
   });
 
-  // CASING: this filesystem is case-insensitive-but-case-preserving
-  // (APFS default, macOS; this test's own `beforeEach`/CI runner sits on
-  // the same filesystem class as the rest of this suite, no separate
-  // skip guard is needed here the way tests/runtime/git-context.test.ts
-  // needs one for ITS OWN differently-cased assertion, because this test
-  // does not assert anything about the string `deriveProjectName`
-  // returns, only about whether a layer written under the on-disk
-  // basename's OWN casing is still found).
+  // Case-sensitivity probe (round 2, task 6c8c1bae, HIGH finding):
+  // mirrors tests/runtime/git-context.test.ts's own case-differing
+  // test's guard (write a lowercase marker, stat the uppercase spelling,
+  // compare inodes). Measured directly (reviewer round 1, real
+  // case-sensitive APFS volume via `hdiutil`): on a case-sensitive
+  // filesystem `findGitEntry` (src/runtime/git-context.ts) never finds
+  // `.git` under a miscased access path at all; it walks to the
+  // filesystem root and returns null, so `resolveGitContext(cwd).repo`
+  // is `""` and the producer short-circuits at src/cli/session-start/
+  // index.ts:519 ("cwd is not inside a git work tree") BEFORE any layer
+  // is read. That is a `result.wrote: false` (the whole preflight run
+  // aborts), not a `setup: false` on an otherwise-successful run: this
+  // test's assertions do not hold in that shape at all, so it self-skips
+  // rather than asserting a wrong failure mode.
+  function isCaseInsensitiveFilesystem(dir: string): boolean {
+    const markerLower = path.join(dir, "case-probe-marker");
+    fs.writeFileSync(markerLower, "x");
+    const markerUpper = path.join(dir, "CASE-PROBE-MARKER");
+    let caseInsensitive: boolean;
+    try {
+      caseInsensitive = fs.statSync(markerUpper).ino === fs.statSync(markerLower).ino;
+    } catch {
+      caseInsensitive = false;
+    }
+    fs.rmSync(markerLower, { force: true });
+    return caseInsensitive;
+  }
+
+  // CASING: a differently-cased `event.cwd` still scopes by the
+  // CORRECTLY-derived main-checkout name, not by `repo` (this hook's
+  // own checkout-basename variable). The cwd here is a LINKED WORKTREE
+  // of the main checkout, reached through an access path spelled in a
+  // different case than that worktree's own on-disk name, so two
+  // distinct mechanisms are exercised together: `findGitEntry`'s
+  // case-insensitive `.git` FILE lookup (the miscased access path still
+  // finds the real gitdir pointer), and `deriveProjectName`'s worktree
+  // `commondir` walk back to the MAIN checkout (independent of the
+  // worktree cwd's own casing, since the gitdir pointer's file CONTENT
+  // already carries the main checkout's correct, on-disk spelling).
   //
-  // Correction against this task's own brief (measured, not assumed;
-  // verified directly with node against dist/runtime/git-context.js and
-  // dist/cli/loader.js before writing this assertion): the resolved
-  // project NAME is NOT corrected to the real basename's spelling here.
-  // `deriveProjectName`'s `fs.realpathSync` step does not canonicalize
-  // case for a plain (non-symlink) path segment (this is the exact
-  // finding `tests/runtime/git-context.test.ts`'s own case-differing
-  // test pins); `deriveProjectName(miscasedPath)` returns the ACCESS
-  // path's own casing verbatim ("REAL-PROJECT-CASING"), not the on-disk
-  // "Real-Project-Casing". What actually resolves the layer on THIS
-  // filesystem is a second, independent case-insensitivity: the layer
-  // FILE lookup itself (`fs.existsSync`/`fs.readFileSync` in
-  // src/cli/loader.ts) is exactly as case-insensitive as the filesystem
-  // HARNESS_HOME lives on, so a project directory physically named
-  // "Real-Project-Casing" is still found by a path string spelled
-  // "REAL-PROJECT-CASING". On a case-SENSITIVE HARNESS_HOME (untested in
-  // CI; the documented, environment-dependent half, see
-  // tests/runtime/git-context.test.ts's own case-differing test and
-  // CHANGELOG.md/docs/CLI.md's CASING note) that exact-spelling lookup
-  // would miss the "Real-Project-Casing" layer entirely and this
-  // assertion would need `setup: false`, not `true`.
-  it("CASING: scopes by a project layer named after the real basename even from a differently-cased event.cwd, on a case-insensitive HARNESS_HOME (PR #522 CASING rule; case-sensitive half is documented, not tested here)", async () => {
+  // Round 2 (task 6c8c1bae, MEDIUM finding): the original single-layer
+  // fixture did not discriminate the P2 mutant (`opts.project ??
+  // repo`, dropping derivation) because `repo` (the checkout basename,
+  // access-path spelling) and the correctly-derived name were the
+  // IDENTICAL string in that non-worktree shape, both folding onto the
+  // SAME on-disk layer on a case-insensitive HARNESS_HOME. The linked
+  // worktree here makes `repo` (this WORKTREE checkout's own basename)
+  // and the derived name (the MAIN checkout's basename, via
+  // `commondir`) genuinely DIFFERENT values: a DECOY layer keyed on
+  // `repo`'s value carries the opposite `setup`, so a producer that
+  // stopped deriving would read the decoy and fail this assertion.
+  //
+  // Corrects a premise in this task's own original brief (measured, not
+  // assumed; verified directly with node against
+  // dist/runtime/git-context.js and dist/cli/loader.js before writing
+  // this assertion): `deriveProjectName`'s `fs.realpathSync` step does
+  // not canonicalize case for a plain (non-symlink) path segment (the
+  // exact finding tests/runtime/git-context.test.ts's own case-differing
+  // test pins); what resolves the MAIN checkout's name here is the
+  // `commondir` file's own (correctly-cased) content, not case-folding.
+  it("CASING: scopes by the correctly-derived main-checkout name from a differently-cased worktree event.cwd, discriminating a producer that stops deriving (PR #522 CASING rule; case-sensitive half self-skips)", async (ctx) => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "harness-sspf-casing-"));
     cleanups.push(() => fs.rmSync(root, { recursive: true, force: true }));
+
+    if (!isCaseInsensitiveFilesystem(root)) {
+      ctx.skip(
+        "this filesystem is case-sensitive, so a differently-cased access path does not find the real .git entry at all (findGitEntry never resolves; matches tests/runtime/git-context.test.ts's own case-differing test's skip guard)",
+      );
+    }
+
+    // Main checkout: the real, on-disk-named repository the derived
+    // project name must resolve to, with a private per-worktree gitdir
+    // under `.git/worktrees/wt` (matching `git worktree add`'s own
+    // layout).
     const realRepo = path.join(root, "Real-Project-Casing");
-    fs.mkdirSync(path.join(realRepo, ".git"), { recursive: true });
+    const wtGitDir = path.join(realRepo, ".git", "worktrees", "wt");
+    fs.mkdirSync(wtGitDir, { recursive: true });
     fs.writeFileSync(path.join(realRepo, ".git", "HEAD"), "ref: refs/heads/main\n");
-    const miscasedRepo = path.join(root, "REAL-PROJECT-CASING");
+    fs.writeFileSync(path.join(wtGitDir, "HEAD"), "ref: refs/heads/main\n");
+    fs.writeFileSync(path.join(wtGitDir, "commondir"), "../..\n");
+
+    // A linked worktree of that repository: `repo` names THIS checkout
+    // directory, but `deriveProjectName` follows `wtGitDir`'s
+    // `commondir` file back to the main checkout above.
+    const worktreeRepo = path.join(root, "Worktree-Casing");
+    fs.mkdirSync(worktreeRepo, { recursive: true });
+    fs.writeFileSync(path.join(worktreeRepo, ".git"), `gitdir: ${wtGitDir}\n`);
+    // The event.cwd: the worktree's own directory, reached through a
+    // differently-cased access path (PR #522's CASING rule).
+    const miscasedWorktreeRepo = path.join(root, "WORKTREE-CASING");
 
     const home = fs.mkdtempSync(path.join(os.tmpdir(), "harness-sspf-casing-home-"));
     cleanups.push(() => fs.rmSync(home, { recursive: true, force: true }));
     writeBaseManifest(home, false);
+    // Correct layer: keyed on the derived name (the main checkout's
+    // basename).
     writeProjectLayer(home, "Real-Project-Casing", true);
+    // Decoy layer: keyed on `repo`'s own value (this worktree
+    // checkout's access-path spelling). Only a producer that stopped
+    // deriving (P2) would read this one.
+    writeProjectLayer(home, "WORKTREE-CASING", false);
 
     const seenArgs: Array<{ cwd: string; timeoutMs: number; setup: boolean }> = [];
     const result = await runSessionStartPreflight({
-      stdin: streamFrom(JSON.stringify({ session_id: "s", cwd: miscasedRepo })),
+      stdin: streamFrom(JSON.stringify({ session_id: "s", cwd: miscasedWorktreeRepo })),
       stderr: captureStream().stream,
       homeDir: home,
       runPreflight: async (cwd, timeoutMs, setup) => {
@@ -2107,6 +2166,6 @@ describe("runSessionStartPreflight: symlinked and differently-cased event.cwd (t
       writeLedger: async () => ({ ok: true }),
     });
     expect(result.wrote).toBe(true);
-    expect(seenArgs).toEqual([{ cwd: miscasedRepo, timeoutMs: 60_000, setup: true }]);
+    expect(seenArgs).toEqual([{ cwd: miscasedWorktreeRepo, timeoutMs: 60_000, setup: true }]);
   });
 });
