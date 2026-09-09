@@ -37,6 +37,7 @@ import {
   type RunPreflightResult,
 } from "../../../src/cli/session-start/index.js";
 import { parseManifest } from "../../../src/schema/index.js";
+import { deriveProjectName } from "../../../src/runtime/git-context.js";
 
 let cleanups: Array<() => void> = [];
 afterEach(() => {
@@ -1600,6 +1601,45 @@ describe("runSessionStartPreflight: per-repo scoping via cwd-derived project nam
     // makeLinkedWorktreeFixture's fixed name), not the main checkout it
     // belongs to ("wt-scope-name-repo"); it must not be picked up.
     writeProjectLayer(home, path.basename(worktreeCwd), false);
+
+    const seenArgs: Array<{ cwd: string; timeoutMs: number; setup: boolean }> = [];
+    const result = await runSessionStartPreflight({
+      stdin: streamFrom(JSON.stringify({ session_id: "s", cwd: worktreeCwd })),
+      stderr: captureStream().stream,
+      homeDir: home,
+      runPreflight: async (cwd, timeoutMs, setup) => {
+        seenArgs.push({ cwd, timeoutMs, setup });
+        return { ok: true, json: { ready: true, confidence: 0.9, checks: [] } };
+      },
+      writeLedger: async () => ({ ok: true }),
+    });
+    expect(result.wrote).toBe(true);
+    expect(seenArgs).toEqual([{ cwd: worktreeCwd, timeoutMs: 60_000, setup: true }]);
+  });
+
+  // Task f1eb1c5c, round 2 review, MEDIUM (tests): nothing pinned that
+  // this producer's `fallback: repo` argument to `resolveScopedProjectName`
+  // (src/runtime/git-context.ts) is genuinely reachable, as opposed to
+  // `deriveProjectName(cwd)` always winning first in practice. This test
+  // forces `deriveProjectName` to return null (the main checkout's OWN
+  // basename, "evil\\name", contains a backslash, so
+  // `isValidProjectName` rejects it, see git-context.ts) while the
+  // linked checkout's own basename ("linked-worktree-checkout",
+  // `makeLinkedWorktreeFixture`'s fixed name) stays a VALID project
+  // name; `repo` (this producer's already-resolved
+  // `resolveGitContext(cwd).repo`) is that checkout basename, computed
+  // independently of `deriveProjectName`. Observable output: the
+  // resolved `setup` argv value the fake `runPreflight` actually
+  // received, which can only reflect the checkout-basename-scoped
+  // layer if the `?? repo` fallback term actually fired.
+  it("falls back to the checkout's own basename for scoping when the derived main-checkout name is invalid (task f1eb1c5c divergence pin)", async () => {
+    const { worktreeCwd } = makeLinkedWorktreeFixture("evil\\name");
+    expect(deriveProjectName(worktreeCwd)).toBeNull();
+    const checkoutBasename = path.basename(worktreeCwd);
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "harness-sspf-projhome-"));
+    cleanups.push(() => fs.rmSync(home, { recursive: true, force: true }));
+    writeBaseManifest(home, false);
+    writeProjectLayer(home, checkoutBasename, true);
 
     const seenArgs: Array<{ cwd: string; timeoutMs: number; setup: boolean }> = [];
     const result = await runSessionStartPreflight({

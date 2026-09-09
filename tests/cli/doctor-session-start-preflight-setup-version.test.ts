@@ -1,7 +1,21 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+// Task f1eb1c5c, round 2 divergence pin (below): `existsSync` is wrapped
+// in a `vi.fn` that calls straight through to the real implementation,
+// so every OTHER test in this file (and doctor()'s own production code)
+// behaves identically; only the one test that spies on `fs.existsSync`'s
+// call history is affected. A plain `vi.spyOn(fs, "existsSync")` fails
+// under ESM ("Module namespace is not configurable"), hence the
+// `vi.mock` here instead.
+vi.mock("node:fs", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs")>();
+  const existsSync = vi.fn(actual.existsSync);
+  return { ...actual, existsSync, default: { ...actual, existsSync } };
+});
+
 import { defaultVersionProbe } from "../../src/cli/index.js";
 import { doctor } from "../../src/cli/doctor/index.js";
 import { format } from "../../src/cli/doctor/format.js";
@@ -731,6 +745,89 @@ describe("doctor: session_start_preflight per-repo effective value (task c88461c
       npmBinExec: STUB_NPM_BIN_EXEC_UNKNOWN,
     });
     expect(report.sessionStartPreflightSetupVersion).toBeUndefined();
+  });
+
+  // Task f1eb1c5c, round 2 review, MEDIUM (tests): nothing pinned this
+  // surface's OWN `fallback: null` argument to `resolveScopedProjectName`
+  // (src/runtime/git-context.ts) as opposed to the producer's `fallback:
+  // repo`; a fixture where `deriveProjectName` returns null exercises
+  // that divergence. A linked-worktree-shaped checkout whose main
+  // checkout is named "evil\\name" (a backslash makes that basename
+  // fail `isValidProjectName`, see git-context.ts) makes
+  // `deriveProjectName(cwd)` return null even though the checkout
+  // directory's OWN basename ("doctor-divergence-checkout") stays a
+  // valid project name a layer could legitimately be written under.
+  // Doctor's `fallback: null` means no name is ever attempted here, so
+  // a matching `<home>/projects/doctor-divergence-checkout/...` layer
+  // must NOT be read: observable via `projectName: null` on the
+  // finding (D-021b's carried identity) and the absence of format.ts's
+  // `(project: X)` suffix, same observables the sibling "negative
+  // control" test above already asserts for a genuinely absent layer.
+  it("does NOT resolve a project layer when the cwd's derived name is invalidated (task f1eb1c5c divergence pin)", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "harness-doctor-ssp-divergence-"));
+    cleanups.push(() => fs.rmSync(root, { recursive: true, force: true }));
+    const mainRepoName = "evil\\name";
+    const mainWorktreeDir = path.join(root, mainRepoName, ".git", "worktrees", "wt1");
+    fs.mkdirSync(mainWorktreeDir, { recursive: true });
+    fs.writeFileSync(path.join(mainWorktreeDir, "HEAD"), "ref: refs/heads/main\n");
+    fs.writeFileSync(path.join(mainWorktreeDir, "commondir"), "../..\n");
+    const checkoutBasename = "doctor-divergence-checkout";
+    const repo = path.join(root, checkoutBasename);
+    fs.mkdirSync(repo, { recursive: true });
+    fs.writeFileSync(path.join(repo, ".git"), `gitdir: ${mainWorktreeDir}\n`);
+
+    const home = makeFixture({
+      "harness.yaml": buildManifest("session_start_preflight:\n  setup: true"),
+    });
+    // A layer DOES exist under the checkout's own (valid) basename;
+    // doctor's fallback:null must never attempt that name at all.
+    writeProjectLayer(home, checkoutBasename, false);
+
+    // Report-shaped observable: no project layer decided the result.
+    // On its own this is NOT sufficient to kill every fallback drift
+    // (a drifted fallback with no MATCHING on-disk layer would produce
+    // the identical `projectName: null` report, since doctor only
+    // names a project when `resolvePaths` actually resolved a layer
+    // FILE for the attempted name); the `existsSync` spy below is the
+    // discriminator that does not depend on guessing the drifted
+    // string. `resolvePaths` (src/cli/loader.ts) calls
+    // `fs.existsSync(<home>/projects/<name>/harness.overrides.yaml)`
+    // for ANY truthy `opts.project`, so ANY fallback change from
+    // `null` to a non-null value shows up here as an extra call under
+    // `<home>/projects/`, regardless of which string it is.
+    const existsSyncMock = fs.existsSync as unknown as {
+      mock: { calls: unknown[][] };
+      mockClear: () => void;
+    };
+    existsSyncMock.mockClear();
+    const report = await doctor({
+      configPath: path.join(home, "harness.yaml"),
+      homeDir: home,
+      homeOverride: home,
+      cwd: repo,
+      versionProbe: (cmd) => (cmd[0] === "preflight" ? "preflight 0.5.0\n" : null),
+      pathEnv: "",
+      npmBinExec: STUB_NPM_BIN_EXEC_UNKNOWN,
+    });
+    const projectsDirCalls = existsSyncMock.mock.calls.filter(([p]) =>
+      String(p).includes(path.join(home, "projects") + path.sep),
+    );
+    expect(
+      projectsDirCalls,
+      "task f1eb1c5c: doctor's fallback:null must never cause resolvePaths to probe " +
+        "ANY path under <home>/projects/ for this cwd; a fallback drifted to a non-null " +
+        "value (e.g. the round-2 review's own \"drifted-fallback\" example) makes this " +
+        "list non-empty even when no on-disk layer matches the drifted name",
+    ).toEqual([]);
+    expect(report.sessionStartPreflightSetupVersion).toEqual({
+      kind: "below_floor",
+      actualVersion: "0.5.0",
+      requiredVersion: "0.6.0",
+      message: expect.stringContaining("v0.5.0 < 0.6.0"),
+      projectName: null,
+    });
+    const text = format(report);
+    expect(text).not.toContain("(project:");
   });
 });
 

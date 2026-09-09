@@ -224,13 +224,13 @@
   `SessionStartPreflightSetupVersionFinding`
   (`src/cli/doctor/session-start-preflight-setup-version.ts:72#"layer_unresolvable"`,
   built directly by `doctor()` at
-  `src/cli/doctor/index.ts:1407#"layer_unresolvable"`), naming the
+  `src/cli/doctor/index.ts:1410#"layer_unresolvable"`), naming the
   layer path and the FIRST LINE of the parse error, counted in
   `warningCount`, rendered by `format.ts` as one warning line; round 1
   first shipped full silence here, round 1's own review found the
   silence itself was the residual gap the task's goal named ("no
   diagnostic anywhere"), closed in round 2. The producer's own stderr
-  diagnostic (`src/cli/session-start/index.ts:668#"the project-scoped"`)
+  diagnostic (`src/cli/session-start/index.ts:672#"the project-scoped"`)
   no longer blames "the project layer" for a
   base- or machine-layer parse failure (round 1's lead-in did); both
   this diagnostic and the new `doctor` finding now collapse a

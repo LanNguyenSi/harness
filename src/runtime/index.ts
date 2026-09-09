@@ -41,7 +41,9 @@ export {
   resolveGitContext,
   deriveProjectName,
   isValidProjectName,
+  resolveScopedProjectName,
   type GitRepoContext,
+  type ResolveScopedProjectNameOptions,
 } from "./git-context.js";
 export {
   buildActionEnvelope,
