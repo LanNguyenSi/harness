@@ -154,4 +154,37 @@ describe("checkPolicyPackVersions - min_version prerelease (task db44ab46)", () 
     ]);
     expect(checkPolicyPackVersions(m, probe("understanding-gate 0.3.1"))).toEqual([]);
   });
+
+  it("passes a higher-version prerelease with no gap (numeric comparison is not a tie)", () => {
+    const m = manifestWith([
+      { name: "understanding-before-execution", min_version: "0.3.1" },
+    ]);
+    expect(checkPolicyPackVersions(m, probe("understanding-gate 0.3.2-rc.1"))).toEqual([]);
+  });
+
+  it("flags below_floor on a git-describe suffix at an equal-numeric floor (accepted cost)", () => {
+    const m = manifestWith([
+      { name: "understanding-before-execution", min_version: "0.3.1" },
+    ]);
+    const gaps = checkPolicyPackVersions(m, probe("understanding-gate 0.3.1-4-gabc123"));
+    expect(gaps).toHaveLength(1);
+    expect(gaps[0]).toMatchObject({
+      declaredMinVersion: "0.3.1",
+      actualVersion: "0.3.1",
+      kind: "below_floor",
+    });
+  });
+
+  it("flags below_floor on a platform suffix at an equal-numeric floor (accepted cost)", () => {
+    const m = manifestWith([
+      { name: "understanding-before-execution", min_version: "0.3.1" },
+    ]);
+    const gaps = checkPolicyPackVersions(m, probe("understanding-gate 0.3.1-linux-x64"));
+    expect(gaps).toHaveLength(1);
+    expect(gaps[0]).toMatchObject({
+      declaredMinVersion: "0.3.1",
+      actualVersion: "0.3.1",
+      kind: "below_floor",
+    });
+  });
 });

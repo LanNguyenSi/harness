@@ -3079,6 +3079,84 @@ ${cliBlock}
     const cli = report.tools.cli.find((c) => c.name === "fake");
     expect(cli?.status).toBe("ok");
   });
+
+  it("passes a higher-version prerelease with no diagnostic (numeric comparison is not a tie)", async () => {
+    const home = makeFixture({
+      "harness.yaml": buildManifest(`    - name: fake
+      binary: /usr/bin/true
+      min_version: "1.2.3"`),
+    });
+    const report = await doctor({
+      configPath: path.join(home, "harness.yaml"),
+      homeOverride: home,
+      mcpProbe: new FakeProbe({}),
+      versionProbe: () => "true 1.2.4-rc.1\n",
+      pathEnv: "",
+      claudeMcpExec: NO_CLAUDE_CLI,
+      npmBinExec: STUB_NPM_BIN_EXEC_UNKNOWN,
+    });
+    const cli = report.tools.cli.find((c) => c.name === "fake");
+    expect(cli?.status).toBe("ok");
+    expect(cli?.message).toBe("v1.2.4 ≥ 1.2.3");
+  });
+
+  it("reads below_floor on a git-describe suffix at an equal-numeric floor (accepted cost)", async () => {
+    const home = makeFixture({
+      "harness.yaml": buildManifest(`    - name: fake
+      binary: /usr/bin/true
+      min_version: "1.2.3"`),
+    });
+    const report = await doctor({
+      configPath: path.join(home, "harness.yaml"),
+      homeOverride: home,
+      mcpProbe: new FakeProbe({}),
+      versionProbe: () => "true 1.2.3-4-gabc123\n",
+      pathEnv: "",
+      claudeMcpExec: NO_CLAUDE_CLI,
+      npmBinExec: STUB_NPM_BIN_EXEC_UNKNOWN,
+    });
+    const cli = report.tools.cli.find((c) => c.name === "fake");
+    expect(cli?.status).toBe("error");
+    expect(cli?.message).toBe("installed v1.2.3-4-gabc123 < required 1.2.3");
+  });
+
+  it("reads below_floor on a platform suffix at an equal-numeric floor (accepted cost)", async () => {
+    const home = makeFixture({
+      "harness.yaml": buildManifest(`    - name: fake
+      binary: /usr/bin/true
+      min_version: "1.2.3"`),
+    });
+    const report = await doctor({
+      configPath: path.join(home, "harness.yaml"),
+      homeOverride: home,
+      mcpProbe: new FakeProbe({}),
+      versionProbe: () => "true 1.2.3-linux-x64\n",
+      pathEnv: "",
+      claudeMcpExec: NO_CLAUDE_CLI,
+      npmBinExec: STUB_NPM_BIN_EXEC_UNKNOWN,
+    });
+    const cli = report.tools.cli.find((c) => c.name === "fake");
+    expect(cli?.status).toBe("error");
+    expect(cli?.message).toBe("installed v1.2.3-linux-x64 < required 1.2.3");
+  });
+
+  it("flips errorCount non-zero for a prerelease tools.cli[] entry (report-level assertion)", async () => {
+    const home = makeFixture({
+      "harness.yaml": buildManifest(`    - name: fake
+      binary: /usr/bin/true
+      min_version: "1.2.3"`),
+    });
+    const report = await doctor({
+      configPath: path.join(home, "harness.yaml"),
+      homeOverride: home,
+      mcpProbe: new FakeProbe({}),
+      versionProbe: () => "true 1.2.3-rc.1\n",
+      pathEnv: "",
+      claudeMcpExec: NO_CLAUDE_CLI,
+      npmBinExec: STUB_NPM_BIN_EXEC_UNKNOWN,
+    });
+    expect(report.errorCount).toBeGreaterThan(0);
+  });
 });
 
 describe("doctor - tools.mcp[] min_version prerelease (task db44ab46)", () => {
@@ -3154,6 +3232,74 @@ ${mcpBlock}
     });
     expect(report.tools.mcpVersions).toEqual([
       { name: "fake-mcp", status: "ok", message: "v1.2.3 ≥ 1.2.3" },
+    ]);
+  });
+
+  it("passes a higher-version prerelease with no diagnostic (numeric comparison is not a tie)", async () => {
+    const home = makeFixture({
+      "harness.yaml": buildManifest(`    - name: fake-mcp
+      command: [my-mcp-bin]
+      min_version: "1.2.3"`),
+    });
+    const report = await doctor({
+      configPath: path.join(home, "harness.yaml"),
+      homeOverride: home,
+      mcpProbe: new FakeProbe({ "fake-mcp": { kind: "missing-verb" } }),
+      versionProbe: () => "my-mcp-bin v1.2.4-rc.1\n",
+      pathEnv: "",
+      claudeMcpExec: NO_CLAUDE_CLI,
+      npmBinExec: STUB_NPM_BIN_EXEC_UNKNOWN,
+    });
+    expect(report.tools.mcpVersions).toEqual([
+      { name: "fake-mcp", status: "ok", message: "v1.2.4 ≥ 1.2.3" },
+    ]);
+  });
+
+  it("warns below_floor on a git-describe suffix at an equal-numeric floor (accepted cost)", async () => {
+    const home = makeFixture({
+      "harness.yaml": buildManifest(`    - name: fake-mcp
+      command: [my-mcp-bin]
+      min_version: "1.2.3"`),
+    });
+    const report = await doctor({
+      configPath: path.join(home, "harness.yaml"),
+      homeOverride: home,
+      mcpProbe: new FakeProbe({ "fake-mcp": { kind: "missing-verb" } }),
+      versionProbe: () => "my-mcp-bin v1.2.3-4-gabc123\n",
+      pathEnv: "",
+      claudeMcpExec: NO_CLAUDE_CLI,
+      npmBinExec: STUB_NPM_BIN_EXEC_UNKNOWN,
+    });
+    expect(report.tools.mcpVersions).toEqual([
+      {
+        name: "fake-mcp",
+        status: "warn",
+        message: "outdated: installed v1.2.3-4-gabc123 < required 1.2.3",
+      },
+    ]);
+  });
+
+  it("warns below_floor on a platform suffix at an equal-numeric floor (accepted cost)", async () => {
+    const home = makeFixture({
+      "harness.yaml": buildManifest(`    - name: fake-mcp
+      command: [my-mcp-bin]
+      min_version: "1.2.3"`),
+    });
+    const report = await doctor({
+      configPath: path.join(home, "harness.yaml"),
+      homeOverride: home,
+      mcpProbe: new FakeProbe({ "fake-mcp": { kind: "missing-verb" } }),
+      versionProbe: () => "my-mcp-bin v1.2.3-linux-x64\n",
+      pathEnv: "",
+      claudeMcpExec: NO_CLAUDE_CLI,
+      npmBinExec: STUB_NPM_BIN_EXEC_UNKNOWN,
+    });
+    expect(report.tools.mcpVersions).toEqual([
+      {
+        name: "fake-mcp",
+        status: "warn",
+        message: "outdated: installed v1.2.3-linux-x64 < required 1.2.3",
+      },
     ]);
   });
 });

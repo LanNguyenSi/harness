@@ -2517,4 +2517,20 @@ policies: []
   it("still passes a real release meeting the floor (no regression)", () => {
     expect(diagnosticFor("fake 1.2.3")).toBeUndefined();
   });
+
+  it("passes a higher-version prerelease with no diagnostic (numeric comparison is not a tie)", () => {
+    expect(diagnosticFor("fake 1.2.4-rc.1")).toBeUndefined();
+  });
+
+  it("errors below_floor on a git-describe suffix at an equal-numeric floor (accepted cost)", () => {
+    const hit = diagnosticFor("fake 1.2.3-4-gabc123");
+    expect(hit?.severity).toBe("error");
+    expect(hit?.message).toBe("installed version 1.2.3-4-gabc123 is less than required 1.2.3");
+  });
+
+  it("errors below_floor on a platform suffix at an equal-numeric floor (accepted cost)", () => {
+    const hit = diagnosticFor("fake 1.2.3-linux-x64");
+    expect(hit?.severity).toBe("error");
+    expect(hit?.message).toBe("installed version 1.2.3-linux-x64 is less than required 1.2.3");
+  });
 });

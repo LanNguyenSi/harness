@@ -249,4 +249,25 @@ describe("inspectMemory: memory.router min_version prerelease (task db44ab46)", 
       message: "v1.2.3 ≥ 1.2.3",
     });
   });
+
+  it("passes a higher-version prerelease with no diagnostic (numeric comparison is not a tie)", () => {
+    expect(routerVersionFor("memory-router 1.2.4-rc.1\n")).toEqual({
+      status: "ok",
+      message: "v1.2.4 ≥ 1.2.3",
+    });
+  });
+
+  it("warns below_floor on a git-describe suffix at an equal-numeric floor (accepted cost)", () => {
+    expect(routerVersionFor("memory-router 1.2.3-4-gabc123\n")).toEqual({
+      status: "warn",
+      message: "outdated: installed v1.2.3-4-gabc123 < required 1.2.3",
+    });
+  });
+
+  it("warns below_floor on a platform suffix at an equal-numeric floor (accepted cost)", () => {
+    expect(routerVersionFor("memory-router 1.2.3-linux-x64\n")).toEqual({
+      status: "warn",
+      message: "outdated: installed v1.2.3-linux-x64 < required 1.2.3",
+    });
+  });
 });
