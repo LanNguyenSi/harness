@@ -732,6 +732,61 @@ describe("doctor: session_start_preflight per-repo effective value (task c88461c
     });
     expect(report.sessionStartPreflightSetupVersion).toBeUndefined();
   });
+
+  // Task f1eb1c5c, round 2 review, MEDIUM (tests): nothing pinned this
+  // surface's OWN `fallback: null` argument to `resolveScopedProjectName`
+  // (src/runtime/git-context.ts) as opposed to the producer's `fallback:
+  // repo`; a fixture where `deriveProjectName` returns null exercises
+  // that divergence. A linked-worktree-shaped checkout whose main
+  // checkout is named "evil\\name" (a backslash makes that basename
+  // fail `isValidProjectName`, see git-context.ts) makes
+  // `deriveProjectName(cwd)` return null even though the checkout
+  // directory's OWN basename ("doctor-divergence-checkout") stays a
+  // valid project name a layer could legitimately be written under.
+  // Doctor's `fallback: null` means no name is ever attempted here, so
+  // a matching `<home>/projects/doctor-divergence-checkout/...` layer
+  // must NOT be read: observable via `projectName: null` on the
+  // finding (D-021b's carried identity) and the absence of format.ts's
+  // `(project: X)` suffix, same observables the sibling "negative
+  // control" test above already asserts for a genuinely absent layer.
+  it("does NOT resolve a project layer when the cwd's derived name is invalidated (task f1eb1c5c divergence pin)", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "harness-doctor-ssp-divergence-"));
+    cleanups.push(() => fs.rmSync(root, { recursive: true, force: true }));
+    const mainRepoName = "evil\\name";
+    const mainWorktreeDir = path.join(root, mainRepoName, ".git", "worktrees", "wt1");
+    fs.mkdirSync(mainWorktreeDir, { recursive: true });
+    fs.writeFileSync(path.join(mainWorktreeDir, "HEAD"), "ref: refs/heads/main\n");
+    fs.writeFileSync(path.join(mainWorktreeDir, "commondir"), "../..\n");
+    const checkoutBasename = "doctor-divergence-checkout";
+    const repo = path.join(root, checkoutBasename);
+    fs.mkdirSync(repo, { recursive: true });
+    fs.writeFileSync(path.join(repo, ".git"), `gitdir: ${mainWorktreeDir}\n`);
+
+    const home = makeFixture({
+      "harness.yaml": buildManifest("session_start_preflight:\n  setup: true"),
+    });
+    // A layer DOES exist under the checkout's own (valid) basename;
+    // doctor's fallback:null must never attempt that name at all.
+    writeProjectLayer(home, checkoutBasename, false);
+    const report = await doctor({
+      configPath: path.join(home, "harness.yaml"),
+      homeDir: home,
+      homeOverride: home,
+      cwd: repo,
+      versionProbe: (cmd) => (cmd[0] === "preflight" ? "preflight 0.5.0\n" : null),
+      pathEnv: "",
+      npmBinExec: STUB_NPM_BIN_EXEC_UNKNOWN,
+    });
+    expect(report.sessionStartPreflightSetupVersion).toEqual({
+      kind: "below_floor",
+      actualVersion: "0.5.0",
+      requiredVersion: "0.6.0",
+      message: expect.stringContaining("v0.5.0 < 0.6.0"),
+      projectName: null,
+    });
+    const text = format(report);
+    expect(text).not.toContain("(project:");
+  });
 });
 
 // Review round 3, decision D-028: the derived project layer this task

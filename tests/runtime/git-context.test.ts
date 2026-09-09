@@ -724,17 +724,23 @@ describe("deriveProjectName: case-differing path on a case-insensitive filesyste
 // pin that agreement (shapes a/b) and that divergence (shape c) at the
 // shared helper directly.
 describe("resolveScopedProjectName (task f1eb1c5c)", () => {
-  it("an explicit project wins outright, without ever calling deriveProjectName", () => {
-    // A `cwd` that is not even a string would make `deriveProjectName`
-    // return `null` (see its own guard); passing one here that is
-    // simply outside any git work tree is enough to prove the explicit
-    // `project` short-circuits before the cwd is consulted at all.
-    const outside = tmpDir();
+  // Round 1 used a cwd OUTSIDE any git work tree here, where
+  // `deriveProjectName` returns null anyway (see shape c below); an
+  // explicit `project` winning over a null derivation proves nothing
+  // about the short-circuit itself (a buggy `deriveProjectName(cwd) ??
+  // opts.project ?? fallback` ordering would pass identically). This
+  // now uses a cwd INSIDE a real repo whose OWN derived name
+  // ("derivable-project") differs from the explicit `project`
+  // ("explicit-name"), so only an actual short-circuit before
+  // `deriveProjectName` runs can produce "explicit-name" here.
+  it("an explicit project wins outright over a genuinely derivable, DIFFERENT name from cwd", () => {
+    const repo = makeRepo(tmpDir(), "derivable-project", "ref: refs/heads/main");
+    expect(deriveProjectName(repo)).toBe("derivable-project");
     expect(
-      resolveScopedProjectName({ project: "explicit-name", cwd: outside, fallback: null }),
+      resolveScopedProjectName({ project: "explicit-name", cwd: repo, fallback: null }),
     ).toBe("explicit-name");
     expect(
-      resolveScopedProjectName({ project: "explicit-name", cwd: outside, fallback: "repo" }),
+      resolveScopedProjectName({ project: "explicit-name", cwd: repo, fallback: "repo" }),
     ).toBe("explicit-name");
   });
 
@@ -790,19 +796,44 @@ describe("resolveScopedProjectName (task f1eb1c5c)", () => {
   // and pin that both call sites still route through `resolveScopedProjectName`,
   // so a caller reverting to its own inline copy is caught here even
   // though the resulting VALUE could still happen to match today.
+  // Round 1 matched a SINGLE LINE containing `<name> =` and required
+  // `resolveScopedProjectName(` on that same line; a behaviour-identical
+  // reflow (the assignment on one line, the call on the next, exactly
+  // as a formatter/linter could produce) failed this suite with no
+  // explanation of what broke. This slices the whole assignment
+  // STATEMENT instead (from `const <name> =` to the next `;`), so the
+  // call may legally span multiple lines, and names the task plus what
+  // to update if a call site is legitimately restructured.
+  function sliceAssignmentStatement(src: string, constDeclaration: string): string | undefined {
+    const start = src.indexOf(constDeclaration);
+    if (start === -1) return undefined;
+    const end = src.indexOf(";", start);
+    return end === -1 ? src.slice(start) : src.slice(start, end + 1);
+  }
+
   it("doctor's project-scoped load still calls resolveScopedProjectName, not an inline copy", () => {
     const src = fs.readFileSync(
       new URL("../../src/cli/doctor/index.ts", import.meta.url),
       "utf8",
     );
-    const line = src
-      .split("\n")
-      .find((l) => l.includes("attemptedSessionStartPreflightProjectName ="));
+    const statement = sliceAssignmentStatement(
+      src,
+      "const attemptedSessionStartPreflightProjectName =",
+    );
     expect(
-      line,
-      "no `attemptedSessionStartPreflightProjectName =` assignment found in src/cli/doctor/index.ts",
+      statement,
+      "task f1eb1c5c: no `const attemptedSessionStartPreflightProjectName =` statement found " +
+        "in src/cli/doctor/index.ts; if this call site was legitimately renamed or restructured, " +
+        "update this test's `constDeclaration` string to match",
     ).toBeDefined();
-    expect(line).toContain("resolveScopedProjectName(");
+    expect(
+      statement,
+      "task f1eb1c5c: src/cli/doctor/index.ts's `attemptedSessionStartPreflightProjectName` " +
+        "assignment no longer calls `resolveScopedProjectName(`, meaning if this call site was " +
+        "legitimately restructured to keep sharing the resolution logic some other way, update " +
+        "this test to pin the new shape instead of reverting to an inline " +
+        "`opts.project ?? deriveProjectName(...) ?? fallback` copy",
+    ).toContain("resolveScopedProjectName(");
     expect(src).not.toContain("deriveProjectName(opts.cwd");
   });
 
@@ -811,14 +842,21 @@ describe("resolveScopedProjectName (task f1eb1c5c)", () => {
       new URL("../../src/cli/session-start/index.ts", import.meta.url),
       "utf8",
     );
-    const line = src
-      .split("\n")
-      .find((l) => l.includes("sessionStartPreflightProjectName ="));
+    const statement = sliceAssignmentStatement(src, "const sessionStartPreflightProjectName =");
     expect(
-      line,
-      "no `sessionStartPreflightProjectName =` assignment found in src/cli/session-start/index.ts",
+      statement,
+      "task f1eb1c5c: no `const sessionStartPreflightProjectName =` statement found " +
+        "in src/cli/session-start/index.ts; if this call site was legitimately renamed or " +
+        "restructured, update this test's `constDeclaration` string to match",
     ).toBeDefined();
-    expect(line).toContain("resolveScopedProjectName(");
+    expect(
+      statement,
+      "task f1eb1c5c: src/cli/session-start/index.ts's `sessionStartPreflightProjectName` " +
+        "assignment no longer calls `resolveScopedProjectName(`, meaning if this call site was " +
+        "legitimately restructured to keep sharing the resolution logic some other way, update " +
+        "this test to pin the new shape instead of reverting to an inline " +
+        "`opts.project ?? deriveProjectName(cwd) ?? repo` copy",
+    ).toContain("resolveScopedProjectName(");
     expect(src).not.toContain("deriveProjectName(cwd) ?? repo");
   });
 });

@@ -413,14 +413,20 @@ export interface ResolveScopedProjectNameOptions<T> {
 
 /**
  * Shared `opts.project ?? deriveProjectName(cwd) ?? fallback` resolution,
- * used by every producer of a per-repo-scoped `session_start_preflight`
- * project name (`harness doctor`'s second, project-scoped load and the
- * `session_start_preflight` producer). Both surfaces agree on the first
- * two terms (an explicit `--project`, then the cwd-derived name); only
- * the fallback differs by call site, and this helper takes it as an
- * explicit argument so that difference is named rather than duplicated
- * inline. No behavior change versus either surface's own prior inline
- * expression: this only extracts the shared shape.
+ * used by two of the three producers of a per-repo-scoped
+ * `session_start_preflight` project name: `harness doctor`'s second,
+ * project-scoped load and the `session_start_preflight` producer. Both
+ * surfaces agree on the first two terms (an explicit `--project`, then
+ * the cwd-derived name); only the fallback differs by call site, and
+ * this helper takes it as an explicit argument so that difference is
+ * named rather than duplicated inline. The third producer,
+ * `harness explain-policy` (`src/cli/explain-policy.ts`), keeps its own
+ * copy of the same expression with a third fallback (`undefined`);
+ * folding it into this helper is deliberately out of scope of task
+ * `f1eb1c5c`. No observable behaviour change versus either surface's
+ * own prior inline expression, other than doctor's `cwd` expression
+ * now being evaluated eagerly (see the call site): this only extracts
+ * the shared shape.
  */
 export function resolveScopedProjectName<T>(opts: ResolveScopedProjectNameOptions<T>): string | T {
   return opts.project ?? deriveProjectName(opts.cwd) ?? opts.fallback;
