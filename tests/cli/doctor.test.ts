@@ -3080,3 +3080,80 @@ ${cliBlock}
     expect(cli?.status).toBe("ok");
   });
 });
+
+describe("doctor - tools.mcp[] min_version prerelease (task db44ab46)", () => {
+  // Task db44ab46 extends the hooks[] prerelease-rejection rule to
+  // tools.mcp[]: a release candidate of the MCP server binary must not
+  // satisfy an equal-numeric min_version floor.
+  function buildManifest(mcpBlock: string): string {
+    return `version: 1
+hooks: []
+policies: []
+tools:
+  mcp:
+${mcpBlock}
+  builtin:
+    known: []
+`;
+  }
+
+  it("warns below_floor when the probed mcp version is a dotted prerelease of min_version", async () => {
+    const home = makeFixture({
+      "harness.yaml": buildManifest(`    - name: fake-mcp
+      command: [my-mcp-bin]
+      min_version: "1.2.3"`),
+    });
+    const report = await doctor({
+      configPath: path.join(home, "harness.yaml"),
+      homeOverride: home,
+      mcpProbe: new FakeProbe({ "fake-mcp": { kind: "missing-verb" } }),
+      versionProbe: () => "my-mcp-bin v1.2.3-rc.1\n",
+      pathEnv: "",
+      claudeMcpExec: NO_CLAUDE_CLI,
+      npmBinExec: STUB_NPM_BIN_EXEC_UNKNOWN,
+    });
+    expect(report.tools.mcpVersions).toEqual([
+      { name: "fake-mcp", status: "warn", message: "outdated: installed v1.2.3 < required 1.2.3" },
+    ]);
+  });
+
+  it("warns below_floor when the probed mcp version is a dotless prerelease of min_version", async () => {
+    const home = makeFixture({
+      "harness.yaml": buildManifest(`    - name: fake-mcp
+      command: [my-mcp-bin]
+      min_version: "1.2.3"`),
+    });
+    const report = await doctor({
+      configPath: path.join(home, "harness.yaml"),
+      homeOverride: home,
+      mcpProbe: new FakeProbe({ "fake-mcp": { kind: "missing-verb" } }),
+      versionProbe: () => "my-mcp-bin v1.2.3-beta\n",
+      pathEnv: "",
+      claudeMcpExec: NO_CLAUDE_CLI,
+      npmBinExec: STUB_NPM_BIN_EXEC_UNKNOWN,
+    });
+    expect(report.tools.mcpVersions).toEqual([
+      { name: "fake-mcp", status: "warn", message: "outdated: installed v1.2.3 < required 1.2.3" },
+    ]);
+  });
+
+  it("still passes a real release meeting the floor (no regression)", async () => {
+    const home = makeFixture({
+      "harness.yaml": buildManifest(`    - name: fake-mcp
+      command: [my-mcp-bin]
+      min_version: "1.2.3"`),
+    });
+    const report = await doctor({
+      configPath: path.join(home, "harness.yaml"),
+      homeOverride: home,
+      mcpProbe: new FakeProbe({ "fake-mcp": { kind: "missing-verb" } }),
+      versionProbe: () => "my-mcp-bin v1.2.3\n",
+      pathEnv: "",
+      claudeMcpExec: NO_CLAUDE_CLI,
+      npmBinExec: STUB_NPM_BIN_EXEC_UNKNOWN,
+    });
+    expect(report.tools.mcpVersions).toEqual([
+      { name: "fake-mcp", status: "ok", message: "v1.2.3 ≥ 1.2.3" },
+    ]);
+  });
+});
