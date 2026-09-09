@@ -2474,3 +2474,54 @@ workflows:
     ).toHaveLength(2);
   });
 });
+
+describe("validate - tools.cli[] min_version prerelease (task db44ab46)", () => {
+  // Task db44ab46 extends the hooks[] prerelease-rejection rule
+  // (docs/decisions/2026-09-08-preflight-floors.md) to validate's
+  // tools.cli[] check: a release candidate of the required binary must
+  // not satisfy an equal-numeric min_version floor.
+  function diagnosticFor(stdout: string) {
+    const home = writeFixture({});
+    const binPath = path.join(home, "bin", "fake");
+    fs.mkdirSync(path.dirname(binPath), { recursive: true });
+    fs.writeFileSync(binPath, "#!/bin/sh\n", "utf8");
+    fs.chmodSync(binPath, 0o755);
+    fs.writeFileSync(
+      path.join(home, "harness.yaml"),
+      `version: 1
+tools:
+  cli:
+    - name: fake
+      binary: ${binPath}
+      min_version: "1.2.3"
+      required: true
+hooks: []
+policies: []
+`,
+      "utf8",
+    );
+    const result = validate({
+      homeDir: home,
+      configPath: path.join(home, "harness.yaml"),
+      versionProbe: () => stdout,
+      builtinRuntimeProbe: () => [],
+    });
+    return result.diagnostics.find((d) => d.path === "tools.cli[fake].min_version");
+  }
+
+  it("errors below_floor when the probed cli version is a dotted prerelease of min_version", () => {
+    const hit = diagnosticFor("fake 1.2.3-rc.1");
+    expect(hit?.severity).toBe("error");
+    expect(hit?.message).toBe("installed version 1.2.3 is less than required 1.2.3");
+  });
+
+  it("errors below_floor when the probed cli version is a dotless prerelease of min_version", () => {
+    const hit = diagnosticFor("fake 1.2.3-beta");
+    expect(hit?.severity).toBe("error");
+    expect(hit?.message).toBe("installed version 1.2.3 is less than required 1.2.3");
+  });
+
+  it("still passes a real release meeting the floor (no regression)", () => {
+    expect(diagnosticFor("fake 1.2.3")).toBeUndefined();
+  });
+});
