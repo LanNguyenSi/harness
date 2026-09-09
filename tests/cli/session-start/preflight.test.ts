@@ -2014,3 +2014,158 @@ describe("runSessionStartPreflight: setupEnabled catch names the failed layer pa
     );
   });
 });
+
+// Producer-level pin for the PR #522 migration note (task 6c8c1bae): the
+// "per-repo scoping via cwd-derived project name" describe block above
+// already pins that `deriveProjectName(cwd)` (not `process.cwd()`) feeds
+// the loader's `project` opt; these two tests replay that SAME
+// mechanism with an `event.cwd` that is a SYMLINK path and a
+// DIFFERENTLY-CASED path, the two access-path shapes PR #522's note
+// names, so the migration note's claims are pinned at the producer this
+// hook actually drives, not only at the `deriveProjectName` helper
+// (`tests/runtime/git-context.test.ts`) or the loader primitive
+// (`tests/cli/loader-project-layer.test.ts`).
+describe("runSessionStartPreflight: symlinked and differently-cased event.cwd (task 6c8c1bae, PR #522 migration note)", () => {
+  function writeBaseManifest(home: string, setup: boolean): void {
+    fs.writeFileSync(
+      path.join(home, "harness.yaml"),
+      [
+        "version: 1",
+        "hooks: []",
+        "policies: []",
+        "tools:",
+        "  builtin:",
+        "    known: [Read, Edit]",
+        "session_start_preflight:",
+        `  setup: ${setup}`,
+        "",
+      ].join("\n"),
+    );
+  }
+
+  function writeProjectLayer(home: string, projectName: string, setup: boolean): void {
+    const projectDir = path.join(home, "projects", projectName);
+    fs.mkdirSync(projectDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(projectDir, "harness.overrides.yaml"),
+      ["session_start_preflight:", `  setup: ${setup}`, ""].join("\n"),
+    );
+  }
+
+  it("SYMLINK: scopes by the real directory's basename when event.cwd is a symlink path (PR #522 SYMLINK rule)", async () => {
+    // Measured directly against this built module before writing this
+    // assertion (`deriveProjectName(link) === deriveProjectName(real) ===
+    // "real-name-repo"`, node -e against dist/runtime/git-context.js):
+    // realpathSync resolves the symlink boundary itself, so the common
+    // dir's basename is the REAL directory's name from either access
+    // path. No project layer is written under the symlink's own name
+    // ("link-name-repo"); only one under the real basename exists, so a
+    // producer that still derived from the symlink's own name (or fell
+    // back to `repo`, this hook's OWN checkout-basename variable, which
+    // for a symlink cwd is ALSO "link-name-repo") would find nothing and
+    // stay on the base manifest's setup:false.
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "harness-sspf-symlink-"));
+    cleanups.push(() => fs.rmSync(root, { recursive: true, force: true }));
+    const realRepo = path.join(root, "real-name-repo");
+    fs.mkdirSync(path.join(realRepo, ".git"), { recursive: true });
+    fs.writeFileSync(path.join(realRepo, ".git", "HEAD"), "ref: refs/heads/main\n");
+    const linkRepo = path.join(root, "link-name-repo");
+    fs.symlinkSync(realRepo, linkRepo, "dir");
+
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "harness-sspf-symlink-home-"));
+    cleanups.push(() => fs.rmSync(home, { recursive: true, force: true }));
+    writeBaseManifest(home, false);
+    writeProjectLayer(home, "real-name-repo", true);
+
+    const seenArgs: Array<{ cwd: string; timeoutMs: number; setup: boolean }> = [];
+    const result = await runSessionStartPreflight({
+      stdin: streamFrom(JSON.stringify({ session_id: "s", cwd: linkRepo })),
+      stderr: captureStream().stream,
+      homeDir: home,
+      runPreflight: async (cwd, timeoutMs, setup) => {
+        seenArgs.push({ cwd, timeoutMs, setup });
+        return { ok: true, json: { ready: true, confidence: 0.9, checks: [] } };
+      },
+      writeLedger: async () => ({ ok: true }),
+    });
+    expect(result.wrote).toBe(true);
+    expect(seenArgs).toEqual([{ cwd: linkRepo, timeoutMs: 60_000, setup: true }]);
+  });
+
+  // Scopes by the correctly-derived main-checkout name from a linked
+  // worktree's own (unmiscased) event.cwd, not by `repo` (this hook's
+  // own checkout-basename variable): `deriveProjectName`'s worktree
+  // `commondir` walk back to the MAIN checkout, and the raw `event.cwd`
+  // passthrough into `runPreflight`'s `cwd` argument.
+  //
+  // task 6c8c1bae: an earlier version of this fixture also miscased the
+  // access path (`WORKTREE-CASING` vs. the on-disk `Worktree-Casing`)
+  // and self-skipped on a case-sensitive filesystem, framed as pinning
+  // casing. It did not: on a case-insensitive filesystem the derived
+  // name comes from the `commondir` file's own (correctly-cased)
+  // content, never from case-folding the access path (verified
+  // directly with node against dist/runtime/git-context.js and
+  // dist/cli/loader.js), so replacing the miscased spelling with the
+  // real one left the assertions unchanged. Renamed to what it actually
+  // pins; the casing claim (PR #522's CASING rule) lives in
+  // tests/cli/loader-project-layer.test.ts's loader-level CASING test
+  // alone.
+  //
+  // The original single-layer fixture also did not discriminate the P2
+  // mutant (`opts.project ?? repo`, dropping derivation) because `repo`
+  // (the checkout basename) and the correctly-derived name were the
+  // IDENTICAL string in that non-worktree shape, both folding onto the
+  // SAME on-disk layer. The linked worktree here makes `repo` (this
+  // WORKTREE checkout's own basename) and the derived name (the MAIN
+  // checkout's basename, via `commondir`) genuinely DIFFERENT values: a
+  // DECOY layer keyed on `repo`'s value carries the opposite `setup`,
+  // so a producer that stopped deriving would read the decoy and fail
+  // this assertion.
+  it("scopes by the correctly-derived main-checkout name from a linked-worktree event.cwd, discriminating a producer that stops deriving (linked-worktree derivation + raw-cwd passthrough)", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "harness-sspf-casing-"));
+    cleanups.push(() => fs.rmSync(root, { recursive: true, force: true }));
+
+    // Main checkout: the real, on-disk-named repository the derived
+    // project name must resolve to, with a private per-worktree gitdir
+    // under `.git/worktrees/wt` (matching `git worktree add`'s own
+    // layout).
+    const realRepo = path.join(root, "Real-Project-Casing");
+    const wtGitDir = path.join(realRepo, ".git", "worktrees", "wt");
+    fs.mkdirSync(wtGitDir, { recursive: true });
+    fs.writeFileSync(path.join(realRepo, ".git", "HEAD"), "ref: refs/heads/main\n");
+    fs.writeFileSync(path.join(wtGitDir, "HEAD"), "ref: refs/heads/main\n");
+    fs.writeFileSync(path.join(wtGitDir, "commondir"), "../..\n");
+
+    // A linked worktree of that repository: `repo` names THIS checkout
+    // directory, but `deriveProjectName` follows `wtGitDir`'s
+    // `commondir` file back to the main checkout above.
+    const worktreeRepo = path.join(root, "Worktree-Casing");
+    fs.mkdirSync(worktreeRepo, { recursive: true });
+    fs.writeFileSync(path.join(worktreeRepo, ".git"), `gitdir: ${wtGitDir}\n`);
+
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "harness-sspf-casing-home-"));
+    cleanups.push(() => fs.rmSync(home, { recursive: true, force: true }));
+    writeBaseManifest(home, false);
+    // Correct layer: keyed on the derived name (the main checkout's
+    // basename).
+    writeProjectLayer(home, "Real-Project-Casing", true);
+    // Decoy layer: keyed on `repo`'s own value (this worktree
+    // checkout's own basename). Only a producer that stopped deriving
+    // (P2) would read this one.
+    writeProjectLayer(home, "Worktree-Casing", false);
+
+    const seenArgs: Array<{ cwd: string; timeoutMs: number; setup: boolean }> = [];
+    const result = await runSessionStartPreflight({
+      stdin: streamFrom(JSON.stringify({ session_id: "s", cwd: worktreeRepo })),
+      stderr: captureStream().stream,
+      homeDir: home,
+      runPreflight: async (cwd, timeoutMs, setup) => {
+        seenArgs.push({ cwd, timeoutMs, setup });
+        return { ok: true, json: { ready: true, confidence: 0.9, checks: [] } };
+      },
+      writeLedger: async () => ({ ok: true }),
+    });
+    expect(result.wrote).toBe(true);
+    expect(seenArgs).toEqual([{ cwd: worktreeRepo, timeoutMs: 60_000, setup: true }]);
+  });
+});
