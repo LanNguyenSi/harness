@@ -638,3 +638,56 @@ describe("deriveProjectName: symlinked checkout resolves the real directory's na
     expect(deriveProjectName(worktree)).toBe(path.basename(missingGitDir));
   });
 });
+
+// Migration note (tracker 52c0036f): this test
+// pins the helper's string behaviour (a hand-built miscased path), not an
+// operator-reachable scenario. `deriveProjectName`'s `fs.realpathSync`
+// step does NOT unify a case-differing path with the real, on-disk casing
+// on a case-insensitive filesystem (APFS's default, some Windows
+// filesystems): Node's default `fs.realpathSync` is its own userland
+// symlink-resolution algorithm, not the operating system's native
+// `realpath(3)` (that OS-level, case-folding implementation is
+// `fs.realpathSync.native`, not used here), so it resolves symlinks but
+// passes a case-insensitive-but-case-preserving directory segment through
+// UNCHANGED, as asserted directly below. Whether this is reachable from a
+// real cwd is a separate question the assertion below does not answer:
+// every CLI verb but the SessionStart hook derives its cwd from
+// `process.cwd()`, which on macOS (measured on a case-insensitive
+// filesystem: the real path, a symlink to it and a differently-cased
+// path all reported the same canonical spelling) already carries the
+// on-disk casing before this helper ever sees it (see CHANGELOG.md
+// and docs/CLI.md's PER-REPO SCOPING note for the executed matrix). This
+// test only runs its assertion on a case-insensitive filesystem; on a
+// case-sensitive one it reports itself as SKIPPED (not a silent pass)
+// since the aliasing it pins cannot occur there.
+describe("deriveProjectName: case-differing path on a case-insensitive filesystem (tracker 52c0036f)", () => {
+  it("derives a name carrying the ACCESS path's own casing, not the on-disk casing, when they differ", (ctx) => {
+    const root = tmpDir();
+    const markerLower = path.join(root, "case-probe-marker");
+    fs.writeFileSync(markerLower, "x");
+    const markerUpper = path.join(root, "CASE-PROBE-MARKER");
+    let caseInsensitive: boolean;
+    try {
+      caseInsensitive = fs.statSync(markerUpper).ino === fs.statSync(markerLower).ino;
+    } catch {
+      caseInsensitive = false;
+    }
+    fs.rmSync(markerLower, { force: true });
+
+    if (!caseInsensitive) {
+      ctx.skip(
+        "this filesystem is case-sensitive, so a differently-cased path does not alias the real directory",
+      );
+    }
+
+    const realRepo = makeRepo(root, "Real-Project", "ref: refs/heads/main");
+    const differentlyCasedPath = path.join(root, "REAL-PROJECT");
+
+    expect(deriveProjectName(realRepo)).toBe("Real-Project");
+    // The on-disk directory is "Real-Project", but reaching it through
+    // "REAL-PROJECT" derives "REAL-PROJECT", NOT "Real-Project": no
+    // case normalization happens, unlike the symlink case above.
+    expect(deriveProjectName(differentlyCasedPath)).toBe("REAL-PROJECT");
+    expect(deriveProjectName(differentlyCasedPath)).not.toBe("Real-Project");
+  });
+});
