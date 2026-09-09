@@ -116,3 +116,42 @@ describe("checkPolicyPackVersions — cross-pack semantics", () => {
     expect(gaps[1]?.kind).toBe("no_probe_registered");
   });
 });
+
+describe("checkPolicyPackVersions - min_version prerelease (task db44ab46)", () => {
+  // Task db44ab46 extends the hooks[] prerelease-rejection rule
+  // (docs/decisions/2026-09-08-preflight-floors.md) to the pack-level
+  // floor: a release candidate of the pack's bin must not satisfy an
+  // equal-numeric min_version floor.
+  it("flags below_floor when the probed version is a dotted prerelease of min_version", () => {
+    const m = manifestWith([
+      { name: "understanding-before-execution", min_version: "0.3.1" },
+    ]);
+    const gaps = checkPolicyPackVersions(m, probe("understanding-gate 0.3.1-rc.1"));
+    expect(gaps).toHaveLength(1);
+    expect(gaps[0]).toMatchObject({
+      declaredMinVersion: "0.3.1",
+      actualVersion: "0.3.1",
+      kind: "below_floor",
+    });
+  });
+
+  it("flags below_floor when the probed version is a dotless prerelease of min_version", () => {
+    const m = manifestWith([
+      { name: "understanding-before-execution", min_version: "0.3.1" },
+    ]);
+    const gaps = checkPolicyPackVersions(m, probe("understanding-gate 0.3.1-beta"));
+    expect(gaps).toHaveLength(1);
+    expect(gaps[0]).toMatchObject({
+      declaredMinVersion: "0.3.1",
+      actualVersion: "0.3.1",
+      kind: "below_floor",
+    });
+  });
+
+  it("still passes a real release meeting the floor (no regression)", () => {
+    const m = manifestWith([
+      { name: "understanding-before-execution", min_version: "0.3.1" },
+    ]);
+    expect(checkPolicyPackVersions(m, probe("understanding-gate 0.3.1"))).toEqual([]);
+  });
+});

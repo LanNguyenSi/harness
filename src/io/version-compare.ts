@@ -89,14 +89,17 @@ export function parseProbedVersion(
  * prerelease flag is irrelevant and the numeric result wins outright
  * (a genuinely older release, prerelease or not, is still older).
  *
- * Decision: docs/decisions/2026-09-08-preflight-floors.md. Used by the
- * two floor checks that must reject a release candidate of their own
- * floor version: `checkHookVersion` (src/cli/doctor/index.ts, generic
- * across every `hooks[]` entry with `min_version`) and
+ * Decision: docs/decisions/2026-09-08-preflight-floors.md (see the
+ * Reopen criteria section for task db44ab46, which extended the rule
+ * from its original two consumers to all `min_version` floor checks in
+ * this codebase). Consumers as of task db44ab46: `checkHookVersion` and
+ * `checkCli`'s `tools.cli[]` check plus `checkMcpVersions`'s
+ * `tools.mcp[]` check (all in src/cli/doctor/index.ts),
  * `checkSessionStartPreflightSetupVersion`
- * (src/cli/doctor/session-start-preflight-setup-version.ts).
- * Deliberately NOT wired into the `tools.cli[]` / `tools.mcp[]` version
- * checks in the same file; see the ADR's scope note.
+ * (src/cli/doctor/session-start-preflight-setup-version.ts), validate's
+ * `tools.cli[]` check (src/cli/validate/checks.ts), `memory.router`'s
+ * version probe (src/probes/memory.ts), and the pack-level floor
+ * (src/policy-packs/version-check.ts).
  */
 export function compareVersionFloor(a: string, aIsPrerelease: boolean, b: string): number {
   const cmp = compareNumericVersions(a, b);

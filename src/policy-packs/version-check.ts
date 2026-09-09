@@ -11,7 +11,7 @@
 // pack-level config-schema mismatch (a `config:` key only the newer
 // package honours). Both can fire in the same doctor run.
 
-import { compareNumericVersions } from "../io/version-compare.js";
+import { parseProbedVersion, compareVersionFloor } from "../io/version-compare.js";
 import { isBuiltinPackName, resolveBuiltinVersionCommand } from "./registry.js";
 import type { Manifest } from "../schema/index.js";
 
@@ -87,8 +87,12 @@ export function checkPolicyPackVersions(
       });
       return;
     }
-    const match = stdout.match(/(\d+(?:\.\d+){0,3})/);
-    if (!match || !match[1]) {
+    // parseProbedVersion + compareVersionFloor (task db44ab46, extending
+    // the hooks[] prerelease rule to the pack-level floor): a release
+    // candidate of the pack's bin must not satisfy an equal-numeric
+    // min_version floor. See docs/decisions/2026-09-08-preflight-floors.md.
+    const parsed = parseProbedVersion(stdout);
+    if (!parsed) {
       gaps.push({
         packIndex,
         packName: pack.name,
@@ -100,8 +104,8 @@ export function checkPolicyPackVersions(
       });
       return;
     }
-    const actual = match[1];
-    if (compareNumericVersions(actual, pack.min_version) < 0) {
+    const { version: actual, isPrerelease } = parsed;
+    if (compareVersionFloor(actual, isPrerelease, pack.min_version) < 0) {
       gaps.push({
         packIndex,
         packName: pack.name,
