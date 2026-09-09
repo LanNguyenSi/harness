@@ -29,7 +29,12 @@ historical prose narrates past re-points) in a computed title, never
 asserted; (3) requires every anchored citation's anchor, in both
 docs/okf and docs/decisions, to contain at least one word character, so a
 punctuation-only anchor (a bare closing delimiter, which pins nothing
-against a line shift) fails. The reproducible measurement is `npx vitest run
+against a line shift) fails; (4) requires every anchored docs/okf citation's
+anchor to not start or end with whitespace, since a leading/trailing-space
+anchor's uniqueness rests on formatting that a reformat of the cited source
+can silently change, turning a routine reflow into a confusing guard
+failure instead of a clear re-anchoring prompt (task `98025e15`). The
+reproducible measurement is `npx vitest run
 tests/decisions-citations-resolve.test.ts`: its test titles report the
 live bare-citation count outside `log.md` (asserted at zero) and `log.md`'s
 own historical count (reported, not asserted). Per-doc conversion tallies
