@@ -825,6 +825,10 @@ it(
 // import from it.
 export const __testOnly = {
   isUnderTmp,
+  // Task 9a4a417b review round 2 closure: the same realpath fallback the
+  // guard uses, exported so the test file's precondition does not keep a
+  // hand copy that can drift.
+  safeRealpath,
   trueOriginals: originals,
   /**
    * Task 9a4a417b review round 2 (residual coverage): the resolver

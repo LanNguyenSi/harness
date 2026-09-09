@@ -28,18 +28,20 @@
 // $TMPDIR, skips these three probes under a plain `npm test` too,
 // silently. `agent-primitives probe`'s default `-i worktree` isolation
 // is simply the common way to hit that condition, since it places its
-// worktree under `--log-dir`, which itself defaults to "a fresh
-// directory under the OS temp dir" (see that package's README, `probe`'s
-// `-l/--log-dir` entry); every path inside such a copy, including
+// worktree under `--log-dir`, which itself defaults to
+// `$AGENT_PRIMITIVES_LOG_DIR`, or a fresh directory under the OS temp
+// dir otherwise (see that package's README, Global options,
+// `-l/--log-dir`); every path inside such a copy, including
 // process.cwd(), is then also under os.tmpdir(), and there is no
 // directory inside the copy that is both part of the checkout and
 // outside that prefix. This cannot be fixed by deriving a different path
 // from this file's cwd/realpath: it is a property of WHERE the checkout
 // sits, not of this test file. The remedy for `agent-primitives probe`
-// specifically: pass `-l/--log-dir` pointing outside the OS temp
-// directory (or `-i inplace`, which mutates the real checkout in place
-// instead of a copy under `--log-dir`) so the isolation copy's cwd stays
-// outside os.tmpdir() and all three probes run. The three affected
+// specifically: pass `-l/--log-dir` (or set `AGENT_PRIMITIVES_LOG_DIR`)
+// pointing outside the OS temp directory, so the isolation copy's cwd
+// stays outside os.tmpdir() and all three probes run; `-i inplace` also
+// avoids the condition but mutates the real checkout in place instead of
+// a copy, so `--log-dir` is the primary remedy. The three affected
 // probes detect the missing precondition with the exact `isUnderTmp`
 // helper the guard itself uses (not a re-implementation) and skip, with
 // a named reason, instead of false-failing. Everywhere the precondition
@@ -66,17 +68,11 @@ import { resolveVitestEntry } from "../_helpers/nested-vitest.js";
 // be blocked" probe.
 const REAL_NOT_ALLOWLISTED = "/bin/ls";
 
-// Task 9a4a417b review round 2: mirrors
-// tests/_helpers/hermetic-spawn-allowlist.ts's own `safeRealpath`: a
-// cwd that vanished or is a broken symlink must not crash the whole
-// file at module load; fall back to the raw (unresolved) cwd instead.
-function safeRealpathForPrecondition(p: string): string {
-  try {
-    return fs.realpathSync(p);
-  } catch {
-    return p;
-  }
-}
+// Task 9a4a417b review round 2: the guard's own `safeRealpath` (exported
+// through `__testOnly`, not a hand copy that could drift): a cwd that
+// vanished or is a broken symlink must not crash the whole file at
+// module load; it falls back to the raw (unresolved) cwd instead.
+const safeRealpathForPrecondition = __testOnly.safeRealpath;
 
 // Task 9a4a417b: the exact fixture-shaped path the F5/F6a/F6b probes
 // below create (a named directory UNDER this file's cwd), not the bare
@@ -112,6 +108,17 @@ const FIXTURE_LOCATION_ESCAPES_TMP_EXEMPTION = !__testOnly.isUnderTmp(PRECONDITI
 // correct, and only there.
 it("task 9a4a417b: FIXTURE_LOCATION_ESCAPES_TMP_EXEMPTION tracks isUnderTmp of the fixture path it names, not a hardcoded value", () => {
   expect(FIXTURE_LOCATION_ESCAPES_TMP_EXEMPTION).toBe(!__testOnly.isUnderTmp(PRECONDITION_FIXTURE_PATH));
+  // Round-2 review closure: pin the SHAPE of the fixture path
+  // independently of the constant, so reverting it to the bare cwd (the
+  // exact-at-os.tmpdir() edge the path segment exists for) fails here
+  // instead of mutating both sides of the assertion above.
+  const resolvedCwd = __testOnly.safeRealpath(process.cwd());
+  expect(path.dirname(PRECONDITION_FIXTURE_PATH)).toBe(resolvedCwd);
+  expect(PRECONDITION_FIXTURE_PATH).not.toBe(resolvedCwd);
+  // And the realpath fallback itself: an unresolvable path comes back
+  // unchanged rather than throwing.
+  const missing = path.join(resolvedCwd, "hermetic-precondition-does-not-exist");
+  expect(__testOnly.safeRealpath(missing)).toBe(missing);
 });
 
 /**
