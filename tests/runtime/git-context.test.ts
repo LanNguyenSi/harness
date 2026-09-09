@@ -778,4 +778,47 @@ describe("resolveScopedProjectName (task f1eb1c5c)", () => {
     expect(resolveScopedProjectName({ cwd: outside, fallback: "" })).toBe("");
     expect(resolveScopedProjectName({ cwd: outside, fallback: "some-repo" })).toBe("some-repo");
   });
+
+  // The tests above pin the shared helper's own behaviour, but a caller
+  // could still silently stop USING it (reverting to its own inline
+  // `opts.project ?? deriveProjectName(cwd) ?? fallback` copy, with
+  // whatever fallback it likes) without any of those tests noticing,
+  // since none of them exercise `doctor()` or the `session_start_preflight`
+  // producer themselves. These source-identity assertions (same pattern
+  // as `tests/cli/doctor-session-start-preflight-setup-version.test.ts`'s
+  // "reads the SETUP floor identifier" test) read the actual source text
+  // and pin that both call sites still route through `resolveScopedProjectName`,
+  // so a caller reverting to its own inline copy is caught here even
+  // though the resulting VALUE could still happen to match today.
+  it("doctor's project-scoped load still calls resolveScopedProjectName, not an inline copy", () => {
+    const src = fs.readFileSync(
+      new URL("../../src/cli/doctor/index.ts", import.meta.url),
+      "utf8",
+    );
+    const line = src
+      .split("\n")
+      .find((l) => l.includes("attemptedSessionStartPreflightProjectName ="));
+    expect(
+      line,
+      "no `attemptedSessionStartPreflightProjectName =` assignment found in src/cli/doctor/index.ts",
+    ).toBeDefined();
+    expect(line).toContain("resolveScopedProjectName(");
+    expect(src).not.toContain("deriveProjectName(opts.cwd");
+  });
+
+  it("the session_start_preflight producer still calls resolveScopedProjectName, not an inline copy", () => {
+    const src = fs.readFileSync(
+      new URL("../../src/cli/session-start/index.ts", import.meta.url),
+      "utf8",
+    );
+    const line = src
+      .split("\n")
+      .find((l) => l.includes("sessionStartPreflightProjectName ="));
+    expect(
+      line,
+      "no `sessionStartPreflightProjectName =` assignment found in src/cli/session-start/index.ts",
+    ).toBeDefined();
+    expect(line).toContain("resolveScopedProjectName(");
+    expect(src).not.toContain("deriveProjectName(cwd) ?? repo");
+  });
 });
