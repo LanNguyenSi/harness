@@ -207,3 +207,46 @@ describe("inspectMemory: staleness + recursion-error catch", () => {
     expect(() => inspectMemory(manifest, { homeDir: home })).not.toThrow();
   });
 });
+
+describe("inspectMemory: memory.router min_version prerelease (task db44ab46)", () => {
+  // Task db44ab46 extends the hooks[] prerelease-rejection rule
+  // (docs/decisions/2026-09-08-preflight-floors.md) to memory.router: a
+  // release candidate of the router binary must not satisfy an
+  // equal-numeric min_version floor.
+  function routerVersionFor(probedStdout: string) {
+    const home = makeTmpHome();
+    const scriptPath = path.join(home, "memory-router");
+    fs.writeFileSync(scriptPath, "#!/bin/sh\nexit 0\n");
+    fs.chmodSync(scriptPath, 0o755);
+    const manifest = {
+      memory: {
+        directories: [{ path: "~/", scope: "user" }],
+        retention: { staleness_days: 30 },
+        router: { command: ["~/memory-router"], min_version: "1.2.3" },
+      },
+    } as unknown as Manifest;
+    const report = inspectMemory(manifest, { homeDir: home, versionProbe: () => probedStdout });
+    return report.routerVersion;
+  }
+
+  it("warns below_floor when the probed router version is a dotted prerelease of min_version", () => {
+    expect(routerVersionFor("memory-router 1.2.3-rc.1\n")).toEqual({
+      status: "warn",
+      message: "outdated: installed v1.2.3 < required 1.2.3",
+    });
+  });
+
+  it("warns below_floor when the probed router version is a dotless prerelease of min_version", () => {
+    expect(routerVersionFor("memory-router 1.2.3-beta\n")).toEqual({
+      status: "warn",
+      message: "outdated: installed v1.2.3 < required 1.2.3",
+    });
+  });
+
+  it("still passes a real release meeting the floor (no regression)", () => {
+    expect(routerVersionFor("memory-router 1.2.3\n")).toEqual({
+      status: "ok",
+      message: "v1.2.3 ≥ 1.2.3",
+    });
+  });
+});
