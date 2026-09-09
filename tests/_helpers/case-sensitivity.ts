@@ -1,4 +1,4 @@
-// Shared case-sensitivity probe (task 6c8c1bae, round 3, LOW finding):
+// Shared case-sensitivity probe (task 6c8c1bae):
 // writes a lowercase marker file into `dir`, stats the uppercase
 // spelling, and compares inodes. A case-insensitive filesystem (APFS's
 // default, some Windows filesystems) resolves both spellings to the
