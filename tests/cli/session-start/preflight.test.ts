@@ -1974,3 +1974,139 @@ describe("runSessionStartPreflight: setupEnabled catch names the failed layer pa
     );
   });
 });
+
+// Producer-level pin for the PR #522 migration note (task 6c8c1bae): the
+// "per-repo scoping via cwd-derived project name" describe block above
+// already pins that `deriveProjectName(cwd)` (not `process.cwd()`) feeds
+// the loader's `project` opt; these two tests replay that SAME
+// mechanism with an `event.cwd` that is a SYMLINK path and a
+// DIFFERENTLY-CASED path, the two access-path shapes PR #522's note
+// names, so the migration note's claims are pinned at the producer this
+// hook actually drives, not only at the `deriveProjectName` helper
+// (`tests/runtime/git-context.test.ts`) or the loader primitive
+// (`tests/cli/loader-project-layer.test.ts`).
+describe("runSessionStartPreflight: symlinked and differently-cased event.cwd (task 6c8c1bae, PR #522 migration note)", () => {
+  function writeBaseManifest(home: string, setup: boolean): void {
+    fs.writeFileSync(
+      path.join(home, "harness.yaml"),
+      [
+        "version: 1",
+        "hooks: []",
+        "policies: []",
+        "tools:",
+        "  builtin:",
+        "    known: [Read, Edit]",
+        "session_start_preflight:",
+        `  setup: ${setup}`,
+        "",
+      ].join("\n"),
+    );
+  }
+
+  function writeProjectLayer(home: string, projectName: string, setup: boolean): void {
+    const projectDir = path.join(home, "projects", projectName);
+    fs.mkdirSync(projectDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(projectDir, "harness.overrides.yaml"),
+      ["session_start_preflight:", `  setup: ${setup}`, ""].join("\n"),
+    );
+  }
+
+  it("SYMLINK: scopes by the real directory's basename when event.cwd is a symlink path (PR #522 SYMLINK rule)", async () => {
+    // Measured directly against this built module before writing this
+    // assertion (`deriveProjectName(link) === deriveProjectName(real) ===
+    // "real-name-repo"`, node -e against dist/runtime/git-context.js):
+    // realpathSync resolves the symlink boundary itself, so the common
+    // dir's basename is the REAL directory's name from either access
+    // path. No project layer is written under the symlink's own name
+    // ("link-name-repo"); only one under the real basename exists, so a
+    // producer that still derived from the symlink's own name (or fell
+    // back to `repo`, this hook's OWN checkout-basename variable, which
+    // for a symlink cwd is ALSO "link-name-repo") would find nothing and
+    // stay on the base manifest's setup:false.
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "harness-sspf-symlink-"));
+    cleanups.push(() => fs.rmSync(root, { recursive: true, force: true }));
+    const realRepo = path.join(root, "real-name-repo");
+    fs.mkdirSync(path.join(realRepo, ".git"), { recursive: true });
+    fs.writeFileSync(path.join(realRepo, ".git", "HEAD"), "ref: refs/heads/main\n");
+    const linkRepo = path.join(root, "link-name-repo");
+    fs.symlinkSync(realRepo, linkRepo, "dir");
+
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "harness-sspf-symlink-home-"));
+    cleanups.push(() => fs.rmSync(home, { recursive: true, force: true }));
+    writeBaseManifest(home, false);
+    writeProjectLayer(home, "real-name-repo", true);
+
+    const seenArgs: Array<{ cwd: string; timeoutMs: number; setup: boolean }> = [];
+    const result = await runSessionStartPreflight({
+      stdin: streamFrom(JSON.stringify({ session_id: "s", cwd: linkRepo })),
+      stderr: captureStream().stream,
+      homeDir: home,
+      runPreflight: async (cwd, timeoutMs, setup) => {
+        seenArgs.push({ cwd, timeoutMs, setup });
+        return { ok: true, json: { ready: true, confidence: 0.9, checks: [] } };
+      },
+      writeLedger: async () => ({ ok: true }),
+    });
+    expect(result.wrote).toBe(true);
+    expect(seenArgs).toEqual([{ cwd: linkRepo, timeoutMs: 60_000, setup: true }]);
+  });
+
+  // CASING: this filesystem is case-insensitive-but-case-preserving
+  // (APFS default, macOS; this test's own `beforeEach`/CI runner sits on
+  // the same filesystem class as the rest of this suite, no separate
+  // skip guard is needed here the way tests/runtime/git-context.test.ts
+  // needs one for ITS OWN differently-cased assertion, because this test
+  // does not assert anything about the string `deriveProjectName`
+  // returns, only about whether a layer written under the on-disk
+  // basename's OWN casing is still found).
+  //
+  // Correction against this task's own brief (measured, not assumed;
+  // verified directly with node against dist/runtime/git-context.js and
+  // dist/cli/loader.js before writing this assertion): the resolved
+  // project NAME is NOT corrected to the real basename's spelling here.
+  // `deriveProjectName`'s `fs.realpathSync` step does not canonicalize
+  // case for a plain (non-symlink) path segment (this is the exact
+  // finding `tests/runtime/git-context.test.ts`'s own case-differing
+  // test pins); `deriveProjectName(miscasedPath)` returns the ACCESS
+  // path's own casing verbatim ("REAL-PROJECT-CASING"), not the on-disk
+  // "Real-Project-Casing". What actually resolves the layer on THIS
+  // filesystem is a second, independent case-insensitivity: the layer
+  // FILE lookup itself (`fs.existsSync`/`fs.readFileSync` in
+  // src/cli/loader.ts) is exactly as case-insensitive as the filesystem
+  // HARNESS_HOME lives on, so a project directory physically named
+  // "Real-Project-Casing" is still found by a path string spelled
+  // "REAL-PROJECT-CASING". On a case-SENSITIVE HARNESS_HOME (untested in
+  // CI; the documented, environment-dependent half, see
+  // tests/runtime/git-context.test.ts's own case-differing test and
+  // CHANGELOG.md/docs/CLI.md's CASING note) that exact-spelling lookup
+  // would miss the "Real-Project-Casing" layer entirely and this
+  // assertion would need `setup: false`, not `true`.
+  it("CASING: scopes by a project layer named after the real basename even from a differently-cased event.cwd, on a case-insensitive HARNESS_HOME (PR #522 CASING rule; case-sensitive half is documented, not tested here)", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "harness-sspf-casing-"));
+    cleanups.push(() => fs.rmSync(root, { recursive: true, force: true }));
+    const realRepo = path.join(root, "Real-Project-Casing");
+    fs.mkdirSync(path.join(realRepo, ".git"), { recursive: true });
+    fs.writeFileSync(path.join(realRepo, ".git", "HEAD"), "ref: refs/heads/main\n");
+    const miscasedRepo = path.join(root, "REAL-PROJECT-CASING");
+
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "harness-sspf-casing-home-"));
+    cleanups.push(() => fs.rmSync(home, { recursive: true, force: true }));
+    writeBaseManifest(home, false);
+    writeProjectLayer(home, "Real-Project-Casing", true);
+
+    const seenArgs: Array<{ cwd: string; timeoutMs: number; setup: boolean }> = [];
+    const result = await runSessionStartPreflight({
+      stdin: streamFrom(JSON.stringify({ session_id: "s", cwd: miscasedRepo })),
+      stderr: captureStream().stream,
+      homeDir: home,
+      runPreflight: async (cwd, timeoutMs, setup) => {
+        seenArgs.push({ cwd, timeoutMs, setup });
+        return { ok: true, json: { ready: true, confidence: 0.9, checks: [] } };
+      },
+      writeLedger: async () => ({ ok: true }),
+    });
+    expect(result.wrote).toBe(true);
+    expect(seenArgs).toEqual([{ cwd: miscasedRepo, timeoutMs: 60_000, setup: true }]);
+  });
+});

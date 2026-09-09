@@ -27,7 +27,9 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { explainPolicy } from "../../src/cli/explain-policy.js";
 import { loadManifest, resolvePaths } from "../../src/cli/loader.js";
+import type { GitRepoContext } from "../../src/runtime/git-context.js";
 
 const PROJECT_NAME = "scoped-repo";
 
@@ -128,5 +130,129 @@ describe("resolvePaths: rejects an unsafe opts.project at its own path.join sink
     expect(resolved.projectLayer).toBe(
       path.join(tmpHome, "projects", PROJECT_NAME, "harness.overrides.yaml"),
     );
+  });
+});
+
+// Loader-level pin for the PR #522 migration note's SYMLINK rule (task
+// 6c8c1bae): a project layer keyed on a checkout SYMLINK's own name
+// never resolves, because `deriveProjectName` (src/runtime/
+// git-context.ts) realpaths the repository's common dir before taking
+// its basename; a layer keyed on the REAL directory's basename resolves
+// instead, even from a cwd that is still the symlink path. This drives
+// the loader end to end through `explainPolicy`'s own exported
+// projection (its `session_start_preflight.source` field, the same
+// field the executed migration-note matrix in CHANGELOG.md/docs/CLI.md
+// reads via `harness explain-policy ... --json`), not a rendered name
+// explain-policy never prints, since only `explainPolicy` derives a
+// project name from `opts.cwd` the way `harness session-start
+// preflight` and `harness doctor` do (the describe blocks above pin the
+// lower-level "opts.project must be explicit" contract this derivation
+// feeds into).
+describe("resolvePaths/loadManifest via explainPolicy's cwd-derivation seam: a symlinked checkout resolves the REAL basename's project layer, never the symlink's own name (task 6c8c1bae, PR #522 SYMLINK rule)", () => {
+  let symlinkScratchRoot: string;
+  let symlinkHome: string;
+
+  const SYMLINK_FIXTURE_MANIFEST_INPUT = {
+    version: 1,
+    hooks: [{ name: "risk-gate", event: "PreToolUse", command: "/usr/bin/true", blocking: false }],
+    policies: [
+      {
+        name: "preflight-before-symlink-fixture",
+        description: "loader-level symlink/real-basename fixture (task 6c8c1bae)",
+        trigger: { event: "PreToolUse", match: "Bash" },
+        requires: { ledger_tag: "preflight:${REPO}" },
+        hook: "risk-gate",
+        enforcement: "block",
+      },
+    ],
+  };
+
+  function writeSymlinkHomeManifest(home: string): void {
+    // JSON is valid YAML; this keeps the fixture self-contained without
+    // pulling in the `yaml` stringify helper this file does not
+    // otherwise import.
+    fs.writeFileSync(
+      path.join(home, "harness.yaml"),
+      JSON.stringify({ ...SYMLINK_FIXTURE_MANIFEST_INPUT, session_start_preflight: { setup: false } }),
+    );
+  }
+
+  function writeSymlinkProjectLayer(home: string, projectName: string): void {
+    const dir = path.join(home, "projects", projectName);
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(
+      path.join(dir, "harness.overrides.yaml"),
+      ["session_start_preflight:", "  setup: true", ""].join("\n"),
+    );
+  }
+
+  function makeSymlinkedRepo(root: string): { realDir: string; linkPath: string } {
+    const realDir = path.join(root, "real-name");
+    fs.mkdirSync(path.join(realDir, ".git"), { recursive: true });
+    fs.writeFileSync(path.join(realDir, ".git", "HEAD"), "ref: refs/heads/main\n");
+    const linkPath = path.join(root, "link-name");
+    fs.symlinkSync(realDir, linkPath, "dir");
+    return { realDir, linkPath };
+  }
+
+  function writeSymlinkEvent(dir: string): string {
+    const file = path.join(dir, "event.json");
+    fs.writeFileSync(
+      file,
+      JSON.stringify({
+        hook_event_name: "PreToolUse",
+        tool_name: "Bash",
+        tool_input: { command: "echo hi" },
+      }),
+    );
+    return file;
+  }
+
+  const symlinkSeams = {
+    now: new Date("2026-09-09T00:00:00.000Z"),
+    host: "h",
+    user: "u",
+    resolveGit: (): GitRepoContext => ({ repo: "r", branch: "main", sha: "" }),
+    cwdFallback: "/fallback",
+    env: {},
+    kubeContext: "",
+    kubeNamespace: "",
+  };
+
+  beforeEach(() => {
+    symlinkScratchRoot = fs.mkdtempSync(path.join(os.tmpdir(), "loader-symlink-fixture-"));
+    symlinkHome = path.join(symlinkScratchRoot, "home");
+    fs.mkdirSync(symlinkHome, { recursive: true });
+    writeSymlinkHomeManifest(symlinkHome);
+  });
+
+  afterEach(() => {
+    fs.rmSync(symlinkScratchRoot, { recursive: true, force: true });
+  });
+
+  it("does not resolve a layer keyed on the symlink's own name: source stays base even though cwd IS the symlink path", () => {
+    const { linkPath } = makeSymlinkedRepo(symlinkScratchRoot);
+    writeSymlinkProjectLayer(symlinkHome, "link-name");
+    const eventFile = writeSymlinkEvent(symlinkScratchRoot);
+    const { projection } = explainPolicy("preflight-before-symlink-fixture", {
+      ...symlinkSeams,
+      eventPath: eventFile,
+      homeDir: symlinkHome,
+      cwd: linkPath,
+    });
+    expect(projection.session_start_preflight).toEqual({ setup: false, source: "base" });
+  });
+
+  it("resolves the layer keyed on the real directory's basename, reached THROUGH the symlink cwd", () => {
+    const { realDir, linkPath } = makeSymlinkedRepo(symlinkScratchRoot);
+    writeSymlinkProjectLayer(symlinkHome, path.basename(realDir));
+    const eventFile = writeSymlinkEvent(symlinkScratchRoot);
+    const { projection } = explainPolicy("preflight-before-symlink-fixture", {
+      ...symlinkSeams,
+      eventPath: eventFile,
+      homeDir: symlinkHome,
+      cwd: linkPath,
+    });
+    expect(projection.session_start_preflight).toEqual({ setup: true, source: "project" });
   });
 });
