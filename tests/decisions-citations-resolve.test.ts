@@ -1046,14 +1046,23 @@ function hasWordCharacterAnchor(anchor: string | undefined): boolean {
   return /\w/.test(anchor ?? "");
 }
 
-describe("docs/okf citation anchors are not punctuation-only (contain a word character)", () => {
-  const anchoredOkfCitations: Citation[] = [];
-  for (const f of listDocs(OKF_DIR)) {
-    const text = fs.readFileSync(path.join(OKF_DIR, f), "utf8");
-    anchoredOkfCitations.push(
-      ...extractCitations(`docs/okf/${f}`, text).filter((c) => c.anchor !== undefined),
-    );
+// Collects every ANCHORED citation across every `.md` doc in `dir`. Shared by
+// both the docs/okf and docs/decisions anchor-quality assertions below and by
+// the scratch-directory fixture, so a mutant that guts either real assertion
+// (e.g. by not calling this helper, or by hardcoding an empty result) is
+// caught by the fixture below, independent of whether the live bundle
+// carries any punctuation-only anchor at the time.
+function collectAnchoredCitations(dir: string, labelPrefix: string): Citation[] {
+  const anchored: Citation[] = [];
+  for (const f of listDocs(dir)) {
+    const text = fs.readFileSync(path.join(dir, f), "utf8");
+    anchored.push(...extractCitations(`${labelPrefix}/${f}`, text).filter((c) => c.anchor !== undefined));
   }
+  return anchored;
+}
+
+describe("docs/okf citation anchors are not punctuation-only (contain a word character)", () => {
+  const anchoredOkfCitations: Citation[] = collectAnchoredCitations(OKF_DIR, "docs/okf");
 
   it("finds anchored docs/okf citations to check", () => {
     expect(anchoredOkfCitations.length).toBeGreaterThan(0);
@@ -1086,13 +1095,7 @@ describe("docs/okf citation anchors are not punctuation-only (contain a word cha
   });
 
   it("every anchored docs/decisions citation's anchor contains at least one word character (same guard, docs/decisions)", () => {
-    const anchoredDecisionsCitations: Citation[] = [];
-    for (const f of listDocs(DECISIONS_DIR)) {
-      const text = fs.readFileSync(path.join(DECISIONS_DIR, f), "utf8");
-      anchoredDecisionsCitations.push(
-        ...extractCitations(`docs/decisions/${f}`, text).filter((c) => c.anchor !== undefined),
-      );
-    }
+    const anchoredDecisionsCitations = collectAnchoredCitations(DECISIONS_DIR, "docs/decisions");
     const punctuationOnly = anchoredDecisionsCitations.filter(
       (c) => !hasWordCharacterAnchor(c.anchor),
     );
@@ -1105,5 +1108,34 @@ describe("docs/okf citation anchors are not punctuation-only (contain a word cha
         )
         .join("\n"),
     ).toHaveLength(0);
+  });
+
+  // Mirrors `collectBareNonMd`'s own fixture above: a scratch, docs/decisions-
+  // shaped directory carrying a planted punctuation-only anchor, run through
+  // the SAME `collectAnchoredCitations` + `hasWordCharacterAnchor` pair the
+  // real docs/decisions assertion above uses. Guards against a mutant that
+  // disables or no-ops the docs/decisions assertion (e.g. hardcoding
+  // `anchoredDecisionsCitations = []`, or dropping the `it` entirely): such a
+  // mutant is caught here even though the live docs/decisions bundle carries
+  // zero punctuation-only anchors today.
+  it("fixture: collectAnchoredCitations + hasWordCharacterAnchor catch a planted punctuation-only anchor in a scratch docs/decisions directory", () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "decisions-anchor-quality-fixtures-"));
+    try {
+      const decisionsDir = path.join(tmpDir, "docs", "decisions");
+      fs.mkdirSync(decisionsDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(decisionsDir, "0001-example.md"),
+        'Planted: see `src/example.ts:1-2#"}"` for the closing brace.\n',
+        "utf8",
+      );
+
+      const anchored = collectAnchoredCitations(decisionsDir, "docs/decisions");
+      const punctuationOnly = anchored.filter((c) => !hasWordCharacterAnchor(c.anchor));
+
+      expect(anchored, JSON.stringify(anchored)).toHaveLength(1);
+      expect(punctuationOnly, JSON.stringify(punctuationOnly)).toHaveLength(1);
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
   });
 });
