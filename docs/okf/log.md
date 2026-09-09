@@ -17,8 +17,16 @@
   in this ADR (`parseProbedVersion` call site) and in
   `manifest-validation-scope.md` (`runAssetChecks`, `checkMcp`) and
   `policy-engine-producer-wiring.md` (`checkSolutionAcceptanceProducer`),
-  re-stamped both `docs/okf/*.md` files' `timestamp:`, and lowered the
-  duplication pin 114 -> 113 (measured). Named the per-surface severity
+  re-stamped both `docs/okf/*.md` files' `timestamp:`. Also re-stamped
+  four further docs whose `sources:` list `src/cli/doctor/index.ts`,
+  `src/cli/validate/checks.ts`, or `docs/CLI.md` without citing a
+  specific line (`codex-adapter-parity-gaps.md`,
+  `debug-verb-selection.md`, `evidence-ledger-trust-boundary.md`,
+  `pause-vs-gate-kill-switch.md`), after `okf-kit check` flagged them
+  `sources-fresh: STALE` once those three files' content moved past
+  the docs' recorded timestamp; none of the four cite a changed line.
+  Lowered the duplication pin 114 -> 113 (measured). Named the
+  per-surface severity
   in this ADR's Update section and the CHANGELOG (error on both
   `tools.cli[]` paths, warning on `tools.mcp[]`/`memory.router`, a
   `below_floor` gap on the pack floor). Fixed the CHANGELOG's
