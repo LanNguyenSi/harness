@@ -1032,6 +1032,15 @@ describe("docs/okf bare (unanchored) line citations into non-Markdown sources: r
 // describe block closes that gap with a mechanical check the resolver above
 // does not perform: every anchored docs/okf citation's anchor must contain
 // at least one word character.
+// Shared predicate (mirroring `isBareNonMdCitation`'s pattern above): factored
+// out so the fixture test below shares the EXACT SAME check the real
+// assertion uses -- a mutant that neutralises this predicate (e.g. always
+// returning `true`) is caught by the fixture alone, without depending on the
+// live bundle carrying a punctuation-only anchor.
+function hasWordCharacterAnchor(anchor: string | undefined): boolean {
+  return /\w/.test(anchor ?? "");
+}
+
 describe("docs/okf citation anchors are not punctuation-only (contain a word character)", () => {
   const anchoredOkfCitations: Citation[] = [];
   for (const f of listDocs(OKF_DIR)) {
@@ -1046,7 +1055,7 @@ describe("docs/okf citation anchors are not punctuation-only (contain a word cha
   });
 
   it("every anchored docs/okf citation's anchor contains at least one word character (mutation probe P5 target: a punctuation-only anchor, e.g. a bare closing delimiter, pins nothing against a line shift)", () => {
-    const punctuationOnly = anchoredOkfCitations.filter((c) => !/\w/.test(c.anchor ?? ""));
+    const punctuationOnly = anchoredOkfCitations.filter((c) => !hasWordCharacterAnchor(c.anchor));
     expect(
       punctuationOnly,
       punctuationOnly
@@ -1058,7 +1067,7 @@ describe("docs/okf citation anchors are not punctuation-only (contain a word cha
     ).toHaveLength(0);
   });
 
-  it("fixture: a punctuation-only anchor fails the word-character check, a word anchor passes", () => {
+  it("fixture: a punctuation-only anchor fails the word-character check, a word anchor passes (mutation probe P5 target: a neutralised hasWordCharacterAnchor is caught here even when the live bundle carries zero punctuation-only anchors)", () => {
     const punctuationCitation = extractCitations(
       "fixture.md",
       'See `src/example.ts:1-2#"}"` for the closing brace.',
@@ -1067,7 +1076,7 @@ describe("docs/okf citation anchors are not punctuation-only (contain a word cha
       "fixture.md",
       'See `src/example.ts:1-2#"token"` for the named token.',
     )[0]!;
-    expect(/\w/.test(punctuationCitation.anchor ?? "")).toBe(false);
-    expect(/\w/.test(wordCitation.anchor ?? "")).toBe(true);
+    expect(hasWordCharacterAnchor(punctuationCitation.anchor)).toBe(false);
+    expect(hasWordCharacterAnchor(wordCitation.anchor)).toBe(true);
   });
 });
