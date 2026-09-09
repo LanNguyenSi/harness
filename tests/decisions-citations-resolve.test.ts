@@ -8,7 +8,10 @@ import { afterAll, describe, expect, it } from "vitest";
 // docs/decisions/*.md must resolve to the code it describes, on the
 // CURRENT tree, in anchored, repo-relative form. It also checks the
 // anchored citations in docs/okf/*.md, including the historical entries in
-// log.md; bare path:N references in that bundle remain out of scope. Written after a sweep
+// log.md. A separate ratchet further below (task `898f9925`) additionally
+// ratchets BARE (unanchored) `path:N` line citations into non-Markdown
+// sources to zero outside log.md, whose bare count is reported in a
+// computed test title only (history, not asserted). Written after a sweep
 // found citations pointing at whitespace hints and envelope comments
 // instead of the code the sentence actually named, plus an 11-line
 // shift from an unrelated constant move, drift a bare `path:N` citation
@@ -857,6 +860,18 @@ describe("docs/okf line-citation guard: fixture pinning discrimination against a
   }
 
   it("fails a docs/okf citation whose line has shifted off the anchor text (mutation probe P1 target: the line-resolution/anchor check above must actually run, not be disabled)", () => {
+    // Also pins the property mutation probe P3 relies on (a whole-file
+    // substring mutant of check (e)): the fixture's anchor text
+    // "widgetDistinctiveToken" is ABSENT from every line of
+    // fixtureSourceLines except line 5, so a whole-file-substring mutant of
+    // check (e) is the only way this shifted citation (claiming line 3)
+    // could wrongly pass, and there is exactly one place in the file where
+    // the mutant's widened search would find it. `agent-primitives probe`
+    // simulates that mutant directly against the real check (e)
+    // implementation; this test alone already kills it, since a
+    // whole-file `.includes()` on "widgetDistinctiveToken" would find the
+    // real occurrence on line 5 and wrongly report the shifted citation as
+    // resolved.
     const c = firstOkfCitation(
       'See `fixture-source.ts:3#"widgetDistinctiveToken"` for the factory.',
     );
@@ -870,21 +885,6 @@ describe("docs/okf line-citation guard: fixture pinning discrimination against a
       'See `fixture-source.ts:5#"widgetDistinctiveToken"` for the factory.',
     );
     expect(checkLineCitation(tmpDir, c)).toBeNull();
-  });
-
-  it("fails the shifted-line citation even under a mutation probe P3 shape: an anchor occurring anywhere in the SAME line's substring search still would not save a citation whose anchor text does not occur on line 3 at all (the anchor is real text unique to line 5)", () => {
-    // This does not simulate the mutant directly (that is done by
-    // `agent-primitives probe` against the real check (e) implementation);
-    // it instead documents and pins the property the probe relies on: the
-    // fixture's anchor text is ABSENT from every line except line 5, so a
-    // whole-file-substring mutant of check (e) is the only way the shifted
-    // citation (line 3) could wrongly pass, and there is exactly one place
-    // in the file where the mutant's widened search would find it.
-    const wholeFile = fixtureSourceLines.join("\n");
-    const occurrences = wholeFile.split("widgetDistinctiveToken").length - 1;
-    expect(occurrences, "the anchor must occur exactly once in the whole fixture file").toBe(1);
-    const line3 = fixtureSourceLines[2] ?? "";
-    expect(line3.includes("widgetDistinctiveToken")).toBe(false);
   });
 });
 
@@ -901,23 +901,42 @@ function isBareNonMdCitation(c: Citation): boolean {
   return c.anchor === undefined && !c.citedPath.endsWith(".md");
 }
 
-describe("docs/okf bare (unanchored) line citations into non-Markdown sources: ratchet", () => {
-  const bareNonMdOutsideLog: Citation[] = [];
-  let logMdBareNonMdCount = 0;
-  for (const f of listDocs(OKF_DIR)) {
-    const text = fs.readFileSync(path.join(OKF_DIR, f), "utf8");
-    const bare = extractCitations(`docs/okf/${f}`, text).filter(isBareNonMdCitation);
+interface BareNonMdCollection {
+  outsideLog: Citation[];
+  logMdCount: number;
+}
+
+/**
+ * Collects bare (unanchored) non-Markdown-target line citations across every
+ * `.md` doc in `dir`, exempting `log.md` (historical prose, reported as a
+ * count only -- see the describe block below). Factored out of the ratchet's
+ * own loop (task `898f9925` round 2) so the loop itself is pinned by a
+ * fixture over a scratch, docs/okf-shaped directory, not just by the live
+ * bundle's citations: a mutant that widens the log.md exemption to every doc
+ * (or drops the exemption, or drops the collection entirely) is caught by
+ * `collectBareNonMd`'s OWN fixture below, independent of whether the real
+ * bundle happens to carry any live bare citations at the time.
+ */
+function collectBareNonMd(dir: string, labelPrefix: string): BareNonMdCollection {
+  const outsideLog: Citation[] = [];
+  let logMdCount = 0;
+  for (const f of listDocs(dir)) {
+    const text = fs.readFileSync(path.join(dir, f), "utf8");
+    const bare = extractCitations(`${labelPrefix}/${f}`, text).filter(isBareNonMdCitation);
     if (f === "log.md") {
-      // log.md is historical prose narrating past re-points (docs/okf/index.md's
-      // Maintenance section states the exemption); its bare count is reported
-      // ONLY in the computed test title below, never asserted -- tracker
-      // criterion 3 ("Unanchored line citations are reported as a count in the
-      // test name (not asserted) so the residual is visible").
-      logMdBareNonMdCount = bare.length;
+      logMdCount = bare.length;
     } else {
-      bareNonMdOutsideLog.push(...bare);
+      outsideLog.push(...bare);
     }
   }
+  return { outsideLog, logMdCount };
+}
+
+describe("docs/okf bare (unanchored) line citations into non-Markdown sources: ratchet", () => {
+  const { outsideLog: bareNonMdOutsideLog, logMdCount: logMdBareNonMdCount } = collectBareNonMd(
+    OKF_DIR,
+    "docs/okf",
+  );
 
   it(`log.md carries ${logMdBareNonMdCount} bare (unanchored) line citation(s) into non-Markdown sources (historical prose, exempt, not asserted here)`, () => {
     // Intentionally not asserted against the count: this test name IS the
@@ -952,5 +971,103 @@ describe("docs/okf bare (unanchored) line citations into non-Markdown sources: r
       planted,
       "expected the planted bare non-md citation to be found by the ratchet's own filter",
     ).toHaveLength(1);
+  });
+
+  // Mutation probe P4 target: a mutant that widens `collectBareNonMd`'s
+  // log.md exemption to every doc (e.g. `if (true)` in place of
+  // `if (f === "log.md")`) would make `bareNonMdOutsideLog` above swallow a
+  // real bare citation that a doc author needs to see flagged. This fixture
+  // runs `collectBareNonMd` itself (not the filter alone, unlike the P2
+  // fixture above) over a scratch, docs/okf-shaped temp directory: one doc
+  // carrying a planted bare `src/x.ts:12` citation, plus a log.md carrying
+  // its own planted bare citation, and asserts the non-log citation is
+  // collected (doc, line, and citation text preserved) while the log.md one
+  // is not -- so a widened exemption fails here even when the real bundle
+  // carries zero live bare citations outside log.md.
+  it("fixture: collectBareNonMd collects a planted non-log bare citation and exempts log.md's own (mutation probe P4 target)", () => {
+    const tmpDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), "collect-bare-non-md-fixtures-"),
+    );
+    try {
+      const okfDir = path.join(tmpDir, "docs", "okf");
+      fs.mkdirSync(okfDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(okfDir, "planted.md"),
+        "Planted drift: see `src/x.ts:12` for detail.\n",
+        "utf8",
+      );
+      fs.writeFileSync(
+        path.join(okfDir, "log.md"),
+        "Historical re-point: see `src/y.ts:34` for detail.\n",
+        "utf8",
+      );
+
+      const { outsideLog, logMdCount } = collectBareNonMd(okfDir, "docs/okf");
+
+      expect(outsideLog, JSON.stringify(outsideLog)).toHaveLength(1);
+      expect(outsideLog[0]?.file).toBe("docs/okf/planted.md");
+      expect(outsideLog[0]?.adrLine).toBe(1);
+      expect(outsideLog[0]?.citedPath).toBe("src/x.ts");
+      expect(
+        outsideLog.some((c) => c.citedPath === "src/y.ts"),
+        "log.md's planted citation must not be collected into outsideLog",
+      ).toBe(false);
+      expect(logMdCount, "log.md's own planted bare citation must still be counted").toBe(1);
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Anchor-quality guard (task `898f9925` round 2, reviewer finding: eight of
+// the 48 live re-anchorings in round 1 were punctuation-only anchors, e.g.
+// `#"}"`, `#");"`, `#"};"`, on a bare-delimiter end line -- such an anchor
+// passes checks (d)-(f) above (it is present, occurs on the end line, and is
+// unique in the range, since a lone closing brace usually IS unique within a
+// short range) but pins NOTHING against the class of drift this whole guard
+// exists to catch: the range can grow or shrink by any number of lines and
+// still end on some closing delimiter, silently re-validating a citation
+// that no longer points at the content the doc's sentence describes. This
+// describe block closes that gap with a mechanical check the resolver above
+// does not perform: every anchored docs/okf citation's anchor must contain
+// at least one word character.
+describe("docs/okf citation anchors are not punctuation-only (contain a word character)", () => {
+  const anchoredOkfCitations: Citation[] = [];
+  for (const f of listDocs(OKF_DIR)) {
+    const text = fs.readFileSync(path.join(OKF_DIR, f), "utf8");
+    anchoredOkfCitations.push(
+      ...extractCitations(`docs/okf/${f}`, text).filter((c) => c.anchor !== undefined),
+    );
+  }
+
+  it("finds anchored docs/okf citations to check", () => {
+    expect(anchoredOkfCitations.length).toBeGreaterThan(0);
+  });
+
+  it("every anchored docs/okf citation's anchor contains at least one word character (mutation probe P5 target: a punctuation-only anchor, e.g. a bare closing delimiter, pins nothing against a line shift)", () => {
+    const punctuationOnly = anchoredOkfCitations.filter((c) => !/\w/.test(c.anchor ?? ""));
+    expect(
+      punctuationOnly,
+      punctuationOnly
+        .map(
+          (c) =>
+            `${c.file}:${c.adrLine}: citation \`${c.raw}\` has a punctuation-only anchor "${c.anchor}"`,
+        )
+        .join("\n"),
+    ).toHaveLength(0);
+  });
+
+  it("fixture: a punctuation-only anchor fails the word-character check, a word anchor passes", () => {
+    const punctuationCitation = extractCitations(
+      "fixture.md",
+      'See `src/example.ts:1-2#"}"` for the closing brace.',
+    )[0]!;
+    const wordCitation = extractCitations(
+      "fixture.md",
+      'See `src/example.ts:1-2#"token"` for the named token.',
+    )[0]!;
+    expect(/\w/.test(punctuationCitation.anchor ?? "")).toBe(false);
+    expect(/\w/.test(wordCitation.anchor ?? "")).toBe(true);
   });
 });

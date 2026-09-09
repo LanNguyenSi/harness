@@ -26,17 +26,16 @@ whose cited line has shifted off its anchor text actually fails; (2)
 ratchets bare (unanchored) line citations into non-Markdown sources to
 ZERO for every doc in this bundle except `log.md`, whose historical prose
 narrates past re-points and is reported only as a count in a computed test
-title, never asserted. Coverage measured 2026-09-09 (`node
-scratchpad/list_bare.mjs`-equivalent scan): 48 live bare citations into
-non-Markdown sources were converted to the anchored form across 8 docs
-(`manifest-validation-scope.md` 13, `pause-vs-gate-kill-switch.md` 18,
-`policy-engine-producer-wiring.md` 5, `quote-model-divergence.md` 4,
-`understanding-gate-auto-mode-signals.md` 3,
-`understanding-gate-lockout-recovery.md` 3, `codex-adapter-parity-gaps.md`
-1 (also re-pointed: the bare basename `generate-codex-config.ts` did not
-resolve at the repo root; corrected to `src/cli/apply/generate-codex-config.ts`),
-`gate-fail-posture-matrix.md` 1); `log.md` keeps its historical bare count,
-visible only via the ratchet's computed test title.
+title, never asserted; (3) requires every anchored docs/okf citation's
+anchor to contain at least one word character, so a punctuation-only
+anchor (a bare closing delimiter, which pins nothing against a line shift)
+fails. The reproducible measurement is `npx vitest run
+tests/decisions-citations-resolve.test.ts`: its test titles report the
+live bare-citation count outside `log.md` (asserted at zero) and `log.md`'s
+own historical count (reported, not asserted). Per-doc conversion tallies
+at the time of the round-1/round-2 conversions are recorded in
+`CHANGELOG.md`'s corresponding entry, not here, so this section does not
+go stale as new docs are added or citations shift.
 
 Do not list `CHANGELOG.md` under a doc's frontmatter `sources:`: `okf-kit`'s
 `sources-fresh` check flags a `sources:` entry by file path and commit
