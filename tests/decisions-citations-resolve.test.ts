@@ -70,7 +70,7 @@ const CITED_EXTENSIONS = ["ts", "md", "js", "sh", "mjs"] as const;
 const CITATION_RE = new RegExp(
   "`([A-Za-z0-9_./-]+\\.(?:" +
     CITED_EXTENSIONS.join("|") +
-    ")):(\\d+)(?:-(\\d+))?(?:#\"([^\"]*)\")?`",
+    ')):(\\d+)(?:-(\\d+))?(?:#"([^"]*)")?`',
   "g",
 );
 
@@ -209,22 +209,28 @@ describe("docs/decisions citations resolve on the current tree", () => {
   for (const f of listDocs(OKF_DIR)) {
     const text = fs.readFileSync(path.join(OKF_DIR, f), "utf8");
     allCitations.push(
-      ...extractCitations(`docs/okf/${f}`, text).filter((citation) => citation.anchor !== undefined),
+      ...extractCitations(`docs/okf/${f}`, text).filter(
+        (citation) => citation.anchor !== undefined,
+      ),
     );
   }
 
   it("finds citations to check, including anchored OKF citations from log.md", () => {
     expect(allCitations.length).toBeGreaterThan(0);
-    expect(allCitations.some((citation) => citation.file === "docs/okf/log.md")).toBe(true);
+    expect(
+      allCitations.some((citation) => citation.file === "docs/okf/log.md"),
+    ).toBe(true);
   });
 
-  it.each(allCitations.map((c) => [`${c.file}:${c.adrLine} ${c.raw}`, c] as const))(
-    "%s",
-    (_label, c) => {
-      const problem = checkLineCitation(REPO_ROOT, c);
-      expect(problem, problem ? `${c.file}:${c.adrLine}: ${problem}` : undefined).toBeNull();
-    },
-  );
+  it.each(
+    allCitations.map((c) => [`${c.file}:${c.adrLine} ${c.raw}`, c] as const),
+  )("%s", (_label, c) => {
+    const problem = checkLineCitation(REPO_ROOT, c);
+    expect(
+      problem,
+      problem ? `${c.file}:${c.adrLine}: ${problem}` : undefined,
+    ).toBeNull();
+  });
 });
 
 // Negative-grammar fixture: pins CITATION_RE against future loosening. Each
@@ -383,7 +389,10 @@ function parseContentAnchorText(raw: string | undefined): string | undefined {
   return raw.slice(1, -1);
 }
 
-function extractHeadingCitations(docFile: string, text: string): HeadingCitation[] {
+function extractHeadingCitations(
+  docFile: string,
+  text: string,
+): HeadingCitation[] {
   const citations: HeadingCitation[] = [];
   const lines = text.split("\n");
   lines.forEach((lineText, idx) => {
@@ -434,13 +443,20 @@ interface HeadingLine {
 
 // Every Markdown heading up to HEADING_MAX_LEVEL, outside fenced code
 // blocks, in document order.
-function collectHeadings(lines: string[], fencedLines: boolean[]): HeadingLine[] {
+function collectHeadings(
+  lines: string[],
+  fencedLines: boolean[],
+): HeadingLine[] {
   const headings: HeadingLine[] = [];
   lines.forEach((lineText, idx) => {
     if (fencedLines[idx]) return;
     const m = lineText.match(HEADING_LINE_RE);
     if (m && m[1]!.length <= HEADING_MAX_LEVEL) {
-      headings.push({ level: m[1]!.length, text: m[2]!.trim(), lineNo: idx + 1 });
+      headings.push({
+        level: m[1]!.length,
+        text: m[2]!.trim(),
+        lineNo: idx + 1,
+      });
     }
   });
   return headings;
@@ -525,7 +541,10 @@ function isHeadingSectionEmpty(
  * content anchor was given) the anchor text missing from, or ambiguous
  * within, the resolved section's body.
  */
-function checkHeadingCitation(repoRoot: string, c: HeadingCitation): string | null {
+function checkHeadingCitation(
+  repoRoot: string,
+  c: HeadingCitation,
+): string | null {
   if (c.citedPath.split("/").includes("..")) {
     return `${c.citedPath} contains a ".." path segment and is rejected without resolution`;
   }
@@ -558,7 +577,12 @@ function checkHeadingCitation(repoRoot: string, c: HeadingCitation): string | nu
     return `section under heading "${heading.text}" (line ${heading.lineNo}) of ${c.citedPath} has no non-blank content before the next heading`;
   }
   if (c.contentAnchor !== undefined) {
-    const count = countSectionAnchorOccurrences(lines, bodyStart, bodyEnd, c.contentAnchor);
+    const count = countSectionAnchorOccurrences(
+      lines,
+      bodyStart,
+      bodyEnd,
+      c.contentAnchor,
+    );
     if (count === 0) {
       return `content anchor "${c.contentAnchor}" does not occur in the section under heading "${heading.text}" (line ${heading.lineNo}) of ${c.citedPath}`;
     }
@@ -580,13 +604,14 @@ describe("docs/okf heading-section (`path.md:#heading`) citations resolve", () =
     expect(headingCitations.length).toBeGreaterThan(0);
   });
 
-  it.each(headingCitations.map((c) => [`${c.file}:${c.docLine} ${c.raw}`, c] as const))(
-    "%s",
-    (_label, c) => {
-      const problem = checkHeadingCitation(REPO_ROOT, c);
-      expect(problem, problem ?? undefined).toBeNull();
-    },
-  );
+  it.each(
+    headingCitations.map(
+      (c) => [`${c.file}:${c.docLine} ${c.raw}`, c] as const,
+    ),
+  )("%s", (_label, c) => {
+    const problem = checkHeadingCitation(REPO_ROOT, c);
+    expect(problem, problem ?? undefined).toBeNull();
+  });
 });
 
 describe("heading-section citation guard: fixtures pinning discriminating checks", () => {
@@ -732,7 +757,7 @@ describe("heading-section citation guard: fixtures pinning discriminating checks
     expect(problem).toContain("does not occur");
   });
 
-  it("rejects a citedPath containing a \"..\" path segment outright, without resolving it (mutation probe (g) target)", () => {
+  it('rejects a citedPath containing a ".." path segment outright, without resolving it (mutation probe (g) target)', () => {
     const c = extractHeadingCitations(
       "fixture.md",
       "See `../escape.md:#1.2.3`.",
@@ -859,7 +884,9 @@ describe("docs/okf line-citation guard: fixture pinning discrimination against a
     fs.writeFileSync(path.join(tmpDir, "docs", "okf", "x.md"), docText, "utf8");
     const citations = extractCitations("docs/okf/x.md", docText);
     if (citations.length !== 1) {
-      throw new Error(`fixture setup error: expected exactly 1 citation, found ${citations.length}`);
+      throw new Error(
+        `fixture setup error: expected exactly 1 citation, found ${citations.length}`,
+      );
     }
     return citations[0]!;
   }
@@ -881,7 +908,10 @@ describe("docs/okf line-citation guard: fixture pinning discrimination against a
       'See `fixture-source.ts:3#"widgetDistinctiveToken"` for the factory.',
     );
     const problem = checkLineCitation(tmpDir, c);
-    expect(problem, "expected the shifted-line citation to fail").not.toBeNull();
+    expect(
+      problem,
+      "expected the shifted-line citation to fail",
+    ).not.toBeNull();
     expect(problem).toContain("does not occur on line 3");
   });
 
@@ -922,12 +952,17 @@ interface BareNonMdCollection {
  * `collectBareNonMd`'s OWN fixture below, independent of whether the real
  * bundle happens to carry any live bare citations at the time.
  */
-function collectBareNonMd(dir: string, labelPrefix: string): BareNonMdCollection {
+function collectBareNonMd(
+  dir: string,
+  labelPrefix: string,
+): BareNonMdCollection {
   const outsideLog: Citation[] = [];
   let logMdCount = 0;
   for (const f of listDocs(dir)) {
     const text = fs.readFileSync(path.join(dir, f), "utf8");
-    const bare = extractCitations(`${labelPrefix}/${f}`, text).filter(isBareNonMdCitation);
+    const bare = extractCitations(`${labelPrefix}/${f}`, text).filter(
+      isBareNonMdCitation,
+    );
     if (f === "log.md") {
       logMdCount = bare.length;
     } else {
@@ -938,10 +973,8 @@ function collectBareNonMd(dir: string, labelPrefix: string): BareNonMdCollection
 }
 
 describe("docs/okf bare (unanchored) line citations into non-Markdown sources: ratchet", () => {
-  const { outsideLog: bareNonMdOutsideLog, logMdCount: logMdBareNonMdCount } = collectBareNonMd(
-    OKF_DIR,
-    "docs/okf",
-  );
+  const { outsideLog: bareNonMdOutsideLog, logMdCount: logMdBareNonMdCount } =
+    collectBareNonMd(OKF_DIR, "docs/okf");
 
   it(`log.md carries ${logMdBareNonMdCount} bare (unanchored) line citation(s) into non-Markdown sources (historical prose, exempt, not asserted here)`, () => {
     // Intentionally not asserted against the count: this test name IS the
@@ -970,8 +1003,12 @@ describe("docs/okf bare (unanchored) line citations into non-Markdown sources: r
   // still finds it, so a neutralised filter fails here even when the real
   // bundle carries zero live bare citations.
   it("fixture: the bare-citation filter still catches a planted bare non-md citation in a scratch doc (mutation probe P2 target)", () => {
-    const plantedDocText = 'Planted drift: see `src/planted-example.ts:12` for detail.\n';
-    const planted = extractCitations("fixture-scratch.md", plantedDocText).filter(isBareNonMdCitation);
+    const plantedDocText =
+      "Planted drift: see `src/planted-example.ts:12` for detail.\n";
+    const planted = extractCitations(
+      "fixture-scratch.md",
+      plantedDocText,
+    ).filter(isBareNonMdCitation);
     expect(
       planted,
       "expected the planted bare non-md citation to be found by the ratchet's own filter",
@@ -1017,7 +1054,10 @@ describe("docs/okf bare (unanchored) line citations into non-Markdown sources: r
         outsideLog.some((c) => c.citedPath === "src/y.ts"),
         "log.md's planted citation must not be collected into outsideLog",
       ).toBe(false);
-      expect(logMdCount, "log.md's own planted bare citation must still be counted").toBe(1);
+      expect(
+        logMdCount,
+        "log.md's own planted bare citation must still be counted",
+      ).toBe(1);
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
@@ -1052,24 +1092,44 @@ function hasWordCharacterAnchor(anchor: string | undefined): boolean {
 // (e.g. by not calling this helper, or by hardcoding an empty result) is
 // caught by the fixture below, independent of whether the live bundle
 // carries any punctuation-only anchor at the time.
-function collectAnchoredCitations(dir: string, labelPrefix: string): Citation[] {
+function collectAnchoredCitations(
+  dir: string,
+  labelPrefix: string,
+): Citation[] {
   const anchored: Citation[] = [];
   for (const f of listDocs(dir)) {
     const text = fs.readFileSync(path.join(dir, f), "utf8");
-    anchored.push(...extractCitations(`${labelPrefix}/${f}`, text).filter((c) => c.anchor !== undefined));
+    anchored.push(
+      ...extractCitations(`${labelPrefix}/${f}`, text).filter(
+        (c) => c.anchor !== undefined,
+      ),
+    );
   }
   return anchored;
 }
 
+// The whole check, collection plus predicate, so the two real assertions
+// below carry nothing but the expect: a mutant that neutralises the filter
+// (e.g. `() => false`) lands here and is caught by the scratch-directory
+// fixture, which runs this same function.
+function punctuationOnlyAnchors(dir: string, labelPrefix: string): Citation[] {
+  return collectAnchoredCitations(dir, labelPrefix).filter(
+    (c) => !hasWordCharacterAnchor(c.anchor),
+  );
+}
+
 describe("docs/okf citation anchors are not punctuation-only (contain a word character)", () => {
-  const anchoredOkfCitations: Citation[] = collectAnchoredCitations(OKF_DIR, "docs/okf");
+  const anchoredOkfCitations: Citation[] = collectAnchoredCitations(
+    OKF_DIR,
+    "docs/okf",
+  );
 
   it("finds anchored docs/okf citations to check", () => {
     expect(anchoredOkfCitations.length).toBeGreaterThan(0);
   });
 
   it("every anchored docs/okf citation's anchor contains at least one word character (mutation probe P5 target: a punctuation-only anchor, e.g. a bare closing delimiter, pins nothing against a line shift)", () => {
-    const punctuationOnly = anchoredOkfCitations.filter((c) => !hasWordCharacterAnchor(c.anchor));
+    const punctuationOnly = punctuationOnlyAnchors(OKF_DIR, "docs/okf");
     expect(
       punctuationOnly,
       punctuationOnly
@@ -1095,9 +1155,9 @@ describe("docs/okf citation anchors are not punctuation-only (contain a word cha
   });
 
   it("every anchored docs/decisions citation's anchor contains at least one word character (same guard, docs/decisions)", () => {
-    const anchoredDecisionsCitations = collectAnchoredCitations(DECISIONS_DIR, "docs/decisions");
-    const punctuationOnly = anchoredDecisionsCitations.filter(
-      (c) => !hasWordCharacterAnchor(c.anchor),
+    const punctuationOnly = punctuationOnlyAnchors(
+      DECISIONS_DIR,
+      "docs/decisions",
     );
     expect(
       punctuationOnly,
@@ -1119,7 +1179,9 @@ describe("docs/okf citation anchors are not punctuation-only (contain a word cha
   // mutant is caught here even though the live docs/decisions bundle carries
   // zero punctuation-only anchors today.
   it("fixture: collectAnchoredCitations + hasWordCharacterAnchor catch a planted punctuation-only anchor in a scratch docs/decisions directory", () => {
-    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "decisions-anchor-quality-fixtures-"));
+    const tmpDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), "decisions-anchor-quality-fixtures-"),
+    );
     try {
       const decisionsDir = path.join(tmpDir, "docs", "decisions");
       fs.mkdirSync(decisionsDir, { recursive: true });
@@ -1130,7 +1192,10 @@ describe("docs/okf citation anchors are not punctuation-only (contain a word cha
       );
 
       const anchored = collectAnchoredCitations(decisionsDir, "docs/decisions");
-      const punctuationOnly = anchored.filter((c) => !hasWordCharacterAnchor(c.anchor));
+      const punctuationOnly = punctuationOnlyAnchors(
+        decisionsDir,
+        "docs/decisions",
+      );
 
       expect(anchored, JSON.stringify(anchored)).toHaveLength(1);
       expect(punctuationOnly, JSON.stringify(punctuationOnly)).toHaveLength(1);
