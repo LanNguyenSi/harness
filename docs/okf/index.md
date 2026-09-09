@@ -23,13 +23,13 @@ while the described sentence had moved to line 940; okf-kit's `sources-fresh` co
 commit timestamps only and does not see line-level drift). The guard now
 also: (1) pins, via a docs/okf-shaped fixture, that an anchored citation
 whose cited line has shifted off its anchor text actually fails; (2)
-ratchets bare (unanchored) line citations into non-Markdown sources to
-ZERO for every doc in this bundle except `log.md`, whose historical prose
-narrates past re-points and is reported only as a count in a computed test
-title, never asserted; (3) requires every anchored docs/okf citation's
-anchor to contain at least one word character, so a punctuation-only
-anchor (a bare closing delimiter, which pins nothing against a line shift)
-fails. The reproducible measurement is `npx vitest run
+asserts zero bare (unanchored) line citations into non-Markdown sources
+outside `log.md` and reports `log.md`'s own historical count (its
+historical prose narrates past re-points) in a computed title, never
+asserted; (3) requires every anchored citation's anchor, in both
+docs/okf and docs/decisions, to contain at least one word character, so a
+punctuation-only anchor (a bare closing delimiter, which pins nothing
+against a line shift) fails. The reproducible measurement is `npx vitest run
 tests/decisions-citations-resolve.test.ts`: its test titles report the
 live bare-citation count outside `log.md` (asserted at zero) and `log.md`'s
 own historical count (reported, not asserted). Per-doc conversion tallies

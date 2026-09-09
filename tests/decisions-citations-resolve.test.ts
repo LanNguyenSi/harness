@@ -11,7 +11,12 @@ import { afterAll, describe, expect, it } from "vitest";
 // log.md. A separate ratchet further below (task `898f9925`) additionally
 // ratchets BARE (unanchored) `path:N` line citations into non-Markdown
 // sources to zero outside log.md, whose bare count is reported in a
-// computed test title only (history, not asserted). Written after a sweep
+// computed test title only (history, not asserted). A further guard
+// (also task `898f9925`) asserts every anchored citation's anchor
+// contains at least one word character, over both docs/okf and
+// docs/decisions, so a punctuation-only anchor (a bare closing
+// delimiter) cannot pass by pinning nothing against a line shift.
+// Written after a sweep
 // found citations pointing at whitespace hints and envelope comments
 // instead of the code the sentence actually named, plus an 11-line
 // shift from an unrelated constant move, drift a bare `path:N` citation
@@ -1078,5 +1083,27 @@ describe("docs/okf citation anchors are not punctuation-only (contain a word cha
     )[0]!;
     expect(hasWordCharacterAnchor(punctuationCitation.anchor)).toBe(false);
     expect(hasWordCharacterAnchor(wordCitation.anchor)).toBe(true);
+  });
+
+  it("every anchored docs/decisions citation's anchor contains at least one word character (same guard, docs/decisions)", () => {
+    const anchoredDecisionsCitations: Citation[] = [];
+    for (const f of listDocs(DECISIONS_DIR)) {
+      const text = fs.readFileSync(path.join(DECISIONS_DIR, f), "utf8");
+      anchoredDecisionsCitations.push(
+        ...extractCitations(`docs/decisions/${f}`, text).filter((c) => c.anchor !== undefined),
+      );
+    }
+    const punctuationOnly = anchoredDecisionsCitations.filter(
+      (c) => !hasWordCharacterAnchor(c.anchor),
+    );
+    expect(
+      punctuationOnly,
+      punctuationOnly
+        .map(
+          (c) =>
+            `${c.file}:${c.adrLine}: citation \`${c.raw}\` has a punctuation-only anchor "${c.anchor}"`,
+        )
+        .join("\n"),
+    ).toHaveLength(0);
   });
 });
