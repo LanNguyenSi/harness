@@ -8,6 +8,7 @@ import {
   resolveCommonDir,
   resolveGitContext,
   resolveOriginHeadBase,
+  resolveScopedProjectName,
 } from "../../src/runtime/git-context.js";
 
 let cleanups: Array<() => void> = [];
@@ -689,5 +690,173 @@ describe("deriveProjectName: case-differing path on a case-insensitive filesyste
     // case normalization happens, unlike the symlink case above.
     expect(deriveProjectName(differentlyCasedPath)).toBe("REAL-PROJECT");
     expect(deriveProjectName(differentlyCasedPath)).not.toBe("Real-Project");
+  });
+});
+
+// Task f1eb1c5c: `harness doctor`'s second, project-scoped load
+// (`opts.project ?? deriveProjectName(...) ?? null`) and the
+// `session_start_preflight` producer (`opts.project ?? deriveProjectName(cwd)
+// ?? repo`) used two independently written copies of the same
+// `opts.project ?? deriveProjectName(cwd) ?? fallback` expression, with
+// nothing pinning that the shared first two terms actually stayed
+// identical across both copies. `resolveScopedProjectName` is the single
+// place that expression now lives; each call site names its own
+// `fallback` explicitly instead of re-typing the whole expression.
+//
+// Pre-decision D-006 (task T-012) required reproducing the three-shape
+// matrix (a normal git repo, a linked worktree, and a cwd outside any
+// git work tree) on both surfaces before touching the code. That matrix
+// (see the run's implementer report and docs/CLI.md's PER-REPO SCOPING
+// section for the executed values):
+//
+//   shape                | doctor (fallback null) | producer (fallback repo)
+//   ---------------------|-------------------------|---------------------------
+//   normal git repo      | derived name            | SAME derived name
+//   linked worktree      | main checkout's name    | SAME main checkout's name
+//   outside any git repo | null                    | N/A (producer returns
+//                        |                          | before this expression
+//                        |                          | is ever reached, since
+//                        |                          | `repo === ""` there)
+//
+// The two surfaces agree everywhere the expression is actually reached
+// by both; they diverge only in the caller-supplied fallback, which is
+// now a named, visible argument rather than an accident. These tests
+// pin that agreement (shapes a/b) and that divergence (shape c) at the
+// shared helper directly.
+describe("resolveScopedProjectName (task f1eb1c5c)", () => {
+  // Round 1 used a cwd OUTSIDE any git work tree here, where
+  // `deriveProjectName` returns null anyway (see shape c below); an
+  // explicit `project` winning over a null derivation proves nothing
+  // about the short-circuit itself (a buggy `deriveProjectName(cwd) ??
+  // opts.project ?? fallback` ordering would pass identically). This
+  // now uses a cwd INSIDE a real repo whose OWN derived name
+  // ("derivable-project") differs from the explicit `project`
+  // ("explicit-name"), so only an actual short-circuit before
+  // `deriveProjectName` runs can produce "explicit-name" here.
+  it("an explicit project wins outright over a genuinely derivable, DIFFERENT name from cwd", () => {
+    const repo = makeRepo(tmpDir(), "derivable-project", "ref: refs/heads/main");
+    expect(deriveProjectName(repo)).toBe("derivable-project");
+    expect(
+      resolveScopedProjectName({ project: "explicit-name", cwd: repo, fallback: null }),
+    ).toBe("explicit-name");
+    expect(
+      resolveScopedProjectName({ project: "explicit-name", cwd: repo, fallback: "repo" }),
+    ).toBe("explicit-name");
+  });
+
+  it("shape a (normal git repo): both surfaces' fallback resolve to the SAME derived name", () => {
+    const repo = makeRepo(tmpDir(), "my-project", "ref: refs/heads/main");
+    const doctorValue = resolveScopedProjectName({ cwd: repo, fallback: null });
+    const producerValue = resolveScopedProjectName({ cwd: repo, fallback: "my-project" });
+    expect(doctorValue).toBe("my-project");
+    expect(producerValue).toBe("my-project");
+    expect(doctorValue).toBe(producerValue);
+  });
+
+  it("shape b (linked worktree): both surfaces' fallback resolve to the SAME main-checkout name", () => {
+    const root = tmpDir();
+    const { worktree } = makeLinkedWorktree(root, { commondir: "../.." });
+    // A linked worktree's OWN checkout directory is named
+    // "linked-worktree" (see `makeLinkedWorktree`); the producer's
+    // `repo` fallback in real code is that checkout basename, which is
+    // deliberately DIFFERENT from the derived main-checkout name
+    // ("main-repo") this shape resolves to, so this only proves the
+    // two surfaces agree on the DERIVED name itself, not on their
+    // respective fallbacks (shape c below covers the fallback).
+    const doctorValue = resolveScopedProjectName({ cwd: worktree, fallback: null });
+    const producerValue = resolveScopedProjectName({ cwd: worktree, fallback: "linked-worktree" });
+    expect(doctorValue).toBe("main-repo");
+    expect(producerValue).toBe("main-repo");
+    expect(doctorValue).toBe(producerValue);
+  });
+
+  it("shape c (outside any git repo): each surface's OWN fallback wins, and they differ by design", () => {
+    const outside = tmpDir();
+    expect(deriveProjectName(outside)).toBeNull();
+
+    // doctor's call site: `fallback: null`.
+    expect(resolveScopedProjectName({ cwd: outside, fallback: null })).toBeNull();
+    // the producer's call site: `fallback: repo` (the caller's own
+    // already-resolved `resolveGitContext(cwd).repo`, "" outside a
+    // repo in the producer's real call flow, but the helper itself
+    // treats `fallback` opaquely, so any caller-supplied value proves
+    // the point).
+    expect(resolveScopedProjectName({ cwd: outside, fallback: "" })).toBe("");
+    expect(resolveScopedProjectName({ cwd: outside, fallback: "some-repo" })).toBe("some-repo");
+  });
+
+  // The tests above pin the shared helper's own behaviour, but a caller
+  // could still silently stop USING it (reverting to its own inline
+  // `opts.project ?? deriveProjectName(cwd) ?? fallback` copy, with
+  // whatever fallback it likes) without any of those tests noticing,
+  // since none of them exercise `doctor()` or the `session_start_preflight`
+  // producer themselves. These source-identity assertions (same pattern
+  // as `tests/cli/doctor-session-start-preflight-setup-version.test.ts`'s
+  // "reads the SETUP floor identifier" test) read the actual source text
+  // and pin that both call sites still route through `resolveScopedProjectName`,
+  // so a caller reverting to its own inline copy is caught here even
+  // though the resulting VALUE could still happen to match today.
+  // Round 1 matched a SINGLE LINE containing `<name> =` and required
+  // `resolveScopedProjectName(` on that same line; a behaviour-identical
+  // reflow (the assignment on one line, the call on the next, exactly
+  // as a formatter/linter could produce) failed this suite with no
+  // explanation of what broke. This slices the whole assignment
+  // STATEMENT instead (from `const <name> =` to the next `;`), so the
+  // call may legally span multiple lines, and names the task plus what
+  // to update if a call site is legitimately restructured.
+  function sliceAssignmentStatement(src: string, constDeclaration: string): string | undefined {
+    const start = src.indexOf(constDeclaration);
+    if (start === -1) return undefined;
+    const end = src.indexOf(";", start);
+    return end === -1 ? src.slice(start) : src.slice(start, end + 1);
+  }
+
+  it("doctor's project-scoped load still calls resolveScopedProjectName, not an inline copy", () => {
+    const src = fs.readFileSync(
+      new URL("../../src/cli/doctor/index.ts", import.meta.url),
+      "utf8",
+    );
+    const statement = sliceAssignmentStatement(
+      src,
+      "const attemptedSessionStartPreflightProjectName =",
+    );
+    expect(
+      statement,
+      "task f1eb1c5c: no `const attemptedSessionStartPreflightProjectName =` statement found " +
+        "in src/cli/doctor/index.ts; if this call site was legitimately renamed or restructured, " +
+        "update this test's `constDeclaration` string to match",
+    ).toBeDefined();
+    expect(
+      statement,
+      "task f1eb1c5c: src/cli/doctor/index.ts's `attemptedSessionStartPreflightProjectName` " +
+        "assignment no longer calls `resolveScopedProjectName(`, meaning if this call site was " +
+        "legitimately restructured to keep sharing the resolution logic some other way, update " +
+        "this test to pin the new shape instead of reverting to an inline " +
+        "`opts.project ?? deriveProjectName(...) ?? fallback` copy",
+    ).toContain("resolveScopedProjectName(");
+    expect(src).not.toContain("deriveProjectName(opts.cwd");
+  });
+
+  it("the session_start_preflight producer still calls resolveScopedProjectName, not an inline copy", () => {
+    const src = fs.readFileSync(
+      new URL("../../src/cli/session-start/index.ts", import.meta.url),
+      "utf8",
+    );
+    const statement = sliceAssignmentStatement(src, "const sessionStartPreflightProjectName =");
+    expect(
+      statement,
+      "task f1eb1c5c: no `const sessionStartPreflightProjectName =` statement found " +
+        "in src/cli/session-start/index.ts; if this call site was legitimately renamed or " +
+        "restructured, update this test's `constDeclaration` string to match",
+    ).toBeDefined();
+    expect(
+      statement,
+      "task f1eb1c5c: src/cli/session-start/index.ts's `sessionStartPreflightProjectName` " +
+        "assignment no longer calls `resolveScopedProjectName(`, meaning if this call site was " +
+        "legitimately restructured to keep sharing the resolution logic some other way, update " +
+        "this test to pin the new shape instead of reverting to an inline " +
+        "`opts.project ?? deriveProjectName(cwd) ?? repo` copy",
+    ).toContain("resolveScopedProjectName(");
+    expect(src).not.toContain("deriveProjectName(cwd) ?? repo");
   });
 });

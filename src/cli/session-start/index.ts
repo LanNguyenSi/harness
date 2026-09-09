@@ -24,8 +24,8 @@ import { randomBytes } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import {
-  deriveProjectName,
   resolveGitContext,
+  resolveScopedProjectName,
 } from "../../runtime/index.js";
 import { resolveManifestLedgerWriter } from "../../runtime/ledger-writer.js";
 import { resolveGeneratedDir } from "../../runtime/pending-approval.js";
@@ -622,7 +622,11 @@ export async function runSessionStartPreflight(
   // `fs.existsSync` check), so nothing extra is merged in that case.
   // See docs/CLI.md's `session_start_preflight.setup` Notes for the
   // full rule.
-  const sessionStartPreflightProjectName = opts.project ?? deriveProjectName(cwd) ?? repo;
+  const sessionStartPreflightProjectName = resolveScopedProjectName({
+    project: opts.project,
+    cwd,
+    fallback: repo,
+  });
   const setupEnabled = (() => {
     try {
       const manifest =
