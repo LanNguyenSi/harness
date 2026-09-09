@@ -3097,7 +3097,7 @@ ${cliBlock}
     });
     const cli = report.tools.cli.find((c) => c.name === "fake");
     expect(cli?.status).toBe("ok");
-    expect(cli?.message).toBe("v1.2.4 ≥ 1.2.3");
+    expect(cli?.message).toBe("v1.2.4-rc.1 ≥ 1.2.3");
   });
 
   it("reads below_floor on a git-describe suffix at an equal-numeric floor (accepted cost)", async () => {
@@ -3251,7 +3251,7 @@ ${mcpBlock}
       npmBinExec: STUB_NPM_BIN_EXEC_UNKNOWN,
     });
     expect(report.tools.mcpVersions).toEqual([
-      { name: "fake-mcp", status: "ok", message: "v1.2.4 ≥ 1.2.3" },
+      { name: "fake-mcp", status: "ok", message: "v1.2.4-rc.1 ≥ 1.2.3" },
     ]);
   });
 

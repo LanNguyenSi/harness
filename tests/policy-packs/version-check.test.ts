@@ -133,6 +133,7 @@ describe("checkPolicyPackVersions - min_version prerelease (task db44ab46)", () 
       actualVersion: "0.3.1",
       kind: "below_floor",
     });
+    expect(gaps[0]?.message).toBe("outdated: installed v0.3.1-rc.1 < required 0.3.1");
   });
 
   it("flags below_floor when the probed version is a dotless prerelease of min_version", () => {
@@ -173,6 +174,7 @@ describe("checkPolicyPackVersions - min_version prerelease (task db44ab46)", () 
       actualVersion: "0.3.1",
       kind: "below_floor",
     });
+    expect(gaps[0]?.message).toBe("outdated: installed v0.3.1-4-gabc123 < required 0.3.1");
   });
 
   it("flags below_floor on a platform suffix at an equal-numeric floor (accepted cost)", () => {
@@ -186,5 +188,6 @@ describe("checkPolicyPackVersions - min_version prerelease (task db44ab46)", () 
       actualVersion: "0.3.1",
       kind: "below_floor",
     });
+    expect(gaps[0]?.message).toBe("outdated: installed v0.3.1-linux-x64 < required 0.3.1");
   });
 });

@@ -185,13 +185,15 @@ merely surfaced as a warning. `tools.mcp[]` in `harness doctor`
 (`checkMcpVersions`) and `memory.router`'s version probe both push
 `status: "warn"`, counted into `warningCount`, matching what
 `git-preflight` and `session_start_preflight.setup` already did. The
-policy-pack-level floor pushes a `below_floor` gap (no severity field of
-its own; the pack layer's own consumer decides how to weigh a gap).
-This is correct under semver precedence (an RC is not the release), not
-a regression, but it means the two `tools.cli[]` checks can flip an
-operator's `doctor`/`validate` exit code non-zero on an RC where they
-previously passed silently. Maintainers keep exactly one comparator
-instead of two.
+policy-pack-level floor pushes a `below_floor` gap counted into
+`harness doctor`'s `warningCount`
+(`src/cli/doctor/index.ts:1074#"warningCount += report.policyPacks.versionGaps.length;"`),
+the same footing as `tools.mcp[]` and `memory.router`, not a hard
+failure. This is correct under semver precedence (an RC is not the
+release), not a regression, but it means the two `tools.cli[]` checks
+can flip an operator's `doctor`/`validate` exit code non-zero on an RC
+where they previously passed silently. Maintainers keep exactly one
+comparator instead of two.
 The accepted cost this ADR's Consequences section named for `hooks[]`
 (a `version_command` reporting a git-describe or platform suffix now
 also reads `below_floor` on an exact numeric tie) applies identically to

@@ -196,7 +196,7 @@ export function inspectMemory(manifest: Manifest, opts: MemoryOptions = {}): Mem
                 status: "warn",
                 message: `outdated: installed v${token} < required ${minVersion}`,
               }
-            : { status: "ok", message: `v${actual} ≥ ${minVersion}` };
+            : { status: "ok", message: `v${token} ≥ ${minVersion}` };
       }
     }
   }

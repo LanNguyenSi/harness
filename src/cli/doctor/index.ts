@@ -288,7 +288,7 @@ function checkCli(manifest: Manifest, opts: DoctorOptions, npmBinDir: string | u
       out.push({
         name: cli.name,
         status: "ok",
-        message: `v${actual} ≥ ${cli.min_version}`,
+        message: `v${token} ≥ ${cli.min_version}`,
       });
     }
   }
@@ -362,7 +362,7 @@ function checkMcpVersions(manifest: Manifest, opts: DoctorOptions): McpVersionRe
       out.push({
         name: mcp.name,
         status: "ok",
-        message: `v${actual} ≥ ${mcp.min_version}`,
+        message: `v${token} ≥ ${mcp.min_version}`,
       });
     }
   }

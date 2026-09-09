@@ -253,7 +253,7 @@ describe("inspectMemory: memory.router min_version prerelease (task db44ab46)", 
   it("passes a higher-version prerelease with no diagnostic (numeric comparison is not a tie)", () => {
     expect(routerVersionFor("memory-router 1.2.4-rc.1\n")).toEqual({
       status: "ok",
-      message: "v1.2.4 ≥ 1.2.3",
+      message: "v1.2.4-rc.1 ≥ 1.2.3",
     });
   });
 
