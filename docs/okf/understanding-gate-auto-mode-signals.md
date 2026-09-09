@@ -3,7 +3,7 @@ type: overview
 title: Understanding gate, auto-mode signal sources (measured)
 description: What signals exist for detecting an agent's own permission/auto-approval mode across Claude Code, Codex, and opencode, measured where possible, doc-only where not, with a trust-class table. Covers both launch shapes for Claude Code, headless and interactive, plus how a hook ask resolves in each and what a subagent's tool call looks like to the same hook. The rule and the decision on which signals gate anything live in the ADR, not here.
 tags: [understanding-gate, permission-mode, auto-mode, hooks, measurement, trust-boundary]
-timestamp: 2026-09-06T18:54:07Z
+timestamp: 2026-09-09T04:56:07Z
 sources:
   - src/cli/pack/auto-approve-path.ts
   - dogfood/ug-auto-mode-signals/README.md
@@ -143,7 +143,7 @@ it is confined to the last step of the hook's decision order:
   `harness.generated/.permission-mode-observations/`
   (`permission-mode-observations.ts`), consumed only by `harness
   doctor`'s missing-`auto_approve` finding, never by any gate decision.
-- `src/cli/smoke/runner.ts:69-70`: `CLAUDE_FLAGS` hard-codes
+- `src/cli/smoke/runner.ts:69-70#"bypassPermissions"`: `CLAUDE_FLAGS` hard-codes
   `--permission-mode bypassPermissions` as an argv flag the smoke driver
   passes to the `claude -p` subprocess it spawns; this sets the mode, it
   does not read it back as a gate signal.
@@ -151,7 +151,7 @@ it is confined to the last step of the hook's decision order:
   `permission-mode` transcript line into a `TranscriptEvent` with
   `kind: "permission_mode"` and `data: { mode: raw.permissionMode }`,
   for session-export purposes. Not consulted by any gate.
-- `src/cli/smoke/stream-parser.ts:23`: an optional `permissionMode` field
+- `src/cli/smoke/stream-parser.ts:23#"permissionMode"`: an optional `permissionMode` field
   on the parsed `InitEvent` from `claude -p --output-format
   stream-json`'s `system`/`init` line; also smoke-only, not gate logic.
 
@@ -175,7 +175,7 @@ under `bypassPermissions`. Result (per-run table in the README, section
 
 This agrees with, and refines, the existing statements that mid-turn
 assistant text is not reliably persisted to the transcript
-(`src/cli/pack/approve-escape.ts:20-24`; the lockout runbook): at the hook
+(`src/cli/pack/approve-escape.ts:20-24#"instant"`; the lockout runbook): at the hook
 instant it is not there; shortly afterwards it is, in this sample. A first
 version of this probe matched the bare string "Understanding Report"
 anywhere in the transcript, which the prompt itself contained, and
