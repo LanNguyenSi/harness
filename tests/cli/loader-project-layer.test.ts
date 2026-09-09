@@ -30,6 +30,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { explainPolicy } from "../../src/cli/explain-policy.js";
 import { loadManifest, resolvePaths } from "../../src/cli/loader.js";
 import type { GitRepoContext } from "../../src/runtime/git-context.js";
+import { isCaseInsensitiveFilesystem } from "../_helpers/case-sensitivity.js";
 
 const PROJECT_NAME = "scoped-repo";
 
@@ -133,6 +134,75 @@ describe("resolvePaths: rejects an unsafe opts.project at its own path.join sink
   });
 });
 
+// Shared fixture helpers for the SYMLINK and CASING describe blocks
+// below (task 6c8c1bae: these two blocks used to carry ~90 lines of
+// near-duplicate fixture builders). Parameterised by
+// policy name/description and layer setup value so both blocks reuse
+// them; only `makeSymlinkedRepo`/`makeCasingRepo` stay separate below,
+// since a symlinked checkout and a plain one are genuinely different
+// shapes.
+function writeFixtureHomeManifest(
+  home: string,
+  policyName: string,
+  description: string,
+  baseSetup: boolean,
+): void {
+  // JSON is valid YAML; this keeps the fixture self-contained without
+  // pulling in the `yaml` stringify helper this file does not
+  // otherwise import.
+  const manifestInput = {
+    version: 1,
+    hooks: [{ name: "risk-gate", event: "PreToolUse", command: "/usr/bin/true", blocking: false }],
+    policies: [
+      {
+        name: policyName,
+        description,
+        trigger: { event: "PreToolUse", match: "Bash" },
+        requires: { ledger_tag: "preflight:${REPO}" },
+        hook: "risk-gate",
+        enforcement: "block",
+      },
+    ],
+  };
+  fs.writeFileSync(
+    path.join(home, "harness.yaml"),
+    JSON.stringify({ ...manifestInput, session_start_preflight: { setup: baseSetup } }),
+  );
+}
+
+function writeFixtureProjectLayer(home: string, projectDirName: string, setup: boolean): void {
+  const dir = path.join(home, "projects", projectDirName);
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(
+    path.join(dir, "harness.overrides.yaml"),
+    ["session_start_preflight:", `  setup: ${setup}`, ""].join("\n"),
+  );
+}
+
+function writeFixtureEvent(dir: string): string {
+  const file = path.join(dir, "event.json");
+  fs.writeFileSync(
+    file,
+    JSON.stringify({
+      hook_event_name: "PreToolUse",
+      tool_name: "Bash",
+      tool_input: { command: "echo hi" },
+    }),
+  );
+  return file;
+}
+
+const FIXTURE_SEAMS = {
+  now: new Date("2026-09-09T00:00:00.000Z"),
+  host: "h",
+  user: "u",
+  resolveGit: (): GitRepoContext => ({ repo: "r", branch: "main", sha: "" }),
+  cwdFallback: "/fallback",
+  env: {},
+  kubeContext: "",
+  kubeNamespace: "",
+};
+
 // Loader-level pin for the PR #522 migration note's SYMLINK rule (task
 // 6c8c1bae): a project layer keyed on a checkout SYMLINK's own name
 // never resolves, because `deriveProjectName` (src/runtime/
@@ -152,40 +222,6 @@ describe("resolvePaths/loadManifest via explainPolicy's cwd-derivation seam: a s
   let symlinkScratchRoot: string;
   let symlinkHome: string;
 
-  const SYMLINK_FIXTURE_MANIFEST_INPUT = {
-    version: 1,
-    hooks: [{ name: "risk-gate", event: "PreToolUse", command: "/usr/bin/true", blocking: false }],
-    policies: [
-      {
-        name: "preflight-before-symlink-fixture",
-        description: "loader-level symlink/real-basename fixture (task 6c8c1bae)",
-        trigger: { event: "PreToolUse", match: "Bash" },
-        requires: { ledger_tag: "preflight:${REPO}" },
-        hook: "risk-gate",
-        enforcement: "block",
-      },
-    ],
-  };
-
-  function writeSymlinkHomeManifest(home: string): void {
-    // JSON is valid YAML; this keeps the fixture self-contained without
-    // pulling in the `yaml` stringify helper this file does not
-    // otherwise import.
-    fs.writeFileSync(
-      path.join(home, "harness.yaml"),
-      JSON.stringify({ ...SYMLINK_FIXTURE_MANIFEST_INPUT, session_start_preflight: { setup: false } }),
-    );
-  }
-
-  function writeSymlinkProjectLayer(home: string, projectName: string): void {
-    const dir = path.join(home, "projects", projectName);
-    fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(
-      path.join(dir, "harness.overrides.yaml"),
-      ["session_start_preflight:", "  setup: true", ""].join("\n"),
-    );
-  }
-
   function makeSymlinkedRepo(root: string): { realDir: string; linkPath: string } {
     const realDir = path.join(root, "real-name");
     fs.mkdirSync(path.join(realDir, ".git"), { recursive: true });
@@ -195,35 +231,16 @@ describe("resolvePaths/loadManifest via explainPolicy's cwd-derivation seam: a s
     return { realDir, linkPath };
   }
 
-  function writeSymlinkEvent(dir: string): string {
-    const file = path.join(dir, "event.json");
-    fs.writeFileSync(
-      file,
-      JSON.stringify({
-        hook_event_name: "PreToolUse",
-        tool_name: "Bash",
-        tool_input: { command: "echo hi" },
-      }),
-    );
-    return file;
-  }
-
-  const symlinkSeams = {
-    now: new Date("2026-09-09T00:00:00.000Z"),
-    host: "h",
-    user: "u",
-    resolveGit: (): GitRepoContext => ({ repo: "r", branch: "main", sha: "" }),
-    cwdFallback: "/fallback",
-    env: {},
-    kubeContext: "",
-    kubeNamespace: "",
-  };
-
   beforeEach(() => {
     symlinkScratchRoot = fs.mkdtempSync(path.join(os.tmpdir(), "loader-symlink-fixture-"));
     symlinkHome = path.join(symlinkScratchRoot, "home");
     fs.mkdirSync(symlinkHome, { recursive: true });
-    writeSymlinkHomeManifest(symlinkHome);
+    writeFixtureHomeManifest(
+      symlinkHome,
+      "preflight-before-symlink-fixture",
+      "loader-level symlink/real-basename fixture (task 6c8c1bae)",
+      false,
+    );
   });
 
   afterEach(() => {
@@ -232,10 +249,10 @@ describe("resolvePaths/loadManifest via explainPolicy's cwd-derivation seam: a s
 
   it("does not resolve a layer keyed on the symlink's own name: source stays base even though cwd IS the symlink path", () => {
     const { linkPath } = makeSymlinkedRepo(symlinkScratchRoot);
-    writeSymlinkProjectLayer(symlinkHome, "link-name");
-    const eventFile = writeSymlinkEvent(symlinkScratchRoot);
+    writeFixtureProjectLayer(symlinkHome, "link-name", true);
+    const eventFile = writeFixtureEvent(symlinkScratchRoot);
     const { projection } = explainPolicy("preflight-before-symlink-fixture", {
-      ...symlinkSeams,
+      ...FIXTURE_SEAMS,
       eventPath: eventFile,
       homeDir: symlinkHome,
       cwd: linkPath,
@@ -245,10 +262,10 @@ describe("resolvePaths/loadManifest via explainPolicy's cwd-derivation seam: a s
 
   it("resolves the layer keyed on the real directory's basename, reached THROUGH the symlink cwd", () => {
     const { realDir, linkPath } = makeSymlinkedRepo(symlinkScratchRoot);
-    writeSymlinkProjectLayer(symlinkHome, path.basename(realDir));
-    const eventFile = writeSymlinkEvent(symlinkScratchRoot);
+    writeFixtureProjectLayer(symlinkHome, path.basename(realDir), true);
+    const eventFile = writeFixtureEvent(symlinkScratchRoot);
     const { projection } = explainPolicy("preflight-before-symlink-fixture", {
-      ...symlinkSeams,
+      ...FIXTURE_SEAMS,
       eventPath: eventFile,
       homeDir: symlinkHome,
       cwd: linkPath,
@@ -258,59 +275,35 @@ describe("resolvePaths/loadManifest via explainPolicy's cwd-derivation seam: a s
 });
 
 // Loader-level pin for the PR #522 migration note's CASING rule, LAYER
-// DIRECTORY half (task 6c8c1bae round 2, LOW finding): docs/CLI.md:155's
-// MIGRATION note says "A DIFFERENTLY-CASED layer directory resolves or
-// not according to the filesystem HARNESS_HOME itself lives on", this
-// is about the PROJECT LAYER DIRECTORY's own on-disk name differing in
-// case from the derived project name, a shape the producer-level CASING
-// fixture in tests/cli/session-start/preflight.test.ts never exercises
-// (that fixture varies the CWD's access-path casing, not the layer
-// directory's own spelling, and its own derived name always matches its
-// layer's spelling exactly). Here the cwd is a plain, non-symlinked
-// checkout with no casing games of its own, so `deriveProjectName`
-// returns the on-disk basename verbatim; only the LAYER DIRECTORY on
-// disk is spelled differently. `resolvePaths`' own lookup
-// (`fs.existsSync`, src/cli/loader.ts) is exactly as case-insensitive as
-// the filesystem HARNESS_HOME lives on, so this still resolves on a
-// case-insensitive home. Self-skips on a case-sensitive HARNESS_HOME
-// (CI's ext4), mirroring tests/runtime/git-context.test.ts's own
-// case-differing test's `ctx.skip` guard: on that filesystem the exact
-// on-disk-differing spelling would simply not be found, and this
-// assertion would not hold.
-describe("resolvePaths/loadManifest via explainPolicy's cwd-derivation seam: a differently-cased project layer DIRECTORY still resolves on a case-insensitive HARNESS_HOME (task 6c8c1bae round 2, PR #522 CASING rule, docs/CLI.md:155 layer-directory half)", () => {
+// DIRECTORY half (task 6c8c1bae, PR #522 CASING rule): docs/CLI.md's
+// PER-REPO SCOPING bullet, MIGRATION note, says "A DIFFERENTLY-CASED
+// layer directory resolves or not according to the filesystem
+// HARNESS_HOME itself lives on"; this is about the PROJECT LAYER
+// DIRECTORY's own on-disk name differing in case from the derived
+// project name, a shape the producer-level fixture in
+// tests/cli/session-start/preflight.test.ts does not exercise (that
+// fixture pins linked-worktree derivation and raw-cwd passthrough, not
+// casing). Here the cwd is a plain, non-symlinked checkout with no
+// casing games of its own, so `deriveProjectName` returns the on-disk
+// basename verbatim; only the LAYER DIRECTORY on disk is spelled
+// differently. `resolvePaths`' own lookup (`fs.existsSync`,
+// src/cli/loader.ts) is exactly as case-insensitive as the filesystem
+// HARNESS_HOME lives on.
+//
+// task 6c8c1bae: both halves of the MIGRATION note's CASING sentence
+// have an assertion, run unconditionally.
+// The fixture's own HARNESS_HOME location is measured with the shared
+// `isCaseInsensitiveFilesystem` probe (tests/_helpers/
+// case-sensitivity.ts, also used by tests/runtime/git-context.test.ts's
+// own inline copy) and the expectation branches on the result: a
+// case-insensitive home resolves the layer (`source: "project"`), a
+// case-sensitive one does not (`source: "base"`, the layer directory
+// simply not found). Previously this test self-skipped entirely on a
+// case-sensitive HARNESS_HOME (CI's ext4), so neither branch of the
+// note was ever asserted there.
+describe("resolvePaths/loadManifest via explainPolicy's cwd-derivation seam: a differently-cased project layer DIRECTORY (task 6c8c1bae, PR #522 CASING rule, docs/CLI.md PER-REPO SCOPING MIGRATION note)", () => {
   let casingScratchRoot: string;
   let casingHome: string;
-
-  const CASING_FIXTURE_MANIFEST_INPUT = {
-    version: 1,
-    hooks: [{ name: "risk-gate", event: "PreToolUse", command: "/usr/bin/true", blocking: false }],
-    policies: [
-      {
-        name: "preflight-before-casing-fixture",
-        description: "loader-level layer-directory-casing fixture (task 6c8c1bae round 2)",
-        trigger: { event: "PreToolUse", match: "Bash" },
-        requires: { ledger_tag: "preflight:${REPO}" },
-        hook: "risk-gate",
-        enforcement: "block",
-      },
-    ],
-  };
-
-  function writeCasingHomeManifest(home: string): void {
-    fs.writeFileSync(
-      path.join(home, "harness.yaml"),
-      JSON.stringify({ ...CASING_FIXTURE_MANIFEST_INPUT, session_start_preflight: { setup: false } }),
-    );
-  }
-
-  function writeCasingProjectLayer(home: string, projectDirName: string): void {
-    const dir = path.join(home, "projects", projectDirName);
-    fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(
-      path.join(dir, "harness.overrides.yaml"),
-      ["session_start_preflight:", "  setup: true", ""].join("\n"),
-    );
-  }
 
   function makeCasingRepo(root: string, name: string): string {
     const dir = path.join(root, name);
@@ -319,77 +312,39 @@ describe("resolvePaths/loadManifest via explainPolicy's cwd-derivation seam: a d
     return dir;
   }
 
-  function writeCasingEvent(dir: string): string {
-    const file = path.join(dir, "event.json");
-    fs.writeFileSync(
-      file,
-      JSON.stringify({
-        hook_event_name: "PreToolUse",
-        tool_name: "Bash",
-        tool_input: { command: "echo hi" },
-      }),
-    );
-    return file;
-  }
-
-  // Mirrors tests/runtime/git-context.test.ts's own case-differing
-  // test's guard (write a lowercase marker, stat the uppercase spelling,
-  // compare inodes).
-  function isCaseInsensitiveFilesystem(dir: string): boolean {
-    const markerLower = path.join(dir, "case-probe-marker");
-    fs.writeFileSync(markerLower, "x");
-    const markerUpper = path.join(dir, "CASE-PROBE-MARKER");
-    let caseInsensitive: boolean;
-    try {
-      caseInsensitive = fs.statSync(markerUpper).ino === fs.statSync(markerLower).ino;
-    } catch {
-      caseInsensitive = false;
-    }
-    fs.rmSync(markerLower, { force: true });
-    return caseInsensitive;
-  }
-
-  const casingSeams = {
-    now: new Date("2026-09-09T00:00:00.000Z"),
-    host: "h",
-    user: "u",
-    resolveGit: (): GitRepoContext => ({ repo: "r", branch: "main", sha: "" }),
-    cwdFallback: "/fallback",
-    env: {},
-    kubeContext: "",
-    kubeNamespace: "",
-  };
-
   beforeEach(() => {
     casingScratchRoot = fs.mkdtempSync(path.join(os.tmpdir(), "loader-casing-fixture-"));
     casingHome = path.join(casingScratchRoot, "home");
     fs.mkdirSync(casingHome, { recursive: true });
-    writeCasingHomeManifest(casingHome);
+    writeFixtureHomeManifest(
+      casingHome,
+      "preflight-before-casing-fixture",
+      "loader-level layer-directory-casing fixture (task 6c8c1bae)",
+      false,
+    );
   });
 
   afterEach(() => {
     fs.rmSync(casingScratchRoot, { recursive: true, force: true });
   });
 
-  it("resolves a project layer directory whose on-disk name differs in case from the derived project name, on a case-insensitive HARNESS_HOME", (ctx) => {
-    if (!isCaseInsensitiveFilesystem(casingHome)) {
-      ctx.skip(
-        "this filesystem is case-sensitive, so a differently-cased layer directory does not resolve (matches tests/runtime/git-context.test.ts's own case-differing test's skip guard)",
-      );
-    }
-
+  it("resolves a project layer directory whose on-disk name differs in case from the derived project name, only when HARNESS_HOME is case-insensitive", () => {
     const repoDir = makeCasingRepo(casingScratchRoot, "casing-layer-repo");
     // Layer directory deliberately spelled in a DIFFERENT case than the
     // derived project name ("casing-layer-repo", the repo's own,
     // unvaried basename).
-    writeCasingProjectLayer(casingHome, "CASING-LAYER-REPO");
-    const eventFile = writeCasingEvent(casingScratchRoot);
+    writeFixtureProjectLayer(casingHome, "CASING-LAYER-REPO", true);
+    const eventFile = writeFixtureEvent(casingScratchRoot);
     const { projection } = explainPolicy("preflight-before-casing-fixture", {
-      ...casingSeams,
+      ...FIXTURE_SEAMS,
       eventPath: eventFile,
       homeDir: casingHome,
       cwd: repoDir,
     });
-    expect(projection.session_start_preflight).toEqual({ setup: true, source: "project" });
+    if (isCaseInsensitiveFilesystem(casingHome)) {
+      expect(projection.session_start_preflight).toEqual({ setup: true, source: "project" });
+    } else {
+      expect(projection.session_start_preflight).toEqual({ setup: false, source: "base" });
+    }
   });
 });
