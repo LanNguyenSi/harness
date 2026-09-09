@@ -173,7 +173,7 @@ on every `min_version` check in this codebase, not only `hooks[]`:
 - `memory.router`'s version floor
   (`src/probes/memory.ts:184#"const parsed = parseProbedVersion(stdout);"`).
 - Policy-pack-level floors
-  (`src/policy-packs/version-check.ts:94#"const parsed = parseProbedVersion(stdout);"`).
+  (`src/policy-packs/version-check.ts:104#"const parsed = parseProbedVersion(stdout);"`).
 
 Who pays: operators running a release candidate of any of these five
 tools now see a below-floor diagnostic until the release ships, and the

@@ -2,6 +2,18 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-09-09T06:12:00Z, task `db44ab46` (review round 3 fix, decision
+  D-036, and the round-3 review's docs closure): the ok-branch messages
+  of doctor tools.cli[] and tools.mcp[] (`src/cli/doctor/index.ts`) and
+  memory.router (`src/probes/memory.ts`) now quote the probed token like
+  the hooks[] site, with their pinned expectations updated; the pack
+  floor's below_floor message is pinned in three cases
+  (`tests/policy-packs/version-check.test.ts`); the ADR and CHANGELOG
+  state that a pack version gap is counted into doctor's warningCount;
+  the two pack-level `actualVersion` doc comments carry the numeric-run
+  caveat the hook-level field already had. Bundle docs listing the
+  touched sources re-verified and re-stamped in the same commit.
+
 - 2026-09-09T05:30:00Z, task `db44ab46` (implementer, review round 1
   fix, decision D-021): fixed the five new below_floor messages to
   quote `token` (the printed version) instead of `actual` (the numeric

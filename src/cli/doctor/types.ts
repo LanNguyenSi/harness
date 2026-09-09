@@ -30,7 +30,10 @@ export const KNOWN_DOCTOR_TARGETS = ["codex", "opencode"] as const;
 export type DoctorTarget = (typeof KNOWN_DOCTOR_TARGETS)[number];
 
 export function isDoctorTarget(value: unknown): value is DoctorTarget {
-  return typeof value === "string" && (KNOWN_DOCTOR_TARGETS as readonly string[]).includes(value);
+  return (
+    typeof value === "string" &&
+    (KNOWN_DOCTOR_TARGETS as readonly string[]).includes(value)
+  );
 }
 
 export interface ManifestSection {
@@ -203,6 +206,12 @@ export interface PolicyPackConfigIssue {
 export interface PolicyPackVersionGapReport {
   name: string;
   declaredMinVersion: string;
+  /**
+   * Numeric run only (never the prerelease or build suffix), so a
+   * `below_floor` gap from a prerelease of the floor shows an
+   * `actualVersion` equal to `declaredMinVersion`; `message` carries the
+   * full probed token. Same trap as `HookVersionReport.actualVersion`.
+   */
   actualVersion: string | null;
   message: string;
 }
@@ -621,16 +630,25 @@ export interface DoctorReport {
 
 export type { NpmBinReport } from "./npm-bin-path.js";
 export type { SessionStartPreflightSetupVersionFinding } from "./session-start-preflight-setup-version.js";
-export type { ClaudeMcpRegistrationSection, ClaudeMcpEntryReport } from "./claude-mcp.js";
+export type {
+  ClaudeMcpRegistrationSection,
+  ClaudeMcpEntryReport,
+} from "./claude-mcp.js";
 export type { UnderstandingModeEnvDivergence } from "./understanding-mode-env.js";
-export type { UgAutoApprovalsSection, AutoApprovalListingEntry } from "./ug-auto-approvals.js";
+export type {
+  UgAutoApprovalsSection,
+  AutoApprovalListingEntry,
+} from "./ug-auto-approvals.js";
 export type { UgDelegationsSection } from "./ug-delegations.js";
 export type { UgInflightSection } from "./ug-inflight.js";
 export type { AutoApproveModeWarning } from "./auto-approve-mode.js";
 export type { BypassWithoutAutoApproveFinding } from "./bypass-without-auto-approve.js";
 export type { SettingsDriftSection } from "./settings-drift.js";
 export type { CodexConfigDriftSection } from "./codex-config-drift.js";
-export type { ToolchainParitySection, ToolchainParityPeerReport } from "./toolchain-parity.js";
+export type {
+  ToolchainParitySection,
+  ToolchainParityPeerReport,
+} from "./toolchain-parity.js";
 
 export type {
   Manifest,

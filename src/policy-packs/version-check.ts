@@ -11,7 +11,10 @@
 // pack-level config-schema mismatch (a `config:` key only the newer
 // package honours). Both can fire in the same doctor run.
 
-import { parseProbedVersion, compareVersionFloor } from "../io/version-compare.js";
+import {
+  parseProbedVersion,
+  compareVersionFloor,
+} from "../io/version-compare.js";
 import { isBuiltinPackName, resolveBuiltinVersionCommand } from "./registry.js";
 import type { Manifest } from "../schema/index.js";
 
@@ -35,7 +38,14 @@ export interface PolicyPackVersionGap {
    * Empty array when no probe is registered for the pack.
    */
   versionCommand: readonly string[];
-  /** Parsed version string when the probe succeeded; otherwise null. */
+  /**
+   * Parsed version when the probe succeeded; otherwise null. Always the
+   * NUMERIC run (`parseProbedVersion`'s `version` field), never the probed
+   * prerelease or build suffix: for a `below_floor` gap caused by a
+   * prerelease of the floor (probed "0.3.1-rc.1" against a "0.3.1"
+   * `min_version`) this field equals `declaredMinVersion`; `message`
+   * carries the full probed token for the human-facing distinction.
+   */
   actualVersion: string | null;
   kind: PolicyPackVersionGapKind;
   message: string;
