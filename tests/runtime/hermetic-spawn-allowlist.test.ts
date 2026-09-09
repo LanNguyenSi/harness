@@ -17,6 +17,30 @@
 // tests/runtime/hermetic-spawn-allowlist-nested-fixtures.test.ts instead
 // — both require observing this file's OWN teardown from outside it,
 // which needs a nested vitest subprocess, not another `it` in this file.
+//
+// Known limit (task 9a4a417b): the F5/F6a/F6b probes below (search
+// "FIXTURE_LOCATION_ESCAPES_TMP_EXEMPTION") each need a fixture location
+// that is provably OUTSIDE the D3 os.tmpdir() exemption, so a real,
+// non-exempt violation is still caught rather than silently allowed
+// through. That precondition holds in an ordinary checkout (this
+// worktree's own root is not under os.tmpdir()) but is NOT obtainable
+// inside an isolation copy whose OWN scratch root already lives under
+// the OS temp directory: `agent-primitives probe`'s default `-i
+// worktree` isolation places its worktree under `--log-dir`, which
+// itself defaults to "a fresh directory under the OS temp dir" (see
+// that package's README, `probe`'s `-l/--log-dir` entry); every path
+// inside such a copy, including process.cwd(), is then also under
+// os.tmpdir(), and there is no directory inside the copy that is both
+// part of the checkout and outside that prefix. This is a property of
+// agent-primitives' isolation copy, not of this test file's own
+// location, so it cannot be fixed by deriving a different path from
+// this file's cwd/realpath. The three affected probes detect the
+// missing precondition with the exact `isUnderTmp` helper the guard
+// itself uses (not a re-implementation) and skip, with a named reason,
+// instead of false-failing. Everywhere the precondition holds, in the
+// real checkout, and in a plain `git worktree add --detach` copy, which
+// does NOT nest under os.tmpdir(), they still run with the exact same
+// assertions as before this task.
 import { exec, execFile, execFileSync, execSync, fork, spawn, spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -30,6 +54,16 @@ import { resolveVitestEntry } from "../_helpers/nested-vitest.js";
 // on the D6 infra allowlist (git/node/sh/patch) — the canonical "should
 // be blocked" probe.
 const REAL_NOT_ALLOWLISTED = "/bin/ls";
+
+// Task 9a4a417b: true when this file's own cwd (and therefore any
+// fixture the F5/F6a/F6b probes below create under it) is OUTSIDE the
+// D3 os.tmpdir() exemption those probes need to exercise their real
+// assertion; see the file-header comment above for why this can be
+// false inside an agent-primitives isolation copy. Computed via the
+// SAME `isUnderTmp` helper the guard itself checks spawns against
+// (imported below as `__testOnly.isUnderTmp`), so this tracks the real
+// code path rather than a separate, possibly-drifting reimplementation.
+const FIXTURE_LOCATION_ESCAPES_TMP_EXEMPTION = !__testOnly.isUnderTmp(fs.realpathSync(process.cwd()));
 
 /**
  * Runs `fn`, returns the thrown value (or undefined if it didn't throw)
@@ -186,7 +220,10 @@ describe("D3 boundary: textual-prefix sibling of os.tmpdir() is NOT exempt (task
 });
 
 describe("F5: resolve cache only caches positive resolutions (task 052f9d5b review)", () => {
-  it("does not permanently cache a null (unresolvable) resolution — a binary created later at the same resolved path is still checked", () => {
+  // Task 9a4a417b: skipped, not false-failed, when this file's cwd
+  // itself is under os.tmpdir() (agent-primitives isolation copy); see
+  // FIXTURE_LOCATION_ESCAPES_TMP_EXEMPTION's doc above.
+  it.skipIf(!FIXTURE_LOCATION_ESCAPES_TMP_EXEMPTION)("does not permanently cache a null (unresolvable) resolution: a binary created later at the same resolved path is still checked", () => {
     // G6 (task 052f9d5b review, second pass): this fixture dir is created
     // under process.cwd() (the repo root), NOT os.tmpdir() — do not
     // "helpfully" move it there. os.tmpdir() is the D3 EXEMPT path in
@@ -218,7 +255,10 @@ describe("F5: resolve cache only caches positive resolutions (task 052f9d5b revi
 });
 
 describe("F6: resolveAbsolute approximates execvp search semantics more closely (task 052f9d5b review)", () => {
-  it("F6a: PATH=\":/usr/bin\" resolves the leading empty entry to cwd (POSIX execvp), not \"skip\"", () => {
+  // Task 9a4a417b: skipped, not false-failed, when this file's cwd
+  // itself is under os.tmpdir() (agent-primitives isolation copy); see
+  // FIXTURE_LOCATION_ESCAPES_TMP_EXEMPTION's doc above.
+  it.skipIf(!FIXTURE_LOCATION_ESCAPES_TMP_EXEMPTION)("F6a: PATH=\":/usr/bin\" resolves the leading empty entry to cwd (POSIX execvp), not \"skip\"", () => {
     // G6: process.cwd(), not os.tmpdir() — see the F5 test above for why.
     const dir = fs.mkdtempSync(path.join(process.cwd(), "hermetic-f6a-empty-path-probe-"));
     try {
@@ -234,7 +274,10 @@ describe("F6: resolveAbsolute approximates execvp search semantics more closely 
     }
   });
 
-  it("F6b: skips a resolved-but-non-executable candidate and keeps searching PATH (mirrors execvp's EACCES fallthrough)", () => {
+  // Task 9a4a417b: skipped, not false-failed, when this file's cwd
+  // itself is under os.tmpdir() (agent-primitives isolation copy); see
+  // FIXTURE_LOCATION_ESCAPES_TMP_EXEMPTION's doc above.
+  it.skipIf(!FIXTURE_LOCATION_ESCAPES_TMP_EXEMPTION)("F6b: skips a resolved-but-non-executable candidate and keeps searching PATH (mirrors execvp's EACCES fallthrough)", () => {
     // G6: process.cwd(), not os.tmpdir() — see the F5 test above for why.
     const base = fs.mkdtempSync(path.join(process.cwd(), "hermetic-f6b-exec-bit-probe-"));
     try {

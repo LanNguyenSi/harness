@@ -117,6 +117,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **`tests/runtime/hermetic-spawn-allowlist.test.ts`'s three cwd-sensitive D3/F5/F6 probes now skip instead of false-failing inside an isolated worktree copy whose own scratch root sits under the OS temp directory** (task `9a4a417b`). Those probes need a fixture location outside the D3 `os.tmpdir()` exemption to prove a real, non-exempt spawn is still caught; `agent-primitives probe`'s default isolation copy lives under the OS temp directory itself, so a fixture created under the copy's own `process.cwd()` fell under that same exemption and the assertions could never fire there. The three probes now detect the missing precondition with the exact `isUnderTmp` helper the guard itself uses and skip, with a named reason, only when it is unmet; unchanged in the real checkout and in a plain `git worktree add --detach` copy, where all 47 assertions in the file still run exactly as before.
+
 - **Authority-directory containment is enforced for understanding-gate markers and delegations** (task `6cb8aa2e-083c-4996-bc7e-26f8841b7acf`). Approval, delegation, and adoption-ledger readers now refuse a symlinked or non-directory authority root; `harness doctor` and `harness gc` use the same root rule and do not follow linked `.approvals/`, `.delegations/`, or `.delegation-adoptions/` directories.
 
 ## [0.56.0] - 2026-09-05
