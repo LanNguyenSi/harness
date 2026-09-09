@@ -13,6 +13,30 @@ Anchored source citations in this bundle, including historical `log.md`
 entries, are resolved against the current tree by
 `tests/decisions-citations-resolve.test.ts`.
 
+**Rule: a `path:N[-M]` line citation into a source file carries an anchor
+(`path:N[-M]#"text on the cited end line"`); `log.md` is exempt as
+history.** Before task `898f9925`, only ANCHORED docs/okf line citations
+were checked (the filter above); a BARE `path:N` citation into a source
+file was checked by nothing, so a shifted line silently drifted (batch-44:
+`quote-model-divergence.md` cited `src/cli/init/templates.ts` at line 928
+while the described sentence had moved to line 940; okf-kit's `sources-fresh` compares
+commit timestamps only and does not see line-level drift). The guard now
+also: (1) pins, via a docs/okf-shaped fixture, that an anchored citation
+whose cited line has shifted off its anchor text actually fails; (2)
+asserts zero bare (unanchored) line citations into non-Markdown sources
+outside `log.md` and reports `log.md`'s own historical count (its
+historical prose narrates past re-points) in a computed title, never
+asserted; (3) requires every anchored citation's anchor, in both
+docs/okf and docs/decisions, to contain at least one word character, so a
+punctuation-only anchor (a bare closing delimiter, which pins nothing
+against a line shift) fails. The reproducible measurement is `npx vitest run
+tests/decisions-citations-resolve.test.ts`: its test titles report the
+live bare-citation count outside `log.md` (asserted at zero) and `log.md`'s
+own historical count (reported, not asserted). Per-doc conversion tallies
+at the time of the round-1/round-2 conversions are recorded in
+`CHANGELOG.md`'s corresponding entry, not here, so this section does not
+go stale as new docs are added or citations shift.
+
 Do not list `CHANGELOG.md` under a doc's frontmatter `sources:`: `okf-kit`'s
 `sources-fresh` check flags a `sources:` entry by file path and commit
 recency alone, with no per-section scoping, so every CHANGELOG edit

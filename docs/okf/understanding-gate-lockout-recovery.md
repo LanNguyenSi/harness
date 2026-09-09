@@ -3,7 +3,7 @@ type: runbook
 title: Understanding-gate lockout recovery
 description: Operator procedure to unblock a session locked by the understanding-before-execution PreToolUse gate via `harness approve understanding`, including the 6-tier session-id resolution and the expiry semantics that re-arm the gate.
 tags: [runbook, understanding-gate, lockout, recovery, operator]
-timestamp: 2026-09-07T09:48:18Z
+timestamp: 2026-09-09T04:56:07Z
 sources:
   - src/cli/pack/auto-approve-path.ts
   - src/cli/approve/understanding.ts
@@ -60,9 +60,9 @@ Recovery is **operator-only**, from a shell the hooks do not gate (the `!`-shell
    harness approve understanding
    ```
 
-   Flags (`src/cli/index.ts:1686-1701`, the `approve understanding` subcommand): `--session <id>`, `--task <ids...>` (variadic; also comma-joined `--task a,b,c`), `--reports-dir <path>`, `--approved-by <actor>` (default `harness-approve-cli`), `--force`, `--config <path>`, `--project <name>`.
+   Flags (`src/cli/index.ts:1686-1700#"enforcement"`, the `approve understanding` subcommand): `--session <id>`, `--task <ids...>` (variadic; also comma-joined `--task a,b,c`), `--reports-dir <path>`, `--approved-by <actor>` (default `harness-approve-cli`), `--force`, `--config <path>`, `--project <name>`.
 
-2. **Session-id resolution** — the bare command works because the id is resolved through a 6-tier precedence chain (`resolveApprovalSessionId`, `src/runtime/session-id.ts:241`; used by `src/cli/approve/understanding.ts:678`):
+2. **Session-id resolution** - the bare command works because the id is resolved through a 6-tier precedence chain (`resolveApprovalSessionId`, `src/runtime/session-id.ts:241#"resolveApprovalSessionId"`; used by `src/cli/approve/understanding.ts:678#"resolveApprovalSessionId"`):
    1. explicit `--session` flag
    2. `$CLAUDE_CODE_SESSION_ID` (the variable Claude Code actually exports; read first so the runtime's id beats a hand-exported legacy value)
    3. `$CLAUDE_SESSION_ID` (legacy peer)
