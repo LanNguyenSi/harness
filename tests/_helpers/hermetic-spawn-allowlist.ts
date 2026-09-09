@@ -825,7 +825,25 @@ it(
 // import from it.
 export const __testOnly = {
   isUnderTmp,
+  // Task 9a4a417b review round 2 closure: the same realpath fallback the
+  // guard uses, exported so the test file's precondition does not keep a
+  // hand copy that can drift.
+  safeRealpath,
   trueOriginals: originals,
+  /**
+   * Task 9a4a417b review round 2 (residual coverage): the resolver
+   * itself, exposed so F5/F6a/F6b's fix-proving assertions can call it
+   * DIRECTLY on fixture paths, without going through a real spawn. This
+   * makes those specific assertions location-independent: they never
+   * touch the D3 `isUnderTmp` exemption at all, since a direct
+   * `resolveAbsolute`/`resolveCached` call never reaches the guard's
+   * spawn-interception layer where that exemption is checked, so they
+   * still run (and still kill the same mutants) inside an
+   * agent-primitives isolation copy, where the spawn-level probes above
+   * must skip. Not part of this setup file's public contract.
+   */
+  resolveAbsolute,
+  resolveCached,
   /**
    * D8/F1's afterAll must still fail a file where a violation was thrown
    * from inside a broad catch and never surfaced to an assertion — that
