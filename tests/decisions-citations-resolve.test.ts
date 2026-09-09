@@ -1204,3 +1204,85 @@ describe("docs/okf citation anchors are not punctuation-only (contain a word cha
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// Whitespace-padded anchor guard (task `98025e15`, pre-decision D-006 T-007).
+// One live docs/okf anchor's uniqueness rested on two leading spaces
+// (`#"  diff-able, source-controlled."` into docs/for-humans.md): it passes
+// `hasWordCharacterAnchor` above (it contains word characters) but a
+// reformat of the cited source that trims or re-indents that line would
+// silently break the anchor's uniqueness into a loud, confusing guard
+// failure rather than a clear "this citation needs re-anchoring" message.
+// This describe block closes that gap: every anchored docs/okf citation's
+// anchor must not start or end with whitespace. Shared predicate, mirroring
+// `hasWordCharacterAnchor`'s pattern, so the fixture below shares the EXACT
+// SAME check the real assertion uses.
+function hasWhitespacePaddedAnchor(anchor: string | undefined): boolean {
+  if (anchor === undefined) return false;
+  return anchor !== "" && /^\s|\s$/.test(anchor);
+}
+
+function whitespacePaddedAnchors(dir: string, labelPrefix: string): Citation[] {
+  return collectAnchoredCitations(dir, labelPrefix).filter((c) =>
+    hasWhitespacePaddedAnchor(c.anchor),
+  );
+}
+
+describe("docs/okf citation anchors do not start or end with whitespace", () => {
+  it("every anchored docs/okf citation's anchor is not whitespace-padded (mutation probe P1 target: a padded anchor pins nothing against a reformat of the cited source)", () => {
+    const padded = whitespacePaddedAnchors(OKF_DIR, "docs/okf");
+    expect(
+      padded,
+      padded
+        .map(
+          (c) =>
+            `${c.file}:${c.adrLine}: citation \`${c.raw}\` has a whitespace-padded anchor "${c.anchor}"`,
+        )
+        .join("\n"),
+    ).toHaveLength(0);
+  });
+
+  it("fixture: a whitespace-padded anchor fails the padding check, an unpadded word anchor passes (mutation probe P1 target: a neutralised hasWhitespacePaddedAnchor is caught here even when the live bundle carries zero padded anchors)", () => {
+    const paddedCitation = extractCitations(
+      "fixture.md",
+      'See `src/example.ts:1-2#"  padded token"` for the indented line.',
+    )[0]!;
+    const wordCitation = extractCitations(
+      "fixture.md",
+      'See `src/example.ts:1-2#"token"` for the named token.',
+    )[0]!;
+    expect(hasWhitespacePaddedAnchor(paddedCitation.anchor)).toBe(true);
+    expect(hasWhitespacePaddedAnchor(wordCitation.anchor)).toBe(false);
+  });
+
+  // Mirrors the docs/okf punctuation-only fixture above: a scratch,
+  // docs/okf-shaped directory carrying a planted whitespace-padded anchor,
+  // run through the SAME `collectAnchoredCitations` +
+  // `hasWhitespacePaddedAnchor` pair the real assertion above uses. Guards
+  // against a mutant that disables or no-ops the real assertion (e.g.
+  // hardcoding an empty result, or dropping the `it` entirely): such a
+  // mutant is caught here even though the live docs/okf bundle carries zero
+  // whitespace-padded anchors today.
+  it("fixture: collectAnchoredCitations + hasWhitespacePaddedAnchor catch a planted padded anchor in a scratch docs/okf directory", () => {
+    const tmpDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), "okf-anchor-padding-fixtures-"),
+    );
+    try {
+      const okfDir = path.join(tmpDir, "docs", "okf");
+      fs.mkdirSync(okfDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(okfDir, "planted.md"),
+        'Planted: see `src/example.ts:1-2#"  padded token"` for the indented line.\n',
+        "utf8",
+      );
+
+      const anchored = collectAnchoredCitations(okfDir, "docs/okf");
+      const padded = whitespacePaddedAnchors(okfDir, "docs/okf");
+
+      expect(anchored, JSON.stringify(anchored)).toHaveLength(1);
+      expect(padded, JSON.stringify(padded)).toHaveLength(1);
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+});
