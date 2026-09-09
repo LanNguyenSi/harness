@@ -13,6 +13,31 @@ Anchored source citations in this bundle, including historical `log.md`
 entries, are resolved against the current tree by
 `tests/decisions-citations-resolve.test.ts`.
 
+**Rule: a `path:N[-M]` line citation into a source file carries an anchor
+(`path:N[-M]#"text on the cited end line"`); `log.md` is exempt as
+history.** Before task `898f9925`, only ANCHORED docs/okf line citations
+were checked (the filter above); a BARE `path:N` citation into a source
+file was checked by nothing, so a shifted line silently drifted (batch-44:
+`quote-model-divergence.md` cited `src/cli/init/templates.ts` at line 928
+while the described sentence had moved to line 940; okf-kit's `sources-fresh` compares
+commit timestamps only and does not see line-level drift). The guard now
+also: (1) pins, via a docs/okf-shaped fixture, that an anchored citation
+whose cited line has shifted off its anchor text actually fails; (2)
+ratchets bare (unanchored) line citations into non-Markdown sources to
+ZERO for every doc in this bundle except `log.md`, whose historical prose
+narrates past re-points and is reported only as a count in a computed test
+title, never asserted. Coverage measured 2026-09-09 (`node
+scratchpad/list_bare.mjs`-equivalent scan): 48 live bare citations into
+non-Markdown sources were converted to the anchored form across 8 docs
+(`manifest-validation-scope.md` 13, `pause-vs-gate-kill-switch.md` 18,
+`policy-engine-producer-wiring.md` 5, `quote-model-divergence.md` 4,
+`understanding-gate-auto-mode-signals.md` 3,
+`understanding-gate-lockout-recovery.md` 3, `codex-adapter-parity-gaps.md`
+1 (also re-pointed: the bare basename `generate-codex-config.ts` did not
+resolve at the repo root; corrected to `src/cli/apply/generate-codex-config.ts`),
+`gate-fail-posture-matrix.md` 1); `log.md` keeps its historical bare count,
+visible only via the ratchet's computed test title.
+
 Do not list `CHANGELOG.md` under a doc's frontmatter `sources:`: `okf-kit`'s
 `sources-fresh` check flags a `sources:` entry by file path and commit
 recency alone, with no per-section scoping, so every CHANGELOG edit
