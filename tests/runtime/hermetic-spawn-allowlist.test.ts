@@ -22,25 +22,36 @@
 // "FIXTURE_LOCATION_ESCAPES_TMP_EXEMPTION") each need a fixture location
 // that is provably OUTSIDE the D3 os.tmpdir() exemption, so a real,
 // non-exempt violation is still caught rather than silently allowed
-// through. That precondition holds in an ordinary checkout (this
-// worktree's own root is not under os.tmpdir()) but is NOT obtainable
-// inside an isolation copy whose OWN scratch root already lives under
-// the OS temp directory: `agent-primitives probe`'s default `-i
-// worktree` isolation places its worktree under `--log-dir`, which
-// itself defaults to "a fresh directory under the OS temp dir" (see
-// that package's README, `probe`'s `-l/--log-dir` entry); every path
-// inside such a copy, including process.cwd(), is then also under
-// os.tmpdir(), and there is no directory inside the copy that is both
-// part of the checkout and outside that prefix. This is a property of
-// agent-primitives' isolation copy, not of this test file's own
-// location, so it cannot be fixed by deriving a different path from
-// this file's cwd/realpath. The three affected probes detect the
-// missing precondition with the exact `isUnderTmp` helper the guard
-// itself uses (not a re-implementation) and skip, with a named reason,
-// instead of false-failing. Everywhere the precondition holds, in the
-// real checkout, and in a plain `git worktree add --detach` copy, which
-// does NOT nest under os.tmpdir(), they still run with the exact same
-// assertions as before this task.
+// through. That precondition fails for ANY checkout whose own root
+// resolves under os.tmpdir(), not only an agent-primitives isolation
+// copy: a Linux `git worktree add /tmp/...`, or a CI checkout under
+// $TMPDIR, skips these three probes under a plain `npm test` too,
+// silently. `agent-primitives probe`'s default `-i worktree` isolation
+// is simply the common way to hit that condition, since it places its
+// worktree under `--log-dir`, which itself defaults to "a fresh
+// directory under the OS temp dir" (see that package's README, `probe`'s
+// `-l/--log-dir` entry); every path inside such a copy, including
+// process.cwd(), is then also under os.tmpdir(), and there is no
+// directory inside the copy that is both part of the checkout and
+// outside that prefix. This cannot be fixed by deriving a different path
+// from this file's cwd/realpath: it is a property of WHERE the checkout
+// sits, not of this test file. The remedy for `agent-primitives probe`
+// specifically: pass `-l/--log-dir` pointing outside the OS temp
+// directory (or `-i inplace`, which mutates the real checkout in place
+// instead of a copy under `--log-dir`) so the isolation copy's cwd stays
+// outside os.tmpdir() and all three probes run. The three affected
+// probes detect the missing precondition with the exact `isUnderTmp`
+// helper the guard itself uses (not a re-implementation) and skip, with
+// a named reason, instead of false-failing. Everywhere the precondition
+// holds, in the real checkout, and in a plain `git worktree add
+// --detach` copy, which does NOT nest under os.tmpdir(), they still run
+// with the exact same assertions as before this task. Where the
+// precondition does NOT hold, F5/F6a/F6b's underlying fixes still keep
+// location-independent coverage: their resolver-level companion
+// assertions below (search "resolveAbsolute" / "resolveCached" via
+// __testOnly) call the fixed code directly on fixture paths, without
+// spawning, so they never consult this exemption and keep running (and
+// killing the same mutants) regardless of where the checkout sits.
 import { exec, execFile, execFileSync, execSync, fork, spawn, spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -55,6 +66,28 @@ import { resolveVitestEntry } from "../_helpers/nested-vitest.js";
 // be blocked" probe.
 const REAL_NOT_ALLOWLISTED = "/bin/ls";
 
+// Task 9a4a417b review round 2: mirrors
+// tests/_helpers/hermetic-spawn-allowlist.ts's own `safeRealpath`: a
+// cwd that vanished or is a broken symlink must not crash the whole
+// file at module load; fall back to the raw (unresolved) cwd instead.
+function safeRealpathForPrecondition(p: string): string {
+  try {
+    return fs.realpathSync(p);
+  } catch {
+    return p;
+  }
+}
+
+// Task 9a4a417b: the exact fixture-shaped path the F5/F6a/F6b probes
+// below create (a named directory UNDER this file's cwd), not the bare
+// cwd itself: `isUnderTmp` compares a resolved path against
+// `os.tmpdir()` with a trailing separator, so checking the bare cwd
+// would misclassify a checkout located AT os.tmpdir() exactly (no
+// separator yet) as escaping the exemption. Joining a path segment onto
+// it, as every real fixture below does, removes that edge case the same
+// way the pinning assertion right below does.
+const PRECONDITION_FIXTURE_PATH = path.join(safeRealpathForPrecondition(process.cwd()), "hermetic-precondition-probe");
+
 // Task 9a4a417b: true when this file's own cwd (and therefore any
 // fixture the F5/F6a/F6b probes below create under it) is OUTSIDE the
 // D3 os.tmpdir() exemption those probes need to exercise their real
@@ -63,7 +96,23 @@ const REAL_NOT_ALLOWLISTED = "/bin/ls";
 // SAME `isUnderTmp` helper the guard itself checks spawns against
 // (imported below as `__testOnly.isUnderTmp`), so this tracks the real
 // code path rather than a separate, possibly-drifting reimplementation.
-const FIXTURE_LOCATION_ESCAPES_TMP_EXEMPTION = !__testOnly.isUnderTmp(fs.realpathSync(process.cwd()));
+const FIXTURE_LOCATION_ESCAPES_TMP_EXEMPTION = !__testOnly.isUnderTmp(PRECONDITION_FIXTURE_PATH);
+
+// Task 9a4a417b review round 2 (MEDIUM: the skip predicate was
+// unpinned: mutating the constant above to a hardcoded `false`
+// reported `survived`). This assertion is NOT gated by `skipIf`, so it
+// always runs, and it recomputes the right-hand side independently
+// (its own `__testOnly.isUnderTmp` call on the same fixture-shaped
+// path) rather than reading the constant back: a mutant that replaces
+// the constant's own expression with a literal diverges from this
+// independent recomputation and fails here. True in a normal checkout
+// (the fixture path is not under os.tmpdir(), so both sides are
+// `true`); also true, for the same reason, inside an isolation copy
+// (both sides `false`), so this passes everywhere the constant is
+// correct, and only there.
+it("task 9a4a417b: FIXTURE_LOCATION_ESCAPES_TMP_EXEMPTION tracks isUnderTmp of the fixture path it names, not a hardcoded value", () => {
+  expect(FIXTURE_LOCATION_ESCAPES_TMP_EXEMPTION).toBe(!__testOnly.isUnderTmp(PRECONDITION_FIXTURE_PATH));
+});
 
 /**
  * Runs `fn`, returns the thrown value (or undefined if it didn't throw)
@@ -222,32 +271,63 @@ describe("D3 boundary: textual-prefix sibling of os.tmpdir() is NOT exempt (task
 describe("F5: resolve cache only caches positive resolutions (task 052f9d5b review)", () => {
   // Task 9a4a417b: skipped, not false-failed, when this file's cwd
   // itself is under os.tmpdir() (agent-primitives isolation copy); see
-  // FIXTURE_LOCATION_ESCAPES_TMP_EXEMPTION's doc above.
-  it.skipIf(!FIXTURE_LOCATION_ESCAPES_TMP_EXEMPTION)("does not permanently cache a null (unresolvable) resolution: a binary created later at the same resolved path is still checked", () => {
-    // G6 (task 052f9d5b review, second pass): this fixture dir is created
-    // under process.cwd() (the repo root), NOT os.tmpdir() — do not
-    // "helpfully" move it there. os.tmpdir() is the D3 EXEMPT path in
-    // tests/_helpers/hermetic-spawn-allowlist.ts itself, so a binary
-    // written there would be silently allowed through regardless of what
-    // this test is trying to prove. Ignored via .gitignore's
-    // `hermetic-*/` entry, not deleted on the next run, in case an
-    // aborted run leaves one behind.
-    const dir = fs.mkdtempSync(path.join(process.cwd(), "hermetic-f5-cache-probe-"));
+  // FIXTURE_LOCATION_ESCAPES_TMP_EXEMPTION's doc above. F5's coverage
+  // stays location-independent regardless, via the resolver-level
+  // companion assertion right below (task 9a4a417b review round 2).
+  it.skipIf(!FIXTURE_LOCATION_ESCAPES_TMP_EXEMPTION)(
+    "does not permanently cache a null (unresolvable) resolution: a binary created later at the same resolved path is still checked",
+    () => {
+      // G6 (task 052f9d5b review, second pass): this fixture dir is
+      // created under process.cwd() (the repo root), NOT os.tmpdir():
+      // do not "helpfully" move it there. os.tmpdir() is the D3 EXEMPT
+      // path in tests/_helpers/hermetic-spawn-allowlist.ts itself, so a
+      // binary written there would be silently allowed through
+      // regardless of what this test is trying to prove. Ignored via
+      // .gitignore's `hermetic-*/` entry, not deleted on the next run,
+      // in case an aborted run leaves one behind.
+      const dir = fs.mkdtempSync(path.join(process.cwd(), "hermetic-f5-cache-probe-"));
+      try {
+        const target = path.join(dir, "not-yet-a-binary");
+        // Nothing exists at `target` yet: D2 allows it (and, before the
+        // F5 fix, would have cached this exact `null` forever for this
+        // cwd/PATH/command key).
+        const first = captureThrow(() => spawnSync(target, []));
+        expect(first).toBeUndefined();
+
+        // A real binary now appears at the EXACT same resolved path.
+        fs.writeFileSync(target, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+
+        // Same resolved path, second call: must now be caught as a
+        // real, non-allowlisted, non-tmp spawn: proves the null wasn't
+        // cached.
+        const second = captureThrow(() => spawnSync(target, []));
+        expect(second).toBeInstanceOf(HermeticSpawnViolationError);
+      } finally {
+        fs.rmSync(dir, { recursive: true, force: true });
+      }
+    },
+  );
+
+  // Task 9a4a417b review round 2 (MEDIUM: residual coverage loss under
+  // the default isolation copy). Calls `resolveCached` directly via
+  // `__testOnly`, WITHOUT spawning, so it never reaches the guard's
+  // D3 `isUnderTmp` exemption check at all, and runs (and kills the same
+  // mutant) everywhere, including inside an agent-primitives isolation
+  // copy where the spawn-level test above must skip. Fixture placement
+  // under os.tmpdir() is fine here specifically because nothing is
+  // spawned: D3 is a property of the spawn-interception layer, not of
+  // this resolver function.
+  it("resolveCached companion (location-independent): a null (unresolvable) resolution is not cached", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "hermetic-f5-cache-companion-"));
     try {
       const target = path.join(dir, "not-yet-a-binary");
-      // Nothing exists at `target` yet: D2 allows it (and, before the F5
-      // fix, would have cached this exact `null` forever for this
-      // cwd/PATH/command key).
-      const first = captureThrow(() => spawnSync(target, []));
-      expect(first).toBeUndefined();
+      const first = __testOnly.resolveCached(target, dir, undefined);
+      expect(first).toBeNull();
 
-      // A real binary now appears at the EXACT same resolved path.
       fs.writeFileSync(target, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
 
-      // Same resolved path, second call: must now be caught as a real,
-      // non-allowlisted, non-tmp spawn — proves the null wasn't cached.
-      const second = captureThrow(() => spawnSync(target, []));
-      expect(second).toBeInstanceOf(HermeticSpawnViolationError);
+      const second = __testOnly.resolveCached(target, dir, undefined);
+      expect(second).toBe(fs.realpathSync(target));
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
@@ -257,18 +337,40 @@ describe("F5: resolve cache only caches positive resolutions (task 052f9d5b revi
 describe("F6: resolveAbsolute approximates execvp search semantics more closely (task 052f9d5b review)", () => {
   // Task 9a4a417b: skipped, not false-failed, when this file's cwd
   // itself is under os.tmpdir() (agent-primitives isolation copy); see
-  // FIXTURE_LOCATION_ESCAPES_TMP_EXEMPTION's doc above.
-  it.skipIf(!FIXTURE_LOCATION_ESCAPES_TMP_EXEMPTION)("F6a: PATH=\":/usr/bin\" resolves the leading empty entry to cwd (POSIX execvp), not \"skip\"", () => {
-    // G6: process.cwd(), not os.tmpdir() — see the F5 test above for why.
-    const dir = fs.mkdtempSync(path.join(process.cwd(), "hermetic-f6a-empty-path-probe-"));
+  // FIXTURE_LOCATION_ESCAPES_TMP_EXEMPTION's doc above. F6a's coverage
+  // stays location-independent regardless, via the resolver-level
+  // companion assertion right below (task 9a4a417b review round 2).
+  it.skipIf(!FIXTURE_LOCATION_ESCAPES_TMP_EXEMPTION)(
+    "F6a: PATH=\":/usr/bin\" resolves the leading empty entry to cwd (POSIX execvp), not \"skip\"",
+    () => {
+      // G6: process.cwd(), not os.tmpdir(); see the F5 test above for why.
+      const dir = fs.mkdtempSync(path.join(process.cwd(), "hermetic-f6a-empty-path-probe-"));
+      try {
+        const binName = "hermetic-f6a-fixture-binary";
+        const fixture = path.join(dir, binName);
+        fs.writeFileSync(fixture, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+        const err = captureThrow(() =>
+          execFileSync(binName, [], { cwd: dir, env: { PATH: ":/usr/bin" } }),
+        );
+        expect(err).toBeInstanceOf(HermeticSpawnViolationError);
+      } finally {
+        fs.rmSync(dir, { recursive: true, force: true });
+      }
+    },
+  );
+
+  // Task 9a4a417b review round 2 (MEDIUM: residual coverage loss under
+  // the default isolation copy). Calls `resolveAbsolute` directly via
+  // `__testOnly`, WITHOUT spawning; see the F5 companion above for why
+  // this is location-independent.
+  it("resolveAbsolute companion (location-independent): an empty PATH entry resolves to cwd, not \"skip\"", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "hermetic-f6a-companion-"));
     try {
-      const binName = "hermetic-f6a-fixture-binary";
+      const binName = "hermetic-f6a-fixture-binary-companion";
       const fixture = path.join(dir, binName);
       fs.writeFileSync(fixture, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
-      const err = captureThrow(() =>
-        execFileSync(binName, [], { cwd: dir, env: { PATH: ":/usr/bin" } }),
-      );
-      expect(err).toBeInstanceOf(HermeticSpawnViolationError);
+      const resolved = __testOnly.resolveAbsolute(binName, dir, ":/usr/bin");
+      expect(resolved).toBe(fs.realpathSync(fixture));
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
@@ -276,10 +378,43 @@ describe("F6: resolveAbsolute approximates execvp search semantics more closely 
 
   // Task 9a4a417b: skipped, not false-failed, when this file's cwd
   // itself is under os.tmpdir() (agent-primitives isolation copy); see
-  // FIXTURE_LOCATION_ESCAPES_TMP_EXEMPTION's doc above.
-  it.skipIf(!FIXTURE_LOCATION_ESCAPES_TMP_EXEMPTION)("F6b: skips a resolved-but-non-executable candidate and keeps searching PATH (mirrors execvp's EACCES fallthrough)", () => {
-    // G6: process.cwd(), not os.tmpdir() — see the F5 test above for why.
-    const base = fs.mkdtempSync(path.join(process.cwd(), "hermetic-f6b-exec-bit-probe-"));
+  // FIXTURE_LOCATION_ESCAPES_TMP_EXEMPTION's doc above. F6b's coverage
+  // stays location-independent regardless, via the resolver-level
+  // companion assertion right below (task 9a4a417b review round 2).
+  it.skipIf(!FIXTURE_LOCATION_ESCAPES_TMP_EXEMPTION)(
+    "F6b: skips a resolved-but-non-executable candidate and keeps searching PATH (mirrors execvp's EACCES fallthrough)",
+    () => {
+      // G6: process.cwd(), not os.tmpdir(); see the F5 test above for why.
+      const base = fs.mkdtempSync(path.join(process.cwd(), "hermetic-f6b-exec-bit-probe-"));
+      try {
+        const dir1 = path.join(base, "dir1");
+        const dir2 = path.join(base, "dir2");
+        fs.mkdirSync(dir1);
+        fs.mkdirSync(dir2);
+        const nonExec = path.join(dir1, "toolx");
+        const realExec = path.join(dir2, "toolx");
+        fs.writeFileSync(nonExec, "not executable", { mode: 0o644 });
+        fs.writeFileSync(realExec, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+
+        const err = captureThrow(() =>
+          execFileSync("toolx", [], { cwd: base, env: { PATH: `${dir1}${path.delimiter}${dir2}` } }),
+        );
+        expect(err).toBeInstanceOf(HermeticSpawnViolationError);
+        const message = (err as Error).message;
+        expect(message).toContain(fs.realpathSync(realExec));
+        expect(message).not.toContain(nonExec);
+      } finally {
+        fs.rmSync(base, { recursive: true, force: true });
+      }
+    },
+  );
+
+  // Task 9a4a417b review round 2 (MEDIUM: residual coverage loss under
+  // the default isolation copy). Calls `resolveAbsolute` directly via
+  // `__testOnly`, WITHOUT spawning; see the F5 companion above for why
+  // this is location-independent.
+  it("resolveAbsolute companion (location-independent): a non-executable candidate is skipped in favor of the next PATH entry", () => {
+    const base = fs.mkdtempSync(path.join(os.tmpdir(), "hermetic-f6b-companion-"));
     try {
       const dir1 = path.join(base, "dir1");
       const dir2 = path.join(base, "dir2");
@@ -290,13 +425,8 @@ describe("F6: resolveAbsolute approximates execvp search semantics more closely 
       fs.writeFileSync(nonExec, "not executable", { mode: 0o644 });
       fs.writeFileSync(realExec, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
 
-      const err = captureThrow(() =>
-        execFileSync("toolx", [], { cwd: base, env: { PATH: `${dir1}${path.delimiter}${dir2}` } }),
-      );
-      expect(err).toBeInstanceOf(HermeticSpawnViolationError);
-      const message = (err as Error).message;
-      expect(message).toContain(fs.realpathSync(realExec));
-      expect(message).not.toContain(nonExec);
+      const resolved = __testOnly.resolveAbsolute("toolx", base, `${dir1}${path.delimiter}${dir2}`);
+      expect(resolved).toBe(fs.realpathSync(realExec));
     } finally {
       fs.rmSync(base, { recursive: true, force: true });
     }
