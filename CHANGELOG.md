@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **`vitest`/`@vitest/mocker` bumped from 4.1.8 to 4.1.11, closing `GHSA-82fw-gwwq-j7x9` (CVE sweep 2026-09-11).** Within-major lockfile bump only; `@vitest/mocker` is now also pinned directly in `devDependencies` alongside `vitest` (previously only nested transitively). `npm audit --audit-level=moderate` no longer reports the advisory; `npm ci --dry-run` passes on a clean extract under the CI-pinned npm 10.9.8.
+
 ### Added
 
 - **The PR #522 migration note's SYMLINK and CASING rules for `session_start_preflight`'s per-repo project layer are now pinned by automated tests, not only by the hand-run CLI matrix behind that note's CHANGELOG entry and `docs/CLI.md`'s PER-REPO SCOPING notes** (task `6c8c1bae`). A loader-level fixture in `tests/cli/loader-project-layer.test.ts` drives `explainPolicy` (its own exported `session_start_preflight.source` field, the field the hand-run matrix read) with a scratch checkout shaped like a git work tree (a `.git` directory carrying only `HEAD`) reached through a symlink: a project layer directory keyed on the symlink's own name never resolves (`source: "base"`), the one keyed on the real directory's basename resolves (`source: "project"`), from the identical symlink cwd both times, matching the SYMLINK rule. A producer-level fixture at the end of `tests/cli/session-start/preflight.test.ts` drives `runSessionStartPreflight` itself with an `event.cwd` that is a symlink path, asserting the `setup` value the producer feeds to its `preflight` child comes from the project layer named after the real, on-disk basename.
