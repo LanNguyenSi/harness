@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
-- **`vitest`/`@vitest/mocker` bumped from 4.1.8 to 4.1.11, closing `GHSA-82fw-gwwq-j7x9` (CVE sweep 2026-09-11).** Within-major lockfile bump only; `@vitest/mocker` is now also pinned directly in `devDependencies` alongside `vitest` (previously only nested transitively). `npm audit --audit-level=moderate` no longer reports the advisory; `npm ci --dry-run` passes on a clean extract under the CI-pinned npm 10.9.8.
+- **`vitest`/`@vitest/mocker` bumped from 4.1.8 to 4.1.11, closing `GHSA-82fw-gwwq-j7x9` (CVE sweep 2026-09-11).** Within-major lockfile bump only, via the single `devDependencies.vitest` range floor; `@vitest/mocker` stays a nested transitive of `vitest` in the lockfile, resolved to the same 4.1.11 without a direct manifest entry. `npm audit --audit-level=moderate` no longer reports the advisory; `npm ci --dry-run` passes on a clean extract under the CI-pinned npm 10.9.8.
 
 ### Added
 

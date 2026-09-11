@@ -56,7 +56,6 @@
     "@inquirer/prompts": "^8.4.3",
     "@lannguyensi/runtime-reality-checker": "^0.2.0",
     "@lannguyensi/understanding-gate": "^0.4.9",
-    "@vitest/mocker": "^4.1.11",
     "chalk": "^5.3.0",
     "commander": "^12.1.0",
     "diff": "^9.0.0",
