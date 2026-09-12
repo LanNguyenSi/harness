@@ -2,7 +2,9 @@ import { defineConfig } from "vitest/config";
 
 // A small family of files (tests/policies/ledger-client.test.ts,
 // tests/probes/mcp.test.ts, tests/runtime/ledger-add.test.ts,
-// tests/io/ledger-record.test.ts, tests/cli/doctor-codex.test.ts)
+// tests/io/ledger-record.test.ts, tests/cli/doctor-codex.test.ts, and
+// with their own per-test budgets tests/cli/smoke/smoke.test.ts and
+// tests/scripts/memory-frontmatter-contract.test.ts)
 // spawns real child processes (execa) and races their own
 // spawn/init/exit/IPC latency against a fixed local test-timeout budget
 // (250-2000ms). With no pool/concurrency limits, vitest's default pool
