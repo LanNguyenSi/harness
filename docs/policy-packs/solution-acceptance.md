@@ -187,17 +187,13 @@ absorb, out of scope for a text-surface change (follow-up: narrow this
 paragraph to the in-flight case by reading that lock anchor). Rather than
 let an agent read "no readable verdict marker" as licence to call
 `solution_evaluate` again, the SAME deny carries the reconnect-vs-retry
-facts regardless of which reading applies: reconnect with
-`solution_evaluate_status` / `solution_evaluate_result` by `attemptId`
-(omit it to resolve the latest attempt); never retry `solution_evaluate`
-while the id's lock is held (a second call for a live attempt just joins
-it and returns its `attemptId`, never starting a second `preflight` run;
-only `forceNewAttempt` is refused while that attempt's lock holds); the
-poll interval and retention bounds from the released grounding-mcp version
-this pack requires (>= 0.3.2, verified against grounding-mcp v0.11.0's
-README): `pollAfterMs` is advertised as `5000` in the README's example
-handle, retention is 24h by default and always at least 100x
-`pollAfterMs`, and a pruned terminal attempt reads `expired`.
+facts regardless of which reading applies. The shared renderer owns the
+exact wording: `RECONNECT_FACT_RECONNECT_BY_ID` covers the lookup tools
+and `attemptId`; `RECONNECT_FACT_JOIN_NOT_RETRY` covers joining a live
+attempt and `forceNewAttempt`; `RECONNECT_FACT_POLL_AND_RETENTION` owns
+the poll and retention terms. See
+`src/policy-packs/builtin/solution-acceptance-reconnect.ts` rather than
+restating its numeric constants here.
 
 The guidance does NOT appear on a not-ready or stale verdict deny: both
 mean a run already completed and produced a marker, so there is no
@@ -210,14 +206,14 @@ pre-existing pack behavior, unchanged here). `instructions.md`
 (`buildInstructions`) stays the audit copy documented above; it renders
 its own "Reconnecting vs. retrying" section verbatim, but that section
 is no longer written by hand separately from this deny paragraph (see
-"Round 3 redesign (fixing the round-2 findings): one shared fact source" below). Pinned by
+"Review round 3 redesign (fixing the round-2 findings): one shared fact source" below). Pinned by
 `tests/cli/pack-hook-solution-acceptance.test.ts` ("the no-verdict deny
 carries the reconnect-vs-retry facts...", including the "joins"
 assertion added in review round 2 against the earlier "refuses a second
 call" misstatement, plus the not-ready/stale/no-verdict-id/
 manifest-load-failure tests' negative assertions).
 
-### Round 3 redesign (fixing the round-2 findings): one shared fact source (harness/5c9cad05)
+### Review round 3 redesign (fixing the round-2 findings): one shared fact source (harness/5c9cad05)
 
 The recurring review-round class above was hand-written deny text
 asserting producer semantics that drift from `instructions.md` and the
@@ -237,9 +233,9 @@ reconnect facts as exported data (`RECONNECT_FACT_RECONNECT_BY_ID`,
 paragraph documented above) and `renderReconnectInstructionsSection`
 (consumed by `buildInstructions`, this pack's `instructions.md` section).
 Both renderers interpolate the SAME fact constants verbatim, and every
-rendering opens with `RECONNECT_VERSION_QUALIFIER` ("With grounding-mcp
->= 0.11.0:") instead of stating the lifecycle as if the pack's own
-producer floor guaranteed it. `tests/policy-packs/solution-acceptance-reconnect.test.ts`
+rendering opens with `RECONNECT_VERSION_QUALIFIER` instead of stating the
+lifecycle as if the pack's own producer floor guaranteed it.
+`tests/policy-packs/solution-acceptance-reconnect.test.ts`
 asserts each fact constant appears verbatim in both rendered surfaces
 (the deny paragraph and the emitted `instructions.md`), so an edit that
 updates one surface but not the other fails that test instead of

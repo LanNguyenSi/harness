@@ -2,6 +2,16 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-09-12T10:06:47Z, task `04189542-266d-4607-a764-9c2e4f752dfb`
+  reconnect-rendering polish: re-checked the two rendered reconnect surfaces
+  after moving identifier formatting and verdict-id substitution into the
+  shared renderer. `gate-fail-posture-matrix.md` is re-stamped because it
+  cites `docs/policy-packs/solution-acceptance.md`; its cited deny-set range
+  remains unchanged. The PR #507 citation positions in
+  `codex-adapter-parity-gaps.md` remain correct: the write-guard constants
+  are lines 92-93 and `completionMatch` is lines 102-105. `okf-kit check
+  --json docs/okf` reports no findings.
+
 - 2026-09-09T06:12:00Z, task `db44ab46` (review round 3 fix, decision
   D-036, and the round-3 review's docs closure): the ok-branch messages
   of doctor tools.cli[] and tools.mcp[] (`src/cli/doctor/index.ts`) and
@@ -936,7 +946,7 @@
   `docs/policy-packs/solution-acceptance.md` citation (lines 56-60, the
   deny-set enumeration) is likewise untouched, this round's doc edits
   landing entirely inside the "Agent-facing surface" subsection (line
-  ~144 onward) and a new "Round 2 redesign" subsection after it. No
+  ~144 onward) and a new "Review round 3 redesign" subsection after it. No
   line-number or content drift on either citation, timestamp-only
   re-stamp. `policy-engine-producer-wiring.md` and
   `pause-vs-gate-kill-switch.md` again list only `CHANGELOG.md` among

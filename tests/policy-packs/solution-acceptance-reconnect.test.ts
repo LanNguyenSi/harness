@@ -3,6 +3,7 @@ import {
   RECONNECT_FACT_JOIN_NOT_RETRY,
   RECONNECT_FACT_POLL_AND_RETENTION,
   RECONNECT_FACT_RECONNECT_BY_ID,
+  RECONNECT_TASK_ID_PLACEHOLDER,
   RECONNECT_VERSION_QUALIFIER,
   renderReconnectDenyParagraph,
   renderReconnectInstructionsSection,
@@ -56,6 +57,32 @@ describe("solution-acceptance-reconnect: shared fact source (parity)", () => {
     expect(deny).toContain(RECONNECT_VERSION_QUALIFIER);
     expect(instructions).toContain(RECONNECT_VERSION_QUALIFIER);
     expect(RECONNECT_VERSION_QUALIFIER).toBe("With grounding-mcp >= 0.11.0:");
+  });
+
+  it("resolves the explicit verdict-id placeholder in the deny surface", () => {
+    const deny = renderReconnectDenyParagraph("task-resolved-42");
+    expect(deny).toContain('`solution_evaluate` was never called for "task-resolved-42"');
+    expect(deny).not.toContain(RECONNECT_TASK_ID_PLACEHOLDER);
+  });
+
+  it("keeps shared tool and attempt identifiers in code formatting", () => {
+    expect(RECONNECT_FACT_RECONNECT_BY_ID).toContain("`id`");
+    expect(RECONNECT_FACT_RECONNECT_BY_ID).toContain("`attemptId`");
+    expect(RECONNECT_FACT_JOIN_NOT_RETRY).toContain("`solution_evaluate`");
+    expect(RECONNECT_FACT_JOIN_NOT_RETRY).toContain("`forceNewAttempt`");
+    expect(RECONNECT_FACT_POLL_AND_RETENTION).toContain("`pollAfterMs`");
+  });
+
+  it("keeps the renderer-owned Never re-call lead-in and readable rendered lines", () => {
+    const deny = renderReconnectDenyParagraph("task-lines-1");
+    const instructions = renderReconnectInstructionsSection();
+    expect(deny).toContain(`Never re-call \`solution_evaluate\`:\n${RECONNECT_FACT_JOIN_NOT_RETRY}.`);
+    expect(instructions).toContain(
+      `Never re-call \`solution_evaluate\` as a stall workaround:\n${RECONNECT_FACT_JOIN_NOT_RETRY}.`,
+    );
+    for (const line of [...deny.split("\n"), ...instructions.split("\n")]) {
+      expect(line.length).toBeLessThanOrEqual(100);
+    }
   });
 
   it("instructions.md still teaches the never-re-call-as-a-stall-workaround framing (audit-copy wording)", () => {
