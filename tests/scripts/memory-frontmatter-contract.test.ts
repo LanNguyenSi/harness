@@ -10,6 +10,32 @@ import {
   validateCorpus,
 } from "../../scripts/memory-frontmatter-contract.mjs";
 
+// Task 1353a96e: "uses the script location and keeps sync transactional
+// through recovery faults" below drives producer()/nextRevision()/
+// syncContract() and the copied CLI many times over (roughly 90+
+// synchronous execFileSync("git", ...) and spawnSync(node, ...) calls
+// across the six pinnedUpdatedFixture() passes, two CLI invocations and
+// the rollback/cleanup fault runs). Under concurrent worker or machine
+// load that run exceeds vitest's default 5000ms testTimeout; it was
+// first observed from a detached git worktree under os.tmpdir() (the
+// environment `agent-primitives probe`'s default isolation copy uses),
+// but the review reproduced it from the ordinary checkout too, so the
+// variable is load, not the checkout location. This is the same class of
+// environment-sensitive vitest default-testTimeout race documented in
+// vitest.config.ts (cold subprocess-spawn latency racing a fixed local
+// budget), NOT the os.tmpdir()-exemption-swallow mechanism task 9a4a417b
+// (PR #527) fixed in tests/runtime/hermetic-spawn-allowlist.test.ts:
+// nothing in this test derives an expected path from the script's own
+// location or from os.tmpdir() at all, so there is no location assumption
+// to correct. Fixed the same way tests/cli/smoke/smoke.test.ts's
+// "escalates to SIGKILL" test and tests/policies/ledger-client.test.ts's
+// tools/list diagnostic already are: an explicit, generous per-test
+// timeout (20000ms) as the third argument to `it(...)`, below, instead of
+// weakening or removing any assertion. The test body is synchronous, so
+// the argument is a reporting ceiling vitest applies after the body
+// returns, not an abort guard and not a performance bound. Measurements
+// are recorded in CHANGELOG.md ([Unreleased], Fixed).
+
 const SHA = "0123456789abcdef0123456789abcdef01234567";
 const scriptPath = resolve(dirname(fileURLToPath(import.meta.url)), "../../scripts/memory-frontmatter-contract.mjs");
 const dirs: string[] = [];
@@ -164,6 +190,7 @@ describe("memory-frontmatter contract tooling", () => {
   });
 
   it("uses the script location and keeps sync transactional through recovery faults", () => {
+    // Task 1353a96e: explicit per-test timeout, see the file-header comment above.
     const source = producer(); const root = consumer();
     syncContract({ source: source.repo, revision: source.revision, consumerRoot: root });
     const elsewhere = temp("memory-cwd-");
@@ -224,5 +251,5 @@ describe("memory-frontmatter contract tooling", () => {
     const cleanupScratch = readdirSync(cleanupContract).find((name) => name.startsWith(".memory-frontmatter-sync-"));
     expect(cleanupScratch).toBeTruthy();
     expect(readdirSync(join(cleanupContract, cleanupScratch!))).toEqual(["provenance-backup"]);
-  });
+  }, 20000);
 });
