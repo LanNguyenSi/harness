@@ -90,7 +90,7 @@ export const RECONNECT_FACT_JOIN_NOT_RETRY =
 export const RECONNECT_FACT_POLL_AND_RETENTION =
   `Wait at least the returned \`pollAfterMs\` (advertised as \`${RECONNECT_POLL_MS_ADVERTISED}\`)\n` +
   `between polls; attempt records are retained \`${RECONNECT_RETENTION}\` by default (always at\n` +
-  `least \`${RECONNECT_RETENTION_FLOOR}\` \`pollAfterMs\`), and a pruned terminal attempt\n` +
+  `least \`${RECONNECT_RETENTION_FLOOR}\`), and a pruned terminal attempt\n` +
   `reads \`expired\``;
 
 /** The three readings, as one clause, with the task id interpolated. */

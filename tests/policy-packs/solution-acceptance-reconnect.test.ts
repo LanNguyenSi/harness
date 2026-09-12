@@ -3,6 +3,7 @@ import {
   RECONNECT_FACT_JOIN_NOT_RETRY,
   RECONNECT_FACT_POLL_AND_RETENTION,
   RECONNECT_FACT_RECONNECT_BY_ID,
+  RECONNECT_RETENTION_FLOOR,
   RECONNECT_TASK_ID_PLACEHOLDER,
   RECONNECT_VERSION_QUALIFIER,
   renderReconnectDenyParagraph,
@@ -71,6 +72,19 @@ describe("solution-acceptance-reconnect: shared fact source (parity)", () => {
     expect(RECONNECT_FACT_JOIN_NOT_RETRY).toContain("`solution_evaluate`");
     expect(RECONNECT_FACT_JOIN_NOT_RETRY).toContain("`forceNewAttempt`");
     expect(RECONNECT_FACT_POLL_AND_RETENTION).toContain("`pollAfterMs`");
+  });
+
+  it("renders the retention-floor phrase with pollAfterMs exactly once on both surfaces", () => {
+    for (const surface of [
+      renderReconnectDenyParagraph("task-retention-1"),
+      renderReconnectInstructionsSection(),
+    ]) {
+      const retentionFloorLine = surface.split("\n").find((line) =>
+        line.includes(RECONNECT_RETENTION_FLOOR),
+      );
+      expect(retentionFloorLine).toBeDefined();
+      expect(retentionFloorLine!.match(/pollAfterMs/g)).toHaveLength(1);
+    }
   });
 
   it("keeps the renderer-owned Never re-call lead-in and readable rendered lines", () => {
