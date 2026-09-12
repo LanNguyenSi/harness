@@ -220,6 +220,7 @@ describe("completion-gate — decision matrix", () => {
     // pinned (round 2 finding: the third reading's exact wording had
     // drifted unpinned).
     expect(reason).toMatch(/no readable verdict marker/);
+    expect(reason).toContain('`solution_evaluate` was never called for "task-42"');
     expect(reason).toMatch(/was never called/);
     expect(reason).toMatch(/still running in the background/);
     expect(reason).toMatch(/could not be read or parsed/);
@@ -231,7 +232,7 @@ describe("completion-gate — decision matrix", () => {
     // live attempt, review round 1 finding: the deny used to claim a second
     // call is refused, which is false against grounding-mcp's join semantics;
     // only forceNewAttempt is refused while the lock holds).
-    expect(reason).toMatch(/do not call it again/);
+    expect(reason).toMatch(/Never re-call `solution_evaluate`/);
     expect(reason).toMatch(/joins/i);
     expect(reason).toMatch(/forceNewAttempt/);
     // Fact 3: poll interval and retention bounds from the released grounding-mcp version.

@@ -46,6 +46,7 @@ export const RECONNECT_VERSION_QUALIFIER = `With ${RECONNECT_PRODUCER_FLOOR}:`;
 
 export const RECONNECT_STATUS_TOOL = "mcp__grounding-mcp__solution_evaluate_status";
 export const RECONNECT_RESULT_TOOL = "mcp__grounding-mcp__solution_evaluate_result";
+export const RECONNECT_TASK_ID_PLACEHOLDER = "<task-id>";
 
 export const RECONNECT_POLL_MS_ADVERTISED = "5000ms";
 export const RECONNECT_RETENTION = "24h";
@@ -59,26 +60,27 @@ export const RECONNECT_RETENTION_FLOOR = "100x pollAfterMs";
  * out from here.
  */
 export const RECONNECT_THREE_READINGS_LABELS = [
-  "solution_evaluate was never called for this id",
-  "a call for it is still running in the background",
+  `\`solution_evaluate\` was never called for "${RECONNECT_TASK_ID_PLACEHOLDER}"`,
+  "a `solution_evaluate` call for it is still running in the background",
   "a marker exists but could not be read or parsed",
 ] as const;
 
 /** Fact 1: reconnect by attempt id, not by starting a fresh call. */
 export const RECONNECT_FACT_RECONNECT_BY_ID =
-  `poll \`${RECONNECT_STATUS_TOOL}\` / \`${RECONNECT_RESULT_TOOL}\` for the SAME id, passing ` +
-  `the attemptId you were given (or omitting it to resolve the latest attempt, the recovery ` +
-  `path when your own call timed out before it ever returned one)`;
+  `poll \`${RECONNECT_STATUS_TOOL}\` /\n` +
+  `\`${RECONNECT_RESULT_TOOL}\` for the SAME \`id\`,\n` +
+  `passing the \`attemptId\` you were given (or omitting it to resolve the latest attempt,\n` +
+  `the recovery path when your own call timed out before it ever returned one)`;
 
 /**
  * Fact 2: never retry while the lock is held; a second call JOINS, it does
- * not refuse. Both renderers use this fact as a fresh sentence (after a
- * period), so it is capitalized.
+ * not refuse. It deliberately begins lowercase because each renderer owns
+ * its own lead-in sentence.
  */
 export const RECONNECT_FACT_JOIN_NOT_RETRY =
-  `A second solution_evaluate call for an id whose attempt is still live just joins that ` +
-  `attempt and returns its attemptId, never starting a second preflight run; only ` +
-  `forceNewAttempt is refused while that attempt's lock holds`;
+  `a second \`solution_evaluate\` call for an \`id\` whose attempt is still live just joins\n` +
+  `that attempt and returns its \`attemptId\`, never starting a second \`preflight\` run;\n` +
+  `only \`forceNewAttempt\` is refused while that attempt's lock holds`;
 
 /**
  * Fact 3: poll interval and retention bounds, from the released
@@ -86,16 +88,19 @@ export const RECONNECT_FACT_JOIN_NOT_RETRY =
  * (after a period), so it is capitalized.
  */
 export const RECONNECT_FACT_POLL_AND_RETENTION =
-  `Wait at least the returned pollAfterMs (advertised as ${RECONNECT_POLL_MS_ADVERTISED}) ` +
-  `between polls; attempt records are retained ${RECONNECT_RETENTION} by default (always at ` +
-  `least ${RECONNECT_RETENTION_FLOOR}), and a pruned terminal attempt reads "expired"`;
+  `Wait at least the returned \`pollAfterMs\` (advertised as \`${RECONNECT_POLL_MS_ADVERTISED}\`)\n` +
+  `between polls; attempt records are retained \`${RECONNECT_RETENTION}\` by default (always at\n` +
+  `least \`${RECONNECT_RETENTION_FLOOR}\`), and a pruned terminal attempt\n` +
+  `reads \`expired\``;
 
 /** The three readings, as one clause, with the task id interpolated. */
 function threeReadingsClause(taskId: string): string {
   const [neverCalled, stillRunning, unreadable] = RECONNECT_THREE_READINGS_LABELS;
-  return (
-    `${neverCalled.replace("this id", `"${taskId}"`)}, ${stillRunning}, or ${unreadable}`
-  );
+  return [
+    neverCalled.replace(RECONNECT_TASK_ID_PLACEHOLDER, taskId),
+    stillRunning,
+    `or ${unreadable}`,
+  ].join(",\n");
 }
 
 /**
@@ -105,16 +110,19 @@ function threeReadingsClause(taskId: string): string {
  * `renderReconnectInstructionsSection` below.
  */
 export function renderReconnectDenyParagraph(taskId: string): string {
-  return (
-    `\n` +
-    `Reconnecting vs. retrying. ${RECONNECT_VERSION_QUALIFIER} this same "no readable ` +
-    `verdict marker" message fires whether ${threeReadingsClause(taskId)} (the verdict marker ` +
-    `only appears once an attempt finishes, and is validated on read; this hook does not read ` +
-    `the documented attempt-lock anchor, so it cannot rule any of these three apart from ` +
-    `here). If you already called solution_evaluate for this id, do not call it again: ` +
-    `${RECONNECT_FACT_RECONNECT_BY_ID}. ${RECONNECT_FACT_JOIN_NOT_RETRY}. ` +
-    `${RECONNECT_FACT_POLL_AND_RETENTION}.\n`
-  );
+  return `\n${[
+    `Reconnecting vs. retrying. ${RECONNECT_VERSION_QUALIFIER} this same`,
+    `"no readable verdict marker" message fires whether`,
+    threeReadingsClause(taskId),
+    `(the verdict marker only appears once an attempt finishes, and is validated on read;`,
+    `this hook does not read the documented attempt-lock anchor, so it cannot rule any of`,
+    `these three apart from here). If you already called \`solution_evaluate\` for this \`id\`,`,
+    `do not call it again:`,
+    `${RECONNECT_FACT_RECONNECT_BY_ID}.`,
+    `Never re-call \`solution_evaluate\`:`,
+    `${RECONNECT_FACT_JOIN_NOT_RETRY}.`,
+    `${RECONNECT_FACT_POLL_AND_RETENTION}.`,
+  ].join("\n")}\n`;
 }
 
 /**
@@ -131,9 +139,11 @@ export function renderReconnectInstructionsSection(): string {
 ${RECONNECT_VERSION_QUALIFIER} a large repo can outlive the call: \`solution_evaluate\` may
 hand back \`{status: "running", attemptId, id, pollAfterMs}\` instead of a verdict, or your
 own call may time out with nothing at all. Either way the \`preflight\` run keeps going in
-the background; ${RECONNECT_FACT_RECONNECT_BY_ID}.
+the background; reconnect as follows:
+${RECONNECT_FACT_RECONNECT_BY_ID}.
 
-Never re-call \`solution_evaluate\` as a stall workaround: ${RECONNECT_FACT_JOIN_NOT_RETRY}.
+Never re-call \`solution_evaluate\` as a stall workaround:
+${RECONNECT_FACT_JOIN_NOT_RETRY}.
 A prior attempt's reported status (\`completed\`,
 \`failed\`, \`unknown\`, or \`expired\`) is informational, not the gate: \`unknown\`/
 \`expired\` never license a new attempt by themselves while another process still holds the
