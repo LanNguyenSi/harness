@@ -2,8 +2,54 @@
 
 <!-- Add new entries at the top, newest first. -->
 
-- 2026-09-13T09:52:00Z, task `e904f25a` (implementer): every rendered copy
-  of a `--project` name now goes through `sanitizeProjectForDisplay`
+- 2026-09-13T10:24:00Z, task `e904f25a` (implementer): control
+  characters are now rejected at the SOURCE, not stripped at each render
+  site. `isValidProjectName` (`src/runtime/git-context.ts`) additionally
+  rejects any name containing a C0 control character (`U+0000` to
+  `U+001F`, NUL included, so the separate NUL clause is gone), DEL
+  (`U+007F`) or a C1 control character (`U+0080` to `U+009F`). The entry
+  below described the previous design, one sanitiser wrapped around each
+  site that renders the NAME; that framing is superseded, because the
+  surfaces that render the SUBSTITUTED memory directory path (`harness
+  doctor`'s "memory directory missing" line, `harness list memories`'
+  `path` row field) never render the name at all, so no enumeration of
+  name-rendering sites could reach them. With the source screen, an
+  accepted name and every path it was substituted into is a plain
+  single-line string on every surface.
+
+  `sanitizeProjectForDisplay` stays for the one class the source screen
+  cannot cover: a REJECTED value is unvalidated by definition and is
+  still echoed back so the operator can see WHICH value was refused
+  (doctor's rejection warning, its per-directory note, its header
+  `project:` clause, `harness list memories`' `project_rejected` field).
+  The `session_start_preflight.setup` finding's `(project: X)` suffix
+  keeps the same wrap as defense in depth, since `doctor()` sets that
+  finding's `projectName` only when a project layer FILE resolved, which
+  the validator already gates. Consequence at the derivation:
+  `deriveProjectName` validates its own return value at every exit, so a
+  checkout directory basename carrying a control character now resolves
+  no project override layer and the base/machine value applies, with no
+  error and no warning, exactly as a `..` basename already did. The two
+  unguarded `{project}` sinks (`generate-memory-index.ts`'s own
+  substitution, `buildLockEntries` in `src/io/harness-lock.ts`) call the
+  validator nowhere and inherit nothing from this.
+
+  Citations re-pointed again, since this round's source edits shifted the
+  cited lines. In `docs/decisions/2026-08-27-ug-auto-mode-approval.md`:
+  `src/cli/doctor/format.ts:121-122#"modeEnv.message"` (previously at
+  lines 118-119) and
+  `src/cli/doctor/format.ts:190#"in-flight subagent records on disk:"`
+  (previously line 179). In `docs/decisions/2026-09-08-preflight-floors.md`:
+  `src/probes/memory.ts:277#"const parsed = parseProbedVersion(stdout);"`
+  (previously line 268). In this file:
+  `src/runtime/git-context.ts:392#"fs.realpathSync(commonDir)"` (previously
+  line 387) and
+  `src/cli/doctor/format.ts:150#"sessionStartPreflightSetupVersion.projectName"`
+  (previously line 139). Four module docs were re-stamped for the
+  `docs/CLI.md` edit in the same change.
+- 2026-09-13T09:52:00Z, task `e904f25a` (implementer). SUPERSEDED by the
+  entry above, kept for the record: every rendered copy
+  of a `--project` name goes through `sanitizeProjectForDisplay`
   (`src/runtime/git-context.ts`, beside `isValidProjectName`), which strips
   C0, DEL and C1 control characters. `isValidProjectName` screens only for
   the shapes that escape a path segment, so an accepted OR a rejected name
@@ -23,11 +69,13 @@
   bullet opened a second list).
 
   Citations re-pointed, since the source edits shifted the cited lines:
-  `src/cli/doctor/format.ts:114-115` to `:118-119` and `:175` to `:179`
-  (`docs/decisions/2026-08-27-ug-auto-mode-approval.md`),
-  `src/probes/memory.ts:263` to `:268`
-  (`docs/decisions/2026-09-08-preflight-floors.md`), and
-  `src/cli/doctor/format.ts:135` to `:139` (the `1c4eb3ea` entry below).
+  two `src/cli/doctor/format.ts` citations in
+  `docs/decisions/2026-08-27-ug-auto-mode-approval.md`, one
+  `src/probes/memory.ts` citation in
+  `docs/decisions/2026-09-08-preflight-floors.md`, and one more
+  `src/cli/doctor/format.ts` citation in this file (the `1c4eb3ea` entry
+  below). The entry above re-points those same four a second time after a
+  later source edit and carries their current anchors.
   Separately, the `65952a0c` entry below cited line 76 of CHANGELOG.md:
   that anchor was still non-blank at the merge base, but this branch's own
   CHANGELOG entries pushed the cited 6993d9b5-era sentence down to line
@@ -307,13 +355,13 @@
   `{project}` substitution, both left unvalidated and out of scope.
   `deriveProjectName` now resolves the common dir through
   `fs.realpathSync` before taking its basename
-  (`src/runtime/git-context.ts:387#"fs.realpathSync(commonDir)"`), so a
+  (`src/runtime/git-context.ts:392#"fs.realpathSync(commonDir)"`), so a
   symlinked checkout resolves the SAME project layer as the real
   directory (decision D-021a's "repository identity is the common dir"
   rule); best-effort, a realpath failure falls back to the un-resolved
   value. `doctor`'s `sessionStartPreflightProjectName` (and the
   finding's `projectName`,
-  `src/cli/doctor/format.ts:139#"sessionStartPreflightSetupVersion.projectName"`
+  `src/cli/doctor/format.ts:150#"sessionStartPreflightSetupVersion.projectName"`
   renders it as a `(project: X)` suffix) fires only when the scoped
   load actually RESOLVED a project layer file, not merely whenever a
   name was derivable for the cwd; round 1 set it unconditionally,
