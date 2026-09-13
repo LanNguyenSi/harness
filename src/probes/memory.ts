@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { parseProbedVersion, compareVersionFloor } from "../io/version-compare.js";
+import { isValidProjectName } from "../runtime/git-context.js";
 import type { Manifest } from "../schema/index.js";
 
 export interface StaleMemory {
@@ -59,8 +60,23 @@ function expandHome(p: string, home: string): string {
   return p;
 }
 
+/**
+ * Substitutes an operator-supplied `--project` value into the `{project}`
+ * placeholder found in `manifest.memory.directories[].path`. Guarded with
+ * the same `isValidProjectName` check `resolvePaths` applies at its own
+ * sink (`src/cli/loader.ts`, task `1c4eb3ea`): an invalid name (`".."`, a
+ * name containing a path separator, etc.) degrades to the "no project
+ * supplied" branch instead of being interpolated, so it can never walk
+ * `expandHome`'s result outside the directory the placeholder is meant to
+ * occupy. The `{project}` literal then survives substitution and is
+ * reported as `unresolved: true` by the caller below, the same
+ * informational path an absent `opts.project` already takes; this sink is
+ * NOT guarded for `generate-memory-index.ts`'s own `{project}`
+ * substitution (`src/cli/apply/generate-memory-index.ts`), left for a
+ * Codex slice per the pandora handoffs' reservation on that file.
+ */
 function substituteProject(p: string, project: string | undefined): string {
-  if (!project) return p;
+  if (!project || !isValidProjectName(project)) return p;
   return p.replace(/\{project\}/g, project);
 }
 

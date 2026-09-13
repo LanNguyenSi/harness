@@ -57,6 +57,24 @@ describe("inspectMemory: directory + router resolution", () => {
     expect(report.directories[0]!.scope).toBe("project");
   });
 
+  it("rejects an invalid opts.project (\"..\") instead of letting it escape the intended directory", () => {
+    const home = makeTmpHome();
+    // Sibling of the directory the {project} placeholder is meant to
+    // occupy, one level up from `claude/`. If the guard were missing,
+    // substituteProject would happily interpolate ".." and
+    // expandHome/path.join would resolve straight to `home` itself.
+    const manifest = manifestFor({
+      directories: [{ path: "~/claude/{project}/memory", scope: "project" }],
+    });
+    const report = inspectMemory(manifest, { homeDir: home, project: ".." });
+    // Invalid name degrades to the same branch as "no project supplied":
+    // the {project} literal survives substitution and is reported as an
+    // unresolved pattern, never joined into a path outside claude/.
+    expect(report.directories[0]!.path).toBe(path.join(home, "claude", "{project}", "memory"));
+    expect(report.directories[0]!.path.startsWith(home)).toBe(true);
+    expect(report.directories[0]!.unresolved).toBe(true);
+  });
+
   it("flags {project} literal as unresolved (pattern, not missing) when no project is supplied", () => {
     const home = makeTmpHome();
     const manifest = manifestFor({
