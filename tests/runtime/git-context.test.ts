@@ -539,6 +539,22 @@ describe("deriveProjectName: hardening against a crafted commondir / gitdir (tas
 
     expect(deriveProjectName(mainCheckout)).toBeNull();
   });
+
+  it("returns null for a resolved name containing a control character, the same exit a `..` basename takes", () => {
+    const root = tmpDir();
+    // Only `/` and NUL are forbidden by the filesystem, so a checkout
+    // directory name may legally carry a newline. Rendered raw, that name
+    // would forge a diagnostic line wherever a consumer prints it or a
+    // path it was substituted into. The derivation refuses it here, at its
+    // own exit, so no consumer ever receives it: no project override layer
+    // resolves for that repository and the base/machine value applies,
+    // with no error and no warning.
+    const mainCheckout = path.join(root, "evil\n  ⚠ forged");
+    fs.mkdirSync(path.join(mainCheckout, ".git"), { recursive: true });
+    fs.writeFileSync(path.join(mainCheckout, ".git", "HEAD"), "ref: refs/heads/main\n");
+
+    expect(deriveProjectName(mainCheckout)).toBeNull();
+  });
 });
 
 // Review round 3, decision D-028's docs finding: two more real-git
