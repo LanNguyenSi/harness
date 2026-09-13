@@ -561,7 +561,7 @@ memory:
     fs.mkdirSync(path.join(home, "claude", "memory"), { recursive: true });
     // No {project}-templated directory at all: a rejected --project has
     // nothing to have affected, so it must not warn (task `e904f25a`,
-    // review fix F2).
+    // task `e904f25a`).
     const rejected = await doctor({
       configPath: path.join(home, "harness.yaml"),
       homeOverride: home,
@@ -610,9 +610,101 @@ memory:
     expect(text).toContain(path.join(home, "claude", "{project}", "memory"));
     expect(text).toContain(path.join(home, "other", "{project}", "notes"));
   });
+
+  it("strips control characters out of a rejected --project before echoing it back", async () => {
+    const home = makeFixture({});
+    fs.writeFileSync(
+      path.join(home, "harness.yaml"),
+      `version: 1
+hooks: []
+policies: []
+memory:
+  directories:
+    - path: ${path.join(home, "claude", "{project}", "memory")}
+      scope: project
+  retention:
+    staleness_days: 30
+`,
+      "utf8",
+    );
+    // isValidProjectName screens for path escapes only, so a value it
+    // DOES reject (this one carries a separator) can still carry a
+    // newline or an ANSI escape into the two lines doctor echoes it back
+    // on. Rendering it raw would let the caller forge a diagnostic line.
+    const newlineBearing = `evil/x\n  ⚠ memory directory missing: ${path.join(home, "forged")}`;
+    const forged = await doctor({
+      configPath: path.join(home, "harness.yaml"),
+      homeOverride: home,
+      shallow: true,
+      pathEnv: "",
+      project: newlineBearing,
+    });
+    // The report keeps the raw operator value; only the rendering is
+    // sanitized.
+    expect(forged.memory.projectRejected).toBe(newlineBearing);
+    const forgedLines = format(forged).split("\n");
+    expect(
+      forgedLines.filter((l) => l.includes("rejected as an unsafe path segment")),
+    ).toHaveLength(1);
+    expect(forgedLines.some((l) => l.trimStart().startsWith("⚠ memory directory missing:"))).toBe(
+      false,
+    );
+    expect(forgedLines.some((l) => l.includes(path.join(home, "forged")))).toBe(true);
+
+    const escapeBearing = "\u001b[31mred\u001b[0m/x";
+    const ansi = await doctor({
+      configPath: path.join(home, "harness.yaml"),
+      homeOverride: home,
+      shallow: true,
+      pathEnv: "",
+      project: escapeBearing,
+    });
+    const ansiText = format(ansi);
+    expect(ansiText).not.toContain("\u001b");
+    expect(ansiText).toContain("--project [31mred[0m/x rejected as an unsafe path segment");
+    expect(ansiText).toContain("(--project [31mred[0m/x rejected; treated as unresolved)");
+  });
+
+  it("keeps the rejection warning independent of a concrete directory's missing warning", async () => {
+    const home = makeFixture({});
+    const missing = path.join(home, "claude", "gone");
+    fs.writeFileSync(
+      path.join(home, "harness.yaml"),
+      `version: 1
+hooks: []
+policies: []
+memory:
+  directories:
+    - path: ${path.join(home, "claude", "{project}", "memory")}
+      scope: project
+    - path: ${missing}
+      scope: user
+  retention:
+    staleness_days: 30
+`,
+      "utf8",
+    );
+    const shared = {
+      configPath: path.join(home, "harness.yaml"),
+      homeOverride: home,
+      shallow: true,
+      pathEnv: "",
+    };
+    const baseline = await doctor(shared);
+    const rejected = await doctor({ ...shared, project: ".." });
+    const baselineText = format(baseline);
+    const rejectedText = format(rejected);
+    expect(baselineText).toContain(`memory directory missing: ${missing}`);
+    expect(baselineText).not.toContain("rejected as an unsafe path segment");
+    expect(rejectedText).toContain(`memory directory missing: ${missing}`);
+    expect(rejectedText).toContain("--project .. rejected as an unsafe path segment");
+    // The concrete directory is missing in both runs and counted in both;
+    // the rejection is the only extra warning the second run adds.
+    expect(rejected.warningCount).toBe(baseline.warningCount + 1);
+  });
 });
 
-describe("doctor — memory rejection warningCount pinning (task e904f25a, review fix F4)", () => {
+describe("doctor — memory rejection warningCount pinning (task e904f25a)", () => {
   it("increments warningCount by exactly one for a rejected --project, no more and no less", async () => {
     const home = makeFixture({});
     fs.writeFileSync(

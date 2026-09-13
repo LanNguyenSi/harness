@@ -9,6 +9,7 @@ import {
   resolveGitContext,
   resolveOriginHeadBase,
   resolveScopedProjectName,
+  sanitizeProjectForDisplay,
 } from "../../src/runtime/git-context.js";
 
 let cleanups: Array<() => void> = [];
@@ -858,5 +859,23 @@ describe("resolveScopedProjectName (task f1eb1c5c)", () => {
         "`opts.project ?? deriveProjectName(cwd) ?? repo` copy",
     ).toContain("resolveScopedProjectName(");
     expect(src).not.toContain("deriveProjectName(cwd) ?? repo");
+  });
+});
+
+describe("sanitizeProjectForDisplay (task e904f25a)", () => {
+  it("strips control characters a project name can legally carry into rendered output", () => {
+    // isValidProjectName screens for path escapes only, so both of these
+    // reach a rendering site: the first one valid, the second rejected.
+    expect(sanitizeProjectForDisplay("ok\n  ⚠ forged")).toBe("ok  ⚠ forged");
+    expect(sanitizeProjectForDisplay("a/b\u001b[31m")).toBe("a/b[31m");
+    // C0, DEL and C1 alike; a bare carriage return would overwrite the
+    // line it was rendered on.
+    expect(sanitizeProjectForDisplay("a\rb\u0000c\u007fd\u0085e")).toBe("abcde");
+  });
+
+  it("passes an ordinary name through byte-identically", () => {
+    for (const name of ["myproj", "..", ".", "a/b", "a\\b", "with space", "ümläut"]) {
+      expect(sanitizeProjectForDisplay(name)).toBe(name);
+    }
   });
 });

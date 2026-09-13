@@ -145,6 +145,31 @@ policies: []
     const rejected = list("memories", { configPath: FULL_MANIFEST, project: ".." });
     expect(rejected.rows[0]!.project_rejected).toBe("..");
   });
+
+  it("strips control characters out of project_rejected, in the rows and in --json output", () => {
+    // Rejected (it carries a separator) and control-character bearing:
+    // this field is read back by machine consumers and printed into the
+    // text table, so neither surface may carry the raw value.
+    const crafted = "a/b\n  ⚠ forged row\u001b[31m";
+    const rejected = list("memories", {
+      configPath: FULL_MANIFEST,
+      project: crafted,
+      json: true,
+    });
+    const value = rejected.rows[0]!.project_rejected;
+    expect(value).toBe("a/b  ⚠ forged row[31m");
+    expect(String(value)).not.toMatch(/[\u0000-\u001f\u007f-\u009f]/);
+    // The --json surface a machine consumer parses back out.
+    const parsed = JSON.parse(rejected.output) as Array<Record<string, unknown>>;
+    expect(parsed[0]!.project_rejected).toBe("a/b  ⚠ forged row[31m");
+    // And the text table, where a raw escape would reach the terminal and
+    // a raw newline would forge a row of its own.
+    const table = list("memories", { configPath: FULL_MANIFEST, project: crafted });
+    expect(table.output).not.toContain("\u001b");
+    expect(table.output.split("\n").some((l) => l.trimStart().startsWith("⚠ forged row"))).toBe(
+      false,
+    );
+  });
 });
 
 describe("list — --filter", () => {

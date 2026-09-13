@@ -1,6 +1,7 @@
 import type { DoctorReport, McpProbeResult } from "./types.js";
 import { VERSION } from "../../version.js";
 import { projectRejectionWarns } from "../../probes/memory.js";
+import { sanitizeProjectForDisplay } from "../../runtime/git-context.js";
 
 function mcpLines(r: McpProbeResult, shallow: boolean): string[] {
   switch (r.outcome.kind) {
@@ -38,7 +39,10 @@ function describeStaleness(date: Date): string {
 }
 
 function formatHeader(report: DoctorReport): string {
-  const project = report.project ? `, project: ${report.project}` : "";
+  // Sanitized: `report.project` is the raw `--project <name>` an operator
+  // passed, and a name carrying a newline would split this header into a
+  // second, diagnostic-looking line of that operator's own text.
+  const project = report.project ? `, project: ${sanitizeProjectForDisplay(report.project)}` : "";
   const shallow = report.shallow ? " [shallow]" : "";
   return `harness ${VERSION} — checking ${report.manifestPath} (version ${report.manifestVersion}${project})${shallow}`;
 }
@@ -133,7 +137,7 @@ function formatEnvironmentSection(report: DoctorReport): string[] {
     // `project:` clause above only ever reflects an EXPLICIT
     // `--project`, never this derived name).
     const project = sessionStartPreflightSetupVersion.projectName
-      ? ` (project: ${sessionStartPreflightSetupVersion.projectName})`
+      ? ` (project: ${sanitizeProjectForDisplay(sessionStartPreflightSetupVersion.projectName)})`
       : "";
     out.push(`  ⚠ ${sessionStartPreflightSetupVersion.message}${project}`);
   }
@@ -238,9 +242,18 @@ function formatMemorySection(report: DoctorReport): string[] {
   // a rejected --project on a manifest with no {project}-templated
   // directory has nothing to warn about (task `e904f25a`).
   const rejectionActive = projectRejectionWarns(report.memory);
+  // The rejected value is operator-supplied and echoed back both here and
+  // on the per-directory note below, so it goes through
+  // `sanitizeRejectedProject` first: a rejected value may still carry a
+  // newline (which would forge an extra diagnostic line) or an ANSI escape
+  // (which would reach the operator's terminal raw).
+  const rejectedProject =
+    report.memory.projectRejected === null
+      ? null
+      : sanitizeProjectForDisplay(report.memory.projectRejected);
   if (rejectionActive) {
     out.push(
-      `  ⚠ --project ${report.memory.projectRejected} rejected as an unsafe path segment; treating the directory as an unresolved pattern`,
+      `  ⚠ --project ${rejectedProject} rejected as an unsafe path segment; treating the directory as an unresolved pattern`,
     );
   }
   for (const d of report.memory.directories) {
@@ -252,9 +265,15 @@ function formatMemorySection(report: DoctorReport): string[] {
       // single warn line (task `e904f25a`).
       if (rejectionActive) {
         out.push(
-          `  ℹ memory directory pattern: ${d.path} (--project ${report.memory.projectRejected} rejected; treated as unresolved)`,
+          `  ℹ memory directory pattern: ${d.path} (--project ${rejectedProject} rejected; treated as unresolved)`,
         );
-      } else if (report.memory.projectRejected === null) {
+      } else {
+        // Plain `else`, not a `projectRejected === null` re-test: this
+        // branch is reached only from inside `if (d.unresolved)`, which
+        // makes `projectRejectionWarns`' second conjunct true, so
+        // `rejectionActive` being false here already means
+        // `projectRejected === null` (see its definition in
+        // `src/probes/memory.ts`).
         out.push(`  ℹ memory directory pattern: ${d.path} (resolved per-project at runtime)`);
       }
     } else if (!d.exists) {

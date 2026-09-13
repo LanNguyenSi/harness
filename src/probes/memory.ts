@@ -41,6 +41,11 @@ export interface MemoryReport {
    * (this value AND at least one such directory) to decide whether to
    * render a warning instead of the informational "resolved per-project
    * at runtime" note; `list` carries this value as a row field regardless.
+   * Carries the RAW operator value: `isValidProjectName` rejects only the
+   * shapes that can escape a path segment, so a rejected value can still
+   * contain a newline or an ANSI escape. Every site that renders or
+   * serializes it passes it through `sanitizeProjectForDisplay`
+   * (`src/runtime/git-context.ts`) first.
    */
   projectRejected: string | null;
   routerExecutable: { path: string; exists: boolean } | null;

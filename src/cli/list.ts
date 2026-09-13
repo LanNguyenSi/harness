@@ -1,6 +1,7 @@
 import { inspectMemory } from "../probes/memory.js";
 import type { Manifest } from "../schema/index.js";
 import { isDerivedPolicy } from "../runtime/workflow-policies.js";
+import { sanitizeProjectForDisplay } from "../runtime/git-context.js";
 import { loadManifest, type LoaderOptions } from "./loader.js";
 
 export type ListCategory =
@@ -95,7 +96,12 @@ function buildMemoryRows(manifest: Manifest, opts: ListOptions): Record<string, 
       // only rejection warning for it is doctor's warn line, gated on at
       // least one memory directory actually carrying the {project}
       // placeholder; harness list itself never prints a warning.
-      ...(report.projectRejected !== null ? { project_rejected: report.projectRejected } : {}),
+      // Sanitized, not raw: a rejected value can still carry control
+      // characters, and this field is read back by machine consumers and
+      // rendered into the text table (see `sanitizeRejectedProject`).
+      ...(report.projectRejected !== null
+        ? { project_rejected: sanitizeProjectForDisplay(report.projectRejected) }
+        : {}),
     });
   }
   return out;

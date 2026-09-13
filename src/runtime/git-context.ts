@@ -471,3 +471,29 @@ export function isValidProjectName(name: string): boolean {
   if (name === "." || name === "..") return false;
   return !name.includes("/") && !name.includes("\\") && !name.includes("\0");
 }
+
+/**
+ * Renders a project name safe to interpolate into one line of CLI output.
+ * {@link isValidProjectName} screens only for the shapes that escape a
+ * path segment, so both a name it ACCEPTS and a name it REJECTS can still
+ * carry a newline, an ANSI escape, or another control character: an
+ * operator-supplied `--project <name>` reaches `harness doctor`'s header
+ * line, its rejected-`--project` warning, its per-directory note, and
+ * `harness list memories`' `project_rejected` row field, and a
+ * cwd-derived name reaches the setup-version finding's `(project: X)`
+ * suffix. Rendered raw, a newline-bearing value forges an extra,
+ * diagnostic-looking line of attacker-chosen text, and an ESC-bearing one
+ * writes raw terminal escapes into the operator's terminal.
+ *
+ * Strips (rather than escapes) every C0 control character, DEL, and every
+ * C1 control character, so the value stays a plain single-line string on
+ * every rendered surface, including the `project_rejected` field the text
+ * table is derived from and a `--json` consumer reads back. A name with no
+ * control character (`..`, `a/b`, every ordinary shape) passes through
+ * unchanged. Report DATA keeps the raw value (`DoctorReport.project`,
+ * `MemoryReport.projectRejected`); this is a guard at each rendering site
+ * (task `e904f25a`).
+ */
+export function sanitizeProjectForDisplay(name: string): string {
+  return name.replace(/[\u0000-\u001f\u007f-\u009f]/g, "");
+}
