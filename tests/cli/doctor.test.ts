@@ -541,6 +541,109 @@ memory:
     expect(text).toContain("resolved per-project at runtime");
     expect(text).not.toContain("rejected as an unsafe path segment");
   });
+
+  it("stays silent on a rejected --project when no memory directory carries a {project} placeholder", async () => {
+    const home = makeFixture({});
+    fs.writeFileSync(
+      path.join(home, "harness.yaml"),
+      `version: 1
+hooks: []
+policies: []
+memory:
+  directories:
+    - path: ${path.join(home, "claude", "memory")}
+      scope: project
+  retention:
+    staleness_days: 30
+`,
+      "utf8",
+    );
+    fs.mkdirSync(path.join(home, "claude", "memory"), { recursive: true });
+    // No {project}-templated directory at all: a rejected --project has
+    // nothing to have affected, so it must not warn (task `e904f25a`,
+    // review fix F2).
+    const rejected = await doctor({
+      configPath: path.join(home, "harness.yaml"),
+      homeOverride: home,
+      shallow: true,
+      pathEnv: "",
+      project: "..",
+    });
+    expect(rejected.memory.projectRejected).toBe("..");
+    const text = format(rejected);
+    expect(text).not.toContain("rejected as an unsafe path segment");
+    const baseline = await doctor({
+      configPath: path.join(home, "harness.yaml"),
+      homeOverride: home,
+      shallow: true,
+      pathEnv: "",
+    });
+    expect(rejected.warningCount).toBe(baseline.warningCount);
+  });
+
+  it("keeps a per-directory note for every {project}-templated directory when --project is rejected, not just a single collapsed warn line", async () => {
+    const home = makeFixture({});
+    fs.writeFileSync(
+      path.join(home, "harness.yaml"),
+      `version: 1
+hooks: []
+policies: []
+memory:
+  directories:
+    - path: ${path.join(home, "claude", "{project}", "memory")}
+      scope: project
+    - path: ${path.join(home, "other", "{project}", "notes")}
+      scope: project
+  retention:
+    staleness_days: 30
+`,
+      "utf8",
+    );
+    const report = await doctor({
+      configPath: path.join(home, "harness.yaml"),
+      homeOverride: home,
+      shallow: true,
+      pathEnv: "",
+      project: "..",
+    });
+    const text = format(report);
+    expect(text).toContain(path.join(home, "claude", "{project}", "memory"));
+    expect(text).toContain(path.join(home, "other", "{project}", "notes"));
+  });
+});
+
+describe("doctor — memory rejection warningCount pinning (task e904f25a, review fix F4)", () => {
+  it("increments warningCount by exactly one for a rejected --project, no more and no less", async () => {
+    const home = makeFixture({});
+    fs.writeFileSync(
+      path.join(home, "harness.yaml"),
+      `version: 1
+hooks: []
+policies: []
+memory:
+  directories:
+    - path: ${path.join(home, "claude", "{project}", "memory")}
+      scope: project
+  retention:
+    staleness_days: 30
+`,
+      "utf8",
+    );
+    const baseline = await doctor({
+      configPath: path.join(home, "harness.yaml"),
+      homeOverride: home,
+      shallow: true,
+      pathEnv: "",
+    });
+    const rejected = await doctor({
+      configPath: path.join(home, "harness.yaml"),
+      homeOverride: home,
+      shallow: true,
+      pathEnv: "",
+      project: "..",
+    });
+    expect(rejected.warningCount).toBe(baseline.warningCount + 1);
+  });
 });
 
 describe("doctor — summary counts", () => {

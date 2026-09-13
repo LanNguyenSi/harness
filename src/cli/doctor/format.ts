@@ -1,5 +1,6 @@
 import type { DoctorReport, McpProbeResult } from "./types.js";
 import { VERSION } from "../../version.js";
+import { projectRejectionWarns } from "../../probes/memory.js";
 
 function mcpLines(r: McpProbeResult, shallow: boolean): string[] {
   switch (r.outcome.kind) {
@@ -233,17 +234,27 @@ function formatMemorySection(report: DoctorReport): string[] {
     const marker = report.memory.routerVersion.status === "ok" ? "✓" : "⚠";
     out.push(`    ${marker} version: ${report.memory.routerVersion.message}`);
   }
-  if (report.memory.projectRejected !== null) {
+  // Gated on `projectRejectionWarns`, not just `projectRejected !== null`:
+  // a rejected --project on a manifest with no {project}-templated
+  // directory has nothing to warn about (task `e904f25a`).
+  const rejectionActive = projectRejectionWarns(report.memory);
+  if (rejectionActive) {
     out.push(
       `  ⚠ --project ${report.memory.projectRejected} rejected as an unsafe path segment; treating the directory as an unresolved pattern`,
     );
   }
   for (const d of report.memory.directories) {
     if (d.unresolved) {
-      // A rejected --project already got its own warning above; do not
-      // also print the "no project supplied" informational note, which
-      // would misdescribe a rejection as the ordinary unresolved case.
-      if (report.memory.projectRejected === null) {
+      // The rejection warning above names the rejected value once; each
+      // affected directory still gets its own per-directory note below
+      // (worded for the rejected case) so several {project}-templated
+      // directories all stay visible instead of being collapsed into the
+      // single warn line (task `e904f25a`).
+      if (rejectionActive) {
+        out.push(
+          `  ℹ memory directory pattern: ${d.path} (--project ${report.memory.projectRejected} rejected; treated as unresolved)`,
+        );
+      } else if (report.memory.projectRejected === null) {
         out.push(`  ℹ memory directory pattern: ${d.path} (resolved per-project at runtime)`);
       }
     } else if (!d.exists) {

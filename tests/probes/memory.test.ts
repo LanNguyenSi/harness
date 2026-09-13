@@ -139,6 +139,20 @@ describe("inspectMemory: directory + router resolution", () => {
     expect(valid.projectRejected).toBeNull();
   });
 
+  it("treats an empty-string --project as \"not supplied\", agreeing with substituteProject's own falsy check", () => {
+    const home = makeTmpHome();
+    const manifest = manifestFor({
+      directories: [{ path: "~/claude/{project}/memory", scope: "project" }],
+    });
+    const report = inspectMemory(manifest, { homeDir: home, project: "" });
+    // substituteProject's `!project` branch already treats "" as
+    // "no project supplied" (the placeholder survives, unresolved: true
+    // below); projectRejected must agree, not report "" as a rejected
+    // value (task `e904f25a`).
+    expect(report.projectRejected).toBeNull();
+    expect(report.directories[0]!.unresolved).toBe(true);
+  });
+
   it("flags {project} literal as unresolved (pattern, not missing) when no project is supplied", () => {
     const home = makeTmpHome();
     const manifest = manifestFor({

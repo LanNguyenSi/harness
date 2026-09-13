@@ -32,14 +32,15 @@ export interface MemoryReport {
   directories: Array<{ path: string; scope: string; exists: boolean; unresolved?: boolean }>;
   /**
    * The `opts.project` value the caller supplied, when it failed
-   * `isValidProjectName` at `substituteProject`'s sink (task `e904f25a`,
-   * review round 2 finding F5): `null` when no project was supplied, or
-   * when the supplied one was valid. Distinguishes "operator passed
-   * `--project` and it was rejected as an unsafe path segment" from the
-   * ordinary "no project supplied" case, both of which otherwise produce
-   * the same `unresolved: true` directory entries above; `doctor`/`list`
-   * use this to render a warning instead of the informational
-   * "resolved per-project at runtime" note.
+   * `isValidProjectName` at `substituteProject`'s sink (task `e904f25a`):
+   * `null` when no project was supplied, or when the supplied one was
+   * valid. Distinguishes "operator passed `--project` and it was rejected
+   * as an unsafe path segment" from the ordinary "no project supplied"
+   * case, both of which otherwise produce the same `unresolved: true`
+   * directory entries above; `doctor` uses `projectRejectionWarns` below
+   * (this value AND at least one such directory) to decide whether to
+   * render a warning instead of the informational "resolved per-project
+   * at runtime" note; `list` carries this value as a row field regardless.
    */
   projectRejected: string | null;
   routerExecutable: { path: string; exists: boolean } | null;
@@ -110,6 +111,21 @@ function substituteProject(p: string, project: string | undefined): string {
   return p.split("{project}").join(project);
 }
 
+/**
+ * True only when a rejected `--project` value should actually be surfaced
+ * as a warning: `report.projectRejected` is set AND at least one memory
+ * directory still carries the unresolved `{project}` placeholder. A
+ * manifest with no `{project}`-templated directory at all has nothing for
+ * the rejected value to have affected, so it stays silent rather than
+ * warning about a substitution that was never going to happen. Shared by
+ * `harness doctor` (`src/cli/doctor/format.ts`, `src/cli/doctor/index.ts`'s
+ * `warningCount`) so both compute the same predicate instead of two
+ * hand-written copies drifting apart (task `e904f25a`).
+ */
+export function projectRejectionWarns(report: MemoryReport): boolean {
+  return report.projectRejected !== null && report.directories.some((d) => d.unresolved);
+}
+
 function findMarkdownFiles(root: string): string[] {
   if (!fs.existsSync(root)) return [];
   const stack: string[] = [root];
@@ -140,8 +156,15 @@ export function inspectMemory(manifest: Manifest, opts: MemoryOptions = {}): Mem
   // `opts.project` supplied but rejected by `isValidProjectName`: distinct
   // from "no project supplied" (see `MemoryReport.projectRejected`'s doc
   // comment). Computed once, independent of any one directory's path.
-  const projectRejected =
-    opts.project !== undefined && !isValidProjectName(opts.project) ? opts.project : null;
+  // The falsy check (not `!== undefined`) matches `substituteProject`'s own
+  // `!project` branch below, so an empty-string `--project` is "not
+  // supplied" in both places instead of "supplied and rejected" here but
+  // "not supplied" there (task `e904f25a`).
+  const projectRejected = opts.project
+    ? isValidProjectName(opts.project)
+      ? null
+      : opts.project
+    : null;
 
   const directories: MemoryReport["directories"] = manifest.memory.directories.map((d) => {
     // `~` is expanded BEFORE `{project}` is substituted so an operator

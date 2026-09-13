@@ -88,10 +88,13 @@ function buildMemoryRows(manifest: Manifest, opts: ListOptions): Record<string, 
       exists: dir.exists,
       stale_count: report.staleMemories.filter((s) => s.path.startsWith(dir.path)).length,
       // Set only when opts.project was supplied and rejected by
-      // isValidProjectName (task e904f25a, review round 2 finding F5):
-      // distinguishes "--project was rejected" from the ordinary
-      // "no project supplied" unresolved-pattern case without adding a
-      // column to every other list category's row shape.
+      // isValidProjectName (task e904f25a): distinguishes "--project was
+      // rejected" from the ordinary "no project supplied" unresolved-pattern
+      // case without adding a column to every other list category's row
+      // shape. Conditionally present (unlike every other field above): the
+      // only rejection warning for it is doctor's warn line, gated on at
+      // least one memory directory actually carrying the {project}
+      // placeholder; harness list itself never prints a warning.
       ...(report.projectRejected !== null ? { project_rejected: report.projectRejected } : {}),
     });
   }
