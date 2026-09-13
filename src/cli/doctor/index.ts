@@ -3,7 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { parseProbedVersion, compareVersionFloor } from "../../io/version-compare.js";
 import { resolveGeneratedDir } from "../../io/generated-dir.js";
-import { inspectMemory } from "../../probes/memory.js";
+import { inspectMemory, projectRejectionWarns } from "../../probes/memory.js";
 import {
   RealMcpProbe,
   probeAll,
@@ -1163,6 +1163,7 @@ function countDiagnostics(report: Omit<DoctorReport, "errorCount" | "warningCoun
   if (report.memory.routerExecutable && !report.memory.routerExecutable.exists) errorCount++;
   if (!report.memory.routerExecutable) warningCount++;
   if (report.memory.routerVersion?.status === "warn") warningCount++;
+  if (projectRejectionWarns(report.memory)) warningCount++;
   for (const d of report.memory.directories) {
     if (!d.exists) warningCount++;
   }

@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { parseProbedVersion, compareVersionFloor } from "../io/version-compare.js";
+import { isValidProjectName } from "../runtime/git-context.js";
 import type { Manifest } from "../schema/index.js";
 
 export interface StaleMemory {
@@ -29,6 +30,28 @@ export interface MemoryReport {
    * "missing", since the real directory only exists per-project.
    */
   directories: Array<{ path: string; scope: string; exists: boolean; unresolved?: boolean }>;
+  /**
+   * The `opts.project` value the caller supplied, when it failed
+   * `isValidProjectName` at `substituteProject`'s sink (task `e904f25a`):
+   * `null` when no project was supplied, or when the supplied one was
+   * valid. Distinguishes "operator passed `--project` and it was rejected
+   * as an unsafe path segment" from the ordinary "no project supplied"
+   * case, both of which otherwise produce the same `unresolved: true`
+   * directory entries above; `doctor` uses `projectRejectionWarns` below
+   * (this value AND at least one such directory) to decide whether to
+   * render a warning instead of the informational "resolved per-project
+   * at runtime" note; `list` carries this value as a row field regardless.
+   * Carries the RAW operator value, which is by definition unvalidated:
+   * a name is rejected precisely BECAUSE it escapes a path segment or
+   * carries a control character, so this field can hold a newline or an
+   * ANSI escape. Every site that renders or serializes it passes it
+   * through `sanitizeProjectForDisplay` (`src/runtime/git-context.ts`)
+   * first. Nothing downstream of a name that was ACCEPTED needs the same
+   * treatment: `isValidProjectName` rejects control characters at the
+   * source, so an accepted name (and any path it was substituted into)
+   * is already a plain single-line string.
+   */
+  projectRejected: string | null;
   routerExecutable: { path: string; exists: boolean } | null;
   routerVersion?: RouterVersionReport;
   staleMemories: StaleMemory[];
@@ -59,9 +82,62 @@ function expandHome(p: string, home: string): string {
   return p;
 }
 
+/**
+ * Substitutes an operator-supplied `--project` value into the `{project}`
+ * placeholder found in `manifest.memory.directories[].path`, AFTER the
+ * caller has already run the path through `expandHome`. Guarded with the
+ * same `isValidProjectName` check `resolvePaths` applies at its own sink
+ * (`src/cli/loader.ts`, task `1c4eb3ea`): an invalid name (`".."`, a name
+ * containing a path separator, a name containing a control character,
+ * etc.) degrades to the "no project supplied" branch instead of being
+ * interpolated. The `{project}` literal then survives substitution and is
+ * reported as `unresolved: true` by the caller below, the same
+ * informational path an absent `opts.project` already takes.
+ *
+ * Three properties this guard actually gives, no more: (1) an invalid name
+ * never reaches the placeholder at all, so it cannot introduce a `..`
+ * segment or a path separator into the manifest path; (2) the same
+ * rejection keeps a control character out of the SUBSTITUTED path, so the
+ * surfaces that render that path rather than the name (`harness doctor`'s
+ * "memory directory missing" line, `harness list memories`' `path` row
+ * field) cannot be made to carry a forged line by a name that passed
+ * validation; (3) substitution
+ * uses `String.prototype.split`/`join` (the same literal idiom
+ * `src/io/harness-lock.ts` and `src/cli/apply/generate-memory-index.ts`
+ * already use for the SAME placeholder), never `String.prototype.replace`
+ * with a regex, so a project value containing a `$`-prefixed
+ * replacement pattern (`$'`, `` $` ``, `$&`) is inserted literally instead
+ * of being interpreted as a reference into the surrounding string. It
+ * does NOT independently re-validate the result against the filesystem;
+ * a valid-looking name can still name a directory that does not exist
+ * (the caller's `fs.existsSync` handles that separately). Because the
+ * caller expands `~` BEFORE calling this function, a project value of
+ * `~` (which `isValidProjectName` allows: it contains no separator) is
+ * inserted as an inert literal segment, never re-interpreted as a home
+ * directory reference. This sink is NOT guarded for
+ * `generate-memory-index.ts`'s own `{project}` substitution
+ * (`src/cli/apply/generate-memory-index.ts`) or `buildLockEntries`'
+ * (`src/io/harness-lock.ts`); see CHANGELOG.md for the reservation on the
+ * former and the follow-up on the latter.
+ */
 function substituteProject(p: string, project: string | undefined): string {
-  if (!project) return p;
-  return p.replace(/\{project\}/g, project);
+  if (!project || !isValidProjectName(project)) return p;
+  return p.split("{project}").join(project);
+}
+
+/**
+ * True only when a rejected `--project` value should actually be surfaced
+ * as a warning: `report.projectRejected` is set AND at least one memory
+ * directory still carries the unresolved `{project}` placeholder. A
+ * manifest with no `{project}`-templated directory at all has nothing for
+ * the rejected value to have affected, so it stays silent rather than
+ * warning about a substitution that was never going to happen. Shared by
+ * `harness doctor` (`src/cli/doctor/format.ts`, `src/cli/doctor/index.ts`'s
+ * `warningCount`) so both compute the same predicate instead of two
+ * hand-written copies drifting apart (task `e904f25a`).
+ */
+export function projectRejectionWarns(report: MemoryReport): boolean {
+  return report.projectRejected !== null && report.directories.some((d) => d.unresolved);
 }
 
 function findMarkdownFiles(root: string): string[] {
@@ -91,17 +167,34 @@ export function inspectMemory(manifest: Manifest, opts: MemoryOptions = {}): Mem
   const stalenessDays = manifest.memory.retention.staleness_days;
   const cutoffMs = now.getTime() - stalenessDays * 86400000;
 
+  // `opts.project` supplied but rejected by `isValidProjectName`: distinct
+  // from "no project supplied" (see `MemoryReport.projectRejected`'s doc
+  // comment). Computed once, independent of any one directory's path.
+  // The falsy check (not `!== undefined`) matches `substituteProject`'s own
+  // `!project` branch below, so an empty-string `--project` is "not
+  // supplied" in both places instead of "supplied and rejected" here but
+  // "not supplied" there (task `e904f25a`).
+  const projectRejected = opts.project
+    ? isValidProjectName(opts.project)
+      ? null
+      : opts.project
+    : null;
+
   const directories: MemoryReport["directories"] = manifest.memory.directories.map((d) => {
-    const substituted = substituteProject(d.path, opts.project);
-    const expanded = expandHome(substituted, home);
-    const unresolved = expanded.includes("{project}");
+    // `~` is expanded BEFORE `{project}` is substituted so an operator
+    // project value that itself looks like `~` (or starts with `~/`)
+    // never gets re-interpreted as a home-directory reference: only the
+    // manifest's own leading `~` is ever expanded.
+    const expanded = expandHome(d.path, home);
+    const substituted = substituteProject(expanded, opts.project);
+    const unresolved = substituted.includes("{project}");
     return {
-      path: expanded,
+      path: substituted,
       scope: d.scope,
       // An entry with an unresolved placeholder is a pattern, not a
       // concrete path; existence is not meaningful and the doctor
       // should not flag it as missing.
-      exists: unresolved ? true : fs.existsSync(expanded),
+      exists: unresolved ? true : fs.existsSync(substituted),
       ...(unresolved ? { unresolved: true } : {}),
     };
   });
@@ -224,6 +317,7 @@ export function inspectMemory(manifest: Manifest, opts: MemoryOptions = {}): Mem
 
   return {
     directories,
+    projectRejected,
     routerExecutable,
     ...(routerVersion ? { routerVersion } : {}),
     staleMemories,

@@ -2,6 +2,106 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-09-13T10:24:00Z, task `e904f25a` (implementer): control
+  characters are now rejected at the SOURCE, not stripped at each render
+  site. `isValidProjectName` (`src/runtime/git-context.ts`) additionally
+  rejects any name containing a C0 control character (`U+0000` to
+  `U+001F`, NUL included, so the separate NUL clause is gone), DEL
+  (`U+007F`) or a C1 control character (`U+0080` to `U+009F`). The entry
+  below described the previous design, one sanitiser wrapped around each
+  site that renders the NAME; that framing is superseded, because the
+  surfaces that render the SUBSTITUTED memory directory path (`harness
+  doctor`'s "memory directory missing" line, `harness list memories`'
+  `path` row field) never render the name at all, so no enumeration of
+  name-rendering sites could reach them. With the source screen, an
+  accepted name and every path it was substituted into is a plain
+  single-line string on every surface.
+
+  `sanitizeProjectForDisplay` stays for the one class the source screen
+  cannot cover: a REJECTED value is unvalidated by definition and is
+  still echoed back so the operator can see WHICH value was refused
+  (doctor's rejection warning, its per-directory note, its header
+  `project:` clause, `harness list memories`' `project_rejected` field).
+  The `session_start_preflight.setup` finding's `(project: X)` suffix
+  keeps the same wrap as defense in depth, since `doctor()` sets that
+  finding's `projectName` only when a project layer FILE resolved, which
+  the validator already gates. Consequence at the derivation:
+  `deriveProjectName` validates its own return value at every exit, so a
+  checkout directory basename carrying a control character now resolves
+  no project override layer and the base/machine value applies, with no
+  error and no warning, exactly as a `..` basename already did. The two
+  unguarded `{project}` sinks (`generate-memory-index.ts`'s own
+  substitution, `buildLockEntries` in `src/io/harness-lock.ts`) call the
+  validator nowhere and inherit nothing from this.
+
+  Citations re-pointed again, since this round's source edits shifted the
+  cited lines. In `docs/decisions/2026-08-27-ug-auto-mode-approval.md`:
+  `src/cli/doctor/format.ts:121-122#"modeEnv.message"` (previously at
+  lines 118-119) and
+  `src/cli/doctor/format.ts:190#"in-flight subagent records on disk:"`
+  (previously line 179). In `docs/decisions/2026-09-08-preflight-floors.md`:
+  `src/probes/memory.ts:277#"const parsed = parseProbedVersion(stdout);"`
+  (previously line 268). In this file:
+  `src/runtime/git-context.ts:392#"fs.realpathSync(commonDir)"` (previously
+  line 387) and
+  `src/cli/doctor/format.ts:150#"sessionStartPreflightSetupVersion.projectName"`
+  (previously line 139). Four module docs were re-stamped for the
+  `docs/CLI.md` edit in the same change.
+- 2026-09-13T09:52:00Z, task `e904f25a` (implementer). SUPERSEDED by the
+  entry above, kept for the record: every rendered copy
+  of a `--project` name goes through `sanitizeProjectForDisplay`
+  (`src/runtime/git-context.ts`, beside `isValidProjectName`), which strips
+  C0, DEL and C1 control characters. `isValidProjectName` screens only for
+  the shapes that escape a path segment, so an accepted OR a rejected name
+  can still carry a newline (which forges an extra, diagnostic-looking
+  output line) or an ANSI escape (which reaches the terminal raw). Covered
+  sites: `harness doctor`'s header `project:` clause, its rejected-value
+  warning, its per-directory note, the `session_start_preflight.setup`
+  finding's `(project: X)` suffix, and `harness list memories`'
+  `project_rejected` row field (and with it the text table derived from
+  it); report data keeps the raw value. `docs/CLI.md`'s sink inventory now
+  states why the two open sinks are accepted (both are reached only through
+  an explicit `--project`, never through a cwd-derived name) and points at
+  `CHANGELOG.md` for the reservation instead of naming an external
+  handoff; its PER-REPO SCOPING item renders as one list again, both
+  continuation paragraphs indented into it (checked with `markdown-it`:
+  before, the list closed after the four sink bullets and the SECURITY
+  bullet opened a second list).
+
+  Citations re-pointed, since the source edits shifted the cited lines:
+  two `src/cli/doctor/format.ts` citations in
+  `docs/decisions/2026-08-27-ug-auto-mode-approval.md`, one
+  `src/probes/memory.ts` citation in
+  `docs/decisions/2026-09-08-preflight-floors.md`, and one more
+  `src/cli/doctor/format.ts` citation in this file (the `1c4eb3ea` entry
+  below). The entry above re-points those same four a second time after a
+  later source edit and carries their current anchors.
+  Separately, the `65952a0c` entry below cited line 76 of CHANGELOG.md:
+  that anchor was still non-blank at the merge base, but this branch's own
+  CHANGELOG entries pushed the cited 6993d9b5-era sentence down to line
+  141 and left line 76 blank, so the citation is re-pointed to `:141`.
+  Measured with `npx okf-kit check --json docs/okf`: 0 errors / 0 warnings
+  against a scratch checkout of the merge base `cb8e69b0`, and 1 warning
+  (`citations-resolve`, blank start line) at this branch's head before the
+  re-point.
+
+- 2026-09-13T09:00:00Z, task `e904f25a` (implementer, review round 1 fix):
+  `substituteProject` (`src/probes/memory.ts`) is now guarded by
+  `isValidProjectName`, substitutes AFTER `expandHome` (not before), and
+  uses a literal `split`/`join` instead of `replace`+regex, closing a
+  `$'`/`` $` ``-pattern and a `~`-re-anchoring gap the round-1 review
+  found. `generate-memory-index.ts`'s own `{project}` substitution and
+  `buildLockEntries`' (`src/io/harness-lock.ts`) both remain unguarded:
+  the former is reserved for a separate slice (see CHANGELOG.md for the
+  reservation), the latter is a follow-up to file. A rejected
+  `--project` now sets `MemoryReport.projectRejected`, rendered by
+  `harness doctor`/`harness list memories` as its own warning instead of
+  the ordinary "unresolved pattern" note. `docs/CLI.md`'s SINK GUARD
+  sentence, the `isValidProjectName` doc comment
+  (`src/runtime/git-context.ts`), and CHANGELOG.md's entry for this task
+  now name all three `{project}` sinks. `okf-kit check --json docs/okf`
+  reports no findings.
+
 - 2026-09-12T10:06:47Z, task `04189542-266d-4607-a764-9c2e4f752dfb`
   reconnect-rendering polish: re-checked the two rendered reconnect surfaces
   after moving identifier formatting and verdict-id substitution into the
@@ -216,7 +316,7 @@
   files / 484 tests passed. `npx okf-kit@0.10.0 check --json docs/okf`
   re-run against this commit: 0 findings.
 
-- 2026-09-08T09:52:55Z, task 65952a0c (implementer, review round 3, decision D-036): applied all seven round-2 mediums/lows I own. The ok-path pin: added a `doctor.test.ts` case (`min_version: "0.6.0"` against a probed `my-hook-bin v0.7.0-rc.1`) asserting `report.hooks[0].version` equals `{ status: "ok", message: "v0.7.0-rc.1 ≥ 0.6.0" }` (the source's own `≥` character, not ASCII `>=`), killing the `${token}` -> `${actual}` ok-message mutant. The second-interpolation pin: extended the existing multi-hyphen assertion in `doctor-session-start-preflight-setup-version.test.ts` with `expect(finding?.message).toContain("--setup on v0.6.0-4-gabc123 is dependency-install only")`, killing the below_floor message's second `${token}` -> `${actual}` mutant. `CHANGELOG.md:76`'s stale 6993d9b5-era sentence ("Both this check's floor and the template bump below read one exported constant... pinned by a test asserting the constant's value") now ends with a superseded-by clause naming task `65952a0c` and the split. Reordered this file: the `9fec3839` entry (08:58:05Z) now sits above the T-006 round-1 entry (08:53:51Z), restoring newest-first order; both directional cross-references between the two T-006 entries flipped to match ("see below" in the round-2 entry, "above" in the round-1 entry); the round-2 entry's false self-verification claim ("log.md entries reconciled newest-first below") corrected to state the reordering was left undone in round 2 and fixed here. The ADR's Reopen-criteria third bullet now names "any of the five prerelease-blind min_version floor checks listed in the scope note above," not only `tools.cli[]`/`tools.mcp[]`. Both the ADR Consequences bullet and `docs/CLI.md`'s VERSION CAVEAT accepted-cost sentence now qualify the git-describe/platform-suffix false-positive class with "when its numeric run exactly equals the floor" (`compareVersionFloor` returns the numeric comparison outright whenever it is non-zero; the prerelease tie-break only bites on an exact numeric tie). The setup-floor pin test in `doctor-session-start-preflight-setup-version.test.ts` retitled from "pins the required floor to the shared constant" to "pins the setup floor's value," its leading comment rewritten to describe a single-constant value pin (the shared-constant framing predates the split). `tests/cli/init-dependencies.test.ts`'s duplicate `node:fs` import dropped; its one `readFileSync` call now goes through the existing `import * as fs from "node:fs"`. `npm run build`, `typecheck`, `typecheck:tests`, `check:changelog-coverage`, `check:no-only` all clean; `npx vitest run tests/cli/doctor.test.ts tests/cli/doctor-session-start-preflight-setup-version.test.ts tests/cli/init-dependencies.test.ts tests/cli/init-full-template-pins.test.ts tests/decisions-citations-resolve.test.ts`: 5 files / 397 tests passed; full `npm test`: 239 files / 7567 tests passed, 2 skipped. The `docs/CLI.md` VERSION CAVEAT edit above then flagged four docs `sources-fresh` STALE on the next `check` run: `codex-adapter-parity-gaps.md`, `debug-verb-selection.md`, `evidence-ledger-trust-boundary.md`, `policy-engine-producer-wiring.md`. Re-verified: none of the four cite the accepted-cost sentence or any other content this round's edits touch (they cite `docs/CLI.md` as a whole file or unrelated sections: the hook-entrypoints table, the `delegate` row, the ledger-producers section, or no line-anchored content at all); re-stamped their `timestamp:` field to this entry's timestamp. `npx okf-kit@0.10.0 check --json docs/okf` re-run against this commit: 0 stale / 0 warnings / 0 errors.
+- 2026-09-08T09:52:55Z, task 65952a0c (implementer, review round 3, decision D-036): applied all seven round-2 mediums/lows I own. The ok-path pin: added a `doctor.test.ts` case (`min_version: "0.6.0"` against a probed `my-hook-bin v0.7.0-rc.1`) asserting `report.hooks[0].version` equals `{ status: "ok", message: "v0.7.0-rc.1 ≥ 0.6.0" }` (the source's own `≥` character, not ASCII `>=`), killing the `${token}` -> `${actual}` ok-message mutant. The second-interpolation pin: extended the existing multi-hyphen assertion in `doctor-session-start-preflight-setup-version.test.ts` with `expect(finding?.message).toContain("--setup on v0.6.0-4-gabc123 is dependency-install only")`, killing the below_floor message's second `${token}` -> `${actual}` mutant. `CHANGELOG.md:141`'s stale 6993d9b5-era sentence ("Both this check's floor and the template bump below read one exported constant... pinned by a test asserting the constant's value") now ends with a superseded-by clause naming task `65952a0c` and the split. Reordered this file: the `9fec3839` entry (08:58:05Z) now sits above the T-006 round-1 entry (08:53:51Z), restoring newest-first order; both directional cross-references between the two T-006 entries flipped to match ("see below" in the round-2 entry, "above" in the round-1 entry); the round-2 entry's false self-verification claim ("log.md entries reconciled newest-first below") corrected to state the reordering was left undone in round 2 and fixed here. The ADR's Reopen-criteria third bullet now names "any of the five prerelease-blind min_version floor checks listed in the scope note above," not only `tools.cli[]`/`tools.mcp[]`. Both the ADR Consequences bullet and `docs/CLI.md`'s VERSION CAVEAT accepted-cost sentence now qualify the git-describe/platform-suffix false-positive class with "when its numeric run exactly equals the floor" (`compareVersionFloor` returns the numeric comparison outright whenever it is non-zero; the prerelease tie-break only bites on an exact numeric tie). The setup-floor pin test in `doctor-session-start-preflight-setup-version.test.ts` retitled from "pins the required floor to the shared constant" to "pins the setup floor's value," its leading comment rewritten to describe a single-constant value pin (the shared-constant framing predates the split). `tests/cli/init-dependencies.test.ts`'s duplicate `node:fs` import dropped; its one `readFileSync` call now goes through the existing `import * as fs from "node:fs"`. `npm run build`, `typecheck`, `typecheck:tests`, `check:changelog-coverage`, `check:no-only` all clean; `npx vitest run tests/cli/doctor.test.ts tests/cli/doctor-session-start-preflight-setup-version.test.ts tests/cli/init-dependencies.test.ts tests/cli/init-full-template-pins.test.ts tests/decisions-citations-resolve.test.ts`: 5 files / 397 tests passed; full `npm test`: 239 files / 7567 tests passed, 2 skipped. The `docs/CLI.md` VERSION CAVEAT edit above then flagged four docs `sources-fresh` STALE on the next `check` run: `codex-adapter-parity-gaps.md`, `debug-verb-selection.md`, `evidence-ledger-trust-boundary.md`, `policy-engine-producer-wiring.md`. Re-verified: none of the four cite the accepted-cost sentence or any other content this round's edits touch (they cite `docs/CLI.md` as a whole file or unrelated sections: the hook-entrypoints table, the `delegate` row, the ledger-producers section, or no line-anchored content at all); re-stamped their `timestamp:` field to this entry's timestamp. `npx okf-kit@0.10.0 check --json docs/okf` re-run against this commit: 0 stale / 0 warnings / 0 errors.
 
 - 2026-09-08T09:37:13Z, task `c88461c1` (review round 3 residual;
   task `1c4eb3ea`, rounds 1-2 of the batch-44 follow-up run,
@@ -234,7 +334,7 @@
   `SessionStartPreflightSetupVersionFinding`
   (`src/cli/doctor/session-start-preflight-setup-version.ts:72#"layer_unresolvable"`,
   built directly by `doctor()` at
-  `src/cli/doctor/index.ts:1410#"layer_unresolvable"`), naming the
+  `src/cli/doctor/index.ts:1411#"layer_unresolvable"`), naming the
   layer path and the FIRST LINE of the parse error, counted in
   `warningCount`, rendered by `format.ts` as one warning line; round 1
   first shipped full silence here, round 1's own review found the
@@ -255,13 +355,13 @@
   `{project}` substitution, both left unvalidated and out of scope.
   `deriveProjectName` now resolves the common dir through
   `fs.realpathSync` before taking its basename
-  (`src/runtime/git-context.ts:387#"fs.realpathSync(commonDir)"`), so a
+  (`src/runtime/git-context.ts:392#"fs.realpathSync(commonDir)"`), so a
   symlinked checkout resolves the SAME project layer as the real
   directory (decision D-021a's "repository identity is the common dir"
   rule); best-effort, a realpath failure falls back to the un-resolved
   value. `doctor`'s `sessionStartPreflightProjectName` (and the
   finding's `projectName`,
-  `src/cli/doctor/format.ts:134#"sessionStartPreflightSetupVersion.projectName"`
+  `src/cli/doctor/format.ts:150#"sessionStartPreflightSetupVersion.projectName"`
   renders it as a `(project: X)` suffix) fires only when the scoped
   load actually RESOLVED a project layer file, not merely whenever a
   name was derivable for the cwd; round 1 set it unconditionally,

@@ -171,7 +171,7 @@ on every `min_version` check in this codebase, not only `hooks[]`:
   a separate implementation of the same `tools.cli[]` contract for a
   different verb.
 - `memory.router`'s version floor
-  (`src/probes/memory.ts:184#"const parsed = parseProbedVersion(stdout);"`).
+  (`src/probes/memory.ts:277#"const parsed = parseProbedVersion(stdout);"`).
 - Policy-pack-level floors
   (`src/policy-packs/version-check.ts:104#"const parsed = parseProbedVersion(stdout);"`).
 

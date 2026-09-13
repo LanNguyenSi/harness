@@ -1,5 +1,7 @@
 import type { DoctorReport, McpProbeResult } from "./types.js";
 import { VERSION } from "../../version.js";
+import { projectRejectionWarns } from "../../probes/memory.js";
+import { sanitizeProjectForDisplay } from "../../runtime/git-context.js";
 
 function mcpLines(r: McpProbeResult, shallow: boolean): string[] {
   switch (r.outcome.kind) {
@@ -37,7 +39,13 @@ function describeStaleness(date: Date): string {
 }
 
 function formatHeader(report: DoctorReport): string {
-  const project = report.project ? `, project: ${report.project}` : "";
+  // Sanitized: `report.project` is the raw `--project <name>` an operator
+  // passed, echoed here whether or not `isValidProjectName` accepted it.
+  // An accepted name can no longer carry a control character (the
+  // validator rejects them at the source), but a REJECTED one still
+  // reaches this line, and a newline in it would split this header into a
+  // second, diagnostic-looking line of that operator's own text.
+  const project = report.project ? `, project: ${sanitizeProjectForDisplay(report.project)}` : "";
   const shallow = report.shallow ? " [shallow]" : "";
   return `harness ${VERSION} — checking ${report.manifestPath} (version ${report.manifestVersion}${project})${shallow}`;
 }
@@ -131,8 +139,16 @@ function formatEnvironmentSection(report: DoctorReport): string[] {
     // one that came from the base/machine value (the header's own
     // `project:` clause above only ever reflects an EXPLICIT
     // `--project`, never this derived name).
+    //
+    // The `sanitizeProjectForDisplay` wrap is defense in depth, not a
+    // live echo of an unvalidated value: `doctor()` sets `projectName`
+    // only when `resolvePaths` actually resolved a project layer FILE,
+    // which requires the name to have passed `isValidProjectName` (and
+    // therefore its control-character screen) first. It stays so a
+    // hand-built finding or a future producer cannot reintroduce a
+    // forged line through this one call site.
     const project = sessionStartPreflightSetupVersion.projectName
-      ? ` (project: ${sessionStartPreflightSetupVersion.projectName})`
+      ? ` (project: ${sanitizeProjectForDisplay(sessionStartPreflightSetupVersion.projectName)})`
       : "";
     out.push(`  ⚠ ${sessionStartPreflightSetupVersion.message}${project}`);
   }
@@ -233,9 +249,47 @@ function formatMemorySection(report: DoctorReport): string[] {
     const marker = report.memory.routerVersion.status === "ok" ? "✓" : "⚠";
     out.push(`    ${marker} version: ${report.memory.routerVersion.message}`);
   }
+  // Gated on `projectRejectionWarns`, not just `projectRejected !== null`:
+  // a rejected --project on a manifest with no {project}-templated
+  // directory has nothing to warn about (task `e904f25a`).
+  const rejectionActive = projectRejectionWarns(report.memory);
+  // The rejected value is operator-supplied and echoed back both here and
+  // on the per-directory note below, so it goes through
+  // `sanitizeProjectForDisplay` first. This is the one class of value the
+  // source-level screen cannot cover: a name reaches this field precisely
+  // BECAUSE `isValidProjectName` refused it, so it may carry a newline
+  // (which would forge an extra diagnostic line) or an ANSI escape (which
+  // would reach the operator's terminal raw). The directory paths below
+  // need no such treatment: an unsafe name never reached them.
+  const rejectedProject =
+    report.memory.projectRejected === null
+      ? null
+      : sanitizeProjectForDisplay(report.memory.projectRejected);
+  if (rejectionActive) {
+    out.push(
+      `  ⚠ --project ${rejectedProject} rejected as an unsafe path segment; treating the directory as an unresolved pattern`,
+    );
+  }
   for (const d of report.memory.directories) {
     if (d.unresolved) {
-      out.push(`  ℹ memory directory pattern: ${d.path} (resolved per-project at runtime)`);
+      // The rejection warning above names the rejected value once; each
+      // affected directory still gets its own per-directory note below
+      // (worded for the rejected case) so several {project}-templated
+      // directories all stay visible instead of being collapsed into the
+      // single warn line (task `e904f25a`).
+      if (rejectionActive) {
+        out.push(
+          `  ℹ memory directory pattern: ${d.path} (--project ${rejectedProject} rejected; treated as unresolved)`,
+        );
+      } else {
+        // Plain `else`, not a `projectRejected === null` re-test: this
+        // branch is reached only from inside `if (d.unresolved)`, which
+        // makes `projectRejectionWarns`' second conjunct true, so
+        // `rejectionActive` being false here already means
+        // `projectRejected === null` (see its definition in
+        // `src/probes/memory.ts`).
+        out.push(`  ℹ memory directory pattern: ${d.path} (resolved per-project at runtime)`);
+      }
     } else if (!d.exists) {
       out.push(`  ⚠ memory directory missing: ${d.path}`);
     }
