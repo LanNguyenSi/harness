@@ -453,14 +453,17 @@ export function resolveScopedProjectName<T>(opts: ResolveScopedProjectNameOption
  * `deriveProjectName` exit, but an `opts.project` reaching
  * `resolvePaths`' OWN sink from anywhere else (a caller building
  * `LoaderOptions` by hand, a future producer) had no equivalent check
- * of its own until now. Scoped to that ONE sink (task `1c4eb3ea`,
- * round 2, D-027 item 8): this guard covers neither `substituteProject`
- * (`src/probes/memory.ts`) nor `generate-memory-index.ts`'s own
- * `{project}` substitution, both of which still interpolate an
- * operator-supplied `--project` value into a path unvalidated (reached
- * only via the explicit CLI flag, not this module's derivation); a
- * caller reading this comment should not assume this function guards
- * every `{project}`-shaped sink in the codebase.
+ * of its own until now. Applied a THIRD time at `substituteProject`'s
+ * own sink (`src/probes/memory.ts`, task `e904f25a`): an invalid name
+ * there degrades to the "no project supplied" branch instead of being
+ * interpolated into the `{project}` placeholder. `resolvePaths` and
+ * `substituteProject` are now both guarded; `generate-memory-index.ts`'s
+ * own `{project}` substitution is NOT: it still interpolates an
+ * operator-supplied `--project` value into a path unvalidated, left
+ * unguarded and reserved for a Codex slice per the pandora handoffs
+ * (reached only via the explicit CLI flag, not this module's
+ * derivation). A caller reading this comment should not assume this
+ * function guards every `{project}`-shaped sink in the codebase.
  */
 export function isValidProjectName(name: string): boolean {
   if (name.length === 0) return false;
