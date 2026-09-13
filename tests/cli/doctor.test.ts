@@ -686,8 +686,12 @@ memory:
     // that screen existed the name was ACCEPTED, substituted into the
     // memory directory path, and rendered raw by doctor's own "memory
     // directory missing" line, a surface no escaper of the NAME reaches.
-    const forgedPath = path.join(home, "forged");
-    const crafted = `proj\n  ⚠ memory directory missing: ${forgedPath}\njunk`;
+    // The forged text carries NO path separator either: an embedded
+    // absolute path would be refused by the separator rule instead, and the
+    // control-character screen this test exists for would never be the
+    // thing doing the rejecting.
+    const forgedMarker = "FORGED_MEMORY_DIRECTORY";
+    const crafted = `proj\n  ⚠ memory directory missing: ${forgedMarker}\njunk`;
     const controlChars = /[\u0000-\u001f\u007f-\u009f]/;
     const report = await doctor({
       configPath: path.join(home, "harness.yaml"),
@@ -722,7 +726,7 @@ memory:
     // (the header project: clause, the rejection warn line, the
     // per-directory note), flattened onto one line each, never as a
     // diagnostic line of its own.
-    const carryingLines = lines.filter((l) => l.includes(forgedPath));
+    const carryingLines = lines.filter((l) => l.includes(forgedMarker));
     expect(carryingLines).toHaveLength(3);
     for (const line of carryingLines) {
       expect(line.trimStart().startsWith("\u26a0 memory directory missing:")).toBe(false);
