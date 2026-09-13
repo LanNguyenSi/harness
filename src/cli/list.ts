@@ -96,9 +96,13 @@ function buildMemoryRows(manifest: Manifest, opts: ListOptions): Record<string, 
       // only rejection warning for it is doctor's warn line, gated on at
       // least one memory directory actually carrying the {project}
       // placeholder; harness list itself never prints a warning.
-      // Sanitized, not raw: a rejected value can still carry control
+      // Sanitized, not raw: a value lands in this field precisely because
+      // isValidProjectName refused it, so it can still carry control
       // characters, and this field is read back by machine consumers and
-      // rendered into the text table (see `sanitizeRejectedProject`).
+      // rendered into the text table (see `sanitizeProjectForDisplay`).
+      // The `path` field above needs no such treatment: an unsafe name
+      // never reached the {project} placeholder it would have been
+      // substituted into.
       ...(report.projectRejected !== null
         ? { project_rejected: sanitizeProjectForDisplay(report.projectRejected) }
         : {}),

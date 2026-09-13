@@ -170,6 +170,37 @@ policies: []
       false,
     );
   });
+
+  it("rejects a control-character-bearing --project with no path separator, so no row and no table line can be forged", () => {
+    // No path separator at all, so the only thing that can refuse this
+    // value is the control-character screen in isValidProjectName. Before
+    // that screen existed the name was ACCEPTED and substituted into the
+    // `path` row field, which is printed into the table and read back
+    // over --json, and which no escaper of the project NAME reaches.
+    const crafted = "proj\n  ⚠ forged row\njunk";
+    const controlChars = /[\u0000-\u001f\u007f-\u009f]/;
+    const asJson = list("memories", {
+      configPath: FULL_MANIFEST,
+      project: crafted,
+      json: true,
+    });
+    const row = asJson.rows[0]!;
+    // The placeholder survives substitution, so the path row field never
+    // carries the raw value.
+    expect(String(row.path)).toContain("{project}");
+    expect(controlChars.test(String(row.path))).toBe(false);
+    expect(controlChars.test(String(row.project_rejected))).toBe(false);
+    const parsed = JSON.parse(asJson.output) as Array<Record<string, unknown>>;
+    expect(parsed[0]!.path).toBe(row.path);
+    expect(parsed[0]!.project_rejected).toBe(row.project_rejected);
+    expect(asJson.output.split("\n").filter((l) => controlChars.test(l))).toEqual([]);
+
+    const table = list("memories", { configPath: FULL_MANIFEST, project: crafted });
+    const lines = table.output.split("\n");
+    expect(lines.some((l) => l.trimStart().startsWith("⚠ forged row"))).toBe(false);
+    expect(lines.some((l) => l.trim() === "junk")).toBe(false);
+    expect(lines.filter((l) => controlChars.test(l))).toEqual([]);
+  });
 });
 
 describe("list — --filter", () => {

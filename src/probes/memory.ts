@@ -41,11 +41,15 @@ export interface MemoryReport {
    * (this value AND at least one such directory) to decide whether to
    * render a warning instead of the informational "resolved per-project
    * at runtime" note; `list` carries this value as a row field regardless.
-   * Carries the RAW operator value: `isValidProjectName` rejects only the
-   * shapes that can escape a path segment, so a rejected value can still
-   * contain a newline or an ANSI escape. Every site that renders or
-   * serializes it passes it through `sanitizeProjectForDisplay`
-   * (`src/runtime/git-context.ts`) first.
+   * Carries the RAW operator value, which is by definition unvalidated:
+   * a name is rejected precisely BECAUSE it escapes a path segment or
+   * carries a control character, so this field can hold a newline or an
+   * ANSI escape. Every site that renders or serializes it passes it
+   * through `sanitizeProjectForDisplay` (`src/runtime/git-context.ts`)
+   * first. Nothing downstream of a name that was ACCEPTED needs the same
+   * treatment: `isValidProjectName` rejects control characters at the
+   * source, so an accepted name (and any path it was substituted into)
+   * is already a plain single-line string.
    */
   projectRejected: string | null;
   routerExecutable: { path: string; exists: boolean } | null;
@@ -84,15 +88,20 @@ function expandHome(p: string, home: string): string {
  * caller has already run the path through `expandHome`. Guarded with the
  * same `isValidProjectName` check `resolvePaths` applies at its own sink
  * (`src/cli/loader.ts`, task `1c4eb3ea`): an invalid name (`".."`, a name
- * containing a path separator, etc.) degrades to the "no project supplied"
- * branch instead of being interpolated. The `{project}` literal then
- * survives substitution and is reported as `unresolved: true` by the
- * caller below, the same informational path an absent `opts.project`
- * already takes.
+ * containing a path separator, a name containing a control character,
+ * etc.) degrades to the "no project supplied" branch instead of being
+ * interpolated. The `{project}` literal then survives substitution and is
+ * reported as `unresolved: true` by the caller below, the same
+ * informational path an absent `opts.project` already takes.
  *
- * Two properties this guard actually gives, no more: (1) an invalid name
+ * Three properties this guard actually gives, no more: (1) an invalid name
  * never reaches the placeholder at all, so it cannot introduce a `..`
- * segment or a path separator into the manifest path; (2) substitution
+ * segment or a path separator into the manifest path; (2) the same
+ * rejection keeps a control character out of the SUBSTITUTED path, so the
+ * surfaces that render that path rather than the name (`harness doctor`'s
+ * "memory directory missing" line, `harness list memories`' `path` row
+ * field) cannot be made to carry a forged line by a name that passed
+ * validation; (3) substitution
  * uses `String.prototype.split`/`join` (the same literal idiom
  * `src/io/harness-lock.ts` and `src/cli/apply/generate-memory-index.ts`
  * already use for the SAME placeholder), never `String.prototype.replace`

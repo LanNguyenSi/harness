@@ -665,6 +665,83 @@ memory:
     expect(ansiText).toContain("(--project [31mred[0m/x rejected; treated as unresolved)");
   });
 
+  it("rejects a control-character-bearing --project that carries no path separator, so no surface can be forged", async () => {
+    const home = makeFixture({});
+    fs.writeFileSync(
+      path.join(home, "harness.yaml"),
+      `version: 1
+hooks: []
+policies: []
+memory:
+  directories:
+    - path: ${path.join(home, "claude", "{project}", "memory")}
+      scope: project
+  retention:
+    staleness_days: 30
+`,
+      "utf8",
+    );
+    // No path separator at all, so the only thing that can refuse this
+    // value is the control-character screen in isValidProjectName. Before
+    // that screen existed the name was ACCEPTED, substituted into the
+    // memory directory path, and rendered raw by doctor's own "memory
+    // directory missing" line, a surface no escaper of the NAME reaches.
+    const forgedPath = path.join(home, "forged");
+    const crafted = `proj\n  ⚠ memory directory missing: ${forgedPath}\njunk`;
+    const controlChars = /[\u0000-\u001f\u007f-\u009f]/;
+    const report = await doctor({
+      configPath: path.join(home, "harness.yaml"),
+      homeOverride: home,
+      shallow: true,
+      pathEnv: "",
+      project: crafted,
+    });
+
+    // Rejected, so the {project} literal survives substitution: the
+    // directory path never carries the raw value.
+    expect(report.memory.projectRejected).toBe(crafted);
+    expect(report.memory.directories[0]!.path).toBe(
+      path.join(home, "claude", "{project}", "memory"),
+    );
+    expect(report.memory.directories[0]!.unresolved).toBe(true);
+
+    const lines = format(report).split("\n");
+    const warnLines = lines.filter((l) => l.includes("rejected as an unsafe path segment"));
+    expect(warnLines).toHaveLength(1);
+    // Sanitized on the one line that echoes the refused value back.
+    expect(warnLines[0]).toContain("proj");
+    expect(warnLines[0]).toContain("junk");
+    expect(controlChars.test(warnLines[0]!)).toBe(false);
+    // And nowhere in the rendered report is there a forged line. The
+    // array is already split on the newlines format() itself emits, so a
+    // surviving control character would have to come from the value.
+    expect(lines.some((l) => l.trimStart().startsWith("⚠ memory directory missing:"))).toBe(
+      false,
+    );
+    // The forged text survives only INSIDE the three sanitized echo lines
+    // (the header project: clause, the rejection warn line, the
+    // per-directory note), flattened onto one line each, never as a
+    // diagnostic line of its own.
+    const carryingLines = lines.filter((l) => l.includes(forgedPath));
+    expect(carryingLines).toHaveLength(3);
+    for (const line of carryingLines) {
+      expect(line.trimStart().startsWith("\u26a0 memory directory missing:")).toBe(false);
+    }
+    expect(lines.some((l) => l.trim() === "junk")).toBe(false);
+    expect(lines.filter((l) => controlChars.test(l))).toEqual([]);
+
+    // The --json surface a machine consumer parses back. Report DATA
+    // keeps the raw operator value on purpose; JSON's own escaping
+    // carries it, never a raw control byte.
+    const json = JSON.stringify(report, null, 2);
+    expect(json.split("\n").filter((l) => controlChars.test(l))).toEqual([]);
+    const parsed = JSON.parse(json) as typeof report;
+    expect(parsed.memory.projectRejected).toBe(crafted);
+    expect(parsed.memory.directories[0]!.path).toBe(
+      path.join(home, "claude", "{project}", "memory"),
+    );
+  });
+
   it("keeps the rejection warning independent of a concrete directory's missing warning", async () => {
     const home = makeFixture({});
     const missing = path.join(home, "claude", "gone");

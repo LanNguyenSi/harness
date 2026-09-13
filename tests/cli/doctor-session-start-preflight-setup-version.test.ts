@@ -669,6 +669,51 @@ describe("doctor: session_start_preflight per-repo effective value (task c88461c
     expect(text).toContain(`(project: ${repoName})`);
   });
 
+  it("renders a control-character-bearing projectName sanitized on the (project: X) suffix", async () => {
+    // isValidProjectName rejects control characters at the source, and
+    // doctor() sets this finding's projectName only when resolvePaths
+    // actually resolved a project layer FILE, which that validator gates.
+    // So doctor() itself can no longer produce such a projectName: the
+    // sanitizeProjectForDisplay wrap on this one render site is defense in
+    // depth for a hand-built finding or a future producer, and is pinned
+    // here directly rather than through an end-to-end path that can no
+    // longer reach it.
+    const repoName = "doctor-scope-display-repo";
+    const repo = makeRepoFixture(repoName);
+    const home = makeFixture({
+      "harness.yaml": buildManifest("session_start_preflight:\n  setup: false"),
+    });
+    writeProjectLayer(home, repoName, true);
+    const report = await doctor({
+      configPath: path.join(home, "harness.yaml"),
+      homeDir: home,
+      homeOverride: home,
+      cwd: repo,
+      versionProbe: (cmd) => (cmd[0] === "preflight" ? "preflight 0.5.0\n" : null),
+      pathEnv: "",
+      npmBinExec: STUB_NPM_BIN_EXEC_UNKNOWN,
+    });
+    const finding = report.sessionStartPreflightSetupVersion;
+    expect(finding?.projectName).toBe(repoName);
+
+    const controlChars = /[\u0000-\u001f\u007f-\u009f]/;
+    const forged = {
+      ...report,
+      sessionStartPreflightSetupVersion: {
+        ...finding!,
+        projectName: `${repoName}\n  ⚠ forged preflight finding`,
+      },
+    };
+    const lines = format(forged).split("\n");
+    expect(lines.some((l) => l.trimStart().startsWith("⚠ forged preflight finding"))).toBe(
+      false,
+    );
+    const suffixLine = lines.find((l) => l.includes("(project: "));
+    expect(suffixLine).toBeDefined();
+    expect(suffixLine).toContain(`(project: ${repoName}  ⚠ forged preflight finding)`);
+    expect(lines.filter((l) => controlChars.test(l))).toEqual([]);
+  });
+
   it("does NOT render the (project: X) suffix when no project layer decided the value (negative control)", async () => {
     // Task 1c4eb3ea, round 2, D-027 items 1 and 2: a cwd inside a git
     // work tree still ATTEMPTS a project-name derivation even when no

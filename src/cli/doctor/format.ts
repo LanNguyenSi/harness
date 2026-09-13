@@ -40,7 +40,10 @@ function describeStaleness(date: Date): string {
 
 function formatHeader(report: DoctorReport): string {
   // Sanitized: `report.project` is the raw `--project <name>` an operator
-  // passed, and a name carrying a newline would split this header into a
+  // passed, echoed here whether or not `isValidProjectName` accepted it.
+  // An accepted name can no longer carry a control character (the
+  // validator rejects them at the source), but a REJECTED one still
+  // reaches this line, and a newline in it would split this header into a
   // second, diagnostic-looking line of that operator's own text.
   const project = report.project ? `, project: ${sanitizeProjectForDisplay(report.project)}` : "";
   const shallow = report.shallow ? " [shallow]" : "";
@@ -136,6 +139,14 @@ function formatEnvironmentSection(report: DoctorReport): string[] {
     // one that came from the base/machine value (the header's own
     // `project:` clause above only ever reflects an EXPLICIT
     // `--project`, never this derived name).
+    //
+    // The `sanitizeProjectForDisplay` wrap is defense in depth, not a
+    // live echo of an unvalidated value: `doctor()` sets `projectName`
+    // only when `resolvePaths` actually resolved a project layer FILE,
+    // which requires the name to have passed `isValidProjectName` (and
+    // therefore its control-character screen) first. It stays so a
+    // hand-built finding or a future producer cannot reintroduce a
+    // forged line through this one call site.
     const project = sessionStartPreflightSetupVersion.projectName
       ? ` (project: ${sanitizeProjectForDisplay(sessionStartPreflightSetupVersion.projectName)})`
       : "";
@@ -244,9 +255,12 @@ function formatMemorySection(report: DoctorReport): string[] {
   const rejectionActive = projectRejectionWarns(report.memory);
   // The rejected value is operator-supplied and echoed back both here and
   // on the per-directory note below, so it goes through
-  // `sanitizeRejectedProject` first: a rejected value may still carry a
-  // newline (which would forge an extra diagnostic line) or an ANSI escape
-  // (which would reach the operator's terminal raw).
+  // `sanitizeProjectForDisplay` first. This is the one class of value the
+  // source-level screen cannot cover: a name reaches this field precisely
+  // BECAUSE `isValidProjectName` refused it, so it may carry a newline
+  // (which would forge an extra diagnostic line) or an ANSI escape (which
+  // would reach the operator's terminal raw). The directory paths below
+  // need no such treatment: an unsafe name never reached them.
   const rejectedProject =
     report.memory.projectRejected === null
       ? null
