@@ -278,7 +278,7 @@
   rule); best-effort, a realpath failure falls back to the un-resolved
   value. `doctor`'s `sessionStartPreflightProjectName` (and the
   finding's `projectName`,
-  `src/cli/doctor/format.ts:134#"sessionStartPreflightSetupVersion.projectName"`
+  `src/cli/doctor/format.ts:135#"sessionStartPreflightSetupVersion.projectName"`
   renders it as a `(project: X)` suffix) fires only when the scoped
   load actually RESOLVED a project layer file, not merely whenever a
   name was derivable for the cwd; round 1 set it unconditionally,
