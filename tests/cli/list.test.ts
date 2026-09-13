@@ -138,6 +138,13 @@ policies: []
     expect(r.rows[0]).toHaveProperty("path");
     expect(r.rows[0]).toHaveProperty("scope");
   });
+
+  it("carries project_rejected on a memory row when --project fails isValidProjectName", () => {
+    const ok = list("memories", { configPath: FULL_MANIFEST });
+    expect(ok.rows[0]).not.toHaveProperty("project_rejected");
+    const rejected = list("memories", { configPath: FULL_MANIFEST, project: ".." });
+    expect(rejected.rows[0]!.project_rejected).toBe("..");
+  });
 });
 
 describe("list — --filter", () => {

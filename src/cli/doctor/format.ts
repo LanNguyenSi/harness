@@ -233,9 +233,19 @@ function formatMemorySection(report: DoctorReport): string[] {
     const marker = report.memory.routerVersion.status === "ok" ? "✓" : "⚠";
     out.push(`    ${marker} version: ${report.memory.routerVersion.message}`);
   }
+  if (report.memory.projectRejected !== null) {
+    out.push(
+      `  ⚠ --project ${report.memory.projectRejected} rejected as an unsafe path segment; treating the directory as an unresolved pattern`,
+    );
+  }
   for (const d of report.memory.directories) {
     if (d.unresolved) {
-      out.push(`  ℹ memory directory pattern: ${d.path} (resolved per-project at runtime)`);
+      // A rejected --project already got its own warning above; do not
+      // also print the "no project supplied" informational note, which
+      // would misdescribe a rejection as the ordinary unresolved case.
+      if (report.memory.projectRejected === null) {
+        out.push(`  ℹ memory directory pattern: ${d.path} (resolved per-project at runtime)`);
+      }
     } else if (!d.exists) {
       out.push(`  ⚠ memory directory missing: ${d.path}`);
     }

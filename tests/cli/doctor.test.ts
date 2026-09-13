@@ -484,6 +484,65 @@ memory:
   });
 });
 
+describe("doctor — rejected --project on a {project}-templated memory directory", () => {
+  it("warns that --project was rejected instead of printing the ordinary unresolved-pattern note", async () => {
+    const home = makeFixture({});
+    fs.writeFileSync(
+      path.join(home, "harness.yaml"),
+      `version: 1
+hooks: []
+policies: []
+memory:
+  directories:
+    - path: ${path.join(home, "claude", "{project}", "memory")}
+      scope: project
+  retention:
+    staleness_days: 30
+`,
+      "utf8",
+    );
+    const report = await doctor({
+      configPath: path.join(home, "harness.yaml"),
+      homeOverride: home,
+      shallow: true,
+      pathEnv: "",
+      project: "..",
+    });
+    expect(report.memory.projectRejected).toBe("..");
+    const text = format(report);
+    expect(text).toContain("--project .. rejected as an unsafe path segment");
+    expect(text).not.toContain("resolved per-project at runtime");
+  });
+
+  it("keeps the ordinary informational note when no --project is supplied", async () => {
+    const home = makeFixture({});
+    fs.writeFileSync(
+      path.join(home, "harness.yaml"),
+      `version: 1
+hooks: []
+policies: []
+memory:
+  directories:
+    - path: ${path.join(home, "claude", "{project}", "memory")}
+      scope: project
+  retention:
+    staleness_days: 30
+`,
+      "utf8",
+    );
+    const report = await doctor({
+      configPath: path.join(home, "harness.yaml"),
+      homeOverride: home,
+      shallow: true,
+      pathEnv: "",
+    });
+    expect(report.memory.projectRejected).toBeNull();
+    const text = format(report);
+    expect(text).toContain("resolved per-project at runtime");
+    expect(text).not.toContain("rejected as an unsafe path segment");
+  });
+});
+
 describe("doctor — summary counts", () => {
   it("counts errors and warnings across sections", async () => {
     const home = makeFixture({

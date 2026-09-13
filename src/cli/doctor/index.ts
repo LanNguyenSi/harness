@@ -1163,6 +1163,7 @@ function countDiagnostics(report: Omit<DoctorReport, "errorCount" | "warningCoun
   if (report.memory.routerExecutable && !report.memory.routerExecutable.exists) errorCount++;
   if (!report.memory.routerExecutable) warningCount++;
   if (report.memory.routerVersion?.status === "warn") warningCount++;
+  if (report.memory.projectRejected !== null) warningCount++;
   for (const d of report.memory.directories) {
     if (!d.exists) warningCount++;
   }

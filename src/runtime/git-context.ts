@@ -457,13 +457,14 @@ export function resolveScopedProjectName<T>(opts: ResolveScopedProjectNameOption
  * own sink (`src/probes/memory.ts`, task `e904f25a`): an invalid name
  * there degrades to the "no project supplied" branch instead of being
  * interpolated into the `{project}` placeholder. `resolvePaths` and
- * `substituteProject` are now both guarded; `generate-memory-index.ts`'s
- * own `{project}` substitution is NOT: it still interpolates an
- * operator-supplied `--project` value into a path unvalidated, left
- * unguarded and reserved for a Codex slice per the pandora handoffs
- * (reached only via the explicit CLI flag, not this module's
- * derivation). A caller reading this comment should not assume this
- * function guards every `{project}`-shaped sink in the codebase.
+ * `substituteProject` are now both guarded; two other `{project}` sinks
+ * are NOT: `generate-memory-index.ts`'s own substitution and
+ * `buildLockEntries`' (`src/io/harness-lock.ts`) both still interpolate
+ * an operator-supplied `--project` value into a path unvalidated, left
+ * unguarded (reached only via the explicit CLI flag, not this module's
+ * derivation; see CHANGELOG.md for the reservation/follow-up on each). A
+ * caller reading this comment should not assume this function guards
+ * every `{project}`-shaped sink in the codebase.
  */
 export function isValidProjectName(name: string): boolean {
   if (name.length === 0) return false;

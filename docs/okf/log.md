@@ -2,6 +2,23 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-09-13T09:00:00Z, task `e904f25a` (implementer, review round 1 fix):
+  `substituteProject` (`src/probes/memory.ts`) is now guarded by
+  `isValidProjectName`, substitutes AFTER `expandHome` (not before), and
+  uses a literal `split`/`join` instead of `replace`+regex, closing a
+  `$'`/`` $` ``-pattern and a `~`-re-anchoring gap the round-1 review
+  found. `generate-memory-index.ts`'s own `{project}` substitution and
+  `buildLockEntries`' (`src/io/harness-lock.ts`) both remain unguarded:
+  the former is reserved for a Codex slice per the pandora handoffs, the
+  latter is a follow-up for the orchestrator to file. A rejected
+  `--project` now sets `MemoryReport.projectRejected`, rendered by
+  `harness doctor`/`harness list memories` as its own warning instead of
+  the ordinary "unresolved pattern" note. `docs/CLI.md`'s SINK GUARD
+  sentence, the `isValidProjectName` doc comment
+  (`src/runtime/git-context.ts`), and CHANGELOG.md's entry for this task
+  now name all three `{project}` sinks. `okf-kit check --json docs/okf`
+  reports no findings.
+
 - 2026-09-12T10:06:47Z, task `04189542-266d-4607-a764-9c2e4f752dfb`
   reconnect-rendering polish: re-checked the two rendered reconnect surfaces
   after moving identifier formatting and verdict-id substitution into the
@@ -234,7 +251,7 @@
   `SessionStartPreflightSetupVersionFinding`
   (`src/cli/doctor/session-start-preflight-setup-version.ts:72#"layer_unresolvable"`,
   built directly by `doctor()` at
-  `src/cli/doctor/index.ts:1410#"layer_unresolvable"`), naming the
+  `src/cli/doctor/index.ts:1411#"layer_unresolvable"`), naming the
   layer path and the FIRST LINE of the parse error, counted in
   `warningCount`, rendered by `format.ts` as one warning line; round 1
   first shipped full silence here, round 1's own review found the

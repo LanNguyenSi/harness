@@ -75,6 +75,70 @@ describe("inspectMemory: directory + router resolution", () => {
     expect(report.directories[0]!.unresolved).toBe(true);
   });
 
+  it("rejects an invalid opts.project (\"a/b\", a path separator) the same way \"..\" is rejected", () => {
+    const home = makeTmpHome();
+    const manifest = manifestFor({
+      directories: [{ path: "~/claude/{project}/memory", scope: "project" }],
+    });
+    const report = inspectMemory(manifest, { homeDir: home, project: "a/b" });
+    expect(report.directories[0]!.path).toBe(path.join(home, "claude", "{project}", "memory"));
+    expect(report.directories[0]!.unresolved).toBe(true);
+    expect(report.directories[0]!.exists).toBe(true);
+  });
+
+  it("resolves a project value containing a replace-special pattern ($') literally, not as a back-reference", () => {
+    const home = makeTmpHome();
+    const manifest = manifestFor({
+      directories: [{ path: "~/claude/{project}/memory", scope: "project" }],
+    });
+    const report = inspectMemory(manifest, { homeDir: home, project: "$'" });
+    // A regex-based `replace(/\{project\}/g, project)` would interpret
+    // `$'` as "everything after the match" (here: "/memory"), producing
+    // `<home>/claude/memory/memory`. The literal split/join idiom must
+    // insert the two characters `$` and `'` unchanged instead.
+    expect(report.directories[0]!.path).toBe(path.join(home, "claude", "$'", "memory"));
+  });
+
+  it("resolves a project value containing $` literally, not as a back-reference", () => {
+    const home = makeTmpHome();
+    const manifest = manifestFor({
+      directories: [{ path: "~/claude/{project}/memory", scope: "project" }],
+    });
+    const report = inspectMemory(manifest, { homeDir: home, project: "$`" });
+    // `replace`'s special syntax would interpret "$`" as "everything
+    // before the match" (here: "<home>/claude/"), producing
+    // `<home>/claude/<home>/claude/memory`. The literal idiom inserts
+    // the two characters unchanged.
+    expect(report.directories[0]!.path).toBe(path.join(home, "claude", "$`", "memory"));
+  });
+
+  it("does not let a project value of \"~\" re-anchor a leading-placeholder relative pattern to the home directory", () => {
+    const home = makeTmpHome();
+    const manifest = manifestFor({
+      directories: [{ path: "{project}/memory", scope: "project" }],
+    });
+    const report = inspectMemory(manifest, { homeDir: home, project: "~" });
+    // Substitution now runs AFTER expandHome, which only ever expands
+    // the manifest's OWN leading "~". A project value that happens to
+    // look like "~" must stay an inert literal segment, never
+    // re-interpreted and re-expanded to the home directory.
+    expect(report.directories[0]!.path).toBe(path.join("~", "memory"));
+    expect(report.directories[0]!.path).not.toBe(path.join(home, "memory"));
+  });
+
+  it("reports a rejected --project on MemoryReport.projectRejected, distinct from the no-project-supplied case", () => {
+    const home = makeTmpHome();
+    const manifest = manifestFor({
+      directories: [{ path: "~/claude/{project}/memory", scope: "project" }],
+    });
+    const rejected = inspectMemory(manifest, { homeDir: home, project: ".." });
+    expect(rejected.projectRejected).toBe("..");
+    const noProject = inspectMemory(manifest, { homeDir: home });
+    expect(noProject.projectRejected).toBeNull();
+    const valid = inspectMemory(manifest, { homeDir: home, project: "myproj" });
+    expect(valid.projectRejected).toBeNull();
+  });
+
   it("flags {project} literal as unresolved (pattern, not missing) when no project is supplied", () => {
     const home = makeTmpHome();
     const manifest = manifestFor({

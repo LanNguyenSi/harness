@@ -87,6 +87,12 @@ function buildMemoryRows(manifest: Manifest, opts: ListOptions): Record<string, 
       scope: dir.scope,
       exists: dir.exists,
       stale_count: report.staleMemories.filter((s) => s.path.startsWith(dir.path)).length,
+      // Set only when opts.project was supplied and rejected by
+      // isValidProjectName (task e904f25a, review round 2 finding F5):
+      // distinguishes "--project was rejected" from the ordinary
+      // "no project supplied" unresolved-pattern case without adding a
+      // column to every other list category's row shape.
+      ...(report.projectRejected !== null ? { project_rejected: report.projectRejected } : {}),
     });
   }
   return out;
