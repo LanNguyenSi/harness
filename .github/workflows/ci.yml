@@ -58,7 +58,7 @@ jobs:
         run: npm run check:no-only
 
       - name: No committed raw control bytes
-        # scripts/check-no-raw-control-bytes.mjs — a raw C0/C1/DEL control
+        # scripts/check-no-raw-control-bytes.mjs: a raw C0/C1/DEL control
         # byte (typed by hand instead of an escaped backslash-u-0000 form)
         # makes git treat the file as binary and defeats text search
         # against it (task b5e6ccb0, round 2 review; widened from a

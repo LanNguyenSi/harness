@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // CI gate against a committed raw C0/C1/DEL control byte (task b5e6ccb0;
-// widened from a NUL-only gate in round 3 review after a raw BEL (0x07)
+// widened from a NUL-only gate after a raw BEL (0x07)
 // turned up in a test literal the NUL-only version could not see). A
 // control byte typed raw inside a regex character class or a string
 // literal (e.g. a character class meant as the escaped backslash-u-0000
@@ -40,9 +40,9 @@
 // was never recursive to begin with, while a NESTED one inside a scanned
 // tree (a `tests/<fixture>/node_modules/` fixture) was still walked and
 // flagged. SKIPPED_DIRECTORY_NAMES, applied at every depth, is what
-// makes the sentence true (round 4 review, LOW 1).
+// makes the sentence true.
 //
-// OUT OF SCOPE, deliberately (round 4 review, LOW 2). These are not
+// OUT OF SCOPE, deliberately. These are not
 // oversights; each would produce a false positive or scan something this
 // gate has no claim over:
 //   - `dogfood/`: captured terminal transcripts and their evidence files
@@ -59,12 +59,12 @@
 //     output. This gate's subject is what a human typed into a file
 //     under review; regenerating `dist/` is the fix for a byte there,
 //     and the source it came from IS scanned.
-//   - Symlinks are never followed, in either direction: `Dirent.isFile()`
-//     is false for a symlink, so a symlinked FILE is never collected and
-//     a symlinked DIRECTORY is never descended into. Every byte this
-//     gate reads therefore comes from a real file inside a scanned tree,
-//     and a symlink committed into src/ cannot point the scan outside
-//     the repo (nor make it loop).
+//   - Symlinks INSIDE a scanned tree are never followed: `Dirent.isFile()`
+//     and `Dirent.isDirectory()` are both false for a symlink, so a
+//     symlinked FILE is never collected and a symlinked DIRECTORY is never
+//     descended into. A SCAN_DIRS entry that is itself a symlink is still
+//     resolved by statSync/readdirSync (the pre-check only requires a
+//     directory), so the scan roots are trusted as checked in.
 //
 // ROOT RESOLUTION. The repo root is resolved from THIS FILE's own
 // location (`fileURLToPath(import.meta.url)`, one directory up from
@@ -79,7 +79,7 @@
 // because round 3 wrapped `readdirSync` in a try/catch that returned an
 // empty list, so a missing scan directory (a rename, a wrong cwd, a
 // partial checkout) printed "OK, scanned 0 file(s)" and exited 0: a
-// green gate that had checked nothing (round 4 review, MEDIUM 1).
+// green gate that had checked nothing.
 // Nothing in this script is caught silently.
 //
 // ALLOWLIST. `ALLOWED_CONTROL_BYTE_FILES` pins both the file and the
@@ -97,7 +97,14 @@
 // scanned file as a Buffer is a sub-second operation for this repo's size.
 
 import { readFileSync, readdirSync, statSync } from "node:fs";
-import { dirname, extname, join, relative, resolve, sep as pathSep } from "node:path";
+import {
+  dirname,
+  extname,
+  join,
+  relative,
+  resolve,
+  sep as pathSep,
+} from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 // The repo root, resolved from this file's own location (scripts/ is one
@@ -109,7 +116,12 @@ export const SCAN_DIRS = ["src", "tests", "scripts", "docs", ".github"];
 
 // Directory names never descended into, at any depth inside a scanned
 // tree. See OUT OF SCOPE above for why each one is here.
-export const SKIPPED_DIRECTORY_NAMES = new Set([".git", "node_modules", "dist", "coverage"]);
+export const SKIPPED_DIRECTORY_NAMES = new Set([
+  ".git",
+  "node_modules",
+  "dist",
+  "coverage",
+]);
 
 // Extensions of root-level files scanned (non-recursive: only files
 // directly in the repo root). Covers the repo's own root docs and config,
@@ -178,7 +190,7 @@ export const ALLOWED_CONTROL_BYTE_FILES = new Map([
     {
       count: 1,
       reason:
-        "template-literal fingerprint delimiter (`${cmd.command}\\x00${cmd.timeout ?? \"\"}`), " +
+        'template-literal fingerprint delimiter (`${cmd.command}\\x00${cmd.timeout ?? ""}`), ' +
         "PR #438; a NUL can't appear in either joined value, so it's collision-proof as a separator",
     },
   ],
@@ -190,7 +202,7 @@ export const ALLOWED_CONTROL_BYTE_FILES = new Map([
  *
  * Deliberately NOT wrapped in a try/catch: a missing or unreadable
  * directory is an IO error the caller surfaces as exit 2, never a
- * silently empty result (round 4 review, MEDIUM 1). `readdirSync`'s own
+ * silently empty result. `readdirSync`'s own
  * error carries the offending path in `err.path`.
  */
 export function collectScanFiles(dir, out = []) {
@@ -234,7 +246,10 @@ export function findControlByteOffsets(buffer) {
   for (let i = 0; i < buffer.length; i += 1) {
     const byte = buffer[i];
     const isC0 =
-      (byte <= 0x08) || byte === 0x0b || byte === 0x0c || (byte >= 0x0e && byte <= 0x1f);
+      byte <= 0x08 ||
+      byte === 0x0b ||
+      byte === 0x0c ||
+      (byte >= 0x0e && byte <= 0x1f);
     if (isC0 || byte === 0x7f) {
       offsets.push(i);
       continue;
@@ -263,15 +278,31 @@ export function findControlByteOffsets(buffer) {
  * - "count-match": file is in the allowlist and the actual count equals
  *   the pinned `count`.
  */
-export function evaluateFile(relPath, offsets, allowlist = ALLOWED_CONTROL_BYTE_FILES) {
+export function evaluateFile(
+  relPath,
+  offsets,
+  allowlist = ALLOWED_CONTROL_BYTE_FILES,
+) {
   const entry = allowlist.get(relPath);
   if (!entry) {
-    return offsets.length === 0 ? { status: "clean", offsets } : { status: "unlisted-violation", offsets };
+    return offsets.length === 0
+      ? { status: "clean", offsets }
+      : { status: "unlisted-violation", offsets };
   }
   if (offsets.length !== entry.count) {
-    return { status: "count-mismatch", offsets, expectedCount: entry.count, actualCount: offsets.length };
+    return {
+      status: "count-mismatch",
+      offsets,
+      expectedCount: entry.count,
+      actualCount: offsets.length,
+    };
   }
-  return { status: "count-match", offsets, expectedCount: entry.count, actualCount: offsets.length };
+  return {
+    status: "count-match",
+    offsets,
+    expectedCount: entry.count,
+    actualCount: offsets.length,
+  };
 }
 
 export function main(rootDir = REPO_ROOT) {
@@ -279,8 +310,19 @@ export function main(rootDir = REPO_ROOT) {
   // a directory. Without this, a rename or a partial checkout reports a
   // clean scan of whatever is left, which is the failure mode exit 2
   // exists for.
-  const missing = SCAN_DIRS.map((d) => ({ d, full: join(rootDir, d) }))
-    .filter(({ full }) => !statSync(full, { throwIfNoEntry: false })?.isDirectory());
+  let missing;
+  try {
+    missing = SCAN_DIRS.map((d) => ({ d, full: join(rootDir, d) })).filter(
+      ({ full }) => !statSync(full, { throwIfNoEntry: false })?.isDirectory(),
+    );
+  } catch (error) {
+    console.error(
+      `check-no-raw-control-bytes: IO ERROR (exit ${EXIT_IO_ERROR}): cannot stat a scan ` +
+        `directory: ${error?.path ?? "?"}: ${error?.code ?? error?.message ?? String(error)}`,
+    );
+    process.exitCode = EXIT_IO_ERROR;
+    return;
+  }
   if (missing.length > 0) {
     console.error(
       `check-no-raw-control-bytes: IO ERROR (exit ${EXIT_IO_ERROR}): scan ` +
@@ -310,6 +352,7 @@ export function main(rootDir = REPO_ROOT) {
   const failures = [];
   let scanned = 0;
   let allowedCount = 0;
+  const scannedPaths = new Set();
 
   for (const file of files) {
     let buffer;
@@ -326,6 +369,7 @@ export function main(rootDir = REPO_ROOT) {
     scanned += 1;
     const offsets = findControlByteOffsets(buffer);
     const relToRoot = relative(rootDir, file).split(pathSep).join("/");
+    scannedPaths.add(relToRoot);
     const evaluated = evaluateFile(relToRoot, offsets);
     if (evaluated.status === "clean") continue;
     if (evaluated.status === "count-match") {
@@ -345,8 +389,20 @@ export function main(rootDir = REPO_ROOT) {
     );
   }
 
+  for (const listed of ALLOWED_CONTROL_BYTE_FILES.keys()) {
+    if (!scannedPaths.has(listed)) {
+      failures.push(
+        `stale allowlist entry: ${listed} is not a scanned file (deleted, renamed, moved under a ` +
+          `skipped directory, or given a binary extension); delete the entry from ` +
+          `ALLOWED_CONTROL_BYTE_FILES in scripts/check-no-raw-control-bytes.mjs`,
+      );
+    }
+  }
+
   if (failures.length > 0) {
-    console.error(`check-no-raw-control-bytes: FAIL: ${failures.length} finding(s):`);
+    console.error(
+      `check-no-raw-control-bytes: FAIL: ${failures.length} finding(s):`,
+    );
     for (const failure of failures) {
       console.error(`  ${failure}`);
     }
@@ -359,7 +415,8 @@ export function main(rootDir = REPO_ROOT) {
     process.exitCode = EXIT_VIOLATION;
     return;
   }
-  const allowedNote = allowedCount > 0 ? `, ${allowedCount} pre-existing allowlisted` : "";
+  const allowedNote =
+    allowedCount > 0 ? `, ${allowedCount} pre-existing allowlisted` : "";
   const rootGlobs = [...ROOT_FILE_EXTENSIONS].map((ext) => `*${ext}`).join("/");
   console.log(
     `check-no-raw-control-bytes: OK: scanned ${scanned} file(s) under ${SCAN_DIRS.join(", ")} ` +
@@ -370,7 +427,8 @@ export function main(rootDir = REPO_ROOT) {
 // Only auto-run when invoked directly (not when imported by tests), same
 // guard as scripts/check-no-only.mjs. The root is this file's own repo
 // root, not the cwd.
-const isDirectRun = import.meta.url === pathToFileURL(process.argv[1] ?? "").href;
+const isDirectRun =
+  import.meta.url === pathToFileURL(process.argv[1] ?? "").href;
 if (isDirectRun) {
   main(REPO_ROOT);
 }
