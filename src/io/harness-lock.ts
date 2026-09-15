@@ -31,7 +31,7 @@ import * as path from "node:path";
 import { expandHome } from "./expand-home.js";
 import type { Manifest } from "../schema/index.js";
 import { atomicWriteFile } from "./atomic-write.js";
-import { isValidProjectName } from "../runtime/git-context.js";
+import { isValidProjectName } from "./project-name.js";
 
 export interface AssetEntry {
   kind: "asset";
