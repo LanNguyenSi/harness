@@ -589,9 +589,15 @@ describe("apply — harness.lock", () => {
     });
     // Mirrors tests/io/harness-lock.test.ts's own ".." case: the raw,
     // rejected value would resolve to a real directory on disk (an
-    // attacker who can create that path), so a regression that drops the
-    // `opts.project` -> `projectName` wiring at apply.ts's buildLockEntries
-    // call site would still find a directory to lock.
+    // attacker who can create that path), so a regression that skips the
+    // isValidProjectName call and substitutes the raw value anyway would
+    // still find a directory to lock. This case alone does NOT pin the
+    // apply.ts:1037 opts.project -> projectName wiring itself: dropping
+    // that spread entirely produces the same "no entry" outcome as the
+    // guard correctly rejecting "..", since an absent projectName and a
+    // rejected one are treated identically by buildLockEntries. The
+    // paired "wires a valid --project through" test below closes that
+    // gap by asserting the POSITIVE case: an entry must appear.
     fs.mkdirSync(path.join(tmpHome, "projects"), { recursive: true });
     const rawDir = path.join(tmpHome, "projects", "..", "memory");
     fs.mkdirSync(rawDir, { recursive: true });
@@ -601,6 +607,24 @@ describe("apply — harness.lock", () => {
     const entries = parseLock(fs.readFileSync(lockPath(), "utf8"));
     expect(entries.find((e) => e.path.includes("memory"))).toBeUndefined();
     expect(JSON.stringify(entries)).not.toContain("..");
+  });
+
+  it("wires a valid --project through to buildLockEntries' {project} sink (task b5e6ccb0)", async () => {
+    writeManifest({
+      memoryDirs: [{ path: "~/projects/{project}/memory", scope: "project" }],
+    });
+    const projectDir = path.join(tmpHome, "projects", "myproj", "memory");
+    fs.mkdirSync(projectDir, { recursive: true });
+    fs.writeFileSync(path.join(projectDir, "x.md"), "x\n");
+
+    await apply({ homeDir: tmpHome, project: "myproj" });
+    const entries = parseLock(fs.readFileSync(lockPath(), "utf8"));
+    // Fails if apply.ts's `...(opts.project !== undefined ? { projectName:
+    // opts.project } : {})` spread feeding buildLockEntries is dropped:
+    // with no projectName reaching it at all, the {project}-templated
+    // directory is skipped exactly like a rejected value is, and no entry
+    // for `projectDir` is ever written.
+    expect(entries.find((e) => e.path === projectDir)).toBeDefined();
   });
 
   it("skips memory.router when memory.router.enabled is false", async () => {
