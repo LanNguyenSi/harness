@@ -2,6 +2,26 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-09-15T00:00:00Z, task `b5e6ccb0` (implementer): `buildLockEntries`
+  (`src/io/harness-lock.ts`) now applies `isValidProjectName`
+  (`src/runtime/git-context.ts`) at its own `{project}` sink, closing
+  the gap task `e904f25a`'s round-2 review reproduced: a crafted
+  `--project` used to land its raw, unvalidated value in `harness.lock`,
+  so a LATER `harness diff --since-apply` run that passed no `--project`
+  at all rendered it in the drift list. An `opts.projectName` that fails
+  `isValidProjectName` (`..`, a path separator, a control character) now
+  skips the templated memory directory's lock entry the same way an
+  absent `opts.projectName` already did; nothing new is surfaced to the
+  operator, the existing silent-skip shape is reused rather than a
+  second, ad-hoc warning invented for this one sink. Of the four
+  `{project}` sinks, three are now guarded (`resolvePaths`,
+  `substituteProject`, `buildLockEntries`); only `generate-memory-index.ts`'s
+  own substitution remains open, still reserved for a separate Codex
+  slice. `docs/CLI.md`'s SINK GUARD sentence and inventory and the
+  `isValidProjectName` doc comment are re-pointed to the new state; see
+  CHANGELOG.md for the fuller writeup. No citation in this bundle's
+  anchored entries below moved: none anchor into the lines this task
+  touched.
 - 2026-09-13T10:24:00Z, task `e904f25a` (implementer): control
   characters are now rejected at the SOURCE, not stripped at each render
   site. `isValidProjectName` (`src/runtime/git-context.ts`) additionally
@@ -42,7 +62,7 @@
   (previously line 179). In `docs/decisions/2026-09-08-preflight-floors.md`:
   `src/probes/memory.ts:277#"const parsed = parseProbedVersion(stdout);"`
   (previously line 268). In this file:
-  `src/runtime/git-context.ts:392#"fs.realpathSync(commonDir)"` (previously
+  `src/runtime/git-context.ts:393#"fs.realpathSync(commonDir)"` (previously
   line 387) and
   `src/cli/doctor/format.ts:150#"sessionStartPreflightSetupVersion.projectName"`
   (previously line 139). Four module docs were re-stamped for the
@@ -355,7 +375,7 @@
   `{project}` substitution, both left unvalidated and out of scope.
   `deriveProjectName` now resolves the common dir through
   `fs.realpathSync` before taking its basename
-  (`src/runtime/git-context.ts:392#"fs.realpathSync(commonDir)"`), so a
+  (`src/runtime/git-context.ts:393#"fs.realpathSync(commonDir)"`), so a
   symlinked checkout resolves the SAME project layer as the real
   directory (decision D-021a's "repository identity is the common dir"
   rule); best-effort, a realpath failure falls back to the un-resolved
