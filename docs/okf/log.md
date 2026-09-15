@@ -4,7 +4,8 @@
 
 - 2026-09-15T00:00:00Z, task `b5e6ccb0` (implementer): `buildLockEntries`
   (`src/io/harness-lock.ts`) now applies `isValidProjectName`
-  (`src/runtime/git-context.ts`) at its own `{project}` sink, closing
+  (`src/io/project-name.ts`, moved from `src/runtime/git-context.ts`,
+  which now re-exports it) at its own `{project}` sink, closing
   the gap task `e904f25a`'s round-2 review reproduced: a crafted
   `--project` used to land its raw, unvalidated value in `harness.lock`,
   so a LATER `harness diff --since-apply` run that passed no `--project`
