@@ -346,7 +346,7 @@ export function main(rootDir = REPO_ROOT) {
   }
 
   if (failures.length > 0) {
-    console.error(`check-no-raw-control-bytes: FAIL — ${failures.length} finding(s):`);
+    console.error(`check-no-raw-control-bytes: FAIL: ${failures.length} finding(s):`);
     for (const failure of failures) {
       console.error(`  ${failure}`);
     }
@@ -362,7 +362,7 @@ export function main(rootDir = REPO_ROOT) {
   const allowedNote = allowedCount > 0 ? `, ${allowedCount} pre-existing allowlisted` : "";
   const rootGlobs = [...ROOT_FILE_EXTENSIONS].map((ext) => `*${ext}`).join("/");
   console.log(
-    `check-no-raw-control-bytes: OK — scanned ${scanned} file(s) under ${SCAN_DIRS.join(", ")} ` +
+    `check-no-raw-control-bytes: OK: scanned ${scanned} file(s) under ${SCAN_DIRS.join(", ")} ` +
       `plus root ${rootGlobs}, no unallowlisted raw control bytes${allowedNote}`,
   );
 }
