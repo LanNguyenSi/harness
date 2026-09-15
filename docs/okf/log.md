@@ -20,9 +20,12 @@
   own substitution remains open, still reserved for a separate Codex
   slice. `docs/CLI.md`'s SINK GUARD sentence and inventory and the
   `isValidProjectName` doc comment are re-pointed to the new state; see
-  CHANGELOG.md for the fuller writeup. No citation in this bundle's
-  anchored entries below moved: none anchor into the lines this task
-  touched.
+  CHANGELOG.md for the fuller writeup. Two citations elsewhere in this
+  bundle moved and were re-pointed in this task: `src/runtime/git-context.ts:392`
+  to `:393` (this file, twice, for the new `io/project-name.ts` import) and
+  `src/probes/memory.ts:277` to `:276` (this file and
+  `docs/decisions/2026-09-08-preflight-floors.md`, for the narrowed
+  `substituteProject` comment).
 - 2026-09-13T10:24:00Z, task `e904f25a` (implementer): control
   characters are now rejected at the SOURCE, not stripped at each render
   site. `isValidProjectName` (`src/runtime/git-context.ts`) additionally

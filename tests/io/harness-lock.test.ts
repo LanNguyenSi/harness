@@ -534,7 +534,7 @@ describe("buildLockEntries", () => {
   it.each([
     ["..", ".."],
     ["a path separator", "a/b"],
-    ["a control character", "ab"],
+    ["a control character", "a\u001b[31mb"],
   ])("skips memory dirs with {project} placeholder when projectName fails isValidProjectName (%s)", (_label, rejected) => {
     const m = parseManifest({
       version: 1,
