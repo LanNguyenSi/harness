@@ -66,8 +66,12 @@ jobs:
         # in round 3 after a raw BEL turned up in a test literal and the
         # round-2 fix itself landed a NUL in CHANGELOG.md/ci.yml). Scans
         # src/, tests/, scripts/, docs/, .github/ and the repo root's own
-        # *.md/*.yml/*.yaml/*.json files as raw bytes, not decoded text, so
-        # it cannot itself be fooled by a decoding step.
+        # *.md/*.yml/*.yaml/*.json/*.ts/*.cjs/*.mjs files as raw bytes, not
+        # decoded text, so it cannot itself be fooled by a decoding step.
+        # Round 4 review: the scan root comes from the script's own
+        # location, never the cwd, and an unreadable or missing scan
+        # directory or file exits 2 instead of reporting a clean scan of
+        # whatever was left readable.
         run: npm run check:no-raw-control-bytes
 
       - name: Changelog coverage

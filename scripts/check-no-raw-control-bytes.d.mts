@@ -6,9 +6,13 @@
 // tests/scripts/check-no-raw-control-bytes.test.ts's import without `any`.
 // Keep in sync with the exports in check-no-raw-control-bytes.mjs.
 
+export const REPO_ROOT: string;
 export const SCAN_DIRS: string[];
+export const SKIPPED_DIRECTORY_NAMES: Set<string>;
 export const ROOT_FILE_EXTENSIONS: Set<string>;
 export const BINARY_EXTENSIONS: Set<string>;
+export const EXIT_VIOLATION: number;
+export const EXIT_IO_ERROR: number;
 
 export interface AllowedControlByteEntry {
   count: number;
