@@ -12,6 +12,10 @@ import {
   resolveScopedProjectName,
   sanitizeProjectForDisplay,
 } from "../../src/runtime/git-context.js";
+import {
+  isValidProjectName as isValidProjectNameFromProjectName,
+  sanitizeProjectForDisplay as sanitizeProjectForDisplayFromProjectName,
+} from "../../src/io/project-name.js";
 
 let cleanups: Array<() => void> = [];
 afterEach(() => {
@@ -936,5 +940,12 @@ describe("isValidProjectName: control characters (task e904f25a)", () => {
     expect(isValidProjectName("proj\n  ⚠ forged line")).toBe(false);
     expect(sanitizeProjectForDisplay("a\nb")).toBe("ab");
     expect(sanitizeProjectForDisplay("a\nb")).toBe("ab");
+  });
+});
+
+describe("isValidProjectName / sanitizeProjectForDisplay re-export (task b5e6ccb0)", () => {
+  it("git-context.ts re-exports the same functions defined in io/project-name.ts, not a duplicate", () => {
+    expect(isValidProjectName).toBe(isValidProjectNameFromProjectName);
+    expect(sanitizeProjectForDisplay).toBe(sanitizeProjectForDisplayFromProjectName);
   });
 });

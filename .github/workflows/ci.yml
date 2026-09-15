@@ -57,6 +57,23 @@ jobs:
         # comment, or test name for a real describe/it/test call.
         run: npm run check:no-only
 
+      - name: No committed raw control bytes
+        # scripts/check-no-raw-control-bytes.mjs: a raw C0/C1/DEL control
+        # byte (typed by hand instead of an escaped backslash-u-0000 form)
+        # makes git treat the file as binary and defeats text search
+        # against it (task b5e6ccb0, round 2 review; widened from a
+        # NUL-only gate to the full control-byte class and to docs/.github/
+        # in round 3 after a raw BEL turned up in a test literal and the
+        # round-2 fix itself landed a NUL in CHANGELOG.md/ci.yml). Scans
+        # src/, tests/, scripts/, docs/, .github/ and the repo root's own
+        # *.md/*.yml/*.yaml/*.json/*.ts/*.cjs/*.mjs files as raw bytes, not
+        # decoded text, so it cannot itself be fooled by a decoding step.
+        # Round 4 review: the scan root comes from the script's own
+        # location, never the cwd, and an unreadable or missing scan
+        # directory or file exits 2 instead of reporting a clean scan of
+        # whatever was left readable.
+        run: npm run check:no-raw-control-bytes
+
       - name: Changelog coverage
         # scripts/check-changelog-coverage.mjs — every release-notable
         # commit since the last tag must be linked from CHANGELOG.md's

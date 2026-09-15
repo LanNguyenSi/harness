@@ -116,9 +116,8 @@ function expandHome(p: string, home: string): string {
  * inserted as an inert literal segment, never re-interpreted as a home
  * directory reference. This sink is NOT guarded for
  * `generate-memory-index.ts`'s own `{project}` substitution
- * (`src/cli/apply/generate-memory-index.ts`) or `buildLockEntries`'
- * (`src/io/harness-lock.ts`); see CHANGELOG.md for the reservation on the
- * former and the follow-up on the latter.
+ * (`src/cli/apply/generate-memory-index.ts`); see CHANGELOG.md for the
+ * reservation.
  */
 function substituteProject(p: string, project: string | undefined): string {
   if (!project || !isValidProjectName(project)) return p;
