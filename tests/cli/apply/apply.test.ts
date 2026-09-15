@@ -583,6 +583,26 @@ describe("apply — harness.lock", () => {
     expect(entries.find((e) => e.path === disabledScript)).toBeUndefined();
   });
 
+  it("writes no lock entry, and never the raw value, for a rejected --project (task b5e6ccb0)", async () => {
+    writeManifest({
+      memoryDirs: [{ path: "~/projects/{project}/memory", scope: "project" }],
+    });
+    // Mirrors tests/io/harness-lock.test.ts's own ".." case: the raw,
+    // rejected value would resolve to a real directory on disk (an
+    // attacker who can create that path), so a regression that drops the
+    // `opts.project` -> `projectName` wiring at apply.ts's buildLockEntries
+    // call site would still find a directory to lock.
+    fs.mkdirSync(path.join(tmpHome, "projects"), { recursive: true });
+    const rawDir = path.join(tmpHome, "projects", "..", "memory");
+    fs.mkdirSync(rawDir, { recursive: true });
+    fs.writeFileSync(path.join(rawDir, "x.md"), "x\n");
+
+    await apply({ homeDir: tmpHome, project: ".." });
+    const entries = parseLock(fs.readFileSync(lockPath(), "utf8"));
+    expect(entries.find((e) => e.path.includes("memory"))).toBeUndefined();
+    expect(JSON.stringify(entries)).not.toContain("..");
+  });
+
   it("skips memory.router when memory.router.enabled is false", async () => {
     const routerScript = path.join(tmpHome, "router-hook.js");
     fs.writeFileSync(routerScript, "// router\n");

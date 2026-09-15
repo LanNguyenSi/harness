@@ -560,9 +560,7 @@ describe("buildLockEntries", () => {
     const entries = buildLockEntries(m, { homeDir: tmpHome, projectName: rejected });
     expect(entries).toEqual([]);
     // The raw, unvalidated value must never appear in any entry.
-    for (const e of entries) {
-      expect(JSON.stringify(e)).not.toContain(rejected);
-    }
+    expect(JSON.stringify(entries)).not.toContain(rejected);
   });
 
   it("skips memory dirs that don't exist", () => {
