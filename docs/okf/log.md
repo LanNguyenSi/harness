@@ -61,7 +61,7 @@
   lines 118-119) and
   `src/cli/doctor/format.ts:190#"in-flight subagent records on disk:"`
   (previously line 179). In `docs/decisions/2026-09-08-preflight-floors.md`:
-  `src/probes/memory.ts:277#"const parsed = parseProbedVersion(stdout);"`
+  `src/probes/memory.ts:276#"const parsed = parseProbedVersion(stdout);"`
   (previously line 268). In this file:
   `src/runtime/git-context.ts:393#"fs.realpathSync(commonDir)"` (previously
   line 387) and
