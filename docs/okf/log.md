@@ -20,12 +20,20 @@
   own substitution remains open, still reserved for a separate Codex
   slice. `docs/CLI.md`'s SINK GUARD sentence and inventory and the
   `isValidProjectName` doc comment are re-pointed to the new state; see
-  CHANGELOG.md for the fuller writeup. Two citations elsewhere in this
-  bundle moved and were re-pointed in this task: `src/runtime/git-context.ts:392`
-  to `:393` (this file, twice, for the new `io/project-name.ts` import) and
-  `src/probes/memory.ts:277` to `:276` (this file and
-  `docs/decisions/2026-09-08-preflight-floors.md`, for the narrowed
-  `substituteProject` comment).
+  CHANGELOG.md for the fuller writeup. The citations this task's source
+  edits shifted, enumerated from the commit range rather than counted by
+  hand (`git diff <base>..HEAD -U0 -- docs`, then a per-file multiset diff
+  of every `path:N[-M]` token), and all re-pointed here:
+  `src/runtime/git-context.ts:392` to `:393` (this file, both occurrences,
+  for the new `io/project-name.ts` import); `src/probes/memory.ts:277` to
+  `:276` (this file and `docs/decisions/2026-09-08-preflight-floors.md`,
+  for the narrowed `substituteProject` comment); and the `sha256: string;`
+  range in `src/io/harness-lock.ts`, from lines 48-57 to
+  `src/io/harness-lock.ts:49-58`
+  (`docs/decisions/2026-08-27-ug-auto-mode-approval.md`, shifted by the
+  `isValidProjectName` import added at `src/io/harness-lock.ts:34`). The
+  last of the three is the one round 3 left behind while stating the list
+  was complete, which is why the list is now produced by a command.
 - 2026-09-13T10:24:00Z, task `e904f25a` (implementer): control
   characters are now rejected at the SOURCE, not stripped at each render
   site. `isValidProjectName` (`src/runtime/git-context.ts`) additionally
