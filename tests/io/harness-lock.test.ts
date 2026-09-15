@@ -546,7 +546,13 @@ describe("buildLockEntries", () => {
     // The templated directory would exist on disk under the raw, rejected
     // value too (mirroring an attacker who can create that path), so a
     // regression that skips the isValidProjectName call and substitutes
-    // the raw value anyway would still find a directory to lock.
+    // the raw value anyway would still find a directory to lock. The
+    // `..` case needs the real `projects` directory to exist on disk:
+    // the OS resolves a literal `..` path segment by walking through its
+    // parent component, so without `projects` present the walk itself
+    // fails (ENOENT) regardless of the guard, and the mutant that drops
+    // the isValidProjectName call would falsely appear caught.
+    fs.mkdirSync(path.join(tmpHome, "projects"), { recursive: true });
     const rawDir = path.join(tmpHome, "projects", rejected, "memory");
     fs.mkdirSync(rawDir, { recursive: true });
     fs.writeFileSync(path.join(rawDir, "x.md"), "x\n");
