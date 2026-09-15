@@ -49,8 +49,12 @@
 //     carry REAL control bytes (ANSI escapes from the captured session).
 //     They are recordings of terminal output, not hand-written source,
 //     so a raw ESC there is the data, not a defect.
-//   - `.ai/`: orchestrator run state, gitignored in this repo; it is not
-//     part of the shipped tree and is not reviewed as source.
+//   - `.ai/`: orchestrator run state. `.ai/runs/` and the `.ai/run`
+//     pointer are gitignored and never reviewed. What IS tracked under
+//     `.ai/` (`.ai/workflow/`'s kit-installed templates and manifest,
+//     `.ai/solution-acceptance.json`) is workflow state installed from a
+//     kit rather than source this repo hand-edits, so a control byte
+//     there would arrive from the kit, not from an edit under review.
 //   - `node_modules/`, `dist/`, `coverage/`: third-party or generated
 //     output. This gate's subject is what a human typed into a file
 //     under review; regenerating `dist/` is the fix for a byte there,
