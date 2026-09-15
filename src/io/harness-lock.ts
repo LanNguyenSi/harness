@@ -31,6 +31,7 @@ import * as path from "node:path";
 import { expandHome } from "./expand-home.js";
 import type { Manifest } from "../schema/index.js";
 import { atomicWriteFile } from "./atomic-write.js";
+import { isValidProjectName } from "../runtime/git-context.js";
 
 export interface AssetEntry {
   kind: "asset";
@@ -287,7 +288,16 @@ export function buildLockEntries(
   for (const dir of manifest.memory.directories) {
     let resolved = expandHome(dir.path, opts.homeDir);
     if (resolved.includes("{project}")) {
-      if (!opts.projectName) continue;
+      // Same guard `resolvePaths` (`src/cli/loader.ts`) and
+      // `substituteProject` (`src/probes/memory.ts`) apply at their own
+      // `{project}` sinks (task e904f25a): an `opts.projectName` that
+      // fails `isValidProjectName` (`..`, a path separator, a control
+      // character) is treated exactly like no project name at all. The
+      // templated directory's entry is skipped rather than the raw,
+      // unvalidated value being interpolated into the path this
+      // function stats and locks; `harness.lock` and `harness diff
+      // --since-apply`'s drift list never carry it (task b5e6ccb0).
+      if (!opts.projectName || !isValidProjectName(opts.projectName)) continue;
       resolved = resolved.split("{project}").join(opts.projectName);
     }
     let isDir = false;
