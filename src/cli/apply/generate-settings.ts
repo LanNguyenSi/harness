@@ -481,9 +481,9 @@ export function buildMemoryRouterHook(manifest: Manifest): Hook | null {
 
 /**
  * Dedupe key for a (command, timeout) pair. The separator is NUL, written
- * as an escape so this file stays text: it cannot appear in a command
- * string or in a timeout's decimal rendering, so two distinct pairs never
- * join to the same key.
+ * as an escape so this file stays text. A timeout's decimal rendering
+ * carries no NUL, so the separator is the last NUL of the key and the
+ * (command, timeout) split stays unambiguous for any command string.
  */
 export function computeHookFingerprint(
   command: string,
