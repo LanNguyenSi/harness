@@ -479,6 +479,13 @@ export function buildMemoryRouterHook(manifest: Manifest): Hook | null {
   return hook;
 }
 
+// Dedupe key for a (command, timeout) pair; \u0000 can't appear in either value.
+export function computeHookFingerprint(
+  command: string,
+  timeout: SettingsHookCommand["timeout"],
+): string {
+  return `${command}\u0000${timeout ?? ""}`;
+}
 function buildGroups(hooks: Hook[]): SettingsHookGroup[] {
   // Group by exact `match` value. Unmatched hooks share the empty-string
   // bucket and emit a group without a `matcher` field.
@@ -494,22 +501,15 @@ function buildGroups(hooks: Hook[]): SettingsHookGroup[] {
   const groups: SettingsHookGroup[] = [];
   for (const key of matcherKeys) {
     const groupHooks = byMatcher.get(key) ?? [];
-    // Multiple harness hooks frequently share the same command (the
-    // generic `harness policy intercept` engine is the obvious case:
-    // every PreToolUse policy in the full template wires to it). Claude
-    // Code spawns each entry in `hooks[]` independently for the same
-    // tool event, so emitting duplicates causes redundant Node bootstraps
-    // and ledger queries per tool call. Dedupe by (command, timeout)
-    // inside each matcher group so only one spawn happens per
-    // logically-identical hook, regardless of how many manifest entries
-    // map to it.
+    // Dedupe (command, timeout) pairs per matcher group so a repeated
+    // hook doesn't spawn twice (computeHookFingerprint above).
     const seen = new Set<string>();
     const inner: SettingsHookCommand[] = [];
     for (const h of [...groupHooks].sort((a, b) =>
       a.command < b.command ? -1 : a.command > b.command ? 1 : 0,
     )) {
       const cmd = toSettingsCommand(h);
-      const fingerprint = `${cmd.command} ${cmd.timeout ?? ""}`;
+      const fingerprint = computeHookFingerprint(cmd.command, cmd.timeout);
       if (seen.has(fingerprint)) continue;
       seen.add(fingerprint);
       inner.push(cmd);

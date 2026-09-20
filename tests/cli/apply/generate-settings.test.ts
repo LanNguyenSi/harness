@@ -4,6 +4,7 @@ import {
   DEFAULT_BUDGET_MS,
   buildMcpServers,
   buildMemoryRouterHook,
+  computeHookFingerprint,
   generateSettings,
   generateSettingsWithWarnings,
   hookTimeoutSeconds,
@@ -213,6 +214,31 @@ describe("generateSettings", () => {
     // budget_ms 1000 -> ceil(1000/1000)=1, floored to the policy-intercept
     // minimum of 2s; budget_ms 5000 -> ceil(5000/1000)=5. Still distinct.
     expect(bashGroup?.hooks.map((h) => h.timeout).sort()).toEqual([2, 5]);
+  });
+
+  // task 0b747433: the dedupe fingerprint (buildGroups) used to join
+  // command and timeout with a raw NUL byte; it's now `\u0000`
+  // (computeHookFingerprint), byte-identical at runtime. A printable
+  // delimiter such as a space is unsafe: a command containing that
+  // character can concatenate to the same string as a different
+  // (command, timeout) split at that character, e.g. command "foo bar"
+  // with an empty timeout and command "foo" with timeout "bar " (a
+  // caller not respecting the `number` type, cast below) both join to
+  // "foo bar " under a space delimiter. `\u0000` can never appear in a
+  // Bash command string or in a timeout's own decimal rendering, so the
+  // same pair never collides through computeHookFingerprint.
+  it("computeHookFingerprint does not collide across a command/timeout split at an embedded space", () => {
+    const commandA = "foo bar";
+    const timeoutA = undefined;
+    const commandB = "foo";
+    const timeoutB = "bar " as unknown as number;
+
+    // Demonstrates the space-delimiter collision this guards against.
+    expect(`${commandA} ${timeoutA ?? ""}`).toBe(`${commandB} ${timeoutB}`);
+
+    expect(computeHookFingerprint(commandA, timeoutA)).not.toBe(
+      computeHookFingerprint(commandB, timeoutB),
+    );
   });
 
   it("emits one event key per distinct event with the right matcher/command tuples", () => {

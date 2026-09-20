@@ -176,25 +176,12 @@ export const EXIT_IO_ERROR = 2;
 // fixed by this gate (task b5e6ccb0; out of that task's file scope). Each
 // entry names the file (forward-slash, relative to the repo root), the
 // exact occurrence count expected there, and the reason. Adding an entry
-// here, or changing its count, is a conscious edit, never a side effect:
-// a fingerprint delimiter that can't appear in either joined value works,
-// but it also makes the file unsearchable by `grep`/`rg` and shows as
-// binary in `git diff`, the same cost this gate exists to catch
-// elsewhere. Replacing that delimiter with an escape-safe form, which
-// would drop this entry entirely, is harness task
-// 0b747433-c697-48bc-adc4-f3a24cc4fa37, filed and not yet done; changing
-// the delimiter is out of scope for task b5e6ccb0.
-export const ALLOWED_CONTROL_BYTE_FILES = new Map([
-  [
-    "src/cli/apply/generate-settings.ts",
-    {
-      count: 1,
-      reason:
-        'template-literal fingerprint delimiter (`${cmd.command}\\x00${cmd.timeout ?? ""}`), ' +
-        "PR #438; a NUL can't appear in either joined value, so it's collision-proof as a separator",
-    },
-  ],
-]);
+// here, or changing its count, is a conscious edit, never a side effect.
+// Empty today: the one entry this allowlist ever held (a raw-NUL
+// fingerprint delimiter in src/cli/apply/generate-settings.ts) was
+// replaced with an escape-safe `\u0000` form, task
+// 0b747433-c697-48bc-adc4-f3a24cc4fa37.
+export const ALLOWED_CONTROL_BYTE_FILES = new Map([]);
 
 /**
  * Recursively collects file paths under `dir`, skipping

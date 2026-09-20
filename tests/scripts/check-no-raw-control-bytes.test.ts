@@ -89,10 +89,8 @@ describe("evaluateFile", () => {
 });
 
 describe("ALLOWED_CONTROL_BYTE_FILES", () => {
-  it("pins the generate-settings.ts fingerprint delimiter to exactly 1 occurrence", () => {
-    expect(
-      ALLOWED_CONTROL_BYTE_FILES.get("src/cli/apply/generate-settings.ts"),
-    ).toMatchObject({ count: 1 });
+  it("is empty (its one entry, generate-settings.ts's raw-NUL fingerprint delimiter, was replaced with an escape-safe form, task 0b747433-c697-48bc-adc4-f3a24cc4fa37)", () => {
+    expect(ALLOWED_CONTROL_BYTE_FILES.size).toBe(0);
   });
 });
 
@@ -111,17 +109,12 @@ describe("main", () => {
     );
     // Every SCAN_DIRS entry must exist, or main() refuses to scan at all
     // (exit 2, see the missing-directory case below); the fixture tree
-    // therefore mirrors the real repo's scan scope.
+    // therefore mirrors the real repo's scan scope. ALLOWED_CONTROL_BYTE_FILES
+    // is empty by default (task 0b747433 dropped its one entry), so this
+    // fixture tree carries no allowlisted file; the count-mismatch and
+    // stale-entry coverage below inject their own temporary entry instead.
     for (const scanDir of SCAN_DIRS)
       mkdirSync(join(dir, scanDir), { recursive: true });
-    // The allowlisted file must exist at its pinned count too: an
-    // allowlist entry whose file is not scanned is a stale entry and fails
-    // (see the stale-entry case below), so the fixture mirrors that as well.
-    mkdirSync(join(dir, "src", "cli", "apply"), { recursive: true });
-    writeFileSync(
-      join(dir, "src", "cli", "apply", "generate-settings.ts"),
-      Buffer.from("cmd\x00timeout"),
-    );
     logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
     errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
   });
@@ -166,58 +159,88 @@ describe("main", () => {
     );
   });
 
-  it("the allowlisted generate-settings.ts path at its pinned count (1) passes", () => {
-    mkdirSync(join(dir, "src", "cli", "apply"), { recursive: true });
-    writeFileSync(
-      join(dir, "src", "cli", "apply", "generate-settings.ts"),
-      Buffer.from("cmd\x00timeout"),
-    );
+  // ALLOWED_CONTROL_BYTE_FILES is empty in production (task 0b747433 dropped
+  // its one live entry). This nested describe injects and removes its own
+  // temporary entry so the count-mismatch and stale-entry behavior of
+  // evaluateFile/main stays covered end to end without a real allowlisted
+  // file to lean on.
+  describe("with an injected allowlist entry", () => {
+    const FIXTURE_REL_PATH = "src/allowlist-fixture.ts";
 
-    main(dir);
+    beforeEach(() => {
+      ALLOWED_CONTROL_BYTE_FILES.set(FIXTURE_REL_PATH, {
+        count: 1,
+        reason: "test-injected fixture entry",
+      });
+      mkdirSync(join(dir, "src"), { recursive: true });
+    });
 
-    expect(process.exitCode).toBeUndefined();
-    expect(logSpy).toHaveBeenCalledWith(
-      expect.stringContaining("check-no-raw-control-bytes: OK"),
-    );
-  });
+    afterEach(() => {
+      ALLOWED_CONTROL_BYTE_FILES.delete(FIXTURE_REL_PATH);
+    });
 
-  it("two extra NULs added to the allowlisted generate-settings.ts path fail (count-mismatch, not silently passed)", () => {
-    mkdirSync(join(dir, "src", "cli", "apply"), { recursive: true });
-    writeFileSync(
-      join(dir, "src", "cli", "apply", "generate-settings.ts"),
-      Buffer.from("cmd\x00timeout\x00\x00"),
-    );
+    it("the injected entry's file at its pinned count (1) passes", () => {
+      writeFileSync(
+        join(dir, "src", "allowlist-fixture.ts"),
+        Buffer.from("cmd\x00timeout"),
+      );
 
-    main(dir);
+      main(dir);
 
-    expect(process.exitCode).toBe(1);
-    expect(errorSpy).toHaveBeenCalledWith(
-      expect.stringContaining(
-        "expected 1 allowlisted raw control byte(s), found 3",
-      ),
-    );
-  });
+      expect(process.exitCode).toBeUndefined();
+      expect(logSpy).toHaveBeenCalledWith(
+        expect.stringContaining("check-no-raw-control-bytes: OK"),
+      );
+    });
 
-  // The FEWER direction, end to end: the allowlisted file no longer holds
-  // the documented delimiter (someone replaced it with an escape-safe
-  // form, task 0b747433-c697-48bc-adc4-f3a24cc4fa37), that must fail as a
-  // stale allowlist entry to delete, not pass because "at most the pinned
-  // count" was satisfied.
-  it("the allowlisted generate-settings.ts path with its pinned NUL removed fails (expected 1, found 0)", () => {
-    mkdirSync(join(dir, "src", "cli", "apply"), { recursive: true });
-    writeFileSync(
-      join(dir, "src", "cli", "apply", "generate-settings.ts"),
-      Buffer.from("cmd|timeout"),
-    );
+    it("two extra NULs beyond the injected entry's pinned count fail (count-mismatch, not silently passed)", () => {
+      writeFileSync(
+        join(dir, "src", "allowlist-fixture.ts"),
+        Buffer.from("cmd\x00timeout\x00\x00"),
+      );
 
-    main(dir);
+      main(dir);
 
-    expect(process.exitCode).toBe(1);
-    expect(errorSpy).toHaveBeenCalledWith(
-      expect.stringContaining(
-        "expected 1 allowlisted raw control byte(s), found 0",
-      ),
-    );
+      expect(process.exitCode).toBe(1);
+      expect(errorSpy).toHaveBeenCalledWith(
+        expect.stringContaining(
+          "expected 1 allowlisted raw control byte(s), found 3",
+        ),
+      );
+    });
+
+    // The FEWER direction, end to end: the file no longer holds its
+    // documented control byte, that must fail as a count-mismatch to fix
+    // (either restore the byte or delete the entry), not pass because "at
+    // most the pinned count" was satisfied.
+    it("the injected entry's file with its pinned NUL removed fails (expected 1, found 0)", () => {
+      writeFileSync(
+        join(dir, "src", "allowlist-fixture.ts"),
+        Buffer.from("cmd|timeout"),
+      );
+
+      main(dir);
+
+      expect(process.exitCode).toBe(1);
+      expect(errorSpy).toHaveBeenCalledWith(
+        expect.stringContaining(
+          "expected 1 allowlisted raw control byte(s), found 0",
+        ),
+      );
+    });
+
+    // Round 4 review, MEDIUM 1 (moved from the removed generate-settings.ts
+    // live-entry coverage): an allowlist entry whose file is not scanned at
+    // all is a stale entry to delete, not a pass.
+    it("an injected allowlist entry whose file is not scanned is a stale entry and fails, not a pass", () => {
+      // Deliberately not written: the file never exists in this fixture tree.
+      main(dir);
+
+      expect(process.exitCode).toBe(1);
+      expect(errorSpy).toHaveBeenCalledWith(
+        expect.stringContaining(`stale allowlist entry: ${FIXTURE_REL_PATH}`),
+      );
+    });
   });
 
   it("scans docs/ and .github/ too, catching the round-2 .md/.yml incident class", () => {
@@ -298,22 +321,6 @@ describe("main", () => {
     expect(process.exitCode).toBeUndefined();
     expect(logSpy).toHaveBeenCalledWith(
       expect.stringContaining("check-no-raw-control-bytes: OK"),
-    );
-  });
-
-  // Round 4 review, MEDIUM 1: round 3 returned an empty list from a silent
-  // catch, so a missing scan directory reported a clean, zero-file scan
-  // and exited 0: a green gate that had checked nothing.
-  it("an allowlist entry whose file is not scanned is a stale entry and fails, not a pass", () => {
-    rmSync(join(dir, "src", "cli", "apply", "generate-settings.ts"));
-
-    main(dir);
-
-    expect(process.exitCode).toBe(1);
-    expect(errorSpy).toHaveBeenCalledWith(
-      expect.stringContaining(
-        "stale allowlist entry: src/cli/apply/generate-settings.ts",
-      ),
     );
   });
 
