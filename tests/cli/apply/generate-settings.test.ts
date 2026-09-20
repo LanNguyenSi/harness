@@ -233,12 +233,14 @@ describe("generateSettings", () => {
     const commandB = "foo";
     const timeoutB = "bar " as unknown as number;
 
-    // Demonstrates the space-delimiter collision this guards against.
-    expect(`${commandA} ${timeoutA ?? ""}`).toBe(`${commandB} ${timeoutB}`);
-
     expect(computeHookFingerprint(commandA, timeoutA)).not.toBe(
       computeHookFingerprint(commandB, timeoutB),
     );
+  });
+
+  it("computeHookFingerprint keeps the NUL-joined wire format", () => {
+    expect(computeHookFingerprint("a", 1)).toBe("a\u00001");
+    expect(computeHookFingerprint("a", undefined)).toBe("a\u0000");
   });
 
   it("emits one event key per distinct event with the right matcher/command tuples", () => {
