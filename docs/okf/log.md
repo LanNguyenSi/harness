@@ -2,6 +2,18 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-09-20T05:03:27Z, task `0b747433`: `src/cli/apply/generate-settings.ts` gained the
+  exported `computeHookFingerprint` above `buildGroups` (the dedupe key's
+  raw NUL byte became the escape `\u0000`), which shifts
+  `hookTimeoutSeconds` from lines 545-548 to lines 558-561.
+  `codex-adapter-parity-gaps.md` item 8 re-pointed to the new range and
+  re-read against the function body (unchanged); item 11 names the file
+  without a line and still holds. Doc re-stamped. The citation is now in
+  the anchored form
+  (`src/cli/apply/generate-settings.ts:558#"export function hookTimeoutSeconds"`)
+  instead of prose line numbers, which no guard could see, and the file
+  joined the doc's `sources` list so a later move marks the doc stale.
+
 - 2026-09-15T00:00:00Z, task `b5e6ccb0` (implementer): `buildLockEntries`
   (`src/io/harness-lock.ts`) now applies `isValidProjectName`
   (`src/io/project-name.ts`, moved from `src/runtime/git-context.ts`,

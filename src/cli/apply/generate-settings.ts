@@ -479,6 +479,19 @@ export function buildMemoryRouterHook(manifest: Manifest): Hook | null {
   return hook;
 }
 
+/**
+ * Dedupe key for a (command, timeout) pair. The separator is NUL, written
+ * as an escape so this file stays text. A timeout's decimal rendering
+ * carries no NUL, so the separator is the last NUL of the key and the
+ * (command, timeout) split stays unambiguous for any command string.
+ */
+export function computeHookFingerprint(
+  command: string,
+  timeout: SettingsHookCommand["timeout"],
+): string {
+  return `${command}\u0000${timeout ?? ""}`;
+}
+
 function buildGroups(hooks: Hook[]): SettingsHookGroup[] {
   // Group by exact `match` value. Unmatched hooks share the empty-string
   // bucket and emit a group without a `matcher` field.
@@ -509,7 +522,7 @@ function buildGroups(hooks: Hook[]): SettingsHookGroup[] {
       a.command < b.command ? -1 : a.command > b.command ? 1 : 0,
     )) {
       const cmd = toSettingsCommand(h);
-      const fingerprint = `${cmd.command} ${cmd.timeout ?? ""}`;
+      const fingerprint = computeHookFingerprint(cmd.command, cmd.timeout);
       if (seen.has(fingerprint)) continue;
       seen.add(fingerprint);
       inner.push(cmd);
