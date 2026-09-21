@@ -46,10 +46,9 @@ jobs:
         # Exact pin: okf-kit@0.3.0 on npm is a deprecated silent no-op
         # (exit 0, no output). The output assertion below exists to catch
         # any regression of that failure mode: never assert on exit code
-        # alone here. Bumped 0.10.0 -> 0.14.0 for --require-anchors below
-        # (task 8765987a); the plain `check docs/okf` verdict (errors/
-        # warnings/notices) is unchanged between the two versions on this
-        # bundle.
+        # alone here. The pin tracks the current okf-kit release; a pin
+        # move is recorded in docs/okf/log.md together with the measured
+        # verdict of the old and the new version on this bundle.
         run: npm install -g okf-kit@0.14.0 --no-audit --no-fund
 
       - name: Assert CLI is alive (output, not exit code)
@@ -68,10 +67,11 @@ jobs:
           # findings: report them and stay green. Anything else means the
           # check itself broke and must fail red, a broken check never
           # looks green.
-          # --require-anchors (task 8765987a): every full or continuation
-          # line citation must carry a #"anchor" (anchor-required /
-          # anchor-required-continuation), so a bare `path:N` citation that
-          # would otherwise resolve cleanly still surfaces here as a
+          # --require-anchors: every full line citation must carry a
+          # #"anchor" (anchor-required), and a continuation must be lifted
+          # into a standalone anchored citation
+          # (anchor-required-continuation), so a bare `path:N` citation
+          # that would otherwise resolve cleanly still surfaces here as a
           # warning, before it can drift silently on a future line shift.
           # Still warn-only, same as every other rule this job runs.
           set +e
@@ -141,7 +141,7 @@ jobs:
           jq -r '
             [.findings[] | select(.severity == "warning")]
             | group_by(.file)[]
-            | "\(.[0].file): \(length) warning(s) (stale sources and/or unresolved citations), full list in the job summary"
+            | "\(.[0].file): \(length) warning(s) (stale sources, unresolved citations and/or missing anchors), full list in the job summary"
           ' okf-report.json | while IFS= read -r line; do
             echo "::warning title=OKF bundle drift::${line}"
           done

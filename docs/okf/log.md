@@ -21,14 +21,17 @@
   `codex-adapter-parity-gaps.md`, `debug-verb-selection.md`,
   `understanding-gate-auto-mode-signals.md`) to 0/0/0: two resolved
   `intercept.ts`/`understanding-before-execution.ts` prose refs became
-  anchored citations; the `docs/risk-gate.md` one was dropped (its line
-  numbers are not stable, per the existing caveat elsewhere in this
-  bundle); the two `understanding-gate-auto-mode-signals.md` "line N"
+  anchored citations, and so did the `docs/risk-gate.md` one (it had
+  pointed one line too high, onto a blank line; the anchored form is what
+  makes the caveat about that file's shifting line numbers unnecessary
+  here); the two `understanding-gate-auto-mode-signals.md` "line N"
   mentions were reworded (they described a transcript JSONL row count from
   a probe, not a source citation, so "line N" was never the right shape).
   `.github/workflows/okf-staleness.yml`'s `okf-kit` pin moved 0.10.0 ->
   0.14.0 and its bundle-check step now also passes `--require-anchors`
-  (job stays warn-only and non-required). `tests/decisions-citations-resolve.test.ts`
+  (job stays warn-only and non-required). The pin move is a currency
+  move, not a capability requirement: at cb67966 okf-kit@0.10.0 accepts
+  `--require-anchors` too and reports the identical 31 findings. `tests/decisions-citations-resolve.test.ts`
   stays green (325/325); its bare-citation ratchet outside `log.md` was
   already at zero and stays there. Docs re-stamped: `manifest-validation-scope.md`,
   `pause-vs-gate-kill-switch.md`, `understanding-gate-auto-mode-signals.md`,
