@@ -46,8 +46,11 @@ jobs:
         # Exact pin: okf-kit@0.3.0 on npm is a deprecated silent no-op
         # (exit 0, no output). The output assertion below exists to catch
         # any regression of that failure mode: never assert on exit code
-        # alone here.
-        run: npm install -g okf-kit@0.10.0 --no-audit --no-fund
+        # alone here. Bumped 0.10.0 -> 0.14.0 for --require-anchors below
+        # (task 8765987a); the plain `check docs/okf` verdict (errors/
+        # warnings/notices) is unchanged between the two versions on this
+        # bundle.
+        run: npm install -g okf-kit@0.14.0 --no-audit --no-fund
 
       - name: Assert CLI is alive (output, not exit code)
         shell: bash
@@ -65,8 +68,14 @@ jobs:
           # findings: report them and stay green. Anything else means the
           # check itself broke and must fail red, a broken check never
           # looks green.
+          # --require-anchors (task 8765987a): every full or continuation
+          # line citation must carry a #"anchor" (anchor-required /
+          # anchor-required-continuation), so a bare `path:N` citation that
+          # would otherwise resolve cleanly still surfaces here as a
+          # warning, before it can drift silently on a future line shift.
+          # Still warn-only, same as every other rule this job runs.
           set +e
-          okf-kit check --json docs/okf > okf-report.json
+          okf-kit check --json --require-anchors docs/okf > okf-report.json
           code=$?
           set -e
 
@@ -114,7 +123,13 @@ jobs:
               echo "correct it (no timestamp bump needed for this rule alone)."
               echo "A citations-resolve notice (ambiguous target,"
               echo "unreadable-target) is informational only and never counts"
-              echo "toward --strict. This job never blocks either way."
+              echo "toward --strict. An anchor-required or"
+              echo "anchor-required-continuation warning (from --require-anchors,"
+              echo "above) means a citation resolves fine but carries no"
+              echo "#\"anchor\": lift it into the full \`path:N-M#\"anchor\"\` form"
+              echo "(a continuation cannot carry its own #anchor; fold it into a"
+              echo "standalone anchored citation instead). This job never blocks"
+              echo "either way."
             else
               echo "Clean, no findings."
             fi
