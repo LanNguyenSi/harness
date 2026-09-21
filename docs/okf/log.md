@@ -32,11 +32,16 @@
   (job stays warn-only and non-required). The pin move is a currency
   move, not a capability requirement: at cb67966 okf-kit@0.10.0 accepts
   `--require-anchors` too and reports the identical 31 findings. `tests/decisions-citations-resolve.test.ts`
-  stays green (325/325); its bare-citation ratchet outside `log.md` was
-  already at zero and stays there. Docs re-stamped: `manifest-validation-scope.md`,
+  stays green; its bare-citation ratchet outside `log.md` was
+  already at zero and stays there. Docs re-stamped at this entry's timestamp:
   `pause-vs-gate-kill-switch.md`, `understanding-gate-auto-mode-signals.md`,
-  `debug-verb-selection.md`, `codex-adapter-parity-gaps.md` (the last two
-  only for the prose-reference fix).
+  `codex-adapter-parity-gaps.md` (the last only for the prose-reference
+  fix). `manifest-validation-scope.md` and `debug-verb-selection.md` carry
+  the later stamp 2026-09-21T05:16:27Z: a review of this task corrected
+  them afterwards (the `docs/risk-gate.md` reference, first dropped, was
+  anchored; the `newErrors` citation got the anchor `!baselineKeys.has`),
+  together with the workflow's pin comment, which had given
+  `--require-anchors` as the reason for the pin move.
 
 - 2026-09-20T05:03:27Z, task `0b747433`: `src/cli/apply/generate-settings.ts` gained the
   exported `computeHookFingerprint` above `buildGroups` (the dedupe key's

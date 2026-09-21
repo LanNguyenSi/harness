@@ -46,9 +46,9 @@ jobs:
         # Exact pin: okf-kit@0.3.0 on npm is a deprecated silent no-op
         # (exit 0, no output). The output assertion below exists to catch
         # any regression of that failure mode: never assert on exit code
-        # alone here. The pin tracks the current okf-kit release; a pin
-        # move is recorded in docs/okf/log.md together with the measured
-        # verdict of the old and the new version on this bundle.
+        # alone here. Move this pin deliberately, never as an automatic
+        # upgrade, and record each move in docs/okf/log.md together with
+        # the old and the new version's measured verdict on this bundle.
         run: npm install -g okf-kit@0.14.0 --no-audit --no-fund
 
       - name: Assert CLI is alive (output, not exit code)
