@@ -2,6 +2,47 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-09-21T04:55:32Z, task `8765987a`: converted every bare `path:N[-M]`
+  line citation in `docs/okf/` into the anchored `path:N-M#"anchor"` form,
+  including 27 comma/continuation-form citations chained off a governing
+  anchored citation in `manifest-validation-scope.md` (`okf-kit
+  --require-anchors`'s `anchor-required-continuation` rule: a continuation
+  cannot carry its own `#anchor`, so each was lifted into its own standalone
+  anchored citation, sometimes narrowing or re-choosing the end line so the
+  anchor text lands on a non-blank, word-bearing line unique within its own
+  range), 3 unanchored full citations in `pause-vs-gate-kill-switch.md`, and
+  1 in `understanding-gate-auto-mode-signals.md`. Every converted citation
+  was verified by reading the target line at head. `npx okf-kit@0.14.0
+  check docs/okf --require-anchors --json` went from 31 `citations-resolve`
+  warnings (three docs) to 0 errors / 0 warnings / 0 notices; the plain
+  `check docs/okf` verdict (0/0/0) is unchanged between okf-kit@0.10.0 and
+  @0.14.0 on this bundle. Also converted or dropped every prose `lines N-M`
+  reference `--prose-line-references` flagged (2 warnings + 4 notices,
+  `codex-adapter-parity-gaps.md`, `debug-verb-selection.md`,
+  `understanding-gate-auto-mode-signals.md`) to 0/0/0: two resolved
+  `intercept.ts`/`understanding-before-execution.ts` prose refs became
+  anchored citations, and so did the `docs/risk-gate.md` one (it had
+  pointed one line too high, onto a blank line; the anchored form is what
+  makes the caveat about that file's shifting line numbers unnecessary
+  here); the two `understanding-gate-auto-mode-signals.md` "line N"
+  mentions were reworded (they described a transcript JSONL row count from
+  a probe, not a source citation, so "line N" was never the right shape).
+  `.github/workflows/okf-staleness.yml`'s `okf-kit` pin moved 0.10.0 ->
+  0.14.0 and its bundle-check step now also passes `--require-anchors`
+  (job stays warn-only and non-required). The pin move is a currency
+  move, not a capability requirement: at cb67966 okf-kit@0.10.0 accepts
+  `--require-anchors` too and reports the identical 31 findings. `tests/decisions-citations-resolve.test.ts`
+  stays green; its bare-citation ratchet outside `log.md` was
+  already at zero and stays there. Docs re-stamped at this entry's timestamp:
+  `pause-vs-gate-kill-switch.md`, `understanding-gate-auto-mode-signals.md`,
+  `codex-adapter-parity-gaps.md` (the last only for the prose-reference
+  fix). `manifest-validation-scope.md` and `debug-verb-selection.md` carry
+  the later stamp 2026-09-21T05:16:27Z: a review of this task corrected
+  them afterwards (the `docs/risk-gate.md` reference, first dropped, was
+  anchored; the `newErrors` citation got the anchor `!baselineKeys.has`),
+  together with the workflow's pin comment, which had given
+  `--require-anchors` as the reason for the pin move.
+
 - 2026-09-20T05:03:27Z, task `0b747433`: `src/cli/apply/generate-settings.ts` gained the
   exported `computeHookFingerprint` above `buildGroups` (the dedupe key's
   raw NUL byte became the escape `\u0000`), which shifts

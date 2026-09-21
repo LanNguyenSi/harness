@@ -3,7 +3,7 @@ type: overview
 title: Understanding gate, auto-mode signal sources (measured)
 description: What signals exist for detecting an agent's own permission/auto-approval mode across Claude Code, Codex, and opencode, measured where possible, doc-only where not, with a trust-class table. Covers both launch shapes for Claude Code, headless and interactive, plus how a hook ask resolves in each and what a subagent's tool call looks like to the same hook. The rule and the decision on which signals gate anything live in the ADR, not here.
 tags: [understanding-gate, permission-mode, auto-mode, hooks, measurement, trust-boundary]
-timestamp: 2026-09-09T04:56:07Z
+timestamp: 2026-09-21T04:55:32Z
 sources:
   - src/cli/pack/auto-approve-path.ts
   - dogfood/ug-auto-mode-signals/README.md
@@ -147,7 +147,7 @@ it is confined to the last step of the hook's decision order:
   `--permission-mode bypassPermissions` as an argv flag the smoke driver
   passes to the `claude -p` subprocess it spawns; this sets the mode, it
   does not read it back as a gate signal.
-- `src/cli/session-export/transcript.ts:13,43,152-153`: parses a
+- `src/cli/session-export/transcript.ts:13#"permission_mode"`, `src/cli/session-export/transcript.ts:43#"permissionMode?: unknown"`, `src/cli/session-export/transcript.ts:152-153#"raw.permissionMode"`: parses a
   `permission-mode` transcript line into a `TranscriptEvent` with
   `kind: "permission_mode"` and `data: { mode: raw.permissionMode }`,
   for session-export purposes. Not consulted by any gate.
@@ -166,8 +166,9 @@ under `bypassPermissions`. Result (per-run table in the README, section
 (e); raw rows in `payloads/transcript-probe.jsonl`):
 
 - At the instant `PreToolUse` fires, the transcript holds 9 lines and the
-  assistant's report is not among them, 5/5. The report lands at line 11
-  and is present at the first poll 100 ms later, 5/5 (first seen after
+  assistant's report is not among them, 5/5. The report lands as the
+  transcript's 11th JSONL entry and is present at the first poll 100 ms
+  later, 5/5 (first seen after
   110 to 111 ms). Negative controls: 0/2 false positives.
 - At `Stop` the report is in the transcript (5/5) but the payload's
   `last_assistant_message` carries only the turn's final text, never the
@@ -251,7 +252,7 @@ rows in `payloads/retry-probe.rerun.jsonl`, result objects
 `payloads/retry-probe-rerun-<kind><n>.result.json`): report first,
 identical, 3/3. No report first: first and second attempts identical
 (deny at 9 lines, deny at 13 lines), but all 3/3 made an unprompted third
-attempt, found the report at line 14, and ran (2 denials, 4 turns each).
+attempt, found the report as the transcript's 14th JSONL entry, and ran (2 denials, 4 turns each).
 Combined over both samples of the one-retry deny text: 2/6 runs stopped
 after the single retry, 4/6 tried again and succeeded.
 
