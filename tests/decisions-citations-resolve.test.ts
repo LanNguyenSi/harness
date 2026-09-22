@@ -20,7 +20,15 @@ import { afterAll, describe, expect, it } from "vitest";
 // found citations pointing at whitespace hints and envelope comments
 // instead of the code the sentence actually named, plus an 11-line
 // shift from an unrelated constant move, drift a bare `path:N` citation
-// cannot self-report.
+// cannot self-report. A third ratchet (task `ea733314`) additionally
+// counts continuation-form citations -- a bare `:N`/`:N-M` token chained
+// to a governing full citation stated earlier in the doc, the spelling
+// docs/okf carried before every citation was individually anchored --
+// and drives that count to zero outside log.md too; continuation
+// citations are ratcheted by count the same way the bare-citation
+// ratchet above is, not individually resolved through `checkLineCitation`
+// below, since the historical spelling never carried its own anchor for
+// that function to check.
 //
 // CITATION GRAMMAR this guard enforces (see the "Citation convention"
 // note near the top of docs/decisions/2026-08-27-ug-auto-mode-approval.md):
@@ -60,7 +68,7 @@ import { afterAll, describe, expect, it } from "vitest";
 // the END line says, but a range that grows without disturbing the
 // uniqueness of its own anchor can still drift at the start.
 //
-// SAME-ANCHOR-WRONG-RANGE LIMIT (task `ea733314` / T-006, ACCEPTED, not
+// SAME-ANCHOR-WRONG-RANGE LIMIT (task `ea733314`, ACCEPTED, not
 // implemented): check (f) only requires the anchor text to be unique
 // WITHIN the citing range itself; it does not require the anchor to be
 // unique ACROSS the target file or across other citations that reuse the
@@ -69,9 +77,9 @@ import { afterAll, describe, expect, it } from "vitest";
 // as long as its own claimed range happens to contain exactly one
 // occurrence of that phrase. PR #537's review flagged this with a
 // measured example still live in the current bundle: `docs/okf/
-// manifest-validation-scope.md` cites 11 different `src/cli/*` ranges
-// with the anchor `#"EX_FAIL"` and 4 different ranges with
-// `#"return diags"` (both are literal return-statement/throw-argument
+// manifest-validation-scope.md` cites `#"EX_FAIL"` 11 times across 8
+// distinct `src/cli/*` ranges, and `#"return diags"` 4 times across 4
+// distinct ranges (both are literal return-statement/throw-argument
 // tokens that recur verbatim across many unrelated functions in
 // `src/cli/validate/checks.ts` and `src/cli/{add,remove}/index.ts`), so a
 // citation using either anchor could have its N-M range silently
@@ -81,9 +89,9 @@ import { afterAll, describe, expect, it } from "vitest";
 // would require a uniqueness rule across a window of nearby lines or
 // across the whole target file, which risks false positives against
 // every other currently-passing low-specificity anchor in the bundle
-// (measured, not attempted, in this round: `docs/okf/log.md`'s
-// `ea733314` entry records the decision and the two counts above).
-// Accepted as a known, recorded limit rather than implemented this round.
+// (measured, not attempted: `docs/okf/log.md`'s `ea733314` entry
+// records the decision and the two counts above). Accepted as a known,
+// recorded limit, not implemented.
 
 const REPO_ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 const DECISIONS_DIR = path.join(REPO_ROOT, "docs", "decisions");
@@ -119,7 +127,7 @@ const CITATION_RE = new RegExp(
 // (B) a standalone, path-less `` `:N` `` or `` `:N-M` `` token in its own
 //     backtick span, continuing the nearest FULL citation (governing,
 //     via CITATION_RE or via (A)'s own governing segment) appearing
-//     earlier in the same line, e.g. `` `src/cli/add/index.ts:77-125` ``
+//     earlier in the document, e.g. `` `src/cli/add/index.ts:77-125` ``
 //     followed later in the same paragraph by `` `:103-116` ``, `` `:110` ``.
 //     Unlike (A), a bare governing citation with no comma tail (e.g.
 //     `` `src/cli/add/index.ts:77-125` `` alone) already matches
@@ -1207,7 +1215,7 @@ describe("docs/okf bare (unanchored) line citations into non-Markdown sources: r
 });
 
 // ---------------------------------------------------------------------------
-// Continuation-form citation guard (task `ea733314`, T-006). See the
+// Continuation-form citation guard (task `ea733314`). See the
 // CONTINUATION_COMMA_CHAIN_RE / CONTINUATION_BARE_RE / extractContinuationCitations
 // comment above for the grammar. Ratcheted the same way `collectBareNonMd`
 // ratchets bare `path:N` citations above: zero outside `docs/okf/log.md`,
@@ -1290,6 +1298,64 @@ describe("docs/okf continuation-form citations (`:N`/`:N-M` chained to a governi
     expect(planted[0]?.startLine).toBe(20);
     expect(planted[0]?.endLine).toBe(25);
     expect(planted[0]?.anchor).toBeUndefined();
+  });
+
+  // Fixture (a) (mutation probe P-3 target): a spelling-(B) bare token with
+  // NO governing citation anywhere earlier in the text is unresolvable and
+  // must not be counted (SCOPE NOTE above). This pins the `governingPath
+  // === undefined` guard directly: a mutant that assigns a dummy governing
+  // path there instead of skipping the token would make this fixture find
+  // one continuation instead of zero, independent of whether the live
+  // docs/okf bundle happens to carry an unresolvable token today.
+  it("fixture: a planted bare `:N` continuation with no governing citation anywhere earlier is not counted (mutation probe P-3 target)", () => {
+    const plantedDocText = "Planted: see `:110` with no governing citation.\n";
+    const planted = extractContinuationCitations("fixture-scratch.md", plantedDocText);
+    expect(planted, JSON.stringify(planted)).toHaveLength(0);
+  });
+
+  // Fixture (b) (mutation probe P-4 target): governingPath persists ACROSS
+  // LINES within one call, per the SCOPE NOTE ("resets at nothing"). A
+  // governing full citation on one line and a spelling-(B) bare token on a
+  // LATER, non-adjacent line still resolves to the earlier governing path.
+  // This pins the cross-line persistence directly: a mutant that resets
+  // governingPath at the start of each line (instead of carrying it across
+  // the whole `lines.forEach` scan) would make this fixture find zero
+  // continuations instead of one.
+  it("fixture: a planted bare `:N-M` continuation resolves to a governing citation stated on an earlier, non-adjacent line (mutation probe P-4 target)", () => {
+    const plantedDocText =
+      'See `src/planted-example.ts:1-2#"anchor"` for detail.\n' +
+      "An unrelated line in between, no citation here.\n" +
+      "Also see `:20-25` later in the document.\n";
+    const planted = extractContinuationCitations("fixture-scratch.md", plantedDocText);
+    expect(planted, JSON.stringify(planted)).toHaveLength(1);
+    expect(planted[0]?.citedPath).toBe("src/planted-example.ts");
+    expect(planted[0]?.startLine).toBe(20);
+    expect(planted[0]?.endLine).toBe(25);
+    expect(planted[0]?.anchor).toBeUndefined();
+  });
+
+  // Fixture (c) (mutation probe P-5 target): the stated grammar boundaries
+  // for spelling (A) -- a comma tail inside the SAME backtick span as the
+  // governing citation, `path:N(-M)(,N2(-M2))+` with no characters other
+  // than digits, commas and dashes inside the tail. Neither of these two
+  // near-miss spellings is part of the grammar CONTINUATION_COMMA_CHAIN_RE
+  // states above, and both are asserted NOT collected: a trailing anchor on
+  // the whole span (`path:N,M-M2#"anchor"`, which the historical spelling
+  // never carried, per the (A)/(B) comment above) and a chain written with
+  // a space after the comma (the historical spelling never carried
+  // whitespace inside the span either). A mutant that loosens
+  // CONTINUATION_COMMA_CHAIN_RE to accept either shape would make one of
+  // these fixtures find a continuation instead of zero.
+  it("fixture: a comma chain with a trailing anchor on the whole span is not collected (grammar boundary, mutation probe P-5 target)", () => {
+    const plantedDocText = 'See `src/planted-example.ts:1,5-6#"x"` for detail.\n';
+    const planted = extractContinuationCitations("fixture-scratch.md", plantedDocText);
+    expect(planted, JSON.stringify(planted)).toHaveLength(0);
+  });
+
+  it("fixture: a comma chain written with a space after the comma is not collected (grammar boundary, mutation probe P-5 target)", () => {
+    const plantedDocText = "See `src/planted-example.ts:1, 5-6` for detail.\n";
+    const planted = extractContinuationCitations("fixture-scratch.md", plantedDocText);
+    expect(planted, JSON.stringify(planted)).toHaveLength(0);
   });
 
   // Mirrors collectBareNonMd's own log-exemption fixture above: a scratch,

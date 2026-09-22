@@ -1,12 +1,16 @@
 <!--
-Negative-control fixture for task `ea733314` (T-006): a minimal excerpt
+Negative-control fixture for task `ea733314`: a minimal excerpt
 reproducing the historical comma-chained continuation spelling
 `docs/okf/pause-vs-gate-kill-switch.md` actually carried before PR #537
 re-anchored it (see `docs/okf/log.md`'s `8765987a` entry: "3 unanchored
 full citations in `pause-vs-gate-kill-switch.md`", the source paragraph
-carrying `src/cli/gate/disable.ts:31,82-88`, a single backtick span
-chaining a second range `82-88` by comma onto the governing citation's
-first range `31`). This file is a fixture only -- it is never read by
+carrying the disable.ts settings-gate citation, a single backtick span
+chaining a second range onto the governing citation's own first range
+by comma -- reproduced verbatim, in its own backtick span, in this
+fixture's body excerpt below). This header deliberately does not
+spell the citation out in its own backtick span (a live continuation
+citation in the header would double up what the body excerpt alone is
+meant to plant); this file is a fixture only -- it is never read by
 the real docs/okf ratchet describe block (which reads `docs/okf/`
 itself, not `tests/fixtures/`); it exists solely so the negative-control
 test below can copy it into a scratch docs/okf-shaped directory under
