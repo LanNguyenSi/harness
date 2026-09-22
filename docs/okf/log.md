@@ -2,6 +2,56 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-09-22T06:07:33Z, task `ea733314` (T-006): `tests/decisions-citations-resolve.test.ts`
+  now extracts continuation-form citations -- a bare, path-less line-range
+  token chained to a governing full citation stated earlier in the doc,
+  in both spellings docs/okf carried before task `8765987a` (PR #537): a
+  comma-separated tail inside the SAME backtick span as the governing
+  citation (e.g., the disable.ts settings-gate citation in the
+  pause-vs-gate-kill-switch.md doc before that PR), and a standalone
+  token in its own span continuing an earlier full citation on the same
+  line (e.g., several of the manifest asset-gate line-range citations in
+  the manifest-validation-scope.md doc before that PR) -- and ratchets
+  them to zero outside `docs/okf/log.md`, the same way the existing bare
+  path-and-line-number ratchet works. NOTE for future readers of THIS
+  entry: neither historical example above is written in its literal
+  backtick-wrapped citation form here, deliberately -- okf-kit's own
+  `citations-resolve` rule (native to this bundle, independently of the
+  vitest guard) ALSO resolves the standalone continuation spelling by
+  chaining it to the nearest earlier full citation IN DOCUMENT ORDER
+  ACROSS THE WHOLE FILE, so a literal example citation placed in a new
+  entry prepended at the top of this log becomes the (wrong) governing
+  citation for real historical continuation citations further down the
+  file, corrupting their resolution (measured: writing the literal forms
+  here reproduced the earlier round-1 837-line-range OKF-CHECK warnings
+  on citations this entry never touched). Two new negative-control
+  fixtures (`tests/fixtures/continuation-citations/manifest-validation-scope.md`,
+  `.../pause-vs-gate-kill-switch.md`, minimal excerpts reproducing each
+  file's actual pre-PR-#537 spelling, in their own scratch-only files
+  rather than in this log) prove the extractor still catches a
+  reintroduction, by generated test name, in a scratch copy. False-positive
+  measurement over the CURRENT `docs/okf` and `docs/decisions` bundles: 12
+  continuation-shaped matches total, all inside `log.md` (0 outside it, 0
+  in `docs/decisions`); of the 12, 8 are genuine continuation citations
+  (mechanically indistinguishable from, and matching, the historical
+  grammar) and 4 are this log's own "old range -> new range" re-point
+  prose entries (an earlier round's own line-range updates, written with
+  an arrow), not citations, that incidentally share the bare line-range
+  shape; both counts are harmless because `log.md` is prose-exempt from
+  the ratchet already (the same honest-coverage tradeoff the file's own
+  mechanical-extractor disclaimer already documents for the primary
+  citation grammar). No excluded matches (version numbers, timestamps)
+  were found in either bundle. SAME-ANCHOR-WRONG-RANGE limit (PR #537
+  review): accepted, not implemented this round; `docs/okf/manifest-validation-scope.md`
+  reuses the anchor text `EX_FAIL` across 11 different citations and the
+  anchor text `return diags` across 4, the measured example of a
+  low-specificity anchor recurring often enough that a wrong-range
+  citation using it would still pass check (f)'s within-range uniqueness
+  test; see the docblock note above `checkLineCitation` in the test file
+  for the full reasoning. `HARNESS-VERIFY` green; `OKF-CHECK(harness)`
+  (with `--require-anchors`) 0 errors / 0 warnings; no `src/**` or other
+  `docs/okf/*.md` content touched (this entry only).
+
 - 2026-09-21T04:55:32Z, task `8765987a`: converted every bare `path:N[-M]`
   line citation in `docs/okf/` into the anchored `path:N-M#"anchor"` form,
   including 27 comma/continuation-form citations chained off a governing
