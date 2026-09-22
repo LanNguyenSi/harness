@@ -144,7 +144,7 @@
 //    independently of this hook's child_process patching (their own
 //    mechanism is a `process.env.VITEST` check, not a spawn interception)
 //    — see the meta-test asserting that directly.
-// D6 the INFRA binaries listed below are allowlisted — real system
+// D6 the INFRA binaries listed below are allowlisted: real system
 //    infrastructure the fixture suite depends on throughout, resolved
 //    freshly per call (not a fixed path baked in at setup time) so
 //    machine-specific install locations and per-test PATH overrides both
