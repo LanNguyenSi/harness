@@ -2,30 +2,45 @@
 
 <!-- Add new entries at the top, newest first. -->
 
-- 2026-09-22T06:07:18Z, task `3a910716` (implementer): release hygiene
-  batch. Re-pointed the `` `CHANGELOG.md:141` `` citation in this file's
+- 2026-09-22T08:23:00Z, task `3a910716` (implementer): release hygiene
+  batch. Re-pointed the stale line-141 citation in this file's
   `65952a0c` entry below to `` `CHANGELOG.md:#0.57.0` `` (the sentence
-  rolled up from the not-yet-tagged section it originally cited into the
-  `0.57.0` release), and the `` `CHANGELOG.md:18` `` citation in
+  rolled up from the not-yet-tagged section it originally cited into
+  the `0.57.0` release), and the stale line-18 citation in
   `src/cli/approve/understanding.ts`'s `validatePersistedReport` doc
-  comment to `` `CHANGELOG.md:#0.28.0` `` (read via `git log -p
-  -S'CHANGELOG.md:18' -- src/cli/approve/understanding.ts`: at commit
-  `5bc2adac9` that added the citation, `CHANGELOG.md:18` was already
+  comment to `` `CHANGELOG.md:#0.28.0` `` (read via a `git log -p -S`
+  pickaxe search for the stale citation string in
+  `src/cli/approve/understanding.ts`: at the
+  commit that added the citation, the stale line pointed at
   `### Fixed` under the unrelated `[0.28.1]` hotfix, not the "prompt is
-  the contract, parser is structural" design it claimed to document; the
-  `[0.28.0]` section's "Understanding Report `Prior Art` section,
+  the contract, parser is structural" design it claimed to document;
+  the `[0.28.0]` section's "Understanding Report `Prior Art` section,
   enforced" entry (#246) is the one whose text actually matches: the
   older Stop-capture parser accepted a report silently even without
-  `Prior Art`, and the prompt/schema, not the parser, is what requires
-  it). The rewrite kept the comment at its original 2-line span so no
-  citation below it in `docs/decisions/2026-08-27-ug-auto-mode-approval.md`
-  shifted; verified `src/cli/approve/understanding.ts:678` (this doc's own
-  `understanding-gate-lockout-recovery.md` citation) still reads
-  `resolveApprovalSessionId` after the edit, unchanged. `npx okf-kit@0.14.0
-  check docs/okf --require-anchors --json`: 0 errors / 0 warnings / 0
-  notices before and after (neither citation touched here was part of the
-  bundle's own anchored-citation set; both are inside prose, not a
-  `sources:`-governed line citation).
+  `Prior Art`, and 0.4.0+ enforces it). The comment's own wording now
+  states only what `[0.28.0]` documents, dropping the unsourced
+  "intentionally stays loose" design claim it carried at first; each
+  rewrite kept the comment at a 4-line span so no numbered citation
+  below it shifted; verified `src/cli/approve/understanding.ts:678`
+  (this doc's own `understanding-gate-lockout-recovery.md` citation)
+  still reads `resolveApprovalSessionId` after the edits, unchanged.
+
+  An earlier `npx okf-kit@0.14.0 check docs/okf --require-anchors
+  --json` measurement was taken before committing the
+  `understanding.ts` edit above, not against the committed tree
+  okf-kit actually reads a source's commit time from, and so recorded
+  a false "0 errors / 0 warnings / 0 notices before and after": at
+  that commit's head, `understanding-gate-lockout-recovery.md` lists
+  `src/cli/approve/understanding.ts` as a `sources:` entry without
+  having been re-stamped past the commit that last touched it, and the
+  same command against that committed tree actually reported 1 warning
+  (plain and with `--require-anchors`), not 0.
+  `understanding-gate-lockout-recovery.md`'s `timestamp:` is now
+  re-stamped to a time after the commit that last touches
+  `src/cli/approve/understanding.ts` in this batch, and
+  re-verified against the newly committed tree; the fresh measurement
+  is recorded in the implementer return for this task, not claimed
+  here in advance.
 
 - 2026-09-21T04:55:32Z, task `8765987a`: converted every bare `path:N[-M]`
   line citation in `docs/okf/` into the anchored `path:N-M#"anchor"` form,
