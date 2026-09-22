@@ -158,9 +158,10 @@ export type NullVerdictReading = "live-attempt" | "never-evaluated" | "unreadabl
 
 /**
  * Three-valued liveness read, never a boolean: `"live"`, `"not-live"` (no
- * lock directory: `checkFileLock` maps a bare `ENOENT` to this), or
- * `"unknown"` (`checkFileLock`'s underlying check threw anything else: an
- * unreadable directory, a symlink loop, ...). `"unknown"` must never be
+ * lock directory, or one past the stale window: `proper-lockfile`'s own
+ * check answers `false` for both, swallowing the absent-lock `ENOENT`
+ * inside the library), or `"unknown"` (the check threw: an unreadable
+ * directory, a symlink loop, ...). `"unknown"` must never be
  * treated as `"not-live"` downstream: that would assert an attempt is
  * confirmed absent when liveness simply could not be determined (see
  * `classifyNullVerdictReading` and `nullVerdictReadingNote` below, which
@@ -244,6 +245,12 @@ function nullVerdictReadingNote(taskId: string, info: NullVerdictInfo): string {
     info.liveness === "unknown" ? "liveness could not be determined" : "no attempt reads as currently live";
   switch (info.reading) {
     case "never-evaluated":
+      if (info.liveness === "unknown") {
+        // Neither axis is established here: the marker probe folds an
+        // unreadable verdict directory into "missing", and the lock check
+        // threw, so the note asserts nothing about either.
+        return `No readable verdict marker for "${taskId}" and liveness could not be determined: the verdict directory could not be read. Check the verdict directory, then run solution_evaluate for this id.`;
+      }
       return `No verdict marker exists for "${taskId}"; ${clause}: solution_evaluate has not (yet) been called for this id, or a prior call never got far enough to record one.`;
     case "unreadable-marker":
       return `A verdict marker exists for "${taskId}" but could not be read or parsed; ${clause}: re-run solution_evaluate to record a fresh one.`;

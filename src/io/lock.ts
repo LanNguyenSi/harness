@@ -16,9 +16,10 @@ export interface CheckLockOptions {
 /**
  * Three-valued read of a lock's liveness, never a boolean: `"live"` (the
  * `proper-lockfile` `.lock` directory exists and is not yet stale under
- * the given `staleMs`), `"not-live"` (no lock directory at all:
- * `checkSync` throws `ENOENT`), or `"unknown"` (`checkSync` threw
- * anything else: an unreadable parent directory, a symlink loop, ...). A
+ * the given `staleMs`), `"not-live"` (no lock directory at all, or a stale
+ * one: `checkSync` answers `false` for both and swallows the absent-lock
+ * `ENOENT` inside the library), or `"unknown"` (`checkSync` threw: an
+ * unreadable parent directory, a symlink loop, ...). A
  * caller must not collapse `"unknown"` into `"not-live"`: that would
  * assert the lock is free when the check simply could not tell.
  */
@@ -69,8 +70,10 @@ export function checkFileLock(lockPath: string, options: CheckLockOptions = {}):
       realpath: false,
     });
     return live ? "live" : "not-live";
-  } catch (err) {
-    return (err as NodeJS.ErrnoException)?.code === "ENOENT" ? "not-live" : "unknown";
+  } catch {
+    // proper-lockfile's check never throws for an absent lock (it answers
+    // false); anything that does throw is an undetermined state.
+    return "unknown";
   }
 }
 

@@ -7,8 +7,10 @@
 //      `renderReconnectInstructionsSection`.
 //   2. `blockJson` (../../cli/pack/hook-solution-acceptance.ts) renders the
 //      agent-facing deny paragraph from `renderReconnectDenyParagraph`,
-//      shown only when `gate.verdict === null` (no readable verdict
-//      marker: covers three readings, see `RECONNECT_THREE_READINGS_LABELS`
+//      shown only when `gate.verdict === null` AND the hook detected
+//      reading (2), a live attempt-lock (see `reconnectGuidanceFor` in
+//      hook-solution-acceptance.ts; the three readings are listed in
+//      `RECONNECT_THREE_READINGS_LABELS`
 //      below).
 //
 // Both renderers are built from the SAME fact constants below (not just
@@ -108,7 +110,8 @@ function threeReadingsClause(taskId: string): string {
 /**
  * Compact paragraph appended to the completion-gate's deny reason
  * (`blockJson` in hook-solution-acceptance.ts) when `gate.verdict ===
- * null`. Renders the SAME fact constants as
+ * null` AND the hook detected reading (2), a live attempt-lock
+ * (`reconnectGuidanceFor`). Renders the SAME fact constants as
  * `renderReconnectInstructionsSection` below.
  */
 export function renderReconnectDenyParagraph(taskId: string): string {

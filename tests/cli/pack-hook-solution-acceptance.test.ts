@@ -297,7 +297,7 @@ describe("completion-gate — decision matrix", () => {
       expect(reason).not.toMatch(/With grounding-mcp >= 0\.11\.0:/);
     });
 
-    // Overlap fixture (mutation probe P-6, priority): a LIVE attempt-lock
+    // Overlap fixture (priority): a LIVE attempt-lock
     // coexisting with a co-present, unparseable marker for the SAME id (an
     // earlier attempt's stale/corrupt leftover, or a marker write racing a
     // fresh attempt). `classifyNullVerdictReading` checks liveness FIRST, so
@@ -325,7 +325,7 @@ describe("completion-gate — decision matrix", () => {
       expect(reason).not.toContain('No verdict marker exists for "task-42"');
     });
 
-    // Indeterminate liveness on reading (3) (mutation probe P-7): a
+    // Indeterminate liveness on reading (3): a
     // co-present unparseable marker, but the `.lock` path itself cannot be
     // statted at all (a self-referential symlink: `fs.statSync` throws
     // `ELOOP`, not `ENOENT`). `checkFileLock` must read this "unknown", and
@@ -366,17 +366,17 @@ describe("completion-gate — decision matrix", () => {
       // rendered output verbatim, not by hand-restating its sentences as
       // separate substrings here (a hook-side copy that had drifted from
       // the module by one word still satisfied every hand-restated
-      // substring below, so P-3 survived). A byte-identical copy is
+      // substring below, so a copy survived). A byte-identical copy is
       // unobservable by construction and is not itself a probe; what this
       // containment assertion actually discriminates is a hook that stops
       // calling `renderReconnectDenyParagraph` and inlines its own text
-      // instead (P-3: the call site patched to a literal copy differing by
+      // instead (the call site patched to a literal copy differing by
       // one word no longer produces a `reason` that contains this exact
       // string).
       expect(reason).toContain(renderReconnectDenyParagraph(TASK));
     });
 
-    // Stale-lock regression (mutation probe P-2): a lock directory left by a
+    // Stale-lock regression: a lock directory left by a
     // DEAD process (mtime past ATTEMPT_LOCK_STALE_MS, grounding-mcp's own
     // DEFAULT_ATTEMPT_LOCK_STALE_MS = 30_000, solution-attempt-log.ts:102 at
     // v0.12.0) must NOT read as live: otherwise a crashed attempt would
@@ -394,7 +394,7 @@ describe("completion-gate — decision matrix", () => {
       expect(reason).not.toMatch(/Reconnecting vs\. retrying/);
     });
 
-    // Error-path regression (mutation probe P-4, replayed): `checkFileLock`
+    // Error-path regression: `checkFileLock`
     // (`src/io/lock.ts`) must read "unknown", not "live" and not silently
     // "not-live", when its underlying `checkSync` throws something other
     // than ENOENT. Pointing `verdictDir` at a REGULAR FILE forces this:
@@ -420,6 +420,17 @@ describe("completion-gate — decision matrix", () => {
       expect(reason).not.toContain("is still live");
       expect(reason).not.toMatch(/no attempt reads as currently live/);
       expect(reason).toMatch(/liveness could not be determined/);
+      // Neither axis is established, so the note asserts neither.
+      expect(reason).not.toContain('No verdict marker exists for "task-42"');
+      expect(reason).not.toMatch(/has not \(yet\) been called/);
+    });
+
+    it("pins the stale window to the producer's documented default (30 s)", () => {
+      // grounding-mcp-v0.12.0 solution-attempt-log.ts:102, DEFAULT_ATTEMPT_LOCK_STALE_MS.
+      // A narrower window would read a live attempt (mtime refreshed every
+      // stale/2 by proper-lockfile) as stale; the stale fixture above only
+      // catches widenings.
+      expect(ATTEMPT_LOCK_STALE_MS).toBe(30_000);
     });
 
     // `realpath: false` regression: making `liveAttemptLock` above acquire

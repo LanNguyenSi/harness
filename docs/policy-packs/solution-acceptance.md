@@ -275,9 +275,13 @@ producer's own `acquireAttemptLock` call; with the library default
 `realpath: true` a check on an anchor that was never created, the common
 "never evaluated" case, throws `ENOENT` resolving the anchor FILE's own
 realpath instead of answering the ordinary "not locked" case). The
-result is `"live"`, `"not-live"` (no lock directory: `checkFileLock` maps
-a bare `ENOENT` to this), or `"unknown"` (the underlying check threw
-anything else: an unreadable directory, a symlink loop, ...).
+result is `"live"`, `"not-live"` (no lock directory, or a stale one: the
+library's own check answers `false` for both and swallows the absent-lock
+`ENOENT` internally), or `"unknown"` (the underlying check threw: an
+unreadable directory, a symlink loop, ...). For reading (1) with
+`"unknown"` liveness the note asserts neither a missing marker nor an
+absent attempt, since an unreadable verdict directory reads as "missing"
+on the marker axis too.
 `checkFileLock` never acquires the lock, so there is nothing to release
 or restore.
 
