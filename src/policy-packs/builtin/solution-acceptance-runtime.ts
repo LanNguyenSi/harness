@@ -351,24 +351,46 @@ export function resolveExplicitVerdictId(
 }
 
 /**
- * Read + validate the verdict marker for `id`, or null when it is absent,
- * unparseable, a symlink, or not a regular file. The symlink-rejecting read
- * is the shared `src/io/read-regular-file.ts` helper (same defense-in-depth
- * as `checkApprovalMarker` against a symlink planted at the marker path
- * pointing at agent-controlled content).
+ * WHY the verdict marker for an id yielded no verdict, as ONE observation.
+ * `readVerdict` below answers `null` for every non-`ok` kind, which is all
+ * the gate DECISION needs; the deny TEXT needs to say which one, and must
+ * not learn it from a second look at the path. A second look can disagree
+ * with the first (a background attempt finishing in between is exactly the
+ * case this pack exists for), and a note rendered from the later one then
+ * describes a rejection the gate never made: it would tell the agent its
+ * fresh marker was refused when the gate had simply not seen it yet
+ * (review finding, harness/799de976, round 6). Both consumers therefore
+ * read through this one function.
  */
-export function readVerdict(dir: string, id: string): Verdict | null {
+export type VerdictReadOutcome =
+  | { kind: "ok"; verdict: Verdict }
+  | { kind: "invalid-id" }
+  | { kind: "missing" }
+  | { kind: "symlink" }
+  | { kind: "not-regular" }
+  | { kind: "unreadable" }
+  | { kind: "invalid-record" };
+
+/**
+ * Read + validate the verdict marker for `id` in ONE filesystem
+ * observation, reporting the outcome instead of collapsing it. The
+ * symlink-rejecting read is the shared `src/io/read-regular-file.ts`
+ * helper (same defense-in-depth as `checkApprovalMarker` against a symlink
+ * planted at the marker path pointing at agent-controlled content), and
+ * its four non-ok kinds pass straight through, so this outcome set cannot
+ * drift from the reader's own. `invalid-record` is the one kind added on
+ * top: a regular file that WAS read but is not a verdict (unparseable
+ * JSON, or JSON missing one of the three required fields).
+ */
+export function readVerdictDetailed(dir: string, id: string): VerdictReadOutcome {
   let p: string;
   try {
     p = verdictPathFor(dir, id);
   } catch {
-    return null; // invalid id
+    return { kind: "invalid-id" };
   }
-  // Shared symlink-rejecting read (src/io/read-regular-file.ts); every
-  // non-ok kind (missing / symlink / not-regular / unreadable) closes the
-  // gate via null, matching the pre-extraction behavior.
   const read = readRegularFileRejectingSymlink(p);
-  if (read.kind !== "ok") return null;
+  if (read.kind !== "ok") return { kind: read.kind };
   try {
     const parsed = JSON.parse(read.content) as Partial<Verdict>;
     if (
@@ -376,26 +398,40 @@ export function readVerdict(dir: string, id: string): Verdict | null {
       typeof parsed.head !== "string" ||
       typeof parsed.ready !== "boolean"
     ) {
-      return null;
+      return { kind: "invalid-record" };
     }
     return {
-      id: parsed.id,
-      head: parsed.head,
-      ready: parsed.ready,
-      confidence: typeof parsed.confidence === "number" ? parsed.confidence : 0,
-      blockers: Array.isArray(parsed.blockers) ? parsed.blockers : [],
-      timestamp: typeof parsed.timestamp === "string" ? parsed.timestamp : "",
-      source: typeof parsed.source === "string" ? parsed.source : "",
-      // Optional (harness/c7c3f606): absent on a legacy/unsigned producer
-      // marker. `evaluateGate` treats that absence as forged/unsigned, not
-      // as a parse failure — the 7 fields above are still ALL a marker
-      // needs to parse successfully; signing is a separate, later gate.
-      alg: typeof parsed.alg === "string" ? parsed.alg : undefined,
-      signature: typeof parsed.signature === "string" ? parsed.signature : undefined,
+      kind: "ok",
+      verdict: {
+        id: parsed.id,
+        head: parsed.head,
+        ready: parsed.ready,
+        confidence: typeof parsed.confidence === "number" ? parsed.confidence : 0,
+        blockers: Array.isArray(parsed.blockers) ? parsed.blockers : [],
+        timestamp: typeof parsed.timestamp === "string" ? parsed.timestamp : "",
+        source: typeof parsed.source === "string" ? parsed.source : "",
+        // Optional (harness/c7c3f606): absent on a legacy/unsigned producer
+        // marker. `evaluateGate` treats that absence as forged/unsigned, not
+        // as a parse failure: the 7 fields above are still ALL a marker
+        // needs to parse successfully; signing is a separate, later gate.
+        alg: typeof parsed.alg === "string" ? parsed.alg : undefined,
+        signature: typeof parsed.signature === "string" ? parsed.signature : undefined,
+      },
     };
   } catch {
-    return null;
+    return { kind: "invalid-record" };
   }
+}
+
+/**
+ * Read + validate the verdict marker for `id`, or null when it is absent,
+ * unparseable, a symlink, or not a regular file: `readVerdictDetailed`
+ * above with the reason dropped. Behaviour is unchanged for every caller
+ * that only needs the gate decision.
+ */
+export function readVerdict(dir: string, id: string): Verdict | null {
+  const read = readVerdictDetailed(dir, id);
+  return read.kind === "ok" ? read.verdict : null;
 }
 
 export interface GateResult {

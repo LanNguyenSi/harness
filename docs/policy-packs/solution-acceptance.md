@@ -171,29 +171,16 @@ Two candidate surfaces were considered:
 Decision: the completion-gate's deny text is the surface. Implemented in
 `blockJson`, gated on `gate.verdict === null` (the `evaluateGate` branch
 whose reason is `no solution-acceptance verdict recorded for "<id>"`).
-That single condition covers THREE readings, deliberately left unresolved
-here: "`solution_evaluate` was never called for this id"; "an attempt for
-this id is still running in the background"; and "a marker exists but
-`readVerdict` rejected it" (an invalid id, a symlinked marker, a
-non-regular file, an unreadable file, malformed JSON, or a body missing
-`id`/`head`/`ready`). grounding-mcp >= 0.11.0's README documents an
-attempt-lock anchor that would let the hook rule out the "still running"
-reading (`<verdict dir>/<id>.attempt-lock`, mode `0600`, beside the
-`<id>.attempt-lock.lock` directory `proper-lockfile` manages, from which
-the producer itself derives its own `running-unconfirmed` status), but
-this change does not read it: doing so is a second cross-repo coupling to
-the producer's lock-file layout, with its own stale-lock semantics to
-absorb, out of scope for a text-surface change (follow-up: narrow this
-paragraph to the in-flight case by reading that lock anchor). Rather than
-let an agent read "no readable verdict marker" as licence to call
-`solution_evaluate` again, the SAME deny carries the reconnect-vs-retry
-facts regardless of which reading applies. The shared renderer owns the
-exact wording: `RECONNECT_FACT_RECONNECT_BY_ID` covers the lookup tools
-and `attemptId`; `RECONNECT_FACT_JOIN_NOT_RETRY` covers joining a live
-attempt and `forceNewAttempt`; `RECONNECT_FACT_POLL_AND_RETENTION` owns
-the poll and retention terms. See
-`src/policy-packs/builtin/solution-acceptance-reconnect.ts` rather than
-restating its numeric constants here.
+That single condition covers three readings: never evaluated, an attempt
+still running, or a marker `readVerdict` rejected. Which reading applies
+for a given denial, and which of them gets the full reconnect-vs-retry
+paragraph versus a short reading-named line, is detected and documented
+once, in "Reading the attempt-lock anchor to distinguish the three
+readings" below; this subsection is about WHY the deny text is the
+chosen surface, not WHAT it renders for each reading, so it stops short
+of restating that detection logic or its exclusion list here (an earlier
+version of this doc did both, in two places, and the two drifted apart
+across review rounds).
 
 The guidance does NOT appear on a not-ready or stale verdict deny: both
 mean a run already completed and produced a marker, so there is no
@@ -206,12 +193,7 @@ pre-existing pack behavior, unchanged here). `instructions.md`
 (`buildInstructions`) stays the audit copy documented above; it renders
 its own "Reconnecting vs. retrying" section verbatim, but that section
 is no longer written by hand separately from this deny paragraph (see
-"Review round 3 redesign (fixing the round-2 findings): one shared fact source" below). Pinned by
-`tests/cli/pack-hook-solution-acceptance.test.ts` ("the no-verdict deny
-carries the reconnect-vs-retry facts...", including the "joins"
-assertion added in review round 2 against the earlier "refuses a second
-call" misstatement, plus the not-ready/stale/no-verdict-id/
-manifest-load-failure tests' negative assertions).
+the shared reconnect-fact-source redesign further below).
 
 ### Review round 3 redesign (fixing the round-2 findings): one shared fact source (harness/5c9cad05)
 
@@ -241,10 +223,13 @@ asserts each fact constant appears verbatim in both rendered surfaces
 updates one surface but not the other fails that test instead of
 shipping a silent drift.
 
-This module also does not read the documented attempt-lock anchor (the
-same scope decision described above): it names all three
-`gate.verdict === null` readings rather than claiming the hook has no
-signal at all to distinguish them.
+This module (`solution-acceptance-reconnect.ts`) does not itself read the
+documented attempt-lock anchor: it names all three `gate.verdict === null`
+readings in its rendered prose (`RECONNECT_THREE_READINGS_LABELS`) rather
+than claiming the paragraph alone has any signal to distinguish them:
+that reading now happens one layer up, in the hook (see the attempt-lock
+anchor section below), which decides WHICH of the three applies before
+deciding whether to append this paragraph at all.
 
 The rendered `instructions.md` "Reconnecting vs. retrying" section's
 wording changed where the shared source now renders it (the surrounding
@@ -255,6 +240,169 @@ as a stall workaround" sentence stays pinned by
 `tests/policy-packs/solution-acceptance-expand.test.ts`), and the poll
 interval / retention bounds, now phrased through the shared fact
 constants instead of restated by hand.
+
+### Reading the attempt-lock anchor to distinguish the three readings (harness/799de976)
+
+The shared-fact-source redesign above still left the three `gate.verdict === null`
+readings unresolved in the deny text: the SAME paragraph fired for all
+three, naming them only inside its own prose. The follow-up it named
+("narrow this paragraph to the in-flight case by reading that lock
+anchor") is now implemented, entirely inside `hook-solution-acceptance.ts`
+(`classifyNullVerdictReading`, `readAttemptLockLiveness`): the
+reconnect-vs-retry paragraph (`renderReconnectDenyParagraph`, still owned
+by `solution-acceptance-reconnect.ts`) is appended only for reading (2),
+"an attempt is live"; readings (1) ("never evaluated") and (3) ("a marker
+path exists but what is there was not accepted as a verdict") instead get
+a short, state-specific line (`nullVerdictReadingNote`) with no reconnect
+paragraph.
+
+**An unusable id is settled before anything is read.** Both derived paths
+(the marker path and the attempt-lock anchor) go through the same
+`sanitizeVerdictId`, so an id it rejects (`.`, `..`, or anything whose
+basename sanitizes to empty, reachable from an active claim: the
+`SOLUTION_VERDICT_ID` path validates through the same function and
+answers null instead) has NO marker path and NO anchor path, and none of
+the three readings applies to it. `classifyNullVerdictReading` therefore
+answers a separate `kind: "unusable-id"` state, modelled as a union
+member without a `liveness` field so that "the id was unusable" cannot be
+rendered as "a path could not be read"; its note states that one fact,
+points at the active claim, and asks for a usable id rather than
+repeating `solution_evaluate` for an id that can never be accepted.
+
+**Detection.** After id usability, `classifyNullVerdictReading` checks
+liveness BEFORE the marker outcome (a live
+attempt can coexist with a stale or corrupt marker left by an earlier run
+for the same id, and "reconnect" is the actionable reading in that
+overlap: pinned by a dedicated overlap fixture, a held lock plus a
+co-present unparseable marker, in
+`tests/cli/pack-hook-solution-acceptance.test.ts`), then splits "never
+evaluated" from "unreadable marker" by the outcome of the read the GATE
+already made.
+
+**The marker is observed once, not twice.** `readVerdictDetailed`
+(`solution-acceptance-runtime.ts`) reports WHY a read yielded no verdict
+(`invalid-id`, `missing`, `symlink`, `not-regular`, `unreadable`,
+`invalid-record`, the shared reader's own four kinds plus one), and the
+hook passes that single outcome into the classifier. `readVerdict` is the
+same function with the reason dropped, so every caller that only needs the
+gate decision is unchanged. The earlier design read the marker at the
+decision site and then probed the path again a few statements later
+(`probePathPresence`) to classify it; the two could disagree, because a
+background `solution_evaluate` attempt finishing in that window is exactly
+the case this pack exists for. The note then told the agent its fresh
+marker had been REJECTED when the gate had simply not seen it yet, and the
+remedy it offered ("re-run `solution_evaluate`") was wrong for that state
+(review finding, harness/799de976, round 6). No fixture could have caught
+it, since a fixture holds the filesystem still; the fix removes the second
+observation rather than adding a test for the race.
+
+**One line per rejection kind.** Reading (3) no longer restates a
+disjunction over the ways a marker can be refused ("not a regular file,
+unreadable, or not a valid verdict record"). Each kind renders its own
+line naming what the gate's read established: a symlink refused by policy
+without being read, a path that is not a regular file, a file that could
+not be read, and a file that was read but is not a valid verdict record.
+The lines live in a `Record` keyed by `NULL_VERDICT_NOTE_STATES`, so a
+state added to that list without a line fails the build, and the state
+table's coverage test fails when a listed state has no fixture.
+
+**Liveness is three-valued, not boolean.** `readAttemptLockLiveness`
+reads `<verdict dir>/<id>.attempt-lock` through `src/io/lock.ts`'s
+`checkFileLock`, the designated read-only wrapper around
+`proper-lockfile`'s own `checkSync` (already a harness runtime
+dependency, so this adds none), with `realpath: false` (mirroring the
+producer's own `acquireAttemptLock` call; with the library default
+`realpath: true` a check on an anchor that was never created, the common
+"never evaluated" case, throws `ENOENT` resolving the anchor FILE's own
+realpath instead of answering the ordinary "not locked" case). The
+result is `"live"`, `"not-live"` (no lock directory, or a stale one: the
+library's own check answers `false` for both and swallows the absent-lock
+`ENOENT` internally), or `"unknown"` (the underlying check threw: an
+unreadable directory, a symlink loop, ...). For reading (1) with
+`"unknown"` liveness the note asserts neither a missing marker nor an
+absent attempt, and names no cause at all: the marker probe folds every
+`lstat` failure into "missing", and the check can throw for the verdict
+directory, for the attempt-lock path alone, or for something else again,
+which this hook does not tell apart. Four review rounds each replaced one
+guessed cause in this line with a narrower guess that the next reachable
+state falsified, so the line now names none.
+`checkFileLock` never acquires the lock, so there is nothing to release
+or restore.
+
+`"unknown"` is never collapsed into `"not-live"`: doing so would assert
+an attempt is confirmed absent when liveness simply could not be
+determined. Readings (1) and (3)'s notes (`nullVerdictReadingNote`) name
+what was actually observed instead, "no attempt reads as currently live"
+for a genuine `"not-live"` read versus "liveness could not be
+determined" for `"unknown"`; neither wording claims the attempt is
+confirmed absent on `"unknown"`. Pinned by a dedicated indeterminate-liveness
+fixture (a co-present unparseable marker plus a `.lock` path whose `stat`
+throws `ELOOP`, via a self-referential symlink) and by the pre-existing
+ENOTDIR regression (`verdictDir` pointed at a regular file), both in
+`tests/cli/pack-hook-solution-acceptance.test.ts`.
+
+**The stale-lock rule, and its source.** A lock directory
+`proper-lockfile` left behind by a DEAD process must eventually stop
+counting as "live", or a crashed attempt would wedge the reconnect
+paragraph in front of every future denial for that id forever (nothing
+else ever removes that directory). The rule is not independently chosen:
+it is `proper-lockfile`'s own staleness formula
+(`lib/lockfile.js` `isLockStale`, `stat.mtime.getTime() < Date.now() -
+options.stale`) applied with the producer's own DOCUMENTED default
+window, `DEFAULT_ATTEMPT_LOCK_STALE_MS = 30_000`
+(`grounding-mcp-v0.12.0`, `packages/grounding-mcp/src/solution-attempt-log.ts:102`),
+the `staleMs` value `acquireAttemptLock` passes straight through to
+`lockfile.lock(anchor, { retries: 0, realpath: false, stale:
+options.staleMs, ... })` (same file, lines 472-475) on every DEFAULT
+acquisition. This hook applies the producer's documented default window
+pinned to `grounding-mcp-v0.12.0`; it diverges from what the producer
+actually enforces for a given attempt if that default changes in a later
+grounding-mcp release, or if a caller of `acquireAttemptLock` overrides
+`staleMs` away from the default (the producer's own option is
+caller-settable, same file), since neither is observable from this side
+of the lock. See `ATTEMPT_LOCK_STALE_MS` in
+`hook-solution-acceptance.ts` for the same citation inline with the
+code.
+
+**What stayed the same, and what a later fix corrected.** The reconnect
+paragraph is still rendered by `renderReconnectDenyParagraph`, still
+naming all three readings in its own prose (see the note above this
+subsection), and its shared fact constants (`RECONNECT_FACT_*`,
+`RECONNECT_VERSION_QUALIFIER`) and `renderReconnectInstructionsSection`
+are byte-identical to the shared-fact-source redesign above. Two clauses of the
+paragraph's OWN wording were corrected: it had shipped still saying "this
+hook does not read the documented attempt-lock anchor, so it cannot rule
+any of these three apart", true of the pre-799de976 behavior but false
+once the paragraph is appended only for the already-detected live-attempt
+reading; it now says the hook read the anchor and is showing the
+paragraph because it detected reading (2). `instructions.md` is
+unchanged; grounding-mcp and its lock layout are unchanged; no new
+runtime dependency was added.
+
+Pinned by `tests/cli/pack-hook-solution-acceptance.test.ts` ("gate.verdict
+=== null: three readings distinguished by the attempt-lock anchor": one
+test per reading, a dedicated stale-lock regression whose back-date is a
+literal rather than derived from the constant under test, the overlap and
+indeterminate-liveness fixtures above, and a symlinked-anchor test that
+builds its lock through the real `proper-lockfile` acquisition). The
+agent-facing wording itself is pinned by a second block in the same file
+("null-verdict deny note: one exact line per reachable state"), a state
+table carrying one exact expected line per reachable (note state,
+liveness) combination plus the assertion that no other state's line
+appears: the note's "state only what was established" invariant is
+checked mechanically there, rather than one fixture per finding as each
+round named it. Its coverage test iterates `NULL_VERDICT_NOTE_STATES` and
+fails when a listed state has no fixture, which is what makes the table a
+checklist rather than a convention; the renderer's own
+`Record<NullVerdictNoteState, ...>` covers the other direction at compile
+time. Backed further by
+the pre-existing parity/negative tests unchanged from the redesign above
+(the not-ready/stale/no-verdict-id/manifest-load-failure denies still
+carry no reconnect guidance;
+`tests/policy-packs/solution-acceptance-reconnect.test.ts` still pins the
+deny paragraph's wording against `instructions.md`); `src/io/lock.ts`'s
+own `tests/io/lock.test.ts` pins `checkFileLock`'s three-valued read
+directly (live, not-live, stale-as-not-live, and unknown via ELOOP).
 
 ### Marker signing (harness/c7c3f606)
 
