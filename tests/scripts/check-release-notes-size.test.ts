@@ -38,10 +38,15 @@ it("release.yml's ceiling literal stays pinned to CEILING", () => {
 // counting BYTES, over-counting any multi-byte UTF-8 character. A
 // mutant that drops the pin or weakens it (e.g. to plain "C") would
 // reintroduce that byte-vs-character divergence unnoticed by any other
-// test here.
+// test here. Matched WITH its trailing newline, not just the bare
+// substring: the step's own explanatory comment quotes the same
+// "LC_ALL: C.UTF-8" string in prose (backtick-fenced, no newline right
+// after it), which a bare `toContain` would keep matching even after a
+// mutant weakened the real `env:` value below - discriminating against
+// exactly that false-pass.
 it("release.yml pins LC_ALL to C.UTF-8 so wc -m counts characters, not bytes", () => {
   const releaseYml = readFileSync(join(process.cwd(), ".github/workflows/release.yml"), "utf8");
-  expect(releaseYml).toContain("LC_ALL: C.UTF-8");
+  expect(releaseYml).toContain("LC_ALL: C.UTF-8\n");
 });
 
 describe("extractVersionSection", () => {
