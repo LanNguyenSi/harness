@@ -364,6 +364,34 @@ describe("completion-gate — decision matrix", () => {
       expect(reason).toMatch(/its attempt-lock anchor does not read as currently live/);
       expect(reason).toMatch(/liveness could not be determined/);
     });
+
+    // `realpath: false` regression: making `liveAttemptLock` above acquire
+    // the REAL anchor file (fixture-fidelity fix) means the anchor now
+    // always exists in every other case here, so `realpath: true` v.
+    // `false` stopped being observable through any of them (both resolve
+    // the SAME path when the anchor is a plain file). The one case that
+    // still discriminates is a SYMLINKED anchor: `isAttemptLockLive`'s own
+    // doc comment says `realpath: false` mirrors the producer's own
+    // `acquireAttemptLock` call and stats the anchor's OWN `.lock` sibling
+    // without following a symlink first. A fresh lock dir sits at the
+    // symlink's own literal path here, not at its target's, so
+    // `realpath: true` would resolve the symlink, find no `.lock` there
+    // (ENOENT, ordinary "not locked"), and miss the live lock entirely.
+    it("a SYMLINKED attempt-lock anchor still reads its OWN (unresolved) lock, not its target's", async () => {
+      const dir = verdictDirWith(null);
+      const elsewhere = fs.mkdtempSync(path.join(os.tmpdir(), "sa-anchor-target-"));
+      cleanups.push(() => fs.rmSync(elsewhere, { recursive: true, force: true }));
+      const target = path.join(elsewhere, "unrelated-file");
+      fs.writeFileSync(target, "");
+      const anchor = path.join(dir, `${TASK}.attempt-lock`);
+      fs.symlinkSync(target, anchor);
+      fs.mkdirSync(`${anchor}.lock`, { recursive: true });
+      const { res, out } = await run({ cwd: repoAtHead(HEAD), verdictDir: dir });
+      expect(res.blocked).toBe(true);
+      const { reason } = JSON.parse(out) as { reason: string };
+      expect(reason).toContain('A solution_evaluate attempt for "task-42" is still live');
+      expect(reason).toMatch(/attempt-lock anchor is held/);
+    });
   });
 
   it("BLOCKS a not-ready verdict and surfaces the blockers", async () => {
