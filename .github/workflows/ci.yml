@@ -85,6 +85,24 @@ jobs:
         # extracted notes).
         run: npm run check:changelog-coverage
 
+      - name: README release-version sentence
+        # scripts/check-readme-release-version.mjs - README.md's "The
+        # current release is `vX.Y.Z`." sentence must name the same
+        # version as package.json. Catches a release-prep step that
+        # bumped one and forgot the other (CONTRIBUTING.md's Releasing
+        # section lists the sentence update as its own step).
+        run: npm run check:readme-release-version
+
+      - name: Release-notes size ceiling
+        # scripts/check-release-notes-size.mjs - the CHANGELOG.md section
+        # for package.json's version must stay under a size ceiling well
+        # below GitHub's release/tag body limit; release.yml runs the
+        # same measurement again at tag time (see its own "Release-notes
+        # size ceiling" step). Catching it here, before Build, means an
+        # oversized section is found during the PR rather than at the
+        # point of tagging.
+        run: npm run check:release-notes-size
+
       - name: Build
         run: npm run build
 
