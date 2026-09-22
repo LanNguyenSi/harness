@@ -481,8 +481,8 @@ export function renderMalformedSectionsNotice(sections: string[]): string | null
  * loop discovered today (2026-05-24): a `grill_me` Report must declare a
  * non-empty `priorArt` list with no literal `- None`. The structural
  * parser in `@lannguyensi/understanding-gate` intentionally stays loose
- * here (`CHANGELOG.md:18` documents the design: the prompt is the
- * contract, the parser is structural). The approve CLI is the right
+ * here (`` `CHANGELOG.md:#0.28.0` `` documents the design: the older
+ * parser accepted a report missing Prior Art silently; the prompt, not the parser, requires it). The approve CLI is the right
  * boundary to flip that loose acceptance into hard refusal, so an agent
  * cannot ship a hollow Understanding Report and still get the gate open.
  *

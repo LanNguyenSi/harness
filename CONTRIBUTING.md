@@ -72,6 +72,18 @@ The parity vitest `tests/cli/init-full-template-parity.test.ts` fails the build 
 
 ## Releasing
 
+Release prep, in order, on a branch/PR before tagging:
+
+1. `npm version --no-git-tag-version` - bumps `package.json` (and `package-lock.json`) to the new version, without creating a git tag (the tag is pushed separately, once the release commit is merged).
+2. Insert the CHANGELOG heading - turn `## [Unreleased]` into `## [Unreleased]` (kept, empty) plus a new `## [X.Y.Z] - YYYY-MM-DD` heading above the prior release, carrying the accumulated entries.
+3. Update the README release sentence - `The current release is \`vX.Y.Z\`.` must name the same version as `package.json`.
+4. Bundle re-verification - if `docs/okf/` changed or drifted, re-run its checks (`npx okf-kit@0.14.0 check docs/okf --json --require-anchors`) and re-stamp any doc whose cited source moved.
+5. Run the checks below locally (they also run in CI): `npm run check:changelog-coverage`, `npm run check:readme-release-version`, `npm run check:release-notes-size`, plus the rest of `npm run typecheck && npm run build && npm test`.
+6. Open the PR.
+7. Merge it.
+8. Read the merge commit's CI run to confirm it is green before tagging - a red merge-commit CI run means the release commit itself is broken.
+9. Push an annotated tag (`git tag -a vX.Y.Z -m vX.Y.Z && git push origin vX.Y.Z`) - this is what triggers the publish and release workflows below.
+
 Publishing is driven by `.github/workflows/publish-npm.yml`. Pushing a `v*` tag triggers it; the workflow checks the tag against `package.json`, builds, tests, then runs `npm publish --provenance`.
 
 The publish step retries up to 3 times with exponential backoff: Sigstore Rekor occasionally returns a transient `TLOG_CREATE_ENTRY` 409 (npm/cli#6892) that fails `--provenance` even when the tarball is fine. It also short-circuits when the version is already on the registry, so a re-run is safe.
