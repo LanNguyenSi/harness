@@ -32,18 +32,17 @@ import {
   DEFAULT_PUSH_BASH_RE,
   evaluateGate,
   PACK_NAME,
-  readVerdict,
+  readVerdictDetailed,
   resolveExplicitVerdictId,
   resolveProtectedCompletionTools,
   sanitizeVerdictId,
   VERDICT_ID_ENV,
   verdictDir as resolveVerdictDir,
-  verdictPathFor,
+  type VerdictReadOutcome,
 } from "../../policy-packs/builtin/solution-acceptance-runtime.js";
 import { renderReconnectDenyParagraph } from "../../policy-packs/builtin/solution-acceptance-reconnect.js";
 import { resolveGeneratedDir } from "../../io/generated-dir.js";
 import { checkFileLock, type LockCheckResult } from "../../io/lock.js";
-import { probePathPresence } from "../../io/read-regular-file.js";
 import { resolveGitContext } from "../../runtime/git-context.js";
 import { renderAgentFacing } from "../../runtime/agent-facing.js";
 import {
@@ -157,6 +156,41 @@ export const ATTEMPT_LOCK_STALE_MS = 30_000;
 export type NullVerdictReading = "live-attempt" | "never-evaluated" | "unreadable-marker";
 
 /**
+ * WHY a present marker path yielded no verdict, carried straight from the
+ * ONE `readVerdictDetailed` observation the gate decided on, never
+ * re-derived from a second look at the path. Exactly the non-`ok`,
+ * non-`missing`, non-`invalid-id` kinds of `VerdictReadOutcome`, so the
+ * agent-facing line for reading (3) names what that read established
+ * rather than restating a disjunction by hand.
+ */
+export type RejectedMarkerKind = Exclude<
+  VerdictReadOutcome["kind"],
+  "ok" | "missing" | "invalid-id"
+>;
+
+/**
+ * Every state the null-verdict note renders a line for, as data. The note
+ * is a total function over this list (`noteStateOf` below maps each
+ * `NullVerdictInfo` onto exactly one member, and the compiler rejects a
+ * member without a line), and
+ * `tests/cli/pack-hook-solution-acceptance.test.ts` iterates it to assert
+ * the state table has a row per member. A state added to the classifier
+ * without a row therefore fails the build or the suite, instead of
+ * shipping an unpinned line to an agent.
+ */
+export const NULL_VERDICT_NOTE_STATES = [
+  "unusable-id",
+  "never-evaluated",
+  "marker-symlink",
+  "marker-not-regular",
+  "marker-unreadable",
+  "marker-invalid-record",
+  "live-attempt",
+] as const;
+
+export type NullVerdictNoteState = (typeof NULL_VERDICT_NOTE_STATES)[number];
+
+/**
  * Three-valued liveness read, never a boolean: `"live"`, `"not-live"` (no
  * lock directory, or one past the stale window: `proper-lockfile`'s own
  * check answers `false` for both, swallowing the absent-lock `ENOENT`
@@ -183,7 +217,14 @@ export type AttemptLockLiveness = LockCheckResult;
  */
 type NullVerdictInfo =
   | { kind: "unusable-id" }
-  | { kind: "reading"; reading: NullVerdictReading; liveness: AttemptLockLiveness };
+  | { kind: "reading"; reading: "live-attempt" | "never-evaluated"; liveness: AttemptLockLiveness }
+  | {
+      kind: "reading";
+      reading: "unreadable-marker";
+      liveness: AttemptLockLiveness;
+      /** From the gate's own read, not from a second look at the path. */
+      markerKind: RejectedMarkerKind;
+    };
 
 function attemptLockAnchorPath(dir: string, id: string): string {
   return path.join(dir, `${sanitizeVerdictId(id)}${ATTEMPT_LOCK_ANCHOR_SUFFIX}`);
@@ -205,15 +246,17 @@ function attemptLockAnchorPath(dir: string, id: string): string {
  * throw `ENOENT`, instead of answering the ordinary "not locked" case.
  * Never acquires or mutates the lock; a check-only read has no cleanup
  * to restore.
+ *
+ * PRECONDITION: `id` is already known usable. `attemptLockAnchorPath`'s
+ * only throw source is `sanitizeVerdictId`, which the caller has already
+ * passed (`readVerdictDetailed` answered something other than
+ * `invalid-id` for the same id, through the same function), so this has no
+ * catch of its own: an unreachable arm cannot be tested and cannot be
+ * killed by a mutant, which is worse than no arm at all (review finding,
+ * harness/799de976, round 6).
  */
 function readAttemptLockLiveness(dir: string, id: string): AttemptLockLiveness {
-  let anchor: string;
-  try {
-    anchor = attemptLockAnchorPath(dir, id);
-  } catch {
-    return "unknown";
-  }
-  return checkFileLock(anchor, { staleMs: ATTEMPT_LOCK_STALE_MS });
+  return checkFileLock(attemptLockAnchorPath(dir, id), { staleMs: ATTEMPT_LOCK_STALE_MS });
 }
 
 /**
@@ -229,75 +272,112 @@ function readAttemptLockLiveness(dir: string, id: string): AttemptLockLiveness {
  * earlier run for the same id, and "reconnect to the live attempt" is
  * the actionable reading in that overlap.
  */
-function classifyNullVerdictReading(dir: string, id: string): NullVerdictInfo {
-  // Id usability is settled FIRST, before anything is read: both derived
-  // paths (marker and anchor) go through the same `sanitizeVerdictId`, so
-  // an id it rejects has no marker path and no anchor path, and the three
-  // readings simply do not apply to it.
-  let markerPath: string;
-  try {
-    markerPath = verdictPathFor(dir, id);
-  } catch {
-    return { kind: "unusable-id" };
-  }
+function classifyNullVerdictReading(
+  dir: string,
+  id: string,
+  read: VerdictReadOutcome,
+): NullVerdictInfo {
+  // The marker is NOT looked at again here. `read` is the same observation
+  // `evaluateGate` decided on, passed in: a second look can disagree with
+  // the first (a background attempt finishing between the two), and a note
+  // rendered from the later one would describe a rejection the gate never
+  // made (review finding, harness/799de976, round 6). Only the LOCK, a
+  // different subject with its own clause, is read here.
+  if (read.kind === "invalid-id") return { kind: "unusable-id" };
   const liveness = readAttemptLockLiveness(dir, id);
   if (liveness === "live") return { kind: "reading", reading: "live-attempt", liveness };
-  const reading: NullVerdictReading =
-    probePathPresence(markerPath).kind === "present" ? "unreadable-marker" : "never-evaluated";
-  return { kind: "reading", reading, liveness };
+  if (read.kind === "missing") return { kind: "reading", reading: "never-evaluated", liveness };
+  // `ok` cannot reach here: the classifier runs only when the gate's own
+  // verdict is null, which for a readable, valid record it never is.
+  const markerKind: RejectedMarkerKind = read.kind === "ok" ? "invalid-record" : read.kind;
+  return { kind: "reading", reading: "unreadable-marker", liveness, markerKind };
 }
 
-/**
- * Short, state-specific line for the unusable-id case and for readings
- * (1) and (3); see `classifyNullVerdictReading`. Its liveness clause
- * names what was actually observed ("no attempt reads as currently live"
- * vs "liveness could not be determined") instead of always asserting
- * absence: an earlier version hardcoded absence here even when the
- * underlying check had thrown and could not tell (review finding,
- * harness/799de976).
- *
- * Invariant across every state: the line states only what the classifier
- * established, and never a cause it did not observe. `tests/cli/
- * pack-hook-solution-acceptance.test.ts` pins one exact expected line per
- * reachable state, so a future state whose line would overstate fails
- * there rather than reaching an agent.
- */
-function nullVerdictReadingNote(taskId: string, info: NullVerdictInfo): string {
-  if (info.kind === "unusable-id") {
-    // Nothing was read here and no liveness was established, so the note
-    // names neither: it reports the one fact the classifier did settle,
-    // and points at the only surface this id can have come from. An
-    // explicit SOLUTION_VERDICT_ID cannot reach this branch:
-    // `resolveExplicitVerdictId` validates through the same
-    // `sanitizeVerdictId` and answers null for anything it rejects.
-    return `The claimed id ${JSON.stringify(taskId)} is not a usable verdict id: no verdict marker path and no attempt-lock path can be derived from it, so neither was read. Clear or correct the active claim this id came from, then run solution_evaluate for a usable id.`;
-  }
-  const clause =
-    info.liveness === "unknown" ? "liveness could not be determined" : "no attempt reads as currently live";
+/** The one note state a classification renders, as a total mapping. */
+function noteStateOf(info: NullVerdictInfo): NullVerdictNoteState {
+  if (info.kind === "unusable-id") return "unusable-id";
   switch (info.reading) {
-    case "never-evaluated":
-      if (info.liveness === "unknown") {
-        // Neither axis is established here: the marker probe folds every
-        // lstat failure into "missing", and the lock check threw for some
-        // reason this hook did not establish. The note therefore states
-        // only the two negative results themselves and NO cause: earlier
-        // versions guessed one ("the verdict directory could not be
-        // read"), then guessed a narrower disjunction of two, and each
-        // guess was falsified by a state that reached this branch without
-        // it (review findings, harness/799de976, rounds 4 and 5).
-        return `No readable verdict marker for "${taskId}" and liveness could not be determined: run solution_evaluate for this id.`;
-      }
-      return `No verdict marker exists for "${taskId}"; ${clause}: solution_evaluate has not (yet) been called for this id, or a prior call never got far enough to record one.`;
-    case "unreadable-marker":
-      // "Present at lstat, refused by `readVerdict`" is the whole
-      // established fact; the parenthetical is the COMPLETE set of ways
-      // that reader answers null for a present path (not a regular file,
-      // including a symlink, which it rejects by policy; unreadable; or
-      // not a valid verdict record), not a guess at which one occurred.
-      return `Something exists at the verdict marker path for "${taskId}" but was not accepted as a verdict (not a regular file, unreadable, or not a valid verdict record); ${clause}: re-run solution_evaluate to record a fresh one.`;
     case "live-attempt":
-      return `A solution_evaluate attempt for "${taskId}" is still live: its attempt-lock anchor is held.`;
+      return "live-attempt";
+    case "never-evaluated":
+      return "never-evaluated";
+    case "unreadable-marker":
+      switch (info.markerKind) {
+        case "symlink":
+          return "marker-symlink";
+        case "not-regular":
+          return "marker-not-regular";
+        case "unreadable":
+          return "marker-unreadable";
+        case "invalid-record":
+          return "marker-invalid-record";
+      }
   }
+}
+
+/** The liveness clause, which names what the lock check actually said. */
+const UNDETERMINED_LIVENESS_CLAUSE = "liveness could not be determined";
+const NOT_LIVE_CLAUSE = "no attempt reads as currently live";
+
+/**
+ * One line per note state, as a total `Record` keyed by
+ * `NULL_VERDICT_NOTE_STATES`: a state added to the list without a line
+ * here fails the build, which is what makes the list a checklist rather
+ * than a convention.
+ *
+ * Invariant across every line: it states only what the gate established,
+ * and never a cause that was not observed. The liveness clause names what
+ * the lock check said ("no attempt reads as currently live" vs "liveness
+ * could not be determined") instead of always asserting absence, and the
+ * marker lines come from the gate's OWN read of the marker, never from a
+ * second look at the path. `tests/cli/pack-hook-solution-acceptance.test.ts`
+ * pins one exact expected line per state and asserts every member of the
+ * list has a row, so a future state whose line would overstate fails there
+ * rather than reaching an agent.
+ */
+const NULL_VERDICT_NOTE_RENDERERS: Record<
+  NullVerdictNoteState,
+  (taskId: string, clause: string) => string
+> = {
+  // Nothing was read here and no liveness was established, so the note
+  // claims neither: it reports the one fact the classifier settled, names
+  // the only surface this id can have come from, and names the verb that
+  // clears it. An explicit SOLUTION_VERDICT_ID cannot reach this state:
+  // `resolveExplicitVerdictId` validates through the same
+  // `sanitizeVerdictId` and answers null for anything it rejects.
+  "unusable-id": (taskId) =>
+    `The claimed id ${JSON.stringify(taskId)} is not a usable verdict id: no verdict marker path and no attempt-lock path can be derived from it, so neither was read. Release the active claim carrying it (mcp__agent-tasks__task_abandon, or have the operator clear harness.generated/active-claim), claim the real task, then run solution_evaluate for it.`,
+  // Only the marker's absence is established, plus whatever the lock check
+  // said. Neither clause names a cause: earlier versions guessed one ("the
+  // verdict directory could not be read"), then a narrower disjunction of
+  // two, and each guess was falsified by a state that reached this branch
+  // without it (review findings, harness/799de976, rounds 4 and 5).
+  "never-evaluated": (taskId, clause) =>
+    clause === UNDETERMINED_LIVENESS_CLAUSE
+      ? `No readable verdict marker for "${taskId}" and liveness could not be determined: run solution_evaluate for this id.`
+      : `No verdict marker exists for "${taskId}"; ${clause}: solution_evaluate has not (yet) been called for this id, or a prior call never got far enough to record one.`,
+  // One line per rejection kind, each naming exactly what the gate's own
+  // read established. A hand-written disjunction over the kinds was the
+  // round-6 finding: it read as a claim about the path as it is NOW, while
+  // the kinds come from the read the gate decided on.
+  "marker-symlink": (taskId, clause) =>
+    `The verdict marker path for "${taskId}" is a symlink, which this gate refuses to follow; ${clause}: replace it with a marker recorded by solution_evaluate.`,
+  "marker-not-regular": (taskId, clause) =>
+    `The verdict marker path for "${taskId}" is not a regular file; ${clause}: replace it with a marker recorded by solution_evaluate.`,
+  "marker-unreadable": (taskId, clause) =>
+    `The verdict marker for "${taskId}" could not be read; ${clause}: re-run solution_evaluate to record a fresh one.`,
+  "marker-invalid-record": (taskId, clause) =>
+    `The verdict marker for "${taskId}" was read but is not a valid verdict record; ${clause}: re-run solution_evaluate to record a fresh one.`,
+  "live-attempt": (taskId) =>
+    `A solution_evaluate attempt for "${taskId}" is still live: its attempt-lock anchor is held.`,
+};
+
+function nullVerdictReadingNote(taskId: string, info: NullVerdictInfo): string {
+  const clause =
+    info.kind === "reading" && info.liveness === "unknown"
+      ? UNDETERMINED_LIVENESS_CLAUSE
+      : NOT_LIVE_CLAUSE;
+  return NULL_VERDICT_NOTE_RENDERERS[noteStateOf(info)](taskId, clause);
 }
 
 /**
@@ -497,7 +577,12 @@ export async function runPackHookSolutionAcceptanceCli(
   // production both see the same process.env, and tests inject opts.verdictDir.
   const dir = opts.verdictDir ?? resolveVerdictDir();
   const currentHead = resolveGitContext(cwd).sha || null;
-  const verdict = readVerdict(dir, taskId);
+  // ONE observation of the marker, shared by the gate decision below and,
+  // when it denies, by the deny text's own classification: the text must
+  // describe the read the decision rests on, not a later, possibly
+  // different state of the same path (harness/799de976, round 6).
+  const read = readVerdictDetailed(dir, taskId);
+  const verdict = read.kind === "ok" ? read.verdict : null;
   // generatedDir (harness's own .generated/ dir, NOT the verdict dir) holds
   // the shared approval-signing key evaluateGate needs to verify the
   // verdict's HMAC signature (harness/c7c3f606); undefined fails closed
@@ -525,7 +610,7 @@ export async function runPackHookSolutionAcceptanceCli(
   const forgedTag = gate.forged ? " [audit: forged/unsigned verdict marker rejected]" : "";
   const diagnostic = `BLOCK — ${gate.reason}${forgedTag}`;
   note(diagnostic);
-  const nullVerdict = gate.verdict === null ? classifyNullVerdictReading(dir, taskId) : null;
+  const nullVerdict = gate.verdict === null ? classifyNullVerdictReading(dir, taskId, read) : null;
   stdout.write(
     `${blockJson(actionLabel, toolName, taskId, gate.reason, configUx, sessionId, nullVerdict)}\n`,
   );
