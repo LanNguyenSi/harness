@@ -169,11 +169,21 @@ export type NullVerdictReading = "live-attempt" | "never-evaluated" | "unreadabl
  */
 export type AttemptLockLiveness = LockCheckResult;
 
-/** `classifyNullVerdictReading`'s result: WHICH reading, and the raw liveness it rests on. */
-interface NullVerdictInfo {
-  reading: NullVerdictReading;
-  liveness: AttemptLockLiveness;
-}
+/**
+ * `classifyNullVerdictReading`'s result, as a union of the two cases the
+ * deny text must never blur: either the claimed id is not a usable
+ * verdict id at all (`kind: "unusable-id"`: `sanitizeVerdictId` rejects
+ * it, so NEITHER the marker path NOR the attempt-lock anchor path can be
+ * derived from it, nothing is read, and no liveness is established), or
+ * one of the three readings applies, carrying the raw liveness it rests
+ * on. Modelled as a union rather than as a third liveness value so that
+ * "the id was unusable" can never be rendered as "a path could not be
+ * read": the two states have no shared field for the note to read the
+ * wrong way round (review finding, harness/799de976, round 5).
+ */
+type NullVerdictInfo =
+  | { kind: "unusable-id" }
+  | { kind: "reading"; reading: NullVerdictReading; liveness: AttemptLockLiveness };
 
 function attemptLockAnchorPath(dir: string, id: string): string {
   return path.join(dir, `${sanitizeVerdictId(id)}${ATTEMPT_LOCK_ANCHOR_SUFFIX}`);
@@ -207,8 +217,9 @@ function readAttemptLockLiveness(dir: string, id: string): AttemptLockLiveness {
 }
 
 /**
- * Classify WHY `gate.verdict === null` for `id`: which of the three
- * readings applies, AND the raw liveness result the classification rests
+ * Classify WHY `gate.verdict === null` for `id`: whether the id is usable
+ * at all, and if it is, which of the three readings applies, AND the raw
+ * liveness result the classification rests
  * on, so the deny text can name the reading it detected without ever
  * collapsing "liveness could not be determined" into "confirmed not
  * live" (see docs/policy-packs/solution-acceptance.md, "Reading the
@@ -219,28 +230,48 @@ function readAttemptLockLiveness(dir: string, id: string): AttemptLockLiveness {
  * the actionable reading in that overlap.
  */
 function classifyNullVerdictReading(dir: string, id: string): NullVerdictInfo {
-  const liveness = readAttemptLockLiveness(dir, id);
-  if (liveness === "live") return { reading: "live-attempt", liveness };
+  // Id usability is settled FIRST, before anything is read: both derived
+  // paths (marker and anchor) go through the same `sanitizeVerdictId`, so
+  // an id it rejects has no marker path and no anchor path, and the three
+  // readings simply do not apply to it.
   let markerPath: string;
   try {
     markerPath = verdictPathFor(dir, id);
   } catch {
-    return { reading: "never-evaluated", liveness };
+    return { kind: "unusable-id" };
   }
+  const liveness = readAttemptLockLiveness(dir, id);
+  if (liveness === "live") return { kind: "reading", reading: "live-attempt", liveness };
   const reading: NullVerdictReading =
     probePathPresence(markerPath).kind === "present" ? "unreadable-marker" : "never-evaluated";
-  return { reading, liveness };
+  return { kind: "reading", reading, liveness };
 }
 
 /**
- * Short, reading-specific line for readings (1) and (3); see
- * `classifyNullVerdictReading`. Its liveness clause names what was
- * actually observed ("no attempt reads as currently live" vs "liveness
- * could not be determined") instead of always asserting absence: an
- * earlier version hardcoded absence here even when the underlying check
- * had thrown and could not tell (review finding, harness/799de976).
+ * Short, state-specific line for the unusable-id case and for readings
+ * (1) and (3); see `classifyNullVerdictReading`. Its liveness clause
+ * names what was actually observed ("no attempt reads as currently live"
+ * vs "liveness could not be determined") instead of always asserting
+ * absence: an earlier version hardcoded absence here even when the
+ * underlying check had thrown and could not tell (review finding,
+ * harness/799de976).
+ *
+ * Invariant across every state: the line states only what the classifier
+ * established, and never a cause it did not observe. `tests/cli/
+ * pack-hook-solution-acceptance.test.ts` pins one exact expected line per
+ * reachable state, so a future state whose line would overstate fails
+ * there rather than reaching an agent.
  */
 function nullVerdictReadingNote(taskId: string, info: NullVerdictInfo): string {
+  if (info.kind === "unusable-id") {
+    // Nothing was read here and no liveness was established, so the note
+    // names neither: it reports the one fact the classifier did settle,
+    // and points at the only surface this id can have come from. An
+    // explicit SOLUTION_VERDICT_ID cannot reach this branch:
+    // `resolveExplicitVerdictId` validates through the same
+    // `sanitizeVerdictId` and answers null for anything it rejects.
+    return `The claimed id ${JSON.stringify(taskId)} is not a usable verdict id: no verdict marker path and no attempt-lock path can be derived from it, so neither was read. Clear or correct the active claim this id came from, then run solution_evaluate for a usable id.`;
+  }
   const clause =
     info.liveness === "unknown" ? "liveness could not be determined" : "no attempt reads as currently live";
   switch (info.reading) {
@@ -248,15 +279,22 @@ function nullVerdictReadingNote(taskId: string, info: NullVerdictInfo): string {
       if (info.liveness === "unknown") {
         // Neither axis is established here: the marker probe folds every
         // lstat failure into "missing", and the lock check threw for some
-        // reason this hook did not establish. The note therefore names
-        // what could not be read and no cause: an earlier version guessed
-        // one ("the verdict directory could not be read"), which is false
-        // whenever only the lock path is unreadable.
-        return `No readable verdict marker for "${taskId}" and liveness could not be determined (the verdict directory or the attempt-lock path could not be read): run solution_evaluate for this id.`;
+        // reason this hook did not establish. The note therefore states
+        // only the two negative results themselves and NO cause: earlier
+        // versions guessed one ("the verdict directory could not be
+        // read"), then guessed a narrower disjunction of two, and each
+        // guess was falsified by a state that reached this branch without
+        // it (review findings, harness/799de976, rounds 4 and 5).
+        return `No readable verdict marker for "${taskId}" and liveness could not be determined: run solution_evaluate for this id.`;
       }
       return `No verdict marker exists for "${taskId}"; ${clause}: solution_evaluate has not (yet) been called for this id, or a prior call never got far enough to record one.`;
     case "unreadable-marker":
-      return `A verdict marker exists for "${taskId}" but could not be read or parsed; ${clause}: re-run solution_evaluate to record a fresh one.`;
+      // "Present at lstat, refused by `readVerdict`" is the whole
+      // established fact; the parenthetical is the COMPLETE set of ways
+      // that reader answers null for a present path (not a regular file,
+      // including a symlink, which it rejects by policy; unreadable; or
+      // not a valid verdict record), not a guess at which one occurred.
+      return `Something exists at the verdict marker path for "${taskId}" but was not accepted as a verdict (not a regular file, unreadable, or not a valid verdict record); ${clause}: re-run solution_evaluate to record a fresh one.`;
     case "live-attempt":
       return `A solution_evaluate attempt for "${taskId}" is still live: its attempt-lock anchor is held.`;
   }
@@ -276,7 +314,7 @@ function nullVerdictReadingNote(taskId: string, info: NullVerdictInfo): string {
  * anchor to distinguish the three readings", for the decision record.
  */
 function reconnectGuidanceFor(taskId: string, info: NullVerdictInfo | null): string {
-  if (info === null || info.reading !== "live-attempt") return "";
+  if (info === null || info.kind !== "reading" || info.reading !== "live-attempt") return "";
   return renderReconnectDenyParagraph(taskId);
 }
 

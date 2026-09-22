@@ -66,7 +66,7 @@ export const RECONNECT_RETENTION_FLOOR = "100x pollAfterMs";
 export const RECONNECT_THREE_READINGS_LABELS = [
   `\`solution_evaluate\` was never called for "${RECONNECT_TASK_ID_PLACEHOLDER}"`,
   "a `solution_evaluate` call for it is still running in the background",
-  "a marker exists but could not be read or parsed",
+  "a marker path exists but what is there was not accepted as a verdict",
 ] as const;
 
 /** Fact 1: reconnect by attempt id, not by starting a fresh call. */

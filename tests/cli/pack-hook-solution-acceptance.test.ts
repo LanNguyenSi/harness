@@ -138,7 +138,14 @@ function liveAttemptLock(verdictDir: string, id: string): () => void {
 function staleAttemptLock(verdictDir: string, id: string): void {
   const dir = attemptLockDir(verdictDir, id);
   fs.mkdirSync(dir, { recursive: true });
-  const old = new Date(Date.now() - ATTEMPT_LOCK_STALE_MS - 60_000);
+  // The back-date is a LITERAL, deliberately not derived from
+  // `ATTEMPT_LOCK_STALE_MS`: an age computed from the constant under test
+  // stays stale under every mutation of it, so this fixture would survive
+  // a widened window. At 90 s it is stale for the pinned 30 s window and
+  // reads LIVE for any window widened past it, which is the half this
+  // fixture discriminates; the narrowing half is pinned by the
+  // `toBe(30_000)` assertion below.
+  const old = new Date(Date.now() - 90_000);
   fs.utimesSync(dir, old, old);
 }
 
@@ -288,7 +295,7 @@ describe("completion-gate — decision matrix", () => {
       const { res, out } = await run({ cwd: repoAtHead(HEAD), verdictDir: dir });
       expect(res.blocked).toBe(true);
       const { reason } = JSON.parse(out) as { reason: string };
-      expect(reason).toContain('A verdict marker exists for "task-42" but could not be read or parsed');
+      expect(reason).toContain('Something exists at the verdict marker path for "task-42" but was not accepted as a verdict');
       // Genuinely not-live here too (no lock directory at all: ENOENT).
       expect(reason).toMatch(/no attempt reads as currently live/);
       expect(reason).not.toMatch(/liveness could not be determined/);
@@ -321,7 +328,7 @@ describe("completion-gate — decision matrix", () => {
       // historical three-readings prose still names that reading, so this
       // pins the absence of reading (3)'s note specifically, not the
       // substring shared with the paragraph's boilerplate.
-      expect(reason).not.toContain('A verdict marker exists for "task-42" but could not be read or parsed');
+      expect(reason).not.toContain('Something exists at the verdict marker path for "task-42" but was not accepted as a verdict');
       expect(reason).not.toContain('No verdict marker exists for "task-42"');
     });
 
@@ -340,7 +347,7 @@ describe("completion-gate — decision matrix", () => {
       const { res, out } = await run({ cwd: repoAtHead(HEAD), verdictDir: dir });
       expect(res.blocked).toBe(true);
       const { reason } = JSON.parse(out) as { reason: string };
-      expect(reason).toContain('A verdict marker exists for "task-42" but could not be read or parsed');
+      expect(reason).toContain('Something exists at the verdict marker path for "task-42" but was not accepted as a verdict');
       expect(reason).toMatch(/liveness could not be determined/);
       expect(reason).not.toMatch(/no attempt reads as currently live/);
       expect(reason).not.toContain("is still live");
@@ -973,5 +980,166 @@ describe("completion-gate — malformed config.ux (task 19e293c6)", () => {
     expect(res.blocked).toBe(true);
     // Full prefix pins the label->hook binding (task 19e293c6 review).
     expect(err).toContain("harness pack hook solution-acceptance: config.ux ignored (");
+  });
+});
+
+// State table for the agent-facing null-verdict note (harness/799de976).
+// Four review rounds in a row found the same defect class here: the note
+// asserted something the hook had not established (first "no attempt is
+// live" when the liveness check had thrown, then "the verdict directory
+// could not be read", then "the verdict directory or the attempt-lock
+// path could not be read" for an id that was never a usable id, so
+// neither path existed to be read). Each round fixed the one state the
+// reviewer named, and the next reachable state falsified the new wording
+// again.
+//
+// This table closes the class mechanically instead of case by case: every
+// reachable (id-usability, reading, liveness) combination appears below
+// with the ONE exact line it must render, restated here independently of
+// the renderer. A future state whose note overstates, or a re-wording
+// that reintroduces an unestablished cause, fails here rather than
+// reaching an agent. Adding a state to `classifyNullVerdictReading`
+// without adding its row leaves that row's combination unpinned, so the
+// table is also the checklist for extending the classifier.
+describe("null-verdict deny note: one exact line per reachable state", () => {
+  const UNUSABLE_ID = 'The claimed id "." is not a usable verdict id: no verdict marker path and no attempt-lock path can be derived from it, so neither was read. Clear or correct the active claim this id came from, then run solution_evaluate for a usable id.';
+  const NEVER_NOT_LIVE =
+    'No verdict marker exists for "task-42"; no attempt reads as currently live: solution_evaluate has not (yet) been called for this id, or a prior call never got far enough to record one.';
+  const NEVER_UNKNOWN =
+    'No readable verdict marker for "task-42" and liveness could not be determined: run solution_evaluate for this id.';
+  const UNREADABLE_NOT_LIVE =
+    'Something exists at the verdict marker path for "task-42" but was not accepted as a verdict (not a regular file, unreadable, or not a valid verdict record); no attempt reads as currently live: re-run solution_evaluate to record a fresh one.';
+  const UNREADABLE_UNKNOWN =
+    'Something exists at the verdict marker path for "task-42" but was not accepted as a verdict (not a regular file, unreadable, or not a valid verdict record); liveness could not be determined: re-run solution_evaluate to record a fresh one.';
+  const LIVE = 'A solution_evaluate attempt for "task-42" is still live: its attempt-lock anchor is held.';
+  const ALL_LINES = [UNUSABLE_ID, NEVER_NOT_LIVE, NEVER_UNKNOWN, UNREADABLE_NOT_LIVE, UNREADABLE_UNKNOWN, LIVE];
+
+  /** A verdict dir whose `<id>.attempt-lock.lock` path cannot be statted (ELOOP). */
+  function lockPathUnreadable(dir: string): string {
+    const lockDir = attemptLockDir(dir, TASK);
+    fs.symlinkSync(lockDir, lockDir);
+    return dir;
+  }
+
+  const cases: Array<{
+    state: string;
+    setup: () => { verdictDir: string; activeClaim?: string };
+    expected: string;
+  }> = [
+    {
+      state: "id not usable (active claim '.'), nothing read at all",
+      setup: () => ({ verdictDir: verdictDirWith(null), activeClaim: "." }),
+      expected: UNUSABLE_ID,
+    },
+    {
+      state: "reading (1) never-evaluated + liveness not-live",
+      setup: () => ({ verdictDir: verdictDirWith(null) }),
+      expected: NEVER_NOT_LIVE,
+    },
+    {
+      state: "reading (1) never-evaluated + liveness unknown (ELOOP on the lock path only)",
+      setup: () => ({ verdictDir: lockPathUnreadable(verdictDirWith(null)) }),
+      expected: NEVER_UNKNOWN,
+    },
+    {
+      state: "reading (1) never-evaluated + liveness unknown (ENOTDIR: the verdict dir is a file)",
+      setup: () => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), "sa-note-table-notdir-"));
+        cleanups.push(() => fs.rmSync(root, { recursive: true, force: true }));
+        const notADir = path.join(root, "verdict-dir-is-actually-a-file");
+        fs.writeFileSync(notADir, "");
+        return { verdictDir: notADir };
+      },
+      expected: NEVER_UNKNOWN,
+    },
+    {
+      state: "reading (3) marker present but unparseable + liveness not-live",
+      setup: () => {
+        const dir = verdictDirWith(null);
+        fs.writeFileSync(path.join(dir, `${TASK}.json`), "{not valid json");
+        return { verdictDir: dir };
+      },
+      expected: UNREADABLE_NOT_LIVE,
+    },
+    {
+      state: "reading (3) marker present but refused as a SYMLINK (policy, not unreadability) + not-live",
+      setup: () => {
+        const dir = verdictDirWith(null);
+        const target = path.join(dir, "real-marker.json");
+        fs.writeFileSync(target, JSON.stringify({ id: TASK, head: HEAD, ready: true }));
+        fs.symlinkSync(target, path.join(dir, `${TASK}.json`));
+        return { verdictDir: dir };
+      },
+      expected: UNREADABLE_NOT_LIVE,
+    },
+    {
+      state: "reading (3) marker path is a DIRECTORY (not a regular file) + not-live",
+      setup: () => {
+        const dir = verdictDirWith(null);
+        fs.mkdirSync(path.join(dir, `${TASK}.json`));
+        return { verdictDir: dir };
+      },
+      expected: UNREADABLE_NOT_LIVE,
+    },
+    {
+      state: "reading (3) marker present but unparseable + liveness unknown (ELOOP)",
+      setup: () => {
+        const dir = verdictDirWith(null);
+        fs.writeFileSync(path.join(dir, `${TASK}.json`), "{not valid json");
+        return { verdictDir: lockPathUnreadable(dir) };
+      },
+      expected: UNREADABLE_UNKNOWN,
+    },
+    {
+      state: "reading (2) a live attempt-lock is held",
+      setup: () => {
+        const dir = verdictDirWith(null);
+        cleanups.push(liveAttemptLock(dir, TASK));
+        return { verdictDir: dir };
+      },
+      expected: LIVE,
+    },
+  ];
+
+  for (const c of cases) {
+    it(`renders exactly one established line: ${c.state}`, async () => {
+      const { verdictDir, activeClaim } = c.setup();
+      const { res, out } = await run({
+        cwd: repoAtHead(HEAD),
+        verdictDir,
+        ...(activeClaim !== undefined && { activeClaim }),
+      });
+      expect(res.blocked).toBe(true);
+      const { reason } = JSON.parse(out) as { reason: string };
+      expect(reason).toContain(c.expected);
+      // No OTHER state's line may appear: the renderer emits the one line
+      // for the state it classified, never a second one and never the
+      // wrong one.
+      for (const other of ALL_LINES.filter((l) => l !== c.expected)) {
+        expect(reason).not.toContain(other);
+      }
+    });
+  }
+
+  // The finding that motivated the table (round 5): with an unusable id
+  // NOTHING is read and NO liveness is established, so the note must
+  // claim neither. Asserted as absences on top of the exact line above,
+  // so a re-worded line that reintroduces either claim cannot pass by
+  // simply changing the expected constant in lockstep.
+  it("the unusable-id line claims no read and no liveness result", async () => {
+    const { res, out } = await run({
+      cwd: repoAtHead(HEAD),
+      verdictDir: verdictDirWith(null),
+      activeClaim: ".",
+    });
+    expect(res.blocked).toBe(true);
+    const { reason } = JSON.parse(out) as { reason: string };
+    expect(reason).not.toContain("could not be read");
+    expect(reason).not.toContain("liveness could not be determined");
+    expect(reason).not.toContain("no attempt reads as currently live");
+    // "run solution_evaluate for this id" is unactionable for an id
+    // `sanitizeVerdictId` rejects: the remedy names a usable id instead.
+    expect(reason).not.toContain("run solution_evaluate for this id");
+    expect(reason).not.toMatch(/Reconnecting vs\. retrying/);
   });
 });
