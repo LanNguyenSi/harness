@@ -42,6 +42,22 @@
   is recorded in the implementer return for this task, not claimed
   here in advance.
 
+  The same `validatePersistedReport` doc comment was narrowed again: it
+  previously read as though the approve CLI closed a pre-0.4.0 gap in
+  the structural parser; it now states only that the parser checks
+  Prior Art's presence (required since 0.4.0, same citation
+  `` `CHANGELOG.md:#0.28.0` ``) and cannot judge the section's content,
+  and that the approve CLI is the boundary that refuses a hollow list.
+  The edited span grew from 4 to 5 lines (`understanding.ts` lines
+  483-487); `src/cli/approve/understanding.ts:678` still reads
+  `resolveApprovalSessionId` and the file's total line count is
+  unchanged, so the citation above it does not shift.
+  `understanding-gate-lockout-recovery.md`'s `timestamp:` is re-stamped
+  again, past this newest commit; the fresh
+  `npx okf-kit@0.14.0 check docs/okf --json` and `--require-anchors`
+  measurements are recorded in the implementer return for this task,
+  not claimed here in advance.
+
 - 2026-09-21T04:55:32Z, task `8765987a`: converted every bare `path:N[-M]`
   line citation in `docs/okf/` into the anchored `path:N-M#"anchor"` form,
   including 27 comma/continuation-form citations chained off a governing
