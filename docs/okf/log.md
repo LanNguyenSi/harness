@@ -40,7 +40,8 @@
   `.../pause-vs-gate-kill-switch.md`, minimal excerpts reproducing each
   file's actual pre-PR-#537 spelling, in their own scratch-only files
   rather than in this log) copied into a scratch docs/okf-shaped
-  directory and caught by generated test name, not a claimed OKF-CHECK
+  directory and caught by the ratchet's own diagnostic message under the
+  failing control's test name, not a claimed OKF-CHECK
   warning. False-positive measurement over the CURRENT `docs/okf` and
   `docs/decisions` bundles: 12 continuation-shaped matches total, all
   inside `log.md` (0 outside it, 0 in `docs/decisions`); of the 12, 8 are
