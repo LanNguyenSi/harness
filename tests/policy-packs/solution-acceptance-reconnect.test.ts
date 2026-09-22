@@ -66,7 +66,7 @@ describe("solution-acceptance-reconnect: shared fact source (parity)", () => {
     expect(deny).not.toContain(RECONNECT_TASK_ID_PLACEHOLDER);
   });
 
-  // Review round-2 finding (HIGH, correctness; P-5): the paragraph is now
+  // An earlier review finding (HIGH, correctness; P-5): the paragraph is now
   // appended ONLY for the live-attempt reading (`reconnectGuidanceFor` in
   // hook-solution-acceptance.ts), so it must say the hook READ the anchor
   // and detected that reading, not that the hook "does not read" it and

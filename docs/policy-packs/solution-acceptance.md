@@ -293,7 +293,7 @@ paragraph is still rendered by `renderReconnectDenyParagraph`, still
 naming all three readings in its own prose (see the note above this
 subsection), and its shared fact constants (`RECONNECT_FACT_*`,
 `RECONNECT_VERSION_QUALIFIER`) and `renderReconnectInstructionsSection`
-are byte-identical to the round-3 redesign above. Two clauses of the
+are byte-identical to the shared-fact-source redesign above. Two clauses of the
 paragraph's OWN wording were corrected: it had shipped still saying "this
 hook does not read the documented attempt-lock anchor, so it cannot rule
 any of these three apart", true of the pre-799de976 behavior but false

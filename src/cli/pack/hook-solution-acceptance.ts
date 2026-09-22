@@ -217,7 +217,7 @@ function classifyNullVerdictReading(dir: string, id: string): NullVerdictReading
 function nullVerdictReadingNote(taskId: string, reading: NullVerdictReading): string {
   switch (reading) {
     case "never-evaluated":
-      // Softened deliberately (review round-2 finding, LOW): this reading
+      // Softened deliberately (an earlier review finding, LOW): this reading
       // is also reached when `isAttemptLockLive`'s OWN check threw (its
       // catch arm returns `false`, "not live", rather than propagating an
       // unreadable/unresolvable lock state), so this note must not assert

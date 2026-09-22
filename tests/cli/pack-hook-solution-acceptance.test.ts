@@ -305,7 +305,7 @@ describe("completion-gate — decision matrix", () => {
       // floor (>= 0.3.2), so the deny must not assert it unconditionally.
       expect(reason).toMatch(/With grounding-mcp >= 0\.11\.0:/);
       expect(reason).toMatch(/no readable verdict marker/);
-      // Review round-2 finding (MEDIUM, tests): pin the reconnect paragraph
+      // An earlier review finding (MEDIUM, tests): pin the reconnect paragraph
       // by asserting the hook's reason CONTAINS the shared module's own
       // rendered output verbatim, not by hand-restating its sentences as
       // separate substrings here (a hook-side copy that had drifted from
