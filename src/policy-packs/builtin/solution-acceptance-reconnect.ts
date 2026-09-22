@@ -31,7 +31,7 @@
 // `<id>.attempt-lock.lock` directory `proper-lockfile` manages, from
 // which the producer itself derives its own `running-unconfirmed`
 // status). The anchor IS read: `classifyNullVerdictReading` /
-// `isAttemptLockLive` in `../../cli/pack/hook-solution-acceptance.ts`
+// `readAttemptLockLiveness` in `../../cli/pack/hook-solution-acceptance.ts`
 // read it to rule two of the three readings below out and select the
 // one it detected (harness/799de976). This module does not touch the
 // filesystem itself; it only owns the WORDING both rendered surfaces
@@ -55,7 +55,7 @@ export const RECONNECT_RETENTION_FLOOR = "100x pollAfterMs";
 
 /**
  * The three readings `gate.verdict === null` covers. The hook
- * (`classifyNullVerdictReading` / `isAttemptLockLive` in
+ * (`classifyNullVerdictReading` / `readAttemptLockLiveness` in
  * `../../cli/pack/hook-solution-acceptance.ts`) reads the documented
  * attempt-lock anchor to rule two of the three out and select the one it
  * detected; this module only owns the wording listing them, consumed by

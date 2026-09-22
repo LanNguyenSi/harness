@@ -4,7 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { withFileLock } from "../../src/io/lock.js";
+import { checkFileLock, withFileLock } from "../../src/io/lock.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -48,6 +48,44 @@ describe("withFileLock — basic", () => {
     ).rejects.toThrow("boom");
     const r = await withFileLock(lockPath, async () => "after");
     expect(r).toBe("after");
+  });
+});
+
+// Three-valued read-only check (harness/799de976): `checkFileLock` is the
+// designated read-only wrapper `hook-solution-acceptance.ts`'s attempt-lock
+// liveness check is routed through, so it must never collapse "the
+// underlying check threw" into "not live": a caller reading that as
+// confirmed-absent would assert an attempt is gone when liveness simply
+// could not be determined.
+describe("checkFileLock", () => {
+  it('reads "not-live" when no lock directory exists', () => {
+    expect(checkFileLock(lockPath)).toBe("not-live");
+  });
+
+  it('reads "live" while a lock is held, "not-live" once released', async () => {
+    let seenDuringHold: string | undefined;
+    await withFileLock(lockPath, async () => {
+      seenDuringHold = checkFileLock(lockPath);
+    });
+    expect(seenDuringHold).toBe("live");
+    expect(checkFileLock(lockPath)).toBe("not-live");
+  });
+
+  it('reads "not-live" for a lock directory past the given staleMs (left by a dead process)', () => {
+    const lockDir = `${lockPath}.lock`;
+    fs.mkdirSync(lockDir, { recursive: true });
+    const old = new Date(Date.now() - 60_000);
+    fs.utimesSync(lockDir, old, old);
+    expect(checkFileLock(lockPath, { staleMs: 10_000 })).toBe("not-live");
+  });
+
+  it('reads "unknown" (not "not-live") when the underlying check throws something other than ENOENT', () => {
+    // A self-referential symlink at the `.lock` path: `fs.statSync` throws
+    // ELOOP resolving it, not ENOENT, so this must read "unknown", never
+    // collapse to "not-live".
+    const lockDir = `${lockPath}.lock`;
+    fs.symlinkSync(lockDir, lockDir);
+    expect(checkFileLock(lockPath)).toBe("unknown");
   });
 });
 

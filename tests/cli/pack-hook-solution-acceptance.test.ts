@@ -111,11 +111,12 @@ function attemptLockDir(verdictDir: string, id: string): string {
 /**
  * A LIVE attempt lock: the real anchor file, locked through
  * `proper-lockfile`'s own `lockSync` (the SAME call, with the SAME
- * `{ stale, realpath: false }` options, the hook's `isAttemptLockLive`
- * uses to READ it) rather than a hand-built `.lock` directory, so this
- * fixture exercises the library's actual on-disk lock state instead of a
- * guess at its shape. Returns the release function; callers push it onto
- * `cleanups` so the lock is released even if the test fails.
+ * `{ stale, realpath: false }` options, the hook's `readAttemptLockLiveness`
+ * uses via `checkFileLock` to READ it) rather than a hand-built `.lock`
+ * directory, so this fixture exercises the library's actual on-disk lock
+ * state instead of a guess at its shape. Returns the release function;
+ * callers push it onto `cleanups` so the lock is released even if the
+ * test fails.
  */
 function liveAttemptLock(verdictDir: string, id: string): () => void {
   const anchor = attemptLockAnchor(verdictDir, id);
@@ -271,8 +272,11 @@ describe("completion-gate — decision matrix", () => {
       const { reason } = JSON.parse(out) as { reason: string };
       expect(reason).toMatch(/no solution-acceptance verdict recorded/);
       expect(reason).toContain('No verdict marker exists for "task-42"');
-      expect(reason).toMatch(/its attempt-lock anchor does not read as currently live/);
-      expect(reason).toMatch(/liveness could not be determined/);
+      // Genuinely not-live (an ordinary ENOENT: never locked at all), so the
+      // note asserts what was actually observed, not "liveness could not be
+      // determined" (that clause is reserved for the "unknown" case below).
+      expect(reason).toMatch(/no attempt reads as currently live/);
+      expect(reason).not.toMatch(/liveness could not be determined/);
       expect(reason).not.toMatch(/Reconnecting vs\. retrying/);
       expect(reason).not.toMatch(/With grounding-mcp >= 0\.11\.0:/);
       expect(reason).not.toContain("attempt-lock anchor is held");
@@ -285,10 +289,62 @@ describe("completion-gate — decision matrix", () => {
       expect(res.blocked).toBe(true);
       const { reason } = JSON.parse(out) as { reason: string };
       expect(reason).toContain('A verdict marker exists for "task-42" but could not be read or parsed');
-      expect(reason).toMatch(/no solution_evaluate attempt for it is currently live/);
+      // Genuinely not-live here too (no lock directory at all: ENOENT).
+      expect(reason).toMatch(/no attempt reads as currently live/);
+      expect(reason).not.toMatch(/liveness could not be determined/);
       expect(reason).not.toContain('No verdict marker exists for "task-42"');
       expect(reason).not.toMatch(/Reconnecting vs\. retrying/);
       expect(reason).not.toMatch(/With grounding-mcp >= 0\.11\.0:/);
+    });
+
+    // Overlap fixture (mutation probe P-6, priority): a LIVE attempt-lock
+    // coexisting with a co-present, unparseable marker for the SAME id (an
+    // earlier attempt's stale/corrupt leftover, or a marker write racing a
+    // fresh attempt). `classifyNullVerdictReading` checks liveness FIRST, so
+    // this must land on reading (2) with the full reconnect paragraph, not
+    // reading (3)'s short "could not be read or parsed" line: reconnecting
+    // to the live attempt is the actionable guidance in this overlap. A
+    // mutant that reorders the check (marker presence before liveness)
+    // survives every OTHER fixture in this file (none of them has both a
+    // live lock and a marker at once) and is killed only here.
+    it("reading (2) live-attempt takes priority over a co-present corrupt marker (overlap)", async () => {
+      const dir = verdictDirWith(null);
+      fs.writeFileSync(path.join(dir, `${TASK}.json`), "{not valid json");
+      cleanups.push(liveAttemptLock(dir, TASK));
+      const { res, out } = await run({ cwd: repoAtHead(HEAD), verdictDir: dir });
+      expect(res.blocked).toBe(true);
+      const { reason } = JSON.parse(out) as { reason: string };
+      expect(reason).toContain('A solution_evaluate attempt for "task-42" is still live');
+      expect(reason).toMatch(/Reconnecting vs\. retrying/);
+      // Reading (3)'s own short note ("A verdict marker exists ... but could
+      // not be read or parsed") must not ALSO appear: the paragraph's own
+      // historical three-readings prose still names that reading, so this
+      // pins the absence of reading (3)'s note specifically, not the
+      // substring shared with the paragraph's boilerplate.
+      expect(reason).not.toContain('A verdict marker exists for "task-42" but could not be read or parsed');
+      expect(reason).not.toContain('No verdict marker exists for "task-42"');
+    });
+
+    // Indeterminate liveness on reading (3) (mutation probe P-7): a
+    // co-present unparseable marker, but the `.lock` path itself cannot be
+    // statted at all (a self-referential symlink: `fs.statSync` throws
+    // `ELOOP`, not `ENOENT`). `checkFileLock` must read this "unknown", and
+    // the note must say liveness could not be determined, NOT assert no
+    // attempt is live: an earlier version of this hook hardcoded absence
+    // regardless of why the check failed (harness/799de976).
+    it("indeterminate liveness (ELOOP) on reading (3): the note does not claim no attempt is live", async () => {
+      const dir = verdictDirWith(null);
+      fs.writeFileSync(path.join(dir, `${TASK}.json`), "{not valid json");
+      const lockDir = attemptLockDir(dir, TASK);
+      fs.symlinkSync(lockDir, lockDir);
+      const { res, out } = await run({ cwd: repoAtHead(HEAD), verdictDir: dir });
+      expect(res.blocked).toBe(true);
+      const { reason } = JSON.parse(out) as { reason: string };
+      expect(reason).toContain('A verdict marker exists for "task-42" but could not be read or parsed');
+      expect(reason).toMatch(/liveness could not be determined/);
+      expect(reason).not.toMatch(/no attempt reads as currently live/);
+      expect(reason).not.toContain("is still live");
+      expect(reason).not.toMatch(/Reconnecting vs\. retrying/);
     });
 
     it("reading (2) live-attempt: a held (non-stale) attempt-lock, the full reconnect-vs-retry paragraph, plus the facts", async () => {
@@ -338,20 +394,21 @@ describe("completion-gate — decision matrix", () => {
       expect(reason).not.toMatch(/Reconnecting vs\. retrying/);
     });
 
-    // Error-path regression (mutation probe P-4): `isAttemptLockLive`'s
-    // catch arm must return "not live" (`false`), not propagate or assume
-    // "live", when `checkSync` itself throws. Pointing `verdictDir` at a
-    // REGULAR FILE forces this: every path proper-lockfile's `check` joins
-    // onto it (`<file>/<id>.attempt-lock.lock`) fails `stat` with ENOTDIR,
-    // not ENOENT, and `lib/lockfile.js`'s `check` only swallows ENOENT
+    // Error-path regression (mutation probe P-4, replayed): `checkFileLock`
+    // (`src/io/lock.ts`) must read "unknown", not "live" and not silently
+    // "not-live", when its underlying `checkSync` throws something other
+    // than ENOENT. Pointing `verdictDir` at a REGULAR FILE forces this:
+    // every path proper-lockfile's `check` joins onto it
+    // (`<file>/<id>.attempt-lock.lock`) fails `stat` with ENOTDIR, not
+    // ENOENT, and `lib/lockfile.js`'s `check` only swallows ENOENT
     // (rethrows everything else), so `checkSync` throws for real rather
     // than resolving "not locked". `readVerdict` and the marker-presence
     // probe both degrade to "missing" the same way (their shared
     // `lstatOrNull` catches every stat failure), so this lands on reading
-    // (1) exactly as the ordinary no-marker/no-lock case does; the softened
-    // wording above is what makes that landing honest instead of a false
-    // "confirmed absent" claim.
-    it("an unreadable attempt-lock check (ENOTDIR) does not read as live, and the note does not assert absence", async () => {
+    // (1)'s never-evaluated branch with an "unknown" liveness, exactly the
+    // combination the softened wording above exists for: it must say
+    // liveness could not be determined, not assert absence.
+    it("an unreadable attempt-lock check (ENOTDIR) reads liveness as unknown, and the note does not assert absence", async () => {
       const root = fs.mkdtempSync(path.join(os.tmpdir(), "sa-verdict-not-a-dir-"));
       cleanups.push(() => fs.rmSync(root, { recursive: true, force: true }));
       const notADir = path.join(root, "verdict-dir-is-actually-a-file");
@@ -361,7 +418,7 @@ describe("completion-gate — decision matrix", () => {
       const { reason } = JSON.parse(out) as { reason: string };
       expect(reason).not.toMatch(/Reconnecting vs\. retrying/);
       expect(reason).not.toContain("is still live");
-      expect(reason).toMatch(/its attempt-lock anchor does not read as currently live/);
+      expect(reason).not.toMatch(/no attempt reads as currently live/);
       expect(reason).toMatch(/liveness could not be determined/);
     });
 
@@ -370,13 +427,18 @@ describe("completion-gate — decision matrix", () => {
     // always exists in every other case here, so `realpath: true` v.
     // `false` stopped being observable through any of them (both resolve
     // the SAME path when the anchor is a plain file). The one case that
-    // still discriminates is a SYMLINKED anchor: `isAttemptLockLive`'s own
-    // doc comment says `realpath: false` mirrors the producer's own
-    // `acquireAttemptLock` call and stats the anchor's OWN `.lock` sibling
+    // still discriminates is a SYMLINKED anchor: `checkFileLock`'s own doc
+    // comment (`src/io/lock.ts`) says `realpath: false` checks the lock
+    // path at its own literal path and stats its OWN `.lock` sibling
     // without following a symlink first. A fresh lock dir sits at the
     // symlink's own literal path here, not at its target's, so
     // `realpath: true` would resolve the symlink, find no `.lock` there
     // (ENOENT, ordinary "not locked"), and miss the live lock entirely.
+    // Builds the lock through the REAL `proper-lockfile` acquisition
+    // (`lockfile.lockSync`, the same call `liveAttemptLock` above makes)
+    // rather than a hand-built `.lock` directory, so this exercises the
+    // library's actual on-disk lock state at a symlinked anchor, not a
+    // guess at its shape.
     it("a SYMLINKED attempt-lock anchor still reads its OWN (unresolved) lock, not its target's", async () => {
       const dir = verdictDirWith(null);
       const elsewhere = fs.mkdtempSync(path.join(os.tmpdir(), "sa-anchor-target-"));
@@ -385,7 +447,7 @@ describe("completion-gate — decision matrix", () => {
       fs.writeFileSync(target, "");
       const anchor = path.join(dir, `${TASK}.attempt-lock`);
       fs.symlinkSync(target, anchor);
-      fs.mkdirSync(`${anchor}.lock`, { recursive: true });
+      cleanups.push(lockfile.lockSync(anchor, { stale: ATTEMPT_LOCK_STALE_MS, realpath: false }));
       const { res, out } = await run({ cwd: repoAtHead(HEAD), verdictDir: dir });
       expect(res.blocked).toBe(true);
       const { reason } = JSON.parse(out) as { reason: string };
