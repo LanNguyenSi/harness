@@ -412,7 +412,7 @@ export function readVerdictDetailed(dir: string, id: string): VerdictReadOutcome
         source: typeof parsed.source === "string" ? parsed.source : "",
         // Optional (harness/c7c3f606): absent on a legacy/unsigned producer
         // marker. `evaluateGate` treats that absence as forged/unsigned, not
-        // as a parse failure — the 7 fields above are still ALL a marker
+        // as a parse failure: the 7 fields above are still ALL a marker
         // needs to parse successfully; signing is a separate, later gate.
         alg: typeof parsed.alg === "string" ? parsed.alg : undefined,
         signature: typeof parsed.signature === "string" ? parsed.signature : undefined,
