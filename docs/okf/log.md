@@ -2,6 +2,61 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-09-22T08:23:00Z, task `3a910716` (implementer): release hygiene
+  batch. Re-pointed the stale line-141 citation in this file's
+  `65952a0c` entry below to `` `CHANGELOG.md:#0.57.0` `` (the sentence
+  rolled up from the not-yet-tagged section it originally cited into
+  the `0.57.0` release), and the stale line-18 citation in
+  `src/cli/approve/understanding.ts`'s `validatePersistedReport` doc
+  comment to `` `CHANGELOG.md:#0.28.0` `` (read via a `git log -p -S`
+  pickaxe search for the stale citation string in
+  `src/cli/approve/understanding.ts`: at the
+  commit that added the citation, the stale line pointed at
+  `### Fixed` under the unrelated `[0.28.1]` hotfix, not the "prompt is
+  the contract, parser is structural" design it claimed to document;
+  the `[0.28.0]` section's "Understanding Report `Prior Art` section,
+  enforced" entry (#246) is the one whose text actually matches: the
+  older Stop-capture parser accepted a report silently even without
+  `Prior Art`, and 0.4.0+ enforces it). The comment's own wording now
+  states only what `[0.28.0]` documents, dropping the unsourced
+  "intentionally stays loose" design claim it carried at first; each
+  rewrite kept the comment at a 4-line span so no numbered citation
+  below it shifted; verified `src/cli/approve/understanding.ts:678`
+  (this doc's own `understanding-gate-lockout-recovery.md` citation)
+  still reads `resolveApprovalSessionId` after the edits, unchanged.
+
+  An earlier `npx okf-kit@0.14.0 check docs/okf --require-anchors
+  --json` measurement was taken before committing the
+  `understanding.ts` edit above, not against the committed tree
+  okf-kit actually reads a source's commit time from, and so recorded
+  a false "0 errors / 0 warnings / 0 notices before and after": at
+  that commit's head, `understanding-gate-lockout-recovery.md` lists
+  `src/cli/approve/understanding.ts` as a `sources:` entry without
+  having been re-stamped past the commit that last touched it, and the
+  same command against that committed tree actually reported 1 warning
+  (plain and with `--require-anchors`), not 0.
+  `understanding-gate-lockout-recovery.md`'s `timestamp:` is now
+  re-stamped to a time after the commit that last touches
+  `src/cli/approve/understanding.ts` in this batch, and
+  re-verified against the newly committed tree; the fresh measurement
+  is recorded in the implementer return for this task, not claimed
+  here in advance.
+
+  The same `validatePersistedReport` doc comment was narrowed again: it
+  previously read as though the approve CLI closed a pre-0.4.0 gap in
+  the structural parser; it now states only that the parser checks
+  Prior Art's presence (required since 0.4.0, same citation
+  `` `CHANGELOG.md:#0.28.0` ``) and cannot judge the section's content,
+  and that the approve CLI is the boundary that refuses a hollow list.
+  The edited span stayed at 4 lines (`understanding.ts` lines 483-486); `src/cli/approve/understanding.ts:678` still reads
+  `resolveApprovalSessionId` and the file's total line count is
+  unchanged, so the citation above it does not shift.
+  `understanding-gate-lockout-recovery.md`'s `timestamp:` is re-stamped
+  again, past this newest commit; the fresh
+  `npx okf-kit@0.14.0 check docs/okf --json` and `--require-anchors`
+  measurements are recorded in the implementer return for this task,
+  not claimed here in advance.
+
 - 2026-09-22T07:38:14Z, task `799de976`, state re-read at commit
   `7624d2a` (the last source commit of this fix; supersedes the two
   earlier entries this task left here, consolidated into this one):
@@ -35,6 +90,69 @@
   2026-09-22T07:37:25Z). `npx okf-kit@0.14.0 check docs/okf --json` and
   the same command with `--require-anchors` both report 0 errors / 0
   warnings / 0 notices.
+
+- 2026-09-22T06:07:33Z, task `ea733314`: `tests/decisions-citations-resolve.test.ts`
+  now extracts continuation-form citations -- a bare, path-less line-range
+  token chained to a governing full citation stated earlier in the doc,
+  in both spellings docs/okf carried before task `8765987a` (PR #537): a
+  comma-separated tail inside the SAME backtick span as the governing
+  citation (e.g., the disable.ts settings-gate citation in the
+  pause-vs-gate-kill-switch.md doc before that PR), and a standalone
+  token in its own span continuing an earlier full citation stated
+  earlier in the document (e.g., several of the manifest asset-gate
+  line-range citations in the manifest-validation-scope.md doc before
+  that PR) -- and ratchets them to zero outside `docs/okf/log.md`, the
+  same way the existing bare path-and-line-number ratchet works. NOTE
+  for future readers of THIS entry: neither historical example above is
+  written in its literal backtick-wrapped citation form here,
+  deliberately -- okf-kit's own `citations-resolve` rule (native to this
+  bundle, independently of the vitest guard) ALSO resolves the
+  standalone continuation spelling by chaining it to the nearest earlier
+  full citation IN DOCUMENT ORDER ACROSS THE WHOLE FILE, so a literal
+  example citation placed in a new entry prepended at the top of this
+  log could in principle become the (wrong) governing citation for real
+  historical continuation citations further down the file. An earlier
+  draft of this note claimed writing the literal forms here reproduced
+  spurious OKF-CHECK warnings on citations this entry never touched;
+  re-measured for this entry, from the harness worktree root (a real git
+  work tree): inserting the same literal spellings into this paragraph and
+  running `npx okf-kit@0.14.0 check docs/okf --json --require-anchors`
+  reported 0 errors / 0 warnings / 0 notices, not reproduced. Separately
+  measured, an isolated NON-git scratch copy of the same tree reports 0
+  errors / 0 warnings with two skip notices instead (`sources-fresh` and
+  `citations-resolve` both report "skipped: not inside a git work tree"),
+  not a bare 0/0/0; both scratch-tree kinds agree in substance (0 errors /
+  0 warnings either way), only the notice count differs, by whether
+  `citations-resolve` runs at all. The concrete record that the extractor
+  still catches a reintroduction is the two negative-control fixtures
+  (`tests/fixtures/continuation-citations/manifest-validation-scope.md`,
+  `.../pause-vs-gate-kill-switch.md`, minimal excerpts reproducing each
+  file's actual pre-PR-#537 spelling, in their own scratch-only files
+  rather than in this log) copied into a scratch docs/okf-shaped
+  directory and caught by the ratchet's own diagnostic message under the
+  failing control's test name, not a claimed OKF-CHECK
+  warning. False-positive measurement over the CURRENT `docs/okf` and
+  `docs/decisions` bundles: 12 continuation-shaped matches total, all
+  inside `log.md` (0 outside it, 0 in `docs/decisions`); of the 12, 8 are
+  genuine continuation citations (mechanically indistinguishable from,
+  and matching, the historical grammar) and 4 are this log's own "old
+  range -> new range" re-point prose entries (an earlier round's own
+  line-range updates, written with an arrow), not citations, that
+  incidentally share the bare line-range shape; both counts are harmless
+  because `log.md` is prose-exempt from the ratchet already (the same
+  honest-coverage tradeoff the file's own mechanical-extractor
+  disclaimer already documents for the primary citation grammar). No
+  excluded matches (version numbers, timestamps) were found in either
+  bundle. SAME-ANCHOR-WRONG-RANGE limit (PR #537 review): accepted, not
+  implemented; `docs/okf/manifest-validation-scope.md` reuses the anchor
+  text `EX_FAIL` 11 times across 8 distinct ranges and `return diags` 4
+  times across 4 distinct ranges, the measured example of a
+  low-specificity anchor recurring often enough that a wrong-range
+  citation using it would still pass check (f)'s within-range uniqueness
+  test; see the docblock note above `checkLineCitation` in the test file
+  for the full reasoning. `HARNESS-VERIFY` green; `OKF-CHECK(harness)`
+  (with `--require-anchors`) 0 errors / 0 warnings; no `src/**` or other
+  `docs/okf/*.md` content touched (this entry only).
 
 - 2026-09-21T04:55:32Z, task `8765987a`: converted every bare `path:N[-M]`
   line citation in `docs/okf/` into the anchored `path:N-M#"anchor"` form,
@@ -435,7 +553,7 @@
   files / 484 tests passed. `npx okf-kit@0.10.0 check --json docs/okf`
   re-run against this commit: 0 findings.
 
-- 2026-09-08T09:52:55Z, task 65952a0c (implementer, review round 3, decision D-036): applied all seven round-2 mediums/lows I own. The ok-path pin: added a `doctor.test.ts` case (`min_version: "0.6.0"` against a probed `my-hook-bin v0.7.0-rc.1`) asserting `report.hooks[0].version` equals `{ status: "ok", message: "v0.7.0-rc.1 ≥ 0.6.0" }` (the source's own `≥` character, not ASCII `>=`), killing the `${token}` -> `${actual}` ok-message mutant. The second-interpolation pin: extended the existing multi-hyphen assertion in `doctor-session-start-preflight-setup-version.test.ts` with `expect(finding?.message).toContain("--setup on v0.6.0-4-gabc123 is dependency-install only")`, killing the below_floor message's second `${token}` -> `${actual}` mutant. `CHANGELOG.md:141`'s stale 6993d9b5-era sentence ("Both this check's floor and the template bump below read one exported constant... pinned by a test asserting the constant's value") now ends with a superseded-by clause naming task `65952a0c` and the split. Reordered this file: the `9fec3839` entry (08:58:05Z) now sits above the T-006 round-1 entry (08:53:51Z), restoring newest-first order; both directional cross-references between the two T-006 entries flipped to match ("see below" in the round-2 entry, "above" in the round-1 entry); the round-2 entry's false self-verification claim ("log.md entries reconciled newest-first below") corrected to state the reordering was left undone in round 2 and fixed here. The ADR's Reopen-criteria third bullet now names "any of the five prerelease-blind min_version floor checks listed in the scope note above," not only `tools.cli[]`/`tools.mcp[]`. Both the ADR Consequences bullet and `docs/CLI.md`'s VERSION CAVEAT accepted-cost sentence now qualify the git-describe/platform-suffix false-positive class with "when its numeric run exactly equals the floor" (`compareVersionFloor` returns the numeric comparison outright whenever it is non-zero; the prerelease tie-break only bites on an exact numeric tie). The setup-floor pin test in `doctor-session-start-preflight-setup-version.test.ts` retitled from "pins the required floor to the shared constant" to "pins the setup floor's value," its leading comment rewritten to describe a single-constant value pin (the shared-constant framing predates the split). `tests/cli/init-dependencies.test.ts`'s duplicate `node:fs` import dropped; its one `readFileSync` call now goes through the existing `import * as fs from "node:fs"`. `npm run build`, `typecheck`, `typecheck:tests`, `check:changelog-coverage`, `check:no-only` all clean; `npx vitest run tests/cli/doctor.test.ts tests/cli/doctor-session-start-preflight-setup-version.test.ts tests/cli/init-dependencies.test.ts tests/cli/init-full-template-pins.test.ts tests/decisions-citations-resolve.test.ts`: 5 files / 397 tests passed; full `npm test`: 239 files / 7567 tests passed, 2 skipped. The `docs/CLI.md` VERSION CAVEAT edit above then flagged four docs `sources-fresh` STALE on the next `check` run: `codex-adapter-parity-gaps.md`, `debug-verb-selection.md`, `evidence-ledger-trust-boundary.md`, `policy-engine-producer-wiring.md`. Re-verified: none of the four cite the accepted-cost sentence or any other content this round's edits touch (they cite `docs/CLI.md` as a whole file or unrelated sections: the hook-entrypoints table, the `delegate` row, the ledger-producers section, or no line-anchored content at all); re-stamped their `timestamp:` field to this entry's timestamp. `npx okf-kit@0.10.0 check --json docs/okf` re-run against this commit: 0 stale / 0 warnings / 0 errors.
+- 2026-09-08T09:52:55Z, task 65952a0c (implementer, review round 3, decision D-036): applied all seven round-2 mediums/lows I own. The ok-path pin: added a `doctor.test.ts` case (`min_version: "0.6.0"` against a probed `my-hook-bin v0.7.0-rc.1`) asserting `report.hooks[0].version` equals `{ status: "ok", message: "v0.7.0-rc.1 ≥ 0.6.0" }` (the source's own `≥` character, not ASCII `>=`), killing the `${token}` -> `${actual}` ok-message mutant. The second-interpolation pin: extended the existing multi-hyphen assertion in `doctor-session-start-preflight-setup-version.test.ts` with `expect(finding?.message).toContain("--setup on v0.6.0-4-gabc123 is dependency-install only")`, killing the below_floor message's second `${token}` -> `${actual}` mutant. `` `CHANGELOG.md:#0.57.0` ``'s stale 6993d9b5-era sentence ("Both this check's floor and the template bump below read one exported constant... pinned by a test asserting the constant's value"; line 141 at the time of this entry, since rolled up into the `0.57.0` section) now ends with a superseded-by clause naming task `65952a0c` and the split. Reordered this file: the `9fec3839` entry (08:58:05Z) now sits above the T-006 round-1 entry (08:53:51Z), restoring newest-first order; both directional cross-references between the two T-006 entries flipped to match ("see below" in the round-2 entry, "above" in the round-1 entry); the round-2 entry's false self-verification claim ("log.md entries reconciled newest-first below") corrected to state the reordering was left undone in round 2 and fixed here. The ADR's Reopen-criteria third bullet now names "any of the five prerelease-blind min_version floor checks listed in the scope note above," not only `tools.cli[]`/`tools.mcp[]`. Both the ADR Consequences bullet and `docs/CLI.md`'s VERSION CAVEAT accepted-cost sentence now qualify the git-describe/platform-suffix false-positive class with "when its numeric run exactly equals the floor" (`compareVersionFloor` returns the numeric comparison outright whenever it is non-zero; the prerelease tie-break only bites on an exact numeric tie). The setup-floor pin test in `doctor-session-start-preflight-setup-version.test.ts` retitled from "pins the required floor to the shared constant" to "pins the setup floor's value," its leading comment rewritten to describe a single-constant value pin (the shared-constant framing predates the split). `tests/cli/init-dependencies.test.ts`'s duplicate `node:fs` import dropped; its one `readFileSync` call now goes through the existing `import * as fs from "node:fs"`. `npm run build`, `typecheck`, `typecheck:tests`, `check:changelog-coverage`, `check:no-only` all clean; `npx vitest run tests/cli/doctor.test.ts tests/cli/doctor-session-start-preflight-setup-version.test.ts tests/cli/init-dependencies.test.ts tests/cli/init-full-template-pins.test.ts tests/decisions-citations-resolve.test.ts`: 5 files / 397 tests passed; full `npm test`: 239 files / 7567 tests passed, 2 skipped. The `docs/CLI.md` VERSION CAVEAT edit above then flagged four docs `sources-fresh` STALE on the next `check` run: `codex-adapter-parity-gaps.md`, `debug-verb-selection.md`, `evidence-ledger-trust-boundary.md`, `policy-engine-producer-wiring.md`. Re-verified: none of the four cite the accepted-cost sentence or any other content this round's edits touch (they cite `docs/CLI.md` as a whole file or unrelated sections: the hook-entrypoints table, the `delegate` row, the ledger-producers section, or no line-anchored content at all); re-stamped their `timestamp:` field to this entry's timestamp. `npx okf-kit@0.10.0 check --json docs/okf` re-run against this commit: 0 stale / 0 warnings / 0 errors.
 
 - 2026-09-08T09:37:13Z, task `c88461c1` (review round 3 residual;
   task `1c4eb3ea`, rounds 1-2 of the batch-44 follow-up run,

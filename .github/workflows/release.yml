@@ -52,6 +52,56 @@ jobs:
             exit 1
           fi
 
+      - name: Release-notes size ceiling
+        # Re-measures release_notes.md (extracted above) against the same
+        # ceiling as scripts/check-release-notes-size.mjs's CEILING
+        # constant (115,000, comfortably under GitHub's release/tag body
+        # limit of roughly 125,000 characters); ci.yml's `npm run
+        # check:release-notes-size` step already catches this before the
+        # tag, against package.json's version - this step is the
+        # at-tag-time backstop for the same measurement, against the tag
+        # actually being released. This job has no node/npm setup (the
+        # `ci` job above runs full CI separately), so it re-measures
+        # directly rather than shelling out to the script; move the
+        # ceiling in both places together, never one alone.
+        #
+        # `wc -m` measures release_notes.md itself, which already carries
+        # the trailing newline awk's ORS appends after the last matched
+        # line, so it needs no "+1" the way the check script's JS
+        # `.length` measurement (over the joined section, no trailing
+        # newline) does. `wc -m` counts CHARACTERS only under a UTF-8
+        # locale; without one it falls back to counting BYTES, so a
+        # multi-byte UTF-8 character would be over-counted relative to
+        # the check script's JS `.length` (UTF-16 code units per
+        # character). `LC_ALL: C.UTF-8` below pins the locale so `wc -m`
+        # counts Unicode code points: for Basic Multilingual Plane text
+        # (ordinary CHANGELOG prose) that agrees exactly with the check
+        # script's `.length`, one unit per character either way. For an
+        # astral-plane character (code point above U+FFFF, e.g. an
+        # emoji), `.length` counts a two-unit surrogate pair where
+        # `wc -m` counts one code point, so the check script's pre-tag
+        # measurement is never the looser of the two gates for such a
+        # section - only ever equal to, or stricter than, this step's.
+        #
+        # VERSION comes in via `env:`, same rationale as the empty-notes
+        # guard above: shell-data only, never spliced into the script's
+        # syntax.
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          LC_ALL: C.UTF-8
+        run: |
+          size=$(wc -m < release_notes.md | tr -d ' ')
+          if [ -z "${size}" ]; then
+            echo "::error::could not measure release_notes.md (missing or unreadable); the ceiling check did not run."
+            exit 1
+          fi
+          ceiling=115000
+          if [ "${size}" -gt "${ceiling}" ]; then
+            echo "::error::release_notes.md is ${size} characters, above the ${ceiling}-character ceiling (GitHub's release/tag body limit is roughly 125,000 characters). Trim CHANGELOG.md's '## [$VERSION]' section before tagging."
+            exit 1
+          fi
+          echo "release_notes.md is ${size} characters (ceiling ${ceiling})."
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v3
         with:

@@ -66,7 +66,7 @@
 // (INFRA-allowed `node`) and to any `fork()`'d or `spawn()`'d child in
 // general: this hook patches only THIS process's own `node:child_process`
 // module, so it has no visibility into what a child process, once
-// launched, in turn spawns on its own. Allowlisting sh/node/git/patch
+// launched, in turn spawns on its own. Allowlisting the INFRA binaries listed
 // below (D6) is a deliberate, scoped trust decision about what THIS
 // suite's fixture setup genuinely needs — not a claim that everything
 // downstream of them is guarded too. One in-tree test deliberately
@@ -144,7 +144,7 @@
 //    independently of this hook's child_process patching (their own
 //    mechanism is a `process.env.VITEST` check, not a spawn interception)
 //    — see the meta-test asserting that directly.
-// D6 git/node/sh/patch are allowlisted (INFRA below) — real system
+// D6 the INFRA binaries listed below are allowlisted: real system
 //    infrastructure the fixture suite depends on throughout, resolved
 //    freshly per call (not a fixed path baked in at setup time) so
 //    machine-specific install locations and per-test PATH overrides both
@@ -447,7 +447,10 @@ function isUnderTmp(resolvedPath: string): boolean {
   return TMP_PREFIXES.some((prefix) => resolvedPath.startsWith(prefix));
 }
 
-// D6: the four infra binaries the suite's fixture setup genuinely needs.
+// D6: the infra binaries the suite genuinely needs, either throughout the
+// fixture setup or as a real system tool one test exercises directly (patch,
+// awk): a direct child is visible to this guard, unlike a grandchild behind
+// sh -c or bash, so such a tool is listed here rather than hidden.
 // Resolved FRESH per call (through the same resolveCached used for every
 // spawn, so repeated lookups under the same cwd/PATH are cache-hits, not
 // repeated fs syscalls) rather than baked in once at setup time — a test
@@ -480,6 +483,12 @@ const INFRA: ReadonlyArray<{ name: string; reason: string }> = [
   // patch: real system `patch`, used by tests/io/patch.test.ts to prove
   // a generated unified diff actually applies (round-trip check).
   { name: "patch", reason: "round-trip-applies a generated diff in tests/io/patch.test.ts." },
+  // awk: real system awk, spawned directly (no `sh -c` indirection) by
+  // the release-notes-size parity test to run release.yml's actual
+  // extraction program and compare its real output against this repo's
+  // JS reimplementation - a genuine drift check, not a fixture binary
+  // (task 3a910716).
+  { name: "awk", reason: "release.yml's real awk extraction program, run directly by tests/scripts/check-release-notes-size.test.ts's parity check; a direct child so this guard sees it, instead of a bash or sh -c grandchild it cannot." },
 ];
 
 function infraCandidates(name: string, cwd: string, pathEnv: string | undefined): readonly string[] {

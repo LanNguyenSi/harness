@@ -48,6 +48,8 @@
     "check:no-only": "node scripts/check-no-only.mjs",
     "check:no-raw-control-bytes": "node scripts/check-no-raw-control-bytes.mjs",
     "check:changelog-coverage": "node scripts/check-changelog-coverage.mjs",
+    "check:readme-release-version": "node scripts/check-readme-release-version.mjs",
+    "check:release-notes-size": "node scripts/check-release-notes-size.mjs",
     "measure:bash-prefix-parse": "node scripts/measure-bash-prefix-parse.mjs",
     "measure:command-normalize": "node scripts/measure-command-normalize.mjs",
     "measure:additive-attribution-matrix": "node scripts/measure-additive-attribution-matrix.mjs",
