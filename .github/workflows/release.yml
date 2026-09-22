@@ -91,6 +91,10 @@ jobs:
           LC_ALL: C.UTF-8
         run: |
           size=$(wc -m < release_notes.md | tr -d ' ')
+          if [ -z "${size}" ]; then
+            echo "::error::could not measure release_notes.md (missing or unreadable); the ceiling check did not run."
+            exit 1
+          fi
           ceiling=115000
           if [ "${size}" -gt "${ceiling}" ]; then
             echo "::error::release_notes.md is ${size} characters, above the ${ceiling}-character ceiling (GitHub's release/tag body limit is roughly 125,000 characters). Trim CHANGELOG.md's '## [$VERSION]' section before tagging."

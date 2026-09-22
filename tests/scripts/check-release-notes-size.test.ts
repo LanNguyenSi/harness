@@ -46,7 +46,17 @@ it("release.yml's ceiling literal stays pinned to CEILING", () => {
 // exactly that false-pass.
 it("release.yml pins LC_ALL to C.UTF-8 so wc -m counts characters, not bytes", () => {
   const releaseYml = readFileSync(join(process.cwd(), ".github/workflows/release.yml"), "utf8");
-  expect(releaseYml).toContain("LC_ALL: C.UTF-8\n");
+  // Anchored to an env line (leading indentation, nothing after the value):
+  // a comment quoting the same text cannot satisfy it.
+  expect(releaseYml).toMatch(/^[ \t]+LC_ALL: C\.UTF-8$/m);
+});
+
+it("ci.yml runs both release-hygiene checks as run steps", () => {
+  // The scripts are covered above; this pins that CI still invokes them, so a
+  // deleted or neutered step is red here rather than silently absent.
+  const ciYml = readFileSync(join(process.cwd(), ".github/workflows/ci.yml"), "utf8");
+  expect(ciYml).toMatch(/^[ \t]+run: npm run check:readme-release-version$/m);
+  expect(ciYml).toMatch(/^[ \t]+run: npm run check:release-notes-size$/m);
 });
 
 describe("extractVersionSection", () => {
@@ -83,7 +93,9 @@ describe("extractVersionSection", () => {
 // substitution GitHub Actions performs at run time.
 function readReleaseYmlAwkProgram(): string {
   const releaseYml = readFileSync(join(process.cwd(), ".github/workflows/release.yml"), "utf8");
-  const match = releaseYml.match(/awk '([^'\n]*)' CHANGELOG\.md/);
+  // Anchored to a run-block line: a `#` comment quoting the command cannot
+  // satisfy this, only the step's own invocation can.
+  const match = releaseYml.match(/^[ \t]+awk '([^'\n]*)' CHANGELOG\.md > release_notes\.md$/m);
   const program = match?.[1];
   if (program === undefined) {
     throw new Error("could not find the awk extraction program in .github/workflows/release.yml's 'Extract changelog for this version' step");
@@ -126,7 +138,7 @@ describe("measureExtractedSize matches the real awk step's output size", () => {
     expect(awkOutput).toBe("");
   });
 
-  // Newline-terminated EOF case (the round-3 fix for the phantom
+  // Newline-terminated EOF case (the fix for the phantom
   // trailing split element): the version's section runs to the very
   // end of a file that itself ends with "\n" (the ordinary case for a
   // real CHANGELOG.md, and the oldest section in it, with no closing

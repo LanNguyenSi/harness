@@ -48,8 +48,7 @@
   Prior Art's presence (required since 0.4.0, same citation
   `` `CHANGELOG.md:#0.28.0` ``) and cannot judge the section's content,
   and that the approve CLI is the boundary that refuses a hollow list.
-  The edited span grew from 4 to 5 lines (`understanding.ts` lines
-  483-487); `src/cli/approve/understanding.ts:678` still reads
+  The edited span stayed at 4 lines (`understanding.ts` lines 483-486); `src/cli/approve/understanding.ts:678` still reads
   `resolveApprovalSessionId` and the file's total line count is
   unchanged, so the citation above it does not shift.
   `understanding-gate-lockout-recovery.md`'s `timestamp:` is re-stamped
