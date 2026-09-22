@@ -57,8 +57,8 @@
   measurements are recorded in the implementer return for this task,
   not claimed here in advance.
 
-- 2026-09-22T08:37:35Z, task `799de976`, state re-read at commit
-  `dcb23d0` (the last source commit of this fix; supersedes the two
+- 2026-09-22T09:02:00Z, task `799de976`, state re-read at commit
+  `c10f1b5` (the last source commit of this fix; supersedes the three
   earlier entries this task left here, consolidated into this one):
   `src/cli/pack/hook-solution-acceptance.ts`'s attempt-lock liveness
   check is now three-valued (`"live" | "not-live" | "unknown"`, routed
@@ -66,7 +66,17 @@
   that collapsed "the check threw" into "not live"; `nullVerdictReadingNote`
   now derives its liveness clause from the result instead of a single
   hardcoded phrase, so neither reading (1) nor (3) claims an attempt is
-  confirmed absent when liveness could not be determined.
+  confirmed absent when liveness could not be determined. An id
+  `sanitizeVerdictId` rejects is a separate `NullVerdictInfo` union
+  member (`kind: "unusable-id"`), settled before anything is read and
+  carrying no liveness field, so the note for it names no read and no
+  liveness result; the remaining unknown-liveness line names no cause at
+  all, and reading (3) names the complete set of ways `readVerdict`
+  answers null for a present path rather than only "could not be read or
+  parsed". The agent-facing wording is pinned by a nine-row state table
+  in `tests/cli/pack-hook-solution-acceptance.test.ts`, one exact
+  expected line per reachable (id-usability, reading, liveness)
+  combination.
   `docs/policy-packs/solution-acceptance.md` gained the corresponding
   redesign in its "Reading the attempt-lock anchor to distinguish the
   three readings" subsection, and its "Agent-facing surface for the
@@ -81,13 +91,13 @@
   fail-closed header contract, and `docs/policy-packs/solution-acceptance.md`
   lines 56-60, the `ready && head === current HEAD` deny-set enumeration)
   sit before every line this fix touched in both files; re-read at commit
-  `dcb23d0`, neither line range nor content moved, no citation needed
+  `c10f1b5`, neither line range nor content moved, no citation needed
   re-pointing. Doc re-stamped at this entry's timestamp
-  (2026-09-22T08:37:35Z), later than every `sources:` file's own last
+  (2026-09-22T09:02:00Z), later than every `sources:` file's own last
   commit at re-stamp time (the newest being this task's own
-  `docs/policy-packs/solution-acceptance.md` and
-  `src/cli/pack/hook-solution-acceptance.ts`, both at
-  2026-09-22T08:35:35Z). `npx okf-kit@0.14.0 check docs/okf --json` and
+  `docs/policy-packs/solution-acceptance.md` at 2026-09-22T09:01:16Z,
+  ahead of `src/cli/pack/hook-solution-acceptance.ts` at
+  2026-09-22T08:57:30Z). `npx okf-kit@0.14.0 check docs/okf --json` and
   the same command with `--require-anchors` both report 0 errors / 0
   warnings / 0 notices.
 
