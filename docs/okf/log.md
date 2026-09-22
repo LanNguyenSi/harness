@@ -88,9 +88,19 @@
   restating its detection logic. `src/policy-packs/builtin/
   solution-acceptance-reconnect.ts` is not listed under any `sources:` in
   `docs/okf/*.md` (checked via `rg -l` against every doc's frontmatter),
-  so only `docs/okf/gate-fail-posture-matrix.md` (which lists
+  so two bundle docs needed re-verification. `docs/okf/
+  evidence-ledger-trust-boundary.md` lists
+  `src/policy-packs/builtin/solution-acceptance-runtime.ts`, which this
+  round touched for the first time: it names no line there, only the
+  function that consumes the shared symlink-rejecting reader, so the
+  sentence was corrected to `readVerdictDetailed` (the new direct
+  consumer, which `readVerdict` delegates to) and the doc re-stamped. Its
+  sibling claim, that `probePathPresence`'s one consumer is
+  `verifyDelegation`, is true again at head: the hook's classifier stopped
+  using it when the marker read became a single observation.
+  `docs/okf/gate-fail-posture-matrix.md` (which lists
   `src/cli/pack/hook-solution-acceptance.ts` and
-  `docs/policy-packs/solution-acceptance.md`) needed re-verification: its
+  `docs/policy-packs/solution-acceptance.md`) is the other: its
   two citations (`src/cli/pack/hook-solution-acceptance.ts` lines 19-22, the
   fail-closed header contract, and `docs/policy-packs/solution-acceptance.md`
   lines 56-60, the `ready && head === current HEAD` deny-set enumeration)
