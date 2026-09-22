@@ -244,8 +244,8 @@ three, naming them only inside its own prose. The follow-up it named
 ("narrow this paragraph to the in-flight case by reading that lock
 anchor") is now implemented, entirely inside `hook-solution-acceptance.ts`
 (`classifyNullVerdictReading`, `isAttemptLockLive`): the reconnect-vs-retry
-paragraph (`renderReconnectDenyParagraph`, wording unchanged, still owned
-by `solution-acceptance-reconnect.ts`) is appended only for reading (2),
+paragraph (`renderReconnectDenyParagraph`, still owned by
+`solution-acceptance-reconnect.ts`) is appended only for reading (2),
 "an attempt is live"; readings (1) ("never evaluated") and (3) ("a marker
 exists but could not be read") instead get a short,
 reading-named line (`nullVerdictReadingNote`) with no reconnect paragraph.
@@ -288,11 +288,20 @@ agree by construction, not by coincidence of matching constants. See
 `ATTEMPT_LOCK_STALE_MS` in `hook-solution-acceptance.ts` for the same
 citation inline with the code.
 
-**What stayed the same.** The reconnect paragraph's own wording is
-byte-identical: still rendered by `renderReconnectDenyParagraph`, still
+**What stayed the same, and what a later fix corrected.** The reconnect
+paragraph is still rendered by `renderReconnectDenyParagraph`, still
 naming all three readings in its own prose (see the note above this
-subsection). `instructions.md` is unchanged; grounding-mcp and its lock
-layout are unchanged; no new runtime dependency was added.
+subsection), and its shared fact constants (`RECONNECT_FACT_*`,
+`RECONNECT_VERSION_QUALIFIER`) and `renderReconnectInstructionsSection`
+are byte-identical to the round-3 redesign above. Two clauses of the
+paragraph's OWN wording were corrected: it had shipped still saying "this
+hook does not read the documented attempt-lock anchor, so it cannot rule
+any of these three apart", true of the pre-799de976 behavior but false
+once the paragraph is appended only for the already-detected live-attempt
+reading; it now says the hook read the anchor and is showing the
+paragraph because it detected reading (2). `instructions.md` is
+unchanged; grounding-mcp and its lock layout are unchanged; no new
+runtime dependency was added.
 
 Pinned by `tests/cli/pack-hook-solution-acceptance.test.ts` ("gate.verdict
 === null: three readings distinguished by the attempt-lock anchor": one

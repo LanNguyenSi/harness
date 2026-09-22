@@ -66,6 +66,26 @@ describe("solution-acceptance-reconnect: shared fact source (parity)", () => {
     expect(deny).not.toContain(RECONNECT_TASK_ID_PLACEHOLDER);
   });
 
+  // Review round-2 finding (HIGH, correctness; P-5): the paragraph is now
+  // appended ONLY for the live-attempt reading (`reconnectGuidanceFor` in
+  // hook-solution-acceptance.ts), so it must say the hook READ the anchor
+  // and detected that reading, not that the hook "does not read" it and
+  // "cannot rule any of these three apart" (both were true of the OLD,
+  // pre-799de976 behavior, false once the caller only appends this text
+  // for reading (2)). A literal-string pin, independent of whatever the
+  // renderer currently outputs, so a regression back to the old wording is
+  // caught here rather than passing by construction against itself.
+  it("says the hook READ the anchor and detected reading (2), not that it cannot rule the readings apart", () => {
+    const deny = renderReconnectDenyParagraph("task-corrected-1");
+    expect(deny).toContain(
+      "this hook read the documented attempt-lock anchor and is showing you this paragraph",
+    );
+    expect(deny).toMatch(/detected reading \(2\): an attempt is still live/);
+    expect(deny).not.toContain("this hook does not read the documented attempt-lock anchor");
+    expect(deny).not.toMatch(/cannot rule any of/);
+    expect(deny).not.toMatch(/message fires whether/);
+  });
+
   it("keeps shared tool and attempt identifiers in code formatting", () => {
     expect(RECONNECT_FACT_RECONNECT_BY_ID).toContain("`id`");
     expect(RECONNECT_FACT_RECONNECT_BY_ID).toContain("`attemptId`");

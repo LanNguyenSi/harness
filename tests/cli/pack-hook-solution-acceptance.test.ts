@@ -2,11 +2,13 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { Readable, Writable } from "node:stream";
+import lockfile from "proper-lockfile";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   ATTEMPT_LOCK_STALE_MS,
   runPackHookSolutionAcceptanceCli,
 } from "../../src/cli/pack/hook-solution-acceptance.js";
+import { renderReconnectDenyParagraph } from "../../src/policy-packs/builtin/solution-acceptance-reconnect.js";
 import { signVerdict, type Verdict } from "../../src/policy-packs/builtin/solution-acceptance-runtime.js";
 import { parseManifest, type Manifest } from "../../src/schema/index.js";
 
@@ -94,22 +96,44 @@ function verdictDirWith(
 
 /**
  * `proper-lockfile`'s own on-disk lock target for an anchor path is
- * `<anchor>.lock` (a directory, `getLockFile` in `lib/lockfile.js`); this
- * mirrors that layout directly rather than going through the library's
- * `lock()` call, so these fixtures stay pure filesystem state (no process
- * actually holds the lock; the hook's `checkSync` reads mtime alone, per
- * `isLockStale`, `stat.mtime.getTime() < Date.now() - stale`).
+ * `<anchor>.lock` (a directory, `getLockFile` in `lib/lockfile.js`); the
+ * anchor itself is `<verdict dir>/<id>.attempt-lock` (README "Attempt lock
+ * anchor" row at `grounding-mcp-v0.12.0`).
  */
+function attemptLockAnchor(verdictDir: string, id: string): string {
+  return path.join(verdictDir, `${id}.attempt-lock`);
+}
+
 function attemptLockDir(verdictDir: string, id: string): string {
-  return path.join(verdictDir, `${id}.attempt-lock.lock`);
+  return `${attemptLockAnchor(verdictDir, id)}.lock`;
 }
 
-/** A LIVE attempt lock: freshly created, mtime "now". */
-function liveAttemptLock(verdictDir: string, id: string): void {
-  fs.mkdirSync(attemptLockDir(verdictDir, id), { recursive: true });
+/**
+ * A LIVE attempt lock: the real anchor file, locked through
+ * `proper-lockfile`'s own `lockSync` (the SAME call, with the SAME
+ * `{ stale, realpath: false }` options, the hook's `isAttemptLockLive`
+ * uses to READ it) rather than a hand-built `.lock` directory, so this
+ * fixture exercises the library's actual on-disk lock state instead of a
+ * guess at its shape. Returns the release function; callers push it onto
+ * `cleanups` so the lock is released even if the test fails.
+ */
+function liveAttemptLock(verdictDir: string, id: string): () => void {
+  const anchor = attemptLockAnchor(verdictDir, id);
+  fs.writeFileSync(anchor, "", { mode: 0o600 });
+  return lockfile.lockSync(anchor, { stale: ATTEMPT_LOCK_STALE_MS, realpath: false });
 }
 
-/** A STALE attempt lock: mtime set past `ATTEMPT_LOCK_STALE_MS`, as if left by a dead process. */
+/**
+ * A STALE attempt lock: mtime set past `ATTEMPT_LOCK_STALE_MS`, as if left
+ * by a dead process. Unlike `liveAttemptLock` above, this stays a
+ * hand-built `.lock` directory (`mkdir` + `utimes`) rather than going
+ * through `lockSync`: the library always stamps a fresh "now" mtime on
+ * acquisition and offers no public API to mint an already-stale one, so
+ * simulating a lock a dead process left behind means constructing the
+ * on-disk state directly (mirrored against `getLockFile`/`isLockStale` in
+ * `lib/lockfile.js`) rather than acquiring and then back-dating it, which
+ * would race the library's own mtime-precision probe.
+ */
 function staleAttemptLock(verdictDir: string, id: string): void {
   const dir = attemptLockDir(verdictDir, id);
   fs.mkdirSync(dir, { recursive: true });
@@ -247,7 +271,8 @@ describe("completion-gate — decision matrix", () => {
       const { reason } = JSON.parse(out) as { reason: string };
       expect(reason).toMatch(/no solution-acceptance verdict recorded/);
       expect(reason).toContain('No verdict marker exists for "task-42"');
-      expect(reason).toMatch(/no solution_evaluate attempt for it is currently live/);
+      expect(reason).toMatch(/its attempt-lock anchor does not read as currently live/);
+      expect(reason).toMatch(/liveness could not be determined/);
       expect(reason).not.toMatch(/Reconnecting vs\. retrying/);
       expect(reason).not.toMatch(/With grounding-mcp >= 0\.11\.0:/);
       expect(reason).not.toContain("attempt-lock anchor is held");
@@ -268,7 +293,7 @@ describe("completion-gate — decision matrix", () => {
 
     it("reading (2) live-attempt: a held (non-stale) attempt-lock, the full reconnect-vs-retry paragraph, plus the facts", async () => {
       const dir = verdictDirWith(null);
-      liveAttemptLock(dir, TASK);
+      cleanups.push(liveAttemptLock(dir, TASK));
       const { res, out } = await run({ cwd: repoAtHead(HEAD), verdictDir: dir });
       expect(res.blocked).toBe(true);
       const { reason } = JSON.parse(out) as { reason: string };
@@ -280,26 +305,19 @@ describe("completion-gate — decision matrix", () => {
       // floor (>= 0.3.2), so the deny must not assert it unconditionally.
       expect(reason).toMatch(/With grounding-mcp >= 0\.11\.0:/);
       expect(reason).toMatch(/no readable verdict marker/);
-      expect(reason).toContain('`solution_evaluate` was never called for "task-42"');
-      expect(reason).toMatch(/was never called/);
-      expect(reason).toMatch(/still running in the background/);
-      expect(reason).toMatch(/could not be read or parsed/);
-      // Fact 1: reconnect by attempt id via the status/result tools.
-      expect(reason).toMatch(/solution_evaluate_status/);
-      expect(reason).toMatch(/solution_evaluate_result/);
-      expect(reason).toMatch(/attemptId/);
-      // Fact 2: do not retry while the lock is held (a second call JOINS the
-      // live attempt, per an earlier review finding: the deny used to claim
-      // a second call is refused, which is false against grounding-mcp's
-      // join semantics; only forceNewAttempt is refused while the lock holds).
-      expect(reason).toMatch(/Never re-call `solution_evaluate`/);
-      expect(reason).toMatch(/joins/i);
-      expect(reason).toMatch(/forceNewAttempt/);
-      // Fact 3: poll interval and retention bounds from the released grounding-mcp version.
-      expect(reason).toMatch(/pollAfterMs/);
-      expect(reason).toMatch(/5000ms/);
-      expect(reason).toMatch(/24h/);
-      expect(reason).toMatch(/100x pollAfterMs/);
+      // Review round-2 finding (MEDIUM, tests): pin the reconnect paragraph
+      // by asserting the hook's reason CONTAINS the shared module's own
+      // rendered output verbatim, not by hand-restating its sentences as
+      // separate substrings here (a hook-side copy that had drifted from
+      // the module by one word still satisfied every hand-restated
+      // substring below, so P-3 survived). A byte-identical copy is
+      // unobservable by construction and is not itself a probe; what this
+      // containment assertion actually discriminates is a hook that stops
+      // calling `renderReconnectDenyParagraph` and inlines its own text
+      // instead (P-3: the call site patched to a literal copy differing by
+      // one word no longer produces a `reason` that contains this exact
+      // string).
+      expect(reason).toContain(renderReconnectDenyParagraph(TASK));
     });
 
     // Stale-lock regression (mutation probe P-2): a lock directory left by a
@@ -318,6 +336,33 @@ describe("completion-gate — decision matrix", () => {
       expect(reason).toContain('No verdict marker exists for "task-42"');
       expect(reason).not.toContain("is still live");
       expect(reason).not.toMatch(/Reconnecting vs\. retrying/);
+    });
+
+    // Error-path regression (mutation probe P-4): `isAttemptLockLive`'s
+    // catch arm must return "not live" (`false`), not propagate or assume
+    // "live", when `checkSync` itself throws. Pointing `verdictDir` at a
+    // REGULAR FILE forces this: every path proper-lockfile's `check` joins
+    // onto it (`<file>/<id>.attempt-lock.lock`) fails `stat` with ENOTDIR,
+    // not ENOENT, and `lib/lockfile.js`'s `check` only swallows ENOENT
+    // (rethrows everything else), so `checkSync` throws for real rather
+    // than resolving "not locked". `readVerdict` and the marker-presence
+    // probe both degrade to "missing" the same way (their shared
+    // `lstatOrNull` catches every stat failure), so this lands on reading
+    // (1) exactly as the ordinary no-marker/no-lock case does; the softened
+    // wording above is what makes that landing honest instead of a false
+    // "confirmed absent" claim.
+    it("an unreadable attempt-lock check (ENOTDIR) does not read as live, and the note does not assert absence", async () => {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), "sa-verdict-not-a-dir-"));
+      cleanups.push(() => fs.rmSync(root, { recursive: true, force: true }));
+      const notADir = path.join(root, "verdict-dir-is-actually-a-file");
+      fs.writeFileSync(notADir, "");
+      const { res, out } = await run({ cwd: repoAtHead(HEAD), verdictDir: notADir });
+      expect(res.blocked).toBe(true);
+      const { reason } = JSON.parse(out) as { reason: string };
+      expect(reason).not.toMatch(/Reconnecting vs\. retrying/);
+      expect(reason).not.toContain("is still live");
+      expect(reason).toMatch(/its attempt-lock anchor does not read as currently live/);
+      expect(reason).toMatch(/liveness could not be determined/);
     });
   });
 
@@ -395,9 +440,9 @@ describe("completion-gate — decision matrix", () => {
   });
 
   it("does not carry the reconnect-vs-retry guidance on the manifest-load-failure failsafe deny", async () => {
-    // Review round 1 finding (LOW, tests): the reconnect paragraph must not
+    // Earlier review finding (LOW, tests): the reconnect paragraph must not
     // appear on the manifest-load-failure failsafe path either (blockJson's
-    // `showReconnectGuidance` defaults to `false` there, same as the
+    // `nullVerdictReading` parameter defaults to `null` there, same as the
     // no-verdict-id path). Force a real load failure (no injected manifest,
     // a `configPath` naming a file that does not exist) rather than
     // asserting against the default-parameter plumbing indirectly.
@@ -764,12 +809,12 @@ describe("completion-gate — solo / non-agent-tasks verdict id (SOLUTION_VERDIC
     expect(reason).toMatch(/no active-claim/);
     expect(reason).toMatch(/SOLUTION_VERDICT_ID/);
     expect(reason).toMatch(/task_start/);
-    // Review round 1 finding (LOW, tests): the reconnect-vs-retry guidance
-    // is gated on `showReconnectGuidance`, which defaults to `false` at
-    // every OTHER call site (this one included, since there is no id to
-    // poll for yet), so the paragraph must not appear here. Unpinned
-    // before this assertion: flipping the default to `true` survived
-    // every existing test.
+    // Earlier review finding (LOW, tests): the reconnect-vs-retry guidance
+    // is gated on `nullVerdictReading` being `"live-attempt"`, and
+    // `nullVerdictReading` defaults to `null` at every OTHER call site
+    // (this one included, since there is no id to poll for yet), so the
+    // paragraph must not appear here. Unpinned before this assertion:
+    // flipping the default to `true` survived every existing test.
     expect(reason).not.toMatch(/Reconnecting vs\. retrying/);
   });
 

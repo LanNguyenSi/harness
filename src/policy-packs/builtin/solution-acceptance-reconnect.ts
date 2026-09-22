@@ -30,13 +30,14 @@
 // (`<verdict dir>/<id>.attempt-lock`, beside the
 // `<id>.attempt-lock.lock` directory `proper-lockfile` manages, from
 // which the producer itself derives its own `running-unconfirmed`
-// status) that would let the deny text rule out two of the three
-// readings below and narrow to just the in-flight case. This module
-// does NOT read it: doing so is a second cross-repo coupling to the
-// producer's lock-file layout, with its own stale-lock semantics to
-// absorb, out of scope for a text-surface change (a follow-up narrows
-// this by reading that anchor). Every rendering below states this as a
-// scope decision, not as "the hook has no signal at all".
+// status). The anchor IS read: `classifyNullVerdictReading` /
+// `isAttemptLockLive` in `../../cli/pack/hook-solution-acceptance.ts`
+// read it to rule two of the three readings below out and select the
+// one it detected (harness/799de976). This module does not touch the
+// filesystem itself; it only owns the WORDING both rendered surfaces
+// share, including `renderReconnectDenyParagraph`'s reading-(2)-only
+// paragraph below, which the hook appends solely when it has detected
+// the live-attempt reading.
 
 /** The grounding-mcp version this reconnect lifecycle was verified against. */
 export const RECONNECT_PRODUCER_FLOOR = "grounding-mcp >= 0.11.0";
@@ -53,11 +54,12 @@ export const RECONNECT_RETENTION = "24h";
 export const RECONNECT_RETENTION_FLOOR = "100x pollAfterMs";
 
 /**
- * The three readings `gate.verdict === null` covers, deliberately left
- * unresolved by this text surface: this module does not read the
- * documented attempt-lock anchor (scope decision, see the module header
- * above and the follow-up it names), so it cannot rule any of the three
- * out from here.
+ * The three readings `gate.verdict === null` covers. The hook
+ * (`classifyNullVerdictReading` / `isAttemptLockLive` in
+ * `../../cli/pack/hook-solution-acceptance.ts`) reads the documented
+ * attempt-lock anchor to rule two of the three out and select the one it
+ * detected; this module only owns the wording listing them, consumed by
+ * `renderReconnectDenyParagraph` below for its reading-(2)-only paragraph.
  */
 export const RECONNECT_THREE_READINGS_LABELS = [
   `\`solution_evaluate\` was never called for "${RECONNECT_TASK_ID_PLACEHOLDER}"`,
@@ -112,12 +114,12 @@ function threeReadingsClause(taskId: string): string {
 export function renderReconnectDenyParagraph(taskId: string): string {
   return `\n${[
     `Reconnecting vs. retrying. ${RECONNECT_VERSION_QUALIFIER} this same`,
-    `"no readable verdict marker" message fires whether`,
+    `"no readable verdict marker" case covers three readings:`,
     threeReadingsClause(taskId),
     `(the verdict marker only appears once an attempt finishes, and is validated on read;`,
-    `this hook does not read the documented attempt-lock anchor, so it cannot rule any of`,
-    `these three apart from here). If you already called \`solution_evaluate\` for this \`id\`,`,
-    `do not call it again:`,
+    `this hook read the documented attempt-lock anchor and is showing you this paragraph`,
+    `because it detected reading (2): an attempt is still live). If you already called`,
+    `\`solution_evaluate\` for this \`id\`, do not call it again:`,
     `${RECONNECT_FACT_RECONNECT_BY_ID}.`,
     `Never re-call \`solution_evaluate\`:`,
     `${RECONNECT_FACT_JOIN_NOT_RETRY}.`,

@@ -217,7 +217,13 @@ function classifyNullVerdictReading(dir: string, id: string): NullVerdictReading
 function nullVerdictReadingNote(taskId: string, reading: NullVerdictReading): string {
   switch (reading) {
     case "never-evaluated":
-      return `No verdict marker exists for "${taskId}" and no solution_evaluate attempt for it is currently live: solution_evaluate has not (yet) been called for this id, or a prior call never got far enough to record one.`;
+      // Softened deliberately (review round-2 finding, LOW): this reading
+      // is also reached when `isAttemptLockLive`'s OWN check threw (its
+      // catch arm returns `false`, "not live", rather than propagating an
+      // unreadable/unresolvable lock state), so this note must not assert
+      // the attempt is confirmed absent when liveness could not actually
+      // be determined; it reports what was observed instead.
+      return `No verdict marker exists for "${taskId}"; its attempt-lock anchor does not read as currently live: solution_evaluate has not (yet) been called for this id, a prior call never got far enough to record one, or liveness could not be determined.`;
     case "unreadable-marker":
       return `A verdict marker exists for "${taskId}" but could not be read or parsed, and no solution_evaluate attempt for it is currently live: re-run solution_evaluate to record a fresh one.`;
     case "live-attempt":
