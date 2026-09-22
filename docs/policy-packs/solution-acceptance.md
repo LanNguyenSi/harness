@@ -252,10 +252,25 @@ anchor") is now implemented, entirely inside `hook-solution-acceptance.ts`
 reconnect-vs-retry paragraph (`renderReconnectDenyParagraph`, still owned
 by `solution-acceptance-reconnect.ts`) is appended only for reading (2),
 "an attempt is live"; readings (1) ("never evaluated") and (3) ("a marker
-exists but could not be read") instead get a short,
-reading-named line (`nullVerdictReadingNote`) with no reconnect paragraph.
+path exists but what is there was not accepted as a verdict") instead get
+a short, reading-named line (`nullVerdictReadingNote`) with no reconnect
+paragraph.
 
-**Detection.** `classifyNullVerdictReading` checks liveness FIRST (a live
+**An unusable id is settled before anything is read.** Both derived paths
+(the marker path and the attempt-lock anchor) go through the same
+`sanitizeVerdictId`, so an id it rejects (`.`, `..`, or anything whose
+basename sanitizes to empty, reachable from an active claim: the
+`SOLUTION_VERDICT_ID` path validates through the same function and
+answers null instead) has NO marker path and NO anchor path, and none of
+the three readings applies to it. `classifyNullVerdictReading` therefore
+answers a separate `kind: "unusable-id"` state, modelled as a union
+member without a `liveness` field so that "the id was unusable" cannot be
+rendered as "a path could not be read"; its note states that one fact,
+points at the active claim, and asks for a usable id rather than
+repeating `solution_evaluate` for an id that can never be accepted.
+
+**Detection.** After id usability, `classifyNullVerdictReading` checks
+liveness BEFORE marker presence (a live
 attempt can coexist with a stale or corrupt marker left by an earlier run
 for the same id, and "reconnect" is the actionable reading in that
 overlap: pinned by a dedicated overlap fixture, a held lock plus a
@@ -280,10 +295,12 @@ library's own check answers `false` for both and swallows the absent-lock
 `ENOENT` internally), or `"unknown"` (the underlying check threw: an
 unreadable directory, a symlink loop, ...). For reading (1) with
 `"unknown"` liveness the note asserts neither a missing marker nor an
-absent attempt, and names no cause: the marker probe folds every `lstat`
-failure into "missing", and the check can throw for the verdict
-directory or for the attempt-lock path alone, which this hook does not
-tell apart.
+absent attempt, and names no cause at all: the marker probe folds every
+`lstat` failure into "missing", and the check can throw for the verdict
+directory, for the attempt-lock path alone, or for something else again,
+which this hook does not tell apart. Four review rounds each replaced one
+guessed cause in this line with a narrower guess that the next reachable
+state falsified, so the line now names none.
 `checkFileLock` never acquires the lock, so there is nothing to release
 or restore.
 
@@ -339,9 +356,18 @@ runtime dependency was added.
 
 Pinned by `tests/cli/pack-hook-solution-acceptance.test.ts` ("gate.verdict
 === null: three readings distinguished by the attempt-lock anchor": one
-test per reading, a dedicated stale-lock regression, the overlap and
+test per reading, a dedicated stale-lock regression whose back-date is a
+literal rather than derived from the constant under test, the overlap and
 indeterminate-liveness fixtures above, and a symlinked-anchor test that
-builds its lock through the real `proper-lockfile` acquisition), and by
+builds its lock through the real `proper-lockfile` acquisition). The
+agent-facing wording itself is pinned by a second block in the same file
+("null-verdict deny note: one exact line per reachable state"), a state
+table carrying one exact expected line per reachable (id-usability,
+reading, liveness) combination plus the assertion that no other state's
+line appears: the note's "state only what was established" invariant is
+checked mechanically there, rather than one fixture per finding as each
+round named it. It is also the checklist for extending the classifier: a
+new state without a row leaves its combination unpinned. Backed further by
 the pre-existing parity/negative tests unchanged from the redesign above
 (the not-ready/stale/no-verdict-id/manifest-load-failure denies still
 carry no reconnect guidance;
