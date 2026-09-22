@@ -86,6 +86,18 @@ describe("solution-acceptance-reconnect: shared fact source (parity)", () => {
     expect(deny).not.toMatch(/message fires whether/);
   });
 
+  // Reading (3)'s label, like the hook's own note for that reading, must
+  // not attribute unreadability to a marker `readVerdict` refuses by
+  // POLICY: a symlink or a non-regular file at the marker path is
+  // rejected without ever being read, so "could not be read or parsed"
+  // states a cause that was not established. A literal pin, same idiom as
+  // the anchor-sentence pin above.
+  it("labels reading (3) by what was established, not by a guessed read failure", () => {
+    const deny = renderReconnectDenyParagraph("task-corrected-2");
+    expect(deny).toContain("a marker path exists but what is there was not accepted as a verdict");
+    expect(deny).not.toContain("a marker exists but could not be read or parsed");
+  });
+
   it("keeps shared tool and attempt identifiers in code formatting", () => {
     expect(RECONNECT_FACT_RECONNECT_BY_ID).toContain("`id`");
     expect(RECONNECT_FACT_RECONNECT_BY_ID).toContain("`attemptId`");
