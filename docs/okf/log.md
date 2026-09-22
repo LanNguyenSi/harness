@@ -57,8 +57,8 @@
   measurements are recorded in the implementer return for this task,
   not claimed here in advance.
 
-- 2026-09-22T09:02:00Z, task `799de976`, state re-read at commit
-  `c10f1b5` (the last source commit of this fix; supersedes the three
+- 2026-09-22T19:22:00Z, task `799de976`, state re-read at commit
+  `a1d95a6` (the last source commit of this fix; supersedes the four
   earlier entries this task left here, consolidated into this one):
   `src/cli/pack/hook-solution-acceptance.ts`'s attempt-lock liveness
   check is now three-valued (`"live" | "not-live" | "unknown"`, routed
@@ -70,13 +70,17 @@
   `sanitizeVerdictId` rejects is a separate `NullVerdictInfo` union
   member (`kind: "unusable-id"`), settled before anything is read and
   carrying no liveness field, so the note for it names no read and no
-  liveness result; the remaining unknown-liveness line names no cause at
-  all, and reading (3) names the complete set of ways `readVerdict`
-  answers null for a present path rather than only "could not be read or
-  parsed". The agent-facing wording is pinned by a nine-row state table
-  in `tests/cli/pack-hook-solution-acceptance.test.ts`, one exact
-  expected line per reachable (id-usability, reading, liveness)
-  combination.
+  liveness result, and the remaining unknown-liveness line names no cause
+  at all. The marker itself is now observed ONCE: `readVerdictDetailed`
+  (`src/policy-packs/builtin/solution-acceptance-runtime.ts`) reports why
+  a read yielded no verdict, the hook passes that single outcome into the
+  classifier instead of probing the path a second time, and each
+  rejection kind renders its own line naming what that read established.
+  The agent-facing wording is pinned by a state table in
+  `tests/cli/pack-hook-solution-acceptance.test.ts` with one exact
+  expected line per (note state, liveness) combination, a coverage test
+  over the exported state list, and a compile-time total `Record` for the
+  lines themselves.
   `docs/policy-packs/solution-acceptance.md` gained the corresponding
   redesign in its "Reading the attempt-lock anchor to distinguish the
   three readings" subsection, and its "Agent-facing surface for the
@@ -91,13 +95,13 @@
   fail-closed header contract, and `docs/policy-packs/solution-acceptance.md`
   lines 56-60, the `ready && head === current HEAD` deny-set enumeration)
   sit before every line this fix touched in both files; re-read at commit
-  `c10f1b5`, neither line range nor content moved, no citation needed
+  `a1d95a6`, neither line range nor content moved, no citation needed
   re-pointing. Doc re-stamped at this entry's timestamp
-  (2026-09-22T09:02:00Z), later than every `sources:` file's own last
+  (2026-09-22T19:22:00Z), later than every `sources:` file's own last
   commit at re-stamp time (the newest being this task's own
-  `docs/policy-packs/solution-acceptance.md` at 2026-09-22T09:01:16Z,
+  `docs/policy-packs/solution-acceptance.md` at 2026-09-22T19:20:26Z,
   ahead of `src/cli/pack/hook-solution-acceptance.ts` at
-  2026-09-22T08:57:30Z). `npx okf-kit@0.14.0 check docs/okf --json` and
+  2026-09-22T19:17:08Z). `npx okf-kit@0.14.0 check docs/okf --json` and
   the same command with `--require-anchors` both report 0 errors / 0
   warnings / 0 notices.
 
