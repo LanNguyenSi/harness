@@ -2,44 +2,39 @@
 
 <!-- Add new entries at the top, newest first. -->
 
-- 2026-09-22T06:52:10Z, task `799de976`: a follow-up fix on
-  `src/cli/pack/hook-solution-acceptance.ts` and
-  `src/policy-packs/builtin/solution-acceptance-reconnect.ts` corrected the
-  reconnect-vs-retry paragraph's own wording (it still said the deny
-  "fires whether" any of three readings and that the hook "does not read"
-  the documented attempt-lock anchor, both false once the paragraph is
-  appended only for the already-detected live-attempt reading) and hardened
-  `isAttemptLockLive`'s error path. `docs/policy-packs/solution-acceptance.md`
-  gained a correction to its "Reading the attempt-lock anchor" subsection's
-  "What stayed the same" note, which had also claimed the paragraph's
-  wording was byte-identical. `src/policy-packs/builtin/
+- 2026-09-22T07:38:14Z, task `799de976`, state re-read at commit
+  `7624d2a` (the last source commit of this fix; supersedes the two
+  earlier entries this task left here, consolidated into this one):
+  `src/cli/pack/hook-solution-acceptance.ts`'s attempt-lock liveness
+  check is now three-valued (`"live" | "not-live" | "unknown"`, routed
+  through a new `checkFileLock` in `src/io/lock.ts`) instead of a boolean
+  that collapsed "the check threw" into "not live"; `nullVerdictReadingNote`
+  now derives its liveness clause from the result instead of a single
+  hardcoded phrase, so neither reading (1) nor (3) claims an attempt is
+  confirmed absent when liveness could not be determined.
+  `docs/policy-packs/solution-acceptance.md` gained the corresponding
+  redesign in its "Reading the attempt-lock anchor to distinguish the
+  three readings" subsection, and its "Agent-facing surface for the
+  in-flight case" section now points at that subsection instead of
+  restating its detection logic. `src/policy-packs/builtin/
   solution-acceptance-reconnect.ts` is not listed under any `sources:` in
-  `docs/okf/*.md` (checked via `rg -l` against every doc's frontmatter), so
-  only `docs/okf/gate-fail-posture-matrix.md` (which lists
+  `docs/okf/*.md` (checked via `rg -l` against every doc's frontmatter),
+  so only `docs/okf/gate-fail-posture-matrix.md` (which lists
   `src/cli/pack/hook-solution-acceptance.ts` and
   `docs/policy-packs/solution-acceptance.md`) needed re-verification: its
   two citations (`src/cli/pack/hook-solution-acceptance.ts` lines 19-22, the
   fail-closed header contract, and `docs/policy-packs/solution-acceptance.md`
   lines 56-60, the `ready && head === current HEAD` deny-set enumeration)
-  sit before every line this fix touched in both files, re-read at HEAD,
-  neither line range nor content moved, no citation needed re-pointing. Doc
-  re-stamped at this entry's timestamp. `npx okf-kit@0.14.0 check docs/okf
-  --json` and the same command with `--require-anchors` both report 0
-  errors / 0 warnings / 0 notices.
-
-- 2026-09-22T06:15:37Z, task `799de976`: `src/cli/pack/hook-solution-acceptance.ts`
-  now reads grounding-mcp's documented attempt-lock anchor to distinguish the
-  three `gate.verdict === null` readings, and `docs/policy-packs/solution-acceptance.md`
-  gained a new "Reading the attempt-lock anchor to distinguish the three
-  readings" subsection. `docs/okf/gate-fail-posture-matrix.md` lists both
-  files under `sources:`; its two citations into them
-  (`src/cli/pack/hook-solution-acceptance.ts` lines 19-22, the fail-closed
-  header contract, and `docs/policy-packs/solution-acceptance.md` lines
-  56-60, the `ready && head === current HEAD` deny-set enumeration) were
-  re-read at HEAD and neither line range nor content moved, so no citation
-  needed re-pointing. Doc re-stamped at this entry's timestamp. `npx
-  okf-kit@0.14.0 check docs/okf --json` and the same command with
-  `--require-anchors` both report 0 errors / 0 warnings / 0 notices.
+  sit before every line this fix touched in both files; re-read at commit
+  `7624d2a`, neither line range nor content moved, no citation needed
+  re-pointing. Doc re-stamped at this entry's timestamp
+  (2026-09-22T07:38:14Z), later than every `sources:` file's own last
+  commit at re-stamp time (the newest being this task's own
+  `docs/policy-packs/solution-acceptance.md` and
+  `src/cli/pack/hook-solution-acceptance.ts`, both at
+  2026-09-22T07:37:25Z). `npx okf-kit@0.14.0 check docs/okf --json` and
+  the same command with `--require-anchors` both report 0 errors / 0
+  warnings / 0 notices.
 
 - 2026-09-21T04:55:32Z, task `8765987a`: converted every bare `path:N[-M]`
   line citation in `docs/okf/` into the anchored `path:N-M#"anchor"` form,
