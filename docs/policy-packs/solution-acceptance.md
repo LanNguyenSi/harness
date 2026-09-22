@@ -253,7 +253,7 @@ reconnect-vs-retry paragraph (`renderReconnectDenyParagraph`, still owned
 by `solution-acceptance-reconnect.ts`) is appended only for reading (2),
 "an attempt is live"; readings (1) ("never evaluated") and (3) ("a marker
 path exists but what is there was not accepted as a verdict") instead get
-a short, reading-named line (`nullVerdictReadingNote`) with no reconnect
+a short, state-specific line (`nullVerdictReadingNote`) with no reconnect
 paragraph.
 
 **An unusable id is settled before anything is read.** Both derived paths
@@ -270,16 +270,41 @@ points at the active claim, and asks for a usable id rather than
 repeating `solution_evaluate` for an id that can never be accepted.
 
 **Detection.** After id usability, `classifyNullVerdictReading` checks
-liveness BEFORE marker presence (a live
+liveness BEFORE the marker outcome (a live
 attempt can coexist with a stale or corrupt marker left by an earlier run
 for the same id, and "reconnect" is the actionable reading in that
 overlap: pinned by a dedicated overlap fixture, a held lock plus a
 co-present unparseable marker, in
-`tests/cli/pack-hook-solution-acceptance.test.ts`), then falls back to a
-stat-only existence probe (`probePathPresence`,
-`src/io/read-regular-file.ts`) on the verdict marker path to split "never
-evaluated" (nothing on disk) from "unreadable marker" (something is
-there, but `readVerdict` rejected it).
+`tests/cli/pack-hook-solution-acceptance.test.ts`), then splits "never
+evaluated" from "unreadable marker" by the outcome of the read the GATE
+already made.
+
+**The marker is observed once, not twice.** `readVerdictDetailed`
+(`solution-acceptance-runtime.ts`) reports WHY a read yielded no verdict
+(`invalid-id`, `missing`, `symlink`, `not-regular`, `unreadable`,
+`invalid-record`, the shared reader's own four kinds plus one), and the
+hook passes that single outcome into the classifier. `readVerdict` is the
+same function with the reason dropped, so every caller that only needs the
+gate decision is unchanged. The earlier design read the marker at the
+decision site and then probed the path again a few statements later
+(`probePathPresence`) to classify it; the two could disagree, because a
+background `solution_evaluate` attempt finishing in that window is exactly
+the case this pack exists for. The note then told the agent its fresh
+marker had been REJECTED when the gate had simply not seen it yet, and the
+remedy it offered ("re-run `solution_evaluate`") was wrong for that state
+(review finding, harness/799de976, round 6). No fixture could have caught
+it, since a fixture holds the filesystem still; the fix removes the second
+observation rather than adding a test for the race.
+
+**One line per rejection kind.** Reading (3) no longer restates a
+disjunction over the ways a marker can be refused ("not a regular file,
+unreadable, or not a valid verdict record"). Each kind renders its own
+line naming what the gate's read established: a symlink refused by policy
+without being read, a path that is not a regular file, a file that could
+not be read, and a file that was read but is not a valid verdict record.
+The lines live in a `Record` keyed by `NULL_VERDICT_NOTE_STATES`, so a
+state added to that list without a line fails the build, and the state
+table's coverage test fails when a listed state has no fixture.
 
 **Liveness is three-valued, not boolean.** `readAttemptLockLiveness`
 reads `<verdict dir>/<id>.attempt-lock` through `src/io/lock.ts`'s
@@ -362,12 +387,15 @@ indeterminate-liveness fixtures above, and a symlinked-anchor test that
 builds its lock through the real `proper-lockfile` acquisition). The
 agent-facing wording itself is pinned by a second block in the same file
 ("null-verdict deny note: one exact line per reachable state"), a state
-table carrying one exact expected line per reachable (id-usability,
-reading, liveness) combination plus the assertion that no other state's
-line appears: the note's "state only what was established" invariant is
+table carrying one exact expected line per reachable (note state,
+liveness) combination plus the assertion that no other state's line
+appears: the note's "state only what was established" invariant is
 checked mechanically there, rather than one fixture per finding as each
-round named it. It is also the checklist for extending the classifier: a
-new state without a row leaves its combination unpinned. Backed further by
+round named it. Its coverage test iterates `NULL_VERDICT_NOTE_STATES` and
+fails when a listed state has no fixture, which is what makes the table a
+checklist rather than a convention; the renderer's own
+`Record<NullVerdictNoteState, ...>` covers the other direction at compile
+time. Backed further by
 the pre-existing parity/negative tests unchanged from the redesign above
 (the not-ready/stale/no-verdict-id/manifest-load-failure denies still
 carry no reconnect guidance;
