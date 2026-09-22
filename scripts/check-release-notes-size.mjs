@@ -21,7 +21,7 @@
 // a runaway section is caught during the PR instead.
 //
 // The ceiling below is deliberately well under GitHub's ~125,000-char
-// limit: the 0.57.0 section measured 110,879 characters at the time this
+// limit: the 0.57.0 section measured 110,880 characters at the time this
 // gate was written (close to the limit already, from long entries
 // documenting a heavily-reviewed change), and the ceiling leaves enough
 // headroom to still flag runaway growth on the NEXT release cycle without
@@ -34,7 +34,7 @@ import { pathToFileURL } from "node:url";
 /**
  * Ceiling in characters. Chosen below GitHub's documented release/tag
  * body limit (roughly 125,000 characters) with headroom above the
- * 110,879-character size measured for the 0.57.0 section when this gate
+ * 110,880-character size measured for the 0.57.0 section when this gate
  * was written - see the module header for the reasoning. Move this
  * deliberately, never as an automatic reaction to one failing run;
  * record the change in CHANGELOG.md.
@@ -63,7 +63,18 @@ export const CEILING = 115000;
  */
 export function extractVersionSectionLines(changelogText, version) {
   const heading = new RegExp(`^## \\[${version}\\]`);
-  const lines = changelogText.split("\n");
+  // A file that ends with a newline (the ordinary case) splits into one
+  // MORE element than awk ever sees: "a\n".split("\n") is ["a", ""],
+  // while awk's own newline-delimited records are just ["a"] - it does
+  // not emit a phantom empty record for a trailing newline. Left in,
+  // that phantom "" becomes a spurious matched line whenever a
+  // version's section runs all the way to end of file (the oldest
+  // CHANGELOG section, with no closing "## [" heading after it),
+  // over-counting measureExtractedSize's result by one (its own
+  // trailing-newline "+1" term charges for a line that was never
+  // really there).
+  const rawLines = changelogText.split("\n");
+  const lines = changelogText.endsWith("\n") ? rawLines.slice(0, -1) : rawLines;
   let found = false;
   const out = [];
   for (const line of lines) {

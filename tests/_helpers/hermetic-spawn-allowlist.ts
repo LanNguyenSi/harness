@@ -447,7 +447,7 @@ function isUnderTmp(resolvedPath: string): boolean {
   return TMP_PREFIXES.some((prefix) => resolvedPath.startsWith(prefix));
 }
 
-// D6: the four infra binaries the suite's fixture setup genuinely needs.
+// D6: the five infra binaries the suite's fixture setup genuinely needs.
 // Resolved FRESH per call (through the same resolveCached used for every
 // spawn, so repeated lookups under the same cwd/PATH are cache-hits, not
 // repeated fs syscalls) rather than baked in once at setup time — a test
@@ -480,6 +480,12 @@ const INFRA: ReadonlyArray<{ name: string; reason: string }> = [
   // patch: real system `patch`, used by tests/io/patch.test.ts to prove
   // a generated unified diff actually applies (round-trip check).
   { name: "patch", reason: "round-trip-applies a generated diff in tests/io/patch.test.ts." },
+  // awk: real system awk, spawned directly (no `sh -c` indirection) by
+  // the release-notes-size parity test to run release.yml's actual
+  // extraction program and compare its real output against this repo's
+  // JS reimplementation - a genuine drift check, not a fixture binary
+  // (task 3a910716).
+  { name: "awk", reason: "release.yml's real awk extraction program, run directly by tests/scripts/check-release-notes-size.test.ts's parity check." },
 ];
 
 function infraCandidates(name: string, cwd: string, pathEnv: string | undefined): readonly string[] {

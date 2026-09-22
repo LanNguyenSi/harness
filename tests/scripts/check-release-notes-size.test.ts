@@ -32,6 +32,18 @@ it("release.yml's ceiling literal stays pinned to CEILING", () => {
   expect(releaseYml).toContain(`ceiling=${CEILING}`);
 });
 
+// Locale pin: release.yml's "Release-notes size ceiling" step's `wc -m`
+// only counts CHARACTERS (matching this script's JS `.length` unit)
+// under a UTF-8 locale - without one pinned, it silently falls back to
+// counting BYTES, over-counting any multi-byte UTF-8 character. A
+// mutant that drops the pin or weakens it (e.g. to plain "C") would
+// reintroduce that byte-vs-character divergence unnoticed by any other
+// test here.
+it("release.yml pins LC_ALL to C.UTF-8 so wc -m counts characters, not bytes", () => {
+  const releaseYml = readFileSync(join(process.cwd(), ".github/workflows/release.yml"), "utf8");
+  expect(releaseYml).toContain("LC_ALL: C.UTF-8");
+});
+
 describe("extractVersionSection", () => {
   it("extracts the section body between the version's heading and the next heading", () => {
     const changelog = ["## [Unreleased]", "", "## [0.2.0]", "- entry a", "- entry b", "", "## [0.1.0]", "- old"].join("\n");
@@ -56,23 +68,33 @@ describe("extractVersionSection", () => {
 });
 
 // Parity with release.yml's ACTUAL awk step (not a re-implementation of
-// it): runs the same `awk '/^## \[V\]/{found=1; next} /^## \[/{found=0}
-// found'` program release.yml's "Extract changelog for this version"
-// step uses, via child_process, against a fixture CHANGELOG, and checks
-// that measureExtractedSize's byte count over the SAME extraction
-// (extractVersionSectionLines) equals the byte length of awk's real
-// stdout. This is the round-2 fix for the finding that the check
-// script's own .length measurement (no trailing newline) undercounted
-// release.yml's true release_notes.md size by exactly one newline.
-// Real awk is spawned through `sh -c` (INFRA-allowlisted in
-// tests/_helpers/hermetic-spawn-allowlist.ts, the same real system shell
-// several existing tests already invoke directly) rather than as a
-// direct `awk` child: this suite's suite-wide hermetic spawn guard
-// refuses a direct spawn of a non-allowlisted binary, and that guard
-// file is out of this task's scope.
+// it): reads the real program text out of release.yml's own "Extract
+// changelog for this version" step (no hand-restated copy of the
+// program to drift out of sync with it) and runs THAT program, via
+// child_process, against a fixture CHANGELOG - so a change to
+// release.yml's awk program alone (not just this script) fails this
+// test. `version` is substituted for the step's own
+// `${{ steps.version.outputs.version }}` placeholder, the same
+// substitution GitHub Actions performs at run time.
+function readReleaseYmlAwkProgram(): string {
+  const releaseYml = readFileSync(join(process.cwd(), ".github/workflows/release.yml"), "utf8");
+  const match = releaseYml.match(/awk '([^'\n]*)' CHANGELOG\.md/);
+  const program = match?.[1];
+  if (program === undefined) {
+    throw new Error("could not find the awk extraction program in .github/workflows/release.yml's 'Extract changelog for this version' step");
+  }
+  return program;
+}
+
+// Real awk is spawned directly (INFRA-allowlisted in
+// tests/_helpers/hermetic-spawn-allowlist.ts, the same real system tool
+// git/patch/sh already are) rather than through a `sh -c` indirection:
+// execFile* never invokes a shell, so the program text needs no quoting
+// at all, and a direct child is what this suite's hermetic spawn guard
+// is actually meant to see and allowlist.
 function runReleaseYmlAwk(version: string, changelog: string): string {
-  const program = `/^## \\[${version}\\]/{found=1; next} /^## \\[/{found=0} found`;
-  return execFileSync("sh", ["-c", "awk \"$1\"", "--", program], {
+  const program = readReleaseYmlAwkProgram().replace("${{ steps.version.outputs.version }}", version);
+  return execFileSync("awk", [program], {
     input: changelog,
     encoding: "utf8",
   });
@@ -97,6 +119,44 @@ describe("measureExtractedSize matches the real awk step's output size", () => {
 
     expect(measureExtractedSize(lines)).toBe(0);
     expect(awkOutput).toBe("");
+  });
+
+  // Newline-terminated EOF case (the round-3 fix for the phantom
+  // trailing split element): the version's section runs to the very
+  // end of a file that itself ends with "\n" (the ordinary case for a
+  // real CHANGELOG.md, and the oldest section in it, with no closing
+  // "## [" heading after it). Without the fix, `changelogText.split`'s
+  // spurious trailing "" would be counted as one more matched line than
+  // awk's real output has.
+  it("matches awk's output when the section runs to end of a newline-terminated file", () => {
+    const version = "0.1.0";
+    const changelog = ["## [Unreleased]", "", "## [0.1.0]", "- last entry", "- another line"].join("\n") + "\n";
+    const lines = extractVersionSectionLines(changelog, version);
+
+    const awkOutput = runReleaseYmlAwk(version, changelog);
+
+    expect(measureExtractedSize(lines)).toBe(Buffer.byteLength(awkOutput, "utf8"));
+  });
+
+  // Astral-plane relation: `wc -m` under release.yml's pinned C.UTF-8
+  // locale counts Unicode CODE POINTS (one per character, matched here
+  // by Array.from(...).length, which iterates by code point). This
+  // script's `measureExtractedSize` is built from JS string `.length`,
+  // which counts UTF-16 CODE UNITS - two for an astral-plane character
+  // (code point above U+FFFF, e.g. an emoji: a surrogate pair) where a
+  // code-point count sees one. So for astral-plane text this script's
+  // pre-tag measurement is always >= wc -m's at-tag measurement, never
+  // the looser of the two gates - it can only be equal to or stricter
+  // than release.yml's own check for the same section.
+  it("over-counts an astral-plane character relative to a code-point count (the pre-tag gate is never the looser one)", () => {
+    const version = "0.4.0";
+    const changelog = ["## [Unreleased]", "", "## [0.4.0]", "- celebrate \u{1F389} done", "", "## [0.1.0]", "- old"].join("\n");
+    const lines = extractVersionSectionLines(changelog, version);
+
+    const awkOutput = runReleaseYmlAwk(version, changelog);
+    const codePointCount = Array.from(awkOutput).length;
+
+    expect(measureExtractedSize(lines)).toBe(codePointCount + 1);
   });
 });
 

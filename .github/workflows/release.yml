@@ -74,7 +74,14 @@ jobs:
         # multi-byte UTF-8 character would be over-counted relative to
         # the check script's JS `.length` (UTF-16 code units per
         # character). `LC_ALL: C.UTF-8` below pins the locale so `wc -m`
-        # always counts characters, matching the check script's units.
+        # counts Unicode code points: for Basic Multilingual Plane text
+        # (ordinary CHANGELOG prose) that agrees exactly with the check
+        # script's `.length`, one unit per character either way. For an
+        # astral-plane character (code point above U+FFFF, e.g. an
+        # emoji), `.length` counts a two-unit surrogate pair where
+        # `wc -m` counts one code point, so the check script's pre-tag
+        # measurement is never the looser of the two gates for such a
+        # section - only ever equal to, or stricter than, this step's.
         #
         # VERSION comes in via `env:`, same rationale as the empty-notes
         # guard above: shell-data only, never spliced into the script's
