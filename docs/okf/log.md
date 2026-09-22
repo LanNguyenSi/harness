@@ -57,8 +57,8 @@
   measurements are recorded in the implementer return for this task,
   not claimed here in advance.
 
-- 2026-09-22T07:38:14Z, task `799de976`, state re-read at commit
-  `7624d2a` (the last source commit of this fix; supersedes the two
+- 2026-09-22T08:20:00Z, task `799de976`, state re-read at commit
+  `1f0d7f0` (the last source commit of this fix; supersedes the two
   earlier entries this task left here, consolidated into this one):
   `src/cli/pack/hook-solution-acceptance.ts`'s attempt-lock liveness
   check is now three-valued (`"live" | "not-live" | "unknown"`, routed
