@@ -2,6 +2,20 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-09-22T06:15:37Z, task `799de976`: `src/cli/pack/hook-solution-acceptance.ts`
+  now reads grounding-mcp's documented attempt-lock anchor to distinguish the
+  three `gate.verdict === null` readings, and `docs/policy-packs/solution-acceptance.md`
+  gained a new "Reading the attempt-lock anchor to distinguish the three
+  readings" subsection. `docs/okf/gate-fail-posture-matrix.md` lists both
+  files under `sources:`; its two citations into them
+  (`src/cli/pack/hook-solution-acceptance.ts` lines 19-22, the fail-closed
+  header contract, and `docs/policy-packs/solution-acceptance.md` lines
+  56-60, the `ready && head === current HEAD` deny-set enumeration) were
+  re-read at HEAD and neither line range nor content moved, so no citation
+  needed re-pointing. Doc re-stamped at this entry's timestamp. `npx
+  okf-kit@0.14.0 check docs/okf --json` and the same command with
+  `--require-anchors` both report 0 errors / 0 warnings / 0 notices.
+
 - 2026-09-21T04:55:32Z, task `8765987a`: converted every bare `path:N[-M]`
   line citation in `docs/okf/` into the anchored `path:N-M#"anchor"` form,
   including 27 comma/continuation-form citations chained off a governing

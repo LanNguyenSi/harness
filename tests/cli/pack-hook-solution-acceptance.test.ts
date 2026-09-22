@@ -3,7 +3,10 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { Readable, Writable } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { runPackHookSolutionAcceptanceCli } from "../../src/cli/pack/hook-solution-acceptance.js";
+import {
+  ATTEMPT_LOCK_STALE_MS,
+  runPackHookSolutionAcceptanceCli,
+} from "../../src/cli/pack/hook-solution-acceptance.js";
 import { signVerdict, type Verdict } from "../../src/policy-packs/builtin/solution-acceptance-runtime.js";
 import { parseManifest, type Manifest } from "../../src/schema/index.js";
 
@@ -87,6 +90,31 @@ function verdictDirWith(
     fs.writeFileSync(path.join(dir, `${id}.json`), JSON.stringify(body));
   }
   return dir;
+}
+
+/**
+ * `proper-lockfile`'s own on-disk lock target for an anchor path is
+ * `<anchor>.lock` (a directory, `getLockFile` in `lib/lockfile.js`); this
+ * mirrors that layout directly rather than going through the library's
+ * `lock()` call, so these fixtures stay pure filesystem state (no process
+ * actually holds the lock; the hook's `checkSync` reads mtime alone, per
+ * `isLockStale`, `stat.mtime.getTime() < Date.now() - stale`).
+ */
+function attemptLockDir(verdictDir: string, id: string): string {
+  return path.join(verdictDir, `${id}.attempt-lock.lock`);
+}
+
+/** A LIVE attempt lock: freshly created, mtime "now". */
+function liveAttemptLock(verdictDir: string, id: string): void {
+  fs.mkdirSync(attemptLockDir(verdictDir, id), { recursive: true });
+}
+
+/** A STALE attempt lock: mtime set past `ATTEMPT_LOCK_STALE_MS`, as if left by a dead process. */
+function staleAttemptLock(verdictDir: string, id: string): void {
+  const dir = attemptLockDir(verdictDir, id);
+  fs.mkdirSync(dir, { recursive: true });
+  const old = new Date(Date.now() - ATTEMPT_LOCK_STALE_MS - 60_000);
+  fs.utimesSync(dir, old, old);
 }
 
 function manifest(enabled = true): Manifest {
@@ -200,46 +228,97 @@ describe("completion-gate — decision matrix", () => {
     expect(env.reason).toMatch(/no solution-acceptance verdict/);
   });
 
-  it("the no-verdict deny carries the reconnect-vs-retry facts (attempt id, no-retry-while-locked, poll/retention bounds)", async () => {
-    // Regression for the agent-facing surface added for the reconnect-vs-
-    // retry guidance (grounding-mcp >= 0.11.0): `gate.verdict === null` is
-    // ambiguous between "never evaluated", "an attempt is still running in
-    // the background", and "a marker exists but could not be read or
-    // parsed" (this hook does not read the documented attempt-lock anchor,
-    // scope decision, see the follow-up in
-    // solution-acceptance-reconnect.ts), so this exact deny must carry all
-    // three readings and the facts an agent needs either way.
-    const { res, out } = await run({ cwd: repoAtHead(HEAD), verdictDir: verdictDirWith(null) });
-    expect(res.blocked).toBe(true);
-    const { reason } = JSON.parse(out) as { reason: string };
-    // The producer-version qualifier: this reconnect lifecycle is verified
-    // against grounding-mcp >= 0.11.0, not the pack's own (older) producer
-    // floor (>= 0.3.2), so the deny must not assert it unconditionally.
-    expect(reason).toMatch(/With grounding-mcp >= 0\.11\.0:/);
-    // The "no readable verdict marker" wording, and all three readings
-    // pinned (round 2 finding: the third reading's exact wording had
-    // drifted unpinned).
-    expect(reason).toMatch(/no readable verdict marker/);
-    expect(reason).toContain('`solution_evaluate` was never called for "task-42"');
-    expect(reason).toMatch(/was never called/);
-    expect(reason).toMatch(/still running in the background/);
-    expect(reason).toMatch(/could not be read or parsed/);
-    // Fact 1: reconnect by attempt id via the status/result tools.
-    expect(reason).toMatch(/solution_evaluate_status/);
-    expect(reason).toMatch(/solution_evaluate_result/);
-    expect(reason).toMatch(/attemptId/);
-    // Fact 2: do not retry while the lock is held (a second call JOINS the
-    // live attempt, review round 1 finding: the deny used to claim a second
-    // call is refused, which is false against grounding-mcp's join semantics;
-    // only forceNewAttempt is refused while the lock holds).
-    expect(reason).toMatch(/Never re-call `solution_evaluate`/);
-    expect(reason).toMatch(/joins/i);
-    expect(reason).toMatch(/forceNewAttempt/);
-    // Fact 3: poll interval and retention bounds from the released grounding-mcp version.
-    expect(reason).toMatch(/pollAfterMs/);
-    expect(reason).toMatch(/5000ms/);
-    expect(reason).toMatch(/24h/);
-    expect(reason).toMatch(/100x pollAfterMs/);
+  describe("gate.verdict === null: three readings distinguished by the attempt-lock anchor", () => {
+    // AC-001: `gate.verdict === null` used to be ambiguous between "never
+    // evaluated", "an attempt is still running in the background", and "a
+    // marker exists but could not be read or parsed": the SAME deny text
+    // for all three. This hook now reads grounding-mcp's documented
+    // attempt-lock anchor (`<verdict dir>/<id>.attempt-lock`, README table
+    // row "Attempt lock anchor" at grounding-mcp-v0.12.0) to tell reading
+    // (2) ("an attempt is live") apart from readings (1) and (3), and only
+    // reading (2) gets the full reconnect-vs-retry paragraph; (1) and (3)
+    // get their own short, reading-named line instead (docs/policy-packs/
+    // solution-acceptance.md, "Agent-facing surface for the in-flight
+    // case").
+
+    it("reading (1) never-evaluated: no marker, no live attempt-lock, short text, no reconnect paragraph", async () => {
+      const { res, out } = await run({ cwd: repoAtHead(HEAD), verdictDir: verdictDirWith(null) });
+      expect(res.blocked).toBe(true);
+      const { reason } = JSON.parse(out) as { reason: string };
+      expect(reason).toMatch(/no solution-acceptance verdict recorded/);
+      expect(reason).toContain('No verdict marker exists for "task-42"');
+      expect(reason).toMatch(/no solution_evaluate attempt for it is currently live/);
+      expect(reason).not.toMatch(/Reconnecting vs\. retrying/);
+      expect(reason).not.toMatch(/With grounding-mcp >= 0\.11\.0:/);
+      expect(reason).not.toContain("attempt-lock anchor is held");
+    });
+
+    it("reading (3) unreadable-marker: a marker file exists but fails to parse, no live attempt-lock, short text, no reconnect paragraph", async () => {
+      const dir = verdictDirWith(null);
+      fs.writeFileSync(path.join(dir, `${TASK}.json`), "{not valid json");
+      const { res, out } = await run({ cwd: repoAtHead(HEAD), verdictDir: dir });
+      expect(res.blocked).toBe(true);
+      const { reason } = JSON.parse(out) as { reason: string };
+      expect(reason).toContain('A verdict marker exists for "task-42" but could not be read or parsed');
+      expect(reason).toMatch(/no solution_evaluate attempt for it is currently live/);
+      expect(reason).not.toContain('No verdict marker exists for "task-42"');
+      expect(reason).not.toMatch(/Reconnecting vs\. retrying/);
+      expect(reason).not.toMatch(/With grounding-mcp >= 0\.11\.0:/);
+    });
+
+    it("reading (2) live-attempt: a held (non-stale) attempt-lock, the full reconnect-vs-retry paragraph, plus the facts", async () => {
+      const dir = verdictDirWith(null);
+      liveAttemptLock(dir, TASK);
+      const { res, out } = await run({ cwd: repoAtHead(HEAD), verdictDir: dir });
+      expect(res.blocked).toBe(true);
+      const { reason } = JSON.parse(out) as { reason: string };
+      expect(reason).toContain('A solution_evaluate attempt for "task-42" is still live');
+      expect(reason).toMatch(/attempt-lock anchor is held/);
+      expect(reason).not.toContain('No verdict marker exists for "task-42"');
+      // The producer-version qualifier: this reconnect lifecycle is verified
+      // against grounding-mcp >= 0.11.0, not the pack's own (older) producer
+      // floor (>= 0.3.2), so the deny must not assert it unconditionally.
+      expect(reason).toMatch(/With grounding-mcp >= 0\.11\.0:/);
+      expect(reason).toMatch(/no readable verdict marker/);
+      expect(reason).toContain('`solution_evaluate` was never called for "task-42"');
+      expect(reason).toMatch(/was never called/);
+      expect(reason).toMatch(/still running in the background/);
+      expect(reason).toMatch(/could not be read or parsed/);
+      // Fact 1: reconnect by attempt id via the status/result tools.
+      expect(reason).toMatch(/solution_evaluate_status/);
+      expect(reason).toMatch(/solution_evaluate_result/);
+      expect(reason).toMatch(/attemptId/);
+      // Fact 2: do not retry while the lock is held (a second call JOINS the
+      // live attempt, per an earlier review finding: the deny used to claim
+      // a second call is refused, which is false against grounding-mcp's
+      // join semantics; only forceNewAttempt is refused while the lock holds).
+      expect(reason).toMatch(/Never re-call `solution_evaluate`/);
+      expect(reason).toMatch(/joins/i);
+      expect(reason).toMatch(/forceNewAttempt/);
+      // Fact 3: poll interval and retention bounds from the released grounding-mcp version.
+      expect(reason).toMatch(/pollAfterMs/);
+      expect(reason).toMatch(/5000ms/);
+      expect(reason).toMatch(/24h/);
+      expect(reason).toMatch(/100x pollAfterMs/);
+    });
+
+    // Stale-lock regression (mutation probe P-2): a lock directory left by a
+    // DEAD process (mtime past ATTEMPT_LOCK_STALE_MS, grounding-mcp's own
+    // DEFAULT_ATTEMPT_LOCK_STALE_MS = 30_000, solution-attempt-log.ts:102 at
+    // v0.12.0) must NOT read as live: otherwise a crashed attempt would
+    // wedge every future denial behind "reconnect" guidance forever, since
+    // nothing else ever clears a lock directory `proper-lockfile` left
+    // behind.
+    it("a STALE attempt-lock (past ATTEMPT_LOCK_STALE_MS) does not count as live", async () => {
+      const dir = verdictDirWith(null);
+      staleAttemptLock(dir, TASK);
+      const { res, out } = await run({ cwd: repoAtHead(HEAD), verdictDir: dir });
+      expect(res.blocked).toBe(true);
+      const { reason } = JSON.parse(out) as { reason: string };
+      expect(reason).toContain('No verdict marker exists for "task-42"');
+      expect(reason).not.toContain("is still live");
+      expect(reason).not.toMatch(/Reconnecting vs\. retrying/);
+    });
   });
 
   it("BLOCKS a not-ready verdict and surfaces the blockers", async () => {

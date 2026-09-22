@@ -24,6 +24,8 @@
 // `solution_evaluate` as the recovery path so the operator is never wedged;
 // `harness pause` (honored first) is the operator's hard override.
 
+import * as path from "node:path";
+import lockfile from "proper-lockfile";
 import {
   readActiveClaim,
 } from "../../policy-packs/builtin/understanding-before-execution-runtime.js";
@@ -34,11 +36,14 @@ import {
   readVerdict,
   resolveExplicitVerdictId,
   resolveProtectedCompletionTools,
+  sanitizeVerdictId,
   VERDICT_ID_ENV,
   verdictDir as resolveVerdictDir,
+  verdictPathFor,
 } from "../../policy-packs/builtin/solution-acceptance-runtime.js";
 import { renderReconnectDenyParagraph } from "../../policy-packs/builtin/solution-acceptance-reconnect.js";
 import { resolveGeneratedDir } from "../../io/generated-dir.js";
+import { probePathPresence } from "../../io/read-regular-file.js";
 import { resolveGitContext } from "../../runtime/git-context.js";
 import { renderAgentFacing } from "../../runtime/agent-facing.js";
 import {
@@ -119,26 +124,122 @@ function completionActionLabel(
 
 
 /**
- * Reconnect-vs-retry guidance appended to the default deny text only when
- * `showReconnectGuidance` is set (the `gate.verdict === null` case: no
- * READABLE verdict marker for this id). That single condition covers THREE
- * readings, deliberately left unresolved here: "solution_evaluate was never
- * called for this id"; "a solution_evaluate attempt for this id is still
- * running in the background" (grounding-mcp >= 0.11.0's `{status: "running"}`
- * reply, or a call that timed out before it ever returned a handle); and "a
- * marker exists but `readVerdict` rejected it" (an invalid id, a symlinked
- * marker, a non-regular file, an unreadable file, malformed JSON, or a body
- * missing `id`/`head`/`ready`; see `readVerdict`,
- * solution-acceptance-runtime.ts). The paragraph itself is rendered from
- * `solution-acceptance-reconnect.ts`, the SAME fact source the pack's
- * `instructions.md` "Reconnecting vs. retrying" section renders from (see
- * that module's header for the attempt-lock-anchor scope decision this
- * hook does not read), so the two surfaces cannot silently drift apart;
- * see docs/policy-packs/solution-acceptance.md, "Agent-facing surface for
- * the in-flight case", for the decision record.
+ * Suffix of the attempt-lock ANCHOR file grounding-mcp writes beside the
+ * verdict marker, mirroring its own `LOCK_ANCHOR_SUFFIX`
+ * (grounding-mcp-v0.12.0 packages/grounding-mcp/src/solution-attempt-log.ts:209)
+ * and README table row "Attempt lock anchor" (`<verdict dir>/<id>.attempt-lock`,
+ * mode `0600`; the lock itself is the `<id>.attempt-lock.lock` directory
+ * `proper-lockfile` manages beside it, packages/grounding-mcp/README.md:42
+ * at that tag).
  */
-function reconnectGuidanceFor(taskId: string, showReconnectGuidance: boolean): string {
-  if (!showReconnectGuidance) return "";
+const ATTEMPT_LOCK_ANCHOR_SUFFIX = ".attempt-lock";
+
+/**
+ * Staleness window this hook applies when READING the attempt-lock anchor,
+ * matching the producer's own value: `DEFAULT_ATTEMPT_LOCK_STALE_MS`
+ * (grounding-mcp-v0.12.0 packages/grounding-mcp/src/solution-attempt-log.ts:102,
+ * `= 30_000`) is the `staleMs` `acquireAttemptLock` passes straight through
+ * to `lockfile.lock(anchor, { retries: 0, realpath: false, stale:
+ * options.staleMs, ... })` (same file, lines 472-475) on every acquisition:
+ * i.e. this IS the window the producer itself uses to decide a lock left by
+ * a dead process is reclaimable, not an independently chosen value. Reading
+ * with the SAME window (via `lockfile.checkSync`'s own stale formula,
+ * `mtime < now - stale`, `lib/lockfile.js` `isLockStale`) means a lock this
+ * hook reports "live" is one the producer itself would still refuse to
+ * reclaim, and a lock it reports "stale" is one the producer itself would
+ * reclaim on its next acquisition attempt: this hook's reading and the
+ * producer's own reclamation rule agree by construction, not by
+ * coincidence of matching constants.
+ */
+export const ATTEMPT_LOCK_STALE_MS = 30_000;
+
+export type NullVerdictReading = "live-attempt" | "never-evaluated" | "unreadable-marker";
+
+function attemptLockAnchorPath(dir: string, id: string): string {
+  return path.join(dir, `${sanitizeVerdictId(id)}${ATTEMPT_LOCK_ANCHOR_SUFFIX}`);
+}
+
+/**
+ * Read-only liveness check: does `id`'s attempt-lock anchor's `.lock`
+ * directory exist and read as NOT stale under `ATTEMPT_LOCK_STALE_MS`?
+ * Uses `proper-lockfile`'s own `checkSync` (already a harness runtime
+ * dependency, `src/io/lock.ts`), the SAME library the producer acquires
+ * the lock with, so the stale/live split is decided by the producer's own
+ * mechanism, not a reimplementation of its mtime arithmetic. `realpath:
+ * false` mirrors the producer's own `acquireAttemptLock` call (cited
+ * above): with the default `realpath: true`, `checkSync` would `realpath`
+ * the anchor FILE itself first, which throws ENOENT whenever no attempt
+ * was ever made for this id (the anchor is created lazily, on first
+ * acquisition), exactly the common "never evaluated" case this function
+ * must answer `false` for, not throw on. Never acquires or mutates the
+ * lock; a check-only read has no cleanup to restore.
+ */
+function isAttemptLockLive(dir: string, id: string): boolean {
+  let anchor: string;
+  try {
+    anchor = attemptLockAnchorPath(dir, id);
+  } catch {
+    return false;
+  }
+  try {
+    return lockfile.checkSync(anchor, { stale: ATTEMPT_LOCK_STALE_MS, realpath: false });
+  } catch {
+    // An unreadable/unresolvable lock state (e.g. a transient stat error)
+    // only narrows WHICH short deny text is shown below; the block itself
+    // stays denied either way (gate.verdict is already null), so failing
+    // to "not live" here is safe, not a fail-open.
+    return false;
+  }
+}
+
+/**
+ * Classify WHY `gate.verdict === null` for `id`, so the deny text can name
+ * the reading it detected instead of leaving all three readings
+ * unresolved (see docs/policy-packs/solution-acceptance.md, "Agent-facing
+ * surface for the in-flight case" / the decision subsection below it, for
+ * the record). Live-attempt takes priority over the marker-presence check:
+ * a live attempt can coexist with a stale or corrupt marker left by an
+ * earlier run for the same id, and "reconnect to the live attempt" is the
+ * actionable reading in that overlap.
+ */
+function classifyNullVerdictReading(dir: string, id: string): NullVerdictReading {
+  if (isAttemptLockLive(dir, id)) return "live-attempt";
+  let markerPath: string;
+  try {
+    markerPath = verdictPathFor(dir, id);
+  } catch {
+    return "never-evaluated";
+  }
+  return probePathPresence(markerPath).kind === "present" ? "unreadable-marker" : "never-evaluated";
+}
+
+/** Short, reading-specific line named for readings (1) and (3); see `classifyNullVerdictReading`. */
+function nullVerdictReadingNote(taskId: string, reading: NullVerdictReading): string {
+  switch (reading) {
+    case "never-evaluated":
+      return `No verdict marker exists for "${taskId}" and no solution_evaluate attempt for it is currently live: solution_evaluate has not (yet) been called for this id, or a prior call never got far enough to record one.`;
+    case "unreadable-marker":
+      return `A verdict marker exists for "${taskId}" but could not be read or parsed, and no solution_evaluate attempt for it is currently live: re-run solution_evaluate to record a fresh one.`;
+    case "live-attempt":
+      return `A solution_evaluate attempt for "${taskId}" is still live: its attempt-lock anchor is held.`;
+  }
+}
+
+/**
+ * Reconnect-vs-retry guidance appended to the default deny text only for
+ * reading (2), "an attempt is live" (`classifyNullVerdictReading` above
+ * returned `"live-attempt"`): the paragraph is rendered from
+ * `solution-acceptance-reconnect.ts`, the SAME fact source the pack's
+ * `instructions.md` "Reconnecting vs. retrying" section renders from, so
+ * the two surfaces cannot silently drift apart. Readings (1)
+ * (never-evaluated) and (3) (unreadable-marker) instead get their own
+ * short `nullVerdictReadingNote` line, with no reconnect paragraph: there
+ * is no live attempt to reconnect to. See
+ * docs/policy-packs/solution-acceptance.md, "Agent-facing surface for the
+ * in-flight case", for the decision record.
+ */
+function reconnectGuidanceFor(taskId: string, reading: NullVerdictReading | null): string {
+  if (reading !== "live-attempt") return "";
   return renderReconnectDenyParagraph(taskId);
 }
 
@@ -149,7 +250,7 @@ function blockJson(
   detail: string,
   ux: PolicyUx | undefined,
   sessionId: string,
-  showReconnectGuidance = false,
+  nullVerdictReading: NullVerdictReading | null = null,
 ): string {
   let reasonText: string;
   if (ux) {
@@ -160,12 +261,13 @@ function blockJson(
   } else {
     reasonText =
       `solution-acceptance: refusing ${actionLabel} (${toolName}). ${detail}\n` +
+      (nullVerdictReading !== null ? `${nullVerdictReadingNote(taskId, nullVerdictReading)}\n` : "") +
       `Completion must be EARNED from a real preflight run at the CURRENT HEAD, not claimed.\n` +
       `Converge in this order, all at one commit:\n` +
       `  1. If the working tree is dirty, COMMIT first. The verdict is pinned to the HEAD it was evaluated at, so any commit you make afterward makes it stale; commit the change before evaluating so the verdict pins to the final HEAD.\n` +
       `  2. mcp__grounding-mcp__solution_evaluate({ id: "${taskId}" }) — runs \`preflight run --json\` (lint/typecheck/test/audit/secret) and records a HEAD-pinned verdict. A clean run at the current HEAD unblocks this tool; a failing run lists the blockers to fix (then back to step 1).\n` +
       `  3. For \`git push\` / \`gh pr merge\`: the separate preflight-before-push gate is satisfied by a preflight at the current HEAD (its \`at_head\` rule), so refresh it at this same commit with \`harness preflight\` before retrying. Satisfy both push-gates at one HEAD.\n` +
-      reconnectGuidanceFor(taskId, showReconnectGuidance) +
+      reconnectGuidanceFor(taskId, nullVerdictReading) +
       `\n` +
       `Operator override: \`harness pause\` (yields this and every other gate).`;
   }
@@ -348,8 +450,9 @@ export async function runPackHookSolutionAcceptanceCli(
   const forgedTag = gate.forged ? " [audit: forged/unsigned verdict marker rejected]" : "";
   const diagnostic = `BLOCK — ${gate.reason}${forgedTag}`;
   note(diagnostic);
+  const nullVerdictReading = gate.verdict === null ? classifyNullVerdictReading(dir, taskId) : null;
   stdout.write(
-    `${blockJson(actionLabel, toolName, taskId, gate.reason, configUx, sessionId, gate.verdict === null)}\n`,
+    `${blockJson(actionLabel, toolName, taskId, gate.reason, configUx, sessionId, nullVerdictReading)}\n`,
   );
   return { exitCode: 0, blocked: true, diagnostic };
 }
