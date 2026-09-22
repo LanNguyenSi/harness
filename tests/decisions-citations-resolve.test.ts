@@ -55,7 +55,12 @@ import { afterAll, describe, expect, it } from "vitest";
 // checked; that is a gap in the grammar's reach, not a bug in the
 // checks below, which run against everything the extractor DOES find.
 // A prose "line N" reference OUTSIDE backticks is not a citation under
-// this grammar at all and is invisible to this guard entirely.
+// this grammar at all and is invisible to this guard entirely. The
+// continuation extractor cannot tell an escaped, illustrative example of
+// the forbidden spelling from a live citation either: outside log.md, write
+// the forbidden spelling with a digit-free placeholder (`:N[-M]`); a
+// concrete example belongs in log.md or in
+// tests/fixtures/continuation-citations/.
 //
 // What resolution actually pins: the END line (M) is anchored, and its text
 // must contain the anchor string, and (per check (f) below) that string
@@ -140,13 +145,11 @@ const CITATION_RE = new RegExp(
 // PRECONDITIONS: exactly how a governing path is tracked, and which token
 // shapes count, are stated once as data below
 // (CONTINUATION_GRAMMAR_PRECONDITIONS, defined just above the
-// "continuation-form citations" describe block further down): ids
-// A-multi, A-boundary-anchor, A-boundary-space, B-nearest, B-cross-line,
-// B-no-governing, AB-chain-governs, L-order, and log-exempt. Each id names
-// one behavior of extractContinuationCitations AND the one fixture that
-// pins it (in that same describe block, via `pinnedIt`); see there for the
-// exact statement and the discriminating test rather than restating them
-// here.
+// "continuation-form citations" describe block further down). The ids are
+// the entries of that list and nowhere else; each is pinned by the
+// `pinnedIt` fixture carrying the same id, and the coverage test in that
+// block fails when the list and the fixtures disagree. See there for the
+// exact statements rather than a copy here.
 const CONTINUATION_COMMA_CHAIN_RE = new RegExp(
   "`([A-Za-z0-9_./-]+\\.(?:" +
     CITED_EXTENSIONS.join("|") +
@@ -1285,6 +1288,11 @@ const CONTINUATION_GRAMMAR_PRECONDITIONS: readonly ContinuationGrammarPreconditi
         "a trailing anchor on the whole comma-chain span is not part of the grammar, and the chain is not collected",
     },
     {
+      id: "A-not-in-citation-re",
+      statement:
+        "CITATION_RE matches no part of a comma-chain span (the trailing comma breaks the backtick-to-backtick match), so the chain is invisible to the bare-citation ratchet and only this grammar sees it",
+    },
+    {
       id: "A-boundary-space",
       statement:
         "a comma chain written with a space after the comma is not part of the grammar, and is not collected",
@@ -1552,9 +1560,22 @@ describe("docs/okf continuation-form citations (`:N`/`:N-M` chained to a governi
     "A-boundary-space",
     "a comma chain written with a space after the comma is not collected (grammar boundary)",
     () => {
-      const plantedDocText = "See `src/planted-example.ts:1, 5-6` for detail.\n";
+      // The chain carries a second, space-free segment (7-8) after the spaced
+      // one: a regex loosened to accept the space would collect that segment
+      // even though the spaced one is dropped, so the fixture moves from 0 to 1.
+      const plantedDocText = "See `src/planted-example.ts:1, 5-6,7-8` for detail.\n";
       const planted = extractContinuationCitations("fixture-scratch.md", plantedDocText);
       expect(planted, JSON.stringify(planted)).toHaveLength(0);
+    },
+  );
+
+  pinnedIt(
+    "A-not-in-citation-re",
+    "CITATION_RE matches no part of a comma-chain span, so only this grammar collects it",
+    () => {
+      const plantedDocText = "See `src/planted-example.ts:31,82-88` for detail.\n";
+      expect(extractCitations("fixture-scratch.md", plantedDocText)).toHaveLength(0);
+      expect(extractContinuationCitations("fixture-scratch.md", plantedDocText)).toHaveLength(1);
     },
   );
 
@@ -1630,7 +1651,7 @@ describe("docs/okf continuation-form citations (`:N`/`:N-M` chained to a governi
 });
 
 // ---------------------------------------------------------------------------
-// Negative-control fixtures (criterion AC-006): a reintroduced continuation
+// Negative-control fixtures (task `ea733314`): a reintroduced continuation
 // citation of EACH spelling, copied from `tests/fixtures/continuation-citations/`
 // into a scratch docs/okf-shaped directory under the REAL historical
 // filenames (`manifest-validation-scope.md`, `pause-vs-gate-kill-switch.md`
@@ -1669,27 +1690,27 @@ describe("negative control: continuation citations reintroduced into the two fil
   });
 
   const { outsideLog } = collectContinuationOutsideLog(okfDir, "docs/okf");
-  const generatedNames = outsideLog.map((c) => `${c.file}:${c.adrLine} ${c.raw}`);
+  const messages = outsideLog.map(continuationOutsideLogMessage);
 
-  it("finds the reintroduced bare `:110` continuation in manifest-validation-scope.md, by its generated test name", () => {
+  it("finds the reintroduced bare `:110` continuation in manifest-validation-scope.md, by the ratchet's own diagnostic", () => {
     expect(
-      generatedNames.some(
-        (n) =>
-          n.startsWith("docs/okf/manifest-validation-scope.md:") &&
-          n.endsWith("`:110`"),
+      messages.some(
+        (m) =>
+          m.startsWith("docs/okf/manifest-validation-scope.md:") &&
+          m.includes(": continuation citation ``:110`` chained to "),
       ),
-      `expected a generated name ending in \`:110\` for docs/okf/manifest-validation-scope.md, got: ${JSON.stringify(generatedNames)}`,
+      `expected the ratchet's own diagnostic naming \`:110\` for docs/okf/manifest-validation-scope.md, got: ${JSON.stringify(messages)}`,
     ).toBe(true);
   });
 
-  it("finds the reintroduced comma-chained continuation in pause-vs-gate-kill-switch.md, by its generated test name", () => {
+  it("finds the reintroduced comma-chained continuation in pause-vs-gate-kill-switch.md, by the ratchet's own diagnostic", () => {
     expect(
-      generatedNames.some(
-        (n) =>
-          n.startsWith("docs/okf/pause-vs-gate-kill-switch.md:") &&
-          n.includes("`src/cli/gate/disable.ts:31,82-88`"),
+      messages.some(
+        (m) =>
+          m.startsWith("docs/okf/pause-vs-gate-kill-switch.md:") &&
+          m.includes(": continuation citation ``src/cli/gate/disable.ts:31,82-88`` chained to "),
       ),
-      `expected a generated name containing the comma-chained citation for docs/okf/pause-vs-gate-kill-switch.md, got: ${JSON.stringify(generatedNames)}`,
+      `expected the ratchet's own diagnostic naming the comma-chained citation for docs/okf/pause-vs-gate-kill-switch.md, got: ${JSON.stringify(messages)}`,
     ).toBe(true);
   });
 });

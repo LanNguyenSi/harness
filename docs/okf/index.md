@@ -51,7 +51,7 @@ task `8765987a` (PR #537) re-anchored every citation; task `ea733314`
 added the extractor and ratchet. The same test file asserts it: its test
 titles report the live continuation count outside `log.md` (asserted at
 zero) and `log.md`'s own historical count (reported, not asserted), the
-same two-count convention the bare-citation rule above uses.
+same two-count convention the bare-citation rule above uses. The extractor cannot tell an escaped, illustrative example of the forbidden spelling from a live citation, so outside `log.md` the spelling is written with the digit-free placeholder above; a concrete example belongs in `log.md` or in `tests/fixtures/continuation-citations/`.
 
 Do not list `CHANGELOG.md` under a doc's frontmatter `sources:`: `okf-kit`'s
 `sources-fresh` check flags a `sources:` entry by file path and commit
