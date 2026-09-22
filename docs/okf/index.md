@@ -42,6 +42,17 @@ at the time of the round-1/round-2 conversions are recorded in
 `CHANGELOG.md`'s corresponding entry, not here, so this section does not
 go stale as new docs are added or citations shift.
 
+**Rule: no continuation-form citation (a bare, path-less `` `:N[-M]` ``
+token, or a comma-separated tail inside a governing citation's own
+backtick span, chained to a governing citation stated earlier in the
+doc) outside `log.md`; `log.md` is exempt as history, same as the
+bare-citation rule above.** This is the spelling docs/okf carried before
+task `8765987a` (PR #537) re-anchored every citation; task `ea733314`
+added the extractor and ratchet. The same test file asserts it: its test
+titles report the live continuation count outside `log.md` (asserted at
+zero) and `log.md`'s own historical count (reported, not asserted), the
+same two-count convention the bare-citation rule above uses.
+
 Do not list `CHANGELOG.md` under a doc's frontmatter `sources:`: `okf-kit`'s
 `sources-fresh` check flags a `sources:` entry by file path and commit
 recency alone, with no per-section scoping, so every CHANGELOG edit

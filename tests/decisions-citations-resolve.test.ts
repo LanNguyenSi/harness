@@ -78,10 +78,13 @@ import { afterAll, describe, expect, it } from "vitest";
 // occurrence of that phrase. PR #537's review flagged this with a
 // measured example still live in the current bundle: `docs/okf/
 // manifest-validation-scope.md` cites `#"EX_FAIL"` 11 times across 8
-// distinct `src/cli/*` ranges, and `#"return diags"` 4 times across 4
-// distinct ranges (both are literal return-statement/throw-argument
-// tokens that recur verbatim across many unrelated functions in
-// `src/cli/validate/checks.ts` and `src/cli/{add,remove}/index.ts`), so a
+// distinct ranges (the literal token `EX_FAIL` itself recurs 4 times in
+// `src/cli/add/index.ts` and 6 times in `src/cli/remove/index.ts`, a
+// throw-argument string repeated verbatim across unrelated functions in
+// BOTH files), and `#"return diags"` 4 times across 4 distinct ranges
+// (the literal token `return diags` recurs 13 times, all in
+// `src/cli/validate/checks.ts` only, a return-statement token repeated
+// verbatim across unrelated functions in that one file), so a
 // citation using either anchor could have its N-M range silently
 // mis-pointed at a DIFFERENT occurrence of the same low-specificity
 // string and this guard would not catch it (each citation's own range
@@ -134,14 +137,16 @@ const CITATION_RE = new RegExp(
 //     CITATION_RE and so is already counted by the existing bare-citation
 //     ratchet below; only the standalone (B) tokens are new here.
 //
-// SCOPE NOTE: (B)'s governing-path tracking is a linear, in-document-order
-// scan per line (CITATION_RE governing matches, then (A) governing
-// segments, then (B) bare tokens, merged by match index within the line);
-// it resets at nothing (a governing path persists across lines within one
-// call to extractContinuationCitations, matching how the historical
-// spellings actually chained across a whole paragraph). A (B) token with
-// no governing path seen yet anywhere earlier in the text is unresolvable
-// and is not counted (there is nothing for it to continue).
+// PRECONDITIONS: exactly how a governing path is tracked, and which token
+// shapes count, are stated once as data below
+// (CONTINUATION_GRAMMAR_PRECONDITIONS, defined just above the
+// "continuation-form citations" describe block further down): ids
+// A-multi, A-boundary-anchor, A-boundary-space, B-nearest, B-cross-line,
+// B-no-governing, AB-chain-governs, L-order, and log-exempt. Each id names
+// one behavior of extractContinuationCitations AND the one fixture that
+// pins it (in that same describe block, via `pinnedIt`); see there for the
+// exact statement and the discriminating test rather than restating them
+// here.
 const CONTINUATION_COMMA_CHAIN_RE = new RegExp(
   "`([A-Za-z0-9_./-]+\\.(?:" +
     CITED_EXTENSIONS.join("|") +
@@ -1243,6 +1248,92 @@ function collectContinuationOutsideLog(
   return { outsideLog, logMdCount };
 }
 
+// The ratchet's own failure-message shape for one offending citation.
+// Factored out (task `ea733314`) so the negative-control describe block
+// further below builds its expected strings from this SAME function,
+// rather than a hand-built, independently maintained string: a change to
+// this message format is caught by the negative controls too, instead of
+// silently drifting apart from them.
+function continuationOutsideLogMessage(c: Citation): string {
+  return `${c.file}:${c.adrLine}: continuation citation \`${c.raw}\` chained to ${c.citedPath}`;
+}
+
+// Every stated precondition of the continuation grammar above, as data
+// (task `ea733314`): a grammar precondition stated only in the comments,
+// with no fixture pinning it, is the class this list and the coverage
+// test below close. Each id is asserted by exactly one fixture in the
+// describe block below (registered via `pinnedIt`); the coverage test at
+// the end of that block fails on either a stated id with no fixture or a
+// fixture id absent from this list, so the next stated precondition
+// without a fixture is red by construction rather than living only in
+// prose.
+interface ContinuationGrammarPrecondition {
+  id: string;
+  statement: string;
+}
+
+const CONTINUATION_GRAMMAR_PRECONDITIONS: readonly ContinuationGrammarPrecondition[] =
+  [
+    {
+      id: "A-multi",
+      statement:
+        "a comma tail (spelling (A)) carries EVERY segment, not just the first",
+    },
+    {
+      id: "A-boundary-anchor",
+      statement:
+        "a trailing anchor on the whole comma-chain span is not part of the grammar, and the chain is not collected",
+    },
+    {
+      id: "A-boundary-space",
+      statement:
+        "a comma chain written with a space after the comma is not part of the grammar, and is not collected",
+    },
+    {
+      id: "B-nearest",
+      statement:
+        "a spelling-(B) bare token continues the NEAREST earlier full citation, not the first one ever seen",
+    },
+    {
+      id: "B-cross-line",
+      statement:
+        "a governing path persists ACROSS LINES within one extractContinuationCitations call; it resets at nothing",
+    },
+    {
+      id: "B-no-governing",
+      statement:
+        "a spelling-(B) bare token with no governing citation seen anywhere earlier in the text is unresolvable and is not counted",
+    },
+    {
+      id: "AB-chain-governs",
+      statement:
+        "a comma chain's (spelling (A)) own path governs a later bare (spelling (B)) token, the same as a governing-full citation would",
+    },
+    {
+      id: "L-order",
+      statement:
+        "tokens within one line are merged by match index (text order), not by which of the three regexes found them, so a bare token appearing before a governing citation on the same line resolves against whatever governing path existed BEFORE that line (or is skipped, if none), never against the later-in-text governing citation on its own line",
+    },
+    {
+      id: "log-exempt",
+      statement:
+        "the ratchet exempts docs/okf/log.md's own continuation citations from the outside-log assertion, reporting log.md's count without asserting it",
+    },
+  ];
+
+const pinnedPreconditionIds = new Set<string>();
+
+// Registers `id` as pinned (at describe-body evaluation time, so this runs
+// regardless of whether the fixture itself later passes or fails) and
+// delegates to `it`, embedding the id in the generated test name so a
+// fixture's presence is visible both in the coverage test below and in
+// `npx vitest run`'s own test list, without a second source of truth to
+// keep in sync.
+function pinnedIt(id: string, name: string, fn: () => void): void {
+  pinnedPreconditionIds.add(id);
+  it(`[${id}] ${name}`, fn);
+}
+
 describe("docs/okf continuation-form citations (`:N`/`:N-M` chained to a governing citation): ratchet", () => {
   const {
     outsideLog: continuationOutsideLog,
@@ -1258,34 +1349,16 @@ describe("docs/okf continuation-form citations (`:N`/`:N-M` chained to a governi
   it("finds zero continuation-form citations chained to a governing citation in docs/okf outside log.md", () => {
     expect(
       continuationOutsideLog,
-      continuationOutsideLog
-        .map(
-          (c) =>
-            `${c.file}:${c.adrLine}: continuation citation \`${c.raw}\` chained to ${c.citedPath}`,
-        )
-        .join("\n"),
+      continuationOutsideLog.map(continuationOutsideLogMessage).join("\n"),
     ).toHaveLength(0);
   });
 
   // Mutation probe P-1 target: a mutant that neutralises
   // extractContinuationCitations (e.g. always returning `[]`) would make
-  // the assertion above pass vacuously. These two fixtures plant a
-  // continuation citation of EACH spelling in a scratch string (never
-  // written into the real bundle) and assert the extractor still finds it.
-  it("fixture: extractContinuationCitations still catches a planted comma-chained continuation (spelling (A), mutation probe P-1 target)", () => {
-    const plantedDocText =
-      "Planted drift: see `src/planted-example.ts:10,20-25` for detail.\n";
-    const planted = extractContinuationCitations(
-      "fixture-scratch.md",
-      plantedDocText,
-    );
-    expect(planted, JSON.stringify(planted)).toHaveLength(1);
-    expect(planted[0]?.citedPath).toBe("src/planted-example.ts");
-    expect(planted[0]?.startLine).toBe(20);
-    expect(planted[0]?.endLine).toBe(25);
-    expect(planted[0]?.anchor).toBeUndefined();
-  });
-
+  // the assertion above pass vacuously. This fixture (spelling (B); spelling
+  // (A) is covered by the A-multi fixture below) plants a continuation
+  // citation in a scratch string (never written into the real bundle) and
+  // asserts the extractor still finds it.
   it("fixture: extractContinuationCitations still catches a planted bare `:N-M` continuation chained to an earlier governing citation (spelling (B), mutation probe P-1 target)", () => {
     const plantedDocText =
       'Planted drift: see `src/planted-example.ts:1-2#"anchor"` and also `:20-25`.\n';
@@ -1300,105 +1373,259 @@ describe("docs/okf continuation-form citations (`:N`/`:N-M` chained to a governi
     expect(planted[0]?.anchor).toBeUndefined();
   });
 
-  // Fixture (a) (mutation probe P-3 target): a spelling-(B) bare token with
-  // NO governing citation anywhere earlier in the text is unresolvable and
-  // must not be counted (SCOPE NOTE above). This pins the `governingPath
-  // === undefined` guard directly: a mutant that assigns a dummy governing
-  // path there instead of skipping the token would make this fixture find
-  // one continuation instead of zero, independent of whether the live
-  // docs/okf bundle happens to carry an unresolvable token today.
-  it("fixture: a planted bare `:N` continuation with no governing citation anywhere earlier is not counted (mutation probe P-3 target)", () => {
-    const plantedDocText = "Planted: see `:110` with no governing citation.\n";
-    const planted = extractContinuationCitations("fixture-scratch.md", plantedDocText);
-    expect(planted, JSON.stringify(planted)).toHaveLength(0);
-  });
+  // Precondition A-multi (mutation probe P-6 target): a comma-chained tail
+  // with only ONE segment (e.g. `10,20-25`) cannot discriminate a mutant
+  // that keeps only the tail's FIRST segment (`.slice(0, 1)`) from correct
+  // behavior, since both return the same one element. This fixture plants
+  // TWO tail segments and asserts both are returned, in order.
+  pinnedIt(
+    "A-multi",
+    "extractContinuationCitations returns EVERY segment of a multi-segment comma tail, not just the first (spelling (A))",
+    () => {
+      const plantedDocText =
+        "Planted drift: see `src/planted-example.ts:10,20-25,30-35` for detail.\n";
+      const planted = extractContinuationCitations(
+        "fixture-scratch.md",
+        plantedDocText,
+      );
+      expect(planted, JSON.stringify(planted)).toHaveLength(2);
+      expect(planted[0]?.citedPath).toBe("src/planted-example.ts");
+      expect(planted[0]?.startLine).toBe(20);
+      expect(planted[0]?.endLine).toBe(25);
+      expect(planted[0]?.anchor).toBeUndefined();
+      expect(planted[1]?.citedPath).toBe("src/planted-example.ts");
+      expect(planted[1]?.startLine).toBe(30);
+      expect(planted[1]?.endLine).toBe(35);
+      expect(planted[1]?.anchor).toBeUndefined();
+    },
+  );
 
-  // Fixture (b) (mutation probe P-4 target): governingPath persists ACROSS
-  // LINES within one call, per the SCOPE NOTE ("resets at nothing"). A
+  // Precondition B-no-governing (mutation probe P-3 target): a spelling-(B)
+  // bare token with NO governing citation anywhere earlier in the text is
+  // unresolvable and must not be counted. This pins the `governingPath ===
+  // undefined` guard directly: a mutant that assigns a dummy governing path
+  // there instead of skipping the token would make this fixture find one
+  // continuation instead of zero, independent of whether the live docs/okf
+  // bundle happens to carry an unresolvable token today.
+  pinnedIt(
+    "B-no-governing",
+    "a planted bare `:N` continuation with no governing citation anywhere earlier is not counted",
+    () => {
+      const plantedDocText = "Planted: see `:110` with no governing citation.\n";
+      const planted = extractContinuationCitations("fixture-scratch.md", plantedDocText);
+      expect(planted, JSON.stringify(planted)).toHaveLength(0);
+    },
+  );
+
+  // Precondition B-cross-line (mutation probe P-4 target): governingPath
+  // persists ACROSS LINES within one call ("resets at nothing"). A
   // governing full citation on one line and a spelling-(B) bare token on a
   // LATER, non-adjacent line still resolves to the earlier governing path.
-  // This pins the cross-line persistence directly: a mutant that resets
-  // governingPath at the start of each line (instead of carrying it across
-  // the whole `lines.forEach` scan) would make this fixture find zero
-  // continuations instead of one.
-  it("fixture: a planted bare `:N-M` continuation resolves to a governing citation stated on an earlier, non-adjacent line (mutation probe P-4 target)", () => {
-    const plantedDocText =
-      'See `src/planted-example.ts:1-2#"anchor"` for detail.\n' +
-      "An unrelated line in between, no citation here.\n" +
-      "Also see `:20-25` later in the document.\n";
-    const planted = extractContinuationCitations("fixture-scratch.md", plantedDocText);
-    expect(planted, JSON.stringify(planted)).toHaveLength(1);
-    expect(planted[0]?.citedPath).toBe("src/planted-example.ts");
-    expect(planted[0]?.startLine).toBe(20);
-    expect(planted[0]?.endLine).toBe(25);
-    expect(planted[0]?.anchor).toBeUndefined();
-  });
+  // A mutant that resets governingPath at the start of each line (instead
+  // of carrying it across the whole `lines.forEach` scan) would make this
+  // fixture find zero continuations instead of one.
+  pinnedIt(
+    "B-cross-line",
+    "a planted bare `:N-M` continuation resolves to a governing citation stated on an earlier, non-adjacent line",
+    () => {
+      const plantedDocText =
+        'See `src/planted-example.ts:1-2#"anchor"` for detail.\n' +
+        "An unrelated line in between, no citation here.\n" +
+        "Also see `:20-25` later in the document.\n";
+      const planted = extractContinuationCitations("fixture-scratch.md", plantedDocText);
+      expect(planted, JSON.stringify(planted)).toHaveLength(1);
+      expect(planted[0]?.citedPath).toBe("src/planted-example.ts");
+      expect(planted[0]?.startLine).toBe(20);
+      expect(planted[0]?.endLine).toBe(25);
+      expect(planted[0]?.anchor).toBeUndefined();
+    },
+  );
 
-  // Fixture (c) (mutation probe P-5 target): the stated grammar boundaries
-  // for spelling (A) -- a comma tail inside the SAME backtick span as the
-  // governing citation, `path:N(-M)(,N2(-M2))+` with no characters other
-  // than digits, commas and dashes inside the tail. Neither of these two
-  // near-miss spellings is part of the grammar CONTINUATION_COMMA_CHAIN_RE
-  // states above, and both are asserted NOT collected: a trailing anchor on
-  // the whole span (`path:N,M-M2#"anchor"`, which the historical spelling
-  // never carried, per the (A)/(B) comment above) and a chain written with
-  // a space after the comma (the historical spelling never carried
-  // whitespace inside the span either). A mutant that loosens
-  // CONTINUATION_COMMA_CHAIN_RE to accept either shape would make one of
-  // these fixtures find a continuation instead of zero.
-  it("fixture: a comma chain with a trailing anchor on the whole span is not collected (grammar boundary, mutation probe P-5 target)", () => {
-    const plantedDocText = 'See `src/planted-example.ts:1,5-6#"x"` for detail.\n';
-    const planted = extractContinuationCitations("fixture-scratch.md", plantedDocText);
-    expect(planted, JSON.stringify(planted)).toHaveLength(0);
-  });
+  // Precondition B-nearest (mutation probe P-7 target): a bare token
+  // continues the NEAREST earlier full citation, not the first one ever
+  // seen. Two governing full citations precede the bare token; a
+  // mutant that only sets governingPath the FIRST time it is undefined
+  // (`if (governingPath === undefined) governingPath = t.match[1];` in
+  // place of the unconditional assignment) would leave it pinned to the
+  // FIRST citation's path, so this fixture asserts the SECOND (nearer)
+  // path instead.
+  pinnedIt(
+    "B-nearest",
+    "a bare token continues the NEAREST earlier full citation, not the first one ever seen",
+    () => {
+      const plantedDocText =
+        'First see `src/first-example.ts:1-2#"anchor"` for context, then ' +
+        '`src/planted-example.ts:5-6#"anchor2"` for the real target, and ' +
+        "also `:20-25`.\n";
+      const planted = extractContinuationCitations("fixture-scratch.md", plantedDocText);
+      expect(planted, JSON.stringify(planted)).toHaveLength(1);
+      expect(
+        planted[0]?.citedPath,
+        "expected the continuation to resolve to the NEARER (second) governing citation, not the first",
+      ).toBe("src/planted-example.ts");
+      expect(planted[0]?.startLine).toBe(20);
+      expect(planted[0]?.endLine).toBe(25);
+    },
+  );
 
-  it("fixture: a comma chain written with a space after the comma is not collected (grammar boundary, mutation probe P-5 target)", () => {
-    const plantedDocText = "See `src/planted-example.ts:1, 5-6` for detail.\n";
-    const planted = extractContinuationCitations("fixture-scratch.md", plantedDocText);
-    expect(planted, JSON.stringify(planted)).toHaveLength(0);
-  });
+  // Precondition AB-chain-governs (mutation probe P-8 target): a comma
+  // chain's own path governs a later bare token, the same as a
+  // governing-full citation would. A mutant that deletes
+  // `governingPath = citedPath;` in the governing-comma branch would leave
+  // governingPath unset after the chain (a real detection hole: a bare
+  // token continuing a comma-chained citation, rather than a plain one,
+  // would silently go uncounted), so this fixture plants a comma chain with
+  // NO earlier governing citation and asserts BOTH the chain's own tail
+  // segment AND a later, cross-line bare token resolving against it.
+  pinnedIt(
+    "AB-chain-governs",
+    "a comma chain's own path governs a later bare token, the same as a governing-full citation would",
+    () => {
+      const plantedDocText =
+        "See `src/chain-example.ts:1,5-6` for the chain.\n" +
+        "Later see `:20-25` too.\n";
+      const planted = extractContinuationCitations("fixture-scratch.md", plantedDocText);
+      expect(planted, JSON.stringify(planted)).toHaveLength(2);
+      expect(planted[0]?.citedPath, "the chain's own tail segment").toBe(
+        "src/chain-example.ts",
+      );
+      expect(planted[0]?.startLine).toBe(5);
+      expect(planted[0]?.endLine).toBe(6);
+      expect(
+        planted[1]?.citedPath,
+        "expected the later bare token to resolve against the comma chain's own path",
+      ).toBe("src/chain-example.ts");
+      expect(planted[1]?.startLine).toBe(20);
+      expect(planted[1]?.endLine).toBe(25);
+    },
+  );
 
-  // Mirrors collectBareNonMd's own log-exemption fixture above: a scratch,
-  // docs/okf-shaped temp directory carrying a planted continuation in one
-  // doc and a planted continuation in log.md, asserting the non-log one is
-  // collected while log.md's own is exempted (counted only).
-  it("fixture: collectContinuationOutsideLog collects a planted non-log continuation and exempts log.md's own", () => {
-    const tmpDir = fs.mkdtempSync(
-      path.join(os.tmpdir(), "collect-continuation-outside-log-fixtures-"),
+  // Precondition L-order (mutation probe P-9 target): tokens within one
+  // line are merged by match index (text order), not by which
+  // regex found them (the code pushes all governing-full matches, then all
+  // governing-comma matches, then all bare matches, so without sorting a
+  // bare token that textually precedes a governing citation on the SAME
+  // line would still see that later citation's path, since it is processed
+  // first). This fixture places a bare token BEFORE its would-be governing
+  // citation, textually, on one line with no earlier governing path: the
+  // correct (sorted) order processes the bare token first (skipped, no
+  // governing path yet), THEN the governing citation (too late to help
+  // it); a mutant that removes `tokens.sort(...)` processes the governing
+  // citation first instead and wrongly resolves the bare token.
+  pinnedIt(
+    "L-order",
+    "a bare token before a governing citation on the same line resolves against the path that existed before that line, never the later-in-text citation on its own line",
+    () => {
+      const plantedDocText =
+        'See `:20-25` first, then `src/planted-example.ts:1-2#"anchor"` governs from here.\n';
+      const planted = extractContinuationCitations("fixture-scratch.md", plantedDocText);
+      expect(
+        planted,
+        `expected zero continuations (the bare token textually precedes its would-be governing citation on the same line), found: ${JSON.stringify(planted)}`,
+      ).toHaveLength(0);
+    },
+  );
+
+  // Precondition A-boundary-anchor / A-boundary-space (mutation probe P-5
+  // target): the stated grammar boundaries for spelling (A) -- a comma tail
+  // inside the SAME backtick span as the governing citation,
+  // `path:N(-M)(,N2(-M2))+` with no characters other than digits, commas
+  // and dashes inside the tail. Neither near-miss spelling below is part of
+  // the grammar CONTINUATION_COMMA_CHAIN_RE states above, and both are
+  // asserted NOT collected: a trailing anchor on the whole span (which the
+  // historical spelling never carried) and a chain written with a space
+  // after the comma (the historical spelling never carried whitespace
+  // inside the span either). A mutant that loosens CONTINUATION_COMMA_CHAIN_RE
+  // to accept either shape would make one of these fixtures find a
+  // continuation instead of zero.
+  pinnedIt(
+    "A-boundary-anchor",
+    "a comma chain with a trailing anchor on the whole span is not collected (grammar boundary)",
+    () => {
+      const plantedDocText = 'See `src/planted-example.ts:1,5-6#"x"` for detail.\n';
+      const planted = extractContinuationCitations("fixture-scratch.md", plantedDocText);
+      expect(planted, JSON.stringify(planted)).toHaveLength(0);
+    },
+  );
+
+  pinnedIt(
+    "A-boundary-space",
+    "a comma chain written with a space after the comma is not collected (grammar boundary)",
+    () => {
+      const plantedDocText = "See `src/planted-example.ts:1, 5-6` for detail.\n";
+      const planted = extractContinuationCitations("fixture-scratch.md", plantedDocText);
+      expect(planted, JSON.stringify(planted)).toHaveLength(0);
+    },
+  );
+
+  // Precondition log-exempt: mirrors collectBareNonMd's own log-exemption
+  // fixture above: a scratch, docs/okf-shaped temp directory carrying a
+  // planted continuation in one doc and a planted continuation in log.md,
+  // asserting the non-log one is collected while log.md's own is exempted
+  // (counted only).
+  pinnedIt(
+    "log-exempt",
+    "collectContinuationOutsideLog collects a planted non-log continuation and exempts log.md's own",
+    () => {
+      const tmpDir = fs.mkdtempSync(
+        path.join(os.tmpdir(), "collect-continuation-outside-log-fixtures-"),
+      );
+      try {
+        const okfDir = path.join(tmpDir, "docs", "okf");
+        fs.mkdirSync(okfDir, { recursive: true });
+        fs.writeFileSync(
+          path.join(okfDir, "planted.md"),
+          "Planted drift: see `src/x.ts:1,12-14` for detail.\n",
+          "utf8",
+        );
+        fs.writeFileSync(
+          path.join(okfDir, "log.md"),
+          "Historical re-point: see `src/y.ts:2,30-31` for detail.\n",
+          "utf8",
+        );
+
+        const { outsideLog, logMdCount } = collectContinuationOutsideLog(
+          okfDir,
+          "docs/okf",
+        );
+
+        expect(outsideLog, JSON.stringify(outsideLog)).toHaveLength(1);
+        expect(outsideLog[0]?.file).toBe("docs/okf/planted.md");
+        expect(outsideLog[0]?.citedPath).toBe("src/x.ts");
+        expect(
+          outsideLog.some((c) => c.citedPath === "src/y.ts"),
+          "log.md's planted continuation must not be collected into outsideLog",
+        ).toBe(false);
+        expect(
+          logMdCount,
+          "log.md's own planted continuation must still be counted",
+        ).toBe(1);
+      } finally {
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+      }
+    },
+  );
+
+  // Class closure (task `ea733314`): every id in
+  // CONTINUATION_GRAMMAR_PRECONDITIONS above has exactly one `pinnedIt`
+  // fixture, and every `pinnedIt` id names a stated precondition -- a
+  // mismatch in either direction fails here, so the next stated
+  // precondition without a fixture (or a fixture whose id was typo'd or
+  // dropped from the list) is red by construction, not just prose.
+  it("coverage: every stated continuation-grammar precondition has a fixture, and every fixture id is a stated precondition", () => {
+    const statedIds = CONTINUATION_GRAMMAR_PRECONDITIONS.map((p) => p.id);
+    const missingFixture = statedIds.filter((id) => !pinnedPreconditionIds.has(id));
+    const extraFixture = [...pinnedPreconditionIds].filter(
+      (id) => !statedIds.includes(id),
     );
-    try {
-      const okfDir = path.join(tmpDir, "docs", "okf");
-      fs.mkdirSync(okfDir, { recursive: true });
-      fs.writeFileSync(
-        path.join(okfDir, "planted.md"),
-        "Planted drift: see `src/x.ts:1,12-14` for detail.\n",
-        "utf8",
-      );
-      fs.writeFileSync(
-        path.join(okfDir, "log.md"),
-        "Historical re-point: see `src/y.ts:2,30-31` for detail.\n",
-        "utf8",
-      );
-
-      const { outsideLog, logMdCount } = collectContinuationOutsideLog(
-        okfDir,
-        "docs/okf",
-      );
-
-      expect(outsideLog, JSON.stringify(outsideLog)).toHaveLength(1);
-      expect(outsideLog[0]?.file).toBe("docs/okf/planted.md");
-      expect(outsideLog[0]?.citedPath).toBe("src/x.ts");
-      expect(
-        outsideLog.some((c) => c.citedPath === "src/y.ts"),
-        "log.md's planted continuation must not be collected into outsideLog",
-      ).toBe(false);
-      expect(
-        logMdCount,
-        "log.md's own planted continuation must still be counted",
-      ).toBe(1);
-    } finally {
-      fs.rmSync(tmpDir, { recursive: true, force: true });
-    }
+    expect(
+      missingFixture,
+      `stated precondition(s) with no fixture: ${JSON.stringify(missingFixture)}`,
+    ).toHaveLength(0);
+    expect(
+      extraFixture,
+      `fixture id(s) not in CONTINUATION_GRAMMAR_PRECONDITIONS: ${JSON.stringify(extraFixture)}`,
+    ).toHaveLength(0);
   });
 });
 
@@ -1410,11 +1637,11 @@ describe("docs/okf continuation-form citations (`:N`/`:N-M` chained to a governi
 // -- both actually carried these spellings before PR #537, per
 // `docs/okf/log.md`'s `8765987a` entry), run through the SAME
 // `collectContinuationOutsideLog` the real ratchet above uses. Each
-// citation's would-be `it.each` test name (the same `${file}:${adrLine}
-// ${raw}` convention the real bundle's `it.each` blocks use throughout this
-// file) is asserted present in the offending set, so a reintroduction of
-// either spelling into the real bundle is identifiable by that generated
-// name, not just by count.
+// citation is asserted present via the ratchet's OWN diagnostic message
+// (`continuationOutsideLogMessage`, defined above the ratchet's describe
+// block, task `ea733314`), not a separately hand-built string: a change to
+// that message format is caught by these negative controls too, instead
+// of silently drifting apart from them.
 const CONTINUATION_FIXTURES_DIR = path.join(
   REPO_ROOT,
   "tests",

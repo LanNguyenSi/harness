@@ -26,13 +26,16 @@
   draft of this note claimed writing the literal forms here reproduced
   spurious OKF-CHECK warnings on citations this entry never touched;
   re-measured for this entry, from the harness worktree root (a real git
-  work tree -- `citations-resolve` is skipped entirely outside one, which
-  is why an isolated non-git scratch copy always reports 0/0/0
-  regardless of content): inserting the same literal spellings into this
-  paragraph and running `npx okf-kit@0.14.0 check docs/okf --json
-  --require-anchors` reported 0 errors / 0 warnings / 0 notices, not
-  reproduced. The concrete record that the extractor still catches a
-  reintroduction is the two negative-control fixtures
+  work tree): inserting the same literal spellings into this paragraph and
+  running `npx okf-kit@0.14.0 check docs/okf --json --require-anchors`
+  reported 0 errors / 0 warnings / 0 notices, not reproduced. Separately
+  measured, an isolated NON-git scratch copy of the same tree reports 0
+  errors / 0 warnings with two skip notices instead (`sources-fresh` and
+  `citations-resolve` both report "skipped: not inside a git work tree"),
+  not a bare 0/0/0; both scratch-tree kinds agree in substance (0 errors /
+  0 warnings either way), only the notice count differs, by whether
+  `citations-resolve` runs at all. The concrete record that the extractor
+  still catches a reintroduction is the two negative-control fixtures
   (`tests/fixtures/continuation-citations/manifest-validation-scope.md`,
   `.../pause-vs-gate-kill-switch.md`, minimal excerpts reproducing each
   file's actual pre-PR-#537 spelling, in their own scratch-only files
