@@ -246,10 +246,13 @@ function nullVerdictReadingNote(taskId: string, info: NullVerdictInfo): string {
   switch (info.reading) {
     case "never-evaluated":
       if (info.liveness === "unknown") {
-        // Neither axis is established here: the marker probe folds an
-        // unreadable verdict directory into "missing", and the lock check
-        // threw, so the note asserts nothing about either.
-        return `No readable verdict marker for "${taskId}" and liveness could not be determined: the verdict directory could not be read. Check the verdict directory, then run solution_evaluate for this id.`;
+        // Neither axis is established here: the marker probe folds every
+        // lstat failure into "missing", and the lock check threw for some
+        // reason this hook did not establish. The note therefore names
+        // what could not be read and no cause: an earlier version guessed
+        // one ("the verdict directory could not be read"), which is false
+        // whenever only the lock path is unreadable.
+        return `No readable verdict marker for "${taskId}" and liveness could not be determined (the verdict directory or the attempt-lock path could not be read): run solution_evaluate for this id.`;
       }
       return `No verdict marker exists for "${taskId}"; ${clause}: solution_evaluate has not (yet) been called for this id, or a prior call never got far enough to record one.`;
     case "unreadable-marker":

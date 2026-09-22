@@ -280,8 +280,10 @@ library's own check answers `false` for both and swallows the absent-lock
 `ENOENT` internally), or `"unknown"` (the underlying check threw: an
 unreadable directory, a symlink loop, ...). For reading (1) with
 `"unknown"` liveness the note asserts neither a missing marker nor an
-absent attempt, since an unreadable verdict directory reads as "missing"
-on the marker axis too.
+absent attempt, and names no cause: the marker probe folds every `lstat`
+failure into "missing", and the check can throw for the verdict
+directory or for the attempt-lock path alone, which this hook does not
+tell apart.
 `checkFileLock` never acquires the lock, so there is nothing to release
 or restore.
 

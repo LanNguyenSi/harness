@@ -347,6 +347,27 @@ describe("completion-gate — decision matrix", () => {
       expect(reason).not.toMatch(/Reconnecting vs\. retrying/);
     });
 
+    // Indeterminate liveness on reading (1) where ONLY the lock path is
+    // unreadable: the verdict directory itself is fine and carries no
+    // marker, while the `.lock` path is a self-referential symlink
+    // (`fs.statSync` throws `ELOOP`). The note must name what could not be
+    // read without attributing a cause it did not establish: an earlier
+    // version said "the verdict directory could not be read", which is
+    // false here (harness/799de976).
+    it("indeterminate liveness on reading (1) with a readable verdict dir: the note attributes no cause", async () => {
+      const dir = verdictDirWith(null);
+      const lockDir = attemptLockDir(dir, TASK);
+      fs.symlinkSync(lockDir, lockDir);
+      const { res, out } = await run({ cwd: repoAtHead(HEAD), verdictDir: dir });
+      expect(res.blocked).toBe(true);
+      const { reason } = JSON.parse(out) as { reason: string };
+      expect(reason).toMatch(/liveness could not be determined/);
+      expect(reason).not.toContain("the verdict directory could not be read");
+      expect(reason).not.toContain('No verdict marker exists for "task-42"');
+      expect(reason).not.toMatch(/no attempt reads as currently live/);
+      expect(reason).not.toMatch(/Reconnecting vs\. retrying/);
+    });
+
     it("reading (2) live-attempt: a held (non-stale) attempt-lock, the full reconnect-vs-retry paragraph, plus the facts", async () => {
       const dir = verdictDirWith(null);
       cleanups.push(liveAttemptLock(dir, TASK));
