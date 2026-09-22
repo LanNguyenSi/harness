@@ -74,9 +74,9 @@ The parity vitest `tests/cli/init-full-template-parity.test.ts` fails the build 
 
 Release prep, in order, on a branch/PR before tagging:
 
-1. `npm version --no-git-tag-version` - bumps `package.json` (and `package-lock.json`) to the new version, without creating a git tag (the tag is pushed separately, once the release commit is merged).
+1. `npm version --no-git-tag-version <newversion>` - bumps `package.json` (and `package-lock.json`) to `<newversion>` (e.g. `0.58.0`), without creating a git tag (the tag is pushed separately, once the release commit is merged); with no argument the command is a no-op.
 2. Insert the CHANGELOG heading - turn `## [Unreleased]` into `## [Unreleased]` (kept, empty) plus a new `## [X.Y.Z] - YYYY-MM-DD` heading above the prior release, carrying the accumulated entries.
-3. Update the README release sentence - `The current release is \`vX.Y.Z\`.` must name the same version as `package.json`.
+3. Update the README release sentence - ``The current release is `vX.Y.Z`.`` must name the same version as `package.json`.
 4. Bundle re-verification - if `docs/okf/` changed or drifted, re-run its checks (`npx okf-kit@0.14.0 check docs/okf --json --require-anchors`) and re-stamp any doc whose cited source moved.
 5. Run the checks below locally (they also run in CI): `npm run check:changelog-coverage`, `npm run check:readme-release-version`, `npm run check:release-notes-size`, plus the rest of `npm run typecheck && npm run build && npm test`.
 6. Open the PR.

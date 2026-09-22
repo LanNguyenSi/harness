@@ -7,6 +7,10 @@
 
 export const CEILING: number;
 
+export function extractVersionSectionLines(changelogText: string, version: string): string[];
+
 export function extractVersionSection(changelogText: string, version: string): string;
+
+export function measureExtractedSize(lines: string[]): number;
 
 export function main(repoDir?: string): void;

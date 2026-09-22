@@ -55,8 +55,13 @@ export const CEILING = 115000;
  * any character there too) - deliberately the same extraction, not a
  * stricter one, so this gate measures exactly what release.yml will
  * ship.
+ *
+ * Returns the matched lines as an array (not yet joined) so callers can
+ * measure the size the way release.yml's awk step actually produces it -
+ * see `measureExtractedSize` below, which accounts for the trailing
+ * newline `array.join("\n")` alone would drop.
  */
-export function extractVersionSection(changelogText, version) {
+export function extractVersionSectionLines(changelogText, version) {
   const heading = new RegExp(`^## \\[${version}\\]`);
   const lines = changelogText.split("\n");
   let found = false;
@@ -72,7 +77,33 @@ export function extractVersionSection(changelogText, version) {
     }
     if (found) out.push(line);
   }
-  return out.join("\n");
+  return out;
+}
+
+/**
+ * Same extraction as `extractVersionSectionLines`, joined into a single
+ * string with no trailing newline. Kept for callers (and existing tests)
+ * that only need the section's text, not its release.yml-accurate byte
+ * size - see `measureExtractedSize` for that.
+ */
+export function extractVersionSection(changelogText, version) {
+  return extractVersionSectionLines(changelogText, version).join("\n");
+}
+
+/**
+ * The size release.yml's awk step actually produces in release_notes.md,
+ * measured over the SAME matched `lines` array `extractVersionSectionLines`
+ * returns. Awk's default print action emits each matched line followed by
+ * its own ORS (`\n`), including the last one - so the file's true length
+ * is `sum(line.length) + lines.length`, one MORE than
+ * `lines.join("\n").length` (which has only `lines.length - 1`
+ * separators) whenever at least one line matched. Zero matched lines
+ * produces zero bytes on both sides, matching the awk step's own
+ * "heading not found" behavior.
+ */
+export function measureExtractedSize(lines) {
+  if (lines.length === 0) return 0;
+  return lines.reduce((sum, line) => sum + line.length, lines.length);
 }
 
 export function main(repoDir = process.cwd()) {
@@ -100,8 +131,8 @@ export function main(repoDir = process.cwd()) {
     return;
   }
 
-  const section = extractVersionSection(changelog, version);
-  const size = section.length;
+  const lines = extractVersionSectionLines(changelog, version);
+  const size = measureExtractedSize(lines);
 
   if (size > CEILING) {
     console.error(

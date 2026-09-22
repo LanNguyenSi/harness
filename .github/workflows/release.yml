@@ -65,18 +65,23 @@ jobs:
         # directly rather than shelling out to the script; move the
         # ceiling in both places together, never one alone.
         #
-        # `wc -m` (character count under the runner's UTF-8 locale)
-        # approximates the check script's JS `.length` measurement
-        # (UTF-16 code units): the two diverge only for astral-plane code
-        # points (each counts as 1 character under `wc -m`, 2 code units
-        # under `.length`), which this repo's CHANGELOG entries do not
-        # use.
+        # `wc -m` measures release_notes.md itself, which already carries
+        # the trailing newline awk's ORS appends after the last matched
+        # line, so it needs no "+1" the way the check script's JS
+        # `.length` measurement (over the joined section, no trailing
+        # newline) does. `wc -m` counts CHARACTERS only under a UTF-8
+        # locale; without one it falls back to counting BYTES, so a
+        # multi-byte UTF-8 character would be over-counted relative to
+        # the check script's JS `.length` (UTF-16 code units per
+        # character). `LC_ALL: C.UTF-8` below pins the locale so `wc -m`
+        # always counts characters, matching the check script's units.
         #
         # VERSION comes in via `env:`, same rationale as the empty-notes
         # guard above: shell-data only, never spliced into the script's
         # syntax.
         env:
           VERSION: ${{ steps.version.outputs.version }}
+          LC_ALL: C.UTF-8
         run: |
           size=$(wc -m < release_notes.md | tr -d ' ')
           ceiling=115000

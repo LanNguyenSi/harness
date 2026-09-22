@@ -480,10 +480,10 @@ export function renderMalformedSectionsNotice(sections: string[]): string | null
  * Approve-time content validation. v1 enforces the one rule the dogfood
  * loop discovered today (2026-05-24): a `grill_me` Report must declare a
  * non-empty `priorArt` list with no literal `- None`. The structural
- * parser in `@lannguyensi/understanding-gate` intentionally stays loose
- * here (`` `CHANGELOG.md:#0.28.0` `` documents the design: the older
- * parser accepted a report missing Prior Art silently; the prompt, not the parser, requires it). The approve CLI is the right
- * boundary to flip that loose acceptance into hard refusal, so an agent
+ * parser in `@lannguyensi/understanding-gate` accepted a report
+ * missing Prior Art silently before 0.4.0 (`CHANGELOG.md:#0.28.0`);
+ * 0.4.0+ enforces the section. The approve CLI is the right boundary
+ * to flip that pre-0.4.0 gap into hard refusal here, so an agent
  * cannot ship a hollow Understanding Report and still get the gate open.
  *
  * Modes that skip validation:
