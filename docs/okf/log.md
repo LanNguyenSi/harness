@@ -2,6 +2,16 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-09-23T05:44:01Z, task `c86e3c4a` round 2 (implementer): `okf-kit
+  check` flagged `debug-verb-selection.md` and `pause-vs-gate-kill-switch.md`
+  STALE against `src/cli/index.ts` (missed in the entry below, which only
+  covered the two other docs sharing sources with the hook file itself).
+  Re-verified: their `src/cli/index.ts` citations (audit/explain/doctor
+  command text, `pause`/`resume` line-anchored ranges) sit far from the
+  single line this round's edit touched (the `track-active-claim`
+  command's `--description` string) and are net-zero-shifted (one line
+  replaced by one line, no other line in the file moved), so no citation
+  needed re-pointing. Timestamp-only re-stamp.
 - 2026-09-23T05:42:32Z, task `c86e3c4a` round 2 (implementer): re-stamped
   `codex-adapter-parity-gaps.md`, `evidence-ledger-trust-boundary.md`,
   `gate-fail-posture-matrix.md`, `understanding-gate-auto-mode-signals.md`,
