@@ -140,8 +140,8 @@ pre-existing raw-regex extraction and `compareNumericVersions`
 comparison, unchanged, and so stayed prerelease-blind (a probed
 `X.Y.Z-rc.1` parsed as `X.Y.Z` and could satisfy an `X.Y.Z` floor on
 every one of them): `tools.cli[]` and `tools.mcp[]` in `harness doctor`,
-`tools.cli[]` in `harness validate` (a separate implementation of the
-same `tools.cli[]` contract for a different verb), `memory.router`'s
+`tools.cli[]` in programmatic validate calls supplying `versionProbe`
+(not the shipped CLI action), `memory.router`'s
 version floor, and policy-pack-level floors.
 
 One consequence at the time: a single `harness doctor` run against a
@@ -166,10 +166,10 @@ on every `min_version` check in this codebase, not only `hooks[]`:
   (`checkCli`, `src/cli/doctor/index.ts:270#"const parsed = parseProbedVersion(stdout);"`).
 - `tools.mcp[]` in `harness doctor`
   (`checkMcpVersions`, `src/cli/doctor/index.ts:344#"const parsed = parseProbedVersion(stdout);"`).
-- `tools.cli[]` in `harness validate`
-  (`src/cli/validate/checks.ts:163#"const parsed = parseProbedVersion(stdout);"`),
-  a separate implementation of the same `tools.cli[]` contract for a
-  different verb.
+- `tools.cli[]` in programmatic validate calls supplying `versionProbe`
+  (`src/cli/validate/checks.ts:173#"const parsed = parseProbedVersion(stdout);"`),
+  a separate implementation of the same `tools.cli[]` contract; the
+  shipped CLI does not supply a probe or execute manifest version commands.
 - `memory.router`'s version floor
   (`src/probes/memory.ts:276#"const parsed = parseProbedVersion(stdout);"`).
 - Policy-pack-level floors
@@ -178,7 +178,7 @@ on every `min_version` check in this codebase, not only `hooks[]`:
 Who pays: operators running a release candidate of any of these five
 tools now see a below-floor diagnostic until the release ships, and the
 severity differs by surface. `tools.cli[]` in `harness doctor`
-(`checkCli`) and `tools.cli[]` in `harness validate` both push
+(`checkCli`) and `tools.cli[]` in validate calls supplying a probe both push
 `severity`/`status: "error"`, so an RC there is a hard failure: it is
 counted into doctor's `errorCount` and validate's `errorCount`, not
 merely surfaced as a warning. `tools.mcp[]` in `harness doctor`
@@ -191,9 +191,12 @@ policy-pack-level floor pushes a `below_floor` gap counted into
 the same footing as `tools.mcp[]` and `memory.router`, not a hard
 failure. This is correct under semver precedence (an RC is not the
 release), not a regression, but it means the two `tools.cli[]` checks
-can flip an operator's `doctor`/`validate` exit code non-zero on an RC
-where they previously passed silently. Maintainers keep exactly one
-comparator instead of two.
+can turn a previously passing doctor run or supplied-probe validate result
+into an error on an RC. The shipped `harness validate` action instead warns
+that the `tools.cli[].min_version` floor was not checked and refers the
+operator to `harness doctor`; `--strict` still promotes that warning to an
+error. No other floor check sits behind validate's optional probe seam.
+Maintainers keep exactly one comparator instead of two.
 The accepted cost this ADR's Consequences section named for `hooks[]`
 (a `version_command` reporting a git-describe or platform suffix now
 also reads `below_floor` on an exact numeric tie) applies identically to
