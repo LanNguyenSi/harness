@@ -2,6 +2,29 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-09-23T05:42:32Z, task `c86e3c4a` round 2 (implementer): re-stamped
+  `codex-adapter-parity-gaps.md`, `evidence-ledger-trust-boundary.md`,
+  `gate-fail-posture-matrix.md`, `understanding-gate-auto-mode-signals.md`,
+  and `understanding-gate-lockout-recovery.md` after this round's edits to
+  `src/runtime/task-providers/agent-tasks.ts`,
+  `src/cli/pack/hook-track-active-claim.ts`, `src/cli/index.ts`, and
+  `docs/policy-packs/understanding-before-execution.md` (the real
+  Claude Code MCP `tool_response` content-block shape is now unwrapped,
+  the fail-safe rationale is corrected, a release verb now clears the
+  active-claim marker only when it names the same task id the call
+  acted on). Re-verified each listing doc's claims against the diff: no
+  claim these docs make about `task_finish`/`task_merge`/active-claim
+  semantics was invalidated (each doc's own reference to
+  `src/runtime/task-providers/agent-tasks.ts` and
+  `docs/policy-packs/understanding-before-execution.md` is a file-level
+  `sources:` listing or an unanchored architectural statement, "the
+  provider adapter owns the classification", never a `path:N` line
+  citation into either file, so no citation needed re-pointing here);
+  the only LINE-anchored citations this round's edit to
+  `docs/policy-packs/understanding-before-execution.md` broke live
+  outside `docs/okf/` (`docs/decisions/2026-08-27-ug-auto-mode-approval.md`
+  lines 28 and 173, into the same doc), re-pointed in the source commit
+  above, not here. Timestamp-only re-stamp, no content rewrite.
 - 2026-09-23T05:15:07Z, task `c86e3c4a` (implementer): re-stamped
   `codex-adapter-parity-gaps.md`, `evidence-ledger-trust-boundary.md`,
   `gate-fail-posture-matrix.md`, `understanding-gate-auto-mode-signals.md`,
