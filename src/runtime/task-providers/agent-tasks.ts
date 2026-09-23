@@ -61,17 +61,115 @@ export function tasksTransitionReleasesClaim(input: unknown): boolean {
 }
 
 /**
+ * Best-effort recursive unwrap of a task_finish tool RESULT into the
+ * mcp-server receipt object it ultimately carries, tolerating every
+ * transport shape observed or plausible for a PostToolUse event (task
+ * c86e3c4a: an earlier version of this function read only shape (a)
+ * below and was inert against the shape Claude Code actually sends):
+ *
+ *   (a) the receipt object itself, `{ ok, task: { id, status } }` -- both
+ *       the small default receipt and the `include:["task"]` full-object
+ *       variant, since both nest the task under `task` and this function
+ *       only reads that key, not the rest of the shape;
+ *   (b) Claude Code's REAL PostToolUse `tool_response` for an MCP tool
+ *       (live capture, claude 2.1.280): a content-block array
+ *       `[{ type: "text", text: "<json>" }, ...]` -- the first `text`
+ *       block is located and its `text` is JSON-parsed, then unwrapped
+ *       again as (a). See `tests/fixtures/track-active-claim/
+ *       real-posttooluse-task-finish-2.1.280.json` for the verbatim
+ *       redacted capture;
+ *   (c) an MCP `CallToolResult` object, `{ content: [{ type: "text",
+ *       text: "<json>" }] }` -- plausible on Codex, UNMEASURED here (no
+ *       Codex capture exists in this run; see
+ *       `docs/policy-packs/understanding-before-execution.md`), handled
+ *       defensively the same way as (b);
+ *   (d) a bare JSON string -- parsed once, then unwrapped again.
+ *
+ * Anything else, a `JSON.parse` failure at any step, or a nesting depth
+ * past a small guard, returns `null` so the caller fails safe rather
+ * than throwing or silently misreading.
+ */
+function unwrapToolResponseEnvelope(
+  toolResponse: unknown,
+  depth = 0,
+): Record<string, unknown> | null {
+  if (depth > 4) return null;
+  if (typeof toolResponse === "string") {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(toolResponse);
+    } catch {
+      return null;
+    }
+    return unwrapToolResponseEnvelope(parsed, depth + 1);
+  }
+  if (Array.isArray(toolResponse)) {
+    const textBlock = toolResponse.find((block) => {
+      const rec = inputRecord(block);
+      return rec !== null && rec["type"] === "text" && typeof rec["text"] === "string";
+    });
+    const text = inputRecord(textBlock)?.["text"];
+    return typeof text === "string" ? unwrapToolResponseEnvelope(text, depth + 1) : null;
+  }
+  const record = inputRecord(toolResponse);
+  if (record === null) return null;
+  if (Array.isArray(record["content"])) {
+    return unwrapToolResponseEnvelope(record["content"], depth + 1);
+  }
+  return record;
+}
+
+/**
  * Read the resulting status off a task_finish tool RESULT (not the
- * request). The v2 mcp-server task_finish receipt is shaped
- * `{ ok, task: { id, status }, deviations? }`; returns `null` when the
- * result is absent, malformed, or carries no string status, so a caller
- * can tell "the task landed on a known non-review status" apart from
- * "we could not tell" (task c86e3c4a).
+ * request), unwrapping whichever transport shape it arrived in (see
+ * `unwrapToolResponseEnvelope`). Returns `null` when the result is
+ * absent, malformed, or carries no string status, so a caller can tell
+ * "the task landed on a known non-review status" apart from "we could
+ * not tell" (task c86e3c4a).
  */
 export function taskFinishResultingStatus(toolResponse: unknown): string | null {
-  const task = inputRecord(toolResponse)?.["task"];
+  const task = unwrapToolResponseEnvelope(toolResponse)?.["task"];
   const status = inputRecord(task)?.["status"];
   return typeof status === "string" && status.length > 0 ? status : null;
+}
+
+/**
+ * Read the acted-on task id off a task_finish (or any agent-tasks) tool
+ * RESULT, unwrapping the same shapes as `taskFinishResultingStatus`.
+ * Used as a fallback when the tool_input did not carry a `taskId` (task
+ * c86e3c4a, id-equality guard on release verbs).
+ */
+export function taskIdFromToolResponse(toolResponse: unknown): string {
+  const task = unwrapToolResponseEnvelope(toolResponse)?.["task"];
+  const id = inputRecord(task)?.["id"];
+  return typeof id === "string" ? id : "";
+}
+
+/**
+ * Diagnostic-only companion to `claimEffectForAgentTasksTool`: was a
+ * task_finish's resulting status actually readable? This does NOT feed
+ * back into the release/keep decision (that stays the classifier's
+ * alone) -- it lets `hook-track-active-claim.ts` label its stderr line
+ * so a silent fail-safe fallback release does not look identical to an
+ * intentional `done` release in the operator's own trail (task
+ * c86e3c4a).
+ */
+export function taskFinishReleaseIsUnreadable(toolResponse: unknown): boolean {
+  return taskFinishResultingStatus(toolResponse) === null;
+}
+
+/**
+ * Coarse shape label for a tool_response, for the same stderr diagnostic
+ * above -- never used to decide anything, only to name what shape a
+ * fail-safe release fell back from.
+ */
+export function describeToolResponseShape(
+  toolResponse: unknown,
+): "array" | "string" | "object" | "absent" {
+  if (toolResponse === undefined || toolResponse === null) return "absent";
+  if (Array.isArray(toolResponse)) return "array";
+  if (typeof toolResponse === "string") return "string";
+  return "object";
 }
 
 export function agentTasksToolName(verb: string): string {
@@ -111,10 +209,24 @@ export type ClaimEffect = "acquire" | "release" | "none";
  * `taskFinishResultingStatus`. A resulting status of `review` returns
  * `none` (keep); `done`, any other resolvable status, and an
  * unresolvable result (no `toolResponse`, or a malformed one) all
- * return `release` -- fail safe, since the active-claim file this
- * classifier feeds is an ergonomic auto-resolve shortcut, not a
- * security-relevant signal, so releasing on an unreadable result costs
- * only that shortcut rather than risking a marker that can never clear.
+ * return `release`.
+ *
+ * Fail-safe rationale (task c86e3c4a -- corrected from an earlier
+ * wording of this comment that was wrong about what the marker feeds):
+ * the active-claim file
+ * this classifier feeds is read by the FAIL-CLOSED completion gate
+ * (`src/cli/pack/hook-solution-acceptance.ts`'s `readActiveClaim` call)
+ * to derive the verdict id it gates `task_finish` / `task_submit_pr` /
+ * `task_merge` / `pull_requests_merge` / `git push` on. Release-on-
+ * unreadable is chosen because a KEPT marker for a task that actually
+ * finished would misroute that gate -- it would keep gating completion
+ * on an id whose work is already done, rather than on whatever the
+ * agent claims next -- at the cost of a possible wedge (the gate then
+ * fails closed with "no active-claim task id recorded" until a fresh
+ * `task_start` or an operator clears the file). Releasing trades a
+ * recoverable wedge for an unrecoverable misroute; it is not costless,
+ * and it is not merely giving up an "ergonomic shortcut".
+ *
  * This is the ONE place that decision is made: callers (e.g.
  * `hook-track-active-claim.ts`) do not re-derive it locally.
  */

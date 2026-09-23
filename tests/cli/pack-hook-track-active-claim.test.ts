@@ -345,6 +345,405 @@ describe("pack hook track-active-claim — task_finish resulting status decides 
   });
 });
 
+describe("pack hook track-active-claim: golden fixture, real Claude Code 2.1.280 PostToolUse tool_response (task c86e3c4a round 2, HIGH)", () => {
+  // Round-1 review found the fix inert in production: Claude Code's real
+  // PostToolUse tool_response for an MCP tool is a content-block array,
+  // `[{ type: "text", text: "<json>" }]`, not the plain
+  // `{ ok, task: { status } }` object the round-1 fixtures assumed.
+  // Verbatim (redacted session id / paths / transcript path / prompt id)
+  // live capture, claude 2.1.280.
+  const fixturePath = path.join(
+    __dirname,
+    "..",
+    "fixtures",
+    "track-active-claim",
+    "real-posttooluse-task-finish-2.1.280.json",
+  );
+
+  function loadFixture(): Record<string, unknown> {
+    return JSON.parse(fs.readFileSync(fixturePath, "utf8")) as Record<string, unknown>;
+  }
+
+  it("the real payload's tool_response is a content-block array, first block type=text, JSON-parses to the mcp-server receipt shape", () => {
+    const raw = loadFixture();
+    const blocks = raw["tool_response"];
+    expect(Array.isArray(blocks)).toBe(true);
+    const first = (blocks as unknown[])[0] as Record<string, unknown>;
+    expect(first["type"]).toBe("text");
+    expect(JSON.parse(first["text"] as string)).toEqual({
+      ok: true,
+      task: { id: "abc-123", status: "review" },
+    });
+  });
+
+  it("finish-to-review (marker KEPT): the real content-block payload, replayed verbatim, keeps the marker end to end", async () => {
+    const generatedDir = path.join(tmp, "harness.generated");
+    writeActiveClaim(generatedDir, "abc-123");
+    const stderr = bufferStream();
+
+    const result = await runPackHookTrackActiveClaimCli({
+      manifest: manifestWithPack(),
+      stdin: readableFromString(JSON.stringify(loadFixture())),
+      stderr: stderr.stream,
+      generatedDir,
+    });
+
+    expect(result.claimCleared).toBe(false);
+    expect(readActiveClaim(generatedDir)).toBe("abc-123");
+    expect(stderr.read()).toMatch(/kept active-claim after mcp__agent-tasks__task_finish \(resulting status=review\)/);
+  });
+
+  it("finish-to-done (marker CLEARED): the same content-block shape with only the status changed to done", async () => {
+    const generatedDir = path.join(tmp, "harness.generated");
+    writeActiveClaim(generatedDir, "abc-123");
+    const raw = loadFixture();
+    const receiptText = (raw["tool_response"] as Array<Record<string, unknown>>)[0]!["text"] as string;
+    const receipt = JSON.parse(receiptText) as { ok: boolean; task: { id: string; status: string } };
+    const doneReceipt = { ...receipt, task: { ...receipt.task, status: "done" } };
+    const doneEvent = {
+      ...raw,
+      tool_response: [{ type: "text", text: JSON.stringify(doneReceipt) }],
+    };
+    const stderr = bufferStream();
+
+    const result = await runPackHookTrackActiveClaimCli({
+      manifest: manifestWithPack(),
+      stdin: readableFromString(JSON.stringify(doneEvent)),
+      stderr: stderr.stream,
+      generatedDir,
+    });
+
+    expect(result.claimCleared).toBe(true);
+    expect(readActiveClaim(generatedDir)).toBeNull();
+    expect(stderr.read()).toMatch(/cleared active-claim after mcp__agent-tasks__task_finish/);
+  });
+
+  it("also unwraps an include:[\"task\"] full-object receipt inside the same content-block envelope", async () => {
+    const generatedDir = path.join(tmp, "harness.generated");
+    writeActiveClaim(generatedDir, "abc-123");
+    const raw = loadFixture();
+    const fullTaskReceipt = {
+      ok: true,
+      task: {
+        id: "abc-123",
+        status: "review",
+        title: "Some task",
+        description: "Full task object as returned by include:[\"task\"]",
+        createdAt: "2026-01-01T00:00:00.000Z",
+      },
+    };
+    const event = {
+      ...raw,
+      tool_response: [{ type: "text", text: JSON.stringify(fullTaskReceipt) }],
+    };
+
+    const result = await runPackHookTrackActiveClaimCli({
+      manifest: manifestWithPack(),
+      stdin: readableFromString(JSON.stringify(event)),
+      stderr: bufferStream().stream,
+      generatedDir,
+    });
+
+    expect(result.claimCleared).toBe(false);
+    expect(readActiveClaim(generatedDir)).toBe("abc-123");
+  });
+});
+
+describe("pack hook track-active-claim: defensive tool_response shapes beyond the measured Claude one (task c86e3c4a round 2)", () => {
+  // Shapes (c) and (d) from `unwrapToolResponseEnvelope`'s doc comment.
+  // Shape (c), the MCP CallToolResult object `{ content: [...] }`, is
+  // plausible on Codex but UNMEASURED here (no Codex capture exists in
+  // this run) -- handled defensively, same as the measured Claude shape.
+
+  it("unwraps an MCP CallToolResult object shape ({ content: [{ type: text, text }] }) -- plausible Codex shape, unmeasured", async () => {
+    const generatedDir = path.join(tmp, "harness.generated");
+    writeActiveClaim(generatedDir, "task-uuid-abc");
+
+    const result = await runPackHookTrackActiveClaimCli({
+      manifest: manifestWithPack(),
+      stdin: readableFromString(
+        eventBodyWithResponse(
+          "mcp__agent-tasks__task_finish",
+          { taskId: "task-uuid-abc" },
+          {
+            content: [
+              { type: "text", text: JSON.stringify({ ok: true, task: { id: "task-uuid-abc", status: "review" } }) },
+            ],
+          },
+        ),
+      ),
+      stderr: bufferStream().stream,
+      generatedDir,
+    });
+
+    expect(result.claimCleared).toBe(false);
+    expect(readActiveClaim(generatedDir)).toBe("task-uuid-abc");
+  });
+
+  it("unwraps a bare JSON string tool_response", async () => {
+    const generatedDir = path.join(tmp, "harness.generated");
+    writeActiveClaim(generatedDir, "task-uuid-abc");
+
+    const result = await runPackHookTrackActiveClaimCli({
+      manifest: manifestWithPack(),
+      stdin: readableFromString(
+        eventBodyWithResponse(
+          "mcp__agent-tasks__task_finish",
+          { taskId: "task-uuid-abc" },
+          JSON.stringify({ ok: true, task: { id: "task-uuid-abc", status: "review" } }),
+        ),
+      ),
+      stderr: bufferStream().stream,
+      generatedDir,
+    });
+
+    expect(result.claimCleared).toBe(false);
+    expect(readActiveClaim(generatedDir)).toBe("task-uuid-abc");
+  });
+});
+
+describe("pack hook track-active-claim: the unreadable-result clear names the tool_response shape (task c86e3c4a round 2, MEDIUM)", () => {
+  // Round-1 review: the fail-safe clear (classifier could not read a
+  // resulting status) looked byte-identical in stderr to an intentional
+  // `done` release. Now it names the shape it fell back from, so an
+  // operator or future incident triage can tell the two apart.
+
+  it("names shape=object when tool_response is an unparseable plain object", async () => {
+    const generatedDir = path.join(tmp, "harness.generated");
+    writeActiveClaim(generatedDir, "task-uuid-abc");
+    const stderr = bufferStream();
+
+    const result = await runPackHookTrackActiveClaimCli({
+      manifest: manifestWithPack(),
+      stdin: readableFromString(
+        eventBodyWithResponse(
+          "mcp__agent-tasks__task_finish",
+          { taskId: "task-uuid-abc" },
+          { ok: true, task: { id: "task-uuid-abc", status: 42 } },
+        ),
+      ),
+      stderr: stderr.stream,
+      generatedDir,
+    });
+
+    expect(result.claimCleared).toBe(true);
+    expect(stderr.read()).toMatch(/unreadable tool_response, shape=object, fail-safe release/);
+  });
+
+  it("names shape=array when tool_response is a content-block array with no text block", async () => {
+    const generatedDir = path.join(tmp, "harness.generated");
+    writeActiveClaim(generatedDir, "task-uuid-abc");
+    const stderr = bufferStream();
+
+    const result = await runPackHookTrackActiveClaimCli({
+      manifest: manifestWithPack(),
+      stdin: readableFromString(
+        eventBodyWithResponse(
+          "mcp__agent-tasks__task_finish",
+          { taskId: "task-uuid-abc" },
+          [{ type: "image", data: "base64…" }],
+        ),
+      ),
+      stderr: stderr.stream,
+      generatedDir,
+    });
+
+    expect(result.claimCleared).toBe(true);
+    expect(stderr.read()).toMatch(/unreadable tool_response, shape=array, fail-safe release/);
+  });
+
+  it("names shape=string when tool_response is a string that is not valid JSON", async () => {
+    const generatedDir = path.join(tmp, "harness.generated");
+    writeActiveClaim(generatedDir, "task-uuid-abc");
+    const stderr = bufferStream();
+
+    const result = await runPackHookTrackActiveClaimCli({
+      manifest: manifestWithPack(),
+      stdin: readableFromString(
+        eventBodyWithResponse(
+          "mcp__agent-tasks__task_finish",
+          { taskId: "task-uuid-abc" },
+          "not json",
+        ),
+      ),
+      stderr: stderr.stream,
+      generatedDir,
+    });
+
+    expect(result.claimCleared).toBe(true);
+    expect(stderr.read()).toMatch(/unreadable tool_response, shape=string, fail-safe release/);
+  });
+
+  it("names shape=absent when task_finish carries no tool_response at all", async () => {
+    const generatedDir = path.join(tmp, "harness.generated");
+    writeActiveClaim(generatedDir, "task-uuid-abc");
+    const stderr = bufferStream();
+
+    const result = await runPackHookTrackActiveClaimCli({
+      manifest: manifestWithPack(),
+      stdin: readableFromString(
+        eventBody("mcp__agent-tasks__task_finish", { taskId: "task-uuid-abc" }),
+      ),
+      stderr: stderr.stream,
+      generatedDir,
+    });
+
+    expect(result.claimCleared).toBe(true);
+    expect(stderr.read()).toMatch(/unreadable tool_response, shape=absent, fail-safe release/);
+  });
+
+  it("does NOT name a shape when the resulting status is readable and simply not review (normal done release)", async () => {
+    const generatedDir = path.join(tmp, "harness.generated");
+    writeActiveClaim(generatedDir, "task-uuid-abc");
+    const stderr = bufferStream();
+
+    const result = await runPackHookTrackActiveClaimCli({
+      manifest: manifestWithPack(),
+      stdin: readableFromString(
+        eventBodyWithResponse(
+          "mcp__agent-tasks__task_finish",
+          { taskId: "task-uuid-abc" },
+          { ok: true, task: { id: "task-uuid-abc", status: "done" } },
+        ),
+      ),
+      stderr: stderr.stream,
+      generatedDir,
+    });
+
+    expect(result.claimCleared).toBe(true);
+    expect(stderr.read()).not.toMatch(/unreadable tool_response/);
+  });
+});
+
+describe("pack hook track-active-claim: release verbs only clear the marker for the matching task id (task c86e3c4a round 2, MEDIUM)", () => {
+  it("keeps active-claim B when task_merge fires for a different task A, and reports the near-miss", async () => {
+    const generatedDir = path.join(tmp, "harness.generated");
+    writeActiveClaim(generatedDir, "task-B");
+    const stderr = bufferStream();
+
+    const result = await runPackHookTrackActiveClaimCli({
+      manifest: manifestWithPack(),
+      stdin: readableFromString(
+        eventBody("mcp__agent-tasks__task_merge", { taskId: "task-A" }),
+      ),
+      stderr: stderr.stream,
+      generatedDir,
+    });
+
+    expect(result.claimCleared).toBe(false);
+    expect(readActiveClaim(generatedDir)).toBe("task-B");
+    expect(stderr.read()).toMatch(
+      /kept active-claim task-B: mcp__agent-tasks__task_merge on task-A/,
+    );
+  });
+
+  it("clears active-claim when task_merge fires for the SAME task id", async () => {
+    const generatedDir = path.join(tmp, "harness.generated");
+    writeActiveClaim(generatedDir, "task-A");
+
+    const result = await runPackHookTrackActiveClaimCli({
+      manifest: manifestWithPack(),
+      stdin: readableFromString(
+        eventBody("mcp__agent-tasks__task_merge", { taskId: "task-A" }),
+      ),
+      stderr: bufferStream().stream,
+      generatedDir,
+    });
+
+    expect(result.claimCleared).toBe(true);
+    expect(readActiveClaim(generatedDir)).toBeNull();
+  });
+
+  it("keeps active-claim B when task_abandon fires for a different task A", async () => {
+    const generatedDir = path.join(tmp, "harness.generated");
+    writeActiveClaim(generatedDir, "task-B");
+    const stderr = bufferStream();
+
+    const result = await runPackHookTrackActiveClaimCli({
+      manifest: manifestWithPack(),
+      stdin: readableFromString(
+        eventBody("mcp__agent-tasks__task_abandon", { taskId: "task-A" }),
+      ),
+      stderr: stderr.stream,
+      generatedDir,
+    });
+
+    expect(result.claimCleared).toBe(false);
+    expect(readActiveClaim(generatedDir)).toBe("task-B");
+    expect(stderr.read()).toMatch(
+      /kept active-claim task-B: mcp__agent-tasks__task_abandon on task-A/,
+    );
+  });
+
+  it("does not clear the work-claim marker B when a REVIEW claim of another task A is finished to done", async () => {
+    // The caller holds a work-claim marker for B. Finishing A's review
+    // claim to done is a task_finish, resulting status "done" (release
+    // effect), for a DIFFERENT task than the one the marker names -- B
+    // must survive.
+    const generatedDir = path.join(tmp, "harness.generated");
+    writeActiveClaim(generatedDir, "task-B");
+    const stderr = bufferStream();
+
+    const result = await runPackHookTrackActiveClaimCli({
+      manifest: manifestWithPack(),
+      stdin: readableFromString(
+        eventBodyWithResponse(
+          "mcp__agent-tasks__task_finish",
+          { taskId: "task-A" },
+          { ok: true, task: { id: "task-A", status: "done" } },
+        ),
+      ),
+      stderr: stderr.stream,
+      generatedDir,
+    });
+
+    expect(result.claimCleared).toBe(false);
+    expect(readActiveClaim(generatedDir)).toBe("task-B");
+    expect(stderr.read()).toMatch(
+      /kept active-claim task-B: mcp__agent-tasks__task_finish on task-A/,
+    );
+  });
+
+  it("falls back to the tool RESULT's task.id for the comparison when tool_input carries none", async () => {
+    const generatedDir = path.join(tmp, "harness.generated");
+    writeActiveClaim(generatedDir, "task-B");
+    const stderr = bufferStream();
+
+    const result = await runPackHookTrackActiveClaimCli({
+      manifest: manifestWithPack(),
+      stdin: readableFromString(
+        eventBodyWithResponse(
+          "mcp__agent-tasks__task_finish",
+          undefined,
+          { ok: true, task: { id: "task-A", status: "done" } },
+        ),
+      ),
+      stderr: stderr.stream,
+      generatedDir,
+    });
+
+    expect(result.claimCleared).toBe(false);
+    expect(readActiveClaim(generatedDir)).toBe("task-B");
+  });
+
+  it("still clears (fail-safe direction) when no current marker exists at all, id or no id", async () => {
+    const generatedDir = path.join(tmp, "harness.generated");
+    fs.mkdirSync(generatedDir, { recursive: true });
+
+    const result = await runPackHookTrackActiveClaimCli({
+      manifest: manifestWithPack(),
+      stdin: readableFromString(
+        eventBody("mcp__agent-tasks__task_merge", { taskId: "task-A" }),
+      ),
+      stderr: bufferStream().stream,
+      generatedDir,
+    });
+
+    expect(result.claimCleared).toBe(true);
+    expect(readActiveClaim(generatedDir)).toBeNull();
+  });
+});
+
 describe("pack hook track-active-claim — tasks_transition v1 verb (PR #200)", () => {
   const TASKS_TRANSITION = "mcp__agent-tasks__tasks_transition";
 

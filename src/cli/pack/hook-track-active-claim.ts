@@ -13,9 +13,15 @@
 //   - `mcp__agent-tasks__task_finish` → remove the file UNLESS the
 //     resulting status is `review` (v2 semantics keep the work claim
 //     there); `mcp__agent-tasks__task_abandon` / `task_merge` → always
-//     remove it (idempotent). The decision is made in ONE place,
-//     `claimEffectForAgentTasksTool` (`src/runtime/task-providers/
-//     agent-tasks.ts`), which this hook only presents (task c86e3c4a).
+//     remove it (idempotent), but ONLY when the current file already
+//     names the task id this call acted on (a release verb on an
+//     UNRELATED task id keeps the file instead of clearing it, see
+//     `releaseResult` below). The release/keep decision is made in ONE
+//     place, `claimEffectForAgentTasksTool` (`src/runtime/
+//     task-providers/agent-tasks.ts`), which this hook only presents
+//     (task c86e3c4a); the id-equality guard and the fail-safe-shape
+//     diagnostic are this hook's own presentation detail on top of that
+//     decision, not a re-derivation of it.
 //
 // The hook is intentionally separate from `hook-post-tool-use` because
 // the existing marker-expiry hook fires on a configurable list of
@@ -61,13 +67,17 @@
 
 import {
   clearActiveClaim,
+  readActiveClaim,
   writeActiveClaim,
 } from "../../policy-packs/builtin/understanding-before-execution-runtime.js";
 import {
   ACTIVE_CLAIM_TOOL_NAMES,
   claimEffectForAgentTasksTool,
+  describeToolResponseShape,
   matchesAgentTasksRuntimeVerb,
+  taskFinishReleaseIsUnreadable,
   taskIdFromInput,
+  taskIdFromToolResponse,
   tasksTransitionStatusFromInput,
   TASK_ABANDON_TOOL,
   TASK_FINISH_TOOL,
@@ -159,26 +169,72 @@ function noop(
 }
 
 /**
- * Clear the active-claim file and return the standard "cleared after
- * <toolName>" result shape. Shared by the task_merge branch and the
- * generic release branch below, which otherwise byte-duplicate this
- * body (both landed the same "release, no per-verb detail to add"
- * shape).
+ * Clear (or keep) the active-claim file after a release-effect verb
+ * (task_finish -> non-review, task_abandon, task_merge) and return the
+ * standard result shape. Shared by all three, which otherwise
+ * byte-duplicate this body.
+ *
+ * Task c86e3c4a: a release verb used to
+ * clear the marker unconditionally, so a caller holding an active-claim
+ * WORK marker for task B who then ran task_merge (or finished / abandoned)
+ * an UNRELATED task A lost marker B -- including the case of finishing a
+ * REVIEW claim on A while B's work claim is what the marker names. Fixed
+ * by reading the current marker before clearing and comparing it against
+ * the task id this call actually acted on (`tool_input.taskId`, falling
+ * back to the tool RESULT's `task.id` when the input carried none): only
+ * a match clears. A mismatch keeps the marker and reports the near-miss
+ * (`kept active-claim <B>: <verb> on <A>`) instead of silently losing it.
+ * When the current marker is absent, or the acted-on id cannot be
+ * resolved at all, the comparison is skipped and the old behaviour
+ * applies (idempotent clear-of-nothing, or "cannot prove this call is for
+ * a different task" -- both favor releasing, matching
+ * `claimEffectForAgentTasksTool`'s own fail-safe direction, see its
+ * doc comment for what that costs).
+ *
+ * Also, task c86e3c4a: when the clear is itself the
+ * classifier's fail-safe fallback for an unreadable task_finish result
+ * (rather than an intentional `done` release), the diagnostic says so by
+ * name (`unreadable tool_response, shape=...`) instead of looking
+ * identical to a normal release in the operator's stderr trail. This
+ * reads `taskFinishReleaseIsUnreadable`/`describeToolResponseShape`
+ * purely to LABEL the decision the classifier already made; it does not
+ * re-derive the decision itself.
  */
-function clearedResult(
+function releaseResult(
   toolName: string,
-  taskId: string,
+  toolInput: unknown,
+  toolResponse: unknown,
   generatedDir: string,
   stderr: NodeJS.WritableStream,
 ): PackHookTrackActiveClaimResult {
+  const actedOnTaskId = taskIdFromInput(toolInput) || taskIdFromToolResponse(toolResponse);
+  const currentClaim = readActiveClaim(generatedDir);
+
+  if (currentClaim !== null && actedOnTaskId !== "" && currentClaim !== actedOnTaskId) {
+    const diagnostic = `harness pack hook track-active-claim: kept active-claim ${currentClaim}: ${toolName} on ${actedOnTaskId}`;
+    stderr.write(`${diagnostic}\n`);
+    return {
+      exitCode: 0,
+      claimWritten: false,
+      claimCleared: false,
+      taskId: currentClaim,
+      diagnostic,
+    };
+  }
+
   clearActiveClaim(generatedDir);
-  const diagnostic = `harness pack hook track-active-claim: cleared active-claim after ${toolName}`;
+  const unreadable =
+    matchesAgentTasksRuntimeVerb(toolName, ["task_finish"]) &&
+    taskFinishReleaseIsUnreadable(toolResponse);
+  const diagnostic = unreadable
+    ? `harness pack hook track-active-claim: cleared active-claim after ${toolName} (unreadable tool_response, shape=${describeToolResponseShape(toolResponse)}, fail-safe release)`
+    : `harness pack hook track-active-claim: cleared active-claim after ${toolName}`;
   stderr.write(`${diagnostic}\n`);
   return {
     exitCode: 0,
     claimWritten: false,
     claimCleared: true,
-    taskId: taskId === "" ? null : taskId,
+    taskId: actedOnTaskId === "" ? null : actedOnTaskId,
     diagnostic,
   };
 }
@@ -299,7 +355,7 @@ export async function runPackHookTrackActiveClaimCli(
 
   if (claimEffect === "release" &&
     !matchesTransition(toolName)) {
-    return clearedResult(toolName, taskId, generatedDir, stderr);
+    return releaseResult(toolName, toolInput, event.tool_response, generatedDir, stderr);
   }
 
   if (matchesAgentTasksRuntimeVerb(toolName, ["task_finish"])) {
