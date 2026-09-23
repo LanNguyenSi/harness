@@ -2,6 +2,13 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-09-23T05:58:18Z, task `c86e3c4a` (orchestrator): re-stamped
+  `codex-adapter-parity-gaps.md`, `evidence-ledger-trust-boundary.md`,
+  `gate-fail-posture-matrix.md` and `understanding-gate-lockout-recovery.md`
+  after a comment-only edit to `src/runtime/task-providers/agent-tasks.ts`
+  (the release-on-unreadable rationale now states the fail-open versus
+  fail-closed asymmetry). None of the four cites a line of that file; their
+  file-level claims about the provider adapter are unchanged.
 - 2026-09-23T05:44:01Z, task `c86e3c4a` round 2 (implementer): `okf-kit
   check` flagged `debug-verb-selection.md` and `pause-vs-gate-kill-switch.md`
   STALE against `src/cli/index.ts` (missed in the entry below, which only
