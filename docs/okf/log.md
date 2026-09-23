@@ -2,6 +2,13 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-09-23T11:36:04.980Z, task T-008 (implementer): re-verified the nine
+  affected source-linked documents against the merged active-claim/Codex
+  changes and the static validate version-floor correction. Updated the
+  optional-probe scope, repaired affected citations, and corrected the
+  lockout doc's native-event versus harness-integration distinction.
+  Source-by-source reasoning and check results are retained in run evidence.
+
 - 2026-09-23, task `T-001` (implementer): re-verified
   `pause-vs-gate-kill-switch.md` after removing guessed payload-based
   suppression from the Codex UserPromptSubmit adapter. Its pause claim remains

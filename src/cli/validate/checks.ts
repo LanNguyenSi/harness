@@ -125,7 +125,7 @@ function checkMcp(manifest: Manifest, home: string): Diagnostic[] {
 function checkCli(manifest: Manifest, opts: CheckOptions): Diagnostic[] {
   const diags: Diagnostic[] = [];
   const pathEnv = opts.pathEnv ?? process.env.PATH ?? "";
-  const versionProbe = opts.versionProbe ?? (() => null);
+  const versionProbe = opts.versionProbe;
 
   manifest.tools.cli.forEach((cli) => {
     let resolved: string | null;
@@ -145,6 +145,16 @@ function checkCli(manifest: Manifest, opts: CheckOptions): Diagnostic[] {
       return;
     }
     if (!cli.min_version) return;
+    // The CLI deliberately supplies no probe: only callers opting into one
+    // may execute manifest-named version programs through this check.
+    if (!versionProbe) {
+      diags.push({
+        severity: "warning",
+        path: `tools.cli[${cli.name}].min_version`,
+        message: "version floor not checked without a version probe; run `harness doctor` to check installed versions",
+      });
+      return;
+    }
     const versionCommand = cli.version_command ?? [resolved, "--version"];
     const stdout = versionProbe(versionCommand);
     if (stdout === null) {

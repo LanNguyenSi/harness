@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- Corrected the 0.57.0 CLI-floor claim: `harness validate` does not execute
+  manifest version commands and now refers `tools.cli[].min_version` checks
+  to `harness doctor`, while callers supplying `versionProbe` retain comparison
+  (task `b32fdea2`).
+
 - **Codex `UserPromptSubmit` now injects whenever Codex invokes the hook**
   (task `f062b9f6`). The adapter no longer guesses from stdin prompt-field aliases
   that a blank value represents an inter-agent notification. It still consumes
