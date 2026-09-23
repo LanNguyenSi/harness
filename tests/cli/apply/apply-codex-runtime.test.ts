@@ -2185,6 +2185,17 @@ describe("apply --runtime codex --install: a refusal never echoes the config's o
       "line 10 contains '# harness hook:'",
     ],
     [
+      "a secret in the trailing comment of the foreign table header past the block",
+      [
+        ...STALE_MANAGED_BLOCK_LINES.filter((line) => line !== CODEX_MANAGED_END),
+        "",
+        `[tui] # ${SECRET}`,
+        'note = "x # harness hook: pasted"',
+        "",
+      ].join("\n"),
+      "foreign table ([tui])",
+    ],
+    [
       "a second BEGIN marker inside a secret-bearing value",
       [
         ...STALE_MANAGED_BLOCK_LINES,
@@ -2269,6 +2280,36 @@ describe("apply --runtime codex --install: foreign-section namespaces split keys
       '[plugins."a#b.c"]',
       '["my.table"]',
       "[ projects . 'Photos [2024]' ]",
+    ]);
+  });
+
+  it("recognizes a quoted hooks root and keeps its two-key namespace", async () => {
+    writeManifestWithPack();
+    const codexConfig = path.join(tmpHome, ".codex", "config.toml");
+    const config = [
+      ...STALE_MANAGED_BLOCK_LINES.filter((line) => line !== CODEX_MANAGED_END),
+      "",
+      '["hooks".state]',
+      "",
+      '["hooks".state."k1"]',
+      'trusted_hash = "sha256:aaaa"',
+      "",
+      CODEX_MANAGED_END,
+      "",
+    ].join("\n");
+    fs.mkdirSync(path.dirname(codexConfig), { recursive: true });
+    fs.writeFileSync(codexConfig, config);
+
+    const result = await apply({
+      homeDir: tmpHome,
+      runtime: "codex",
+      installCodex: true,
+      dryRun: true,
+    });
+
+    expect(result.outcome).toBe("would-apply");
+    expect(result.codexConfigInstall?.foreignSectionsPreserved).toEqual([
+      '["hooks".state.*] (2 tables)',
     ]);
   });
 });
