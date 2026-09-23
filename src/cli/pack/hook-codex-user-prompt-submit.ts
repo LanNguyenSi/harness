@@ -5,30 +5,22 @@
 // `understanding-gate-claude-hook` bin (the npm package owns the
 // instruction template). The Codex adapter mirrors that contract here:
 // reads the upstream prompt JSON on stdin, writes a system-style
-// instruction block on stdout that Codex will prepend to its system
-// prompt before the agent runs.
+// instruction block on stdout as developer context before the agent runs.
 //
-// Wire format on stdin: UNVERIFIED against a real Codex payload. This
-// module does not trust a single field name; it alias-tolerates any of
-// `REAL_PROMPT_FIELD_ALIASES` below (`prompt`, `text`, `input`,
-// `message`, `user_prompt`, `user_input`) as the carrier of the
-// operator's actual prompt text, the same way the sibling Codex hooks
-// alias-tolerate `tool`/`tool_name` and `raw_input`/`tool_input`. The
-// generated `config.toml` header for other Codex hooks documents the
-// wire shape as `{ session_id?, tool_name?, raw_input?, event? }`, with
-// no prompt field at all, so an envelope carrying none of the known
-// aliases is expected, not an error.
+// Wire format on stdin: Codex invokes this hook for an operator prompt.
+// The adapter deliberately does not inspect the envelope to infer which
+// kind of turn caused it. The hook event itself is the protocol boundary:
+// if Codex invokes UserPromptSubmit, inject the instruction block.
 //
-// stdout: a plain-text instruction block (no JSON wrapper) that Codex
-// concatenates into `additional_instructions`. The block is identical
-// across modes for v1; finer-grained per-mode templating is an
-// upstream-package concern.
+// stdout: a plain-text developer-context instruction block (no JSON wrapper).
+// The block is identical across modes for v1; finer-grained per-mode
+// templating is an upstream-package concern.
 //
 // Failure mode: any error → exit 0, no stdout, diagnostic on stderr.
 // A missing injector text must never fail the agent's prompt path.
 //
-// Two short-circuits happen before any manifest/mode logic runs, both
-// producing the same "no stdout, no injection" outcome:
+// One short-circuit happens before any manifest/mode logic runs,
+// producing "no stdout, no injection":
 //
 //   1. Pause sentinel (task 63fefe3a): honoured the same way every other
 //      pack hook honours it (`checkHookPause`, mirrored from
@@ -36,27 +28,6 @@
 //      `harness pause` must silence this injector exactly like it silences
 //      the PreToolUse/PostToolUse gates. Checked BEFORE manifest load so a
 //      broken install still respects an active pause.
-//   2. No real user input (task 63fefe3a, corrected same task after an
-//      advisor review caught the first cut fail-closed): a notification
-//      turn, subagent completion, a Monitor event, a background-bash
-//      finishing, carries no operator text, and injecting the full
-//      instruction block on it is pure noise (and, per the pack's own
-//      contract, prompts the agent to write a fresh Understanding Report
-//      against nothing). BUT the module's own documented envelope
-//      (`{ session_id?, prompt? }` above) is unverified against a real
-//      Codex payload: the generated `config.toml` header for every other
-//      Codex hook documents the wire shape as `{ session_id?, tool_name?,
-//      raw_input?, event? }`, no `prompt` field at all, and the sibling
-//      hooks (`hook-codex-pre-tool-use.ts` etc.) never trust a single
-//      field name, they alias-tolerate (`tool`/`tool_name`,
-//      `raw_input`/`tool_input`) via `pickString`. So this check is
-//      FAIL-OPEN-TO-INJECT: it only suppresses when a recognized
-//      prompt-carrying field is POSITIVELY present and empty. A missing
-//      field, an unrecognized envelope shape, or unparsable stdin is not
-//      evidence of "no user input", it is evidence the real Codex wire
-//      format is not what this module assumed, and the safe default in
-//      that case is the pre-task-63fefe3a behavior: inject. See
-//      `hasRealUserPrompt` below.
 
 import { type Mode, resolveMode } from "../../policy-packs/builtin/understanding-before-execution.js";
 import type { Manifest } from "../../schema/index.js";
@@ -114,76 +85,6 @@ export function buildInstructionBlock(mode: Mode): string {
   return base + "\n";
 }
 
-/**
- * Field names that could plausibly carry the operator's actual prompt
- * text on a Codex UserPromptSubmit envelope. `prompt` is this module's
- * own documented guess; the others are tolerated the same way the
- * sibling Codex hooks tolerate `tool`/`tool_name` and
- * `raw_input`/`tool_input`, a real integration may use a different
- * name than the one this package assumed. None of this is confirmed
- * against a real Codex payload (see module header); the alias list only
- * WIDENS which fields can prove a real prompt, it never narrows what
- * counts as "unknown, so inject".
- */
-const REAL_PROMPT_FIELD_ALIASES = [
-  "prompt",
-  "text",
-  "input",
-  "message",
-  "user_prompt",
-  "user_input",
-] as const;
-
-/**
- * True when the UserPromptSubmit envelope should trigger injection.
- *
- * FAIL-OPEN TO INJECT: this only returns `false` (suppress) when at
- * least one recognized prompt-carrying field (see
- * `REAL_PROMPT_FIELD_ALIASES`) is POSITIVELY present on the parsed
- * envelope with a string value, and every string-valued alias present
- * is empty or whitespace-only, a real signal that the sender
- * explicitly marked this turn as carrying no operator text. The
- * decision considers every alias present, not just the first match in
- * list order: a single non-empty string alias anywhere in the envelope
- * (for example `{"prompt":"","text":"real operator text"}`) is real
- * user input and must inject, even when an earlier-listed alias on the
- * same envelope is empty. Everything else defaults to `true` (inject,
- * i.e. the pre-task-63fefe3a behavior):
- *
- *   - unparsable / non-JSON stdin,
- *   - a parsed value that is not an object,
- *   - an object that carries none of the known aliases as a string
- *     value at all (this is the documented `{ session_id?, tool_name?,
- *     raw_input?, event? }` shape from the generated config.toml
- *     header, no prompt field by design, not evidence of a
- *     notification turn, and a non-string alias value is ignored the
- *     same way),
- *
- * An envelope harness cannot parse, or cannot recognize, is not
- * evidence that there was no real user input; it is evidence this
- * module's assumption about the wire format was wrong, and the correct
- * failure direction for a governance-adjacent injector is to keep
- * injecting, not to go silently dark.
- */
-export function hasRealUserPrompt(raw: string): boolean {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    return true;
-  }
-  if (typeof parsed !== "object" || parsed === null) return true;
-  const obj = parsed as Record<string, unknown>;
-  let sawStringAlias = false;
-  for (const key of REAL_PROMPT_FIELD_ALIASES) {
-    const value = obj[key];
-    if (typeof value !== "string") continue;
-    sawStringAlias = true;
-    if (value.trim().length > 0) return true;
-  }
-  return !sawStringAlias;
-}
-
 export async function runPackHookCodexUserPromptSubmitCli(
   opts: PackHookCodexUserPromptSubmitOptions = {},
 ): Promise<PackHookCodexUserPromptSubmitResult> {
@@ -192,22 +93,13 @@ export async function runPackHookCodexUserPromptSubmitCli(
   const stderr = opts.stderr ?? process.stderr;
   const packName = opts.pack ?? PACK_NAME;
 
-  const raw = await readStdin(stdin).catch(() => "");
+  await readStdin(stdin).catch(() => "");
 
   // Pause sentinel, operator-only kill switch. Honoured BEFORE manifest
   // load, same ordering as every other pack hook (see module header).
   if (checkHookPause("codex-user-prompt-submit", stderr, opts, opts.generatedDir, opts.now).paused) {
     stderr.write(
       "harness pack hook codex-user-prompt-submit: harness paused, skipping injection.\n",
-    );
-    return { exitCode: 0, emitted: false, text: "" };
-  }
-
-  // No real user input on this turn: nothing to react to, so nothing to
-  // inject. See `hasRealUserPrompt` above.
-  if (!hasRealUserPrompt(raw)) {
-    stderr.write(
-      "harness pack hook codex-user-prompt-submit: no real user prompt on this turn, suppressing injection.\n",
     );
     return { exitCode: 0, emitted: false, text: "" };
   }

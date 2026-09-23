@@ -10,11 +10,11 @@ import {
 import { parseManifest, type Manifest } from "../../src/schema/index.js";
 import { writeSentinel, type PauseSentinel } from "../../src/runtime/pause-sentinel.js";
 
-/** A real operator turn: the envelope carries non-empty `prompt` text. */
-const REAL_PROMPT_PAYLOAD = JSON.stringify({
-  session_id: "sess-1",
-  prompt: "please fix the flaky test",
-});
+/** Redacted genuine operator envelope; provenance lives beside the fixture. */
+const REAL_PROMPT_PAYLOAD = fs.readFileSync(
+  new URL("../fixtures/codex-user-prompt-submit/operator-0.156.1.json", import.meta.url),
+  "utf8",
+);
 
 function manifestWithPack(
   enabled = true,
@@ -102,14 +102,8 @@ describe("pack hook codex-user-prompt-submit injector", () => {
     expect(a).toContain("mode: grill_me");
   });
 
-  describe("no real user input (fail-open to inject, task 63fefe3a fix)", () => {
-    it("REGRESSION: an envelope with only the documented config.toml fields (no prompt field at all) still injects", async () => {
-      // This is the exact regression an advisor review caught: the
-      // generated config.toml header documents the wire shape as
-      // { session_id?, tool_name?, raw_input?, event? }, no `prompt`
-      // field. A hook that suppressed on "no prompt field" would go
-      // permanently silent against the real envelope while every test
-      // using a synthetic `{"prompt": ...}` fixture stayed green.
+  describe("UserPromptSubmit invocation", () => {
+    it("injects when invoked with a tool-event-shaped envelope", async () => {
       const stdout = bufferStream();
       const result = await runPackHookCodexUserPromptSubmitCli({
         manifest: manifestWithPack(),
@@ -161,16 +155,25 @@ describe("pack hook codex-user-prompt-submit injector", () => {
       expect(result.emitted).toBe(true);
     });
 
-    it("suppresses injection when prompt is POSITIVELY present and empty/whitespace-only (a real signal of a notification turn)", async () => {
+    it("REGRESSION: injects a valid user prompt even when its prompt field is blank", async () => {
+      // This deliberately synthetic derivative of the genuine operator
+      // fixture is a regression case, not a notification capture. Codex
+      // event dispatch, rather than payload inspection, determines whether
+      // this hook was invoked.
       const stdout = bufferStream();
       const result = await runPackHookCodexUserPromptSubmitCli({
         manifest: manifestWithPack(),
-        stdin: readableFromString(JSON.stringify({ session_id: "sess-1", prompt: "   " })),
+        stdin: readableFromString(
+          JSON.stringify({
+            ...(JSON.parse(REAL_PROMPT_PAYLOAD) as Record<string, unknown>),
+            prompt: "   ",
+          }),
+        ),
         stdout: stdout.stream,
         stderr: bufferStream().stream,
       });
-      expect(result.emitted).toBe(false);
-      expect(stdout.read()).toBe("");
+      expect(result.emitted).toBe(true);
+      expect(stdout.read()).toContain("Understanding Gate");
     });
 
     it("still injects on a real operator prompt (positive control)", async () => {
@@ -185,89 +188,6 @@ describe("pack hook codex-user-prompt-submit injector", () => {
       expect(stdout.read()).toContain("Understanding Gate");
     });
 
-    it.each(["text", "input", "message", "user_prompt", "user_input"])(
-      "still injects on a real operator prompt carried under the alias field `%s`",
-      async (alias) => {
-        const stdout = bufferStream();
-        const result = await runPackHookCodexUserPromptSubmitCli({
-          manifest: manifestWithPack(),
-          stdin: readableFromString(
-            JSON.stringify({ session_id: "sess-1", [alias]: "please fix the flaky test" }),
-          ),
-          stdout: stdout.stream,
-          stderr: bufferStream().stream,
-        });
-        expect(result.emitted).toBe(true);
-        expect(stdout.read()).toContain("Understanding Gate");
-      },
-    );
-
-    // Discriminating probe for alias support: a fail-open default means
-    // "still injects on alias `%s`" (above) passes even if that alias were
-    // dropped from the recognized list entirely, because an unrecognized
-    // field falls through to "inject anyway". Only the SUPPRESS path
-    // (an alias present and positively empty) actually proves the alias is
-    // recognized, since dropping the alias would flip that case from
-    // "suppress" to "inject" (fail-open), an observable difference.
-    it.each(["prompt", "text", "input", "message", "user_prompt", "user_input"])(
-      "suppresses injection when the alias field `%s` is positively present and empty (proves the alias is recognized)",
-      async (alias) => {
-        const stdout = bufferStream();
-        const result = await runPackHookCodexUserPromptSubmitCli({
-          manifest: manifestWithPack(),
-          stdin: readableFromString(JSON.stringify({ session_id: "sess-1", [alias]: "" })),
-          stdout: stdout.stream,
-          stderr: bufferStream().stream,
-        });
-        expect(result.emitted).toBe(false);
-        expect(stdout.read()).toBe("");
-      },
-    );
-
-    // Fix round (task 1432e053 review): the decision must consider every
-    // alias present on the envelope, not just the first alias in list
-    // order. `prompt` sorts before `text` in REAL_PROMPT_FIELD_ALIASES; a
-    // first-match short-circuit would return on the empty `prompt` and
-    // never look at the real text carried under `text`.
-    it("injects when an earlier-listed alias is empty but a later-listed alias carries real text", async () => {
-      const stdout = bufferStream();
-      const result = await runPackHookCodexUserPromptSubmitCli({
-        manifest: manifestWithPack(),
-        stdin: readableFromString(
-          JSON.stringify({ session_id: "sess-1", prompt: "", text: "real operator text" }),
-        ),
-        stdout: stdout.stream,
-        stderr: bufferStream().stream,
-      });
-      expect(result.emitted).toBe(true);
-      expect(stdout.read()).toContain("Understanding Gate");
-    });
-
-    it("suppresses when every string-valued alias present on the envelope is empty", async () => {
-      const stdout = bufferStream();
-      const result = await runPackHookCodexUserPromptSubmitCli({
-        manifest: manifestWithPack(),
-        stdin: readableFromString(JSON.stringify({ session_id: "sess-1", prompt: "", text: "" })),
-        stdout: stdout.stream,
-        stderr: bufferStream().stream,
-      });
-      expect(result.emitted).toBe(false);
-      expect(stdout.read()).toBe("");
-    });
-
-    it("ignores a non-string alias value and still injects on a real string alias", async () => {
-      const stdout = bufferStream();
-      const result = await runPackHookCodexUserPromptSubmitCli({
-        manifest: manifestWithPack(),
-        stdin: readableFromString(
-          JSON.stringify({ session_id: "sess-1", prompt: 123, text: "real" }),
-        ),
-        stdout: stdout.stream,
-        stderr: bufferStream().stream,
-      });
-      expect(result.emitted).toBe(true);
-      expect(stdout.read()).toContain("Understanding Gate");
-    });
   });
 
   describe("pause sentinel", () => {
