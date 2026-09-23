@@ -191,6 +191,12 @@ export interface CodexConfigInstallOutcome {
   written: boolean;
   summary: string;
   backupPath?: string;
+  /** Hook ids present in the old managed block but absent from the new
+   * one (task 6a037359). */
+  removedHookIds: string[];
+  /** Foreign table headers preserved from a stray-END drift cleanup
+   * (task 6a037359). */
+  foreignSectionsPreserved: string[];
 }
 
 export interface ApplyResult {
@@ -304,6 +310,8 @@ function codexInstallOutcome(
     changed: result.changed,
     written: "written" in result ? result.written : false,
     summary: result.summary,
+    removedHookIds: result.removedHookIds,
+    foreignSectionsPreserved: result.foreignSectionsPreserved,
     ...("backupPath" in result && result.backupPath !== undefined
       ? { backupPath: result.backupPath }
       : {}),
