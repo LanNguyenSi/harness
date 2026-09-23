@@ -174,7 +174,7 @@ describe("pack hook track-active-claim — task_finish resulting status decides 
     expect(result.claimWritten).toBe(false);
     expect(readActiveClaim(generatedDir)).toBeNull();
     expect(stderr.read()).toMatch(
-      /cleared active-claim after mcp__agent-tasks__task_finish \(resulting status=done\)/,
+      /cleared active-claim after mcp__agent-tasks__task_finish/,
     );
   });
 
@@ -226,7 +226,7 @@ describe("pack hook track-active-claim — task_finish resulting status decides 
     expect(result.claimWritten).toBe(false);
     expect(readActiveClaim(generatedDir)).toBeNull();
     expect(stderr.read()).toMatch(
-      /cleared active-claim after mcp__agent-tasks__task_finish \(resulting status=\(missing\)\)/,
+      /cleared active-claim after mcp__agent-tasks__task_finish/,
     );
   });
 

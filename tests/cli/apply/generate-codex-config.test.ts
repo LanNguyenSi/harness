@@ -250,6 +250,10 @@ describe("generateCodexConfig", () => {
     expect(re.test("mcp__agent-tasks__task_start")).toBe(true); // canonical
     expect(re.test("mcp__agent-tasks__.task_start")).toBe(true); // dotted
     expect(re.test("mcp__agent_tasks__task_start")).toBe(true); // underscore-server
+    // task c86e3c4a, AC-002 item 3: task_merge is now a tracked verb too,
+    // both the canonical name and the underscore-server variant.
+    expect(re.test("mcp__agent-tasks__task_merge")).toBe(true);
+    expect(re.test("mcp__agent_tasks__task_merge")).toBe(true);
     expect(re.test("Read")).toBe(false); // negative control: unrelated tool
   });
 

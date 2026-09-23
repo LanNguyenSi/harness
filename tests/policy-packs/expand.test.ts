@@ -246,6 +246,28 @@ describe("expandPolicyPacks", () => {
     expect(r.hooks).toHaveLength(7);
   });
 
+  it("the Claude track-active-claim matcher covers task_start/task_finish/task_abandon/tasks_transition/task_merge (task c86e3c4a, AC-002 item 3)", () => {
+    // task_merge was previously untracked (fell through as "not tracked"
+    // in hook-track-active-claim.ts), so the generated matcher never
+    // dispatched a real task_merge tool call to the hook at all. Pins
+    // both the exact anchored string and that it actually matches.
+    const m = buildManifest([{ name: "understanding-before-execution" }]);
+    const r = expandPolicyPacks(m);
+    const claim = r.hooks.find(
+      (h) => h.name === "policy-pack:understanding-before-execution:track-active-claim",
+    );
+    expect(claim?.match).toBe(
+      "^(?:mcp__agent-tasks__task_start|mcp__agent-tasks__task_finish|mcp__agent-tasks__task_abandon|mcp__agent-tasks__tasks_transition|mcp__agent-tasks__task_merge)$",
+    );
+    const re = new RegExp(claim!.match!);
+    expect(re.test("mcp__agent-tasks__task_start")).toBe(true);
+    expect(re.test("mcp__agent-tasks__task_finish")).toBe(true);
+    expect(re.test("mcp__agent-tasks__task_abandon")).toBe(true);
+    expect(re.test("mcp__agent-tasks__tasks_transition")).toBe(true);
+    expect(re.test("mcp__agent-tasks__task_merge")).toBe(true);
+    expect(re.test("Read")).toBe(false); // negative control
+  });
+
   it("PostToolUse hook match pattern reflects custom expire_on_tool_match list", () => {
     const m = buildManifest([
       {
@@ -679,7 +701,7 @@ describe("expandPolicyPacks", () => {
     // Bare pipe list (not the Claude builder's anchored form), same
     // rationale as the marker-expiry hook above.
     expect(claim?.match).toBe(
-      "mcp__agent-tasks__task_start|mcp__agent-tasks__task_finish|mcp__agent-tasks__task_abandon|mcp__agent-tasks__tasks_transition",
+      "mcp__agent-tasks__task_start|mcp__agent-tasks__task_finish|mcp__agent-tasks__task_abandon|mcp__agent-tasks__tasks_transition|mcp__agent-tasks__task_merge",
     );
 
     const scope = r.hooks.find(
@@ -712,6 +734,8 @@ describe("expandPolicyPacks", () => {
     expect(claimRe.test("mcp__agent-tasks__task_start")).toBe(true); // canonical
     expect(claimRe.test("mcp__agent-tasks__.task_start")).toBe(true); // dotted
     expect(claimRe.test("mcp__agent_tasks__task_start")).toBe(true); // underscore-server
+    expect(claimRe.test("mcp__agent-tasks__task_merge")).toBe(true); // task c86e3c4a
+    expect(claimRe.test("mcp__agent_tasks__task_merge")).toBe(true); // underscore-server
     expect(claimRe.test("Read")).toBe(false); // negative control
     const scopeRe = new RegExp(expandedScope);
     expect(scopeRe.test("mcp__demo_tasks__create")).toBe(true);
