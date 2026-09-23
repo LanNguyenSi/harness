@@ -151,7 +151,7 @@ describe("pack hook track-active-claim — task_start writes the active-claim fi
   });
 });
 
-describe("pack hook track-active-claim — task_finish resulting status decides the effect (task c86e3c4a)", () => {
+describe("pack hook track-active-claim: task_finish resulting status decides the effect (task c86e3c4a)", () => {
   it("clears the active-claim file on task_finish whose resulting status is done", async () => {
     const generatedDir = path.join(tmp, "harness.generated");
     writeActiveClaim(generatedDir, "task-uuid-abc");
