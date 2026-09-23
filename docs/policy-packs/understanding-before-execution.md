@@ -634,7 +634,7 @@ Wire format for the Codex adapter scripts (stdin):
 }
 ```
 
-Block contract (PreToolUse): exit 2 + reason on stderr. Allow contract: exit 0, optional diagnostic on stderr. Injector contract (UserPromptSubmit): instruction template on stdout for Codex to prepend to `additional_instructions`.
+Block contract (PreToolUse): exit 2 + reason on stderr. Allow contract: exit 0, optional diagnostic on stderr. Injector contract (UserPromptSubmit): Codex invokes it for an operator prompt; the adapter consumes stdin without inferring turn type and writes the instruction template as developer context on stdout.
 
 `codex-post-tool-use` reads the same envelope but prefers `tool_input` over `raw_input` when both are present (`tool_input` is the field name the published Codex `PostToolUse` payload actually sends, matching Claude Code's own convention; `raw_input` remains accepted for any shim built against harness's earlier portable wire format). It also resolves `session_id` from `$CODEX_SESSION_ID` ahead of `$CLAUDE_CODE_SESSION_ID` / `$CLAUDE_SESSION_ID` when the event omits it.
 
@@ -690,7 +690,7 @@ After capture, `harness approve understanding --session <id>` flips `approvalSta
   - `SubagentStart` / `SubagentStop`: `harness pack hook subagent-start` and `harness pack hook subagent-stop` record and clear Claude subagent state.
   - Optional `PostToolUse` stay-in-scope reminder: emitted only for an explicitly enabled `stay_in_scope` block. See [Stay-in-scope reminder](#stay-in-scope-reminder).
   - Hook names are namespaced (`policy-pack:understanding-before-execution:<role>`) to avoid collisions with operator-authored hooks.
-- The Codex managed configuration has five default hooks: `UserPromptSubmit`, `Stop`, `PreToolUse`, marker-expiry `PostToolUse`, and active-claim `PostToolUse`. It has no Claude `SubagentStart`/`SubagentStop` companions. An enabled `stay_in_scope` block adds a sixth configured `PostToolUse` reminder using the same command and alias-expandable matcher rules as Claude.
+- The Codex managed configuration has five default hooks: `UserPromptSubmit`, `Stop`, `PreToolUse`, marker-expiry `PostToolUse`, and active-claim `PostToolUse`. Codex exposes native `SubagentStart`/`SubagentStop` events, but harness does not wire the Claude in-flight companions for them. An enabled `stay_in_scope` block adds a sixth configured `PostToolUse` reminder using the same command and alias-expandable matcher rules as Claude.
 - An operator audit copy at `harness.generated/policy-packs/understanding-before-execution/instructions.md`. This file documents what the pack is doing in the operator's voice (mode, hook list, approval flow); the agent-facing prompt is injected at runtime by the `UserPromptSubmit` hook and lives in the npm package, not here. Drift on the audit copy means an operator edited something they shouldn't have, and `harness diff --since-apply` flags it.
 
 ## Approving an Understanding Report

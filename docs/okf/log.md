@@ -2,6 +2,11 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-09-23, task `T-001` (implementer): re-verified
+  `pause-vs-gate-kill-switch.md` after removing guessed payload-based
+  suppression from the Codex UserPromptSubmit adapter. Its pause claim remains
+  accurate: the sentinel check still runs before manifest loading.
+
 - 2026-09-23T05:58:18Z, task `c86e3c4a` (orchestrator): re-stamped
   `codex-adapter-parity-gaps.md`, `evidence-ledger-trust-boundary.md`,
   `gate-fail-posture-matrix.md` and `understanding-gate-lockout-recovery.md`

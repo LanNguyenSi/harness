@@ -1378,8 +1378,7 @@ export function buildProgram(opts: RunOptions = {}): Command {
     );
 
   // Phase 6 #6 — Codex adapter sub-commands. Mirror the pre-tool-use
-  // shape; UserPromptSubmit equivalent injects the instruction template
-  // on stdout for Codex to prepend to additional_instructions.
+  // shape; UserPromptSubmit emits developer-context instructions on stdout.
   packHookCmd
     .command("codex-pre-tool-use")
     .description(
@@ -1442,7 +1441,7 @@ export function buildProgram(opts: RunOptions = {}): Command {
   packHookCmd
     .command("codex-user-prompt-submit")
     .description(
-      "Codex UserPromptSubmit injector: emit the Understanding-Gate instruction template on stdout for Codex to prepend to additional_instructions",
+      "Codex UserPromptSubmit injector: emit developer-context instructions on stdout whenever Codex invokes the event",
     )
     .option("--config <path>", "manifest path (default: ~/.harness/harness.yaml; legacy fallback ~/.claude/harness.yaml)")
     .option("--project <name>", "apply per-project overrides")

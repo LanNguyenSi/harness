@@ -1,0 +1,10 @@
+{
+  "session_id": "<redacted-session-id>",
+  "turn_id": "<redacted-turn-id>",
+  "transcript_path": "<redacted-transcript-path>",
+  "cwd": "<redacted-cwd>",
+  "hook_event_name": "UserPromptSubmit",
+  "model": "gpt-5.6-terra",
+  "permission_mode": "default",
+  "prompt": "Run exactly this one shell command and nothing else: echo tui-probe . Then reply with the single word: done"
+}

@@ -56,15 +56,15 @@ const HEADER = [
   "# Operator-owned settings (model, auth, sandbox profile, MCP servers)",
   "# stay in your own config; harness owns hook wiring only.",
   "#",
-  "# Wire format the harness adapter scripts expect on stdin (per",
+  "# Wire format the tool-event adapter scripts expect on stdin (per",
   '# docs/policy-packs/understanding-before-execution.md "Adapter notes /',
   '# Codex"):',
   "#",
   "#   { session_id?: string, tool_name?: string, raw_input?: any, event?: string }",
   "#",
   "# PreToolUse blocker exit-code contract: 0 = allow, 2 = block (with reason",
-  "# on stderr). UserPromptSubmit injector emits the instruction template on",
-  "# stdout for Codex to prepend to additional_instructions.",
+  "# on stderr). UserPromptSubmit emits developer-context instructions on stdout",
+  "# whenever Codex invokes that event; it does not inspect stdin to suppress turns.",
   "",
 ].join("\n");
 

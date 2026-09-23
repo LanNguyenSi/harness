@@ -1,0 +1,10 @@
+{
+  "session_id": "<redacted-session-id>",
+  "turn_id": "<redacted-turn-id>",
+  "transcript_path": null,
+  "cwd": "<redacted-cwd>",
+  "hook_event_name": "UserPromptSubmit",
+  "model": "gpt-6-astra",
+  "permission_mode": "bypassPermissions",
+  "prompt": "This is one bounded read-only hook measurement. Spawn exactly one default child agent with fork_turns explicitly set to \"none\" and agent_type \"default\". Ask the child to independently choose a fresh unpredictable 16-character alphanumeric token, use no tools, and return exactly CHILD_TOKEN=<its token>. Do not suggest a token. You may use only spawn_agent and wait_agent, no shell, network, file, or other tools. Wait until the child is terminal. Then consume its FINAL_ANSWER notification and copy its exact CHILD_TOKEN line as your final answer. Do not guess a token and do not finish before that notification. This is a measurement fixture, not repository work."
+}
