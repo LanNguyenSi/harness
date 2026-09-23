@@ -60,6 +60,20 @@ function eventBody(
   });
 }
 
+function eventBodyWithResponse(
+  toolName: string,
+  toolInput: Record<string, unknown> | undefined,
+  toolResponse: unknown,
+  sessionId = "sess-1",
+): string {
+  return JSON.stringify({
+    session_id: sessionId,
+    tool_name: toolName,
+    ...(toolInput !== undefined && { tool_input: toolInput }),
+    tool_response: toolResponse,
+  });
+}
+
 describe("pack hook track-active-claim — task_start writes the active-claim file", () => {
   it("writes <generatedDir>/active-claim with the taskId from tool_input on task_start", async () => {
     const generatedDir = path.join(tmp, "harness.generated");
@@ -137,8 +151,64 @@ describe("pack hook track-active-claim — task_start writes the active-claim fi
   });
 });
 
-describe("pack hook track-active-claim — task_finish / task_abandon clears the file", () => {
-  it("clears the active-claim file on task_finish", async () => {
+describe("pack hook track-active-claim — task_finish resulting status decides the effect (task c86e3c4a)", () => {
+  it("clears the active-claim file on task_finish whose resulting status is done", async () => {
+    const generatedDir = path.join(tmp, "harness.generated");
+    writeActiveClaim(generatedDir, "task-uuid-abc");
+
+    const stderr = bufferStream();
+    const result = await runPackHookTrackActiveClaimCli({
+      manifest: manifestWithPack(),
+      stdin: readableFromString(
+        eventBodyWithResponse(
+          "mcp__agent-tasks__task_finish",
+          { taskId: "task-uuid-abc" },
+          { ok: true, task: { id: "task-uuid-abc", status: "done" } },
+        ),
+      ),
+      stderr: stderr.stream,
+      generatedDir,
+    });
+
+    expect(result.claimCleared).toBe(true);
+    expect(result.claimWritten).toBe(false);
+    expect(readActiveClaim(generatedDir)).toBeNull();
+    expect(stderr.read()).toMatch(
+      /cleared active-claim after mcp__agent-tasks__task_finish \(resulting status=done\)/,
+    );
+  });
+
+  it("keeps the active-claim file on task_finish whose resulting status is review", async () => {
+    // Pins the fix for task c86e3c4a: a finish that lands the task in
+    // review keeps the work claim per v2 semantics (task_finish docs),
+    // so the marker must stay so `harness approve understanding` can
+    // still auto-resolve the (still-claimed) task on the recovery path.
+    const generatedDir = path.join(tmp, "harness.generated");
+    writeActiveClaim(generatedDir, "task-uuid-abc");
+
+    const stderr = bufferStream();
+    const result = await runPackHookTrackActiveClaimCli({
+      manifest: manifestWithPack(),
+      stdin: readableFromString(
+        eventBodyWithResponse(
+          "mcp__agent-tasks__task_finish",
+          { taskId: "task-uuid-abc" },
+          { ok: true, task: { id: "task-uuid-abc", status: "review" } },
+        ),
+      ),
+      stderr: stderr.stream,
+      generatedDir,
+    });
+
+    expect(result.claimCleared).toBe(false);
+    expect(result.claimWritten).toBe(false);
+    expect(readActiveClaim(generatedDir)).toBe("task-uuid-abc");
+    expect(stderr.read()).toMatch(
+      /kept active-claim after mcp__agent-tasks__task_finish \(resulting status=review\)/,
+    );
+  });
+
+  it("fails safe (clears) when task_finish carries no tool_response at all", async () => {
     const generatedDir = path.join(tmp, "harness.generated");
     writeActiveClaim(generatedDir, "task-uuid-abc");
 
@@ -155,7 +225,31 @@ describe("pack hook track-active-claim — task_finish / task_abandon clears the
     expect(result.claimCleared).toBe(true);
     expect(result.claimWritten).toBe(false);
     expect(readActiveClaim(generatedDir)).toBeNull();
-    expect(stderr.read()).toMatch(/cleared active-claim after mcp__agent-tasks__task_finish/);
+    expect(stderr.read()).toMatch(
+      /cleared active-claim after mcp__agent-tasks__task_finish \(resulting status=\(missing\)\)/,
+    );
+  });
+
+  it("fails safe (clears) when task_finish's tool_response is malformed (status not a string)", async () => {
+    const generatedDir = path.join(tmp, "harness.generated");
+    writeActiveClaim(generatedDir, "task-uuid-abc");
+
+    const stderr = bufferStream();
+    const result = await runPackHookTrackActiveClaimCli({
+      manifest: manifestWithPack(),
+      stdin: readableFromString(
+        eventBodyWithResponse(
+          "mcp__agent-tasks__task_finish",
+          { taskId: "task-uuid-abc" },
+          { ok: true, task: { id: "task-uuid-abc", status: 42 } },
+        ),
+      ),
+      stderr: stderr.stream,
+      generatedDir,
+    });
+
+    expect(result.claimCleared).toBe(true);
+    expect(readActiveClaim(generatedDir)).toBeNull();
   });
 
   it("clears the active-claim file on task_abandon", async () => {
@@ -176,6 +270,26 @@ describe("pack hook track-active-claim — task_finish / task_abandon clears the
     expect(readActiveClaim(generatedDir)).toBeNull();
   });
 
+  it("clears the active-claim file on task_merge", async () => {
+    // AC-002 item 2: merge clears it, same as done/abandon.
+    const generatedDir = path.join(tmp, "harness.generated");
+    writeActiveClaim(generatedDir, "task-uuid-abc");
+
+    const stderr = bufferStream();
+    const result = await runPackHookTrackActiveClaimCli({
+      manifest: manifestWithPack(),
+      stdin: readableFromString(
+        eventBody("mcp__agent-tasks__task_merge", { taskId: "task-uuid-abc" }),
+      ),
+      stderr: stderr.stream,
+      generatedDir,
+    });
+
+    expect(result.claimCleared).toBe(true);
+    expect(readActiveClaim(generatedDir)).toBeNull();
+    expect(stderr.read()).toMatch(/cleared active-claim after mcp__agent-tasks__task_merge/);
+  });
+
   it("is idempotent: clearing when no file exists does not error", async () => {
     const generatedDir = path.join(tmp, "harness.generated");
     fs.mkdirSync(generatedDir, { recursive: true });
@@ -192,6 +306,42 @@ describe("pack hook track-active-claim — task_finish / task_abandon clears the
 
     expect(result.claimCleared).toBe(true);
     expect(result.exitCode).toBe(0);
+  });
+
+  it("recovery path: task_start on the SAME review-state task rewrites the marker (no 409 handling needed here)", async () => {
+    // After a finish-to-review keeps the marker, the documented recovery
+    // is `task_start` on that same task id, which this hook already
+    // handles as an ordinary claim acquisition (overwrite-on-write,
+    // pinned above by the task_start describe block); this case pins
+    // the concrete review -> re-start sequence end to end.
+    const generatedDir = path.join(tmp, "harness.generated");
+    writeActiveClaim(generatedDir, "task-uuid-abc");
+    await runPackHookTrackActiveClaimCli({
+      manifest: manifestWithPack(),
+      stdin: readableFromString(
+        eventBodyWithResponse(
+          "mcp__agent-tasks__task_finish",
+          { taskId: "task-uuid-abc" },
+          { ok: true, task: { id: "task-uuid-abc", status: "review" } },
+        ),
+      ),
+      stderr: bufferStream().stream,
+      generatedDir,
+    });
+    expect(readActiveClaim(generatedDir)).toBe("task-uuid-abc");
+
+    const stderr = bufferStream();
+    const result = await runPackHookTrackActiveClaimCli({
+      manifest: manifestWithPack(),
+      stdin: readableFromString(
+        eventBody("mcp__agent-tasks__task_start", { taskId: "task-uuid-abc" }),
+      ),
+      stderr: stderr.stream,
+      generatedDir,
+    });
+
+    expect(result.claimWritten).toBe(true);
+    expect(readActiveClaim(generatedDir)).toBe("task-uuid-abc");
   });
 });
 

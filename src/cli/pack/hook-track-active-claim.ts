@@ -67,6 +67,7 @@ import {
   tasksTransitionStatusFromInput,
   TASK_ABANDON_TOOL,
   TASK_FINISH_TOOL,
+  TASK_MERGE_TOOL,
   TASK_START_TOOL,
   TASKS_TRANSITION_TOOL,
 } from "../../runtime/task-providers/agent-tasks.js";
@@ -94,8 +95,23 @@ export const TOOL_NAME_TASK_ABANDON = TASK_ABANDON_TOOL;
 // 9e06175f). Adding this verb closes the marker-GC gap left by PR #198,
 // which fixed the auto-bypass but did not GC the stale markers themselves.
 export const TOOL_NAME_TASKS_TRANSITION = TASKS_TRANSITION_TOOL;
+export const TOOL_NAME_TASK_MERGE = TASK_MERGE_TOOL;
 
-export const TRACK_ACTIVE_CLAIM_TOOLS: readonly string[] = ACTIVE_CLAIM_TOOL_NAMES;
+// TASK_MERGE_TOOL is handled locally below (matchesTaskMerge), not through
+// claimEffectForAgentTasksTool: that shared classifier's own tool set
+// (ACTIVE_CLAIM_TOOL_NAMES, src/runtime/task-providers/agent-tasks.ts) is
+// out of this hook's scope to change. Note for the wiring gap this leaves:
+// the generated PostToolUse matcher (understanding-before-execution.ts,
+// TRACK_ACTIVE_CLAIM_MATCH / _CODEX) is still built from
+// ACTIVE_CLAIM_TOOL_NAMES, so it does not yet include task_merge either,
+// meaning a real task_merge tool call will not dispatch to this hook
+// until that matcher is widened too (out of scope here, flagged as a
+// risk). This export documents the CLI-level set this hook body itself
+// recognizes today.
+export const TRACK_ACTIVE_CLAIM_TOOLS: readonly string[] = [
+  ...ACTIVE_CLAIM_TOOL_NAMES,
+  TASK_MERGE_TOOL,
+];
 
 export interface PackHookTrackActiveClaimOptions extends LoaderOptions {
   pack?: string;
@@ -127,6 +143,31 @@ interface ToolEventLite {
   // Codex-shim fallback tolerated alongside tool_input (mirrors the
   // sibling codex-post-tool-use hook's `resolveToolInput`).
   raw_input?: unknown;
+  // The tool RESULT, not the request. task_finish's receipt (mcp-server
+  // receipt v1) is shaped `{ ok, task: { id, status }, deviations? }`;
+  // the resulting `task.status` is the only way to tell a finish that
+  // landed on `review` (work claim kept) apart from one that landed on
+  // `done` or anything else (work claim released) -- the verb alone is
+  // ambiguous between the two (task c86e3c4a).
+  tool_response?: unknown;
+}
+
+function objectField(input: unknown, key: string): unknown {
+  return typeof input === "object" && input !== null && !Array.isArray(input)
+    ? (input as Record<string, unknown>)[key]
+    : undefined;
+}
+
+/**
+ * Read the resulting status off a task_finish tool_response. Returns
+ * `null` when the result is absent, malformed, or carries no string
+ * status -- the caller treats `null` the same as any non-`review`
+ * status (fail safe: release rather than risk a marker that never
+ * clears).
+ */
+function taskFinishResultingStatus(toolResponse: unknown): string | null {
+  const status = objectField(objectField(toolResponse, "task"), "status");
+  return typeof status === "string" && status.length > 0 ? status : null;
 }
 
 function noop(
@@ -139,6 +180,31 @@ function noop(
     claimWritten: false,
     claimCleared: false,
     taskId: null,
+    diagnostic,
+  };
+}
+
+/**
+ * Clear the active-claim file and return the standard "cleared after
+ * <toolName>" result shape. Shared by the task_merge branch and the
+ * generic release branch below, which otherwise byte-duplicate this
+ * body (both landed the same "release, no per-verb detail to add"
+ * shape).
+ */
+function clearedResult(
+  toolName: string,
+  taskId: string,
+  generatedDir: string,
+  stderr: NodeJS.WritableStream,
+): PackHookTrackActiveClaimResult {
+  clearActiveClaim(generatedDir);
+  const diagnostic = `harness pack hook track-active-claim: cleared active-claim after ${toolName}`;
+  stderr.write(`${diagnostic}\n`);
+  return {
+    exitCode: 0,
+    claimWritten: false,
+    claimCleared: true,
+    taskId: taskId === "" ? null : taskId,
     diagnostic,
   };
 }
@@ -222,6 +288,47 @@ export async function runPackHookTrackActiveClaimCli(
 
   const toolInput = resolveToolInput(event);
   const taskId = taskIdFromInput(toolInput);
+
+  // task_finish is decided from the RESULT, not the verb: a finish whose
+  // resulting status is `review` keeps the work claim (v2 semantics,
+  // task_finish docs); every other resulting status, and an
+  // unresolvable result, releases it. This intentionally bypasses
+  // claimEffectForAgentTasksTool, whose own task_finish branch still
+  // classifies every finish as a release (task c86e3c4a; that shared
+  // classifier's tool set is out of this hook's scope to change).
+  if (matchesAgentTasksRuntimeVerb(toolName, ["task_finish"])) {
+    const resultingStatus = taskFinishResultingStatus(event.tool_response);
+    if (resultingStatus === "review") {
+      const diagnostic = `harness pack hook track-active-claim: kept active-claim after ${toolName} (resulting status=review)`;
+      stderr.write(`${diagnostic}\n`);
+      return {
+        exitCode: 0,
+        claimWritten: false,
+        claimCleared: false,
+        taskId: taskId === "" ? null : taskId,
+        diagnostic,
+      };
+    }
+    clearActiveClaim(generatedDir);
+    const statusNote = resultingStatus === null ? "(missing)" : resultingStatus;
+    const diagnostic = `harness pack hook track-active-claim: cleared active-claim after ${toolName} (resulting status=${statusNote})`;
+    stderr.write(`${diagnostic}\n`);
+    return {
+      exitCode: 0,
+      claimWritten: false,
+      claimCleared: true,
+      taskId: taskId === "" ? null : taskId,
+      diagnostic,
+    };
+  }
+
+  // task_merge always releases the claim, mirroring abandon: mirrors the
+  // pack doc's documented "merge clears it" outcome (task c86e3c4a). See
+  // TRACK_ACTIVE_CLAIM_TOOLS above for the matcher-wiring gap this leaves.
+  if (matchesAgentTasksRuntimeVerb(toolName, ["task_merge"])) {
+    return clearedResult(toolName, taskId, generatedDir, stderr);
+  }
+
   const claimEffect = claimEffectForAgentTasksTool(toolName, toolInput);
 
   if (claimEffect === "acquire") {
@@ -252,16 +359,7 @@ export async function runPackHookTrackActiveClaimCli(
 
   if (claimEffect === "release" &&
     !matchesTransition(toolName)) {
-    clearActiveClaim(generatedDir);
-    const diagnostic = `harness pack hook track-active-claim: cleared active-claim after ${toolName}`;
-    stderr.write(`${diagnostic}\n`);
-    return {
-      exitCode: 0,
-      claimWritten: false,
-      claimCleared: true,
-      taskId: taskId === "" ? null : taskId,
-      diagnostic,
-    };
+    return clearedResult(toolName, taskId, generatedDir, stderr);
   }
 
   if (matchesTransition(toolName)) {
