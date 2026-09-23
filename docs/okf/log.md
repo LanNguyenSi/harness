@@ -2,6 +2,26 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-09-23T05:15:07Z, task `c86e3c4a` (implementer): re-stamped
+  `codex-adapter-parity-gaps.md`, `evidence-ledger-trust-boundary.md`,
+  `gate-fail-posture-matrix.md`, `understanding-gate-auto-mode-signals.md`,
+  and `understanding-gate-lockout-recovery.md` after editing
+  `src/cli/pack/hook-track-active-claim.ts`,
+  `src/policy-packs/builtin/understanding-before-execution.ts`,
+  `src/runtime/task-providers/agent-tasks.ts`, and
+  `docs/policy-packs/understanding-before-execution.md` (active-claim
+  marker now kept on a `task_finish` that lands the task in `review`,
+  `task_merge` now tracked end to end). Re-verified each listing doc's
+  claims against the diff: no line-anchored citation shifted (the
+  source edits landed as same-line-count replacements or comment-only
+  insertions before every cited line range), and no claim these docs
+  make about `task_finish`/`task_merge`/active-claim semantics was
+  invalidated by the fix (they describe `task_start` claim acquisition,
+  the separate approval-marker expiry hook's `DEFAULT_BOUNDARY_TOOL_NAMES`
+  default list, and unrelated gate/ledger mechanics, none of which this
+  task touched). Timestamp-only re-stamp, no content rewrite beyond
+  round 1's `PostToolUse active-claim tracker` bullet already committed
+  in `docs/policy-packs/understanding-before-execution.md`.
 - 2026-09-22T08:23:00Z, task `3a910716` (implementer): release hygiene
   batch. Re-pointed the stale line-141 citation in this file's
   `65952a0c` entry below to `` `CHANGELOG.md:#0.57.0` `` (the sentence
