@@ -2,6 +2,22 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-09-23T18:07:00.000Z, task 6a037359 (implementer): re-stamped
+  `codex-adapter-parity-gaps.md`, the one doc listing
+  `src/cli/apply/install-codex-config.ts` under `sources:`, after the
+  install safety net was scoped to content outside the hook event arrays
+  (parse refusals without the parser's code frame, byte order mark and
+  64-bit integer parsing, `[hooks.state.*]` namespace reporting).
+  Re-verified its install claim ("only the marked harness-managed block
+  inside `~/.codex/config.toml` is replaced; operator
+  model/auth/sandbox config is never owned by harness"): unchanged, no
+  content edit. The change touched no line above any line-numbered
+  citation in the bundle (no bundle doc cites `install-codex-config.ts`,
+  `tests/cli/apply/apply-codex-runtime.test.ts` or `CHANGELOG.md` by line,
+  and `src/cli/index.ts` is unchanged), so no citation needed re-pointing.
+  `okf-kit@0.14.0 check --json docs/okf --require-anchors`, from a scratch
+  npm prefix, reports 0 findings against the committed worktree.
+
 - 2026-09-23T16:45:00.000Z, task 6a037359 (implementer): corrected a
   citation-shift error in this log's own narrative text, found by
   adversarial review. Two earlier entries below (the `30183330` round-3
