@@ -968,6 +968,12 @@ export function buildProgram(opts: RunOptions = {}): Command {
           }
           if (result.codexConfigInstall?.changed) {
             stdout(`  ${result.codexConfigInstall.configPath} (Codex install)\n`);
+            for (const id of result.codexConfigInstall.removedHookIds) {
+              stdout(`    removing hook block: ${id}\n`);
+            }
+            for (const section of result.codexConfigInstall.foreignSectionsPreserved) {
+              stdout(`    preserving foreign section: ${section}\n`);
+            }
           }
         } else {
           stdout(`applied ${changedFiles.length} file(s):\n`);
@@ -990,6 +996,12 @@ export function buildProgram(opts: RunOptions = {}): Command {
           }
           if (result.codexConfigInstall?.written) {
             stdout(`${result.codexConfigInstall.summary}\n`);
+            for (const id of result.codexConfigInstall.removedHookIds) {
+              stdout(`  removed hook block: ${id}\n`);
+            }
+            for (const section of result.codexConfigInstall.foreignSectionsPreserved) {
+              stdout(`  preserved foreign section: ${section}\n`);
+            }
             if (result.codexConfigInstall.backupPath) {
               stdout(`backup written to ${result.codexConfigInstall.backupPath}\n`);
             }

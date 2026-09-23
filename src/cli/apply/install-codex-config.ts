@@ -12,6 +12,12 @@ const LEGACY_HOOK_TABLE_RE =
   /^\[\[hooks\.(pre_tool_use|post_tool_use|user_prompt_submit|session_start|stop)\]\]$/;
 const CURRENT_HOOK_TABLE_RE = /^\[\[hooks\.[A-Za-z][A-Za-z0-9_]*\]\]$/;
 const NON_HOOK_TABLE_RE = /^\[(?!\[hooks\.)/;
+// Every emitted hook table is preceded by exactly this comment shape
+// (generate-codex-config.ts's `emitHook`); used both to name removed hook
+// blocks in the install summary and to detect a foreign table wedged
+// between two harness hook tables (see `assertNoSplitBlock`).
+const HARNESS_HOOK_COMMENT_PREFIX = "# harness hook: ";
+const HOOK_ID_LINE_RE = /^# harness hook: (.+) \(budget_ms=\d+\)$/;
 
 export interface CodexConfigInstallPlan {
   configPath: string;
@@ -20,6 +26,23 @@ export interface CodexConfigInstallPlan {
   nextContent: string;
   changed: boolean;
   summary: string;
+  /**
+   * Hook ids (the `# harness hook: <id>` comment text) that were present
+   * in the old managed block and are absent from the new one. Reported so
+   * an operator whose manifest still declares a pack does not silently
+   * lose a hook (task 6a037359, AC-004).
+   */
+  removedHookIds: string[];
+  /**
+   * Foreign (non harness-owned) table headers that sat between the old
+   * managed block and a stray END marker, one representative header per
+   * distinct top-level namespace. Populated only when the previous
+   * install's END marker had drifted past foreign content (the
+   * task-6a037359 bug): these are the sections that would have been
+   * deleted under the old blind-END-trust logic and are now preserved
+   * byte-for-byte instead.
+   */
+  foreignSectionsPreserved: string[];
 }
 
 export interface CodexConfigInstallResult extends CodexConfigInstallPlan {
@@ -59,48 +82,193 @@ function previousLine(
   return { start, text: text.slice(start, end) };
 }
 
-function findLegacyRangeEnd(text: string, start: number): number {
+/**
+ * Scans forward from `start` classifying each line as either still-owned
+ * harness content or the start of foreign (non-harness) content, WITHOUT
+ * relying on where (or whether) a `CODEX_MANAGED_END` marker sits. This is
+ * what makes the region computation safe against a stray/misplaced END
+ * (task 6a037359: `findManagedRange` used to trust `text.indexOf(END,
+ * begin)` unconditionally, so an END marker that had drifted past
+ * Codex-written tables such as `[hooks.state]` caused every foreign table
+ * between BEGIN and that END to be deleted on the next install) and
+ * against a config that has no END marker at all (the legacy shape).
+ *
+ * A run of blank/comment lines immediately followed by foreign content is
+ * excluded from the owned region (backed off to the start of that run):
+ * Codex, or an operator, may attach a comment to the table that follows,
+ * and that comment must never be misread as harness commentary and folded
+ * into the replaced block.
+ *
+ * A line is "foreign" exactly when it is a table header that is not one
+ * of ours (`NON_HOOK_TABLE_RE`, mirroring the pre-existing legacy scan);
+ * every other non-blank, non-comment line (a hook table's `matcher =` /
+ * `hooks =` field, or an older schema's bare `command =` / `match =` /
+ * `timeout_ms =` / `blocking =` field) is treated as still-owned content,
+ * same as before this fix.
+ */
+function scanOwnedContentEnd(
+  text: string,
+  start: number,
+): { end: number; sawEndMarker: boolean } {
   let pos = start;
+  let commentRunStart: number | null = null;
   while (pos < text.length) {
-    const end = lineEndAfter(text, pos);
-    const line = text.slice(pos, end).trim();
-    if (pos > start && NON_HOOK_TABLE_RE.test(line)) return pos;
-    pos = end;
+    const lineEnd = lineEndAfter(text, pos);
+    const trimmed = text.slice(pos, lineEnd).trim();
+
+    if (trimmed === CODEX_MANAGED_END) {
+      return { end: lineEnd, sawEndMarker: true };
+    }
+    if (trimmed === "" || trimmed.startsWith("#")) {
+      if (commentRunStart === null) commentRunStart = pos;
+      pos = lineEnd;
+      continue;
+    }
+    if (NON_HOOK_TABLE_RE.test(trimmed)) {
+      return { end: commentRunStart ?? pos, sawEndMarker: false };
+    }
+    commentRunStart = null;
+    pos = lineEnd;
   }
-  return text.length;
+  return { end: pos, sawEndMarker: false };
 }
 
-function findManagedRange(text: string): { start: number; end: number } | null {
+/**
+ * Refuses loudly (mirror case of the stray-END bug) when the zone between
+ * `from` and `to` still contains a recognizable fragment of a harness
+ * hook block: a second BEGIN/source-prefix marker, or a `# harness hook:`
+ * comment. Either means a foreign table was wedged between two harness
+ * hook tables, or the BEGIN marker moved, and the true block boundaries
+ * can no longer be determined by a line scan; guessing risks reordering
+ * or dropping harness- or foreign-owned bytes, so this throws instead.
+ */
+function assertNoSplitBlock(text: string, from: number, to: number): void {
+  const zone = text.slice(Math.max(from, 0), Math.max(to, from));
+  if (
+    zone.includes(CODEX_MANAGED_SOURCE_PREFIX) ||
+    zone.includes(CODEX_MANAGED_BEGIN) ||
+    zone.includes(HARNESS_HOOK_COMMENT_PREFIX)
+  ) {
+    throw new Error(
+      "Codex config's harness-managed hook block looks split by foreign content " +
+        "(a table was inserted between two harness hook tables, or the BEGIN " +
+        "marker moved); refusing to guess the block boundaries. Restore " +
+        "~/.codex/config.toml from the most recent .harness-backup-* file and " +
+        "re-run `harness apply --runtime codex --install`.",
+    );
+  }
+}
+
+function foreignSectionRootKey(headerLine: string): string {
+  const inner = headerLine.replace(/^\[+/, "").replace(/\]+$/, "");
+  const cut = inner.search(/[."]/);
+  return cut === -1 ? inner : inner.slice(0, cut);
+}
+
+/** One representative header per distinct top-level foreign namespace
+ * found between `from` and `to` (e.g. all `[hooks.state."..."]` sub-tables
+ * collapse to a single `[hooks.state]` entry), in first-seen order. */
+function collectForeignSectionHeaders(
+  text: string,
+  from: number,
+  to: number,
+): string[] {
+  const seenRoots = new Set<string>();
+  const headers: string[] = [];
+  let pos = Math.max(from, 0);
+  const limit = Math.max(to, from);
+  while (pos < limit) {
+    const lineEnd = Math.min(lineEndAfter(text, pos), limit);
+    const trimmed = text.slice(pos, lineEnd).trim();
+    if (NON_HOOK_TABLE_RE.test(trimmed)) {
+      const root = foreignSectionRootKey(trimmed);
+      if (!seenRoots.has(root)) {
+        seenRoots.add(root);
+        headers.push(trimmed);
+      }
+    }
+    pos = lineEnd;
+  }
+  return headers;
+}
+
+function extractHookIds(content: string): Set<string> {
+  const ids = new Set<string>();
+  for (const rawLine of content.split(/\r?\n/)) {
+    const m = HOOK_ID_LINE_RE.exec(rawLine.trim());
+    if (m?.[1] !== undefined) ids.add(m[1]);
+  }
+  return ids;
+}
+
+interface ManagedRange {
+  start: number;
+  end: number;
+  /** A stray END-marker line beyond `end` to excise (task 6a037359). */
+  strayEnd?: { start: number; end: number };
+  foreignSectionsPreserved: string[];
+}
+
+function findManagedRange(text: string): ManagedRange | null {
   const begin = text.indexOf(CODEX_MANAGED_BEGIN);
   if (begin !== -1) {
+    if (text.indexOf(CODEX_MANAGED_BEGIN, begin + CODEX_MANAGED_BEGIN.length) !== -1) {
+      throw new Error(
+        "Codex config has more than one harness-managed BEGIN marker; refusing " +
+          "to guess which one is current. Restore ~/.codex/config.toml from the " +
+          "most recent .harness-backup-* file and reinstall once the config has " +
+          "a single managed block.",
+      );
+    }
     let start = lineStartAt(text, begin);
     const prev = previousLine(text, start);
     if (prev && prev.text.startsWith(CODEX_MANAGED_SOURCE_PREFIX)) {
       start = prev.start;
     }
-    const endMarker = text.indexOf(CODEX_MANAGED_END, begin);
-    if (endMarker !== -1) {
-      return { start, end: lineEndAfter(text, endMarker) };
+
+    const contentStart = lineEndAfter(text, begin);
+    const scan = scanOwnedContentEnd(text, contentStart);
+    const end = scan.end;
+
+    if (scan.sawEndMarker) {
+      return { start, end, foreignSectionsPreserved: [] };
     }
-    return { start, end: findLegacyRangeEnd(text, start) };
+
+    const strayIdx = text.indexOf(CODEX_MANAGED_END, end);
+    if (strayIdx === -1) {
+      assertNoSplitBlock(text, end, text.length);
+      return { start, end, foreignSectionsPreserved: [] };
+    }
+
+    const strayLineStart = lineStartAt(text, strayIdx);
+    const strayLineEnd = lineEndAfter(text, strayIdx);
+    assertNoSplitBlock(text, end, strayLineStart);
+    const foreignSectionsPreserved = collectForeignSectionHeaders(text, end, strayLineStart);
+    return {
+      start,
+      end,
+      strayEnd: { start: strayLineStart, end: strayLineEnd },
+      foreignSectionsPreserved,
+    };
   }
 
   const source = text.indexOf(CODEX_MANAGED_SOURCE_PREFIX);
   if (source !== -1) {
     const start = lineStartAt(text, source);
-    return { start, end: findLegacyRangeEnd(text, start) };
+    const end = scanOwnedContentEnd(text, start).end;
+    return { start, end, foreignSectionsPreserved: [] };
   }
 
   const generated = text.indexOf(GENERATED_HEADER);
   if (generated !== -1) {
     const start = lineStartAt(text, generated);
-    const end = findLegacyRangeEnd(text, start);
+    const end = scanOwnedContentEnd(text, start).end;
     const candidate = text.slice(start, end);
     if (
       candidate.includes("[[hooks.") ||
       candidate.includes("[[hooks.pre_tool_use]]")
     ) {
-      return { start, end };
+      return { start, end, foreignSectionsPreserved: [] };
     }
   }
 
@@ -189,8 +357,19 @@ export function planCodexConfigInstall(
   const range = findManagedRange(currentContent);
   let nextContent: string;
   let summary: string;
+  let removedHookIds: string[] = [];
+  let foreignSectionsPreserved: string[] = [];
   if (range) {
-    nextContent = `${currentContent.slice(0, range.start)}${managedBlock}${currentContent.slice(range.end)}`;
+    const oldHookIds = extractHookIds(currentContent.slice(range.start, range.end));
+    const newHookIds = extractHookIds(managedBlock);
+    removedHookIds = [...oldHookIds].filter((id) => !newHookIds.has(id));
+    foreignSectionsPreserved = range.foreignSectionsPreserved;
+
+    const middleForeign = range.strayEnd
+      ? currentContent.slice(range.end, range.strayEnd.start)
+      : "";
+    const tailStart = range.strayEnd ? range.strayEnd.end : range.end;
+    nextContent = `${currentContent.slice(0, range.start)}${managedBlock}${middleForeign}${currentContent.slice(tailStart)}`;
     summary = `updated harness-managed Codex hook block in ${configPath}`;
   } else {
     const prefix =
@@ -215,6 +394,8 @@ export function planCodexConfigInstall(
       currentContent === nextContent
         ? `Codex config already up to date: ${configPath}`
         : summary,
+    removedHookIds,
+    foreignSectionsPreserved,
   };
 }
 
