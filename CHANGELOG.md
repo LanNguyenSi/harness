@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.58.0] - 2026-09-23
+
 ### Fixed
 
 - Corrected the 0.57.0 CLI-floor claim: `harness validate` does not execute
