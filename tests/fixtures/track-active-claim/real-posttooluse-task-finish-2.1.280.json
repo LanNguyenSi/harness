@@ -1,0 +1,24 @@
+{
+  "session_id": "redacted-session-id",
+  "transcript_path": "/redacted/transcript.jsonl",
+  "cwd": "/redacted/cwd",
+  "prompt_id": "redacted-prompt-id",
+  "permission_mode": "default",
+  "hook_event_name": "PostToolUse",
+  "tool_name": "mcp__agent-tasks__task_finish",
+  "tool_input": {
+    "taskId": "abc-123"
+  },
+  "tool_response": [
+    {
+      "type": "text",
+      "text": "{\n  \"ok\": true,\n  \"task\": {\n    \"id\": \"abc-123\",\n    \"status\": \"review\"\n  }\n}"
+    }
+  ],
+  "tool_use_id": "toolu_01D37GHk9X9XT39hwkUH3fgP",
+  "duration_ms": 3,
+  "mcp_server": {
+    "name": "agent-tasks",
+    "source": "dynamic"
+  }
+}

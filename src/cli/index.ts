@@ -1310,7 +1310,7 @@ export function buildProgram(opts: RunOptions = {}): Command {
   packHookCmd
     .command("track-active-claim")
     .description(
-      "PostToolUse: read tool-event JSON from stdin, maintain ~/.claude/harness.generated/active-claim on agent-tasks task_start / task_finish / task_abandon so `harness approve understanding` can auto-resolve the task id without --task (harness/494fd1e5).",
+      "PostToolUse: read tool-event JSON from stdin, maintain ~/.claude/harness.generated/active-claim on agent-tasks task_start / task_finish / task_abandon / task_merge so `harness approve understanding` can auto-resolve the task id without --task (harness/494fd1e5). task_finish keeps the marker when the resulting status is review and clears it otherwise (task c86e3c4a); task_abandon / task_merge / a non-review task_finish clear it only when the marker already names the same task id, otherwise it is left in place (task c86e3c4a round 2).",
     )
     .option("--config <path>", "manifest path (default: ~/.harness/harness.yaml; legacy fallback ~/.claude/harness.yaml)")
     .option("--project <name>", "apply per-project overrides")

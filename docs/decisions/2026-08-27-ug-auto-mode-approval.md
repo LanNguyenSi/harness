@@ -25,7 +25,7 @@ test's own HONEST COVERAGE CLAIM comment for the full statement.
 
 ### The problem
 
-The `understanding-before-execution` pack (UG) blocks Edit / Write / Bash until an operator has approved the agent's Understanding Report. Every one of the pack's modes ends in the same human step: `harness approve understanding`, run from a shell the hooks do not gate (`docs/policy-packs/understanding-before-execution.md:700-706#"the flipped report and the ledger row are the audit records beside it."`, "Approving an Understanding Report"; `docs/okf/understanding-gate-lockout-recovery.md`, "Recovery: exact steps").
+The `understanding-before-execution` pack (UG) blocks Edit / Write / Bash until an operator has approved the agent's Understanding Report. Every one of the pack's modes ends in the same human step: `harness approve understanding`, run from a shell the hooks do not gate (`docs/policy-packs/understanding-before-execution.md:702-708#"the flipped report and the ledger row are the audit records beside it."`, "Approving an Understanding Report"; `docs/okf/understanding-gate-lockout-recovery.md`, "Recovery: exact steps").
 
 Agent harnesses also run in modes where no human sits in the loop mid-run: Claude Code `--permission-mode bypassPermissions` and `--dangerously-skip-permissions`, Codex full-auto, opencode `--auto`, and headless `claude -p` child processes (harness's own smoke runner spawns exactly that shape: `src/cli/smoke/runner.ts:64-70#"bypassPermissions"`). In those modes the human approve step has nobody to perform it. Today the outcome is a hard block on the first gated tool call, and for a `-p` child a run that ends in `permission_denials`.
 
@@ -170,7 +170,7 @@ In an allowlisted mode the hook allows once a structurally valid pending report 
 
 ### Option D: operator pre-approval via CLI without report binding
 
-`harness approve understanding --task a b c` (batch markers, `docs/policy-packs/understanding-before-execution.md:710#"writes one task-scoped marker per id in a single operator action"`), or a fixed `--session-id` that a launcher reuses so one approval covers every run (`docs/policy-packs/understanding-before-execution.md:564#"pins a fixed session id and approves once"`), or a hypothetical duration-scoped variant (`harness approve understanding --for 2h --any-session`).
+`harness approve understanding --task a b c` (batch markers, `docs/policy-packs/understanding-before-execution.md:712#"writes one task-scoped marker per id in a single operator action"`), or a fixed `--session-id` that a launcher reuses so one approval covers every run (`docs/policy-packs/understanding-before-execution.md:564#"pins a fixed session id and approves once"`), or a hypothetical duration-scoped variant (`harness approve understanding --for 2h --any-session`).
 
 - Pros: exists today (first two shapes); no new trust surface.
 - Cons: the approval is not bound to the child's own report, so the "report stays mandatory" invariant is satisfied only nominally (the operator's report covers the batch, the child writes none that matters); a duration- or any-session-scoped variant is a marker without a report and without a session, weaker than A on every axis; a `-p` child with a fresh session id gets nothing unless the launcher pins the id, which is the "scripted runs reuse a session id" property the pack docs already flag as something to make deliberate.

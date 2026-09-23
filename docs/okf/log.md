@@ -2,6 +2,66 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-09-23T05:58:18Z, task `c86e3c4a` (orchestrator): re-stamped
+  `codex-adapter-parity-gaps.md`, `evidence-ledger-trust-boundary.md`,
+  `gate-fail-posture-matrix.md` and `understanding-gate-lockout-recovery.md`
+  after a comment-only edit to `src/runtime/task-providers/agent-tasks.ts`
+  (the release-on-unreadable rationale now states the fail-open versus
+  fail-closed asymmetry). None of the four cites a line of that file; their
+  file-level claims about the provider adapter are unchanged.
+- 2026-09-23T05:44:01Z, task `c86e3c4a` round 2 (implementer): `okf-kit
+  check` flagged `debug-verb-selection.md` and `pause-vs-gate-kill-switch.md`
+  STALE against `src/cli/index.ts` (missed in the entry below, which only
+  covered the two other docs sharing sources with the hook file itself).
+  Re-verified: their `src/cli/index.ts` citations (audit/explain/doctor
+  command text, `pause`/`resume` line-anchored ranges) sit far from the
+  single line this round's edit touched (the `track-active-claim`
+  command's `--description` string) and are net-zero-shifted (one line
+  replaced by one line, no other line in the file moved), so no citation
+  needed re-pointing. Timestamp-only re-stamp.
+- 2026-09-23T05:42:32Z, task `c86e3c4a` round 2 (implementer): re-stamped
+  `codex-adapter-parity-gaps.md`, `evidence-ledger-trust-boundary.md`,
+  `gate-fail-posture-matrix.md`, `understanding-gate-auto-mode-signals.md`,
+  and `understanding-gate-lockout-recovery.md` after this round's edits to
+  `src/runtime/task-providers/agent-tasks.ts`,
+  `src/cli/pack/hook-track-active-claim.ts`, `src/cli/index.ts`, and
+  `docs/policy-packs/understanding-before-execution.md` (the real
+  Claude Code MCP `tool_response` content-block shape is now unwrapped,
+  the fail-safe rationale is corrected, a release verb now clears the
+  active-claim marker only when it names the same task id the call
+  acted on). Re-verified each listing doc's claims against the diff: no
+  claim these docs make about `task_finish`/`task_merge`/active-claim
+  semantics was invalidated (each doc's own reference to
+  `src/runtime/task-providers/agent-tasks.ts` and
+  `docs/policy-packs/understanding-before-execution.md` is a file-level
+  `sources:` listing or an unanchored architectural statement, "the
+  provider adapter owns the classification", never a `path:N` line
+  citation into either file, so no citation needed re-pointing here);
+  the only LINE-anchored citations this round's edit to
+  `docs/policy-packs/understanding-before-execution.md` broke live
+  outside `docs/okf/` (`docs/decisions/2026-08-27-ug-auto-mode-approval.md`
+  lines 28 and 173, into the same doc), re-pointed in the source commit
+  above, not here. Timestamp-only re-stamp, no content rewrite.
+- 2026-09-23T05:15:07Z, task `c86e3c4a` (implementer): re-stamped
+  `codex-adapter-parity-gaps.md`, `evidence-ledger-trust-boundary.md`,
+  `gate-fail-posture-matrix.md`, `understanding-gate-auto-mode-signals.md`,
+  and `understanding-gate-lockout-recovery.md` after editing
+  `src/cli/pack/hook-track-active-claim.ts`,
+  `src/policy-packs/builtin/understanding-before-execution.ts`,
+  `src/runtime/task-providers/agent-tasks.ts`, and
+  `docs/policy-packs/understanding-before-execution.md` (active-claim
+  marker now kept on a `task_finish` that lands the task in `review`,
+  `task_merge` now tracked end to end). Re-verified each listing doc's
+  claims against the diff: no line-anchored citation shifted (the
+  source edits landed as same-line-count replacements or comment-only
+  insertions before every cited line range), and no claim these docs
+  make about `task_finish`/`task_merge`/active-claim semantics was
+  invalidated by the fix (they describe `task_start` claim acquisition,
+  the separate approval-marker expiry hook's `DEFAULT_BOUNDARY_TOOL_NAMES`
+  default list, and unrelated gate/ledger mechanics, none of which this
+  task touched). Timestamp-only re-stamp, no content rewrite beyond
+  round 1's `PostToolUse active-claim tracker` bullet already committed
+  in `docs/policy-packs/understanding-before-execution.md`.
 - 2026-09-22T08:23:00Z, task `3a910716` (implementer): release hygiene
   batch. Re-pointed the stale line-141 citation in this file's
   `65952a0c` entry below to `` `CHANGELOG.md:#0.57.0` `` (the sentence

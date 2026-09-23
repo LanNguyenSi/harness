@@ -904,7 +904,7 @@ function buildHooks(
         blocking: false,
         budget_ms: 2000,
         description:
-          "Codex adapter: track the active agent-tasks claim by writing/clearing <generatedDir>/active-claim on task_start / task_finish / task_abandon. Lets `harness approve understanding` auto-resolve the task id (harness/494fd1e5, Codex parity task cf4cdc93).",
+          "Codex adapter: track the active agent-tasks claim by writing/clearing <generatedDir>/active-claim on task_start / task_finish / task_abandon / task_merge. Lets `harness approve understanding` auto-resolve the task id (harness/494fd1e5, Codex parity task cf4cdc93).",
       },
       ...((): Hook[] => {
         const stayInScope = resolveStayInScopeConfig(pack.config["stay_in_scope"]);
@@ -1047,9 +1047,11 @@ function buildHooks(
       return [hook];
     })(),
     // Active-claim tracker (harness/494fd1e5). PostToolUse hook on
-    // agent-tasks task_start / task_finish / task_abandon. Maintains a
-    // small file at <generatedDir>/active-claim so `harness approve
-    // understanding` can auto-resolve the task id when --task is
+    // agent-tasks task_start / task_finish / task_abandon / task_merge
+    // (task_merge added by task c86e3c4a: previously untracked here, so
+    // a real task_merge tool call never dispatched to the hook at all).
+    // Maintains a small file at <generatedDir>/active-claim so `harness
+    // approve understanding` can auto-resolve the task id when --task is
     // absent. Always emitted alongside the pack — operators on other
     // tasking systems are unaffected (the matcher won't fire for
     // their tools), the file simply never appears.
@@ -1061,7 +1063,7 @@ function buildHooks(
       blocking: false,
       budget_ms: 2000,
       description:
-        "Track the active agent-tasks claim by writing/clearing <generatedDir>/active-claim on task_start / task_finish / task_abandon. Lets `harness approve understanding` auto-resolve the task id (harness/494fd1e5).",
+        "Track the active agent-tasks claim by writing/clearing <generatedDir>/active-claim on task_start / task_finish / task_abandon / task_merge. Lets `harness approve understanding` auto-resolve the task id (harness/494fd1e5).",
     },
     ...((): Hook[] => {
       const stayInScope = resolveStayInScopeConfig(pack.config["stay_in_scope"]);
