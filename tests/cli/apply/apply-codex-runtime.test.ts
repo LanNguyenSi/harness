@@ -1843,6 +1843,14 @@ describe("apply --runtime codex --install: the safety net compares everything ou
     expect(err.message).toContain("installing would change 'hooks.state'");
   });
 
+  it("refuses when the spliced output gains a key outside the hook arrays that the current config does not have", () => {
+    const current = ['model = "gpt-5.5"', "", "[tui]", "a = 1", ""].join("\n");
+    const next = ['model = "gpt-5.5"', "", "[tui]", "a = 1", "b = 2", ""].join("\n");
+
+    const err = refusalOf(() => assertConfigSemanticInvariant(current, next, NET_CONFIG_PATH));
+    expect(err.message).toContain("installing would change 'tui.b'");
+  });
+
   const scannerDropShapes: Array<[string, string, string]> = [
     [
       "a foreign key sitting between BEGIN and the first harness hook comment",
