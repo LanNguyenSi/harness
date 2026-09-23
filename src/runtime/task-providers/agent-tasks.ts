@@ -219,13 +219,14 @@ export type ClaimEffect = "acquire" | "release" | "none";
  * to derive the verdict id it gates `task_finish` / `task_submit_pr` /
  * `task_merge` / `pull_requests_merge` / `git push` on. Release-on-
  * unreadable is chosen because a KEPT marker for a task that actually
- * finished would misroute that gate -- it would keep gating completion
- * on an id whose work is already done, rather than on whatever the
- * agent claims next -- at the cost of a possible wedge (the gate then
- * fails closed with "no active-claim task id recorded" until a fresh
- * `task_start` or an operator clears the file). Releasing trades a
- * recoverable wedge for an unrecoverable misroute; it is not costless,
- * and it is not merely giving up an "ergonomic shortcut".
+ * finished would fail OPEN: until the next `task_start` overwrites it,
+ * post-done completion-gated actions (git push, task_merge, PR merge)
+ * would pass on that finished task's already-accepted verdict, and the
+ * marker would override SOLUTION_VERDICT_ID. Releasing fails CLOSED
+ * instead, at the cost of a possible wedge (the gate refuses with "no
+ * active-claim task id recorded" until a fresh `task_start` or an
+ * operator clears the file). It is not costless, and it is not merely
+ * giving up an "ergonomic shortcut".
  *
  * This is the ONE place that decision is made: callers (e.g.
  * `hook-track-active-claim.ts`) do not re-derive it locally.

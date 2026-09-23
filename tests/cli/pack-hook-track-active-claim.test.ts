@@ -726,7 +726,23 @@ describe("pack hook track-active-claim: release verbs only clear the marker for 
     expect(readActiveClaim(generatedDir)).toBe("task-B");
   });
 
-  it("still clears (fail-safe direction) when no current marker exists at all, id or no id", async () => {
+  it("clears (fail-safe direction) when a marker exists but the acted-on task id is unresolvable", async () => {
+    const generatedDir = path.join(tmp, "harness.generated");
+    fs.mkdirSync(generatedDir, { recursive: true });
+    writeActiveClaim(generatedDir, "task-B");
+
+    const result = await runPackHookTrackActiveClaimCli({
+      manifest: manifestWithPack(),
+      stdin: readableFromString(eventBody("mcp__agent-tasks__task_merge", {})),
+      stderr: bufferStream().stream,
+      generatedDir,
+    });
+
+    expect(result.claimCleared).toBe(true);
+    expect(readActiveClaim(generatedDir)).toBeNull();
+  });
+
+  it("still clears (fail-safe direction) when no current marker exists and the call names a task id", async () => {
     const generatedDir = path.join(tmp, "harness.generated");
     fs.mkdirSync(generatedDir, { recursive: true });
 
