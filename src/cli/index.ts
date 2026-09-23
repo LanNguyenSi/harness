@@ -28,6 +28,7 @@ import { adopt } from "./adopt/index.js";
 import {
   apply,
   CODEX_CONFIG_BASENAME,
+  CodexInstallRefusalError,
   DRIFT_HINT_MESSAGE,
   formatNextSteps,
   OPENCODE_CONFIG_BASENAME,
@@ -887,22 +888,45 @@ export function buildProgram(opts: RunOptions = {}): Command {
         // depending on the JSON early-return below as the only chokepoint.
         if (options.json) options.quiet = true;
 
-        const result = await apply({
-          ...(options.config !== undefined ? { configPath: options.config } : {}),
-          ...(options.project !== undefined ? { project: options.project } : {}),
-          ...(options.dryRun ? { dryRun: true } : {}),
-          ...(options.overwriteDrift ? { overwriteDrift: true } : {}),
-          ...(options.yes ? { yes: true } : {}),
-          ...(options.strictLock ? { strictLock: true } : {}),
-          ...(options.target !== undefined ? { target: options.target } : {}),
-          ...(options.merge ? { merge: true } : {}),
-          ...(options.force ? { force: true } : {}),
-          ...(runtime !== undefined ? { runtime } : {}),
-          ...(options.install ? { installCodex: true } : {}),
-          ...(options.codexConfig !== undefined
-            ? { codexConfigPath: options.codexConfig }
-            : {}),
-        });
+        // `apply()` throws `CodexInstallRefusalError` (rather than
+        // returning a refuse `outcome`, the way `target-exists-refuse` /
+        // `drift-refuse` do) for a codex-install refusal, because the
+        // refusal is detected deep inside `planCodexConfigInstall`, before
+        // an `ApplyResult` can be assembled. Catch it here so `--json`
+        // still gets a structured error on stdout the same way every
+        // other refusal does, instead of only the plain-text message
+        // `run()`'s top-level catch would otherwise print.
+        let result: Awaited<ReturnType<typeof apply>>;
+        try {
+          result = await apply({
+            ...(options.config !== undefined ? { configPath: options.config } : {}),
+            ...(options.project !== undefined ? { project: options.project } : {}),
+            ...(options.dryRun ? { dryRun: true } : {}),
+            ...(options.overwriteDrift ? { overwriteDrift: true } : {}),
+            ...(options.yes ? { yes: true } : {}),
+            ...(options.strictLock ? { strictLock: true } : {}),
+            ...(options.target !== undefined ? { target: options.target } : {}),
+            ...(options.merge ? { merge: true } : {}),
+            ...(options.force ? { force: true } : {}),
+            ...(runtime !== undefined ? { runtime } : {}),
+            ...(options.install ? { installCodex: true } : {}),
+            ...(options.codexConfig !== undefined
+              ? { codexConfigPath: options.codexConfig }
+              : {}),
+          });
+        } catch (err) {
+          if (err instanceof CodexInstallRefusalError && options.json) {
+            stdout(
+              `${JSON.stringify(
+                { outcome: "codex-install-refuse", configPath: err.configPath, error: err.message },
+                null,
+                2,
+              )}\n`,
+            );
+            throw new HarnessExitError("", EX_FAIL);
+          }
+          throw err;
+        }
 
         if (options.json) {
           // Machine-readable: one JSON object on stdout regardless of

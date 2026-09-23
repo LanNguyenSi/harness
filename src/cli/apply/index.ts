@@ -13,6 +13,7 @@ export {
   type CodexConfigInstallOutcome,
   type FileApplyOutcome,
 } from "./apply.js";
+export { CodexInstallRefusalError } from "./install-codex-config.js";
 export { formatNextSteps, type NextStepsContext } from "./next-steps.js";
 export { generateCodexConfig, type CodexConfigResult } from "./generate-codex-config.js";
 export {
