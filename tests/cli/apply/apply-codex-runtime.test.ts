@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { parse as parseTomlForTest } from "smol-toml";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { stringify as yamlStringify } from "yaml";
 import {
@@ -14,9 +15,9 @@ import {
   apply,
   planCodexConfigInstall,
 } from "../../../src/cli/apply/index.js";
-import { buildProgram } from "../../../src/cli/index.js";
-// `assertConfigSemanticInvariant` is the Part-A safety-net primitive: it is
-// not part of the public apply surface re-exported from
+import { buildProgram, run } from "../../../src/cli/index.js";
+// `assertConfigSemanticInvariant` is the install's TOML-semantic safety net:
+// it is not part of the public apply surface re-exported from
 // `../../../src/cli/apply/index.js` (only test-only, direct access), so it
 // is imported straight from its own module here.
 import { assertConfigSemanticInvariant } from "../../../src/cli/apply/install-codex-config.js";
@@ -547,12 +548,13 @@ describe("apply --runtime codex --install against a config whose END marker drif
     // tell "4 correct entries" from "6 entries, one just happens to be
     // present 3 times" apart).
     expect(result.codexConfigInstall?.removedHookIds).toEqual([RETIRED_HOOK_ID]);
-    // The three `[hooks.state...]` headers share the "hooks" root and
-    // collapse to a wildcarded namespace count (task 6a037359 L5); the
-    // other two roots have exactly one table each and print their own
-    // full header.
+    // The three `[hooks.state...]` headers share the "hooks.state"
+    // namespace (two keys under `hooks`, so the operator can tell it from
+    // the harness-managed hook arrays) and collapse to a wildcarded
+    // namespace count; the other roots have exactly one table each and
+    // print their own full header.
     expect(result.codexConfigInstall?.foreignSectionsPreserved).toEqual([
-      "[hooks.*] (3 tables)",
+      "[hooks.state.*] (3 tables)",
       "[marketplaces.example-bundled]",
       '[plugins."visualize@example-bundled"]',
       "[tui]",
@@ -1153,7 +1155,7 @@ describe("apply --runtime codex --install --dry-run / --install: CLI-level outpu
       );
 
       expect(out).toContain(`removing hook block: ${RETIRED_HOOK_ID}`);
-      expect(out).toContain("preserving foreign section: [hooks.*] (3 tables)");
+      expect(out).toContain("preserving foreign section: [hooks.state.*] (3 tables)");
       expect(out).toContain("preserving foreign section: [marketplaces.example-bundled]");
       expect(out).toContain('preserving foreign section: [plugins."visualize@example-bundled"]');
       expect(out).toContain("preserving foreign section: [tui]");
@@ -1190,7 +1192,7 @@ describe("apply --runtime codex --install --dry-run / --install: CLI-level outpu
       );
 
       expect(out).toContain(`removed hook block: ${RETIRED_HOOK_ID}`);
-      expect(out).toContain("preserved foreign section: [hooks.*] (3 tables)");
+      expect(out).toContain("preserved foreign section: [hooks.state.*] (3 tables)");
       expect(out).toContain("preserved foreign section: [marketplaces.example-bundled]");
       expect(out).toContain('preserved foreign section: [plugins."visualize@example-bundled"]');
       expect(out).toContain("preserved foreign section: [tui]");
@@ -1416,7 +1418,7 @@ describe("apply --runtime codex --install: a basic multi-line string containing 
   });
 });
 
-describe("apply --runtime codex --install: refusal guidance is actionable and, followed literally, makes the install succeed (task `6a037359` L2)", () => {
+describe("apply --runtime codex --install: refusal guidance is actionable and, followed literally, makes the install succeed (task `6a037359`)", () => {
   it("no-END split-block guidance names adding an END marker or moving the table, not a nonexistent marker, and following it literally succeeds", async () => {
     writeManifestWithPack();
     const codexConfig = path.join(tmpHome, ".codex", "config.toml");
@@ -1540,7 +1542,7 @@ describe("apply --runtime codex --install: refusal guidance is actionable and, f
   });
 });
 
-describe("apply --runtime codex --install: foreign-section namespace counts print the shared ROOT with a wildcard, not the first header, once more than one table collapses into it (task `6a037359` L5)", () => {
+describe("apply --runtime codex --install: foreign-section namespace counts print the shared ROOT with a wildcard, not the first header, once more than one table collapses into it (task `6a037359`)", () => {
   it("two tables sharing a root print `[root.*] (2 tables)`; a middle-zone table (between two other foreign tables, not just a trailing one) is still listed", async () => {
     writeManifestWithPack();
     const codexConfig = path.join(tmpHome, ".codex", "config.toml");
@@ -1585,7 +1587,7 @@ describe("apply --runtime codex --install: foreign-section namespace counts prin
   });
 });
 
-describe("apply --runtime codex --install: the TOML-semantic safety net (task `6a037359`, Part A)", () => {
+describe("apply --runtime codex --install: the TOML-semantic safety net (task `6a037359`)", () => {
   it("refuses when the spliced output would silently drop a foreign table, independently of whatever the line scanner itself would have produced", () => {
     // Simulates a scanner regression directly, without needing the
     // scanner to actually be broken: `[projects.demo]` silently dropped
@@ -1606,12 +1608,7 @@ describe("apply --runtime codex --install: the TOML-semantic safety net (task `6
 
     let caught: unknown;
     try {
-      assertConfigSemanticInvariant(
-        current,
-        scannerRegressedNext,
-        "/fake/.codex/config.toml",
-        new Map(),
-      );
+      assertConfigSemanticInvariant(current, scannerRegressedNext, "/fake/.codex/config.toml");
     } catch (err) {
       caught = err;
     }
@@ -1652,14 +1649,10 @@ describe("apply --runtime codex --install: the TOML-semantic safety net (task `6
       "",
     ].join("\n");
 
-    // Index 0 of `hooks.PreToolUse` is the harness-managed entry itself
-    // (the one this install is replacing); marking it "owned" is what
-    // exempts it from the per-entry survival check, mirroring what
-    // `computeOwnedHookEntryIndexes` would compute for a real managed
-    // range around it.
-    const ownedHookEntries = new Map([["PreToolUse", new Set([0])]]);
+    // Only the `[[hooks.PreToolUse]]` event array differs; the net does not
+    // compare hook event arrays, so this is accepted.
     expect(() =>
-      assertConfigSemanticInvariant(current, next, "/fake/.codex/config.toml", ownedHookEntries),
+      assertConfigSemanticInvariant(current, next, "/fake/.codex/config.toml"),
     ).not.toThrow();
   });
 
@@ -1690,7 +1683,12 @@ describe("apply --runtime codex --install: the TOML-semantic safety net (task `6
     }
     expect(caught).toBeInstanceOf(CodexInstallRefusalError);
     const err = caught as CodexInstallRefusalError;
-    expect(err.message).toContain("does not parse as TOML");
+    // Says the harness parser could not read the file (Codex's own parser
+    // may accept it), with the parser's position and one-line reason, and
+    // does not tell the operator their syntax is wrong.
+    expect(err.message).toContain("the TOML parser used by harness could not read this file");
+    expect(err.message).toContain("line 10, column 23: control characters are not allowed in strings");
+    expect(err.message).not.toMatch(/fix (the file's|your)/i);
     // Refuses before writing anything.
     expect(fs.readFileSync(codexConfig, "utf8")).toBe(unparseable);
   });
@@ -1713,5 +1711,509 @@ describe("apply --runtime codex --install: the TOML-semantic safety net (task `6
         generatedContent: badGenerated,
       }),
     ).toThrow(CodexInstallRefusalError);
+  });
+});
+
+// Shared helpers for the safety-net and refusal-text fixtures below.
+const NET_CONFIG_PATH = "/fake/.codex/config.toml";
+
+function refusalOf(fn: () => unknown): CodexInstallRefusalError {
+  try {
+    fn();
+  } catch (err) {
+    if (err instanceof CodexInstallRefusalError) return err;
+    throw err;
+  }
+  throw new Error("expected a CodexInstallRefusalError, but nothing was thrown");
+}
+
+async function refusalOfAsync(fn: () => Promise<unknown>): Promise<CodexInstallRefusalError> {
+  try {
+    await fn();
+  } catch (err) {
+    if (err instanceof CodexInstallRefusalError) return err;
+    throw err;
+  }
+  throw new Error("expected a CodexInstallRefusalError, but nothing was thrown");
+}
+
+// A previous install's managed block, BEGIN through END, as lines.
+const STALE_MANAGED_BLOCK_LINES = [
+  "# Harness Codex hook wiring. Generated source: old",
+  CODEX_MANAGED_BEGIN,
+  "# Generated by harness apply --runtime codex.",
+  `# harness hook: ${RETIRED_HOOK_ID} (budget_ms=2000)`,
+  "[[hooks.PreToolUse]]",
+  'matcher = "Bash"',
+  'hooks = [{ type = "command", command = "harness pack hook example-retired", timeout = 2 }]',
+  CODEX_MANAGED_END,
+];
+
+// Minimal generated block for driving `planCodexConfigInstall` directly.
+const SYNTHETIC_GENERATED = [
+  "# Generated by harness apply --runtime codex.",
+  "# harness hook: new-hook (budget_ms=2000)",
+  "[[hooks.PreToolUse]]",
+  'matcher = "Bash"',
+  'hooks = [{ type = "command", command = "harness pack hook new", timeout = 2 }]',
+  "",
+].join("\n");
+
+describe("apply --runtime codex --install: an operator-authored hook entry outside the managed block survives whatever its header spelling (task `6a037359`)", () => {
+  const cases = [
+    ["a trailing comment on its header", "[[hooks.PreToolUse]] # my own lint hook"],
+    ["a quoted event key", '[[hooks."PreToolUse"]]'],
+  ] as const;
+  for (const [label, header] of cases) {
+    it(`installs and keeps an operator [[hooks.PreToolUse]] entry above the block written with ${label}`, async () => {
+      writeManifestWithPack();
+      const codexConfig = path.join(tmpHome, ".codex", "config.toml");
+      const operatorHook = [
+        header,
+        'matcher = "Edit"',
+        'hooks = [{ type = "command", command = "my-lint --check", timeout = 5 }]',
+        "",
+      ].join("\n");
+      const input = `model = "gpt-5.5"\n\n${operatorHook}${STALE_MANAGED_BLOCK_LINES.join("\n")}\n`;
+      fs.mkdirSync(path.dirname(codexConfig), { recursive: true });
+      fs.writeFileSync(codexConfig, input);
+
+      const result = await apply({
+        homeDir: tmpHome,
+        runtime: "codex",
+        installCodex: true,
+        now: new Date("2026-09-23T20:00:00.000Z"),
+      });
+
+      expect(result.outcome).toBe("applied");
+      const installed = fs.readFileSync(codexConfig, "utf8");
+      // The operator's entry is kept byte-for-byte, still above the block.
+      expect(installed.startsWith(`model = "gpt-5.5"\n\n${operatorHook}`)).toBe(true);
+      expect(installed).not.toContain("harness pack hook example-retired");
+      // Parsed, it is still the first PreToolUse entry, unchanged.
+      const doc = parseTomlForTest(installed) as {
+        hooks: { PreToolUse: unknown[] };
+      };
+      expect(doc.hooks.PreToolUse[0]).toEqual({
+        matcher: "Edit",
+        hooks: [{ type: "command", command: "my-lint --check", timeout: 5 }],
+      });
+    });
+  }
+});
+
+describe("apply --runtime codex --install: the safety net compares everything outside the hook event arrays (task `6a037359`)", () => {
+  it("refuses when only a Codex hook trust entry under hooks.state differs, although `hooks` also holds the harness-managed event arrays", () => {
+    const withHash = (hash: string): string =>
+      [
+        "[hooks.state]",
+        "",
+        '[hooks.state."/p/config.toml:pre_tool_use:0:0"]',
+        `trusted_hash = "${hash}"`,
+        "",
+        "[[hooks.PreToolUse]]",
+        'hooks = [{ type = "command", command = "x", timeout = 2 }]',
+        "",
+      ].join("\n");
+
+    const err = refusalOf(() =>
+      assertConfigSemanticInvariant(withHash("sha256:aaaa"), withHash("sha256:bbbb"), NET_CONFIG_PATH),
+    );
+    expect(err.message).toContain(
+      "installing would change 'hooks.state./p/config.toml:pre_tool_use:0:0.trusted_hash'",
+    );
+  });
+
+  it("refuses when a hooks.state entry disappears while the hook arrays also change", () => {
+    const current = [
+      '[hooks.state."/p/config.toml:pre_tool_use:0:0"]',
+      'trusted_hash = "sha256:aaaa"',
+      "",
+      "[[hooks.PreToolUse]]",
+      'hooks = [{ type = "command", command = "old", timeout = 2 }]',
+      "",
+    ].join("\n");
+    const next = [
+      "[[hooks.PreToolUse]]",
+      'hooks = [{ type = "command", command = "new", timeout = 2 }]',
+      "",
+    ].join("\n");
+
+    const err = refusalOf(() => assertConfigSemanticInvariant(current, next, NET_CONFIG_PATH));
+    expect(err.message).toContain("installing would change 'hooks.state'");
+  });
+
+  const scannerDropShapes: Array<[string, string, string]> = [
+    [
+      "a foreign key sitting between BEGIN and the first harness hook comment",
+      [
+        "[tui]",
+        "a = 1",
+        "# Harness Codex hook wiring. Generated source: old",
+        CODEX_MANAGED_BEGIN,
+        "b = 2",
+        "# Generated by harness apply --runtime codex.",
+        "# harness hook: old-hook (budget_ms=2000)",
+        "[[hooks.PreToolUse]]",
+        'matcher = "Bash"',
+        'hooks = [{ type = "command", command = "harness pack hook old", timeout = 2 }]',
+        CODEX_MANAGED_END,
+        "",
+      ].join("\n"),
+      "tui.b",
+    ],
+    [
+      "the generated-header comment pasted inside a foreign table",
+      [
+        "[tui]",
+        "# Generated by harness apply --runtime codex.",
+        "a = 1",
+        "[[hooks.PreToolUse]]",
+        'hooks = [{ type = "command", command = "x", timeout = 2 }]',
+        "",
+      ].join("\n"),
+      "tui.a",
+    ],
+    [
+      "a top-level key right after a legacy source-prefix line with no END",
+      [
+        "# Harness Codex hook wiring. Generated source: old",
+        'model = "gpt-5.5"',
+        "[[hooks.PreToolUse]]",
+        'hooks = [{ type = "command", command = "x", timeout = 2 }]',
+        "",
+      ].join("\n"),
+      "model",
+    ],
+  ];
+  for (const [label, input, keyPath] of scannerDropShapes) {
+    it(`refuses through planCodexConfigInstall when the line scan would drop ${label}`, () => {
+      const configPath = path.join(tmpHome, "config.toml");
+      fs.writeFileSync(configPath, input);
+
+      const err = refusalOf(() =>
+        planCodexConfigInstall({
+          configPath,
+          generatedPath: "/gen/config.toml",
+          generatedContent: SYNTHETIC_GENERATED,
+        }),
+      );
+      expect(err.message).toContain(`installing would change '${keyPath}'`);
+      expect(fs.readFileSync(configPath, "utf8")).toBe(input);
+    });
+  }
+
+  it("refuses when a date/time value differs, including the same instant written in another TOML date/time form, and accepts an unchanged one", () => {
+    const cfg = (value: string): string => `[schedule]\nlast_run = ${value}\n`;
+
+    expect(
+      refusalOf(() =>
+        assertConfigSemanticInvariant(
+          cfg("1979-05-27T07:32:00Z"),
+          cfg("1979-05-27T07:32:01Z"),
+          NET_CONFIG_PATH,
+        ),
+      ).message,
+    ).toContain("installing would change 'schedule.last_run'");
+    // Offset date-time vs local date-time: the same JavaScript time value,
+    // but a different TOML value.
+    expect(
+      refusalOf(() =>
+        assertConfigSemanticInvariant(
+          cfg("1979-05-27T07:32:00Z"),
+          cfg("1979-05-27T07:32:00"),
+          NET_CONFIG_PATH,
+        ),
+      ).message,
+    ).toContain("installing would change 'schedule.last_run'");
+    // A date replaced by a string of the same text.
+    expect(
+      refusalOf(() =>
+        assertConfigSemanticInvariant(cfg("1979-05-27"), cfg('"1979-05-27"'), NET_CONFIG_PATH),
+      ).message,
+    ).toContain("installing would change 'schedule.last_run'");
+    expect(() =>
+      assertConfigSemanticInvariant(
+        cfg("1979-05-27T07:32:00-07:00"),
+        cfg("1979-05-27T07:32:00-07:00"),
+        NET_CONFIG_PATH,
+      ),
+    ).not.toThrow();
+  });
+
+  it("compares 64-bit integers beyond 2^53 by their exact value", () => {
+    const cfg = (value: string): string => `[history]\nmax_bytes = ${value}\n`;
+
+    expect(() =>
+      assertConfigSemanticInvariant(
+        cfg("9223372036854775807"),
+        cfg("9223372036854775807"),
+        NET_CONFIG_PATH,
+      ),
+    ).not.toThrow();
+    // Both values round to the same double; only an exact comparison
+    // tells them apart.
+    expect(
+      refusalOf(() =>
+        assertConfigSemanticInvariant(
+          cfg("9223372036854775807"),
+          cfg("9223372036854775806"),
+          NET_CONFIG_PATH,
+        ),
+      ).message,
+    ).toContain("installing would change 'history.max_bytes'");
+  });
+
+  it("keeps a hooks sub-table literally named __proto__ in the comparison", () => {
+    const current = [
+      '[hooks."__proto__"]',
+      "x = 1",
+      "",
+      "[[hooks.PreToolUse]]",
+      'hooks = [{ type = "command", command = "a", timeout = 2 }]',
+      "",
+    ].join("\n");
+    const next = [
+      "[[hooks.PreToolUse]]",
+      'hooks = [{ type = "command", command = "b", timeout = 2 }]',
+      "",
+    ].join("\n");
+
+    const err = refusalOf(() => assertConfigSemanticInvariant(current, next, NET_CONFIG_PATH));
+    expect(err.message).toContain("installing would change 'hooks.__proto__'");
+  });
+});
+
+describe("apply --runtime codex --install: TOML the harness parser used to reject installs (task `6a037359`)", () => {
+  it("installs a config that starts with a UTF-8 byte order mark and leaves the mark in place", async () => {
+    writeManifestWithPack();
+    const codexConfig = path.join(tmpHome, ".codex", "config.toml");
+    const input = `\uFEFF${buildDriftedEndConfig()}`;
+    fs.mkdirSync(path.dirname(codexConfig), { recursive: true });
+    fs.writeFileSync(codexConfig, input);
+
+    const result = await apply({
+      homeDir: tmpHome,
+      runtime: "codex",
+      installCodex: true,
+      now: new Date("2026-09-23T20:01:00.000Z"),
+    });
+
+    expect(result.outcome).toBe("applied");
+    const installed = fs.readFileSync(codexConfig, "utf8");
+    expect(installed.startsWith('\uFEFFmodel = "gpt-5.5"\n')).toBe(true);
+    expect(installed.split("\uFEFF").length - 1).toBe(1);
+    expect(installed).toContain(FOREIGN_BLOCK);
+    expect(installed).not.toContain("harness pack hook example-retired");
+  });
+
+  it("installs a config holding an integer beyond 2^53 (TOML integers are 64-bit) and keeps it verbatim", async () => {
+    writeManifestWithPack();
+    const codexConfig = path.join(tmpHome, ".codex", "config.toml");
+    const bigIntTable = "[history]\nmax_bytes = 9223372036854775807\n";
+    const input = `${buildDriftedEndConfig()}\n${bigIntTable}`;
+    fs.mkdirSync(path.dirname(codexConfig), { recursive: true });
+    fs.writeFileSync(codexConfig, input);
+
+    const result = await apply({
+      homeDir: tmpHome,
+      runtime: "codex",
+      installCodex: true,
+      now: new Date("2026-09-23T20:02:00.000Z"),
+    });
+
+    expect(result.outcome).toBe("applied");
+    const installed = fs.readFileSync(codexConfig, "utf8");
+    expect(installed.endsWith(`\n${bigIntTable}`)).toBe(true);
+    expect(installed).toContain(FOREIGN_BLOCK);
+  });
+
+  it("names an operator's inline `hooks` table as the likely cause when the would-be output does not parse, instead of blaming the generated block", async () => {
+    writeManifestWithPack();
+    const codexConfig = path.join(tmpHome, ".codex", "config.toml");
+    const input = ['model = "gpt-5.5"', "hooks = { state = {} }", ""].join("\n");
+    fs.mkdirSync(path.dirname(codexConfig), { recursive: true });
+    fs.writeFileSync(codexConfig, input);
+
+    const err = await refusalOfAsync(() =>
+      apply({ homeDir: tmpHome, runtime: "codex", installCodex: true }),
+    );
+    expect(err.message).toContain("would not parse as TOML (in the would-be output, line ");
+    expect(err.message).toContain("an inline table such as `hooks = { ... }`");
+    expect(err.message).not.toContain("points at a bug in the generated hook block");
+    expect(fs.readFileSync(codexConfig, "utf8")).toBe(input);
+  });
+});
+
+describe("apply --runtime codex --install: a refusal never echoes the config's own text (task `6a037359`)", () => {
+  const SECRET = "FAKE-SECRET-TOKEN-0123456789";
+
+  function writeCliFixture(configBody: string): {
+    home: string;
+    manifestPath: string;
+    codexConfig: string;
+  } {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "harness-apply-codex-secret-"));
+    const manifest = {
+      version: 1,
+      tools: {
+        mcp: [],
+        cli: [],
+        skills: { enabled: [], source_dirs: [] },
+        builtin: { known: [] },
+      },
+      memory: { directories: [] },
+      hooks: [],
+      policies: [],
+      policy_packs: [{ name: "understanding-before-execution" }],
+    };
+    const manifestPath = path.join(home, "harness.yaml");
+    fs.writeFileSync(manifestPath, yamlStringify(manifest));
+    const codexConfig = path.join(home, ".codex", "config.toml");
+    fs.mkdirSync(path.dirname(codexConfig), { recursive: true });
+    fs.writeFileSync(codexConfig, configBody);
+    return { home, manifestPath, codexConfig };
+  }
+
+  async function runInstall(
+    manifestPath: string,
+    codexConfig: string,
+    json: boolean,
+  ): Promise<{ code: number; out: string; err: string }> {
+    let out = "";
+    let err = "";
+    const code = await run({
+      argv: [
+        "apply",
+        "--config",
+        manifestPath,
+        "--runtime",
+        "codex",
+        "--install",
+        "--codex-config",
+        codexConfig,
+        ...(json ? ["--json"] : []),
+      ],
+      stdout: (s: string) => {
+        out += s;
+      },
+      stderr: (s: string) => {
+        err += s;
+      },
+    });
+    return { code, out, err };
+  }
+
+  const cases: Array<[string, string, string]> = [
+    [
+      "a parse error on the line after a secret",
+      [
+        ...STALE_MANAGED_BLOCK_LINES,
+        "",
+        "[mcp_servers.example]",
+        'command = "example"',
+        `env = { API_TOKEN = "${SECRET}" }`,
+        'broken = "unterminated',
+        "",
+      ].join("\n"),
+      "the TOML parser used by harness could not read this file (line 13, column 23: control characters are not allowed in strings)",
+    ],
+    [
+      "a harness-hook marker inside a secret-bearing value past a foreign table",
+      [
+        ...STALE_MANAGED_BLOCK_LINES.filter((line) => line !== CODEX_MANAGED_END),
+        "",
+        "[tui]",
+        `note = "${SECRET} # harness hook: pasted"`,
+        "",
+      ].join("\n"),
+      "line 10 contains '# harness hook:'",
+    ],
+    [
+      "a second BEGIN marker inside a secret-bearing value",
+      [
+        ...STALE_MANAGED_BLOCK_LINES,
+        "",
+        "[tui]",
+        `note = "${SECRET} ${CODEX_MANAGED_BEGIN}"`,
+        "",
+      ].join("\n"),
+      "(a second one at line 11)",
+    ],
+  ];
+  for (const [label, configBody, expected] of cases) {
+    it(`${label}: neither stderr nor --json output contains the secret`, async () => {
+      const { home, manifestPath, codexConfig } = writeCliFixture(configBody);
+      try {
+        const plain = await runInstall(manifestPath, codexConfig, false);
+        expect(plain.code).toBe(EX_FAIL);
+        expect(plain.err).toContain(expected);
+        expect(plain.err).not.toContain(SECRET);
+        expect(plain.out).not.toContain(SECRET);
+
+        const json = await runInstall(manifestPath, codexConfig, true);
+        expect(json.code).toBe(EX_FAIL);
+        const parsed = JSON.parse(json.out) as { outcome: string; error: string };
+        expect(parsed.outcome).toBe("codex-install-refuse");
+        expect(parsed.error).toContain(expected);
+        expect(json.out).not.toContain(SECRET);
+        expect(json.err).not.toContain(SECRET);
+
+        expect(fs.readFileSync(codexConfig, "utf8")).toBe(configBody);
+      } finally {
+        fs.rmSync(home, { recursive: true, force: true });
+      }
+    });
+  }
+});
+
+describe("apply --runtime codex --install: foreign-section namespaces split keys quote-aware, ignore trailing comments, and keep two keys under hooks (task `6a037359`)", () => {
+  it("groups by the parsed first key (two under hooks) and prints headers without their trailing comments", async () => {
+    writeManifestWithPack();
+    const codexConfig = path.join(tmpHome, ".codex", "config.toml");
+    const config = [
+      ...STALE_MANAGED_BLOCK_LINES.filter((line) => line !== CODEX_MANAGED_END),
+      "",
+      "[hooks.state]",
+      "",
+      '[hooks.state."/p/config.toml:pre_tool_use:0:0"]',
+      'trusted_hash = "sha256:aaaa"',
+      "",
+      "[tui] # codex tui",
+      "a = 1",
+      "",
+      "[tui.notifications]",
+      "b = 2",
+      "",
+      '[plugins."a#b.c"] # trailing comment',
+      "enabled = true",
+      "",
+      '["my.table"]',
+      "x = 1",
+      "",
+      "[ projects . 'Photos [2024]' ]",
+      'trust_level = "trusted"',
+      "",
+      CODEX_MANAGED_END,
+      "",
+    ].join("\n");
+    fs.mkdirSync(path.dirname(codexConfig), { recursive: true });
+    fs.writeFileSync(codexConfig, config);
+
+    const result = await apply({
+      homeDir: tmpHome,
+      runtime: "codex",
+      installCodex: true,
+      dryRun: true,
+    });
+
+    expect(result.outcome).toBe("would-apply");
+    expect(result.codexConfigInstall?.foreignSectionsPreserved).toEqual([
+      "[hooks.state.*] (2 tables)",
+      "[tui.*] (2 tables)",
+      '[plugins."a#b.c"]',
+      '["my.table"]',
+      "[ projects . 'Photos [2024]' ]",
+    ]);
   });
 });

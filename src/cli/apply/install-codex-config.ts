@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { parse as parseToml } from "smol-toml";
+import { parse as parseTomlDocument, TomlError } from "smol-toml";
 import { atomicWriteFile } from "../../io/atomic-write.js";
 import { EX_FAIL, HarnessExitError } from "../exit-codes.js";
 
@@ -78,11 +78,11 @@ export interface CodexConfigInstallPlan {
   /**
    * Foreign (non harness-owned) table headers that sat between the old
    * managed block and a stray END marker, one representative header per
-   * distinct top-level namespace. Populated only when the previous
-   * install's END marker had drifted past foreign content (the
-   * task-6a037359 bug): these are the sections that would have been
-   * deleted under the old blind-END-trust logic and are now preserved
-   * byte-for-byte instead.
+   * distinct namespace (see `collectForeignSectionHeaders`). Populated
+   * only when the previous install's END marker had drifted past foreign
+   * content (the task-6a037359 bug): these are the sections that would
+   * have been deleted under the old blind-END-trust logic and are now
+   * preserved byte-for-byte instead.
    */
   foreignSectionsPreserved: string[];
 }
@@ -156,9 +156,9 @@ function isEscapedAt(line: string, index: number): boolean {
  * triple-quote delimiter (if any) is open once this line ends. `delimIn`
  * is the delimiter already open when this line STARTS (from a preceding
  * multi-line string that has not yet closed); when non-null, this line's
- * own content is scanned only for that SAME delimiter closing it (task
- * 6a037359 L1: a basic `"""` string is closed only by another `"""`, never
- * by `'''`, and vice versa -- naively counting either delimiter's raw
+ * own content is scanned only for that SAME delimiter closing it (a basic
+ * `"""` string is closed only by another `"""`, never by `'''`, and vice
+ * versa -- naively counting either delimiter's raw
  * occurrences, as the pre-fix code did, misreads a `'''` sitting inside an
  * open `"""` string, or a comment/single-line-string containing `'''` or
  * `"""`, as a real close).
@@ -300,7 +300,7 @@ function firstContentLine(text: string, from: number, limit: number): string | n
  * inside the owned region by construction -- this scanner only ever runs
  * from a position that is itself still-owned) may contain a line that
  * reads exactly like a comment, a blank line, or even the END marker
- * without that ending the region early (task 6a037359 L1).
+ * without that ending the region early (task 6a037359).
  */
 function scanOwnedContentEnd(
   text: string,
@@ -348,15 +348,20 @@ function scanOwnedContentEnd(
  * or dropping harness- or foreign-owned bytes, so this throws instead. The
  * message names the resolved config path (never a hard-coded `~/.codex`),
  * the first foreign table header the scan found (`from` always sits at
- * one, see `scanOwnedContentEnd`), and the offending line that still
- * looks like harness content beyond it, so the operator can act without
- * guessing themselves. `hasEndMarker` distinguishes the two callers: when
- * `to` was derived from a real stray `CODEX_MANAGED_END` line, the fix
- * guidance can point at that marker; when there is no END marker anywhere
- * in the document (`to` is `text.length`), telling the operator to move
- * something below a marker that does not exist would be nonsensical, so a
- * different fix (add one, or move the table below the last harness hook
- * table) is offered instead (task 6a037359 L2).
+ * one, see `scanOwnedContentEnd`; printed through `describeTableHeader`,
+ * so only the header's own bracketed key path appears, never a trailing
+ * comment), and the line number and marker of the first line beyond it
+ * that still looks like harness content. That line's own text is never
+ * echoed: the marker is found by a substring search, so the line may be
+ * foreign content (a value holding an API token, say) that merely contains
+ * the marker text, and the refusal is printed to stderr and into `--json`
+ * output. `hasEndMarker` distinguishes the two callers: when `to` was
+ * derived from a real stray `CODEX_MANAGED_END` line, the fix guidance can
+ * point at that marker; when there is no END marker anywhere in the
+ * document (`to` is `text.length`), telling the operator to move something
+ * below a marker that does not exist would be nonsensical, so a different
+ * fix (add one, or move the table below the last harness hook table) is
+ * offered instead (task 6a037359).
  */
 function assertNoSplitBlock(
   text: string,
@@ -368,18 +373,25 @@ function assertNoSplitBlock(
   const zoneStart = Math.max(from, 0);
   const zoneEnd = Math.max(to, from);
   const zone = text.slice(zoneStart, zoneEnd);
-  const markerOffsets = [CODEX_MANAGED_SOURCE_PREFIX, CODEX_MANAGED_BEGIN, HARNESS_HOOK_COMMENT_PREFIX]
-    .map((marker) => zone.indexOf(marker))
-    .filter((idx) => idx !== -1);
-  if (markerOffsets.length === 0) return;
+  let markerOffset = -1;
+  let marker = "";
+  for (const candidate of [
+    CODEX_MANAGED_SOURCE_PREFIX,
+    CODEX_MANAGED_BEGIN,
+    HARNESS_HOOK_COMMENT_PREFIX,
+  ]) {
+    const idx = zone.indexOf(candidate);
+    if (idx !== -1 && (markerOffset === -1 || idx < markerOffset)) {
+      markerOffset = idx;
+      marker = candidate.trim();
+    }
+  }
+  if (markerOffset === -1) return;
 
-  const markerOffset = Math.min(...markerOffsets);
-  const offendingLineStart = lineStartAt(text, zoneStart + markerOffset);
-  const offendingLineEnd = lineEndAfter(text, zoneStart + markerOffset);
-  const offendingLine = text.slice(offendingLineStart, offendingLineEnd).trim();
-  const offendingLineNumber = lineNumberAt(text, offendingLineStart);
+  const offendingLineNumber = lineNumberAt(text, lineStartAt(text, zoneStart + markerOffset));
+  const foreignHeaderLine = firstContentLine(text, zoneStart, zoneStart + markerOffset);
   const firstForeignHeader =
-    firstContentLine(text, zoneStart, zoneStart + markerOffset) ?? "(unknown)";
+    foreignHeaderLine === null ? "(unknown)" : describeTableHeader(foreignHeaderLine);
 
   const guidance = hasEndMarker
     ? `Move ${firstForeignHeader} below the '${CODEX_MANAGED_END}' marker, or delete the lines ` +
@@ -390,29 +402,80 @@ function assertNoSplitBlock(
 
   throw new CodexInstallRefusalError(
     `Codex config ${configPath} has a foreign table (${firstForeignHeader}) sitting before ` +
-      `more harness-owned content: line ${offendingLineNumber} (${offendingLine}) still looks ` +
-      "like part of the harness-managed hook block; refusing to guess the block boundaries. " +
-      `${guidance}, then re-run \`harness apply --runtime codex --install\`. As a last resort, ` +
-      `restore ${configPath} from the most recent .harness-backup-* file, but that discards any ` +
-      "Codex state (hook trust entries, marketplaces, plugins) written to the file since that " +
-      "backup.",
+      `more harness-owned content: line ${offendingLineNumber} contains '${marker}' and still ` +
+      "looks like part of the harness-managed hook block; refusing to guess the block " +
+      `boundaries. ${guidance}, then re-run \`harness apply --runtime codex --install\`. As a ` +
+      `last resort, restore ${configPath} from the most recent .harness-backup-* file, but ` +
+      "that discards any Codex state (hook trust entries, marketplaces, plugins) written to " +
+      "the file since that backup.",
     configPath,
   );
 }
 
-function foreignSectionRootKey(headerLine: string): string {
-  const inner = headerLine.replace(/^\[+/, "").replace(/\]+$/, "");
-  const cut = inner.search(/[."]/);
-  return cut === -1 ? inner : inner.slice(0, cut);
+// A single-line TOML table header split into the header itself (brackets
+// plus dotted key path, without any trailing comment; group 1) and its
+// dotted key path (group 2). Same shape `NON_HOOK_TABLE_RE` recognizes,
+// minus the `[[hooks.` exclusion, so every header that regex accepts
+// parses here too.
+const TABLE_HEADER_PARTS_RE = new RegExp(
+  String.raw`^(\[\[?\s*(${TOML_KEY}(?:\s*\.\s*${TOML_KEY})*)\s*\]\]?)\s*(?:#.*)?$`,
+);
+const TOML_KEY_GLOBAL_RE = new RegExp(TOML_KEY, "g");
+
+/** A table header line's own bracketed key path (`header`) and its keys in
+ * order (`keys`), each as written. Keys are matched with the quote-aware
+ * `TOML_KEY`, so a quoted key containing `.`, `[`, `]` or `#` stays one
+ * key, and a trailing comment is never part of either field. `null` for a
+ * line that is not a single-line table header. */
+function parseTableHeader(line: string): { header: string; keys: string[] } | null {
+  const m = TABLE_HEADER_PARTS_RE.exec(line.trim());
+  if (m?.[1] === undefined || m[2] === undefined) return null;
+  return { header: m[1], keys: [...m[2].matchAll(TOML_KEY_GLOBAL_RE)].map((k) => k[0]) };
 }
 
-/** One representative header per distinct top-level foreign namespace
- * found between `from` and `to` (e.g. all `[hooks.state."..."]` sub-tables
- * collapse to one entry), in first-seen order. A namespace with more than
- * one table under it prints its representative header suffixed with a
- * `(N tables)` count (e.g. `[hooks.state] (3 tables)`) instead of silently
- * dropping the other N-1 headers, so the operator can tell "one table" from
- * "a whole namespace" preserved. */
+/** A table header for operator-facing output: the bracketed key path only,
+ * with any trailing comment dropped (a comment is free text and is not
+ * echoed). `(unknown)` for a line that is not a table header. */
+function describeTableHeader(line: string): string {
+  return parseTableHeader(line)?.header ?? "(unknown)";
+}
+
+/** A key segment's bare name: a literal (`'...'`) key's inner text, a basic
+ * (`"..."`) key's inner text when it holds no escape sequence, otherwise
+ * the segment as written. Used only to recognize the `hooks` root however
+ * it is spelled. */
+function bareKeyName(segment: string): string {
+  const quote = segment[0];
+  if (segment.length >= 2 && (quote === "'" || quote === '"') && segment.endsWith(quote)) {
+    const inner = segment.slice(1, -1);
+    if (quote === "'" || !inner.includes("\\")) return inner;
+  }
+  return segment;
+}
+
+/** The namespace a foreign table header is grouped under in
+ * `foreignSectionsPreserved`: its first key, or its first TWO keys when the
+ * first is `hooks` (`hooks.state`), since `hooks` is shared with the
+ * harness-managed event arrays and a bare `hooks` group would not tell the
+ * operator which namespace was kept. */
+function foreignSectionRootKey(headerLine: string): string {
+  const parsed = parseTableHeader(headerLine);
+  const first = parsed?.keys[0];
+  if (parsed === null || first === undefined) return headerLine.trim();
+  const second = parsed.keys[1];
+  if (bareKeyName(first) === "hooks" && second !== undefined) return `${first}.${second}`;
+  return first;
+}
+
+/** One representative header per distinct foreign namespace found between
+ * `from` and `to` (e.g. all `[hooks.state."..."]` sub-tables collapse to
+ * one entry), in first-seen order. A namespace with more than one table
+ * under it prints its root with a wildcard and a count (e.g.
+ * `[hooks.state.*] (3 tables)`) instead of the first table's own header,
+ * so the operator reads "a whole namespace, N tables" rather than
+ * mistaking the printed header for the only table kept; exactly one table
+ * under a root prints its own header. Headers print through
+ * `describeTableHeader` (no trailing comment). */
 function collectForeignSectionHeaders(
   text: string,
   from: number,
@@ -439,7 +502,7 @@ function collectForeignSectionHeaders(
       counts.set(root, (counts.get(root) ?? 0) + 1);
       if (!seenRoots.has(root)) {
         seenRoots.add(root);
-        headers.push(trimmed);
+        headers.push(describeTableHeader(trimmed));
       }
     }
     pos = lineEnd;
@@ -447,12 +510,6 @@ function collectForeignSectionHeaders(
   return headers.map((header) => {
     const root = foreignSectionRootKey(header);
     const count = counts.get(root) ?? 1;
-    // More than one table collapses to this root: name the ROOT with a
-    // wildcard (`[hooks.*] (3 tables)`) instead of the first table's own
-    // full header, so the operator reads "a whole namespace, N tables"
-    // rather than mistaking the printed header for the only table kept
-    // (task 6a037359 L5). Exactly one table under a root still prints its
-    // own full header, unchanged -- there is no namespace to summarize.
     return count > 1 ? `[${root}.*] (${count} tables)` : header;
   });
 }
@@ -479,13 +536,14 @@ function findManagedRange(text: string, configPath: string): ManagedRange | null
   if (begin !== -1) {
     const secondBegin = text.indexOf(CODEX_MANAGED_BEGIN, begin + CODEX_MANAGED_BEGIN.length);
     if (secondBegin !== -1) {
-      const secondBeginLineStart = lineStartAt(text, secondBegin);
-      const secondBeginLineEnd = lineEndAfter(text, secondBegin);
-      const secondBeginLine = text.slice(secondBeginLineStart, secondBeginLineEnd).trim();
-      const secondBeginLineNumber = lineNumberAt(text, secondBeginLineStart);
+      // Names the second marker's line number only, never that line's own
+      // text: the marker is found by a substring search, so the line may be
+      // foreign content (a value holding a token, say) that merely contains
+      // the marker text, and this refusal is printed to stderr and `--json`.
+      const secondBeginLineNumber = lineNumberAt(text, lineStartAt(text, secondBegin));
       throw new CodexInstallRefusalError(
         `Codex config ${configPath} has more than one '${CODEX_MANAGED_BEGIN}' marker ` +
-          `(a second one at line ${secondBeginLineNumber}: ${secondBeginLine}); refusing to ` +
+          `(a second one at line ${secondBeginLineNumber}); refusing to ` +
           "guess which one is current. Delete the entire unwanted BEGIN/END pair -- including " +
           `its own '${CODEX_MANAGED_BEGIN}' and '${CODEX_MANAGED_END}' marker lines (and its ` +
           `'${CODEX_MANAGED_SOURCE_PREFIX}' source-prefix comment line, if it has one) -- ` +
@@ -621,67 +679,54 @@ export function validateCodexManagedConfig(content: string): void {
   }
 }
 
-const HOOK_TABLE_HEADER_RE = /^\[\[hooks\.([A-Za-z][A-Za-z0-9_]*)\]\]$/;
-
-/**
- * For every `[[hooks.<Event>]]` table header found in `text` (in document
- * order, multi-line-string aware via `nextTripleDelim` so a header-looking
- * line inside a string value is never miscounted), records its 0-based
- * index within that event's array AND whether the header's own start
- * offset falls inside `range` (the text span `findManagedRange` treats as
- * harness-owned). Returns, per event, the set of indexes that are inside
- * that range -- i.e. the entries `assertConfigSemanticInvariant`'s
- * per-entry survival check does NOT require to survive unchanged, because
- * the installer is free to replace them (task 6a037359, Part A safety
- * net). Every index NOT in the returned set is "outside the managed
- * region" and must still be present, unchanged, in `next`.
- */
-function computeOwnedHookEntryIndexes(
-  text: string,
-  range: { start: number; end: number } | null,
-): Map<string, Set<number>> {
-  const owned = new Map<string, Set<number>>();
-  const eventCounts = new Map<string, number>();
-  let pos = 0;
-  let delim: TripleDelim = null;
-  while (pos < text.length) {
-    const lineEnd = lineEndAfter(text, pos);
-    const rawLine = text.slice(pos, lineEnd);
-    const startedInsideString = delim !== null;
-    delim = nextTripleDelim(rawLine, delim);
-    if (!startedInsideString) {
-      const m = HOOK_TABLE_HEADER_RE.exec(rawLine.trim());
-      if (m?.[1] !== undefined) {
-        const event = m[1];
-        const idx = eventCounts.get(event) ?? 0;
-        eventCounts.set(event, idx + 1);
-        if (range && pos >= range.start && pos < range.end) {
-          const set = owned.get(event) ?? new Set<number>();
-          set.add(idx);
-          owned.set(event, set);
-        }
-      }
-    }
-    pos = lineEnd;
-  }
-  return owned;
+/** Parses a Codex config for the safety net below. A leading UTF-8 byte
+ * order mark is not TOML content, so it is skipped for parsing only (the
+ * bytes written are never changed here). Integers beyond JavaScript's safe
+ * range, which TOML allows (64-bit), come back as a `bigint` instead of
+ * failing the parse. */
+function parseToml(content: string): unknown {
+  const body = content.startsWith("\uFEFF") ? content.slice(1) : content;
+  return parseTomlDocument(body, { integersAsBigInt: "asNeeded" });
 }
 
-/** Every harness-managed hook event array (`hooks.<Event>`, an ARRAY of
- * tables) removed from `doc.hooks`, keeping every other `hooks.*` key
- * (single tables such as `hooks.state`, or any future non-array key)
- * untouched. This is the "simplest robust definition" of what the
- * installer owns: everything else in the document -- including all of
- * `hooks.state` -- is not the installer's to change (task 6a037359, D-003
- * safety net). Non-object/array `doc` and a missing/non-object `hooks` are
- * returned as-is; there is nothing to strip. */
+/** Where and why the parser rejected a document, for a refusal message:
+ * the line and column it reports plus the first line of its message, and
+ * nothing else. The rest of a `TomlError` message is a code frame quoting
+ * the surrounding lines of the document verbatim; a Codex config holds
+ * secrets (API tokens under `[mcp_servers.*]`), and a refusal is printed to
+ * stderr and into `--json` output, so that frame is never included. Any
+ * other error is reduced to its name for the same reason. */
+function describeTomlParseError(err: unknown): string {
+  if (err instanceof TomlError) {
+    const firstLine = err.message.split("\n", 1)[0] ?? "";
+    const reason = firstLine.replace(/^Invalid TOML document: /, "");
+    return `line ${err.line}, column ${err.column}: ${reason}`;
+  }
+  return err instanceof Error ? err.name : "unknown parse error";
+}
+
+/** True for a parsed TOML table: a non-array, non-date object. */
+function isTomlTable(value: unknown): value is Record<string, unknown> {
+  return (
+    typeof value === "object" && value !== null && !Array.isArray(value) && !(value instanceof Date)
+  );
+}
+
+/** Every ARRAY-valued key directly under `doc.hooks` (the `[[hooks.<Event>]]`
+ * event arrays, the only shape the installer writes) removed, keeping every
+ * other `hooks.*` key (single tables such as `hooks.state`, or any future
+ * non-array key) untouched. Everything the result still holds, including all
+ * of `hooks.state`, is not the installer's to change. The stripped `hooks`
+ * map is a null-prototype object, so a key literally named `__proto__`
+ * stays an own key instead of re-pointing the map's prototype and dropping
+ * out of the comparison. A non-table `doc`, and a missing or non-table
+ * `hooks` value, are returned as-is: there is nothing to strip. */
 function stripManagedHookArrays(doc: unknown): unknown {
-  if (typeof doc !== "object" || doc === null || Array.isArray(doc)) return doc;
-  const obj = doc as Record<string, unknown>;
-  const hooksRaw = obj.hooks;
-  if (typeof hooksRaw !== "object" || hooksRaw === null || Array.isArray(hooksRaw)) return obj;
-  const hooks = hooksRaw as Record<string, unknown>;
-  const strippedHooks: Record<string, unknown> = {};
+  if (!isTomlTable(doc)) return doc;
+  const obj = doc;
+  const hooks = obj.hooks;
+  if (!isTomlTable(hooks)) return obj;
+  const strippedHooks = Object.create(null) as Record<string, unknown>;
   for (const [key, value] of Object.entries(hooks)) {
     if (Array.isArray(value)) continue;
     strippedHooks[key] = value;
@@ -700,17 +745,25 @@ function stripManagedHookArrays(doc: unknown): unknown {
   return result;
 }
 
+/** A date/time value's identity for comparison: its as-written TOML form
+ * (`TomlDate.toISOString` keeps local date, local time, local date-time
+ * and offset forms apart), or `invalid` for an unparseable date. */
+function dateIdentity(value: Date): string {
+  return Number.isNaN(value.getTime()) ? "invalid" : value.toISOString();
+}
+
 /** The path (as a dotted string once joined by the caller) to the first
- * value at which `a` and `b` differ, walking objects/arrays recursively
- * and comparing primitives (including `Date`/`TomlDate`, by their time
- * value) with `Object.is`; `null` means the two are deeply equal. Key
- * order follows `a`'s own insertion order first, then any key present
- * only in `b`, so the reported path is deterministic. */
+ * value at which `a` and `b` differ, walking tables and arrays recursively
+ * and comparing primitives (including `bigint`) with `Object.is` and
+ * date/time values by `dateIdentity`; `null` means the two are deeply
+ * equal. A key present on one side only is a difference at that key (and,
+ * when it holds a table, at that table's first key). Key
+ * order follows `a`'s own insertion order first, then any key present only
+ * in `b`, so the reported path is deterministic. */
 function firstDifferingKeyPath(a: unknown, b: unknown, path: string[]): string[] | null {
   if (a instanceof Date || b instanceof Date) {
-    const av = a instanceof Date ? a.getTime() : a;
-    const bv = b instanceof Date ? b.getTime() : b;
-    return Object.is(av, bv) ? null : path;
+    if (!(a instanceof Date) || !(b instanceof Date)) return path;
+    return dateIdentity(a) === dateIdentity(b) ? null : path;
   }
   if (Array.isArray(a) || Array.isArray(b)) {
     if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return path;
@@ -723,9 +776,17 @@ function firstDifferingKeyPath(a: unknown, b: unknown, path: string[]): string[]
   if (typeof a === "object" && a !== null && typeof b === "object" && b !== null) {
     const aObj = a as Record<string, unknown>;
     const bObj = b as Record<string, unknown>;
-    const aKeys = Object.keys(aObj);
-    const bOnlyKeys = Object.keys(bObj).filter((k) => !aKeys.includes(k));
-    for (const key of [...aKeys, ...bOnlyKeys]) {
+    const keys = new Set([...Object.keys(aObj), ...Object.keys(bObj)]);
+    for (const key of keys) {
+      const aHas = Object.hasOwn(aObj, key);
+      if (aHas !== Object.hasOwn(bObj, key)) {
+        // A whole table present on one side only: name its first key too
+        // (`hooks.state` rather than just `hooks`), so the refusal points at
+        // what was lost.
+        const present = aHas ? aObj[key] : bObj[key];
+        const child = isTomlTable(present) ? Object.keys(present)[0] : undefined;
+        return child === undefined ? [...path, key] : [...path, key, child];
+      }
       const diff = firstDifferingKeyPath(aObj[key], bObj[key], [...path, key]);
       if (diff) return diff;
     }
@@ -735,58 +796,54 @@ function firstDifferingKeyPath(a: unknown, b: unknown, path: string[]): string[]
 }
 
 /**
- * The independent TOML-semantic safety net (task 6a037359, operator
- * redesign decision D-003): the byte-preserving text splice above stays
- * the source of truth for what gets WRITTEN, but before it is written
- * both `currentContent` and `nextContent` are parsed with `smol-toml` and
- * compared, and the install refuses rather than writes when the
- * comparison cannot establish that nothing outside the installer's own
- * ownership changed. This exists to catch a scanner defect (a shape the
- * line-based scan above mishandles) that would otherwise silently drop or
- * corrupt operator- or Codex-owned TOML content.
+ * The TOML-semantic safety net (task 6a037359). The byte-preserving text
+ * splice in `planCodexConfigInstall` stays the source of truth for what gets
+ * WRITTEN; before it is written, `currentContent` and `nextContent` are
+ * both parsed and compared, and the install refuses rather than writes when
+ * the comparison finds a change outside what the installer owns. It exists
+ * to catch a scanner defect (a shape the line-based scan above mishandles)
+ * that would otherwise silently drop or alter operator- or Codex-owned
+ * content.
  *
- * What the installer owns, precisely: the harness-managed hook event
- * arrays, `[[hooks.<Event>]]`, both the ones a previous install wrote
- * (identified by `ownedHookEntries`, the entries physically inside the
- * managed text region) and the ones this install writes now. Two checks
- * enforce that boundary:
+ * The invariant: both documents must parse, and once every ARRAY-valued key
+ * directly under `hooks` (the `[[hooks.<Event>]]` event arrays) is removed
+ * from both, what remains must be deep-equal. What remains is everything
+ * outside the hook event arrays: `hooks.state` and every other single-table
+ * `hooks.*` key, plus all non-hooks content (top-level keys, `projects`,
+ * `plugins`, `marketplaces`, `mcp_servers`, `tui`, ...). A refusal names the
+ * first differing key path.
  *
- * 1. Whole-array-removed comparison: strip every ARRAY-valued key under
- *    `hooks` from both parsed documents (keeping `hooks.state` and any
- *    other single-table `hooks.*` key untouched) and deep-compare what
- *    remains. Any difference means the splice changed something outside
- *    the hook arrays it owns -- a foreign table, a Codex-written table
- *    like `hooks.state`, or any other top-level key.
- * 2. Per-entry survival: check 1 necessarily ignores the hook arrays
- *    themselves (the installer is expected to change those), which would
- *    hide a regression that drops a `[[hooks.<Event>]]` entry sitting
- *    OUTSIDE the managed region (an operator-authored hook table with no
- *    harness comment, for instance, positioned before BEGIN or after the
- *    tail). Every such "outside" entry in `current` must still appear, in
- *    order and deep-equal once parsed, as a subsequence of the
- *    corresponding array in `next`.
+ * What it does NOT check: the hook event arrays themselves. The installer
+ * rewrites its own entries there, and telling an operator-authored entry
+ * from a harness-written one would need the same line-level reading of the
+ * file this net is meant to be independent of. An operator-authored
+ * `[[hooks.<Event>]]` entry that the line scan wrongly counts as part of
+ * the harness-managed block is therefore replaced without a refusal
+ * (follow-up task 01053b27).
  *
- * Refuses via `CodexInstallRefusalError` naming the first differing key
- * path (check 1) or the offending event (check 2); the file is never
- * touched by this function, and a `--dry-run` plan that reaches this
- * check reports the same refusal a real install would (both call
- * `planCodexConfigInstall`, which is where this runs).
+ * Parsing goes through `parseToml` (a leading byte order mark ignored,
+ * 64-bit integers kept as `bigint`). A document that does not parse refuses
+ * with the parser's line, column and one-line reason only, never the
+ * document's own text (`describeTomlParseError`). This function never
+ * touches the file, and a `--dry-run` plan reports the same refusal a real
+ * install would (both go through `planCodexConfigInstall`).
  */
 export function assertConfigSemanticInvariant(
   currentContent: string,
   nextContent: string,
   configPath: string,
-  ownedHookEntries: Map<string, Set<number>>,
 ): void {
   let currentDoc: unknown;
   try {
     currentDoc = parseToml(currentContent);
   } catch (err) {
     throw new CodexInstallRefusalError(
-      `Codex config ${configPath} does not parse as TOML (${(err as Error).message}); ` +
-        "refusing to install rather than guess whether every foreign table would be " +
-        "preserved. Fix the file's existing TOML syntax (or restore it from a " +
-        ".harness-backup-* file), then re-run `harness apply --runtime codex --install`.",
+      `Codex config ${configPath}: the TOML parser used by harness could not read this file ` +
+        `(${describeTomlParseError(err)}); refusing to install, because without parsing it ` +
+        "harness cannot confirm that every table outside the harness-managed hook block " +
+        "would survive the install. The file is untouched. If Codex itself loads this file, " +
+        "the construct at that position is one this parser does not support; please report " +
+        "it as a harness issue (the construct, not its value).",
       configPath,
     );
   }
@@ -796,10 +853,16 @@ export function assertConfigSemanticInvariant(
     nextDoc = parseToml(nextContent);
   } catch (err) {
     throw new CodexInstallRefusalError(
-      `The Codex config harness would write to ${configPath} does not parse as TOML ` +
-        `(${(err as Error).message}); refusing to write a config that would not load. This ` +
-        "points at a bug in the generated hook block or the install itself, not at the " +
-        "existing file.",
+      `The Codex config harness would write to ${configPath} would not parse as TOML ` +
+        `(in the would-be output, ${describeTomlParseError(err)}); refusing to write a config ` +
+        "that would not load. The file is untouched. A common cause is the current file " +
+        "already defining `hooks`, or a hook event under it, in a form the generated " +
+        "`[[hooks.<Event>]]` tables cannot extend: an inline table such as `hooks = { ... }`, " +
+        "or an inline array such as `PreToolUse = []` under `[hooks]`. Rewrite that " +
+        "definition as `[hooks.<name>]` / `[[hooks.<Event>]]` tables (or remove it), then " +
+        "re-run `harness apply --runtime codex --install`. If the file has no such " +
+        "definition, this points at a harness defect (in the generated hook block, or in " +
+        "where the install placed it); please report it with the config's shape, not its values.",
       configPath,
     );
   }
@@ -813,55 +876,11 @@ export function assertConfigSemanticInvariant(
     throw new CodexInstallRefusalError(
       `Codex config ${configPath}: installing would change '${diffPath.join(".")}', which is ` +
         "not a harness-managed hook event array; refusing to install rather than risk " +
-        "silently dropping or altering operator- or Codex-owned content. Restore " +
-        `${configPath} from the most recent .harness-backup-* file if it looks wrong, or file ` +
-        "an issue with the config shape that triggered this.",
+        "silently dropping or altering operator- or Codex-owned content. The file is " +
+        `untouched. Restore ${configPath} from the most recent .harness-backup-* file if it ` +
+        "looks wrong, or file an issue with the config shape that triggered this.",
       configPath,
     );
-  }
-
-  const currentHooks =
-    typeof currentDoc === "object" &&
-    currentDoc !== null &&
-    !Array.isArray(currentDoc) &&
-    typeof (currentDoc as Record<string, unknown>).hooks === "object" &&
-    (currentDoc as Record<string, unknown>).hooks !== null &&
-    !Array.isArray((currentDoc as Record<string, unknown>).hooks)
-      ? ((currentDoc as Record<string, unknown>).hooks as Record<string, unknown>)
-      : {};
-  const nextHooks =
-    typeof nextDoc === "object" &&
-    nextDoc !== null &&
-    !Array.isArray(nextDoc) &&
-    typeof (nextDoc as Record<string, unknown>).hooks === "object" &&
-    (nextDoc as Record<string, unknown>).hooks !== null &&
-    !Array.isArray((nextDoc as Record<string, unknown>).hooks)
-      ? ((nextDoc as Record<string, unknown>).hooks as Record<string, unknown>)
-      : {};
-
-  for (const [event, value] of Object.entries(currentHooks)) {
-    if (!Array.isArray(value)) continue;
-    const owned = ownedHookEntries.get(event) ?? new Set<number>();
-    const outsideEntries = value.filter((_, idx) => !owned.has(idx));
-    if (outsideEntries.length === 0) continue;
-    const nextArray = Array.isArray(nextHooks[event]) ? (nextHooks[event] as unknown[]) : [];
-    let cursor = 0;
-    for (const entry of outsideEntries) {
-      while (cursor < nextArray.length && firstDifferingKeyPath(entry, nextArray[cursor], []) !== null) {
-        cursor += 1;
-      }
-      if (cursor >= nextArray.length) {
-        throw new CodexInstallRefusalError(
-          `Codex config ${configPath}: an operator-authored [[hooks.${event}]] table (outside ` +
-            "the harness-managed block) would not survive this install unchanged; refusing to " +
-            `install rather than drop it. Restore ${configPath} from the most recent ` +
-            ".harness-backup-* file if it looks wrong, or file an issue with the config shape " +
-            "that triggered this.",
-          configPath,
-        );
-      }
-      cursor += 1;
-    }
   }
 }
 
@@ -914,11 +933,7 @@ export function planCodexConfigInstall(
   }
 
   if (currentContent !== nextContent) {
-    const ownedHookEntries = computeOwnedHookEntryIndexes(
-      currentContent,
-      range ? { start: range.start, end: range.end } : null,
-    );
-    assertConfigSemanticInvariant(currentContent, nextContent, configPath, ownedHookEntries);
+    assertConfigSemanticInvariant(currentContent, nextContent, configPath);
   }
 
   return {
