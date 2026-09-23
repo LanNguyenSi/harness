@@ -2,6 +2,34 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-09-23T16:45:00.000Z, task 6a037359 (implementer): corrected a
+  citation-shift error in this log's own narrative text, found by
+  adversarial review. Two earlier entries below (the `30183330` round-3
+  notes and the `eeb8029` re-point entry) stated `src/cli/index.ts` had
+  grown "a net 24 lines" above the cited ranges once task 6a037359's
+  earlier commits landed; the true shift was 36 lines (12 at that task's
+  first fix commit, 24 more at its review-fix commit), so the five
+  citations those entries re-pointed to (`:1710-1725`, `:2981-2985`,
+  `:3354-3453`, `:3356-3361`, `:3313-3412`) landed one hunk short of the
+  quoted text. Corrected to `:1722-1737`, `:2993-2997`, `:3366-3465`,
+  `:3368-3373`, `:3325-3424` (each checked byte-identical against the base
+  commit `e8a5f085` content at the +36 offset) and the "net 24 lines" prose
+  to "net 36 lines". The doc bundle's own live citations
+  (`pause-vs-gate-kill-switch.md`, `understanding-gate-lockout-recovery.md`)
+  already carried the correct +36-shifted numbers; only this log's
+  narrative text lagged. Re-stamped `codex-adapter-parity-gaps.md`,
+  `evidence-ledger-trust-boundary.md`, `gate-fail-posture-matrix.md` and
+  `understanding-gate-auto-mode-signals.md` (each lists a file this task's
+  own commits touched -- `src/cli/apply/install-codex-config.ts` or
+  `docs/policy-packs/understanding-before-execution.md` -- under
+  `sources:`); re-verified each against the changed source and found no
+  content drift (neither touched file is cited by line number or quoted
+  text in any of the four, only listed as a source and, for the
+  understanding-before-execution.md case, referenced by section name).
+  `okf-kit@0.14.0 check --json docs/okf --require-anchors`, from a scratch
+  npm prefix, reports 0 findings against the committed worktree, matching
+  base `e8a5f085`.
+
 - 2026-09-23T11:36:04.980Z, task T-008 (implementer): re-verified the nine
   affected source-linked documents against the merged active-claim/Codex
   changes and the static validate version-floor correction. Updated the
@@ -967,8 +995,8 @@
   `quote-model-divergence.md` and `understanding-gate-lockout-recovery.md`
   `sources-fresh` STALE against these files. Checked every line-numbered
   citation these seven docs make into the five touched files
-  (`src/cli/index.ts:1710-1725`, `:2981-2985`, `:3354-3453`,
-  `:3356-3361`; `src/cli/init/templates.ts:928`): all still match their
+  (`src/cli/index.ts:1722-1737`, `:2993-2997`, `:3366-3465`,
+  `:3368-3373`; `src/cli/init/templates.ts:928`): all still match their
   quoted text verbatim (sibling-line check), since none of this round's
   edits added or removed a line above a cited line in any file a
   line-numbered citation targets. No citation needed re-pointing;
@@ -1101,11 +1129,11 @@
     `src/cli/index.ts` citations in `pause-vs-gate-kill-switch.md`,
     `:2953-2957#"offending hook group out of settings.json with a
     reversible snapshot."` -> `:2957-2961`, `:3328-3333#"in the
-    manifest."` -> `:3356-3361` (re-pointed again, task `6a037359`:
-    `src/cli/index.ts` grew a net 24 lines above it, a
+    manifest."` -> `:3368-3373` (re-pointed again, task `6a037359`:
+    `src/cli/index.ts` grew a net 36 lines above it, a
     `CodexInstallRefusalError` import plus a try/catch wrapping the
     codex-install `apply()` call), and the bare `:3285-3384` ->
-    `:3313-3412` (same shift).
+    `:3325-3424` (same shift).
     Sibling-line check at both bounds of each range: the content at the
     old start/end lines is byte-identical to the content at the new
     start/end lines (verified by diffing `git show HEAD~1:src/cli/index.ts`
