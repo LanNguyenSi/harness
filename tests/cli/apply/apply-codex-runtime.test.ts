@@ -1949,6 +1949,53 @@ describe("apply --runtime codex --install: the safety net compares everything ou
     ).not.toThrow();
   });
 
+  it("compares arrays outside the hook event arrays by length and element, including arrays of tables", () => {
+    const cfg = (statusLine: string, profileName: string): string =>
+      [
+        "[tui]",
+        `status_line = ${statusLine}`,
+        "",
+        "[[profiles]]",
+        `name = "${profileName}"`,
+        "",
+      ].join("\n");
+
+    expect(() =>
+      assertConfigSemanticInvariant(
+        cfg('["model", "cwd"]', "a"),
+        cfg('["model", "cwd"]', "a"),
+        NET_CONFIG_PATH,
+      ),
+    ).not.toThrow();
+    expect(
+      refusalOf(() =>
+        assertConfigSemanticInvariant(
+          cfg('["model", "cwd"]', "a"),
+          cfg('["model"]', "a"),
+          NET_CONFIG_PATH,
+        ),
+      ).message,
+    ).toContain("installing would change 'tui.status_line'");
+    expect(
+      refusalOf(() =>
+        assertConfigSemanticInvariant(
+          cfg('["model", "cwd"]', "a"),
+          cfg('["model", "git"]', "a"),
+          NET_CONFIG_PATH,
+        ),
+      ).message,
+    ).toContain("installing would change 'tui.status_line.1'");
+    expect(
+      refusalOf(() =>
+        assertConfigSemanticInvariant(
+          cfg('["model", "cwd"]', "a"),
+          cfg('["model", "cwd"]', "b"),
+          NET_CONFIG_PATH,
+        ),
+      ).message,
+    ).toContain("installing would change 'profiles.0.name'");
+  });
+
   it("compares 64-bit integers beyond 2^53 by their exact value", () => {
     const cfg = (value: string): string => `[history]\nmax_bytes = ${value}\n`;
 
