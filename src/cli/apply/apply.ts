@@ -192,10 +192,10 @@ export interface CodexConfigInstallOutcome {
   summary: string;
   backupPath?: string;
   /** Hook ids present in the old managed block but absent from the new
-   * one (task 6a037359, AC-004). */
+   * one (task 6a037359). */
   removedHookIds: string[];
   /** Foreign table headers preserved from a stray-END drift cleanup
-   * (task 6a037359, AC-004). */
+   * (task 6a037359). */
   foreignSectionsPreserved: string[];
 }
 

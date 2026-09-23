@@ -30,7 +30,7 @@ export interface CodexConfigInstallPlan {
    * Hook ids (the `# harness hook: <id>` comment text) that were present
    * in the old managed block and are absent from the new one. Reported so
    * an operator whose manifest still declares a pack does not silently
-   * lose a hook (task 6a037359, AC-004).
+   * lose a hook (task 6a037359).
    */
   removedHookIds: string[];
   /**
