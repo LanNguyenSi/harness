@@ -67,6 +67,16 @@ export interface CodexConfigInstallPlan {
   currentContent: string;
   nextContent: string;
   changed: boolean;
+  /**
+   * True when `configPath` already held a file before this install (even
+   * an empty one), false when the path did not exist. Distinguishes "no
+   * prior file" from "an existing, possibly empty, prior file" so
+   * `writeCodexConfigInstall` only backs up a file that actually existed
+   * (task 461ec064): writing a 0-byte backup for a config that never
+   * existed had nothing to protect and misreported a write that never
+   * happened.
+   */
+  configExisted: boolean;
   summary: string;
   /**
    * Hook ids (the `# harness hook: <id>` comment text) that were present
@@ -904,11 +914,13 @@ export function planCodexConfigInstall(
 
   const configPath = opts.configPath ?? defaultCodexConfigPath(opts.homeDir);
   let currentContent = "";
+  let configExisted = true;
   try {
     currentContent = fs.readFileSync(configPath, "utf8");
   } catch (err) {
     const e = err as NodeJS.ErrnoException;
     if (e.code !== "ENOENT") throw err;
+    configExisted = false;
   }
 
   const managedBlock = buildManagedBlock(
@@ -955,6 +967,7 @@ export function planCodexConfigInstall(
     currentContent,
     nextContent,
     changed: currentContent !== nextContent,
+    configExisted,
     summary:
       currentContent === nextContent
         ? `Codex config already up to date: ${configPath}`
@@ -989,9 +1002,16 @@ export function writeCodexConfigInstall(
   opts: { now?: Date } = {},
 ): CodexConfigInstallResult {
   if (!plan.changed) return { ...plan, written: false };
-  const backupPath = `${plan.configPath}.harness-backup-${timestampForBackup(opts.now ?? new Date())}`;
   fs.mkdirSync(path.dirname(plan.configPath), { recursive: true });
   const mode = existingFileMode(plan.configPath);
+  // Only back up a config that actually existed before this install (task
+  // 461ec064): a fresh install has nothing to protect, and writing a
+  // 0-byte backup for it misreported a write that never happened.
+  if (!plan.configExisted) {
+    atomicWriteFile(plan.configPath, plan.nextContent, { mode });
+    return { ...plan, written: true };
+  }
+  const backupPath = `${plan.configPath}.harness-backup-${timestampForBackup(opts.now ?? new Date())}`;
   atomicWriteFile(backupPath, plan.currentContent, { mode });
   atomicWriteFile(plan.configPath, plan.nextContent, { mode });
   return { ...plan, backupPath, written: true };
