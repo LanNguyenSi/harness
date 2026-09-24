@@ -137,7 +137,9 @@ export function taskFinishResultingStatus(toolResponse: unknown): string | null 
  * Read the acted-on task id off a task_finish (or any agent-tasks) tool
  * RESULT, unwrapping the same shapes as `taskFinishResultingStatus`.
  * Used as a fallback when the tool_input did not carry a `taskId` (task
- * c86e3c4a, id-equality guard on release verbs).
+ * c86e3c4a, id-equality guard on release verbs), and by the stay-in-scope
+ * hook to read the created task id off a create verb's result, which never
+ * carries a `taskId` input (task b5e65f5e).
  */
 export function taskIdFromToolResponse(toolResponse: unknown): string {
   const task = unwrapToolResponseEnvelope(toolResponse)?.["task"];
