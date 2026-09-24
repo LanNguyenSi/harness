@@ -67,6 +67,16 @@ export interface CodexConfigInstallPlan {
   currentContent: string;
   nextContent: string;
   changed: boolean;
+  /**
+   * True when `configPath` already held a file before this install (even
+   * an empty one), false when the path did not exist. Distinguishes "no
+   * prior file" from "an existing, possibly empty, prior file" so
+   * `writeCodexConfigInstall` only backs up a file that actually existed
+   * (task 461ec064): writing a 0-byte backup for a config that never
+   * existed had nothing to protect and misreported a write that never
+   * happened.
+   */
+  configExisted: boolean;
   summary: string;
   /**
    * Hook ids (the `# harness hook: <id>` comment text) that were present
@@ -418,7 +428,7 @@ function assertNoSplitBlock(
       `more harness-owned content: line ${offendingLineNumber} contains '${marker}' and still ` +
       "looks like part of the harness-managed hook block; refusing to guess the block " +
       `boundaries. ${guidance}, then re-run \`harness apply --runtime codex --install\`. As a ` +
-      `last resort, restore ${configPath} from the most recent .harness-backup-* file, but ` +
+      `last resort, restore ${configPath} from the most recent .harness-backup-* file (if one exists), but ` +
       "that discards any Codex state (hook trust entries, marketplaces, plugins) written to " +
       "the file since that backup.",
     configPath,
@@ -561,7 +571,7 @@ function findManagedRange(text: string, configPath: string): ManagedRange | null
           `its own '${CODEX_MANAGED_BEGIN}' and '${CODEX_MANAGED_END}' marker lines (and its ` +
           `'${CODEX_MANAGED_SOURCE_PREFIX}' source-prefix comment line, if it has one) -- ` +
           "keeping exactly one pair, then re-run `harness apply --runtime codex --install`. As " +
-          `a last resort, restore ${configPath} from the most recent .harness-backup-* file, ` +
+          `a last resort, restore ${configPath} from the most recent .harness-backup-* file (if one exists), ` +
           "but that discards any Codex state (hook trust entries, marketplaces, plugins) " +
           "written to the file since that backup.",
         configPath,
@@ -890,8 +900,8 @@ export function assertConfigSemanticInvariant(
       `Codex config ${configPath}: installing would change '${diffPath.join(".")}', which is ` +
         "not a harness-managed hook event array; refusing to install rather than risk " +
         "silently dropping or altering operator- or Codex-owned content. The file is " +
-        `untouched. Restore ${configPath} from the most recent .harness-backup-* file if it ` +
-        "looks wrong, or file an issue with the config shape that triggered this.",
+        `untouched. If it looks wrong, restore it from the most recent .harness-backup-* file ` +
+        "(if one exists), or file an issue with the config shape that triggered this.",
       configPath,
     );
   }
@@ -904,11 +914,13 @@ export function planCodexConfigInstall(
 
   const configPath = opts.configPath ?? defaultCodexConfigPath(opts.homeDir);
   let currentContent = "";
+  let configExisted = true;
   try {
     currentContent = fs.readFileSync(configPath, "utf8");
   } catch (err) {
     const e = err as NodeJS.ErrnoException;
     if (e.code !== "ENOENT") throw err;
+    configExisted = false;
   }
 
   const managedBlock = buildManagedBlock(
@@ -955,6 +967,7 @@ export function planCodexConfigInstall(
     currentContent,
     nextContent,
     changed: currentContent !== nextContent,
+    configExisted,
     summary:
       currentContent === nextContent
         ? `Codex config already up to date: ${configPath}`
@@ -989,9 +1002,16 @@ export function writeCodexConfigInstall(
   opts: { now?: Date } = {},
 ): CodexConfigInstallResult {
   if (!plan.changed) return { ...plan, written: false };
-  const backupPath = `${plan.configPath}.harness-backup-${timestampForBackup(opts.now ?? new Date())}`;
   fs.mkdirSync(path.dirname(plan.configPath), { recursive: true });
   const mode = existingFileMode(plan.configPath);
+  // Only back up a config that actually existed before this install (task
+  // 461ec064): a fresh install has nothing to protect, and writing a
+  // 0-byte backup for it misreported a write that never happened.
+  if (!plan.configExisted) {
+    atomicWriteFile(plan.configPath, plan.nextContent, { mode });
+    return { ...plan, written: true };
+  }
+  const backupPath = `${plan.configPath}.harness-backup-${timestampForBackup(opts.now ?? new Date())}`;
   atomicWriteFile(backupPath, plan.currentContent, { mode });
   atomicWriteFile(plan.configPath, plan.nextContent, { mode });
   return { ...plan, backupPath, written: true };

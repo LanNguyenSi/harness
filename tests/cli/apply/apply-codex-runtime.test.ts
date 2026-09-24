@@ -318,6 +318,53 @@ describe("apply --runtime codex", () => {
     expect(installed).not.toContain("blocking =");
   });
 
+  it("backs up an existing but empty ~/.codex/config.toml (existence, not content, decides the backup)", async () => {
+    writeManifestWithPack();
+    const codexConfig = path.join(tmpHome, ".codex", "config.toml");
+    fs.mkdirSync(path.dirname(codexConfig), { recursive: true });
+    fs.writeFileSync(codexConfig, "");
+
+    const result = await apply({
+      homeDir: tmpHome,
+      runtime: "codex",
+      installCodex: true,
+      now: new Date("2026-05-19T05:00:00.000Z"),
+    });
+
+    expect(result.outcome).toBe("applied");
+    expect(result.codexConfigInstall?.written).toBe(true);
+    const expectedBackup = `${codexConfig}.harness-backup-2026-05-19T05-00-00-000Z`;
+    expect(result.codexConfigInstall?.backupPath).toBe(expectedBackup);
+    const backups = fs
+      .readdirSync(path.dirname(codexConfig))
+      .filter((name) => name.includes(".harness-backup-"));
+    expect(backups).toHaveLength(1);
+    expect(fs.statSync(expectedBackup).size).toBe(0);
+  });
+
+  it("installs into a fresh ~/.codex/config.toml (no prior file) and makes no backup (task 461ec064)", async () => {
+    writeManifestWithPack();
+    const codexConfig = path.join(tmpHome, ".codex", "config.toml");
+    expect(fs.existsSync(codexConfig)).toBe(false);
+
+    const result = await apply({
+      homeDir: tmpHome,
+      runtime: "codex",
+      installCodex: true,
+      now: new Date("2026-05-19T05:00:00.000Z"),
+    });
+
+    expect(result.outcome).toBe("applied");
+    expect(result.codexConfigInstall?.written).toBe(true);
+    expect(result.codexConfigInstall?.backupPath).toBeUndefined();
+    const siblings = fs.readdirSync(path.dirname(codexConfig));
+    expect(siblings.filter((name) => name.includes(".harness-backup-"))).toHaveLength(0);
+
+    const installed = fs.readFileSync(codexConfig, "utf8");
+    expect(installed).toContain(CODEX_MANAGED_BEGIN);
+    expect(installed).toContain(CODEX_MANAGED_END);
+  });
+
   it("updates a legacy pasted harness block while preserving operator-owned config around it", async () => {
     writeManifestWithPack();
     const codexConfig = path.join(tmpHome, ".codex", "config.toml");
@@ -409,10 +456,11 @@ describe("apply --runtime codex", () => {
     expect(second.outcome).toBe("no-changes");
     expect(second.codexConfigInstall?.changed).toBe(false);
     expect(second.codexConfigInstall?.written).toBe(false);
+    // The first install had no prior config to back up (task 461ec064).
     const backups = fs
       .readdirSync(path.join(tmpHome, ".codex"))
       .filter((name) => name.includes(".harness-backup-"));
-    expect(backups).toHaveLength(1);
+    expect(backups).toHaveLength(0);
   });
 
   it("rejects --install without --runtime codex", async () => {
@@ -681,6 +729,8 @@ describe("apply --runtime codex --install refuses when the harness block looks s
     // The backup restore is offered only as a last resort, with a warning
     // that it drops later Codex state.
     expect(err.message).toContain("As a last resort");
+    // A config harness created fresh has no backup, so the advice is conditional.
+    expect(err.message).toContain(".harness-backup-* file (if one exists)");
     expect(err.message).toContain(
       "discards any Codex state (hook trust entries, marketplaces, plugins)",
     );
@@ -918,6 +968,7 @@ describe("apply --runtime codex --install refuses when the harness block looks s
     expect(err.configPath).toBe(codexConfig);
     expect(err.message).toContain(codexConfig);
     expect(err.message).toContain("more than one");
+    expect(err.message).toContain(".harness-backup-* file (if one exists)");
     expect(err.message).not.toContain("~/.codex");
 
     // Refuses before writing anything.
@@ -1118,7 +1169,7 @@ describe("apply --runtime codex --install: preserves the config's own file mode 
     expect(fs.statSync(backupPath).mode & 0o777).toBe(0o600);
   });
 
-  it("creates a fresh config and its backup at 0600 (not atomicWriteFile's 0644 default) when no config existed before", async () => {
+  it("creates a fresh config at 0600 (not atomicWriteFile's 0644 default) when no config existed before, and makes no backup", async () => {
     writeManifestWithPack();
     const codexConfig = path.join(tmpHome, ".codex", "config.toml");
 
@@ -1131,8 +1182,8 @@ describe("apply --runtime codex --install: preserves the config's own file mode 
 
     expect(result.codexConfigInstall?.written).toBe(true);
     expect(fs.statSync(codexConfig).mode & 0o777).toBe(0o600);
-    const backupPath = result.codexConfigInstall!.backupPath!;
-    expect(fs.statSync(backupPath).mode & 0o777).toBe(0o600);
+    // No prior config existed, so nothing to back up (task 461ec064).
+    expect(result.codexConfigInstall?.backupPath).toBeUndefined();
   });
 
   it("keeps a 0640 config and its backup at 0640 after install (not just the already-0600 case, which a mutant returning a hard-coded 0o600 cannot be told apart from)", async () => {
@@ -1720,6 +1771,9 @@ describe("apply --runtime codex --install: the TOML-semantic safety net (task `6
     expect((caught as CodexInstallRefusalError).message).toContain("projects");
     expect((caught as CodexInstallRefusalError).message).toContain(
       "not a harness-managed hook event array",
+    );
+    expect((caught as CodexInstallRefusalError).message).toContain(
+      ".harness-backup-* file (if one exists)",
     );
   });
 
@@ -2445,10 +2499,12 @@ describe("apply --runtime codex --install: foreign-section namespaces split keys
 // with an explicit --codex-config under a tmp dir (never the operator's
 // real ~/.codex).
 describe("apply --runtime codex --install: CLI next-steps hint reflects the install outcome (task dd7a3f23)", () => {
-  it("a successful install prints the exact write lede naming the config path, not the old 'nothing installed' text", async () => {
+  it("a successful install over an existing config prints the exact write lede naming the config path and a backup line, not the old 'nothing installed' text", async () => {
     writeManifestWithPack();
     const configPath = path.join(tmpHome, "harness.yaml");
     const codexConfig = path.join(tmpHome, ".codex", "config.toml");
+    fs.mkdirSync(path.dirname(codexConfig), { recursive: true });
+    fs.writeFileSync(codexConfig, 'model = "gpt-5.5"\n');
     let out = "";
     const program = buildProgram({
       stdout: (s: string) => {
@@ -2478,6 +2534,43 @@ describe("apply --runtime codex --install: CLI next-steps hint reflects the inst
         `\\n\\nInstalled the harness-managed hook block into ${esc(codexConfig)}\\.\\n  backup: ${esc(codexConfig)}\\.harness-backup-[^\\n]+\\n`,
       ),
     );
+    expect(out).not.toContain("Nothing is installed into Codex yet");
+  });
+
+  it("a successful install with no prior config prints the write lede with no backup line (task 461ec064)", async () => {
+    writeManifestWithPack();
+    const configPath = path.join(tmpHome, "harness.yaml");
+    const codexConfig = path.join(tmpHome, ".codex", "config.toml");
+    expect(fs.existsSync(codexConfig)).toBe(false);
+    let out = "";
+    const program = buildProgram({
+      stdout: (s: string) => {
+        out += s;
+      },
+      stderr: () => {},
+    });
+    await program.parseAsync(
+      [
+        "apply",
+        "--config",
+        configPath,
+        "--runtime",
+        "codex",
+        "--install",
+        "--codex-config",
+        codexConfig,
+      ],
+      { from: "user" },
+    );
+
+    // The whole next-steps block, pinned as one unit: the lede with the
+    // config path, no backup line, since no prior file existed to back up.
+    const esc = (v: string) => v.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    expect(out).toMatch(
+      new RegExp(`\\n\\nInstalled the harness-managed hook block into ${esc(codexConfig)}\\.\\n`),
+    );
+    expect(out).not.toContain("  backup: ");
+    expect(out).not.toContain("backup written to");
     expect(out).not.toContain("Nothing is installed into Codex yet");
   });
 
