@@ -916,9 +916,9 @@ export function checkTemplatePolicyDrift(manifest: Manifest): Diagnostic[] {
 //
 // Exit-code choice: ERROR, not warn, same rationale as
 // checkTemplatePolicyDrift: a missing boundary alternative is a real,
-// measured gate bypass, not cosmetic drift. See CHANGELOG.md's
-// [Unreleased] entry for task 037cfb7c for the measured incident and
-// reproduction. Severity is pinned directly (not just via message
+// measured gate bypass, not cosmetic drift. See the `CHANGELOG.md:#0.49.0`
+// entry for task 037cfb7c for the measured incident and reproduction.
+// Severity is pinned directly (not just via message
 // content) by tests/cli/doctor-trigger-boundary-drift.test.ts.
 //
 // Deliberate opt-out: a name listed under `doctor.ignore_template_drift`
