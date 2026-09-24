@@ -2,6 +2,10 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-09-24T06:05:53.000Z, task 461ec064 (orchestrator): re-stamped
+  `codex-adapter-parity-gaps.md` after the refusal messages in
+  `install-codex-config.ts` were qualified (restore from a backup only if
+  one exists); the doc makes no claim about those messages.
 - 2026-09-24T06:03:15.000Z, task 58c65bc9 (orchestrator): re-stamped
   `gate-fail-posture-matrix.md` after a wording fix in the new converge
   step 2 subsection of `docs/policy-packs/solution-acceptance.md`; the
