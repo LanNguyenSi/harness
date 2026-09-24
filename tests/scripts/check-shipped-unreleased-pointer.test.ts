@@ -122,10 +122,10 @@ describe("resolveScannedFiles", () => {
   });
 });
 
-// CLI-level coverage of run(): calls it in-process against a temp fixture
-// tree (mirrors tests/scripts/check-no-only.test.ts's main() coverage) and
-// inspects the returned exit code + console output instead of shelling out
-// to `node scripts/check-shipped-unreleased-pointer.mjs` a second time.
+// run() is covered in-process against a temp fixture tree (mirrors
+// tests/scripts/check-no-only.test.ts's main() coverage), inspecting the
+// returned exit code and console output; the CLI entry itself is covered
+// by the main() and spawn blocks below.
 describe("run", () => {
   let dir: string;
   let logSpy: ReturnType<typeof vi.spyOn>;
@@ -245,9 +245,10 @@ describe("main", () => {
 // seeded pointer.
 describe("CLI spawn smoke test", () => {
   it("on the real repo tree: exits 0 and prints the OK line on stdout", () => {
-    const stdout = execFileSync("node", [SCRIPT_PATH], {
+    const stdout = execFileSync(process.execPath, [SCRIPT_PATH], {
       cwd: REPO_ROOT,
       encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
     });
 
     expect(stdout).toContain("check-shipped-unreleased-pointer: OK - scanned");
@@ -265,7 +266,11 @@ describe("CLI spawn smoke test", () => {
 
       let threw: { status: number | null; stdout: string; stderr: string } | undefined;
       try {
-        execFileSync("node", [SCRIPT_PATH, dir], { cwd: REPO_ROOT, encoding: "utf8" });
+        execFileSync(process.execPath, [SCRIPT_PATH, dir], {
+          cwd: REPO_ROOT,
+          encoding: "utf8",
+          stdio: ["ignore", "pipe", "pipe"],
+        });
       } catch (err) {
         const e = err as { status: number | null; stdout: string; stderr: string };
         threw = { status: e.status, stdout: e.stdout, stderr: e.stderr };
