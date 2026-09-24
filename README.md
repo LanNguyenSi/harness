@@ -224,7 +224,7 @@ the `&`-as-command-boundary trigger fix in `v0.43.0`, per-policy
 cross-repository attribution for `${REPO}`/`${BRANCH}` preflight
 facts in `v0.44.0`, and `apply --runtime codex|opencode` next-steps
 hints in `v0.46.0`.
-The current release is `v0.58.1`.
+The current release is `v0.58.2`.
 
 The phase-by-phase plan with acceptance criteria lives in
 [`docs/ROADMAP.md`](docs/ROADMAP.md); what shipped in each version is
