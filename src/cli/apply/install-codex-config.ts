@@ -347,10 +347,14 @@ function scanOwnedContentEnd(
  * can no longer be determined by a line scan; guessing risks reordering
  * or dropping harness- or foreign-owned bytes, so this throws instead. The
  * message names the resolved config path (never a hard-coded `~/.codex`),
- * the first foreign table header the scan found (`from` always sits at
- * one, see `scanOwnedContentEnd`; printed through `describeTableHeader`,
- * so only the header's own bracketed key path appears, never a trailing
- * comment), and the line number and marker of the first line beyond it
+ * the foreign table header the scan found (usually `from` itself, see
+ * `scanOwnedContentEnd`; when only blank or comment lines precede the found
+ * marker in the zone -- so the pre-marker lookup finds no content line to
+ * report -- the header is looked up again just past that marker's own
+ * line, since the wedged table then sits after it, not before; printed
+ * through `describeTableHeader`, so only the header's own bracketed key
+ * path appears, never a trailing comment), and
+ * the line number and marker of the first line beyond it
  * that still looks like harness content. That line's own text is never
  * echoed: the marker is found by a substring search, so the line may be
  * foreign content (a value holding an API token, say) that merely contains
@@ -389,7 +393,16 @@ function assertNoSplitBlock(
   if (markerOffset === -1) return;
 
   const offendingLineNumber = lineNumberAt(text, lineStartAt(text, zoneStart + markerOffset));
-  const foreignHeaderLine = firstContentLine(text, zoneStart, zoneStart + markerOffset);
+  // Normally the foreign table header is the zone's own first content line,
+  // sitting before the marker (`from` starts at that header per
+  // `scanOwnedContentEnd`). But when only blank or comment lines precede the
+  // marker in the zone -- so that pre-marker lookup finds no content line --
+  // the foreign table that split the block is wedged after the marker's own
+  // line instead, so look there.
+  const markerLineEnd = lineEndAfter(text, zoneStart + markerOffset);
+  const foreignHeaderLine =
+    firstContentLine(text, zoneStart, zoneStart + markerOffset) ??
+    firstContentLine(text, markerLineEnd, zoneEnd);
   const firstForeignHeader =
     foreignHeaderLine === null ? "(unknown)" : describeTableHeader(foreignHeaderLine);
 
