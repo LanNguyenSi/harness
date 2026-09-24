@@ -2,6 +2,19 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-09-24T04:59:46.000Z, task 25a4c53f (implementer): re-stamped
+  `codex-adapter-parity-gaps.md`, the one doc listing
+  `src/cli/apply/install-codex-config.ts` under `sources:`, after a
+  follow-up fix on the same task (a second fixture pinning the
+  tracker's own multi-hook zero-precedent shape, reworded
+  comments/docstring/CHANGELOG, a secret-matrix row for the
+  wedged-after-comment case). No bundle claim cites `assertNoSplitBlock`,
+  `firstContentLine` or any line of this file, so no claim needed
+  re-verification and no citation needed re-pointing; this is a
+  source-list timestamp refresh only. `okf-kit@0.14.0 check --json
+  docs/okf --require-anchors`, from a scratch npm prefix, reports 0
+  findings against the committed worktree.
+
 - 2026-09-23T18:07:00.000Z, task 6a037359 (implementer): re-stamped
   `codex-adapter-parity-gaps.md`, the one doc listing
   `src/cli/apply/install-codex-config.ts` under `sources:`, after the
