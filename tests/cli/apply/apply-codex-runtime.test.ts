@@ -729,6 +729,8 @@ describe("apply --runtime codex --install refuses when the harness block looks s
     // The backup restore is offered only as a last resort, with a warning
     // that it drops later Codex state.
     expect(err.message).toContain("As a last resort");
+    // A config harness created fresh has no backup, so the advice is conditional.
+    expect(err.message).toContain(".harness-backup-* file (if one exists)");
     expect(err.message).toContain(
       "discards any Codex state (hook trust entries, marketplaces, plugins)",
     );
@@ -966,6 +968,7 @@ describe("apply --runtime codex --install refuses when the harness block looks s
     expect(err.configPath).toBe(codexConfig);
     expect(err.message).toContain(codexConfig);
     expect(err.message).toContain("more than one");
+    expect(err.message).toContain(".harness-backup-* file (if one exists)");
     expect(err.message).not.toContain("~/.codex");
 
     // Refuses before writing anything.
@@ -1768,6 +1771,9 @@ describe("apply --runtime codex --install: the TOML-semantic safety net (task `6
     expect((caught as CodexInstallRefusalError).message).toContain("projects");
     expect((caught as CodexInstallRefusalError).message).toContain(
       "not a harness-managed hook event array",
+    );
+    expect((caught as CodexInstallRefusalError).message).toContain(
+      ".harness-backup-* file (if one exists)",
     );
   });
 
