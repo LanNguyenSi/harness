@@ -428,7 +428,7 @@ function assertNoSplitBlock(
       `more harness-owned content: line ${offendingLineNumber} contains '${marker}' and still ` +
       "looks like part of the harness-managed hook block; refusing to guess the block " +
       `boundaries. ${guidance}, then re-run \`harness apply --runtime codex --install\`. As a ` +
-      `last resort, restore ${configPath} from the most recent .harness-backup-* file, but ` +
+      `last resort, restore ${configPath} from the most recent .harness-backup-* file (if one exists), but ` +
       "that discards any Codex state (hook trust entries, marketplaces, plugins) written to " +
       "the file since that backup.",
     configPath,
@@ -571,7 +571,7 @@ function findManagedRange(text: string, configPath: string): ManagedRange | null
           `its own '${CODEX_MANAGED_BEGIN}' and '${CODEX_MANAGED_END}' marker lines (and its ` +
           `'${CODEX_MANAGED_SOURCE_PREFIX}' source-prefix comment line, if it has one) -- ` +
           "keeping exactly one pair, then re-run `harness apply --runtime codex --install`. As " +
-          `a last resort, restore ${configPath} from the most recent .harness-backup-* file, ` +
+          `a last resort, restore ${configPath} from the most recent .harness-backup-* file (if one exists), ` +
           "but that discards any Codex state (hook trust entries, marketplaces, plugins) " +
           "written to the file since that backup.",
         configPath,
@@ -900,8 +900,8 @@ export function assertConfigSemanticInvariant(
       `Codex config ${configPath}: installing would change '${diffPath.join(".")}', which is ` +
         "not a harness-managed hook event array; refusing to install rather than risk " +
         "silently dropping or altering operator- or Codex-owned content. The file is " +
-        `untouched. Restore ${configPath} from the most recent .harness-backup-* file if it ` +
-        "looks wrong, or file an issue with the config shape that triggered this.",
+        `untouched. If it looks wrong, restore it from the most recent .harness-backup-* file ` +
+        "(if one exists), or file an issue with the config shape that triggered this.",
       configPath,
     );
   }

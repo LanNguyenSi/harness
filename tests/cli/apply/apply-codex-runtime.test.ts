@@ -318,6 +318,30 @@ describe("apply --runtime codex", () => {
     expect(installed).not.toContain("blocking =");
   });
 
+  it("backs up an existing but empty ~/.codex/config.toml (existence, not content, decides the backup)", async () => {
+    writeManifestWithPack();
+    const codexConfig = path.join(tmpHome, ".codex", "config.toml");
+    fs.mkdirSync(path.dirname(codexConfig), { recursive: true });
+    fs.writeFileSync(codexConfig, "");
+
+    const result = await apply({
+      homeDir: tmpHome,
+      runtime: "codex",
+      installCodex: true,
+      now: new Date("2026-05-19T05:00:00.000Z"),
+    });
+
+    expect(result.outcome).toBe("applied");
+    expect(result.codexConfigInstall?.written).toBe(true);
+    const expectedBackup = `${codexConfig}.harness-backup-2026-05-19T05-00-00-000Z`;
+    expect(result.codexConfigInstall?.backupPath).toBe(expectedBackup);
+    const backups = fs
+      .readdirSync(path.dirname(codexConfig))
+      .filter((name) => name.includes(".harness-backup-"));
+    expect(backups).toHaveLength(1);
+    expect(fs.statSync(expectedBackup).size).toBe(0);
+  });
+
   it("installs into a fresh ~/.codex/config.toml (no prior file) and makes no backup (task 461ec064)", async () => {
     writeManifestWithPack();
     const codexConfig = path.join(tmpHome, ".codex", "config.toml");
