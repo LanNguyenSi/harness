@@ -5,6 +5,7 @@ import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { collectFiles, findPointerHit, main, resolveScannedFiles, run } from "../../scripts/check-shipped-unreleased-pointer.mjs";
+import { spawnExpectingFailure } from "../_helpers/spawn-script.js";
 
 // The repo root and this script's path, resolved the same way check-no-only's
 // own tests would if it spawned - used only by the spawn smoke tests below.
@@ -264,21 +265,14 @@ describe("CLI spawn smoke test", () => {
       writeFileSync(join(dir, "CHANGELOG.md"), "# Changelog\n\n## [Unreleased]\n");
       writeFileSync(join(dir, "scripts", "runtime-reality-docker-probe.mjs"), "export {};");
 
-      let threw: { status: number | null; stdout: string; stderr: string } | undefined;
-      try {
-        execFileSync(process.execPath, [SCRIPT_PATH, dir], {
-          cwd: REPO_ROOT,
-          encoding: "utf8",
-          stdio: ["ignore", "pipe", "pipe"],
-        });
-      } catch (err) {
-        const e = err as { status: number | null; stdout: string; stderr: string };
-        threw = { status: e.status, stdout: e.stdout, stderr: e.stderr };
-      }
+      const threw = spawnExpectingFailure(process.execPath, [SCRIPT_PATH, dir], {
+        cwd: REPO_ROOT,
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"],
+      });
 
-      expect(threw).toBeDefined();
-      expect(threw?.status).toBe(1);
-      expect(threw?.stderr).toContain("src/bad.ts");
+      expect(threw.status).toBe(1);
+      expect(threw.stderr).toContain("src/bad.ts");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

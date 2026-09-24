@@ -1,7 +1,8 @@
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   CEILING,
@@ -10,6 +11,13 @@ import {
   main,
   measureExtractedSize,
 } from "../../scripts/check-release-notes-size.mjs";
+import { spawnExpectingFailure } from "../_helpers/spawn-script.js";
+
+// The repo root and this script's path, resolved the same way
+// check-shipped-unreleased-pointer.test.ts does: used only by the spawn
+// smoke tests below.
+const REPO_ROOT = resolve(fileURLToPath(import.meta.url), "..", "..", "..");
+const SCRIPT_PATH = join(REPO_ROOT, "scripts", "check-release-notes-size.mjs");
 
 // Pinned, not just "some number below GitHub's limit": a bump to CEILING
 // must be a deliberate CHANGELOG-recorded decision (module header), not a
@@ -291,5 +299,60 @@ describe("main", () => {
     const errorOutput = errorSpy.mock.calls.map((callArgs: unknown[]) => callArgs.join(" ")).join("\n");
     expect(errorOutput).toContain("check-release-notes-size: FAIL");
     expect(errorOutput).toContain("CHANGELOG.md");
+  });
+});
+
+// Spawn smoke tests: actually exec `node scripts/check-release-notes-size.mjs`
+// as a child process, the way CI's step really invokes it. Unlike the
+// in-process `main()` coverage above (which cannot see the top-level
+// `if (isDirectRun) { main(...); }` guard, since importing the module from
+// a test never sets `isDirectRun` true), this is the only way to catch a
+// mutant that breaks that guard (e.g. `if (isDirectRun)` -> `if (false)`),
+// which would make the CLI silently exit 0 with no output even on an
+// over-ceiling section.
+describe("CLI spawn smoke test", () => {
+  let dir: string;
+
+  function writePkg(version: string): void {
+    writeFileSync(join(dir, "package.json"), JSON.stringify({ name: "fixture", version }));
+  }
+
+  function writeChangelog(text: string): void {
+    writeFileSync(join(dir, "CHANGELOG.md"), text);
+  }
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "harness-check-release-notes-size-spawn-"));
+  });
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("on an under-ceiling fixture (spawn argv[2]): exits 0 and prints the OK line on stdout", () => {
+    writePkg("0.1.0");
+    writeChangelog(["## [Unreleased]", "", "## [0.1.0]", "- a small entry", "", "## [0.0.1]", "- older"].join("\n"));
+
+    const stdout = execFileSync(process.execPath, [SCRIPT_PATH, dir], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+
+    expect(stdout).toContain("check-release-notes-size: OK");
+  });
+
+  it("on an over-ceiling fixture (spawn argv[2]): exits nonzero and names the ceiling", () => {
+    writePkg("0.1.0");
+    const oversized = "- ".padEnd(CEILING + 500, "x");
+    writeChangelog(["## [Unreleased]", "", "## [0.1.0]", oversized, "", "## [0.0.1]", "- older"].join("\n"));
+
+    const threw = spawnExpectingFailure(process.execPath, [SCRIPT_PATH, dir], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+
+    expect(threw.status).toBe(1);
+    expect(threw.stderr).toContain(String(CEILING));
+    expect(threw.stderr).toContain("check-release-notes-size: FAIL");
   });
 });
