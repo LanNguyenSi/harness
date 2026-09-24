@@ -2,6 +2,47 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-09-24T05:35:15.000Z, task dd7a3f23 (orchestrator): re-stamped
+  `codex-adapter-parity-gaps.md`, `pause-vs-gate-kill-switch.md` and
+  `policy-engine-producer-wiring.md` after rebasing this change onto
+  sibling harness fixes that had re-stamped the same docs; the re-pointed
+  `src/cli/index.ts` citations in `pause-vs-gate-kill-switch.md` were
+  re-checked against the rebased source. `okf-kit@0.14.0 check
+  docs/okf --require-anchors` reports no findings.
+- 2026-09-24T05:07:50.000Z, task dd7a3f23 (implementer):
+  re-pointed the two `--project` flag citations in `docs/CLI.md`'s
+  PER-REPO SCOPING section (naming `harness preflight` and `harness
+  session-start preflight` in `src/cli/index.ts`), stale after the
+  earlier commit on this branch shifted them, to their current lines;
+  re-verified each still holds the cited `.option("--project <name>", ...)`
+  text. Re-stamped `evidence-ledger-trust-boundary.md`,
+  `codex-adapter-parity-gaps.md`, `debug-verb-selection.md` and
+  `policy-engine-producer-wiring.md`, the four bundle docs listing
+  `docs/CLI.md` under `sources:`: none cites the re-pointed section by
+  line, so no claim needed re-wording, only the staleness clear.
+  `okf-kit@0.14.0 check --json docs/okf --require-anchors` reports 0
+  findings against the committed worktree.
+
+- 2026-09-24T04:50:00.000Z, task dd7a3f23 (implementer): re-stamped
+  `pause-vs-gate-kill-switch.md`, `understanding-gate-lockout-recovery.md`
+  and `debug-verb-selection.md`, the three bundle docs listing
+  `src/cli/index.ts` under `sources:`, after
+  `src/cli/index.ts` grew 15 lines (passing the `--install` result into
+  `formatNextSteps`) and every line-numbered citation past that insertion
+  point shifted by +15. Re-pointed the line-numbered citations in those
+  two docs, and the ones in `docs/decisions/2026-08-27-ug-auto-mode-approval.md`,
+  which the same `tests/decisions-citations-resolve.test.ts` guard also
+  checks and which cites `src/cli/index.ts` and the also-touched
+  `src/cli/apply/next-steps.ts` by line, to their new line numbers;
+  re-verified each cited anchor text still occurs, unchanged, at the new
+  location, so no citation's claim needed re-wording, only its line
+  range. `debug-verb-selection.md` only cites `src/cli/index.ts` by bare
+  (unanchored) command name, none of which the change touched; re-verified
+  those claims unchanged and re-stamped it to clear the resulting
+  `sources-fresh` staleness warning only. `okf-kit@0.14.0 check --json
+  docs/okf --require-anchors` reports 0 findings at base and 0 findings
+  against the committed worktree.
+
 - 2026-09-24T05:16:00.000Z, task ba7958e1 (implementer, follow-up fix):
   re-stamped the same six docs as the entry below after a fix that added
   `(task a7eb1a71)` to the two re-pointed comments in

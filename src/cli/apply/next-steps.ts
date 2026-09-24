@@ -57,10 +57,44 @@ export interface NextStepsContext {
    * the wording `harness apply --help` already uses) when omitted.
    */
   opencodeConfigPath?: string;
+  /**
+   * Result of a `--runtime codex --install` merge, when one was
+   * requested this run. Only read when `runtime === "codex"`. Absent
+   * entirely when --install was not passed, so the fallback text below
+   * ("nothing installed yet") still applies to a plain codex apply.
+   * Present (with `written: false`) on a no-op install too, so the lede
+   * does not keep claiming "nothing is installed" once the config
+   * already carries the harness-managed block.
+   */
+  codexInstall?: {
+    /** Resolved path of the Codex config that was merged into. */
+    configPath: string;
+    /** True when the install actually wrote to `configPath` this run. */
+    written: boolean;
+    /** Present only when `written` is true and a backup was made. */
+    backupPath?: string;
+  };
 }
 
 function formatCodexNextSteps(ctx: NextStepsContext): string {
   const configPath = ctx.codexConfigPath ?? "harness.generated/codex/config.toml";
+  if (ctx.codexInstall) {
+    // --install was requested this run: report what actually happened to
+    // the Codex config instead of the generic "nothing installed yet"
+    // text below, which would be wrong the moment --install succeeds
+    // (task dd7a3f23) and also wrong for a no-op install (config already
+    // current: still nothing to claim was written).
+    const { configPath: installedPath, written, backupPath } = ctx.codexInstall;
+    const lede = written
+      ? `Installed the harness-managed hook block into ${installedPath}.`
+      : `${installedPath} already has the harness-managed hook block. Nothing written.`;
+    const lines = ["", lede];
+    if (written && backupPath) {
+      lines.push(`  backup: ${backupPath}`);
+    }
+    lines.push("");
+    return lines.join("\n");
+  }
   const lede =
     ctx.anyChanged === false
       ? "Codex config is already up to date."

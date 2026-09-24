@@ -89,6 +89,79 @@ describe("formatNextSteps", () => {
     expect(s).not.toContain("--merge");
   });
 
+  it("runtime codex with a successful --install: reports what was installed, where, and the backup path", () => {
+    const s = formatNextSteps({
+      generatedSettingsPath: "/abs/harness.generated/settings.json",
+      codexConfigPath: "/abs/harness.generated/codex/config.toml",
+      runtime: "codex",
+      codexInstall: {
+        configPath: "/home/x/.codex/config.toml",
+        written: true,
+        backupPath: "/home/x/.codex/config.toml.bak-20260101T000000Z",
+      },
+    });
+    expect(s).toContain("Installed");
+    expect(s).toContain("/home/x/.codex/config.toml");
+    expect(s).toContain("/home/x/.codex/config.toml.bak-20260101T000000Z");
+    // Pin the exact write lede line, config path included: a mutant that
+    // drops " into ${installedPath}" from the lede would still pass a bare
+    // toContain("/home/x/.codex/config.toml") check above, because the
+    // backup line ("/home/x/.codex/config.toml.bak-...") also starts with
+    // that same path.
+    expect(s).toContain(
+      "Installed the harness-managed hook block into /home/x/.codex/config.toml.\n",
+    );
+    // The old always-claims-nothing-installed lede must be gone.
+    expect(s).not.toContain("Nothing is installed into Codex yet");
+    // Regression pin: collapsing the install branch back to the plain
+    // "generated, nothing installed yet" text (the bug) must fail this.
+    expect(s).not.toBe(
+      formatNextSteps({
+        generatedSettingsPath: "/abs/harness.generated/settings.json",
+        codexConfigPath: "/abs/harness.generated/codex/config.toml",
+        runtime: "codex",
+      }),
+    );
+  });
+
+  it("runtime codex with a no-op --install (config already current): does not claim a write", () => {
+    const s = formatNextSteps({
+      generatedSettingsPath: "/abs/harness.generated/settings.json",
+      codexConfigPath: "/abs/harness.generated/codex/config.toml",
+      runtime: "codex",
+      codexInstall: {
+        configPath: "/home/x/.codex/config.toml",
+        written: false,
+      },
+    });
+    expect(s).toContain("/home/x/.codex/config.toml");
+    expect(s).toContain("Nothing written");
+    expect(s).not.toContain("Installed");
+    expect(s).not.toContain("Nothing is installed into Codex yet");
+    expect(s).not.toContain("undefined");
+  });
+
+  it("runtime codex without --install keeps the original text unchanged", () => {
+    const s = formatNextSteps({
+      generatedSettingsPath: "/abs/harness.generated/settings.json",
+      codexConfigPath: "/abs/harness.generated/codex/config.toml",
+      runtime: "codex",
+    });
+    expect(s).toBe(
+      [
+        "",
+        "Codex config generated. Nothing is installed into Codex yet.",
+        "  /abs/harness.generated/codex/config.toml",
+        "",
+        "Install the harness-managed hook block into ~/.codex/config.toml:",
+        "  harness apply --runtime codex --install",
+        "",
+        "Override the install path with --codex-config <path>.",
+        "",
+      ].join("\n"),
+    );
+  });
+
   it("runtime opencode: no settings.json / --target recommendation, points at $OPENCODE_CONFIG / mcp-block-copy instead", () => {
     const s = formatNextSteps({
       generatedSettingsPath: "/abs/harness.generated/settings.json",

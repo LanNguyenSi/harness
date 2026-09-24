@@ -1058,6 +1058,21 @@ export function buildProgram(opts: RunOptions = {}): Command {
                 ...((result.targetWritten || result.targetInSync) && result.targetPath
                   ? { targetPath: result.targetPath }
                   : {}),
+                // Pass the --install outcome through whenever one was
+                // requested this run (written or a no-op), so the codex
+                // lede reflects reality instead of always claiming
+                // "nothing is installed yet".
+                ...(result.codexConfigInstall !== undefined
+                  ? {
+                      codexInstall: {
+                        configPath: result.codexConfigInstall.configPath,
+                        written: result.codexConfigInstall.written,
+                        ...(result.codexConfigInstall.backupPath !== undefined
+                          ? { backupPath: result.codexConfigInstall.backupPath }
+                          : {}),
+                      },
+                    }
+                  : {}),
               }),
             );
           }

@@ -2434,3 +2434,95 @@ describe("apply --runtime codex --install: foreign-section namespaces split keys
     ]);
   });
 });
+
+// Task dd7a3f23: the next-steps hint printed after `apply --runtime codex
+// --install` used to always say "Nothing is installed into Codex yet",
+// even right after a successful install, because the CLI wiring that
+// passes the install outcome into `formatNextSteps` was pinned by no test
+// (the pure-function tests in next-steps.test.ts only exercise
+// `formatNextSteps` directly, never the CLI plumbing that feeds it). These
+// tests go through `buildProgram`/`parseAsync`, the real CLI entrypoint,
+// with an explicit --codex-config under a tmp dir (never the operator's
+// real ~/.codex).
+describe("apply --runtime codex --install: CLI next-steps hint reflects the install outcome (task dd7a3f23)", () => {
+  it("a successful install prints the exact write lede naming the config path, not the old 'nothing installed' text", async () => {
+    writeManifestWithPack();
+    const configPath = path.join(tmpHome, "harness.yaml");
+    const codexConfig = path.join(tmpHome, ".codex", "config.toml");
+    let out = "";
+    const program = buildProgram({
+      stdout: (s: string) => {
+        out += s;
+      },
+      stderr: () => {},
+    });
+    await program.parseAsync(
+      [
+        "apply",
+        "--config",
+        configPath,
+        "--runtime",
+        "codex",
+        "--install",
+        "--codex-config",
+        codexConfig,
+      ],
+      { from: "user" },
+    );
+
+    // The whole next-steps block, pinned as one unit: the lede with the
+    // config path and the backup line the CLI wiring passes through.
+    const esc = (v: string) => v.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    expect(out).toMatch(
+      new RegExp(
+        `\\n\\nInstalled the harness-managed hook block into ${esc(codexConfig)}\\.\\n  backup: ${esc(codexConfig)}\\.harness-backup-[^\\n]+\\n`,
+      ),
+    );
+    expect(out).not.toContain("Nothing is installed into Codex yet");
+  });
+
+  it("a no-op install (config already current, generated files changed) reports 'Nothing written', not a false write claim", async () => {
+    writeManifestWithPack();
+    const configPath = path.join(tmpHome, "harness.yaml");
+    const codexConfig = path.join(tmpHome, ".codex", "config.toml");
+    const args = [
+      "apply",
+      "--config",
+      configPath,
+      "--runtime",
+      "codex",
+      "--install",
+      "--codex-config",
+      codexConfig,
+    ];
+
+    // First install: writes the config.
+    await buildProgram({ stdout: () => {}, stderr: () => {} }).parseAsync(args, {
+      from: "user",
+    });
+
+    // Force the generated files to be rewritten on the next apply (so
+    // `outcome` is "applied" and the quiet-gated next-steps block prints),
+    // while leaving the already-installed Codex config untouched, so the
+    // second install is a no-op (config already carries the current
+    // harness-managed block).
+    fs.rmSync(path.join(tmpHome, GENERATED_DIRNAME), {
+      recursive: true,
+      force: true,
+    });
+
+    let out = "";
+    await buildProgram({
+      stdout: (s: string) => {
+        out += s;
+      },
+      stderr: () => {},
+    }).parseAsync(args, { from: "user" });
+
+    expect(out).toContain(
+      `${codexConfig} already has the harness-managed hook block. Nothing written.`,
+    );
+    expect(out).not.toContain("Installed the harness-managed hook block into");
+    expect(out).not.toContain("Nothing is installed into Codex yet");
+  });
+});
