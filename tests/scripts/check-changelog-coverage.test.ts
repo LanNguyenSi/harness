@@ -1,7 +1,8 @@
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   SKIPPED_TYPES,
@@ -13,6 +14,13 @@ import {
   main,
   parseCommits,
 } from "../../scripts/check-changelog-coverage.mjs";
+import { spawnExpectingFailure } from "../_helpers/spawn-script.js";
+
+// The repo root and this script's path, resolved the same way
+// check-shipped-unreleased-pointer.test.ts does: used only by the spawn
+// smoke tests below.
+const REPO_ROOT = resolve(fileURLToPath(import.meta.url), "..", "..", "..");
+const SCRIPT_PATH = join(REPO_ROOT, "scripts", "check-changelog-coverage.mjs");
 
 const US = "\u001f";
 const RS = "\u001e";
@@ -449,5 +457,76 @@ describe("main", () => {
     expect(process.exitCode).toBe(1);
     const errorOutput = errorSpy.mock.calls.map((callArgs: unknown[]) => callArgs.join(" ")).join("\n");
     expect(errorOutput).toContain("no tag reachable");
+  });
+});
+
+// Spawn smoke tests: actually exec `node scripts/check-changelog-coverage.mjs`
+// as a child process, the way CI's step really invokes it. Unlike the
+// in-process `main()` coverage above (which cannot see the top-level
+// `if (isDirectRun) { main(...); }` guard, since importing the module from
+// a test never sets `isDirectRun` true), this is the only way to catch a
+// mutant that breaks that guard (e.g. `if (isDirectRun)` -> `if (false)`),
+// which would make the CLI silently exit 0 with no output even on an
+// uncovered commit. Real fixture git repos (git is on the hermetic-spawn
+// allowlist for exactly this fixture-building purpose), never the live
+// repo's own HEAD.
+describe("CLI spawn smoke test", () => {
+  let dir: string;
+
+  function git(...args: string[]): void {
+    execFileSync("git", ["-C", dir, ...args], { stdio: ["ignore", "pipe", "pipe"] });
+  }
+
+  function initRepoWithTag(changelog: string): void {
+    git("init", "-q", "-b", "master");
+    git("config", "user.email", "t@example.invalid");
+    git("config", "user.name", "t");
+    git("config", "core.hooksPath", "/dev/null");
+    git("config", "commit.gpgsign", "false");
+    git("config", "tag.gpgsign", "false");
+    writeFileSync(join(dir, "CHANGELOG.md"), changelog);
+    git("add", "CHANGELOG.md");
+    git("commit", "-q", "-m", "chore(release): v0.1.0");
+    git("tag", "v0.1.0");
+  }
+
+  function addCommit(subject: string, body = ""): void {
+    writeFileSync(join(dir, "file.txt"), `${subject}\n${body}\n`);
+    git("add", "file.txt");
+    git("commit", "-q", "-m", body ? `${subject}\n\n${body}` : subject);
+  }
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "harness-check-changelog-coverage-spawn-"));
+  });
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("on a fully covered fixture repo (spawn argv[2]): exits 0 and prints the OK line on stdout", () => {
+    initRepoWithTag("## [Unreleased]\n\n### Fixed\n- the thing (task `deadbee1`)\n\n## [0.1.0]\n- base\n");
+    addCommit("fix: the thing (#7)", "task deadbee1");
+
+    const stdout = execFileSync(process.execPath, [SCRIPT_PATH, dir], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+
+    expect(stdout).toContain("check-changelog-coverage: OK");
+  });
+
+  it("on a fixture repo with an uncovered commit (spawn argv[2]): exits nonzero and names the commit", () => {
+    initRepoWithTag("## [Unreleased]\n\n### Fixed\n- unrelated (task `deadbee1`)\n\n## [0.1.0]\n- base\n");
+    addCommit("feat: uncovered thing (#42)", "task cafe0012");
+
+    const threw = spawnExpectingFailure(process.execPath, [SCRIPT_PATH, dir], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+
+    expect(threw.status).toBe(1);
+    expect(threw.stderr).toContain("feat: uncovered thing (#42)");
+    expect(threw.stderr).toContain("check-changelog-coverage: FAIL");
   });
 });

@@ -1,8 +1,17 @@
+import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { collectTestSourceFiles, findOnlyViolations, main } from "../../scripts/check-no-only.mjs";
+import { spawnExpectingFailure } from "../_helpers/spawn-script.js";
+
+// The repo root and this script's path, resolved the same way
+// check-shipped-unreleased-pointer.test.ts does: used only by the spawn
+// smoke tests below.
+const REPO_ROOT = resolve(fileURLToPath(import.meta.url), "..", "..", "..");
+const SCRIPT_PATH = join(REPO_ROOT, "scripts", "check-no-only.mjs");
 
 describe("findOnlyViolations", () => {
   it("flags describe.only(...)", () => {
@@ -203,5 +212,52 @@ describe("main", () => {
     const errorOutput = errorSpy.mock.calls.map((callArgs: unknown[]) => callArgs.join(" ")).join("\n");
     expect(errorOutput).toContain(`${file}:3:4 — committed \`it.only\``);
     expect(errorOutput).toContain("check-no-only: FAIL");
+  });
+});
+
+// Spawn smoke tests: actually exec `node scripts/check-no-only.mjs` as a
+// child process, the way CI's step really invokes it. Unlike the
+// in-process `main()` coverage above (which cannot see the top-level
+// `if (isDirectRun) { main("tests"); }` guard, since importing the module
+// from a test never sets `isDirectRun` true), this is the only way to
+// catch a mutant that breaks that guard (e.g. `if (isDirectRun)` ->
+// `if (false)`), which would make the CLI silently exit 0 with no output
+// even on a seeded `.only`.
+describe("CLI spawn smoke test", () => {
+  let dir: string;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "harness-check-no-only-spawn-"));
+    mkdirSync(join(dir, "tests"), { recursive: true });
+  });
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("on a clean tests/ dir (spawn cwd): exits 0 and prints the OK line on stdout", () => {
+    writeFileSync(join(dir, "tests", "clean.test.ts"), 'import { it } from "vitest";\nit("case", () => {});\n');
+
+    const stdout = execFileSync(process.execPath, [SCRIPT_PATH], {
+      cwd: dir,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+
+    expect(stdout).toContain("check-no-only: OK");
+  });
+
+  it("on a tests/ dir with a committed .only (spawn cwd): exits nonzero and names the file", () => {
+    writeFileSync(join(dir, "tests", "bad.test.ts"), 'import { it } from "vitest";\n\nit.only("case", () => {});\n');
+
+    const threw = spawnExpectingFailure(process.execPath, [SCRIPT_PATH], {
+      cwd: dir,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+
+    expect(threw.status).toBe(1);
+    expect(threw.stderr).toContain("committed `it.only`");
+    expect(threw.stderr).toContain("check-no-only: FAIL");
   });
 });
