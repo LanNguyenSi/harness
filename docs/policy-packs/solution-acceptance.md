@@ -407,8 +407,8 @@ directly (live, not-live, stale-as-not-live, and unknown via ELOOP).
 ### The converge list's next action, per reading (harness/58c65bc9)
 
 The deny text's converge list (`blockJson` in
-`src/cli/pack/hook-solution-acceptance.ts`) always names step 2 as calling
-`solution_evaluate`. For readings (1) (never evaluated) and (3) (a marker
+`src/cli/pack/hook-solution-acceptance.ts`) used to name step 2 as calling
+`solution_evaluate` for every reading. For readings (1) (never evaluated) and (3) (a marker
 path exists but what is there was not accepted as a verdict) that is the
 right next action: a call there genuinely starts the evaluation. For
 reading (2) (an attempt is live) it is the wrong one: a call for an id
@@ -425,7 +425,8 @@ call.
 `convergeStep2For` now renders step 2 as a function of the reading:
 readings (1) and (3), and every non-null-verdict deny (drift, not-ready,
 manifest-load-failure, ...), keep the original line naming
-`solution_evaluate` unqualified. Reading (2) instead gets its own line
+`solution_evaluate` unqualified (its wording is unchanged apart from a
+colon in place of a dash). Reading (2) instead gets its own line
 naming `solution_evaluate_status` / `solution_evaluate_result` (the same
 poll tools `RECONNECT_STATUS_TOOL` / `RECONNECT_RESULT_TOOL` the reconnect
 paragraph itself names) and pointing at the reconnect paragraph below it,
@@ -436,7 +437,8 @@ this: the shared reconnect wording still owns the paragraph, only the
 converge list's step 2 line changed, and only for reading (2). Pinned in
 `tests/cli/pack-hook-solution-acceptance.test.ts`: a dedicated test
 asserts the reading-(2) deny contains no `solution_evaluate(` call
-instruction and names both poll tools, and the reading-(1) and reading-(3)
+instruction and that step 2 itself (not only the reconnect paragraph)
+names both poll tools, and the reading-(1) and reading-(3)
 fixtures each assert step 2 still names `solution_evaluate` unqualified.
 
 ### Marker signing (harness/c7c3f606)

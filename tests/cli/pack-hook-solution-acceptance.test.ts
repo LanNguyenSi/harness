@@ -425,9 +425,13 @@ describe("completion-gate — decision matrix", () => {
       expect(res.blocked).toBe(true);
       const { reason } = JSON.parse(out) as { reason: string };
       expect(reason).not.toContain("solution_evaluate(");
-      expect(reason).toContain('An attempt for "task-42" is already live');
-      expect(reason).toContain("mcp__grounding-mcp__solution_evaluate_status");
-      expect(reason).toContain("mcp__grounding-mcp__solution_evaluate_result");
+      // Scope the poll-tool assertions to step 2 itself: the reconnect
+      // paragraph appended below also names both tools, so a whole-reason
+      // check would pass even with the poll clause dropped from step 2.
+      const step2 = reason.slice(reason.indexOf("  2. "), reason.indexOf("  3. "));
+      expect(step2).toContain('An attempt for "task-42" is already live');
+      expect(step2).toContain("mcp__grounding-mcp__solution_evaluate_status");
+      expect(step2).toContain("mcp__grounding-mcp__solution_evaluate_result");
     });
 
     // Stale-lock regression: a lock directory left by a
