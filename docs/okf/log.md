@@ -2,6 +2,10 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-09-24T06:03:15.000Z, task 58c65bc9 (orchestrator): re-stamped
+  `gate-fail-posture-matrix.md` after a wording fix in the new converge
+  step 2 subsection of `docs/policy-packs/solution-acceptance.md`; the
+  cited lines 56-60 of that doc are unchanged.
 - 2026-09-24T05:53:38.000Z, task 58c65bc9 (implementer): re-verified and
   re-stamped `gate-fail-posture-matrix.md` after the live-attempt deny's
   converge step 2 change (`src/cli/pack/hook-solution-acceptance.ts`,
