@@ -428,7 +428,11 @@ describe("completion-gate — decision matrix", () => {
       // Scope the poll-tool assertions to step 2 itself: the reconnect
       // paragraph appended below also names both tools, so a whole-reason
       // check would pass even with the poll clause dropped from step 2.
-      const step2 = reason.slice(reason.indexOf("  2. "), reason.indexOf("  3. "));
+      const i2 = reason.indexOf("  2. ");
+      const i3 = reason.indexOf("  3. ");
+      expect(i2).toBeGreaterThanOrEqual(0);
+      expect(i3).toBeGreaterThan(i2);
+      const step2 = reason.slice(i2, i3);
       expect(step2).toContain('An attempt for "task-42" is already live');
       expect(step2).toContain("mcp__grounding-mcp__solution_evaluate_status");
       expect(step2).toContain("mcp__grounding-mcp__solution_evaluate_result");
