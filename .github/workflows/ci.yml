@@ -85,6 +85,15 @@ jobs:
         # extracted notes).
         run: npm run check:changelog-coverage
 
+      - name: No shipped [Unreleased] pointer
+        # scripts/check-shipped-unreleased-pointer.mjs - a shipped file
+        # (src/, README.md, scripts/runtime-reality-docker-probe.mjs;
+        # CHANGELOG.md itself is deliberately excluded, see the script's
+        # own header) must never cite CHANGELOG.md's [Unreleased] section,
+        # which a release cut empties out from under it; cite the
+        # shift-proof `CHANGELOG.md:#X.Y.Z` anchor instead.
+        run: npm run check:shipped-unreleased-pointer
+
       - name: README release-version sentence
         # scripts/check-readme-release-version.mjs - README.md's "The
         # current release is `vX.Y.Z`." sentence must name the same

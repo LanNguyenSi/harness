@@ -319,8 +319,8 @@ function applyBranchSwitchUpgrade(
  * applyBranchSwitchUpgrade exactly (both the ambient-only base and the
  * merged-candidate kube inputs run through the SAME resolveEnvironment
  * call with identical git/env inputs, so ENV_RANK picks the more
- * dangerous of the two). See CHANGELOG.md's `[Unreleased]` entry for
- * the measured downgrade this fixes.
+ * dangerous of the two). See the `CHANGELOG.md:#0.49.0` entry (task
+ * a7eb1a71) for the measured downgrade this fixes.
  */
 function applyKubeTargetUpgrade(
   event: ToolEvent,

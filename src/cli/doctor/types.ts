@@ -378,7 +378,7 @@ export interface TemplateDriftSection {
  * alternative the template has, or missing a boundary group entirely.
  * Rule and rationale live on `checkTriggerBoundaryDrift` in
  * `validate/checks.ts`; the measured incident that motivated this check
- * is in CHANGELOG.md's [Unreleased] entry for task 037cfb7c. Shape
+ * is in the `CHANGELOG.md:#0.49.0` entry for task 037cfb7c. Shape
  * mirrors `TemplateDriftSection` immediately above: every `error`
  * diagnostic rolls into `errorCount`, every `warning` diagnostic (none
  * emitted today; the field exists so a future non-error diagnostic from

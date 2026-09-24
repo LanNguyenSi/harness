@@ -2,6 +2,38 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-09-24T05:16:00.000Z, task ba7958e1 (implementer, follow-up fix):
+  re-stamped the same six docs as the entry below after a fix that added
+  `(task a7eb1a71)` to the two re-pointed comments in
+  `src/cli/policy/intercept.ts` (line 322-323) and
+  `src/runtime/kubectl-target-parse.ts` (line 8-9) that were missing it
+  (the other two comments, in `src/cli/doctor/types.ts` and
+  `src/cli/validate/checks.ts`, already carried their task id). Both edits
+  are same-line-count content-only rewrites (2 lines replaced by 2 lines
+  in each file); re-verified that none of the six docs' own line-numbered
+  citations into `intercept.ts` land on or near lines 322-323 (same
+  citations as the entry below: `policy-engine-producer-wiring.md` cites
+  lines 125-126 and 387, `quote-model-divergence.md` and the other four
+  cite the file without a line anchor), and `kubectl-target-parse.ts` is
+  not listed under any of these six docs' `sources:`. No behavior,
+  function signature, or claim these docs describe changed.
+
+- 2026-09-24T04:52:07.000Z, task ba7958e1 (implementer): re-stamped
+  `codex-adapter-parity-gaps.md`, `gate-fail-posture-matrix.md`,
+  `manifest-validation-scope.md`, `pause-vs-gate-kill-switch.md`,
+  `policy-engine-producer-wiring.md`, and `quote-model-divergence.md`,
+  the six docs listing `src/cli/policy/intercept.ts` and/or
+  `src/cli/validate/checks.ts` under `sources:`, after re-pointing four
+  shipped source comments (two of them in these two files) off
+  CHANGELOG.md's `[Unreleased]` section to the shift-proof
+  `CHANGELOG.md:#0.49.0` anchor. Re-verified: the edit touched only
+  doc-comment text (a citation string), same line count in both files
+  (no line shifted), and none of the six docs' own line-numbered
+  citations into `intercept.ts` or `checks.ts` land on or near the
+  edited lines (line 322 of `src/cli/policy/intercept.ts`, line 919 of
+  `src/cli/validate/checks.ts`); every existing
+  citation still resolves to the same content. No behavior, function
+  signature, or claim these docs describe changed.
 - 2026-09-24T05:19:13.000Z, task b5e65f5e (implementer): re-stamped the
   four bundle docs listing `src/cli/pack/hook-stay-in-scope.ts` or
   `src/runtime/task-providers/agent-tasks.ts` under `sources:` --

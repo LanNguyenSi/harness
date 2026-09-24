@@ -4,9 +4,9 @@
 // Extracts an explicit `--context`/`--namespace`/`-n` target from a
 // `kubectl ...` command string so `src/cli/policy/intercept.ts` can
 // merge it into the resolver's `SignalInputs`, UPGRADE-ONLY (see that
-// call site's `applyKubeTargetUpgrade` for the merge rule). See
-// CHANGELOG.md's `[Unreleased]` entry for the measured defects this
-// fixes and the review round history.
+// call site's `applyKubeTargetUpgrade` for the merge rule). See the
+// `CHANGELOG.md:#0.49.0` entry (task a7eb1a71) for the measured defects
+// this fixes and the review round history.
 //
 // SCOPE, deliberately narrow (task risk note: too-broad parsing could
 // collect values from a foreign context):
