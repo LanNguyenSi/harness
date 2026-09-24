@@ -289,6 +289,9 @@ describe("completion-gate — decision matrix", () => {
       expect(reason).not.toMatch(/Reconnecting vs\. retrying/);
       expect(reason).not.toMatch(/With grounding-mcp >= 0\.11\.0:/);
       expect(reason).not.toContain("attempt-lock anchor is held");
+      // Converge step 2 is unaffected for this reading: a call genuinely
+      // starts the evaluation here, so it keeps naming `solution_evaluate`.
+      expect(reason).toContain('mcp__grounding-mcp__solution_evaluate({ id: "task-42" })');
     });
 
     it("reading (3) unreadable-marker: a marker file exists but fails to parse, no live attempt-lock, short text, no reconnect paragraph", async () => {
@@ -304,6 +307,8 @@ describe("completion-gate — decision matrix", () => {
       expect(reason).not.toContain('No verdict marker exists for "task-42"');
       expect(reason).not.toMatch(/Reconnecting vs\. retrying/);
       expect(reason).not.toMatch(/With grounding-mcp >= 0\.11\.0:/);
+      // Converge step 2 is unaffected for this reading too.
+      expect(reason).toContain('mcp__grounding-mcp__solution_evaluate({ id: "task-42" })');
     });
 
     // Overlap fixture (priority): a LIVE attempt-lock
@@ -403,6 +408,26 @@ describe("completion-gate — decision matrix", () => {
       // one word no longer produces a `reason` that contains this exact
       // string).
       expect(reason).toContain(renderReconnectDenyParagraph(TASK));
+    });
+
+    // Converge step 2, live-attempt reading only: a call instruction naming
+    // `solution_evaluate` is the wrong next action here (a call JOINS the
+    // live attempt rather than evaluating; only `forceNewAttempt` is refused
+    // while the lock holds), so step 2 must be replaced with the poll tools
+    // instead, and the reason must carry no `solution_evaluate(` call
+    // instruction anywhere, including inside the reconnect paragraph's own
+    // "do not call it again" sentence (that sentence names the tool without
+    // call syntax).
+    it("reading (2) live-attempt: converge step 2 names the poll tools, not a solution_evaluate call", async () => {
+      const dir = verdictDirWith(null);
+      cleanups.push(liveAttemptLock(dir, TASK));
+      const { res, out } = await run({ cwd: repoAtHead(HEAD), verdictDir: dir });
+      expect(res.blocked).toBe(true);
+      const { reason } = JSON.parse(out) as { reason: string };
+      expect(reason).not.toContain("solution_evaluate(");
+      expect(reason).toContain('An attempt for "task-42" is already live');
+      expect(reason).toContain("mcp__grounding-mcp__solution_evaluate_status");
+      expect(reason).toContain("mcp__grounding-mcp__solution_evaluate_result");
     });
 
     // Stale-lock regression: a lock directory left by a

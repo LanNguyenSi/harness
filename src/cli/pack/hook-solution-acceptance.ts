@@ -40,7 +40,11 @@ import {
   verdictDir as resolveVerdictDir,
   type VerdictReadOutcome,
 } from "../../policy-packs/builtin/solution-acceptance-runtime.js";
-import { renderReconnectDenyParagraph } from "../../policy-packs/builtin/solution-acceptance-reconnect.js";
+import {
+  RECONNECT_RESULT_TOOL,
+  RECONNECT_STATUS_TOOL,
+  renderReconnectDenyParagraph,
+} from "../../policy-packs/builtin/solution-acceptance-reconnect.js";
 import { resolveGeneratedDir } from "../../io/generated-dir.js";
 import { checkFileLock, type LockCheckResult } from "../../io/lock.js";
 import { resolveGitContext } from "../../runtime/git-context.js";
@@ -398,6 +402,33 @@ function reconnectGuidanceFor(taskId: string, info: NullVerdictInfo | null): str
   return renderReconnectDenyParagraph(taskId);
 }
 
+/**
+ * Converge step 2, as a function of the reading: for the live-attempt
+ * reading a call instruction naming `solution_evaluate` is the wrong next
+ * action (a call JOINS the live attempt rather than evaluating; only
+ * `forceNewAttempt` is refused while the lock holds, see
+ * `RECONNECT_FACT_JOIN_NOT_RETRY`), so that reading gets its own step 2
+ * naming the poll tools instead. The other two null-verdict readings
+ * (never-evaluated, unreadable-marker) and every non-null-verdict deny
+ * (drift, not-ready, ...) keep the original step naming `solution_evaluate`
+ * unqualified, since a call there genuinely starts the evaluation.
+ */
+function convergeStep2For(taskId: string, nullVerdict: NullVerdictInfo | null): string {
+  if (nullVerdict !== null && nullVerdict.kind === "reading" && nullVerdict.reading === "live-attempt") {
+    return (
+      `  2. An attempt for "${taskId}" is already live (see the reconnect paragraph below): ` +
+      `poll \`${RECONNECT_STATUS_TOOL}\` / \`${RECONNECT_RESULT_TOOL}\` for the SAME id until it resolves, ` +
+      `instead of starting a new evaluation. A clean verdict at the current HEAD unblocks this tool; ` +
+      `a not-ready or failing verdict lists the blockers to fix (then back to step 1).\n`
+    );
+  }
+  return (
+    `  2. mcp__grounding-mcp__solution_evaluate({ id: "${taskId}" }): runs \`preflight run --json\` ` +
+    `(lint/typecheck/test/audit/secret) and records a HEAD-pinned verdict. A clean run at the current ` +
+    `HEAD unblocks this tool; a failing run lists the blockers to fix (then back to step 1).\n`
+  );
+}
+
 function blockJson(
   actionLabel: string,
   toolName: string,
@@ -420,7 +451,7 @@ function blockJson(
       `Completion must be EARNED from a real preflight run at the CURRENT HEAD, not claimed.\n` +
       `Converge in this order, all at one commit:\n` +
       `  1. If the working tree is dirty, COMMIT first. The verdict is pinned to the HEAD it was evaluated at, so any commit you make afterward makes it stale; commit the change before evaluating so the verdict pins to the final HEAD.\n` +
-      `  2. mcp__grounding-mcp__solution_evaluate({ id: "${taskId}" }) — runs \`preflight run --json\` (lint/typecheck/test/audit/secret) and records a HEAD-pinned verdict. A clean run at the current HEAD unblocks this tool; a failing run lists the blockers to fix (then back to step 1).\n` +
+      convergeStep2For(taskId, nullVerdict) +
       `  3. For \`git push\` / \`gh pr merge\`: the separate preflight-before-push gate is satisfied by a preflight at the current HEAD (its \`at_head\` rule), so refresh it at this same commit with \`harness preflight\` before retrying. Satisfy both push-gates at one HEAD.\n` +
       reconnectGuidanceFor(taskId, nullVerdict) +
       `\n` +
