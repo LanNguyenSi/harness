@@ -1,6 +1,6 @@
 {
   "kit": "orchestrator-workflow",
-  "version": "0.40.0",
+  "version": "0.40.1",
   "harnesses": [
     "claude"
   ],
@@ -169,7 +169,7 @@
     ".ai/workflow/templates/06-handoff.md": "47023d4aaabf4b1ecd6b309f7572b20f84ed3494d686d92e2fc8af5ac66d7a7a",
     ".ai/runs/.gitkeep": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
     ".claude/skills/orchestrator-workflow/SKILL.md": "151d38ccf65c36e62018144a03c4a2fd9c947eefdad333abc879830f169230e5",
-    ".claude/skills/orchestrator-workflow/references/contracts.md": "1cbe8328053eba25397efeafc2595fe6ab195507664ea55be8daae647b6a7930",
+    ".claude/skills/orchestrator-workflow/references/contracts.md": "4d9de32da79aa8da637ac76678524c41d5aceac4d373add03a3925c0d41c7840",
     ".claude/skills/orchestrator-workflow/references/evidence-and-probes.md": "0dde62d9a74d3b43987a72b4a49408dd3ec82a111ed3b2848125a6401f0033f6",
     ".claude/skills/orchestrator-workflow/references/review-and-recovery.md": "1a3ea5a4d7295e1c3c07276d49c6de7d81684cfaa405acccf4c21be668af2f00",
     ".claude/skills/orchestrator-workflow/references/run-state-and-harness.md": "9d86259f6628b7eac87b9a3e9e090b4b8ecba134944d632d9cf4a37785656095",
@@ -179,13 +179,13 @@
     ".claude/agents/task-slicer.md": "b3af045598143672eead72689d856d90c87c0aa2ce0ebb0683895d2d67c484d9",
     ".claude/agents/task-slicer-low.md": "8f3e5fd65ff63d0c79831b8c3e67d53473f7db4d62edc679666e909ae0f9e0c0",
     ".claude/agents/task-slicer-high.md": "9d41043a8793601f2739d765b29c672b0fab1716a145066dbeac336f43786700",
-    ".claude/agents/implementer.md": "b659203ca97a78e1b0ddf1d6728b19835811a351c0bf3d2c527569a09a8dbd59",
-    ".claude/agents/implementer-low.md": "fd3dcb105d4b38c1780a717cca0dfea526f6e93cae6f4d2368d29698e12599e0",
-    ".claude/agents/implementer-high.md": "867ea6203f77815ed30db9ae16c0a4e9611a9bc916c0d0c11af680cea03f1810",
-    ".claude/agents/implementer-xhigh.md": "df6fa4ed7d8df78db949da174a4655a2082b9fe7d410b11660bf2af1fa762ced",
-    ".claude/agents/reviewer.md": "07f8d2d1436da416dd39ab98f72183e7e106f4e51b01726fe8e8a58ed952ca3c",
-    ".claude/agents/reviewer-medium.md": "a0669f1a63c3ae4e87e098b4461c1f8d5e8ba8a20091bce148795ae74259307e",
-    ".claude/agents/reviewer-xhigh.md": "6235317f94e0dacbe9831e575a9f860f1f6c9b4f47ee9d05593c719484a31363",
+    ".claude/agents/implementer.md": "38ba9df0d2bcaa6505a596d0a6b305ed5701b35afaec2778fdc225b7e2137539",
+    ".claude/agents/implementer-low.md": "db8ca7f0d463f8948b0dc3643329fa04e1443608d667e666de44dc7078356f6b",
+    ".claude/agents/implementer-high.md": "c172f02c6ad4ff3e0deef257462a0f398b10ea076b7491250648879a9f9e3a0b",
+    ".claude/agents/implementer-xhigh.md": "f6ecff82c03549a2ebff5bd4817e8cd86381e425578530df4817aa530b245a7a",
+    ".claude/agents/reviewer.md": "a5081b3bd09d749aa7ff31adf3844456ba65ab95760820467f39523b60fc2b6e",
+    ".claude/agents/reviewer-medium.md": "e59bfc4809adc46c08bc3a1fef0dcb32e65dd84b4f0388791682b13dad44bd65",
+    ".claude/agents/reviewer-xhigh.md": "b26b3c8dd70ea3f859b2809ef1b5a694b518b68b73e3443512ce9382d9952a08",
     ".claude/agents/advisor.md": "5566dfc763bc89f2be832686822608786c521449518f19c2a225800f14397e35",
     ".claude/agents/advisor-xhigh.md": "bf7fc0268534053050abcdac2cf39e58b903c64d3d3f4882f15f8a1cbac29f8e"
   },
