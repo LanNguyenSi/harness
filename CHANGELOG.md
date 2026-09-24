@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.58.2] - 2026-09-24
+
 ### Fixed
 
 - **`scripts/check-changelog-coverage.mjs`, `check-no-only.mjs`, `check-readme-release-version.mjs`, `check-release-notes-size.mjs` and `check-ug-schema-drift.mjs` now each have a CLI-spawn smoke test pinning their direct-run guard and exit-code wiring** (task `3aa81802`). Each script already exported testable pure functions (and, for the first four, an exported `main(repoDir)` covered in-process), but importing a module from a test never sets `isDirectRun` true, so nothing exercised the top-level `if (isDirectRun) { main(...); }` guard or, for `check-ug-schema-drift.mjs`, the `.catch()` handler's `process.exit(2)` wiring: the same untested shape `check-shipped-unreleased-pointer.mjs` had before task `ba7958e1`'s fix. Each of the five scripts now has a real green and a real red spawn fixture (`node scripts/<name>.mjs` as a child process) asserting the process's own exit code and stdout/stderr, so a mutant disabling the guard or forcing the exit code to 0 fails a test instead of letting CI print nothing and pass silently. For the first four scripts these fixtures never depend on the live repo's own state or the network. `check-ug-schema-drift.mjs`'s fixtures cover the OK exit, the drift-detected exit, the zero-keys extraction-failure exit and the missing-mirror build hint through the top-level catch, and are hermetic against the network and the live repo: a fake `npm` binary on the spawned process's own PATH supplies the upstream tarball, so no registry is contacted, while the live comparison against the published package stays in CI's own `check:ug-schema-drift` step.
