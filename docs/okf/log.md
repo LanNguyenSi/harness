@@ -6,6 +6,13 @@
   `gate-fail-posture-matrix.md` after a wording fix in the new converge
   step 2 subsection of `docs/policy-packs/solution-acceptance.md`; the
   cited lines 56-60 of that doc are unchanged.
+- 2026-09-24T05:53:41.000Z, task 461ec064 (implementer): re-stamped
+  `codex-adapter-parity-gaps.md` after the `461ec064` fix (no empty
+  backup when no Codex config existed before install) touched a listed
+  source, `install-codex-config.ts`. The doc makes no claim about backup
+  behavior for that file; timestamp-only re-stamp, no wording changed.
+  `okf-kit@0.14.0 check docs/okf --require-anchors` reports no findings
+  beyond baseline.
 - 2026-09-24T05:53:38.000Z, task 58c65bc9 (implementer): re-verified and
   re-stamped `gate-fail-posture-matrix.md` after the live-attempt deny's
   converge step 2 change (`src/cli/pack/hook-solution-acceptance.ts`,
