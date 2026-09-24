@@ -6,7 +6,7 @@
   `codex-adapter-parity-gaps.md`, the one doc listing
   `src/cli/apply/install-codex-config.ts` under `sources:`, after a
   follow-up fix on the same task (a second fixture pinning the
-  tracker's own multi-hook zero-precedent shape, reworded
+  shape where a second hook's comment directly follows the first hook's content line, reworded
   comments/docstring/CHANGELOG, a secret-matrix row for the
   wedged-after-comment case). No bundle claim cites `assertNoSplitBlock`,
   `firstContentLine` or any line of this file, so no claim needed
