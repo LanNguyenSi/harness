@@ -1,0 +1,26 @@
+{
+  "session_id": "redacted-session-id",
+  "transcript_path": "/redacted/transcript.jsonl",
+  "cwd": "/redacted/cwd",
+  "prompt_id": "redacted-prompt-id",
+  "permission_mode": "default",
+  "hook_event_name": "PostToolUse",
+  "tool_name": "mcp__agent-tasks__task_create",
+  "tool_input": {
+    "title": "Adjust wording",
+    "labels": ["review-followup"],
+    "description": "Review follow-up: notes"
+  },
+  "tool_response": [
+    {
+      "type": "text",
+      "text": "{\n  \"ok\": true,\n  \"task\": {\n    \"id\": \"created-task-77\",\n    \"status\": \"backlog\"\n  },\n  \"confidence\": 90,\n  \"next\": [\n    \"awaits operator promotion; task_start rejects a backlog task until an operator promotes it to open\"\n  ]\n}"
+    }
+  ],
+  "tool_use_id": "toolu_01D37GHk9X9XT39hwkUH3fgQ",
+  "duration_ms": 4,
+  "mcp_server": {
+    "name": "agent-tasks",
+    "source": "dynamic"
+  }
+}

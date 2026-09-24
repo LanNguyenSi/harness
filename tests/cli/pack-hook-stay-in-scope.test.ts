@@ -121,16 +121,26 @@ describe("pack hook stay-in-scope", () => {
     expect(result).toMatchObject({ exitCode: 0, matched: false });
   });
 
-  it("uses tool_input and response task IDs before raw_input and direct response IDs", async () => {
+  it("prefers the tool_input task id over raw_input and tool_response ids", async () => {
     const result = await runPackHookStayInScopeCli({ manifest: manifest(), generatedDir: path.join(tmp, "generated"), logPath: logPath(), env: {}, stdin: input({ tool_name: "mcp__demo_tasks__create", tool_input: { taskId: "input-id", labels: ["review-followup"] }, raw_input: { taskId: "raw-id", labels: [] }, tool_response: { id: "direct-id", task: { id: "wrapped-id" } } }), stderr: stderr().stream });
     expect(result.matched).toBe(true);
     expect(readRecord().taskId).toBe("input-id");
   });
 
+  it("reads the task id off a real Claude Code content-block tool_response for a create verb, in both the audit row and the reminder", async () => {
+    const fixture = JSON.parse(fs.readFileSync(path.join(process.cwd(), "tests/fixtures/pack-hook-stay-in-scope/real-posttooluse-task-create-2.1.280.json"), "utf8")) as Record<string, unknown>;
+    const realShapeConfig = { ...config, tools: [...config.tools, "mcp__agent-tasks__task_create"] };
+    const out = stderr();
+    const result = await runPackHookStayInScopeCli({ manifest: manifest(realShapeConfig), generatedDir: path.join(tmp, "generated"), logPath: logPath(), env: {}, stdin: input(fixture), stderr: out.stream });
+    expect(result.matched).toBe(true);
+    expect(readRecord().taskId).toBe("created-task-77");
+    expect(out.value()).toContain("task=created-task-77");
+  });
+
   it("keeps payload precedence and response fallbacks soft for invalid shapes", async () => {
     const responseFallback = await runPackHookStayInScopeCli({ manifest: manifest(), generatedDir: path.join(tmp, "generated"), logPath: logPath(), env: {}, stdin: input({ tool_name: "mcp__demo_tasks__create", tool_input: { labels: ["review-followup"] }, tool_response: { task: { id: 7 }, id: "direct-id" } }), stderr: stderr().stream });
     expect(responseFallback).toMatchObject({ matched: true, logged: true });
-    expect(readRecord().taskId).toBe("direct-id");
+    expect(readRecord().taskId).toBe(null);
     fs.rmSync(logPath());
 
     const invalidPreferredPayload = await runPackHookStayInScopeCli({ manifest: manifest(), generatedDir: path.join(tmp, "generated"), logPath: logPath(), env: {}, stdin: input({ tool_name: "mcp__demo_tasks__create", tool_input: [], raw_input: { labels: ["review-followup"] }, tool_response: [] }), stderr: stderr().stream });

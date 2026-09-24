@@ -6,6 +6,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { resolveHomeDir } from "../../runtime/home-dir.js";
 import { toolNameMatchesAny } from "../../policy-packs/builtin/understanding-before-execution-runtime.js";
+import { taskIdFromToolResponse } from "../../runtime/task-providers/agent-tasks.js";
 import {
   evaluateStayInScopeMatch,
   extractConfiguredParentUrl,
@@ -95,13 +96,15 @@ function extractTitle(toolInput: unknown): string | null {
   return typeof title === "string" && title.length > 0 ? title : null;
 }
 
+// Reuses the shared MCP tool_response unwrap (taskIdFromToolResponse) so
+// this hook reads the real Claude Code content-block shape the same way
+// the active-claim tracker does, instead of a second, plain-object-only
+// parser (harness task b5e65f5e).
 function extractTaskId(toolInput: unknown, toolResponse: unknown): string | null {
   const taskId = objectValue(toolInput, "taskId");
   if (typeof taskId === "string" && taskId.length > 0) return taskId;
-  const wrappedId = objectValue(objectValue(toolResponse, "task"), "id");
-  if (typeof wrappedId === "string" && wrappedId.length > 0) return wrappedId;
-  const directId = objectValue(toolResponse, "id");
-  return typeof directId === "string" && directId.length > 0 ? directId : null;
+  const wrappedId = taskIdFromToolResponse(toolResponse);
+  return wrappedId.length > 0 ? wrappedId : null;
 }
 
 function resolveLogPath(opts: PackHookStayInScopeOptions, env: NodeJS.ProcessEnv): string {
