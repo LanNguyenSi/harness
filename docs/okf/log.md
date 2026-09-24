@@ -2,6 +2,18 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-09-24T05:19:13.000Z, task b5e65f5e (implementer): re-stamped the
+  four bundle docs listing `src/cli/pack/hook-stay-in-scope.ts` or
+  `src/runtime/task-providers/agent-tasks.ts` under `sources:` --
+  `codex-adapter-parity-gaps.md`, `evidence-ledger-trust-boundary.md`,
+  `gate-fail-posture-matrix.md`, `understanding-gate-lockout-recovery.md`
+  -- after `extractTaskId` switched to reusing `taskIdFromToolResponse`
+  (dropping the bare `tool_response.id` fallback) and that helper's doc
+  comment gained a sentence naming the stay-in-scope consumer. Re-verified
+  each doc's claims against the diff: `codex-adapter-parity-gaps.md`'s
+  fallback-is-a-separate-read claim still holds; the other three cite
+  `agent-tasks.ts` only at file level or with unanchored ownership
+  statements, none of which the comment-only edit invalidates.
 - 2026-09-24T04:59:46.000Z, task 25a4c53f (implementer): re-stamped
   `codex-adapter-parity-gaps.md`, the one doc listing
   `src/cli/apply/install-codex-config.ts` under `sources:`, after a
