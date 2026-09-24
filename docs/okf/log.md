@@ -2,6 +2,16 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-09-24T06:03:15.000Z, task 58c65bc9 (orchestrator): re-stamped
+  `gate-fail-posture-matrix.md` after a wording fix in the new converge
+  step 2 subsection of `docs/policy-packs/solution-acceptance.md`; the
+  cited lines 56-60 of that doc are unchanged.
+- 2026-09-24T05:53:38.000Z, task 58c65bc9 (implementer): re-verified and
+  re-stamped `gate-fail-posture-matrix.md` after the live-attempt deny's
+  converge step 2 change (`src/cli/pack/hook-solution-acceptance.ts`,
+  `docs/policy-packs/solution-acceptance.md`, both listed as sources);
+  the cited line ranges and claims for both files still hold unchanged.
+  `okf-kit@0.14.0 check docs/okf --require-anchors` reports no findings.
 - 2026-09-24T05:35:15.000Z, task dd7a3f23 (orchestrator): re-stamped
   `codex-adapter-parity-gaps.md`, `pause-vs-gate-kill-switch.md` and
   `policy-engine-producer-wiring.md` after rebasing this change onto
