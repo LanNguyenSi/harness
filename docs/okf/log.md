@@ -2,6 +2,13 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-09-25T12:36:47Z (task 5018c0c4, review round 3 notes and master merge): the
+  approval-marker change was merged with the symlinked-config install fix from
+  master; `markers.ts`, the pack schema comment and the pack doc's config row
+  now name the session marker's task binding and its signed `claimTaskId`.
+  Comment and doc edits only; the five docs whose sources changed were
+  re-checked (no claim touches the changed text) and re-stamped.
+
 - 2026-09-25T12:28:33Z (task 5018c0c4, review round 2 notes): the `mode: session` bullet in
   `understanding-gate-lockout-recovery.md` now says that mode also opts out of
   the session marker's task binding; `lifecycle.ts`, `inflight-records.ts`,
