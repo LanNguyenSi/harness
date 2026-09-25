@@ -2,6 +2,18 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-09-25T12:12:59.000Z, task 5018c0c4 (implementer): re-verified and re-stamped after
+  the session approval marker's task binding was exempted under
+  `approval_lifecycle: { mode: session }` (operator decision).
+  `understanding-gate-lockout-recovery.md`,
+  `evidence-ledger-trust-boundary.md` and `codex-adapter-parity-gaps.md`
+  now say the binding applies outside that mode and name the residual
+  (under `mode: session` an out-of-band completion followed by a
+  `task_start` on another task keeps the approval until `max_age`).
+  Timestamp-only re-stamps of `debug-verb-selection.md`,
+  `gate-fail-posture-matrix.md`, `pause-vs-gate-kill-switch.md` and
+  `understanding-gate-auto-mode-signals.md`, whose claims about the
+  touched sources (help text, pack doc) still hold.
 - 2026-09-25T12:02:14.000Z, task 5018c0c4 (implementer): re-verified and
   re-stamped after the session approval marker was bound to the claimed
   task and `task_merge` was added to every scaffolded
