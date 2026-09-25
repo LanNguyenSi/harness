@@ -2,6 +2,14 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-09-25T11:42:22.000Z, task 1637fbc8 (implementer): re-verified and re-stamped
+  `codex-adapter-parity-gaps.md` and `policy-engine-producer-wiring.md`
+  after the symlinked-config follow-up touched listed sources
+  (`install-codex-config.ts`, `apply.ts`): the backup of a symlinked config
+  now sits beside the link, and the install outcome carries the link as
+  `linkPath`. Both docs' claims still hold; the three `apply.ts` line
+  citations in the codex doc were re-mapped to the current lines (they had
+  drifted, and the new outcome field shifted them further).
 - 2026-09-25T11:22:46.000Z, task 1637fbc8 (implementer): re-verified and re-stamped
   `codex-adapter-parity-gaps.md` after the symlinked-config fix touched a
   listed source, `install-codex-config.ts` (a symlinked config is now
