@@ -26,8 +26,19 @@ import { readLastApply } from "../../../src/io/last-apply.js";
 
 let tmpHome: string;
 
+// Every temp root in this file is built under the PHYSICAL temp directory.
+// On macOS os.tmpdir() is itself reached through a symlink (/var ->
+// /private/var), so a fixture under the raw os.tmpdir() gets link
+// resolution for free and a test can pass there only by accident, while
+// the same test on Linux (a plain /tmp) exercises a different path. The
+// realpath makes the symlinked-config fixtures below behave identically
+// on every platform: each link in a fixture is one the test created.
+function makeTmpRoot(prefix: string): string {
+  return fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), prefix));
+}
+
 beforeEach(() => {
-  tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), "harness-apply-codex-"));
+  tmpHome = makeTmpRoot("harness-apply-codex-");
 });
 
 afterEach(() => {
@@ -845,7 +856,7 @@ describe("apply --runtime codex --install refuses when the harness block looks s
   });
 
   it("--json emits a structured codex-install-refuse error on stdout instead of only the plain-text message", async () => {
-    const home = fs.mkdtempSync(path.join(os.tmpdir(), "harness-apply-codex-json-"));
+    const home = makeTmpRoot("harness-apply-codex-json-");
     try {
       const manifest = {
         version: 1,
@@ -1283,7 +1294,7 @@ describe("apply --runtime codex --install --dry-run / --install: CLI-level outpu
   }
 
   it("--dry-run prints the removing-hook-block and preserving-foreign-section lines via the real CLI program, before writing anything", async () => {
-    const home = fs.mkdtempSync(path.join(os.tmpdir(), "harness-apply-codex-cli-dry-"));
+    const home = makeTmpRoot("harness-apply-codex-cli-dry-");
     try {
       const { codexConfig, manifestPath } = writeDriftedFixture(home);
       const before = fs.readFileSync(codexConfig, "utf8");
@@ -1322,7 +1333,7 @@ describe("apply --runtime codex --install --dry-run / --install: CLI-level outpu
   });
 
   it("a non-dry-run install prints the removed-hook-block and preserved-foreign-section summary lines via the real CLI program", async () => {
-    const home = fs.mkdtempSync(path.join(os.tmpdir(), "harness-apply-codex-cli-applied-"));
+    const home = makeTmpRoot("harness-apply-codex-cli-applied-");
     try {
       const { codexConfig, manifestPath } = writeDriftedFixture(home);
       let out = "";
@@ -2266,7 +2277,7 @@ describe("apply --runtime codex --install: a refusal never echoes the config's o
     manifestPath: string;
     codexConfig: string;
   } {
-    const home = fs.mkdtempSync(path.join(os.tmpdir(), "harness-apply-codex-secret-"));
+    const home = makeTmpRoot("harness-apply-codex-secret-");
     const manifest = {
       version: 1,
       tools: {
@@ -2617,5 +2628,496 @@ describe("apply --runtime codex --install: CLI next-steps hint reflects the inst
     );
     expect(out).not.toContain("Installed the harness-managed hook block into");
     expect(out).not.toContain("Nothing is installed into Codex yet");
+  });
+});
+
+describe("apply --runtime codex --install through a symlinked config (task `1637fbc8`)", () => {
+  // A dotfiles-managed setup keeps the real config in a separate directory
+  // (the dotfiles repo) and links ~/.codex/config.toml to it.
+  function setUpDotfiles(): { codexConfig: string; dotfilesDir: string; target: string } {
+    writeManifestWithPack();
+    const codexConfig = path.join(tmpHome, ".codex", "config.toml");
+    const dotfilesDir = path.join(tmpHome, "dotfiles", "codex");
+    fs.mkdirSync(path.dirname(codexConfig), { recursive: true });
+    fs.mkdirSync(dotfilesDir, { recursive: true });
+    return { codexConfig, dotfilesDir, target: path.join(dotfilesDir, "config.toml") };
+  }
+
+  const BEFORE = ['model = "gpt-5.5"', ""].join("\n");
+  const NOW = new Date("2026-09-25T10:00:00.000Z");
+  const STAMP = "2026-09-25T10-00-00-000Z";
+
+  function installAt(): Promise<Awaited<ReturnType<typeof apply>>> {
+    return apply({ homeDir: tmpHome, runtime: "codex", installCodex: true, now: NOW });
+  }
+
+  function siblingNames(dir: string): string[] {
+    return fs.readdirSync(dir).sort();
+  }
+
+  it("keeps an absolute symlink a symlink, writes the link target, keeps the target's mode, and backs up the target's old content beside the link", async () => {
+    const { codexConfig, dotfilesDir, target } = setUpDotfiles();
+    fs.writeFileSync(target, BEFORE);
+    fs.chmodSync(target, 0o640);
+    fs.symlinkSync(target, codexConfig);
+
+    const result = await installAt();
+
+    expect(result.codexConfigInstall?.written).toBe(true);
+    // The link itself is untouched: still a symlink, still pointing at the same target.
+    expect(fs.lstatSync(codexConfig).isSymbolicLink()).toBe(true);
+    expect(fs.readlinkSync(codexConfig)).toBe(target);
+    // The write landed in the target.
+    const installed = fs.readFileSync(target, "utf8");
+    expect(installed.startsWith(`${BEFORE}\n`)).toBe(true);
+    expect(installed).toContain(CODEX_MANAGED_BEGIN);
+    expect(fs.statSync(target).mode & 0o777).toBe(0o640);
+    // The reported path is the real file written, and the summary names the link too.
+    expect(result.codexConfigInstall?.configPath).toBe(target);
+    expect(result.codexConfigInstall?.summary).toContain(target);
+    expect(result.codexConfigInstall?.summary).toContain(`via symlink ${codexConfig}`);
+    expect(result.codexConfigInstall?.linkPath).toBe(codexConfig);
+    // The backup holds the target's previous content and keeps its mode, but
+    // sits beside the link (the config holds secrets; the target's directory
+    // is typically a dotfiles git work tree).
+    const backupPath = result.codexConfigInstall!.backupPath!;
+    expect(backupPath).toBe(`${codexConfig}.harness-backup-${STAMP}`);
+    expect(fs.lstatSync(backupPath).isFile()).toBe(true);
+    expect(fs.readFileSync(backupPath, "utf8")).toBe(BEFORE);
+    expect(fs.statSync(backupPath).mode & 0o777).toBe(0o640);
+    // The link's directory gets only the backup; the target's directory gets
+    // no backup and no leftover temp file.
+    expect(siblingNames(path.dirname(codexConfig))).toEqual([
+      "config.toml",
+      `config.toml.harness-backup-${STAMP}`,
+    ]);
+    expect(siblingNames(dotfilesDir)).toEqual(["config.toml"]);
+  });
+
+  it("installs a regular config inside a symlinked ~/.codex directory exactly as for a plain path: no link resolution, backup beside the requested path", async () => {
+    writeManifestWithPack();
+    const dotfilesDir = path.join(tmpHome, "dotfiles", "codex");
+    fs.mkdirSync(dotfilesDir, { recursive: true });
+    fs.symlinkSync(dotfilesDir, path.join(tmpHome, ".codex"));
+    const codexConfig = path.join(tmpHome, ".codex", "config.toml");
+    fs.writeFileSync(codexConfig, BEFORE);
+
+    const result = await installAt();
+
+    expect(result.codexConfigInstall?.written).toBe(true);
+    // The requested path is a regular file (only an ancestor is a link), so it
+    // is reported as requested, with no link and no "via symlink" suffix.
+    expect(result.codexConfigInstall?.configPath).toBe(codexConfig);
+    expect(result.codexConfigInstall).not.toHaveProperty("linkPath");
+    expect(result.codexConfigInstall?.summary).toBe(
+      `installed harness-managed Codex hook block into ${codexConfig}`,
+    );
+    expect(result.codexConfigInstall?.backupPath).toBe(`${codexConfig}.harness-backup-${STAMP}`);
+    expect(fs.readFileSync(`${codexConfig}.harness-backup-${STAMP}`, "utf8")).toBe(BEFORE);
+    expect(fs.readFileSync(codexConfig, "utf8")).toContain(CODEX_MANAGED_BEGIN);
+    expect(fs.lstatSync(codexConfig).isFile()).toBe(true);
+  });
+
+  it("reports no linkPath for a regular config file", async () => {
+    const { codexConfig } = setUpDotfiles();
+    fs.writeFileSync(codexConfig, BEFORE);
+
+    const result = await installAt();
+
+    expect(result.codexConfigInstall?.configPath).toBe(codexConfig);
+    expect(result.codexConfigInstall).not.toHaveProperty("linkPath");
+    expect(result.codexConfigInstall?.summary).not.toContain("via symlink");
+  });
+
+  it("names the symlink's backup location in a refusal that points at the backups", async () => {
+    const { codexConfig, dotfilesDir, target } = setUpDotfiles();
+    // Two BEGIN markers: the install refuses and tells the operator to
+    // restore from a backup as a last resort.
+    fs.writeFileSync(
+      target,
+      [CODEX_MANAGED_BEGIN, CODEX_MANAGED_END, CODEX_MANAGED_BEGIN, CODEX_MANAGED_END, ""].join("\n"),
+    );
+    fs.symlinkSync(target, codexConfig);
+
+    const err = await installAt().then(
+      () => {
+        throw new Error("expected the install to refuse");
+      },
+      (e: unknown) => e,
+    );
+
+    expect(err).toBeInstanceOf(CodexInstallRefusalError);
+    const message = (err as Error).message;
+    expect(message).toContain("more than one");
+    expect(message).toContain(`${codexConfig}.harness-backup-*`);
+    expect(siblingNames(path.dirname(codexConfig))).toEqual(["config.toml"]);
+    expect(siblingNames(dotfilesDir)).toEqual(["config.toml"]);
+  });
+
+  it("keeps the refusal text unchanged for a regular config", async () => {
+    const { codexConfig } = setUpDotfiles();
+    fs.writeFileSync(
+      codexConfig,
+      [CODEX_MANAGED_BEGIN, CODEX_MANAGED_END, CODEX_MANAGED_BEGIN, CODEX_MANAGED_END, ""].join("\n"),
+    );
+
+    const err = await installAt().then(
+      () => {
+        throw new Error("expected the install to refuse");
+      },
+      (e: unknown) => e,
+    );
+
+    expect(err).toBeInstanceOf(CodexInstallRefusalError);
+    expect((err as Error).message).toContain("more than one");
+    expect((err as Error).message).not.toContain("through the symlink");
+  });
+
+  it("--json reports the link as linkPath and the real file written as configPath", async () => {
+    const { codexConfig, target } = setUpDotfiles();
+    fs.writeFileSync(target, BEFORE);
+    fs.symlinkSync(target, codexConfig);
+    const manifestPath = path.join(tmpHome, "harness.yaml");
+
+    let out = "";
+    await buildProgram({
+      stdout: (s: string) => {
+        out += s;
+      },
+      stderr: () => {},
+    }).parseAsync(
+      [
+        "apply",
+        "--config",
+        manifestPath,
+        "--runtime",
+        "codex",
+        "--install",
+        "--json",
+        "--codex-config",
+        codexConfig,
+      ],
+      { from: "user" },
+    );
+
+    const parsed = JSON.parse(out) as {
+      codexConfigInstall: { configPath: string; linkPath?: string; backupPath?: string };
+    };
+    expect(parsed.codexConfigInstall.configPath).toBe(target);
+    expect(parsed.codexConfigInstall.linkPath).toBe(codexConfig);
+    expect(parsed.codexConfigInstall.backupPath?.startsWith(`${codexConfig}.harness-backup-`)).toBe(
+      true,
+    );
+    expect(fs.lstatSync(codexConfig).isSymbolicLink()).toBe(true);
+  });
+
+  it("keeps a relative symlink a symlink and writes its target", async () => {
+    const { codexConfig, target } = setUpDotfiles();
+    fs.writeFileSync(target, BEFORE);
+    const relative = path.relative(path.dirname(codexConfig), target);
+    fs.symlinkSync(relative, codexConfig);
+
+    const result = await installAt();
+
+    expect(result.codexConfigInstall?.written).toBe(true);
+    expect(fs.lstatSync(codexConfig).isSymbolicLink()).toBe(true);
+    expect(fs.readlinkSync(codexConfig)).toBe(relative);
+    expect(fs.readFileSync(target, "utf8")).toContain(CODEX_MANAGED_BEGIN);
+    expect(result.codexConfigInstall?.configPath).toBe(target);
+  });
+
+  it("follows a symlink chain to the final file and leaves every link in the chain untouched", async () => {
+    const { codexConfig, dotfilesDir, target } = setUpDotfiles();
+    fs.writeFileSync(target, BEFORE);
+    const middle = path.join(dotfilesDir, "current.toml");
+    fs.symlinkSync(target, middle);
+    fs.symlinkSync(middle, codexConfig);
+
+    const result = await installAt();
+
+    expect(result.codexConfigInstall?.written).toBe(true);
+    expect(fs.readlinkSync(codexConfig)).toBe(middle);
+    expect(fs.readlinkSync(middle)).toBe(target);
+    expect(fs.lstatSync(middle).isSymbolicLink()).toBe(true);
+    expect(fs.readFileSync(target, "utf8")).toContain(CODEX_MANAGED_BEGIN);
+    expect(result.codexConfigInstall?.configPath).toBe(target);
+    expect(result.codexConfigInstall?.linkPath).toBe(codexConfig);
+    expect(result.codexConfigInstall?.backupPath).toBe(`${codexConfig}.harness-backup-${STAMP}`);
+    expect(fs.readFileSync(result.codexConfigInstall!.backupPath!, "utf8")).toBe(BEFORE);
+  });
+
+  it("names the missing end of a dangling chain, not an existing intermediate link", async () => {
+    const { codexConfig, dotfilesDir } = setUpDotfiles();
+    const middle = path.join(dotfilesDir, "mid.toml");
+    fs.symlinkSync("gone.toml", middle);
+    fs.symlinkSync(path.relative(path.dirname(codexConfig), middle), codexConfig);
+
+    const err = await installAt().then(
+      () => {
+        throw new Error("expected the install to refuse");
+      },
+      (e: unknown) => e,
+    );
+
+    expect(err).toBeInstanceOf(CodexInstallRefusalError);
+    const message = (err as Error).message;
+    expect(message).toContain(codexConfig);
+    expect(message).toContain("dangling");
+    const missing = path.join(dotfilesDir, "gone.toml");
+    expect(message).toContain(`ends at ${missing}, which does not exist`);
+    expect(message).not.toContain("mid.toml, which does not exist");
+    expect(siblingNames(dotfilesDir)).toEqual(["mid.toml"]);
+    expect(siblingNames(path.dirname(codexConfig))).toEqual(["config.toml"]);
+  });
+
+  it("resolves a `..` link text against the physical directory when ~/.codex itself is a directory symlink", async () => {
+    writeManifestWithPack();
+    // ~/.codex -> dotfiles/cx, and config.toml -> ../mid.toml -> gone.toml.
+    // The kernel resolves `..` from the link's physical directory
+    // (dotfiles/cx), so the chain ends at dotfiles/gone.toml. Resolving it
+    // lexically against ~/.codex would name <home>/mid.toml instead, a
+    // path that is not in the chain at all.
+    const dotfilesRoot = path.join(tmpHome, "dotfiles");
+    const physicalCodexDir = path.join(dotfilesRoot, "cx");
+    fs.mkdirSync(physicalCodexDir, { recursive: true });
+    fs.symlinkSync(physicalCodexDir, path.join(tmpHome, ".codex"));
+    fs.symlinkSync("gone.toml", path.join(dotfilesRoot, "mid.toml"));
+    const codexConfig = path.join(tmpHome, ".codex", "config.toml");
+    fs.symlinkSync("../mid.toml", codexConfig);
+
+    const err = await installAt().then(
+      () => {
+        throw new Error("expected the install to refuse");
+      },
+      (e: unknown) => e,
+    );
+
+    expect(err).toBeInstanceOf(CodexInstallRefusalError);
+    const message = (err as Error).message;
+    expect(message).toContain("dangling");
+    expect(message).toContain(
+      `ends at ${path.join(dotfilesRoot, "gone.toml")}, which does not exist`,
+    );
+    expect(message).not.toContain(path.join(tmpHome, "mid.toml"));
+    expect(siblingNames(dotfilesRoot)).toEqual(["cx", "mid.toml"]);
+    expect(siblingNames(physicalCodexDir)).toEqual(["config.toml"]);
+  });
+
+  it("writes the physical target of a `..` link when ~/.codex itself is a directory symlink, not the lexical path beside ~/.codex", async () => {
+    writeManifestWithPack();
+    // ~/.codex -> dotfiles/cx, and config.toml -> ../config.toml. The kernel
+    // resolves `..` from dotfiles/cx, so the real file is
+    // dotfiles/config.toml. A lexical resolution against ~/.codex would
+    // name <home>/config.toml, an unrelated path that does not exist.
+    const dotfilesRoot = path.join(tmpHome, "dotfiles");
+    const physicalCodexDir = path.join(dotfilesRoot, "cx");
+    fs.mkdirSync(physicalCodexDir, { recursive: true });
+    fs.symlinkSync(physicalCodexDir, path.join(tmpHome, ".codex"));
+    const target = path.join(dotfilesRoot, "config.toml");
+    fs.writeFileSync(target, BEFORE);
+    const codexConfig = path.join(tmpHome, ".codex", "config.toml");
+    fs.symlinkSync("../config.toml", codexConfig);
+
+    const result = await installAt();
+
+    expect(result.codexConfigInstall?.written).toBe(true);
+    expect(result.codexConfigInstall?.configPath).toBe(target);
+    expect(result.codexConfigInstall?.linkPath).toBe(codexConfig);
+    const installed = fs.readFileSync(target, "utf8");
+    expect(installed.startsWith(`${BEFORE}\n`)).toBe(true);
+    expect(installed).toContain(CODEX_MANAGED_BEGIN);
+    expect(fs.existsSync(path.join(tmpHome, "config.toml"))).toBe(false);
+    expect(fs.lstatSync(codexConfig).isSymbolicLink()).toBe(true);
+    expect(fs.readlinkSync(codexConfig)).toBe("../config.toml");
+    expect(fs.lstatSync(path.join(tmpHome, ".codex")).isSymbolicLink()).toBe(true);
+    expect(fs.readlinkSync(path.join(tmpHome, ".codex"))).toBe(physicalCodexDir);
+  });
+
+  it("names the physical missing end when a later hop of a dangling chain sits behind a directory link with `..` link text", async () => {
+    writeManifestWithPack();
+    // ~/.codex/config.toml -> ../dotfiles/lnk/mid.toml, lnk -> deep/sub, and
+    // deep/sub/mid.toml -> ../gone.toml. The second hop's `..` is resolved
+    // from the physical dotfiles/deep/sub, so the chain ends at
+    // dotfiles/deep/gone.toml. Resolving that hop lexically against
+    // dotfiles/lnk would name dotfiles/gone.toml instead.
+    fs.mkdirSync(path.join(tmpHome, ".codex"));
+    const dotfilesRoot = path.join(tmpHome, "dotfiles");
+    const deepSub = path.join(dotfilesRoot, "deep", "sub");
+    fs.mkdirSync(deepSub, { recursive: true });
+    fs.symlinkSync("deep/sub", path.join(dotfilesRoot, "lnk"));
+    fs.symlinkSync("../gone.toml", path.join(deepSub, "mid.toml"));
+    const codexConfig = path.join(tmpHome, ".codex", "config.toml");
+    fs.symlinkSync("../dotfiles/lnk/mid.toml", codexConfig);
+
+    const err = await installAt().then(
+      () => {
+        throw new Error("expected the install to refuse");
+      },
+      (e: unknown) => e,
+    );
+
+    expect(err).toBeInstanceOf(CodexInstallRefusalError);
+    const message = (err as Error).message;
+    expect(message).toContain("dangling");
+    expect(message).toContain(
+      `ends at ${path.join(dotfilesRoot, "deep", "gone.toml")}, which does not exist`,
+    );
+    expect(message).not.toContain(`${path.join(dotfilesRoot, "gone.toml")},`);
+    expect(siblingNames(dotfilesRoot)).toEqual(["deep", "lnk"]);
+    expect(siblingNames(deepSub)).toEqual(["mid.toml"]);
+    expect(siblingNames(path.join(tmpHome, ".codex"))).toEqual(["config.toml"]);
+  });
+
+  it("adds no backup-location sentence to a refusal that does not point at backups, even through a link", async () => {
+    const { codexConfig, dotfilesDir, target } = setUpDotfiles();
+    const unparseable = ["[tui]", 'broken = "unterminated', ""].join("\n");
+    fs.writeFileSync(target, unparseable);
+    fs.symlinkSync(target, codexConfig);
+
+    const err = await installAt().then(
+      () => {
+        throw new Error("expected the install to refuse");
+      },
+      (e: unknown) => e,
+    );
+
+    expect(err).toBeInstanceOf(CodexInstallRefusalError);
+    const message = (err as Error).message;
+    expect(message).toContain("the TOML parser used by harness could not read this file");
+    expect(message).not.toContain("through the symlink");
+    expect(message).not.toContain(".harness-backup-*");
+    expect(fs.readFileSync(target, "utf8")).toBe(unparseable);
+    expect(fs.readlinkSync(codexConfig)).toBe(target);
+    expect(siblingNames(path.dirname(codexConfig))).toEqual(["config.toml"]);
+    expect(siblingNames(dotfilesDir)).toEqual(["config.toml"]);
+  });
+
+  it("--dry-run on a dangling symlink refuses and writes nothing", async () => {
+    const { codexConfig, dotfilesDir, target } = setUpDotfiles();
+    fs.symlinkSync(target, codexConfig);
+    const manifestPath = path.join(tmpHome, "harness.yaml");
+
+    let err = "";
+    const code = await run({
+      argv: [
+        "apply",
+        "--config",
+        manifestPath,
+        "--runtime",
+        "codex",
+        "--install",
+        "--dry-run",
+        "--codex-config",
+        codexConfig,
+      ],
+      stdout: () => {},
+      stderr: (s: string) => {
+        err += s;
+      },
+    });
+
+    expect(code).toBe(EX_FAIL);
+    expect(err).toContain("dangling");
+    expect(err).toContain(codexConfig);
+    expect(fs.existsSync(target)).toBe(false);
+    expect(siblingNames(dotfilesDir)).toEqual([]);
+    expect(siblingNames(path.dirname(codexConfig))).toEqual(["config.toml"]);
+  });
+
+  it("refuses a dangling symlink with a message naming the link, and writes nothing", async () => {
+    const { codexConfig, dotfilesDir, target } = setUpDotfiles();
+    fs.symlinkSync(target, codexConfig);
+
+    const err = await installAt().then(
+      () => {
+        throw new Error("expected the install to refuse");
+      },
+      (e: unknown) => e,
+    );
+
+    expect(err).toBeInstanceOf(CodexInstallRefusalError);
+    const refusal = err as CodexInstallRefusalError;
+    expect(refusal.configPath).toBe(codexConfig);
+    expect(refusal.message).toContain(codexConfig);
+    expect(refusal.message).toContain("dangling");
+    expect(refusal.message).toContain(target);
+    // Nothing written: the link is still a dangling link, the target does not exist.
+    expect(fs.lstatSync(codexConfig).isSymbolicLink()).toBe(true);
+    expect(fs.existsSync(target)).toBe(false);
+    expect(siblingNames(path.dirname(codexConfig))).toEqual(["config.toml"]);
+    expect(siblingNames(dotfilesDir)).toEqual([]);
+  });
+
+  it("refuses a symlink loop with a message naming the link, and writes nothing", async () => {
+    const { codexConfig, dotfilesDir } = setUpDotfiles();
+    const loopA = path.join(dotfilesDir, "a.toml");
+    const loopB = path.join(dotfilesDir, "b.toml");
+    fs.symlinkSync(loopB, loopA);
+    fs.symlinkSync(loopA, loopB);
+    fs.symlinkSync(loopA, codexConfig);
+
+    const err = await installAt().then(
+      () => {
+        throw new Error("expected the install to refuse");
+      },
+      (e: unknown) => e,
+    );
+
+    expect(err).toBeInstanceOf(CodexInstallRefusalError);
+    expect((err as Error).message).toContain(codexConfig);
+    expect((err as Error).message).toContain("cannot be resolved");
+    expect(fs.readlinkSync(codexConfig)).toBe(loopA);
+    expect(siblingNames(dotfilesDir)).toEqual(["a.toml", "b.toml"]);
+  });
+
+  it("refuses a symlink whose target is a directory, and writes nothing", async () => {
+    const { codexConfig, dotfilesDir } = setUpDotfiles();
+    fs.symlinkSync(dotfilesDir, codexConfig);
+
+    const err = await installAt().then(
+      () => {
+        throw new Error("expected the install to refuse");
+      },
+      (e: unknown) => e,
+    );
+
+    expect(err).toBeInstanceOf(CodexInstallRefusalError);
+    expect((err as Error).message).toContain(codexConfig);
+    expect((err as Error).message).toContain("not a regular file");
+    expect(fs.readlinkSync(codexConfig)).toBe(dotfilesDir);
+    expect(siblingNames(dotfilesDir)).toEqual([]);
+  });
+
+  it("--dry-run through a symlink names the resolved target and writes nothing", async () => {
+    const { codexConfig, dotfilesDir, target } = setUpDotfiles();
+    fs.writeFileSync(target, BEFORE);
+    fs.symlinkSync(target, codexConfig);
+    const manifestPath = path.join(tmpHome, "harness.yaml");
+
+    let out = "";
+    await buildProgram({
+      stdout: (s: string) => {
+        out += s;
+      },
+      stderr: () => {},
+    }).parseAsync(
+      [
+        "apply",
+        "--config",
+        manifestPath,
+        "--runtime",
+        "codex",
+        "--install",
+        "--dry-run",
+        "--codex-config",
+        codexConfig,
+      ],
+      { from: "user" },
+    );
+
+    expect(out).toContain(`${target} (Codex install)`);
+    expect(fs.readlinkSync(codexConfig)).toBe(target);
+    expect(fs.readFileSync(target, "utf8")).toBe(BEFORE);
+    expect(siblingNames(dotfilesDir)).toEqual(["config.toml"]);
   });
 });

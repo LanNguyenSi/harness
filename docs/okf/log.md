@@ -24,6 +24,14 @@
   `gate-fail-posture-matrix.md`, `pause-vs-gate-kill-switch.md` and
   `understanding-gate-auto-mode-signals.md`, whose claims about the
   touched sources (help text, pack doc) still hold.
+
+- 2026-09-25T12:05:23.000Z, task 1637fbc8 (implementer): re-verified and re-stamped
+  `codex-adapter-parity-gaps.md` after a doc-comment move in a listed
+  source, `install-codex-config.ts` (no behaviour change; the symlink
+  fixtures now build under the physical temp directory). The doc's claim
+  that `--install` replaces only the marked harness-managed block still
+  holds; timestamp-only re-stamp.
+
 - 2026-09-25T12:02:14.000Z, task 5018c0c4 (implementer): re-verified and
   re-stamped after the session approval marker was bound to the claimed
   task and `task_merge` was added to every scaffolded
@@ -39,6 +47,16 @@
   `pause-vs-gate-kill-switch.md`, `quote-model-divergence.md` and
   `understanding-gate-auto-mode-signals.md`, whose claims about the
   touched sources (help text, scaffold lists, hook headers) still hold.
+
+- 2026-09-25T11:42:22.000Z, task 1637fbc8 (implementer): re-verified and re-stamped
+  `codex-adapter-parity-gaps.md` and `policy-engine-producer-wiring.md`
+  after the symlinked-config follow-up touched listed sources
+  (`install-codex-config.ts`, `apply.ts`): the backup of a symlinked config
+  now sits beside the link, and the install outcome carries the link as
+  `linkPath`. Both docs' claims still hold; the three `apply.ts` line
+  citations in the codex doc were re-mapped to the current lines (they had
+  drifted, and the new outcome field shifted them further).
+
 - 2026-09-25T11:26:06.000Z, task 5018c0c4 (implementer): re-verified and re-stamped
   `understanding-gate-lockout-recovery.md` and `codex-adapter-parity-gaps.md`
   after the approval-marker expiry hook started asking the active-claim
@@ -48,6 +66,14 @@
   `gate-fail-posture-matrix.md` and `understanding-gate-auto-mode-signals.md`,
   whose claims about the touched sources (`agent-tasks.ts`, the pack doc)
   still hold unchanged.
+
+- 2026-09-25T11:22:46.000Z, task 1637fbc8 (implementer): re-verified and re-stamped
+  `codex-adapter-parity-gaps.md` after the symlinked-config fix touched a
+  listed source, `install-codex-config.ts` (a symlinked config is now
+  resolved and its target written, the link left intact). The doc's claim
+  that `--install` replaces only the marked harness-managed block still
+  holds; timestamp-only re-stamp, no wording changed.
+
 - 2026-09-24T06:05:53.000Z, task 461ec064 (orchestrator): re-stamped
   `codex-adapter-parity-gaps.md` after the refusal messages in
   `install-codex-config.ts` were qualified (restore from a backup only if
