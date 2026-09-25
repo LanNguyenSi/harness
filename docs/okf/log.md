@@ -2,6 +2,13 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-09-25T12:56:13Z (task b9e6d63c, master merge): the apply-runtime change was merged
+  with the approval-marker binding and the symlinked-config install fix from
+  master. `codex-adapter-parity-gaps.md` keeps the runtime-reuse paragraph and
+  the `--target` refusal sentence of this task, with its `apply.ts` line
+  ranges re-counted on the merged file; shifted citations were re-pointed
+  after re-reading each anchor. Re-checked and re-stamped: `codex-adapter-parity-gaps.md`, `debug-verb-selection.md`, `evidence-ledger-trust-boundary.md`, `gate-fail-posture-matrix.md`, `pause-vs-gate-kill-switch.md`, `policy-engine-producer-wiring.md`, `understanding-gate-auto-mode-signals.md`.
+
 - 2026-09-25T12:40:54.000Z, task b9e6d63c (implementer, review fix): `harness pack
   remove --force` now keeps the runtime `.last-apply` records when it
   prunes the pack's entries, and an older record's pack
