@@ -2,6 +2,12 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-09-25T11:22:46.000Z, task 1637fbc8 (implementer): re-verified and re-stamped
+  `codex-adapter-parity-gaps.md` after the symlinked-config fix touched a
+  listed source, `install-codex-config.ts` (a symlinked config is now
+  resolved and its target written, the link left intact). The doc's claim
+  that `--install` replaces only the marked harness-managed block still
+  holds; timestamp-only re-stamp, no wording changed.
 - 2026-09-24T06:05:53.000Z, task 461ec064 (orchestrator): re-stamped
   `codex-adapter-parity-gaps.md` after the refusal messages in
   `install-codex-config.ts` were qualified (restore from a backup only if
