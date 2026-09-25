@@ -855,8 +855,9 @@ function buildHooks(
       // PostToolUse marker-expiry (task a1348c89, widened by task
       // bea04a03). Same boundary-tool list as the Claude hook below
       // (resolveExpireOnToolMatch) so Codex expires on the identical
-      // default set (agent-tasks task_finish / task_abandon /
-      // pull_requests_merge / tasks_transition) — but a DIFFERENT
+      // configured set (agent-tasks task_finish / task_abandon /
+      // task_merge / pull_requests_merge / tasks_transition in the
+      // scaffolds), but a DIFFERENT
       // `match` builder (`codexPostToolUseMatchPattern`, not
       // `postToolUseMatchPattern`): see that function's own doc comment
       // for why the Claude builder's anchored regex form silently
@@ -885,7 +886,7 @@ function buildHooks(
           blocking: false,
           budget_ms: 2000,
           description:
-            "Codex adapter: expire the approval marker AND the persisted report after a task-completion boundary tool or expire_on_bash_match shell command (default tools: agent-tasks task_finish / task_abandon / pull_requests_merge). Forces a fresh Understanding Report on the next task.",
+            "Codex adapter: expire the approval marker AND the persisted report after a task-completion boundary tool listed in approval_lifecycle.expire_on_tool_match (scaffolds: agent-tasks task_finish / task_abandon / task_merge / pull_requests_merge / tasks_transition; a task_finish that lands in review keeps the approval) or an expire_on_bash_match shell command. Forces a fresh Understanding Report on the next task.",
         };
         return [hook];
       })(),
@@ -1011,8 +1012,11 @@ function buildHooks(
     // configured task-boundary tools, and (task bea04a03) on a Bash call
     // when `approval_lifecycle.expire_on_bash_match` carries at least one
     // pattern, and deletes the approval marker so the next Edit / Write /
-    // Bash forces a fresh Understanding Report. Default tool list expires
-    // on agent-tasks task_finish / task_abandon / pull_requests_merge.
+    // Bash forces a fresh Understanding Report. The runtime tool list is
+    // the configured expire_on_tool_match (scaffolds: agent-tasks
+    // task_finish / task_abandon / task_merge / pull_requests_merge /
+    // tasks_transition); DEFAULT_BOUNDARY_TOOL_NAMES only shapes the
+    // emitted matcher when no list is configured.
     // Operators on other task systems override the list via
     // config.approval_lifecycle.expire_on_tool_match; setting
     // `approval_lifecycle: { mode: session }` opts out entirely and
@@ -1042,7 +1046,7 @@ function buildHooks(
         blocking: false,
         budget_ms: 2000,
         description:
-          "Expire the approval marker AND the persisted report after a task-completion boundary tool or expire_on_bash_match Bash command (default tools: agent-tasks task_finish / task_abandon / pull_requests_merge). Forces a fresh Understanding Report on the next task.",
+          "Expire the approval marker AND the persisted report after a task-completion boundary tool listed in approval_lifecycle.expire_on_tool_match (scaffolds: agent-tasks task_finish / task_abandon / task_merge / pull_requests_merge / tasks_transition; a task_finish that lands in review keeps the approval) or an expire_on_bash_match Bash command. Forces a fresh Understanding Report on the next task.",
       };
       return [hook];
     })(),

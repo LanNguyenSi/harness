@@ -24,8 +24,10 @@
 // Failure mode: every error path resolves to no-op + stderr log. The
 // gate is opt-in; turning a buggy hook into a session-wide "everything
 // is unapproved now" surface would be hostile. Worst case the marker
-// persists past the intended boundary, which degrades to the legacy
-// per-session contract.
+// persists past the intended boundary; the session marker still counts
+// only while the active claim names the task it was granted for
+// (task 5018c0c4), so it degrades to a per-task approval, not to the
+// legacy per-session contract.
 
 import {
   applyPostToolUseExpiry,

@@ -1741,7 +1741,7 @@ export function buildProgram(opts: RunOptions = {}): Command {
     )
     .option(
       "--task <ids...>",
-      "agent-tasks task id(s) — writes one task-scoped marker per id. Pass several (--task a b c, or --task a,b,c) to pre-approve a whole batch in a single operator action so a multi-task session does not re-prompt per task_finish (harness/1ee26e77, harness/0dce3880)",
+      "agent-tasks task id(s): writes one task-scoped marker per id. Pass several (--task a b c, or --task a,b,c) to pre-approve a whole batch in a single operator action so a multi-task session does not re-prompt for each task it claims (the session approval covers only the task claimed when it was granted, and a done, abandoned or merged task expires it) (harness/1ee26e77, harness/0dce3880, harness 5018c0c4)",
     )
     .option("--reports-dir <path>", "override the persisted-report directory (default: ./.understanding-gate/reports)")
     .option("--approved-by <actor>", "actor to record on the persisted report (default: harness-approve-cli)")

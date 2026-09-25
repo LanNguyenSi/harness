@@ -15,8 +15,13 @@ import { InvalidDurationError, parseDurationSeconds } from "../../../policies/in
 //   1. expire_on_tool_match: a list of MCP tool name patterns. When a
 //      tool whose exact name appears in the list runs (PostToolUse hook),
 //      the marker is deleted. Used to mark task-completion boundaries
-//      for agent-tasks workflows (task_finish, task_abandon,
-//      pull_requests_merge).
+//      for agent-tasks workflows (task_finish, task_abandon, task_merge,
+//      pull_requests_merge, tasks_transition). An agent-tasks claim
+//      lifecycle verb expires only when the active-claim decider says
+//      the claim is released, so a task_finish that lands in review
+//      keeps the marker (task 5018c0c4). The list comes from the config
+//      alone: an absent `expire_on_tool_match` means no tool boundary
+//      at runtime.
 //   2. expire_on_bash_match: a list of regex patterns matched against
 //      the Bash tool's command string. Same expiry semantics. Used by
 //      gh-CLI / pure-Bash workflows where the task boundary is a shell
