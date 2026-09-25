@@ -9,6 +9,8 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { stringify as yamlStringify } from "yaml";
+import { apply } from "../../../src/cli/apply/index.js";
 import { runSmoke } from "../../../src/cli/smoke/index.js";
 import { HarnessExitError } from "../../../src/cli/exit-codes.js";
 
@@ -202,6 +204,44 @@ describe("runSmoke: happy path", () => {
     const sidIdx = result.claudeArgv.indexOf("--session-id");
     expect(sidIdx).toBeGreaterThan(-1);
     expect(result.claudeArgv[sidIdx + 1]).toBe("00000000-0000-4000-8000-000000000001");
+  });
+});
+
+describe("runSmoke after an apply that recorded another runtime (agent-tasks b9e6d63c)", () => {
+  it("still applies the claude-code target when the last apply used codex", async () => {
+    const home = makeTmpDir("smoke-runtime-home-");
+    const configPath = path.join(home, "harness.yaml");
+    fs.writeFileSync(
+      configPath,
+      yamlStringify({
+        version: 1,
+        tools: { mcp: [], cli: [], skills: { enabled: [], source_dirs: [] }, builtin: { known: [] } },
+        memory: { directories: [] },
+        hooks: [],
+        policies: [],
+        policy_packs: [{ name: "understanding-before-execution" }],
+      }),
+    );
+    await apply({ homeDir: home, configPath, runtime: "codex" });
+
+    const seen: Array<Parameters<typeof apply>[0]> = [];
+    const outputDir = makeTmpDir("smoke-runtime-out-");
+    const claude = makeFakeClaude({ stdout: `${RESULT_OK}\n` });
+    const result = await runSmoke({
+      prompt: "x",
+      outputDir,
+      claudeBin: claude,
+      configPath,
+      applyImpl: async (opts) => {
+        seen.push(opts);
+        return apply({ ...opts, homeDir: home });
+      },
+      noDelegate: true,
+    });
+    expect(result.exitCode).toBe(0);
+    expect(seen[0]?.runtime).toBe("claude-code");
+    const settings = JSON.parse(fs.readFileSync(result.settingsPath, "utf8")) as Record<string, unknown>;
+    expect(settings.hooks).toBeDefined();
   });
 });
 

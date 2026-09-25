@@ -1999,6 +1999,44 @@ describe("interactive wizard — Full profile", () => {
 });
 
 describe("interactive wizard — runtime multiselect (task 696f7560)", () => {
+  it("wires claude-code on a re-run after a codex-only run (agent-tasks b9e6d63c)", async () => {
+    // The first run records runtime codex in .last-apply. The second run's
+    // claude-code wire step must still apply its settings.json target
+    // instead of inheriting codex from the last apply.
+    fs.mkdirSync(path.join(tmpHome, ".claude"));
+    const runOnce = async (
+      runtimes: string[],
+      forceOverwrite: boolean,
+    ): Promise<{ result: Awaited<ReturnType<typeof runInteractive>>; stderr: string }> => {
+      const cap = captureStreams();
+      const result = await runInteractive({
+        homeDir: tmpHome,
+        dependencyPathEnv: fakeDepsPath,
+        forceOverwrite,
+        prompts: mockPrompts({
+          select: ["solo"],
+          input: ["~/.claude/projects/{project}/memory"],
+          confirm: [true],
+          checkbox: [runtimes],
+        }),
+        stdout: cap.out,
+        stderr: cap.err,
+      });
+      return { result, stderr: cap.stderr() };
+    };
+    const first = await runOnce(["codex"], false);
+    expect(first.result.applies?.[0]?.apply?.runtime).toBe("codex");
+
+    const second = await runOnce(["claude-code"], true);
+    const wired = second.result.applies?.[0]?.apply;
+    expect(wired?.runtime).toBe("claude-code");
+    expect(wired?.runtimeSource).toBe("explicit");
+    expect(wired?.targetWritten).toBe(true);
+    expect(second.stderr).toContain("wired into");
+    expect(second.stderr).not.toContain("Failed to wire");
+    expect(fs.existsSync(path.join(tmpHome, ".claude", "settings.json"))).toBe(true);
+  });
+
   it("wires only codex when the operator picks codex", async () => {
     fs.mkdirSync(path.join(tmpHome, ".claude"));
     const cap = captureStreams();

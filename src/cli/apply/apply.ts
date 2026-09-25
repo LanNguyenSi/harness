@@ -145,9 +145,11 @@ export interface ApplyOptions {
   /**
    * Phase 6 #6 — `--runtime <claude-code|codex>`. Selects which adapter
    * shape policy-pack hooks expand into and which artefacts apply
-   * writes. When omitted, the runtime recorded in `.last-apply` by the
-   * previous apply is reused; with no recorded runtime it defaults to
-   * `claude-code` (settings.json output unchanged from previous releases). When set to `codex`, settings.json is NOT
+   * writes. When omitted, `target` implies `claude-code`; otherwise the
+   * runtime recorded in `.last-apply` by the previous apply is reused
+   * (inferred from its files map for a record that predates the field);
+   * with no recorded or inferable runtime it defaults to `claude-code`
+   * (settings.json output unchanged from previous releases). When set to `codex`, settings.json is NOT
    * written; instead `harness.generated/codex/config.toml` carries the
    * Codex adapter configuration. The two runtimes are mutually
    * exclusive in a single apply for v1; cross-runtime applies are a
@@ -252,30 +254,55 @@ export interface ApplyResult {
   runtime: Runtime;
   /**
    * Where `runtime` came from: `explicit` (`--runtime` was passed),
-   * `last-apply` (reused from the runtime `.last-apply` recorded), or
-   * `default` (no `--runtime` and no recorded runtime).
+   * `target` (no `--runtime`, `--target` implies `claude-code`),
+   * `last-apply` (reused from the runtime `.last-apply` recorded),
+   * `inferred` (reused from a `.last-apply` that predates the field, read
+   * off its files map), `unrecorded` (such a record whose files map names
+   * no single runtime, so the default is used), or `default` (no
+   * `.last-apply` at all).
    */
   runtimeSource: RuntimeSource;
   /**
-   * The runtime `.last-apply` recorded for the previous apply, when it
-   * recorded one. Differs from `runtime` only on an explicit switch.
+   * The runtime the previous apply recorded in `.last-apply`, or inferred
+   * from its files map when it predates the field. Absent when there is
+   * none.
    */
   previousRuntime?: Runtime;
 }
 
-export type RuntimeSource = "explicit" | "last-apply" | "default";
+export type RuntimeSource =
+  | "explicit"
+  | "target"
+  | "last-apply"
+  | "inferred"
+  | "unrecorded"
+  | "default";
 
 /**
- * One line naming the runtime when it did not come from an explicit
- * `--runtime` matching the last apply: a reused runtime, or an explicit
- * switch away from the recorded one. `null` when there is nothing to say
- * (first apply, or an explicit `--runtime` equal to the recorded one).
+ * One line naming the runtime whenever it did not come from an explicit
+ * `--runtime` matching the last apply: a reused or inferred runtime, the
+ * default used for a record without one, the runtime `--target` implies,
+ * or an explicit switch away from the previous one. `null` when there is
+ * nothing to say (first apply, or an explicit `--runtime` equal to the
+ * previous one).
  */
 export function formatRuntimeLine(
   result: Pick<ApplyResult, "runtime" | "runtimeSource" | "previousRuntime">,
 ): string | null {
   if (result.runtimeSource === "last-apply") {
     return `runtime: ${result.runtime} (from last apply; pass --runtime to change)`;
+  }
+  if (result.runtimeSource === "inferred") {
+    return `runtime: ${result.runtime} (inferred from the last apply's generated files; pass --runtime to change)`;
+  }
+  if (result.runtimeSource === "unrecorded") {
+    return `runtime: ${result.runtime} (default; the last apply did not record a runtime, pass --runtime to choose)`;
+  }
+  if (result.runtimeSource === "target") {
+    if (result.previousRuntime !== undefined && result.previousRuntime !== result.runtime) {
+      return `runtime: ${result.previousRuntime} -> ${result.runtime} (--target implies claude-code)`;
+    }
+    return `runtime: ${result.runtime} (implied by --target)`;
   }
   if (
     result.runtimeSource === "explicit" &&
@@ -293,24 +320,56 @@ interface RuntimeSelection {
   previousRuntime?: Runtime;
 }
 
+// A `.last-apply` written before the `runtime` field existed still names
+// the runtime through its files map: each runtime writes its own adapter
+// artefact (`settings.json`, `codex/config.toml`, `opencode/opencode.json`).
+// Exactly one of them present means that runtime; none or several (the map
+// keeps entries from earlier applies, so a machine that applied both
+// runtimes carries both) is ambiguous.
+function inferRuntimeFromFiles(files: LastApplyRecord["files"]): Runtime | undefined {
+  const has = (key: string): boolean => Object.prototype.hasOwnProperty.call(files, key);
+  const found: Runtime[] = [];
+  if (has(SETTINGS_BASENAME)) found.push("claude-code");
+  if (has(CODEX_CONFIG_BASENAME)) found.push("codex");
+  if (has(OPENCODE_CONFIG_BASENAME)) found.push("opencode");
+  return found.length === 1 ? found[0] : undefined;
+}
+
 // `--runtime` omitted: reuse the runtime the previous apply recorded, so a
 // plain `harness apply` after `harness apply --runtime codex` keeps
 // generating the Codex variant instead of silently switching every
-// runtime-specific file back to the default (agent-tasks b9e6d63c). No
-// recorded runtime (first apply, or a `.last-apply` written before the
-// field existed, or an unknown value) keeps today's default.
+// runtime-specific file back to the default (agent-tasks b9e6d63c).
+// `--target` wires Claude Code's settings.json, so it implies claude-code
+// instead of reusing another runtime. A record without the field (or with
+// an unknown value) falls back to inferring from its files map, then to
+// the default; the caller names every non-explicit choice in its output.
 function selectRuntime(
   explicit: Runtime | undefined,
   lastApply: LastApplyRecord | null,
+  hasTarget: boolean,
 ): RuntimeSelection {
   const recorded = lastApply?.runtime;
-  const previousRuntime = isRuntime(recorded) ? recorded : undefined;
+  const recordedRuntime = isRuntime(recorded) ? recorded : undefined;
+  const inferredRuntime =
+    recordedRuntime === undefined && lastApply !== null
+      ? inferRuntimeFromFiles(lastApply.files)
+      : undefined;
+  const previousRuntime = recordedRuntime ?? inferredRuntime;
   const base = previousRuntime !== undefined ? { previousRuntime } : {};
   if (explicit !== undefined) {
     return { runtime: explicit, runtimeSource: "explicit", ...base };
   }
+  if (hasTarget) {
+    return { runtime: "claude-code", runtimeSource: "target", ...base };
+  }
+  if (inferredRuntime !== undefined) {
+    return { runtime: inferredRuntime, runtimeSource: "inferred", ...base };
+  }
   if (previousRuntime !== undefined) {
     return { runtime: previousRuntime, runtimeSource: "last-apply", ...base };
+  }
+  if (lastApply !== null) {
+    return { runtime: DEFAULT_RUNTIME, runtimeSource: "unrecorded" };
   }
   return { runtime: DEFAULT_RUNTIME, runtimeSource: "default" };
 }
@@ -465,8 +524,10 @@ function buildExpectedFiles(
   if (runtime === "codex") {
     // Codex apply: emit Codex config artefact instead of settings.json.
     // settings.json is Claude Code's contract and meaningless to Codex.
-    // MEMORY.md and pack instructions.md are runtime-agnostic and ship
-    // unchanged.
+    // MEMORY.md is runtime-agnostic and ships unchanged. Pack
+    // instructions.md ships too, but its content differs per runtime
+    // (builtin packs' buildInstructions() branch on the runtime), which is
+    // why a re-apply under another runtime rewrites it.
     const codexConfig = generateCodexConfig(augmentedManifest);
     const codexWarnings = [...codexConfig.warnings];
     if (packExpansion.permissions) {
@@ -706,7 +767,7 @@ export async function apply(opts: ApplyOptions = {}): Promise<ApplyResult> {
   }
 
   const lastApply = readLastApply(generatedDir);
-  const runtimeInfo = selectRuntime(opts.runtime, lastApply);
+  const runtimeInfo = selectRuntime(opts.runtime, lastApply, Boolean(opts.target));
   const { runtime } = runtimeInfo;
   const { files: expected, warnings } = buildExpectedFiles(
     manifest,
@@ -718,13 +779,15 @@ export async function apply(opts: ApplyOptions = {}): Promise<ApplyResult> {
   // the runtime on the next .last-apply write even when no generated file
   // changed, so the next plain apply reuses it.
   const runtimeRecordStale = lastApply !== null && lastApply.runtime !== runtime;
-  const reusedHint = (want: Runtime): string =>
-    runtimeInfo.runtimeSource === "last-apply"
-      ? ` (runtime ${runtime} reused from the last apply; pass --runtime ${want} to change)`
-      : "";
+  const reusedHint =
+    runtimeInfo.runtimeSource === "last-apply" || runtimeInfo.runtimeSource === "inferred"
+      ? ` (runtime ${runtime} reused from the last apply; pass --runtime codex to change)`
+      : runtimeInfo.runtimeSource === "target"
+        ? " (--target implies claude-code)"
+        : "";
 
   if (opts.installCodex && runtime !== "codex") {
-    throw new HarnessExitError(`--install requires --runtime codex${reusedHint("codex")}`, EX_NOINPUT);
+    throw new HarnessExitError(`--install requires --runtime codex${reusedHint}`, EX_NOINPUT);
   }
 
   // Asset-content drift detection (Phase 3 #6): if a previous apply wrote
@@ -780,10 +843,11 @@ export async function apply(opts: ApplyOptions = {}): Promise<ApplyResult> {
   // Phase 6 #6: --target wires the generated settings.json into a
   // Claude Code path. The runtime=codex branch does not produce
   // settings.json at all, so the combination is incoherent. Reject
-  // early instead of writing a half-broken state.
+  // early instead of writing a half-broken state. Only an explicit
+  // --runtime reaches this: without one, --target implies claude-code.
   if (targetPath && runtime === "codex") {
     throw new HarnessExitError(
-      `--target is incompatible with --runtime codex (target wires Claude Code's settings.json)${reusedHint("claude-code")}`,
+      "--target is incompatible with --runtime codex (target wires Claude Code's settings.json)",
       EX_NOINPUT,
     );
   }
@@ -793,7 +857,7 @@ export async function apply(opts: ApplyOptions = {}): Promise<ApplyResult> {
   // all). Reject symmetrically to the codex branch above.
   if (targetPath && runtime === "opencode") {
     throw new HarnessExitError(
-      `--target is incompatible with --runtime opencode (target wires Claude Code's settings.json)${reusedHint("claude-code")}`,
+      "--target is incompatible with --runtime opencode (target wires Claude Code's settings.json)",
       EX_NOINPUT,
     );
   }

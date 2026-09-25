@@ -343,9 +343,13 @@ async function wireRuntime(o: WireRuntimeOpts): Promise<RuntimeApplyOutcome> {
     // manifest actually lands. The drift safeguard is appropriate
     // for ad-hoc `harness apply` calls, not for init's canonical
     // "start from scratch" path (agent-tasks/df68b3e6).
+    // The claude-code branch is claude-code by definition: pass it
+    // explicitly instead of inheriting the runtime the last apply recorded
+    // (agent-tasks b9e6d63c).
     const applyOpts: Parameters<typeof apply>[0] = {
       configPath: o.configPath,
       target: o.claudeSettingsPath,
+      runtime: "claude-code",
       merge: true,
       overwriteDrift: true,
       prompt: async () => "yes",

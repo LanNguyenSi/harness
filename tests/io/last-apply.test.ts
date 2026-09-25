@@ -88,6 +88,21 @@ describe("last-apply", () => {
     expect(() => readLastApply(tmpDir)).toThrow(/malformed/);
   });
 
+  it("readLastApply round-trips a string runtime and drops a non-string one", () => {
+    const record = buildLastApply({ "MEMORY.md": "m" });
+    writeLastApply(tmpDir, { ...record, runtime: "codex" });
+    expect(readLastApply(tmpDir)?.runtime).toBe("codex");
+
+    // A hand-edited non-string runtime is ignored, not a malformed record.
+    const raw = JSON.parse(fs.readFileSync(lastApplyPath(tmpDir), "utf8")) as Record<string, unknown>;
+    raw["runtime"] = 5;
+    fs.writeFileSync(lastApplyPath(tmpDir), JSON.stringify(raw));
+    const loaded = readLastApply(tmpDir);
+    expect(loaded).not.toBeNull();
+    expect(loaded?.runtime).toBeUndefined();
+    expect(Object.keys(loaded?.files ?? {})).toEqual(["MEMORY.md"]);
+  });
+
   it("verifyLastApplyIntegrity returns [] when every stored sha matches its content", () => {
     const record = buildLastApply({
       "a.json": "a\n",

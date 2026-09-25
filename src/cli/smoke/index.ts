@@ -165,9 +165,13 @@ export async function runSmoke(opts: SmokeOptions): Promise<SmokeResult> {
   const settingsPath = path.join(opts.outputDir, SETTINGS_BASENAME);
 
   const applyImpl = opts.applyImpl ?? apply;
+  // smoke always drives claude, so the runtime is claude-code explicitly
+  // rather than whatever runtime the operator's last apply recorded
+  // (agent-tasks b9e6d63c).
   const applyOpts: Parameters<typeof apply>[0] = {
     target: settingsPath,
     force: true,
+    runtime: "claude-code",
   };
   if (opts.configPath) applyOpts.configPath = opts.configPath;
   if (opts.project) applyOpts.project = opts.project;

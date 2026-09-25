@@ -101,6 +101,10 @@ export function readLastApply(generatedDir: string): LastApplyRecord | null {
   if (!isLastApplyRecord(parsed)) {
     throw new Error(`malformed ${LAST_APPLY_BASENAME}: missing or invalid "files" map`);
   }
+  // A non-string `runtime` (only reachable by a hand edit) is dropped, the
+  // same as the apply command ignores an unknown runtime string, instead
+  // of failing every reader of the record.
+  if (parsed.runtime !== undefined && typeof parsed.runtime !== "string") delete parsed.runtime;
   return parsed;
 }
 
@@ -149,7 +153,6 @@ function isLastApplyRecord(x: unknown): x is LastApplyRecord {
   }
   // Optional manifest snapshot: tolerate omission; reject malformed shape.
   if (obj.manifest !== undefined && !isFileEntry(obj.manifest)) return false;
-  if (obj.runtime !== undefined && typeof obj.runtime !== "string") return false;
   if (obj.memoryDirs !== undefined) {
     if (typeof obj.memoryDirs !== "object" || obj.memoryDirs === null) return false;
     for (const v of Object.values(obj.memoryDirs as Record<string, unknown>)) {
