@@ -10,7 +10,9 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { stringify as yamlStringify } from "yaml";
-import { apply } from "../../../src/cli/apply/index.js";
+import { GENERATED_DIRNAME, apply } from "../../../src/cli/apply/index.js";
+import { buildProgram } from "../../../src/cli/index.js";
+import { readLastApply } from "../../../src/io/last-apply.js";
 import { runSmoke } from "../../../src/cli/smoke/index.js";
 import { HarnessExitError } from "../../../src/cli/exit-codes.js";
 
@@ -237,11 +239,113 @@ describe("runSmoke after an apply that recorded another runtime (agent-tasks b9e
         return apply({ ...opts, homeDir: home });
       },
       noDelegate: true,
+      stdout: () => {},
     });
     expect(result.exitCode).toBe(0);
     expect(seen[0]?.runtime).toBe("claude-code");
     const settings = JSON.parse(fs.readFileSync(result.settingsPath, "utf8")) as Record<string, unknown>;
     expect(settings.hooks).toBeDefined();
+  });
+
+  it("keeps the recorded codex runtime, says so, and the next plain apply restores codex", async () => {
+    const home = makeTmpDir("smoke-runtime-keep-home-");
+    const configPath = path.join(home, "harness.yaml");
+    fs.writeFileSync(
+      configPath,
+      yamlStringify({
+        version: 1,
+        tools: { mcp: [], cli: [], skills: { enabled: [], source_dirs: [] }, builtin: { known: [] } },
+        memory: { directories: [] },
+        hooks: [],
+        policies: [],
+        policy_packs: [{ name: "understanding-before-execution" }],
+      }),
+    );
+    await apply({ homeDir: home, configPath, runtime: "codex" });
+    const generatedDir = path.join(home, GENERATED_DIRNAME);
+    const instructionsPath = path.join(
+      generatedDir,
+      "policy-packs",
+      "understanding-before-execution",
+      "instructions.md",
+    );
+    const codexInstructions = fs.readFileSync(instructionsPath, "utf8");
+    expect(codexInstructions).toContain("## Runtime\n\ncodex");
+
+    let out = "";
+    const result = await runSmoke({
+      prompt: "x",
+      outputDir: makeTmpDir("smoke-runtime-keep-out-"),
+      claudeBin: makeFakeClaude({ stdout: `${RESULT_OK}\n` }),
+      configPath,
+      applyImpl: async (opts) => apply({ ...opts, homeDir: home }),
+      noDelegate: true,
+      stdout: (s: string) => {
+        out += s;
+      },
+    });
+    expect(result.exitCode).toBe(0);
+    expect(out).toContain(
+      "runtime: claude-code for smoke; the recorded runtime codex is kept, the next harness apply restores it\n",
+    );
+    // smoke generated the claude-code variant, but the runtime selection
+    // stays codex.
+    expect(fs.readFileSync(instructionsPath, "utf8")).toContain("## Runtime\n\nclaude-code");
+    expect(readLastApply(generatedDir)?.runtime).toBe("codex");
+
+    // The next plain dry-run reuses codex and lists the file it restores.
+    let dryOut = "";
+    const program = buildProgram({
+      stdout: (s: string) => {
+        dryOut += s;
+      },
+      stderr: () => {},
+    });
+    await program.parseAsync(["apply", "--config", configPath, "--dry-run", "--quiet"], {
+      from: "user",
+    });
+    expect(dryOut.startsWith("runtime: codex (from last apply; pass --runtime to change)\n")).toBe(
+      true,
+    );
+    expect(dryOut).toContain(instructionsPath);
+
+    // ...and the plain apply writes the codex variant back.
+    const restored = await apply({ homeDir: home, configPath });
+    expect(restored.runtime).toBe("codex");
+    expect(restored.runtimeSource).toBe("last-apply");
+    expect(fs.readFileSync(instructionsPath, "utf8")).toBe(codexInstructions);
+  });
+
+  it("prints no runtime line when the recorded runtime is already claude-code", async () => {
+    const home = makeTmpDir("smoke-runtime-cc-home-");
+    const configPath = path.join(home, "harness.yaml");
+    fs.writeFileSync(
+      configPath,
+      yamlStringify({
+        version: 1,
+        tools: { mcp: [], cli: [], skills: { enabled: [], source_dirs: [] }, builtin: { known: [] } },
+        memory: { directories: [] },
+        hooks: [],
+        policies: [],
+        policy_packs: [],
+      }),
+    );
+    await apply({ homeDir: home, configPath, runtime: "claude-code" });
+    let out = "";
+    const result = await runSmoke({
+      prompt: "x",
+      outputDir: makeTmpDir("smoke-runtime-cc-out-"),
+      claudeBin: makeFakeClaude({ stdout: `${RESULT_OK}\n` }),
+      configPath,
+      applyImpl: async (opts) => apply({ ...opts, homeDir: home }),
+      noDelegate: true,
+      stdout: (s: string) => {
+        out += s;
+      },
+    });
+    expect(result.exitCode).toBe(0);
+    expect(out).not.toContain("runtime:");
+    expect(readLastApply(path.join(home, GENERATED_DIRNAME))?.runtime).toBe("claude-code");
   });
 });
 

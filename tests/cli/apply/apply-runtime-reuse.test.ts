@@ -19,7 +19,12 @@ import {
 } from "../../../src/cli/apply/index.js";
 import { buildProgram } from "../../../src/cli/index.js";
 import { HarnessExitError } from "../../../src/cli/exit-codes.js";
-import { lastApplyPath, readLastApply } from "../../../src/io/last-apply.js";
+import {
+  buildLastApply,
+  lastApplyPath,
+  readLastApply,
+  writeLastApply,
+} from "../../../src/io/last-apply.js";
 
 let tmpHome: string;
 let manifestPath: string;
@@ -94,6 +99,43 @@ const INFERRED_CODEX_LINE =
   "runtime: codex (inferred from the last apply's generated files; pass --runtime to change)\n";
 const UNRECORDED_LINE =
   "runtime: claude-code (default; the last apply did not record a runtime, pass --runtime to choose)\n";
+
+// Write a `.last-apply` holding exactly these files (no runtime field).
+function writeRecord(files: Record<string, string>): void {
+  fs.mkdirSync(generatedDir(), { recursive: true });
+  writeLastApply(generatedDir(), buildLastApply(files));
+}
+
+// The shape a harness 0.58.2 install writes after `harness apply` and then
+// `harness apply --runtime codex --install`: no runtime field, both adapter
+// keys (the merge keeps the settings.json entry), and every policy-pack
+// instructions.md entry regenerated for codex. Contents are truncated
+// around each entry's `## Runtime` section.
+const MERGED_FIXTURE = path.join(
+  __dirname,
+  "..",
+  "..",
+  "fixtures",
+  "last-apply",
+  "merged-claude-code-then-codex.json",
+);
+
+function writeMergedFixture(edit?: (files: Record<string, string>) => void): void {
+  const rec = JSON.parse(fs.readFileSync(MERGED_FIXTURE, "utf8")) as {
+    files: Record<string, { content: string }>;
+  };
+  const files = Object.fromEntries(
+    Object.entries(rec.files).map(([key, entry]) => [key, entry.content]),
+  );
+  edit?.(files);
+  writeRecord(files);
+  // The generated files on disk match the record, as on a real machine.
+  for (const [key, content] of Object.entries(files)) {
+    const onDisk = path.join(generatedDir(), key);
+    fs.mkdirSync(path.dirname(onDisk), { recursive: true });
+    fs.writeFileSync(onDisk, content);
+  }
+}
 
 function editLastApply(edit: (rec: Record<string, unknown>) => void): void {
   const p = lastApplyPath(generatedDir());
@@ -365,20 +407,31 @@ describe("a .last-apply written before the runtime field existed", () => {
     ).toBe(true);
   });
 
-  it("several runtimes in the files map: uses the default and says the runtime was not recorded", async () => {
+  it("claude-code then codex (both adapter keys): the recorded pack instructions.md settle it on codex", async () => {
     await apply({ homeDir: tmpHome, runtime: "claude-code" });
     await apply({ homeDir: tmpHome, runtime: "codex" });
     stripRuntime();
     const keys = Object.keys(readLastApply(generatedDir())?.files ?? {});
     expect(keys).toContain(SETTINGS_BASENAME);
     expect(keys).toContain(CODEX_CONFIG_BASENAME);
+    const instructionsBefore = readInstructions();
 
     const result = await apply({ homeDir: tmpHome, dryRun: true });
-    expect(result.runtime).toBe("claude-code");
-    expect(result.runtimeSource).toBe("unrecorded");
-    expect(result.previousRuntime).toBeUndefined();
+    expect(result.runtime).toBe("codex");
+    expect(result.runtimeSource).toBe("inferred");
+    expect(result.previousRuntime).toBe("codex");
     const { out } = await cli(["--dry-run"]);
-    expect(out.startsWith(`${UNRECORDED_LINE}`)).toBe(true);
+    expect(out).toBe(`${INFERRED_CODEX_LINE}no changes\n`);
+    await apply({ homeDir: tmpHome });
+    expect(readInstructions()).toBe(instructionsBefore);
+  });
+
+  it("only codex/config.toml and no pack entries: the adapter key alone decides", async () => {
+    fs.mkdirSync(generatedDir(), { recursive: true });
+    writeRecord({ [CODEX_CONFIG_BASENAME]: "# codex\n" });
+    const result = await apply({ homeDir: tmpHome, dryRun: true });
+    expect(result.runtime).toBe("codex");
+    expect(result.runtimeSource).toBe("inferred");
   });
 
   it("an empty files map: uses the default and says the runtime was not recorded", async () => {
@@ -415,5 +468,157 @@ describe("a .last-apply written before the runtime field existed", () => {
     expect(result.files.some((f) => f.changed)).toBe(false);
     expect(result.codexConfigInstall?.written).toBe(true);
     expect(readLastApply(generatedDir())?.runtime).toBe("codex");
+  });
+});
+
+describe("a merged pre-field record from a claude-code then codex history", () => {
+  const MIXED_LINE =
+    "runtime: claude-code (default; the last apply did not record a runtime and generated files for claude-code and codex; pass --runtime codex to keep codex)\n";
+
+  it("the fixture has both adapter keys and no runtime field", () => {
+    writeMergedFixture();
+    const rec = readLastApply(generatedDir());
+    expect(rec?.runtime).toBeUndefined();
+    expect(Object.keys(rec?.files ?? {})).toEqual(
+      expect.arrayContaining([SETTINGS_BASENAME, CODEX_CONFIG_BASENAME]),
+    );
+  });
+
+  it("codex in every pack instructions.md: reuses codex and says it was inferred", async () => {
+    writeMergedFixture();
+    const { out, exit } = await cli(["--dry-run"]);
+    expect(exit).toBe(0);
+    expect(out.startsWith(INFERRED_CODEX_LINE)).toBe(true);
+
+    const result = await apply({ homeDir: tmpHome });
+    expect(result.runtime).toBe("codex");
+    expect(result.runtimeSource).toBe("inferred");
+    expect(readInstructions()).toContain("## Runtime\n\ncodex");
+    expect(readLastApply(generatedDir())?.runtime).toBe("codex");
+  });
+
+  it("pack entries that disagree: default runtime, and the line names the candidates", async () => {
+    writeMergedFixture((files) => {
+      const key = "policy-packs/branch-protection/instructions.md";
+      files[key] = files[key]!.replace("## Runtime\n\ncodex", "## Runtime\n\nclaude-code");
+    });
+    const result = await apply({ homeDir: tmpHome, dryRun: true });
+    expect(result.runtime).toBe("claude-code");
+    expect(result.runtimeSource).toBe("unrecorded");
+    expect(result.runtimeCandidates).toEqual(["claude-code", "codex"]);
+    const { out } = await cli(["--dry-run"]);
+    expect(out.startsWith(MIXED_LINE)).toBe(true);
+  });
+
+  it("a pack entry without a readable runtime: default runtime, and the line names the candidates", async () => {
+    writeMergedFixture((files) => {
+      const key = "policy-packs/solution-acceptance/instructions.md";
+      files[key] = files[key]!.replace("## Runtime\n\ncodex", "## Runtime\n\ngemini");
+    });
+    const { out, exit } = await cli(["--dry-run"]);
+    expect(exit).toBe(0);
+    expect(out.startsWith(MIXED_LINE)).toBe(true);
+  });
+
+  it("pack entries naming a runtime no adapter key names: default runtime, every candidate named", async () => {
+    writeMergedFixture((files) => {
+      for (const key of Object.keys(files)) {
+        if (key.endsWith("/instructions.md")) {
+          files[key] = files[key]!.replace(/## Runtime\n\ncodex/, "## Runtime\n\nopencode");
+        }
+      }
+    });
+    const { out } = await cli(["--dry-run"]);
+    expect(
+      out.startsWith(
+        "runtime: claude-code (default; the last apply did not record a runtime and generated files for claude-code, codex and opencode; pass --runtime codex or --runtime opencode to keep one of them)\n",
+      ),
+    ).toBe(true);
+  });
+
+  it("an explicit --runtime claude-code names the switch away from the inferred codex", async () => {
+    writeMergedFixture();
+    const { out } = await cli(["--runtime", "claude-code", "--dry-run"]);
+    expect(
+      out.startsWith("runtime: codex -> claude-code (switching from the last apply's runtime)\n"),
+    ).toBe(true);
+  });
+});
+
+describe("--install without --runtime on a claude-code record", () => {
+  it("a legacy settings.json-only record: the refusal says the runtime was inferred", async () => {
+    await apply({ homeDir: tmpHome, runtime: "claude-code" });
+    stripRuntime();
+    const { err, exit } = await cli(["--install"]);
+    expect(exit).not.toBe(0);
+    expect(err).toContain(
+      "--install requires --runtime codex (runtime claude-code inferred from the last apply's generated files; pass --runtime codex to change)",
+    );
+  });
+
+  it("a recorded claude-code runtime: the refusal says it was reused", async () => {
+    await apply({ homeDir: tmpHome, runtime: "claude-code" });
+    const { err, exit } = await cli(["--install"]);
+    expect(exit).not.toBe(0);
+    expect(err).toContain(
+      "--install requires --runtime codex (runtime claude-code reused from the last apply; pass --runtime codex to change)",
+    );
+  });
+});
+
+describe("preserveRecordedRuntime (the harness smoke apply)", () => {
+  it("keeps a recorded codex runtime while generating claude-code files", async () => {
+    await apply({ homeDir: tmpHome, runtime: "codex" });
+    const result = await apply({
+      homeDir: tmpHome,
+      runtime: "claude-code",
+      preserveRecordedRuntime: true,
+    });
+    expect(result.outcome).toBe("applied");
+    expect(result.runtime).toBe("claude-code");
+    expect(result.previousRuntime).toBe("codex");
+    expect(readInstructions()).toContain("## Runtime\n\nclaude-code");
+    const rec = readLastApply(generatedDir());
+    expect(rec?.runtime).toBe("codex");
+    expect(Object.keys(rec?.files ?? {})).toContain(SETTINGS_BASENAME);
+
+    const next = await apply({ homeDir: tmpHome, dryRun: true });
+    expect(next.runtime).toBe("codex");
+    expect(next.runtimeSource).toBe("last-apply");
+    expect(next.files.filter((f) => f.changed).map((f) => f.basename)).toContain(
+      "policy-packs/understanding-before-execution/instructions.md",
+    );
+  });
+
+  it("stamps the runtime inferred from a pre-field record, not its own", async () => {
+    await apply({ homeDir: tmpHome, runtime: "codex" });
+    stripRuntime();
+    await apply({ homeDir: tmpHome, runtime: "claude-code", preserveRecordedRuntime: true });
+    expect(readLastApply(generatedDir())?.runtime).toBe("codex");
+  });
+
+  it("a no-op apply over a pre-field record stamps the inferred runtime", async () => {
+    await apply({ homeDir: tmpHome, runtime: "codex" });
+    stripRuntime();
+    const result = await apply({
+      homeDir: tmpHome,
+      runtime: "codex",
+      preserveRecordedRuntime: true,
+    });
+    expect(result.files.some((f) => f.changed)).toBe(false);
+    expect(readLastApply(generatedDir())?.runtime).toBe("codex");
+  });
+
+  it("leaves the field absent when nothing was recorded or inferable", async () => {
+    await apply({ homeDir: tmpHome, runtime: "claude-code", preserveRecordedRuntime: true });
+    const rec = readLastApply(generatedDir());
+    expect(rec).not.toBeNull();
+    expect(rec?.runtime).toBeUndefined();
+  });
+
+  it("without the option the same apply records claude-code", async () => {
+    await apply({ homeDir: tmpHome, runtime: "codex" });
+    await apply({ homeDir: tmpHome, runtime: "claude-code" });
+    expect(readLastApply(generatedDir())?.runtime).toBe("claude-code");
   });
 });
