@@ -2,6 +2,21 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-09-25T12:02:14.000Z, task 5018c0c4 (implementer): re-verified and
+  re-stamped after the session approval marker was bound to the claimed
+  task and `task_merge` was added to every scaffolded
+  `expire_on_tool_match` list. `understanding-gate-lockout-recovery.md`
+  now documents the signed `claimTaskId` binding, the `belongs to another
+  task` block reason, and corrects the former claim that
+  `DEFAULT_BOUNDARY_TOOL_NAMES` is the runtime list when the block is
+  absent (it only shapes the emitted matcher; the runtime list comes from
+  config alone). `evidence-ledger-trust-boundary.md` and
+  `codex-adapter-parity-gaps.md` gained the binding (the latter also a
+  moved line range in the Codex hook). Timestamp-only re-stamps of
+  `debug-verb-selection.md`, `gate-fail-posture-matrix.md`,
+  `pause-vs-gate-kill-switch.md`, `quote-model-divergence.md` and
+  `understanding-gate-auto-mode-signals.md`, whose claims about the
+  touched sources (help text, scaffold lists, hook headers) still hold.
 - 2026-09-25T11:26:06.000Z, task 5018c0c4 (implementer): re-verified and re-stamped
   `understanding-gate-lockout-recovery.md` and `codex-adapter-parity-gaps.md`
   after the approval-marker expiry hook started asking the active-claim
@@ -2064,7 +2079,7 @@
   `probeRegularFilePresence`, or cite a span of `hook-pre-tool-use.ts`
   inside this round's edited region (lines ~940-978): `grep` across all 6
   for those terms found only `understanding-gate-lockout-recovery.md`'s
-  pre-existing citation at `src/cli/pack/hook-pre-tool-use.ts:939#"writePendingApproval(generatedDir, sessionId);"`,
+  pre-existing citation at `src/cli/pack/hook-pre-tool-use.ts:948#"writePendingApproval(generatedDir, sessionId);"`,
   well before the edited region, still resolving. `evidence-ledger-trust-boundary.md`
   was NOT flagged stale this round: it was itself edited (new
   `probeRegularFilePresence` paragraph, `delegation-markers.ts` added to
@@ -2116,7 +2131,7 @@
   describes only the new reason itself; neither touches any claim or
   cited span in these 7 docs (the one line-numbered citation among them,
   `understanding-gate-lockout-recovery.md`'s
-  `src/cli/pack/hook-pre-tool-use.ts:939#"writePendingApproval(generatedDir, sessionId);"`,
+  `src/cli/pack/hook-pre-tool-use.ts:948#"writePendingApproval(generatedDir, sessionId);"`,
   sits well before the edited comment and still resolves). Timestamp-only
   re-stamp on all 7; no content changed. `okf-kit check --json docs/okf`
   on the committed tree shows 0 errors, 0 warnings after the re-stamp.
