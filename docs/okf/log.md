@@ -2,6 +2,19 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-09-25T12:40:54.000Z, task b9e6d63c (implementer, review fix): `harness pack
+  remove --force` now keeps the runtime `.last-apply` records when it
+  prunes the pack's entries, and an older record's pack
+  `instructions.md` entries count only for the packs its own manifest
+  snapshot lists. `codex-adapter-parity-gaps.md` names both, adds
+  `src/cli/pack/remove.ts` to its sources, says the codex apply (not
+  smoke) is what skips `settings.json`, and re-points its `apply.ts`
+  ranges for the instructions.md comment, the permission warning and the
+  `--target` refusal. Re-verified `debug-verb-selection.md` (smoke
+  sentence unchanged), `policy-engine-producer-wiring.md` (apply's
+  grounding-mcp gate is unchanged) and `evidence-ledger-trust-boundary.md`
+  (it cites `docs/CLI.md` only for `harness session-start preflight`,
+  unchanged). Re-stamped all four.
 - 2026-09-25T12:16:45.000Z, task b9e6d63c (implementer, review fix): `harness smoke`
   now applies with `preserveRecordedRuntime`, so it keeps the runtime
   `.last-apply` records, and an older record holding both
