@@ -36,7 +36,9 @@
 // the delegation's signed `approvedBy` string is the packed
 // `delegated:<parent>;cwd=...;task=...;expires=...` tuple
 // (delegation-markers.ts), which has no room for one, and the ADR rules
-// out adding a new signed field (a `SIGNING_ALG` bump).
+// out adding a new required signed field (a `SIGNING_ALG` bump; only an
+// optional field left out of the payload when absent, like `claimTaskId`,
+// keeps the old bytes).
 //
 // REPORT FALLBACK (`--report <path>`): binds the launcher-supplied
 // report by BOTH its content (`reportContentHash`) and its path

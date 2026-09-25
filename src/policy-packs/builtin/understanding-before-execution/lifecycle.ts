@@ -35,7 +35,8 @@ import { InvalidDurationError, parseDurationSeconds } from "../../../policies/in
 // All three fields are optional. An empty list means no per-tool or
 // per-command expiry; an omitted max_age means no TTL. `{ mode: "session" }`
 // is the documented opt-out for operators who want the legacy behaviour —
-// but it opts out of the tool/bash boundary expiry only. `max_age` still
+// but it opts out of the tool/bash boundary expiry and the session
+// marker's task binding (task 5018c0c4) only. `max_age` still
 // applies under `mode: session` (task 496660c5): a session-scoped install
 // that never hits a listed tool or bash pattern still wants a TTL safety
 // net, and an in-flight subagent's inherited approval (see
