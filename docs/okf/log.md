@@ -2,6 +2,27 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-09-25T11:51:29.000Z, task b9e6d63c (implementer, review fix):
+  `harness apply --target` without `--runtime` now implies `claude-code`,
+  a `.last-apply` without a `runtime` field is read through its files
+  map, and `harness smoke` plus the init wizard's claude-code wire step
+  pass `claude-code` explicitly. `codex-adapter-parity-gaps.md` no longer
+  calls pack `instructions.md` runtime-agnostic (only `MEMORY.md` is; the
+  builtin packs' instructions branch on the runtime), names the
+  inference and the implied runtime, and re-points its `apply.ts` ranges
+  for that comment, the permission warning and the `--target` refusal.
+  Re-pointed the `src/cli/index.ts` citations in
+  `pause-vs-gate-kill-switch.md` and
+  `understanding-gate-lockout-recovery.md` by the two-line shift of the
+  `--target`/`--runtime` help text, and an older entry's `:2993-2997`
+  range by the same shift so it starts on the same line as before this
+  change. Re-verified `debug-verb-selection.md` (smoke still renders a
+  claude-code settings.json through apply; `ensureClaudeAvailable` is
+  unmoved), `policy-engine-producer-wiring.md`,
+  `evidence-ledger-trust-boundary.md`, `gate-fail-posture-matrix.md` and
+  `understanding-gate-auto-mode-signals.md` (the pack doc gained one
+  sentence on `--target` in its Codex adapter notes, which none of them
+  cite). Re-stamped all eight.
 - 2026-09-25T11:28:23.000Z, task b9e6d63c (implementer): re-stamped
   `evidence-ledger-trust-boundary.md` after `docs/CLI.md`'s `harness
   apply` row changed; the doc cites `docs/CLI.md` only for `harness
@@ -1147,7 +1168,7 @@
   `quote-model-divergence.md` and `understanding-gate-lockout-recovery.md`
   `sources-fresh` STALE against these files. Checked every line-numbered
   citation these seven docs make into the five touched files
-  (`src/cli/index.ts:1722-1737`, `:2993-2997`, `:3366-3465`,
+  (`src/cli/index.ts:1722-1737`, `:2995-2999`, `:3366-3465`,
   `:3368-3373`; `src/cli/init/templates.ts:928`): all still match their
   quoted text verbatim (sibling-line check), since none of this round's
   edits added or removed a line above a cited line in any file a
