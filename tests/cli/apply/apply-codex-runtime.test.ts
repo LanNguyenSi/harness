@@ -2673,9 +2673,8 @@ describe("apply --runtime codex --install through a symlinked config (task `1637
     expect(installed).toContain(CODEX_MANAGED_BEGIN);
     expect(fs.statSync(target).mode & 0o777).toBe(0o640);
     // The reported path is the real file written, and the summary names the link too.
-    const realTarget = fs.realpathSync(target);
-    expect(result.codexConfigInstall?.configPath).toBe(realTarget);
-    expect(result.codexConfigInstall?.summary).toContain(realTarget);
+    expect(result.codexConfigInstall?.configPath).toBe(target);
+    expect(result.codexConfigInstall?.summary).toContain(target);
     expect(result.codexConfigInstall?.summary).toContain(`via symlink ${codexConfig}`);
     expect(result.codexConfigInstall?.linkPath).toBe(codexConfig);
     // The backup holds the target's previous content and keeps its mode, but
@@ -2804,7 +2803,7 @@ describe("apply --runtime codex --install through a symlinked config (task `1637
     const parsed = JSON.parse(out) as {
       codexConfigInstall: { configPath: string; linkPath?: string; backupPath?: string };
     };
-    expect(parsed.codexConfigInstall.configPath).toBe(fs.realpathSync(target));
+    expect(parsed.codexConfigInstall.configPath).toBe(target);
     expect(parsed.codexConfigInstall.linkPath).toBe(codexConfig);
     expect(parsed.codexConfigInstall.backupPath?.startsWith(`${codexConfig}.harness-backup-`)).toBe(
       true,
@@ -2824,7 +2823,7 @@ describe("apply --runtime codex --install through a symlinked config (task `1637
     expect(fs.lstatSync(codexConfig).isSymbolicLink()).toBe(true);
     expect(fs.readlinkSync(codexConfig)).toBe(relative);
     expect(fs.readFileSync(target, "utf8")).toContain(CODEX_MANAGED_BEGIN);
-    expect(result.codexConfigInstall?.configPath).toBe(fs.realpathSync(target));
+    expect(result.codexConfigInstall?.configPath).toBe(target);
   });
 
   it("follows a symlink chain to the final file and leaves every link in the chain untouched", async () => {
@@ -2841,7 +2840,7 @@ describe("apply --runtime codex --install through a symlinked config (task `1637
     expect(fs.readlinkSync(middle)).toBe(target);
     expect(fs.lstatSync(middle).isSymbolicLink()).toBe(true);
     expect(fs.readFileSync(target, "utf8")).toContain(CODEX_MANAGED_BEGIN);
-    expect(result.codexConfigInstall?.configPath).toBe(fs.realpathSync(target));
+    expect(result.codexConfigInstall?.configPath).toBe(target);
     expect(result.codexConfigInstall?.linkPath).toBe(codexConfig);
     expect(result.codexConfigInstall?.backupPath).toBe(`${codexConfig}.harness-backup-${STAMP}`);
     expect(fs.readFileSync(result.codexConfigInstall!.backupPath!, "utf8")).toBe(BEFORE);
@@ -2864,7 +2863,7 @@ describe("apply --runtime codex --install through a symlinked config (task `1637
     const message = (err as Error).message;
     expect(message).toContain(codexConfig);
     expect(message).toContain("dangling");
-    const missing = path.join(fs.realpathSync(dotfilesDir), "gone.toml");
+    const missing = path.join(dotfilesDir, "gone.toml");
     expect(message).toContain(`ends at ${missing}, which does not exist`);
     expect(message).not.toContain("mid.toml, which does not exist");
     expect(siblingNames(dotfilesDir)).toEqual(["mid.toml"]);
@@ -2902,6 +2901,71 @@ describe("apply --runtime codex --install through a symlinked config (task `1637
     expect(message).not.toContain(path.join(tmpHome, "mid.toml"));
     expect(siblingNames(dotfilesRoot)).toEqual(["cx", "mid.toml"]);
     expect(siblingNames(physicalCodexDir)).toEqual(["config.toml"]);
+  });
+
+  it("writes the physical target of a `..` link when ~/.codex itself is a directory symlink, not the lexical path beside ~/.codex", async () => {
+    writeManifestWithPack();
+    // ~/.codex -> dotfiles/cx, and config.toml -> ../config.toml. The kernel
+    // resolves `..` from dotfiles/cx, so the real file is
+    // dotfiles/config.toml. A lexical resolution against ~/.codex would
+    // name <home>/config.toml, an unrelated path that does not exist.
+    const dotfilesRoot = path.join(tmpHome, "dotfiles");
+    const physicalCodexDir = path.join(dotfilesRoot, "cx");
+    fs.mkdirSync(physicalCodexDir, { recursive: true });
+    fs.symlinkSync(physicalCodexDir, path.join(tmpHome, ".codex"));
+    const target = path.join(dotfilesRoot, "config.toml");
+    fs.writeFileSync(target, BEFORE);
+    const codexConfig = path.join(tmpHome, ".codex", "config.toml");
+    fs.symlinkSync("../config.toml", codexConfig);
+
+    const result = await installAt();
+
+    expect(result.codexConfigInstall?.written).toBe(true);
+    expect(result.codexConfigInstall?.configPath).toBe(target);
+    expect(result.codexConfigInstall?.linkPath).toBe(codexConfig);
+    const installed = fs.readFileSync(target, "utf8");
+    expect(installed.startsWith(`${BEFORE}\n`)).toBe(true);
+    expect(installed).toContain(CODEX_MANAGED_BEGIN);
+    expect(fs.existsSync(path.join(tmpHome, "config.toml"))).toBe(false);
+    expect(fs.lstatSync(codexConfig).isSymbolicLink()).toBe(true);
+    expect(fs.readlinkSync(codexConfig)).toBe("../config.toml");
+    expect(fs.lstatSync(path.join(tmpHome, ".codex")).isSymbolicLink()).toBe(true);
+    expect(fs.readlinkSync(path.join(tmpHome, ".codex"))).toBe(physicalCodexDir);
+  });
+
+  it("names the physical missing end when a later hop of a dangling chain sits behind a directory link with `..` link text", async () => {
+    writeManifestWithPack();
+    // ~/.codex/config.toml -> ../dotfiles/lnk/mid.toml, lnk -> deep/sub, and
+    // deep/sub/mid.toml -> ../gone.toml. The second hop's `..` is resolved
+    // from the physical dotfiles/deep/sub, so the chain ends at
+    // dotfiles/deep/gone.toml. Resolving that hop lexically against
+    // dotfiles/lnk would name dotfiles/gone.toml instead.
+    fs.mkdirSync(path.join(tmpHome, ".codex"));
+    const dotfilesRoot = path.join(tmpHome, "dotfiles");
+    const deepSub = path.join(dotfilesRoot, "deep", "sub");
+    fs.mkdirSync(deepSub, { recursive: true });
+    fs.symlinkSync("deep/sub", path.join(dotfilesRoot, "lnk"));
+    fs.symlinkSync("../gone.toml", path.join(deepSub, "mid.toml"));
+    const codexConfig = path.join(tmpHome, ".codex", "config.toml");
+    fs.symlinkSync("../dotfiles/lnk/mid.toml", codexConfig);
+
+    const err = await installAt().then(
+      () => {
+        throw new Error("expected the install to refuse");
+      },
+      (e: unknown) => e,
+    );
+
+    expect(err).toBeInstanceOf(CodexInstallRefusalError);
+    const message = (err as Error).message;
+    expect(message).toContain("dangling");
+    expect(message).toContain(
+      `ends at ${path.join(dotfilesRoot, "deep", "gone.toml")}, which does not exist`,
+    );
+    expect(message).not.toContain(`${path.join(dotfilesRoot, "gone.toml")},`);
+    expect(siblingNames(dotfilesRoot)).toEqual(["deep", "lnk"]);
+    expect(siblingNames(deepSub)).toEqual(["mid.toml"]);
+    expect(siblingNames(path.join(tmpHome, ".codex"))).toEqual(["config.toml"]);
   });
 
   it("adds no backup-location sentence to a refusal that does not point at backups, even through a link", async () => {
@@ -3051,7 +3115,7 @@ describe("apply --runtime codex --install through a symlinked config (task `1637
       { from: "user" },
     );
 
-    expect(out).toContain(`${fs.realpathSync(target)} (Codex install)`);
+    expect(out).toContain(`${target} (Codex install)`);
     expect(fs.readlinkSync(codexConfig)).toBe(target);
     expect(fs.readFileSync(target, "utf8")).toBe(BEFORE);
     expect(siblingNames(dotfilesDir)).toEqual(["config.toml"]);

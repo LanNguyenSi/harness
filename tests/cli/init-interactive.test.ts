@@ -2077,7 +2077,7 @@ describe("interactive wizard — runtime multiselect (task 696f7560)", () => {
     expect(fs.lstatSync(link).isSymbolicLink()).toBe(true);
     expect(fs.readFileSync(target, "utf8")).toContain("# BEGIN harness-managed codex hooks");
     expect(cap.stderr()).toContain(
-      `codex config installed into ${fs.realpathSync(target)} (via symlink ${link})`,
+      `codex config installed into ${target} (via symlink ${link})`,
     );
   });
 
