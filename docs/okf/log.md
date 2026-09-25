@@ -2,6 +2,16 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-09-25T12:28:33Z (task 5018c0c4, review round 2 notes): the `mode: session` bullet in
+  `understanding-gate-lockout-recovery.md` now says that mode also opts out of
+  the session marker's task binding; `lifecycle.ts`, `inflight-records.ts`,
+  `delegation-markers.ts` and `delegate/index.ts` comments name the optional
+  signed `claimTaskId`, and a test pins that its presence is signed. Comment
+  and CHANGELOG edits only; `codex-adapter-parity-gaps.md`,
+  `evidence-ledger-trust-boundary.md` and `gate-fail-posture-matrix.md`
+  re-checked (no claim touches the changed text) and re-stamped with
+  `understanding-gate-lockout-recovery.md`.
+
 - 2026-09-25T12:12:59.000Z, task 5018c0c4 (implementer): re-verified and re-stamped after
   the session approval marker's task binding was exempted under
   `approval_lifecycle: { mode: session }` (operator decision).
