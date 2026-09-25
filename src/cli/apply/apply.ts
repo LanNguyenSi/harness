@@ -186,7 +186,12 @@ export interface FileApplyOutcome {
 }
 
 export interface CodexConfigInstallOutcome {
+  /** The regular file the install read and wrote; for a symlinked config,
+   * the link's resolved target (task 1637fbc8). */
   configPath: string;
+  /** The requested config path when it is a symlink, absent otherwise
+   * (task 1637fbc8). A backup of a symlinked config sits beside it. */
+  linkPath?: string;
   changed: boolean;
   written: boolean;
   summary: string;
@@ -307,6 +312,7 @@ function codexInstallOutcome(
 ): CodexConfigInstallOutcome {
   return {
     configPath: result.configPath,
+    ...(result.linkPath !== undefined ? { linkPath: result.linkPath } : {}),
     changed: result.changed,
     written: "written" in result ? result.written : false,
     summary: result.summary,

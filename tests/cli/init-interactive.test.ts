@@ -173,9 +173,17 @@ let tmpHome: string;
 let fakeDepsPath: string;
 let savedHarnessHome: string | undefined;
 
+// Temp roots sit under the PHYSICAL temp directory: on macOS os.tmpdir()
+// is itself reached through a symlink (/var -> /private/var), so a
+// symlinked-config fixture under the raw os.tmpdir() would get link
+// resolution for free and could pass there only by accident.
+function makeTmpRoot(prefix: string): string {
+  return fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), prefix));
+}
+
 beforeEach(() => {
-  tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), "harness-wizard-"));
-  fakeDepsPath = fs.mkdtempSync(path.join(os.tmpdir(), "harness-wizard-deps-"));
+  tmpHome = makeTmpRoot("harness-wizard-");
+  fakeDepsPath = makeTmpRoot("harness-wizard-deps-");
   // The wizard resolves the harness home through `resolveHomeDir`, whose
   // `$HARNESS_HOME` tier outranks the `userHome`-based resolution these
   // tests rely on. Clear it so a CI env leak cannot redirect detect() /
@@ -2041,6 +2049,36 @@ describe("interactive wizard — runtime multiselect (task 696f7560)", () => {
     expect(cap.stderr()).toContain("codex config installed into");
     // Claude Code's settings.json must NOT be touched when only codex is selected.
     expect(fs.existsSync(path.join(tmpHome, ".claude", "settings.json"))).toBe(false);
+  });
+
+  it("names the real file written and the link when ~/.codex/config.toml is a symlink (task 1637fbc8)", async () => {
+    fs.mkdirSync(path.join(tmpHome, ".claude"));
+    const dotfilesDir = path.join(tmpHome, "dotfiles", "codex");
+    fs.mkdirSync(dotfilesDir, { recursive: true });
+    fs.mkdirSync(path.join(tmpHome, ".codex"));
+    const target = path.join(dotfilesDir, "config.toml");
+    fs.writeFileSync(target, 'model = "gpt-5.5"\n');
+    const link = path.join(tmpHome, ".codex", "config.toml");
+    fs.symlinkSync(target, link);
+    const cap = captureStreams();
+    const result = await runInteractive({
+      homeDir: tmpHome,
+      dependencyPathEnv: fakeDepsPath,
+      prompts: mockPrompts({
+        select: ["solo"],
+        input: ["~/.claude/projects/{project}/memory"],
+        confirm: [true],
+        checkbox: [["codex"]],
+      }),
+      stdout: cap.out,
+      stderr: cap.err,
+    });
+    expect(result.aborted).toBe(false);
+    expect(fs.lstatSync(link).isSymbolicLink()).toBe(true);
+    expect(fs.readFileSync(target, "utf8")).toContain("# BEGIN harness-managed codex hooks");
+    expect(cap.stderr()).toContain(
+      `codex config installed into ${target} (via symlink ${link})`,
+    );
   });
 
   it("wires both runtimes in one run when the operator picks both", async () => {

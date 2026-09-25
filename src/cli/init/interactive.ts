@@ -426,13 +426,19 @@ async function wireRuntime(o: WireRuntimeOpts): Promise<RuntimeApplyOutcome> {
     const r = await apply(applyOpts);
     const generatedCodexPath = path.join(r.generatedDir, CODEX_CONFIG_BASENAME);
     o.stderr(`\ncodex config generated at ${generatedCodexPath}\n`);
-    if (r.codexConfigInstall?.written) {
-      o.stderr(`codex config installed into ${o.codexConfigPath}\n`);
-      if (r.codexConfigInstall.backupPath) {
-        o.stderr(`backup written to ${r.codexConfigInstall.backupPath}\n`);
+    // Name the real file written: for a symlinked config that is the
+    // link's resolved target, plus the link itself (task 1637fbc8).
+    const install = r.codexConfigInstall;
+    const writtenPath =
+      (install?.configPath ?? o.codexConfigPath) +
+      (install?.linkPath !== undefined ? ` (via symlink ${install.linkPath})` : "");
+    if (install?.written) {
+      o.stderr(`codex config installed into ${writtenPath}\n`);
+      if (install.backupPath) {
+        o.stderr(`backup written to ${install.backupPath}\n`);
       }
     } else {
-      o.stderr(`codex config already up to date at ${o.codexConfigPath}\n`);
+      o.stderr(`codex config already up to date at ${writtenPath}\n`);
     }
     for (const hint of r.restartHints) o.stderr(`restart hint: ${hint}\n`);
     const recoveryHint = `harness apply --runtime codex --install --codex-config ${o.codexConfigPath}`;
