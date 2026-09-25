@@ -2,6 +2,12 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-09-25T12:05:23.000Z, task 1637fbc8 (implementer): re-verified and re-stamped
+  `codex-adapter-parity-gaps.md` after a doc-comment move in a listed
+  source, `install-codex-config.ts` (no behaviour change; the symlink
+  fixtures now build under the physical temp directory). The doc's claim
+  that `--install` replaces only the marked harness-managed block still
+  holds; timestamp-only re-stamp.
 - 2026-09-25T11:42:22.000Z, task 1637fbc8 (implementer): re-verified and re-stamped
   `codex-adapter-parity-gaps.md` and `policy-engine-producer-wiring.md`
   after the symlinked-config follow-up touched listed sources
