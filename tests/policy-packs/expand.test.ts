@@ -189,7 +189,7 @@ describe("expandPolicyPacks", () => {
     // tools. tasks_transition is included since PR #200 with an in-hook
     // status filter (only `status=done` actually clears the marker).
     expect(post?.match).toBe(
-      "^(?:mcp__agent-tasks__task_finish|mcp__agent-tasks__task_abandon|mcp__agent-tasks__pull_requests_merge|mcp__agent-tasks__tasks_transition)$",
+      "^(?:mcp__agent-tasks__task_finish|mcp__agent-tasks__task_abandon|mcp__agent-tasks__pull_requests_merge|mcp__agent-tasks__tasks_transition|mcp__agent-tasks__task_merge)$",
     );
   });
 
@@ -304,7 +304,7 @@ describe("expandPolicyPacks", () => {
       (h) => h.name === "policy-pack:understanding-before-execution:post-tool-use",
     );
     expect(post?.match).toBe(
-      "^(?:mcp__agent-tasks__task_finish|mcp__agent-tasks__task_abandon|mcp__agent-tasks__pull_requests_merge|mcp__agent-tasks__tasks_transition|Bash)$",
+      "^(?:mcp__agent-tasks__task_finish|mcp__agent-tasks__task_abandon|mcp__agent-tasks__pull_requests_merge|mcp__agent-tasks__tasks_transition|mcp__agent-tasks__task_merge|Bash)$",
     );
     // Positive control: a real Bash tool_name now routes through the
     // emitted matcher. Negative control: an unrelated tool does not.
@@ -667,7 +667,7 @@ describe("expandPolicyPacks", () => {
     // token" guard in the generator and would silently skip the MCP
     // tool-name alias expansion Codex needs.
     expect(post?.match).toBe(
-      "mcp__agent-tasks__task_finish|mcp__agent-tasks__task_abandon|mcp__agent-tasks__pull_requests_merge|mcp__agent-tasks__tasks_transition",
+      "mcp__agent-tasks__task_finish|mcp__agent-tasks__task_abandon|mcp__agent-tasks__pull_requests_merge|mcp__agent-tasks__tasks_transition|mcp__agent-tasks__task_merge",
     );
   });
 
@@ -815,7 +815,7 @@ describe("expandPolicyPacks", () => {
     const r = expandPolicyPacks(m, "codex");
     const post = r.hooks.find((h) => h.event === "PostToolUse");
     expect(post?.match).toBe(
-      "mcp__agent-tasks__task_finish|mcp__agent-tasks__task_abandon|mcp__agent-tasks__pull_requests_merge|mcp__agent-tasks__tasks_transition|Bash|shell|exec_command|functions.exec_command",
+      "mcp__agent-tasks__task_finish|mcp__agent-tasks__task_abandon|mcp__agent-tasks__pull_requests_merge|mcp__agent-tasks__tasks_transition|mcp__agent-tasks__task_merge|Bash|shell|exec_command|functions.exec_command",
     );
     // Positive control (each shell alias routes); negative control (an
     // unrelated tool does not).

@@ -20,11 +20,20 @@ export const ACTIVE_CLAIM_TOOL_NAMES = [
   TASK_MERGE_TOOL,
 ] as const;
 
+/**
+ * Default approval-marker expiry boundaries (`expire_on_tool_match`).
+ * `task_merge` is listed because a `task_finish` that lands in `review`
+ * no longer expires the approval (it keeps the work claim, task
+ * 5018c0c4): the review-then-`task_merge` path must still expire it
+ * when the task reaches `done`, the same boundary where the active-claim
+ * marker is released.
+ */
 export const DEFAULT_BOUNDARY_TOOL_NAMES = [
   TASK_FINISH_TOOL,
   TASK_ABANDON_TOOL,
   PULL_REQUESTS_MERGE_TOOL,
   TASKS_TRANSITION_TOOL,
+  TASK_MERGE_TOOL,
 ] as const;
 
 export const DEFAULT_PROTECTED_COMPLETION_TOOLS = [

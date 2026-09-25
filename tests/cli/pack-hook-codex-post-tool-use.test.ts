@@ -709,7 +709,7 @@ describe("pack hook codex-post-tool-use — tasks_transition v1 status filter (p
 
     expect(result.matchedExpiry).toBe(false);
     expect(fs.existsSync(approvalMarkerPathFor(generatedDir, "sess-1"))).toBe(true);
-    expect(stderr.read()).toMatch(/tasks_transition status keeps work claim/);
+    expect(stderr.read()).toMatch(/tasks_transition keeps the work claim per the active-claim decider/);
   });
 });
 
@@ -885,5 +885,80 @@ describe("pack hook codex-post-tool-use — end-to-end matcher routing for expir
     const post = hooks.find((h) => h.event === "PostToolUse");
     const re = new RegExp(post!.match!);
     expect(re.test("Read")).toBe(false);
+  });
+});
+
+describe("pack hook codex-post-tool-use: approval expiry aligned with the active-claim decider (task 5018c0c4)", () => {
+  // Same decider as the Claude sibling, fed the event's tool_response.
+  // The content-block payload is the measured Claude Code capture; the
+  // CallToolResult object form is the shape the shared unwrap accepts
+  // for Codex (unmeasured there, handled defensively).
+  const fixturePath = path.join(
+    __dirname,
+    "..",
+    "fixtures",
+    "track-active-claim",
+    "real-posttooluse-task-finish-2.1.280.json",
+  );
+  const LIFECYCLE = {
+    expire_on_tool_match: ["mcp__agent-tasks__task_finish"],
+    max_age: "4h",
+  };
+
+  async function run(event: Record<string, unknown>): Promise<{
+    matched: boolean;
+    generatedDir: string;
+  }> {
+    const generatedDir = path.join(tmp, "harness.generated");
+    writeApprovalMarker(generatedDir, "redacted-session-id", {
+      approvedAt: "2026-09-24T08:00:00Z",
+      approvedBy: "test-operator",
+    });
+    const stderr = bufferStream();
+    const result = await runPackHookCodexPostToolUseCli({
+      manifest: manifestWithPack({ approval_lifecycle: LIFECYCLE }),
+      stdin: readableFromString(JSON.stringify(event)),
+      stderr: stderr.stream,
+      generatedDir,
+      reportsDir: path.join(tmp, "reports"),
+    });
+    return { matched: result.matchedExpiry, generatedDir };
+  }
+
+  function loadFixture(): Record<string, unknown> {
+    return JSON.parse(fs.readFileSync(fixturePath, "utf8")) as Record<string, unknown>;
+  }
+
+  it("finish-to-review (KEPT): the real content-block payload keeps the marker", async () => {
+    const { matched, generatedDir } = await run(loadFixture());
+    expect(matched).toBe(false);
+    expect(fs.existsSync(approvalMarkerPathFor(generatedDir, "redacted-session-id"))).toBe(true);
+  });
+
+  it("finish-to-review (KEPT) in the CallToolResult object envelope", async () => {
+    const raw = loadFixture();
+    const { matched, generatedDir } = await run({
+      ...raw,
+      tool_response: { content: raw["tool_response"] },
+    });
+    expect(matched).toBe(false);
+    expect(fs.existsSync(approvalMarkerPathFor(generatedDir, "redacted-session-id"))).toBe(true);
+  });
+
+  it("finish-to-done (EXPIRED) and an absent tool_response (EXPIRED, fail-safe)", async () => {
+    const raw = loadFixture();
+    const done = await run({
+      ...raw,
+      tool_response: [
+        { type: "text", text: JSON.stringify({ ok: true, task: { id: "abc-123", status: "done" } }) },
+      ],
+    });
+    expect(done.matched).toBe(true);
+    expect(fs.existsSync(approvalMarkerPathFor(done.generatedDir, "redacted-session-id"))).toBe(false);
+
+    const { tool_response: _drop, ...noResponse } = raw;
+    const absent = await run(noResponse);
+    expect(absent.matched).toBe(true);
+    expect(fs.existsSync(approvalMarkerPathFor(absent.generatedDir, "redacted-session-id"))).toBe(false);
   });
 });

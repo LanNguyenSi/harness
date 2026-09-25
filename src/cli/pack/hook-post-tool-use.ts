@@ -15,6 +15,12 @@
 // tool actually ran (a PreToolUse-blocked call does NOT fire PostToolUse),
 // so we never expire a marker for a tool the agent merely attempted.
 //
+// Exception, aligned with the active-claim marker (task 5018c0c4): a
+// task_finish whose result lands the task in `review` keeps the work
+// claim, so it keeps the approval too. That decision is not made here:
+// `matchPostToolUseBoundary` asks `claimEffectForAgentTasksTool` with
+// the event's `tool_response`, and an unreadable result still expires.
+//
 // Failure mode: every error path resolves to no-op + stderr log. The
 // gate is opt-in; turning a buggy hook into a session-wide "everything
 // is unapproved now" surface would be hostile. Worst case the marker
@@ -87,6 +93,7 @@ interface ToolEventLite {
   session_id?: unknown;
   tool_name?: unknown;
   tool_input?: unknown;
+  tool_response?: unknown;
 }
 
 function noop(
@@ -192,13 +199,22 @@ export async function runPackHookPostToolUseCli(
   // sibling hook via matchPostToolUseBoundary, task a1348c89). Bash
   // check only runs when the event is actually a Bash call; an MCP tool
   // whose name happens to match a regex is not a Bash boundary.
-  const boundary = matchPostToolUseBoundary(toolName, event.tool_input, lifecycle);
+  // `tool_response` feeds the active-claim decider so a task_finish that
+  // lands in `review` (claim kept) does not expire the approval
+  // (task 5018c0c4).
+  const boundary = matchPostToolUseBoundary(
+    toolName,
+    event.tool_input,
+    lifecycle,
+    undefined,
+    event.tool_response,
+  );
   if (!boundary.matched) {
     const detail = !boundary.rawToolNameMatched
       ? toolName === "Bash"
         ? `Bash command did not match any expire_on_bash_match regex`
         : `tool ${toolName} not in expire_on_tool_match`
-      : `tasks_transition status keeps work claim, skipping`;
+      : `${toolName} keeps the work claim per the active-claim decider`;
     return noop(
       `harness pack hook post-tool-use: ${detail}, skipping`,
       stderr,
