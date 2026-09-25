@@ -65,7 +65,15 @@ function matchedParent(
   source: "task" | "session" = "session",
   detail = "approved via marker sess-0000-1111",
 ): OperatorMarkerApproval {
-  return { matched: true, source, detail, taskCheckDetail: detail, expired: false, forged: false };
+  return {
+    matched: true,
+    source,
+    detail,
+    taskCheckDetail: detail,
+    expired: false,
+    forged: false,
+    sessionBindingRefused: false,
+  };
 }
 
 function unmatchedParent(): OperatorMarkerApproval {
@@ -76,6 +84,7 @@ function unmatchedParent(): OperatorMarkerApproval {
     taskCheckDetail: "no approval marker",
     expired: false,
     forged: false,
+    sessionBindingRefused: false,
   };
 }
 

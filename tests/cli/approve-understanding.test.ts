@@ -10,7 +10,10 @@ import {
 } from "../../src/cli/approve/understanding.js";
 import { buildProgram } from "../../src/cli/index.js";
 import { HarnessExitError } from "../../src/cli/exit-codes.js";
-import { REPORTS_DIR_ENV } from "../../src/policy-packs/builtin/understanding-before-execution-runtime.js";
+import {
+  REPORTS_DIR_ENV,
+  checkApprovalMarker,
+} from "../../src/policy-packs/builtin/understanding-before-execution-runtime.js";
 import { readPendingApproval, writePendingApproval } from "../../src/runtime/pending-approval.js";
 import { parseManifest, type Manifest } from "../../src/schema/index.js";
 
@@ -1330,6 +1333,36 @@ describe("approveUnderstanding — task-scoped marker (harness/1ee26e77)", () =>
       path.join(generatedDir, ".approvals", "task-task-from-file"),
     );
     expect(fs.existsSync(tm.filePath)).toBe(true);
+  });
+
+  it("binds the session marker to the active claim at approval time, not to --task, and to null without a claim (harness 5018c0c4)", async () => {
+    const generatedDir = path.join(tmp, "harness.generated");
+    fs.mkdirSync(generatedDir, { recursive: true });
+    fs.writeFileSync(path.join(generatedDir, "active-claim"), "task-from-file\n");
+    await approveUnderstanding({
+      manifest: manifest(),
+      session: "sess-1",
+      task: "task-from-flag",
+      reportsDir: tmp,
+      generatedDir,
+      ledgerAdd: async () => ({ ok: true }),
+    });
+    expect(checkApprovalMarker(generatedDir, "sess-1").marker?.claimTaskId).toBe("task-from-file");
+    // The task-scoped marker keeps its own semantics: no binding field.
+    const taskMarker = JSON.parse(
+      fs.readFileSync(path.join(generatedDir, ".approvals", "task-task-from-flag"), "utf8"),
+    ) as Record<string, unknown>;
+    expect(Object.prototype.hasOwnProperty.call(taskMarker, "claimTaskId")).toBe(false);
+
+    fs.rmSync(path.join(generatedDir, "active-claim"));
+    await approveUnderstanding({
+      manifest: manifest(),
+      session: "sess-2",
+      reportsDir: tmp,
+      generatedDir,
+      ledgerAdd: async () => ({ ok: true }),
+    });
+    expect(checkApprovalMarker(generatedDir, "sess-2").marker?.claimTaskId).toBeNull();
   });
 
   it("--task overrides the active-claim file when both are present", async () => {

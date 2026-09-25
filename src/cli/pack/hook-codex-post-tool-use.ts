@@ -98,6 +98,7 @@ interface CodexToolEventLite {
   tool?: unknown;
   tool_input?: unknown;
   raw_input?: unknown;
+  tool_response?: unknown;
 }
 
 /** Prefer `tool_input` (the field name real Codex sends; matches Claude
@@ -216,13 +217,19 @@ export async function runPackHookCodexPostToolUseCli(
   // (Bash/shell/exec_command/functions.exec_command, same set the
   // sibling PreToolUse blocker treats as shell-equivalent); any of
   // those counts as "the Bash tool" for expire_on_bash_match.
-  const boundary = matchPostToolUseBoundary(toolName, toolInput, lifecycle, CODEX_SHELL_TOOLS);
+  const boundary = matchPostToolUseBoundary(
+    toolName,
+    toolInput,
+    lifecycle,
+    CODEX_SHELL_TOOLS,
+    event.tool_response,
+  );
   if (!boundary.matched) {
     const detail = !boundary.rawToolNameMatched
       ? CODEX_SHELL_TOOLS.has(toolName)
         ? `Bash command did not match any expire_on_bash_match regex`
         : `tool ${toolName} not in expire_on_tool_match`
-      : `tasks_transition status keeps work claim, skipping`;
+      : `${toolName} keeps the work claim per the active-claim decider`;
     return noop(
       `harness pack hook codex-post-tool-use: ${detail}, skipping`,
       stderr,

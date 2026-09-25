@@ -90,6 +90,10 @@ import * as ubeShim from "../../src/policy-packs/builtin/understanding-before-ex
 // VerifyInflightRecordOptions, InflightRecordVerification,
 // InflightRecordsSummary) are absent from this list for the same reason
 // the delegation module's own type-only exports are.
+// Widened an eleventh time (harness 5018c0c4, session approval bound to
+// the claimed task) by checkSessionApprovalMarker. 81 -> 82. Its
+// SessionMarkerCheck interface is type-only and absent for the same
+// reason.
 //
 // Mutation-verified: temporarily re-adding `export { safeJsonParse } from
 // "./persisted-reports.js";` to
@@ -128,6 +132,7 @@ const EXPECTED_EXPORTS = [
   "checkApprovalMarker",
   "checkOperatorApprovalMarkers",
   "checkPersistedReport",
+  "checkSessionApprovalMarker",
   "clearActiveClaim",
   "clearApprovalMarker",
   "clearInflightRecord",
@@ -181,9 +186,9 @@ const EXPECTED_EXPORTS = [
 ] as const;
 
 describe("understanding-before-execution-runtime shim export surface", () => {
-  it("exports exactly the pinned 81-name surface, sorted", () => {
+  it("exports exactly the pinned 82-name surface, sorted", () => {
     const actual = Object.keys(ubeShim).sort();
-    expect(EXPECTED_EXPORTS).toHaveLength(81);
+    expect(EXPECTED_EXPORTS).toHaveLength(82);
     expect(actual).toEqual([...EXPECTED_EXPORTS].sort());
   });
 

@@ -15,6 +15,24 @@
   grounding-mcp gate is unchanged) and `evidence-ledger-trust-boundary.md`
   (it cites `docs/CLI.md` only for `harness session-start preflight`,
   unchanged). Re-stamped all four.
+
+- 2026-09-25T12:36:47Z (task 5018c0c4, review round 3 notes and master merge): the
+  approval-marker change was merged with the symlinked-config install fix from
+  master; `markers.ts`, the pack schema comment and the pack doc's config row
+  now name the session marker's task binding and its signed `claimTaskId`.
+  Comment and doc edits only; the five docs whose sources changed were
+  re-checked (no claim touches the changed text) and re-stamped.
+
+- 2026-09-25T12:28:33Z (task 5018c0c4, review round 2 notes): the `mode: session` bullet in
+  `understanding-gate-lockout-recovery.md` now says that mode also opts out of
+  the session marker's task binding; `lifecycle.ts`, `inflight-records.ts`,
+  `delegation-markers.ts` and `delegate/index.ts` comments name the optional
+  signed `claimTaskId`, and a test pins that its presence is signed. Comment
+  and CHANGELOG edits only; `codex-adapter-parity-gaps.md`,
+  `evidence-ledger-trust-boundary.md` and `gate-fail-posture-matrix.md`
+  re-checked (no claim touches the changed text) and re-stamped with
+  `understanding-gate-lockout-recovery.md`.
+
 - 2026-09-25T12:16:45.000Z, task b9e6d63c (implementer, review fix): `harness smoke`
   now applies with `preserveRecordedRuntime`, so it keeps the runtime
   `.last-apply` records, and an older record holding both
@@ -28,6 +46,43 @@
   grounding-mcp gate is unchanged) and `evidence-ledger-trust-boundary.md`
   (it cites `docs/CLI.md` only for `harness session-start preflight`,
   unchanged). Re-stamped all four.
+
+- 2026-09-25T12:12:59.000Z, task 5018c0c4 (implementer): re-verified and re-stamped after
+  the session approval marker's task binding was exempted under
+  `approval_lifecycle: { mode: session }` (operator decision).
+  `understanding-gate-lockout-recovery.md`,
+  `evidence-ledger-trust-boundary.md` and `codex-adapter-parity-gaps.md`
+  now say the binding applies outside that mode and name the residual
+  (under `mode: session` an out-of-band completion followed by a
+  `task_start` on another task keeps the approval until `max_age`).
+  Timestamp-only re-stamps of `debug-verb-selection.md`,
+  `gate-fail-posture-matrix.md`, `pause-vs-gate-kill-switch.md` and
+  `understanding-gate-auto-mode-signals.md`, whose claims about the
+  touched sources (help text, pack doc) still hold.
+
+- 2026-09-25T12:05:23.000Z, task 1637fbc8 (implementer): re-verified and re-stamped
+  `codex-adapter-parity-gaps.md` after a doc-comment move in a listed
+  source, `install-codex-config.ts` (no behaviour change; the symlink
+  fixtures now build under the physical temp directory). The doc's claim
+  that `--install` replaces only the marked harness-managed block still
+  holds; timestamp-only re-stamp.
+
+- 2026-09-25T12:02:14.000Z, task 5018c0c4 (implementer): re-verified and
+  re-stamped after the session approval marker was bound to the claimed
+  task and `task_merge` was added to every scaffolded
+  `expire_on_tool_match` list. `understanding-gate-lockout-recovery.md`
+  now documents the signed `claimTaskId` binding, the `belongs to another
+  task` block reason, and corrects the former claim that
+  `DEFAULT_BOUNDARY_TOOL_NAMES` is the runtime list when the block is
+  absent (it only shapes the emitted matcher; the runtime list comes from
+  config alone). `evidence-ledger-trust-boundary.md` and
+  `codex-adapter-parity-gaps.md` gained the binding (the latter also a
+  moved line range in the Codex hook). Timestamp-only re-stamps of
+  `debug-verb-selection.md`, `gate-fail-posture-matrix.md`,
+  `pause-vs-gate-kill-switch.md`, `quote-model-divergence.md` and
+  `understanding-gate-auto-mode-signals.md`, whose claims about the
+  touched sources (help text, scaffold lists, hook headers) still hold.
+
 - 2026-09-25T11:51:29.000Z, task b9e6d63c (implementer, review fix):
   `harness apply --target` without `--runtime` now implies `claude-code`,
   a `.last-apply` without a `runtime` field is read through its files
@@ -49,12 +104,23 @@
   `understanding-gate-auto-mode-signals.md` (the pack doc gained one
   sentence on `--target` in its Codex adapter notes, which none of them
   cite). Re-stamped all eight.
+
+- 2026-09-25T11:42:22.000Z, task 1637fbc8 (implementer): re-verified and re-stamped
+  `codex-adapter-parity-gaps.md` and `policy-engine-producer-wiring.md`
+  after the symlinked-config follow-up touched listed sources
+  (`install-codex-config.ts`, `apply.ts`): the backup of a symlinked config
+  now sits beside the link, and the install outcome carries the link as
+  `linkPath`. Both docs' claims still hold; the three `apply.ts` line
+  citations in the codex doc were re-mapped to the current lines (they had
+  drifted, and the new outcome field shifted them further).
+
 - 2026-09-25T11:28:23.000Z, task b9e6d63c (implementer): re-stamped
   `evidence-ledger-trust-boundary.md` after `docs/CLI.md`'s `harness
   apply` row changed; the doc cites `docs/CLI.md` only for `harness
   session-start preflight`, which is unchanged. Re-pointed an older
   entry's `src/cli/index.ts` range for the `pause`/`resume` bodies by the
   same seven-line shift so it still starts on the same statement.
+
 - 2026-09-25T11:27:44.000Z, task b9e6d63c (implementer): `harness apply`
   now reuses the runtime recorded in `.last-apply` when `--runtime` is
   omitted (`src/cli/apply/apply.ts`, `src/cli/index.ts`,
@@ -66,6 +132,24 @@
   re-checked each anchor. Re-verified `policy-engine-producer-wiring.md`
   and `debug-verb-selection.md` (their claims about these files still
   hold). Re-stamped all five.
+
+- 2026-09-25T11:26:06.000Z, task 5018c0c4 (implementer): re-verified and re-stamped
+  `understanding-gate-lockout-recovery.md` and `codex-adapter-parity-gaps.md`
+  after the approval-marker expiry hook started asking the active-claim
+  decider (a `task_finish` to `review` keeps the approval; `task_merge`
+  joined `DEFAULT_BOUNDARY_TOOL_NAMES`); both docs now say so. Timestamp-only
+  re-stamps of `evidence-ledger-trust-boundary.md`,
+  `gate-fail-posture-matrix.md` and `understanding-gate-auto-mode-signals.md`,
+  whose claims about the touched sources (`agent-tasks.ts`, the pack doc)
+  still hold unchanged.
+
+- 2026-09-25T11:22:46.000Z, task 1637fbc8 (implementer): re-verified and re-stamped
+  `codex-adapter-parity-gaps.md` after the symlinked-config fix touched a
+  listed source, `install-codex-config.ts` (a symlinked config is now
+  resolved and its target written, the link left intact). The doc's claim
+  that `--install` replaces only the marked harness-managed block still
+  holds; timestamp-only re-stamp, no wording changed.
+
 - 2026-09-24T06:05:53.000Z, task 461ec064 (orchestrator): re-stamped
   `codex-adapter-parity-gaps.md` after the refusal messages in
   `install-codex-config.ts` were qualified (restore from a backup only if
@@ -2119,7 +2203,7 @@
   `probeRegularFilePresence`, or cite a span of `hook-pre-tool-use.ts`
   inside this round's edited region (lines ~940-978): `grep` across all 6
   for those terms found only `understanding-gate-lockout-recovery.md`'s
-  pre-existing citation at `src/cli/pack/hook-pre-tool-use.ts:939#"writePendingApproval(generatedDir, sessionId);"`,
+  pre-existing citation at `src/cli/pack/hook-pre-tool-use.ts:948#"writePendingApproval(generatedDir, sessionId);"`,
   well before the edited region, still resolving. `evidence-ledger-trust-boundary.md`
   was NOT flagged stale this round: it was itself edited (new
   `probeRegularFilePresence` paragraph, `delegation-markers.ts` added to
@@ -2171,7 +2255,7 @@
   describes only the new reason itself; neither touches any claim or
   cited span in these 7 docs (the one line-numbered citation among them,
   `understanding-gate-lockout-recovery.md`'s
-  `src/cli/pack/hook-pre-tool-use.ts:939#"writePendingApproval(generatedDir, sessionId);"`,
+  `src/cli/pack/hook-pre-tool-use.ts:948#"writePendingApproval(generatedDir, sessionId);"`,
   sits well before the edited comment and still resolves). Timestamp-only
   re-stamp on all 7; no content changed. `okf-kit check --json docs/okf`
   on the committed tree shows 0 errors, 0 warnings after the re-stamp.

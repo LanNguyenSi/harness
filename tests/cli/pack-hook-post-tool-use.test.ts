@@ -14,6 +14,7 @@ import {
   writeTaskApprovalMarker,
 } from "../../src/policy-packs/builtin/understanding-before-execution-runtime.js";
 import { expandPolicyPacks } from "../../src/policy-packs/expand.js";
+import { DEFAULT_BOUNDARY_TOOL_NAMES } from "../../src/runtime/task-providers/agent-tasks.js";
 import { parseManifest, type Manifest } from "../../src/schema/index.js";
 
 let tmp: string;
@@ -126,6 +127,7 @@ describe("pack hook post-tool-use marker-expiry (agent-tasks/d8ee60ca)", () => {
       taskCheckDetail: "",
       expired: false,
       forged: false,
+      sessionBindingRefused: false,
     };
     const written = writeInflightRecord({
       generatedDir,
@@ -674,7 +676,7 @@ describe("pack hook post-tool-use — tasks_transition v1 status filter (PR #200
     expect(
       fs.existsSync(taskApprovalMarkerPathFor(generatedDir, "task-uuid-abc")),
     ).toBe(true);
-    expect(stderr.read()).toMatch(/tasks_transition status keeps work claim/);
+    expect(stderr.read()).toMatch(/tasks_transition keeps the work claim per the active-claim decider/);
   });
 
   it("is a no-op on tasks_transition status=in_progress", async () => {
@@ -820,5 +822,211 @@ describe("pack hook post-tool-use — end-to-end matcher routing for expire_on_b
     const re = new RegExp(post!.match!);
     expect(re.test("Read")).toBe(false);
     expect(re.test("mcp__unrelated__verb")).toBe(false);
+  });
+});
+
+describe("pack hook post-tool-use: approval expiry aligned with the active-claim decider (task 5018c0c4)", () => {
+  // Driven by the verbatim redacted live capture from task c86e3c4a:
+  // Claude Code's real PostToolUse tool_response for an MCP call is a
+  // content-block array, `[{ type: "text", text: "<json>" }]`.
+  const fixturePath = path.join(
+    __dirname,
+    "..",
+    "fixtures",
+    "track-active-claim",
+    "real-posttooluse-task-finish-2.1.280.json",
+  );
+  const SESSION = "redacted-session-id";
+  const TASK = "abc-123";
+  const LIFECYCLE = {
+    expire_on_tool_match: [
+      "mcp__agent-tasks__task_finish",
+      "mcp__agent-tasks__task_abandon",
+      "mcp__agent-tasks__pull_requests_merge",
+      "mcp__agent-tasks__tasks_transition",
+      "mcp__agent-tasks__task_merge",
+      "mcp__agent-tasks__task_start",
+      "mcp__agent-tasks__task_submit_pr",
+    ],
+    max_age: "4h",
+  };
+
+  function loadFixture(): Record<string, unknown> {
+    return JSON.parse(fs.readFileSync(fixturePath, "utf8")) as Record<string, unknown>;
+  }
+
+  /** The real capture with the resulting status (and optionally the
+   * tool name) swapped, keeping the content-block envelope. */
+  function fixtureWith(status: string, toolName?: string): Record<string, unknown> {
+    const raw = loadFixture();
+    const text = (raw["tool_response"] as Array<Record<string, unknown>>)[0]!["text"] as string;
+    const receipt = JSON.parse(text) as { ok: boolean; task: { id: string; status: string } };
+    return {
+      ...raw,
+      ...(toolName !== undefined ? { tool_name: toolName } : {}),
+      tool_response: [
+        { type: "text", text: JSON.stringify({ ...receipt, task: { ...receipt.task, status } }) },
+      ],
+    };
+  }
+
+  function seedMarkers(generatedDir: string): void {
+    writeApprovalMarker(generatedDir, SESSION, {
+      approvedAt: "2026-09-24T08:00:00Z",
+      approvedBy: "test-operator",
+    });
+    writeTaskApprovalMarker(generatedDir, TASK, {
+      approvedAt: "2026-09-24T08:00:00Z",
+      approvedBy: "test-operator",
+    });
+  }
+
+  async function run(
+    event: Record<string, unknown>,
+    lifecycle: Record<string, unknown> = LIFECYCLE,
+  ): Promise<{
+    result: Awaited<ReturnType<typeof runPackHookPostToolUseCli>>;
+    generatedDir: string;
+    stderr: string;
+  }> {
+    const generatedDir = path.join(tmp, "harness.generated");
+    seedMarkers(generatedDir);
+    const stderr = bufferStream();
+    const result = await runPackHookPostToolUseCli({
+      manifest: manifestWithPack({ approval_lifecycle: lifecycle }),
+      stdin: readableFromString(JSON.stringify(event)),
+      stderr: stderr.stream,
+      generatedDir,
+      reportsDir: path.join(tmp, "reports"),
+    });
+    return { result, generatedDir, stderr: stderr.read() };
+  }
+
+  function expectKept(generatedDir: string): void {
+    expect(fs.existsSync(approvalMarkerPathFor(generatedDir, SESSION))).toBe(true);
+    expect(fs.existsSync(taskApprovalMarkerPathFor(generatedDir, TASK))).toBe(true);
+  }
+
+  function expectExpired(generatedDir: string): void {
+    expect(fs.existsSync(approvalMarkerPathFor(generatedDir, SESSION))).toBe(false);
+    expect(fs.existsSync(taskApprovalMarkerPathFor(generatedDir, TASK))).toBe(false);
+  }
+
+  it("finish-to-review (KEPT): the real content-block payload, replayed verbatim, keeps the session and task approval markers", async () => {
+    const { result, generatedDir, stderr } = await run(loadFixture());
+    expect(result.matchedExpiry).toBe(false);
+    expect(result.markerCleared).toBe(false);
+    expect(result.taskMarkerCleared).toBe(false);
+    expectKept(generatedDir);
+    expect(stderr).toMatch(
+      /mcp__agent-tasks__task_finish keeps the work claim per the active-claim decider, skipping/,
+    );
+  });
+
+  it("finish-to-review via a Claude Code MCP name variant (dotted form) is still kept", async () => {
+    const { result, generatedDir } = await run(
+      fixtureWith("review", "mcp__agent-tasks__.task_finish"),
+    );
+    expect(result.matchedExpiry).toBe(false);
+    expectKept(generatedDir);
+  });
+
+  it("finish-to-done (EXPIRED): the same content-block shape with only the status changed", async () => {
+    const { result, generatedDir } = await run(fixtureWith("done"));
+    expect(result.matchedExpiry).toBe(true);
+    expect(result.markerCleared).toBe(true);
+    expect(result.taskMarkerCleared).toBe(true);
+    expectExpired(generatedDir);
+  });
+
+  it("task_abandon (EXPIRED) in the same content-block envelope", async () => {
+    const { result, generatedDir } = await run(
+      fixtureWith("open", "mcp__agent-tasks__task_abandon"),
+    );
+    expect(result.matchedExpiry).toBe(true);
+    expectExpired(generatedDir);
+  });
+
+  it("task_merge (EXPIRED) in the same content-block envelope, even when the receipt echoes a review status", async () => {
+    const { result, generatedDir } = await run(
+      fixtureWith("review", "mcp__agent-tasks__task_merge"),
+    );
+    expect(result.matchedExpiry).toBe(true);
+    expectExpired(generatedDir);
+  });
+
+  it("pull_requests_merge (EXPIRED): not a claim verb, plain list membership still decides", async () => {
+    const { result, generatedDir } = await run(
+      fixtureWith("review", "mcp__agent-tasks__pull_requests_merge"),
+    );
+    expect(result.matchedExpiry).toBe(true);
+    expectExpired(generatedDir);
+  });
+
+  it("task_submit_pr (EXPIRED when an operator lists it): unknown to the decider, list membership decides", async () => {
+    const { result, generatedDir } = await run(
+      fixtureWith("in_progress", "mcp__agent-tasks__task_submit_pr"),
+    );
+    expect(result.matchedExpiry).toBe(true);
+    expectExpired(generatedDir);
+  });
+
+  it("task_start (EXPIRED when an operator lists it): an acquire is not a keep, list membership decides", async () => {
+    const { result, generatedDir } = await run(
+      fixtureWith("in_progress", "mcp__agent-tasks__task_start"),
+    );
+    expect(result.matchedExpiry).toBe(true);
+    expectExpired(generatedDir);
+  });
+
+  it("tasks_transition status=review (KEPT) and status=done (EXPIRED) go through the same decider", async () => {
+    const kept = await run({
+      session_id: SESSION,
+      tool_name: "mcp__agent-tasks__tasks_transition",
+      tool_input: { taskId: TASK, status: "review" },
+    });
+    expect(kept.result.matchedExpiry).toBe(false);
+    expectKept(kept.generatedDir);
+    expect(kept.stderr).toMatch(/tasks_transition keeps the work claim per the active-claim decider/);
+
+    fs.rmSync(kept.generatedDir, { recursive: true, force: true });
+    const expired = await run({
+      session_id: SESSION,
+      tool_name: "mcp__agent-tasks__tasks_transition",
+      tool_input: { taskId: TASK, status: "done" },
+    });
+    expect(expired.result.matchedExpiry).toBe(true);
+    expectExpired(expired.generatedDir);
+  });
+
+  describe("fail-safe: an unreadable task_finish result EXPIRES (the safe side of the gate)", () => {
+    const base = (): Record<string, unknown> => loadFixture();
+    const cases: Array<[string, (e: Record<string, unknown>) => Record<string, unknown>]> = [
+      ["absent tool_response", (e) => { const { tool_response: _drop, ...rest } = e; return rest; }],
+      ["non-JSON text block", (e) => ({ ...e, tool_response: [{ type: "text", text: "not json {" }] })],
+      ["empty content-block array", (e) => ({ ...e, tool_response: [] })],
+      ["receipt without a task status", (e) => ({ ...e, tool_response: [{ type: "text", text: JSON.stringify({ ok: true, task: { id: TASK } }) }] })],
+      ["non-string status", (e) => ({ ...e, tool_response: { ok: true, task: { id: TASK, status: 7 } } })],
+      ["bare number", (e) => ({ ...e, tool_response: 42 })],
+    ];
+    for (const [label, mutate] of cases) {
+      it(`${label}: expires`, async () => {
+        const { result, generatedDir } = await run(mutate(base()));
+        expect(result.matchedExpiry).toBe(true);
+        expectExpired(generatedDir);
+      });
+    }
+  });
+
+  it("DEFAULT_BOUNDARY_TOOL_NAMES as the configured list keeps on finish-to-review and expires on task_merge", async () => {
+    const defaults = { expire_on_tool_match: [...DEFAULT_BOUNDARY_TOOL_NAMES], max_age: "4h" };
+    const kept = await run(loadFixture(), defaults);
+    expect(kept.result.matchedExpiry).toBe(false);
+    expectKept(kept.generatedDir);
+
+    fs.rmSync(kept.generatedDir, { recursive: true, force: true });
+    const merged = await run(fixtureWith("done", "mcp__agent-tasks__task_merge"), defaults);
+    expect(merged.result.matchedExpiry).toBe(true);
+    expectExpired(merged.generatedDir);
   });
 });

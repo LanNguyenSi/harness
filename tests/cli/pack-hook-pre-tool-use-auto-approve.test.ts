@@ -28,6 +28,7 @@ import {
   checkApprovalMarker,
   clearApprovalMarker,
   listPersistedReports,
+  writeActiveClaim,
   writeApprovalMarker,
 } from "../../src/policy-packs/builtin/understanding-before-execution-runtime.js";
 import {
@@ -573,6 +574,25 @@ describe("pack hook pre-tool-use — auto-approval path (ADR slice 1)", () => {
       expect(markerExists()).toBe(false);
       expect(ledgerCalls).toEqual([]);
       expect(readReport(report.filePath)["approvalStatus"]).toBe("expired");
+    });
+
+    it("an auto-minted session marker is bound to the active claim and does not carry over to another task (harness 5018c0c4)", async () => {
+      process.env.CLAUDE_CODE_SESSION_ID = SESSION;
+      getOrCreateSigningKey(generatedDir);
+      writeActiveClaim(generatedDir, "task-auto-a");
+      writePendingReport();
+      expect((await call()).blocked).toBe(false);
+      expect(readMarkerRaw()["claimTaskId"]).toBe("task-auto-a");
+      expect(checkApprovalMarker(generatedDir, SESSION).marker?.claimTaskId).toBe("task-auto-a");
+
+      // Another task is claimed; the consumed report cannot mint again, so
+      // the call blocks and says why.
+      writeActiveClaim(generatedDir, "task-auto-b");
+      const second = await call();
+      expect(second.blocked).toBe(true);
+      expect(second.stderr).toMatch(
+        /session approval for sess-auto-1 belongs to another task: it was granted for task task-auto-a, the active claim is now task task-auto-b/,
+      );
     });
 
     it("N11 — after max_age, the same report yields no second auto-marker; markerExpired stays true so the recovery `git commit` is still allowed", async () => {

@@ -7,10 +7,10 @@
 import * as fs from "node:fs";
 import { expandToolNameAliases } from "../../../runtime/tool-name-aliases.js";
 import {
-  matchesAgentTasksRuntimeVerb,
+  ACTIVE_CLAIM_TOOL_NAMES,
+  claimEffectForAgentTasksTool,
   taskIdFromInput,
   tasksTransitionStatusFromInput,
-  tasksTransitionReleasesClaim,
 } from "../../../runtime/task-providers/agent-tasks.js";
 import { type ApprovalLifecycle } from "./lifecycle.js";
 import { approvalMarkerPathFor, clearApprovalMarker } from "./markers.js";
@@ -118,43 +118,61 @@ export function extractTasksTransitionStatusFromToolInput(toolInput: unknown): s
 export interface PostToolUseBoundaryMatch {
   /** Final match decision: `toolNameMatched || bashRegex !== undefined`. */
   matched: boolean;
-  /** Tool-name match, refined by the tasks_transition status filter. */
+  /** Tool-name match, refined by the active-claim decider (a claim
+   * lifecycle verb the decider says keeps the work claim does not
+   * count, see `claimKeptByDecider`). */
   toolNameMatched: boolean;
-  /** Tool-name match BEFORE the tasks_transition status filter — lets
-   * the caller distinguish "not in the list" from "in the list, but
-   * status keeps the claim" for its diagnostic. */
+  /** Tool-name match BEFORE the active-claim decider filter: lets the
+   * caller distinguish "not in the list" from "in the list, but the
+   * work claim is kept" for its diagnostic. */
   rawToolNameMatched: boolean;
+  /** True when the tool is an agent-tasks claim lifecycle verb and
+   * `claimEffectForAgentTasksTool` returned `"none"` for it (a
+   * `task_finish` whose result landed in `review`, a legacy
+   * `tasks_transition` to a status other than `done`). */
+  claimKeptByDecider: boolean;
   /** The `expire_on_bash_match` regex the command satisfied, if any. */
   bashRegex: RegExp | undefined;
 }
 
 /**
- * Decide whether `toolName` (+ its `tool_input`) crosses one of the
- * configured `approval_lifecycle` boundaries. Pure — no filesystem
- * access. Callers branch on `.matched` before touching marker/report
- * state (see `applyPostToolUseExpiry`).
+ * Decide whether `toolName` (+ its `tool_input` and `tool_response`)
+ * crosses one of the configured `approval_lifecycle` boundaries. Pure,
+ * no filesystem access. Callers branch on `.matched` before touching
+ * marker/report state (see `applyPostToolUseExpiry`).
+ *
+ * The approval marker expires on the same boundary as the active-claim
+ * marker (task 5018c0c4): for an agent-tasks claim lifecycle verb
+ * (`ACTIVE_CLAIM_TOOL_NAMES`) the one decider,
+ * `claimEffectForAgentTasksTool`, is asked with the tool RESULT, and a
+ * `"none"` (claim kept) answer means "not a boundary". So a
+ * `task_finish` that lands the task in `review` keeps the approval,
+ * while `done`, `task_abandon`, `task_merge` and a `tasks_transition`
+ * to `done` expire it. There is no second local classification here.
+ * The decider's own fail-safe direction is `"release"` for an absent or
+ * unreadable `task_finish` result, which here means EXPIRE: the safe
+ * side of a gate. An `"acquire"` answer (`task_start`, only reachable
+ * when an operator lists it explicitly) and a tool the decider does not
+ * track (`pull_requests_merge`, `task_submit_pr`, any non-agent-tasks
+ * tool) keep the plain list-membership behaviour.
  */
 export function matchPostToolUseBoundary(
   toolName: string,
   toolInput: unknown,
   lifecycle: Pick<ApprovalLifecycle, "expireOnToolMatch" | "expireOnBashMatch">,
   bashToolNames: ReadonlySet<string> = DEFAULT_BASH_TOOL_NAMES,
+  toolResponse?: unknown,
 ): PostToolUseBoundaryMatch {
   const rawToolNameMatched = toolNameMatchesAny(toolName, lifecycle.expireOnToolMatch);
-  // Legacy v1 `tasks_transition`: only `status=done` releases the work
-  // claim (per task_finish docs: "The work claim is cleared when going
-  // to done and kept when going to review"). open / in_progress /
-  // review / missing status keep the marker. The task-provider adapter
-  // applies the same alias expansion as the general match above:
-  // a Codex dotted/server-variant `tasks_transition`
-  // tool_name must still get the status filter applied, otherwise it
-  // would fall through to the unconditional `true` branch below and
-  // clear the marker on ANY status — a worse bug than a missed match
+  // Alias-aware membership (a Codex dotted/server-variant tool_name is
+  // still a claim verb), so a variant `tasks_transition` cannot fall
+  // through to plain membership and clear the marker on ANY status
   // (review finding on task a1348c89).
-  const tasksTransitionStatusOk = matchesAgentTasksRuntimeVerb(toolName, ["tasks_transition"])
-    ? tasksTransitionReleasesClaim(toolInput)
-    : true;
-  const toolNameMatched = rawToolNameMatched && tasksTransitionStatusOk;
+  const claimKeptByDecider =
+    rawToolNameMatched &&
+    toolNameMatchesAny(toolName, ACTIVE_CLAIM_TOOL_NAMES) &&
+    claimEffectForAgentTasksTool(toolName, toolInput, toolResponse) === "none";
+  const toolNameMatched = rawToolNameMatched && !claimKeptByDecider;
   // Bash check only runs when the event is actually a Bash(-alias) call;
   // an MCP tool whose name happens to match a regex is not a Bash
   // boundary.
@@ -168,6 +186,7 @@ export function matchPostToolUseBoundary(
     matched: toolNameMatched || bashRegex !== undefined,
     toolNameMatched,
     rawToolNameMatched,
+    claimKeptByDecider,
     bashRegex,
   };
 }

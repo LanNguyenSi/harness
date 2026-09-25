@@ -89,6 +89,7 @@ function writeExistingRecord(generatedDir: string): void {
       taskCheckDetail: "n/a",
       expired: false,
       forged: false,
+      sessionBindingRefused: false,
     },
   });
   if (!result.ok) throw new Error(`fixture setup failed: ${result.detail}`);

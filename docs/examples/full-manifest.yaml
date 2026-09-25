@@ -770,8 +770,13 @@ policy_packs:
         expire_on_tool_match:
           - mcp__agent-tasks__task_finish
           - mcp__agent-tasks__task_abandon
+          # A task_finish that lands in review keeps the approval (the
+          # claim is kept, harness 5018c0c4), so the later task_merge is
+          # the boundary that expires it on the review-then-merge path.
+          - mcp__agent-tasks__task_merge
           - mcp__agent-tasks__pull_requests_merge
-          # Legacy v1 verb; the hook applies a status filter so only
+          # Legacy v1 verb; the hook asks the active-claim decider
+          # (claimEffectForAgentTasksTool), so only
           # `tool_input.status == "done"` actually expires the marker
           # (open / in_progress / review keep the work claim per v2
           # semantics, see PR #200).

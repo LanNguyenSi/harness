@@ -36,7 +36,9 @@
 // the delegation's signed `approvedBy` string is the packed
 // `delegated:<parent>;cwd=...;task=...;expires=...` tuple
 // (delegation-markers.ts), which has no room for one, and the ADR rules
-// out adding a new signed field (a `SIGNING_ALG` bump).
+// out adding a new required signed field (a `SIGNING_ALG` bump; only an
+// optional field left out of the payload when absent, like `claimTaskId`,
+// keeps the old bytes).
 //
 // REPORT FALLBACK (`--report <path>`): binds the launcher-supplied
 // report by BOTH its content (`reportContentHash`) and its path
@@ -64,7 +66,7 @@ import { atomicWriteFile } from "../../io/atomic-write.js";
 import { resolveGeneratedDir } from "../../runtime/pending-approval.js";
 import { resolveApprovalSessionId } from "../../runtime/session-id.js";
 import {
-  checkApprovalMarker,
+  checkSessionApprovalMarker,
   delegationReportPathFor,
   hashDelegationCwd,
   parseApprovalLifecycle,
@@ -301,11 +303,15 @@ export async function issueDelegation(
   );
 
   // Key one of the ADR's two-key design: the parent must already carry a
-  // valid, unexpired, signed approval marker. Same check the gate itself
-  // runs (`checkApprovalMarker`), same `max_age` bound.
-  const parentCheck = checkApprovalMarker(generatedDir, parentSessionId, {
+  // valid, unexpired, signed approval marker. Same session-marker check
+  // the gate itself runs (`checkSessionApprovalMarker`: signature,
+  // `max_age`, and, outside `mode: session`, the task binding of task
+  // 5018c0c4, so a parent approval granted for another task does not
+  // count), same `max_age` bound.
+  const parentCheck = checkSessionApprovalMarker(generatedDir, parentSessionId, {
     ...(lifecycle.maxAgeMs !== undefined ? { maxAgeMs: lifecycle.maxAgeMs } : {}),
     ...(opts.now !== undefined ? { now: opts.now } : {}),
+    taskBinding: !lifecycle.legacyMode,
   });
   if (!parentCheck.matched) {
     const reason: IssueDelegationRefusalReason = parentCheck.forged

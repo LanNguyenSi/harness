@@ -22,7 +22,8 @@
 //
 // WHY EVERY BINDING TRAVELS INSIDE `approvedBy`. The signing primitive
 // signs exactly the tuple (markerId, approvedAt, approvedBy,
-// reportContentHash) (src/runtime/approval-signing.ts), and adding a
+// reportContentHash) (src/runtime/approval-signing.ts), plus the optional
+// `claimTaskId` that keeps the old bytes when absent; adding any other
 // signed field would change `canonicalPayload`, which under that module's
 // strict no-migration precedent means a `SIGNING_ALG` bump and forced
 // re-approval on every install. So the delegation packs parent, cwd, task
