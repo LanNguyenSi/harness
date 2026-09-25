@@ -335,14 +335,14 @@ export async function runPackHookCodexPreToolUseCli(
   // or was cleared by a task-completion boundary tool. Mirrors the
   // Claude hook (hook-pre-tool-use.ts) so the two runtimes stay in
   // lockstep, same rationale as `checkOperatorApprovalMarkers` itself.
-  let markerExpired = false;
-  // True when checkOperatorApprovalMarkers found a marker FILE that failed
-  // signature verification (harness/f9485cc7), mirroring the Claude hook.
-  let markerForged = false;
   // Session marker refused only for its task binding (task 5018c0c4),
   // mirroring the Claude hook: blocks like a missing marker, with its
   // own reason text.
   let sessionBindingRefusedDetail: string | undefined;
+  let markerExpired = false;
+  // True when checkOperatorApprovalMarkers found a marker FILE that failed
+  // signature verification (harness/f9485cc7), mirroring the Claude hook.
+  let markerForged = false;
   if (generatedDir !== undefined) {
     const markers = checkOperatorApprovalMarkers(
       generatedDir,
@@ -352,7 +352,6 @@ export async function runPackHookCodexPreToolUseCli(
     );
     markerExpired = markers.expired;
     markerForged = markers.forged;
-    if (markers.sessionBindingRefused) sessionBindingRefusedDetail = markers.detail;
     if (markers.source !== "task") {
       // Trace the task-marker miss, mirroring the Claude hook, so an
       // operator debugging a Codex session sees the active-claim vs
@@ -361,6 +360,7 @@ export async function runPackHookCodexPreToolUseCli(
         `harness pack hook codex: task-scoped check: ${markers.taskCheckDetail}\n`,
       );
     }
+    sessionBindingRefusedDetail = markers.sessionBindingRefused ? markers.detail : undefined;
     if (markers.matched) {
       return allowResult(markers.detail, "marker", stderr);
     }
