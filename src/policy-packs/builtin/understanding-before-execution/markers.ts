@@ -12,6 +12,7 @@ import { readRegularFileRejectingSymlink } from "../../../io/read-regular-file.j
 import { signMarker, verifyMarkerSignature } from "../../../runtime/approval-signing.js";
 import { rejectMalformedSessionId } from "../../../runtime/reject-malformed-session-id.js";
 import { safeJsonParse } from "../../../io/safe-json-parse.js";
+import { readActiveClaim } from "./active-claim.js";
 
 export const APPROVAL_MARKER_DIRNAME = ".approvals";
 
@@ -32,6 +33,17 @@ export interface ApprovalMarker {
    * (possibly `null`) on a marker `checkApprovalMarker` returns.
    */
   reportContentHash?: string | null;
+  /**
+   * Task binding (task 5018c0c4): the active-claim task id this approval
+   * was granted for, `null` when no claim was held at approval time.
+   * Signed. On write, omitted means "resolve it now from the active-claim
+   * file" (see `writeApprovalMarker`). On a marker `checkApprovalMarker`
+   * returns, the property is ABSENT for a marker that carries no binding
+   * (one written by a release before the binding existed); the gate's
+   * session-marker reader (`checkSessionApprovalMarker`) refuses such a
+   * marker.
+   */
+  claimTaskId?: string | null;
 }
 
 /**
@@ -49,6 +61,15 @@ export interface ApprovalMarker {
  * the honest trust model. Mode 0600 on the marker file itself, best-
  * effort (matches the signing key's own permission convention); this is
  * defense-in-depth alongside the signature, not a substitute for it.
+ *
+ * Task binding (task 5018c0c4): every marker this writer signs records
+ * the task id of the active claim at the moment of writing (`null` when
+ * none is held), unless the caller passes `claimTaskId` explicitly. The
+ * binding is resolved here, at the one writer, so no approve path (the
+ * `harness approve understanding` CLI, the hook's auto-approval path)
+ * can mint an unbound session marker. Only the understanding gate's
+ * session-marker reader enforces it; the branch-protection marker, which
+ * shares this writer under its own id, carries the field unused.
  */
 export function writeApprovalMarker(
   generatedDir: string,
@@ -56,7 +77,9 @@ export function writeApprovalMarker(
   marker: ApprovalMarker,
 ): string {
   const filePath = approvalMarkerPathFor(generatedDir, sessionId);
-  const signed = signMarker(generatedDir, sessionId, marker);
+  const claimTaskId =
+    marker.claimTaskId !== undefined ? marker.claimTaskId : readActiveClaim(generatedDir);
+  const signed = signMarker(generatedDir, sessionId, { ...marker, claimTaskId });
   atomicWriteFile(filePath, `${JSON.stringify(signed, null, 2)}\n`, { mode: 0o600 });
   return filePath;
 }
@@ -264,6 +287,10 @@ export function checkApprovalMarker(
   const reportContentHash =
     typeof obj["reportContentHash"] === "string" ? (obj["reportContentHash"] as string) : null;
   const marker: ApprovalMarker = { approvedAt, approvedBy, reportContentHash };
+  // Signature verification above already rejected a malformed binding.
+  if (Object.prototype.hasOwnProperty.call(obj, "claimTaskId")) {
+    marker.claimTaskId = obj["claimTaskId"] as string | null;
+  }
 
   if (opts.maxAgeMs !== undefined) {
     const approvedAtMs = Date.parse(approvedAt);

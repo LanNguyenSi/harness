@@ -278,12 +278,26 @@ function canonicalPayload(
   approvedAt: string,
   approvedBy: string,
   reportContentHash: string | null,
+  claimTaskId?: string | null,
 ): string {
   // Fixed key order + JSON string-escaping makes this injective: there is
   // no (markerId, approvedAt, approvedBy, reportContentHash) tuple that
   // collides with a different tuple's encoding, unlike naive delimiter
   // concatenation (e.g. "a"+"bc" vs "ab"+"c").
-  return JSON.stringify({ markerId, approvedAt, approvedBy, reportContentHash });
+  //
+  // `claimTaskId` (task 5018c0c4) is the optional fifth field: the
+  // active-claim task id a session approval marker was granted for, or
+  // `null` for "no claim held". A marker that carries no binding (every
+  // task, delegation, in-flight and verdict marker, and a session marker
+  // written by an older release) signs and verifies over exactly the
+  // same bytes as before (the first branch below): no `SIGNING_ALG`
+  // bump, no migration. A present binding
+  // (string or `null`) is inside the signed bytes, so it cannot be added,
+  // dropped or changed without failing verification.
+  if (claimTaskId === undefined) {
+    return JSON.stringify({ markerId, approvedAt, approvedBy, reportContentHash });
+  }
+  return JSON.stringify({ markerId, approvedAt, approvedBy, reportContentHash, claimTaskId });
 }
 
 export interface SignedMarkerFields {
@@ -291,6 +305,12 @@ export interface SignedMarkerFields {
   approvedBy: string;
   /** sha256 hex of the persisted-report content this approval is bound to; null when no report exists to bind (e.g. branch-protection, or a ledger-only approval). */
   reportContentHash: string | null;
+  /**
+   * Active-claim task id the approval was granted for (`null` = no claim
+   * held at approval time). Present only when the writer supplied one;
+   * see `canonicalPayload`.
+   */
+  claimTaskId?: string | null;
   alg: string;
   signature: string;
 }
@@ -308,18 +328,24 @@ export interface SignedMarkerFields {
 export function signMarker(
   generatedDir: string,
   markerId: string,
-  marker: { approvedAt: string; approvedBy: string; reportContentHash?: string | null },
+  marker: {
+    approvedAt: string;
+    approvedBy: string;
+    reportContentHash?: string | null;
+    claimTaskId?: string | null;
+  },
 ): SignedMarkerFields {
   const { key } = getOrCreateSigningKey(generatedDir);
   const reportContentHash = marker.reportContentHash ?? null;
   const signature = crypto
     .createHmac("sha256", key)
-    .update(canonicalPayload(markerId, marker.approvedAt, marker.approvedBy, reportContentHash))
+    .update(canonicalPayload(markerId, marker.approvedAt, marker.approvedBy, reportContentHash, marker.claimTaskId))
     .digest("hex");
   return {
     approvedAt: marker.approvedAt,
     approvedBy: marker.approvedBy,
     reportContentHash,
+    ...(marker.claimTaskId !== undefined ? { claimTaskId: marker.claimTaskId } : {}),
     alg: SIGNING_ALG,
     signature,
   };
@@ -381,6 +407,18 @@ export function verifyMarkerSignature(
     typeof payload["reportContentHash"] === "string"
       ? (payload["reportContentHash"] as string)
       : null;
+  // Optional claim binding (task 5018c0c4): absent means "no binding"
+  // (verified over the pre-binding bytes); present must be a non-empty
+  // string or `null`, anything else is a malformed marker.
+  let claimTaskId: string | null | undefined;
+  if (Object.prototype.hasOwnProperty.call(payload, "claimTaskId")) {
+    const raw = payload["claimTaskId"];
+    if (raw === null || (typeof raw === "string" && raw.length > 0)) {
+      claimTaskId = raw;
+    } else {
+      return { ok: false, reason: "malformed claimTaskId (expected a non-empty string or null)" };
+    }
+  }
   let key: Buffer;
   try {
     ({ key } = getOrCreateSigningKey(generatedDir));
@@ -393,7 +431,7 @@ export function verifyMarkerSignature(
   }
   const expected = crypto
     .createHmac("sha256", key)
-    .update(canonicalPayload(markerId, approvedAt, approvedBy, reportContentHash))
+    .update(canonicalPayload(markerId, approvedAt, approvedBy, reportContentHash, claimTaskId))
     .digest();
   // No try/catch around Buffer.from(signature, "hex"): unlike JSON.parse,
   // Buffer.from with a "hex" encoding never throws on malformed input — it

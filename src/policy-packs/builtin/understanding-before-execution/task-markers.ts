@@ -32,11 +32,14 @@ import {
 // (different surface, different acceptance criteria). Without per-task
 // markers a multi-task session re-uses the first task's approval for
 // every subsequent task. The expire_on_tool_match PostToolUse hook
-// already deletes the session marker on `task_finish`, but if delivery
-// is unreliable (e.g. PostToolUse skipped for an MCP tool) the marker
-// silently persists. A task-keyed marker side-steps that delivery
-// concern because the next task's id is different even if the previous
-// marker file outlives its scope.
+// deletes the session marker on a listed completion boundary (a
+// `task_finish` to done, `task_abandon`, `task_merge`, ...), but if
+// delivery is unreliable (e.g. PostToolUse skipped for an MCP tool) or
+// the task completes outside the session (a merge in the UI), the file
+// persists. A task-keyed marker side-steps that delivery concern because
+// the next task's id is different even if the previous marker file
+// outlives its scope; the session marker gets the same property from its
+// signed task binding (`checkSessionApprovalMarker`, task 5018c0c4).
 
 export const APPROVAL_MARKER_TASK_PREFIX = "task-";
 
@@ -138,6 +141,73 @@ export function checkActiveClaimApprovalMarker(
   };
 }
 
+export interface SessionMarkerCheck extends MarkerCheck {
+  /**
+   * True when a validly signed session marker existed but was refused
+   * because of its task binding (task 5018c0c4): it was granted for a
+   * different active claim than the current one, or it carries no
+   * binding at all (written by a release before the binding existed).
+   * `matched`, `expired` and `forged` are all false in that case: the
+   * gate treats it exactly like a missing marker.
+   */
+  bindingRefused: boolean;
+}
+
+function describeClaim(taskId: string | null): string {
+  return taskId === null ? "no claimed task" : `task ${taskId}`;
+}
+
+/**
+ * Gate-side: the session-keyed marker, accepted only while it belongs to
+ * the current task (task 5018c0c4, operator decision: bind the session
+ * marker to the task). `writeApprovalMarker` records the active-claim
+ * task id at approval time (`null` when none was held); this reader
+ * compares it with the active claim NOW and refuses the marker when the
+ * two differ, so an approval never carries over to another task, even
+ * when the previous task completed outside the session where no
+ * PostToolUse hook could expire it (a merge in the UI, a webhook moving
+ * the task to done). A marker without the binding field (older release)
+ * is refused too: one fresh approve re-binds it.
+ *
+ * The binding is checked BEFORE the `maxAgeMs` verdict is passed on, so a
+ * marker that belongs to another task never reads as `expired` (that
+ * signal means "this task's own approval aged out" and opens the
+ * recovery-git-commit exemption, see src/runtime/recovery-git-commit.ts).
+ */
+export function checkSessionApprovalMarker(
+  generatedDir: string,
+  sessionId: string,
+  opts: CheckApprovalMarkerOptions = {},
+): SessionMarkerCheck {
+  const check = checkApprovalMarker(generatedDir, sessionId, opts);
+  if (check.marker === null) {
+    // Absent, unreadable, forged, or a malformed session id: nothing to
+    // bind, the plain verdict stands.
+    return { ...check, bindingRefused: false };
+  }
+  const refused = (detail: string): SessionMarkerCheck => ({
+    matched: false,
+    detail,
+    marker: null,
+    expired: false,
+    forged: false,
+    bindingRefused: true,
+  });
+  if (!Object.prototype.hasOwnProperty.call(check.marker, "claimTaskId")) {
+    return refused(
+      `session approval marker for ${sessionId} carries no task binding (written by a harness release before approvals were bound to the claimed task); approve once more to bind it to ${describeClaim(readActiveClaim(generatedDir))}`,
+    );
+  }
+  const boundTo = check.marker.claimTaskId ?? null;
+  const current = readActiveClaim(generatedDir);
+  if (boundTo !== current) {
+    return refused(
+      `session approval for ${sessionId} belongs to another task: it was granted for ${describeClaim(boundTo)}, the active claim is now ${describeClaim(current)}; approve the Understanding Report for this task`,
+    );
+  }
+  return { ...check, bindingRefused: false };
+}
+
 export interface OperatorMarkerApproval {
   matched: boolean;
   /** Which marker satisfied the gate; null when neither matched. */
@@ -167,6 +237,14 @@ export interface OperatorMarkerApproval {
    * attempt distinctly from the routine "not approved yet" case.
    */
   forged: boolean;
+  /**
+   * True when the session marker was refused only because of its task
+   * binding (`SessionMarkerCheck.bindingRefused`, task 5018c0c4): it
+   * belongs to another task, or predates the binding. Always false when
+   * `matched` is true. Lets the PreToolUse hooks say "the approval
+   * belongs to another task" instead of "no approval marker".
+   */
+  sessionBindingRefused: boolean;
 }
 
 /**
@@ -200,9 +278,10 @@ export function checkOperatorApprovalMarkers(
       taskCheckDetail: taskMarker.detail,
       expired: false,
       forged: false,
+      sessionBindingRefused: false,
     };
   }
-  const sessionMarker = checkApprovalMarker(generatedDir, sessionId, ageOpts);
+  const sessionMarker = checkSessionApprovalMarker(generatedDir, sessionId, ageOpts);
   if (sessionMarker.matched) {
     return {
       matched: true,
@@ -211,6 +290,7 @@ export function checkOperatorApprovalMarkers(
       taskCheckDetail: taskMarker.detail,
       expired: false,
       forged: false,
+      sessionBindingRefused: false,
     };
   }
   return {
@@ -232,6 +312,7 @@ export function checkOperatorApprovalMarkers(
     // the caller even though the overall result is (correctly) unmatched
     // — mirrors the `expired` OR-merge above.
     forged: taskMarker.forged || sessionMarker.forged,
+    sessionBindingRefused: sessionMarker.bindingRefused,
   };
 }
 

@@ -405,10 +405,13 @@ describe("writeApprovalMarker / checkApprovalMarker / clearApprovalMarker (agent
     expect(r.matched).toBe(true);
     expect(r.expired).toBe(false);
     expect(r.forged).toBe(false);
+    // No active claim at write time: the signed task binding records
+    // `null` (harness 5018c0c4).
     expect(r.marker).toEqual({
       approvedAt: "2026-05-15T20:00:00Z",
       approvedBy: "test-operator",
       reportContentHash: null,
+      claimTaskId: null,
     });
     expect(r.detail).toMatch(/approved at 2026-05-15T20:00:00Z by test-operator/);
   });

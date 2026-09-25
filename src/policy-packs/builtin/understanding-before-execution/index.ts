@@ -147,6 +147,8 @@ export {
   taskApprovalMarkerPathFor,
   writeTaskApprovalMarker,
   checkActiveClaimApprovalMarker,
+  type SessionMarkerCheck,
+  checkSessionApprovalMarker,
   type OperatorMarkerApproval,
   checkOperatorApprovalMarkers,
   clearTaskApprovalMarker,
