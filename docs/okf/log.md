@@ -2,6 +2,12 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-09-25T11:28:23.000Z, task b9e6d63c (implementer): re-stamped
+  `evidence-ledger-trust-boundary.md` after `docs/CLI.md`'s `harness
+  apply` row changed; the doc cites `docs/CLI.md` only for `harness
+  session-start preflight`, which is unchanged. Re-pointed an older
+  entry's `src/cli/index.ts` range for the `pause`/`resume` bodies by the
+  same seven-line shift so it still starts on the same statement.
 - 2026-09-25T11:27:44.000Z, task b9e6d63c (implementer): `harness apply`
   now reuses the runtime recorded in `.last-apply` when `--runtime` is
   omitted (`src/cli/apply/apply.ts`, `src/cli/index.ts`,
@@ -1242,7 +1248,7 @@
 - 2026-09-07T07:32:32Z, task 30183330 (orchestrator), review round 3 notes, docs and
   comments only: `docs/okf/pause-vs-gate-kill-switch.md` re-pointed its
   commands citation from a range that started inside an earlier command
-  body to `src/cli/index.ts:3330-3429` (the `pause` and `resume`
+  body to `src/cli/index.ts:3337-3436` (the `pause` and `resume`
   registrations); `docs/okf/codex-adapter-parity-gaps.md` corrected the
   docs/CLI.md line reference for the 2s Codex hook timeout note (line 67, a
   pre-existing off-by-two, measured equal at the base commit); the
