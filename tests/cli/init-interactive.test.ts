@@ -173,9 +173,17 @@ let tmpHome: string;
 let fakeDepsPath: string;
 let savedHarnessHome: string | undefined;
 
+// Temp roots sit under the PHYSICAL temp directory: on macOS os.tmpdir()
+// is itself reached through a symlink (/var -> /private/var), so a
+// symlinked-config fixture under the raw os.tmpdir() would get link
+// resolution for free and could pass there only by accident.
+function makeTmpRoot(prefix: string): string {
+  return fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), prefix));
+}
+
 beforeEach(() => {
-  tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), "harness-wizard-"));
-  fakeDepsPath = fs.mkdtempSync(path.join(os.tmpdir(), "harness-wizard-deps-"));
+  tmpHome = makeTmpRoot("harness-wizard-");
+  fakeDepsPath = makeTmpRoot("harness-wizard-deps-");
   // The wizard resolves the harness home through `resolveHomeDir`, whose
   // `$HARNESS_HOME` tier outranks the `userHome`-based resolution these
   // tests rely on. Clear it so a CI env leak cannot redirect detect() /

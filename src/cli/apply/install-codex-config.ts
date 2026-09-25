@@ -923,16 +923,6 @@ export function assertConfigSemanticInvariant(
 }
 
 /**
- * Resolves a symlinked config path to the regular file it points at (task
- * 1637fbc8). `atomicWriteFile` renames a temp file over its destination,
- * which would replace a symlink with a regular file and leave the link's
- * target (typically a dotfiles repo) silently stale; writing to the
- * resolved target instead keeps the link intact. A non-symlink path
- * (including a missing one) is returned unchanged. A dangling link, an
- * unresolvable chain (a loop, a permission error) or a link to anything
- * other than a regular file is refused before anything is written.
- */
-/**
  * Follows a dangling link chain hop by hop with `readlink` and returns the
  * first path in it that does not exist, so a dangling refusal names the
  * missing file rather than the first hop (which may be an existing
@@ -964,6 +954,16 @@ function missingEndOfLinkChain(start: string): string | undefined {
   return undefined;
 }
 
+/**
+ * Resolves a symlinked config path to the regular file it points at (task
+ * 1637fbc8). `atomicWriteFile` renames a temp file over its destination,
+ * which would replace a symlink with a regular file and leave the link's
+ * target (typically a dotfiles repo) silently stale; writing to the
+ * resolved target instead keeps the link intact. A non-symlink path
+ * (including a missing one) is returned unchanged. A dangling link, an
+ * unresolvable chain (a loop, a permission error) or a link to anything
+ * other than a regular file is refused before anything is written.
+ */
 function resolveConfigSymlink(requestedPath: string): string {
   let linkStat: fs.Stats;
   try {

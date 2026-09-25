@@ -26,8 +26,19 @@ import { readLastApply } from "../../../src/io/last-apply.js";
 
 let tmpHome: string;
 
+// Every temp root in this file is built under the PHYSICAL temp directory.
+// On macOS os.tmpdir() is itself reached through a symlink (/var ->
+// /private/var), so a fixture under the raw os.tmpdir() gets link
+// resolution for free and a test can pass there only by accident, while
+// the same test on Linux (a plain /tmp) exercises a different path. The
+// realpath makes the symlinked-config fixtures below behave identically
+// on every platform: each link in a fixture is one the test created.
+function makeTmpRoot(prefix: string): string {
+  return fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), prefix));
+}
+
 beforeEach(() => {
-  tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), "harness-apply-codex-"));
+  tmpHome = makeTmpRoot("harness-apply-codex-");
 });
 
 afterEach(() => {
@@ -845,7 +856,7 @@ describe("apply --runtime codex --install refuses when the harness block looks s
   });
 
   it("--json emits a structured codex-install-refuse error on stdout instead of only the plain-text message", async () => {
-    const home = fs.mkdtempSync(path.join(os.tmpdir(), "harness-apply-codex-json-"));
+    const home = makeTmpRoot("harness-apply-codex-json-");
     try {
       const manifest = {
         version: 1,
@@ -1283,7 +1294,7 @@ describe("apply --runtime codex --install --dry-run / --install: CLI-level outpu
   }
 
   it("--dry-run prints the removing-hook-block and preserving-foreign-section lines via the real CLI program, before writing anything", async () => {
-    const home = fs.mkdtempSync(path.join(os.tmpdir(), "harness-apply-codex-cli-dry-"));
+    const home = makeTmpRoot("harness-apply-codex-cli-dry-");
     try {
       const { codexConfig, manifestPath } = writeDriftedFixture(home);
       const before = fs.readFileSync(codexConfig, "utf8");
@@ -1322,7 +1333,7 @@ describe("apply --runtime codex --install --dry-run / --install: CLI-level outpu
   });
 
   it("a non-dry-run install prints the removed-hook-block and preserved-foreign-section summary lines via the real CLI program", async () => {
-    const home = fs.mkdtempSync(path.join(os.tmpdir(), "harness-apply-codex-cli-applied-"));
+    const home = makeTmpRoot("harness-apply-codex-cli-applied-");
     try {
       const { codexConfig, manifestPath } = writeDriftedFixture(home);
       let out = "";
@@ -2266,7 +2277,7 @@ describe("apply --runtime codex --install: a refusal never echoes the config's o
     manifestPath: string;
     codexConfig: string;
   } {
-    const home = fs.mkdtempSync(path.join(os.tmpdir(), "harness-apply-codex-secret-"));
+    const home = makeTmpRoot("harness-apply-codex-secret-");
     const manifest = {
       version: 1,
       tools: {
@@ -2858,6 +2869,63 @@ describe("apply --runtime codex --install through a symlinked config (task `1637
     expect(message).not.toContain("mid.toml, which does not exist");
     expect(siblingNames(dotfilesDir)).toEqual(["mid.toml"]);
     expect(siblingNames(path.dirname(codexConfig))).toEqual(["config.toml"]);
+  });
+
+  it("resolves a `..` link text against the physical directory when ~/.codex itself is a directory symlink", async () => {
+    writeManifestWithPack();
+    // ~/.codex -> dotfiles/cx, and config.toml -> ../mid.toml -> gone.toml.
+    // The kernel resolves `..` from the link's physical directory
+    // (dotfiles/cx), so the chain ends at dotfiles/gone.toml. Resolving it
+    // lexically against ~/.codex would name <home>/mid.toml instead, a
+    // path that is not in the chain at all.
+    const dotfilesRoot = path.join(tmpHome, "dotfiles");
+    const physicalCodexDir = path.join(dotfilesRoot, "cx");
+    fs.mkdirSync(physicalCodexDir, { recursive: true });
+    fs.symlinkSync(physicalCodexDir, path.join(tmpHome, ".codex"));
+    fs.symlinkSync("gone.toml", path.join(dotfilesRoot, "mid.toml"));
+    const codexConfig = path.join(tmpHome, ".codex", "config.toml");
+    fs.symlinkSync("../mid.toml", codexConfig);
+
+    const err = await installAt().then(
+      () => {
+        throw new Error("expected the install to refuse");
+      },
+      (e: unknown) => e,
+    );
+
+    expect(err).toBeInstanceOf(CodexInstallRefusalError);
+    const message = (err as Error).message;
+    expect(message).toContain("dangling");
+    expect(message).toContain(
+      `ends at ${path.join(dotfilesRoot, "gone.toml")}, which does not exist`,
+    );
+    expect(message).not.toContain(path.join(tmpHome, "mid.toml"));
+    expect(siblingNames(dotfilesRoot)).toEqual(["cx", "mid.toml"]);
+    expect(siblingNames(physicalCodexDir)).toEqual(["config.toml"]);
+  });
+
+  it("adds no backup-location sentence to a refusal that does not point at backups, even through a link", async () => {
+    const { codexConfig, dotfilesDir, target } = setUpDotfiles();
+    const unparseable = ["[tui]", 'broken = "unterminated', ""].join("\n");
+    fs.writeFileSync(target, unparseable);
+    fs.symlinkSync(target, codexConfig);
+
+    const err = await installAt().then(
+      () => {
+        throw new Error("expected the install to refuse");
+      },
+      (e: unknown) => e,
+    );
+
+    expect(err).toBeInstanceOf(CodexInstallRefusalError);
+    const message = (err as Error).message;
+    expect(message).toContain("the TOML parser used by harness could not read this file");
+    expect(message).not.toContain("through the symlink");
+    expect(message).not.toContain(".harness-backup-*");
+    expect(fs.readFileSync(target, "utf8")).toBe(unparseable);
+    expect(fs.readlinkSync(codexConfig)).toBe(target);
+    expect(siblingNames(path.dirname(codexConfig))).toEqual(["config.toml"]);
+    expect(siblingNames(dotfilesDir)).toEqual(["config.toml"]);
   });
 
   it("--dry-run on a dangling symlink refuses and writes nothing", async () => {
