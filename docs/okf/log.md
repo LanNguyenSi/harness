@@ -2,6 +2,17 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-09-25T11:27:44.000Z, task b9e6d63c (implementer): `harness apply`
+  now reuses the runtime recorded in `.last-apply` when `--runtime` is
+  omitted (`src/cli/apply/apply.ts`, `src/cli/index.ts`,
+  `src/io/last-apply.ts`). Updated `codex-adapter-parity-gaps.md` to state
+  the reuse and the `--target` refusal hint, and re-pointed its `apply.ts`
+  line references to the current lines. Re-pointed the `src/cli/index.ts`
+  citations in `pause-vs-gate-kill-switch.md` and
+  `understanding-gate-lockout-recovery.md` shifted by the change and
+  re-checked each anchor. Re-verified `policy-engine-producer-wiring.md`
+  and `debug-verb-selection.md` (their claims about these files still
+  hold). Re-stamped all five.
 - 2026-09-24T06:05:53.000Z, task 461ec064 (orchestrator): re-stamped
   `codex-adapter-parity-gaps.md` after the refusal messages in
   `install-codex-config.ts` were qualified (restore from a backup only if
