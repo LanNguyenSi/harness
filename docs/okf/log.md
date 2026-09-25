@@ -2,6 +2,19 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-09-25T12:16:45.000Z, task b9e6d63c (implementer, review fix): `harness smoke`
+  now applies with `preserveRecordedRuntime`, so it keeps the runtime
+  `.last-apply` records, and an older record holding both
+  `settings.json` and `codex/config.toml` is settled by its recorded pack
+  `instructions.md` `## Runtime` sections. `codex-adapter-parity-gaps.md`
+  names both and re-points its `apply.ts` ranges for the
+  instructions.md comment, the permission warning and the `--target`
+  refusal. `debug-verb-selection.md` says smoke renders the `claude-code`
+  variant and keeps the recorded runtime; `ensureClaudeAvailable` is
+  unmoved. Re-verified `policy-engine-producer-wiring.md` (apply's
+  grounding-mcp gate is unchanged) and `evidence-ledger-trust-boundary.md`
+  (it cites `docs/CLI.md` only for `harness session-start preflight`,
+  unchanged). Re-stamped all four.
 - 2026-09-25T11:51:29.000Z, task b9e6d63c (implementer, review fix):
   `harness apply --target` without `--runtime` now implies `claude-code`,
   a `.last-apply` without a `runtime` field is read through its files
