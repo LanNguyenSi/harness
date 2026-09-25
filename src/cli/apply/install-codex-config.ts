@@ -62,7 +62,19 @@ const HARNESS_HOOK_COMMENT_PREFIX = "# harness hook: ";
 const HOOK_ID_LINE_RE = /^# harness hook: (.+) \(budget_ms=\d+\)$/;
 
 export interface CodexConfigInstallPlan {
+  /**
+   * The regular file the install reads and writes. When the requested
+   * config path is a symlink (a dotfiles-managed config), this is the
+   * link's fully resolved target, so the write and its backup land next to
+   * the real file and the link itself stays a link (task 1637fbc8).
+   */
   configPath: string;
+  /**
+   * The requested config path when it is a symlink, set only then. Named
+   * in the summary so the operator sees both the link and the real file
+   * written.
+   */
+  linkPath?: string;
   generatedPath: string;
   currentContent: string;
   nextContent: string;
@@ -907,12 +919,74 @@ export function assertConfigSemanticInvariant(
   }
 }
 
+/**
+ * Resolves a symlinked config path to the regular file it points at (task
+ * 1637fbc8). `atomicWriteFile` renames a temp file over its destination,
+ * which would replace a symlink with a regular file and leave the link's
+ * target (typically a dotfiles repo) silently stale; writing to the
+ * resolved target instead keeps the link intact. A non-symlink path
+ * (including a missing one) is returned unchanged. A dangling link, an
+ * unresolvable chain (a loop, a permission error) or a link to anything
+ * other than a regular file is refused before anything is written.
+ */
+function resolveConfigSymlink(requestedPath: string): string {
+  let linkStat: fs.Stats;
+  try {
+    linkStat = fs.lstatSync(requestedPath);
+  } catch (err) {
+    const e = err as NodeJS.ErrnoException;
+    if (e.code === "ENOENT") return requestedPath;
+    throw err;
+  }
+  if (!linkStat.isSymbolicLink()) return requestedPath;
+
+  let resolved: string;
+  try {
+    resolved = fs.realpathSync(requestedPath);
+  } catch (err) {
+    const e = err as NodeJS.ErrnoException;
+    if (e.code === "ENOENT") {
+      let linkText = "";
+      try {
+        linkText = fs.readlinkSync(requestedPath);
+      } catch {
+        // The link vanished between lstat and readlink; the refusal below
+        // still names the link itself.
+      }
+      throw new CodexInstallRefusalError(
+        `Codex config ${requestedPath} is a dangling symlink` +
+          (linkText ? ` (points at ${linkText}, which does not exist)` : "") +
+          `; refusing to install, nothing was written. Create the link's target file ` +
+          `(or point the link at an existing config) and re-run.`,
+        requestedPath,
+      );
+    }
+    throw new CodexInstallRefusalError(
+      `Codex config ${requestedPath} is a symlink that cannot be resolved ` +
+        `(${e.code ?? "error"}: ${e.message}); refusing to install, nothing was written. ` +
+        `Fix the link chain and re-run.`,
+      requestedPath,
+    );
+  }
+  if (!fs.statSync(resolved).isFile()) {
+    throw new CodexInstallRefusalError(
+      `Codex config ${requestedPath} is a symlink to ${resolved}, which is not a regular ` +
+        `file; refusing to install, nothing was written. Point the link at a config file and re-run.`,
+      requestedPath,
+    );
+  }
+  return resolved;
+}
+
 export function planCodexConfigInstall(
   opts: CodexConfigInstallOptions,
 ): CodexConfigInstallPlan {
   validateCodexManagedConfig(opts.generatedContent);
 
-  const configPath = opts.configPath ?? defaultCodexConfigPath(opts.homeDir);
+  const requestedPath = opts.configPath ?? defaultCodexConfigPath(opts.homeDir);
+  const configPath = resolveConfigSymlink(requestedPath);
+  const linkPath = configPath !== requestedPath ? requestedPath : undefined;
+  const viaLink = linkPath !== undefined ? ` (via symlink ${linkPath})` : "";
   let currentContent = "";
   let configExisted = true;
   try {
@@ -943,7 +1017,7 @@ export function planCodexConfigInstall(
       : "";
     const tailStart = range.strayEnd ? range.strayEnd.end : range.end;
     nextContent = `${currentContent.slice(0, range.start)}${managedBlock}${middleForeign}${currentContent.slice(tailStart)}`;
-    summary = `updated harness-managed Codex hook block in ${configPath}`;
+    summary = `updated harness-managed Codex hook block in ${configPath}${viaLink}`;
   } else {
     const prefix =
       currentContent.length === 0
@@ -954,7 +1028,7 @@ export function planCodexConfigInstall(
             ? "\n"
             : "\n\n";
     nextContent = `${currentContent}${prefix}${managedBlock}`;
-    summary = `installed harness-managed Codex hook block into ${configPath}`;
+    summary = `installed harness-managed Codex hook block into ${configPath}${viaLink}`;
   }
 
   if (currentContent !== nextContent) {
@@ -963,6 +1037,7 @@ export function planCodexConfigInstall(
 
   return {
     configPath,
+    ...(linkPath !== undefined ? { linkPath } : {}),
     generatedPath: opts.generatedPath,
     currentContent,
     nextContent,
@@ -970,7 +1045,7 @@ export function planCodexConfigInstall(
     configExisted,
     summary:
       currentContent === nextContent
-        ? `Codex config already up to date: ${configPath}`
+        ? `Codex config already up to date: ${configPath}${viaLink}`
         : summary,
     removedHookIds,
     foreignSectionsPreserved,

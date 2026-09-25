@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **`harness apply --runtime codex --install` keeps a symlinked (dotfiles-managed) `~/.codex/config.toml` a symlink** (task `1637fbc8`). The install wrote through `atomicWriteFile`, whose temp-file rename replaced the link with a regular file and left the link's target (typically a dotfiles repo) unchanged, so the two silently diverged. `planCodexConfigInstall` now resolves a symlinked config path with `realpath` and plans against the resolved regular file: the backup holds that file's previous content and sits next to it, the atomic write's temp file is created in the target's own directory (so the rename stays on one filesystem), the target's file mode is preserved, and every link in the chain is left untouched. The plan and the `--install` result report the real file written as `configPath` (also shown by `--dry-run`), and the summary adds `(via symlink <link>)`. A dangling link, an unresolvable chain (a loop, a permission error) or a link to anything other than a regular file (such as a directory) is refused with a `CodexInstallRefusalError` naming the link, and nothing is written. `atomicWriteFile` itself and non-symlink config paths are unchanged. Pinned by fixtures in `tests/cli/apply/apply-codex-runtime.test.ts` for an absolute link, a relative link, a two-link chain, a dangling link, a loop, a link to a directory and `--dry-run` through a link, all failing at the pre-fix implementation.
+
 ## [0.58.2] - 2026-09-24
 
 ### Fixed
