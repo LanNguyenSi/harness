@@ -18,6 +18,7 @@ import {
   hashDelegationCwd,
   REPORTS_DIR_ENV,
   verifyDelegation,
+  writeActiveClaim,
   writeApprovalMarker,
 } from "../../src/policy-packs/builtin/understanding-before-execution-runtime.js";
 import {
@@ -343,6 +344,41 @@ describe("issueDelegation - refusals", () => {
     if (result.ok) throw new Error("expected refusal");
     expect(result.reason).toBe("parent-marker-expired");
     expect(fs.existsSync(delegationMarkerPathFor(generatedDir, CHILD))).toBe(false);
+  });
+
+  it("refuses with a parent marker granted for another task (harness 5018c0c4)", async () => {
+    writeActiveClaim(generatedDir, "task-parent-a");
+    approveParent();
+    writeActiveClaim(generatedDir, "task-parent-b");
+    const { ledgerAdd } = fakeLedger();
+    const result = await issueDelegation({
+      childSessionId: CHILD,
+      cwd: childCwd,
+      parentSessionId: PARENT,
+      generatedDir,
+      ledgerAdd,
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("expected refusal");
+    expect(result.reason).toBe("parent-marker-missing");
+    expect(result.detail).toMatch(/belongs to another task/);
+    expect(fs.existsSync(delegationMarkerPathFor(generatedDir, CHILD))).toBe(false);
+  });
+
+  it("accepts a parent marker granted for another task under approval_lifecycle mode: session (harness 5018c0c4)", async () => {
+    writeActiveClaim(generatedDir, "task-parent-a");
+    approveParent();
+    writeActiveClaim(generatedDir, "task-parent-b");
+    const { ledgerAdd } = fakeLedger();
+    const result = await issueDelegation({
+      childSessionId: CHILD,
+      cwd: childCwd,
+      parentSessionId: PARENT,
+      generatedDir,
+      manifest: manifestWithModeSessionMaxAge("2h"),
+      ledgerAdd,
+    });
+    expect(result.ok).toBe(true);
   });
 
   it("refuses without binding, neither --cwd nor --task (mutation probe M3 target)", async () => {

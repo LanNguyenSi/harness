@@ -16,8 +16,13 @@ import { atomicWriteFile } from "../../../io/atomic-write.js";
 // operator had to type the taskId by hand.
 //
 // File contract: a single line containing just the taskId. No JSON,
-// no metadata. Operators can `cat` it to debug. The post-tool-use
-// hook on task_finish / task_abandon removes the file.
+// no metadata. Operators can `cat` it to debug. The track-active-claim
+// PostToolUse hook removes the file when `claimEffectForAgentTasksTool`
+// says the claim is released (a task_finish to done, task_abandon,
+// task_merge, a tasks_transition to done); a task_finish that lands in
+// review keeps it. The session approval marker records this id when it
+// is written and, outside `approval_lifecycle: { mode: session }`,
+// counts only while it is unchanged (task 5018c0c4).
 
 export const ACTIVE_CLAIM_FILENAME = "active-claim";
 

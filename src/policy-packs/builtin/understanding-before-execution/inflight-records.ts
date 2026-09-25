@@ -32,7 +32,8 @@
 //
 // WHY EVERY BINDING TRAVELS INSIDE `approvedBy`. `signMarker` signs
 // exactly the tuple `(markerId, approvedAt, approvedBy,
-// reportContentHash)`; adding a signed field is a `SIGNING_ALG` bump.
+// reportContentHash)` plus, when present, the optional `claimTaskId`
+// (see `canonicalPayload`); any other new signed field is a `SIGNING_ALG` bump.
 // So the one thing this record signs beyond the marker id and the
 // issue timestamp — which parent authority actually matched — rides in
 // `approvedBy` as `inflight:<agentType>:parent=<task|session>`, the

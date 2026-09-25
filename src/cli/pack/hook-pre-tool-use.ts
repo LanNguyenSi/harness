@@ -755,6 +755,12 @@ export async function runPackHookPreToolUseCli(
   // cwd, and subagents") is a forgery attempt the operator should see
   // even though the in-flight record is what ends up opening the gate.
   let markerForgedDetail: string | undefined;
+  // Set when the session marker was refused only because of its task
+  // binding (task 5018c0c4): it was granted for another task, or predates
+  // the binding. Blocks exactly like a missing marker; only the reason
+  // text below differs, so the operator sees why an approval that exists
+  // on disk does not open the gate.
+  let sessionBindingRefusedDetail: string | undefined;
   if (generatedDir !== undefined) {
     // Source 1a/1b: task-scoped marker for the currently-claimed task
     // (harness/1ee26e77 + PR #198 correctness fix), then the
@@ -770,6 +776,7 @@ export async function runPackHookPreToolUseCli(
     );
     markerExpired = markers.expired;
     markerForged = markers.forged;
+    if (markers.sessionBindingRefused) sessionBindingRefusedDetail = markers.detail;
     if (markerForged) {
       // `markers.detail` is only ever the SESSION marker's detail on the
       // unmatched path (see OperatorMarkerApproval.detail); when it is
@@ -926,7 +933,9 @@ export async function runPackHookPreToolUseCli(
       ? `forged/unsigned marker rejected for session ${sessionId}; ${report.detail}; ${ledger.detail}`
       : inflightForged
         ? `forged/unsigned in-flight record for agent ${displayAgentId} rejected for session ${sessionId}; ${report.detail}; ${ledger.detail}`
-        : `no approval marker for session ${sessionId}; ${report.detail}; ${ledger.detail}${subagentRecordSentence}`
+        : sessionBindingRefusedDetail !== undefined
+          ? `${sessionBindingRefusedDetail}; ${report.detail}; ${ledger.detail}${subagentRecordSentence}`
+          : `no approval marker for session ${sessionId}; ${report.detail}; ${ledger.detail}${subagentRecordSentence}`
     : `generatedDir not resolvable (test/injection path); ${report.detail}; ${ledger.detail}`;
 
   // Stage the session id so `harness approve`, run from the operator's

@@ -78,7 +78,11 @@ describe("rotateSigningKey", () => {
       approvedBy: "op",
     });
     rotateSigningKey(generatedDir);
-    const verification = verifyMarkerSignature(generatedDir, "sess-1", signed as unknown as Record<string, unknown>);
+    const verification = verifyMarkerSignature(
+      generatedDir,
+      "sess-1",
+      signed as unknown as Record<string, unknown>,
+    );
     expect(verification.ok).toBe(false);
   });
 });
@@ -106,7 +110,9 @@ describe("signingKeyExists", () => {
 
   it("is false for a truncated key file (getOrCreateSigningKey would overwrite it, which is the operator-side act the probe refuses)", () => {
     fs.mkdirSync(generatedDir, { recursive: true });
-    fs.writeFileSync(signingKeyPathFor(generatedDir), Buffer.alloc(8), { mode: 0o600 });
+    fs.writeFileSync(signingKeyPathFor(generatedDir), Buffer.alloc(8), {
+      mode: 0o600,
+    });
     expect(signingKeyExists(generatedDir)).toBe(false);
   });
 
@@ -154,8 +160,11 @@ describe("signMarker / verifyMarkerSignature — round trip", () => {
     });
     expect(signed.reportContentHash).toBeNull();
     expect(
-      verifyMarkerSignature(generatedDir, "sess-1", signed as unknown as Record<string, unknown>)
-        .ok,
+      verifyMarkerSignature(
+        generatedDir,
+        "sess-1",
+        signed as unknown as Record<string, unknown>,
+      ).ok,
     ).toBe(true);
   });
 
@@ -235,7 +244,10 @@ describe("signMarker / verifyMarkerSignature — round trip", () => {
       approvedBy: "op",
     });
     const flippedChar = signed.signature[0] === "0" ? "1" : "0";
-    const tampered = { ...signed, signature: flippedChar + signed.signature.slice(1) };
+    const tampered = {
+      ...signed,
+      signature: flippedChar + signed.signature.slice(1),
+    };
     const r = verifyMarkerSignature(generatedDir, "sess-1", tampered);
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.reason).toMatch(/tampered or forged/);
@@ -264,15 +276,68 @@ describe("signMarker / verifyMarkerSignature — round trip", () => {
     });
     // Confirm it verifies BEFORE breaking the key, so the failure below is
     // attributable to the key becoming unavailable, not some other bug.
-    expect(verifyMarkerSignature(generatedDir, "sess-1", signed as unknown as Record<string, unknown>).ok).toBe(true);
+    expect(
+      verifyMarkerSignature(
+        generatedDir,
+        "sess-1",
+        signed as unknown as Record<string, unknown>,
+      ).ok,
+    ).toBe(true);
     const keyPath = signingKeyPathFor(generatedDir);
     fs.rmSync(keyPath, { force: true });
     fs.mkdirSync(keyPath); // a directory at the key's path: readFileSync throws EISDIR
-    const r = verifyMarkerSignature(generatedDir, "sess-1", signed as unknown as Record<string, unknown>);
+    const r = verifyMarkerSignature(
+      generatedDir,
+      "sess-1",
+      signed as unknown as Record<string, unknown>,
+    );
     expect(r.ok).toBe(false);
     if (!r.ok) {
       expect(r.kind).toBe("key-unavailable");
       expect(r.reason).toMatch(/signing key unavailable/);
     }
+  });
+});
+
+describe("signMarker / verifyMarkerSignature: claim binding presence (task 5018c0c4)", () => {
+  it("rejects a legacy-shape marker with claimTaskId: null injected without re-signing", () => {
+    const signed = signMarker(generatedDir, "sess-1", {
+      approvedAt: "2026-05-15T20:00:00Z",
+      approvedBy: "op",
+    });
+    expect(Object.prototype.hasOwnProperty.call(signed, "claimTaskId")).toBe(
+      false,
+    );
+    const tampered = { ...signed, claimTaskId: null } as unknown as Record<
+      string,
+      unknown
+    >;
+    expect(verifyMarkerSignature(generatedDir, "sess-1", tampered).ok).toBe(
+      false,
+    );
+  });
+
+  it("rejects a null-bound marker whose claimTaskId field was removed", () => {
+    const signed = signMarker(generatedDir, "sess-1", {
+      approvedAt: "2026-05-15T20:00:00Z",
+      approvedBy: "op",
+      claimTaskId: null,
+    });
+    expect(signed.claimTaskId).toBeNull();
+    expect(
+      verifyMarkerSignature(
+        generatedDir,
+        "sess-1",
+        signed as unknown as Record<string, unknown>,
+      ).ok,
+    ).toBe(true);
+    const { claimTaskId: _dropped, ...stripped } = signed;
+    expect(
+      verifyMarkerSignature(
+        generatedDir,
+        "sess-1",
+        stripped as unknown as Record<string, unknown>,
+      ).ok,
+    ).toBe(false);
   });
 });

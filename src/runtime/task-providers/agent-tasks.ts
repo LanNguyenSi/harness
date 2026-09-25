@@ -20,11 +20,23 @@ export const ACTIVE_CLAIM_TOOL_NAMES = [
   TASK_MERGE_TOOL,
 ] as const;
 
+/**
+ * Default approval-marker expiry tool list. It only shapes the EMITTED
+ * PostToolUse matcher when a manifest configures no explicit
+ * `approval_lifecycle.expire_on_tool_match`; the runtime boundary list
+ * the hook applies comes from the config alone (`parseApprovalLifecycle`
+ * returns an empty list when the key is absent). `task_merge` is listed
+ * because a `task_finish` that lands in `review` no longer expires the
+ * approval (it keeps the work claim, task 5018c0c4); an operator's
+ * explicit list, and every `harness init` scaffold, needs `task_merge`
+ * too for the review-then-`task_merge` path to expire the approval.
+ */
 export const DEFAULT_BOUNDARY_TOOL_NAMES = [
   TASK_FINISH_TOOL,
   TASK_ABANDON_TOOL,
   PULL_REQUESTS_MERGE_TOOL,
   TASKS_TRANSITION_TOOL,
+  TASK_MERGE_TOOL,
 ] as const;
 
 export const DEFAULT_PROTECTED_COMPLETION_TOOLS = [

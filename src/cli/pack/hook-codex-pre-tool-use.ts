@@ -335,6 +335,10 @@ export async function runPackHookCodexPreToolUseCli(
   // or was cleared by a task-completion boundary tool. Mirrors the
   // Claude hook (hook-pre-tool-use.ts) so the two runtimes stay in
   // lockstep, same rationale as `checkOperatorApprovalMarkers` itself.
+  // Session marker refused only for its task binding (task 5018c0c4),
+  // mirroring the Claude hook: blocks like a missing marker, with its
+  // own reason text.
+  let sessionBindingRefusedDetail: string | undefined;
   let markerExpired = false;
   // True when checkOperatorApprovalMarkers found a marker FILE that failed
   // signature verification (harness/f9485cc7), mirroring the Claude hook.
@@ -356,6 +360,7 @@ export async function runPackHookCodexPreToolUseCli(
         `harness pack hook codex: task-scoped check: ${markers.taskCheckDetail}\n`,
       );
     }
+    sessionBindingRefusedDetail = markers.sessionBindingRefused ? markers.detail : undefined;
     if (markers.matched) {
       return allowResult(markers.detail, "marker", stderr);
     }
@@ -508,7 +513,9 @@ export async function runPackHookCodexPreToolUseCli(
   const reason = generatedDir !== undefined
     ? markerForged
       ? `forged/unsigned marker rejected for session ${sessionId}; ${report.detail}; ${ledger.detail}`
-      : `no approval marker for session ${sessionId}; ${report.detail}; ${ledger.detail}`
+      : sessionBindingRefusedDetail !== undefined
+        ? `${sessionBindingRefusedDetail}; ${report.detail}; ${ledger.detail}`
+        : `no approval marker for session ${sessionId}; ${report.detail}; ${ledger.detail}`
     : `generatedDir not resolvable (test/injection path); ${report.detail}; ${ledger.detail}`;
   // When the pack config declares `ux:`, the agent-facing block becomes
   // the plain-language shape and the legacy schemaHint text is
