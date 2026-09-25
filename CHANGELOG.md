@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- **The understanding gate's approval marker now expires on the same boundary as the active-claim marker: a `task_finish` that lands the task in `review` no longer re-locks the session** (task `5018c0c4`, operator decision: align). The PostToolUse expiry hooks (`harness pack hook post-tool-use` and the Codex `codex-post-tool-use` sibling) share `matchPostToolUseBoundary`, which now asks the one decider, `claimEffectForAgentTasksTool`, with the event's `tool_response` for every listed agent-tasks claim lifecycle verb (`ACTIVE_CLAIM_TOOL_NAMES`); a "claim kept" answer is not a boundary. `task_finish` to `review` keeps the session and task approval markers; `task_finish` to `done`, `task_abandon`, `task_merge` and `tasks_transition` to `done` expire them; an absent or unreadable `task_finish` result expires (the decider's fail-safe `release`). The former local `tasks_transition` status filter is replaced by the same decider (same outcome), and its skip diagnostic now reads `<tool> keeps the work claim per the active-claim decider`. `pull_requests_merge`, a listed `task_submit_pr` and a listed `task_start` still expire on list membership. `task_merge` joins `DEFAULT_BOUNDARY_TOOL_NAMES` so the review-then-`task_merge` path still expires the approval at `done`. Pinned by `tests/cli/pack-hook-post-tool-use.test.ts` and `tests/cli/pack-hook-codex-post-tool-use.test.ts`, driven by the real content-block PostToolUse capture `tests/fixtures/track-active-claim/real-posttooluse-task-finish-2.1.280.json`. Upgrade: re-run `harness apply` (and re-merge the generated settings or Codex config) to install the widened default PostToolUse matcher; operators with an explicit `expire_on_tool_match` list add `mcp__agent-tasks__task_merge` themselves if they merge through `task_merge`.
+
 ## [0.58.2] - 2026-09-24
 
 ### Fixed
