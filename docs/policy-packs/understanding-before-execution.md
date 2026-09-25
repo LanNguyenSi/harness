@@ -283,7 +283,7 @@ Since task `d78fb3c7`, the pack's `config:` block is validated by `harness valid
 |---|---|---|
 | `mode` | enum `fast_confirm` / `grill_me` / `strict` | default `grill_me` |
 | `permission_profile` | enum `safe-start` / `implementation-after-approval` / `high-risk-grill-me` | optional; see the table above |
-| `approval_lifecycle.mode` | literal `session` | optional; opts out of the tool/bash boundary expiry (`expire_on_tool_match` / `expire_on_bash_match`) only, `max_age` still applies under `mode: session` (task `496660c5`; see "Lifecycle re-arm triggers and in-flight subagents" below) |
+| `approval_lifecycle.mode` | literal `session` | optional; opts out of the tool/bash boundary expiry (`expire_on_tool_match` / `expire_on_bash_match`) and the session marker's task binding only, `max_age` still applies under `mode: session` (task `496660c5`; see "Lifecycle re-arm triggers and in-flight subagents" below) |
 | `approval_lifecycle.expire_on_tool_match` | array of tool-name strings | optional override for the default agent-tasks tool list |
 | `approval_lifecycle.expire_on_bash_match` | array of regex strings | optional; clear the marker when a Bash call matches any of these (gh-cli workflows); see "expire_on_bash_match: start-anchored, with a documented fail-open limitation" below for the shipped defaults' known gap |
 | `approval_lifecycle.max_age` | duration string (`1h`, `30m`, ...) | optional safety net for sessions that never hit a listed tool / Bash boundary; also the recommended TTL under `mode: session` for orchestrator-led sessions (see "Lifecycle re-arm triggers and in-flight subagents" below) |

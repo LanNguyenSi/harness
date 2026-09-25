@@ -299,7 +299,7 @@ describe("signMarker / verifyMarkerSignature — round trip", () => {
   });
 });
 
-describe("signMarker / verifyMarkerSignature — claim binding presence (task 5018c0c4)", () => {
+describe("signMarker / verifyMarkerSignature: claim binding presence (task 5018c0c4)", () => {
   it("rejects a legacy-shape marker with claimTaskId: null injected without re-signing", () => {
     const signed = signMarker(generatedDir, "sess-1", {
       approvedAt: "2026-05-15T20:00:00Z",

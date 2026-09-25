@@ -55,7 +55,8 @@ export interface ApprovalMarker {
  * approve CLI rather than as a generally importable verb.
  *
  * The marker is HMAC-signed (harness/f9485cc7) over (sessionId,
- * approvedAt, approvedBy, reportContentHash) using an operator-side key
+ * approvedAt, approvedBy, reportContentHash), plus the claimTaskId every
+ * marker this writer signs carries (see `canonicalPayload`), using an operator-side key
  * lazily generated at `<generatedDir>/.approval-signing.key` — see
  * `src/runtime/approval-signing.ts` for the key-management contract and
  * the honest trust model. Mode 0600 on the marker file itself, best-

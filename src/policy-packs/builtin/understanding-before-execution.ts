@@ -292,7 +292,7 @@ export const configSchema = z
         // check on PreToolUse (`checkApprovalMarker`'s `max_age`
         // comparison), not by a PostToolUse hook — `max_age` still
         // applies under `mode: session`, which only opts out of the
-        // PostToolUse boundary hooks.
+        // PostToolUse boundary hooks and the session marker's task binding.
         max_age: z.string().min(1).optional(),
       })
       .strict()
