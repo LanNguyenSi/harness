@@ -2043,6 +2043,36 @@ describe("interactive wizard — runtime multiselect (task 696f7560)", () => {
     expect(fs.existsSync(path.join(tmpHome, ".claude", "settings.json"))).toBe(false);
   });
 
+  it("names the real file written and the link when ~/.codex/config.toml is a symlink (task 1637fbc8)", async () => {
+    fs.mkdirSync(path.join(tmpHome, ".claude"));
+    const dotfilesDir = path.join(tmpHome, "dotfiles", "codex");
+    fs.mkdirSync(dotfilesDir, { recursive: true });
+    fs.mkdirSync(path.join(tmpHome, ".codex"));
+    const target = path.join(dotfilesDir, "config.toml");
+    fs.writeFileSync(target, 'model = "gpt-5.5"\n');
+    const link = path.join(tmpHome, ".codex", "config.toml");
+    fs.symlinkSync(target, link);
+    const cap = captureStreams();
+    const result = await runInteractive({
+      homeDir: tmpHome,
+      dependencyPathEnv: fakeDepsPath,
+      prompts: mockPrompts({
+        select: ["solo"],
+        input: ["~/.claude/projects/{project}/memory"],
+        confirm: [true],
+        checkbox: [["codex"]],
+      }),
+      stdout: cap.out,
+      stderr: cap.err,
+    });
+    expect(result.aborted).toBe(false);
+    expect(fs.lstatSync(link).isSymbolicLink()).toBe(true);
+    expect(fs.readFileSync(target, "utf8")).toContain("# BEGIN harness-managed codex hooks");
+    expect(cap.stderr()).toContain(
+      `codex config installed into ${fs.realpathSync(target)} (via symlink ${link})`,
+    );
+  });
+
   it("wires both runtimes in one run when the operator picks both", async () => {
     fs.mkdirSync(path.join(tmpHome, ".claude"));
     const cap = captureStreams();

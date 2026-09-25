@@ -65,14 +65,17 @@ export interface CodexConfigInstallPlan {
   /**
    * The regular file the install reads and writes. When the requested
    * config path is a symlink (a dotfiles-managed config), this is the
-   * link's fully resolved target, so the write and its backup land next to
-   * the real file and the link itself stays a link (task 1637fbc8).
+   * link's fully resolved target, so the write lands in the real file and
+   * the link itself stays a link (task 1637fbc8).
    */
   configPath: string;
   /**
    * The requested config path when it is a symlink, set only then. Named
    * in the summary so the operator sees both the link and the real file
-   * written.
+   * written, and the base of the backup file name: the backup of a
+   * symlinked config sits beside the link (e.g. in ~/.codex), never beside
+   * the target, because the config holds secrets and the target's
+   * directory is typically a dotfiles git work tree.
    */
   linkPath?: string;
   generatedPath: string;
@@ -929,6 +932,38 @@ export function assertConfigSemanticInvariant(
  * unresolvable chain (a loop, a permission error) or a link to anything
  * other than a regular file is refused before anything is written.
  */
+/**
+ * Follows a dangling link chain hop by hop with `readlink` and returns the
+ * first path in it that does not exist, so a dangling refusal names the
+ * missing file rather than the first hop (which may be an existing
+ * intermediate link). Each relative link text is resolved against the
+ * physical directory of the link holding it, as the kernel does. Returns
+ * undefined when the chain cannot be walked (it changed under us, or a
+ * hop is not readable); the caller then words the refusal generically.
+ */
+function missingEndOfLinkChain(start: string): string | undefined {
+  const MAX_HOPS = 40;
+  let current = start;
+  for (let hop = 0; hop < MAX_HOPS; hop++) {
+    let next: string;
+    try {
+      const linkText = fs.readlinkSync(current);
+      next = path.resolve(fs.realpathSync(path.dirname(current)), linkText);
+    } catch {
+      return undefined;
+    }
+    let nextStat: fs.Stats;
+    try {
+      nextStat = fs.lstatSync(next);
+    } catch (err) {
+      return (err as NodeJS.ErrnoException).code === "ENOENT" ? next : undefined;
+    }
+    if (!nextStat.isSymbolicLink()) return undefined;
+    current = next;
+  }
+  return undefined;
+}
+
 function resolveConfigSymlink(requestedPath: string): string {
   let linkStat: fs.Stats;
   try {
@@ -946,18 +981,12 @@ function resolveConfigSymlink(requestedPath: string): string {
   } catch (err) {
     const e = err as NodeJS.ErrnoException;
     if (e.code === "ENOENT") {
-      let linkText = "";
-      try {
-        linkText = fs.readlinkSync(requestedPath);
-      } catch {
-        // The link vanished between lstat and readlink; the refusal below
-        // still names the link itself.
-      }
+      const missing = missingEndOfLinkChain(requestedPath);
       throw new CodexInstallRefusalError(
-        `Codex config ${requestedPath} is a dangling symlink` +
-          (linkText ? ` (points at ${linkText}, which does not exist)` : "") +
-          `; refusing to install, nothing was written. Create the link's target file ` +
-          `(or point the link at an existing config) and re-run.`,
+        `Codex config ${requestedPath} is a dangling symlink (its link chain ends at ` +
+          `${missing ?? "a missing file"}, which does not exist); refusing to install, ` +
+          `nothing was written. Create the link's target file (or point the link at an ` +
+          `existing config) and re-run.`,
         requestedPath,
       );
     }
@@ -976,6 +1005,29 @@ function resolveConfigSymlink(requestedPath: string): string {
     );
   }
   return resolved;
+}
+
+/**
+ * Runs a planning check and, for a symlinked config, extends any refusal
+ * that points the operator at a `.harness-backup-*` file with where those
+ * backups actually sit: beside the link, not beside the resolved target
+ * the refusal names (task 1637fbc8). A non-symlink config (linkPath
+ * undefined) keeps every refusal text unchanged.
+ */
+function withBackupLocation<T>(linkPath: string | undefined, check: () => T): T {
+  if (linkPath === undefined) return check();
+  try {
+    return check();
+  } catch (err) {
+    if (!(err instanceof CodexInstallRefusalError) || !err.message.includes(".harness-backup-*")) {
+      throw err;
+    }
+    throw new CodexInstallRefusalError(
+      `${err.message} This config is reached through the symlink ${linkPath}; its backups ` +
+        `sit beside the link, as ${linkPath}.harness-backup-* files.`,
+      err.configPath,
+    );
+  }
 }
 
 export function planCodexConfigInstall(
@@ -1001,7 +1053,7 @@ export function planCodexConfigInstall(
     opts.generatedContent,
     opts.generatedPath,
   );
-  const range = findManagedRange(currentContent, configPath);
+  const range = withBackupLocation(linkPath, () => findManagedRange(currentContent, configPath));
   let nextContent: string;
   let summary: string;
   let removedHookIds: string[] = [];
@@ -1032,7 +1084,9 @@ export function planCodexConfigInstall(
   }
 
   if (currentContent !== nextContent) {
-    assertConfigSemanticInvariant(currentContent, nextContent, configPath);
+    withBackupLocation(linkPath, () =>
+      assertConfigSemanticInvariant(currentContent, nextContent, configPath),
+    );
   }
 
   return {
@@ -1086,7 +1140,14 @@ export function writeCodexConfigInstall(
     atomicWriteFile(plan.configPath, plan.nextContent, { mode });
     return { ...plan, written: true };
   }
-  const backupPath = `${plan.configPath}.harness-backup-${timestampForBackup(opts.now ?? new Date())}`;
+  // A symlinked config's backup sits beside the link (task 1637fbc8), not
+  // beside the resolved target: the config holds secrets, and the target's
+  // directory is typically a dotfiles git work tree where an untracked
+  // backup is one `git add` away from being pushed. The backup is a fresh
+  // file, so it need not share the target's filesystem; only the atomic
+  // write of the target itself (temp file plus rename) must.
+  const backupBase = plan.linkPath ?? plan.configPath;
+  const backupPath = `${backupBase}.harness-backup-${timestampForBackup(opts.now ?? new Date())}`;
   atomicWriteFile(backupPath, plan.currentContent, { mode });
   atomicWriteFile(plan.configPath, plan.nextContent, { mode });
   return { ...plan, backupPath, written: true };
