@@ -68,7 +68,9 @@ export interface ApprovalMarker {
  * binding is resolved here, at the one writer, so no approve path (the
  * `harness approve understanding` CLI, the hook's auto-approval path)
  * can mint an unbound session marker. Only the understanding gate's
- * session-marker reader enforces it; the branch-protection marker, which
+ * session-marker reader enforces it, and only outside
+ * `approval_lifecycle: { mode: session }` (the field is written in every
+ * mode so a later mode change takes effect); the branch-protection marker, which
  * shares this writer under its own id, carries the field unused.
  */
 export function writeApprovalMarker(

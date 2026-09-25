@@ -148,6 +148,7 @@ export {
   writeTaskApprovalMarker,
   checkActiveClaimApprovalMarker,
   type SessionMarkerCheck,
+  type CheckSessionApprovalMarkerOptions,
   checkSessionApprovalMarker,
   type OperatorMarkerApproval,
   checkOperatorApprovalMarkers,

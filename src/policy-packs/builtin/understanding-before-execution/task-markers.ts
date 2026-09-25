@@ -38,8 +38,9 @@ import {
 // the task completes outside the session (a merge in the UI), the file
 // persists. A task-keyed marker side-steps that delivery concern because
 // the next task's id is different even if the previous marker file
-// outlives its scope; the session marker gets the same property from its
-// signed task binding (`checkSessionApprovalMarker`, task 5018c0c4).
+// outlives its scope; outside `mode: session` the session marker gets
+// the same property from its signed task binding
+// (`checkSessionApprovalMarker`, task 5018c0c4).
 
 export const APPROVAL_MARKER_TASK_PREFIX = "task-";
 
@@ -173,16 +174,32 @@ function describeClaim(taskId: string | null): string {
  * marker that belongs to another task never reads as `expired` (that
  * signal means "this task's own approval aged out" and opens the
  * recovery-git-commit exemption, see src/runtime/recovery-git-commit.ts).
+ *
+ * `opts.taskBinding` is required so every reader states it: pass
+ * `!lifecycle.legacyMode`. Under `approval_lifecycle: { mode: session }`
+ * (operator decision on task 5018c0c4) the binding is NOT applied: the
+ * documented contract of that mode is one approval for the whole
+ * session, bounded only by `max_age`, so a bound or unbound session
+ * marker counts for every task there. The writer still records
+ * `claimTaskId` in every mode, so switching away from `mode: session`
+ * takes effect on the next check without a re-approve.
  */
+export interface CheckSessionApprovalMarkerOptions extends CheckApprovalMarkerOptions {
+  /** Apply the claimed-task binding (false under `mode: session`). */
+  taskBinding: boolean;
+}
+
 export function checkSessionApprovalMarker(
   generatedDir: string,
   sessionId: string,
-  opts: CheckApprovalMarkerOptions = {},
+  opts: CheckSessionApprovalMarkerOptions,
 ): SessionMarkerCheck {
-  const check = checkApprovalMarker(generatedDir, sessionId, opts);
-  if (check.marker === null) {
+  const { taskBinding, ...ageOpts } = opts;
+  const check = checkApprovalMarker(generatedDir, sessionId, ageOpts);
+  if (check.marker === null || !taskBinding) {
     // Absent, unreadable, forged, or a malformed session id: nothing to
-    // bind, the plain verdict stands.
+    // bind, the plain verdict stands. Same under `mode: session`, where
+    // the binding does not apply.
     return { ...check, bindingRefused: false };
   }
   const refused = (detail: string): SessionMarkerCheck => ({
@@ -281,7 +298,10 @@ export function checkOperatorApprovalMarkers(
       sessionBindingRefused: false,
     };
   }
-  const sessionMarker = checkSessionApprovalMarker(generatedDir, sessionId, ageOpts);
+  const sessionMarker = checkSessionApprovalMarker(generatedDir, sessionId, {
+    ...ageOpts,
+    taskBinding: !lifecycle.legacyMode,
+  });
   if (sessionMarker.matched) {
     return {
       matched: true,

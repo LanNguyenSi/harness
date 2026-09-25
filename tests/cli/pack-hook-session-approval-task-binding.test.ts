@@ -151,10 +151,12 @@ async function postToolUse(event: Record<string, unknown>): Promise<boolean> {
 }
 
 /** One gated Edit through the real Claude PreToolUse hook. */
-async function gatedEdit(): Promise<{ blocked: boolean; source: string; stderr: string }> {
+async function gatedEdit(
+  config?: Record<string, unknown>,
+): Promise<{ blocked: boolean; source: string; stderr: string }> {
   const stderr = bufferStream();
   const result = await runPackHookPreToolUseCli({
-    manifest: manifest(),
+    manifest: manifest(config),
     stdin: readableFromString(JSON.stringify({ session_id: SESSION, tool_name: "Edit" })),
     stdout: bufferStream().stream,
     stderr: stderr.stream,
@@ -269,7 +271,7 @@ describe("session approval marker bound to the claimed task (harness 5018c0c4)",
     await taskStart(TASK);
     approve();
     fs.rmSync(path.join(generatedDir, "active-claim"));
-    const r = checkSessionApprovalMarker(generatedDir, SESSION);
+    const r = checkSessionApprovalMarker(generatedDir, SESSION, { taskBinding: true });
     expect(r.matched).toBe(false);
     expect(r.bindingRefused).toBe(true);
     expect(r.detail).toMatch(/granted for task abc-123, the active claim is now no claimed task/);
@@ -284,18 +286,18 @@ describe("session approval marker bound to the claimed task (harness 5018c0c4)",
 
     await taskStart(OTHER);
     fs.writeFileSync(filePath, `${JSON.stringify({ ...body, claimTaskId: OTHER })}\n`);
-    const rebound = checkSessionApprovalMarker(generatedDir, SESSION);
+    const rebound = checkSessionApprovalMarker(generatedDir, SESSION, { taskBinding: true });
     expect(rebound.matched).toBe(false);
     expect(rebound.forged).toBe(true);
 
     const { claimTaskId: _drop, ...unbound } = body;
     fs.writeFileSync(filePath, `${JSON.stringify(unbound)}\n`);
-    const dropped = checkSessionApprovalMarker(generatedDir, SESSION);
+    const dropped = checkSessionApprovalMarker(generatedDir, SESSION, { taskBinding: true });
     expect(dropped.matched).toBe(false);
     expect(dropped.forged).toBe(true);
 
     fs.writeFileSync(filePath, `${JSON.stringify({ ...body, claimTaskId: 7 })}\n`);
-    const malformed = checkSessionApprovalMarker(generatedDir, SESSION);
+    const malformed = checkSessionApprovalMarker(generatedDir, SESSION, { taskBinding: true });
     expect(malformed.forged).toBe(true);
     expect(malformed.detail).toMatch(/malformed claimTaskId/);
   });
@@ -363,5 +365,75 @@ describe("session approval marker bound to the claimed task (harness 5018c0c4)",
       ledgerQuery: async (): Promise<LedgerEntry[]> => [],
     });
     expect(resumed.blocked).toBe(false);
+  });
+});
+
+describe("approval_lifecycle mode: session is exempt from the task binding (harness 5018c0c4)", () => {
+  // Operator decision: `mode: session` keeps its documented contract, one
+  // approval for the whole session bounded only by max_age, so the
+  // claimed-task binding does not apply there. The writer still records
+  // claimTaskId, so switching the mode away takes effect immediately.
+  const SESSION_MODE = { approval_lifecycle: { mode: "session", max_age: "4h" } };
+
+  it("a marker bound to task A is accepted while task B is claimed", async () => {
+    await taskStart(TASK);
+    approve();
+    await taskStart(OTHER);
+
+    const r = await gatedEdit(SESSION_MODE);
+    expect(r.blocked).toBe(false);
+    expect(r.source).toBe("marker");
+    const markers = checkOperatorApprovalMarkers(generatedDir, SESSION, SESSION_MODE);
+    expect(markers).toMatchObject({ matched: true, source: "session", sessionBindingRefused: false });
+
+    // The binding was still written, and the same marker is refused as
+    // soon as the lifecycle leaves mode: session.
+    const body = JSON.parse(
+      fs.readFileSync(approvalMarkerPathFor(generatedDir, SESSION), "utf8"),
+    ) as Record<string, unknown>;
+    expect(body["claimTaskId"]).toBe(TASK);
+    expect((await gatedEdit()).blocked).toBe(true);
+  });
+
+  it("a legacy unbound marker is accepted, with or without a claim", async () => {
+    writeLegacyUnboundMarker();
+    expect((await gatedEdit(SESSION_MODE)).blocked).toBe(false);
+    await taskStart(TASK);
+    expect((await gatedEdit(SESSION_MODE)).blocked).toBe(false);
+    expect((await gatedEdit()).blocked).toBe(true);
+  });
+
+  it("the documented residual: an out-of-band completion then a task_start on another task keeps the approval until max_age", async () => {
+    await taskStart(TASK);
+    approve();
+    expect(await postToolUse(loadFixture())).toBe(false);
+    // Out of band: abc-123 merged in the UI, no hook fires. Next task:
+    await taskStart(OTHER);
+    expect((await gatedEdit(SESSION_MODE)).blocked).toBe(false);
+
+    // max_age still bounds it.
+    writeApprovalMarker(generatedDir, SESSION, {
+      approvedAt: new Date(Date.now() - 5 * 60 * 60 * 1000).toISOString(),
+      approvedBy: "test-operator",
+      claimTaskId: TASK,
+    });
+    const aged = checkOperatorApprovalMarkers(generatedDir, SESSION, SESSION_MODE);
+    expect(aged.matched).toBe(false);
+    expect(aged.expired).toBe(true);
+  });
+
+  it("Codex PreToolUse accepts the bound-elsewhere marker under mode: session", async () => {
+    await taskStart(TASK);
+    approve();
+    await taskStart(OTHER);
+    const result = await runPackHookCodexPreToolUseCli({
+      manifest: manifest(SESSION_MODE),
+      stdin: readableFromString(JSON.stringify({ session_id: SESSION, tool_name: "apply_patch" })),
+      stderr: bufferStream().stream,
+      reportsDir,
+      generatedDir,
+      ledgerQuery: async (): Promise<LedgerEntry[]> => [],
+    });
+    expect(result.blocked).toBe(false);
   });
 });

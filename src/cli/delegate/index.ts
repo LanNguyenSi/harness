@@ -303,12 +303,13 @@ export async function issueDelegation(
   // Key one of the ADR's two-key design: the parent must already carry a
   // valid, unexpired, signed approval marker. Same session-marker check
   // the gate itself runs (`checkSessionApprovalMarker`: signature,
-  // `max_age`, and the task binding of task 5018c0c4, so a parent
-  // approval granted for another task does not count), same `max_age`
-  // bound.
+  // `max_age`, and, outside `mode: session`, the task binding of task
+  // 5018c0c4, so a parent approval granted for another task does not
+  // count), same `max_age` bound.
   const parentCheck = checkSessionApprovalMarker(generatedDir, parentSessionId, {
     ...(lifecycle.maxAgeMs !== undefined ? { maxAgeMs: lifecycle.maxAgeMs } : {}),
     ...(opts.now !== undefined ? { now: opts.now } : {}),
+    taskBinding: !lifecycle.legacyMode,
   });
   if (!parentCheck.matched) {
     const reason: IssueDelegationRefusalReason = parentCheck.forged

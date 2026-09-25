@@ -26,8 +26,9 @@
 // is unapproved now" surface would be hostile. Worst case the marker
 // persists past the intended boundary; the session marker still counts
 // only while the active claim names the task it was granted for
-// (task 5018c0c4), so it degrades to a per-task approval, not to the
-// legacy per-session contract.
+// (task 5018c0c4; this hook is not emitted under `mode: session`, the
+// one mode where that binding is not applied), so it degrades to a
+// per-task approval, not to the legacy per-session contract.
 
 import {
   applyPostToolUseExpiry,
