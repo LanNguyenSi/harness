@@ -2,6 +2,15 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-09-25T11:26:06.000Z, task 5018c0c4 (implementer): re-verified and re-stamped
+  `understanding-gate-lockout-recovery.md` and `codex-adapter-parity-gaps.md`
+  after the approval-marker expiry hook started asking the active-claim
+  decider (a `task_finish` to `review` keeps the approval; `task_merge`
+  joined `DEFAULT_BOUNDARY_TOOL_NAMES`); both docs now say so. Timestamp-only
+  re-stamps of `evidence-ledger-trust-boundary.md`,
+  `gate-fail-posture-matrix.md` and `understanding-gate-auto-mode-signals.md`,
+  whose claims about the touched sources (`agent-tasks.ts`, the pack doc)
+  still hold unchanged.
 - 2026-09-24T06:05:53.000Z, task 461ec064 (orchestrator): re-stamped
   `codex-adapter-parity-gaps.md` after the refusal messages in
   `install-codex-config.ts` were qualified (restore from a backup only if
