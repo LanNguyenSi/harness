@@ -901,7 +901,7 @@ describe("pack hook codex-post-tool-use: approval expiry aligned with the active
     "real-posttooluse-task-finish-2.1.280.json",
   );
   const LIFECYCLE = {
-    expire_on_tool_match: ["mcp__agent-tasks__task_finish"],
+    expire_on_tool_match: ["mcp__agent-tasks__task_finish", "mcp__agent-tasks__task_merge"],
     max_age: "4h",
   };
 
@@ -960,5 +960,12 @@ describe("pack hook codex-post-tool-use: approval expiry aligned with the active
     const absent = await run(noResponse);
     expect(absent.matched).toBe(true);
     expect(fs.existsSync(approvalMarkerPathFor(absent.generatedDir, "redacted-session-id"))).toBe(false);
+  });
+
+  it("task_merge (EXPIRED) through the shared decider, even when the receipt echoes a review status", async () => {
+    const raw = loadFixture();
+    const merged = await run({ ...raw, tool_name: "mcp__agent-tasks__task_merge" });
+    expect(merged.matched).toBe(true);
+    expect(fs.existsSync(approvalMarkerPathFor(merged.generatedDir, "redacted-session-id"))).toBe(false);
   });
 });

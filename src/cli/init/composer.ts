@@ -611,6 +611,7 @@ export function composeCustom(sel: CustomSelection): ComposeResult {
               expire_on_tool_match: [
                 "mcp__agent-tasks__task_finish",
                 "mcp__agent-tasks__task_abandon",
+                "mcp__agent-tasks__task_merge",
                 "mcp__agent-tasks__pull_requests_merge",
                 "mcp__agent-tasks__tasks_transition",
               ],
