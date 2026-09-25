@@ -6,7 +6,8 @@
 // would leave orphan files in `harness.generated/`. With --force, the
 // manifest entry is removed AND the orphan files are deleted AND the
 // `.last-apply` file entries are pruned, so the next `harness apply` is
-// a clean no-op.
+// a clean no-op. The record's other fields, including the recorded
+// runtime, are kept as they were.
 
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -64,12 +65,13 @@ function packFileKeys(record: LastApplyRecord | null, packName: string): string[
     .sort();
 }
 
+// Drops only the pack's file entries. Every other field (the manifest
+// snapshot, memoryDirs, the recorded runtime, and any field a later
+// release adds) is carried as it was, so removing a pack never changes
+// which runtime the next plain `harness apply` reuses (agent-tasks
+// b9e6d63c).
 function pruneRecord(record: LastApplyRecord, packName: string): LastApplyRecord {
-  const out: LastApplyRecord = {
-    files: {},
-    ...(record.manifest !== undefined ? { manifest: record.manifest } : {}),
-    ...(record.memoryDirs !== undefined ? { memoryDirs: record.memoryDirs } : {}),
-  };
+  const out: LastApplyRecord = { ...record, files: {} };
   const prefix = `policy-packs/${packName}/`;
   for (const [key, entry] of Object.entries(record.files)) {
     if (!key.startsWith(prefix)) out.files[key] = entry;

@@ -13,6 +13,7 @@ import { stringify as yamlStringify } from "yaml";
 import { GENERATED_DIRNAME, apply } from "../../../src/cli/apply/index.js";
 import { buildProgram } from "../../../src/cli/index.js";
 import { readLastApply } from "../../../src/io/last-apply.js";
+import { packRemove } from "../../../src/cli/pack/index.js";
 import { runSmoke } from "../../../src/cli/smoke/index.js";
 import { HarnessExitError } from "../../../src/cli/exit-codes.js";
 
@@ -314,6 +315,58 @@ describe("runSmoke after an apply that recorded another runtime (agent-tasks b9e
     expect(restored.runtime).toBe("codex");
     expect(restored.runtimeSource).toBe("last-apply");
     expect(fs.readFileSync(instructionsPath, "utf8")).toBe(codexInstructions);
+  });
+
+  it("codex apply, smoke, pack remove --force, then a plain apply still keeps codex", async () => {
+    const home = makeTmpDir("smoke-runtime-packrm-home-");
+    const configPath = path.join(home, "harness.yaml");
+    fs.writeFileSync(
+      configPath,
+      yamlStringify({
+        version: 1,
+        tools: { mcp: [], cli: [], skills: { enabled: [], source_dirs: [] }, builtin: { known: [] } },
+        memory: { directories: [] },
+        hooks: [],
+        policies: [],
+        policy_packs: [{ name: "understanding-before-execution" }, { name: "branch-protection" }],
+      }),
+    );
+    await apply({ homeDir: home, configPath, runtime: "codex" });
+    const generatedDir = path.join(home, GENERATED_DIRNAME);
+    const instructionsPath = path.join(
+      generatedDir,
+      "policy-packs",
+      "understanding-before-execution",
+      "instructions.md",
+    );
+    const codexInstructions = fs.readFileSync(instructionsPath, "utf8");
+
+    const result = await runSmoke({
+      prompt: "x",
+      outputDir: makeTmpDir("smoke-runtime-packrm-out-"),
+      claudeBin: makeFakeClaude({ stdout: `${RESULT_OK}\n` }),
+      configPath,
+      applyImpl: async (opts) => apply({ ...opts, homeDir: home }),
+      noDelegate: true,
+      stdout: () => {},
+    });
+    expect(result.exitCode).toBe(0);
+    expect(fs.readFileSync(instructionsPath, "utf8")).toContain("## Runtime\n\nclaude-code");
+
+    await packRemove("branch-protection", { configPath, force: true });
+    expect(readLastApply(generatedDir)?.runtime).toBe("codex");
+
+    let out = "";
+    const program = buildProgram({
+      stdout: (s: string) => {
+        out += s;
+      },
+      stderr: () => {},
+    });
+    await program.parseAsync(["apply", "--config", configPath, "--quiet"], { from: "user" });
+    expect(out.startsWith("runtime: codex (from last apply; pass --runtime to change)\n")).toBe(true);
+    expect(fs.readFileSync(instructionsPath, "utf8")).toBe(codexInstructions);
+    expect(readLastApply(generatedDir)?.runtime).toBe("codex");
   });
 
   it("prints no runtime line when the recorded runtime is already claude-code", async () => {

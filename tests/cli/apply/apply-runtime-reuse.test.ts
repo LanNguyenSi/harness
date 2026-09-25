@@ -9,7 +9,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { stringify as yamlStringify } from "yaml";
+import { parse as parseYaml, stringify as yamlStringify } from "yaml";
 import {
   CODEX_CONFIG_BASENAME,
   GENERATED_DIRNAME,
@@ -120,15 +120,24 @@ const MERGED_FIXTURE = path.join(
   "merged-claude-code-then-codex.json",
 );
 
-function writeMergedFixture(edit?: (files: Record<string, string>) => void): void {
+function writeMergedFixture(
+  edit?: (files: Record<string, string>) => void,
+  { keepSnapshot = false }: { keepSnapshot?: boolean } = {},
+): void {
   const rec = JSON.parse(fs.readFileSync(MERGED_FIXTURE, "utf8")) as {
     files: Record<string, { content: string }>;
+    manifest?: unknown;
   };
   const files = Object.fromEntries(
     Object.entries(rec.files).map(([key, entry]) => [key, entry.content]),
   );
   edit?.(files);
   writeRecord(files);
+  if (keepSnapshot) {
+    editLastApply((written) => {
+      written["manifest"] = rec.manifest;
+    });
+  }
   // The generated files on disk match the record, as on a real machine.
   for (const [key, content] of Object.entries(files)) {
     const onDisk = path.join(generatedDir(), key);
@@ -542,6 +551,112 @@ describe("a merged pre-field record from a claude-code then codex history", () =
     expect(
       out.startsWith("runtime: codex -> claude-code (switching from the last apply's runtime)\n"),
     ).toBe(true);
+  });
+});
+
+// Rewrite the manifest's policy_packs[] (the rest stays as beforeEach wrote it).
+function setPolicyPacks(packs: Array<Record<string, unknown>>): void {
+  const manifest = parseYaml(fs.readFileSync(manifestPath, "utf8")) as Record<string, unknown>;
+  manifest["policy_packs"] = packs;
+  fs.writeFileSync(manifestPath, yamlStringify(manifest));
+}
+
+const UBE = "understanding-before-execution";
+const BP = "branch-protection";
+const packEntryRuntime = (pack: string): string | undefined =>
+  /## Runtime\n\n([a-z-]+)/.exec(
+    readLastApply(generatedDir())?.files[`policy-packs/${pack}/instructions.md`]?.content ?? "",
+  )?.[1];
+
+describe("a pre-field record: only the packs its manifest snapshot lists settle the runtime", () => {
+  const MIXED_LINE =
+    "runtime: claude-code (default; the last apply did not record a runtime and generated files for claude-code and codex; pass --runtime codex to keep codex)\n";
+
+  // A codex apply with one pack, the pack then dropped from harness.yaml by
+  // hand, and a claude-code apply without packs, all before the runtime
+  // field existed: both adapter keys, and one pack entry left over from the
+  // codex apply that the last (claude-code) apply no longer generated.
+  async function staleCodexPackHistory(): Promise<void> {
+    await apply({ homeDir: tmpHome, runtime: "codex" });
+    stripRuntime();
+    setPolicyPacks([]);
+    await apply({ homeDir: tmpHome, runtime: "claude-code" });
+    stripRuntime();
+  }
+
+  it("a stale codex pack entry the snapshot does not list does not infer codex", async () => {
+    await staleCodexPackHistory();
+    expect(packEntryRuntime(UBE)).toBe("codex");
+    const result = await apply({ homeDir: tmpHome, dryRun: true });
+    expect(result.runtime).toBe("claude-code");
+    expect(result.runtimeSource).toBe("unrecorded");
+    expect(result.runtimeCandidates).toEqual(["claude-code", "codex"]);
+    const { out, exit } = await cli(["--dry-run"]);
+    expect(exit).toBe(0);
+    expect(out.startsWith(MIXED_LINE)).toBe(true);
+  });
+
+  it("a stale codex entry next to a listed claude-code pack: infers claude-code", async () => {
+    setPolicyPacks([{ name: UBE }, { name: BP }]);
+    await apply({ homeDir: tmpHome, runtime: "codex" });
+    stripRuntime();
+    setPolicyPacks([{ name: UBE }]);
+    await apply({ homeDir: tmpHome, runtime: "claude-code" });
+    stripRuntime();
+    expect(packEntryRuntime(BP)).toBe("codex");
+    expect(packEntryRuntime(UBE)).toBe("claude-code");
+
+    const result = await apply({ homeDir: tmpHome, dryRun: true });
+    expect(result.runtime).toBe("claude-code");
+    expect(result.runtimeSource).toBe("inferred");
+    const { out } = await cli(["--dry-run"]);
+    expect(
+      out.startsWith(
+        "runtime: claude-code (inferred from the last apply's generated files; pass --runtime to change)\n",
+      ),
+    ).toBe(true);
+  });
+
+  it("a pack the snapshot lists as disabled does not count", async () => {
+    setPolicyPacks([{ name: UBE }, { name: BP }]);
+    await apply({ homeDir: tmpHome, runtime: "codex" });
+    stripRuntime();
+    setPolicyPacks([{ name: UBE }, { name: BP, enabled: false }]);
+    await apply({ homeDir: tmpHome, runtime: "claude-code" });
+    stripRuntime();
+    expect(packEntryRuntime(BP)).toBe("codex");
+
+    const result = await apply({ homeDir: tmpHome, dryRun: true });
+    expect(result.runtime).toBe("claude-code");
+    expect(result.runtimeSource).toBe("inferred");
+  });
+
+  it("an unreadable snapshot falls back to counting every recorded pack entry", async () => {
+    await staleCodexPackHistory();
+    editLastApply((rec) => {
+      rec["manifest"] = { sha256: "0", content: "{not json" };
+    });
+    const result = await apply({ homeDir: tmpHome, dryRun: true });
+    expect(result.runtime).toBe("codex");
+    expect(result.runtimeSource).toBe("inferred");
+  });
+
+  it("a snapshot without a policy_packs list falls back to counting every recorded pack entry", async () => {
+    await staleCodexPackHistory();
+    editLastApply((rec) => {
+      rec["manifest"] = { sha256: "0", content: JSON.stringify({ version: 1 }) };
+    });
+    const result = await apply({ homeDir: tmpHome, dryRun: true });
+    expect(result.runtime).toBe("codex");
+    expect(result.runtimeSource).toBe("inferred");
+  });
+
+  it("the real merged record with its snapshot (every pack listed) still infers codex", async () => {
+    writeMergedFixture(undefined, { keepSnapshot: true });
+    expect(readLastApply(generatedDir())?.manifest).toBeDefined();
+    const { out, exit } = await cli(["--dry-run"]);
+    expect(exit).toBe(0);
+    expect(out.startsWith(INFERRED_CODEX_LINE)).toBe(true);
   });
 });
 

@@ -357,7 +357,7 @@ interface RuntimeInference {
   candidates: Runtime[];
 }
 
-const PACK_INSTRUCTIONS_KEY_RE = /^policy-packs\/[^/]+\/instructions\.md$/;
+const PACK_INSTRUCTIONS_KEY_RE = /^policy-packs\/([^/]+)\/instructions\.md$/;
 // Every builtin pack's instructions.md opens its body with this section and
 // names the runtime it was generated for as the first word, e.g.
 // "## Runtime\n\ncodex" or "## Runtime\n\ncodex (UNSUPPORTED ...)".
@@ -370,13 +370,42 @@ interface PackInstructionsRuntimes {
   unreadable: boolean;
 }
 
+// The policy packs the last apply generated: the enabled `policy_packs[]`
+// names in the record's own manifest snapshot. `undefined` when the record
+// has no snapshot or it does not parse; the caller then counts every
+// recorded pack entry.
+function snapshotPackNames(record: LastApplyRecord): Set<string> | undefined {
+  const content = record.manifest?.content;
+  if (content === undefined) return undefined;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(content);
+  } catch {
+    return undefined;
+  }
+  const packs = (parsed as { policy_packs?: unknown } | null)?.policy_packs;
+  if (!Array.isArray(packs)) return undefined;
+  const names = new Set<string>();
+  for (const pack of packs) {
+    if (pack === null || typeof pack !== "object") continue;
+    const { name, enabled } = pack as { name?: unknown; enabled?: unknown };
+    if (typeof name === "string" && enabled !== false) names.add(name);
+  }
+  return names;
+}
+
 // What the recorded policy-pack instructions.md entries name in their
-// `## Runtime` section.
-function packInstructionsRuntimes(files: LastApplyRecord["files"]): PackInstructionsRuntimes {
+// `## Runtime` section. With a readable manifest snapshot only the packs
+// it lists count: the map keeps entries of packs a later apply no longer
+// had, and those still name the runtime of an older apply.
+function packInstructionsRuntimes(record: LastApplyRecord): PackInstructionsRuntimes {
+  const listed = snapshotPackNames(record);
   const named = new Set<Runtime>();
   let unreadable = false;
-  for (const [key, entry] of Object.entries(files)) {
-    if (!PACK_INSTRUCTIONS_KEY_RE.test(key)) continue;
+  for (const [key, entry] of Object.entries(record.files)) {
+    const pack = PACK_INSTRUCTIONS_KEY_RE.exec(key)?.[1];
+    if (pack === undefined) continue;
+    if (listed !== undefined && !listed.has(pack)) continue;
     const runtime = RUNTIME_SECTION_RE.exec(entry.content)?.[1];
     if (isRuntime(runtime)) named.add(runtime);
     else unreadable = true;
@@ -402,16 +431,18 @@ function soleAdapterRuntime(found: readonly Runtime[]): Runtime | undefined {
 // from earlier applies, so a machine that applied claude-code and later
 // codex carries both adapter artefacts; the recorded policy-pack
 // instructions.md entries then settle it, since each apply rewrites them
-// with the runtime it generated for. They count only when every entry
-// names the same runtime and that runtime is one of the adapter
+// with the runtime it generated for (only the packs the record's manifest
+// snapshot lists, when it has a readable one). They count only when every
+// entry names the same runtime and that runtime is one of the adapter
 // artefacts' (or there are none); anything else is ambiguous.
-function inferRuntimeFromFiles(files: LastApplyRecord["files"]): RuntimeInference {
+function inferRuntimeFromFiles(record: LastApplyRecord): RuntimeInference {
+  const { files } = record;
   const has = (key: string): boolean => Object.prototype.hasOwnProperty.call(files, key);
   const found: Runtime[] = [];
   if (has(SETTINGS_BASENAME)) found.push("claude-code");
   if (has(CODEX_CONFIG_BASENAME)) found.push("codex");
   if (has(OPENCODE_CONFIG_BASENAME)) found.push("opencode");
-  const packs = packInstructionsRuntimes(files);
+  const packs = packInstructionsRuntimes(record);
   const candidates = KNOWN_RUNTIMES.filter((r) => found.includes(r) || packs.named.has(r));
   const fromAdapter = soleAdapterRuntime(found);
   if (fromAdapter !== undefined) return { runtime: fromAdapter, candidates };
@@ -439,7 +470,7 @@ function selectRuntime(
   const recordedRuntime = isRuntime(recorded) ? recorded : undefined;
   const inference =
     recordedRuntime === undefined && lastApply !== null
-      ? inferRuntimeFromFiles(lastApply.files)
+      ? inferRuntimeFromFiles(lastApply)
       : undefined;
   const inferredRuntime = inference?.runtime;
   const previousRuntime = recordedRuntime ?? inferredRuntime;
