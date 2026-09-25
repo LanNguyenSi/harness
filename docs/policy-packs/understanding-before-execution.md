@@ -643,7 +643,7 @@ Block contract (PreToolUse): exit 2 + reason on stderr. Allow contract: exit 0, 
 
 `codex-pre-tool-use` now (slice 2, agent-tasks 57058364) prefers `tool_input` over `raw_input` the same way, via the same shared `resolveToolInput` helper, so the real Codex payload reaches the read-only Bash and recovery-commit exemptions; it also reads `permission_mode` and `transcript_path` off the envelope for the `auto_approve` attempt (see "`auto_approve`: opt-in auto-approval for a listed permission mode" above).
 
-`--target` and `--runtime codex` are mutually exclusive: `--target` wires the Claude-Code-shaped settings.json into a destination path, which the codex runtime does not produce. The two runtimes are mutually exclusive for v1; running apply against a single manifest under both runtimes requires two invocations into separate generated trees.
+`--target` and `--runtime codex` are mutually exclusive: `--target` wires the Claude-Code-shaped settings.json into a destination path, which the codex runtime does not produce. Without `--runtime`, `--target` implies `claude-code` (even when the last apply recorded `codex`), and the apply output names the runtime; only an explicit `--runtime codex` together with `--target` is refused. The two runtimes are mutually exclusive for v1; running apply against a single manifest under both runtimes requires two invocations into separate generated trees.
 
 ### Doctor wiring
 

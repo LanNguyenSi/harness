@@ -165,13 +165,29 @@ export async function runSmoke(opts: SmokeOptions): Promise<SmokeResult> {
   const settingsPath = path.join(opts.outputDir, SETTINGS_BASENAME);
 
   const applyImpl = opts.applyImpl ?? apply;
+  // smoke always drives claude, so the runtime is claude-code explicitly
+  // rather than whatever runtime the operator's last apply recorded. It is
+  // a diagnostic, not a runtime choice: `.last-apply` keeps the recorded
+  // runtime, so the next plain `harness apply` reuses it and rewrites that
+  // runtime's files back (agent-tasks b9e6d63c).
   const applyOpts: Parameters<typeof apply>[0] = {
     target: settingsPath,
     force: true,
+    runtime: "claude-code",
+    preserveRecordedRuntime: true,
   };
   if (opts.configPath) applyOpts.configPath = opts.configPath;
   if (opts.project) applyOpts.project = opts.project;
   const applyResult = await applyImpl(applyOpts);
+  const stdoutWrite = opts.stdout ?? ((s: string) => process.stdout.write(s));
+  if (
+    applyResult.previousRuntime !== undefined &&
+    applyResult.previousRuntime !== applyResult.runtime
+  ) {
+    stdoutWrite(
+      `runtime: ${applyResult.runtime} for smoke; the recorded runtime ${applyResult.previousRuntime} is kept, the next harness apply restores it\n`,
+    );
+  }
   // `apply` can return a refusal outcome without throwing. Without this
   // guard a stale generated/ dir or an unresolved --target conflict
   // silently lets smoke run claude against the OLD settings, which then
@@ -217,7 +233,6 @@ export async function runSmoke(opts: SmokeOptions): Promise<SmokeResult> {
   // `harness` binary) prints one line and the run proceeds exactly as
   // it did before this delegation step existed, the same shape
   // `--no-delegate` opts back into explicitly.
-  const stdoutWrite = opts.stdout ?? ((s: string) => process.stdout.write(s));
   if (!opts.noDelegate) {
     const issueDelegationImpl = opts.issueDelegationImpl ?? issueDelegation;
     const childCwd = opts.spawnCwd ?? process.cwd();

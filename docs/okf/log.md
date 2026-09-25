@@ -2,6 +2,27 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-09-25T12:56:13Z (task b9e6d63c, master merge): the apply-runtime change was merged
+  with the approval-marker binding and the symlinked-config install fix from
+  master. `codex-adapter-parity-gaps.md` keeps the runtime-reuse paragraph and
+  the `--target` refusal sentence of this task, with its `apply.ts` line
+  ranges re-counted on the merged file; shifted citations were re-pointed
+  after re-reading each anchor. Re-checked and re-stamped: `codex-adapter-parity-gaps.md`, `debug-verb-selection.md`, `evidence-ledger-trust-boundary.md`, `gate-fail-posture-matrix.md`, `pause-vs-gate-kill-switch.md`, `policy-engine-producer-wiring.md`, `understanding-gate-auto-mode-signals.md`.
+
+- 2026-09-25T12:40:54.000Z, task b9e6d63c (implementer, review fix): `harness pack
+  remove --force` now keeps the runtime `.last-apply` records when it
+  prunes the pack's entries, and an older record's pack
+  `instructions.md` entries count only for the packs its own manifest
+  snapshot lists. `codex-adapter-parity-gaps.md` names both, adds
+  `src/cli/pack/remove.ts` to its sources, says the codex apply (not
+  smoke) is what skips `settings.json`, and re-points its `apply.ts`
+  ranges for the instructions.md comment, the permission warning and the
+  `--target` refusal. Re-verified `debug-verb-selection.md` (smoke
+  sentence unchanged), `policy-engine-producer-wiring.md` (apply's
+  grounding-mcp gate is unchanged) and `evidence-ledger-trust-boundary.md`
+  (it cites `docs/CLI.md` only for `harness session-start preflight`,
+  unchanged). Re-stamped all four.
+
 - 2026-09-25T12:36:47Z (task 5018c0c4, review round 3 notes and master merge): the
   approval-marker change was merged with the symlinked-config install fix from
   master; `markers.ts`, the pack schema comment and the pack doc's config row
@@ -18,6 +39,20 @@
   `evidence-ledger-trust-boundary.md` and `gate-fail-posture-matrix.md`
   re-checked (no claim touches the changed text) and re-stamped with
   `understanding-gate-lockout-recovery.md`.
+
+- 2026-09-25T12:16:45.000Z, task b9e6d63c (implementer, review fix): `harness smoke`
+  now applies with `preserveRecordedRuntime`, so it keeps the runtime
+  `.last-apply` records, and an older record holding both
+  `settings.json` and `codex/config.toml` is settled by its recorded pack
+  `instructions.md` `## Runtime` sections. `codex-adapter-parity-gaps.md`
+  names both and re-points its `apply.ts` ranges for the
+  instructions.md comment, the permission warning and the `--target`
+  refusal. `debug-verb-selection.md` says smoke renders the `claude-code`
+  variant and keeps the recorded runtime; `ensureClaudeAvailable` is
+  unmoved. Re-verified `policy-engine-producer-wiring.md` (apply's
+  grounding-mcp gate is unchanged) and `evidence-ledger-trust-boundary.md`
+  (it cites `docs/CLI.md` only for `harness session-start preflight`,
+  unchanged). Re-stamped all four.
 
 - 2026-09-25T12:12:59.000Z, task 5018c0c4 (implementer): re-verified and re-stamped after
   the session approval marker's task binding was exempted under
@@ -55,6 +90,28 @@
   `understanding-gate-auto-mode-signals.md`, whose claims about the
   touched sources (help text, scaffold lists, hook headers) still hold.
 
+- 2026-09-25T11:51:29.000Z, task b9e6d63c (implementer, review fix):
+  `harness apply --target` without `--runtime` now implies `claude-code`,
+  a `.last-apply` without a `runtime` field is read through its files
+  map, and `harness smoke` plus the init wizard's claude-code wire step
+  pass `claude-code` explicitly. `codex-adapter-parity-gaps.md` no longer
+  calls pack `instructions.md` runtime-agnostic (only `MEMORY.md` is; the
+  builtin packs' instructions branch on the runtime), names the
+  inference and the implied runtime, and re-points its `apply.ts` ranges
+  for that comment, the permission warning and the `--target` refusal.
+  Re-pointed the `src/cli/index.ts` citations in
+  `pause-vs-gate-kill-switch.md` and
+  `understanding-gate-lockout-recovery.md` by the two-line shift of the
+  `--target`/`--runtime` help text, and an older entry's `:2993-2997`
+  range by the same shift so it starts on the same line as before this
+  change. Re-verified `debug-verb-selection.md` (smoke still renders a
+  claude-code settings.json through apply; `ensureClaudeAvailable` is
+  unmoved), `policy-engine-producer-wiring.md`,
+  `evidence-ledger-trust-boundary.md`, `gate-fail-posture-matrix.md` and
+  `understanding-gate-auto-mode-signals.md` (the pack doc gained one
+  sentence on `--target` in its Codex adapter notes, which none of them
+  cite). Re-stamped all eight.
+
 - 2026-09-25T11:42:22.000Z, task 1637fbc8 (implementer): re-verified and re-stamped
   `codex-adapter-parity-gaps.md` and `policy-engine-producer-wiring.md`
   after the symlinked-config follow-up touched listed sources
@@ -63,6 +120,25 @@
   `linkPath`. Both docs' claims still hold; the three `apply.ts` line
   citations in the codex doc were re-mapped to the current lines (they had
   drifted, and the new outcome field shifted them further).
+
+- 2026-09-25T11:28:23.000Z, task b9e6d63c (implementer): re-stamped
+  `evidence-ledger-trust-boundary.md` after `docs/CLI.md`'s `harness
+  apply` row changed; the doc cites `docs/CLI.md` only for `harness
+  session-start preflight`, which is unchanged. Re-pointed an older
+  entry's `src/cli/index.ts` range for the `pause`/`resume` bodies by the
+  same seven-line shift so it still starts on the same statement.
+
+- 2026-09-25T11:27:44.000Z, task b9e6d63c (implementer): `harness apply`
+  now reuses the runtime recorded in `.last-apply` when `--runtime` is
+  omitted (`src/cli/apply/apply.ts`, `src/cli/index.ts`,
+  `src/io/last-apply.ts`). Updated `codex-adapter-parity-gaps.md` to state
+  the reuse and the `--target` refusal hint, and re-pointed its `apply.ts`
+  line references to the current lines. Re-pointed the `src/cli/index.ts`
+  citations in `pause-vs-gate-kill-switch.md` and
+  `understanding-gate-lockout-recovery.md` shifted by the change and
+  re-checked each anchor. Re-verified `policy-engine-producer-wiring.md`
+  and `debug-verb-selection.md` (their claims about these files still
+  hold). Re-stamped all five.
 
 - 2026-09-25T11:26:06.000Z, task 5018c0c4 (implementer): re-verified and re-stamped
   `understanding-gate-lockout-recovery.md` and `codex-adapter-parity-gaps.md`
@@ -1209,7 +1285,7 @@
   `quote-model-divergence.md` and `understanding-gate-lockout-recovery.md`
   `sources-fresh` STALE against these files. Checked every line-numbered
   citation these seven docs make into the five touched files
-  (`src/cli/index.ts:1722-1737`, `:2993-2997`, `:3366-3465`,
+  (`src/cli/index.ts:1722-1737`, `:2995-2999`, `:3366-3465`,
   `:3368-3373`; `src/cli/init/templates.ts:928`): all still match their
   quoted text verbatim (sibling-line check), since none of this round's
   edits added or removed a line above a cited line in any file a
@@ -1310,7 +1386,7 @@
 - 2026-09-07T07:32:32Z, task 30183330 (orchestrator), review round 3 notes, docs and
   comments only: `docs/okf/pause-vs-gate-kill-switch.md` re-pointed its
   commands citation from a range that started inside an earlier command
-  body to `src/cli/index.ts:3330-3429` (the `pause` and `resume`
+  body to `src/cli/index.ts:3337-3436` (the `pause` and `resume`
   registrations); `docs/okf/codex-adapter-parity-gaps.md` corrected the
   docs/CLI.md line reference for the 2s Codex hook timeout note (line 67, a
   pre-existing off-by-two, measured equal at the base commit); the

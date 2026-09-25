@@ -57,6 +57,8 @@ import {
   checkPolicyPackSources,
   expandPolicyPacks,
   DEFAULT_RUNTIME,
+  KNOWN_RUNTIMES,
+  isRuntime,
   type Runtime,
 } from "../../policy-packs/index.js";
 import { parseManifest, type Manifest } from "../../schema/index.js";
@@ -144,8 +146,11 @@ export interface ApplyOptions {
   /**
    * Phase 6 #6 — `--runtime <claude-code|codex>`. Selects which adapter
    * shape policy-pack hooks expand into and which artefacts apply
-   * writes. Defaults to `claude-code` (settings.json output unchanged
-   * from previous releases). When set to `codex`, settings.json is NOT
+   * writes. When omitted, `target` implies `claude-code`; otherwise the
+   * runtime recorded in `.last-apply` by the previous apply is reused
+   * (inferred from its files map for a record that predates the field);
+   * with no recorded or inferable runtime it defaults to `claude-code`
+   * (settings.json output unchanged from previous releases). When set to `codex`, settings.json is NOT
    * written; instead `harness.generated/codex/config.toml` carries the
    * Codex adapter configuration. The two runtimes are mutually
    * exclusive in a single apply for v1; cross-runtime applies are a
@@ -164,6 +169,18 @@ export interface ApplyOptions {
   now?: Date;
   /** Test-injectable confirmation prompt; defaults to a stdin readline. */
   prompt?: (message: string) => Promise<string>;
+  /**
+   * Keep the runtime `.last-apply` records instead of recording this
+   * apply's runtime. For a diagnostic apply (`harness smoke`) that must
+   * run under a fixed runtime without changing the operator's runtime
+   * selection: the files map is still updated, so the next plain apply
+   * reuses the kept runtime and rewrites that runtime's files back. A
+   * record without a runtime field gets the runtime inferred from it
+   * stamped instead (this apply's own files would otherwise change what
+   * the next apply infers); with nothing recorded or inferable the field
+   * stays absent.
+   */
+  preserveRecordedRuntime?: boolean;
 }
 
 export type ApplyOutcome =
@@ -251,6 +268,238 @@ export interface ApplyResult {
   targetMergeSummary?: string;
   /** Present when --runtime codex --install was requested. */
   codexConfigInstall?: CodexConfigInstallOutcome;
+  /** Adapter runtime this apply generated (or would generate) for. */
+  runtime: Runtime;
+  /**
+   * Where `runtime` came from: `explicit` (`--runtime` was passed),
+   * `target` (no `--runtime`, `--target` implies `claude-code`),
+   * `last-apply` (reused from the runtime `.last-apply` recorded),
+   * `inferred` (reused from a `.last-apply` that predates the field, read
+   * off its files map), `unrecorded` (such a record whose files map names
+   * no single runtime, so the default is used), or `default` (no
+   * `.last-apply` at all).
+   */
+  runtimeSource: RuntimeSource;
+  /**
+   * The runtime the previous apply recorded in `.last-apply`, or inferred
+   * from its files map when it predates the field. Absent when there is
+   * none.
+   */
+  previousRuntime?: Runtime;
+  /**
+   * `unrecorded` only: the runtimes the record's files map names (adapter
+   * artefacts and policy-pack instructions.md `## Runtime` sections) when
+   * they do not settle on one. Absent when the map names none.
+   */
+  runtimeCandidates?: Runtime[];
+}
+
+export type RuntimeSource =
+  | "explicit"
+  | "target"
+  | "last-apply"
+  | "inferred"
+  | "unrecorded"
+  | "default";
+
+/**
+ * One line naming the runtime whenever it did not come from an explicit
+ * `--runtime` matching the last apply: a reused or inferred runtime, the
+ * default used for a record without one, the runtime `--target` implies,
+ * or an explicit switch away from the previous one. `null` when there is
+ * nothing to say (first apply, or an explicit `--runtime` equal to the
+ * previous one).
+ */
+export function formatRuntimeLine(
+  result: Pick<ApplyResult, "runtime" | "runtimeSource" | "previousRuntime" | "runtimeCandidates">,
+): string | null {
+  if (result.runtimeSource === "last-apply") {
+    return `runtime: ${result.runtime} (from last apply; pass --runtime to change)`;
+  }
+  if (result.runtimeSource === "inferred") {
+    return `runtime: ${result.runtime} (inferred from the last apply's generated files; pass --runtime to change)`;
+  }
+  if (result.runtimeSource === "unrecorded") {
+    const candidates = result.runtimeCandidates ?? [];
+    const others = candidates.filter((r) => r !== result.runtime);
+    if (others.length > 0) {
+      const keep = others.length === 1 ? others[0] : "one of them";
+      return `runtime: ${result.runtime} (default; the last apply did not record a runtime and generated files for ${joinRuntimes(candidates)}; pass --runtime ${others.join(" or --runtime ")} to keep ${keep})`;
+    }
+    return `runtime: ${result.runtime} (default; the last apply did not record a runtime, pass --runtime to choose)`;
+  }
+  if (result.runtimeSource === "target") {
+    if (result.previousRuntime !== undefined && result.previousRuntime !== result.runtime) {
+      return `runtime: ${result.previousRuntime} -> ${result.runtime} (--target implies claude-code)`;
+    }
+    return `runtime: ${result.runtime} (implied by --target)`;
+  }
+  if (
+    result.runtimeSource === "explicit" &&
+    result.previousRuntime !== undefined &&
+    result.previousRuntime !== result.runtime
+  ) {
+    return `runtime: ${result.previousRuntime} -> ${result.runtime} (switching from the last apply's runtime)`;
+  }
+  return null;
+}
+
+function joinRuntimes(runtimes: readonly Runtime[]): string {
+  if (runtimes.length <= 1) return runtimes.join("");
+  return `${runtimes.slice(0, -1).join(", ")} and ${runtimes[runtimes.length - 1]}`;
+}
+
+interface RuntimeSelection {
+  runtime: Runtime;
+  runtimeSource: RuntimeSource;
+  previousRuntime?: Runtime;
+  runtimeCandidates?: Runtime[];
+}
+
+interface RuntimeInference {
+  runtime?: Runtime;
+  /** Every runtime the files map names, in KNOWN order; for the unrecorded line. */
+  candidates: Runtime[];
+}
+
+const PACK_INSTRUCTIONS_KEY_RE = /^policy-packs\/([^/]+)\/instructions\.md$/;
+// Every builtin pack's instructions.md opens its body with this section and
+// names the runtime it was generated for as the first word, e.g.
+// "## Runtime\n\ncodex" or "## Runtime\n\ncodex (UNSUPPORTED ...)".
+const RUNTIME_SECTION_RE = /^## Runtime\n\n([a-z-]+)/m;
+
+interface PackInstructionsRuntimes {
+  /** Every known runtime a recorded pack instructions.md names. */
+  named: Set<Runtime>;
+  /** Some pack instructions.md entry lacks the section or names an unknown runtime. */
+  unreadable: boolean;
+}
+
+// The policy packs the last apply generated: the enabled `policy_packs[]`
+// names in the record's own manifest snapshot. `undefined` when the record
+// has no snapshot or it does not parse; the caller then counts every
+// recorded pack entry.
+function snapshotPackNames(record: LastApplyRecord): Set<string> | undefined {
+  const content = record.manifest?.content;
+  if (content === undefined) return undefined;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(content);
+  } catch {
+    return undefined;
+  }
+  const packs = (parsed as { policy_packs?: unknown } | null)?.policy_packs;
+  if (!Array.isArray(packs)) return undefined;
+  const names = new Set<string>();
+  for (const pack of packs) {
+    if (pack === null || typeof pack !== "object") continue;
+    const { name, enabled } = pack as { name?: unknown; enabled?: unknown };
+    if (typeof name === "string" && enabled !== false) names.add(name);
+  }
+  return names;
+}
+
+// What the recorded policy-pack instructions.md entries name in their
+// `## Runtime` section. With a readable manifest snapshot only the packs
+// it lists count: the map keeps entries of packs a later apply no longer
+// had, and those still name the runtime of an older apply.
+function packInstructionsRuntimes(record: LastApplyRecord): PackInstructionsRuntimes {
+  const listed = snapshotPackNames(record);
+  const named = new Set<Runtime>();
+  let unreadable = false;
+  for (const [key, entry] of Object.entries(record.files)) {
+    const pack = PACK_INSTRUCTIONS_KEY_RE.exec(key)?.[1];
+    if (pack === undefined) continue;
+    if (listed !== undefined && !listed.has(pack)) continue;
+    const runtime = RUNTIME_SECTION_RE.exec(entry.content)?.[1];
+    if (isRuntime(runtime)) named.add(runtime);
+    else unreadable = true;
+  }
+  return { named, unreadable };
+}
+
+// The runtime every recorded pack instructions.md entry agrees on, or
+// `undefined` when there is none, one is unreadable, or two disagree.
+function agreedPackRuntime(packs: PackInstructionsRuntimes): Runtime | undefined {
+  if (packs.unreadable || packs.named.size !== 1) return undefined;
+  return [...packs.named][0];
+}
+
+function soleAdapterRuntime(found: readonly Runtime[]): Runtime | undefined {
+  return found.length === 1 ? found[0] : undefined;
+}
+
+// A `.last-apply` written before the `runtime` field existed still names
+// the runtime through its files map: each runtime writes its own adapter
+// artefact (`settings.json`, `codex/config.toml`, `opencode/opencode.json`).
+// Exactly one of them present means that runtime. The map keeps entries
+// from earlier applies, so a machine that applied claude-code and later
+// codex carries both adapter artefacts; the recorded policy-pack
+// instructions.md entries then settle it, since each apply rewrites them
+// with the runtime it generated for (only the packs the record's manifest
+// snapshot lists, when it has a readable one). They count only when every
+// entry names the same runtime and that runtime is one of the adapter
+// artefacts' (or there are none); anything else is ambiguous.
+function inferRuntimeFromFiles(record: LastApplyRecord): RuntimeInference {
+  const { files } = record;
+  const has = (key: string): boolean => Object.prototype.hasOwnProperty.call(files, key);
+  const found: Runtime[] = [];
+  if (has(SETTINGS_BASENAME)) found.push("claude-code");
+  if (has(CODEX_CONFIG_BASENAME)) found.push("codex");
+  if (has(OPENCODE_CONFIG_BASENAME)) found.push("opencode");
+  const packs = packInstructionsRuntimes(record);
+  const candidates = KNOWN_RUNTIMES.filter((r) => found.includes(r) || packs.named.has(r));
+  const fromAdapter = soleAdapterRuntime(found);
+  if (fromAdapter !== undefined) return { runtime: fromAdapter, candidates };
+  const fromPacks = agreedPackRuntime(packs);
+  if (fromPacks !== undefined && (found.length === 0 || found.includes(fromPacks))) {
+    return { runtime: fromPacks, candidates };
+  }
+  return { candidates };
+}
+
+// `--runtime` omitted: reuse the runtime the previous apply recorded, so a
+// plain `harness apply` after `harness apply --runtime codex` keeps
+// generating the Codex variant instead of silently switching every
+// runtime-specific file back to the default (agent-tasks b9e6d63c).
+// `--target` wires Claude Code's settings.json, so it implies claude-code
+// instead of reusing another runtime. A record without the field (or with
+// an unknown value) falls back to inferring from its files map, then to
+// the default; the caller names every non-explicit choice in its output.
+function selectRuntime(
+  explicit: Runtime | undefined,
+  lastApply: LastApplyRecord | null,
+  hasTarget: boolean,
+): RuntimeSelection {
+  const recorded = lastApply?.runtime;
+  const recordedRuntime = isRuntime(recorded) ? recorded : undefined;
+  const inference =
+    recordedRuntime === undefined && lastApply !== null
+      ? inferRuntimeFromFiles(lastApply)
+      : undefined;
+  const inferredRuntime = inference?.runtime;
+  const previousRuntime = recordedRuntime ?? inferredRuntime;
+  const base = previousRuntime !== undefined ? { previousRuntime } : {};
+  if (explicit !== undefined) {
+    return { runtime: explicit, runtimeSource: "explicit", ...base };
+  }
+  if (hasTarget) {
+    return { runtime: "claude-code", runtimeSource: "target", ...base };
+  }
+  if (inferredRuntime !== undefined) {
+    return { runtime: inferredRuntime, runtimeSource: "inferred", ...base };
+  }
+  if (previousRuntime !== undefined) {
+    return { runtime: previousRuntime, runtimeSource: "last-apply", ...base };
+  }
+  if (lastApply !== null) {
+    const runtimeCandidates = inference?.candidates ?? [];
+    if (runtimeCandidates.length > 0) {
+      return { runtime: DEFAULT_RUNTIME, runtimeSource: "unrecorded", runtimeCandidates };
+    }
+    return { runtime: DEFAULT_RUNTIME, runtimeSource: "unrecorded" };
+  }
+  return { runtime: DEFAULT_RUNTIME, runtimeSource: "default" };
 }
 
 const DRIFT_HINT_MESSAGE =
@@ -404,8 +653,10 @@ function buildExpectedFiles(
   if (runtime === "codex") {
     // Codex apply: emit Codex config artefact instead of settings.json.
     // settings.json is Claude Code's contract and meaningless to Codex.
-    // MEMORY.md and pack instructions.md are runtime-agnostic and ship
-    // unchanged.
+    // MEMORY.md is runtime-agnostic and ships unchanged. Pack
+    // instructions.md ships too, but its content differs per runtime
+    // (builtin packs' buildInstructions() branch on the runtime), which is
+    // why a re-apply under another runtime rewrites it.
     const codexConfig = generateCodexConfig(augmentedManifest);
     const codexWarnings = [...codexConfig.warnings];
     if (packExpansion.permissions) {
@@ -555,6 +806,7 @@ function buildMergedLastApplyRecord(
   previous: LastApplyRecord | null,
   manifest: Manifest,
   memoryDirSnapshots: Record<string, { sha256: string; fileHashes: Record<string, string> }>,
+  runtime: string | undefined,
 ): LastApplyRecord {
   const next: LastApplyRecord = buildLastApply(
     Object.fromEntries(expected.map((f) => [f.basename, f.content])),
@@ -576,11 +828,13 @@ function buildMergedLastApplyRecord(
   if (Object.keys(memoryDirSnapshots).length > 0) {
     next.memoryDirs = memoryDirSnapshots;
   }
+  // Absent only for `preserveRecordedRuntime` over a record with no
+  // recorded or inferable runtime: the field then stays absent.
+  if (runtime !== undefined) next.runtime = runtime;
   return next;
 }
 
 export async function apply(opts: ApplyOptions = {}): Promise<ApplyResult> {
-  const runtime: Runtime = opts.runtime ?? DEFAULT_RUNTIME;
   const manifestPath = resolveManifestPath(opts);
   if (!fs.existsSync(manifestPath)) {
     throw new HarnessExitError(
@@ -643,11 +897,36 @@ export async function apply(opts: ApplyOptions = {}): Promise<ApplyResult> {
     );
   }
 
-  const { files: expected, warnings } = buildExpectedFiles(manifest, opts, manifestPath, generatedDir);
   const lastApply = readLastApply(generatedDir);
+  const runtimeInfo = selectRuntime(opts.runtime, lastApply, Boolean(opts.target));
+  const { runtime } = runtimeInfo;
+  const { files: expected, warnings } = buildExpectedFiles(
+    manifest,
+    { ...opts, runtime },
+    manifestPath,
+    generatedDir,
+  );
+  // The runtime this apply records: its own, or with
+  // `preserveRecordedRuntime` the previous one (recorded or inferred, else
+  // whatever the field held), so a diagnostic apply leaves the operator's
+  // runtime selection alone.
+  const recordRuntime: string | undefined = opts.preserveRecordedRuntime
+    ? (runtimeInfo.previousRuntime ?? lastApply?.runtime)
+    : runtime;
+  // The recorded runtime is missing or differs from the one to record:
+  // persist it on the next .last-apply write even when no generated file
+  // changed, so the next plain apply reuses it.
+  const runtimeRecordStale =
+    lastApply !== null && recordRuntime !== undefined && lastApply.runtime !== recordRuntime;
+  const reusedHint =
+    runtimeInfo.runtimeSource === "last-apply" || runtimeInfo.runtimeSource === "inferred"
+      ? ` (runtime ${runtime} ${runtimeInfo.runtimeSource === "inferred" ? "inferred from the last apply's generated files" : "reused from the last apply"}; pass --runtime codex to change)`
+      : runtimeInfo.runtimeSource === "target"
+        ? " (--target implies claude-code)"
+        : "";
 
   if (opts.installCodex && runtime !== "codex") {
-    throw new HarnessExitError("--install requires --runtime codex", EX_NOINPUT);
+    throw new HarnessExitError(`--install requires --runtime codex${reusedHint}`, EX_NOINPUT);
   }
 
   // Asset-content drift detection (Phase 3 #6): if a previous apply wrote
@@ -677,6 +956,7 @@ export async function apply(opts: ApplyOptions = {}): Promise<ApplyResult> {
     return {
       manifestPath,
       generatedDir,
+      ...runtimeInfo,
       files: [],
       warnings,
       restartHints: [],
@@ -702,8 +982,9 @@ export async function apply(opts: ApplyOptions = {}): Promise<ApplyResult> {
   // Phase 6 #6: --target wires the generated settings.json into a
   // Claude Code path. The runtime=codex branch does not produce
   // settings.json at all, so the combination is incoherent. Reject
-  // early instead of writing a half-broken state.
-  if (targetPath && opts.runtime === "codex") {
+  // early instead of writing a half-broken state. Only an explicit
+  // --runtime reaches this: without one, --target implies claude-code.
+  if (targetPath && runtime === "codex") {
     throw new HarnessExitError(
       "--target is incompatible with --runtime codex (target wires Claude Code's settings.json)",
       EX_NOINPUT,
@@ -713,7 +994,7 @@ export async function apply(opts: ApplyOptions = {}): Promise<ApplyResult> {
   // see generate-opencode-config.ts's header for why it does not produce
   // settings.json (or write into any operator-owned opencode config at
   // all). Reject symmetrically to the codex branch above.
-  if (targetPath && opts.runtime === "opencode") {
+  if (targetPath && runtime === "opencode") {
     throw new HarnessExitError(
       "--target is incompatible with --runtime opencode (target wires Claude Code's settings.json)",
       EX_NOINPUT,
@@ -794,6 +1075,7 @@ export async function apply(opts: ApplyOptions = {}): Promise<ApplyResult> {
         return {
           manifestPath,
           generatedDir,
+          ...runtimeInfo,
           files: [],
           warnings,
           restartHints: [],
@@ -885,6 +1167,7 @@ export async function apply(opts: ApplyOptions = {}): Promise<ApplyResult> {
     const result: ApplyResult = {
       manifestPath,
       generatedDir,
+      ...runtimeInfo,
       files: fileOutcomes,
       warnings,
       restartHints: [],
@@ -924,6 +1207,7 @@ export async function apply(opts: ApplyOptions = {}): Promise<ApplyResult> {
       const result: ApplyResult = {
         manifestPath,
         generatedDir,
+        ...runtimeInfo,
         files: fileOutcomes,
         warnings,
         restartHints: [],
@@ -950,6 +1234,7 @@ export async function apply(opts: ApplyOptions = {}): Promise<ApplyResult> {
     const result: ApplyResult = {
       manifestPath,
       generatedDir,
+      ...runtimeInfo,
       files: fileOutcomes,
       warnings,
       restartHints,
@@ -1000,12 +1285,17 @@ export async function apply(opts: ApplyOptions = {}): Promise<ApplyResult> {
       );
       writeLastApply(
         generatedDir,
-        buildMergedLastApplyRecord(expected, lastApply, manifest, refreshedMemoryDirs),
+        buildMergedLastApplyRecord(expected, lastApply, manifest, refreshedMemoryDirs, recordRuntime),
       );
+    } else if (runtimeRecordStale) {
+      // Nothing else to refresh: only stamp the runtime so the next plain
+      // apply reuses it.
+      writeLastApply(generatedDir, { ...lastApply, runtime: recordRuntime });
     }
     const result: ApplyResult = {
       manifestPath,
       generatedDir,
+      ...runtimeInfo,
       files: fileOutcomes,
       warnings,
       restartHints,
@@ -1078,11 +1368,11 @@ export async function apply(opts: ApplyOptions = {}): Promise<ApplyResult> {
     previousLock,
   );
 
-  if (anyChanged || recoveredMissingLastApply) {
+  if (anyChanged || recoveredMissingLastApply || runtimeRecordStale) {
     const memoryDirSnapshots = collectMemoryDirSnapshots(lockEntries);
     writeLastApply(
       generatedDir,
-      buildMergedLastApplyRecord(expected, lastApply, manifest, memoryDirSnapshots),
+      buildMergedLastApplyRecord(expected, lastApply, manifest, memoryDirSnapshots, recordRuntime),
     );
   }
   writeLock(lockPath, lockEntriesWithTarget);
@@ -1090,6 +1380,7 @@ export async function apply(opts: ApplyOptions = {}): Promise<ApplyResult> {
   const result: ApplyResult = {
     manifestPath,
     generatedDir,
+    ...runtimeInfo,
     files: fileOutcomes,
     warnings,
     restartHints,

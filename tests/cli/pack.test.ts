@@ -7,7 +7,9 @@ import { apply } from "../../src/cli/apply/index.js";
 import { init } from "../../src/cli/init/index.js";
 import { packAdd, packList, packRemove } from "../../src/cli/pack/index.js";
 import { applyPackAdd, applyPackRemove, planPackRemove } from "../../src/cli/pack/mutate.js";
+import { buildProgram } from "../../src/cli/index.js";
 import { HarnessExitError } from "../../src/cli/exit-codes.js";
+import { readLastApply } from "../../src/io/last-apply.js";
 import { STUB_NPM_BIN_EXEC_UNKNOWN as STUB_NPM_BIN_EXEC } from "../_helpers/npm-bin-exec.js";
 
 let tmpHome: string;
@@ -214,6 +216,39 @@ describe("pack remove", () => {
     // ... and a third apply IS a no-op (everything reconverged).
     const r3 = await apply({ homeDir: tmpHome });
     expect(r3.outcome).toBe("no-changes");
+  });
+
+  it("--force keeps the runtime .last-apply records, so the next plain apply still reuses codex (agent-tasks b9e6d63c)", async () => {
+    await packAdd({ name: "understanding-before-execution" }, { configPath: manifestPath });
+    await packAdd({ name: "branch-protection" }, { configPath: manifestPath });
+    await apply({ homeDir: tmpHome, runtime: "codex" });
+    const generatedDir = path.join(tmpHome, "harness.generated");
+    expect(readLastApply(generatedDir)?.runtime).toBe("codex");
+    const snapshotBefore = readLastApply(generatedDir)?.manifest;
+
+    await packRemove("branch-protection", { configPath: manifestPath, force: true });
+
+    const rec = readLastApply(generatedDir);
+    expect(Object.keys(rec?.files ?? {}).some((k) => k.startsWith("policy-packs/branch-protection/"))).toBe(
+      false,
+    );
+    expect(rec?.runtime).toBe("codex");
+    expect(rec?.manifest).toEqual(snapshotBefore);
+
+    let out = "";
+    const program = buildProgram({
+      stdout: (s: string) => {
+        out += s;
+      },
+      stderr: () => {},
+    });
+    await program.parseAsync(["apply", "--config", manifestPath, "--dry-run", "--quiet"], {
+      from: "user",
+    });
+    expect(out.startsWith("runtime: codex (from last apply; pass --runtime to change)\n")).toBe(true);
+    const next = await apply({ homeDir: tmpHome, dryRun: true });
+    expect(next.runtime).toBe("codex");
+    expect(next.runtimeSource).toBe("last-apply");
   });
 
   it("schema rejects a manifest with a path-traversal pack name (defense in depth)", async () => {
