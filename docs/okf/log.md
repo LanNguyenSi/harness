@@ -2,6 +2,13 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-09-25T13:48:08Z (release 0.59.0): the `[Unreleased]` notes moved under
+  `## [0.59.0] - 2026-09-25`. The squash merges of #559 and #560 re-dated
+  their source changes after the branch-side re-stamp, so
+  `understanding-gate-lockout-recovery.md` read STALE on master; its claims
+  (task binding outside `mode: session`, config-only boundary list) were
+  re-checked against the merged sources and it is re-stamped.
+
 - 2026-09-25T12:56:13Z (task b9e6d63c, master merge): the apply-runtime change was merged
   with the approval-marker binding and the symlinked-config install fix from
   master. `codex-adapter-parity-gaps.md` keeps the runtime-reuse paragraph and
