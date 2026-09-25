@@ -31,6 +31,7 @@ import {
   CodexInstallRefusalError,
   DRIFT_HINT_MESSAGE,
   formatNextSteps,
+  formatRuntimeLine,
   OPENCODE_CONFIG_BASENAME,
   SETTINGS_BASENAME,
   type FileApplyOutcome,
@@ -841,7 +842,8 @@ export function buildProgram(opts: RunOptions = {}): Command {
     .option("--force", "with --target, overwrite an existing target file (no merge)")
     .option(
       "--runtime <runtime>",
-      `policy-pack adapter runtime (${KNOWN_RUNTIMES.join(" | ")}; default: claude-code). ` +
+      `policy-pack adapter runtime (${KNOWN_RUNTIMES.join(" | ")}; default: the runtime of the last apply, ` +
+        "or claude-code when no apply recorded one; --install follows the same default). " +
         "Selects which adapter shape policy-pack hooks expand into and which artefacts apply writes. " +
         "`codex` emits harness.generated/codex/config.toml in place of settings.json. " +
         "`opencode` emits harness.generated/opencode/opencode.json (MCP servers only; not auto-installed).",
@@ -983,6 +985,11 @@ export function buildProgram(opts: RunOptions = {}): Command {
 
         const changedFiles = result.files.filter((f: FileApplyOutcome) => f.changed);
 
+        // Name a reused or switched runtime before the file list, in the
+        // dry-run and the real apply alike (agent-tasks b9e6d63c).
+        const runtimeLine = formatRuntimeLine(result);
+        if (runtimeLine !== null) stdout(`${runtimeLine}\n`);
+
         if (result.outcome === "no-changes") {
           stdout("no changes\n");
         } else if (result.outcome === "would-apply") {
@@ -1054,7 +1061,7 @@ export function buildProgram(opts: RunOptions = {}): Command {
                 codexConfigPath,
                 opencodeConfigPath,
                 anyChanged,
-                ...(runtime !== undefined ? { runtime } : {}),
+                runtime: result.runtime,
                 ...((result.targetWritten || result.targetInSync) && result.targetPath
                   ? { targetPath: result.targetPath }
                   : {}),

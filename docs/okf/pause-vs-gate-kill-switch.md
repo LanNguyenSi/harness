@@ -33,8 +33,8 @@ harness has TWO separate kill-switch mechanisms. Do not conflate them: `pause` i
 | Situation | Use |
 |---|---|
 | Lockout recovery, debug A/B test, incident hotfix, short window | `harness pause --for <duration>` (all hooks dormant, auto-resumes) |
-| One specific hard-blocking hook must go, e.g. the understanding-before-execution PreToolUse gate blocks every Bash call INCLUDING its own recovery command `harness approve understanding` (the motivating case, task 8fcddb26, comment at `src/cli/index.ts:3011#"offending hook group out of settings.json with a reversible snapshot."`) | `harness gate disable --matcher <substring>` (removes only matching hook groups, reversible snapshot) |
-| Permanently turn a policy off | NEITHER. Edit `policies[].enabled` in the manifest (or `policy_packs[].enabled: false`): persistent, diff-able, source-controlled. Stated in the `harness pause` command help (`src/cli/index.ts:3383-3387#"in the manifest."`) and `docs/for-humans.md:395-397#"source-controlled"` |
+| One specific hard-blocking hook must go, e.g. the understanding-before-execution PreToolUse gate blocks every Bash call INCLUDING its own recovery command `harness approve understanding` (the motivating case, task 8fcddb26, comment at `src/cli/index.ts:3018#"offending hook group out of settings.json with a reversible snapshot."`) | `harness gate disable --matcher <substring>` (removes only matching hook groups, reversible snapshot) |
+| Permanently turn a policy off | NEITHER. Edit `policies[].enabled` in the manifest (or `policy_packs[].enabled: false`): persistent, diff-able, source-controlled. Stated in the `harness pause` command help (`src/cli/index.ts:3390-3394#"in the manifest."`) and `docs/for-humans.md:395-397#"source-controlled"` |
 | "Move fast on a prototype branch" | A branch-aware policy with a `when:` clause, not a session-wide pause (`docs/for-humans.md:398-399#"session-wide pause"`) |
 
 ## Mechanism 1: `harness pause` / `harness resume` (sentinel)
@@ -43,7 +43,7 @@ harness has TWO separate kill-switch mechanisms. Do not conflate them: `pause` i
 
 **History note: closed 2026-08-25 (tasks `63fefe3a`, `1432e053`).** The Codex `UserPromptSubmit` injector and the Codex `Stop` capture now both honour the sentinel; earlier they did not, so an active pause silenced every gate except these two. Both now call `checkHookPause` first, same ordering as `hook-pre-tool-use.ts`. All four `hook-codex-*.ts` files import `checkHookPause`, pinned by a source-grep test. UserPromptSubmit no longer suppresses based on a guessed blank prompt field: an invocation injects unless this pause, the disabled-pack path, or an error prevents it. Measurement and dogfood detail: `CHANGELOG.md:#0.48.0` (the `63fefe3a` and `1432e053` entries).
 
-**Commands** (registered in `src/cli/index.ts:3381-3441#"stdout("` (`pause`) and `src/cli/index.ts:3446-3477#"stdout("` (`resume`)):
+**Commands** (registered in `src/cli/index.ts:3388-3448#"stdout("` (`pause`) and `src/cli/index.ts:3453-3484#"stdout("` (`resume`)):
 - `harness pause --for <duration>` - e.g. `5m`, `1h`, `PT30S`; default 15 minutes (`DEFAULT_PAUSE_SECONDS = 15 * 60`, `src/cli/pause/index.ts:36#"DEFAULT_PAUSE_SECONDS"`).
 - `harness pause --indefinite` - refuses unless the separate verbose flag `--i-am-the-operator-and-accept-no-auto-resume` is also passed; the flag's verbosity is deliberate friction (`src/cli/pause/index.ts:269-279#"EX_USAGE"`).
 - `--reason <text>` — recorded in the sentinel and announced on each hook fire.

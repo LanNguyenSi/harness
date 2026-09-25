@@ -57,6 +57,7 @@ import {
   checkPolicyPackSources,
   expandPolicyPacks,
   DEFAULT_RUNTIME,
+  isRuntime,
   type Runtime,
 } from "../../policy-packs/index.js";
 import { parseManifest, type Manifest } from "../../schema/index.js";
@@ -144,8 +145,9 @@ export interface ApplyOptions {
   /**
    * Phase 6 #6 — `--runtime <claude-code|codex>`. Selects which adapter
    * shape policy-pack hooks expand into and which artefacts apply
-   * writes. Defaults to `claude-code` (settings.json output unchanged
-   * from previous releases). When set to `codex`, settings.json is NOT
+   * writes. When omitted, the runtime recorded in `.last-apply` by the
+   * previous apply is reused; with no recorded runtime it defaults to
+   * `claude-code` (settings.json output unchanged from previous releases). When set to `codex`, settings.json is NOT
    * written; instead `harness.generated/codex/config.toml` carries the
    * Codex adapter configuration. The two runtimes are mutually
    * exclusive in a single apply for v1; cross-runtime applies are a
@@ -246,6 +248,71 @@ export interface ApplyResult {
   targetMergeSummary?: string;
   /** Present when --runtime codex --install was requested. */
   codexConfigInstall?: CodexConfigInstallOutcome;
+  /** Adapter runtime this apply generated (or would generate) for. */
+  runtime: Runtime;
+  /**
+   * Where `runtime` came from: `explicit` (`--runtime` was passed),
+   * `last-apply` (reused from the runtime `.last-apply` recorded), or
+   * `default` (no `--runtime` and no recorded runtime).
+   */
+  runtimeSource: RuntimeSource;
+  /**
+   * The runtime `.last-apply` recorded for the previous apply, when it
+   * recorded one. Differs from `runtime` only on an explicit switch.
+   */
+  previousRuntime?: Runtime;
+}
+
+export type RuntimeSource = "explicit" | "last-apply" | "default";
+
+/**
+ * One line naming the runtime when it did not come from an explicit
+ * `--runtime` matching the last apply: a reused runtime, or an explicit
+ * switch away from the recorded one. `null` when there is nothing to say
+ * (first apply, or an explicit `--runtime` equal to the recorded one).
+ */
+export function formatRuntimeLine(
+  result: Pick<ApplyResult, "runtime" | "runtimeSource" | "previousRuntime">,
+): string | null {
+  if (result.runtimeSource === "last-apply") {
+    return `runtime: ${result.runtime} (from last apply; pass --runtime to change)`;
+  }
+  if (
+    result.runtimeSource === "explicit" &&
+    result.previousRuntime !== undefined &&
+    result.previousRuntime !== result.runtime
+  ) {
+    return `runtime: ${result.previousRuntime} -> ${result.runtime} (switching from the last apply's runtime)`;
+  }
+  return null;
+}
+
+interface RuntimeSelection {
+  runtime: Runtime;
+  runtimeSource: RuntimeSource;
+  previousRuntime?: Runtime;
+}
+
+// `--runtime` omitted: reuse the runtime the previous apply recorded, so a
+// plain `harness apply` after `harness apply --runtime codex` keeps
+// generating the Codex variant instead of silently switching every
+// runtime-specific file back to the default (agent-tasks b9e6d63c). No
+// recorded runtime (first apply, or a `.last-apply` written before the
+// field existed, or an unknown value) keeps today's default.
+function selectRuntime(
+  explicit: Runtime | undefined,
+  lastApply: LastApplyRecord | null,
+): RuntimeSelection {
+  const recorded = lastApply?.runtime;
+  const previousRuntime = isRuntime(recorded) ? recorded : undefined;
+  const base = previousRuntime !== undefined ? { previousRuntime } : {};
+  if (explicit !== undefined) {
+    return { runtime: explicit, runtimeSource: "explicit", ...base };
+  }
+  if (previousRuntime !== undefined) {
+    return { runtime: previousRuntime, runtimeSource: "last-apply", ...base };
+  }
+  return { runtime: DEFAULT_RUNTIME, runtimeSource: "default" };
 }
 
 const DRIFT_HINT_MESSAGE =
@@ -549,6 +616,7 @@ function buildMergedLastApplyRecord(
   previous: LastApplyRecord | null,
   manifest: Manifest,
   memoryDirSnapshots: Record<string, { sha256: string; fileHashes: Record<string, string> }>,
+  runtime: Runtime,
 ): LastApplyRecord {
   const next: LastApplyRecord = buildLastApply(
     Object.fromEntries(expected.map((f) => [f.basename, f.content])),
@@ -570,11 +638,11 @@ function buildMergedLastApplyRecord(
   if (Object.keys(memoryDirSnapshots).length > 0) {
     next.memoryDirs = memoryDirSnapshots;
   }
+  next.runtime = runtime;
   return next;
 }
 
 export async function apply(opts: ApplyOptions = {}): Promise<ApplyResult> {
-  const runtime: Runtime = opts.runtime ?? DEFAULT_RUNTIME;
   const manifestPath = resolveManifestPath(opts);
   if (!fs.existsSync(manifestPath)) {
     throw new HarnessExitError(
@@ -637,11 +705,26 @@ export async function apply(opts: ApplyOptions = {}): Promise<ApplyResult> {
     );
   }
 
-  const { files: expected, warnings } = buildExpectedFiles(manifest, opts, manifestPath, generatedDir);
   const lastApply = readLastApply(generatedDir);
+  const runtimeInfo = selectRuntime(opts.runtime, lastApply);
+  const { runtime } = runtimeInfo;
+  const { files: expected, warnings } = buildExpectedFiles(
+    manifest,
+    { ...opts, runtime },
+    manifestPath,
+    generatedDir,
+  );
+  // The recorded runtime is missing or differs from this apply's: persist
+  // the runtime on the next .last-apply write even when no generated file
+  // changed, so the next plain apply reuses it.
+  const runtimeRecordStale = lastApply !== null && lastApply.runtime !== runtime;
+  const reusedHint = (want: Runtime): string =>
+    runtimeInfo.runtimeSource === "last-apply"
+      ? ` (runtime ${runtime} reused from the last apply; pass --runtime ${want} to change)`
+      : "";
 
   if (opts.installCodex && runtime !== "codex") {
-    throw new HarnessExitError("--install requires --runtime codex", EX_NOINPUT);
+    throw new HarnessExitError(`--install requires --runtime codex${reusedHint("codex")}`, EX_NOINPUT);
   }
 
   // Asset-content drift detection (Phase 3 #6): if a previous apply wrote
@@ -671,6 +754,7 @@ export async function apply(opts: ApplyOptions = {}): Promise<ApplyResult> {
     return {
       manifestPath,
       generatedDir,
+      ...runtimeInfo,
       files: [],
       warnings,
       restartHints: [],
@@ -697,9 +781,9 @@ export async function apply(opts: ApplyOptions = {}): Promise<ApplyResult> {
   // Claude Code path. The runtime=codex branch does not produce
   // settings.json at all, so the combination is incoherent. Reject
   // early instead of writing a half-broken state.
-  if (targetPath && opts.runtime === "codex") {
+  if (targetPath && runtime === "codex") {
     throw new HarnessExitError(
-      "--target is incompatible with --runtime codex (target wires Claude Code's settings.json)",
+      `--target is incompatible with --runtime codex (target wires Claude Code's settings.json)${reusedHint("claude-code")}`,
       EX_NOINPUT,
     );
   }
@@ -707,9 +791,9 @@ export async function apply(opts: ApplyOptions = {}): Promise<ApplyResult> {
   // see generate-opencode-config.ts's header for why it does not produce
   // settings.json (or write into any operator-owned opencode config at
   // all). Reject symmetrically to the codex branch above.
-  if (targetPath && opts.runtime === "opencode") {
+  if (targetPath && runtime === "opencode") {
     throw new HarnessExitError(
-      "--target is incompatible with --runtime opencode (target wires Claude Code's settings.json)",
+      `--target is incompatible with --runtime opencode (target wires Claude Code's settings.json)${reusedHint("claude-code")}`,
       EX_NOINPUT,
     );
   }
@@ -788,6 +872,7 @@ export async function apply(opts: ApplyOptions = {}): Promise<ApplyResult> {
         return {
           manifestPath,
           generatedDir,
+          ...runtimeInfo,
           files: [],
           warnings,
           restartHints: [],
@@ -879,6 +964,7 @@ export async function apply(opts: ApplyOptions = {}): Promise<ApplyResult> {
     const result: ApplyResult = {
       manifestPath,
       generatedDir,
+      ...runtimeInfo,
       files: fileOutcomes,
       warnings,
       restartHints: [],
@@ -918,6 +1004,7 @@ export async function apply(opts: ApplyOptions = {}): Promise<ApplyResult> {
       const result: ApplyResult = {
         manifestPath,
         generatedDir,
+        ...runtimeInfo,
         files: fileOutcomes,
         warnings,
         restartHints: [],
@@ -944,6 +1031,7 @@ export async function apply(opts: ApplyOptions = {}): Promise<ApplyResult> {
     const result: ApplyResult = {
       manifestPath,
       generatedDir,
+      ...runtimeInfo,
       files: fileOutcomes,
       warnings,
       restartHints,
@@ -994,12 +1082,17 @@ export async function apply(opts: ApplyOptions = {}): Promise<ApplyResult> {
       );
       writeLastApply(
         generatedDir,
-        buildMergedLastApplyRecord(expected, lastApply, manifest, refreshedMemoryDirs),
+        buildMergedLastApplyRecord(expected, lastApply, manifest, refreshedMemoryDirs, runtime),
       );
+    } else if (runtimeRecordStale) {
+      // Nothing else to refresh: only stamp the runtime so the next plain
+      // apply reuses it.
+      writeLastApply(generatedDir, { ...lastApply, runtime });
     }
     const result: ApplyResult = {
       manifestPath,
       generatedDir,
+      ...runtimeInfo,
       files: fileOutcomes,
       warnings,
       restartHints,
@@ -1072,11 +1165,11 @@ export async function apply(opts: ApplyOptions = {}): Promise<ApplyResult> {
     previousLock,
   );
 
-  if (anyChanged || recoveredMissingLastApply) {
+  if (anyChanged || recoveredMissingLastApply || runtimeRecordStale) {
     const memoryDirSnapshots = collectMemoryDirSnapshots(lockEntries);
     writeLastApply(
       generatedDir,
-      buildMergedLastApplyRecord(expected, lastApply, manifest, memoryDirSnapshots),
+      buildMergedLastApplyRecord(expected, lastApply, manifest, memoryDirSnapshots, runtime),
     );
   }
   writeLock(lockPath, lockEntriesWithTarget);
@@ -1084,6 +1177,7 @@ export async function apply(opts: ApplyOptions = {}): Promise<ApplyResult> {
   const result: ApplyResult = {
     manifestPath,
     generatedDir,
+    ...runtimeInfo,
     files: fileOutcomes,
     warnings,
     restartHints,

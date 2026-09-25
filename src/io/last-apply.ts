@@ -3,7 +3,7 @@
 // from "no changes needed".
 //
 // Lives at `<generatedDir>/.last-apply`. Format is JSON:
-//   { files: { <relPath>: { sha256, content } } }
+//   { files: { <relPath>: { sha256, content } }, manifest?, runtime?, memoryDirs? }
 // Atomic writes via `atomic-write.ts` (Phase 2 #1 contract).
 
 import * as crypto from "node:crypto";
@@ -37,6 +37,14 @@ export interface LastApplyRecord {
   // Optional per-memory-dir per-file snapshot. Phase 3 #5 reads it for
   // `--memory-detail`. Older records may omit; readers MUST tolerate.
   memoryDirs?: Record<string, MemoryDirSnapshot>;
+  // Optional adapter runtime (`claude-code`, `codex`, `opencode`) the
+  // previous apply generated for. `harness apply` without `--runtime`
+  // reuses it so a plain re-apply does not silently switch the generated
+  // files to the default runtime (agent-tasks b9e6d63c). Kept as a plain
+  // string here (io layer); the apply command validates it against the
+  // known runtimes and ignores an unknown value. Older records omit it;
+  // readers MUST tolerate the omission.
+  runtime?: string;
 }
 
 export const LAST_APPLY_BASENAME = ".last-apply";
@@ -67,6 +75,7 @@ export function writeLastApply(generatedDir: string, record: LastApplyRecord): v
     if (entry !== undefined) sorted.files[key] = entry;
   }
   if (record.manifest !== undefined) sorted.manifest = record.manifest;
+  if (record.runtime !== undefined) sorted.runtime = record.runtime;
   if (record.memoryDirs !== undefined) {
     const sortedDirs: Record<string, MemoryDirSnapshot> = {};
     for (const dirKey of Object.keys(record.memoryDirs).sort()) {
@@ -128,13 +137,19 @@ function isMemoryDirSnapshot(v: unknown): v is MemoryDirSnapshot {
 
 function isLastApplyRecord(x: unknown): x is LastApplyRecord {
   if (!x || typeof x !== "object") return false;
-  const obj = x as { files?: unknown; manifest?: unknown; memoryDirs?: unknown };
+  const obj = x as {
+    files?: unknown;
+    manifest?: unknown;
+    memoryDirs?: unknown;
+    runtime?: unknown;
+  };
   if (!obj.files || typeof obj.files !== "object") return false;
   for (const v of Object.values(obj.files as Record<string, unknown>)) {
     if (!isFileEntry(v)) return false;
   }
   // Optional manifest snapshot: tolerate omission; reject malformed shape.
   if (obj.manifest !== undefined && !isFileEntry(obj.manifest)) return false;
+  if (obj.runtime !== undefined && typeof obj.runtime !== "string") return false;
   if (obj.memoryDirs !== undefined) {
     if (typeof obj.memoryDirs !== "object" || obj.memoryDirs === null) return false;
     for (const v of Object.values(obj.memoryDirs as Record<string, unknown>)) {

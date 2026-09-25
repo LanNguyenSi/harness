@@ -3,6 +3,7 @@ export {
   CODEX_CONFIG_BASENAME,
   OPENCODE_CONFIG_BASENAME,
   DRIFT_HINT_MESSAGE,
+  formatRuntimeLine,
   GENERATED_DIRNAME,
   MANIFEST_BASENAME,
   MEMORY_BASENAME,
@@ -12,6 +13,7 @@ export {
   type ApplyResult,
   type CodexConfigInstallOutcome,
   type FileApplyOutcome,
+  type RuntimeSource,
 } from "./apply.js";
 export { CodexInstallRefusalError } from "./install-codex-config.js";
 export { formatNextSteps, type NextStepsContext } from "./next-steps.js";

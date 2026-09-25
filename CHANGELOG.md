@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **`harness apply` without `--runtime` now reuses the runtime the last apply used instead of silently switching to `claude-code`** (task `b9e6d63c`). After `harness apply --runtime codex`, a plain `harness apply` used to regenerate the runtime-specific files (policy-pack `instructions.md`, `settings.json` instead of `codex/config.toml`) for `claude-code`, report `applied N file(s)`, and neither `--dry-run` nor the apply said the runtime had changed. `.last-apply` now records the runtime (`runtime` field), and apply without `--runtime` (including `--install`) reuses it and prints `runtime: codex (from last apply; pass --runtime to change)`. An explicit `--runtime` that differs from the recorded one is honoured, and both `--dry-run` and the apply print `runtime: <old> -> <new> (switching from the last apply's runtime)`. With no `.last-apply`, or one written by an older release without the field, the default stays `claude-code`; a no-op apply stamps the runtime into such a record so the next plain apply reuses it. `--target` without `--runtime` after a codex apply refuses with a message that names the reused runtime and `--runtime claude-code`. The `--json` result carries `runtime`, `runtimeSource` and `previousRuntime`. `harness diff --since-apply` is unchanged: it compares `.last-apply` against disk and never regenerates, so it has no runtime to select. Pinned by `tests/cli/apply/apply-runtime-reuse.test.ts`.
+
 ## [0.58.2] - 2026-09-24
 
 ### Fixed
