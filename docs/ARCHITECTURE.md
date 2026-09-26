@@ -33,7 +33,9 @@ flowchart LR
 Observe → refine → declare is the whole loop. The read-side surfaces
 (`audit`, `explain --trace`, `session-export`) replay rows the runtime
 already recorded, so what flows back into the manifest is grounded in
-what actually happened.
+what actually happened. Unlike the historical CLI-surface examples
+elsewhere in this document (see the callout above), this loop
+describes the shipped tool as it behaves today.
 
 ## Architecture overview
 

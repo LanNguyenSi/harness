@@ -44,6 +44,17 @@ The wizard is one of three ways to bootstrap a manifest:
 
    Since v0.17.4, the `claude-code` wire-now branch passes `overwriteDrift: true` (auto-confirmed) to `apply`. This is the deliberate "start from scratch" intent of `init --interactive`: any pre-existing `~/.harness/harness.generated/settings.json` (legacy `~/.claude/harness.generated/settings.json`) that drifted out of the last-apply snapshot is overwritten by the freshly-rendered settings rather than refused with `outcome: "drift-refuse"`. Ad-hoc `harness apply` (outside the wizard) keeps the strict drift safeguard unchanged. If `targetWritten` still ends up false for any other reason, the wizard now prints a clear stderr message and a `recoveryHint` instead of leaving the operator with a "wired into …" line that never landed.
 
+### MCP registration
+
+Every enabled `tools.mcp[]` server is registered with Claude Code via
+`claude mcp add-json --scope user` (harness itself never writes
+`~/.claude.json`); this requires the `claude` CLI on `$PATH`. If the CLI
+is missing, the wizard warns and prints the equivalent
+`claude mcp add-json --scope user <name> '<json>'` commands to run by
+hand instead of failing. `harness doctor` has a "Claude Code MCP
+Registration" section that re-verifies the live registration via
+`claude mcp list`.
+
 ## Custom flow
 
 Custom is for power users who want a manifest narrower or wider than the named profiles. The wizard branches into three checkbox prompts:
