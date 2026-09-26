@@ -10,6 +10,31 @@ The phase-by-phase plan is deliberately *not* here; it belongs in [`ROADMAP.md`]
 
 ---
 
+## The declare-apply-enforce-record-observe loop
+
+At the conceptual level, before the plane-level detail below, `harness`
+is one loop:
+
+```mermaid
+flowchart LR
+    declare["1. Declare<br/><code>harness.yaml</code>"]
+    apply["2. Apply<br/><code>harness apply</code>"]
+    enforce["3. Enforce<br/>hooks + policies<br/>at runtime"]
+    record[("4. Record<br/>evidence ledger")]
+    observe["5. Observe<br/><code>audit</code> / <code>explain</code> /<br/><code>session-export</code>"]
+
+    declare --> apply
+    apply --> enforce
+    enforce --> record
+    record --> observe
+    observe -. refine .-> declare
+```
+
+Observe → refine → declare is the whole loop. The read-side surfaces
+(`audit`, `explain --trace`, `session-export`) replay rows the runtime
+already recorded, so what flows back into the manifest is grounded in
+what actually happened.
+
 ## Architecture overview
 
 The harness operates across two planes: an authoring plane that merges YAML config files into an effective manifest and runs `harness apply` to emit Claude Code runtime artifacts, and a runtime plane where Claude Code PreToolUse hook events are intercepted, risk-classified, and gate-checked against the grounding-mcp evidence ledger before being allowed or denied.
