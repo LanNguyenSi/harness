@@ -2,7 +2,7 @@
 
 <!-- Add new entries at the top, newest first. -->
 
-- 2026-09-29T10:43:37Z (task 6b56d735): `codex-adapter-parity-gaps.md` re-verified after
+- 2026-09-29T10:44:27Z (task 6b56d735): `codex-adapter-parity-gaps.md` re-verified after
   `install-codex-config.ts` changed again (header recognition now requires a
   candidate line to start at the top level of the document, checked by parsing
   only the text since the last confirmed top-level line, so an array element on
