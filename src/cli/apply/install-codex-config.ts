@@ -333,6 +333,7 @@ function scanOwnedContentEnd(
 ): { end: number; sawEndMarker: boolean } {
   let pos = start;
   let commentRunStart: number | null = null;
+  let sawOwnedContent = false;
   let delim: TripleDelim = null;
   while (pos < text.length) {
     const lineEnd = lineEndAfter(text, pos);
@@ -341,6 +342,7 @@ function scanOwnedContentEnd(
     delim = nextTripleDelim(rawLine, delim);
     if (startedInsideString) {
       commentRunStart = null;
+      sawOwnedContent = true;
       pos = lineEnd;
       continue;
     }
@@ -358,14 +360,27 @@ function scanOwnedContentEnd(
       return { end: commentRunStart ?? pos, sawEndMarker: false };
     }
     commentRunStart = null;
+    sawOwnedContent = true;
     pos = lineEnd;
   }
   // No END marker and no foreign table: a run of blank/comment lines that
   // reaches EOF and holds at least one comment is an operator's trailing
   // comment, not harness content, so back off to the start of that run
-  // (task b34ed105). A run of only blank lines is still consumed.
-  if (commentRunStart !== null && /(^|\n)[ \t]*#/.test(text.slice(commentRunStart, pos))) {
-    return { end: commentRunStart, sawEndMarker: false };
+  // (task b34ed105). Not when the run holds a harness-authored line (the
+  // generated header, a `# harness hook:` line, the source prefix: the
+  // generator itself writes comment-only content, so such a run is stale
+  // harness output that must be replaced), and not before the scan has seen
+  // an owned content line. A run of only blank lines is still consumed.
+  if (commentRunStart !== null && sawOwnedContent) {
+    const run = text.slice(commentRunStart, pos);
+    const hasComment = /(^|\n)[ \t]*#/.test(run);
+    const harnessAuthored =
+      run.includes(HARNESS_HOOK_COMMENT_PREFIX) ||
+      run.includes(CODEX_MANAGED_SOURCE_PREFIX) ||
+      run.includes(GENERATED_HEADER);
+    if (hasComment && !harnessAuthored) {
+      return { end: commentRunStart, sawEndMarker: false };
+    }
   }
   return { end: pos, sawEndMarker: false };
 }
