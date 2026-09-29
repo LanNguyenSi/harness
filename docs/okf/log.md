@@ -2,6 +2,11 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-09-29T06:17:00Z (task e8c9edaf): `evidence-ledger-trust-boundary.md` re-verified after merging
+  master into the write-guard branch: it combines the runtime-module claims
+  re-verified for this change with the `docs/CLI.md` wording already
+  re-verified on master; no claim changed, re-stamped.
+
 - 2026-09-29T06:05:04Z (task e8c9edaf): `gate-fail-posture-matrix.md` re-verified after the
   pack doc's write-guard paragraph was reworded to the recognized-spelling
   boundary and gained the fully obscured glob residual; the doc's deny-set
