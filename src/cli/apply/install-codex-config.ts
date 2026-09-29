@@ -125,8 +125,10 @@ export interface CodexConfigInstallPlan {
    * Operator-authored `[[hooks.<Event>]]` tables (no `# harness hook:`
    * comment above them) that the managed-range scan ended the harness block
    * at and that are kept after the fresh block, one entry per table: its
-   * header and its 1-based line number in the current config (for example
-   * `[[hooks.Stop]] (line 14)`), never any value text. Named because the
+   * header and its 1-based line number in the config before the install and
+   * in the config the install writes (for example
+   * `[[hooks.Stop]] (line 14 before the install, line 40 after it)`), never
+   * any value text. Named because the
    * scan cannot tell such a table from a harness table whose comment line an
    * operator deleted (task 01053b27); a kept table that looks
    * harness-generated is refused instead (see `assertKeptHookTablesAreOperatorOwned`).
@@ -653,13 +655,14 @@ function extractHookIds(content: string): Set<string> {
  * The operator-authored hook tables directly after a managed range that
  * ended at one (`scanOwnedContentEnd`'s `endedAtOperatorHookTable`): every
  * `[[hooks.*]]` header from `from` up to the first non-hook table header or
- * `to`, each with its own text. Empty for any other ending (the first header
- * at `from` is then a non-hook table, or there is none). The caller has
- * already refused a zone that holds a harness marker (`assertNoSplitBlock`),
- * so no header found here carries a `# harness hook:` comment.
+ * `to`, each by header, line number and offset. Empty for any other ending
+ * (the first header at `from` is then a non-hook table, or there is none).
+ * The caller has already refused a zone that holds a harness marker
+ * (`assertNoSplitBlock`), so no header found here carries a `# harness
+ * hook:` comment.
  */
 function collectKeptHookTables(text: string, from: number, to: number): KeptHookTable[] {
-  const tables: { header: string; line: number; start: number; end: number }[] = [];
+  const tables: KeptHookTable[] = [];
   let pos = from;
   let delim: TripleDelim = null;
   while (pos < to) {
@@ -671,35 +674,33 @@ function collectKeptHookTables(text: string, from: number, to: number): KeptHook
       const trimmed = rawLine.trim();
       if (NON_HOOK_TABLE_RE.test(trimmed)) break;
       if (HOOK_ARRAY_HEADER_RE.test(trimmed)) {
-        tables.push({
-          header: describeTableHeader(trimmed),
-          line: lineNumberAt(text, pos),
-          start: pos,
-          end: pos,
-        });
+        tables.push({ header: describeTableHeader(trimmed), line: lineNumberAt(text, pos), start: pos });
       }
     }
     pos = lineEnd;
-    const last = tables[tables.length - 1];
-    if (last !== undefined) last.end = pos;
   }
-  return tables.map((t) => ({ header: t.header, line: t.line, source: text.slice(t.start, t.end) }));
+  return tables;
 }
 
-/** A kept table as the install names it: its header and its 1-based line
- * number in the current config, never any value text. */
-function describeKeptHookTables(kept: KeptHookTable[]): string[] {
-  return kept.map((t) => `${t.header} (line ${t.line})`);
+/** A kept table as the install names it: its header, its 1-based line
+ * number in the config before the install and in the config the install
+ * writes (`nextLines`, same order as `kept`), never any value text. */
+function describeKeptHookTables(kept: KeptHookTable[], nextLines: number[]): string[] {
+  return kept.map(
+    (t, i) => `${t.header} (line ${t.line} before the install, line ${nextLines[i]} after it)`,
+  );
 }
 
 /** An operator-authored hook table the managed-range scan ended the block
- * at, kept after the fresh block (task 01053b27). `source` is the table's
- * own text (header line through the line before the next hook table), read
- * only to compare its commands with the fresh block's; it is never printed. */
+ * at, kept after the fresh block (task 01053b27): its header as printed, its
+ * 1-based line number and the offset of its header line in the current
+ * config. Its commands are read from the parsed whole document, matched by
+ * that offset (`assertKeptHookTablesAreOperatorOwned`); the table's own text
+ * is never parsed on its own and never printed. */
 interface KeptHookTable {
   header: string;
   line: number;
-  source: string;
+  start: number;
 }
 
 interface ManagedRange {
@@ -1208,43 +1209,226 @@ function withBackupLocation<T>(linkPath: string | undefined, check: () => T): T 
   }
 }
 
-/** Every string value stored under a `command` key anywhere in a parsed
- * hook document (`hooks = [{ command = "..." }]` and the expanded
- * `[[hooks.<Event>.hooks]]` form alike). */
-function collectCommandStrings(value: unknown, out: string[]): string[] {
-  if (Array.isArray(value)) {
-    for (const item of value) collectCommandStrings(item, out);
-  } else if (isTomlTable(value)) {
-    for (const [key, child] of Object.entries(value)) {
-      if (key === "command" && typeof child === "string") out.push(child);
-      collectCommandStrings(child, out);
-    }
+/** A header key segment's name as TOML reads it: a bare key as written, a
+ * literal (`'...'`) key's inner text, a basic (`"..."`) key's inner text
+ * when it holds no escape sequence. `null` for a basic key with an escape,
+ * which this scan does not decode; a header holding one is not matched to a
+ * parsed entry (see `mapHookArrayHeaders`). */
+function resolvedKeyName(segment: string): string | null {
+  const quote = segment[0];
+  if (quote === "'") return segment.slice(1, -1);
+  if (quote === '"') {
+    const inner = segment.slice(1, -1);
+    return inner.includes("\\") ? null : inner;
   }
-  return out;
+  return segment;
+}
+
+/** Where a `[[...]]` header line appends in the parsed document: the
+ * `index`-th entry of `hooks.<event>`, or, for `[[hooks.<event>.hooks]]`,
+ * the `subIndex`-th entry of that entry's own `hooks` array. */
+interface HookArraySlot {
+  event: string;
+  index: number;
+  subIndex?: number;
+}
+
+interface HookArrayHeaderMap {
+  /** By offset of the header line in the document. */
+  slots: Map<number, HookArraySlot>;
+  /** Headers seen per event, to compare with the parsed array's length. */
+  eventCounts: Map<string, number>;
+  /** `[[hooks.<event>.hooks]]` headers seen per entry (`subKey`). */
+  subCounts: Map<string, number>;
+}
+
+function subKey(event: string, index: number): string {
+  return `${event}\u0000${index}`;
+}
+
+/**
+ * Every array-of-tables header of the whole document that appends to a hook
+ * event array (`[[hooks.<Event>]]`, however its keys are spelled) or to such
+ * an entry's own `hooks` array (`[[hooks.<Event>.hooks]]`), with the entry it
+ * appends: TOML appends each header's table to its array in document order,
+ * and a sub-array header to the array's LAST entry so far. Lines that start
+ * inside a multi-line string are skipped (`nextTripleDelim`). A line resolved
+ * to such a header cannot be a value line of a document that parses (a
+ * dotted bare path is not a TOML value), and a header this scan cannot
+ * resolve (an escape in a quoted key) is not counted, so the caller compares
+ * `eventCounts` and `subCounts` with the parsed arrays' lengths and treats a
+ * mismatch as "cannot match exactly".
+ */
+function mapHookArrayHeaders(text: string): HookArrayHeaderMap {
+  const map: HookArrayHeaderMap = { slots: new Map(), eventCounts: new Map(), subCounts: new Map() };
+  let pos = 0;
+  let delim: TripleDelim = null;
+  while (pos < text.length) {
+    const lineEnd = lineEndAfter(text, pos);
+    const rawLine = text.slice(pos, lineEnd);
+    const startedInsideString = delim !== null;
+    delim = nextTripleDelim(rawLine, delim);
+    const parsed = startedInsideString ? null : parseTableHeader(rawLine);
+    if (parsed !== null && parsed.header.startsWith("[[")) {
+      const [root, event, sub] = parsed.keys.map(resolvedKeyName);
+      if (root === "hooks" && typeof event === "string") {
+        const count = map.eventCounts.get(event) ?? 0;
+        if (parsed.keys.length === 2) {
+          map.slots.set(pos, { event, index: count });
+          map.eventCounts.set(event, count + 1);
+        } else if (parsed.keys.length === 3 && sub === "hooks") {
+          // Appends to the event's last entry so far; with no entry before
+          // it (`index` -1) TOML makes the event a table, not an array, and
+          // the caller finds no array to match.
+          const key = subKey(event, count - 1);
+          const subIndex = map.subCounts.get(key) ?? 0;
+          map.slots.set(pos, { event, index: count - 1, subIndex });
+          map.subCounts.set(key, subIndex + 1);
+        }
+      }
+    }
+    pos = lineEnd;
+  }
+  return map;
+}
+
+/** The hook command of one parsed hook entry, `{ command = "..." }`, as a
+ * one-element list; empty for anything else. */
+function hookCommandOf(entry: unknown): string[] {
+  return isTomlTable(entry) && typeof entry.command === "string" ? [entry.command] : [];
+}
+
+/** The hook commands of one parsed `hooks.<Event>` entry: its own `command`
+ * plus each `command` of its `hooks` array (inline `hooks = [{ ... }]` or the
+ * expanded `[[hooks.<Event>.hooks]]` form). No other `command` key counts. */
+function eventEntryCommands(entry: unknown): string[] {
+  if (!isTomlTable(entry)) return [];
+  const nested = Array.isArray(entry.hooks) ? entry.hooks.flatMap(hookCommandOf) : [];
+  return [...hookCommandOf(entry), ...nested];
+}
+
+/** Every hook command of a parsed document's `hooks.<Event>` arrays. */
+function documentHookCommands(doc: unknown): string[] {
+  if (!isTomlTable(doc) || !isTomlTable(doc.hooks)) return [];
+  return Object.values(doc.hooks).flatMap((value) =>
+    Array.isArray(value) ? value.flatMap(eventEntryCommands) : [],
+  );
+}
+
+/**
+ * The hook commands a kept table defines, read from the parsed whole
+ * document (`doc`) at the entry its header appends (`map`): for
+ * `[[hooks.<Event>]]` the entry's own `command`, plus its `hooks` array's
+ * commands unless `[[hooks.<Event>.hooks]]` headers build that array (each
+ * of those is its own kept table); for `[[hooks.<Event>.hooks]]` that nested
+ * entry's `command`. A header appending nowhere else (`[[hooks.<Event>.x]]`)
+ * defines none. `null` when the header cannot be matched exactly: a header
+ * the scan did not resolve, a count of headers that differs from the parsed
+ * array's length, or a nested `hooks` header with no entry before it.
+ */
+function keptTableCommands(
+  table: KeptHookTable,
+  doc: unknown,
+  map: HookArrayHeaderMap,
+): string[] | null {
+  const slot = map.slots.get(table.start);
+  if (slot === undefined) {
+    // Not an append the map resolved: a `[[hooks.<Event>.x]]` table holds no
+    // hook command; a header with a key the map does not resolve cannot be
+    // matched.
+    const resolved = parseTableHeader(table.header)?.keys.every((k) => resolvedKeyName(k) !== null);
+    return resolved === true ? [] : null;
+  }
+  const hooks = isTomlTable(doc) && isTomlTable(doc.hooks) ? doc.hooks : undefined;
+  const entries = hooks?.[slot.event];
+  if (!Array.isArray(entries) || entries.length !== map.eventCounts.get(slot.event)) return null;
+  const entry: unknown = entries[slot.index];
+  const subCount = map.subCounts.get(subKey(slot.event, slot.index)) ?? 0;
+  if (slot.subIndex === undefined) {
+    return subCount > 0 ? hookCommandOf(entry) : eventEntryCommands(entry);
+  }
+  const nested = isTomlTable(entry) && Array.isArray(entry.hooks) ? entry.hooks : [];
+  if (nested.length !== subCount) return null;
+  return hookCommandOf(nested[slot.subIndex]);
+}
+
+/** The move-below-END option of a kept-table refusal: only when the config
+ * has an END marker after the kept tables, since below it the install never
+ * touches a table (an operator-owned table whose command starts with
+ * `harness `, the operator's own CLI, is kept that way). */
+function moveBelowEndOption(hasEndMarker: boolean): string {
+  return hasEndMarker
+    ? `, or, if it is an operator-owned table, move it below the '${CODEX_MANAGED_END}' marker, ` +
+        "where the install never touches it"
+    : "";
+}
+
+/** Parses the whole document for the kept-table check, refusing with the
+ * parser's position and one-line reason only (never its code frame). */
+function parseForKeptTableCheck(content: string, what: string, configPath: string): unknown {
+  try {
+    return parseToml(content);
+  } catch (err) {
+    throw new CodexInstallRefusalError(
+      `Codex config ${configPath}: the TOML parser used by harness could not read ${what} ` +
+        `(${describeTomlParseError(err)}), so harness cannot check the operator hook tables it ` +
+        "would keep after the harness hook tables; refusing to install. The file is untouched.",
+      configPath,
+    );
+  }
 }
 
 /**
  * Refuses (file untouched) when an operator hook table the install keeps
- * looks like one harness wrote: its command equals a command of the fresh
- * block, or starts with `harness ` (the shape every generated command has).
- * The line scan tells a harness table from an operator one only by the
- * `# harness hook:` comment above it, so a harness table whose comment an
- * operator deleted, sitting last, would otherwise be kept next to the fresh
- * block: the hook would run twice, or a hook the manifest retired would
- * keep running after every later install (task 01053b27). The message names
- * the table's header and line number only, never a command or any other
- * value text, since a refusal is printed to stderr and into `--json`
- * output.
+ * looks like one harness wrote: one of its hook commands equals a command of
+ * the fresh block, or starts with `harness `. The line scan tells a harness
+ * table from an operator one only by the `# harness hook:` comment above it,
+ * so a harness table whose comment an operator deleted, sitting last, would
+ * otherwise be kept next to the fresh block: the hook would run twice, or a
+ * hook the manifest retired would keep running after every later install
+ * (task 01053b27). A retired hook whose command does not start with
+ * `harness ` (an environment-prefixed report-dir wrap, the memory-router
+ * hook, a custom manifest hook) is not recognised: it is kept and named only.
+ *
+ * The commands come from the parsed WHOLE document (the same `parseToml` the
+ * semantic net uses), each kept table matched to its parsed entry by the
+ * order of the `[[hooks.<Event>]]` headers (`mapHookArrayHeaders`); no part
+ * of the file is parsed on its own. Only hook commands count
+ * (`hooks.<Event>[].command` and `hooks.<Event>[].hooks[].command`), not any
+ * other key named `command`. A kept table that cannot be matched exactly
+ * refuses too. Every message names the table's header and line number only,
+ * never a command or any other value text, and never a parser code frame,
+ * since a refusal is printed to stderr and into `--json` output.
  */
 function assertKeptHookTablesAreOperatorOwned(
   kept: KeptHookTable[],
+  currentContent: string,
   generatedContent: string,
   configPath: string,
+  hasEndMarker: boolean,
 ): void {
   if (kept.length === 0) return;
-  const freshCommands = new Set(collectCommandStrings(parseToml(generatedContent), []));
+  const freshCommands = new Set(
+    documentHookCommands(parseForKeptTableCheck(generatedContent, "the generated hook block", configPath)),
+  );
+  const doc = parseForKeptTableCheck(currentContent, "this file", configPath);
+  const map = mapHookArrayHeaders(currentContent);
   for (const table of kept) {
-    const commands = collectCommandStrings(parseToml(table.source), []);
+    const commands = keptTableCommands(table, doc, map);
+    if (commands === null) {
+      throw new CodexInstallRefusalError(
+        `Codex config ${configPath} has a hook table ${table.header} (line ${table.line}) with no ` +
+          `'${HARNESS_HOOK_COMMENT_PREFIX}<id> (budget_ms=<n>)' comment line above it, placed after the ` +
+          "harness hook tables, that harness could not match to its entry in the parsed config " +
+          "(a header it does not resolve: an escape sequence in a quoted key, on this table or on " +
+          "another table of the same hook event, or a nested hooks table it cannot place), so it " +
+          "cannot check whether harness wrote that table. Spell those header keys without escape " +
+          `sequences, restore the '${HARNESS_HOOK_COMMENT_PREFIX}<id> (budget_ms=<n>)' comment line ` +
+          `directly above ${table.header} if harness wrote it${moveBelowEndOption(hasEndMarker)}, or ` +
+          "delete the table, then re-run `harness apply --runtime codex --install`. The file is untouched.",
+        configPath,
+      );
+    }
     const harnessShaped = commands.some(
       (command) => freshCommands.has(command) || command.startsWith("harness "),
     );
@@ -1256,7 +1440,7 @@ function assertKeptHookTablesAreOperatorOwned(
         "from a harness hook table whose comment line was deleted, and keeping it next to the " +
         "fresh harness block would run that hook twice (or keep a retired harness hook running). " +
         `Restore the comment line directly above ${table.header}, so the install replaces the table ` +
-        "with the fresh block, or delete the table, then re-run " +
+        `with the fresh block${moveBelowEndOption(hasEndMarker)}, or delete the table, then re-run ` +
         `\`harness apply --runtime codex --install\`. The file is untouched.`,
       configPath,
     );
@@ -1292,24 +1476,32 @@ export function planCodexConfigInstall(
   let removedHookIds: string[] = [];
   let foreignSectionsPreserved: string[] = [];
   let keptHookTables: KeptHookTable[] = [];
+  let keptTableDescriptions: string[] = [];
+  let hasEndMarkerAfterKept = false;
   if (range) {
     const oldHookIds = extractHookIds(currentContent.slice(range.start, range.end));
     const newHookIds = extractHookIds(managedBlock);
     removedHookIds = [...oldHookIds].filter((id) => !newHookIds.has(id));
     keptHookTables = range.keptHookTables;
-    // The kept operator hook tables ride the same list, so the dry-run and
-    // the install summary name them exactly like the foreign tables kept
-    // beside them (task 01053b27).
-    foreignSectionsPreserved = [
-      ...range.foreignSectionsPreserved,
-      ...describeKeptHookTables(keptHookTables),
-    ];
+    hasEndMarkerAfterKept = range.strayEnd !== undefined;
 
     const middleForeign = range.strayEnd
       ? currentContent.slice(range.end, range.strayEnd.start)
       : "";
     const tailStart = range.strayEnd ? range.strayEnd.end : range.end;
     nextContent = `${currentContent.slice(0, range.start)}${managedBlock}${middleForeign}${currentContent.slice(tailStart)}`;
+    // A kept table sits right after the fresh block in the written config
+    // (it is in `middleForeign`, or at the start of the tail when there is
+    // no stray END), so its offset there follows from the splice.
+    const shift = range.start + managedBlock.length - range.end;
+    keptTableDescriptions = describeKeptHookTables(
+      keptHookTables,
+      keptHookTables.map((t) => lineNumberAt(nextContent, t.start + shift)),
+    );
+    // The kept operator hook tables ride the same list, so the dry-run and
+    // the install summary name them exactly like the foreign tables kept
+    // beside them (task 01053b27).
+    foreignSectionsPreserved = [...range.foreignSectionsPreserved, ...keptTableDescriptions];
     summary = `updated harness-managed Codex hook block in ${configPath}${viaLink}`;
   } else {
     const prefix =
@@ -1329,7 +1521,13 @@ export function planCodexConfigInstall(
       assertConfigSemanticInvariant(currentContent, nextContent, configPath),
     );
   }
-  assertKeptHookTablesAreOperatorOwned(keptHookTables, opts.generatedContent, configPath);
+  assertKeptHookTablesAreOperatorOwned(
+    keptHookTables,
+    currentContent,
+    opts.generatedContent,
+    configPath,
+    hasEndMarkerAfterKept,
+  );
 
   return {
     configPath,
@@ -1345,7 +1543,7 @@ export function planCodexConfigInstall(
         : summary,
     removedHookIds,
     foreignSectionsPreserved,
-    keptOperatorHookTables: describeKeptHookTables(keptHookTables),
+    keptOperatorHookTables: keptTableDescriptions,
   };
 }
 
