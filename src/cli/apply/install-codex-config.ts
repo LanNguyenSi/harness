@@ -307,14 +307,13 @@ function findExactLine(text: string, target: string, from: number): number {
  * conflict between two segments (a table defined twice, a dotted key that
  * clashes with an earlier table) is invisible to a segment, and such a
  * document does not parse as a whole, so the install refuses it through the
- * parse check on the spliced config either way. A query before the last
- * confirmed line restarts from offset 0 (task 6b56d735). */
+ * parse check on the spliced config either way. Queries come with
+ * non-decreasing line starts, as both scans issue them (task 6b56d735). */
 function createTopLevelProbe(text: string): (lineStart: number) => boolean {
   let confirmed = 0;
   return (lineStart) => {
-    const segmentStart = lineStart >= confirmed ? confirmed : 0;
     try {
-      parseToml(text.slice(segmentStart, lineStart));
+      parseToml(text.slice(confirmed, lineStart));
       confirmed = lineStart;
       return true;
     } catch {
