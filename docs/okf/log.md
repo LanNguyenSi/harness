@@ -2,6 +2,11 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-09-29T06:05:04Z (task e8c9edaf): `gate-fail-posture-matrix.md` re-verified after the
+  pack doc's write-guard paragraph was reworded to the recognized-spelling
+  boundary and gained the fully obscured glob residual; the doc's deny-set
+  claims are unchanged, re-stamped.
+
 - 2026-09-29T05:46:12Z (task e8c9edaf): the solution-acceptance write-guard's reference matcher no
   longer treats a command that only names a pack source file as a verdict-dir
   reference, and it stops scrubbing the pack name when the command carries
