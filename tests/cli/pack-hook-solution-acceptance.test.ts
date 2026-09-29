@@ -3,16 +3,33 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { Readable, Writable } from "node:stream";
 import lockfile from "proper-lockfile";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   ATTEMPT_LOCK_STALE_MS,
+  NULL_VERDICT_NOTE_COORDINATES,
   NULL_VERDICT_NOTE_STATES,
+  renderNullVerdictNote,
   runPackHookSolutionAcceptanceCli,
-  type NullVerdictNoteState,
+  type NullVerdictNoteCoordinate,
 } from "../../src/cli/pack/hook-solution-acceptance.js";
 import { renderReconnectDenyParagraph } from "../../src/policy-packs/builtin/solution-acceptance-reconnect.js";
-import { signVerdict, type Verdict } from "../../src/policy-packs/builtin/solution-acceptance-runtime.js";
+import {
+  readVerdictDetailed,
+  signVerdict,
+  type Verdict,
+} from "../../src/policy-packs/builtin/solution-acceptance-runtime.js";
 import { parseManifest, type Manifest } from "../../src/schema/index.js";
+
+// Passthrough spy on the marker read, so a test can count how many times one
+// hook invocation observes the marker (the single-observation invariant:
+// the deny text is classified from the read the gate decided on, never from
+// a second one). Every other export of the module is the real one.
+vi.mock("../../src/policy-packs/builtin/solution-acceptance-runtime.js", async (importOriginal) => {
+  const actual = await importOriginal<
+    typeof import("../../src/policy-packs/builtin/solution-acceptance-runtime.js")
+  >();
+  return { ...actual, readVerdictDetailed: vi.fn(actual.readVerdictDetailed) };
+});
 
 let cleanups: Array<() => void> = [];
 afterEach(() => {
@@ -280,7 +297,7 @@ describe("completion-gate — decision matrix", () => {
       expect(res.blocked).toBe(true);
       const { reason } = JSON.parse(out) as { reason: string };
       expect(reason).toMatch(/no solution-acceptance verdict recorded/);
-      expect(reason).toContain('No verdict marker exists for "task-42"');
+      expect(reason).toContain('No verdict marker was found for "task-42"');
       // Genuinely not-live (an ordinary ENOENT: never locked at all), so the
       // note asserts what was actually observed, not "liveness could not be
       // determined" (that clause is reserved for the "unknown" case below).
@@ -304,7 +321,7 @@ describe("completion-gate — decision matrix", () => {
       // Genuinely not-live here too (no lock directory at all: ENOENT).
       expect(reason).toMatch(/no attempt reads as currently live/);
       expect(reason).not.toMatch(/liveness could not be determined/);
-      expect(reason).not.toContain('No verdict marker exists for "task-42"');
+      expect(reason).not.toContain('No verdict marker was found for "task-42"');
       expect(reason).not.toMatch(/Reconnecting vs\. retrying/);
       expect(reason).not.toMatch(/With grounding-mcp >= 0\.11\.0:/);
       // Converge step 2 is unaffected for this reading too.
@@ -335,7 +352,7 @@ describe("completion-gate — decision matrix", () => {
       // absence of reading (3)'s note specifically, not the substring
       // shared with the paragraph's boilerplate.
       expect(reason).not.toContain('The verdict marker for "task-42" was read but is not a valid verdict record');
-      expect(reason).not.toContain('No verdict marker exists for "task-42"');
+      expect(reason).not.toContain('No verdict marker was found for "task-42"');
     });
 
     // Indeterminate liveness on reading (3): a
@@ -376,7 +393,7 @@ describe("completion-gate — decision matrix", () => {
       const { reason } = JSON.parse(out) as { reason: string };
       expect(reason).toMatch(/liveness could not be determined/);
       expect(reason).not.toContain("the verdict directory could not be read");
-      expect(reason).not.toContain('No verdict marker exists for "task-42"');
+      expect(reason).not.toContain('No verdict marker was found for "task-42";');
       expect(reason).not.toMatch(/no attempt reads as currently live/);
       expect(reason).not.toMatch(/Reconnecting vs\. retrying/);
     });
@@ -389,7 +406,7 @@ describe("completion-gate — decision matrix", () => {
       const { reason } = JSON.parse(out) as { reason: string };
       expect(reason).toContain('A solution_evaluate attempt for "task-42" is still live');
       expect(reason).toMatch(/attempt-lock anchor is held/);
-      expect(reason).not.toContain('No verdict marker exists for "task-42"');
+      expect(reason).not.toContain('No verdict marker was found for "task-42"');
       // The producer-version qualifier: this reconnect lifecycle is verified
       // against grounding-mcp >= 0.11.0, not the pack's own (older) producer
       // floor (>= 0.3.2), so the deny must not assert it unconditionally.
@@ -451,7 +468,7 @@ describe("completion-gate — decision matrix", () => {
       const { res, out } = await run({ cwd: repoAtHead(HEAD), verdictDir: dir });
       expect(res.blocked).toBe(true);
       const { reason } = JSON.parse(out) as { reason: string };
-      expect(reason).toContain('No verdict marker exists for "task-42"');
+      expect(reason).toContain('No verdict marker was found for "task-42"');
       expect(reason).not.toContain("is still live");
       expect(reason).not.toMatch(/Reconnecting vs\. retrying/);
     });
@@ -483,7 +500,7 @@ describe("completion-gate — decision matrix", () => {
       expect(reason).not.toMatch(/no attempt reads as currently live/);
       expect(reason).toMatch(/liveness could not be determined/);
       // Neither axis is established, so the note asserts neither.
-      expect(reason).not.toContain('No verdict marker exists for "task-42"');
+      expect(reason).not.toContain('No verdict marker was found for "task-42";');
       expect(reason).not.toMatch(/has not \(yet\) been called/);
     });
 
@@ -1029,31 +1046,43 @@ describe("completion-gate — malformed config.ux (task 19e293c6)", () => {
 describe("null-verdict deny note: one exact line per reachable state", () => {
   const UNUSABLE_ID = 'The claimed id "." is not a usable verdict id: no verdict marker path and no attempt-lock path can be derived from it, so neither was read. Release the active claim carrying it (mcp__agent-tasks__task_abandon, or have the operator clear harness.generated/active-claim), claim the real task, then run solution_evaluate for it.';
   const NEVER_NOT_LIVE =
-    'No verdict marker exists for "task-42"; no attempt reads as currently live: solution_evaluate has not (yet) been called for this id, or a prior call never got far enough to record one.';
+    'No verdict marker was found for "task-42"; no attempt reads as currently live: run solution_evaluate for this id.';
   const NEVER_UNKNOWN =
-    'No readable verdict marker for "task-42" and liveness could not be determined: run solution_evaluate for this id.';
+    'No verdict marker was found for "task-42" and liveness could not be determined: run solution_evaluate for this id.';
   const INVALID_RECORD_NOT_LIVE =
     'The verdict marker for "task-42" was read but is not a valid verdict record; no attempt reads as currently live: re-run solution_evaluate to record a fresh one.';
   const INVALID_RECORD_UNKNOWN =
     'The verdict marker for "task-42" was read but is not a valid verdict record; liveness could not be determined: re-run solution_evaluate to record a fresh one.';
   const MARKER_SYMLINK =
     'The verdict marker path for "task-42" is a symlink, which this gate refuses to follow; no attempt reads as currently live: replace it with a marker recorded by solution_evaluate.';
+  const MARKER_SYMLINK_UNKNOWN =
+    'The verdict marker path for "task-42" is a symlink, which this gate refuses to follow; liveness could not be determined: replace it with a marker recorded by solution_evaluate.';
   const MARKER_NOT_REGULAR =
     'The verdict marker path for "task-42" is not a regular file; no attempt reads as currently live: replace it with a marker recorded by solution_evaluate.';
+  const MARKER_NOT_REGULAR_UNKNOWN =
+    'The verdict marker path for "task-42" is not a regular file; liveness could not be determined: replace it with a marker recorded by solution_evaluate.';
   const MARKER_UNREADABLE =
     'The verdict marker for "task-42" could not be read; no attempt reads as currently live: re-run solution_evaluate to record a fresh one.';
+  const MARKER_UNREADABLE_UNKNOWN =
+    'The verdict marker for "task-42" could not be read; liveness could not be determined: re-run solution_evaluate to record a fresh one.';
   const LIVE = 'A solution_evaluate attempt for "task-42" is still live: its attempt-lock anchor is held.';
-  const ALL_LINES = [
-    UNUSABLE_ID,
-    NEVER_NOT_LIVE,
-    NEVER_UNKNOWN,
-    INVALID_RECORD_NOT_LIVE,
-    INVALID_RECORD_UNKNOWN,
-    MARKER_SYMLINK,
-    MARKER_NOT_REGULAR,
-    MARKER_UNREADABLE,
-    LIVE,
-  ];
+
+  /**
+   * Every line any reachable coordinate can render for `taskId`, derived
+   * from the renderer itself rather than listed by hand: a state added to
+   * `NULL_VERDICT_NOTE_STATES` joins the "no other line appears" check
+   * without anyone remembering to extend a list. The literals above stay
+   * the independent pin of each line's wording; this only decides which
+   * lines a case must NOT contain.
+   */
+  function allLines(taskId: string): string[] {
+    return [...new Set(NULL_VERDICT_NOTE_COORDINATES.map((c) => renderNullVerdictNote(c, taskId)))];
+  }
+
+  /** One key per coordinate, for comparing a row's declaration to the reachable set. */
+  function coordinateKey(c: NullVerdictNoteCoordinate): string {
+    return "liveness" in c ? `${c.state} + ${c.liveness}` : c.state;
+  }
 
   /** A verdict dir whose `<id>.attempt-lock.lock` path cannot be statted (ELOOP). */
   function lockPathUnreadable(dir: string): string {
@@ -1062,33 +1091,67 @@ describe("null-verdict deny note: one exact line per reachable state", () => {
     return dir;
   }
 
+  // `coordinate` declares which line the fixture is meant to reach; the
+  // binding test below compares it against what the renderer produces for
+  // it, so a row cannot claim a state its `expected` line does not belong
+  // to. For a clause-carrying state, `liveness` is what the lock check reads
+  // for the fixture. The two clause-free states (unusable-id, live-attempt)
+  // have no liveness field at all, so there is no placeholder to mistake for
+  // an observation.
+  /** The marker path is a symlink to a regular file (refused by policy, never read). */
+  function markerSymlink(dir: string): string {
+    const target = path.join(dir, "real-marker.json");
+    fs.writeFileSync(target, JSON.stringify({ id: TASK, head: HEAD, ready: true }));
+    fs.symlinkSync(target, path.join(dir, `${TASK}.json`));
+    return dir;
+  }
+
+  /** The marker path is a directory (present, not a regular file). */
+  function markerDirectory(dir: string): string {
+    fs.mkdirSync(path.join(dir, `${TASK}.json`));
+    return dir;
+  }
+
+  /** The marker is a regular file the process may not read (EACCES). */
+  function markerUnreadable(dir: string): string {
+    const marker = path.join(dir, `${TASK}.json`);
+    fs.writeFileSync(marker, JSON.stringify({ id: TASK, head: HEAD, ready: true }));
+    fs.chmodSync(marker, 0o000);
+    // The enclosing directory stays writable, so the afterEach cleanup
+    // removes the file regardless of its own mode.
+    return dir;
+  }
+
   const cases: Array<{
     state: string;
-    noteState: NullVerdictNoteState;
+    coordinate: NullVerdictNoteCoordinate;
+    /** The claimed id the fixture runs with (default TASK). */
+    claimId?: string;
     setup: () => { verdictDir: string; activeClaim?: string };
     expected: string;
   }> = [
     {
       state: "id not usable (active claim '.'), nothing read at all",
-      noteState: "unusable-id",
+      coordinate: { state: "unusable-id" },
+      claimId: ".",
       setup: () => ({ verdictDir: verdictDirWith(null), activeClaim: "." }),
       expected: UNUSABLE_ID,
     },
     {
       state: "reading (1) never-evaluated + liveness not-live",
-      noteState: "never-evaluated",
+      coordinate: { state: "never-evaluated", liveness: "not-live" },
       setup: () => ({ verdictDir: verdictDirWith(null) }),
       expected: NEVER_NOT_LIVE,
     },
     {
       state: "reading (1) never-evaluated + liveness unknown (ELOOP on the lock path only)",
-      noteState: "never-evaluated",
+      coordinate: { state: "never-evaluated", liveness: "unknown" },
       setup: () => ({ verdictDir: lockPathUnreadable(verdictDirWith(null)) }),
       expected: NEVER_UNKNOWN,
     },
     {
       state: "reading (1) never-evaluated + liveness unknown (ENOTDIR: the verdict dir is a file)",
-      noteState: "never-evaluated",
+      coordinate: { state: "never-evaluated", liveness: "unknown" },
       setup: () => {
         const root = fs.mkdtempSync(path.join(os.tmpdir(), "sa-note-table-notdir-"));
         cleanups.push(() => fs.rmSync(root, { recursive: true, force: true }));
@@ -1100,7 +1163,7 @@ describe("null-verdict deny note: one exact line per reachable state", () => {
     },
     {
       state: "reading (3) marker read but unparseable + liveness not-live",
-      noteState: "marker-invalid-record",
+      coordinate: { state: "marker-invalid-record", liveness: "not-live" },
       setup: () => {
         const dir = verdictDirWith(null);
         fs.writeFileSync(path.join(dir, `${TASK}.json`), "{not valid json");
@@ -1110,7 +1173,7 @@ describe("null-verdict deny note: one exact line per reachable state", () => {
     },
     {
       state: "reading (3) marker read but missing a required field + liveness not-live",
-      noteState: "marker-invalid-record",
+      coordinate: { state: "marker-invalid-record", liveness: "not-live" },
       setup: () => {
         const dir = verdictDirWith(null);
         // Parses fine, but `ready` is absent: the reader answers the SAME
@@ -1122,43 +1185,43 @@ describe("null-verdict deny note: one exact line per reachable state", () => {
     },
     {
       state: "reading (3) marker path is a SYMLINK, refused by policy without being read + not-live",
-      noteState: "marker-symlink",
-      setup: () => {
-        const dir = verdictDirWith(null);
-        const target = path.join(dir, "real-marker.json");
-        fs.writeFileSync(target, JSON.stringify({ id: TASK, head: HEAD, ready: true }));
-        fs.symlinkSync(target, path.join(dir, `${TASK}.json`));
-        return { verdictDir: dir };
-      },
+      coordinate: { state: "marker-symlink", liveness: "not-live" },
+      setup: () => ({ verdictDir: markerSymlink(verdictDirWith(null)) }),
       expected: MARKER_SYMLINK,
     },
     {
+      state: "reading (3) marker path is a SYMLINK + liveness unknown (ELOOP)",
+      coordinate: { state: "marker-symlink", liveness: "unknown" },
+      setup: () => ({ verdictDir: lockPathUnreadable(markerSymlink(verdictDirWith(null))) }),
+      expected: MARKER_SYMLINK_UNKNOWN,
+    },
+    {
       state: "reading (3) marker path is a DIRECTORY (not a regular file) + not-live",
-      noteState: "marker-not-regular",
-      setup: () => {
-        const dir = verdictDirWith(null);
-        fs.mkdirSync(path.join(dir, `${TASK}.json`));
-        return { verdictDir: dir };
-      },
+      coordinate: { state: "marker-not-regular", liveness: "not-live" },
+      setup: () => ({ verdictDir: markerDirectory(verdictDirWith(null)) }),
       expected: MARKER_NOT_REGULAR,
     },
     {
+      state: "reading (3) marker path is a DIRECTORY + liveness unknown (ELOOP)",
+      coordinate: { state: "marker-not-regular", liveness: "unknown" },
+      setup: () => ({ verdictDir: lockPathUnreadable(markerDirectory(verdictDirWith(null))) }),
+      expected: MARKER_NOT_REGULAR_UNKNOWN,
+    },
+    {
       state: "reading (3) marker is a regular file the process may not read (EACCES) + not-live",
-      noteState: "marker-unreadable",
-      setup: () => {
-        const dir = verdictDirWith(null);
-        const marker = path.join(dir, `${TASK}.json`);
-        fs.writeFileSync(marker, JSON.stringify({ id: TASK, head: HEAD, ready: true }));
-        fs.chmodSync(marker, 0o000);
-        // The enclosing directory stays writable, so the afterEach cleanup
-        // removes the file regardless of its own mode.
-        return { verdictDir: dir };
-      },
+      coordinate: { state: "marker-unreadable", liveness: "not-live" },
+      setup: () => ({ verdictDir: markerUnreadable(verdictDirWith(null)) }),
       expected: MARKER_UNREADABLE,
     },
     {
+      state: "reading (3) marker is a regular file the process may not read (EACCES) + liveness unknown (ELOOP)",
+      coordinate: { state: "marker-unreadable", liveness: "unknown" },
+      setup: () => ({ verdictDir: lockPathUnreadable(markerUnreadable(verdictDirWith(null))) }),
+      expected: MARKER_UNREADABLE_UNKNOWN,
+    },
+    {
       state: "reading (3) marker read but unparseable + liveness unknown (ELOOP)",
-      noteState: "marker-invalid-record",
+      coordinate: { state: "marker-invalid-record", liveness: "unknown" },
       setup: () => {
         const dir = verdictDirWith(null);
         fs.writeFileSync(path.join(dir, `${TASK}.json`), "{not valid json");
@@ -1168,7 +1231,7 @@ describe("null-verdict deny note: one exact line per reachable state", () => {
     },
     {
       state: "reading (2) a live attempt-lock is held",
-      noteState: "live-attempt",
+      coordinate: { state: "live-attempt" },
       setup: () => {
         const dir = verdictDirWith(null);
         cleanups.push(liveAttemptLock(dir, TASK));
@@ -1179,9 +1242,17 @@ describe("null-verdict deny note: one exact line per reachable state", () => {
   ];
 
   for (const c of cases) {
+    // Binds the case's declared state and liveness to the line that pair
+    // renders: relabelling a case to a state its fixture never reaches
+    // makes `expected` disagree with the renderer and fails here, instead
+    // of leaving the coverage test below satisfied by a label alone.
+    it(`declared state renders the expected line: ${c.state}`, () => {
+      expect(renderNullVerdictNote(c.coordinate, c.claimId ?? TASK)).toBe(c.expected);
+    });
+
     // The EACCES fixture cannot discriminate for a process that ignores
     // file modes; skipping is honest, silently passing would not be.
-    const runCase = c.noteState === "marker-unreadable" && process.getuid?.() === 0 ? it.skip : it;
+    const runCase = c.coordinate.state === "marker-unreadable" && process.getuid?.() === 0 ? it.skip : it;
     runCase(`renders exactly one established line: ${c.state}`, async () => {
       const { verdictDir, activeClaim } = c.setup();
       const { res, out } = await run({
@@ -1195,7 +1266,7 @@ describe("null-verdict deny note: one exact line per reachable state", () => {
       // No OTHER state's line may appear: the renderer emits the one line
       // for the state it classified, never a second one and never the
       // wrong one.
-      for (const other of ALL_LINES.filter((l) => l !== c.expected)) {
+      for (const other of allLines(c.claimId ?? TASK).filter((l) => l !== c.expected)) {
         expect(reason).not.toContain(other);
       }
     });
@@ -1207,8 +1278,55 @@ describe("null-verdict deny note: one exact line per reachable state", () => {
   // renderer's own `Record<NullVerdictNoteState, ...>` covers the other
   // half at compile time (a state with no line fails the build).
   it("covers every declared note state with at least one fixture", () => {
-    const covered = new Set(cases.map((c) => c.noteState));
+    const covered = new Set(cases.map((c) => c.coordinate.state));
     expect([...NULL_VERDICT_NOTE_STATES].filter((s) => !covered.has(s))).toEqual([]);
+  });
+
+  // The liveness axis: every reachable (state, liveness) coordinate has a
+  // row, so a state pinned for one clause only, with a mutant hardcoding the
+  // other clause into its line, cannot pass (the marker-kind lines once had
+  // a not-live fixture only). The reachable set comes from the source, not
+  // from this file.
+  it("has a row for every reachable (state, liveness) coordinate", () => {
+    const declared = new Set(cases.map((c) => coordinateKey(c.coordinate)));
+    expect(NULL_VERDICT_NOTE_COORDINATES.map(coordinateKey).filter((k) => !declared.has(k))).toEqual([]);
+  });
+
+  // The same axis checked against a list this file owns, independent of the
+  // source's coordinate list: every state whose line carries a clause needs
+  // a row for BOTH clauses, and the source list must equal that set. Without
+  // it, dropping a clause from the source's derived list would shrink what
+  // the check above requires and still pass.
+  it("has a row for both liveness clauses of every clause-carrying state (test-owned list)", () => {
+    const declared = new Set(cases.map((c) => coordinateKey(c.coordinate)));
+    const clauseFree: readonly string[] = ["unusable-id", "live-attempt"];
+    const required = NULL_VERDICT_NOTE_STATES.flatMap((state) =>
+      clauseFree.includes(state)
+        ? [state]
+        : (["not-live", "unknown"] as const).map((liveness) => coordinateKey({ state, liveness } as never)),
+    );
+    expect(required.filter((k) => !declared.has(k))).toEqual([]);
+    // and the source's coordinate list (which drives the "no other line"
+    // set above) must be exactly this set, not a subset of it
+    expect(NULL_VERDICT_NOTE_COORDINATES.map(coordinateKey).sort()).toEqual([...required].sort());
+  });
+
+  // The renderer is total over reachable coordinates only. A pair the type
+  // excludes must not render a line, or a row (or a caller that bypasses the
+  // type) could declare "live" beside a marker line and get the not-live
+  // clause back, which says "no attempt reads as currently live" for a
+  // lock that read live.
+  it.each([
+    ["live beside a marker line", { state: "marker-invalid-record", liveness: "live" }],
+    ["live beside the never-evaluated line", { state: "never-evaluated", liveness: "live" }],
+    ["no liveness beside a clause-carrying state", { state: "marker-symlink" }],
+    ["a liveness beside the unusable-id state", { state: "unusable-id", liveness: "unknown" }],
+    ["a liveness beside the unusable-id state (not-live)", { state: "unusable-id", liveness: "not-live" }],
+    ["a liveness beside the live-attempt state", { state: "live-attempt", liveness: "live" }],
+  ])("refuses to render an unreachable coordinate: %s", (_label, coordinate) => {
+    expect(() => renderNullVerdictNote(coordinate as NullVerdictNoteCoordinate, TASK)).toThrow(
+      /null-verdict note state/,
+    );
   });
 
   // The finding that motivated the table (round 5): with an unusable id
@@ -1231,5 +1349,44 @@ describe("null-verdict deny note: one exact line per reachable state", () => {
     // `sanitizeVerdictId` rejects: the remedy names a usable id instead.
     expect(reason).not.toContain("run solution_evaluate for this id");
     expect(reason).not.toMatch(/Reconnecting vs\. retrying/);
+  });
+
+  // The last line that named a cause the gate never observed: what was
+  // established is only that the marker read found nothing (the shared
+  // reader folds every lstat failure into "missing") and that the lock read
+  // not-live a moment later. "Not yet called" / "never got far enough" are
+  // falsified by a marker recorded then deleted, by an attempt finishing
+  // between the two reads, and by an lstat failure that is not ENOENT.
+  // Asserted as absences on top of the exact lines, in both liveness states.
+  it.each([
+    ["liveness not-live", () => verdictDirWith(null)],
+    ["liveness unknown (ELOOP on the lock path)", () => lockPathUnreadable(verdictDirWith(null))],
+  ])("the never-evaluated line names no cause it did not observe: %s", async (_label, makeDir) => {
+    const { res, out } = await run({ cwd: repoAtHead(HEAD), verdictDir: makeDir() });
+    expect(res.blocked).toBe(true);
+    const { reason } = JSON.parse(out) as { reason: string };
+    expect(reason).not.toContain("has not (yet) been called");
+    expect(reason).not.toContain("never got far enough");
+    expect(reason).toContain("run solution_evaluate for this id");
+  });
+
+  // The single-observation invariant: one hook invocation observes the
+  // marker once, and the deny text is classified from that outcome. A second
+  // `readVerdictDetailed` call at the classifier call site (the shape of the
+  // race where an attempt finishes between two reads) fails here. The reader spy is a passthrough, so the deny
+  // text under test is the real one.
+  it.each([
+    ["marker missing", (dir: string) => dir],
+    ["marker is a symlink", (dir: string) => markerSymlink(dir)],
+    ["marker is unparseable", (dir: string) => {
+      fs.writeFileSync(path.join(dir, `${TASK}.json`), "{not valid json");
+      return dir;
+    }],
+  ])("reads the marker exactly once per invocation and classifies a deny from it: %s", async (_label, prepare) => {
+    vi.mocked(readVerdictDetailed).mockClear();
+    const { res, out } = await run({ cwd: repoAtHead(HEAD), verdictDir: prepare(verdictDirWith(null)) });
+    expect(res.blocked).toBe(true);
+    expect(JSON.parse(out).reason as string).toContain(`"${TASK}"`);
+    expect(vi.mocked(readVerdictDetailed)).toHaveBeenCalledTimes(1);
   });
 });

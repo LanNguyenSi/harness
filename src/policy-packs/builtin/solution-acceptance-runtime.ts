@@ -426,8 +426,10 @@ export function readVerdictDetailed(dir: string, id: string): VerdictReadOutcome
 /**
  * Read + validate the verdict marker for `id`, or null when it is absent,
  * unparseable, a symlink, or not a regular file: `readVerdictDetailed`
- * above with the reason dropped. Behaviour is unchanged for every caller
- * that only needs the gate decision.
+ * above with the reason dropped. The completion-gate hook reads through
+ * `readVerdictDetailed` (it needs the reason), so this null-collapsing form
+ * has no production caller today; it stays as the exported form for a
+ * caller that only needs the verdict, and its collapse is unit-tested.
  */
 export function readVerdict(dir: string, id: string): Verdict | null {
   const read = readVerdictDetailed(dir, id);
