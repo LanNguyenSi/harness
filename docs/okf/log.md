@@ -2,9 +2,11 @@
 
 <!-- Add new entries at the top, newest first. -->
 
-- 2026-09-29T05:35:27Z (task e8c9edaf): the solution-acceptance write-guard's reference matcher no
+- 2026-09-29T05:46:12Z (task e8c9edaf): the solution-acceptance write-guard's reference matcher no
   longer treats a command that only names a pack source file as a verdict-dir
-  reference. Re-verified `evidence-ledger-trust-boundary.md` (its write-guard
+  reference, and it stops scrubbing the pack name when the command carries
+  runtime-construction syntax (a name built at runtime is an open residual,
+  not caught). Re-verified `evidence-ledger-trust-boundary.md` (its write-guard
   sentence, the runtime module claims) and `gate-fail-posture-matrix.md` (the
   pack doc's deny-set lines are unchanged; the addition sits below the
   write-guard heading); neither doc's claims changed, both are re-stamped.
