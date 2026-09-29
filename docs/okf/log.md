@@ -2,7 +2,7 @@
 
 <!-- Add new entries at the top, newest first. -->
 
-- 2026-09-29T07:07:08Z (task b34ed105): `codex-adapter-parity-gaps.md` re-verified after
+- 2026-09-29T07:24:41Z (task b34ed105): `codex-adapter-parity-gaps.md` re-verified after
   `install-codex-config.ts` changed again (the no-END EOF comment back-off now
   skips a trailing run that holds a harness-authored line); the doc's install
   claim (only the marked harness-managed block is replaced, operator config is
