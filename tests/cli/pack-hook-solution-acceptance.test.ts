@@ -276,7 +276,7 @@ describe("completion-gate — decision matrix", () => {
     expect(res.blocked).toBe(true);
     const env = JSON.parse(out);
     expect(env.decision).toBe("block");
-    expect(env.reason).toMatch(/no solution-acceptance verdict/);
+    expect(env.reason).toMatch(/no readable solution-acceptance verdict marker/);
   });
 
   describe("gate.verdict === null: three readings distinguished by the attempt-lock anchor", () => {
@@ -296,7 +296,7 @@ describe("completion-gate — decision matrix", () => {
       const { res, out } = await run({ cwd: repoAtHead(HEAD), verdictDir: verdictDirWith(null) });
       expect(res.blocked).toBe(true);
       const { reason } = JSON.parse(out) as { reason: string };
-      expect(reason).toMatch(/no solution-acceptance verdict recorded/);
+      expect(reason).toMatch(/no readable solution-acceptance verdict marker/);
       expect(reason).toContain('No verdict marker was found for "task-42"');
       // Genuinely not-live (an ordinary ENOENT: never locked at all), so the
       // note asserts what was actually observed, not "liveness could not be
@@ -338,6 +338,34 @@ describe("completion-gate — decision matrix", () => {
     // mutant that reorders the check (marker presence before liveness)
     // survives every OTHER fixture in this file (none of them has both a
     // live lock and a marker at once) and is killed only here.
+    // The deny's first line (the gate's own reason) states only what the gate
+    // observed. It must not say a verdict was "recorded" nor tell the agent to
+    // run solution_evaluate "first": the latter contradicts the live-attempt
+    // converge step, which says to poll the SAME attempt instead.
+    it("live-attempt deny: reason line has no 'recorded' and no 'run ... solution_evaluate first'", async () => {
+      const dir = verdictDirWith(null);
+      cleanups.push(liveAttemptLock(dir, TASK));
+      const { res, out } = await run({ cwd: repoAtHead(HEAD), verdictDir: dir });
+      expect(res.blocked).toBe(true);
+      const { reason } = JSON.parse(out) as { reason: string };
+      expect(reason).toContain('A solution_evaluate attempt for "task-42" is still live');
+      const firstLine = reason.split("\n")[0] ?? "";
+      expect(firstLine).toContain('no readable solution-acceptance verdict marker for "task-42"');
+      expect(firstLine).not.toMatch(/recorded/);
+      expect(firstLine).not.toMatch(/\bfirst\b/);
+      expect(reason).not.toMatch(/run \S*solution_evaluate\S* first/);
+    });
+
+    it("never-evaluated deny: reason line has no 'recorded' and no 'first'", async () => {
+      const { res, out } = await run({ cwd: repoAtHead(HEAD), verdictDir: verdictDirWith(null) });
+      expect(res.blocked).toBe(true);
+      const { reason } = JSON.parse(out) as { reason: string };
+      const firstLine = reason.split("\n")[0] ?? "";
+      expect(firstLine).toContain('no readable solution-acceptance verdict marker for "task-42"');
+      expect(firstLine).not.toMatch(/recorded/);
+      expect(firstLine).not.toMatch(/\bfirst\b/);
+    });
+
     it("reading (2) live-attempt takes priority over a co-present corrupt marker (overlap)", async () => {
       const dir = verdictDirWith(null);
       fs.writeFileSync(path.join(dir, `${TASK}.json`), "{not valid json");
@@ -659,7 +687,7 @@ describe("completion-gate — signature verification end-to-end (harness/c7c3f60
     expect(res.blocked).toBe(true);
     const reason = JSON.parse(out).reason as string;
     expect(reason).toMatch(/forged\/unsigned solution-acceptance verdict rejected/);
-    expect(reason).not.toMatch(/no solution-acceptance verdict recorded/);
+    expect(reason).not.toMatch(/no readable solution-acceptance verdict marker/);
   });
 
   // Regression (AC #3): a marker hand-written WITHOUT the signing key, as a
@@ -892,7 +920,7 @@ describe("completion-gate — scoping", () => {
       toolInput: { command: "git push origin work" },
     });
     expect(res.blocked).toBe(true);
-    expect(JSON.parse(out).reason).toMatch(/no solution-acceptance verdict/);
+    expect(JSON.parse(out).reason).toMatch(/no readable solution-acceptance verdict marker/);
   });
 
   it("GATES `gh pr merge` and ALLOWS it once a ready verdict is present", async () => {

@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **The solution-acceptance null-verdict deny now opens with a reason that states only what the gate observed** (task `8e9d7333`, follow-up to the note-line fix of task `8fe0f633`; agent-facing text and tests only, no gate decision changes). `evaluateGate`'s reason for a missing verdict read `no solution-acceptance verdict recorded for "<id>" (run mcp__grounding-mcp__solution_evaluate first)`; "recorded" is falsified by a marker recorded then deleted, an attempt finishing between the marker read and the lock read, and an `lstat` failure folded into `missing`, and "run ... first" contradicted the live-attempt deny, whose converge step says to poll the same attempt. It now reads `no readable solution-acceptance verdict marker for "<id>" at read time`. The next-action guidance stays where it already was, in the note line and the converge steps below it. The tests that pinned the old wording were updated, and new absence tests cover the plain reason and the never-evaluated and live-attempt denies.
+
 ## [0.59.1] - 2026-09-29
 
 ### Fixed

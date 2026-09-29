@@ -161,6 +161,15 @@ describe("readVerdict", () => {
 });
 
 describe("evaluateGate — mirror of grounding-mcp solution_gate", () => {
+  it("null-verdict reason states only what was observed: no 'recorded', no 'first'", () => {
+    const r = evaluateGate(null, HEAD, "t", generatedDir);
+    expect(r.allowed).toBe(false);
+    expect(r.verdict).toBeNull();
+    expect(r.reason).toBe('no readable solution-acceptance verdict marker for "t" at read time');
+    expect(r.reason).not.toMatch(/recorded/);
+    expect(r.reason).not.toMatch(/\bfirst\b/);
+  });
+
   it("allows only a ready, VALIDLY-SIGNED verdict at the current HEAD", () => {
     const dir = tmpDir();
     writeMarker(dir, "t", { head: HEAD, ready: true });
@@ -170,7 +179,7 @@ describe("evaluateGate — mirror of grounding-mcp solution_gate", () => {
     const r = evaluateGate(null, HEAD, "t", generatedDir);
     expect(r.allowed).toBe(false);
     expect(r.forged).toBe(false);
-    expect(r.reason).toMatch(/no solution-acceptance verdict/);
+    expect(r.reason).toMatch(/no readable solution-acceptance verdict marker/);
   });
   it("blocks: not ready, surfacing blockers", () => {
     const dir = tmpDir();
@@ -223,8 +232,8 @@ describe("evaluateGate — signature verification (harness/c7c3f606, fail-closed
     expect(r.allowed).toBe(false);
     expect(r.forged).toBe(true);
     expect(r.reason).toMatch(/forged\/unsigned solution-acceptance verdict rejected/);
-    // Distinct from the "no verdict recorded" wording used when the file is absent.
-    expect(r.reason).not.toMatch(/no solution-acceptance verdict recorded/);
+    // Distinct from the "no readable verdict marker" wording used when the file is absent.
+    expect(r.reason).not.toMatch(/no readable solution-acceptance verdict marker/);
   });
 
   // Regression (AC #3): a marker hand-written WITHOUT the signing key —
