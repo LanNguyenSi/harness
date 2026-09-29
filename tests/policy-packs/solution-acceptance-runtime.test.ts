@@ -675,6 +675,29 @@ describe("bashReferencesVerdictDir — write-guard reference detection", () => {
     expect(bashReferencesVerdictDir("echo x > /p/solu*verdicts/t.json", dir)).toBe(true);
     expect(bashReferencesVerdictDir("echo x > /p/solution-v[e]rdicts/t.json", dir)).toBe(true);
   });
+
+  // KNOWN OPEN RESIDUAL, not a guarantee: these assertions pin an ALLOW
+  // (false) verdict on purpose, to document a gap. A path whose every segment
+  // is obscured so that neither `solution` nor `verdicts` survives in the
+  // command text cannot be decided by a text matcher, before or after the
+  // narrowing. The residual is named in the module header of
+  // src/policy-packs/builtin/solution-acceptance-runtime.ts and in
+  // docs/policy-packs/solution-acceptance.md (write-guard section, "open
+  // residual"). Marker signing is the closure. If a change makes any of these
+  // refuse, flip the assertion together with that doc and the CHANGELOG. The
+  // matcher is called as a pure function on command strings; nothing is run.
+  it("KNOWN OPEN RESIDUAL (see docs/policy-packs/solution-acceptance.md): a fully glob-obscured leaf is not detected", () => {
+    expect(bashReferencesVerdictDir("cp x.md sol*verd*/e8.json", dir)).toBe(false);
+    expect(bashReferencesVerdictDir("echo x > /p/sol*verd*/t.json", dir)).toBe(false);
+  });
+  it("KNOWN OPEN RESIDUAL (see docs/policy-packs/solution-acceptance.md): sibling obscured spellings are not detected", () => {
+    // brace and glob obscuring of every segment
+    expect(bashReferencesVerdictDir("cp x.md /p/s{o,}l*v{e,}rd*/t.json", dir)).toBe(false);
+    // backslash-escaped leaf
+    expect(bashReferencesVerdictDir("cp x.md /p/so\\lution-ver\\dicts/t.json", dir)).toBe(false);
+    // case-variant leaf (matters on a case-insensitive filesystem)
+    expect(bashReferencesVerdictDir("cp x.md /p/SOLUTION-VERDICTS/t.json", dir)).toBe(false);
+  });
 });
 
 describe("DEFAULT_PUSH_BASH_RE — completion bash matcher", () => {
