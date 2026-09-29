@@ -316,12 +316,12 @@ function findExactLine(text: string, target: string, from: number): number {
  * then the segment starts at a confirmed line with nothing open, so a line
  * inside an open array, inline table or multi-line string still fails it.
  *
- * Cost: a scan over many real tables confirms each one on the fast path, so
- * it stays linear. A candidate that fails (an array element on its own line)
- * costs a segment parse plus a full-prefix parse, so one foreign array with
- * thousands of element lines each on its own line is quadratic in their
- * number: about 0.8 s for 2000 such lines, 3 s for 4000 and 12 s for 8000,
- * measured in-process. Both scans query non-decreasing line starts. A query
+ * Cost: a real table confirmed on the fast path costs a segment parse. Any
+ * candidate whose segment fails costs a full-prefix parse too: an array
+ * element on its own line, or a sub-table after a later element of the same
+ * array of tables. Many of those are quadratic in their number (seconds at
+ * thousands; the CHANGELOG entry for this change has the measurements).
+ * Both scans query non-decreasing line starts. A query
  * before the last confirmed line start throws instead of answering; a line
  * reported as not top level is never confirmed, so it never moves that
  * bound (task 6b56d735). Exported for direct tests only. */

@@ -487,8 +487,8 @@ describe("codex install header check falls back to the full prefix when the text
   it("a config with thousands of tables and no END marker is planned without parsing the whole prefix for each table", () => {
     // Each real table is confirmed from the text since the previous one;
     // parsing the full prefix for every table instead is quadratic and takes
-    // seconds at this size. Head time is tens of milliseconds, so the bound
-    // is generous.
+    // seconds at this size. Linear planning stays far below the bound, so
+    // the bound is generous.
     const tables: string[] = [];
     for (let i = 0; i < 4000; i++) {
       if (i % 2) tables.push(`[projects."/Users/someone/git/some-repository-${i}"]`, 'trust_level = "trusted"');
