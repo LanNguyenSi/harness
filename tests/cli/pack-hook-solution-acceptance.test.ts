@@ -1292,6 +1292,25 @@ describe("null-verdict deny note: one exact line per reachable state", () => {
     expect(NULL_VERDICT_NOTE_COORDINATES.map(coordinateKey).filter((k) => !declared.has(k))).toEqual([]);
   });
 
+  // The same axis checked against a list this file owns, independent of the
+  // source's coordinate list: every state whose line carries a clause needs
+  // a row for BOTH clauses, and the source list must equal that set. Without
+  // it, dropping a clause from the source's derived list would shrink what
+  // the check above requires and still pass.
+  it("has a row for both liveness clauses of every clause-carrying state (test-owned list)", () => {
+    const declared = new Set(cases.map((c) => coordinateKey(c.coordinate)));
+    const clauseFree: readonly string[] = ["unusable-id", "live-attempt"];
+    const required = NULL_VERDICT_NOTE_STATES.flatMap((state) =>
+      clauseFree.includes(state)
+        ? [state]
+        : (["not-live", "unknown"] as const).map((liveness) => coordinateKey({ state, liveness } as never)),
+    );
+    expect(required.filter((k) => !declared.has(k))).toEqual([]);
+    // and the source's coordinate list (which drives the "no other line"
+    // set above) must be exactly this set, not a subset of it
+    expect(NULL_VERDICT_NOTE_COORDINATES.map(coordinateKey).sort()).toEqual([...required].sort());
+  });
+
   // The renderer is total over reachable coordinates only. A pair the type
   // excludes must not render a line, or a row (or a caller that bypasses the
   // type) could declare "live" beside a marker line and get the not-live

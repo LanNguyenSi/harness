@@ -235,9 +235,11 @@ export type AttemptLockLiveness = LockCheckResult;
  * The lock-check results a clause-carrying line can render. `"live"` is
  * absent on purpose: a live lock is settled as the live-attempt state
  * before any marker line is chosen, so no marker line is ever rendered for
- * it.
+ * it. Spelled out rather than derived from `AttemptLockLiveness`, so a new
+ * lock-check result fails the typecheck at the classifier instead of
+ * reaching the renderer's runtime throw inside the deny path.
  */
-type ClauseLiveness = Exclude<AttemptLockLiveness, "live">;
+type ClauseLiveness = "not-live" | "unknown";
 
 /**
  * One reachable (note state, liveness) combination, the coordinate a line
