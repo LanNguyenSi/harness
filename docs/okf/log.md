@@ -2,6 +2,20 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-09-29T07:30:05Z (task 8fe0f633): the solution-acceptance deny text's never-evaluated line
+  no longer names a cause the gate did not observe, the state table gained the
+  liveness rows it lacked and binds each row's declared (state, liveness)
+  coordinate to the renderer (which throws on an unreachable pair), the
+  classifier lost its unreachable `ok` arm, and a dependency-cruiser rule plus a
+  call-count test guard the single marker read. The `task 799de976` entry moved
+  to its chronological place with its commit reference corrected to the merge
+  commit. Re-verified `evidence-ledger-trust-boundary.md` (its solution-acceptance
+  sentence now names `readVerdictDetailed` as the hook's reader, since
+  `readVerdict` has no production caller) and `gate-fail-posture-matrix.md`
+  (the header-contract lines 19-22 of the hook and the deny-set lines 56-60
+  of the pack doc are unchanged and still hold); both re-stamped after the
+  last source, test and doc commit of the change.
+
 - 2026-09-29T07:24:41Z (task b34ed105): `codex-adapter-parity-gaps.md` re-verified after
   `install-codex-config.ts` changed again (the no-END EOF comment back-off now
   skips a trailing run that holds a harness-authored line); the doc's install
@@ -431,6 +445,66 @@
   task touched). Timestamp-only re-stamp, no content rewrite beyond
   round 1's `PostToolUse active-claim tracker` bullet already committed
   in `docs/policy-packs/understanding-before-execution.md`.
+
+- 2026-09-22T19:22:00Z, task `799de976`, state re-read at the
+  squash merge commit `8d15f64` (the branch's own commits do not exist on
+  master; supersedes the four earlier entries this task left here,
+  consolidated into this one):
+  `src/cli/pack/hook-solution-acceptance.ts`'s attempt-lock liveness
+  check is now three-valued (`"live" | "not-live" | "unknown"`, routed
+  through a new `checkFileLock` in `src/io/lock.ts`) instead of a boolean
+  that collapsed "the check threw" into "not live"; `nullVerdictReadingNote`
+  now derives its liveness clause from the result instead of a single
+  hardcoded phrase, so neither reading (1) nor (3) claims an attempt is
+  confirmed absent when liveness could not be determined. An id
+  `sanitizeVerdictId` rejects is a separate `NullVerdictInfo` union
+  member (`kind: "unusable-id"`), settled before anything is read and
+  carrying no liveness field, so the note for it names no read and no
+  liveness result, and the remaining unknown-liveness line names no cause
+  at all. The marker itself is now observed ONCE: `readVerdictDetailed`
+  (`src/policy-packs/builtin/solution-acceptance-runtime.ts`) reports why
+  a read yielded no verdict, the hook passes that single outcome into the
+  classifier instead of probing the path a second time, and each
+  rejection kind renders its own line naming what that read established.
+  The agent-facing wording is pinned by a state table in
+  `tests/cli/pack-hook-solution-acceptance.test.ts` with one exact
+  expected line per (note state, liveness) combination, a coverage test
+  over the exported state list, and a compile-time total `Record` for the
+  lines themselves.
+  `docs/policy-packs/solution-acceptance.md` gained the corresponding
+  redesign in its "Reading the attempt-lock anchor to distinguish the
+  three readings" subsection, and its "Agent-facing surface for the
+  in-flight case" section now points at that subsection instead of
+  restating its detection logic. `src/policy-packs/builtin/
+  solution-acceptance-reconnect.ts` is not listed under any `sources:` in
+  `docs/okf/*.md` (checked via `rg -l` against every doc's frontmatter),
+  so two bundle docs needed re-verification. `docs/okf/
+  evidence-ledger-trust-boundary.md` lists
+  `src/policy-packs/builtin/solution-acceptance-runtime.ts`, which this
+  round touched for the first time: it names no line there, only the
+  function that consumes the shared symlink-rejecting reader, so the
+  sentence was corrected to `readVerdictDetailed` (the new direct
+  consumer, which `readVerdict` delegates to) and the doc re-stamped. Its
+  sibling claim, that `probePathPresence`'s one consumer is
+  `verifyDelegation`, is true again at head: the hook's classifier stopped
+  using it when the marker read became a single observation.
+  `docs/okf/gate-fail-posture-matrix.md` (which lists
+  `src/cli/pack/hook-solution-acceptance.ts` and
+  `docs/policy-packs/solution-acceptance.md`) is the other: its
+  two citations (`src/cli/pack/hook-solution-acceptance.ts` lines 19-22, the
+  fail-closed header contract, and `docs/policy-packs/solution-acceptance.md`
+  lines 56-60, the `ready && head === current HEAD` deny-set enumeration)
+  sit before every line this fix touched in both files; re-read at the merge commit
+  `8d15f64`, neither line range nor content moved, no citation needed
+  re-pointing. Doc re-stamped at this entry's timestamp
+  (2026-09-22T19:22:00Z), later than every `sources:` file's own last
+  commit at re-stamp time (the newest being this task's own
+  `docs/policy-packs/solution-acceptance.md` at 2026-09-22T19:20:26Z,
+  ahead of `src/cli/pack/hook-solution-acceptance.ts` at
+  2026-09-22T19:17:08Z). `npx okf-kit@0.14.0 check docs/okf --json` and
+  the same command with `--require-anchors` both report 0 errors / 0
+  warnings / 0 notices.
+
 - 2026-09-22T08:23:00Z, task `3a910716` (implementer): release hygiene
   batch. Re-pointed the stale line-141 citation in this file's
   `65952a0c` entry below to `` `CHANGELOG.md:#0.57.0` `` (the sentence
@@ -485,64 +559,6 @@
   `npx okf-kit@0.14.0 check docs/okf --json` and `--require-anchors`
   measurements are recorded in the implementer return for this task,
   not claimed here in advance.
-
-- 2026-09-22T19:22:00Z, task `799de976`, state re-read at commit
-  `a1d95a6` (the last source commit of this fix; supersedes the four
-  earlier entries this task left here, consolidated into this one):
-  `src/cli/pack/hook-solution-acceptance.ts`'s attempt-lock liveness
-  check is now three-valued (`"live" | "not-live" | "unknown"`, routed
-  through a new `checkFileLock` in `src/io/lock.ts`) instead of a boolean
-  that collapsed "the check threw" into "not live"; `nullVerdictReadingNote`
-  now derives its liveness clause from the result instead of a single
-  hardcoded phrase, so neither reading (1) nor (3) claims an attempt is
-  confirmed absent when liveness could not be determined. An id
-  `sanitizeVerdictId` rejects is a separate `NullVerdictInfo` union
-  member (`kind: "unusable-id"`), settled before anything is read and
-  carrying no liveness field, so the note for it names no read and no
-  liveness result, and the remaining unknown-liveness line names no cause
-  at all. The marker itself is now observed ONCE: `readVerdictDetailed`
-  (`src/policy-packs/builtin/solution-acceptance-runtime.ts`) reports why
-  a read yielded no verdict, the hook passes that single outcome into the
-  classifier instead of probing the path a second time, and each
-  rejection kind renders its own line naming what that read established.
-  The agent-facing wording is pinned by a state table in
-  `tests/cli/pack-hook-solution-acceptance.test.ts` with one exact
-  expected line per (note state, liveness) combination, a coverage test
-  over the exported state list, and a compile-time total `Record` for the
-  lines themselves.
-  `docs/policy-packs/solution-acceptance.md` gained the corresponding
-  redesign in its "Reading the attempt-lock anchor to distinguish the
-  three readings" subsection, and its "Agent-facing surface for the
-  in-flight case" section now points at that subsection instead of
-  restating its detection logic. `src/policy-packs/builtin/
-  solution-acceptance-reconnect.ts` is not listed under any `sources:` in
-  `docs/okf/*.md` (checked via `rg -l` against every doc's frontmatter),
-  so two bundle docs needed re-verification. `docs/okf/
-  evidence-ledger-trust-boundary.md` lists
-  `src/policy-packs/builtin/solution-acceptance-runtime.ts`, which this
-  round touched for the first time: it names no line there, only the
-  function that consumes the shared symlink-rejecting reader, so the
-  sentence was corrected to `readVerdictDetailed` (the new direct
-  consumer, which `readVerdict` delegates to) and the doc re-stamped. Its
-  sibling claim, that `probePathPresence`'s one consumer is
-  `verifyDelegation`, is true again at head: the hook's classifier stopped
-  using it when the marker read became a single observation.
-  `docs/okf/gate-fail-posture-matrix.md` (which lists
-  `src/cli/pack/hook-solution-acceptance.ts` and
-  `docs/policy-packs/solution-acceptance.md`) is the other: its
-  two citations (`src/cli/pack/hook-solution-acceptance.ts` lines 19-22, the
-  fail-closed header contract, and `docs/policy-packs/solution-acceptance.md`
-  lines 56-60, the `ready && head === current HEAD` deny-set enumeration)
-  sit before every line this fix touched in both files; re-read at commit
-  `a1d95a6`, neither line range nor content moved, no citation needed
-  re-pointing. Doc re-stamped at this entry's timestamp
-  (2026-09-22T19:22:00Z), later than every `sources:` file's own last
-  commit at re-stamp time (the newest being this task's own
-  `docs/policy-packs/solution-acceptance.md` at 2026-09-22T19:20:26Z,
-  ahead of `src/cli/pack/hook-solution-acceptance.ts` at
-  2026-09-22T19:17:08Z). `npx okf-kit@0.14.0 check docs/okf --json` and
-  the same command with `--require-anchors` both report 0 errors / 0
-  warnings / 0 notices.
 
 - 2026-09-22T06:07:33Z, task `ea733314`: `tests/decisions-citations-resolve.test.ts`
   now extracts continuation-form citations -- a bare, path-less line-range
