@@ -3287,4 +3287,11 @@ describe("apply --runtime codex --install: a trailing EOF comment survives the n
     expect(installed).not.toContain("# [[hooks.Stop]]");
     expect(occurrences(installed, "# Harness Codex hook wiring.")).toBe(1);
   });
+
+  it("BEGIN followed only by comments (no owned content line seen) and no END: consumed to EOF as before, not backed off", async () => {
+    const installed = await installOver([CODEX_MANAGED_BEGIN, "# note with no hook table above it", ""].join("\n"));
+    expect(installed).not.toContain("note with no hook table above it");
+    expect(occurrences(installed, CODEX_MANAGED_BEGIN)).toBe(1);
+    expect(occurrences(installed, CODEX_MANAGED_END)).toBe(1);
+  });
 });
