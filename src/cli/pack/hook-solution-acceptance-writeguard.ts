@@ -16,9 +16,9 @@
 //   - Bash that is NOT provably read-only AND references the verdict dir
 //     (covers `echo >`, `$SOLUTION_VERDICT_DIR` spellings, `tee`, `mv`/`cp`/
 //     `ln`/`install`, `python3 -c '...path...'`, and `chmod`/`chattr` that
-//     would loosen perms) — or whose shell cwd is inside the dir. Merely
-//     NAMING one of the pack's own source files (its doc, hook, runtime
-//     module or tests) is not a reference: `bashReferencesVerdictDir`
+//     would loosen perms) — or whose shell cwd is inside the dir.
+//     Merely NAMING one of the pack's own source files (its doc, hook,
+//     runtime module or tests) is not a reference: `bashReferencesVerdictDir`
 //     scrubs the pack name out of plain words before its glob/brace
 //     leaf-word scan (task e8c9edaf), so editing those files from the shell
 //     is allowed while a command that also reaches the dir stays blocked.
