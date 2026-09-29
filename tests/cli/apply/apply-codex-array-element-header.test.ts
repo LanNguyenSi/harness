@@ -476,6 +476,14 @@ describe("codex install header check falls back to the full prefix when the text
     expect(() => probe(0)).toThrow(/before the last confirmed line start/);
   });
 
+  it("a line reported as not top level is never confirmed: a later query may still start before it", () => {
+    const text = ["[a]", "x = [", "  [1]", "]", "[b]", ""].join("\n");
+    const probe = createTopLevelProbe(text);
+    expect(probe(text.indexOf("  [1]"))).toBe(false);
+    expect(probe(text.indexOf("x = ["))).toBe(true);
+    expect(probe(text.indexOf("[b]"))).toBe(true);
+  });
+
   it("a config with thousands of tables and no END marker is planned without parsing the whole prefix for each table", () => {
     // Each real table is confirmed from the text since the previous one;
     // parsing the full prefix for every table instead is quadratic and takes
