@@ -443,6 +443,74 @@ describe("write-guard: a command that only NAMES a pack source file is not a ver
   });
 });
 
+describe("write-guard: a leaf built at runtime from the pack name stays refused when the text carries a glob or brace (task e8c9edaf)", () => {
+  // These are STRING INPUTS to the guard's evaluation function; nothing here
+  // is ever executed. Each one has a glob/brace character, the pack name as a
+  // plain word, and a way to derive the verdict-dir leaf from that word at
+  // runtime. The matcher cannot decide such a command statically, so it must
+  // fall back to scanning the unmodified text, where the leaf word "solution"
+  // is present.
+  const PARENT = "/home/u/.local/state/agent-grounding";
+  const DOC = "docs/policy-packs/solution-acceptance.md";
+
+  it("blocks a leaf derived through parameter expansion of a variable holding the pack name", () => {
+    expect(bash(`v=solution-acceptance; echo x > ${PARENT}/\${v%-acceptance}-ver*/t.json`).blocked).toBe(true);
+    expect(bash(`v=solution-acceptance; echo x > ${PARENT}/\${v/-acceptance/-verdict{s,}}/t.json`).blocked).toBe(true);
+    expect(bash(`v=solution-acceptance; echo x > ${PARENT}/$v/../\${v%-acceptance}-ver?icts/t.json`).blocked).toBe(true);
+  });
+
+  it("blocks a leaf derived through command substitution", () => {
+    expect(
+      bash(`echo x > ${PARENT}/$(echo solution-acceptance | sed 's/-acceptance/-ver*/')/t.json`).blocked,
+    ).toBe(true);
+  });
+
+  it("blocks a leaf derived through backticks", () => {
+    expect(bash(`echo x > ${PARENT}/\`echo solution-acceptance | sed 's/-acceptance/-ver*/'\`/t.json`).blocked).toBe(
+      true,
+    );
+  });
+
+  it("blocks a leaf derived through process substitution", () => {
+    expect(bash(`cp <(echo solution-acceptance) ${PARENT}/solu?ion-ver*/t.json`).blocked).toBe(true);
+    expect(bash(`echo solution-acceptance > >(cat > ${PARENT}/solu?ion-ver*/t.json)`).blocked).toBe(true);
+  });
+
+  it("blocks a leaf derived through eval", () => {
+    expect(bash(`eval "d=solution-acceptance; echo x > ${PARENT}/\${d%-acceptance}-ver*/t.json"`).blocked).toBe(true);
+  });
+
+  it("blocks a leaf derived through printf -v", () => {
+    expect(bash(`printf -v w %s solution-acceptance; echo x > ${PARENT}/\${w%-acceptance}-ver*/t.json`).blocked).toBe(
+      true,
+    );
+  });
+
+  // The words below carry no `$` or backtick, so each of these isolates one
+  // runtime-construction word: the doc edit is refused once the word is present.
+  it.each([
+    "eval :",
+    "source ./x.sh",
+    ". ./x.sh",
+    "printf -v v %s x",
+    "read v",
+    "declare v=1",
+    "export v=1",
+    "set -f",
+  ])("blocks a doc edit that also carries the runtime-construction word: %s", (prefix) => {
+    const edit = `sed -i 's/a.*b/[c]/' ${DOC}`;
+    expect(bash(`${prefix}; ${edit}`).blocked).toBe(true);
+    expect(bash(`${edit} && ${prefix}`).blocked).toBe(true);
+  });
+
+  it("blocks a doc edit whose text carries a `$`, a backtick or a process substitution, glob body or not", () => {
+    expect(bash(`cat >> ${DOC} <<'EOF'\n[x] $HOME\nEOF`).blocked).toBe(true);
+    expect(bash(`sed -i 's/a.*b/$X/' ${DOC}`).blocked).toBe(true);
+    expect(bash(`sed -i 's/a.*b/c/' ${DOC} && echo \`date\``).blocked).toBe(true);
+    expect(bash(`sed -i 's/a.*b/c/' ${DOC} && diff <(echo a) <(echo b)`).blocked).toBe(true);
+  });
+});
+
 describe("write-guard CLI — end-to-end deny envelope", () => {
   it("emits a Claude Code block envelope on a forge attempt", async () => {
     const stdout = captureStream();

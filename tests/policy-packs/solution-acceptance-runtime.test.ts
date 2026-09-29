@@ -651,6 +651,21 @@ describe("bashReferencesVerdictDir — write-guard reference detection", () => {
     expect(bashReferencesVerdictDir("echo x > /data/solution-acceptance-verd*/t.json", custom)).toBe(true);
     expect(bashReferencesVerdictDir("cat >> docs/policy-packs/solution-acceptance.md <<'EOF'\n[x]\nEOF", custom)).toBe(true);
   });
+  it("keeps scanning the unmodified text when the command can build the leaf at runtime from the pack name", () => {
+    const parent = "/home/u/.local/state/agent-grounding";
+    const doc = "docs/policy-packs/solution-acceptance.md";
+    // parameter expansion, command substitution, backticks, process substitution
+    expect(bashReferencesVerdictDir(`v=solution-acceptance; echo x > ${parent}/\${v%-acceptance}-ver*/t.json`, dir)).toBe(true);
+    expect(bashReferencesVerdictDir(`echo x > ${parent}/$(echo solution-acceptance | sed 's/-a.*/-ver*/')/t`, dir)).toBe(true);
+    expect(bashReferencesVerdictDir(`echo x > ${parent}/\`echo solution-acceptance | tr a b\`*/t`, dir)).toBe(true);
+    expect(bashReferencesVerdictDir(`cp <(echo solution-acceptance) ${parent}/solu?ion-ver*/t`, dir)).toBe(true);
+    // builtins that assign or execute text
+    expect(bashReferencesVerdictDir(`eval :; sed -i 's/a.*b/c/' ${doc}`, dir)).toBe(true);
+    expect(bashReferencesVerdictDir(`printf -v v %s x; sed -i 's/a.*b/c/' ${doc}`, dir)).toBe(true);
+    expect(bashReferencesVerdictDir(`read v; sed -i 's/a.*b/c/' ${doc}`, dir)).toBe(true);
+    expect(bashReferencesVerdictDir(`source ./x; sed -i 's/a.*b/c/' ${doc}`, dir)).toBe(true);
+    expect(bashReferencesVerdictDir(`. ./x; sed -i 's/a.*b/c/' ${doc}`, dir)).toBe(true);
+  });
   it("matches a brace split of the leaf and a glob that keeps only one leaf word, with no other clue in the text", () => {
     expect(bashReferencesVerdictDir("echo x > /p/solution-verdict{s,}/t.json", dir)).toBe(true);
     expect(bashReferencesVerdictDir("echo x > /p/solu*verdicts/t.json", dir)).toBe(true);
