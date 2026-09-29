@@ -133,6 +133,21 @@ async function cli(opts: { json?: boolean; dryRun?: boolean }): Promise<CliRun> 
   return { code, out, err };
 }
 
+/** Every output channel of the install for the config on disk: --dry-run
+ * (stdout and stderr), --dry-run --json, and the real install's summary and
+ * its --json form. Each entry is one stream's text; all must exit 0. The
+ * real installs run last, since they rewrite the config. */
+async function everyOutput(): Promise<string[]> {
+  const runs = [
+    await cli({ dryRun: true }),
+    await cli({ dryRun: true, json: true }),
+    await cli({}),
+    await cli({ json: true }),
+  ];
+  for (const r of runs) expect(r.code).toBe(EX_OK);
+  return runs.flatMap((r) => [r.out, r.err]);
+}
+
 /** Every value printed after "foreign section: " in the human output. */
 function foreignSectionLines(out: string): string[] {
   return [...out.matchAll(/foreign section: (.*)$/gm)].map((m) => m[1] ?? "");
@@ -248,9 +263,7 @@ describe("codex install finds the end of the harness block across an array eleme
       expect(p.nextContent).not.toContain("late-retired");
       expect(p.nextContent).not.toContain(shape.element);
 
-      const dry = await cli({ dryRun: true });
-      expect(dry.code).toBe(EX_OK);
-      expect(dry.out).not.toContain(shape.text);
+      for (const output of await everyOutput()) expect(output).not.toContain(shape.text);
     });
 
     it(`${shape.label}: with the END marker after the element, the block ends at that marker`, () => {
@@ -270,13 +283,67 @@ describe("codex install finds the end of the harness block across an array eleme
   }
 });
 
+describe("codex install decides header recognition with the parser, not with indentation (task 6b56d735)", () => {
+  // An element line with no leading whitespace: the same shape as a real
+  // top-level header, told apart only by what is open before it.
+  const bareElement = `["${TOKEN}"]`;
+
+  const layouts: Array<[string, string[]]> = [
+    ["no END marker", [...OLD_BLOCK, ...foreignTableWithElement(bareElement), ""]],
+    [
+      "END marker past the foreign table",
+      [...OLD_BLOCK, ...foreignTableWithElement(bareElement), CODEX_MANAGED_END, ""],
+    ],
+  ];
+  for (const [label, lines] of layouts) {
+    it(`${label}: an unindented element in a foreign args array is not listed and its text never prints`, async () => {
+      write(lines);
+      expect(plan().foreignSectionsPreserved).toEqual(["[mcp_servers.x]"]);
+      expect(printedFields(plan())).not.toContain(TOKEN);
+      for (const output of await everyOutput()) expect(output).not.toContain(TOKEN);
+      expect(fs.readFileSync(codexConfig, "utf8")).toContain(`\n${bareElement}\n`);
+    });
+  }
+
+  it("an unindented element inside an owned hook table does not end the block: the hook after it is recognized", async () => {
+    write([
+      ...OLD_BLOCK,
+      "[[hooks.Stop]]",
+      'hooks = [{ type = "command", command = "operator", timeout = 5 }]',
+      "args = [",
+      bareElement,
+      "]",
+      "# harness hook: late-retired (budget_ms=2000)",
+      "[[hooks.PostToolUse]]",
+      'matcher = "Bash"',
+      'hooks = [{ type = "command", command = "harness pack hook late-retired", timeout = 2 }]',
+      "[tui]",
+      "theme = 1",
+      "",
+    ]);
+    const p = plan();
+    expect(p.removedHookIds).toEqual([RETIRED_ID, "late-retired"]);
+    expect(p.foreignSectionsPreserved).toEqual(["[tui]"]);
+    expect(p.nextContent.endsWith(`${CODEX_MANAGED_END}\n[tui]\ntheme = 1\n`)).toBe(true);
+    for (const output of await everyOutput()) expect(output).not.toContain(TOKEN);
+  });
+
+  it("an indented real header after a block with no END marker is listed and kept", () => {
+    write([...OLD_BLOCK, "  [tui]", "  theme = 1", ""]);
+    const p = plan();
+    expect(p.foreignSectionsPreserved).toEqual(["[tui]"]);
+    expect(p.nextContent.endsWith(`${CODEX_MANAGED_END}\n  [tui]\n  theme = 1\n`)).toBe(true);
+    expect(p.nextContent).not.toContain(RETIRED_ID);
+  });
+});
+
 describe("codex install split-block refusal never names an array element as the foreign table (task 6b56d735)", () => {
   // A hook table with a multi-line array, then a marker comment and more
   // harness content. With the element read as a header the install refused
   // and printed the element as the foreign table; it is not a header, so the
   // harness block simply runs on through it and the install succeeds.
   for (const shape of SHAPES) {
-    it(`${shape.label}: no refusal and no element text on stderr, stdout or --json`, async () => {
+    it(`${shape.label}: no refusal and no element text on stderr, stdout, --dry-run or --json`, async () => {
       write([
         ...OLD_BLOCK.slice(0, 3),
         "# operator note",
@@ -291,13 +358,9 @@ describe("codex install split-block refusal never names an array element as the 
         'hooks = [{ type = "command", command = "harness pack hook more", timeout = 2 }]',
         "",
       ]);
-      const plain = await cli({});
-      expect(plain.code).toBe(EX_OK);
-      expect(plain.err).not.toContain(shape.text);
-      expect(plain.out).not.toContain(shape.text);
-      const json = await cli({ json: true });
-      expect(json.out).not.toContain(shape.text);
-      expect(json.err).not.toContain(shape.text);
+      for (const output of await everyOutput()) {
+        expect(output).not.toContain(shape.text);
+      }
     });
   }
 

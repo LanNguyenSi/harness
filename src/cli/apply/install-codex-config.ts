@@ -52,7 +52,7 @@ const TOML_KEY = String.raw`(?:[A-Za-z0-9_-]+|"(?:[^"\\]|\\.)*"|'[^']*')`;
 // is never misread as a foreign table header ending the owned region
 // early (task 6a037359). A lone element on its own line (`["x"]`, `['x']`,
 // `[1]`, `[1979-05-27]`) does have the shape of a header, so this regex is
-// only a candidate filter: every caller also requires `startsAtTopLevel`
+// only a candidate filter: every caller also requires `createTopLevelProbe`
 // before treating a match as a real header (task 6b56d735).
 const NON_HOOK_TABLE_RE = new RegExp(
   String.raw`^\[(?!\[hooks\.)\[?\s*${TOML_KEY}(?:\s*\.\s*${TOML_KEY})*\s*\]\]?\s*(?:#.*)?$`,
@@ -284,9 +284,9 @@ function findExactLine(text: string, target: string, from: number): number {
   return -1;
 }
 
-/** True when a line starting at `lineStart` sits at the top level of the
- * document, that is, not inside a multi-line array, a multi-line inline
- * table or a multi-line string opened by an earlier line. The document
+/** Answers, for a line start in `text`, whether that line sits at the top
+ * level of the document, that is, not inside a multi-line array, a multi-line
+ * inline table or a multi-line string opened by an earlier line. The document
  * parser is the oracle: the text before the line parses on its own exactly
  * when nothing is still open there, whereas a prefix that ends inside an
  * array is an unterminated array and fails. A line that merely LOOKS like a
@@ -295,14 +295,32 @@ function findExactLine(text: string, target: string, from: number): number {
  * when a real table of the same name exists elsewhere in the document, which
  * a lookup of the header's key path in the parsed document could not do.
  * A document that does not parse up to the line reads as not top level, so
- * such a line is never taken for a header (task 6b56d735). */
-function startsAtTopLevel(text: string, lineStart: number): boolean {
-  try {
-    parseToml(text.slice(0, lineStart));
-    return true;
-  } catch {
-    return false;
-  }
+ * such a line is never taken for a header.
+ *
+ * The probe is incremental so a scan over many tables stays linear: it
+ * remembers the last line start it confirmed as top level and parses only
+ * the text from there. A confirmed line is a header line (or offset 0), so
+ * the segment opens in the scope of its own header and parses exactly when
+ * the full prefix does: for a document that parses, a line with nothing open
+ * leaves a segment of complete constructs, and a line inside an open
+ * construct leaves that construct unterminated in the segment. Only a
+ * conflict between two segments (a table defined twice, a dotted key that
+ * clashes with an earlier table) is invisible to a segment, and such a
+ * document does not parse as a whole, so the install refuses it through the
+ * parse check on the spliced config either way. A query before the last
+ * confirmed line restarts from offset 0 (task 6b56d735). */
+function createTopLevelProbe(text: string): (lineStart: number) => boolean {
+  let confirmed = 0;
+  return (lineStart) => {
+    const segmentStart = lineStart >= confirmed ? confirmed : 0;
+    try {
+      parseToml(text.slice(segmentStart, lineStart));
+      confirmed = lineStart;
+      return true;
+    } catch {
+      return false;
+    }
+  };
 }
 
 /** The first non-blank, non-comment line at or after `from` (bounded by
@@ -343,7 +361,7 @@ function firstContentLine(
  *
  * A line is "foreign" exactly when it is a table header that is not one
  * of ours (`NON_HOOK_TABLE_RE`, mirroring the pre-existing legacy scan) and
- * sits at the top level of the document (`startsAtTopLevel`: an array
+ * sits at the top level of the document (`createTopLevelProbe`: an array
  * element on its own line inside a multi-line value has the same shape but
  * is not a header);
  * every other non-blank, non-comment line (a hook table's `matcher =` /
@@ -366,6 +384,7 @@ function scanOwnedContentEnd(
   let commentRunStart: number | null = null;
   let sawOwnedContent = false;
   let delim: TripleDelim = null;
+  const startsAtTopLevel = createTopLevelProbe(text);
   while (pos < text.length) {
     const lineEnd = lineEndAfter(text, pos);
     const rawLine = text.slice(pos, lineEnd);
@@ -387,7 +406,7 @@ function scanOwnedContentEnd(
       pos = lineEnd;
       continue;
     }
-    if (NON_HOOK_TABLE_RE.test(trimmed) && startsAtTopLevel(text, pos)) {
+    if (NON_HOOK_TABLE_RE.test(trimmed) && startsAtTopLevel(pos)) {
       return { end: commentRunStart ?? pos, sawEndMarker: false };
     }
     commentRunStart = null;
@@ -546,7 +565,7 @@ function describeForeignHeaderLine(
   if (found === null) return "(unknown)";
   const parsed = parseTableHeader(found.line);
   if (parsed === null) return "(unknown)";
-  if (!startsAtTopLevel(text, found.start)) {
+  if (!createTopLevelProbe(text)(found.start)) {
     return `line ${lineNumberAt(text, found.start)}`;
   }
   return parsed.header;
@@ -599,6 +618,7 @@ function collectForeignSectionHeaders(
   let pos = Math.max(from, 0);
   const limit = Math.max(to, from);
   let delim: TripleDelim = null;
+  const startsAtTopLevel = createTopLevelProbe(text);
   while (pos < limit) {
     const lineEnd = Math.min(lineEndAfter(text, pos), limit);
     const rawLine = text.slice(pos, lineEnd);
@@ -609,7 +629,7 @@ function collectForeignSectionHeaders(
       continue;
     }
     const trimmed = rawLine.trim();
-    if (NON_HOOK_TABLE_RE.test(trimmed) && startsAtTopLevel(text, pos)) {
+    if (NON_HOOK_TABLE_RE.test(trimmed) && startsAtTopLevel(pos)) {
       const root = foreignSectionRootKey(trimmed);
       counts.set(root, (counts.get(root) ?? 0) + 1);
       if (!seenRoots.has(root)) {
