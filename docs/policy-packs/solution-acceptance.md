@@ -206,7 +206,7 @@ Decision: the completion-gate's deny text is the surface. Implemented in
 `blockJson`, gated on `gate.verdict === null` (the `evaluateGate` branch
 whose reason is `no solution-acceptance verdict recorded for "<id>"`).
 That single condition covers three readings: never evaluated, an attempt
-still running, or a marker `readVerdict` rejected. Which reading applies
+still running, or a marker `readVerdictDetailed` rejected. Which reading applies
 for a given denial, and which of them gets the full reconnect-vs-retry
 paragraph versus a short reading-named line, is detected and documented
 once, in "Reading the attempt-lock anchor to distinguish the three
@@ -441,22 +441,27 @@ indeterminate-liveness fixtures above, and a symlinked-anchor test that
 builds its lock through the real `proper-lockfile` acquisition). The
 agent-facing wording itself is pinned by a second block in the same file
 ("null-verdict deny note: one exact line per reachable state"), a state
-table with twelve rows, one exact expected line per reachable (note
-state, liveness) combination: the unusable-id and live-attempt lines carry
-no liveness clause and have one row each, every other state has a
+table with fourteen rows covering the twelve reachable (note state,
+liveness) combinations, one exact expected line per combination (two
+combinations, never-evaluated + unknown and marker-invalid-record +
+not-live, have a second fixture): the unusable-id and live-attempt lines
+carry no liveness clause and have one row each, every other state has a
 `"not-live"` row and an `"unknown"` row (never-evaluated, and each of the
 four marker kinds). The block also asserts that no other line appears, and
 the note's "state only what was established" invariant is checked
 mechanically there, rather than one fixture per finding as each round named
-it. Each row declares the note state and liveness it means to reach, and a
-per-row test asserts that `renderNullVerdictNote` renders the row's expected
-line for exactly that pair, so a row cannot claim a state its fixture and
-line do not belong to; the set of lines that must not appear is derived
-from the same renderer. Its coverage tests iterate
-`NULL_VERDICT_NOTE_STATES` and fail when a listed state has no fixture, or
-when a state whose line carries a liveness clause lacks a row for either
-clause, which is what makes the table a checklist rather than a
-convention; the renderer's own `Record<NullVerdictNoteState, ...>` covers
+it. Each row declares the coordinate (note state, plus liveness for a state
+whose line carries a clause) it means to reach, and a per-row test asserts
+that `renderNullVerdictNote` renders the row's expected line for exactly
+that coordinate, so a row cannot claim a state or a liveness its fixture and
+line do not belong to. The renderer is total over reachable coordinates
+only: `"live"` exists only with the live-attempt state, the unusable-id
+state has no liveness field at all, and any other pair throws (pinned by a
+refusal test). The set of lines that must not appear is derived from the
+same renderer. Its coverage tests fail when a listed state has no fixture,
+or when a reachable coordinate (`NULL_VERDICT_NOTE_COORDINATES`, derived from
+`NULL_VERDICT_NOTE_STATES`) lacks a row, which is what makes the table a
+checklist rather than a convention; the renderer's own `Record<NullVerdictNoteState, ...>` covers
 the other direction at compile time. Backed further by
 the pre-existing parity/negative tests unchanged from the redesign above
 (the not-ready/stale/no-verdict-id/manifest-load-failure denies still

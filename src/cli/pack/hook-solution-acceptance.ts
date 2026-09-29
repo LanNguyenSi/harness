@@ -182,8 +182,8 @@ type RejectedVerdictReadOutcome = Exclude<VerdictReadOutcome, { kind: "ok" }>;
 
 /**
  * Every state the null-verdict note renders a line for, as data. The note
- * is a total function over this list (`noteStateOf` below maps each
- * `NullVerdictInfo` onto exactly one member, and the compiler rejects a
+ * is a total function over this list (`coordinateOf` below maps each
+ * `NullVerdictInfo` onto exactly one coordinate, and the compiler rejects a
  * member without a line), and
  * `tests/cli/pack-hook-solution-acceptance.test.ts` iterates it to assert
  * the state table has a row per member. A state added to the classifier
@@ -203,6 +203,22 @@ export const NULL_VERDICT_NOTE_STATES = [
 export type NullVerdictNoteState = (typeof NULL_VERDICT_NOTE_STATES)[number];
 
 /**
+ * The two states whose line carries no liveness clause: the unusable-id
+ * line (nothing was read, so no liveness exists to name) and the
+ * live-attempt line (its liveness is `"live"` by definition). Every other
+ * state's line names what the lock check said, so it exists once per
+ * clause.
+ */
+export const NULL_VERDICT_CLAUSE_FREE_STATES = ["unusable-id", "live-attempt"] as const;
+
+type ClauseFreeNoteState = (typeof NULL_VERDICT_CLAUSE_FREE_STATES)[number];
+type ClauseNoteState = Exclude<NullVerdictNoteState, ClauseFreeNoteState>;
+
+function isClauseFreeNoteState(state: NullVerdictNoteState): state is ClauseFreeNoteState {
+  return (NULL_VERDICT_CLAUSE_FREE_STATES as readonly string[]).includes(state);
+}
+
+/**
  * Three-valued liveness read, never a boolean: `"live"`, `"not-live"` (no
  * lock directory, or one past the stale window: `proper-lockfile`'s own
  * check answers `false` for both, swallowing the absent-lock `ENOENT`
@@ -214,6 +230,24 @@ export type NullVerdictNoteState = (typeof NULL_VERDICT_NOTE_STATES)[number];
  * keep the two states distinct all the way into the agent-facing text).
  */
 export type AttemptLockLiveness = LockCheckResult;
+
+/**
+ * The lock-check results a clause-carrying line can render. `"live"` is
+ * absent on purpose: a live lock is settled as the live-attempt state
+ * before any marker line is chosen, so no marker line is ever rendered for
+ * it.
+ */
+type ClauseLiveness = Exclude<AttemptLockLiveness, "live">;
+
+/**
+ * One reachable (note state, liveness) combination, the coordinate a line
+ * is rendered at. Unreachable pairs have no member: `"live"` exists only
+ * with the live-attempt state, and the unusable-id state carries no
+ * liveness at all (no placeholder value to mistake for an observation).
+ */
+export type NullVerdictNoteCoordinate =
+  | { state: ClauseFreeNoteState }
+  | { state: ClauseNoteState; liveness: ClauseLiveness };
 
 /**
  * `classifyNullVerdictReading`'s result, as a union of the two cases the
@@ -229,11 +263,12 @@ export type AttemptLockLiveness = LockCheckResult;
  */
 type NullVerdictInfo =
   | { kind: "unusable-id" }
-  | { kind: "reading"; reading: "live-attempt" | "never-evaluated"; liveness: AttemptLockLiveness }
+  | { kind: "reading"; reading: "live-attempt" }
+  | { kind: "reading"; reading: "never-evaluated"; liveness: ClauseLiveness }
   | {
       kind: "reading";
       reading: "unreadable-marker";
-      liveness: AttemptLockLiveness;
+      liveness: ClauseLiveness;
       /** From the gate's own read, not from a second look at the path. */
       markerKind: RejectedMarkerKind;
     };
@@ -297,7 +332,7 @@ function classifyNullVerdictReading(
   // different subject with its own clause, is read here.
   if (read.kind === "invalid-id") return { kind: "unusable-id" };
   const liveness = readAttemptLockLiveness(dir, id);
-  if (liveness === "live") return { kind: "reading", reading: "live-attempt", liveness };
+  if (liveness === "live") return { kind: "reading", reading: "live-attempt" };
   if (read.kind === "missing") return { kind: "reading", reading: "never-evaluated", liveness };
   // `read.kind` is narrowed to the rejected kinds by the parameter type: a
   // read that produced a verdict never reaches the classifier, so there is
@@ -306,24 +341,24 @@ function classifyNullVerdictReading(
   return { kind: "reading", reading: "unreadable-marker", liveness, markerKind };
 }
 
-/** The one note state a classification renders, as a total mapping. */
-function noteStateOf(info: NullVerdictInfo): NullVerdictNoteState {
-  if (info.kind === "unusable-id") return "unusable-id";
+/** The one coordinate a classification renders at, as a total mapping. */
+function coordinateOf(info: NullVerdictInfo): NullVerdictNoteCoordinate {
+  if (info.kind === "unusable-id") return { state: "unusable-id" };
   switch (info.reading) {
     case "live-attempt":
-      return "live-attempt";
+      return { state: "live-attempt" };
     case "never-evaluated":
-      return "never-evaluated";
+      return { state: "never-evaluated", liveness: info.liveness };
     case "unreadable-marker":
       switch (info.markerKind) {
         case "symlink":
-          return "marker-symlink";
+          return { state: "marker-symlink", liveness: info.liveness };
         case "not-regular":
-          return "marker-not-regular";
+          return { state: "marker-not-regular", liveness: info.liveness };
         case "unreadable":
-          return "marker-unreadable";
+          return { state: "marker-unreadable", liveness: info.liveness };
         case "invalid-record":
-          return "marker-invalid-record";
+          return { state: "marker-invalid-record", liveness: info.liveness };
       }
   }
 }
@@ -371,7 +406,7 @@ export const NULL_VERDICT_NOTE_RENDERERS: Record<
   // lstat failure of some other kind.
   "never-evaluated": (taskId, clause) =>
     clause === UNDETERMINED_LIVENESS_CLAUSE
-      ? `No readable verdict marker for "${taskId}" and liveness could not be determined: run solution_evaluate for this id.`
+      ? `No verdict marker was found for "${taskId}" and liveness could not be determined: run solution_evaluate for this id.`
       : `No verdict marker was found for "${taskId}"; ${clause}: run solution_evaluate for this id.`,
   // One line per rejection kind, each naming exactly what the gate's own
   // read established. A hand-written disjunction over the kinds was the
@@ -390,24 +425,56 @@ export const NULL_VERDICT_NOTE_RENDERERS: Record<
 };
 
 /**
- * The exact line a note state renders for `taskId` at the lock-check result
- * `liveness`. The one place a state and a liveness become a line: the hook
- * renders through it, and the state table in
- * `tests/cli/pack-hook-solution-acceptance.test.ts` derives its "no other
- * line appears" set and checks each case's declared state against it.
+ * Every reachable coordinate, derived from `NULL_VERDICT_NOTE_STATES`: one
+ * per clause-free state, one per liveness clause for every other state. The
+ * state table in `tests/cli/pack-hook-solution-acceptance.test.ts` requires
+ * a row per member and derives its "no other line appears" set from it, so
+ * a state added to the list joins both without anyone extending a list.
+ */
+export const NULL_VERDICT_NOTE_COORDINATES: readonly NullVerdictNoteCoordinate[] =
+  NULL_VERDICT_NOTE_STATES.flatMap((state): NullVerdictNoteCoordinate[] =>
+    isClauseFreeNoteState(state)
+      ? [{ state }]
+      : [
+          { state, liveness: "not-live" },
+          { state, liveness: "unknown" },
+        ],
+  );
+
+/**
+ * The exact line a coordinate renders for `taskId`. The one place a state
+ * and a liveness become a line: the hook renders through it, and the state
+ * table derives its "no other line appears" set and checks each row's
+ * declared coordinate against it. Total over reachable coordinates only: a
+ * pair the type excludes (`"live"` beside a clause-carrying state, any
+ * liveness beside a clause-free one) throws instead of rendering a line
+ * that would misstate what was observed, for a caller that bypasses the
+ * type.
  */
 export function renderNullVerdictNote(
-  state: NullVerdictNoteState,
+  coordinate: NullVerdictNoteCoordinate,
   taskId: string,
-  liveness: AttemptLockLiveness,
 ): string {
+  const liveness: unknown = "liveness" in coordinate ? coordinate.liveness : undefined;
+  if (isClauseFreeNoteState(coordinate.state)) {
+    if (liveness !== undefined) {
+      throw new Error(
+        `null-verdict note state ${coordinate.state} carries no liveness clause, got ${String(liveness)}`,
+      );
+    }
+    return NULL_VERDICT_NOTE_RENDERERS[coordinate.state](taskId, "");
+  }
+  if (liveness !== "not-live" && liveness !== "unknown") {
+    throw new Error(
+      `null-verdict note state ${coordinate.state} renders only for liveness not-live or unknown, got ${String(liveness)}`,
+    );
+  }
   const clause = liveness === "unknown" ? UNDETERMINED_LIVENESS_CLAUSE : NOT_LIVE_CLAUSE;
-  return NULL_VERDICT_NOTE_RENDERERS[state](taskId, clause);
+  return NULL_VERDICT_NOTE_RENDERERS[coordinate.state](taskId, clause);
 }
 
 function nullVerdictReadingNote(taskId: string, info: NullVerdictInfo): string {
-  const liveness = info.kind === "reading" ? info.liveness : "not-live";
-  return renderNullVerdictNote(noteStateOf(info), taskId, liveness);
+  return renderNullVerdictNote(coordinateOf(info), taskId);
 }
 
 /**
@@ -670,10 +737,7 @@ export async function runPackHookSolutionAcceptanceCli(
   // Classify only a denial whose read produced no verdict. A deny with a
   // verdict on record (`read.kind === "ok"`) gets no null-verdict note at all
   // rather than a line describing a rejection the gate never made.
-  const nullVerdict =
-    gate.verdict === null && read.kind !== "ok"
-      ? classifyNullVerdictReading(dir, taskId, read)
-      : null;
+  const nullVerdict = read.kind !== "ok" ? classifyNullVerdictReading(dir, taskId, read) : null;
   stdout.write(
     `${blockJson(actionLabel, toolName, taskId, gate.reason, configUx, sessionId, nullVerdict)}\n`,
   );
