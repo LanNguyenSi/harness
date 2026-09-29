@@ -2,11 +2,12 @@
 
 <!-- Add new entries at the top, newest first. -->
 
-- 2026-09-29T06:49:53Z (task b34ed105): `codex-adapter-parity-gaps.md` re-verified after
-  `install-codex-config.ts` changed (the splice keeps a trailing EOF comment
-  on the no-END paths and a leading BOM exactly once); the doc's install claim
-  (only the marked harness-managed block is replaced, operator config is never
-  owned) still holds against the changed code; no claim changed, re-stamped.
+- 2026-09-29T07:07:08Z (task b34ed105): `codex-adapter-parity-gaps.md` re-verified after
+  `install-codex-config.ts` changed again (the no-END EOF comment back-off now
+  skips a trailing run that holds a harness-authored line); the doc's install
+  claim (only the marked harness-managed block is replaced, operator config is
+  never owned) still holds against the changed code; no claim changed,
+  re-stamped.
 
 - 2026-09-29T06:17:00Z (task e8c9edaf): `evidence-ledger-trust-boundary.md` re-verified after merging
   master into the write-guard branch: it combines the runtime-module claims
