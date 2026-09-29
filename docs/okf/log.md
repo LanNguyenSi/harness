@@ -2,7 +2,7 @@
 
 <!-- Add new entries at the top, newest first. -->
 
-- 2026-09-29T05:34:08Z (task e8c9edaf): the solution-acceptance write-guard's reference matcher no
+- 2026-09-29T05:35:27Z (task e8c9edaf): the solution-acceptance write-guard's reference matcher no
   longer treats a command that only names a pack source file as a verdict-dir
   reference. Re-verified `evidence-ledger-trust-boundary.md` (its write-guard
   sentence, the runtime module claims) and `gate-fail-posture-matrix.md` (the
