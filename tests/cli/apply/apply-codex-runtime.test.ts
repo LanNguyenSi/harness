@@ -3379,15 +3379,42 @@ describe("apply --runtime codex --install: an operator-authored [[hooks.*]] tabl
     return (doc.hooks?.Stop ?? []).flatMap((entry) => entry.hooks.map((h) => h.command));
   }
 
-  function plan(config: string) {
+  function plan(config: string, generatedContent = `${GENERATED}\n`) {
     writeManifestWithPack();
     fs.mkdirSync(path.dirname(configPath()), { recursive: true });
     fs.writeFileSync(configPath(), config);
     return planCodexConfigInstall({
       homeDir: tmpHome,
       generatedPath: "/x/config.toml",
-      generatedContent: `${GENERATED}\n`,
+      generatedContent,
     });
+  }
+
+  // A fresh block whose one hook command does not start with `harness `, so
+  // the equal-command clause can be exercised without the prefix clause.
+  const FRESH_COMMAND = "custom-fresh-gate --strict";
+  const FRESH_BLOCK = [
+    GENERATED,
+    "# harness hook: custom-fresh (budget_ms=2000)",
+    "[[hooks.Stop]]",
+    `hooks = [{ type = "command", command = "${FRESH_COMMAND}", timeout = 2 }]`,
+    "",
+  ].join("\n");
+
+  /** 1-based line number of the first line equal to `needle` in `text`. */
+  function lineOf(text: string, needle: string): number {
+    return text.split("\n").findIndex((l) => l.trim() === needle) + 1;
+  }
+
+  /** The refusal `plan` throws for `config`, or fails the test. */
+  function refusalOf(config: string, generatedContent?: string): CodexInstallRefusalError {
+    try {
+      plan(config, generatedContent);
+    } catch (err) {
+      expect(err).toBeInstanceOf(CodexInstallRefusalError);
+      return err as CodexInstallRefusalError;
+    }
+    throw new Error("expected the plan to refuse");
   }
 
   it("drifted END after an operator hook table: the table is kept once, after the fresh END, with its own comment, and the retired harness table is replaced", async () => {
@@ -3511,19 +3538,359 @@ describe("apply --runtime codex --install: an operator-authored [[hooks.*]] tabl
     expect(fs.readFileSync(configPath(), "utf8")).toBe(original);
   });
 
-  it("a last harness table whose comment was deleted is kept as an operator table (documented failure mode: the fresh block repeats it)", async () => {
-    const installed = await installOver(
-      [
-        CODEX_MANAGED_BEGIN,
-        GENERATED,
-        ...retiredTable,
-        "[[hooks.Stop]]",
-        'hooks = [{ type = "command", command = "harness pack hook uncommented-last", timeout = 2 }]',
-        CODEX_MANAGED_END,
-        "",
-      ].join("\n"),
+  // ---- a kept uncommented table that looks harness-generated is refused ----
+
+  const harnessShapedOperatorTable = (command: string, event = "Stop"): string[] => [
+    `[[hooks.${event}]]`,
+    `hooks = [{ type = "command", command = "${command}", timeout = 5 }]`,
+  ];
+  const driftedEnd = (...tail: string[]): string =>
+    [CODEX_MANAGED_BEGIN, GENERATED, ...retiredTable, ...tail, CODEX_MANAGED_END, ""].join("\n");
+
+  it("a last uncommented table whose command equals a command of the fresh block refuses (the comment-deleted duplicate), naming the table and never its command", () => {
+    const config = driftedEnd(...harnessShapedOperatorTable(FRESH_COMMAND));
+    const err = refusalOf(config, FRESH_BLOCK);
+    const line = lineOf(config, "[[hooks.Stop]]");
+    expect(err.message).toContain(`[[hooks.Stop]] (line ${line})`);
+    expect(err.message).toContain("Restore the comment line directly above [[hooks.Stop]]");
+    expect(err.message).toContain("or delete the table");
+    expect(err.message).toContain("The file is untouched");
+    expect(err.message).not.toContain(FRESH_COMMAND);
+    expect(fs.readFileSync(configPath(), "utf8")).toBe(config);
+  });
+
+  it("a last uncommented table whose command starts with `harness ` refuses even when the fresh block no longer holds that command (the comment-deleted retired hook)", () => {
+    const retiredCommand = "harness pack hook example-retired-elsewhere";
+    const config = driftedEnd(...harnessShapedOperatorTable(retiredCommand, "PostToolUse"));
+    const err = refusalOf(config, FRESH_BLOCK);
+    expect(err.message).toContain(`[[hooks.PostToolUse]] (line ${lineOf(config, "[[hooks.PostToolUse]]")})`);
+    expect(err.message).not.toContain(retiredCommand);
+    expect(fs.readFileSync(configPath(), "utf8")).toBe(config);
+  });
+
+  it("a table that only starts like the prefix (`harnessctl`) or differs from every fresh command is kept, not refused", () => {
+    const result = plan(driftedEnd(...harnessShapedOperatorTable("harnessctl run --stop")), FRESH_BLOCK);
+    expect(result.nextContent).toContain("harnessctl run --stop");
+    expect(result.keptOperatorHookTables).toHaveLength(1);
+  });
+
+  it("the real duplicate: a harness table still in the manifest whose comment line was deleted refuses through the install and leaves the file untouched", async () => {
+    writeManifestWithPack();
+    await apply({ homeDir: tmpHome, runtime: "codex", installCodex: true });
+    const fresh = fs.readFileSync(configPath(), "utf8");
+    const lines = fresh.split("\n");
+    const lastComment = lines.map((l) => l.startsWith("# harness hook: ")).lastIndexOf(true);
+    expect(lastComment).toBeGreaterThan(0);
+    lines.splice(lastComment, 1);
+    const broken = lines.join("\n");
+    fs.writeFileSync(configPath(), broken);
+    await expect(
+      apply({ homeDir: tmpHome, runtime: "codex", installCodex: true }),
+    ).rejects.toBeInstanceOf(CodexInstallRefusalError);
+    expect(fs.readFileSync(configPath(), "utf8")).toBe(broken);
+  });
+
+  it("a table with two commands refuses when only one of them is harness-shaped, in either order", () => {
+    for (const commands of [
+      ["operator-only-script", "harness pack hook example-retired-elsewhere"],
+      ["harness pack hook example-retired-elsewhere", "operator-only-script"],
+    ]) {
+      const entries = commands.map((c) => `{ type = "command", command = "${c}", timeout = 5 }`).join(", ");
+      const config = driftedEnd("[[hooks.Stop]]", `hooks = [${entries}]`);
+      expect(refusalOf(config, FRESH_BLOCK).message).toContain("[[hooks.Stop]]");
+    }
+  });
+
+  it("the expanded operator form ([[hooks.Stop]] plus [[hooks.Stop.hooks]]) is checked through its nested table", () => {
+    const config = driftedEnd(
+      "[[hooks.Stop]]",
+      "[[hooks.Stop.hooks]]",
+      'type = "command"',
+      'command = "harness pack hook example-retired-elsewhere"',
+      "timeout = 5",
     );
-    expect(occurrences(installed, "harness pack hook uncommented-last")).toBe(1);
-    expect(installed.indexOf(CODEX_MANAGED_END)).toBeLessThan(installed.indexOf("uncommented-last"));
+    const err = refusalOf(config, FRESH_BLOCK);
+    expect(err.message).toContain(`[[hooks.Stop.hooks]] (line ${lineOf(config, "[[hooks.Stop.hooks]]")})`);
+  });
+
+  it("the refusal names the table that holds the harness-shaped command, not the one before it", () => {
+    const config = driftedEnd(
+      ...harnessShapedOperatorTable("operator-only-script", "SessionStart"),
+      "",
+      ...harnessShapedOperatorTable("harness pack hook example-retired-elsewhere", "Stop"),
+    );
+    const err = refusalOf(config, FRESH_BLOCK);
+    expect(err.message).toContain(`[[hooks.Stop]] (line ${lineOf(config, "[[hooks.Stop]]")})`);
+    expect(err.message).not.toContain("[[hooks.SessionStart]]");
+  });
+
+  it("a hook table after a foreign table is neither named nor refused (only the run directly after the harness tables is examined)", () => {
+    const config = driftedEnd(
+      ...harnessShapedOperatorTable("operator-only-script", "SessionStart"),
+      '[projects."/work/x"]',
+      'trust_level = "trusted"',
+      ...harnessShapedOperatorTable("harness pack hook example-retired-elsewhere", "Stop"),
+    );
+    const result = plan(config, FRESH_BLOCK);
+    expect(result.keptOperatorHookTables).toEqual([
+      `[[hooks.SessionStart]] (line ${lineOf(config, "[[hooks.SessionStart]]")})`,
+    ]);
+  });
+
+  it("a header-looking line inside a multi-line string of a kept table does not end the examined run", () => {
+    const config = driftedEnd(
+      "[[hooks.SessionStart]]",
+      'hooks = [{ type = "command", command = "operator-only-script", timeout = 5 }]',
+      'note = """',
+      '[projects."/fake"]',
+      '"""',
+      ...harnessShapedOperatorTable("harness pack hook example-retired-elsewhere", "Stop"),
+    );
+    expect(refusalOf(config, FRESH_BLOCK).message).toContain("[[hooks.Stop]]");
+  });
+
+  it("legacy source-prefix config: an operator table followed by a harness-commented table refuses instead of being kept beside the fresh block", () => {
+    const config = [
+      "# Harness Codex hook wiring. Generated source: old",
+      GENERATED,
+      ...retiredTable,
+      "",
+      ...operatorTable,
+      "",
+      ...harnessTable("second-kept", "SessionStart", "harness pack hook second"),
+      "",
+    ].join("\n");
+    expect(refusalOf(config).message).toContain("[[hooks.Stop]]");
+    expect(fs.readFileSync(configPath(), "utf8")).toBe(config);
+  });
+
+  it("legacy generated-header config: an operator table followed by a harness-commented table refuses instead of being kept beside the fresh block", () => {
+    const config = [
+      GENERATED,
+      ...retiredTable,
+      "",
+      ...operatorTable,
+      "",
+      ...harnessTable("second-kept", "SessionStart", "harness pack hook second"),
+      "",
+    ].join("\n");
+    expect(refusalOf(config).message).toContain("[[hooks.Stop]]");
+    expect(fs.readFileSync(configPath(), "utf8")).toBe(config);
+  });
+
+  it("legacy configs that end at a foreign table keep their old behaviour: a later harness-marker line is not a refusal", () => {
+    for (const head of [["# Harness Codex hook wiring. Generated source: old", GENERATED], [GENERATED]]) {
+      const config = [
+        ...head,
+        ...retiredTable,
+        '[projects."/work/x"]',
+        'trust_level = "trusted"',
+        "# harness hook: mentioned-in-a-comment (budget_ms=1)",
+        "",
+      ].join("\n");
+      const result = plan(config);
+      expect(result.nextContent).toContain('trust_level = "trusted"');
+      expect(result.keptOperatorHookTables).toEqual([]);
+    }
+  });
+
+  // ---- naming: plan field, dry-run output, install summary ----
+
+  it("the plan names every kept operator hook table by header and line number, in file order, and no value text", () => {
+    const config = driftedEnd(
+      operatorComment,
+      ...operatorTable,
+      "",
+      ...harnessShapedOperatorTable("operator-second-script", "SessionStart"),
+    );
+    const result = plan(config);
+    expect(result.keptOperatorHookTables).toEqual([
+      `[[hooks.Stop]] (line ${lineOf(config, "[[hooks.Stop]]")})`,
+      `[[hooks.SessionStart]] (line ${lineOf(config, "[[hooks.SessionStart]]")})`,
+    ]);
+    expect(JSON.stringify(result.keptOperatorHookTables)).not.toContain(operatorCommand);
+  });
+
+  it("the kept operator hook tables follow the foreign tables in foreignSectionsPreserved, which is what the outputs print", () => {
+    const config = driftedEnd(operatorComment, ...operatorTable, '[projects."/work/x"]', 'trust_level = "trusted"');
+    const result = plan(config);
+    expect(result.foreignSectionsPreserved).toEqual([
+      '[projects."/work/x"]',
+      `[[hooks.Stop]] (line ${lineOf(config, "[[hooks.Stop]]")})`,
+    ]);
+  });
+
+  it("the plan names nothing when the config holds no operator hook table after the harness tables", () => {
+    expect(plan(driftedEnd()).keptOperatorHookTables).toEqual([]);
+    expect(plan(driftedEnd('[projects."/work/x"]', 'trust_level = "trusted"')).keptOperatorHookTables).toEqual([]);
+    expect(plan("").keptOperatorHookTables).toEqual([]);
+  });
+
+  async function cliOutput(config: string, extraArgs: string[]): Promise<string> {
+    const manifestPath = writeManifestWithPack();
+    const codexConfig = configPath();
+    fs.mkdirSync(path.dirname(codexConfig), { recursive: true });
+    fs.writeFileSync(codexConfig, config);
+    let out = "";
+    const program = buildProgram({
+      stdout: (s: string) => {
+        out += s;
+      },
+      stderr: () => {},
+    });
+    await program.parseAsync(
+      ["apply", "--config", manifestPath, "--runtime", "codex", "--install", "--codex-config", codexConfig, ...extraArgs],
+      { from: "user" },
+    );
+    return out;
+  }
+
+  it("--dry-run names the kept operator hook table with its line number among the preserved sections and writes nothing", async () => {
+    const config = driftedEnd(operatorComment, ...operatorTable);
+    const out = await cliOutput(config, ["--dry-run"]);
+    expect(out).toContain(`preserving foreign section: [[hooks.Stop]] (line ${lineOf(config, "[[hooks.Stop]]")})`);
+    expect(out).not.toContain(operatorCommand);
+    expect(fs.readFileSync(configPath(), "utf8")).toBe(config);
+  });
+
+  it("the install summary names the kept operator hook table with its line number among the preserved sections", async () => {
+    const config = driftedEnd(operatorComment, ...operatorTable);
+    const out = await cliOutput(config, []);
+    expect(out).toContain(`preserved foreign section: [[hooks.Stop]] (line ${lineOf(config, "[[hooks.Stop]]")})`);
+    expect(out).not.toContain(operatorCommand);
+  });
+
+  it("neither output names a kept table when none was kept", async () => {
+    const config = driftedEnd();
+    expect(await cliOutput(config, ["--dry-run"])).not.toContain("(line ");
+    expect(await cliOutput(config, [])).not.toContain("(line ");
+  });
+
+  // ---- the middle-table refusal offers both fixes ----
+
+  it("a middle uncommented hook table refuses naming both options: restore the comment, or move an operator-owned table", () => {
+    const withEnd = [
+      CODEX_MANAGED_BEGIN,
+      GENERATED,
+      ...harnessTable("first-kept", "PreToolUse", "harness pack hook first"),
+      "[[hooks.PostToolUse]]",
+      'hooks = [{ type = "command", command = "harness pack hook second", timeout = 2 }]',
+      ...harnessTable("third-kept", "SessionStart", "harness pack hook third"),
+      CODEX_MANAGED_END,
+      "",
+    ].join("\n");
+    const noEnd = withEnd.replace(`${CODEX_MANAGED_END}\n`, "");
+    for (const config of [withEnd, noEnd]) {
+      const { message } = refusalOf(config);
+      expect(message).toContain("restore that comment line directly above it");
+      expect(message).toContain("If it is an operator-owned table, ");
+      if (config === withEnd) {
+        expect(message).toContain(`move [[hooks.PostToolUse]] below the '${CODEX_MANAGED_END}' marker`);
+      } else {
+        expect(message).toContain("add a '# END harness-managed codex hooks' marker line right after the last harness hook table");
+      }
+    }
+  });
+
+  it("a middle foreign table that is not a hook table keeps the original refusal guidance, without the restore option", () => {
+    const config = [
+      CODEX_MANAGED_BEGIN,
+      GENERATED,
+      ...harnessTable("first-kept", "PreToolUse", "harness pack hook first"),
+      '[projects."/work/x"]',
+      'trust_level = "trusted"',
+      ...harnessTable("third-kept", "SessionStart", "harness pack hook third"),
+      CODEX_MANAGED_END,
+      "",
+    ].join("\n");
+    const { message } = refusalOf(config);
+    expect(message).toContain(`Move [projects."/work/x"] below the '${CODEX_MANAGED_END}' marker`);
+    expect(message).not.toContain("restore that comment line");
+  });
+
+  // ---- accepted header and comment spellings ----
+
+  it("a quoted-key operator table ([[hooks.\"Stop\"]]) after the harness tables is kept", async () => {
+    const installed = await installOver(
+      driftedEnd(operatorComment, '[[hooks."Stop"]]', `hooks = [{ type = "command", command = "${operatorCommand}", timeout = 5 }]`),
+    );
+    expect(occurrences(installed, operatorCommand)).toBe(1);
+    expect(installed.indexOf(CODEX_MANAGED_END)).toBeLessThan(installed.indexOf(operatorCommand));
+    expect(stopCommands(installed)).toContain(operatorCommand);
+  });
+
+  it("an indented operator header with a trailing comment is kept", async () => {
+    const installed = await installOver(
+      driftedEnd(
+        "  [[hooks.Stop]] # my own stop hook",
+        `  hooks = [{ type = "command", command = "${operatorCommand}", timeout = 5 }]`,
+      ),
+    );
+    expect(occurrences(installed, operatorCommand)).toBe(1);
+    expect(installed.indexOf(CODEX_MANAGED_END)).toBeLessThan(installed.indexOf(operatorCommand));
+    expect(stopCommands(installed)).toContain(operatorCommand);
+  });
+
+  it("an indented `# harness hook:` comment line still marks its table, so the operator table after it is kept", async () => {
+    const config = [
+      CODEX_MANAGED_BEGIN,
+      GENERATED,
+      `  ${retiredTable[0]}`,
+      ...retiredTable.slice(1),
+      ...operatorTable,
+      CODEX_MANAGED_END,
+      "",
+    ].join("\n");
+    const installed = await installOver(config);
+    expect(installed).not.toContain(RETIRED_HOOK_ID);
+    expect(occurrences(installed, operatorCommand)).toBe(1);
+    expect(installed.indexOf(CODEX_MANAGED_END)).toBeLessThan(installed.indexOf(operatorCommand));
+  });
+
+  it("a CRLF config with a drifted END keeps the operator table once and parses", async () => {
+    const config = driftedEnd(operatorComment, ...operatorTable).replace(/\n/g, "\r\n");
+    const installed = await installOver(config);
+    expect(installed).not.toContain(RETIRED_HOOK_ID);
+    expect(occurrences(installed, operatorCommand)).toBe(1);
+    expect(occurrences(installed, CODEX_MANAGED_END)).toBe(1);
+    expect(installed.indexOf(CODEX_MANAGED_END)).toBeLessThan(installed.indexOf(operatorCommand));
+    expect(stopCommands(installed)).toContain(operatorCommand);
+  });
+
+  it("the plan names an operator table in every accepted spelling, at its own line", () => {
+    const shapes: { config: string; header: string; headerLine: string }[] = [
+      {
+        config: driftedEnd('[[hooks."Stop"]]', `hooks = [{ type = "command", command = "${operatorCommand}", timeout = 5 }]`),
+        header: '[[hooks."Stop"]]',
+        headerLine: '[[hooks."Stop"]]',
+      },
+      {
+        config: driftedEnd("  [[hooks.Stop]] # mine", `  hooks = [{ type = "command", command = "${operatorCommand}", timeout = 5 }]`),
+        header: "[[hooks.Stop]]",
+        headerLine: "[[hooks.Stop]] # mine",
+      },
+      {
+        config: driftedEnd(operatorComment, ...operatorTable).replace(/\n/g, "\r\n"),
+        header: "[[hooks.Stop]]",
+        headerLine: "[[hooks.Stop]]",
+      },
+    ];
+    for (const { config, header, headerLine } of shapes) {
+      const result = plan(config);
+      expect(result.keptOperatorHookTables).toEqual([`${header} (line ${lineOf(config, headerLine)})`]);
+    }
+  });
+
+  it("applying the install twice over each spelling shape gives the same bytes the second time", async () => {
+    const shapes = [
+      driftedEnd('[[hooks."Stop"]]', `hooks = [{ type = "command", command = "${operatorCommand}", timeout = 5 }]`),
+      driftedEnd("  [[hooks.Stop]] # mine", `  hooks = [{ type = "command", command = "${operatorCommand}", timeout = 5 }]`),
+      driftedEnd(operatorComment, ...operatorTable).replace(/\n/g, "\r\n"),
+    ];
+    for (const shape of shapes) {
+      const first = await installOver(shape);
+      const second = await installOver(first);
+      expect(second).toBe(first);
+    }
   });
 });

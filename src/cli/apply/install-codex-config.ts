@@ -121,6 +121,19 @@ export interface CodexConfigInstallPlan {
    * preserved byte-for-byte instead.
    */
   foreignSectionsPreserved: string[];
+  /**
+   * Operator-authored `[[hooks.<Event>]]` tables (no `# harness hook:`
+   * comment above them) that the managed-range scan ended the harness block
+   * at and that are kept after the fresh block, one entry per table: its
+   * header and its 1-based line number in the current config (for example
+   * `[[hooks.Stop]] (line 14)`), never any value text. Named because the
+   * scan cannot tell such a table from a harness table whose comment line an
+   * operator deleted (task 01053b27); a kept table that looks
+   * harness-generated is refused instead (see `assertKeptHookTablesAreOperatorOwned`).
+   * The same entries are appended to `foreignSectionsPreserved`, which is
+   * what `--dry-run` and the install summary print.
+   */
+  keptOperatorHookTables: string[];
 }
 
 export interface CodexConfigInstallResult extends CodexConfigInstallPlan {
@@ -331,7 +344,9 @@ function firstContentLine(text: string, from: number, limit: number): string | n
  * Failure modes of that second rule: a harness table whose comment an
  * operator deleted ends the range there (a later harness table still
  * carrying its comment lands in the zone `assertNoSplitBlock` refuses on; a
- * last table stays as an operator table and the fresh block repeats it); a
+ * last table stays as an operator table, which the install names in
+ * `keptOperatorHookTables` and refuses when its command is one harness
+ * writes, see `assertKeptHookTablesAreOperatorOwned`); a
  * block that never carried the comments (older generator output) has no
  * marked table before its first hook table, so it is consumed whole as
  * before. Bare `key =` lines of an operator table follow that table out of
@@ -352,7 +367,7 @@ function firstContentLine(text: string, from: number, limit: number): string | n
 function scanOwnedContentEnd(
   text: string,
   start: number,
-): { end: number; sawEndMarker: boolean } {
+): { end: number; sawEndMarker: boolean; endedAtOperatorHookTable?: true } {
   let pos = start;
   let commentRunStart: number | null = null;
   let sawOwnedContent = false;
@@ -392,7 +407,7 @@ function scanOwnedContentEnd(
         // An operator-authored hook table (no `# harness hook:` comment
         // above it) after the harness tables ends the owned region, like a
         // foreign table, and keeps a comment attached to it (task 01053b27).
-        return { end: commentRunStart ?? pos, sawEndMarker: false };
+        return { end: commentRunStart ?? pos, sawEndMarker: false, endedAtOperatorHookTable: true };
       }
     }
     commentRunStart = null;
@@ -489,12 +504,27 @@ function assertNoSplitBlock(
   const firstForeignHeader =
     foreignHeaderLine === null ? "(unknown)" : describeTableHeader(foreignHeaderLine);
 
-  const guidance = hasEndMarker
-    ? `Move ${firstForeignHeader} below the '${CODEX_MANAGED_END}' marker, or delete the lines ` +
-      `between '${CODEX_MANAGED_BEGIN}' and '${CODEX_MANAGED_END}' so only harness-owned tables ` +
-      "remain between them"
-    : `Add a '${CODEX_MANAGED_END}' marker line right after the last harness hook table (before ` +
-      `${firstForeignHeader}), or move ${firstForeignHeader} below the last harness hook table`;
+  const fixes = hasEndMarker
+    ? [
+        `move ${firstForeignHeader} below the '${CODEX_MANAGED_END}' marker`,
+        `delete the lines between '${CODEX_MANAGED_BEGIN}' and '${CODEX_MANAGED_END}' so only ` +
+          "harness-owned tables remain between them",
+      ]
+    : [
+        `add a '${CODEX_MANAGED_END}' marker line right after the last harness hook table ` +
+          `(before ${firstForeignHeader})`,
+        `move ${firstForeignHeader} below the last harness hook table`,
+      ];
+  // An uncommented hook table in the middle may be a harness table whose
+  // comment line was deleted, so moving it (the operator-table fix) is only
+  // right for an operator-owned one; name the restore option first (task
+  // 01053b27).
+  const isHookTable = HOOK_ARRAY_HEADER_RE.test(foreignHeaderLine?.trim() ?? "");
+  const guidance = isHookTable
+    ? `If ${firstForeignHeader} is a harness hook table whose '${HARNESS_HOOK_COMMENT_PREFIX}<id> ` +
+      "(budget_ms=<n>)' comment line was deleted, restore that comment line directly above it. " +
+      `If it is an operator-owned table, ${fixes.join(", or ")}`
+    : fixes.join(", or ").replace(/^./, (c) => c.toUpperCase());
 
   throw new CodexInstallRefusalError(
     `Codex config ${configPath} has a foreign table (${firstForeignHeader}) sitting before ` +
@@ -619,12 +649,66 @@ function extractHookIds(content: string): Set<string> {
   return ids;
 }
 
+/**
+ * The operator-authored hook tables directly after a managed range that
+ * ended at one (`scanOwnedContentEnd`'s `endedAtOperatorHookTable`): every
+ * `[[hooks.*]]` header from `from` up to the first non-hook table header or
+ * `to`, each with its own text. Empty for any other ending (the first header
+ * at `from` is then a non-hook table, or there is none). The caller has
+ * already refused a zone that holds a harness marker (`assertNoSplitBlock`),
+ * so no header found here carries a `# harness hook:` comment.
+ */
+function collectKeptHookTables(text: string, from: number, to: number): KeptHookTable[] {
+  const tables: { header: string; line: number; start: number; end: number }[] = [];
+  let pos = from;
+  let delim: TripleDelim = null;
+  while (pos < to) {
+    const lineEnd = Math.min(lineEndAfter(text, pos), to);
+    const rawLine = text.slice(pos, lineEnd);
+    const startedInsideString = delim !== null;
+    delim = nextTripleDelim(rawLine, delim);
+    if (!startedInsideString) {
+      const trimmed = rawLine.trim();
+      if (NON_HOOK_TABLE_RE.test(trimmed)) break;
+      if (HOOK_ARRAY_HEADER_RE.test(trimmed)) {
+        tables.push({
+          header: describeTableHeader(trimmed),
+          line: lineNumberAt(text, pos),
+          start: pos,
+          end: pos,
+        });
+      }
+    }
+    pos = lineEnd;
+    const last = tables[tables.length - 1];
+    if (last !== undefined) last.end = pos;
+  }
+  return tables.map((t) => ({ header: t.header, line: t.line, source: text.slice(t.start, t.end) }));
+}
+
+/** A kept table as the install names it: its header and its 1-based line
+ * number in the current config, never any value text. */
+function describeKeptHookTables(kept: KeptHookTable[]): string[] {
+  return kept.map((t) => `${t.header} (line ${t.line})`);
+}
+
+/** An operator-authored hook table the managed-range scan ended the block
+ * at, kept after the fresh block (task 01053b27). `source` is the table's
+ * own text (header line through the line before the next hook table), read
+ * only to compare its commands with the fresh block's; it is never printed. */
+interface KeptHookTable {
+  header: string;
+  line: number;
+  source: string;
+}
+
 interface ManagedRange {
   start: number;
   end: number;
   /** A stray END-marker line beyond `end` to excise (task 6a037359). */
   strayEnd?: { start: number; end: number };
   foreignSectionsPreserved: string[];
+  keptHookTables: KeptHookTable[];
 }
 
 const UTF8_BOM = "\uFEFF";
@@ -634,6 +718,22 @@ const UTF8_BOM = "\uFEFF";
  * the BOM exactly once (task b34ed105). */
 function startPastBom(text: string, start: number): number {
   return start === 0 && text.startsWith(UTF8_BOM) ? UTF8_BOM.length : start;
+}
+
+/** The kept hook tables of a legacy (no BEGIN marker) range. Those paths
+ * never ran `assertNoSplitBlock`; when the scan ended at an operator hook
+ * table it runs here, so a harness-commented table later in the file
+ * refuses instead of being kept as if it were operator content (the fresh
+ * block would repeat it). Other endings keep the legacy behaviour. */
+function legacyKeptHookTables(
+  text: string,
+  end: number,
+  scan: { endedAtOperatorHookTable?: true },
+  configPath: string,
+): KeptHookTable[] {
+  if (!scan.endedAtOperatorHookTable) return [];
+  assertNoSplitBlock(text, end, text.length, configPath, false);
+  return collectKeptHookTables(text, end, text.length);
 }
 
 function findManagedRange(text: string, configPath: string): ManagedRange | null {
@@ -674,25 +774,28 @@ function findManagedRange(text: string, configPath: string): ManagedRange | null
     const end = scan.end;
 
     if (scan.sawEndMarker) {
-      return { start, end, foreignSectionsPreserved: [] };
+      return { start, end, foreignSectionsPreserved: [], keptHookTables: [] };
     }
 
     const strayIdx = findExactLine(text, CODEX_MANAGED_END, end);
     if (strayIdx === -1) {
       assertNoSplitBlock(text, end, text.length, configPath, false);
       const foreignSectionsPreserved = collectForeignSectionHeaders(text, end, text.length);
-      return { start, end, foreignSectionsPreserved };
+      const keptHookTables = collectKeptHookTables(text, end, text.length);
+      return { start, end, foreignSectionsPreserved, keptHookTables };
     }
 
     const strayLineStart = lineStartAt(text, strayIdx);
     const strayLineEnd = lineEndAfter(text, strayIdx);
     assertNoSplitBlock(text, end, strayLineStart, configPath, true);
     const foreignSectionsPreserved = collectForeignSectionHeaders(text, end, strayLineStart);
+    const keptHookTables = collectKeptHookTables(text, end, strayLineStart);
     return {
       start,
       end,
       strayEnd: { start: strayLineStart, end: strayLineEnd },
       foreignSectionsPreserved,
+      keptHookTables,
     };
   }
 
@@ -704,7 +807,7 @@ function findManagedRange(text: string, configPath: string): ManagedRange | null
     const foreignSectionsPreserved = scan.sawEndMarker
       ? []
       : collectForeignSectionHeaders(text, end, text.length);
-    return { start, end, foreignSectionsPreserved };
+    return { start, end, foreignSectionsPreserved, keptHookTables: legacyKeptHookTables(text, end, scan, configPath) };
   }
 
   const generated = text.indexOf(GENERATED_HEADER);
@@ -720,7 +823,7 @@ function findManagedRange(text: string, configPath: string): ManagedRange | null
       const foreignSectionsPreserved = scan.sawEndMarker
         ? []
         : collectForeignSectionHeaders(text, end, text.length);
-      return { start, end, foreignSectionsPreserved };
+      return { start, end, foreignSectionsPreserved, keptHookTables: legacyKeptHookTables(text, end, scan, configPath) };
     }
   }
 
@@ -927,8 +1030,12 @@ function firstDifferingKeyPath(a: unknown, b: unknown, path: string[]): string[]
  * from a harness-written one would need the same line-level reading of the
  * file this net is meant to be independent of. An operator-authored
  * `[[hooks.<Event>]]` entry that the line scan wrongly counts as part of
- * the harness-managed block is therefore replaced without a refusal
- * (follow-up task 01053b27).
+ * the harness-managed block is therefore replaced without a refusal (task
+ * 01053b27 covers the operator table after the harness tables, which the scan
+ * now keeps and names; still replaced silently are an operator table before
+ * the first harness table inside the block, one under a comment run that
+ * holds a `# harness hook:` line, bare keys directly under a harness table,
+ * and one after an old block that never carried the comments).
  *
  * Parsing goes through `parseToml` (a leading byte order mark ignored,
  * 64-bit integers kept as `bigint`). A document that does not parse refuses
@@ -1101,6 +1208,61 @@ function withBackupLocation<T>(linkPath: string | undefined, check: () => T): T 
   }
 }
 
+/** Every string value stored under a `command` key anywhere in a parsed
+ * hook document (`hooks = [{ command = "..." }]` and the expanded
+ * `[[hooks.<Event>.hooks]]` form alike). */
+function collectCommandStrings(value: unknown, out: string[]): string[] {
+  if (Array.isArray(value)) {
+    for (const item of value) collectCommandStrings(item, out);
+  } else if (isTomlTable(value)) {
+    for (const [key, child] of Object.entries(value)) {
+      if (key === "command" && typeof child === "string") out.push(child);
+      collectCommandStrings(child, out);
+    }
+  }
+  return out;
+}
+
+/**
+ * Refuses (file untouched) when an operator hook table the install keeps
+ * looks like one harness wrote: its command equals a command of the fresh
+ * block, or starts with `harness ` (the shape every generated command has).
+ * The line scan tells a harness table from an operator one only by the
+ * `# harness hook:` comment above it, so a harness table whose comment an
+ * operator deleted, sitting last, would otherwise be kept next to the fresh
+ * block: the hook would run twice, or a hook the manifest retired would
+ * keep running after every later install (task 01053b27). The message names
+ * the table's header and line number only, never a command or any other
+ * value text, since a refusal is printed to stderr and into `--json`
+ * output.
+ */
+function assertKeptHookTablesAreOperatorOwned(
+  kept: KeptHookTable[],
+  generatedContent: string,
+  configPath: string,
+): void {
+  if (kept.length === 0) return;
+  const freshCommands = new Set(collectCommandStrings(parseToml(generatedContent), []));
+  for (const table of kept) {
+    const commands = collectCommandStrings(parseToml(table.source), []);
+    const harnessShaped = commands.some(
+      (command) => freshCommands.has(command) || command.startsWith("harness "),
+    );
+    if (!harnessShaped) continue;
+    throw new CodexInstallRefusalError(
+      `Codex config ${configPath} has a hook table ${table.header} (line ${table.line}) with no ` +
+        `'${HARNESS_HOOK_COMMENT_PREFIX}<id> (budget_ms=<n>)' comment line above it, placed after the ` +
+        "harness hook tables, whose command is one harness itself writes. harness cannot tell it " +
+        "from a harness hook table whose comment line was deleted, and keeping it next to the " +
+        "fresh harness block would run that hook twice (or keep a retired harness hook running). " +
+        `Restore the comment line directly above ${table.header}, so the install replaces the table ` +
+        "with the fresh block, or delete the table, then re-run " +
+        `\`harness apply --runtime codex --install\`. The file is untouched.`,
+      configPath,
+    );
+  }
+}
+
 export function planCodexConfigInstall(
   opts: CodexConfigInstallOptions,
 ): CodexConfigInstallPlan {
@@ -1129,11 +1291,19 @@ export function planCodexConfigInstall(
   let summary: string;
   let removedHookIds: string[] = [];
   let foreignSectionsPreserved: string[] = [];
+  let keptHookTables: KeptHookTable[] = [];
   if (range) {
     const oldHookIds = extractHookIds(currentContent.slice(range.start, range.end));
     const newHookIds = extractHookIds(managedBlock);
     removedHookIds = [...oldHookIds].filter((id) => !newHookIds.has(id));
-    foreignSectionsPreserved = range.foreignSectionsPreserved;
+    keptHookTables = range.keptHookTables;
+    // The kept operator hook tables ride the same list, so the dry-run and
+    // the install summary name them exactly like the foreign tables kept
+    // beside them (task 01053b27).
+    foreignSectionsPreserved = [
+      ...range.foreignSectionsPreserved,
+      ...describeKeptHookTables(keptHookTables),
+    ];
 
     const middleForeign = range.strayEnd
       ? currentContent.slice(range.end, range.strayEnd.start)
@@ -1159,6 +1329,7 @@ export function planCodexConfigInstall(
       assertConfigSemanticInvariant(currentContent, nextContent, configPath),
     );
   }
+  assertKeptHookTablesAreOperatorOwned(keptHookTables, opts.generatedContent, configPath);
 
   return {
     configPath,
@@ -1174,6 +1345,7 @@ export function planCodexConfigInstall(
         : summary,
     removedHookIds,
     foreignSectionsPreserved,
+    keptOperatorHookTables: describeKeptHookTables(keptHookTables),
   };
 }
 
