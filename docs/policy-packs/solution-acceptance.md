@@ -82,7 +82,12 @@ Naming a pack source file is not a reference. The glob/brace fallback
 (a `*?[{` character in the command plus a distinctive word of the dir
 leaf, `solution` or `verdicts`) scrubs the pack name
 (`solution-acceptance`) out of every plain word, meaning one with no
-`*?[]{}` character, before it looks for those words. So a heredoc, a
+`*?[]{}` character, before it looks for those words, and only when the
+command carries no runtime-construction syntax (a `$`, a backtick, `<(`
+or `>(`, `printf -v`, a `.` in command position, or a word such as
+`eval`, `source`, `read`, `declare`, `export`, `set`, `xargs`, `sh` or
+`bash`): a command that can build text at runtime could derive the leaf
+from the scrubbed pack name, so it is scanned as written. So a heredoc, a
 `sed -i`, a `git add` or a Codex `apply_patch` that edits
 `docs/policy-packs/solution-acceptance.md`, the pack's hook or runtime
 module or its tests is allowed, while any command that can write into
@@ -95,9 +100,14 @@ refused because the text cannot be decided without evaluating the
 shell: a command with a glob or brace character that also contains
 `solution` or `verdicts` outside a plain pack-name word (prose in a
 heredoc body, a glob over the pack sources such as
-`solution-acceptance*`). The named residuals are unchanged: a
-backslash-escaped leaf, a case-variant leaf on a case-insensitive
-filesystem, and a path built at runtime inside an interpreter.
+`solution-acceptance*`), and the same text next to runtime-construction
+syntax (a doc-editing heredoc whose body contains a `$` is refused again
+when it also carries a glob character). A name that is built at runtime
+and never shows `solution` or `verdicts` in the command text is not
+caught, with or without this change: it is an open residual, together
+with the other named residuals, which are unchanged: a backslash-escaped
+leaf, a case-variant leaf on a case-insensitive filesystem, and a path
+built at runtime inside an interpreter.
 
 Anti-forgery scope is v1-honest: it closes the enumerated-write-path
 residual, not arbitrary same-uid forgery.

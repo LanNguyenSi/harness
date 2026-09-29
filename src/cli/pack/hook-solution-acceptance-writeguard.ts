@@ -20,7 +20,8 @@
 //     Merely NAMING one of the pack's own source files (its doc, hook,
 //     runtime module or tests) is not a reference: `bashReferencesVerdictDir`
 //     scrubs the pack name out of plain words before its glob/brace
-//     leaf-word scan (task e8c9edaf), so editing those files from the shell
+//     leaf-word scan (task e8c9edaf; skipped when the command carries
+//     runtime-construction syntax), so editing those files from the shell
 //     is allowed while a command that also reaches the dir stays blocked.
 //   - Bash `cd` whose RESOLVED target is inside the verdict dir. `cd` itself
 //     is provably read-only (task fb67b402 added it to the shared
