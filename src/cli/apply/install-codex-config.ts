@@ -321,9 +321,10 @@ function findExactLine(text: string, target: string, from: number): number {
  * costs a segment parse plus a full-prefix parse, so one foreign array with
  * thousands of element lines each on its own line is quadratic in their
  * number: about 0.8 s for 2000 such lines, 3 s for 4000 and 12 s for 8000,
- * measured in-process. Queries must come with non-decreasing line starts, as both
- * scans issue them; an earlier line start throws (task 6b56d735). Exported
- * for direct tests only. */
+ * measured in-process. Both scans query non-decreasing line starts. A query
+ * before the last confirmed line start throws instead of answering; a line
+ * reported as not top level is never confirmed, so it never moves that
+ * bound (task 6b56d735). Exported for direct tests only. */
 export function createTopLevelProbe(text: string): (lineStart: number) => boolean {
   let confirmed = 0;
   const parses = (content: string): boolean => {
