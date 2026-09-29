@@ -60,6 +60,17 @@ const NON_HOOK_TABLE_RE = new RegExp(
 // between two harness hook tables (see `assertNoSplitBlock`).
 const HARNESS_HOOK_COMMENT_PREFIX = "# harness hook: ";
 const HOOK_ID_LINE_RE = /^# harness hook: (.+) \(budget_ms=\d+\)$/;
+// A `[[hooks.<Event>]]` array-of-tables header, harness-written or not.
+// `NON_HOOK_TABLE_RE` deliberately excludes it, so the ownership scan tells
+// the two apart by the `# harness hook:` comment above the header instead
+// (see `scanOwnedContentEnd`).
+const HOOK_ARRAY_HEADER_RE = /^\[\[hooks\./;
+
+/** True when a run of comment/blank lines holds a line the generator writes
+ * above every hook table (`# harness hook: <id> (budget_ms=N)`). */
+function runHoldsHarnessHookComment(run: string): boolean {
+  return run.split("\n").some((line) => line.trim().startsWith(HARNESS_HOOK_COMMENT_PREFIX));
+}
 
 export interface CodexConfigInstallPlan {
   /**
@@ -314,7 +325,18 @@ function firstContentLine(text: string, from: number, limit: number): string | n
  * into the replaced block.
  *
  * A line is "foreign" exactly when it is a table header that is not one
- * of ours (`NON_HOOK_TABLE_RE`, mirroring the pre-existing legacy scan);
+ * of ours (`NON_HOOK_TABLE_RE`, mirroring the pre-existing legacy scan), or
+ * a `[[hooks.<Event>]]` header without a `# harness hook:` comment above it
+ * that comes after at least one header that has one (task 01053b27).
+ * Failure modes of that second rule: a harness table whose comment an
+ * operator deleted ends the range there (a later harness table still
+ * carrying its comment lands in the zone `assertNoSplitBlock` refuses on; a
+ * last table stays as an operator table and the fresh block repeats it); a
+ * block that never carried the comments (older generator output) has no
+ * marked table before its first hook table, so it is consumed whole as
+ * before. Bare `key =` lines of an operator table follow that table out of
+ * the range; bare keys placed directly under a harness table cannot be told
+ * apart from the harness table's own fields and are still consumed with it;
  * every other non-blank, non-comment line (a hook table's `matcher =` /
  * `hooks =` field, or an older schema's bare `command =` / `match =` /
  * `timeout_ms =` / `blocking =` field) is treated as still-owned content,
@@ -334,6 +356,7 @@ function scanOwnedContentEnd(
   let pos = start;
   let commentRunStart: number | null = null;
   let sawOwnedContent = false;
+  let sawMarkedHookTable = false;
   let delim: TripleDelim = null;
   while (pos < text.length) {
     const lineEnd = lineEndAfter(text, pos);
@@ -358,6 +381,19 @@ function scanOwnedContentEnd(
     }
     if (NON_HOOK_TABLE_RE.test(trimmed)) {
       return { end: commentRunStart ?? pos, sawEndMarker: false };
+    }
+    if (HOOK_ARRAY_HEADER_RE.test(trimmed)) {
+      const marked =
+        commentRunStart !== null &&
+        runHoldsHarnessHookComment(text.slice(commentRunStart, pos));
+      if (marked) {
+        sawMarkedHookTable = true;
+      } else if (sawMarkedHookTable) {
+        // An operator-authored hook table (no `# harness hook:` comment
+        // above it) after the harness tables ends the owned region, like a
+        // foreign table, and keeps a comment attached to it (task 01053b27).
+        return { end: commentRunStart ?? pos, sawEndMarker: false };
+      }
     }
     commentRunStart = null;
     sawOwnedContent = true;
