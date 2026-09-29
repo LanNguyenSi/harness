@@ -617,6 +617,25 @@ describe("bashReferencesVerdictDir — write-guard reference detection", () => {
     expect(bashReferencesVerdictDir("cp src/*.ts dist/", dir)).toBe(false);
     expect(bashReferencesVerdictDir("rm /tmp/agent-relay/*.log", dir)).toBe(false);
   });
+  it("still matches when a pack source file is named next to a reference to the dir", () => {
+    const doc = "docs/policy-packs/solution-acceptance.md";
+    const parent = "/home/u/.local/state/agent-grounding";
+    expect(bashReferencesVerdictDir(`sed -i 's/a/b/' ${doc} && echo x > ${dir}/t.json`, dir)).toBe(true);
+    expect(bashReferencesVerdictDir(`cat >> ${doc} <<'EOF'\n[x]\nEOF\ncp /tmp/f $${VERDICT_DIR_ENV}/t.json`, dir)).toBe(
+      true,
+    );
+    expect(bashReferencesVerdictDir(`sed -i 's/a/b/' ${doc} && echo x > ${parent}/solution-ver*/t.json`, dir)).toBe(
+      true,
+    );
+    expect(bashReferencesVerdictDir(`echo x > ${parent}/solution-acceptance/../solution-verdict{s,}/t.json`, dir)).toBe(
+      true,
+    );
+  });
+  it("matches a brace split of the leaf and a glob that keeps only one leaf word, with no other clue in the text", () => {
+    expect(bashReferencesVerdictDir("echo x > /p/solution-verdict{s,}/t.json", dir)).toBe(true);
+    expect(bashReferencesVerdictDir("echo x > /p/solu*verdicts/t.json", dir)).toBe(true);
+    expect(bashReferencesVerdictDir("echo x > /p/solution-v[e]rdicts/t.json", dir)).toBe(true);
+  });
 });
 
 describe("DEFAULT_PUSH_BASH_RE — completion bash matcher", () => {
