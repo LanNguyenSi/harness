@@ -10,6 +10,15 @@
   harness-managed block is replaced, operator config is never owned) still holds
   against the changed code; no claim changed, re-stamped.
 
+- 2026-09-29T10:30:54Z (task 8e9d7333): the solution-acceptance null-verdict reason (`evaluateGate`) now claims only
+  what the gate received (`no usable solution-acceptance verdict for "<id>"`) instead of
+  "recorded" and "run ... solution_evaluate first", and no longer says anything about a
+  read (the unusable-id state reads nothing, the invalid-record state reads a marker).
+  Re-verified `evidence-ledger-trust-boundary.md` and `gate-fail-posture-matrix.md`, the two
+  docs listing the touched runtime file or pack doc under sources: neither quotes the old
+  reason wording, the deny set and line citations they make are unchanged; no claim
+  changed, both re-stamped after the last source, test and doc commit.
+
 - 2026-09-29T07:30:05Z (task 8fe0f633): the solution-acceptance deny text's never-evaluated line
   no longer names a cause the gate did not observe, the state table gained the
   liveness rows it lacked and binds each row's declared (state, liveness)
