@@ -1247,7 +1247,7 @@ function subKey(event: string, index: number): string {
 }
 
 /**
- * Every array-of-tables header of the whole document that appends to a hook
+ * Every table header of the whole document that appends to a hook
  * event array (`[[hooks.<Event>]]`, however its keys are spelled) or to such
  * an entry's own `hooks` array (`[[hooks.<Event>.hooks]]`), with the entry it
  * appends: TOML appends each header's table to its array in document order,
@@ -1269,7 +1269,11 @@ function mapHookArrayHeaders(text: string): HookArrayHeaderMap {
     const startedInsideString = delim !== null;
     delim = nextTripleDelim(rawLine, delim);
     const parsed = startedInsideString ? null : parseTableHeader(rawLine);
-    if (parsed !== null && parsed.header.startsWith("[[")) {
+    // The bracket kind is not checked: a single-bracket `[hooks.<Event>]`
+    // cannot coexist with a `[[hooks.<Event>]]` array in a document that
+    // parses, and a single-bracket `[hooks.<Event>.hooks]` makes that entry's
+    // `hooks` a table, whose `command` is not a hook command either way.
+    if (parsed !== null) {
       const [root, event, sub] = parsed.keys.map(resolvedKeyName);
       if (root === "hooks" && typeof event === "string") {
         const count = map.eventCounts.get(event) ?? 0;
