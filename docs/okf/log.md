@@ -16,6 +16,13 @@
   of the pack doc are unchanged and still hold); both re-stamped after the
   last source, test and doc commit of the change.
 
+- 2026-09-29T07:24:41Z (task b34ed105): `codex-adapter-parity-gaps.md` re-verified after
+  `install-codex-config.ts` changed again (the no-END EOF comment back-off now
+  skips a trailing run that holds a harness-authored line); the doc's install
+  claim (only the marked harness-managed block is replaced, operator config is
+  never owned) still holds against the changed code; no claim changed,
+  re-stamped.
+
 - 2026-09-29T06:17:00Z (task e8c9edaf): `evidence-ledger-trust-boundary.md` re-verified after merging
   master into the write-guard branch: it combines the runtime-module claims
   re-verified for this change with the `docs/CLI.md` wording already
