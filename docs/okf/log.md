@@ -2,7 +2,7 @@
 
 <!-- Add new entries at the top, newest first. -->
 
-- 2026-09-29T07:09:23Z (task 8fe0f633): the solution-acceptance deny text's never-evaluated line
+- 2026-09-29T07:20:49Z (task 8fe0f633): the solution-acceptance deny text's never-evaluated line
   no longer names a cause the gate did not observe, the state table gained the
   liveness rows it lacked and binds each row's declared (state, liveness)
   coordinate to the renderer (which throws on an unreachable pair), the
