@@ -266,7 +266,7 @@ describe("codex install finds the end of the harness block across an array eleme
       for (const output of await everyOutput()) expect(output).not.toContain(shape.text);
     });
 
-    it(`${shape.label}: with the END marker after the element, the block ends at that marker`, () => {
+    it(`${shape.label}: with the END marker after the element, the block ends at that marker`, async () => {
       write([
         ...OLD_BLOCK,
         ...operatorTable(shape.element),
@@ -279,6 +279,7 @@ describe("codex install finds the end of the harness block across an array eleme
       expect(p.nextContent.endsWith(`${CODEX_MANAGED_END}\n[tui]\ntheme = 1\n`)).toBe(true);
       expect(p.nextContent).not.toContain(shape.element);
       expect(p.foreignSectionsPreserved).toEqual([]);
+      for (const output of await everyOutput()) expect(output).not.toContain(shape.text);
     });
   }
 });
