@@ -2,6 +2,13 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-09-29T08:10:22Z (task 01053b27): `codex-adapter-parity-gaps.md` re-verified after
+  `install-codex-config.ts` changed again (the install now names every kept
+  operator `[[hooks.*]]` table among the preserved sections and refuses when such
+  a table's command is one harness writes); the doc's install claim (only the
+  marked harness-managed block is replaced, operator config is never owned) still
+  holds against the changed code; no claim changed, re-stamped.
+
 - 2026-09-29T07:34:17Z (task 01053b27): `codex-adapter-parity-gaps.md` re-verified after
   `install-codex-config.ts` changed again (the managed-range scan now ends the
   range at an operator `[[hooks.*]]` table that has no `# harness hook:` comment
