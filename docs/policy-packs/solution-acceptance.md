@@ -78,6 +78,40 @@ prefix is caught (`~/.local/state/...`, `$HOME/...`,
 `$XDG_STATE_HOME/...`, the literal absolute path). The only legitimate
 writer is the producer.
 
+Naming a pack source file is not a reference. The glob/brace fallback
+(a `*?[{` character in the command plus a distinctive word of the dir
+leaf, `solution` or `verdicts`) scrubs the pack name
+(`solution-acceptance`) out of every plain word, meaning one with no
+`*?[]{}` character, before it looks for those words, and only when the
+command carries no runtime-construction syntax (a `$`, a backtick, `<(`
+or `>(`, `printf -v`, a `.` in command position, or a word such as
+`eval`, `source`, `read`, `declare`, `export`, `set`, `xargs`, `sh` or
+`bash`): a command that can build text at runtime could derive the leaf
+from the scrubbed pack name, so it is scanned as written. So a heredoc, a
+`sed -i`, a `git add` or a Codex `apply_patch` that edits
+`docs/policy-packs/solution-acceptance.md`, the pack's hook or runtime
+module or its tests is allowed, while a command whose text reaches the
+dir through a spelling the matcher recognizes is still refused, including
+one that also names a pack file. Not narrowed:
+the literal dir, the `$SOLUTION_VERDICT_DIR` token, the stable tail and
+the literal leaf are matched on the whole command, and a word that
+carries a glob or brace character (`solution-acceptance/../solution-ver*`,
+`[solution-acceptance]*`) keeps the pack name in the scan. What stays
+refused because the text cannot be decided without evaluating the
+shell: a command with a glob or brace character that also contains
+`solution` or `verdicts` outside a plain pack-name word (prose in a
+heredoc body, a glob over the pack sources such as
+`solution-acceptance*`), and the same text next to runtime-construction
+syntax (a doc-editing heredoc whose body contains a `$` is refused again
+when it also carries a glob character). A name that is built at runtime
+and never shows `solution` or `verdicts` in the command text is not
+caught, with or without this change: it is an open residual, together
+with the other named residuals, which are unchanged: a backslash-escaped
+leaf, a case-variant leaf on a case-insensitive filesystem, a path in
+which globs or braces obscure every segment so that neither `solution`
+nor `verdicts` survives in the text (for example `sol*verd*`), and a path
+built at runtime inside an interpreter.
+
 Anti-forgery scope is v1-honest: it closes the enumerated-write-path
 residual, not arbitrary same-uid forgery.
 

@@ -2,6 +2,25 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-09-29T06:17:00Z (task e8c9edaf): `evidence-ledger-trust-boundary.md` re-verified after merging
+  master into the write-guard branch: it combines the runtime-module claims
+  re-verified for this change with the `docs/CLI.md` wording already
+  re-verified on master; no claim changed, re-stamped.
+
+- 2026-09-29T06:05:04Z (task e8c9edaf): `gate-fail-posture-matrix.md` re-verified after the
+  pack doc's write-guard paragraph was reworded to the recognized-spelling
+  boundary and gained the fully obscured glob residual; the doc's deny-set
+  claims are unchanged, re-stamped.
+
+- 2026-09-29T05:46:12Z (task e8c9edaf): the solution-acceptance write-guard's reference matcher no
+  longer treats a command that only names a pack source file as a verdict-dir
+  reference, and it stops scrubbing the pack name when the command carries
+  runtime-construction syntax (a name built at runtime is an open residual,
+  not caught). Re-verified `evidence-ledger-trust-boundary.md` (its write-guard
+  sentence, the runtime module claims) and `gate-fail-posture-matrix.md` (the
+  pack doc's deny-set lines are unchanged; the addition sits below the
+  write-guard heading); neither doc's claims changed, both are re-stamped.
+
 - 2026-09-29T05:30:51Z (task 75399bb2): review-slop residue in `docs/CLI.md`, `src/cli/apply/apply.ts` and
   `tests/cli/init-interactive.test.ts` reworded to behaviour and task ids
   (comments and prose only, same line counts). `evidence-ledger-trust-boundary.md`,

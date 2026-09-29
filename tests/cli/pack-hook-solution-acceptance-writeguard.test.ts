@@ -294,6 +294,236 @@ describe("write-guard — forge-attempt matrix (the load-bearing anti-forgery pr
   });
 });
 
+describe("write-guard: refuse-side pins for any command that can write into the verdict dir", () => {
+  // Pinned BEFORE the reference matcher was narrowed so that naming a pack
+  // source file no longer trips it: every command here can reach the verdict
+  // dir and must stay blocked, whichever way the matcher is tightened.
+  const PARENT = "/home/u/.local/state/agent-grounding";
+  const DOC = "docs/policy-packs/solution-acceptance.md";
+  const HOOK = "src/cli/pack/hook-solution-acceptance-writeguard.ts";
+
+  it("blocks a heredoc written into the verdict dir", () => {
+    expect(bash(`cat > ${MARKER} <<'EOF'\n{"ready":true}\nEOF`).blocked).toBe(true);
+    expect(bash(`cat >> "$SOLUTION_VERDICT_DIR/task-42.json" <<'EOF'\n{"ready":true}\nEOF`).blocked).toBe(true);
+  });
+
+  it("blocks a redirect into the dir spelled through $HOME, ${HOME}, ~ and the XDG variable", () => {
+    expect(bash("echo x > $HOME/.local/state/agent-grounding/solution-verdicts/task-42.json").blocked).toBe(true);
+    expect(bash("echo x > ${HOME}/.local/state/agent-grounding/solution-verdicts/task-42.json").blocked).toBe(true);
+    expect(bash("echo x > ~/.local/state/agent-grounding/solution-verdicts/task-42.json").blocked).toBe(true);
+    expect(bash("echo x > $XDG_STATE_HOME/agent-grounding/solution-verdicts/task-42.json").blocked).toBe(true);
+  });
+
+  it("blocks quoted spellings of the dir", () => {
+    expect(bash(`echo x > "${MARKER}"`).blocked).toBe(true);
+    expect(bash(`echo x > '${MARKER}'`).blocked).toBe(true);
+    expect(bash(`echo x > "$HOME/.local/state/agent-grounding/solution-verdicts/task-42.json"`).blocked).toBe(true);
+  });
+
+  it("blocks glob and brace spellings that expand into the dir", () => {
+    expect(bash(`echo x > ${PARENT}/solution-ver*/task-42.json`).blocked).toBe(true);
+    expect(bash(`echo x > ${PARENT}/solution-verdict{s,}/task-42.json`).blocked).toBe(true);
+    expect(bash(`echo x > ${PARENT}/solution-v[e]rdicts/task-42.json`).blocked).toBe(true);
+    expect(bash(`echo x > ${PARENT}/{solution-verdicts,x}/task-42.json`).blocked).toBe(true);
+    expect(bash(`echo x > ${PARENT}/*verdicts/task-42.json`).blocked).toBe(true);
+  });
+
+  it("blocks cd into the dir (any spelling) followed by a relative write", () => {
+    expect(bash(`cd ${DIR} && echo x > task-42.json`).blocked).toBe(true);
+    expect(bash(`cd "${DIR}" && echo x > task-42.json`).blocked).toBe(true);
+    expect(bash(`cd ${PARENT}/solution-ver* && echo x > task-42.json`).blocked).toBe(true);
+    expect(bash(`cd ${PARENT} && echo x > solution-verdict{s,}/task-42.json`).blocked).toBe(true);
+  });
+
+  it("blocks a command that names BOTH a pack source file and the verdict dir", () => {
+    expect(bash(`sed -i 's/a/b/' ${DOC} && echo x > ${MARKER}`).blocked).toBe(true);
+    expect(bash(`cat >> ${DOC} <<'EOF'\nnote\nEOF\ncp /tmp/f ${MARKER}`).blocked).toBe(true);
+    expect(bash(`echo x > ${MARKER} && sed -i 's/a/b/' ${HOOK}`).blocked).toBe(true);
+    expect(bash(`git add ${DOC} ${HOOK} && echo x > ${MARKER}`).blocked).toBe(true);
+    expect(bash(`echo x > $SOLUTION_VERDICT_DIR/task-42.json # see ${DOC}`).blocked).toBe(true);
+  });
+
+  it("blocks a command that names a pack source file AND obscures the verdict dir with a glob or brace", () => {
+    expect(bash(`sed -i 's/a/b/' ${DOC} && echo x > ${PARENT}/solution-ver*/task-42.json`).blocked).toBe(true);
+    expect(bash(`sed -i 's/a/b/' ${DOC} && echo x > ${PARENT}/solution-verdict{s,}/task-42.json`).blocked).toBe(true);
+    expect(bash(`sed -i 's/a/b/' ${HOOK} && echo x > ${PARENT}/solu*verdicts/task-42.json`).blocked).toBe(true);
+    // The pack name sitting right next to a globbed verdict-dir segment does
+    // not hide the segment.
+    expect(bash(`echo x > ${PARENT}/solution-acceptance/../solution-ver*/task-42.json`).blocked).toBe(true);
+    expect(bash(`echo x > ${PARENT}/solution-acceptance-runtime/../solution-verdict{s,}/task-42.json`).blocked).toBe(true);
+  });
+
+  it("blocks a redirect into the dir when the same command also carries a metacharacter-heavy heredoc", () => {
+    expect(bash(`cat > ${MARKER} <<'EOF'\n{"ready": true, "items": [1, 2]}\nEOF`).blocked).toBe(true);
+  });
+
+  it("blocks apply_patch whose body names both a pack source file and the verdict dir", () => {
+    const patch = `*** Begin Patch\n*** Update File: ${DOC}\n@@\n-a\n+b\n*** Add File: ${MARKER}\n+{}\n*** End Patch`;
+    expect(evaluateWriteGuard("apply_patch", { patch }, DIR, "/repo").blocked).toBe(true);
+  });
+
+  it("stays blocked when the shell cwd is inside the dir, whatever pack file the command names", () => {
+    expect(bash(`sed -i 's/a/b/' ${DOC}`, DIR).blocked).toBe(true);
+  });
+
+  it("does not turn the case-variance residual into a block or an allow by accident (residual pin, unchanged)", () => {
+    // Recorded, not endorsed: a case-variant leaf on a case-insensitive
+    // filesystem still passes today.
+    expect(bash(`echo x > ${PARENT}/SOLUTION-VERDICTS/task-42.json`).blocked).toBe(false);
+  });
+});
+
+describe("write-guard: a command that only NAMES a pack source file is not a verdict-dir reference (task e8c9edaf)", () => {
+  const ROOT = "/repo";
+  const DOC = "docs/policy-packs/solution-acceptance.md";
+  const HOOK = "src/cli/pack/hook-solution-acceptance-writeguard.ts";
+  const RUNTIME = "src/policy-packs/builtin/solution-acceptance-runtime.ts";
+  const TEST = "tests/policy-packs/solution-acceptance-runtime.test.ts";
+  const CLI_TEST = "tests/cli/pack-hook-solution-acceptance-writeguard.test.ts";
+
+  // Each source file is edited from the repo root (relative path) and from
+  // elsewhere (absolute path). The bodies carry the characters that used to
+  // trip the glob/brace leaf-word fallback: [ ] * ? { }.
+  const files = [DOC, HOOK, RUNTIME, TEST, CLI_TEST];
+
+  it.each(files)("allows a heredoc that appends to %s (relative path, metacharacter body)", (file) => {
+    expect(bash(`cat >> ${file} <<'EOF'\n- [x] done **bold** {"a": 1} why?\nEOF`, ROOT).blocked).toBe(false);
+  });
+
+  it.each(files)("allows a heredoc that appends to %s (absolute path, metacharacter body)", (file) => {
+    expect(bash(`cat >> ${ROOT}/${file} <<'EOF'\n- [x] done **bold** {"a": 1} why?\nEOF`, "/elsewhere").blocked).toBe(
+      false,
+    );
+  });
+
+  it.each(files)("allows sed -i on %s with a regex that carries glob characters", (file) => {
+    expect(bash(`sed -i 's/foo.*bar/[baz]/' ${file}`, ROOT).blocked).toBe(false);
+    expect(bash(`sed -i 's/foo.*bar/[baz]/' ${ROOT}/${file}`, "/elsewhere").blocked).toBe(false);
+  });
+
+  it("allows staging and committing the pack sources", () => {
+    expect(bash(`git add ${DOC} ${HOOK} ${TEST} && git commit -m "docs [x]"`, ROOT).blocked).toBe(false);
+  });
+
+  it("allows apply_patch that edits a pack source file", () => {
+    const patch = `*** Begin Patch\n*** Update File: ${DOC}\n@@\n-a\n+b [x]\n*** End Patch`;
+    expect(evaluateWriteGuard("apply_patch", { patch }, DIR, ROOT).blocked).toBe(false);
+  });
+
+  it("allows a plain redirect and quoted path to a pack source file", () => {
+    expect(bash(`echo hi >> ${DOC}`, ROOT).blocked).toBe(false);
+    expect(bash(`echo '[x]' >> "${DOC}"`, ROOT).blocked).toBe(false);
+  });
+
+  it("still blocks the same edit once the command also reaches the verdict dir", () => {
+    expect(bash(`cat >> ${DOC} <<'EOF'\n[x]\nEOF\necho x > ${MARKER}`, ROOT).blocked).toBe(true);
+    expect(bash(`sed -i 's/a.*b/c/' ${HOOK} && echo x > $SOLUTION_VERDICT_DIR/task-42.json`, ROOT).blocked).toBe(true);
+    expect(
+      bash(`sed -i 's/a.*b/c/' ${HOOK} && echo x > /home/u/.local/state/agent-grounding/solution-verdict{s,}/t.json`, ROOT)
+        .blocked,
+    ).toBe(true);
+  });
+
+  it("fails closed where the text cannot be decided statically (recorded residuals, not endorsements)", () => {
+    // A glob over the pack sources carries a metacharacter in the very word
+    // that names the pack, so the word is not scrubbed.
+    expect(bash(`git add docs/policy-packs/solution-acceptance*`, ROOT).blocked).toBe(true);
+    // Prose that says "solution" or "verdicts" next to a metacharacter, even
+    // in a heredoc to a pack doc, cannot be told from a path.
+    expect(bash(`cat >> ${DOC} <<'EOF'\nthe solution [x]\nEOF`, ROOT).blocked).toBe(true);
+    expect(bash(`cat >> ${DOC} <<'EOF'\nverdicts {x}\nEOF`, ROOT).blocked).toBe(true);
+    // A bracket class that contains the pack name can still expand to the leaf.
+    expect(bash(`echo x > /home/u/.local/state/agent-grounding/[solution-acceptance]*/t.json`, ROOT).blocked).toBe(true);
+    // Naming the leaf itself is a reference whatever else the command says.
+    expect(bash(`cat >> ${DOC} <<'EOF'\nsolution-verdicts\nEOF`, ROOT).blocked).toBe(true);
+  });
+
+  it("still allows a doc edit that carries none of the runtime-construction syntax, next to the refuse cases below", () => {
+    expect(bash(`sed -i 's/a.*b/[c]/' ${DOC}`, ROOT).blocked).toBe(false);
+  });
+
+  it("does not treat a longer word that merely contains one of the runtime-construction words as one", () => {
+    expect(bash(`sed -i 's/a.*b/[c]/' docs/reader/setup-eval.md ${DOC}`, ROOT).blocked).toBe(false);
+    expect(bash(`git add ${DOC} src/dataset.ts src/readme.sh.ts && git commit -m "x [y]"`, ROOT).blocked).toBe(false);
+  });
+
+  it("fails closed again for a doc edit whose body carries a dollar sign (recorded, not an endorsement)", () => {
+    expect(bash(`cat >> ${DOC} <<'EOF'\n- [x] uses $HOME\nEOF`, ROOT).blocked).toBe(true);
+  });
+
+  it("keeps the backslash residual open, unchanged (the named pre-existing residual)", () => {
+    expect(bash("cd /home/u/.local/state/agent-grounding/solution\\-verdicts").blocked).toBe(false);
+  });
+});
+
+describe("write-guard: a leaf built at runtime from the pack name stays refused when the text carries a glob or brace (task e8c9edaf)", () => {
+  // These are STRING INPUTS to the guard's evaluation function; nothing here
+  // is ever executed. Each one has a glob/brace character, the pack name as a
+  // plain word, and a way to derive the verdict-dir leaf from that word at
+  // runtime. The matcher cannot decide such a command statically, so it must
+  // fall back to scanning the unmodified text, where the leaf word "solution"
+  // is present.
+  const PARENT = "/home/u/.local/state/agent-grounding";
+  const DOC = "docs/policy-packs/solution-acceptance.md";
+
+  it("blocks a leaf derived through parameter expansion of a variable holding the pack name", () => {
+    expect(bash(`v=solution-acceptance; echo x > ${PARENT}/\${v%-acceptance}-ver*/t.json`).blocked).toBe(true);
+    expect(bash(`v=solution-acceptance; echo x > ${PARENT}/\${v/-acceptance/-verdict{s,}}/t.json`).blocked).toBe(true);
+    expect(bash(`v=solution-acceptance; echo x > ${PARENT}/$v/../\${v%-acceptance}-ver?icts/t.json`).blocked).toBe(true);
+  });
+
+  it("blocks a leaf derived through command substitution", () => {
+    expect(
+      bash(`echo x > ${PARENT}/$(echo solution-acceptance | sed 's/-acceptance/-ver*/')/t.json`).blocked,
+    ).toBe(true);
+  });
+
+  it("blocks a leaf derived through backticks", () => {
+    expect(bash(`echo x > ${PARENT}/\`echo solution-acceptance | sed 's/-acceptance/-ver*/'\`/t.json`).blocked).toBe(
+      true,
+    );
+  });
+
+  it("blocks a leaf derived through process substitution", () => {
+    expect(bash(`cp <(echo solution-acceptance) ${PARENT}/solu?ion-ver*/t.json`).blocked).toBe(true);
+    expect(bash(`echo solution-acceptance > >(cat > ${PARENT}/solu?ion-ver*/t.json)`).blocked).toBe(true);
+  });
+
+  it("blocks a leaf derived through eval", () => {
+    expect(bash(`eval "d=solution-acceptance; echo x > ${PARENT}/\${d%-acceptance}-ver*/t.json"`).blocked).toBe(true);
+  });
+
+  it("blocks a leaf derived through printf -v", () => {
+    expect(bash(`printf -v w %s solution-acceptance; echo x > ${PARENT}/\${w%-acceptance}-ver*/t.json`).blocked).toBe(
+      true,
+    );
+  });
+
+  // The words below carry no `$` or backtick, so each of these isolates one
+  // runtime-construction word: the doc edit is refused once the word is present.
+  it.each([
+    "eval :",
+    "source ./x.sh",
+    ". ./x.sh",
+    "printf -v v %s x",
+    "read v",
+    "declare v=1",
+    "export v=1",
+    "set -f",
+  ])("blocks a doc edit that also carries the runtime-construction word: %s", (prefix) => {
+    const edit = `sed -i 's/a.*b/[c]/' ${DOC}`;
+    expect(bash(`${prefix}; ${edit}`).blocked).toBe(true);
+    expect(bash(`${edit} && ${prefix}`).blocked).toBe(true);
+  });
+
+  it("blocks a doc edit whose text carries a `$`, a backtick or a process substitution, glob body or not", () => {
+    expect(bash(`cat >> ${DOC} <<'EOF'\n[x] $HOME\nEOF`).blocked).toBe(true);
+    expect(bash(`sed -i 's/a.*b/$X/' ${DOC}`).blocked).toBe(true);
+    expect(bash(`sed -i 's/a.*b/c/' ${DOC} && echo \`date\``).blocked).toBe(true);
+    expect(bash(`sed -i 's/a.*b/c/' ${DOC} && diff <(echo a) <(echo b)`).blocked).toBe(true);
+  });
+});
+
 describe("write-guard CLI — end-to-end deny envelope", () => {
   it("emits a Claude Code block envelope on a forge attempt", async () => {
     const stdout = captureStream();
