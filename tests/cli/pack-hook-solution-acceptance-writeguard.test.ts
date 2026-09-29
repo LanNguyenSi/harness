@@ -373,6 +373,76 @@ describe("write-guard: refuse-side pins for any command that can write into the 
   });
 });
 
+describe("write-guard: a command that only NAMES a pack source file is not a verdict-dir reference (task e8c9edaf)", () => {
+  const ROOT = "/repo";
+  const DOC = "docs/policy-packs/solution-acceptance.md";
+  const HOOK = "src/cli/pack/hook-solution-acceptance-writeguard.ts";
+  const RUNTIME = "src/policy-packs/builtin/solution-acceptance-runtime.ts";
+  const TEST = "tests/policy-packs/solution-acceptance-runtime.test.ts";
+  const CLI_TEST = "tests/cli/pack-hook-solution-acceptance-writeguard.test.ts";
+
+  // Each source file is edited from the repo root (relative path) and from
+  // elsewhere (absolute path). The bodies carry the characters that used to
+  // trip the glob/brace leaf-word fallback: [ ] * ? { }.
+  const files = [DOC, HOOK, RUNTIME, TEST, CLI_TEST];
+
+  it.each(files)("allows a heredoc that appends to %s (relative path, metacharacter body)", (file) => {
+    expect(bash(`cat >> ${file} <<'EOF'\n- [x] done **bold** {"a": 1} why?\nEOF`, ROOT).blocked).toBe(false);
+  });
+
+  it.each(files)("allows a heredoc that appends to %s (absolute path, metacharacter body)", (file) => {
+    expect(bash(`cat >> ${ROOT}/${file} <<'EOF'\n- [x] done **bold** {"a": 1} why?\nEOF`, "/elsewhere").blocked).toBe(
+      false,
+    );
+  });
+
+  it.each(files)("allows sed -i on %s with a regex that carries glob characters", (file) => {
+    expect(bash(`sed -i 's/foo.*bar/[baz]/' ${file}`, ROOT).blocked).toBe(false);
+    expect(bash(`sed -i 's/foo.*bar/[baz]/' ${ROOT}/${file}`, "/elsewhere").blocked).toBe(false);
+  });
+
+  it("allows staging and committing the pack sources", () => {
+    expect(bash(`git add ${DOC} ${HOOK} ${TEST} && git commit -m "docs [x]"`, ROOT).blocked).toBe(false);
+  });
+
+  it("allows apply_patch that edits a pack source file", () => {
+    const patch = `*** Begin Patch\n*** Update File: ${DOC}\n@@\n-a\n+b [x]\n*** End Patch`;
+    expect(evaluateWriteGuard("apply_patch", { patch }, DIR, ROOT).blocked).toBe(false);
+  });
+
+  it("allows a plain redirect and quoted path to a pack source file", () => {
+    expect(bash(`echo hi >> ${DOC}`, ROOT).blocked).toBe(false);
+    expect(bash(`echo '[x]' >> "${DOC}"`, ROOT).blocked).toBe(false);
+  });
+
+  it("still blocks the same edit once the command also reaches the verdict dir", () => {
+    expect(bash(`cat >> ${DOC} <<'EOF'\n[x]\nEOF\necho x > ${MARKER}`, ROOT).blocked).toBe(true);
+    expect(bash(`sed -i 's/a.*b/c/' ${HOOK} && echo x > $SOLUTION_VERDICT_DIR/task-42.json`, ROOT).blocked).toBe(true);
+    expect(
+      bash(`sed -i 's/a.*b/c/' ${HOOK} && echo x > /home/u/.local/state/agent-grounding/solution-verdict{s,}/t.json`, ROOT)
+        .blocked,
+    ).toBe(true);
+  });
+
+  it("fails closed where the text cannot be decided statically (recorded residuals, not endorsements)", () => {
+    // A glob over the pack sources carries a metacharacter in the very word
+    // that names the pack, so the word is not scrubbed.
+    expect(bash(`git add docs/policy-packs/solution-acceptance*`, ROOT).blocked).toBe(true);
+    // Prose that says "solution" or "verdicts" next to a metacharacter, even
+    // in a heredoc to a pack doc, cannot be told from a path.
+    expect(bash(`cat >> ${DOC} <<'EOF'\nthe solution [x]\nEOF`, ROOT).blocked).toBe(true);
+    expect(bash(`cat >> ${DOC} <<'EOF'\nverdicts {x}\nEOF`, ROOT).blocked).toBe(true);
+    // A bracket class that contains the pack name can still expand to the leaf.
+    expect(bash(`echo x > /home/u/.local/state/agent-grounding/[solution-acceptance]*/t.json`, ROOT).blocked).toBe(true);
+    // Naming the leaf itself is a reference whatever else the command says.
+    expect(bash(`cat >> ${DOC} <<'EOF'\nsolution-verdicts\nEOF`, ROOT).blocked).toBe(true);
+  });
+
+  it("keeps the backslash residual open, unchanged (the named pre-existing residual)", () => {
+    expect(bash("cd /home/u/.local/state/agent-grounding/solution\\-verdicts").blocked).toBe(false);
+  });
+});
+
 describe("write-guard CLI — end-to-end deny envelope", () => {
   it("emits a Claude Code block envelope on a forge attempt", async () => {
     const stdout = captureStream();

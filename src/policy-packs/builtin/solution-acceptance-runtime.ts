@@ -712,9 +712,53 @@ export function bashReferencesVerdictDir(command: string, dir: string): boolean 
   // "solution" is a common word, so this is not rare. It is deliberate:
   // it fails safe, and the tighter alternative (dropping `{`) reopens
   // the `solution-verdict{s,}` split-leaf hole, which fails open.
+  //
+  // NARROWING (task e8c9edaf): the leaf word "solution" is also the first
+  // word of this pack's own name, so any glob/brace/bracket character
+  // anywhere in the command text (a `[x]` or `**bold**` inside a heredoc body,
+  // a `.*` in a sed expression, the `***` of an apply_patch header) made a
+  // command that merely NAMES a pack source file
+  // (`docs/policy-packs/solution-acceptance.md`,
+  // `src/cli/pack/hook-solution-acceptance-writeguard.ts`, ...) look like a
+  // leaf-word hit. The word scan therefore runs on the command with each
+  // plain (no glob/brace/bracket character) whitespace-delimited word
+  // scrubbed of the pack name (`scrubPlainPackNameWords`). Nothing else about
+  // the fallback changes: the direct literal checks above run on the untouched
+  // command, a word that itself carries a metacharacter is never scrubbed (so
+  // `solution-acceptance/../solution-ver*` and `[solution-acceptance]*` keep
+  // their leaf word), and a custom dir whose leaf contains the pack name is
+  // scanned unscrubbed.
+  //
+  // Still refused by design (fails closed, cannot be decided without
+  // shell-evaluating): a command whose text carries a glob/brace character AND
+  // the word "solution" or "verdicts" outside a plain pack-name word (for
+  // example prose in a heredoc body, or a glob over pack sources such as
+  // `solution-acceptance*`); and, as before, a path built at runtime.
   if (/[*?[{]/.test(command)) {
     const leafWords = leaf.split(/[^A-Za-z0-9]+/).filter((w) => w.length >= 6);
-    if (leafWords.some((w) => command.includes(w))) return true;
+    const scanned = leaf.includes(PACK_NAME) ? command : scrubPlainPackNameWords(command);
+    if (leafWords.some((w) => scanned.includes(w))) return true;
   }
   return false;
+}
+
+/** Glob, bracket and brace characters: a word carrying one can expand at runtime. */
+const EXPANDABLE_WORD_CHARS = /[*?[\]{}]/;
+/** The pack name as a whole word: not embedded in a longer alphanumeric run. */
+const PACK_NAME_WORD_RE = new RegExp(`(?<![A-Za-z0-9])${PACK_NAME}(?![A-Za-z0-9])`, "g");
+
+/**
+ * Replace the pack name with a space inside every whitespace-delimited word
+ * that cannot expand (no `*?[]{}` character). Such a word is a plain path or
+ * file name: its literal text reaches the verdict dir only if it contains the
+ * leaf, tail or env token, which the caller's direct checks already saw on the
+ * untouched command. A word that carries a metacharacter is returned as is.
+ * The replacement is a space, never the empty string, so scrubbing cannot
+ * join the text on either side into a new word.
+ */
+function scrubPlainPackNameWords(command: string): string {
+  return command
+    .split(/(\s+)/)
+    .map((word) => (EXPANDABLE_WORD_CHARS.test(word) ? word : word.replace(PACK_NAME_WORD_RE, " ")))
+    .join("");
 }

@@ -631,6 +631,26 @@ describe("bashReferencesVerdictDir — write-guard reference detection", () => {
       true,
     );
   });
+  it("does not match a command that only names a pack source file, even with glob/brace characters in the text", () => {
+    const doc = "docs/policy-packs/solution-acceptance.md";
+    const hook = "src/cli/pack/hook-solution-acceptance-writeguard.ts";
+    const runtime = "src/policy-packs/builtin/solution-acceptance-runtime.ts";
+    expect(bashReferencesVerdictDir(`cat >> ${doc} <<'EOF'\n- [x] **done** {"a": 1} why?\nEOF`, dir)).toBe(false);
+    expect(bashReferencesVerdictDir(`sed -i 's/a.*b/[c]/' ${hook}`, dir)).toBe(false);
+    expect(bashReferencesVerdictDir(`sed -i 's/a?/b/' /abs/repo/${runtime}`, dir)).toBe(false);
+    expect(bashReferencesVerdictDir(`git add ${doc} ${hook} && git commit -m "x [y]"`, dir)).toBe(false);
+    expect(bashReferencesVerdictDir(`echo '[x]' >> "${doc}"`, dir)).toBe(false);
+  });
+  it("still scans a metacharacter-bearing word that carries the pack name", () => {
+    expect(bashReferencesVerdictDir("git add docs/policy-packs/solution-acceptance*", dir)).toBe(true);
+    expect(bashReferencesVerdictDir("echo x > /p/[solution-acceptance]*/t.json", dir)).toBe(true);
+    expect(bashReferencesVerdictDir("echo x > /p/solution-acceptance/../solution-ver*/t.json", dir)).toBe(true);
+  });
+  it("scans unscrubbed when the custom dir's own leaf contains the pack name", () => {
+    const custom = "/data/solution-acceptance-verdicts-x";
+    expect(bashReferencesVerdictDir("echo x > /data/solution-acceptance-verd*/t.json", custom)).toBe(true);
+    expect(bashReferencesVerdictDir("cat >> docs/policy-packs/solution-acceptance.md <<'EOF'\n[x]\nEOF", custom)).toBe(true);
+  });
   it("matches a brace split of the leaf and a glob that keeps only one leaf word, with no other clue in the text", () => {
     expect(bashReferencesVerdictDir("echo x > /p/solution-verdict{s,}/t.json", dir)).toBe(true);
     expect(bashReferencesVerdictDir("echo x > /p/solu*verdicts/t.json", dir)).toBe(true);

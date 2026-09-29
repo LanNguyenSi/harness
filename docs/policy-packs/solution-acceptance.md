@@ -78,6 +78,27 @@ prefix is caught (`~/.local/state/...`, `$HOME/...`,
 `$XDG_STATE_HOME/...`, the literal absolute path). The only legitimate
 writer is the producer.
 
+Naming a pack source file is not a reference. The glob/brace fallback
+(a `*?[{` character in the command plus a distinctive word of the dir
+leaf, `solution` or `verdicts`) scrubs the pack name
+(`solution-acceptance`) out of every plain word, meaning one with no
+`*?[]{}` character, before it looks for those words. So a heredoc, a
+`sed -i`, a `git add` or a Codex `apply_patch` that edits
+`docs/policy-packs/solution-acceptance.md`, the pack's hook or runtime
+module or its tests is allowed, while any command that can write into
+the dir is still refused, including one that names both. Not narrowed:
+the literal dir, the `$SOLUTION_VERDICT_DIR` token, the stable tail and
+the literal leaf are matched on the whole command, and a word that
+carries a glob or brace character (`solution-acceptance/../solution-ver*`,
+`[solution-acceptance]*`) keeps the pack name in the scan. What stays
+refused because the text cannot be decided without evaluating the
+shell: a command with a glob or brace character that also contains
+`solution` or `verdicts` outside a plain pack-name word (prose in a
+heredoc body, a glob over the pack sources such as
+`solution-acceptance*`). The named residuals are unchanged: a
+backslash-escaped leaf, a case-variant leaf on a case-insensitive
+filesystem, and a path built at runtime inside an interpreter.
+
 Anti-forgery scope is v1-honest: it closes the enumerated-write-path
 residual, not arbitrary same-uid forgery.
 
