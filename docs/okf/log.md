@@ -2,6 +2,15 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-09-29T11:05:10Z (task 6b56d735): `codex-adapter-parity-gaps.md` re-verified after
+  `install-codex-config.ts` changed again (the top-level check behind header
+  recognition now falls back to parsing the full text before a candidate line
+  when the text since the last confirmed header does not parse on its own, and
+  throws on a query before the last confirmed line start); the doc's install
+  claim (only the marked harness-managed block is replaced, operator config is
+  never owned) still holds against the changed code; no claim changed,
+  re-stamped.
+
 - 2026-09-29T10:44:27Z (task 6b56d735): `codex-adapter-parity-gaps.md` re-verified after
   `install-codex-config.ts` changed again (header recognition now requires a
   candidate line to start at the top level of the document, checked by parsing
