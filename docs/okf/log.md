@@ -2,7 +2,7 @@
 
 <!-- Add new entries at the top, newest first. -->
 
-- 2026-09-29T10:28:39Z (task 8e9d7333): the solution-acceptance null-verdict reason (`evaluateGate`) now claims only
+- 2026-09-29T10:30:54Z (task 8e9d7333): the solution-acceptance null-verdict reason (`evaluateGate`) now claims only
   what the gate received (`no usable solution-acceptance verdict for "<id>"`) instead of
   "recorded" and "run ... solution_evaluate first", and no longer says anything about a
   read (the unusable-id state reads nothing, the invalid-record state reads a marker).
