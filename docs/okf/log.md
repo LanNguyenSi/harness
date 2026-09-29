@@ -2,17 +2,19 @@
 
 <!-- Add new entries at the top, newest first. -->
 
-- 2026-09-29T06:53:08Z (task 8fe0f633): the solution-acceptance deny text's never-evaluated line
+- 2026-09-29T07:09:23Z (task 8fe0f633): the solution-acceptance deny text's never-evaluated line
   no longer names a cause the gate did not observe, the state table gained the
-  liveness rows it lacked and binds each row to the renderer, the classifier
-  lost its unreachable `ok` arm, and a dependency-cruiser rule plus a call-count
-  test guard the single marker read. The `task 799de976` entry moved to its
-  chronological place with its commit reference corrected to the merge commit.
-  Re-verified `evidence-ledger-trust-boundary.md` (its solution-acceptance
+  liveness rows it lacked and binds each row's declared (state, liveness)
+  coordinate to the renderer (which throws on an unreachable pair), the
+  classifier lost its unreachable `ok` arm, and a dependency-cruiser rule plus a
+  call-count test guard the single marker read. The `task 799de976` entry moved
+  to its chronological place with its commit reference corrected to the merge
+  commit. Re-verified `evidence-ledger-trust-boundary.md` (its solution-acceptance
   sentence now names `readVerdictDetailed` as the hook's reader, since
   `readVerdict` has no production caller) and `gate-fail-posture-matrix.md`
   (the header-contract lines 19-22 of the hook and the deny-set lines 56-60
-  of the pack doc are unchanged and still hold); both re-stamped.
+  of the pack doc are unchanged and still hold); both re-stamped after the
+  last source, test and doc commit of the change.
 
 - 2026-09-29T06:17:00Z (task e8c9edaf): `evidence-ledger-trust-boundary.md` re-verified after merging
   master into the write-guard branch: it combines the runtime-module claims
