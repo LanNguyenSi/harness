@@ -173,6 +173,14 @@ export type RejectedMarkerKind = Exclude<
 >;
 
 /**
+ * Every outcome of the one marker read that yielded NO verdict: the only
+ * outcomes the classifier can be asked about. `ok` is excluded by type, so
+ * the classifier has no arm for it and cannot render a line that calls a
+ * valid record invalid, whatever `evaluateGate` learns to deny later.
+ */
+type RejectedVerdictReadOutcome = Exclude<VerdictReadOutcome, { kind: "ok" }>;
+
+/**
  * Every state the null-verdict note renders a line for, as data. The note
  * is a total function over this list (`noteStateOf` below maps each
  * `NullVerdictInfo` onto exactly one member, and the compiler rejects a
@@ -279,7 +287,7 @@ function readAttemptLockLiveness(dir: string, id: string): AttemptLockLiveness {
 function classifyNullVerdictReading(
   dir: string,
   id: string,
-  read: VerdictReadOutcome,
+  read: RejectedVerdictReadOutcome,
 ): NullVerdictInfo {
   // The marker is NOT looked at again here. `read` is the same observation
   // `evaluateGate` decided on, passed in: a second look can disagree with
@@ -291,9 +299,10 @@ function classifyNullVerdictReading(
   const liveness = readAttemptLockLiveness(dir, id);
   if (liveness === "live") return { kind: "reading", reading: "live-attempt", liveness };
   if (read.kind === "missing") return { kind: "reading", reading: "never-evaluated", liveness };
-  // `ok` cannot reach here: the classifier runs only when the gate's own
-  // verdict is null, which for a readable, valid record it never is.
-  const markerKind: RejectedMarkerKind = read.kind === "ok" ? "invalid-record" : read.kind;
+  // `read.kind` is narrowed to the rejected kinds by the parameter type: a
+  // read that produced a verdict never reaches the classifier, so there is
+  // no arm here that could name a valid record as invalid.
+  const markerKind: RejectedMarkerKind = read.kind;
   return { kind: "reading", reading: "unreadable-marker", liveness, markerKind };
 }
 
@@ -339,7 +348,7 @@ const NOT_LIVE_CLAUSE = "no attempt reads as currently live";
  * list has a row, so a future state whose line would overstate fails there
  * rather than reaching an agent.
  */
-const NULL_VERDICT_NOTE_RENDERERS: Record<
+export const NULL_VERDICT_NOTE_RENDERERS: Record<
   NullVerdictNoteState,
   (taskId: string, clause: string) => string
 > = {
@@ -351,15 +360,19 @@ const NULL_VERDICT_NOTE_RENDERERS: Record<
   // `sanitizeVerdictId` and answers null for anything it rejects.
   "unusable-id": (taskId) =>
     `The claimed id ${JSON.stringify(taskId)} is not a usable verdict id: no verdict marker path and no attempt-lock path can be derived from it, so neither was read. Release the active claim carrying it (mcp__agent-tasks__task_abandon, or have the operator clear harness.generated/active-claim), claim the real task, then run solution_evaluate for it.`,
-  // Only the marker's absence is established, plus whatever the lock check
-  // said. Neither clause names a cause: earlier versions guessed one ("the
-  // verdict directory could not be read"), then a narrower disjunction of
-  // two, and each guess was falsified by a state that reached this branch
-  // without it (review findings, harness/799de976, rounds 4 and 5).
+  // Only "the marker read found nothing" is established (the shared reader
+  // folds every lstat failure into `missing`), plus whatever the lock check
+  // said at a later moment. Neither clause names a cause: earlier versions
+  // guessed one ("the verdict directory could not be read"), then a
+  // narrower disjunction of two, then "solution_evaluate has not been
+  // called for this id", and each guess was falsified by a state that
+  // reached this branch without it: a marker recorded and then deleted, an
+  // attempt finishing between the marker read and the lock read, or an
+  // lstat failure of some other kind.
   "never-evaluated": (taskId, clause) =>
     clause === UNDETERMINED_LIVENESS_CLAUSE
       ? `No readable verdict marker for "${taskId}" and liveness could not be determined: run solution_evaluate for this id.`
-      : `No verdict marker exists for "${taskId}"; ${clause}: solution_evaluate has not (yet) been called for this id, or a prior call never got far enough to record one.`,
+      : `No verdict marker was found for "${taskId}"; ${clause}: run solution_evaluate for this id.`,
   // One line per rejection kind, each naming exactly what the gate's own
   // read established. A hand-written disjunction over the kinds was the
   // round-6 finding: it read as a claim about the path as it is NOW, while
@@ -376,12 +389,25 @@ const NULL_VERDICT_NOTE_RENDERERS: Record<
     `A solution_evaluate attempt for "${taskId}" is still live: its attempt-lock anchor is held.`,
 };
 
+/**
+ * The exact line a note state renders for `taskId` at the lock-check result
+ * `liveness`. The one place a state and a liveness become a line: the hook
+ * renders through it, and the state table in
+ * `tests/cli/pack-hook-solution-acceptance.test.ts` derives its "no other
+ * line appears" set and checks each case's declared state against it.
+ */
+export function renderNullVerdictNote(
+  state: NullVerdictNoteState,
+  taskId: string,
+  liveness: AttemptLockLiveness,
+): string {
+  const clause = liveness === "unknown" ? UNDETERMINED_LIVENESS_CLAUSE : NOT_LIVE_CLAUSE;
+  return NULL_VERDICT_NOTE_RENDERERS[state](taskId, clause);
+}
+
 function nullVerdictReadingNote(taskId: string, info: NullVerdictInfo): string {
-  const clause =
-    info.kind === "reading" && info.liveness === "unknown"
-      ? UNDETERMINED_LIVENESS_CLAUSE
-      : NOT_LIVE_CLAUSE;
-  return NULL_VERDICT_NOTE_RENDERERS[noteStateOf(info)](taskId, clause);
+  const liveness = info.kind === "reading" ? info.liveness : "not-live";
+  return renderNullVerdictNote(noteStateOf(info), taskId, liveness);
 }
 
 /**
@@ -641,7 +667,13 @@ export async function runPackHookSolutionAcceptanceCli(
   const forgedTag = gate.forged ? " [audit: forged/unsigned verdict marker rejected]" : "";
   const diagnostic = `BLOCK — ${gate.reason}${forgedTag}`;
   note(diagnostic);
-  const nullVerdict = gate.verdict === null ? classifyNullVerdictReading(dir, taskId, read) : null;
+  // Classify only a denial whose read produced no verdict. A deny with a
+  // verdict on record (`read.kind === "ok"`) gets no null-verdict note at all
+  // rather than a line describing a rejection the gate never made.
+  const nullVerdict =
+    gate.verdict === null && read.kind !== "ok"
+      ? classifyNullVerdictReading(dir, taskId, read)
+      : null;
   stdout.write(
     `${blockJson(actionLabel, toolName, taskId, gate.reason, configUx, sessionId, nullVerdict)}\n`,
   );

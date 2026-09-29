@@ -65,6 +65,23 @@ module.exports = {
       to: { path: "^src/cli" },
     },
     {
+      name: "solution-acceptance-hook-reads-marker-once",
+      comment:
+        "src/cli/pack/hook-solution-acceptance.ts observes the verdict marker " +
+        "exactly once, through readVerdictDetailed, and classifies its deny " +
+        "text from that one outcome: a second look can disagree with the " +
+        "first (an attempt finishing in between), and a note rendered from " +
+        "the later one describes a rejection the gate never made (task " +
+        "8fe0f633). Importing the shared marker reader directly is the way " +
+        "to take that second look without going through readVerdictDetailed, " +
+        "so it is forbidden here. This rule cannot forbid a named import: a " +
+        "second readVerdictDetailed call is guarded by the call-count test " +
+        "in tests/cli/pack-hook-solution-acceptance.test.ts instead.",
+      severity: "error",
+      from: { path: "^src/cli/pack/hook-solution-acceptance\\.ts$" },
+      to: { path: "^src/io/read-regular-file\\.ts$" },
+    },
+    {
       name: "io-no-upward-imports",
       comment:
         "io/ must not import from policies/runtime/policy-packs/cli. Two " +
