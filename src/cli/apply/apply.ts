@@ -691,7 +691,7 @@ function buildExpectedFiles(
     // settings.json, same reasoning as the codex branch above --
     // settings.json is Claude Code's contract and meaningless to
     // opencode. MEMORY.md ships unchanged. Pack instructions.md files
-    // are NOT runtime-agnostic (HIGH-F1, batch18 fix-round, task
+    // are NOT runtime-agnostic (batch18 fix-round, task
     // f34eb233): each builtin pack's buildInstructions() branches on
     // `runtime` and, under opencode, documents that its hooks are
     // UNSUPPORTED/not-wired (opencode has no declarative hook/event
@@ -780,7 +780,7 @@ function buildPrevManifestForHints(record: LastApplyRecord | null): Manifest | n
     // `emitRestartHints` are the same view. A snapshot written by a
     // release that predates the derivation therefore compares equal to
     // today's manifest instead of emitting a one-time phantom "hooks
-    // changed" hint (review round 3, 99f47307 Slice 1).
+    // changed" hint (task 99f47307, Slice 1).
     return withDerivedPolicies(parseManifest(parsed));
   } catch {
     return null;
