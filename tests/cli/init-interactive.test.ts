@@ -613,7 +613,7 @@ describe("interactive wizard — MCP registration + settings.json migration (tas
     expect(cap.stderr()).toContain("claude` CLI is not on PATH");
     expect(cap.stderr()).toContain("claude mcp add-json --scope user agent-tasks");
     expect(cap.stderr()).toContain("claude mcp add-json --scope user grounding-mcp");
-    // Migration did not run: the dead block is untouched (D-002).
+    // Migration did not run: the dead block is untouched (migration gate).
     expect(outcome?.mcpMigrationRemovedNames).toBeUndefined();
     const settings = JSON.parse(
       fs.readFileSync(path.join(tmpHome, ".claude", "settings.json"), "utf8"),
@@ -650,7 +650,7 @@ describe("interactive wizard — already-exists gate (batch19/T-005, Finding 3 �
   // `alreadyExistsName`, `add-json` reports the documented "already
   // exists" outcome instead of "added" — simulating a registration
   // `ensureMcpServers`'s own earlier registry-file read didn't see (the
-  // exact condition Finding 3 fixes) — while every OTHER desired name
+  // exact condition the gate fixes), while every OTHER desired name
   // (here: the sibling manifest MCP server) goes through the ordinary
   // add-json path. `matchingSpec: true` persists a spec-IDENTICAL entry to
   // the registry file as a side effect of the "already exists" branch
@@ -737,8 +737,8 @@ describe("interactive wizard — already-exists gate (batch19/T-005, Finding 3 �
   /**
    * The verb sequence (in call order) `calls` recorded for a single
    * server `name` — `add-json` matches on `args[4]`, `get` on `args[2]`
-   * (their respective name-argument positions). Used to pin Finding 5
-   * (batch19/T-005-R2, review round 2, task fb3e4dce): `mcp get` must
+   * (their respective name-argument positions). Used to pin the verb-order
+   * check (task fb3e4dce): `mcp get` must
    * follow `mcp add-json` ONLY for the already-exists name, never for an
    * ordinary sibling that just gets added.
    */
@@ -778,7 +778,7 @@ describe("interactive wizard — already-exists gate (batch19/T-005, Finding 3 �
     expect(agentTasksResult?.add?.status).toBe("already-exists");
     expect(agentTasksResult?.verifiedAlreadyExists).toEqual({ getStatus: "found", matches: true });
 
-    // Migration still ran (D-002 gate held despite the "already exists"
+    // Migration still ran (migration gate held despite the "already exists"
     // add-json outcome) — the dead settings.json entry is stripped.
     expect(outcome?.mcpMigrationRemovedNames).toEqual(["agent-tasks"]);
     const settings = JSON.parse(
@@ -788,7 +788,7 @@ describe("interactive wizard — already-exists gate (batch19/T-005, Finding 3 �
     expect(cap.stderr()).not.toContain("Registering one or more MCP servers");
     expect(cap.stderr()).not.toContain("claude` CLI is not on PATH");
 
-    // Finding 5 (R2): `mcp get` follows `mcp add-json` ONLY for the
+    // Verb order: `mcp get` follows `mcp add-json` ONLY for the
     // already-exists name (agent-tasks); every sibling desired name (the
     // "team" profile's other manifest MCP server(s)) only ever sees a
     // plain `add-json` — nothing in `fakeClaudeCliWithAlreadyExists`'s
@@ -802,7 +802,7 @@ describe("interactive wizard — already-exists gate (batch19/T-005, Finding 3 �
       expect(verbSequenceForName(calls, name)).toEqual(["add-json"]);
     }
 
-    // Finding 6 (R2): the success message is split by what actually
+    // Success message: the success message is split by what actually
     // happened this run — "registered" for freshly add-json'd names,
     // "confirmed ... already registered" for the verified-already-exists
     // one. Before this fix both buckets were reported as "registered",
@@ -854,7 +854,7 @@ describe("interactive wizard — already-exists gate (batch19/T-005, Finding 3 �
     expect(agentTasksResult?.add?.status).toBe("already-exists");
     expect(agentTasksResult?.verifiedAlreadyExists).toEqual({ getStatus: "found", matches: false });
 
-    // Migration did NOT run (D-002: prior conservative behavior held) —
+    // Migration did NOT run (migration gate: prior conservative behavior held),
     // the dead settings.json entry survives untouched.
     expect(outcome?.mcpMigrationRemovedNames).toBeUndefined();
     const settings = JSON.parse(
@@ -864,7 +864,7 @@ describe("interactive wizard — already-exists gate (batch19/T-005, Finding 3 �
     expect(cap.stderr()).toContain("Registering one or more MCP servers with the `claude` CLI failed:");
     expect(cap.stderr()).toContain("agent-tasks: MCP server agent-tasks already exists in user config");
 
-    // Finding 5 (R2): same verb-order pin as the matching-spec test above
+    // Verb order: same verb-order pin as the matching-spec test above
     // — `get` follows `add-json` ONLY for the already-exists name, even
     // on the mismatched-spec/failure path.
     expect(verbSequenceForName(calls, "agent-tasks")).toEqual(["add-json", "get"]);
@@ -1347,7 +1347,7 @@ describe("interactive wizard — Team path", () => {
     expect(result.binResolutionClean).toBe(false);
     expect(cap.stderr()).toContain("not found on PATH");
     expect(cap.stderr()).toContain("grounding-mcp");
-    // Review finding F6 (task T-007): the title promises a "PATH-shadow-free
+    // The title promises a "PATH-shadow-free
     // hint" but this file previously never asserted the PATH-shadow hint's
     // absence. It stays absent here because the stubbed npm prefix
     // (STUB_NPM_BIN_EXEC_WARN, top of file) resolves to a directory guaranteed

@@ -16,6 +16,12 @@
   pack doc's deny-set lines are unchanged; the addition sits below the
   write-guard heading); neither doc's claims changed, both are re-stamped.
 
+- 2026-09-29T05:30:51Z (task 75399bb2): review-slop residue in `docs/CLI.md`, `src/cli/apply/apply.ts` and
+  `tests/cli/init-interactive.test.ts` reworded to behaviour and task ids
+  (comments and prose only, same line counts). `evidence-ledger-trust-boundary.md`,
+  `debug-verb-selection.md`, `codex-adapter-parity-gaps.md` and
+  `policy-engine-producer-wiring.md` list those files as sources; their claims
+  were re-checked against the reworded text and are re-stamped.
 - 2026-09-25T13:48:08Z (release 0.59.0): the `[Unreleased]` notes moved under
   `## [0.59.0] - 2026-09-25`. The squash merges of #559 and #560 re-dated
   their source changes after the branch-side re-stamp, so
