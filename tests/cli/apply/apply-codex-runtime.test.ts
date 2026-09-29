@@ -4143,4 +4143,16 @@ describe("apply --runtime codex --install: an operator-authored [[hooks.*]] tabl
     ]);
     expect(stopCommands(result.nextContent)).toContain(operatorCommand);
   });
+
+  it("a sub-table after a kept entry's inline hooks array does not hide the inline commands: the refusal names the entry's own header", () => {
+    const config = driftedEnd(
+      "[[hooks.Stop]]",
+      `hooks = [{ type = "command", command = "${RETIRED_ELSEWHERE}", timeout = 5 }]`,
+      "[[hooks.Stop.extra]]",
+      "x = 1",
+    );
+    const err = refusalOf(config, FRESH_BLOCK);
+    expect(err.message).toContain(`[[hooks.Stop]] (line ${lineOf(config, "[[hooks.Stop]]")})`);
+    expect(err.message).not.toContain("[[hooks.Stop.extra]]");
+  });
 });
