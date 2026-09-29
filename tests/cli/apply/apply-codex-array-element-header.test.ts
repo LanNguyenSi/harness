@@ -9,7 +9,10 @@ import {
   CodexInstallRefusalError,
   planCodexConfigInstall,
 } from "../../../src/cli/apply/index.js";
-import { assertNoSplitBlock } from "../../../src/cli/apply/install-codex-config.js";
+import {
+  assertNoSplitBlock,
+  createTopLevelProbe,
+} from "../../../src/cli/apply/install-codex-config.js";
 import { EX_OK } from "../../../src/cli/exit-codes.js";
 import { run } from "../../../src/cli/index.js";
 
@@ -135,14 +138,21 @@ async function cli(opts: { json?: boolean; dryRun?: boolean }): Promise<CliRun> 
 
 /** Every output channel of the install for the config on disk: --dry-run
  * (stdout and stderr), --dry-run --json, and the real install's summary and
- * its --json form. Each entry is one stream's text; all must exit 0. The
- * real installs run last, since they rewrite the config. */
+ * its --json form. Each entry is one stream's text; all must exit 0. A real
+ * install rewrites the config, so the original config is written back
+ * before each real install: both see the fixture, not the first install's
+ * result. */
 async function everyOutput(): Promise<string[]> {
+  const original = fs.readFileSync(codexConfig, "utf8");
+  const realInstall = async (json: boolean): Promise<CliRun> => {
+    fs.writeFileSync(codexConfig, original);
+    return cli({ json });
+  };
   const runs = [
     await cli({ dryRun: true }),
     await cli({ dryRun: true, json: true }),
-    await cli({}),
-    await cli({ json: true }),
+    await realInstall(false),
+    await realInstall(true),
   ];
   for (const r of runs) expect(r.code).toBe(EX_OK);
   return runs.flatMap((r) => [r.out, r.err]);
@@ -407,5 +417,80 @@ describe("codex install split-block refusal never names an array element as the 
   it("a content line that is no header at all stays unnamed", () => {
     const text = ["x = 1", "# harness hook: a (budget_ms=1)", ""].join("\n");
     expect(refusalFor(text, 0)).toContain("foreign table ((unknown))");
+  });
+});
+
+describe("codex install header check falls back to the full prefix when the text since the last header does not parse alone (task 6b56d735)", () => {
+  // An operator hook array with a sub-table on its first element: the next
+  // `[[hooks.Stop]]` element is never a header candidate, so the text since
+  // the sub-table's header does not parse on its own (it redefines
+  // `hooks.Stop` as seen from there), while the document up to each later
+  // header does. Every later foreign table is still listed.
+  const operatorHooks = [
+    "[[hooks.Stop]]",
+    'matcher = "a"',
+    'hooks = [{ type = "command", command = "operator-a", timeout = 5 }]',
+    "[hooks.Stop.meta]",
+    "k = 1",
+    "[[hooks.Stop]]",
+    'matcher = "b"',
+    'hooks = [{ type = "command", command = "operator-b", timeout = 5 }]',
+  ];
+  const layouts: Array<[string, string[], string[]]> = [
+    [
+      "no END marker",
+      [...OLD_BLOCK, "[tui]", "t = 1", ...operatorHooks, '[projects."/x"]', 'trust_level = "trusted"', ""],
+      ["[tui]", "[hooks.Stop.meta]", '[projects."/x"]'],
+    ],
+    [
+      "END marker past the foreign tables",
+      [...OLD_BLOCK, "[tui]", "t = 1", ...operatorHooks, '[projects."/x"]', 'trust_level = "trusted"', CODEX_MANAGED_END, ""],
+      ["[tui]", "[hooks.Stop.meta]", '[projects."/x"]'],
+    ],
+  ];
+  for (const [label, lines, expected] of layouts) {
+    it(`${label}: the foreign table after the next array-of-tables element is listed in the plan, --dry-run, --dry-run --json and the summary`, async () => {
+      write(lines);
+      expect(plan().foreignSectionsPreserved).toEqual(expected);
+
+      const dry = await cli({ dryRun: true });
+      expect(dry.code).toBe(EX_OK);
+      expect(foreignSectionLines(dry.out)).toEqual(expected);
+
+      const json = await cli({ dryRun: true, json: true });
+      expect(json.code).toBe(EX_OK);
+      expect(jsonForeignSections(json.out)).toEqual(expected);
+
+      const applied = await cli({});
+      expect(applied.code).toBe(EX_OK);
+      expect(foreignSectionLines(applied.out)).toEqual(expected);
+    });
+  }
+
+  it("a query before the last confirmed line start throws instead of answering", () => {
+    const text = ["[a]", "x = 1", "[b]", "y = 2", ""].join("\n");
+    const probe = createTopLevelProbe(text);
+    const second = text.indexOf("[b]");
+    expect(probe(second)).toBe(true);
+    expect(probe(second)).toBe(true);
+    expect(() => probe(0)).toThrow(/before the last confirmed line start/);
+  });
+
+  it("a config with thousands of tables and no END marker is planned without parsing the whole prefix for each table", () => {
+    // Each real table is confirmed from the text since the previous one;
+    // parsing the full prefix for every table instead is quadratic and takes
+    // seconds at this size. Head time is tens of milliseconds, so the bound
+    // is generous.
+    const tables: string[] = [];
+    for (let i = 0; i < 4000; i++) {
+      if (i % 2) tables.push(`[projects."/Users/someone/git/some-repository-${i}"]`, 'trust_level = "trusted"');
+      else tables.push(`[hooks.state."/Users/someone/.codex/hooks/hook-${i}.toml:pre_tool_use:0:0"]`, `trusted_hash = "sha256:${"ab".repeat(32)}"`);
+    }
+    write([...OLD_BLOCK, ...tables, ""]);
+    const started = performance.now();
+    const p = plan();
+    const elapsed = performance.now() - started;
+    expect(p.foreignSectionsPreserved).toEqual(["[hooks.state.*] (2000 tables)", "[projects.*] (2000 tables)"]);
+    expect(elapsed).toBeLessThan(2000);
   });
 });
