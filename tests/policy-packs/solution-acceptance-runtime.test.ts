@@ -665,6 +665,10 @@ describe("bashReferencesVerdictDir — write-guard reference detection", () => {
     expect(bashReferencesVerdictDir(`read v; sed -i 's/a.*b/c/' ${doc}`, dir)).toBe(true);
     expect(bashReferencesVerdictDir(`source ./x; sed -i 's/a.*b/c/' ${doc}`, dir)).toBe(true);
     expect(bashReferencesVerdictDir(`. ./x; sed -i 's/a.*b/c/' ${doc}`, dir)).toBe(true);
+    // the same edit with none of them is still not a reference
+    expect(bashReferencesVerdictDir(`sed -i 's/a.*b/c/' ${doc}`, dir)).toBe(false);
+    // a longer word that contains one of the words is not runtime construction
+    expect(bashReferencesVerdictDir(`sed -i 's/a.*b/c/' docs/reader/setup-eval.md ${doc}`, dir)).toBe(false);
   });
   it("matches a brace split of the leaf and a glob that keeps only one leaf word, with no other clue in the text", () => {
     expect(bashReferencesVerdictDir("echo x > /p/solution-verdict{s,}/t.json", dir)).toBe(true);

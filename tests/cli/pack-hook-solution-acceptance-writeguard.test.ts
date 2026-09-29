@@ -438,6 +438,19 @@ describe("write-guard: a command that only NAMES a pack source file is not a ver
     expect(bash(`cat >> ${DOC} <<'EOF'\nsolution-verdicts\nEOF`, ROOT).blocked).toBe(true);
   });
 
+  it("still allows a doc edit that carries none of the runtime-construction syntax, next to the refuse cases below", () => {
+    expect(bash(`sed -i 's/a.*b/[c]/' ${DOC}`, ROOT).blocked).toBe(false);
+  });
+
+  it("does not treat a longer word that merely contains one of the runtime-construction words as one", () => {
+    expect(bash(`sed -i 's/a.*b/[c]/' docs/reader/setup-eval.md ${DOC}`, ROOT).blocked).toBe(false);
+    expect(bash(`git add ${DOC} src/dataset.ts src/readme.sh.ts && git commit -m "x [y]"`, ROOT).blocked).toBe(false);
+  });
+
+  it("fails closed again for a doc edit whose body carries a dollar sign (recorded, not an endorsement)", () => {
+    expect(bash(`cat >> ${DOC} <<'EOF'\n- [x] uses $HOME\nEOF`, ROOT).blocked).toBe(true);
+  });
+
   it("keeps the backslash residual open, unchanged (the named pre-existing residual)", () => {
     expect(bash("cd /home/u/.local/state/agent-grounding/solution\\-verdicts").blocked).toBe(false);
   });
