@@ -2,6 +2,8 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-09-29T11:16:08Z, `codex-adapter-parity-gaps.md` re-verified after the header check's source comment on its cost was reworded (no behaviour change, no line moved); re-stamped.
+
 - 2026-09-29T11:05:10Z (task 6b56d735): `codex-adapter-parity-gaps.md` re-verified after
   `install-codex-config.ts` changed again (the top-level check behind header
   recognition now falls back to parsing the full text before a candidate line
