@@ -360,6 +360,13 @@ function scanOwnedContentEnd(
     commentRunStart = null;
     pos = lineEnd;
   }
+  // No END marker and no foreign table: a run of blank/comment lines that
+  // reaches EOF and holds at least one comment is an operator's trailing
+  // comment, not harness content, so back off to the start of that run
+  // (task b34ed105). A run of only blank lines is still consumed.
+  if (commentRunStart !== null && /(^|\n)[ \t]*#/.test(text.slice(commentRunStart, pos))) {
+    return { end: commentRunStart, sawEndMarker: false };
+  }
   return { end: pos, sawEndMarker: false };
 }
 
@@ -569,6 +576,15 @@ interface ManagedRange {
   foreignSectionsPreserved: string[];
 }
 
+const UTF8_BOM = "\uFEFF";
+
+/** A leading UTF-8 BOM is not part of any managed range: a range that would
+ * start at offset 0 starts just past the BOM instead, so the splice keeps
+ * the BOM exactly once (task b34ed105). */
+function startPastBom(text: string, start: number): number {
+  return start === 0 && text.startsWith(UTF8_BOM) ? UTF8_BOM.length : start;
+}
+
 function findManagedRange(text: string, configPath: string): ManagedRange | null {
   const begin = text.indexOf(CODEX_MANAGED_BEGIN);
   if (begin !== -1) {
@@ -594,9 +610,13 @@ function findManagedRange(text: string, configPath: string): ManagedRange | null
     }
     let start = lineStartAt(text, begin);
     const prev = previousLine(text, start);
-    if (prev && prev.text.startsWith(CODEX_MANAGED_SOURCE_PREFIX)) {
-      start = prev.start;
+    if (prev) {
+      // A BOM sitting before the source-prefix comment on line 1 must not
+      // hide the prefix from this check (task b34ed105).
+      const prevText = prev.start === 0 ? prev.text.replace(/^\uFEFF/, "") : prev.text;
+      if (prevText.startsWith(CODEX_MANAGED_SOURCE_PREFIX)) start = prev.start;
     }
+    start = startPastBom(text, start);
 
     const contentStart = lineEndAfter(text, begin);
     const scan = scanOwnedContentEnd(text, contentStart);
@@ -627,7 +647,7 @@ function findManagedRange(text: string, configPath: string): ManagedRange | null
 
   const source = text.indexOf(CODEX_MANAGED_SOURCE_PREFIX);
   if (source !== -1) {
-    const start = lineStartAt(text, source);
+    const start = startPastBom(text, lineStartAt(text, source));
     const scan = scanOwnedContentEnd(text, start);
     const end = scan.end;
     const foreignSectionsPreserved = scan.sawEndMarker
@@ -638,7 +658,7 @@ function findManagedRange(text: string, configPath: string): ManagedRange | null
 
   const generated = text.indexOf(GENERATED_HEADER);
   if (generated !== -1) {
-    const start = lineStartAt(text, generated);
+    const start = startPastBom(text, lineStartAt(text, generated));
     const scan = scanOwnedContentEnd(text, start);
     const end = scan.end;
     const candidate = text.slice(start, end);
