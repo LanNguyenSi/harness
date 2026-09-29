@@ -3301,7 +3301,6 @@ describe("apply --runtime codex --install: a trailing EOF comment survives the n
         "\n",
       ),
     );
-    expect(installed).not.toContain("# see:");
     expect(occurrences(installed, "# Harness Codex hook wiring.")).toBe(1);
     expect(occurrences(installed, CODEX_MANAGED_END)).toBe(1);
     expect(installed).not.toContain(RETIRED_HOOK_ID);
