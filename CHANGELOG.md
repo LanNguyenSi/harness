@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **The Codex install no longer takes an array element on its own line for a table header** (task `6b56d735`). A multi-line array whose element sits on its own line (`["x"]`, `['x']`, `[1]`, `[1979-05-27]`) has the shape of a table header, and the install's header recognition accepted it. `harness apply --runtime codex --install --dry-run` printed such an element as `preserving foreign section: ...` (a token inside an `args` array leaked into the plan, the install summary and `--json`), an element inside a hook table ended the harness-owned region early so the install refused a config that parses, and the split-block refusal named the element as the foreign table on stderr and in `--json`. A header candidate now counts only when the document text before it parses on its own, so a line inside an open array, inline table or multi-line string is never a header, even when a real table of the same name exists elsewhere. The refusal names a header-shaped line that is not a header by its line number, never by its text. No other splice behaviour changes.
+
 ## [0.59.1] - 2026-09-29
 
 ### Fixed

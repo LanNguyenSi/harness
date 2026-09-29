@@ -50,7 +50,10 @@ const TOML_KEY = String.raw`(?:[A-Za-z0-9_-]+|"(?:[^"\\]|\\.)*"|'[^']*')`;
 // single key with nothing after it, never as an array element) so a
 // multi-line array/value sitting inside a still-owned harness hook table
 // is never misread as a foreign table header ending the owned region
-// early (task 6a037359).
+// early (task 6a037359). A lone element on its own line (`["x"]`, `['x']`,
+// `[1]`, `[1979-05-27]`) does have the shape of a header, so this regex is
+// only a candidate filter: every caller also requires `startsAtTopLevel`
+// before treating a match as a real header (task 6b56d735).
 const NON_HOOK_TABLE_RE = new RegExp(
   String.raw`^\[(?!\[hooks\.)\[?\s*${TOML_KEY}(?:\s*\.\s*${TOML_KEY})*\s*\]\]?\s*(?:#.*)?$`,
 );
@@ -281,16 +284,41 @@ function findExactLine(text: string, target: string, from: number): number {
   return -1;
 }
 
+/** True when a line starting at `lineStart` sits at the top level of the
+ * document, that is, not inside a multi-line array, a multi-line inline
+ * table or a multi-line string opened by an earlier line. The document
+ * parser is the oracle: the text before the line parses on its own exactly
+ * when nothing is still open there, whereas a prefix that ends inside an
+ * array is an unterminated array and fails. A line that merely LOOKS like a
+ * table header (an array element on its own line such as `["x"]`, `['x']`,
+ * `[1]` or `[1979-05-27]`) is therefore told apart from a real header even
+ * when a real table of the same name exists elsewhere in the document, which
+ * a lookup of the header's key path in the parsed document could not do.
+ * A document that does not parse up to the line reads as not top level, so
+ * such a line is never taken for a header (task 6b56d735). */
+function startsAtTopLevel(text: string, lineStart: number): boolean {
+  try {
+    parseToml(text.slice(0, lineStart));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /** The first non-blank, non-comment line at or after `from` (bounded by
- * `limit`), trimmed. Used to name the offending foreign header in a
- * refusal message. */
-function firstContentLine(text: string, from: number, limit: number): string | null {
+ * `limit`), trimmed, with the offset its line starts at. Used to name the
+ * offending foreign header in a refusal message. */
+function firstContentLine(
+  text: string,
+  from: number,
+  limit: number,
+): { line: string; start: number } | null {
   let pos = Math.max(from, 0);
   const end = Math.max(limit, from);
   while (pos < end) {
     const lineEnd = Math.min(lineEndAfter(text, pos), end);
     const trimmed = text.slice(pos, lineEnd).trim();
-    if (trimmed !== "" && !trimmed.startsWith("#")) return trimmed;
+    if (trimmed !== "" && !trimmed.startsWith("#")) return { line: trimmed, start: pos };
     pos = lineEnd;
   }
   return null;
@@ -314,7 +342,10 @@ function firstContentLine(text: string, from: number, limit: number): string | n
  * into the replaced block.
  *
  * A line is "foreign" exactly when it is a table header that is not one
- * of ours (`NON_HOOK_TABLE_RE`, mirroring the pre-existing legacy scan);
+ * of ours (`NON_HOOK_TABLE_RE`, mirroring the pre-existing legacy scan) and
+ * sits at the top level of the document (`startsAtTopLevel`: an array
+ * element on its own line inside a multi-line value has the same shape but
+ * is not a header);
  * every other non-blank, non-comment line (a hook table's `matcher =` /
  * `hooks =` field, or an older schema's bare `command =` / `match =` /
  * `timeout_ms =` / `blocking =` field) is treated as still-owned content,
@@ -356,7 +387,7 @@ function scanOwnedContentEnd(
       pos = lineEnd;
       continue;
     }
-    if (NON_HOOK_TABLE_RE.test(trimmed)) {
+    if (NON_HOOK_TABLE_RE.test(trimmed) && startsAtTopLevel(text, pos)) {
       return { end: commentRunStart ?? pos, sawEndMarker: false };
     }
     commentRunStart = null;
@@ -412,9 +443,12 @@ function scanOwnedContentEnd(
  * document (`to` is `text.length`), telling the operator to move something
  * below a marker that does not exist would be nonsensical, so a different
  * fix (add one, or move the table below the last harness hook table) is
- * offered instead (task 6a037359).
+ * offered instead (task 6a037359). Exported for direct tests only: the scan
+ * that feeds it never hands it a line that is not a real header, so its own
+ * naming rule is reachable in isolation only by calling it directly (task
+ * 6b56d735).
  */
-function assertNoSplitBlock(
+export function assertNoSplitBlock(
   text: string,
   from: number,
   to: number,
@@ -450,8 +484,7 @@ function assertNoSplitBlock(
   const foreignHeaderLine =
     firstContentLine(text, zoneStart, zoneStart + markerOffset) ??
     firstContentLine(text, markerLineEnd, zoneEnd);
-  const firstForeignHeader =
-    foreignHeaderLine === null ? "(unknown)" : describeTableHeader(foreignHeaderLine);
+  const firstForeignHeader = describeForeignHeaderLine(text, foreignHeaderLine);
 
   const guidance = hasEndMarker
     ? `Move ${firstForeignHeader} below the '${CODEX_MANAGED_END}' marker, or delete the lines ` +
@@ -498,6 +531,25 @@ function parseTableHeader(line: string): { header: string; keys: string[] } | nu
  * echoed). `(unknown)` for a line that is not a table header. */
 function describeTableHeader(line: string): string {
   return parseTableHeader(line)?.header ?? "(unknown)";
+}
+
+/** How a refusal names the line it found where the foreign table's header
+ * should be. A verified header prints as its bracketed key path. A line that
+ * has the shape of a header but is not one (an array element on its own line
+ * inside a multi-line value) is never printed, since it can hold a config
+ * value such as a token; only its line number is. Any other line is
+ * `(unknown)`, as before. */
+function describeForeignHeaderLine(
+  text: string,
+  found: { line: string; start: number } | null,
+): string {
+  if (found === null) return "(unknown)";
+  const parsed = parseTableHeader(found.line);
+  if (parsed === null) return "(unknown)";
+  if (!startsAtTopLevel(text, found.start)) {
+    return `line ${lineNumberAt(text, found.start)}`;
+  }
+  return parsed.header;
 }
 
 /** A key segment's bare name: a literal (`'...'`) key's inner text, a basic
@@ -557,7 +609,7 @@ function collectForeignSectionHeaders(
       continue;
     }
     const trimmed = rawLine.trim();
-    if (NON_HOOK_TABLE_RE.test(trimmed)) {
+    if (NON_HOOK_TABLE_RE.test(trimmed) && startsAtTopLevel(text, pos)) {
       const root = foreignSectionRootKey(trimmed);
       counts.set(root, (counts.get(root) ?? 0) + 1);
       if (!seenRoots.has(root)) {
