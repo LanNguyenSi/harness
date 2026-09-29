@@ -2,6 +2,13 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-09-29T05:34:08Z (task e8c9edaf): the solution-acceptance write-guard's reference matcher no
+  longer treats a command that only names a pack source file as a verdict-dir
+  reference. Re-verified `evidence-ledger-trust-boundary.md` (its write-guard
+  sentence, the runtime module claims) and `gate-fail-posture-matrix.md` (the
+  pack doc's deny-set lines are unchanged; the addition sits below the
+  write-guard heading); neither doc's claims changed, both are re-stamped.
+
 - 2026-09-25T13:48:08Z (release 0.59.0): the `[Unreleased]` notes moved under
   `## [0.59.0] - 2026-09-25`. The squash merges of #559 and #560 re-dated
   their source changes after the branch-side re-stamp, so
