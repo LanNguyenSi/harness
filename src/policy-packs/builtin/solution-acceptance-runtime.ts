@@ -533,7 +533,7 @@ export function evaluateGate(
   if (!verdict) {
     return {
       allowed: false,
-      reason: `no readable solution-acceptance verdict marker for "${id}" at read time`,
+      reason: `no usable solution-acceptance verdict for "${id}"`,
       verdict: null,
       forged: false,
     };

@@ -204,7 +204,7 @@ Two candidate surfaces were considered:
 
 Decision: the completion-gate's deny text is the surface. Implemented in
 `blockJson`, gated on `gate.verdict === null` (the `evaluateGate` branch
-whose reason is `no readable solution-acceptance verdict marker for "<id>" at read time`).
+whose reason is `no usable solution-acceptance verdict for "<id>"`).
 That single condition covers three readings: never evaluated, an attempt
 still running, or a marker `readVerdictDetailed` rejected. Which reading applies
 for a given denial, and which of them gets the full reconnect-vs-retry
