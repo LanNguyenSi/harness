@@ -533,7 +533,7 @@ export function evaluateGate(
   if (!verdict) {
     return {
       allowed: false,
-      reason: `no solution-acceptance verdict recorded for "${id}" (run mcp__grounding-mcp__solution_evaluate first)`,
+      reason: `no usable solution-acceptance verdict for "${id}"`,
       verdict: null,
       forged: false,
     };
