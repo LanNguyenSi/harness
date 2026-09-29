@@ -294,31 +294,57 @@ function findExactLine(text: string, target: string, from: number): number {
  * `[1]` or `[1979-05-27]`) is therefore told apart from a real header even
  * when a real table of the same name exists elsewhere in the document, which
  * a lookup of the header's key path in the parsed document could not do.
- * A document that does not parse up to the line reads as not top level, so
- * such a line is never taken for a header.
+ * A line inside an open construct never has a prefix that parses, so such a
+ * line is never taken for a header.
  *
- * The probe is incremental so a scan over many tables stays linear: it
+ * The verdict is the full-prefix verdict: a line is top level when
+ * `text.slice(0, lineStart)` parses. The probe first tries a fast path: it
  * remembers the last line start it confirmed as top level and parses only
- * the text from there. A confirmed line is a header line (or offset 0), so
- * the segment opens in the scope of its own header and parses exactly when
- * the full prefix does: for a document that parses, a line with nothing open
- * leaves a segment of complete constructs, and a line inside an open
- * construct leaves that construct unterminated in the segment. Only a
- * conflict between two segments (a table defined twice, a dotted key that
- * clashes with an earlier table) is invisible to a segment, and such a
- * document does not parse as a whole, so the install refuses it through the
- * parse check on the spliced config either way. Queries come with
- * non-decreasing line starts, as both scans issue them (task 6b56d735). */
-function createTopLevelProbe(text: string): (lineStart: number) => boolean {
+ * the text from there; when that segment parses, the line is confirmed
+ * without parsing the full prefix. When the segment fails, the full prefix
+ * decides, and a line it accepts is confirmed too. The segment is not
+ * claimed to agree with the full prefix: a segment can fail where the full
+ * prefix parses (a sub-table `[hooks.Stop.meta]` confirmed, then the next
+ * `[[hooks.Stop]]` element, which is never a candidate and so stays in the
+ * segment, redefines `hooks.Stop` as seen from the segment alone), and then
+ * the full prefix is what answers. So a line is reported as not top level
+ * only when the full prefix fails, and a line whose full prefix parses is
+ * always reported as top level. The fast path can only answer "top level"
+ * where the full prefix fails if the prefix holds a conflict of its own (a
+ * table defined twice); such a document does not parse as a whole, and the
+ * install refuses it through the parse check on the config either way. Even
+ * then the segment starts at a confirmed line with nothing open, so a line
+ * inside an open array, inline table or multi-line string still fails it.
+ *
+ * Cost: a scan over many real tables confirms each one on the fast path, so
+ * it stays linear. A candidate that fails (an array element on its own line)
+ * costs a segment parse plus a full-prefix parse, so one foreign array with
+ * thousands of element lines each on its own line is quadratic in their
+ * number: about 0.8 s for 2000 such lines, 3 s for 4000 and 12 s for 8000,
+ * measured in-process. Queries must come with non-decreasing line starts, as both
+ * scans issue them; an earlier line start throws (task 6b56d735). Exported
+ * for direct tests only. */
+export function createTopLevelProbe(text: string): (lineStart: number) => boolean {
   let confirmed = 0;
-  return (lineStart) => {
+  const parses = (content: string): boolean => {
     try {
-      parseToml(text.slice(confirmed, lineStart));
-      confirmed = lineStart;
+      parseToml(content);
       return true;
     } catch {
       return false;
     }
+  };
+  return (lineStart) => {
+    if (lineStart < confirmed) {
+      throw new Error(
+        `top-level probe queried at offset ${lineStart}, before the last confirmed line start ${confirmed}`,
+      );
+    }
+    const topLevel =
+      parses(text.slice(confirmed, lineStart)) ||
+      (confirmed > 0 && parses(text.slice(0, lineStart)));
+    if (topLevel) confirmed = lineStart;
+    return topLevel;
   };
 }
 
