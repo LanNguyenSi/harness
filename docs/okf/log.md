@@ -2,6 +2,20 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-09-30T11:22:30Z (task 04b8abcf): `codex-adapter-parity-gaps.md` and `debug-verb-selection.md`
+  re-verified and edited after `harness smoke` moved into its own
+  `<output-dir>/harness.generated/` (new `generatedDir` apply option) and
+  `harness doctor` began expanding packs against apply's `selectRuntime`
+  result: the smoke claims now say the operator's generated tree and
+  `.last-apply` are untouched instead of kept-by-`preserveRecordedRuntime`,
+  the two `apply.ts` line citations in the codex doc moved by 8 lines and were
+  re-pointed against the changed file, and one sentence names doctor's
+  expansion runtime. `evidence-ledger-trust-boundary.md`,
+  `pause-vs-gate-kill-switch.md` and `policy-engine-producer-wiring.md` list
+  files this task touched (`docs/CLI.md`, `src/cli/doctor/index.ts`,
+  `src/cli/apply/apply.ts`) but cite nothing that changed (marker reads, the
+  kill-switch policies, producer wiring); no claim changed, re-stamped.
+
 - 2026-09-30T09:51:08Z (task 01053b27): `codex-adapter-parity-gaps.md` re-verified after
   `install-codex-config.ts` changed again (the split-block refusal of a legacy
   config that starts at a generated header now tells the operator to delete
