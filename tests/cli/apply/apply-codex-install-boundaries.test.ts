@@ -243,6 +243,22 @@ describe("codex install: boundary checks of the hook header map and the END line
     expect(count(p.nextContent, comment)).toBe(1);
     expect(p.nextContent.endsWith(`${CODEX_MANAGED_END}\n[tui]\n${comment}\ntheme = 1\n${TAIL.join("\n")}\n`)).toBe(true);
   });
+
+  it("the split-block refusal names the first harness marker line past the foreign table, whichever marker it is", () => {
+    const config = write([
+      CODEX_MANAGED_BEGIN,
+      GENERATED,
+      ...HARNESS_A,
+      "[tui]",
+      "theme = 1",
+      ...HARNESS_B,
+      "# Harness Codex hook wiring. Generated source: a later copy",
+      "",
+    ]);
+    const { message } = refusal();
+    expect(message).toContain("has a foreign table ([tui])");
+    expect(message).toContain(`line ${lineOf(config, "# harness hook: b (budget_ms=2000)")} contains '# harness hook:'`);
+  });
 });
 
 // Layouts in which a hook event table spelled without the `[[hooks.` prefix
