@@ -2,7 +2,29 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-09-30T13:37:28Z, task e8f4fc03: `codex-adapter-parity-gaps.md` states when the legacy no-END split-block check runs (only after a scan that ended at a respelled hook table, up to the first non-hook table). Re-stamped.
+
+- 2026-09-30T13:09:29Z (task e8f4fc03): `codex-adapter-parity-gaps.md` re-verified after
+  `install-codex-config.ts` changed again (on a legacy config with no END
+  marker whose scan ended at a hook table spelled without the `[[hooks.`
+  prefix, a harness marker in the run of hook tables from there now refuses
+  through the split-block check, and that refusal says when the marker line
+  sits above the named table); the install claim (only the marked
+  harness-managed block is replaced, operator config is never owned) still
+  holds; the boundaries sentence now also names the escaped `hooks` root key,
+  which is not resolved, and the split-block check's substring matching on
+  the legacy paths, re-stamped.
+
 - 2026-09-30T12:15:37Z, task 04b8abcf: the smoke and doctor wording was narrowed: settings.json carries only the operator's pause sentinel (the signing-key path is in the opencode config and the grounding-mcp registration), and doctor's malformed-`.last-apply` fallback covers its runtime selection while the settings-drift check (understanding pack declared) still aborts on a malformed record. `codex-adapter-parity-gaps.md` edited; it and `debug-verb-selection.md`, `evidence-ledger-trust-boundary.md`, `pause-vs-gate-kill-switch.md`, `policy-engine-producer-wiring.md` re-checked against `docs/CLI.md` and `src/cli/apply/apply.ts` and re-stamped.
+
+- 2026-09-30T12:02:53Z (task e8f4fc03): `codex-adapter-parity-gaps.md` re-verified after
+  `install-codex-config.ts` changed (a hook event table spelled without the
+  `[[hooks.` prefix directly after the harness tables is now named and checked
+  as a kept operator hook table, and a legacy config with a foreign table between
+  its harness tables and a surviving END marker is handled like the BEGIN path);
+  the install claim (only the marked harness-managed block is replaced, operator
+  config is never owned) still holds; added a sentence naming the install's
+  deliberate boundaries after that block, re-stamped.
 
 - 2026-09-30T11:58:32Z (task 04b8abcf): `codex-adapter-parity-gaps.md` and `debug-verb-selection.md`
   re-verified and edited after `harness smoke` moved into its own
