@@ -241,21 +241,17 @@ describe("codex install lists foreign sections without taking an array element f
 });
 
 describe("codex install finds the end of the harness block across an array element (task 6b56d735)", () => {
-  // An operator table sitting inside the harness block that holds a
-  // multi-line array: the element must not end the harness block.
-  const operatorTable = (element: string) => [
-    "[[hooks.Stop]]",
-    'hooks = [{ type = "command", command = "operator", timeout = 5 }]',
-    "args = [",
-    element,
-    "]",
-  ];
+  // A multi-line array inside the last harness hook table of the block: the
+  // element must not end the harness block. The array sits in the commented
+  // harness table itself, since an uncommented hook table after it would be
+  // an operator table that ends the block on its own (task 01053b27).
+  const ownedTableArray = (element: string) => ["args = [", element, "]"];
 
   for (const shape of SHAPES) {
     it(`${shape.label}: a foreign table after the element still ends the harness block, and a hook table after the element is still recognized`, async () => {
       write([
         ...OLD_BLOCK,
-        ...operatorTable(shape.element),
+        ...ownedTableArray(shape.element),
         "# harness hook: late-retired (budget_ms=2000)",
         "[[hooks.PostToolUse]]",
         'matcher = "Bash"',
@@ -279,7 +275,7 @@ describe("codex install finds the end of the harness block across an array eleme
     it(`${shape.label}: with the END marker after the element, the block ends at that marker`, async () => {
       write([
         ...OLD_BLOCK,
-        ...operatorTable(shape.element),
+        ...ownedTableArray(shape.element),
         CODEX_MANAGED_END,
         "[tui]",
         "theme = 1",
@@ -319,8 +315,6 @@ describe("codex install decides header recognition with the parser, not with ind
   it("an unindented element inside an owned hook table does not end the block: the hook after it is recognized", async () => {
     write([
       ...OLD_BLOCK,
-      "[[hooks.Stop]]",
-      'hooks = [{ type = "command", command = "operator", timeout = 5 }]',
       "args = [",
       bareElement,
       "]",

@@ -2,6 +2,33 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-09-30T09:51:08Z (task 01053b27): `codex-adapter-parity-gaps.md` re-verified after
+  `install-codex-config.ts` changed again (the split-block refusal of a legacy
+  config that starts at a generated header now tells the operator to delete
+  every line from that header through the END marker line, both included, and
+  the hook header map's comment names the one element line it probes); the
+  splice is unchanged, so the doc's install claim (only the marked
+  harness-managed block is replaced, operator config is never owned) still
+  holds; no claim changed, re-stamped.
+
+- 2026-09-30T08:37:19Z (task 01053b27): `codex-adapter-parity-gaps.md` re-verified after
+  `install-codex-config.ts` changed again (the hook header map now reads a
+  header-shaped line as a header only when its root key resolves to `hooks`,
+  before the top-level check, and a legacy config whose END marker survived gets
+  split-block guidance naming its source-prefix line or generated header instead
+  of a BEGIN marker); the splice is unchanged, so the doc's install claim (only
+  the marked harness-managed block is replaced, operator config is never owned)
+  still holds; no claim changed, re-stamped.
+
+- 2026-09-30T07:06:15Z (task 01053b27): `codex-adapter-parity-gaps.md` re-verified after
+  `install-codex-config.ts` changed again (every header scan of the install now
+  reads lines through one classifier, so an array element line inside a kept
+  operator hook table no longer ends the kept run, and in the legacy paths an END
+  marker that survived its deleted BEGIN line after the kept tables is removed
+  like a drifted END); the doc's install claim (only the marked harness-managed
+  block is replaced, operator config is never owned) still holds against the
+  changed code; no claim changed, re-stamped.
+
 - 2026-09-29T11:16:08Z, `codex-adapter-parity-gaps.md` re-verified after the header check's source comment on its cost was reworded (no behaviour change, no line moved); re-stamped.
 
 - 2026-09-29T11:05:10Z (task 6b56d735): `codex-adapter-parity-gaps.md` re-verified after
@@ -30,6 +57,28 @@
   docs listing the touched runtime file or pack doc under sources: neither quotes the old
   reason wording, the deny set and line citations they make are unchanged; no claim
   changed, both re-stamped after the last source, test and doc commit.
+
+- 2026-09-29T09:16:42Z (task 01053b27): `codex-adapter-parity-gaps.md` re-verified after
+  `install-codex-config.ts` changed again (the check on a kept operator
+  `[[hooks.*]]` table now reads its hook commands from the parsed whole config,
+  matched by header order, and the preserved-section entry names the table's
+  line before and after the install); the doc's install claim (only the marked
+  harness-managed block is replaced, operator config is never owned) still
+  holds against the changed code; no claim changed, re-stamped.
+
+- 2026-09-29T08:10:22Z (task 01053b27): `codex-adapter-parity-gaps.md` re-verified after
+  `install-codex-config.ts` changed again (the install now names every kept
+  operator `[[hooks.*]]` table among the preserved sections and refuses when such
+  a table's command is one harness writes); the doc's install claim (only the
+  marked harness-managed block is replaced, operator config is never owned) still
+  holds against the changed code; no claim changed, re-stamped.
+
+- 2026-09-29T07:34:17Z (task 01053b27): `codex-adapter-parity-gaps.md` re-verified after
+  `install-codex-config.ts` changed again (the managed-range scan now ends the
+  range at an operator `[[hooks.*]]` table that has no `# harness hook:` comment
+  above it and follows a commented harness table); the doc's install claim (only
+  the marked harness-managed block is replaced, operator config is never owned)
+  still holds against the changed code; no claim changed, re-stamped.
 
 - 2026-09-29T07:30:05Z (task 8fe0f633): the solution-acceptance deny text's never-evaluated line
   no longer names a cause the gate did not observe, the state table gained the
