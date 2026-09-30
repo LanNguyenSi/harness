@@ -7,9 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-### Fixed
+### Security
 
 - **`fast-uri` 3.1.8 in the lockfile** (transitive under ajv; lockfile-only, no source change), closing GHSA-hrr3-gc8f-f4qj (inconsistent host case normalization via percent-encoded octets; moderate).
+
+### Fixed
 
 - **The Codex install no longer takes an array element on its own line for a table header** (task `6b56d735`). A multi-line array whose element sits on its own line (`["x"]`, `['x']`, `[1]`, `[1979-05-27]`) has the shape of a table header, and the install's header recognition accepted it. `harness apply --runtime codex --install --dry-run` printed such an element as `preserving foreign section: ...` (a token inside an `args` array leaked into the plan, the install summary and `--json`), an element inside a hook table ended the harness-owned region early so the install refused a config that parses, and the split-block refusal named the element as the foreign table on stderr and in `--json`. A header candidate now counts only when the document text before it parses on its own, so a line inside an open array, inline table or multi-line string is never a header, even when a real table of the same name exists elsewhere. The refusal names a header-shaped line that is not a header by its line number, never by its text. A line counts as top level exactly when the text before it parses (the full-prefix verdict); as a fast path the check first parses only the text since the last confirmed top-level line and confirms the line when that parses, and when it does not, the full prefix decides. So a config with thousands of ordinary tables stays fast, and a table after an array-of-tables element whose sub-table was confirmed before it is still listed. Any candidate whose segment fails costs a full-prefix parse as well, quadratic in the number of such candidates: a foreign array with many element lines each on its own line (measured in-process: about 0.8 s for 2000 such lines, 12 s for 8000), or many sub-tables that each follow a later element of the same array of tables (about 1.5 s for 2000). In a config that does not parse, the install now refuses with the parse-error message instead of the split-block refusal, since header recognition stops at the parse error. No other splice behaviour changes.
 
