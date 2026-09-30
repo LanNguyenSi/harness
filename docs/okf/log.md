@@ -2,19 +2,22 @@
 
 <!-- Add new entries at the top, newest first. -->
 
-- 2026-09-30T11:22:30Z (task 04b8abcf): `codex-adapter-parity-gaps.md` and `debug-verb-selection.md`
+- 2026-09-30T11:58:32Z (task 04b8abcf): `codex-adapter-parity-gaps.md` and `debug-verb-selection.md`
   re-verified and edited after `harness smoke` moved into its own
-  `<output-dir>/harness.generated/` (new `generatedDir` apply option) and
+  `<output-dir>/harness.generated/` (new `generatedDir` apply option, which
+  moves only the apply output; the pause sentinel and signing-key path in the
+  rendered settings stay on the operator's generated dir) and
   `harness doctor` began expanding packs against apply's `selectRuntime`
-  result: the smoke claims now say the operator's generated tree and
-  `.last-apply` are untouched instead of kept-by-`preserveRecordedRuntime`,
-  the two `apply.ts` line citations in the codex doc moved by 8 lines and were
-  re-pointed against the changed file, and one sentence names doctor's
-  expansion runtime. `evidence-ledger-trust-boundary.md`,
+  result (a malformed `.last-apply` falls back to the default and warns): the
+  smoke claims now say the operator's generated files and `.last-apply` are
+  not rewritten while runtime state (delegation marker, hook session state)
+  still lands in the operator's tree, and the three `apply.ts` line citations
+  in the codex doc were re-pointed against the changed file (the `--target`
+  refusal citation had been left on a stale range). `evidence-ledger-trust-boundary.md`,
   `pause-vs-gate-kill-switch.md` and `policy-engine-producer-wiring.md` list
   files this task touched (`docs/CLI.md`, `src/cli/doctor/index.ts`,
-  `src/cli/apply/apply.ts`) but cite nothing that changed (marker reads, the
-  kill-switch policies, producer wiring); no claim changed, re-stamped.
+  `src/cli/apply/apply.ts`) but cite nothing that changed; no claim changed,
+  re-stamped.
 
 - 2026-09-30T09:51:08Z (task 01053b27): `codex-adapter-parity-gaps.md` re-verified after
   `install-codex-config.ts` changed again (the split-block refusal of a legacy
@@ -1132,7 +1135,7 @@
   `SessionStartPreflightSetupVersionFinding`
   (`src/cli/doctor/session-start-preflight-setup-version.ts:72#"layer_unresolvable"`,
   built directly by `doctor()` at
-  `src/cli/doctor/index.ts:1423#"layer_unresolvable"`), naming the
+  `src/cli/doctor/index.ts:1428#"layer_unresolvable"`), naming the
   layer path and the FIRST LINE of the parse error, counted in
   `warningCount`, rendered by `format.ts` as one warning line; round 1
   first shipped full silence here, round 1's own review found the
