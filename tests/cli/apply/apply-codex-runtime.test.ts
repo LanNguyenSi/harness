@@ -4144,6 +4144,64 @@ describe("apply --runtime codex --install: an operator-authored [[hooks.*]] tabl
     expect(stopCommands(result.nextContent)).toContain(operatorCommand);
   });
 
+  it("a deeper array of tables under a kept nested hooks table ([[hooks.Stop.hooks.extra]]) is not counted as another nested hooks table: all three tables are kept and named", () => {
+    const config = driftedEnd(
+      "[[hooks.Stop]]",
+      "[[hooks.Stop.hooks]]",
+      'type = "command"',
+      `command = "${operatorCommand}"`,
+      "timeout = 5",
+      "[[hooks.Stop.hooks.extra]]",
+      'note = "operator"',
+    );
+    const result = plan(config, FRESH_BLOCK);
+    expect(result.keptOperatorHookTables).toEqual([
+      keptLabel("[[hooks.Stop]]", config, result.nextContent),
+      keptLabel("[[hooks.Stop.hooks]]", config, result.nextContent),
+      keptLabel("[[hooks.Stop.hooks.extra]]", config, result.nextContent),
+    ]);
+    expect(stopCommands(result.nextContent)).toEqual([FRESH_COMMAND, operatorCommand]);
+  });
+
+  it("an escaped event key is never matched to an event literally named `null`: the kept table still refuses as unmatched", () => {
+    const config = [
+      "[[hooks.null]]",
+      'hooks = [{ type = "command", command = "operator-null-hook", timeout = 5 }]',
+      CODEX_MANAGED_BEGIN,
+      GENERATED,
+      ...retiredTable,
+      String.raw`[[hooks."St\u006fp"]]`,
+      `hooks = [{ type = "command", command = "${operatorCommand}", timeout = 5 }]`,
+      CODEX_MANAGED_END,
+      "",
+    ].join("\n");
+    const err = refusalOf(config, FRESH_BLOCK);
+    expect(err.message).toContain(
+      String.raw`[[hooks."St\u006fp"]] (line ${lineOf(config, String.raw`[[hooks."St\u006fp"]]`)})`,
+    );
+    expect(err.message).toContain("could not match to its entry in the parsed config");
+  });
+
+  it("a harness-commented table below the END marker is left untouched and not named", async () => {
+    const below = harnessTable("below-end", "SessionStart", "harness pack hook below-end");
+    const config = [CODEX_MANAGED_BEGIN, GENERATED, ...retiredTable, CODEX_MANAGED_END, ...below, ""].join("\n");
+    const result = plan(config);
+    expect(result.keptOperatorHookTables).toEqual([]);
+    expect(result.foreignSectionsPreserved).toEqual([]);
+    const installed = await installOver(config);
+    expect(installed).not.toContain(RETIRED_HOOK_ID);
+    expect(installed.endsWith(`${CODEX_MANAGED_END}\n${below.join("\n")}\n`)).toBe(true);
+    expect(occurrences(installed, CODEX_MANAGED_END)).toBe(1);
+  });
+
+  it("the kept-table check parses nothing when no table is kept: an install that changes nothing stays a no-op on a config the parser cannot read", () => {
+    const clean = plan([CODEX_MANAGED_BEGIN, GENERATED, ...retiredTable, CODEX_MANAGED_END, ""].join("\n")).nextContent;
+    const unreadable = `${clean}[tui]\nbroken = \n`;
+    const result = plan(unreadable);
+    expect(result.nextContent).toBe(unreadable);
+    expect(result.keptOperatorHookTables).toEqual([]);
+  });
+
   it("a sub-table after a kept entry's inline hooks array does not hide the inline commands: the refusal names the entry's own header", () => {
     const config = driftedEnd(
       "[[hooks.Stop]]",
@@ -4391,6 +4449,14 @@ describe("apply --runtime codex --install: an operator-authored [[hooks.*]] tabl
       );
       expect(message).not.toContain(CODEX_MANAGED_BEGIN);
       expect(fs.readFileSync(configPath(), "utf8")).toBe(config);
+    });
+
+    it(`legacy ${label} config whose END marker directly follows the harness tables: content below that END is untouched and not listed`, () => {
+      const config = [...head, ...retiredTable, CODEX_MANAGED_END, '[projects."/work/x"]', 'trust_level = "trusted"', ""].join("\n");
+      const result = plan(config);
+      expect(result.foreignSectionsPreserved).toEqual([]);
+      expect(result.keptOperatorHookTables).toEqual([]);
+      expect(result.nextContent.endsWith(`${CODEX_MANAGED_END}\n[projects."/work/x"]\ntrust_level = "trusted"\n`)).toBe(true);
     });
 
     it(`legacy ${label} config whose END marker survived its deleted BEGIN line: a harness-commented table below that END is left untouched and not named`, async () => {
