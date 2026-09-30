@@ -449,3 +449,245 @@ describe("codex install: no value text on any output channel for these shapes, i
     });
   }
 });
+
+// A later '# harness hook:' comment line past a legacy block's foreign table:
+// without a whole END line after the foreign table the legacy reading keeps it
+// (no split-block check), so END text elsewhere must not count as that line.
+const LATER_MARKER = "# harness hook: mentioned-in-a-comment (budget_ms=1)";
+
+const endTextOutsideALine: Array<[string, string[]]> = [
+  ["inside a foreign table's multi-line string", ["[mcp_servers.docs]", 'note = """', CODEX_MANAGED_END, `${TOKEN}`, '"""']],
+  ["mid-line in a foreign table's value", ["[mcp_servers.docs]", `note = "${TOKEN} ${CODEX_MANAGED_END}"`]],
+];
+
+describe("codex install: the legacy paths read a surviving END marker only as a whole line outside strings (task e8f4fc03)", () => {
+  for (const [label, head] of LEGACY_HEADS) {
+    for (const [where, docs] of endTextOutsideALine) {
+      it(`legacy ${label}, END text ${where}, a later harness-marker comment line: installs with the legacy reading, no split-block refusal`, () => {
+        const zone = [...docs, LATER_MARKER, ...TAIL, ""].join("\n");
+        write([...head, ...HARNESS_A, zone]);
+        const p = planTwice();
+        expect(p.nextContent.endsWith(`${CODEX_MANAGED_END}\n${zone}`)).toBe(true);
+        expect(p.foreignSectionsPreserved).toEqual(["[mcp_servers.docs]", '[projects."/work/x"]']);
+        expect(p.keptOperatorHookTables).toEqual([]);
+        expect(count(p.nextContent, 'command = "harness pack hook a"')).toBe(1);
+        expect(JSON.stringify([p.summary, p.removedHookIds, p.foreignSectionsPreserved])).not.toContain(TOKEN);
+      });
+    }
+  }
+});
+
+describe("codex install: found-guards and whole-line END comparisons of the scan (task e8f4fc03)", () => {
+  const pasted = "# Harness Codex hook wiring. Generated source: a pasted copy";
+  for (const [label, tail] of [
+    ["no END", [""]],
+    ["END after it", [CODEX_MANAGED_END, ""]],
+  ] as Array<[string, string[]]>) {
+    it(`a split zone whose only harness marker is a source-prefix line (${label}) refuses, naming that line and never its text`, () => {
+      const config = write([CODEX_MANAGED_BEGIN, GENERATED, ...HARNESS_A, "[tui]", "theme = 1", pasted, ...tail]);
+      const { message } = refusal();
+      expect(message).toContain("has a foreign table ([tui]) sitting before more harness-owned content");
+      expect(message).toContain(`line ${lineOf(config, pasted)} contains '# Harness Codex hook wiring.'`);
+      expect(message).not.toContain("a pasted copy");
+      expect(fs.readFileSync(codexConfig, "utf8")).toBe(config);
+    });
+  }
+
+  it("an indented drifted END past a foreign table is the stray END: the install writes one END", () => {
+    write([CODEX_MANAGED_BEGIN, GENERATED, ...HARNESS_A, "[tui]", "theme = 1", `  ${CODEX_MANAGED_END}`, ...TAIL, ""]);
+    const p = planTwice();
+    expect(endLines(p.nextContent)).toBe(1);
+    expect(p.foreignSectionsPreserved).toEqual(["[tui]"]);
+    expect(p.nextContent.endsWith(`${CODEX_MANAGED_END}\n[tui]\ntheme = 1\n${TAIL.join("\n")}\n`)).toBe(true);
+  });
+
+  for (const [label, head] of LEGACY_HEADS) {
+    it(`legacy ${label}: an indented END orphaned after a foreign table is removed, the install writes one END`, () => {
+      write([...head, ...HARNESS_A, ...DOCS_TABLE, `  ${CODEX_MANAGED_END}`, ...TAIL, ""]);
+      const p = planTwice();
+      expect(endLines(p.nextContent)).toBe(1);
+      expect(p.nextContent.endsWith(`${CODEX_MANAGED_END}\n${DOCS_TABLE.join("\n")}\n${TAIL.join("\n")}\n`)).toBe(true);
+    });
+  }
+
+  it("an indented END directly after the harness tables ends the block: the harness-commented table below it is left untouched and not named", () => {
+    const below = [...HARNESS_B, ...TAIL, ""].join("\n");
+    write([CODEX_MANAGED_BEGIN, GENERATED, ...HARNESS_A, `  ${CODEX_MANAGED_END}`, below]);
+    const p = planTwice();
+    expect(p.nextContent.endsWith(`${CODEX_MANAGED_END}\n${below}`)).toBe(true);
+    expect(count(p.nextContent, 'command = "harness pack hook b"')).toBe(2);
+    expect(p.keptOperatorHookTables).toEqual([]);
+  });
+});
+
+// Legacy configs with no END marker whose scan ended at a hook table spelled
+// without the `[[hooks.` prefix, with harness content in the run after it.
+const respelledThenMarked = (head: string[]): string[] => [
+  ...head,
+  ...HARNESS_A,
+  ...respelledTable("[[ hooks.Stop ]]", OPERATOR_COMMAND),
+  ...harnessTable("c", "SessionStart", "harness pack hook c"),
+  "",
+];
+const markedRespelled = (head: string[]): string[] => [
+  ...head,
+  ...HARNESS_A,
+  "# harness hook: b (budget_ms=2000)",
+  ...respelledTable("[[ hooks.Stop ]]", "harness pack hook b"),
+  "",
+];
+
+describe("codex install: a harness marker in the run of respelled hook tables of a legacy config without END refuses through the split-block check (task e8f4fc03)", () => {
+  for (const [label, head] of LEGACY_HEADS) {
+    it(`legacy ${label}: an operator [[ hooks.Stop ]] followed by a harness-commented table refuses, naming the table and the marker's line`, () => {
+      const config = write(respelledThenMarked(head));
+      const { message } = refusal();
+      expect(message).toContain(
+        `has a foreign table ([[ hooks.Stop ]]) sitting before more harness-owned content: line ${lineOf(config, "# harness hook: c (budget_ms=2000)")} contains '# harness hook:'`,
+      );
+      expect(message).toContain("If [[ hooks.Stop ]] is a harness hook table, delete it");
+      expect(message).toContain("move [[ hooks.Stop ]] below the last harness hook table");
+      expect(message).not.toContain("with no '# harness hook:");
+      expect(message).not.toContain(TOKEN);
+      expect(message).not.toContain("pack hook");
+      expect(fs.readFileSync(codexConfig, "utf8")).toBe(config);
+    });
+
+    it(`legacy ${label}: a harness-commented [[ hooks.Stop ]] refuses, saying the marker line sits above it`, () => {
+      const config = write(markedRespelled(head));
+      const { message } = refusal();
+      expect(message).toContain(
+        `has a foreign table ([[ hooks.Stop ]]) below harness-owned content: line ${lineOf(config, "# harness hook: b (budget_ms=2000)")}, above it, contains '# harness hook:'`,
+      );
+      expect(message).toContain("If [[ hooks.Stop ]] is a harness hook table, delete it");
+      expect(message).not.toContain("with no '# harness hook:");
+      expect(message).not.toContain(TOKEN);
+      expect(message).not.toContain("pack hook");
+      expect(fs.readFileSync(codexConfig, "utf8")).toBe(config);
+    });
+
+    it(`legacy ${label}: the run stops at the first non-hook table, so a harness-commented table past it keeps the legacy reading`, () => {
+      const config = write([
+        ...head,
+        ...HARNESS_A,
+        ...respelledTable("[[ hooks.Stop ]]", OPERATOR_COMMAND),
+        ...DOCS_TABLE,
+        ...harnessTable("c", "SessionStart", "harness pack hook c"),
+        "",
+      ]);
+      const p = planTwice();
+      expect(p.keptOperatorHookTables).toEqual([keptLabel("[[ hooks.Stop ]]", config, p.nextContent)]);
+      expect(count(p.nextContent, 'command = "harness pack hook c"')).toBe(1);
+      expect(endLines(p.nextContent)).toBe(1);
+    });
+
+    it(`legacy ${label}: a harness marker in the comment run before a non-hook table, with no respelled table, keeps the legacy reading`, () => {
+      write([...head, ...HARNESS_A, "# harness hook: stale (budget_ms=1)", ...DOCS_TABLE, ""]);
+      const p = planTwice();
+      expect(p.keptOperatorHookTables).toEqual([]);
+      expect(p.foreignSectionsPreserved).toEqual(["[mcp_servers.docs]"]);
+      expect(p.nextContent.endsWith(`${CODEX_MANAGED_END}\n# harness hook: stale (budget_ms=1)\n${DOCS_TABLE.join("\n")}\n`)).toBe(true);
+    });
+  }
+
+  it("BEGIN, no END: a harness-commented [[ hooks.Stop ]] refuses the same way, saying the marker line sits above it", () => {
+    const config = write(markedRespelled([CODEX_MANAGED_BEGIN, GENERATED]));
+    const { message } = refusal();
+    expect(message).toContain(
+      `has a foreign table ([[ hooks.Stop ]]) below harness-owned content: line ${lineOf(config, "# harness hook: b (budget_ms=2000)")}, above it, contains '# harness hook:'`,
+    );
+    expect(message).toContain("If [[ hooks.Stop ]] is a harness hook table, delete it");
+  });
+});
+
+describe("codex install: documented boundaries (task e8f4fc03)", () => {
+  it("a hooks root key spelled with an escape sequence is not resolved: its table is kept as a foreign section, not named or checked as a hook table", () => {
+    const header = String.raw`[["ho\u006fks".Stop]]`;
+    write([
+      CODEX_MANAGED_BEGIN,
+      GENERATED,
+      ...HARNESS_A,
+      header,
+      'hooks = [{ type = "command", command = "harness pack hook b", timeout = 5 }]',
+      CODEX_MANAGED_END,
+      "",
+    ]);
+    const p = planTwice();
+    expect(p.keptOperatorHookTables).toEqual([]);
+    expect(p.foreignSectionsPreserved).toEqual([header]);
+    expect(stopCommands(p.nextContent)).toEqual(["harness pack hook b", "harness pack hook b"]);
+  });
+
+  for (const [label, head] of LEGACY_HEADS) {
+    it(`legacy ${label} with a surviving END: a value holding the harness marker text refuses through the split-block check (substring match), never echoing the value`, () => {
+      const config = write([
+        ...head,
+        ...HARNESS_A,
+        "[mcp_servers.docs]",
+        `description = "${TOKEN} # harness hook: x"`,
+        CODEX_MANAGED_END,
+        "",
+      ]);
+      const { message } = refusal();
+      expect(message).toContain(
+        `has a foreign table ([mcp_servers.docs]) sitting before more harness-owned content: line ${lineOf(config, "[mcp_servers.docs]") + 1} contains '# harness hook:'`,
+      );
+      expect(message).not.toContain(TOKEN);
+      expect(fs.readFileSync(codexConfig, "utf8")).toBe(config);
+    });
+  }
+});
+
+describe("codex install: every output mode for the legacy END-reading and marker-run shapes (task e8f4fc03)", () => {
+  const installing: Array<[string, string[], number]> = [
+    ...LEGACY_HEADS.flatMap(([label, head]) =>
+      endTextOutsideALine.map(([where, docs]): [string, string[], number] => [
+        `legacy ${label}, END text ${where}`,
+        [...head, ...HARNESS_A, ...docs, LATER_MARKER, ...TAIL, ""],
+        where.startsWith("inside") ? 2 : 1,
+      ]),
+    ),
+    ...LEGACY_HEADS.map(([label, head]): [string, string[], number] => [
+      `legacy ${label}, indented orphan END after a foreign table`,
+      [...head, ...HARNESS_A, ...DOCS_TABLE, `  ${CODEX_MANAGED_END}`, ...TAIL, ""],
+      1,
+    ]),
+  ];
+
+  for (const [label, lines, ends] of installing) {
+    it(`${label}: every mode exits 0 with no value text, the install is idempotent`, async () => {
+      write(lines);
+      for (const r of await everyMode()) {
+        expect(r.code).toBe(EX_OK);
+        expect(r.out).not.toContain(TOKEN);
+        expect(r.err).not.toContain(TOKEN);
+      }
+      expect((await cli({})).code).toBe(EX_OK);
+      const first = fs.readFileSync(codexConfig, "utf8");
+      // A whole-line END count: one written by the install, plus the one a
+      // multi-line string holds as its own text.
+      expect(endLines(first)).toBe(ends);
+      expect((await cli({})).code).toBe(EX_OK);
+      expect(fs.readFileSync(codexConfig, "utf8")).toBe(first);
+    });
+  }
+
+  const refusing: Array<[string, string[]]> = LEGACY_HEADS.flatMap(([label, head]): Array<[string, string[]]> => [
+    [`legacy ${label}, operator [[ hooks.Stop ]] then a harness-commented table, no END`, respelledThenMarked(head)],
+    [`legacy ${label}, harness-commented [[ hooks.Stop ]], no END`, markedRespelled(head)],
+  ]);
+
+  for (const [label, lines] of refusing) {
+    it(`${label}: every mode refuses with no value text and leaves the file untouched`, async () => {
+      const config = write(lines);
+      for (const r of await everyMode()) {
+        expect(r.code).not.toBe(EX_OK);
+        expect(`${r.out}${r.err}`).toMatch(/refus|untouched/);
+        expect(r.out).not.toContain(TOKEN);
+        expect(r.err).not.toContain(TOKEN);
+        expect(`${r.out}${r.err}`).not.toContain("pack hook");
+        expect(fs.readFileSync(codexConfig, "utf8")).toBe(config);
+      }
+    });
+  }
+});
