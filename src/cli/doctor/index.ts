@@ -23,7 +23,7 @@ import { checkPolicyPackVersions } from "../../policy-packs/version-check.js";
 import { checkPolicyPackUxDrift } from "../../policy-packs/ux-drift-check.js";
 import type { Runtime } from "../../policy-packs/runtime.js";
 import { selectRuntime, type RuntimeSelection } from "../apply/apply.js";
-import { readLastApply } from "../../io/last-apply.js";
+import { lastApplyPath, readLastApply } from "../../io/last-apply.js";
 import {
   checkHookBudgetLedgerMargin,
   checkPolicyRiskWithoutEnvScope,
@@ -755,8 +755,12 @@ export function resolveGitIgnoreProbe(
   return createDefaultGitIgnoreProbe();
 }
 
-function packExpansionRuntimeReport(selection: RuntimeSelection): PackExpansionRuntimeReport {
+function packExpansionRuntimeReport(
+  selection: RuntimeSelection,
+  warning?: string,
+): PackExpansionRuntimeReport {
   return {
+    ...(warning !== undefined ? { warning } : {}),
     runtime: selection.runtime,
     source: selection.runtimeSource,
     ...(selection.previousRuntime !== undefined
@@ -1053,6 +1057,7 @@ function countDiagnostics(report: Omit<DoctorReport, "errorCount" | "warningCoun
   let errorCount = 0;
   let warningCount = 0;
   warningCount += report.manifest.warnings.length;
+  if (report.packExpansionRuntime.warning !== undefined) warningCount++;
   for (const m of report.tools.mcp) {
     if (m.outcome.kind === "error") errorCount++;
     // Clean-exit-without-response: doctor still cannot probe the server,
@@ -1439,7 +1444,7 @@ export async function doctor(opts: DoctorOptions = {}): Promise<DoctorReport> {
       sessionStartPreflightProjectName,
     );
   // generatedDir resolved the same way apply.ts / interactive.ts resolve
-  // it (review round H1, Finding 2) so buildClaudeMcpRegistration's
+  // it, so buildClaudeMcpRegistration's
   // desired projection carries SOLUTION_VERDICT_SIGNING_KEY too, and so
   // the runtime below is read from the very `.last-apply` apply reads.
   const generatedDir = resolveGeneratedDir({
@@ -1451,7 +1456,19 @@ export async function doctor(opts: DoctorOptions = {}): Promise<DoctorReport> {
   // `selectRuntime` (recorded, inferred or default; `--target` is an
   // apply flag, not a doctor input). Pack expansion below uses it, so
   // doctor checks the hooks the machine actually gets (task 04b8abcf).
-  const applyRuntime = selectRuntime(undefined, readLastApply(generatedDir), false);
+  // A malformed `.last-apply` must not kill doctor (base doctor never read
+  // it unless the understanding pack was declared): fall back to the
+  // default selection and warn, naming the file.
+  let lastApplyRecord: ReturnType<typeof readLastApply> = null;
+  let lastApplyWarning: string | undefined;
+  try {
+    lastApplyRecord = readLastApply(generatedDir);
+  } catch (err) {
+    lastApplyWarning =
+      `${lastApplyPath(generatedDir)} is unreadable (${err instanceof Error ? err.message : String(err)}); ` +
+      "expanding policy packs against the default runtime";
+  }
+  const applyRuntime = selectRuntime(undefined, lastApplyRecord, false);
   const policies = buildPolicies(manifest);
   const policyPacks = buildPolicyPacks(
     manifest,
@@ -1610,7 +1627,7 @@ export async function doctor(opts: DoctorOptions = {}): Promise<DoctorReport> {
     policies,
     policyPacks,
     policyPackHookVersions,
-    packExpansionRuntime: packExpansionRuntimeReport(applyRuntime),
+    packExpansionRuntime: packExpansionRuntimeReport(applyRuntime, lastApplyWarning),
     workflows,
     riskGate,
     templateDrift,

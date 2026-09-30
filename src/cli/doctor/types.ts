@@ -240,6 +240,8 @@ export interface PackExpansionRuntimeReport {
   source: string;
   /** The runtime the last apply recorded or that its files imply, when there is one. */
   previousRuntime?: string;
+  /** Set when the last apply's `.last-apply` could not be read; names the file. */
+  warning?: string;
 }
 
 /**

@@ -331,7 +331,7 @@ function formatHooksSection(report: DoctorReport): string[] {
 // 04b8abcf): the one a plain `harness apply` would select, so a report on a
 // codex-recorded machine says codex rather than implying claude-code.
 function formatPackExpansionRuntimeSection(report: DoctorReport): string[] {
-  const { runtime, source, previousRuntime } = report.packExpansionRuntime;
+  const { runtime, source, previousRuntime, warning } = report.packExpansionRuntime;
   const how =
     source === "last-apply"
       ? "recorded by the last apply"
@@ -344,7 +344,11 @@ function formatPackExpansionRuntimeSection(report: DoctorReport): string[] {
     previousRuntime !== undefined && previousRuntime !== runtime
       ? ` (last apply: ${previousRuntime})`
       : "";
-  return ["", `Pack expansion runtime: ${runtime} (${how})${prior}`];
+  return [
+    "",
+    `Pack expansion runtime: ${runtime} (${how})${prior}`,
+    ...(warning !== undefined ? [`  warning: ${warning}`] : []),
+  ];
 }
 
 // Policy-pack hooks section (task ab634898): the hook-level `min_version`

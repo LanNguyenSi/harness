@@ -187,7 +187,7 @@ merely surfaced as a warning. `tools.mcp[]` in `harness doctor`
 `git-preflight` and `session_start_preflight.setup` already did. The
 policy-pack-level floor pushes a `below_floor` gap counted into
 `harness doctor`'s `warningCount`
-(`src/cli/doctor/index.ts:1086#"warningCount += report.policyPacks.versionGaps.length;"`),
+(`src/cli/doctor/index.ts:1091#"warningCount += report.policyPacks.versionGaps.length;"`),
 the same footing as `tools.mcp[]` and `memory.router`, not a hard
 failure. This is correct under semver precedence (an RC is not the
 release), not a regression, but it means the two `tools.cli[]` checks

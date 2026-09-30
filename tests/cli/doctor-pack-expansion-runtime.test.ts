@@ -19,7 +19,7 @@ afterEach(() => {
   while (cleanups.length > 0) cleanups.pop()!();
 });
 
-function makeHome(): { home: string; configPath: string } {
+function makeHome(withPack = true): { home: string; configPath: string } {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "harness-doctor-runtime-"));
   cleanups.push(() => fs.rmSync(home, { recursive: true, force: true }));
   const configPath = path.join(home, "harness.yaml");
@@ -31,7 +31,7 @@ function makeHome(): { home: string; configPath: string } {
       memory: { directories: [] },
       hooks: [],
       policies: [],
-      policy_packs: [{ name: "understanding-before-execution" }],
+      policy_packs: withPack ? [{ name: "understanding-before-execution" }] : [],
     }),
   );
   return { home, configPath };
@@ -104,5 +104,26 @@ describe("doctor: pack expansion runtime follows the runtime apply selects", () 
     expect(format(report)).toContain(
       "Pack expansion runtime: codex (inferred from the last apply's generated files)",
     );
+  });
+
+  it("malformed .last-apply: does not crash, falls back to the default and warns naming the file", async () => {
+    // No understanding pack: the settings-drift check (which reads the same
+    // record for that pack) is not in play, so doctor's own read is what is
+    // under test.
+    const { home, configPath } = makeHome(false);
+    await apply({ homeDir: home, configPath, runtime: "codex" });
+    const target = path.join(home, "harness.generated", ".last-apply");
+    fs.writeFileSync(target, "{ not json");
+
+    const report = await runDoctor(configPath);
+    expect(report.packExpansionRuntime.runtime).toBe("claude-code");
+    expect(report.packExpansionRuntime.source).toBe("default");
+    expect(report.packExpansionRuntime.warning).toContain(target);
+    const text = format(report);
+    expect(text).toContain(`warning: ${target} is unreadable`);
+    // The malformed record counts as a warning in the summary.
+    const clean = makeHome(false);
+    const cleanReport = await runDoctor(clean.configPath);
+    expect(report.warningCount).toBe(cleanReport.warningCount + 1);
   });
 });

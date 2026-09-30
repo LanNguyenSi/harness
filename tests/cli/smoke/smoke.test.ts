@@ -339,6 +339,48 @@ describe("runSmoke after an apply that recorded another runtime (agent-tasks b9e
     expect(snapshotTree(generatedDir)).toEqual(before);
   });
 
+  it("keeps the pause sentinel in the rendered settings anchored to the operator's generated dir", async () => {
+    const home = makeTmpDir("smoke-anchor-home-");
+    const configPath = path.join(home, "harness.yaml");
+    fs.writeFileSync(
+      configPath,
+      yamlStringify({
+        version: 1,
+        tools: {
+          mcp: [],
+          cli: [],
+          skills: { enabled: [], source_dirs: [] },
+          builtin: { known: [] },
+        },
+        memory: { directories: [] },
+        hooks: [],
+        policies: [],
+        policy_packs: [{ name: "understanding-before-execution" }],
+      }),
+    );
+    await apply({ homeDir: home, configPath, runtime: "codex" });
+    const operatorDir = path.join(home, GENERATED_DIRNAME);
+
+    const outputDir = makeTmpDir("smoke-anchor-out-");
+    const result = await runSmoke({
+      prompt: "x",
+      outputDir,
+      claudeBin: makeFakeClaude({ stdout: `${RESULT_OK}\n` }),
+      configPath,
+      applyImpl: async (opts) => apply({ ...opts, homeDir: home }),
+      noDelegate: true,
+      stdout: () => {},
+    });
+    expect(result.exitCode).toBe(0);
+    const settings = fs.readFileSync(path.join(outputDir, "settings.json"), "utf8");
+    const ownDir = path.join(outputDir, GENERATED_DIRNAME);
+    // The understanding-gate hook reads the sentinel harness's own hooks
+    // consult, i.e. the operator's, not one under smoke's output dir.
+    expect(settings).toContain(`UNDERSTANDING_GATE_PAUSE_FILE`);
+    expect(settings).toContain(path.join(operatorDir, ".harness-paused"));
+    expect(settings).not.toContain(path.join(ownDir, ".harness-paused"));
+  });
+
   it("leaves the operator's tree byte-identical when the run fails an expectation", async () => {
     const home = makeTmpDir("smoke-runtime-fail-home-");
     const configPath = path.join(home, "harness.yaml");
