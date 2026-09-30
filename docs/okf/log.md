@@ -2,6 +2,15 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-09-30T09:51:08Z (task 01053b27): `codex-adapter-parity-gaps.md` re-verified after
+  `install-codex-config.ts` changed again (the split-block refusal of a legacy
+  config that starts at a generated header now tells the operator to delete
+  every line from that header through the END marker line, both included, and
+  the hook header map's comment names the one element line it probes); the
+  splice is unchanged, so the doc's install claim (only the marked
+  harness-managed block is replaced, operator config is never owned) still
+  holds; no claim changed, re-stamped.
+
 - 2026-09-30T08:37:19Z (task 01053b27): `codex-adapter-parity-gaps.md` re-verified after
   `install-codex-config.ts` changed again (the hook header map now reads a
   header-shaped line as a header only when its root key resolves to `hooks`,
