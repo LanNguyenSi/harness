@@ -283,6 +283,25 @@ describe("codex install: a hook event table spelled without the [[hooks. prefix 
   }
 });
 
+describe("codex install: tables after the harness tables that are not hook event arrays stay foreign sections (task e8f4fc03)", () => {
+  const controls: Array<[string, string[], string]> = [
+    ["an array of tables outside `hooks`", ['[[ "hooks-archive" . Stop ]]', `note = "${TOKEN}"`], '[[ "hooks-archive" . Stop ]]'],
+    ["a single-bracket table under `hooks`", ['[hooks.state."/work/x"]', `trusted_hash = "${TOKEN}"`], '[hooks.state."/work/x"]'],
+  ];
+  for (const [label, table, header] of controls) {
+    for (const layout of RESPELLED_LAYOUTS) {
+      it(`${layout.label}, ${label}: listed as a foreign section, not as a kept hook table`, () => {
+        write(layout.build(table));
+        const p = planTwice();
+        expect(p.keptOperatorHookTables).toEqual([]);
+        expect(p.foreignSectionsPreserved).toEqual([header]);
+        expect(count(p.nextContent, header)).toBe(1);
+        expect(endLines(p.nextContent)).toBe(1);
+      });
+    }
+  }
+});
+
 const LEGACY_HEADS: Array<[string, string[]]> = [
   ["source-prefix", [SOURCE_PREFIX, GENERATED]],
   ["generated-header", [GENERATED]],
