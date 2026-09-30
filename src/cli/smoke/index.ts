@@ -13,7 +13,7 @@
 import { randomUUID } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { apply, SETTINGS_BASENAME } from "../apply/index.js";
+import { apply, GENERATED_DIRNAME, SETTINGS_BASENAME } from "../apply/index.js";
 import { issueDelegation } from "../delegate/index.js";
 import { EX_FAIL, EX_UNAVAILABLE, EX_USAGE, HarnessExitError } from "../exit-codes.js";
 import {
@@ -33,7 +33,7 @@ export interface SmokeOptions {
   project?: string;
   /** Prompt fed to claude -p. */
   prompt: string;
-  /** Directory where stream.jsonl + stderr.log + settings.json land. */
+  /** Directory where stream.jsonl + stderr.log + settings.json + its own harness.generated/ land. */
   outputDir: string;
   /** Override the spawned session id (default: fresh uuid). */
   sessionId?: string;
@@ -165,29 +165,22 @@ export async function runSmoke(opts: SmokeOptions): Promise<SmokeResult> {
   const settingsPath = path.join(opts.outputDir, SETTINGS_BASENAME);
 
   const applyImpl = opts.applyImpl ?? apply;
-  // smoke always drives claude, so the runtime is claude-code explicitly
-  // rather than whatever runtime the operator's last apply recorded. It is
-  // a diagnostic, not a runtime choice: `.last-apply` keeps the recorded
-  // runtime, so the next plain `harness apply` reuses it and rewrites that
-  // runtime's files back (agent-tasks b9e6d63c).
+  // smoke always drives claude, so the runtime is claude-code explicitly.
+  // It generates into its own `<output-dir>/harness.generated/`, never the
+  // operator's: the operator's generated tree and `.last-apply` (the
+  // runtime record the next plain `harness apply` reuses) stay untouched,
+  // so a codex machine's audit copies are never overwritten with the
+  // claude-code variant (agent-tasks 04b8abcf).
   const applyOpts: Parameters<typeof apply>[0] = {
     target: settingsPath,
     force: true,
     runtime: "claude-code",
-    preserveRecordedRuntime: true,
+    generatedDir: path.join(opts.outputDir, GENERATED_DIRNAME),
   };
   if (opts.configPath) applyOpts.configPath = opts.configPath;
   if (opts.project) applyOpts.project = opts.project;
   const applyResult = await applyImpl(applyOpts);
   const stdoutWrite = opts.stdout ?? ((s: string) => process.stdout.write(s));
-  if (
-    applyResult.previousRuntime !== undefined &&
-    applyResult.previousRuntime !== applyResult.runtime
-  ) {
-    stdoutWrite(
-      `runtime: ${applyResult.runtime} for smoke; the recorded runtime ${applyResult.previousRuntime} is kept, the next harness apply restores it\n`,
-    );
-  }
   // `apply` can return a refusal outcome without throwing. Without this
   // guard a stale generated/ dir or an unresolved --target conflict
   // silently lets smoke run claude against the OLD settings, which then
