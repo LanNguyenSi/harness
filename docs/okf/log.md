@@ -2,6 +2,8 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-09-30T13:37:28Z, task e8f4fc03: `codex-adapter-parity-gaps.md` states when the legacy no-END split-block check runs (only after a scan that ended at a respelled hook table, up to the first non-hook table). Re-stamped.
+
 - 2026-09-30T13:09:29Z (task e8f4fc03): `codex-adapter-parity-gaps.md` re-verified after
   `install-codex-config.ts` changed again (on a legacy config with no END
   marker whose scan ended at a hook table spelled without the `[[hooks.`
