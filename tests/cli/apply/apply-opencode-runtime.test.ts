@@ -232,6 +232,34 @@ describe("apply --runtime opencode — SOLUTION_VERDICT_SIGNING_KEY projection (
     );
   });
 
+  it("with a redirected generatedDir, writes there but keeps the signing-key path on the operator's generated dir", async () => {
+    writeManifest({
+      tools: {
+        mcp: [{ name: "grounding-mcp", command: ["grounding-mcp-server"] }],
+        cli: [],
+        skills: { enabled: [], source_dirs: [] },
+        builtin: { known: [] },
+      },
+    });
+    const redirected = path.join(tmpHome, "elsewhere", GENERATED_DIRNAME);
+    const result = await apply({ homeDir: tmpHome, runtime: "opencode", generatedDir: redirected });
+    expect(result.outcome).toBe("applied");
+    expect(result.generatedDir).toBe(redirected);
+    expect(fs.existsSync(path.join(redirected, OPENCODE_CONFIG_BASENAME))).toBe(true);
+    expect(fs.existsSync(path.join(tmpHome, GENERATED_DIRNAME, OPENCODE_CONFIG_BASENAME))).toBe(false);
+
+    const jsonBody = fs
+      .readFileSync(path.join(redirected, OPENCODE_CONFIG_BASENAME), "utf8")
+      .split("\n")
+      .filter((l) => !l.startsWith("//"))
+      .join("\n");
+    const mcp = (JSON.parse(jsonBody) as { mcp: Record<string, { environment?: Record<string, string> }> })
+      .mcp;
+    expect(mcp["grounding-mcp"]?.environment?.[SOLUTION_VERDICT_SIGNING_KEY_ENV]).toBe(
+      signingKeyPathFor(path.join(tmpHome, GENERATED_DIRNAME)),
+    );
+  });
+
   it("does not override an operator-declared SOLUTION_VERDICT_SIGNING_KEY", async () => {
     writeManifest({
       tools: {

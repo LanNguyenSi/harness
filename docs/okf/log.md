@@ -2,6 +2,8 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-09-30T12:15:37Z, task 04b8abcf: the smoke and doctor wording was narrowed: settings.json carries only the operator's pause sentinel (the signing-key path is in the opencode config and the grounding-mcp registration), and doctor's malformed-`.last-apply` fallback covers its runtime selection while the settings-drift check (understanding pack declared) still aborts on a malformed record. `codex-adapter-parity-gaps.md` edited; it and `debug-verb-selection.md`, `evidence-ledger-trust-boundary.md`, `pause-vs-gate-kill-switch.md`, `policy-engine-producer-wiring.md` re-checked against `docs/CLI.md` and `src/cli/apply/apply.ts` and re-stamped.
+
 - 2026-09-30T12:02:53Z (task e8f4fc03): `codex-adapter-parity-gaps.md` re-verified after
   `install-codex-config.ts` changed (a hook event table spelled without the
   `[[hooks.` prefix directly after the harness tables is now named and checked
@@ -10,6 +12,25 @@
   the install claim (only the marked harness-managed block is replaced, operator
   config is never owned) still holds; added a sentence naming the install's
   deliberate boundaries after that block, re-stamped.
+
+- 2026-09-30T11:58:32Z (task 04b8abcf): `codex-adapter-parity-gaps.md` and `debug-verb-selection.md`
+  re-verified and edited after `harness smoke` moved into its own
+  `<output-dir>/harness.generated/` (new `generatedDir` apply option, which
+  moves only the apply output; the pause sentinel in the rendered settings and
+  the signing-key path in the opencode config stay on the operator's generated
+  dir) and
+  `harness doctor` began expanding packs against apply's `selectRuntime`
+  result (a malformed `.last-apply` falls back to the default and warns in the
+  runtime selection; the settings-drift check still aborts on one): the
+  smoke claims now say the operator's generated files and `.last-apply` are
+  not rewritten while runtime state (delegation marker, hook session state)
+  still lands in the operator's tree, and the three `apply.ts` line citations
+  in the codex doc were re-pointed against the changed file (the `--target`
+  refusal citation had been left on a stale range). `evidence-ledger-trust-boundary.md`,
+  `pause-vs-gate-kill-switch.md` and `policy-engine-producer-wiring.md` list
+  files this task touched (`docs/CLI.md`, `src/cli/doctor/index.ts`,
+  `src/cli/apply/apply.ts`) but cite nothing that changed; no claim changed,
+  re-stamped.
 
 - 2026-09-30T09:51:08Z (task 01053b27): `codex-adapter-parity-gaps.md` re-verified after
   `install-codex-config.ts` changed again (the split-block refusal of a legacy
@@ -1127,7 +1148,7 @@
   `SessionStartPreflightSetupVersionFinding`
   (`src/cli/doctor/session-start-preflight-setup-version.ts:72#"layer_unresolvable"`,
   built directly by `doctor()` at
-  `src/cli/doctor/index.ts:1411#"layer_unresolvable"`), naming the
+  `src/cli/doctor/index.ts:1428#"layer_unresolvable"`), naming the
   layer path and the FIRST LINE of the parse error, counted in
   `warningCount`, rendered by `format.ts` as one warning line; round 1
   first shipped full silence here, round 1's own review found the

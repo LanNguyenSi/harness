@@ -52,6 +52,20 @@ async function waitForFile(filePath: string, timeoutMs: number): Promise<void> {
   }
 }
 
+/** Every file under `dir` (relative path to content), so a before/after compare is byte-exact. */
+function snapshotTree(dir: string): Record<string, string> {
+  const out: Record<string, string> = {};
+  const walk = (d: string): void => {
+    for (const entry of fs.readdirSync(d, { withFileTypes: true })) {
+      const full = path.join(d, entry.name);
+      if (entry.isDirectory()) walk(full);
+      else out[path.relative(dir, full)] = fs.readFileSync(full, "utf8");
+    }
+  };
+  walk(dir);
+  return out;
+}
+
 /**
  * Fake claude binary. The runner spawns it the same way it spawns the
  * real claude. The fake reads its instructions from env vars rather
@@ -244,11 +258,12 @@ describe("runSmoke after an apply that recorded another runtime (agent-tasks b9e
     });
     expect(result.exitCode).toBe(0);
     expect(seen[0]?.runtime).toBe("claude-code");
+    expect(seen[0]?.generatedDir).toBe(path.join(outputDir, GENERATED_DIRNAME));
     const settings = JSON.parse(fs.readFileSync(result.settingsPath, "utf8")) as Record<string, unknown>;
     expect(settings.hooks).toBeDefined();
   });
 
-  it("keeps the recorded codex runtime, says so, and the next plain apply restores codex", async () => {
+  it("leaves the operator's harness.generated and .last-apply byte-identical on a codex-recorded machine", async () => {
     const home = makeTmpDir("smoke-runtime-keep-home-");
     const configPath = path.join(home, "harness.yaml");
     fs.writeFileSync(
@@ -270,13 +285,15 @@ describe("runSmoke after an apply that recorded another runtime (agent-tasks b9e
       "understanding-before-execution",
       "instructions.md",
     );
-    const codexInstructions = fs.readFileSync(instructionsPath, "utf8");
-    expect(codexInstructions).toContain("## Runtime\n\ncodex");
+    expect(fs.readFileSync(instructionsPath, "utf8")).toContain("## Runtime\n\ncodex");
+    const before = snapshotTree(generatedDir);
+    expect(Object.keys(before)).toContain(".last-apply");
 
+    const outputDir = makeTmpDir("smoke-runtime-keep-out-");
     let out = "";
     const result = await runSmoke({
       prompt: "x",
-      outputDir: makeTmpDir("smoke-runtime-keep-out-"),
+      outputDir,
       claudeBin: makeFakeClaude({ stdout: `${RESULT_OK}\n` }),
       configPath,
       applyImpl: async (opts) => apply({ ...opts, homeDir: home }),
@@ -286,15 +303,21 @@ describe("runSmoke after an apply that recorded another runtime (agent-tasks b9e
       },
     });
     expect(result.exitCode).toBe(0);
-    expect(out).toContain(
-      "runtime: claude-code for smoke; the recorded runtime codex is kept, the next harness apply restores it\n",
-    );
-    // smoke generated the claude-code variant, but the runtime selection
-    // stays codex.
-    expect(fs.readFileSync(instructionsPath, "utf8")).toContain("## Runtime\n\nclaude-code");
+    // The operator's tree (audit copies and the runtime record) is untouched.
+    expect(snapshotTree(generatedDir)).toEqual(before);
     expect(readLastApply(generatedDir)?.runtime).toBe("codex");
+    expect(out).not.toContain("is kept");
+    // smoke generated the claude-code variant into its own output dir.
+    const ownDir = path.join(outputDir, GENERATED_DIRNAME);
+    expect(
+      fs.readFileSync(
+        path.join(ownDir, "policy-packs", "understanding-before-execution", "instructions.md"),
+        "utf8",
+      ),
+    ).toContain("## Runtime\n\nclaude-code");
+    expect(readLastApply(ownDir)?.runtime).toBe("claude-code");
 
-    // The next plain dry-run reuses codex and lists the file it restores.
+    // The next plain dry-run reuses codex and has nothing to restore.
     let dryOut = "";
     const program = buildProgram({
       stdout: (s: string) => {
@@ -308,13 +331,85 @@ describe("runSmoke after an apply that recorded another runtime (agent-tasks b9e
     expect(dryOut.startsWith("runtime: codex (from last apply; pass --runtime to change)\n")).toBe(
       true,
     );
-    expect(dryOut).toContain(instructionsPath);
+    expect(dryOut).not.toContain(instructionsPath);
 
-    // ...and the plain apply writes the codex variant back.
-    const restored = await apply({ homeDir: home, configPath });
-    expect(restored.runtime).toBe("codex");
-    expect(restored.runtimeSource).toBe("last-apply");
-    expect(fs.readFileSync(instructionsPath, "utf8")).toBe(codexInstructions);
+    const next = await apply({ homeDir: home, configPath });
+    expect(next.runtime).toBe("codex");
+    expect(next.outcome).toBe("no-changes");
+    expect(snapshotTree(generatedDir)).toEqual(before);
+  });
+
+  it("keeps the pause sentinel in the rendered settings anchored to the operator's generated dir", async () => {
+    const home = makeTmpDir("smoke-anchor-home-");
+    const configPath = path.join(home, "harness.yaml");
+    fs.writeFileSync(
+      configPath,
+      yamlStringify({
+        version: 1,
+        tools: {
+          mcp: [],
+          cli: [],
+          skills: { enabled: [], source_dirs: [] },
+          builtin: { known: [] },
+        },
+        memory: { directories: [] },
+        hooks: [],
+        policies: [],
+        policy_packs: [{ name: "understanding-before-execution" }],
+      }),
+    );
+    await apply({ homeDir: home, configPath, runtime: "codex" });
+    const operatorDir = path.join(home, GENERATED_DIRNAME);
+
+    const outputDir = makeTmpDir("smoke-anchor-out-");
+    const result = await runSmoke({
+      prompt: "x",
+      outputDir,
+      claudeBin: makeFakeClaude({ stdout: `${RESULT_OK}\n` }),
+      configPath,
+      applyImpl: async (opts) => apply({ ...opts, homeDir: home }),
+      noDelegate: true,
+      stdout: () => {},
+    });
+    expect(result.exitCode).toBe(0);
+    const settings = fs.readFileSync(path.join(outputDir, "settings.json"), "utf8");
+    const ownDir = path.join(outputDir, GENERATED_DIRNAME);
+    // The understanding-gate hook reads the sentinel harness's own hooks
+    // consult, i.e. the operator's, not one under smoke's output dir.
+    expect(settings).toContain(`UNDERSTANDING_GATE_PAUSE_FILE`);
+    expect(settings).toContain(path.join(operatorDir, ".harness-paused"));
+    expect(settings).not.toContain(path.join(ownDir, ".harness-paused"));
+  });
+
+  it("leaves the operator's tree byte-identical when the run fails an expectation", async () => {
+    const home = makeTmpDir("smoke-runtime-fail-home-");
+    const configPath = path.join(home, "harness.yaml");
+    fs.writeFileSync(
+      configPath,
+      yamlStringify({
+        version: 1,
+        tools: { mcp: [], cli: [], skills: { enabled: [], source_dirs: [] }, builtin: { known: [] } },
+        memory: { directories: [] },
+        hooks: [],
+        policies: [],
+        policy_packs: [{ name: "understanding-before-execution" }],
+      }),
+    );
+    await apply({ homeDir: home, configPath, runtime: "codex" });
+    const generatedDir = path.join(home, GENERATED_DIRNAME);
+    const before = snapshotTree(generatedDir);
+    const result = await runSmoke({
+      prompt: "x",
+      outputDir: makeTmpDir("smoke-runtime-fail-out-"),
+      claudeBin: makeFakeClaude({ stdout: `${RESULT_OK}\n` }),
+      configPath,
+      expectations: { expectHooks: ["no-such-hook"] },
+      applyImpl: async (opts) => apply({ ...opts, homeDir: home }),
+      noDelegate: true,
+      stdout: () => {},
+    });
+    expect(result.exitCode).toBe(1);
+    expect(snapshotTree(generatedDir)).toEqual(before);
   });
 
   it("codex apply, smoke, pack remove --force, then a plain apply still keeps codex", async () => {
@@ -351,7 +446,7 @@ describe("runSmoke after an apply that recorded another runtime (agent-tasks b9e
       stdout: () => {},
     });
     expect(result.exitCode).toBe(0);
-    expect(fs.readFileSync(instructionsPath, "utf8")).toContain("## Runtime\n\nclaude-code");
+    expect(fs.readFileSync(instructionsPath, "utf8")).toBe(codexInstructions);
 
     await packRemove("branch-protection", { configPath, force: true });
     expect(readLastApply(generatedDir)?.runtime).toBe("codex");

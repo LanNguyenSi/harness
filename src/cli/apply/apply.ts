@@ -181,6 +181,18 @@ export interface ApplyOptions {
    * stays absent.
    */
   preserveRecordedRuntime?: boolean;
+  /**
+   * Generate into this directory instead of the `harness.generated/` next
+   * to the manifest. For a diagnostic apply (`harness smoke`) that must
+   * leave the operator's generated tree and its `.last-apply` record
+   * untouched; the runtime selection then reads the `.last-apply` of THIS
+   * directory, not the operator's. Resolved to an absolute path. Only the
+   * apply output (generated files, audit copies, `.last-apply`) moves;
+   * the settings' pause sentinel and the opencode/grounding-mcp signing-key
+   * path stay anchored to the operator's generated dir, since the
+   * operator's hooks and grounding-mcp resolve them there.
+   */
+  generatedDir?: string;
 }
 
 export type ApplyOutcome =
@@ -349,7 +361,7 @@ function joinRuntimes(runtimes: readonly Runtime[]): string {
   return `${runtimes.slice(0, -1).join(", ")} and ${runtimes[runtimes.length - 1]}`;
 }
 
-interface RuntimeSelection {
+export interface RuntimeSelection {
   runtime: Runtime;
   runtimeSource: RuntimeSource;
   previousRuntime?: Runtime;
@@ -466,7 +478,7 @@ function inferRuntimeFromFiles(record: LastApplyRecord): RuntimeInference {
 // instead of reusing another runtime. A record without the field (or with
 // an unknown value) falls back to inferring from its files map, then to
 // the default; the caller names every non-explicit choice in its output.
-function selectRuntime(
+export function selectRuntime(
   explicit: Runtime | undefined,
   lastApply: LastApplyRecord | null,
   hasTarget: boolean,
@@ -598,6 +610,11 @@ function buildExpectedFiles(
   opts: ApplyOptions,
   manifestPath: string,
   generatedDir: string,
+  // The operator's generated dir. It differs from `generatedDir` only when
+  // the caller redirected apply's output (`opts.generatedDir`); values that
+  // name runtime state the operator's hooks and grounding-mcp consult (the
+  // pause sentinel, the verdict signing key) stay anchored here.
+  stateDir: string = generatedDir,
 ): { files: ExpectedFile[]; warnings: string[] } {
   // Phase 6 #2: expand policy_packs[] into hook contributions + extra
   // generated files BEFORE settings projection. Pack hooks flow through
@@ -630,7 +647,7 @@ function buildExpectedFiles(
   // sentinel harness's own hooks resolve via generatedDir at runtime. See
   // `ResolvePackOptions.pauseFile`'s doc comment for why only that one hook
   // needs it.
-  const pauseFile = sentinelPath(generatedDir);
+  const pauseFile = sentinelPath(stateDir);
   const packExpansion = expandPolicyPacks(manifest, runtime, {
     reportsDir,
     solutionVerdictDir,
@@ -702,7 +719,7 @@ function buildExpectedFiles(
     // grounding-mcp entry gets a real, resolved SOLUTION_VERDICT_SIGNING_KEY
     // instead of no projection at all (generateOpencodeConfig's extras have
     // no safe default for this -- see GenerateOpencodeConfigExtras).
-    const opencodeConfig = generateOpencodeConfig(augmentedManifest, { generatedDir });
+    const opencodeConfig = generateOpencodeConfig(augmentedManifest, { generatedDir: stateDir });
     const opencodeWarnings = [...opencodeConfig.warnings];
     if (packExpansion.permissions) {
       // See generate-opencode-config.ts's header ("permission -> NOT
@@ -736,7 +753,7 @@ function buildExpectedFiles(
   // why this projection is not itself observable in settings.json.
   const settingsResult = generateSettingsWithWarnings(augmentedManifest, {
     ...(packExpansion.permissions && { packPermissions: packExpansion.permissions }),
-    generatedDir,
+    generatedDir: stateDir,
   });
   const settings = `${JSON.stringify(settingsResult.root, null, 2)}\n`;
   return {
@@ -843,7 +860,9 @@ export async function apply(opts: ApplyOptions = {}): Promise<ApplyResult> {
     );
   }
 
-  const generatedDir = resolveGeneratedDir({ homeDir: opts.homeDir, manifestPath });
+  const operatorGeneratedDir = resolveGeneratedDir({ homeDir: opts.homeDir, manifestPath });
+  const generatedDir =
+    opts.generatedDir !== undefined ? path.resolve(opts.generatedDir) : operatorGeneratedDir;
   const lockPath = path.join(path.dirname(manifestPath), LOCK_BASENAME);
 
   const loaderOpts: Parameters<typeof loadManifest>[0] = {
@@ -905,6 +924,7 @@ export async function apply(opts: ApplyOptions = {}): Promise<ApplyResult> {
     { ...opts, runtime },
     manifestPath,
     generatedDir,
+    operatorGeneratedDir,
   );
   // The runtime this apply records: its own, or with
   // `preserveRecordedRuntime` the previous one (recorded or inferred, else
