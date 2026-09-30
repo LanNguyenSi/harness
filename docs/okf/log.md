@@ -2,6 +2,35 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-09-29T11:16:08Z, `codex-adapter-parity-gaps.md` re-verified after the header check's source comment on its cost was reworded (no behaviour change, no line moved); re-stamped.
+
+- 2026-09-29T11:05:10Z (task 6b56d735): `codex-adapter-parity-gaps.md` re-verified after
+  `install-codex-config.ts` changed again (the top-level check behind header
+  recognition now falls back to parsing the full text before a candidate line
+  when the text since the last confirmed header does not parse on its own, and
+  throws on a query before the last confirmed line start); the doc's install
+  claim (only the marked harness-managed block is replaced, operator config is
+  never owned) still holds against the changed code; no claim changed,
+  re-stamped.
+
+- 2026-09-29T10:44:27Z (task 6b56d735): `codex-adapter-parity-gaps.md` re-verified after
+  `install-codex-config.ts` changed again (header recognition now requires a
+  candidate line to start at the top level of the document, checked by parsing
+  only the text since the last confirmed top-level line, so an array element on
+  its own line is never taken for a table header, and a refusal names such a
+  line by its line number); the doc's install claim (only the marked
+  harness-managed block is replaced, operator config is never owned) still holds
+  against the changed code; no claim changed, re-stamped.
+
+- 2026-09-29T10:30:54Z (task 8e9d7333): the solution-acceptance null-verdict reason (`evaluateGate`) now claims only
+  what the gate received (`no usable solution-acceptance verdict for "<id>"`) instead of
+  "recorded" and "run ... solution_evaluate first", and no longer says anything about a
+  read (the unusable-id state reads nothing, the invalid-record state reads a marker).
+  Re-verified `evidence-ledger-trust-boundary.md` and `gate-fail-posture-matrix.md`, the two
+  docs listing the touched runtime file or pack doc under sources: neither quotes the old
+  reason wording, the deny set and line citations they make are unchanged; no claim
+  changed, both re-stamped after the last source, test and doc commit.
+
 - 2026-09-29T09:16:42Z (task 01053b27): `codex-adapter-parity-gaps.md` re-verified after
   `install-codex-config.ts` changed again (the check on a kept operator
   `[[hooks.*]]` table now reads its hook commands from the parsed whole config,
