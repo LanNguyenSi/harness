@@ -1446,12 +1446,14 @@ function subKey(event: string, index: number): string {
  * dotted bare path is not a TOML value), and a header this scan cannot
  * resolve (an escape in a quoted key) is not counted, so the caller compares
  * `eventCounts` and `subCounts` with the parsed arrays' lengths and treats a
- * mismatch as "cannot match exactly". A header-shaped line whose root key
- * does not resolve to `hooks` is never resolved here, so the classifier
- * skips the top-level probe for it (`hooksRooted`): an array element on its
- * own line (`["x"]`, `[1]`) costs no parse in this scan, only a
- * `hooks`-rooted spelling that `[[hooks.` does not catch (`[[ hooks.Stop ]]`,
- * `[["hooks".Stop]]`, `[hooks.Stop]`) is probed.
+ * mismatch as "cannot match exactly". The classifier reads a header-shaped
+ * line as a header here only when its root key resolves to `hooks`
+ * (`hooksRooted`, checked before the top-level probe), so every header this
+ * scan resolves has the root `hooks` (a `[[hooks.` line has it by its
+ * prefix), a table outside `hooks` never shifts the order match, and an
+ * array element on its own line (`["x"]`, `[1]`) costs no parse in this
+ * scan: only a `hooks`-rooted spelling that `[[hooks.` does not catch
+ * (`[[ hooks.Stop ]]`, `[["hooks".Stop]]`, `[hooks.Stop]`) is probed.
  */
 function mapHookArrayHeaders(text: string): HookArrayHeaderMap {
   const map: HookArrayHeaderMap = { slots: new Map(), eventCounts: new Map(), subCounts: new Map() };
@@ -1467,8 +1469,8 @@ function mapHookArrayHeaders(text: string): HookArrayHeaderMap {
     // parses, and a single-bracket `[hooks.<Event>.hooks]` makes that entry's
     // `hooks` a table, whose `command` is not a hook command either way.
     if (parsed !== null) {
-      const [root, event, sub] = parsed.keys.map(resolvedKeyName);
-      if (root === "hooks" && typeof event === "string") {
+      const [, event, sub] = parsed.keys.map(resolvedKeyName);
+      if (typeof event === "string") {
         const count = map.eventCounts.get(event) ?? 0;
         if (parsed.keys.length === 2) {
           map.slots.set(pos, { event, index: count });
