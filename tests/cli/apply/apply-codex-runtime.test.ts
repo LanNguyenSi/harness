@@ -4400,6 +4400,72 @@ describe("apply --runtime codex --install: an operator-authored [[hooks.*]] tabl
     }
   }
 
+  // A root key that only starts with `hooks`, or equals it in another case,
+  // is not `hooks`: its table appends to another array, so the order match
+  // must not count it (counted, the kept table's event would have one header
+  // more than its parsed array and the install would refuse a valid config).
+  const otherRootSpellings = ["[[hooks2.Stop]]", '[[ "hooks-archive" . Stop ]]', "[[HOOKS.Stop]]"];
+
+  for (const spelling of otherRootSpellings) {
+    for (const where of ["above the BEGIN marker", "below the END marker"]) {
+      it(`a table spelled ${spelling} ${where} is outside \`hooks\` and not counted by the order match: the kept table is kept and named with its own line numbers`, () => {
+        const other = [spelling, 'hooks = [{ type = "command", command = "archived-hook", timeout = 5 }]'];
+        const block = [CODEX_MANAGED_BEGIN, GENERATED, ...retiredTable, ...operatorTable, CODEX_MANAGED_END];
+        const config = (
+          where === "above the BEGIN marker" ? [...other, ...block, ""] : [...block, ...other, ""]
+        ).join("\n");
+        const result = plan(config);
+        expect(result.keptOperatorHookTables).toEqual([keptLabel("[[hooks.Stop]]", config, result.nextContent)]);
+        expect(lineOf(config, "[[hooks.Stop]]")).toBe(where === "above the BEGIN marker" ? 9 : 7);
+        expect(stopCommands(result.nextContent)).toEqual([operatorCommand]);
+        expect(result.nextContent).toContain(`${other.join("\n")}\n`);
+      });
+    }
+  }
+
+  it("a sub-table [[hooks.Stop.hooks2]] of a kept entry with two inline hooks is not counted as a nested hooks table: both tables are kept and named", () => {
+    const config = driftedEnd(
+      "[[hooks.Stop]]",
+      `hooks = [{ type = "command", command = "${operatorCommand}", timeout = 5 }, { type = "command", command = "operator-second --x", timeout = 5 }]`,
+      "[[hooks.Stop.hooks2]]",
+      "x = 1",
+    );
+    const result = plan(config, FRESH_BLOCK);
+    expect(result.keptOperatorHookTables).toEqual([
+      keptLabel("[[hooks.Stop]]", config, result.nextContent),
+      keptLabel("[[hooks.Stop.hooks2]]", config, result.nextContent),
+    ]);
+    expect(lineOf(config, "[[hooks.Stop]]")).toBe(7);
+    expect(lineOf(config, "[[hooks.Stop.hooks2]]")).toBe(9);
+    expect(stopCommands(result.nextContent)).toEqual([FRESH_COMMAND, operatorCommand, "operator-second --x"]);
+  });
+
+  // ---- the order match: inputs that reach its type guards ----
+
+  it("an array-of-tables `hooks` root ([[hooks]]) above the block makes `hooks` an array: the kept table cannot be matched and the install refuses, not a TypeError", () => {
+    const config = ["[[hooks]]", "x = 1", CODEX_MANAGED_BEGIN, GENERATED, ...retiredTable, ...operatorTable, CODEX_MANAGED_END, ""].join(
+      "\n",
+    );
+    // A fresh block equal to the config's own harness table, so only the kept
+    // table differs between the current and the next config.
+    const err = refusalOf(config, [GENERATED, ...retiredTable, ""].join("\n"));
+    expect(err.message).toContain(`[[hooks.Stop]] (line ${lineOf(config, "[[hooks.Stop]]")})`);
+    expect(err.message).toContain("could not match to its entry in the parsed config");
+    expect(err.message).not.toContain(operatorCommand);
+    expect(fs.readFileSync(configPath(), "utf8")).toBe(config);
+  });
+
+  it("a kept header whose trailing comment holds U+2028 is named (unknown) and refuses as unmatched, not a TypeError", () => {
+    const header = "[[hooks.Stop]] # note more";
+    const config = driftedEnd(header, `hooks = [{ type = "command", command = "${operatorCommand}", timeout = 5 }]`);
+    const err = refusalOf(config);
+    expect(err.message).toContain(`hook table (unknown) (line ${lineOf(config, header)})`);
+    expect(err.message).toContain("could not match to its entry in the parsed config");
+    expect(err.message).not.toContain("note more");
+    expect(err.message).not.toContain(operatorCommand);
+    expect(fs.readFileSync(configPath(), "utf8")).toBe(config);
+  });
+
   it("a line reading exactly like the END marker inside a harness table's multi-line string does not end the block: the install replaces the table and writes one END", async () => {
     const config = [
       CODEX_MANAGED_BEGIN,
@@ -4423,17 +4489,28 @@ describe("apply --runtime codex --install: an operator-authored [[hooks.*]] tabl
 
   // ---- legacy (no BEGIN) paths whose END marker survived ----
 
-  const legacyHeads: Array<[string, string[], string]> = [
+  // The delete fix of the split-block refusal per legacy path: a generated
+  // header left alone above END no longer marks a harness block, so on that
+  // path the fix deletes the header and END lines too.
+  const legacyHeads: Array<[string, string[], string, string]> = [
     [
       "source-prefix",
       ["# Harness Codex hook wiring. Generated source: old", GENERATED],
       "the '# Harness Codex hook wiring.' source-prefix line",
+      `delete the lines between the '# Harness Codex hook wiring.' source-prefix line and '${CODEX_MANAGED_END}' ` +
+        "so only harness-owned tables remain between them",
     ],
-    ["generated-header", [GENERATED], `the '${GENERATED}' line`],
+    [
+      "generated-header",
+      [GENERATED],
+      `the '${GENERATED}' line`,
+      `delete every line from the '${GENERATED}' line through the '${CODEX_MANAGED_END}' marker line, both ` +
+        "included, so the install writes a fresh harness block",
+    ],
   ];
 
-  for (const [label, head, opening] of legacyHeads) {
-    it(`legacy ${label} config whose END marker survived its deleted BEGIN line: the split-block refusal names the lines between ${opening} and END, never a BEGIN marker`, () => {
+  for (const [label, head, opening, deleteFix] of legacyHeads) {
+    it(`legacy ${label} config whose END marker survived its deleted BEGIN line: the split-block refusal names the lines to delete by ${opening} and END, never a BEGIN marker`, () => {
       const config = [
         ...head,
         ...retiredTable,
@@ -4444,11 +4521,45 @@ describe("apply --runtime codex --install: an operator-authored [[hooks.*]] tabl
       ].join("\n");
       const { message } = refusalOf(config);
       expect(message).toContain(
-        `If it is an operator-owned table, move [[hooks.Stop]] below the '${CODEX_MANAGED_END}' marker, or ` +
-          `delete the lines between ${opening} and '${CODEX_MANAGED_END}' so only harness-owned tables remain between them`,
+        `If it is an operator-owned table, move [[hooks.Stop]] below the '${CODEX_MANAGED_END}' marker, or ${deleteFix}`,
       );
       expect(message).not.toContain(CODEX_MANAGED_BEGIN);
       expect(fs.readFileSync(configPath(), "utf8")).toBe(config);
+    });
+
+    it(`legacy ${label} config whose END marker survived its deleted BEGIN line: the split-block refusal's delete fix, followed literally, installs with one END and one generated header, and a second install gives the same bytes`, async () => {
+      const config = [
+        ...head,
+        ...retiredTable,
+        ...operatorTable,
+        ...harnessTable("second-kept", "SessionStart", "harness pack hook second"),
+        CODEX_MANAGED_END,
+        '[projects."/work/x"]',
+        'trust_level = "trusted"',
+        "",
+      ].join("\n");
+      const { message } = refusalOf(config);
+      const lines = config.split("\n");
+      const through = /delete every line from the '([^']+)' line through the '([^']+)' marker line, both included/.exec(
+        message,
+      );
+      const between = /delete the lines between the '([^']+)' (?:source-prefix )?line and '([^']+)'/.exec(message);
+      const [, from, to] = through ?? between ?? [];
+      const fromIdx = lines.findIndex((l) => from !== undefined && l.startsWith(from));
+      const toIdx = lines.indexOf(to ?? "");
+      expect(fromIdx).toBe(0);
+      expect(lines[toIdx]).toBe(CODEX_MANAGED_END);
+      const followed = (
+        through !== null
+          ? [...lines.slice(0, fromIdx), ...lines.slice(toIdx + 1)]
+          : [...lines.slice(0, fromIdx + 1), ...lines.slice(toIdx)]
+      ).join("\n");
+      const installed = await installOver(followed);
+      expect(occurrences(installed, CODEX_MANAGED_END)).toBe(1);
+      expect(occurrences(installed, GENERATED)).toBe(1);
+      expect(installed).not.toContain(RETIRED_HOOK_ID);
+      expect(installed).toContain('[projects."/work/x"]\ntrust_level = "trusted"\n');
+      expect(await installOver(installed)).toBe(installed);
     });
 
     it(`legacy ${label} config whose END marker directly follows the harness tables: content below that END is untouched and not listed`, () => {
