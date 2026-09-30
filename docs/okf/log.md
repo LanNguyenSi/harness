@@ -2,6 +2,15 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-09-30T07:06:15Z (task 01053b27): `codex-adapter-parity-gaps.md` re-verified after
+  `install-codex-config.ts` changed again (every header scan of the install now
+  reads lines through one classifier, so an array element line inside a kept
+  operator hook table no longer ends the kept run, and in the legacy paths an END
+  marker that survived its deleted BEGIN line after the kept tables is removed
+  like a drifted END); the doc's install claim (only the marked harness-managed
+  block is replaced, operator config is never owned) still holds against the
+  changed code; no claim changed, re-stamped.
+
 - 2026-09-29T11:16:08Z, `codex-adapter-parity-gaps.md` re-verified after the header check's source comment on its cost was reworded (no behaviour change, no line moved); re-stamped.
 
 - 2026-09-29T11:05:10Z (task 6b56d735): `codex-adapter-parity-gaps.md` re-verified after
