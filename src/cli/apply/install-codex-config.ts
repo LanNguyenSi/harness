@@ -658,7 +658,7 @@ export function assertNoSplitBlock(
   // stays true when the table was found past the marker (a respelled hook
   // table with its own '# harness hook:' comment line above it, say).
   const placement =
-    headerBeforeMarker === null && foreignHeaderLine !== null
+    headerBeforeMarker === null
       ? `below harness-owned content: line ${offendingLineNumber}, above it, contains '${marker}'`
       : `sitting before more harness-owned content: line ${offendingLineNumber} contains '${marker}'`;
 
@@ -684,7 +684,7 @@ export function assertNoSplitBlock(
   // A hook event table spelled another way (`[[ hooks.Stop ]]`) is read as
   // foreign with or without a comment line above it, so restoring one does
   // not help; deleting it does, if harness wrote it (task e8f4fc03).
-  const isRespelledHookTable = !isHookTable && isHookEventArrayHeader(foreignHeaderLine?.line ?? "");
+  const isRespelledHookTable = isHookEventArrayHeader(foreignHeaderLine?.line ?? "");
   const guidance = isHookTable
     ? `If ${firstForeignHeader} is a harness hook table whose '${HARNESS_HOOK_COMMENT_PREFIX}<id> ` +
       "(budget_ms=<n>)' comment line was deleted, restore that comment line directly above it. " +
