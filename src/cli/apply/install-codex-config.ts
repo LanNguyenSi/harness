@@ -421,8 +421,17 @@ type LineKind = "string" | "comment" | "hookHeader" | "foreignHeader" | "content
  *    `[1979-05-27]`) and is `content`, never a header.
  * 5. Every other line is `content` (a key/value line or a continuation line
  *    of a multi-line value).
+ *
+ * `wanted` narrows rule 4 for a scan that only uses some headers: a
+ * header-shaped line it rejects is `content` for that scan without the
+ * top-level probe, whose full-prefix parse is the cost of rule 4 (see
+ * `createTopLevelProbe`). Only the hook header map passes one, since it
+ * resolves nothing but headers whose root key is `hooks`.
  */
-function createLineClassifier(text: string): (lineStart: number, rawLine: string) => LineKind {
+function createLineClassifier(
+  text: string,
+  wanted: (trimmed: string) => boolean = () => true,
+): (lineStart: number, rawLine: string) => LineKind {
   let delim: TripleDelim = null;
   const startsAtTopLevel = createTopLevelProbe(text);
   return (lineStart, rawLine) => {
@@ -432,7 +441,9 @@ function createLineClassifier(text: string): (lineStart: number, rawLine: string
     const trimmed = rawLine.trim();
     if (trimmed === "" || trimmed.startsWith("#")) return "comment";
     if (HOOK_ARRAY_HEADER_RE.test(trimmed)) return "hookHeader";
-    if (NON_HOOK_TABLE_RE.test(trimmed) && startsAtTopLevel(lineStart)) return "foreignHeader";
+    if (NON_HOOK_TABLE_RE.test(trimmed) && wanted(trimmed) && startsAtTopLevel(lineStart)) {
+      return "foreignHeader";
+    }
     return "content";
   };
 }
@@ -463,7 +474,8 @@ function createLineClassifier(text: string): (lineStart: number, rawLine: string
  * that comes after at least one header that has one (task 01053b27).
  * Failure modes of that second rule: a harness table whose comment an
  * operator deleted ends the range there (a later harness table still
- * carrying its comment lands in the zone `assertNoSplitBlock` refuses on; a
+ * carrying its comment, before the END marker when one follows, lands in
+ * the zone `assertNoSplitBlock` refuses on; a
  * last table stays as an operator table, which the install names in
  * `keptOperatorHookTables` and refuses when its command is one harness
  * writes, see `assertKeptHookTablesAreOperatorOwned`); a
@@ -580,7 +592,12 @@ function scanOwnedContentEnd(
  * document (`to` is `text.length`), telling the operator to move something
  * below a marker that does not exist would be nonsensical, so a different
  * fix (add one, or move the table below the last harness hook table) is
- * offered instead (task 6a037359). Exported for direct tests only: the scan
+ * offered instead (task 6a037359). `blockOpening` names the line the block
+ * starts at in the delete-the-lines fix: the BEGIN marker by default; a
+ * legacy config (no BEGIN marker) whose END marker survived passes its
+ * source-prefix line or generated header instead, since a BEGIN marker it
+ * does not have is no line to delete from (task 01053b27). Exported for
+ * direct tests only: the scan
  * that feeds it never hands it a line that is not a real header, so its own
  * naming rule is reachable in isolation only by calling it directly (task
  * 6b56d735).
@@ -591,6 +608,7 @@ export function assertNoSplitBlock(
   to: number,
   configPath: string,
   hasEndMarker: boolean,
+  blockOpening = `'${CODEX_MANAGED_BEGIN}'`,
 ): void {
   const zoneStart = Math.max(from, 0);
   const zoneEnd = Math.max(to, from);
@@ -626,7 +644,7 @@ export function assertNoSplitBlock(
   const fixes = hasEndMarker
     ? [
         `move ${firstForeignHeader} below the '${CODEX_MANAGED_END}' marker`,
-        `delete the lines between '${CODEX_MANAGED_BEGIN}' and '${CODEX_MANAGED_END}' so only ` +
+        `delete the lines between ${blockOpening} and '${CODEX_MANAGED_END}' so only ` +
           "harness-owned tables remain between them",
       ]
     : [
@@ -856,13 +874,17 @@ function startPastBom(text: string, start: number): number {
  * follows (a drifted END), the zone up to it is checked for a split block
  * (`assertNoSplitBlock`), its foreign sections and kept operator hook tables
  * are collected, and that END line is excised by the splice (`strayEnd`);
- * without one, the same happens up to the end of the document.
+ * without one, the same happens up to the end of the document. Content below
+ * that END line is never read here and the splice leaves it untouched.
+ * `blockOpening` is the line the split-block refusal names as the start of
+ * the block (`assertNoSplitBlock`; the BEGIN marker when omitted).
  */
 function rangeBeforeStrayEnd(
   text: string,
   start: number,
   end: number,
   configPath: string,
+  blockOpening?: string,
 ): ManagedRange {
   const strayIdx = findExactLine(text, CODEX_MANAGED_END, end);
   if (strayIdx === -1) {
@@ -874,7 +896,7 @@ function rangeBeforeStrayEnd(
 
   const strayLineStart = lineStartAt(text, strayIdx);
   const strayLineEnd = lineEndAfter(text, strayIdx);
-  assertNoSplitBlock(text, end, strayLineStart, configPath, true);
+  assertNoSplitBlock(text, end, strayLineStart, configPath, true, blockOpening);
   const foreignSectionsPreserved = collectForeignSectionHeaders(text, end, strayLineStart);
   const keptHookTables = collectKeptHookTables(text, end, strayLineStart);
   return {
@@ -890,21 +912,29 @@ function rangeBeforeStrayEnd(
  * The range of a legacy (no BEGIN marker) config: the source-prefix or
  * generated-header paths. When the scan ended at an operator hook table,
  * the zone after it is handled like the BEGIN path's
- * (`rangeBeforeStrayEnd`): a harness-commented table later in the file
- * refuses instead of being kept as if it were operator content (the fresh
- * block would repeat it), and an END marker that survived its deleted BEGIN
+ * (`rangeBeforeStrayEnd`): an END marker that survived its deleted BEGIN
  * line, sitting after the kept tables, is excised like a drifted END, so
  * the install leaves no orphan END line below the kept tables and the
- * kept-table refusal offers moving an operator-owned table below that END
- * (task 01053b27). Other endings keep the legacy behaviour.
+ * kept-table refusal offers moving an operator-owned table below that END;
+ * a harness-commented table after the kept tables refuses through the
+ * split-block check instead of being kept as if it were operator content
+ * (the fresh block would repeat it) when it sits before that END, or
+ * anywhere later when no END follows. Content below that END is untouched,
+ * as on the BEGIN path, so a harness-commented table there is kept and not
+ * named. The split-block refusal names `blockOpening` (the source-prefix
+ * line or the generated header) as the start of the block, since there is
+ * no BEGIN marker (task 01053b27). Other endings keep the legacy behaviour.
  */
 function legacyManagedRange(
   text: string,
   start: number,
   scan: { end: number; sawEndMarker: boolean; endedAtOperatorHookTable?: true },
   configPath: string,
+  blockOpening: string,
 ): ManagedRange {
-  if (scan.endedAtOperatorHookTable) return rangeBeforeStrayEnd(text, start, scan.end, configPath);
+  if (scan.endedAtOperatorHookTable) {
+    return rangeBeforeStrayEnd(text, start, scan.end, configPath, blockOpening);
+  }
   const foreignSectionsPreserved = scan.sawEndMarker
     ? []
     : collectForeignSectionHeaders(text, scan.end, text.length);
@@ -957,7 +987,13 @@ function findManagedRange(text: string, configPath: string): ManagedRange | null
   const source = text.indexOf(CODEX_MANAGED_SOURCE_PREFIX);
   if (source !== -1) {
     const start = startPastBom(text, lineStartAt(text, source));
-    return legacyManagedRange(text, start, scanOwnedContentEnd(text, start), configPath);
+    return legacyManagedRange(
+      text,
+      start,
+      scanOwnedContentEnd(text, start),
+      configPath,
+      `the '${CODEX_MANAGED_SOURCE_PREFIX}' source-prefix line`,
+    );
   }
 
   const generated = text.indexOf(GENERATED_HEADER);
@@ -970,7 +1006,7 @@ function findManagedRange(text: string, configPath: string): ManagedRange | null
       candidate.includes("[[hooks.") ||
       candidate.includes("[[hooks.pre_tool_use]]")
     ) {
-      return legacyManagedRange(text, start, scan, configPath);
+      return legacyManagedRange(text, start, scan, configPath, `the '${GENERATED_HEADER}' line`);
     }
   }
 
@@ -1370,6 +1406,12 @@ function resolvedKeyName(segment: string): string | null {
   return segment;
 }
 
+/** Whether a header-shaped line's first key resolves to `hooks`, the only
+ * root `mapHookArrayHeaders` resolves. */
+function hooksRooted(trimmed: string): boolean {
+  return resolvedKeyName(parseTableHeader(trimmed)?.keys[0] ?? "") === "hooks";
+}
+
 /** Where a `[[...]]` header line appends in the parsed document: the
  * `index`-th entry of `hooks.<event>`, or, for `[[hooks.<event>.hooks]]`,
  * the `subIndex`-th entry of that entry's own `hooks` array. */
@@ -1404,12 +1446,17 @@ function subKey(event: string, index: number): string {
  * dotted bare path is not a TOML value), and a header this scan cannot
  * resolve (an escape in a quoted key) is not counted, so the caller compares
  * `eventCounts` and `subCounts` with the parsed arrays' lengths and treats a
- * mismatch as "cannot match exactly".
+ * mismatch as "cannot match exactly". A header-shaped line whose root key
+ * does not resolve to `hooks` is never resolved here, so the classifier
+ * skips the top-level probe for it (`hooksRooted`): an array element on its
+ * own line (`["x"]`, `[1]`) costs no parse in this scan, only a
+ * `hooks`-rooted spelling that `[[hooks.` does not catch (`[[ hooks.Stop ]]`,
+ * `[["hooks".Stop]]`, `[hooks.Stop]`) is probed.
  */
 function mapHookArrayHeaders(text: string): HookArrayHeaderMap {
   const map: HookArrayHeaderMap = { slots: new Map(), eventCounts: new Map(), subCounts: new Map() };
   let pos = 0;
-  const classify = createLineClassifier(text);
+  const classify = createLineClassifier(text, hooksRooted);
   while (pos < text.length) {
     const lineEnd = lineEndAfter(text, pos);
     const rawLine = text.slice(pos, lineEnd);
