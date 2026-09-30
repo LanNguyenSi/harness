@@ -36,6 +36,8 @@ const harnessTable = (id: string, event: string, command: string): string[] => [
 const HARNESS_A = harnessTable("a", "PreToolUse", "harness pack hook a");
 const HARNESS_B = harnessTable("b", "Stop", "harness pack hook b");
 const FRESH = [GENERATED, ...HARNESS_A, ...HARNESS_B, ""].join("\n");
+const DOCS_TABLE = ["[mcp_servers.docs]", `command = "docs-server --token=${TOKEN}"`];
+const TAIL = ['[projects."/work/x"]', 'trust_level = "trusted"'];
 
 let home: string;
 let codexConfig: string;
@@ -232,6 +234,15 @@ describe("codex install: boundary checks of the hook header map and the END line
     expect(count(p.nextContent, 'command = "harness pack hook b"')).toBe(1);
     expect(p.nextContent.endsWith(`${CODEX_MANAGED_END}\n[projects."/work/x"]\ntrust_level = "trusted"\n`)).toBe(true);
   });
+
+  it("past a foreign table, a comment line that only starts with the END marker text is not the drifted END: the real END is removed and the comment kept", () => {
+    const comment = `${CODEX_MANAGED_END} (moved here by hand)`;
+    write([CODEX_MANAGED_BEGIN, GENERATED, ...HARNESS_A, "[tui]", comment, "theme = 1", CODEX_MANAGED_END, ...TAIL, ""]);
+    const p = planTwice();
+    expect(endLines(p.nextContent)).toBe(1);
+    expect(count(p.nextContent, comment)).toBe(1);
+    expect(p.nextContent.endsWith(`${CODEX_MANAGED_END}\n[tui]\n${comment}\ntheme = 1\n${TAIL.join("\n")}\n`)).toBe(true);
+  });
 });
 
 // Layouts in which a hook event table spelled without the `[[hooks.` prefix
@@ -306,9 +317,6 @@ const LEGACY_HEADS: Array<[string, string[]]> = [
   ["source-prefix", [SOURCE_PREFIX, GENERATED]],
   ["generated-header", [GENERATED]],
 ];
-
-const DOCS_TABLE = ["[mcp_servers.docs]", `command = "docs-server --token=${TOKEN}"`];
-const TAIL = ['[projects."/work/x"]', 'trust_level = "trusted"'];
 
 describe("codex install: a legacy config with a foreign table between its harness tables and a surviving END marker (task e8f4fc03)", () => {
   for (const [label, head] of LEGACY_HEADS) {
