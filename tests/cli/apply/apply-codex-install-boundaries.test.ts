@@ -581,6 +581,24 @@ describe("codex install: a harness marker in the run of respelled hook tables of
       expect(endLines(p.nextContent)).toBe(1);
     });
 
+    it(`legacy ${label}: a scan that ended at an operator [[hooks.Stop]] with no END checks the whole rest of the file, so a harness-commented table past a later foreign table refuses`, () => {
+      const config = write([
+        ...head,
+        ...HARNESS_A,
+        "[[hooks.Stop]]",
+        `hooks = [{ type = "command", command = "${OPERATOR_COMMAND}", timeout = 5 }]`,
+        ...DOCS_TABLE,
+        ...harnessTable("c", "SessionStart", "harness pack hook c"),
+        "",
+      ]);
+      const { message } = refusal();
+      expect(message).toContain(
+        `has a foreign table ([[hooks.Stop]]) sitting before more harness-owned content: line ${lineOf(config, "# harness hook: c (budget_ms=2000)")} contains '# harness hook:'`,
+      );
+      expect(message).not.toContain(TOKEN);
+      expect(fs.readFileSync(codexConfig, "utf8")).toBe(config);
+    });
+
     it(`legacy ${label}: a harness marker in the comment run before a non-hook table, with no respelled table, keeps the legacy reading`, () => {
       write([...head, ...HARNESS_A, "# harness hook: stale (budget_ms=1)", ...DOCS_TABLE, ""]);
       const p = planTwice();
