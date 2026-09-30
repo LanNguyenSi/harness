@@ -4456,12 +4456,12 @@ describe("apply --runtime codex --install: an operator-authored [[hooks.*]] tabl
   });
 
   it("a kept header whose trailing comment holds U+2028 is named (unknown) and refuses as unmatched, not a TypeError", () => {
-    const header = "[[hooks.Stop]] # note more";
+    const header = "[[hooks.Stop]] # note\u2028more";
     const config = driftedEnd(header, `hooks = [{ type = "command", command = "${operatorCommand}", timeout = 5 }]`);
     const err = refusalOf(config);
     expect(err.message).toContain(`hook table (unknown) (line ${lineOf(config, header)})`);
     expect(err.message).toContain("could not match to its entry in the parsed config");
-    expect(err.message).not.toContain("note more");
+    expect(err.message).not.toContain("note\u2028more");
     expect(err.message).not.toContain(operatorCommand);
     expect(fs.readFileSync(configPath(), "utf8")).toBe(config);
   });
