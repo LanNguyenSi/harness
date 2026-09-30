@@ -4155,4 +4155,208 @@ describe("apply --runtime codex --install: an operator-authored [[hooks.*]] tabl
     expect(err.message).toContain(`[[hooks.Stop]] (line ${lineOf(config, "[[hooks.Stop]]")})`);
     expect(err.message).not.toContain("[[hooks.Stop.extra]]");
   });
+
+  // ---- one line classifier: an array element on its own line inside a kept table ----
+
+  const ELEMENT_SHAPES: Array<{ label: string; element: string; text: string }> = [
+    { label: "a basic-string element holding a token", element: `  ["--token=${SECRET}"]`, text: SECRET },
+    { label: "a literal-string element holding a token", element: `  ['${SECRET}']`, text: SECRET },
+    { label: "a date element", element: "  [1979-05-27]", text: "1979-05-27" },
+  ];
+  const keptTableWithElement = (element: string): string[] => [
+    "[[hooks.Stop]]",
+    `hooks = [{ type = "command", command = "${operatorCommand}", timeout = 5 }]`,
+    "args = [",
+    element,
+    "]",
+  ];
+  const beginWithoutEnd = (...tail: string[]): string =>
+    [CODEX_MANAGED_BEGIN, GENERATED, ...retiredTable, ...tail, ""].join("\n");
+  const elementLayouts: Array<[string, (...tail: string[]) => string]> = [
+    ["drifted END", driftedEnd],
+    ["BEGIN without END", beginWithoutEnd],
+  ];
+
+  /** One CLI run over `config` (written first), with both streams and the
+   * exit code. */
+  async function cliRun(config: string, extraArgs: string[]): Promise<{ code: number; out: string; err: string }> {
+    const manifestPath = writeManifestWithPack();
+    fs.mkdirSync(path.dirname(configPath()), { recursive: true });
+    fs.writeFileSync(configPath(), config);
+    let out = "";
+    let err = "";
+    const code = await run({
+      argv: ["apply", "--config", manifestPath, "--runtime", "codex", "--install", "--codex-config", configPath(), ...extraArgs],
+      stdout: (s: string) => {
+        out += s;
+      },
+      stderr: (s: string) => {
+        err += s;
+      },
+    });
+    return { code, out, err };
+  }
+
+  const CLI_MODES = [["--dry-run"], ["--dry-run", "--json"], [], ["--json"]];
+
+  for (const [layout, build] of elementLayouts) {
+    for (const shape of ELEMENT_SHAPES) {
+      it(`${layout}, ${shape.label} in a kept table: the element neither ends the kept run nor is named, the hook table after it is named, and no output carries the element`, async () => {
+        const config = build(
+          ...keptTableWithElement(shape.element),
+          ...harnessShapedOperatorTable("operator-second-script", "SessionStart"),
+        );
+        const result = plan(config);
+        expect(result.keptOperatorHookTables).toEqual([
+          keptLabel("[[hooks.Stop]]", config, result.nextContent),
+          keptLabel("[[hooks.SessionStart]]", config, result.nextContent),
+        ]);
+        expect(result.foreignSectionsPreserved).toEqual(result.keptOperatorHookTables);
+        expect(JSON.stringify([result.summary, result.removedHookIds, result.foreignSectionsPreserved])).not.toContain(
+          shape.text,
+        );
+        for (const mode of CLI_MODES) {
+          const r = await cliRun(config, mode);
+          expect(r.code).toBe(0);
+          expect(r.out).toContain("[[hooks.SessionStart]] (line ");
+          expect(r.out).not.toContain(shape.text);
+          expect(r.err).not.toContain(shape.text);
+        }
+        // The kept table keeps its own lines, element included.
+        expect(fs.readFileSync(configPath(), "utf8")).toContain(`\n${shape.element}\n`);
+      });
+
+      it(`${layout}, ${shape.label} in a kept table: a comment-deleted harness table after the element (duplicate or retired) is still refused, and no refusal carries the element`, async () => {
+        for (const command of [FRESH_COMMAND, RETIRED_ELSEWHERE]) {
+          const config = build(
+            ...keptTableWithElement(shape.element),
+            ...harnessShapedOperatorTable(command, "PostToolUse"),
+          );
+          const err = refusalOf(config, FRESH_BLOCK);
+          expect(err.message).toContain(`[[hooks.PostToolUse]] (line ${lineOf(config, "[[hooks.PostToolUse]]")})`);
+          expect(err.message).toContain("whose command is one harness itself writes");
+          expect(err.message).not.toContain(shape.text);
+          expect(err.message).not.toContain(command);
+          expect(fs.readFileSync(configPath(), "utf8")).toBe(config);
+        }
+        const config = build(
+          ...keptTableWithElement(shape.element),
+          ...harnessShapedOperatorTable(RETIRED_ELSEWHERE, "PostToolUse"),
+        );
+        for (const mode of CLI_MODES) {
+          const r = await cliRun(config, mode);
+          expect(r.code).not.toBe(0);
+          expect(`${r.out}${r.err}`).toContain("[[hooks.PostToolUse]] (line ");
+          expect(r.out).not.toContain(shape.text);
+          expect(r.err).not.toContain(shape.text);
+          expect(fs.readFileSync(configPath(), "utf8")).toBe(config);
+        }
+      });
+    }
+  }
+
+  it("an element line inside an operator table before the first harness table is not taken for the foreign table: the install succeeds and no output carries its token", async () => {
+    const config = [
+      CODEX_MANAGED_BEGIN,
+      GENERATED,
+      "[[hooks.Stop]]",
+      `hooks = [{ type = "command", command = "${operatorCommand}", timeout = 5 }]`,
+      "args = [",
+      `  ["${SECRET}"]`,
+      "]",
+      ...retiredTable,
+      CODEX_MANAGED_END,
+      "",
+    ].join("\n");
+    expect(JSON.stringify(plan(config).foreignSectionsPreserved)).not.toContain(SECRET);
+    for (const mode of CLI_MODES) {
+      const r = await cliRun(config, mode);
+      expect(r.code).toBe(0);
+      expect(r.out).not.toContain(SECRET);
+      expect(r.err).not.toContain(SECRET);
+    }
+  });
+
+  // ---- the order match: header spellings and multi-line strings ----
+
+  it("a kept table whose multi-line string holds a `[[hooks.Stop]]` line stays kept and named: the string line is not counted as a header", () => {
+    for (const [open, close] of [
+      ['note = """', '"""'],
+      ["note = '''", "'''"],
+    ]) {
+      const config = driftedEnd(
+        "[[hooks.Stop]]",
+        `hooks = [{ type = "command", command = "${operatorCommand}", timeout = 5 }]`,
+        open ?? "",
+        "[[hooks.Stop]]",
+        close ?? "",
+      );
+      const result = plan(config, FRESH_BLOCK);
+      const written = result.nextContent.split("\n");
+      const after = written.findIndex((l, i) => l === "[[hooks.Stop]]" && written[i + 1]?.includes(operatorCommand)) + 1;
+      expect(result.keptOperatorHookTables).toEqual([
+        `[[hooks.Stop]] (line ${lineOf(config, "[[hooks.Stop]]")} before the install, line ${after} after it)`,
+      ]);
+      expect(stopCommands(result.nextContent)).toEqual([FRESH_COMMAND, operatorCommand]);
+    }
+  });
+
+  it("a literal-quoted operator table ([[hooks.'Stop']]) is kept and named; holding a harness command it refuses with the harness-shape message, not the could-not-match one", () => {
+    const kept = driftedEnd("[[hooks.'Stop']]", `hooks = [{ type = "command", command = "${operatorCommand}", timeout = 5 }]`);
+    const result = plan(kept, FRESH_BLOCK);
+    expect(result.keptOperatorHookTables).toEqual([keptLabel("[[hooks.'Stop']]", kept, result.nextContent)]);
+
+    const duplicate = driftedEnd("[[hooks.'Stop']]", `hooks = [{ type = "command", command = "${FRESH_COMMAND}", timeout = 5 }]`);
+    const err = refusalOf(duplicate, FRESH_BLOCK);
+    expect(err.message).toContain(`[[hooks.'Stop']] (line ${lineOf(duplicate, "[[hooks.'Stop']]")})`);
+    expect(err.message).toContain("whose command is one harness itself writes");
+    expect(err.message).not.toContain("could not match");
+    expect(err.message).not.toContain(FRESH_COMMAND);
+  });
+
+  // ---- legacy (no BEGIN) paths whose END marker survived ----
+
+  const legacyHeads: Array<[string, string[]]> = [
+    ["source-prefix", ["# Harness Codex hook wiring. Generated source: old", GENERATED]],
+    ["generated-header", [GENERATED]],
+  ];
+
+  for (const [label, head] of legacyHeads) {
+    it(`legacy ${label} config whose END marker survived its deleted BEGIN line: the kept-table refusal offers moving an operator-owned table below that END`, () => {
+      const config = [...head, ...retiredTable, ...harnessShapedOperatorTable("harness my-own-cli run"), CODEX_MANAGED_END, ""].join(
+        "\n",
+      );
+      const err = refusalOf(config, FRESH_BLOCK);
+      expect(err.message).toContain(`[[hooks.Stop]] (line ${lineOf(config, "[[hooks.Stop]]")})`);
+      expect(err.message).toContain(
+        `or, if it is an operator-owned table, move it below the '${CODEX_MANAGED_END}' marker, where the install never touches it`,
+      );
+    });
+
+    it(`legacy ${label} config whose END marker survived its deleted BEGIN line: the install keeps the operator table after the one fresh END, leaves no orphan END line, and a second install gives the same bytes`, async () => {
+      const config = [
+        ...head,
+        ...retiredTable,
+        "",
+        operatorComment,
+        ...operatorTable,
+        CODEX_MANAGED_END,
+        '[projects."/work/x"]',
+        'trust_level = "trusted"',
+        "",
+      ].join("\n");
+      const result = plan(config);
+      expect(result.keptOperatorHookTables).toEqual([keptLabel("[[hooks.Stop]]", config, result.nextContent)]);
+      expect(result.foreignSectionsPreserved).toEqual(result.keptOperatorHookTables);
+      const installed = await installOver(config);
+      expect(installed).not.toContain(RETIRED_HOOK_ID);
+      expect(occurrences(installed, CODEX_MANAGED_END)).toBe(1);
+      expect(installed.indexOf(CODEX_MANAGED_END)).toBeLessThan(installed.indexOf(operatorComment));
+      expect(installed).toContain(`${operatorComment}\n[[hooks.Stop]]\n`);
+      expect(occurrences(installed, operatorCommand)).toBe(1);
+      expect(stopCommands(installed)).toContain(operatorCommand);
+      expect(installed.endsWith('[projects."/work/x"]\ntrust_level = "trusted"\n')).toBe(true);
+      expect(await installOver(installed)).toBe(installed);
+    });
+  }
 });
