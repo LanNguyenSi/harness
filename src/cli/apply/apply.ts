@@ -188,8 +188,8 @@ export interface ApplyOptions {
    * untouched; the runtime selection then reads the `.last-apply` of THIS
    * directory, not the operator's. Resolved to an absolute path. Only the
    * apply output (generated files, audit copies, `.last-apply`) moves;
-   * the pause sentinel and the signing-key path projected into the
-   * settings stay anchored to the operator's generated dir, since the
+   * the settings' pause sentinel and the opencode/grounding-mcp signing-key
+   * path stay anchored to the operator's generated dir, since the
    * operator's hooks and grounding-mcp resolve them there.
    */
   generatedDir?: string;
