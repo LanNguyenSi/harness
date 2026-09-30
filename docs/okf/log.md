@@ -2,6 +2,15 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-09-30T12:02:53Z (task e8f4fc03): `codex-adapter-parity-gaps.md` re-verified after
+  `install-codex-config.ts` changed (a hook event table spelled without the
+  `[[hooks.` prefix directly after the harness tables is now named and checked
+  as a kept operator hook table, and a legacy config with a foreign table between
+  its harness tables and a surviving END marker is handled like the BEGIN path);
+  the install claim (only the marked harness-managed block is replaced, operator
+  config is never owned) still holds; added a sentence naming the install's
+  deliberate boundaries after that block, re-stamped.
+
 - 2026-09-30T09:51:08Z (task 01053b27): `codex-adapter-parity-gaps.md` re-verified after
   `install-codex-config.ts` changed again (the split-block refusal of a legacy
   config that starts at a generated header now tells the operator to delete
