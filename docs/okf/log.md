@@ -2,7 +2,7 @@
 
 <!-- Add new entries at the top, newest first. -->
 
-- 2026-09-30T08:30:41Z (task 01053b27): `codex-adapter-parity-gaps.md` re-verified after
+- 2026-09-30T08:37:19Z (task 01053b27): `codex-adapter-parity-gaps.md` re-verified after
   `install-codex-config.ts` changed again (the hook header map now reads a
   header-shaped line as a header only when its root key resolves to `hooks`,
   before the top-level check, and a legacy config whose END marker survived gets
