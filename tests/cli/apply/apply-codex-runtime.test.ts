@@ -4314,14 +4314,97 @@ describe("apply --runtime codex --install: an operator-authored [[hooks.*]] tabl
     expect(err.message).not.toContain(FRESH_COMMAND);
   });
 
-  // ---- legacy (no BEGIN) paths whose END marker survived ----
-
-  const legacyHeads: Array<[string, string[]]> = [
-    ["source-prefix", ["# Harness Codex hook wiring. Generated source: old", GENERATED]],
-    ["generated-header", [GENERATED]],
+  // A table of the kept table's event whose header does not start `[[hooks.`
+  // (spaces inside the brackets, a quoted root, spaces around the dot) still
+  // appends to the same array, so the order match counts it wherever it sits.
+  // Its command starts with `harness `, so a kept table matched to its entry
+  // instead of its own would refuse.
+  const sameEventSpellings = ["[[ hooks.Stop ]]", '[["hooks".Stop]]', "[[hooks . Stop]]"];
+  const otherSpelledTable = (header: string): string[] => [
+    header,
+    'hooks = [{ type = "command", command = "harness my-own-cli run", timeout = 5 }]',
   ];
 
-  for (const [label, head] of legacyHeads) {
+  for (const spelling of sameEventSpellings) {
+    for (const where of ["above the BEGIN marker", "below the END marker"]) {
+      it(`a same-event table spelled ${spelling} ${where} is counted by the order match: the kept table is kept and named with its own line numbers`, () => {
+        const block = [CODEX_MANAGED_BEGIN, GENERATED, ...retiredTable, ...operatorTable, CODEX_MANAGED_END];
+        const config = (
+          where === "above the BEGIN marker"
+            ? [...otherSpelledTable(spelling), ...block, ""]
+            : [...block, ...otherSpelledTable(spelling), ""]
+        ).join("\n");
+        const result = plan(config);
+        expect(result.keptOperatorHookTables).toEqual([keptLabel("[[hooks.Stop]]", config, result.nextContent)]);
+        expect(lineOf(config, "[[hooks.Stop]]")).toBe(where === "above the BEGIN marker" ? 9 : 7);
+        expect(stopCommands(result.nextContent).sort()).toEqual(["harness my-own-cli run", operatorCommand].sort());
+      });
+    }
+  }
+
+  it("a line reading exactly like the END marker inside a harness table's multi-line string does not end the block: the install replaces the table and writes one END", async () => {
+    const config = [
+      CODEX_MANAGED_BEGIN,
+      GENERATED,
+      ...retiredTable,
+      'note = """',
+      CODEX_MANAGED_END,
+      '"""',
+      CODEX_MANAGED_END,
+      '[projects."/work/x"]',
+      'trust_level = "trusted"',
+      "",
+    ].join("\n");
+    const installed = await installOver(config);
+    expect(installed).not.toContain(RETIRED_HOOK_ID);
+    expect(installed).not.toContain('note = """');
+    expect(occurrences(installed, CODEX_MANAGED_END)).toBe(1);
+    expect(installed.endsWith(`${CODEX_MANAGED_END}\n[projects."/work/x"]\ntrust_level = "trusted"\n`)).toBe(true);
+    expect(await installOver(installed)).toBe(installed);
+  });
+
+  // ---- legacy (no BEGIN) paths whose END marker survived ----
+
+  const legacyHeads: Array<[string, string[], string]> = [
+    [
+      "source-prefix",
+      ["# Harness Codex hook wiring. Generated source: old", GENERATED],
+      "the '# Harness Codex hook wiring.' source-prefix line",
+    ],
+    ["generated-header", [GENERATED], `the '${GENERATED}' line`],
+  ];
+
+  for (const [label, head, opening] of legacyHeads) {
+    it(`legacy ${label} config whose END marker survived its deleted BEGIN line: the split-block refusal names the lines between ${opening} and END, never a BEGIN marker`, () => {
+      const config = [
+        ...head,
+        ...retiredTable,
+        ...operatorTable,
+        ...harnessTable("second-kept", "SessionStart", "harness pack hook second"),
+        CODEX_MANAGED_END,
+        "",
+      ].join("\n");
+      const { message } = refusalOf(config);
+      expect(message).toContain(
+        `If it is an operator-owned table, move [[hooks.Stop]] below the '${CODEX_MANAGED_END}' marker, or ` +
+          `delete the lines between ${opening} and '${CODEX_MANAGED_END}' so only harness-owned tables remain between them`,
+      );
+      expect(message).not.toContain(CODEX_MANAGED_BEGIN);
+      expect(fs.readFileSync(configPath(), "utf8")).toBe(config);
+    });
+
+    it(`legacy ${label} config whose END marker survived its deleted BEGIN line: a harness-commented table below that END is left untouched and not named`, async () => {
+      const below = harnessTable("below-end", "SessionStart", "harness pack hook below-end");
+      const config = [...head, ...retiredTable, ...operatorTable, CODEX_MANAGED_END, ...below, ""].join("\n");
+      const result = plan(config);
+      expect(result.keptOperatorHookTables).toEqual([keptLabel("[[hooks.Stop]]", config, result.nextContent)]);
+      expect(result.foreignSectionsPreserved).toEqual(result.keptOperatorHookTables);
+      const installed = await installOver(config);
+      expect(installed.endsWith(`${CODEX_MANAGED_END}\n${operatorTable.join("\n")}\n${below.join("\n")}\n`)).toBe(true);
+      expect(occurrences(installed, CODEX_MANAGED_END)).toBe(1);
+      expect(await installOver(installed)).toBe(installed);
+    });
+
     it(`legacy ${label} config whose END marker survived its deleted BEGIN line: the kept-table refusal offers moving an operator-owned table below that END`, () => {
       const config = [...head, ...retiredTable, ...harnessShapedOperatorTable("harness my-own-cli run"), CODEX_MANAGED_END, ""].join(
         "\n",
