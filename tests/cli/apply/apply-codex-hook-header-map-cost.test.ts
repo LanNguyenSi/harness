@@ -70,6 +70,9 @@ describe("codex install: the hook header map does not probe lines that cannot be
       generatedContent: `${GENERATED}\n`,
     });
     const count = parses.count;
+    // The counter sees the install's own parses, so equal counts below are
+    // not two zeros.
+    expect(count).toBeGreaterThan(0);
 
     const after = result.nextContent.split("\n").lastIndexOf("[[hooks.Stop]]") + 1;
     expect(result.keptOperatorHookTables).toEqual([
