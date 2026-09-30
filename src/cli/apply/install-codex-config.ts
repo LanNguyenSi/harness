@@ -583,7 +583,8 @@ function scanOwnedContentEnd(
  * `scanOwnedContentEnd`; when only blank or comment lines precede the found
  * marker in the zone -- so the pre-marker lookup finds no content line to
  * report -- the header is looked up again just past that marker's own
- * line, since the wedged table then sits after it, not before; printed
+ * line, since the wedged table then sits after it, not before, and the
+ * message says the marker line sits above the table (task e8f4fc03); printed
  * through `describeTableHeader`, so only the header's own bracketed key
  * path appears, never a trailing comment), and
  * the line number and marker of the first line beyond it
@@ -597,7 +598,12 @@ function scanOwnedContentEnd(
  * document (`to` is `text.length`), telling the operator to move something
  * below a marker that does not exist would be nonsensical, so a different
  * fix (add one, or move the table below the last harness hook table) is
- * offered instead (task 6a037359). `blockOpening` names the line the block
+ * offered instead (task 6a037359). When the named table is a hook event
+ * table spelled without the `[[hooks.` prefix, the guidance offers deleting
+ * it if harness wrote it, since the scan reads such a table as foreign with
+ * or without a comment line above it (task e8f4fc03). The legacy paths call
+ * this too, so the substring matching above applies there as well: a value
+ * holding marker text refuses. `blockOpening` names the line the block
  * starts at in the delete-the-lines fix: the BEGIN marker by default; a
  * legacy config (no BEGIN marker) whose END marker survived passes its
  * source-prefix line or generated header instead, since a BEGIN marker it
@@ -645,10 +651,16 @@ export function assertNoSplitBlock(
   // the foreign table that split the block is wedged after the marker's own
   // line instead, so look there.
   const markerLineEnd = lineEndAfter(text, zoneStart + markerOffset);
-  const foreignHeaderLine =
-    firstContentLine(text, zoneStart, zoneStart + markerOffset) ??
-    firstContentLine(text, markerLineEnd, zoneEnd);
+  const headerBeforeMarker = firstContentLine(text, zoneStart, zoneStart + markerOffset);
+  const foreignHeaderLine = headerBeforeMarker ?? firstContentLine(text, markerLineEnd, zoneEnd);
   const firstForeignHeader = describeForeignHeaderLine(text, foreignHeaderLine);
+  // Where the marker line sits relative to the named table, so the message
+  // stays true when the table was found past the marker (a respelled hook
+  // table with its own '# harness hook:' comment line above it, say).
+  const placement =
+    headerBeforeMarker === null && foreignHeaderLine !== null
+      ? `below harness-owned content: line ${offendingLineNumber}, above it, contains '${marker}'`
+      : `sitting before more harness-owned content: line ${offendingLineNumber} contains '${marker}'`;
 
   const fixes = hasEndMarker
     ? [
@@ -669,15 +681,23 @@ export function assertNoSplitBlock(
   // right for an operator-owned one; name the restore option first (task
   // 01053b27).
   const isHookTable = HOOK_ARRAY_HEADER_RE.test(foreignHeaderLine?.line ?? "");
+  // A hook event table spelled another way (`[[ hooks.Stop ]]`) is read as
+  // foreign with or without a comment line above it, so restoring one does
+  // not help; deleting it does, if harness wrote it (task e8f4fc03).
+  const isRespelledHookTable = !isHookTable && isHookEventArrayHeader(foreignHeaderLine?.line ?? "");
   const guidance = isHookTable
     ? `If ${firstForeignHeader} is a harness hook table whose '${HARNESS_HOOK_COMMENT_PREFIX}<id> ` +
       "(budget_ms=<n>)' comment line was deleted, restore that comment line directly above it. " +
       `If it is an operator-owned table, ${fixes.join(", or ")}`
-    : fixes.join(", or ").replace(/^./, (c) => c.toUpperCase());
+    : isRespelledHookTable
+      ? `If ${firstForeignHeader} is a harness hook table, delete it together with any ` +
+        `'${HARNESS_HOOK_COMMENT_PREFIX}<id> (budget_ms=<n>)' comment line above it (the install ` +
+        "replaces only hook tables spelled '[[hooks.<Event>]]' with that comment line above " +
+        `them, and writes the fresh block). If it is an operator-owned table, ${fixes.join(", or ")}`
+      : fixes.join(", or ").replace(/^./, (c) => c.toUpperCase());
 
   throw new CodexInstallRefusalError(
-    `Codex config ${configPath} has a foreign table (${firstForeignHeader}) sitting before ` +
-      `more harness-owned content: line ${offendingLineNumber} contains '${marker}' and still ` +
+    `Codex config ${configPath} has a foreign table (${firstForeignHeader}) ${placement} and still ` +
       "looks like part of the harness-managed hook block; refusing to guess the block " +
       `boundaries. ${guidance}, then re-run \`harness apply --runtime codex --install\`. As a ` +
       `last resort, restore ${configPath} from the most recent .harness-backup-* file (if one exists), but ` +
@@ -834,11 +854,13 @@ function extractHookIds(content: string): Set<string> {
  * header at `from` is a non-hook table, or there is none. A hook table after
  * the first non-hook table is not collected: it is kept, not named and not
  * checked, a deliberate boundary (only the run of hook tables directly after
- * the harness tables is examined). The caller has already refused a zone
- * that holds a harness marker (`assertNoSplitBlock`) where one applies, so
- * no header found there carries a `# harness hook:` comment.
+ * the harness tables is examined). The caller refuses a zone that holds a
+ * harness marker (`assertNoSplitBlock`) before it uses the tables: over the
+ * whole zone on the BEGIN path and when an END marker follows, over the run
+ * of hook tables (up to the returned `end`) on the legacy path without one,
+ * so no table the install keeps carries a `# harness hook:` comment.
  */
-function collectKeptHookTables(text: string, from: number, to: number): KeptHookTable[] {
+function collectKeptHookTables(text: string, from: number, to: number): KeptHookRun {
   const tables: KeptHookTable[] = [];
   let pos = from;
   const classify = createLineClassifier(text);
@@ -854,7 +876,14 @@ function collectKeptHookTables(text: string, from: number, to: number): KeptHook
     }
     pos = lineEnd;
   }
-  return tables;
+  return { tables, end: pos };
+}
+
+/** The kept hook tables `collectKeptHookTables` found and the offset its run
+ * stopped at: the first non-hook table header after `from`, or `to`. */
+interface KeptHookRun {
+  tables: KeptHookTable[];
+  end: number;
 }
 
 /** A kept table as the install names it: its header, its 1-based line
@@ -917,7 +946,7 @@ function rangeBeforeStrayEnd(
   const strayIdx = findExactLine(text, CODEX_MANAGED_END, end);
   if (strayIdx === -1) {
     assertNoSplitBlock(text, end, text.length, configPath, false);
-    const keptHookTables = collectKeptHookTables(text, end, text.length);
+    const keptHookTables = collectKeptHookTables(text, end, text.length).tables;
     const foreignSectionsPreserved = collectForeignSectionHeaders(text, end, text.length, keptHookTables);
     return { start, end, foreignSectionsPreserved, keptHookTables };
   }
@@ -925,7 +954,7 @@ function rangeBeforeStrayEnd(
   const strayLineStart = lineStartAt(text, strayIdx);
   const strayLineEnd = lineEndAfter(text, strayIdx);
   assertNoSplitBlock(text, end, strayLineStart, configPath, true, blockOpening);
-  const keptHookTables = collectKeptHookTables(text, end, strayLineStart);
+  const keptHookTables = collectKeptHookTables(text, end, strayLineStart).tables;
   const foreignSectionsPreserved = collectForeignSectionHeaders(text, end, strayLineStart, keptHookTables);
   return {
     start,
@@ -956,7 +985,12 @@ function rangeBeforeStrayEnd(
  * 01053b27). A scan that ended at a foreign table with no END marker
  * anywhere after it keeps the legacy behaviour (no split-block check), except
  * that hook event tables directly after the block are collected, named and
- * checked (`collectKeptHookTables`).
+ * checked (`collectKeptHookTables`), and a harness marker in their run
+ * refuses through the split-block check. The END marker is looked up as a
+ * whole line outside multi-line strings (`findExactLine`), so END text in a
+ * foreign table's value does not route a config here. Like the BEGIN path,
+ * the split-block check matches its markers as substrings, so a value in the
+ * zone that holds marker text refuses too (see `assertNoSplitBlock`).
  */
 function legacyManagedRange(
   text: string,
@@ -971,7 +1005,16 @@ function legacyManagedRange(
   if (scan.endedAtOperatorHookTable || findExactLine(text, CODEX_MANAGED_END, scan.end) !== -1) {
     return rangeBeforeStrayEnd(text, start, scan.end, configPath, blockOpening);
   }
-  const keptHookTables = collectKeptHookTables(text, scan.end, text.length);
+  const run = collectKeptHookTables(text, scan.end, text.length);
+  // The scan ended at a hook table spelled without the `[[hooks.` prefix: a
+  // harness marker in the run of hook tables after it (a harness-commented
+  // table, or the respelled table's own comment line) is harness content the
+  // scan could not read, so refuse through the split-block check, as the
+  // BEGIN path does, instead of naming a table with that comment line above it
+  // as one without (task e8f4fc03). The run stops at the first non-hook table:
+  // past it the legacy reading below stays unchanged.
+  if (run.tables.length > 0) assertNoSplitBlock(text, scan.end, run.end, configPath, false);
+  const keptHookTables = run.tables;
   const foreignSectionsPreserved = collectForeignSectionHeaders(text, scan.end, text.length, keptHookTables);
   return { start, end: scan.end, foreignSectionsPreserved, keptHookTables };
 }
