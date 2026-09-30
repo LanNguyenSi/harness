@@ -2,13 +2,17 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-09-30T12:15:37Z, task 04b8abcf: the smoke and doctor wording was narrowed: settings.json carries only the operator's pause sentinel (the signing-key path is in the opencode config and the grounding-mcp registration), and doctor's malformed-`.last-apply` fallback covers its runtime selection while the settings-drift check (understanding pack declared) still aborts on a malformed record. `codex-adapter-parity-gaps.md` edited; it and `debug-verb-selection.md`, `evidence-ledger-trust-boundary.md`, `pause-vs-gate-kill-switch.md`, `policy-engine-producer-wiring.md` re-checked against `docs/CLI.md` and `src/cli/apply/apply.ts` and re-stamped.
+
 - 2026-09-30T11:58:32Z (task 04b8abcf): `codex-adapter-parity-gaps.md` and `debug-verb-selection.md`
   re-verified and edited after `harness smoke` moved into its own
   `<output-dir>/harness.generated/` (new `generatedDir` apply option, which
-  moves only the apply output; the pause sentinel and signing-key path in the
-  rendered settings stay on the operator's generated dir) and
+  moves only the apply output; the pause sentinel in the rendered settings and
+  the signing-key path in the opencode config stay on the operator's generated
+  dir) and
   `harness doctor` began expanding packs against apply's `selectRuntime`
-  result (a malformed `.last-apply` falls back to the default and warns): the
+  result (a malformed `.last-apply` falls back to the default and warns in the
+  runtime selection; the settings-drift check still aborts on one): the
   smoke claims now say the operator's generated files and `.last-apply` are
   not rewritten while runtime state (delegation marker, hook session state)
   still lands in the operator's tree, and the three `apply.ts` line citations
