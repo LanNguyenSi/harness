@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.59.2] - 2026-09-30
+
 ### Security
 
 - **`fast-uri` 3.1.8 in the lockfile** (transitive under ajv; lockfile-only, no source change), closing GHSA-hrr3-gc8f-f4qj (inconsistent host case normalization via percent-encoded octets; moderate).
