@@ -327,6 +327,26 @@ function formatHooksSection(report: DoctorReport): string[] {
   return out;
 }
 
+// Names the runtime the pack checks below expanded against (task
+// 04b8abcf): the one a plain `harness apply` would select, so a report on a
+// codex-recorded machine says codex rather than implying claude-code.
+function formatPackExpansionRuntimeSection(report: DoctorReport): string[] {
+  const { runtime, source, previousRuntime } = report.packExpansionRuntime;
+  const how =
+    source === "last-apply"
+      ? "recorded by the last apply"
+      : source === "inferred"
+        ? "inferred from the last apply's generated files"
+        : source === "unrecorded"
+          ? "the last apply recorded no runtime; default"
+          : "no apply recorded yet; default";
+  const prior =
+    previousRuntime !== undefined && previousRuntime !== runtime
+      ? ` (last apply: ${previousRuntime})`
+      : "";
+  return ["", `Pack expansion runtime: ${runtime} (${how})${prior}`];
+}
+
 // Policy-pack hooks section (task ab634898): the hook-level `min_version`
 // floor on hooks a builtin policy pack contributes (understanding-gate's
 // UserPromptSubmit/Stop hooks, floored at 0.5.0, are the motivating
@@ -685,6 +705,7 @@ export function format(report: DoctorReport): string {
   lines.push(...formatToolsSection(report));
   lines.push(...formatMemorySection(report));
   lines.push(...formatHooksSection(report));
+  lines.push(...formatPackExpansionRuntimeSection(report));
   lines.push(...formatPolicyPackHookVersionsSection(report));
   lines.push(...formatPoliciesSection(report));
   lines.push(...formatPolicyPacksSection(report));

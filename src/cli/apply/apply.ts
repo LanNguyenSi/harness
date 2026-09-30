@@ -181,6 +181,14 @@ export interface ApplyOptions {
    * stays absent.
    */
   preserveRecordedRuntime?: boolean;
+  /**
+   * Generate into this directory instead of the `harness.generated/` next
+   * to the manifest. For a diagnostic apply (`harness smoke`) that must
+   * leave the operator's generated tree and its `.last-apply` record
+   * untouched; the runtime selection then reads the `.last-apply` of THIS
+   * directory, not the operator's. Resolved to an absolute path.
+   */
+  generatedDir?: string;
 }
 
 export type ApplyOutcome =
@@ -349,7 +357,7 @@ function joinRuntimes(runtimes: readonly Runtime[]): string {
   return `${runtimes.slice(0, -1).join(", ")} and ${runtimes[runtimes.length - 1]}`;
 }
 
-interface RuntimeSelection {
+export interface RuntimeSelection {
   runtime: Runtime;
   runtimeSource: RuntimeSource;
   previousRuntime?: Runtime;
@@ -466,7 +474,7 @@ function inferRuntimeFromFiles(record: LastApplyRecord): RuntimeInference {
 // instead of reusing another runtime. A record without the field (or with
 // an unknown value) falls back to inferring from its files map, then to
 // the default; the caller names every non-explicit choice in its output.
-function selectRuntime(
+export function selectRuntime(
   explicit: Runtime | undefined,
   lastApply: LastApplyRecord | null,
   hasTarget: boolean,
@@ -843,7 +851,10 @@ export async function apply(opts: ApplyOptions = {}): Promise<ApplyResult> {
     );
   }
 
-  const generatedDir = resolveGeneratedDir({ homeDir: opts.homeDir, manifestPath });
+  const generatedDir =
+    opts.generatedDir !== undefined
+      ? path.resolve(opts.generatedDir)
+      : resolveGeneratedDir({ homeDir: opts.homeDir, manifestPath });
   const lockPath = path.join(path.dirname(manifestPath), LOCK_BASENAME);
 
   const loaderOpts: Parameters<typeof loadManifest>[0] = {

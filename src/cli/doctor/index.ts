@@ -21,7 +21,9 @@ import { expandPolicyPacks } from "../../policy-packs/index.js";
 import { checkPolicyPackConfigs } from "../../policy-packs/config-check.js";
 import { checkPolicyPackVersions } from "../../policy-packs/version-check.js";
 import { checkPolicyPackUxDrift } from "../../policy-packs/ux-drift-check.js";
-import { DEFAULT_RUNTIME } from "../../policy-packs/runtime.js";
+import type { Runtime } from "../../policy-packs/runtime.js";
+import { selectRuntime, type RuntimeSelection } from "../apply/apply.js";
+import { readLastApply } from "../../io/last-apply.js";
 import {
   checkHookBudgetLedgerMargin,
   checkPolicyRiskWithoutEnvScope,
@@ -83,6 +85,7 @@ import {
   type HookEntryReport,
   type ManifestSection,
   type McpVersionReport,
+  type PackExpansionRuntimeReport,
   type PolicyEntryReport,
   type PolicyPackHookVersionGapReport,
   type PolicyPackUnresolved,
@@ -557,27 +560,25 @@ export function memoizeVersionProbe(
  * (`checkPolicyPackVersions`). Always warn, never error: the pack still
  * runs in degraded mode rather than failing outright.
  *
- * Always expands against `DEFAULT_RUNTIME` ("claude-code"), never
- * `opts.target`: `--target codex` / `--target opencode` additionally
- * evaluate the harness-side adapter health for that runtime, they do
- * not change which runtime is actually installed and running the
- * hooks. Matches the sibling pack-level check's `resolveBuiltin(pack,
- * DEFAULT_RUNTIME)` further below (task ab634898:
- * keying this on `--target` produced a below-floor install that showed
- * no warning under `--target codex` and a spurious one under
- * `--target opencode`, where the pack never wires in the first place).
+ * Expands against the runtime a plain `harness apply` would select
+ * (`selectRuntime` in `src/cli/apply/apply.ts`: recorded in `.last-apply`,
+ * inferred from its files, else the default), never `opts.target`:
+ * `--target codex` / `--target opencode` additionally evaluate the
+ * harness-side adapter health for that runtime, they do not change which
+ * runtime is actually installed and running the hooks. Matches the
+ * sibling pack-level check's `resolveBuiltin(pack, runtime)` further below
+ * (task ab634898: keying this on `--target` produced a below-floor install
+ * that showed no warning under `--target codex` and a spurious one under
+ * `--target opencode`, where the pack never wires in the first place; task
+ * 04b8abcf: expanding against the default instead of the applied runtime
+ * made doctor and apply diverge on a codex-recorded machine).
  */
 function checkPolicyPackHookVersions(
   manifest: Manifest,
   versionProbe: (cmd: readonly string[]) => string | null,
+  runtime: Runtime,
 ): PolicyPackHookVersionGapReport[] {
-  // Always expands against DEFAULT_RUNTIME ("claude-code"), not
-  // `opts.target`: `--target` additionally evaluates the harness-side
-  // adapter health for that runtime (see checkPolicyPackHookVersions'
-  // header comment), it does not change which runtime is actually
-  // installed. Matches the sibling pack-level check's
-  // `resolveBuiltin(pack, DEFAULT_RUNTIME)` a few hundred lines below.
-  const expansion = expandPolicyPacks(manifest, DEFAULT_RUNTIME);
+  const expansion = expandPolicyPacks(manifest, runtime);
   const dedupedProbe = memoizeVersionProbe(versionProbe);
   const gaps: PolicyPackHookVersionGapReport[] = [];
   for (const hook of expansion.hooks) {
@@ -754,10 +755,21 @@ export function resolveGitIgnoreProbe(
   return createDefaultGitIgnoreProbe();
 }
 
+function packExpansionRuntimeReport(selection: RuntimeSelection): PackExpansionRuntimeReport {
+  return {
+    runtime: selection.runtime,
+    source: selection.runtimeSource,
+    ...(selection.previousRuntime !== undefined
+      ? { previousRuntime: selection.previousRuntime }
+      : {}),
+  };
+}
+
 function buildPolicyPacks(
   manifest: Manifest,
   versionProbe: (cmd: readonly string[]) => string | null,
   gitIgnoreProbe: GitIgnoreProbe,
+  runtime: Runtime,
 ): PolicyPacksSection {
   const unresolved: PolicyPackUnresolved[] = [];
   for (const pack of manifest.policy_packs) {
@@ -772,7 +784,7 @@ function buildPolicyPacks(
       });
       continue;
     }
-    const resolved = resolveBuiltin(pack, DEFAULT_RUNTIME);
+    const resolved = resolveBuiltin(pack, runtime);
     if (!resolved) {
       unresolved.push({
         name: pack.name,
@@ -1426,15 +1438,31 @@ export async function doctor(opts: DoctorOptions = {}): Promise<DoctorReport> {
       dedupedVersionProbe,
       sessionStartPreflightProjectName,
     );
+  // generatedDir resolved the same way apply.ts / interactive.ts resolve
+  // it (review round H1, Finding 2) so buildClaudeMcpRegistration's
+  // desired projection carries SOLUTION_VERDICT_SIGNING_KEY too, and so
+  // the runtime below is read from the very `.last-apply` apply reads.
+  const generatedDir = resolveGeneratedDir({
+    ...(opts.homeDir !== undefined ? { homeDir: opts.homeDir } : {}),
+    manifestPath: resolved.base,
+    userHome: home,
+  });
+  // The runtime a plain `harness apply` would select, through apply's own
+  // `selectRuntime` (recorded, inferred or default; `--target` is an
+  // apply flag, not a doctor input). Pack expansion below uses it, so
+  // doctor checks the hooks the machine actually gets (task 04b8abcf).
+  const applyRuntime = selectRuntime(undefined, readLastApply(generatedDir), false);
   const policies = buildPolicies(manifest);
   const policyPacks = buildPolicyPacks(
     manifest,
     dedupedVersionProbe,
     resolveGitIgnoreProbe(opts),
+    applyRuntime.runtime,
   );
   const policyPackHookVersions = checkPolicyPackHookVersions(
     manifest,
     dedupedVersionProbe,
+    applyRuntime.runtime,
   );
   const workflows = buildWorkflows(manifest);
   const riskGate = buildRiskGate(manifest);
@@ -1455,15 +1483,6 @@ export async function doctor(opts: DoctorOptions = {}): Promise<DoctorReport> {
   // further runtime-scoped gate); the live `claude mcp list` spawn
   // inside buildClaudeMcpRegistration additionally self-gates on
   // `!shallow` and at least one ENABLED entry.
-  //
-  // generatedDir resolved the same way apply.ts / interactive.ts resolve
-  // it (review round H1, Finding 2) so buildClaudeMcpRegistration's
-  // desired projection carries SOLUTION_VERDICT_SIGNING_KEY too.
-  const generatedDir = resolveGeneratedDir({
-    ...(opts.homeDir !== undefined ? { homeDir: opts.homeDir } : {}),
-    manifestPath: resolved.base,
-    userHome: home,
-  });
   const claudeMcp =
     manifest.tools.mcp.length > 0
       ? await buildClaudeMcpRegistration(manifest, {
@@ -1591,6 +1610,7 @@ export async function doctor(opts: DoctorOptions = {}): Promise<DoctorReport> {
     policies,
     policyPacks,
     policyPackHookVersions,
+    packExpansionRuntime: packExpansionRuntimeReport(applyRuntime),
     workflows,
     riskGate,
     templateDrift,

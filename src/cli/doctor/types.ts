@@ -233,6 +233,15 @@ export interface PolicyPackUxDriftReport {
   message: string;
 }
 
+/** The runtime policy packs were expanded against; see `DoctorReport.packExpansionRuntime`. */
+export interface PackExpansionRuntimeReport {
+  runtime: string;
+  /** How apply's `selectRuntime` chose it: last-apply, inferred, unrecorded or default. */
+  source: string;
+  /** The runtime the last apply recorded or that its files imply, when there is one. */
+  previousRuntime?: string;
+}
+
 /**
  * Doctor surface for the HOOK-level `min_version` floor on a
  * policy-pack-EXPANDED hook (task ab634898). Distinct from
@@ -550,6 +559,13 @@ export interface DoctorReport {
    * meets it.
    */
   policyPackHookVersions: PolicyPackHookVersionGapReport[];
+  /**
+   * The runtime policy packs were expanded against for the pack checks:
+   * the one a plain `harness apply` would select (recorded in
+   * `.last-apply`, inferred from its files, else the default; task
+   * 04b8abcf). Always present.
+   */
+  packExpansionRuntime: PackExpansionRuntimeReport;
   workflows: WorkflowsSectionReport;
   /** Phase 7 #6 — Risk Gate wiring health (classifiers / resolvers / `when:`). */
   riskGate: RiskGateSection;

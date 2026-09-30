@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **`harness smoke` no longer rewrites the operator's `harness.generated/`, and `harness doctor` expands policy packs against the runtime `harness apply` selects** (task `04b8abcf`, follow-up to the review of task `b9e6d63c`). smoke applied the `claude-code` variant into the operator's generated tree, so between a smoke run and the next plain apply a codex machine's audit copies were the claude-code variant. It now generates into its own `<output-dir>/harness.generated/` (kept with the other run artifacts): the operator's tree and `.last-apply` stay byte-identical, the `runtime: claude-code for smoke; ...` line is gone because nothing is left to restore, and the delegation marker (unless `--no-delegate`) is still written into the operator's tree, where the child's gates read it. `harness apply` gains an internal `generatedDir` option for this; the runtime-reuse selection itself is unchanged. `harness doctor` expanded packs against the default `claude-code` regardless of the recorded runtime, so on a codex machine it reported claude-code hook floors the machine never runs. It now uses apply's own `selectRuntime` (recorded, inferred or default) for the pack hook-floor and declared-but-not-live checks, and names the runtime in a `Pack expansion runtime:` line and a `packExpansionRuntime` JSON field. A codex-recorded machine no longer gets a spurious understanding-gate floor warning; `--target` still does not change the expansion.
+
 ## [0.59.2] - 2026-09-30
 
 ### Security
