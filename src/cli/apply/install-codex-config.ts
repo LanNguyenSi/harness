@@ -135,7 +135,9 @@ export interface CodexConfigInstallPlan {
    * header and its 1-based line number in the config before the install and
    * in the config the install writes (for example
    * `[[hooks.Stop]] (line 14 before the install, line 40 after it)`), never
-   * any value text. Named because the
+   * any value text. A hook event table spelled without the `[[hooks.` prefix
+   * (`[[ hooks.Stop ]]`, `[["hooks".Stop]]`) directly after the harness
+   * tables is one of these too (task e8f4fc03). Named because the
    * scan cannot tell such a table from a harness table whose comment line an
    * operator deleted (task 01053b27); a kept table that looks
    * harness-generated is refused instead (see `assertKeptHookTablesAreOperatorOwned`).
@@ -767,22 +769,27 @@ function foreignSectionRootKey(headerLine: string): string {
  * so the operator reads "a whole namespace, N tables" rather than
  * mistaking the printed header for the only table kept; exactly one table
  * under a root prints its own header. Headers print through
- * `describeTableHeader` (no trailing comment). */
+ * `describeTableHeader` (no trailing comment). A header that is one of the
+ * `kept` operator hook tables (a hook event table spelled without the
+ * `[[hooks.` prefix, see `collectKeptHookTables`) is named there instead and
+ * not listed twice. */
 function collectForeignSectionHeaders(
   text: string,
   from: number,
   to: number,
+  kept: readonly KeptHookTable[] = [],
 ): string[] {
   const seenRoots = new Set<string>();
   const headers: string[] = [];
   const counts = new Map<string, number>();
+  const keptStarts = new Set(kept.map((t) => t.start));
   let pos = Math.max(from, 0);
   const limit = Math.max(to, from);
   const classify = createLineClassifier(text);
   while (pos < limit) {
     const lineEnd = Math.min(lineEndAfter(text, pos), limit);
     const rawLine = text.slice(pos, lineEnd);
-    if (classify(pos, rawLine) === "foreignHeader") {
+    if (classify(pos, rawLine) === "foreignHeader" && !keptStarts.has(pos)) {
       const trimmed = rawLine.trim();
       const root = foreignSectionRootKey(trimmed);
       counts.set(root, (counts.get(root) ?? 0) + 1);
@@ -810,17 +817,26 @@ function extractHookIds(content: string): Set<string> {
 }
 
 /**
- * The operator-authored hook tables directly after a managed range that
- * ended at one (`scanOwnedContentEnd`'s `endedAtOperatorHookTable`): every
- * `[[hooks.*]]` header from `from` up to the first non-hook table header or
- * `to`, each by header, line number and offset. Lines are read by
+ * The operator-authored hook tables directly after a managed range: every
+ * hook event table header from `from` up to the first non-hook table header
+ * or `to`, each by header, line number and offset. A hook event table is a
+ * `[[hooks.*]]` header, or an array-of-tables header spelled another way
+ * whose first key resolves to `hooks` and that names an event
+ * (`isHookEventArrayHeader`: `[[ hooks.Stop ]]`, `[["hooks".Stop]]`,
+ * `[[hooks . Stop]]`). The ownership scan reads such a respelled header as a
+ * foreign table, so it ends the managed range there; collected here, it is
+ * named and its commands are checked like any kept hook table, instead of
+ * being kept as a foreign section whose harness command would then run next
+ * to the fresh block's (task e8f4fc03). Lines are read by
  * `createLineClassifier`, so an array element on its own line inside a kept
  * table's multi-line value neither ends the run nor is named, and a hook
- * table after it is still collected (task 01053b27). Empty for any other ending
- * (the first header at `from` is then a non-hook table, or there is none).
- * The caller has already refused a zone that holds a harness marker
- * (`assertNoSplitBlock`), so no header found here carries a `# harness
- * hook:` comment.
+ * table after it is still collected (task 01053b27). Empty when the first
+ * header at `from` is a non-hook table, or there is none. A hook table after
+ * the first non-hook table is not collected: it is kept, not named and not
+ * checked, a deliberate boundary (only the run of hook tables directly after
+ * the harness tables is examined). The caller has already refused a zone
+ * that holds a harness marker (`assertNoSplitBlock`) where one applies, so
+ * no header found there carries a `# harness hook:` comment.
  */
 function collectKeptHookTables(text: string, from: number, to: number): KeptHookTable[] {
   const tables: KeptHookTable[] = [];
@@ -830,8 +846,10 @@ function collectKeptHookTables(text: string, from: number, to: number): KeptHook
     const lineEnd = Math.min(lineEndAfter(text, pos), to);
     const rawLine = text.slice(pos, lineEnd);
     const kind = classify(pos, rawLine);
-    if (kind === "foreignHeader") break;
-    if (kind === "hookHeader") {
+    const hookTable =
+      kind === "hookHeader" || (kind === "foreignHeader" && isHookEventArrayHeader(rawLine.trim()));
+    if (kind === "foreignHeader" && !hookTable) break;
+    if (hookTable) {
       tables.push({ header: describeTableHeader(rawLine), line: lineNumberAt(text, pos), start: pos });
     }
     pos = lineEnd;
@@ -899,16 +917,16 @@ function rangeBeforeStrayEnd(
   const strayIdx = findExactLine(text, CODEX_MANAGED_END, end);
   if (strayIdx === -1) {
     assertNoSplitBlock(text, end, text.length, configPath, false);
-    const foreignSectionsPreserved = collectForeignSectionHeaders(text, end, text.length);
     const keptHookTables = collectKeptHookTables(text, end, text.length);
+    const foreignSectionsPreserved = collectForeignSectionHeaders(text, end, text.length, keptHookTables);
     return { start, end, foreignSectionsPreserved, keptHookTables };
   }
 
   const strayLineStart = lineStartAt(text, strayIdx);
   const strayLineEnd = lineEndAfter(text, strayIdx);
   assertNoSplitBlock(text, end, strayLineStart, configPath, true, blockOpening);
-  const foreignSectionsPreserved = collectForeignSectionHeaders(text, end, strayLineStart);
   const keptHookTables = collectKeptHookTables(text, end, strayLineStart);
+  const foreignSectionsPreserved = collectForeignSectionHeaders(text, end, strayLineStart, keptHookTables);
   return {
     start,
     end,
@@ -921,19 +939,24 @@ function rangeBeforeStrayEnd(
 /**
  * The range of a legacy (no BEGIN marker) config: the source-prefix or
  * generated-header paths. When the scan ended at an operator hook table,
- * the zone after it is handled like the BEGIN path's
- * (`rangeBeforeStrayEnd`): an END marker that survived its deleted BEGIN
- * line, sitting after the kept tables, is excised like a drifted END, so
- * the install leaves no orphan END line below the kept tables and the
- * kept-table refusal offers moving an operator-owned table below that END;
- * a harness-commented table after the kept tables refuses through the
- * split-block check instead of being kept as if it were operator content
- * (the fresh block would repeat it) when it sits before that END, or
- * anywhere later when no END follows. Content below that END is untouched,
- * as on the BEGIN path, so a harness-commented table there is kept and not
- * named. The split-block refusal names `blockOpening` (the source-prefix
- * line or the generated header) as the start of the block, since there is
- * no BEGIN marker (task 01053b27). Other endings keep the legacy behaviour.
+ * or at a foreign table with an END marker after it, the zone after it is
+ * handled like the BEGIN path's (`rangeBeforeStrayEnd`): an END marker that
+ * survived its deleted BEGIN line, sitting after the kept tables or the
+ * foreign table, is excised like a drifted END, so the install leaves no
+ * orphan END line and the kept-table refusal offers moving an operator-owned
+ * table below that END; a harness-commented table after the kept tables or
+ * the foreign table refuses through the split-block check instead of being
+ * kept as if it were operator content (the fresh block would repeat it)
+ * when it sits before that END, or, after kept tables, anywhere later when
+ * no END follows (task e8f4fc03 extends the END case to a foreign table).
+ * Content below that END is untouched, as on the BEGIN path, so a
+ * harness-commented table there is kept and not named. The split-block
+ * refusal names `blockOpening` (the source-prefix line or the generated
+ * header) as the start of the block, since there is no BEGIN marker (task
+ * 01053b27). A scan that ended at a foreign table with no END marker
+ * anywhere after it keeps the legacy behaviour (no split-block check), except
+ * that hook event tables directly after the block are collected, named and
+ * checked (`collectKeptHookTables`).
  */
 function legacyManagedRange(
   text: string,
@@ -942,13 +965,15 @@ function legacyManagedRange(
   configPath: string,
   blockOpening: string,
 ): ManagedRange {
-  if (scan.endedAtOperatorHookTable) {
+  if (scan.sawEndMarker) {
+    return { start, end: scan.end, foreignSectionsPreserved: [], keptHookTables: [] };
+  }
+  if (scan.endedAtOperatorHookTable || findExactLine(text, CODEX_MANAGED_END, scan.end) !== -1) {
     return rangeBeforeStrayEnd(text, start, scan.end, configPath, blockOpening);
   }
-  const foreignSectionsPreserved = scan.sawEndMarker
-    ? []
-    : collectForeignSectionHeaders(text, scan.end, text.length);
-  return { start, end: scan.end, foreignSectionsPreserved, keptHookTables: [] };
+  const keptHookTables = collectKeptHookTables(text, scan.end, text.length);
+  const foreignSectionsPreserved = collectForeignSectionHeaders(text, scan.end, text.length, keptHookTables);
+  return { start, end: scan.end, foreignSectionsPreserved, keptHookTables };
 }
 
 function findManagedRange(text: string, configPath: string): ManagedRange | null {
@@ -1422,6 +1447,20 @@ function hooksRooted(trimmed: string): boolean {
   return resolvedKeyName(parseTableHeader(trimmed)?.keys[0] ?? "") === "hooks";
 }
 
+/** Whether a header line is an array-of-tables header that appends to a
+ * hook event array or below one (`[[hooks.Stop]]`, `[[ hooks.Stop ]]`,
+ * `[["hooks".Stop]]`, `[[hooks . Stop.hooks]]`): double brackets, a first key
+ * that resolves to `hooks` (`hooksRooted`) and at least an event key after
+ * it. A one-key line (`[["hooks"]]`, which may also be an array element on
+ * its own line) is not one. Used by `collectKeptHookTables` for the
+ * spellings the `[[hooks.` prefix does not catch (task e8f4fc03). */
+function isHookEventArrayHeader(trimmed: string): boolean {
+  const parsed = parseTableHeader(trimmed);
+  return (
+    parsed !== null && parsed.header.startsWith("[[") && parsed.keys.length >= 2 && hooksRooted(trimmed)
+  );
+}
+
 /** Where a `[[...]]` header line appends in the parsed document: the
  * `index`-th entry of `hooks.<event>`, or, for `[[hooks.<event>.hooks]]`,
  * the `subIndex`-th entry of that entry's own `hooks` array. */
@@ -1462,11 +1501,12 @@ function subKey(event: string, index: number): string {
  * scan resolves has the root `hooks` (a `[[hooks.` line has it by its
  * prefix), a table outside `hooks` never shifts the order match, and an
  * array element on its own line (`["x"]`, `[1]`) costs no parse in this
- * scan, unless the element is the string `hooks` (`["hooks"]`,
- * `['hooks']`): that line reads as a `hooks` root, so it is probed like the
- * `hooks`-rooted spellings that `[[hooks.` does not catch
- * (`[[ hooks.Stop ]]`, `[["hooks".Stop]]`, `[hooks.Stop]`), and the probe
- * finds it inside the array.
+ * scan, unless the element line reads as a header whose first key is
+ * `hooks` (`["hooks"]`, `['hooks']`, `[["hooks"]]`, `[[ 'hooks' ]]`): that
+ * line reads as a `hooks` root, so it is probed like the `hooks`-rooted
+ * spellings that `[[hooks.` does not catch (`[[ hooks.Stop ]]`,
+ * `[["hooks".Stop]]`, `[hooks.Stop]`), and the probe finds it inside the
+ * array.
  */
 function mapHookArrayHeaders(text: string): HookArrayHeaderMap {
   const map: HookArrayHeaderMap = { slots: new Map(), eventCounts: new Map(), subCounts: new Map() };
@@ -1648,15 +1688,23 @@ function assertKeptHookTablesAreOperatorOwned(
       (command) => freshCommands.has(command) || command.startsWith("harness "),
     );
     if (!harnessShaped) continue;
+    // harness writes every hook table as `[[hooks.<Event>]]`; a table spelled
+    // another way (`[[ hooks.Stop ]]`) never was one, and with the comment
+    // line restored above it the scan would still read it as a foreign
+    // table, so the restore fix is offered only for the harness spelling
+    // (task e8f4fc03).
+    const fix = HOOK_ARRAY_HEADER_RE.test(table.header)
+      ? `Restore the comment line directly above ${table.header}, so the install replaces the table ` +
+        `with the fresh block${moveBelowEndOption(hasEndMarker)}, or delete the table`
+      : "Delete the table (the install replaces only hook tables spelled '[[hooks.<Event>]]' with " +
+        `that comment line above them)${moveBelowEndOption(hasEndMarker)}`;
     throw new CodexInstallRefusalError(
       `Codex config ${configPath} has a hook table ${table.header} (line ${table.line}) with no ` +
         `'${HARNESS_HOOK_COMMENT_PREFIX}<id> (budget_ms=<n>)' comment line above it, placed after the ` +
         "harness hook tables, whose command is one harness itself writes. harness cannot tell it " +
         "from a harness hook table whose comment line was deleted, and keeping it next to the " +
         "fresh harness block would run that hook twice (or keep a retired harness hook running). " +
-        `Restore the comment line directly above ${table.header}, so the install replaces the table ` +
-        `with the fresh block${moveBelowEndOption(hasEndMarker)}, or delete the table, then re-run ` +
-        `\`harness apply --runtime codex --install\`. The file is untouched.`,
+        `${fix}, then re-run \`harness apply --runtime codex --install\`. The file is untouched.`,
       configPath,
     );
   }
