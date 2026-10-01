@@ -3,7 +3,7 @@ type: overview
 title: Shell quote models, measured divergence against bash
 description: The policy engine has four independent shell-word models plus a raw-regex trigger layer. This records what each actually extracts, measured against real bash, which divergences are fail-open, and the evidence-led ordering for closing them.
 tags: [policy-engine, bash-match, quote-model, fail-open, measurement]
-timestamp: 2026-10-01T11:31:36Z
+timestamp: 2026-10-01T12:03:09Z
 sources:
   - src/runtime/command-normalize.ts
   - src/cli/init/composer.ts
@@ -94,6 +94,15 @@ Kontrollbau und meldete 0/48 Zellen schwächer als 0.43.0 bei diesem Lauf.
 Der `cdTarget`-Kanal von `bash-prefix-parse.ts` selbst (Risk-Gate-Kontext,
 nicht die `${REPO}`/`${BRANCH}`-Builtins) ist von `98ad072f` unberührt und
 bleibt K1s offene Beobachtung.
+
+Ausnahme seit Task `6c8ebd37`: liegt das cwd außerhalb jedes Git-Repositorys
+(leeres `${REPO}`, wie der Leer-Identifier-Guard es sieht), entfällt dessen
+cwd-Kontext neben einem Segment, dessen eigenes Ziel zu einem echten
+Repository aufgelöst wurde. Diese Ausnahme stützt sich auf die statische
+Ziel-Attribution, deren bekannte Fehlattribution (ein `GIT_DIR=`-Präfix oder
+ein drittes Repository über ein anderes Konstrukt) es für jedes cwd gibt;
+ein detached cwd und jeder andere nicht-leere cwd-Kontext fallen weiterhin
+nie.
 
 **Empfehlung 2, Teil (der read-only-Flag-Kanal, `fdee7d0f`) ist umgesetzt
 und ausgeliefert — als "slice 1", PR #392, nur für diesen einen der drei
