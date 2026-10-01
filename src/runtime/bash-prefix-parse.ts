@@ -106,7 +106,16 @@
 //     operator (bash skips it after `||` and runs it in a pipeline
 //     subshell after `|`). Ending the walk at `||` and never reading a
 //     `cd` clause after `|` is a separate follow-up, not done here;
-//   - ANSI-C `$'...'` and `$VAR` / `$(...)` are kept as raw text.
+//   - an escape-led or mid-quote env word swallows an unquoted `;` or `&`
+//     (kept on purpose, so `V=\"; W=/tmp cmd` still yields `W`), which
+//     makes the assignment behind it read as a leading one even where
+//     bash runs it in a pipeline subshell and an earlier value of the
+//     same name wins;
+//   - an escape-led env word ended by `||` also drops what bash really
+//     runs after the short-circuited right side (`A=a\ b|| x; D=y cmd`
+//     no longer yields `D`);
+//   - ANSI-C `$'...'` and `$VAR` / `$(...)` are kept as raw text, so a
+//     value glued to an unset variable (`D='o'$d`) reads `o$d`.
 //
 // MEASUREMENT RULE (task 47297478): any claim about this parser's
 // CD-TARGET extraction versus another build (lost or gained `cdTarget`
