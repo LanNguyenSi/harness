@@ -234,7 +234,13 @@ import * as path from "node:path";
 // now use src/cli/session-start/shared-options.ts. The check reported 109
 // clones on master before the extraction and 92 after, so the pin follows
 // the measured count.
-const MAX_CLONES = 92;
+// Raised to 93 (task fa423e9b): the Claude and Codex PreToolUse hooks each
+// declare the marker-check state next to `checkOperatorApprovalMarkers`, and
+// the report-hash mismatch reason added there lengthened that mirrored setup
+// past the clone threshold. The two hooks mirror each other on purpose (the
+// marker resolution itself is already shared), so the pin follows the
+// measured count instead of folding runtime-specific state into one helper.
+const MAX_CLONES = 93;
 
 // Sets process.exitCode instead of calling process.exit so the caller's
 // finally-cleanup runs on every path (process.exit skips stack unwinding).
