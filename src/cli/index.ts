@@ -2780,11 +2780,14 @@ export function buildProgram(opts: RunOptions = {}): Command {
     .command("review-subagent [summary]")
     .description(
       "Record a review-subagent:${TASK_ID} + review-subagent:${BRANCH} fact for the " +
-        "review-subagent-before-pr-create / review-subagent-before-pr-create-bash gates.",
+        "review-subagent-before-pr-create / review-subagent-before-pr-create-bash gates. " +
+        "Exactly one of --task or --adhoc is required; --adhoc (work without an agent-tasks " +
+        "task) writes review-subagent:${BRANCH} only.",
     )
     .option("--config <path>", "manifest path (default: ~/.harness/harness.yaml; legacy fallback ~/.claude/harness.yaml)")
     .option("--project <name>", "apply per-project overrides")
-    .requiredOption("--task <id>", "agent-tasks task id the review-subagent:${TASK_ID} tag is namespaced by")
+    .option("--task <id>", "agent-tasks task id the review-subagent:${TASK_ID} tag is namespaced by (exactly one of --task or --adhoc)")
+    .option("--adhoc", "record for work without an agent-tasks task: writes review-subagent:${BRANCH} only, no task tag (exactly one of --task or --adhoc)")
     .requiredOption("--verdict <text>", "reviewer verdict recorded in the fact content")
     .option("--branch <name>", "explicit branch override for review-subagent:${BRANCH} (default: current git branch)")
     .option(
@@ -2798,7 +2801,8 @@ export function buildProgram(opts: RunOptions = {}): Command {
         options: {
           config?: string;
           project?: string;
-          task: string;
+          task?: string;
+          adhoc?: boolean;
           verdict: string;
           branch?: string;
           session?: string;
@@ -2806,9 +2810,10 @@ export function buildProgram(opts: RunOptions = {}): Command {
         },
       ) => {
         const cliOpts: Parameters<typeof runRecordReviewSubagent>[0] = {
-          task: options.task,
           verdict: options.verdict,
         };
+        if (options.task !== undefined) cliOpts.task = options.task;
+        if (options.adhoc) cliOpts.adhoc = true;
         if (options.config) cliOpts.configPath = options.config;
         if (options.project) cliOpts.project = options.project;
         if (options.branch) cliOpts.branch = options.branch;
