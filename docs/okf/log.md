@@ -2,7 +2,7 @@
 
 <!-- Add new entries at the top, newest first. -->
 
-- 2026-10-01T12:01:53Z, task fa423e9b: `understanding-gate-lockout-recovery.md` gained the gate-read report-hash cross-check (a matched marker's signed `reportContentHash` is compared with the canonical hash of the session's `approved` report; mismatch denies, null-hash markers and non-approved reports unchanged; the hash is now the canonical one without the lifecycle fields), and `evidence-ledger-trust-boundary.md`, `gate-fail-posture-matrix.md` and `codex-adapter-parity-gaps.md` each gained one sentence for it; `understanding-gate-auto-mode-signals.md` was re-verified with no claim affected (the auto path still mints through the same marker check). The change shifted line citations in the hook, report, approve and task-marker sources, which were re-pointed in the decision record, this log, `understanding-gate-lockout-recovery.md` and a prose `lines` pointer in `codex-adapter-parity-gaps.md`. Re-stamped.
+- 2026-10-01T12:46:16Z, task fa423e9b: `understanding-gate-lockout-recovery.md` gained the gate-read report-hash cross-check (a matched marker's signed `reportContentHash` must still be carried by some parseable report file in the reports directory, any session and any `approvalStatus`; the session marker is the fallback when the task marker fails; null-hash markers and a directory with no report file are unchanged; the hash is the canonical one without the lifecycle fields; the deny reason names the marker kind, not a report file), and `evidence-ledger-trust-boundary.md`, `gate-fail-posture-matrix.md` and `codex-adapter-parity-gaps.md` each gained one sentence for it, the matrix sentence now also covering the unparseable-rewrite case; `understanding-gate-auto-mode-signals.md` was re-verified with no claim affected (the auto path still mints through the same marker check). The change shifted line citations in the hook, report, approve and task-marker sources, which were re-pointed in the decision record, this log, `understanding-gate-lockout-recovery.md` and a prose `lines` pointer in `codex-adapter-parity-gaps.md`. Re-stamped.
 
 - 2026-10-01T11:43:09Z, task 20ebf935: `understanding-gate-lockout-recovery.md` gained the block-message reason bullet, and `codex-adapter-parity-gaps.md`, `evidence-ledger-trust-boundary.md`, `gate-fail-posture-matrix.md` and `understanding-gate-auto-mode-signals.md` were re-verified after the PreToolUse and PostToolUse hooks, `persisted-reports.ts`, `post-tool-use-boundary.ts`, `markers.ts`, `approve/understanding.ts` and `docs/policy-packs/understanding-before-execution.md` changed (an optional `expiredBy` report field carried on the persisted-report record, the expiry reason in the block message, a new `expiry-reason.ts`, an expiry trigger matrix). Claims re-checked against the code: no gate decision, source list, precedence or fail posture they state changed; the lockout doc now says the Claude hook appends the expiry sentence to its stdout reason after the `ux:` envelope, while the Codex agent reads the whole stderr, whose engine reason carries it once. The edits shifted line citations into the hook files, `persisted-reports.ts`, `approve/understanding.ts`, `markers.ts` and `post-tool-use-boundary.ts`, which were re-pointed in the decision record, this log and the okf docs, including three prose `lines N-M` pointers in `codex-adapter-parity-gaps.md`. Re-stamped.
 
@@ -2408,7 +2408,7 @@
   `probeRegularFilePresence`, or cite a span of `hook-pre-tool-use.ts`
   inside this round's edited region (lines ~940-978): `grep` across all 6
   for those terms found only `understanding-gate-lockout-recovery.md`'s
-  pre-existing citation at `src/cli/pack/hook-pre-tool-use.ts:1000#"writePendingApproval(generatedDir, sessionId);"`,
+  pre-existing citation at `src/cli/pack/hook-pre-tool-use.ts:998#"writePendingApproval(generatedDir, sessionId);"`,
   well before the edited region, still resolving. `evidence-ledger-trust-boundary.md`
   was NOT flagged stale this round: it was itself edited (new
   `probeRegularFilePresence` paragraph, `delegation-markers.ts` added to
@@ -2460,7 +2460,7 @@
   describes only the new reason itself; neither touches any claim or
   cited span in these 7 docs (the one line-numbered citation among them,
   `understanding-gate-lockout-recovery.md`'s
-  `src/cli/pack/hook-pre-tool-use.ts:1000#"writePendingApproval(generatedDir, sessionId);"`,
+  `src/cli/pack/hook-pre-tool-use.ts:998#"writePendingApproval(generatedDir, sessionId);"`,
   sits well before the edited comment and still resolves). Timestamp-only
   re-stamp on all 7; no content changed. `okf-kit check --json docs/okf`
   on the committed tree shows 0 errors, 0 warnings after the re-stamp.
