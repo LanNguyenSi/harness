@@ -3,7 +3,7 @@ type: overview
 title: Shell quote models, measured divergence against bash
 description: The policy engine has four independent shell-word models plus a raw-regex trigger layer. This records what each actually extracts, measured against real bash, which divergences are fail-open, and the evidence-led ordering for closing them.
 tags: [policy-engine, bash-match, quote-model, fail-open, measurement]
-timestamp: 2026-10-01T07:57:02Z
+timestamp: 2026-10-01T08:37:53Z
 sources:
   - src/runtime/command-normalize.ts
   - src/cli/init/composer.ts
@@ -210,29 +210,44 @@ einem doppelt gequoteten Teil trägt (`release/"$V"`): es wird roh gelesen
 wie vorher, damit ein `release/*`-Muster, ein späteres `cd` und der
 kubectl-Rest erreichbar bleiben (ein Wort, das mit einem Quote beginnt und
 interpoliert, bleibt unaufgelöst). Ein Env-Wort mit Escape oder
-mittendrin stehendem Quote endet an einem unquotierten `||`, ein einzelnes
-`|` wird weiter geschluckt. Zusätzlich ist
-`inlineEnv` jetzt ein Objekt ohne Prototyp, damit `__proto__=/prod`
-nicht still verworfen wird.
+mittendrin stehendem Quote schluckt unquotierte Operatoren (`;`, `&`, `|`,
+`||`) wie ein reiner Env-Wert; ein Ende an `||` wurde versucht und wieder
+entfernt, weil es ehrliche Klauseln verlor, die bash nach dem Kurzschluss
+ausführt. Zusätzlich ist `inlineEnv` jetzt ein Objekt ohne Prototyp, damit
+`__proto__=/prod` nicht still verworfen wird.
 
-**Nicht allgemein verlustfrei, nur gemessen:** das Messwerkzeug
-`scripts/measure-bash-prefix-parse.mjs` zeigt 0 verlorene ehrliche
-cd-Ziele gegen master und das ausgelieferte Release (11 von 17 Armen
-beweisen nichts, sie sind ausgeschlossen, nicht als null gezählt); es misst
-weder `inlineEnv` noch `branchTarget`. Ein Differenzlauf alt gegen neu mit
-bash als Schiedsrichter über 120000 erzeugte Kommandos (59187 liefen in
-bash) zeigt noch wenige verlorene ehrliche Werte oder Ziele: ein
-quote-tragendes `cd`- oder Branch-Wort, das an einem unquotierten `|`
-endet, lehnt seine Klausel ab und beendet den Präfix-Lauf; ein Env-Wort mit
-Escape schluckt ein unquotiertes `;` oder `&`, sodass eine Zuweisung dahinter
-als führend gelesen wird; ein Env-Wort mit Escape, das an `||` endet, verliert
-das, was bash nach der kurzgeschlossenen rechten Seite ausführt; `$VAR` bleibt
-Literaltext (`D='o'$d` liest `o$d`). Die Phantom-`cd`s `A=x|| cd /t && y`
-und `A=a\ b| cd /t && y` werden weiter gelesen (die Klassenlösung, den Lauf
-an `||` zu beenden und nach `|` nie ein `cd` zu lesen, ist ein eigener
-Folge-Task). Die Trigger-Ebene (`command-normalize`, Zeile
-"Backslash-Escape im Wert" in der Fail-open-Tabelle unten) ist von dieser
-Änderung nicht berührt und wurde dabei nicht neu gemessen.
+**Nicht allgemein verlustfrei; die Abnahmeregel ist signalbasiert:** ein
+Leser, der Wortgrenzen ändert, kann "nichts, was vorher extrahiert wurde,
+geht verloren" nicht halten. Abgenommen wurde die Änderung deshalb gegen
+den Parser vor der Änderung auf Signalebene (Env-Wert, Branch, `cd`-Ziel,
+kubectl-Rest): (i) kein Produktionssignal, das der alte Parser sah und der
+neue nicht, auf einer benannten Hochrisiko-Formenmenge und auf einem
+Replay echter Agenten-Kommandos; (ii) auf Korpora mit festem Seed und bash
+als Schiedsrichter weniger verpasste Signale als vorher für Env, Branch
+und `cd` aus einem Nicht-Prod-cwd; (iii) jeder verbleibende neue Fehlgriff
+gehört zu einer benannten Restklasse, deren schlichten Zwilling der alte
+Parser ebenfalls verfehlt; (iv) die `cd`-Herabstufungen aus einem Prod-cwd
+werden mit Zahlen berichtet. Die Messwerte stehen im CHANGELOG-Eintrag und
+im Pull Request. Das Messwerkzeug `scripts/measure-bash-prefix-parse.mjs`
+zeigt 0 verlorene ehrliche cd-Ziele gegen master und das ausgelieferte
+Release (11 von 17 Armen beweisen nichts, sie sind ausgeschlossen, nicht
+als null gezählt); es misst weder `inlineEnv` noch `branchTarget`.
+Benannte Restklassen (Modul-Header von `src/runtime/bash-prefix-parse.ts`):
+ein Env-Wort schluckt einen Operator, sodass ein `cd` oder eine Zuweisung
+dahinter als führend gelesen wird (Phantom-`cd` wie `A=x|| cd /t && y` und
+`A=a\ b|| cd /t && y`, oder eine spätere Zuweisung im Hintergrund
+überschreibt den Wert, den bash behält); ein reiner `cd`-Pfad wird über ein
+`|` hinweg gelesen; nur das erste `cd` zählt, und ein `cd` in einer später
+mit `&` in den Hintergrund geschickten Und-Liste wird gelesen; ein `cd`-
+oder Branch-Wort ohne folgendes `&&`/`;` ergibt keine Klausel (jetzt auch
+bei einem escapten `;` im Wort); ein quote-tragendes `cd`- oder Branch-Wort,
+das an einem unquotierten `|` endet, lehnt seine Klausel ab; `$VAR` bleibt
+Literaltext (`D='o'$d` liest `o$d`). Weil mehr gequotete und escapte
+`cd`-Pfade gelesen werden, liefern die ersten drei Klassen aus einem
+Prod-cwd mehr falsche Herabstufungen als vorher; dieser Tausch ist im Pull
+Request beziffert und angenommen. Die Trigger-Ebene (`command-normalize`,
+Zeile "Backslash-Escape im Wert" in der Fail-open-Tabelle unten) ist von
+dieser Änderung nicht berührt und wurde dabei nicht neu gemessen.
 
 ## Kurzfassung
 
