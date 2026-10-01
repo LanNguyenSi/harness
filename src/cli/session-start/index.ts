@@ -29,14 +29,17 @@ import {
 } from "../../runtime/index.js";
 import { resolveManifestLedgerWriter } from "../../runtime/ledger-writer.js";
 import { resolveGeneratedDir } from "../../runtime/pending-approval.js";
-import {
-  resolveReadSessionId,
-  type ResolveReadSessionOptions,
-} from "../../runtime/session-id.js";
+import { resolveReadSessionId } from "../../runtime/session-id.js";
 import type { Manifest } from "../../schema/index.js";
 import { loadManifest, resolvePaths, type LoaderOptions } from "../loader.js";
-
-const FALLBACK_SESSION = "default";
+import {
+  classifySessionSource,
+  explicitSessionId,
+  FALLBACK_SESSION,
+  type SessionSource,
+  type SessionStartCommonOptions,
+  type SessionStartEvent,
+} from "./shared-options.js";
 
 // Exported (task 6993d9b5, round 2 F5) so
 // `session-start-preflight-setup-version.ts`'s `PREFLIGHT_SETUP_VERSION_COMMAND`
@@ -62,12 +65,6 @@ const LEDGER_SOURCE = "harness-session-start-preflight";
 const FAIL_LOG_KEEP_LAST = 20;
 const FAIL_LOG_PREFIX = "preflight-";
 
-interface SessionStartEvent {
-  session_id?: unknown;
-  cwd?: unknown;
-  hook_event_name?: unknown;
-}
-
 /** The slice of `preflight run --json` output this producer reads. */
 export interface PreflightJson {
   ready?: boolean;
@@ -84,26 +81,19 @@ export type RunPreflightResult =
   | { ok: true; json: PreflightJson }
   | { ok: false; reason: string };
 
-export interface SessionStartPreflightOptions extends LoaderOptions {
-  /** Defaults to process.stdin. */
-  stdin?: NodeJS.ReadableStream;
+export interface SessionStartPreflightOptions extends SessionStartCommonOptions {
+  // `session` is wired to the `--session <id>` CLI flag for manual /
+  // scripted invocations where no SessionStart event JSON is piped on
+  // stdin. `resolveSession` is the test seam over `resolveReadSessionId`
+  // (the same precedence chain as `harness audit` and
+  // `harness explain --trace`).
   /**
    * Idle bound, in ms, for the stdin read when no `--session` is given
    * (default STDIN_IDLE_TIMEOUT_MS). Tests inject a short value.
    */
   stdinIdleTimeoutMs?: number;
-  /** Defaults to process.stderr. stdout is never written (SessionStart). */
-  stderr?: NodeJS.WritableStream;
-  /**
-   * Explicit session id (overrides every other source). Wired to the
-   * `--session <id>` CLI flag for manual / scripted invocations where
-   * no SessionStart event JSON is being piped on stdin.
-   */
-  session?: string;
   /** `preflight` subprocess timeout in ms. */
   preflightTimeoutMs?: number;
-  /** Per-call ledger timeout in ms. */
-  ledgerTimeoutMs?: number;
   /** Inject the preflight runner (tests). */
   runPreflight?: (cwd: string, timeoutMs: number, setup: boolean) => Promise<RunPreflightResult>;
   /**
@@ -142,19 +132,6 @@ export interface SessionStartPreflightOptions extends LoaderOptions {
    * operator's real `~/.harness/logs/` (or the legacy `~/.claude/logs/`).
    */
   logDir?: string;
-  /** Inject the ledger writer (tests). */
-  writeLedger?: (args: {
-    sessionId: string;
-    content: string;
-    source: string;
-  }) => Promise<{ ok: boolean; reason?: string }>;
-  /**
-   * Inject the read-path session resolver (env + transcript discovery).
-   * Test seam — production uses `resolveReadSessionId` from
-   * `runtime/session-id` so we get the same precedence chain as
-   * `harness audit` and `harness explain --trace`.
-   */
-  resolveSession?: (explicit: string | undefined, opts: ResolveReadSessionOptions) => string;
   /**
    * Inject the `.pending-approval` writer. Opt-in: staging only happens
    * when the caller explicitly passes a writer. The CLI entry points
@@ -188,7 +165,7 @@ export interface SessionStartPreflightResult {
    * recorded under that id will not satisfy any `preflight-before-*`
    * gate, which queries by the real Claude Code session id).
    */
-  sessionSource: "flag" | "stdin" | "env" | "transcript" | "default";
+  sessionSource: SessionSource;
   /** Resolved session id. */
   sessionId: string;
   /** Human-readable explanation of a non-write outcome, for diagnostics. */
@@ -605,27 +582,10 @@ export async function runSessionStartPreflight(
   // recorded under `"default"` will never satisfy a `preflight-before-*`
   // gate, so we loud-warn rather than letting the success line read as
   // if the producer worked.
-  const explicit =
-    typeof opts.session === "string" && opts.session.length > 0
-      ? opts.session
-      : typeof event.session_id === "string" && event.session_id.length > 0
-        ? event.session_id
-        : undefined;
+  const explicit = explicitSessionId(opts.session, event);
   const resolveSession = opts.resolveSession ?? resolveReadSessionId;
   const sessionId = resolveSession(explicit, {});
-  const sessionSource: SessionStartPreflightResult["sessionSource"] =
-    typeof opts.session === "string" && opts.session.length > 0
-      ? "flag"
-      : typeof event.session_id === "string" && event.session_id.length > 0
-        ? "stdin"
-        : sessionId === FALLBACK_SESSION
-          ? "default"
-          : (typeof process.env.CLAUDE_CODE_SESSION_ID === "string" &&
-              process.env.CLAUDE_CODE_SESSION_ID === sessionId) ||
-              (typeof process.env.CLAUDE_SESSION_ID === "string" &&
-                process.env.CLAUDE_SESSION_ID === sessionId)
-            ? "env"
-            : "transcript";
+  const sessionSource = classifySessionSource(opts.session, event, sessionId);
 
   // Stage `.pending-approval` as soon as we resolve a real session id so
   // `harness approve understanding` (no flags) works from the operator's

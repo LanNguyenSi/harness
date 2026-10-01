@@ -581,9 +581,9 @@ export function rewriteReportApproved(
   parsed["approvalStatus"] = "approved";
   parsed["approvedAt"] = approvedAt;
   parsed["approvedBy"] = approvedBy;
-  // `expiredAt` is `expirePersistedReport`'s stamp for how a report
-  // reached "expired" (understanding-before-execution-runtime.ts); it
-  // describes that specific past state, not the report's current one.
+  // `expiredAt` and `expiredBy` are `expirePersistedReport`'s stamp for how a
+  // report reached "expired" (understanding-before-execution-runtime.ts); they
+  // describe that specific past state, not the report's current one.
   // Approving a report that was previously expired must not let that
   // stale timestamp survive into the new snapshot, or the persisted
   // record becomes self-contradictory: {approvalStatus: "approved",
@@ -593,6 +593,7 @@ export function rewriteReportApproved(
   // drops the key entirely instead of serializing `"expiredAt": null`-
   // adjacent noise.
   delete parsed["expiredAt"];
+  delete parsed["expiredBy"];
   // Stamp the session id when the report lacks one (older Stop-hook
   // package versions write reports without a `sessionId` field). This
   // binds the report to the session that approved it, so every later

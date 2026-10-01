@@ -8,7 +8,13 @@
 
 - 2026-10-01T12:03:09Z, task 6c8ebd37: the cwd context of a policy with an empty `${REPO}`/`${BRANCH}` is now skipped next to a resolved target only when the cwd is outside every git repository, decided from the values the guard sees (the policy's own `trigger.extract` evaluated against the cwd builtins); a detached cwd keeps its cwd context, and the detached hint names the repository (`src/runtime/intercept.ts`). `gate-fail-posture-matrix.md` (exception bullet, the "never dropped" lines and the doc-comment citation re-pointed), `policy-engine-producer-wiring.md` and `quote-model-divergence.md` (the always-evaluated cwd claims) now state that exception and its reliance on the static target attribution. `debug-verb-selection.md`, `codex-adapter-parity-gaps.md` and `pause-vs-gate-kill-switch.md` re-checked: no claim affected. Re-stamped.
 
+- 2026-10-01T11:43:09Z, task 20ebf935: `understanding-gate-lockout-recovery.md` gained the block-message reason bullet, and `codex-adapter-parity-gaps.md`, `evidence-ledger-trust-boundary.md`, `gate-fail-posture-matrix.md` and `understanding-gate-auto-mode-signals.md` were re-verified after the PreToolUse and PostToolUse hooks, `persisted-reports.ts`, `post-tool-use-boundary.ts`, `markers.ts`, `approve/understanding.ts` and `docs/policy-packs/understanding-before-execution.md` changed (an optional `expiredBy` report field carried on the persisted-report record, the expiry reason in the block message, a new `expiry-reason.ts`, an expiry trigger matrix). Claims re-checked against the code: no gate decision, source list, precedence or fail posture they state changed; the lockout doc now says the Claude hook appends the expiry sentence to its stdout reason after the `ux:` envelope, while the Codex agent reads the whole stderr, whose engine reason carries it once. The edits shifted line citations into the hook files, `persisted-reports.ts`, `approve/understanding.ts`, `markers.ts` and `post-tool-use-boundary.ts`, which were re-pointed in the decision record, this log and the okf docs, including three prose `lines N-M` pointers in `codex-adapter-parity-gaps.md`. Re-stamped.
+
+- 2026-10-01T11:36:05Z, task 11bd2b97: the four `session-start` producers and their CLI wiring in `src/cli/index.ts` now share `src/cli/session-start/shared-options.ts` (pure refactor; help text, options, defaults, stderr output, exit codes and ledger writes unchanged). `debug-verb-selection.md`, `pause-vs-gate-kill-switch.md` and `understanding-gate-lockout-recovery.md` list `src/cli/index.ts` under sources and were re-verified: none states a claim about the session-start options or wiring; the only effect was shifted lines, so their citations into `src/cli/index.ts` were re-pointed (+8 above the session-start block, -87 below it), and so were the three citations in this log that okf-kit resolves against the current file. The lockout doc's sentence that `harness session-start preflight` stages `.pending-approval` on every run with a resolved id still holds. Re-stamped.
+
 - 2026-10-01T11:31:36Z, task 6c8ebd37: an empty `${REPO}`/`${BRANCH}` in a policy's `ledger_tag` (cwd outside every repo, detached HEAD, empty override) now decides from the policy's enforcement with its own reason and no ledger query (`src/runtime/intercept.ts`, `src/cli/dry-run.ts`, `src/cli/policy/intercept.ts`). `policy-engine-producer-wiring.md` (second short-circuit next to `operator_only`), `gate-fail-posture-matrix.md` (new row) and `debug-verb-selection.md` (dry-run `ledgerQuery` hint) gained that claim; the `src/runtime/intercept.ts` citations in `policy-engine-producer-wiring.md`, `quote-model-divergence.md` and `gate-fail-posture-matrix.md` were re-pointed to the lines the edit shifted. `codex-adapter-parity-gaps.md` and `pause-vs-gate-kill-switch.md` re-checked: neither makes a claim about the changed code. A blank cwd context is also no longer demanded next to a target that resolved to a real repository (`resolveAttributedContexts`), so the `git -C <repo>` / `cd <repo> &&` remedy the message names passes; `gate-fail-posture-matrix.md` gained that exception to the always-evaluate-cwd rule. Re-stamped.
+
+- 2026-10-01T11:20:42Z, task 241d9e9e: `src/runtime/read-only-bash.ts` now refuses a command carrying a NUL-decoding ANSI-C escape (fail closed, predicate `hasAnsiCNulEscape` in `src/runtime/shell-word.ts`); `decodeShellWord` itself decodes such a word exactly as before. `quote-model-divergence.md` and `understanding-gate-auto-mode-signals.md` re-verified against the code and against GNU bash 3.2.57: neither makes a claim about a NUL escape or about the classifier's escape handling beyond the restrictive-side use of the decoder, which still holds, so no body text changed (a body edit would shift the lines older entries here cite). Re-stamped.
 
 - 2026-10-01T08:37:53Z, task b093911d: `quote-model-divergence.md` re-verified a third time after `src/runtime/bash-prefix-parse.ts` stopped ending escape-led env words at `||` (that end lost honest clauses bash runs after the short circuit) and its header gained the signal-level acceptance rule and the named residual classes. Claims re-checked against the parser, the measurement tool and real bash: the `||` sentence was replaced by the swallowing behaviour, the measured-not-lossless paragraph now states the acceptance rule and the residual classes, and the earlier value-decoding claims still match bash. Re-stamped.
 
@@ -499,7 +505,7 @@
   first fix commit, 24 more at its review-fix commit), so the five
   citations those entries re-pointed to (`:1710-1725`, `:2981-2985`,
   `:3354-3453`, `:3356-3361`, `:3313-3412`) landed one hunk short of the
-  quoted text. Corrected to `:1722-1737`, `:2993-2997`, `:3371-3470`,
+  quoted text. Corrected to `:1722-1737`, `:2993-2997`, `:3284-3383`,
   `:3373-3378`, `:3325-3424` (each checked byte-identical against the base
   commit `e8a5f085` content at the +36 offset) and the "net 24 lines" prose
   to "net 36 lines". The doc bundle's own live citations
@@ -669,7 +675,7 @@
   states only what `[0.28.0]` documents, dropping the unsourced
   "intentionally stays loose" design claim it carried at first; each
   rewrite kept the comment at a 4-line span so no numbered citation
-  below it shifted; verified `src/cli/approve/understanding.ts:678`
+  below it shifted; verified `src/cli/approve/understanding.ts:679`
   (this doc's own `understanding-gate-lockout-recovery.md` citation)
   still reads `resolveApprovalSessionId` after the edits, unchanged.
 
@@ -696,7 +702,7 @@
   Prior Art's presence (required since 0.4.0, same citation
   `` `CHANGELOG.md:#0.28.0` ``) and cannot judge the section's content,
   and that the approve CLI is the boundary that refuses a hollow list.
-  The edited span stayed at 4 lines (`understanding.ts` lines 483-486); `src/cli/approve/understanding.ts:678` still reads
+  The edited span stayed at 4 lines (`understanding.ts` lines 483-486); `src/cli/approve/understanding.ts:679` still reads
   `resolveApprovalSessionId` and the file's total line count is
   unchanged, so the citation above it does not shift.
   `understanding-gate-lockout-recovery.md`'s `timestamp:` is re-stamped
@@ -1191,7 +1197,7 @@
   first shipped full silence here, round 1's own review found the
   silence itself was the residual gap the task's goal named ("no
   diagnostic anywhere"), closed in round 2. The producer's own stderr
-  diagnostic (`src/cli/session-start/index.ts:747#"the project-scoped"`)
+  diagnostic (`src/cli/session-start/index.ts:707#"the project-scoped"`)
   no longer blames "the project layer" for a
   base- or machine-layer parse failure (round 1's lead-in did); both
   this diagnostic and the new `doctor` finding now collapse a
@@ -1485,7 +1491,7 @@
   `quote-model-divergence.md` and `understanding-gate-lockout-recovery.md`
   `sources-fresh` STALE against these files. Checked every line-numbered
   citation these seven docs make into the five touched files
-  (`src/cli/index.ts:1722-1737`, `:2995-2999`, `:3371-3470`,
+  (`src/cli/index.ts:1722-1737`, `:2995-2999`, `:3284-3383`,
   `:3373-3378`; `src/cli/init/templates.ts:928`): all still match their
   quoted text verbatim (sibling-line check), since none of this round's
   edits added or removed a line above a cited line in any file a
@@ -1652,7 +1658,7 @@
       That range is the `harness pack list` subcommand; the seven flags the
       doc enumerates (`--config`, `--project`, `--session`, `--task`,
       `--reports-dir`, `--approved-by`, `--force`) are declared at
-      `src/cli/index.ts:1686-1701`, which the doc now cites (sibling
+      `src/cli/index.ts:1694-1709`, which the doc now cites (sibling
       check: line 1685 closes the preceding `.description(` call and line
       1702 opens `.action(`, so the range covers exactly the option
       declarations). This doc is one of
@@ -2410,7 +2416,7 @@
   `probeRegularFilePresence`, or cite a span of `hook-pre-tool-use.ts`
   inside this round's edited region (lines ~940-978): `grep` across all 6
   for those terms found only `understanding-gate-lockout-recovery.md`'s
-  pre-existing citation at `src/cli/pack/hook-pre-tool-use.ts:948#"writePendingApproval(generatedDir, sessionId);"`,
+  pre-existing citation at `src/cli/pack/hook-pre-tool-use.ts:969#"writePendingApproval(generatedDir, sessionId);"`,
   well before the edited region, still resolving. `evidence-ledger-trust-boundary.md`
   was NOT flagged stale this round: it was itself edited (new
   `probeRegularFilePresence` paragraph, `delegation-markers.ts` added to
@@ -2462,7 +2468,7 @@
   describes only the new reason itself; neither touches any claim or
   cited span in these 7 docs (the one line-numbered citation among them,
   `understanding-gate-lockout-recovery.md`'s
-  `src/cli/pack/hook-pre-tool-use.ts:948#"writePendingApproval(generatedDir, sessionId);"`,
+  `src/cli/pack/hook-pre-tool-use.ts:969#"writePendingApproval(generatedDir, sessionId);"`,
   sits well before the edited comment and still resolves). Timestamp-only
   re-stamp on all 7; no content changed. `okf-kit check --json docs/okf`
   on the committed tree shows 0 errors, 0 warnings after the re-stamp.

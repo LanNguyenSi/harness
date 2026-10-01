@@ -221,6 +221,7 @@ export function applyPostToolUseExpiry(
   toolNameMatched: boolean,
   reportsDir: string,
   now?: Date,
+  trigger?: string,
 ): ApplyPostToolUseExpiryResult {
   const markerPath = approvalMarkerPathFor(generatedDir, sessionId);
   const wasMarkerPresent = fs.existsSync(markerPath);
@@ -250,7 +251,7 @@ export function applyPostToolUseExpiry(
   // 7402301d the report can no longer satisfy the gate on its own, so
   // this now exists so the audit record agrees with the cleared marker.
   // Best-effort.
-  const reportExpiry = expirePersistedReport(reportsDir, sessionId, now);
+  const reportExpiry = expirePersistedReport(reportsDir, sessionId, now, trigger);
 
   return {
     wasMarkerPresent,

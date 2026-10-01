@@ -3,7 +3,7 @@
 //
 // Receives Claude Code's PostToolUse event JSON on stdin. Fires only when
 // the just-completed tool was Bash AND the command matched `gh pr merge`
-// AND the merge is CONFIRMED by one of two contracts (see
+// (see "Trigger arms" below) AND the merge is CONFIRMED by one of two contracts (see
 // `resolveMergeConfirmation` in post-merge-gate-runtime.ts, "PAYLOAD
 // REALITY" follow-up):
 //
@@ -27,6 +27,27 @@
 // (see post-merge-gate-runtime.ts's header for the full squash-fest
 // rationale — no ancestry walk, no `git` subprocess).
 //
+// Trigger arms: the trigger mirrors the four arms the `gh pr merge` gate
+// policies test in `policyMatchesEvent` (src/runtime/intercept.ts), in the
+// same raw-first, lazy order: `GH_PR_MERGE_BASH_RE` against (1) the raw
+// command, then (2) `normalizeCommand`, (3) `normalizeCommandAmpAware`,
+// (4) `normalizeCommandQuoteAware`. Each later arm is computed only when
+// every earlier arm missed, so a raw match never normalizes, and the
+// result is strictly additive (a command that matched raw keeps matching;
+// no arm removes a hit). That closes wrapper spellings (`nice`/`env`/
+// `command`/`time`), the bare-`&` chain (`echo hi & nice gh pr merge 1`)
+// and a boundary character inside a quoted assignment value
+// (`VAR='a; b' gh pr merge 1`), which the raw regex alone missed while the
+// gate blocked them. Normalisation is skipped above MAX_NORMALIZE_LENGTH,
+// like the gate; such a command is tested raw only, which is the one named
+// residual (a wrapper spelling in a command longer than that bound).
+// Like the gate, quoted text that holds a wrapper plus `gh pr merge` behind
+// a boundary (`git commit -m 'x; env gh pr merge 1'`) also matches; the
+// merged fact is still written only on a confirmed merge result.
+// Only the TRIGGER is widened: the PR number is still read from the raw
+// command and the merged fact is still written only when
+// `resolveMergeConfirmation` confirms the merge.
+//
 // Every non-match / failure path is a no-op: wrong tool, non-matching
 // command, neither contract confirms, an unresolvable git context, no
 // session id, a manifest/ledger failure. `PostToolUse` is `blocking:false`
@@ -40,6 +61,11 @@ import {
   PACK_NAME,
   resolveMergeConfirmation,
 } from "../../policy-packs/builtin/post-merge-gate-runtime.js";
+import {
+  normalizeCommand,
+  normalizeCommandAmpAware,
+  normalizeCommandQuoteAware,
+} from "../../runtime/command-normalize.js";
 import { resolveGitContext } from "../../runtime/git-context.js";
 import { resolveManifestLedgerWriter, type LedgerWriteFn } from "../../runtime/ledger-writer.js";
 import type { Manifest } from "../../schema/index.js";
@@ -93,6 +119,19 @@ function bashCommandOf(toolInput: unknown): string {
   return typeof cmd === "string" ? cmd : "";
 }
 
+/**
+ * Does `command` look like a `gh pr merge` invocation to any of the four
+ * arms the gate policies use? Raw first, then each normalised form, lazily:
+ * a later arm runs only after every earlier arm missed. Exported for the
+ * divergence measurement and the ordering test.
+ */
+export function recorderTriggerMatches(command: string): boolean {
+  if (GH_PR_MERGE_BASH_RE.test(command)) return true;
+  if (GH_PR_MERGE_BASH_RE.test(normalizeCommand(command).normalized)) return true;
+  if (GH_PR_MERGE_BASH_RE.test(normalizeCommandAmpAware(command).normalized)) return true;
+  return GH_PR_MERGE_BASH_RE.test(normalizeCommandQuoteAware(command).normalized);
+}
+
 export async function runPackHookPostMergeGateRecordCli(
   opts: PackHookPostMergeGateRecordOptions = {},
 ): Promise<PackHookPostMergeGateRecordResult> {
@@ -127,7 +166,7 @@ export async function runPackHookPostMergeGateRecordCli(
   }
 
   const command = bashCommandOf(event.tool_input);
-  if (!command || !GH_PR_MERGE_BASH_RE.test(command)) {
+  if (!command || !recorderTriggerMatches(command)) {
     const diagnostic = "command did not match gh pr merge, skipping";
     note(diagnostic);
     return { exitCode: 0, wrote: false, diagnostic };

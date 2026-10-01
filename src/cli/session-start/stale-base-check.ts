@@ -110,36 +110,25 @@ import {
 } from "../../runtime/git-context.js";
 import { assertNoRealSpawnInTests } from "../../runtime/hermetic-spawn-guard.js";
 import { resolveManifestLedgerWriter } from "../../runtime/ledger-writer.js";
-import {
-  resolveReadSessionId,
-  type ResolveReadSessionOptions,
-} from "../../runtime/session-id.js";
+import { resolveReadSessionId } from "../../runtime/session-id.js";
 import type { Manifest } from "../../schema/index.js";
-import { loadManifest, type LoaderOptions } from "../loader.js";
+import { loadManifest } from "../loader.js";
+import {
+  classifySessionSource,
+  explicitSessionId,
+  FALLBACK_SESSION,
+  malformedEventReason,
+  readSessionStartEvent,
+  resolveEventCwd,
+  type SessionSource,
+  type SessionStartCwdOptions,
+  type SessionStartEvent,
+} from "./shared-options.js";
 import { formatSnapshotAge } from "./toolchain-parity.js";
 
-const FALLBACK_SESSION = "default";
 const LEDGER_SOURCE = "harness-session-start-stale-base-check";
 const DEFAULT_REMOTE = "origin";
 const DEFAULT_FETCH_TIMEOUT_MS = 8_000;
-
-interface SessionStartEvent {
-  session_id?: unknown;
-  cwd?: unknown;
-  hook_event_name?: unknown;
-}
-
-async function readStdin(stream: NodeJS.ReadableStream): Promise<string> {
-  return new Promise((resolve, reject) => {
-    let data = "";
-    stream.setEncoding("utf8");
-    stream.on("data", (chunk: string) => {
-      data += chunk;
-    });
-    stream.on("end", () => resolve(data));
-    stream.on("error", reject);
-  });
-}
 
 // ---------------------------------------------------------------------
 // The live check: fetch + ahead/behind + (when behind) the newest
@@ -282,29 +271,9 @@ function realCheckStaleBase(args: StaleBaseCheckArgs): Promise<StaleBaseCheckRes
 // Driver
 // ---------------------------------------------------------------------
 
-export interface SessionStartStaleBaseCheckOptions extends LoaderOptions {
-  /** Defaults to process.stdin. */
-  stdin?: NodeJS.ReadableStream;
-  /** Defaults to process.stderr. stdout is never written (SessionStart). */
-  stderr?: NodeJS.WritableStream;
-  /** Explicit session id (overrides every other source). */
-  session?: string;
-  /** Override the cwd resolution (test injection). Falls back to event.cwd then process.cwd(). */
-  cwd?: string;
+export interface SessionStartStaleBaseCheckOptions extends SessionStartCwdOptions {
   /** Override "now" for deterministic age-formatting tests. */
   now?: Date;
-  /** Per-call ledger timeout in ms. */
-  ledgerTimeoutMs?: number;
-  /** Inject a manifest (tests). Bypasses loadManifest. */
-  manifest?: Manifest;
-  /** Inject the ledger writer (tests). */
-  writeLedger?: (args: {
-    sessionId: string;
-    content: string;
-    source: string;
-  }) => Promise<{ ok: boolean; reason?: string }>;
-  /** Inject the read-path session resolver (env + transcript discovery). Test seam. */
-  resolveSession?: (explicit: string | undefined, opts: ResolveReadSessionOptions) => string;
   /** Inject the live check (tests) — see realCheckStaleBase's doc. */
   runCheck?: (args: StaleBaseCheckArgs) => Promise<StaleBaseCheckResult>;
 }
@@ -322,7 +291,7 @@ export interface SessionStartStaleBaseCheckResult {
   behindCount?: number;
   /** Resolved session id. */
   sessionId: string;
-  sessionSource: "flag" | "stdin" | "env" | "transcript" | "default";
+  sessionSource: SessionSource;
   /** Human-readable explanation of a non-write outcome, for diagnostics. */
   reason?: string;
 }
@@ -357,41 +326,19 @@ export async function runSessionStartStaleBaseCheck(
 
   let event: SessionStartEvent;
   try {
-    event = JSON.parse((await readStdin(stdin)).trim() || "{}") as SessionStartEvent;
+    event = await readSessionStartEvent(stdin);
   } catch (err) {
-    const reason = `malformed event JSON: ${(err as Error).message}`;
+    const reason = malformedEventReason(err);
     note(reason);
     return done(false, "", "", FALLBACK_SESSION, "default", reason);
   }
 
-  const cwd =
-    typeof opts.cwd === "string" && opts.cwd.length > 0
-      ? opts.cwd
-      : typeof event.cwd === "string" && event.cwd.length > 0
-        ? event.cwd
-        : process.cwd();
+  const cwd = resolveEventCwd(opts.cwd, event);
 
-  const explicit =
-    typeof opts.session === "string" && opts.session.length > 0
-      ? opts.session
-      : typeof event.session_id === "string" && event.session_id.length > 0
-        ? event.session_id
-        : undefined;
+  const explicit = explicitSessionId(opts.session, event);
   const resolveSession = opts.resolveSession ?? resolveReadSessionId;
   const sessionId = resolveSession(explicit, {});
-  const sessionSource: SessionStartStaleBaseCheckResult["sessionSource"] =
-    typeof opts.session === "string" && opts.session.length > 0
-      ? "flag"
-      : typeof event.session_id === "string" && event.session_id.length > 0
-        ? "stdin"
-        : sessionId === FALLBACK_SESSION
-          ? "default"
-          : (typeof process.env.CLAUDE_CODE_SESSION_ID === "string" &&
-              process.env.CLAUDE_CODE_SESSION_ID === sessionId) ||
-              (typeof process.env.CLAUDE_SESSION_ID === "string" &&
-                process.env.CLAUDE_SESSION_ID === sessionId)
-            ? "env"
-            : "transcript";
+  const sessionSource = classifySessionSource(opts.session, event, sessionId);
 
   let manifest: Manifest;
   if (opts.manifest) {
