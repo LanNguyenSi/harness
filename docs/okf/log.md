@@ -2,6 +2,8 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-10-01T06:50:19Z, task dda77b46: `harness preflight` no longer waits forever on a stdin that never closes (`src/cli/session-start/index.ts`; `docs/CLI.md` gained a STDIN HANDLING note). Re-verified the four docs listing `docs/CLI.md` under sources (`policy-engine-producer-wiring.md`, `codex-adapter-parity-gaps.md`, `evidence-ledger-trust-boundary.md`, `debug-verb-selection.md`): none makes a claim about the preflight producer's stdin handling and none cites a line of that file, so no claim is affected. The older entry citing `src/cli/session-start/index.ts` by line was re-pointed to the moved line. Re-stamped.
+
 - 2026-09-30T13:46:41Z, task 35eb287b: re-stamped the five docs listing `docs/policy-packs/understanding-before-execution.md` after a wording-only edit there (tracker ids dropped from the kept hook table paragraph); no claim affected.
 
 - 2026-09-30T13:43:20Z, task 35eb287b: the codex install section of `docs/policy-packs/understanding-before-execution.md` now describes kept operator hook tables (named with both line numbers under the foreign-section prefix, refused when their command is one harness writes) and its documented boundaries; `codex-adapter-parity-gaps.md` re-checked against `src/cli/apply/install-codex-config.ts` (its boundary sentence still holds) and `evidence-ledger-trust-boundary.md`, `gate-fail-posture-matrix.md`, `understanding-gate-lockout-recovery.md`, `understanding-gate-auto-mode-signals.md` re-checked (none makes a claim about the changed paragraph). Re-stamped.
@@ -1171,7 +1173,7 @@
   first shipped full silence here, round 1's own review found the
   silence itself was the residual gap the task's goal named ("no
   diagnostic anywhere"), closed in round 2. The producer's own stderr
-  diagnostic (`src/cli/session-start/index.ts:672#"the project-scoped"`)
+  diagnostic (`src/cli/session-start/index.ts:736#"the project-scoped"`)
   no longer blames "the project layer" for a
   base- or machine-layer parse failure (round 1's lead-in did); both
   this diagnostic and the new `doctor` finding now collapse a
