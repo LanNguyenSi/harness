@@ -24,10 +24,7 @@ import {
   addLedgerFact,
   resolveGitContext,
 } from "../../runtime/index.js";
-import {
-  resolveReadSessionId,
-  type ResolveReadSessionOptions,
-} from "../../runtime/session-id.js";
+import { resolveReadSessionId } from "../../runtime/session-id.js";
 import {
   DEFAULT_PROTECTED_BRANCHES,
   isProtectedBranch,
@@ -36,39 +33,22 @@ import {
   resolveProtectedBranches,
 } from "../../policy-packs/builtin/branch-protection-runtime.js";
 import type { Manifest, McpServer } from "../../schema/index.js";
-import { loadManifest, type LoaderOptions } from "../loader.js";
+import { loadManifest } from "../loader.js";
+import {
+  classifySessionSource,
+  explicitSessionId,
+  FALLBACK_SESSION,
+  malformedEventReason,
+  readSessionStartEvent,
+  resolveEventCwd,
+  type SessionSource,
+  type SessionStartCwdOptions,
+  type SessionStartEvent,
+} from "./shared-options.js";
 
-const FALLBACK_SESSION = "default";
 const LEDGER_SOURCE = "harness-session-start-branch-check";
 
-interface SessionStartEvent {
-  session_id?: unknown;
-  cwd?: unknown;
-  hook_event_name?: unknown;
-}
-
-export interface SessionStartBranchCheckOptions extends LoaderOptions {
-  /** Defaults to process.stdin. */
-  stdin?: NodeJS.ReadableStream;
-  /** Defaults to process.stderr. stdout is never written (SessionStart). */
-  stderr?: NodeJS.WritableStream;
-  /** Explicit session id (overrides every other source). */
-  session?: string;
-  /** Override the cwd resolution (test injection). Falls back to event.cwd then process.cwd(). */
-  cwd?: string;
-  /** Per-call ledger timeout in ms. */
-  ledgerTimeoutMs?: number;
-  /** Inject the ledger writer (tests). */
-  writeLedger?: (args: {
-    sessionId: string;
-    content: string;
-    source: string;
-  }) => Promise<{ ok: boolean; reason?: string }>;
-  /** Inject the read-path session resolver (env + transcript discovery). Test seam. */
-  resolveSession?: (explicit: string | undefined, opts: ResolveReadSessionOptions) => string;
-  /** Inject a manifest (tests). Bypasses loadManifest. */
-  manifest?: Manifest;
-}
+export type SessionStartBranchCheckOptions = SessionStartCwdOptions;
 
 export interface SessionStartBranchCheckResult {
   /** Always 0 — SessionStart hooks must never break the session loop. */
@@ -81,21 +61,9 @@ export interface SessionStartBranchCheckResult {
   protected: boolean;
   /** Resolved session id. */
   sessionId: string;
-  sessionSource: "flag" | "stdin" | "env" | "transcript" | "default";
+  sessionSource: SessionSource;
   /** Human-readable explanation of a non-write outcome (when applicable). */
   reason?: string;
-}
-
-async function readStdin(stream: NodeJS.ReadableStream): Promise<string> {
-  return new Promise((resolve, reject) => {
-    let data = "";
-    stream.setEncoding("utf8");
-    stream.on("data", (chunk: string) => {
-      data += chunk;
-    });
-    stream.on("end", () => resolve(data));
-    stream.on("error", reject);
-  });
 }
 
 function findGroundingMcp(manifest: Manifest): McpServer | null {
@@ -135,19 +103,14 @@ export async function runSessionStartBranchCheck(
 
   let event: SessionStartEvent;
   try {
-    event = JSON.parse((await readStdin(stdin)).trim() || "{}") as SessionStartEvent;
+    event = await readSessionStartEvent(stdin);
   } catch (err) {
-    const reason = `malformed event JSON: ${(err as Error).message}`;
+    const reason = malformedEventReason(err);
     note(reason);
     return done(false, "", false, FALLBACK_SESSION, "default", reason);
   }
 
-  const cwd =
-    typeof opts.cwd === "string" && opts.cwd.length > 0
-      ? opts.cwd
-      : typeof event.cwd === "string" && event.cwd.length > 0
-        ? event.cwd
-        : process.cwd();
+  const cwd = resolveEventCwd(opts.cwd, event);
   const { branch } = resolveGitContext(cwd);
 
   // Load manifest to resolve the pack's protected_branches override.
@@ -171,27 +134,10 @@ export async function runSessionStartBranchCheck(
 
   // Resolve session id with the same precedence chain as
   // session-start/preflight so the two producers stay symmetric.
-  const explicit =
-    typeof opts.session === "string" && opts.session.length > 0
-      ? opts.session
-      : typeof event.session_id === "string" && event.session_id.length > 0
-        ? event.session_id
-        : undefined;
+  const explicit = explicitSessionId(opts.session, event);
   const resolveSession = opts.resolveSession ?? resolveReadSessionId;
   const sessionId = resolveSession(explicit, {});
-  const sessionSource: SessionStartBranchCheckResult["sessionSource"] =
-    typeof opts.session === "string" && opts.session.length > 0
-      ? "flag"
-      : typeof event.session_id === "string" && event.session_id.length > 0
-        ? "stdin"
-        : sessionId === FALLBACK_SESSION
-          ? "default"
-          : (typeof process.env.CLAUDE_CODE_SESSION_ID === "string" &&
-              process.env.CLAUDE_CODE_SESSION_ID === sessionId) ||
-              (typeof process.env.CLAUDE_SESSION_ID === "string" &&
-                process.env.CLAUDE_SESSION_ID === sessionId)
-            ? "env"
-            : "transcript";
+  const sessionSource = classifySessionSource(opts.session, event, sessionId);
 
   if (branch === "") {
     const reason = `cwd is not on a named branch (detached HEAD or outside a git work tree); leaving the gate closed (treated as protected)`;

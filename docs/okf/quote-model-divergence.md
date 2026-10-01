@@ -3,7 +3,7 @@ type: overview
 title: Shell quote models, measured divergence against bash
 description: The policy engine has four independent shell-word models plus a raw-regex trigger layer. This records what each actually extracts, measured against real bash, which divergences are fail-open, and the evidence-led ordering for closing them.
 tags: [policy-engine, bash-match, quote-model, fail-open, measurement]
-timestamp: 2026-10-01T11:20:42Z
+timestamp: 2026-10-01T13:15:49Z
 sources:
   - src/runtime/command-normalize.ts
   - src/cli/init/composer.ts
@@ -95,6 +95,23 @@ Der `cdTarget`-Kanal von `bash-prefix-parse.ts` selbst (Risk-Gate-Kontext,
 nicht die `${REPO}`/`${BRANCH}`-Builtins) ist von `98ad072f` unberührt und
 bleibt K1s offene Beobachtung.
 
+Ausnahme seit Task `6c8ebd37`: liegt das cwd außerhalb jedes Git-Repositorys
+(leeres `${REPO}`, wie der Leer-Identifier-Guard es sieht), entfällt dessen
+cwd-Kontext neben einem Segment, dessen eigenes Ziel zu einem echten
+Repository aufgelöst wurde. Diese Ausnahme stützt sich auf zwei statische
+Modelle: die Ziel-Attribution, deren bekannte Fehlattribution (ein
+`GIT_DIR=`-Präfix oder ein drittes Repository über ein anderes Konstrukt) es
+für jedes cwd gibt, und die Prüfung, dass das cwd außerhalb jedes
+Repositorys liegt; diese entscheidet im Zweifel für "innerhalb" (sie gilt
+nur, wenn weder der reale cwd-Pfad noch ein Vorfahr bis zur
+Dateisystemwurzel einen Eintrag namens `HEAD` oder `.git` enthält und kein
+Lookup dort mit einem anderen Fehler als ENOENT scheiterte; nicht abgedeckt
+sind ein drittes Repository, in dem der Befehl tatsächlich läuft, Zustand,
+den der Befehl selbst während der Ausführung anlegt, und ein `GIT_DIR` /
+`GIT_COMMON_DIR` aus der Umgebung);
+ein detached cwd und jeder andere nicht-leere cwd-Kontext fallen weiterhin
+nie.
+
 **Empfehlung 2, Teil (der read-only-Flag-Kanal, `fdee7d0f`) ist umgesetzt
 und ausgeliefert — als "slice 1", PR #392, nur für diesen einen der drei
 Aufrufstellen.** Neues `src/runtime/shell-word.ts` exportiert
@@ -167,7 +184,7 @@ Normalisierungs-Pass (vierter Matching-Arm, siehe `intercept.ts`s
 eigenen Kommentar), eine eigene, additive Grenzsuche
 (`findNextBoundaryQuoteAware`), die einen Boundary-Charakter innerhalb
 einer offenen Quote überspringt, und verdrahtet ihn in
-`policyMatchesEvent` (`src/runtime/intercept.ts:538-622#"return true;"`) als vierten
+`policyMatchesEvent` (`src/runtime/intercept.ts:549-633#"return true;"`) als vierten
 OR-Zweig: roh, dann normalisiert, dann amp-bewusst (`aabbad63`), dann
 quote-bewusst (`cf3dff51`), jeder Zweig nur additiv gegenüber den
 vorherigen. Produktions-Nachweis über dieselbe `runInterceptCli`-Messung
@@ -296,7 +313,7 @@ Ausgaben und sind nur paarweise überlappend messbar.
 
 | Modul | Ausgabe | verdrahtet an |
 |---|---|---|
-| `command-normalize.ts` | `normalized` | `bash_match` raw-OR-normalized-OR-amp-OR-quote-normalized (`src/runtime/intercept.ts:538-622#"return true;"`, dritter Arm seit `aabbad63`, vierter Arm seit `cf3dff51`) |
+| `command-normalize.ts` | `normalized` | `bash_match` raw-OR-normalized-OR-amp-OR-quote-normalized (`src/runtime/intercept.ts:549-633#"return true;"`, dritter Arm seit `aabbad63`, vierter Arm seit `cf3dff51`) |
 | | `targetDir`/`targetBase` | nichts (grep-verifiziert) |
 | `bash-prefix-parse.ts` | `inlineEnv`, `cdTarget` | Risk-Gate-Kontext (`src/cli/policy/intercept.ts:1026-1056#"return { ...base, ...bashPrefix.inlineEnv };"`) |
 | `read-only-bash.ts` | Boolean | Risk-Floor, Understanding-Gate-PreToolUse (2 Hooks), Write-Guard |

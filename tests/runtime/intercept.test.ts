@@ -1,8 +1,9 @@
 import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 import { Writable } from "node:stream";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { parse as parseYaml } from "yaml";
 import {
   attributeTriggerSegments,
@@ -21,6 +22,7 @@ import type {
   LedgerEntry,
   LedgerQueryResult,
 } from "../../src/policies/index.js";
+import { FULL_TEMPLATE } from "../../src/cli/init/templates.js";
 import { parseManifest } from "../../src/schema/index.js";
 import type {
   EnvironmentResolver,
@@ -2271,5 +2273,341 @@ describe("attributeTriggerSegments — segment-level re-test of a policy's own b
       session_id: "sess-1",
     };
     expect(policyMatchesEvent(PUSH_POLICY, event)).toBe(true);
+  });
+});
+
+// An empty ${REPO} / ${BRANCH} (cwd outside every git repo, detached HEAD,
+// or an empty HARNESS_REPO / HARNESS_BRANCH override) must never render a
+// blank ledger tag: `preflight:` is a substring of EVERY preflight fact,
+// so a blank tag lets any unrelated fact satisfy the gate. The engine
+// decides per enforcement with an actionable reason and never queries the
+// ledger.
+describe("intercept: empty REPO / BRANCH never renders a blank ledger tag", () => {
+  const templatePolicy = (name: string): Policy => {
+    const found = parseManifest(parseYaml(FULL_TEMPLATE)).policies.find(
+      (p) => p.name === name,
+    );
+    if (!found) throw new Error(`policy ${name} missing from FULL_TEMPLATE`);
+    return found;
+  };
+  const bashEvent = (command: string): ToolEvent => ({
+    hook_event_name: "PreToolUse",
+    tool_name: "Bash",
+    tool_input: { command },
+    session_id: "sess-1",
+  });
+  const factEntry = (content: string): LedgerEntry => ({
+    id: "f1",
+    content,
+    createdAt: NOW.toISOString(),
+  });
+  const EMPTY_REPO: ExtractBuiltins = { ...BUILTINS, REPO: "", BRANCH: "" };
+  const DETACHED: ExtractBuiltins = { ...BUILTINS, BRANCH: "" };
+
+  it("denies preflight-before-investigation outside a repo despite a foreign preflight fact, with no ledger query", async () => {
+    const ledger = makeLedger({
+      kind: "ok",
+      entries: [factEntry("preflight:other-repo ready:true")],
+    });
+    const result = await intercept({
+      manifest: manifest([templatePolicy("preflight-before-investigation")]),
+      event: bashEvent("git status"),
+      ledger,
+      builtins: EMPTY_REPO,
+      now: NOW,
+    });
+    expect(result.decisions).toHaveLength(1);
+    expect(result.decisions[0]?.outcome).toBe("deny");
+    expect(ledger.queryCalls).toEqual([]);
+    expect(result.decisions[0]?.ledgerTag).not.toBe("preflight:");
+    const reason = result.blockJson?.reason ?? "";
+    expect(reason).toContain("preflight-before-investigation");
+    expect(reason).toContain("not inside a git repository");
+    expect(reason).toContain("cd <repo>");
+    expect(reason).toContain("git -C <repo>");
+    // The reason names a state the agent can establish, never a tag to
+    // produce, and never an opt-out.
+    expect(reason).not.toContain("To satisfy");
+    expect(reason).not.toContain("harness preflight");
+    expect(reason).not.toMatch(/pause|manifest|fail_open/i);
+    expect(result.blockJson?.hookSpecificOutput?.permissionDecisionReason).toBe(reason);
+    // The audit row is still written, with the placeholder tag.
+    expect(ledger.recordCalls.map((c) => c.decisionName)).toEqual([
+      "preflight-before-investigation",
+    ]);
+  });
+
+  it("denies preflight-before-push on a detached HEAD, names git switch and not the blank ux text", async () => {
+    const ledger = makeLedger({
+      kind: "ok",
+      entries: [factEntry("preflight:other-branch ready:true")],
+    });
+    const result = await intercept({
+      manifest: manifest([templatePolicy("preflight-before-push")]),
+      event: bashEvent("git push origin HEAD:refs/heads/x"),
+      ledger,
+      builtins: DETACHED,
+      now: NOW,
+    });
+    expect(result.decisions[0]?.outcome).toBe("deny");
+    expect(ledger.queryCalls).toEqual([]);
+    const reason = result.blockJson?.reason ?? "";
+    expect(reason).toContain("HEAD is detached");
+    expect(reason).toContain("git switch <branch>");
+    expect(reason).toContain("git switch -c <branch>");
+    expect(reason).not.toContain("You cannot push branch");
+    expect(reason).not.toContain("  yet");
+    expect(reason).not.toMatch(/pause|manifest|fail_open/i);
+  });
+
+  it.each([
+    ["preflight-before-investigation", "git status", EMPTY_REPO, "not inside a git repository"],
+    ["review-before-merge-bash", "gh pr merge 5", DETACHED, "HEAD is detached"],
+    ["review-subagent-before-pr-create-bash", "gh pr create --fill", DETACHED, "HEAD is detached"],
+    ["preflight-before-push", "git push", DETACHED, "HEAD is detached"],
+  ] as const)(
+    "%s: replaces its producers/ux text with the empty-identifier reason",
+    async (name, command, builtins, phrase) => {
+      const ledger = makeLedger({ kind: "ok", entries: [factEntry("review:x preflight:y review-subagent:z")] });
+      const result = await intercept({
+        manifest: manifest([templatePolicy(name)]),
+        event: bashEvent(command),
+        ledger,
+        builtins,
+        now: NOW,
+      });
+      expect(result.decisions[0]?.outcome).toBe("deny");
+      expect(ledger.queryCalls).toEqual([]);
+      const reason = result.blockJson?.reason ?? "";
+      expect(reason).toContain(phrase);
+      expect(reason).not.toContain("ledger_add");
+    },
+  );
+
+  it("a branch-only policy outside a repo gets the no-repository reason, not the detached-HEAD one", async () => {
+    const ledger = makeLedger({ kind: "ok", entries: [] });
+    const result = await intercept({
+      manifest: manifest([templatePolicy("preflight-before-push")]),
+      event: bashEvent("git push"),
+      ledger,
+      builtins: EMPTY_REPO,
+      now: NOW,
+    });
+    const reason = result.blockJson?.reason ?? "";
+    expect(reason).toContain("not inside a git repository");
+    expect(reason).not.toContain("HEAD is detached");
+  });
+
+  it("treats a whitespace-only value as empty", async () => {
+    const ledger = makeLedger({ kind: "ok", entries: [factEntry("preflight:   ")] });
+    const result = await intercept({
+      manifest: manifest([templatePolicy("preflight-before-investigation")]),
+      event: bashEvent("git status"),
+      ledger,
+      builtins: { ...BUILTINS, REPO: "  " },
+      now: NOW,
+    });
+    expect(result.decisions[0]?.outcome).toBe("deny");
+    expect(ledger.queryCalls).toEqual([]);
+  });
+
+  it("follows enforcement: warn stays non-blocking, require_approval blocks as require_approval", async () => {
+    const base = templatePolicy("preflight-before-investigation");
+    const warnLedger = makeLedger({ kind: "ok", entries: [factEntry("preflight:other-repo")] });
+    const warned = await intercept({
+      manifest: manifest([{ ...base, enforcement: "warn" } as Policy]),
+      event: bashEvent("git status"),
+      ledger: warnLedger,
+      builtins: EMPTY_REPO,
+      now: NOW,
+    });
+    expect(warned.decisions[0]?.outcome).toBe("warn");
+    expect(warned.blockJson).toBeNull();
+    expect(warnLedger.queryCalls).toEqual([]);
+    expect(warned.decisions[0]?.ledgerTag).not.toBe("preflight:");
+
+    const approvalLedger = makeLedger({ kind: "ok", entries: [factEntry("preflight:other-repo")] });
+    const approval = await intercept({
+      manifest: manifest([{ ...base, enforcement: "require_approval" } as Policy]),
+      event: bashEvent("git status"),
+      ledger: approvalLedger,
+      builtins: EMPTY_REPO,
+      now: NOW,
+    });
+    expect(approval.decisions[0]?.outcome).toBe("require_approval");
+    expect(approval.blockJson).not.toBeNull();
+    expect(approvalLedger.queryCalls).toEqual([]);
+    expect(approval.blockJson?.reason).toContain("cd <repo>");
+  });
+
+  it("a block decision is never the degraded one: no deny-degraded envelope text", async () => {
+    const ledger = makeLedger({ kind: "ok", entries: [] });
+    const result = await intercept({
+      manifest: manifest([templatePolicy("preflight-before-investigation")]),
+      event: bashEvent("git status"),
+      ledger,
+      builtins: EMPTY_REPO,
+      now: NOW,
+    });
+    expect(result.decisions[0]?.outcome).toBe("deny");
+    expect(result.blockJson?.reason).not.toContain("ledger degraded");
+    expect(result.blockJson?.reason).not.toContain("grounding-mcp");
+  });
+
+  it("risk.degraded_fail_posture: fail_open does not relax an empty identifier: deny, zero ledger queries", async () => {
+    const ledger = makeLedger({ kind: "ok", entries: [factEntry("preflight:other-repo ready:true")] });
+    const result = await intercept({
+      manifest: makeManifest({
+        policies: [templatePolicy("preflight-before-investigation")],
+        degradedFailPosture: "fail_open",
+      }),
+      event: bashEvent("git status"),
+      ledger,
+      builtins: EMPTY_REPO,
+      now: NOW,
+    });
+    expect(result.decisions[0]?.outcome).toBe("deny");
+    expect(result.blockJson).not.toBeNull();
+    expect(ledger.queryCalls).toEqual([]);
+    expect(result.blockJson?.reason).toContain("cd <repo>");
+  });
+
+  it("risk.degraded_fail_posture: fail_open with an empty REPO and an unresolved extract still denies, never warn-degraded", async () => {
+    const base = templatePolicy("preflight-before-investigation");
+    const withExtract = {
+      ...base,
+      name: "empty-repo-unresolved-extract",
+      trigger: { ...base.trigger, extract: { X: "toolArgs.nothere" } },
+      requires: { ledger_tag: "preflight:${REPO}:${X}" },
+    } as Policy;
+    const ledger = makeLedger({ kind: "ok", entries: [factEntry("preflight:other-repo")] });
+    const result = await intercept({
+      manifest: makeManifest({ policies: [withExtract], degradedFailPosture: "fail_open" }),
+      event: bashEvent("git status"),
+      ledger,
+      builtins: EMPTY_REPO,
+      now: NOW,
+    });
+    expect(result.decisions[0]?.outcome).toBe("deny");
+    expect(result.decisions[0]?.outcome).not.toBe("warn-degraded");
+    expect(result.blockJson).not.toBeNull();
+    expect(ledger.queryCalls).toEqual([]);
+  });
+
+  it("unchanged: a named repo and branch with a matching fact allow; a missing fact keeps the ux deny text", async () => {
+    const allowLedger = makeLedger({
+      kind: "ok",
+      entries: [factEntry("preflight:harness ready:true"), factEntry("preflight:master ready:true")],
+    });
+    for (const [name, command] of [
+      ["preflight-before-investigation", "git status"],
+      ["preflight-before-push", "git push"],
+    ] as const) {
+      const allowed = await intercept({
+        manifest: manifest([templatePolicy(name)]),
+        event: bashEvent(command),
+        ledger: allowLedger,
+        builtins: BUILTINS,
+        now: NOW,
+      });
+      expect(allowed.decisions[0]?.outcome).toBe("allow");
+    }
+    const emptyLedger = makeLedger({ kind: "ok", entries: [] });
+    const denied = await intercept({
+      manifest: manifest([templatePolicy("preflight-before-push")]),
+      event: bashEvent("git push"),
+      ledger: emptyLedger,
+      builtins: BUILTINS,
+      now: NOW,
+    });
+    expect(denied.decisions[0]?.outcome).toBe("deny");
+    expect(denied.blockJson?.reason).toContain("You cannot push branch master yet.");
+    expect(emptyLedger.queryCalls).toHaveLength(1);
+  });
+
+  it("unchanged: a policy without REPO/BRANCH in its ledger_tag ignores empty builtins", async () => {
+    const ledger = makeLedger({ kind: "ok", entries: [matchingEntry] });
+    const result = await intercept({
+      manifest: manifest([REVIEW_POLICY]),
+      event: MERGE_EVENT,
+      ledger,
+      builtins: EMPTY_REPO,
+      now: NOW,
+    });
+    expect(result.decisions[0]?.outcome).toBe("allow");
+    expect(ledger.queryCalls).toEqual([{ tag: "review:42", sessionId: "sess-1" }]);
+  });
+
+  it("unchanged: a tag that merely lacks REPO but a policy whose ledger_tag names only SESSION_ID still queries", async () => {
+    const sessionPolicy = policy({
+      name: "session-gate",
+      trigger: { event: "PreToolUse", match: "Bash" },
+      requires: { ledger_tag: "ok:${SESSION_ID}" },
+      hook: "h",
+    });
+    const ledger = makeLedger({ kind: "ok", entries: [] });
+    const result = await intercept({
+      manifest: manifest([sessionPolicy]),
+      event: bashEvent("ls"),
+      ledger,
+      builtins: EMPTY_REPO,
+      now: NOW,
+    });
+    expect(ledger.queryCalls).toEqual([{ tag: "ok:sess-1", sessionId: "sess-1" }]);
+    expect(result.decisions[0]?.outcome).toBe("deny");
+  });
+
+  it("an empty CWD builtin names no directory, so its blank cwd context is still demanded next to a resolved target", async () => {
+    const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "harness-empty-cwd-")));
+    // An empty path resolves against the process cwd, which is a checkout
+    // when the suite runs; pin it to a directory outside every repository
+    // so only the empty-CWD rule can keep the cwd context here.
+    const processCwd = vi.spyOn(process, "cwd").mockReturnValue(root);
+    try {
+      const target = path.join(root, "widget");
+      fs.mkdirSync(path.join(target, ".git"), { recursive: true });
+      fs.writeFileSync(path.join(target, ".git", "HEAD"), "ref: refs/heads/main\n");
+      const ledger = makeLedger({ kind: "ok", entries: [factEntry("preflight:widget ready:true")] });
+      const result = await intercept({
+        manifest: manifest([templatePolicy("preflight-before-investigation")]),
+        event: bashEvent(`git -C ${target} status`),
+        ledger,
+        builtins: { ...EMPTY_REPO, CWD: "" },
+        now: NOW,
+      });
+      expect(result.decisions.map((d) => d.outcome)).toEqual(["deny", "allow"]);
+      expect(result.decisions[0]?.emptyIdentifier).toBe("REPO");
+      expect(result.blockJson).not.toBeNull();
+      expect(ledger.queryCalls.map((c) => c.tag)).toEqual(["preflight:widget"]);
+    } finally {
+      processCwd.mockRestore();
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("an attributed foreign target on a detached HEAD is guarded even when the cwd context is satisfied", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "harness-empty-branch-"));
+    try {
+      const detached = path.join(root, "detached-repo");
+      fs.mkdirSync(path.join(detached, ".git"), { recursive: true });
+      fs.writeFileSync(path.join(detached, ".git", "HEAD"), `${"a".repeat(40)}\n`);
+      const ledger = makeLedger({
+        kind: "ok",
+        entries: [factEntry("preflight:master ready:true")],
+      });
+      const result = await intercept({
+        manifest: manifest([templatePolicy("preflight-before-push")]),
+        event: bashEvent(`git -C ${detached} push`),
+        ledger,
+        builtins: BUILTINS,
+        now: NOW,
+      });
+      const outcomes = result.decisions.map((d) => d.outcome).sort();
+      expect(outcomes).toEqual(["allow", "deny"]);
+      expect(result.blockJson?.reason).toContain("HEAD is detached");
+      expect(ledger.queryCalls.every((c) => c.tag === "preflight:master")).toBe(true);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
   });
 });

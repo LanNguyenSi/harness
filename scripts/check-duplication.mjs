@@ -227,7 +227,14 @@ import * as path from "node:path";
 // the shared `compareVersionFloor`) removed its clone against the
 // sibling numeric comparators; the check reported 113, so the pin
 // follows.
-const MAX_CLONES = 113;
+// Lowered to 92 (task 11bd2b97): the four session-start producers
+// (preflight, branch-check, toolchain-parity, stale-base-check) and their
+// CLI wiring each carried a copy of the options type, the stdin read, the
+// session-source classification and the shared commander options; they
+// now use src/cli/session-start/shared-options.ts. The check reported 109
+// clones on master before the extraction and 92 after, so the pin follows
+// the measured count.
+const MAX_CLONES = 92;
 
 // Sets process.exitCode instead of calling process.exit so the caller's
 // finally-cleanup runs on every path (process.exit skips stack unwinding).

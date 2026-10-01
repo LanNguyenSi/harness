@@ -198,6 +198,67 @@ describe("dry-run — REPO builtin resolves from cwd", () => {
   });
 });
 
+describe("dry-run: an empty REPO / BRANCH never shows a blank ledger tag", () => {
+  const tmpDir = (): string => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "harness-dryrun-empty-"));
+    cleanups.push(() => fs.rmSync(root, { recursive: true, force: true }));
+    return root;
+  };
+  const queryFor = (name: string, command: string, cwd: string): string | undefined => {
+    const r = dryRun("look around", {
+      configPath: FULL_MANIFEST,
+      tool: "Bash",
+      toolArgs: JSON.stringify({ command }),
+      builtins: { CWD: cwd },
+    });
+    return r.report.matchingPolicies.find((p) => p.name === name)?.ledgerQuery;
+  };
+
+  it("a cwd outside every repo shows the no-repository hint instead of `preflight:`", () => {
+    const query = queryFor("preflight-before-investigation", "git status", tmpDir());
+    expect(query).toBeDefined();
+    expect(query).not.toBe("preflight:");
+    expect(query).toContain("no ledger query");
+    expect(query).toContain("cd <repo>");
+    expect(query).toContain("git -C <repo>");
+  });
+
+  it("a detached HEAD shows the git switch hint for a branch tag", () => {
+    const repo = path.join(tmpDir(), "detached-repo");
+    fs.mkdirSync(path.join(repo, ".git"), { recursive: true });
+    fs.writeFileSync(path.join(repo, ".git", "HEAD"), `${"c".repeat(40)}\n`);
+    const query = queryFor("preflight-before-push", "git push", repo);
+    expect(query).toBeDefined();
+    expect(query).not.toBe("preflight:");
+    expect(query).toContain("git switch <branch>");
+  });
+
+  it("an explicit empty REPO builtin is guarded too", () => {
+    const r = dryRun("look around", {
+      configPath: FULL_MANIFEST,
+      tool: "Bash",
+      toolArgs: JSON.stringify({ command: "git status" }),
+      builtins: { REPO: "" },
+    });
+    const query = r.report.matchingPolicies.find(
+      (p) => p.name === "preflight-before-investigation",
+    )?.ledgerQuery;
+    expect(query).toContain("cd <repo>");
+  });
+
+  it("unchanged: a policy without REPO/BRANCH in its tag still renders its tag outside a repo", () => {
+    const r = dryRun("merge PR 42", {
+      configPath: FULL_MANIFEST,
+      tool: "mcp__agent-tasks__pull_requests_merge",
+      toolArgs: JSON.stringify({ prNumber: 42 }),
+      builtins: { CWD: tmpDir() },
+    });
+    expect(r.report.matchingPolicies.find((p) => p.name === "review-before-merge")?.ledgerQuery).toBe(
+      "review:42",
+    );
+  });
+});
+
 describe("dry-run — memory routing", () => {
   it("surfaces the configured memory directories with their scopes", () => {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), "harness-dryrun-mem-"));

@@ -140,6 +140,17 @@ export interface PolicyDecision {
    * match from a fail-closed unclassified command at a glance.
    */
   whenUnclassifiedFallback?: boolean;
+  /**
+   * Set when the policy's `ledger_tag` references `${REPO}` / `${BRANCH}`
+   * and the value resolved for this context was empty (cwd outside every
+   * git repository, detached HEAD, or an empty override), so the engine
+   * decided per enforcement WITHOUT rendering or querying a ledger tag.
+   * In-memory only: it is not part of the serialised audit row (the
+   * `reason` and the placeholder `ledgerTag` already carry the cause).
+   * The agent envelope renders `reason` with precedence over the policy's
+   * `ux:` / `producers:` text when this is set.
+   */
+  emptyIdentifier?: EmptyIdentifier;
   evaluatedAt: string;
 }
 
@@ -779,6 +790,77 @@ export function sanitizeEnvelopeReason(reason: string): string {
   return stripped.length > 200 ? `${stripped.slice(0, 200)}...` : stripped;
 }
 
+/** Which per-repo builtin resolved to an empty value; see {@link emptyIdentifierGuard}. */
+export type EmptyIdentifier = "REPO" | "BRANCH";
+
+export interface EmptyIdentifierGuard {
+  identifier: EmptyIdentifier;
+  /** Agent-facing text naming a state the agent can establish itself. */
+  message: string;
+}
+
+const EMPTY_REPO_MESSAGE =
+  "no git repository was found for this command: the working directory (or the directory the command targets) is not inside a git repository, so the repository-scoped evidence this policy checks cannot be looked up. " +
+  "Change into the target repository first (`cd <repo>`) or name it explicitly (`git -C <repo> ...`), then retry the command.";
+
+/**
+ * Names the repository whose HEAD is detached, so a detached working
+ * directory that is denied next to a `git -C <other repo>` target is
+ * recognisable as the working directory's own repository. The name is the
+ * resolved `${REPO}` value: the work-tree basename, a `HARNESS_REPO`
+ * override, or the value of a policy extract named `REPO` (which can
+ * carry tool input), so it is cleaned and bounded like any other untrusted
+ * text before it reaches the agent envelope: control characters blanked,
+ * at most 200 characters (`sanitizeEnvelopeReason`).
+ */
+function emptyBranchMessage(repo: string): string {
+  const name = sanitizeEnvelopeReason(repo);
+  return (
+    `no branch is checked out in repository \`${name}\`: HEAD is detached, so the branch-scoped evidence this policy checks cannot be looked up. ` +
+    "Check out a named branch there (`git switch <branch>`, or `git switch -c <branch>` for a new one), create the evidence for that branch, then retry the command."
+  );
+}
+
+function isBlankIdentifier(value: string | undefined): boolean {
+  return value === undefined || value.trim().length === 0;
+}
+
+/**
+ * Does `ledgerTagTemplate` reference `${REPO}` / `${BRANCH}` while the
+ * value resolved for this context is empty? An empty identifier must
+ * never be rendered into a ledger tag: `preflight:` is a substring of
+ * EVERY preflight fact, so a blank tag lets any unrelated fact satisfy
+ * the gate (and `preflight-before-push` would render "You cannot push
+ * branch  yet."). The caller decides per enforcement with
+ * `message` instead of querying the ledger.
+ *
+ * `REPO` wins over `BRANCH`, and a branch-only template evaluated where
+ * REPO is empty too (no repository at all) gets the no-repository text,
+ * since "HEAD is detached" would be false there. The messages name a
+ * state the agent can establish (`cd` / `git -C` / `git switch`), never
+ * a tag to produce, so there is no producer trap, and never an opt-out
+ * (a block that names its own disable path is not a gate).
+ *
+ * Exported so `harness dry-run` shows the same hint instead of a blank
+ * tag (`src/cli/dry-run.ts`).
+ */
+export function emptyIdentifierGuard(
+  ledgerTagTemplate: string,
+  values: Record<string, string>,
+): EmptyIdentifierGuard | null {
+  const refsRepo = ledgerTagTemplate.includes("${REPO}");
+  const refsBranch = ledgerTagTemplate.includes("${BRANCH}");
+  if (refsRepo && isBlankIdentifier(values.REPO)) {
+    return { identifier: "REPO", message: EMPTY_REPO_MESSAGE };
+  }
+  if (refsBranch && isBlankIdentifier(values.BRANCH)) {
+    return isBlankIdentifier(values.REPO)
+      ? { identifier: "REPO", message: EMPTY_REPO_MESSAGE }
+      : { identifier: "BRANCH", message: emptyBranchMessage(values.REPO ?? "") };
+  }
+  return null;
+}
+
 /**
  * Placeholder `ledgerTag` recorded on an `operator_only` decision (and on
  * the defensive schema-invariant-violated branch below). Both outcomes
@@ -851,6 +933,27 @@ async function evaluateOnePolicy(
         "policy declares neither requires: nor operator_only: true (schema invariant violated)",
       extractValues: extract.values,
       ledgerTag: NO_LEDGER_TAG,
+      evaluatedAt,
+    };
+  }
+
+  // Empty-identifier guard: decided BEFORE any tag is rendered or the
+  // ledger is queried, per the policy's own enforcement (block -> deny,
+  // require_approval -> require_approval, warn -> warn). Deliberately NOT
+  // routed through `degradedOutcome` / the unresolved-variable branch
+  // below: that path ends in the `deny-degraded` envelope, which blames
+  // an unreadable ledger and tells the agent to ask the operator to
+  // check grounding-mcp, false and misleading for an empty identifier.
+  const emptyGuard = emptyIdentifierGuard(requires.ledger_tag, extract.values);
+  if (emptyGuard !== null) {
+    return {
+      policyName: policy.name,
+      enforcement: policy.enforcement,
+      outcome: outcomeForFailedRequires(policy.enforcement),
+      reason: emptyGuard.message,
+      extractValues: extract.values,
+      ledgerTag: `(empty ${emptyGuard.identifier}: no ledger tag rendered, no ledger query)`,
+      emptyIdentifier: emptyGuard.identifier,
       evaluatedAt,
     };
   }
@@ -1162,6 +1265,18 @@ export type AttributedContextsResult =
  * demands BOTH A's and B's context, where the pre-D-021 engine demanded
  * only B's.
  *
+ * One exception to "never dropped": when the working directory is outside
+ * every git repository (a blank `${REPO}` for the policy, as the guard
+ * sees it), its cwd context is not demanded next to a segment whose own
+ * target resolved to a real repository (see the loop body). That
+ * exception relies on two static models: the target attribution, whose
+ * known misattribution (a `GIT_DIR=` prefix or a third repository reached
+ * through another construct) exists for every cwd, and the check that the
+ * cwd is outside every repository, which errs toward inside: it holds only
+ * when neither the cwd nor any ancestor has an entry named `HEAD` or
+ * `.git` (`mayBeInsideRepository`). A detached cwd and every other
+ * non-blank cwd context are still never dropped.
+ *
  * D-012: a target reached through a symlink resolves to its REAL
  * (realpath'd) repository identity, not the symlink's own lexical
  * basename — `resolveGitContext` derives `repo` from the basename of
@@ -1195,7 +1310,9 @@ export type AttributedContextsResult =
  * REALPATH'D absolute path (never module-level state — no cross-event
  * caching), so several policies (or several satisfying segments) naming
  * the same foreign path within one event pay the `fs` cost once, not
- * once per policy per segment.
+ * once per policy per segment. `mayBeInsideRepositoryMemo` is the same
+ * kind of per-call cache for the cwd's own outside-every-repository
+ * check, keyed by the cwd's real path, so that walk runs once per event.
  */
 function resolveAttributedContexts(
   policy: Policy,
@@ -1203,8 +1320,10 @@ function resolveAttributedContexts(
   cwdBuiltins: ExtractBuiltins,
   cwdCurrentHeadSha: string | undefined,
   resolveGitContextMemo: Map<string, GitRepoContext>,
+  mayBeInsideRepositoryMemo: Map<string, boolean>,
   repoOverridden: boolean,
   branchOverridden: boolean,
+  extractContext: ExtractEventContext,
 ): AttributedContextsResult {
   const cwdContext: AttributedContext = { builtins: cwdBuiltins, currentHeadSha: cwdCurrentHeadSha };
   const satisfying = new Set(attributeTriggerSegments(policy, segments));
@@ -1219,6 +1338,27 @@ function resolveAttributedContexts(
     contexts.push(cwdContext);
   };
   const cwdReal = realpathOrSelf(cwdBuiltins.CWD);
+  // Decided from the same values `evaluateOnePolicy` guards on: the
+  // policy's own `trigger.extract` evaluated against the cwd builtins, so
+  // an extract named `REPO` / `BRANCH` that shadows a builtin is honoured
+  // here exactly as it is there.
+  const cwdGuard = emptyIdentifierGuard(
+    policy.requires?.ledger_tag ?? "",
+    evaluateExtract(policy.trigger.extract ?? {}, extractContext, cwdBuiltins).values,
+  );
+  // "Outside every repository" is checked on the cwd's real path: the
+  // builtins resolve the path as given, while git runs in the physical
+  // directory, so a symlink into a repository is not outside it. An empty
+  // CWD names no directory at all and never qualifies. The check is the
+  // conservative `mayBeInsideRepository`, not the static
+  // `resolveGitContext` the builtins come from: that resolver misses
+  // repositories git still finds (see the helper's doc comment), and here
+  // a miss would drop a demand. It runs only for a blank `${REPO}`, at
+  // most once per event (`mayBeInsideRepositoryMemo`).
+  const cwdOutsideEveryRepository =
+    cwdGuard?.identifier === "REPO" &&
+    cwdBuiltins.CWD.length > 0 &&
+    !mayBeInsideRepositoryMemoised(cwdReal, mayBeInsideRepositoryMemo);
 
   for (const seg of segments) {
     if (!satisfying.has(seg)) continue;
@@ -1235,8 +1375,10 @@ function resolveAttributedContexts(
     // demanded UNCONDITIONALLY here, regardless of whether the target came
     // from the segment's own explicit flag or was inherited from a
     // preceding `cd`. `seg.ownTarget` is no longer read for this decision.
-    addCwdOnce();
-
+    // The one exception is `cwdOutsideEveryRepository` below: it is
+    // decided after the target resolved, so the cwd context is added from
+    // the branches of this loop body instead of up front, in the same
+    // order as before.
     const resolvedLexical = path.resolve(cwdBuiltins.CWD, seg.effectiveTarget);
     const resolved = realpathOrSelf(resolvedLexical);
     if (resolved === cwdReal) {
@@ -1256,6 +1398,39 @@ function resolveAttributedContexts(
     }
 
     const signature = [gitCtx.repo, gitCtx.branch, gitCtx.sha].join("|");
+
+    // Empty-identifier exception to the universal-additive rule, limited
+    // to a working directory outside every git repository. That cwd
+    // context has a blank `${REPO}` (the value the guard sees, after the
+    // policy's own extract) and can never be satisfied: the
+    // empty-identifier guard denies it without a ledger query. Demanding
+    // it next to a target that resolved to a real repository would deny
+    // the very remedy the guard's message names (`git -C <repo> ...`, or
+    // `cd <repo> && ...` in one command). The skip applies only when the
+    // cwd is outside every repository and this segment's own target
+    // resolved to a real repository; the target's own context is still
+    // demanded in full. It relies on two static models: the target
+    // attribution, whose known misattribution (a `GIT_DIR=` prefix or a
+    // third repository reached through another construct) exists for every
+    // cwd, and the cwd resolution, which is conservative: the skip applies
+    // only when neither the cwd's real path nor any ancestor up to the
+    // filesystem root holds an entry named `HEAD` or `.git` (any type) and
+    // no lookup failed other than with ENOENT (`mayBeInsideRepository`).
+    // What remains outside both models: a third repository the command
+    // really runs in (a `GIT_DIR=` prefix, or a `cd` into another
+    // repository before the misattributed segment), state the command
+    // itself creates while it runs (a `.git` it links or writes before the
+    // git verb), and an ambient `GIT_DIR` / `GIT_COMMON_DIR` in the
+    // environment git runs with. A
+    // detached cwd (non-blank `${REPO}`, blank `${BRANCH}`) and
+    // every non-blank cwd context keep the rule above unchanged: the
+    // detached remedy (`git switch` in that repository) is establishable,
+    // and dropping that context would let a misattributed push from the
+    // detached HEAD pass on the target's evidence. A segment without a
+    // resolved target (a bare `git status`) keeps its cwd context and
+    // still denies with the hint.
+    if (!cwdOutsideEveryRepository) addCwdOnce();
+
     if (signature === cwdSignature) {
       // D-015: a foreign target that resolves to cwd's own REAL identity
       // (e.g. a subdirectory of the cwd repo reached via `-C`, a
@@ -1292,6 +1467,73 @@ function resolveAttributedContexts(
   // the cwd context or a foreign one). Never leave a matched, per-repo-
   // builtins policy with zero contexts to evaluate against.
   return { kind: "contexts", contexts: contexts.length > 0 ? contexts : [cwdContext] };
+}
+
+/**
+ * Could git find a repository from `dir`? Decided for the one place that
+ * drops a demand on the answer (the cwd-outside-every-repository exception
+ * in `resolveAttributedContexts`), so every doubt counts as inside. The
+ * static `resolveGitContext` walk that resolves the `REPO` / `BRANCH`
+ * builtins is left as it is for its other callers; it reports no
+ * repository where git still finds one: a `.git` directory without `HEAD`
+ * ends its walk (git skips it and walks on), its walk stops after 128
+ * levels, and it never recognises a directory that is itself a git
+ * directory (a bare repository, or one whose objects live elsewhere
+ * through a `commondir` file).
+ *
+ * This walk does not list layouts. It uses the one structural fact every
+ * git directory shares: git accepts a directory as a git directory only
+ * when it holds an entry named `HEAD`, and it reaches a repository from a
+ * working directory only through a `.git` entry (directory or `gitdir:`
+ * file) or a git directory on the way up. So, from `dir` up to the
+ * filesystem root with no depth bound:
+ *
+ * - an entry named `HEAD` or `.git`, of any type, valid or not, counts as
+ *   inside (never followed, read or validated);
+ * - an `lstat` error other than ENOENT counts as inside (the entry may
+ *   exist).
+ *
+ * The cost is a conservative false inside: a directory that merely holds
+ * an entry named `HEAD` (also `head` or `Head` on a case-insensitive
+ * volume), or lies below one, keeps its cwd context and denies with the
+ * no-repository hint (fail closed). An ambient `GIT_DIR` /
+ * `GIT_COMMON_DIR` in git's environment is not visible here.
+ */
+function mayBeInsideRepository(dir: string): boolean {
+  let current = path.resolve(dir);
+  for (;;) {
+    if (entryMayExist(path.join(current, ".git"))) return true;
+    if (entryMayExist(path.join(current, "HEAD"))) return true;
+    const parent = path.dirname(current);
+    if (parent === current) return false;
+    current = parent;
+  }
+}
+
+/**
+ * `false` only when `lstat` proves the entry absent (ENOENT, reported as
+ * `undefined` without building an exception); every other error counts as
+ * present.
+ */
+function entryMayExist(entryPath: string): boolean {
+  try {
+    return fs.lstatSync(entryPath, { throwIfNoEntry: false }) !== undefined;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code !== "ENOENT";
+  }
+}
+
+/**
+ * `mayBeInsideRepository(dir)`, computed at most once per `dir` within one
+ * `intercept()` call. `memo` is that call's own map (never module-level
+ * state), so no answer outlives the event it was computed for.
+ */
+function mayBeInsideRepositoryMemoised(dir: string, memo: Map<string, boolean>): boolean {
+  const known = memo.get(dir);
+  if (known !== undefined) return known;
+  const inside = mayBeInsideRepository(dir);
+  memo.set(dir, inside);
+  return inside;
 }
 
 /**
@@ -1415,9 +1657,11 @@ export async function intercept(
   // (every Phase 4/5/6-only manifest) never computes it.
   // `resolveGitContextMemo` is this call's own, non-module-level cache
   // (task constraint: no eager/global filesystem work) — see
-  // `resolveAttributedContexts`'s own comment.
+  // `resolveAttributedContexts`'s own comment. `mayBeInsideRepositoryMemo`
+  // is the same kind of per-call cache for the cwd walk.
   let segmentsForAttribution: CommandSegment[] | undefined;
   const resolveGitContextMemo = new Map<string, GitRepoContext>();
+  const mayBeInsideRepositoryMemo = new Map<string, boolean>();
 
   const decisions: PolicyDecision[] = [];
   for (const policy of matching) {
@@ -1428,8 +1672,10 @@ export async function intercept(
           options.builtins,
           options.currentHeadSha,
           resolveGitContextMemo,
+          mayBeInsideRepositoryMemo,
           options.repoOverridden === true,
           options.branchOverridden === true,
+          buildEventContext(options.event),
         )
       : { kind: "contexts", contexts: [{ builtins: options.builtins, currentHeadSha: options.currentHeadSha }] };
 
@@ -1573,6 +1819,15 @@ export async function intercept(
         `source is unreadable; producing the required tag will not unblock it ` +
         `until the ledger is reachable again. Ask your operator to check ` +
         `grounding-mcp (harness doctor), then retry. Session: ${sessionId}.`;
+    } else if (blocking.emptyIdentifier !== undefined) {
+      // Empty ${REPO} / ${BRANCH}: the decision's own reason names the
+      // state the agent can establish (`cd` / `git -C` / `git switch`).
+      // Takes precedence over `ux:` (whose `cannot:` text would render
+      // the blank identifier, "You cannot push branch  yet.") and over
+      // `producers:` / the record hint (both would send the agent to
+      // produce a tag the gate will not read in this state). Names no
+      // opt-out, same reasoning as the degraded envelope above.
+      reasonText = `${blocking.policyName}: ${blocking.reason}`;
     } else if (blockingPolicy?.ux) {
       // The ux surface is operator-curated plain language. Task
       // 2929c5b7: a ux-declared policy's `cannot:` text used to be

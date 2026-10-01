@@ -33,6 +33,7 @@ Every harness enforcement gate has a deliberate posture for the moment its evide
 | Policy engine / Risk Gate | `harness policy intercept` → `intercept()` in `src/runtime/intercept.ts` | grounding-mcp evidence ledger | fail **CLOSED** for `block`/`require_approval`, fail **OPEN** for `warn` (task f1aea826; opt-out `risk.degraded_fail_posture: fail_open` restores fail-open for every tier) | `deny-degraded` blocks with a degraded-specific envelope for `block`/`require_approval`; `warn-degraded` never blocks for `warn` |
 | `bash_match` normalised-form matching (both passes) | `harness policy intercept` → `normalizeCommand` / `normalizeCommandAmpAware` in `src/runtime/command-normalize.ts` | command length vs `MAX_NORMALIZE_LENGTH` (100,000 chars) | fail **OPEN** above the bound | normalised-form matching skipped for BOTH the primary and the ampersand-aware second pass (task `aabbad63`) — they share the identical bound on the identical input command, so one stderr line covers both; raw match only. Previously silent, no stderr line, no audit row (G4 fix, review round 2, 2026-07-27) |
 | Per-policy target attribution bound (`${REPO}`/`${BRANCH}`/`at_head`) | `harness policy intercept` → `resolveAttributedContexts` in `src/runtime/intercept.ts` | segment-derived repository targets (a filesystem `.git`-shape check, no evidence source of its own) | fail **CLOSED** above 4 distinct targets (`MAX_ATTRIBUTED_CONTEXTS`) | one synthetic decision naming the ambiguity, mapped through the policy's OWN `enforcement:` (`block` denies, `warn` warns, `require_approval` requires approval — never a hardcoded outcome); ZERO ledger queries for that policy |
+| Empty `${REPO}`/`${BRANCH}` in a `ledger_tag` | `harness policy intercept` → `evaluateOnePolicy` in `src/runtime/intercept.ts` | none queried: the value resolved for the context (cwd outside every repo, detached HEAD, empty override) | decided per the policy's OWN `enforcement:` (never fail-open to a blank tag) | `deny` / `require_approval` / `warn` with a reason naming `cd <repo>` / `git -C <repo>` or `git switch <branch>`; ZERO ledger queries; NOT `deny-degraded` (task `6c8ebd37`) |
 | understanding-before-execution | `harness pack hook pre-tool-use` (`src/cli/pack/hook-pre-tool-use.ts`) | HMAC-signed approval marker (sole authority); persisted JSON report and ledger are audit-only | fail **OPEN** on load/parse/ledger/report-scan errors | allow, exit 0, stderr diagnostic |
 | branch-protection | `harness pack hook branch-protection` (`src/cli/pack/hook-branch-protection.ts`) | `branch:non-protected:<branch>` ledger tag (5-min window) + override marker | fail **CLOSED** on any load/parse/ledger error | block envelope |
 | solution-acceptance | `harness pack hook solution-acceptance` (`src/cli/pack/hook-solution-acceptance.ts`) | HEAD-pinned verdict marker file written by grounding-mcp `solution_evaluate` | fail **CLOSED** (scoped to completion actions) | deny the completion verb |
@@ -69,9 +70,9 @@ Above `MAX_NORMALIZE_LENGTH` (100,000 characters), `normalizeCommand` (`src/runt
 DISTINCT repository a trigger-satisfying command segment names (its own
 `-C`/`env -C`/`--git-dir`, or a target inherited from a genuinely
 persisting `cd`) — the session's own cwd context is ALWAYS also
-evaluated, never dropped (`resolveAttributedContexts`; the "always add, never replace" rule
+evaluated, never dropped except for a cwd outside every repository next to a resolved target (see the exception below; `resolveAttributedContexts`; the "always add, never replace" rule
 D-021 and its four-review-pass history are restated in-tree in that
-function's own doc comment, `src/runtime/intercept.ts:1132-1160#"disproved"`; the
+function's own doc comment, `src/runtime/intercept.ts:1235-1263#"disproved"`; the
 original decision record under
 `.ai/runs/2026-08-02-per-repo-gate-scoping-redesign/` is local run state
 and not shipped with the repo). This section covers only the FALLBACK side of that resolution,
@@ -84,13 +85,45 @@ since it is the part that changes this matrix's own fail-posture story:
   new gap.** This is identical to the cwd-only resolution every such
   policy had before this task; the fallback is a PRECISION concern (does
   the demand correctly name the touched repo), not a safety one, because
-  the cwd demand is never dropped regardless of how the fallback
-  resolves.
+  the cwd demand is never dropped when the fallback applies (the one
+  exception, below, drops the context of a cwd outside every repository
+  only next to a RESOLVED target, never in a fallback).
 - **More than `MAX_ATTRIBUTED_CONTEXTS` (4) distinct targets for one
   policy on one event fails CLOSED** — see the new table row above. This
   is the one place per-policy attribution ADDS a fail-closed posture the
   plain per-event resolution never needed (an event with only ever one
   context to evaluate could not exceed a bound on the count of contexts).
+- **One exception to "the cwd context is always evaluated": a cwd
+  outside every repository next to a resolved target (task `6c8ebd37`).**
+  When the working directory is outside every git repository (checked on
+  its real path, where git runs) and the policy's `${REPO}`, as the empty-identifier guard sees it (after the
+  policy's own `trigger.extract`, which can shadow the builtin), is blank,
+  the cwd context can never be satisfied (the empty-identifier row above
+  denies it without a ledger query), so `resolveAttributedContexts` does
+  not add it for a segment whose own target resolved to a real repository:
+  otherwise the remedy the deny message names (`git -C <repo> ...`, or
+  `cd <repo> && ...` in one command) would be denied again. The target's
+  own context is still demanded in full. The skip relies on two static
+  models: the target attribution, whose known misattribution (a `GIT_DIR=`
+  prefix or a third repository reached through another construct) exists
+  for every cwd, and the cwd resolution, which errs toward inside
+  (`mayBeInsideRepository`, not the `resolveGitContext` walk the builtins
+  come from): the skip applies only when neither the cwd's real path nor
+  any ancestor up to the filesystem root holds an entry named `HEAD` or
+  `.git` (any type, valid or not) and no lstat there failed with an error
+  other than ENOENT. Every git directory holds a `HEAD` entry, so this
+  covers a `.git` directory without `HEAD`, any depth, a bare repository
+  and a directory holding only `HEAD` and a `commondir` file; a stray
+  `HEAD` entry is a conservative deny with the hint. The check runs at
+  most once per event. What remains outside both models: a third
+  repository the command really runs in (a `GIT_DIR=` prefix, or a `cd`
+  into another repository before the misattributed segment), state the
+  command itself creates while it runs (for example a `.git` it links
+  before the git verb), and an ambient `GIT_DIR` or `GIT_COMMON_DIR` in
+  the environment git runs with. A detached cwd (non-blank `${REPO}`, blank `${BRANCH}`) and
+  every other non-blank cwd context keep the cwd context, as do a segment
+  with no resolved target (a bare `git status`) and a target that is the
+  cwd repository itself; the detached hint names the cwd repository.
 - **What is unchanged:** every OTHER fail-posture row in this matrix
   (ledger degradation → tier-derived `warn-degraded` for `warn` /
   `deny-degraded` for `block`/`require_approval`, audit-write failure →
