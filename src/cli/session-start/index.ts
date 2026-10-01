@@ -87,6 +87,11 @@ export type RunPreflightResult =
 export interface SessionStartPreflightOptions extends LoaderOptions {
   /** Defaults to process.stdin. */
   stdin?: NodeJS.ReadableStream;
+  /**
+   * Idle bound, in ms, for the stdin read when no `--session` is given
+   * (default STDIN_IDLE_TIMEOUT_MS). Tests inject a short value.
+   */
+  stdinIdleTimeoutMs?: number;
   /** Defaults to process.stderr. stdout is never written (SessionStart). */
   stderr?: NodeJS.WritableStream;
   /**
@@ -190,15 +195,58 @@ export interface SessionStartPreflightResult {
   reason?: string;
 }
 
-async function readStdin(stream: NodeJS.ReadableStream): Promise<string> {
+/**
+ * Idle bound for the stdin read. The SessionStart hook pipes the event JSON
+ * and closes stdin at once, so a real pipe never gets near this; it only
+ * bites when stdin is an open pipe or a TTY that never produces `end` (a
+ * backgrounded compound command with no controlling terminal), where an
+ * unbounded read hangs the process forever. The timer restarts on every
+ * chunk, so a slow but live pipe is never cut off mid-write; it stays well
+ * under the 60 s preflight timeout so the fallback costs little.
+ */
+export const STDIN_IDLE_TIMEOUT_MS = 3000;
+
+interface StdinRead {
+  text: string;
+  /** True when the idle bound fired before `end`. */
+  timedOut: boolean;
+}
+
+async function readStdin(
+  stream: NodeJS.ReadableStream,
+  idleTimeoutMs: number,
+): Promise<StdinRead> {
   return new Promise((resolve, reject) => {
     let data = "";
-    stream.setEncoding("utf8");
-    stream.on("data", (chunk: string) => {
+    let timer: NodeJS.Timeout | undefined;
+    const arm = (): void => {
+      if (timer !== undefined) clearTimeout(timer);
+      timer = setTimeout(() => {
+        stream.removeListener("data", onData);
+        stream.removeListener("end", onEnd);
+        stream.removeListener("error", onError);
+        // Stop reading so an open pipe or TTY does not keep the process alive.
+        stream.pause();
+        resolve({ text: data, timedOut: true });
+      }, idleTimeoutMs);
+    };
+    const onData = (chunk: string): void => {
       data += chunk;
-    });
-    stream.on("end", () => resolve(data));
-    stream.on("error", reject);
+      arm();
+    };
+    const onEnd = (): void => {
+      if (timer !== undefined) clearTimeout(timer);
+      resolve({ text: data, timedOut: false });
+    };
+    const onError = (err: Error): void => {
+      if (timer !== undefined) clearTimeout(timer);
+      reject(err);
+    };
+    stream.setEncoding("utf8");
+    stream.on("data", onData);
+    stream.on("end", onEnd);
+    stream.on("error", onError);
+    arm();
   });
 }
 
@@ -504,9 +552,25 @@ export async function runSessionStartPreflight(
     ...(reason !== undefined && { reason }),
   });
 
+  // An explicit --session id overrides every other source, so stdin is not
+  // read at all in that case: a manual or scripted call must not wait on a
+  // stream that may never close. Without it, the read is idle-bounded and a
+  // timeout falls back to the default session resolution below.
   let event: SessionStartEvent;
   try {
-    event = JSON.parse((await readStdin(stdin)).trim() || "{}") as SessionStartEvent;
+    if (typeof opts.session === "string" && opts.session.length > 0) {
+      event = {};
+    } else {
+      const idleTimeoutMs = opts.stdinIdleTimeoutMs ?? STDIN_IDLE_TIMEOUT_MS;
+      const read = await readStdin(stdin, idleTimeoutMs);
+      if (read.timedOut) {
+        note(
+          `no complete event JSON on stdin within ${idleTimeoutMs} ms (stdin never closed); ` +
+            "falling back to the default session resolution",
+        );
+      }
+      event = JSON.parse(read.text.trim() || "{}") as SessionStartEvent;
+    }
   } catch (err) {
     const reason = `malformed event JSON: ${(err as Error).message}`;
     note(reason);
