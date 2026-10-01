@@ -134,6 +134,28 @@ describe("canonicalReportHashOfFile", () => {
   });
 });
 
+/** A JSON array value nested `depth` levels deep, built from text: JSON.stringify cannot nest thousands of levels. */
+const nestedArray = (depth: number): unknown => JSON.parse(`${"[".repeat(depth)}${"]".repeat(depth)}`);
+
+describe("canonical hashing is total (deeply nested content)", () => {
+  it("hashes a report nested 64 levels deep (the report object is level 1) and returns null one level deeper", () => {
+    expect(canonicalReportHash({ ...base(), extra: nestedArray(63) })).toMatch(/^[0-9a-f]{64}$/);
+    expect(canonicalReportHash({ ...base(), extra: nestedArray(64) })).toBeNull();
+    expect(canonicalReportHash({ ...base(), extra: { a: { b: nestedArray(62) } } })).toBeNull();
+    // A deeply nested lifecycle field is not hashed, so it does not count.
+    expect(canonicalReportHash({ ...base(), approvedBy: nestedArray(200) })).toBe(canonicalReportHash(base()));
+  });
+
+  it("never throws for a report nested thousands of levels deep, in memory or on disk", () => {
+    expect(() => canonicalReportHash({ ...base(), extra: nestedArray(6000) })).not.toThrow();
+    expect(canonicalReportHash({ ...base(), extra: nestedArray(6000) })).toBeNull();
+    const deep = path.join(tmp, "deep.json");
+    fs.writeFileSync(deep, `{"content":${"[".repeat(6000)}${"]".repeat(6000)}}`);
+    expect(() => canonicalReportHashOfFile(deep)).not.toThrow();
+    expect(canonicalReportHashOfFile(deep)).toBeNull();
+  });
+});
+
 describe("verifyApprovedReportHash", () => {
   const approved = (extra: Record<string, unknown> = {}): Record<string, unknown> => ({
     ...base(),
@@ -224,7 +246,7 @@ describe("verifyApprovedReportHash", () => {
     );
   });
 
-  it("pinned residual: content preserved in a copy before the edit keeps a match", () => {
+  it("pinned residual: any *.json file with the approved content keeps a match, kept before the edit or re-created after it", () => {
     const original = writeReport("r.json", approved());
     fs.copyFileSync(original, path.join(tmp, "copy.json"));
     writeReport("r.json", approved({ currentUnderstanding: "swapped" }));
@@ -232,5 +254,24 @@ describe("verifyApprovedReportHash", () => {
       ok: true,
       kind: "session",
     });
+    // Re-created after the edit, under another session and status, with no copy kept.
+    fs.rmSync(path.join(tmp, "copy.json"));
+    expect(verifyApprovedReportHash(tmp, session(canonicalReportHash(base()))).ok).toBe(false);
+    writeReport("re-created.json", approved({ sessionId: "sess-other", approvalStatus: "pending" }));
+    expect(verifyApprovedReportHash(tmp, session(canonicalReportHash(base())))).toEqual({
+      ok: true,
+      kind: "session",
+    });
+  });
+
+  it("a deeply nested *.json file in the directory is a file that matches nothing: never throws, never opens the gate on its own", () => {
+    fs.writeFileSync(path.join(tmp, "aa-deep.json"), `{"content":${"[".repeat(6000)}${"]".repeat(6000)}}`);
+    const signed = canonicalReportHash(base());
+    // Only the deep file: report files exist, none carries the signed content.
+    expect(() => verifyApprovedReportHash(tmp, session(signed))).not.toThrow();
+    expect(verifyApprovedReportHash(tmp, session(signed)).ok).toBe(false);
+    // Next to the untouched approved report: still a match.
+    writeReport("zz-mine.json", approved());
+    expect(verifyApprovedReportHash(tmp, session(signed))).toEqual({ ok: true, kind: "session" });
   });
 });

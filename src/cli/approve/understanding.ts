@@ -20,6 +20,7 @@ import * as path from "node:path";
 import { atomicWriteFile } from "../../io/atomic-write.js";
 import {
   approvedLedgerTagFor,
+  canonicalReportHash,
   canonicalReportHashOfFile,
   defaultReportsDir,
   listPersistedReports,
@@ -840,6 +841,18 @@ export async function approveUnderstanding(
     } else {
       const v = validatePersistedReport(parsed);
       validation = v.ok ? v : { ...v, enforced: !opts.force };
+      // A report nested too deeply for `canonicalReportHash` would sign a
+      // marker whose `reportContentHash` is null, i.e. one the gate-read
+      // content check never applies to, so it fails validation instead
+      // (`--force` still overrides, as for any other validation failure).
+      if (validation.ok && canonicalReportHash(parsed) === null) {
+        validation = {
+          ok: false,
+          field: "report",
+          reason: "nested too deeply to hash its content, so the approval could not bind it",
+          enforced: !opts.force,
+        };
+      }
     }
   }
 
@@ -937,8 +950,9 @@ export async function approveUnderstanding(
   // both PreToolUse hooks look for a report file with that hash at gate-read
   // time (`verifyApprovedReportHash`, task fa423e9b) and refuse the marker
   // when none is left. null when no persisted report was resolved
-  // (ledger-only / --force paths have nothing to bind) or it cannot be
-  // read as a JSON object.
+  // (ledger-only / --force paths have nothing to bind), it cannot be read
+  // as a JSON object, or it nests too deeply to hash (reachable only under
+  // --force: the validation above refuses such a report otherwise).
   const reportContentHash: string | null =
     latest ? canonicalReportHashOfFile(latest.filePath) : null;
 

@@ -878,6 +878,32 @@ describe("pack hook pre-tool-use — auto-approval path (ADR slice 1)", () => {
       expect(readReport(report.filePath)["approvalStatus"]).toBe("pending");
     });
 
+    it.each([200, 6000])(
+      "declines a report with an extra field nested %i levels deep (too deep to hash) instead of throwing: no marker, no ledger fact, report stays pending",
+      async (depth) => {
+        // The marker would bind no content, and at a few thousand levels a
+        // recursive hash overflows the stack; the hook process then dies
+        // instead of deciding, which the runtime treats as a non-blocking
+        // error. Written as raw text: JSON.stringify itself cannot nest that deep.
+        process.env.CLAUDE_CODE_SESSION_ID = SESSION;
+        getOrCreateSigningKey(generatedDir);
+        fs.mkdirSync(reportsDir, { recursive: true });
+        const filePath = path.join(reportsDir, "2026-08-27T10-00-00-000Z-deep-abcd1234.json");
+        const head = JSON.stringify(reportBody(SESSION, "pending", "2026-08-27T10:00:00.000Z")).slice(0, -1);
+        fs.writeFileSync(filePath, `${head},"extra":${"[".repeat(depth)}${"]".repeat(depth)}}`);
+
+        const result = await call();
+
+        expect(result.blocked).toBe(true);
+        expect(result.stderr).toMatch(
+          /auto-approval declined: report invalid \(nested too deeply to hash its content\)/,
+        );
+        expect(markerExists()).toBe(false);
+        expect(ledgerCalls).toEqual([]);
+        expect(readReport(filePath)["approvalStatus"]).toBe("pending");
+      },
+    );
+
     it("mints even when the ledger is unreachable (audit only, never a gate input)", async () => {
       process.env.CLAUDE_CODE_SESSION_ID = SESSION;
       getOrCreateSigningKey(generatedDir);

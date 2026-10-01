@@ -30,11 +30,17 @@
 // elsewhere):
 //   - Key read + uncovered write forges a VALID marker (documented
 //     honest trust model in src/runtime/approval-signing.ts). Unchanged.
-//   - Copy-then-edit: an agent that keeps the approved content in a second
-//     file of the reports directory and then edits the original keeps a
-//     match, so the marker still allows (pinned by the RESIDUAL test). The
-//     signed hash proves the approved content is still on disk, not that the
-//     file the audit trail points at is unmodified.
+//   - Content kept or re-created: any *.json file of the reports directory
+//     whose content equals the approved content keeps a match, whether it
+//     was kept before the edit (a copy) or re-created after it, so the
+//     marker still allows (pinned by the RESIDUAL test). The signed hash
+//     proves the approved content is on disk, not that the file the audit
+//     trail points at is unmodified.
+//   - No report file left: a reports directory that is empty, unreadable or
+//     holds no *.json file falls back to the "no report file" allow, the
+//     same as before the check existed (pinned below). Removing only the
+//     approved report while other report files remain denies; re-approving
+//     recovers (also pinned below).
 //   - In-flight subagent record: hook-subagent-start.ts mints the in-flight
 //     record without the hash check, so a record written under a refused
 //     approval can open the gate for that subagent once the parent marker
@@ -495,7 +501,7 @@ describe.each(RUNTIMES)("persisted report is evidence, not authority (task 74023
     fs.writeFileSync(reportPath, `${JSON.stringify(r, null, 2)}\n`);
   }
 
-  it("P19 TAMPER: valid session marker + approved report whose content was edited after approval: blocks with the mismatch reason naming the file and `harness approve understanding`", async () => {
+  it("P19 TAMPER: valid session marker + the approved report's content edited after approval, no other file carries it: blocks with the mismatch reason naming the session marker kind and `harness approve understanding`", async () => {
     const generatedDir = path.join(tmp, "harness.generated");
     const reportsDir = path.join(tmp, "reports");
     const reportPath = await approveRealFlow(generatedDir, reportsDir);
@@ -590,7 +596,7 @@ describe.each(RUNTIMES)("persisted report is evidence, not authority (task 74023
     expect(after.source).toBe("marker");
   });
 
-  it("P28 task-scoped marker, NEW session whose own report is still pending: allows as before (the check needs an approved report)", async () => {
+  it("P28 task-scoped marker, NEW session whose own report is still pending: allows, because the earlier approved file still carries the signed content (approvalStatus is not part of the rule)", async () => {
     const generatedDir = path.join(tmp, "harness.generated");
     const reportsDir = path.join(tmp, "reports");
     writeActiveClaim(generatedDir, "task-live");
@@ -813,7 +819,7 @@ describe.each(RUNTIMES)("persisted report is evidence, not authority (task 74023
     expect(out.source).toBe("marker");
   });
 
-  it("RESIDUAL (pinned, not closed): content preserved in a copy before the edit keeps a match, so the marker still allows", async () => {
+  it("RESIDUAL (pinned, not closed): content kept in a copy before the edit, or re-created after it, keeps a match, so the marker still allows", async () => {
     const generatedDir = path.join(tmp, "harness.generated");
     const reportsDir = path.join(tmp, "reports");
     const reportPath = pendingReport(reportsDir, "r1.json", SESSION, -60_000, "reviewed");
@@ -822,6 +828,7 @@ describe.each(RUNTIMES)("persisted report is evidence, not authority (task 74023
     // original. The signed hash only proves the approved content is still on
     // disk somewhere; it cannot see that the file the audit trail points at
     // was edited. Documented in the policy-pack doc.
+    const approvedText = fs.readFileSync(reportPath, "utf8");
     fs.copyFileSync(reportPath, path.join(reportsDir, "r1-copy.json"));
     editReport(reportPath, (r) => {
       r["content"] = "SWAPPED";
@@ -829,6 +836,33 @@ describe.each(RUNTIMES)("persisted report is evidence, not authority (task 74023
     const out = await rt.run({ generatedDir, reportsDir });
     expect(out.blocked).toBe(false);
     expect(out.source).toBe("marker");
+    // No copy kept: the edit denies, and writing the approved content back
+    // (here as a new file) restores the match.
+    fs.rmSync(path.join(reportsDir, "r1-copy.json"));
+    expect((await rt.run({ generatedDir, reportsDir })).blocked).toBe(true);
+    fs.writeFileSync(path.join(reportsDir, "re-created.json"), approvedText);
+    expect((await rt.run({ generatedDir, reportsDir })).blocked).toBe(false);
+  });
+
+  it("no report file left: deleting every report file falls back to the no-report allow; removing only the approved one while another report remains denies until re-approved", async () => {
+    const generatedDir = path.join(tmp, "harness.generated");
+    const reportsDir = path.join(tmp, "reports");
+    const reportPath = pendingReport(reportsDir, "r1.json", SESSION, -60_000, "reviewed");
+    await approveFor(generatedDir, reportsDir, SESSION);
+    const other = pendingReport(reportsDir, "other.json", "sess-other", -30_000, "another session's report");
+    fs.rmSync(reportPath);
+    const removed = await rt.run({ generatedDir, reportsDir });
+    expect(removed.blocked).toBe(true);
+    expect(removed.detail).toMatch(MISMATCH("session"));
+    fs.rmSync(other);
+    const empty = await rt.run({ generatedDir, reportsDir });
+    expect(empty.blocked).toBe(false);
+    expect(empty.source).toBe("marker");
+    // Re-approving recovers the first case: a fresh report for the session.
+    pendingReport(reportsDir, "other.json", "sess-other", -30_000, "another session's report");
+    pendingReport(reportsDir, "r2.json", SESSION, -10_000, "reviewed again");
+    await approveFor(generatedDir, reportsDir, SESSION);
+    expect((await rt.run({ generatedDir, reportsDir })).blocked).toBe(false);
   });
 
   it("R1 batch pre-approval (--tasks a,b), a newer report approved on task a, then claim b: the task b marker still allows", async () => {
@@ -898,6 +932,131 @@ describe.each(RUNTIMES)("persisted report is evidence, not authority (task 74023
     const out = await rt.run({ generatedDir, reportsDir, session: "sess-one" });
     expect(out.blocked).toBe(true);
     expect(out.detail).toMatch(MISMATCH("task and session"));
+  });
+
+  // The session-marker fallback inherits the session marker's own guards: it
+  // never rescues a refused task marker when the session marker is past
+  // `approval_lifecycle.max_age` or bound to another claim. Markers are
+  // written directly (signed) so the ages and bindings are exact.
+  const fallbackSetup = (
+    claimForSession: string,
+    sessionApprovedAt: string,
+  ): { generatedDir: string; reportsDir: string } => {
+    const generatedDir = path.join(tmp, "harness.generated");
+    const reportsDir = path.join(tmp, "reports");
+    const s1 = pendingReport(reportsDir, "s1.json", "sess-one", -120_000, "session one report");
+    const s2 = pendingReport(reportsDir, "s2.json", "sess-two", -60_000, "session two report");
+    writeActiveClaim(generatedDir, claimForSession);
+    writeApprovalMarker(generatedDir, "sess-one", {
+      approvedAt: sessionApprovedAt,
+      approvedBy: "operator",
+      reportContentHash: canonicalReportHashOfFile(s1),
+    });
+    writeActiveClaim(generatedDir, "task-now");
+    writeTaskApprovalMarker(generatedDir, "task-now", {
+      approvedAt: new Date().toISOString(),
+      approvedBy: "operator",
+      reportContentHash: canonicalReportHashOfFile(s2),
+    });
+    // The task marker's report content is edited; only the session marker could still verify.
+    editReport(s2, (r) => {
+      r["content"] = "SWAPPED";
+    });
+    return { generatedDir, reportsDir };
+  };
+
+  it("fallback guard: a session marker past max_age does not rescue a task marker whose report was edited; without max_age it does", async () => {
+    const { generatedDir, reportsDir } = fallbackSetup("task-now", iso(-2 * 3_600_000));
+    const withTtl = await rt.run({
+      generatedDir,
+      reportsDir,
+      session: "sess-one",
+      manifest: manifestWithPack({ approval_lifecycle: { max_age: "1h" } }),
+    });
+    expect(withTtl.blocked).toBe(true);
+    expect(withTtl.detail).toMatch(MISMATCH("task"));
+    const noTtl = await rt.run({ generatedDir, reportsDir, session: "sess-one" });
+    expect(noTtl.blocked).toBe(false);
+    expect(noTtl.source).toBe("marker");
+    expect(noTtl.stderr).not.toMatch(/approved via marker task-/);
+  });
+
+  it("fallback guard: a session marker bound to another claim does not rescue a task marker whose report was edited; under mode: session it does", async () => {
+    const { generatedDir, reportsDir } = fallbackSetup("task-before", new Date().toISOString());
+    const bound = await rt.run({ generatedDir, reportsDir, session: "sess-one" });
+    expect(bound.blocked).toBe(true);
+    expect(bound.detail).toMatch(MISMATCH("task"));
+    const sessionMode = await rt.run({
+      generatedDir,
+      reportsDir,
+      session: "sess-one",
+      manifest: manifestWithPack({ approval_lifecycle: { mode: "session" } }),
+    });
+    expect(sessionMode.blocked).toBe(false);
+    expect(sessionMode.source).toBe("marker");
+  });
+
+  // A *.json file nested thousands of levels deep in the reports directory
+  // used to overflow the stack of the canonical hash and kill the hook
+  // process, which the runtime treats as a non-blocking error (fail-open).
+  // It is now a report file that matches nothing.
+  const plantDeepFile = (reportsDir: string, name: string): void => {
+    fs.writeFileSync(path.join(reportsDir, name), `{"content":${"[".repeat(6000)}${"]".repeat(6000)}}`);
+  };
+
+  it("deep file: a tampered approval next to a deeply nested *.json still blocks with the mismatch reason", async () => {
+    const generatedDir = path.join(tmp, "harness.generated");
+    const reportsDir = path.join(tmp, "reports");
+    const reportPath = await approveRealFlow(generatedDir, reportsDir);
+    editReport(reportPath, (r) => {
+      r["content"] = "SWAPPED";
+    });
+    for (const name of ["aa-deep.json", "zz-deep.json"]) plantDeepFile(reportsDir, name);
+    const out = await rt.run({ generatedDir, reportsDir });
+    expect(out.blocked).toBe(true);
+    expect(out.detail).toMatch(MISMATCH("session"));
+  });
+
+  it("deep file: an untouched approval next to a deeply nested *.json (listed before and after it) still allows", async () => {
+    const generatedDir = path.join(tmp, "harness.generated");
+    const reportsDir = path.join(tmp, "reports");
+    await approveRealFlow(generatedDir, reportsDir);
+    for (const name of ["aa-deep.json", "zz-deep.json"]) plantDeepFile(reportsDir, name);
+    const out = await rt.run({ generatedDir, reportsDir });
+    expect(out.blocked).toBe(false);
+    expect(out.source).toBe("marker");
+  });
+
+  it("deep report: `harness approve understanding` refuses a report too deeply nested to hash (the marker could not bind it) and the gate stays closed; --force overrides with an unbound marker", async () => {
+    const generatedDir = path.join(tmp, "harness.generated");
+    const reportsDir = path.join(tmp, "reports");
+    fs.mkdirSync(reportsDir, { recursive: true });
+    const head = JSON.stringify({
+      sessionId: SESSION,
+      approvalStatus: "pending",
+      createdAt: new Date().toISOString(),
+      content: "the understanding the operator reviewed",
+    }).slice(0, -1);
+    const reportPath = path.join(reportsDir, "r1.json");
+    fs.writeFileSync(reportPath, `${head},"extra":${"[".repeat(200)}${"]".repeat(200)}}`);
+    const approveArgs = {
+      manifest: parseManifest({ version: 1 }),
+      session: SESSION,
+      reportsDir,
+      generatedDir,
+      ledgerAdd: async () => ({ ok: true as const }),
+    };
+    const refused = await approveUnderstanding(approveArgs);
+    expect(refused.marker.ok).toBe(false);
+    expect(refused.validation).toMatchObject({ ok: false, field: "report", enforced: true });
+    expect(fs.existsSync(approvalMarkerPathFor(generatedDir, SESSION))).toBe(false);
+    expect(JSON.parse(fs.readFileSync(reportPath, "utf8"))["approvalStatus"]).toBe("pending");
+    expect((await rt.run({ generatedDir, reportsDir })).blocked).toBe(true);
+    const forced = await approveUnderstanding({ ...approveArgs, force: true });
+    expect(forced.marker.ok).toBe(true);
+    const marker = JSON.parse(fs.readFileSync(approvalMarkerPathFor(generatedDir, SESSION), "utf8")) as Record<string, unknown>;
+    expect(marker["reportContentHash"]).toBeNull();
+    expect((await rt.run({ generatedDir, reportsDir })).blocked).toBe(false);
   });
 
   it("R2b re-approving session one after session two: neither session is denied", async () => {

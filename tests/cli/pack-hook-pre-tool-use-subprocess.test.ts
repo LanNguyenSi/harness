@@ -28,6 +28,8 @@ import * as path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { approveUnderstanding } from "../../src/cli/approve/understanding.js";
+import { parseManifest } from "../../src/schema/index.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const REPO_ROOT = path.resolve(path.dirname(__filename), "..", "..");
@@ -192,5 +194,62 @@ describe("pack hook pre-tool-use — subprocess E2E (deny path)", () => {
     expect(decision.hookSpecificOutput?.permissionDecision).toBe("deny");
     expect(decision.hookSpecificOutput?.hookEventName).toBe("PreToolUse");
     expect(stderr).toMatch(/BLOCK/);
+  });
+});
+
+describe("pack hook pre-tool-use: subprocess E2E (report content check never crashes the hook)", () => {
+  it("a tampered approval next to a deeply nested *.json exits 0 with a block decision, not a crash exit", async () => {
+    // A hook that dies (non-zero exit other than a decision) is a
+    // non-blocking error for Claude Code, so the call would proceed. A
+    // *.json nested thousands of levels deep in the reports directory used
+    // to overflow the canonical report hash's stack exactly that way.
+    const configPath = path.join(tmpDir, "harness.yaml");
+    fs.writeFileSync(configPath, MANIFEST_WITH_PACK, "utf8");
+    const session = "sess-hook-e2e-deep-1";
+    const reportsDir = path.join(tmpDir, "reports");
+    // The hook resolves harness.generated next to the --config file.
+    const generatedDir = path.join(tmpDir, "harness.generated");
+    fs.mkdirSync(reportsDir, { recursive: true });
+    const reportPath = path.join(reportsDir, "r1.json");
+    fs.writeFileSync(
+      reportPath,
+      JSON.stringify({
+        sessionId: session,
+        approvalStatus: "pending",
+        createdAt: new Date(Date.now() - 60_000).toISOString(),
+        content: "the understanding the operator reviewed",
+      }),
+    );
+    const approve = await approveUnderstanding({
+      manifest: parseManifest({ version: 1 }),
+      session,
+      reportsDir,
+      generatedDir,
+      ledgerAdd: async () => ({ ok: true }),
+    });
+    expect(approve.marker.ok).toBe(true);
+    const event = JSON.stringify({
+      session_id: session,
+      tool_name: "Edit",
+      tool_input: { file_path: "/some/file.ts", old_string: "x", new_string: "y" },
+    });
+    // Control: the untouched approval allows through the built CLI.
+    const before = runHook(configPath, event);
+    expect(before.status).toBe(0);
+    expect(before.stdout.trim()).toBe("");
+    expect(before.stderr).toMatch(/approved via marker/);
+
+    const approved = JSON.parse(fs.readFileSync(reportPath, "utf8")) as Record<string, unknown>;
+    fs.writeFileSync(reportPath, JSON.stringify({ ...approved, content: "SWAPPED" }));
+    fs.writeFileSync(path.join(reportsDir, "zz-deep.json"), `{"content":${"[".repeat(6000)}${"]".repeat(6000)}}`);
+
+    const { status, stdout, stderr } = runHook(configPath, event);
+
+    expect(status).toBe(0);
+    const decision = JSON.parse(stdout.trim()) as { decision?: string };
+    expect(decision.decision).toBe("block");
+    // The hook's diagnostic names the refused marker; the envelope stays the generic deny.
+    expect(stderr).toMatch(/no report in the reports directory matches the content the session approval marker was signed for/);
+    expect(stderr).not.toMatch(/Maximum call stack size exceeded/);
   });
 });

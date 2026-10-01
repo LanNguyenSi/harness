@@ -573,6 +573,29 @@ const LIFECYCLE_REPORT_FIELDS: ReadonlySet<string> = new Set([
   "sessionId",
 ]);
 
+/**
+ * Deepest array/object nesting {@link canonicalReportHash} serialises (the
+ * report object itself is level 1). `sortKeysDeep` and `JSON.stringify`
+ * recurse once per level, and any agent-written `*.json` file in the reports
+ * directory reaches them through the gate-read scan, so without a bound a
+ * file nested a few thousand levels deep overflows the stack and the hook
+ * process dies instead of deciding. A real report nests a handful of levels.
+ */
+const MAX_CANONICAL_REPORT_DEPTH = 64;
+
+/** True when `value` nests arrays/objects deeper than `max` levels. Iterative, so the check itself cannot overflow. */
+function nestsDeeperThan(value: unknown, max: number): boolean {
+  const pending: Array<{ node: unknown; depth: number }> = [{ node: value, depth: 1 }];
+  for (let next = pending.pop(); next !== undefined; next = pending.pop()) {
+    if (next.node === null || typeof next.node !== "object") continue;
+    if (next.depth > max) return true;
+    for (const child of Object.values(next.node as Record<string, unknown>)) {
+      pending.push({ node: child, depth: next.depth + 1 });
+    }
+  }
+  return false;
+}
+
 function sortKeysDeep(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(sortKeysDeep);
   if (value !== null && typeof value === "object") {
@@ -596,17 +619,23 @@ function sortKeysDeep(value: unknown): unknown {
  * report never match what the marker signed. One function on purpose, shared
  * by both producers (`harness approve understanding`, the auto-approval path)
  * and the verifier.
+ *
+ * Total: returns null instead of throwing for a report nested deeper than
+ * `MAX_CANONICAL_REPORT_DEPTH`. The verifier counts such a file as one that
+ * matches nothing; both producers refuse to approve such a report, so no
+ * marker is ever signed without a content binding because of it.
  */
-export function canonicalReportHash(report: Record<string, unknown>): string {
+export function canonicalReportHash(report: Record<string, unknown>): string | null {
   // `Object.fromEntries` (not `kept[key] = value`): a report key named
   // `__proto__` must stay hashed data, not re-parent the copy and vanish.
   const kept = Object.fromEntries(
     Object.entries(report).filter(([key]) => !LIFECYCLE_REPORT_FIELDS.has(key)),
   );
+  if (nestsDeeperThan(kept, MAX_CANONICAL_REPORT_DEPTH)) return null;
   return sha256Hex(JSON.stringify(sortKeysDeep(kept)));
 }
 
-/** Canonical hash of the report file at `filePath`; null when unreadable or not a JSON object. */
+/** Canonical hash of the report file at `filePath`; null when unreadable, not a JSON object, or nested too deeply to hash. */
 export function canonicalReportHashOfFile(filePath: string): string | null {
   let raw: string;
   try {
@@ -642,8 +671,11 @@ interface ReportHashScan {
 /**
  * Hash every regular `*.json` file of `dir` (any session, any
  * `approvalStatus`) and report which of the `wanted` hashes occur. Stops as
- * soon as every wanted hash was found, so the usual allow path reads few
- * files. Unreadable and non-object files count as files but match nothing.
+ * soon as every wanted hash was found. The cost is linear in the number of
+ * report files, and the usual allow path scans nearly all of them: the
+ * directory listing comes back in name order and report names start with a
+ * timestamp, so the approved (newest) report tends to come last. Unreadable,
+ * non-object and too deeply nested files count as files but match nothing.
  */
 function scanReportHashes(dir: string, wanted: ReadonlySet<string>): ReportHashScan {
   const scan: ReportHashScan = { files: 0, matched: new Set<string>() };
@@ -689,11 +721,22 @@ function scanReportHashes(dir: string, wanted: ReadonlySet<string>): ReportHashS
  * sessions on one claim) and would let a swap pass by moving the swapped
  * report out of the selection.
  *
- * Residual: the check cannot see content that was preserved before the edit.
- * An agent that copies the approved report to a second file in the directory
- * and then edits the original keeps a match, so the marker still opens the
- * gate. The marker and the operator's approval itself are untouched by that;
- * only the audit trail loses its claim to be the approved content.
+ * Residuals: (1) the check proves only that some file carries the approved
+ * content. Any `*.json` file in the directory whose content equals it keeps
+ * a match, whether it was kept before the edit (a copy) or re-created after
+ * it (the agent wrote that content, so it can write it again), and the marker
+ * still opens the gate. (2) A reports directory that is empty, unreadable or
+ * holds no `*.json` file (every report deleted, the directory made
+ * unreadable, the reports renamed) falls back to the "no report file" allow,
+ * the same as before this check existed. The marker and the operator's
+ * approval itself are untouched in both cases; only the audit trail loses
+ * its claim to be the approved content.
+ *
+ * Removing the approved report while other report files remain is a deny:
+ * nothing on disk carries the signed content any more. `harness gc --apply`
+ * can do that legitimately: it ages approved reports out by their createdAt
+ * but markers by their file mtime, so a report written long before its
+ * approval can go while the marker stays. Re-approving recovers.
  *
  * `primary` is the marker that satisfied the gate (task-scoped first),
  * `fallback` a session marker that matched behind a task marker. The
