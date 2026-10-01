@@ -242,6 +242,39 @@ describe("runInterceptCli — Bash prefix parsing for Risk Gate resolver", () =>
     expect(result.blocked).toBe(true);
     expect(JSON.parse(output().trim()).decision).toBe("block");
   });
+
+  it("blocks when an escaped quote sits in the inline-env value before a prod cd, or inside the prod value (task b093911d)", async () => {
+    // The old first-quote scan cut `VAR="say \"hi\""` at the escaped
+    // quote, so the real `cd <repo-on-main>` after it was never seen, and
+    // `DATABASE_URL="x \"y\" postgres://prod-host"` lost its prod host.
+    // Both ran against the non-prod hook cwd and were allowed.
+    const nonProdRepo = makeGitRepo("feature/work");
+    const prodRepo = makeGitRepo("main");
+    const commands = [
+      `VAR="say \\"hi\\"" cd ${prodRepo} && terraform destroy`,
+      `DATABASE_URL="x \\"y\\" postgres://prod-host/db" terraform destroy`,
+    ];
+    for (const [n, command] of commands.entries()) {
+      const { stream, output } = captureStdout();
+      const result = await runInterceptCli({
+        stdin: streamFrom(
+          JSON.stringify({
+            hook_event_name: "PreToolUse",
+            tool_name: "Bash",
+            tool_input: { command },
+            session_id: `sess-escape-${n}`,
+            cwd: nonProdRepo,
+          }),
+        ),
+        stdout: stream,
+        manifest,
+        ledger: emptyLedger,
+        env: {},
+      });
+      expect(result.blocked, command).toBe(true);
+      expect(JSON.parse(output().trim()).decision).toBe("block");
+    }
+  });
 });
 
 // Task 341e024b — leading `git switch`/`checkout <branch>` as a branch
