@@ -55,6 +55,7 @@ import {
   canonicalReportHash,
   checkApprovalMarker,
   clearApprovalMarker,
+  MAX_HASHED_REPORT_BYTES,
   writeApprovalMarker,
 } from "../../src/policy-packs/builtin/understanding-before-execution-runtime.js";
 import {
@@ -1229,6 +1230,25 @@ describe("pack hook codex-pre-tool-use — auto-approval path (ADR slice 2)", ()
         expect(readReport(filePath)["approvalStatus"]).toBe("pending");
       },
     );
+
+    it("a valid pending report over the 1 MiB size cap declines (the gate-read scan never reads it): block, no marker, no ledger fact", async () => {
+      getOrCreateSigningKey(generatedDir);
+      const report = writePendingReport();
+      // Trailing JSON whitespace: the content stays valid, only the size grows.
+      fs.appendFileSync(report.filePath, " ".repeat(2 * MAX_HASHED_REPORT_BYTES));
+      const size = fs.statSync(report.filePath).size;
+
+      const result = await call();
+
+      expect(result.blocked).toBe(true);
+      expect(result.exitCode).toBe(2);
+      expect(result.stderr).toContain(
+        `auto-approval declined: report invalid (${size} bytes, over the 1048576-byte cap for hashing its content)`,
+      );
+      expect(markerExists()).toBe(false);
+      expect(ledgerCalls).toEqual([]);
+      expect(readReport(report.filePath)["approvalStatus"]).toBe("pending");
+    });
   });
 
   describe("audit trail", () => {

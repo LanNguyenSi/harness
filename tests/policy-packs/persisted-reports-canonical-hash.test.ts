@@ -12,9 +12,13 @@ import {
   canonicalReportHash,
   canonicalReportHashOfFile,
   expirePersistedReport,
+  hashReportFile,
+  MAX_HASHED_REPORT_BYTES,
+  readReportFileBounded,
   verifyApprovedReportHash,
   type MarkerReportBinding,
 } from "../../src/policy-packs/builtin/understanding-before-execution-runtime.js";
+import { walkContainerDepth } from "../../src/policy-packs/builtin/understanding-before-execution/persisted-reports.js";
 
 const SESSION = "sess-canonical";
 
@@ -156,6 +160,107 @@ describe("canonical hashing is total (deeply nested content)", () => {
   });
 });
 
+describe("the depth walk queues containers only", () => {
+  it("visits the root plus every array and object, never a scalar", () => {
+    const value = { a: [1, 2, 3, "x", null, true], b: { c: [[]], d: "s" }, e: 0 };
+    // root, a, b, c, the empty array inside c: five containers; seven scalars are never queued.
+    expect(walkContainerDepth(value, 64)).toEqual({ tooDeep: false, visited: 5 });
+  });
+
+  it("a scalar-heavy report file under the size cap costs two visits, not one per element", () => {
+    const elements = 400_000;
+    const parsed = JSON.parse(`{"content":[${"0,".repeat(elements - 1)}0]}`) as Record<string, unknown>;
+    expect((parsed["content"] as unknown[]).length).toBe(elements);
+    expect(walkContainerDepth(parsed, 64)).toEqual({ tooDeep: false, visited: 2 });
+  });
+
+  it("keeps the depth cap: the report object is level 1, 64 levels pass and 65 do not", () => {
+    expect(walkContainerDepth({ x: nestedArray(63) }, 64).tooDeep).toBe(false);
+    expect(walkContainerDepth({ x: nestedArray(64) }, 64).tooDeep).toBe(true);
+  });
+});
+
+describe("report files are read bounded by type and size", () => {
+  /** A report file of exactly `bytes` bytes: `body` serialised, padded with JSON whitespace. */
+  const writePadded = (name: string, body: Record<string, unknown>, bytes: number): string => {
+    const json = JSON.stringify(body);
+    const filePath = path.join(tmp, name);
+    fs.writeFileSync(filePath, json + " ".repeat(bytes - Buffer.byteLength(json)));
+    expect(fs.statSync(filePath).size).toBe(bytes);
+    return filePath;
+  };
+
+  it("caps a hashed report file at 1 MiB, far above a real report", () => {
+    expect(MAX_HASHED_REPORT_BYTES).toBe(1048576);
+  });
+
+  it("hashes a file of exactly the cap and refuses one byte more without reading it", () => {
+    const atCap = writePadded("at-cap.json", base(), MAX_HASHED_REPORT_BYTES);
+    expect(hashReportFile(atCap)).toEqual({ ok: true, hash: canonicalReportHash(base()) });
+    const overCap = writePadded("over-cap.json", base(), MAX_HASHED_REPORT_BYTES + 1);
+    expect(hashReportFile(overCap)).toEqual({
+      ok: false,
+      reason: "too-large",
+      detail: "1048577 bytes, over the 1048576-byte cap for hashing its content",
+    });
+    expect(canonicalReportHashOfFile(overCap)).toBeNull();
+    expect(readReportFileBounded(overCap)).toMatchObject({ ok: false, reason: "too-large" });
+  });
+
+  it("hashes a wide but shallow array report within the cap", () => {
+    const filePath = path.join(tmp, "wide.json");
+    fs.writeFileSync(filePath, `{"content":[${"0,".repeat(400_000)}0]}`);
+    expect(fs.statSync(filePath).size).toBeLessThan(MAX_HASHED_REPORT_BYTES);
+    const hashed = hashReportFile(filePath);
+    expect(hashed.ok).toBe(true);
+    expect(hashed.ok && hashed.hash).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it("refuses anything that is not a regular file, by the type of the opened descriptor", () => {
+    const dir = path.join(tmp, "dir.json");
+    fs.mkdirSync(dir);
+    expect(hashReportFile(dir)).toEqual({ ok: false, reason: "not-regular", detail: "not a regular file" });
+    const device = path.join(tmp, "device.json");
+    fs.symlinkSync("/dev/null", device);
+    expect(hashReportFile(device)).toEqual({ ok: false, reason: "not-regular", detail: "not a regular file" });
+  });
+
+  it("reports a path that cannot be opened as unreadable instead of throwing", () => {
+    expect(readReportFileBounded(path.join(tmp, "missing.json"))).toEqual({
+      ok: false,
+      reason: "unreadable",
+      detail: "could not be opened (ENOENT)",
+    });
+    fs.symlinkSync(path.join(tmp, "nowhere.json"), path.join(tmp, "dangling.json"));
+    expect(hashReportFile(path.join(tmp, "dangling.json"))).toMatchObject({ ok: false, reason: "unreadable" });
+  });
+
+  it("names a JSON body that is not an object and one nested too deeply", () => {
+    fs.writeFileSync(path.join(tmp, "arr.json"), "[1]");
+    expect(hashReportFile(path.join(tmp, "arr.json"))).toEqual({
+      ok: false,
+      reason: "not-json-object",
+      detail: "not a JSON object",
+    });
+    fs.writeFileSync(path.join(tmp, "deep.json"), `{"content":${"[".repeat(100)}${"]".repeat(100)}}`);
+    expect(hashReportFile(path.join(tmp, "deep.json"))).toEqual({
+      ok: false,
+      reason: "too-deep",
+      detail: "nested too deeply to hash its content",
+    });
+  });
+
+  it("an oversized copy of the approved content keeps no match: residual (1) covers only files within the cap", () => {
+    const signed = canonicalReportHash(base());
+    const session: MarkerReportBinding = { kind: "session", reportContentHash: signed };
+    writePadded("copy.json", { ...base(), approvalStatus: "approved" }, MAX_HASHED_REPORT_BYTES);
+    expect(verifyApprovedReportHash(tmp, session)).toEqual({ ok: true, kind: "session" });
+    fs.rmSync(path.join(tmp, "copy.json"));
+    writePadded("copy.json", { ...base(), approvalStatus: "approved" }, 2 * MAX_HASHED_REPORT_BYTES);
+    expect(verifyApprovedReportHash(tmp, session).ok).toBe(false);
+  });
+});
+
 describe("verifyApprovedReportHash", () => {
   const approved = (extra: Record<string, unknown> = {}): Record<string, unknown> => ({
     ...base(),
@@ -214,15 +319,31 @@ describe("verifyApprovedReportHash", () => {
     expect(verifyApprovedReportHash(tmp, session("deadbeef")).ok).toBe(false);
   });
 
-  it("is ok when the directory has no report file at all (missing, empty, or only non-json files)", () => {
+  it("is ok when the directory has no *.json entry at all (missing, empty, or only non-json names)", () => {
     expect(verifyApprovedReportHash(path.join(tmp, "missing"), session("deadbeef"))).toEqual({
       ok: true,
       kind: "session",
     });
     expect(verifyApprovedReportHash(tmp, session("deadbeef"))).toEqual({ ok: true, kind: "session" });
     fs.writeFileSync(path.join(tmp, "notes.txt"), "x");
-    fs.mkdirSync(path.join(tmp, "dir.json"));
+    fs.mkdirSync(path.join(tmp, "subdir"));
     expect(verifyApprovedReportHash(tmp, session("deadbeef"))).toEqual({ ok: true, kind: "session" });
+  });
+
+  it.each([
+    ["a directory", (p: string): void => fs.mkdirSync(p)],
+    ["a symlink to a device", (p: string): void => fs.symlinkSync("/dev/null", p)],
+    ["a dangling symlink", (p: string): void => fs.symlinkSync(path.join(tmp, "nowhere"), p)],
+    ["a file over the size cap", (p: string): void => fs.writeFileSync(p, `{}${" ".repeat(MAX_HASHED_REPORT_BYTES)}`)],
+  ])("every *.json entry counts as a report file: %s named *.json, alone, matches nothing and denies", (_kind, plant) => {
+    plant(path.join(tmp, "only.json"));
+    expect(verifyApprovedReportHash(tmp, session(canonicalReportHash(base())))).toMatchObject({ ok: false });
+    // Next to the untouched approved report the same entry changes nothing.
+    writeReport("zz-mine.json", approved());
+    expect(verifyApprovedReportHash(tmp, session(canonicalReportHash(base())))).toEqual({
+      ok: true,
+      kind: "session",
+    });
   });
 
   it("falls back to the fallback binding when the primary content is gone", () => {

@@ -20,9 +20,9 @@ import * as path from "node:path";
 import { atomicWriteFile } from "../../io/atomic-write.js";
 import {
   approvedLedgerTagFor,
-  canonicalReportHash,
   canonicalReportHashOfFile,
   defaultReportsDir,
+  hashReportFile,
   listPersistedReports,
   readActiveClaim,
   selectReportForSession,
@@ -841,17 +841,22 @@ export async function approveUnderstanding(
     } else {
       const v = validatePersistedReport(parsed);
       validation = v.ok ? v : { ...v, enforced: !opts.force };
-      // A report nested too deeply for `canonicalReportHash` would sign a
+      // A report the canonical hash cannot cover (larger than the size cap
+      // the gate reads, not a regular file, nested too deeply) would sign a
       // marker whose `reportContentHash` is null, i.e. one the gate-read
       // content check never applies to, so it fails validation instead
       // (`--force` still overrides, as for any other validation failure).
-      if (validation.ok && canonicalReportHash(parsed) === null) {
-        validation = {
-          ok: false,
-          field: "report",
-          reason: "nested too deeply to hash its content, so the approval could not bind it",
-          enforced: !opts.force,
-        };
+      // `hashReportFile` reads the file exactly as the gate-read scan does.
+      if (validation.ok) {
+        const hashed = hashReportFile(latest.filePath);
+        if (!hashed.ok) {
+          validation = {
+            ok: false,
+            field: "report",
+            reason: `${hashed.detail}, so the approval could not bind it`,
+            enforced: !opts.force,
+          };
+        }
       }
     }
   }
@@ -949,10 +954,11 @@ export async function approveUnderstanding(
   // value survives that flip and a later `expirePersistedReport` rewrite;
   // both PreToolUse hooks look for a report file with that hash at gate-read
   // time (`verifyApprovedReportHash`, task fa423e9b) and refuse the marker
-  // when none is left. null when no persisted report was resolved
-  // (ledger-only / --force paths have nothing to bind), it cannot be read
-  // as a JSON object, or it nests too deeply to hash (reachable only under
-  // --force: the validation above refuses such a report otherwise).
+  // when none is left. null when no persisted report was resolved or it
+  // cannot be read as a JSON object (validation skipped above, nothing to
+  // bind), or when it cannot be hashed: larger than the size cap, not a
+  // regular file, nested too deeply (reachable only under --force: the
+  // validation above refuses such a report otherwise).
   const reportContentHash: string | null =
     latest ? canonicalReportHashOfFile(latest.filePath) : null;
 

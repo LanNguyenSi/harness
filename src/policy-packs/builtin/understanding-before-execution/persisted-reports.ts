@@ -583,17 +583,57 @@ const LIFECYCLE_REPORT_FIELDS: ReadonlySet<string> = new Set([
  */
 const MAX_CANONICAL_REPORT_DEPTH = 64;
 
-/** True when `value` nests arrays/objects deeper than `max` levels. Iterative, so the check itself cannot overflow. */
-function nestsDeeperThan(value: unknown, max: number): boolean {
-  const pending: Array<{ node: unknown; depth: number }> = [{ node: value, depth: 1 }];
-  for (let next = pending.pop(); next !== undefined; next = pending.pop()) {
-    if (next.node === null || typeof next.node !== "object") continue;
-    if (next.depth > max) return true;
-    for (const child of Object.values(next.node as Record<string, unknown>)) {
-      pending.push({ node: child, depth: next.depth + 1 });
+/**
+ * Largest report file, in bytes, the canonical hash reads from disk (1 MiB).
+ * Every `*.json` entry of the reports directory reaches the hash through the
+ * gate-read scan, and the agent can write that directory, so without a bound
+ * a planted file of a few hundred megabytes made the hook run out of heap or
+ * past its time budget instead of deciding (a hook that dies or overruns is a
+ * non-blocking error for the runtime). A real report is a few kilobytes, far
+ * below the cap. A file over the cap matches nothing at gate read, and both
+ * producers refuse to approve such a report.
+ */
+export const MAX_HASHED_REPORT_BYTES = 1024 * 1024;
+
+/** Result of {@link walkContainerDepth}. */
+export interface ContainerDepthWalk {
+  /** True when some array/object nests deeper than the walk's `max` levels. */
+  tooDeep: boolean;
+  /** Values the walk took off its stack: the root plus every array/object below it. */
+  visited: number;
+}
+
+/**
+ * Iterative walk over the arrays and objects of `value` (the value itself is
+ * level 1) that stops at the first one nested deeper than `max` levels.
+ * Iterative, so the walk itself cannot overflow the stack. Only arrays and
+ * objects are pushed: a scalar child (string, number, boolean, null) cannot
+ * nest, so a wide array of scalars costs no stack slot per element, and
+ * `visited` counts the root plus the containers below it. Exported for tests.
+ */
+export function walkContainerDepth(value: unknown, max: number): ContainerDepthWalk {
+  const nodes: unknown[] = [value];
+  const depths: number[] = [1];
+  let visited = 0;
+  while (nodes.length > 0) {
+    const node = nodes.pop();
+    const depth = depths.pop() ?? 1;
+    visited += 1;
+    if (node === null || typeof node !== "object") continue;
+    if (depth > max) return { tooDeep: true, visited };
+    for (const child of Array.isArray(node) ? node : Object.values(node)) {
+      if (child !== null && typeof child === "object") {
+        nodes.push(child);
+        depths.push(depth + 1);
+      }
     }
   }
-  return false;
+  return { tooDeep: false, visited };
+}
+
+/** True when `value` nests arrays/objects deeper than `max` levels. */
+function nestsDeeperThan(value: unknown, max: number): boolean {
+  return walkContainerDepth(value, max).tooDeep;
 }
 
 function sortKeysDeep(value: unknown): unknown {
@@ -623,7 +663,10 @@ function sortKeysDeep(value: unknown): unknown {
  * Total: returns null instead of throwing for a report nested deeper than
  * `MAX_CANONICAL_REPORT_DEPTH`. The verifier counts such a file as one that
  * matches nothing; both producers refuse to approve such a report, so no
- * marker is ever signed without a content binding because of it.
+ * marker is ever signed without a content binding because of it. Report
+ * files reach it only after {@link readReportFileBounded} bounded their type
+ * and size (the gate-read scan and `harness approve understanding` through
+ * {@link hashReportFile}, the auto-approval path directly).
  */
 export function canonicalReportHash(report: Record<string, unknown>): string | null {
   // `Object.fromEntries` (not `kept[key] = value`): a report key named
@@ -635,17 +678,103 @@ export function canonicalReportHash(report: Record<string, unknown>): string | n
   return sha256Hex(JSON.stringify(sortKeysDeep(kept)));
 }
 
-/** Canonical hash of the report file at `filePath`; null when unreadable, not a JSON object, or nested too deeply to hash. */
-export function canonicalReportHashOfFile(filePath: string): string | null {
-  let raw: string;
+/** Why {@link readReportFileBounded} returned no content. */
+export type ReportFileReadFailure = "unreadable" | "not-regular" | "too-large" | "grew";
+
+export type BoundedReportRead =
+  | { ok: true; raw: string }
+  | { ok: false; reason: ReportFileReadFailure; detail: string };
+
+function errorCode(err: unknown): string {
+  const code = (err as NodeJS.ErrnoException | null)?.code;
+  return typeof code === "string" ? code : String(err);
+}
+
+/**
+ * Read a report file for hashing, bounded by type and size. This is the one
+ * read every canonical report hash goes through: the gate-read scan (via
+ * {@link hashReportFile}) and both producers. The path is opened once,
+ * read-only and non-blocking (`O_NONBLOCK`: opening a FIFO with no writer
+ * returns at once instead of waiting for one); its type and size come from
+ * `fstat` on that descriptor, and the content is read through the same
+ * descriptor, so nothing can be swapped in between (no separate stat of the
+ * path, which a symlink flipped to a FIFO used to race). Refused without
+ * reading: anything that is not a regular file, and a file larger than
+ * `MAX_HASHED_REPORT_BYTES`. The read stops one byte past the fstat size
+ * (never more than the cap plus one byte); a file that grows into that byte
+ * while being read is refused too. The descriptor is always closed. Never
+ * throws.
+ */
+export function readReportFileBounded(filePath: string): BoundedReportRead {
+  let fd: number;
   try {
-    raw = fs.readFileSync(filePath, "utf8");
-  } catch {
-    return null;
+    fd = fs.openSync(filePath, fs.constants.O_RDONLY | fs.constants.O_NONBLOCK);
+  } catch (err) {
+    return { ok: false, reason: "unreadable", detail: `could not be opened (${errorCode(err)})` };
   }
-  const parsed = safeJsonParse(raw);
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
-  return canonicalReportHash(parsed as Record<string, unknown>);
+  try {
+    const stat = fs.fstatSync(fd);
+    if (!stat.isFile()) return { ok: false, reason: "not-regular", detail: "not a regular file" };
+    if (stat.size > MAX_HASHED_REPORT_BYTES) {
+      return {
+        ok: false,
+        reason: "too-large",
+        detail: `${stat.size} bytes, over the ${MAX_HASHED_REPORT_BYTES}-byte cap for hashing its content`,
+      };
+    }
+    const buf = Buffer.allocUnsafe(stat.size + 1);
+    let total = 0;
+    while (total < buf.length) {
+      const n = fs.readSync(fd, buf, total, buf.length - total, null);
+      if (n === 0) break;
+      total += n;
+    }
+    if (total > stat.size) return { ok: false, reason: "grew", detail: "grew while being read" };
+    return { ok: true, raw: buf.toString("utf8", 0, total) };
+  } catch (err) {
+    return { ok: false, reason: "unreadable", detail: `could not be read (${errorCode(err)})` };
+  } finally {
+    try {
+      fs.closeSync(fd);
+    } catch {
+      // Already gone; nothing left to release.
+    }
+  }
+}
+
+/** Why a report file has no canonical hash. */
+export type UnhashableReportReason = ReportFileReadFailure | "not-json-object" | "too-deep";
+
+export type ReportFileHash =
+  | { ok: true; hash: string }
+  | { ok: false; reason: UnhashableReportReason; detail: string };
+
+/**
+ * Canonical hash of the report file at `filePath`, read through
+ * {@link readReportFileBounded}, or why it has none: not a regular file, over
+ * `MAX_HASHED_REPORT_BYTES`, unreadable, grown while read, not a JSON object,
+ * or nested too deeply. `harness approve understanding` refuses a report on
+ * any of these (the `detail` is its message); the gate-read scan counts such
+ * a file as one that matches nothing. Never throws.
+ */
+export function hashReportFile(filePath: string): ReportFileHash {
+  const read = readReportFileBounded(filePath);
+  if (!read.ok) return read;
+  const parsed = safeJsonParse(read.raw);
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return { ok: false, reason: "not-json-object", detail: "not a JSON object" };
+  }
+  const hash = canonicalReportHash(parsed as Record<string, unknown>);
+  if (hash === null) {
+    return { ok: false, reason: "too-deep", detail: "nested too deeply to hash its content" };
+  }
+  return { ok: true, hash };
+}
+
+/** Canonical hash of the report file at `filePath` ({@link hashReportFile}); null when it has none. */
+export function canonicalReportHashOfFile(filePath: string): string | null {
+  const hashed = hashReportFile(filePath);
+  return hashed.ok ? hashed.hash : null;
 }
 
 /** Marker kind whose signed report hash the gate checks. */
@@ -662,20 +791,23 @@ export type ApprovedReportHashVerification =
   | { ok: false; detail: string };
 
 interface ReportHashScan {
-  /** Regular `*.json` files found in the directory, parseable or not. */
+  /** `*.json` entries found in the directory, whether or not they hash. */
   files: number;
-  /** The wanted hashes some parseable report file hashes to. */
+  /** The wanted hashes some report file hashes to. */
   matched: Set<string>;
 }
 
 /**
- * Hash every regular `*.json` file of `dir` (any session, any
- * `approvalStatus`) and report which of the `wanted` hashes occur. Stops as
- * soon as every wanted hash was found. The cost is linear in the number of
- * report files, and the usual allow path scans nearly all of them: the
- * directory listing comes back in name order and report names start with a
- * timestamp, so the approved (newest) report tends to come last. Unreadable,
- * non-object and too deeply nested files count as files but match nothing.
+ * Hash every `*.json` entry of `dir` (any session, any `approvalStatus`)
+ * through {@link canonicalReportHashOfFile} and report which of the `wanted`
+ * hashes occur. Stops as soon as every wanted hash was found. Every entry
+ * counts as a report file; one that is not a regular file, is larger than
+ * `MAX_HASHED_REPORT_BYTES`, cannot be opened or read, grows while read, is
+ * not a JSON object, or nests too deeply matches nothing. The cost is linear
+ * in the number and size of the report files (each read at most up to the
+ * cap), and the usual allow path scans nearly all of them: the directory
+ * listing comes back in name order and report names start with a timestamp,
+ * so the approved (newest) report tends to come last.
  */
 function scanReportHashes(dir: string, wanted: ReadonlySet<string>): ReportHashScan {
   const scan: ReportHashScan = { files: 0, matched: new Set<string>() };
@@ -688,11 +820,6 @@ function scanReportHashes(dir: string, wanted: ReadonlySet<string>): ReportHashS
   for (const name of names) {
     if (!name.endsWith(".json")) continue;
     const full = path.join(dir, name);
-    try {
-      if (!fs.statSync(full).isFile()) continue;
-    } catch {
-      continue;
-    }
     scan.files += 1;
     const hash = canonicalReportHashOfFile(full);
     if (hash !== null && wanted.has(hash)) {
@@ -721,16 +848,31 @@ function scanReportHashes(dir: string, wanted: ReadonlySet<string>): ReportHashS
  * sessions on one claim) and would let a swap pass by moving the swapped
  * report out of the selection.
  *
+ * Bounded input: only a regular file of at most `MAX_HASHED_REPORT_BYTES`
+ * (1 MiB) that parses as a JSON object nested at most 64 levels deep has a
+ * canonical hash, read through {@link readReportFileBounded} (opened
+ * non-blocking, typed and sized by `fstat` on the open descriptor, read
+ * through it). Every other `*.json` entry (a FIFO, a directory, a device, a
+ * symlink to one of them, a file over the cap, an unreadable, unparseable or
+ * too deeply nested file) still counts as a report file but matches nothing,
+ * so it can neither open the gate nor make the scan block, run out of
+ * memory or die instead of deciding.
+ *
  * Residuals: (1) the check proves only that some file carries the approved
- * content. Any `*.json` file in the directory whose content equals it keeps
- * a match, whether it was kept before the edit (a copy) or re-created after
- * it (the agent wrote that content, so it can write it again), and the marker
- * still opens the gate. (2) A reports directory that is empty, unreadable or
- * holds no `*.json` file (every report deleted, the directory made
- * unreadable, the reports renamed) falls back to the "no report file" allow,
- * the same as before this check existed. The marker and the operator's
- * approval itself are untouched in both cases; only the audit trail loses
- * its claim to be the approved content.
+ * content. Any regular `*.json` file within the size cap whose content
+ * equals it keeps a match, whether it was kept before the edit (a copy) or
+ * re-created after it (the agent wrote that content, so it can write it
+ * again), and the marker still opens the gate. (2) A reports directory that
+ * is empty, unreadable or holds no `*.json` entry at all (every report
+ * deleted, the directory made unreadable, the reports renamed) falls back to
+ * the "no report file" allow, the same as before this check existed. The
+ * marker and the operator's approval itself are untouched in both cases;
+ * only the audit trail loses its claim to be the approved content. (3) The
+ * cap bounds each file, not their number: the scan time grows with the
+ * total volume of report files, so an agent that plants hundreds of
+ * megabytes of files just under the cap can still push one scan past the
+ * hook's time budget, which the runtime treats as a non-blocking error (the
+ * same allow as before this check existed).
  *
  * Removing the approved report while other report files remain is a deny:
  * nothing on disk carries the signed content any more. `harness gc --apply`
@@ -742,9 +884,11 @@ function scanReportHashes(dir: string, wanted: ReadonlySet<string>): ReportHashS
  * `fallback` a session marker that matched behind a task marker. The
  * fallback is consulted only when the primary fails the check, so a task
  * marker signed for another report does not hide a session marker that
- * verifies. Unchanged behaviour: a null hash on the accepted marker (ledger
- * only / `--force` approvals bind no report) and a reports directory with no
- * report file at all both allow.
+ * verifies. Unchanged behaviour: a null hash on the accepted marker (no
+ * report resolved, or `--force` over a report the producer could not hash:
+ * too deeply nested or over the size cap) and a reports directory with no
+ * `*.json` entry at all both allow. A forced approval of a hashable report
+ * signs its hash and is checked like any other.
  *
  * The `detail` is the block reason. It names the failing marker kind and the
  * one-command fix, which is also the single migration step for a marker

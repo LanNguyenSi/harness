@@ -71,6 +71,7 @@ import {
   listPersistedReports,
   parseAutoApprove,
   permissionModeAllowed,
+  readReportFileBounded,
   selectNewestStrictSessionReport,
   writeApprovalMarker,
 } from "../../policy-packs/builtin/understanding-before-execution-runtime.js";
@@ -455,13 +456,20 @@ export async function attemptAutoApproval(
     );
     return decline("newest report not pending");
   }
-  let raw: string;
-  try {
-    raw = fs.readFileSync(newest.filePath, "utf8");
-  } catch (err) {
-    note(`auto-approval declined: report unreadable (${(err as Error).message})`);
+  // Read exactly as the gate-read scan reads it (`readReportFileBounded`):
+  // a report over the size cap there matches nothing, so a marker minted
+  // from it would bind content the gate never finds; it declines as an
+  // invalid report instead, like one nested too deeply to hash.
+  const read = readReportFileBounded(newest.filePath);
+  if (!read.ok) {
+    if (read.reason === "too-large") {
+      note(`auto-approval declined: report invalid (${read.detail})`);
+      return decline("report invalid: size");
+    }
+    note(`auto-approval declined: report unreadable (${read.detail})`);
     return decline("report unreadable");
   }
+  const raw = read.raw;
   let parsed: Record<string, unknown>;
   try {
     parsed = JSON.parse(raw) as Record<string, unknown>;

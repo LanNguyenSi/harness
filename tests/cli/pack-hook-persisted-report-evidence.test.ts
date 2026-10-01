@@ -22,25 +22,31 @@
 // Editing the approved file in place, by swap, by symlink or by an
 // unparseable rewrite removes the only match and the gate denies. A task
 // marker that fails falls back to the session marker with the same check.
-// Null-hash markers and a directory with no report file keep today's
-// behaviour. P19 and P23-P33 and the cases after P33 pin all of that,
-// including the approvals that must stay allowed.
+// Only a regular file of at most 1 MiB is read for the hash; any other
+// *.json entry (oversized, a FIFO, a directory, a device) counts as a report
+// file that matches nothing. Null-hash markers and a directory with no
+// *.json entry keep today's behaviour. P19 and P23-P33 and the cases after
+// P33 pin all of that, including the approvals that must stay allowed.
 //
 // Residuals named and pinned below (not closed by this task, tracked
 // elsewhere):
 //   - Key read + uncovered write forges a VALID marker (documented
 //     honest trust model in src/runtime/approval-signing.ts). Unchanged.
-//   - Content kept or re-created: any *.json file of the reports directory
-//     whose content equals the approved content keeps a match, whether it
-//     was kept before the edit (a copy) or re-created after it, so the
-//     marker still allows (pinned by the RESIDUAL test). The signed hash
-//     proves the approved content is on disk, not that the file the audit
-//     trail points at is unmodified.
+//   - Content kept or re-created: any regular *.json file of the reports
+//     directory within the size cap whose content equals the approved
+//     content keeps a match, whether it was kept before the edit (a copy)
+//     or re-created after it, so the marker still allows (pinned by the
+//     RESIDUAL test). The signed hash proves the approved content is on
+//     disk, not that the file the audit trail points at is unmodified.
 //   - No report file left: a reports directory that is empty, unreadable or
-//     holds no *.json file falls back to the "no report file" allow, the
+//     holds no *.json entry falls back to the "no report file" allow, the
 //     same as before the check existed (pinned below). Removing only the
 //     approved report while other report files remain denies; re-approving
 //     recovers (also pinned below).
+//   - Volume: the size cap bounds each file, not their number, so enough
+//     planted files just under the cap can still push one scan past the
+//     hook's time budget (a non-blocking error for the runtime, the same
+//     allow as before the check existed). Not pinned by a test here.
 //   - In-flight subagent record: hook-subagent-start.ts mints the in-flight
 //     record without the hash check, so a record written under a refused
 //     approval can open the gate for that subagent once the parent marker
@@ -67,6 +73,7 @@ import {
   canonicalReportHashOfFile,
   clearApprovalMarker,
   expirePersistedReport,
+  MAX_HASHED_REPORT_BYTES,
   writeActiveClaim,
   writeApprovalMarker,
   writeTaskApprovalMarker,
@@ -1049,6 +1056,77 @@ describe.each(RUNTIMES)("persisted report is evidence, not authority (task 74023
     const refused = await approveUnderstanding(approveArgs);
     expect(refused.marker.ok).toBe(false);
     expect(refused.validation).toMatchObject({ ok: false, field: "report", enforced: true });
+    expect(fs.existsSync(approvalMarkerPathFor(generatedDir, SESSION))).toBe(false);
+    expect(JSON.parse(fs.readFileSync(reportPath, "utf8"))["approvalStatus"]).toBe("pending");
+    expect((await rt.run({ generatedDir, reportsDir })).blocked).toBe(true);
+    const forced = await approveUnderstanding({ ...approveArgs, force: true });
+    expect(forced.marker.ok).toBe(true);
+    const marker = JSON.parse(fs.readFileSync(approvalMarkerPathFor(generatedDir, SESSION), "utf8")) as Record<string, unknown>;
+    expect(marker["reportContentHash"]).toBeNull();
+    expect((await rt.run({ generatedDir, reportsDir })).blocked).toBe(false);
+  });
+
+  // A report file is hashed only when it is a regular file of at most
+  // MAX_HASHED_REPORT_BYTES. A planted file of a few hundred megabytes used to
+  // run the hook out of heap (a dead hook is a non-blocking error, so the call
+  // went through); over the cap it is now a report file that matches nothing.
+  // 2 MiB stands in for any size over the cap.
+  const OVERSIZED_BYTES = 2 * MAX_HASHED_REPORT_BYTES;
+
+  it("oversized file: a tampered approval next to a 2 MiB *.json carrying the approved content blocks, because a file over the size cap matches nothing", async () => {
+    const generatedDir = path.join(tmp, "harness.generated");
+    const reportsDir = path.join(tmp, "reports");
+    const reportPath = await approveRealFlow(generatedDir, reportsDir);
+    // The approved content, padded with JSON whitespace past the cap: within
+    // the cap this would be a copy that keeps a match (residual 1).
+    const approvedJson = fs.readFileSync(reportPath, "utf8");
+    fs.writeFileSync(path.join(reportsDir, "zz-padded.json"), approvedJson + " ".repeat(OVERSIZED_BYTES));
+    editReport(reportPath, (r) => {
+      r["content"] = "SWAPPED";
+    });
+    const out = await rt.run({ generatedDir, reportsDir });
+    expect(out.blocked).toBe(true);
+    expect(out.detail).toMatch(MISMATCH("session"));
+  });
+
+  it("oversized file: an untouched approval next to a 2 MiB *.json still allows", async () => {
+    const generatedDir = path.join(tmp, "harness.generated");
+    const reportsDir = path.join(tmp, "reports");
+    await approveRealFlow(generatedDir, reportsDir);
+    fs.writeFileSync(path.join(reportsDir, "aa-big.json"), `{"pad":"${"x".repeat(OVERSIZED_BYTES)}"}`);
+    const out = await rt.run({ generatedDir, reportsDir });
+    expect(out.blocked).toBe(false);
+    expect(out.source).toBe("marker");
+  });
+
+  it("oversized report: `harness approve understanding` refuses a report over the size cap (the marker could not bind it) and the gate stays closed; --force overrides with an unbound marker", async () => {
+    const generatedDir = path.join(tmp, "harness.generated");
+    const reportsDir = path.join(tmp, "reports");
+    fs.mkdirSync(reportsDir, { recursive: true });
+    const reportPath = path.join(reportsDir, "r1.json");
+    // A valid report whose only flaw is its size: whitespace changes no content.
+    const json = JSON.stringify({
+      sessionId: SESSION,
+      approvalStatus: "pending",
+      createdAt: new Date().toISOString(),
+      content: "the understanding the operator reviewed",
+    });
+    fs.writeFileSync(reportPath, json + " ".repeat(OVERSIZED_BYTES));
+    const approveArgs = {
+      manifest: parseManifest({ version: 1 }),
+      session: SESSION,
+      reportsDir,
+      generatedDir,
+      ledgerAdd: async () => ({ ok: true as const }),
+    };
+    const refused = await approveUnderstanding(approveArgs);
+    expect(refused.marker.ok).toBe(false);
+    expect(refused.validation).toMatchObject({
+      ok: false,
+      field: "report",
+      reason: `${json.length + OVERSIZED_BYTES} bytes, over the 1048576-byte cap for hashing its content, so the approval could not bind it`,
+      enforced: true,
+    });
     expect(fs.existsSync(approvalMarkerPathFor(generatedDir, SESSION))).toBe(false);
     expect(JSON.parse(fs.readFileSync(reportPath, "utf8"))["approvalStatus"]).toBe("pending");
     expect((await rt.run({ generatedDir, reportsDir })).blocked).toBe(true);

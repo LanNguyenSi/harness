@@ -28,6 +28,7 @@ import {
   canonicalReportHash,
   checkApprovalMarker,
   clearApprovalMarker,
+  MAX_HASHED_REPORT_BYTES,
   listPersistedReports,
   writeActiveClaim,
   writeApprovalMarker,
@@ -903,6 +904,25 @@ describe("pack hook pre-tool-use — auto-approval path (ADR slice 1)", () => {
         expect(readReport(filePath)["approvalStatus"]).toBe("pending");
       },
     );
+
+    it("declines a valid pending report over the 1 MiB size cap (the gate-read scan never reads it, so the marker would bind nothing it finds): no marker, no ledger fact, report stays pending", async () => {
+      process.env.CLAUDE_CODE_SESSION_ID = SESSION;
+      getOrCreateSigningKey(generatedDir);
+      const report = writePendingReport();
+      // Trailing JSON whitespace: the content stays valid, only the size grows.
+      fs.appendFileSync(report.filePath, " ".repeat(2 * MAX_HASHED_REPORT_BYTES));
+      const size = fs.statSync(report.filePath).size;
+
+      const result = await call();
+
+      expect(result.blocked).toBe(true);
+      expect(result.stderr).toContain(
+        `auto-approval declined: report invalid (${size} bytes, over the 1048576-byte cap for hashing its content)`,
+      );
+      expect(markerExists()).toBe(false);
+      expect(ledgerCalls).toEqual([]);
+      expect(readReport(report.filePath)["approvalStatus"]).toBe("pending");
+    });
 
     it("mints even when the ledger is unreachable (audit only, never a gate input)", async () => {
       process.env.CLAUDE_CODE_SESSION_ID = SESSION;
