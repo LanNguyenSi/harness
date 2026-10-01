@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.60.0] - 2026-10-01
+
+### Upgrade notes
+
+- A live understanding-gate approval written by an earlier release is denied once after upgrading (its marker signed the report's raw bytes, not the new canonical content hash): run `harness approve understanding` again; the deny reason names it.
+- After approval, deleting the approved report while other report files remain now denies until you re-approve; `harness gc --apply` can do this when it removes an approved report whose marker is still live. Reports larger than 1 MiB or nested deeper than 64 levels can no longer be approved without `--force`.
+- `${REPO}`/`${BRANCH}`-tagged gates now block from a cwd outside every git repository and from a detached HEAD instead of matching any fact; the message names the way forward (`cd <repo>` or `git -C <repo> ...`, `git switch <branch>`).
+
 ### Added
 
 - **`harness record review-subagent --adhoc` records a review for work without an agent-tasks task** (task `bc97a697`). `--task` is no longer a `requiredOption`: exactly one of `--task <id>` or `--adhoc` is required, so a task-based flow still writes both `review-subagent:<task>` and `review-subagent:<branch>` exactly as before and cannot silently skip the task tag the MCP-surface `review-subagent-before-pr-create` gate keys on. With `--adhoc` the fact carries `review-subagent:<branch>` and the verdict only (no task token, and no invented id), which satisfies `review-subagent-before-pr-create-bash` for the recorded branch (tag matching is substring-based, see "Substring matching and the advisory trust model" in docs/CLI.md). Neither option, or both together, exits `64` with a message naming both options; `--adhoc` on a detached HEAD without `--branch` refuses with the existing no-branch reason instead of writing a blank tag. The MCP-surface gate is unchanged: an ad-hoc fact carries no task tag (a branch name that contains a task id can still match it, by the same substring rule).
