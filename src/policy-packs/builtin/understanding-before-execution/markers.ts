@@ -303,6 +303,7 @@ export function checkApprovalMarker(
       if (ageMs > opts.maxAgeMs) {
         const ageMin = Math.round(ageMs / 60_000);
         const maxMin = Math.round(opts.maxAgeMs / 60_000);
+        // KEEP IN SYNC: describeMarkerTtlExpiry (expiry-reason.ts) parses this detail.
         return {
           matched: false,
           detail: `approval marker ${path.basename(filePath)} expired: age ${ageMin}m > max ${maxMin}m (approved at ${approvedAt})`,

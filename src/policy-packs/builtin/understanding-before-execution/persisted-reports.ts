@@ -22,6 +22,15 @@ export interface PersistedReport {
   approvalStatus: string | null;
   approvedAt: string | null;
   /**
+   * Event a PostToolUse boundary expired this report for
+   * (`tool:<tool_name>` or `bash:/<regex>/`), stamped by
+   * `expirePersistedReport`; null for a report without the field (older
+   * reports, package producers, or a TTL-only lapse).
+   */
+  expiredBy: string | null;
+  /** ISO timestamp `expirePersistedReport` stamped; null when absent. */
+  expiredAt: string | null;
+  /**
    * ISO timestamp the producer stamped when it wrote the report; null
    * for legacy reports without the field.
    */
@@ -109,6 +118,8 @@ function readPersistedReport(filePath: string, mtimeMs: number): PersistedReport
     approvalStatus:
       typeof obj["approvalStatus"] === "string" ? (obj["approvalStatus"] as string) : null,
     approvedAt: typeof obj["approvedAt"] === "string" ? (obj["approvedAt"] as string) : null,
+    expiredBy: typeof obj["expiredBy"] === "string" ? (obj["expiredBy"] as string) : null,
+    expiredAt: typeof obj["expiredAt"] === "string" ? (obj["expiredAt"] as string) : null,
     createdAt,
     createdAtMs,
   };
@@ -409,7 +420,8 @@ export interface PersistedReportEvidence {
 export function expirePersistedReport(
   reportsDir: string,
   sessionId: string,
-  now: Date = new Date(), trigger?: string,
+  now: Date = new Date(),
+  trigger?: string,
 ): { ok: true; filePath: string; previousStatus: string | null } | { ok: false; reason: string } {
   const reports = listPersistedReports(reportsDir);
   if (reports.length === 0) {
@@ -443,7 +455,13 @@ export function expirePersistedReport(
   const previousStatus =
     typeof parsed["approvalStatus"] === "string" ? (parsed["approvalStatus"] as string) : null;
   parsed["approvalStatus"] = "expired";
-  parsed["expiredAt"] = now.toISOString(); if (trigger !== undefined && trigger !== "") parsed["expiredBy"] = trigger; else delete parsed["expiredBy"];
+  parsed["expiredAt"] = now.toISOString();
+  if (trigger !== undefined && trigger !== "") {
+    parsed["expiredBy"] = trigger;
+  } else {
+    // No event to record: drop a stale one from an earlier expiry.
+    delete parsed["expiredBy"];
+  }
   try {
     atomicWriteFile(latest.filePath, `${JSON.stringify(parsed, null, 2)}\n`);
   } catch (err) {
@@ -494,11 +512,13 @@ export function checkPersistedReport(
   }
   const safeFileName = sanitizeDetailValue(path.basename(latest.filePath));
   if (latest.approvalStatus !== "approved") {
+    const boundaryExpiry = describeBoundaryExpiry(latest);
+    const expirySuffix = boundaryExpiry !== undefined ? `; ${boundaryExpiry}` : "";
     return {
       claimsApproved: false,
       detail: `latest report ${safeFileName} has approvalStatus=${
         sanitizeDetailValue(latest.approvalStatus ?? "<missing>")
-      }${latest.approvalStatus === "expired" ? describeBoundaryExpiry(latest.filePath) : ""}`,
+      }${expirySuffix}`,
       report: latest,
     };
   }
@@ -515,27 +535,21 @@ export function checkPersistedReport(
 }
 
 /**
- * `; approval expired because <event> at <time>` for a report a PostToolUse
+ * `approval expired because <event> at <time>` for a report a PostToolUse
  * boundary expired (`expirePersistedReport` stamps `expiredBy` and
- * `expiredAt`), `""` when the file carries no `expiredBy` (an older report,
- * or one a package producer wrote) or cannot be read. Both values come from
- * a JSON file the gated agent can write, so both pass `sanitizeDetailValue`.
- * Read here rather than carried on `PersistedReport` so that shape stays as
- * it was.
+ * `expiredAt`), `undefined` for any other report, including an older one or
+ * one a package producer wrote that carries no `expiredBy`. Both values come
+ * from a JSON file the gated agent can write, so both pass
+ * `sanitizeDetailValue`.
  */
-function describeBoundaryExpiry(filePath: string): string {
-  let raw: string;
-  try {
-    raw = fs.readFileSync(filePath, "utf8");
-  } catch {
-    return "";
-  }
-  const parsed = safeJsonParse(raw);
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return "";
-  const obj = parsed as Record<string, unknown>;
-  const by = obj["expiredBy"];
-  if (typeof by !== "string" || by === "") return "";
-  const at = obj["expiredAt"];
-  const when = typeof at === "string" && at !== "" ? ` at ${sanitizeDetailValue(at)}` : "";
-  return `; approval expired because ${sanitizeDetailValue(by)}${when}`;
+export function describeBoundaryExpiry(
+  report: Pick<PersistedReport, "approvalStatus" | "expiredBy" | "expiredAt">,
+): string | undefined {
+  if (report.approvalStatus !== "expired") return undefined;
+  if (report.expiredBy === null || report.expiredBy === "") return undefined;
+  const when =
+    report.expiredAt !== null && report.expiredAt !== ""
+      ? ` at ${sanitizeDetailValue(report.expiredAt)}`
+      : "";
+  return `approval expired because ${sanitizeDetailValue(report.expiredBy)}${when}`;
 }

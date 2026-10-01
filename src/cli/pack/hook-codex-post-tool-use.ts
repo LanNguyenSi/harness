@@ -46,9 +46,10 @@
 // contract), never to a blocked tool call.
 
 import {
-  applyPostToolUseExpiry, describePostToolUseTrigger,
+  applyPostToolUseExpiry,
   defaultReportsDir,
   describePostToolUseExpiry,
+  describePostToolUseTrigger,
   matchPostToolUseBoundary,
   parseApprovalLifecycle,
 } from "../../policy-packs/builtin/understanding-before-execution-runtime.js";
@@ -258,7 +259,8 @@ export async function runPackHookCodexPostToolUseCli(
     toolInput,
     boundary.toolNameMatched,
     reportsDir,
-    opts.now, describePostToolUseTrigger(toolName, boundary),
+    opts.now,
+    describePostToolUseTrigger(toolName, boundary),
   );
 
   const diagnostic = describePostToolUseExpiry(

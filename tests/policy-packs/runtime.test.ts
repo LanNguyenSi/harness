@@ -47,6 +47,8 @@ function mkReport(over: Partial<PersistedReport>): PersistedReport {
     sessionId: null,
     approvalStatus: "pending",
     approvedAt: null,
+    expiredBy: null,
+    expiredAt: null,
     createdAt: null,
     createdAtMs: Date.parse("2026-06-10T12:00:00.000Z"),
     ...over,

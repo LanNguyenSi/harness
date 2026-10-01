@@ -13,7 +13,11 @@
 // Only wording lives here; no gate decision reads any of it.
 
 import type { PostToolUseBoundaryMatch } from "./post-tool-use-boundary.js";
-import { sanitizeDetailValue } from "./persisted-reports.js";
+import {
+  describeBoundaryExpiry,
+  type PersistedReport,
+  sanitizeDetailValue,
+} from "./persisted-reports.js";
 
 /** Matches the detail `checkApprovalMarker` writes for an aged-out marker. */
 const MARKER_TTL_DETAIL_RE = /expired: age \d+m > max (\d+)m \(approved at ([^)]*)\)/;
@@ -38,6 +42,24 @@ export function describeMarkerTtlExpiry(markers: {
     }
   }
   return undefined;
+}
+
+/**
+ * The sentence the PreToolUse hooks append to the AGENT-facing block text
+ * (after the `ux:` or legacy envelope, like the malformed-sections notice),
+ * so the agent reads why its approval lapsed instead of only the stderr
+ * audit line. The max_age sentence wins when the marker check reported a
+ * TTL expiry; otherwise a report a PostToolUse boundary expired supplies
+ * the event and time. `undefined` when neither applies. Wording only.
+ */
+export function approvalExpiryNotice(
+  ttlExpiry: string | undefined,
+  report: PersistedReport | null,
+): string | undefined {
+  if (ttlExpiry !== undefined) return `${ttlExpiry}.`;
+  if (report === null) return undefined;
+  const boundaryExpiry = describeBoundaryExpiry(report);
+  return boundaryExpiry !== undefined ? `${boundaryExpiry}.` : undefined;
 }
 
 /**

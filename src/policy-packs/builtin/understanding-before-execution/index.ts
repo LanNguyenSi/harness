@@ -235,6 +235,7 @@ export {
 // Wording of the approval-expiry reason in the PreToolUse block message and
 // the event a PostToolUse expiry persists (expiry-reason.ts).
 export {
+  approvalExpiryNotice,
   describeMarkerTtlExpiry,
   describePostToolUseTrigger,
   noApprovalMarkerReason,

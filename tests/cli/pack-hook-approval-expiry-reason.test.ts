@@ -19,6 +19,7 @@ import { runPackHookPostToolUseCli } from "../../src/cli/pack/hook-post-tool-use
 import { runPackHookPreToolUseCli } from "../../src/cli/pack/hook-pre-tool-use.js";
 import type { LedgerEntry } from "../../src/policies/index.js";
 import {
+  approvalExpiryNotice,
   checkPersistedReport,
   describeMarkerTtlExpiry,
   expirePersistedReport,
@@ -116,13 +117,28 @@ function dirs(): Dirs {
   };
 }
 
+interface PreOutcome {
+  blocked: boolean;
+  /** The engine reason (approvalCheck.detail), the stderr audit surface. */
+  detail: string;
+  stderr: string;
+  /**
+   * What the AGENT is shown: the stdout JSON `reason` of the Claude hook, and
+   * for the Codex hook the part of its stderr diagnostic after the engine
+   * reason line (the Codex hook has no stdout wire).
+   */
+  agentFacing: string;
+  /** Claude only: the same text as `hookSpecificOutput.permissionDecisionReason`. */
+  permissionDecisionReason?: string;
+}
+
 type PostEvent = { tool_name: string; tool_input?: Record<string, unknown> };
 
 interface Runtime {
   name: string;
   post: (d: Dirs, manifest: Manifest, event: PostEvent, now?: Date) => Promise<void>;
   /** The gate's block text for an Edit / apply_patch with `manifest` as the pack config. */
-  pre: (d: Dirs, manifest: Manifest) => Promise<{ blocked: boolean; detail: string; stderr: string }>;
+  pre: (d: Dirs, manifest: Manifest) => Promise<PreOutcome>;
 }
 
 const RUNTIMES: Runtime[] = [
@@ -140,16 +156,33 @@ const RUNTIMES: Runtime[] = [
     },
     pre: async (d, manifest) => {
       const stderr = bufferStream();
+      const stdout = bufferStream();
       const result = await runPackHookPreToolUseCli({
         manifest,
         stdin: readableFromString(JSON.stringify({ session_id: SESSION, tool_name: "Edit" })),
-        stdout: bufferStream().stream,
+        stdout: stdout.stream,
         stderr: stderr.stream,
         reportsDir: d.reportsDir,
         generatedDir: d.generatedDir,
         ledgerQuery: async (): Promise<LedgerEntry[]> => [],
       });
-      return { blocked: result.blocked, detail: result.approvalCheck.detail, stderr: stderr.read() };
+      const wire = stdout.read().trim();
+      const parsed =
+        wire === ""
+          ? undefined
+          : (JSON.parse(wire) as {
+              reason: string;
+              hookSpecificOutput: { permissionDecisionReason: string };
+            });
+      return {
+        blocked: result.blocked,
+        detail: result.approvalCheck.detail,
+        stderr: stderr.read(),
+        agentFacing: parsed?.reason ?? "",
+        ...(parsed !== undefined
+          ? { permissionDecisionReason: parsed.hookSpecificOutput.permissionDecisionReason }
+          : {}),
+      };
     },
   },
   {
@@ -174,7 +207,18 @@ const RUNTIMES: Runtime[] = [
         generatedDir: d.generatedDir,
         ledgerQuery: async (): Promise<LedgerEntry[]> => [],
       });
-      return { blocked: result.blocked, detail: result.approvalCheck.detail, stderr: stderr.read() };
+      const text = stderr.read();
+      // Everything after the engine-reason line of the BLOCK diagnostic is the
+      // agent-facing block text.
+      const blockAt = text.indexOf("harness pack hook codex: BLOCK");
+      const afterReason =
+        blockAt === -1 ? "" : text.slice(text.indexOf("\n", blockAt) + 1);
+      return {
+        blocked: result.blocked,
+        detail: result.approvalCheck.detail,
+        stderr: text,
+        agentFacing: afterReason,
+      };
     },
   },
 ];
@@ -205,12 +249,20 @@ describe.each(RUNTIMES)("approval expiry reason in the block message: $name hook
       "approval expired because tool:mcp__agent-tasks__pull_requests_merge at 2026-10-01T12:34:56.000Z",
     );
     expect(after.detail).toMatch(/^no approval marker for session sess-expiry; /);
+    // The agent-facing surface (not only the stderr audit line) carries the
+    // reason, under the shipped template's `ux:` envelope.
+    expect(after.agentFacing).toContain(
+      "approval expired because tool:mcp__agent-tasks__pull_requests_merge at 2026-10-01T12:34:56.000Z.",
+    );
+    expect(after.agentFacing).not.toContain("no approval marker for session");
+    if (after.permissionDecisionReason !== undefined) {
+      expect(after.permissionDecisionReason).toBe(after.agentFacing);
+    }
     expect(readReport(reportFile)["expiredBy"]).toBe("tool:mcp__agent-tasks__pull_requests_merge");
     expect(readReport(reportFile)["expiredAt"]).toBe("2026-10-01T12:34:56.000Z");
   });
 
-  it("a Bash boundary persists 'bash:/<regex>/' as the event (Claude only: the Codex shell tool takes the same shared path)", async () => {
-    if (rt.name !== "claude") return;
+  it("a Bash boundary persists 'bash:/<regex>/' as the event and the agent-facing text names it", async () => {
     const d = dirs();
     const manifest = fullTemplateManifest();
     writeApprovalMarker(d.generatedDir, SESSION, {
@@ -223,6 +275,9 @@ describe.each(RUNTIMES)("approval expiry reason in the block message: $name hook
     const after = await rt.pre(d, manifest);
     expect(after.blocked).toBe(true);
     expect(after.detail).toMatch(/approval expired because bash:\/\^gh pr \(merge\|close\)\\b\/ at 20\d\d-/);
+    expect(after.agentFacing).toMatch(
+      /approval expired because bash:\/\^gh pr \(merge\|close\)\\b\/ at 20\d\d-[^\n]*\.$/m,
+    );
   });
 
   it("TTL expiry reads 'max_age <dur> elapsed (approved at <time>)', not a boundary event, and still blocks", async () => {
@@ -236,6 +291,39 @@ describe.each(RUNTIMES)("approval expiry reason in the block message: $name hook
       `approval expired because max_age 240m elapsed (approved at ${approvedAt})`,
     );
     expect(out.detail).not.toMatch(/approval expired because (tool|bash):/);
+    // Same sentence on the agent-facing surface (legacy envelope here: this
+    // manifest declares no `ux:`; the next test covers the shipped `ux:`).
+    expect(out.agentFacing).toContain(
+      `approval expired because max_age 240m elapsed (approved at ${approvedAt}).`,
+    );
+  });
+
+  it("TTL expiry under the shipped template's lifecycle reaches the agent-facing text too", async () => {
+    const d = dirs();
+    const approvedAt = new Date(Date.now() - 5 * 60 * 60 * 1000).toISOString();
+    writeApprovalMarker(d.generatedDir, SESSION, { approvedAt, approvedBy: "operator" });
+    writeReport(d.reportsDir, approvedBody({ approvedAt }));
+    const out = await rt.pre(d, fullTemplateManifest());
+    expect(out.blocked).toBe(true);
+    expect(out.agentFacing).toContain(
+      `approval expired because max_age 240m elapsed (approved at ${approvedAt}).`,
+    );
+    expect(out.agentFacing).not.toMatch(/approval expired because (tool|bash):/);
+    if (out.permissionDecisionReason !== undefined) {
+      expect(out.permissionDecisionReason).toBe(out.agentFacing);
+    }
+  });
+
+  it("no expiry sentence reaches the agent when the approval never lapsed", async () => {
+    const d = dirs();
+    writeReport(d.reportsDir, {
+      sessionId: SESSION,
+      approvalStatus: "pending",
+      createdAt: new Date().toISOString(),
+    });
+    const out = await rt.pre(d, fullTemplateManifest());
+    expect(out.blocked).toBe(true);
+    expect(out.agentFacing).not.toMatch(/approval expired because/);
   });
 
   it("a boundary expiry never reads as a TTL expiry", async () => {
@@ -269,6 +357,7 @@ describe.each(RUNTIMES)("approval expiry reason in the block message: $name hook
     expect(out.blocked).toBe(true);
     expect(out.detail).toMatch(/approvalStatus=expired/);
     expect(out.detail).not.toMatch(/approval expired because/);
+    expect(out.agentFacing).not.toMatch(/approval expired because/);
   });
 
   it("the reported event and time are sanitized: control characters cannot forge an extra reason line", async () => {
@@ -302,6 +391,7 @@ describe.each(RUNTIMES)("approval expiry reason in the block message: $name hook
     const out = await rt.pre(d, manifestWithLifecycle({ max_age: "4h" }));
     expect(out.blocked).toBe(true);
     expect(out.detail).toMatch(/^forged\/unsigned marker rejected for session sess-expiry; /);
+    expect(out.agentFacing).not.toMatch(/approval expired because/);
   });
 });
 
@@ -348,6 +438,36 @@ describe("expirePersistedReport / checkPersistedReport / rewriteReportApproved",
     expect(after["approvalStatus"]).toBe("approved");
     expect(Object.prototype.hasOwnProperty.call(after, "expiredAt")).toBe(false);
     expect(Object.prototype.hasOwnProperty.call(after, "expiredBy")).toBe(false);
+  });
+});
+
+describe("approvalExpiryNotice", () => {
+  const base = { approvalStatus: "expired", expiredBy: null, expiredAt: null };
+
+  it("prefers the max_age sentence and ends it with a period", () => {
+    expect(approvalExpiryNotice("approval expired because max_age 1m elapsed (approved at t)", null)).toBe(
+      "approval expired because max_age 1m elapsed (approved at t).",
+    );
+  });
+
+  it("names a boundary event from the carried report fields, without re-reading the file", () => {
+    const report = {
+      filePath: "/nonexistent/never-read.json",
+      sessionId: SESSION,
+      createdAt: null,
+      createdAtMs: 0,
+      approvedAt: null,
+      ...base,
+      expiredBy: "tool:x",
+      expiredAt: "2026-10-01T00:00:00.000Z",
+    };
+    expect(approvalExpiryNotice(undefined, report)).toBe(
+      "approval expired because tool:x at 2026-10-01T00:00:00.000Z.",
+    );
+  });
+
+  it("is undefined without a TTL sentence or a report event", () => {
+    expect(approvalExpiryNotice(undefined, null)).toBeUndefined();
   });
 });
 

@@ -63,14 +63,17 @@ import { renderProducers } from "../../policies/producers.js";
 import {
   ADOPTION_LEDGER_DIRNAME,
   CLAUDE_CODE_HARNESS,
-  checkOperatorApprovalMarkers, describeMarkerTtlExpiry, noApprovalMarkerReason,
+  approvalExpiryNotice,
+  checkOperatorApprovalMarkers,
   checkPersistedReport,
   defaultReportsDir,
   delegationMarkerPathFor,
   delegationReportPathFor,
+  describeMarkerTtlExpiry,
   harnessAllowed,
   listPersistedReports,
   matchLedgerEntries,
+  noApprovalMarkerReason,
   parseAutoApprove,
   readActiveClaim,
   recordPermissionModeObservation,
@@ -409,6 +412,7 @@ function blockJson(
   escapeHint?: string | null,
   malformedSections?: string[],
   retryInstruction?: string | null,
+  expiryNotice?: string | null,
 ): string {
   // When the pack config declares `ux:`, the agent-facing surface
   // becomes the plain-language `{ cannot, required, run }` shape, and
@@ -435,6 +439,13 @@ function blockJson(
     const schemaHint = renderReportSchemaHint();
     const producersBlock = renderProducers(producers, { SESSION_ID: sessionId });
     reasonText = `Understanding Gate: ${reason}. Tool: ${toolName}. ${suffix}\n${schemaHint}${producersBlock}`;
+  }
+  // Say why the approval lapsed (max_age elapsed, or the PostToolUse event
+  // that expired it), after the ux/legacy envelope for the same reason the
+  // malformed-sections notice below is appended there: both envelopes omit
+  // the engine vocabulary, so without this the agent would not see it.
+  if (expiryNotice) {
+    reasonText = `${reasonText}\n\n${expiryNotice}`;
   }
   // Name the malformed sections from the session's own latest parse-error
   // log, when it carries any (task 823837fd, follow-up to 7e29e5d7): a
@@ -741,7 +752,10 @@ export async function runPackHookPreToolUseCli(
   // task-completion boundary tool. See understanding-before-execution-
   // runtime.ts's `OperatorMarkerApproval.expired` doc for the full
   // distinction.
-  let markerExpired = false, markerTtlExpiry: string | undefined; // markerTtlExpiry: max_age sentence, wording only
+  let markerExpired = false;
+  // The max_age sentence for the block reason (wording only, never read by a
+  // gate decision); set when the marker check reported a TTL expiry.
+  let markerTtlExpiry: string | undefined;
   // True when checkOperatorApprovalMarkers found a marker FILE that failed
   // signature verification (harness/f9485cc7) — missing/invalid signature,
   // wrong alg, or tampered payload — for either the task-scoped or
@@ -774,7 +788,8 @@ export async function runPackHookPreToolUseCli(
       declared.config,
       stderr,
     );
-    markerExpired = markers.expired; markerTtlExpiry = describeMarkerTtlExpiry(markers);
+    markerExpired = markers.expired;
+    markerTtlExpiry = describeMarkerTtlExpiry(markers);
     markerForged = markers.forged;
     if (markers.sessionBindingRefused) sessionBindingRefusedDetail = markers.detail;
     if (markerForged) {
@@ -935,7 +950,13 @@ export async function runPackHookPreToolUseCli(
         ? `forged/unsigned in-flight record for agent ${displayAgentId} rejected for session ${sessionId}; ${report.detail}; ${ledger.detail}`
         : sessionBindingRefusedDetail !== undefined
           ? `${sessionBindingRefusedDetail}; ${report.detail}; ${ledger.detail}${subagentRecordSentence}`
-          : noApprovalMarkerReason(sessionId, markerTtlExpiry, report.detail, ledger.detail, subagentRecordSentence)
+          : noApprovalMarkerReason(
+              sessionId,
+              markerTtlExpiry,
+              report.detail,
+              ledger.detail,
+              subagentRecordSentence,
+            )
     : `generatedDir not resolvable (test/injection path); ${report.detail}; ${ledger.detail}`;
 
   // Stage the session id so `harness approve`, run from the operator's
@@ -1485,6 +1506,16 @@ export async function runPackHookPreToolUseCli(
   // path can still succeed on the very next retry regardless of the
   // subagent record's own state, so telling the agent to stop here would
   // be wrong.
+  // The expiry notice belongs to the routine "no approval marker" reason
+  // only: a forged marker, a forged in-flight record or a refused task
+  // binding keep their own reasons and never carry it.
+  const expiryNotice =
+    generatedDir !== undefined &&
+    !markerForged &&
+    !inflightForged &&
+    sessionBindingRefusedDetail === undefined
+      ? approvalExpiryNotice(markerTtlExpiry, report.report)
+      : undefined;
   const agentInstruction = reportScanTimedOut
     ? DELEGATION_REPORT_RETRY_INSTRUCTION
     : displayAgentId !== undefined && subagentRecordSentence.length > 0
@@ -1500,6 +1531,7 @@ export async function runPackHookPreToolUseCli(
       escapeHint,
       latestParseError?.malformedSections,
       agentInstruction,
+      expiryNotice,
     )}\n`,
   );
   return {

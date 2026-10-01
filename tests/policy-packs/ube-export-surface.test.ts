@@ -91,9 +91,9 @@ import * as ubeShim from "../../src/policy-packs/builtin/understanding-before-ex
 // InflightRecordsSummary) are absent from this list for the same reason
 // the delegation module's own type-only exports are.
 // Widened a twelfth time (approval-expiry reason in the block message) by
-// describePostToolUseTrigger (post-tool-use-boundary.ts) and
-// describeMarkerTtlExpiry / noApprovalMarkerReason (expiry-reason.ts).
-// 82 -> 85.
+// approvalExpiryNotice, describeMarkerTtlExpiry, describePostToolUseTrigger
+// and noApprovalMarkerReason (all four defined in expiry-reason.ts).
+// 82 -> 86.
 // Widened an eleventh time (harness 5018c0c4, session approval bound to
 // the claimed task) by checkSessionApprovalMarker. 81 -> 82. Its
 // SessionMarkerCheck interface is type-only and absent for the same
@@ -126,6 +126,7 @@ const EXPECTED_EXPORTS = [
   "TOLERANT_FALLBACK_MAX_AGE_MS",
   "activeClaimPathFor",
   "applyPostToolUseExpiry",
+  "approvalExpiryNotice",
   "approvalMarkerPathFor",
   "approvedLedgerTagFor",
   "autoApprovedByFor",
@@ -193,9 +194,9 @@ const EXPECTED_EXPORTS = [
 ] as const;
 
 describe("understanding-before-execution-runtime shim export surface", () => {
-  it("exports exactly the pinned 85-name surface, sorted", () => {
+  it("exports exactly the pinned 86-name surface, sorted", () => {
     const actual = Object.keys(ubeShim).sort();
-    expect(EXPECTED_EXPORTS).toHaveLength(85);
+    expect(EXPECTED_EXPORTS).toHaveLength(86);
     expect(actual).toEqual([...EXPECTED_EXPORTS].sort());
   });
 

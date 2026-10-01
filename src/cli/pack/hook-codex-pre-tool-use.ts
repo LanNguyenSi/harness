@@ -23,10 +23,13 @@
 import * as path from "node:path";
 import { queryLedgerByTag, type LedgerEntry } from "../../policies/index.js";
 import {
-  checkOperatorApprovalMarkers, describeMarkerTtlExpiry, noApprovalMarkerReason,
+  approvalExpiryNotice,
+  checkOperatorApprovalMarkers,
   checkPersistedReport,
   defaultReportsDir,
+  describeMarkerTtlExpiry,
   matchLedgerEntries,
+  noApprovalMarkerReason,
   type ApprovalCheckResult,
 } from "../../policy-packs/builtin/understanding-before-execution-runtime.js";
 import { findLatestParseError, renderMalformedSectionsNotice } from "../approve/understanding.js";
@@ -339,7 +342,10 @@ export async function runPackHookCodexPreToolUseCli(
   // mirroring the Claude hook: blocks like a missing marker, with its
   // own reason text.
   let sessionBindingRefusedDetail: string | undefined;
-  let markerExpired = false, markerTtlExpiry: string | undefined; // markerTtlExpiry: max_age sentence, wording only
+  let markerExpired = false;
+  // The max_age sentence for the block reason (wording only, never read by a
+  // gate decision); set when the marker check reported a TTL expiry.
+  let markerTtlExpiry: string | undefined;
   // True when checkOperatorApprovalMarkers found a marker FILE that failed
   // signature verification (harness/f9485cc7), mirroring the Claude hook.
   let markerForged = false;
@@ -350,7 +356,8 @@ export async function runPackHookCodexPreToolUseCli(
       declared.config,
       stderr,
     );
-    markerExpired = markers.expired; markerTtlExpiry = describeMarkerTtlExpiry(markers);
+    markerExpired = markers.expired;
+    markerTtlExpiry = describeMarkerTtlExpiry(markers);
     markerForged = markers.forged;
     if (markers.source !== "task") {
       // Trace the task-marker miss, mirroring the Claude hook, so an
@@ -556,6 +563,16 @@ export async function runPackHookCodexPreToolUseCli(
   );
   if (malformedNotice) {
     agentFacing = `${agentFacing}\n\n${malformedNotice}`;
+  }
+  // Say why the approval lapsed, mirroring the Claude hook: only on the
+  // routine "no approval marker" reason, never on a forged marker or a
+  // refused task binding.
+  const expiryNotice =
+    generatedDir !== undefined && !markerForged && sessionBindingRefusedDetail === undefined
+      ? approvalExpiryNotice(markerTtlExpiry, report.report)
+      : undefined;
+  if (expiryNotice !== undefined) {
+    agentFacing = `${agentFacing}\n\n${expiryNotice}`;
   }
   const diagnostic = configUx
     ? `harness pack hook codex: BLOCK: ${reason}.\n${agentFacing}`

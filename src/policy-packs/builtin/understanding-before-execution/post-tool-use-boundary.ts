@@ -220,7 +220,8 @@ export function applyPostToolUseExpiry(
   toolInput: unknown,
   toolNameMatched: boolean,
   reportsDir: string,
-  now?: Date, trigger?: string,
+  now?: Date,
+  trigger?: string,
 ): ApplyPostToolUseExpiryResult {
   const markerPath = approvalMarkerPathFor(generatedDir, sessionId);
   const wasMarkerPresent = fs.existsSync(markerPath);
