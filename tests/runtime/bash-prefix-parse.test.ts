@@ -363,6 +363,14 @@ describe("parseBashPrefix", () => {
         expect(parseBashPrefix("A=a\\ b| cd /t && y").cdTarget).toBe("/t");
       });
 
+      it("residual, not covered: a mid-quote env word swallows an unquoted ;, so a later backgrounded assignment of the same name is read as leading and overrides the value bash keeps", () => {
+        // bash: `D=a"b c"; D=dev&T` runs `D=dev` in the background, T sees `ab c`.
+        const r = parseBashPrefix('D=postgres://prod-host"/db x"; D=dev&T');
+        expect(r.inlineEnv).toEqual({ D: "dev&T" });
+        // the plain twin reads the same override on the pre-change parser
+        expect(parseBashPrefix("D=/srv/prod; D=dev&T").inlineEnv).toEqual({ D: "dev&T" });
+      });
+
       it("drops a backslash-newline line continuation outside quotes (bash: VAR=pro\\<NL>d -> prod)", () => {
         const cmd = "VAR=pro\\\nd cmd";
         const r = parseBashPrefix(cmd);
@@ -563,6 +571,15 @@ describe("parseBashPrefix", () => {
         const r = parseBashPrefix('git switch "ab$V\\" && rm');
         expect(r.branchTarget).toBe(null);
         expect(r.remainderStart).toBe(0);
+      });
+
+      it("residual, not covered: an escaped ; keeps the branch word going, so the words behind it make the switch a no-separator clause (no branch)", () => {
+        // bash: `git switch release/1.2\; cd dev && T` passes `release/1.2;`, `cd`, `dev` to git.
+        const r = parseBashPrefix("git switch release/1.2\\; cd dev && T");
+        expect(r.branchTarget).toBe(null);
+        expect(r.remainderStart).toBe(0);
+        // the plain twin (a branch word followed by more words) has no branch on the pre-change parser either
+        expect(parseBashPrefix("git switch release/1 checkout main && T").branchTarget).toBe(null);
       });
 
       it("skips an escaped quote inside the `-C <path>` value", () => {

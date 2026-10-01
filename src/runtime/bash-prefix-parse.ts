@@ -90,32 +90,56 @@
 // the first matching quote ends the word, and a branch word that does not
 // start with a quote but has a `$` in a double-quoted part (form 3).
 //
-// What was measured, and what was not: the cd targets on
-// `scripts/measure-bash-prefix-parse.mjs`'s arms (no honest loss against
-// master and the shipped release; 11 of 17 arms prove nothing), plus a
-// bash-referee differential over generated commands (see the pull
-// request). That is NOT a general "nothing extracted before is lost".
-// Known residuals, not covered:
+// ACCEPTANCE RULE (task b093911d): a reader that changes word boundaries
+// cannot promise "nothing extracted before is lost", so this change is
+// held to a signal-level rule instead, measured against the pre-change
+// parser: (i) no production signal (env value, branch, cd target,
+// kubectl remainder) that the old parser saw and this one does not, on a
+// named high-risk shape set (plain, quoted and escaped env values and cd
+// paths, literal, quoted and `release/"$V"` branches followed by a cd or
+// kubectl, `__proto__=`, the `'\''` idiom, `\"` in double quotes) and on
+// a replay of real agent commands; (ii) fewer missed signals than the old
+// parser on fixed-seed generated corpora with bash as referee, for env,
+// branch and cd from a non-prod cwd; (iii) every remaining new miss
+// belongs to a named residual class whose plain twin the old parser
+// already misses; (iv) the cd downgrades from a prod cwd are reported with
+// numbers. What was measured against that rule is in the CHANGELOG entry
+// and the pull request; the cd-target arms of
+// `scripts/measure-bash-prefix-parse.mjs` show no lost honest target
+// against master and the shipped release (11 of 17 arms prove nothing).
+// Known residuals, not covered. The old parser already gets the plain
+// twin of each of the first four wrong, so they are follow-up work for
+// the prefix walk; the last two are shapes outside the high-risk set,
+// pinned by tests:
+//   - OPERATOR SWALLOWED BY AN ENV WORD: an inline env word that does not
+//     start with a quote swallows unquoted `;`, `&`, `|` and `||` (the
+//     plain `A=x|| cd /t && y` always has; an escape-led or mid-quote word
+//     now does too, kept so `V=\"; W=/tmp cmd` still yields `W` and so a
+//     clause bash runs after a short circuit is still reached). So a `cd`
+//     or assignment behind the operator is read as a leading one: a
+//     phantom `cd` bash never runs (`A=a\ b|| cd /t && y`), or a later
+//     backgrounded assignment that overrides the value bash keeps
+//     (`D=a"b c"; D=dev&T` reads `dev&T`, plain twin `D=x; D=dev&T`);
+//   - PLAIN PATH ACROSS `|`: a plain `cd` path ends at whitespace, `;` or
+//     `&` only, so `cd /srv/p|rod; T` reads `/srv/p|rod` where bash runs
+//     `cd /srv/p` in a pipeline;
+//   - FIRST CD ONLY, AND-LIST BACKGROUNDED: only the first leading `cd` is
+//     read (a later `cd` wins in bash), and a `cd` in an and-list that a
+//     later `&` backgrounds is read although bash runs it in a subshell;
+//   - WORD FOLLOWED BY MORE WORDS: a cd or branch word with no `&&` / `;`
+//     right behind it yields no clause, which now also covers an escaped
+//     `;` inside the word (`git switch release/1.2\; cd dev && T` passes
+//     `release/1.2;`, `cd`, `dev` to git), plain twin
+//     `git switch release/1 checkout main && T`;
 //   - a `cd` path or branch word that carries a quote or an escape and is
 //     ended at an unquoted `|`, `<`, `>`, `(` or `)` (`cd /srv/p|ro"d"`)
-//     rejects its clause and stops the prefix walk; the old reading
-//     accepted a phantom word there and could reach a later honest
-//     clause by accident;
-//   - the plain `A=x|| cd /t && y` and an escape-led word ended by a
-//     single `|` (`A=a\ b| cd /t && y`) still read the `cd` behind the
-//     operator (bash skips it after `||` and runs it in a pipeline
-//     subshell after `|`). Ending the walk at `||` and never reading a
-//     `cd` clause after `|` is a separate follow-up, not done here;
-//   - an escape-led or mid-quote env word swallows an unquoted `;` or `&`
-//     (kept on purpose, so `V=\"; W=/tmp cmd` still yields `W`), which
-//     makes the assignment behind it read as a leading one even where
-//     bash runs it in a pipeline subshell and an earlier value of the
-//     same name wins;
-//   - an escape-led env word ended by `||` also drops what bash really
-//     runs after the short-circuited right side (`A=a\ b|| x; D=y cmd`
-//     no longer yields `D`);
+//     rejects its clause and stops the prefix walk;
 //   - ANSI-C `$'...'` and `$VAR` / `$(...)` are kept as raw text, so a
 //     value glued to an unset variable (`D='o'$d`) reads `o$d`.
+// Because this reader now reads more quoted and escaped `cd` paths, the
+// first three classes also produce more cd DOWNGRADES from a prod cwd
+// than the old parser did (a non-prod `cd` that bash does not end in);
+// that trade is measured and accepted in the pull request.
 //
 // MEASUREMENT RULE (task 47297478): any claim about this parser's
 // CD-TARGET extraction versus another build (lost or gained `cdTarget`
