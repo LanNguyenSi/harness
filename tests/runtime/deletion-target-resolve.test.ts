@@ -977,3 +977,28 @@ describe("backslash-newline line continuation over-gates (fail-closed ceiling)",
     expect(v?.unresolvable).toBe(true);
   });
 });
+
+// Task 241d9e9e. A word with a NUL-decoding ANSI-C escape decodes to a value
+// that still carries its flag or path text (a literal U+0000 where the escape
+// stands), so the resolver still recognises the deletion verb and still
+// gates. bash (GNU bash 3.2.57, `printf '[%s]' <word> | od -c`) truncates
+// the run at the NUL and runs the plain command: `$'-rf\0'` is `-rf`. A raw
+// `$'...'` token in place of the decoded value would hide the verb, and the
+// environment-independent unresolvable-target gate with it.
+describe("resolveDeletionTarget: NUL-escape spellings keep their verdict (task 241d9e9e)", () => {
+  it.each([
+    ["rm -rf cluster with a NUL after the flag", "rm $'-rf\\0' /home/x", "rm"],
+    ["rm -rf with a NUL inside the target", "rm -rf $'/\\0tmp/x'", "rm"],
+    ["git clean -fd with a NUL after the flag", "git clean $'-fd\\0'", "git-clean"],
+    ["git clean -f with a control escape", "git clean $'-f\\c@'", "git-clean"],
+  ])("%s: %s", (_label, command, verb) => {
+    const v = resolveDeletionTarget(command, ROOTS);
+    expect(v).not.toBeNull();
+    expect(v?.verb).toBe(verb);
+    expect(v?.unresolvable).toBe(true);
+  });
+
+  it("gates the plain twin the same way", () => {
+    expect(resolveDeletionTarget("rm -rf /home/x", ROOTS)?.unresolvable).toBe(true);
+  });
+});

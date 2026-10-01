@@ -2,10 +2,26 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { Readable, Writable } from "node:stream";
-import { afterEach, describe, expect, it } from "vitest";
-import { runPackHookPostMergeGateRecordCli } from "../../src/cli/pack/hook-post-merge-gate-record.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  recorderTriggerMatches,
+  runPackHookPostMergeGateRecordCli,
+} from "../../src/cli/pack/hook-post-merge-gate-record.js";
 import { MERGED_TAG_PREFIX } from "../../src/policy-packs/builtin/post-merge-gate-runtime.js";
 import { parseManifest, type Manifest } from "../../src/schema/index.js";
+
+// Pass-through spies on the three normalisers, so a test can observe which
+// arms the recorder trigger actually computed.
+vi.mock("../../src/runtime/command-normalize.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../src/runtime/command-normalize.js")>();
+  return {
+    ...actual,
+    normalizeCommand: vi.fn(actual.normalizeCommand),
+    normalizeCommandAmpAware: vi.fn(actual.normalizeCommandAmpAware),
+    normalizeCommandQuoteAware: vi.fn(actual.normalizeCommandQuoteAware),
+  };
+});
+import * as normalizers from "../../src/runtime/command-normalize.js";
 
 let cleanups: Array<() => void> = [];
 afterEach(() => {
@@ -662,5 +678,143 @@ describe("runPackHookPostMergeGateRecordCli — no fact on anything but confirme
     expect(result.exitCode).toBe(0);
     expect(result.wrote).toBe(false);
     expect(result.diagnostic).toMatch(/mcp connect refused/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Trigger arms: the recorder mirrors the gate's four arms (raw, normalizeCommand,
+// normalizeCommandAmpAware, normalizeCommandQuoteAware), raw first and lazy.
+// Each row is a spelling the gate matches and the raw GH_PR_MERGE_BASH_RE misses.
+// ---------------------------------------------------------------------------
+
+const MISSED_RAW_FORMS: Array<{ arm: "normalize" | "amp" | "quote"; command: string }> = [
+  // Only the primary normaliser peels these wrappers.
+  { arm: "normalize", command: "env gh pr merge 1" },
+  { arm: "normalize", command: "nice gh pr merge 1 --squash" },
+  { arm: "normalize", command: "command gh pr merge 1" },
+  { arm: "normalize", command: "time gh pr merge 1" },
+  { arm: "normalize", command: "cd /tmp && nice gh pr merge 1" },
+  { arm: "normalize", command: "false || nice -n 5 gh pr merge 1" },
+  { arm: "normalize", command: "echo a | nice gh pr merge 1" },
+  { arm: "normalize", command: "env A=1 gh  pr merge 1" },
+  { arm: "normalize", command: "cd /tmp && env FOO=bar gh pr merge 1" },
+  { arm: "normalize", command: "git -C /tmp status && nice gh pr merge 1" },
+  { arm: "normalize", command: "(nice gh pr merge 1)" },
+  { arm: "normalize", command: "echo a\nnice gh pr merge 1" },
+  { arm: "normalize", command: "VAR='x y' env gh pr merge 2 --admin" },
+  // A bare `&` chain before a wrapper: only the amp-aware pass segments there.
+  { arm: "amp", command: "echo hi & nice gh pr merge 1 --squash" },
+  { arm: "amp", command: "echo hi & env gh pr merge 1" },
+  { arm: "amp", command: "echo hi & command gh pr merge 1" },
+  { arm: "amp", command: "echo hi & time gh pr merge 1" },
+  { arm: "amp", command: 'echo "a & b" & nice gh pr merge 4' },
+  // A boundary character inside a quoted assignment value: only the quote-aware pass.
+  { arm: "quote", command: "VAR='a; b' gh pr merge 1" },
+  { arm: "quote", command: 'VAR="a; b" gh pr merge 1 --squash' },
+  { arm: "quote", command: "VAR='a; b' nice gh pr merge 1" },
+];
+
+async function runRecorder(
+  command: string,
+  toolOutput: unknown,
+): Promise<{ wrote: boolean; writes: number }> {
+  const repo = makeRepoFixture("svc", "feat/cool", SHA);
+  let writes = 0;
+  const result = await runPackHookPostMergeGateRecordCli({
+    stdin: streamFrom(eventJson({ cwd: repo, tool_input: { command }, tool_output: toolOutput })),
+    stderr: captureStream().stream,
+    manifest: manifestNoPolicyPacks(),
+    writeLedger: async () => {
+      writes += 1;
+      return { ok: true };
+    },
+  });
+  return { wrote: result.wrote, writes };
+}
+
+describe("runPackHookPostMergeGateRecordCli - trigger mirrors the four gate arms", () => {
+  for (const { arm, command } of MISSED_RAW_FORMS) {
+    it(`records a confirmed merge for ${JSON.stringify(command)} (${arm} arm)`, async () => {
+      const r = await runRecorder(command, { exit_code: 0 });
+      expect(r.wrote).toBe(true);
+      expect(r.writes).toBe(1);
+    });
+  }
+
+  it("still writes nothing for a missed-raw spelling when the merge is not confirmed", async () => {
+    const r = await runRecorder("echo hi & nice gh pr merge 1 --squash", { exit_code: 1 });
+    expect(r.wrote).toBe(false);
+    expect(r.writes).toBe(0);
+  });
+
+  for (const command of [
+    "gh pr view 1",
+    "echo gh pr merge-ish",
+    "echo hi & nice gh pr view 1",
+    "VAR='a; b' gh pr view 1",
+    "git merge main",
+    "echo 'gh pr merge 1'",
+  ]) {
+    it(`writes nothing for the non-merge command ${JSON.stringify(command)}`, async () => {
+      const r = await runRecorder(command, { exit_code: 0 });
+      expect(r.wrote).toBe(false);
+      expect(r.writes).toBe(0);
+    });
+  }
+
+  it("keeps matching every raw-matching spelling (additive)", () => {
+    for (const c of [
+      "gh pr merge 1",
+      "cd /x && gh pr merge 1 --squash",
+      "A=x&gh pr merge 1",
+      "echo hi & gh pr merge 1",
+      "(gh pr merge 1)",
+      "FOO=bar gh pr merge 2",
+    ]) {
+      expect(recorderTriggerMatches(c)).toBe(true);
+    }
+  });
+
+  describe("lazy, raw-first arm order", () => {
+    const spies = (): [number, number, number] => [
+      vi.mocked(normalizers.normalizeCommand).mock.calls.length,
+      vi.mocked(normalizers.normalizeCommandAmpAware).mock.calls.length,
+      vi.mocked(normalizers.normalizeCommandQuoteAware).mock.calls.length,
+    ];
+    const reset = (): void => {
+      vi.mocked(normalizers.normalizeCommand).mockClear();
+      vi.mocked(normalizers.normalizeCommandAmpAware).mockClear();
+      vi.mocked(normalizers.normalizeCommandQuoteAware).mockClear();
+    };
+
+    it("a raw match computes no normalisation", () => {
+      reset();
+      expect(recorderTriggerMatches("cd /x && gh pr merge 1")).toBe(true);
+      expect(spies()).toEqual([0, 0, 0]);
+    });
+
+    it("a normalizeCommand-only form stops after the first normaliser", () => {
+      reset();
+      expect(recorderTriggerMatches("nice gh pr merge 1")).toBe(true);
+      expect(spies()).toEqual([1, 0, 0]);
+    });
+
+    it("an amp-aware-only form stops after the second normaliser", () => {
+      reset();
+      expect(recorderTriggerMatches("echo hi & nice gh pr merge 1")).toBe(true);
+      expect(spies()).toEqual([1, 1, 0]);
+    });
+
+    it("a quote-aware-only form reaches the third normaliser", () => {
+      reset();
+      expect(recorderTriggerMatches("VAR='a; b' gh pr merge 1")).toBe(true);
+      expect(spies()).toEqual([1, 1, 1]);
+    });
+
+    it("a non-merge command runs all three and misses", () => {
+      reset();
+      expect(recorderTriggerMatches("gh pr view 1")).toBe(false);
+      expect(spies()).toEqual([1, 1, 1]);
+    });
   });
 });
