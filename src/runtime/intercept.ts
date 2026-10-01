@@ -1308,6 +1308,11 @@ function resolveAttributedContexts(
     contexts.push(cwdContext);
   };
   const cwdReal = realpathOrSelf(cwdBuiltins.CWD);
+  const cwdContextIsBlank =
+    emptyIdentifierGuard(policy.requires?.ledger_tag ?? "", {
+      REPO: cwdBuiltins.REPO,
+      BRANCH: cwdBuiltins.BRANCH,
+    }) !== null;
 
   for (const seg of segments) {
     if (!satisfying.has(seg)) continue;
@@ -1324,8 +1329,9 @@ function resolveAttributedContexts(
     // demanded UNCONDITIONALLY here, regardless of whether the target came
     // from the segment's own explicit flag or was inherited from a
     // preceding `cd`. `seg.ownTarget` is no longer read for this decision.
-    addCwdOnce();
-
+    // The one exception is `cwdContextIsBlank` below: it is decided after
+    // the target resolved, so the cwd context is added from the branches
+    // of this loop body instead of up front, in the same order as before.
     const resolvedLexical = path.resolve(cwdBuiltins.CWD, seg.effectiveTarget);
     const resolved = realpathOrSelf(resolvedLexical);
     if (resolved === cwdReal) {
@@ -1345,6 +1351,25 @@ function resolveAttributedContexts(
     }
 
     const signature = [gitCtx.repo, gitCtx.branch, gitCtx.sha].join("|");
+
+    // Empty-identifier exception to the universal-additive rule. A cwd
+    // context whose `${REPO}` / `${BRANCH}` (whichever this policy's
+    // ledger_tag references) is blank can never be satisfied: the
+    // empty-identifier guard denies it without a ledger query. Demanding
+    // it next to a target that resolved to a real repository would deny
+    // the very remedy the guard's message names (`git -C <repo> ...`, or
+    // `cd <repo> && ...` in one command) for an agent whose cwd is
+    // outside every repository or on a detached HEAD. At the base commit
+    // that cwd context rendered a blank tag which ANY fact satisfied, so
+    // dropping it for a segment whose own target is a real repository is
+    // no weaker than the base, and the target's own context is still
+    // demanded in full. Only a blank cwd context is dropped: a non-blank
+    // cwd context keeps the rule above unchanged, a segment without a
+    // resolved target (a bare `git status`) keeps its cwd context and
+    // still denies with the hint, and a target that is the cwd repository
+    // itself (same signature) is still the cwd context.
+    if (!cwdContextIsBlank || signature === cwdSignature) addCwdOnce();
+
     if (signature === cwdSignature) {
       // D-015: a foreign target that resolves to cwd's own REAL identity
       // (e.g. a subdirectory of the cwd repo reached via `-C`, a

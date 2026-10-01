@@ -2454,6 +2454,46 @@ describe("intercept: empty REPO / BRANCH never renders a blank ledger tag", () =
     expect(result.blockJson?.reason).not.toContain("grounding-mcp");
   });
 
+  it("risk.degraded_fail_posture: fail_open does not relax an empty identifier: deny, zero ledger queries", async () => {
+    const ledger = makeLedger({ kind: "ok", entries: [factEntry("preflight:other-repo ready:true")] });
+    const result = await intercept({
+      manifest: makeManifest({
+        policies: [templatePolicy("preflight-before-investigation")],
+        degradedFailPosture: "fail_open",
+      }),
+      event: bashEvent("git status"),
+      ledger,
+      builtins: EMPTY_REPO,
+      now: NOW,
+    });
+    expect(result.decisions[0]?.outcome).toBe("deny");
+    expect(result.blockJson).not.toBeNull();
+    expect(ledger.queryCalls).toEqual([]);
+    expect(result.blockJson?.reason).toContain("cd <repo>");
+  });
+
+  it("risk.degraded_fail_posture: fail_open with an empty REPO and an unresolved extract still denies, never warn-degraded", async () => {
+    const base = templatePolicy("preflight-before-investigation");
+    const withExtract = {
+      ...base,
+      name: "empty-repo-unresolved-extract",
+      trigger: { ...base.trigger, extract: { X: "toolArgs.nothere" } },
+      requires: { ledger_tag: "preflight:${REPO}:${X}" },
+    } as Policy;
+    const ledger = makeLedger({ kind: "ok", entries: [factEntry("preflight:other-repo")] });
+    const result = await intercept({
+      manifest: makeManifest({ policies: [withExtract], degradedFailPosture: "fail_open" }),
+      event: bashEvent("git status"),
+      ledger,
+      builtins: EMPTY_REPO,
+      now: NOW,
+    });
+    expect(result.decisions[0]?.outcome).toBe("deny");
+    expect(result.decisions[0]?.outcome).not.toBe("warn-degraded");
+    expect(result.blockJson).not.toBeNull();
+    expect(ledger.queryCalls).toEqual([]);
+  });
+
   it("unchanged: a named repo and branch with a matching fact allow; a missing fact keeps the ux deny text", async () => {
     const allowLedger = makeLedger({
       kind: "ok",
