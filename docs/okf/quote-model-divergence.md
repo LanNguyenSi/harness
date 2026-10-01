@@ -3,7 +3,7 @@ type: overview
 title: Shell quote models, measured divergence against bash
 description: The policy engine has four independent shell-word models plus a raw-regex trigger layer. This records what each actually extracts, measured against real bash, which divergences are fail-open, and the evidence-led ordering for closing them.
 tags: [policy-engine, bash-match, quote-model, fail-open, measurement]
-timestamp: 2026-10-01T07:07:17Z
+timestamp: 2026-10-01T07:57:02Z
 sources:
   - src/runtime/command-normalize.ts
   - src/cli/init/composer.ts
@@ -204,10 +204,33 @@ undekodiert und damit versteckt (das Wort wird roh gehalten), `$VAR` und
 (quote- und escape-freien) Env-Wert weiterhin nicht (`A=x;B=2` gibt
 `A="x;B=2"`, `A=x|| cd /t && y` liest das `cd`). Ein Wort, dessen
 schließendes Quote nur ein escaptes sein könnte (`VAR="abc\" cd /x && y`,
-für bash unvollständig), wird wie vorher mit dem ersten Quote gelesen,
-damit nichts verloren geht, das vorher extrahiert wurde. Zusätzlich ist
+für bash unvollständig), wird wie vorher mit dem ersten Quote gelesen.
+Ebenso ein Branch-Wort, das nicht mit einem Quote beginnt, aber ein `$` in
+einem doppelt gequoteten Teil trägt (`release/"$V"`): es wird roh gelesen
+wie vorher, damit ein `release/*`-Muster, ein späteres `cd` und der
+kubectl-Rest erreichbar bleiben (ein Wort, das mit einem Quote beginnt und
+interpoliert, bleibt unaufgelöst). Ein Env-Wort mit Escape oder
+mittendrin stehendem Quote endet an einem unquotierten `||`, ein einzelnes
+`|` wird weiter geschluckt. Zusätzlich ist
 `inlineEnv` jetzt ein Objekt ohne Prototyp, damit `__proto__=/prod`
-nicht still verworfen wird. Die Trigger-Ebene (`command-normalize`, Zeile
+nicht still verworfen wird.
+
+**Nicht allgemein verlustfrei, nur gemessen:** das Messwerkzeug
+`scripts/measure-bash-prefix-parse.mjs` zeigt 0 verlorene ehrliche
+cd-Ziele gegen master und das ausgelieferte Release (11 von 17 Armen
+beweisen nichts, sie sind ausgeschlossen, nicht als null gezählt); es misst
+weder `inlineEnv` noch `branchTarget`. Ein Differenzlauf alt gegen neu mit
+bash als Schiedsrichter über 120000 erzeugte Kommandos (59187 liefen in
+bash) zeigt noch wenige verlorene ehrliche Werte oder Ziele: ein
+quote-tragendes `cd`- oder Branch-Wort, das an einem unquotierten `|`
+endet, lehnt seine Klausel ab und beendet den Präfix-Lauf; ein Env-Wort mit
+Escape schluckt ein unquotiertes `;` oder `&`, sodass eine Zuweisung dahinter
+als führend gelesen wird; ein Env-Wort mit Escape, das an `||` endet, verliert
+das, was bash nach der kurzgeschlossenen rechten Seite ausführt; `$VAR` bleibt
+Literaltext (`D='o'$d` liest `o$d`). Die Phantom-`cd`s `A=x|| cd /t && y`
+und `A=a\ b| cd /t && y` werden weiter gelesen (die Klassenlösung, den Lauf
+an `||` zu beenden und nach `|` nie ein `cd` zu lesen, ist ein eigener
+Folge-Task). Die Trigger-Ebene (`command-normalize`, Zeile
 "Backslash-Escape im Wert" in der Fail-open-Tabelle unten) ist von dieser
 Änderung nicht berührt und wurde dabei nicht neu gemessen.
 

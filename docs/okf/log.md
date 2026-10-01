@@ -2,7 +2,7 @@
 
 <!-- Add new entries at the top, newest first. -->
 
-- 2026-10-01T07:07:17Z, task b093911d: `quote-model-divergence.md` re-verified after `src/runtime/bash-prefix-parse.ts` began reading values, `cd` paths and branch tokens as whole shell words (backslash escapes, chained quote runs, `'\''`) and keeping `__proto__=` assignments. Claims re-checked against the parser and real bash (`V=<word> printenv V`): the K2 value-decoding classes `a'b'"c"`, `'a'b'c'` and `A=a\ b` now match bash, ANSI-C `$'...'` is still undecoded. Added a paragraph naming what changed and what is not covered, updated the two status sentences and the Fail-open-Klassen row for the value-decoding class. Re-stamped.
+- 2026-10-01T07:57:02Z, task b093911d: `quote-model-divergence.md` re-verified a second time after `src/runtime/bash-prefix-parse.ts` kept the raw branch-word reading for a word with a mid-word double-quoted `$`, ended escape-led env words at `||` and had its no-loss statements narrowed to what was measured. Claims re-checked against the parser, the measurement tool and real bash: the "nothing is lost" sentence was replaced by what the tool and a bash-referee differential actually show plus the named residuals; the earlier value-decoding claims still match bash. Re-stamped.
 
 - 2026-10-01T07:20:32Z, task dda77b46: merged master (task bc97a697 edits to `docs/CLI.md`, `src/cli/index.ts` and the record verb) into this branch; the four docs listing `docs/CLI.md` re-verified against the combined file (both changes are separate rows/notes, no claim affected) and re-stamped.
 
