@@ -1272,9 +1272,10 @@ export type AttributedContextsResult =
  * exception relies on two static models: the target attribution, whose
  * known misattribution (a `GIT_DIR=` prefix or a third repository reached
  * through another construct) exists for every cwd, and the check that the
- * cwd is outside every repository, which errs toward inside
- * (`mayBeInsideRepository`). A detached cwd and every other non-blank cwd
- * context are still never dropped.
+ * cwd is outside every repository, which errs toward inside: it holds only
+ * when neither the cwd nor any ancestor has an entry named `HEAD` or
+ * `.git` (`mayBeInsideRepository`). A detached cwd and every other
+ * non-blank cwd context are still never dropped.
  *
  * D-012: a target reached through a symlink resolves to its REAL
  * (realpath'd) repository identity, not the symlink's own lexical
@@ -1309,7 +1310,9 @@ export type AttributedContextsResult =
  * REALPATH'D absolute path (never module-level state — no cross-event
  * caching), so several policies (or several satisfying segments) naming
  * the same foreign path within one event pay the `fs` cost once, not
- * once per policy per segment.
+ * once per policy per segment. `mayBeInsideRepositoryMemo` is the same
+ * kind of per-call cache for the cwd's own outside-every-repository
+ * check, keyed by the cwd's real path, so that walk runs once per event.
  */
 function resolveAttributedContexts(
   policy: Policy,
@@ -1317,6 +1320,7 @@ function resolveAttributedContexts(
   cwdBuiltins: ExtractBuiltins,
   cwdCurrentHeadSha: string | undefined,
   resolveGitContextMemo: Map<string, GitRepoContext>,
+  mayBeInsideRepositoryMemo: Map<string, boolean>,
   repoOverridden: boolean,
   branchOverridden: boolean,
   extractContext: ExtractEventContext,
@@ -1349,11 +1353,12 @@ function resolveAttributedContexts(
   // conservative `mayBeInsideRepository`, not the static
   // `resolveGitContext` the builtins come from: that resolver misses
   // repositories git still finds (see the helper's doc comment), and here
-  // a miss would drop a demand.
+  // a miss would drop a demand. It runs only for a blank `${REPO}`, at
+  // most once per event (`mayBeInsideRepositoryMemo`).
   const cwdOutsideEveryRepository =
     cwdGuard?.identifier === "REPO" &&
     cwdBuiltins.CWD.length > 0 &&
-    !mayBeInsideRepository(cwdReal);
+    !mayBeInsideRepositoryMemoised(cwdReal, mayBeInsideRepositoryMemo);
 
   for (const seg of segments) {
     if (!satisfying.has(seg)) continue;
@@ -1407,11 +1412,16 @@ function resolveAttributedContexts(
     // demanded in full. It relies on two static models: the target
     // attribution, whose known misattribution (a `GIT_DIR=` prefix or a
     // third repository reached through another construct) exists for every
-    // cwd, and the cwd resolution, which is conservative: any `.git` entry,
-    // a bare-repository layout or an unreadable entry counts as inside and
-    // the walk has no depth bound (`mayBeInsideRepository`), so a git verb
-    // that really runs in a cwd this check calls outside every repository
-    // fails on its own. A
+    // cwd, and the cwd resolution, which is conservative: the skip applies
+    // only when neither the cwd's real path nor any ancestor up to the
+    // filesystem root holds an entry named `HEAD` or `.git` (any type) and
+    // no lookup failed other than with ENOENT (`mayBeInsideRepository`).
+    // What remains outside both models: a third repository the command
+    // really runs in (a `GIT_DIR=` prefix, or a `cd` into another
+    // repository before the misattributed segment), state the command
+    // itself creates while it runs (a `.git` it links or writes before the
+    // git verb), and an ambient `GIT_DIR` / `GIT_COMMON_DIR` in the
+    // environment git runs with. A
     // detached cwd (non-blank `${REPO}`, blank `${BRANCH}`) and
     // every non-blank cwd context keep the rule above unchanged: the
     // detached remedy (`git switch` in that repository) is establishable,
@@ -1467,40 +1477,63 @@ function resolveAttributedContexts(
  * builtins is left as it is for its other callers; it reports no
  * repository where git still finds one: a `.git` directory without `HEAD`
  * ends its walk (git skips it and walks on), its walk stops after 128
- * levels, and it never recognises a bare repository. This walk instead:
+ * levels, and it never recognises a directory that is itself a git
+ * directory (a bare repository, or one whose objects live elsewhere
+ * through a `commondir` file).
  *
- * - counts any `.git` entry, file or directory, valid or not, and does not
- *   follow or validate it;
- * - counts a directory holding `HEAD`, `objects` and `refs` (a bare
- *   repository, or a directory inside a git directory);
- * - counts an `lstat` error other than ENOENT (the entry may exist);
- * - has no depth bound: it ends only at the filesystem root.
+ * This walk does not list layouts. It uses the one structural fact every
+ * git directory shares: git accepts a directory as a git directory only
+ * when it holds an entry named `HEAD`, and it reaches a repository from a
+ * working directory only through a `.git` entry (directory or `gitdir:`
+ * file) or a git directory on the way up. So, from `dir` up to the
+ * filesystem root with no depth bound:
+ *
+ * - an entry named `HEAD` or `.git`, of any type, valid or not, counts as
+ *   inside (never followed, read or validated);
+ * - an `lstat` error other than ENOENT counts as inside (the entry may
+ *   exist).
+ *
+ * The cost is a conservative false inside: a directory that merely holds
+ * an entry named `HEAD` (also `head` or `Head` on a case-insensitive
+ * volume), or lies below one, keeps its cwd context and denies with the
+ * no-repository hint (fail closed). An ambient `GIT_DIR` /
+ * `GIT_COMMON_DIR` in git's environment is not visible here.
  */
 function mayBeInsideRepository(dir: string): boolean {
   let current = path.resolve(dir);
   for (;;) {
     if (entryMayExist(path.join(current, ".git"))) return true;
-    if (
-      entryMayExist(path.join(current, "HEAD")) &&
-      entryMayExist(path.join(current, "objects")) &&
-      entryMayExist(path.join(current, "refs"))
-    ) {
-      return true;
-    }
+    if (entryMayExist(path.join(current, "HEAD"))) return true;
     const parent = path.dirname(current);
     if (parent === current) return false;
     current = parent;
   }
 }
 
-/** `false` only when `lstat` proves the entry absent (ENOENT). */
+/**
+ * `false` only when `lstat` proves the entry absent (ENOENT, reported as
+ * `undefined` without building an exception); every other error counts as
+ * present.
+ */
 function entryMayExist(entryPath: string): boolean {
   try {
-    fs.lstatSync(entryPath);
-    return true;
+    return fs.lstatSync(entryPath, { throwIfNoEntry: false }) !== undefined;
   } catch (error) {
     return (error as NodeJS.ErrnoException).code !== "ENOENT";
   }
+}
+
+/**
+ * `mayBeInsideRepository(dir)`, computed at most once per `dir` within one
+ * `intercept()` call. `memo` is that call's own map (never module-level
+ * state), so no answer outlives the event it was computed for.
+ */
+function mayBeInsideRepositoryMemoised(dir: string, memo: Map<string, boolean>): boolean {
+  const known = memo.get(dir);
+  if (known !== undefined) return known;
+  const inside = mayBeInsideRepository(dir);
+  memo.set(dir, inside);
+  return inside;
 }
 
 /**
@@ -1624,9 +1657,11 @@ export async function intercept(
   // (every Phase 4/5/6-only manifest) never computes it.
   // `resolveGitContextMemo` is this call's own, non-module-level cache
   // (task constraint: no eager/global filesystem work) — see
-  // `resolveAttributedContexts`'s own comment.
+  // `resolveAttributedContexts`'s own comment. `mayBeInsideRepositoryMemo`
+  // is the same kind of per-call cache for the cwd walk.
   let segmentsForAttribution: CommandSegment[] | undefined;
   const resolveGitContextMemo = new Map<string, GitRepoContext>();
+  const mayBeInsideRepositoryMemo = new Map<string, boolean>();
 
   const decisions: PolicyDecision[] = [];
   for (const policy of matching) {
@@ -1637,6 +1672,7 @@ export async function intercept(
           options.builtins,
           options.currentHeadSha,
           resolveGitContextMemo,
+          mayBeInsideRepositoryMemo,
           options.repoOverridden === true,
           options.branchOverridden === true,
           buildEventContext(options.event),

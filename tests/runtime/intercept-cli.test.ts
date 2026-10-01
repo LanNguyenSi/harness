@@ -4784,9 +4784,19 @@ describe("runInterceptCli: empty REPO / BRANCH never renders a blank ledger tag"
     // "Outside every repository" errs toward inside. The static walk that
     // resolves the builtins finds no repository in these layouts, but git
     // does: it walks past a `.git` directory without HEAD, has no depth
-    // bound, and runs in a bare repository. The guarded `cd` does not run,
-    // so the push really runs in the detached repository, and B's evidence
-    // must not satisfy it.
+    // bound, runs in a bare repository, and accepts a directory holding
+    // only `HEAD` and a `commondir` file as a git directory (also from a
+    // subdirectory of it). The guarded `cd` does not run, so the push
+    // really runs in the detached repository, and B's evidence must not
+    // satisfy it.
+    function headCommondirGitDir(parent: string, umbrella: string, commondir: (alpha: string) => string): string {
+      const alpha = namedRepo(parent, "alpha", `${DETACHED_SHA}\n`);
+      const gitDir = path.join(parent, umbrella, "gd");
+      fs.mkdirSync(path.join(gitDir, "sub"), { recursive: true });
+      fs.writeFileSync(path.join(gitDir, "HEAD"), `${DETACHED_SHA}\n`);
+      fs.writeFileSync(path.join(gitDir, "commondir"), `${commondir(alpha)}\n`);
+      return gitDir;
+    }
     it.each([
       [
         "below a HEAD-less .git directory inside a detached repository",
@@ -4816,6 +4826,19 @@ describe("runInterceptCli: empty REPO / BRANCH never renders a blank ledger tag"
           return cwd;
         },
       ],
+      [
+        "a git directory holding only HEAD and an absolute commondir into a detached repository",
+        (parent: string) => headCommondirGitDir(parent, "umbrella-abs", (alpha) => path.join(alpha, ".git")),
+      ],
+      [
+        "a subdirectory of a git directory holding only HEAD and an absolute commondir",
+        (parent: string) =>
+          path.join(headCommondirGitDir(parent, "umbrella-abs", (alpha) => path.join(alpha, ".git")), "sub"),
+      ],
+      [
+        "a git directory holding only HEAD and a relative commondir into a detached repository",
+        (parent: string) => headCommondirGitDir(parent, "umbrella-rel", () => "../../alpha/.git"),
+      ],
     ])("a cwd %s keeps its cwd context: `false && cd <B>; git push` with B's matching fact still denies", async (_label, makeCwd) => {
       const parent = fs.realpathSync(tmpRoot());
       const target = namedRepo(parent, "beta", "ref: refs/heads/feature\n");
@@ -4836,9 +4859,20 @@ describe("runInterceptCli: empty REPO / BRANCH never renders a blank ledger tag"
     });
 
     // Where the check cannot rule a repository out it counts the cwd as
-    // inside, even when git would find none: any `.git` entry, valid or
-    // not, and an lstat error other than ENOENT.
+    // inside, even when git would find none: any `.git` or `HEAD` entry,
+    // valid or not, and an lstat error other than ENOENT. A stray `HEAD`
+    // entry is the accepted conservative cost: it denies with the hint.
     it.each([
+      [
+        "a stray HEAD file above it and no git directory",
+        (parent: string) => {
+          const umbrella = nonRepoCwd(parent);
+          fs.writeFileSync(path.join(umbrella, "HEAD"), "not a ref\n");
+          const cwd = path.join(umbrella, "below");
+          fs.mkdirSync(cwd);
+          return cwd;
+        },
+      ],
       [
         "a HEAD-less .git directory",
         (parent: string) => {
@@ -4906,6 +4940,64 @@ describe("runInterceptCli: empty REPO / BRANCH never renders a blank ledger tag"
         }
       },
     );
+
+    // The outside-every-repository answer is computed once per event and
+    // never reused by a later event in the same process: neither for
+    // another cwd nor for the same cwd after its layout changed.
+    it("a later event from another cwd decides anew: a non-repo cwd passes `git -C <B> push`, the next event from a HEAD + commondir git directory denies", async () => {
+      const parent = fs.realpathSync(tmpRoot());
+      const target = namedRepo(parent, "beta", "ref: refs/heads/feature\n");
+      const gitDir = headCommondirGitDir(parent, "umbrella-abs", (alpha) => path.join(alpha, ".git"));
+      const command = `git -C ${target} push`;
+
+      const outside = await run({
+        policy: templatePolicy("preflight-before-push"),
+        command,
+        cwd: nonRepoCwd(parent),
+        ledger: factsLedger("preflight:feature ready:true"),
+      });
+      expect(outside.result.blocked).toBe(false);
+      expect(outside.result.decisions.map((d) => d.outcome)).toEqual(["allow"]);
+
+      const inside = await run({
+        policy: templatePolicy("preflight-before-push"),
+        command,
+        cwd: gitDir,
+        ledger: factsLedger("preflight:feature ready:true"),
+      });
+      expect(inside.result.blocked).toBe(true);
+      expect(inside.result.decisions.map((d) => d.outcome)).toEqual(["deny", "allow"]);
+      expect(inside.result.decisions[0]!.emptyIdentifier).toBe("REPO");
+    });
+
+    it("a later event from the same cwd decides anew: once the cwd became a HEAD + commondir git directory, `git -C <B> push` denies", async () => {
+      const parent = fs.realpathSync(tmpRoot());
+      const target = namedRepo(parent, "beta", "ref: refs/heads/feature\n");
+      const alpha = namedRepo(parent, "alpha", `${DETACHED_SHA}\n`);
+      const cwd = path.join(nonRepoCwd(parent), "gd");
+      fs.mkdirSync(cwd);
+      const command = `git -C ${target} push`;
+
+      const before = await run({
+        policy: templatePolicy("preflight-before-push"),
+        command,
+        cwd,
+        ledger: factsLedger("preflight:feature ready:true"),
+      });
+      expect(before.result.decisions.map((d) => d.outcome)).toEqual(["allow"]);
+
+      fs.writeFileSync(path.join(cwd, "HEAD"), `${DETACHED_SHA}\n`);
+      fs.writeFileSync(path.join(cwd, "commondir"), `${path.join(alpha, ".git")}\n`);
+      const after = await run({
+        policy: templatePolicy("preflight-before-push"),
+        command,
+        cwd,
+        ledger: factsLedger("preflight:feature ready:true"),
+      });
+      expect(after.result.blocked).toBe(true);
+      expect(after.result.decisions.map((d) => d.outcome)).toEqual(["deny", "allow"]);
+      expect(after.result.decisions[0]!.emptyIdentifier).toBe("REPO");
+    });
 
     it("an extract named like a builtin decides the cwd context exactly as the guard sees it: a shadowed REPO / BRANCH keeps the non-repo cwd context", async () => {
       const parent = fs.realpathSync(tmpRoot());
