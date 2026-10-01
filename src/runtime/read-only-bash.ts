@@ -56,7 +56,7 @@
 // parallel classifier in the future, it should mirror this allowlist
 // verbatim, not diverge.
 
-import { decodeShellWord } from "./shell-word.js";
+import { decodeShellWord, hasAnsiCNulEscape } from "./shell-word.js";
 import {
   GIT_GLOBAL_NO_VALUE_FLAGS,
   GIT_GLOBAL_VALUE_TAKING_FLAGS,
@@ -687,6 +687,12 @@ export function isReadOnlyBashCommand(command: string): boolean {
   // token slice, never from a re-read of the shell.
   if (hasUnsafeShellMetachar(trimmed)) return false;
 
+  // Refuse any NUL-decoding ANSI-C escape (`$'\0'`, `$'\x00'`, `\c@`, ...):
+  // bash truncates the `$'...'` run there, so the argument it passes is not
+  // the one the token checks below see. Not modelled, refused (task
+  // 241d9e9e); see the header of shell-word.ts.
+  if (hasAnsiCNulEscape(trimmed)) return false;
+
   return classifyTokens(trimmed.split(/\s+/));
 }
 
@@ -721,6 +727,10 @@ export function isReadOnlyBashPipeline(command: string): boolean {
   if (trimmed.includes("\n")) return false;
   if (trimmed.includes("`")) return false;
   if (trimmed.includes("$(")) return false;
+
+  // Checked on the whole text as well as per stage: a `|` inside a `$'...'`
+  // run would otherwise split a NUL escape away from its opening `$'`.
+  if (hasAnsiCNulEscape(trimmed)) return false;
 
   // Split on the pipe and require every stage to be a non-empty, provably
   // read-only command. An empty stage means `||`, a leading/trailing pipe,

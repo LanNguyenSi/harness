@@ -111,6 +111,17 @@ export function buildMergedTagContent(args: {
  * segmenter — the reasoning that makes order matter in
  * `command-normalize.ts`'s `BOUNDARY_RE`/`AMP_BOUNDARY_RE` does not transfer
  * to a plain `.test()` matcher like this one).
+ *
+ * The RECORDER (`hook-post-merge-gate-record.ts`) does not test this regex
+ * against the raw command alone: it tests it against four forms, raw first
+ * and lazily, mirroring the gate's `policyMatchesEvent` arms (raw,
+ * `normalizeCommand`, `normalizeCommandAmpAware`,
+ * `normalizeCommandQuoteAware`). The regex itself stays anchored for the
+ * raw form, so wrapper spellings (`nice gh pr merge 1`), a bare-`&` chain
+ * before a wrapper and a quoted assignment value holding a boundary
+ * character are matched via the normalised forms, not by this pattern.
+ * Named residual: a command longer than MAX_NORMALIZE_LENGTH is not
+ * normalised and is tested raw only.
  */
 export const GH_PR_MERGE_BASH_RE = /(?:^|\n|;|\||&&|&|\()\s*(?:\w+=\S+\s+)*gh\s+pr\s+merge\b/;
 
