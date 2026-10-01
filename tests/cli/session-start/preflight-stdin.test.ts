@@ -151,6 +151,53 @@ describe("session-start preflight stdin: bounded read", () => {
     }
   }, 15_000);
 
+  it("after the idle timeout the stream is paused, readStdin's listeners are gone and a late error is swallowed", async () => {
+    const { stream } = neverEndingStdin();
+    const { stream: err } = captureStream();
+    const cwd = tmpDir("harness-stdin-nogit3-");
+    const prior = process.cwd();
+    process.chdir(cwd);
+    try {
+      await runSessionStartPreflight({
+        ...hermeticOpts(cwd),
+        stdin: stream,
+        stderr: err,
+        stdinIdleTimeoutMs: 100,
+      });
+      expect(stream.isPaused()).toBe(true);
+      expect(stream.listenerCount("data")).toBe(0);
+      expect(stream.listenerCount("end")).toBe(0);
+      // A no-op error handler stays so a late 'error' is not an unhandled event.
+      expect(stream.listenerCount("error")).toBeGreaterThan(0);
+      expect(() => stream.emit("error", new Error("late"))).not.toThrow();
+    } finally {
+      process.chdir(prior);
+    }
+  }, 15_000);
+
+  it("timeout note wording follows what was read: partial data says so and is used", async () => {
+    const stream = new PassThrough();
+    const { stream: err, output } = captureStream();
+    const repo = tmpDir("harness-stdin-partial-");
+    fs.mkdirSync(path.join(repo, ".git"), { recursive: true });
+    fs.writeFileSync(path.join(repo, ".git", "HEAD"), "ref: refs/heads/main\n");
+    const json = JSON.stringify({ session_id: "partial-sess", cwd: repo });
+    // Complete JSON but stdin is never closed.
+    stream.write(json);
+    const result = await runSessionStartPreflight({
+      ...hermeticOpts(repo),
+      stdin: stream,
+      stderr: err,
+      stdinIdleTimeoutMs: 150,
+    });
+    expect(output()).toContain(
+      `stdin did not close within 150 ms of the last data; using the ${Buffer.byteLength(json)} bytes read`,
+    );
+    expect(output()).not.toContain("falling back to the default session resolution");
+    expect(result.sessionId).toBe("partial-sess");
+    expect(result.sessionSource).toBe("stdin");
+  }, 15_000);
+
   it("a slow but live pipe is not cut off: each chunk restarts the idle bound", async () => {
     const stream = new PassThrough();
     const { stream: err, output } = captureStream();

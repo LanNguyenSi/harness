@@ -212,6 +212,10 @@ interface StdinRead {
   timedOut: boolean;
 }
 
+function ignoreLateError(): void {
+  // Deliberately empty: the read already resolved, see readStdin.
+}
+
 async function readStdin(
   stream: NodeJS.ReadableStream,
   idleTimeoutMs: number,
@@ -225,7 +229,11 @@ async function readStdin(
         stream.removeListener("data", onData);
         stream.removeListener("end", onEnd);
         stream.removeListener("error", onError);
-        // Stop reading so an open pipe or TTY does not keep the process alive.
+        // A later 'error' on a stream nobody listens to any more would be an
+        // unhandled event and throw, so keep a no-op handler attached.
+        stream.on("error", ignoreLateError);
+        // Stop reading so a caller that passed a live stream is not left with
+        // a flowing one (the CLI itself exits through process.exit regardless).
         stream.pause();
         resolve({ text: data, timedOut: true });
       }, idleTimeoutMs);
@@ -565,8 +573,11 @@ export async function runSessionStartPreflight(
       const read = await readStdin(stdin, idleTimeoutMs);
       if (read.timedOut) {
         note(
-          `no complete event JSON on stdin within ${idleTimeoutMs} ms (stdin never closed); ` +
-            "falling back to the default session resolution",
+          read.text.length === 0
+            ? `no complete event JSON on stdin within ${idleTimeoutMs} ms (stdin never closed); ` +
+                "falling back to the default session resolution"
+            : `stdin did not close within ${idleTimeoutMs} ms of the last data; ` +
+                `using the ${Buffer.byteLength(read.text)} bytes read`,
         );
       }
       event = JSON.parse(read.text.trim() || "{}") as SessionStartEvent;
