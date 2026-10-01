@@ -211,6 +211,9 @@ describe("pack hook pre-tool-use — subprocess E2E (deny path)", () => {
 // levels deep (once a stack overflow), a file over the 1 MiB hashing cap
 // (once a heap exhaustion at a few hundred megabytes; 2 MiB stands in for any
 // size over the cap here) and a FIFO with no writer (once a blocking open).
+// This pins the hash scan. The evidence read after a refused marker is still
+// unbounded for a file of a few hundred megabytes or a FIFO swapped in during
+// that read (a named residual).
 // Built CLI, both runtimes: Claude exits 0 with a block decision on stdout,
 // Codex exits 2.
 interface E2ERuntime {

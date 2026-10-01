@@ -259,6 +259,22 @@ describe("report files are read bounded by type and size", () => {
     writePadded("copy.json", { ...base(), approvalStatus: "approved" }, 2 * MAX_HASHED_REPORT_BYTES);
     expect(verifyApprovedReportHash(tmp, session).ok).toBe(false);
   });
+
+  // The grew check and fstat-on-the-descriptor are defence in depth with no
+  // deterministic test; closing the descriptor on every outcome is pinned here.
+  it.runIf(fs.existsSync("/dev/fd"))("closes the descriptor on every outcome, success and refusal alike", () => {
+    const ok = writePadded("ok.json", base(), 1024);
+    const tooLarge = writePadded("big.json", base(), MAX_HASHED_REPORT_BYTES + 1);
+    const notRegular = path.join(tmp, "dir.json");
+    fs.mkdirSync(notRegular);
+    fs.writeFileSync(path.join(tmp, "arr.json"), "[1]");
+    fs.writeFileSync(path.join(tmp, "deep.json"), `{"content":${"[".repeat(100)}${"]".repeat(100)}}`);
+    const inputs = [ok, tooLarge, notRegular, path.join(tmp, "arr.json"), path.join(tmp, "deep.json")];
+    const openDescriptors = (): number => fs.readdirSync("/dev/fd").length;
+    const before = openDescriptors();
+    for (let round = 0; round < 50; round++) for (const input of inputs) hashReportFile(input);
+    expect(openDescriptors()).toBe(before);
+  });
 });
 
 describe("verifyApprovedReportHash", () => {
