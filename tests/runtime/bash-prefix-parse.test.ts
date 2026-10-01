@@ -363,13 +363,16 @@ describe("parseBashPrefix", () => {
         expect(cmd.slice(r.remainderStart)).toBe("cmd");
       });
 
-      it("skips an escaped quote inside ANSI-C $'...' (raw text kept, not decoded) so the cd and a later quote pair are still read", () => {
-        // bash: D=$'it\'s' -> it's. Not decoded here (not covered): the raw word is kept.
-        const cmd = "D=$'it\\'s' cd /x && echo 'a' 'b'";
+      it("skips an escaped quote inside ANSI-C $'...' (raw text kept, not decoded) so the cd behind it is still read", () => {
+        // bash: D=$'it\'s' -> it's. Not decoded here (not covered): the raw
+        // word is kept. The tail carries an escaped apostrophe: a reader that
+        // ended the ANSI-C part at the escaped quote would pair the real
+        // closing quote with it and swallow the cd into the value.
+        const cmd = "D=$'it\\'s' cd /x && echo a\\'b";
         const r = parseBashPrefix(cmd);
         expect(r.inlineEnv).toEqual({ D: "$'it\\'s'" });
         expect(r.cdTarget).toBe("/x");
-        expect(cmd.slice(r.remainderStart)).toBe("echo 'a' 'b'");
+        expect(cmd.slice(r.remainderStart)).toBe("echo a\\'b");
       });
 
       it("falls back to the plain word reading on an unterminated ANSI-C $'...' (bash rejects it), without throwing", () => {

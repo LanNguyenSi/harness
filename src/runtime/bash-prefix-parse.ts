@@ -553,8 +553,11 @@ function consumeLeadingGitSwitch(s: string, start: number): { branch: string; ne
   // included, which still matches a glob such as `release/*`) and went on
   // to the clauses behind it (a later `cd`, the kubectl remainder). Fall
   // back to that reading instead of dropping them. A word that starts
-  // with a quote stays unresolved: the pre-change reading did the same.
-  if (word !== null && word.interpolates && s[i] !== '"' && s[i] !== "'") {
+  // with a double quote stays unresolved: the pre-change reading did the
+  // same. One that starts with a single quote cannot be saved either: the
+  // old reading ends it at the first closing quote, and a `$` part glued
+  // behind it means the next character is neither whitespace nor `;` / `&`.
+  if (word !== null && word.interpolates && s[i] !== '"') {
     word = readWordLegacy(s, i, PATH_PLAIN_STOPS);
   }
   if (word === null || word.interpolates) return null;
