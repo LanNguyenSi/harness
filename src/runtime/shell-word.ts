@@ -40,6 +40,21 @@
 // brace expansion are left verbatim, because their values are not derivable
 // from the command text alone. A word containing them decodes to something
 // that still contains them, which is the honest answer.
+//
+// NUL-DECODING ESCAPES are refused, not modelled (task `241d9e9e`). GNU bash
+// 3.2.57 (measured with `printf '[%s]' <word> | od -c`; the first report
+// measured 5.1.16) truncates a `$'...'` run at a NUL, drops a NUL between two
+// runs, and reads `\c@` (value 0) the same way, so a decoder that kept a
+// literal U+0000 produced a value that never equals the argument bash passes,
+// and the raw token matches no flag either: a write flag hid from every
+// caller. This module does not rebuild bash's truncation. `readAnsiC` returns
+// `null` for such an escape (so `decodeShellWord` returns the raw token) and
+// `hasAnsiCNulEscape` lets a caller refuse the whole command text; the
+// read-only classifier does. Both over-report on purpose (any `\c` escape
+// counts, `\u`/`\U` count although bash 3.2.57 does not decode them), because
+// a false positive only blocks an exotic read. The `raw || decoded` callers
+// keep today's behaviour on the deny side; the one permissive caller (the
+// kubectl read floor) loses its floor for such a word, which is intended.
 
 /** Characters a backslash can escape inside a double-quoted run (bash). */
 const DOUBLE_QUOTE_ESCAPABLE = new Set(['$', '`', '"', "\\", "\n"]);
@@ -62,6 +77,64 @@ const ANSI_C_SIMPLE: ReadonlyMap<string, string> = new Map([
 ]);
 
 /**
+ * True when the `$'...'` escape that starts at `word[at]` (a backslash)
+ * decodes to NUL, or is a `\c` control escape, which is not modelled and so
+ * counts as possibly NUL. Conservative: it may say true too often, never too
+ * rarely. Octal values wrap modulo 256 because bash keeps one byte.
+ */
+function isNulEscapeAt(word: string, at: number): boolean {
+  const nxt = word[at + 1];
+  if (nxt === undefined) return false;
+  if (nxt === "c") return true;
+  if (nxt === "x" || nxt === "u" || nxt === "U") {
+    const max = nxt === "x" ? 2 : nxt === "u" ? 4 : 8;
+    let hex = "";
+    for (let j = at + 2; j < word.length && hex.length < max && /[0-9a-fA-F]/.test(word[j]!); j++) {
+      hex += word[j]!;
+    }
+    return hex.length > 0 && /^0+$/.test(hex);
+  }
+  if (/[0-7]/.test(nxt)) {
+    let oct = "";
+    for (let j = at + 1; j < word.length && oct.length < 3 && /[0-7]/.test(word[j]!); j++) {
+      oct += word[j]!;
+    }
+    return Number.parseInt(oct, 8) % 256 === 0;
+  }
+  return false;
+}
+
+/**
+ * True when `text` contains, inside any `$'...'` run, an escape that decodes
+ * to NUL (`\0`, `\00`, `\000`, `\x0`, `\x00`, `\u0` to `\u0000`, `\U0` to
+ * `\U00000000`) or a `\c` control escape (not modelled, so counted). Works on
+ * a whole command string or a single word. Every `$'` occurrence is scanned
+ * on its own, including one that sits inside a single-quoted span, so a real
+ * run is never hidden by an earlier false start; the cost is an occasional
+ * over-report, which the caller treats as "refuse".
+ *
+ * This is deliberately not a model of bash's NUL truncation. Never throws.
+ */
+export function hasAnsiCNulEscape(text: string): boolean {
+  if (typeof text !== "string") return false;
+  let from = text.indexOf("$'");
+  while (from !== -1) {
+    for (let i = from + 2; i < text.length; ) {
+      const ch = text[i]!;
+      if (ch === "'") break;
+      if (ch === "\\") {
+        if (isNulEscapeAt(text, i)) return true;
+        i += 2;
+        continue;
+      }
+      i++;
+    }
+    from = text.indexOf("$'", from + 1);
+  }
+  return false;
+}
+
+/**
  * Decode one shell WORD to the literal string bash would pass as an argv
  * entry, as far as that is derivable from the text alone.
  *
@@ -74,7 +147,8 @@ const ANSI_C_SIMPLE: ReadonlyMap<string, string> = new Map([
  * how the measured bypasses hid a write flag from a raw string comparison.
  *
  * Returns the input UNCHANGED when the word cannot be resolved: an
- * unterminated quote, or a truncated escape at end of input. Per the module
+ * unterminated quote, a truncated escape at end of input, or a NUL-decoding
+ * (or `\c`) escape inside `$'...'` (see the module header). Per the module
  * header's direction rule, callers compare the result against a set of
  * things to REJECT, so falling back to the raw token reproduces today's
  * behaviour instead of inventing one.
@@ -187,6 +261,9 @@ function readAnsiC(word: string, start: number): { value: string; next: number }
     }
     const nxt = word[i + 1];
     if (nxt === undefined) return null;
+    // A NUL-decoding (or unmodelled `\c`) escape makes the word unresolvable:
+    // see the module header. Never emit a literal U+0000.
+    if (isNulEscapeAt(word, i)) return null;
     const simple = ANSI_C_SIMPLE.get(nxt);
     if (simple !== undefined) {
       out += simple;

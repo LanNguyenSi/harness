@@ -837,6 +837,94 @@ describe("read-only Bash pipeline classifier (isReadOnlyBashPipeline)", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Task 241d9e9e: NUL-decoding ANSI-C escapes are refused, not modelled.
+//
+// GNU bash 3.2.57 (this machine's /bin/bash, `printf '[%s]' <word> | od -c`)
+// truncates a `$'...'` run at a NUL and drops a NUL between runs, and also
+// reads `\c@` (control-at, value 0) as a NUL: `$'-delete\0XYZ'`,
+// `-$'\0'delete`, `-$'\x00'delete`, `$'-delete\000x'` and `$'-dele\c@x'te`
+// each reach the program as `-delete`. The first report measured the same on
+// bash 5.1.16. bash 3.2.57 does not decode `\u`/`\U` at all (they stay
+// literal); bash 4.2 and later do, so those spellings are refused as well.
+// The decoder does not rebuild that truncation: `isReadOnlyBashCommand`
+// refuses any command text carrying such an escape, which closes the channel
+// whatever the word would decode to.
+// ---------------------------------------------------------------------------
+
+describe("NUL-decoding ANSI-C escapes make a command not read-only (task 241d9e9e)", () => {
+  const NUL_SPELLINGS = ["\\0", "\\000", "\\x00", "\\u0000", "\\U00000000"];
+
+  // The four commands of the former NOT-COVERED list, once per spelling.
+  const direct = (nul: string): string[] => [
+    `find . -name c $'-delete${nul}XYZ'`,
+    `find . -name c -$'${nul}'delete`,
+    `sort $'--output${nul}' o.txt data.txt`,
+    `file $'--compile${nul}X' -m magic`,
+  ];
+  const corpus = NUL_SPELLINGS.flatMap((nul) => [
+    ...direct(nul),
+    ...direct(nul).map((c) => `env ${c}`),
+    ...direct(nul).map((c) => `command ${c}`),
+  ]);
+
+  it.each(corpus)("isReadOnlyBashCommand(%s) is false", (cmd) => {
+    expect(isReadOnlyBashCommand(cmd)).toBe(false);
+  });
+
+  it.each(corpus)("isReadOnlyBashPipeline(%s) is false", (cmd) => {
+    expect(isReadOnlyBashPipeline(cmd)).toBe(false);
+  });
+
+  it.each(NUL_SPELLINGS)("blocks the same command as a pipeline stage (%s)", (nul) => {
+    expect(isReadOnlyBashPipeline(`cat x | find . -name c -$'${nul}'delete`)).toBe(false);
+    expect(isReadOnlyBashPipeline(`find . -name c -$'${nul}'delete | head`)).toBe(false);
+  });
+
+  // `\c@` (control-at) reads as NUL in bash 3.2.57; `\c` is not modelled, so
+  // every `\c` escape counts.
+  it.each([
+    "find . -name c $'-dele\\c@x'te",
+    "find . -name c $'-dele\\c x'te",
+    "env find . -name c $'-dele\\c@x'te",
+    "command find . -name c $'-dele\\c@x'te",
+  ])("blocks the control-escape form: %s", (cmd) => {
+    expect(isReadOnlyBashCommand(cmd)).toBe(false);
+    expect(isReadOnlyBashPipeline(cmd)).toBe(false);
+  });
+
+  it("blocks a NUL escape in a read-only binary that has no write-flag guard", () => {
+    expect(isReadOnlyBashCommand("cat $'a\\0b'")).toBe(false);
+    expect(isReadOnlyBashPipeline("cat $'a\\0b' | head")).toBe(false);
+  });
+
+  it("blocks a NUL run that a pipe character splits across stages", () => {
+    // The `|` sits inside the `$'...'` run, so a per-stage check alone sees
+    // no complete run.
+    expect(isReadOnlyBashPipeline("cat $'a|b\\0'")).toBe(false);
+  });
+
+  // Negative control: the non-NUL spellings of the same shapes keep their
+  // earlier verdicts (a read stays a read, a write flag stays blocked).
+  it.each([
+    "cat $'a\\x41b'",
+    "cat $'\\101'",
+    "find . -name $'\\x41'",
+    "sort $'\\x64ata.txt'",
+  ])("keeps %s read-only", (cmd) => {
+    expect(isReadOnlyBashCommand(cmd)).toBe(true);
+    expect(isReadOnlyBashPipeline(cmd)).toBe(true);
+  });
+
+  it.each([
+    "find . -name c -$'\\x64elete'",
+    "find . -name c $'-\\144elete'",
+    "env find . -name c -$'\\x64elete'",
+  ])("still blocks the non-NUL write flag %s", (cmd) => {
+    expect(isReadOnlyBashCommand(cmd)).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Task fdee7d0f: the write-flag guards compared RAW tokens, so any shell
 // quoting hid the flag from them while bash still passed it through. Each
 // case below was verified against the real binary in a fresh sandbox: the
@@ -853,30 +941,29 @@ describe("read-only Bash pipeline classifier (isReadOnlyBashPipeline)", () => {
 // `o`). The fix decodes the token before every one of these comparisons, so
 // the surviving-by-accident cases stop depending on that accident.
 //
-// NOT COVERED, named rather than implied. One channel stays open, measured,
-// not made worse by this change; the other channel named here at the time
-// (GNU long-option ABBREVIATION) is now CLOSED — see task dd055c1d below,
-// which fixes it and pins its own artefact-confirmed test cases in a
-// dedicated section further down this file.
+// NOT COVERED, named rather than implied. One channel is not modelled; the
+// other channel named here at the time (GNU long-option ABBREVIATION) is now
+// CLOSED, see task dd055c1d below, which fixes it and pins its own
+// artefact-confirmed test cases in a dedicated section further down this file.
 //
-// 1. NUL escapes inside `$'...'`. bash TRUNCATES a `$'...'` run at a NUL and
-//    drops a NUL sitting between runs; `decodeShellWord` emits a literal
-//    U+0000 and keeps accumulating, so the decoded value never equals the
-//    flag bash actually passes. Artefact-confirmed bypasses (canary deleted
-//    / file created), all five NUL spellings `\0 \000 \x00 \u0000
-//    \U00000000`:
-//      find . -name c $'-delete\0XYZ'      find . -name c -$'\0'delete
-//      sort $'--output\0' o.txt data.txt   file $'--compile\0X' -m magic
-//    plus the same through the `env` and `command` recursions. Master fails
-//    open identically, so this is a pre-existing gap this change does not
-//    close and does not widen; the raw-token fallback cannot help, because
-//    the raw form matches nothing either.
+// 1. NUL escapes inside `$'...'`: CLOSED (fail closed), see the section
+//    above. bash TRUNCATES a `$'...'` run at a NUL and drops a NUL sitting
+//    between runs, which this decoder does not model. It no longer emits a
+//    literal U+0000: a word with a NUL-decoding escape is reported as
+//    unresolvable (raw token returned), and `isReadOnlyBashCommand` refuses
+//    the whole command text when `hasAnsiCNulEscape` finds one. Measured on
+//    GNU bash 3.2.57 and, for the first report, 5.1.16; the artefact-
+//    confirmed commands (canary deleted / file created) used the five NUL
+//    spellings `\0 \000 \x00 \u0000 \U00000000` (3.2.57 does not decode the
+//    last two) over find, sort and file plus the `env` and `command`
+//    recursions, and are now pinned as blocked by the corpus above. The
+//    refusal over-blocks by design: any `\c` escape counts too, since `\c`
+//    is not modelled.
 //
-// The `$'...'` cases pinned in this file cover the NON-NUL spellings only.
-// Deliberately NOT fixed here: modelling NUL truncation would be a third
-// round of teaching this decoder one more bash rule, and the run's halt
-// criterion (03-decisions.md D2, written before fix round 1) says to stop
-// growing the model and file it instead.
+// The `$'...'` cases pinned in the section below cover the NON-NUL spellings.
+// Deliberately NOT done: modelling NUL truncation would be a third round of
+// teaching this decoder one more bash rule, and the halt criterion of that
+// review says to stop growing the model and file it instead.
 // ---------------------------------------------------------------------------
 
 describe("write-flag guards see through shell quoting (task fdee7d0f)", () => {
