@@ -2,6 +2,8 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-10-01T11:36:05Z, task 11bd2b97: the four `session-start` producers and their CLI wiring in `src/cli/index.ts` now share `src/cli/session-start/shared-options.ts` (pure refactor; help text, options, defaults, stderr output, exit codes and ledger writes unchanged). `debug-verb-selection.md`, `pause-vs-gate-kill-switch.md` and `understanding-gate-lockout-recovery.md` list `src/cli/index.ts` under sources and were re-verified: none states a claim about the session-start options or wiring; the only effect was shifted lines, so their citations into `src/cli/index.ts` were re-pointed (+8 above the session-start block, -87 below it), and so were the three citations in this log that okf-kit resolves against the current file. The lockout doc's sentence that `harness session-start preflight` stages `.pending-approval` on every run with a resolved id still holds. Re-stamped.
+
 - 2026-10-01T11:43:09Z, task 20ebf935: `understanding-gate-lockout-recovery.md` gained the block-message reason bullet, and `codex-adapter-parity-gaps.md`, `evidence-ledger-trust-boundary.md`, `gate-fail-posture-matrix.md` and `understanding-gate-auto-mode-signals.md` were re-verified after the PreToolUse and PostToolUse hooks, `persisted-reports.ts`, `post-tool-use-boundary.ts`, `markers.ts`, `approve/understanding.ts` and `docs/policy-packs/understanding-before-execution.md` changed (an optional `expiredBy` report field carried on the persisted-report record, the expiry reason in the block message, a new `expiry-reason.ts`, an expiry trigger matrix). Claims re-checked against the code: no gate decision, source list, precedence or fail posture they state changed; the lockout doc now says the Claude hook appends the expiry sentence to its stdout reason after the `ux:` envelope, while the Codex agent reads the whole stderr, whose engine reason carries it once. The edits shifted line citations into the hook files, `persisted-reports.ts`, `approve/understanding.ts`, `markers.ts` and `post-tool-use-boundary.ts`, which were re-pointed in the decision record, this log and the okf docs, including three prose `lines N-M` pointers in `codex-adapter-parity-gaps.md`. Re-stamped.
 
 - 2026-10-01T11:20:42Z, task 241d9e9e: `src/runtime/read-only-bash.ts` now refuses a command carrying a NUL-decoding ANSI-C escape (fail closed, predicate `hasAnsiCNulEscape` in `src/runtime/shell-word.ts`); `decodeShellWord` itself decodes such a word exactly as before. `quote-model-divergence.md` and `understanding-gate-auto-mode-signals.md` re-verified against the code and against GNU bash 3.2.57: neither makes a claim about a NUL escape or about the classifier's escape handling beyond the restrictive-side use of the decoder, which still holds, so no body text changed (a body edit would shift the lines older entries here cite). Re-stamped.
@@ -495,7 +497,7 @@
   first fix commit, 24 more at its review-fix commit), so the five
   citations those entries re-pointed to (`:1710-1725`, `:2981-2985`,
   `:3354-3453`, `:3356-3361`, `:3313-3412`) landed one hunk short of the
-  quoted text. Corrected to `:1722-1737`, `:2993-2997`, `:3371-3470`,
+  quoted text. Corrected to `:1722-1737`, `:2993-2997`, `:3284-3383`,
   `:3373-3378`, `:3325-3424` (each checked byte-identical against the base
   commit `e8a5f085` content at the +36 offset) and the "net 24 lines" prose
   to "net 36 lines". The doc bundle's own live citations
@@ -1187,7 +1189,7 @@
   first shipped full silence here, round 1's own review found the
   silence itself was the residual gap the task's goal named ("no
   diagnostic anywhere"), closed in round 2. The producer's own stderr
-  diagnostic (`src/cli/session-start/index.ts:747#"the project-scoped"`)
+  diagnostic (`src/cli/session-start/index.ts:707#"the project-scoped"`)
   no longer blames "the project layer" for a
   base- or machine-layer parse failure (round 1's lead-in did); both
   this diagnostic and the new `doctor` finding now collapse a
@@ -1481,7 +1483,7 @@
   `quote-model-divergence.md` and `understanding-gate-lockout-recovery.md`
   `sources-fresh` STALE against these files. Checked every line-numbered
   citation these seven docs make into the five touched files
-  (`src/cli/index.ts:1722-1737`, `:2995-2999`, `:3371-3470`,
+  (`src/cli/index.ts:1722-1737`, `:2995-2999`, `:3284-3383`,
   `:3373-3378`; `src/cli/init/templates.ts:928`): all still match their
   quoted text verbatim (sibling-line check), since none of this round's
   edits added or removed a line above a cited line in any file a
@@ -1648,7 +1650,7 @@
       That range is the `harness pack list` subcommand; the seven flags the
       doc enumerates (`--config`, `--project`, `--session`, `--task`,
       `--reports-dir`, `--approved-by`, `--force`) are declared at
-      `src/cli/index.ts:1686-1701`, which the doc now cites (sibling
+      `src/cli/index.ts:1694-1709`, which the doc now cites (sibling
       check: line 1685 closes the preceding `.description(` call and line
       1702 opens `.action(`, so the range covers exactly the option
       declarations). This doc is one of
