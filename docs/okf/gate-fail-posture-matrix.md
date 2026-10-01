@@ -3,7 +3,7 @@ type: overview
 title: Gate fail-posture matrix
 description: Which harness enforcement gates fail OPEN vs fail CLOSED when their evidence source (grounding-mcp ledger, approval markers, verdict files, probes) is unreachable or errors, with the exact code paths and override knobs.
 tags: [gates, fail-open, fail-closed, enforcement]
-timestamp: 2026-10-01T12:03:09Z
+timestamp: 2026-10-01T12:35:47Z
 sources:
   - src/cli/pack/auto-approve-path.ts
   - src/cli/pack/hook-codex-pre-tool-use.ts
@@ -72,7 +72,7 @@ DISTINCT repository a trigger-satisfying command segment names (its own
 persisting `cd`) — the session's own cwd context is ALWAYS also
 evaluated, never dropped except for a cwd outside every repository next to a resolved target (see the exception below; `resolveAttributedContexts`; the "always add, never replace" rule
 D-021 and its four-review-pass history are restated in-tree in that
-function's own doc comment, `src/runtime/intercept.ts:1232-1260#"disproved"`; the
+function's own doc comment, `src/runtime/intercept.ts:1235-1263#"disproved"`; the
 original decision record under
 `.ai/runs/2026-08-02-per-repo-gate-scoping-redesign/` is local run state
 and not shipped with the repo). This section covers only the FALLBACK side of that resolution,
@@ -103,11 +103,16 @@ since it is the part that changes this matrix's own fail-posture story:
   not add it for a segment whose own target resolved to a real repository:
   otherwise the remedy the deny message names (`git -C <repo> ...`, or
   `cd <repo> && ...` in one command) would be denied again. The target's
-  own context is still demanded in full. The skip relies on the static
-  target attribution, whose known misattribution (a `GIT_DIR=` prefix or a
-  third repository reached through another construct) exists for every
-  cwd; a git verb that really runs in a cwd outside every repository fails
-  on its own. A detached cwd (non-blank `${REPO}`, blank `${BRANCH}`) and
+  own context is still demanded in full. The skip relies on two static
+  models: the target attribution, whose known misattribution (a `GIT_DIR=`
+  prefix or a third repository reached through another construct) exists
+  for every cwd, and the cwd resolution, which errs toward inside
+  (`mayBeInsideRepository`, not the `resolveGitContext` walk the builtins
+  come from): any `.git` entry on the walk to the filesystem root (file or
+  directory, valid or not), a directory holding `HEAD`, `objects` and
+  `refs` (a bare repository) and an lstat error other than ENOENT count as
+  inside, with no depth bound. A git verb that really runs where that
+  check finds no repository fails on its own. A detached cwd (non-blank `${REPO}`, blank `${BRANCH}`) and
   every other non-blank cwd context keep the cwd context, as do a segment
   with no resolved target (a bare `git status`) and a target that is the
   cwd repository itself; the detached hint names the cwd repository.

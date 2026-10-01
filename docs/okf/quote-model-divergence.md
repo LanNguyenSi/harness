@@ -3,7 +3,7 @@ type: overview
 title: Shell quote models, measured divergence against bash
 description: The policy engine has four independent shell-word models plus a raw-regex trigger layer. This records what each actually extracts, measured against real bash, which divergences are fail-open, and the evidence-led ordering for closing them.
 tags: [policy-engine, bash-match, quote-model, fail-open, measurement]
-timestamp: 2026-10-01T12:03:09Z
+timestamp: 2026-10-01T12:35:47Z
 sources:
   - src/runtime/command-normalize.ts
   - src/cli/init/composer.ts
@@ -98,9 +98,13 @@ bleibt K1s offene Beobachtung.
 Ausnahme seit Task `6c8ebd37`: liegt das cwd außerhalb jedes Git-Repositorys
 (leeres `${REPO}`, wie der Leer-Identifier-Guard es sieht), entfällt dessen
 cwd-Kontext neben einem Segment, dessen eigenes Ziel zu einem echten
-Repository aufgelöst wurde. Diese Ausnahme stützt sich auf die statische
-Ziel-Attribution, deren bekannte Fehlattribution (ein `GIT_DIR=`-Präfix oder
-ein drittes Repository über ein anderes Konstrukt) es für jedes cwd gibt;
+Repository aufgelöst wurde. Diese Ausnahme stützt sich auf zwei statische
+Modelle: die Ziel-Attribution, deren bekannte Fehlattribution (ein
+`GIT_DIR=`-Präfix oder ein drittes Repository über ein anderes Konstrukt) es
+für jedes cwd gibt, und die Prüfung, dass das cwd außerhalb jedes
+Repositorys liegt; diese entscheidet im Zweifel für "innerhalb" (jeder
+`.git`-Eintrag, ein Bare-Repository-Layout oder ein unlesbarer Eintrag auf
+dem Weg bis zur Dateisystemwurzel zählt als innerhalb);
 ein detached cwd und jeder andere nicht-leere cwd-Kontext fallen weiterhin
 nie.
 
