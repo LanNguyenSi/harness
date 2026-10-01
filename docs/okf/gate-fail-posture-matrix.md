@@ -3,7 +3,7 @@ type: overview
 title: Gate fail-posture matrix
 description: Which harness enforcement gates fail OPEN vs fail CLOSED when their evidence source (grounding-mcp ledger, approval markers, verdict files, probes) is unreachable or errors, with the exact code paths and override knobs.
 tags: [gates, fail-open, fail-closed, enforcement]
-timestamp: 2026-10-01T12:35:47Z
+timestamp: 2026-10-01T13:15:49Z
 sources:
   - src/cli/pack/auto-approve-path.ts
   - src/cli/pack/hook-codex-pre-tool-use.ts
@@ -108,11 +108,19 @@ since it is the part that changes this matrix's own fail-posture story:
   prefix or a third repository reached through another construct) exists
   for every cwd, and the cwd resolution, which errs toward inside
   (`mayBeInsideRepository`, not the `resolveGitContext` walk the builtins
-  come from): any `.git` entry on the walk to the filesystem root (file or
-  directory, valid or not), a directory holding `HEAD`, `objects` and
-  `refs` (a bare repository) and an lstat error other than ENOENT count as
-  inside, with no depth bound. A git verb that really runs where that
-  check finds no repository fails on its own. A detached cwd (non-blank `${REPO}`, blank `${BRANCH}`) and
+  come from): the skip applies only when neither the cwd's real path nor
+  any ancestor up to the filesystem root holds an entry named `HEAD` or
+  `.git` (any type, valid or not) and no lstat there failed with an error
+  other than ENOENT. Every git directory holds a `HEAD` entry, so this
+  covers a `.git` directory without `HEAD`, any depth, a bare repository
+  and a directory holding only `HEAD` and a `commondir` file; a stray
+  `HEAD` entry is a conservative deny with the hint. The check runs at
+  most once per event. What remains outside both models: a third
+  repository the command really runs in (a `GIT_DIR=` prefix, or a `cd`
+  into another repository before the misattributed segment), state the
+  command itself creates while it runs (for example a `.git` it links
+  before the git verb), and an ambient `GIT_DIR` or `GIT_COMMON_DIR` in
+  the environment git runs with. A detached cwd (non-blank `${REPO}`, blank `${BRANCH}`) and
   every other non-blank cwd context keep the cwd context, as do a segment
   with no resolved target (a bare `git status`) and a target that is the
   cwd repository itself; the detached hint names the cwd repository.
