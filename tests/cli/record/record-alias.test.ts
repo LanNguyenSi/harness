@@ -44,16 +44,17 @@ describe("harness record (command group registration)", () => {
     expect(review?.registeredArguments[0]?.required).toBe(true);
   });
 
-  it("`record review-subagent` declares --task/--verdict (required) plus an optional summary argument", () => {
+  it("`record review-subagent` declares --verdict (required), optional --task/--adhoc (exactly one enforced by the runner) plus an optional summary argument", () => {
     const program = buildProgram();
     const record = program.commands.find((c) => c.name() === "record");
     const reviewSubagent = record?.commands.find((c) => c.name() === "review-subagent");
     expect(reviewSubagent).toBeDefined();
     const optionNames = reviewSubagent?.options.map((o) => o.long) ?? [];
     expect(optionNames).toEqual(
-      expect.arrayContaining(["--task", "--verdict", "--branch", "--session"]),
+      expect.arrayContaining(["--task", "--adhoc", "--verdict", "--branch", "--session"]),
     );
-    expect(reviewSubagent?.options.find((o) => o.long === "--task")?.mandatory).toBe(true);
+    expect(reviewSubagent?.options.find((o) => o.long === "--task")?.mandatory).toBe(false);
+    expect(reviewSubagent?.options.find((o) => o.long === "--adhoc")?.mandatory).toBe(false);
     expect(reviewSubagent?.options.find((o) => o.long === "--verdict")?.mandatory).toBe(true);
     expect(reviewSubagent?.registeredArguments.map((a) => a.name())).toEqual(["summary"]);
     expect(reviewSubagent?.registeredArguments[0]?.required).toBe(false);

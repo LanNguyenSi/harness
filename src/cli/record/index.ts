@@ -358,8 +358,17 @@ export async function runRecordReview(opts: RecordReviewOptions): Promise<Record
 // ---------------------------------------------------------------------------
 
 export interface RecordReviewSubagentOptions extends RecordCommonOptions {
-  /** agent-tasks task id — required, non-empty. */
-  task: string;
+  /**
+   * agent-tasks task id, non-empty when given. Exactly one of `task` or
+   * `adhoc` is required.
+   */
+  task?: string;
+  /**
+   * Record a review for work that has no agent-tasks task: only the
+   * `review-subagent:<branch>` tag is written, never a task tag. Mutually
+   * exclusive with `task`.
+   */
+  adhoc?: boolean;
   /** Reviewer verdict — required, non-empty. */
   verdict: string;
   /** Explicit branch override (otherwise resolved via resolveGitContext(cwd)). */
@@ -373,9 +382,31 @@ export async function runRecordReviewSubagent(
 ): Promise<RecordResult> {
   const { note, cwd, sessionId } = initRecordVerb(opts, "review-subagent");
 
-  const taskResult = requireNonEmpty(opts.task, "--task", sessionId, note);
-  if (!taskResult.ok) return taskResult.result;
-  const task = taskResult.value;
+  // Exactly one of --task / --adhoc: a task-based flow must never silently
+  // skip the review-subagent:<task> tag (the MCP-surface gate keys on it),
+  // and an ad-hoc flow must never invent a task id.
+  const adhoc = opts.adhoc === true;
+  if (adhoc && opts.task !== undefined) {
+    return usageFailure(
+      "--task and --adhoc are mutually exclusive; pass exactly one",
+      sessionId,
+      note,
+    ).result;
+  }
+  if (!adhoc && opts.task === undefined) {
+    return usageFailure(
+      "one of --task <id> or --adhoc is required (--adhoc records a review for work without an agent-tasks task)",
+      sessionId,
+      note,
+    ).result;
+  }
+
+  let taskTag = "";
+  if (opts.task !== undefined) {
+    const taskResult = requireNonEmpty(opts.task, "--task", sessionId, note);
+    if (!taskResult.ok) return taskResult.result;
+    taskTag = `review-subagent:${taskResult.value} `;
+  }
 
   const verdictResult = requireNonEmpty(opts.verdict, "--verdict", sessionId, note);
   if (!verdictResult.ok) return verdictResult.result;
@@ -386,7 +417,7 @@ export async function runRecordReviewSubagent(
   const branch = branchResult.branch;
 
   const summary = typeof opts.summary === "string" ? opts.summary.trim() : "";
-  const content = `review-subagent:${task} review-subagent:${branch} verdict:${verdict}${
+  const content = `${taskTag}review-subagent:${branch} verdict:${verdict}${
     summary.length > 0 ? ` — ${summary}` : ""
   }`;
 

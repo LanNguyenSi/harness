@@ -505,9 +505,14 @@ describe("runSessionStartPreflight — session-id resolution (task 5e84191b)", (
     const repo = makeRepoFixture("repo-flag", "main");
     const { stream: err } = captureStream();
     const writes: string[] = [];
-    const result = await runSessionStartPreflight({
-      // stdin carries a session_id but the explicit flag wins.
-      stdin: streamFrom(JSON.stringify({ session_id: "from-stdin", cwd: repo })),
+    const prior = process.cwd();
+    process.chdir(repo);
+    let result: Awaited<ReturnType<typeof runSessionStartPreflight>>;
+    try {
+      result = await runSessionStartPreflight({
+      // With the explicit flag stdin is not read at all (its session_id and
+      // cwd are both ignored), so the run resolves the process cwd.
+      stdin: streamFrom(JSON.stringify({ session_id: "from-stdin", cwd: "/nonexistent-event-cwd" })),
       stderr: err,
       session: "from-flag",
       runPreflight: readyPreflight(0.9),
@@ -515,7 +520,11 @@ describe("runSessionStartPreflight — session-id resolution (task 5e84191b)", (
         writes.push(args.sessionId);
         return { ok: true };
       },
-    });
+      });
+    } finally {
+      process.chdir(prior);
+    }
+    expect(result.repo).toBe("repo-flag");
     expect(result.sessionId).toBe("from-flag");
     expect(result.sessionSource).toBe("flag");
     expect(writes).toEqual(["from-flag"]);
