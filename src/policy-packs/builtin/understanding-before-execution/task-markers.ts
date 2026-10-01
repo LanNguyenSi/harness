@@ -17,6 +17,11 @@ import {
   type CheckApprovalMarkerOptions,
   type MarkerCheck,
 } from "./markers.js";
+import {
+  type ApprovalMarkerKind,
+  type MarkerReportBinding,
+  verifyApprovedReportHash,
+} from "./persisted-reports.js";
 
 // Task-scoped approval markers (harness/1ee26e77). When the operator
 // passes `--task <id>` to `harness approve understanding`, a second
@@ -240,6 +245,14 @@ export interface OperatorMarkerApproval {
    */
   reportContentHash: string | null;
   /**
+   * A session marker that ALSO matched behind a matched task marker whose
+   * signed hash is non-null (null otherwise). The gate-read cross-check
+   * falls back to it when the task marker's report content is gone: a task
+   * marker is not bound to a session, so it can be signed for another
+   * session's report while this session's own marker still verifies.
+   */
+  sessionFallback: { detail: string; reportContentHash: string | null } | null;
+  /**
    * True when EITHER the task-scoped or the session-scoped marker
    * existed but aged past `approval_lifecycle.max_age` (task 6e888423).
    * False when `matched` is true, and false when a marker was simply
@@ -294,12 +307,31 @@ export function checkOperatorApprovalMarkers(
     lifecycle.maxAgeMs !== undefined ? { maxAgeMs: lifecycle.maxAgeMs } : {};
   const taskMarker = checkActiveClaimApprovalMarker(generatedDir, ageOpts);
   if (taskMarker.matched) {
+    const taskHash = taskMarker.marker?.reportContentHash ?? null;
+    // Only a task marker that binds a report can fail the gate-read hash
+    // check, so only then is the session marker read as its fallback.
+    const sessionFallback =
+      taskHash === null
+        ? null
+        : (() => {
+            const fallback = checkSessionApprovalMarker(generatedDir, sessionId, {
+              ...ageOpts,
+              taskBinding: !lifecycle.legacyMode,
+            });
+            return fallback.matched
+              ? {
+                  detail: fallback.detail,
+                  reportContentHash: fallback.marker?.reportContentHash ?? null,
+                }
+              : null;
+          })();
     return {
       matched: true,
       source: "task",
       detail: taskMarker.detail,
       taskCheckDetail: taskMarker.detail,
-      reportContentHash: taskMarker.marker?.reportContentHash ?? null,
+      reportContentHash: taskHash,
+      sessionFallback,
       expired: false,
       forged: false,
       sessionBindingRefused: false,
@@ -316,6 +348,7 @@ export function checkOperatorApprovalMarkers(
       detail: sessionMarker.detail,
       taskCheckDetail: taskMarker.detail,
       reportContentHash: sessionMarker.marker?.reportContentHash ?? null,
+      sessionFallback: null,
       expired: false,
       forged: false,
       sessionBindingRefused: false,
@@ -327,6 +360,7 @@ export function checkOperatorApprovalMarkers(
     detail: sessionMarker.detail,
     taskCheckDetail: taskMarker.detail,
     reportContentHash: null,
+    sessionFallback: null,
     // `expired` is computed ONLY on this non-matched path, preserving the
     // "false when matched is true" invariant (task 6e888423 review):
     // e.g. a FRESH session marker (matched:true, returned above) must not
@@ -352,4 +386,38 @@ export function clearTaskApprovalMarker(generatedDir: string, taskId: string): v
   } catch {
     /* already gone */
   }
+}
+
+export type MatchedMarkerReportCheck =
+  | { ok: true; source: ApprovalMarkerKind; detail: string }
+  | { ok: false; detail: string };
+
+/**
+ * Gate-read report cross-check for a matched operator marker, shared by the
+ * Claude and Codex PreToolUse hooks (task fa423e9b). Applies
+ * `verifyApprovedReportHash` to the matched marker and, when that fails and
+ * a session marker matched behind a task marker, to the session marker, so
+ * the verdict never depends on which marker the check order happened to
+ * pick. On success `source`/`detail` describe the marker that verified; on
+ * failure `detail` is the block reason.
+ */
+export function verifyMatchedMarkerReport(
+  reportsDir: string,
+  markers: OperatorMarkerApproval,
+): MatchedMarkerReportCheck {
+  const source: ApprovalMarkerKind = markers.source === "task" ? "task" : "session";
+  const primary: MarkerReportBinding = {
+    kind: source,
+    reportContentHash: markers.reportContentHash,
+  };
+  const fallback: MarkerReportBinding | null =
+    markers.sessionFallback === null
+      ? null
+      : { kind: "session", reportContentHash: markers.sessionFallback.reportContentHash };
+  const verdict = verifyApprovedReportHash(reportsDir, primary, fallback);
+  if (!verdict.ok) return verdict;
+  if (verdict.kind === primary.kind || markers.sessionFallback === null) {
+    return { ok: true, source: verdict.kind, detail: markers.detail };
+  }
+  return { ok: true, source: "session", detail: markers.sessionFallback.detail };
 }

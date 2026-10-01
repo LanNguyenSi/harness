@@ -482,7 +482,8 @@ export async function attemptAutoApproval(
   // Success sequence. `reportContentHash` is the canonical hash of the
   // report as it stands BEFORE the approval rewrite, exactly as the approve
   // CLI computes it; the lifecycle fields the rewrite changes are not part
-  // of it, so the gate-read cross-check still matches afterwards.
+  // of it, so the gate-read cross-check (some report file must still hash to
+  // it) matches afterwards.
   const reportContentHash = canonicalReportHash(parsed);
   const approvedAt = new Date().toISOString();
   // The parent linkage rides in the same signed `approvedBy` field the

@@ -13,6 +13,7 @@ import {
   canonicalReportHashOfFile,
   expirePersistedReport,
   verifyApprovedReportHash,
+  type MarkerReportBinding,
 } from "../../src/policy-packs/builtin/understanding-before-execution-runtime.js";
 
 const SESSION = "sess-canonical";
@@ -56,6 +57,24 @@ describe("canonicalReportHash", () => {
       createdAt: "2026-10-01T10:00:00.000Z",
     };
     expect(canonicalReportHash(reordered)).toBe(canonicalReportHash(base()));
+  });
+
+  it("does not depend on key order inside objects nested in arrays", () => {
+    const withArrayObjects = (first: Record<string, unknown>): Record<string, unknown> => ({
+      ...base(),
+      sections: [first, { y: 2, z: { q: 1, p: 2 } }],
+    });
+    const forward = withArrayObjects({ a: 1, b: 2 });
+    // `forward` is [{a,b}, {y, z:{q,p}}]; `reordered` lists the same values with every object's keys in another order.
+    const reordered = {
+      ...base(),
+      sections: [{ b: 2, a: 1 }, { z: { p: 2, q: 1 }, y: 2 }],
+    };
+    expect(canonicalReportHash(reordered)).toBe(canonicalReportHash(forward));
+    // Array ORDER still matters.
+    expect(canonicalReportHash({ ...base(), sections: [{ y: 2, z: { q: 1, p: 2 } }, { a: 1, b: 2 }] })).not.toBe(
+      canonicalReportHash(forward),
+    );
   });
 
   it.each([
@@ -122,39 +141,96 @@ describe("verifyApprovedReportHash", () => {
     approvalStatus: "approved",
     ...extra,
   });
+  const task = (hash: string | null): MarkerReportBinding => ({ kind: "task", reportContentHash: hash });
+  const session = (hash: string | null): MarkerReportBinding => ({ kind: "session", reportContentHash: hash });
+  const MISSING = "no report in the reports directory matches the content the";
 
-  it("is ok for a null marker hash whatever the report says", () => {
+  it("is ok for a null marker hash whatever the reports say", () => {
     writeReport("r.json", approved({ currentUnderstanding: "anything" }));
-    expect(verifyApprovedReportHash(tmp, SESSION, null)).toEqual({ ok: true });
+    expect(verifyApprovedReportHash(tmp, session(null))).toEqual({ ok: true, kind: "session" });
   });
 
-  it("is ok when the approved report hashes to the marker's hash", () => {
+  it("is ok when some report hashes to the marker's hash", () => {
     writeReport("r.json", approved());
-    expect(verifyApprovedReportHash(tmp, SESSION, canonicalReportHash(base()))).toEqual({ ok: true });
+    expect(verifyApprovedReportHash(tmp, session(canonicalReportHash(base())))).toEqual({
+      ok: true,
+      kind: "session",
+    });
   });
 
-  it("denies a differing approved report with a reason naming the file and the fix", () => {
-    const filePath = writeReport("r.json", approved({ currentUnderstanding: "swapped" }));
-    const result = verifyApprovedReportHash(tmp, SESSION, canonicalReportHash(base()));
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.filePath).toBe(filePath);
-      expect(result.detail).toBe(
-        "approved report r.json does not match the content the approval marker was signed for; re-run `harness approve understanding`",
-      );
-    }
+  it("matches a report of ANY session and ANY approvalStatus (the hash excludes the lifecycle fields)", () => {
+    writeReport("a.json", approved({ sessionId: "sess-other", approvalStatus: "expired" }));
+    expect(verifyApprovedReportHash(tmp, task(canonicalReportHash(base())))).toEqual({ ok: true, kind: "task" });
   });
 
-  it("is ok when there is no report, or the selected report is not approved", () => {
-    expect(verifyApprovedReportHash(tmp, SESSION, "deadbeef")).toEqual({ ok: true });
-    writeReport("r.json", approved({ approvalStatus: "pending", currentUnderstanding: "swapped" }));
-    expect(verifyApprovedReportHash(tmp, SESSION, "deadbeef")).toEqual({ ok: true });
-    writeReport("e.json", approved({ approvalStatus: "expired", createdAt: "2026-10-02T00:00:00.000Z" }));
-    expect(verifyApprovedReportHash(tmp, SESSION, "deadbeef")).toEqual({ ok: true });
+  it("denies when no report has the signed content, naming the marker kind and the fix, never a file", () => {
+    writeReport("r.json", approved({ currentUnderstanding: "swapped" }));
+    const result = verifyApprovedReportHash(tmp, task(canonicalReportHash(base())));
+    expect(result).toEqual({
+      ok: false,
+      detail:
+        "no report in the reports directory matches the content the task approval marker was signed for " +
+        "(the approved report was changed or removed after approval); re-run `harness approve understanding`",
+    });
+    const sessionResult = verifyApprovedReportHash(tmp, session(canonicalReportHash(base())));
+    expect(sessionResult.ok === false && sessionResult.detail).toContain(`${MISSING} session approval marker was signed for`);
   });
 
-  it("looks only at the report selected for the session, not at another session's approved report", () => {
-    writeReport("other.json", approved({ sessionId: "sess-other", currentUnderstanding: "swapped" }));
-    expect(verifyApprovedReportHash(tmp, SESSION, canonicalReportHash(base()))).toEqual({ ok: true });
+  it("finds the signed content among many other reports", () => {
+    for (let i = 0; i < 25; i += 1) writeReport(`other-${i}.json`, approved({ currentUnderstanding: `other ${i}` }));
+    writeReport("mine.json", approved());
+    expect(verifyApprovedReportHash(tmp, session(canonicalReportHash(base())))).toEqual({
+      ok: true,
+      kind: "session",
+    });
+  });
+
+  it("denies when report files exist but none parses to the signed content (unparseable rewrite)", () => {
+    fs.writeFileSync(path.join(tmp, "r.json"), '{ "currentUnderstanding": "swapped", ');
+    expect(verifyApprovedReportHash(tmp, session("deadbeef")).ok).toBe(false);
+    fs.writeFileSync(path.join(tmp, "r.json"), "[]");
+    expect(verifyApprovedReportHash(tmp, session("deadbeef")).ok).toBe(false);
+  });
+
+  it("is ok when the directory has no report file at all (missing, empty, or only non-json files)", () => {
+    expect(verifyApprovedReportHash(path.join(tmp, "missing"), session("deadbeef"))).toEqual({
+      ok: true,
+      kind: "session",
+    });
+    expect(verifyApprovedReportHash(tmp, session("deadbeef"))).toEqual({ ok: true, kind: "session" });
+    fs.writeFileSync(path.join(tmp, "notes.txt"), "x");
+    fs.mkdirSync(path.join(tmp, "dir.json"));
+    expect(verifyApprovedReportHash(tmp, session("deadbeef"))).toEqual({ ok: true, kind: "session" });
+  });
+
+  it("falls back to the fallback binding when the primary content is gone", () => {
+    writeReport("mine.json", approved());
+    const mine = canonicalReportHash(base());
+    expect(verifyApprovedReportHash(tmp, task("deadbeef"), session(mine))).toEqual({ ok: true, kind: "session" });
+    // The primary wins when both verify.
+    expect(verifyApprovedReportHash(tmp, task(mine), session(mine))).toEqual({ ok: true, kind: "task" });
+  });
+
+  it("accepts a null-hash fallback without reading any report", () => {
+    writeReport("r.json", approved());
+    expect(verifyApprovedReportHash(tmp, task("deadbeef"), session(null))).toEqual({ ok: true, kind: "session" });
+  });
+
+  it("denies naming both kinds when neither binding verifies", () => {
+    writeReport("r.json", approved());
+    const result = verifyApprovedReportHash(tmp, task("aaaa"), session("bbbb"));
+    expect(result.ok === false && result.detail).toContain(
+      `${MISSING} task and session approval markers were signed for`,
+    );
+  });
+
+  it("pinned residual: content preserved in a copy before the edit keeps a match", () => {
+    const original = writeReport("r.json", approved());
+    fs.copyFileSync(original, path.join(tmp, "copy.json"));
+    writeReport("r.json", approved({ currentUnderstanding: "swapped" }));
+    expect(verifyApprovedReportHash(tmp, session(canonicalReportHash(base())))).toEqual({
+      ok: true,
+      kind: "session",
+    });
   });
 });

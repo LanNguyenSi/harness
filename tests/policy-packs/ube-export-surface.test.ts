@@ -102,8 +102,11 @@ import * as ubeShim from "../../src/policy-packs/builtin/understanding-before-ex
 // at gate read) by canonicalReportHash, canonicalReportHashOfFile and
 // verifyApprovedReportHash (persisted-reports.ts): the one shared hash the
 // two marker producers sign and the verifier both PreToolUse hooks call.
-// 86 -> 89. The ApprovedReportHashVerification type is absent for the
-// usual reason.
+// 86 -> 89. Widened once more in the same task by verifyMatchedMarkerReport
+// (task-markers.ts), the shared gate-side wrapper that applies the check to
+// the task marker and falls back to the session marker. 89 -> 90. The
+// ApprovedReportHashVerification, MarkerReportBinding, ApprovalMarkerKind and
+// MatchedMarkerReportCheck types are absent for the usual reason.
 //
 // Mutation-verified: temporarily re-adding `export { safeJsonParse } from
 // "./persisted-reports.js";` to
@@ -195,6 +198,7 @@ const EXPECTED_EXPORTS = [
   "verifyApprovedReportHash",
   "verifyDelegation",
   "verifyInflightRecord",
+  "verifyMatchedMarkerReport",
   "writeActiveClaim",
   "writeApprovalMarker",
   "writeDelegationMarker",
@@ -203,9 +207,9 @@ const EXPECTED_EXPORTS = [
 ] as const;
 
 describe("understanding-before-execution-runtime shim export surface", () => {
-  it("exports exactly the pinned 89-name surface, sorted", () => {
+  it("exports exactly the pinned 90-name surface, sorted", () => {
     const actual = Object.keys(ubeShim).sort();
-    expect(EXPECTED_EXPORTS).toHaveLength(89);
+    expect(EXPECTED_EXPORTS).toHaveLength(90);
     expect(actual).toEqual([...EXPECTED_EXPORTS].sort());
   });
 

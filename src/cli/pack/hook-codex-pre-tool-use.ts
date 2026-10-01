@@ -29,7 +29,7 @@ import {
   describeMarkerTtlExpiry,
   matchLedgerEntries,
   noApprovalMarkerReason,
-  verifyApprovedReportHash,
+  verifyMatchedMarkerReport,
   type ApprovalCheckResult,
 } from "../../policy-packs/builtin/understanding-before-execution-runtime.js";
 import { findLatestParseError, renderMalformedSectionsNotice } from "../approve/understanding.js";
@@ -349,8 +349,8 @@ export async function runPackHookCodexPreToolUseCli(
   // True when checkOperatorApprovalMarkers found a marker FILE that failed
   // signature verification (harness/f9485cc7), mirroring the Claude hook.
   let markerForged = false;
-  // Set when a marker matched but the session's approved persisted report no
-  // longer hashes to the content that marker was signed for (task fa423e9b),
+  // Set when a marker matched but no persisted report file hashes to the
+  // content that marker was signed for any more (task fa423e9b),
   // mirroring the Claude hook: the call falls through to the ordinary block
   // path (read-only shell commands keep their exemption) with this reason.
   let reportHashMismatchDetail: string | undefined;
@@ -376,15 +376,11 @@ export async function runPackHookCodexPreToolUseCli(
     sessionBindingRefusedDetail = markers.sessionBindingRefused ? markers.detail : undefined;
     if (markers.matched) {
       // Cross-check the matched marker's signed report hash against the
-      // session's approved persisted report (task fa423e9b), for the task
-      // marker and the session marker alike.
-      const reportHash = verifyApprovedReportHash(
-        reportsDir,
-        sessionId,
-        markers.reportContentHash,
-      );
+      // persisted reports (task fa423e9b): the task marker first, the
+      // session marker as fallback.
+      const reportHash = verifyMatchedMarkerReport(reportsDir, markers);
       if (reportHash.ok) {
-        return allowResult(markers.detail, "marker", stderr);
+        return allowResult(reportHash.detail, "marker", stderr);
       }
       reportHashMismatchDetail = reportHash.detail;
     }
@@ -540,9 +536,10 @@ export async function runPackHookCodexPreToolUseCli(
         ? `${sessionBindingRefusedDetail}; ${report.detail}; ${ledger.detail}`
         : noApprovalMarkerReason(sessionId, markerTtlExpiry, report.detail, ledger.detail)
     : `generatedDir not resolvable (test/injection path); ${report.detail}; ${ledger.detail}`;
-  // A marker that matched but whose approved report was swapped after
-  // approval (task fa423e9b) gets its own reason, naming the report file and
-  // the one-command fix; no "no approval marker" wording applies to it.
+  // A marker that matched but whose signed report content is gone (the
+  // approved report was edited or removed after approval, task fa423e9b)
+  // gets its own reason, naming the marker kind and the one-command fix; no
+  // "no approval marker" wording applies to it.
   const reason =
     reportHashMismatchDetail !== undefined
       ? `${reportHashMismatchDetail}; ${ledger.detail}`

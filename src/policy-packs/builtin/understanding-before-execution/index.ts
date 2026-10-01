@@ -91,6 +91,8 @@ export {
   checkPersistedReport,
   canonicalReportHash,
   canonicalReportHashOfFile,
+  type ApprovalMarkerKind,
+  type MarkerReportBinding,
   type ApprovedReportHashVerification,
   verifyApprovedReportHash,
 } from "./persisted-reports.js";
@@ -156,6 +158,8 @@ export {
   checkSessionApprovalMarker,
   type OperatorMarkerApproval,
   checkOperatorApprovalMarkers,
+  type MatchedMarkerReportCheck,
+  verifyMatchedMarkerReport,
   clearTaskApprovalMarker,
 } from "./task-markers.js";
 

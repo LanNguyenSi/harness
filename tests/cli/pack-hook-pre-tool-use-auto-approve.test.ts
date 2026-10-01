@@ -314,7 +314,7 @@ describe("pack hook pre-tool-use — auto-approval path (ADR slice 1)", () => {
 
       expect(result.blocked).toBe(true);
       expect(result.stderr).toMatch(
-        /approved report 2026-08-27T10-00-00-000Z-report-aaaa1111\.json does not match the content the approval marker was signed for; re-run `harness approve understanding`/,
+        /no report in the reports directory matches the content the session approval marker was signed for \(the approved report was changed or removed after approval\); re-run `harness approve understanding`/,
       );
       // Refused, not re-minted: the edited report is `approved`, never `pending`.
       expect(ledgerCalls).toEqual([]);
@@ -839,7 +839,11 @@ describe("pack hook pre-tool-use — auto-approval path (ADR slice 1)", () => {
       writeApprovalMarker(generatedDir, SESSION, {
         approvedAt: new Date().toISOString(),
         approvedBy: "test-operator",
-        reportContentHash: "not-the-auto-hash",
+        // A hash-less operator marker (ledger-only approval): the gate-read
+        // report cross-check does not apply, so the marker stands and the auto
+        // path has nothing to mint. A non-null hash that matches no report
+        // would be refused and the auto path would legitimately re-mint.
+        reportContentHash: null,
       });
 
       const result = await call();
@@ -848,7 +852,7 @@ describe("pack hook pre-tool-use — auto-approval path (ADR slice 1)", () => {
       expect(result.source).toBe("marker");
       expect(result.stderr).not.toMatch(/auto-approved via session marker/);
       expect(readMarkerRaw()["approvedBy"]).toBe("test-operator");
-      expect(readMarkerRaw()["reportContentHash"]).toBe("not-the-auto-hash");
+      expect(readMarkerRaw()["reportContentHash"]).toBeNull();
       expect(readReport(report.filePath)["approvalStatus"]).toBe("pending");
       expect(ledgerCalls).toEqual([]);
     });

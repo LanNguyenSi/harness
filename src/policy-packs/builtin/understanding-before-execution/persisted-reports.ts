@@ -619,47 +619,127 @@ export function canonicalReportHashOfFile(filePath: string): string | null {
   return canonicalReportHash(parsed as Record<string, unknown>);
 }
 
+/** Marker kind whose signed report hash the gate checks. */
+export type ApprovalMarkerKind = "task" | "session";
+
+/** One matched marker's signed `reportContentHash`, tagged with its kind. */
+export interface MarkerReportBinding {
+  kind: ApprovalMarkerKind;
+  reportContentHash: string | null;
+}
+
 export type ApprovedReportHashVerification =
-  | { ok: true }
-  | { ok: false; filePath: string; detail: string };
+  | { ok: true; kind: ApprovalMarkerKind }
+  | { ok: false; detail: string };
+
+interface ReportHashScan {
+  /** Regular `*.json` files found in the directory, parseable or not. */
+  files: number;
+  /** The wanted hashes some parseable report file hashes to. */
+  matched: Set<string>;
+}
 
 /**
- * Gate-read cross-check of a matched approval marker against the session's
- * persisted report (task fa423e9b, residual of the 0.50.0 redesign). Both
- * PreToolUse hooks call it after `checkOperatorApprovalMarkers` matched,
- * passing the matched marker's signed `reportContentHash`.
+ * Hash every regular `*.json` file of `dir` (any session, any
+ * `approvalStatus`) and report which of the `wanted` hashes occur. Stops as
+ * soon as every wanted hash was found, so the usual allow path reads few
+ * files. Unreadable and non-object files count as files but match nothing.
+ */
+function scanReportHashes(dir: string, wanted: ReadonlySet<string>): ReportHashScan {
+  const scan: ReportHashScan = { files: 0, matched: new Set<string>() };
+  let names: string[];
+  try {
+    names = fs.readdirSync(dir);
+  } catch {
+    return scan;
+  }
+  for (const name of names) {
+    if (!name.endsWith(".json")) continue;
+    const full = path.join(dir, name);
+    try {
+      if (!fs.statSync(full).isFile()) continue;
+    } catch {
+      continue;
+    }
+    scan.files += 1;
+    const hash = canonicalReportHashOfFile(full);
+    if (hash !== null && wanted.has(hash)) {
+      scan.matched.add(hash);
+      if (scan.matched.size === wanted.size) break;
+    }
+  }
+  return scan;
+}
+
+/**
+ * Gate-read cross-check of a matched approval marker against the persisted
+ * reports (task fa423e9b). Both PreToolUse hooks call it after
+ * `checkOperatorApprovalMarkers` matched, through `verifyMatchedMarkerReport`.
  *
- * Fails closed on a mismatch ONLY when the marker carries a non-null hash
- * AND the report the gate selects for the session claims `approved`;
- * everything else keeps the pre-existing behaviour: a null-hash marker
- * (ledger-only / `--force` approvals bind no report), no report at all, or a
- * selected report that is not `approved` (e.g. a fresh pending report of a
- * later session under a task-scoped marker). The report is selected the way
- * `checkPersistedReport` selects it. An approved report that can no longer be
- * read or parsed counts as a mismatch: its content cannot be shown to be the
- * approved one.
+ * Rule: a marker with a non-null signed `reportContentHash` is valid iff at
+ * least one parseable report file in `reportsDir` (any session, any
+ * `approvalStatus`) has a canonical hash equal to it. The hash already
+ * leaves the lifecycle fields out, so approving, expiring or re-approving
+ * the report never changes it. The signed hash therefore proves one thing:
+ * the content the operator approved is still on disk unmodified. Editing
+ * that file (in place, by swap, by symlink, by an unparseable rewrite)
+ * removes the only match and the marker stops opening the gate. Comparing
+ * against the session's newest approved report instead would deny
+ * legitimate approvals (a newer report approved for the same claim, two
+ * sessions on one claim) and would let a swap pass by moving the swapped
+ * report out of the selection.
  *
- * The `detail` is the block reason; it names the report file (through
- * `sanitizeDetailValue`, since the name comes from the agent-writable
- * directory) and the one-command fix, which is also the single migration step
- * for a marker written before the canonical hash existed.
+ * Residual: the check cannot see content that was preserved before the edit.
+ * An agent that copies the approved report to a second file in the directory
+ * and then edits the original keeps a match, so the marker still opens the
+ * gate. The marker and the operator's approval itself are untouched by that;
+ * only the audit trail loses its claim to be the approved content.
+ *
+ * `primary` is the marker that satisfied the gate (task-scoped first),
+ * `fallback` a session marker that matched behind a task marker. The
+ * fallback is consulted only when the primary fails the check, so a task
+ * marker signed for another report does not hide a session marker that
+ * verifies. Unchanged behaviour: a null hash on the accepted marker (ledger
+ * only / `--force` approvals bind no report) and a reports directory with no
+ * report file at all both allow.
+ *
+ * The `detail` is the block reason. It names the failing marker kind and the
+ * one-command fix, which is also the single migration step for a marker
+ * written before the canonical hash existed. It carries no report-derived
+ * value, so nothing in it needs sanitising.
  */
 export function verifyApprovedReportHash(
   reportsDir: string,
-  sessionId: string,
-  markerReportContentHash: string | null,
+  primary: MarkerReportBinding,
+  fallback: MarkerReportBinding | null = null,
 ): ApprovedReportHashVerification {
-  if (markerReportContentHash === null) return { ok: true };
-  const latest = findLatestReportForSession(listPersistedReports(reportsDir), sessionId);
-  if (latest === null || latest.approvalStatus !== "approved") return { ok: true };
-  if (canonicalReportHashOfFile(latest.filePath) === markerReportContentHash) {
-    return { ok: true };
+  if (primary.reportContentHash === null) return { ok: true, kind: primary.kind };
+  if (fallback !== null && fallback.reportContentHash === null) {
+    return { ok: true, kind: fallback.kind };
   }
+  const wanted = new Set<string>([primary.reportContentHash]);
+  if (fallback !== null && fallback.reportContentHash !== null) {
+    wanted.add(fallback.reportContentHash);
+  }
+  const scan = scanReportHashes(reportsDir, wanted);
+  if (scan.files === 0 || scan.matched.has(primary.reportContentHash)) {
+    return { ok: true, kind: primary.kind };
+  }
+  if (
+    fallback !== null &&
+    fallback.reportContentHash !== null &&
+    scan.matched.has(fallback.reportContentHash)
+  ) {
+    return { ok: true, kind: fallback.kind };
+  }
+  const kinds =
+    fallback !== null
+      ? `${primary.kind} and ${fallback.kind} approval markers were`
+      : `${primary.kind} approval marker was`;
   return {
     ok: false,
-    filePath: latest.filePath,
     detail:
-      `approved report ${sanitizeDetailValue(path.basename(latest.filePath))} does not match ` +
-      `the content the approval marker was signed for; re-run \`harness approve understanding\``,
+      `no report in the reports directory matches the content the ${kinds} signed for ` +
+      `(the approved report was changed or removed after approval); re-run \`harness approve understanding\``,
   };
 }

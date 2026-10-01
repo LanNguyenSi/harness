@@ -934,9 +934,9 @@ export async function approveUnderstanding(
   // approvedBy fields, so it covers what the operator actually reviewed.
   // `canonicalReportHash` leaves the lifecycle fields out, which is why the
   // value survives that flip and a later `expirePersistedReport` rewrite;
-  // both PreToolUse hooks recompute it at gate-read time
-  // (`verifyApprovedReportHash`, task fa423e9b) and refuse a report whose
-  // content no longer matches. null when no persisted report was resolved
+  // both PreToolUse hooks look for a report file with that hash at gate-read
+  // time (`verifyApprovedReportHash`, task fa423e9b) and refuse the marker
+  // when none is left. null when no persisted report was resolved
   // (ledger-only / --force paths have nothing to bind) or it cannot be
   // read as a JSON object.
   const reportContentHash: string | null =
