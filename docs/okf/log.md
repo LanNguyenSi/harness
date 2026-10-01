@@ -2,6 +2,10 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-10-01T08:37:53Z, task b093911d: `quote-model-divergence.md` re-verified a third time after `src/runtime/bash-prefix-parse.ts` stopped ending escape-led env words at `||` (that end lost honest clauses bash runs after the short circuit) and its header gained the signal-level acceptance rule and the named residual classes. Claims re-checked against the parser, the measurement tool and real bash: the `||` sentence was replaced by the swallowing behaviour, the measured-not-lossless paragraph now states the acceptance rule and the residual classes, and the earlier value-decoding claims still match bash. Re-stamped.
+
+- 2026-10-01T07:57:02Z, task b093911d: `quote-model-divergence.md` re-verified a second time after `src/runtime/bash-prefix-parse.ts` kept the raw branch-word reading for a word with a mid-word double-quoted `$`, ended escape-led env words at `||` and had its no-loss statements narrowed to what was measured. Claims re-checked against the parser, the measurement tool and real bash: the "nothing is lost" sentence was replaced by what the tool and a bash-referee differential actually show plus the named residuals; the earlier value-decoding claims still match bash. Re-stamped.
+
 - 2026-10-01T07:20:32Z, task dda77b46: merged master (task bc97a697 edits to `docs/CLI.md`, `src/cli/index.ts` and the record verb) into this branch; the four docs listing `docs/CLI.md` re-verified against the combined file (both changes are separate rows/notes, no claim affected) and re-stamped.
 
 - 2026-10-01T07:07:54Z, task dda77b46: round 2 of the preflight stdin fix (`src/cli/session-start/index.ts` gained a no-op late-error handler and a timeout note worded by what was read; `docs/CLI.md` STDIN HANDLING note reworded to match). Re-verified the same four docs listing `docs/CLI.md` under sources: none makes a claim about the stdin timeout wording, so no claim is affected. The citation into that source in the older entry was re-pointed to the moved line. Re-stamped.
