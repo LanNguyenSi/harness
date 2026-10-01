@@ -3,7 +3,7 @@ type: overview
 title: Gate fail-posture matrix
 description: Which harness enforcement gates fail OPEN vs fail CLOSED when their evidence source (grounding-mcp ledger, approval markers, verdict files, probes) is unreachable or errors, with the exact code paths and override knobs.
 tags: [gates, fail-open, fail-closed, enforcement]
-timestamp: 2026-10-01T11:00:58Z
+timestamp: 2026-10-01T11:31:36Z
 sources:
   - src/cli/pack/auto-approve-path.ts
   - src/cli/pack/hook-codex-pre-tool-use.ts
@@ -92,6 +92,19 @@ since it is the part that changes this matrix's own fail-posture story:
   is the one place per-policy attribution ADDS a fail-closed posture the
   plain per-event resolution never needed (an event with only ever one
   context to evaluate could not exceed a bound on the count of contexts).
+- **One exception to "the cwd context is always evaluated": a BLANK cwd
+  context next to a resolved target (task `6c8ebd37`).** When the cwd's
+  `${REPO}` (outside every repository) or `${BRANCH}` (detached HEAD), as
+  far as the policy's `ledger_tag` references it, is empty, the cwd context
+  can never be satisfied (the empty-identifier row above denies it without a
+  ledger query), so `resolveAttributedContexts` does not add it for a
+  segment whose own target resolved to a real repository: otherwise the
+  remedy the deny message names (`git -C <repo> ...`, or `cd <repo> && ...`
+  in one command) would be denied again. The target's own context is still
+  demanded in full, and the base commit's blank cwd tag was satisfied by any
+  fact, so this is no weaker than the base. A non-blank cwd context, a
+  segment with no resolved target (a bare `git status`) and a target that is
+  the cwd repository itself keep the cwd context.
 - **What is unchanged:** every OTHER fail-posture row in this matrix
   (ledger degradation → tier-derived `warn-degraded` for `warn` /
   `deny-degraded` for `block`/`require_approval`, audit-write failure →
