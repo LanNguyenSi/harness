@@ -2,6 +2,8 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-10-01T07:07:54Z, task dda77b46: round 2 of the preflight stdin fix (`src/cli/session-start/index.ts` gained a no-op late-error handler and a timeout note worded by what was read; `docs/CLI.md` STDIN HANDLING note reworded to match). Re-verified the same four docs listing `docs/CLI.md` under sources: none makes a claim about the stdin timeout wording, so no claim is affected. The citation into that source in the older entry was re-pointed to the moved line. Re-stamped.
+
 - 2026-10-01T06:50:19Z, task dda77b46: `harness preflight` no longer waits forever on a stdin that never closes (`src/cli/session-start/index.ts`; `docs/CLI.md` gained a STDIN HANDLING note). Re-verified the four docs listing `docs/CLI.md` under sources (`policy-engine-producer-wiring.md`, `codex-adapter-parity-gaps.md`, `evidence-ledger-trust-boundary.md`, `debug-verb-selection.md`): none makes a claim about the preflight producer's stdin handling and none cites a line of that file, so no claim is affected. The older entry citing `src/cli/session-start/index.ts` by line was re-pointed to the moved line. Re-stamped.
 
 - 2026-09-30T13:46:41Z, task 35eb287b: re-stamped the five docs listing `docs/policy-packs/understanding-before-execution.md` after a wording-only edit there (tracker ids dropped from the kept hook table paragraph); no claim affected.
@@ -1173,7 +1175,7 @@
   first shipped full silence here, round 1's own review found the
   silence itself was the residual gap the task's goal named ("no
   diagnostic anywhere"), closed in round 2. The producer's own stderr
-  diagnostic (`src/cli/session-start/index.ts:736#"the project-scoped"`)
+  diagnostic (`src/cli/session-start/index.ts:747#"the project-scoped"`)
   no longer blames "the project layer" for a
   base- or machine-layer parse failure (round 1's lead-in did); both
   this diagnostic and the new `doctor` finding now collapse a
