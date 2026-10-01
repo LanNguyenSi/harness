@@ -262,12 +262,11 @@ interface WordRead {
  *   - an inline env word that carries an escape or a mid-word quote but
  *     does not START with a quote (`swallowOps`) keeps swallowing the
  *     same operators, because the old reading did and a later assignment
- *     behind them (`V=\"& W=/tmp cmd`) was extracted through it. It ends
- *     at an unquoted `||` though (bash never runs what follows a pure
- *     assignment on the left of `||`), so `A=a\ b|| cd /x && y` reads no
- *     `cd`; a single `|` is still swallowed (`A=a\ b| cd /x && y` reads
- *     the `cd`, like the plain `A=x|| cd /x && y` always has: a known
- *     phantom, not covered);
+ *     behind them (`V=\"& W=/tmp cmd`) was extracted through it. That
+ *     includes `|` and `||`, so `A=a\ b|| cd /x && y` reads the `cd` like
+ *     the plain `A=x|| cd /x && y` always has (a known phantom, not
+ *     covered); ending the word at `||` was tried and lost honest clauses
+ *     that bash runs after the short circuit;
  *   - a word that STARTS with a quote, and every `cd` / branch word, ends
  *     at an unquoted, unescaped `;`, `&`, `|`, `<`, `>`, `(` or `)`, so
  *     `A='a b'|| cd /x && y` ends the value at `||` and never reads the
@@ -293,10 +292,6 @@ function readWord(
   while (i < s.length) {
     const c = s[i]!;
     if (WS.test(c) || stops.includes(c)) break;
-    // A swallowing word still ends at an unquoted `||`: bash never runs
-    // what follows a pure assignment on the left of `||`, so nothing an
-    // honest command needs is behind it.
-    if (swallow && c === "|" && s[i + 1] === "|") break;
     if (c === "'") {
       const end = s.indexOf("'", i + 1);
       if (end < 0) return null;

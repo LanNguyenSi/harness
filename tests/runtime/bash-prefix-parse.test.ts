@@ -334,18 +334,32 @@ describe("parseBashPrefix", () => {
         expect(piped.inlineEnv).toEqual({ V: '"|', W: "x" });
       });
 
-      it("ends an escape-led or mid-quote env word at an unquoted || (bash never runs what follows a pure assignment), so no phantom cd is read behind it", () => {
-        for (const head of ["A=a\\ b", 'A=x"a b"', 'V=\\"']) {
+      it("keeps swallowing an unquoted || in an escape-led or mid-quote env word, so a later honest clause bash runs after the short circuit is still reached", () => {
+        // bash: the pure assignment on the left of || succeeds, the right side
+        // `D='dev'` is skipped, and `git checkout release/1.2` runs after the `;`.
+        const r = parseBashPrefix("A=&'&'||D='dev'; git checkout release/1.2 && T");
+        expect(r.branchTarget).toBe("release/1.2");
+        expect(r.inlineEnv).toEqual({ A: "&&||D=dev;" });
+      });
+
+      it("residual, not covered: an escape-led or mid-quote env word swallows ||, so the cd behind it is read as a leading one (phantom, same as the plain A=x|| spelling)", () => {
+        // bash skips the cd after a successful pure assignment on the left of ||.
+        // The walk-level fix (stop at ||, never read a cd after |) is a separate follow-up.
+        const heads: Array<[string, string]> = [
+          ["A=a\\ b", "a b||"],
+          ['A=x"a b"', "xa b||"],
+          ['V=\\"', '"||'],
+        ];
+        for (const [head, value] of heads) {
           const cmd = `${head}|| cd /t && y`;
           const r = parseBashPrefix(cmd);
-          expect(r.cdTarget, cmd).toBe(null);
-          expect(cmd.slice(r.remainderStart).startsWith("||"), cmd).toBe(true);
+          expect(r.cdTarget, cmd).toBe("/t");
+          expect(Object.values(r.inlineEnv), cmd).toEqual([value]);
+          expect(cmd.slice(r.remainderStart), cmd).toBe("y");
         }
-        // the value itself is still extracted
-        expect(parseBashPrefix("A=a\\ b|| cd /t && y").inlineEnv).toEqual({ A: "a b" });
-        // not covered: the PLAIN spelling `A=x|| cd /t && y` keeps reading the cd (pre-existing phantom, a separate follow-up)
+        // the plain twin reads the same phantom cd on the pre-change parser
         expect(parseBashPrefix("A=x|| cd /t && y").cdTarget).toBe("/t");
-        // not covered: a single | behind an escape-led word is still swallowed, so the phantom cd is read
+        // a single | behind an escape-led word is swallowed the same way
         expect(parseBashPrefix("A=a\\ b| cd /t && y").cdTarget).toBe("/t");
       });
 
