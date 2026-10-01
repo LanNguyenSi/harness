@@ -4,6 +4,8 @@
 
 - 2026-10-01T11:36:05Z, task 11bd2b97: the four `session-start` producers and their CLI wiring in `src/cli/index.ts` now share `src/cli/session-start/shared-options.ts` (pure refactor; help text, options, defaults, stderr output, exit codes and ledger writes unchanged). `debug-verb-selection.md`, `pause-vs-gate-kill-switch.md` and `understanding-gate-lockout-recovery.md` list `src/cli/index.ts` under sources and were re-verified: none states a claim about the session-start options or wiring; the only effect was shifted lines, so their citations into `src/cli/index.ts` were re-pointed (+8 above the session-start block, -87 below it), and so were the three citations in this log that okf-kit resolves against the current file. The lockout doc's sentence that `harness session-start preflight` stages `.pending-approval` on every run with a resolved id still holds. Re-stamped.
 
+- 2026-10-01T11:43:09Z, task 20ebf935: `understanding-gate-lockout-recovery.md` gained the block-message reason bullet, and `codex-adapter-parity-gaps.md`, `evidence-ledger-trust-boundary.md`, `gate-fail-posture-matrix.md` and `understanding-gate-auto-mode-signals.md` were re-verified after the PreToolUse and PostToolUse hooks, `persisted-reports.ts`, `post-tool-use-boundary.ts`, `markers.ts`, `approve/understanding.ts` and `docs/policy-packs/understanding-before-execution.md` changed (an optional `expiredBy` report field carried on the persisted-report record, the expiry reason in the block message, a new `expiry-reason.ts`, an expiry trigger matrix). Claims re-checked against the code: no gate decision, source list, precedence or fail posture they state changed; the lockout doc now says the Claude hook appends the expiry sentence to its stdout reason after the `ux:` envelope, while the Codex agent reads the whole stderr, whose engine reason carries it once. The edits shifted line citations into the hook files, `persisted-reports.ts`, `approve/understanding.ts`, `markers.ts` and `post-tool-use-boundary.ts`, which were re-pointed in the decision record, this log and the okf docs, including three prose `lines N-M` pointers in `codex-adapter-parity-gaps.md`. Re-stamped.
+
 - 2026-10-01T11:20:42Z, task 241d9e9e: `src/runtime/read-only-bash.ts` now refuses a command carrying a NUL-decoding ANSI-C escape (fail closed, predicate `hasAnsiCNulEscape` in `src/runtime/shell-word.ts`); `decodeShellWord` itself decodes such a word exactly as before. `quote-model-divergence.md` and `understanding-gate-auto-mode-signals.md` re-verified against the code and against GNU bash 3.2.57: neither makes a claim about a NUL escape or about the classifier's escape handling beyond the restrictive-side use of the decoder, which still holds, so no body text changed (a body edit would shift the lines older entries here cite). Re-stamped.
 
 - 2026-10-01T08:37:53Z, task b093911d: `quote-model-divergence.md` re-verified a third time after `src/runtime/bash-prefix-parse.ts` stopped ending escape-led env words at `||` (that end lost honest clauses bash runs after the short circuit) and its header gained the signal-level acceptance rule and the named residual classes. Claims re-checked against the parser, the measurement tool and real bash: the `||` sentence was replaced by the swallowing behaviour, the measured-not-lossless paragraph now states the acceptance rule and the residual classes, and the earlier value-decoding claims still match bash. Re-stamped.
@@ -665,7 +667,7 @@
   states only what `[0.28.0]` documents, dropping the unsourced
   "intentionally stays loose" design claim it carried at first; each
   rewrite kept the comment at a 4-line span so no numbered citation
-  below it shifted; verified `src/cli/approve/understanding.ts:678`
+  below it shifted; verified `src/cli/approve/understanding.ts:679`
   (this doc's own `understanding-gate-lockout-recovery.md` citation)
   still reads `resolveApprovalSessionId` after the edits, unchanged.
 
@@ -692,7 +694,7 @@
   Prior Art's presence (required since 0.4.0, same citation
   `` `CHANGELOG.md:#0.28.0` ``) and cannot judge the section's content,
   and that the approve CLI is the boundary that refuses a hollow list.
-  The edited span stayed at 4 lines (`understanding.ts` lines 483-486); `src/cli/approve/understanding.ts:678` still reads
+  The edited span stayed at 4 lines (`understanding.ts` lines 483-486); `src/cli/approve/understanding.ts:679` still reads
   `resolveApprovalSessionId` and the file's total line count is
   unchanged, so the citation above it does not shift.
   `understanding-gate-lockout-recovery.md`'s `timestamp:` is re-stamped
@@ -2406,7 +2408,7 @@
   `probeRegularFilePresence`, or cite a span of `hook-pre-tool-use.ts`
   inside this round's edited region (lines ~940-978): `grep` across all 6
   for those terms found only `understanding-gate-lockout-recovery.md`'s
-  pre-existing citation at `src/cli/pack/hook-pre-tool-use.ts:948#"writePendingApproval(generatedDir, sessionId);"`,
+  pre-existing citation at `src/cli/pack/hook-pre-tool-use.ts:969#"writePendingApproval(generatedDir, sessionId);"`,
   well before the edited region, still resolving. `evidence-ledger-trust-boundary.md`
   was NOT flagged stale this round: it was itself edited (new
   `probeRegularFilePresence` paragraph, `delegation-markers.ts` added to
@@ -2458,7 +2460,7 @@
   describes only the new reason itself; neither touches any claim or
   cited span in these 7 docs (the one line-numbered citation among them,
   `understanding-gate-lockout-recovery.md`'s
-  `src/cli/pack/hook-pre-tool-use.ts:948#"writePendingApproval(generatedDir, sessionId);"`,
+  `src/cli/pack/hook-pre-tool-use.ts:969#"writePendingApproval(generatedDir, sessionId);"`,
   sits well before the edited comment and still resolves). Timestamp-only
   re-stamp on all 7; no content changed. `okf-kit check --json docs/okf`
   on the committed tree shows 0 errors, 0 warnings after the re-stamp.
