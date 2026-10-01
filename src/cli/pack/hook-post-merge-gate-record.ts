@@ -41,6 +41,9 @@
 // gate blocked them. Normalisation is skipped above MAX_NORMALIZE_LENGTH,
 // like the gate; such a command is tested raw only, which is the one named
 // residual (a wrapper spelling in a command longer than that bound).
+// Like the gate, quoted text that holds a wrapper plus `gh pr merge` behind
+// a boundary (`git commit -m 'x; env gh pr merge 1'`) also matches; the
+// merged fact is still written only on a confirmed merge result.
 // Only the TRIGGER is widened: the PR number is still read from the raw
 // command and the merged fact is still written only when
 // `resolveMergeConfirmation` confirms the merge.

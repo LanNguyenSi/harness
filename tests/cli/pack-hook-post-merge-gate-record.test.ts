@@ -697,6 +697,11 @@ const MISSED_RAW_FORMS: Array<{ arm: "normalize" | "amp" | "quote"; command: str
   { arm: "normalize", command: "false || nice -n 5 gh pr merge 1" },
   { arm: "normalize", command: "echo a | nice gh pr merge 1" },
   { arm: "normalize", command: "env A=1 gh  pr merge 1" },
+  { arm: "normalize", command: "cd /tmp && env FOO=bar gh pr merge 1" },
+  { arm: "normalize", command: "git -C /tmp status && nice gh pr merge 1" },
+  { arm: "normalize", command: "(nice gh pr merge 1)" },
+  { arm: "normalize", command: "echo a\nnice gh pr merge 1" },
+  { arm: "normalize", command: "VAR='x y' env gh pr merge 2 --admin" },
   // A bare `&` chain before a wrapper: only the amp-aware pass segments there.
   { arm: "amp", command: "echo hi & nice gh pr merge 1 --squash" },
   { arm: "amp", command: "echo hi & env gh pr merge 1" },
