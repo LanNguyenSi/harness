@@ -2,6 +2,8 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-10-01T07:07:17Z, task b093911d: `quote-model-divergence.md` re-verified after `src/runtime/bash-prefix-parse.ts` began reading values, `cd` paths and branch tokens as whole shell words (backslash escapes, chained quote runs, `'\''`) and keeping `__proto__=` assignments. Claims re-checked against the parser and real bash (`V=<word> printenv V`): the K2 value-decoding classes `a'b'"c"`, `'a'b'c'` and `A=a\ b` now match bash, ANSI-C `$'...'` is still undecoded. Added a paragraph naming what changed and what is not covered, updated the two status sentences and the Fail-open-Klassen row for the value-decoding class. Re-stamped.
+
 - 2026-09-30T13:46:41Z, task 35eb287b: re-stamped the five docs listing `docs/policy-packs/understanding-before-execution.md` after a wording-only edit there (tracker ids dropped from the kept hook table paragraph); no claim affected.
 
 - 2026-09-30T13:43:20Z, task 35eb287b: the codex install section of `docs/policy-packs/understanding-before-execution.md` now describes kept operator hook tables (named with both line numbers under the foreign-section prefix, refused when their command is one harness writes) and its documented boundaries; `codex-adapter-parity-gaps.md` re-checked against `src/cli/apply/install-codex-config.ts` (its boundary sentence still holds) and `evidence-ledger-trust-boundary.md`, `gate-fail-posture-matrix.md`, `understanding-gate-lockout-recovery.md`, `understanding-gate-auto-mode-signals.md` re-checked (none makes a claim about the changed paragraph). Re-stamped.

@@ -3,7 +3,7 @@ type: overview
 title: Shell quote models, measured divergence against bash
 description: The policy engine has four independent shell-word models plus a raw-regex trigger layer. This records what each actually extracts, measured against real bash, which divergences are fail-open, and the evidence-led ordering for closing them.
 tags: [policy-engine, bash-match, quote-model, fail-open, measurement]
-timestamp: 2026-09-25T12:02:14.000Z
+timestamp: 2026-10-01T07:07:17Z
 sources:
   - src/runtime/command-normalize.ts
   - src/cli/init/composer.ts
@@ -184,6 +184,32 @@ K5/K2/K1-Aufrufstellen der gemeinsamen Unquoting-Familie sind damit zwei
 (`read-only-bash` über `fdee7d0f`, der Trigger-Layer über `cf3dff51`)
 umgesetzt; `bash-prefix-parse`s Wert-Dekodierung (K2) bleibt die einzige
 noch offene.
+
+**Nach Task `b093911d` (Stand der Änderung an
+`src/runtime/bash-prefix-parse.ts`):** die Wert-Dekodierung (K2) liest
+ein Shell-Wort jetzt wie bash, nämlich unquotierten Text, Backslash-Escapes
+sowie einfach und doppelt gequotete Teile aneinandergereiht bis zum
+unescapten Leerraum. Gegen echtes bash gemessen (`V=<wort> printenv V`):
+`a'b'"c"` und `'a'b'c'` liefern `abc` (vorher `a'b'"c"` und `a`), `A=a\ b`
+liefert `A=a b` (vorher `A=a\`), `VAR="say \"hi\""` liefert `say "hi"`
+(vorher `say \`, und das echte `cd` dahinter ging verloren), `VAR='it'\''s
+fine'` liefert `it's fine` (vorher `it`). Dasselbe Wortlesen gilt für den
+`cd`-Pfad und das Branch-Token von `git switch`/`checkout`. Auf der
+Resolver-Seite zeigt die Tabelle "Env-Indikator vor dem Risk-Gate
+versteckbar" unten damit zwei Schreibweisen nicht mehr versteckt:
+`DATABASE_URL=p'r'od` und `DATABASE_URL=pro\d` liefern jetzt `prod`.
+**Nicht geschlossen:** ANSI-C `$'...'` (`$'\x70rod'`, `$'\160rod'`) bleibt
+undekodiert und damit versteckt (das Wort wird roh gehalten), `$VAR` und
+`$(...)` bleiben Literaltext, und `;`/`&`/`|` beenden einen reinen
+(quote- und escape-freien) Env-Wert weiterhin nicht (`A=x;B=2` gibt
+`A="x;B=2"`, `A=x|| cd /t && y` liest das `cd`). Ein Wort, dessen
+schließendes Quote nur ein escaptes sein könnte (`VAR="abc\" cd /x && y`,
+für bash unvollständig), wird wie vorher mit dem ersten Quote gelesen,
+damit nichts verloren geht, das vorher extrahiert wurde. Zusätzlich ist
+`inlineEnv` jetzt ein Objekt ohne Prototyp, damit `__proto__=/prod`
+nicht still verworfen wird. Die Trigger-Ebene (`command-normalize`, Zeile
+"Backslash-Escape im Wert" in der Fail-open-Tabelle unten) ist von dieser
+Änderung nicht berührt und wurde dabei nicht neu gemessen.
 
 ## Kurzfassung
 
@@ -457,7 +483,7 @@ Zeichenfolge `prod`.
 | `&` fehlt im Boundary-Alphabet | **fail-open** zum Messzeitpunkt, seither geschlossen: `d834a065` (Template-Ebene, `harness.yaml`-Regex neuer `init`-Läufe, schließt EIN bestehendes materialisiertes Manifest nicht automatisch, `harness apply` schreibt dessen Trigger-Regex nie um; `checkTriggerBoundaryDrift`, task `037cfb7c`, meldet die Drift seither als Fehler) UND `aabbad63` (Engine-Ebene, zweiter, unabhängiger Normalisierungs-Pass in `policyMatchesEvent`, wirkt auch auf ein altes, noch nicht nachgezogenes Manifest) | Hook-Probe mit Pro-Policy-Kontrolle + Shim |
 | Metazeichen im gequoteten Wert (`cf3dff51`) | **fail-open** zum Messzeitpunkt, seither geschlossen (PR #412/#419) | Hook-Probe + Shim |
 | Backslash-Escape im Wert (`b093911d`) | **fail-open** Trigger, unverändert offen | Hook-Probe + Shim |
-| Wert-Dekodierung fehlt (ANSI-C, Verkettung, Backslash) | **fail-open** Risk-Einstufung, unverändert offen | Resolver-Probe mit Kontrollen |
+| Wert-Dekodierung fehlt (ANSI-C, Verkettung, Backslash) | **fail-open** Risk-Einstufung zum Messzeitpunkt; seit `b093911d` für Verkettung und Backslash geschlossen (`p'r'od`, `pro\d` liefern `prod`), für ANSI-C (`$'\x70rod'`) unverändert offen | Resolver-Probe mit Kontrollen; Nachmessung am Parser gegen bash |
 | Flag-Unquoting fehlt (`2dfdf472`) | **fail-open** zum Messzeitpunkt, seither geschlossen (`fdee7d0f`) | K5, reale Mutation, 3 Schreibweisen |
 | Modell behauptet Env ohne Export | fail-closed | K2, 1653 Fälle |
 | `command-normalize` peelt nicht (97/196) | fail-closed (raw greift) | K3 |
@@ -504,8 +530,10 @@ nicht. Der `&`-Befund ist eine fünfte, bisher nicht gefilte Klasse und
 sticht sie alle im Verhältnis Wirkung zu Aufwand. **Stand heute**
 (siehe "Status seit dieser Messung"): `cf3dff51` und `2dfdf472` sind
 beide geschlossen, über getrennte Umsetzungen statt einer gemeinsamen
-`decodeShellWord`-Primitive für alle drei; `b093911d` bleibt der
-einzige noch offene der drei ursprünglich verbundenen Tasks.
+`decodeShellWord`-Primitive für alle drei; `b093911d` hat die
+Wert-Dekodierung von `bash-prefix-parse` mit einem eigenen Wortleser
+geschlossen (siehe der Absatz "Nach Task `b093911d`"), ANSI-C bleibt
+offen.
 
 ## Offene Lücken dieser Messung
 
