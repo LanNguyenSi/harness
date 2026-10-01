@@ -4537,6 +4537,32 @@ describe("runInterceptCli: empty REPO / BRANCH never renders a blank ledger tag"
     expect(ledger.tags).toEqual([]);
   });
 
+  it("the repository name in the detached hint is cleaned and bounded: an override with control characters or 500 characters", async () => {
+    const repo = makeDetachedRepo();
+    const control = `evil${String.fromCharCode(7)}\n${String.fromCharCode(27)}[31mname`;
+    process.env.HARNESS_REPO = control;
+    const dirty = await run({
+      policy: templatePolicy("preflight-before-push"),
+      command: "git push origin HEAD:refs/heads/x",
+      cwd: repo,
+      ledger: foreignLedger("preflight:other-branch ready:true"),
+    });
+    expect(dirty.result.blocked).toBe(true);
+    expect(dirty.result.decisions[0]!.emptyIdentifier).toBe("BRANCH");
+    expect(dirty.envelope.reason).toContain("repository `evil [31mname`");
+    expect(dirty.envelope.reason).not.toMatch(/[\u0000-\u001f\u007f]/);
+
+    process.env.HARNESS_REPO = "r".repeat(500);
+    const long = await run({
+      policy: templatePolicy("preflight-before-push"),
+      command: "git push origin HEAD:refs/heads/x",
+      cwd: repo,
+      ledger: foreignLedger("preflight:other-branch ready:true"),
+    });
+    expect(long.envelope.reason).toContain(`repository \`${"r".repeat(200)}...\``);
+    expect(long.envelope.reason).not.toContain("r".repeat(201));
+  });
+
   it("warn stays non-blocking and require_approval blocks without staging an approval marker", async () => {
     const base = templatePolicy("preflight-before-investigation");
     const warnLedger = foreignLedger("preflight:other-repo");
@@ -4754,6 +4780,132 @@ describe("runInterceptCli: empty REPO / BRANCH never renders a blank ledger tag"
       expect(result.decisions[0]!.emptyIdentifier).toBe("REPO");
       expect(ledger.tags).toEqual(["preflight:feature"]);
     });
+
+    // "Outside every repository" errs toward inside. The static walk that
+    // resolves the builtins finds no repository in these layouts, but git
+    // does: it walks past a `.git` directory without HEAD, has no depth
+    // bound, and runs in a bare repository. The guarded `cd` does not run,
+    // so the push really runs in the detached repository, and B's evidence
+    // must not satisfy it.
+    it.each([
+      [
+        "below a HEAD-less .git directory inside a detached repository",
+        (parent: string) => {
+          const alpha = namedRepo(parent, "alpha", `${DETACHED_SHA}\n`);
+          const cwd = path.join(alpha, "eg");
+          fs.mkdirSync(path.join(cwd, ".git"), { recursive: true });
+          return cwd;
+        },
+      ],
+      [
+        "a bare repository with a detached HEAD",
+        (parent: string) => {
+          const bare = path.join(parent, "bare.git");
+          fs.mkdirSync(path.join(bare, "refs", "heads"), { recursive: true });
+          fs.mkdirSync(path.join(bare, "objects"));
+          fs.writeFileSync(path.join(bare, "HEAD"), `${DETACHED_SHA}\n`);
+          return bare;
+        },
+      ],
+      [
+        "130 levels below a detached repository",
+        (parent: string) => {
+          let cwd = path.join(namedRepo(parent, "alpha", `${DETACHED_SHA}\n`), "deep");
+          for (let level = 0; level < 130; level++) cwd = path.join(cwd, "d");
+          fs.mkdirSync(cwd, { recursive: true });
+          return cwd;
+        },
+      ],
+    ])("a cwd %s keeps its cwd context: `false && cd <B>; git push` with B's matching fact still denies", async (_label, makeCwd) => {
+      const parent = fs.realpathSync(tmpRoot());
+      const target = namedRepo(parent, "beta", "ref: refs/heads/feature\n");
+      const cwd = makeCwd(parent);
+
+      const ledger = factsLedger("preflight:feature ready:true");
+      const { result, envelope } = await run({
+        policy: templatePolicy("preflight-before-push"),
+        command: `false && cd ${target}; git push origin HEAD:refs/heads/x`,
+        cwd,
+        ledger,
+      });
+      expect(result.blocked).toBe(true);
+      expect(result.decisions.map((d) => d.outcome)).toEqual(["deny", "allow"]);
+      expect(result.decisions[0]!.emptyIdentifier).toBe("REPO");
+      expect(ledger.tags).toEqual(["preflight:feature"]);
+      expect(envelope.reason).toContain("no git repository was found");
+    });
+
+    // Where the check cannot rule a repository out it counts the cwd as
+    // inside, even when git would find none: any `.git` entry, valid or
+    // not, and an lstat error other than ENOENT.
+    it.each([
+      [
+        "a HEAD-less .git directory",
+        (parent: string) => {
+          const cwd = path.join(nonRepoCwd(parent), "eg");
+          fs.mkdirSync(path.join(cwd, ".git"), { recursive: true });
+          return cwd;
+        },
+      ],
+      [
+        "a dangling .git symlink",
+        (parent: string) => {
+          const cwd = path.join(nonRepoCwd(parent), "dangling");
+          fs.mkdirSync(cwd);
+          fs.symlinkSync(path.join(parent, "missing-gitdir"), path.join(cwd, ".git"));
+          return cwd;
+        },
+      ],
+      [
+        "a path below a regular file (lstat fails with ENOTDIR)",
+        (parent: string) => {
+          const file = path.join(nonRepoCwd(parent), "file");
+          fs.writeFileSync(file, "x\n");
+          return path.join(file, "sub");
+        },
+      ],
+    ])("outside every real repository, a cwd with %s still keeps its cwd context next to `git -C <B> push`", async (_label, makeCwd) => {
+      const parent = fs.realpathSync(tmpRoot());
+      const target = namedRepo(parent, "beta", "ref: refs/heads/feature\n");
+      const cwd = makeCwd(parent);
+
+      const ledger = factsLedger("preflight:feature ready:true");
+      const { result } = await run({
+        policy: templatePolicy("preflight-before-push"),
+        command: `git -C ${target} push`,
+        cwd,
+        ledger,
+      });
+      expect(result.blocked).toBe(true);
+      expect(result.decisions.map((d) => d.outcome)).toEqual(["deny", "allow"]);
+      expect(result.decisions[0]!.emptyIdentifier).toBe("REPO");
+      expect(ledger.tags).toEqual(["preflight:feature"]);
+    });
+
+    it.skipIf(process.getuid?.() === 0)(
+      "an unsearchable cwd (lstat fails with EACCES) keeps its cwd context next to `git -C <B> push`",
+      async () => {
+        const parent = fs.realpathSync(tmpRoot());
+        const target = namedRepo(parent, "beta", "ref: refs/heads/feature\n");
+        const cwd = path.join(nonRepoCwd(parent), "locked");
+        fs.mkdirSync(cwd);
+        fs.chmodSync(cwd, 0o000);
+        try {
+          const ledger = factsLedger("preflight:feature ready:true");
+          const { result } = await run({
+            policy: templatePolicy("preflight-before-push"),
+            command: `git -C ${target} push`,
+            cwd,
+            ledger,
+          });
+          expect(result.blocked).toBe(true);
+          expect(result.decisions.map((d) => d.outcome)).toEqual(["deny", "allow"]);
+          expect(result.decisions[0]!.emptyIdentifier).toBe("REPO");
+        } finally {
+          fs.chmodSync(cwd, 0o755);
+        }
+      },
+    );
 
     it("an extract named like a builtin decides the cwd context exactly as the guard sees it: a shadowed REPO / BRANCH keeps the non-repo cwd context", async () => {
       const parent = fs.realpathSync(tmpRoot());

@@ -3,7 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { Writable } from "node:stream";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { parse as parseYaml } from "yaml";
 import {
   attributeTriggerSegments,
@@ -2559,6 +2559,10 @@ describe("intercept: empty REPO / BRANCH never renders a blank ledger tag", () =
 
   it("an empty CWD builtin names no directory, so its blank cwd context is still demanded next to a resolved target", async () => {
     const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "harness-empty-cwd-")));
+    // An empty path resolves against the process cwd, which is a checkout
+    // when the suite runs; pin it to a directory outside every repository
+    // so only the empty-CWD rule can keep the cwd context here.
+    const processCwd = vi.spyOn(process, "cwd").mockReturnValue(root);
     try {
       const target = path.join(root, "widget");
       fs.mkdirSync(path.join(target, ".git"), { recursive: true });
@@ -2576,6 +2580,7 @@ describe("intercept: empty REPO / BRANCH never renders a blank ledger tag", () =
       expect(result.blockJson).not.toBeNull();
       expect(ledger.queryCalls.map((c) => c.tag)).toEqual(["preflight:widget"]);
     } finally {
+      processCwd.mockRestore();
       fs.rmSync(root, { recursive: true, force: true });
     }
   });

@@ -806,12 +806,15 @@ const EMPTY_REPO_MESSAGE =
 /**
  * Names the repository whose HEAD is detached, so a detached working
  * directory that is denied next to a `git -C <other repo>` target is
- * recognisable as the working directory's own repository. The name is a
- * directory basename, so control characters are blanked before it reaches
- * the agent envelope.
+ * recognisable as the working directory's own repository. The name is the
+ * resolved `${REPO}` value: the work-tree basename, a `HARNESS_REPO`
+ * override, or the value of a policy extract named `REPO` (which can
+ * carry tool input), so it is cleaned and bounded like any other untrusted
+ * text before it reaches the agent envelope: control characters blanked,
+ * at most 200 characters (`sanitizeEnvelopeReason`).
  */
 function emptyBranchMessage(repo: string): string {
-  const name = repo.replace(ENVELOPE_CONTROL_CHARS, " ");
+  const name = sanitizeEnvelopeReason(repo);
   return (
     `no branch is checked out in repository \`${name}\`: HEAD is detached, so the branch-scoped evidence this policy checks cannot be looked up. ` +
     "Check out a named branch there (`git switch <branch>`, or `git switch -c <branch>` for a new one), create the evidence for that branch, then retry the command."
@@ -1266,10 +1269,12 @@ export type AttributedContextsResult =
  * every git repository (a blank `${REPO}` for the policy, as the guard
  * sees it), its cwd context is not demanded next to a segment whose own
  * target resolved to a real repository (see the loop body). That
- * exception relies on the static target attribution, whose known
- * misattribution (a `GIT_DIR=` prefix or a third repository reached
- * through another construct) exists for every cwd. A detached cwd and
- * every other non-blank cwd context are still never dropped.
+ * exception relies on two static models: the target attribution, whose
+ * known misattribution (a `GIT_DIR=` prefix or a third repository reached
+ * through another construct) exists for every cwd, and the check that the
+ * cwd is outside every repository, which errs toward inside
+ * (`mayBeInsideRepository`). A detached cwd and every other non-blank cwd
+ * context are still never dropped.
  *
  * D-012: a target reached through a symlink resolves to its REAL
  * (realpath'd) repository identity, not the symlink's own lexical
@@ -1340,11 +1345,15 @@ function resolveAttributedContexts(
   // "Outside every repository" is checked on the cwd's real path: the
   // builtins resolve the path as given, while git runs in the physical
   // directory, so a symlink into a repository is not outside it. An empty
-  // CWD names no directory at all and never qualifies.
+  // CWD names no directory at all and never qualifies. The check is the
+  // conservative `mayBeInsideRepository`, not the static
+  // `resolveGitContext` the builtins come from: that resolver misses
+  // repositories git still finds (see the helper's doc comment), and here
+  // a miss would drop a demand.
   const cwdOutsideEveryRepository =
     cwdGuard?.identifier === "REPO" &&
     cwdBuiltins.CWD.length > 0 &&
-    resolveGitContext(cwdReal).repo.length === 0;
+    !mayBeInsideRepository(cwdReal);
 
   for (const seg of segments) {
     if (!satisfying.has(seg)) continue;
@@ -1395,11 +1404,15 @@ function resolveAttributedContexts(
     // `cd <repo> && ...` in one command). The skip applies only when the
     // cwd is outside every repository and this segment's own target
     // resolved to a real repository; the target's own context is still
-    // demanded in full. It relies on the static target attribution, whose
-    // known misattribution (a `GIT_DIR=` prefix or a third repository
-    // reached through another construct) exists for every cwd, and a git
-    // verb that really runs in a cwd outside every repository fails on its
-    // own. A detached cwd (non-blank `${REPO}`, blank `${BRANCH}`) and
+    // demanded in full. It relies on two static models: the target
+    // attribution, whose known misattribution (a `GIT_DIR=` prefix or a
+    // third repository reached through another construct) exists for every
+    // cwd, and the cwd resolution, which is conservative: any `.git` entry,
+    // a bare-repository layout or an unreadable entry counts as inside and
+    // the walk has no depth bound (`mayBeInsideRepository`), so a git verb
+    // that really runs in a cwd this check calls outside every repository
+    // fails on its own. A
+    // detached cwd (non-blank `${REPO}`, blank `${BRANCH}`) and
     // every non-blank cwd context keep the rule above unchanged: the
     // detached remedy (`git switch` in that repository) is establishable,
     // and dropping that context would let a misattributed push from the
@@ -1444,6 +1457,50 @@ function resolveAttributedContexts(
   // the cwd context or a foreign one). Never leave a matched, per-repo-
   // builtins policy with zero contexts to evaluate against.
   return { kind: "contexts", contexts: contexts.length > 0 ? contexts : [cwdContext] };
+}
+
+/**
+ * Could git find a repository from `dir`? Decided for the one place that
+ * drops a demand on the answer (the cwd-outside-every-repository exception
+ * in `resolveAttributedContexts`), so every doubt counts as inside. The
+ * static `resolveGitContext` walk that resolves the `REPO` / `BRANCH`
+ * builtins is left as it is for its other callers; it reports no
+ * repository where git still finds one: a `.git` directory without `HEAD`
+ * ends its walk (git skips it and walks on), its walk stops after 128
+ * levels, and it never recognises a bare repository. This walk instead:
+ *
+ * - counts any `.git` entry, file or directory, valid or not, and does not
+ *   follow or validate it;
+ * - counts a directory holding `HEAD`, `objects` and `refs` (a bare
+ *   repository, or a directory inside a git directory);
+ * - counts an `lstat` error other than ENOENT (the entry may exist);
+ * - has no depth bound: it ends only at the filesystem root.
+ */
+function mayBeInsideRepository(dir: string): boolean {
+  let current = path.resolve(dir);
+  for (;;) {
+    if (entryMayExist(path.join(current, ".git"))) return true;
+    if (
+      entryMayExist(path.join(current, "HEAD")) &&
+      entryMayExist(path.join(current, "objects")) &&
+      entryMayExist(path.join(current, "refs"))
+    ) {
+      return true;
+    }
+    const parent = path.dirname(current);
+    if (parent === current) return false;
+    current = parent;
+  }
+}
+
+/** `false` only when `lstat` proves the entry absent (ENOENT). */
+function entryMayExist(entryPath: string): boolean {
+  try {
+    fs.lstatSync(entryPath);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code !== "ENOENT";
+  }
 }
 
 /**
