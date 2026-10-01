@@ -158,16 +158,20 @@ describe("session-start preflight stdin: bounded read", () => {
     fs.mkdirSync(path.join(repo, ".git"), { recursive: true });
     fs.writeFileSync(path.join(repo, ".git", "HEAD"), "ref: refs/heads/main\n");
     const json = JSON.stringify({ session_id: "slow-sess", cwd: repo });
-    const half = Math.floor(json.length / 2);
+    const third = Math.floor(json.length / 3);
     const run = runSessionStartPreflight({
       ...hermeticOpts(repo),
       stdin: stream,
       stderr: err,
       stdinIdleTimeoutMs: 400,
     });
-    stream.write(json.slice(0, half));
+    // Each gap (250 ms) is under the bound (400 ms) but the whole write
+    // (500 ms) is over it: only a per-chunk restart lets this finish.
+    stream.write(json.slice(0, third));
     await new Promise((r) => setTimeout(r, 250));
-    stream.end(json.slice(half));
+    stream.write(json.slice(third, 2 * third));
+    await new Promise((r) => setTimeout(r, 250));
+    stream.end(json.slice(2 * third));
     const result = await run;
     expect(result.sessionId).toBe("slow-sess");
     expect(result.sessionSource).toBe("stdin");
