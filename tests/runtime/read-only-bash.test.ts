@@ -898,9 +898,11 @@ describe("NUL-decoding ANSI-C escapes make a command not read-only (task 241d9e9
   });
 
   it("blocks a NUL run that a pipe character splits across stages", () => {
-    // The `|` sits inside the `$'...'` run, so a per-stage check alone sees
-    // no complete run.
-    expect(isReadOnlyBashPipeline("cat $'a|b\\0'")).toBe(false);
+    // The `|` sits inside the `$'...'` run: split on it, each half is a
+    // plain read-only `cat` stage and the NUL escape lands in a half with no
+    // `$'` in front of it, so only a check on the whole text sees it.
+    expect(isReadOnlyBashPipeline("cat $'a|cat b\\0'")).toBe(false);
+    expect(isReadOnlyBashPipeline("cat $'a|cat b'")).toBe(true);
   });
 
   // Negative control: the non-NUL spellings of the same shapes keep their
