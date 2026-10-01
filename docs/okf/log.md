@@ -2,6 +2,8 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-10-01T07:20:32Z, task dda77b46: merged master (task bc97a697 edits to `docs/CLI.md`, `src/cli/index.ts` and the record verb) into this branch; the four docs listing `docs/CLI.md` re-verified against the combined file (both changes are separate rows/notes, no claim affected) and re-stamped.
+
 - 2026-10-01T07:07:54Z, task dda77b46: round 2 of the preflight stdin fix (`src/cli/session-start/index.ts` gained a no-op late-error handler and a timeout note worded by what was read; `docs/CLI.md` STDIN HANDLING note reworded to match). Re-verified the same four docs listing `docs/CLI.md` under sources: none makes a claim about the stdin timeout wording, so no claim is affected. The citation into that source in the older entry was re-pointed to the moved line. Re-stamped.
 
 - 2026-10-01T06:50:19Z, task dda77b46: `harness preflight` no longer waits forever on a stdin that never closes (`src/cli/session-start/index.ts`; `docs/CLI.md` gained a STDIN HANDLING note). Re-verified the four docs listing `docs/CLI.md` under sources (`policy-engine-producer-wiring.md`, `codex-adapter-parity-gaps.md`, `evidence-ledger-trust-boundary.md`, `debug-verb-selection.md`): none makes a claim about the preflight producer's stdin handling and none cites a line of that file, so no claim is affected. The older entry citing `src/cli/session-start/index.ts` by line was re-pointed to the moved line. Re-stamped.
