@@ -2,6 +2,8 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-10-01T06:48:02Z, task bc97a697: `harness record review-subagent` gained `--adhoc` (exactly one of `--task` / `--adhoc`; the ad-hoc fact carries the branch tag only) in `src/cli/index.ts` and `docs/CLI.md`. `pause-vs-gate-kill-switch.md` and the `src/cli/index.ts` citations of `log.md` re-pointed to the lines the edit shifted (+5 below the record verb). `codex-adapter-parity-gaps.md`, `debug-verb-selection.md`, `evidence-ledger-trust-boundary.md`, `policy-engine-producer-wiring.md` and `understanding-gate-lockout-recovery.md` re-checked: none states the `--task` requirement of the verb, so no claim changed. Re-stamped.
+
 - 2026-09-30T13:46:41Z, task 35eb287b: re-stamped the five docs listing `docs/policy-packs/understanding-before-execution.md` after a wording-only edit there (tracker ids dropped from the kept hook table paragraph); no claim affected.
 
 - 2026-09-30T13:43:20Z, task 35eb287b: the codex install section of `docs/policy-packs/understanding-before-execution.md` now describes kept operator hook tables (named with both line numbers under the foreign-section prefix, refused when their command is one harness writes) and its documented boundaries; `codex-adapter-parity-gaps.md` re-checked against `src/cli/apply/install-codex-config.ts` (its boundary sentence still holds) and `evidence-ledger-trust-boundary.md`, `gate-fail-posture-matrix.md`, `understanding-gate-lockout-recovery.md`, `understanding-gate-auto-mode-signals.md` re-checked (none makes a claim about the changed paragraph). Re-stamped.
@@ -479,8 +481,8 @@
   first fix commit, 24 more at its review-fix commit), so the five
   citations those entries re-pointed to (`:1710-1725`, `:2981-2985`,
   `:3354-3453`, `:3356-3361`, `:3313-3412`) landed one hunk short of the
-  quoted text. Corrected to `:1722-1737`, `:2993-2997`, `:3366-3465`,
-  `:3368-3373`, `:3325-3424` (each checked byte-identical against the base
+  quoted text. Corrected to `:1722-1737`, `:2993-2997`, `:3371-3470`,
+  `:3373-3378`, `:3325-3424` (each checked byte-identical against the base
   commit `e8a5f085` content at the +36 offset) and the "net 24 lines" prose
   to "net 36 lines". The doc bundle's own live citations
   (`pause-vs-gate-kill-switch.md`, `understanding-gate-lockout-recovery.md`)
@@ -1465,8 +1467,8 @@
   `quote-model-divergence.md` and `understanding-gate-lockout-recovery.md`
   `sources-fresh` STALE against these files. Checked every line-numbered
   citation these seven docs make into the five touched files
-  (`src/cli/index.ts:1722-1737`, `:2995-2999`, `:3366-3465`,
-  `:3368-3373`; `src/cli/init/templates.ts:928`): all still match their
+  (`src/cli/index.ts:1722-1737`, `:2995-2999`, `:3371-3470`,
+  `:3373-3378`; `src/cli/init/templates.ts:928`): all still match their
   quoted text verbatim (sibling-line check), since none of this round's
   edits added or removed a line above a cited line in any file a
   line-numbered citation targets. No citation needed re-pointing;
@@ -1566,7 +1568,7 @@
 - 2026-09-07T07:32:32Z, task 30183330 (orchestrator), review round 3 notes, docs and
   comments only: `docs/okf/pause-vs-gate-kill-switch.md` re-pointed its
   commands citation from a range that started inside an earlier command
-  body to `src/cli/index.ts:3337-3436` (the `pause` and `resume`
+  body to `src/cli/index.ts:3342-3441` (the `pause` and `resume`
   registrations); `docs/okf/codex-adapter-parity-gaps.md` corrected the
   docs/CLI.md line reference for the 2s Codex hook timeout note (line 67, a
   pre-existing off-by-two, measured equal at the base commit); the
@@ -1599,10 +1601,10 @@
     `src/cli/index.ts` citations in `pause-vs-gate-kill-switch.md`,
     `:2953-2957#"offending hook group out of settings.json with a
     reversible snapshot."` -> `:2957-2961`, `:3328-3333#"in the
-    manifest."` -> `:3368-3373` (re-pointed again, task `6a037359`:
+    manifest."` -> `:3373-3378` (re-pointed again, task `6a037359`:
     `src/cli/index.ts` grew a net 36 lines above it, a
     `CodexInstallRefusalError` import plus a try/catch wrapping the
-    codex-install `apply()` call), and the bare `:3285-3384` ->
+    codex-install `apply()` call), and the bare `:3290-3389` ->
     `:3325-3424` (same shift).
     Sibling-line check at both bounds of each range: the content at the
     old start/end lines is byte-identical to the content at the new
