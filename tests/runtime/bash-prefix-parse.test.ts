@@ -401,6 +401,16 @@ describe("parseBashPrefix", () => {
         expect(parseBashPrefix('cd "/tmp/x\\" && y').cdTarget).toBe("/tmp/x\\");
       });
 
+      it("keeps reading a PLAIN path up to whitespace, ; or & only (pre-existing, not covered): | < > ( ) stay in it", () => {
+        expect(parseBashPrefix("cd /tmp/x|cat && y").cdTarget).toBe("/tmp/x|cat");
+        expect(parseBashPrefix("cd /tmp/x>o && y").cdTarget).toBe("/tmp/x>o");
+      });
+
+      it("ends a path that carries a quote or an escape at an unquoted | < > ( )", () => {
+        expect(parseBashPrefix('cd "/tmp/x"|cat && y').cdTarget).toBe(null);
+        expect(parseBashPrefix("cd /tmp/a\\ b|cat && y").cdTarget).toBe(null);
+      });
+
       it("keeps today's cd targets for the plain shapes (no escape involved)", () => {
         expect(parseBashPrefix('cd "/tmp/risk gate" && x').cdTarget).toBe("/tmp/risk gate");
         expect(parseBashPrefix("cd '/tmp/risk gate'; x").cdTarget).toBe("/tmp/risk gate");
