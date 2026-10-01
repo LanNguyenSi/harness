@@ -2557,6 +2557,29 @@ describe("intercept: empty REPO / BRANCH never renders a blank ledger tag", () =
     expect(result.decisions[0]?.outcome).toBe("deny");
   });
 
+  it("an empty CWD builtin names no directory, so its blank cwd context is still demanded next to a resolved target", async () => {
+    const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "harness-empty-cwd-")));
+    try {
+      const target = path.join(root, "widget");
+      fs.mkdirSync(path.join(target, ".git"), { recursive: true });
+      fs.writeFileSync(path.join(target, ".git", "HEAD"), "ref: refs/heads/main\n");
+      const ledger = makeLedger({ kind: "ok", entries: [factEntry("preflight:widget ready:true")] });
+      const result = await intercept({
+        manifest: manifest([templatePolicy("preflight-before-investigation")]),
+        event: bashEvent(`git -C ${target} status`),
+        ledger,
+        builtins: { ...EMPTY_REPO, CWD: "" },
+        now: NOW,
+      });
+      expect(result.decisions.map((d) => d.outcome)).toEqual(["deny", "allow"]);
+      expect(result.decisions[0]?.emptyIdentifier).toBe("REPO");
+      expect(result.blockJson).not.toBeNull();
+      expect(ledger.queryCalls.map((c) => c.tag)).toEqual(["preflight:widget"]);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("an attributed foreign target on a detached HEAD is guarded even when the cwd context is satisfied", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "harness-empty-branch-"));
     try {

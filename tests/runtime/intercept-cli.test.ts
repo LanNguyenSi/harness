@@ -4588,11 +4588,12 @@ describe("runInterceptCli: empty REPO / BRANCH never renders a blank ledger tag"
     expect(missing.envelope.reason).toContain("You cannot push branch release yet.");
   });
 
-  // The remedy the empty-REPO / empty-BRANCH message names must itself work:
-  // a blank cwd context is not demanded next to a target that resolved to a
-  // real repository. A non-blank cwd context keeps the universal-additive
-  // rule, and a segment with no resolved target keeps its cwd context.
-  describe("a blank cwd context does not block the remedy the message names", () => {
+  // The remedy the empty-REPO message names must itself work: the context of
+  // a cwd outside every repository is not demanded next to a target that
+  // resolved to a real repository. A detached cwd and every non-blank cwd
+  // context keep the universal-additive rule, and a segment with no
+  // resolved target keeps its cwd context.
+  describe("a cwd outside every repository does not block the remedy the message names", () => {
     function namedRepo(parent: string, name: string, head: string): string {
       const repo = path.join(parent, name);
       fs.mkdirSync(path.join(repo, ".git"), { recursive: true });
@@ -4694,33 +4695,111 @@ describe("runInterceptCli: empty REPO / BRANCH never renders a blank ledger tag"
       expect(envelope.reason).toContain("git -C <repo>");
     });
 
-    it("a detached cwd repo A plus `git -C <repo B on a named branch> push` is decided on B alone", async () => {
+    // A detached cwd is NOT outside every repository: its cwd context keeps
+    // the universal-additive rule, so a push whose target the static model
+    // attributes to another repository B is still demanded in the detached
+    // cwd repository. The real-git effect of the second and third shapes is
+    // a push of A's detached HEAD (the guarded `cd` does not run; GIT_DIR
+    // overrides -C), so B's evidence must not satisfy them.
+    it.each([
+      ["git -C <B> push", (b: string) => `git -C ${b} push`],
+      ["false && cd <B>; git push", (b: string) => `false && cd ${b}; git push origin HEAD:refs/heads/x`],
+      [
+        "GIT_DIR=<cwd>/.git git -C <B> push",
+        (b: string, a: string) => `GIT_DIR=${a}/.git git -C ${b} push origin HEAD:refs/heads/x`,
+      ],
+    ])("a detached cwd repo A plus `%s` with B's matching fact still denies, naming A and git switch", async (_label, command) => {
       const parent = fs.realpathSync(tmpRoot());
       const detached = namedRepo(parent, "alpha", `${DETACHED_SHA}\n`);
       const target = namedRepo(parent, "beta", "ref: refs/heads/feature\n");
 
-      const allowLedger = factsLedger("preflight:feature ready:true");
-      const allowed = await run({
+      const ledger = factsLedger("preflight:feature ready:true");
+      const { result, envelope } = await run({
         policy: templatePolicy("preflight-before-push"),
-        command: `git -C ${target} push`,
+        command: command(target, detached),
         cwd: detached,
-        ledger: allowLedger,
+        ledger,
       });
-      expect(allowed.result.blocked).toBe(false);
-      expect(allowed.result.decisions.map((d) => d.outcome)).toEqual(["allow"]);
-      expect(allowLedger.tags).toEqual(["preflight:feature"]);
+      expect(result.blocked).toBe(true);
+      expect(result.decisions.map((d) => d.outcome)).toEqual(["deny", "allow"]);
+      expect(result.decisions[0]!.emptyIdentifier).toBe("BRANCH");
+      // Only B's context reads the ledger; the detached cwd context is
+      // decided by the guard without a query.
+      expect(ledger.tags).toEqual(["preflight:feature"]);
+      expect(envelope.reason).toContain("HEAD is detached");
+      expect(envelope.reason).toContain("repository `alpha`");
+      expect(envelope.reason).toContain("git switch");
+      expect(envelope.reason).not.toContain("You cannot push branch");
+    });
 
-      const denyLedger = factsLedger("preflight:other ready:true");
-      const denied = await run({
+    it("a cwd path that only lexically lies outside every repository (a symlink into a detached repository) keeps its cwd context", async () => {
+      const parent = fs.realpathSync(tmpRoot());
+      const detached = namedRepo(parent, "alpha", `${DETACHED_SHA}\n`);
+      fs.mkdirSync(path.join(detached, "sub"));
+      const target = namedRepo(parent, "beta", "ref: refs/heads/feature\n");
+      // git resolves the physical directory, so a command run from this
+      // path operates on alpha, whose HEAD is detached.
+      const link = path.join(parent, "link-into-alpha");
+      fs.symlinkSync(path.join(detached, "sub"), link);
+
+      const ledger = factsLedger("preflight:feature ready:true");
+      const { result } = await run({
         policy: templatePolicy("preflight-before-push"),
-        command: `git -C ${target} push`,
-        cwd: detached,
-        ledger: denyLedger,
+        command: `false && cd ${target}; git push origin HEAD:refs/heads/x`,
+        cwd: link,
+        ledger,
       });
-      expect(denied.result.blocked).toBe(true);
-      expect(denied.result.decisions.map((d) => d.outcome)).toEqual(["deny"]);
-      expect(denied.envelope.reason).toContain("You cannot push branch feature yet.");
-      expect(denied.envelope.reason).not.toContain("HEAD is detached");
+      expect(result.blocked).toBe(true);
+      expect(result.decisions.map((d) => d.outcome)).toEqual(["deny", "allow"]);
+      expect(result.decisions[0]!.emptyIdentifier).toBe("REPO");
+      expect(ledger.tags).toEqual(["preflight:feature"]);
+    });
+
+    it("an extract named like a builtin decides the cwd context exactly as the guard sees it: a shadowed REPO / BRANCH keeps the non-repo cwd context", async () => {
+      const parent = fs.realpathSync(tmpRoot());
+      const target = namedRepo(parent, "beta", "ref: refs/heads/feature\n");
+      const targetSha = "c".repeat(40);
+      fs.mkdirSync(path.join(target, ".git", "refs", "heads"), { recursive: true });
+      fs.writeFileSync(path.join(target, ".git", "refs", "heads", "feature"), `${targetSha}\n`);
+      const base = templatePolicy("preflight-before-push");
+      const shadowing = {
+        ...base,
+        name: "shadowing-extract",
+        trigger: { ...base.trigger, extract: { BRANCH: "toolArgs.command" } },
+      } as Policy;
+      const command = `git -C ${target} push`;
+      // Older than the 10m window, so only at_head can satisfy it, and only
+      // in a context whose HEAD is the target's sha. The cwd outside every
+      // repository has no HEAD, so its kept context denies.
+      const tags: string[] = [];
+      const ledger: LedgerClient = {
+        async query(tag) {
+          tags.push(tag);
+          return {
+            kind: "ok",
+            entries: [
+              {
+                id: "f0",
+                content: `preflight:${command} head:${targetSha}`,
+                createdAt: new Date(Date.now() - 30 * 60_000).toISOString(),
+              },
+            ],
+          };
+        },
+        async record() {
+          /* no-op */
+        },
+      };
+      const { result } = await run({
+        policy: shadowing,
+        command,
+        cwd: nonRepoCwd(parent),
+        ledger,
+      });
+      expect(result.blocked).toBe(true);
+      expect(result.decisions.map((d) => d.outcome)).toEqual(["deny", "allow"]);
+      expect(result.decisions.every((d) => d.emptyIdentifier === undefined)).toBe(true);
+      expect(tags).toEqual([`preflight:${command}`, `preflight:${command}`]);
     });
 
     it("a non-blank cwd context keeps the universal-additive rule: cwd repo A and target repo B are both demanded", async () => {

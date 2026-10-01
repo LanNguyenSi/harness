@@ -803,9 +803,20 @@ const EMPTY_REPO_MESSAGE =
   "no git repository was found for this command: the working directory (or the directory the command targets) is not inside a git repository, so the repository-scoped evidence this policy checks cannot be looked up. " +
   "Change into the target repository first (`cd <repo>`) or name it explicitly (`git -C <repo> ...`), then retry the command.";
 
-const EMPTY_BRANCH_MESSAGE =
-  "no branch is checked out: HEAD is detached, so the branch-scoped evidence this policy checks cannot be looked up. " +
-  "Check out a named branch (`git switch <branch>`, or `git switch -c <branch>` for a new one), create the evidence for that branch, then retry the command.";
+/**
+ * Names the repository whose HEAD is detached, so a detached working
+ * directory that is denied next to a `git -C <other repo>` target is
+ * recognisable as the working directory's own repository. The name is a
+ * directory basename, so control characters are blanked before it reaches
+ * the agent envelope.
+ */
+function emptyBranchMessage(repo: string): string {
+  const name = repo.replace(ENVELOPE_CONTROL_CHARS, " ");
+  return (
+    `no branch is checked out in repository \`${name}\`: HEAD is detached, so the branch-scoped evidence this policy checks cannot be looked up. ` +
+    "Check out a named branch there (`git switch <branch>`, or `git switch -c <branch>` for a new one), create the evidence for that branch, then retry the command."
+  );
+}
 
 function isBlankIdentifier(value: string | undefined): boolean {
   return value === undefined || value.trim().length === 0;
@@ -842,7 +853,7 @@ export function emptyIdentifierGuard(
   if (refsBranch && isBlankIdentifier(values.BRANCH)) {
     return isBlankIdentifier(values.REPO)
       ? { identifier: "REPO", message: EMPTY_REPO_MESSAGE }
-      : { identifier: "BRANCH", message: EMPTY_BRANCH_MESSAGE };
+      : { identifier: "BRANCH", message: emptyBranchMessage(values.REPO ?? "") };
   }
   return null;
 }
@@ -1251,6 +1262,15 @@ export type AttributedContextsResult =
  * demands BOTH A's and B's context, where the pre-D-021 engine demanded
  * only B's.
  *
+ * One exception to "never dropped": when the working directory is outside
+ * every git repository (a blank `${REPO}` for the policy, as the guard
+ * sees it), its cwd context is not demanded next to a segment whose own
+ * target resolved to a real repository (see the loop body). That
+ * exception relies on the static target attribution, whose known
+ * misattribution (a `GIT_DIR=` prefix or a third repository reached
+ * through another construct) exists for every cwd. A detached cwd and
+ * every other non-blank cwd context are still never dropped.
+ *
  * D-012: a target reached through a symlink resolves to its REAL
  * (realpath'd) repository identity, not the symlink's own lexical
  * basename — `resolveGitContext` derives `repo` from the basename of
@@ -1294,6 +1314,7 @@ function resolveAttributedContexts(
   resolveGitContextMemo: Map<string, GitRepoContext>,
   repoOverridden: boolean,
   branchOverridden: boolean,
+  extractContext: ExtractEventContext,
 ): AttributedContextsResult {
   const cwdContext: AttributedContext = { builtins: cwdBuiltins, currentHeadSha: cwdCurrentHeadSha };
   const satisfying = new Set(attributeTriggerSegments(policy, segments));
@@ -1308,11 +1329,22 @@ function resolveAttributedContexts(
     contexts.push(cwdContext);
   };
   const cwdReal = realpathOrSelf(cwdBuiltins.CWD);
-  const cwdContextIsBlank =
-    emptyIdentifierGuard(policy.requires?.ledger_tag ?? "", {
-      REPO: cwdBuiltins.REPO,
-      BRANCH: cwdBuiltins.BRANCH,
-    }) !== null;
+  // Decided from the same values `evaluateOnePolicy` guards on: the
+  // policy's own `trigger.extract` evaluated against the cwd builtins, so
+  // an extract named `REPO` / `BRANCH` that shadows a builtin is honoured
+  // here exactly as it is there.
+  const cwdGuard = emptyIdentifierGuard(
+    policy.requires?.ledger_tag ?? "",
+    evaluateExtract(policy.trigger.extract ?? {}, extractContext, cwdBuiltins).values,
+  );
+  // "Outside every repository" is checked on the cwd's real path: the
+  // builtins resolve the path as given, while git runs in the physical
+  // directory, so a symlink into a repository is not outside it. An empty
+  // CWD names no directory at all and never qualifies.
+  const cwdOutsideEveryRepository =
+    cwdGuard?.identifier === "REPO" &&
+    cwdBuiltins.CWD.length > 0 &&
+    resolveGitContext(cwdReal).repo.length === 0;
 
   for (const seg of segments) {
     if (!satisfying.has(seg)) continue;
@@ -1329,9 +1361,10 @@ function resolveAttributedContexts(
     // demanded UNCONDITIONALLY here, regardless of whether the target came
     // from the segment's own explicit flag or was inherited from a
     // preceding `cd`. `seg.ownTarget` is no longer read for this decision.
-    // The one exception is `cwdContextIsBlank` below: it is decided after
-    // the target resolved, so the cwd context is added from the branches
-    // of this loop body instead of up front, in the same order as before.
+    // The one exception is `cwdOutsideEveryRepository` below: it is
+    // decided after the target resolved, so the cwd context is added from
+    // the branches of this loop body instead of up front, in the same
+    // order as before.
     const resolvedLexical = path.resolve(cwdBuiltins.CWD, seg.effectiveTarget);
     const resolved = realpathOrSelf(resolvedLexical);
     if (resolved === cwdReal) {
@@ -1352,23 +1385,28 @@ function resolveAttributedContexts(
 
     const signature = [gitCtx.repo, gitCtx.branch, gitCtx.sha].join("|");
 
-    // Empty-identifier exception to the universal-additive rule. A cwd
-    // context whose `${REPO}` / `${BRANCH}` (whichever this policy's
-    // ledger_tag references) is blank can never be satisfied: the
+    // Empty-identifier exception to the universal-additive rule, limited
+    // to a working directory outside every git repository. That cwd
+    // context has a blank `${REPO}` (the value the guard sees, after the
+    // policy's own extract) and can never be satisfied: the
     // empty-identifier guard denies it without a ledger query. Demanding
     // it next to a target that resolved to a real repository would deny
     // the very remedy the guard's message names (`git -C <repo> ...`, or
-    // `cd <repo> && ...` in one command) for an agent whose cwd is
-    // outside every repository or on a detached HEAD. At the base commit
-    // that cwd context rendered a blank tag which ANY fact satisfied, so
-    // dropping it for a segment whose own target is a real repository is
-    // no weaker than the base, and the target's own context is still
-    // demanded in full. Only a blank cwd context is dropped: a non-blank
-    // cwd context keeps the rule above unchanged, a segment without a
+    // `cd <repo> && ...` in one command). The skip applies only when the
+    // cwd is outside every repository and this segment's own target
+    // resolved to a real repository; the target's own context is still
+    // demanded in full. It relies on the static target attribution, whose
+    // known misattribution (a `GIT_DIR=` prefix or a third repository
+    // reached through another construct) exists for every cwd, and a git
+    // verb that really runs in a cwd outside every repository fails on its
+    // own. A detached cwd (non-blank `${REPO}`, blank `${BRANCH}`) and
+    // every non-blank cwd context keep the rule above unchanged: the
+    // detached remedy (`git switch` in that repository) is establishable,
+    // and dropping that context would let a misattributed push from the
+    // detached HEAD pass on the target's evidence. A segment without a
     // resolved target (a bare `git status`) keeps its cwd context and
-    // still denies with the hint, and a target that is the cwd repository
-    // itself (same signature) is still the cwd context.
-    if (!cwdContextIsBlank || signature === cwdSignature) addCwdOnce();
+    // still denies with the hint.
+    if (!cwdOutsideEveryRepository) addCwdOnce();
 
     if (signature === cwdSignature) {
       // D-015: a foreign target that resolves to cwd's own REAL identity
@@ -1544,6 +1582,7 @@ export async function intercept(
           resolveGitContextMemo,
           options.repoOverridden === true,
           options.branchOverridden === true,
+          buildEventContext(options.event),
         )
       : { kind: "contexts", contexts: [{ builtins: options.builtins, currentHeadSha: options.currentHeadSha }] };
 
