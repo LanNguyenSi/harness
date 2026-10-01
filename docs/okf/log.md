@@ -2,6 +2,8 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-10-01T10:47:34Z, task 20ebf935: `understanding-gate-lockout-recovery.md` gained the block-message reason bullet, and `codex-adapter-parity-gaps.md`, `evidence-ledger-trust-boundary.md`, `gate-fail-posture-matrix.md` and `understanding-gate-auto-mode-signals.md` were re-verified after the PreToolUse and PostToolUse hooks, `persisted-reports.ts`, `post-tool-use-boundary.ts`, `approve/understanding.ts` and `docs/policy-packs/understanding-before-execution.md` changed (an optional `expiredBy` report field, the expiry reason in the block message, a new `expiry-reason.ts`, an expiry trigger matrix). Claims re-checked against the code: no gate decision, source list, precedence or fail posture they state changed. The line citations into `hook-pre-tool-use.ts`, `hook-codex-pre-tool-use.ts` and `approve/understanding.ts` (here and in the lockout doc) were re-pointed to the shifted lines. Re-stamped.
+
 - 2026-10-01T08:37:53Z, task b093911d: `quote-model-divergence.md` re-verified a third time after `src/runtime/bash-prefix-parse.ts` stopped ending escape-led env words at `||` (that end lost honest clauses bash runs after the short circuit) and its header gained the signal-level acceptance rule and the named residual classes. Claims re-checked against the parser, the measurement tool and real bash: the `||` sentence was replaced by the swallowing behaviour, the measured-not-lossless paragraph now states the acceptance rule and the residual classes, and the earlier value-decoding claims still match bash. Re-stamped.
 
 - 2026-10-01T07:57:02Z, task b093911d: `quote-model-divergence.md` re-verified a second time after `src/runtime/bash-prefix-parse.ts` kept the raw branch-word reading for a word with a mid-word double-quoted `$`, ended escape-led env words at `||` and had its no-loss statements narrowed to what was measured. Claims re-checked against the parser, the measurement tool and real bash: the "nothing is lost" sentence was replaced by what the tool and a bash-referee differential actually show plus the named residuals; the earlier value-decoding claims still match bash. Re-stamped.
@@ -661,7 +663,7 @@
   states only what `[0.28.0]` documents, dropping the unsourced
   "intentionally stays loose" design claim it carried at first; each
   rewrite kept the comment at a 4-line span so no numbered citation
-  below it shifted; verified `src/cli/approve/understanding.ts:678`
+  below it shifted; verified `src/cli/approve/understanding.ts:680`
   (this doc's own `understanding-gate-lockout-recovery.md` citation)
   still reads `resolveApprovalSessionId` after the edits, unchanged.
 
@@ -688,7 +690,7 @@
   Prior Art's presence (required since 0.4.0, same citation
   `` `CHANGELOG.md:#0.28.0` ``) and cannot judge the section's content,
   and that the approve CLI is the boundary that refuses a hollow list.
-  The edited span stayed at 4 lines (`understanding.ts` lines 483-486); `src/cli/approve/understanding.ts:678` still reads
+  The edited span stayed at 4 lines (`understanding.ts` lines 483-486); `src/cli/approve/understanding.ts:680` still reads
   `resolveApprovalSessionId` and the file's total line count is
   unchanged, so the citation above it does not shift.
   `understanding-gate-lockout-recovery.md`'s `timestamp:` is re-stamped
@@ -2380,7 +2382,7 @@
   landed at lines 969-990 (`git show b24af93 -- src/cli/pack/hook-pre-tool-use.ts`
   confirms the hunk starts at line 969); the round-3 entry's own
   freshness conclusion is unaffected, since `understanding-gate-lockout-recovery.md`'s
-  citation at `hook-pre-tool-use.ts:902` is well before either range.
+  citation at `hook-pre-tool-use.ts:908` is well before either range.
   `okf-kit check --json docs/okf` on the committed tree shows 0 errors,
   0 warnings after the re-stamp.
 - 2026-09-02T05:44:14Z, task `204efc56` round 3 (further review fixes
@@ -2402,7 +2404,7 @@
   `probeRegularFilePresence`, or cite a span of `hook-pre-tool-use.ts`
   inside this round's edited region (lines ~940-978): `grep` across all 6
   for those terms found only `understanding-gate-lockout-recovery.md`'s
-  pre-existing citation at `src/cli/pack/hook-pre-tool-use.ts:948#"writePendingApproval(generatedDir, sessionId);"`,
+  pre-existing citation at `src/cli/pack/hook-pre-tool-use.ts:954#"writePendingApproval(generatedDir, sessionId);"`,
   well before the edited region, still resolving. `evidence-ledger-trust-boundary.md`
   was NOT flagged stale this round: it was itself edited (new
   `probeRegularFilePresence` paragraph, `delegation-markers.ts` added to
@@ -2454,7 +2456,7 @@
   describes only the new reason itself; neither touches any claim or
   cited span in these 7 docs (the one line-numbered citation among them,
   `understanding-gate-lockout-recovery.md`'s
-  `src/cli/pack/hook-pre-tool-use.ts:948#"writePendingApproval(generatedDir, sessionId);"`,
+  `src/cli/pack/hook-pre-tool-use.ts:954#"writePendingApproval(generatedDir, sessionId);"`,
   sits well before the edited comment and still resolves). Timestamp-only
   re-stamp on all 7; no content changed. `okf-kit check --json docs/okf`
   on the committed tree shows 0 errors, 0 warnings after the re-stamp.
@@ -2532,7 +2534,7 @@
   `65f7d76` after the em-dash cleanup); merging master (`10b5217`)
   pulled in an unrelated ADR expansion that shifted four of this ADR's
   own citations, re-anchored in `733b9f8`
-  (`hook-pre-tool-use.ts:866->882` and `:1087->1198`,
+  (`hook-pre-tool-use.ts:872->882` and `:1087->1198`,
   `delegate/index.ts:256->276` and `:285->305`); round 3's own edit
   shifted two of those same `delegate/index.ts` anchors again
   (`:276->277`, `:305->306`), re-anchored in the round-3 commit
