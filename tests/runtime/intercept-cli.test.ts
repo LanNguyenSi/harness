@@ -4797,6 +4797,12 @@ describe("runInterceptCli: empty REPO / BRANCH never renders a blank ledger tag"
       fs.writeFileSync(path.join(gitDir, "commondir"), `${commondir(alpha)}\n`);
       return gitDir;
     }
+    function symlinkHeadGitDir(parent: string): string {
+      const gitDir = headCommondirGitDir(parent, "umbrella-link", (alpha) => path.join(alpha, ".git"));
+      fs.rmSync(path.join(gitDir, "HEAD"));
+      fs.symlinkSync("refs/heads/main", path.join(gitDir, "HEAD"));
+      return gitDir;
+    }
     it.each([
       [
         "below a HEAD-less .git directory inside a detached repository",
@@ -4838,6 +4844,17 @@ describe("runInterceptCli: empty REPO / BRANCH never renders a blank ledger tag"
       [
         "a git directory holding only HEAD and a relative commondir into a detached repository",
         (parent: string) => headCommondirGitDir(parent, "umbrella-rel", () => "../../alpha/.git"),
+      ],
+      // git accepts a symbolic-link HEAD that dangles inside the git
+      // directory (it resolves in the commondir); the check must count the
+      // entry itself and never follow it.
+      [
+        "a git directory whose HEAD is a dangling symbolic link, with an absolute commondir",
+        (parent: string) => symlinkHeadGitDir(parent),
+      ],
+      [
+        "a subdirectory of a git directory whose HEAD is a dangling symbolic link",
+        (parent: string) => path.join(symlinkHeadGitDir(parent), "sub"),
       ],
     ])("a cwd %s keeps its cwd context: `false && cd <B>; git push` with B's matching fact still denies", async (_label, makeCwd) => {
       const parent = fs.realpathSync(tmpRoot());
