@@ -140,6 +140,17 @@ export interface PolicyDecision {
    * match from a fail-closed unclassified command at a glance.
    */
   whenUnclassifiedFallback?: boolean;
+  /**
+   * Set when the policy's `ledger_tag` references `${REPO}` / `${BRANCH}`
+   * and the value resolved for this context was empty (cwd outside every
+   * git repository, detached HEAD, or an empty override), so the engine
+   * decided per enforcement WITHOUT rendering or querying a ledger tag.
+   * In-memory only: it is not part of the serialised audit row (the
+   * `reason` and the placeholder `ledgerTag` already carry the cause).
+   * The agent envelope renders `reason` with precedence over the policy's
+   * `ux:` / `producers:` text when this is set.
+   */
+  emptyIdentifier?: EmptyIdentifier;
   evaluatedAt: string;
 }
 
@@ -779,6 +790,63 @@ export function sanitizeEnvelopeReason(reason: string): string {
   return stripped.length > 200 ? `${stripped.slice(0, 200)}...` : stripped;
 }
 
+/** Which per-repo builtin resolved to an empty value; see {@link emptyIdentifierGuard}. */
+export type EmptyIdentifier = "REPO" | "BRANCH";
+
+export interface EmptyIdentifierGuard {
+  identifier: EmptyIdentifier;
+  /** Agent-facing text naming a state the agent can establish itself. */
+  message: string;
+}
+
+const EMPTY_REPO_MESSAGE =
+  "no git repository was found for this command: the working directory (or the directory the command targets) is not inside a git repository, so the repository-scoped evidence this policy checks cannot be looked up. " +
+  "Change into the target repository first (`cd <repo>`) or name it explicitly (`git -C <repo> ...`), then retry the command.";
+
+const EMPTY_BRANCH_MESSAGE =
+  "no branch is checked out: HEAD is detached, so the branch-scoped evidence this policy checks cannot be looked up. " +
+  "Check out a named branch (`git switch <branch>`, or `git switch -c <branch>` for a new one), create the evidence for that branch, then retry the command.";
+
+function isBlankIdentifier(value: string | undefined): boolean {
+  return value === undefined || value.trim().length === 0;
+}
+
+/**
+ * Does `ledgerTagTemplate` reference `${REPO}` / `${BRANCH}` while the
+ * value resolved for this context is empty? An empty identifier must
+ * never be rendered into a ledger tag: `preflight:` is a substring of
+ * EVERY preflight fact, so a blank tag lets any unrelated fact satisfy
+ * the gate (and `preflight-before-push` would render "You cannot push
+ * branch  yet."). The caller decides per enforcement with
+ * `message` instead of querying the ledger.
+ *
+ * `REPO` wins over `BRANCH`, and a branch-only template evaluated where
+ * REPO is empty too (no repository at all) gets the no-repository text,
+ * since "HEAD is detached" would be false there. The messages name a
+ * state the agent can establish (`cd` / `git -C` / `git switch`), never
+ * a tag to produce, so there is no producer trap, and never an opt-out
+ * (a block that names its own disable path is not a gate).
+ *
+ * Exported so `harness dry-run` shows the same hint instead of a blank
+ * tag (`src/cli/dry-run.ts`).
+ */
+export function emptyIdentifierGuard(
+  ledgerTagTemplate: string,
+  values: Record<string, string>,
+): EmptyIdentifierGuard | null {
+  const refsRepo = ledgerTagTemplate.includes("${REPO}");
+  const refsBranch = ledgerTagTemplate.includes("${BRANCH}");
+  if (refsRepo && isBlankIdentifier(values.REPO)) {
+    return { identifier: "REPO", message: EMPTY_REPO_MESSAGE };
+  }
+  if (refsBranch && isBlankIdentifier(values.BRANCH)) {
+    return isBlankIdentifier(values.REPO)
+      ? { identifier: "REPO", message: EMPTY_REPO_MESSAGE }
+      : { identifier: "BRANCH", message: EMPTY_BRANCH_MESSAGE };
+  }
+  return null;
+}
+
 /**
  * Placeholder `ledgerTag` recorded on an `operator_only` decision (and on
  * the defensive schema-invariant-violated branch below). Both outcomes
@@ -851,6 +919,27 @@ async function evaluateOnePolicy(
         "policy declares neither requires: nor operator_only: true (schema invariant violated)",
       extractValues: extract.values,
       ledgerTag: NO_LEDGER_TAG,
+      evaluatedAt,
+    };
+  }
+
+  // Empty-identifier guard: decided BEFORE any tag is rendered or the
+  // ledger is queried, per the policy's own enforcement (block -> deny,
+  // require_approval -> require_approval, warn -> warn). Deliberately NOT
+  // routed through `degradedOutcome` / the unresolved-variable branch
+  // below: that path ends in the `deny-degraded` envelope, which blames
+  // an unreadable ledger and tells the agent to ask the operator to
+  // check grounding-mcp, false and misleading for an empty identifier.
+  const emptyGuard = emptyIdentifierGuard(requires.ledger_tag, extract.values);
+  if (emptyGuard !== null) {
+    return {
+      policyName: policy.name,
+      enforcement: policy.enforcement,
+      outcome: outcomeForFailedRequires(policy.enforcement),
+      reason: emptyGuard.message,
+      extractValues: extract.values,
+      ledgerTag: `(empty ${emptyGuard.identifier}: no ledger tag rendered, no ledger query)`,
+      emptyIdentifier: emptyGuard.identifier,
       evaluatedAt,
     };
   }
@@ -1573,6 +1662,15 @@ export async function intercept(
         `source is unreadable; producing the required tag will not unblock it ` +
         `until the ledger is reachable again. Ask your operator to check ` +
         `grounding-mcp (harness doctor), then retry. Session: ${sessionId}.`;
+    } else if (blocking.emptyIdentifier !== undefined) {
+      // Empty ${REPO} / ${BRANCH}: the decision's own reason names the
+      // state the agent can establish (`cd` / `git -C` / `git switch`).
+      // Takes precedence over `ux:` (whose `cannot:` text would render
+      // the blank identifier, "You cannot push branch  yet.") and over
+      // `producers:` / the record hint (both would send the agent to
+      // produce a tag the gate will not read in this state). Names no
+      // opt-out, same reasoning as the degraded envelope above.
+      reasonText = `${blocking.policyName}: ${blocking.reason}`;
     } else if (blockingPolicy?.ux) {
       // The ux surface is operator-curated plain language. Task
       // 2929c5b7: a ux-declared policy's `cannot:` text used to be

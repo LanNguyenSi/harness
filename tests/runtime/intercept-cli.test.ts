@@ -4375,3 +4375,216 @@ describe("runInterceptCli — 98ad072f FIX ROUND: D-011 critical bypass closure 
     });
   });
 });
+
+// An empty ${REPO} / ${BRANCH} end to end through the CLI: a cwd outside
+// every repo, a detached HEAD, and an empty HARNESS_REPO / HARNESS_BRANCH
+// override must decide per enforcement with an actionable reason and
+// never query the ledger with a blank tag.
+describe("runInterceptCli: empty REPO / BRANCH never renders a blank ledger tag", () => {
+  const cleanups: Array<() => void> = [];
+  const savedEnv: Record<string, string | undefined> = {};
+  beforeEach(() => {
+    for (const k of ["HARNESS_REPO", "HARNESS_BRANCH"]) {
+      savedEnv[k] = process.env[k];
+      delete process.env[k];
+    }
+  });
+  afterEach(() => {
+    for (const k of ["HARNESS_REPO", "HARNESS_BRANCH"]) {
+      if (savedEnv[k] === undefined) delete process.env[k];
+      else process.env[k] = savedEnv[k];
+    }
+    for (const c of cleanups) c();
+    cleanups.length = 0;
+  });
+
+  const templatePolicy = (name: string): Policy => {
+    const found = parseManifest(parseYaml(FULL_TEMPLATE)).policies.find((p) => p.name === name);
+    if (!found) throw new Error(`policy ${name} missing from FULL_TEMPLATE`);
+    return found;
+  };
+
+  const tmpRoot = (): string => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "harness-empty-identifier-"));
+    cleanups.push(() => fs.rmSync(root, { recursive: true, force: true }));
+    return root;
+  };
+
+  const DETACHED_SHA = "b".repeat(40);
+  function makeDetachedRepo(): string {
+    const repo = path.join(tmpRoot(), "detached-repo");
+    fs.mkdirSync(path.join(repo, ".git"), { recursive: true });
+    fs.writeFileSync(path.join(repo, ".git", "HEAD"), `${DETACHED_SHA}\n`);
+    return repo;
+  }
+
+  function foreignLedger(content: string): LedgerClient & { tags: string[] } {
+    const tags: string[] = [];
+    return {
+      tags,
+      async query(tag) {
+        tags.push(tag);
+        return {
+          kind: "ok",
+          entries: [{ id: "f1", content, createdAt: new Date().toISOString() }],
+        };
+      },
+      async record() {
+        /* no-op */
+      },
+    };
+  }
+
+  async function run(opts: {
+    policy: Policy;
+    command: string;
+    cwd: string;
+    ledger: LedgerClient;
+    generatedDir?: string;
+  }) {
+    const out = captureStream();
+    const result = await runInterceptCli({
+      stdin: streamFrom(
+        JSON.stringify({
+          hook_event_name: "PreToolUse",
+          tool_name: "Bash",
+          tool_input: { command: opts.command },
+          session_id: "sess-empty-id",
+          cwd: opts.cwd,
+        }),
+      ),
+      stdout: out.stream,
+      stderr: captureStream().stream,
+      manifest: fakeManifest([opts.policy]),
+      ledger: opts.ledger,
+      ...(opts.generatedDir !== undefined && { generatedDir: opts.generatedDir }),
+    });
+    const text = out.output().trim();
+    return { result, envelope: text.length > 0 ? JSON.parse(text) : null };
+  }
+
+  it("a cwd outside every repo denies a git read despite a foreign preflight fact and never queries", async () => {
+    const ledger = foreignLedger("preflight:other-repo ready:true");
+    const { result, envelope } = await run({
+      policy: templatePolicy("preflight-before-investigation"),
+      command: "git status",
+      cwd: tmpRoot(),
+      ledger,
+    });
+    expect(result.blocked).toBe(true);
+    expect(result.decisions[0]!.outcome).toBe("deny");
+    expect(result.decisions[0]!.ledgerTag).not.toBe("preflight:");
+    expect(ledger.tags).toEqual([]);
+    expect(envelope.reason).toContain("cd <repo>");
+    expect(envelope.reason).toContain("git -C <repo>");
+  });
+
+  it("a detached HEAD denies a push, names git switch and never renders the blank ux text", async () => {
+    const ledger = foreignLedger("preflight:other-branch ready:true");
+    const { result, envelope } = await run({
+      policy: templatePolicy("preflight-before-push"),
+      command: "git push origin HEAD:refs/heads/x",
+      cwd: makeDetachedRepo(),
+      ledger,
+    });
+    expect(result.blocked).toBe(true);
+    expect(result.decisions[0]!.outcome).toBe("deny");
+    expect(result.decisions[0]!.extractValues.BRANCH).toBe("");
+    expect(ledger.tags).toEqual([]);
+    expect(envelope.reason).toContain("git switch <branch>");
+    expect(envelope.reason).not.toContain("You cannot push branch");
+    expect(envelope.hookSpecificOutput.permissionDecisionReason).toBe(envelope.reason);
+  });
+
+  it("an empty HARNESS_BRANCH override counts as empty; a non-empty one stays effective", async () => {
+    const repo = path.join(tmpRoot(), "named-repo");
+    fs.mkdirSync(path.join(repo, ".git"), { recursive: true });
+    fs.writeFileSync(path.join(repo, ".git", "HEAD"), "ref: refs/heads/feature\n");
+
+    process.env.HARNESS_BRANCH = "";
+    const emptyOverrideLedger = foreignLedger("preflight:feature");
+    const emptyOverride = await run({
+      policy: templatePolicy("preflight-before-push"),
+      command: "git push",
+      cwd: repo,
+      ledger: emptyOverrideLedger,
+    });
+    expect(emptyOverride.result.decisions[0]!.outcome).toBe("deny");
+    expect(emptyOverrideLedger.tags).toEqual([]);
+
+    process.env.HARNESS_BRANCH = "forced";
+    const forcedLedger = foreignLedger("preflight:forced ready:true");
+    const forced = await run({
+      policy: templatePolicy("preflight-before-push"),
+      command: "git push",
+      cwd: makeDetachedRepo(),
+      ledger: forcedLedger,
+    });
+    expect(forced.result.decisions[0]!.outcome).toBe("allow");
+    expect(forcedLedger.tags).toEqual(["preflight:forced"]);
+  });
+
+  it("an empty HARNESS_REPO override counts as empty", async () => {
+    process.env.HARNESS_REPO = "";
+    const ledger = foreignLedger("preflight:other-repo");
+    const { result } = await run({
+      policy: templatePolicy("preflight-before-investigation"),
+      command: "git status",
+      cwd: makeDetachedRepo(),
+      ledger,
+    });
+    expect(result.decisions[0]!.outcome).toBe("deny");
+    expect(ledger.tags).toEqual([]);
+  });
+
+  it("warn stays non-blocking and require_approval blocks without staging an approval marker", async () => {
+    const base = templatePolicy("preflight-before-investigation");
+    const warnLedger = foreignLedger("preflight:other-repo");
+    const warned = await run({
+      policy: { ...base, enforcement: "warn" } as Policy,
+      command: "git status",
+      cwd: tmpRoot(),
+      ledger: warnLedger,
+    });
+    expect(warned.result.decisions[0]!.outcome).toBe("warn");
+    expect(warned.result.blocked).toBe(false);
+    expect(warnLedger.tags).toEqual([]);
+
+    const generatedDir = tmpRoot();
+    const approval = await run({
+      policy: { ...base, enforcement: "require_approval" } as Policy,
+      command: "git status",
+      cwd: tmpRoot(),
+      ledger: foreignLedger("preflight:other-repo"),
+      generatedDir,
+    });
+    expect(approval.result.decisions[0]!.outcome).toBe("require_approval");
+    expect(approval.result.blocked).toBe(true);
+    expect(fs.existsSync(path.join(generatedDir, ".pending-approval"))).toBe(false);
+  });
+
+  it("unchanged: a named repo and branch with a matching fact allow; a missing fact keeps the ux deny text", async () => {
+    const repo = path.join(tmpRoot(), "widget-service");
+    fs.mkdirSync(path.join(repo, ".git"), { recursive: true });
+    fs.writeFileSync(path.join(repo, ".git", "HEAD"), "ref: refs/heads/release\n");
+
+    const allowLedger = foreignLedger("preflight:release ready:true");
+    const allowed = await run({
+      policy: templatePolicy("preflight-before-push"),
+      command: "git push",
+      cwd: repo,
+      ledger: allowLedger,
+    });
+    expect(allowed.result.decisions[0]!.outcome).toBe("allow");
+    expect(allowLedger.tags).toEqual(["preflight:release"]);
+
+    const missing = await run({
+      policy: templatePolicy("preflight-before-push"),
+      command: "git push",
+      cwd: repo,
+      ledger: foreignLedger("unrelated fact"),
+    });
+    expect(missing.result.decisions[0]!.outcome).toBe("deny");
+    expect(missing.envelope.reason).toContain("You cannot push branch release yet.");
+  });
+});
