@@ -1163,7 +1163,11 @@ export async function runInterceptCli(
     result.blockJson &&
     eventSessionId !== undefined &&
     eventSessionId.length > 0 &&
-    firstBlocking?.outcome === "require_approval"
+    firstBlocking?.outcome === "require_approval" &&
+    // An empty-identifier decision never reads the ledger, so no approval
+    // tag could unblock it: staging a marker `harness approve risk` cannot
+    // act on would misstate the recoverability of the block.
+    firstBlocking.emptyIdentifier === undefined
   ) {
     const generatedDir = opts.generatedDir
       ?? (manifestPath !== undefined
