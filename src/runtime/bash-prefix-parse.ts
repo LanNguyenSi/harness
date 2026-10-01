@@ -41,10 +41,16 @@
 //      `--`, `-b`, ...; this is how `git checkout -- <path>`'s
 //      file-restore form is excluded) or an unquoted `$VAR`/`${VAR}`
 //      shell variable is left unresolved (`branchTarget: null`) rather
-//      than guessed; a DOUBLE-quoted token whose content contains a `$`
-//      is treated the same way (not guessed) since double quotes DO
-//      interpolate in real bash and this parser does not evaluate the
-//      shell environment — a single-quoted token is always taken
+//      than guessed; a token that STARTS with a quote and carries an
+//      unescaped `$` in a double-quoted part (`"release/$V"`) is treated
+//      the same way (not guessed) since double quotes DO interpolate in
+//      real bash and this parser does not evaluate the shell
+//      environment. A token that does NOT start with a quote but carries
+//      such a `$` mid-word (`release/"$V"`) is read raw, quotes included,
+//      exactly as before the escape-aware reader: bash expands it, so the
+//      branch is unknown, but the raw word still matches a glob like
+//      `release/*` and the clauses behind it (a later `cd`, the kubectl
+//      remainder) stay reachable. A single-quoted token is always taken
 //      literally, since single quotes never interpolate. The optional
 //      `-C <path>` is recognized so it does not block the match, but its
 //      value is discarded: the ONLY thing this idiom feeds the resolver
@@ -78,11 +84,29 @@
 // production indicators, falling through is not the safe direction, a
 // dropped `cd` target or env value hides the very signal being looked
 // for. So a quoted word is decoded the way bash reads it instead of
-// being abandoned when it contains a backslash. The one place the
-// parser still reads the OLD way is a word whose quote only an escaped
-// quote could close (`VAR="abc\" cd /x && y`, an unterminated string for
-// bash): there the first matching quote ends the word, as before, so
-// nothing this module extracted before is lost.
+// being abandoned when it contains a backslash. Two places keep the OLD
+// reading on purpose: a word whose quote only an escaped quote could
+// close (`VAR="abc\" cd /x && y`, an unterminated string for bash), where
+// the first matching quote ends the word, and a branch word that does not
+// start with a quote but has a `$` in a double-quoted part (form 3).
+//
+// What was measured, and what was not: the cd targets on
+// `scripts/measure-bash-prefix-parse.mjs`'s arms (no honest loss against
+// master and the shipped release; 11 of 17 arms prove nothing), plus a
+// bash-referee differential over generated commands (see the pull
+// request). That is NOT a general "nothing extracted before is lost".
+// Known residuals, not covered:
+//   - a `cd` path or branch word that carries a quote or an escape and is
+//     ended at an unquoted `|`, `<`, `>`, `(` or `)` (`cd /srv/p|ro"d"`)
+//     rejects its clause and stops the prefix walk; the old reading
+//     accepted a phantom word there and could reach a later honest
+//     clause by accident;
+//   - the plain `A=x|| cd /t && y` and an escape-led word ended by a
+//     single `|` (`A=a\ b| cd /t && y`) still read the `cd` behind the
+//     operator (bash skips it after `||` and runs it in a pipeline
+//     subshell after `|`). Ending the walk at `||` and never reading a
+//     `cd` clause after `|` is a separate follow-up, not done here;
+//   - ANSI-C `$'...'` and `$VAR` / `$(...)` are kept as raw text.
 //
 // MEASUREMENT RULE (task 47297478): any claim about this parser's
 // CD-TARGET extraction versus another build (lost or gained `cdTarget`
@@ -219,8 +243,9 @@ interface WordRead {
  *     including its `$'` and `'` is kept, so the value is no worse than
  *     before (explicitly not covered).
  *
- * Pre-existing behaviour that is kept so nothing extracted before is lost
- * (bash itself ends a word at every unquoted shell metacharacter):
+ * Pre-existing behaviour that is kept to limit what the new reader can
+ * lose (bash itself ends a word at every unquoted shell metacharacter;
+ * this is not a no-loss guarantee, see the module doc's residuals):
  *   - a word with no quote and no backslash in it is read exactly as
  *     before (`readWordLegacy`): an inline env value ends at whitespace
  *     only, so it swallows an unquoted `;`, `&`, `|`, ...; a `cd` path or
@@ -228,9 +253,12 @@ interface WordRead {
  *   - an inline env word that carries an escape or a mid-word quote but
  *     does not START with a quote (`swallowOps`) keeps swallowing the
  *     same operators, because the old reading did and a later assignment
- *     behind them (`V=\"& W=/tmp cmd`) was extracted through it. This
- *     leaves `A=a\ b|| cd /x && y` reading the `cd` like the plain
- *     `A=x|| cd /x && y` always has (a known phantom, not covered);
+ *     behind them (`V=\"& W=/tmp cmd`) was extracted through it. It ends
+ *     at an unquoted `||` though (bash never runs what follows a pure
+ *     assignment on the left of `||`), so `A=a\ b|| cd /x && y` reads no
+ *     `cd`; a single `|` is still swallowed (`A=a\ b| cd /x && y` reads
+ *     the `cd`, like the plain `A=x|| cd /x && y` always has: a known
+ *     phantom, not covered);
  *   - a word that STARTS with a quote, and every `cd` / branch word, ends
  *     at an unquoted, unescaped `;`, `&`, `|`, `<`, `>`, `(` or `)`, so
  *     `A='a b'|| cd /x && y` ends the value at `||` and never reads the
@@ -248,13 +276,18 @@ function readWord(
   let end = start;
   while (end < s.length && !WS.test(s[end]!) && !plainStops.includes(s[end]!)) end++;
   if (!/['"\\]/.test(s.slice(start, end))) return readWordLegacy(s, start, plainStops);
-  const stops = swallowOps && s[start] !== "'" && s[start] !== '"' ? "" : WORD_STOPS;
+  const swallow = swallowOps && s[start] !== "'" && s[start] !== '"';
+  const stops = swallow ? "" : WORD_STOPS;
   let i = start;
   let value = "";
   let interpolates = false;
   while (i < s.length) {
     const c = s[i]!;
     if (WS.test(c) || stops.includes(c)) break;
+    // A swallowing word still ends at an unquoted `||`: bash never runs
+    // what follows a pure assignment on the left of `||`, so nothing an
+    // honest command needs is behind it.
+    if (swallow && c === "|" && s[i + 1] === "|") break;
     if (c === "'") {
       const end = s.indexOf("'", i + 1);
       if (end < 0) return null;
@@ -314,11 +347,10 @@ function readWord(
  * The reading this module used before it knew about escapes: a word that
  * opens with a quote ends at the FIRST matching quote character, any
  * other word ends at whitespace (and at any character of `plainStops`).
- * Kept as the fall-back for a word `readWord` cannot terminate, so a
- * value or `cd` target the module extracted before is never lost to the
- * escape-aware reader (`VAR="abc\" cd /x && y` is an unterminated string
- * for bash, but the old reading still yields `VAR` and the `cd`). Null
- * only for a quote with no closing quote at all.
+ * Kept as the fall-back for a word `readWord` cannot terminate, so that
+ * word still yields what the old reading yielded (`VAR="abc\" cd /x && y`
+ * is an unterminated string for bash, but the old reading still yields
+ * `VAR` and the `cd`). Null only for a quote with no closing quote at all.
  */
 function readWordLegacy(s: string, start: number, plainStops: string): WordRead | null {
   const first = s[start];
@@ -464,11 +496,14 @@ function skipPathToken(s: string, i: number): number | null {
  *   - An unquoted `$VAR` / `${VAR}` first argument: a shell variable,
  *     not a literal branch name. Resolving it would require evaluating
  *     the shell environment, which this parser does not do (see module
- *     doc). A DOUBLE-quoted token whose content contains a `$` is
- *     excluded the same way (double quotes interpolate in real bash); a
- *     single-quoted token is never excluded on this basis (single
- *     quotes never interpolate, so its content is always the literal
- *     branch name).
+ *     doc). A token that STARTS with a quote and carries an unescaped `$`
+ *     in a double-quoted part is excluded the same way (double quotes
+ *     interpolate in real bash); a single-quoted token is never excluded
+ *     on this basis (single quotes never interpolate, so its content is
+ *     always the literal branch name). A token that does not start with a
+ *     quote but has such a `$` mid-word (`release/"$V"`) is NOT excluded:
+ *     it is read raw (quotes kept) as before, so a glob like `release/*`
+ *     and the clauses behind it still resolve.
  *   - A missing trailing `&&` / `;` separator, mirroring
  *     `consumeLeadingCd`'s identical rule: `git switch main` alone, with
  *     nothing following, has no "rest of command" for the branch
@@ -511,7 +546,17 @@ function consumeLeadingGitSwitch(s: string, start: number): { branch: string; ne
   // unresolved (real bash interpolates there; this parser does not
   // evaluate the shell environment); a single-quoted `$` and an escaped
   // `\$` are literal and kept.
-  const word = readWordOrLegacy(s, i, PATH_PLAIN_STOPS, false);
+  let word = readWordOrLegacy(s, i, PATH_PLAIN_STOPS, false);
+  // A word that does NOT start with a quote but carries a `$` in a
+  // double-quoted part (`release/"$V"`): bash expands it, so the branch
+  // is unknown, but the pre-change reading kept the raw word (quotes
+  // included, which still matches a glob such as `release/*`) and went on
+  // to the clauses behind it (a later `cd`, the kubectl remainder). Fall
+  // back to that reading instead of dropping them. A word that starts
+  // with a quote stays unresolved: the pre-change reading did the same.
+  if (word !== null && word.interpolates && s[i] !== '"' && s[i] !== "'") {
+    word = readWordLegacy(s, i, PATH_PLAIN_STOPS);
+  }
   if (word === null || word.interpolates) return null;
   const branch = word.value;
   if (branch.length === 0) return null;

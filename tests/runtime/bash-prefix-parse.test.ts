@@ -326,11 +326,58 @@ describe("parseBashPrefix", () => {
         }
       });
 
-      it("keeps swallowing operators in an env word that carries an escape but does not start with a quote (old reading, so a later assignment is still found; not covered)", () => {
+      it("keeps swallowing a single | or & in an env word that carries an escape but does not start with a quote (old reading, so a later assignment is still found)", () => {
         const r = parseBashPrefix('V=\\"& W=/tmp cmd');
         expect(r.inlineEnv).toEqual({ V: '"&', W: "/tmp" });
-        // same phantom as the plain `A=x||` spelling above
-        expect(parseBashPrefix("A=a\\ b|| cd /t && y").cdTarget).toBe("/t");
+        // bash: `V=\"| W=x cmd` runs `cmd` with W=x in the pipeline's right side
+        const piped = parseBashPrefix('V=\\"| W=x cmd');
+        expect(piped.inlineEnv).toEqual({ V: '"|', W: "x" });
+      });
+
+      it("ends an escape-led or mid-quote env word at an unquoted || (bash never runs what follows a pure assignment), so no phantom cd is read behind it", () => {
+        for (const head of ["A=a\\ b", 'A=x"a b"', 'V=\\"']) {
+          const cmd = `${head}|| cd /t && y`;
+          const r = parseBashPrefix(cmd);
+          expect(r.cdTarget, cmd).toBe(null);
+          expect(cmd.slice(r.remainderStart).startsWith("||"), cmd).toBe(true);
+        }
+        // the value itself is still extracted
+        expect(parseBashPrefix("A=a\\ b|| cd /t && y").inlineEnv).toEqual({ A: "a b" });
+        // not covered: the PLAIN spelling `A=x|| cd /t && y` keeps reading the cd (pre-existing phantom, a separate follow-up)
+        expect(parseBashPrefix("A=x|| cd /t && y").cdTarget).toBe("/t");
+        // not covered: a single | behind an escape-led word is still swallowed, so the phantom cd is read
+        expect(parseBashPrefix("A=a\\ b| cd /t && y").cdTarget).toBe("/t");
+      });
+
+      it("drops a backslash-newline line continuation outside quotes (bash: VAR=pro\\<NL>d -> prod)", () => {
+        const cmd = "VAR=pro\\\nd cmd";
+        const r = parseBashPrefix(cmd);
+        expect(r.inlineEnv).toEqual({ VAR: "prod" });
+        expect(cmd.slice(r.remainderStart)).toBe("cmd");
+      });
+
+      it("drops a backslash-newline line continuation inside double quotes (bash: VAR=\"pro\\<NL>d\" -> prod)", () => {
+        const cmd = 'VAR="pro\\\nd" cmd';
+        const r = parseBashPrefix(cmd);
+        expect(r.inlineEnv).toEqual({ VAR: "prod" });
+        expect(cmd.slice(r.remainderStart)).toBe("cmd");
+      });
+
+      it("skips an escaped quote inside ANSI-C $'...' (raw text kept, not decoded) so the cd and a later quote pair are still read", () => {
+        // bash: D=$'it\'s' -> it's. Not decoded here (not covered): the raw word is kept.
+        const cmd = "D=$'it\\'s' cd /x && echo 'a' 'b'";
+        const r = parseBashPrefix(cmd);
+        expect(r.inlineEnv).toEqual({ D: "$'it\\'s'" });
+        expect(r.cdTarget).toBe("/x");
+        expect(cmd.slice(r.remainderStart)).toBe("echo 'a' 'b'");
+      });
+
+      it("falls back to the plain word reading on an unterminated ANSI-C $'...' (bash rejects it), without throwing", () => {
+        const cmd = "VAR=$'abc cmd";
+        expect(() => parseBashPrefix(cmd)).not.toThrow();
+        const r = parseBashPrefix(cmd);
+        expect(r.inlineEnv).toEqual({ VAR: "$'abc" });
+        expect(cmd.slice(r.remainderStart)).toBe("cmd");
       });
 
       it("keeps `$VAR` inside a double-quoted value as literal text (v1, unchanged)", () => {
@@ -406,6 +453,17 @@ describe("parseBashPrefix", () => {
         expect(parseBashPrefix("cd /tmp/x>o && y").cdTarget).toBe("/tmp/x>o");
       });
 
+      it("reads a path that carries no quote or escape before its ; as a plain path even when a quote follows the ;", () => {
+        // bash runs `cd /tmp/x | y` here (a pipeline); the plain reading
+        // (ended at ; or & only) takes `/tmp/x|y` as the target. Unchanged
+        // from before, not covered: the quote behind the ; must not turn
+        // this into a quote-bearing word that ends at the |.
+        const cmd = 'cd /tmp/x|y;"z" && w';
+        const r = parseBashPrefix(cmd);
+        expect(r.cdTarget).toBe("/tmp/x|y");
+        expect(cmd.slice(r.remainderStart)).toBe('"z" && w');
+      });
+
       it("ends a path that carries a quote or an escape at an unquoted | < > ( )", () => {
         expect(parseBashPrefix('cd "/tmp/x"|cat && y').cdTarget).toBe(null);
         expect(parseBashPrefix("cd /tmp/a\\ b|cat && y").cdTarget).toBe(null);
@@ -432,6 +490,62 @@ describe("parseBashPrefix", () => {
 
       it("reads a backslash before a space in an unquoted branch as part of the token", () => {
         expect(parseBashPrefix("git switch feat\\ x && y").branchTarget).toBe("feat x");
+      });
+
+      it("keeps the pre-change branch reading when a `$` sits in a double-quoted part of a word that does not start with a quote (release/\"$V\")", () => {
+        // bash expands $V here, so the branch is unknown; the old reading
+        // kept the raw word, which still matches a `release/*` pattern, and
+        // went on to the clauses behind it. Returning null dropped them all.
+        const cases: Array<[string, string]> = [
+          ['git switch release/"$V" && rm', 'release/"$V"'],
+          ['git checkout release/"${VERSION}" && rm', 'release/"${VERSION}"'],
+          ['git switch release/v"$V" && rm', 'release/v"$V"'],
+          ["git switch release/'x'\"$V\" && rm", "release/'x'\"$V\""],
+        ];
+        for (const [cmd, branch] of cases) {
+          const r = parseBashPrefix(cmd);
+          expect(r.branchTarget, cmd).toBe(branch);
+          expect(cmd.slice(r.remainderStart), cmd).toBe("rm");
+        }
+      });
+
+      it("keeps the cd and the kubectl remainder behind a mid-word `$` branch switch", () => {
+        const cd = 'git switch feature/"$V" && cd /x && y';
+        const r1 = parseBashPrefix(cd);
+        expect(r1.branchTarget).toBe('feature/"$V"');
+        expect(r1.cdTarget).toBe("/x");
+        expect(cd.slice(r1.remainderStart).trim()).toBe("y");
+
+        const kube = 'git switch feature/"$V" && kubectl --context prod-1 delete ns x';
+        const r2 = parseBashPrefix(kube);
+        expect(kube.slice(r2.remainderStart).trimStart().startsWith("kubectl --context prod-1")).toBe(true);
+
+        // a `;` glued to the word ends it, as before
+        const semi = 'git switch release/"$V"; cd /x && y';
+        const r3 = parseBashPrefix(semi);
+        expect(r3.branchTarget).toBe('release/"$V"');
+        expect(r3.cdTarget).toBe("/x");
+      });
+
+      it("still leaves a branch word that STARTS with a quote and interpolates unresolved, with no clause consumed", () => {
+        for (const cmd of [
+          'git switch "$V" && rm',
+          'git switch "release/$V" && rm',
+          "git switch 'a'\"$V\" && rm",
+          // escape-aware reading sees one word with a `$`; the old first-quote reading would end it at the escaped quote
+          'git switch "a\\" && rm $V" && x',
+        ]) {
+          const r = parseBashPrefix(cmd);
+          expect(r.branchTarget, cmd).toBe(null);
+          expect(r.remainderStart, cmd).toBe(0);
+        }
+      });
+
+      it("treats the old first-quote reading of a branch word as unresolved when it contains a `$` (quote not closable by the escape-aware read)", () => {
+        // `"ab$V\" && rm` has no unescaped closing quote for bash; the first-quote reading closes at the escaped quote and sees the `$`
+        const r = parseBashPrefix('git switch "ab$V\\" && rm');
+        expect(r.branchTarget).toBe(null);
+        expect(r.remainderStart).toBe(0);
       });
 
       it("skips an escaped quote inside the `-C <path>` value", () => {

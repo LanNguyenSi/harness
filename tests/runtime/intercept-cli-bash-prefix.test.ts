@@ -551,3 +551,103 @@ describe("runInterceptCli — quoted git switch/checkout branch (task 341e024b f
     expect(output()).toBe("");
   });
 });
+
+// A `git switch`/`checkout` branch word that carries a `$` in a
+// double-quoted part but does not start with a quote (`release/"$V"`)
+// used to be read raw (quotes kept, still matching `release/*`) and the
+// clauses behind it were parsed. A parser round that returned "no branch"
+// for it dropped the branch signal, a following `cd` and the kubectl
+// remainder, and every command below ran ungated from a non-prod cwd
+// (task b093911d).
+const KUBE_CLASSIFIER: RiskClassifier = {
+  name: "dangerous-shell-kube",
+  tool: "Bash",
+  patterns: [
+    { pattern: "terraform\\s+destroy", categories: ["destructive"], severity: "critical" },
+    { pattern: "kubectl\\b[^\\n]*\\bdelete\\b", categories: ["destructive"], severity: "critical" },
+  ],
+};
+
+const PROD_BRANCH_KUBE_RESOLVER: EnvironmentResolver = {
+  name: "production-signals",
+  environment: "production",
+  signals: {
+    branch_patterns: ["main", "release/*"],
+    kube_context_patterns: [".*prod.*"],
+  },
+};
+
+const kubeManifest: Manifest = makeManifest({
+  policies: [GATE_PROD],
+  classifiers: [KUBE_CLASSIFIER],
+  resolvers: [PROD_BRANCH_KUBE_RESOLVER],
+});
+
+async function interceptFrom(command: string, cwd: string, sessionId: string) {
+  const { stream, output } = captureStdout();
+  const result = await runInterceptCli({
+    stdin: streamFrom(
+      JSON.stringify({
+        hook_event_name: "PreToolUse",
+        tool_name: "Bash",
+        tool_input: { command },
+        session_id: sessionId,
+        cwd,
+      }),
+    ),
+    stdout: stream,
+    manifest: kubeManifest,
+    ledger: emptyLedger,
+    env: {},
+    kubeContext: "",
+    kubeNamespace: "",
+  });
+  return { result, output };
+}
+
+describe("runInterceptCli - git switch branch word with a mid-word double-quoted $ (task b093911d)", () => {
+  it('blocks `git switch release/"$V" && terraform destroy` from a non-prod cwd (the raw word still matches release/*)', async () => {
+    const nonProdRepo = makeGitRepo("feature/work");
+    const { result, output } = await interceptFrom(
+      'git switch release/"$V" && terraform destroy',
+      nonProdRepo,
+      "sess-midword-1",
+    );
+    expect(result.blocked).toBe(true);
+    expect(JSON.parse(output().trim()).decision).toBe("block");
+  });
+
+  it('blocks `git switch feature/"$V" && cd <repo-on-main> && terraform destroy` (the cd behind the switch is still read)', async () => {
+    const nonProdRepo = makeGitRepo("feature/work");
+    const prodRepo = makeGitRepo("main");
+    const { result, output } = await interceptFrom(
+      `git switch feature/"$V" && cd ${prodRepo} && terraform destroy`,
+      nonProdRepo,
+      "sess-midword-2",
+    );
+    expect(result.blocked).toBe(true);
+    expect(JSON.parse(output().trim()).decision).toBe("block");
+  });
+
+  it('blocks `git switch feature/"$V" && kubectl --context prod-1 delete ns x` (the kubectl remainder is still reached)', async () => {
+    const nonProdRepo = makeGitRepo("feature/work");
+    const { result, output } = await interceptFrom(
+      'git switch feature/"$V" && kubectl --context prod-1 delete ns x',
+      nonProdRepo,
+      "sess-midword-3",
+    );
+    expect(result.blocked).toBe(true);
+    expect(JSON.parse(output().trim()).decision).toBe("block");
+  });
+
+  it('allows `git switch feature/"$V" && terraform destroy` from a non-prod cwd (no prod signal anywhere)', async () => {
+    const nonProdRepo = makeGitRepo("feature/work");
+    const { result, output } = await interceptFrom(
+      'git switch feature/"$V" && terraform destroy',
+      nonProdRepo,
+      "sess-midword-4",
+    );
+    expect(result.blocked).toBe(false);
+    expect(output()).toBe("");
+  });
+});
