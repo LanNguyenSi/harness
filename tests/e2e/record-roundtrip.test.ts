@@ -380,6 +380,7 @@ let featureCheckout: string;
 let baseCheckout: string;
 let reviewContent: string;
 let reviewSubagentContent: string;
+let adhocSubagentContent: string;
 let dogfoodContent: string;
 let dogfoodSessionId: string;
 
@@ -419,6 +420,19 @@ beforeAll(async () => {
     );
   }
   reviewSubagentContent = subagentResult.content;
+
+  // Ad-hoc acceptance criterion: no task, same feature checkout.
+  const adhocResult = await runRecordReviewSubagent({
+    adhoc: true,
+    verdict: "approve",
+    cwd: featureCheckout,
+    session: "e2e-sess-review",
+    writeLedger: noopWrite,
+  });
+  if (!adhocResult.wrote) {
+    throw new Error(`fixture setup: ad-hoc runRecordReviewSubagent did not write: ${adhocResult.reason}`);
+  }
+  adhocSubagentContent = adhocResult.content;
 
   // dogfood acceptance criterion: session-tagged, no branch involved.
   dogfoodSessionId = "e2e-sess-dogfood";
@@ -620,6 +634,61 @@ describe("harness record review-subagent -> review-subagent-before-pr-create[-ba
     expect(result.decisions).toHaveLength(1);
     expect(result.decisions[0]?.outcome).toBe("allow");
     expect(stdoutOut()).toBe("");
+  });
+
+  it("an ad-hoc fact (no task token) allows gh pr create on the recorded branch only", async () => {
+    const mcp = makeFakeGroundingMcp([
+      { id: 1, content: adhocSubagentContent, createdAt: STALE_ISO },
+    ]);
+    const manifestPath = writeRecordManifest(["node", mcp]);
+    const bashEvent = (cwd: string) => ({
+      hook_event_name: "PreToolUse",
+      tool_name: "Bash",
+      tool_input: { command: 'gh pr create --title "ad-hoc" --body "fixture"' },
+      session_id: "e2e-sess-review",
+      cwd,
+    });
+
+    const recorded = await runInterceptCli({
+      stdin: streamFrom(JSON.stringify(bashEvent(featureCheckout))),
+      stdout: captureStream().stream,
+      stderr: captureStream().stream,
+      configPath: manifestPath,
+    });
+    expect(recorded.blocked).toBe(false);
+    expect(recorded.decisions[0]?.outcome).toBe("allow");
+
+    // Another branch (the master checkout) is not covered by the fact.
+    const other = await runInterceptCli({
+      stdin: streamFrom(JSON.stringify(bashEvent(baseCheckout))),
+      stdout: captureStream().stream,
+      stderr: captureStream().stream,
+      configPath: manifestPath,
+    });
+    expect(other.blocked).toBe(true);
+    expect(other.decisions[0]?.outcome).toBe("deny");
+  });
+
+  it("an ad-hoc fact does not open the MCP-surface gate (it keys on the task id)", async () => {
+    const mcp = makeFakeGroundingMcp([
+      { id: 1, content: adhocSubagentContent, createdAt: STALE_ISO },
+    ]);
+    const manifestPath = writeRecordManifest(["node", mcp]);
+    const event = {
+      hook_event_name: "PreToolUse",
+      tool_name: "mcp__agent-tasks__pull_requests_create",
+      tool_input: { taskId: "T-123", title: "ad-hoc fixture PR" },
+      session_id: "e2e-sess-review",
+      cwd: featureCheckout,
+    };
+    const result = await runInterceptCli({
+      stdin: streamFrom(JSON.stringify(event)),
+      stdout: captureStream().stream,
+      stderr: captureStream().stream,
+      configPath: manifestPath,
+    });
+    expect(result.blocked).toBe(true);
+    expect(result.decisions[0]?.outcome).toBe("deny");
   });
 
   it("denies pull_requests_create (MCP surface) on an empty ledger, with the harness record review-subagent hint", async () => {
