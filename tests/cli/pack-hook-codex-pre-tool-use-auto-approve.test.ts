@@ -52,6 +52,7 @@ import type { LedgerEntry } from "../../src/policies/index.js";
 import {
   applyPostToolUseExpiry,
   approvalMarkerPathFor,
+  canonicalReportHash,
   checkApprovalMarker,
   clearApprovalMarker,
   writeApprovalMarker,
@@ -220,16 +221,19 @@ function reportBody(
   };
 }
 
-/** Write a report file and return its path plus the sha256 of its exact bytes. */
+/**
+ * Write a report file and return its path, the sha256 of its exact bytes, and
+ * its canonical hash (what an approval marker signs as `reportContentHash`).
+ */
 function writeReportFile(
   name: string,
   body: Record<string, unknown>,
-): { filePath: string; sha256: string } {
+): { filePath: string; sha256: string; canonicalHash: string } {
   fs.mkdirSync(reportsDir, { recursive: true });
   const filePath = path.join(reportsDir, name);
   const content = `${JSON.stringify(body, null, 2)}\n`;
   fs.writeFileSync(filePath, content);
-  return { filePath, sha256: sha256Hex(content) };
+  return { filePath, sha256: sha256Hex(content), canonicalHash: canonicalReportHash(body) };
 }
 
 /** The canonical happy-path report: newest, strict-session, `pending`, valid. */
@@ -237,7 +241,7 @@ function writePendingReport(
   sessionId: string | null = SESSION,
   createdAt = "2026-08-27T10:00:00.000Z",
   name = "2026-08-27T10-00-00-000Z-report-aaaa1111.json",
-): { filePath: string; sha256: string } {
+): { filePath: string; sha256: string; canonicalHash: string } {
   return writeReportFile(name, reportBody(sessionId, "pending", createdAt));
 }
 
@@ -356,7 +360,7 @@ describe("pack hook codex-pre-tool-use — auto-approval path (ADR slice 2)", ()
       expect(check.matched).toBe(true);
       expect(check.forged).toBe(false);
       expect(check.marker?.approvedBy).toBe("auto-mode:codex:bypassPermissions");
-      expect(check.marker?.reportContentHash).toBe(report.sha256);
+      expect(check.marker?.reportContentHash).toBe(report.canonicalHash);
 
       // The report was consumed in the same pass.
       const after = readReport(report.filePath);
@@ -401,6 +405,29 @@ describe("pack hook codex-pre-tool-use — auto-approval path (ADR slice 2)", ()
       expect(fs.readFileSync(approvalMarkerPathFor(generatedDir, SESSION), "utf8")).toBe(
         markerAfterFirst,
       );
+    });
+
+    it("a report edited after auto-approval is refused at the next gated call: the marker signed the canonical hash, the gate recomputes it", async () => {
+      getOrCreateSigningKey(generatedDir);
+      const report = writePendingReport();
+      expect((await call()).blocked).toBe(false);
+      // Control: the unedited, auto-approved report allows on a second call.
+      expect((await call()).blocked).toBe(false);
+
+      fs.writeFileSync(
+        report.filePath,
+        `${JSON.stringify({ ...readReport(report.filePath), currentUnderstanding: "swapped after approval" }, null, 2)}\n`,
+      );
+      ledgerCalls = [];
+
+      const result = await call();
+
+      expect(result.blocked).toBe(true);
+      expect(result.stderr).toMatch(
+        /approved report 2026-08-27T10-00-00-000Z-report-aaaa1111\.json does not match the content the approval marker was signed for; re-run `harness approve understanding`/,
+      );
+      // Refused, not re-minted: the edited report is `approved`, never `pending`.
+      expect(ledgerCalls).toEqual([]);
     });
   });
 
@@ -629,7 +656,7 @@ describe("pack hook codex-pre-tool-use — auto-approval path (ADR slice 2)", ()
       const first = writePendingReport();
       expect((await call()).blocked).toBe(false);
       expect(checkApprovalMarker(generatedDir, SESSION).marker?.reportContentHash).toBe(
-        first.sha256,
+        first.canonicalHash,
       );
 
       clearApprovalMarker(generatedDir, SESSION);
@@ -645,7 +672,7 @@ describe("pack hook codex-pre-tool-use — auto-approval path (ADR slice 2)", ()
       expect(result.source).toBe("marker");
       const check = checkApprovalMarker(generatedDir, SESSION);
       expect(check.matched).toBe(true);
-      expect(check.marker?.reportContentHash).toBe(second.sha256);
+      expect(check.marker?.reportContentHash).toBe(second.canonicalHash);
       expect(readReport(second.filePath)["approvalStatus"]).toBe("approved");
       expect(ledgerCalls).toHaveLength(1);
     });

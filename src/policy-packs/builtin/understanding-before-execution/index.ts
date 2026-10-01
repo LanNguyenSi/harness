@@ -89,6 +89,10 @@ export {
   type PersistedReportEvidence,
   expirePersistedReport,
   checkPersistedReport,
+  canonicalReportHash,
+  canonicalReportHashOfFile,
+  type ApprovedReportHashVerification,
+  verifyApprovedReportHash,
 } from "./persisted-reports.js";
 
 export { type ApprovalLifecycle, parseApprovalLifecycle } from "./lifecycle.js";

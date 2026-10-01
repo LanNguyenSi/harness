@@ -65,6 +65,7 @@ import * as path from "node:path";
 import {
   autoApprovedByFor,
   autoApprovedLedgerTagFor,
+  canonicalReportHash,
   checkOperatorApprovalMarkers,
   harnessAllowed,
   listPersistedReports,
@@ -73,7 +74,7 @@ import {
   selectNewestStrictSessionReport,
   writeApprovalMarker,
 } from "../../policy-packs/builtin/understanding-before-execution-runtime.js";
-import { sha256Hex, signingKeyExists } from "../../runtime/approval-signing.js";
+import { signingKeyExists } from "../../runtime/approval-signing.js";
 import {
   clearPendingApproval,
   readPendingApproval,
@@ -478,9 +479,11 @@ export async function attemptAutoApproval(
     return decline(`report invalid: ${validation.field}`);
   }
 
-  // Success sequence. `reportContentHash` binds the bytes as they were
-  // BEFORE the approval rewrite, exactly as the approve CLI computes it.
-  const reportContentHash = sha256Hex(raw);
+  // Success sequence. `reportContentHash` is the canonical hash of the
+  // report as it stands BEFORE the approval rewrite, exactly as the approve
+  // CLI computes it; the lifecycle fields the rewrite changes are not part
+  // of it, so the gate-read cross-check still matches afterwards.
+  const reportContentHash = canonicalReportHash(parsed);
   const approvedAt = new Date().toISOString();
   // The parent linkage rides in the same signed `approvedBy` field the
   // source already travels in (ADR "Audit and doctor"): no new signed

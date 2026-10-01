@@ -15,6 +15,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { atomicWriteFile } from "../../../io/atomic-write.js";
 import { safeJsonParse } from "../../../io/safe-json-parse.js";
+import { sha256Hex } from "../../../runtime/approval-signing.js";
 
 export interface PersistedReport {
   filePath: string;
@@ -552,4 +553,113 @@ export function describeBoundaryExpiry(
       ? ` at ${sanitizeDetailValue(report.expiredAt)}`
       : "";
   return `approval expired because ${sanitizeDetailValue(report.expiredBy)}${when}`;
+}
+
+/**
+ * Report fields the approval and expiry lifecycles rewrite. They are left
+ * out of {@link canonicalReportHash}: `rewriteReportApproved` flips
+ * `approvalStatus`/`approvedAt`/`approvedBy`, may stamp `sessionId`, and
+ * drops `expiredAt`/`expiredBy`; `expirePersistedReport` later sets
+ * `approvalStatus`/`expiredAt`/`expiredBy` again. The hash must survive all
+ * of that for an untouched report, so it covers only the content the
+ * operator actually reviewed.
+ */
+const LIFECYCLE_REPORT_FIELDS: ReadonlySet<string> = new Set([
+  "approvalStatus",
+  "approvedAt",
+  "approvedBy",
+  "expiredAt",
+  "expiredBy",
+  "sessionId",
+]);
+
+function sortKeysDeep(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(sortKeysDeep);
+  if (value !== null && typeof value === "object") {
+    const entries = Object.entries(value as Record<string, unknown>)
+      .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+      .map(([k, v]): [string, unknown] => [k, sortKeysDeep(v)]);
+    // `Object.fromEntries` defines own properties, so a report key named
+    // `__proto__` stays data instead of re-parenting the copy.
+    return Object.fromEntries(entries);
+  }
+  return value;
+}
+
+/**
+ * The hash an approval marker signs as its `reportContentHash`, and the one
+ * the gate recomputes at read time (task fa423e9b): sha256 over a key-sorted
+ * JSON serialisation of the parsed report with the lifecycle fields in
+ * `LIFECYCLE_REPORT_FIELDS` removed. A raw-bytes hash cannot do this job: the
+ * producers hash before `rewriteReportApproved` re-serialises the file and
+ * `expirePersistedReport` rewrites it again, so the raw bytes of an untouched
+ * report never match what the marker signed. One function on purpose, shared
+ * by both producers (`harness approve understanding`, the auto-approval path)
+ * and the verifier.
+ */
+export function canonicalReportHash(report: Record<string, unknown>): string {
+  // `Object.fromEntries` (not `kept[key] = value`): a report key named
+  // `__proto__` must stay hashed data, not re-parent the copy and vanish.
+  const kept = Object.fromEntries(
+    Object.entries(report).filter(([key]) => !LIFECYCLE_REPORT_FIELDS.has(key)),
+  );
+  return sha256Hex(JSON.stringify(sortKeysDeep(kept)));
+}
+
+/** Canonical hash of the report file at `filePath`; null when unreadable or not a JSON object. */
+export function canonicalReportHashOfFile(filePath: string): string | null {
+  let raw: string;
+  try {
+    raw = fs.readFileSync(filePath, "utf8");
+  } catch {
+    return null;
+  }
+  const parsed = safeJsonParse(raw);
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+  return canonicalReportHash(parsed as Record<string, unknown>);
+}
+
+export type ApprovedReportHashVerification =
+  | { ok: true }
+  | { ok: false; filePath: string; detail: string };
+
+/**
+ * Gate-read cross-check of a matched approval marker against the session's
+ * persisted report (task fa423e9b, residual of the 0.50.0 redesign). Both
+ * PreToolUse hooks call it after `checkOperatorApprovalMarkers` matched,
+ * passing the matched marker's signed `reportContentHash`.
+ *
+ * Fails closed on a mismatch ONLY when the marker carries a non-null hash
+ * AND the report the gate selects for the session claims `approved`;
+ * everything else keeps the pre-existing behaviour: a null-hash marker
+ * (ledger-only / `--force` approvals bind no report), no report at all, or a
+ * selected report that is not `approved` (e.g. a fresh pending report of a
+ * later session under a task-scoped marker). The report is selected the way
+ * `checkPersistedReport` selects it. An approved report that can no longer be
+ * read or parsed counts as a mismatch: its content cannot be shown to be the
+ * approved one.
+ *
+ * The `detail` is the block reason; it names the report file (through
+ * `sanitizeDetailValue`, since the name comes from the agent-writable
+ * directory) and the one-command fix, which is also the single migration step
+ * for a marker written before the canonical hash existed.
+ */
+export function verifyApprovedReportHash(
+  reportsDir: string,
+  sessionId: string,
+  markerReportContentHash: string | null,
+): ApprovedReportHashVerification {
+  if (markerReportContentHash === null) return { ok: true };
+  const latest = findLatestReportForSession(listPersistedReports(reportsDir), sessionId);
+  if (latest === null || latest.approvalStatus !== "approved") return { ok: true };
+  if (canonicalReportHashOfFile(latest.filePath) === markerReportContentHash) {
+    return { ok: true };
+  }
+  return {
+    ok: false,
+    filePath: latest.filePath,
+    detail:
+      `approved report ${sanitizeDetailValue(path.basename(latest.filePath))} does not match ` +
+      `the content the approval marker was signed for; re-run \`harness approve understanding\``,
+  };
 }

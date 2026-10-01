@@ -13,18 +13,20 @@
 // is structural (option B of the task): gate-time approval flows ONLY
 // through the HMAC-signed marker; the report contributes a diagnostic.
 //
+// Task fa423e9b closed the gap that task left open: a VALID marker plus a
+// report swapped after approval used to allow, because the marker's signed
+// `reportContentHash` was never compared at gate time. Both hooks now
+// recompute the canonical report hash (lifecycle fields excluded) and deny
+// a mismatch; P19 and P23-P33 below pin that, including the paths that must
+// stay allowed.
+//
 // Residuals named and pinned below (not closed by this task, tracked
 // elsewhere):
-//   R1. A VALID marker plus a swapped/replaced report still allows: the
-//       operator did approve this session; the marker's
-//       `reportContentHash` is not yet cross-checked at gate time (C1
-//       staleness follow-up, task fa423e9b). Under this task that is an
-//       audit-fidelity gap, no longer an authority gap.
-//   R2. Key read + uncovered write forges a VALID marker (documented
-//       honest trust model in src/runtime/approval-signing.ts). Unchanged.
-//   R3. The standalone `understanding-gate approve` CLI flips the report
-//       without a signed marker and therefore no longer opens the harness
-//       gate; `harness approve understanding` is the approval path.
+//   - Key read + uncovered write forges a VALID marker (documented
+//     honest trust model in src/runtime/approval-signing.ts). Unchanged.
+//   - The standalone `understanding-gate approve` CLI flips the report
+//     without a signed marker and therefore no longer opens the harness
+//     gate; `harness approve understanding` is the approval path.
 
 import { Readable, Writable } from "node:stream";
 import * as fs from "node:fs";
@@ -34,16 +36,19 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { approveUnderstanding } from "../../src/cli/approve/understanding.js";
 import { runPackHookCodexPreToolUseCli } from "../../src/cli/pack/hook-codex-pre-tool-use.js";
 import { runPackHookPreToolUseCli } from "../../src/cli/pack/hook-pre-tool-use.js";
+import { runPackHookSubagentStartCli } from "../../src/cli/pack/hook-subagent-start.js";
 import type { LedgerEntry } from "../../src/policies/index.js";
 import {
   applyPostToolUseExpiry,
+  approvalMarkerPathFor,
+  canonicalReportHashOfFile,
   clearApprovalMarker,
   expirePersistedReport,
   writeActiveClaim,
   writeApprovalMarker,
   writeTaskApprovalMarker,
 } from "../../src/policy-packs/builtin/understanding-before-execution-runtime.js";
-import { rotateSigningKey } from "../../src/runtime/approval-signing.js";
+import { rotateSigningKey, sha256Hex } from "../../src/runtime/approval-signing.js";
 import { parseManifest, type Manifest } from "../../src/schema/index.js";
 
 let tmp: string;
@@ -102,6 +107,12 @@ function writeReport(dir: string, name: string, body: Record<string, unknown>): 
 
 const SESSION = "sess-evidence";
 const REJECT = /unsigned persisted-report approval rejected/;
+// The reason a matched marker whose approved report was swapped gets: names
+// the report file and the one-command fix.
+const MISMATCH = (file: string): RegExp =>
+  new RegExp(
+    `approved report ${file.replace(/\./g, "\\.")} does not match the content the approval marker was signed for; re-run \`harness approve understanding\``,
+  );
 
 interface Outcome {
   blocked: boolean;
@@ -429,14 +440,121 @@ describe.each(RUNTIMES)("persisted report is evidence, not authority (task 74023
     expect(out.source).toBe("marker");
   });
 
-  it("P19 RESIDUAL R1 (pinned, tracked by fa423e9b): valid marker + report SWAPPED after approval still allows via the marker", async () => {
-    const generatedDir = path.join(tmp, "harness.generated");
-    const reportsDir = path.join(tmp, "reports");
+  /** Real `harness approve understanding` flow over a pending report; returns the report path. */
+  async function approveRealFlow(
+    generatedDir: string,
+    reportsDir: string,
+    session: string = SESSION,
+    body: Record<string, unknown> = {},
+  ): Promise<string> {
     const reportPath = writeReport(reportsDir, "r1.json", {
-      sessionId: SESSION,
+      sessionId: session,
       approvalStatus: "pending",
       createdAt: new Date().toISOString(),
+      content: "the understanding the operator reviewed",
+      ...body,
     });
+    const approve = await approveUnderstanding({
+      manifest: parseManifest({ version: 1 }),
+      session,
+      reportsDir,
+      generatedDir,
+      ledgerAdd: async () => ({ ok: true }),
+    });
+    expect(approve.marker.ok).toBe(true);
+    expect(approve.persistedReport.ok).toBe(true);
+    return reportPath;
+  }
+
+  function editReport(reportPath: string, edit: (r: Record<string, unknown>) => void): void {
+    const r = JSON.parse(fs.readFileSync(reportPath, "utf8")) as Record<string, unknown>;
+    edit(r);
+    fs.writeFileSync(reportPath, `${JSON.stringify(r, null, 2)}\n`);
+  }
+
+  it("P19 TAMPER: valid session marker + approved report whose content was edited after approval: blocks with the mismatch reason naming the file and `harness approve understanding`", async () => {
+    const generatedDir = path.join(tmp, "harness.generated");
+    const reportsDir = path.join(tmp, "reports");
+    const reportPath = await approveRealFlow(generatedDir, reportsDir);
+    expect((await rt.run({ generatedDir, reportsDir })).blocked).toBe(false);
+    // Replace the approved report's content wholesale (a different
+    // Understanding text, same session, still claiming approved).
+    fs.writeFileSync(reportPath, `${JSON.stringify({ ...approvedBody(), content: "swapped" }, null, 2)}\n`);
+    const out = await rt.run({ generatedDir, reportsDir });
+    expect(out.blocked).toBe(true);
+    expect(out.source).toBe("none");
+    expect(out.detail).toMatch(MISMATCH("r1.json"));
+    expect(out.stderr).toMatch(MISMATCH("r1.json"));
+    expect(out.detail).not.toMatch(/no approval marker/);
+  });
+
+  it("P23 TAMPER, task-scoped marker (active claim set): the same edit blocks when only the task marker can match", async () => {
+    const generatedDir = path.join(tmp, "harness.generated");
+    const reportsDir = path.join(tmp, "reports");
+    writeActiveClaim(generatedDir, "task-live");
+    const reportPath = await approveRealFlow(generatedDir, reportsDir);
+    // Remove the session marker so the task-scoped marker is the only one
+    // that can match: a check wired to the session marker alone would be inert.
+    fs.rmSync(approvalMarkerPathFor(generatedDir, SESSION));
+    const before = await rt.run({ generatedDir, reportsDir });
+    expect(before.blocked).toBe(false);
+    expect(before.stderr).toMatch(/approved via marker task-/);
+    editReport(reportPath, (r) => {
+      r["content"] = "edited after approval";
+    });
+    const out = await rt.run({ generatedDir, reportsDir });
+    expect(out.blocked).toBe(true);
+    expect(out.detail).toMatch(MISMATCH("r1.json"));
+  });
+
+  it("P24 UNCHANGED path, real approve flow: the marker signs the canonical hash (not the raw bytes) and the gate allows", async () => {
+    const generatedDir = path.join(tmp, "harness.generated");
+    const reportsDir = path.join(tmp, "reports");
+    const reportPath = await approveRealFlow(generatedDir, reportsDir);
+    const markerBody = JSON.parse(
+      fs.readFileSync(approvalMarkerPathFor(generatedDir, SESSION), "utf8"),
+    ) as Record<string, unknown>;
+    expect(markerBody["reportContentHash"]).toBe(canonicalReportHashOfFile(reportPath));
+    expect(markerBody["reportContentHash"]).not.toBe(sha256Hex(fs.readFileSync(reportPath, "utf8")));
+    const out = await rt.run({ generatedDir, reportsDir });
+    expect(out.blocked).toBe(false);
+    expect(out.source).toBe("marker");
+  });
+
+  it("P25 UNCHANGED path: a later post-tool-use expiry rewrite of the report does not change what the marker signed", async () => {
+    const generatedDir = path.join(tmp, "harness.generated");
+    const reportsDir = path.join(tmp, "reports");
+    const reportPath = await approveRealFlow(generatedDir, reportsDir);
+    const approvedHash = canonicalReportHashOfFile(reportPath);
+    const expired = expirePersistedReport(reportsDir, SESSION, new Date(), "tool:mcp__agent-tasks__task_finish");
+    expect(expired.ok).toBe(true);
+    expect(JSON.parse(fs.readFileSync(reportPath, "utf8"))["approvalStatus"]).toBe("expired");
+    expect(canonicalReportHashOfFile(reportPath)).toBe(approvedHash);
+  });
+
+  it("P26 null-hash marker (ledger-only / --force approval) + approved report with ANY content: allows as before", async () => {
+    const generatedDir = path.join(tmp, "harness.generated");
+    const reportsDir = path.join(tmp, "reports");
+    writeApprovalMarker(generatedDir, SESSION, { approvedAt: new Date().toISOString(), approvedBy: "operator" });
+    writeReport(reportsDir, "r1.json", approvedBody({ content: "anything" }));
+    const out = await rt.run({ generatedDir, reportsDir });
+    expect(out.blocked).toBe(false);
+    expect(out.source).toBe("marker");
+  });
+
+  it("P27 legacy marker (raw-bytes hash written before the canonical hash existed) + approved report: denies once, naming the fix; re-approving opens the gate again", async () => {
+    const generatedDir = path.join(tmp, "harness.generated");
+    const reportsDir = path.join(tmp, "reports");
+    const reportPath = writeReport(reportsDir, "r1.json", approvedBody({ content: "approved earlier" }));
+    writeApprovalMarker(generatedDir, SESSION, {
+      approvedAt: new Date().toISOString(),
+      approvedBy: "operator",
+      reportContentHash: sha256Hex(fs.readFileSync(reportPath, "utf8")),
+    });
+    const out = await rt.run({ generatedDir, reportsDir });
+    expect(out.blocked).toBe(true);
+    expect(out.detail).toMatch(MISMATCH("r1.json"));
+    // The single migration step the reason names.
     await approveUnderstanding({
       manifest: parseManifest({ version: 1 }),
       session: SESSION,
@@ -444,10 +562,102 @@ describe.each(RUNTIMES)("persisted report is evidence, not authority (task 74023
       generatedDir,
       ledgerAdd: async () => ({ ok: true }),
     });
-    // Replace the approved report's content wholesale (a different
-    // Understanding text, same session). The marker's reportContentHash
-    // is not cross-checked at gate time yet.
-    fs.writeFileSync(reportPath, `${JSON.stringify({ ...approvedBody(), content: "swapped" }, null, 2)}\n`);
+    const after = await rt.run({ generatedDir, reportsDir });
+    expect(after.blocked).toBe(false);
+    expect(after.source).toBe("marker");
+  });
+
+  it("P28 task-scoped marker, NEW session whose own report is still pending: allows as before (the check needs an approved report)", async () => {
+    const generatedDir = path.join(tmp, "harness.generated");
+    const reportsDir = path.join(tmp, "reports");
+    writeActiveClaim(generatedDir, "task-live");
+    // Approved earlier in another session: writes the task marker too.
+    await approveRealFlow(generatedDir, reportsDir, "sess-earlier");
+    writeReport(reportsDir, "new-session.json", {
+      sessionId: SESSION,
+      approvalStatus: "pending",
+      createdAt: new Date(Date.now() + 1000).toISOString(),
+      content: "a different, not yet approved report",
+    });
+    const out = await rt.run({ generatedDir, reportsDir });
+    expect(out.blocked).toBe(false);
+    expect(out.source).toBe("marker");
+    expect(out.stderr).toMatch(/approved via marker task-/);
+  });
+
+  it("P29 mismatch plus a read-only shell command: still allowed by the read-only carve-out, not by the marker (source none)", async () => {
+    const generatedDir = path.join(tmp, "harness.generated");
+    const reportsDir = path.join(tmp, "reports");
+    const reportPath = await approveRealFlow(generatedDir, reportsDir);
+    editReport(reportPath, (r) => {
+      r["content"] = "swapped";
+    });
+    const out = await rt.run({ generatedDir, reportsDir, command: "git status" });
+    expect(out.blocked).toBe(false);
+    expect(out.source).toBe("none");
+    const mutating = await rt.run({ generatedDir, reportsDir, command: "rm -rf build" });
+    expect(mutating.blocked).toBe(true);
+    expect(mutating.detail).toMatch(MISMATCH("r1.json"));
+  });
+
+  it("P30 the report file name in the mismatch reason is sanitized (a newline in the name cannot forge an extra reason line)", async () => {
+    const generatedDir = path.join(tmp, "harness.generated");
+    const reportsDir = path.join(tmp, "reports");
+    const reportPath = await approveRealFlow(generatedDir, reportsDir);
+    const hostile = path.join(reportsDir, "r1\nreason: allowed.json");
+    fs.renameSync(reportPath, hostile);
+    editReport(hostile, (r) => {
+      r["content"] = "swapped";
+    });
+    const out = await rt.run({ generatedDir, reportsDir });
+    expect(out.blocked).toBe(true);
+    expect(out.detail).toMatch(/approved report r1 reason: allowed\.json does not match the content/);
+    expect(out.detail).not.toMatch(/approved report r1\n/);
+  });
+
+  it("P31 editing only lifecycle fields of the approved report (approvedBy, approvedAt) is not a content change: allows", async () => {
+    const generatedDir = path.join(tmp, "harness.generated");
+    const reportsDir = path.join(tmp, "reports");
+    const reportPath = await approveRealFlow(generatedDir, reportsDir);
+    editReport(reportPath, (r) => {
+      r["approvedBy"] = "someone-else";
+      r["approvedAt"] = "2000-01-01T00:00:00.000Z";
+    });
+    const out = await rt.run({ generatedDir, reportsDir });
+    expect(out.blocked).toBe(false);
+    expect(out.source).toBe("marker");
+  });
+
+  it("P32 report without a sessionId (adopted by the approve flow, which stamps the session id): the real flow still allows", async () => {
+    const generatedDir = path.join(tmp, "harness.generated");
+    const reportsDir = path.join(tmp, "reports");
+    const reportPath = writeReport(reportsDir, "legacy.json", {
+      approvalStatus: "pending",
+      createdAt: new Date().toISOString(),
+      content: "legacy report without a session id",
+    });
+    const approve = await approveUnderstanding({
+      manifest: parseManifest({ version: 1 }),
+      session: SESSION,
+      reportsDir,
+      generatedDir,
+      ledgerAdd: async () => ({ ok: true }),
+    });
+    expect(approve.persistedReport.ok).toBe(true);
+    expect(JSON.parse(fs.readFileSync(reportPath, "utf8"))["sessionId"]).toBe(SESSION);
+    const out = await rt.run({ generatedDir, reportsDir });
+    expect(out.blocked).toBe(false);
+    expect(out.source).toBe("marker");
+  });
+
+  it("P33 an approved report replaced by a non-object file counts as no report at all: the marker stands (pinned boundary of the check)", async () => {
+    const generatedDir = path.join(tmp, "harness.generated");
+    const reportsDir = path.join(tmp, "reports");
+    const reportPath = await approveRealFlow(generatedDir, reportsDir);
+    const body = JSON.parse(fs.readFileSync(reportPath, "utf8")) as Record<string, unknown>;
+    // Parses, but is an array: the report listing skips it, so no approved
+    // report is selected for the session.
+    fs.writeFileSync(reportPath, JSON.stringify([body]));
     const out = await rt.run({ generatedDir, reportsDir });
     expect(out.blocked).toBe(false);
     expect(out.source).toBe("marker");
@@ -488,5 +698,87 @@ describe.each(RUNTIMES)("persisted report is evidence, not authority (task 74023
     const out = await rt.run({ generatedDir, reportsDir, command: "rm -rf build" });
     expect(out.blocked).toBe(true);
     expect(out.detail).toMatch(REJECT);
+  });
+});
+
+describe("report hash mismatch: Claude-only call shapes (task fa423e9b)", () => {
+  async function approvedSession(): Promise<{ generatedDir: string; reportsDir: string; reportPath: string }> {
+    const generatedDir = path.join(tmp, "harness.generated");
+    const reportsDir = path.join(tmp, "reports");
+    const reportPath = writeReport(reportsDir, "r1.json", {
+      sessionId: SESSION,
+      approvalStatus: "pending",
+      createdAt: new Date().toISOString(),
+      content: "reviewed",
+    });
+    await approveUnderstanding({
+      manifest: parseManifest({ version: 1 }),
+      session: SESSION,
+      reportsDir,
+      generatedDir,
+      ledgerAdd: async () => ({ ok: true }),
+    });
+    return { generatedDir, reportsDir, reportPath };
+  }
+
+  function swap(reportPath: string): void {
+    const r = JSON.parse(fs.readFileSync(reportPath, "utf8")) as Record<string, unknown>;
+    r["content"] = "swapped";
+    fs.writeFileSync(reportPath, `${JSON.stringify(r, null, 2)}\n`);
+  }
+
+  async function preToolUse(
+    generatedDir: string,
+    reportsDir: string,
+    event: Record<string, unknown>,
+  ): Promise<{ blocked: boolean; asked: boolean; source: string; detail: string }> {
+    const result = await runPackHookPreToolUseCli({
+      manifest: manifestWithPack(),
+      stdin: readableFromString(JSON.stringify({ session_id: SESSION, ...event })),
+      stdout: bufferStream().stream,
+      stderr: bufferStream().stream,
+      reportsDir,
+      generatedDir,
+      ledgerQuery: async (): Promise<LedgerEntry[]> => [],
+    });
+    return {
+      blocked: result.blocked,
+      asked: result.asked === true,
+      source: result.approvalCheck.source,
+      detail: result.approvalCheck.detail,
+    };
+  }
+
+  it("an in-flight subagent record does not re-open the gate for a subagent under a refused approval", async () => {
+    const { generatedDir, reportsDir, reportPath } = await approvedSession();
+    const start = await runPackHookSubagentStartCli({
+      manifest: manifestWithPack(),
+      stdin: readableFromString(
+        JSON.stringify({ session_id: SESSION, agent_id: "agent-abc", agent_type: "general-purpose" }),
+      ),
+      stderr: bufferStream().stream,
+      generatedDir,
+    });
+    expect(start.recordWritten).toBe(true);
+    const subagentCall = { tool_name: "Edit", agent_id: "agent-abc" };
+    // Control: before the swap the subagent call is allowed.
+    expect((await preToolUse(generatedDir, reportsDir, subagentCall)).blocked).toBe(false);
+    swap(reportPath);
+    const out = await preToolUse(generatedDir, reportsDir, subagentCall);
+    expect(out.blocked).toBe(true);
+    expect(out.source).toBe("none");
+    expect(out.detail).toMatch(MISMATCH("r1.json"));
+  });
+
+  it("the operator-approval command still defers to the interactive prompt, so the fix the reason names is reachable", async () => {
+    const { generatedDir, reportsDir, reportPath } = await approvedSession();
+    swap(reportPath);
+    const out = await preToolUse(generatedDir, reportsDir, {
+      tool_name: "Bash",
+      tool_input: { command: "harness approve understanding" },
+    });
+    expect(out.blocked).toBe(false);
+    expect(out.asked).toBe(true);
+    expect(out.detail).toMatch(MISMATCH("r1.json"));
   });
 });

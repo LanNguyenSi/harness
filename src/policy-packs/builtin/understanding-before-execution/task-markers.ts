@@ -234,6 +234,12 @@ export interface OperatorMarkerApproval {
   /** Task-scoped check detail, for callers that trace the fall-through. */
   taskCheckDetail: string;
   /**
+   * The matched marker's signed `reportContentHash`; null when no marker
+   * matched or the matched marker binds no report. The gate-read
+   * cross-check (`verifyApprovedReportHash`) consumes it.
+   */
+  reportContentHash: string | null;
+  /**
    * True when EITHER the task-scoped or the session-scoped marker
    * existed but aged past `approval_lifecycle.max_age` (task 6e888423).
    * False when `matched` is true, and false when a marker was simply
@@ -293,6 +299,7 @@ export function checkOperatorApprovalMarkers(
       source: "task",
       detail: taskMarker.detail,
       taskCheckDetail: taskMarker.detail,
+      reportContentHash: taskMarker.marker?.reportContentHash ?? null,
       expired: false,
       forged: false,
       sessionBindingRefused: false,
@@ -308,6 +315,7 @@ export function checkOperatorApprovalMarkers(
       source: "session",
       detail: sessionMarker.detail,
       taskCheckDetail: taskMarker.detail,
+      reportContentHash: sessionMarker.marker?.reportContentHash ?? null,
       expired: false,
       forged: false,
       sessionBindingRefused: false,
@@ -318,6 +326,7 @@ export function checkOperatorApprovalMarkers(
     source: null,
     detail: sessionMarker.detail,
     taskCheckDetail: taskMarker.detail,
+    reportContentHash: null,
     // `expired` is computed ONLY on this non-matched path, preserving the
     // "false when matched is true" invariant (task 6e888423 review):
     // e.g. a FRESH session marker (matched:true, returned above) must not

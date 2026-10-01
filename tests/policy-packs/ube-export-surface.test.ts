@@ -98,6 +98,12 @@ import * as ubeShim from "../../src/policy-packs/builtin/understanding-before-ex
 // the claimed task) by checkSessionApprovalMarker. 81 -> 82. Its
 // SessionMarkerCheck interface is type-only and absent for the same
 // reason.
+// Widened a thirteenth time (harness fa423e9b, report content hash verified
+// at gate read) by canonicalReportHash, canonicalReportHashOfFile and
+// verifyApprovedReportHash (persisted-reports.ts): the one shared hash the
+// two marker producers sign and the verifier both PreToolUse hooks call.
+// 86 -> 89. The ApprovedReportHashVerification type is absent for the
+// usual reason.
 //
 // Mutation-verified: temporarily re-adding `export { safeJsonParse } from
 // "./persisted-reports.js";` to
@@ -133,6 +139,8 @@ const EXPECTED_EXPORTS = [
   "autoApprovedLedgerTagFor",
   "bashCommandMatchesAny",
   "buildDelegationApprovedBy",
+  "canonicalReportHash",
+  "canonicalReportHashOfFile",
   "checkActiveClaimApprovalMarker",
   "checkApprovalMarker",
   "checkOperatorApprovalMarkers",
@@ -184,6 +192,7 @@ const EXPECTED_EXPORTS = [
   "selectReportForSession",
   "taskApprovalMarkerPathFor",
   "toolNameMatchesAny",
+  "verifyApprovedReportHash",
   "verifyDelegation",
   "verifyInflightRecord",
   "writeActiveClaim",
@@ -194,9 +203,9 @@ const EXPECTED_EXPORTS = [
 ] as const;
 
 describe("understanding-before-execution-runtime shim export surface", () => {
-  it("exports exactly the pinned 86-name surface, sorted", () => {
+  it("exports exactly the pinned 89-name surface, sorted", () => {
     const actual = Object.keys(ubeShim).sort();
-    expect(EXPECTED_EXPORTS).toHaveLength(86);
+    expect(EXPECTED_EXPORTS).toHaveLength(89);
     expect(actual).toEqual([...EXPECTED_EXPORTS].sort());
   });
 
