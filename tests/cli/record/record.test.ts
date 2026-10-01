@@ -2,8 +2,9 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { Writable } from "node:stream";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { EX_FAIL, EX_USAGE } from "../../../src/cli/exit-codes.js";
+import { run } from "../../../src/cli/index.js";
 import {
   runRecordDogfood,
   runRecordReview,
@@ -528,6 +529,132 @@ describe("harness record review-subagent", () => {
     expect(errOut()).toContain("no branch resolvable");
   });
 
+  it("--adhoc writes review-subagent:<branch> and the verdict only, with no task token", async () => {
+    const repo = makeRepoFixture("widget-service", "feature/adhoc");
+    const { stream: err } = captureStream();
+    const writes: Array<{ sessionId: string; content: string; source: string }> = [];
+    const result = await runRecordReviewSubagent({
+      cwd: repo,
+      stderr: err,
+      adhoc: true,
+      verdict: "ok",
+      resolveSession: () => "sess-rs",
+      writeLedger: async (args) => {
+        writes.push(args);
+        return { ok: true };
+      },
+    });
+    expect(result).toEqual({
+      exitCode: 0,
+      wrote: true,
+      content: "review-subagent:feature/adhoc verdict:ok",
+      sessionId: "sess-rs",
+      branch: "feature/adhoc",
+    });
+    expect(writes).toEqual([
+      {
+        sessionId: "sess-rs",
+        content: "review-subagent:feature/adhoc verdict:ok",
+        source: "harness-record-review-subagent",
+      },
+    ]);
+    // Exactly one review-subagent: token, and it is the branch; no blank one.
+    const tokens = result.content.split(" ").filter((t) => t.startsWith("review-subagent:"));
+    expect(tokens).toEqual(["review-subagent:feature/adhoc"]);
+  });
+
+  it("--adhoc keeps the optional summary suffix", async () => {
+    const repo = makeRepoFixture("widget-service", "feature/adhoc");
+    const { stream: err } = captureStream();
+    const result = await runRecordReviewSubagent({
+      cwd: repo,
+      stderr: err,
+      adhoc: true,
+      verdict: "ok",
+      summary: "no blockers",
+      resolveSession: () => "sess-rs",
+      writeLedger: okLedger(),
+    });
+    expect(result.content).toBe("review-subagent:feature/adhoc verdict:ok \u2014 no blockers");
+  });
+
+  it("neither --task nor --adhoc is EX_USAGE naming both options and does not write", async () => {
+    const repo = makeRepoFixture("widget-service");
+    const { stream: err, output: errOut } = captureStream();
+    let wrote = false;
+    const result = await runRecordReviewSubagent({
+      cwd: repo,
+      stderr: err,
+      verdict: "ok",
+      resolveSession: () => "sess-rs",
+      writeLedger: async () => {
+        wrote = true;
+        return { ok: true };
+      },
+    });
+    expect(wrote).toBe(false);
+    expect(result).toMatchObject({ exitCode: EX_USAGE, wrote: false, content: "" });
+    expect(result.reason).toContain("--task");
+    expect(result.reason).toContain("--adhoc");
+    expect(errOut()).toContain("--adhoc");
+  });
+
+  it("--task together with --adhoc is EX_USAGE and does not write", async () => {
+    const repo = makeRepoFixture("widget-service");
+    const { stream: err } = captureStream();
+    let wrote = false;
+    const result = await runRecordReviewSubagent({
+      cwd: repo,
+      stderr: err,
+      task: "task-1",
+      adhoc: true,
+      verdict: "ok",
+      resolveSession: () => "sess-rs",
+      writeLedger: async () => {
+        wrote = true;
+        return { ok: true };
+      },
+    });
+    expect(wrote).toBe(false);
+    expect(result).toMatchObject({ exitCode: EX_USAGE, wrote: false, content: "" });
+    expect(result.reason).toContain("mutually exclusive");
+  });
+
+  it("--adhoc on a detached HEAD without --branch refuses and writes no blank tag", async () => {
+    const repo = makeDetachedHeadFixture("widget-service");
+    const { stream: err } = captureStream();
+    let wrote = false;
+    const result = await runRecordReviewSubagent({
+      cwd: repo,
+      stderr: err,
+      adhoc: true,
+      verdict: "ok",
+      resolveSession: () => "sess-rs",
+      writeLedger: async () => {
+        wrote = true;
+        return { ok: true };
+      },
+    });
+    expect(wrote).toBe(false);
+    expect(result).toMatchObject({ exitCode: EX_FAIL, wrote: false, content: "", branch: "" });
+    expect(result.reason).toContain("no branch resolvable");
+  });
+
+  it("--adhoc on a detached HEAD with --branch records that branch", async () => {
+    const repo = makeDetachedHeadFixture("widget-service");
+    const { stream: err } = captureStream();
+    const result = await runRecordReviewSubagent({
+      cwd: repo,
+      stderr: err,
+      adhoc: true,
+      verdict: "ok",
+      branch: "feature/named",
+      resolveSession: () => "sess-rs",
+      writeLedger: okLedger(),
+    });
+    expect(result.content).toBe("review-subagent:feature/named verdict:ok");
+  });
+
   it("surfaces a failed ledger write without throwing", async () => {
     const repo = makeRepoFixture("widget-service");
     const { stream: err } = captureStream();
@@ -799,5 +926,66 @@ describe("harness record review --task", () => {
     });
     expect(result).toMatchObject({ exitCode: EX_USAGE, wrote: false });
     expect(writes).toEqual([]);
+  });
+});
+
+describe("harness record review-subagent CLI wiring (--task / --adhoc)", () => {
+  async function exec(argv: string[]) {
+    let stdout = "";
+    let stderr = "";
+    const code = await run({
+      argv,
+      stdout: (s) => {
+        stdout += s;
+      },
+      stderr: (s) => {
+        stderr += s;
+      },
+    });
+    return { code, stdout, stderr };
+  }
+
+  // The record runners write their usage reasons to process.stderr, not to
+  // the run() stderr sink, so capture that stream for the failure paths.
+  async function execCapturingProcessStderr(argv: string[]) {
+    const chunks: string[] = [];
+    const spy = vi.spyOn(process.stderr, "write").mockImplementation((chunk: unknown) => {
+      chunks.push(String(chunk));
+      return true;
+    });
+    try {
+      const r = await exec(argv);
+      return { code: r.code, stderr: chunks.join("") };
+    } finally {
+      spy.mockRestore();
+    }
+  }
+
+  it("--help documents --adhoc next to --task", async () => {
+    const { stdout, stderr } = await exec(["record", "review-subagent", "--help"]);
+    const text = stdout + stderr;
+    expect(text).toContain("--adhoc");
+    expect(text).toContain("--task <id>");
+  });
+
+  it("neither --task nor --adhoc exits 64 naming both options", async () => {
+    const { code, stderr } = await execCapturingProcessStderr(["record", "review-subagent", "--verdict", "ok"]);
+    expect(code).toBe(EX_USAGE);
+    expect(stderr).toContain("--task");
+    expect(stderr).toContain("--adhoc");
+  });
+
+  it("--task together with --adhoc exits 64", async () => {
+    const { code, stderr } = await execCapturingProcessStderr([
+      "record",
+      "review-subagent",
+      "--task",
+      "T1",
+      "--adhoc",
+      "--verdict",
+      "ok",
+    ]);
+    expect(code).toBe(EX_USAGE);
+    expect(stderr).toContain("mutually exclusive");
   });
 });
