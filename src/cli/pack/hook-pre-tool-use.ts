@@ -1491,6 +1491,16 @@ export async function runPackHookPreToolUseCli(
     report.report === null
       ? findLatestParseError(path.join(path.dirname(reportsDir), "parse-errors"), sessionId)
       : null;
+  // The expiry notice belongs to the routine "no approval marker" reason
+  // only: a forged marker, a forged in-flight record or a refused task
+  // binding keep their own reasons and never carry it.
+  const expiryNotice =
+    generatedDir !== undefined &&
+    !markerForged &&
+    !inflightForged &&
+    sessionBindingRefusedDetail === undefined
+      ? approvalExpiryNotice(markerTtlExpiry, report.report)
+      : undefined;
   // The subagent record sentence, delivered to the AGENT through the
   // same channel the slice-3 retry instruction uses (appended after both
   // the `ux:` and legacy envelopes, so it survives either one) rather
@@ -1506,16 +1516,6 @@ export async function runPackHookPreToolUseCli(
   // path can still succeed on the very next retry regardless of the
   // subagent record's own state, so telling the agent to stop here would
   // be wrong.
-  // The expiry notice belongs to the routine "no approval marker" reason
-  // only: a forged marker, a forged in-flight record or a refused task
-  // binding keep their own reasons and never carry it.
-  const expiryNotice =
-    generatedDir !== undefined &&
-    !markerForged &&
-    !inflightForged &&
-    sessionBindingRefusedDetail === undefined
-      ? approvalExpiryNotice(markerTtlExpiry, report.report)
-      : undefined;
   const agentInstruction = reportScanTimedOut
     ? DELEGATION_REPORT_RETRY_INSTRUCTION
     : displayAgentId !== undefined && subagentRecordSentence.length > 0

@@ -23,7 +23,6 @@
 import * as path from "node:path";
 import { queryLedgerByTag, type LedgerEntry } from "../../policies/index.js";
 import {
-  approvalExpiryNotice,
   checkOperatorApprovalMarkers,
   checkPersistedReport,
   defaultReportsDir,
@@ -564,16 +563,10 @@ export async function runPackHookCodexPreToolUseCli(
   if (malformedNotice) {
     agentFacing = `${agentFacing}\n\n${malformedNotice}`;
   }
-  // Say why the approval lapsed, mirroring the Claude hook: only on the
-  // routine "no approval marker" reason, never on a forged marker or a
-  // refused task binding.
-  const expiryNotice =
-    generatedDir !== undefined && !markerForged && sessionBindingRefusedDetail === undefined
-      ? approvalExpiryNotice(markerTtlExpiry, report.report)
-      : undefined;
-  if (expiryNotice !== undefined) {
-    agentFacing = `${agentFacing}\n\n${expiryNotice}`;
-  }
+  // No separate expiry sentence is appended here (the Claude hook does append
+  // one): the Codex agent reads the whole stderr diagnostic, and the engine
+  // reason on its BLOCK line already carries `approval expired because ...`
+  // (see `noApprovalMarkerReason`), so a second copy would say it twice.
   const diagnostic = configUx
     ? `harness pack hook codex: BLOCK: ${reason}.\n${agentFacing}`
     : `harness pack hook codex: BLOCK: ${reason}. Tool: ${toolName}. ${agentFacing}`;
