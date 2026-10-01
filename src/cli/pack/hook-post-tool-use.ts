@@ -34,6 +34,7 @@ import {
   applyPostToolUseExpiry,
   defaultReportsDir,
   describePostToolUseExpiry,
+  describePostToolUseTrigger,
   matchPostToolUseBoundary,
   parseApprovalLifecycle,
 } from "../../policy-packs/builtin/understanding-before-execution-runtime.js";
@@ -250,6 +251,7 @@ export async function runPackHookPostToolUseCli(
     boundary.toolNameMatched,
     reportsDir,
     opts.now,
+    describePostToolUseTrigger(toolName, boundary),
   );
 
   const diagnostic = describePostToolUseExpiry(

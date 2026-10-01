@@ -90,6 +90,10 @@ import * as ubeShim from "../../src/policy-packs/builtin/understanding-before-ex
 // VerifyInflightRecordOptions, InflightRecordVerification,
 // InflightRecordsSummary) are absent from this list for the same reason
 // the delegation module's own type-only exports are.
+// Widened a twelfth time (approval-expiry reason in the block message) by
+// approvalExpiryNotice, describeMarkerTtlExpiry, describePostToolUseTrigger
+// and noApprovalMarkerReason (all four defined in expiry-reason.ts).
+// 82 -> 86.
 // Widened an eleventh time (harness 5018c0c4, session approval bound to
 // the claimed task) by checkSessionApprovalMarker. 81 -> 82. Its
 // SessionMarkerCheck interface is type-only and absent for the same
@@ -122,6 +126,7 @@ const EXPECTED_EXPORTS = [
   "TOLERANT_FALLBACK_MAX_AGE_MS",
   "activeClaimPathFor",
   "applyPostToolUseExpiry",
+  "approvalExpiryNotice",
   "approvalMarkerPathFor",
   "approvedLedgerTagFor",
   "autoApprovedByFor",
@@ -142,7 +147,9 @@ const EXPECTED_EXPORTS = [
   "delegationMarkerIdFor",
   "delegationMarkerPathFor",
   "delegationReportPathFor",
+  "describeMarkerTtlExpiry",
   "describePostToolUseExpiry",
+  "describePostToolUseTrigger",
   "expirePersistedReport",
   "extractBashCommandFromToolInput",
   "extractTaskIdFromToolInput",
@@ -158,6 +165,7 @@ const EXPECTED_EXPORTS = [
   "listPersistedReports",
   "matchLedgerEntries",
   "matchPostToolUseBoundary",
+  "noApprovalMarkerReason",
   "PERMISSION_MODE_OBSERVATION_DIRNAME",
   "parseApprovalLifecycle",
   "parseAutoApprove",
@@ -186,9 +194,9 @@ const EXPECTED_EXPORTS = [
 ] as const;
 
 describe("understanding-before-execution-runtime shim export surface", () => {
-  it("exports exactly the pinned 82-name surface, sorted", () => {
+  it("exports exactly the pinned 86-name surface, sorted", () => {
     const actual = Object.keys(ubeShim).sort();
-    expect(EXPECTED_EXPORTS).toHaveLength(82);
+    expect(EXPECTED_EXPORTS).toHaveLength(86);
     expect(actual).toEqual([...EXPECTED_EXPORTS].sort());
   });
 

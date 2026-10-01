@@ -231,3 +231,12 @@ export {
   type InflightRecordsSummary,
   listInflightRecords,
 } from "./inflight-records.js";
+
+// Wording of the approval-expiry reason in the PreToolUse block message and
+// the event a PostToolUse expiry persists (expiry-reason.ts).
+export {
+  approvalExpiryNotice,
+  describeMarkerTtlExpiry,
+  describePostToolUseTrigger,
+  noApprovalMarkerReason,
+} from "./expiry-reason.js";

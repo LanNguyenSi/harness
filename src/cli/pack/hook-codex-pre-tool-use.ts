@@ -26,7 +26,9 @@ import {
   checkOperatorApprovalMarkers,
   checkPersistedReport,
   defaultReportsDir,
+  describeMarkerTtlExpiry,
   matchLedgerEntries,
+  noApprovalMarkerReason,
   type ApprovalCheckResult,
 } from "../../policy-packs/builtin/understanding-before-execution-runtime.js";
 import { findLatestParseError, renderMalformedSectionsNotice } from "../approve/understanding.js";
@@ -340,6 +342,9 @@ export async function runPackHookCodexPreToolUseCli(
   // own reason text.
   let sessionBindingRefusedDetail: string | undefined;
   let markerExpired = false;
+  // The max_age sentence for the block reason (wording only, never read by a
+  // gate decision); set when the marker check reported a TTL expiry.
+  let markerTtlExpiry: string | undefined;
   // True when checkOperatorApprovalMarkers found a marker FILE that failed
   // signature verification (harness/f9485cc7), mirroring the Claude hook.
   let markerForged = false;
@@ -351,6 +356,7 @@ export async function runPackHookCodexPreToolUseCli(
       stderr,
     );
     markerExpired = markers.expired;
+    markerTtlExpiry = describeMarkerTtlExpiry(markers);
     markerForged = markers.forged;
     if (markers.source !== "task") {
       // Trace the task-marker miss, mirroring the Claude hook, so an
@@ -515,7 +521,7 @@ export async function runPackHookCodexPreToolUseCli(
       ? `forged/unsigned marker rejected for session ${sessionId}; ${report.detail}; ${ledger.detail}`
       : sessionBindingRefusedDetail !== undefined
         ? `${sessionBindingRefusedDetail}; ${report.detail}; ${ledger.detail}`
-        : `no approval marker for session ${sessionId}; ${report.detail}; ${ledger.detail}`
+        : noApprovalMarkerReason(sessionId, markerTtlExpiry, report.detail, ledger.detail)
     : `generatedDir not resolvable (test/injection path); ${report.detail}; ${ledger.detail}`;
   // When the pack config declares `ux:`, the agent-facing block becomes
   // the plain-language shape and the legacy schemaHint text is
@@ -557,6 +563,10 @@ export async function runPackHookCodexPreToolUseCli(
   if (malformedNotice) {
     agentFacing = `${agentFacing}\n\n${malformedNotice}`;
   }
+  // No separate expiry sentence is appended here (the Claude hook does append
+  // one): the Codex agent reads the whole stderr diagnostic, and the engine
+  // reason on its BLOCK line already carries `approval expired because ...`
+  // (see `noApprovalMarkerReason`), so a second copy would say it twice.
   const diagnostic = configUx
     ? `harness pack hook codex: BLOCK: ${reason}.\n${agentFacing}`
     : `harness pack hook codex: BLOCK: ${reason}. Tool: ${toolName}. ${agentFacing}`;
