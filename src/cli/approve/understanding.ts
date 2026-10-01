@@ -20,7 +20,9 @@ import * as path from "node:path";
 import { atomicWriteFile } from "../../io/atomic-write.js";
 import {
   approvedLedgerTagFor,
+  canonicalReportHashOfFile,
   defaultReportsDir,
+  hashReportFile,
   listPersistedReports,
   readActiveClaim,
   selectReportForSession,
@@ -34,7 +36,6 @@ import {
   resolveMode,
   toPackageMode,
 } from "../../policy-packs/builtin/understanding-before-execution.js";
-import { sha256Hex } from "../../runtime/approval-signing.js";
 import { addLedgerFact } from "../../runtime/ledger-add.js";
 import {
   clearPendingApproval,
@@ -840,6 +841,23 @@ export async function approveUnderstanding(
     } else {
       const v = validatePersistedReport(parsed);
       validation = v.ok ? v : { ...v, enforced: !opts.force };
+      // A report the canonical hash cannot cover (larger than the size cap
+      // the gate reads, not a regular file, nested too deeply) would sign a
+      // marker whose `reportContentHash` is null, i.e. one the gate-read
+      // content check never applies to, so it fails validation instead
+      // (`--force` still overrides, as for any other validation failure).
+      // `hashReportFile` reads the file exactly as the gate-read scan does.
+      if (validation.ok) {
+        const hashed = hashReportFile(latest.filePath);
+        if (!hashed.ok) {
+          validation = {
+            ok: false,
+            field: "report",
+            reason: `${hashed.detail}, so the approval could not bind it`,
+            enforced: !opts.force,
+          };
+        }
+      }
     }
   }
 
@@ -929,29 +947,20 @@ export async function approveUnderstanding(
   }
 
   // Report-content hash the marker's signature binds to (harness/f9485cc7):
-  // sha256 of the persisted report's raw bytes AT APPROVAL TIME, read
+  // the canonical hash of the persisted report AT APPROVAL TIME, computed
   // BEFORE `rewriteReportApproved` below flips its status/approvedAt/
-  // approvedBy fields — this hashes what the operator actually reviewed,
-  // not the post-approval-flip artefact. null when no persisted report was
-  // resolved (ledger-only / --force paths have nothing to bind).
-  //
-  // This is GROUNDWORK ONLY, not yet enforced at gate-check time: nothing
-  // today cross-checks the hash carried in a signed marker against the
-  // CURRENTLY-selected persisted report, so on its own this does not stop
-  // a stale-report adoption. The live cross-check ("does this marker's
-  // reportContentHash match the report the gate is about to consult right
-  // now") is the C1 staleness follow-up (task fa423e9b), out of scope
-  // here; this just makes the binding exist and be forensically
-  // inspectable so that follow-up can add the comparison without a
-  // marker-format change.
-  let reportContentHash: string | null = null;
-  if (latest) {
-    try {
-      reportContentHash = sha256Hex(fs.readFileSync(latest.filePath, "utf8"));
-    } catch {
-      reportContentHash = null;
-    }
-  }
+  // approvedBy fields, so it covers what the operator actually reviewed.
+  // `canonicalReportHash` leaves the lifecycle fields out, which is why the
+  // value survives that flip and a later `expirePersistedReport` rewrite;
+  // both PreToolUse hooks look for a report file with that hash at gate-read
+  // time (`verifyApprovedReportHash`, task fa423e9b) and refuse the marker
+  // when none is left. null when no persisted report was resolved or it
+  // cannot be read as a JSON object (validation skipped above, nothing to
+  // bind), or when it cannot be hashed: larger than the size cap, not a
+  // regular file, nested too deeply (reachable only under --force: the
+  // validation above refuses such a report otherwise).
+  const reportContentHash: string | null =
+    latest ? canonicalReportHashOfFile(latest.filePath) : null;
 
   // Write the canonical approval marker first. The gate consults this
   // file (not the ledger) since agent-tasks/88ca4bb3 closed the self-

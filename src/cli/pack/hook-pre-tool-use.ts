@@ -81,6 +81,7 @@ import {
   selectNewestStrictSessionReport,
   verifyDelegation,
   verifyInflightRecord,
+  verifyMatchedMarkerReport,
   type ApprovalCheckResult,
 } from "../../policy-packs/builtin/understanding-before-execution-runtime.js";
 import {
@@ -775,6 +776,15 @@ export async function runPackHookPreToolUseCli(
   // text below differs, so the operator sees why an approval that exists
   // on disk does not open the gate.
   let sessionBindingRefusedDetail: string | undefined;
+  // Set when a marker matched but no persisted report file hashes to the
+  // content that marker was signed for any more (task fa423e9b).
+  // The marker is then treated as not matching: the call falls through to the
+  // ordinary block path (read-only Bash and the operator-approval command
+  // keep their exemptions) with this as the reason, and the in-flight
+  // subagent record below is not consulted, because it would otherwise
+  // re-open the gate for a subagent under the very approval just refused.
+  let reportHashMismatchDetail: string | undefined;
+  const reportsDir = opts.reportsDir ?? defaultReportsDir();
   if (generatedDir !== undefined) {
     // Source 1a/1b: task-scoped marker for the currently-claimed task
     // (harness/1ee26e77 + PR #198 correctness fix), then the
@@ -813,14 +823,22 @@ export async function runPackHookPreToolUseCli(
       stderr.write(`harness pack hook: task-scoped check: ${markers.taskCheckDetail}\n`);
     }
     if (markers.matched) {
-      const diagnostic = `harness pack hook: ${markers.detail}, allowing.`;
-      stderr.write(`${diagnostic}\n`);
-      return {
-        exitCode: 0,
-        blocked: false,
-        approvalCheck: { approved: true, source: "marker", detail: markers.detail },
-        diagnostic,
-      };
+      // Cross-check the matched marker's signed report hash against the
+      // persisted reports (task fa423e9b): the task marker first, the
+      // session marker as fallback, so the verdict never depends on which
+      // marker the check order picked.
+      const reportHash = verifyMatchedMarkerReport(reportsDir, markers);
+      if (reportHash.ok) {
+        const diagnostic = `harness pack hook: ${reportHash.detail}, allowing.`;
+        stderr.write(`${diagnostic}\n`);
+        return {
+          exitCode: 0,
+          blocked: false,
+          approvalCheck: { approved: true, source: "marker", detail: reportHash.detail },
+          diagnostic,
+        };
+      }
+      reportHashMismatchDetail = reportHash.detail;
     }
   }
 
@@ -854,7 +872,11 @@ export async function runPackHookPreToolUseCli(
   // from a record simply never existing, so the subagent sentence below
   // can name the actual cause instead of always saying "no record".
   let inflightStale = false;
-  if (generatedDir !== undefined && agentId !== undefined) {
+  if (
+    generatedDir !== undefined &&
+    agentId !== undefined &&
+    reportHashMismatchDetail === undefined
+  ) {
     const record = verifyInflightRecord(
       generatedDir,
       sessionId,
@@ -899,7 +921,6 @@ export async function runPackHookPreToolUseCli(
   // source that opens the gate. The carve-outs below (read-only Bash,
   // recovery git-commit, escape-ask) are separate, independently-argued
   // exemptions, not a second approval source.
-  const reportsDir = opts.reportsDir ?? defaultReportsDir();
   const report = checkPersistedReport(reportsDir, sessionId);
 
   // Audit-only ledger probe: the ledger row is still recorded by
@@ -943,7 +964,7 @@ export async function runPackHookPreToolUseCli(
   // record gets its own distinct phrase for the same reason, checked
   // second so a forged SESSION/TASK marker (the higher-authority forgery)
   // is never masked by a merely-forged copy of it.
-  const reason = generatedDir !== undefined
+  const unapprovedReason = generatedDir !== undefined
     ? markerForged
       ? `forged/unsigned marker rejected for session ${sessionId}; ${report.detail}; ${ledger.detail}`
       : inflightForged
@@ -958,6 +979,14 @@ export async function runPackHookPreToolUseCli(
               subagentRecordSentence,
             )
     : `generatedDir not resolvable (test/injection path); ${report.detail}; ${ledger.detail}`;
+  // A marker that matched but whose signed report content is gone (the
+  // approved report was edited or removed after approval, task fa423e9b)
+  // gets its own reason, naming the marker kind and the one-command fix; no
+  // "no approval marker" wording applies to it.
+  const reason =
+    reportHashMismatchDetail !== undefined
+      ? `${reportHashMismatchDetail}; ${ledger.detail}`
+      : unapprovedReason;
 
   // Stage the session id so `harness approve`, run from the operator's
   // shell where $CLAUDE_CODE_SESSION_ID / $CLAUDE_SESSION_ID is unset, can resolve it without

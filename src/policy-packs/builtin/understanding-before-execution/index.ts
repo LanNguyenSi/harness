@@ -89,6 +89,19 @@ export {
   type PersistedReportEvidence,
   expirePersistedReport,
   checkPersistedReport,
+  canonicalReportHash,
+  canonicalReportHashOfFile,
+  MAX_HASHED_REPORT_BYTES,
+  type ReportFileReadFailure,
+  type BoundedReportRead,
+  readReportFileBounded,
+  type UnhashableReportReason,
+  type ReportFileHash,
+  hashReportFile,
+  type ApprovalMarkerKind,
+  type MarkerReportBinding,
+  type ApprovedReportHashVerification,
+  verifyApprovedReportHash,
 } from "./persisted-reports.js";
 
 export { type ApprovalLifecycle, parseApprovalLifecycle } from "./lifecycle.js";
@@ -152,6 +165,8 @@ export {
   checkSessionApprovalMarker,
   type OperatorMarkerApproval,
   checkOperatorApprovalMarkers,
+  type MatchedMarkerReportCheck,
+  verifyMatchedMarkerReport,
   clearTaskApprovalMarker,
 } from "./task-markers.js";
 

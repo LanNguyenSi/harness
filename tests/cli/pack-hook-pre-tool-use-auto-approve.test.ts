@@ -25,8 +25,10 @@ import type { LedgerEntry } from "../../src/policies/index.js";
 import {
   applyPostToolUseExpiry,
   approvalMarkerPathFor,
+  canonicalReportHash,
   checkApprovalMarker,
   clearApprovalMarker,
+  MAX_HASHED_REPORT_BYTES,
   listPersistedReports,
   writeActiveClaim,
   writeApprovalMarker,
@@ -132,16 +134,19 @@ function reportBody(
   };
 }
 
-/** Write a report file and return its path plus the sha256 of its exact bytes. */
+/**
+ * Write a report file and return its path, the sha256 of its exact bytes, and
+ * its canonical hash (what an approval marker signs as `reportContentHash`).
+ */
 function writeReportFile(
   name: string,
   body: Record<string, unknown>,
-): { filePath: string; sha256: string } {
+): { filePath: string; sha256: string; canonicalHash: string } {
   fs.mkdirSync(reportsDir, { recursive: true });
   const filePath = path.join(reportsDir, name);
   const content = `${JSON.stringify(body, null, 2)}\n`;
   fs.writeFileSync(filePath, content);
-  return { filePath, sha256: sha256Hex(content) };
+  return { filePath, sha256: sha256Hex(content), canonicalHash: canonicalReportHash(body) };
 }
 
 /** The canonical happy-path report: newest, strict-session, `pending`, valid. */
@@ -149,7 +154,7 @@ function writePendingReport(
   sessionId: string | null = SESSION,
   createdAt = "2026-08-27T10:00:00.000Z",
   name = "2026-08-27T10-00-00-000Z-report-aaaa1111.json",
-): { filePath: string; sha256: string } {
+): { filePath: string; sha256: string; canonicalHash: string } {
   return writeReportFile(name, reportBody(sessionId, "pending", createdAt));
 }
 
@@ -241,7 +246,7 @@ describe("pack hook pre-tool-use — auto-approval path (ADR slice 1)", () => {
       expect(check.matched).toBe(true);
       expect(check.forged).toBe(false);
       expect(check.marker?.approvedBy).toBe("auto-mode:claude-code:bypassPermissions");
-      expect(check.marker?.reportContentHash).toBe(report.sha256);
+      expect(check.marker?.reportContentHash).toBe(report.canonicalHash);
 
       // The report was consumed in the same pass.
       const after = readReport(report.filePath);
@@ -290,6 +295,30 @@ describe("pack hook pre-tool-use — auto-approval path (ADR slice 1)", () => {
         markerAfterFirst,
       );
       expect(listPersistedReports(reportsDir)).toHaveLength(reportCountAfterFirst);
+    });
+
+    it("a report edited after auto-approval is refused at the next gated call: the marker signed the canonical hash, the gate recomputes it", async () => {
+      process.env.CLAUDE_CODE_SESSION_ID = SESSION;
+      getOrCreateSigningKey(generatedDir);
+      const report = writePendingReport();
+      expect((await call()).blocked).toBe(false);
+      // Control: the unedited, auto-approved report allows on a second call.
+      expect((await call()).blocked).toBe(false);
+
+      fs.writeFileSync(
+        report.filePath,
+        `${JSON.stringify({ ...readReport(report.filePath), currentUnderstanding: "swapped after approval" }, null, 2)}\n`,
+      );
+      ledgerCalls = [];
+
+      const result = await call();
+
+      expect(result.blocked).toBe(true);
+      expect(result.stderr).toMatch(
+        /no report in the reports directory matches the content the session approval marker was signed for \(the approved report was changed or removed after approval\); re-run `harness approve understanding`/,
+      );
+      // Refused, not re-minted: the edited report is `approved`, never `pending`.
+      expect(ledgerCalls).toEqual([]);
     });
   });
 
@@ -778,7 +807,7 @@ describe("pack hook pre-tool-use — auto-approval path (ADR slice 1)", () => {
       const first = writePendingReport();
       expect((await call()).blocked).toBe(false);
       expect(checkApprovalMarker(generatedDir, SESSION).marker?.reportContentHash).toBe(
-        first.sha256,
+        first.canonicalHash,
       );
 
       applyPostToolUseExpiry(generatedDir, SESSION, {}, false, reportsDir);
@@ -796,7 +825,7 @@ describe("pack hook pre-tool-use — auto-approval path (ADR slice 1)", () => {
       expect(result.source).toBe("marker");
       const check = checkApprovalMarker(generatedDir, SESSION);
       expect(check.matched).toBe(true);
-      expect(check.marker?.reportContentHash).toBe(second.sha256);
+      expect(check.marker?.reportContentHash).toBe(second.canonicalHash);
       expect(readReport(second.filePath)["approvalStatus"]).toBe("approved");
       expect(ledgerCalls).toHaveLength(1);
     });
@@ -811,7 +840,11 @@ describe("pack hook pre-tool-use — auto-approval path (ADR slice 1)", () => {
       writeApprovalMarker(generatedDir, SESSION, {
         approvedAt: new Date().toISOString(),
         approvedBy: "test-operator",
-        reportContentHash: "not-the-auto-hash",
+        // A hash-less operator marker (ledger-only approval): the gate-read
+        // report cross-check does not apply, so the marker stands and the auto
+        // path has nothing to mint. A non-null hash that matches no report
+        // would be refused and the auto path would legitimately re-mint.
+        reportContentHash: null,
       });
 
       const result = await call();
@@ -820,7 +853,7 @@ describe("pack hook pre-tool-use — auto-approval path (ADR slice 1)", () => {
       expect(result.source).toBe("marker");
       expect(result.stderr).not.toMatch(/auto-approved via session marker/);
       expect(readMarkerRaw()["approvedBy"]).toBe("test-operator");
-      expect(readMarkerRaw()["reportContentHash"]).toBe("not-the-auto-hash");
+      expect(readMarkerRaw()["reportContentHash"]).toBeNull();
       expect(readReport(report.filePath)["approvalStatus"]).toBe("pending");
       expect(ledgerCalls).toEqual([]);
     });
@@ -843,6 +876,51 @@ describe("pack hook pre-tool-use — auto-approval path (ADR slice 1)", () => {
       expect(result.blocked).toBe(true);
       expect(result.stderr).toMatch(/auto-approval declined: report invalid \(priorArt:/);
       expect(markerExists()).toBe(false);
+      expect(readReport(report.filePath)["approvalStatus"]).toBe("pending");
+    });
+
+    it.each([200, 6000])(
+      "declines a report with an extra field nested %i levels deep (too deep to hash) instead of throwing: no marker, no ledger fact, report stays pending",
+      async (depth) => {
+        // The marker would bind no content, and at a few thousand levels a
+        // recursive hash overflows the stack; the hook process then dies
+        // instead of deciding, which the runtime treats as a non-blocking
+        // error. Written as raw text: JSON.stringify itself cannot nest that deep.
+        process.env.CLAUDE_CODE_SESSION_ID = SESSION;
+        getOrCreateSigningKey(generatedDir);
+        fs.mkdirSync(reportsDir, { recursive: true });
+        const filePath = path.join(reportsDir, "2026-08-27T10-00-00-000Z-deep-abcd1234.json");
+        const head = JSON.stringify(reportBody(SESSION, "pending", "2026-08-27T10:00:00.000Z")).slice(0, -1);
+        fs.writeFileSync(filePath, `${head},"extra":${"[".repeat(depth)}${"]".repeat(depth)}}`);
+
+        const result = await call();
+
+        expect(result.blocked).toBe(true);
+        expect(result.stderr).toMatch(
+          /auto-approval declined: report invalid \(nested too deeply to hash its content\)/,
+        );
+        expect(markerExists()).toBe(false);
+        expect(ledgerCalls).toEqual([]);
+        expect(readReport(filePath)["approvalStatus"]).toBe("pending");
+      },
+    );
+
+    it("declines a valid pending report over the 1 MiB size cap (the gate-read scan never reads it, so the marker would bind nothing it finds): no marker, no ledger fact, report stays pending", async () => {
+      process.env.CLAUDE_CODE_SESSION_ID = SESSION;
+      getOrCreateSigningKey(generatedDir);
+      const report = writePendingReport();
+      // Trailing JSON whitespace: the content stays valid, only the size grows.
+      fs.appendFileSync(report.filePath, " ".repeat(2 * MAX_HASHED_REPORT_BYTES));
+      const size = fs.statSync(report.filePath).size;
+
+      const result = await call();
+
+      expect(result.blocked).toBe(true);
+      expect(result.stderr).toContain(
+        `auto-approval declined: report invalid (${size} bytes, over the 1048576-byte cap for hashing its content)`,
+      );
+      expect(markerExists()).toBe(false);
+      expect(ledgerCalls).toEqual([]);
       expect(readReport(report.filePath)["approvalStatus"]).toBe("pending");
     });
 

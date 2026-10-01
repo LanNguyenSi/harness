@@ -489,6 +489,11 @@ const INFRA: ReadonlyArray<{ name: string; reason: string }> = [
   // JS reimplementation - a genuine drift check, not a fixture binary
   // (task 3a910716).
   { name: "awk", reason: "release.yml's real awk extraction program, run directly by tests/scripts/check-release-notes-size.test.ts's parity check; a direct child so this guard sees it, instead of a bash or sh -c grandchild it cannot." },
+  // mkfifo: real system mkfifo, spawned directly (no `sh -c` indirection)
+  // by tests/cli/pack-hook-pre-tool-use-subprocess.test.ts to plant a FIFO
+  // in the understanding-gate reports directory; Node has no API that
+  // creates one (task fa423e9b).
+  { name: "mkfifo", reason: "creates the FIFO fixture for the subprocess hook test's non-blocking report read; Node has no mkfifo API." },
 ];
 
 function infraCandidates(name: string, cwd: string, pathEnv: string | undefined): readonly string[] {

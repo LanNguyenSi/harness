@@ -29,6 +29,7 @@ import {
   describeMarkerTtlExpiry,
   matchLedgerEntries,
   noApprovalMarkerReason,
+  verifyMatchedMarkerReport,
   type ApprovalCheckResult,
 } from "../../policy-packs/builtin/understanding-before-execution-runtime.js";
 import { findLatestParseError, renderMalformedSectionsNotice } from "../approve/understanding.js";
@@ -348,6 +349,12 @@ export async function runPackHookCodexPreToolUseCli(
   // True when checkOperatorApprovalMarkers found a marker FILE that failed
   // signature verification (harness/f9485cc7), mirroring the Claude hook.
   let markerForged = false;
+  // Set when a marker matched but no persisted report file hashes to the
+  // content that marker was signed for any more (task fa423e9b),
+  // mirroring the Claude hook: the call falls through to the ordinary block
+  // path (read-only shell commands keep their exemption) with this reason.
+  let reportHashMismatchDetail: string | undefined;
+  const reportsDir = opts.reportsDir ?? defaultReportsDir();
   if (generatedDir !== undefined) {
     const markers = checkOperatorApprovalMarkers(
       generatedDir,
@@ -368,7 +375,14 @@ export async function runPackHookCodexPreToolUseCli(
     }
     sessionBindingRefusedDetail = markers.sessionBindingRefused ? markers.detail : undefined;
     if (markers.matched) {
-      return allowResult(markers.detail, "marker", stderr);
+      // Cross-check the matched marker's signed report hash against the
+      // persisted reports (task fa423e9b): the task marker first, the
+      // session marker as fallback.
+      const reportHash = verifyMatchedMarkerReport(reportsDir, markers);
+      if (reportHash.ok) {
+        return allowResult(reportHash.detail, "marker", stderr);
+      }
+      reportHashMismatchDetail = reportHash.detail;
     }
   }
 
@@ -381,7 +395,6 @@ export async function runPackHookCodexPreToolUseCli(
   // this hook too. The read-only-Bash and recovery-git-commit carve-outs
   // below are separate, independently-argued exemptions, not a second
   // approval source.
-  const reportsDir = opts.reportsDir ?? defaultReportsDir();
   const report = checkPersistedReport(reportsDir, sessionId);
 
   // Audit-only ledger probe.
@@ -516,13 +529,21 @@ export async function runPackHookCodexPreToolUseCli(
   // Neither operator source approved. Codex blocks via non-zero exit
   // + stderr reason; there is no JSON-decision wire to write to stdout.
   // Mirrors the Claude hook's distinct forged-marker reason (harness/f9485cc7).
-  const reason = generatedDir !== undefined
+  const unapprovedReason = generatedDir !== undefined
     ? markerForged
       ? `forged/unsigned marker rejected for session ${sessionId}; ${report.detail}; ${ledger.detail}`
       : sessionBindingRefusedDetail !== undefined
         ? `${sessionBindingRefusedDetail}; ${report.detail}; ${ledger.detail}`
         : noApprovalMarkerReason(sessionId, markerTtlExpiry, report.detail, ledger.detail)
     : `generatedDir not resolvable (test/injection path); ${report.detail}; ${ledger.detail}`;
+  // A marker that matched but whose signed report content is gone (the
+  // approved report was edited or removed after approval, task fa423e9b)
+  // gets its own reason, naming the marker kind and the one-command fix; no
+  // "no approval marker" wording applies to it.
+  const reason =
+    reportHashMismatchDetail !== undefined
+      ? `${reportHashMismatchDetail}; ${ledger.detail}`
+      : unapprovedReason;
   // When the pack config declares `ux:`, the agent-facing block becomes
   // the plain-language shape and the legacy schemaHint text is
   // suppressed. The engine-vocabulary `reason` still lands in stderr

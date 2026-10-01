@@ -98,6 +98,20 @@ import * as ubeShim from "../../src/policy-packs/builtin/understanding-before-ex
 // the claimed task) by checkSessionApprovalMarker. 81 -> 82. Its
 // SessionMarkerCheck interface is type-only and absent for the same
 // reason.
+// Widened a thirteenth time (harness fa423e9b, report content hash verified
+// at gate read) by canonicalReportHash, canonicalReportHashOfFile and
+// verifyApprovedReportHash (persisted-reports.ts): the one shared hash the
+// two marker producers sign and the verifier both PreToolUse hooks call.
+// 86 -> 89. Widened once more in the same task by verifyMatchedMarkerReport
+// (task-markers.ts), the shared gate-side wrapper that applies the check to
+// the task marker and falls back to the session marker. 89 -> 90. The
+// ApprovedReportHashVerification, MarkerReportBinding, ApprovalMarkerKind and
+// MatchedMarkerReportCheck types are absent for the usual reason. Widened
+// again in the same task by MAX_HASHED_REPORT_BYTES, readReportFileBounded
+// and hashReportFile (persisted-reports.ts): the size cap and the one
+// bounded report read the gate-read scan and both producers share. 90 -> 93.
+// The ReportFileReadFailure, BoundedReportRead, UnhashableReportReason and
+// ReportFileHash types are absent for the usual reason.
 //
 // Mutation-verified: temporarily re-adding `export { safeJsonParse } from
 // "./persisted-reports.js";` to
@@ -120,6 +134,7 @@ const EXPECTED_EXPORTS = [
   "DELEGATION_MARKER_DIRNAME",
   "DELEGATION_REPORT_DIRNAME",
   "INFLIGHT_RECORD_DIRNAME",
+  "MAX_HASHED_REPORT_BYTES",
   "REPORTS_DIR_ENV",
   "REPORT_SCAN_MAX_WAIT_CEILING_MS",
   "TOLERANT_FALLBACK_FUTURE_SKEW_MS",
@@ -133,6 +148,8 @@ const EXPECTED_EXPORTS = [
   "autoApprovedLedgerTagFor",
   "bashCommandMatchesAny",
   "buildDelegationApprovedBy",
+  "canonicalReportHash",
+  "canonicalReportHashOfFile",
   "checkActiveClaimApprovalMarker",
   "checkApprovalMarker",
   "checkOperatorApprovalMarkers",
@@ -157,6 +174,7 @@ const EXPECTED_EXPORTS = [
   "findLatestReportForSession",
   "harnessAllowed",
   "hashDelegationCwd",
+  "hashReportFile",
   "inflightMarkerIdFor",
   "inflightRecordPathFor",
   "isPolicyDecisionRow",
@@ -175,6 +193,7 @@ const EXPECTED_EXPORTS = [
   "permissionModeAllowed",
   "permissionModeObservationPathFor",
   "readActiveClaim",
+  "readReportFileBounded",
   "recordPermissionModeObservation",
   "rejectMalformedAgentId",
   "renderAutoApproveSnippet",
@@ -184,8 +203,10 @@ const EXPECTED_EXPORTS = [
   "selectReportForSession",
   "taskApprovalMarkerPathFor",
   "toolNameMatchesAny",
+  "verifyApprovedReportHash",
   "verifyDelegation",
   "verifyInflightRecord",
+  "verifyMatchedMarkerReport",
   "writeActiveClaim",
   "writeApprovalMarker",
   "writeDelegationMarker",
@@ -194,9 +215,9 @@ const EXPECTED_EXPORTS = [
 ] as const;
 
 describe("understanding-before-execution-runtime shim export surface", () => {
-  it("exports exactly the pinned 86-name surface, sorted", () => {
+  it("exports exactly the pinned 93-name surface, sorted", () => {
     const actual = Object.keys(ubeShim).sort();
-    expect(EXPECTED_EXPORTS).toHaveLength(86);
+    expect(EXPECTED_EXPORTS).toHaveLength(93);
     expect(actual).toEqual([...EXPECTED_EXPORTS].sort());
   });
 

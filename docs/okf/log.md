@@ -2,7 +2,15 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-10-01T15:15:50Z, task fa423e9b: `gate-fail-posture-matrix.md` now scopes the bounded-read guarantee to the hash scan and names the second residual (after a refused marker both hooks fall through to the evidence read shared with the no-marker path, which still reads report files without a bound); `codex-adapter-parity-gaps.md`, `evidence-ledger-trust-boundary.md`, `understanding-gate-auto-mode-signals.md` and `understanding-gate-lockout-recovery.md` re-verified against the pack doc's matching residual; `debug-verb-selection.md` and `policy-engine-producer-wiring.md` re-verified against the merged `src/runtime/intercept.ts`, `src/cli/policy/intercept.ts` and `src/cli/dry-run.ts` (task 6c8ebd37), no claim affected.
+
+- 2026-10-01T14:31:41Z, task fa423e9b: the report files behind the canonical report hash are now read bounded (`readReportFileBounded` in `persisted-reports.ts`: opened once, read-only and non-blocking, typed and sized by `fstat` on the open descriptor and read through it; only a regular file of at most 1 MiB is hashed, every other `*.json` entry counts as a report file that matches nothing, and both producers refuse a report over the cap). `gate-fail-posture-matrix.md`, `evidence-ledger-trust-boundary.md` and `understanding-gate-lockout-recovery.md` were re-checked against the changed `persisted-reports.ts`, `auto-approve-path.ts` and `approve/understanding.ts` and now state the size and file-type rule, the copy residual narrowed to regular files within the cap, the no-report allow as a directory with no `*.json` entry, and (matrix and lockout doc) the remaining volume residual; the lockout doc also names the approve CLI's refusal of a report it could not hash and the unbound `--force` marker. `codex-adapter-parity-gaps.md` and `understanding-gate-auto-mode-signals.md` were re-verified with no claim affected (the parity doc's "no longer matches any report file" still holds; the signals doc makes no claim about report reads). Re-stamped.
+
+- 2026-10-01T13:28:36Z, task fa423e9b: the canonical report hash became total (a report file nested more than 64 levels deep counts as one that matches nothing instead of overflowing the stack; both producers refuse such a report), the session-marker fallback's max_age and claim-binding guards are pinned, and the residual and gc wording changed. `understanding-gate-lockout-recovery.md`, `evidence-ledger-trust-boundary.md` and `gate-fail-posture-matrix.md` were re-checked against the changed `persisted-reports.ts`, `auto-approve-path.ts` and `approve/understanding.ts` and now state the deep-file rule, the residual as any `*.json` file with the approved content (kept before the edit or re-created after it) plus the empty or unreadable reports directory, and, in the lockout doc, the deny after the approved report is removed while other reports remain (including `harness gc --apply`); `codex-adapter-parity-gaps.md`, `understanding-gate-auto-mode-signals.md`, `debug-verb-selection.md` and `policy-engine-producer-wiring.md` were re-verified after the `docs/CLI.md` gc row and the pack doc changed, with no claim affected. Citations into `approve/understanding.ts` shifted by the new validation lines were re-pointed in the decision record, this log and the lockout doc. Re-stamped.
+
 - 2026-10-01T13:15:49Z, task 6c8ebd37: the cwd-outside-every-repository skip (`mayBeInsideRepository` in `src/runtime/intercept.ts`) no longer lists layouts: any entry named `HEAD` or `.git` in the cwd's real path or an ancestor, or an lstat error other than ENOENT, counts as inside, which also covers a directory holding only `HEAD` and a `commondir` file; the walk runs once per event. `gate-fail-posture-matrix.md` (exception bullet), `policy-engine-producer-wiring.md` and `quote-model-divergence.md` now state that rule and the residuals it leaves (a third repository the command really runs in, state the command creates while it runs, an ambient `GIT_DIR`/`GIT_COMMON_DIR`) instead of claiming that a git verb fails on its own where the check finds no repository. `codex-adapter-parity-gaps.md`, `debug-verb-selection.md` and `pause-vs-gate-kill-switch.md` re-verified against the changed source with no claim affected; all six re-stamped.
+
+- 2026-10-01T12:46:16Z, task fa423e9b: `understanding-gate-lockout-recovery.md` gained the gate-read report-hash cross-check (a matched marker's signed `reportContentHash` must still be carried by some parseable report file in the reports directory, any session and any `approvalStatus`; the session marker is the fallback when the task marker fails; null-hash markers and a directory with no report file are unchanged; the hash is the canonical one without the lifecycle fields; the deny reason names the marker kind, not a report file), and `evidence-ledger-trust-boundary.md`, `gate-fail-posture-matrix.md` and `codex-adapter-parity-gaps.md` each gained one sentence for it, the matrix sentence now also covering the unparseable-rewrite case; `understanding-gate-auto-mode-signals.md` was re-verified with no claim affected (the auto path still mints through the same marker check). The change shifted line citations in the hook, report, approve and task-marker sources, which were re-pointed in the decision record, this log, `understanding-gate-lockout-recovery.md` and a prose `lines` pointer in `codex-adapter-parity-gaps.md`. Re-stamped.
 
 - 2026-10-01T12:35:47Z, task 6c8ebd37: the cwd-outside-every-repository skip now decides with its own conservative walk (`mayBeInsideRepository` in `src/runtime/intercept.ts`) instead of the static `resolveGitContext` walk: any `.git` entry, a bare-repository layout (`HEAD`, `objects`, `refs`) and an lstat error other than ENOENT count as inside, with no depth bound; the detached hint's repository name is sanitised and bounded. `gate-fail-posture-matrix.md` (exception bullet; doc-comment citation re-pointed to the shifted lines), `policy-engine-producer-wiring.md` and `quote-model-divergence.md` now name that cwd-resolution dependency next to the target attribution. `debug-verb-selection.md`, `codex-adapter-parity-gaps.md` and `pause-vs-gate-kill-switch.md` re-checked: no claim affected. Re-stamped.
 
@@ -675,7 +683,7 @@
   states only what `[0.28.0]` documents, dropping the unsourced
   "intentionally stays loose" design claim it carried at first; each
   rewrite kept the comment at a 4-line span so no numbered citation
-  below it shifted; verified `src/cli/approve/understanding.ts:679`
+  below it shifted; verified `src/cli/approve/understanding.ts:680`
   (this doc's own `understanding-gate-lockout-recovery.md` citation)
   still reads `resolveApprovalSessionId` after the edits, unchanged.
 
@@ -702,7 +710,7 @@
   Prior Art's presence (required since 0.4.0, same citation
   `` `CHANGELOG.md:#0.28.0` ``) and cannot judge the section's content,
   and that the approve CLI is the boundary that refuses a hollow list.
-  The edited span stayed at 4 lines (`understanding.ts` lines 483-486); `src/cli/approve/understanding.ts:679` still reads
+  The edited span stayed at 4 lines (`understanding.ts` lines 483-486); `src/cli/approve/understanding.ts:680` still reads
   `resolveApprovalSessionId` and the file's total line count is
   unchanged, so the citation above it does not shift.
   `understanding-gate-lockout-recovery.md`'s `timestamp:` is re-stamped
@@ -2416,7 +2424,7 @@
   `probeRegularFilePresence`, or cite a span of `hook-pre-tool-use.ts`
   inside this round's edited region (lines ~940-978): `grep` across all 6
   for those terms found only `understanding-gate-lockout-recovery.md`'s
-  pre-existing citation at `src/cli/pack/hook-pre-tool-use.ts:969#"writePendingApproval(generatedDir, sessionId);"`,
+  pre-existing citation at `src/cli/pack/hook-pre-tool-use.ts:998#"writePendingApproval(generatedDir, sessionId);"`,
   well before the edited region, still resolving. `evidence-ledger-trust-boundary.md`
   was NOT flagged stale this round: it was itself edited (new
   `probeRegularFilePresence` paragraph, `delegation-markers.ts` added to
@@ -2468,7 +2476,7 @@
   describes only the new reason itself; neither touches any claim or
   cited span in these 7 docs (the one line-numbered citation among them,
   `understanding-gate-lockout-recovery.md`'s
-  `src/cli/pack/hook-pre-tool-use.ts:969#"writePendingApproval(generatedDir, sessionId);"`,
+  `src/cli/pack/hook-pre-tool-use.ts:998#"writePendingApproval(generatedDir, sessionId);"`,
   sits well before the edited comment and still resolves). Timestamp-only
   re-stamp on all 7; no content changed. `okf-kit check --json docs/okf`
   on the committed tree shows 0 errors, 0 warnings after the re-stamp.

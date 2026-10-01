@@ -65,15 +65,17 @@ import * as path from "node:path";
 import {
   autoApprovedByFor,
   autoApprovedLedgerTagFor,
+  canonicalReportHash,
   checkOperatorApprovalMarkers,
   harnessAllowed,
   listPersistedReports,
   parseAutoApprove,
   permissionModeAllowed,
+  readReportFileBounded,
   selectNewestStrictSessionReport,
   writeApprovalMarker,
 } from "../../policy-packs/builtin/understanding-before-execution-runtime.js";
-import { sha256Hex, signingKeyExists } from "../../runtime/approval-signing.js";
+import { signingKeyExists } from "../../runtime/approval-signing.js";
 import {
   clearPendingApproval,
   readPendingApproval,
@@ -454,13 +456,20 @@ export async function attemptAutoApproval(
     );
     return decline("newest report not pending");
   }
-  let raw: string;
-  try {
-    raw = fs.readFileSync(newest.filePath, "utf8");
-  } catch (err) {
-    note(`auto-approval declined: report unreadable (${(err as Error).message})`);
+  // Read exactly as the gate-read scan reads it (`readReportFileBounded`):
+  // a report over the size cap there matches nothing, so a marker minted
+  // from it would bind content the gate never finds; it declines as an
+  // invalid report instead, like one nested too deeply to hash.
+  const read = readReportFileBounded(newest.filePath);
+  if (!read.ok) {
+    if (read.reason === "too-large") {
+      note(`auto-approval declined: report invalid (${read.detail})`);
+      return decline("report invalid: size");
+    }
+    note(`auto-approval declined: report unreadable (${read.detail})`);
     return decline("report unreadable");
   }
+  const raw = read.raw;
   let parsed: Record<string, unknown>;
   try {
     parsed = JSON.parse(raw) as Record<string, unknown>;
@@ -478,9 +487,17 @@ export async function attemptAutoApproval(
     return decline(`report invalid: ${validation.field}`);
   }
 
-  // Success sequence. `reportContentHash` binds the bytes as they were
-  // BEFORE the approval rewrite, exactly as the approve CLI computes it.
-  const reportContentHash = sha256Hex(raw);
+  // Success sequence. `reportContentHash` is the canonical hash of the
+  // report as it stands BEFORE the approval rewrite, exactly as the approve
+  // CLI computes it; the lifecycle fields the rewrite changes are not part
+  // of it, so the gate-read cross-check (some report file must still hash to
+  // it) matches afterwards. A report nested too deeply to hash would mint a
+  // marker that binds no content, so it declines like any other invalid report.
+  const reportContentHash = canonicalReportHash(parsed);
+  if (reportContentHash === null) {
+    note("auto-approval declined: report invalid (nested too deeply to hash its content)");
+    return decline("report invalid: nesting depth");
+  }
   const approvedAt = new Date().toISOString();
   // The parent linkage rides in the same signed `approvedBy` field the
   // source already travels in (ADR "Audit and doctor"): no new signed
