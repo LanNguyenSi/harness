@@ -48,9 +48,19 @@ import {
   type ResolveReadSessionOptions,
 } from "../../runtime/session-id.js";
 import type { Manifest } from "../../schema/index.js";
-import { loadManifest, type LoaderOptions } from "../loader.js";
+import { loadManifest } from "../loader.js";
+import {
+  classifySessionSource,
+  explicitSessionId,
+  FALLBACK_SESSION,
+  malformedEventReason,
+  readSessionStartEvent,
+  resolveEventCwd,
+  type SessionSource,
+  type SessionStartCwdOptions,
+  type SessionStartEvent,
+} from "./shared-options.js";
 
-const FALLBACK_SESSION = "default";
 const LEDGER_SOURCE = "harness-session-start-toolchain-parity";
 const SNAPSHOT_SCHEMA_VERSION = 1;
 
@@ -68,24 +78,6 @@ const SNAPSHOT_SCHEMA_VERSION = 1;
 // between the two comments a prior round introduced).
 const DEFAULT_NODE_TIMEOUT_MS = 2_000;
 const DEFAULT_NPM_GLOBALS_TIMEOUT_MS = 4_000;
-
-interface SessionStartEvent {
-  session_id?: unknown;
-  cwd?: unknown;
-  hook_event_name?: unknown;
-}
-
-async function readStdin(stream: NodeJS.ReadableStream): Promise<string> {
-  return new Promise((resolve, reject) => {
-    let data = "";
-    stream.setEncoding("utf8");
-    stream.on("data", (chunk: string) => {
-      data += chunk;
-    });
-    stream.on("end", () => resolve(data));
-    stream.on("error", reject);
-  });
-}
 
 /**
  * Profile names land in a filename; strip anything not filename-safe.
@@ -603,29 +595,15 @@ export function compareToPeer(
 // Driver
 // ---------------------------------------------------------------------
 
-export interface SessionStartToolchainParityOptions extends LoaderOptions {
-  /** Defaults to process.stdin. */
-  stdin?: NodeJS.ReadableStream;
-  /** Defaults to process.stderr. stdout is never written (SessionStart). */
-  stderr?: NodeJS.WritableStream;
-  /** Explicit session id (overrides every other source). */
-  session?: string;
-  /** Override the cwd resolution (test injection). Falls back to event.cwd then process.cwd(). */
-  cwd?: string;
+export interface SessionStartToolchainParityOptions extends SessionStartCwdOptions {
   /** Override "now" for deterministic snapshot-age tests. */
   now?: Date;
-  /** Per-call ledger timeout in ms. */
-  ledgerTimeoutMs?: number;
+  /** Inject the ledger writer (tests). */
+  writeLedger?: LedgerWriteFn;
   /** `node --version` subprocess timeout in ms. */
   nodeTimeoutMs?: number;
   /** `npm ls -g --depth=0 --json` subprocess timeout in ms. */
   npmTimeoutMs?: number;
-  /** Inject a manifest (tests). Bypasses loadManifest. */
-  manifest?: Manifest;
-  /** Inject the ledger writer (tests). */
-  writeLedger?: LedgerWriteFn;
-  /** Inject the read-path session resolver (env + transcript discovery). Test seam. */
-  resolveSession?: (explicit: string | undefined, opts: ResolveReadSessionOptions) => string;
   /** Inject the `node --version` collector (tests) — see realNodeVersionSpawn's doc. */
   runNodeVersion?: (timeoutMs: number) => Promise<CollectNodeVersionResult>;
   /** Inject the `npm ls -g` collector (tests) — see realNpmGlobalsSpawn's doc. */
@@ -664,7 +642,7 @@ export interface SessionStartToolchainParityResult {
   unparseablePeerCount: number;
   /** Resolved session id. */
   sessionId: string;
-  sessionSource: "flag" | "stdin" | "env" | "transcript" | "default";
+  sessionSource: SessionSource;
   /** Human-readable explanation of a non-write outcome, for diagnostics. */
   reason?: string;
 }
@@ -727,28 +705,18 @@ export async function runSessionStartToolchainParity(
 
   let event: SessionStartEvent;
   try {
-    event = JSON.parse((await readStdin(stdin)).trim() || "{}") as SessionStartEvent;
+    event = await readSessionStartEvent(stdin);
   } catch (err) {
-    const reason = `malformed event JSON: ${(err as Error).message}`;
+    const reason = malformedEventReason(err);
     note(reason);
     return done(false, "", 0, 0, FALLBACK_SESSION, "default", reason);
   }
 
-  const cwd =
-    typeof opts.cwd === "string" && opts.cwd.length > 0
-      ? opts.cwd
-      : typeof event.cwd === "string" && event.cwd.length > 0
-        ? event.cwd
-        : process.cwd();
+  const cwd = resolveEventCwd(opts.cwd, event);
 
   // Session id resolution: same precedence chain as the two siblings, so
   // all three producers stay symmetric.
-  const explicit =
-    typeof opts.session === "string" && opts.session.length > 0
-      ? opts.session
-      : typeof event.session_id === "string" && event.session_id.length > 0
-        ? event.session_id
-        : undefined;
+  const explicit = explicitSessionId(opts.session, event);
   const resolveSession = opts.resolveSession ?? resolveReadSessionId;
   // Defensive (task c1b5ade5): a session resolver that throws (real or
   // injected) must degrade to the same FALLBACK_SESSION every OTHER "no
@@ -777,20 +745,7 @@ export async function runSessionStartToolchainParity(
     sessionId = FALLBACK_SESSION;
     resolverThrew = true;
   }
-  const sessionSource: SessionStartToolchainParityResult["sessionSource"] = resolverThrew
-    ? "default"
-    : typeof opts.session === "string" && opts.session.length > 0
-      ? "flag"
-      : typeof event.session_id === "string" && event.session_id.length > 0
-        ? "stdin"
-        : sessionId === FALLBACK_SESSION
-          ? "default"
-          : (typeof process.env.CLAUDE_CODE_SESSION_ID === "string" &&
-              process.env.CLAUDE_CODE_SESSION_ID === sessionId) ||
-              (typeof process.env.CLAUDE_SESSION_ID === "string" &&
-                process.env.CLAUDE_SESSION_ID === sessionId)
-            ? "env"
-            : "transcript";
+  const sessionSource = classifySessionSource(opts.session, event, sessionId, resolverThrew);
 
   let manifest: Manifest;
   if (opts.manifest) {

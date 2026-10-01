@@ -92,6 +92,14 @@ import { writePendingApproval } from "../runtime/pending-approval.js";
 import { runSessionStartBranchCheck } from "./session-start/branch-check.js";
 import { runSessionStartToolchainParity } from "./session-start/toolchain-parity.js";
 import { runSessionStartStaleBaseCheck } from "./session-start/stale-base-check.js";
+import {
+  addCwdOption,
+  addIdentityOptions,
+  addLedgerTimeoutOption,
+  applyCliOptions,
+  type SessionStartCliOptions,
+  type SessionStartCliTarget,
+} from "./session-start/shared-options.js";
 import { runPackHookBranchProtectionCli } from "./pack/hook-branch-protection.js";
 import { runPackHookSolutionAcceptanceCli } from "./pack/hook-solution-acceptance.js";
 import { runPackHookSolutionAcceptanceWriteguardCli } from "./pack/hook-solution-acceptance-writeguard.js";
@@ -2629,48 +2637,39 @@ export function buildProgram(opts: RunOptions = {}): Command {
       }
     });
 
+  // The action shared by `harness session-start preflight` and its
+  // top-level alias `harness preflight`: the alias delegates to the same
+  // implementation, with the same CLI options.
+  const preflightAction = async (options: SessionStartCliOptions & { timeout?: string }) => {
+    const cliOpts: Parameters<typeof runSessionStartPreflight>[0] = {};
+    applyCliOptions(options, cliOpts);
+    if (options.timeout) {
+      const n = Number.parseInt(options.timeout, 10);
+      if (Number.isFinite(n) && n > 0) cliOpts.preflightTimeoutMs = n;
+    }
+    // Opt into the bootstrap-staging side effect from the CLI entry
+    // point only. Library callers (vitest cases) get the no-op default
+    // so they cannot clobber the operator's real pending-approval file.
+    cliOpts.stagePendingApproval = writePendingApproval;
+    await runSessionStartPreflight(cliOpts);
+  };
+
   // Top-level alias for `harness session-start preflight`, so the
   // policy `ux.run:` field can show the short form the agent should
-  // type: `Run: harness preflight`. The handler delegates to the same
-  // implementation, with the same CLI options.
-  program
-    .command("preflight")
-    .description(
-      "Alias for `harness session-start preflight`: run agent-preflight against the session cwd " +
-        "and, on a ready:true result, record a `preflight:${REPO}` fact to the evidence ledger. " +
-        "Opt-in `session_start_preflight.setup: true` (default off) passes --setup through; " +
-        "see docs/CLI.md for the trust and scope caveats.",
-    )
-    .option("--config <path>", "manifest path (default: ~/.harness/harness.yaml; legacy fallback ~/.claude/harness.yaml)")
-    .option("--project <name>", "apply per-project overrides")
-    .option("--session <id>", "explicit session id (overrides stdin event + env)")
-    .option("--timeout <ms>", "agent-preflight subprocess timeout in milliseconds (default 60000)")
-    .option("--ledger-timeout <ms>", "per-call ledger timeout in milliseconds")
-    .action(async (options: {
-      config?: string;
-      project?: string;
-      session?: string;
-      timeout?: string;
-      ledgerTimeout?: string;
-    }) => {
-      const cliOpts: Parameters<typeof runSessionStartPreflight>[0] = {};
-      if (options.config) cliOpts.configPath = options.config;
-      if (options.project) cliOpts.project = options.project;
-      if (options.session) cliOpts.session = options.session;
-      if (options.timeout) {
-        const n = Number.parseInt(options.timeout, 10);
-        if (Number.isFinite(n) && n > 0) cliOpts.preflightTimeoutMs = n;
-      }
-      if (options.ledgerTimeout) {
-        const n = Number.parseInt(options.ledgerTimeout, 10);
-        if (Number.isFinite(n) && n > 0) cliOpts.ledgerTimeoutMs = n;
-      }
-      // Opt into the bootstrap-staging side effect from the CLI entry
-      // point only. Library callers (vitest cases) get the no-op default
-      // so they cannot clobber the operator's real pending-approval file.
-      cliOpts.stagePendingApproval = writePendingApproval;
-      await runSessionStartPreflight(cliOpts);
-    });
+  // type: `Run: harness preflight`.
+  addLedgerTimeoutOption(
+    addIdentityOptions(
+      program
+        .command("preflight")
+        .description(
+          "Alias for `harness session-start preflight`: run agent-preflight against the session cwd " +
+            "and, on a ready:true result, record a `preflight:${REPO}` fact to the evidence ledger. " +
+            "Opt-in `session_start_preflight.setup: true` (default off) passes --setup through; " +
+            "see docs/CLI.md for the trust and scope caveats.",
+        ),
+      "explicit session id (overrides stdin event + env)",
+    ).option("--timeout <ms>", "agent-preflight subprocess timeout in milliseconds (default 60000)"),
+  ).action(preflightAction);
 
   // Shared by the three `record` verbs' action handlers below: parse
   // `--ledger-timeout <ms>` into `cliOpts.ledgerTimeoutMs`, and report a
@@ -2858,164 +2857,78 @@ export function buildProgram(opts: RunOptions = {}): Command {
   const sessionStart = program
     .command("session-start")
     .description("SessionStart hook entrypoints (called by Claude Code via settings.json)");
-  sessionStart
-    .command("preflight")
-    .description(
-      "SessionStart producer: run agent-preflight against the session cwd and, on a ready:true result, " +
-        "record a `preflight:${REPO}` fact to the evidence ledger so the preflight-before-* policies have a " +
-        "fresh tag to match. Reads SessionStart event JSON from stdin ({ session_id, cwd, hook_event_name }). " +
-        "Opt-in `session_start_preflight.setup: true` (default off) passes --setup through; " +
-        "see docs/CLI.md for the trust and scope caveats. " +
-        "blocking:false — every failure path logs to stderr and exits 0.",
-    )
-    .option("--config <path>", "manifest path (default: ~/.harness/harness.yaml; legacy fallback ~/.claude/harness.yaml)")
-    .option("--project <name>", "apply per-project overrides")
-    .option(
-      "--session <id>",
+  addLedgerTimeoutOption(
+    addIdentityOptions(
+      sessionStart
+        .command("preflight")
+        .description(
+          "SessionStart producer: run agent-preflight against the session cwd and, on a ready:true result, " +
+            "record a `preflight:${REPO}` fact to the evidence ledger so the preflight-before-* policies have a " +
+            "fresh tag to match. Reads SessionStart event JSON from stdin ({ session_id, cwd, hook_event_name }). " +
+            "Opt-in `session_start_preflight.setup: true` (default off) passes --setup through; " +
+            "see docs/CLI.md for the trust and scope caveats. " +
+            "blocking:false \u2014 every failure path logs to stderr and exits 0.",
+        ),
       "explicit session id (overrides stdin event + env). Use for manual / scripted invocations " +
         "where no SessionStart event JSON is piped on stdin. Without it the resolver tries " +
         "stdin event → $CLAUDE_SESSION_ID → newest Claude Code transcript → 'default' (which logs " +
         "a loud warning since the literal 'default' session never satisfies a preflight-before-* gate).",
-    )
-    .option("--timeout <ms>", "agent-preflight subprocess timeout in milliseconds (default 60000)")
-    .option("--ledger-timeout <ms>", "per-call ledger timeout in milliseconds")
-    .action(async (options: {
-      config?: string;
-      project?: string;
-      session?: string;
-      timeout?: string;
-      ledgerTimeout?: string;
-    }) => {
-      const cliOpts: Parameters<typeof runSessionStartPreflight>[0] = {};
-      if (options.config) cliOpts.configPath = options.config;
-      if (options.project) cliOpts.project = options.project;
-      if (options.session) cliOpts.session = options.session;
-      if (options.timeout) {
-        const n = Number.parseInt(options.timeout, 10);
-        if (Number.isFinite(n) && n > 0) cliOpts.preflightTimeoutMs = n;
-      }
-      if (options.ledgerTimeout) {
-        const n = Number.parseInt(options.ledgerTimeout, 10);
-        if (Number.isFinite(n) && n > 0) cliOpts.ledgerTimeoutMs = n;
-      }
-      // Opt into the bootstrap-staging side effect from the CLI entry
-      // point only. Library callers (vitest cases) get the no-op default
-      // so they cannot clobber the operator's real pending-approval file.
-      cliOpts.stagePendingApproval = writePendingApproval;
-      await runSessionStartPreflight(cliOpts);
+    ).option("--timeout <ms>", "agent-preflight subprocess timeout in milliseconds (default 60000)"),
+  ).action(preflightAction);
+  // The three advisory producers below share one option set and one
+  // action shape: only the description and the runner differ.
+  const addSessionStartProducer = (
+    name: string,
+    description: string,
+    run: (opts: SessionStartCliTarget) => Promise<unknown>,
+  ): void => {
+    addLedgerTimeoutOption(
+      addCwdOption(
+        addIdentityOptions(
+          sessionStart.command(name).description(description),
+          "explicit session id (overrides stdin event + env)",
+        ),
+      ),
+    ).action(async (options: SessionStartCliOptions) => {
+      const cliOpts: SessionStartCliTarget = {};
+      applyCliOptions(options, cliOpts);
+      await run(cliOpts);
     });
-  sessionStart
-    .command("branch-check")
-    .description(
-      "SessionStart producer for the branch-protection pack: read .git/HEAD for the session cwd and, " +
-        "when the branch is NOT in the operator's protected list (default: master, main, develop), " +
-        "record a `branch:non-protected:<branch>` fact to the evidence ledger so the pack's PreToolUse " +
-        "blocker has a fresh tag to satisfy its 5-minute freshness window. Also runnable on demand from " +
-        "the operator's shell. blocking:false — every failure path logs to stderr and exits 0.",
-    )
-    .option("--config <path>", "manifest path (default: ~/.harness/harness.yaml; legacy fallback ~/.claude/harness.yaml)")
-    .option("--project <name>", "apply per-project overrides")
-    .option(
-      "--session <id>",
-      "explicit session id (overrides stdin event + env)",
-    )
-    .option("--cwd <path>", "override cwd resolution (default: stdin event.cwd then process.cwd())")
-    .option("--ledger-timeout <ms>", "per-call ledger timeout in milliseconds")
-    .action(async (options: {
-      config?: string;
-      project?: string;
-      session?: string;
-      cwd?: string;
-      ledgerTimeout?: string;
-    }) => {
-      const cliOpts: Parameters<typeof runSessionStartBranchCheck>[0] = {};
-      if (options.config) cliOpts.configPath = options.config;
-      if (options.project) cliOpts.project = options.project;
-      if (options.session) cliOpts.session = options.session;
-      if (options.cwd) cliOpts.cwd = options.cwd;
-      if (options.ledgerTimeout) {
-        const n = Number.parseInt(options.ledgerTimeout, 10);
-        if (Number.isFinite(n) && n > 0) cliOpts.ledgerTimeoutMs = n;
-      }
-      await runSessionStartBranchCheck(cliOpts);
-    });
-  sessionStart
-    .command("toolchain-parity")
-    .description(
-      "SessionStart producer (opt-in via `toolchain_parity.enabled: true`): writes THIS machine's " +
-        "toolchain snapshot (node version, npm globals, OW-Kit version, MCP server names) to " +
-        "`<machine_state_dir>/<profile>.json`, compares it against every OTHER snapshot file already " +
-        "in that directory, and records a `toolchain-parity:ok` / `toolchain-parity:drift:<n>` fact " +
-        "(with a `:unparseable-peer:<n>` suffix whenever a peer file failed to parse as JSON, so an " +
-        "unparseable peer never silently vanishes from the comparison) to the evidence ledger. " +
-        "Purely advisory — never blocking, and never touches a peer's file. " +
-        "Cross-machine transport of the snapshot files is agent-memory-sync's job, not this command's.",
-    )
-    .option("--config <path>", "manifest path (default: ~/.harness/harness.yaml; legacy fallback ~/.claude/harness.yaml)")
-    .option("--project <name>", "apply per-project overrides")
-    .option(
-      "--session <id>",
-      "explicit session id (overrides stdin event + env)",
-    )
-    .option("--cwd <path>", "override cwd resolution (default: stdin event.cwd then process.cwd())")
-    .option("--ledger-timeout <ms>", "per-call ledger timeout in milliseconds")
-    .action(async (options: {
-      config?: string;
-      project?: string;
-      session?: string;
-      cwd?: string;
-      ledgerTimeout?: string;
-    }) => {
-      const cliOpts: Parameters<typeof runSessionStartToolchainParity>[0] = {};
-      if (options.config) cliOpts.configPath = options.config;
-      if (options.project) cliOpts.project = options.project;
-      if (options.session) cliOpts.session = options.session;
-      if (options.cwd) cliOpts.cwd = options.cwd;
-      if (options.ledgerTimeout) {
-        const n = Number.parseInt(options.ledgerTimeout, 10);
-        if (Number.isFinite(n) && n > 0) cliOpts.ledgerTimeoutMs = n;
-      }
-      await runSessionStartToolchainParity(cliOpts);
-    });
-  sessionStart
-    .command("stale-base-check")
-    .description(
-      "SessionStart producer (opt-in via `stale_base_check.enabled: true`; task ce3903b0, incident " +
-        "ea8becf5): runs a LIVE `git fetch` of the remote default branch (never trusting the local " +
-        "origin/<default> ref, which can itself be stale — that is the exact bug this closes) and, when " +
-        "the current branch's base is behind, writes a WARNING to stderr naming how many commits behind, " +
-        "how old the missing work is, and the recovery command. Records a `stale-base:ok` / " +
-        "`stale-base:behind:<n>` fact to the evidence ledger (audit-only — no gate consumes it). " +
-        "Purely advisory: never blocks, and degrades cleanly (no fact written) when offline, the remote " +
-        "or default branch can't be resolved, or credentials are missing. blocking:false — every failure " +
-        "path logs to stderr and exits 0.",
-    )
-    .option("--config <path>", "manifest path (default: ~/.harness/harness.yaml; legacy fallback ~/.claude/harness.yaml)")
-    .option("--project <name>", "apply per-project overrides")
-    .option(
-      "--session <id>",
-      "explicit session id (overrides stdin event + env)",
-    )
-    .option("--cwd <path>", "override cwd resolution (default: stdin event.cwd then process.cwd())")
-    .option("--ledger-timeout <ms>", "per-call ledger timeout in milliseconds")
-    .action(async (options: {
-      config?: string;
-      project?: string;
-      session?: string;
-      cwd?: string;
-      ledgerTimeout?: string;
-    }) => {
-      const cliOpts: Parameters<typeof runSessionStartStaleBaseCheck>[0] = {};
-      if (options.config) cliOpts.configPath = options.config;
-      if (options.project) cliOpts.project = options.project;
-      if (options.session) cliOpts.session = options.session;
-      if (options.cwd) cliOpts.cwd = options.cwd;
-      if (options.ledgerTimeout) {
-        const n = Number.parseInt(options.ledgerTimeout, 10);
-        if (Number.isFinite(n) && n > 0) cliOpts.ledgerTimeoutMs = n;
-      }
-      await runSessionStartStaleBaseCheck(cliOpts);
-    });
+  };
+  addSessionStartProducer(
+    "branch-check",
+    "SessionStart producer for the branch-protection pack: read .git/HEAD for the session cwd and, " +
+      "when the branch is NOT in the operator's protected list (default: master, main, develop), " +
+      "record a `branch:non-protected:<branch>` fact to the evidence ledger so the pack's PreToolUse " +
+      "blocker has a fresh tag to satisfy its 5-minute freshness window. Also runnable on demand from " +
+      "the operator's shell. blocking:false \u2014 every failure path logs to stderr and exits 0.",
+    runSessionStartBranchCheck,
+  );
+  addSessionStartProducer(
+    "toolchain-parity",
+    "SessionStart producer (opt-in via `toolchain_parity.enabled: true`): writes THIS machine's " +
+      "toolchain snapshot (node version, npm globals, OW-Kit version, MCP server names) to " +
+      "`<machine_state_dir>/<profile>.json`, compares it against every OTHER snapshot file already " +
+      "in that directory, and records a `toolchain-parity:ok` / `toolchain-parity:drift:<n>` fact " +
+      "(with a `:unparseable-peer:<n>` suffix whenever a peer file failed to parse as JSON, so an " +
+      "unparseable peer never silently vanishes from the comparison) to the evidence ledger. " +
+      "Purely advisory \u2014 never blocking, and never touches a peer's file. " +
+      "Cross-machine transport of the snapshot files is agent-memory-sync's job, not this command's.",
+    runSessionStartToolchainParity,
+  );
+  addSessionStartProducer(
+    "stale-base-check",
+    "SessionStart producer (opt-in via `stale_base_check.enabled: true`; task ce3903b0, incident " +
+      "ea8becf5): runs a LIVE `git fetch` of the remote default branch (never trusting the local " +
+      "origin/<default> ref, which can itself be stale \u2014 that is the exact bug this closes) and, when " +
+      "the current branch's base is behind, writes a WARNING to stderr naming how many commits behind, " +
+      "how old the missing work is, and the recovery command. Records a `stale-base:ok` / " +
+      "`stale-base:behind:<n>` fact to the evidence ledger (audit-only \u2014 no gate consumes it). " +
+      "Purely advisory: never blocks, and degrades cleanly (no fact written) when offline, the remote " +
+      "or default branch can't be resolved, or credentials are missing. blocking:false \u2014 every failure " +
+      "path logs to stderr and exits 0.",
+    runSessionStartStaleBaseCheck,
+  );
 
   // `harness gate` — operator escape hatch for hard-blocking hooks.
   // Task 8fcddb26: the understanding-before-execution PreToolUse hook can
