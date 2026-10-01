@@ -164,8 +164,10 @@ describe("decodeShellWord — expansions are deliberately NOT performed", () => 
 // Task 241d9e9e. NUL-decoding escapes inside `$'...'` are NOT modelled: bash
 // (GNU bash 3.2.57 on this machine, `printf '[%s]' <word> | od -c`) truncates
 // a run at a NUL, and this module deliberately does not rebuild that rule.
-// The decoder reports the word as unresolvable instead (raw token returned),
-// and `hasAnsiCNulEscape` lets a caller refuse the whole command text.
+// `decodeShellWord` keeps decoding such a word the way it always did (a
+// literal U+0000 where the escape stands), because the deny-side callers
+// match prefixes and short-flag clusters of that value. `hasAnsiCNulEscape`
+// lets a caller refuse the whole command text; the read-only classifier does.
 
 // One word per NUL spelling, each placed at the end of a run, between two
 // runs and inside a run. `\u`/`\U` are not decoded by bash 3.2.57 (they stay
@@ -233,9 +235,26 @@ describe("hasAnsiCNulEscape (task 241d9e9e)", () => {
   });
 });
 
-describe("decodeShellWord returns the raw token for a NUL escape (task 241d9e9e)", () => {
-  it.each(NUL_WORDS)("leaves %s unchanged", (w) => {
-    expect(decodeShellWord(w)).toBe(w);
+// Values decodeShellWord returned for these words before the NUL predicate
+// existed; they are pinned so the decoder stays what the deny-side callers
+// were built against (see destructive-shell-floor.test.ts and
+// deletion-target-resolve.test.ts for the consumer verdicts).
+describe("decodeShellWord keeps its decoding for a NUL escape (task 241d9e9e)", () => {
+  it.each([
+    ["$'-delete\\0XYZ'", "-delete\u0000XYZ"],
+    ["-$'\\0'delete", "-\u0000delete"],
+    ["-$'\\x00'delete", "-\u0000delete"],
+    ["$'-delete\\000x'", "-delete\u0000x"],
+    ["$'-delete\\u0000x'", "-delete\u0000x"],
+    ["$'-delete\\U00000000x'", "-delete\u0000x"],
+    ["$'-del'$'\\0'$'ete'", "-del\u0000ete"],
+    ["$'-del\\x0-ete'", "-del\u0000-ete"],
+    ["$'of=/dev/sda\\0'", "of=/dev/sda\u0000"],
+    ["$'-dele\\c@x'te", "-dele\\c@xte"],
+    ["$'-dele\\c x'te", "-dele\\c xte"],
+    ["$'-f\\c@'", "-f\\c@"],
+  ])("decodes %s to the base value", (w, expected) => {
+    expect(decodeShellWord(w)).toBe(expected);
   });
 
   it("still decodes the non-NUL spellings of the same words", () => {

@@ -41,20 +41,22 @@
 // from the command text alone. A word containing them decodes to something
 // that still contains them, which is the honest answer.
 //
-// NUL-DECODING ESCAPES are refused, not modelled (task `241d9e9e`). GNU bash
+// NUL-DECODING ESCAPES are not modelled here (task `241d9e9e`). GNU bash
 // 3.2.57 (measured with `printf '[%s]' <word> | od -c`; the first report
 // measured 5.1.16) truncates a `$'...'` run at a NUL, drops a NUL between two
-// runs, and reads `\c@` (value 0) the same way, so a decoder that kept a
-// literal U+0000 produced a value that never equals the argument bash passes,
-// and the raw token matches no flag either: a write flag hid from every
-// caller. This module does not rebuild bash's truncation. `readAnsiC` returns
-// `null` for such an escape (so `decodeShellWord` returns the raw token) and
-// `hasAnsiCNulEscape` lets a caller refuse the whole command text; the
-// read-only classifier does. Both over-report on purpose (any `\c` escape
-// counts, `\u`/`\U` count although bash 3.2.57 does not decode them), because
-// a false positive only blocks an exotic read. The `raw || decoded` callers
-// keep today's behaviour on the deny side; the one permissive caller (the
-// kubectl read floor) loses its floor for such a word, which is intended.
+// runs, and reads `\c@` (value 0) the same way. This module does not rebuild
+// that rule: `readAnsiC` keeps decoding such an escape exactly as before (a
+// literal U+0000 for `\0`, `\x00` and the like), and `decodeShellWord` output
+// for these words is unchanged. That is on purpose: the deny-side callers
+// match PREFIXES and short-flag clusters of the decoded value (`of=`, `-s`,
+// `-f`, `+ref`, `-c`, `-R`, `-i`, `-rf`), and a decoded value that carries a
+// U+0000 after the flag text still starts with it, so those detections hold;
+// returning the raw token instead would drop them. `hasAnsiCNulEscape` is a
+// separate predicate that lets a caller refuse a whole command text; the
+// read-only classifier does, so a command with such an escape is never read
+// only. It over-reports on purpose (any `\c` escape counts, `\u`/`\U` count
+// although bash 3.2.57 does not decode them), because a false positive only
+// blocks an exotic read.
 
 /** Characters a backslash can escape inside a double-quoted run (bash). */
 const DOUBLE_QUOTE_ESCAPABLE = new Set(['$', '`', '"', "\\", "\n"]);
@@ -147,8 +149,10 @@ export function hasAnsiCNulEscape(text: string): boolean {
  * how the measured bypasses hid a write flag from a raw string comparison.
  *
  * Returns the input UNCHANGED when the word cannot be resolved: an
- * unterminated quote, a truncated escape at end of input, or a NUL-decoding
- * (or `\c`) escape inside `$'...'` (see the module header). Per the module
+ * unterminated quote, or a truncated escape at end of input. A NUL-decoding
+ * escape inside `$'...'` does not make a word unresolvable (see the module
+ * header; the read-only classifier refuses such a command through
+ * `hasAnsiCNulEscape` instead). Per the module
  * header's direction rule, callers compare the result against a set of
  * things to REJECT, so falling back to the raw token reproduces today's
  * behaviour instead of inventing one.
@@ -261,9 +265,6 @@ function readAnsiC(word: string, start: number): { value: string; next: number }
     }
     const nxt = word[i + 1];
     if (nxt === undefined) return null;
-    // A NUL-decoding (or unmodelled `\c`) escape makes the word unresolvable:
-    // see the module header. Never emit a literal U+0000.
-    if (isNulEscapeAt(word, i)) return null;
     const simple = ANSI_C_SIMPLE.get(nxt);
     if (simple !== undefined) {
       out += simple;

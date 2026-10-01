@@ -950,10 +950,10 @@ describe("NUL-decoding ANSI-C escapes make a command not read-only (task 241d9e9
 //
 // 1. NUL escapes inside `$'...'`: CLOSED (fail closed), see the section
 //    above. bash TRUNCATES a `$'...'` run at a NUL and drops a NUL sitting
-//    between runs, which this decoder does not model. It no longer emits a
-//    literal U+0000: a word with a NUL-decoding escape is reported as
-//    unresolvable (raw token returned), and `isReadOnlyBashCommand` refuses
-//    the whole command text when `hasAnsiCNulEscape` finds one. Measured on
+//    between runs, which this decoder does not model: it still decodes such
+//    an escape to a literal U+0000 (the deny-side floor and resolver depend
+//    on that value), and `isReadOnlyBashCommand` refuses the whole command
+//    text when `hasAnsiCNulEscape` finds one. Measured on
 //    GNU bash 3.2.57 and, for the first report, 5.1.16; the artefact-
 //    confirmed commands (canary deleted / file created) used the five NUL
 //    spellings `\0 \000 \x00 \u0000 \U00000000` (3.2.57 does not decode the
