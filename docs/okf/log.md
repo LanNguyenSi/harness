@@ -2,6 +2,8 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-10-01T13:28:36Z, task fa423e9b: the canonical report hash became total (a report file nested more than 64 levels deep counts as one that matches nothing instead of overflowing the stack; both producers refuse such a report), the session-marker fallback's max_age and claim-binding guards are pinned, and the residual and gc wording changed. `understanding-gate-lockout-recovery.md`, `evidence-ledger-trust-boundary.md` and `gate-fail-posture-matrix.md` were re-checked against the changed `persisted-reports.ts`, `auto-approve-path.ts` and `approve/understanding.ts` and now state the deep-file rule, the residual as any `*.json` file with the approved content (kept before the edit or re-created after it) plus the empty or unreadable reports directory, and, in the lockout doc, the deny after the approved report is removed while other reports remain (including `harness gc --apply`); `codex-adapter-parity-gaps.md`, `understanding-gate-auto-mode-signals.md`, `debug-verb-selection.md` and `policy-engine-producer-wiring.md` were re-verified after the `docs/CLI.md` gc row and the pack doc changed, with no claim affected. Citations into `approve/understanding.ts` shifted by the new validation lines were re-pointed in the decision record, this log and the lockout doc. Re-stamped.
+
 - 2026-10-01T12:46:16Z, task fa423e9b: `understanding-gate-lockout-recovery.md` gained the gate-read report-hash cross-check (a matched marker's signed `reportContentHash` must still be carried by some parseable report file in the reports directory, any session and any `approvalStatus`; the session marker is the fallback when the task marker fails; null-hash markers and a directory with no report file are unchanged; the hash is the canonical one without the lifecycle fields; the deny reason names the marker kind, not a report file), and `evidence-ledger-trust-boundary.md`, `gate-fail-posture-matrix.md` and `codex-adapter-parity-gaps.md` each gained one sentence for it, the matrix sentence now also covering the unparseable-rewrite case; `understanding-gate-auto-mode-signals.md` was re-verified with no claim affected (the auto path still mints through the same marker check). The change shifted line citations in the hook, report, approve and task-marker sources, which were re-pointed in the decision record, this log, `understanding-gate-lockout-recovery.md` and a prose `lines` pointer in `codex-adapter-parity-gaps.md`. Re-stamped.
 
 - 2026-10-01T11:43:09Z, task 20ebf935: `understanding-gate-lockout-recovery.md` gained the block-message reason bullet, and `codex-adapter-parity-gaps.md`, `evidence-ledger-trust-boundary.md`, `gate-fail-posture-matrix.md` and `understanding-gate-auto-mode-signals.md` were re-verified after the PreToolUse and PostToolUse hooks, `persisted-reports.ts`, `post-tool-use-boundary.ts`, `markers.ts`, `approve/understanding.ts` and `docs/policy-packs/understanding-before-execution.md` changed (an optional `expiredBy` report field carried on the persisted-report record, the expiry reason in the block message, a new `expiry-reason.ts`, an expiry trigger matrix). Claims re-checked against the code: no gate decision, source list, precedence or fail posture they state changed; the lockout doc now says the Claude hook appends the expiry sentence to its stdout reason after the `ux:` envelope, while the Codex agent reads the whole stderr, whose engine reason carries it once. The edits shifted line citations into the hook files, `persisted-reports.ts`, `approve/understanding.ts`, `markers.ts` and `post-tool-use-boundary.ts`, which were re-pointed in the decision record, this log and the okf docs, including three prose `lines N-M` pointers in `codex-adapter-parity-gaps.md`. Re-stamped.
@@ -667,7 +669,7 @@
   states only what `[0.28.0]` documents, dropping the unsourced
   "intentionally stays loose" design claim it carried at first; each
   rewrite kept the comment at a 4-line span so no numbered citation
-  below it shifted; verified `src/cli/approve/understanding.ts:679`
+  below it shifted; verified `src/cli/approve/understanding.ts:680`
   (this doc's own `understanding-gate-lockout-recovery.md` citation)
   still reads `resolveApprovalSessionId` after the edits, unchanged.
 
@@ -694,7 +696,7 @@
   Prior Art's presence (required since 0.4.0, same citation
   `` `CHANGELOG.md:#0.28.0` ``) and cannot judge the section's content,
   and that the approve CLI is the boundary that refuses a hollow list.
-  The edited span stayed at 4 lines (`understanding.ts` lines 483-486); `src/cli/approve/understanding.ts:679` still reads
+  The edited span stayed at 4 lines (`understanding.ts` lines 483-486); `src/cli/approve/understanding.ts:680` still reads
   `resolveApprovalSessionId` and the file's total line count is
   unchanged, so the citation above it does not shift.
   `understanding-gate-lockout-recovery.md`'s `timestamp:` is re-stamped
