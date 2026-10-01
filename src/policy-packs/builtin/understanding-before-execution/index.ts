@@ -91,8 +91,6 @@ export {
   checkPersistedReport,
 } from "./persisted-reports.js";
 
-export { describeMarkerTtlExpiry, noApprovalMarkerReason } from "./expiry-reason.js";
-
 export { type ApprovalLifecycle, parseApprovalLifecycle } from "./lifecycle.js";
 
 export {
@@ -169,7 +167,6 @@ export {
   type ApplyPostToolUseExpiryResult,
   applyPostToolUseExpiry,
   describePostToolUseExpiry,
-  describePostToolUseTrigger,
 } from "./post-tool-use-boundary.js";
 
 export {
@@ -234,3 +231,11 @@ export {
   type InflightRecordsSummary,
   listInflightRecords,
 } from "./inflight-records.js";
+
+// Wording of the approval-expiry reason in the PreToolUse block message and
+// the event a PostToolUse expiry persists (expiry-reason.ts).
+export {
+  describeMarkerTtlExpiry,
+  describePostToolUseTrigger,
+  noApprovalMarkerReason,
+} from "./expiry-reason.js";

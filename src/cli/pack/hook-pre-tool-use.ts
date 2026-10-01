@@ -63,9 +63,7 @@ import { renderProducers } from "../../policies/producers.js";
 import {
   ADOPTION_LEDGER_DIRNAME,
   CLAUDE_CODE_HARNESS,
-  checkOperatorApprovalMarkers,
-  describeMarkerTtlExpiry,
-  noApprovalMarkerReason,
+  checkOperatorApprovalMarkers, describeMarkerTtlExpiry, noApprovalMarkerReason,
   checkPersistedReport,
   defaultReportsDir,
   delegationMarkerPathFor,
@@ -743,7 +741,7 @@ export async function runPackHookPreToolUseCli(
   // task-completion boundary tool. See understanding-before-execution-
   // runtime.ts's `OperatorMarkerApproval.expired` doc for the full
   // distinction.
-  let markerExpired = false;
+  let markerExpired = false, markerTtlExpiry: string | undefined; // markerTtlExpiry: max_age sentence, wording only
   // True when checkOperatorApprovalMarkers found a marker FILE that failed
   // signature verification (harness/f9485cc7) — missing/invalid signature,
   // wrong alg, or tampered payload — for either the task-scoped or
@@ -751,9 +749,6 @@ export async function runPackHookPreToolUseCli(
   // distinct phrase from "no approval marker" so an operator/auditor can
   // tell a forgery attempt apart from the routine "never approved" case.
   let markerForged = false;
-  // The max_age expiry sentence when a marker on disk aged out
-  // (describeMarkerTtlExpiry); undefined otherwise. Wording only.
-  let markerTtlExpiry: string | undefined;
   // `markers.detail` itself, hoisted alongside `markerForged` so the
   // in-flight consult below can still surface it: a forged SESSION/TASK
   // marker sitting next to a genuinely valid in-flight record (ADR "TTL,
@@ -779,9 +774,8 @@ export async function runPackHookPreToolUseCli(
       declared.config,
       stderr,
     );
-    markerExpired = markers.expired;
+    markerExpired = markers.expired; markerTtlExpiry = describeMarkerTtlExpiry(markers);
     markerForged = markers.forged;
-    markerTtlExpiry = describeMarkerTtlExpiry(markers);
     if (markers.sessionBindingRefused) sessionBindingRefusedDetail = markers.detail;
     if (markerForged) {
       // `markers.detail` is only ever the SESSION marker's detail on the

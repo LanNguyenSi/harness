@@ -191,21 +191,6 @@ export function matchPostToolUseBoundary(
   };
 }
 
-/**
- * The event string `applyPostToolUseExpiry` persists as the reason a
- * report expired: `tool:<tool_name>` when the tool name matched
- * `expire_on_tool_match`, else `bash:/<regex>/` for an
- * `expire_on_bash_match` hit.
- */
-export function describePostToolUseTrigger(
-  toolName: string,
-  match: Pick<PostToolUseBoundaryMatch, "toolNameMatched" | "bashRegex">,
-): string {
-  if (match.toolNameMatched) return `tool:${toolName}`;
-  if (match.bashRegex !== undefined) return `bash:/${match.bashRegex.source}/`;
-  return "";
-}
-
 export interface ApplyPostToolUseExpiryResult {
   /** Did the session marker exist before this call cleared it? */
   wasMarkerPresent: boolean;
@@ -235,8 +220,7 @@ export function applyPostToolUseExpiry(
   toolInput: unknown,
   toolNameMatched: boolean,
   reportsDir: string,
-  now?: Date,
-  trigger?: string,
+  now?: Date, trigger?: string,
 ): ApplyPostToolUseExpiryResult {
   const markerPath = approvalMarkerPathFor(generatedDir, sessionId);
   const wasMarkerPresent = fs.existsSync(markerPath);

@@ -23,9 +23,7 @@
 import * as path from "node:path";
 import { queryLedgerByTag, type LedgerEntry } from "../../policies/index.js";
 import {
-  checkOperatorApprovalMarkers,
-  describeMarkerTtlExpiry,
-  noApprovalMarkerReason,
+  checkOperatorApprovalMarkers, describeMarkerTtlExpiry, noApprovalMarkerReason,
   checkPersistedReport,
   defaultReportsDir,
   matchLedgerEntries,
@@ -341,12 +339,10 @@ export async function runPackHookCodexPreToolUseCli(
   // mirroring the Claude hook: blocks like a missing marker, with its
   // own reason text.
   let sessionBindingRefusedDetail: string | undefined;
-  let markerExpired = false;
+  let markerExpired = false, markerTtlExpiry: string | undefined; // markerTtlExpiry: max_age sentence, wording only
   // True when checkOperatorApprovalMarkers found a marker FILE that failed
   // signature verification (harness/f9485cc7), mirroring the Claude hook.
   let markerForged = false;
-  // The max_age expiry sentence when a marker on disk aged out; wording only.
-  let markerTtlExpiry: string | undefined;
   if (generatedDir !== undefined) {
     const markers = checkOperatorApprovalMarkers(
       generatedDir,
@@ -354,9 +350,8 @@ export async function runPackHookCodexPreToolUseCli(
       declared.config,
       stderr,
     );
-    markerExpired = markers.expired;
+    markerExpired = markers.expired; markerTtlExpiry = describeMarkerTtlExpiry(markers);
     markerForged = markers.forged;
-    markerTtlExpiry = describeMarkerTtlExpiry(markers);
     if (markers.source !== "task") {
       // Trace the task-marker miss, mirroring the Claude hook, so an
       // operator debugging a Codex session sees the active-claim vs

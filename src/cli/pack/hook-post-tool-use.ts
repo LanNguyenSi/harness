@@ -31,8 +31,7 @@
 // per-task approval, not to the legacy per-session contract.
 
 import {
-  applyPostToolUseExpiry,
-  describePostToolUseTrigger,
+  applyPostToolUseExpiry, describePostToolUseTrigger,
   defaultReportsDir,
   describePostToolUseExpiry,
   matchPostToolUseBoundary,
@@ -250,8 +249,7 @@ export async function runPackHookPostToolUseCli(
     event.tool_input,
     boundary.toolNameMatched,
     reportsDir,
-    opts.now,
-    describePostToolUseTrigger(toolName, boundary),
+    opts.now, describePostToolUseTrigger(toolName, boundary),
   );
 
   const diagnostic = describePostToolUseExpiry(

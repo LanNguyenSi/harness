@@ -12,6 +12,7 @@
 //    <time>)").
 // Only wording lives here; no gate decision reads any of it.
 
+import type { PostToolUseBoundaryMatch } from "./post-tool-use-boundary.js";
 import { sanitizeDetailValue } from "./persisted-reports.js";
 
 /** Matches the detail `checkApprovalMarker` writes for an aged-out marker. */
@@ -53,4 +54,19 @@ export function noApprovalMarkerReason(
 ): string {
   const expiry = ttlExpiry !== undefined ? `${ttlExpiry}; ` : "";
   return `no approval marker for session ${sessionId}; ${expiry}${reportDetail}; ${ledgerDetail}${suffix}`;
+}
+
+/**
+ * The event string a PostToolUse expiry persists as the reason a report
+ * expired: `tool:<tool_name>` when the tool name matched
+ * `expire_on_tool_match`, else `bash:/<regex>/` for an
+ * `expire_on_bash_match` hit.
+ */
+export function describePostToolUseTrigger(
+  toolName: string,
+  match: Pick<PostToolUseBoundaryMatch, "toolNameMatched" | "bashRegex">,
+): string {
+  if (match.toolNameMatched) return `tool:${toolName}`;
+  if (match.bashRegex !== undefined) return `bash:/${match.bashRegex.source}/`;
+  return "";
 }
