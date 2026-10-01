@@ -191,6 +191,21 @@ export function matchPostToolUseBoundary(
   };
 }
 
+/**
+ * The event string `applyPostToolUseExpiry` persists as the reason a
+ * report expired: `tool:<tool_name>` when the tool name matched
+ * `expire_on_tool_match`, else `bash:/<regex>/` for an
+ * `expire_on_bash_match` hit.
+ */
+export function describePostToolUseTrigger(
+  toolName: string,
+  match: Pick<PostToolUseBoundaryMatch, "toolNameMatched" | "bashRegex">,
+): string {
+  if (match.toolNameMatched) return `tool:${toolName}`;
+  if (match.bashRegex !== undefined) return `bash:/${match.bashRegex.source}/`;
+  return "";
+}
+
 export interface ApplyPostToolUseExpiryResult {
   /** Did the session marker exist before this call cleared it? */
   wasMarkerPresent: boolean;
@@ -221,6 +236,7 @@ export function applyPostToolUseExpiry(
   toolNameMatched: boolean,
   reportsDir: string,
   now?: Date,
+  trigger?: string,
 ): ApplyPostToolUseExpiryResult {
   const markerPath = approvalMarkerPathFor(generatedDir, sessionId);
   const wasMarkerPresent = fs.existsSync(markerPath);
@@ -250,7 +266,7 @@ export function applyPostToolUseExpiry(
   // 7402301d the report can no longer satisfy the gate on its own, so
   // this now exists so the audit record agrees with the cleared marker.
   // Best-effort.
-  const reportExpiry = expirePersistedReport(reportsDir, sessionId, now);
+  const reportExpiry = expirePersistedReport(reportsDir, sessionId, now, trigger);
 
   return {
     wasMarkerPresent,

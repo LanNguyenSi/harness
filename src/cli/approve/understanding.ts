@@ -593,6 +593,8 @@ export function rewriteReportApproved(
   // drops the key entirely instead of serializing `"expiredAt": null`-
   // adjacent noise.
   delete parsed["expiredAt"];
+  // `expiredBy` (the event that expired the report) goes with it.
+  delete parsed["expiredBy"];
   // Stamp the session id when the report lacks one (older Stop-hook
   // package versions write reports without a `sessionId` field). This
   // binds the report to the session that approved it, so every later

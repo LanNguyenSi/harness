@@ -47,6 +47,7 @@
 
 import {
   applyPostToolUseExpiry,
+  describePostToolUseTrigger,
   defaultReportsDir,
   describePostToolUseExpiry,
   matchPostToolUseBoundary,
@@ -259,6 +260,7 @@ export async function runPackHookCodexPostToolUseCli(
     boundary.toolNameMatched,
     reportsDir,
     opts.now,
+    describePostToolUseTrigger(toolName, boundary),
   );
 
   const diagnostic = describePostToolUseExpiry(

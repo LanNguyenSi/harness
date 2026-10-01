@@ -33,6 +33,20 @@ export interface PersistedReport {
    * weeks-old report sort as the freshest, harness-discovery C1).
    */
   createdAtMs: number;
+  /**
+   * ISO timestamp `expirePersistedReport` stamped when a PostToolUse
+   * boundary flipped this report to `expired`. Optional: absent on
+   * reports that were never expired and on reports written by a package
+   * producer that does not know the field.
+   */
+  expiredAt?: string | null;
+  /**
+   * The event that expired the report: `tool:<tool_name>` or
+   * `bash:/<regex>/`. Optional like `expiredAt`; a report expired before
+   * this field existed carries `expiredAt` only and renders without an
+   * event.
+   */
+  expiredBy?: string | null;
 }
 
 const DEFAULT_REPORTS_DIRNAME = ".understanding-gate";
@@ -111,6 +125,8 @@ function readPersistedReport(filePath: string, mtimeMs: number): PersistedReport
     approvedAt: typeof obj["approvedAt"] === "string" ? (obj["approvedAt"] as string) : null,
     createdAt,
     createdAtMs,
+    expiredAt: typeof obj["expiredAt"] === "string" ? (obj["expiredAt"] as string) : null,
+    expiredBy: typeof obj["expiredBy"] === "string" ? (obj["expiredBy"] as string) : null,
   };
 }
 
@@ -352,7 +368,7 @@ const DETAIL_VALUE_MAX_LENGTH = 120;
  * forge extra `reason:`-looking lines) are replaced with a space and
  * the result is capped so one field cannot blow out the surface.
  */
-function sanitizeDetailValue(value: string): string {
+export function sanitizeDetailValue(value: string): string {
   // Deliberately strips C0/DEL control characters (including newline,
   // which could otherwise forge an extra `reason:`-looking stderr line).
   const flattened = value.replace(/[\x00-\x1f\x7f]/g, " ");
@@ -410,6 +426,7 @@ export function expirePersistedReport(
   reportsDir: string,
   sessionId: string,
   now: Date = new Date(),
+  trigger?: string,
 ): { ok: true; filePath: string; previousStatus: string | null } | { ok: false; reason: string } {
   const reports = listPersistedReports(reportsDir);
   if (reports.length === 0) {
@@ -444,6 +461,14 @@ export function expirePersistedReport(
     typeof parsed["approvalStatus"] === "string" ? (parsed["approvalStatus"] as string) : null;
   parsed["approvalStatus"] = "expired";
   parsed["expiredAt"] = now.toISOString();
+  // The event that closed the boundary, so the next PreToolUse block can
+  // say WHY the approval lapsed. Without a trigger any `expiredBy` left by
+  // an earlier expiry is dropped instead of describing the wrong event.
+  if (trigger !== undefined && trigger !== "") {
+    parsed["expiredBy"] = trigger;
+  } else {
+    delete parsed["expiredBy"];
+  }
   try {
     atomicWriteFile(latest.filePath, `${JSON.stringify(parsed, null, 2)}\n`);
   } catch (err) {
@@ -453,6 +478,23 @@ export function expirePersistedReport(
     };
   }
   return { ok: true, filePath: latest.filePath, previousStatus };
+}
+
+/**
+ * `; approval expired because <event> at <time>` for a report a PostToolUse
+ * boundary expired, `""` when the report carries no event (an older report,
+ * or one a package producer wrote). Both values come from a JSON file the
+ * gated agent can write, so both pass `sanitizeDetailValue`.
+ */
+function describeBoundaryExpiry(report: PersistedReport): string {
+  if (report.expiredBy === undefined || report.expiredBy === null || report.expiredBy === "") {
+    return "";
+  }
+  const at =
+    report.expiredAt !== undefined && report.expiredAt !== null && report.expiredAt !== ""
+      ? ` at ${sanitizeDetailValue(report.expiredAt)}`
+      : "";
+  return `; approval expired because ${sanitizeDetailValue(report.expiredBy)}${at}`;
 }
 
 /**
@@ -498,7 +540,7 @@ export function checkPersistedReport(
       claimsApproved: false,
       detail: `latest report ${safeFileName} has approvalStatus=${
         sanitizeDetailValue(latest.approvalStatus ?? "<missing>")
-      }`,
+      }${latest.approvalStatus === "expired" ? describeBoundaryExpiry(latest) : ""}`,
       report: latest,
     };
   }

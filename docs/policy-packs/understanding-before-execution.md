@@ -595,6 +595,24 @@ Claude Code's `SubagentStart` hook (`harness pack hook subagent-start`) closes t
 
 **Recommended lifecycle for orchestrator-led sessions.** An orchestrator that dispatches Agent-tool subagents across a batch of tasks should configure `approval_lifecycle: { mode: session, max_age: "4h" }` (or a duration matched to the batch's expected wall-clock length): `mode: session` keeps a single approval valid across the whole batch without re-arming on every agent-tasks boundary tool call or on a change of the claimed task (the task binding of task `5018c0c4` does not apply under `mode: session`), while `max_age` still forces periodic re-approval so a session cannot stay approved indefinitely. The alternative is the batch `--task` pre-approval already described above (`harness approve understanding --task a b c`), trading the single long-lived session marker for one approval per task boundary; outside `mode: session` the session marker is bound to the claimed task, and the active-claim file is one per `harness.generated/`, shared by every session and subagent on the machine, so a claim taken by any of them moves the binding check for all of them. Either way is a valid choice, but silently exempting subagent sessions from re-approval altogether, or defaulting every install to arm-at-start-only, were both considered and rejected (see the ADR amendment in `docs/decisions/2026-08-27-ug-auto-mode-approval.md`).
 
+### Expiry trigger matrix and the reason in the block message (task `20ebf935`)
+
+Which event ends an approval, and what is left on disk afterwards. "Boundary" rows run in the PostToolUse hook (`harness pack hook post-tool-use` and `codex-post-tool-use`, both through `applyPostToolUseExpiry`); the TTL row runs at gate time.
+
+| Event | Config | Session marker | Task marker | Persisted report | Block message reason |
+|---|---|---|---|---|---|
+| A tool in `expire_on_tool_match` completes (shipped: `task_finish`, `task_abandon`, `task_merge`, `pull_requests_merge`, `tasks_transition`) | `approval_lifecycle.expire_on_tool_match` | deleted | deleted when `tool_input.taskId` names a task whose marker exists, otherwise untouched | latest report for the session flipped from `approved` to `expired`, with `expiredAt` and `expiredBy: tool:<tool_name>` | `approval expired because tool:<tool_name> at <time>` |
+| A Bash command matches `expire_on_bash_match` (shipped: `^gh pr (merge\|close)\b`, `^git push origin (master\|main)\b`) | `approval_lifecycle.expire_on_bash_match` | deleted | untouched (a Bash call carries no task id) | as above, with `expiredBy: bash:/<regex>/` | `approval expired because bash:/<regex>/ at <time>` |
+| The marker is older than `max_age` (shipped: `4h`) | `approval_lifecycle.max_age` | stays on disk, no longer opens the gate | stays on disk, same | untouched | `approval expired because max_age <n>m elapsed (approved at <time>)` |
+| `task_finish` whose result lands the task in `review` | the same `expire_on_tool_match` entry | kept | kept | kept | none, the gate stays open |
+
+Notes on the matrix:
+
+- **Merge before finish is intended.** `pull_requests_merge` and `task_merge` are on the shipped list, so merging the PR ends the approval before `task_finish` runs; the next Edit, Write or mutating Bash needs a fresh approval. That is configured behaviour, not a bug, and `tests/cli/pack-hook-approval-expiry-reason.test.ts` pins it for both runtimes.
+- **The `review` exception.** For an agent-tasks claim lifecycle verb the boundary follows the active-claim decider (task `5018c0c4`): a `task_finish` that leaves the task in `review` keeps the claim and the approval; `done`, `task_abandon`, `task_merge` and a `tasks_transition` to `done` end it. A verb the decider does not track (`pull_requests_merge`, any non-agent-tasks tool) expires on list membership alone.
+- **Under `mode: session`** the PostToolUse hook does nothing, so no tool or Bash boundary deletes a marker and no report is flipped; only `max_age` (when configured) ends the approval, and the block message then carries the `max_age` reason. The task binding of the session marker does not apply either.
+- **The message is wording only.** The reason comes from the persisted report (`expiredBy`, `expiredAt`) for a boundary and from the marker check's own detail for a TTL expiry. It never changes a gate decision: a forged or unsigned marker, an in-flight record failure and a task-binding refusal keep their own, higher-precedence reasons, and a report without `expiredBy` (written before this field existed, or by a package producer) renders as before, without an event. Values read from the report pass through the same sanitizer as the other report fields. A re-approve (`harness approve understanding`) removes `expiredBy` together with `expiredAt`.
+
 ## Adapter notes
 
 ### Claude Code (first-class target)

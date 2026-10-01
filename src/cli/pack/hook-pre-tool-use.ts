@@ -64,6 +64,8 @@ import {
   ADOPTION_LEDGER_DIRNAME,
   CLAUDE_CODE_HARNESS,
   checkOperatorApprovalMarkers,
+  describeMarkerTtlExpiry,
+  noApprovalMarkerReason,
   checkPersistedReport,
   defaultReportsDir,
   delegationMarkerPathFor,
@@ -749,6 +751,9 @@ export async function runPackHookPreToolUseCli(
   // distinct phrase from "no approval marker" so an operator/auditor can
   // tell a forgery attempt apart from the routine "never approved" case.
   let markerForged = false;
+  // The max_age expiry sentence when a marker on disk aged out
+  // (describeMarkerTtlExpiry); undefined otherwise. Wording only.
+  let markerTtlExpiry: string | undefined;
   // `markers.detail` itself, hoisted alongside `markerForged` so the
   // in-flight consult below can still surface it: a forged SESSION/TASK
   // marker sitting next to a genuinely valid in-flight record (ADR "TTL,
@@ -776,6 +781,7 @@ export async function runPackHookPreToolUseCli(
     );
     markerExpired = markers.expired;
     markerForged = markers.forged;
+    markerTtlExpiry = describeMarkerTtlExpiry(markers);
     if (markers.sessionBindingRefused) sessionBindingRefusedDetail = markers.detail;
     if (markerForged) {
       // `markers.detail` is only ever the SESSION marker's detail on the
@@ -935,7 +941,7 @@ export async function runPackHookPreToolUseCli(
         ? `forged/unsigned in-flight record for agent ${displayAgentId} rejected for session ${sessionId}; ${report.detail}; ${ledger.detail}`
         : sessionBindingRefusedDetail !== undefined
           ? `${sessionBindingRefusedDetail}; ${report.detail}; ${ledger.detail}${subagentRecordSentence}`
-          : `no approval marker for session ${sessionId}; ${report.detail}; ${ledger.detail}${subagentRecordSentence}`
+          : noApprovalMarkerReason(sessionId, markerTtlExpiry, report.detail, ledger.detail, subagentRecordSentence)
     : `generatedDir not resolvable (test/injection path); ${report.detail}; ${ledger.detail}`;
 
   // Stage the session id so `harness approve`, run from the operator's

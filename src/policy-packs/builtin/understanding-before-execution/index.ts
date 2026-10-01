@@ -91,6 +91,8 @@ export {
   checkPersistedReport,
 } from "./persisted-reports.js";
 
+export { describeMarkerTtlExpiry, noApprovalMarkerReason } from "./expiry-reason.js";
+
 export { type ApprovalLifecycle, parseApprovalLifecycle } from "./lifecycle.js";
 
 export {
@@ -167,6 +169,7 @@ export {
   type ApplyPostToolUseExpiryResult,
   applyPostToolUseExpiry,
   describePostToolUseExpiry,
+  describePostToolUseTrigger,
 } from "./post-tool-use-boundary.js";
 
 export {

@@ -24,6 +24,8 @@ import * as path from "node:path";
 import { queryLedgerByTag, type LedgerEntry } from "../../policies/index.js";
 import {
   checkOperatorApprovalMarkers,
+  describeMarkerTtlExpiry,
+  noApprovalMarkerReason,
   checkPersistedReport,
   defaultReportsDir,
   matchLedgerEntries,
@@ -343,6 +345,8 @@ export async function runPackHookCodexPreToolUseCli(
   // True when checkOperatorApprovalMarkers found a marker FILE that failed
   // signature verification (harness/f9485cc7), mirroring the Claude hook.
   let markerForged = false;
+  // The max_age expiry sentence when a marker on disk aged out; wording only.
+  let markerTtlExpiry: string | undefined;
   if (generatedDir !== undefined) {
     const markers = checkOperatorApprovalMarkers(
       generatedDir,
@@ -352,6 +356,7 @@ export async function runPackHookCodexPreToolUseCli(
     );
     markerExpired = markers.expired;
     markerForged = markers.forged;
+    markerTtlExpiry = describeMarkerTtlExpiry(markers);
     if (markers.source !== "task") {
       // Trace the task-marker miss, mirroring the Claude hook, so an
       // operator debugging a Codex session sees the active-claim vs
@@ -515,7 +520,7 @@ export async function runPackHookCodexPreToolUseCli(
       ? `forged/unsigned marker rejected for session ${sessionId}; ${report.detail}; ${ledger.detail}`
       : sessionBindingRefusedDetail !== undefined
         ? `${sessionBindingRefusedDetail}; ${report.detail}; ${ledger.detail}`
-        : `no approval marker for session ${sessionId}; ${report.detail}; ${ledger.detail}`
+        : noApprovalMarkerReason(sessionId, markerTtlExpiry, report.detail, ledger.detail)
     : `generatedDir not resolvable (test/injection path); ${report.detail}; ${ledger.detail}`;
   // When the pack config declares `ux:`, the agent-facing block becomes
   // the plain-language shape and the legacy schemaHint text is
