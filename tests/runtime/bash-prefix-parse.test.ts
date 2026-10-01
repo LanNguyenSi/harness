@@ -357,7 +357,7 @@ describe("parseBashPrefix", () => {
           expect(Object.values(r.inlineEnv), cmd).toEqual([value]);
           expect(cmd.slice(r.remainderStart), cmd).toBe("y");
         }
-        // the plain twin reads the same phantom cd on the pre-change parser
+        // the plain twin, read by the unchanged legacy path, gives the same phantom cd
         expect(parseBashPrefix("A=x|| cd /t && y").cdTarget).toBe("/t");
         // a single | behind an escape-led word is swallowed the same way
         expect(parseBashPrefix("A=a\\ b| cd /t && y").cdTarget).toBe("/t");
@@ -367,7 +367,7 @@ describe("parseBashPrefix", () => {
         // bash: `D=a"b c"; D=dev&T` runs `D=dev` in the background, T sees `ab c`.
         const r = parseBashPrefix('D=postgres://prod-host"/db x"; D=dev&T');
         expect(r.inlineEnv).toEqual({ D: "dev&T" });
-        // the plain twin reads the same override on the pre-change parser
+        // the plain twin, read by the unchanged legacy path, gives the same override
         expect(parseBashPrefix("D=/srv/prod; D=dev&T").inlineEnv).toEqual({ D: "dev&T" });
       });
 
@@ -469,7 +469,7 @@ describe("parseBashPrefix", () => {
       it("falls through on an unterminated quoted path, and keeps the old reading when only an escaped quote is left", () => {
         expect(parseBashPrefix('cd "/tmp/x && y').cdTarget).toBe(null);
         expect(parseBashPrefix("cd '/tmp/x && y").cdTarget).toBe(null);
-        // bash rejects `cd "/tmp/x\" && y`; the first-quote reading is kept so nothing extracted before is lost
+        // bash rejects `cd "/tmp/x\" && y`; the first-quote reading is kept for this escaped-quote case
         expect(parseBashPrefix('cd "/tmp/x\\" && y').cdTarget).toBe("/tmp/x\\");
       });
 
@@ -534,6 +534,19 @@ describe("parseBashPrefix", () => {
         }
       });
 
+      it("ends a mid-word `$` branch word at a glued `&&` and keeps the cd and kubectl behind it", () => {
+        const cd = 'git switch release/"$V"&& cd /x && y';
+        const r1 = parseBashPrefix(cd);
+        expect(r1.branchTarget).toBe('release/"$V"');
+        expect(r1.cdTarget).toBe("/x");
+        expect(cd.slice(r1.remainderStart).trim()).toBe("y");
+
+        const kube = 'git switch release/"$V"&&kubectl --context prod-1 delete ns x';
+        const r2 = parseBashPrefix(kube);
+        expect(r2.branchTarget).toBe('release/"$V"');
+        expect(kube.slice(r2.remainderStart)).toBe("kubectl --context prod-1 delete ns x");
+      });
+
       it("keeps the cd and the kubectl remainder behind a mid-word `$` branch switch", () => {
         const cd = 'git switch feature/"$V" && cd /x && y';
         const r1 = parseBashPrefix(cd);
@@ -578,7 +591,7 @@ describe("parseBashPrefix", () => {
         const r = parseBashPrefix("git switch release/1.2\\; cd dev && T");
         expect(r.branchTarget).toBe(null);
         expect(r.remainderStart).toBe(0);
-        // the plain twin (a branch word followed by more words) has no branch on the pre-change parser either
+        // the plain twin (a branch word followed by more words), read by the unchanged legacy path, has no branch either
         expect(parseBashPrefix("git switch release/1 checkout main && T").branchTarget).toBe(null);
       });
 
