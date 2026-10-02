@@ -2,6 +2,8 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-10-02T10:11:26Z, task 7dfdcaaf: re-stamped after merging master; `codex-adapter-parity-gaps.md`, `evidence-ledger-trust-boundary.md`, `gate-fail-posture-matrix.md`, `understanding-gate-auto-mode-signals.md`, `understanding-gate-lockout-recovery.md` list sources that master changed in the meantime. The merged changes come from separately reviewed tasks and none contradicts these docs' claims, so no body text changed.
+
 - 2026-10-02T09:38:10Z, task 7dfdcaaf: re-stamped after merging master; `codex-adapter-parity-gaps.md` list sources that master changed in the meantime. The merged changes come from separately reviewed tasks and none contradicts these docs' claims, so no body text changed.
 
 - 2026-10-02T09:32:33Z, task 7dfdcaaf: `gate-fail-posture-matrix.md` runtime-reality section no longer quotes the removed 'only deny path' sentence of `docs/runtime-reality-hook.md`; it names both deny paths (critical drift, stdin timeout). Re-verified against the hook source and re-stamped.
