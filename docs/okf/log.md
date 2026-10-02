@@ -2,6 +2,8 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-10-02T12:07:27Z, task 1ccfe922: re-stamped after merging master; `codex-adapter-parity-gaps.md`, `debug-verb-selection.md`, `evidence-ledger-trust-boundary.md`, `gate-fail-posture-matrix.md`, `policy-engine-producer-wiring.md` list sources that master changed in the meantime. The merged changes come from separately reviewed tasks and none contradicts these docs' claims, so no body text changed.
+
 - 2026-10-02T12:06:17Z, task 1ccfe922: re-stamped after merging master; `codex-adapter-parity-gaps.md`, `evidence-ledger-trust-boundary.md`, `gate-fail-posture-matrix.md`, `understanding-gate-auto-mode-signals.md`, `understanding-gate-lockout-recovery.md` list sources that master changed in the meantime. The merged changes come from separately reviewed tasks and none contradicts these docs' claims, so no body text changed.
 
 - 2026-10-02T11:55:20Z, task 1ccfe922 (success output): the report paths `harness approve understanding` prints on success (the newest-report fallback line and the flipped report line) are escaped literals too, and the `--force` hint names what cannot be forced. `understanding-gate-lockout-recovery.md`, `debug-verb-selection.md` and `pause-vs-gate-kill-switch.md` list `src/cli/index.ts` and were re-verified; their claims still hold, no text change. Re-stamped.
