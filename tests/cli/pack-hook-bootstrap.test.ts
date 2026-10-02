@@ -11,8 +11,11 @@ import {
   checkHookPause,
   loadManifestOrInjected,
   readStdin,
+  readStdinChecked,
   resolveSessionAndAgentIds,
   resolveSubagentHookContext,
+  stdinTimeoutBlockJson,
+  stdinTimeoutBlockReason,
 } from "../../src/cli/pack/hook-bootstrap.js";
 import { parseManifest, type Manifest } from "../../src/schema/index.js";
 
@@ -119,6 +122,56 @@ describe("readStdin", () => {
     const p = readStdin(r);
     r.emit("error", new Error("EPIPE"));
     await expect(p).rejects.toThrow("EPIPE");
+  });
+});
+
+describe("readStdinChecked (the PreToolUse gates' reader)", () => {
+  it("a closed stdin reports the whole text and no timeout", async () => {
+    const read = await readStdinChecked(makeReadableOf('{"tool_name":"Bash"}'), {
+      idleTimeoutMs: 100,
+    });
+    expect(read).toEqual({ text: '{"tool_name":"Bash"}', timedOut: false, idleTimeoutMs: 100 });
+  });
+
+  it("an idle empty stdin reports timedOut with no text and the bound that applied", async () => {
+    const read = await readStdinChecked(new PassThrough(), { idleTimeoutMs: 100 });
+    expect(read).toEqual({ text: "", timedOut: true, idleTimeoutMs: 100 });
+  });
+
+  it("an idle stdin with partial data reports timedOut and the text read so far", async () => {
+    const pt = new PassThrough();
+    pt.write('{"tool_name":');
+    const read = await readStdinChecked(pt, { idleTimeoutMs: 100 });
+    expect(read).toEqual({ text: '{"tool_name":', timedOut: true, idleTimeoutMs: 100 });
+  });
+
+  it("rejects when the stream emits an error", async () => {
+    const r = new Readable({ read() {} });
+    const p = readStdinChecked(r);
+    r.emit("error", new Error("EPIPE"));
+    await expect(p).rejects.toThrow("EPIPE");
+  });
+});
+
+describe("stdin timeout block helpers", () => {
+  it("the reason names the stdin timeout and the bound", () => {
+    const reason = stdinTimeoutBlockReason(3000);
+    expect(reason).toMatch(/^stdin timeout:/);
+    expect(reason).toContain("within 3000 ms");
+    expect(reason).toContain("fail closed");
+  });
+
+  it("the envelope blocks in both the legacy and the hookSpecificOutput form", () => {
+    const parsed = JSON.parse(stdinTimeoutBlockJson("why"));
+    expect(parsed).toEqual({
+      decision: "block",
+      reason: "why",
+      hookSpecificOutput: {
+        hookEventName: "PreToolUse",
+        permissionDecision: "deny",
+        permissionDecisionReason: "why",
+      },
+    });
   });
 });
 

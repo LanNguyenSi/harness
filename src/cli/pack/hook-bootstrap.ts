@@ -74,34 +74,92 @@ export interface ReadStdinOptions {
   stderr?: NodeJS.WritableStream;
 }
 
+/** What `readStdinChecked` reports: the text read and whether the bound fired. */
+export interface CheckedStdinRead {
+  text: string;
+  /** True when the idle bound fired before `end` (the stdin was never closed). */
+  timedOut: boolean;
+  /** The idle bound that applied, in ms. */
+  idleTimeoutMs: number;
+}
+
 /**
- * Standard promise-based stdin reader for pack hook events. Resolves to the
- * UTF-8 string read from the stream, ending at `end` or, when no chunk has
- * arrived for the idle bound, at the idle timeout (task 7dfdcaaf; the shared
- * reader is `src/cli/bounded-stdin.ts`). Rejects on stream error.
+ * Idle-bounded stdin read that tells the caller whether it timed out and
+ * writes no note. A PreToolUse gate uses this so it can fail closed on a
+ * timed-out read: a timeout means the event never finished arriving, so the
+ * gate cannot judge the tool call and must not treat it as an allow (a writer
+ * that is merely late, then writes a complete gated event and closes, was
+ * decided on its content when the read was end-only). Rejects on stream error.
+ */
+export async function readStdinChecked(
+  stream: NodeJS.ReadableStream,
+  opts: Pick<ReadStdinOptions, "idleTimeoutMs"> = {},
+): Promise<CheckedStdinRead> {
+  const idleTimeoutMs = opts.idleTimeoutMs ?? STDIN_IDLE_TIMEOUT_MS;
+  const read = await readStdinBounded(stream, idleTimeoutMs);
+  return { text: read.text, timedOut: read.timedOut, idleTimeoutMs };
+}
+
+/**
+ * Promise-based stdin reader for the pack hooks that are NOT PreToolUse gates
+ * (PostToolUse, Stop, SubagentStart/Stop, UserPromptSubmit and the like).
+ * Resolves to the UTF-8 string read from the stream, ending at `end` or, when
+ * no chunk has arrived for the idle bound, at the idle timeout (task 7dfdcaaf;
+ * the shared reader is `src/cli/bounded-stdin.ts`). Rejects on stream error.
  *
  * Claude Code pipes the event and closes stdin, so a real hook never reaches
  * the bound; it only bites on an open, never-closed stdin, where an end-only
  * read held the hook until the host's own hook timeout. On a timeout the text
- * read so far is returned and one stderr note names the bound, so every caller
- * continues exactly as it does for an empty or truncated event it was handed on
- * a closed stdin: its own parse step decides, and each gate keeps the posture
- * it already has for unparseable input (branch-protection can still block,
- * the understanding gate still allows). No caller's decision changes on input
- * that arrives and closes within the bound.
+ * read so far is returned and one stderr note names the bound, so the caller
+ * continues exactly as it does for an empty or truncated event it was handed
+ * on a closed stdin. A PreToolUse gate must not use this: it calls
+ * `readStdinChecked` and blocks on `timedOut`.
  */
 export async function readStdin(
   stream: NodeJS.ReadableStream,
   opts: ReadStdinOptions = {},
 ): Promise<string> {
-  const idleTimeoutMs = opts.idleTimeoutMs ?? STDIN_IDLE_TIMEOUT_MS;
-  const read = await readStdinBounded(stream, idleTimeoutMs);
+  const read = await readStdinChecked(stream, opts);
   if (read.timedOut) {
     (opts.stderr ?? process.stderr).write(
-      `harness pack hook: ${stdinTimeoutNote(read, idleTimeoutMs, "continuing as an empty event")}\n`,
+      `harness pack hook: ${stdinTimeoutNote(
+        { text: read.text, timedOut: true },
+        read.idleTimeoutMs,
+        "continuing as an empty event",
+      )}\n`,
     );
   }
   return read.text;
+}
+
+/**
+ * The block reason a PreToolUse gate gives when its stdin read timed out. It
+ * names the stdin timeout and the bound; the gate fails closed because an
+ * event that did not finish arriving cannot be judged.
+ */
+export function stdinTimeoutBlockReason(idleTimeoutMs: number): string {
+  return (
+    `stdin timeout: no complete event arrived and closed on stdin within ${idleTimeoutMs} ms, ` +
+    `so this gate cannot judge the tool call and refuses it (fail closed). ` +
+    `Retry the tool call. Operator override: \`harness pause\`.`
+  );
+}
+
+/**
+ * The Claude Code block envelope for a stdin-timeout refusal: `decision:
+ * "block"` for legacy CLIs plus the 2.1+ `hookSpecificOutput` PreToolUse deny.
+ * Same shape every PreToolUse gate in this directory emits for a block.
+ */
+export function stdinTimeoutBlockJson(reason: string): string {
+  return JSON.stringify({
+    decision: "block",
+    reason,
+    hookSpecificOutput: {
+      hookEventName: "PreToolUse",
+      permissionDecision: "deny",
+      permissionDecisionReason: reason,
+    },
+  });
 }
 
 // ---------------------------------------------------------------------------

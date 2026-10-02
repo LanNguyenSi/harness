@@ -333,7 +333,7 @@ describe("runPackHookRuntimeRealityCli (entrypoint, real env + probe)", () => {
     expect(stdout.read()).toBe("");
   });
 
-  it("a complete critical-drift payload on a stdin that never closes is still denied (the idle bound ends the read)", async () => {
+  it("a complete critical-drift payload on a stdin that never closes is denied because the read timed out, not for its content", async () => {
     process.env.RUNTIME_REALITY_PROBE_CMD = writeProbe(
       `printf '[{"name":"panel-api","running":true,"startup_mode":"docker","port":3001}]'`,
     );
@@ -348,13 +348,16 @@ describe("runPackHookRuntimeRealityCli (entrypoint, real env + probe)", () => {
       stdinIdleTimeoutMs: 150,
     });
     expect(result.exitCode).toBe(2);
-    expect(JSON.parse(stdout.read()).hookSpecificOutput.permissionDecision).toBe("deny");
-    expect(stderr.read()).toContain(
-      `stdin did not close within 150 ms of the last data; using the ${Buffer.byteLength(TRIGGER_PAYLOAD)} bytes read`,
-    );
+    const deny = JSON.parse(stdout.read()).hookSpecificOutput;
+    expect(deny.permissionDecision).toBe("deny");
+    expect(deny.permissionDecisionReason).toContain("stdin timeout:");
+    expect(deny.permissionDecisionReason).toContain("within 150 ms");
+    // The drift verdict was never reached: the probe's critical drift is not in the reason.
+    expect(deny.permissionDecisionReason).not.toContain("panel-api");
+    expect(stderr.read()).toContain("stdin timeout:");
   });
 
-  it("an idle empty stdin fails open: exit 0, no stdout, a stderr note naming the bound", async () => {
+  it("an idle empty stdin is denied, not allowed: exit 2, a deny envelope naming the stdin timeout and the bound", async () => {
     process.env.RUNTIME_REALITY_PROBE_CMD = writeProbe(
       `printf '[{"name":"panel-api","running":true,"startup_mode":"docker","port":3001}]'`,
     );
@@ -366,11 +369,27 @@ describe("runPackHookRuntimeRealityCli (entrypoint, real env + probe)", () => {
       stderr: stderr.stream,
       stdinIdleTimeoutMs: 100,
     });
+    expect(result.exitCode).toBe(2);
+    expect(result.decision.kind).toBe("block");
+    const deny = JSON.parse(stdout.read()).hookSpecificOutput;
+    expect(deny.permissionDecision).toBe("deny");
+    expect(deny.permissionDecisionReason).toContain("stdin timeout:");
+    expect(deny.permissionDecisionReason).toContain("within 100 ms");
+    expect(stderr.read()).toContain("harness pack hook runtime-reality: BLOCK: stdin timeout:");
+  });
+
+  it("RUNTIME_REALITY_DISABLE still disables the hook on a timed-out read", async () => {
+    process.env.RUNTIME_REALITY_DISABLE = "1";
+    const stdout = bufferStream();
+    const stderr = bufferStream();
+    const result = await runPackHookRuntimeRealityCli({
+      stdin: new PassThrough(),
+      stdout: stdout.stream,
+      stderr: stderr.stream,
+      stdinIdleTimeoutMs: 100,
+    });
     expect(result.exitCode).toBe(0);
     expect(stdout.read()).toBe("");
-    expect(stderr.read()).toContain(
-      "harness pack hook runtime-reality: no complete event JSON on stdin within 100 ms (stdin never closed); continuing as an empty event",
-    );
   });
 
   it("a payload whose chunks arrive inside the idle bound is parsed whole (no timeout note)", async () => {

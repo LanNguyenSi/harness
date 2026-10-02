@@ -30,8 +30,8 @@ import {
   type Probe,
 } from "@lannguyensi/runtime-reality-checker/policy";
 import type { ActualProcessState } from "@lannguyensi/runtime-reality-checker";
-import { readStdinBounded, STDIN_IDLE_TIMEOUT_MS, stdinTimeoutNote } from "../bounded-stdin.js";
-import { checkHookPause } from "./hook-bootstrap.js";
+import { readStdinBounded, STDIN_IDLE_TIMEOUT_MS } from "../bounded-stdin.js";
+import { checkHookPause, stdinTimeoutBlockReason } from "./hook-bootstrap.js";
 
 /** Hard ceiling on a single probe invocation. The hook's own budget_ms
  *  (default 30s) is the outer bound; keep the probe well inside it so a
@@ -135,23 +135,41 @@ export function runRuntimeRealityHook(
 /**
  * Read the PreToolUse event: nothing on a TTY, otherwise to `end` or until no
  * chunk has arrived for the idle bound (task 7dfdcaaf; shared reader in
- * `src/cli/bounded-stdin.ts`). On a timeout the text read so far is returned
- * and a stderr note names the bound; the handler then sees an empty or
- * truncated event, which this fail-open hook already treats as nothing to check.
+ * `src/cli/bounded-stdin.ts`). Reports whether the bound fired so the caller
+ * can refuse the tool call: a timed-out read means the event never finished
+ * arriving, and this PreToolUse gate must not turn that into an allow.
  */
 async function readStdin(
   stream: NodeJS.ReadableStream,
-  stderr: NodeJS.WritableStream,
   idleTimeoutMs: number,
-): Promise<string> {
-  if ((stream as NodeJS.ReadStream).isTTY) return "";
+): Promise<{ text: string; timedOut: boolean }> {
+  if ((stream as NodeJS.ReadStream).isTTY) return { text: "", timedOut: false };
   const read = await readStdinBounded(stream, idleTimeoutMs);
-  if (read.timedOut) {
-    stderr.write(
-      `harness pack hook runtime-reality: ${stdinTimeoutNote(read, idleTimeoutMs, "continuing as an empty event")}\n`,
-    );
-  }
-  return read.text;
+  return { text: read.text, timedOut: read.timedOut };
+}
+
+/** The package handler's own on-switch semantics for its env knobs. */
+function envOn(value: string | undefined): boolean {
+  if (!value) return false;
+  return value === "1" || value.toLowerCase() === "true" || value.toLowerCase() === "yes";
+}
+
+/** Deny result for a timed-out stdin read: Claude Code deny envelope, exit 2. */
+function stdinTimeoutDenyResult(idleTimeoutMs: number): HandlerResult {
+  const reason = stdinTimeoutBlockReason(idleTimeoutMs);
+  return {
+    stdout:
+      JSON.stringify({
+        hookSpecificOutput: {
+          hookEventName: "PreToolUse",
+          permissionDecision: "deny",
+          permissionDecisionReason: reason,
+        },
+      }) + "\n",
+    stderr: `harness pack hook runtime-reality: BLOCK: ${reason}\n`,
+    exitCode: 2,
+    decision: { kind: "block", reason, drift: [] },
+  };
 }
 
 export interface RuntimeRealityCliOptions {
@@ -198,9 +216,11 @@ export async function runPackHookRuntimeRealityCli(
   const stdout = opts.stdout ?? process.stdout;
   const stderr = opts.stderr ?? process.stderr;
 
+  const idleTimeoutMs = opts.stdinIdleTimeoutMs ?? STDIN_IDLE_TIMEOUT_MS;
   let raw = "";
+  let timedOut = false;
   try {
-    raw = await readStdin(stdin, stderr, opts.stdinIdleTimeoutMs ?? STDIN_IDLE_TIMEOUT_MS);
+    ({ text: raw, timedOut } = await readStdin(stdin, idleTimeoutMs));
   } catch {
     return allowResult("stdin read failed, degraded to allow");
   }
@@ -213,6 +233,18 @@ export async function runPackHookRuntimeRealityCli(
   // loaderOpts; that is intentional, not an omission.
   if (checkHookPause("runtime-reality", stderr, undefined, opts.generatedDir, opts.now).paused) {
     return allowResult("harness paused; runtime-reality allowing without evaluating.");
+  }
+
+  // A timed-out read means the event never finished arriving, so this
+  // PreToolUse gate cannot tell whether the tool call is a deploy trigger:
+  // refuse it instead of handing the empty or truncated text to the handler,
+  // which would degrade to allow. The operator pause above and the
+  // package's own RUNTIME_REALITY_DISABLE switch still yield.
+  if (timedOut && !envOn(process.env.RUNTIME_REALITY_DISABLE)) {
+    const denied = stdinTimeoutDenyResult(idleTimeoutMs);
+    stdout.write(denied.stdout);
+    stderr.write(denied.stderr);
+    return denied;
   }
 
   let result: HandlerResult;

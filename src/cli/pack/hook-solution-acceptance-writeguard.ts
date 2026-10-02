@@ -83,7 +83,12 @@ import {
 } from "../../policy-packs/builtin/solution-acceptance-runtime.js";
 import { isReadOnlyBashCommand } from "../../runtime/read-only-bash.js";
 import type { LoaderOptions } from "../loader.js";
-import { checkHookPause, readStdin } from "./hook-bootstrap.js";
+import {
+  checkHookPause,
+  readStdinChecked,
+  stdinTimeoutBlockJson,
+  stdinTimeoutBlockReason,
+} from "./hook-bootstrap.js";
 
 export interface PackHookSolutionAcceptanceWriteguardOptions extends LoaderOptions {
   stdin?: NodeJS.ReadableStream;
@@ -349,7 +354,8 @@ export async function runPackHookSolutionAcceptanceWriteguardCli(
     stderr.write(`harness pack hook solution-acceptance-writeguard: ${msg}\n`);
   };
 
-  const raw = await readStdin(stdin);
+  const stdinRead = await readStdinChecked(stdin);
+  const raw = stdinRead.text;
   let event: ToolEventLite = {};
   try {
     event = JSON.parse(raw.trim() || "{}") as ToolEventLite;
@@ -360,6 +366,18 @@ export async function runPackHookSolutionAcceptanceWriteguardCli(
   if (checkHookPause(`${PACK_NAME}-writeguard`, stderr, opts).paused) {
     const diagnostic = "harness paused; write-guard allowing without evaluating.";
     return { exitCode: 0, blocked: false, diagnostic };
+  }
+
+  // A timed-out stdin read means the event never finished arriving, so this
+  // gate cannot judge the tool call: refuse it instead of treating the empty
+  // or truncated text as a malformed event (task 7dfdcaaf). Only the operator
+  // pause, handled just before, yields.
+  if (stdinRead.timedOut) {
+    const reason = stdinTimeoutBlockReason(stdinRead.idleTimeoutMs);
+    const diagnostic = `BLOCK: ${reason}`;
+    note(diagnostic);
+    stdout.write(`${stdinTimeoutBlockJson(reason)}\n`);
+    return { exitCode: 0, blocked: true, diagnostic };
   }
 
   const toolName = typeof event.tool_name === "string" ? event.tool_name : "(unknown)";

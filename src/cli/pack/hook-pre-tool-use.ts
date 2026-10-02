@@ -115,7 +115,9 @@ import {
   checkHookPause,
   loadManifestOrInjected,
   parseConfigUx,
-  readStdin,
+  readStdinChecked,
+  stdinTimeoutBlockJson,
+  stdinTimeoutBlockReason,
 } from "./hook-bootstrap.js";
 import { renderReportSchemaHint } from "./understanding-report-schema-hint.js";
 
@@ -630,7 +632,8 @@ export async function runPackHookPreToolUseCli(
   // the degradation is loud — a silently-allowing gate manufactures
   // false confidence, which is the worst direction for a governance
   // hook to fail in.
-  const raw = await readStdin(stdin);
+  const stdinRead = await readStdinChecked(stdin);
+  const raw = stdinRead.text;
   let event: ToolEventLite = {};
   try {
     event = JSON.parse(raw.trim() || "{}") as ToolEventLite;
@@ -663,6 +666,23 @@ export async function runPackHookPreToolUseCli(
       exitCode: 0,
       blocked: false,
       approvalCheck: { approved: true, source: "none", detail: diagnostic },
+      diagnostic,
+    };
+  }
+
+  // A timed-out stdin read means the event never finished arriving, so this
+  // gate cannot judge the tool call: refuse it instead of treating the empty
+  // or truncated text as a malformed event (task 7dfdcaaf). Only the operator
+  // pause, handled just before, yields.
+  if (stdinRead.timedOut) {
+    const reason = stdinTimeoutBlockReason(stdinRead.idleTimeoutMs);
+    const diagnostic = `harness pack hook: BLOCK: ${reason}`;
+    stderr.write(`${diagnostic}\n`);
+    stdout.write(`${stdinTimeoutBlockJson(reason)}\n`);
+    return {
+      exitCode: 0,
+      blocked: true,
+      approvalCheck: { approved: false, source: "none", detail: reason },
       diagnostic,
     };
   }

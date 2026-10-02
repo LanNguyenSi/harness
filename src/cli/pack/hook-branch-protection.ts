@@ -57,7 +57,9 @@ import {
   checkHookPause,
   loadManifestOrInjected,
   parseConfigUx,
-  readStdin,
+  readStdinChecked,
+  stdinTimeoutBlockJson,
+  stdinTimeoutBlockReason,
 } from "./hook-bootstrap.js";
 
 export interface PackHookBranchProtectionOptions extends LoaderOptions {
@@ -309,7 +311,8 @@ export async function runPackHookBranchProtectionCli(
   // (the inverse of understanding-before-execution's allow-on-malformed
   // default): we'd rather block a Write we couldn't classify than let
   // it through silently.
-  const raw = await readStdin(stdin);
+  const stdinRead = await readStdinChecked(stdin);
+  const raw = stdinRead.text;
   let event: ToolEventLite = {};
   try {
     event = JSON.parse(raw.trim() || "{}") as ToolEventLite;
@@ -324,6 +327,18 @@ export async function runPackHookBranchProtectionCli(
   if (checkHookPause("branch-protection", stderr, opts).paused) {
     const diagnostic = "harness paused; branch-protection allowing without evaluating.";
     return { exitCode: 0, blocked: false, diagnostic };
+  }
+
+  // A timed-out stdin read means the event never finished arriving, so this
+  // gate cannot judge the tool call: refuse it instead of treating the empty
+  // or truncated text as a malformed event (task 7dfdcaaf). Only the operator
+  // pause, handled just before, yields.
+  if (stdinRead.timedOut) {
+    const reason = stdinTimeoutBlockReason(stdinRead.idleTimeoutMs);
+    const diagnostic = `BLOCK: ${reason}`;
+    note(diagnostic);
+    stdout.write(`${stdinTimeoutBlockJson(reason)}\n`);
+    return { exitCode: 0, blocked: true, diagnostic };
   }
 
   const sessionId =

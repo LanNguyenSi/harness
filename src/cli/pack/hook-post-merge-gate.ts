@@ -45,6 +45,11 @@
 // indistinguishable, and fail-closed here would block ordinary git
 // history work on every branch whenever grounding-mcp hiccups. See
 // post-merge-gate-runtime.ts's header for the full rationale.
+//
+// The one exception is a stdin read that times out (the idle bound in
+// src/cli/bounded-stdin.ts fired before stdin closed): the event never
+// finished arriving, so the command cannot even be classified, and the gate
+// BLOCKS instead of allowing (the operator pause still yields).
 
 import {
   isEscapeCommand,
@@ -60,7 +65,14 @@ import { renderAgentFacing } from "../../runtime/agent-facing.js";
 import { POLICY_DECISION_TYPE } from "../../io/ledger-record.js";
 import { type Manifest, type McpServer, type PolicyUx } from "../../schema/index.js";
 import { type LoaderOptions } from "../loader.js";
-import { checkHookPause, loadManifestOrInjected, parseConfigUx, readStdin } from "./hook-bootstrap.js";
+import {
+  checkHookPause,
+  loadManifestOrInjected,
+  parseConfigUx,
+  readStdinChecked,
+  stdinTimeoutBlockJson,
+  stdinTimeoutBlockReason,
+} from "./hook-bootstrap.js";
 
 const DEFAULT_BRANCH_PLACEHOLDER = "<default-branch>";
 
@@ -222,20 +234,37 @@ export async function runPackHookPostMergeGateCli(
     stderr.write(`harness pack hook post-merge-gate: ${msg}\n`);
   };
 
-  const raw = await readStdin(stdin);
+  const stdinRead = await readStdinChecked(stdin);
+  const raw = stdinRead.text;
   let event: ToolEventLite = {};
   try {
     event = JSON.parse(raw.trim() || "{}") as ToolEventLite;
   } catch {
-    const diagnostic = "malformed event JSON, cannot classify; allowing";
-    note(diagnostic);
-    return { exitCode: 0, blocked: false, diagnostic };
+    // A truncated event from a timed-out read is refused below, after the
+    // pause check, instead of being allowed as malformed.
+    if (!stdinRead.timedOut) {
+      const diagnostic = "malformed event JSON, cannot classify; allowing";
+      note(diagnostic);
+      return { exitCode: 0, blocked: false, diagnostic };
+    }
   }
 
   // Pause sentinel — even this gate yields to an operator pause.
   if (checkHookPause(PACK_NAME, stderr, opts).paused) {
     const diagnostic = "harness paused; post-merge-gate allowing without evaluating.";
     return { exitCode: 0, blocked: false, diagnostic };
+  }
+
+  // A timed-out stdin read means the event never finished arriving, so this
+  // gate cannot judge the tool call: refuse it instead of treating the empty
+  // or truncated text as a malformed event (task 7dfdcaaf). Only the operator
+  // pause, handled just before, yields.
+  if (stdinRead.timedOut) {
+    const reason = stdinTimeoutBlockReason(stdinRead.idleTimeoutMs);
+    const diagnostic = `BLOCK: ${reason}`;
+    note(diagnostic);
+    stdout.write(`${stdinTimeoutBlockJson(reason)}\n`);
+    return { exitCode: 0, blocked: true, diagnostic };
   }
 
   const sessionId =
