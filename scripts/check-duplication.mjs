@@ -241,8 +241,10 @@ import * as path from "node:path";
 // marker resolution itself is already shared), so the pin follows the
 // measured count instead of folding runtime-specific state into one helper.
 // Lowered to 91 (task c8cfc110): the end-only stdin readers in the
-// session-start shared options and in policy intercept each mirrored the
-// bounded one in session-start preflight; all five entries now share
+// session-start shared options and in policy intercept each formed a clone
+// pair with the end-only reader in pack/hook-bootstrap.ts (so the
+// `hook-bootstrap.ts` <-> `cli/policy/intercept.ts` pair named above is gone
+// too); all five session-start and intercept entries now share
 // src/cli/bounded-stdin.ts. The check reported 93 on master and 91 after.
 const MAX_CLONES = 91;
 
