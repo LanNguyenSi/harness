@@ -1067,6 +1067,8 @@ describe("codex install: marker text that is not a whole top-level comment line 
     const p = planTwice();
     expect(p.removedHookIds).toEqual(["old"]);
     expect(count(p.nextContent, "harness pack hook old")).toBe(0);
+    // The block opens at its own source-prefix line, so that line is replaced too.
+    expect(p.nextContent).not.toContain(SOURCE_PREFIX);
     expect(count(p.nextContent, 'command = "harness pack hook a"')).toBe(1);
     expect(p.nextContent).toContain(STRING_VALUE_SOURCE_TAIL.join("\n"));
     expect(p.nextContent).toContain("[tui]\ntheme = 1\n");
