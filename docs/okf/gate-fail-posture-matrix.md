@@ -3,7 +3,7 @@ type: overview
 title: Gate fail-posture matrix
 description: Which harness enforcement gates fail OPEN vs fail CLOSED when their evidence source (grounding-mcp ledger, approval markers, verdict files, probes) is unreachable or errors, with the exact code paths and override knobs.
 tags: [gates, fail-open, fail-closed, enforcement]
-timestamp: 2026-10-02T07:51:17Z
+timestamp: 2026-10-02T09:13:01Z
 sources:
   - src/cli/pack/auto-approve-path.ts
   - src/cli/pack/hook-codex-pre-tool-use.ts
@@ -21,6 +21,10 @@ sources:
   - src/cli/pack/hook-solution-acceptance.ts
   - src/runtime/task-providers/agent-tasks.ts
   - src/cli/pack/hook-runtime-reality.ts
+  - src/cli/pack/hook-bootstrap.ts
+  - src/cli/bounded-stdin.ts
+  - src/cli/pack/hook-solution-acceptance-writeguard.ts
+  - src/cli/pack/hook-post-merge-gate.ts
   - src/policy-packs/builtin/understanding-before-execution/inflight-records.ts
 ---
 
@@ -59,9 +63,13 @@ Header contract in `src/cli/pack/hook-solution-acceptance.ts` (lines 19–22): a
 
 `docs/runtime-reality-hook.md` (line 14): "Every load or probe error degrades to allow: a misconfigured probe never tarpits the session. The only deny path is a probe that actually produced state showing critical drift." The source (`src/cli/pack/hook-runtime-reality.ts`) mirrors this: stdin read failure, hook construction failure, unset `RUNTIME_REALITY_KEYWORD` (no baseline), and unset `RUNTIME_REALITY_PROBE_CMD` (nothing to compare) all resolve via `allowResult(...)`; a thrown/hung probe (10s subprocess timeout) is treated as "probe failed" under the same fail-open policy. Operators can invert per tier (env toggles documented in `docs/runtime-reality-hook.md`'s reference table; the escalation logic lives in the external `@lannguyensi/runtime-reality-checker` package, not in the hook file): `RUNTIME_REALITY_PROBE_FAIL_BLOCK=1` denies on probe failure, `RUNTIME_REALITY_WARN_AS_BLOCK=1` escalates warnings, `RUNTIME_REALITY_CRITICAL_AS_WARN=1` degrades critical drift to allow, `RUNTIME_REALITY_DISABLE=1` short-circuits entirely. This fail-open default is why `harness init --template full` ships the hook entry commented out: an active entry without the three env values "would degrade to a silent allow (a no-op that looks like protection)".
 
-## Pack hooks: a stdin that never closes decides like an empty or truncated event (task `7dfdcaaf`)
+## Pack hooks: a PreToolUse gate blocks on a timed-out stdin read (task `7dfdcaaf`)
 
-The pack hooks read the event JSON through one idle-bounded reader (`readStdin` in `src/cli/pack/hook-bootstrap.ts`, the reader in `src/cli/pack/hook-runtime-reality.ts`, both on `src/cli/bounded-stdin.ts`, 3000 ms without a chunk). Claude Code closes stdin after writing the event, so only an open, never-closed pipe reaches the bound; before the bound the hook waited for the host's own hook timeout. On a timeout the reader returns the text read so far with one stderr note, and the hook's existing parse step takes over, so a timeout is not a decision of its own and no gate gets a new posture: the table above applies unchanged to a timeout. Measured with a child process holding stdin open: `branch-protection` on a protected branch with no session id blocks (`no session_id resolvable`); `solution-acceptance` allows an empty event (`is not a gated completion action`) and refuses a readable completion action; the understanding gate, `codex-pre-tool-use`, the solution-acceptance write guard and `runtime-reality` allow an empty event; a complete event that merely never closes is decided on its content by every one of them. The understanding gate's allow on an empty event is its documented fail-open on unparseable input, not a timeout-specific allow; a deny-on-timeout was not chosen because the host never produces the condition and an empty event is already what the gate allows today.
+The pack hooks read the event JSON through one idle-bounded reader (`readStdin`, `readStdinChecked` and the gate wrapper `runGateWithStdinRefusal` in `src/cli/pack/hook-bootstrap.ts`, the reader in `src/cli/pack/hook-runtime-reality.ts`, both on `src/cli/bounded-stdin.ts`, 3000 ms without a chunk). Claude Code closes stdin after writing the event, so only an open pipe that stays quiet for the bound reaches it; before the bound the hook waited for the host's own hook timeout, and a writer that was merely late (first byte or a mid-event stall longer than the bound, then the full event and a close) was still decided on its content.
+
+A timeout is not an allow for a gate. Every PreToolUse gate verb fails CLOSED on a timed-out read, whether nothing, a partial event, or a complete event on a stdin that never closed was read: it blocks with a reason starting `stdin timeout:` that names the bound, instead of its empty or malformed event handling. The Claude Code gates (`pre-tool-use`, `branch-protection`, `solution-acceptance`, `solution-acceptance-writeguard`, `post-merge-gate`) write the usual `decision: "block"` envelope and exit 0, `codex-pre-tool-use` exits 2 with the reason on stderr, `runtime-reality` writes its `permissionDecision: "deny"` envelope and exits 2. The decision is taken right after the read and the operator pause check, before the manifest is loaded: the pause sentinel still yields (and `RUNTIME_REALITY_DISABLE` still disables `runtime-reality`), and a gate whose pack is disabled or undeclared also blocks on a timeout. This is a timeout-specific exception to the fail-open rows above: the understanding gate's allow on an empty event, `solution-acceptance-writeguard`'s allow on an unguarded surface, `post-merge-gate`'s allow on malformed JSON and `runtime-reality`'s degrade-to-allow all apply to an event that CLOSED, not to one that timed out. `branch-protection` already blocked an empty event, and its timeout block now also covers a partial or complete event. Measured with a child process holding stdin open (empty and complete events) and with a writer that waits past the bound and then writes the full gated event and closes: every gate verb blocks in both cases.
+
+Every other pack hook (PostToolUse, Stop, SubagentStart and SubagentStop, UserPromptSubmit, `post-merge-gate-record`, `stay-in-scope`) is not a gate: on a timeout it writes one stderr note and treats the text read so far exactly like the same bytes on a closed stdin.
 
 ## `bash_match` normalised-form matching: fail open above a size bound, now loud
 
