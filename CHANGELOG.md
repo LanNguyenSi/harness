@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Upgrade notes
+
+- `harness policy intercept` (the PreToolUse hook of the policy engine) now blocks when its stdin does not deliver a complete, closed event within 3000 ms of idle time, instead of continuing as an empty event. Claude Code and Codex close stdin after writing the event, so normal use is unaffected; `harness pause` still wins.
+
+### Fixed
+
+- **`harness policy intercept` blocks a PreToolUse call on a timed-out stdin read instead of allowing it** (task `aca3de04`, follow-up to `7dfdcaaf`). After the idle-bounded read timed out (3000 ms without a chunk) the intercept continued as an empty event, which matches no policy and allows, so a host that stalled past the bound and then wrote a complete gated event and closed got an allow where the policy would have blocked (the hook had already exited when the event arrived). A timed-out read now refuses the tool call after the operator pause check: a reason starting `stdin timeout:` that names the 3000 ms bound, the usual `decision: "block"` envelope with the PreToolUse `permissionDecision: "deny"` on stdout, exit 0, one `BLOCK` line on stderr, and no policy is evaluated, so it applies whatever the declared enforcement tiers are. The hook command carries no event name, so the event the read itself declares decides: a timed-out read whose text is a JSON object naming a hook event other than `PreToolUse` keeps the previous behaviour (the `using the N bytes read` note, then the event is evaluated like any other); anything else (nothing read, a truncated or unparseable prefix, a `PreToolUse` event, an object with no event name) is treated as the PreToolUse call the verb is registered for. A stdin that closes within the bound is decided exactly as before, and the empty-event note `continuing as an empty event` is no longer written by this verb.
+
 ## [0.61.0] - 2026-10-02
 
 ### Upgrade notes
