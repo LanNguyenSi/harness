@@ -2,7 +2,7 @@
 
 <!-- Add new entries at the top, newest first. -->
 
-- 2026-10-02T07:47:13Z, task 36d962d2: `src/cli/apply/install-codex-config.ts` now finds a legacy block's opening line (source prefix or generated header) only as a whole top-level comment line, starts the split-block zone after that line, and offers the add-an-END fix of the no-END refusal only when no harness-commented hook table, in either spelling, follows the named table. `codex-adapter-parity-gaps.md` (which lists the file under sources) was re-verified against the changed code; its paragraph on what the install reads after the harness block carries the three behaviours, and it is re-stamped.
+- 2026-10-02T08:16:15Z, task 36d962d2: `src/cli/apply/install-codex-config.ts` now finds every managed-block marker (BEGIN, END, source prefix, generated header, `# harness hook:` comment) by one rule, a whole trimmed line at the top level of the document, starts the split-block zone of a legacy block after its opening line, and offers the add-an-END fix of the no-END refusal only when no harness-commented hook table, in either spelling, follows the named table. `codex-adapter-parity-gaps.md` (which lists the file under sources) was re-verified against the changed code; its paragraph on what the install reads after the harness block states the one-marker-rule and the two other behaviours, and it is re-stamped.
 
 - 2026-10-02T06:37:19Z, task 237cc609: `docs/CLI.md` now names the six gate-opening namespaces the free-text check uses; the four docs listing it re-verified (no claim affected) and re-stamped.
 
