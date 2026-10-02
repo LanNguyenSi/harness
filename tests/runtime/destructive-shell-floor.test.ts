@@ -655,6 +655,8 @@ describe("built-in destructive floor: a NUL-escaped word is classified like its 
     ["mkfs.ext4, NUL-escaped head", "$'mkfs.ext4\\0' /dev/sdb1", "critical"],
     ["a nested shell -c with a NUL-escaped dd", "bash -c \"$'dd\\0' of=/dev/sda\"", "critical"],
     ["a NUL-escaped shell head with a nested dd", "$'bash\\0' -c 'dd of=/dev/sda'", "critical"],
+    ["a NUL-escaped shell head whose nested command spans a boundary", "$'bash\\0' -c \"dd of=/dev/sda; echo\"", "critical"],
+    ["the plain twin of that nested command", "bash -c \"dd of=/dev/sda; echo\"", "critical"],
     ["chmod -R, NUL-escaped head", "$'chmod\\0' -R 777 /", "high"],
     ["sed -i, NUL-escaped head", "$'sed\\0' -i s/a/b/ f", "high"],
     ["curl -o, NUL-escaped head", "$'curl\\0' -o /etc/x http://h", "high"],
