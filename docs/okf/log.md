@@ -2,6 +2,8 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-10-02T07:51:17Z, task 7dfdcaaf: `src/cli/pack/hook-bootstrap.ts` and `src/cli/pack/hook-runtime-reality.ts` now read stdin through the shared idle-bounded reader in `src/cli/bounded-stdin.ts`, and `docs/CLI.md` (STDIN HANDLING) says so. `gate-fail-posture-matrix.md` gained a section stating that a timeout decides like an empty or truncated event for each pack hook (measured with a child process holding stdin open); `codex-adapter-parity-gaps.md`, `pause-vs-gate-kill-switch.md`, `understanding-gate-auto-mode-signals.md`, `debug-verb-selection.md`, `evidence-ledger-trust-boundary.md` and `policy-engine-producer-wiring.md` list one or more of the changed files under sources and were re-verified: none states how the hooks read stdin, so no body text changed. All seven re-stamped.
+
 - 2026-10-02T07:22:49Z, task eed7c036: re-stamped after merging master; `codex-adapter-parity-gaps.md`, `understanding-gate-lockout-recovery.md` list sources that master changed in the meantime. The merged changes come from separately reviewed tasks and none contradicts these docs' claims, so no body text changed.
 
 - 2026-10-02T07:15:43Z, task eed7c036: `src/policy-packs/builtin/understanding-before-execution.ts` changed only in the `ResolvePackOptions.reportsDir` comment (the prefix goes on each report-reading hook command); `codex-adapter-parity-gaps.md` and `understanding-gate-lockout-recovery.md` list it under sources and were re-verified, no claim affected, re-stamped only.

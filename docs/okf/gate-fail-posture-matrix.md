@@ -3,7 +3,7 @@ type: overview
 title: Gate fail-posture matrix
 description: Which harness enforcement gates fail OPEN vs fail CLOSED when their evidence source (grounding-mcp ledger, approval markers, verdict files, probes) is unreachable or errors, with the exact code paths and override knobs.
 tags: [gates, fail-open, fail-closed, enforcement]
-timestamp: 2026-10-02T07:06:38Z
+timestamp: 2026-10-02T07:51:17Z
 sources:
   - src/cli/pack/auto-approve-path.ts
   - src/cli/pack/hook-codex-pre-tool-use.ts
@@ -58,6 +58,10 @@ Header contract in `src/cli/pack/hook-solution-acceptance.ts` (lines 19–22): a
 ## runtime-reality: fail open, with an opt-in fail-closed knob
 
 `docs/runtime-reality-hook.md` (line 14): "Every load or probe error degrades to allow: a misconfigured probe never tarpits the session. The only deny path is a probe that actually produced state showing critical drift." The source (`src/cli/pack/hook-runtime-reality.ts`) mirrors this: stdin read failure, hook construction failure, unset `RUNTIME_REALITY_KEYWORD` (no baseline), and unset `RUNTIME_REALITY_PROBE_CMD` (nothing to compare) all resolve via `allowResult(...)`; a thrown/hung probe (10s subprocess timeout) is treated as "probe failed" under the same fail-open policy. Operators can invert per tier (env toggles documented in `docs/runtime-reality-hook.md`'s reference table; the escalation logic lives in the external `@lannguyensi/runtime-reality-checker` package, not in the hook file): `RUNTIME_REALITY_PROBE_FAIL_BLOCK=1` denies on probe failure, `RUNTIME_REALITY_WARN_AS_BLOCK=1` escalates warnings, `RUNTIME_REALITY_CRITICAL_AS_WARN=1` degrades critical drift to allow, `RUNTIME_REALITY_DISABLE=1` short-circuits entirely. This fail-open default is why `harness init --template full` ships the hook entry commented out: an active entry without the three env values "would degrade to a silent allow (a no-op that looks like protection)".
+
+## Pack hooks: a stdin that never closes decides like an empty or truncated event (task `7dfdcaaf`)
+
+The pack hooks read the event JSON through one idle-bounded reader (`readStdin` in `src/cli/pack/hook-bootstrap.ts`, the reader in `src/cli/pack/hook-runtime-reality.ts`, both on `src/cli/bounded-stdin.ts`, 3000 ms without a chunk). Claude Code closes stdin after writing the event, so only an open, never-closed pipe reaches the bound; before the bound the hook waited for the host's own hook timeout. On a timeout the reader returns the text read so far with one stderr note, and the hook's existing parse step takes over, so a timeout is not a decision of its own and no gate gets a new posture: the table above applies unchanged to a timeout. Measured with a child process holding stdin open: `branch-protection` on a protected branch with no session id blocks (`no session_id resolvable`); `solution-acceptance` allows an empty event (`is not a gated completion action`) and refuses a readable completion action; the understanding gate, `codex-pre-tool-use`, the solution-acceptance write guard and `runtime-reality` allow an empty event; a complete event that merely never closes is decided on its content by every one of them. The understanding gate's allow on an empty event is its documented fail-open on unparseable input, not a timeout-specific allow; a deny-on-timeout was not chosen because the host never produces the condition and an empty event is already what the gate allows today.
 
 ## `bash_match` normalised-form matching: fail open above a size bound, now loud
 
