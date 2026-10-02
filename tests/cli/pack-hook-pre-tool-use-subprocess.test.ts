@@ -542,6 +542,60 @@ fs.openSync = function (p, ...rest) {
 syncBuiltinESMExports();
 `;
 
+// Preloads for the consume step's WRITE (loaded into the hook process with
+// NODE_OPTIONS=--import). The consume step writes the approved report through
+// a temp file in the agent-writable reports directory.
+//
+// SPRAY plants FIFOs, at process start, at every name the former scheme
+// `.<base>.<pid>.<millisecond>.tmp` could produce for the next few seconds
+// (the hook's own pid is known inside the process, which is what an attacker
+// reading the process table gets). A writer that opens a predictable name
+// without O_EXCL blocks on one of them until the kill; one that keeps a
+// predictable name but opens with O_EXCL declines on the first; one with an
+// unpredictable name never meets one. The number planted goes to SPRAY_COUNT_FILE.
+const SPRAY_PRELOAD = `import fs from "node:fs";
+import path from "node:path";
+import { spawnSync } from "node:child_process";
+const dir = process.env.SPRAY_DIR;
+const base = process.env.SPRAY_BASE;
+const now = Date.now();
+const names = [];
+for (let ms = now - 50; ms <= now + 4000; ms++) {
+  names.push(path.join(dir, "." + base + "." + process.pid + "." + ms + ".tmp"));
+}
+for (let i = 0; i < names.length; i += 500) {
+  spawnSync("mkfifo", names.slice(i, i + 500));
+}
+fs.writeFileSync(process.env.SPRAY_COUNT_FILE, String(names.filter((n) => fs.existsSync(n)).length));
+`;
+
+// PLANT_AT_CHOSEN_NAME plants one entry at the temp name the write chose, right
+// before the first open of it: the attack with a name the attacker knows. The
+// kind is PLANT_KIND (fifo | symlink | file); a symlink points at PLANT_OUTSIDE.
+// The planted path goes to PLANT_RECORD_FILE.
+const PLANT_AT_CHOSEN_NAME_PRELOAD = `import fs from "node:fs";
+import path from "node:path";
+import { spawnSync } from "node:child_process";
+import { syncBuiltinESMExports } from "node:module";
+const dir = process.env.PLANT_DIR;
+const base = process.env.PLANT_BASE;
+const kind = process.env.PLANT_KIND;
+const openSync = fs.openSync;
+let planted = false;
+fs.openSync = function (p, ...rest) {
+  const s = String(p);
+  if (!planted && path.dirname(s) === dir && path.basename(s).startsWith("." + base + ".") && s.endsWith(".tmp")) {
+    planted = true;
+    if (kind === "fifo") spawnSync("mkfifo", [s]);
+    else if (kind === "symlink") fs.symlinkSync(process.env.PLANT_OUTSIDE, s);
+    else fs.writeFileSync(s, "planted\\n");
+    fs.writeFileSync(process.env.PLANT_RECORD_FILE, s);
+  }
+  return openSync.call(this, p, ...rest);
+};
+syncBuiltinESMExports();
+`;
+
 const MANIFEST_WITH_AUTO_APPROVE = `version: 1
 policy_packs:
   - name: understanding-before-execution
@@ -775,6 +829,80 @@ describe.each(E2E_RUNTIMES)(
           const consumed = JSON.parse(fs.readFileSync(report, "utf8")) as Record<string, unknown>;
           expect(consumed["approvalStatus"]).toBe("approved");
           expect(consumed["currentUnderstanding"]).toBe("the auto path under test");
+        },
+        60_000,
+      );
+
+      // The consume step's temp file. Its name used to be `.<base>.<pid>.<ms>.tmp`
+      // opened with plain "w": a FIFO planted at the name hung the hook (the
+      // call then proceeds as a non-blocking hook error), a symlink was
+      // written through. The name is random and opened with O_EXCL now.
+      it("auto-approval consume: FIFOs planted at every former pid.millisecond temp name do not hang the hook, and the report is still minted", async () => {
+        const { reportsDir, run, writePending } = await setup(session, refused);
+        const report = writePending("r1.json", new Date(Date.now() - 60_000).toISOString());
+        const preload = path.join(tmpDir, "spray.mjs");
+        fs.writeFileSync(preload, SPRAY_PRELOAD);
+        const countFile = path.join(tmpDir, "spray-count");
+        const bound = 10_000;
+
+        const result = run(bound, {
+          NODE_OPTIONS: `--import=${pathToFileURL(preload).href}`,
+          SPRAY_DIR: reportsDir,
+          SPRAY_BASE: "r1.json",
+          SPRAY_COUNT_FILE: countFile,
+        });
+
+        // The spray really ran: thousands of FIFOs sit at the old names.
+        expect(Number(fs.readFileSync(countFile, "utf8"))).toBeGreaterThan(3000);
+        expect(result.timedOut).toBe(false);
+        expect(result.ms).toBeLessThan(bound);
+        expect(result.stderr).toMatch(/auto-approved/);
+        expect(status(report)).toBe("approved");
+        // Nothing the hook did touched the planted names.
+        const fifos = fs.readdirSync(reportsDir).filter((n) => /^\.r1\.json\.\d+\.\d+\.tmp$/.test(n));
+        expect(fifos.length).toBeGreaterThan(3000);
+      }, 60_000);
+
+      it.each([
+        ["a FIFO with no reader", "fifo"],
+        ["a symlink to a file outside the reports directory", "symlink"],
+        ["a regular file", "file"],
+      ] as const)(
+        "auto-approval consume: %s planted at the chosen temp name declines within the bound, the report stays pending, nothing is written through or removed",
+        async (_label, kind) => {
+          const { reportsDir, run, writePending } = await setup(session, refused);
+          const report = writePending("r1.json", new Date(Date.now() - 60_000).toISOString());
+          const outside = path.join(tmpDir, "outside-victim.txt");
+          fs.writeFileSync(outside, "victim\n");
+          const preload = path.join(tmpDir, "plant-at-chosen-name.mjs");
+          fs.writeFileSync(preload, PLANT_AT_CHOSEN_NAME_PRELOAD);
+          const recordFile = path.join(tmpDir, "plant-record");
+          const bound = 10_000;
+
+          const result = run(bound, {
+            NODE_OPTIONS: `--import=${pathToFileURL(preload).href}`,
+            PLANT_DIR: reportsDir,
+            PLANT_BASE: "r1.json",
+            PLANT_KIND: kind,
+            PLANT_OUTSIDE: outside,
+            PLANT_RECORD_FILE: recordFile,
+          });
+
+          // The plant really happened, at a name inside the reports directory.
+          const plantedPath = fs.readFileSync(recordFile, "utf8");
+          expect(path.dirname(plantedPath)).toBe(reportsDir);
+          // A blocking open() of the FIFO would wait for a reader forever; the
+          // child would be killed at the bound and reported as timed out.
+          expect(result.timedOut).toBe(false);
+          expect(result.ms).toBeLessThan(bound);
+          rt.expectBlock(result);
+          expect(result.stderr).toMatch(/auto-approval declined: could not consume the report \(.*EEXIST/);
+          expect(status(report)).toBe("pending");
+          // Not written through the link, and the planted entry was not ours to remove.
+          expect(fs.readFileSync(outside, "utf8")).toBe("victim\n");
+          const entry = fs.lstatSync(plantedPath);
+          expect(kind === "fifo" ? entry.isFIFO() : kind === "symlink" ? entry.isSymbolicLink() : entry.isFile()).toBe(true);
+          if (kind === "file") expect(fs.readFileSync(plantedPath, "utf8")).toBe("planted\n");
         },
         60_000,
       );
