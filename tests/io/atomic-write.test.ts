@@ -3,7 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { execFileSync, spawnSync } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   ATOMIC_WRITE_TEMP_FLAGS,
   atomicWriteFile,
@@ -89,11 +89,16 @@ describe("atomicWriteFile: the temp file is created by this call or the write fa
 
   it("does not use the old pid.millisecond name: files planted at every such name do not stop a default write", () => {
     const target = path.join(tmpDir, "h.yaml");
-    const now = Date.now();
-    for (let ms = now - 20; ms < now + 400; ms++) {
-      fs.writeFileSync(path.join(tmpDir, tmpName("h.yaml", String(ms))), "planted");
+    // The clock is pinned so a millisecond-derived suffix collides with the
+    // planted name on every run, with no timing window to miss.
+    const now = 1_790_000_000_000;
+    const clock = vi.spyOn(Date, "now").mockReturnValue(now);
+    try {
+      fs.writeFileSync(path.join(tmpDir, tmpName("h.yaml", String(now))), "planted");
+      atomicWriteFile(target, "ok\n");
+    } finally {
+      clock.mockRestore();
     }
-    atomicWriteFile(target, "ok\n");
     expect(fs.readFileSync(target, "utf8")).toBe("ok\n");
   });
 
