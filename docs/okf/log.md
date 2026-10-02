@@ -2,6 +2,12 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-10-02T06:37:19Z, task 237cc609: `docs/CLI.md` now names the six gate-opening namespaces the free-text check uses; the four docs listing it re-verified (no claim affected) and re-stamped.
+
+- 2026-10-02T06:32:28Z, task 237cc609: `docs/CLI.md` tag-injection paragraph worded exactly (trimmed values, non-whitespace after the colon, free text checked against builtin namespaces only, task/PR/branch values share namespaces); `codex-adapter-parity-gaps.md`, `debug-verb-selection.md`, `evidence-ledger-trust-boundary.md` and `policy-engine-producer-wiring.md` list it under sources and were re-verified, no body text changed. All four re-stamped.
+
+- 2026-10-02T06:21:03Z, task 237cc609: `docs/CLI.md` (Tag-injection validation) now states what the `harness record` verbs refuse: a `:` or ASCII whitespace in `--branch` (also when resolved from git), `--base`, `--task`, `--pr` and the dogfood session id, and a recognised `<namespace>:` glued to a following non-space character in `--verdict` and the summaries (exit 64), plus that task and branch values share a tag namespace. `codex-adapter-parity-gaps.md`, `debug-verb-selection.md`, `evidence-ledger-trust-boundary.md` and `policy-engine-producer-wiring.md` list `docs/CLI.md` under sources and were re-verified against the changed verbs: none states what the record verbs accept, so no claim changed; re-stamped only.
+
 - 2026-10-02T06:15:12Z, task dac02d5c: `gate-fail-posture-matrix.md` re-stamped after merging master, where task c8cfc110 changed its source `src/cli/policy/intercept.ts` (stdin read only); its fail-posture claims, including the subagent-start report-hash cross-check added by this task, still hold, no body text changed.
 
 - 2026-10-02T06:12:10Z, task 5cc64860: `policy-engine-producer-wiring.md` re-stamped after merging master, where task c8cfc110 changed two of its sources (`src/cli/policy/intercept.ts`, stdin read only, and `docs/CLI.md`); its claims about the deletion resolver (this task) and about intercept's evaluation order still hold, no body text changed.

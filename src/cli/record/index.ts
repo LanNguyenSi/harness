@@ -184,22 +184,48 @@ function requireNonEmpty(
 }
 
 /**
- * An OPTIONAL tag value: absent stays absent, present must be a non-empty
- * token with no internal whitespace. The shape check is deliberately loose
- * (task 2699b476): the id only namespaces a ledger tag, so anything the
- * gate's `${TASK_ID}` substitution can compare against is acceptable, but
- * a value carrying whitespace would split into two tags in the fact
- * content and silently satisfy a gate keyed on the first half.
+ * Ledger tag namespaces the shipped gates read (`requires.ledger_tag`).
+ * Used for FREE TEXT only (`--verdict`, summaries): the matcher is a
+ * case-sensitive substring test (`src/policies/requires.ts`), so free text
+ * carrying `<namespace>:` glued to a following value reads as a tag.
+ * Ref-like and id-like values are checked structurally instead (no `:`, no
+ * whitespace), which closes every namespace including custom ones.
  */
-function optionalTagValue(
-  value: string | undefined,
+const TAG_NAMESPACES = [
+  "review-subagent",
+  "review",
+  "dogfood",
+  "preflight",
+  "risk-approved",
+  "risk-override",
+];
+// `<namespace>:` immediately followed by a non-whitespace character; prose such
+// as "code-review: approved" is not a tag token because a gate's substituted
+// value is never empty and never starts with a space.
+const TAG_TOKEN_RE = new RegExp(`(?:${TAG_NAMESPACES.join("|")}):(?=\\S)`);
+
+// ASCII whitespace only: git ref names forbid exactly these, and Unicode
+// whitespace without a `:` cannot form a tag token under substring matching.
+const ASCII_WHITESPACE_RE = /[ \t\r\n\v\f]/;
+
+/**
+ * A tag value: a ref-like or id-like token (`--branch`, `--base`, `--task`,
+ * `--pr`, dogfood `--session`) that is embedded in a ledger tag. It must be
+ * non-empty, free of ASCII whitespace (the fact content is space-separated
+ * tag text, so whitespace would split into a second tag) and free of `:`
+ * (a `:` is what turns a value into `<namespace>:<value>` tag text). Git ref
+ * names forbid both characters, so no real branch is refused. The shape is
+ * otherwise loose (task 2699b476): anything the gate's `${TASK_ID}`
+ * substitution can compare against is acceptable (task 237cc609).
+ */
+function checkTagValue(
+  value: string,
   flagLabel: string,
   sessionId: string,
   note: (msg: string) => void,
-): { ok: true; value: string | undefined } | { ok: false; result: RecordResult } {
-  if (value === undefined) return { ok: true, value: undefined };
+): { ok: true; value: string } | { ok: false; result: RecordResult } {
   const trimmed = value.trim();
-  if (trimmed.length === 0 || /\s/.test(trimmed)) {
+  if (trimmed.length === 0 || ASCII_WHITESPACE_RE.test(trimmed)) {
     return usageFailure(
       `${flagLabel} must be a non-empty value with no whitespace ` +
         `(it namespaces one ledger tag); got ${JSON.stringify(value)}`,
@@ -207,8 +233,83 @@ function optionalTagValue(
       note,
     );
   }
+  if (trimmed.includes(":")) {
+    return usageFailure(
+      `${flagLabel} must not contain ':' (it would plant ledger tag text such as ` +
+        `${TAG_NAMESPACES.map((n) => `${n}:`).join(", ")}); got ${JSON.stringify(value)}`,
+      sessionId,
+      note,
+    );
+  }
   return { ok: true, value: trimmed };
 }
+
+/** An OPTIONAL tag value: absent stays absent, present goes through `checkTagValue`. */
+function optionalTagValue(
+  value: string | undefined,
+  flagLabel: string,
+  sessionId: string,
+  note: (msg: string) => void,
+): { ok: true; value: string | undefined } | { ok: false; result: RecordResult } {
+  if (value === undefined) return { ok: true, value: undefined };
+  return checkTagValue(value, flagLabel, sessionId, note);
+}
+
+/**
+ * Free text (`--verdict`, summaries) stays free, but may not carry a
+ * recognised `<namespace>:` immediately followed by a non-whitespace character:
+ * the text lands verbatim in the fact content, where the substring matcher
+ * would read that as a tag. Prose like "code-review: approved" is kept. Rejected
+ * rather than rewritten, so the audit text is never altered silently.
+ */
+function rejectTagTokens(
+  value: string,
+  flagLabel: string,
+  sessionId: string,
+  note: (msg: string) => void,
+): { ok: true; value: string } | { ok: false; result: RecordResult } {
+  if (TAG_TOKEN_RE.test(value)) {
+    return usageFailure(
+      `${flagLabel} must not contain ledger tag text such as ` +
+        `${TAG_NAMESPACES.map((n) => `${n}:`).join(", ")} glued to a value ` +
+        `(it would plant a second ledger tag); got ${JSON.stringify(value)}`,
+      sessionId,
+      note,
+    );
+  }
+  return { ok: true, value };
+}
+
+type Checked = { ok: true; value: string } | { ok: false; result: RecordResult };
+
+/**
+ * Required value: keeps the plain "must not be empty" message, then runs
+ * `check` (tag shape for `--pr` / `--task`, tag-token rejection for free text).
+ */
+function requireChecked(
+  value: string | undefined,
+  flagLabel: string,
+  sessionId: string,
+  note: (msg: string) => void,
+  check: typeof checkTagValue,
+): Checked {
+  const nonEmpty = requireNonEmpty(value, flagLabel, sessionId, note);
+  return nonEmpty.ok ? check(nonEmpty.value, flagLabel, sessionId, note) : nonEmpty;
+}
+
+const requireTagValue = (
+  value: string | undefined,
+  flagLabel: string,
+  sessionId: string,
+  note: (msg: string) => void,
+): Checked => requireChecked(value, flagLabel, sessionId, note, checkTagValue);
+
+const requireFreeText = (
+  value: string | undefined,
+  flagLabel: string,
+  sessionId: string,
+  note: (msg: string) => void,
+): Checked => requireChecked(value, flagLabel, sessionId, note, rejectTagTokens);
 
 /**
  * Resolve the branch tag `review` and `review-subagent` both require:
@@ -224,8 +325,8 @@ function resolveRequiredBranch(
   note: (msg: string) => void,
 ): { ok: true; branch: string } | { ok: false; result: RecordResult } {
   const gitContext = resolveGitContext(cwd);
-  const branch = (explicitBranch ?? "").trim() || gitContext.branch;
-  if (branch.length === 0) {
+  const rawBranch = (explicitBranch ?? "").trim() || gitContext.branch;
+  if (rawBranch.length === 0) {
     const reason =
       "no branch resolvable (cwd is not inside a git work tree, or HEAD is detached); pass --branch <name>";
     note(reason);
@@ -234,7 +335,9 @@ function resolveRequiredBranch(
       result: { exitCode: EX_FAIL, wrote: false, content: "", sessionId, branch: "", reason },
     };
   }
-  return { ok: true, branch };
+  const checked = checkTagValue(rawBranch, "--branch", sessionId, note);
+  if (!checked.ok) return checked;
+  return { ok: true, branch: checked.value };
 }
 
 /**
@@ -321,11 +424,11 @@ export interface RecordReviewOptions extends RecordCommonOptions {
 export async function runRecordReview(opts: RecordReviewOptions): Promise<RecordResult> {
   const { note, cwd, sessionId } = initRecordVerb(opts, "review");
 
-  const summaryResult = requireNonEmpty(opts.summary, "summary", sessionId, note);
+  const summaryResult = requireFreeText(opts.summary, "summary", sessionId, note);
   if (!summaryResult.ok) return summaryResult.result;
   const summary = summaryResult.value;
 
-  const prResult = requireNonEmpty(opts.pr, "--pr", sessionId, note);
+  const prResult = requireTagValue(opts.pr, "--pr", sessionId, note);
   if (!prResult.ok) return prResult.result;
   const pr = prResult.value;
 
@@ -337,7 +440,9 @@ export async function runRecordReview(opts: RecordReviewOptions): Promise<Record
   if (!taskResult.ok) return taskResult.result;
   const task = taskResult.value;
 
-  const base = resolveBase(cwd, opts.base, note);
+  const baseResult = optionalTagValue(resolveBase(cwd, opts.base, note), "--base", sessionId, note);
+  if (!baseResult.ok) return baseResult.result;
+  const base = baseResult.value;
   // One fact, every tag family a merge/PR gate can key on: the PR number,
   // the working branch, the base branch, and (task 2699b476) the
   // agent-tasks task id the two task-scoped merge gates read. Recording a
@@ -403,12 +508,12 @@ export async function runRecordReviewSubagent(
 
   let taskTag = "";
   if (opts.task !== undefined) {
-    const taskResult = requireNonEmpty(opts.task, "--task", sessionId, note);
+    const taskResult = requireTagValue(opts.task, "--task", sessionId, note);
     if (!taskResult.ok) return taskResult.result;
     taskTag = `review-subagent:${taskResult.value} `;
   }
 
-  const verdictResult = requireNonEmpty(opts.verdict, "--verdict", sessionId, note);
+  const verdictResult = requireFreeText(opts.verdict, "--verdict", sessionId, note);
   if (!verdictResult.ok) return verdictResult.result;
   const verdict = verdictResult.value;
 
@@ -416,7 +521,10 @@ export async function runRecordReviewSubagent(
   if (!branchResult.ok) return branchResult.result;
   const branch = branchResult.branch;
 
-  const summary = typeof opts.summary === "string" ? opts.summary.trim() : "";
+  const summaryText = typeof opts.summary === "string" ? opts.summary.trim() : "";
+  const summaryChecked = rejectTagTokens(summaryText, "summary", sessionId, note);
+  if (!summaryChecked.ok) return summaryChecked.result;
+  const summary = summaryChecked.value;
   const content = `${taskTag}review-subagent:${branch} verdict:${verdict}${
     summary.length > 0 ? ` — ${summary}` : ""
   }`;
@@ -436,11 +544,14 @@ export interface RecordDogfoodOptions extends RecordCommonOptions {
 export async function runRecordDogfood(opts: RecordDogfoodOptions): Promise<RecordResult> {
   const { note, sessionId } = initRecordVerb(opts, "dogfood");
 
-  const summaryResult = requireNonEmpty(opts.summary, "summary", sessionId, note);
+  const summaryResult = requireFreeText(opts.summary, "summary", sessionId, note);
   if (!summaryResult.ok) return summaryResult.result;
   const summary = summaryResult.value;
 
-  const content = `dogfood:${sessionId} — ${summary}`;
+  const sessionResult = checkTagValue(sessionId, "--session", sessionId, note);
+  if (!sessionResult.ok) return sessionResult.result;
+
+  const content = `dogfood:${sessionResult.value} ${TAG_SUMMARY_SEPARATOR} ${summary}`;
 
   return finishRecordWrite(opts, sessionId, "", LEDGER_SOURCE_DOGFOOD, content, note);
 }
