@@ -950,22 +950,19 @@ export function verifyApprovedReportHash(
  * oversized report to refuse or age it.
  */
 export function listPersistedReportsBounded(dir: string): PersistedReport[] {
-  let names: string[];
+  let names: string[] = [];
   try {
     names = fs.readdirSync(dir);
   } catch {
-    return [];
+    // No readable directory: no reports.
   }
-  const reports: PersistedReport[] = [];
-  for (const name of names) {
-    if (!name.endsWith(".json")) continue;
-    const full = path.join(dir, name);
-    const read = readReportFileBounded(full);
-    if (!read.ok) continue;
-    const report = readPersistedReport(full, read.mtimeMs, read.raw);
-    if (!report) continue;
-    reports.push(report);
-  }
-  reports.sort((a, b) => b.createdAtMs - a.createdAtMs);
-  return reports;
+  const reports = names
+    .filter((name) => name.endsWith(".json"))
+    .flatMap((name) => {
+      const full = path.join(dir, name);
+      const read = readReportFileBounded(full);
+      const report = read.ok ? readPersistedReport(full, read.mtimeMs, read.raw) : null;
+      return report === null ? [] : [report];
+    });
+  return reports.sort((a, b) => b.createdAtMs - a.createdAtMs);
 }
