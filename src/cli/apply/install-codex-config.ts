@@ -316,6 +316,33 @@ function findExactLine(text: string, target: string, from: number): number {
   return -1;
 }
 
+/**
+ * The start of the first line that genuinely opens a legacy block: a whole
+ * comment line whose trimmed text starts with `marker` (the source prefix or
+ * the generated header) and that sits at the top level of the document
+ * (`createTopLevelProbe`), or -1. The one rule every legacy opening is found
+ * by (task 36d962d2): text that merely contains the marker, a trailing
+ * comment on a content line, or a line inside a multi-line string (the
+ * closing line of a value that ends with the marker text, say) is no block
+ * opening, and treating it as one made the install replace, or splice a
+ * fresh block into, the operator's string value. Candidates are visited in
+ * order, one line each, so the probe's non-decreasing-offset contract holds.
+ */
+function findLegacyOpeningLine(text: string, marker: string): number {
+  const topLevel = createTopLevelProbe(text);
+  let from = 0;
+  for (;;) {
+    const idx = text.indexOf(marker, from);
+    if (idx === -1) return -1;
+    const lineStart = lineStartAt(text, idx);
+    const lineEnd = lineEndAfter(text, lineStart);
+    if (text.slice(lineStart, lineEnd).trim().startsWith(marker) && topLevel(lineStart)) {
+      return lineStart;
+    }
+    from = lineEnd;
+  }
+}
+
 /** Answers, for a line start in `text`, whether that line sits at the top
  * level of the document, that is, not inside a multi-line array, a multi-line
  * inline table or a multi-line string opened by an earlier line. The document
@@ -572,7 +599,8 @@ function scanOwnedContentEnd(
 
 /**
  * True when a harness-commented hook table (a `# harness hook:` comment line
- * followed, later in the zone, by a `[[hooks.` header) lies after the named
+ * followed, later in the zone, by a `[[hooks.` header or a hook event array
+ * header spelled without that prefix, `[[ hooks.SessionStart ]]`) lies after the named
  * table's header line, before `to`. The comment is matched at the start of a
  * trimmed line, so a value that merely contains the marker text does not
  * count. Used only to pick the fix guidance of a refusal (task 36d962d2).
@@ -589,7 +617,9 @@ function harnessHookTableFollows(
     const lineEnd = Math.min(lineEndAfter(text, pos), to);
     const trimmed = text.slice(pos, lineEnd).trim();
     if (trimmed.startsWith(HARNESS_HOOK_COMMENT_PREFIX)) sawComment = true;
-    else if (sawComment && HOOK_ARRAY_HEADER_RE.test(trimmed)) return true;
+    else if (sawComment && (HOOK_ARRAY_HEADER_RE.test(trimmed) || isHookEventArrayHeader(trimmed))) {
+      return true;
+    }
     pos = lineEnd;
   }
   return false;
@@ -1020,10 +1050,11 @@ function rangeBeforeStrayEnd(
  * header) as the start of the block, since there is no BEGIN marker (task
  * 01053b27); the split-block zone starts after that opening line, so a block
  * with no hook table in it (the source prefix directly above an operator
- * table) is not refused for its own opening line (task 36d962d2). A scan that
- * ended at a foreign table with no END marker anywhere after it keeps the
- * legacy behaviour (no split-block check), except
- * that hook event tables directly after the block are collected, named and
+ * table) is not refused for its own opening line (task 36d962d2). The opening
+ * line is a genuine top-level comment line (`findLegacyOpeningLine`), so
+ * marker text inside a string value or after a content line opens no block.
+ * A scan that ended at a foreign table with no END marker anywhere after it
+ * keeps the legacy behaviour (no split-block check), except that hook event tables directly after the block are collected, named and
  * checked (`collectKeptHookTables`), and a harness marker in their run
  * refuses through the split-block check. The END marker is looked up as a
  * whole line outside multi-line strings (`findExactLine`), so END text in a
@@ -1093,7 +1124,15 @@ function findManagedRange(text: string, configPath: string): ManagedRange | null
       // A BOM sitting before the source-prefix comment on line 1 must not
       // hide the prefix from this check (task b34ed105).
       const prevText = prev.start === 0 ? prev.text.replace(/^\uFEFF/, "") : prev.text;
-      if (prevText.startsWith(CODEX_MANAGED_SOURCE_PREFIX)) start = prev.start;
+      // Only a genuine top-level comment line is the block's source prefix:
+      // the closing line of a multi-line string that ends with the prefix
+      // text is the operator's value, not part of the block (task 36d962d2).
+      if (
+        prevText.startsWith(CODEX_MANAGED_SOURCE_PREFIX) &&
+        createTopLevelProbe(text)(prev.start)
+      ) {
+        start = prev.start;
+      }
     }
     start = startPastBom(text, start);
 
@@ -1107,9 +1146,9 @@ function findManagedRange(text: string, configPath: string): ManagedRange | null
     return rangeBeforeStrayEnd(text, start, end, configPath);
   }
 
-  const source = text.indexOf(CODEX_MANAGED_SOURCE_PREFIX);
+  const source = findLegacyOpeningLine(text, CODEX_MANAGED_SOURCE_PREFIX);
   if (source !== -1) {
-    const start = startPastBom(text, lineStartAt(text, source));
+    const start = startPastBom(text, source);
     return legacyManagedRange(
       text,
       start,
@@ -1119,9 +1158,9 @@ function findManagedRange(text: string, configPath: string): ManagedRange | null
     );
   }
 
-  const generated = text.indexOf(GENERATED_HEADER);
+  const generated = findLegacyOpeningLine(text, GENERATED_HEADER);
   if (generated !== -1) {
-    const start = startPastBom(text, lineStartAt(text, generated));
+    const start = startPastBom(text, generated);
     const scan = scanOwnedContentEnd(text, start);
     const end = scan.end;
     const candidate = text.slice(start, end);
