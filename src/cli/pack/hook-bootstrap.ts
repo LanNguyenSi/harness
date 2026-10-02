@@ -40,8 +40,9 @@
 //      vs. clear). Composes 2, 7, and 8 above.
 //
 // Not used by:
-//   - hook-runtime-reality.ts: its stdin reader uses async iteration + an
-//     isTTY guard, which is a legitimately different contract.
+//   - hook-runtime-reality.ts: it keeps an `isTTY` guard in front of the
+//     same shared idle-bounded reader (`src/cli/bounded-stdin.ts`) and
+//     composes the read itself, which is a legitimately different contract.
 //   - hook-solution-acceptance-writeguard.ts: loads no manifest.
 //   - hook-stay-in-scope.ts: loads the current manifest so a generated hook
 //     can no-op after an operator changes its optional configuration.
@@ -55,6 +56,7 @@
 // Per-hook decision logic, error envelopes, and early-return shapes stay local
 // to each hook. This module covers structural boilerplate only, not semantics.
 
+import { readStdinBounded, STDIN_IDLE_TIMEOUT_MS, stdinTimeoutNote } from "../bounded-stdin.js";
 import { checkPauseFromLoader } from "../pause-check.js";
 import { loadManifest, type LoaderOptions } from "../loader.js";
 import { resolveGeneratedDir } from "../../runtime/pending-approval.js";
@@ -65,23 +67,41 @@ import { PolicyUxSchema, type Manifest, type PolicyUx } from "../../schema/index
 // 1. Standard stdin reader
 // ---------------------------------------------------------------------------
 
+export interface ReadStdinOptions {
+  /** Idle bound in ms; defaults to the shared 3000 ms bound. */
+  idleTimeoutMs?: number;
+  /** Where the timeout note goes; defaults to process.stderr. */
+  stderr?: NodeJS.WritableStream;
+}
+
 /**
  * Standard promise-based stdin reader for pack hook events. Resolves to the
- * full UTF-8 string read from the stream. Rejects on stream error.
+ * UTF-8 string read from the stream, ending at `end` or, when no chunk has
+ * arrived for the idle bound, at the idle timeout (task 7dfdcaaf; the shared
+ * reader is `src/cli/bounded-stdin.ts`). Rejects on stream error.
  *
- * Not suitable for `hook-runtime-reality`, which needs an async-iteration
- * reader with an `isTTY` guard.
+ * Claude Code pipes the event and closes stdin, so a real hook never reaches
+ * the bound; it only bites on an open, never-closed stdin, where an end-only
+ * read held the hook until the host's own hook timeout. On a timeout the text
+ * read so far is returned and one stderr note names the bound, so every caller
+ * continues exactly as it does for an empty or truncated event it was handed on
+ * a closed stdin: its own parse step decides, and each gate keeps the posture
+ * it already has for unparseable input (branch-protection can still block,
+ * the understanding gate still allows). No caller's decision changes on input
+ * that arrives and closes within the bound.
  */
-export async function readStdin(stream: NodeJS.ReadableStream): Promise<string> {
-  return new Promise((resolve, reject) => {
-    let data = "";
-    stream.setEncoding("utf8");
-    stream.on("data", (chunk: string) => {
-      data += chunk;
-    });
-    stream.on("end", () => resolve(data));
-    stream.on("error", (err) => reject(err));
-  });
+export async function readStdin(
+  stream: NodeJS.ReadableStream,
+  opts: ReadStdinOptions = {},
+): Promise<string> {
+  const idleTimeoutMs = opts.idleTimeoutMs ?? STDIN_IDLE_TIMEOUT_MS;
+  const read = await readStdinBounded(stream, idleTimeoutMs);
+  if (read.timedOut) {
+    (opts.stderr ?? process.stderr).write(
+      `harness pack hook: ${stdinTimeoutNote(read, idleTimeoutMs, "continuing as an empty event")}\n`,
+    );
+  }
+  return read.text;
 }
 
 // ---------------------------------------------------------------------------

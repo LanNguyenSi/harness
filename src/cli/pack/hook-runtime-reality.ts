@@ -30,6 +30,7 @@ import {
   type Probe,
 } from "@lannguyensi/runtime-reality-checker/policy";
 import type { ActualProcessState } from "@lannguyensi/runtime-reality-checker";
+import { readStdinBounded, STDIN_IDLE_TIMEOUT_MS, stdinTimeoutNote } from "../bounded-stdin.js";
 import { checkHookPause } from "./hook-bootstrap.js";
 
 /** Hard ceiling on a single probe invocation. The hook's own budget_ms
@@ -131,13 +132,26 @@ export function runRuntimeRealityHook(
   });
 }
 
-async function readStdin(stream: NodeJS.ReadableStream): Promise<string> {
+/**
+ * Read the PreToolUse event: nothing on a TTY, otherwise to `end` or until no
+ * chunk has arrived for the idle bound (task 7dfdcaaf; shared reader in
+ * `src/cli/bounded-stdin.ts`). On a timeout the text read so far is returned
+ * and a stderr note names the bound; the handler then sees an empty or
+ * truncated event, which this fail-open hook already treats as nothing to check.
+ */
+async function readStdin(
+  stream: NodeJS.ReadableStream,
+  stderr: NodeJS.WritableStream,
+  idleTimeoutMs: number,
+): Promise<string> {
   if ((stream as NodeJS.ReadStream).isTTY) return "";
-  const chunks: Buffer[] = [];
-  for await (const chunk of stream) {
-    chunks.push(chunk as Buffer);
+  const read = await readStdinBounded(stream, idleTimeoutMs);
+  if (read.timedOut) {
+    stderr.write(
+      `harness pack hook runtime-reality: ${stdinTimeoutNote(read, idleTimeoutMs, "continuing as an empty event")}\n`,
+    );
   }
-  return Buffer.concat(chunks).toString("utf8");
+  return read.text;
 }
 
 export interface RuntimeRealityCliOptions {
@@ -147,6 +161,8 @@ export interface RuntimeRealityCliOptions {
   stdout?: NodeJS.WritableStream;
   /** Defaults to process.stderr. */
   stderr?: NodeJS.WritableStream;
+  /** Idle bound for the stdin read in ms; defaults to the shared 3000 ms bound. */
+  stdinIdleTimeoutMs?: number;
   /**
    * Test-injected harness.generated/ directory for the pause sentinel lookup.
    * In production this is resolved automatically from the manifest path; tests
@@ -184,7 +200,7 @@ export async function runPackHookRuntimeRealityCli(
 
   let raw = "";
   try {
-    raw = await readStdin(stdin);
+    raw = await readStdin(stdin, stderr, opts.stdinIdleTimeoutMs ?? STDIN_IDLE_TIMEOUT_MS);
   } catch {
     return allowResult("stdin read failed, degraded to allow");
   }

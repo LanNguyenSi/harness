@@ -2,7 +2,7 @@
 // These verify the three shared pieces in isolation so a regression in the
 // common module is caught once, not scattered across eleven per-hook test files.
 
-import { Readable } from "node:stream";
+import { PassThrough, Readable } from "node:stream";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -72,6 +72,46 @@ describe("readStdin", () => {
     r.push(null); // EOF immediately
     const result = await readStdin(r);
     expect(result).toBe("");
+  });
+
+  it("a closed stdin is read whole with no timeout note", async () => {
+    const { stream, lines } = makeStderr();
+    const result = await readStdin(makeReadableOf('{"tool_name":"Bash"}'), { stderr: stream });
+    expect(result).toBe('{"tool_name":"Bash"}');
+    expect(lines).toEqual([]);
+  });
+
+  it("an idle stdin with nothing read resolves empty after the bound and notes it", async () => {
+    const { stream, lines } = makeStderr();
+    const result = await readStdin(new PassThrough(), { idleTimeoutMs: 100, stderr: stream });
+    expect(result).toBe("");
+    expect(lines).toEqual([
+      "harness pack hook: no complete event JSON on stdin within 100 ms (stdin never closed); continuing as an empty event\n",
+    ]);
+  });
+
+  it("an idle stdin with partial data resolves with the data read and notes the byte count", async () => {
+    const { stream, lines } = makeStderr();
+    const pt = new PassThrough();
+    pt.write('{"tool_name":');
+    const result = await readStdin(pt, { idleTimeoutMs: 100, stderr: stream });
+    expect(result).toBe('{"tool_name":');
+    expect(lines).toEqual([
+      "harness pack hook: stdin did not close within 100 ms of the last data; using the 13 bytes read\n",
+    ]);
+  });
+
+  it("a slow but live pipe is not cut off: each chunk restarts the bound", async () => {
+    const { stream, lines } = makeStderr();
+    const pt = new PassThrough();
+    const read = readStdin(pt, { idleTimeoutMs: 400, stderr: stream });
+    pt.write("ab");
+    await new Promise((r) => setTimeout(r, 250));
+    pt.write("cd");
+    await new Promise((r) => setTimeout(r, 250));
+    pt.end("ef");
+    expect(await read).toBe("abcdef");
+    expect(lines).toEqual([]);
   });
 
   it("rejects when the stream emits an error", async () => {

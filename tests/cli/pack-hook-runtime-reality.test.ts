@@ -1,4 +1,4 @@
-import { Readable, Writable } from "node:stream";
+import { PassThrough, Readable, Writable } from "node:stream";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -331,6 +331,70 @@ describe("runPackHookRuntimeRealityCli (entrypoint, real env + probe)", () => {
     });
     expect(result.exitCode).toBe(0);
     expect(stdout.read()).toBe("");
+  });
+
+  it("a complete critical-drift payload on a stdin that never closes is still denied (the idle bound ends the read)", async () => {
+    process.env.RUNTIME_REALITY_PROBE_CMD = writeProbe(
+      `printf '[{"name":"panel-api","running":true,"startup_mode":"docker","port":3001}]'`,
+    );
+    const stdin = new PassThrough();
+    stdin.write(TRIGGER_PAYLOAD);
+    const stdout = bufferStream();
+    const stderr = bufferStream();
+    const result = await runPackHookRuntimeRealityCli({
+      stdin,
+      stdout: stdout.stream,
+      stderr: stderr.stream,
+      stdinIdleTimeoutMs: 150,
+    });
+    expect(result.exitCode).toBe(2);
+    expect(JSON.parse(stdout.read()).hookSpecificOutput.permissionDecision).toBe("deny");
+    expect(stderr.read()).toContain(
+      `stdin did not close within 150 ms of the last data; using the ${Buffer.byteLength(TRIGGER_PAYLOAD)} bytes read`,
+    );
+  });
+
+  it("an idle empty stdin fails open: exit 0, no stdout, a stderr note naming the bound", async () => {
+    process.env.RUNTIME_REALITY_PROBE_CMD = writeProbe(
+      `printf '[{"name":"panel-api","running":true,"startup_mode":"docker","port":3001}]'`,
+    );
+    const stdout = bufferStream();
+    const stderr = bufferStream();
+    const result = await runPackHookRuntimeRealityCli({
+      stdin: new PassThrough(),
+      stdout: stdout.stream,
+      stderr: stderr.stream,
+      stdinIdleTimeoutMs: 100,
+    });
+    expect(result.exitCode).toBe(0);
+    expect(stdout.read()).toBe("");
+    expect(stderr.read()).toContain(
+      "harness pack hook runtime-reality: no complete event JSON on stdin within 100 ms (stdin never closed); continuing as an empty event",
+    );
+  });
+
+  it("a payload whose chunks arrive inside the idle bound is parsed whole (no timeout note)", async () => {
+    process.env.RUNTIME_REALITY_PROBE_CMD = writeProbe(
+      `printf '[{"name":"panel-api","running":true,"startup_mode":"docker","port":3001}]'`,
+    );
+    const stdin = new PassThrough();
+    const stdout = bufferStream();
+    const stderr = bufferStream();
+    const run = runPackHookRuntimeRealityCli({
+      stdin,
+      stdout: stdout.stream,
+      stderr: stderr.stream,
+      stdinIdleTimeoutMs: 400,
+    });
+    const half = Math.floor(TRIGGER_PAYLOAD.length / 2);
+    stdin.write(TRIGGER_PAYLOAD.slice(0, half));
+    await new Promise((r) => setTimeout(r, 250));
+    stdin.write(TRIGGER_PAYLOAD.slice(half, half + 2));
+    await new Promise((r) => setTimeout(r, 250));
+    stdin.end(TRIGGER_PAYLOAD.slice(half + 2));
+    const result = await run;
+    expect(result.exitCode).toBe(2);
+    expect(stderr.read()).not.toContain("stdin");
   });
 
   it("degrades to allow (exit 0) when the probe command fails", async () => {
