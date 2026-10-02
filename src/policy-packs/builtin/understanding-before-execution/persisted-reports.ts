@@ -932,37 +932,74 @@ export function verifyApprovedReportHash(
 }
 
 /**
- * {@link listPersistedReports} for the hook-time evidence read
- * ({@link checkPersistedReport}, {@link expirePersistedReport}). The reports
- * directory holds files the gated agent can write, so every entry is opened
- * once through {@link readReportFileBounded}: non-blocking, typed and sized by
- * `fstat` on the open descriptor, read through it. A `*.json` entry that is
- * not a regular file (a FIFO, a directory, a device, a symlink to one of
- * them), is over `MAX_HASHED_REPORT_BYTES`, cannot be opened or read, or grows
- * while it is read is skipped, as if it were not there: it can neither block
- * the hook nor run it out of memory. There is no separate stat of the path
- * (a symlink flipped to a FIFO between that stat and the read used to hang
- * the read), and the modification time comes from the same descriptor.
- *
- * A report skipped for its size is invisible to the callers: the operator
- * commands (`harness approve understanding`, `harness gc`) keep the
- * unbounded {@link listPersistedReports}, because they must still see an
- * oversized report to refuse or age it.
+ * Why a `*.json` entry of the reports directory is absent from a bounded
+ * listing: it could not be read through {@link readReportFileBounded}.
  */
-export function listPersistedReportsBounded(dir: string): PersistedReport[] {
+export interface SkippedReportEntry {
+  filePath: string;
+  reason: ReportFileReadFailure;
+  detail: string;
+}
+
+/**
+ * {@link listPersistedReports} for every read a PreToolUse hook (or the
+ * PostToolUse boundary) makes of the reports directory. The directory holds
+ * files the gated agent can write, so every entry is opened once through
+ * {@link readReportFileBounded}: non-blocking, typed and sized by `fstat` on
+ * the open descriptor, read through it. A `*.json` entry that is not a
+ * regular file (a FIFO, a directory, a device, a symlink to one of them), is
+ * over `MAX_HASHED_REPORT_BYTES`, cannot be opened or read, or grows while it
+ * is read is left out of `reports`, as if it were not there, and recorded in
+ * `skipped`: it can neither block the hook nor run it out of memory. There is
+ * no separate stat of the path (a symlink flipped to a FIFO between that stat
+ * and the read used to hang the read), and the modification time comes from
+ * the same descriptor.
+ *
+ * A caller that must not let the selection fall back to an older report when
+ * a newer one is unreadable (the auto-approval precondition) declines when
+ * `skipped` is not empty. The operator commands (`harness approve
+ * understanding`, `harness gc`) keep the unbounded {@link listPersistedReports}
+ * on purpose: they must still see an oversized report to refuse or age it.
+ *
+ * Placement: this block sits at the end of the file, and
+ * {@link readPersistedReport} takes the already-read text (`boundedRaw`), so
+ * the line numbers the decision record
+ * docs/decisions/2026-08-27-ug-auto-mode-approval.md cites in this file stay
+ * put (tests/decisions-citations-resolve.test.ts pins them).
+ */
+export function listPersistedReportsBoundedWithSkips(dir: string): {
+  reports: PersistedReport[];
+  skipped: SkippedReportEntry[];
+} {
   let names: string[] = [];
   try {
     names = fs.readdirSync(dir);
   } catch {
     // No readable directory: no reports.
   }
-  const reports = names
-    .filter((name) => name.endsWith(".json"))
-    .flatMap((name) => {
-      const full = path.join(dir, name);
-      const read = readReportFileBounded(full);
-      const report = read.ok ? readPersistedReport(full, read.mtimeMs, read.raw) : null;
-      return report === null ? [] : [report];
-    });
-  return reports.sort((a, b) => b.createdAtMs - a.createdAtMs);
+  const reports: PersistedReport[] = [];
+  const skipped: SkippedReportEntry[] = [];
+  for (const name of names.filter((n) => n.endsWith(".json"))) {
+    const full = path.join(dir, name);
+    const read = readReportFileBounded(full);
+    if (!read.ok) {
+      skipped.push({ filePath: full, reason: read.reason, detail: read.detail });
+      continue;
+    }
+    const report = readPersistedReport(full, read.mtimeMs, read.raw);
+    if (report !== null) reports.push(report);
+  }
+  reports.sort((a, b) => b.createdAtMs - a.createdAtMs);
+  return { reports, skipped };
+}
+
+/**
+ * {@link listPersistedReportsBoundedWithSkips} without the skipped entries,
+ * for the callers that treat a skipped entry as no evidence
+ * ({@link checkPersistedReport}, {@link expirePersistedReport}). Expiry acts
+ * on the newest report that was within the cap, so an oversized newest
+ * approved report is left as it is and the next in-cap one is expired.
+ */
+export function listPersistedReportsBounded(dir: string): PersistedReport[] {
+  return listPersistedReportsBoundedWithSkips(dir).reports;
 }

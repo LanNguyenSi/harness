@@ -24,6 +24,7 @@ import {
   defaultReportsDir,
   hashReportFile,
   listPersistedReports,
+  readReportFileBounded,
   readActiveClaim,
   selectReportForSession,
   TOLERANT_FALLBACK_MAX_AGE_MS,
@@ -389,17 +390,20 @@ export function findLatestParseError(dir: string, sessionId: string): ParseError
     } catch {
       continue;
     }
-    if (!stat.isFile()) continue;
     candidates.push({ filePath: full, mtimeMs: stat.mtimeMs });
   }
   candidates.sort((a, b) => b.mtimeMs - a.mtimeMs);
   for (const cand of candidates) {
-    let raw: string;
-    try {
-      raw = fs.readFileSync(cand.filePath, "utf8");
-    } catch {
-      continue;
-    }
+    // The logs directory holds files the gated agent can write, and the
+    // PreToolUse hooks reach this lookup on the no-marker path. The stat
+    // above only orders the candidates (it decides nothing about type or
+    // size); the type and size of what is read are decided by the descriptor
+    // the bounded reader opens (non-blocking, regular files up to the report
+    // size cap), so a FIFO, a huge file or one that grows while read is
+    // skipped like an unreadable log.
+    const bounded = readReportFileBounded(cand.filePath);
+    if (!bounded.ok) continue;
+    const raw = bounded.raw;
     // The standalone package writes a JSON header followed by `--- raw ---`
     // and the original assistant text. Read the header for a `message`,
     // `reason`, or `missing` field; fall back to the first line if the

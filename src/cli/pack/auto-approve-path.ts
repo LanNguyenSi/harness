@@ -68,7 +68,7 @@ import {
   canonicalReportHash,
   checkOperatorApprovalMarkers,
   harnessAllowed,
-  listPersistedReports,
+  listPersistedReportsBoundedWithSkips,
   parseAutoApprove,
   permissionModeAllowed,
   readReportFileBounded,
@@ -440,10 +440,28 @@ export async function attemptAutoApproval(
   // (6) The report precondition: the NEWEST strict-session report, and
   // only that one, must be exactly `pending`, parse, and pass the
   // approve CLI's own content validation.
-  const newest = selectNewestStrictSessionReport(
-    listPersistedReports(args.reportsDir),
-    args.sessionId,
-  );
+  //
+  // The directory holds files the gated agent can write, so it is listed
+  // through the bounded reader (a FIFO or a huge file cannot block or kill
+  // the hook), and an entry that listing had to skip declines the whole
+  // attempt: an unreadable or oversized NEWEST report must not let the
+  // selection fall back to an older pending one.
+  const listing = listPersistedReportsBoundedWithSkips(args.reportsDir);
+  if (listing.skipped.length > 0) {
+    const oversized = listing.skipped.find((entry) => entry.reason === "too-large");
+    if (oversized !== undefined) {
+      note(`auto-approval declined: report invalid (${oversized.detail})`);
+      return decline("report invalid: size");
+    }
+    const first = listing.skipped[0];
+    note(
+      `auto-approval declined: report listing skipped ${listing.skipped.length} unreadable entr${
+        listing.skipped.length === 1 ? "y" : "ies"
+      } (${first?.detail ?? "unknown"})`,
+    );
+    return decline("report listing incomplete");
+  }
+  const newest = selectNewestStrictSessionReport(listing.reports, args.sessionId);
   if (newest === null) {
     note(`auto-approval declined: no persisted report bound to session ${args.sessionId}`);
     return decline("no report for session");

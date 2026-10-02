@@ -112,6 +112,11 @@ import * as ubeShim from "../../src/policy-packs/builtin/understanding-before-ex
 // bounded report read the gate-read scan and both producers share. 90 -> 93.
 // The ReportFileReadFailure, BoundedReportRead, UnhashableReportReason and
 // ReportFileHash types are absent for the usual reason.
+// Widened once more (harness 4b39022f, bounded evidence read) by
+// listPersistedReportsBoundedWithSkips (persisted-reports.ts), the listing the
+// auto-approval precondition and the delegation lookup share with the evidence
+// read: bounded reads, skipped entries reported. 93 -> 94. The
+// SkippedReportEntry type is absent for the usual reason.
 //
 // Mutation-verified: temporarily re-adding `export { safeJsonParse } from
 // "./persisted-reports.js";` to
@@ -181,6 +186,7 @@ const EXPECTED_EXPORTS = [
   "listInflightRecords",
   "listPermissionModeObservations",
   "listPersistedReports",
+  "listPersistedReportsBoundedWithSkips",
   "matchLedgerEntries",
   "matchPostToolUseBoundary",
   "noApprovalMarkerReason",
@@ -215,9 +221,9 @@ const EXPECTED_EXPORTS = [
 ] as const;
 
 describe("understanding-before-execution-runtime shim export surface", () => {
-  it("exports exactly the pinned 93-name surface, sorted", () => {
+  it("exports exactly the pinned 94-name surface, sorted", () => {
     const actual = Object.keys(ubeShim).sort();
-    expect(EXPECTED_EXPORTS).toHaveLength(93);
+    expect(EXPECTED_EXPORTS).toHaveLength(94);
     expect(actual).toEqual([...EXPECTED_EXPORTS].sort());
   });
 

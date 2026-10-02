@@ -71,7 +71,7 @@ import {
   delegationReportPathFor,
   describeMarkerTtlExpiry,
   harnessAllowed,
-  listPersistedReports,
+  listPersistedReportsBoundedWithSkips,
   matchLedgerEntries,
   noApprovalMarkerReason,
   parseAutoApprove,
@@ -1214,8 +1214,12 @@ export async function runPackHookPreToolUseCli(
           // payload session_id. Spelling it out keeps the report this
           // branch looks for bound to the same session the delegation,
           // the scan and the adoption ledger are all keyed by.
+          // Listed through the bounded reader: the reports directory holds
+          // files the gated agent can write, and this lookup runs on every
+          // call that reaches the delegation path. An entry the listing
+          // skips is no report here; at worst the scan below runs.
           const existing = selectNewestStrictSessionReport(
-            listPersistedReports(reportsDir),
+            listPersistedReportsBoundedWithSkips(reportsDir).reports,
             childSessionId,
           );
           // A report-bound delegation (the `--report` fallback shape,
