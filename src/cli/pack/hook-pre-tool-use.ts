@@ -115,8 +115,9 @@ import {
   checkHookPause,
   loadManifestOrInjected,
   parseConfigUx,
-  readStdin, runGateWithStdinRefusal, stdinTimeoutBlockJson,
+  readStdin, runGateWithStdinRefusal,
 } from "./hook-bootstrap.js";
+import { stdinTimeoutBlockJson } from "../bounded-stdin.js";
 import { renderReportSchemaHint } from "./understanding-report-schema-hint.js";
 
 const PACK_NAME = "understanding-before-execution";

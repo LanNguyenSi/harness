@@ -13,7 +13,7 @@ import {
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { readStdinBounded, STDIN_IDLE_TIMEOUT_MS, stdinTimeoutNote } from "../bounded-stdin.js";
+import { readStdinBounded, STDIN_IDLE_TIMEOUT_MS, stdinTimeoutNote, stdinTimeoutBlockJson, stdinTimeoutBlockReason } from "../bounded-stdin.js";
 import {
   buildActionEnvelope,
   intercept,
@@ -47,7 +47,6 @@ import {
 import { extractShellCommand, SHELL_ALIASES } from "../../runtime/tool-name-aliases.js";
 import { loadManifest, type LoaderOptions } from "../loader.js";
 import { checkPauseFromLoader } from "../pause-check.js";
-import { stdinTimeoutBlockJson, stdinTimeoutBlockReason } from "../pack/hook-bootstrap.js";
 
 export interface InterceptCliOptions extends LoaderOptions {
   /** Defaults to process.stdin. */
@@ -698,6 +697,14 @@ export async function runInterceptCli(
   const stderr = opts.stderr ?? process.stderr;
   const verbose = isVerboseEnabled(opts);
   const idleTimeoutMs = opts.stdinIdleTimeoutMs ?? STDIN_IDLE_TIMEOUT_MS;
+  // Single pause-check options, shared by both checkPauseFromLoader calls.
+  const pauseOpts: Parameters<typeof checkPauseFromLoader>[0] = {
+    loaderOpts: opts,
+    hookLabel: "policy intercept",
+    stderr,
+  };
+  if (opts.generatedDir !== undefined) pauseOpts.generatedDir = opts.generatedDir;
+  if (opts.now !== undefined) pauseOpts.now = opts.now;
   const read = await readStdinBounded(stdin, idleTimeoutMs);
   if (read.timedOut && otherHookEventName(read.text) === undefined) {
     // A timed-out read leaves no event to judge, and this verb is the
@@ -710,14 +717,7 @@ export async function runInterceptCli(
     // an object with no event name) is treated as the PreToolUse call this
     // verb is registered for. The operator pause still wins, and a paused run
     // allows exactly as it does after a read that closed.
-    const pause: Parameters<typeof checkPauseFromLoader>[0] = {
-      loaderOpts: opts,
-      hookLabel: "policy intercept",
-      stderr,
-    };
-    if (opts.generatedDir !== undefined) pause.generatedDir = opts.generatedDir;
-    if (opts.now !== undefined) pause.now = opts.now;
-    if (checkPauseFromLoader(pause).paused) {
+    if (checkPauseFromLoader(pauseOpts).paused) {
       return { exitCode: 0, decisions: [], blocked: false };
     }
     const reason = stdinTimeoutBlockReason(idleTimeoutMs);
@@ -750,13 +750,6 @@ export async function runInterceptCli(
   // very gates the kill switch most needs to silence (a wedged preflight /
   // grounding gate is the canonical reason an operator pauses at all).
   {
-    const pauseOpts: Parameters<typeof checkPauseFromLoader>[0] = {
-      loaderOpts: opts,
-      hookLabel: "policy intercept",
-      stderr,
-    };
-    if (opts.generatedDir !== undefined) pauseOpts.generatedDir = opts.generatedDir;
-    if (opts.now !== undefined) pauseOpts.now = opts.now;
     if (checkPauseFromLoader(pauseOpts).paused) {
       return { exitCode: 0, decisions: [], blocked: false };
     }

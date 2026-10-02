@@ -2,7 +2,9 @@
 // parses an event JSON from stdin (session-start preflight, branch-check,
 // stale-base-check, toolchain-parity, policy intercept, and the pack hook
 // readers: `readStdin` / `readStdinChecked` in pack/hook-bootstrap.ts and the
-// runtime-reality reader in pack/hook-runtime-reality.ts).
+// runtime-reality reader in pack/hook-runtime-reality.ts). It also holds the
+// shared stdin-timeout refusal reason and block envelope those PreToolUse
+// gates emit when the read timed out.
 //
 // A hook pipes the event JSON and closes stdin at once, so a real pipe never
 // gets near the bound; it only bites when stdin is an open pipe or a TTY that
@@ -93,4 +95,35 @@ export function stdinTimeoutNote(
         emptyReadTail
     : `stdin did not close within ${idleTimeoutMs} ms of the last data; ` +
         `using the ${Buffer.byteLength(read.text)} bytes read`;
+}
+
+/**
+ * The block reason a PreToolUse gate gives when its stdin read timed out. It
+ * names the stdin timeout and the bound; the gate fails closed because an
+ * event that did not finish arriving cannot be judged.
+ */
+export function stdinTimeoutBlockReason(idleTimeoutMs: number): string {
+  return (
+    `stdin timeout: no complete event arrived and closed on stdin within ${idleTimeoutMs} ms, ` +
+    `so this gate cannot judge the tool call and refuses it (fail closed). ` +
+    `Retry the tool call. Operator override: \`harness pause\`.`
+  );
+}
+
+/**
+ * The Claude Code block envelope for a stdin-timeout refusal: `decision:
+ * "block"` for legacy CLIs plus the 2.1+ `hookSpecificOutput` PreToolUse deny.
+ * Same shape every PreToolUse gate under src/cli/pack/ and `harness policy
+ * intercept` emit for a block.
+ */
+export function stdinTimeoutBlockJson(reason: string): string {
+  return JSON.stringify({
+    decision: "block",
+    reason,
+    hookSpecificOutput: {
+      hookEventName: "PreToolUse",
+      permissionDecision: "deny",
+      permissionDecisionReason: reason,
+    },
+  });
 }

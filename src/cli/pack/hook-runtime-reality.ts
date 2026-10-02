@@ -30,8 +30,8 @@ import {
   type Probe,
 } from "@lannguyensi/runtime-reality-checker/policy";
 import type { ActualProcessState } from "@lannguyensi/runtime-reality-checker";
-import { readStdinBounded, STDIN_IDLE_TIMEOUT_MS } from "../bounded-stdin.js";
-import { checkHookPause, stdinTimeoutBlockReason } from "./hook-bootstrap.js";
+import { readStdinBounded, STDIN_IDLE_TIMEOUT_MS, stdinTimeoutBlockReason } from "../bounded-stdin.js";
+import { checkHookPause } from "./hook-bootstrap.js";
 
 /** Hard ceiling on a single probe invocation. The hook's own budget_ms
  *  (default 30s) is the outer bound; keep the probe well inside it so a

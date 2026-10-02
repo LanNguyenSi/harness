@@ -16,9 +16,8 @@ import {
   stdoutBlockRefusal,
   resolveSessionAndAgentIds,
   resolveSubagentHookContext,
-  stdinTimeoutBlockJson,
-  stdinTimeoutBlockReason,
 } from "../../src/cli/pack/hook-bootstrap.js";
+import { stdinTimeoutBlockJson, stdinTimeoutBlockReason } from "../../src/cli/bounded-stdin.js";
 import { parseManifest, type Manifest } from "../../src/schema/index.js";
 
 function noopValidateAgentId(): void {
