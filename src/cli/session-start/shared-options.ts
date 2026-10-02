@@ -11,6 +11,7 @@
 import type { Command } from "commander";
 import type { ResolveReadSessionOptions } from "../../runtime/session-id.js";
 import type { Manifest } from "../../schema/index.js";
+import { readStdinBounded, STDIN_IDLE_TIMEOUT_MS, stdinTimeoutNote } from "../bounded-stdin.js";
 import type { LoaderOptions } from "../loader.js";
 
 /** The literal session id every producer falls back to when none is known. */
@@ -41,6 +42,11 @@ export interface SessionStartCommonOptions extends LoaderOptions {
   stderr?: NodeJS.WritableStream;
   /** Explicit session id (overrides every other source). */
   session?: string;
+  /**
+   * Idle bound, in ms, for the stdin read (default STDIN_IDLE_TIMEOUT_MS).
+   * Tests inject a short value.
+   */
+  stdinIdleTimeoutMs?: number;
   /** Per-call ledger timeout in ms. */
   ledgerTimeoutMs?: number;
   /** Inject the ledger writer (tests). */
@@ -57,29 +63,25 @@ export interface SessionStartCwdOptions extends SessionStartCommonOptions {
   cwd?: string;
 }
 
-/** Read a stream to its end as UTF-8 text. */
-export async function readStdin(stream: NodeJS.ReadableStream): Promise<string> {
-  return new Promise((resolve, reject) => {
-    let data = "";
-    stream.setEncoding("utf8");
-    stream.on("data", (chunk: string) => {
-      data += chunk;
-    });
-    stream.on("end", () => resolve(data));
-    stream.on("error", reject);
-  });
-}
-
 /** Parse the text of a SessionStart event (empty text is an empty event). */
 export function parseSessionStartEvent(text: string): SessionStartEvent {
   return JSON.parse(text.trim() || "{}") as SessionStartEvent;
 }
 
-/** Read and parse the SessionStart event JSON from a stream. */
+/**
+ * Read and parse the SessionStart event JSON from a stream. The read is
+ * idle-bounded (see bounded-stdin.ts): when stdin never closes, the text read
+ * so far is parsed (empty text is an empty event) and `onTimeout` receives the
+ * stderr note the producer logs.
+ */
 export async function readSessionStartEvent(
   stream: NodeJS.ReadableStream,
+  opts: { idleTimeoutMs?: number; onTimeout?: (note: string) => void } = {},
 ): Promise<SessionStartEvent> {
-  return parseSessionStartEvent(await readStdin(stream));
+  const idleTimeoutMs = opts.idleTimeoutMs ?? STDIN_IDLE_TIMEOUT_MS;
+  const read = await readStdinBounded(stream, idleTimeoutMs);
+  if (read.timedOut) opts.onTimeout?.(stdinTimeoutNote(read, idleTimeoutMs));
+  return parseSessionStartEvent(read.text);
 }
 
 /** The reason line a producer logs when the event JSON does not parse. */

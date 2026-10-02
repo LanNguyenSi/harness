@@ -42,6 +42,16 @@ describe("post-merge-gate pack expansion", () => {
     expect(blocker?.command).toBe("harness pack hook post-merge-gate");
   });
 
+  it("instructions.md describes the recorder trigger as raw command first, then the three normalized forms", () => {
+    const m = buildManifest([{ name: "post-merge-gate" }]);
+    const r = expandPolicyPacks(m);
+    const md = (r.files[0]?.content ?? "").replace(/\s+/g, " ");
+    expect(md).toContain("against the raw command and, only when that misses, against the three normalized forms");
+    expect(md).toContain("`normalizeCommand`, `normalizeCommandAmpAware`, `normalizeCommandQuoteAware`");
+    expect(md).toContain("raw-first, lazy order as the gate");
+    expect(md).not.toContain("against the command text");
+  });
+
   it("instructions.md documents the escape list, curated mutation list, and known gaps", () => {
     const m = buildManifest([{ name: "post-merge-gate" }]);
     const r = expandPolicyPacks(m);
