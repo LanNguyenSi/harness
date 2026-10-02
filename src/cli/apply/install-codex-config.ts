@@ -981,7 +981,7 @@ function rangeBeforeStrayEnd(
 ): ManagedRange {
   const strayIdx = findExactLine(text, CODEX_MANAGED_END, end);
   if (strayIdx === -1) {
-    assertNoSplitBlock(text, zoneFrom, text.length, configPath, false);
+    assertNoSplitBlock(text, end, text.length, configPath, false);
     const keptHookTables = collectKeptHookTables(text, end, text.length).tables;
     const foreignSectionsPreserved = collectForeignSectionHeaders(text, end, text.length, keptHookTables);
     return { start, end, foreignSectionsPreserved, keptHookTables };

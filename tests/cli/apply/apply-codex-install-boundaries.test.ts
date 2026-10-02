@@ -881,6 +881,39 @@ describe("codex install: the no-END refusal guidance leads to a correct install 
     expect(message).toContain(`Add a '${CODEX_MANAGED_END}' marker line right after the last harness hook table (before [mcp_servers.docs]), or move`);
   });
 
+  it("a harness comment line above the named table does not count as a table following it: the END fix stays offered when only an operator hook table follows", () => {
+    write([
+      CODEX_MANAGED_BEGIN,
+      GENERATED,
+      ...HARNESS_A,
+      "# harness hook: stale (budget_ms=1)",
+      ...DOCS_TABLE,
+      "[[hooks.Stop]]",
+      `hooks = [{ type = "command", command = "${OPERATOR_COMMAND}", timeout = 5 }]`,
+      "",
+    ]);
+    const { message } = refusal();
+    expect(message).toContain(`Add a '${CODEX_MANAGED_END}' marker line right after the last harness hook table (before [mcp_servers.docs]), or move`);
+    expect(message).not.toContain(TOKEN);
+  });
+
+  for (const [label, head] of LEGACY_HEADS) {
+    it(`legacy ${label}: a harness-commented table past the checked run of hook tables does not count as following the named table`, () => {
+      write([
+        ...head,
+        ...HARNESS_A,
+        "[[ hooks.Stop ]]",
+        `note = "${TOKEN} # harness hook: x"`,
+        ...DOCS_TABLE,
+        ...HARNESS_SESSION_TABLE,
+        "",
+      ]);
+      const { message } = refusal();
+      expect(message).toContain(`add a '${CODEX_MANAGED_END}' marker line right after the last harness hook table (before [[ hooks.Stop ]]), or move`);
+      expect(message).not.toContain(TOKEN);
+    });
+  }
+
   it("a zone with no content line (called directly) still offers the END fix and does not throw anything but the refusal", () => {
     const text = "# harness hook: a (budget_ms=1)\n";
     expect(() => assertNoSplitBlock(text, 0, text.length, "/cfg/config.toml", false)).toThrowError(
