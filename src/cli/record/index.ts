@@ -185,9 +185,11 @@ function requireNonEmpty(
 
 /**
  * Ledger tag namespaces the shipped gates read (`requires.ledger_tag`).
- * The matcher is a case-sensitive substring test (`src/policies/requires.ts`),
- * so a value carrying `<namespace>:` text satisfies a gate keyed on that
- * namespace even when it sits inside a longer word.
+ * Used for FREE TEXT only (`--verdict`, summaries): the matcher is a
+ * case-sensitive substring test (`src/policies/requires.ts`), so free text
+ * carrying `<namespace>:` glued to a following value reads as a tag.
+ * Ref-like and id-like values are checked structurally instead (no `:`, no
+ * whitespace), which closes every namespace including custom ones.
  */
 const TAG_NAMESPACES = [
   "review-subagent",
@@ -197,31 +199,24 @@ const TAG_NAMESPACES = [
   "risk-approved",
   "risk-override",
 ];
-const TAG_TOKEN_RE = new RegExp(`(?:${TAG_NAMESPACES.join("|")}):`);
+// `<namespace>:` immediately followed by a non-space character; prose such
+// as "code-review: approved" is not a tag token because a gate's substituted
+// value is never empty and never starts with a space.
+const TAG_TOKEN_RE = new RegExp(`(?:${TAG_NAMESPACES.join("|")}):(?=\\S)`);
 
-function tagTextFailure(
-  value: string,
-  flagLabel: string,
-  sessionId: string,
-  note: (msg: string) => void,
-): { ok: false; result: RecordResult } {
-  return usageFailure(
-    `${flagLabel} must not contain ledger tag text such as ` +
-      `${TAG_NAMESPACES.map((n) => `${n}:`).join(", ")} ` +
-      `(it would plant a second ledger tag); got ${JSON.stringify(value)}`,
-    sessionId,
-    note,
-  );
-}
+// ASCII whitespace only: git ref names forbid exactly these, and Unicode
+// whitespace without a `:` cannot form a tag token under substring matching.
+const ASCII_WHITESPACE_RE = /[ \t\r\n\v\f]/;
 
 /**
- * A tag value: a non-empty token with no internal whitespace and no
- * embedded `<namespace>:` tag text. The shape check is deliberately loose
- * (task 2699b476): the value only namespaces a ledger tag, so anything the
- * gate's `${TASK_ID}` substitution can compare against is acceptable, but
- * a value carrying whitespace would split into two tags in the fact content
- * and one carrying `<namespace>:` text would plant a second tag, both
- * silently satisfying a gate keyed on that other tag (task 237cc609).
+ * A tag value: a ref-like or id-like token (`--branch`, `--base`, `--task`,
+ * `--pr`, dogfood `--session`) that is embedded in a ledger tag. It must be
+ * non-empty, free of ASCII whitespace (the fact content is space-separated
+ * tag text, so whitespace would split into a second tag) and free of `:`
+ * (a `:` is what turns a value into `<namespace>:<value>` tag text). Git ref
+ * names forbid both characters, so no real branch is refused. The shape is
+ * otherwise loose (task 2699b476): anything the gate's `${TASK_ID}`
+ * substitution can compare against is acceptable (task 237cc609).
  */
 function checkTagValue(
   value: string,
@@ -230,7 +225,7 @@ function checkTagValue(
   note: (msg: string) => void,
 ): { ok: true; value: string } | { ok: false; result: RecordResult } {
   const trimmed = value.trim();
-  if (trimmed.length === 0 || /\s/.test(trimmed)) {
+  if (trimmed.length === 0 || ASCII_WHITESPACE_RE.test(trimmed)) {
     return usageFailure(
       `${flagLabel} must be a non-empty value with no whitespace ` +
         `(it namespaces one ledger tag); got ${JSON.stringify(value)}`,
@@ -238,8 +233,13 @@ function checkTagValue(
       note,
     );
   }
-  if (TAG_TOKEN_RE.test(trimmed)) {
-    return tagTextFailure(value, flagLabel, sessionId, note);
+  if (trimmed.includes(":")) {
+    return usageFailure(
+      `${flagLabel} must not contain ':' (it would plant ledger tag text such as ` +
+        `${TAG_NAMESPACES.map((n) => `${n}:`).join(", ")}); got ${JSON.stringify(value)}`,
+      sessionId,
+      note,
+    );
   }
   return { ok: true, value: trimmed };
 }
@@ -257,8 +257,9 @@ function optionalTagValue(
 
 /**
  * Free text (`--verdict`, summaries) stays free, but may not carry a
- * recognised `<namespace>:` tag token: the text lands verbatim in the fact
- * content, where the substring matcher would read it as a tag. Rejected
+ * recognised `<namespace>:` immediately followed by a non-space character:
+ * the text lands verbatim in the fact content, where the substring matcher
+ * would read that as a tag. Prose like "code-review: approved" is kept. Rejected
  * rather than rewritten, so the audit text is never altered silently.
  */
 function rejectTagTokens(
@@ -268,7 +269,13 @@ function rejectTagTokens(
   note: (msg: string) => void,
 ): { ok: true; value: string } | { ok: false; result: RecordResult } {
   if (TAG_TOKEN_RE.test(value)) {
-    return tagTextFailure(value, flagLabel, sessionId, note);
+    return usageFailure(
+      `${flagLabel} must not contain ledger tag text such as ` +
+        `${TAG_NAMESPACES.map((n) => `${n}:`).join(", ")} glued to a value ` +
+        `(it would plant a second ledger tag); got ${JSON.stringify(value)}`,
+      sessionId,
+      note,
+    );
   }
   return { ok: true, value };
 }
@@ -433,7 +440,9 @@ export async function runRecordReview(opts: RecordReviewOptions): Promise<Record
   if (!taskResult.ok) return taskResult.result;
   const task = taskResult.value;
 
-  const base = resolveBase(cwd, opts.base, note);
+  const baseResult = optionalTagValue(resolveBase(cwd, opts.base, note), "--base", sessionId, note);
+  if (!baseResult.ok) return baseResult.result;
+  const base = baseResult.value;
   // One fact, every tag family a merge/PR gate can key on: the PR number,
   // the working branch, the base branch, and (task 2699b476) the
   // agent-tasks task id the two task-scoped merge gates read. Recording a
@@ -539,7 +548,10 @@ export async function runRecordDogfood(opts: RecordDogfoodOptions): Promise<Reco
   if (!summaryResult.ok) return summaryResult.result;
   const summary = summaryResult.value;
 
-  const content = `dogfood:${sessionId} — ${summary}`;
+  const sessionResult = checkTagValue(sessionId, "--session", sessionId, note);
+  if (!sessionResult.ok) return sessionResult.result;
+
+  const content = `dogfood:${sessionResult.value} ${TAG_SUMMARY_SEPARATOR} ${summary}`;
 
   return finishRecordWrite(opts, sessionId, "", LEDGER_SOURCE_DOGFOOD, content, note);
 }
