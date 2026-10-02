@@ -2,6 +2,8 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-10-02T07:17:12Z, task 36d962d2: `src/cli/apply/install-codex-config.ts` now starts the split-block zone of a legacy source-prefix block after the block's own opening line and offers the add-an-END fix of the no-END refusal only when no harness-commented hook table follows the named table. `codex-adapter-parity-gaps.md` (which lists the file under sources) was re-verified against the changed code; its paragraph on what the install reads after the harness block gained one sentence for both behaviours, and it is re-stamped.
+
 - 2026-10-02T06:37:19Z, task 237cc609: `docs/CLI.md` now names the six gate-opening namespaces the free-text check uses; the four docs listing it re-verified (no claim affected) and re-stamped.
 
 - 2026-10-02T06:32:28Z, task 237cc609: `docs/CLI.md` tag-injection paragraph worded exactly (trimmed values, non-whitespace after the colon, free text checked against builtin namespaces only, task/PR/branch values share namespaces); `codex-adapter-parity-gaps.md`, `debug-verb-selection.md`, `evidence-ledger-trust-boundary.md` and `policy-engine-producer-wiring.md` list it under sources and were re-verified, no body text changed. All four re-stamped.
