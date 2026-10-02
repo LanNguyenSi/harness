@@ -1069,9 +1069,9 @@ describe.each(RUNTIMES)("persisted report is evidence, not authority (task 74023
   // MAX_HASHED_REPORT_BYTES. A planted file of a few hundred megabytes used to
   // run the hook out of heap (a dead hook is a non-blocking error, so the call
   // went through); over the cap it is now a report file that matches nothing.
-  // 2 MiB stands in for any size over the cap as far as the hash scan goes;
-  // the evidence read after a refused marker is still unbounded for files of a
-  // few hundred megabytes (a named residual).
+  // 2 MiB stands in for any size over the cap; the evidence read after a
+  // refused marker and on the no-marker path reads through the same bounded
+  // reader (pinned in tests/cli/pack-hook-pre-tool-use-subprocess.test.ts).
   const OVERSIZED_BYTES = 2 * MAX_HASHED_REPORT_BYTES;
 
   it("oversized file: a tampered approval next to a 2 MiB *.json carrying the approved content blocks, because a file over the size cap matches nothing", async () => {
