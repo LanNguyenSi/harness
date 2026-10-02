@@ -191,7 +191,7 @@ import {
   type WrapperPeelToken,
 } from "./command-normalize.js";
 import { firstSegment } from "./kubectl-target-parse.js";
-import { decodeShellWord } from "./shell-word.js";
+import { decodeShellWord, truncateNulRuns } from "./shell-word.js";
 
 /** Verdict for one recognized deletion-verb command. */
 export interface DeletionTargetVerdict {
@@ -1080,6 +1080,30 @@ const GIT_REQUIRE_FORCE_RE = /clean\.requireforce/i;
  * deletion verb at all. Never throws.
  */
 export function resolveDeletionTarget(
+  command: string,
+  safeRoots: readonly string[],
+): DeletionTargetVerdict | null {
+  const asWritten = resolveDeletionTargetText(command, safeRoots);
+  // A word with a NUL-decoding ANSI-C escape decodes to a value that keeps a
+  // literal U+0000 (`$'rm\0'`, `$'--recursive\0'`, `$'/tmp\0/x'`): the head
+  // and flag comparisons never match it and a target can look strictly inside
+  // a safe root, while bash cuts the run at the NUL and runs the plain
+  // command (task `5cc64860`, GNU bash 3.2.57). The command is therefore
+  // resolved a second time with each such run replaced by the value bash
+  // passes (`truncateNulRuns`, applied before any segmentation, so a boundary
+  // character inside the cut-off part of a run cannot tear the word), and the
+  // two verdicts are combined: gated if EITHER reading is. The second
+  // reading can only add a verdict or an unresolved target, never remove
+  // one. A command without such a run is resolved once, as before.
+  const nul = typeof command === "string" ? truncateNulRuns(command) : null;
+  if (nul === null) return asWritten;
+  const truncated = resolveDeletionTargetText(nul, safeRoots);
+  if (truncated === null) return asWritten;
+  if (asWritten === null) return truncated;
+  return combineVerdicts([asWritten, truncated]);
+}
+
+function resolveDeletionTargetText(
   command: string,
   safeRoots: readonly string[],
 ): DeletionTargetVerdict | null {

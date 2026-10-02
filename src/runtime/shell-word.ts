@@ -44,8 +44,8 @@
 // NUL-DECODING ESCAPES are not modelled here (task `241d9e9e`). GNU bash
 // 3.2.57 (measured with `printf '[%s]' <word> | od -c`; the first report
 // measured 5.1.16) truncates a `$'...'` run at a NUL, drops a NUL between two
-// runs, and reads `\c@` (value 0) the same way. This module does not rebuild
-// that rule: `readAnsiC` keeps decoding such an escape exactly as before (a
+// runs, and reads `\c@` (value 0) the same way. `decodeShellWord` does not
+// rebuild that rule: `readAnsiC` keeps decoding such an escape exactly as before (a
 // literal U+0000 for `\0`, `\x00` and the like), and `decodeShellWord` output
 // for these words is unchanged. That is on purpose: the deny-side callers
 // match PREFIXES and short-flag clusters of the decoded value (`of=`, `-s`,
@@ -57,6 +57,20 @@
 // only. It over-reports on purpose (any `\c` escape counts, `\u`/`\U` count
 // although bash 3.2.57 does not decode them), because a false positive only
 // blocks an exotic read.
+//
+// DENY-SIDE COMPARISONS (task `5cc64860`). The prefix and cluster matches
+// above do not help an EXACT comparison (a whole flag such as `--force`, a
+// head name such as `dd`, a subcommand): `$'--force\0'` decodes to a value
+// that carries a trailing U+0000 and never equals `--force`, while bash
+// passes `--force`. `decodeShellWordTruncatingNul` and `truncateNulRuns`
+// give the deny-side scanners the value bash passes, for the COMPARISON only:
+// they never replace the decoded value, the scanners keep their existing scan
+// of the command as written and add a second one over the rewritten text, so
+// the second scan can only add a verdict. The truncation is the one measured rule, nothing more: a `$'...'`
+// run ends at the first escape that decodes to NUL (or a `\c` escape, which
+// is not modelled and so counts as possibly NUL), and the text around the run
+// is kept (`x$'a\0b'y` is `xay`, measured on GNU bash 3.2.57 with
+// `printf '[%s]' <word> | od -c`).
 
 /** Characters a backslash can escape inside a double-quoted run (bash). */
 const DOUBLE_QUOTE_ESCAPABLE = new Set(['$', '`', '"', "\\", "\n"]);
@@ -160,11 +174,73 @@ export function hasAnsiCNulEscape(text: string): boolean {
  * Never throws.
  */
 export function decodeShellWord(word: string): string {
+  return decodeWith(word, false);
+}
+
+/**
+ * The value bash passes for `word` when a `$'...'` run carries a NUL-decoding
+ * escape: each such run is cut at its first NUL (or `\c`) escape, everything
+ * else is decoded exactly as `decodeShellWord` does. Equal to
+ * `decodeShellWord(word)` for a word without such an escape. For the
+ * deny-side exact comparisons only (module header, task `5cc64860`); like
+ * `decodeShellWord` it returns the raw word when it cannot resolve it, and
+ * never throws.
+ */
+export function decodeShellWordTruncatingNul(word: string): string {
+  return decodeWith(word, true);
+}
+
+/**
+ * Rewrite every `$'...'` run of `text` that carries a NUL-decoding escape into
+ * a single-quoted literal of the value bash passes for it, and leave the rest
+ * of the text byte for byte as it was (`rm -rf $'/tmp\\0/x'` becomes
+ * `rm -rf '/tmp'`). `null` when nothing was rewritten, so the caller has no
+ * second text to examine. Works on a whole command string: the rewrite
+ * happens before any boundary split, so a `;`, `|` or `&` that sits inside
+ * the cut-off part of a run (`$'--force\\0;'`) disappears with it instead of
+ * tearing the word in two. A run without a closing quote is left alone
+ * (`decodeShellWord` cannot resolve it either). Every `$'` occurrence is a
+ * candidate start, as in `hasAnsiCNulEscape`, so a real run is never hidden
+ * behind an earlier false start; the cost is an occasional over-rewrite of
+ * text bash reads as quoted, which only gives a deny-side caller one more
+ * text to examine next to the original. Never throws.
+ */
+export function truncateNulRuns(text: string): string | null {
+  if (typeof text !== "string") return null;
+  let out = "";
+  let copied = 0;
+  let rewrote = false;
+  let from = text.indexOf("$'");
+  while (from !== -1) {
+    let end = -1;
+    for (let i = from + 2; i < text.length; ) {
+      const ch = text[i]!;
+      if (ch === "'") {
+        end = i;
+        break;
+      }
+      i += ch === "\\" ? 2 : 1;
+    }
+    const run = end === -1 ? "" : text.slice(from, end + 1);
+    if (end !== -1 && hasAnsiCNulEscape(run)) {
+      const value = decodeShellWordTruncatingNul(run).replace(/'/g, "'\\''");
+      out += text.slice(copied, from) + `'${value}'`;
+      copied = end + 1;
+      rewrote = true;
+      from = text.indexOf("$'", end + 1);
+      continue;
+    }
+    from = text.indexOf("$'", from + 1);
+  }
+  return rewrote ? out + text.slice(copied) : null;
+}
+
+function decodeWith(word: string, truncateNul: boolean): string {
   if (typeof word !== "string" || word.length === 0) return typeof word === "string" ? word : "";
   // Fast path: nothing quotable present, so the word is already literal.
   if (!/['"\\]/.test(word)) return word;
   try {
-    const decoded = decodeInner(word);
+    const decoded = decodeInner(word, truncateNul);
     return decoded === null ? word : decoded;
   } catch {
     return word;
@@ -172,7 +248,7 @@ export function decodeShellWord(word: string): string {
 }
 
 /** Returns null when the word is unresolvable (caller falls back to raw). */
-function decodeInner(word: string): string | null {
+function decodeInner(word: string, truncateNul: boolean): string | null {
   let out = "";
   let i = 0;
   while (i < word.length) {
@@ -206,7 +282,7 @@ function decodeInner(word: string): string | null {
       continue;
     }
     if (ch === "$" && word[i + 1] === "'") {
-      const run = readAnsiC(word, i + 2);
+      const run = readAnsiC(word, i + 2, truncateNul);
       if (run === null) return null;
       out += run.value;
       i = run.next;
@@ -252,19 +328,35 @@ function readDoubleQuoted(word: string, start: number): { value: string; next: n
   return null; // unterminated
 }
 
-function readAnsiC(word: string, start: number): { value: string; next: number } | null {
+function readAnsiC(
+  word: string,
+  start: number,
+  truncateNul: boolean,
+): { value: string; next: number } | null {
   let out = "";
   let i = start;
+  // Set once a NUL-decoding escape was met under `truncateNul`: the rest of
+  // the run is read only to find its closing quote, and adds nothing.
+  let dropping = false;
   while (i < word.length) {
     const ch = word[i]!;
     if (ch === "'") return { value: out, next: i + 1 };
     if (ch !== "\\") {
-      out += ch;
+      if (!dropping) out += ch;
       i++;
       continue;
     }
     const nxt = word[i + 1];
     if (nxt === undefined) return null;
+    if (dropping) {
+      i += 2;
+      continue;
+    }
+    if (truncateNul && isNulEscapeAt(word, i)) {
+      dropping = true;
+      i += 2;
+      continue;
+    }
     const simple = ANSI_C_SIMPLE.get(nxt);
     if (simple !== undefined) {
       out += simple;
