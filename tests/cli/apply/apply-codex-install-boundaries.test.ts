@@ -11,7 +11,7 @@ import {
   planCodexConfigInstall,
 } from "../../../src/cli/apply/index.js";
 import { assertNoSplitBlock } from "../../../src/cli/apply/install-codex-config.js";
-import { EX_OK } from "../../../src/cli/exit-codes.js";
+import { EX_FAIL, EX_OK } from "../../../src/cli/exit-codes.js";
 import { run } from "../../../src/cli/index.js";
 
 // Boundary checks of the codex install's hook-table scan and the shapes that
@@ -1273,5 +1273,97 @@ describe("codex install: marker text inside an operator value is never a managed
     expect(message).toContain("has a foreign table ([[hooks.Stop]])");
     expect(message).not.toContain(TOKEN);
     expect(fs.readFileSync(codexConfig, "utf8")).toBe(config);
+  });
+});
+
+// The generated header opens a legacy block only when a hook table header line
+// (`[[hooks.`) follows it at the top level of the document, inside the range
+// the scan owns (task 36d962d2). `[[hooks.` text in an operator value, in a
+// line of a multi-line string, or in a comment line under an operator table
+// used to open that block, and the install replaced the operator's keys after
+// the header line with the fresh block.
+describe("codex install: `[[hooks.` text that is not a top-level header line opens no generated-header legacy block (task 36d962d2)", () => {
+  const appended: Array<[string, string[]]> = [
+    [
+      "the generated header as a comment line in an operator hook table, then `[[hooks.` text in a string value",
+      [...OPERATOR_STOP, GENERATED, `note = "see [[hooks.Stop]] ${TOKEN}"`, ""],
+    ],
+    [
+      "the generated header as a comment line in an operator hook table, then `[[hooks.` text as a line of a multi-line string",
+      [...OPERATOR_STOP, GENERATED, 'note = """', "[[hooks.Stop]]", `${TOKEN}"""`, ""],
+    ],
+    [
+      "the generated header as a comment line in an operator hook table, then `[[hooks.` text in a comment line above a key",
+      [...OPERATOR_STOP, GENERATED, "# old [[hooks.Stop]] table moved", `note = "${TOKEN}"`, ""],
+    ],
+  ];
+
+  for (const [label, lines] of appended) {
+    it(`${label}: appends one block after the operator's bytes, every operator value kept, a second install gives the same bytes`, () => {
+      const config = write(lines);
+      const p = planTwice();
+      expect(p.changed).toBe(true);
+      expect(p.nextContent.startsWith(config)).toBe(true);
+      expectOperatorContentKept(config, p.nextContent);
+      expect(count(p.nextContent, CODEX_MANAGED_BEGIN)).toBe(1);
+      expect(endLines(p.nextContent)).toBe(1);
+      expect(count(p.nextContent, 'command = "harness pack hook a"')).toBe(1);
+      expect(p.removedHookIds).toEqual([]);
+      expect(JSON.stringify([p.summary, p.removedHookIds, p.foreignSectionsPreserved, p.keptOperatorHookTables])).not.toContain(TOKEN);
+    });
+  }
+
+  it("a top-level hook table header past the scanned range opens no block: the generated header above a foreign table stays and the block is appended", () => {
+    const config = write([GENERATED, "[tui]", `theme = "${TOKEN}"`, ...OPERATOR_STOP, ""]);
+    const p = planTwice();
+    expect(p.nextContent.startsWith(config)).toBe(true);
+    expect(count(p.nextContent, GENERATED)).toBe(2);
+    expect(count(p.nextContent, CODEX_MANAGED_BEGIN)).toBe(1);
+    expectOperatorContentKept(config, p.nextContent);
+  });
+
+  for (const header of ["[[hooks.pre_tool_use]]", "  [[hooks.pre_tool_use]]", "[[hooks.PreToolUse]]"]) {
+    it(`a generated-header legacy block whose hook table header line reads '${header.trim()}'${header.startsWith(" ") ? " (indented)" : ""} is still replaced, the operator tables around it kept`, () => {
+      const before = 'model = "x"\n\n';
+      const after = [...DOCS_TABLE, ...TAIL, ""].join("\n");
+      const legacy = [GENERATED, header, 'match = "Bash"', 'command = "harness old"', "timeout_ms = 5000", "blocking = true", ""].join("\n");
+      fs.writeFileSync(codexConfig, `${before}${legacy}${after}`);
+      const p = planTwice();
+      expect(p.nextContent.startsWith(before)).toBe(true);
+      expect(p.nextContent.endsWith(after)).toBe(true);
+      expect(p.nextContent).not.toContain('command = "harness old"');
+      // Only the fresh block's own header lines remain.
+      expect(count(p.nextContent, header)).toBe(count(FRESH, header));
+      expect(count(p.nextContent, CODEX_MANAGED_BEGIN)).toBe(1);
+      expect(count(p.nextContent, GENERATED)).toBe(1);
+      expect(p.foreignSectionsPreserved).toEqual(["[mcp_servers.docs]", '[projects."/work/x"]']);
+    });
+  }
+});
+
+// A config the harness TOML parser cannot read is refused once the install
+// would change it (task 36d962d2): a marker line after the parse error is not
+// at the top level of a readable prefix, so the block below it is not found,
+// and an already current block there no longer reads as up to date.
+describe("codex install: an unreadable config with its parse error before a current block refuses (task 36d962d2)", () => {
+  it("a parse error before a current block refuses with exit 1, the file untouched and no backup; after a current block it stays up to date", async () => {
+    // The block a real install writes is current for the next install.
+    write([]);
+    expect((await cli({})).code).toBe(EX_OK);
+    const block = fs.readFileSync(codexConfig, "utf8");
+    const backups = () => fs.readdirSync(path.dirname(codexConfig)).filter((n) => n.includes(".harness-backup-"));
+    const backupsBefore = backups();
+
+    const brokenBefore = write(["[tui]", "x = ", "", block]);
+    const r = await cli({});
+    expect(r.code).toBe(EX_FAIL);
+    expect(r.err).toContain("the TOML parser used by harness could not read this file");
+    expect(fs.readFileSync(codexConfig, "utf8")).toBe(brokenBefore);
+    expect(backups()).toEqual(backupsBefore);
+
+    const brokenAfter = write([block, "[tui]", "x = ", ""]);
+    expect((await cli({})).code).toBe(EX_OK);
+    expect(fs.readFileSync(codexConfig, "utf8")).toBe(brokenAfter);
+    expect(backups()).toEqual(backupsBefore);
   });
 });

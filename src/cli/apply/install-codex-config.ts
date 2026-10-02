@@ -298,11 +298,18 @@ type MarkerShape = "whole" | "prefix";
  * elements). Treating such text as a marker made the install replace,
  * delete, or splice a fresh block into the operator's value. Every lookup
  * of BEGIN, END, the source prefix, the generated header and the
- * `# harness hook:` comment goes through this probe or `findMarkerLine`.
+ * `# harness hook:` comment goes through this probe or `findMarkerLine`, and
+ * so does the `[[hooks.` header line that lets a generated header open a
+ * legacy block (`findManagedRange`).
  * Two marker searches stay outside it on purpose: the split-block refusal's
  * candidate list (`assertNoSplitBlock`), which can only refuse, never
  * install, and the trailing comment run of `scanOwnedContentEnd`, whose
- * lines are whole top-level comment lines by construction.
+ * lines are whole top-level comment lines by construction. That run (blank
+ * and comment lines ending the file after a block with no END marker) is
+ * consumed as stale harness output when the source prefix, the generated
+ * header or the `# harness hook:` text appears anywhere in it, so an
+ * operator comment there that mentions such text mid-line is removed with
+ * the block.
  *
  * The returned probe answers for line starts queried in non-decreasing
  * order (the top-level probe's contract, which a line that fails the text
@@ -676,17 +683,24 @@ function harnessHookTableFollows(
  * reads such a table as foreign with or without a comment line above it
  * (task e8f4fc03). The legacy paths call
  * this too, so the substring matching above applies there as well: a value
- * holding marker text refuses. This is the one marker search that does not
- * go through `createMarkerLineProbe`, on purpose: it can only refuse, never
- * install, so matching marker text in a value costs a refusal, never
- * operator content. `blockOpening` names the line the block
+ * holding marker text refuses. This candidate list and the trailing comment
+ * run of `scanOwnedContentEnd` are the two marker searches that do not go
+ * through `createMarkerLineProbe`, on purpose. This one can only refuse,
+ * never install, so matching marker text in a value costs a refusal, never
+ * operator content. The comment run's lines are whole top-level comment
+ * lines, so marker text there is never inside a value, but that run (blank
+ * and comment lines ending the file after a block with no END marker) is
+ * consumed when the source prefix, the generated header or the
+ * `# harness hook:` text appears anywhere in it, so an operator comment
+ * there that mentions such text mid-line is removed with the block.
+ * `blockOpening` names the line the block
  * starts at in the delete-the-lines fix: the BEGIN marker by default; a
  * legacy config (no BEGIN marker) whose END marker survived passes its
  * source-prefix line or generated header instead, since a BEGIN marker it
  * does not have is no line to delete from (task 01053b27). For the generated
  * header the fix deletes that line and the END marker line too: a generated
  * header left alone above END no longer marks a harness block
- * (`findManagedRange` needs a `[[hooks.` line after it), so the install
+ * (`findManagedRange` needs a top-level `[[hooks.` header line after it), so the install
  * would add a fresh block and leave that pair behind as an orphan. Exported for
  * direct tests only: the scan
  * that feeds it never hands it a line that is not a real header, so its own
@@ -1179,12 +1193,15 @@ function findManagedRange(text: string, configPath: string): ManagedRange | null
   if (generated !== -1) {
     const start = startPastBom(text, generated);
     const scan = scanOwnedContentEnd(text, start);
-    const end = scan.end;
-    const candidate = text.slice(start, end);
-    if (
-      candidate.includes("[[hooks.") ||
-      candidate.includes("[[hooks.pre_tool_use]]")
-    ) {
+    // The generated header opens a legacy block only when a hook table header
+    // line (`[[hooks.`, the older `[[hooks.pre_tool_use]]` included) follows
+    // it inside the scanned range, found by the same top-level line rule as
+    // the markers: `[[hooks.` text in a value, a multi-line string line or a
+    // comment under an operator table is operator content, and taking it for
+    // a header made the install replace the operator's keys after the header
+    // line with the fresh block (task 36d962d2).
+    const hookHeader = findMarkerLine(text, "[[hooks.", "prefix", start);
+    if (hookHeader !== -1 && hookHeader < scan.end) {
       return legacyManagedRange(text, start, scan, configPath, GENERATED_HEADER_OPENING);
     }
   }
