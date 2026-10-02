@@ -153,7 +153,7 @@ export async function runPackHookSubagentStartCli(
     );
   }
 
-  const diagnostic = `${HOOK_LABEL}: wrote in-flight record for agent ${agentId} (parent=${approval.source})`;
+  const diagnostic = `${HOOK_LABEL}: wrote in-flight record for agent ${agentId} (parent=${reportHash.source})`;
   stderr.write(`${diagnostic}\n`);
   return { exitCode: 0, recordWritten: true, sessionId, agentId, diagnostic };
 }

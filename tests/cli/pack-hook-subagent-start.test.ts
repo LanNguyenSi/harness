@@ -451,6 +451,56 @@ describe("pack hook subagent-start: report-hash cross-check before minting the r
     expect(call.source).toBe("inflight");
   });
 
+  // Production wiring: `harness apply` bakes UNDERSTANDING_GATE_REPORT_DIR into
+  // the hook command and the hook gets no reportsDir injection, so the
+  // directory comes from the environment. The cwd stays elsewhere (the
+  // default `<cwd>/.understanding-gate/reports` does not exist here).
+  describe("reports directory resolved from UNDERSTANDING_GATE_REPORT_DIR (no reportsDir injection)", () => {
+    let savedReportDir: string | undefined;
+
+    beforeEach(() => {
+      savedReportDir = process.env.UNDERSTANDING_GATE_REPORT_DIR;
+      process.env.UNDERSTANDING_GATE_REPORT_DIR = reportsDir;
+    });
+
+    afterEach(() => {
+      if (savedReportDir === undefined) delete process.env.UNDERSTANDING_GATE_REPORT_DIR;
+      else process.env.UNDERSTANDING_GATE_REPORT_DIR = savedReportDir;
+    });
+
+    async function startSubagentFromEnv(): Promise<{ recordWritten: boolean; stderr: string }> {
+      const stderr = bufferStream();
+      const result = await runPackHookSubagentStartCli({
+        manifest: manifestWithPack(),
+        stdin: readableFromString(eventBody()),
+        stderr: stderr.stream,
+        generatedDir,
+      });
+      return { recordWritten: result.recordWritten, stderr: stderr.read() };
+    }
+
+    it("edited report: no in-flight record is written", async () => {
+      const reportPath = await approveRealFlow();
+      editReport(reportPath);
+
+      const start = await startSubagentFromEnv();
+
+      expect(start.recordWritten).toBe(false);
+      expect(start.stderr).toMatch(MISMATCH);
+      expect(verifyInflightRecord(generatedDir, SESSION, AGENT).matched).toBe(false);
+    });
+
+    it("intact approval: the record is written", async () => {
+      await approveRealFlow();
+
+      const start = await startSubagentFromEnv();
+
+      expect(start.recordWritten).toBe(true);
+      expect(start.stderr).toMatch(/wrote in-flight record for agent agent-abc123 \(parent=session\)/);
+      expect(verifyInflightRecord(generatedDir, SESSION, AGENT).matched).toBe(true);
+    });
+  });
+
   it("null-hash marker: unchanged, the record is written even though report files exist and none matches anything", async () => {
     writeReport("unrelated.json", "sess-other", "some other report");
     writeApprovalMarker(generatedDir, SESSION, {
@@ -504,5 +554,7 @@ describe("pack hook subagent-start: report-hash cross-check before minting the r
     const verified = verifyInflightRecord(generatedDir, SESSION, AGENT);
     expect(verified.matched).toBe(true);
     expect(verified.detail).toMatch(/parent=session/);
+    // The success diagnostic names the marker that verified, like the record.
+    expect(start.stderr).toMatch(/wrote in-flight record for agent agent-abc123 \(parent=session\)/);
   });
 });

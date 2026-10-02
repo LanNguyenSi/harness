@@ -47,10 +47,9 @@
 //     planted files just under the cap can still push one scan past the
 //     hook's time budget (a non-blocking error for the runtime, the same
 //     allow as before the check existed). Not pinned by a test here.
-//   - In-flight subagent record: hook-subagent-start.ts mints the in-flight
-//     record without the hash check, so a record written under a refused
-//     approval can open the gate for that subagent once the parent marker
-//     stops matching (claim switch, max_age). Pre-existing, unchanged here.
+//   - In-flight subagent record: closed. hook-subagent-start.ts now applies
+//     the same hash check before minting the record, so a refused approval
+//     mints none (pinned in tests/cli/pack-hook-subagent-start.test.ts).
 //   - The standalone `understanding-gate approve` CLI flips the report
 //     without a signed marker and therefore no longer opens the harness
 //     gate; `harness approve understanding` is the approval path. It writes a
