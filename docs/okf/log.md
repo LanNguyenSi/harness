@@ -2,6 +2,8 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-10-02T11:02:28Z, task 4d28617e: `gate-fail-posture-matrix.md` and the pack doc now say that the consume step's temp file is created by `atomicWriteFile` (`src/io/atomic-write.ts`) under a random 64-bit suffix with `O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW`, so a FIFO, symlink or regular file planted at the name it chose makes the write fail at once and the consume declines with the report left pending; this closes the write-path residual the 4b39022f entries name. The matrix lists `src/io/atomic-write.ts` under its sources. `codex-adapter-parity-gaps.md`, `evidence-ledger-trust-boundary.md`, `understanding-gate-auto-mode-signals.md` and `understanding-gate-lockout-recovery.md` list the pack doc under sources; their claims about the gate were re-verified against the changed helper (none mentions the temp file or its open flags) and they are re-stamped with no body change.
+
 - 2026-10-02T10:11:26Z, task 7dfdcaaf: re-stamped after merging master; `codex-adapter-parity-gaps.md`, `evidence-ledger-trust-boundary.md`, `gate-fail-posture-matrix.md`, `understanding-gate-auto-mode-signals.md`, `understanding-gate-lockout-recovery.md` list sources that master changed in the meantime. The merged changes come from separately reviewed tasks and none contradicts these docs' claims, so no body text changed.
 
 - 2026-10-02T09:38:10Z, task 7dfdcaaf: re-stamped after merging master; `codex-adapter-parity-gaps.md` list sources that master changed in the meantime. The merged changes come from separately reviewed tasks and none contradicts these docs' claims, so no body text changed.
