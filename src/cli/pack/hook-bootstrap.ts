@@ -146,6 +146,24 @@ export function stdinTimeoutBlockReason(idleTimeoutMs: number): string {
 }
 
 /**
+ * Refuse a tool call because the stdin read timed out: write the Claude Code
+ * block envelope to `stdout` and one `BLOCK: <reason>` line through `note`
+ * (the hook's own stderr writer). Returns the blocked result shape the gates
+ * share, plus the reason for a gate whose result carries one.
+ */
+export function refuseOnStdinTimeout(
+  idleTimeoutMs: number,
+  stdout: NodeJS.WritableStream,
+  note: (line: string) => void,
+): { exitCode: 0; blocked: true; diagnostic: string; reason: string } {
+  const reason = stdinTimeoutBlockReason(idleTimeoutMs);
+  const diagnostic = `BLOCK: ${reason}`;
+  note(diagnostic);
+  stdout.write(`${stdinTimeoutBlockJson(reason)}\n`);
+  return { exitCode: 0, blocked: true, diagnostic, reason };
+}
+
+/**
  * The Claude Code block envelope for a stdin-timeout refusal: `decision:
  * "block"` for legacy CLIs plus the 2.1+ `hookSpecificOutput` PreToolUse deny.
  * Same shape every PreToolUse gate in this directory emits for a block.

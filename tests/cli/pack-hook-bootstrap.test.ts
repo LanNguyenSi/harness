@@ -12,6 +12,7 @@ import {
   loadManifestOrInjected,
   readStdin,
   readStdinChecked,
+  refuseOnStdinTimeout,
   resolveSessionAndAgentIds,
   resolveSubagentHookContext,
   stdinTimeoutBlockJson,
@@ -159,6 +160,26 @@ describe("stdin timeout block helpers", () => {
     expect(reason).toMatch(/^stdin timeout:/);
     expect(reason).toContain("within 3000 ms");
     expect(reason).toContain("fail closed");
+  });
+
+  it("refuseOnStdinTimeout writes the block envelope to stdout and one BLOCK note, and returns a blocked result", () => {
+    const out: string[] = [];
+    const notes: string[] = [];
+    const result = refuseOnStdinTimeout(
+      3000,
+      { write: (s: string) => (out.push(s), true) } as unknown as NodeJS.WritableStream,
+      (line) => notes.push(line),
+    );
+    expect(result.exitCode).toBe(0);
+    expect(result.blocked).toBe(true);
+    expect(result.reason).toBe(stdinTimeoutBlockReason(3000));
+    expect(result.diagnostic).toBe(`BLOCK: ${result.reason}`);
+    expect(notes).toEqual([result.diagnostic]);
+    expect(out).toHaveLength(1);
+    expect(JSON.parse(out[0] as string)).toMatchObject({
+      decision: "block",
+      reason: result.reason,
+    });
   });
 
   it("the envelope blocks in both the legacy and the hookSpecificOutput form", () => {

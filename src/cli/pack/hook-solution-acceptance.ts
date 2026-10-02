@@ -60,8 +60,7 @@ import {
   loadManifestOrInjected,
   parseConfigUx,
   readStdinChecked,
-  stdinTimeoutBlockJson,
-  stdinTimeoutBlockReason,
+  refuseOnStdinTimeout,
 } from "./hook-bootstrap.js";
 
 export interface PackHookSolutionAcceptanceOptions extends LoaderOptions {
@@ -596,11 +595,7 @@ export async function runPackHookSolutionAcceptanceCli(
   // or truncated text as a malformed event (task 7dfdcaaf). Only the operator
   // pause, handled just before, yields.
   if (stdinRead.timedOut) {
-    const reason = stdinTimeoutBlockReason(stdinRead.idleTimeoutMs);
-    const diagnostic = `BLOCK: ${reason}`;
-    note(diagnostic);
-    stdout.write(`${stdinTimeoutBlockJson(reason)}\n`);
-    return { exitCode: 0, blocked: true, diagnostic };
+    return refuseOnStdinTimeout(stdinRead.idleTimeoutMs, stdout, note);
   }
 
   const sessionId =

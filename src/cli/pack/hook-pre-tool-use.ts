@@ -116,8 +116,7 @@ import {
   loadManifestOrInjected,
   parseConfigUx,
   readStdinChecked,
-  stdinTimeoutBlockJson,
-  stdinTimeoutBlockReason,
+  refuseOnStdinTimeout,
 } from "./hook-bootstrap.js";
 import { renderReportSchemaHint } from "./understanding-report-schema-hint.js";
 
@@ -675,15 +674,16 @@ export async function runPackHookPreToolUseCli(
   // or truncated text as a malformed event (task 7dfdcaaf). Only the operator
   // pause, handled just before, yields.
   if (stdinRead.timedOut) {
-    const reason = stdinTimeoutBlockReason(stdinRead.idleTimeoutMs);
-    const diagnostic = `harness pack hook: BLOCK: ${reason}`;
-    stderr.write(`${diagnostic}\n`);
-    stdout.write(`${stdinTimeoutBlockJson(reason)}\n`);
+    const { reason, diagnostic } = refuseOnStdinTimeout(
+      stdinRead.idleTimeoutMs,
+      stdout,
+      (line) => stderr.write(`harness pack hook: ${line}\n`),
+    );
     return {
       exitCode: 0,
       blocked: true,
       approvalCheck: { approved: false, source: "none", detail: reason },
-      diagnostic,
+      diagnostic: `harness pack hook: ${diagnostic}`,
     };
   }
 

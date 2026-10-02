@@ -86,8 +86,7 @@ import type { LoaderOptions } from "../loader.js";
 import {
   checkHookPause,
   readStdinChecked,
-  stdinTimeoutBlockJson,
-  stdinTimeoutBlockReason,
+  refuseOnStdinTimeout,
 } from "./hook-bootstrap.js";
 
 export interface PackHookSolutionAcceptanceWriteguardOptions extends LoaderOptions {
@@ -373,11 +372,7 @@ export async function runPackHookSolutionAcceptanceWriteguardCli(
   // or truncated text as a malformed event (task 7dfdcaaf). Only the operator
   // pause, handled just before, yields.
   if (stdinRead.timedOut) {
-    const reason = stdinTimeoutBlockReason(stdinRead.idleTimeoutMs);
-    const diagnostic = `BLOCK: ${reason}`;
-    note(diagnostic);
-    stdout.write(`${stdinTimeoutBlockJson(reason)}\n`);
-    return { exitCode: 0, blocked: true, diagnostic };
+    return refuseOnStdinTimeout(stdinRead.idleTimeoutMs, stdout, note);
   }
 
   const toolName = typeof event.tool_name === "string" ? event.tool_name : "(unknown)";
