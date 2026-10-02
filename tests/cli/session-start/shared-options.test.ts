@@ -1,6 +1,7 @@
 import { Command } from "commander";
 import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { readStdinBounded } from "../../../src/cli/bounded-stdin.js";
 import {
   addCwdOption,
   addIdentityOptions,
@@ -11,7 +12,6 @@ import {
   FALLBACK_SESSION,
   malformedEventReason,
   readSessionStartEvent,
-  readStdin,
   resolveEventCwd,
   type SessionStartCliTarget,
 } from "../../../src/cli/session-start/shared-options.js";
@@ -94,10 +94,10 @@ describe("resolveEventCwd", () => {
 describe("stdin event reading", () => {
   it("reads a stream to its end", async () => {
     const stream = new PassThrough();
-    const read = readStdin(stream);
+    const read = readStdinBounded(stream);
     stream.write("ab");
     stream.end("cd");
-    expect(await read).toBe("abcd");
+    expect(await read).toEqual({ text: "abcd", timedOut: false });
   });
 
   it("parses the event JSON and treats blank input as an empty event", async () => {

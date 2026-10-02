@@ -225,8 +225,8 @@ which are available even when the policy declares no `trigger.extract`:
 | Variable | Source |
 |---|---|
 | `${SESSION_ID}` | Claude Code session id |
-| `${REPO}` | basename of the git worktree root (`git rev-parse --show-toplevel`), so a subdirectory of a checkout still resolves to the repo name; `""` when not in a git repo |
-| `${BRANCH}` | branch name from git HEAD; `""` on a detached HEAD or outside a git worktree (there is no `(detached)` placeholder) |
+| `${REPO}` | basename of the git worktree root (`git rev-parse --show-toplevel`), so a subdirectory of a checkout still resolves to the repo name; `""` when not in a git repo. An empty `${REPO}` never renders a blank ledger tag: a gate whose `requires.ledger_tag` references it decides from the policy's own `enforcement:` with a reason that names `cd <repo>` or `git -C <repo> ...`, and queries no ledger |
+| `${BRANCH}` | branch name from git HEAD; `""` on a detached HEAD or outside a git worktree (there is no `(detached)` placeholder). An empty `${BRANCH}` never renders a blank ledger tag: a gate whose `requires.ledger_tag` references it decides from the policy's own `enforcement:` with a reason that names `git switch <branch>`, and queries no ledger |
 | `${TOOL_NAME}` | the tool the agent invoked |
 | `${CWD}` | the agent's working directory |
 | `${PR_NUMBER}`, `${TASK_ID}`, ... | per-policy `trigger.extract` keys |

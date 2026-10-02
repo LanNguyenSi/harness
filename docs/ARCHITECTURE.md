@@ -497,8 +497,8 @@ Variables appear in `requires.ledger_tag` and are substituted at policy-evaluati
 | Variable | Ships in | Source |
 |---|---|---|
 | `${SESSION_ID}` | Phase 1 | current grounding session id |
-| `${REPO}` | Phase 1 | basename of `git rev-parse --show-toplevel`, or `""` if not in a git repo |
-| `${BRANCH}` | Phase 1 | branch name from git HEAD (symbolic ref); `""` on a detached HEAD or outside a git worktree |
+| `${REPO}` | Phase 1 | basename of `git rev-parse --show-toplevel`, or `""` if not in a git repo. An empty `${REPO}` never renders a blank ledger tag: a gate whose `requires.ledger_tag` references it decides from the policy's own `enforcement:` with a reason that names `cd <repo>` or `git -C <repo> ...`, and queries no ledger |
+| `${BRANCH}` | Phase 1 | branch name from git HEAD (symbolic ref); `""` on a detached HEAD or outside a git worktree. An empty `${BRANCH}` never renders a blank ledger tag: a gate whose `requires.ledger_tag` references it decides from the policy's own `enforcement:` with a reason that names `git switch <branch>`, and queries no ledger |
 | `${PR_NUMBER}` | Phase 1 | requires a `trigger.extract: { PR_NUMBER: ... }` entry. No tool-specific hardcoding; the policy author writes the JSONPath against the event context. `validate` rejects a policy that references `${PR_NUMBER}` in `requires` without an `extract` entry. |
 | `${TOOL_NAME}` | Phase 2 | the matched tool's canonical name |
 | `${CWD}` | Phase 2 | current working directory (absolute) |
