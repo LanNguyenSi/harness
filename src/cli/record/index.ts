@@ -273,33 +273,36 @@ function rejectTagTokens(
   return { ok: true, value };
 }
 
-/** Required tag value: keeps the plain "must not be empty" message, then `checkTagValue`. */
-function requireTagValue(
+type Checked = { ok: true; value: string } | { ok: false; result: RecordResult };
+
+/**
+ * Required value: keeps the plain "must not be empty" message, then runs
+ * `check` (tag shape for `--pr` / `--task`, tag-token rejection for free text).
+ */
+function requireChecked(
   value: string | undefined,
   flagLabel: string,
   sessionId: string,
   note: (msg: string) => void,
-): { ok: true; value: string } | { ok: false; result: RecordResult } {
+  check: typeof checkTagValue,
+): Checked {
   const nonEmpty = requireNonEmpty(value, flagLabel, sessionId, note);
-  if (!nonEmpty.ok) return nonEmpty;
-  const checked = checkTagValue(nonEmpty.value, flagLabel, sessionId, note);
-  if (!checked.ok) return { ok: false, result: checked.result };
-  return checked;
+  return nonEmpty.ok ? check(nonEmpty.value, flagLabel, sessionId, note) : nonEmpty;
 }
 
-/** Required free text: non-empty after trimming, no recognised tag token. */
-function requireFreeText(
+const requireTagValue = (
   value: string | undefined,
   flagLabel: string,
   sessionId: string,
   note: (msg: string) => void,
-): { ok: true; value: string } | { ok: false; result: RecordResult } {
-  const nonEmpty = requireNonEmpty(value, flagLabel, sessionId, note);
-  if (!nonEmpty.ok) return nonEmpty;
-  const checked = rejectTagTokens(nonEmpty.value, flagLabel, sessionId, note);
-  if (!checked.ok) return { ok: false, result: checked.result };
-  return checked;
-}
+): Checked => requireChecked(value, flagLabel, sessionId, note, checkTagValue);
+
+const requireFreeText = (
+  value: string | undefined,
+  flagLabel: string,
+  sessionId: string,
+  note: (msg: string) => void,
+): Checked => requireChecked(value, flagLabel, sessionId, note, rejectTagTokens);
 
 /**
  * Resolve the branch tag `review` and `review-subagent` both require:
