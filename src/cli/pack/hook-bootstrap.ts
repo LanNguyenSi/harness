@@ -57,7 +57,7 @@
 // to each hook. This module covers structural boilerplate only, not semantics.
 
 import { PassThrough } from "node:stream";
-import { readStdinBounded, STDIN_IDLE_TIMEOUT_MS, stdinTimeoutNote } from "../bounded-stdin.js";
+import { readStdinBounded, STDIN_IDLE_TIMEOUT_MS, stdinTimeoutNote, stdinTimeoutBlockJson, stdinTimeoutBlockReason } from "../bounded-stdin.js";
 import { checkPauseFromLoader } from "../pause-check.js";
 import { loadManifest, type LoaderOptions } from "../loader.js";
 import { resolveGeneratedDir } from "../../runtime/pending-approval.js";
@@ -134,19 +134,6 @@ export async function readStdin(
 }
 
 /**
- * The block reason a PreToolUse gate gives when its stdin read timed out. It
- * names the stdin timeout and the bound; the gate fails closed because an
- * event that did not finish arriving cannot be judged.
- */
-export function stdinTimeoutBlockReason(idleTimeoutMs: number): string {
-  return (
-    `stdin timeout: no complete event arrived and closed on stdin within ${idleTimeoutMs} ms, ` +
-    `so this gate cannot judge the tool call and refuses it (fail closed). ` +
-    `Retry the tool call. Operator override: \`harness pause\`.`
-  );
-}
-
-/**
  * Run a PreToolUse gate entry behind a stdin-timeout refusal without editing
  * the entry's body: read stdin with the idle bound first, and when the read
  * timed out (and the operator pause does not apply) hand `refuse` the reason
@@ -171,23 +158,6 @@ export async function runGateWithStdinRefusal<
   const replay = new PassThrough();
   replay.end(read.text);
   return run({ ...opts, stdin: replay });
-}
-
-/**
- * The Claude Code block envelope for a stdin-timeout refusal: `decision:
- * "block"` for legacy CLIs plus the 2.1+ `hookSpecificOutput` PreToolUse deny.
- * Same shape every PreToolUse gate in this directory emits for a block.
- */
-export function stdinTimeoutBlockJson(reason: string): string {
-  return JSON.stringify({
-    decision: "block",
-    reason,
-    hookSpecificOutput: {
-      hookEventName: "PreToolUse",
-      permissionDecision: "deny",
-      permissionDecisionReason: reason,
-    },
-  });
 }
 
 /**

@@ -315,7 +315,7 @@ Ausgaben und sind nur paarweise überlappend messbar.
 |---|---|---|
 | `command-normalize.ts` | `normalized` | `bash_match` raw-OR-normalized-OR-amp-OR-quote-normalized (`src/runtime/intercept.ts:549-633#"return true;"`, dritter Arm seit `aabbad63`, vierter Arm seit `cf3dff51`) |
 | | `targetDir`/`targetBase` | nichts (grep-verifiziert) |
-| `bash-prefix-parse.ts` | `inlineEnv`, `cdTarget` | Risk-Gate-Kontext (`src/cli/policy/intercept.ts:1071-1101#"return { ...base, ...bashPrefix.inlineEnv };"`) |
+| `bash-prefix-parse.ts` | `inlineEnv`, `cdTarget` | Risk-Gate-Kontext (`src/cli/policy/intercept.ts:1064-1094#"return { ...base, ...bashPrefix.inlineEnv };"`) |
 | `read-only-bash.ts` | Boolean | Risk-Floor, Understanding-Gate-PreToolUse (2 Hooks), Write-Guard |
 | `read-only-bash.ts`, `splitCurlWords` | `CurlWord[] \| null` | Risk-Floor NUR (`isReadOnlyCurlCommand`, task `fdaad781`) |
 

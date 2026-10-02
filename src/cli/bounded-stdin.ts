@@ -94,3 +94,33 @@ export function stdinTimeoutNote(
     : `stdin did not close within ${idleTimeoutMs} ms of the last data; ` +
         `using the ${Buffer.byteLength(read.text)} bytes read`;
 }
+
+/**
+ * The block reason a PreToolUse gate gives when its stdin read timed out. It
+ * names the stdin timeout and the bound; the gate fails closed because an
+ * event that did not finish arriving cannot be judged.
+ */
+export function stdinTimeoutBlockReason(idleTimeoutMs: number): string {
+  return (
+    `stdin timeout: no complete event arrived and closed on stdin within ${idleTimeoutMs} ms, ` +
+    `so this gate cannot judge the tool call and refuses it (fail closed). ` +
+    `Retry the tool call. Operator override: \`harness pause\`.`
+  );
+}
+
+/**
+ * The Claude Code block envelope for a stdin-timeout refusal: `decision:
+ * "block"` for legacy CLIs plus the 2.1+ `hookSpecificOutput` PreToolUse deny.
+ * Same shape every PreToolUse gate in this directory emits for a block.
+ */
+export function stdinTimeoutBlockJson(reason: string): string {
+  return JSON.stringify({
+    decision: "block",
+    reason,
+    hookSpecificOutput: {
+      hookEventName: "PreToolUse",
+      permissionDecision: "deny",
+      permissionDecisionReason: reason,
+    },
+  });
+}
