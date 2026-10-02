@@ -298,9 +298,11 @@ type MarkerShape = "whole" | "prefix";
  * elements). Treating such text as a marker made the install replace,
  * delete, or splice a fresh block into the operator's value. Every lookup
  * of BEGIN, END, the source prefix, the generated header and the
- * `# harness hook:` comment goes through this probe or `findMarkerLine`, and
- * so does the `[[hooks.` header line that lets a generated header open a
- * legacy block (`findManagedRange`).
+ * `# harness hook:` comment goes through this probe or `findMarkerLine` (or
+ * `findMarkerAboveHookTable`, which calls the probe for its one candidate),
+ * and so does the `[[hooks.` header line that lets a generated header open a
+ * legacy block (`findManagedRange`), searched only up to the end of the range
+ * the scan owns.
  * Two marker searches stay outside it on purpose: the split-block refusal's
  * candidate list (`assertNoSplitBlock`), which can only refuse, never
  * install, and the trailing comment run of `scanOwnedContentEnd`, whose
@@ -327,18 +329,80 @@ function createMarkerLineProbe(
 }
 
 /** The start of the first marker line (`createMarkerLineProbe`) at or after
- * the line start `from`, or -1. Candidates are visited in order, one line
- * each, so the probe's non-decreasing-offset contract holds. */
-function findMarkerLine(text: string, marker: string, shape: MarkerShape, from = 0): number {
+ * the line start `from` and before `to`, or -1. Candidates are visited in
+ * order, one line each, so the probe's non-decreasing-offset contract holds.
+ * Every candidate that fails the text test is free, but one that passes it
+ * costs a parse of the document before it (`createTopLevelProbe`), so a caller
+ * that only needs a marker inside a known range passes that range's end as
+ * `to`: the search stops there instead of probing every candidate past it. */
+function findMarkerLine(
+  text: string,
+  marker: string,
+  shape: MarkerShape,
+  from = 0,
+  to = text.length,
+): number {
   const isMarkerLine = createMarkerLineProbe(text);
   let pos = from;
   for (;;) {
     const idx = text.indexOf(marker, pos);
     if (idx === -1) return -1;
     const lineStart = lineStartAt(text, idx);
+    if (lineStart >= to) return -1;
     if (isMarkerLine(lineStart, marker, shape)) return lineStart;
     pos = lineEndAfter(text, lineStart);
   }
+}
+
+/**
+ * The marker line (`createMarkerLineProbe`, prefix shape) that sits in the run
+ * of blank and comment lines directly above a hook table header, searched from
+ * the line start `from` (a line at which nothing is open) to the end of the
+ * document, with the header's offset; null when there is none. `isHookTable`
+ * says which header lines count as a hook table. This is how the two orphan
+ * shapes are found: a generated-header line above a hook table past a foreign
+ * table, and a `# harness hook:` comment line above a hook table with no block
+ * marker around it. The scan is linear and parses nothing for a line that is
+ * not such a pair: a line inside a multi-line string is skipped
+ * (`nextTripleDelim`), a content line ends the run, and only a marker-text
+ * line directly above a header reaches the probe, once, which confirms the
+ * line is at the top level. A comment run directly above a hook table header
+ * is at the top level in any config that parses (a header line is never inside
+ * an array), so the probe only turns away a config that does not parse, which
+ * the parse checks refuse anyway.
+ */
+function findMarkerAboveHookTable(
+  text: string,
+  marker: string,
+  from: number,
+  isHookTable: (trimmedHeader: string) => boolean,
+): { marker: number; header: number } | null {
+  const isMarkerLine = createMarkerLineProbe(text);
+  let delim: TripleDelim = null;
+  let runMarker: number | null = null;
+  let pos = from;
+  while (pos < text.length) {
+    const lineEnd = lineEndAfter(text, pos);
+    const rawLine = text.slice(pos, lineEnd);
+    const startedInsideString = delim !== null;
+    delim = nextTripleDelim(rawLine, delim);
+    if (startedInsideString) {
+      runMarker = null;
+      pos = lineEnd;
+      continue;
+    }
+    const trimmed = rawLine.trim();
+    if (trimmed === "" || trimmed.startsWith("#")) {
+      if (runMarker === null && trimmed.startsWith(marker)) runMarker = pos;
+    } else {
+      if (runMarker !== null && isHookTable(trimmed) && isMarkerLine(runMarker, marker, "prefix")) {
+        return { marker: runMarker, header: pos };
+      }
+      runMarker = null;
+    }
+    pos = lineEnd;
+  }
+  return null;
 }
 
 /** True when a line in `[from, to)` is a marker line for the prefix
@@ -493,6 +557,26 @@ function createLineClassifier(
   };
 }
 
+/** What `scanOwnedContentEnd` found: where the owned range ends, whether it
+ * ended at an END marker line, and two facts about the lines it passed. */
+interface OwnedContentScan {
+  end: number;
+  sawEndMarker: boolean;
+  endedAtOperatorHookTable?: true;
+  /**
+   * The offset of the first key or value line (not blank, not a comment, not a
+   * table header) the range holds before its first `[[hooks.` header, and the
+   * offset of that header, set only when both exist. A block harness wrote
+   * puts nothing but comment lines between its opening line and its first hook
+   * table, so such a line is operator content: the key of the operator table
+   * that was open where the opening line sits, which the install would delete
+   * with the block (the semantic net compares only what is outside the hook
+   * event arrays, so a key of an operator hook table goes unseen there). The
+   * legacy paths refuse on it (`legacyManagedRange`).
+   */
+  operatorLineBeforeHookTable?: { line: number; header: number };
+}
+
 /**
  * Scans forward from `start` classifying each line as either still-owned
  * harness content or the start of foreign (non-harness) content, WITHOUT
@@ -541,14 +625,19 @@ function createLineClassifier(
  * reads exactly like a comment, a blank line, or even the END marker
  * without that ending the region early (task 6a037359).
  */
-function scanOwnedContentEnd(
-  text: string,
-  start: number,
-): { end: number; sawEndMarker: boolean; endedAtOperatorHookTable?: true } {
+function scanOwnedContentEnd(text: string, start: number): OwnedContentScan {
   let pos = start;
   let commentRunStart: number | null = null;
   let sawOwnedContent = false;
   let sawMarkedHookTable = false;
+  let firstContentLine: number | null = null;
+  let firstHookHeader: number | null = null;
+  // A key line before the first hook table header of the range, with that
+  // header, when both exist: see `OwnedContentScan.operatorLineBeforeHookTable`.
+  const keyBeforeHookTable = (): Pick<OwnedContentScan, "operatorLineBeforeHookTable"> =>
+    firstContentLine !== null && firstHookHeader !== null
+      ? { operatorLineBeforeHookTable: { line: firstContentLine, header: firstHookHeader } }
+      : {};
   const classify = createLineClassifier(text);
   const isMarkerLine = createMarkerLineProbe(text);
   while (pos < text.length) {
@@ -562,7 +651,7 @@ function scanOwnedContentEnd(
       continue;
     }
     if (isMarkerLine(pos, CODEX_MANAGED_END, "whole")) {
-      return { end: lineEnd, sawEndMarker: true };
+      return { end: lineEnd, sawEndMarker: true, ...keyBeforeHookTable() };
     }
     if (kind === "comment") {
       if (commentRunStart === null) commentRunStart = pos;
@@ -570,9 +659,10 @@ function scanOwnedContentEnd(
       continue;
     }
     if (kind === "foreignHeader") {
-      return { end: commentRunStart ?? pos, sawEndMarker: false };
+      return { end: commentRunStart ?? pos, sawEndMarker: false, ...keyBeforeHookTable() };
     }
     if (kind === "hookHeader") {
+      firstHookHeader ??= pos;
       const marked =
         commentRunStart !== null &&
         rangeHoldsMarkerLine(text, commentRunStart, pos, HARNESS_HOOK_COMMENT_PREFIX, isMarkerLine);
@@ -582,8 +672,15 @@ function scanOwnedContentEnd(
         // An operator-authored hook table (no `# harness hook:` comment
         // above it) after the harness tables ends the owned region, like a
         // foreign table, and keeps a comment attached to it (task 01053b27).
-        return { end: commentRunStart ?? pos, sawEndMarker: false, endedAtOperatorHookTable: true };
+        return {
+          end: commentRunStart ?? pos,
+          sawEndMarker: false,
+          endedAtOperatorHookTable: true,
+          ...keyBeforeHookTable(),
+        };
       }
+    } else if (firstHookHeader === null) {
+      firstContentLine ??= pos;
     }
     commentRunStart = null;
     sawOwnedContent = true;
@@ -610,10 +707,10 @@ function scanOwnedContentEnd(
       run.includes(CODEX_MANAGED_SOURCE_PREFIX) ||
       run.includes(GENERATED_HEADER);
     if (hasComment && !harnessAuthored) {
-      return { end: commentRunStart, sawEndMarker: false };
+      return { end: commentRunStart, sawEndMarker: false, ...keyBeforeHookTable() };
     }
   }
-  return { end: pos, sawEndMarker: false };
+  return { end: pos, sawEndMarker: false, ...keyBeforeHookTable() };
 }
 
 /**
@@ -673,11 +770,14 @@ function harnessHookTableFollows(
  * point at that marker; when there is no END marker anywhere in the
  * document (`to` is `text.length`), telling the operator to move something
  * below a marker that does not exist would be nonsensical, so a different
- * fix (add one, or move the table below the last harness hook table) is
- * offered instead (task 6a037359). Adding one is offered only when no
- * harness-commented hook table follows the named table
- * (`harnessHookTableFollows`): an END placed before the named table would
- * leave that later table running next to the fresh block (task 36d962d2).
+ * fix is offered instead (task 6a037359): adding one right after the last
+ * harness hook table, unless a harness-commented hook table follows the named
+ * table (`harnessHookTableFollows`), since an END placed before the named table
+ * would leave that later table running next to the fresh block, and then only
+ * moving the named table below the last harness hook table is offered (task
+ * 36d962d2). With no such table after it the named table already sits below
+ * the last harness hook table, so that move is never offered next to the END
+ * fix: it would change nothing and bring the same refusal back.
  * When the named table is a hook event table spelled without the `[[hooks.`
  * prefix, the guidance offers deleting it if harness wrote it, since the scan
  * reads such a table as foreign with or without a comment line above it
@@ -767,10 +867,13 @@ export function assertNoSplitBlock(
         // block, so the only fix offered is moving the named table past it
         // (task 36d962d2).
         [`move ${firstForeignHeader} below the last harness hook table`]
-      : [
+      : // No harness-commented hook table follows the named table, so it
+        // already sits below the last harness hook table and moving it there
+        // changes nothing (the same refusal would come back): only the END
+        // marker is offered.
+        [
           `add a '${CODEX_MANAGED_END}' marker line right after the last harness hook table ` +
             `(before ${firstForeignHeader})`,
-          `move ${firstForeignHeader} below the last harness hook table`,
         ];
   // An uncommented hook table in the middle may be a harness table whose
   // comment line was deleted, so moving it (the operator-table fix) is only
@@ -1101,10 +1204,28 @@ function rangeBeforeStrayEnd(
 function legacyManagedRange(
   text: string,
   start: number,
-  scan: { end: number; sawEndMarker: boolean; endedAtOperatorHookTable?: true },
+  scan: OwnedContentScan,
   configPath: string,
   blockOpening: string,
 ): ManagedRange {
+  if (scan.operatorLineBeforeHookTable !== undefined) {
+    const { line, header } = scan.operatorLineBeforeHookTable;
+    // Names line numbers only, never the line's own text: it is a key or a
+    // value, which can hold a token, and the refusal is printed to stderr and
+    // `--json`.
+    throw new CodexInstallRefusalError(
+      `Codex config ${configPath} has a key or value line (line ${lineNumberAt(text, line)}) between ` +
+        `${blockOpening} (line ${lineNumberAt(text, start)}) and the first hook table below it (line ` +
+        `${lineNumberAt(text, header)}). A block harness wrote has only comment lines there, so that ` +
+        "line is yours, a key of whatever table is open where the opening line sits (an operator " +
+        "hook table, say), and the install, which replaces everything from the opening line " +
+        "through the harness hook tables, would delete it; refusing to guess. Move that line (with " +
+        "any value lines it continues) above the opening line, so it stays in the table it " +
+        "belongs to, then re-run " +
+        "`harness apply --runtime codex --install`. The file is untouched.",
+      configPath,
+    );
+  }
   if (scan.sawEndMarker) {
     return { start, end: scan.end, foreignSectionsPreserved: [], keptHookTables: [] };
   }
@@ -1200,13 +1321,89 @@ function findManagedRange(text: string, configPath: string): ManagedRange | null
     // comment under an operator table is operator content, and taking it for
     // a header made the install replace the operator's keys after the header
     // line with the fresh block (task 36d962d2).
-    const hookHeader = findMarkerLine(text, "[[hooks.", "prefix", start);
-    if (hookHeader !== -1 && hookHeader < scan.end) {
+    // The search stops at the end of the scanned range: a candidate past it
+    // cannot open the block, and each one the text test lets through costs a
+    // parse of the document before it.
+    const hookHeader = findMarkerLine(text, "[[hooks.", "prefix", start, scan.end);
+    if (hookHeader !== -1) {
       return legacyManagedRange(text, start, scan, configPath, GENERATED_HEADER_OPENING);
     }
+    assertNoLaterGeneratedHeaderBlock(text, generated, scan.end, configPath);
   }
 
+  assertNoOrphanHarnessHookTable(text, configPath);
   return null;
+}
+
+/**
+ * Refuses when the first generated-header line opens no block (a foreign table
+ * follows it before any hook table) but a later generated-header line sits
+ * directly above a hook table: that is a genuine legacy block, and the install
+ * reads only the first generated-header line, so it would add the fresh block
+ * and leave the genuine one running next to it. Which of the two lines to
+ * trust is not something the file says, so the install names both lines and
+ * refuses. A later block whose first hook table is not directly under its
+ * generated-header line (a key or value line in between) is not recognised
+ * here, a documented boundary. Line numbers only, never a line's text.
+ */
+function assertNoLaterGeneratedHeaderBlock(
+  text: string,
+  firstHeader: number,
+  from: number,
+  configPath: string,
+): void {
+  const later = findMarkerAboveHookTable(text, GENERATED_HEADER, from, (t) =>
+    HOOK_ARRAY_HEADER_RE.test(t),
+  );
+  if (later === null) return;
+  throw new CodexInstallRefusalError(
+    `Codex config ${configPath} has two '${GENERATED_HEADER}' lines and the install can replace ` +
+      `only one block: the one at line ${lineNumberAt(text, firstHeader)} has no hook table of its ` +
+      `own (a table of yours follows it), the one at line ${lineNumberAt(text, later.marker)} sits ` +
+      `above the hook table at line ${lineNumberAt(text, later.header)}. Installing would add the ` +
+      "fresh block and leave that hook table running next to it, so the install refuses to guess " +
+      `which line is current. Delete the line at line ${lineNumberAt(text, firstHeader)} (it is a ` +
+      "comment, and no block hangs on it), then re-run `harness apply --runtime codex --install`. " +
+      "The file is untouched.",
+    configPath,
+  );
+}
+
+/**
+ * Refuses on the append path (no BEGIN marker, no source-prefix line and no
+ * generated-header line opening a block) when a `# harness hook:` comment line
+ * sits directly above a hook table: that is a hook table an earlier install
+ * wrote whose opening lines are gone, and the install would add the fresh block
+ * and leave it running next to it (the hook would run twice, or a hook the
+ * manifest retired would keep running). The comment line is found as a marker
+ * line (`createMarkerLineProbe`), above a `[[hooks.` header or a hook event
+ * header spelled another way (`isHookEventArrayHeader`). A table of the
+ * operator's own that carries such a comment is refused too, since the two
+ * cannot be told apart; the guidance offers rewording the comment. Line numbers
+ * and the table's own header only, never a line's text.
+ */
+function assertNoOrphanHarnessHookTable(text: string, configPath: string): void {
+  const orphan = findMarkerAboveHookTable(
+    text,
+    HARNESS_HOOK_COMMENT_PREFIX,
+    0,
+    (t) => HOOK_ARRAY_HEADER_RE.test(t) || isHookEventArrayHeader(t),
+  );
+  if (orphan === null) return;
+  const header = describeTableHeader(text.slice(orphan.header, lineEndAfter(text, orphan.header)));
+  throw new CodexInstallRefusalError(
+    `Codex config ${configPath} has a '${HARNESS_HOOK_COMMENT_PREFIX}<id> (budget_ms=<n>)' comment ` +
+      `line (line ${lineNumberAt(text, orphan.marker)}) directly above the hook table ${header} (line ` +
+      `${lineNumberAt(text, orphan.header)}), but no harness block marker (the '${CODEX_MANAGED_BEGIN}' ` +
+      "line, the source-prefix line, or the generated-header line above a hook table) opens a block " +
+      "around it. harness cannot tell that table from one an earlier install wrote, and the install " +
+      "would add its fresh block next to it, so that hook would run twice (or a hook the manifest " +
+      "retired would keep running). If harness wrote the table, delete it together with its comment " +
+      "line. If it is your own table, delete or reword the comment line, since the install reads a " +
+      `comment line that starts with '${HARNESS_HOOK_COMMENT_PREFIX}' as harness-owned. Then re-run ` +
+      "`harness apply --runtime codex --install`. The file is untouched.",
+    configPath,
+  );
 }
 
 function ensureTrailingNewline(s: string): string {
