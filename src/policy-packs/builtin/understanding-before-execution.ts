@@ -993,7 +993,10 @@ function buildHooks(
     {
       name: `${HOOK_NAME_PREFIX}:subagent-start`,
       event: "SubagentStart",
-      command: SUBAGENT_START_COMMAND,
+      // Reads persisted reports (report-hash cross-check before minting the
+      // record), so it carries the same reports-dir prefix as the other
+      // report-reading hooks and agrees with where `harness approve` wrote.
+      command: wrap(SUBAGENT_START_COMMAND),
       blocking: false,
       budget_ms: 2000,
       description:

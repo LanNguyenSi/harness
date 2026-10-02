@@ -11,7 +11,12 @@
 // `(session_id, agent_id)` — see inflight-records.ts's module header
 // for why this is a COPY of authority already granted, never a new
 // grant. When the parent holds no valid approval at spawn time, nothing
-// is written and the subagent gets no record to present later.
+// is written and the subagent gets no record to present later. A matched
+// marker whose signed report hash no longer matches any persisted report
+// (the approved report was edited after approval, the same cross-check
+// both PreToolUse hooks apply after a match) counts as no valid
+// approval: the PreToolUse hooks refuse that marker, so a record minted
+// under it would outlive the refusal and open the gate for the subagent.
 //
 // Never blocks: this hook has no gating role of its own (a later slice
 // teaches the PreToolUse blocker to consult the record it produces
@@ -20,7 +25,9 @@
 
 import {
   checkOperatorApprovalMarkers,
+  defaultReportsDir,
   rejectMalformedAgentId,
+  verifyMatchedMarkerReport,
   writeInflightRecord,
 } from "../../policy-packs/builtin/understanding-before-execution-runtime.js";
 import type { Manifest } from "../../schema/index.js";
@@ -40,6 +47,8 @@ export interface PackHookSubagentStartOptions extends LoaderOptions {
   stdin?: NodeJS.ReadableStream;
   stderr?: NodeJS.WritableStream;
   manifest?: Manifest;
+  /** Override the persisted-report directory (test injection). */
+  reportsDir?: string;
   /** Override the issue timestamp for deterministic tests. */
   now?: Date;
 }
@@ -113,12 +122,25 @@ export async function runPackHookSubagentStartCli(
     return { exitCode: 0, recordWritten: false, sessionId, agentId, diagnostic };
   }
 
+  // Same gate-read cross-check as both PreToolUse hooks: a marker whose
+  // signed report content is no longer on disk is not an approval, so no
+  // record may be copied from it.
+  const reportsDir = opts.reportsDir ?? defaultReportsDir();
+  const reportHash = verifyMatchedMarkerReport(reportsDir, approval);
+  if (!reportHash.ok) {
+    const diagnostic = `${HOOK_LABEL}: parent session ${sessionId} approval refused, ${reportHash.detail}; no in-flight record for agent ${agentId}`;
+    stderr.write(`${diagnostic}\n`);
+    return { exitCode: 0, recordWritten: false, sessionId, agentId, diagnostic };
+  }
+
   const writeOpts: Parameters<typeof writeInflightRecord>[0] = {
     generatedDir,
     sessionId,
     agentId,
     agentType,
-    parent: approval,
+    // The marker that actually verified (the session marker when a task
+    // marker failed the check and the session marker behind it held).
+    parent: { ...approval, source: reportHash.source, detail: reportHash.detail },
   };
   if (opts.now) writeOpts.now = opts.now;
   const result = writeInflightRecord(writeOpts);
@@ -131,7 +153,7 @@ export async function runPackHookSubagentStartCli(
     );
   }
 
-  const diagnostic = `${HOOK_LABEL}: wrote in-flight record for agent ${agentId} (parent=${approval.source})`;
+  const diagnostic = `${HOOK_LABEL}: wrote in-flight record for agent ${agentId} (parent=${reportHash.source})`;
   stderr.write(`${diagnostic}\n`);
   return { exitCode: 0, recordWritten: true, sessionId, agentId, diagnostic };
 }

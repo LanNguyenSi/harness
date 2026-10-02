@@ -12,8 +12,13 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { approveUnderstanding } from "../../src/cli/approve/understanding.js";
+import { runPackHookPreToolUseCli } from "../../src/cli/pack/hook-pre-tool-use.js";
 import { runPackHookSubagentStartCli } from "../../src/cli/pack/hook-subagent-start.js";
+import type { LedgerEntry } from "../../src/policies/index.js";
 import {
+  approvalMarkerPathFor,
+  canonicalReportHashOfFile,
   verifyInflightRecord,
   writeActiveClaim,
   writeApprovalMarker,
@@ -316,5 +321,240 @@ describe("pack hook subagent-start — writes an in-flight record on a valid par
     expect(result.recordWritten).toBe(false);
     expect(verifyInflightRecord(generatedDir, SESSION, AGENT).matched).toBe(false);
     expect(stderr.read()).toMatch(/enabled:false/);
+  });
+});
+
+// Gate-read report-hash cross-check at spawn time: the same rule both
+// PreToolUse hooks apply after a matched marker. The Codex adapter has no
+// SubagentStart hook (there is no `hook-codex-subagent-start`), so the
+// Claude hook is the only runtime with this path.
+describe("pack hook subagent-start: report-hash cross-check before minting the record", () => {
+  let generatedDir: string;
+  let reportsDir: string;
+  let savedClaude: string | undefined;
+  let savedClaudeCode: string | undefined;
+
+  beforeEach(() => {
+    generatedDir = path.join(tmp, "harness.generated");
+    reportsDir = path.join(tmp, "reports");
+    savedClaude = process.env.CLAUDE_SESSION_ID;
+    savedClaudeCode = process.env.CLAUDE_CODE_SESSION_ID;
+    delete process.env.CLAUDE_SESSION_ID;
+    delete process.env.CLAUDE_CODE_SESSION_ID;
+  });
+
+  afterEach(() => {
+    if (savedClaude === undefined) delete process.env.CLAUDE_SESSION_ID;
+    else process.env.CLAUDE_SESSION_ID = savedClaude;
+    if (savedClaudeCode === undefined) delete process.env.CLAUDE_CODE_SESSION_ID;
+    else process.env.CLAUDE_CODE_SESSION_ID = savedClaudeCode;
+  });
+
+  function writeReport(name: string, session: string, content: string): string {
+    fs.mkdirSync(reportsDir, { recursive: true });
+    const full = path.join(reportsDir, name);
+    fs.writeFileSync(
+      full,
+      `${JSON.stringify(
+        { sessionId: session, approvalStatus: "pending", createdAt: new Date().toISOString(), content },
+        null,
+        2,
+      )}\n`,
+    );
+    return full;
+  }
+
+  function editReport(reportPath: string): void {
+    const r = JSON.parse(fs.readFileSync(reportPath, "utf8")) as Record<string, unknown>;
+    r["content"] = "edited after approval";
+    fs.writeFileSync(reportPath, `${JSON.stringify(r, null, 2)}\n`);
+  }
+
+  /** Real approve flow: writes the signed marker carrying the report's canonical hash. */
+  async function approveRealFlow(): Promise<string> {
+    const reportPath = writeReport("r1.json", SESSION, "the understanding the operator reviewed");
+    const approve = await approveUnderstanding({
+      manifest: parseManifest({ version: 1 }),
+      session: SESSION,
+      reportsDir,
+      generatedDir,
+      ledgerAdd: async () => ({ ok: true }),
+    });
+    expect(approve.marker.ok).toBe(true);
+    return reportPath;
+  }
+
+  async function startSubagent(): Promise<{ recordWritten: boolean; stderr: string }> {
+    const stderr = bufferStream();
+    const result = await runPackHookSubagentStartCli({
+      manifest: manifestWithPack(),
+      stdin: readableFromString(eventBody()),
+      stderr: stderr.stream,
+      generatedDir,
+      reportsDir,
+    });
+    return { recordWritten: result.recordWritten, stderr: stderr.read() };
+  }
+
+  async function subagentCall(): Promise<{ blocked: boolean; source: string }> {
+    const result = await runPackHookPreToolUseCli({
+      manifest: manifestWithPack(),
+      stdin: readableFromString(
+        JSON.stringify({
+          session_id: SESSION,
+          agent_id: AGENT,
+          tool_name: "Edit",
+          tool_input: { file_path: "x.txt", old_string: "a", new_string: "b" },
+        }),
+      ),
+      stdout: bufferStream().stream,
+      stderr: bufferStream().stream,
+      reportsDir,
+      generatedDir,
+      ledgerQuery: async (): Promise<LedgerEntry[]> => [],
+    });
+    return { blocked: result.blocked, source: result.approvalCheck.source };
+  }
+
+  const MISMATCH =
+    /approval refused, no report in the reports directory matches the content the session approval marker was signed for \(the approved report was changed or removed after approval\); re-run `harness approve understanding`; no in-flight record for agent agent-abc123/;
+
+  it("edited report: no in-flight record is written, and the subagent's tool call blocks once the parent marker stops matching", async () => {
+    const reportPath = await approveRealFlow();
+    editReport(reportPath);
+
+    const start = await startSubagent();
+
+    expect(start.recordWritten).toBe(false);
+    expect(start.stderr).toMatch(MISMATCH);
+    expect(fs.existsSync(path.join(generatedDir, ".inflight", SESSION, AGENT))).toBe(false);
+    expect(verifyInflightRecord(generatedDir, SESSION, AGENT).matched).toBe(false);
+    // The parent marker stops matching (claim switch, max_age lapse): modelled
+    // by removing it. Without a record the subagent has nothing to present.
+    fs.rmSync(approvalMarkerPathFor(generatedDir, SESSION));
+    const call = await subagentCall();
+    expect(call.blocked).toBe(true);
+    expect(call.source).toBe("none");
+  });
+
+  it("intact approval: the record is written and the subagent is allowed through it after the parent marker is gone", async () => {
+    await approveRealFlow();
+
+    const start = await startSubagent();
+
+    expect(start.recordWritten).toBe(true);
+    expect(start.stderr).toMatch(/wrote in-flight record for agent agent-abc123 \(parent=session\)/);
+    expect(verifyInflightRecord(generatedDir, SESSION, AGENT).matched).toBe(true);
+    fs.rmSync(approvalMarkerPathFor(generatedDir, SESSION));
+    const call = await subagentCall();
+    expect(call.blocked).toBe(false);
+    expect(call.source).toBe("inflight");
+  });
+
+  // Production wiring: `harness apply` bakes UNDERSTANDING_GATE_REPORT_DIR into
+  // the hook command and the hook gets no reportsDir injection, so the
+  // directory comes from the environment. The cwd stays elsewhere (the
+  // default `<cwd>/.understanding-gate/reports` does not exist here).
+  describe("reports directory resolved from UNDERSTANDING_GATE_REPORT_DIR (no reportsDir injection)", () => {
+    let savedReportDir: string | undefined;
+
+    beforeEach(() => {
+      savedReportDir = process.env.UNDERSTANDING_GATE_REPORT_DIR;
+      process.env.UNDERSTANDING_GATE_REPORT_DIR = reportsDir;
+    });
+
+    afterEach(() => {
+      if (savedReportDir === undefined) delete process.env.UNDERSTANDING_GATE_REPORT_DIR;
+      else process.env.UNDERSTANDING_GATE_REPORT_DIR = savedReportDir;
+    });
+
+    async function startSubagentFromEnv(): Promise<{ recordWritten: boolean; stderr: string }> {
+      const stderr = bufferStream();
+      const result = await runPackHookSubagentStartCli({
+        manifest: manifestWithPack(),
+        stdin: readableFromString(eventBody()),
+        stderr: stderr.stream,
+        generatedDir,
+      });
+      return { recordWritten: result.recordWritten, stderr: stderr.read() };
+    }
+
+    it("edited report: no in-flight record is written", async () => {
+      const reportPath = await approveRealFlow();
+      editReport(reportPath);
+
+      const start = await startSubagentFromEnv();
+
+      expect(start.recordWritten).toBe(false);
+      expect(start.stderr).toMatch(MISMATCH);
+      expect(verifyInflightRecord(generatedDir, SESSION, AGENT).matched).toBe(false);
+    });
+
+    it("intact approval: the record is written", async () => {
+      await approveRealFlow();
+
+      const start = await startSubagentFromEnv();
+
+      expect(start.recordWritten).toBe(true);
+      expect(start.stderr).toMatch(/wrote in-flight record for agent agent-abc123 \(parent=session\)/);
+      expect(verifyInflightRecord(generatedDir, SESSION, AGENT).matched).toBe(true);
+    });
+  });
+
+  it("null-hash marker: unchanged, the record is written even though report files exist and none matches anything", async () => {
+    writeReport("unrelated.json", "sess-other", "some other report");
+    writeApprovalMarker(generatedDir, SESSION, {
+      approvedAt: new Date().toISOString(),
+      approvedBy: "test-operator",
+      reportContentHash: null,
+    });
+
+    const start = await startSubagent();
+
+    expect(start.recordWritten).toBe(true);
+    expect(verifyInflightRecord(generatedDir, SESSION, AGENT).matched).toBe(true);
+  });
+
+  it("task-scoped marker whose report was edited: no record", async () => {
+    const reportPath = writeReport("t1.json", "sess-task", "task report");
+    writeActiveClaim(generatedDir, "task-live");
+    writeTaskApprovalMarker(generatedDir, "task-live", {
+      approvedAt: new Date().toISOString(),
+      approvedBy: "operator",
+      reportContentHash: canonicalReportHashOfFile(reportPath),
+    });
+    editReport(reportPath);
+
+    const start = await startSubagent();
+
+    expect(start.recordWritten).toBe(false);
+    expect(start.stderr).toMatch(/approval refused, no report in the reports directory matches the content the task approval marker was signed for/);
+    expect(verifyInflightRecord(generatedDir, SESSION, AGENT).matched).toBe(false);
+  });
+
+  it("task marker's report edited but the session marker behind it still verifies: the record is written and names the session marker", async () => {
+    const sessionReport = writeReport("s1.json", SESSION, "session report");
+    const taskReport = writeReport("t1.json", "sess-task", "task report");
+    writeActiveClaim(generatedDir, "task-live");
+    writeApprovalMarker(generatedDir, SESSION, {
+      approvedAt: new Date().toISOString(),
+      approvedBy: "operator",
+      reportContentHash: canonicalReportHashOfFile(sessionReport),
+    });
+    writeTaskApprovalMarker(generatedDir, "task-live", {
+      approvedAt: new Date().toISOString(),
+      approvedBy: "operator",
+      reportContentHash: canonicalReportHashOfFile(taskReport),
+    });
+    editReport(taskReport);
+
+    const start = await startSubagent();
+
+    expect(start.recordWritten).toBe(true);
+    const verified = verifyInflightRecord(generatedDir, SESSION, AGENT);
+    expect(verified.matched).toBe(true);
+    expect(verified.detail).toMatch(/parent=session/);
+    // The success diagnostic names the marker that verified, like the record.
+    expect(start.stderr).toMatch(/wrote in-flight record for agent agent-abc123 \(parent=session\)/);
   });
 });
