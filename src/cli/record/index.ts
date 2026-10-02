@@ -199,7 +199,7 @@ const TAG_NAMESPACES = [
   "risk-approved",
   "risk-override",
 ];
-// `<namespace>:` immediately followed by a non-space character; prose such
+// `<namespace>:` immediately followed by a non-whitespace character; prose such
 // as "code-review: approved" is not a tag token because a gate's substituted
 // value is never empty and never starts with a space.
 const TAG_TOKEN_RE = new RegExp(`(?:${TAG_NAMESPACES.join("|")}):(?=\\S)`);
@@ -257,7 +257,7 @@ function optionalTagValue(
 
 /**
  * Free text (`--verdict`, summaries) stays free, but may not carry a
- * recognised `<namespace>:` immediately followed by a non-space character:
+ * recognised `<namespace>:` immediately followed by a non-whitespace character:
  * the text lands verbatim in the fact content, where the substring matcher
  * would read that as a tag. Prose like "code-review: approved" is kept. Rejected
  * rather than rewritten, so the audit text is never altered silently.

@@ -16,7 +16,7 @@ import {
 // whitespace or `<namespace>:` text would plant a second tag. Ref-like and
 // id-like values (--branch, --base, --task, --pr, dogfood --session) are
 // refused on any ':' or ASCII whitespace; free text is refused only for a
-// recognised `<namespace>:` glued to a following non-space character.
+// recognised `<namespace>:` glued to a following non-whitespace character.
 
 let cleanups: Array<() => void> = [];
 afterEach(() => {
