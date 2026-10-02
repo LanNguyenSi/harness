@@ -144,6 +144,22 @@ describe("codex install: an operator key between a legacy block's opening line a
       expect(fs.readFileSync(codexConfig, "utf8")).toBe(config);
     });
 
+    it(`${label}: a legacy block that ends at an END marker refuses on the key between the opening line and the first hook table too`, () => {
+      const config = write([
+        ...OPERATOR_STOP,
+        ...head.slice(0, 1),
+        `note = "${TOKEN}"`,
+        ...head.slice(1),
+        ...OLD_TABLE,
+        CODEX_MANAGED_END,
+        "",
+      ]);
+      const { message } = refusal();
+      expect(message).toContain(`has a key or value line (line ${lineOf(config, `note = "${TOKEN}"`)}) between`);
+      expect(message).not.toContain(TOKEN);
+      expect(fs.readFileSync(codexConfig, "utf8")).toBe(config);
+    });
+
     it(`${label}: only blank and comment lines between the opening line and the first hook table still install`, () => {
       write([...head, "", "# a note an operator left", ...OLD_TABLE, ""]);
       const p = planTwice();
