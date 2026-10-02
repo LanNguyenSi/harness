@@ -12,7 +12,7 @@ import { PassThrough, Readable, Writable } from "node:stream";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { readStdinBounded, STDIN_IDLE_TIMEOUT_MS } from "../../src/cli/bounded-stdin.js";
+import { readStdinBounded, STDIN_IDLE_TIMEOUT_MS, stdinTimeoutNote } from "../../src/cli/bounded-stdin.js";
 import { runInterceptCli } from "../../src/cli/policy/intercept.js";
 import { runSessionStartBranchCheck } from "../../src/cli/session-start/branch-check.js";
 import { runSessionStartStaleBaseCheck } from "../../src/cli/session-start/stale-base-check.js";
@@ -146,6 +146,20 @@ describe("bounded stdin: reader behaviour", () => {
     expect(() => stream.emit("error", new Error("late"))).not.toThrow();
   });
 
+  it("the empty-read note keeps the preflight text by default and takes a caller tail", () => {
+    const empty = { text: "", timedOut: true };
+    expect(stdinTimeoutNote(empty, 3000)).toBe(
+      "no complete event JSON on stdin within 3000 ms (stdin never closed); " +
+        "falling back to the default session resolution",
+    );
+    expect(stdinTimeoutNote(empty, 3000, "continuing as an empty event")).toBe(
+      "no complete event JSON on stdin within 3000 ms (stdin never closed); continuing as an empty event",
+    );
+    expect(stdinTimeoutNote({ text: "abc", timedOut: true }, 3000, "ignored tail")).toBe(
+      "stdin did not close within 3000 ms of the last data; using the 3 bytes read",
+    );
+  });
+
   it("the default bound is the one the preflight path has always used", () => {
     expect(STDIN_IDLE_TIMEOUT_MS).toBe(3000);
   });
@@ -225,14 +239,14 @@ describe("bounded stdin: each producer keeps parsing a closed stdin and a slow p
 
     it(`${p.name}: an idle stdin times out with a note and does not throw`, async () => {
       const { stderr, err } = hermeticProducerOpts();
+      // Restore cwd in afterEach cleanup, registered before the tmp dir's own
+      // removal: a regressed bound that times out the test must not leave the
+      // process in a deleted directory for every later test in the file.
       const prior = process.cwd();
+      cleanups.push(() => process.chdir(prior));
       process.chdir(tmpDir("harness-bstdin-idle-"));
-      try {
-        const result = await p.run(new PassThrough(), stderr, 100);
-        expect(result.sessionId).toBeDefined();
-      } finally {
-        process.chdir(prior);
-      }
+      const result = await p.run(new PassThrough(), stderr, 100);
+      expect(result.sessionId).toBeDefined();
       expect(err()).toContain("stdin never closed");
     });
   }
@@ -279,7 +293,10 @@ describe("bounded stdin: policy intercept fail posture", () => {
     const r = await intercept(new PassThrough(), 100);
     expect(r.result.exitCode).toBe(0);
     expect(r.result.blocked).toBe(false);
-    expect(r.stderr).toContain("no complete event JSON on stdin within 100 ms (stdin never closed)");
+    expect(r.stderr).toContain(
+      "no complete event JSON on stdin within 100 ms (stdin never closed); continuing as an empty event",
+    );
+    expect(r.stderr).not.toContain("default session resolution");
     expect(r.stderr).not.toContain("malformed event JSON");
   });
 
