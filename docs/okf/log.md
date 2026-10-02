@@ -2,6 +2,8 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-10-02T11:05:53Z, task 1ccfe922: `understanding-gate-lockout-recovery.md` and `gate-fail-posture-matrix.md` now say that `harness approve understanding` and `harness gc` list the reports directory through the bounded reader: approve refuses (exit 1, no marker, ledger tag or report flip, not overridable by `--force`) while an entry is oversized, not a regular file, a symlink or unreadable, naming each file, and gc reports such an entry as unparseable and leaves it. The earlier statements that both commands read unbounded on purpose, and the V8-fatal recovery note, are replaced. `evidence-ledger-trust-boundary.md` was re-verified against the changed sources and needed no text change. The decision record's line citations into `src/cli/approve/understanding.ts` and `src/cli/gc/index.ts` were re-pointed.
+
 - 2026-10-02T10:11:26Z, task 7dfdcaaf: re-stamped after merging master; `codex-adapter-parity-gaps.md`, `evidence-ledger-trust-boundary.md`, `gate-fail-posture-matrix.md`, `understanding-gate-auto-mode-signals.md`, `understanding-gate-lockout-recovery.md` list sources that master changed in the meantime. The merged changes come from separately reviewed tasks and none contradicts these docs' claims, so no body text changed.
 
 - 2026-10-02T09:38:10Z, task 7dfdcaaf: re-stamped after merging master; `codex-adapter-parity-gaps.md` list sources that master changed in the meantime. The merged changes come from separately reviewed tasks and none contradicts these docs' claims, so no body text changed.
