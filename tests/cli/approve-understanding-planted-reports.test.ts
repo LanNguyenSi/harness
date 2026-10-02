@@ -585,6 +585,29 @@ describe("approveUnderstanding renders a hostile file name safely", () => {
     expect(markerFiles()).toEqual([]);
   });
 
+  it.each([
+    ["with --session (the flipped report line)", true],
+    ["without --session (the newest-report fallback line and the flipped report line)", false],
+  ])("the built CLI's success output escapes a hostile in-cap report name: %s", (_label, withSession) => {
+    const configPath = path.join(tmp, "harness.yaml");
+    fs.writeFileSync(configPath, "version: 1\n");
+    writeValidReport(HOSTILE);
+    const childEnv = { ...process.env };
+    for (const k of ["CLAUDE_CODE_SESSION_ID", "CLAUDE_SESSION_ID", "CODEX_SESSION_ID"]) {
+      delete childEnv[k];
+    }
+    childEnv["HARNESS_HOME"] = path.join(tmp, "home");
+    childEnv["UNDERSTANDING_GATE_REPORT_DIR"] = reportsDir;
+    const args = [MAIN_JS, "approve", "understanding", "--config", configPath];
+    if (withSession) args.push("--session", SESSION);
+    const run = spawnSync("node", args, { encoding: "utf8", timeout: 30_000, killSignal: "SIGKILL", env: childEnv });
+    expect(run.status).toBe(0);
+    const out = `${run.stdout}${run.stderr}`;
+    expect(out).toContain("\\u001b]52;c;ZWNobyBwd25lZA==");
+    expect(rawControlCodes(out)).toEqual([]);
+    expect(out.split("\n").some((l) => l.startsWith("line2") || l.startsWith("marker: OK"))).toBe(false);
+  }, 45_000);
+
   it("the parse-error path in the no-report reason is escaped too", async () => {
     const parseErrorsDir = path.join(tmp, "parse-errors");
     fs.mkdirSync(parseErrorsDir, { recursive: true });

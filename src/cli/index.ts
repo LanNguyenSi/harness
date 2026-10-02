@@ -1832,7 +1832,7 @@ export function buildProgram(opts: RunOptions = {}): Command {
           lines.push("  gate-staged .pending-approval, so it was read from the newest pending");
           lines.push("  Understanding Report:");
           if (result.newestReportPath) {
-            lines.push(`    ${result.newestReportPath}`);
+            lines.push(`    ${escapeForDisplay(result.newestReportPath)}`);
           }
           lines.push("  If that is not your live session, the marker above approves the wrong");
           lines.push("  session and the gate stays blocked. Confirm the id matches the running");
@@ -1918,7 +1918,7 @@ export function buildProgram(opts: RunOptions = {}): Command {
             ? "; stamped sessionId"
             : "";
           lines.push(
-            `report:  ✓ ${result.persistedReport.filePath} (approvalStatus: ${prev} → approved${stampNote})`,
+            `report:  ✓ ${escapeForDisplay(result.persistedReport.filePath)} (approvalStatus: ${prev} → approved${stampNote})`,
           );
           const fb = result.persistedReport.fallbackAdopted;
           if (fb) {
@@ -1958,7 +1958,7 @@ export function buildProgram(opts: RunOptions = {}): Command {
             );
             lines.push("  the marker was NOT written; the gate stays closed.");
             lines.push(
-              "  pass --force to bypass this check (the ledger tag will be stamped `:forced:<field>` for audit).",
+              "  pass --force to bypass a content check (the ledger tag will be stamped `:forced:<field>` for audit); a report that is oversized, not a regular file or unreadable cannot be forced.",
             );
           } else {
             lines.push(
@@ -1979,7 +1979,7 @@ export function buildProgram(opts: RunOptions = {}): Command {
         if ("ok" in v && v.ok === false && v.enforced) {
           throw new HarnessExitError(
             `approve refused: ${v.field} validation failed. ` +
-              `Run with --force to bypass (the ledger tag will be stamped \`:forced:${v.field}\` for audit).`,
+              `Run with --force to bypass a content check (the ledger tag will be stamped \`:forced:${v.field}\` for audit); a report that is oversized, not a regular file or unreadable cannot be forced.`,
             EX_FAIL,
           );
         }
