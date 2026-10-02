@@ -2,6 +2,8 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-10-02T08:53:06Z, task 36d962d2: `src/cli/apply/install-codex-config.ts` now finds every managed-block marker (BEGIN, END, source prefix, generated header, `# harness hook:` comment) by one rule, a whole trimmed line at the top level of the document, and by the same rule the `[[hooks.` header line that lets a generated-header line open a legacy block; it starts the split-block zone of a legacy block after its opening line, and offers the add-an-END fix of the no-END refusal only when no harness-commented hook table, in either spelling, follows the named table. `codex-adapter-parity-gaps.md` (which lists the file under sources) was re-verified against the changed code; its paragraph on what the install reads after the harness block states the one-marker rule, the generated-header condition, the two substring searches with the trailing-comment-run boundary, the refusal of an unreadable config with a current block after its parse error, and the two other behaviours, and it is re-stamped.
+
 - 2026-10-02T07:22:49Z, task eed7c036: re-stamped after merging master; `codex-adapter-parity-gaps.md`, `understanding-gate-lockout-recovery.md` list sources that master changed in the meantime. The merged changes come from separately reviewed tasks and none contradicts these docs' claims, so no body text changed.
 
 - 2026-10-02T07:15:43Z, task eed7c036: `src/policy-packs/builtin/understanding-before-execution.ts` changed only in the `ResolvePackOptions.reportsDir` comment (the prefix goes on each report-reading hook command); `codex-adapter-parity-gaps.md` and `understanding-gate-lockout-recovery.md` list it under sources and were re-verified, no claim affected, re-stamped only.
