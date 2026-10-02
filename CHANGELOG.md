@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **`harness approve understanding` refuses, and `harness gc` reports, a planted oversized, non-regular or symlinked entry in the reports directory instead of reading it in full** (task `1ccfe922`, follow-up to `4b39022f`). Both commands listed the reports directory unbounded: a file of a few hundred megabytes was read whole, and one larger than the string limit was skipped silently, so approve signed a marker bound to no report (measured: a 600 MB planted `*.json` gave exit 0 and a marker). They now list through the bounded reader. Approve exits 1 before any side effect (no marker, ledger tag, report flip or task marker), naming each `*.json` entry that is over the 1 MiB cap, not a regular file (FIFO, directory), a symbolic link whatever it points at, or unreadable; `--force` does not override it. Its re-read of the selected report and the final report rewrite are bounded as well. `harness gc` lists such an entry as unparseable, never reads it and never deletes it. A regular in-cap report signs the same marker as before. To recover from the refusal, remove or move the named file; see `docs/okf/understanding-gate-lockout-recovery.md`.
+
 ## [0.61.0] - 2026-10-02
 
 ### Upgrade notes
