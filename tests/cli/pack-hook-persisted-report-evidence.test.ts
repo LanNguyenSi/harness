@@ -1100,7 +1100,7 @@ describe.each(RUNTIMES)("persisted report is evidence, not authority (task 74023
     expect(out.source).toBe("marker");
   });
 
-  it("oversized report: `harness approve understanding` refuses a report over the size cap (the marker could not bind it) and the gate stays closed; --force overrides with an unbound marker", async () => {
+  it("oversized report: `harness approve understanding` refuses before writing anything, even with --force, and the gate stays closed", async () => {
     const generatedDir = path.join(tmp, "harness.generated");
     const reportsDir = path.join(tmp, "reports");
     fs.mkdirSync(reportsDir, { recursive: true });
@@ -1120,22 +1120,15 @@ describe.each(RUNTIMES)("persisted report is evidence, not authority (task 74023
       generatedDir,
       ledgerAdd: async () => ({ ok: true as const }),
     };
-    const refused = await approveUnderstanding(approveArgs);
-    expect(refused.marker.ok).toBe(false);
-    expect(refused.validation).toMatchObject({
-      ok: false,
-      field: "report",
-      reason: `${json.length + OVERSIZED_BYTES} bytes, over the 1048576-byte cap for hashing its content, so the approval could not bind it`,
-      enforced: true,
-    });
-    expect(fs.existsSync(approvalMarkerPathFor(generatedDir, SESSION))).toBe(false);
-    expect(JSON.parse(fs.readFileSync(reportPath, "utf8"))["approvalStatus"]).toBe("pending");
-    expect((await rt.run({ generatedDir, reportsDir })).blocked).toBe(true);
-    const forced = await approveUnderstanding({ ...approveArgs, force: true });
-    expect(forced.marker.ok).toBe(true);
-    const marker = JSON.parse(fs.readFileSync(approvalMarkerPathFor(generatedDir, SESSION), "utf8")) as Record<string, unknown>;
-    expect(marker["reportContentHash"]).toBeNull();
-    expect((await rt.run({ generatedDir, reportsDir })).blocked).toBe(false);
+    const expectedDetail = `${json.length + OVERSIZED_BYTES} bytes, over the 1048576-byte cap for hashing its content`;
+    for (const force of [false, true]) {
+      await expect(approveUnderstanding({ ...approveArgs, ...(force ? { force } : {}) })).rejects.toThrow(
+        new RegExp(`${reportPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}: ${expectedDetail}`),
+      );
+      expect(fs.existsSync(approvalMarkerPathFor(generatedDir, SESSION))).toBe(false);
+      expect(JSON.parse(fs.readFileSync(reportPath, "utf8"))["approvalStatus"]).toBe("pending");
+      expect((await rt.run({ generatedDir, reportsDir })).blocked).toBe(true);
+    }
   });
 
   it("R2b re-approving session one after session two: neither session is denied", async () => {
