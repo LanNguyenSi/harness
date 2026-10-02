@@ -2,9 +2,13 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-10-02T06:03:59Z, task c8cfc110: `docs/CLI.md` (STDIN HANDLING) now says the three session-start siblings and `policy intercept` read stdin through the shared bounded reader in `src/cli/bounded-stdin.ts`, and that the pack hooks keep their own read to end of input. `codex-adapter-parity-gaps.md`, `debug-verb-selection.md`, `evidence-ledger-trust-boundary.md` and `policy-engine-producer-wiring.md` list `docs/CLI.md` under sources and were re-verified: none makes a claim about how these entries read stdin, so no body text changed. All four re-stamped.
+
 - 2026-10-02T05:50:25Z, task 40611602: `debug-verb-selection.md` re-verified and re-stamped after `docs/for-agents.md` (its source) gained a sentence per `${REPO}` and `${BRANCH}` row stating that an empty value renders no blank ledger tag and decides from the policy's `enforcement:` with a `cd <repo>`, `git -C <repo>` or `git switch` hint; its claims about the dry-run hint and `emptyIdentifierGuard` were unchanged and still hold.
 
 - 2026-10-02T05:49:48Z, task 5cc64860: `src/runtime/deletion-target-resolve.ts` now resolves a second text next to the command as written, with every NUL-decoding `$'...'` run replaced by the value bash passes (`truncateNulRuns` in `src/runtime/shell-word.ts`), and combines the two verdicts. `policy-engine-producer-wiring.md` was re-verified against the changed source: its description of `resolveDeletionTarget` as a purely syntactic, per-segment resolution of the raw command that consults no `riskContext` still holds, and no other claim in it touches the resolver; re-stamped.
+
+- 2026-10-02T05:42:42Z, task c8cfc110: `src/cli/policy/intercept.ts` lost its own end-only stdin reader and now reads through the shared idle-bounded reader in `src/cli/bounded-stdin.ts`; `codex-adapter-parity-gaps.md`, `gate-fail-posture-matrix.md`, `policy-engine-producer-wiring.md` and `quote-model-divergence.md` were re-verified against it (no claim about the stdin read changed; the line citations into `intercept.ts` and one log citation into `session-start/index.ts` were re-pointed and re-stamped).
 
 - 2026-10-02T05:38:47Z, task 7adedfe8: `docs/writing-custom-policies.md` now states the one exception to the always-evaluated cwd context (a cwd outside every git repository with a blank `${REPO}`, next to a segment whose own target resolved to a real repository), cited to `mayBeInsideRepository` in `src/runtime/intercept.ts`. `policy-engine-producer-wiring.md` and `evidence-ledger-trust-boundary.md` list the doc under sources and were re-verified: the former already states the exception in its second short-circuit paragraph and matches the new sentence, the latter makes no claim about cwd contexts, so no body text changed. Both re-stamped.
 
@@ -1211,7 +1215,7 @@
   first shipped full silence here, round 1's own review found the
   silence itself was the residual gap the task's goal named ("no
   diagnostic anywhere"), closed in round 2. The producer's own stderr
-  diagnostic (`src/cli/session-start/index.ts:707#"the project-scoped"`)
+  diagnostic (`src/cli/session-start/index.ts:632#"the project-scoped"`)
   no longer blames "the project layer" for a
   base- or machine-layer parse failure (round 1's lead-in did); both
   this diagnostic and the new `doctor` finding now collapse a

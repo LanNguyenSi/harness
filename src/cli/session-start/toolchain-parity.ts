@@ -705,7 +705,10 @@ export async function runSessionStartToolchainParity(
 
   let event: SessionStartEvent;
   try {
-    event = await readSessionStartEvent(stdin);
+    event = await readSessionStartEvent(stdin, {
+      onTimeout: note,
+      ...(opts.stdinIdleTimeoutMs !== undefined && { idleTimeoutMs: opts.stdinIdleTimeoutMs }),
+    });
   } catch (err) {
     const reason = malformedEventReason(err);
     note(reason);

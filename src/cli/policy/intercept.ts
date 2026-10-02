@@ -13,6 +13,7 @@ import {
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { readStdinBounded, STDIN_IDLE_TIMEOUT_MS, stdinTimeoutNote } from "../bounded-stdin.js";
 import {
   buildActionEnvelope,
   intercept,
@@ -58,6 +59,8 @@ export interface InterceptCliOptions extends LoaderOptions {
   ledgerTimeoutMs?: number;
   /** Override "now" for deterministic tests. */
   now?: Date;
+  /** Idle bound, in ms, for the stdin read (default STDIN_IDLE_TIMEOUT_MS). Tests inject a short value. */
+  stdinIdleTimeoutMs?: number;
   /** Inject a fake ledger client (tests). */
   ledger?: LedgerClient;
   /** Inject the resolved manifest (tests). */
@@ -108,18 +111,6 @@ export interface InterceptCliResult {
   exitCode: number;
   decisions: PolicyDecision[];
   blocked: boolean;
-}
-
-async function readStdin(stream: NodeJS.ReadableStream): Promise<string> {
-  return new Promise((resolve, reject) => {
-    let data = "";
-    stream.setEncoding("utf8");
-    stream.on("data", (chunk: string) => {
-      data += chunk;
-    });
-    stream.on("end", () => resolve(data));
-    stream.on("error", (err) => reject(err));
-  });
 }
 
 function findGroundingMcp(manifest: Manifest): McpServer | null {
@@ -687,7 +678,16 @@ export async function runInterceptCli(
   const stdout = opts.stdout ?? process.stdout;
   const stderr = opts.stderr ?? process.stderr;
   const verbose = isVerboseEnabled(opts);
-  const raw = await readStdin(stdin);
+  const idleTimeoutMs = opts.stdinIdleTimeoutMs ?? STDIN_IDLE_TIMEOUT_MS;
+  const read = await readStdinBounded(stdin, idleTimeoutMs);
+  if (read.timedOut) {
+    // Same fail posture as an absent event: an empty read continues as an
+    // empty event, partial text is parsed (and fails open below when malformed).
+    stderr.write(
+      `harness policy intercept${hookSuffix(opts.hookName)}: ${stdinTimeoutNote(read, idleTimeoutMs)}\n`,
+    );
+  }
+  const raw = read.text;
   let event: ToolEvent;
   try {
     event = JSON.parse(raw.trim() || "{}") as ToolEvent;
