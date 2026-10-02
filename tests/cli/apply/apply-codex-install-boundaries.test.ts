@@ -1322,6 +1322,17 @@ describe("codex install: `[[hooks.` text that is not a top-level header line ope
     expectOperatorContentKept(config, p.nextContent);
   });
 
+  it("a hook table header directly after an END line is outside the scanned range: the generated header in an operator table opens no block, the key above the END stays", () => {
+    const config = write([...OPERATOR_STOP, GENERATED, `note = "${TOKEN}"`, CODEX_MANAGED_END, ...OPERATOR_STOP, ""]);
+    const p = planTwice();
+    expect(p.changed).toBe(true);
+    expect(p.nextContent.startsWith(config)).toBe(true);
+    expect(p.nextContent).toContain(`note = "${TOKEN}"`);
+    expectOperatorContentKept(config, p.nextContent);
+    expect(count(p.nextContent, CODEX_MANAGED_BEGIN)).toBe(1);
+    expect(p.removedHookIds).toEqual([]);
+  });
+
   for (const header of ["[[hooks.pre_tool_use]]", "  [[hooks.pre_tool_use]]", "[[hooks.PreToolUse]]"]) {
     it(`a generated-header legacy block whose hook table header line reads '${header.trim()}'${header.startsWith(" ") ? " (indented)" : ""} is still replaced, the operator tables around it kept`, () => {
       const before = 'model = "x"\n\n';
