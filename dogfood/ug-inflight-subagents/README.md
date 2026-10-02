@@ -16,8 +16,12 @@ Method: Claude Code 2.1.261 on macOS, harness 0.55.0, captured
 ## Mechanics (what this script actually had to solve)
 
 1. **PATH shim resolves `harness` to this worktree's dist.**
-   `harness apply` renders hook commands as the bare word `harness pack
-   hook <verb>` (confirmed in `payloads/rendered-settings.json`), so
+   `harness apply` rendered hook commands as the bare word `harness pack
+   hook <verb>` when this was captured (confirmed in
+   `payloads/rendered-settings.json`, a historical capture: since task
+   `dac02d5c` apply emits the `subagent-start` command with an
+   `UNDERSTANDING_GATE_REPORT_DIR=<dir>` prefix like the other
+   report-reading hooks, which this payload predates), so
    the script writes a fresh directory holding one executable file,
    `harness`, that execs `node <this-worktree>/dist/cli/main.js "$@"`,
    and prepends that directory to `PATH` for every `harness ...`
