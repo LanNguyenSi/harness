@@ -655,8 +655,8 @@ function isContentReason(reason: UnhashableReportReason): boolean {
 
 /**
  * The reports directory is writable by the gated agent, so `harness approve
- * understanding` lists it through the bounded reader (one `lstat`/`fstat`
- * per entry, never a read past the size cap) and refuses while any `*.json`
+ * understanding` lists it through the bounded reader (one `O_NOFOLLOW` open
+ * and `fstat` per entry, never a read past the size cap) and refuses while any `*.json`
  * entry cannot be read as a report: oversized, a FIFO or other non-regular
  * file, a symbolic link, unreadable, or growing. Refusing, rather than
  * leaving the entry out, keeps the approval from binding an older report
