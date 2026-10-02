@@ -17,6 +17,7 @@ import { runInterceptCli } from "../../src/cli/policy/intercept.js";
 import { runSessionStartBranchCheck } from "../../src/cli/session-start/branch-check.js";
 import { runSessionStartStaleBaseCheck } from "../../src/cli/session-start/stale-base-check.js";
 import { runSessionStartToolchainParity } from "../../src/cli/session-start/toolchain-parity.js";
+import { writeSentinel } from "../../src/runtime/pause-sentinel.js";
 import { parseManifest } from "../../src/schema/index.js";
 
 // A bare manifest: the opt-in producers are disabled, so each run ends right
@@ -109,11 +110,6 @@ describe("bounded stdin: real child process with a never-closed stdin", () => {
       args: ["session-start", "toolchain-parity"],
       label: "harness session-start toolchain-parity:",
     },
-    {
-      name: "policy intercept",
-      args: ["policy", "intercept", "--config", "/nonexistent/harness.yaml"],
-      label: "harness policy intercept:",
-    },
   ];
   for (const c of cases) {
     it(`${c.name} exits 0 within a bound with a stderr note naming the timeout (not a hang)`, async () => {
@@ -124,6 +120,13 @@ describe("bounded stdin: real child process with a never-closed stdin", () => {
       expect(r.stderr).toContain("stdin never closed");
     }, 20_000);
   }
+
+  it("policy intercept exits 0 within a bound and refuses the tool call, naming the stdin timeout (not a hang)", async () => {
+    const r = await runWithNeverClosedStdin(["policy", "intercept", "--config", "/nonexistent/harness.yaml"]);
+    expect(r.hung, `pid ${r.pid} still running after ${KILL_AFTER_MS} ms; stderr: ${r.stderr}`).toBe(false);
+    expect(r.code).toBe(0);
+    expect(r.stderr).toContain("harness policy intercept: BLOCK: stdin timeout:");
+  }, 20_000);
 });
 
 describe("bounded stdin: reader behaviour", () => {
@@ -280,24 +283,87 @@ describe("bounded stdin: policy intercept fail posture", () => {
     expect(r.stderr).not.toContain("malformed event JSON");
   });
 
-  it("an idle stdin with partial malformed text fails open with both notes", async () => {
+  // A timed-out read leaves no event to judge, and policy intercept is the
+  // PreToolUse gate entrypoint, so it refuses the tool call (task aca3de04).
+  // The cases below pin that and what stays as it was.
+  function expectTimeoutBlock(r: Awaited<ReturnType<typeof intercept>>): void {
+    expect(r.result).toEqual({ exitCode: 0, decisions: [], blocked: true });
+    const out = JSON.parse(r.stdout.trim()) as {
+      decision: string;
+      reason: string;
+      hookSpecificOutput: { hookEventName: string; permissionDecision: string };
+    };
+    expect(out.decision).toBe("block");
+    expect(out.reason.startsWith("stdin timeout:")).toBe(true);
+    expect(out.reason).toContain("within 100 ms");
+    expect(out.hookSpecificOutput.hookEventName).toBe("PreToolUse");
+    expect(out.hookSpecificOutput.permissionDecision).toBe("deny");
+    expect(r.stderr).toContain("harness policy intercept: BLOCK: stdin timeout:");
+    expect(r.stderr).not.toContain("malformed event JSON");
+  }
+
+  it("an idle stdin with partial malformed text blocks on the timed-out read", async () => {
     const stream = new PassThrough();
     stream.write("{\"tool_name\":");
-    const r = await intercept(stream, 100);
-    expect(r.result).toEqual({ exitCode: 0, decisions: [], blocked: false });
-    expect(r.stderr).toContain("stdin did not close within 100 ms of the last data");
-    expect(r.stderr).toContain("malformed event JSON:");
+    expectTimeoutBlock(await intercept(stream, 100));
   });
 
-  it("an idle empty stdin continues as an empty event and notes the timeout", async () => {
-    const r = await intercept(new PassThrough(), 100);
+  it("an idle empty stdin blocks on the timed-out read", async () => {
+    expectTimeoutBlock(await intercept(new PassThrough(), 100));
+  });
+
+  it("a complete PreToolUse event on a stdin that never closes blocks", async () => {
+    const stream = new PassThrough();
+    stream.write(JSON.stringify({ hook_event_name: "PreToolUse", tool_name: "Bash" }));
+    expectTimeoutBlock(await intercept(stream, 100));
+  });
+
+  it.each([
+    ["an object that names no event", "{}"],
+    ["an empty event name", JSON.stringify({ hook_event_name: "" })],
+    ["a non-string event name", JSON.stringify({ hook_event_name: 7 })],
+    ["a JSON array", "[1]"],
+    ["a JSON string", '"PostToolUse"'],
+    ["JSON null", "null"],
+  ])("a never-closed stdin carrying %s is treated as the PreToolUse call and blocks", async (_n, text) => {
+    const stream = new PassThrough();
+    stream.write(text);
+    expectTimeoutBlock(await intercept(stream, 100));
+  });
+
+  it("a complete event naming another hook event keeps the continue behaviour: note, no block", async () => {
+    const stream = new PassThrough();
+    stream.write(JSON.stringify({ hook_event_name: "PostToolUse", tool_name: "Bash" }));
+    const r = await intercept(stream, 100);
     expect(r.result.exitCode).toBe(0);
     expect(r.result.blocked).toBe(false);
-    expect(r.stderr).toContain(
-      "no complete event JSON on stdin within 100 ms (stdin never closed); continuing as an empty event",
-    );
-    expect(r.stderr).not.toContain("default session resolution");
-    expect(r.stderr).not.toContain("malformed event JSON");
+    expect(r.stdout).toBe("");
+    expect(r.stderr).toContain("stdin did not close within 100 ms of the last data");
+    expect(r.stderr).not.toContain("stdin timeout:");
+  });
+
+  it("the operator pause wins over a timed-out read", async () => {
+    const generatedDir = tmpDir("harness-bstdin-pause-");
+    writeSentinel(generatedDir, {
+      pausedAt: new Date().toISOString(),
+      expiresAt: null,
+      reason: "stdin bound test",
+      pausedBy: "test",
+    });
+    const { stream: out, output: stdout } = captureStream();
+    const { stream: err, output: stderr } = captureStream();
+    const result = await runInterceptCli({
+      stdin: new PassThrough(),
+      stdout: out,
+      stderr: err,
+      manifest: bareManifest(),
+      generatedDir,
+      stdinIdleTimeoutMs: 100,
+    });
+    expect(result).toEqual({ exitCode: 0, decisions: [], blocked: false });
+    expect(stdout()).toBe("");
+    expect(stderr().toLowerCase()).toContain("paused");
+    expect(stderr()).not.toContain("stdin timeout:");
   });
 
   it("a slow payload with chunks inside the idle bound is parsed, not dropped", async () => {

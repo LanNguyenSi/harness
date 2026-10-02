@@ -79,8 +79,8 @@ export const DEFAULT_EMPTY_READ_TAIL = "falling back to the default session reso
 /**
  * The stderr note for a read the idle bound cut off (no trailing newline).
  * `emptyReadTail` says what the caller does when nothing was read; it defaults
- * to the session-start wording, and a caller with a different fallback (policy
- * intercept continues as an empty event) passes its own. The partial-data note
+ * to the session-start wording, and a caller with a different fallback (the pack
+ * hook readers continue as an empty event) passes its own. The partial-data note
  * is the same for every caller.
  */
 export function stdinTimeoutNote(
