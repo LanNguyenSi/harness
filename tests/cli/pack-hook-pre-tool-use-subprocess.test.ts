@@ -514,11 +514,14 @@ describe.each(E2E_RUNTIMES)(
 // fs.openSync of it first points it at RETARGET_REAL and, once the descriptor
 // is open, at RETARGET_PLANTED. Reads through a descriptor (the bounded
 // reader) see the real report; a later read by path sees the planted entry.
+// Each retarget appends one line to RETARGET_COUNT_FILE so a case can assert
+// the window was actually exercised and cannot pass by checking nothing.
 const RETARGET_AFTER_OPEN_PRELOAD = `import fs from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
 const target = process.env.RETARGET_PATH;
 const real = process.env.RETARGET_REAL;
 const planted = process.env.RETARGET_PLANTED;
+const countFile = process.env.RETARGET_COUNT_FILE;
 const openSync = fs.openSync;
 function isLink() {
   try { return fs.lstatSync(target).isSymbolicLink(); } catch { return false; }
@@ -533,6 +536,7 @@ fs.openSync = function (p, ...rest) {
   point(real);
   const fd = openSync.call(this, p, ...rest);
   point(planted);
+  if (countFile) fs.appendFileSync(countFile, "retarget\\n");
   return fd;
 };
 syncBuiltinESMExports();
@@ -747,15 +751,22 @@ describe.each(E2E_RUNTIMES)(
           fs.symlinkSync(real, report);
           const preload = path.join(tmpDir, "retarget-after-open.mjs");
           fs.writeFileSync(preload, RETARGET_AFTER_OPEN_PRELOAD);
+          const countFile = path.join(tmpDir, "retarget-count");
+          fs.writeFileSync(countFile, "");
           const bound = 10_000;
 
           const result = run(bound, {
             NODE_OPTIONS: `--import=${pathToFileURL(preload).href}`,
+            RETARGET_COUNT_FILE: countFile,
             RETARGET_PATH: report,
             RETARGET_REAL: real,
             RETARGET_PLANTED: planted,
           });
 
+          // At least the listing and the precondition each opened the report
+          // through the preload, so the retarget window was really exercised.
+          const retargets = fs.readFileSync(countFile, "utf8").split("\n").filter(Boolean).length;
+          expect(retargets).toBeGreaterThanOrEqual(2);
           expect(result.timedOut).toBe(false);
           expect(result.ms).toBeLessThan(bound);
           expect(result.stderr).toMatch(/auto-approved/);
