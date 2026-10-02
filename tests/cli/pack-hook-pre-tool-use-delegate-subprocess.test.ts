@@ -30,7 +30,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { spawnSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { DELEGATION_REPORT_RETRY_INSTRUCTION } from "../../src/cli/pack/hook-pre-tool-use.js";
@@ -194,7 +194,12 @@ afterEach(() => {
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
-function runHook(): { status: number | null; stdout: string; stderr: string } {
+function runHook(timeoutMs = 30_000): {
+  status: number | null;
+  stdout: string;
+  stderr: string;
+  timedOut: boolean;
+} {
   const childEnv = { ...process.env };
   delete childEnv["CLAUDE_SESSION_ID"];
   delete childEnv["UNDERSTANDING_GATE_MODE"];
@@ -217,12 +222,14 @@ function runHook(): { status: number | null; stdout: string; stderr: string } {
   const result = spawnSync(
     "node",
     [MAIN_JS, "pack", "hook", "pre-tool-use", "--config", configPath],
-    { input: payload, encoding: "utf8", timeout: 30_000, env: childEnv },
+    // A hook stuck in a blocking open() is killed outright at the timeout.
+    { input: payload, encoding: "utf8", timeout: timeoutMs, killSignal: "SIGKILL", env: childEnv },
   );
   return {
     status: result.status,
     stdout: result.stdout as string,
     stderr: result.stderr as string,
+    timedOut: (result.error as NodeJS.ErrnoException | undefined)?.code === "ETIMEDOUT",
   };
 }
 
@@ -284,5 +291,51 @@ describe("pack hook pre-tool-use: delegation path, subprocess E2E", () => {
     expect(check.marker?.approvedBy).toBe(
       `auto-mode:claude-code:delegated;delegated:${PARENT}`,
     );
+  });
+
+  // The delegation lookup lists the reports directory too, before it decides
+  // whether the child's report still has to be captured. It reads through the
+  // bounded reader, so an entry it cannot read is no report there: the
+  // capture from the transcript still runs. (Read whole, a 2 MiB pending
+  // report of the child would stand in for the missing one and the capture
+  // would not run at all.) The auto-approval precondition that follows lists
+  // the same directory, skips the same entry and declines, so the call stays
+  // blocked: a skipped entry is never a reason to mint.
+  it("an oversized pending report of the child (over the 1 MiB cap) is skipped by the delegation lookup: the capture still runs, the auto-approval declines and no marker is minted", () => {
+    writeTranscript([userTurn(), assistantEntry()]);
+    fs.writeFileSync(
+      path.join(reportsDir, "zz-big-pending.json"),
+      JSON.stringify({
+        sessionId: CHILD,
+        approvalStatus: "pending",
+        createdAt: new Date().toISOString(),
+        mode: "grill_me",
+      }) + " ".repeat(2 * 1024 * 1024),
+    );
+
+    const { status, stdout, stderr, timedOut } = runHook(20_000);
+
+    expect(timedOut).toBe(false);
+    expect(status).toBe(0);
+    expect(stderr).toMatch(/captured the Understanding Report for session .* from its own transcript/);
+    expect(stderr).toMatch(/auto-approval declined: report invalid \(\d+ bytes, over the 1048576-byte cap/);
+    expect((JSON.parse(stdout.trim()) as { decision?: string }).decision).toBe("block");
+    expect(checkApprovalMarker(generatedDir, CHILD).matched).toBe(false);
+  });
+
+  it("a FIFO named *.json with no writer is skipped by the delegation lookup within the bound: the capture still runs, the auto-approval declines and no marker is minted", () => {
+    writeTranscript([userTurn(), assistantEntry()]);
+    execFileSync("mkfifo", [path.join(reportsDir, "zz-fifo.json")]);
+
+    const { status, stdout, stderr, timedOut } = runHook(20_000);
+
+    // A blocking open() of the FIFO would wait for a writer forever; the
+    // child is killed at the bound and the run reports it as timed out.
+    expect(timedOut).toBe(false);
+    expect(status).toBe(0);
+    expect(stderr).toMatch(/captured the Understanding Report for session .* from its own transcript/);
+    expect(stderr).toMatch(/auto-approval declined: report listing skipped 1 unreadable entry/);
+    expect((JSON.parse(stdout.trim()) as { decision?: string }).decision).toBe("block");
+    expect(checkApprovalMarker(generatedDir, CHILD).matched).toBe(false);
   });
 });

@@ -79,6 +79,8 @@ export {
   defaultReportsDir,
   reportsDirForManifest,
   listPersistedReports,
+  type SkippedReportEntry,
+  listPersistedReportsBoundedWithSkips,
   TOLERANT_FALLBACK_MAX_AGE_MS,
   TOLERANT_FALLBACK_FUTURE_SKEW_MS,
   type FindReportOptions,
