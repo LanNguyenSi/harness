@@ -209,8 +209,15 @@ repository other than the session's own cwd (`git -C <path>`, `env -C
 <path> git ...`, a leading `cd <path> &&`).
 
 **Additive, not exclusive.** The session's own cwd is ALWAYS one of the
-contexts evaluated — never dropped, regardless of what a command names
-elsewhere. When a trigger-satisfying segment ALSO names a distinct,
+contexts evaluated, never dropped, regardless of what a command names
+elsewhere, with one exception: when the cwd is outside every git
+repository (neither its real path nor any ancestor up to the filesystem
+root holds an entry named `HEAD` or `.git`, and no lookup there failed
+with an error other than ENOENT), `${REPO}` is blank for the policy, and
+a segment's own target resolved to a real repository, the cwd context is
+not demanded and that target's context is demanded in full (see
+`mayBeInsideRepository` in `src/runtime/intercept.ts`). A detached cwd
+and every other non-blank cwd context are still never dropped. When a trigger-satisfying segment ALSO names a distinct,
 resolvable target (its own `-C`/`env -C`/`--git-dir`, or a target
 inherited from a preceding `cd` earlier in the same command), that
 target's context is evaluated TOO, side by side with cwd's — the policy's

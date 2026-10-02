@@ -191,8 +191,11 @@ ${runtime}${
 ## Trigger + signals
 
 1. \`PostToolUse\` producer (\`${PRODUCER_COMMAND}\`, blocking: false) on
-   \`Bash\`: matches \`${GH_PR_MERGE_BASH_RE.source}\` against the command
-   text. Fires only on a CONFIRMED merge, via either of two contracts
+   \`Bash\`: tests \`${GH_PR_MERGE_BASH_RE.source}\` against the raw command
+   and, only when that misses, against the three normalized forms
+   (\`normalizeCommand\`, \`normalizeCommandAmpAware\`,
+   \`normalizeCommandQuoteAware\`), in the same raw-first, lazy order as the
+   gate. Fires only on a CONFIRMED merge, via either of two contracts
    (dual-contract, payload-reality follow-up — real Claude Code shims
    have shipped both shapes in the wild):
    - **Contract A** — \`tool_output.exit_code\` is the number \`0\`.
