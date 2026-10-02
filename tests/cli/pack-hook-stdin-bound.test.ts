@@ -425,6 +425,47 @@ describe("pack hook stdin bound: the operator pause still wins over the timeout 
   }
 });
 
+// The two gates that take no --config resolve the pause sentinel from the
+// default generated dir, so the sentinel is written under both layouts the
+// default home can resolve to.
+describe("pack hook stdin bound: the pause wins over a timed-out read for the config-less gates", () => {
+  for (const gate of GATES.filter((g) => g.pack === null)) {
+    it.concurrent(
+      `${gate.verb}: a complete event on a stdin that never closes is allowed while paused, and blocked once unpaused`,
+      async () => {
+        // Control: no pause, the same timed-out read is refused.
+        const control = makeCtx();
+        expectTimeoutBlock(
+          gate,
+          await runGate(gate, [{ afterMs: 0, data: gate.event(control) }], false, control),
+        );
+
+        const ctx = makeCtx();
+        for (const generated of [
+          path.join(ctx.home, GENERATED_DIRNAME),
+          path.join(ctx.home, ".harness", GENERATED_DIRNAME),
+        ]) {
+          fs.mkdirSync(generated, { recursive: true });
+          writeSentinel(generated, {
+            pausedAt: new Date().toISOString(),
+            expiresAt: null,
+            reason: "stdin bound test",
+            pausedBy: "test",
+          });
+        }
+        const r = await runGate(gate, [{ afterMs: 0, data: gate.event(ctx) }], false, ctx);
+        expectBoundedExit(r);
+        expect(r.code, `stdout: ${r.stdout}; stderr: ${r.stderr}`).toBe(0);
+        expect(r.stdout).not.toContain("block");
+        expect(r.stdout).not.toContain("deny");
+        expect(r.stderr).not.toContain(BLOCK_REASON_HEAD);
+        expect(r.stderr.toLowerCase()).toContain("paused");
+      },
+      TEST_TIMEOUT_MS,
+    );
+  }
+});
+
 describe("pack hook stdin bound: every other hook verb treats a timeout as the bytes it read", () => {
   const verbs = [
     "post-tool-use",

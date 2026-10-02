@@ -475,6 +475,41 @@ describe("runPackHookRuntimeRealityCli (entrypoint, real env + probe)", () => {
       expect(stderr.read()).toContain("operator recovery");
     });
 
+    it("an active pause wins over a timed-out read: allow, no deny envelope, no stdin-timeout note", async () => {
+      writeSentinel(generatedDir, ACTIVE_SENTINEL);
+      const stdout = bufferStream();
+      const stderr = bufferStream();
+      const result = await runPackHookRuntimeRealityCli({
+        stdin: new PassThrough(), // never closed: the read times out
+        stdout: stdout.stream,
+        stderr: stderr.stream,
+        stdinIdleTimeoutMs: 100,
+        generatedDir,
+      });
+      expect(result.exitCode).toBe(0);
+      expect(result.decision.kind).toBe("skip");
+      expect(stdout.read()).toBe("");
+      expect(stderr.read()).toContain("PAUSED");
+      expect(stderr.read()).not.toContain("stdin timeout:");
+    });
+
+    it("without a pause the same timed-out read is denied (control for the pause-wins case)", async () => {
+      const stdout = bufferStream();
+      const stderr = bufferStream();
+      const result = await runPackHookRuntimeRealityCli({
+        stdin: new PassThrough(),
+        stdout: stdout.stream,
+        stderr: stderr.stream,
+        stdinIdleTimeoutMs: 100,
+        generatedDir,
+      });
+      expect(result.exitCode).toBe(2);
+      expect(result.decision.kind).toBe("block");
+      expect(JSON.parse(stdout.read()).hookSpecificOutput.permissionDecisionReason).toContain(
+        "stdin timeout:",
+      );
+    });
+
     it("still denies on critical drift when no sentinel is present (unchanged behavior)", async () => {
       // No sentinel written to generatedDir: normal evaluation must run.
       process.env.RUNTIME_REALITY_PROBE_CMD = writeProbe(
