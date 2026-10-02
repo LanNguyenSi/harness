@@ -98,13 +98,7 @@ function parseFilenameIsoMs(name: string): number | null {
   return Number.isNaN(ms) ? null : ms;
 }
 
-function readPersistedReport(filePath: string, mtimeMs: number): PersistedReport | null {
-  let raw: string;
-  try {
-    raw = fs.readFileSync(filePath, "utf8");
-  } catch {
-    return null;
-  }
+function parsePersistedReport(filePath: string, raw: string, mtimeMs: number): PersistedReport | null {
   const parsed = safeJsonParse(raw);
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
   const obj = parsed as Record<string, unknown>;
@@ -140,6 +134,53 @@ function readPersistedReport(filePath: string, mtimeMs: number): PersistedReport
  * fallback for files that carry neither timestamp.
  */
 export function listPersistedReports(dir: string): PersistedReport[] {
+  return collectPersistedReports(dir, (full) => {
+    let stat: fs.Stats;
+    try {
+      stat = fs.statSync(full);
+    } catch {
+      return null;
+    }
+    if (!stat.isFile()) return null;
+    let raw: string;
+    try {
+      raw = fs.readFileSync(full, "utf8");
+    } catch {
+      return null;
+    }
+    return { raw, mtimeMs: stat.mtimeMs };
+  });
+}
+
+/**
+ * {@link listPersistedReports} for the hook-time evidence read
+ * ({@link checkPersistedReport}, {@link expirePersistedReport}). The reports
+ * directory holds files the gated agent can write, so every entry is opened
+ * once through {@link readReportFileBounded}: non-blocking, typed and sized by
+ * `fstat` on the open descriptor, read through it. A `*.json` entry that is
+ * not a regular file (a FIFO, a directory, a device, a symlink to one of
+ * them), is over `MAX_HASHED_REPORT_BYTES`, cannot be opened or read, or grows
+ * while it is read is skipped, as if it were not there: it can neither block
+ * the hook nor run it out of memory. There is no separate stat of the path
+ * (a symlink flipped to a FIFO between that stat and the read used to hang
+ * the read), and the modification time comes from the same descriptor.
+ *
+ * A report skipped for its size is invisible to the callers: the operator
+ * commands (`harness approve understanding`, `harness gc`) keep the
+ * unbounded {@link listPersistedReports}, because they must still see an
+ * oversized report to refuse or age it.
+ */
+export function listPersistedReportsBounded(dir: string): PersistedReport[] {
+  return collectPersistedReports(dir, (full) => {
+    const read = readReportFileBounded(full);
+    return read.ok ? { raw: read.raw, mtimeMs: read.mtimeMs } : null;
+  });
+}
+
+function collectPersistedReports(
+  dir: string,
+  load: (filePath: string) => { raw: string; mtimeMs: number } | null,
+): PersistedReport[] {
   let names: string[];
   try {
     names = fs.readdirSync(dir);
@@ -150,14 +191,9 @@ export function listPersistedReports(dir: string): PersistedReport[] {
   for (const name of names) {
     if (!name.endsWith(".json")) continue;
     const full = path.join(dir, name);
-    let stat: fs.Stats;
-    try {
-      stat = fs.statSync(full);
-    } catch {
-      continue;
-    }
-    if (!stat.isFile()) continue;
-    const report = readPersistedReport(full, stat.mtimeMs);
+    const loaded = load(full);
+    if (loaded === null) continue;
+    const report = parsePersistedReport(full, loaded.raw, loaded.mtimeMs);
     if (!report) continue;
     reports.push(report);
   }
@@ -424,7 +460,7 @@ export function expirePersistedReport(
   now: Date = new Date(),
   trigger?: string,
 ): { ok: true; filePath: string; previousStatus: string | null } | { ok: false; reason: string } {
-  const reports = listPersistedReports(reportsDir);
+  const reports = listPersistedReportsBounded(reportsDir);
   if (reports.length === 0) {
     return { ok: false, reason: `no reports under ${reportsDir}` };
   }
@@ -441,12 +477,11 @@ export function expirePersistedReport(
       reason: `latest report ${sanitizeDetailValue(path.basename(latest.filePath))} already has approvalStatus=${sanitizeDetailValue(latest.approvalStatus ?? "<missing>")}, nothing to expire`,
     };
   }
-  let raw: string;
-  try {
-    raw = fs.readFileSync(latest.filePath, "utf8");
-  } catch (err) {
-    return { ok: false, reason: `failed to read ${latest.filePath}: ${(err as Error).message}` };
+  const read = readReportFileBounded(latest.filePath);
+  if (!read.ok) {
+    return { ok: false, reason: `failed to read ${latest.filePath}: ${read.detail}` };
   }
+  const raw = read.raw;
   let parsed: Record<string, unknown>;
   try {
     parsed = JSON.parse(raw) as Record<string, unknown>;
@@ -495,7 +530,7 @@ export function checkPersistedReport(
   reportsDir: string,
   sessionId: string,
 ): PersistedReportEvidence {
-  const reports = listPersistedReports(reportsDir);
+  const reports = listPersistedReportsBounded(reportsDir);
   if (reports.length === 0) {
     return {
       claimsApproved: false,
@@ -682,7 +717,7 @@ export function canonicalReportHash(report: Record<string, unknown>): string | n
 export type ReportFileReadFailure = "unreadable" | "not-regular" | "too-large" | "grew";
 
 export type BoundedReportRead =
-  | { ok: true; raw: string }
+  | { ok: true; raw: string; mtimeMs: number }
   | { ok: false; reason: ReportFileReadFailure; detail: string };
 
 function errorCode(err: unknown): string {
@@ -730,7 +765,7 @@ export function readReportFileBounded(filePath: string): BoundedReportRead {
       total += n;
     }
     if (total > stat.size) return { ok: false, reason: "grew", detail: "grew while being read" };
-    return { ok: true, raw: buf.toString("utf8", 0, total) };
+    return { ok: true, raw: buf.toString("utf8", 0, total), mtimeMs: stat.mtimeMs };
   } catch (err) {
     return { ok: false, reason: "unreadable", detail: `could not be read (${errorCode(err)})` };
   } finally {

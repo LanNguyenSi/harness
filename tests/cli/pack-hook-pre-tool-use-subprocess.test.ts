@@ -211,9 +211,11 @@ describe("pack hook pre-tool-use — subprocess E2E (deny path)", () => {
 // levels deep (once a stack overflow), a file over the 1 MiB hashing cap
 // (once a heap exhaustion at a few hundred megabytes; 2 MiB stands in for any
 // size over the cap here) and a FIFO with no writer (once a blocking open).
-// This pins the hash scan. The evidence read after a refused marker is still
-// unbounded for a file of a few hundred megabytes or a FIFO swapped in during
-// that read (a named residual).
+// This pins the hash scan and, below, the evidence read.
+// The evidence read (no marker at all, and after a refused marker) is bounded
+// the same way: it reads each report file through the one bounded reader, so
+// a FIFO or a file over the cap there is skipped instead of blocking the hook
+// or running it out of memory (the cases tagged "evidence read" below).
 // Built CLI, both runtimes: Claude exits 0 with a block decision on stdout,
 // Codex exits 2.
 interface E2ERuntime {
@@ -253,6 +255,18 @@ const E2E_RUNTIMES: E2ERuntime[] = [
       expect(run.status).toBe(2);
     },
   },
+];
+
+const FIFO_PLANTS: [string, (reportsDir: string) => void][] = [
+  ["a FIFO", (reportsDir) => execFileSync("mkfifo", [path.join(reportsDir, "zz-fifo.json")])],
+  [
+    "a symlink to a FIFO",
+    (reportsDir) => {
+      const pipe = path.join(tmpDir, "outside-pipe");
+      execFileSync("mkfifo", [pipe]);
+      fs.symlinkSync(pipe, path.join(reportsDir, "zz-link.json"));
+    },
+  ],
 ];
 
 const MISMATCH_SESSION =
@@ -333,17 +347,7 @@ describe.each(E2E_RUNTIMES)(
       expect(after.stderr).toMatch(MISMATCH_SESSION);
     });
 
-    it.each([
-      ["a FIFO", (reportsDir: string): void => execFileSync("mkfifo", [path.join(reportsDir, "zz-fifo.json")])],
-      [
-        "a symlink to a FIFO",
-        (reportsDir: string): void => {
-          const pipe = path.join(tmpDir, "outside-pipe");
-          execFileSync("mkfifo", [pipe]);
-          fs.symlinkSync(pipe, path.join(reportsDir, "zz-link.json"));
-        },
-      ],
-    ])(
+    it.each(FIFO_PLANTS)(
       "%s named *.json with no writer is skipped without blocking: the untouched approval allows and the tampered one blocks, each within the bound",
       async (_kind, plant) => {
         const { reportsDir, reportPath, run } = await approvedSetup(`sess-e2e-fifo-${rt.verb}`);
@@ -362,6 +366,122 @@ describe.each(E2E_RUNTIMES)(
         expect(blocked.ms).toBeLessThan(bound);
         rt.expectBlock(blocked);
         expect(blocked.stderr).toMatch(MISMATCH_SESSION);
+      },
+      60_000,
+    );
+
+    // The evidence read after a refused marker. The refusal is the same
+    // mismatch block, whatever the evidence read finds; what it must not do
+    // is wait on a FIFO or die on a huge file. The cases pin that the decision
+    // is reached, promptly, with the unchanged deny. (The reason carries no
+    // report-derived value, so the evidence a skipped file would have
+    // contributed is pinned by the no-marker cases below.)
+    it("evidence read after a refused marker: a tampered approval next to a 2 MiB approved report of the same session still blocks with the mismatch reason", async () => {
+      const session = `sess-e2e-ev-big-${rt.verb}`;
+      const { reportsDir, reportPath, run } = await approvedSetup(session);
+      fs.writeFileSync(
+        path.join(reportsDir, "zz-big-approved.json"),
+        JSON.stringify({
+          sessionId: session,
+          approvalStatus: "approved",
+          createdAt: new Date().toISOString(),
+          content: "planted",
+        }) + " ".repeat(2 * 1024 * 1024),
+      );
+      tamper(reportPath);
+
+      const after = run(10_000);
+
+      expect(after.timedOut).toBe(false);
+      rt.expectBlock(after);
+      expect(after.stderr).toMatch(MISMATCH_SESSION);
+    });
+
+    it.each(FIFO_PLANTS)(
+      "evidence read after a refused marker: %s named *.json with no writer next to the tampered approval blocks with the mismatch reason within the bound",
+      async (_kind, plant) => {
+        const { reportsDir, reportPath, run } = await approvedSetup(`sess-e2e-ev-fifo-${rt.verb}`);
+        tamper(reportPath);
+        plant(reportsDir);
+        const bound = 10_000;
+
+        const blocked = run(bound);
+
+        expect(blocked.timedOut).toBe(false);
+        expect(blocked.ms).toBeLessThan(bound);
+        rt.expectBlock(blocked);
+        expect(blocked.stderr).toMatch(MISMATCH_SESSION);
+      },
+      60_000,
+    );
+
+    // No marker at all: the hash scan never runs, so the evidence read is the
+    // only reader of the reports directory.
+    function noMarkerSetup(): { reportsDir: string; run: (timeoutMs?: number) => ReturnType<typeof runHook> } {
+      const configPath = path.join(tmpDir, "harness.yaml");
+      fs.writeFileSync(configPath, MANIFEST_WITH_PACK, "utf8");
+      const reportsDir = path.join(tmpDir, "reports");
+      fs.mkdirSync(reportsDir, { recursive: true });
+      const event = rt.event(`sess-e2e-nomarker-${rt.verb}`);
+      return {
+        reportsDir,
+        run: (timeoutMs) => runHook(configPath, event, { verb: rt.verb, ...(timeoutMs !== undefined ? { timeoutMs } : {}) }),
+      };
+    }
+
+    it("evidence read, no marker: a 2 MiB approved report of the session is skipped, so the block names no report instead of the unsigned approval", () => {
+      const { reportsDir, run } = noMarkerSetup();
+      fs.writeFileSync(
+        path.join(reportsDir, "zz-big-approved.json"),
+        JSON.stringify({
+          sessionId: `sess-e2e-nomarker-${rt.verb}`,
+          approvalStatus: "approved",
+          createdAt: new Date().toISOString(),
+          content: "planted",
+        }) + " ".repeat(2 * 1024 * 1024),
+      );
+
+      const result = run(10_000);
+
+      expect(result.timedOut).toBe(false);
+      rt.expectBlock(result);
+      expect(result.stderr).toMatch(/no reports found at/);
+      expect(result.stderr).not.toMatch(/unsigned persisted-report approval rejected/);
+    });
+
+    it("evidence read, no marker: a regular approved report of the session is still reported as an unsigned approval claim (unchanged)", () => {
+      const { reportsDir, run } = noMarkerSetup();
+      fs.writeFileSync(
+        path.join(reportsDir, "r1.json"),
+        JSON.stringify({
+          sessionId: `sess-e2e-nomarker-${rt.verb}`,
+          approvalStatus: "approved",
+          createdAt: new Date().toISOString(),
+          content: "forged",
+        }),
+      );
+
+      const result = run(10_000);
+
+      rt.expectBlock(result);
+      expect(result.stderr).toMatch(/unsigned persisted-report approval rejected/);
+    });
+
+    it.each(FIFO_PLANTS)(
+      "evidence read, no marker: %s named *.json with no writer gives the unchanged no-report block within the bound",
+      (_kind, plant) => {
+        const { reportsDir, run } = noMarkerSetup();
+        plant(reportsDir);
+        const bound = 10_000;
+
+        const result = run(bound);
+
+        // A blocking open() of the FIFO would wait for a writer forever; the
+        // child is killed at the bound and the run reports it as timed out.
+        expect(result.timedOut).toBe(false);
+        expect(result.ms).toBeLessThan(bound);
+        rt.expectBlock(result);
+        expect(result.stderr).toMatch(/no reports found at/);
       },
       60_000,
     );
