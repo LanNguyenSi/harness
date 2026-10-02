@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { decodeShellWord, hasAnsiCNulEscape } from "../../src/runtime/shell-word.js";
+import {
+  decodeShellWord,
+  decodeShellWordTruncatingNul,
+  hasAnsiCNulEscape,
+  truncateNulWords,
+} from "../../src/runtime/shell-word.js";
 
 // Task fdee7d0f. Every expectation below is bash's own answer, obtained by
 // running `printf '%s' <word>` in a real shell (through `od -c` where the
@@ -260,5 +265,65 @@ describe("decodeShellWord keeps its decoding for a NUL escape (task 241d9e9e)", 
   it("still decodes the non-NUL spellings of the same words", () => {
     expect(decodeShellWord("-$'\\x64'elete")).toBe("-delete");
     expect(decodeShellWord("$'-\\144elete'")).toBe("-delete");
+  });
+});
+
+// Task 5cc64860. `decodeShellWordTruncatingNul` is the value bash passes when
+// a `$'...'` run carries a NUL-decoding escape: the run is cut at the first
+// such escape and the text around it is kept. Every expectation is the output
+// of GNU bash 3.2.57, `printf '[%s]' <word> | od -c`; `\c@` and the escape
+// spellings that bash 3.2.57 leaves literal (`\u0000`) are deliberately
+// over-cut, which only ever adds a candidate for a deny-side scan.
+describe("decodeShellWordTruncatingNul (task 5cc64860)", () => {
+  it.each([
+    ["$'--force\\0'", "--force"],
+    ["$'--force\\x00'", "--force"],
+    ["$'--force\\000junk'", "--force"],
+    ["--$'for\\0xx'ce", "--force"],
+    ["$'-delete\\c@'", "-delete"],
+    ["$'-dele\\c@x'te", "-delete"],
+    ["$'a\\400b'", "a"],
+    ["x$'a\\0b'y", "xay"],
+    ["$'a\\0'$'b'", "ab"],
+    ["$'a\\0'\"b c\"", "ab c"],
+    ["'q'$'-\\0z''r'", "q-r"],
+    ["$'a\\'b\\0c'", "a'b"],
+    ["$'\\0abc'", ""],
+    ["$'a\\\\0b'", "a\\0b"],
+  ])("decodes %s to %j", (w, expected) => {
+    expect(decodeShellWordTruncatingNul(w)).toBe(expected);
+  });
+
+  it("equals decodeShellWord for a word without a NUL escape", () => {
+    for (const w of ["-delete", "-'delete'", "$'\\x64elete'", "$'a\\x0bb'", "\"a b\"", "a\\ b", "$'\\xz'"]) {
+      expect(decodeShellWordTruncatingNul(w), w).toBe(decodeShellWord(w));
+    }
+  });
+
+  it("returns the raw word when it cannot resolve it, and never throws", () => {
+    expect(decodeShellWordTruncatingNul("$'a\\0b")).toBe("$'a\\0b");
+    expect(decodeShellWordTruncatingNul("$'\\")).toBe("$'\\");
+    expect(decodeShellWordTruncatingNul("")).toBe("");
+  });
+
+  it("leaves decodeShellWord itself unchanged for these words", () => {
+    expect(decodeShellWord("$'--force\\0'")).toBe("--force\u0000");
+    expect(decodeShellWord("x$'a\\0b'y")).toBe("xa\u0000by");
+    expect(decodeShellWord("$'-delete\\c@'")).toBe("-delete\\c@");
+  });
+});
+
+describe("truncateNulWords (task 5cc64860)", () => {
+  it("is null when no word carries a NUL-decoding escape", () => {
+    expect(truncateNulWords(["git", "push", "$'--fo\\x72ce'", "origin"])).toBeNull();
+    expect(truncateNulWords([])).toBeNull();
+  });
+
+  it("rewrites only the NUL-escaped words, into words that decode to bash's value", () => {
+    const out = truncateNulWords(["git", "push", "$'--force\\0'", "'it'\\''s'", "$'a\\'b\\0c'"]);
+    expect(out).not.toBeNull();
+    expect(out!.slice(0, 2)).toEqual(["git", "push"]);
+    expect(out!.map((w) => decodeShellWord(w))).toEqual(["git", "push", "--force", "it's", "a'b"]);
+    expect(out![3]).toBe("'it'\\''s'");
   });
 });
