@@ -59,7 +59,7 @@ import {
   peelWrapperPrefixes,
   type WrapperPeelToken,
 } from "./command-normalize.js";
-import { decodeShellWord, truncateNulWords } from "./shell-word.js";
+import { decodeShellWord, truncateNulRuns } from "./shell-word.js";
 
 /** One recognised destructive invocation. */
 export interface DestructiveFloorHit {
@@ -102,6 +102,19 @@ const MAX_NESTING_DEPTH = 4;
 export function classifyDestructiveShellFloor(command: string): DestructiveFloorHit[] {
   const hits: DestructiveFloorHit[] = [];
   scanCommand(command, 0, hits);
+  // A word with a NUL-decoding ANSI-C escape decodes to a value that keeps a
+  // literal U+0000 (`$'--force\0'`, `$'dd\0'`), which no exact comparison
+  // below (a whole flag, a head or subcommand name) can equal, while bash cuts
+  // the run at the NUL and runs the plain command (task `5cc64860`, GNU bash
+  // 3.2.57). The command is therefore scanned a second time with each such
+  // run replaced by the value bash passes (`truncateNulRuns`), and the hits of
+  // both scans are kept: the second scan can only add a hit, so no verdict is
+  // lowered, and the NUL spelling is classified at least as severely as its
+  // plain twin. The rewrite runs before the boundary split, so a boundary
+  // character inside the cut-off part of a run (`$'--force\0;'`) cannot tear
+  // the word. A command without such a run is scanned once, as before.
+  const nul = truncateNulRuns(command);
+  if (nul !== null) scanCommand(nul, 0, hits);
   return dedupe(hits);
 }
 
@@ -125,27 +138,15 @@ function scanCommand(command: string, depth: number, hits: DestructiveFloorHit[]
   // `dd` unrecognisable. Resolving the shell head before splitting keeps
   // the nested command intact for the recursive scan.
   const wholeTokens = tokenize(command);
-  scanWholeString(wholeTokens, depth, hits);
-  // A word carrying a NUL-decoding escape (`$'bash\0' -c ...`) is scanned a
-  // second time as the value bash passes; see `scanInvocation`.
-  const wholeNul = truncateNulWords(wholeTokens);
-  if (wholeNul !== null) scanWholeString(wholeNul, depth, hits);
+  const wholeHead = resolveHead(wholeTokens);
+  if (wholeHead !== null && SHELL_HEADS.has(wholeHead.name)) {
+    scanShellDashC(wholeTokens.slice(wholeHead.idx + 1), depth, hits);
+  }
 
   for (const piece of command.split(BOUNDARY_SPLIT_RE)) {
     const tokens = tokenize(piece);
     if (tokens.length === 0) continue;
     scanInvocation(tokens, depth, hits);
-  }
-}
-
-function scanWholeString(
-  wholeTokens: readonly string[],
-  depth: number,
-  hits: DestructiveFloorHit[],
-): void {
-  const wholeHead = resolveHead(wholeTokens);
-  if (wholeHead !== null && SHELL_HEADS.has(wholeHead.name)) {
-    scanShellDashC(wholeTokens.slice(wholeHead.idx + 1), depth, hits);
   }
 }
 
@@ -187,27 +188,8 @@ function resolveHead(rawTokens: readonly string[]): { name: string; idx: number 
   return name === undefined ? null : { name, idx };
 }
 
-/**
- * Resolve one boundary-delimited invocation's head, then dispatch on it.
- *
- * A word with a NUL-decoding ANSI-C escape decodes to a value that keeps a
- * literal U+0000 (`$'--force\0'`, `$'dd\0'`), which no exact comparison
- * below (a whole flag, a head or subcommand name) can equal, while bash cuts
- * the run at the NUL and runs the plain command (task `5cc64860`, GNU bash
- * 3.2.57). Such an invocation is therefore scanned twice, once as written and
- * once with each of those words replaced by the value bash passes
- * (`truncateNulWords`), and the hits of both are kept: the second scan can
- * only add a hit, so no verdict is lowered, and the NUL spelling is
- * classified at least as severely as its plain twin. An invocation without
- * such a word is scanned once, as before.
- */
+/** Resolve one boundary-delimited invocation's head, then dispatch on it. */
 function scanInvocation(rawTokens: readonly string[], depth: number, hits: DestructiveFloorHit[]): void {
-  scanInvocationTokens(rawTokens, depth, hits);
-  const nul = truncateNulWords(rawTokens);
-  if (nul !== null) scanInvocationTokens(nul, depth, hits);
-}
-
-function scanInvocationTokens(rawTokens: readonly string[], depth: number, hits: DestructiveFloorHit[]): void {
   const resolved = resolveHead(rawTokens);
   if (resolved === null) return;
   const head = resolved.name;

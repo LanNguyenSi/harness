@@ -62,11 +62,11 @@
 // above do not help an EXACT comparison (a whole flag such as `--force`, a
 // head name such as `dd`, a subcommand): `$'--force\0'` decodes to a value
 // that carries a trailing U+0000 and never equals `--force`, while bash
-// passes `--force`. `decodeShellWordTruncatingNul` and `truncateNulWords`
+// passes `--force`. `decodeShellWordTruncatingNul` and `truncateNulRuns`
 // give the deny-side scanners the value bash passes, for the COMPARISON only:
 // they never replace the decoded value, the scanners keep their existing scan
-// and add a second one over these words, so the second scan can only add a
-// verdict. The truncation is the one measured rule, nothing more: a `$'...'`
+// of the command as written and add a second one over the rewritten text, so
+// the second scan can only add a verdict. The truncation is the one measured rule, nothing more: a `$'...'`
 // run ends at the first escape that decodes to NUL (or a `\c` escape, which
 // is not modelled and so counts as possibly NUL), and the text around the run
 // is kept (`x$'a\0b'y` is `xay`, measured on GNU bash 3.2.57 with
@@ -191,18 +191,48 @@ export function decodeShellWordTruncatingNul(word: string): string {
 }
 
 /**
- * Rewrite every word that carries a NUL-decoding escape into a plain
- * single-quoted word holding the value bash passes, leaving the other words
- * untouched, so a scanner can run its unchanged logic over bash's own
- * argv. `null` when no word carries such an escape (the caller has nothing
- * extra to scan). A caller that matches RAW tokens still sees the original
- * words in its first scan; this array is for the second one.
+ * Rewrite every `$'...'` run of `text` that carries a NUL-decoding escape into
+ * a single-quoted literal of the value bash passes for it, and leave the rest
+ * of the text byte for byte as it was (`rm -rf $'/tmp\\0/x'` becomes
+ * `rm -rf '/tmp'`). `null` when nothing was rewritten, so the caller has no
+ * second text to examine. Works on a whole command string: the rewrite
+ * happens before any boundary split, so a `;`, `|` or `&` that sits inside
+ * the cut-off part of a run (`$'--force\\0;'`) disappears with it instead of
+ * tearing the word in two. A run without a closing quote is left alone
+ * (`decodeShellWord` cannot resolve it either). Every `$'` occurrence is a
+ * candidate start, as in `hasAnsiCNulEscape`, so a real run is never hidden
+ * behind an earlier false start; the cost is an occasional over-rewrite of
+ * text bash reads as quoted, which only gives a deny-side caller one more
+ * text to examine next to the original. Never throws.
  */
-export function truncateNulWords(words: readonly string[]): string[] | null {
-  if (!words.some((w) => hasAnsiCNulEscape(w))) return null;
-  return words.map((w) =>
-    hasAnsiCNulEscape(w) ? `'${decodeShellWordTruncatingNul(w).replace(/'/g, "'\\''")}'` : w,
-  );
+export function truncateNulRuns(text: string): string | null {
+  if (typeof text !== "string") return null;
+  let out = "";
+  let copied = 0;
+  let rewrote = false;
+  let from = text.indexOf("$'");
+  while (from !== -1) {
+    let end = -1;
+    for (let i = from + 2; i < text.length; ) {
+      const ch = text[i]!;
+      if (ch === "'") {
+        end = i;
+        break;
+      }
+      i += ch === "\\" ? 2 : 1;
+    }
+    const run = end === -1 ? "" : text.slice(from, end + 1);
+    if (end !== -1 && hasAnsiCNulEscape(run)) {
+      const value = decodeShellWordTruncatingNul(run).replace(/'/g, "'\\''");
+      out += text.slice(copied, from) + `'${value}'`;
+      copied = end + 1;
+      rewrote = true;
+      from = text.indexOf("$'", end + 1);
+      continue;
+    }
+    from = text.indexOf("$'", from + 1);
+  }
+  return rewrote ? out + text.slice(copied) : null;
 }
 
 function decodeWith(word: string, truncateNul: boolean): string {

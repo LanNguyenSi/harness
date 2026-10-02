@@ -1025,6 +1025,8 @@ describe("resolveDeletionTarget: a NUL-escaped word gates like its plain twin (t
 
   it.each([
     ["rm head, \\x00", "$'rm\\x00' -rf /home/x", "rm"],
+    ["rm, a boundary character inside the cut-off part of the head", "$'rm\\0;' -rf /home/x", "rm"],
+    ["rm, a boundary character inside the cut-off part of the target", "rm -rf $'/home/x\\0;&|'", "rm"],
     ["rm head, \\000", "$'rm\\000' -rf /home/x", "rm"],
     ["rm head, NUL inside the name", "$'r\\0xx'm -rf /home/x", "rm"],
     ["rm head, path-qualified", "/bin/$'rm\\0' -rf /home/x", "rm"],

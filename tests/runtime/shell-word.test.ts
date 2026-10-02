@@ -3,7 +3,7 @@ import {
   decodeShellWord,
   decodeShellWordTruncatingNul,
   hasAnsiCNulEscape,
-  truncateNulWords,
+  truncateNulRuns,
 } from "../../src/runtime/shell-word.js";
 
 // Task fdee7d0f. Every expectation below is bash's own answer, obtained by
@@ -313,17 +313,40 @@ describe("decodeShellWordTruncatingNul (task 5cc64860)", () => {
   });
 });
 
-describe("truncateNulWords (task 5cc64860)", () => {
-  it("is null when no word carries a NUL-decoding escape", () => {
-    expect(truncateNulWords(["git", "push", "$'--fo\\x72ce'", "origin"])).toBeNull();
-    expect(truncateNulWords([])).toBeNull();
+describe("truncateNulRuns (task 5cc64860)", () => {
+  it("is null when no run carries a NUL-decoding escape", () => {
+    expect(truncateNulRuns("git push $'--fo\\x72ce' origin")).toBeNull();
+    expect(truncateNulRuns("git push --force origin")).toBeNull();
+    expect(truncateNulRuns("echo '\\0' \"\\0\"")).toBeNull();
+    expect(truncateNulRuns("")).toBeNull();
   });
 
-  it("rewrites only the NUL-escaped words, into words that decode to bash's value", () => {
-    const out = truncateNulWords(["git", "push", "$'--force\\0'", "'it'\\''s'", "$'a\\'b\\0c'"]);
-    expect(out).not.toBeNull();
-    expect(out!.slice(0, 2)).toEqual(["git", "push"]);
-    expect(out!.map((w) => decodeShellWord(w))).toEqual(["git", "push", "--force", "it's", "a'b"]);
-    expect(out![3]).toBe("'it'\\''s'");
+  it.each([
+    ["git push $'--force\\0' origin", "git push '--force' origin"],
+    ["$'dd\\0' of=/dev/sda", "'dd' of=/dev/sda"],
+    ["find / $'-delete\\c@'", "find / '-delete'"],
+    ["rm -rf $'/tmp\\0/x'", "rm -rf '/tmp'"],
+    ["git push --$'for\\0xx'ce origin", "git push --'for'ce origin"],
+    ["x $'a\\'b\\0c' y", "x 'a'\\''b' y"],
+    ["$'a\\0' $'b\\0'", "'a' 'b'"],
+    // The text is left byte for byte outside a rewritten run, including a
+    // non-NUL run and the boundary characters inside the cut-off part.
+    ["echo $'\\x41'; git push $'--force\\0;x' origin", "echo $'\\x41'; git push '--force' origin"],
+    // A real run behind an earlier false start (`'$'` is a quoted dollar).
+    ["echo '$'$'\\0'", "echo '$'''"],
+  ])("rewrites %s to %s", (text, expected) => {
+    expect(truncateNulRuns(text)).toBe(expected);
+  });
+
+  it("leaves a run without a closing quote alone, and never throws", () => {
+    expect(truncateNulRuns("git push $'--force\\0")).toBeNull();
+    expect(truncateNulRuns("$'\\")).toBeNull();
+    expect(truncateNulRuns("$'")).toBeNull();
+  });
+
+  it("rewrites into text that decodes to the value bash passes", () => {
+    const out = truncateNulRuns("x$'a\\0b'y");
+    expect(out).toBe("x'a'y");
+    expect(decodeShellWord(out!)).toBe("xay");
   });
 });
