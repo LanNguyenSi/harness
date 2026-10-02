@@ -2,6 +2,7 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-10-02T11:10:19Z, task c78a155b: `src/cli/apply/install-codex-config.ts` now refuses three legacy shapes it used to install over (a genuine generated-header block after a stale header line, a key or value line between a legacy block's opening line and its first hook table, a `# harness hook:` comment directly above a hook table on the append path), offers only the END fix in the no-END refusal when the named table already sits below the last harness hook table, and stops the generated-header `[[hooks.` lookup at the scanned range. `codex-adapter-parity-gaps.md` re-verified against the changed code (the `findManagedRange` and no-END refusal sentences rewritten, the three refusals and their boundaries added) and re-stamped.
 - 2026-10-02T10:11:26Z, task 7dfdcaaf: re-stamped after merging master; `codex-adapter-parity-gaps.md`, `evidence-ledger-trust-boundary.md`, `gate-fail-posture-matrix.md`, `understanding-gate-auto-mode-signals.md`, `understanding-gate-lockout-recovery.md` list sources that master changed in the meantime. The merged changes come from separately reviewed tasks and none contradicts these docs' claims, so no body text changed.
 
 - 2026-10-02T09:38:10Z, task 7dfdcaaf: re-stamped after merging master; `codex-adapter-parity-gaps.md` list sources that master changed in the meantime. The merged changes come from separately reviewed tasks and none contradicts these docs' claims, so no body text changed.
