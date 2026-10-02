@@ -459,6 +459,10 @@ const LATER_MARKER = "# harness hook: mentioned-in-a-comment (budget_ms=1)";
 const endTextOutsideALine: Array<[string, string[]]> = [
   ["inside a foreign table's multi-line string", ["[mcp_servers.docs]", 'note = """', CODEX_MANAGED_END, `${TOKEN}`, '"""']],
   ["mid-line in a foreign table's value", ["[mcp_servers.docs]", `note = "${TOKEN} ${CODEX_MANAGED_END}"`]],
+  [
+    "inside a foreign table's multi-line array, as a comment line",
+    ["[mcp_servers.docs]", "args = [", `  ${CODEX_MANAGED_END}`, `  "${TOKEN}",`, "]"],
+  ],
 ];
 
 describe("codex install: the legacy paths read a surviving END marker only as a whole line outside strings (task e8f4fc03)", () => {
@@ -1131,4 +1135,129 @@ describe("codex install: a respelled harness-commented table after the named tab
       expect(endLines(p.nextContent)).toBe(1);
     });
   }
+});
+
+// Every managed-block marker (BEGIN, END, the source prefix, the generated
+// header, the `# harness hook:` comment) is found only as a whole trimmed line
+// at the top level of the document (task 36d962d2). Marker text inside an
+// operator value (a single-line or multi-line string, a trailing comment, a
+// comment line inside a multi-line array) is operator content: the install
+// neither deletes operator content after it, nor splices the fresh block into
+// the value, nor reports it.
+const OPERATOR_STOP_SECOND = [
+  "[[hooks.Stop]]",
+  `hooks = [{ type = "command", command = "${OPERATOR_COMMAND}-second", timeout = 5 }]`,
+];
+
+describe("codex install: marker text inside an operator value is never a managed-block marker (task 36d962d2)", () => {
+  const appended: Array<[string, string[]]> = [
+    [
+      "BEGIN text in a single-line string of an operator hook table",
+      [...OPERATOR_STOP, `note = "${CODEX_MANAGED_BEGIN} ${TOKEN}"`, ...OPERATOR_STOP_SECOND, ""],
+    ],
+    [
+      "BEGIN text as the trailing comment of a content line in an operator hook table",
+      [...OPERATOR_STOP, `x = "${TOKEN}" ${CODEX_MANAGED_BEGIN}`, ...OPERATOR_STOP_SECOND, ""],
+    ],
+    [
+      "a whole source-prefix, BEGIN and END block inside a multi-line string of an operator hook table",
+      [...OPERATOR_STOP, 'note = """', SOURCE_PREFIX, CODEX_MANAGED_BEGIN, TOKEN, CODEX_MANAGED_END, '"""', ...OPERATOR_STOP_SECOND, ""],
+    ],
+    [
+      "the generated header as a comment line inside a multi-line array, then an operator hook table",
+      ["[tui]", "arr = [", `  ${GENERATED}`, `  "${TOKEN}",`, "]", ...OPERATOR_STOP_SECOND, ""],
+    ],
+    [
+      "the source prefix as a comment line inside a multi-line array, then a respelled operator hook table",
+      ["[tui]", "arr = [", `  ${SOURCE_PREFIX}`, `  "${TOKEN}",`, "]", ...OPERATOR_STOP_RESPELLED, ""],
+    ],
+  ];
+
+  for (const [label, lines] of appended) {
+    it(`${label}: appends one block after the operator's bytes, every operator value kept, a second install gives the same bytes`, () => {
+      const config = write(lines);
+      const p = planTwice();
+      expect(p.changed).toBe(true);
+      // The operator's config, the value holding the marker text and the
+      // operator hook table after it included, is kept byte for byte.
+      expect(p.nextContent.startsWith(config)).toBe(true);
+      expectOperatorContentKept(config, p.nextContent);
+      expect(count(p.nextContent, CODEX_MANAGED_BEGIN)).toBe(count(config, CODEX_MANAGED_BEGIN) + 1);
+      expect(endLines(p.nextContent)).toBe(endLines(config) + 1);
+      expect(count(p.nextContent, 'command = "harness pack hook a"')).toBe(1);
+      expect(p.removedHookIds).toEqual([]);
+      expect(JSON.stringify([p.summary, p.removedHookIds, p.foreignSectionsPreserved, p.keptOperatorHookTables])).not.toContain(TOKEN);
+    });
+  }
+
+  it("BEGIN text in a value after a genuine block is no second BEGIN marker: the block is replaced and the value stays", () => {
+    const after = ["[tui]", `note = "${CODEX_MANAGED_BEGIN} ${TOKEN}"`, ...TAIL, ""].join("\n");
+    write([CODEX_MANAGED_BEGIN, GENERATED, ...harnessTable("old", "Stop", "harness pack hook old"), CODEX_MANAGED_END, after]);
+    const p = planTwice();
+    expect(p.removedHookIds).toEqual(["old"]);
+    expect(p.nextContent.endsWith(`${CODEX_MANAGED_END}\n${after}`)).toBe(true);
+    expect(JSON.stringify([p.summary, p.removedHookIds, p.foreignSectionsPreserved])).not.toContain(TOKEN);
+  });
+
+  it("an END comment line inside a multi-line array past a foreign table is no stray END: the array is kept whole", () => {
+    const zone = ["[mcp_servers.docs]", "args = [", `  ${CODEX_MANAGED_END}`, `  "${TOKEN}",`, "]", ...TAIL, ""].join("\n");
+    write([CODEX_MANAGED_BEGIN, GENERATED, ...HARNESS_A, zone]);
+    const p = planTwice();
+    expect(p.nextContent.endsWith(`${CODEX_MANAGED_END}\n${zone}`)).toBe(true);
+    expect(endLines(p.nextContent)).toBe(2);
+    expect(p.foreignSectionsPreserved).toEqual(["[mcp_servers.docs]", '[projects."/work/x"]']);
+  });
+
+  it("an END comment line inside a harness table's multi-line hooks array does not end the block: the genuine END does", () => {
+    write([
+      CODEX_MANAGED_BEGIN,
+      GENERATED,
+      "# harness hook: old (budget_ms=2000)",
+      "[[hooks.Stop]]",
+      "hooks = [",
+      `  ${CODEX_MANAGED_END}`,
+      '  { type = "command", command = "harness pack hook old", timeout = 2 },',
+      "]",
+      CODEX_MANAGED_END,
+      ...OPERATOR_STOP,
+      "",
+    ]);
+    const p = planTwice();
+    expect(p.removedHookIds).toEqual(["old"]);
+    expect(count(p.nextContent, "harness pack hook old")).toBe(0);
+    expect(endLines(p.nextContent)).toBe(1);
+    expect(p.nextContent.endsWith(`${CODEX_MANAGED_END}\n${OPERATOR_STOP.join("\n")}\n`)).toBe(true);
+  });
+
+  it("a '# harness hook:' line inside a multi-line string of a replaced harness table is no removed hook id, so its text is never reported", () => {
+    write([
+      CODEX_MANAGED_BEGIN,
+      GENERATED,
+      ...harnessTable("old", "Stop", "harness pack hook old"),
+      'note = """',
+      `# harness hook: ${TOKEN} (budget_ms=1)`,
+      '"""',
+      CODEX_MANAGED_END,
+      "",
+    ]);
+    const p = planTwice();
+    expect(p.removedHookIds).toEqual(["old"]);
+    expect(JSON.stringify([p.summary, p.removedHookIds, p.foreignSectionsPreserved])).not.toContain(TOKEN);
+  });
+
+  it("a comment that mentions '# harness hook:' mid-line above an operator hook table does not make that table harness-owned: the install refuses and deletes nothing", () => {
+    const config = write([
+      CODEX_MANAGED_BEGIN,
+      GENERATED,
+      ...HARNESS_A,
+      "# see the # harness hook: comments above",
+      ...OPERATOR_STOP,
+      CODEX_MANAGED_END,
+      "",
+    ]);
+    const { message } = refusal();
+    expect(message).toContain("has a foreign table ([[hooks.Stop]])");
+    expect(message).not.toContain(TOKEN);
+    expect(fs.readFileSync(codexConfig, "utf8")).toBe(config);
+  });
 });

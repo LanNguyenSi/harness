@@ -2371,15 +2371,18 @@ describe("apply --runtime codex --install: a refusal never echoes the config's o
       "foreign table ([tui])",
     ],
     [
-      "a second BEGIN marker inside a secret-bearing value",
+      // BEGIN text inside the value is no marker (only a whole top-level
+      // line is), so the refusal names the genuine second BEGIN line below it.
+      "a second BEGIN marker line below a secret-bearing value that holds BEGIN text",
       [
         ...STALE_MANAGED_BLOCK_LINES,
         "",
         "[tui]",
         `note = "${SECRET} ${CODEX_MANAGED_BEGIN}"`,
+        CODEX_MANAGED_BEGIN,
         "",
       ].join("\n"),
-      "(a second one at line 11)",
+      "(a second one at line 12)",
     ],
     [
       "a secret-bearing foreign table wedged directly after a '# harness hook:' comment, with no END marker",
