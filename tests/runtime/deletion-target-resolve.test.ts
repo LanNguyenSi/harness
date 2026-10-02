@@ -1002,3 +1002,72 @@ describe("resolveDeletionTarget: NUL-escape spellings keep their verdict (task 2
     expect(resolveDeletionTarget("rm -rf /home/x", ROOTS)?.unresolvable).toBe(true);
   });
 });
+
+// Task 5cc64860. A NUL-decoding escape inside the verb name (`$'rm\0'`) left
+// a decoded head with a literal U+0000 in it, which never matched the head
+// test, so the segment returned no verdict at all: no deletion gate decision
+// for a command bash runs as `rm -rf /home/x` (GNU bash 3.2.57,
+// `printf '[%s]' <word> | od -c`). A NUL escape in an operand could also keep
+// a target inside a safe root that bash cuts back to the root itself. Each
+// such segment is now also resolved with every NUL-escaped word replaced by
+// the value bash passes, and the two verdicts are combined (gated if either
+// is), so a NUL-escaped command is gated at least as strictly as its twin.
+describe("resolveDeletionTarget: a NUL-escaped word gates like its plain twin (task 5cc64860)", () => {
+  it("pin: $'rm\\0' -rf /home/x is gated exactly as rm -rf /home/x", () => {
+    const twin = resolveDeletionTarget("rm -rf /home/x", ROOTS);
+    const v = resolveDeletionTarget("$'rm\\0' -rf /home/x", ROOTS);
+    expect(twin?.unresolvable).toBe(true);
+    expect(v).not.toBeNull();
+    expect(v?.verb).toBe("rm");
+    expect(v?.unresolvable).toBe(true);
+    expect(v?.unresolvedTargets).toContain("/home/x");
+  });
+
+  it.each([
+    ["rm head, \\x00", "$'rm\\x00' -rf /home/x", "rm"],
+    ["rm, a boundary character inside the cut-off part of the head", "$'rm\\0;' -rf /home/x", "rm"],
+    ["rm, a boundary character inside the cut-off part of the target", "rm -rf $'/home/x\\0;&|'", "rm"],
+    ["rm head, \\000", "$'rm\\000' -rf /home/x", "rm"],
+    ["rm head, NUL inside the name", "$'r\\0xx'm -rf /home/x", "rm"],
+    ["rm head, path-qualified", "/bin/$'rm\\0' -rf /home/x", "rm"],
+    ["rm head behind a wrapper", "sudo $'rm\\0' -rf /home/x", "rm"],
+    ["rm head behind a NUL-escaped wrapper", "$'sudo\\0' rm -rf /home/x", "rm"],
+    ["rm head after xargs", "xargs $'rm\\0' -rf", "rm"],
+    ["rm head, NUL-escaped flag cluster too", "$'rm\\0' $'-rf\\0' /home/x", "rm"],
+    ["rm, only the NUL-escaped flag names the force", "$'rm\\0' $'-f\\0' /home/x", "rm"],
+    ["rm, NUL-escaped --recursive", "rm $'--recursive\\0' /home/x", "rm"],
+    ["rm, NUL-escaped --force", "rm $'--force\\0' /home/x", "rm"],
+    ["rm, NUL-escaped end-of-flags marker", "rm -rf $'--\\0' /home/x", "rm"],
+    ["find head", "$'find\\0' /home/x -delete", "find"],
+    ["find -delete, control escape", "find /home/x $'-delete\\c@'", "find"],
+    ["find -exec rm, NUL-escaped payload", "find /home/x -exec $'rm\\0' {} +", "find"],
+    ["git clean, NUL-escaped head", "$'git\\0' clean -fd", "git-clean"],
+    ["git clean, NUL-escaped subcommand", "git $'clean\\0' -fd", "git-clean"],
+    ["git clean, NUL-escaped --force", "git clean $'--force\\0'", "git-clean"],
+  ])("%s: %s", (_label, command, verb) => {
+    const v = resolveDeletionTarget(command, ROOTS);
+    expect(v).not.toBeNull();
+    expect(v?.verb).toBe(verb);
+    expect(v?.unresolvable).toBe(true);
+  });
+
+  it("gates a target that a NUL cuts back to the safe root itself", () => {
+    // Decoded, the operand is strictly inside /tmp; bash passes `/tmp`.
+    expect(resolveDeletionTarget("rm -rf /tmp/ok", ROOTS)?.unresolvable).toBe(false);
+    const v = resolveDeletionTarget("rm -rf $'/tmp\\0/ok'", ROOTS);
+    expect(v?.unresolvable).toBe(true);
+    expect(v?.unresolvedTargets).toContain("/tmp");
+  });
+
+  it("keeps an in-root NUL-escaped command with an in-root target resolved when bash's value is in-root too", () => {
+    const v = resolveDeletionTarget("$'rm\\0' -rf /tmp/ok", ROOTS);
+    expect(v).not.toBeNull();
+    expect(v?.unresolvable).toBe(false);
+  });
+
+  it("still returns null for a NUL escape in a command that deletes nothing", () => {
+    expect(resolveDeletionTarget("echo $'a\\0b'", ROOTS)).toBeNull();
+    expect(resolveDeletionTarget("ls $'-la\\0' /tmp", ROOTS)).toBeNull();
+    expect(resolveDeletionTarget("$'ls\\0' -rf /home/x", ROOTS)).toBeNull();
+  });
+});

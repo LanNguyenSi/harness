@@ -59,7 +59,7 @@ import {
   peelWrapperPrefixes,
   type WrapperPeelToken,
 } from "./command-normalize.js";
-import { decodeShellWord } from "./shell-word.js";
+import { decodeShellWord, truncateNulRuns } from "./shell-word.js";
 
 /** One recognised destructive invocation. */
 export interface DestructiveFloorHit {
@@ -102,6 +102,19 @@ const MAX_NESTING_DEPTH = 4;
 export function classifyDestructiveShellFloor(command: string): DestructiveFloorHit[] {
   const hits: DestructiveFloorHit[] = [];
   scanCommand(command, 0, hits);
+  // A word with a NUL-decoding ANSI-C escape decodes to a value that keeps a
+  // literal U+0000 (`$'--force\0'`, `$'dd\0'`), which no exact comparison
+  // below (a whole flag, a head or subcommand name) can equal, while bash cuts
+  // the run at the NUL and runs the plain command (task `5cc64860`, GNU bash
+  // 3.2.57). The command is therefore scanned a second time with each such
+  // run replaced by the value bash passes (`truncateNulRuns`), and the hits of
+  // both scans are kept: the second scan can only add a hit, so no verdict is
+  // lowered, and the NUL spelling is classified at least as severely as its
+  // plain twin. The rewrite runs before the boundary split, so a boundary
+  // character inside the cut-off part of a run (`$'--force\0;'`) cannot tear
+  // the word. A command without such a run is scanned once, as before.
+  const nul = truncateNulRuns(command);
+  if (nul !== null) scanCommand(nul, 0, hits);
   return dedupe(hits);
 }
 
