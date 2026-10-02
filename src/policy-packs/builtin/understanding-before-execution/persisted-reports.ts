@@ -98,7 +98,13 @@ function parseFilenameIsoMs(name: string): number | null {
   return Number.isNaN(ms) ? null : ms;
 }
 
-function parsePersistedReport(filePath: string, raw: string, mtimeMs: number): PersistedReport | null {
+function readPersistedReport(filePath: string, mtimeMs: number, boundedRaw?: string): PersistedReport | null {
+  let raw: string;
+  try {
+    raw = boundedRaw ?? fs.readFileSync(filePath, "utf8");
+  } catch {
+    return null;
+  }
   const parsed = safeJsonParse(raw);
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
   const obj = parsed as Record<string, unknown>;
@@ -134,53 +140,6 @@ function parsePersistedReport(filePath: string, raw: string, mtimeMs: number): P
  * fallback for files that carry neither timestamp.
  */
 export function listPersistedReports(dir: string): PersistedReport[] {
-  return collectPersistedReports(dir, (full) => {
-    let stat: fs.Stats;
-    try {
-      stat = fs.statSync(full);
-    } catch {
-      return null;
-    }
-    if (!stat.isFile()) return null;
-    let raw: string;
-    try {
-      raw = fs.readFileSync(full, "utf8");
-    } catch {
-      return null;
-    }
-    return { raw, mtimeMs: stat.mtimeMs };
-  });
-}
-
-/**
- * {@link listPersistedReports} for the hook-time evidence read
- * ({@link checkPersistedReport}, {@link expirePersistedReport}). The reports
- * directory holds files the gated agent can write, so every entry is opened
- * once through {@link readReportFileBounded}: non-blocking, typed and sized by
- * `fstat` on the open descriptor, read through it. A `*.json` entry that is
- * not a regular file (a FIFO, a directory, a device, a symlink to one of
- * them), is over `MAX_HASHED_REPORT_BYTES`, cannot be opened or read, or grows
- * while it is read is skipped, as if it were not there: it can neither block
- * the hook nor run it out of memory. There is no separate stat of the path
- * (a symlink flipped to a FIFO between that stat and the read used to hang
- * the read), and the modification time comes from the same descriptor.
- *
- * A report skipped for its size is invisible to the callers: the operator
- * commands (`harness approve understanding`, `harness gc`) keep the
- * unbounded {@link listPersistedReports}, because they must still see an
- * oversized report to refuse or age it.
- */
-export function listPersistedReportsBounded(dir: string): PersistedReport[] {
-  return collectPersistedReports(dir, (full) => {
-    const read = readReportFileBounded(full);
-    return read.ok ? { raw: read.raw, mtimeMs: read.mtimeMs } : null;
-  });
-}
-
-function collectPersistedReports(
-  dir: string,
-  load: (filePath: string) => { raw: string; mtimeMs: number } | null,
-): PersistedReport[] {
   let names: string[];
   try {
     names = fs.readdirSync(dir);
@@ -191,9 +150,14 @@ function collectPersistedReports(
   for (const name of names) {
     if (!name.endsWith(".json")) continue;
     const full = path.join(dir, name);
-    const loaded = load(full);
-    if (loaded === null) continue;
-    const report = parsePersistedReport(full, loaded.raw, loaded.mtimeMs);
+    let stat: fs.Stats;
+    try {
+      stat = fs.statSync(full);
+    } catch {
+      continue;
+    }
+    if (!stat.isFile()) continue;
+    const report = readPersistedReport(full, stat.mtimeMs);
     if (!report) continue;
     reports.push(report);
   }
@@ -477,6 +441,7 @@ export function expirePersistedReport(
       reason: `latest report ${sanitizeDetailValue(path.basename(latest.filePath))} already has approvalStatus=${sanitizeDetailValue(latest.approvalStatus ?? "<missing>")}, nothing to expire`,
     };
   }
+  // Bounded like the listing: the file may have been swapped since.
   const read = readReportFileBounded(latest.filePath);
   if (!read.ok) {
     return { ok: false, reason: `failed to read ${latest.filePath}: ${read.detail}` };
@@ -964,4 +929,43 @@ export function verifyApprovedReportHash(
       `no report in the reports directory matches the content the ${kinds} signed for ` +
       `(the approved report was changed or removed after approval); re-run \`harness approve understanding\``,
   };
+}
+
+/**
+ * {@link listPersistedReports} for the hook-time evidence read
+ * ({@link checkPersistedReport}, {@link expirePersistedReport}). The reports
+ * directory holds files the gated agent can write, so every entry is opened
+ * once through {@link readReportFileBounded}: non-blocking, typed and sized by
+ * `fstat` on the open descriptor, read through it. A `*.json` entry that is
+ * not a regular file (a FIFO, a directory, a device, a symlink to one of
+ * them), is over `MAX_HASHED_REPORT_BYTES`, cannot be opened or read, or grows
+ * while it is read is skipped, as if it were not there: it can neither block
+ * the hook nor run it out of memory. There is no separate stat of the path
+ * (a symlink flipped to a FIFO between that stat and the read used to hang
+ * the read), and the modification time comes from the same descriptor.
+ *
+ * A report skipped for its size is invisible to the callers: the operator
+ * commands (`harness approve understanding`, `harness gc`) keep the
+ * unbounded {@link listPersistedReports}, because they must still see an
+ * oversized report to refuse or age it.
+ */
+export function listPersistedReportsBounded(dir: string): PersistedReport[] {
+  let names: string[];
+  try {
+    names = fs.readdirSync(dir);
+  } catch {
+    return [];
+  }
+  const reports: PersistedReport[] = [];
+  for (const name of names) {
+    if (!name.endsWith(".json")) continue;
+    const full = path.join(dir, name);
+    const read = readReportFileBounded(full);
+    if (!read.ok) continue;
+    const report = readPersistedReport(full, read.mtimeMs, read.raw);
+    if (!report) continue;
+    reports.push(report);
+  }
+  reports.sort((a, b) => b.createdAtMs - a.createdAtMs);
+  return reports;
 }
