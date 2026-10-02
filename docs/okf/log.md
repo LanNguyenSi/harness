@@ -2,6 +2,10 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-10-02T07:22:49Z, task eed7c036: re-stamped after merging master; `codex-adapter-parity-gaps.md`, `understanding-gate-lockout-recovery.md` list sources that master changed in the meantime. The merged changes come from separately reviewed tasks and none contradicts these docs' claims, so no body text changed.
+
+- 2026-10-02T07:15:43Z, task eed7c036: `src/policy-packs/builtin/understanding-before-execution.ts` changed only in the `ResolvePackOptions.reportsDir` comment (the prefix goes on each report-reading hook command); `codex-adapter-parity-gaps.md` and `understanding-gate-lockout-recovery.md` list it under sources and were re-verified, no claim affected, re-stamped only.
+
 - 2026-10-02T07:18:47Z, task 3128df7a: re-stamped after merging master, where task c5831891 changed `docs/CLI.md` (STDIN HANDLING) and `src/cli/policy/intercept.ts` (timeout note tail). `codex-adapter-parity-gaps.md`, `debug-verb-selection.md`, `evidence-ledger-trust-boundary.md` and `policy-engine-producer-wiring.md` list them under sources; none quotes the timeout note or the doctor row, so no body text changed.
 
 - 2026-10-02T07:10:11Z, task 3128df7a: `docs/CLI.md` (the `harness doctor` row) now says the settings-drift check skips its comparison and warns naming the file on a malformed `.last-apply` instead of aborting. `codex-adapter-parity-gaps.md`, `debug-verb-selection.md`, `evidence-ledger-trust-boundary.md` and `policy-engine-producer-wiring.md` list `docs/CLI.md` under sources and were re-verified: none makes a claim about doctor's handling of `.last-apply`, so no body text changed; re-stamped only.
