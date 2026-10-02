@@ -684,7 +684,7 @@ export async function runInterceptCli(
     // Same fail posture as an absent event: an empty read continues as an
     // empty event, partial text is parsed (and fails open below when malformed).
     stderr.write(
-      `harness policy intercept${hookSuffix(opts.hookName)}: ${stdinTimeoutNote(read, idleTimeoutMs)}\n`,
+      `harness policy intercept${hookSuffix(opts.hookName)}: ${stdinTimeoutNote(read, idleTimeoutMs, "continuing as an empty event")}\n`,
     );
   }
   const raw = read.text;
