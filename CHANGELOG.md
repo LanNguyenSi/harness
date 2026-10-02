@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **`harness record review` / `review-subagent` / `dogfood` reject values that would plant a second ledger tag** (task `237cc609`). The verbs write their fact as space-separated tag text and the gates match tags by substring, so `--branch "x review-subagent:master"` or `--verdict "ok review-subagent:master"` also satisfied another branch's `review-subagent-before-pr-create-bash` gate. `--branch`, `--task` and `--pr` now must be one token with no whitespace and no embedded `review-subagent:`, `review:`, `dogfood:`, `preflight:`, `risk-approved:` or `risk-override:` text (case-sensitive, like the gate matcher, so a glued `xreview:master` is refused too); the check also covers a branch resolved from git. `--verdict` and the summary of all three verbs stay free text, but one carrying such a token is rejected (not rewritten, so the audit text is never altered). Each refusal exits `64` with a message naming the flag, and nothing is written. Ordinary branch names (slashes, dots, dashes, digits, underscores) are unaffected. Hardening of the advisory ledger only: the substring matcher and `ledger_add` are unchanged, and docs/CLI.md "Substring matching and the advisory trust model" now says so.
+
 ## [0.60.0] - 2026-10-01
 
 ### Upgrade notes

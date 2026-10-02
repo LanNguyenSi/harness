@@ -184,20 +184,51 @@ function requireNonEmpty(
 }
 
 /**
- * An OPTIONAL tag value: absent stays absent, present must be a non-empty
- * token with no internal whitespace. The shape check is deliberately loose
- * (task 2699b476): the id only namespaces a ledger tag, so anything the
- * gate's `${TASK_ID}` substitution can compare against is acceptable, but
- * a value carrying whitespace would split into two tags in the fact
- * content and silently satisfy a gate keyed on the first half.
+ * Ledger tag namespaces the shipped gates read (`requires.ledger_tag`).
+ * The matcher is a case-sensitive substring test (`src/policies/requires.ts`),
+ * so a value carrying `<namespace>:` text satisfies a gate keyed on that
+ * namespace even when it sits inside a longer word.
  */
-function optionalTagValue(
-  value: string | undefined,
+const TAG_NAMESPACES = [
+  "review-subagent",
+  "review",
+  "dogfood",
+  "preflight",
+  "risk-approved",
+  "risk-override",
+];
+const TAG_TOKEN_RE = new RegExp(`(?:${TAG_NAMESPACES.join("|")}):`);
+
+function tagTextFailure(
+  value: string,
   flagLabel: string,
   sessionId: string,
   note: (msg: string) => void,
-): { ok: true; value: string | undefined } | { ok: false; result: RecordResult } {
-  if (value === undefined) return { ok: true, value: undefined };
+): { ok: false; result: RecordResult } {
+  return usageFailure(
+    `${flagLabel} must not contain ledger tag text such as ` +
+      `${TAG_NAMESPACES.map((n) => `${n}:`).join(", ")} ` +
+      `(it would plant a second ledger tag); got ${JSON.stringify(value)}`,
+    sessionId,
+    note,
+  );
+}
+
+/**
+ * A tag value: a non-empty token with no internal whitespace and no
+ * embedded `<namespace>:` tag text. The shape check is deliberately loose
+ * (task 2699b476): the value only namespaces a ledger tag, so anything the
+ * gate's `${TASK_ID}` substitution can compare against is acceptable, but
+ * a value carrying whitespace would split into two tags in the fact content
+ * and one carrying `<namespace>:` text would plant a second tag, both
+ * silently satisfying a gate keyed on that other tag (task 237cc609).
+ */
+function checkTagValue(
+  value: string,
+  flagLabel: string,
+  sessionId: string,
+  note: (msg: string) => void,
+): { ok: true; value: string } | { ok: false; result: RecordResult } {
   const trimmed = value.trim();
   if (trimmed.length === 0 || /\s/.test(trimmed)) {
     return usageFailure(
@@ -207,7 +238,67 @@ function optionalTagValue(
       note,
     );
   }
+  if (TAG_TOKEN_RE.test(trimmed)) {
+    return tagTextFailure(value, flagLabel, sessionId, note);
+  }
   return { ok: true, value: trimmed };
+}
+
+/** An OPTIONAL tag value: absent stays absent, present goes through `checkTagValue`. */
+function optionalTagValue(
+  value: string | undefined,
+  flagLabel: string,
+  sessionId: string,
+  note: (msg: string) => void,
+): { ok: true; value: string | undefined } | { ok: false; result: RecordResult } {
+  if (value === undefined) return { ok: true, value: undefined };
+  return checkTagValue(value, flagLabel, sessionId, note);
+}
+
+/**
+ * Free text (`--verdict`, summaries) stays free, but may not carry a
+ * recognised `<namespace>:` tag token: the text lands verbatim in the fact
+ * content, where the substring matcher would read it as a tag. Rejected
+ * rather than rewritten, so the audit text is never altered silently.
+ */
+function rejectTagTokens(
+  value: string,
+  flagLabel: string,
+  sessionId: string,
+  note: (msg: string) => void,
+): { ok: true; value: string } | { ok: false; result: RecordResult } {
+  if (TAG_TOKEN_RE.test(value)) {
+    return tagTextFailure(value, flagLabel, sessionId, note);
+  }
+  return { ok: true, value };
+}
+
+/** Required tag value: keeps the plain "must not be empty" message, then `checkTagValue`. */
+function requireTagValue(
+  value: string | undefined,
+  flagLabel: string,
+  sessionId: string,
+  note: (msg: string) => void,
+): { ok: true; value: string } | { ok: false; result: RecordResult } {
+  const nonEmpty = requireNonEmpty(value, flagLabel, sessionId, note);
+  if (!nonEmpty.ok) return nonEmpty;
+  const checked = checkTagValue(nonEmpty.value, flagLabel, sessionId, note);
+  if (!checked.ok) return { ok: false, result: checked.result };
+  return checked;
+}
+
+/** Required free text: non-empty after trimming, no recognised tag token. */
+function requireFreeText(
+  value: string | undefined,
+  flagLabel: string,
+  sessionId: string,
+  note: (msg: string) => void,
+): { ok: true; value: string } | { ok: false; result: RecordResult } {
+  const nonEmpty = requireNonEmpty(value, flagLabel, sessionId, note);
+  if (!nonEmpty.ok) return nonEmpty;
+  const checked = rejectTagTokens(nonEmpty.value, flagLabel, sessionId, note);
+  if (!checked.ok) return { ok: false, result: checked.result };
+  return checked;
 }
 
 /**
@@ -224,8 +315,8 @@ function resolveRequiredBranch(
   note: (msg: string) => void,
 ): { ok: true; branch: string } | { ok: false; result: RecordResult } {
   const gitContext = resolveGitContext(cwd);
-  const branch = (explicitBranch ?? "").trim() || gitContext.branch;
-  if (branch.length === 0) {
+  const rawBranch = (explicitBranch ?? "").trim() || gitContext.branch;
+  if (rawBranch.length === 0) {
     const reason =
       "no branch resolvable (cwd is not inside a git work tree, or HEAD is detached); pass --branch <name>";
     note(reason);
@@ -234,7 +325,9 @@ function resolveRequiredBranch(
       result: { exitCode: EX_FAIL, wrote: false, content: "", sessionId, branch: "", reason },
     };
   }
-  return { ok: true, branch };
+  const checked = checkTagValue(rawBranch, "--branch", sessionId, note);
+  if (!checked.ok) return checked;
+  return { ok: true, branch: checked.value };
 }
 
 /**
@@ -321,11 +414,11 @@ export interface RecordReviewOptions extends RecordCommonOptions {
 export async function runRecordReview(opts: RecordReviewOptions): Promise<RecordResult> {
   const { note, cwd, sessionId } = initRecordVerb(opts, "review");
 
-  const summaryResult = requireNonEmpty(opts.summary, "summary", sessionId, note);
+  const summaryResult = requireFreeText(opts.summary, "summary", sessionId, note);
   if (!summaryResult.ok) return summaryResult.result;
   const summary = summaryResult.value;
 
-  const prResult = requireNonEmpty(opts.pr, "--pr", sessionId, note);
+  const prResult = requireTagValue(opts.pr, "--pr", sessionId, note);
   if (!prResult.ok) return prResult.result;
   const pr = prResult.value;
 
@@ -403,12 +496,12 @@ export async function runRecordReviewSubagent(
 
   let taskTag = "";
   if (opts.task !== undefined) {
-    const taskResult = requireNonEmpty(opts.task, "--task", sessionId, note);
+    const taskResult = requireTagValue(opts.task, "--task", sessionId, note);
     if (!taskResult.ok) return taskResult.result;
     taskTag = `review-subagent:${taskResult.value} `;
   }
 
-  const verdictResult = requireNonEmpty(opts.verdict, "--verdict", sessionId, note);
+  const verdictResult = requireFreeText(opts.verdict, "--verdict", sessionId, note);
   if (!verdictResult.ok) return verdictResult.result;
   const verdict = verdictResult.value;
 
@@ -416,7 +509,10 @@ export async function runRecordReviewSubagent(
   if (!branchResult.ok) return branchResult.result;
   const branch = branchResult.branch;
 
-  const summary = typeof opts.summary === "string" ? opts.summary.trim() : "";
+  const summaryText = typeof opts.summary === "string" ? opts.summary.trim() : "";
+  const summaryChecked = rejectTagTokens(summaryText, "summary", sessionId, note);
+  if (!summaryChecked.ok) return summaryChecked.result;
+  const summary = summaryChecked.value;
   const content = `${taskTag}review-subagent:${branch} verdict:${verdict}${
     summary.length > 0 ? ` — ${summary}` : ""
   }`;
@@ -436,7 +532,7 @@ export interface RecordDogfoodOptions extends RecordCommonOptions {
 export async function runRecordDogfood(opts: RecordDogfoodOptions): Promise<RecordResult> {
   const { note, sessionId } = initRecordVerb(opts, "dogfood");
 
-  const summaryResult = requireNonEmpty(opts.summary, "summary", sessionId, note);
+  const summaryResult = requireFreeText(opts.summary, "summary", sessionId, note);
   if (!summaryResult.ok) return summaryResult.result;
   const summary = summaryResult.value;
 
