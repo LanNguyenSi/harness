@@ -1199,6 +1199,20 @@ describe("codex install: marker text inside an operator value is never a managed
     expect(JSON.stringify([p.summary, p.removedHookIds, p.foreignSectionsPreserved])).not.toContain(TOKEN);
   });
 
+  it("a top-level BEGIN line with text after the marker is still the block's BEGIN: the block is replaced, not kept beside a fresh one", () => {
+    write([`${CODEX_MANAGED_BEGIN} (edited)`, GENERATED, ...harnessTable("old", "Stop", "harness pack hook old"), CODEX_MANAGED_END, ...TAIL, ""]);
+    const p = planTwice();
+    expect(p.removedHookIds).toEqual(["old"]);
+    expect(count(p.nextContent, CODEX_MANAGED_BEGIN)).toBe(1);
+    expect(endLines(p.nextContent)).toBe(1);
+  });
+
+  it("an END line with text after the marker is no END: the BEGIN block without END refuses at the foreign table after it", () => {
+    const config = write([CODEX_MANAGED_BEGIN, GENERATED, ...HARNESS_A, `${CODEX_MANAGED_END} (edited)`, "[tui]", "theme = 1", ...HARNESS_B, ""]);
+    expect(refusal().message).toContain("has a foreign table ([tui])");
+    expect(fs.readFileSync(codexConfig, "utf8")).toBe(config);
+  });
+
   it("an END comment line inside a multi-line array past a foreign table is no stray END: the array is kept whole", () => {
     const zone = ["[mcp_servers.docs]", "args = [", `  ${CODEX_MANAGED_END}`, `  "${TOKEN}",`, "]", ...TAIL, ""].join("\n");
     write([CODEX_MANAGED_BEGIN, GENERATED, ...HARNESS_A, zone]);

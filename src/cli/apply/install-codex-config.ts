@@ -280,9 +280,11 @@ function nextTripleDelim(rawLine: string, delimIn: TripleDelim): TripleDelim {
 }
 
 /** How a managed-block marker's line must read once trimmed: `whole`, the
- * line is the marker (BEGIN, END); `prefix`, the line starts with it (the
- * source prefix, which the generator follows with the generated path, the
- * generated header, and the `# harness hook: <id>` comment). */
+ * line is the marker (END, compared exactly as before); `prefix`, the line
+ * starts with it (BEGIN, which was found wherever its text sat and so still
+ * matches a marker line with text after it; the source prefix, which the
+ * generator follows with the generated path; the generated header; the
+ * `# harness hook: <id>` comment). */
 type MarkerShape = "whole" | "prefix";
 
 /**
@@ -1120,9 +1122,9 @@ function findManagedRange(text: string, configPath: string): ManagedRange | null
   // an operator value (a string, a trailing comment) is neither the block nor
   // a second marker, so the install neither deletes operator content after
   // it nor splices the fresh block into the value (task 36d962d2).
-  const begin = findMarkerLine(text, CODEX_MANAGED_BEGIN, "whole");
+  const begin = findMarkerLine(text, CODEX_MANAGED_BEGIN, "prefix");
   if (begin !== -1) {
-    const secondBegin = findMarkerLine(text, CODEX_MANAGED_BEGIN, "whole", lineEndAfter(text, begin));
+    const secondBegin = findMarkerLine(text, CODEX_MANAGED_BEGIN, "prefix", lineEndAfter(text, begin));
     if (secondBegin !== -1) {
       // Names the second marker's line number only, never that line's own
       // text, since this refusal is printed to stderr and `--json`.
