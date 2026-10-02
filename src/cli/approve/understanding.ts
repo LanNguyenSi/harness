@@ -563,19 +563,20 @@ export function validatePersistedReport(parsed: Record<string, unknown>): Valida
 }
 
 /**
- * Exported (agent-tasks/74b4b17d) so the PreToolUse hook's auto-approval
- * path CONSUMES the report it used through the identical rewrite this
- * CLI performs (ADR Option A condition 5: consumption plus the
- * `pending`-only eligibility rule is what makes one report mintable at
- * most once). Export only; the logic is unchanged.
+ * Exported (agent-tasks/74b4b17d) so the PreToolUse hook's auto-approval path
+ * CONSUMES the report it used through the identical rewrite this CLI performs
+ * (ADR Option A condition 5). `boundedRaw`: the text that path already read
+ * through the bounded reader, so the consume never re-reads the agent-writable
+ * path (a retargeted symlink); `harness approve understanding` reads by path.
  */
 export function rewriteReportApproved(
   filePath: string,
   approvedAt: string,
   approvedBy: string,
   sessionId: string,
+  boundedRaw?: string,
 ): { previousStatus: string | null; sessionIdStamped: boolean } {
-  const raw = fs.readFileSync(filePath, "utf8");
+  const raw = boundedRaw ?? fs.readFileSync(filePath, "utf8");
   const parsed = JSON.parse(raw) as Record<string, unknown>;
   const previousStatus =
     typeof parsed["approvalStatus"] === "string" ? (parsed["approvalStatus"] as string) : null;
@@ -585,29 +586,28 @@ export function rewriteReportApproved(
   // `expiredAt` and `expiredBy` are `expirePersistedReport`'s stamp for how a
   // report reached "expired" (understanding-before-execution-runtime.ts); they
   // describe that specific past state, not the report's current one.
-  // Approving a report that was previously expired must not let that
-  // stale timestamp survive into the new snapshot, or the persisted
-  // record becomes self-contradictory: {approvalStatus: "approved",
-  // expiredAt: ...}. Mirrors the same idiom in the standalone package's
-  // `withApprovalStatus` (agent-grounding PR #173 / 5120938c review
-  // round 2). `delete` (not `= undefined`) so `JSON.stringify` below
-  // drops the key entirely instead of serializing `"expiredAt": null`-
-  // adjacent noise.
+  // Approving a report that was previously expired must not let that stale
+  // timestamp survive into the new snapshot, or the persisted record becomes
+  // self-contradictory: {approvalStatus: "approved", expiredAt: ...}. Mirrors
+  // the same idiom in the standalone package's `withApprovalStatus`
+  // (agent-grounding PR #173, from the 5120938c review). `delete` (not
+  // `= undefined`) so `JSON.stringify` below drops the key entirely instead
+  // of serializing `"expiredAt": null`-adjacent noise.
   delete parsed["expiredAt"];
   delete parsed["expiredBy"];
-  // Stamp the session id when the report lacks one (older Stop-hook
-  // package versions write reports without a `sessionId` field). This
-  // binds the report to the session that approved it, so every later
-  // lookup strict-matches it and the sessionId-null tolerant fallback
-  // can never re-adopt it for a different session (harness/0dce3880
-  // friction #1). A report that already carries a sessionId is left
-  // untouched — it is not this command's place to rewrite identity.
+  // Stamp the session id when the report lacks one (older Stop-hook package
+  // versions write reports without a `sessionId` field). This binds the report
+  // to the session that approved it, so every later lookup strict-matches it and
+  // the sessionId-null fallback can never re-adopt it for a different session
+  // (harness/0dce3880 friction #1). An existing sessionId is left untouched.
   let sessionIdStamped = false;
   const existing = parsed["sessionId"];
   if (typeof existing !== "string" || existing.length === 0) {
     parsed["sessionId"] = sessionId;
     sessionIdStamped = true;
   }
+  // Temp file plus rename: the rename replaces the directory entry (a symlink
+  // included) and never opens whatever a retargeted symlink points at.
   atomicWriteFile(filePath, `${JSON.stringify(parsed, null, 2)}\n`);
   return { previousStatus, sessionIdStamped };
 }

@@ -26,7 +26,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { execFileSync, spawnSync } from "node:child_process";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { approveUnderstanding } from "../../src/cli/approve/understanding.js";
 import { parseManifest } from "../../src/schema/index.js";
@@ -509,6 +509,35 @@ describe.each(E2E_RUNTIMES)(
 // declines below are caused by the planted entry. The planted size is 2 MiB,
 // a member of the "over the 1 MiB cap" class; hundreds of megabytes are never
 // written.
+// Preload for the consume-window cases below (loaded into the hook process
+// with NODE_OPTIONS=--import). While RETARGET_PATH is a symlink, every
+// fs.openSync of it first points it at RETARGET_REAL and, once the descriptor
+// is open, at RETARGET_PLANTED. Reads through a descriptor (the bounded
+// reader) see the real report; a later read by path sees the planted entry.
+const RETARGET_AFTER_OPEN_PRELOAD = `import fs from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
+const target = process.env.RETARGET_PATH;
+const real = process.env.RETARGET_REAL;
+const planted = process.env.RETARGET_PLANTED;
+const openSync = fs.openSync;
+function isLink() {
+  try { return fs.lstatSync(target).isSymbolicLink(); } catch { return false; }
+}
+function point(to) {
+  const tmp = target + ".retarget";
+  fs.symlinkSync(to, tmp);
+  fs.renameSync(tmp, target);
+}
+fs.openSync = function (p, ...rest) {
+  if (String(p) !== target || !isLink()) return openSync.call(this, p, ...rest);
+  point(real);
+  const fd = openSync.call(this, p, ...rest);
+  point(planted);
+  return fd;
+};
+syncBuiltinESMExports();
+`;
+
 const MANIFEST_WITH_AUTO_APPROVE = `version: 1
 policy_packs:
   - name: understanding-before-execution
@@ -558,7 +587,7 @@ describe.each(E2E_RUNTIMES)(
     ): Promise<{
       reportsDir: string;
       generatedDir: string;
-      run: (timeoutMs?: number) => ReturnType<typeof runHook>;
+      run: (timeoutMs?: number, env?: Record<string, string>) => ReturnType<typeof runHook>;
       writePending: (name: string, createdAt: string) => string;
     }> {
       const configPath = path.join(tmpDir, "harness.yaml");
@@ -591,12 +620,15 @@ describe.each(E2E_RUNTIMES)(
       return {
         reportsDir,
         generatedDir,
-        run: (timeoutMs) =>
+        run: (timeoutMs, env) =>
           runHook(configPath, event, {
             verb: rt.verb,
             ...(timeoutMs !== undefined ? { timeoutMs } : {}),
-            // Claude's auto-approval wants the session id in the hook environment too.
-            ...(rt.verb === "pre-tool-use" ? { env: { CLAUDE_CODE_SESSION_ID: session } } : {}),
+            env: {
+              ...env,
+              // Claude's auto-approval wants the session id in the hook environment too.
+              ...(rt.verb === "pre-tool-use" ? { CLAUDE_CODE_SESSION_ID: session } : {}),
+            },
           }),
         writePending: (name, createdAt) => {
           const file = path.join(reportsDir, name);
@@ -673,6 +705,65 @@ describe.each(E2E_RUNTIMES)(
           rt.expectBlock(result);
           expect(result.stderr).toMatch(/auto-approval declined: report listing skipped 1 unreadable entry/);
           expect(status(report)).toBe("pending");
+        },
+        60_000,
+      );
+
+      // The consume step rewrites the report the precondition validated. A
+      // report that is a symlink can be retargeted after the precondition read,
+      // so the consume must not re-read the path. The window is made
+      // deterministic with a preload in the hook process: every descriptor
+      // open of the report path sees the regular file, and right after each
+      // open the symlink is retargeted to the planted entry. The bounded reads
+      // (listing, precondition) therefore validate the real report, while a
+      // read by path in the consume would get the planted entry: a FIFO with
+      // no writer blocks it until the kill, and an oversized swapped report
+      // would be the one rewritten. The planted size is 2 MiB, a member of the
+      // "over the 1 MiB cap" class.
+      it.each([
+        ["a FIFO with no writer", (target: string): void => execFileSync("mkfifo", [target])],
+        [
+          "a 2 MiB swapped report",
+          (target: string): void =>
+            fs.writeFileSync(
+              target,
+              JSON.stringify({
+                ...pendingBody(session, new Date(Date.now() - 30_000).toISOString()),
+                currentUnderstanding: "SWAPPED",
+              }) + OVER_CAP,
+            ),
+        ],
+      ])(
+        "auto-approval consume: the report symlink retargeted to %s after the precondition read still mints the validated report within the bound",
+        async (_kind, plantTarget) => {
+          const { reportsDir, run } = await setup(session, refused);
+          const outside = path.join(tmpDir, "outside");
+          fs.mkdirSync(outside);
+          const real = path.join(outside, "real.json");
+          fs.writeFileSync(real, JSON.stringify(pendingBody(session, new Date(Date.now() - 60_000).toISOString())));
+          const planted = path.join(outside, "planted.json");
+          plantTarget(planted);
+          const report = path.join(reportsDir, "r1.json");
+          fs.symlinkSync(real, report);
+          const preload = path.join(tmpDir, "retarget-after-open.mjs");
+          fs.writeFileSync(preload, RETARGET_AFTER_OPEN_PRELOAD);
+          const bound = 10_000;
+
+          const result = run(bound, {
+            NODE_OPTIONS: `--import=${pathToFileURL(preload).href}`,
+            RETARGET_PATH: report,
+            RETARGET_REAL: real,
+            RETARGET_PLANTED: planted,
+          });
+
+          expect(result.timedOut).toBe(false);
+          expect(result.ms).toBeLessThan(bound);
+          expect(result.stderr).toMatch(/auto-approved/);
+          // The rename put the rewritten validated report in place of the symlink.
+          expect(fs.lstatSync(report).isFile()).toBe(true);
+          const consumed = JSON.parse(fs.readFileSync(report, "utf8")) as Record<string, unknown>;
+          expect(consumed["approvalStatus"]).toBe("approved");
+          expect(consumed["currentUnderstanding"]).toBe("the auto path under test");
         },
         60_000,
       );

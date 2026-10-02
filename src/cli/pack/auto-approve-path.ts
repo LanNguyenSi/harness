@@ -534,8 +534,11 @@ export async function attemptAutoApproval(
   // report can never mint again. The reverse order would leave a
   // still-`pending` report behind a failed write, i.e. a report that is
   // mintable on the very next call — the direction this design refuses.
+  // The rewrite takes the text read above through the bounded reader instead
+  // of re-reading the path: a report symlink retargeted (to a FIFO, a huge
+  // file) after that read can then neither block nor kill the hook here.
   try {
-    rewriteReportApproved(newest.filePath, approvedAt, approvedBy, args.sessionId);
+    rewriteReportApproved(newest.filePath, approvedAt, approvedBy, args.sessionId, raw);
   } catch (err) {
     note(`auto-approval declined: could not consume the report (${(err as Error).message})`);
     return decline("report consumption failed");

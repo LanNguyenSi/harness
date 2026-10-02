@@ -3,27 +3,33 @@
 // with a stat and then read the path. A symlink to a regular file that is
 // retargeted to a FIFO between the two used to hang the read (measured as a
 // nondeterministic 4/20 and 1/20 in the built hooks). This test makes the
-// window deterministic: every stat-like call on the planted entry first swaps
-// a symlink to a FIFO over it. The bounded readers open the entry once
+// window deterministic: every stat-like call on the planted entry sees a
+// symlink to the regular file, and right after it returns a symlink to a FIFO
+// is swapped over the entry. The bounded readers open the entry once
 // (non-blocking), type it with fstat on the descriptor and read through that,
 // so they see the FIFO as "not a regular file" and skip it; a stat followed by
-// a path read would read the FIFO instead. A spawned writer feeds the FIFO,
-// so such a regression fails the assertion rather than hanging the worker.
-// A safe variant (lstat, then the bounded read) must still pass: the test pins
-// the behaviour (the FIFO is never read), not "never stat".
+// a path read would read the FIFO instead, however many stats came before. A
+// spawned writer feeds the FIFO valid-looking content, so such a regression
+// fails the assertion rather than hanging the worker. A safe variant (lstat,
+// then the bounded read) must still pass: the test pins the behaviour (the
+// FIFO is never read), not "never stat".
 
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-const hook = vi.hoisted(() => ({ onStat: null as null | ((p: string) => void) }));
+const hook = vi.hoisted(() => ({
+  beforeStat: null as null | ((p: string) => void),
+  onStat: null as null | ((p: string) => void),
+}));
 
 vi.mock("node:fs", async (importOriginal) => {
   const orig = await importOriginal<typeof import("node:fs")>();
   const wrap =
     <F extends (...a: never[]) => unknown>(fn: F): F =>
     ((...args: Parameters<F>) => {
+      hook.beforeStat?.(String(args[0]));
       const result = fn(...args);
       hook.onStat?.(String(args[0]));
       return result;
@@ -46,6 +52,7 @@ let writer: ChildProcess | undefined;
 let tmp: string | undefined;
 
 afterEach(() => {
+  hook.beforeStat = null;
   hook.onStat = null;
   writer?.kill("SIGKILL");
   writer = undefined;
@@ -55,8 +62,9 @@ afterEach(() => {
 
 /**
  * A directory holding `entry`, a symlink to a regular file with
- * `regularContent`, plus a FIFO that a writer feeds `fifoContent`. The first
- * stat-like call on `entry` swaps a symlink to the FIFO over it.
+ * `regularContent`, plus a FIFO that a writer feeds `fifoContent`. Every
+ * stat-like call on `entry` sees the regular file; right after it returns, a
+ * symlink to the FIFO is swapped over the entry.
  */
 function plantFlip(
   dirName: string,
@@ -73,14 +81,16 @@ function plantFlip(
   execFileSync("mkfifo", [pipe]);
   const entry = path.join(dir, entryName);
   fs.symlinkSync(regular, entry);
-  const flip = path.join(tmp, "flip-link");
-  fs.symlinkSync(pipe, flip);
-  let flipped = false;
+  const point = (target: string): void => {
+    const link = path.join(tmp as string, "flip-link");
+    fs.symlinkSync(target, link);
+    fs.renameSync(link, entry);
+  };
+  hook.beforeStat = (p) => {
+    if (p === entry) point(regular);
+  };
   hook.onStat = (p) => {
-    if (!flipped && p === entry) {
-      flipped = true;
-      fs.renameSync(flip, entry);
-    }
+    if (p === entry) point(pipe);
   };
   writer = spawn("sh", ["-c", 'printf "%s" "$1" > "$2"', "sh", fifoContent, pipe], {
     stdio: "ignore",
