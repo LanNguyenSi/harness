@@ -2,6 +2,8 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-10-02T07:15:43Z, task eed7c036: `src/policy-packs/builtin/understanding-before-execution.ts` changed only in the `ResolvePackOptions.reportsDir` comment (the prefix goes on each report-reading hook command); `codex-adapter-parity-gaps.md` and `understanding-gate-lockout-recovery.md` list it under sources and were re-verified, no claim affected, re-stamped only.
+
 - 2026-10-02T06:37:19Z, task 237cc609: `docs/CLI.md` now names the six gate-opening namespaces the free-text check uses; the four docs listing it re-verified (no claim affected) and re-stamped.
 
 - 2026-10-02T06:32:28Z, task 237cc609: `docs/CLI.md` tag-injection paragraph worded exactly (trimmed values, non-whitespace after the colon, free text checked against builtin namespaces only, task/PR/branch values share namespaces); `codex-adapter-parity-gaps.md`, `debug-verb-selection.md`, `evidence-ledger-trust-boundary.md` and `policy-engine-producer-wiring.md` list it under sources and were re-verified, no body text changed. All four re-stamped.
