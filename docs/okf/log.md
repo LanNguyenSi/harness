@@ -2,6 +2,8 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-10-02T06:03:59Z, task c8cfc110: `docs/CLI.md` (STDIN HANDLING) now says the three session-start siblings and `policy intercept` read stdin through the shared bounded reader in `src/cli/bounded-stdin.ts`, and that the pack hooks keep their own read to end of input. `codex-adapter-parity-gaps.md`, `debug-verb-selection.md`, `evidence-ledger-trust-boundary.md` and `policy-engine-producer-wiring.md` list `docs/CLI.md` under sources and were re-verified: none makes a claim about how these entries read stdin, so no body text changed. All four re-stamped.
+
 - 2026-10-02T05:50:25Z, task 40611602: `debug-verb-selection.md` re-verified and re-stamped after `docs/for-agents.md` (its source) gained a sentence per `${REPO}` and `${BRANCH}` row stating that an empty value renders no blank ledger tag and decides from the policy's `enforcement:` with a `cd <repo>`, `git -C <repo>` or `git switch` hint; its claims about the dry-run hint and `emptyIdentifierGuard` were unchanged and still hold.
 
 - 2026-10-02T05:42:42Z, task c8cfc110: `src/cli/policy/intercept.ts` lost its own end-only stdin reader and now reads through the shared idle-bounded reader in `src/cli/bounded-stdin.ts`; `codex-adapter-parity-gaps.md`, `gate-fail-posture-matrix.md`, `policy-engine-producer-wiring.md` and `quote-model-divergence.md` were re-verified against it (no claim about the stdin read changed; the line citations into `intercept.ts` and one log citation into `session-start/index.ts` were re-pointed and re-stamped).
