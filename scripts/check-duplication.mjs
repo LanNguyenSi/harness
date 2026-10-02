@@ -240,7 +240,11 @@ import * as path from "node:path";
 // past the clone threshold. The two hooks mirror each other on purpose (the
 // marker resolution itself is already shared), so the pin follows the
 // measured count instead of folding runtime-specific state into one helper.
-const MAX_CLONES = 93;
+// Lowered to 91 (task c8cfc110): the end-only stdin readers in the
+// session-start shared options and in policy intercept each mirrored the
+// bounded one in session-start preflight; all five entries now share
+// src/cli/bounded-stdin.ts. The check reported 93 on master and 91 after.
+const MAX_CLONES = 91;
 
 // Sets process.exitCode instead of calling process.exit so the caller's
 // finally-cleanup runs on every path (process.exit skips stack unwinding).
