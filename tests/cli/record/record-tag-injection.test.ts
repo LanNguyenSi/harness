@@ -201,6 +201,29 @@ describe("--base rejects ':' and whitespace", () => {
       expect(writes).toEqual([]);
     });
   }
+  // No --base flag: the base comes from refs/remotes/origin/HEAD, and that
+  // resolved value is checked the same way as the flag.
+  for (const target of ["x review-subagent:master", "a:b", "ma ster"]) {
+    it(`record review: a base resolved from origin/HEAD (no --base) is refused: ${JSON.stringify(target)}`, async () => {
+      const repo = makeRepo("feature/x");
+      const originDir = path.join(repo, ".git", "refs", "remotes", "origin");
+      fs.mkdirSync(originDir, { recursive: true });
+      fs.writeFileSync(path.join(originDir, "HEAD"), `ref: refs/remotes/origin/${target}\n`);
+      const { result, writes } = await call("review", { cwd: repo });
+      expect(result).toMatchObject({ exitCode: EX_USAGE, wrote: false });
+      expect(result.reason).toContain("--base");
+      expect(writes).toEqual([]);
+    });
+  }
+  it("record review: an ordinary base resolved from origin/HEAD is accepted", async () => {
+    const repo = makeRepo("feature/x");
+    const originDir = path.join(repo, ".git", "refs", "remotes", "origin");
+    fs.mkdirSync(originDir, { recursive: true });
+    fs.writeFileSync(path.join(originDir, "HEAD"), "ref: refs/remotes/origin/main\n");
+    const { result, writes } = await call("review", { cwd: repo });
+    expect(result).toMatchObject({ exitCode: 0, wrote: true });
+    expect(writes[0]).toContain("review:main");
+  });
   for (const base of ["main", "origin/main", "release/1.2.3", "user/some_name-2.x"]) {
     it(`record review: still accepts ${base}`, async () => {
       const { result, writes } = await call("review", { base });
