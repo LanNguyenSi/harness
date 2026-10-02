@@ -312,6 +312,22 @@ describe("--verdict and summaries stay free text but reject tag tokens", () => {
     expect(result.reason).toContain("summary");
     expect(writes).toEqual([]);
   });
+  for (const ns of ["review-subagent", "review", "dogfood", "preflight", "risk-approved", "risk-override"]) {
+    for (const [verb, key] of [
+      ["review-subagent", "verdict"],
+      ["review-subagent", "summary"],
+      ["review", "summary"],
+      ["dogfood", "summary"],
+    ] as const) {
+      it(`${verb} ${key}: ${ns}:<value> is rejected, spaced and glued`, async () => {
+        for (const text of [`ok ${ns}:master`, `ok${ns}:master`]) {
+          const { result, writes } = await call(verb, { [key]: text });
+          expect(result).toMatchObject({ exitCode: EX_USAGE, wrote: false });
+          expect(writes).toEqual([]);
+        }
+      });
+    }
+  }
   for (const [verb, over] of [
     ["review-subagent", { verdict: "code-review: approved" }],
     ["review-subagent", { summary: "Self-review: LGTM" }],
