@@ -23,8 +23,7 @@ import {
   canonicalReportHashOfFile,
   defaultReportsDir,
   hashReportFile,
-  listPersistedReports,
-  readReportFileBounded,
+  listPersistedReports, readReportFileBounded,
   readActiveClaim,
   selectReportForSession,
   TOLERANT_FALLBACK_MAX_AGE_MS,
@@ -394,13 +393,10 @@ export function findLatestParseError(dir: string, sessionId: string): ParseError
   }
   candidates.sort((a, b) => b.mtimeMs - a.mtimeMs);
   for (const cand of candidates) {
-    // The logs directory holds files the gated agent can write, and the
-    // PreToolUse hooks reach this lookup on the no-marker path. The stat
-    // above only orders the candidates (it decides nothing about type or
-    // size); the type and size of what is read are decided by the descriptor
-    // the bounded reader opens (non-blocking, regular files up to the report
-    // size cap), so a FIFO, a huge file or one that grows while read is
-    // skipped like an unreadable log.
+    // Agent-writable dir, reached by both hooks on the no-marker path: the stat
+    // above only orders the candidates; the bounded reader's descriptor decides
+    // type and size, so a FIFO, a huge or a growing log is skipped like an
+    // unreadable one.
     const bounded = readReportFileBounded(cand.filePath);
     if (!bounded.ok) continue;
     const raw = bounded.raw;
