@@ -2,6 +2,8 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-10-02T06:15:12Z, task dac02d5c: `gate-fail-posture-matrix.md` re-stamped after merging master, where task c8cfc110 changed its source `src/cli/policy/intercept.ts` (stdin read only); its fail-posture claims, including the subagent-start report-hash cross-check added by this task, still hold, no body text changed.
+
 - 2026-10-02T06:03:59Z, task c8cfc110: `docs/CLI.md` (STDIN HANDLING) now says the three session-start siblings and `policy intercept` read stdin through the shared bounded reader in `src/cli/bounded-stdin.ts`, and that the pack hooks keep their own read to end of input. `codex-adapter-parity-gaps.md`, `debug-verb-selection.md`, `evidence-ledger-trust-boundary.md` and `policy-engine-producer-wiring.md` list `docs/CLI.md` under sources and were re-verified: none makes a claim about how these entries read stdin, so no body text changed. All four re-stamped.
 
 - 2026-10-02T06:02:49Z, task dac02d5c: `understanding-gate-lockout-recovery.md` now says `harness apply` emits the `SubagentStart` hook command (`src/policy-packs/builtin/understanding-before-execution.ts`) with the same `UNDERSTANDING_GATE_REPORT_DIR` prefix as the other report-reading hooks, so the report-hash cross-check in `src/cli/pack/hook-subagent-start.ts` reads the directory `harness approve understanding` wrote to; `codex-adapter-parity-gaps.md`, `evidence-ledger-trust-boundary.md`, `gate-fail-posture-matrix.md` and `understanding-gate-auto-mode-signals.md` were re-verified after the pack doc edits (the `SubagentStart` command prefix, the `subagent-start` cross-check no longer listed as unchanged) with no claim affected. Re-stamped.
