@@ -20,12 +20,19 @@ import { writeSentinel } from "../../src/runtime/pause-sentinel.js";
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const MAIN_JS = path.join(REPO_ROOT, "dist", "cli", "main.js");
+// Loaded ahead of the CLI; it reports on fd 3 when the CLI starts reading stdin.
+const READY_PRELOAD = path.join(REPO_ROOT, "tests", "_helpers", "stdin-reader-ready-preload.cjs");
 
-const KILL_AFTER_MS = 15_000;
+// Generous on purpose: it is only the failure-path deadline for a child that
+// never exits, and a loaded runner can spend seconds booting node.
+const KILL_AFTER_MS = 30_000;
 const TEST_TIMEOUT_MS = 120_000;
 // The default idle bound the readers must apply, and the wait that outlasts it.
+// The wait is measured from the moment the hook started reading (not from the
+// spawn), and carries a wide margin over the bound so a late write can only
+// land after the hook's timer fired, whatever the runner's speed.
 const BOUND_MS = 3000;
-const LATE_MS = 3600;
+const LATE_MS = BOUND_MS + 5000;
 const TIMEOUT_NOTE = "stdin never closed";
 const BLOCK_REASON_HEAD = "stdin timeout:";
 const BOUND_TEXT = `within ${BOUND_MS} ms`;
@@ -82,9 +89,17 @@ interface ChildResult {
   stderr: string;
   pid: number;
   ms: number;
+  /** True when the child reported (fd 3) that it started reading stdin before it exited. */
+  readSignalled: boolean;
+  /** How many scripted writes had been sent to the child when it exited. */
+  writesBeforeExit: number;
 }
 
-/** One scripted write: `data` goes to the child's stdin `afterMs` after the previous step. */
+/**
+ * One scripted write: `data` goes to the child's stdin `afterMs` after the
+ * previous step. The first step's clock starts when the child reports that it
+ * began reading stdin, so a slow node start-up cannot eat into the delay.
+ */
 interface WriteStep {
   afterMs: number;
   data: string;
@@ -134,7 +149,11 @@ async function runHook(opts: {
   await acquireSlot();
   try {
     const started = Date.now();
-    const child = spawn(process.execPath, args, { cwd, stdio: ["pipe", "pipe", "pipe"], env });
+    const child = spawn(process.execPath, ["--require", READY_PRELOAD, ...args], {
+      cwd,
+      stdio: ["pipe", "pipe", "pipe", "pipe"],
+      env,
+    });
     const pid = child.pid as number;
     cleanups.push(() => {
       try {
@@ -146,8 +165,26 @@ async function runHook(opts: {
     // A child that exits before reading stdin makes the write fail with EPIPE.
     child.stdin.on("error", () => undefined);
     let exited = false;
+    let readSignalled = false;
+    let written = 0;
+    let writesBeforeExit = 0;
     let stdout = "";
     let stderr = "";
+    // Resolves when the child starts reading stdin, or when it exits first
+    // (a verb that never reads), and wakes a writer that is mid-wait.
+    let wake: () => void = () => undefined;
+    const readyOrExit = new Promise<void>((resolve) => {
+      wake = resolve;
+    });
+    const readyPipe = child.stdio[3];
+    if (readyPipe !== null && readyPipe !== undefined) {
+      readyPipe.on("error", () => undefined);
+      readyPipe.once("data", () => {
+        readSignalled = true;
+        wake();
+      });
+    }
+    let cancelWait: () => void = () => undefined;
     child.stdout.on("data", (c: Buffer) => {
       stdout += c.toString("utf8");
     });
@@ -155,10 +192,20 @@ async function runHook(opts: {
       stderr += c.toString("utf8");
     });
     void (async () => {
+      await readyOrExit;
       for (const step of opts.steps ?? []) {
-        if (step.afterMs > 0) await new Promise((r) => setTimeout(r, step.afterMs));
+        if (step.afterMs > 0) {
+          await new Promise<void>((resolve) => {
+            const t = setTimeout(resolve, step.afterMs);
+            cancelWait = () => {
+              clearTimeout(t);
+              resolve();
+            };
+          });
+        }
         if (exited) return;
         child.stdin.write(step.data);
+        written += 1;
       }
       if (opts.closeAfter === true && !exited) child.stdin.end();
     })();
@@ -169,11 +216,22 @@ async function runHook(opts: {
       }, KILL_AFTER_MS);
       child.on("exit", (code) => {
         exited = true;
+        writesBeforeExit = written;
         clearTimeout(killer);
+        wake();
+        cancelWait();
         resolve({ code, hung: false });
       });
     });
-    return { ...outcome, stdout, stderr, pid, ms: Date.now() - started };
+    return {
+      ...outcome,
+      stdout,
+      stderr,
+      pid,
+      ms: Date.now() - started,
+      readSignalled,
+      writesBeforeExit,
+    };
   } finally {
     releaseSlot();
   }
@@ -315,6 +373,20 @@ function runGate(
   });
 }
 
+/**
+ * The hook started reading, its timer fired, and it exited before the late
+ * write was attempted: `sent` is how many scripted writes had been sent by then
+ * (0 for a writer that stays silent past the bound, 1 for one that stalls
+ * after the first half of the event).
+ */
+function expectExitedBeforeLateWrite(r: ChildResult, sent: number): void {
+  expect(r.readSignalled, "the child never reported that it started reading stdin").toBe(true);
+  expect(
+    r.writesBeforeExit,
+    `the child exited after ${r.writesBeforeExit} writes, expected ${sent} (the late write must not have been sent before the timer fired)`,
+  ).toBe(sent);
+}
+
 /** The gate refused the tool call because of the timed-out read, in the gate's own block form. */
 function expectTimeoutBlock(gate: Gate, r: ChildResult): void {
   expectBoundedExit(r);
@@ -358,6 +430,7 @@ describe("pack hook stdin bound: every PreToolUse gate blocks on a timed-out rea
         const ctx = makeCtx();
         const r = await runGate(gate, [{ afterMs: LATE_MS, data: gate.event(ctx) }], true, ctx);
         expectTimeoutBlock(gate, r);
+        expectExitedBeforeLateWrite(r, 0);
       },
       TEST_TIMEOUT_MS,
     );
@@ -378,6 +451,7 @@ describe("pack hook stdin bound: every PreToolUse gate blocks on a timed-out rea
           ctx,
         );
         expectTimeoutBlock(gate, r);
+        expectExitedBeforeLateWrite(r, 1);
       },
       TEST_TIMEOUT_MS,
     );
@@ -513,6 +587,7 @@ describe("pack hook stdin bound: every other hook verb treats a timeout as the b
       expectBoundedExit(r);
       expect(r.code).toBe(0);
       expect(r.stderr).toContain(TIMEOUT_NOTE);
+      expectExitedBeforeLateWrite(r, 0);
     },
     TEST_TIMEOUT_MS,
   );
