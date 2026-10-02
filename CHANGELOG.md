@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **`harness session-start branch-check`, `stale-base-check`, `toolchain-parity` and `harness policy intercept` no longer hang when stdin is never closed** (task `c8cfc110`). They awaited stdin's `end` with no bound, so a backgrounded compound command (or any caller holding an open pipe) left the hook idle forever. All five stdin-reading hook-style entries (these four and `preflight`) now share one idle-bounded reader (`src/cli/bounded-stdin.ts`): the 3 s idle timer restarts on every chunk, so a slow but live payload is still read in full, and a timeout writes a stderr note and carries on with what was read (an empty read is an empty event, partial text is parsed). `policy intercept` keeps its fail posture: malformed event JSON still exits 0 with no decision and a stderr note. Hook output formats are unchanged. The pack hooks (`hook-bootstrap.ts`, `runtime-reality`) keep their own readers.
+
 ## [0.60.0] - 2026-10-01
 
 ### Upgrade notes
