@@ -163,6 +163,10 @@ ordinary git history work on every branch whenever grounding-mcp
 hiccups. This pack is advisory-strength against a hostile agent, the
 same honesty as the other `requires.ledger_tag`-style gates — see
 [`docs/okf/evidence-ledger-trust-boundary.md`](../okf/evidence-ledger-trust-boundary.md).
+One exception, shared by every PreToolUse gate: when the hook's stdin
+read times out (no complete event within the 3000 ms idle bound), the
+hook blocks instead of deciding on what it read; the operator pause
+still wins.
 
 ## Configuration
 
