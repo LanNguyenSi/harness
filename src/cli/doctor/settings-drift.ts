@@ -43,7 +43,7 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { readLastApply } from "../../io/last-apply.js";
+import { lastApplyPath, readLastApply } from "../../io/last-apply.js";
 import { readLock, type TargetEntry } from "../../io/harness-lock.js";
 import { safeJsonParse } from "../../io/safe-json-parse.js";
 import { resolveSettingsPath as resolveUserSettingsPath } from "./claude-mcp.js";
@@ -217,7 +217,18 @@ export function buildSettingsDrift(opts: BuildSettingsDriftOptions): SettingsDri
   const notes: string[] = [];
   const warnings: string[] = [];
 
-  const lastApply = readLastApply(opts.generatedDir);
+  // A malformed `.last-apply` must not abort doctor: degrade to a warning
+  // naming the file and skip the drift comparison (same shape as the
+  // runtime-selection fallback in index.ts).
+  let lastApply: ReturnType<typeof readLastApply>;
+  try {
+    lastApply = readLastApply(opts.generatedDir);
+  } catch (err) {
+    warnings.push(
+      `${lastApplyPath(opts.generatedDir)} is unreadable (${err instanceof Error ? err.message : String(err)}); settings drift not checked`,
+    );
+    return { notes, warnings };
+  }
   if (lastApply === null) {
     notes.push("no apply snapshot; settings drift not checked");
     return { notes, warnings };

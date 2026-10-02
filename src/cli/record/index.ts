@@ -548,6 +548,16 @@ export async function runRecordDogfood(opts: RecordDogfoodOptions): Promise<Reco
   if (!summaryResult.ok) return summaryResult.result;
   const summary = summaryResult.value;
 
+  // The ledger session and the `dogfood:<session>` content must name the same
+  // id, so a padded value is refused instead of trimmed for the content only.
+  if (sessionId !== sessionId.trim()) {
+    return usageFailure(
+      `--session must not have leading or trailing whitespace; got ${JSON.stringify(sessionId)}`,
+      sessionId,
+      note,
+    ).result;
+  }
+
   const sessionResult = checkTagValue(sessionId, "--session", sessionId, note);
   if (!sessionResult.ok) return sessionResult.result;
 

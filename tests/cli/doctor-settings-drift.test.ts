@@ -331,6 +331,53 @@ policy_packs:
     );
   });
 
+  it.each([
+    ["unparseable JSON", "{ not json"],
+    ["a record without a files map", JSON.stringify({ runtime: "claude-code" })],
+  ])("a malformed .last-apply (%s) does not abort doctor and warns naming the file", async (_label, content) => {
+    const f = makeFixture();
+    fs.writeFileSync(
+      path.join(f.projectDir, "harness.yaml"),
+      `version: 1
+hooks: []
+policies: []
+doctor:
+  ignore_template_drift:
+    - deny-kill-switch-bypass
+    - deny-session-env-strip
+    - deny-pause-sentinel-forgery
+tools:
+  builtin:
+    known: [Read]
+policy_packs:
+  - name: understanding-before-execution
+    config:
+      mode: grill_me
+`,
+    );
+    fs.mkdirSync(f.generatedDir, { recursive: true });
+    const target = path.join(f.generatedDir, ".last-apply");
+    fs.writeFileSync(target, content);
+    const run = () =>
+      doctor({
+        configPath: path.join(f.projectDir, "harness.yaml"),
+        homeOverride: f.home,
+        cwd: f.projectDir,
+        versionProbe: () => null,
+        pathEnv: "",
+        npmBinExec: STUB_NPM_BIN_EXEC_UNKNOWN,
+        envOverride: {},
+      });
+
+    const report = await run();
+    const warnings = report.settingsDrift?.warnings ?? [];
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain(target);
+    expect(warnings[0]).toContain("is unreadable");
+    expect(format(report)).toContain(`⚠ ${warnings[0]}`);
+    expect(report.warningCount).toBeGreaterThanOrEqual(1);
+  });
+
   it("is absent from the report when harness.generated/ has never been created (no apply has ever run)", async () => {
     const f = makeFixture();
     fs.writeFileSync(

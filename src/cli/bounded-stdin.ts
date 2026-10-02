@@ -71,11 +71,24 @@ export async function readStdinBounded(
   });
 }
 
-/** The stderr note for a read the idle bound cut off (no trailing newline). */
-export function stdinTimeoutNote(read: StdinRead, idleTimeoutMs: number): string {
+/** Tail of the empty-read note used by the session-start producers. */
+export const DEFAULT_EMPTY_READ_TAIL = "falling back to the default session resolution";
+
+/**
+ * The stderr note for a read the idle bound cut off (no trailing newline).
+ * `emptyReadTail` says what the caller does when nothing was read; it defaults
+ * to the session-start wording, and a caller with a different fallback (policy
+ * intercept continues as an empty event) passes its own. The partial-data note
+ * is the same for every caller.
+ */
+export function stdinTimeoutNote(
+  read: StdinRead,
+  idleTimeoutMs: number,
+  emptyReadTail: string = DEFAULT_EMPTY_READ_TAIL,
+): string {
   return read.text.length === 0
     ? `no complete event JSON on stdin within ${idleTimeoutMs} ms (stdin never closed); ` +
-        "falling back to the default session resolution"
+        emptyReadTail
     : `stdin did not close within ${idleTimeoutMs} ms of the last data; ` +
         `using the ${Buffer.byteLength(read.text)} bytes read`;
 }
