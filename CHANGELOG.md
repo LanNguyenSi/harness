@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **`harness pack hook subagent-start` no longer mints an in-flight subagent record under an approval whose report was edited** (task `dac02d5c`, closes residual (2) named under 0.60.0). After a parent marker matched, the hook now applies the same gate-read report-hash cross-check as both PreToolUse hooks (`verifyMatchedMarkerReport`, task marker first, session marker as fallback) before `writeInflightRecord`; when no report file carries the signed content any more it writes no record and says so on stderr (`approval refused, no report in the reports directory matches the content ...; no in-flight record for agent <id>`), so the subagent has nothing to present once the parent marker stops matching (claim switch, `max_age`) and blocks. An intact approval and a null-hash marker mint exactly as before; a task marker that fails the check while the session marker behind it verifies mints a record that names the session marker. The record format and its 24 h staleness window are unchanged. Codex has no SubagentStart wiring, so this is the Claude hook only.
+
 ## [0.60.0] - 2026-10-01
 
 ### Upgrade notes
