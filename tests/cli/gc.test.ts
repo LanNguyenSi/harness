@@ -865,6 +865,30 @@ describe("gc - hostile file names in the printed report paths", () => {
   });
 });
 
+describe("gc - a hostile name in the deletion failure line", () => {
+  it("prints the failed removal as an escaped literal", async () => {
+    const { buildProgram } = await import("../../src/cli/index.js");
+    const name = "old-\u001b[2Kfake\u009b.json";
+    const old = writeReport("old-approved.json", { approvalStatus: "approved", createdAt: isoDaysAgo(4000) });
+    fs.renameSync(old, path.join(reportsDir, name));
+    let err = "";
+    const program = buildProgram({ stdout: () => {}, stderr: (s: string) => { err += s; } });
+    fs.writeFileSync(path.join(tmp, "harness.yaml"), "version: 1\n");
+    // A directory that cannot be written to makes the unlink fail.
+    fs.chmodSync(reportsDir, 0o555);
+    try {
+      await expect(
+        program.parseAsync(["gc", "--apply", "--config", path.join(tmp, "harness.yaml")], { from: "user" }),
+      ).rejects.toThrow(/deletion\(s\) failed/);
+    } finally {
+      fs.chmodSync(reportsDir, 0o755);
+    }
+    expect(err).toContain("gc: failed to remove \"");
+    expect(err).toContain("\\u001b[2Kfake\\u009b.json");
+    expect([...err].some((ch) => ch.charCodeAt(0) === 0x1b || ch.charCodeAt(0) === 0x9b)).toBe(false);
+  });
+});
+
 describe("gc — CLI wiring", () => {
   it("rejects a malformed --retention-days with a usage error", async () => {
     const { buildProgram } = await import("../../src/cli/index.js");

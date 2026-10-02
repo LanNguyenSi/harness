@@ -328,6 +328,21 @@ describe("rewriteReportApproved reads by path through the bounded reader", () =>
   });
 });
 
+describe("rewriteReportApproved does not follow a symbolic link", () => {
+  it("refuses a path swapped for a link to an in-cap report, leaving the target unchanged", () => {
+    const target = path.join(outsideDir, "real.json");
+    fs.writeFileSync(target, JSON.stringify(pendingBody("2026-05-07T07:00:00.000Z")));
+    const link = path.join(reportsDir, "swapped-link.json");
+    fs.symlinkSync(target, link);
+    const before = fs.readFileSync(target, "utf8");
+    expect(() =>
+      rewriteReportApproved(link, "2026-05-07T08:00:00.000Z", "test-suite", SESSION),
+    ).toThrow(/symbolic link/);
+    expect(fs.readFileSync(target, "utf8")).toBe(before);
+    expect(fs.lstatSync(link).isSymbolicLink()).toBe(true);
+  });
+});
+
 describe("harness approve understanding (built CLI) with a planted entry", () => {
   it.each([PLANTS[0]!, PLANTS[2]!, PLANTS[3]!, PLANTS[5]!])(
     "exits non-zero within the bound, names the file, writes no marker: $name",

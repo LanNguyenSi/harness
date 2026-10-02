@@ -585,7 +585,7 @@ export function rewriteReportApproved(
     // Bounded like every other read of this agent-writable directory: the path
     // can be swapped for an oversized file or a FIFO after the listing.
     const read = readReportFileBounded(filePath, { noFollow: true });
-    if (!read.ok) throw new Error(`report ${escapeForDisplay(filePath)} ${read.detail}`);
+    if (!read.ok) throw new Error(`report ${read.detail}`);
     raw = read.raw;
   }
   const parsed = JSON.parse(raw) as Record<string, unknown>;
@@ -1220,7 +1220,7 @@ export async function approveUnderstanding(
     } catch (err) {
       persistedReport = {
         ok: false,
-        reason: `failed to rewrite ${escapeForDisplay(latest.filePath)}: ${(err as Error).message}`,
+        reason: `failed to rewrite ${escapeForDisplay(latest.filePath)}: ${escapeForDisplay((err as Error).message)}`,
       };
     }
   }

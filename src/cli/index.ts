@@ -3104,7 +3104,7 @@ export function buildProgram(opts: RunOptions = {}): Command {
       stdout(`removed ${result.removed.length} file(s).\n`);
       if (result.failures.length > 0) {
         for (const f of result.failures) {
-          stderr(`gc: failed to remove ${escapeForDisplay(f.filePath)}: ${f.reason}\n`);
+          stderr(`gc: failed to remove ${escapeForDisplay(f.filePath)}: ${escapeForDisplay(f.reason)}\n`);
         }
         throw new HarnessExitError(
           `${result.failures.length} deletion(s) failed`,
