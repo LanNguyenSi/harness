@@ -1554,6 +1554,15 @@ describe("apply — policy_packs expansion (Phase 6 #2)", () => {
     expect(postToolUseCommand).toMatch(
       /^UNDERSTANDING_GATE_REPORT_DIR='[^']+\/\.understanding-gate\/reports' harness pack hook post-tool-use$/,
     );
+    // SubagentStart reads the persisted reports too (report-hash check before
+    // it mints an in-flight record), so apply wraps it with the same env.
+    const subagentStartCommand = allCommands.find((c) =>
+      c.endsWith("harness pack hook subagent-start"),
+    );
+    expect(subagentStartCommand).toBeDefined();
+    expect(subagentStartCommand).toMatch(
+      /^UNDERSTANDING_GATE_REPORT_DIR='[^']+\/\.understanding-gate\/reports' harness pack hook subagent-start$/,
+    );
     // v2 (harness/494fd1e5) track-active-claim hook: same PostToolUse
     // event, hardcoded matcher for agent-tasks task_start / task_finish
     // / task_abandon. Maintains the active-claim file so `harness

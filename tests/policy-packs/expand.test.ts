@@ -413,6 +413,23 @@ describe("expandPolicyPacks", () => {
     );
   });
 
+  it("prefixes the SubagentStart command with UNDERSTANDING_GATE_REPORT_DIR when reportsDir is supplied, and leaves it bare otherwise (task dac02d5c)", () => {
+    const m = buildManifest([{ name: "understanding-before-execution" }]);
+    // The hook reads the persisted reports (report-hash cross-check before it
+    // mints an in-flight record), so it must resolve the same directory as
+    // PreToolUse and `harness approve understanding`.
+    const withDir = expandPolicyPacks(m, undefined, {
+      reportsDir: "/home/u/.claude/.understanding-gate/reports",
+    });
+    expect(withDir.hooks.find((h) => h.event === "SubagentStart")?.command).toBe(
+      "UNDERSTANDING_GATE_REPORT_DIR='/home/u/.claude/.understanding-gate/reports' harness pack hook subagent-start",
+    );
+    const without = expandPolicyPacks(m, undefined, {});
+    expect(without.hooks.find((h) => h.event === "SubagentStart")?.command).toBe(
+      "harness pack hook subagent-start",
+    );
+  });
+
   it("also prefixes Stop + PreToolUse commands with UNDERSTANDING_GATE_REPORT_DIR when reportsDir is supplied (mode prefix stays outermost)", () => {
     const m = buildManifest([{ name: "understanding-before-execution" }]);
     const r = expandPolicyPacks(m, undefined, {
