@@ -2,7 +2,7 @@
 
 <!-- Add new entries at the top, newest first. -->
 
-- 2026-10-02T07:14:00Z, task 4b39022f: `gate-fail-posture-matrix.md` now says the evidence read of the persisted reports (the no-marker and refused-marker paths of both PreToolUse hooks, and the PostToolUse boundary expiry) lists the directory through `readReportFileBounded` (`listPersistedReportsBounded` in `persisted-reports.ts`), closing its second named residual; `evidence-ledger-trust-boundary.md` and `understanding-gate-lockout-recovery.md` (both list `persisted-reports.ts` under sources) and `codex-adapter-parity-gaps.md` and `understanding-gate-auto-mode-signals.md` (list the pack doc) were re-verified against the changed source and pack doc, no claim affected, and re-stamped.
+- 2026-10-02T07:36:40Z, task 4b39022f: `gate-fail-posture-matrix.md` now says the evidence read of the persisted reports (the no-marker and refused-marker paths of both PreToolUse hooks, and the PostToolUse boundary expiry) lists the directory through `readReportFileBounded` (`listPersistedReportsBounded` in `persisted-reports.ts`), closing its second named residual; `evidence-ledger-trust-boundary.md` and `understanding-gate-lockout-recovery.md` (both list `persisted-reports.ts` under sources) and `codex-adapter-parity-gaps.md` and `understanding-gate-auto-mode-signals.md` (list the pack doc) were re-verified against the changed source and pack doc, no claim affected, and re-stamped.
 
 - 2026-10-02T06:37:19Z, task 237cc609: `docs/CLI.md` now names the six gate-opening namespaces the free-text check uses; the four docs listing it re-verified (no claim affected) and re-stamped.
 
