@@ -49,7 +49,8 @@
 // The one exception is a stdin read that times out (the idle bound in
 // src/cli/bounded-stdin.ts fired before stdin closed): the event never
 // finished arriving, so the command cannot even be classified, and the gate
-// BLOCKS instead of allowing (the operator pause still yields).
+// BLOCKS instead of allowing (the operator pause still yields). That refusal
+// sits in the exported wrapper at the end of this file.
 
 import {
   isEscapeCommand,
@@ -69,8 +70,9 @@ import {
   checkHookPause,
   loadManifestOrInjected,
   parseConfigUx,
-  readStdinChecked,
-  refuseOnStdinTimeout,
+  readStdin,
+  runGateWithStdinRefusal,
+  stdoutBlockRefusal,
 } from "./hook-bootstrap.js";
 
 const DEFAULT_BRANCH_PLACEHOLDER = "<default-branch>";
@@ -223,7 +225,7 @@ function blockJson(
   });
 }
 
-export async function runPackHookPostMergeGateCli(
+async function runPackHookPostMergeGateCliInner(
   opts: PackHookPostMergeGateOptions = {},
 ): Promise<PackHookPostMergeGateResult> {
   const stdin = opts.stdin ?? process.stdin;
@@ -233,33 +235,20 @@ export async function runPackHookPostMergeGateCli(
     stderr.write(`harness pack hook post-merge-gate: ${msg}\n`);
   };
 
-  const stdinRead = await readStdinChecked(stdin);
-  const raw = stdinRead.text;
+  const raw = await readStdin(stdin);
   let event: ToolEventLite = {};
   try {
     event = JSON.parse(raw.trim() || "{}") as ToolEventLite;
   } catch {
-    // A truncated event from a timed-out read is refused below, after the
-    // pause check, instead of being allowed as malformed.
-    if (!stdinRead.timedOut) {
-      const diagnostic = "malformed event JSON, cannot classify; allowing";
-      note(diagnostic);
-      return { exitCode: 0, blocked: false, diagnostic };
-    }
+    const diagnostic = "malformed event JSON, cannot classify; allowing";
+    note(diagnostic);
+    return { exitCode: 0, blocked: false, diagnostic };
   }
 
   // Pause sentinel — even this gate yields to an operator pause.
   if (checkHookPause(PACK_NAME, stderr, opts).paused) {
     const diagnostic = "harness paused; post-merge-gate allowing without evaluating.";
     return { exitCode: 0, blocked: false, diagnostic };
-  }
-
-  // A timed-out stdin read means the event never finished arriving, so this
-  // gate cannot judge the tool call: refuse it instead of treating the empty
-  // or truncated text as a malformed event (task 7dfdcaaf). Only the operator
-  // pause, handled just before, yields.
-  if (stdinRead.timedOut) {
-    return refuseOnStdinTimeout(stdinRead.idleTimeoutMs, stdout, note);
   }
 
   const sessionId =
@@ -367,4 +356,21 @@ export async function runPackHookPostMergeGateCli(
     `${blockJson(toolName, command, branch, defaultBranch, check.matchedContent ?? matchKey, configUx, sessionId)}\n`,
   );
   return { exitCode: 0, blocked: true, diagnostic };
+}
+
+/**
+ * `harness pack hook post-merge-gate`. A stdin read that times out is refused here
+ * instead of being handed to the gate as an empty or truncated event it would
+ * treat as malformed input (task 7dfdcaaf). The operator pause still wins;
+ * every other input runs the gate unchanged.
+ */
+export function runPackHookPostMergeGateCli(
+  opts: PackHookPostMergeGateOptions = {},
+): Promise<PackHookPostMergeGateResult> {
+  return runGateWithStdinRefusal(
+    opts,
+    (stderr) => checkHookPause(PACK_NAME, stderr, opts).paused,
+    stdoutBlockRefusal("post-merge-gate"),
+    runPackHookPostMergeGateCliInner,
+  );
 }

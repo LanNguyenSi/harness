@@ -57,8 +57,9 @@ import {
   checkHookPause,
   loadManifestOrInjected,
   parseConfigUx,
-  readStdinChecked,
-  refuseOnStdinTimeout,
+  readStdin,
+  runGateWithStdinRefusal,
+  stdoutBlockRefusal,
 } from "./hook-bootstrap.js";
 
 export interface PackHookBranchProtectionOptions extends LoaderOptions {
@@ -296,7 +297,7 @@ function blockJson(
   });
 }
 
-export async function runPackHookBranchProtectionCli(
+async function runPackHookBranchProtectionCliInner(
   opts: PackHookBranchProtectionOptions = {},
 ): Promise<PackHookBranchProtectionResult> {
   const stdin = opts.stdin ?? process.stdin;
@@ -310,8 +311,7 @@ export async function runPackHookBranchProtectionCli(
   // (the inverse of understanding-before-execution's allow-on-malformed
   // default): we'd rather block a Write we couldn't classify than let
   // it through silently.
-  const stdinRead = await readStdinChecked(stdin);
-  const raw = stdinRead.text;
+  const raw = await readStdin(stdin);
   let event: ToolEventLite = {};
   try {
     event = JSON.parse(raw.trim() || "{}") as ToolEventLite;
@@ -326,14 +326,6 @@ export async function runPackHookBranchProtectionCli(
   if (checkHookPause("branch-protection", stderr, opts).paused) {
     const diagnostic = "harness paused; branch-protection allowing without evaluating.";
     return { exitCode: 0, blocked: false, diagnostic };
-  }
-
-  // A timed-out stdin read means the event never finished arriving, so this
-  // gate cannot judge the tool call: refuse it instead of treating the empty
-  // or truncated text as a malformed event (task 7dfdcaaf). Only the operator
-  // pause, handled just before, yields.
-  if (stdinRead.timedOut) {
-    return refuseOnStdinTimeout(stdinRead.idleTimeoutMs, stdout, note);
   }
 
   const sessionId =
@@ -497,4 +489,21 @@ export async function runPackHookBranchProtectionCli(
   note(diagnostic);
   stdout.write(`${blockJson(toolName, branch, why, protectedList, configUx, sessionId)}\n`);
   return { exitCode: 0, blocked: true, diagnostic };
+}
+
+/**
+ * `harness pack hook branch-protection`. A stdin read that times out is refused here
+ * instead of being handed to the gate as an empty or truncated event it would
+ * treat as malformed input (task 7dfdcaaf). The operator pause still wins;
+ * every other input runs the gate unchanged.
+ */
+export function runPackHookBranchProtectionCli(
+  opts: PackHookBranchProtectionOptions = {},
+): Promise<PackHookBranchProtectionResult> {
+  return runGateWithStdinRefusal(
+    opts,
+    (stderr) => checkHookPause("branch-protection", stderr, opts).paused,
+    stdoutBlockRefusal("branch-protection"),
+    runPackHookBranchProtectionCliInner,
+  );
 }

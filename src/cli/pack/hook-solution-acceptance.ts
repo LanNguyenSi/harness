@@ -59,8 +59,9 @@ import {
   checkHookPause,
   loadManifestOrInjected,
   parseConfigUx,
-  readStdinChecked,
-  refuseOnStdinTimeout,
+  readStdin,
+  runGateWithStdinRefusal,
+  stdoutBlockRefusal,
 } from "./hook-bootstrap.js";
 
 export interface PackHookSolutionAcceptanceOptions extends LoaderOptions {
@@ -564,7 +565,7 @@ function blockJson(
   });
 }
 
-export async function runPackHookSolutionAcceptanceCli(
+async function runPackHookSolutionAcceptanceCliInner(
   opts: PackHookSolutionAcceptanceOptions = {},
 ): Promise<PackHookSolutionAcceptanceResult> {
   const stdin = opts.stdin ?? process.stdin;
@@ -575,8 +576,7 @@ export async function runPackHookSolutionAcceptanceCli(
   };
   const env = opts.env ?? process.env;
 
-  const stdinRead = await readStdinChecked(stdin);
-  const raw = stdinRead.text;
+  const raw = await readStdin(stdin);
   let event: ToolEventLite = {};
   try {
     event = JSON.parse(raw.trim() || "{}") as ToolEventLite;
@@ -588,14 +588,6 @@ export async function runPackHookSolutionAcceptanceCli(
   if (checkHookPause(PACK_NAME, stderr, opts).paused) {
     const diagnostic = "harness paused; solution-acceptance allowing without evaluating.";
     return { exitCode: 0, blocked: false, diagnostic };
-  }
-
-  // A timed-out stdin read means the event never finished arriving, so this
-  // gate cannot judge the tool call: refuse it instead of treating the empty
-  // or truncated text as a malformed event (task 7dfdcaaf). Only the operator
-  // pause, handled just before, yields.
-  if (stdinRead.timedOut) {
-    return refuseOnStdinTimeout(stdinRead.idleTimeoutMs, stdout, note);
   }
 
   const sessionId =
@@ -754,4 +746,21 @@ export async function runPackHookSolutionAcceptanceCli(
     `${blockJson(actionLabel, toolName, taskId, gate.reason, configUx, sessionId, nullVerdict)}\n`,
   );
   return { exitCode: 0, blocked: true, diagnostic };
+}
+
+/**
+ * `harness pack hook solution-acceptance`. A stdin read that times out is refused here
+ * instead of being handed to the gate as an empty or truncated event it would
+ * treat as malformed input (task 7dfdcaaf). The operator pause still wins;
+ * every other input runs the gate unchanged.
+ */
+export function runPackHookSolutionAcceptanceCli(
+  opts: PackHookSolutionAcceptanceOptions = {},
+): Promise<PackHookSolutionAcceptanceResult> {
+  return runGateWithStdinRefusal(
+    opts,
+    (stderr) => checkHookPause(PACK_NAME, stderr, opts).paused,
+    stdoutBlockRefusal("solution-acceptance"),
+    runPackHookSolutionAcceptanceCliInner,
+  );
 }

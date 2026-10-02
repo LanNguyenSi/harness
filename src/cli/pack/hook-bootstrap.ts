@@ -56,6 +56,7 @@
 // Per-hook decision logic, error envelopes, and early-return shapes stay local
 // to each hook. This module covers structural boilerplate only, not semantics.
 
+import { PassThrough } from "node:stream";
 import { readStdinBounded, STDIN_IDLE_TIMEOUT_MS, stdinTimeoutNote } from "../bounded-stdin.js";
 import { checkPauseFromLoader } from "../pause-check.js";
 import { loadManifest, type LoaderOptions } from "../loader.js";
@@ -146,21 +147,30 @@ export function stdinTimeoutBlockReason(idleTimeoutMs: number): string {
 }
 
 /**
- * Refuse a tool call because the stdin read timed out: write the Claude Code
- * block envelope to `stdout` and one `BLOCK: <reason>` line through `note`
- * (the hook's own stderr writer). Returns the blocked result shape the gates
- * share, plus the reason for a gate whose result carries one.
+ * Run a PreToolUse gate entry behind a stdin-timeout refusal without editing
+ * the entry's body: read stdin with the idle bound first, and when the read
+ * timed out (and the operator pause does not apply) hand `refuse` the reason
+ * instead of running the gate. Otherwise the text read is replayed to `run` on
+ * a closed stream, so the gate sees exactly what it would have read itself.
+ * Used by the two large gate entries whose line numbers other docs cite.
  */
-export function refuseOnStdinTimeout(
-  idleTimeoutMs: number,
-  stdout: NodeJS.WritableStream,
-  note: (line: string) => void,
-): { exitCode: 0; blocked: true; diagnostic: string; reason: string } {
-  const reason = stdinTimeoutBlockReason(idleTimeoutMs);
-  const diagnostic = `BLOCK: ${reason}`;
-  note(diagnostic);
-  stdout.write(`${stdinTimeoutBlockJson(reason)}\n`);
-  return { exitCode: 0, blocked: true, diagnostic, reason };
+export async function runGateWithStdinRefusal<
+  O extends { stdin?: NodeJS.ReadableStream; stdout?: NodeJS.WritableStream; stderr?: NodeJS.WritableStream },
+  R,
+>(
+  opts: O,
+  isPaused: (stderr: NodeJS.WritableStream) => boolean,
+  refuse: (reason: string, stdout: NodeJS.WritableStream, stderr: NodeJS.WritableStream) => R,
+  run: (opts: O) => Promise<R>,
+): Promise<R> {
+  const read = await readStdinChecked(opts.stdin ?? process.stdin);
+  const stderr = opts.stderr ?? process.stderr;
+  if (read.timedOut && !isPaused(stderr)) {
+    return refuse(stdinTimeoutBlockReason(read.idleTimeoutMs), opts.stdout ?? process.stdout, stderr);
+  }
+  const replay = new PassThrough();
+  replay.end(read.text);
+  return run({ ...opts, stdin: replay });
 }
 
 /**
@@ -178,6 +188,26 @@ export function stdinTimeoutBlockJson(reason: string): string {
       permissionDecisionReason: reason,
     },
   });
+}
+
+/**
+ * The refusal the Claude Code gates that write a block envelope to stdout hand
+ * to `runGateWithStdinRefusal`: one `harness pack hook <label>: BLOCK: ...`
+ * stderr line, the block envelope on stdout, and the blocked result (exit 0).
+ */
+export function stdoutBlockRefusal(
+  label: string,
+): (
+  reason: string,
+  stdout: NodeJS.WritableStream,
+  stderr: NodeJS.WritableStream,
+) => { exitCode: number; blocked: true; diagnostic: string } {
+  return (reason, stdout, stderr) => {
+    const diagnostic = `BLOCK: ${reason}`;
+    stderr.write(`harness pack hook ${label}: ${diagnostic}\n`);
+    stdout.write(`${stdinTimeoutBlockJson(reason)}\n`);
+    return { exitCode: 0, blocked: true, diagnostic };
+  };
 }
 
 // ---------------------------------------------------------------------------

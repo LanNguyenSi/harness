@@ -12,7 +12,8 @@ import {
   loadManifestOrInjected,
   readStdin,
   readStdinChecked,
-  refuseOnStdinTimeout,
+  runGateWithStdinRefusal,
+  stdoutBlockRefusal,
   resolveSessionAndAgentIds,
   resolveSubagentHookContext,
   stdinTimeoutBlockJson,
@@ -162,24 +163,17 @@ describe("stdin timeout block helpers", () => {
     expect(reason).toContain("fail closed");
   });
 
-  it("refuseOnStdinTimeout writes the block envelope to stdout and one BLOCK note, and returns a blocked result", () => {
+  it("stdoutBlockRefusal writes the block envelope to stdout and one BLOCK line to stderr, and returns a blocked result", () => {
     const out: string[] = [];
-    const notes: string[] = [];
-    const result = refuseOnStdinTimeout(
-      3000,
-      { write: (s: string) => (out.push(s), true) } as unknown as NodeJS.WritableStream,
-      (line) => notes.push(line),
-    );
-    expect(result.exitCode).toBe(0);
-    expect(result.blocked).toBe(true);
-    expect(result.reason).toBe(stdinTimeoutBlockReason(3000));
-    expect(result.diagnostic).toBe(`BLOCK: ${result.reason}`);
-    expect(notes).toEqual([result.diagnostic]);
+    const err: string[] = [];
+    const sink = (into: string[]): NodeJS.WritableStream =>
+      ({ write: (s: string) => (into.push(s), true) }) as unknown as NodeJS.WritableStream;
+    const reason = stdinTimeoutBlockReason(3000);
+    const result = stdoutBlockRefusal("some-gate")(reason, sink(out), sink(err));
+    expect(result).toEqual({ exitCode: 0, blocked: true, diagnostic: `BLOCK: ${reason}` });
+    expect(err).toEqual([`harness pack hook some-gate: BLOCK: ${reason}\n`]);
     expect(out).toHaveLength(1);
-    expect(JSON.parse(out[0] as string)).toMatchObject({
-      decision: "block",
-      reason: result.reason,
-    });
+    expect(JSON.parse(out[0] as string)).toMatchObject({ decision: "block", reason });
   });
 
   it("the envelope blocks in both the legacy and the hookSpecificOutput form", () => {
@@ -427,4 +421,60 @@ describe("codex hooks import checkHookPause (parity pin, task 1432e053)", () => 
     // checkHookPause somewhere in its body, not merely imports it.
     expect(src, `${filename}: imports checkHookPause but never calls it`).toMatch(/checkHookPause\(/);
   });
+});
+
+describe("runGateWithStdinRefusal", () => {
+  const sink = (): NodeJS.WritableStream =>
+    ({ write: () => true }) as unknown as NodeJS.WritableStream;
+
+  it("a closed stdin is replayed whole to the gate, which runs unrefused", async () => {
+    let seen = "";
+    const result = await runGateWithStdinRefusal(
+      { stdin: makeReadableOf('{"tool_name":"Bash"}'), stdout: sink(), stderr: sink() },
+      () => false,
+      () => "refused",
+      async (opts) => {
+        seen = await readStdin(opts.stdin as NodeJS.ReadableStream);
+        return "ran";
+      },
+    );
+    expect(result).toBe("ran");
+    expect(seen).toBe('{"tool_name":"Bash"}');
+  });
+
+  it("a timed-out read refuses with the stdin-timeout reason and never runs the gate", async () => {
+    let ran = false;
+    const pt = new PassThrough();
+    pt.write('{"tool_name":');
+    const reasons: string[] = [];
+    const result = await runGateWithStdinRefusal(
+      { stdin: pt, stdout: sink(), stderr: sink() },
+      () => false,
+      (reason) => (reasons.push(reason), "refused"),
+      async () => {
+        ran = true;
+        return "ran";
+      },
+    );
+    expect(result).toBe("refused");
+    expect(ran).toBe(false);
+    expect(reasons).toEqual([stdinTimeoutBlockReason(3000)]);
+  }, 15_000);
+
+  it("the operator pause wins: a timed-out read under a pause runs the gate with the text read", async () => {
+    let seen = "";
+    const pt = new PassThrough();
+    pt.write('{"tool_name":');
+    const result = await runGateWithStdinRefusal(
+      { stdin: pt, stdout: sink(), stderr: sink() },
+      () => true,
+      () => "refused",
+      async (opts) => {
+        seen = await readStdin(opts.stdin as NodeJS.ReadableStream);
+        return "ran";
+      },
+    );
+    expect(result).toBe("ran");
+    expect(seen).toBe('{"tool_name":');
+  }, 15_000);
 });

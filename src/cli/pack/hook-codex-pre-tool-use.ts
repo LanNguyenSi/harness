@@ -55,8 +55,7 @@ import {
   loadManifestOrInjected,
   parseConfigUx,
   pickString,
-  readStdinChecked,
-  stdinTimeoutBlockReason,
+  readStdin, runGateWithStdinRefusal,
 } from "./hook-bootstrap.js";
 
 const PACK_NAME = "understanding-before-execution";
@@ -244,7 +243,7 @@ function allowResult(
   };
 }
 
-export async function runPackHookCodexPreToolUseCli(
+async function runPackHookCodexPreToolUseCliInner(
   opts: PackHookCodexPreToolUseOptions = {},
 ): Promise<PackHookCodexPreToolUseResult> {
   const stdin = opts.stdin ?? process.stdin;
@@ -256,8 +255,7 @@ export async function runPackHookCodexPreToolUseCli(
   // the degradation is loud — a silently-allowing gate manufactures
   // false confidence, which is the worst direction for a governance
   // hook to fail in.
-  const stdinRead = await readStdinChecked(stdin);
-  const raw = stdinRead.text;
+  const raw = await readStdin(stdin);
   let event: CodexEventEnvelope = {};
   try {
     event = JSON.parse(raw.trim() || "{}") as CodexEventEnvelope;
@@ -281,22 +279,6 @@ export async function runPackHookCodexPreToolUseCli(
   // flow (broken install) still respects an active pause.
   if (checkHookPause("codex-pre-tool-use", stderr, opts, opts.generatedDir).paused) {
     return allowResult("harness paused", "none", stderr);
-  }
-
-  // A timed-out stdin read means the event never finished arriving, so this
-  // gate cannot judge the tool call: refuse it instead of treating the empty
-  // or truncated text as a malformed event (task 7dfdcaaf). Only the operator
-  // pause, handled just before, yields.
-  if (stdinRead.timedOut) {
-    const reason = stdinTimeoutBlockReason(stdinRead.idleTimeoutMs);
-    const diagnostic = `harness pack hook codex: BLOCK: ${reason}`;
-    stderr.write(`${diagnostic}\n`);
-    return {
-      exitCode: EXIT_BLOCK,
-      blocked: true,
-      approvalCheck: { approved: false, source: "none", detail: reason },
-      diagnostic,
-    };
   }
 
   // Load manifest (or use injection). Bail to allow on any failure so a
@@ -616,4 +598,30 @@ export async function runPackHookCodexPreToolUseCli(
     approvalCheck: { approved: false, source: "none", detail: reason },
     diagnostic,
   };
+}
+
+/**
+ * `harness pack hook codex-pre-tool-use`. A timed-out stdin read exits 2 with
+ * the reason on stderr (the runtime's deny form) instead of running the gate on
+ * an empty or truncated event it would allow (task 7dfdcaaf). The operator
+ * pause still wins; every other input runs the gate unchanged.
+ */
+export function runPackHookCodexPreToolUseCli(
+  opts: PackHookCodexPreToolUseOptions = {},
+): Promise<PackHookCodexPreToolUseResult> {
+  return runGateWithStdinRefusal(
+    opts,
+    (stderr) => checkHookPause("codex-pre-tool-use", stderr, opts, opts.generatedDir).paused,
+    (reason, _stdout, stderr) => {
+      const diagnostic = `harness pack hook codex: BLOCK: ${reason}`;
+      stderr.write(`${diagnostic}\n`);
+      return {
+        exitCode: EXIT_BLOCK,
+        blocked: true,
+        approvalCheck: { approved: false, source: "none", detail: reason },
+        diagnostic,
+      };
+    },
+    runPackHookCodexPreToolUseCliInner,
+  );
 }
