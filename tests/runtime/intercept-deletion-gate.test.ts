@@ -373,3 +373,26 @@ describe("intercept — AC4: production-context regression, deny-first order una
     expect(result.decisions[0]?.outcome).toBe("deny");
   });
 });
+
+// Task 5cc64860. A NUL-decoding escape inside the verb name used to leave
+// the segment without a verdict, so the gate never fired for a command bash
+// runs as `rm -rf /home/user/project/some-dir` (GNU bash 3.2.57).
+describe("intercept: a NUL-escaped deletion verb is gated like its plain twin (task 5cc64860)", () => {
+  it.each([
+    "rm -rf /home/user/project/some-dir",
+    "$'rm\\0' -rf /home/user/project/some-dir",
+    "rm $'--recursive\\0' /home/user/project/some-dir",
+    "find /home/user/project/some-dir $'-delete\\c@'",
+  ])("requires approval for %s", async (command) => {
+    const result = await intercept({
+      manifest: makeManifest({ policies: [DELETION_GATE_POLICY] }),
+      event: bashEvent(command),
+      ledger: makeLedger(),
+      builtins: BUILTINS,
+      now: NOW,
+      riskContext: riskCtx("task/x"),
+    });
+    expect(result.decisions[0]?.outcome).toBe("require_approval");
+    expect(result.blockJson?.decision).toBe("block");
+  });
+});
