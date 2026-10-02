@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Upgrade notes
 
-- `harness policy intercept` (the PreToolUse hook of the policy engine) now blocks when its stdin does not deliver a complete, closed event within 3000 ms of idle time, instead of continuing as an empty event. Claude Code and Codex close stdin after writing the event, so normal use is unaffected; `harness pause` still wins.
+- `harness policy intercept` (the PreToolUse hook of the policy engine) now blocks when its stdin does not deliver a complete, closed event within 3000 ms of idle time, instead of continuing as an empty event. Claude Code and Codex close stdin after writing the event, so normal use is unaffected; `harness pause` still wins. A hand-written registration of `harness policy intercept` on a non-PreToolUse event whose stalled read names no event gets the same block.
 
 ### Fixed
 
