@@ -571,6 +571,31 @@ function scanOwnedContentEnd(
 }
 
 /**
+ * True when a harness-commented hook table (a `# harness hook:` comment line
+ * followed, later in the zone, by a `[[hooks.` header) lies after the named
+ * table's header line, before `to`. The comment is matched at the start of a
+ * trimmed line, so a value that merely contains the marker text does not
+ * count. Used only to pick the fix guidance of a refusal (task 36d962d2).
+ */
+function harnessHookTableFollows(
+  text: string,
+  header: { line: string; start: number } | null,
+  to: number,
+): boolean {
+  if (header === null) return false;
+  let pos = lineEndAfter(text, header.start);
+  let sawComment = false;
+  while (pos < to) {
+    const lineEnd = Math.min(lineEndAfter(text, pos), to);
+    const trimmed = text.slice(pos, lineEnd).trim();
+    if (trimmed.startsWith(HARNESS_HOOK_COMMENT_PREFIX)) sawComment = true;
+    else if (sawComment && HOOK_ARRAY_HEADER_RE.test(trimmed)) return true;
+    pos = lineEnd;
+  }
+  return false;
+}
+
+/**
  * Refuses loudly (mirror case of the stray-END bug) when the zone between
  * `from` and `to` still contains a recognizable fragment of a harness
  * hook block: a second BEGIN/source-prefix marker, or a `# harness hook:`
@@ -598,10 +623,14 @@ function scanOwnedContentEnd(
  * document (`to` is `text.length`), telling the operator to move something
  * below a marker that does not exist would be nonsensical, so a different
  * fix (add one, or move the table below the last harness hook table) is
- * offered instead (task 6a037359). When the named table is a hook event
- * table spelled without the `[[hooks.` prefix, the guidance offers deleting
- * it if harness wrote it, since the scan reads such a table as foreign with
- * or without a comment line above it (task e8f4fc03). The legacy paths call
+ * offered instead (task 6a037359). Adding one is offered only when no
+ * harness-commented hook table follows the named table
+ * (`harnessHookTableFollows`): an END placed before the named table would
+ * leave that later table running next to the fresh block (task 36d962d2).
+ * When the named table is a hook event table spelled without the `[[hooks.`
+ * prefix, the guidance offers deleting it if harness wrote it, since the scan
+ * reads such a table as foreign with or without a comment line above it
+ * (task e8f4fc03). The legacy paths call
  * this too, so the substring matching above applies there as well: a value
  * holding marker text refuses. `blockOpening` names the line the block
  * starts at in the delete-the-lines fix: the BEGIN marker by default; a
@@ -671,11 +700,17 @@ export function assertNoSplitBlock(
           : `delete the lines between ${blockOpening} and '${CODEX_MANAGED_END}' so only ` +
             "harness-owned tables remain between them",
       ]
-    : [
-        `add a '${CODEX_MANAGED_END}' marker line right after the last harness hook table ` +
-          `(before ${firstForeignHeader})`,
-        `move ${firstForeignHeader} below the last harness hook table`,
-      ];
+    : harnessHookTableFollows(text, foreignHeaderLine, zoneEnd)
+      ? // An END marker placed before the named table would leave the
+        // harness-commented hook table after it running next to the fresh
+        // block, so the only fix offered is moving the named table past it
+        // (task 36d962d2).
+        [`move ${firstForeignHeader} below the last harness hook table`]
+      : [
+          `add a '${CODEX_MANAGED_END}' marker line right after the last harness hook table ` +
+            `(before ${firstForeignHeader})`,
+          `move ${firstForeignHeader} below the last harness hook table`,
+        ];
   // An uncommented hook table in the middle may be a harness table whose
   // comment line was deleted, so moving it (the operator-table fix) is only
   // right for an operator-owned one; name the restore option first (task
@@ -942,10 +977,11 @@ function rangeBeforeStrayEnd(
   end: number,
   configPath: string,
   blockOpening?: string,
+  zoneFrom = end,
 ): ManagedRange {
   const strayIdx = findExactLine(text, CODEX_MANAGED_END, end);
   if (strayIdx === -1) {
-    assertNoSplitBlock(text, end, text.length, configPath, false);
+    assertNoSplitBlock(text, zoneFrom, text.length, configPath, false);
     const keptHookTables = collectKeptHookTables(text, end, text.length).tables;
     const foreignSectionsPreserved = collectForeignSectionHeaders(text, end, text.length, keptHookTables);
     return { start, end, foreignSectionsPreserved, keptHookTables };
@@ -953,7 +989,7 @@ function rangeBeforeStrayEnd(
 
   const strayLineStart = lineStartAt(text, strayIdx);
   const strayLineEnd = lineEndAfter(text, strayIdx);
-  assertNoSplitBlock(text, end, strayLineStart, configPath, true, blockOpening);
+  assertNoSplitBlock(text, zoneFrom, strayLineStart, configPath, true, blockOpening);
   const keptHookTables = collectKeptHookTables(text, end, strayLineStart).tables;
   const foreignSectionsPreserved = collectForeignSectionHeaders(text, end, strayLineStart, keptHookTables);
   return {
@@ -982,8 +1018,11 @@ function rangeBeforeStrayEnd(
  * harness-commented table there is kept and not named. The split-block
  * refusal names `blockOpening` (the source-prefix line or the generated
  * header) as the start of the block, since there is no BEGIN marker (task
- * 01053b27). A scan that ended at a foreign table with no END marker
- * anywhere after it keeps the legacy behaviour (no split-block check), except
+ * 01053b27); the split-block zone starts after that opening line, so a block
+ * with no hook table in it (the source prefix directly above an operator
+ * table) is not refused for its own opening line (task 36d962d2). A scan that
+ * ended at a foreign table with no END marker anywhere after it keeps the
+ * legacy behaviour (no split-block check), except
  * that hook event tables directly after the block are collected, named and
  * checked (`collectKeptHookTables`), and a harness marker in their run
  * refuses through the split-block check. The END marker is looked up as a
@@ -1002,8 +1041,14 @@ function legacyManagedRange(
   if (scan.sawEndMarker) {
     return { start, end: scan.end, foreignSectionsPreserved: [], keptHookTables: [] };
   }
+  // The split-block zone starts after the block's own opening line: when the
+  // scan owned nothing (the generated header or a foreign table directly
+  // follows the source prefix), `scan.end` is that opening line itself, which
+  // is a split-block marker and would refuse a block with nothing in it
+  // (task 36d962d2).
+  const zoneFrom = Math.max(scan.end, lineEndAfter(text, start));
   if (scan.endedAtOperatorHookTable || findExactLine(text, CODEX_MANAGED_END, scan.end) !== -1) {
-    return rangeBeforeStrayEnd(text, start, scan.end, configPath, blockOpening);
+    return rangeBeforeStrayEnd(text, start, scan.end, configPath, blockOpening, zoneFrom);
   }
   const run = collectKeptHookTables(text, scan.end, text.length);
   // The scan ended at a hook table spelled without the `[[hooks.` prefix: a
@@ -1013,7 +1058,7 @@ function legacyManagedRange(
   // BEGIN path does, instead of naming a table with that comment line above it
   // as one without (task e8f4fc03). The run stops at the first non-hook table:
   // past it the legacy reading below stays unchanged.
-  if (run.tables.length > 0) assertNoSplitBlock(text, scan.end, run.end, configPath, false);
+  if (run.tables.length > 0) assertNoSplitBlock(text, zoneFrom, run.end, configPath, false);
   const keptHookTables = run.tables;
   const foreignSectionsPreserved = collectForeignSectionHeaders(text, scan.end, text.length, keptHookTables);
   return { start, end: scan.end, foreignSectionsPreserved, keptHookTables };
