@@ -58,6 +58,8 @@ import {
   loadManifestOrInjected,
   parseConfigUx,
   readStdin,
+  runGateWithStdinRefusal,
+  stdoutBlockRefusal,
 } from "./hook-bootstrap.js";
 
 export interface PackHookBranchProtectionOptions extends LoaderOptions {
@@ -295,7 +297,7 @@ function blockJson(
   });
 }
 
-export async function runPackHookBranchProtectionCli(
+async function runPackHookBranchProtectionCliInner(
   opts: PackHookBranchProtectionOptions = {},
 ): Promise<PackHookBranchProtectionResult> {
   const stdin = opts.stdin ?? process.stdin;
@@ -487,4 +489,21 @@ export async function runPackHookBranchProtectionCli(
   note(diagnostic);
   stdout.write(`${blockJson(toolName, branch, why, protectedList, configUx, sessionId)}\n`);
   return { exitCode: 0, blocked: true, diagnostic };
+}
+
+/**
+ * `harness pack hook branch-protection`. A stdin read that times out is refused here
+ * instead of being handed to the gate as an empty or truncated event it would
+ * treat as malformed input (task 7dfdcaaf). The operator pause still wins;
+ * every other input runs the gate unchanged.
+ */
+export function runPackHookBranchProtectionCli(
+  opts: PackHookBranchProtectionOptions = {},
+): Promise<PackHookBranchProtectionResult> {
+  return runGateWithStdinRefusal(
+    opts,
+    (stderr) => checkHookPause("branch-protection", stderr, opts).paused,
+    stdoutBlockRefusal("branch-protection"),
+    runPackHookBranchProtectionCliInner,
+  );
 }

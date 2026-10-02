@@ -115,7 +115,7 @@ import {
   checkHookPause,
   loadManifestOrInjected,
   parseConfigUx,
-  readStdin,
+  readStdin, runGateWithStdinRefusal, stdinTimeoutBlockJson,
 } from "./hook-bootstrap.js";
 import { renderReportSchemaHint } from "./understanding-report-schema-hint.js";
 
@@ -617,7 +617,7 @@ async function checkLedger(
   return matchLedgerEntries(result.entries, sessionId);
 }
 
-export async function runPackHookPreToolUseCli(
+async function runPackHookPreToolUseCliInner(
   opts: PackHookPreToolUseOptions = {},
 ): Promise<PackHookPreToolUseResult> {
   const stdin = opts.stdin ?? process.stdin;
@@ -1569,4 +1569,32 @@ export async function runPackHookPreToolUseCli(
     approvalCheck: { approved: false, source: "none", detail: reason },
     diagnostic,
   };
+}
+
+/**
+ * `harness pack hook pre-tool-use`. A stdin read that times out (the idle
+ * bound fired before stdin closed) is refused here instead of being handed to
+ * the gate as an empty or truncated event it would allow: the event never
+ * finished arriving, so the gate cannot judge the tool call (task 7dfdcaaf).
+ * The operator pause still wins; every other input runs the gate unchanged.
+ */
+export function runPackHookPreToolUseCli(
+  opts: PackHookPreToolUseOptions = {},
+): Promise<PackHookPreToolUseResult> {
+  return runGateWithStdinRefusal(
+    opts,
+    (stderr) => checkHookPause("pre-tool-use", stderr, opts, opts.generatedDir, opts.now).paused,
+    (reason, stdout, stderr) => {
+      const diagnostic = `harness pack hook: BLOCK: ${reason}`;
+      stderr.write(`${diagnostic}\n`);
+      stdout.write(`${stdinTimeoutBlockJson(reason)}\n`);
+      return {
+        exitCode: 0,
+        blocked: true,
+        approvalCheck: { approved: false, source: "none", detail: reason },
+        diagnostic,
+      };
+    },
+    runPackHookPreToolUseCliInner,
+  );
 }

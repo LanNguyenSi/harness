@@ -11,7 +11,7 @@ The motivation: without this check, an agent can issue `docker-compose restart p
 3. On a match, it runs your `RUNTIME_REALITY_PROBE_CMD` to capture the actual process state, loads the expectations file for `RUNTIME_REALITY_KEYWORD`, and compares them.
 4. Critical drift (an expected process is not running) denies the call. Warnings (port or startup-mode mismatch) are surfaced on stderr but allowed by default.
 
-Every load or probe error degrades to allow: a misconfigured probe never tarpits the session. The only deny path is a probe that actually produced state showing critical drift.
+Every load or probe error degrades to allow: a misconfigured probe never tarpits the session. The deny paths are a probe that actually produced state showing critical drift and a stdin that stays open past the hook's 3000 ms idle bound: like every PreToolUse gate, the hook denies a call whose event it could not read to the end in time (`RUNTIME_REALITY_DISABLE` still wins).
 
 ## 1. Declare the hook
 

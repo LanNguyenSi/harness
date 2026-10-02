@@ -45,6 +45,12 @@
 // indistinguishable, and fail-closed here would block ordinary git
 // history work on every branch whenever grounding-mcp hiccups. See
 // post-merge-gate-runtime.ts's header for the full rationale.
+//
+// The one exception is a stdin read that times out (the idle bound in
+// src/cli/bounded-stdin.ts fired before stdin closed): the event never
+// finished arriving, so the command cannot even be classified, and the gate
+// BLOCKS instead of allowing (the operator pause still yields). That refusal
+// sits in the exported wrapper at the end of this file.
 
 import {
   isEscapeCommand,
@@ -60,7 +66,14 @@ import { renderAgentFacing } from "../../runtime/agent-facing.js";
 import { POLICY_DECISION_TYPE } from "../../io/ledger-record.js";
 import { type Manifest, type McpServer, type PolicyUx } from "../../schema/index.js";
 import { type LoaderOptions } from "../loader.js";
-import { checkHookPause, loadManifestOrInjected, parseConfigUx, readStdin } from "./hook-bootstrap.js";
+import {
+  checkHookPause,
+  loadManifestOrInjected,
+  parseConfigUx,
+  readStdin,
+  runGateWithStdinRefusal,
+  stdoutBlockRefusal,
+} from "./hook-bootstrap.js";
 
 const DEFAULT_BRANCH_PLACEHOLDER = "<default-branch>";
 
@@ -212,7 +225,7 @@ function blockJson(
   });
 }
 
-export async function runPackHookPostMergeGateCli(
+async function runPackHookPostMergeGateCliInner(
   opts: PackHookPostMergeGateOptions = {},
 ): Promise<PackHookPostMergeGateResult> {
   const stdin = opts.stdin ?? process.stdin;
@@ -343,4 +356,21 @@ export async function runPackHookPostMergeGateCli(
     `${blockJson(toolName, command, branch, defaultBranch, check.matchedContent ?? matchKey, configUx, sessionId)}\n`,
   );
   return { exitCode: 0, blocked: true, diagnostic };
+}
+
+/**
+ * `harness pack hook post-merge-gate`. A stdin read that times out is refused here
+ * instead of being handed to the gate as an empty or truncated event it would
+ * treat as malformed input (task 7dfdcaaf). The operator pause still wins;
+ * every other input runs the gate unchanged.
+ */
+export function runPackHookPostMergeGateCli(
+  opts: PackHookPostMergeGateOptions = {},
+): Promise<PackHookPostMergeGateResult> {
+  return runGateWithStdinRefusal(
+    opts,
+    (stderr) => checkHookPause(PACK_NAME, stderr, opts).paused,
+    stdoutBlockRefusal("post-merge-gate"),
+    runPackHookPostMergeGateCliInner,
+  );
 }

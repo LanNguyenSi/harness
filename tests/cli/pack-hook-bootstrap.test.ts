@@ -2,7 +2,7 @@
 // These verify the three shared pieces in isolation so a regression in the
 // common module is caught once, not scattered across eleven per-hook test files.
 
-import { Readable } from "node:stream";
+import { PassThrough, Readable } from "node:stream";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -11,8 +11,13 @@ import {
   checkHookPause,
   loadManifestOrInjected,
   readStdin,
+  readStdinChecked,
+  runGateWithStdinRefusal,
+  stdoutBlockRefusal,
   resolveSessionAndAgentIds,
   resolveSubagentHookContext,
+  stdinTimeoutBlockJson,
+  stdinTimeoutBlockReason,
 } from "../../src/cli/pack/hook-bootstrap.js";
 import { parseManifest, type Manifest } from "../../src/schema/index.js";
 
@@ -74,11 +79,114 @@ describe("readStdin", () => {
     expect(result).toBe("");
   });
 
+  it("a closed stdin is read whole with no timeout note", async () => {
+    const { stream, lines } = makeStderr();
+    const result = await readStdin(makeReadableOf('{"tool_name":"Bash"}'), { stderr: stream });
+    expect(result).toBe('{"tool_name":"Bash"}');
+    expect(lines).toEqual([]);
+  });
+
+  it("an idle stdin with nothing read resolves empty after the bound and notes it", async () => {
+    const { stream, lines } = makeStderr();
+    const result = await readStdin(new PassThrough(), { idleTimeoutMs: 100, stderr: stream });
+    expect(result).toBe("");
+    expect(lines).toEqual([
+      "harness pack hook: no complete event JSON on stdin within 100 ms (stdin never closed); continuing as an empty event\n",
+    ]);
+  });
+
+  it("an idle stdin with partial data resolves with the data read and notes the byte count", async () => {
+    const { stream, lines } = makeStderr();
+    const pt = new PassThrough();
+    pt.write('{"tool_name":');
+    const result = await readStdin(pt, { idleTimeoutMs: 100, stderr: stream });
+    expect(result).toBe('{"tool_name":');
+    expect(lines).toEqual([
+      "harness pack hook: stdin did not close within 100 ms of the last data; using the 13 bytes read\n",
+    ]);
+  });
+
+  it("a slow but live pipe is not cut off: each chunk restarts the bound", async () => {
+    const { stream, lines } = makeStderr();
+    const pt = new PassThrough();
+    const read = readStdin(pt, { idleTimeoutMs: 400, stderr: stream });
+    pt.write("ab");
+    await new Promise((r) => setTimeout(r, 250));
+    pt.write("cd");
+    await new Promise((r) => setTimeout(r, 250));
+    pt.end("ef");
+    expect(await read).toBe("abcdef");
+    expect(lines).toEqual([]);
+  });
+
   it("rejects when the stream emits an error", async () => {
     const r = new Readable({ read() {} });
     const p = readStdin(r);
     r.emit("error", new Error("EPIPE"));
     await expect(p).rejects.toThrow("EPIPE");
+  });
+});
+
+describe("readStdinChecked (the PreToolUse gates' reader)", () => {
+  it("a closed stdin reports the whole text and no timeout", async () => {
+    const read = await readStdinChecked(makeReadableOf('{"tool_name":"Bash"}'), {
+      idleTimeoutMs: 100,
+    });
+    expect(read).toEqual({ text: '{"tool_name":"Bash"}', timedOut: false, idleTimeoutMs: 100 });
+  });
+
+  it("an idle empty stdin reports timedOut with no text and the bound that applied", async () => {
+    const read = await readStdinChecked(new PassThrough(), { idleTimeoutMs: 100 });
+    expect(read).toEqual({ text: "", timedOut: true, idleTimeoutMs: 100 });
+  });
+
+  it("an idle stdin with partial data reports timedOut and the text read so far", async () => {
+    const pt = new PassThrough();
+    pt.write('{"tool_name":');
+    const read = await readStdinChecked(pt, { idleTimeoutMs: 100 });
+    expect(read).toEqual({ text: '{"tool_name":', timedOut: true, idleTimeoutMs: 100 });
+  });
+
+  it("rejects when the stream emits an error", async () => {
+    const r = new Readable({ read() {} });
+    const p = readStdinChecked(r);
+    r.emit("error", new Error("EPIPE"));
+    await expect(p).rejects.toThrow("EPIPE");
+  });
+});
+
+describe("stdin timeout block helpers", () => {
+  it("the reason names the stdin timeout and the bound", () => {
+    const reason = stdinTimeoutBlockReason(3000);
+    expect(reason).toMatch(/^stdin timeout:/);
+    expect(reason).toContain("within 3000 ms");
+    expect(reason).toContain("fail closed");
+  });
+
+  it("stdoutBlockRefusal writes the block envelope to stdout and one BLOCK line to stderr, and returns a blocked result", () => {
+    const out: string[] = [];
+    const err: string[] = [];
+    const sink = (into: string[]): NodeJS.WritableStream =>
+      ({ write: (s: string) => (into.push(s), true) }) as unknown as NodeJS.WritableStream;
+    const reason = stdinTimeoutBlockReason(3000);
+    const result = stdoutBlockRefusal("some-gate")(reason, sink(out), sink(err));
+    expect(result).toEqual({ exitCode: 0, blocked: true, diagnostic: `BLOCK: ${reason}` });
+    expect(err).toEqual([`harness pack hook some-gate: BLOCK: ${reason}\n`]);
+    expect(out).toHaveLength(1);
+    expect(JSON.parse(out[0] as string)).toMatchObject({ decision: "block", reason });
+  });
+
+  it("the envelope blocks in both the legacy and the hookSpecificOutput form", () => {
+    const parsed = JSON.parse(stdinTimeoutBlockJson("why"));
+    expect(parsed).toEqual({
+      decision: "block",
+      reason: "why",
+      hookSpecificOutput: {
+        hookEventName: "PreToolUse",
+        permissionDecision: "deny",
+        permissionDecisionReason: "why",
+      },
+    });
   });
 });
 
@@ -313,4 +421,60 @@ describe("codex hooks import checkHookPause (parity pin, task 1432e053)", () => 
     // checkHookPause somewhere in its body, not merely imports it.
     expect(src, `${filename}: imports checkHookPause but never calls it`).toMatch(/checkHookPause\(/);
   });
+});
+
+describe("runGateWithStdinRefusal", () => {
+  const sink = (): NodeJS.WritableStream =>
+    ({ write: () => true }) as unknown as NodeJS.WritableStream;
+
+  it("a closed stdin is replayed whole to the gate, which runs unrefused", async () => {
+    let seen = "";
+    const result = await runGateWithStdinRefusal(
+      { stdin: makeReadableOf('{"tool_name":"Bash"}'), stdout: sink(), stderr: sink() },
+      () => false,
+      () => "refused",
+      async (opts) => {
+        seen = await readStdin(opts.stdin as NodeJS.ReadableStream);
+        return "ran";
+      },
+    );
+    expect(result).toBe("ran");
+    expect(seen).toBe('{"tool_name":"Bash"}');
+  });
+
+  it("a timed-out read refuses with the stdin-timeout reason and never runs the gate", async () => {
+    let ran = false;
+    const pt = new PassThrough();
+    pt.write('{"tool_name":');
+    const reasons: string[] = [];
+    const result = await runGateWithStdinRefusal(
+      { stdin: pt, stdout: sink(), stderr: sink() },
+      () => false,
+      (reason) => (reasons.push(reason), "refused"),
+      async () => {
+        ran = true;
+        return "ran";
+      },
+    );
+    expect(result).toBe("refused");
+    expect(ran).toBe(false);
+    expect(reasons).toEqual([stdinTimeoutBlockReason(3000)]);
+  }, 15_000);
+
+  it("the operator pause wins: a timed-out read under a pause runs the gate with the text read", async () => {
+    let seen = "";
+    const pt = new PassThrough();
+    pt.write('{"tool_name":');
+    const result = await runGateWithStdinRefusal(
+      { stdin: pt, stdout: sink(), stderr: sink() },
+      () => true,
+      () => "refused",
+      async (opts) => {
+        seen = await readStdin(opts.stdin as NodeJS.ReadableStream);
+        return "ran";
+      },
+    );
+    expect(result).toBe("ran");
+    expect(seen).toBe('{"tool_name":');
+  }, 15_000);
 });

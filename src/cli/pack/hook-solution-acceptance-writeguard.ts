@@ -83,7 +83,12 @@ import {
 } from "../../policy-packs/builtin/solution-acceptance-runtime.js";
 import { isReadOnlyBashCommand } from "../../runtime/read-only-bash.js";
 import type { LoaderOptions } from "../loader.js";
-import { checkHookPause, readStdin } from "./hook-bootstrap.js";
+import {
+  checkHookPause,
+  readStdin,
+  runGateWithStdinRefusal,
+  stdoutBlockRefusal,
+} from "./hook-bootstrap.js";
 
 export interface PackHookSolutionAcceptanceWriteguardOptions extends LoaderOptions {
   stdin?: NodeJS.ReadableStream;
@@ -339,7 +344,7 @@ function blockJson(toolName: string, reason: string): string {
   });
 }
 
-export async function runPackHookSolutionAcceptanceWriteguardCli(
+async function runPackHookSolutionAcceptanceWriteguardCliInner(
   opts: PackHookSolutionAcceptanceWriteguardOptions = {},
 ): Promise<PackHookSolutionAcceptanceWriteguardResult> {
   const stdin = opts.stdin ?? process.stdin;
@@ -382,4 +387,21 @@ export async function runPackHookSolutionAcceptanceWriteguardCli(
   note(diagnostic);
   stdout.write(`${blockJson(toolName, decision.reason)}\n`);
   return { exitCode: 0, blocked: true, diagnostic };
+}
+
+/**
+ * `harness pack hook solution-acceptance-writeguard`. A stdin read that times out is refused here
+ * instead of being handed to the gate as an empty or truncated event it would
+ * treat as malformed input (task 7dfdcaaf). The operator pause still wins;
+ * every other input runs the gate unchanged.
+ */
+export function runPackHookSolutionAcceptanceWriteguardCli(
+  opts: PackHookSolutionAcceptanceWriteguardOptions = {},
+): Promise<PackHookSolutionAcceptanceWriteguardResult> {
+  return runGateWithStdinRefusal(
+    opts,
+    (stderr) => checkHookPause(`${PACK_NAME}-writeguard`, stderr, opts).paused,
+    stdoutBlockRefusal("solution-acceptance-writeguard"),
+    runPackHookSolutionAcceptanceWriteguardCliInner,
+  );
 }
