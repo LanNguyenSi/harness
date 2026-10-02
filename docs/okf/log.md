@@ -2,6 +2,8 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-10-02T05:42:42Z, task c8cfc110: `src/cli/policy/intercept.ts` lost its own end-only stdin reader and now reads through the shared idle-bounded reader in `src/cli/bounded-stdin.ts`; `codex-adapter-parity-gaps.md`, `gate-fail-posture-matrix.md`, `policy-engine-producer-wiring.md` and `quote-model-divergence.md` were re-verified against it (no claim about the stdin read changed; the line citations into `intercept.ts` and one log citation into `session-start/index.ts` were re-pointed and re-stamped).
+
 - 2026-10-01T15:15:50Z, task fa423e9b: `gate-fail-posture-matrix.md` now scopes the bounded-read guarantee to the hash scan and names the second residual (after a refused marker both hooks fall through to the evidence read shared with the no-marker path, which still reads report files without a bound); `codex-adapter-parity-gaps.md`, `evidence-ledger-trust-boundary.md`, `understanding-gate-auto-mode-signals.md` and `understanding-gate-lockout-recovery.md` re-verified against the pack doc's matching residual; `debug-verb-selection.md` and `policy-engine-producer-wiring.md` re-verified against the merged `src/runtime/intercept.ts`, `src/cli/policy/intercept.ts` and `src/cli/dry-run.ts` (task 6c8ebd37), no claim affected.
 
 - 2026-10-01T14:31:41Z, task fa423e9b: the report files behind the canonical report hash are now read bounded (`readReportFileBounded` in `persisted-reports.ts`: opened once, read-only and non-blocking, typed and sized by `fstat` on the open descriptor and read through it; only a regular file of at most 1 MiB is hashed, every other `*.json` entry counts as a report file that matches nothing, and both producers refuse a report over the cap). `gate-fail-posture-matrix.md`, `evidence-ledger-trust-boundary.md` and `understanding-gate-lockout-recovery.md` were re-checked against the changed `persisted-reports.ts`, `auto-approve-path.ts` and `approve/understanding.ts` and now state the size and file-type rule, the copy residual narrowed to regular files within the cap, the no-report allow as a directory with no `*.json` entry, and (matrix and lockout doc) the remaining volume residual; the lockout doc also names the approve CLI's refusal of a report it could not hash and the unbound `--force` marker. `codex-adapter-parity-gaps.md` and `understanding-gate-auto-mode-signals.md` were re-verified with no claim affected (the parity doc's "no longer matches any report file" still holds; the signals doc makes no claim about report reads). Re-stamped.
@@ -1205,7 +1207,7 @@
   first shipped full silence here, round 1's own review found the
   silence itself was the residual gap the task's goal named ("no
   diagnostic anywhere"), closed in round 2. The producer's own stderr
-  diagnostic (`src/cli/session-start/index.ts:707#"the project-scoped"`)
+  diagnostic (`src/cli/session-start/index.ts:632#"the project-scoped"`)
   no longer blames "the project layer" for a
   base- or machine-layer parse failure (round 1's lead-in did); both
   this diagnostic and the new `doctor` finding now collapse a
