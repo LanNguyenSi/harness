@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -708,6 +709,183 @@ describe("gc - permission-mode observations (task 8f637efd review round 2 F5)", 
   it("reports permissionModeObservationsDir in the result", () => {
     const r = run();
     expect(r.permissionModeObservationsDir).toBe(permissionModeObservationsDir);
+  });
+});
+
+describe("gc - planted report entries (agent-tasks 1ccfe922)", () => {
+  const OVER_CAP = " ".repeat(2 * 1024 * 1024);
+  // Past anything a read-in-full survives; sparse, so it costs no disk.
+  const SPARSE_BYTES = 400 * 1024 * 1024;
+
+  function sparse(file: string): void {
+    const fd = fs.openSync(file, "w");
+    try {
+      fs.ftruncateSync(fd, SPARSE_BYTES);
+    } finally {
+      fs.closeSync(fd);
+    }
+  }
+
+  const plants: Array<{ name: string; plant: () => string; reason: RegExp }> = [
+    {
+      name: "a 2 MiB terminal report, aged past the window",
+      plant: () => {
+        const p = path.join(reportsDir, "zz-oversized.json");
+        fs.writeFileSync(
+          p,
+          JSON.stringify({ approvalStatus: "approved", createdAt: isoDaysAgo(90) }) + OVER_CAP,
+        );
+        const then = new Date(NOW.getTime() - 90 * DAY_MS);
+        fs.utimesSync(p, then, then);
+        return p;
+      },
+      reason: /over the \d+-byte cap/,
+    },
+    {
+      name: "a sparse 400 MiB file",
+      plant: () => {
+        const p = path.join(reportsDir, "zz-huge.json");
+        sparse(p);
+        return p;
+      },
+      reason: /over the \d+-byte cap/,
+    },
+    {
+      name: "a FIFO",
+      plant: () => {
+        const p = path.join(reportsDir, "zz-fifo.json");
+        execFileSync("mkfifo", [p]);
+        return p;
+      },
+      reason: /not a regular file/,
+    },
+    {
+      name: "a symlink to an outside sparse 400 MiB file",
+      plant: () => {
+        const target = path.join(tmp, "outside-huge");
+        sparse(target);
+        const p = path.join(reportsDir, "zz-link.json");
+        fs.symlinkSync(target, p);
+        return p;
+      },
+      reason: /over the \d+-byte cap/,
+    },
+    {
+      name: "a symlink to an outside FIFO",
+      plant: () => {
+        const target = path.join(tmp, "outside-pipe");
+        execFileSync("mkfifo", [target]);
+        const p = path.join(reportsDir, "zz-link-fifo.json");
+        fs.symlinkSync(target, p);
+        return p;
+      },
+      reason: /not a regular file/,
+    },
+  ];
+
+  it.each(plants)(
+    "reports $name as unparseable without reading it, and --apply leaves it in place",
+    ({ plant, reason }) => {
+      const old = writeReport("old-approved.json", {
+        approvalStatus: "approved",
+        createdAt: isoDaysAgo(40),
+      });
+      const planted = plant();
+
+      const started = Date.now();
+      const dry = run();
+      const applied = run({ apply: true });
+      const elapsedMs = Date.now() - started;
+
+      expect(elapsedMs).toBeLessThan(5_000);
+      for (const r of [dry, applied]) {
+        const entry = r.unparseable.find((u) => u.filePath === planted);
+        expect(entry, "the planted entry is reported").toBeDefined();
+        expect(entry?.category).toBe("report");
+        expect(entry?.reason).toMatch(reason);
+        expect(r.candidates.some((c) => c.filePath === planted)).toBe(false);
+      }
+      expect(dry.candidates.map((c) => c.filePath)).toEqual([old]);
+      expect(applied.removed).toEqual([old]);
+      expect(() => fs.lstatSync(planted)).not.toThrow();
+    },
+    15_000,
+  );
+
+  it("counts a planted entry among the kept artifacts", () => {
+    execFileSync("mkfifo", [path.join(reportsDir, "zz-fifo.json")]);
+    expect(run().keptCount).toBe(1);
+  });
+});
+
+describe("gc - hostile file names in the printed report paths", () => {
+  // ESC, BEL, CR, LF, DEL and a C1 control in a name the gated agent chose.
+  const HOSTILE =
+    "\u001b]52;c;ZWNobyBwd25lZA==\u0007\u001b[2K\rgc: removed 0 file(s)\nline2\u007f\u009b.json";
+
+  function rawControlCodes(text: string): number[] {
+    return [...text]
+      .map((ch) => ch.charCodeAt(0))
+      .filter((c) => (c < 0x20 && c !== 0x0a) || (c >= 0x7f && c <= 0x9f));
+  }
+
+  async function runCli(): Promise<{ out: string; err: string }> {
+    const { buildProgram } = await import("../../src/cli/index.js");
+    let out = "";
+    let err = "";
+    const program = buildProgram({
+      stdout: (s: string) => {
+        out += s;
+      },
+      stderr: (s: string) => {
+        err += s;
+      },
+    });
+    fs.writeFileSync(path.join(tmp, "harness.yaml"), "version: 1\n");
+    await program.parseAsync(["gc", "--config", path.join(tmp, "harness.yaml")], { from: "user" });
+    return { out, err };
+  }
+
+  it("prints an unreadable planted entry and a deletion candidate as escaped literals", async () => {
+    const planted = path.join(reportsDir, HOSTILE);
+    fs.writeFileSync(planted, "x".repeat(2 * 1024 * 1024));
+    const old = writeReport("old-approved.json", { approvalStatus: "approved", createdAt: isoDaysAgo(4000) });
+    const hostileOld = path.join(reportsDir, `old-${HOSTILE}`);
+    fs.renameSync(old, hostileOld);
+
+    const { out, err } = await runCli();
+
+    const escaped = "\\u001b]52;c;ZWNobyBwd25lZA==\\u0007\\u001b[2K\\rgc: removed 0 file(s)\\nline2\\u007f\\u009b.json";
+    expect(err).toContain(escaped);
+    expect(out).toContain(escaped);
+    for (const text of [out, err]) {
+      expect(rawControlCodes(text)).toEqual([]);
+      expect(text.split("\n").some((l) => l.startsWith("line2") || l.startsWith("gc: removed 0"))).toBe(false);
+    }
+  });
+});
+
+describe("gc - a hostile name in the deletion failure line", () => {
+  it("prints the failed removal as an escaped literal", async () => {
+    const { buildProgram } = await import("../../src/cli/index.js");
+    const name = "old-\u001b[2Kfake\u009b.json";
+    const old = writeReport("old-approved.json", { approvalStatus: "approved", createdAt: isoDaysAgo(4000) });
+    fs.renameSync(old, path.join(reportsDir, name));
+    let err = "";
+    const program = buildProgram({ stdout: () => {}, stderr: (s: string) => { err += s; } });
+    fs.writeFileSync(path.join(tmp, "harness.yaml"), "version: 1\n");
+    // A directory that cannot be written to makes the unlink fail.
+    fs.chmodSync(reportsDir, 0o555);
+    try {
+      await expect(
+        program.parseAsync(["gc", "--apply", "--config", path.join(tmp, "harness.yaml")], { from: "user" }),
+      ).rejects.toThrow(/deletion\(s\) failed/);
+    } finally {
+      fs.chmodSync(reportsDir, 0o755);
+    }
+    expect(err).toContain("gc: failed to remove \"");
+    expect(err).toContain("\\u001b[2Kfake\\u009b.json");
+    expect([...err].some((ch) => ch.charCodeAt(0) === 0x1b || ch.charCodeAt(0) === 0x9b)).toBe(false);
   });
 });
 

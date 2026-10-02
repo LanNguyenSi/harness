@@ -3,7 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { Command } from "commander";
-
+import { escapeForDisplay } from "../io/display-path.js";
 import { HermeticSpawnViolationError } from "../runtime/hermetic-spawn-guard.js";
 
 // Production version probe for `harness doctor`: synchronous --version
@@ -1832,7 +1832,7 @@ export function buildProgram(opts: RunOptions = {}): Command {
           lines.push("  gate-staged .pending-approval, so it was read from the newest pending");
           lines.push("  Understanding Report:");
           if (result.newestReportPath) {
-            lines.push(`    ${result.newestReportPath}`);
+            lines.push(`    ${escapeForDisplay(result.newestReportPath)}`);
           }
           lines.push("  If that is not your live session, the marker above approves the wrong");
           lines.push("  session and the gate stays blocked. Confirm the id matches the running");
@@ -1918,7 +1918,7 @@ export function buildProgram(opts: RunOptions = {}): Command {
             ? "; stamped sessionId"
             : "";
           lines.push(
-            `report:  ✓ ${result.persistedReport.filePath} (approvalStatus: ${prev} → approved${stampNote})`,
+            `report:  ✓ ${escapeForDisplay(result.persistedReport.filePath)} (approvalStatus: ${prev} → approved${stampNote})`,
           );
           const fb = result.persistedReport.fallbackAdopted;
           if (fb) {
@@ -1958,7 +1958,7 @@ export function buildProgram(opts: RunOptions = {}): Command {
             );
             lines.push("  the marker was NOT written; the gate stays closed.");
             lines.push(
-              "  pass --force to bypass this check (the ledger tag will be stamped `:forced:<field>` for audit).",
+              "  pass --force to bypass a content check (the ledger tag will be stamped `:forced:<field>` for audit); a report that is oversized, not a regular file or unreadable cannot be forced.",
             );
           } else {
             lines.push(
@@ -1979,7 +1979,7 @@ export function buildProgram(opts: RunOptions = {}): Command {
         if ("ok" in v && v.ok === false && v.enforced) {
           throw new HarnessExitError(
             `approve refused: ${v.field} validation failed. ` +
-              `Run with --force to bypass (the ledger tag will be stamped \`:forced:${v.field}\` for audit).`,
+              `Run with --force to bypass a content check (the ledger tag will be stamped \`:forced:${v.field}\` for audit); a report that is oversized, not a regular file or unreadable cannot be forced.`,
             EX_FAIL,
           );
         }
@@ -3079,7 +3079,7 @@ export function buildProgram(opts: RunOptions = {}): Command {
       if (result.unparseable.length > 0) {
         stderr(
           `gc: ${result.unparseable.length} file(s) could not be parsed and were left in place:\n` +
-            result.unparseable.map((u) => `  [${u.category}] ${u.filePath} (${u.reason})\n`).join(""),
+            result.unparseable.map((u) => `  [${u.category}] ${escapeForDisplay(u.filePath)} (${u.reason})\n`).join(""),
         );
       }
       if (result.candidates.length === 0) {
@@ -3095,7 +3095,7 @@ export function buildProgram(opts: RunOptions = {}): Command {
         `gc: ${verb} ${result.candidates.length} artifact(s) older than ${result.retentionDays}d (cutoff ${result.cutoffIso}); keeping ${result.keptCount}:\n`,
       );
       for (const c of result.candidates) {
-        stdout(`  [${c.category}] ${c.filePath} (${c.reason})\n`);
+        stdout(`  [${c.category}] ${escapeForDisplay(c.filePath)} (${c.reason})\n`);
       }
       if (!result.applied) {
         stdout(`\nDry-run; pass --apply to delete.\n`);
@@ -3104,7 +3104,7 @@ export function buildProgram(opts: RunOptions = {}): Command {
       stdout(`removed ${result.removed.length} file(s).\n`);
       if (result.failures.length > 0) {
         for (const f of result.failures) {
-          stderr(`gc: failed to remove ${f.filePath}: ${f.reason}\n`);
+          stderr(`gc: failed to remove ${escapeForDisplay(f.filePath)}: ${escapeForDisplay(f.reason)}\n`);
         }
         throw new HarnessExitError(
           `${result.failures.length} deletion(s) failed`,

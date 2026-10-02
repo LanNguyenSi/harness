@@ -82,7 +82,7 @@ import {
   INFLIGHT_RECORD_DIRNAME,
   PERMISSION_MODE_OBSERVATION_DIRNAME,
   defaultReportsDir,
-  listPersistedReports,
+  listPersistedReportsBoundedWithSkips,
   parseDelegationApprovedBy,
   rejectMalformedAgentId,
 } from "../../policy-packs/builtin/understanding-before-execution-runtime.js";
@@ -124,7 +124,11 @@ export interface GcCandidate {
   reason: string;
 }
 
-/** A delegation-sweep file gc could not parse: reported, never a deletion candidate. */
+/**
+ * A file gc could not read or parse (a delegation or in-flight record, or a
+ * report entry that is oversized, not a regular file or unreadable): reported,
+ * never a deletion candidate.
+ */
 export interface GcUnparseable {
   filePath: string;
   category: GcCategory;
@@ -149,7 +153,7 @@ export interface GcResult {
   permissionModeObservationsDir: string;
   inflightRecordsDir: string;
   candidates: GcCandidate[];
-  /** Delegation-sweep files inspected but left in place because they could not be parsed. */
+  /** Files inspected but left in place because they could not be read or parsed (delegations, in-flight records, unreadable report entries). */
   unparseable: GcUnparseable[];
   /** Files actually deleted (apply mode only). */
   removed: string[];
@@ -576,7 +580,21 @@ export function gc(opts: GcOptions = {}): GcResult {
   // deleted regardless of age; since the C1 fix, stale pending leftovers
   // can no longer satisfy `approve understanding`, and keeping them
   // preserves the forensic trail for the producer-side investigation.
-  for (const report of listPersistedReports(reportsDir)) {
+  // Bounded listing: the reports dir is writable by the gated agent, so a
+  // planted multi-hundred-MB report, a FIFO or a symlink to either must not
+  // be read in full (or block). Such an entry is reported as unparseable and
+  // left in place: without reading it gc cannot tell whether it is a terminal
+  // report, and a pending one is never deleted.
+  const reportListing = listPersistedReportsBoundedWithSkips(reportsDir);
+  for (const skipped of reportListing.skipped) {
+    unparseable.push({
+      filePath: skipped.filePath,
+      category: "report",
+      reason: `not read: ${skipped.detail}`,
+    });
+    keptCount += 1;
+  }
+  for (const report of reportListing.reports) {
     const terminal =
       report.approvalStatus === "approved" || report.approvalStatus === "expired";
     if (terminal && report.createdAtMs < cutoffMs) {
