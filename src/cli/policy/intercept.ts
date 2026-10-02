@@ -47,6 +47,7 @@ import {
 import { extractShellCommand, SHELL_ALIASES } from "../../runtime/tool-name-aliases.js";
 import { loadManifest, type LoaderOptions } from "../loader.js";
 import { checkPauseFromLoader } from "../pause-check.js";
+import { stdinTimeoutBlockJson, stdinTimeoutBlockReason } from "../pack/hook-bootstrap.js";
 
 export interface InterceptCliOptions extends LoaderOptions {
   /** Defaults to process.stdin. */
@@ -671,6 +672,24 @@ function degradedLedgerClient(
   };
 }
 
+/**
+ * The hook event name a timed-out read carries when it names a hook event other
+ * than PreToolUse, else `undefined`: the text is empty, truncated, not a JSON
+ * object, names no event, or names PreToolUse. The caller keeps its pre-existing
+ * continue behaviour only for an event this returns a name for.
+ */
+function otherHookEventName(text: string): string | undefined {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text.trim());
+  } catch {
+    return undefined;
+  }
+  if (typeof parsed !== "object" || parsed === null) return undefined;
+  const name = (parsed as { hook_event_name?: unknown }).hook_event_name;
+  return typeof name === "string" && name.length > 0 && name !== "PreToolUse" ? name : undefined;
+}
+
 export async function runInterceptCli(
   opts: InterceptCliOptions = {},
 ): Promise<InterceptCliResult> {
@@ -680,11 +699,37 @@ export async function runInterceptCli(
   const verbose = isVerboseEnabled(opts);
   const idleTimeoutMs = opts.stdinIdleTimeoutMs ?? STDIN_IDLE_TIMEOUT_MS;
   const read = await readStdinBounded(stdin, idleTimeoutMs);
+  if (read.timedOut && otherHookEventName(read.text) === undefined) {
+    // A timed-out read leaves no event to judge, and this verb is the
+    // PreToolUse gate entrypoint: continuing as an empty event turned a block
+    // into an allow whenever the host stalled past the bound and then wrote a
+    // complete gated event. The rendered hook command carries no event name, so
+    // the event the read itself declares is the only signal there is: an event
+    // naming another hook event keeps the continue path below, anything else
+    // (nothing read, a truncated or unparseable prefix, a PreToolUse event, or
+    // an object with no event name) is treated as the PreToolUse call this
+    // verb is registered for. The operator pause still wins, and a paused run
+    // allows exactly as it does after a read that closed.
+    const pause: Parameters<typeof checkPauseFromLoader>[0] = {
+      loaderOpts: opts,
+      hookLabel: "policy intercept",
+      stderr,
+    };
+    if (opts.generatedDir !== undefined) pause.generatedDir = opts.generatedDir;
+    if (opts.now !== undefined) pause.now = opts.now;
+    if (checkPauseFromLoader(pause).paused) {
+      return { exitCode: 0, decisions: [], blocked: false };
+    }
+    const reason = stdinTimeoutBlockReason(idleTimeoutMs);
+    stderr.write(`harness policy intercept${hookSuffix(opts.hookName)}: BLOCK: ${reason}\n`);
+    stdout.write(`${stdinTimeoutBlockJson(reason)}\n`);
+    return { exitCode: 0, decisions: [], blocked: true };
+  }
   if (read.timedOut) {
-    // Same fail posture as an absent event: an empty read continues as an
-    // empty event, partial text is parsed (and fails open below when malformed).
+    // Only an event that names another hook event gets here (see above), so the
+    // text read is non-empty and parsed as that event below.
     stderr.write(
-      `harness policy intercept${hookSuffix(opts.hookName)}: ${stdinTimeoutNote(read, idleTimeoutMs, "continuing as an empty event")}\n`,
+      `harness policy intercept${hookSuffix(opts.hookName)}: ${stdinTimeoutNote(read, idleTimeoutMs)}\n`,
     );
   }
   const raw = read.text;
