@@ -242,6 +242,15 @@ describe("dogfood --session rejects ':' and whitespace", () => {
       expect(writes).toEqual([]);
     });
   }
+  for (const session of [" s1", "s1 ", "\ts1", "s1\n"]) {
+    it(`refuses a padded session ${JSON.stringify(session)} instead of splitting content and target`, async () => {
+      const { result, writes } = await call("dogfood", { resolveSession: (() => session) as never });
+      expect(result).toMatchObject({ exitCode: EX_USAGE, wrote: false });
+      expect(result.reason).toContain("--session");
+      expect(result.reason).toContain("leading or trailing whitespace");
+      expect(writes).toEqual([]);
+    });
+  }
   it("still accepts a uuid session", async () => {
     const id = "0b6a1c1e-5d2f-4c1a-9a55-0123456789ab";
     const { result, writes } = await call("dogfood", { resolveSession: (() => id) as never });

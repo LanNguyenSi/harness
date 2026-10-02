@@ -355,8 +355,8 @@ export const configSchema = z
 export interface ResolvePackOptions {
   /**
    * Absolute path to the persisted-report directory the pack's hooks
-   * should write/read. When provided, the pack prefixes each contributed
-   * hook command with `UNDERSTANDING_GATE_REPORT_DIR=<path>` so the
+   * should write/read. When provided, the pack prefixes each
+   * report-reading hook command with `UNDERSTANDING_GATE_REPORT_DIR=<path>` so the
    * Stop hook (writes the report), the PreToolUse blocker (reads it),
    * and `harness approve understanding` (flips it) all resolve the same
    * directory regardless of each process's cwd. Apply sets this to a
