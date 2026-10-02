@@ -597,3 +597,91 @@ describe("built-in destructive floor: NUL-escape spellings keep their verdict (t
     expect(isReadOnlyBashCommand("git push $'-f\\0' origin main")).toBe(false);
   });
 });
+
+// Task 5cc64860. A word whose NUL-decoding escape sits INSIDE the name being
+// compared (`$'--force\0'`, `$'dd\0'`, `$'-delete\c@'`) decodes to a value
+// that carries a literal U+0000, so every exact comparison (a whole flag, a
+// head name, a subcommand) missed it, while bash (GNU bash 3.2.57,
+// `printf '[%s]' <word> | od -c`) truncates the run at the NUL and runs the
+// plain command. The floor now also scans the command with each such word
+// replaced by the value bash passes, and keeps the hits of both scans, so
+// each command below is classified at least as severely as its plain twin.
+describe("built-in destructive floor: a NUL-escaped word is classified like its plain twin (task 5cc64860)", () => {
+  const PINS: Array<[string, string, string, RiskSeverity, string]> = [
+    ["git push --force", "git push $'--force\\0' origin", "git push --force origin", "high", "git push --force"],
+    ["git reset --hard", "git reset $'--hard\\0'", "git reset --hard", "high", "git reset --hard"],
+    ["find -delete, control escape", "find / $'-delete\\c@'", "find / -delete", "critical", "find -delete"],
+    ["dd of= with the head NUL-escaped", "$'dd\\0' of=/dev/sda", "dd of=/dev/sda", "critical", "dd with an of= write target"],
+  ];
+
+  it.each(PINS)("%s: the plain twin keeps its verdict", (_label, _nul, twin, severity, reasonPart) => {
+    const hits = classifyDestructiveShellFloor(twin);
+    expect(hits.some((h) => h.severity === severity && h.reason.includes(reasonPart))).toBe(true);
+  });
+
+  it.each(PINS)("%s: the NUL spelling gets the twin's severity and reason", (_label, nul, _twin, severity, reasonPart) => {
+    const hits = classifyDestructiveShellFloor(nul);
+    expect(hits.some((h) => h.severity === severity && h.reason.includes(reasonPart))).toBe(true);
+    expect(floorOnly(nul).severity).toBe(severity);
+  });
+
+  // Same family at the other exact comparisons and at the other NUL
+  // spellings. Every row is a command bash runs as its plain twin (bash
+  // 3.2.57, `printf '[%s]' <word> | od -c`), including the two rows where
+  // the NUL sits between the halves of a name that other runs complete.
+  it.each([
+    ["git push --force, \\x00", "git push $'--force\\x00' origin", "high"],
+    ["git push --force, \\000", "git push $'--force\\000' origin", "high"],
+    ["git push --force, text after the NUL", "git push $'--force\\0junk' origin", "high"],
+    ["git push --force, NUL inside the name", "git push --$'for\\0xx'ce origin", "high"],
+    ["git push -f, NUL inside the name", "git push $'-\\0xx'f origin", "high"],
+    ["git push --force-with-lease, \\0", "git push $'--force-with-lease\\0' origin", "high"],
+    ["git push, NUL-escaped subcommand", "git $'push\\0' -f origin", "high"],
+    ["git push after a NUL-escaped global flag", "git $'--no-pager\\0' push -f origin", "high"],
+    ["git reset --hard, \\x00", "git reset $'--hard\\x00'", "high"],
+    ["git reset, NUL-escaped subcommand", "git $'reset\\0' --hard", "high"],
+    ["git clean --force", "git clean $'--force\\0'", "high"],
+    ["git checkout -- . with a NUL-escaped dot", "git checkout $'.\\0'", "high"],
+    ["find -delete, \\0", "find / $'-delete\\0'", "critical"],
+    ["find -delete, NUL-escaped head", "$'find\\0' / -delete", "critical"],
+    ["find -exec rm, NUL-escaped primary", "find / $'-exec\\0' rm {} +", "critical"],
+    ["find -exec rm, NUL-escaped payload head", "find / -exec $'rm\\0' {} +", "critical"],
+    ["dd, NUL inside the head name", "$'d\\0xx'd of=/dev/sda", "critical"],
+    ["dd, path-qualified NUL-escaped head", "/bin/$'dd\\0' of=/dev/sda", "critical"],
+    ["dd behind a NUL-escaped wrapper", "$'sudo\\0' dd of=/dev/sda", "critical"],
+    ["dd of= after a pipe boundary", "echo x | $'dd\\0' of=/dev/sda", "critical"],
+    ["truncate, NUL-escaped head", "$'truncate\\0' -s0 f", "critical"],
+    ["shred, NUL-escaped head", "$'shred\\0' f", "critical"],
+    ["mkfs.ext4, NUL-escaped head", "$'mkfs.ext4\\0' /dev/sdb1", "critical"],
+    ["a nested shell -c with a NUL-escaped dd", "bash -c \"$'dd\\0' of=/dev/sda\"", "critical"],
+    ["a NUL-escaped shell head with a nested dd", "$'bash\\0' -c 'dd of=/dev/sda'", "critical"],
+    ["a NUL-escaped shell head whose nested command spans a boundary", "$'bash\\0' -c \"dd of=/dev/sda; echo\"", "critical"],
+    ["the plain twin of that nested command", "bash -c \"dd of=/dev/sda; echo\"", "critical"],
+    ["git push --force, a boundary character inside the cut-off part", "git push $'--force\\0;' origin", "high"],
+    ["dd, a pipe inside the cut-off part of the head", "$'dd\\0|' of=/dev/sda", "critical"],
+    ["find -delete, a boundary character after the control escape", "find / $'-delete\\c@&'", "critical"],
+    ["chmod -R, NUL-escaped head", "$'chmod\\0' -R 777 /", "high"],
+    ["sed -i, NUL-escaped head", "$'sed\\0' -i s/a/b/ f", "high"],
+    ["curl -o, NUL-escaped head", "$'curl\\0' -o /etc/x http://h", "high"],
+  ] as Array<[string, string, RiskSeverity]>)("%s: %s", (_label, command, severity) => {
+    expect(floorOnly(command).severity).toBe(severity);
+  });
+
+  // Negative control: a NUL escape in a harmless place still classifies
+  // nothing, so the second scan adds no hit to a command with no
+  // destructive shape.
+  it.each([
+    "echo $'a\\0b'",
+    "git status $'--short\\0'",
+    "git push $'origin\\0' main",
+    "dd if=/dev/zero $'bs=1\\0'",
+    "find / $'-name\\0' x",
+  ])("keeps %s unclassified by the floor", (command) => {
+    expect(classifyDestructiveShellFloor(command)).toEqual([]);
+  });
+
+  it("never lowers a hit the first scan found: a destructive tail after a NUL-escaped word still hits", () => {
+    const hits = classifyDestructiveShellFloor("echo $'a\\0b'; dd of=/dev/sda");
+    expect(hits.some((h) => h.severity === "critical")).toBe(true);
+  });
+});
