@@ -2,6 +2,8 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-10-02T07:10:11Z, task 3128df7a: `docs/CLI.md` (the `harness doctor` row) now says the settings-drift check skips its comparison and warns naming the file on a malformed `.last-apply` instead of aborting. `codex-adapter-parity-gaps.md`, `debug-verb-selection.md`, `evidence-ledger-trust-boundary.md` and `policy-engine-producer-wiring.md` list `docs/CLI.md` under sources and were re-verified: none makes a claim about doctor's handling of `.last-apply`, so no body text changed; re-stamped only.
+
 - 2026-10-02T06:37:19Z, task 237cc609: `docs/CLI.md` now names the six gate-opening namespaces the free-text check uses; the four docs listing it re-verified (no claim affected) and re-stamped.
 
 - 2026-10-02T06:32:28Z, task 237cc609: `docs/CLI.md` tag-injection paragraph worded exactly (trimmed values, non-whitespace after the colon, free text checked against builtin namespaces only, task/PR/branch values share namespaces); `codex-adapter-parity-gaps.md`, `debug-verb-selection.md`, `evidence-ledger-trust-boundary.md` and `policy-engine-producer-wiring.md` list it under sources and were re-verified, no body text changed. All four re-stamped.
