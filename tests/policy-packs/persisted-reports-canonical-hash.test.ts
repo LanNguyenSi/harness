@@ -235,6 +235,25 @@ describe("report files are read bounded by type and size", () => {
     expect(hashReportFile(path.join(tmp, "dangling.json"))).toMatchObject({ ok: false, reason: "unreadable" });
   });
 
+  it("noFollow refuses a symbolic link at the open, whatever it points at; the default still follows", () => {
+    const target = path.join(tmp, "real.json");
+    fs.writeFileSync(target, JSON.stringify(base()));
+    const link = path.join(tmp, "link.json");
+    fs.symlinkSync(target, link);
+    const refused = { ok: false, reason: "not-regular", detail: "a symbolic link, not a regular file" };
+    expect(readReportFileBounded(link, { noFollow: true })).toEqual(refused);
+    expect(hashReportFile(link, { noFollow: true })).toEqual(refused);
+    expect(canonicalReportHashOfFile(link, { noFollow: true })).toBeNull();
+    fs.symlinkSync(path.join(tmp, "nowhere.json"), path.join(tmp, "dangling-link.json"));
+    expect(readReportFileBounded(path.join(tmp, "dangling-link.json"), { noFollow: true })).toEqual(refused);
+    // Unchanged for every hook read: no option, or the option off, follows the link.
+    expect(readReportFileBounded(link)).toMatchObject({ ok: true });
+    expect(readReportFileBounded(link, { noFollow: false })).toMatchObject({ ok: true });
+    expect(hashReportFile(link)).toEqual({ ok: true, hash: canonicalReportHash(base()) });
+    // A regular file is read the same way with the option on.
+    expect(hashReportFile(target, { noFollow: true })).toEqual({ ok: true, hash: canonicalReportHash(base()) });
+  });
+
   it("names a JSON body that is not an object and one nested too deeply", () => {
     fs.writeFileSync(path.join(tmp, "arr.json"), "[1]");
     expect(hashReportFile(path.join(tmp, "arr.json"))).toEqual({

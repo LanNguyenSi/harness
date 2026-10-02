@@ -128,16 +128,16 @@ function readPersistedReport(filePath: string, mtimeMs: number, boundedRaw?: str
 
 /**
  * List persisted reports under `dir`, newest-first by creation time
- * (JSON `createdAt`, falling back to the filename ISO prefix, falling
- * back to mtime). Missing directory returns []. Any I/O error on a
- * single file is silently skipped; the caller falls through to the
- * ledger result.
+ * (JSON `createdAt`, then the filename ISO prefix, then mtime). Missing
+ * directory returns []; an I/O error on a single file skips it. Reads each
+ * regular file IN FULL, so it must not list the agent-writable reports
+ * directory (use {@link listPersistedReportsBoundedWithSkips}); no `src`
+ * caller remains, it stays for its tests and the pack's export surface.
  *
  * Creation time, NOT mtime, is the sort key: `harness approve
  * understanding` rewrites the report it flips, which bumps mtime and
  * made an old just-approved report sort as the freshest
- * (harness-discovery C1). mtime survives only as the last-resort
- * fallback for files that carry neither timestamp.
+ * (harness-discovery C1). mtime is the last-resort fallback.
  */
 export function listPersistedReports(dir: string): PersistedReport[] {
   let names: string[];
@@ -685,6 +685,13 @@ export type BoundedReportRead =
   | { ok: true; raw: string; mtimeMs: number }
   | { ok: false; reason: ReportFileReadFailure; detail: string };
 
+/** What `readReportFileBounded` returns for a symbolic link when `noFollow` is set. */
+const SYMLINK_REFUSED: BoundedReportRead = {
+  ok: false,
+  reason: "not-regular",
+  detail: "a symbolic link, not a regular file",
+};
+
 function errorCode(err: unknown): string {
   const code = (err as NodeJS.ErrnoException | null)?.code;
   return typeof code === "string" ? code : String(err);
@@ -704,12 +711,27 @@ function errorCode(err: unknown): string {
  * (never more than the cap plus one byte); a file that grows into that byte
  * while being read is refused too. The descriptor is always closed. Never
  * throws.
+ *
+ * `opts.noFollow` adds `O_NOFOLLOW` to the open: a path that is a symbolic
+ * link (whatever it points at, a dangling link included) is refused as
+ * not-regular by the open itself (`ELOOP`), with no earlier `lstat` for a
+ * swap to race. Off by default, so every hook read keeps following links
+ * exactly as before; `harness approve understanding` turns it on.
  */
-export function readReportFileBounded(filePath: string): BoundedReportRead {
+export function readReportFileBounded(
+  filePath: string,
+  opts: { noFollow?: boolean } = {},
+): BoundedReportRead {
   let fd: number;
   try {
-    fd = fs.openSync(filePath, fs.constants.O_RDONLY | fs.constants.O_NONBLOCK);
+    fd = fs.openSync(
+      filePath,
+      fs.constants.O_RDONLY |
+        fs.constants.O_NONBLOCK |
+        (opts.noFollow === true ? fs.constants.O_NOFOLLOW : 0),
+    );
   } catch (err) {
+    if (opts.noFollow === true && errorCode(err) === "ELOOP") return SYMLINK_REFUSED;
     return { ok: false, reason: "unreadable", detail: `could not be opened (${errorCode(err)})` };
   }
   try {
@@ -757,8 +779,11 @@ export type ReportFileHash =
  * any of these (the `detail` is its message); the gate-read scan counts such
  * a file as one that matches nothing. Never throws.
  */
-export function hashReportFile(filePath: string): ReportFileHash {
-  const read = readReportFileBounded(filePath);
+export function hashReportFile(
+  filePath: string,
+  opts: { noFollow?: boolean } = {},
+): ReportFileHash {
+  const read = readReportFileBounded(filePath, opts);
   if (!read.ok) return read;
   const parsed = safeJsonParse(read.raw);
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
@@ -772,8 +797,11 @@ export function hashReportFile(filePath: string): ReportFileHash {
 }
 
 /** Canonical hash of the report file at `filePath` ({@link hashReportFile}); null when it has none. */
-export function canonicalReportHashOfFile(filePath: string): string | null {
-  const hashed = hashReportFile(filePath);
+export function canonicalReportHashOfFile(
+  filePath: string,
+  opts: { noFollow?: boolean } = {},
+): string | null {
+  const hashed = hashReportFile(filePath, opts);
   return hashed.ok ? hashed.hash : null;
 }
 
@@ -885,8 +913,8 @@ function scanReportHashes(dir: string, wanted: ReadonlySet<string>): ReportHashS
  * fallback is consulted only when the primary fails the check, so a task
  * marker signed for another report does not hide a session marker that
  * verifies. Unchanged behaviour: a null hash on the accepted marker (no
- * report resolved, or `--force` over a report the producer could not hash:
- * too deeply nested or over the size cap) and a reports directory with no
+ * report resolved, or `--force` over a report nested too deeply to hash,
+ * never one over the size cap) and a reports directory with no
  * `*.json` entry at all both allow. A forced approval of a hashable report
  * signs its hash and is checked like any other.
  *
@@ -961,7 +989,7 @@ export interface SkippedReportEntry {
  * well, so a planted oversized or non-regular entry cannot crash or hang
  * them, and they still see it: `harness approve understanding` refuses
  * while `skipped` is not empty (it passes `refuseSymlinks`, which also
- * records a symbolic link by `lstat`, whatever it points at), and
+ * refuses a symbolic link at the open, whatever it points at), and
  * `harness gc` reports each skipped entry and leaves it in place.
  *
  * Placement: this block sits at the end of the file, and
@@ -987,23 +1015,9 @@ export function listPersistedReportsBoundedWithSkips(
   const skipped: SkippedReportEntry[] = [];
   for (const name of names.filter((n) => n.endsWith(".json"))) {
     const full = path.join(dir, name);
-    if (opts.refuseSymlinks === true) {
-      let isLink = false;
-      try {
-        isLink = fs.lstatSync(full).isSymbolicLink();
-      } catch {
-        // Gone or unreadable: the bounded read below reports it.
-      }
-      if (isLink) {
-        skipped.push({
-          filePath: full,
-          reason: "not-regular",
-          detail: "a symbolic link, not a regular file",
-        });
-        continue;
-      }
-    }
-    const read = readReportFileBounded(full);
+    // `refuseSymlinks` opens with O_NOFOLLOW, so a link is recorded as skipped
+    // by the open itself and no earlier lstat can race a swap.
+    const read = readReportFileBounded(full, { noFollow: opts.refuseSymlinks === true });
     if (!read.ok) {
       skipped.push({ filePath: full, reason: read.reason, detail: read.detail });
       continue;

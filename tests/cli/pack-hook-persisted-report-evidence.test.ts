@@ -1123,7 +1123,7 @@ describe.each(RUNTIMES)("persisted report is evidence, not authority (task 74023
     const expectedDetail = `${json.length + OVERSIZED_BYTES} bytes, over the 1048576-byte cap for hashing its content`;
     for (const force of [false, true]) {
       await expect(approveUnderstanding({ ...approveArgs, ...(force ? { force } : {}) })).rejects.toThrow(
-        new RegExp(`${reportPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}: ${expectedDetail}`),
+        new RegExp(`${JSON.stringify(reportPath).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}: ${expectedDetail}`),
       );
       expect(fs.existsSync(approvalMarkerPathFor(generatedDir, SESSION))).toBe(false);
       expect(JSON.parse(fs.readFileSync(reportPath, "utf8"))["approvalStatus"]).toBe("pending");

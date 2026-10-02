@@ -3,7 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { Command } from "commander";
-
+import { escapeForDisplay } from "../io/display-path.js";
 import { HermeticSpawnViolationError } from "../runtime/hermetic-spawn-guard.js";
 
 // Production version probe for `harness doctor`: synchronous --version
@@ -3079,7 +3079,7 @@ export function buildProgram(opts: RunOptions = {}): Command {
       if (result.unparseable.length > 0) {
         stderr(
           `gc: ${result.unparseable.length} file(s) could not be parsed and were left in place:\n` +
-            result.unparseable.map((u) => `  [${u.category}] ${u.filePath} (${u.reason})\n`).join(""),
+            result.unparseable.map((u) => `  [${u.category}] ${escapeForDisplay(u.filePath)} (${u.reason})\n`).join(""),
         );
       }
       if (result.candidates.length === 0) {
@@ -3095,7 +3095,7 @@ export function buildProgram(opts: RunOptions = {}): Command {
         `gc: ${verb} ${result.candidates.length} artifact(s) older than ${result.retentionDays}d (cutoff ${result.cutoffIso}); keeping ${result.keptCount}:\n`,
       );
       for (const c of result.candidates) {
-        stdout(`  [${c.category}] ${c.filePath} (${c.reason})\n`);
+        stdout(`  [${c.category}] ${escapeForDisplay(c.filePath)} (${c.reason})\n`);
       }
       if (!result.applied) {
         stdout(`\nDry-run; pass --apply to delete.\n`);
@@ -3104,7 +3104,7 @@ export function buildProgram(opts: RunOptions = {}): Command {
       stdout(`removed ${result.removed.length} file(s).\n`);
       if (result.failures.length > 0) {
         for (const f of result.failures) {
-          stderr(`gc: failed to remove ${f.filePath}: ${f.reason}\n`);
+          stderr(`gc: failed to remove ${escapeForDisplay(f.filePath)}: ${f.reason}\n`);
         }
         throw new HarnessExitError(
           `${result.failures.length} deletion(s) failed`,

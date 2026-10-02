@@ -9,7 +9,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   approveUnderstanding,
   rewriteReportApproved,
@@ -21,6 +21,42 @@ import {
   canonicalReportHash,
 } from "../../src/policy-packs/builtin/understanding-before-execution-runtime.js";
 import { parseManifest } from "../../src/schema/index.js";
+
+// A pass-through of the runtime module whose reader, hasher and listing a test
+// can replace for one call site, so the races that need a swap between two
+// reads of the same path (listing, validation re-read, final hash) are
+// reproducible: the real reads inside the module itself are never replaced,
+// only the ones approve makes through its import.
+const overrides = vi.hoisted(() => ({
+  read: null as null | ((filePath: string, opts?: { noFollow?: boolean }) => unknown),
+  hash: null as null | ((filePath: string, opts?: { noFollow?: boolean }) => unknown),
+  list: null as null | ((dir: string, opts?: { refuseSymlinks?: boolean }) => unknown),
+}));
+
+vi.mock("../../src/policy-packs/builtin/understanding-before-execution-runtime.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import("../../src/policy-packs/builtin/understanding-before-execution-runtime.js")
+    >();
+  return {
+    ...actual,
+    readReportFileBounded: (filePath: string, opts?: { noFollow?: boolean }) =>
+      overrides.read !== null ? overrides.read(filePath, opts) : actual.readReportFileBounded(filePath, opts),
+    hashReportFile: (filePath: string, opts?: { noFollow?: boolean }) =>
+      overrides.hash !== null ? overrides.hash(filePath, opts) : actual.hashReportFile(filePath, opts),
+    listPersistedReportsBoundedWithSkips: (dir: string, opts?: { refuseSymlinks?: boolean }) =>
+      overrides.list !== null
+        ? overrides.list(dir, opts)
+        : actual.listPersistedReportsBoundedWithSkips(dir, opts),
+  };
+});
+
+// The unmocked module, for the tests that let a call through once and fail the next.
+const actualRuntime = await vi.importActual<
+  typeof import("../../src/policy-packs/builtin/understanding-before-execution-runtime.js")
+>("../../src/policy-packs/builtin/understanding-before-execution-runtime.js");
+const realHashReportFile = actualRuntime.hashReportFile;
+const realList = actualRuntime.listPersistedReportsBoundedWithSkips;
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const MAIN_JS = path.join(REPO_ROOT, "dist", "cli", "main.js");
@@ -51,6 +87,9 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  overrides.read = null;
+  overrides.hash = null;
+  overrides.list = null;
   fs.rmSync(tmp, { recursive: true, force: true });
   for (const [k, v] of Object.entries(savedEnv)) {
     if (v === undefined) delete process.env[k];
@@ -322,4 +361,230 @@ describe("harness approve understanding (built CLI) with a planted entry", () =>
     },
     45_000,
   );
+});
+
+describe("approveUnderstanding when a report changes between its reads", () => {
+  const TOO_LARGE = {
+    ok: false as const,
+    reason: "too-large" as const,
+    detail: "2097152 bytes, over the 1048576-byte cap for hashing its content",
+  };
+
+  async function approve(
+    force: boolean,
+    ledgerCalls: string[],
+  ): ReturnType<typeof approveUnderstanding> {
+    return approveUnderstanding({
+      manifest: parseManifest({ version: 1 }),
+      session: SESSION,
+      reportsDir,
+      generatedDir,
+      now: new Date("2026-05-07T08:00:00Z"),
+      approvedBy: "test-suite",
+      ...(force ? { force: true } : {}),
+      ledgerAdd: async (sessionId, content) => {
+        ledgerCalls.push(`${sessionId}:${content}`);
+        return { ok: true };
+      },
+    });
+  }
+
+  it.each([false, true])(
+    "the validation re-read fails (swapped for an oversized file, force=%s): validation is enforced, no marker, no ledger call",
+    async (force) => {
+      const valid = writeValidReport();
+      const before = fs.readFileSync(valid, "utf8");
+      const reads: Array<{ filePath: string; noFollow: boolean | undefined }> = [];
+      overrides.read = (filePath, opts) => {
+        reads.push({ filePath, noFollow: opts?.noFollow });
+        return TOO_LARGE;
+      };
+      const ledgerCalls: string[] = [];
+
+      const result = await approve(force, ledgerCalls);
+
+      expect(reads).toEqual([{ filePath: valid, noFollow: true }]);
+      expect(result.validation).toMatchObject({ ok: false, field: "report", enforced: true });
+      expect(result.marker.ok).toBe(false);
+      expect(result.persistedReport.ok).toBe(false);
+      expect(markerFiles()).toEqual([]);
+      expect(ledgerCalls).toEqual([]);
+      expect(fs.readFileSync(valid, "utf8")).toBe(before);
+    },
+  );
+
+  it.each([
+    ["too-large", TOO_LARGE],
+    ["not-regular", { ok: false as const, reason: "not-regular" as const, detail: "not a regular file" }],
+    ["unreadable", { ok: false as const, reason: "unreadable" as const, detail: "could not be read (EIO)" }],
+    ["grew", { ok: false as const, reason: "grew" as const, detail: "grew while being read" }],
+  ])(
+    "the validation hash fails with %s: enforced under --force, no marker, no ledger call",
+    async (_reason, failure) => {
+      writeValidReport();
+      overrides.hash = () => failure;
+      const ledgerCalls: string[] = [];
+
+      const result = await approve(true, ledgerCalls);
+
+      expect(result.validation).toMatchObject({ ok: false, field: "report", enforced: true });
+      expect(markerFiles()).toEqual([]);
+      expect(ledgerCalls).toEqual([]);
+    },
+  );
+
+  it("a report swapped for an oversized file after validation is refused under --force, before any write", async () => {
+    const valid = writeValidReport();
+    const before = fs.readFileSync(valid, "utf8");
+    const hashCalls: Array<{ noFollow: boolean | undefined }> = [];
+    overrides.hash = (filePath, opts) => {
+      hashCalls.push({ noFollow: opts?.noFollow });
+      return hashCalls.length === 1 ? realHashReportFile(filePath, opts) : TOO_LARGE;
+    };
+    const ledgerCalls: string[] = [];
+
+    let thrown: unknown;
+    try {
+      await approve(true, ledgerCalls);
+    } catch (err) {
+      thrown = err;
+    }
+
+    expect(thrown).toBeInstanceOf(HarnessExitError);
+    expect((thrown as HarnessExitError).exitCode).toBe(EX_FAIL);
+    expect((thrown as HarnessExitError).message).toContain(valid);
+    expect(hashCalls).toEqual([{ noFollow: true }, { noFollow: true }]);
+    expect(markerFiles()).toEqual([]);
+    expect(ledgerCalls).toEqual([]);
+    expect(fs.readFileSync(valid, "utf8")).toBe(before);
+  });
+
+  it("--force still signs an unbound marker for a content reason (a report nested too deeply)", async () => {
+    writeValidReport();
+    overrides.hash = (_filePath, _opts) => ({
+      ok: false,
+      reason: "too-deep",
+      detail: "nested too deeply to hash its content",
+    });
+    const ledgerCalls: string[] = [];
+
+    const result = await approve(true, ledgerCalls);
+
+    expect(result.validation).toMatchObject({ ok: false, field: "report", enforced: false });
+    expect(result.marker.ok).toBe(true);
+    if (!result.marker.ok) return;
+    const marker = JSON.parse(fs.readFileSync(result.marker.filePath, "utf8")) as Record<string, unknown>;
+    expect(marker["reportContentHash"]).toBeNull();
+  });
+
+  it("a report content failure without --force is still refused", async () => {
+    writeValidReport();
+    overrides.hash = () => ({ ok: false, reason: "too-deep", detail: "nested too deeply to hash its content" });
+    const ledgerCalls: string[] = [];
+
+    const result = await approve(false, ledgerCalls);
+
+    expect(result.validation).toMatchObject({ ok: false, field: "report", enforced: true });
+    expect(markerFiles()).toEqual([]);
+  });
+
+  it("an entry planted between the two listings is refused, naming it", async () => {
+    writeValidReport();
+    const late = path.join(reportsDir, "late-planted.json");
+    const listOpts: Array<{ refuseSymlinks: boolean | undefined }> = [];
+    overrides.list = (dir, opts) => {
+      listOpts.push({ refuseSymlinks: opts?.refuseSymlinks });
+      const real = realList(dir, opts);
+      if (listOpts.length < 2) return real;
+      return {
+        reports: real.reports,
+        skipped: [{ filePath: late, reason: "too-large", detail: TOO_LARGE.detail }],
+      };
+    };
+    const ledgerCalls: string[] = [];
+
+    let thrown: unknown;
+    try {
+      await approve(false, ledgerCalls);
+    } catch (err) {
+      thrown = err;
+    }
+
+    expect(thrown).toBeInstanceOf(HarnessExitError);
+    expect((thrown as HarnessExitError).message).toContain(late);
+    expect(markerFiles()).toEqual([]);
+    expect(ledgerCalls).toEqual([]);
+  });
+
+  it("both listings refuse symbolic links", async () => {
+    writeValidReport();
+    const listOpts: Array<{ refuseSymlinks: boolean | undefined }> = [];
+    overrides.list = (dir, opts) => {
+      listOpts.push({ refuseSymlinks: opts?.refuseSymlinks });
+      return realList(dir, opts);
+    };
+
+    const result = await approve(false, []);
+
+    expect(result.marker.ok).toBe(true);
+    expect(listOpts).toEqual([{ refuseSymlinks: true }, { refuseSymlinks: true }]);
+  });
+});
+
+describe("approveUnderstanding renders a hostile file name safely", () => {
+  // ESC (OSC 52 clipboard write, a line erase), BEL, CR and LF (a forged
+  // line), DEL and a C1 control (U+009B is a one-byte CSI on some terminals).
+  const HOSTILE =
+    "\u001b]52;c;ZWNobyBwd25lZA==\u0007\u001b[2K\rmarker: OK fake\nline2\u007f\u009b.json";
+
+  function rawControlCodes(text: string): number[] {
+    return [...text]
+      .map((ch) => ch.charCodeAt(0))
+      .filter((c) => (c < 0x20 && c !== 0x0a) || (c >= 0x7f && c <= 0x9f));
+  }
+
+  it("the refusal names the entry as an escaped literal: no raw control byte, no forged line", async () => {
+    writeValidReport();
+    const planted = path.join(reportsDir, HOSTILE);
+    sparse(planted, 2 * 1024 * 1024);
+
+    let thrown: unknown;
+    try {
+      await approveUnderstanding({
+        manifest: parseManifest({ version: 1 }),
+        session: SESSION,
+        reportsDir,
+        generatedDir,
+        ledgerAdd: async () => ({ ok: true }),
+      });
+    } catch (err) {
+      thrown = err;
+    }
+
+    expect(thrown).toBeInstanceOf(HarnessExitError);
+    const message = (thrown as HarnessExitError).message;
+    expect(rawControlCodes(message)).toEqual([]);
+    expect(message).toContain("\\u001b]52;c;ZWNobyBwd25lZA==\\u0007\\u001b[2K\\rmarker: OK fake\\nline2\\u007f\\u009b.json");
+    // The LF inside the name did not start a line of its own.
+    expect(message.split("\n").some((l) => l.startsWith("line2") || l.startsWith("marker: OK"))).toBe(false);
+    expect(markerFiles()).toEqual([]);
+  });
+
+  it("the parse-error path in the no-report reason is escaped too", async () => {
+    const parseErrorsDir = path.join(tmp, "parse-errors");
+    fs.mkdirSync(parseErrorsDir, { recursive: true });
+    const hostileLog = path.join(parseErrorsDir, `${SESSION}-${HOSTILE.replace(/\.json$/, "")}.log`);
+    fs.writeFileSync(hostileLog, JSON.stringify({ sessionId: SESSION, message: "rejected" }));
+    const result = await approveUnderstanding({
+      manifest: parseManifest({ version: 1 }),
+      session: SESSION,
+      reportsDir,
+      generatedDir,
+      ledgerAdd: async () => ({ ok: true }),
+    });
+    const reason = result.persistedReport.ok ? "" : result.persistedReport.reason;
+    expect(reason).toMatch(/latest parse-error at /);
+    expect(reason).toContain("\\u001b]52;c;ZWNobyBwd25lZA==");
+    expect(rawControlCodes(reason)).toEqual([]);
+  });
 });

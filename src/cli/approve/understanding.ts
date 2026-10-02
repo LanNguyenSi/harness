@@ -18,9 +18,9 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { atomicWriteFile } from "../../io/atomic-write.js";
+import { escapeForDisplay } from "../../io/display-path.js";
 import {
   approvedLedgerTagFor,
-  canonicalReportHashOfFile,
   defaultReportsDir,
   hashReportFile,
   listPersistedReportsBoundedWithSkips,
@@ -29,6 +29,7 @@ import {
   selectReportForSession,
   type SkippedReportEntry,
   TOLERANT_FALLBACK_MAX_AGE_MS,
+  type UnhashableReportReason,
   writeApprovalMarker,
   writeTaskApprovalMarker,
 } from "../../policy-packs/builtin/understanding-before-execution-runtime.js";
@@ -583,8 +584,8 @@ export function rewriteReportApproved(
   if (raw === undefined) {
     // Bounded like every other read of this agent-writable directory: the path
     // can be swapped for an oversized file or a FIFO after the listing.
-    const read = readReportFileBounded(filePath);
-    if (!read.ok) throw new Error(`report ${filePath} ${read.detail}`);
+    const read = readReportFileBounded(filePath, { noFollow: true });
+    if (!read.ok) throw new Error(`report ${escapeForDisplay(filePath)} ${read.detail}`);
     raw = read.raw;
   }
   const parsed = JSON.parse(raw) as Record<string, unknown>;
@@ -643,6 +644,16 @@ export function dedupeTaskIds(raw: string[]): string[] {
 }
 
 /**
+ * A reason `hashReportFile` gives for a report whose CONTENT cannot be hashed
+ * (`--force` may sign a marker without a content binding over it), as opposed
+ * to one that could not be read within the bound (oversized, not a regular
+ * file, a link, unreadable, growing), which `--force` never overrides.
+ */
+function isContentReason(reason: UnhashableReportReason): boolean {
+  return reason === "too-deep" || reason === "not-json-object";
+}
+
+/**
  * The reports directory is writable by the gated agent, so `harness approve
  * understanding` lists it through the bounded reader (one `lstat`/`fstat`
  * per entry, never a read past the size cap) and refuses while any `*.json`
@@ -655,7 +666,7 @@ export function dedupeTaskIds(raw: string[]): string[] {
  */
 function refuseSkippedReports(skipped: SkippedReportEntry[], reportsDir: string): void {
   if (skipped.length === 0) return;
-  const lines = skipped.map((s) => `  ${s.filePath}: ${s.detail}`);
+  const lines = skipped.map((s) => `  ${escapeForDisplay(s.filePath)}: ${s.detail}`);
   throw new HarnessExitError(
     [
       `refusing to approve: ${skipped.length === 1 ? "an entry" : `${skipped.length} entries`} in the reports directory ` +
@@ -878,9 +889,10 @@ export async function approveUnderstanding(
     validation = { skipped: true };
   } else {
     let parsed: Record<string, unknown> | null = null;
-    // Bounded read: the listing above saw the file within the cap, but the
-    // path can be swapped for an oversized file or a FIFO since.
-    const reread = readReportFileBounded(latest.filePath);
+    // Bounded read, not following a symbolic link: the listing above saw the
+    // file within the cap, but the path can be swapped for an oversized file,
+    // a FIFO or a link since.
+    const reread = readReportFileBounded(latest.filePath, { noFollow: true });
     if (reread.ok) {
       try {
         parsed = JSON.parse(reread.raw) as Record<string, unknown>;
@@ -889,11 +901,14 @@ export async function approveUnderstanding(
       }
     }
     if (!reread.ok) {
+      // Enforced even under --force: a report that cannot be read within the
+      // bound has no content to bind, and --force never signs a marker over
+      // one (it overrides content validation only).
       validation = {
         ok: false,
         field: "report",
         reason: `${reread.detail}, so the approval could not bind it`,
-        enforced: !opts.force,
+        enforced: true,
       };
     } else if (!parsed) {
       validation = { skipped: true };
@@ -903,17 +918,19 @@ export async function approveUnderstanding(
       // A report the canonical hash cannot cover (larger than the size cap
       // the gate reads, not a regular file, nested too deeply) would sign a
       // marker whose `reportContentHash` is null, i.e. one the gate-read
-      // content check never applies to, so it fails validation instead
-      // (`--force` still overrides, as for any other validation failure).
-      // `hashReportFile` reads the file exactly as the gate-read scan does.
+      // content check never applies to, so it fails validation instead.
+      // `--force` overrides only a content reason (too deep, not a JSON
+      // object); a size, type or read failure is enforced whatever the flag
+      // says. `hashReportFile` reads the file exactly as the gate-read scan
+      // does, except that it does not follow a symbolic link.
       if (validation.ok) {
-        const hashed = hashReportFile(latest.filePath);
+        const hashed = hashReportFile(latest.filePath, { noFollow: true });
         if (!hashed.ok) {
           validation = {
             ok: false,
             field: "report",
             reason: `${hashed.detail}, so the approval could not bind it`,
-            enforced: !opts.force,
+            enforced: !isContentReason(hashed.reason) || !opts.force,
           };
         }
       }
@@ -1015,11 +1032,29 @@ export async function approveUnderstanding(
   // time (`verifyApprovedReportHash`, task fa423e9b) and refuse the marker
   // when none is left. null when no persisted report was resolved or it
   // cannot be read as a JSON object (validation skipped above, nothing to
-  // bind), or when it cannot be hashed: larger than the size cap, not a
-  // regular file, nested too deeply (reachable only under --force: the
-  // validation above refuses such a report otherwise).
-  const reportContentHash: string | null =
-    latest ? canonicalReportHashOfFile(latest.filePath) : null;
+  // bind), or when its content cannot be hashed: nested too deeply or not a
+  // JSON object (reachable only under --force: the validation above refuses
+  // the first otherwise). A report larger than the size cap, not a regular
+  // file or a link never gets here: the validation above enforces that
+  // refusal under --force too, and the check below repeats it for a swap
+  // since.
+  let reportContentHash: string | null = null;
+  if (latest) {
+    const hashed = hashReportFile(latest.filePath, { noFollow: true });
+    if (hashed.ok) {
+      reportContentHash = hashed.hash;
+    } else if (!isContentReason(hashed.reason)) {
+      // Swapped for an oversized file, a FIFO or a link after the validation
+      // above read it: refuse before any marker, ledger tag or report flip is
+      // written, `--force` or not (the validation above enforces the same).
+      throw new HarnessExitError(
+        `refusing to approve: report ${escapeForDisplay(latest.filePath)} ${hashed.detail} ` +
+          "since it was validated, so the approval cannot bind it. No approval marker, " +
+          "ledger tag or report change was written; re-run `harness approve understanding`.",
+        EX_FAIL,
+      );
+    }
+  }
 
   // Write the canonical approval marker first. The gate consults this
   // file (not the ledger) since agent-tasks/88ca4bb3 closed the self-
@@ -1129,7 +1164,7 @@ export async function approveUnderstanding(
     if (reports.length === 0) {
       reason = `no reports found at ${reportsDir}`;
       if (latestParseError) {
-        reason += `; latest parse-error at ${latestParseError.filePath}: ${latestParseError.summary}`;
+        reason += `; latest parse-error at ${escapeForDisplay(latestParseError.filePath)}: ${latestParseError.summary}`;
       }
     } else if (selection.staleRejected.length > 0) {
       // A sessionId-less pending report existed but exceeded the
@@ -1144,12 +1179,12 @@ export async function approveUnderstanding(
       const maxMin = Math.round(TOLERANT_FALLBACK_MAX_AGE_MS / 60_000);
       reason =
         `no report matched session_id=${sessionId}; rejected ${selection.staleRejected.length} ` +
-        `stale sessionId-less candidate(s) for age (newest: ${newest.filePath}, ` +
+        `stale sessionId-less candidate(s) for age (newest: ${escapeForDisplay(newest.filePath)}, ` +
         `created ${newest.createdAt ?? "<unknown>"}, age ${age} > max ${maxMin}m). ` +
         `If the agent just wrote an Understanding Report, the Stop hook likely failed to ` +
         `persist it; check ${parseErrorsDir}`;
       if (latestParseError) {
-        reason += `; latest parse-error at ${latestParseError.filePath}: ${latestParseError.summary}`;
+        reason += `; latest parse-error at ${escapeForDisplay(latestParseError.filePath)}: ${latestParseError.summary}`;
       }
     } else {
       reason = `no report matched session_id=${sessionId} (${reports.length} report(s) for other sessions)`;
@@ -1185,7 +1220,7 @@ export async function approveUnderstanding(
     } catch (err) {
       persistedReport = {
         ok: false,
-        reason: `failed to rewrite ${latest.filePath}: ${(err as Error).message}`,
+        reason: `failed to rewrite ${escapeForDisplay(latest.filePath)}: ${(err as Error).message}`,
       };
     }
   }
