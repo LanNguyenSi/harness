@@ -278,6 +278,15 @@ describe("codex install: a harness-commented hook table with no block marker aro
     expect(refusal().message).toContain("directly above the hook table [[hooks.Stop]]");
   });
 
+  it("a config the parser cannot read before the comment refuses through the parse check, not as an orphan table", () => {
+    // The comment line counts only at the top level of a readable prefix, as
+    // every marker line does.
+    write([...OPERATOR_STOP, "broken = ", "", ...ORPHAN, ""]);
+    const { message } = refusal();
+    expect(message).toContain("the TOML parser used by harness could not read this file");
+    expect(message).not.toContain("directly above the hook table");
+  });
+
   const stays: Array<[string, string[]]> = [
     [
       "marker text in a multi-line string line above a hook table",
