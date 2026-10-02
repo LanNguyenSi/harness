@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -708,6 +709,112 @@ describe("gc - permission-mode observations (task 8f637efd review round 2 F5)", 
   it("reports permissionModeObservationsDir in the result", () => {
     const r = run();
     expect(r.permissionModeObservationsDir).toBe(permissionModeObservationsDir);
+  });
+});
+
+describe("gc - planted report entries (agent-tasks 1ccfe922)", () => {
+  const OVER_CAP = " ".repeat(2 * 1024 * 1024);
+  // Past anything a read-in-full survives; sparse, so it costs no disk.
+  const SPARSE_BYTES = 400 * 1024 * 1024;
+
+  function sparse(file: string): void {
+    const fd = fs.openSync(file, "w");
+    try {
+      fs.ftruncateSync(fd, SPARSE_BYTES);
+    } finally {
+      fs.closeSync(fd);
+    }
+  }
+
+  const plants: Array<{ name: string; plant: () => string; reason: RegExp }> = [
+    {
+      name: "a 2 MiB terminal report, aged past the window",
+      plant: () => {
+        const p = path.join(reportsDir, "zz-oversized.json");
+        fs.writeFileSync(
+          p,
+          JSON.stringify({ approvalStatus: "approved", createdAt: isoDaysAgo(90) }) + OVER_CAP,
+        );
+        const then = new Date(NOW.getTime() - 90 * DAY_MS);
+        fs.utimesSync(p, then, then);
+        return p;
+      },
+      reason: /over the \d+-byte cap/,
+    },
+    {
+      name: "a sparse 400 MiB file",
+      plant: () => {
+        const p = path.join(reportsDir, "zz-huge.json");
+        sparse(p);
+        return p;
+      },
+      reason: /over the \d+-byte cap/,
+    },
+    {
+      name: "a FIFO",
+      plant: () => {
+        const p = path.join(reportsDir, "zz-fifo.json");
+        execFileSync("mkfifo", [p]);
+        return p;
+      },
+      reason: /not a regular file/,
+    },
+    {
+      name: "a symlink to an outside sparse 400 MiB file",
+      plant: () => {
+        const target = path.join(tmp, "outside-huge");
+        sparse(target);
+        const p = path.join(reportsDir, "zz-link.json");
+        fs.symlinkSync(target, p);
+        return p;
+      },
+      reason: /over the \d+-byte cap/,
+    },
+    {
+      name: "a symlink to an outside FIFO",
+      plant: () => {
+        const target = path.join(tmp, "outside-pipe");
+        execFileSync("mkfifo", [target]);
+        const p = path.join(reportsDir, "zz-link-fifo.json");
+        fs.symlinkSync(target, p);
+        return p;
+      },
+      reason: /not a regular file/,
+    },
+  ];
+
+  it.each(plants)(
+    "reports $name as unparseable without reading it, and --apply leaves it in place",
+    ({ plant, reason }) => {
+      const old = writeReport("old-approved.json", {
+        approvalStatus: "approved",
+        createdAt: isoDaysAgo(40),
+      });
+      const planted = plant();
+
+      const started = Date.now();
+      const dry = run();
+      const applied = run({ apply: true });
+      const elapsedMs = Date.now() - started;
+
+      expect(elapsedMs).toBeLessThan(5_000);
+      for (const r of [dry, applied]) {
+        const entry = r.unparseable.find((u) => u.filePath === planted);
+        expect(entry, "the planted entry is reported").toBeDefined();
+        expect(entry?.category).toBe("report");
+        expect(entry?.reason).toMatch(reason);
+        expect(r.candidates.some((c) => c.filePath === planted)).toBe(false);
+      }
+      expect(dry.candidates.map((c) => c.filePath)).toEqual([old]);
+      expect(applied.removed).toEqual([old]);
+      expect(() => fs.lstatSync(planted)).not.toThrow();
+    },
+    15_000,
+  );
+
+  it("counts a planted entry among the kept artifacts", () => {
+    execFileSync("mkfifo", [path.join(reportsDir, "zz-fifo.json")]);
+    expect(run().keptCount).toBe(1);
   });
 });
 

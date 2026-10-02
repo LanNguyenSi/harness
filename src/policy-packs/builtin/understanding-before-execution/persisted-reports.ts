@@ -957,9 +957,12 @@ export interface SkippedReportEntry {
  *
  * A caller that must not let the selection fall back to an older report when
  * a newer one is unreadable (the auto-approval precondition) declines when
- * `skipped` is not empty. The operator commands (`harness approve
- * understanding`, `harness gc`) keep the unbounded {@link listPersistedReports}
- * on purpose: they must still see an oversized report to refuse or age it.
+ * `skipped` is not empty. The operator commands read through this listing as
+ * well, so a planted oversized or non-regular entry cannot crash or hang
+ * them, and they still see it: `harness approve understanding` refuses
+ * while `skipped` is not empty (it passes `refuseSymlinks`, which also
+ * records a symbolic link by `lstat`, whatever it points at), and
+ * `harness gc` reports each skipped entry and leaves it in place.
  *
  * Placement: this block sits at the end of the file, and
  * {@link readPersistedReport} takes the already-read text (`boundedRaw`), so
@@ -967,7 +970,10 @@ export interface SkippedReportEntry {
  * docs/decisions/2026-08-27-ug-auto-mode-approval.md cites in this file stay
  * put (tests/decisions-citations-resolve.test.ts pins them).
  */
-export function listPersistedReportsBoundedWithSkips(dir: string): {
+export function listPersistedReportsBoundedWithSkips(
+  dir: string,
+  opts: { refuseSymlinks?: boolean } = {},
+): {
   reports: PersistedReport[];
   skipped: SkippedReportEntry[];
 } {
@@ -981,6 +987,22 @@ export function listPersistedReportsBoundedWithSkips(dir: string): {
   const skipped: SkippedReportEntry[] = [];
   for (const name of names.filter((n) => n.endsWith(".json"))) {
     const full = path.join(dir, name);
+    if (opts.refuseSymlinks === true) {
+      let isLink = false;
+      try {
+        isLink = fs.lstatSync(full).isSymbolicLink();
+      } catch {
+        // Gone or unreadable: the bounded read below reports it.
+      }
+      if (isLink) {
+        skipped.push({
+          filePath: full,
+          reason: "not-regular",
+          detail: "a symbolic link, not a regular file",
+        });
+        continue;
+      }
+    }
     const read = readReportFileBounded(full);
     if (!read.ok) {
       skipped.push({ filePath: full, reason: read.reason, detail: read.detail });

@@ -23,9 +23,11 @@ import {
   canonicalReportHashOfFile,
   defaultReportsDir,
   hashReportFile,
-  listPersistedReports, readReportFileBounded,
+  listPersistedReportsBoundedWithSkips,
+  readReportFileBounded,
   readActiveClaim,
   selectReportForSession,
+  type SkippedReportEntry,
   TOLERANT_FALLBACK_MAX_AGE_MS,
   writeApprovalMarker,
   writeTaskApprovalMarker,
@@ -567,7 +569,8 @@ export function validatePersistedReport(parsed: Record<string, unknown>): Valida
  * CONSUMES the report it used through the identical rewrite this CLI performs
  * (ADR Option A condition 5). `boundedRaw`: the text that path already read
  * through the bounded reader, so the consume never re-reads the agent-writable
- * path (a retargeted symlink); `harness approve understanding` reads by path.
+ * path (a retargeted symlink); `harness approve understanding` reads by path
+ * through the same bounded reader.
  */
 export function rewriteReportApproved(
   filePath: string,
@@ -576,7 +579,14 @@ export function rewriteReportApproved(
   sessionId: string,
   boundedRaw?: string,
 ): { previousStatus: string | null; sessionIdStamped: boolean } {
-  const raw = boundedRaw ?? fs.readFileSync(filePath, "utf8");
+  let raw = boundedRaw;
+  if (raw === undefined) {
+    // Bounded like every other read of this agent-writable directory: the path
+    // can be swapped for an oversized file or a FIFO after the listing.
+    const read = readReportFileBounded(filePath);
+    if (!read.ok) throw new Error(`report ${filePath} ${read.detail}`);
+    raw = read.raw;
+  }
   const parsed = JSON.parse(raw) as Record<string, unknown>;
   const previousStatus =
     typeof parsed["approvalStatus"] === "string" ? (parsed["approvalStatus"] as string) : null;
@@ -632,6 +642,34 @@ export function dedupeTaskIds(raw: string[]): string[] {
   return out;
 }
 
+/**
+ * The reports directory is writable by the gated agent, so `harness approve
+ * understanding` lists it through the bounded reader (one `lstat`/`fstat`
+ * per entry, never a read past the size cap) and refuses while any `*.json`
+ * entry cannot be read as a report: oversized, a FIFO or other non-regular
+ * file, a symbolic link, unreadable, or growing. Refusing, rather than
+ * leaving the entry out, keeps the approval from binding an older report
+ * while a newer one is hidden from it. Thrown before any side effect, so
+ * no marker, ledger tag or report flip is written; `--force` does not
+ * override it (it overrides report content validation only).
+ */
+function refuseSkippedReports(skipped: SkippedReportEntry[], reportsDir: string): void {
+  if (skipped.length === 0) return;
+  const lines = skipped.map((s) => `  ${s.filePath}: ${s.detail}`);
+  throw new HarnessExitError(
+    [
+      `refusing to approve: ${skipped.length === 1 ? "an entry" : `${skipped.length} entries`} in the reports directory ` +
+        `cannot be read as a report, so approval cannot tell which report it would bind:`,
+      ...lines,
+      "",
+      `Remove or move ${skipped.length === 1 ? "that file" : "those files"} out of ${reportsDir}, then re-run ` +
+        "`harness approve understanding`. No approval marker, ledger tag or report change was written.",
+      "(`harness gc` lists such entries too and leaves them in place.)",
+    ].join("\n"),
+    EX_FAIL,
+  );
+}
+
 export async function approveUnderstanding(
   opts: ApproveUnderstandingOptions = {},
 ): Promise<ApproveUnderstandingResult> {
@@ -677,6 +715,12 @@ export async function approveUnderstanding(
   const reportsDir =
     opts.reportsDir ??
     defaultReportsDir(path.dirname(resolvePaths(opts).base));
+  // Refuse a planted entry before anything else: the session-id fallback
+  // below and the report lookup further down both list this directory.
+  refuseSkippedReports(
+    listPersistedReportsBoundedWithSkips(reportsDir, { refuseSymlinks: true }).skipped,
+    reportsDir,
+  );
   const resolved = resolveApprovalSessionId({
     session: opts.session,
     generatedDir,
@@ -694,7 +738,9 @@ export async function approveUnderstanding(
     // the loud newest-report warning the CLI prints, which names the report
     // file so the operator can verify before trusting the marker.
     newestReportFallback: () => {
-      const newest = listPersistedReports(reportsDir).find(
+      const newest = listPersistedReportsBoundedWithSkips(reportsDir, {
+        refuseSymlinks: true,
+      }).reports.find(
         (r) => r.sessionId !== null && r.approvalStatus === "pending",
       );
       if (newest && newest.sessionId !== null) {
@@ -816,7 +862,11 @@ export async function approveUnderstanding(
   // weeks-old sessionId-less leftover from being adopted, validated,
   // and stamped as if it were the live session's report when the
   // producer Stop hook silently failed (harness-discovery C1).
-  const reports = listPersistedReports(reportsDir);
+  // Listed again here (the stdin capture above may have written a report);
+  // a planted entry that appeared since the first listing is refused too.
+  const listing = listPersistedReportsBoundedWithSkips(reportsDir, { refuseSymlinks: true });
+  refuseSkippedReports(listing.skipped, reportsDir);
+  const reports = listing.reports;
   const selection = selectReportForSession(reports, sessionId, {
     tolerantFallback: "uncompleted",
     maxFallbackAgeMs: TOLERANT_FALLBACK_MAX_AGE_MS,
@@ -828,15 +878,24 @@ export async function approveUnderstanding(
     validation = { skipped: true };
   } else {
     let parsed: Record<string, unknown> | null = null;
-    try {
-      parsed = JSON.parse(fs.readFileSync(latest.filePath, "utf8")) as Record<
-        string,
-        unknown
-      >;
-    } catch {
-      parsed = null;
+    // Bounded read: the listing above saw the file within the cap, but the
+    // path can be swapped for an oversized file or a FIFO since.
+    const reread = readReportFileBounded(latest.filePath);
+    if (reread.ok) {
+      try {
+        parsed = JSON.parse(reread.raw) as Record<string, unknown>;
+      } catch {
+        parsed = null;
+      }
     }
-    if (!parsed) {
+    if (!reread.ok) {
+      validation = {
+        ok: false,
+        field: "report",
+        reason: `${reread.detail}, so the approval could not bind it`,
+        enforced: !opts.force,
+      };
+    } else if (!parsed) {
       validation = { skipped: true };
     } else {
       const v = validatePersistedReport(parsed);
