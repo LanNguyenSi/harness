@@ -852,7 +852,7 @@ describe("codex install: the no-END refusal guidance leads to a correct install 
     });
   }
 
-  it("a marker mentioned inside a value (not a harness comment line) keeps both fixes, and following the END fix installs", () => {
+  it("a marker mentioned inside a value (not a harness comment line) offers only the END fix, and following it installs", () => {
     const withValue = [
       CODEX_MANAGED_BEGIN,
       GENERATED,
@@ -865,7 +865,11 @@ describe("codex install: the no-END refusal guidance leads to a correct install 
     ];
     const config = write(withValue);
     const { message } = refusal();
-    expect(message).toContain(`Add a '${CODEX_MANAGED_END}' marker line right after the last harness hook table (before [mcp_servers.docs]), or move [mcp_servers.docs] below the last harness hook table`);
+    // [mcp_servers.docs] already sits below the last harness hook table, so
+    // moving it there is not offered.
+    expect(message).toContain(`Add a '${CODEX_MANAGED_END}' marker line right after the last harness hook table (before [mcp_servers.docs]), then re-run`);
+    expect(message).not.toContain("below the last harness hook table");
+    expect(message).not.toContain(" or move ");
     expect(message).not.toContain(TOKEN);
     expect(fs.readFileSync(codexConfig, "utf8")).toBe(config);
 
@@ -878,11 +882,12 @@ describe("codex install: the no-END refusal guidance leads to a correct install 
     expect(endLines(p.nextContent)).toBe(1);
   });
 
-  it("a harness comment line above the named table keeps both fixes when no harness table follows it", () => {
+  it("a harness comment line above the named table offers only the END fix when no harness table follows it", () => {
     write([CODEX_MANAGED_BEGIN, GENERATED, ...HARNESS_A, "# harness hook: stale (budget_ms=1)", ...DOCS_TABLE, ""]);
     const { message } = refusal();
     expect(message).toContain("has a foreign table ([mcp_servers.docs]) below harness-owned content");
-    expect(message).toContain(`Add a '${CODEX_MANAGED_END}' marker line right after the last harness hook table (before [mcp_servers.docs]), or move`);
+    expect(message).toContain(`Add a '${CODEX_MANAGED_END}' marker line right after the last harness hook table (before [mcp_servers.docs]), then re-run`);
+    expect(message).not.toContain("below the last harness hook table");
   });
 
   it("a harness comment line above the named table does not count as a table following it: the END fix stays offered when only an operator hook table follows", () => {
@@ -897,7 +902,8 @@ describe("codex install: the no-END refusal guidance leads to a correct install 
       "",
     ]);
     const { message } = refusal();
-    expect(message).toContain(`Add a '${CODEX_MANAGED_END}' marker line right after the last harness hook table (before [mcp_servers.docs]), or move`);
+    expect(message).toContain(`Add a '${CODEX_MANAGED_END}' marker line right after the last harness hook table (before [mcp_servers.docs]), then re-run`);
+    expect(message).not.toContain("below the last harness hook table");
     expect(message).not.toContain(TOKEN);
   });
 
@@ -913,7 +919,8 @@ describe("codex install: the no-END refusal guidance leads to a correct install 
         "",
       ]);
       const { message } = refusal();
-      expect(message).toContain(`add a '${CODEX_MANAGED_END}' marker line right after the last harness hook table (before [[ hooks.Stop ]]), or move`);
+      expect(message).toContain(`add a '${CODEX_MANAGED_END}' marker line right after the last harness hook table (before [[ hooks.Stop ]]), then re-run`);
+      expect(message).not.toContain("below the last harness hook table");
       expect(message).not.toContain(TOKEN);
     });
   }
