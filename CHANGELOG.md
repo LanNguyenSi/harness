@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
-- Publish workflows now install npm with `npm install -g npm@^11.5.1` (the documented trusted-publishing floor) instead of the floating `npm@11`, and the retry loop's "reached the registry despite a non-zero publish exit" branch now probes `npm view <pkg>@<version> dist.attestations` and fails with an error when the attestation is empty, so a partially completed publish is no longer announced green. CI only; no package code change.
+- Publish workflows now install npm with `npm install -g npm@^11.5.1` (the documented trusted-publishing floor) instead of the floating `npm@11`, and the retry loop's two success-on-registry exits (the "already on the registry" idempotency check and the "reached the registry despite a non-zero publish exit" branch) now probe `npm view <pkg>@<version> dist.attestations` and fail with an error when the attestation is empty (or when the probe itself fails), so a partially completed publish is no longer announced green. CI only; no package code change.
 
 ### Upgrade notes
 
