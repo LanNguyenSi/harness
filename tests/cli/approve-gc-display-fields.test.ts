@@ -118,4 +118,74 @@ describe("approve/gc display fields (built CLI)", () => {
     expect(out).toContain(kind === "future" ? "minutes in the future" : "not a valid instant");
     expect(fs.existsSync(record)).toBe(true); // Dry-run remains read-only.
   });
+  it.each([true, false])("escapes a successful ledger tag (guessed=%s) while storing the raw identity", (guessed) => {
+    report({ sessionId: HOSTILE });
+    const server = path.join(root, "ledger.cjs");
+    const receipt = path.join(root, "receipt.json");
+    fs.writeFileSync(server, `const fs = require('node:fs'); let buffer = '';
+process.stdin.setEncoding('utf8');
+process.stdin.on('data', chunk => {
+  buffer += chunk; let end;
+  while ((end = buffer.indexOf('\\n')) >= 0) {
+    const message = JSON.parse(buffer.slice(0, end)); buffer = buffer.slice(end + 1);
+    if (message.id === undefined) continue;
+    if (message.method === 'tools/call') fs.writeFileSync(process.env.RECEIPT, JSON.stringify(message.params.arguments));
+    process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: message.id, result: {} }) + '\\n');
+  }
+});`);
+    fs.writeFileSync(config, JSON.stringify({ version: 1, tools: { mcp: [{ name: "grounding-mcp", command: [process.execPath, server], env: { RECEIPT: receipt } }] } }));
+    const out = run("approve", guessed, HOSTILE);
+    expect(out).toContain(`ledger:  ✓ wrote ${escapeForDisplay(`understanding-approved:${HOSTILE}`)}`);
+    const saved = JSON.parse(fs.readFileSync(receipt, "utf8"));
+    expect(saved.sessionId).toBe(HOSTILE);
+    expect(saved.content).toBe(`understanding-approved:${HOSTILE}`);
+    expect(fs.existsSync(path.join(root, "harness.generated/.approvals", HOSTILE))).toBe(true);
+  });
+
+  it.each(["overlong", "traversal"])("escapes a %s marker-write failure without writing a marker", (kind) => {
+    const session = kind === "overlong" ? "x".repeat(260) + HOSTILE : "../" + HOSTILE;
+    const file = report({ sessionId: session });
+    const out = run("approve", true);
+    expect(out).toContain("marker:  ✗ FAILED (");
+    expect(out).toContain(kind === "overlong" ? "ENAMETOOLONG" : "sessionId");
+    expect(JSON.parse(fs.readFileSync(file, "utf8")).sessionId).toBe(session);
+    const approvals = path.join(root, "harness.generated/.approvals");
+    expect(fs.existsSync(approvals) ? fs.readdirSync(approvals) : []).toEqual([]);
+  });
+
+  it("escapes an unreadable in-flight pathname and retains the record", () => {
+    const dir = path.join(root, "harness.generated/.inflight", HOSTILE);
+    fs.mkdirSync(dir, { recursive: true });
+    const record = path.join(dir, "agent");
+    fs.writeFileSync(record, JSON.stringify({ approvedAt: HOSTILE }));
+    fs.chmodSync(record, 0);
+    try {
+      const out = run("gc");
+      expect(out).toContain(`could not read ${escapeForDisplay(record)}`);
+      expect(fs.existsSync(record)).toBe(true);
+    } finally { fs.chmodSync(record, 0o600); }
+  });
+
+  it("escapes an imported delegation diagnostic and retains the record", () => {
+    const dir = path.join(root, "harness.generated/.delegations");
+    fs.mkdirSync(dir, { recursive: true });
+    const record = path.join(dir, SESSION);
+    fs.writeFileSync(record, JSON.stringify({ approvedBy: HOSTILE.replaceAll(";", "") }));
+    const out = run("gc");
+    expect(out).toContain("unrecognized delegation segment");
+    expect(out).toContain("could not be parsed and were left in place");
+    expect(fs.existsSync(record)).toBe(true);
+  });
+
+  it("escapes an invalid delegation expiry without deleting the record", () => {
+    const dir = path.join(root, "harness.generated/.delegations");
+    fs.mkdirSync(dir, { recursive: true });
+    const record = path.join(dir, SESSION);
+    const expires = HOSTILE.replaceAll(";", "");
+    fs.writeFileSync(record, JSON.stringify({ approvedBy: `delegated:parent;cwd=-;task=-;expires=${expires}` }));
+    const out = run("gc");
+    expect(out).toContain("not an ISO-8601 instant");
+    expect(fs.existsSync(record)).toBe(true);
+  });
+
 });

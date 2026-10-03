@@ -1845,7 +1845,7 @@ export function buildProgram(opts: RunOptions = {}): Command {
         if (result.marker.ok) {
           lines.push(`marker:  ✓ ${escapeForDisplay(result.marker.filePath)} (canonical gate signal)`);
         } else {
-          lines.push(`marker:  ✗ FAILED (${result.marker.reason})`);
+          lines.push(`marker:  ✗ FAILED (${escapeForDisplay(result.marker.reason)})`);
           lines.push(
             "  the gate WILL block the next tool call until the marker exists.",
           );
@@ -1873,7 +1873,7 @@ export function buildProgram(opts: RunOptions = {}): Command {
           );
         }
         if (result.ledger.ok) {
-          lines.push(`ledger:  ✓ wrote ${result.ledger.tag} (audit only)`);
+          lines.push(`ledger:  ✓ wrote ${escapeForDisplay(result.ledger.tag)} (audit only)`);
         } else {
           lines.push(`ledger:  ⚠ skipped (${result.ledger.reason ?? "unknown"}) (audit only)`);
         }

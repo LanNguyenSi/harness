@@ -241,7 +241,7 @@ function readJsonRecordOrUnparseable(
 ): { ok: true; body: Record<string, unknown> } | { ok: false; reason: string } {
   const read = readRegularFileRejectingSymlink(filePath);
   if (read.kind !== "ok") {
-    return { ok: false, reason: `could not read ${filePath} (${read.kind})` };
+    return { ok: false, reason: `could not read ${escapeForDisplay(filePath)} (${read.kind})` };
   }
   const parsed = safeJsonParse(read.content);
   if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
@@ -271,13 +271,13 @@ function readDelegationStatus(filePath: string, cutoffMs: number, nowMs: number)
   }
   const segments = parseDelegationApprovedBy(read.body["approvedBy"]);
   if (!segments.ok) {
-    return { kind: "unparseable", reason: segments.reason };
+    return { kind: "unparseable", reason: escapeForDisplay(segments.reason) };
   }
   const expiresMs = Date.parse(segments.value.expiresAt);
   if (!Number.isFinite(expiresMs)) {
     return {
       kind: "unparseable",
-      reason: `expires segment is not a valid instant: ${JSON.stringify(segments.value.expiresAt)}`,
+      reason: `expires segment is not a valid instant: ${escapeForDisplay(segments.value.expiresAt)}`,
     };
   }
   // The expiry comparison itself: mutation probe M1 skips this and treats
