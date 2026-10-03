@@ -62,6 +62,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { approveUnderstanding } from "../../src/cli/approve/understanding.js";
+import { EX_FAIL, HarnessExitError } from "../../src/cli/exit-codes.js";
 import { runPackHookCodexPreToolUseCli } from "../../src/cli/pack/hook-codex-pre-tool-use.js";
 import { runPackHookPreToolUseCli } from "../../src/cli/pack/hook-pre-tool-use.js";
 import { runPackHookSubagentStartCli } from "../../src/cli/pack/hook-subagent-start.js";
@@ -77,6 +78,10 @@ import {
   writeApprovalMarker,
   writeTaskApprovalMarker,
 } from "../../src/policy-packs/builtin/understanding-before-execution-runtime.js";
+import {
+  MAX_HASH_SCAN_BYTES,
+  MIN_SCAN_ENTRY_COST_BYTES,
+} from "../../src/policy-packs/builtin/understanding-before-execution/persisted-reports.js";
 import { rotateSigningKey, sha256Hex } from "../../src/runtime/approval-signing.js";
 import { parseManifest, type Manifest } from "../../src/schema/index.js";
 
@@ -1073,6 +1078,235 @@ describe.each(RUNTIMES)("persisted report is evidence, not authority (task 74023
   // refused marker and on the no-marker path reads through the same bounded
   // reader (pinned in tests/cli/pack-hook-pre-tool-use-subprocess.test.ts).
   const OVERSIZED_BYTES = 2 * MAX_HASHED_REPORT_BYTES;
+
+  // The hash scan has a total budget (MAX_HASH_SCAN_BYTES) next to the
+  // per-file cap: the cap bounds one file, not their number. Past the budget
+  // without a match the check fails closed with the mismatch reason. The scan
+  // reads the newest file (descending name order) first, so the approved
+  // report is found early in the usual case. Every entry is charged at least
+  // MIN_SCAN_ENTRY_COST_BYTES whatever its read returned, so entries that read
+  // nothing (tiny files, directories named *.json, files over the cap) spend
+  // the budget too and the entry count is bounded.
+  const PAD_FILE_BYTES = MAX_HASHED_REPORT_BYTES - 1024;
+  const padFileCount = Math.ceil(MAX_HASH_SCAN_BYTES / PAD_FILE_BYTES) + 1;
+
+  /** Plant `count` valid report-shaped files just under the per-file cap, named to sort newer than r1.json. */
+  function plantPadFiles(reportsDir: string, count: number, prefix = "z-pad-"): void {
+    const pad = " ".repeat(PAD_FILE_BYTES - 40);
+    for (let i = 0; i < count; i++) {
+      fs.writeFileSync(
+        path.join(reportsDir, `${prefix}${String(i).padStart(3, "0")}.json`),
+        `{"filler":${i}}${pad}`,
+      );
+    }
+  }
+
+  it("scan budget: the approved report older than more report data than the budget covers denies with the mismatch reason (fail closed)", async () => {
+    const generatedDir = path.join(tmp, "harness.generated");
+    const reportsDir = path.join(tmp, "reports");
+    await approveRealFlow(generatedDir, reportsDir);
+    // Control: untouched directory allows.
+    expect((await rt.run({ generatedDir, reportsDir })).blocked).toBe(false);
+    plantPadFiles(reportsDir, padFileCount);
+    const out = await rt.run({ generatedDir, reportsDir });
+    expect(out.blocked).toBe(true);
+    expect(out.detail).toMatch(MISMATCH("session"));
+    expect(out.detail).toMatch(/more report data than the gate-read scan budget covers/);
+  });
+
+  it("scan budget: just under the budget the same directory still allows", async () => {
+    const generatedDir = path.join(tmp, "harness.generated");
+    const reportsDir = path.join(tmp, "reports");
+    await approveRealFlow(generatedDir, reportsDir);
+    plantPadFiles(reportsDir, Math.floor(MAX_HASH_SCAN_BYTES / PAD_FILE_BYTES) - 1);
+    const out = await rt.run({ generatedDir, reportsDir });
+    expect(out.blocked).toBe(false);
+    expect(out.source).toBe("marker");
+  });
+
+  it("scan budget: the approved report is the newest by name, so it is found first however much other report data follows", async () => {
+    const generatedDir = path.join(tmp, "harness.generated");
+    const reportsDir = path.join(tmp, "reports");
+    const reportPath = await approveRealFlow(generatedDir, reportsDir);
+    fs.renameSync(reportPath, path.join(reportsDir, "zzz-approved.json"));
+    plantPadFiles(reportsDir, padFileCount);
+    const out = await rt.run({ generatedDir, reportsDir });
+    expect(out.blocked).toBe(false);
+    expect(out.source).toBe("marker");
+  });
+
+  it("scan budget: a large realistic directory (1000 reports of a few KiB) with the approved report the oldest still allows", async () => {
+    const generatedDir = path.join(tmp, "harness.generated");
+    const reportsDir = path.join(tmp, "reports");
+    const reportPath = await approveRealFlow(generatedDir, reportsDir);
+    fs.renameSync(reportPath, path.join(reportsDir, "0000-approved.json"));
+    for (let i = 1; i <= 1000; i++) {
+      const para = `Paragraph of report ${i}: ${"the understanding the operator reviewed ".repeat(8)}`;
+      fs.writeFileSync(
+        path.join(reportsDir, `2026-01-01T00-00-00-${String(i).padStart(4, "0")}.json`),
+        JSON.stringify(
+          {
+            sessionId: `sess-${i}`,
+            approvalStatus: "approved",
+            createdAt: "2026-01-01T00:00:00.000Z",
+            sections: Object.fromEntries(
+              Array.from({ length: 8 }, (_, k) => [`section${k}`, { text: para, items: [para, para] }]),
+            ),
+          },
+          null,
+          2,
+        ),
+      );
+    }
+    const out = await rt.run({ generatedDir, reportsDir });
+    expect(out.blocked).toBe(false);
+    expect(out.source).toBe("marker");
+  });
+
+  // Entries that cost (almost) no bytes still cost an open each. The per-entry
+  // floor charges them, so MAX_HASH_SCAN_BYTES / MIN_SCAN_ENTRY_COST_BYTES
+  // entries spend the budget however little they read.
+  const floorEntryLimit = MAX_HASH_SCAN_BYTES / MIN_SCAN_ENTRY_COST_BYTES;
+  // Planting thousands of entries takes seconds on a loaded machine.
+  const PLANTED_DIR_TEST_TIMEOUT_MS = 60_000;
+
+  type UnchargedKind = "tiny files" | "directories named *.json" | "files over the size cap";
+  const unchargedKinds: UnchargedKind[] = ["tiny files", "directories named *.json", "files over the size cap"];
+
+  /** Plant `count` entries that read (almost) no bytes, named to sort newer than r1.json. */
+  function plantUnchargedEntries(reportsDir: string, kind: UnchargedKind, count: number): void {
+    for (let i = 0; i < count; i++) {
+      const entry = path.join(reportsDir, `z-entry-${String(i).padStart(6, "0")}.json`);
+      if (kind === "tiny files") fs.writeFileSync(entry, "{}");
+      else if (kind === "directories named *.json") fs.mkdirSync(entry);
+      else {
+        const fd = fs.openSync(entry, "w");
+        fs.ftruncateSync(fd, OVERSIZED_BYTES);
+        fs.closeSync(fd);
+      }
+    }
+  }
+
+  for (const kind of unchargedKinds) {
+    it(`scan budget: more ${kind} than the per-entry floor allows before the approved report deny with the mismatch reason (fail closed)`, async () => {
+      const generatedDir = path.join(tmp, "harness.generated");
+      const reportsDir = path.join(tmp, "reports");
+      await approveRealFlow(generatedDir, reportsDir);
+      plantUnchargedEntries(reportsDir, kind, floorEntryLimit + 1);
+      const out = await rt.run({ generatedDir, reportsDir });
+      expect(out.blocked).toBe(true);
+      expect(out.detail).toMatch(MISMATCH("session"));
+      expect(out.detail).toMatch(/more report data than the gate-read scan budget covers/);
+    }, PLANTED_DIR_TEST_TIMEOUT_MS);
+
+    it(`scan budget: just under the per-entry floor limit the same directory of ${kind} still allows`, async () => {
+      const generatedDir = path.join(tmp, "harness.generated");
+      const reportsDir = path.join(tmp, "reports");
+      await approveRealFlow(generatedDir, reportsDir);
+      plantUnchargedEntries(reportsDir, kind, floorEntryLimit - 2);
+      const out = await rt.run({ generatedDir, reportsDir });
+      expect(out.blocked).toBe(false);
+      expect(out.source).toBe("marker");
+    }, PLANTED_DIR_TEST_TIMEOUT_MS);
+  }
+
+  it("scan budget: 5000 realistic reports of a few KiB with the approved report the oldest still allows under the per-entry floor", async () => {
+    const generatedDir = path.join(tmp, "harness.generated");
+    const reportsDir = path.join(tmp, "reports");
+    const reportPath = await approveRealFlow(generatedDir, reportsDir);
+    fs.renameSync(reportPath, path.join(reportsDir, "0000-approved.json"));
+    const para = `the understanding the operator reviewed ${"x".repeat(40)} `.repeat(4);
+    for (let i = 1; i <= 5000; i++) {
+      fs.writeFileSync(
+        path.join(reportsDir, `2026-01-01T00-00-00-${String(i).padStart(5, "0")}.json`),
+        JSON.stringify({
+          sessionId: `sess-${i}`,
+          approvalStatus: "approved",
+          createdAt: "2026-01-01T00:00:00.000Z",
+          sections: Object.fromEntries(Array.from({ length: 6 }, (_, k) => [`section${k}`, { text: para, items: [para] }])),
+        }),
+      );
+    }
+    const out = await rt.run({ generatedDir, reportsDir });
+    expect(out.blocked).toBe(false);
+    expect(out.source).toBe("marker");
+  }, PLANTED_DIR_TEST_TIMEOUT_MS);
+
+  /** A pending report whose file is exactly MAX_HASHED_REPORT_BYTES - 50 bytes. */
+  function writeNearCapReport(reportsDir: string, session: string): { filePath: string; json: string } {
+    fs.mkdirSync(reportsDir, { recursive: true });
+    const filePath = path.join(reportsDir, "r1.json");
+    const make = (n: number): string =>
+      JSON.stringify({
+        sessionId: session,
+        approvalStatus: "pending",
+        createdAt: new Date().toISOString(),
+        content: "x".repeat(n),
+      });
+    const json = make(MAX_HASHED_REPORT_BYTES - 50 - make(0).length);
+    expect(json.length).toBe(MAX_HASHED_REPORT_BYTES - 50);
+    fs.writeFileSync(filePath, json);
+    return { filePath, json };
+  }
+
+  it("producer cap: `harness approve understanding` refuses a report of cap minus 50 bytes (the pretty-printed rewrite crosses the cap), even with --force, before writing anything", async () => {
+    const generatedDir = path.join(tmp, "harness.generated");
+    const reportsDir = path.join(tmp, "reports");
+    const { filePath, json } = writeNearCapReport(reportsDir, SESSION);
+    let ledgerAddCalls = 0;
+    const approveArgs = {
+      manifest: parseManifest({ version: 1 }),
+      session: SESSION,
+      reportsDir,
+      generatedDir,
+      ledgerAdd: async () => {
+        ledgerAddCalls += 1;
+        return { ok: true as const };
+      },
+    };
+    for (const force of [false, true]) {
+      const rejection: unknown = await approveUnderstanding({ ...approveArgs, ...(force ? { force } : {}) }).then(
+        () => null,
+        (err: unknown) => err,
+      );
+      expect(rejection).toBeInstanceOf(HarnessExitError);
+      expect((rejection as HarnessExitError).exitCode).toBe(EX_FAIL);
+      expect((rejection as HarnessExitError).message).toMatch(
+        /the approved report would be \d+ bytes, over the 1048576-byte cap for hashing its content/,
+      );
+      expect(ledgerAddCalls).toBe(0);
+      expect(fs.existsSync(approvalMarkerPathFor(generatedDir, SESSION))).toBe(false);
+      expect(fs.readFileSync(filePath, "utf8")).toBe(json);
+      // The gate stays closed for want of an approval, not on a mismatch.
+      const out = await rt.run({ generatedDir, reportsDir });
+      expect(out.blocked).toBe(true);
+      expect(out.detail).not.toMatch(MISMATCH("session"));
+    }
+  });
+
+  it("producer cap: a report of cap minus 4 KiB still approves and the gate allows (the refusal is the size, nothing else)", async () => {
+    const generatedDir = path.join(tmp, "harness.generated");
+    const reportsDir = path.join(tmp, "reports");
+    fs.mkdirSync(reportsDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(reportsDir, "r1.json"),
+      JSON.stringify({
+        sessionId: SESSION,
+        approvalStatus: "pending",
+        createdAt: new Date().toISOString(),
+        content: "x".repeat(MAX_HASHED_REPORT_BYTES - 4096),
+      }),
+    );
+    const approve = await approveUnderstanding({
+      manifest: parseManifest({ version: 1 }),
+      session: SESSION,
+      reportsDir,
+      generatedDir,
+      ledgerAdd: async () => ({ ok: true }),
+    });
+    expect(approve.marker.ok).toBe(true);
+    expect((await rt.run({ generatedDir, reportsDir })).blocked).toBe(false);
+  });
 
   it("oversized file: a tampered approval next to a 2 MiB *.json carrying the approved content blocks, because a file over the size cap matches nothing", async () => {
     const generatedDir = path.join(tmp, "harness.generated");

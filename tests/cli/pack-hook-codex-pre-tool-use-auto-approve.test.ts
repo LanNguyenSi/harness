@@ -248,6 +248,22 @@ function writePendingReport(
   return writeReportFile(name, reportBody(sessionId, "pending", createdAt));
 }
 
+/**
+ * A valid pending report whose file is exactly `MAX_HASHED_REPORT_BYTES -
+ * slack` bytes: under the size cap as written, over it once the approval
+ * rewrite adds its fields.
+ */
+function writeNearCapPendingReport(slack: number): { filePath: string; size: number } {
+  const body = reportBody(SESSION, "pending", "2026-08-27T10:00:00.000Z");
+  const base = writeReportFile("2026-08-27T10-00-00-000Z-report-nearcap.json", body);
+  const baseSize = fs.statSync(base.filePath).size;
+  const padded = { ...body, currentUnderstanding: "x".repeat(MAX_HASHED_REPORT_BYTES - slack - baseSize + String(body["currentUnderstanding"]).length) };
+  const written = writeReportFile("2026-08-27T10-00-00-000Z-report-nearcap.json", padded);
+  const size = fs.statSync(written.filePath).size;
+  if (size !== MAX_HASHED_REPORT_BYTES - slack) throw new Error(`fixture size ${size}`);
+  return { filePath: written.filePath, size };
+}
+
 function readReport(filePath: string): Record<string, unknown> {
   return JSON.parse(fs.readFileSync(filePath, "utf8")) as Record<string, unknown>;
 }
@@ -1250,6 +1266,50 @@ describe("pack hook codex-pre-tool-use — auto-approval path (ADR slice 2)", ()
       expect(markerExists()).toBe(false);
       expect(ledgerCalls).toEqual([]);
       expect(readReport(report.filePath)["approvalStatus"]).toBe("pending");
+    });
+
+    it("a valid pending report of cap minus 50 bytes declines: the approval rewrite would push it over the cap, so no marker is minted that denies on every call (report stays pending, a second call declines the same way)", async () => {
+      getOrCreateSigningKey(generatedDir);
+      const report = writeNearCapPendingReport(50);
+      expect(report.size).toBe(MAX_HASHED_REPORT_BYTES - 50);
+
+      const result = await call();
+
+      expect(result.blocked).toBe(true);
+      expect(result.exitCode).toBe(2);
+      expect(result.stderr).toMatch(
+        /auto-approval declined: report invalid \(the approved report would be \d+ bytes, over the 1048576-byte cap for hashing its content, so the gate could not match it\)/,
+      );
+      expect(markerExists()).toBe(false);
+      expect(ledgerCalls).toEqual([]);
+      expect(readReport(report.filePath)["approvalStatus"]).toBe("pending");
+
+      // The gate call after the declined mint blocks for want of an approval,
+      // never with the "approved report was changed or removed" reason a
+      // marker minted over the cap would give on every call.
+      const again = await call();
+      expect(again.blocked).toBe(true);
+      expect(again.stderr).toMatch(
+        /auto-approval declined: report invalid \(the approved report would be \d+ bytes, over the 1048576-byte cap for hashing its content, so the gate could not match it\)/,
+      );
+      expect(again.stderr).not.toMatch(/matches the content the session approval marker was signed for/);
+      expect(markerExists()).toBe(false);
+      expect(ledgerCalls).toEqual([]);
+      expect(readReport(report.filePath)["approvalStatus"]).toBe("pending");
+    });
+
+    it("control: a valid pending report of cap minus 4 KiB still mints, and the gate call after the mint allows", async () => {
+      getOrCreateSigningKey(generatedDir);
+      const report = writeNearCapPendingReport(4096);
+
+      const minted = await call();
+      expect(minted.blocked).toBe(false);
+      expect(markerExists()).toBe(true);
+      expect(readReport(report.filePath)["approvalStatus"]).toBe("approved");
+
+      const next = await call();
+      expect(next.blocked).toBe(false);
+      expect(next.source).toBe("marker");
     });
   });
 

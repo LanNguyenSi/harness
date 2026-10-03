@@ -23,7 +23,7 @@ import {
   approvedLedgerTagFor,
   defaultReportsDir,
   hashReportFile,
-  listPersistedReportsBoundedWithSkips,
+  listPersistedReportsBoundedWithSkips, MAX_HASHED_REPORT_BYTES,
   readReportFileBounded,
   readActiveClaim,
   selectReportForSession,
@@ -588,6 +588,49 @@ export function rewriteReportApproved(
     if (!read.ok) throw new Error(`report ${read.detail}`);
     raw = read.raw;
   }
+  const { text, previousStatus, sessionIdStamped } = renderApprovedReport(
+    raw,
+    approvedAt,
+    approvedBy,
+    sessionId,
+  );
+  // Temp file plus rename: the rename replaces the directory entry (a symlink
+  // included) and never opens whatever a retargeted symlink points at.
+  atomicWriteFile(filePath, text);
+  return { previousStatus, sessionIdStamped };
+}
+
+/**
+ * Thrown by {@link renderApprovedReport} when the approved report, once
+ * pretty-printed with its approval fields, is over `MAX_HASHED_REPORT_BYTES`.
+ * The gate-read scan reads no file over that cap, so a marker signed for such
+ * a report would deny on every call and neither re-approval nor `--force`
+ * could clear it.
+ */
+export class ApprovedReportTooLargeError extends Error {
+  constructor(readonly bytes: number) {
+    super(
+      `the approved report would be ${bytes} bytes, over the ${MAX_HASHED_REPORT_BYTES}-byte cap ` +
+        "for hashing its content, so the gate could not match it",
+    );
+    this.name = "ApprovedReportTooLargeError";
+  }
+}
+
+/**
+ * The text `rewriteReportApproved` writes: the report with its approval
+ * fields stamped and pretty-printed. Pure, so a producer can check the size
+ * of the rewritten bytes before it signs a marker or changes any file. Throws
+ * {@link ApprovedReportTooLargeError} when those bytes exceed
+ * `MAX_HASHED_REPORT_BYTES`: a report accepted just under the cap can cross
+ * it through the pretty-print and the added fields.
+ */
+export function renderApprovedReport(
+  raw: string,
+  approvedAt: string,
+  approvedBy: string,
+  sessionId: string,
+): { text: string; previousStatus: string | null; sessionIdStamped: boolean } {
   const parsed = JSON.parse(raw) as Record<string, unknown>;
   const previousStatus =
     typeof parsed["approvalStatus"] === "string" ? (parsed["approvalStatus"] as string) : null;
@@ -617,10 +660,10 @@ export function rewriteReportApproved(
     parsed["sessionId"] = sessionId;
     sessionIdStamped = true;
   }
-  // Temp file plus rename: the rename replaces the directory entry (a symlink
-  // included) and never opens whatever a retargeted symlink points at.
-  atomicWriteFile(filePath, `${JSON.stringify(parsed, null, 2)}\n`);
-  return { previousStatus, sessionIdStamped };
+  const text = `${JSON.stringify(parsed, null, 2)}\n`;
+  const bytes = Buffer.byteLength(text);
+  if (bytes > MAX_HASHED_REPORT_BYTES) throw new ApprovedReportTooLargeError(bytes);
+  return { text, previousStatus, sessionIdStamped };
 }
 
 /**
@@ -1062,6 +1105,30 @@ export async function approveUnderstanding(
   // but no path to write a file under harness.generated/.
   const approvedAtMarker = (opts.now ?? new Date()).toISOString();
   const approvedByMarker = opts.approvedBy ?? DEFAULT_APPROVED_BY;
+  // The rewrite below pretty-prints the report and adds its approval fields,
+  // which can carry a report accepted just under the size cap over it. The
+  // gate-read scan reads no file over the cap, so the marker signed here would
+  // deny on every call, and neither re-approval nor --force could clear it.
+  // Render the rewrite first and refuse on its bytes, before any marker,
+  // ledger tag or report change is written, `--force` or not.
+  if (latest) {
+    const current = readReportFileBounded(latest.filePath, { noFollow: true });
+    if (current.ok) {
+      try {
+        renderApprovedReport(current.raw, approvedAtMarker, approvedByMarker, sessionId);
+      } catch (err) {
+        if (err instanceof ApprovedReportTooLargeError) {
+          throw new HarnessExitError(
+            `refusing to approve: report ${escapeForDisplay(latest.filePath)}: ${err.message}. ` +
+              "Shorten the report and re-run `harness approve understanding`. No approval marker, " +
+              "ledger tag or report change was written.",
+            EX_FAIL,
+          );
+        }
+        // Any other failure (unparseable text) keeps its existing handling below.
+      }
+    }
+  }
   let markerResult: ApproveUnderstandingResult["marker"];
   try {
     const filePath = writeApprovalMarker(generatedDir, sessionId, {
