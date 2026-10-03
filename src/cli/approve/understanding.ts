@@ -1164,7 +1164,7 @@ export async function approveUnderstanding(
     if (reports.length === 0) {
       reason = `no reports found at ${reportsDir}`;
       if (latestParseError) {
-        reason += `; latest parse-error at ${escapeForDisplay(latestParseError.filePath)}: ${latestParseError.summary}`;
+        reason += `; latest parse-error at ${escapeForDisplay(latestParseError.filePath)}: ${escapeForDisplay(latestParseError.summary)}`;
       }
     } else if (selection.staleRejected.length > 0) {
       // A sessionId-less pending report existed but exceeded the
@@ -1178,16 +1178,16 @@ export async function approveUnderstanding(
       );
       const maxMin = Math.round(TOLERANT_FALLBACK_MAX_AGE_MS / 60_000);
       reason =
-        `no report matched session_id=${sessionId}; rejected ${selection.staleRejected.length} ` +
+        `no report matched session_id=${escapeForDisplay(sessionId)}; rejected ${selection.staleRejected.length} ` +
         `stale sessionId-less candidate(s) for age (newest: ${escapeForDisplay(newest.filePath)}, ` +
-        `created ${newest.createdAt ?? "<unknown>"}, age ${age} > max ${maxMin}m). ` +
+        `created ${escapeForDisplay(newest.createdAt ?? "<unknown>")}, age ${age} > max ${maxMin}m). ` +
         `If the agent just wrote an Understanding Report, the Stop hook likely failed to ` +
         `persist it; check ${parseErrorsDir}`;
       if (latestParseError) {
-        reason += `; latest parse-error at ${escapeForDisplay(latestParseError.filePath)}: ${latestParseError.summary}`;
+        reason += `; latest parse-error at ${escapeForDisplay(latestParseError.filePath)}: ${escapeForDisplay(latestParseError.summary)}`;
       }
     } else {
-      reason = `no report matched session_id=${sessionId} (${reports.length} report(s) for other sessions)`;
+      reason = `no report matched session_id=${escapeForDisplay(sessionId)} (${reports.length} report(s) for other sessions)`;
     }
     persistedReport = { ok: false, reason };
   } else {

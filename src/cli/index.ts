@@ -1817,7 +1817,7 @@ export function buildProgram(opts: RunOptions = {}): Command {
                   : result.sessionSource === "newest-report"
                     ? " (GUESSED from the newest pending Understanding Report)"
                     : "";
-        lines.push(`session: ${result.sessionId}${sourceNote}`);
+        lines.push(`session: ${escapeForDisplay(result.sessionId)}${sourceNote}`);
         if (result.sessionSource === "newest-report") {
           // Tier-5 is a guess: no --session, no env var, no gate-staged
           // .pending-approval. It is restricted to `pending` reports
@@ -1843,9 +1843,9 @@ export function buildProgram(opts: RunOptions = {}): Command {
           lines.push(`mode:    ⚠ ${result.modeWarning}`);
         }
         if (result.marker.ok) {
-          lines.push(`marker:  ✓ ${result.marker.filePath} (canonical gate signal)`);
+          lines.push(`marker:  ✓ ${escapeForDisplay(result.marker.filePath)} (canonical gate signal)`);
         } else {
-          lines.push(`marker:  ✗ FAILED (${result.marker.reason})`);
+          lines.push(`marker:  ✗ FAILED (${escapeForDisplay(result.marker.reason)})`);
           lines.push(
             "  the gate WILL block the next tool call until the marker exists.",
           );
@@ -1873,7 +1873,7 @@ export function buildProgram(opts: RunOptions = {}): Command {
           );
         }
         if (result.ledger.ok) {
-          lines.push(`ledger:  ✓ wrote ${result.ledger.tag} (audit only)`);
+          lines.push(`ledger:  ✓ wrote ${escapeForDisplay(result.ledger.tag)} (audit only)`);
         } else {
           lines.push(`ledger:  ⚠ skipped (${result.ledger.reason ?? "unknown"}) (audit only)`);
         }
@@ -1918,12 +1918,12 @@ export function buildProgram(opts: RunOptions = {}): Command {
             ? "; stamped sessionId"
             : "";
           lines.push(
-            `report:  ✓ ${escapeForDisplay(result.persistedReport.filePath)} (approvalStatus: ${prev} → approved${stampNote})`,
+            `report:  ✓ ${escapeForDisplay(result.persistedReport.filePath)} (approvalStatus: ${escapeForDisplay(prev)} → approved${stampNote})`,
           );
           const fb = result.persistedReport.fallbackAdopted;
           if (fb) {
             lines.push(
-              `  ⚠ adopted via sessionId-less fallback: created ${fb.createdAt ?? "<unknown>"} (${fb.ageMinutes}m ago).`,
+              `  ⚠ adopted via sessionId-less fallback: created ${escapeForDisplay(fb.createdAt ?? "<unknown>")} (${fb.ageMinutes}m ago).`,
             );
             lines.push(
               "  The live session's report was never persisted, or an older producer",
@@ -1949,7 +1949,7 @@ export function buildProgram(opts: RunOptions = {}): Command {
           if (v.mode === null) {
             lines.push("validation: ⓘ legacy report (no mode field) — priorArt rule waived");
           } else {
-            lines.push(`validation: ✓ ${v.mode} report passed structural checks`);
+            lines.push(`validation: ✓ ${escapeForDisplay(v.mode)} report passed structural checks`);
           }
         } else if ("ok" in v && v.ok === false) {
           if (v.enforced) {

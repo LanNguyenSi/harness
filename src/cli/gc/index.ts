@@ -73,6 +73,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { readRegularFileRejectingSymlink } from "../../io/read-regular-file.js";
+import { escapeForDisplay } from "../../io/display-path.js";
 import { safeJsonParse } from "../../io/safe-json-parse.js";
 import {
   ADOPTION_LEDGER_DIRNAME,
@@ -240,7 +241,7 @@ function readJsonRecordOrUnparseable(
 ): { ok: true; body: Record<string, unknown> } | { ok: false; reason: string } {
   const read = readRegularFileRejectingSymlink(filePath);
   if (read.kind !== "ok") {
-    return { ok: false, reason: `could not read ${filePath} (${read.kind})` };
+    return { ok: false, reason: `could not read ${escapeForDisplay(filePath)} (${read.kind})` };
   }
   const parsed = safeJsonParse(read.content);
   if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
@@ -270,13 +271,13 @@ function readDelegationStatus(filePath: string, cutoffMs: number, nowMs: number)
   }
   const segments = parseDelegationApprovedBy(read.body["approvedBy"]);
   if (!segments.ok) {
-    return { kind: "unparseable", reason: segments.reason };
+    return { kind: "unparseable", reason: escapeForDisplay(segments.reason) };
   }
   const expiresMs = Date.parse(segments.value.expiresAt);
   if (!Number.isFinite(expiresMs)) {
     return {
       kind: "unparseable",
-      reason: `expires segment is not a valid instant: ${JSON.stringify(segments.value.expiresAt)}`,
+      reason: `expires segment is not a valid instant: ${escapeForDisplay(segments.value.expiresAt)}`,
     };
   }
   // The expiry comparison itself: mutation probe M1 skips this and treats
@@ -435,7 +436,7 @@ function readInflightRecordStatus(filePath: string, nowMs: number): InflightReco
   if (!Number.isFinite(approvedAtMs)) {
     return {
       kind: "unparseable",
-      reason: `approvedAt is not a valid instant: ${JSON.stringify(approvedAtRaw)}`,
+      reason: `approvedAt is not a valid instant: ${escapeForDisplay(approvedAtRaw)}`,
     };
   }
   if (nowMs - approvedAtMs > DEFAULT_INFLIGHT_STALE_AFTER_MS) {
@@ -447,7 +448,7 @@ function readInflightRecordStatus(filePath: string, nowMs: number): InflightReco
   if (approvedAtMs - nowMs > INFLIGHT_FUTURE_SKEW_MS) {
     return {
       kind: "stale",
-      reason: `approved at ${approvedAtRaw}, more than ${INFLIGHT_FUTURE_SKEW_MS / 60_000} minutes in the future`,
+      reason: `approved at ${escapeForDisplay(approvedAtRaw)}, more than ${INFLIGHT_FUTURE_SKEW_MS / 60_000} minutes in the future`,
     };
   }
   return { kind: "fresh" };

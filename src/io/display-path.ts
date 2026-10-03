@@ -12,20 +12,22 @@
 // Lives in `src/io/` for the same reason `project-name.ts` does: it is a
 // leaf utility any layer may use (`io/` may not import from `runtime/`).
 
-/** DEL (U+007F) and every C1 control character (U+0080 to U+009F). */
-const DEL_AND_C1 = new RegExp("[\\u007f-\\u009f]", "g");
+/** Controls JSON leaves raw, Unicode format characters and line separators. */
+const UNSAFE_DISPLAY_CHARACTERS = /[\u007f-\u009f\p{Cf}\u2028\u2029]/gu;
 
 /**
  * `value` as one double-quoted, single-line literal that is safe to print:
  * `JSON.stringify` escapes `"`, `\`, every C0 control character (ESC as
  * `\u001b`, CR as `\r`, LF as `\n`) and lone surrogates, and DEL and the C1
  * range, which JSON leaves raw (U+009B is a one-byte CSI on terminals that
- * honour C1), are escaped here as `\uXXXX`. The result contains no raw byte
- * below 0x20 and no DEL or C1 character.
+ * honour C1), are escaped here as `\uXXXX`. Unicode format characters
+ * (including bidi overrides) and line/paragraph separators are escaped too.
+ * Supplementary characters use two UTF-16 `\uXXXX` escapes so the result
+ * stays a JSON literal that parses back to the original string.
  */
 export function escapeForDisplay(value: string): string {
   return JSON.stringify(value).replace(
-    DEL_AND_C1,
-    (ch) => `\\u${ch.charCodeAt(0).toString(16).padStart(4, "0")}`,
+    UNSAFE_DISPLAY_CHARACTERS,
+    (ch) => ch.split("").map((unit) => `\\u${unit.charCodeAt(0).toString(16).padStart(4, "0")}`).join(""),
   );
 }

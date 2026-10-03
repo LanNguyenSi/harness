@@ -35,4 +35,19 @@ describe("escapeForDisplay", () => {
       expect(unsafeCodes(escapeForDisplay(`x${String.fromCharCode(code)}y`)), `U+${code.toString(16)}`).toEqual([]);
     }
   });
+
+  it.each([
+    ["bidi override", "\u202e", "\\u202e"],
+    ["zero-width space", "\u200b", "\\u200b"],
+    ["byte-order mark", "\ufeff", "\\ufeff"],
+    ["line separator", "\u2028", "\\u2028"],
+    ["paragraph separator", "\u2029", "\\u2029"],
+    ["supplementary language tag", "\u{e0001}", "\\udb40\\udc01"],
+  ])("escapes %s as UTF-16 JSON escapes", (_name, character, escaped) => {
+    const original = `before${character}after`;
+    const output = escapeForDisplay(original);
+    expect(output).toBe(`"before${escaped}after"`);
+    expect(output).not.toMatch(/[\p{Cf}\u2028\u2029]/u);
+    expect(JSON.parse(output)).toBe(original);
+  });
 });
