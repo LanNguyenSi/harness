@@ -86,6 +86,6 @@ Release prep, in order, on a branch/PR before tagging:
 
 Publishing is driven by `.github/workflows/publish-npm.yml`. Pushing a `v*` tag triggers it; the workflow checks the tag against `package.json`, builds, tests, then runs `npm publish --provenance`.
 
-The publish step retries up to 3 times with exponential backoff: Sigstore Rekor occasionally returns a transient `TLOG_CREATE_ENTRY` 409 (npm/cli#6892) that fails `--provenance` even when the tarball is fine. It also short-circuits when the version is already on the registry, so a re-run is safe.
+The publish step retries up to 3 times with exponential backoff: Sigstore Rekor occasionally returns a transient `TLOG_CREATE_ENTRY` 409 (npm/cli#6892) that fails `--provenance` even when the tarball is fine. It also short-circuits when the version is already on the registry with a provenance attestation (`npm view <pkg>@<version> dist.attestations` non-empty), so a re-run is safe. A version that is on the registry without an attestation fails the step instead, and a re-run cannot fix it: deprecate that version and publish a fixed one. A failed attestation read is reported as a registry error; check `npm view` by hand before deprecating anything.
 
 If a publish still fails after the retries, re-run it without re-tagging: Actions -> Publish to npm -> Run workflow, passing the release tag (e.g. `v0.10.0`).
