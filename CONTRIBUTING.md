@@ -77,7 +77,7 @@ Release prep, in order, on a branch/PR before tagging:
 1. `npm version --no-git-tag-version <newversion>` - bumps `package.json` (and `package-lock.json`) to `<newversion>` (e.g. `0.58.0`), without creating a git tag (the tag is pushed separately, once the release commit is merged); with no argument the command is a no-op.
 2. Insert the CHANGELOG heading - turn `## [Unreleased]` into `## [Unreleased]` (kept, empty) plus a new `## [X.Y.Z] - YYYY-MM-DD` heading above the prior release, carrying the accumulated entries.
 3. Update the README release sentence - ``The current release is `vX.Y.Z`.`` must name the same version as `package.json`.
-4. Bundle re-verification - if `docs/okf/` changed or drifted, re-run its checks (`npx okf-kit@0.14.0 check docs/okf --json --require-anchors`) and re-stamp any doc whose cited source moved.
+4. Bundle re-verification - if `docs/okf/` changed or drifted, re-run its checks (`npx okf-kit@0.16.0 check docs/okf --json --require-anchors`) and re-stamp any doc whose cited source moved.
 5. Run the checks below locally (they also run in CI): `npm run check:changelog-coverage`, `npm run check:readme-release-version`, `npm run check:release-notes-size`, plus the rest of `npm run typecheck && npm run build && npm test`.
 6. Open the PR.
 7. Merge it.
@@ -86,6 +86,6 @@ Release prep, in order, on a branch/PR before tagging:
 
 Publishing is driven by `.github/workflows/publish-npm.yml`. Pushing a `v*` tag triggers it; the workflow checks the tag against `package.json`, builds, tests, then runs `npm publish --provenance`.
 
-The publish step retries up to 3 times with exponential backoff: Sigstore Rekor occasionally returns a transient `TLOG_CREATE_ENTRY` 409 (npm/cli#6892) that fails `--provenance` even when the tarball is fine. It also short-circuits when the version is already on the registry, so a re-run is safe.
+The publish step retries up to 3 times with exponential backoff: Sigstore Rekor occasionally returns a transient `TLOG_CREATE_ENTRY` 409 (npm/cli#6892) that fails `--provenance` even when the tarball is fine. It also short-circuits when the version is already on the registry with a provenance attestation (`npm view <pkg>@<version> dist.attestations` non-empty), so a re-run is safe. A version that is on the registry without an attestation fails the step instead, and a re-run cannot fix it: deprecate that version and publish a fixed one. A failed attestation read is reported as a registry error; check `npm view` by hand before deprecating anything.
 
 If a publish still fails after the retries, re-run it without re-tagging: Actions -> Publish to npm -> Run workflow, passing the release tag (e.g. `v0.10.0`).
