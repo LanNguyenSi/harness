@@ -15,7 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
-- Restore test typechecking by completing approval marker fixtures, checking nullable report hashes and runtime fixtures, and discarding subprocess return values in void callbacks.
+- Restore test typechecking by completing approval marker fixtures, checking nullable report hashes and runtime fixtures, and discarding subprocess return values in void callbacks (9d74bae, #612).
 
 - Codex install (`8c2cca88b07919c82d0e6d6da0dc3122f1a59443`) refuses operator content between BEGIN and the first hook table, marked orphan hooks outside its replacement range (including after foreign tables or END), and a separate later generated block above a canonical hook table. Refusals give line guidance and leave the config untouched. A canonical legacy block before a later BEGIN, uncommented respelled later blocks, and uncommented harness commands on the append path remain ownership boundaries; see `docs/okf/codex-adapter-parity-gaps.md`.
 
