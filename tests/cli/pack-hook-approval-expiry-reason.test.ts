@@ -460,7 +460,8 @@ function expectOwnReasonFirst(out: PreOutcome, own: string): void {
 describe("a forged in-flight record keeps its own reason and carries no expiry sentence (Claude hook)", () => {
   it("blocks with the forged in-flight reason although the report carries expiredBy", async () => {
     const d = dirs();
-    const claude = RUNTIMES[0];
+    const claude = RUNTIMES.find((runtime) => runtime.name === "claude");
+    if (claude === undefined) throw new Error("Claude runtime fixture is missing");
     // A signing key must exist so the unsigned record reads as forged rather
     // than as unverifiable.
     getOrCreateSigningKey(d.generatedDir);

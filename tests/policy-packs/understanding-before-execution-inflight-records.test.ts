@@ -73,6 +73,8 @@ function matchedParent(
     expired: false,
     forged: false,
     sessionBindingRefused: false,
+    reportContentHash: null,
+    sessionFallback: null,
   };
 }
 
@@ -85,6 +87,8 @@ function unmatchedParent(): OperatorMarkerApproval {
     expired: false,
     forged: false,
     sessionBindingRefused: false,
+    reportContentHash: null,
+    sessionFallback: null,
   };
 }
 
@@ -544,7 +548,7 @@ describe("verifyInflightRecord", () => {
     },
   );
 
-  // Inverse of the test above (review T-003 R3 L4): on a CASE-SENSITIVE
+  // Inverse of the test above: on a CASE-SENSITIVE
   // filesystem a case-variant sessionId does not even resolve to the
   // same directory, so `sessionDir`'s lstat throws and the outcome is
   // the ordinary "no record" absence — never `forged`, unlike the

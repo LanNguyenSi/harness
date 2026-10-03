@@ -128,6 +128,8 @@ describe("pack hook post-tool-use marker-expiry (agent-tasks/d8ee60ca)", () => {
       expired: false,
       forged: false,
       sessionBindingRefused: false,
+      reportContentHash: null,
+      sessionFallback: null,
     };
     const written = writeInflightRecord({
       generatedDir,

@@ -15,6 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- Restore test typechecking by completing approval marker fixtures, checking nullable report hashes and runtime fixtures, and discarding subprocess return values in void callbacks.
+
 - `harness approve understanding` escapes successful ledger tags and marker-write diagnostics; `harness gc` escapes unreadable record paths and malformed delegation diagnostics. Stored identities, validation, and retention remain unchanged (#610).
 
 - `harness approve understanding` escapes report-controlled parse-error summaries, approval status, mode, fallback creation times, resolved session ids and marker paths before terminal display. Guessed session ids retain their existing resolution and marker naming. `harness gc` also escapes in-flight approval timestamps. The shared display renderer now escapes Unicode format characters (including bidi overrides), U+2028 and U+2029 as JSON Unicode escapes (beba45f, #610).

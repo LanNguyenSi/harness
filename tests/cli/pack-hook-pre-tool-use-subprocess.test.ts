@@ -779,7 +779,9 @@ describe.each(E2E_RUNTIMES)(
       // would be the one rewritten. The planted size is 2 MiB, a member of the
       // "over the 1 MiB cap" class.
       it.each([
-        ["a FIFO with no writer", (target: string): void => execFileSync("mkfifo", [target])],
+        ["a FIFO with no writer", (target: string): void => {
+          execFileSync("mkfifo", [target]);
+        }],
         [
           "a 2 MiB swapped report",
           (target: string): void =>
@@ -962,7 +964,9 @@ describe.each(E2E_RUNTIMES)(
     });
 
     it.each([
-      ["a FIFO", (dir: string): void => execFileSync("mkfifo", [path.join(dir, "zz-fifo.log")])],
+      ["a FIFO", (dir: string): void => {
+        execFileSync("mkfifo", [path.join(dir, "zz-fifo.log")]);
+      }],
       [
         "a symlink to a FIFO",
         (dir: string): void => {

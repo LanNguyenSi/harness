@@ -90,6 +90,8 @@ function writeExistingRecord(generatedDir: string): void {
       expired: false,
       forged: false,
       sessionBindingRefused: false,
+      reportContentHash: null,
+      sessionFallback: null,
     },
   });
   if (!result.ok) throw new Error(`fixture setup failed: ${result.detail}`);
