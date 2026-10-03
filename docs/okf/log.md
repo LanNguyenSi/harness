@@ -751,7 +751,7 @@
   states only what `[0.28.0]` documents, dropping the unsourced
   "intentionally stays loose" design claim it carried at first; each
   rewrite kept the comment at a 4-line span so no numbered citation
-  below it shifted; verified `src/cli/approve/understanding.ts:680`
+  below it shifted; verified `src/cli/approve/understanding.ts:723`
   (this doc's own `understanding-gate-lockout-recovery.md` citation)
   still reads `resolveApprovalSessionId` after the edits, unchanged.
 
@@ -778,7 +778,7 @@
   Prior Art's presence (required since 0.4.0, same citation
   `` `CHANGELOG.md:#0.28.0` ``) and cannot judge the section's content,
   and that the approve CLI is the boundary that refuses a hollow list.
-  The edited span stayed at 4 lines (`understanding.ts` lines 483-486); `src/cli/approve/understanding.ts:680` still reads
+  The edited span stayed at 4 lines (`understanding.ts` lines 483-486); `src/cli/approve/understanding.ts:723` still reads
   `resolveApprovalSessionId` and the file's total line count is
   unchanged, so the citation above it does not shift.
   `understanding-gate-lockout-recovery.md`'s `timestamp:` is re-stamped

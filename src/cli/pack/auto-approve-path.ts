@@ -81,7 +81,12 @@ import {
   readPendingApproval,
 } from "../../runtime/pending-approval.js";
 import type { LedgerWriteFn } from "../../runtime/ledger-writer.js";
-import { rewriteReportApproved, validatePersistedReport } from "../approve/understanding.js";
+import {
+  ApprovedReportTooLargeError,
+  renderApprovedReport,
+  rewriteReportApproved,
+  validatePersistedReport,
+} from "../approve/understanding.js";
 
 /**
  * Source string the CLAUDE CODE hook records on the audit-only ledger
@@ -528,6 +533,21 @@ export async function attemptAutoApproval(
     args.delegation === undefined
       ? autoApprovedByFor(args.harness, modeStr)
       : `${autoApprovedByFor(args.harness, modeStr)};delegated:${args.delegation.parentSessionId}`;
+
+  // The rewrite below pretty-prints the report and adds its approval fields,
+  // which can carry a report read just under the size cap over it. The
+  // gate-read scan reads no file over the cap, so a marker minted for it would
+  // deny on every call: check the rewritten bytes first and decline, before
+  // the report is consumed or any marker is written.
+  try {
+    renderApprovedReport(raw, approvedAt, approvedBy, args.sessionId);
+  } catch (err) {
+    if (err instanceof ApprovedReportTooLargeError) {
+      note(`auto-approval declined: report invalid (${err.message})`);
+      return decline("report invalid: size");
+    }
+    // Any other failure surfaces through the consume step below.
+  }
 
   // CONSUME FIRST, then sign. If the marker write fails after this, the
   // report is spent and no marker exists: the call blocks and the same

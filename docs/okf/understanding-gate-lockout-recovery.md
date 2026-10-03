@@ -62,7 +62,7 @@ Recovery is **operator-only**, from a shell the hooks do not gate (the `!`-shell
 
    Flags (`src/cli/index.ts:1765-1767#"enforcement"`, the `approve understanding` subcommand): `--session <id>`, `--task <ids...>` (variadic; also comma-joined `--task a,b,c`), `--reports-dir <path>`, `--approved-by <actor>` (default `harness-approve-cli`), `--force`, `--config <path>`, `--project <name>`.
 
-2. **Session-id resolution** - the bare command works because the id is resolved through a 6-tier precedence chain (`resolveApprovalSessionId`, `src/runtime/session-id.ts:241#"resolveApprovalSessionId"`; used by `src/cli/approve/understanding.ts:735#"resolveApprovalSessionId"`):
+2. **Session-id resolution** - the bare command works because the id is resolved through a 6-tier precedence chain (`resolveApprovalSessionId`, `src/runtime/session-id.ts:241#"resolveApprovalSessionId"`; used by `src/cli/approve/understanding.ts:778#"resolveApprovalSessionId"`):
    1. explicit `--session` flag
    2. `$CLAUDE_CODE_SESSION_ID` (the variable Claude Code actually exports; read first so the runtime's id beats a hand-exported legacy value)
    3. `$CLAUDE_SESSION_ID` (legacy peer)

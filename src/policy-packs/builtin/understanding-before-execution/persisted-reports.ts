@@ -595,6 +595,19 @@ const MAX_CANONICAL_REPORT_DEPTH = 64;
  */
 export const MAX_HASHED_REPORT_BYTES = 1024 * 1024;
 
+/**
+ * Total bytes, summed over the report files read, the gate-read hash scan
+ * spends before it gives up (32 MiB, 32 files at the per-file cap). The
+ * per-file cap bounds one file, not their number: 160 planted 1 MiB
+ * key-heavy files took about 10 s of scan time, near the 15 s PreToolUse
+ * budget, and a hook past its budget is a non-blocking error for the runtime
+ * (an allow). A scan that spent the budget without finding every wanted hash
+ * stops and the check fails closed with the mismatch reason. Real reports are
+ * a few kilobytes, so this is thousands of them. The scan reads the newest
+ * file first, which is where the approved report usually is.
+ */
+export const MAX_HASH_SCAN_BYTES = 32 * 1024 * 1024;
+
 /** Result of {@link walkContainerDepth}. */
 export interface ContainerDepthWalk {
   /** True when some array/object nests deeper than the walk's `max` levels. */
@@ -785,7 +798,12 @@ export function hashReportFile(
 ): ReportFileHash {
   const read = readReportFileBounded(filePath, opts);
   if (!read.ok) return read;
-  const parsed = safeJsonParse(read.raw);
+  return hashReportText(read.raw);
+}
+
+/** {@link hashReportFile} for text already read through {@link readReportFileBounded}. */
+function hashReportText(raw: string): ReportFileHash {
+  const parsed = safeJsonParse(raw);
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
     return { ok: false, reason: "not-json-object", detail: "not a JSON object" };
   }
@@ -823,35 +841,46 @@ interface ReportHashScan {
   files: number;
   /** The wanted hashes some report file hashes to. */
   matched: Set<string>;
+  /** True when the scan stopped at `MAX_HASH_SCAN_BYTES` with a wanted hash still unfound. */
+  budgetExhausted: boolean;
 }
 
 /**
  * Hash every `*.json` entry of `dir` (any session, any `approvalStatus`)
- * through {@link canonicalReportHashOfFile} and report which of the `wanted`
+ * through {@link readReportFileBounded} and report which of the `wanted`
  * hashes occur. Stops as soon as every wanted hash was found. Every entry
  * counts as a report file; one that is not a regular file, is larger than
  * `MAX_HASHED_REPORT_BYTES`, cannot be opened or read, grows while read, is
- * not a JSON object, or nests too deeply matches nothing. The cost is linear
- * in the number and size of the report files (each read at most up to the
- * cap), and the usual allow path scans nearly all of them: the directory
- * listing comes back in name order and report names start with a timestamp,
- * so the approved (newest) report tends to come last.
+ * not a JSON object, or nests too deeply matches nothing. Entries are taken
+ * in descending name order, newest first (report names start with a
+ * timestamp), so the approved report is usually the first file read. The
+ * bytes of the files read are summed; once they reach `MAX_HASH_SCAN_BYTES`
+ * with a wanted hash still unfound the scan stops and sets `budgetExhausted`,
+ * so the cost is bounded by that budget instead of growing with the number
+ * of files (each read at most up to the per-file cap).
  */
 function scanReportHashes(dir: string, wanted: ReadonlySet<string>): ReportHashScan {
-  const scan: ReportHashScan = { files: 0, matched: new Set<string>() };
+  const scan: ReportHashScan = { files: 0, matched: new Set<string>(), budgetExhausted: false };
   let names: string[];
   try {
     names = fs.readdirSync(dir);
   } catch {
     return scan;
   }
+  names = names.filter((name) => name.endsWith(".json")).sort().reverse();
+  let hashedBytes = 0;
   for (const name of names) {
-    if (!name.endsWith(".json")) continue;
-    const full = path.join(dir, name);
     scan.files += 1;
-    const hash = canonicalReportHashOfFile(full);
-    if (hash !== null && wanted.has(hash)) {
-      scan.matched.add(hash);
+    if (hashedBytes >= MAX_HASH_SCAN_BYTES) {
+      scan.budgetExhausted = true;
+      break;
+    }
+    const read = readReportFileBounded(path.join(dir, name));
+    if (!read.ok) continue;
+    hashedBytes += Buffer.byteLength(read.raw);
+    const hashed = hashReportText(read.raw);
+    if (hashed.ok && wanted.has(hashed.hash)) {
+      scan.matched.add(hashed.hash);
       if (scan.matched.size === wanted.size) break;
     }
   }
@@ -896,11 +925,11 @@ function scanReportHashes(dir: string, wanted: ReadonlySet<string>): ReportHashS
  * the "no report file" allow, the same as before this check existed. The
  * marker and the operator's approval itself are untouched in both cases;
  * only the audit trail loses its claim to be the approved content. (3) The
- * cap bounds each file, not their number: the scan time grows with the
- * total volume of report files, so an agent that plants hundreds of
- * megabytes of files just under the cap can still push one scan past the
- * hook's time budget, which the runtime treats as a non-blocking error (the
- * same allow as before this check existed).
+ * cap bounds each file, not their number, so the scan itself is bounded by
+ * `MAX_HASH_SCAN_BYTES`: past it the check denies with the mismatch reason
+ * (fail closed). The remaining cost is that a legitimate approval whose
+ * report is older than 32 MiB of newer report files is denied; re-approving
+ * writes a new, newest report and recovers.
  *
  * Removing the approved report while other report files remain is a deny:
  * nothing on disk carries the signed content any more. `harness gc --apply`
@@ -955,7 +984,10 @@ export function verifyApprovedReportHash(
     ok: false,
     detail:
       `no report in the reports directory matches the content the ${kinds} signed for ` +
-      `(the approved report was changed or removed after approval); re-run \`harness approve understanding\``,
+      `(the approved report was changed or removed after approval); re-run \`harness approve understanding\`` +
+      (scan.budgetExhausted
+        ? " (the reports directory holds more report data than the gate-read scan budget covers)"
+        : ""),
   };
 }
 
