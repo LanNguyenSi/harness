@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- Publish workflows now install npm with `npm install -g npm@^11.5.1` (the documented trusted-publishing floor) instead of the floating `npm@11`, and the retry loop's "reached the registry despite a non-zero publish exit" branch now probes `npm view <pkg>@<version> dist.attestations` and fails with an error when the attestation is empty, so a partially completed publish is no longer announced green. CI only; no package code change.
+
 ### Upgrade notes
 
 - `harness policy intercept` (the PreToolUse hook of the policy engine) now blocks when its stdin does not deliver a complete, closed event within 3000 ms of idle time, instead of continuing as an empty event. Claude Code and Codex close stdin after writing the event, so normal use is unaffected; `harness pause` still wins. A hand-written registration of `harness policy intercept` on a non-PreToolUse event whose stalled read names no event gets the same block.
