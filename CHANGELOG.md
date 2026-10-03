@@ -17,6 +17,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 - Restore test typechecking by completing approval marker fixtures, checking nullable report hashes and runtime fixtures, and discarding subprocess return values in void callbacks (9d74bae, #612).
 
+- Codex install (`8c2cca88b07919c82d0e6d6da0dc3122f1a59443`) refuses operator content between BEGIN and the first hook table, marked orphan hooks outside its replacement range (including after foreign tables or END), and a separate later generated block above a canonical hook table. Refusals give line guidance and leave the config untouched. A canonical legacy block before a later BEGIN, uncommented respelled later blocks, and uncommented harness commands on the append path remain ownership boundaries; see `docs/okf/codex-adapter-parity-gaps.md`.
+
 - `harness approve understanding` escapes successful ledger tags and marker-write diagnostics; `harness gc` escapes unreadable record paths and malformed delegation diagnostics. Stored identities, validation, and retention remain unchanged (#610).
 
 - `harness approve understanding` escapes report-controlled parse-error summaries, approval status, mode, fallback creation times, resolved session ids and marker paths before terminal display. Guessed session ids retain their existing resolution and marker naming. `harness gc` also escapes in-flight approval timestamps. The shared display renderer now escapes Unicode format characters (including bidi overrides), U+2028 and U+2029 as JSON Unicode escapes (beba45f, #610).

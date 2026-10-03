@@ -114,8 +114,8 @@ function hookCommands(text: string): string[] {
   );
 }
 
-describe("codex install: an operator key between a legacy block's opening line and its first hook table refuses (task c78a155b)", () => {
-  for (const [label, head] of LEGACY_HEADS) {
+describe("codex install: an operator key before a block's first hook table refuses", () => {
+  for (const [label, head] of [["BEGIN", [CODEX_MANAGED_BEGIN, GENERATED]], ...LEGACY_HEADS] as Array<[string, string[]]>) {
     it(`${label}: a key of the operator hook table above the opening line refuses, naming line numbers only, and moving the key above the line installs`, () => {
       const config = write([...OPERATOR_STOP, ...head.slice(0, 1), `note = "${TOKEN}"`, ...head.slice(1), ...OLD_TABLE, ""]);
       const { message } = refusal();
@@ -374,9 +374,15 @@ describe("codex install: the no-END refusal for a table that already sits below 
       const lines = config.split("\n");
       const at = lines.indexOf("# harness hook: bb (budget_ms=2000)");
       write([...lines.slice(0, at), CODEX_MANAGED_END, ...lines.slice(at)]);
+      // END no longer hides the orphan: deleting the stale marked table is
+      // required before the remaining operator table can be kept.
+      expect(refusal().message).toContain("directly above the hook table [[ hooks.SessionStart ]]");
+      write([...lines.slice(0, at), CODEX_MANAGED_END, ...lines.slice(at + RESPELLED_HARNESS_TABLE.length)]);
       const p = planTwice();
       expect(endLines(p.nextContent)).toBe(1);
       expect(hookCommands(p.nextContent)).toContain("Stop:harness pack hook b");
+      expect(hookCommands(p.nextContent)).toContain(`Stop:${OPERATOR_COMMAND}`);
+      expect(hookCommands(p.nextContent)).not.toContain("SessionStart:harness pack hook bb");
     });
   }
 
@@ -393,5 +399,120 @@ describe("codex install: the no-END refusal for a table that already sits below 
     const { message } = refusal();
     expect(message).toContain("move [[ hooks.Stop ]] below the last harness hook table");
     expect(message).not.toContain(`add a '${CODEX_MANAGED_END}'`);
+  });
+});
+
+
+describe("codex install: marked hooks outside the owned range refuse", () => {
+  const orphan = harnessTable("stale", "Stop", "harness pack hook stale");
+  const layouts: Array<[string, string[]]> = [
+    ["source prefix after a foreign table", [SOURCE_PREFIX, GENERATED, ...HARNESS_A, "[tui]", 'note = "operator"']],
+    ["generated header after a foreign table", [GENERATED, ...HARNESS_A, "[tui]", 'note = "operator"']],
+    ["BEGIN after END", [CODEX_MANAGED_BEGIN, GENERATED, ...HARNESS_A, CODEX_MANAGED_END]],
+  ];
+  for (const [label, head] of layouts) {
+    for (const header of ["[[hooks.Stop]]", "[[ hooks.Stop ]]", '[["hooks" . "Stop"]]']) {
+      it(`${label}: ${header} refuses with line guidance and deleting the orphan installs`, () => {
+        const table = [...orphan];
+        table[1] = header;
+        const config = write([...head, ...table, ""]);
+        const message = refusal().message;
+        expect(message).toContain(`comment line (line ${lineOf(config, orphan[0]!)})`);
+        expect(message).toContain(`hook table ${header} (line ${lineOf(config, header)})`);
+        expect(message).toContain("delete it together with its comment line");
+        expect(message).not.toContain("harness pack hook stale");
+        expect(fs.readFileSync(codexConfig, "utf8")).toBe(config);
+        write([...head, ""]);
+        const p = planTwice();
+        expect(hookCommands(p.nextContent).sort()).toEqual(
+          ["PreToolUse:harness pack hook a", "Stop:harness pack hook b"].sort(),
+        );
+      });
+    }
+  }
+
+  it("a marked orphan before a BEGIN block also refuses", () => {
+    const config = write([...orphan, CODEX_MANAGED_BEGIN, GENERATED, ...HARNESS_A, CODEX_MANAGED_END, ""]);
+    expect(refusal().message).toContain("comment line (line 1)");
+    expect(fs.readFileSync(codexConfig, "utf8")).toBe(config);
+  });
+
+  it("marker and header text inside a value after END stays operator content", () => {
+    const tail = ["[tui]", 'note = """', ...orphan, '"""', ""].join("\n");
+    write([CODEX_MANAGED_BEGIN, GENERATED, ...HARNESS_A, CODEX_MANAGED_END, tail]);
+    const p = planTwice();
+    expect(p.nextContent.endsWith(tail)).toBe(true);
+    expect(hookCommands(p.nextContent).sort()).toEqual(
+      ["PreToolUse:harness pack hook a", "Stop:harness pack hook b"].sort(),
+    );
+  });
+});
+
+describe("codex install: later generated blocks outside the owned range refuse", () => {
+  for (const head of [[GENERATED, ...OLD_TABLE], [CODEX_MANAGED_BEGIN, GENERATED, ...OLD_TABLE, CODEX_MANAGED_END]]) {
+    for (const header of ["[[hooks.Stop]]"]) {
+      it(`a later uncommented ${header} block refuses and removing it permits one replacement`, () => {
+        const first = [...head, "[tui]", `note = "${TOKEN}"`];
+        const later = [GENERATED, header, 'command = "harness pack hook stale"'];
+        const config = write([...first, ...later, ""]);
+        const message = refusal().message;
+        const secondLine = first.length + 1;
+        expect(message).toContain("has two '# Generated by harness apply --runtime codex.' lines");
+        expect(message).toContain(`the one at line ${secondLine} sits above the hook table at line ${secondLine + 1}`);
+        expect(message).toContain("Delete the unwanted later block");
+        expect(message).not.toContain(TOKEN);
+        expect(fs.readFileSync(codexConfig, "utf8")).toBe(config);
+        write([...first, ""]);
+        const p = planTwice();
+        expect(hookCommands(p.nextContent).sort()).toEqual(
+          ["PreToolUse:harness pack hook a", "Stop:harness pack hook b"].sort(),
+        );
+        expect(p.nextContent).toContain(`note = "${TOKEN}"`);
+      });
+    }
+  }
+
+  for (const [label, separator] of [
+    ["foreign table", ["[tui]", "x = 1"]],
+    ["END", [CODEX_MANAGED_END]],
+    ["END and foreign table", [CODEX_MANAGED_END, "[tui]", "x = 1"]],
+  ] as Array<[string, string[]]>) {
+    it(`a canonical legacy block before BEGIN remains an ownership boundary after ${label}`, () => {
+      const prefix = [GENERATED, ...OLD_TABLE, ...separator, ""].join("\n");
+      write([prefix, SOURCE_PREFIX, CODEX_MANAGED_BEGIN, GENERATED,
+        ...harnessTable("current-old", "Stop", "harness pack hook current-old"), CODEX_MANAGED_END, ""]);
+      const p = planTwice();
+      expect(p.nextContent.startsWith(prefix)).toBe(true);
+      expect(hookCommands(p.nextContent).sort()).toEqual([
+        "PreToolUse:harness pack hook old", "PreToolUse:harness pack hook a", "Stop:harness pack hook b",
+      ].sort());
+      expect(count(p.nextContent, CODEX_MANAGED_BEGIN)).toBe(1);
+      expect(count(p.nextContent, "harness pack hook current-old")).toBe(0);
+    });
+  }
+
+  it("a later generated header above an uncommented respelled hook remains an ownership boundary", () => {
+    const config = write([GENERATED, "[tui]", "t = 1", GENERATED, "[[ hooks.Stop ]]", 'command = "harness pack hook stale"', ""]);
+    const p = planTwice();
+    expect(p.nextContent.startsWith(config)).toBe(true);
+    expect(hookCommands(p.nextContent)).toContain("Stop:harness pack hook stale");
+    expect(count(p.nextContent, CODEX_MANAGED_BEGIN)).toBe(1);
+  });
+
+  it("two contiguous generated blocks within the owned range are replaced together", () => {
+    write([GENERATED, ...HARNESS_A, GENERATED, ...HARNESS_B, ""]);
+    const p = planTwice();
+    expect(count(p.nextContent, GENERATED)).toBe(1);
+    expect(hookCommands(p.nextContent).sort()).toEqual(
+      ["PreToolUse:harness pack hook a", "Stop:harness pack hook b"].sort(),
+    );
+  });
+
+  it("an uncommented harness command on the append path remains an ownership boundary", () => {
+    const config = write(["[[hooks.Stop]]", 'command = "harness pack hook stale"', ""]);
+    const p = planTwice();
+    expect(p.nextContent.startsWith(config)).toBe(true);
+    expect(hookCommands(p.nextContent)).toContain("Stop:harness pack hook stale");
+    expect(count(p.nextContent, CODEX_MANAGED_BEGIN)).toBe(1);
   });
 });

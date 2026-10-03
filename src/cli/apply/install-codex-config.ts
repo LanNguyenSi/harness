@@ -572,7 +572,7 @@ interface OwnedContentScan {
    * that was open where the opening line sits, which the install would delete
    * with the block (the semantic net compares only what is outside the hook
    * event arrays, so a key of an operator hook table goes unseen there). The
-   * legacy paths refuse on it (`legacyManagedRange`).
+   * every locator path refuses on it (`assertNoOperatorLineBeforeHookTable`).
    */
   operatorLineBeforeHookTable?: { line: number; header: number };
 }
@@ -1170,6 +1170,35 @@ function rangeBeforeStrayEnd(
   };
 }
 
+/** Refuses operator key/value content before the first hook table on every
+ * locator path. The ownership scan supplies offsets; diagnostics print no values. */
+function assertNoOperatorLineBeforeHookTable(
+  text: string,
+  start: number,
+  scan: OwnedContentScan,
+  configPath: string,
+  blockOpening: string,
+): void {
+  if (scan.operatorLineBeforeHookTable !== undefined) {
+    const { line, header } = scan.operatorLineBeforeHookTable;
+    // Names line numbers only, never the line's own text: it is a key or a
+    // value, which can hold a token, and the refusal is printed to stderr and
+    // `--json`.
+    throw new CodexInstallRefusalError(
+      `Codex config ${configPath} has a key or value line (line ${lineNumberAt(text, line)}) between ` +
+        `${blockOpening} (line ${lineNumberAt(text, start)}) and the first hook table below it (line ` +
+        `${lineNumberAt(text, header)}). A block harness wrote has only comment lines there, so that ` +
+        "line is yours, a key of whatever table is open where the opening line sits (an operator " +
+        "hook table, say), and the install, which replaces everything from the opening line " +
+        "through the harness hook tables, would delete it; refusing to guess. Move that line (with " +
+        "any value lines it continues) above the opening line, so it stays in the table it " +
+        "belongs to, then re-run " +
+        "`harness apply --runtime codex --install`. The file is untouched.",
+      configPath,
+    );
+  }
+}
+
 /**
  * The range of a legacy (no BEGIN marker) config: the source-prefix or
  * generated-header paths. When the scan ended at an operator hook table,
@@ -1183,8 +1212,8 @@ function rangeBeforeStrayEnd(
  * kept as if it were operator content (the fresh block would repeat it)
  * when it sits before that END, or, after kept tables, anywhere later when
  * no END follows (task e8f4fc03 extends the END case to a foreign table).
- * Content below that END is untouched, as on the BEGIN path, so a
- * harness-commented table there is kept and not named. The split-block
+ * Content below that END is kept, as on the BEGIN path; the global orphan
+ * check refuses a harness-commented hook table outside the owned range. The split-block
  * refusal names `blockOpening` (the source-prefix line or the generated
  * header) as the start of the block, since there is no BEGIN marker (task
  * 01053b27); the split-block zone starts after that opening line, so a block
@@ -1208,24 +1237,7 @@ function legacyManagedRange(
   configPath: string,
   blockOpening: string,
 ): ManagedRange {
-  if (scan.operatorLineBeforeHookTable !== undefined) {
-    const { line, header } = scan.operatorLineBeforeHookTable;
-    // Names line numbers only, never the line's own text: it is a key or a
-    // value, which can hold a token, and the refusal is printed to stderr and
-    // `--json`.
-    throw new CodexInstallRefusalError(
-      `Codex config ${configPath} has a key or value line (line ${lineNumberAt(text, line)}) between ` +
-        `${blockOpening} (line ${lineNumberAt(text, start)}) and the first hook table below it (line ` +
-        `${lineNumberAt(text, header)}). A block harness wrote has only comment lines there, so that ` +
-        "line is yours, a key of whatever table is open where the opening line sits (an operator " +
-        "hook table, say), and the install, which replaces everything from the opening line " +
-        "through the harness hook tables, would delete it; refusing to guess. Move that line (with " +
-        "any value lines it continues) above the opening line, so it stays in the table it " +
-        "belongs to, then re-run " +
-        "`harness apply --runtime codex --install`. The file is untouched.",
-      configPath,
-    );
-  }
+  assertNoOperatorLineBeforeHookTable(text, start, scan, configPath, blockOpening);
   if (scan.sawEndMarker) {
     return { start, end: scan.end, foreignSectionsPreserved: [], keptHookTables: [] };
   }
@@ -1290,6 +1302,7 @@ function findManagedRange(text: string, configPath: string): ManagedRange | null
 
     const contentStart = lineEndAfter(text, begin);
     const scan = scanOwnedContentEnd(text, contentStart);
+    assertNoOperatorLineBeforeHookTable(text, begin, scan, configPath, `the '${CODEX_MANAGED_BEGIN}' line`);
     const end = scan.end;
 
     if (scan.sawEndMarker) {
@@ -1336,9 +1349,9 @@ function findManagedRange(text: string, configPath: string): ManagedRange | null
 }
 
 /**
- * Refuses when the first generated-header line opens no block (a foreign table
- * follows it before any hook table) but a later generated-header line sits
- * directly above a hook table: that is a genuine legacy block, and the install
+ * Refuses when a generated-header line outside the range being replaced sits
+ * directly above a hook table, either after a stale first header or after a
+ * genuine block: that is a genuine legacy block, and the install
  * reads only the first generated-header line, so it would add the fresh block
  * and leave the genuine one running next to it. Which of the two lines to
  * trust is not something the file says, so the install names both lines and
@@ -1351,28 +1364,32 @@ function assertNoLaterGeneratedHeaderBlock(
   firstHeader: number,
   from: number,
   configPath: string,
+  firstBlockOwned = false,
 ): void {
   const later = findMarkerAboveHookTable(text, GENERATED_HEADER, from, (t) =>
     HOOK_ARRAY_HEADER_RE.test(t),
   );
   if (later === null) return;
+  const firstDescription = firstBlockOwned
+    ? `the one at line ${lineNumberAt(text, firstHeader)} belongs to the block being replaced`
+    : `the one at line ${lineNumberAt(text, firstHeader)} has no hook table of its own (a table of yours follows it)`;
+  const fix = firstBlockOwned
+    ? `Delete the unwanted later block, including its generated-header line and hook tables`
+    : `Delete the line at line ${lineNumberAt(text, firstHeader)} (it is a comment, and no block hangs on it)`;
   throw new CodexInstallRefusalError(
     `Codex config ${configPath} has two '${GENERATED_HEADER}' lines and the install can replace ` +
-      `only one block: the one at line ${lineNumberAt(text, firstHeader)} has no hook table of its ` +
-      `own (a table of yours follows it), the one at line ${lineNumberAt(text, later.marker)} sits ` +
+      `only one block: ${firstDescription}, the one at line ${lineNumberAt(text, later.marker)} sits ` +
       `above the hook table at line ${lineNumberAt(text, later.header)}. Installing would add the ` +
       "fresh block and leave that hook table running next to it, so the install refuses to guess " +
-      `which line is current. Delete the line at line ${lineNumberAt(text, firstHeader)} (it is a ` +
-      "comment, and no block hangs on it), then re-run `harness apply --runtime codex --install`. " +
-      "The file is untouched.",
+      `which line is current. ${fix}, then re-run ` +
+      "`harness apply --runtime codex --install`. The file is untouched.",
     configPath,
   );
 }
 
 /**
- * Refuses on the append path (no BEGIN marker, no source-prefix line and no
- * generated-header line opening a block) when a `# harness hook:` comment line
- * sits directly above a hook table: that is a hook table an earlier install
+ * Refuses outside the range being replaced (including the append path) when
+ * a `# harness hook:` comment line sits directly above a hook table: that is a hook table an earlier install
  * wrote whose opening lines are gone, and the install would add the fresh block
  * and leave it running next to it (the hook would run twice, or a hook the
  * manifest retired would keep running). The comment line is found as a marker
@@ -1382,13 +1399,21 @@ function assertNoLaterGeneratedHeaderBlock(
  * cannot be told apart; the guidance offers rewording the comment. Line numbers
  * and the table's own header only, never a line's text.
  */
-function assertNoOrphanHarnessHookTable(text: string, configPath: string): void {
-  const orphan = findMarkerAboveHookTable(
+function assertNoOrphanHarnessHookTable(text: string, configPath: string, range: ManagedRange | null = null): void {
+  let orphan = findMarkerAboveHookTable(
     text,
     HARNESS_HOOK_COMMENT_PREFIX,
     0,
     (t) => HOOK_ARRAY_HEADER_RE.test(t) || isHookEventArrayHeader(t),
   );
+  // An owned pair is replaced together. Search the unowned tail from a known
+  // top-level boundary; a pair before the range must still refuse.
+  if (orphan !== null && range !== null && orphan.header >= range.start && orphan.header < range.end) {
+    orphan = findMarkerAboveHookTable(
+      text, HARNESS_HOOK_COMMENT_PREFIX, range.end,
+      (t) => HOOK_ARRAY_HEADER_RE.test(t) || isHookEventArrayHeader(t),
+    );
+  }
   if (orphan === null) return;
   const header = describeTableHeader(text.slice(orphan.header, lineEndAfter(text, orphan.header)));
   throw new CodexInstallRefusalError(
@@ -2092,6 +2117,13 @@ export function planCodexConfigInstall(
     opts.generatedPath,
   );
   const range = withBackupLocation(linkPath, () => findManagedRange(currentContent, configPath));
+  if (range !== null) {
+    assertNoOrphanHarnessHookTable(currentContent, configPath, range);
+    const firstGenerated = findMarkerLine(currentContent, GENERATED_HEADER, "prefix", range.start, range.end);
+    if (firstGenerated !== -1) {
+      assertNoLaterGeneratedHeaderBlock(currentContent, firstGenerated, range.end, configPath, true);
+    }
+  }
   let nextContent: string;
   let summary: string;
   let removedHookIds: string[] = [];
