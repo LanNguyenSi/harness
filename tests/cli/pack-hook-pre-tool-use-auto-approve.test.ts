@@ -146,7 +146,9 @@ function writeReportFile(
   const filePath = path.join(reportsDir, name);
   const content = `${JSON.stringify(body, null, 2)}\n`;
   fs.writeFileSync(filePath, content);
-  return { filePath, sha256: sha256Hex(content), canonicalHash: canonicalReportHash(body) };
+  const canonicalHash = canonicalReportHash(body);
+  if (canonicalHash === null) throw new Error("Report fixture exceeds the canonical hash depth limit");
+  return { filePath, sha256: sha256Hex(content), canonicalHash };
 }
 
 /** The canonical happy-path report: newest, strict-session, `pending`, valid. */

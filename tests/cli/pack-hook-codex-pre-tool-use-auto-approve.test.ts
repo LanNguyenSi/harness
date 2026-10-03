@@ -28,7 +28,7 @@
 //     published envelope used `raw_input`. Both shapes are exercised for
 //     the two exemptions that have to see the command.
 //
-// Review round 1 added four more concerns, each with its own control
+// Four additional concerns have their own controls
 // below: the per-harness opt-in (`auto_approve.harnesses`, so sharing
 // one body does not share one opt-in), the exemption's own view of
 // `tool_input` / `raw_input` (a disagreeing pair, and a null
@@ -142,7 +142,7 @@ function writeTranscriptFile(sessionId: string = SESSION): string {
 /**
  * The opt-in manifest: `bypassPermissions` allowlisted, `require_report:
  * true`, and BOTH harnesses opted in. `harnesses` is required for any
- * Codex auto-approval (review round 1): the shared auto path declines
+ * Codex auto-approval: the shared auto path declines
  * for a harness the operator did not name, and an absent key means
  * Claude Code only, so the whole happy-path fixture would block without
  * this. The controls in "the per-harness opt-in" below are the ones that
@@ -234,7 +234,9 @@ function writeReportFile(
   const filePath = path.join(reportsDir, name);
   const content = `${JSON.stringify(body, null, 2)}\n`;
   fs.writeFileSync(filePath, content);
-  return { filePath, sha256: sha256Hex(content), canonicalHash: canonicalReportHash(body) };
+  const canonicalHash = canonicalReportHash(body);
+  if (canonicalHash === null) throw new Error("Report fixture exceeds the canonical hash depth limit");
+  return { filePath, sha256: sha256Hex(content), canonicalHash };
 }
 
 /** The canonical happy-path report: newest, strict-session, `pending`, valid. */
