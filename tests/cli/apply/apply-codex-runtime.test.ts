@@ -2062,7 +2062,10 @@ describe("apply --runtime codex --install: the safety net compares everything ou
           generatedContent: SYNTHETIC_GENERATED,
         }),
       );
-      expect(err.message).toContain(`installing would change '${keyPath}'`);
+      expect(err.message).toContain("has a key or value line (line 5) between");
+      expect(err.message).toContain("the '# BEGIN harness-managed codex hooks' line (line 4)");
+      expect(err.message).toContain("the first hook table below it (line 8)");
+      expect(err.message).not.toContain(keyPath);
       expect(fs.readFileSync(configPath, "utf8")).toBe(input);
     });
   }
@@ -4175,16 +4178,14 @@ describe("apply --runtime codex --install: an operator-authored [[hooks.*]] tabl
     expect(err.message).toContain("could not match to its entry in the parsed config");
   });
 
-  it("a harness-commented table below the END marker is left untouched and not named", async () => {
+  it("a harness-commented table below END refuses before the install writes anything", async () => {
     const below = harnessTable("below-end", "SessionStart", "harness pack hook below-end");
     const config = [CODEX_MANAGED_BEGIN, GENERATED, ...retiredTable, CODEX_MANAGED_END, ...below, ""].join("\n");
-    const result = plan(config);
-    expect(result.keptOperatorHookTables).toEqual([]);
-    expect(result.foreignSectionsPreserved).toEqual([]);
-    const installed = await installOver(config);
-    expect(installed).not.toContain(RETIRED_HOOK_ID);
-    expect(installed.endsWith(`${CODEX_MANAGED_END}\n${below.join("\n")}\n`)).toBe(true);
-    expect(occurrences(installed, CODEX_MANAGED_END)).toBe(1);
+    const err = await refusalOfAsync(() => installOver(config));
+    expect(err.message).toContain("directly above the hook table [[hooks.SessionStart]]");
+    expect(err.message).not.toContain("harness pack hook below-end");
+    expect(fs.readFileSync(configPath(), "utf8")).toBe(config);
+    expect(fs.readdirSync(path.dirname(configPath())).some((name) => name.includes(".harness-backup-"))).toBe(false);
   });
 
   it("the kept-table check parses nothing when no table is kept: an install that changes nothing stays a no-op on a config the parser cannot read", () => {
@@ -4563,16 +4564,14 @@ describe("apply --runtime codex --install: an operator-authored [[hooks.*]] tabl
       expect(result.nextContent.endsWith(`${CODEX_MANAGED_END}\n[projects."/work/x"]\ntrust_level = "trusted"\n`)).toBe(true);
     });
 
-    it(`legacy ${label} config whose END marker survived its deleted BEGIN line: a harness-commented table below that END is left untouched and not named`, async () => {
+    it(`legacy ${label} with a surviving END: a marked table below it refuses before writing`, async () => {
       const below = harnessTable("below-end", "SessionStart", "harness pack hook below-end");
       const config = [...head, ...retiredTable, ...operatorTable, CODEX_MANAGED_END, ...below, ""].join("\n");
-      const result = plan(config);
-      expect(result.keptOperatorHookTables).toEqual([keptLabel("[[hooks.Stop]]", config, result.nextContent)]);
-      expect(result.foreignSectionsPreserved).toEqual(result.keptOperatorHookTables);
-      const installed = await installOver(config);
-      expect(installed.endsWith(`${CODEX_MANAGED_END}\n${operatorTable.join("\n")}\n${below.join("\n")}\n`)).toBe(true);
-      expect(occurrences(installed, CODEX_MANAGED_END)).toBe(1);
-      expect(await installOver(installed)).toBe(installed);
+      const err = await refusalOfAsync(() => installOver(config));
+      expect(err.message).toContain("directly above the hook table [[hooks.SessionStart]]");
+      expect(err.message).not.toContain(operatorCommand);
+      expect(fs.readFileSync(configPath(), "utf8")).toBe(config);
+      expect(fs.readdirSync(path.dirname(configPath())).some((name) => name.includes(".harness-backup-"))).toBe(false);
     });
 
     it(`legacy ${label} config whose END marker survived its deleted BEGIN line: the kept-table refusal offers moving an operator-owned table below that END`, () => {

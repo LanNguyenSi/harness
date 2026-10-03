@@ -515,13 +515,11 @@ describe("codex install: found-guards and whole-line END comparisons of the scan
     });
   }
 
-  it("an indented END directly after the harness tables ends the block: the harness-commented table below it is left untouched and not named", () => {
+  it("an indented END cannot hide a harness-commented table below the block", () => {
     const below = [...HARNESS_B, ...TAIL, ""].join("\n");
-    write([CODEX_MANAGED_BEGIN, GENERATED, ...HARNESS_A, `  ${CODEX_MANAGED_END}`, below]);
-    const p = planTwice();
-    expect(p.nextContent.endsWith(`${CODEX_MANAGED_END}\n${below}`)).toBe(true);
-    expect(count(p.nextContent, 'command = "harness pack hook b"')).toBe(2);
-    expect(p.keptOperatorHookTables).toEqual([]);
+    const config = write([CODEX_MANAGED_BEGIN, GENERATED, ...HARNESS_A, `  ${CODEX_MANAGED_END}`, below]);
+    expect(refusal().message).toContain("directly above the hook table [[hooks.Stop]]");
+    expect(fs.readFileSync(codexConfig, "utf8")).toBe(config);
   });
 });
 
@@ -571,7 +569,7 @@ describe("codex install: a harness marker in the run of respelled hook tables of
       expect(fs.readFileSync(codexConfig, "utf8")).toBe(config);
     });
 
-    it(`legacy ${label}: the run stops at the first non-hook table, so a harness-commented table past it keeps the legacy reading`, () => {
+    it(`legacy ${label}: a harness-commented table past the first non-hook table refuses as an orphan`, () => {
       const config = write([
         ...head,
         ...HARNESS_A,
@@ -580,10 +578,11 @@ describe("codex install: a harness marker in the run of respelled hook tables of
         ...harnessTable("c", "SessionStart", "harness pack hook c"),
         "",
       ]);
-      const p = planTwice();
-      expect(p.keptOperatorHookTables).toEqual([keptLabel("[[ hooks.Stop ]]", config, p.nextContent)]);
-      expect(count(p.nextContent, 'command = "harness pack hook c"')).toBe(1);
-      expect(endLines(p.nextContent)).toBe(1);
+      const message = refusal().message;
+      expect(message).toContain("directly above the hook table [[hooks.SessionStart]]");
+      expect(message).not.toContain(TOKEN);
+      expect(message).not.toContain("harness pack hook c");
+      expect(fs.readFileSync(codexConfig, "utf8")).toBe(config);
     });
 
     it(`legacy ${label}: a scan that ended at an operator [[hooks.Stop]] with no END checks the whole rest of the file, so a harness-commented table past a later foreign table refuses`, () => {
