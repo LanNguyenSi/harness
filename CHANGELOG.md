@@ -15,7 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
-- Restore test typechecking by completing approval marker fixtures, checking nullable report hashes and runtime fixtures, and discarding subprocess return values in void callbacks.
+- Restore test typechecking by completing approval marker fixtures, checking nullable report hashes and runtime fixtures, and discarding subprocess return values in void callbacks (9d74bae, #612).
 
 - `harness approve understanding` escapes successful ledger tags and marker-write diagnostics; `harness gc` escapes unreadable record paths and malformed delegation diagnostics. Stored identities, validation, and retention remain unchanged (#610).
 
