@@ -315,6 +315,55 @@ describe("pause → policy intercept hook → resume", () => {
     expect(stdoutB.read()).toContain('"decision":"block"');
   });
 
+  it("honours an injected pause time even when the real clock sees an expired sentinel", async () => {
+    const realNow = Date.now();
+    const pausedAt = new Date(realNow - 24 * 60 * 60 * 1000);
+    const duringPause = new Date(pausedAt.getTime() + 5 * 60 * 1000);
+    await pause({
+      manifest: manifestWithPack(),
+      generatedDir,
+      stdinIsTTY: true,
+      claudeSessionIdEnv: "",
+      forDuration: "10m",
+      now: pausedAt,
+      reason: "injected clock pause",
+      ledgerAdd: async () => ({ ok: true }),
+    });
+    const sentinel = JSON.parse(fs.readFileSync(sentinelPath(generatedDir), "utf8"));
+    expect(Date.parse(sentinel.expiresAt)).toBeGreaterThan(duringPause.getTime());
+    expect(Date.parse(sentinel.expiresAt)).toBeLessThan(realNow);
+
+    let ledgerQueried = false;
+    const stdout = bufferStream();
+    const stderr = bufferStream();
+    const res = await runInterceptCli({
+      stdin: readableFromString(mergeEvent),
+      stdout: stdout.stream,
+      stderr: stderr.stream,
+      manifest: makeManifest({ policies: [blockingPolicy] }),
+      ledger: {
+        async query() {
+          ledgerQueried = true;
+          return { kind: "ok", entries: [] };
+        },
+        async record() {
+          /* no-op */
+        },
+      },
+      generatedDir,
+      now: duringPause,
+    });
+
+    expect(res.exitCode).toBe(0);
+    expect(res.blocked).toBe(false);
+    expect(res.decisions).toEqual([]);
+    expect(ledgerQueried).toBe(false);
+    expect(stdout.read()).toBe("");
+    expect(stderr.read()).toContain("policy intercept: PAUSED");
+    expect(stderr.read()).toContain("injected clock pause");
+    expect(fs.existsSync(sentinelPath(generatedDir))).toBe(true);
+  });
+
   it("auto-expires past the --for window: policy intercept evaluates normally", async () => {
     const pausedAt = new Date("2026-05-20T12:00:00.000Z");
     await pause({
