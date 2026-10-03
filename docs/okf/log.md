@@ -2,6 +2,7 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-10-03T13:05:01Z, task 805be2af (fix round): the hash scan now charges every `*.json` entry at least 4 KiB (`MIN_SCAN_ENTRY_COST_BYTES`) against the 32 MiB budget, whatever its read returned, so at most 8192 entries are opened (a first version charged only bytes read, leaving the entry count open); `gate-fail-posture-matrix.md` and `understanding-gate-lockout-recovery.md` say so and name the uncharged `readdir`, and the lockout doc states what `--force` overrides (the nesting-depth refusal) and never overrides (size, unreadable, not a regular file), matching the reworded `--force` help. `debug-verb-selection.md`, `evidence-ledger-trust-boundary.md` and `pause-vs-gate-kill-switch.md` list `src/cli/index.ts` or `persisted-reports.ts` and were re-verified against the changed sources (help text of one option, scan charging); their claims still hold, no text change. The two historical entries below that cited `understanding.ts` by line number for `resolveApprovalSessionId` were re-pointed to the real line (778) with the anchor `#"resolveApprovalSessionId"`. Re-stamped.
 - 2026-10-03T12:14:54Z, task 805be2af: `gate-fail-posture-matrix.md` and `understanding-gate-lockout-recovery.md` now say the gate-read hash scan reads the newest report first and stops after a 32 MiB byte budget (`MAX_HASH_SCAN_BYTES`), denying with the mismatch reason (fail closed), which replaces the named volume residual; the lockout doc also names the refusal of a report whose approval rewrite would exceed the 1 MiB cap (the approve CLI, also under `--force`, and the auto-approval path) and the `--force` help text. `codex-adapter-parity-gaps.md`, `debug-verb-selection.md`, `evidence-ledger-trust-boundary.md`, `pause-vs-gate-kill-switch.md` and `understanding-gate-auto-mode-signals.md` list `src/cli/pack/auto-approve-path.ts`, `src/cli/index.ts` or `persisted-reports.ts` and were re-verified against the changed sources; their claims still hold, no text change. Re-stamped.
 - 2026-10-02T12:07:27Z, task 1ccfe922: re-stamped after merging master; `codex-adapter-parity-gaps.md`, `debug-verb-selection.md`, `evidence-ledger-trust-boundary.md`, `gate-fail-posture-matrix.md`, `policy-engine-producer-wiring.md` list sources that master changed in the meantime. The merged changes come from separately reviewed tasks and none contradicts these docs' claims, so no body text changed.
 
@@ -752,7 +753,7 @@
   states only what `[0.28.0]` documents, dropping the unsourced
   "intentionally stays loose" design claim it carried at first; each
   rewrite kept the comment at a 4-line span so no numbered citation
-  below it shifted; verified `src/cli/approve/understanding.ts:723`
+  below it shifted; verified `src/cli/approve/understanding.ts:778#"resolveApprovalSessionId"`
   (this doc's own `understanding-gate-lockout-recovery.md` citation)
   still reads `resolveApprovalSessionId` after the edits, unchanged.
 
@@ -779,7 +780,7 @@
   Prior Art's presence (required since 0.4.0, same citation
   `` `CHANGELOG.md:#0.28.0` ``) and cannot judge the section's content,
   and that the approve CLI is the boundary that refuses a hollow list.
-  The edited span stayed at 4 lines (`understanding.ts` lines 483-486); `src/cli/approve/understanding.ts:723` still reads
+  The edited span stayed at 4 lines (`understanding.ts` lines 483-486); `src/cli/approve/understanding.ts:778#"resolveApprovalSessionId"` still reads
   `resolveApprovalSessionId` and the file's total line count is
   unchanged, so the citation above it does not shift.
   `understanding-gate-lockout-recovery.md`'s `timestamp:` is re-stamped
