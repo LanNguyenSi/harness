@@ -27,9 +27,11 @@ jobs:
 
       - name: Extract changelog for this version
         id: changelog
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
         run: |
-          awk '/^## \[${{ steps.version.outputs.version }}\]/{found=1; next} /^## \[/{found=0} found' CHANGELOG.md > release_notes.md
-          echo "Release notes extracted for v${{ steps.version.outputs.version }}"
+          awk '$0 ~ ("^## \\[" ENVIRON["VERSION"] "\\]") {found=1; next} /^## \[/{found=0} found' CHANGELOG.md > release_notes.md
+          echo "Release notes extracted for v$VERSION"
 
       - name: Fail on empty release notes
         # Guards the awk extraction above (task 3ed3d333): when
@@ -39,11 +41,10 @@ jobs:
         # body. Abort instead — convert [Unreleased] into the version
         # section before tagging.
         #
-        # VERSION comes in via `env:` rather than being interpolated
-        # straight into the run: script (as the pre-existing awk step
-        # above still does): an `env:`-bound `${{ }}` becomes a plain
-        # environment variable, so its value is shell-data, never
-        # spliced into the script's syntax.
+        # VERSION comes in via `env:` (as in the awk step above) rather
+        # than being interpolated straight into the run: script: an
+        # `env:`-bound `${{ }}` becomes a plain environment variable, so
+        # its value is shell-data, never spliced into the script's syntax.
         env:
           VERSION: ${{ steps.version.outputs.version }}
         run: |

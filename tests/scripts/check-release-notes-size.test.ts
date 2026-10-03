@@ -118,10 +118,13 @@ function readReleaseYmlAwkProgram(): string {
 // at all, and a direct child is what this suite's hermetic spawn guard
 // is actually meant to see and allowlist.
 function runReleaseYmlAwk(version: string, changelog: string): string {
-  const program = readReleaseYmlAwkProgram().replace("${{ steps.version.outputs.version }}", version);
+  // release.yml passes the version to awk through the step's env
+  // (ENVIRON["VERSION"]), not by splicing it into the program text.
+  const program = readReleaseYmlAwkProgram();
   return execFileSync("awk", [program], {
     input: changelog,
     encoding: "utf8",
+    env: { ...process.env, VERSION: version },
   });
 }
 
