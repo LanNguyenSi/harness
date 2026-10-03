@@ -41,11 +41,10 @@ jobs:
         # body. Abort instead — convert [Unreleased] into the version
         # section before tagging.
         #
-        # VERSION comes in via `env:` rather than being interpolated
-        # straight into the run: script (as the awk step above does as
-        # well): an `env:`-bound `${{ }}` becomes a plain environment
-        # variable, so its value is shell-data, never spliced into the
-        # script's syntax.
+        # VERSION comes in via `env:` (as in the awk step above) rather
+        # than being interpolated straight into the run: script: an
+        # `env:`-bound `${{ }}` becomes a plain environment variable, so
+        # its value is shell-data, never spliced into the script's syntax.
         env:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
