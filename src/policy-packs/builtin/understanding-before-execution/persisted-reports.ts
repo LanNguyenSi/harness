@@ -606,10 +606,18 @@ export const MAX_HASHED_REPORT_BYTES = 1024 * 1024;
  * `*.json`, files over the cap, unreadable ones) still cost an open each, and
  * 400k tiny files took about 22 s of CPU. A scan that spent the budget without
  * finding every wanted hash stops and the check fails closed with the mismatch
- * reason. With the floor the scan opens at most 8192 entries and reads at most
- * 32 MiB, whichever the entries are. Real reports are a few kilobytes, so the
- * budget covers thousands of them. The scan reads the newest file first,
- * which is where the approved report usually is.
+ * reason. With the floor the scan opens at most 8192 entries and reads about
+ * 32 MiB (the last file read may add up to the 1 MiB per-file cap), whichever
+ * the entries are. Real reports are a few kilobytes, so the budget covers
+ * thousands of them. The scan reads the newest file first, which is where the
+ * approved report usually is.
+ *
+ * This bounds the hash scan only, not the hook as a whole by entry count: the
+ * evidence read that follows a refused marker (shared with the no-marker path,
+ * `listPersistedReportsBounded`) still opens and parses every `*.json` entry,
+ * so a directory of hundreds of thousands of planted entries still takes the
+ * hook past the PreToolUse budget, which the runtime treats as an allow. A
+ * follow-up task bounds that read.
  */
 export const MAX_HASH_SCAN_BYTES = 32 * 1024 * 1024;
 
@@ -870,9 +878,12 @@ interface ReportHashScan {
  * entry, whatever its read returned, is charged the larger of the bytes read
  * and `MIN_SCAN_ENTRY_COST_BYTES`; once the charges reach `MAX_HASH_SCAN_BYTES`
  * with a wanted hash still unfound the scan stops and sets `budgetExhausted`,
- * so the number of entries opened and the bytes read are both bounded by the
- * budget, however many entries the directory holds. The `readdir` and the
- * name sort of the directory itself are outside the budget.
+ * so the number of entries opened and the bytes read (about 32 MiB, the last
+ * file read may add up to the per-file cap) are both bounded by the budget,
+ * however many entries the directory holds. The `readdir` and the name sort
+ * of the directory itself are outside the budget, and so is the evidence read
+ * a refused marker falls through to (`listPersistedReportsBounded`), which
+ * still opens every `*.json` entry.
  */
 function scanReportHashes(dir: string, wanted: ReadonlySet<string>): ReportHashScan {
   const scan: ReportHashScan = { files: 0, matched: new Set<string>(), budgetExhausted: false };
@@ -944,12 +955,21 @@ function scanReportHashes(dir: string, wanted: ReadonlySet<string>): ReportHashS
  * entry at least `MIN_SCAN_ENTRY_COST_BYTES` against `MAX_HASH_SCAN_BYTES`
  * (bytes read or the floor, whichever is larger, whatever the read returned):
  * past the budget the check denies with the mismatch reason (fail closed).
- * That bounds the entries opened (8192) and the bytes read (32 MiB). Two
- * costs remain. A legitimate approval whose report sits behind that much
- * newer report data (by name, descending) is denied; re-approving writes a
- * new, newest report and recovers. And the `readdir` plus name sort of the
- * directory itself are not charged, so a directory of hundreds of thousands
- * of entries still costs that listing before the scan starts.
+ * That bounds the entries opened (8192) and the bytes read (about 32 MiB, the
+ * last file read may add up to the 1 MiB per-file cap). Three costs remain.
+ * A legitimate approval whose report sits behind that much newer report data
+ * (by name, descending) is denied; re-approving writes a new, newest report
+ * and recovers only when the newer entries are real reports: planted `*.json`
+ * names that sort after the timestamped report names (for example names
+ * starting with a letter) stay newer than any new report and keep denying
+ * until removed. The `readdir` plus name sort of the directory itself are not
+ * charged, so a directory of hundreds of thousands of entries still costs that
+ * listing before the scan starts. And the hash scan is not the whole hook:
+ * the evidence read that follows a refused marker (shared with the no-marker
+ * path, `listPersistedReportsBounded`) still opens and parses every `*.json`
+ * entry, so the hook as a whole is still unbounded by entry count and a
+ * large planted directory runs it past the PreToolUse budget (an allow); a
+ * follow-up task bounds that read.
  *
  * Removing the approved report while other report files remain is a deny:
  * nothing on disk carries the signed content any more. `harness gc --apply`
