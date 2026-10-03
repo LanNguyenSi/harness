@@ -73,6 +73,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { readRegularFileRejectingSymlink } from "../../io/read-regular-file.js";
+import { escapeForDisplay } from "../../io/display-path.js";
 import { safeJsonParse } from "../../io/safe-json-parse.js";
 import {
   ADOPTION_LEDGER_DIRNAME,
@@ -435,7 +436,7 @@ function readInflightRecordStatus(filePath: string, nowMs: number): InflightReco
   if (!Number.isFinite(approvedAtMs)) {
     return {
       kind: "unparseable",
-      reason: `approvedAt is not a valid instant: ${JSON.stringify(approvedAtRaw)}`,
+      reason: `approvedAt is not a valid instant: ${escapeForDisplay(approvedAtRaw)}`,
     };
   }
   if (nowMs - approvedAtMs > DEFAULT_INFLIGHT_STALE_AFTER_MS) {
@@ -447,7 +448,7 @@ function readInflightRecordStatus(filePath: string, nowMs: number): InflightReco
   if (approvedAtMs - nowMs > INFLIGHT_FUTURE_SKEW_MS) {
     return {
       kind: "stale",
-      reason: `approved at ${approvedAtRaw}, more than ${INFLIGHT_FUTURE_SKEW_MS / 60_000} minutes in the future`,
+      reason: `approved at ${escapeForDisplay(approvedAtRaw)}, more than ${INFLIGHT_FUTURE_SKEW_MS / 60_000} minutes in the future`,
     };
   }
   return { kind: "fresh" };
