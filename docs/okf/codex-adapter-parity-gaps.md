@@ -3,7 +3,7 @@ type: module
 title: Codex runtime adapter — parity gaps vs Claude Code
 description: "What harness's Codex runtime adapter is, the enumerated behavioral gaps vs the Claude Code first-class target (former headline gap, no Codex PostToolUse hook, closed by task a1348c89; the active-claim tracker / stay-in-scope reminder gap closed by task cf4cdc93; the opt-in auto-approval gap closed by agent-tasks 57058364, slice 2, gap 13; current top gap is the un-translated permission-profile / sandbox stanza, gap 4; the claude -p delegation gap 14 is decided (task be9faf70): stays Claude Code only, documented, not ported), and the Codex wire-format contract."
 tags: [codex, runtime-adapter, parity, hooks]
-timestamp: 2026-10-03T10:26:17Z
+timestamp: 2026-10-03T11:00:12Z
 sources:
   - src/cli/apply/generate-settings.ts
   - src/cli/pack/hook-pre-tool-use.ts
@@ -63,6 +63,7 @@ The remaining shapes have explicit boundaries:
 
 | Shape | Behaviour and reason |
 | --- | --- |
+| Canonical legacy generated block before a later BEGIN block, separated by a foreign table, END, or both | Kept, so its stale hook still runs alongside the fresh hooks. `findManagedRange` gives BEGIN priority over legacy generated headers and owns only that replacement range; `assertNoLaterGeneratedHeaderBlock` searches after its end, not before BEGIN. Without a `# harness hook:` ownership comment, the earlier table is preserved rather than selected as a second range. Remove an obsolete earlier block explicitly; reapplying alone leaves it unchanged. |
 | Later generated header above an uncommented respelled hook table, such as `[[ hooks.Stop ]]` | Kept. The legacy-block detector requires the canonical `[[hooks.` prefix; broadening it also treats preserved empty-legacy header comments above a genuine operator hook as a second block and breaks idempotent installs. A `# harness hook:` ownership comment above the respelled table does refuse. |
 | Uncommented hook table running a harness command on the append path | Kept. With no owned range or ownership comment, the command alone cannot distinguish a stale generated table from an intentional operator hook. The existing command check applies to the run of hook tables directly after a managed range, not every hook in the document. |
 | Later generated header with a key/value line before its first hook table, or a later source-prefix-only block with uncommented tables | Not recognised as another block. The later-header check needs a comment run directly above the header and does not select a second ownership range. |

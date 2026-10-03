@@ -472,6 +472,25 @@ describe("codex install: later generated blocks outside the owned range refuse",
     }
   }
 
+  for (const [label, separator] of [
+    ["foreign table", ["[tui]", "x = 1"]],
+    ["END", [CODEX_MANAGED_END]],
+    ["END and foreign table", [CODEX_MANAGED_END, "[tui]", "x = 1"]],
+  ] as Array<[string, string[]]>) {
+    it(`a canonical legacy block before BEGIN remains an ownership boundary after ${label}`, () => {
+      const prefix = [GENERATED, ...OLD_TABLE, ...separator, ""].join("\n");
+      write([prefix, SOURCE_PREFIX, CODEX_MANAGED_BEGIN, GENERATED,
+        ...harnessTable("current-old", "Stop", "harness pack hook current-old"), CODEX_MANAGED_END, ""]);
+      const p = planTwice();
+      expect(p.nextContent.startsWith(prefix)).toBe(true);
+      expect(hookCommands(p.nextContent).sort()).toEqual([
+        "PreToolUse:harness pack hook old", "PreToolUse:harness pack hook a", "Stop:harness pack hook b",
+      ].sort());
+      expect(count(p.nextContent, CODEX_MANAGED_BEGIN)).toBe(1);
+      expect(count(p.nextContent, "harness pack hook current-old")).toBe(0);
+    });
+  }
+
   it("a later generated header above an uncommented respelled hook remains an ownership boundary", () => {
     const config = write([GENERATED, "[tui]", "t = 1", GENERATED, "[[ hooks.Stop ]]", 'command = "harness pack hook stale"', ""]);
     const p = planTwice();
