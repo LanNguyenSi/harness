@@ -596,17 +596,30 @@ const MAX_CANONICAL_REPORT_DEPTH = 64;
 export const MAX_HASHED_REPORT_BYTES = 1024 * 1024;
 
 /**
- * Total bytes, summed over the report files read, the gate-read hash scan
- * spends before it gives up (32 MiB, 32 files at the per-file cap). The
- * per-file cap bounds one file, not their number: 160 planted 1 MiB
- * key-heavy files took about 10 s of scan time, near the 15 s PreToolUse
- * budget, and a hook past its budget is a non-blocking error for the runtime
- * (an allow). A scan that spent the budget without finding every wanted hash
- * stops and the check fails closed with the mismatch reason. Real reports are
- * a few kilobytes, so this is thousands of them. The scan reads the newest
- * file first, which is where the approved report usually is.
+ * Budget the gate-read hash scan spends before it gives up (32 MiB), charged
+ * per `*.json` entry as the larger of the bytes read and
+ * {@link MIN_SCAN_ENTRY_COST_BYTES}. The per-file cap bounds one file, not
+ * their number: 160 planted 1 MiB key-heavy files took 15.9 to 17.6 s of scan
+ * time, past the 15 s PreToolUse budget, and a hook past its budget is a
+ * non-blocking error for the runtime (an allow). Charging bytes alone left the
+ * entry count open: entries that cost no bytes (tiny files, directories named
+ * `*.json`, files over the cap, unreadable ones) still cost an open each, and
+ * 400k tiny files took about 22 s of CPU. A scan that spent the budget without
+ * finding every wanted hash stops and the check fails closed with the mismatch
+ * reason. With the floor the scan opens at most 8192 entries and reads at most
+ * 32 MiB, whichever the entries are. Real reports are a few kilobytes, so the
+ * budget covers thousands of them. The scan reads the newest file first,
+ * which is where the approved report usually is.
  */
 export const MAX_HASH_SCAN_BYTES = 32 * 1024 * 1024;
+
+/**
+ * Least a `*.json` entry is charged against {@link MAX_HASH_SCAN_BYTES}
+ * whatever the read returned (4 KiB, about one real report), so entries that
+ * read nothing or little still spend the budget at a rate that bounds their
+ * count: 32 MiB / 4 KiB = 8192 entries.
+ */
+export const MIN_SCAN_ENTRY_COST_BYTES = 4096;
 
 /** Result of {@link walkContainerDepth}. */
 export interface ContainerDepthWalk {
@@ -841,7 +854,7 @@ interface ReportHashScan {
   files: number;
   /** The wanted hashes some report file hashes to. */
   matched: Set<string>;
-  /** True when the scan stopped at `MAX_HASH_SCAN_BYTES` with a wanted hash still unfound. */
+  /** True when the scan stopped at the `MAX_HASH_SCAN_BYTES` budget with a wanted hash still unfound. */
   budgetExhausted: boolean;
 }
 
@@ -853,11 +866,13 @@ interface ReportHashScan {
  * `MAX_HASHED_REPORT_BYTES`, cannot be opened or read, grows while read, is
  * not a JSON object, or nests too deeply matches nothing. Entries are taken
  * in descending name order, newest first (report names start with a
- * timestamp), so the approved report is usually the first file read. The
- * bytes of the files read are summed; once they reach `MAX_HASH_SCAN_BYTES`
+ * timestamp), so the approved report is usually the first file read. Every
+ * entry, whatever its read returned, is charged the larger of the bytes read
+ * and `MIN_SCAN_ENTRY_COST_BYTES`; once the charges reach `MAX_HASH_SCAN_BYTES`
  * with a wanted hash still unfound the scan stops and sets `budgetExhausted`,
- * so the cost is bounded by that budget instead of growing with the number
- * of files (each read at most up to the per-file cap).
+ * so the number of entries opened and the bytes read are both bounded by the
+ * budget, however many entries the directory holds. The `readdir` and the
+ * name sort of the directory itself are outside the budget.
  */
 function scanReportHashes(dir: string, wanted: ReadonlySet<string>): ReportHashScan {
   const scan: ReportHashScan = { files: 0, matched: new Set<string>(), budgetExhausted: false };
@@ -868,7 +883,7 @@ function scanReportHashes(dir: string, wanted: ReadonlySet<string>): ReportHashS
     return scan;
   }
   names = names.filter((name) => name.endsWith(".json")).sort().reverse();
-  let hashedBytes = 0;
+  let hashedBytes = 0; // budget charged so far, see the charge below
   for (const name of names) {
     scan.files += 1;
     if (hashedBytes >= MAX_HASH_SCAN_BYTES) {
@@ -876,8 +891,8 @@ function scanReportHashes(dir: string, wanted: ReadonlySet<string>): ReportHashS
       break;
     }
     const read = readReportFileBounded(path.join(dir, name));
+    hashedBytes += Math.max(read.ok ? Buffer.byteLength(read.raw) : 0, MIN_SCAN_ENTRY_COST_BYTES);
     if (!read.ok) continue;
-    hashedBytes += Buffer.byteLength(read.raw);
     const hashed = hashReportText(read.raw);
     if (hashed.ok && wanted.has(hashed.hash)) {
       scan.matched.add(hashed.hash);
@@ -925,11 +940,16 @@ function scanReportHashes(dir: string, wanted: ReadonlySet<string>): ReportHashS
  * the "no report file" allow, the same as before this check existed. The
  * marker and the operator's approval itself are untouched in both cases;
  * only the audit trail loses its claim to be the approved content. (3) The
- * cap bounds each file, not their number, so the scan itself is bounded by
- * `MAX_HASH_SCAN_BYTES`: past it the check denies with the mismatch reason
- * (fail closed). The remaining cost is that a legitimate approval whose
- * report is older than 32 MiB of newer report files is denied; re-approving
- * writes a new, newest report and recovers.
+ * cap bounds each file, not their number, so the scan charges every `*.json`
+ * entry at least `MIN_SCAN_ENTRY_COST_BYTES` against `MAX_HASH_SCAN_BYTES`
+ * (bytes read or the floor, whichever is larger, whatever the read returned):
+ * past the budget the check denies with the mismatch reason (fail closed).
+ * That bounds the entries opened (8192) and the bytes read (32 MiB). Two
+ * costs remain. A legitimate approval whose report sits behind that much
+ * newer report data (by name, descending) is denied; re-approving writes a
+ * new, newest report and recovers. And the `readdir` plus name sort of the
+ * directory itself are not charged, so a directory of hundreds of thousands
+ * of entries still costs that listing before the scan starts.
  *
  * Removing the approved report while other report files remain is a deny:
  * nothing on disk carries the signed content any more. `harness gc --apply`

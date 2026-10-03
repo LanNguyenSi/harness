@@ -963,8 +963,13 @@ describe("pack hook pre-tool-use — auto-approval path (ADR slice 1)", () => {
       // marker minted over the cap would give on every call.
       const again = await call();
       expect(again.blocked).toBe(true);
+      expect(again.stderr).toMatch(
+        /auto-approval declined: report invalid \(the approved report would be \d+ bytes, over the 1048576-byte cap for hashing its content, so the gate could not match it\)/,
+      );
       expect(again.stderr).not.toMatch(/matches the content the session approval marker was signed for/);
       expect(markerExists()).toBe(false);
+      expect(ledgerCalls).toEqual([]);
+      expect(readReport(report.filePath)["approvalStatus"]).toBe("pending");
     });
 
     it("control: a valid pending report of cap minus 4 KiB still mints, and the gate call after the mint allows", async () => {

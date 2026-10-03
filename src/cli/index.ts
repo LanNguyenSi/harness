@@ -1764,7 +1764,7 @@ export function buildProgram(opts: RunOptions = {}): Command {
     .option("--approved-by <actor>", "actor to record on the persisted report (default: harness-approve-cli)")
     .option(
       "--force",
-      "bypass approve-time report validation (priorArt enforcement on grill_me reports). Writes the marker / ledger / report-flip anyway and stamps the ledger tag with `:forced:<field>` so audit can distinguish forced approvals from clean ones. Emergency-unblock path: default refuses the marker when a grill_me report fails validation. Does not bypass the nesting-depth and size refusals: a report nested too deeply to hash still signs an unbound marker, but one over the size cap (also once pretty-printed with the approval fields), unreadable or not a regular file is refused either way.",
+      "bypass approve-time report validation (priorArt enforcement on grill_me reports). Writes the marker / ledger / report-flip anyway and stamps the ledger tag with `:forced:<field>` so audit can distinguish forced approvals from clean ones. Emergency-unblock path: default refuses the marker when a grill_me report fails validation. Also overrides the nesting-depth refusal (the marker is then signed with no content binding); never overrides the size refusal (also on the pretty-printed approval rewrite), an unreadable report, or one that is not a regular file.",
     )
     .action(
       async (options: {
