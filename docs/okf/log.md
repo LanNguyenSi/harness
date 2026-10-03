@@ -2,6 +2,19 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-10-03T12:12:29Z, okf-staleness workflow re-synced from the okf-kit
+  workflow template (fleet convergence ticket fdc01728): the workflow header
+  now names the template as its source instead of calling the file a pattern
+  to keep in sync, the pin moved from okf-kit@0.14.0 to okf-kit@0.16.0,
+  `--require-anchors` was already part of the invocation, and the job stays
+  warn-only. Measured on the tree before the change with `okf-kit check --json
+  <bundle>`: at okf-kit@0.14.0, 0 errors, 0 warnings, 0 notices (exit 0) plain
+  and 0 errors, 0 warnings, 0 notices (exit 0) with `--require-anchors`; at
+  okf-kit@0.16.0, 0 errors, 0 warnings, 0 notices (exit 0) plain and 0 errors,
+  0 warnings, 0 notices (exit 0) with `--require-anchors`. Of the anchored-run
+  warnings, 0 are anchor-required findings (full citations without an anchor);
+  anchoring them is separate work and none of them blocks anything.
+
 - 2026-10-02T12:07:27Z, task 1ccfe922: re-stamped after merging master; `codex-adapter-parity-gaps.md`, `debug-verb-selection.md`, `evidence-ledger-trust-boundary.md`, `gate-fail-posture-matrix.md`, `policy-engine-producer-wiring.md` list sources that master changed in the meantime. The merged changes come from separately reviewed tasks and none contradicts these docs' claims, so no body text changed.
 
 - 2026-10-02T12:06:17Z, task 1ccfe922: re-stamped after merging master; `codex-adapter-parity-gaps.md`, `evidence-ledger-trust-boundary.md`, `gate-fail-posture-matrix.md`, `understanding-gate-auto-mode-signals.md`, `understanding-gate-lockout-recovery.md` list sources that master changed in the meantime. The merged changes come from separately reviewed tasks and none contradicts these docs' claims, so no body text changed.
