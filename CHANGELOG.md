@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.63.0] - 2026-10-04
+
+### Upgrade notes
+
+- The understanding gate's PreToolUse hook now reads at most 8192 `*.json` entries and 32 MiB of report data from the reports directory (and the same bounds for `parse-errors/`). A directory past either bound fails closed: the block names no report evidence and the opt-in auto-approval declines until non-report or stale `*.json` entries are removed by hand (`harness gc` removes only aged approved or expired reports). Directories within the bounds behave as before.
+- `harness explain-policy` JSON and YAML output gains a `parity` block; consumers that validate the projection strictly should allow the new key.
+
 ### Fixed
 
 - `harness explain-policy` now builds its Action Envelope through the same enrichment as `harness policy intercept` (task 7c3919a2). Before, it read only the ambient process environment, so `DATABASE_URL=postgres://u@prod-db/app psql ...` resolved `production` in the hook but `unknown` (`applies: false`) in the debug verb; inline `VAR=value` prefixes (quoted values and several assignments included), a leading `cd <path> &&` and a leading `git switch|checkout <branch> &&` are now merged by one shared helper (`src/cli/policy/risk-envelope-enrichment.ts`). The verb stays hypothetical and ledger-free, and its output gains a `parity` block naming what it does not evaluate (`ledger_requires`, `kubectl_target`). A fixture corpus test fails when the two verbs disagree.
