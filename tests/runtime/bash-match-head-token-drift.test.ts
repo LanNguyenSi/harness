@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 import { parse as parseYaml } from "yaml";
 import { FULL_TEMPLATE } from "../../src/cli/init/templates.js";
 import { parseManifest } from "../../src/schema/index.js";
+import { findHeadTokenShapedSetNames } from "../_helpers/head-token-set-scan.js";
 import { GIT_TOKEN_RE, NON_GIT_HEAD_TOKENS } from "../../src/runtime/command-normalize.js";
 import {
   DOCUMENTED_UNCOVERED_HEAD_TOKENS,
@@ -54,26 +55,34 @@ import {
 //      see `src/runtime/bash-match-registry.ts`.
 //
 // UNREGISTERED-SET SCAN — WHAT IT SEES AND WHAT IT MISSES (be honest, per
-// this run's brief; broadened in the fix round, F3): a textual regex scan
-// of every non-test `.ts` file under `src/runtime/` (RECURSIVELY, so a
-// future `src/runtime/<subdir>/` is covered) for a TOP-LEVEL
-// `export const NAME[: <any type annotation>] = new Set(<optional
-// constructor generic>)([...])` literal containing AT LEAST ONE bare
-// lowercase word element (no leading `-`, matching `read-only-bash.ts`'s
-// own flag-vs-name distinction). Any match is a "candidate" that MUST have
-// its name present in `REGISTERED_HEAD_TOKEN_SETS`.
+// this run's brief). Since task `26c1d33e` the scan is STRUCTURAL: every
+// non-test `.ts` file under `src/runtime/` (RECURSIVELY, so a future
+// `src/runtime/<subdir>/` is covered) is parsed with the TypeScript
+// compiler API (`tests/_helpers/head-token-set-scan.ts`, the same
+// `ts.createSourceFile` approach as `scripts/check-no-only.mjs`) and every
+// TOP-LEVEL `export const NAME[: <any type annotation>] = new Set[<T>](<array
+// literal>)` is inspected. A set is a "candidate" when AT LEAST ONE element
+// is a string literal (or a no-substitution template literal) holding a
+// bare lowercase word (no leading `-`, matching `read-only-bash.ts`'s own
+// flag-vs-name distinction). Any candidate MUST have its (file, name) pair
+// present in `REGISTERED_HEAD_TOKEN_SETS`.
 //   SEES: a new exported `Set` literal of bare-word tokens anywhere under
 //   `src/runtime/` (any depth), regardless of file — closing the exact
-//   "new module" shape of run `dbc6d303` — AND, since the fix round,
-//   regardless of three shapes a fixed-form regex plus `every()` missed:
+//   "new module" shape of run `dbc6d303` — regardless of:
 //     (a) a MUTABLE type annotation (`export const X: Set<string> = ...`,
 //         not only `ReadonlySet<string>`).
 //     (b) a GENERIC on the constructor itself (`new Set<string>([...])`).
-//     (c) a `// comment` line sharing an array element's slot — this
-//         merges the comment into one element, which fails the bare-word
-//         test; `some()` (not `every()`) only needs ONE genuine bare-word
-//         element among the rest to flag the whole set, so a stray
-//         comment can no longer sink an otherwise-detectable set.
+//     (c) a `// comment` line inside the array (comments are not elements;
+//         `some()` needs only ONE genuine bare-word element among the rest).
+//     (d) a trailing `as const` (or `satisfies` / parenthesised) wrapper
+//         around the array literal.
+//     (e) a `// comment` line BETWEEN `(` and `[`.
+//     (f) backtick-quoted elements without substitutions.
+//     (g) a union-literal type annotation on the constant
+//         (`ReadonlySet<"gh" | "harness">`).
+//     (h) a trailing comma in the constructor call (`new Set([...],)`).
+//   Because the scan reads the AST, `export const` text inside a string
+//   literal or a comment is never a candidate.
 //   MISSES (by construction, not oversight):
 //     - Anything outside `src/runtime/` (e.g. `src/policy-packs/`,
 //       `src/cli/`) — scoped to the layer where both real registrations
@@ -82,8 +91,13 @@ import {
 //       map, or a regex alternation (`GIT_TOKEN_RE`'s own shape) — those
 //       are registered BY HAND, not discovered.
 //     - A set built any way other than a literal `new Set([...])` at the
-//       declaration site (computed, spread from another module, built in
-//       a function body, or re-exported under an alias).
+//       declaration site (computed, built in a function body, or
+//       re-exported under an alias); a literal that spreads another
+//       module's set is still seen when it also lists a bare-word element
+//       of its own, and missed otherwise.
+//     - A constructor other than the bare identifier `Set` (for example
+//       `new globalThis.Set(...)`), and an `export const` nested inside a
+//       namespace: only top-level statements are read.
 //     - A module-private (`const`, not `export const`) set — nothing
 //       outside the module could reference it for registration anyway,
 //       and no other module could consume it as a mirror of manifest
@@ -91,33 +105,12 @@ import {
 //     - A set with NO bare-lowercase-word element at all (every element
 //       uppercase, a flag, or a non-string literal) — `some()` still
 //       needs at least one genuine candidate element to fire.
-//     - (fix round 2, S3 decision D-003 — deliberately DEFERRED, not
-//       fixed, as case enumeration; filed as follow-up rather than chased
-//       one shape at a time):
-//         - `new Set([...] as const)` — the trailing `as const` assertion
-//           after the array literal is not accounted for by
-//           `EXPORTED_SET_RE`.
-//         - a `// comment` line BETWEEN `(` and `[` (e.g. `new Set(\n  //
-//           why\n  [...])`) — distinct from the INSIDE-the-brackets
-//           comment case, SEES (c) above, which a comment IS tolerated
-//           for: the regex only tolerates whitespace between `(` and `[`,
-//           not text, so a comment there breaks the match entirely rather
-//           than merging into an element. A comment is tolerated ONLY
-//           inside the brackets, sharing an element's slot — nowhere else.
-//         - backtick-quoted (template-literal) elements — the unquoting
-//           step only strips a leading/trailing `"` or `'`, never a
-//           backtick.
-//         - a union-literal type annotation on the constant itself.
-//         - a trailing comma in the constructor call (`new Set([...], )`)
-//           — the regex demands `]` immediately (modulo whitespace)
-//           followed by `)`, with nothing in between.
 //   This is a real, load-bearing but NARROW net, honestly under-claimed:
 //   it catches both historical incidents and the shapes enumerated in SEES
-//   above; it does not catch the shapes enumerated in MISSES above,
-//   including the five just listed. See the fixture-tree tests below
-//   (fix round 2, S5) for the mutation probes that prove each SEEN shape
-//   fires, and the positive-control test (F4) for what it does and does
-//   not guarantee on its own.
+//   above; it does not catch the shapes enumerated in MISSES above. See
+//   the fixture-tree tests below for the tests that prove each SEEN shape
+//   fires and each negative control stays silent, and the positive-control
+//   test (F4) for what it does and does not guarantee on its own.
 //
 // FIX ROUND 2 (task `074acf5d`, second fix round, findings S3/S5/S6 — see
 // `.ai/runs/2026-07-28-manifest-facts-drift-guard/03-decisions.md`):
@@ -158,11 +151,6 @@ import {
 const __filename = fileURLToPath(import.meta.url);
 const REPO_ROOT = path.resolve(path.dirname(__filename), "..", "..");
 const RUNTIME_DIR = path.join(REPO_ROOT, "src", "runtime");
-
-const EXPORTED_SET_RE =
-  /export const (\w+)\s*(?::\s*[\w.<>|\s]*)?=\s*new Set(?:<[^>]*>)?\(\s*\[([^\]]*)\]\s*\)/g;
-
-const BARE_WORD_RE = /^[a-z][a-z0-9_-]*$/;
 
 interface CandidateSet {
   /**
@@ -207,24 +195,12 @@ function scanForHeadTokenShapedSets(rootDir: string = RUNTIME_DIR): CandidateSet
   const found: CandidateSet[] = [];
   for (const full of collectRuntimeTsFiles(rootDir)) {
     const text = fs.readFileSync(full, "utf8");
-    EXPORTED_SET_RE.lastIndex = 0;
-    let m: RegExpExecArray | null;
-    while ((m = EXPORTED_SET_RE.exec(text)) !== null) {
-      const name = m[1]!;
-      const arrayBody = m[2] ?? "";
-      const elements = arrayBody
-        .split(",")
-        .map((s) => s.trim())
-        .filter((s) => s.length > 0)
-        .map((s) => s.replace(/^["']|["']$/g, ""));
-      if (elements.length === 0) continue;
-      if (elements.some((e) => BARE_WORD_RE.test(e))) {
-        // Repo-root-relative (fix round 2, S3) — NOT rootDir-relative —
-        // so the (file, name) pair is directly comparable to a
-        // registration's (module, id) pair regardless of which root the
-        // scan actually walked (the real RUNTIME_DIR or a fixture tree).
-        found.push({ file: path.relative(REPO_ROOT, full), name });
-      }
+    for (const name of findHeadTokenShapedSetNames(text, full)) {
+      // Repo-root-relative (fix round 2, S3) — NOT rootDir-relative —
+      // so the (file, name) pair is directly comparable to a
+      // registration's (module, id) pair regardless of which root the
+      // scan actually walked (the real RUNTIME_DIR or a fixture tree).
+      found.push({ file: path.relative(REPO_ROOT, full), name });
     }
   }
   return found;
@@ -417,6 +393,81 @@ describe("bash_match facts drift guard (migrated onto src/runtime/bash-match-fac
         },
       );
     });
+  });
+
+  describe("task 26c1d33e: the five spellings the regex scan could not see are now detected (structural scan)", () => {
+    const spellings: ReadonlyArray<{ label: string; name: string; source: string }> = [
+      {
+        label: "`new Set([...] as const)`",
+        name: "AS_CONST_HEADS",
+        source: 'export const AS_CONST_HEADS = new Set(["ls", "harness"] as const);\n',
+      },
+      {
+        label: "a `// comment` line between `(` and `[`",
+        name: "COMMENT_BEFORE_ARRAY_HEADS",
+        source: 'export const COMMENT_BEFORE_ARRAY_HEADS = new Set(\n  // why\n  ["ls", "harness"]);\n',
+      },
+      {
+        label: "backtick-quoted (no-substitution template literal) elements",
+        name: "BACKTICK_HEADS",
+        source: "export const BACKTICK_HEADS = new Set([`ls`, `harness`]);\n",
+      },
+      {
+        label: "a union-literal type annotation on the constant",
+        name: "UNION_ANNOTATION_HEADS",
+        source:
+          'export const UNION_ANNOTATION_HEADS: ReadonlySet<"gh" | "harness"> = new Set(["gh", "harness"]);\n',
+      },
+      {
+        label: "a trailing comma in the constructor call",
+        name: "TRAILING_COMMA_HEADS",
+        source: 'export const TRAILING_COMMA_HEADS = new Set(["ls", "harness"],);\n',
+      },
+    ];
+    for (const { label, name, source } of spellings) {
+      it(`detects ${label}`, () => {
+        withFixtureTree({ "spelling.ts": source }, (root) => {
+          expect(scanForHeadTokenShapedSets(root)).toContainEqual(expect.objectContaining({ name }));
+        });
+      });
+    }
+  });
+
+  it("task 26c1d33e: a set mixing a bare-word element with flag and non-string elements is still a candidate (some(), not every())", () => {
+    withFixtureTree({ "mixed.ts": 'export const MIXED_HEADS = new Set(["ls", "-x", "UPPER", 7]);\n' }, (root) => {
+      expect(scanForHeadTokenShapedSets(root)).toContainEqual(
+        expect.objectContaining({ name: "MIXED_HEADS" }),
+      );
+    });
+  });
+
+  describe("task 26c1d33e: negative controls, the scan reports no candidate", () => {
+    const controls: ReadonlyArray<{ label: string; source: string }> = [
+      {
+        label: "a pure flag set in the style of ENV_LEADING_FLAGS (no bare-word element)",
+        source: 'export const F: ReadonlySet<string> = new Set(["-i", "--ignore-environment"]);\n',
+      },
+      {
+        label: "a module-private (non-exported) bare-word set",
+        source: 'const G = new Set(["ls", "harness"]);\n',
+      },
+      {
+        label: "an `export const` set that only appears inside a string literal and a comment",
+        source:
+          'const S = \'export const H = new Set(["ls", "harness"]);\';\n// export const I = new Set(["ls", "harness"]);\n/* export const J = new Set(["ls", "harness"]); */\n',
+      },
+      {
+        label: "a set whose elements are all uppercase or non-string literals",
+        source: 'export const K = new Set(["LS", "HARNESS", 1, 2]);\n',
+      },
+    ];
+    for (const { label, source } of controls) {
+      it(`reports nothing for ${label}`, () => {
+        withFixtureTree({ "control.ts": source }, (root) => {
+          expect(scanForHeadTokenShapedSets(root)).toEqual([]);
+        });
+      });
+    }
   });
 
   it("scanForHeadTokenShapedSets DETECTS the known-good real case on the ACTUAL src/runtime/ tree (F4 fix-round-1 regression, title corrected fix round 2: this alone is NOT a general positive control — NON_GIT_HEAD_TOKENS is the one real set that also satisfies the pre-fix-round-1 narrow regex, `every()`, and a non-recursive walk, so it is invariant under every widening those fixes made; it only proves the scan is not a no-op against TODAY's shipped tree. The fix-round-2 fixture-tree tests above are what actually pin the mutable-annotation, generic-constructor, comment-tolerance, and recursive-walk shapes independently)", () => {
