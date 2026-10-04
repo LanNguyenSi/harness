@@ -72,6 +72,7 @@ import {
   describeMarkerTtlExpiry,
   harnessAllowed,
   listPersistedReportsBoundedWithSkips,
+  MAX_HOOK_LISTING_ENTRIES,
   matchLedgerEntries,
   noApprovalMarkerReason,
   parseAutoApprove,
@@ -1215,8 +1216,16 @@ async function runPackHookPreToolUseCliInner(
           // payload session_id. Spelling it out keeps the report this
           // branch looks for bound to the same session the delegation,
           // the scan and the adoption ledger are all keyed by.
+          // Bounded by entry count and bytes too (planted entries would run
+          // this hook past its budget, which the runtime treats as an allow):
+          // past either bound no report is returned and the capture below is
+          // skipped, since a listing that cannot see every entry cannot tell
+          // whether the child already has a report.
+          const delegationListing = listPersistedReportsBoundedWithSkips(reportsDir, {
+            maxEntries: MAX_HOOK_LISTING_ENTRIES,
+          });
           const existing = selectNewestStrictSessionReport(
-            listPersistedReportsBoundedWithSkips(reportsDir).reports, // bounded: agent-writable dir; a skipped entry is no report
+            delegationListing.reports, // bounded: agent-writable dir; a skipped entry is no report
             childSessionId,
           );
           // A report-bound delegation (the `--report` fallback shape,
@@ -1228,7 +1237,11 @@ async function runPackHookPreToolUseCliInner(
           // report-bound delegation ALSO be satisfied by whatever the
           // child happens to write, which defeats the point of the
           // launcher fixing the content.
-          if (existing === null || existing.approvalStatus !== "pending") {
+          if (delegationListing.truncated) {
+            stderr.write(
+              `harness pack hook: the reports directory ${delegationListing.truncatedDetail}; the report for session ${childSessionId} was not captured\n`,
+            );
+          } else if (existing === null || existing.approvalStatus !== "pending") {
             if (verified.reportPathHash !== undefined) {
               // The bytes `verifyDelegation` already proved present,
               // path-matched, and content-matched against the bound
@@ -1519,7 +1532,9 @@ async function runPackHookPreToolUseCliInner(
   // right after `checkPersistedReport`).
   const latestParseError =
     report.report === null
-      ? findLatestParseError(path.join(path.dirname(reportsDir), "parse-errors"), sessionId)
+      ? findLatestParseError(path.join(path.dirname(reportsDir), "parse-errors"), sessionId, {
+          maxEntries: MAX_HOOK_LISTING_ENTRIES,
+        })
       : null;
   // The expiry notice belongs to the routine "no approval marker" reason
   // only: a forged marker, a forged in-flight record or a refused task

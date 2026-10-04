@@ -495,7 +495,21 @@ export function checkPersistedReport(
   reportsDir: string,
   sessionId: string,
 ): PersistedReportEvidence {
-  const reports = listPersistedReportsBounded(reportsDir);
+  // Bounded by entry count: the directory is agent-writable, and a read of
+  // hundreds of thousands of planted entries runs the hook past its budget,
+  // which the runtime treats as an allow. Past the bound nothing is opened and
+  // the answer is no evidence (never an approval, so the block stands).
+  const listing = listPersistedReportsBoundedWithSkips(reportsDir, {
+    maxEntries: MAX_HOOK_LISTING_ENTRIES,
+  });
+  if (listing.truncated) {
+    return {
+      claimsApproved: false,
+      detail: `no report evidence read: ${reportsDir} ${listing.truncatedDetail}`,
+      report: null,
+    };
+  }
+  const reports = listing.reports;
   if (reports.length === 0) {
     return {
       claimsApproved: false,
@@ -612,12 +626,12 @@ export const MAX_HASHED_REPORT_BYTES = 1024 * 1024;
  * thousands of them. The scan reads the newest file first, which is where the
  * approved report usually is.
  *
- * This bounds the hash scan only, not the hook as a whole by entry count: the
- * evidence read that follows a refused marker (shared with the no-marker path,
- * `listPersistedReportsBounded`) still opens and parses every `*.json` entry,
- * so a directory of hundreds of thousands of planted entries still takes the
- * hook past the PreToolUse budget, which the runtime treats as an allow. A
- * follow-up task bounds that read.
+ * The other full-directory reads on the PreToolUse path spend the same
+ * budget with the same floor, each its own (a fresh {@link ReadBudget} per
+ * listing, not one shared across the hook call): the evidence read, the
+ * auto-approval precondition listing, the subagent-delegation lookup and the
+ * parse-error log lookup each read at most about 32 MiB, and none opens an
+ * entry once the directory holds more than {@link MAX_HOOK_LISTING_ENTRIES}.
  */
 export const MAX_HASH_SCAN_BYTES = 32 * 1024 * 1024;
 
@@ -628,6 +642,121 @@ export const MAX_HASH_SCAN_BYTES = 32 * 1024 * 1024;
  * count: 32 MiB / 4 KiB = 8192 entries.
  */
 export const MIN_SCAN_ENTRY_COST_BYTES = 4096;
+
+/**
+ * Most entries (8192, the hash scan's budget divided by its per-entry floor)
+ * a PreToolUse-path reader accepts in one agent-writable directory. The hash
+ * scan stops at its budget, but four more readers on the same hook path used
+ * to open every entry (the evidence read, the auto-approval precondition
+ * listing, the subagent-delegation lookup, the parse-error log lookup), so a
+ * directory of hundreds of thousands of planted entries took the hook past the
+ * 15 s PreToolUse budget, which the runtime treats as an allow (measured at
+ * 400k planted entries: 408195 opens and 28.9 s of CPU in the Claude Code
+ * hook). The count alone left each entry readable up to the 1 MiB per-file
+ * cap, so every one of those readers also charges the entries it reads against
+ * {@link MAX_HASH_SCAN_BYTES} (see {@link ReadBudget}).
+ *
+ * A reader does not take a newest window of such a directory: a partial view
+ * would let a hidden newer entry change a selection (an auto-approval would
+ * adopt an older pending report while a newer, hidden one is already
+ * approved). Past either bound (more entries, or more report data than the
+ * byte budget) it returns nothing and reports the directory as too large to
+ * read, and each reader treats that as no evidence: the evidence read
+ * reports no report, the auto-approval path declines, the delegation lookup
+ * captures nothing and the parse-error lookup finds nothing. None of them
+ * allows. The directory listing stops as soon as the bound is crossed. See
+ * {@link listDirNamesBounded}.
+ */
+export const MAX_HOOK_LISTING_ENTRIES = MAX_HASH_SCAN_BYTES / MIN_SCAN_ENTRY_COST_BYTES;
+
+/**
+ * Most entries (matching or not) {@link listDirNamesBounded} iterates in one
+ * directory, as a multiple of `maxEntries`. The reports and parse-errors
+ * directories hold nothing but their `*.json` and `*.log` entries, so a
+ * directory with many more names than that is planted, not real.
+ */
+const HOOK_LISTING_SCAN_FACTOR = 2;
+
+const TRUNCATED_REMEDY =
+  "remove non-report or stale *.json entries from it by hand (`harness gc` removes only aged approved or expired reports)";
+
+/** Clause a past-the-entry-bound listing reports; the caller supplies the subject. */
+const ENTRIES_TRUNCATED_DETAIL = `holds more than ${MAX_HOOK_LISTING_ENTRIES} *.json entries, or more than ${MAX_HOOK_LISTING_ENTRIES * HOOK_LISTING_SCAN_FACTOR} entries of any name, more than the gate reads; ${TRUNCATED_REMEDY}`;
+
+/** Clause a past-the-byte-budget listing reports; the caller supplies the subject. */
+const BYTES_TRUNCATED_DETAIL = `holds more than ${MAX_HASH_SCAN_BYTES / (1024 * 1024)} MiB of report data, more than the gate reads; ${TRUNCATED_REMEDY}`;
+
+/** Result of {@link listDirNamesBounded}. */
+export interface BoundedDirNames {
+  /** Entry names that end with the suffix, in ascending byte order; empty when `truncated`. */
+  names: string[];
+  /** True when the directory holds more matching entries than `maxEntries`, or more entries in all than `maxScanned`. */
+  truncated: boolean;
+}
+
+/**
+ * Names under `dir` ending in `suffix`, or none and `truncated: true` when
+ * there are more than `maxEntries` of them. The one listing the bounded
+ * PreToolUse-path readers share, so the bound lives in one place; a missing or
+ * unreadable directory lists nothing and is not `truncated`.
+ *
+ * The listing reads the directory one entry at a time and stops as soon as
+ * `maxEntries + 1` matching names have been seen, or `maxScanned` entries of
+ * any name (default: {@link HOOK_LISTING_SCAN_FACTOR} times `maxEntries`),
+ * so millions of planted names, matching or not, cost a bounded number of
+ * directory reads and no allocation of their names. The directory handle is
+ * always closed. An unbounded `maxEntries` reads the whole directory. The
+ * names come back in ascending byte order (the `fs.readdirSync` order), not
+ * in the filesystem's iteration order.
+ */
+export function listDirNamesBounded(
+  dir: string,
+  suffix: string,
+  maxEntries: number,
+  maxScanned: number = maxEntries * HOOK_LISTING_SCAN_FACTOR,
+): BoundedDirNames {
+  let handle: fs.Dir;
+  try {
+    handle = fs.opendirSync(dir);
+  } catch {
+    return { names: [], truncated: false };
+  }
+  const names: string[] = [];
+  let scanned = 0;
+  try {
+    for (let entry = handle.readSync(); entry !== null; entry = handle.readSync()) {
+      scanned += 1;
+      if (scanned > maxScanned) return { names: [], truncated: true };
+      if (!entry.name.endsWith(suffix)) continue;
+      names.push(entry.name);
+      if (names.length > maxEntries) return { names: [], truncated: true };
+    }
+  } catch {
+    return { names: [], truncated: false };
+  } finally {
+    try {
+      handle.closeSync();
+    } catch {
+      // Already gone; nothing left to release.
+    }
+  }
+  return { names: sortNamesByBytes(names), truncated: false };
+}
+
+/**
+ * `names` in ascending byte order of their UTF-8 encoding: the order
+ * `fs.readdirSync` returns (libuv sorts its scandir with `strcmp`), so the
+ * readers that took names from it before {@link listDirNamesBounded} read
+ * the directory one entry at a time keep the same order, and ties in their
+ * own newest-first sort stay deterministic instead of following the
+ * filesystem's iteration order.
+ */
+function sortNamesByBytes(names: string[]): string[] {
+  return names
+    .map((name) => ({ name, key: Buffer.from(name, "utf8") }))
+    .sort((a, b) => Buffer.compare(a.key, b.key))
+    .map((entry) => entry.name);
+}
 
 /** Result of {@link walkContainerDepth}. */
 export interface ContainerDepthWalk {
@@ -713,7 +842,21 @@ export function canonicalReportHash(report: Record<string, unknown>): string | n
 }
 
 /** Why {@link readReportFileBounded} returned no content. */
-export type ReportFileReadFailure = "unreadable" | "not-regular" | "too-large" | "grew";
+export type ReportFileReadFailure =
+  | "unreadable"
+  | "not-regular"
+  | "too-large"
+  | "grew"
+  | "over-budget";
+
+/**
+ * Bytes a bounded multi-entry reader has spent against
+ * {@link MAX_HASH_SCAN_BYTES}; pass one object to every
+ * {@link readReportFileBounded} call of the same listing.
+ */
+export interface ReadBudget {
+  spent: number;
+}
 
 export type BoundedReportRead =
   | { ok: true; raw: string; mtimeMs: number }
@@ -724,6 +867,13 @@ const SYMLINK_REFUSED: BoundedReportRead = {
   ok: false,
   reason: "not-regular",
   detail: "a symbolic link, not a regular file",
+};
+
+/** What `readReportFileBounded` returns once its `budget` is spent; nothing is opened. */
+const OVER_BUDGET: BoundedReportRead = {
+  ok: false,
+  reason: "over-budget",
+  detail: "not read: the reader's byte budget is spent",
 };
 
 function errorCode(err: unknown): string {
@@ -751,11 +901,18 @@ function errorCode(err: unknown): string {
  * not-regular by the open itself (`ELOOP`), with no earlier `lstat` for a
  * swap to race. Off by default, so every hook read keeps following links
  * exactly as before; `harness approve understanding` turns it on.
+ *
+ * `opts.budget` charges the read against {@link MAX_HASH_SCAN_BYTES} the way
+ * the hash scan does (the larger of the `fstat` size and
+ * {@link MIN_SCAN_ENTRY_COST_BYTES} per entry, taken before the read); once
+ * the budget is spent the call opens nothing and returns `over-budget`.
  */
 export function readReportFileBounded(
   filePath: string,
-  opts: { noFollow?: boolean } = {},
+  opts: { noFollow?: boolean; budget?: ReadBudget } = {},
 ): BoundedReportRead {
+  const budget = opts.budget;
+  if (budget !== undefined && budget.spent >= MAX_HASH_SCAN_BYTES) return OVER_BUDGET;
   let fd: number;
   try {
     fd = fs.openSync(
@@ -765,11 +922,22 @@ export function readReportFileBounded(
         (opts.noFollow === true ? fs.constants.O_NOFOLLOW : 0),
     );
   } catch (err) {
+    if (budget !== undefined) budget.spent += MIN_SCAN_ENTRY_COST_BYTES;
     if (opts.noFollow === true && errorCode(err) === "ELOOP") return SYMLINK_REFUSED;
     return { ok: false, reason: "unreadable", detail: `could not be opened (${errorCode(err)})` };
   }
   try {
     const stat = fs.fstatSync(fd);
+    // Charged from the descriptor's size BEFORE the read, so the bytes read
+    // never run past the budget by more than the one file in flight: the
+    // larger of the size and the per-entry floor for a file about to be read,
+    // the floor for one that is refused unread.
+    if (budget !== undefined) {
+      budget.spent +=
+        stat.isFile() && stat.size <= MAX_HASHED_REPORT_BYTES
+          ? Math.max(stat.size, MIN_SCAN_ENTRY_COST_BYTES)
+          : MIN_SCAN_ENTRY_COST_BYTES;
+    }
     if (!stat.isFile()) return { ok: false, reason: "not-regular", detail: "not a regular file" };
     if (stat.size > MAX_HASHED_REPORT_BYTES) {
       return {
@@ -881,9 +1049,9 @@ interface ReportHashScan {
  * so the number of entries opened and the bytes read (about 32 MiB, the last
  * file read may add up to the per-file cap) are both bounded by the budget,
  * however many entries the directory holds. The `readdir` and the name sort
- * of the directory itself are outside the budget, and so is the evidence read
- * a refused marker falls through to (`listPersistedReportsBounded`), which
- * still opens every `*.json` entry.
+ * of the directory itself are outside the budget. The evidence read a refused
+ * marker falls through to has its own entry bound
+ * ({@link MAX_HOOK_LISTING_ENTRIES}).
  */
 function scanReportHashes(dir: string, wanted: ReadonlySet<string>): ReportHashScan {
   const scan: ReportHashScan = { files: 0, matched: new Set<string>(), budgetExhausted: false };
@@ -963,13 +1131,14 @@ function scanReportHashes(dir: string, wanted: ReadonlySet<string>): ReportHashS
  * names that sort after the timestamped report names (for example names
  * starting with a letter) stay newer than any new report and keep denying
  * until removed. The `readdir` plus name sort of the directory itself are not
- * charged, so a directory of hundreds of thousands of entries still costs that
- * listing before the scan starts. And the hash scan is not the whole hook:
- * the evidence read that follows a refused marker (shared with the no-marker
- * path, `listPersistedReportsBounded`) still opens and parses every `*.json`
- * entry, so the hook as a whole is still unbounded by entry count and a
- * large planted directory runs it past the PreToolUse budget (an allow); a
- * follow-up task bounds that read.
+ * charged, so a directory of millions of entries still costs that listing
+ * before this scan starts (the scan runs when a signed marker is present). The
+ * hash scan is not the whole hook: the other full-directory reads on it (the
+ * evidence read, the auto-approval listing, the delegation lookup and the
+ * parse-error lookup) list the directory entry by entry and stop once
+ * {@link MAX_HOOK_LISTING_ENTRIES} entries are crossed, and charge the entries
+ * they read against the same byte budget; past either bound they open or read
+ * nothing more and fail closed.
  *
  * Removing the approved report while other report files remain is a deny:
  * nothing on disk carries the signed content any more. `harness gc --apply`
@@ -1072,24 +1241,37 @@ export interface SkippedReportEntry {
  */
 export function listPersistedReportsBoundedWithSkips(
   dir: string,
-  opts: { refuseSymlinks?: boolean } = {},
+  opts: { refuseSymlinks?: boolean; maxEntries?: number } = {},
 ): {
   reports: PersistedReport[];
   skipped: SkippedReportEntry[];
+  /** True when `opts.maxEntries` was set and the directory holds more `*.json` entries, or more report data than the byte budget; no report is returned. */
+  truncated: boolean;
+  /** Why the listing was `truncated`, as a clause that follows the subject ("holds more than ..."); empty otherwise. */
+  truncatedDetail: string;
 } {
-  let names: string[] = [];
-  try {
-    names = fs.readdirSync(dir);
-  } catch {
-    // No readable directory: no reports.
+  // `maxEntries` is set by the PreToolUse-path readers (see
+  // `MAX_HOOK_LISTING_ENTRIES`); the operator commands leave it unset. Setting
+  // it applies both bounds of one hook read: the entry count, and the byte
+  // budget every entry read is charged against (see `MAX_HASH_SCAN_BYTES`).
+  const bounded = opts.maxEntries !== undefined;
+  const listed = listDirNamesBounded(dir, ".json", opts.maxEntries ?? Number.POSITIVE_INFINITY);
+  if (listed.truncated) {
+    return { reports: [], skipped: [], truncated: true, truncatedDetail: ENTRIES_TRUNCATED_DETAIL };
   }
+  const budget: ReadBudget | undefined = bounded ? { spent: 0 } : undefined;
   const reports: PersistedReport[] = [];
   const skipped: SkippedReportEntry[] = [];
-  for (const name of names.filter((n) => n.endsWith(".json"))) {
+  for (const name of listed.names) {
     const full = path.join(dir, name);
     // `refuseSymlinks` opens with O_NOFOLLOW, so a link is recorded as skipped
     // by the open itself and no earlier lstat can race a swap.
-    const read = readReportFileBounded(full, { noFollow: opts.refuseSymlinks === true });
+    const read = readReportFileBounded(full, { noFollow: opts.refuseSymlinks === true, budget });
+    // All or nothing: a listing that ran out of budget cannot say which
+    // report is the newest, so it returns no report at all.
+    if (!read.ok && read.reason === "over-budget") {
+      return { reports: [], skipped: [], truncated: true, truncatedDetail: BYTES_TRUNCATED_DETAIL };
+    }
     if (!read.ok) {
       skipped.push({ filePath: full, reason: read.reason, detail: read.detail });
       continue;
@@ -1098,7 +1280,7 @@ export function listPersistedReportsBoundedWithSkips(
     if (report !== null) reports.push(report);
   }
   reports.sort((a, b) => b.createdAtMs - a.createdAtMs);
-  return { reports, skipped };
+  return { reports, skipped, truncated: false, truncatedDetail: "" };
 }
 
 /**
