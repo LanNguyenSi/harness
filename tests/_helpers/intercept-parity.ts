@@ -100,7 +100,10 @@ export function writeEvent(command: string, cwd: string): string {
   return file;
 }
 
-export async function hookBlocks(eventPath: string): Promise<boolean> {
+export async function hookBlocks(
+  eventPath: string,
+  over: { manifest?: Manifest; kubeContext?: string } = {},
+): Promise<boolean> {
   const chunks: string[] = [];
   const result = await runInterceptCli({
     stdin: Readable.from([fs.readFileSync(eventPath, "utf8")]),
@@ -110,10 +113,10 @@ export async function hookBlocks(eventPath: string): Promise<boolean> {
         cb();
       },
     }),
-    manifest,
+    manifest: over.manifest ?? manifest,
     ledger: emptyLedger,
     env: {},
-    kubeContext: "",
+    kubeContext: over.kubeContext ?? "",
     kubeNamespace: "",
   });
   return result.blocked;

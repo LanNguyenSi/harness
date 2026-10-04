@@ -992,8 +992,10 @@ export async function runInterceptCli(
     const riskHost = safeOs(() => os.hostname());
     // The leading-prefix parse and the three merges it feeds (inline
     // `VAR=value` env, leading `cd`, leading `git switch|checkout`)
-    // live in `resolveBashPrefixEnrichment`, shared with `harness
-    // explain-policy` so the debug verb cannot drift from this hook.
+    // live in `resolveBashPrefixEnrichment`, shared (via
+    // `src/cli/enriched-event.ts`) with `harness explain-policy`,
+    // `resolve-env`, `test-risk` and `explain-action` so the debug verbs
+    // cannot drift from this hook.
     // The kubectl-target merge below stays hook-only.
     const { bashPrefix, riskBashCommand, git: gitForRisk, env: resolverEnv } =
       resolveBashPrefixEnrichment({

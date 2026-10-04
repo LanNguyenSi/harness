@@ -1141,9 +1141,14 @@ Pattern match semantics per signal kind, as implemented by the Phase 7
 Signals within a resolver are OR-ed: a resolver fires when any one
 signal matches. When several resolvers fire and disagree, the
 most-dangerous environment wins (`production > staging > dev > local`).
-Branch comes from the Action Envelope; env vars and the kube
-context/namespace are ambient inputs the `resolve-env` wrapper resolves
-(`~/.kube/config` is read best-effort).
+Branch comes from the Action Envelope. Env vars and the kube
+context/namespace start from the ambient process (`~/.kube/config` is read
+best-effort); for a Bash command the inline `VAR=value` assignments, a
+leading `cd` and a leading `git switch`/`checkout` are merged on top, the
+same way in `harness policy intercept`, `resolve-env`, `explain-policy`,
+`test-risk` and `explain-action`. An explicit `kubectl --context`/
+`--namespace` is merged only by the hook; the debug verbs report the
+ambient kube context.
 
 **The branch signal is not only the hook's starting cwd.** Inside
 `harness policy intercept`, a leading `cd <path> && ...` in the SAME
@@ -1229,7 +1234,9 @@ breakdown for a hypothetical event; the envelope enrichment, i.e. the
 Bash-prefix merges of inline `VAR=value`, a leading `cd` and a leading
 `git switch`/`checkout`, is shared with the hook, so both resolve the same
 environment; the verb's `parity` block lists `ledger_requires` and
-`kubectl_target` as not evaluated).*
+`kubectl_target` as not evaluated, and sets `kubectl_target_present: true`
+for an event whose command is a `kubectl` invocation with an explicit
+`--context`/`--namespace`, the merge the hook applies and the verb skips).*
 
 A policy may carry an optional `when:` block. As of Phase 7 #5 a
 declared `when:` is ANDed onto the policy's `trigger:` match and

@@ -11,15 +11,20 @@
 // `block`-enforced policy that needs a production environment AND a high
 // risk, so each verb is checked against the half of that verdict it owns.
 
+import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { EX_NOINPUT, HarnessExitError } from "../../src/cli/exit-codes.js";
 import { explainAction } from "../../src/cli/explain-action.js";
 import { explainPolicy } from "../../src/cli/explain-policy.js";
 import { resolveEnv } from "../../src/cli/resolve-env.js";
 import { testRisk } from "../../src/cli/test-risk.js";
 import { resolveEnvironment } from "../../src/runtime/index.js";
+import { makeManifest } from "../_helpers/manifest.js";
 import {
   FIXTURES,
+  GATE_PROD,
   hookBlocks,
   makeGitRepo,
   manifest,
@@ -66,7 +71,11 @@ describe("debug verbs vs policy intercept: same enriched inputs", () => {
       expect(blocked).toBe(resolution.name === "production");
     });
 
-    it(`test-risk agrees with the hook and explain-policy on: ${fx.name}`, async () => {
+    // Classifier parity only: the classifier reads the raw command and the
+    // tool, so this cannot notice a test-risk that stopped using the
+    // enrichment helper. The helper-call-count test below is the guard for
+    // routing through the helper.
+    it(`test-risk classifier parity with explain-policy and the hook on: ${fx.name}`, async () => {
       const cwd = makeGitRepo("feature/work");
       const prod = makeGitRepo("main");
       const eventPath = writeEvent(command(prod), cwd);
@@ -159,7 +168,56 @@ describe("each verb routes through resolveBashPrefixEnrichment", () => {
   });
 });
 
-describe("explain-action keeps working with no manifest on the machine", () => {
+describe("documented limit: the kubectl --context merge is hook-only", () => {
+  // The hook also merges an explicit `kubectl --context/--namespace` into
+  // the environment (upgrade-only). The debug verbs do not: resolve-env
+  // reports the ambient kube context, and explain-policy flags the skipped
+  // merge per event via `parity.kubectl_target_present`. This pins that
+  // known divergence so a change to it is deliberate.
+  const kubeManifest = makeManifest({
+    policies: [GATE_PROD],
+    classifiers: [
+      {
+        name: "kube-delete",
+        tool: "Bash",
+        patterns: [{ pattern: "kubectl.*delete", categories: ["destructive"], severity: "critical" }],
+      },
+    ],
+    resolvers: [
+      {
+        name: "prod-kube",
+        environment: "production",
+        signals: { kube_context_patterns: [".*prod.*"] },
+      },
+    ],
+  });
+  const command = "kubectl --context prod-cluster delete ns a";
+
+  it("resolve-env stays on the ambient kube context while the hook resolves production", async () => {
+    const eventPath = writeEvent(command, makeGitRepo("feature/work"));
+    const seams = { env: {}, kubeContext: "dev-cluster", kubeNamespace: "" };
+
+    const { resolution } = resolveEnv({ eventPath, manifest: kubeManifest, ...seams });
+    const blocked = await hookBlocks(eventPath, { manifest: kubeManifest, kubeContext: "dev-cluster" });
+
+    expect(resolution.name).toBe("unknown");
+    expect(blocked).toBe(true);
+    const projection = explainPolicy("gate-prod-destructive", {
+      eventPath,
+      manifest: kubeManifest,
+      ...seams,
+    }).projection;
+    expect(projection.parity.kubectl_target_present).toBe(true);
+  });
+});
+
+describe("explain-action manifest handling for a leading git switch", () => {
+  const switchEvent = () => writeEvent("git switch main && ls", makeGitRepo("feature/work"));
+  const emptyHome = () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "harness-parity-home-"));
+    return dir;
+  };
+
   it("does not load a manifest for a command without a leading git switch", () => {
     const eventPath = writeEvent("cd /nonexistent-dir-xyz && ls", makeGitRepo("feature/work"));
     // No `manifest` and no `configPath`: loading would throw (the loader
@@ -168,8 +226,36 @@ describe("explain-action keeps working with no manifest on the machine", () => {
     expect(() => explainAction({ eventPath, ...SEAMS })).not.toThrow();
   });
 
-  it("loads the manifest for a leading git switch (needs the resolvers)", () => {
-    const eventPath = writeEvent("git switch main && ls", makeGitRepo("feature/work"));
-    expect(() => explainAction({ eventPath, ...SEAMS })).toThrow();
+  it("falls back to the empty manifest when no manifest exists at the default location", () => {
+    const homeDir = emptyHome();
+    try {
+      const eventPath = switchEvent();
+      const { envelope } = explainAction({ eventPath, homeDir, ...SEAMS });
+      // No resolvers, so the branch-switch upgrade is a no-op: the
+      // envelope is the plain cwd context.
+      expect(envelope.session.branch).toBe("feature/work");
+    } finally {
+      fs.rmSync(homeDir, { recursive: true, force: true });
+    }
+  });
+
+  it("still fails with the manifest-not-found error for an explicit missing --config", () => {
+    const eventPath = switchEvent();
+    const configPath = path.join(os.tmpdir(), "harness-parity-missing", "harness.yaml");
+    let caught: unknown;
+    try {
+      explainAction({ eventPath, configPath, ...SEAMS });
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(HarnessExitError);
+    expect((caught as HarnessExitError).exitCode).toBe(EX_NOINPUT);
+    expect((caught as Error).message).toContain("manifest not found");
+  });
+
+  it("applies the branch-switch upgrade when a manifest is present", () => {
+    const eventPath = switchEvent();
+    const { envelope } = explainAction({ eventPath, manifest, ...SEAMS });
+    expect(envelope.session.branch).toBe("main");
   });
 });

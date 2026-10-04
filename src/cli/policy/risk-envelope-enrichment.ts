@@ -1,8 +1,10 @@
 // Shared Risk Gate envelope enrichment for the verbs that predict or
 // enforce a `when:` verdict: `harness policy intercept` (the PreToolUse
-// hook) and `harness explain-policy` (the debug verb).
+// hook) and the debug verbs `harness explain-policy`, `harness resolve-env`,
+// `harness test-risk` and `harness explain-action`. The four verbs reach
+// this helper through `src/cli/enriched-event.ts`.
 //
-// Both must resolve the environment from the SAME inputs, or the tool an
+// All of them must resolve the environment from the SAME inputs, or the tool an
 // operator uses to predict a gate disagrees with the gate (task
 // 7c3919a2: `DATABASE_URL=...prod... psql ...` resolved `production` in
 // the hook and `unknown` in explain-policy). This module owns the
