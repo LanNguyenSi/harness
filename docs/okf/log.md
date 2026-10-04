@@ -4,6 +4,7 @@
 
 - 2026-10-04T05:45:44Z, task 7c3919a2: comment-only edit in `src/cli/policy/intercept.ts` (moved-code pointers now name `risk-envelope-enrichment.ts`, unused type import dropped, line count unchanged); `codex-adapter-parity-gaps.md`, `gate-fail-posture-matrix.md`, `policy-engine-producer-wiring.md` and `quote-model-divergence.md` list it as a source, their citations still resolve, no claim changed. Re-stamped.
 - 2026-10-04T05:28:50Z, task 7c3919a2: `debug-verb-selection.md` now states that `explain-policy` builds its envelope through the Bash-prefix enrichment shared with `policy intercept` (`src/cli/policy/risk-envelope-enrichment.ts`) and names the `parity` block. `policy-engine-producer-wiring.md` (ledger-timeout citation re-pointed), `quote-model-divergence.md` (the `inlineEnv` citation and the resolver-probe note now point at the new module) and `codex-adapter-parity-gaps.md` (function line range) were re-pointed after the extraction moved code out of `intercept.ts`; `gate-fail-posture-matrix.md` lists `intercept.ts` and `evidence-ledger-trust-boundary.md` lists `docs/CLI.md` (one table row for `explain-policy` changed); both were re-read, no claim changed. `npx okf-kit@0.16.0 check docs/okf` reports no finding after the re-stamp. Re-stamped.
+- 2026-10-04T05:36:49Z, task 169e6286: `gate-fail-posture-matrix.md` and `understanding-gate-lockout-recovery.md` now say the four other full-directory reads on the PreToolUse hook path (the evidence read, the auto-approval precondition listing, the subagent-delegation lookup, the parse-error log lookup) share one entry bound of 8192 (`MAX_HOOK_LISTING_ENTRIES`) and fail closed past it (no evidence, the auto-approval declines, no delegation capture, no parse error), which replaces the follow-up they named; `evidence-ledger-trust-boundary.md` names the bound in the auto-approval preconditions; the lockout doc's session-id citations were re-pointed to the shifted lines. `codex-adapter-parity-gaps.md` and `understanding-gate-auto-mode-signals.md` list changed sources but state no listing or bound claim; re-stamped only. The older log entries' line citations into `src/cli/approve/understanding.ts` and the two hook files were re-pointed to the shifted lines so the bundle check stays clean.
 - 2026-10-03T13:46:40Z, task 805be2af: `codex-adapter-parity-gaps.md`, `evidence-ledger-trust-boundary.md` and `understanding-gate-auto-mode-signals.md` list the pack doc as a source; its residual (4) wording changed (follow-up scope). None of the three states a volume or entry-count claim; re-stamped only.
 - 2026-10-03T13:45:52Z, task 805be2af (review notes): `gate-fail-posture-matrix.md` and `understanding-gate-lockout-recovery.md` now name every full-directory read on the PreToolUse hook path (evidence read, auto-approval precondition listing, subagent-delegation lookup, parse-error log lookup) as the scope of the follow-up, not only the evidence read; the lockout-recovery residual on `hook-subagent-start.ts` now matches the code (the in-flight record is minted only after the cross-check passes). Re-stamped both.
 - 2026-10-03T13:34:12Z, task 805be2af (docs-honesty fix): `gate-fail-posture-matrix.md` and `understanding-gate-lockout-recovery.md` now say the hash scan bound (8192 entries, about 32 MiB, per-entry floor) does not bound the hook as a whole by entry count: the evidence read after a refused marker (shared with the no-marker path) still opens and parses every `*.json` entry, so a directory of hundreds of thousands of planted entries runs the hook past the 15 s PreToolUse budget (an allow); a follow-up task bounds the evidence read. Both also state that re-approval recovers only when the newer entries are real reports (planted names sorting after the timestamped report names keep denying until removed) and that the last file read may add up to the 1 MiB per-file cap to the 32 MiB figure. `codex-adapter-parity-gaps.md`, `understanding-gate-auto-mode-signals.md` and `evidence-ledger-trust-boundary.md` list the pack doc or `persisted-reports.ts` (comment and residual text changed) and were re-verified: none states a volume or entry-count claim, no text change. Re-stamped.
@@ -771,7 +772,7 @@
   states only what `[0.28.0]` documents, dropping the unsourced
   "intentionally stays loose" design claim it carried at first; each
   rewrite kept the comment at a 4-line span so no numbered citation
-  below it shifted; verified `src/cli/approve/understanding.ts:778#"resolveApprovalSessionId"`
+  below it shifted; verified `src/cli/approve/understanding.ts:785#"resolveApprovalSessionId"`
   (this doc's own `understanding-gate-lockout-recovery.md` citation)
   still reads `resolveApprovalSessionId` after the edits, unchanged.
 
@@ -798,7 +799,7 @@
   Prior Art's presence (required since 0.4.0, same citation
   `` `CHANGELOG.md:#0.28.0` ``) and cannot judge the section's content,
   and that the approve CLI is the boundary that refuses a hollow list.
-  The edited span stayed at 4 lines (`understanding.ts` lines 483-486); `src/cli/approve/understanding.ts:778#"resolveApprovalSessionId"` still reads
+  The edited span stayed at 4 lines (`understanding.ts` lines 483-486); `src/cli/approve/understanding.ts:785#"resolveApprovalSessionId"` still reads
   `resolveApprovalSessionId` and the file's total line count is
   unchanged, so the citation above it does not shift.
   `understanding-gate-lockout-recovery.md`'s `timestamp:` is re-stamped
@@ -2512,7 +2513,7 @@
   `probeRegularFilePresence`, or cite a span of `hook-pre-tool-use.ts`
   inside this round's edited region (lines ~940-978): `grep` across all 6
   for those terms found only `understanding-gate-lockout-recovery.md`'s
-  pre-existing citation at `src/cli/pack/hook-pre-tool-use.ts:999#"writePendingApproval(generatedDir, sessionId);"`,
+  pre-existing citation at `src/cli/pack/hook-pre-tool-use.ts:1000#"writePendingApproval(generatedDir, sessionId);"`,
   well before the edited region, still resolving. `evidence-ledger-trust-boundary.md`
   was NOT flagged stale this round: it was itself edited (new
   `probeRegularFilePresence` paragraph, `delegation-markers.ts` added to
@@ -2564,7 +2565,7 @@
   describes only the new reason itself; neither touches any claim or
   cited span in these 7 docs (the one line-numbered citation among them,
   `understanding-gate-lockout-recovery.md`'s
-  `src/cli/pack/hook-pre-tool-use.ts:999#"writePendingApproval(generatedDir, sessionId);"`,
+  `src/cli/pack/hook-pre-tool-use.ts:1000#"writePendingApproval(generatedDir, sessionId);"`,
   sits well before the edited comment and still resolves). Timestamp-only
   re-stamp on all 7; no content changed. `okf-kit check --json docs/okf`
   on the committed tree shows 0 errors, 0 warnings after the re-stamp.
