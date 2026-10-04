@@ -3,7 +3,7 @@ type: runbook
 title: Understanding-gate lockout recovery
 description: Operator procedure to unblock a session locked by the understanding-before-execution PreToolUse gate via `harness approve understanding`, including the 6-tier session-id resolution and the expiry semantics that re-arm the gate.
 tags: [runbook, understanding-gate, lockout, recovery, operator]
-timestamp: 2026-10-04T05:36:49Z
+timestamp: 2026-10-04T05:42:33Z
 sources:
   - src/cli/pack/auto-approve-path.ts
   - src/cli/approve/understanding.ts
@@ -62,12 +62,12 @@ Recovery is **operator-only**, from a shell the hooks do not gate (the `!`-shell
 
    Flags (`src/cli/index.ts:1765-1767#"enforcement"`, the `approve understanding` subcommand): `--session <id>`, `--task <ids...>` (variadic; also comma-joined `--task a,b,c`), `--reports-dir <path>`, `--approved-by <actor>` (default `harness-approve-cli`), `--force`, `--config <path>`, `--project <name>`.
 
-2. **Session-id resolution** - the bare command works because the id is resolved through a 6-tier precedence chain (`resolveApprovalSessionId`, `src/runtime/session-id.ts:241#"resolveApprovalSessionId"`; used by `src/cli/approve/understanding.ts:785#"resolveApprovalSessionId"`):
+2. **Session-id resolution** - the bare command works because the id is resolved through a 6-tier precedence chain (`resolveApprovalSessionId`, `src/runtime/session-id.ts:241#"resolveApprovalSessionId"`; used by `src/cli/approve/understanding.ts:784#"resolveApprovalSessionId"`):
    1. explicit `--session` flag
    2. `$CLAUDE_CODE_SESSION_ID` (the variable Claude Code actually exports; read first so the runtime's id beats a hand-exported legacy value)
    3. `$CLAUDE_SESSION_ID` (legacy peer)
    4. `$CODEX_SESSION_ID` (live Codex session)
-   5. `<generatedDir>/.pending-approval`, staged by the PreToolUse blocker on every block/ask (Claude path: `src/cli/pack/hook-pre-tool-use.ts:1000#"writePendingApproval(generatedDir, sessionId);"`; Codex path: `src/cli/pack/hook-codex-pre-tool-use.ts:524#"writePendingApproval(generatedDir, sessionId);"`) and by `harness session-start preflight` on every run with a resolved id (`src/cli/session-start/index.ts`). Deleted after a successful resolve **and** marker write, so a stale id cannot be revived; a failed marker write keeps it for retry.
+   5. `<generatedDir>/.pending-approval`, staged by the PreToolUse blocker on every block/ask (Claude path: `src/cli/pack/hook-pre-tool-use.ts:999#"writePendingApproval(generatedDir, sessionId);"`; Codex path: `src/cli/pack/hook-codex-pre-tool-use.ts:523#"writePendingApproval(generatedDir, sessionId);"`) and by `harness session-start preflight` on every run with a resolved id (`src/cli/session-start/index.ts`). Deleted after a successful resolve **and** marker write, so a stale id cannot be revived; a failed marker write keeps it for retry.
    6. the freshest persisted report under the reports dir whose JSON `sessionId` is non-null **and** whose `approvalStatus` is `pending` (approved/expired reports belong to finished cycles and are never adopted, harness/56f51f2b). The CLI prints a loud "session id was GUESSED" warning naming the report file — verify it is your live session before trusting the marker.
 
    **Terminal display.** Report-controlled strings are shown as quoted escaped literals: parse-error summaries, previous approval status, report mode, fallback creation time, and the resolved session id and marker path. A malformed-looking tier-6 session id is escaped for display rather than newly rejected; the actual session id and marker filename remain unchanged. Unicode format characters (including bidi overrides), U+2028 and U+2029 are escaped as `\uXXXX`, with two UTF-16 escapes for supplementary format characters (`escapeForDisplay`, `src/io/display-path.ts`). `harness gc` uses the same rendering for in-flight `approvedAt` diagnostics. Escaped display text is a representation, not a replacement for the stored value.
