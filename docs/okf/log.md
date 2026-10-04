@@ -2,6 +2,8 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-10-04T17:05:38Z, task 8b891e83 review fixes: `explain-action` now falls back to the empty manifest for a leading `git switch|checkout` when no manifest exists at the default location (explicit missing `--config` still exits 66); `docs/CLI.md` and `docs/risk-gate.md` no longer claim full hook parity for `resolve-env` (the kubectl `--context`/`--namespace` merge is hook-only, flagged by `parity.kubectl_target_present`); comment-only edits in `src/cli/policy/intercept.ts` (past the first thousand lines) and `risk-envelope-enrichment.ts` (header, +2 lines). `quote-model-divergence.md` its citation into the enrichment helper moved two lines down and was re-pointed; the cited `cli/policy/intercept.ts` lines in `policy-engine-producer-wiring.md` and `codex-adapter-parity-gaps.md` are all above the edit and unchanged; `debug-verb-selection.md` gained `src/cli/enriched-event.ts` as a source and the two limits above; `evidence-ledger-trust-boundary.md` and `gate-fail-posture-matrix.md` were re-read, no claim changed. Re-stamped.
+- 2026-10-04T16:48:52Z, task 8b891e83: `resolve-env`, `test-risk` and `explain-action` now call the shared Bash-prefix enrichment (`src/cli/enriched-event.ts` over `risk-envelope-enrichment.ts`) and `explain-policy` gains `parity.kubectl_target_present`; `debug-verb-selection.md` says so and its two line citations into `test-risk.ts` and `resolve-env.ts` were re-pointed (40-41, 48-49). `src/cli/index.ts` grew 4 lines above the pause/resume code, so `pause-vs-gate-kill-switch.md` citations and the historical continuation citations in this log were shifted by 4; `understanding-gate-lockout-recovery.md` (cites lines before the edit), `evidence-ledger-trust-boundary.md`, `policy-engine-producer-wiring.md` and `codex-adapter-parity-gaps.md` (list `docs/CLI.md`, one table row each for the four verbs changed) were re-read, no claim changed. `okf-kit@0.16.0 check --require-anchors docs/okf` reports no finding. Re-stamped.
 - 2026-10-04T13:59:52Z, debug-verb-selection.md re-stamped after the `export` row in docs/for-agents.md was made precise (operator-declared manifest, derived policies omitted). Its dry-run claims are unaffected; the prose citation of the dry-run row's "without ledger I/O" wording now names the correct line (280, it had drifted).
 - 2026-10-04T13:46:51Z: `docs/CLI.md`, `docs/for-agents.md` and `docs/writing-custom-policies.md` had single-line wording edits (init template list now includes `minimal`, `export` described as stdout output, version stamp and a removed example link dropped). `codex-adapter-parity-gaps.md`, `debug-verb-selection.md`, `evidence-ledger-trust-boundary.md` and `policy-engine-producer-wiring.md` list them as sources; no claim or line citation in those docs touches the edited lines, so they were re-verified and re-stamped.
 - 2026-10-04T07:34:26Z, task 169e6286: `gate-fail-posture-matrix.md` and `understanding-gate-lockout-recovery.md` now name the in-flight session directory listing on a Claude Code subagent call (`verifyInflightRecord`) as a third uncharged read next to the hash scan's `readdir` and sort and the ledger query, taken from an independent inventory of the PreToolUse directory reads; `codex-adapter-parity-gaps.md`, `evidence-ledger-trust-boundary.md` and `understanding-gate-auto-mode-signals.md` list changed sources (CHANGELOG, pack doc, `persisted-reports.ts` listing order and floor charges) but state no listing-order, bound or residual claim; re-stamped only.
@@ -1594,8 +1596,8 @@
   `quote-model-divergence.md` and `understanding-gate-lockout-recovery.md`
   `sources-fresh` STALE against these files. Checked every line-numbered
   citation these seven docs make into the five touched files
-  (`src/cli/index.ts:1722-1737`, `:2995-2999`, `:3284-3383`,
-  `:3373-3378`; `src/cli/init/templates.ts:928`): all still match their
+  (`src/cli/index.ts:1722-1737`, `:2999-3003`, `:3288-3387`,
+  `:3377-3382`; `src/cli/init/templates.ts:928`): all still match their
   quoted text verbatim (sibling-line check), since none of this round's
   edits added or removed a line above a cited line in any file a
   line-numbered citation targets. No citation needed re-pointing;
@@ -1728,11 +1730,11 @@
     `src/cli/index.ts` citations in `pause-vs-gate-kill-switch.md`,
     `:2953-2957#"offending hook group out of settings.json with a
     reversible snapshot."` -> `:2957-2961`, `:3328-3333#"in the
-    manifest."` -> `:3373-3378` (re-pointed again, task `6a037359`:
+    manifest."` -> `:3377-3382` (re-pointed again, task `6a037359`:
     `src/cli/index.ts` grew a net 36 lines above it, a
     `CodexInstallRefusalError` import plus a try/catch wrapping the
     codex-install `apply()` call), and the bare `:3290-3389` ->
-    `:3325-3424` (same shift).
+    `:3329-3428` (same shift).
     Sibling-line check at both bounds of each range: the content at the
     old start/end lines is byte-identical to the content at the new
     start/end lines (verified by diffing `git show HEAD~1:src/cli/index.ts`

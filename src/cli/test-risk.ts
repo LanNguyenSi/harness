@@ -13,10 +13,11 @@
 import { stringify as stringifyYaml } from "yaml";
 import { classifyRisk, type RiskProfile } from "../runtime/index.js";
 import type { Manifest } from "../schema/index.js";
+import { enrichLoadedEvent, type EnrichmentSeams } from "./enriched-event.js";
 import { loadEventEnvelope, type EventInputSeams } from "./event-input.js";
 import { loadManifest, type LoaderOptions } from "./loader.js";
 
-export interface TestRiskOptions extends EventInputSeams, LoaderOptions {
+export interface TestRiskOptions extends EventInputSeams, EnrichmentSeams, LoaderOptions {
   /** Path to the tool-event JSON file. */
   eventPath: string;
   /** Emit JSON instead of YAML. */
@@ -40,8 +41,11 @@ export interface TestRiskResult {
  * as unclassified ("unknown is not safe").
  */
 export function testRisk(opts: TestRiskOptions): TestRiskResult {
-  const { envelope } = loadEventEnvelope(opts.eventPath, opts, "test-risk");
+  const loaded = loadEventEnvelope(opts.eventPath, opts, "test-risk");
   const manifest = opts.manifest ?? loadManifest(opts).manifest;
+  // Classify the envelope the hook classifies: after its Bash-prefix
+  // enrichment (leading `cd`, `git switch|checkout`; task 8b891e83).
+  const { envelope } = enrichLoadedEvent(loaded, manifest, opts);
   const profile = classifyRisk(envelope, manifest.risk.classifiers);
   const output = opts.json
     ? `${JSON.stringify(profile, null, 2)}\n`

@@ -12,15 +12,17 @@
 // also fails.
 
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
-import { Readable, Writable } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { explainPolicy } from "../../src/cli/explain-policy.js";
-import { runInterceptCli } from "../../src/cli/policy/intercept.js";
-import type { LedgerClient } from "../../src/runtime/intercept.js";
-import type { Manifest, Policy } from "../../src/schema/index.js";
-import { makeManifest } from "../_helpers/manifest.js";
+import {
+  FIXTURES,
+  hookBlocks,
+  makeGitRepo,
+  manifest,
+  runParityCleanups,
+  writeEvent,
+} from "../_helpers/intercept-parity.js";
 
 // Any ledger session opened from explain-policy's code path would go
 // through this export; the guard test below asserts it is never reached.
@@ -36,110 +38,7 @@ vi.mock("../../src/policies/index.js", async (importOriginal) => {
   };
 });
 
-const GATE_PROD: Policy = {
-  name: "gate-prod-destructive",
-  description: "require approval for destructive production actions",
-  trigger: { event: "PreToolUse", match: "Bash" },
-  when: {
-    "risk.severity_at_least": "high",
-    "environment.name": "production",
-  },
-  requires: { ledger_tag: "risk-approved:${SESSION_ID}" },
-  hook: "risk-gate",
-  enforcement: "block",
-} as Policy;
-
-const manifest: Manifest = makeManifest({
-  policies: [GATE_PROD],
-  classifiers: [
-    {
-      name: "dangerous-shell",
-      tool: "Bash",
-      patterns: [
-        {
-          pattern: "DROP\\s+TABLE|rm\\s+-rf",
-          categories: ["destructive"],
-          severity: "critical",
-        },
-      ],
-    },
-  ],
-  resolvers: [
-    {
-      name: "production-signals",
-      environment: "production",
-      signals: {
-        branch_patterns: ["main"],
-        env_var_patterns: [{ var: "DATABASE_URL", patterns: ["prod"] }],
-      },
-    },
-  ],
-});
-
-const emptyLedger: LedgerClient = {
-  async query() {
-    return { kind: "ok", entries: [] };
-  },
-  async record() {
-    /* no-op */
-  },
-};
-
-let cleanups: Array<() => void> = [];
-afterEach(() => {
-  for (const c of cleanups) c();
-  cleanups = [];
-});
-
-function makeGitRepo(branch: string): string {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "harness-parity-"));
-  fs.mkdirSync(path.join(root, ".git", "refs", "heads", path.dirname(branch)), {
-    recursive: true,
-  });
-  fs.writeFileSync(path.join(root, ".git", "HEAD"), `ref: refs/heads/${branch}\n`);
-  fs.writeFileSync(
-    path.join(root, ".git", "refs", "heads", branch),
-    "9fceb02d0ae598e95dc970b74767f19372d61af8\n",
-  );
-  cleanups.push(() => fs.rmSync(root, { recursive: true, force: true }));
-  return root;
-}
-
-function writeEvent(command: string, cwd: string): string {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "harness-parity-ev-"));
-  cleanups.push(() => fs.rmSync(dir, { recursive: true, force: true }));
-  const file = path.join(dir, "event.json");
-  fs.writeFileSync(
-    file,
-    JSON.stringify({
-      hook_event_name: "PreToolUse",
-      tool_name: "Bash",
-      tool_input: { command },
-      session_id: "sess-parity",
-      cwd,
-    }),
-  );
-  return file;
-}
-
-async function hookBlocks(eventPath: string): Promise<boolean> {
-  const chunks: string[] = [];
-  const result = await runInterceptCli({
-    stdin: Readable.from([fs.readFileSync(eventPath, "utf8")]),
-    stdout: new Writable({
-      write(chunk, _enc, cb) {
-        chunks.push(chunk.toString("utf8"));
-        cb();
-      },
-    }),
-    manifest,
-    ledger: emptyLedger,
-    env: {},
-    kubeContext: "",
-    kubeNamespace: "",
-  });
-  return result.blocked;
-}
+afterEach(runParityCleanups);
 
 function explain(eventPath: string) {
   return explainPolicy("gate-prod-destructive", {
@@ -150,66 +49,6 @@ function explain(eventPath: string) {
     kubeNamespace: "",
   }).projection;
 }
-
-interface Fixture {
-  name: string;
-  command: (repos: { prod: string }) => string;
-  expectedEnv: "production" | "unknown";
-}
-
-const FIXTURES: Fixture[] = [
-  {
-    name: "no prefix, non-prod cwd",
-    command: () => 'psql -c "DROP TABLE users"',
-    expectedEnv: "unknown",
-  },
-  {
-    name: "inline dev URL (negative control)",
-    command: () =>
-      'DATABASE_URL=postgres://u@localhost:5432/app_dev psql -c "DROP TABLE users"',
-    expectedEnv: "unknown",
-  },
-  {
-    name: "inline prod URL",
-    command: () =>
-      'DATABASE_URL=postgres://u@prod-db:5432/app psql -c "DROP TABLE users"',
-    expectedEnv: "production",
-  },
-  {
-    name: "inline prod URL, double-quoted value",
-    command: () =>
-      'DATABASE_URL="postgres://u@prod-db:5432/app" psql -c "DROP TABLE users"',
-    expectedEnv: "production",
-  },
-  {
-    name: "inline prod URL, single-quoted value",
-    command: () =>
-      "DATABASE_URL='postgres://u@prod-db:5432/app' rm -rf /var/lib/appdata",
-    expectedEnv: "production",
-  },
-  {
-    name: "several assignments, prod one in the middle",
-    command: () =>
-      'A=1 DATABASE_URL=postgres://u@prod-db:5432/app B="x y" psql -c "DROP TABLE users"',
-    expectedEnv: "production",
-  },
-  {
-    name: "several assignments, later dev value overrides earlier prod",
-    command: () =>
-      'DATABASE_URL=postgres://u@prod-db:5432/app DATABASE_URL=postgres://u@dev-db:5432/app psql -c "DROP TABLE users"',
-    expectedEnv: "unknown",
-  },
-  {
-    name: "cd into a repo on main",
-    command: ({ prod }) => `cd ${prod} && rm -rf /var/lib/appdata`,
-    expectedEnv: "production",
-  },
-  {
-    name: "git switch main",
-    command: () => "git switch main && rm -rf /var/lib/appdata",
-    expectedEnv: "production",
-  },
-];
 
 describe("explain-policy vs policy intercept: same environment resolution", () => {
   it("has at least five fixtures including a quoted prefix and multiple assignments", () => {
@@ -243,6 +82,73 @@ describe("explain-policy vs policy intercept: same environment resolution", () =
       "branch_switch_upgrade",
     ]);
     expect(projection.parity.not_evaluated).toEqual(["ledger_requires", "kubectl_target"]);
+  });
+});
+
+describe("explain-policy: per-event kubectl_target_present flag (task 8b891e83)", () => {
+  const cases: Array<{ name: string; command: string; present: boolean }> = [
+    {
+      name: "kubectl --context on a delete",
+      command: "kubectl --context prod-cluster delete ns a",
+      present: true,
+    },
+    {
+      name: "kubectl -n only",
+      command: "kubectl delete pod x -n payments",
+      present: true,
+    },
+    {
+      name: "kubectl --namespace= form behind an inline-env prefix",
+      command: "A=1 kubectl delete pod x --namespace=payments",
+      present: true,
+    },
+    {
+      name: "kubectl behind a cd prefix",
+      command: "cd /tmp && kubectl --context prod-cluster delete ns a",
+      present: true,
+    },
+    {
+      name: "kubectl without --context/--namespace (negative)",
+      command: "kubectl delete ns a",
+      present: false,
+    },
+    {
+      name: "non-kubectl command (negative)",
+      command: 'psql -c "DROP TABLE users"',
+      present: false,
+    },
+    {
+      name: "kubectl-looking flag on a non-kubectl command (negative)",
+      command: "echo kubectl --context prod-cluster",
+      present: false,
+    },
+  ];
+  for (const c of cases) {
+    it(`flags ${c.name}: ${String(c.present)}`, () => {
+      const cwd = makeGitRepo("feature/work");
+      const projection = explain(writeEvent(c.command, cwd));
+      expect(projection.parity.kubectl_target_present).toBe(c.present);
+      // The static not_evaluated list keeps its meaning: the merge is
+      // never evaluated by this verb, whatever the flag says.
+      expect(projection.parity.not_evaluated).toContain("kubectl_target");
+    });
+  }
+
+  it("is false for a non-Bash event", () => {
+    const cwd = makeGitRepo("feature/work");
+    const dir = path.dirname(writeEvent("x", cwd));
+    const file = path.join(dir, "edit-event.json");
+    fs.writeFileSync(
+      file,
+      JSON.stringify({
+        hook_event_name: "PreToolUse",
+        tool_name: "Edit",
+        tool_input: { file_path: "/tmp/x", command: "kubectl --context prod delete ns a" },
+        session_id: "sess-parity",
+        cwd,
+      }),
+    );
+    expect(explain(file).parity.kubectl_target_present).toBe(false);
   });
 });
 

@@ -8,16 +8,14 @@
 // stage.
 //
 // File read, JSON guards, and envelope build are the shared
-// `event-input` front end; manifest load, kube-context resolution,
-// environment resolution, and rendering live here.
+// `event-input` front end, the hook's Bash-prefix enrichment is the
+// shared `enriched-event` step; manifest load, environment resolution,
+// and rendering live here.
 
 import { stringify as stringifyYaml } from "yaml";
-import {
-  resolveEnvironment,
-  resolveKubeContext,
-  type EnvironmentResolution,
-} from "../runtime/index.js";
+import { resolveEnvironment, type EnvironmentResolution } from "../runtime/index.js";
 import type { Manifest } from "../schema/index.js";
+import { enrichLoadedEvent } from "./enriched-event.js";
 import { loadEventEnvelope, type EventInputSeams } from "./event-input.js";
 import { loadManifest, type LoaderOptions } from "./loader.js";
 
@@ -51,24 +49,20 @@ export interface ResolveEnvResult {
  * resolves to `unknown` ("unknown is not safe").
  */
 export function resolveEnv(opts: ResolveEnvOptions): ResolveEnvResult {
-  const { envelope } = loadEventEnvelope(opts.eventPath, opts, "resolve-env");
+  const loaded = loadEventEnvelope(opts.eventPath, opts, "resolve-env");
   const manifest = opts.manifest ?? loadManifest(opts).manifest;
 
-  // The kube seams are resolved together: if either is injected, skip
-  // the `~/.kube/config` read entirely so a test never touches disk.
-  const kube =
-    opts.kubeContext !== undefined || opts.kubeNamespace !== undefined
-      ? {
-          context: opts.kubeContext ?? "",
-          namespace: opts.kubeNamespace ?? "",
-        }
-      : resolveKubeContext();
+  // The same Bash-prefix enrichment the hook applies (inline `VAR=value`,
+  // leading `cd`, leading `git switch|checkout`, task 8b891e83), so this
+  // verb resolves the environment the gate would. The kube seams resolve
+  // together inside the helper (either injected: no `~/.kube/config` read).
+  const { envelope, enrichment, kube } = enrichLoadedEvent(loaded, manifest, opts);
 
   const resolution = resolveEnvironment(
     envelope,
     manifest.environments.resolvers,
     {
-      env: opts.env ?? process.env,
+      env: enrichment.env,
       kubeContext: kube.context,
       kubeNamespace: kube.namespace,
     },
