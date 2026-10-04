@@ -23,6 +23,7 @@ import {
   approvedLedgerTagFor,
   defaultReportsDir,
   hashReportFile,
+  listDirNamesBounded,
   listPersistedReportsBoundedWithSkips, MAX_HASHED_REPORT_BYTES,
   readReportFileBounded,
   readActiveClaim,
@@ -374,17 +375,23 @@ export interface ParseErrorSummary {
  * *something* under the heading. Exported so the PreToolUse hooks
  * (hook-pre-tool-use.ts, hook-codex-pre-tool-use.ts) can reuse the same
  * lookup + attribution logic rather than re-implementing the header scan.
+ *
+ * Both hooks pass `maxEntries` (`MAX_HOOK_LISTING_ENTRIES`): a directory with
+ * more `*.log` entries than that is read not at all and yields no parse error,
+ * so a planted directory cannot run the hook past its time budget.
  */
-export function findLatestParseError(dir: string, sessionId: string): ParseErrorSummary | null {
-  let names: string[];
-  try {
-    names = fs.readdirSync(dir);
-  } catch {
-    return null;
-  }
+export function findLatestParseError(
+  dir: string,
+  sessionId: string,
+  opts: { maxEntries?: number } = {},
+): ParseErrorSummary | null {
+  // `maxEntries` is set by the PreToolUse hooks (the directory is agent-writable
+  // and the lookup stats and reads its logs): past it nothing is opened and the
+  // answer is no parse error. The operator command leaves it unset.
+  const listed = listDirNamesBounded(dir, ".log", opts.maxEntries ?? Number.POSITIVE_INFINITY);
+  if (listed.truncated) return null;
   const candidates: { filePath: string; mtimeMs: number }[] = [];
-  for (const name of names) {
-    if (!name.endsWith(".log")) continue;
+  for (const name of listed.names) {
     const full = path.join(dir, name);
     let stat: fs.Stats;
     try {

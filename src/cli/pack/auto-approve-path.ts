@@ -69,6 +69,7 @@ import {
   checkOperatorApprovalMarkers,
   harnessAllowed,
   listPersistedReportsBoundedWithSkips,
+  MAX_HOOK_LISTING_ENTRIES,
   parseAutoApprove,
   permissionModeAllowed,
   readReportFileBounded,
@@ -451,7 +452,20 @@ export async function attemptAutoApproval(
   // the hook), and an entry that listing had to skip declines the whole
   // attempt: an unreadable or oversized NEWEST report must not let the
   // selection fall back to an older pending one.
-  const listing = listPersistedReportsBoundedWithSkips(args.reportsDir);
+  //
+  // Bounded by entry count as well: past `MAX_HOOK_LISTING_ENTRIES` entries
+  // nothing is opened and the attempt declines, since a listing that cannot
+  // see every entry cannot say which report is the newest (a hidden newer one
+  // may already be approved).
+  const listing = listPersistedReportsBoundedWithSkips(args.reportsDir, {
+    maxEntries: MAX_HOOK_LISTING_ENTRIES,
+  });
+  if (listing.truncated) {
+    note(
+      `auto-approval declined: the reports directory holds more than ${MAX_HOOK_LISTING_ENTRIES} *.json entries, more than the gate reads`,
+    );
+    return decline("report listing over the entry bound");
+  }
   if (listing.skipped.length > 0) {
     const oversized = listing.skipped.find((entry) => entry.reason === "too-large");
     if (oversized !== undefined) {
