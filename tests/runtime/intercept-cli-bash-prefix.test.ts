@@ -279,7 +279,7 @@ describe("runInterceptCli — Bash prefix parsing for Risk Gate resolver", () =>
 
 // Task 341e024b — leading `git switch`/`checkout <branch>` as a branch
 // candidate for the Risk Gate resolver, upgrade-only (see
-// `applyBranchSwitchUpgrade` in src/cli/policy/intercept.ts). Uses the
+// `applyBranchSwitchUpgrade` in src/cli/policy/risk-envelope-enrichment.ts). Uses the
 // spec's own destructive verb (`rm -rf <path>`) rather than the
 // `terraform destroy` classifier above, so a separate classifier is
 // declared for this block.

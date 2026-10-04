@@ -29,7 +29,7 @@ import {
   type RiskGateContext,
   type ToolEvent,
 } from "../../runtime/index.js";
-import type { Manifest, MatchableEnvironment, McpServer } from "../../schema/index.js";
+import type { Manifest, McpServer } from "../../schema/index.js";
 import { resolveGeneratedDir, writePendingApproval } from "../../runtime/pending-approval.js";
 import { ENV_RANK, resolveBashPrefixEnrichment } from "./risk-envelope-enrichment.js";
 import { parseKubectlTarget, type KubectlTarget } from "../../runtime/kubectl-target-parse.js";
@@ -959,7 +959,7 @@ export async function runInterceptCli(
     // names the hook's own cwd; ${REPO}/${BRANCH} (`cwdGitContext`
     // above, feeding `builtins`) are cwd-only too — see the comment
     // above `cwdGitContext`'s declaration. The Risk Gate resolver's git
-    // base, `resolverGit` below, is its own independent narrow parse: it
+    // base, `resolverGit` (risk-envelope-enrichment.ts), is its own narrow parse: it
     // recognises only a leading `cd`, never `git -C` / `--work-tree` /
     // `--git-dir` / `env -C`. Bottom line: `resolverGit` must never read
     // anything other than `cwdGitContext`, or the leading-`cd` target
@@ -981,8 +981,8 @@ export async function runInterceptCli(
     // branch, as in the example above) — `resolverGit` trusts whichever
     // of the two the command happens to name, with no independent check
     // that the `cd` target is the repo the destructive command actually
-    // runs against. The `git switch`/`checkout` merge added below
-    // (`gitForRisk`, via `applyBranchSwitchUpgrade`) deliberately does
+    // runs against. The `git switch`/`checkout` merge in that helper
+    // (`gitForRisk`, `applyBranchSwitchUpgrade`, same module) deliberately does
     // NOT share this bidirectional-risk shape: it is a SEPARATE,
     // upgrade-only step layered on top of `resolverGit`, not a change to
     // `resolverGit` itself — a switch away from a production branch can
