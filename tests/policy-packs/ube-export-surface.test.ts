@@ -117,6 +117,10 @@ import * as ubeShim from "../../src/policy-packs/builtin/understanding-before-ex
 // auto-approval precondition and the delegation lookup share with the evidence
 // read: bounded reads, skipped entries reported. 93 -> 94. The
 // SkippedReportEntry type is absent for the usual reason.
+// Widened once more (harness 169e6286, bounded hook-path directory reads) by
+// MAX_HOOK_LISTING_ENTRIES and listDirNamesBounded (persisted-reports.ts):
+// the entry bound and the one listing the four PreToolUse-path readers share.
+// 94 -> 96. The BoundedDirNames type is absent for the usual reason.
 //
 // Mutation-verified: temporarily re-adding `export { safeJsonParse } from
 // "./persisted-reports.js";` to
@@ -140,6 +144,7 @@ const EXPECTED_EXPORTS = [
   "DELEGATION_REPORT_DIRNAME",
   "INFLIGHT_RECORD_DIRNAME",
   "MAX_HASHED_REPORT_BYTES",
+  "MAX_HOOK_LISTING_ENTRIES",
   "REPORTS_DIR_ENV",
   "REPORT_SCAN_MAX_WAIT_CEILING_MS",
   "TOLERANT_FALLBACK_FUTURE_SKEW_MS",
@@ -183,6 +188,7 @@ const EXPECTED_EXPORTS = [
   "inflightMarkerIdFor",
   "inflightRecordPathFor",
   "isPolicyDecisionRow",
+  "listDirNamesBounded",
   "listInflightRecords",
   "listPermissionModeObservations",
   "listPersistedReports",
@@ -221,9 +227,9 @@ const EXPECTED_EXPORTS = [
 ] as const;
 
 describe("understanding-before-execution-runtime shim export surface", () => {
-  it("exports exactly the pinned 94-name surface, sorted", () => {
+  it("exports exactly the pinned 96-name surface, sorted", () => {
     const actual = Object.keys(ubeShim).sort();
-    expect(EXPECTED_EXPORTS).toHaveLength(94);
+    expect(EXPECTED_EXPORTS).toHaveLength(96);
     expect(actual).toEqual([...EXPECTED_EXPORTS].sort());
   });
 

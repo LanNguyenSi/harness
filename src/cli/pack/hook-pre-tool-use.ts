@@ -71,8 +71,7 @@ import {
   delegationReportPathFor,
   describeMarkerTtlExpiry,
   harnessAllowed,
-  listPersistedReportsBoundedWithSkips,
-  MAX_HOOK_LISTING_ENTRIES,
+  listPersistedReportsBoundedWithSkips, MAX_HOOK_LISTING_ENTRIES,
   matchLedgerEntries,
   noApprovalMarkerReason,
   parseAutoApprove,
@@ -1532,9 +1531,7 @@ async function runPackHookPreToolUseCliInner(
   // right after `checkPersistedReport`).
   const latestParseError =
     report.report === null
-      ? findLatestParseError(path.join(path.dirname(reportsDir), "parse-errors"), sessionId, {
-          maxEntries: MAX_HOOK_LISTING_ENTRIES,
-        })
+      ? findLatestParseError(path.join(path.dirname(reportsDir), "parse-errors"), sessionId, { maxEntries: MAX_HOOK_LISTING_ENTRIES })
       : null;
   // The expiry notice belongs to the routine "no approval marker" reason
   // only: a forged marker, a forged in-flight record or a refused task
