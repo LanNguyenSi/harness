@@ -30,7 +30,7 @@ is allowed to do, under the exact context, and records why.
 
 ```bash
 npm i -g @lannguyensi/harness   # Node 20 or newer
-harness init --interactive      # guided wizard, or: --template solo|team|full
+harness init --interactive      # guided wizard, or: --template minimal|solo|team|full (default: minimal)
 ```
 
 The wizard detects your `~/.claude/` and `~/.codex/` setup, MCP

@@ -285,7 +285,7 @@ operator-driven flows.
 | `init --interactive` | mutating | operator-facing wizard (`@inquirer/prompts`). Detects env, picks a profile, writes the manifest. Not for agent driver scripts. |
 | `init --probe` | read-only | prints a JSON snapshot of detected runtimes + MCPs + manifest; no writes. |
 | `adopt` | mutating | reverse engineers a manifest from an existing settings.json. |
-| `export` | mutating-ish | emits a manifest snapshot to a chosen path. |
+| `export` | read-only | prints the effective merged manifest to stdout (`-o <file>` writes it to a file instead). |
 | `pack add / remove / list / reseed` | mutating (add/remove/reseed), read-only (list) | manages `policy_packs:` entries in the manifest. Four builtin packs: `understanding-before-execution`, `branch-protection`, `solution-acceptance`, `post-merge-gate`. `reseed <name>` pulls the shipped template's config back onto a drifted entry. |
 | `approve understanding --session <id>` | mutating | operator action that approves a captured Understanding Report (round-trips evidence-ledger tag + persisted JSON). Required before write-capable tools fire under the understanding-before-execution pack. |
 | `doctor --target codex` | read-only | verifies Codex adapter wiring after `apply --runtime codex`. `--json` for machine-readable output. |
