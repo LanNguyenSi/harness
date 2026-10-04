@@ -3,7 +3,7 @@ type: overview
 title: Debug verb selection — which harness verb answers which question
 description: Decision guide mapping "why did my policy (not) fire" questions to the right harness debug verb — ledger-replay vs live-hypothetical vs static-prediction vs stage-isolation vs end-to-end — with each verb's key discriminators and fail-postures.
 tags: [debugging, cli, audit, explain, dry-run, smoke]
-timestamp: 2026-10-04T16:48:52Z
+timestamp: 2026-10-04T17:05:38Z
 sources:
   - docs/for-agents.md
   - docs/CLI.md
@@ -15,6 +15,7 @@ sources:
   - src/io/extract.ts
   - src/cli/explain.ts
   - src/cli/explain-action.ts
+  - src/cli/enriched-event.ts
   - src/cli/explain-policy.ts
   - src/cli/test-risk.ts
   - src/cli/resolve-env.ts
@@ -64,7 +65,7 @@ When the policy's `ledger_tag` references `${REPO}`/`${BRANCH}` and that value i
 
 ## explain-action — the normalized Action Envelope, nothing else
 
-`harness explain-action <event.json> [--json]` reads a tool-event JSON file (the Claude Code PreToolUse hook payload shape: `{ hook_event_name, tool_name, tool_input, session_id, cwd }`) and prints the normalized Action Envelope — the inspection surface for the normalization all downstream Risk-Gate stages consume. Its description says it plainly: "does not evaluate policies" (src/cli/index.ts, `command("explain-action <event.json>")`). Since task `8b891e83` the envelope it prints carries the hook's leading-prefix git context (a leading `cd <path> &&` or `git switch|checkout <branch> &&`); it loads the manifest (`--config`/`--project`) only for a leading `git switch|checkout`, so it still runs with no manifest otherwise. Use it first when a downstream verb gives a surprising answer, to check whether the envelope itself is what you expected.
+`harness explain-action <event.json> [--json]` reads a tool-event JSON file (the Claude Code PreToolUse hook payload shape: `{ hook_event_name, tool_name, tool_input, session_id, cwd }`) and prints the normalized Action Envelope — the inspection surface for the normalization all downstream Risk-Gate stages consume. Its description says it plainly: "does not evaluate policies" (src/cli/index.ts, `command("explain-action <event.json>")`). Since task `8b891e83` the envelope it prints carries the hook's leading-prefix git context (a leading `cd <path> &&` or `git switch|checkout <branch> &&`); it loads the manifest (`--config`/`--project`) only for a leading `git switch|checkout`, so it still runs with no manifest otherwise; with no manifest at the default location (and no `--config`) it uses an empty manifest and the switch upgrade is a no-op, while an explicit missing `--config` still exits 66. The hook's `kubectl --context`/`--namespace` merge is not shared: `resolve-env` reports the ambient kube context and `explain-policy` flags such an event with `parity.kubectl_target_present`. Use it first when a downstream verb gives a surprising answer, to check whether the envelope itself is what you expected.
 
 ## test-risk / resolve-env — one Risk-Gate stage in isolation
 
