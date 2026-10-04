@@ -18,6 +18,7 @@
 // layer (a call-through `vi.mock` of `node:fs`), never wall time: an unbounded
 // reader opens every planted entry, a bounded one opens none past the bound.
 
+import { execFileSync } from "node:child_process";
 import { Readable, Writable } from "node:stream";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -108,6 +109,8 @@ import {
   listDirNamesBounded,
   listPersistedReportsBoundedWithSkips,
   MAX_HOOK_LISTING_ENTRIES,
+  readReportFileBounded,
+  type ReadBudget,
 } from "../../src/policy-packs/builtin/understanding-before-execution/persisted-reports.js";
 import { getOrCreateSigningKey } from "../../src/runtime/approval-signing.js";
 import type { LedgerWriteArgs } from "../../src/runtime/ledger-writer.js";
@@ -496,6 +499,112 @@ describe("shared bound", () => {
     expect(atBound?.malformedSections).toEqual(["priorArt"]);
     // The operator command passes no bound.
     expect(findLatestParseError(parseErrorsDir, SESSION)?.malformedSections).toEqual(["priorArt"]);
+  });
+});
+
+describe("listing order", () => {
+  it("listDirNamesBounded returns the matching names in ascending byte order, whatever order they were created in", () => {
+    fs.mkdirSync(reportsDir, { recursive: true });
+    // Created in neither sorted nor reverse-sorted order. The last two names
+    // separate byte order (the fs.readdirSync order) from JavaScript's default
+    // UTF-16 code-unit sort: the UTF-8 encoding of U+1F600 starts with byte
+    // 0xf0 and sorts after U+FB01 (leading byte 0xef), while its first
+    // surrogate (0xd83d) sorts before 0xfb01 by code units. No two names
+    // differ only in case, so a case-insensitive filesystem keeps all of them.
+    const created = [
+      "m.json",
+      "Z.json",
+      "a.json",
+      "_x.json",
+      "10.json",
+      "9.json",
+      "b.json",
+      "é.json",
+      "\u{1F600}.json",
+      "ﬁ.json",
+    ];
+    for (const name of created) fs.writeFileSync(path.join(reportsDir, name), "{}");
+    fs.writeFileSync(path.join(reportsDir, "c.txt"), "x");
+    const expected = [
+      "10.json",
+      "9.json",
+      "Z.json",
+      "_x.json",
+      "a.json",
+      "b.json",
+      "m.json",
+      "é.json",
+      "ﬁ.json",
+      "\u{1F600}.json",
+    ];
+    expect(listDirNamesBounded(reportsDir, ".json", BOUND)).toEqual({ names: expected, truncated: false });
+    // The unbounded listing the operator commands use keeps the same order.
+    expect(listDirNamesBounded(reportsDir, ".json", Number.POSITIVE_INFINITY).names).toEqual(expected);
+  });
+});
+
+// The per-entry floor written out (4 KiB), not read from the constant.
+const ENTRY_FLOOR = 4096;
+
+describe("readReportFileBounded: the per-entry floor is charged for an entry it does not read", () => {
+  it("a FIFO is refused unread and costs the floor", () => {
+    fs.mkdirSync(reportsDir, { recursive: true });
+    const fifo = path.join(reportsDir, "pipe.json");
+    execFileSync("mkfifo", [fifo]);
+    const budget: ReadBudget = { spent: 0 };
+    expect(readReportFileBounded(fifo, { budget })).toMatchObject({ ok: false, reason: "not-regular" });
+    expect(budget.spent).toBe(ENTRY_FLOOR);
+  });
+
+  it("a file over the read cap is refused unread and costs the floor, not its size", async () => {
+    fs.mkdirSync(reportsDir, { recursive: true });
+    const big = path.join(reportsDir, "big.json");
+    fs.writeFileSync(big, "");
+    fs.truncateSync(big, FILE_CAP + 1);
+    const budget: ReadBudget = { spent: 0 };
+    const read = await counted(() => readReportFileBounded(big, { budget }));
+    expect(read.value).toMatchObject({ ok: false, reason: "too-large" });
+    expect(read.bytes).toBe(0);
+    expect(budget.spent).toBe(ENTRY_FLOOR);
+  });
+
+  it("an entry whose open fails costs the floor: a dangling symlink, followed or refused, and a vanished path", () => {
+    fs.mkdirSync(reportsDir, { recursive: true });
+    const dangling = path.join(reportsDir, "dangling.json");
+    fs.symlinkSync(path.join(tmp, "nowhere.json"), dangling);
+    const followed: ReadBudget = { spent: 0 };
+    expect(readReportFileBounded(dangling, { budget: followed })).toMatchObject({ ok: false, reason: "unreadable" });
+    expect(followed.spent).toBe(ENTRY_FLOOR);
+    const refused: ReadBudget = { spent: 0 };
+    expect(readReportFileBounded(dangling, { noFollow: true, budget: refused })).toMatchObject({
+      ok: false,
+      reason: "not-regular",
+    });
+    expect(refused.spent).toBe(ENTRY_FLOOR);
+    const vanished: ReadBudget = { spent: 0 };
+    expect(readReportFileBounded(path.join(reportsDir, "gone.json"), { budget: vanished })).toMatchObject({
+      ok: false,
+      reason: "unreadable",
+    });
+    expect(vanished.spent).toBe(ENTRY_FLOOR);
+  });
+
+  it("floor charges alone spend the budget: once they reach it, the next entry is not opened", async () => {
+    fs.mkdirSync(reportsDir, { recursive: true });
+    const fifo = path.join(reportsDir, "pipe.json");
+    execFileSync("mkfifo", [fifo]);
+    const dangling = path.join(reportsDir, "dangling.json");
+    fs.symlinkSync(path.join(tmp, "nowhere.json"), dangling);
+    const report = path.join(reportsDir, "report.json");
+    fs.writeFileSync(report, "{}");
+    // Two floors short of the budget: the FIFO and the failed open spend it.
+    const budget: ReadBudget = { spent: BYTE_BUDGET - 2 * ENTRY_FLOOR };
+    expect(readReportFileBounded(fifo, { budget }).ok).toBe(false);
+    expect(readReportFileBounded(dangling, { budget }).ok).toBe(false);
+    expect(budget.spent).toBe(BYTE_BUDGET);
+    const next = await counted(() => readReportFileBounded(report, { budget }));
+    expect(next.value).toMatchObject({ ok: false, reason: "over-budget" });
+    expect(next.opens).toBe(0);
   });
 });
 

@@ -688,7 +688,7 @@ const BYTES_TRUNCATED_DETAIL = `holds more than ${MAX_HASH_SCAN_BYTES / (1024 * 
 
 /** Result of {@link listDirNamesBounded}. */
 export interface BoundedDirNames {
-  /** Entry names that end with the suffix; empty when `truncated`. */
+  /** Entry names that end with the suffix, in ascending byte order; empty when `truncated`. */
   names: string[];
   /** True when the directory holds more matching entries than `maxEntries`, or more entries in all than `maxScanned`. */
   truncated: boolean;
@@ -705,7 +705,9 @@ export interface BoundedDirNames {
  * any name (default: {@link HOOK_LISTING_SCAN_FACTOR} times `maxEntries`),
  * so millions of planted names, matching or not, cost a bounded number of
  * directory reads and no allocation of their names. The directory handle is
- * always closed. An unbounded `maxEntries` reads the whole directory.
+ * always closed. An unbounded `maxEntries` reads the whole directory. The
+ * names come back in ascending byte order (the `fs.readdirSync` order), not
+ * in the filesystem's iteration order.
  */
 export function listDirNamesBounded(
   dir: string,
@@ -738,7 +740,22 @@ export function listDirNamesBounded(
       // Already gone; nothing left to release.
     }
   }
-  return { names, truncated: false };
+  return { names: sortNamesByBytes(names), truncated: false };
+}
+
+/**
+ * `names` in ascending byte order of their UTF-8 encoding: the order
+ * `fs.readdirSync` returns (libuv sorts its scandir with `strcmp`), so the
+ * readers that took names from it before {@link listDirNamesBounded} read
+ * the directory one entry at a time keep the same order, and ties in their
+ * own newest-first sort stay deterministic instead of following the
+ * filesystem's iteration order.
+ */
+function sortNamesByBytes(names: string[]): string[] {
+  return names
+    .map((name) => ({ name, key: Buffer.from(name, "utf8") }))
+    .sort((a, b) => Buffer.compare(a.key, b.key))
+    .map((entry) => entry.name);
 }
 
 /** Result of {@link walkContainerDepth}. */
