@@ -1,5 +1,5 @@
 // Drift guard (reviewer LOW finding, task 341e024b fix round 1): `ENV_RANK`
-// in src/cli/policy/intercept.ts is a hand-maintained copy of
+// in src/cli/policy/risk-envelope-enrichment.ts is a hand-maintained copy of
 // `ENV_PRECEDENCE` in src/runtime/environment-resolver.ts, used by
 // `applyBranchSwitchUpgrade` to decide whether a leading `git
 // switch`/`checkout <branch>` candidate is MORE dangerous than the base

@@ -41,7 +41,7 @@ The CLI is grouped by purpose below. Run any verb with `--help` for flags and ex
 | `harness policy intercept` | The runtime evaluator that hooks call on every PreToolUse / PostToolUse. Supports `--hook <name>` (v0.29.0) to scope evaluation to a single hook generator. |
 | `harness explain [policy] [--trace] [--last]` | Print a policy's definition; `--trace` reads the last recorded evaluation; `--last` traces the most recent decision in the ledger. |
 | `harness explain-action <event.json>` | Reason about a single hook event JSON file and explain which policies would fire (Risk Gate debug verb, Phase 7). |
-| `harness explain-policy <policy>` | Resolve and print a single policy by name (after merge + overrides) and whether it would apply to a tool event. |
+| `harness explain-policy <policy>` | Resolve and print a single policy by name (after merge + overrides) and whether it would apply to a tool event. The Action Envelope is enriched by the same Bash-prefix merges as `harness policy intercept` (inline `VAR=value`, leading `cd`, leading `git switch`/`checkout`), so the environment it reports matches the hook; it still reads no ledger, and its `parity` block names what it does not evaluate (`ledger_requires`, `kubectl_target`). |
 | `harness test-risk <event.json>` | Replay an event against the Risk Gate and print the assigned tier. |
 | `harness resolve-env <event.json>` | Resolve which `environment` block a given event maps to. |
 | `harness dry-run <prompt>` | Statically predict which hooks fire, which policies match, and which memories route for a prompt. |

@@ -1225,7 +1225,11 @@ trusted config, so a pathological pattern is a self-inflicted hazard.
 policy intercept` as of Phase 7 #5, inspectable with `harness
 explain-policy <policy> --event <event.json>` (the trigger match, risk
 classification, resolved environment, and a per-clause `when:`
-breakdown for a hypothetical event).*
+breakdown for a hypothetical event; the envelope enrichment, i.e. the
+Bash-prefix merges of inline `VAR=value`, a leading `cd` and a leading
+`git switch`/`checkout`, is shared with the hook, so both resolve the same
+environment; the verb's `parity` block lists `ledger_requires` and
+`kubectl_target` as not evaluated).*
 
 A policy may carry an optional `when:` block. As of Phase 7 #5 a
 declared `when:` is ANDed onto the policy's `trigger:` match and
