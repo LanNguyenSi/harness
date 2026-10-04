@@ -91,8 +91,13 @@ import {
 //       map, or a regex alternation (`GIT_TOKEN_RE`'s own shape) — those
 //       are registered BY HAND, not discovered.
 //     - A set built any way other than a literal `new Set([...])` at the
-//       declaration site (computed, spread from another module, built in
-//       a function body, or re-exported under an alias).
+//       declaration site (computed, built in a function body, or
+//       re-exported under an alias); a literal that spreads another
+//       module's set is still seen when it also lists a bare-word element
+//       of its own, and missed otherwise.
+//     - A constructor other than the bare identifier `Set` (for example
+//       `new globalThis.Set(...)`), and an `export const` nested inside a
+//       namespace: only top-level statements are read.
 //     - A module-private (`const`, not `export const`) set — nothing
 //       outside the module could reference it for registration anyway,
 //       and no other module could consume it as a mirror of manifest
