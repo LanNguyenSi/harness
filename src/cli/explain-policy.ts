@@ -16,6 +16,7 @@
 import * as fs from "node:fs";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import {
+  buildActionEnvelope,
   classifyRisk,
   deriveProjectName,
   evaluateWhen,
@@ -31,6 +32,7 @@ import {
 import { extractShellCommand } from "../runtime/tool-name-aliases.js";
 import type { Manifest } from "../schema/index.js";
 import { DEFAULT_SAFE_DELETION_ROOTS } from "../schema/risk.js";
+import { resolveBashPrefixEnrichment } from "./policy/risk-envelope-enrichment.js";
 import { loadEventEnvelope, type EventInputSeams } from "./event-input.js";
 import { EX_USAGE, HarnessExitError } from "./exit-codes.js";
 import { loadManifest, type LoaderOptions, type ResolvedPaths } from "./loader.js";
@@ -147,6 +149,17 @@ interface ExplainPolicyProjection {
   };
   classifier: RiskProfile;
   environment: EnvironmentResolution;
+  /**
+   * Which parts of the hook's evaluation this verb mirrors and which it
+   * deliberately does not (task 7c3919a2). `envelope_enrichment` lists the
+   * Bash-prefix merges shared with `harness policy intercept`;
+   * `not_evaluated` lists what the hook does that this hypothetical,
+   * read-free verb does not.
+   */
+  parity: {
+    envelope_enrichment: string[];
+    not_evaluated: string[];
+  };
   /** Static deletion-target verdict (task d03af8f6); null when the
    *  event's command is not a recognized deletion verb. */
   deletion_target: DeletionTargetVerdict | null;
@@ -295,7 +308,7 @@ export function explainPolicy(
     }
   }
 
-  const { event, envelope } = loadEventEnvelope(
+  const { event, envelope: baseEnvelope } = loadEventEnvelope(
     opts.eventPath,
     opts,
     "explain-policy",
@@ -308,12 +321,47 @@ export function explainPolicy(
       ? { context: opts.kubeContext ?? "", namespace: opts.kubeNamespace ?? "" }
       : resolveKubeContext();
 
+  // Envelope enrichment shared with `harness policy intercept` (task
+  // 7c3919a2): the leading Bash prefix (inline `VAR=value`, `cd <path>
+  // &&`, `git switch|checkout <branch> &&`) is parsed and merged into
+  // the resolver inputs by the SAME helper the hook uses, so this verb
+  // cannot report `unknown` for a command the hook resolves to
+  // `production`. Only the envelope enrichment is shared; this verb
+  // still reads no ledger or evidence.
+  const enrichment = resolveBashPrefixEnrichment({
+    event,
+    manifest,
+    cwd: baseEnvelope.runtime.cwd,
+    cwdGitContext: {
+      repo: baseEnvelope.session.repo,
+      branch: baseEnvelope.session.branch,
+      sha: "",
+    },
+    env: opts.env ?? process.env,
+    kubeContext: kube.context,
+    kubeNamespace: kube.namespace,
+    user: baseEnvelope.runtime.user,
+    host: baseEnvelope.runtime.host,
+    now: new Date(baseEnvelope.timestamp),
+  });
+  const envelope =
+    enrichment.git.repo === baseEnvelope.session.repo &&
+    enrichment.git.branch === baseEnvelope.session.branch
+      ? baseEnvelope
+      : buildActionEnvelope(event, {
+          cwd: baseEnvelope.runtime.cwd,
+          git: enrichment.git,
+          user: baseEnvelope.runtime.user,
+          host: baseEnvelope.runtime.host,
+          now: new Date(baseEnvelope.timestamp),
+        });
+
   const classifier = classifyRisk(envelope, manifest.risk.classifiers);
   const environment = resolveEnvironment(
     envelope,
     manifest.environments.resolvers,
     {
-      env: opts.env ?? process.env,
+      env: enrichment.env,
       kubeContext: kube.context,
       kubeNamespace: kube.namespace,
     },
@@ -353,6 +401,10 @@ export function explainPolicy(
     },
     classifier,
     environment,
+    parity: {
+      envelope_enrichment: ["inline_env", "cd_git_context", "branch_switch_upgrade"],
+      not_evaluated: ["ledger_requires", "kubectl_target"],
+    },
     deletion_target: deletionTarget,
     ...(policy.name.startsWith("preflight-before-") && {
       session_start_preflight: {

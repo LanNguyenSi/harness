@@ -315,7 +315,7 @@ Ausgaben und sind nur paarweise überlappend messbar.
 |---|---|---|
 | `command-normalize.ts` | `normalized` | `bash_match` raw-OR-normalized-OR-amp-OR-quote-normalized (`src/runtime/intercept.ts:549-633#"return true;"`, dritter Arm seit `aabbad63`, vierter Arm seit `cf3dff51`) |
 | | `targetDir`/`targetBase` | nichts (grep-verifiziert) |
-| `bash-prefix-parse.ts` | `inlineEnv`, `cdTarget` | Risk-Gate-Kontext (`src/cli/policy/intercept.ts:1064-1094#"return { ...base, ...bashPrefix.inlineEnv };"`) |
+| `bash-prefix-parse.ts` | `inlineEnv`, `cdTarget` | Risk-Gate-Kontext (`src/cli/policy/risk-envelope-enrichment.ts:155#"return { ...base, ...bashPrefix.inlineEnv };"`) |
 | `read-only-bash.ts` | Boolean | Risk-Floor, Understanding-Gate-PreToolUse (2 Hooks), Write-Guard |
 | `read-only-bash.ts`, `splitCurlWords` | `CurlWord[] \| null` | Risk-Floor NUR (`isReadOnlyCurlCommand`, task `fdaad781`) |
 
@@ -611,5 +611,6 @@ offen.
 - Eine Maschine (WSL2, bash 5.x, GNU findutils). `&`-Backgrounding,
   Job-Control und `find -delete` können anderswo abweichen.
 - Die Resolver-Probe rekonstruiert den Merge-Pfad aus
-  `src/cli/policy/intercept.ts` (`resolverGit`/`resolverEnv`, Zeilen
-  1041–1057), statt den echten PreToolUse-Hook zu fahren.
+  `src/cli/policy/risk-envelope-enrichment.ts`
+  (`resolveBashPrefixEnrichment`, `resolverGit`/`env`; seit Task `7c3919a2`
+  dort statt in `intercept.ts`), statt den echten PreToolUse-Hook zu fahren.

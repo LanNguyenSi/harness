@@ -31,7 +31,7 @@ import {
 } from "../../runtime/index.js";
 import type { Manifest, MatchableEnvironment, McpServer } from "../../schema/index.js";
 import { resolveGeneratedDir, writePendingApproval } from "../../runtime/pending-approval.js";
-import { parseBashPrefix } from "../../runtime/bash-prefix-parse.js";
+import { ENV_RANK, resolveBashPrefixEnrichment } from "./risk-envelope-enrichment.js";
 import { parseKubectlTarget, type KubectlTarget } from "../../runtime/kubectl-target-parse.js";
 import {
   MAX_NORMALIZE_LENGTH,
@@ -183,18 +183,6 @@ function isVerboseEnabled(opts: InterceptCliOptions): boolean {
   return !/^(0|false|no|off)$/i.test(env.trim());
 }
 
-/**
- * Read the command string out of a Bash tool's `tool_input.command`,
- * returning null when the shape is wrong (defensive — production input
- * comes from Claude Code, but tests and Codex bridges have varied
- * payload shapes).
- */
-function readBashCommand(input: unknown): string | null {
-  if (!input || typeof input !== "object" || Array.isArray(input)) return null;
-  const cmd = (input as { command?: unknown }).command;
-  return typeof cmd === "string" && cmd.length > 0 ? cmd : null;
-}
-
 // Derived from `SHELL_ALIASES` rather than hand-copying its members (fix
 // round 2): `tool-name-aliases.ts`'s own header warns against the copy,
 // and since fix round 1 the precompute-matches-matcher argument above
@@ -239,67 +227,6 @@ function resolvePolicyCwd(event: ToolEvent, codexCommandCwd?: string): string {
     if (procCwd) return procCwd;
   }
   return process.cwd();
-}
-
-// Mirrors `ENV_PRECEDENCE` in `../../runtime/environment-resolver.ts`
-// (most-dangerous-first). Kept as a local, small, duplicate table
-// instead of importing that module's private const, so this file stays
-// a read-only consumer of `resolveEnvironment`'s public API rather than
-// reaching into its internals. `unknown` is deliberately ranked lowest:
-// resolving to no signal at all must never look like an "upgrade" over
-// a branch that DID fire a resolver.
-const ENV_RANK: Record<MatchableEnvironment, number> = {
-  production: 0,
-  staging: 1,
-  dev: 2,
-  local: 3,
-  unknown: 4,
-};
-
-/**
- * Branch-switch, upgrade-only merge (task 341e024b): a leading `git
- * switch <branch>` / `git checkout <branch>` names the branch the REST
- * of the command actually runs against, the same way a leading `cd
- * <path>` names a different working directory (see `resolverGit`'s own
- * comment at the call site). Unlike that `cd` merge — which fully
- * REPLACES the git context and can move the resolved environment in
- * EITHER direction (G5, pre-existing, out of scope for this task) —
- * this merge is deliberately asymmetric: it only ever pushes the
- * resolved environment to something MORE dangerous, never less.
- *
- * Both the base git context and the switch-target candidate (same repo
- * / sha, only `branch` differs) are run through the SAME
- * `resolveEnvironment` call with IDENTICAL env / kube inputs, so any
- * difference in the result is attributable to the branch alone. The
- * more dangerous of the two (`ENV_RANK` order) wins; a switch AWAY from
- * a production branch never downgrades — when the candidate resolves to
- * something equally or less dangerous, `baseGit` is returned unchanged.
- */
-function applyBranchSwitchUpgrade(
-  event: ToolEvent,
-  manifest: Manifest,
-  cwd: string,
-  baseGit: GitRepoContext,
-  branchTarget: string | null,
-  inputs: { env: Record<string, string | undefined>; kubeContext: string; kubeNamespace: string },
-  user: string,
-  host: string,
-  now: Date | undefined,
-): GitRepoContext {
-  if (branchTarget === null || branchTarget === baseGit.branch) return baseGit;
-  const candidateGit: GitRepoContext = { ...baseGit, branch: branchTarget };
-  const effectiveNow = now ?? new Date();
-  const baseResolution = resolveEnvironment(
-    buildActionEnvelope(event, { cwd, git: baseGit, user, host, now: effectiveNow }),
-    manifest.environments.resolvers,
-    inputs,
-  );
-  const candidateResolution = resolveEnvironment(
-    buildActionEnvelope(event, { cwd, git: candidateGit, user, host, now: effectiveNow }),
-    manifest.environments.resolvers,
-    inputs,
-  );
-  return ENV_RANK[candidateResolution.name] < ENV_RANK[baseResolution.name] ? candidateGit : baseGit;
 }
 
 /**
@@ -1061,9 +988,26 @@ export async function runInterceptCli(
     // `resolverGit` itself — a switch away from a production branch can
     // never downgrade what `resolverGit` (cwd- or cd-based) already
     // resolved.
-    const riskBashCommand =
-      event.tool_name === "Bash" ? readBashCommand(event.tool_input) : null;
-    const bashPrefix = riskBashCommand === null ? null : parseBashPrefix(riskBashCommand);
+    const riskUser = safeOs(() => os.userInfo().username);
+    const riskHost = safeOs(() => os.hostname());
+    // The leading-prefix parse and the three merges it feeds (inline
+    // `VAR=value` env, leading `cd`, leading `git switch|checkout`)
+    // live in `resolveBashPrefixEnrichment`, shared with `harness
+    // explain-policy` so the debug verb cannot drift from this hook.
+    // The kubectl-target merge below stays hook-only.
+    const { bashPrefix, riskBashCommand, git: gitForRisk, env: resolverEnv } =
+      resolveBashPrefixEnrichment({
+        event,
+        manifest,
+        cwd,
+        cwdGitContext,
+        env: opts.env ?? process.env,
+        kubeContext: kube.context,
+        kubeNamespace: kube.namespace,
+        user: riskUser,
+        host: riskHost,
+        now: opts.now,
+      });
     // Explicit `--context`/`--namespace`/`-n` on a `kubectl ...`
     // invocation (task a7eb1a71). Fed the REMAINDER after `bashPrefix`
     // consumed a leading `cd <path> &&` / `VAR=value` / `git switch
@@ -1076,43 +1020,6 @@ export async function runInterceptCli(
     const kubectlSubject =
       riskBashCommand === null ? null : riskBashCommand.slice(bashPrefix?.remainderStart ?? 0);
     const kubectlTarget = kubectlSubject === null ? null : parseKubectlTarget(kubectlSubject);
-    const resolverGit = (() => {
-      if (bashPrefix === null || bashPrefix.cdTarget === null) return cwdGitContext;
-      const effective = path.isAbsolute(bashPrefix.cdTarget)
-        ? bashPrefix.cdTarget
-        : path.resolve(cwd, bashPrefix.cdTarget);
-      // resolveGitContext returns empty strings for non-git paths;
-      // an empty repo means cd-target was bogus, fall through.
-      const candidate = resolveGitContext(effective);
-      return candidate.repo.length > 0 ? candidate : cwdGitContext;
-    })();
-    const resolverEnv = (() => {
-      const base = opts.env ?? process.env;
-      if (bashPrefix === null || Object.keys(bashPrefix.inlineEnv).length === 0) return base;
-      // Inline assignments are the operator's explicit override; they
-      // win over process.env (matches POSIX `VAR=value cmd` semantics).
-      return { ...base, ...bashPrefix.inlineEnv };
-    })();
-    const riskUser = safeOs(() => os.userInfo().username);
-    const riskHost = safeOs(() => os.hostname());
-    // A leading `git switch`/`checkout <branch>` (task 341e024b) is
-    // merged on top of `resolverGit` above, upgrade-only, using the
-    // AMBIENT kube state (`kube` from `resolveKubeContext()` / the
-    // `opts.kubeContext`/`opts.kubeNamespace` test override), unaffected
-    // by the kubectl-target merge below. See
-    // `applyBranchSwitchUpgrade`'s own doc comment for why this one is
-    // NOT a straight replacement the way the `cd` merge is.
-    const gitForRisk = applyBranchSwitchUpgrade(
-      event,
-      manifest,
-      cwd,
-      resolverGit,
-      bashPrefix?.branchTarget ?? null,
-      { env: resolverEnv, kubeContext: kube.context, kubeNamespace: kube.namespace },
-      riskUser,
-      riskHost,
-      opts.now,
-    );
     // CONFLICT PRIORITY (task a7eb1a71): an explicit kubectl
     // --context/--namespace/-n is merged on top of the AMBIENT kube
     // state (`kube`), on top of `gitForRisk` above (the git context

@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- `harness explain-policy` now builds its Action Envelope through the same enrichment as `harness policy intercept` (task 7c3919a2). Before, it read only the ambient process environment, so `DATABASE_URL=postgres://u@prod-db/app psql ...` resolved `production` in the hook but `unknown` (`applies: false`) in the debug verb; inline `VAR=value` prefixes (quoted values and several assignments included), a leading `cd <path> &&` and a leading `git switch|checkout <branch> &&` are now merged by one shared helper (`src/cli/policy/risk-envelope-enrichment.ts`). The verb stays hypothetical and ledger-free, and its output gains a `parity` block naming what it does not evaluate (`ledger_requires`, `kubectl_target`). A fixture corpus test fails when the two verbs disagree.
+
 ## [0.62.0] - 2026-10-03
 
 ### Changed
