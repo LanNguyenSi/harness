@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Upgrade notes
+
+- `harness explain-policy` output gains `parity.kubectl_target_present` (a boolean, always present); consumers that validate the projection strictly should allow the new key.
+- `harness explain-action` accepts `--config` and `--project`; the manifest is read only for a command with a leading `git switch|checkout`, so it still runs on a machine with no manifest otherwise.
+
+### Fixed
+
+- `harness resolve-env`, `harness test-risk` and `harness explain-action` now read the same Bash-prefix enrichment as `harness policy intercept` and `harness explain-policy` (task 8b891e83): inline `VAR=value` assignments, a leading `cd <path> &&` and a leading `git switch|checkout <branch> &&`. Before, they read only the ambient environment, so `DATABASE_URL=postgres://u@prod-db/app psql ...` resolved `unknown` in `resolve-env` while the hook resolved `production`. All four verbs call one shared helper (`src/cli/enriched-event.ts`); none reads the ledger, and the hook path is unchanged. A divergence test runs each verb over the explain-policy fixture corpus against the hook.
+- `harness explain-policy` now says per event when it skipped a kubectl target: `parity.kubectl_target_present` is `true` when the command (after a leading `cd`/`VAR=value`/`git switch` prefix) is a `kubectl` invocation with an explicit `--context`/`--namespace`/`-n`, so `kubectl --context prod-cluster delete ns a` no longer reads as a plain `applies: false`. The static `not_evaluated` list is unchanged.
+
 ## [0.63.0] - 2026-10-04
 
 ### Upgrade notes

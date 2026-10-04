@@ -1594,8 +1594,8 @@
   `quote-model-divergence.md` and `understanding-gate-lockout-recovery.md`
   `sources-fresh` STALE against these files. Checked every line-numbered
   citation these seven docs make into the five touched files
-  (`src/cli/index.ts:1722-1737`, `:2995-2999`, `:3284-3383`,
-  `:3373-3378`; `src/cli/init/templates.ts:928`): all still match their
+  (`src/cli/index.ts:1722-1737`, `:2999-3003`, `:3288-3387`,
+  `:3377-3382`; `src/cli/init/templates.ts:928`): all still match their
   quoted text verbatim (sibling-line check), since none of this round's
   edits added or removed a line above a cited line in any file a
   line-numbered citation targets. No citation needed re-pointing;
@@ -1728,11 +1728,11 @@
     `src/cli/index.ts` citations in `pause-vs-gate-kill-switch.md`,
     `:2953-2957#"offending hook group out of settings.json with a
     reversible snapshot."` -> `:2957-2961`, `:3328-3333#"in the
-    manifest."` -> `:3373-3378` (re-pointed again, task `6a037359`:
+    manifest."` -> `:3377-3382` (re-pointed again, task `6a037359`:
     `src/cli/index.ts` grew a net 36 lines above it, a
     `CodexInstallRefusalError` import plus a try/catch wrapping the
     codex-install `apply()` call), and the bare `:3290-3389` ->
-    `:3325-3424` (same shift).
+    `:3329-3428` (same shift).
     Sibling-line check at both bounds of each range: the content at the
     old start/end lines is byte-identical to the content at the new
     start/end lines (verified by diffing `git show HEAD~1:src/cli/index.ts`

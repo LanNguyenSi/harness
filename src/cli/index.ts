@@ -2347,10 +2347,14 @@ export function buildProgram(opts: RunOptions = {}): Command {
         "{ hook_event_name, tool_name, tool_input, session_id, cwd }) and print the normalized Action Envelope. " +
         "Inspection surface for the envelope that downstream Risk Gate stages consume; does not evaluate policies.",
     )
+    .option("--config <path>", "manifest path (default: ~/.harness/harness.yaml; legacy fallback ~/.claude/harness.yaml); read only for a leading `git switch|checkout`")
+    .option("--project <name>", "apply per-project overrides")
     .option("--json", "emit the envelope as JSON instead of YAML")
-    .action((eventPath: string, options: { json?: boolean }) => {
+    .action((eventPath: string, options: { config?: string; project?: string; json?: boolean }) => {
       const result = explainAction({
         eventPath,
+        ...(options.config !== undefined && { configPath: options.config }),
+        ...(options.project !== undefined && { project: options.project }),
         ...(options.json === true && { json: true }),
       });
       stdout(result.output);
