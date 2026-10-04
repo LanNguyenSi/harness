@@ -24,7 +24,8 @@ import * as path from "node:path";
 import { queryLedgerByTag, type LedgerEntry } from "../../policies/index.js";
 import {
   checkOperatorApprovalMarkers,
-  checkPersistedReport, MAX_HOOK_LISTING_ENTRIES,
+  checkPersistedReport,
+  MAX_HOOK_LISTING_ENTRIES,
   defaultReportsDir,
   describeMarkerTtlExpiry,
   matchLedgerEntries,
@@ -572,7 +573,9 @@ async function runPackHookCodexPreToolUseCliInner(
   // motion from its previous location right after `checkPersistedReport`).
   const latestParseError =
     report.report === null
-      ? findLatestParseError(path.join(path.dirname(reportsDir), "parse-errors"), sessionId, { maxEntries: MAX_HOOK_LISTING_ENTRIES })
+      ? findLatestParseError(path.join(path.dirname(reportsDir), "parse-errors"), sessionId, {
+          maxEntries: MAX_HOOK_LISTING_ENTRIES,
+        })
       : null;
   // Name the malformed sections from that log, when it carries any:
   // shared with the Claude hook's identical append via

@@ -99,6 +99,7 @@ export {
   listDirNamesBounded,
   type ReportFileReadFailure,
   type BoundedReportRead,
+  type ReadBudget,
   readReportFileBounded,
   type UnhashableReportReason,
   type ReportFileHash,

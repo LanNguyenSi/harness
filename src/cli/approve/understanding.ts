@@ -23,8 +23,11 @@ import {
   approvedLedgerTagFor,
   defaultReportsDir,
   hashReportFile,
-  listDirNamesBounded, listPersistedReportsBoundedWithSkips, MAX_HASHED_REPORT_BYTES,
+  listDirNamesBounded,
+  listPersistedReportsBoundedWithSkips,
+  MAX_HASHED_REPORT_BYTES,
   readReportFileBounded,
+  type ReadBudget,
   readActiveClaim,
   selectReportForSession,
   type SkippedReportEntry,
@@ -377,7 +380,10 @@ export interface ParseErrorSummary {
  *
  * Both hooks pass `maxEntries` (`MAX_HOOK_LISTING_ENTRIES`): a directory with
  * more `*.log` entries than that is read not at all and yields no parse error,
- * so a planted directory cannot run the hook past its time budget.
+ * and the logs read are charged against the hash scan's byte budget (the
+ * larger of the `fstat` size and the per-entry floor, newest first), so a
+ * planted directory cannot run the hook past its time budget. Once the budget
+ * is spent the lookup yields no parse error.
  */
 export function findLatestParseError(
   dir: string,
@@ -386,9 +392,10 @@ export function findLatestParseError(
 ): ParseErrorSummary | null {
   // `maxEntries` is set by the PreToolUse hooks (the directory is agent-writable
   // and the lookup stats and reads its logs): past it nothing is opened and the
-  // answer is no parse error (the listing of a too large directory is empty).
-  // The operator command leaves it unset.
+  // answer is no parse error (the listing of a too large directory is empty),
+  // and the reads below spend a byte budget. The operator command leaves it unset.
   const listed = listDirNamesBounded(dir, ".log", opts.maxEntries ?? Number.POSITIVE_INFINITY);
+  const budget: ReadBudget | undefined = opts.maxEntries === undefined ? undefined : { spent: 0 };
   const candidates: { filePath: string; mtimeMs: number }[] = [];
   for (const name of listed.names) {
     const full = path.join(dir, name);
@@ -406,7 +413,8 @@ export function findLatestParseError(
     // above only orders the candidates; the bounded reader's descriptor decides
     // type and size, so a FIFO, a huge or a growing log is skipped like an
     // unreadable one.
-    const bounded = readReportFileBounded(cand.filePath);
+    const bounded = readReportFileBounded(cand.filePath, { budget });
+    if (!bounded.ok && bounded.reason === "over-budget") return null;
     if (!bounded.ok) continue;
     const raw = bounded.raw;
     // The standalone package writes a JSON header followed by `--- raw ---`

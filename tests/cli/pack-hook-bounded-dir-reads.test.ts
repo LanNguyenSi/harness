@@ -1,18 +1,22 @@
 // Task 169e6286 (split from 805be2af): every full-directory read on the
-// PreToolUse hook path is bounded by entry count, so a reports directory (or a
-// parse-errors directory) with many planted entries cannot push one hook call
-// past the 15 s PreToolUse budget, which the runtime treats as an allow. The
-// hash scan was bounded by 805be2af; this file pins the four other readers:
+// PreToolUse hook path is bounded by entry count and by bytes, so a reports
+// directory (or a parse-errors directory) with many planted entries, or with a
+// few thousand large ones, cannot push one hook call past the 15 s PreToolUse
+// budget, which the runtime treats as an allow. The hash scan was bounded by
+// 805be2af; this file pins the four other readers:
 //   - the evidence read (`checkPersistedReport`), both runtimes
 //   - the auto-approval precondition listing (`attemptAutoApproval`), both runtimes
 //   - the subagent-delegation lookup, Claude hook only (the Codex hook has none)
 //   - the parse-error log lookup (`findLatestParseError`), both runtimes
-// Past the bound each reader opens nothing and fails closed: no evidence, the
-// auto-approval declines, the delegation capture is skipped, no parse error.
+// Past the entry bound a reader opens nothing, and past the byte budget (32 MiB,
+// each entry charged its size or 4 KiB, whichever is larger) it reads no more;
+// either way it fails closed: no evidence, the auto-approval declines, the
+// delegation capture is skipped, no parse error. The directory listing itself
+// stops early (one entry at a time, after the bound is crossed).
 //
-// The assertions count opens and stats on the fs layer (a call-through
-// `vi.mock` of `node:fs`), never wall time: an unbounded reader opens every
-// planted entry, a bounded one opens none past the bound.
+// The assertions count opens, stats, bytes read and directory reads on the fs
+// layer (a call-through `vi.mock` of `node:fs`), never wall time: an unbounded
+// reader opens every planted entry, a bounded one opens none past the bound.
 
 import { Readable, Writable } from "node:stream";
 import * as os from "node:os";
@@ -23,6 +27,13 @@ const fsCounts = vi.hoisted(() => ({
   prefixes: [] as string[],
   opens: 0,
   stats: 0,
+  /** Bytes returned by `readSync` on descriptors opened under a watched prefix. */
+  bytes: 0,
+  /** Entries `Dir.readSync` yielded (and the final null) for watched directories. */
+  dirReads: 0,
+  dirsOpened: 0,
+  dirsClosed: 0,
+  fds: new Set<number>(),
 }));
 
 vi.mock("node:fs", async (importOriginal) => {
@@ -32,9 +43,44 @@ vi.mock("node:fs", async (importOriginal) => {
   const mod = {
     ...orig,
     openSync: ((...args: Parameters<typeof orig.openSync>) => {
-      if (watched(args[0])) fsCounts.opens += 1;
-      return orig.openSync(...args);
+      const isWatched = watched(args[0]);
+      if (isWatched) fsCounts.opens += 1;
+      const fd = orig.openSync(...args);
+      if (isWatched) fsCounts.fds.add(fd);
+      return fd;
     }) as typeof orig.openSync,
+    closeSync: ((fd: number) => {
+      fsCounts.fds.delete(fd);
+      return orig.closeSync(fd);
+    }) as typeof orig.closeSync,
+    readSync: ((fd: number, ...rest: unknown[]) => {
+      const n = (orig.readSync as (...a: unknown[]) => number)(fd, ...rest);
+      if (fsCounts.fds.has(fd)) fsCounts.bytes += n;
+      return n;
+    }) as typeof orig.readSync,
+    opendirSync: ((...args: Parameters<typeof orig.opendirSync>) => {
+      const dir = orig.opendirSync(...args);
+      if (!watched(args[0])) return dir;
+      fsCounts.dirsOpened += 1;
+      return new Proxy(dir, {
+        get(target, prop) {
+          if (prop === "readSync") {
+            return (): fs.Dirent | null => {
+              fsCounts.dirReads += 1;
+              return target.readSync();
+            };
+          }
+          if (prop === "closeSync") {
+            return (): void => {
+              fsCounts.dirsClosed += 1;
+              target.closeSync();
+            };
+          }
+          const value = Reflect.get(target, prop, target) as unknown;
+          return typeof value === "function" ? (value as (...a: unknown[]) => unknown).bind(target) : value;
+        },
+      });
+    }) as typeof orig.opendirSync,
     statSync: ((...args: Parameters<typeof orig.statSync>) => {
       if (watched(args[0])) fsCounts.stats += 1;
       return orig.statSync(...args);
@@ -102,8 +148,7 @@ beforeEach(() => {
   transcriptPath = path.join(sessionsDir, `rollout-2026-10-04T00-00-00-${SESSION}.jsonl`);
   fs.writeFileSync(transcriptPath, "");
   fsCounts.prefixes = [];
-  fsCounts.opens = 0;
-  fsCounts.stats = 0;
+  resetCounts();
 });
 
 afterEach(() => {
@@ -217,16 +262,74 @@ function writeSessionParseErrorLog(): void {
   );
 }
 
-/** Count the opens and stats the callback makes under the reports and parse-errors directories. */
-async function counted<T>(fn: () => Promise<T>): Promise<{ value: T; opens: number; stats: number }> {
-  fsCounts.prefixes = [reportsDir, parseErrorsDir];
+interface Counted<T> {
+  value: T;
+  opens: number;
+  stats: number;
+  /** Bytes read through descriptors opened under the watched directories. */
+  bytes: number;
+  /** Entries the watched directory listings yielded (plus each listing's final null). */
+  dirReads: number;
+  dirsOpened: number;
+  dirsClosed: number;
+}
+
+function resetCounts(): void {
   fsCounts.opens = 0;
   fsCounts.stats = 0;
+  fsCounts.bytes = 0;
+  fsCounts.dirReads = 0;
+  fsCounts.dirsOpened = 0;
+  fsCounts.dirsClosed = 0;
+  fsCounts.fds.clear();
+}
+
+/** Count the fs calls the callback makes under the reports and parse-errors directories. */
+async function counted<T>(fn: () => Promise<T> | T): Promise<Counted<T>> {
+  resetCounts();
+  fsCounts.prefixes = [reportsDir, parseErrorsDir];
   try {
     const value = await fn();
-    return { value, opens: fsCounts.opens, stats: fsCounts.stats };
+    return {
+      value,
+      opens: fsCounts.opens,
+      stats: fsCounts.stats,
+      bytes: fsCounts.bytes,
+      dirReads: fsCounts.dirReads,
+      dirsOpened: fsCounts.dirsOpened,
+      dirsClosed: fsCounts.dirsClosed,
+    };
   } finally {
     fsCounts.prefixes = [];
+  }
+}
+
+// The byte budget written out (32 MiB) and the per-file cap (1 MiB), not read
+// from the constants, so changing either fails a test.
+const BYTE_BUDGET = 32 * 1024 * 1024;
+const FILE_CAP = 1024 * 1024;
+// Entries well under the count bound whose total size is over the byte budget:
+// 60 files of 1,000,000 bytes (the largest single read the cap allows is 1 MiB),
+// every one a hard link to one inode, so the fixture costs one file of disk.
+const LARGE_LINKS = 60;
+const LARGE_FILE_BYTES = 1_000_000;
+// One listing reads at most the budget plus the one file in flight.
+const ONE_READER_MAX_BYTES = BYTE_BUDGET + FILE_CAP + 1;
+
+/** A JSON object of exactly `LARGE_FILE_BYTES` bytes (one trailing newline). */
+function largeJsonBody(fields: Record<string, unknown>): string {
+  const head = JSON.stringify({ ...fields, pad: "" });
+  const pad = "x".repeat(LARGE_FILE_BYTES - 1 - Buffer.byteLength(head));
+  return `${JSON.stringify({ ...fields, pad })}\n`;
+}
+
+/** Plant `LARGE_LINKS` hard links to one large file in `dir`, named `<prefix>NNNN<suffix>`. */
+function plantLargeLinks(dir: string, prefix: string, suffix: string, body: string): void {
+  fs.mkdirSync(dir, { recursive: true });
+  const original = path.join(dir, `${prefix}0000${suffix}`);
+  fs.writeFileSync(original, body);
+  for (let i = 1; i < LARGE_LINKS; i++) {
+    fs.linkSync(original, path.join(dir, `${prefix}${String(i).padStart(4, "0")}${suffix}`));
   }
 }
 
@@ -328,7 +431,14 @@ describe("shared bound", () => {
   it("listPersistedReportsBoundedWithSkips: maxEntries opens nothing past the bound, no option reads everything", async () => {
     plantOtherSessionReports(5);
     const bounded = await counted(async () => listPersistedReportsBoundedWithSkips(reportsDir, { maxEntries: 4 }));
-    expect(bounded.value).toEqual({ reports: [], skipped: [], truncated: true });
+    expect(bounded.value).toEqual({
+      reports: [],
+      skipped: [],
+      truncated: true,
+      truncatedDetail: expect.stringMatching(
+        /^holds more than 8192 \*\.json entries, or more than 16384 entries of any name, more than the gate reads; remove /,
+      ),
+    });
     expect(bounded.opens).toBe(0);
     const atBound = listPersistedReportsBoundedWithSkips(reportsDir, { maxEntries: 5 });
     expect(atBound.truncated).toBe(false);
@@ -336,6 +446,43 @@ describe("shared bound", () => {
     const unbounded = listPersistedReportsBoundedWithSkips(reportsDir);
     expect(unbounded.truncated).toBe(false);
     expect(unbounded.reports).toHaveLength(5);
+  });
+
+  it("listDirNamesBounded: the listing stops after maxEntries + 1 matching names instead of reading the whole directory", async () => {
+    fs.mkdirSync(reportsDir, { recursive: true });
+    for (let i = 0; i < 50; i++) fs.writeFileSync(path.join(reportsDir, `e${i}.json`), "{}");
+    const past = await counted(() => listDirNamesBounded(reportsDir, ".json", 3));
+    expect(past.value).toEqual({ names: [], truncated: true });
+    // Four matching names cross the bound of three; the other 46 are never read.
+    expect(past.dirReads).toBe(4);
+    // The handle is closed on the early return.
+    expect(past.dirsOpened).toBe(1);
+    expect(past.dirsClosed).toBe(1);
+    // Within the bound the whole directory is read, to its end (3 names + the final null).
+    fs.rmSync(reportsDir, { recursive: true });
+    fs.mkdirSync(reportsDir, { recursive: true });
+    for (let i = 0; i < 3; i++) fs.writeFileSync(path.join(reportsDir, `e${i}.json`), "{}");
+    const within = await counted(() => listDirNamesBounded(reportsDir, ".json", 3));
+    expect(within.value.truncated).toBe(false);
+    expect(within.value.names).toHaveLength(3);
+    expect(within.dirReads).toBe(4);
+    expect(within.dirsClosed).toBe(within.dirsOpened);
+  });
+
+  it("listDirNamesBounded: a directory of many non-matching names fails closed after twice the bound, however few match", async () => {
+    fs.mkdirSync(reportsDir, { recursive: true });
+    for (let i = 0; i < 60; i++) fs.writeFileSync(path.join(reportsDir, `junk${i}.txt`), "x");
+    fs.writeFileSync(path.join(reportsDir, "only.json"), "{}");
+    const past = await counted(() => listDirNamesBounded(reportsDir, ".json", 3));
+    expect(past.value).toEqual({ names: [], truncated: true });
+    // Twice the bound (6) iterated, then one more entry crosses it.
+    expect(past.dirReads).toBe(7);
+    expect(past.dirsClosed).toBe(past.dirsOpened);
+    // The same directory under a roomy scan cap lists its one match.
+    expect(listDirNamesBounded(reportsDir, ".json", 3, 1000)).toEqual({
+      names: ["only.json"],
+      truncated: false,
+    });
   });
 
   it("findLatestParseError: maxEntries yields no parse error past the bound without a stat or an open, and the bounded lookup still finds the log at the bound", async () => {
@@ -445,6 +592,99 @@ describe.each(RUNTIMES)("bounded directory reads on the hook path: $name", (rt) 
       expect(out.value.stderr).toMatch(/malformed sections/);
       expect(out.opens).toBeGreaterThan(0);
       expect(out.opens).toBeLessThanOrEqual(BOUND);
+      // Positive control for the stat counter the bound tests above assert 0 on:
+      // the lookup stats every log it lists (the stat only orders the candidates).
+      expect(out.stats).toBeGreaterThanOrEqual(REALISTIC_ENTRIES);
+      expect(out.stats).toBeLessThanOrEqual(BOUND);
+    },
+    PLANTED_DIR_TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "evidence read: entries under the count bound but over the byte budget are read only up to the budget (no evidence, the call still blocks)",
+    async () => {
+      writePendingReport();
+      plantLargeLinks(reportsDir, "z-large-", ".json", largeJsonBody({ sessionId: "other" }));
+      const out = await counted(() => rt.run({ manifest: plainManifest() }));
+      expect(out.value.blocked).toBe(true);
+      expect(out.value.stderr).toMatch(/no report evidence read: .* holds more than 32 MiB of report data/);
+      expect(out.value.stderr).toMatch(/remove non-report or stale \*\.json entries from it by hand/);
+      expect(out.value.stderr).not.toMatch(/has approvalStatus=pending/);
+      // Without a byte charge all 60 files (60 MB) would be read and parsed.
+      expect(out.bytes).toBeLessThanOrEqual(ONE_READER_MAX_BYTES);
+      expect(out.opens).toBeLessThan(LARGE_LINKS);
+    },
+    PLANTED_DIR_TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "auto-approval listing: entries under the count bound but over the byte budget decline the attempt (fail closed, the gate stays shut)",
+    async () => {
+      getOrCreateSigningKey(generatedDir);
+      writePendingReport();
+      plantLargeLinks(reportsDir, "z-large-", ".json", largeJsonBody({ sessionId: "other" }));
+      const out = await counted(() =>
+        rt.run({ manifest: autoApproveManifest(), permissionMode: "bypassPermissions" }),
+      );
+      expect(out.value.blocked).toBe(true);
+      expect(out.value.stderr).toMatch(
+        /auto-approval declined: the reports directory holds more than 32 MiB of report data/,
+      );
+      expect(checkApprovalMarker(generatedDir, SESSION).matched).toBe(false);
+      // Two readers each list the reports directory once (the auto-approval
+      // precondition, then the evidence read), each within its own budget.
+      expect(out.bytes).toBeLessThanOrEqual(2 * ONE_READER_MAX_BYTES);
+    },
+    PLANTED_DIR_TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "parse-error lookup: logs under the count bound but over the byte budget are read only up to the budget, the block names no parse error",
+    async () => {
+      // The session's own log is the OLDEST, so the lookup reaches it only after
+      // the planted logs; the budget is spent before that.
+      writeSessionParseErrorLog();
+      const own = path.join(parseErrorsDir, "2026-10-04T09-00-00-000Z-parse-error.log");
+      fs.utimesSync(own, new Date("2020-01-01T00:00:00Z"), new Date("2020-01-01T00:00:00Z"));
+      plantLargeLinks(parseErrorsDir, "z-large-", ".log", largeJsonBody({ sessionId: "other" }));
+      const out = await counted(() => rt.run({ manifest: plainManifest() }));
+      expect(out.value.blocked).toBe(true);
+      expect(out.value.stderr).not.toMatch(/malformed sections/);
+      expect(out.bytes).toBeLessThanOrEqual(ONE_READER_MAX_BYTES);
+      expect(out.opens).toBeLessThan(LARGE_LINKS);
+    },
+    PLANTED_DIR_TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "evidence read: the listing stops once the bound is crossed (no read of the rest of 8193 planted entries)",
+    async () => {
+      writePendingReport();
+      plantJsonEntries(BOUND + 1);
+      const out = await counted(() => rt.run({ manifest: plainManifest() }));
+      expect(out.value.blocked).toBe(true);
+      // BOUND + 2 *.json entries exist; the listing yields BOUND + 1 of them.
+      expect(out.dirReads).toBeLessThanOrEqual(BOUND + 1);
+      expect(out.dirsClosed).toBe(out.dirsOpened);
+    },
+    PLANTED_DIR_TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "evidence read: a directory of more non-matching names than twice the bound fails closed after reading twice the bound",
+    async () => {
+      writePendingReport();
+      fs.mkdirSync(reportsDir, { recursive: true });
+      for (let i = 0; i < 2 * BOUND + 20; i++) {
+        fs.writeFileSync(path.join(reportsDir, `junk-${String(i).padStart(6, "0")}.txt`), "");
+      }
+      const out = await counted(() => rt.run({ manifest: plainManifest() }));
+      expect(out.value.blocked).toBe(true);
+      expect(out.value.stderr).toMatch(/no report evidence read: .* holds more than 8192 \*\.json entries/);
+      expect(out.value.stderr).not.toMatch(/has approvalStatus=pending/);
+      expect(out.opens).toBe(0);
+      expect(out.dirReads).toBeLessThanOrEqual(2 * BOUND + 1);
+      expect(out.dirsClosed).toBe(out.dirsOpened);
     },
     PLANTED_DIR_TEST_TIMEOUT_MS,
   );
@@ -615,7 +855,7 @@ describe("bounded directory reads on the hook path: delegation lookup (claude pr
       expect(out.opens).toBeLessThanOrEqual(BOUND);
       expect(out.opens).toBe(0);
       expect(out.value.stderr).toMatch(
-        /holds more than 8192 \*\.json entries, more than the gate reads; the report for session child-bounded-4444 was not captured/,
+        /holds more than 8192 \*\.json entries, or more than 16384 entries of any name, more than the gate reads; remove .*; the report for session child-bounded-4444 was not captured/,
       );
       expect(out.value.stderr).not.toMatch(/captured the Understanding Report/);
       expect(checkApprovalMarker(generatedDir, CHILD).matched).toBe(false);
@@ -634,6 +874,26 @@ describe("bounded directory reads on the hook path: delegation lookup (claude pr
       expect(out.value.source).toBe("marker");
       expect(out.opens).toBeLessThanOrEqual(BOUND * 2);
       expect(checkApprovalMarker(generatedDir, CHILD).matched).toBe(true);
+    },
+    PLANTED_DIR_TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "entries under the count bound but over the byte budget are read only up to the budget and the child's report is not captured",
+    async () => {
+      setUpDelegation(true);
+      plantLargeLinks(reportsDir, "z-large-", ".json", largeJsonBody({ sessionId: "other" }));
+      const out = await counted(runChild);
+      expect(out.value.blocked).toBe(true);
+      expect(out.value.stderr).toMatch(
+        /holds more than 32 MiB of report data, more than the gate reads; remove .*; the report for session child-bounded-4444 was not captured/,
+      );
+      expect(out.value.stderr).not.toMatch(/captured the Understanding Report/);
+      expect(checkApprovalMarker(generatedDir, CHILD).matched).toBe(false);
+      // Three readers list the reports directory on this call (the evidence
+      // read, the delegation lookup, the auto-approval precondition), each
+      // within its own budget.
+      expect(out.bytes).toBeLessThanOrEqual(3 * ONE_READER_MAX_BYTES);
     },
     PLANTED_DIR_TEST_TIMEOUT_MS,
   );
