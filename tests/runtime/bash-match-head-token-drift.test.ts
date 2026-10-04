@@ -419,6 +419,73 @@ describe("bash_match facts drift guard (migrated onto src/runtime/bash-match-fac
     });
   });
 
+  describe("task 26c1d33e: the five spellings the regex scan could not see are now detected (structural scan)", () => {
+    const spellings: ReadonlyArray<{ label: string; name: string; source: string }> = [
+      {
+        label: "`new Set([...] as const)`",
+        name: "AS_CONST_HEADS",
+        source: 'export const AS_CONST_HEADS = new Set(["ls", "harness"] as const);\n',
+      },
+      {
+        label: "a `// comment` line between `(` and `[`",
+        name: "COMMENT_BEFORE_ARRAY_HEADS",
+        source: 'export const COMMENT_BEFORE_ARRAY_HEADS = new Set(\n  // why\n  ["ls", "harness"]);\n',
+      },
+      {
+        label: "backtick-quoted (no-substitution template literal) elements",
+        name: "BACKTICK_HEADS",
+        source: "export const BACKTICK_HEADS = new Set([`ls`, `harness`]);\n",
+      },
+      {
+        label: "a union-literal type annotation on the constant",
+        name: "UNION_ANNOTATION_HEADS",
+        source:
+          'export const UNION_ANNOTATION_HEADS: ReadonlySet<"gh" | "harness"> = new Set(["gh", "harness"]);\n',
+      },
+      {
+        label: "a trailing comma in the constructor call",
+        name: "TRAILING_COMMA_HEADS",
+        source: 'export const TRAILING_COMMA_HEADS = new Set(["ls", "harness"],);\n',
+      },
+    ];
+    for (const { label, name, source } of spellings) {
+      it(`detects ${label}`, () => {
+        withFixtureTree({ "spelling.ts": source }, (root) => {
+          expect(scanForHeadTokenShapedSets(root)).toContainEqual(expect.objectContaining({ name }));
+        });
+      });
+    }
+  });
+
+  describe("task 26c1d33e: negative controls, the scan reports no candidate", () => {
+    const controls: ReadonlyArray<{ label: string; source: string }> = [
+      {
+        label: "a pure flag set in the style of ENV_LEADING_FLAGS (no bare-word element)",
+        source: 'export const F: ReadonlySet<string> = new Set(["-i", "--ignore-environment"]);\n',
+      },
+      {
+        label: "a module-private (non-exported) bare-word set",
+        source: 'const G = new Set(["ls", "harness"]);\n',
+      },
+      {
+        label: "an `export const` set that only appears inside a string literal and a comment",
+        source:
+          'const S = \'export const H = new Set(["ls", "harness"]);\';\n// export const I = new Set(["ls", "harness"]);\n/* export const J = new Set(["ls", "harness"]); */\n',
+      },
+      {
+        label: "a set whose elements are all uppercase or non-string literals",
+        source: 'export const K = new Set(["LS", "HARNESS", 1, 2]);\n',
+      },
+    ];
+    for (const { label, source } of controls) {
+      it(`reports nothing for ${label}`, () => {
+        withFixtureTree({ "control.ts": source }, (root) => {
+          expect(scanForHeadTokenShapedSets(root)).toEqual([]);
+        });
+      });
+    }
+  });
+
   it("scanForHeadTokenShapedSets DETECTS the known-good real case on the ACTUAL src/runtime/ tree (F4 fix-round-1 regression, title corrected fix round 2: this alone is NOT a general positive control — NON_GIT_HEAD_TOKENS is the one real set that also satisfies the pre-fix-round-1 narrow regex, `every()`, and a non-recursive walk, so it is invariant under every widening those fixes made; it only proves the scan is not a no-op against TODAY's shipped tree. The fix-round-2 fixture-tree tests above are what actually pin the mutable-annotation, generic-constructor, comment-tolerance, and recursive-walk shapes independently)", () => {
     expect(scanForHeadTokenShapedSets()).toContainEqual({
       file: "src/runtime/command-normalize.ts",
