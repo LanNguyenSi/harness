@@ -50,6 +50,8 @@ instead.)
 | `team`  | An **agent-tasks** account ([hosted](https://agent-tasks.opentriologue.ai) or [self-hosted](https://github.com/LanNguyenSi/agent-tasks)). | Teams that already use `agent-tasks` for PR review tracking. The merge gate (`review:<pr-number>` ledger tag) wires against the agent-tasks MCP. |
 | `full`  | Same as `team` plus `@lannguyensi/agent-preflight` and `gh` on PATH. | Operators who want every reference policy enforced (dogfood gate, preflight gates, review-subagent gate, merge gate). |
 
+`harness init --template` also accepts `minimal` (header only, no policy packs), which is the default when no template is given.
+
 **Not using agent-tasks?** Pick `solo`. The `team` review gate matches
 only the agent-tasks MCP tool names, so a `gh pr create` workflow stays
 unprotected by it. `full` adds `gh`-CLI variants of the review gates

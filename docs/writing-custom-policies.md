@@ -530,4 +530,3 @@ Acceptance criteria for each `requires` shape:
 - [`for-humans.md`](for-humans.md): operator path from install to first `apply`.
 - [`policy-packs/understanding-before-execution.md`](policy-packs/understanding-before-execution.md), [`policy-packs/branch-protection.md`](policy-packs/branch-protection.md), [`policy-packs/solution-acceptance.md`](policy-packs/solution-acceptance.md), [`policy-packs/post-merge-gate.md`](policy-packs/post-merge-gate.md): the four builtin packs, plus the future contract for custom-pack sources.
 - [`ARCHITECTURE.md`](ARCHITECTURE.md) Appendix A: full reference manifest.
-- [`examples/pandora-bootstrap.md`](examples/pandora-bootstrap.md): walkthrough of an end-to-end real harness setup.

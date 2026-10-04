@@ -249,7 +249,7 @@ Distribution:
 
 Test + reproducibility:
 
-- `dogfood/phase5/run-smoke.sh`: reproducible end-to-end smoke against real grounding-mcp + live SQLite ledger, with five fail-closed gates (deny, ledger_add, silent allow, 5m audit, 24h audit, explain --trace). First-run baseline transcripts committed for review of the live wiring.
+- `dogfood/phase5/run-smoke.sh`: reproducible end-to-end smoke against real grounding-mcp + live SQLite ledger, with five fail-closed gates (deny, ledger_add, silent allow, 5m audit, 24h audit, explain --trace). First-run baseline transcripts were committed for review of the live wiring and later removed; rerun the script to reproduce them.
 - Shared `tests/_helpers/` builders (`makeManifest`, `makePolicy`, `makeDecision`, `makeDecisionEntry`) collapsed ~80 lines of duplicated test boilerplate.
 
 ### Acceptance criteria

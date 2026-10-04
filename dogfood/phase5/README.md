@@ -43,9 +43,8 @@ sqlite3 ~/.evidence-ledger/ledger.db \
   "DELETE FROM evidence_ledger WHERE session LIKE 'phase5-dogfood-%';"
 ```
 
-Each run writes to `dogfood/phase5/transcript/` (gitignored). The first-run
-evidence is preserved in `dogfood/phase5/transcript-baseline-2026-05-01/` so
-PR reviewers can read the exact output cited below.
+Each run writes to `dogfood/phase5/transcript/` (gitignored). The artifact
+names cited below are the files the smoke driver writes there.
 
 ## Acceptance evidence
 
@@ -96,7 +95,7 @@ before any silent fix:
 
 `run-smoke.sh` directly invokes the same binary with the same stdin
 shape that Claude Code's hook protocol provides; the complementary
-headless `claude -p` smoke (`transcript-claude-p-2026-05-03/`) covers
+headless `claude -p` smoke (`run-smoke-claude-p.sh`) covers
 Claude Code's own hook driver. Together they cover the runtime and
 the harness side of the contract.
 
