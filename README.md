@@ -98,7 +98,7 @@ steps).
 
 ## Status
 
-The current release is `v0.62.1`. All seven planned phases have
+The current release is `v0.63.0`. All seven planned phases have
 shipped; phase acceptance criteria are in
 [`docs/ROADMAP.md`](docs/ROADMAP.md), and what shipped in each version
 is in [`CHANGELOG.md`](CHANGELOG.md).

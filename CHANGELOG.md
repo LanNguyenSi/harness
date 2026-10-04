@@ -7,7 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-## [0.62.1] - 2026-10-04
+## [0.63.0] - 2026-10-04
+
+### Upgrade notes
+
+- The understanding gate's PreToolUse hook now reads at most 8192 `*.json` entries and 32 MiB of report data from the reports directory (and the same bounds for `parse-errors/`). A directory past either bound fails closed: the block names no report evidence and the opt-in auto-approval declines until non-report or stale `*.json` entries are removed by hand (`harness gc` removes only aged approved or expired reports). Directories within the bounds behave as before.
+- `harness explain-policy` JSON and YAML output gains a `parity` block; consumers that validate the projection strictly should allow the new key.
 
 ### Fixed
 
