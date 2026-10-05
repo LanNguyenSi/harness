@@ -151,7 +151,22 @@ export interface PolicyDecision {
    * `ux:` / `producers:` text when this is set.
    */
   emptyIdentifier?: EmptyIdentifier;
+  /**
+   * Set when this decision was made for a FOREIGN attributed context: the
+   * repository a target-naming command (`git -C <dir>`, `cd <dir> &&`)
+   * resolved to, as opposed to the working directory's own. Absent for
+   * every cwd-context decision. In-memory only (not part of the serialised
+   * audit row); the block message uses it to name the repository and
+   * directory whose evidence is missing.
+   */
+  foreignTarget?: ForeignTarget;
   evaluatedAt: string;
+}
+
+/** The repository name and directory a foreign attributed context resolved to. */
+export interface ForeignTarget {
+  repo: string;
+  dir: string;
 }
 
 /**
@@ -790,6 +805,24 @@ export function sanitizeEnvelopeReason(reason: string): string {
   return stripped.length > 200 ? `${stripped.slice(0, 200)}...` : stripped;
 }
 
+/**
+ * Agent-facing sentence appended to a block whose blocking decision came from
+ * a foreign attributed context. Names the repository and directory the
+ * command targets (both come from the agent's own command and the work tree
+ * it resolves to, so both pass through `sanitizeEnvelopeReason`) and says the
+ * missing evidence belongs to that repository, not to the working directory.
+ * Names no command: which step produces the evidence is the policy's own,
+ * and it has to be produced for the target repository.
+ */
+function foreignTargetSentence(target: ForeignTarget, structured: boolean): string {
+  const sentence =
+    `This command targets repository \`${sanitizeEnvelopeReason(target.repo)}\` ` +
+    `(directory \`${sanitizeEnvelopeReason(target.dir)}\`). ` +
+    `The required evidence is missing for that repository, not for the working directory, ` +
+    `so it has to be produced for that repository itself.`;
+  return structured ? `\n\n${sentence}` : ` ${sentence}`;
+}
+
 /** Which per-repo builtin resolved to an empty value; see {@link emptyIdentifierGuard}. */
 export type EmptyIdentifier = "REPO" | "BRANCH";
 
@@ -1169,6 +1202,8 @@ export function usesPerRepoBuiltins(policy: Policy): boolean {
 interface AttributedContext {
   builtins: ExtractBuiltins;
   currentHeadSha: string | undefined;
+  /** Set only on a foreign context; the cwd context never carries it. */
+  foreignTarget?: ForeignTarget;
 }
 
 /**
@@ -1459,6 +1494,7 @@ export function resolveAttributedContexts(
         BRANCH: branchOverridden ? cwdBuiltins.BRANCH : gitCtx.branch,
       },
       currentHeadSha: gitCtx.sha.length > 0 ? gitCtx.sha : undefined,
+      foreignTarget: { repo: gitCtx.repo, dir: resolved },
     });
   }
 
@@ -1722,14 +1758,17 @@ export async function intercept(
       // to true; leave the field absent otherwise so decisions from
       // manifests without a `when:` policy stay byte-identical.
       const whenFallback = whenFallbackMap.get(policy.name);
-      const decision: PolicyDecision = enriched
-        ? {
-            ...base,
-            risk: enriched.risk,
-            environment: enriched.environment,
-            ...(whenFallback === true ? { whenUnclassifiedFallback: true } : {}),
-          }
-        : base;
+      const decision: PolicyDecision = {
+        ...(enriched
+          ? {
+              ...base,
+              risk: enriched.risk,
+              environment: enriched.environment,
+              ...(whenFallback === true ? { whenUnclassifiedFallback: true } : {}),
+            }
+          : base),
+        ...(context.foreignTarget !== undefined ? { foreignTarget: context.foreignTarget } : {}),
+      };
       decisions.push(decision);
       try {
         await options.ledger.record(
@@ -1870,6 +1909,20 @@ export async function intercept(
         ? " (matched via the fail-closed unclassified rule, not a real risk classification)"
         : "";
       reasonText = `${blocking.policyName}: ${blocking.reason}.${unclassifiedClause}${hintSuffix}${producersBlock}`;
+    }
+    // A decision made for a foreign attributed context (a nested or
+    // vendored work tree named by the command) is explained by the
+    // repository it resolved to: the producer the message points at runs
+    // for the working directory, whose own evidence may already be on
+    // record. Appended only for a missing-evidence block; the degraded and
+    // empty-identifier envelopes above name their own cause and stay as
+    // they are. Deliberately policy-neutral and names no opt-out.
+    if (
+      blocking.foreignTarget !== undefined &&
+      blocking.outcome !== "deny-degraded" &&
+      blocking.emptyIdentifier === undefined
+    ) {
+      reasonText += foreignTargetSentence(blocking.foreignTarget, blockingPolicy?.ux !== undefined);
     }
     const block: ClaudeDenyJson = {
       decision: "block",

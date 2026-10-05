@@ -8,6 +8,7 @@ export {
   type InterceptOptions,
   type InterceptResult,
   type LedgerClient,
+  type ForeignTarget,
   type PolicyDecision,
   type PolicyOutcome,
   type RiskGateContext,
