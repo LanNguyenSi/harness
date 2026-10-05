@@ -1045,7 +1045,7 @@ describe("bounded directory reads on the hook path: delegation lookup (claude pr
 // the byte budget.
 const REPORT_NAME = "2026-10-04T10-00-00-000Z-report-aaaa1111.json";
 const SCAN_ENTRY_BOUND_DETAIL =
-  /no report in the reports directory could be checked against the content the session approval marker was signed for \(the reports directory holds more than 8192 \*\.json entries, or more than 16384 entries of any name, more than the gate reads; remove /;
+  /no report in the reports directory could be checked against the content the session approval marker was signed for \(the reports directory \S+ holds more than 8192 \*\.json entries, or more than 16384 entries of any name, more than the gate reads; remove /;
 
 /** Write the pending report and approve it, so a signed marker names its content hash. */
 async function approveSessionReport(): Promise<string> {

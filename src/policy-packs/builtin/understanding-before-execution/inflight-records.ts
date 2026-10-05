@@ -370,8 +370,8 @@ export function verifyInflightRecord(
   //
   // The check is a direct lookup of the one entry, never a listing of
   // the session directory: the directory holds only what its writers put
-  // there, and a listing costs time in proportion to its size (8.3 s at
-  // 3M planted entries) inside a hook whose 15 s budget the runtime
+  // there, and a listing costs time in proportion to its size (see the
+  // CHANGELOG entry for task aa6f6570) inside a hook whose 15 s budget the runtime
   // treats as an allow when it is exceeded. `lstat` says whether the
   // entry exists (a missing entry, or any error, reads as "no record":
   // fail closed); `realpath.native` then returns the entry's name as the

@@ -1210,7 +1210,7 @@ export function verifyApprovedReportHash(
       ok: false,
       detail:
         `no report in the reports directory could be checked against the content the ${truncatedKinds} signed for ` +
-        `(the reports directory ${ENTRIES_TRUNCATED_DETAIL})`,
+        `(the reports directory ${reportsDir} ${ENTRIES_TRUNCATED_DETAIL})`,
     };
   }
   if (scan.files === 0 || scan.matched.has(primary.reportContentHash)) {

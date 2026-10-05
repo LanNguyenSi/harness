@@ -1198,8 +1198,9 @@ describe.each(RUNTIMES)("persisted report is evidence, not authority (task 74023
       // The listing stops at the entry bound before the scan starts, so the
       // reason names that bound (not the mismatch or the byte budget).
       expect(out.detail).toMatch(
-        /no report in the reports directory could be checked against the content the session approval marker was signed for \(the reports directory holds more than 8192 \*\.json entries, or more than 16384 entries of any name, more than the gate reads; remove /,
+        /no report in the reports directory could be checked against the content the session approval marker was signed for \(the reports directory \S+ holds more than 8192 \*\.json entries, or more than 16384 entries of any name, more than the gate reads; remove /,
       );
+      expect(out.detail).toContain(`(the reports directory ${reportsDir} holds more than`);
       expect(out.detail).not.toMatch(/the approved report was changed or removed after approval/);
       expect(out.detail).not.toMatch(/more report data than the gate-read scan budget covers/);
     }, PLANTED_DIR_TEST_TIMEOUT_MS);
