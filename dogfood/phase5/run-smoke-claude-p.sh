@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Phase 5 #1a, rewritten on top of `harness smoke` (task 78a23aed).
 #
-# The original 2026-05-03 recipe was a hand-rolled bash invocation of
+# The earlier recipe was a hand-rolled bash invocation of
 # `claude -p ... --output-format stream-json --include-hook-events ...`
 # whose output was greppy'd by hand for hook events and result.is_error.
 # The `harness smoke` verb owns all of that: argv-building, env
@@ -37,7 +37,7 @@ echo "manifest    = $MANIFEST_RENDERED"
 echo "output dir  = $OUTPUT_DIR"
 echo
 
-# `say hi` is the same prompt as the 2026-05-03 baseline. The
+# `say hi` is the same prompt the earlier hand-rolled recipe used. The
 # manifest's only PreToolUse matcher targets
 # mcp__agent-tasks__pull_requests_merge, which `say hi` does not
 # trigger, so the policy-hook does not fire here and --expect-exit=0

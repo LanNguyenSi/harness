@@ -1,2 +1,5 @@
 transcript/
-harness.lock
+# Per-run output of run-smoke-claude-p.sh (and any saved baselines):
+# local artifacts, never committed.
+transcript-claude-p-*/
+transcript-baseline-*/
