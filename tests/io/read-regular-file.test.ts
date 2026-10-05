@@ -211,6 +211,7 @@ describe.skipIf(process.platform === "win32")("readRegularFileRejectingSymlink: 
 
   function leakedBy(call: () => unknown): number {
     call(); // warm any lazily opened internal descriptor first
+    openDescriptorCount();
     const before = openDescriptorCount();
     for (let i = 0; i < CALLS; i++) call();
     return openDescriptorCount() - before;
@@ -226,12 +227,6 @@ describe.skipIf(process.platform === "win32")("readRegularFileRejectingSymlink: 
     const dir = path.join(tmp, "a-dir");
     fs.mkdirSync(dir);
     expect(leakedBy(() => expect(readRegularFileRejectingSymlink(dir).kind).toBe("not-regular"))).toBe(0);
-  });
-
-  it("not-regular (a FIFO with no writer)", () => {
-    const fifo = path.join(tmp, "marker.fifo");
-    execFileSync("mkfifo", [fifo]);
-    expect(leakedBy(() => expect(readRegularFileRejectingSymlink(fifo).kind).toBe("not-regular"))).toBe(0);
   });
 
   it("unreadable (over the cap)", () => {
@@ -299,6 +294,37 @@ describe.skipIf(process.platform === "win32")(
       expect(run.timedOut).toBe(false);
       expect(run.ms).toBeLessThan(BOUND_MS);
       expect(JSON.parse(run.stdout)).toEqual({ kind: "not-regular" });
+    });
+
+    it("the descriptor of a refused FIFO is closed (no leak across repeated reads)", () => {
+      const fifo = path.join(tmp, "marker.fifo");
+      execFileSync("mkfifo", [fifo]);
+      const started = Date.now();
+      // In a child for the same reason as above: without O_NONBLOCK the open
+      // would wait for a writer, and here that must show as a killed child.
+      const result = spawnSync(
+        process.execPath,
+        [
+          "--input-type=module",
+          "-e",
+          `const fs = await import("node:fs");` +
+            `const m = await import(${JSON.stringify(pathToFileURL(BUILT_READER).href)});` +
+            "const count = () => fs.readdirSync('/dev/fd').length;" +
+            "m.readRegularFileRejectingSymlink(process.argv[1]);" +
+            "count();" + // the first listing may open an internal descriptor of its own
+            "const before = count();" +
+            "const kinds = new Set();" +
+            "for (let i = 0; i < 25; i++) kinds.add(m.readRegularFileRejectingSymlink(process.argv[1]).kind);" +
+            // Count before touching process.stdout: its lazy creation opens a descriptor.
+            "const leaked = count() - before;" +
+            "process.stdout.write(JSON.stringify({ leaked, kinds: [...kinds] }));",
+          fifo,
+        ],
+        { encoding: "utf8", timeout: BOUND_MS, killSignal: "SIGKILL" },
+      );
+      expect((result.error as NodeJS.ErrnoException | undefined)?.code).not.toBe("ETIMEDOUT");
+      expect(Date.now() - started).toBeLessThan(BOUND_MS);
+      expect(JSON.parse(result.stdout)).toEqual({ leaked: 0, kinds: ["not-regular"] });
     });
 
     it("a symlink to a FIFO returns symlink within the bound", () => {
