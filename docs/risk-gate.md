@@ -1093,7 +1093,7 @@ secrets/configmap exclusion, the file-selection guard, the
 `$`-expansion guard, the token-shape allowlist, an entry from the flag
 allowlist, or the flag-allowlist enforcement itself) was applied and
 observed to fail exactly the tests named above, then restored — see the
-`[Unreleased]` CHANGELOG entry for task `da823721` and the named test
+CHANGELOG.md's `[0.50.0]` entry for task `da823721` and the named test
 blocks above (this file's own record of what was measured, rather than
 a pointer to a subagent report that does not live in this repository).
 
@@ -1196,7 +1196,7 @@ remainder after `src/runtime/bash-prefix-parse.ts` strips a leading
 invocation's own first shell segment, stopping at a bare `--`. See
 `src/runtime/kubectl-target-parse.ts`'s own module doc for the full
 scope and known-unhandled-shapes list, and CHANGELOG.md's
-`[Unreleased]` entry for the measured downgrade this fixes.
+`[0.49.0]` entry (task `a7eb1a71`) for the measured downgrade this fixes.
 
 One measured, out-of-scope interaction this surfaced: once this merge
 correctly resolves `environment: production` from an explicit
@@ -1215,8 +1215,8 @@ value token each, linear in command length, while still requiring the
 literal `delete` verb so `kubectl get`/`describe` never match, flagged
 or not. `terraform destroy` got the identical treatment for terraform's
 own `-chdir=DIR` global flag, which occupies the same position between
-the tool name and its subcommand. See CHANGELOG.md's `[Unreleased]`
-entry for the exponential-backtracking defect this replaced and its
+the tool name and its subcommand. See CHANGELOG.md's `[0.49.0]`
+entry (task `a7eb1a71`) for the exponential-backtracking defect this replaced and its
 measured timings.
 
 `kube_context_patterns` are operator-authored regexes compiled at
