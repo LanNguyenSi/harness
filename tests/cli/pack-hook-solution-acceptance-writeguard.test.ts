@@ -4,6 +4,11 @@ import {
   evaluateWriteGuard,
   runPackHookSolutionAcceptanceWriteguardCli,
 } from "../../src/cli/pack/hook-solution-acceptance-writeguard.js";
+import {
+  MATRIX_CWD,
+  MATRIX_DIR,
+  PIPELINE_MATRIX,
+} from "../_helpers/writeguard-pipeline-matrix.js";
 
 const DIR = "/home/u/.local/state/agent-grounding/solution-verdicts";
 const MARKER = `${DIR}/task-42.json`;
@@ -598,5 +603,122 @@ describe("write-guard: the shared read-only predicate must not learn `sed` / `cu
     // reference check, not by the guard rejecting every sed/curl outright.
     expect(bash("sed -n '1,5p' /tmp/src.txt").blocked).toBe(false);
     expect(bash("curl -sL https://example.com/x").blocked).toBe(false);
+  });
+});
+
+describe("write-guard: read-only `|` pipelines are not treated as writes (task 95a3712d)", () => {
+  // Master blocked each of these although every stage only reads: the strict
+  // single-command classifier refuses any `|`, so the command fell through to
+  // the verdict-dir reference check, whose glob/brace-plus-"solution" fallback
+  // fired on the pattern or the path. The same text without the `| head`
+  // was allowed. The pipeline classifier admits a single-`|` chain only when
+  // EVERY stage is itself read-only, so the pins below are the discriminating
+  // pair for the matrix further down.
+  it.each([
+    ["glob in a grep pattern, file named solution-*", "grep -n 'x*y' solution-notes.md | head -20"],
+    ["three-stage pipe, glob in the middle stage", "cat docs/solution-design.md | grep -n 'a*b' | wc -l"],
+    ["brace in an rg pattern", "rg 'a{2}' solution-x | head"],
+    ["reads a marker by literal path", `cat ${MATRIX_DIR}/a.json | head`],
+    ["reads a marker by ~ path", "cat ~/.local/state/agent-grounding/solution-verdicts/a.json | head"],
+    ["reads a marker by $HOME path", "cat $HOME/.local/state/agent-grounding/solution-verdicts/a.json | head"],
+  ])("allows %s", (_label, command) => {
+    expect(bash(command).blocked).toBe(false);
+  });
+
+  it("the same reads without the pipe stay allowed (unchanged)", () => {
+    expect(bash("grep -n 'x*y' solution-notes.md").blocked).toBe(false);
+    expect(bash(`ls ${MATRIX_DIR}`).blocked).toBe(false);
+  });
+
+  it("a write stage next to the same read stays blocked (discriminating pair)", () => {
+    expect(bash(`cat ${MATRIX_DIR}/a.json | head`).blocked).toBe(false);
+    expect(bash(`cat ${MATRIX_DIR}/a.json | tee ${MATRIX_DIR}/b.json`).blocked).toBe(true);
+    expect(bash("grep -n 'x*y' solution-notes.md | head").blocked).toBe(false);
+    expect(bash("grep -n 'x*y' solution-notes.md | tee solution-verdicts/b.json").blocked).toBe(true);
+  });
+});
+
+describe("write-guard: pipeline negative-control matrix (task 95a3712d)", () => {
+  // Every row is a real write attempt (or an unparsable pipeline) and must be
+  // blocked by the current guard, whatever it decided on origin/master.
+  const writes = PIPELINE_MATRIX.filter((row) => row.kind === "write");
+
+  it("the matrix is not empty and covers each group the task names", () => {
+    const groups = new Set(writes.map((row) => row.group));
+    for (const g of [
+      "tee",
+      "redirect",
+      "sed -i",
+      "mv",
+      "cp",
+      "rm",
+      "dd",
+      "install",
+      "truncate",
+      "sort -o",
+      "subshell",
+      "substitution",
+      "backticks",
+      "existing+pipe",
+      "fail-closed",
+      "quoted-pipe",
+      "cd stage",
+    ]) {
+      expect(groups.has(g), `matrix group ${g}`).toBe(true);
+    }
+  });
+
+  it.each(writes.map((row) => [`${row.group}: ${row.command}`, row.command] as const))(
+    "blocks %s",
+    (_label, command) => {
+      expect(evaluateWriteGuard("Bash", { command }, MATRIX_DIR, MATRIX_CWD).blocked).toBe(true);
+    },
+  );
+
+  it("blocks a quoted `|` hidden in a find that deletes, even though each fragment would read-classify", () => {
+    // Splitting `find <dir> -name 'a|cat -x' -delete` on every `|` yields the
+    // fragments `find <dir> -name 'a` and `cat -x' -delete`, both of which a
+    // per-stage classifier accepts. Only the quote-aware stage boundary
+    // keeps this a write.
+    expect(bash(`find ${MATRIX_DIR} -name 'a|cat -x' -delete`).blocked).toBe(true);
+    expect(bash(`find ${MATRIX_DIR} -name "a|cat -x" -delete`).blocked).toBe(true);
+    expect(bash(`find ${MATRIX_DIR} -name a\\|cat -delete`).blocked).toBe(true);
+  });
+
+  it("a `cd` stage never takes the pipeline arm, wherever it sits in the pipeline", () => {
+    // `cd <dir> | cat` is already caught by the leading-cd pre-check; the
+    // cases below put the `cd` after another stage, where only the
+    // pipeline arm's own exclusion keeps them out of the read-only fast path.
+    expect(bash(`cd ${MATRIX_DIR} | cat`).blocked).toBe(true);
+    expect(bash(`cat x | cd ${MATRIX_DIR}`).blocked).toBe(true);
+    expect(bash(`cat x | cd ${MATRIX_DIR}/sub | head`).blocked).toBe(true);
+    // A pipeline whose stages merely mention the letters cd stays a read.
+    expect(bash("rg cd src | head").blocked).toBe(false);
+  });
+});
+
+describe("write-guard: monotonicity against origin/master (task 95a3712d)", () => {
+  // The fixture records what master decided for each row (measured by
+  // scripts/measure-writeguard-baseline.mjs against `git archive
+  // origin/master`, not a checkout). Every real write that master blocked
+  // must still be blocked; the only rows that may flip to allowed are the
+  // pure read pipelines.
+  const verdictNow = (command: string) =>
+    evaluateWriteGuard("Bash", { command }, MATRIX_DIR, MATRIX_CWD).blocked ? "blocked" : "allowed";
+
+  it("no real write blocked on master is allowed now", () => {
+    const regressions = PIPELINE_MATRIX.filter(
+      (row) => row.kind === "write" && row.onMaster === "blocked" && verdictNow(row.command) !== "blocked",
+    ).map((row) => row.command);
+    expect(regressions).toEqual([]);
+  });
+
+  it("only pure read pipelines change from blocked to allowed, and the table says so", () => {
+    const flipped = PIPELINE_MATRIX.filter(
+      (row) => row.onMaster === "blocked" && verdictNow(row.command) === "allowed",
+    );
+    expect(flipped.length).toBeGreaterThan(0);
+    expect(flipped.every((row) => row.kind === "read")).toBe(true);
+    for (const row of PIPELINE_MATRIX) expect(verdictNow(row.command)).toBe(row.now);
   });
 });
