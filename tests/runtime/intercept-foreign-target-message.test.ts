@@ -132,6 +132,14 @@ const CWD_ONLY_UX_TEXT =
   "Run:\n" +
   "  harness preflight";
 
+function targetSentence(repo: string, dir: string): string {
+  return (
+    `This command targets repository \`${repo}\` (directory \`${dir}\`). ` +
+    "The required evidence is missing for that repository, not for the working directory, " +
+    "so it has to be produced for that repository itself."
+  );
+}
+
 describe("foreign-target block message (nested / vendored work tree)", () => {
   for (const spelling of ["git -C vendor/libfoo log", "cd vendor/libfoo && git log"]) {
     it(`ux branch: \`${spelling}\` names the target repo and its resolved directory`, async () => {
@@ -151,10 +159,9 @@ describe("foreign-target block message (nested / vendored work tree)", () => {
       expect(block ?? null).not.toBeNull();
       const resolvedDir = fs.realpathSync(libfoo);
       for (const text of [block?.reason, block?.hookSpecificOutput?.permissionDecisionReason]) {
-        expect(text).toContain("libfoo");
-        expect(text).toContain(resolvedDir);
-        // The operator-curated ux text is intact at the head of the message.
-        expect(text?.startsWith(CWD_ONLY_UX_TEXT)).toBe(true);
+        // The operator-curated ux text stays intact, and the sentence follows
+        // after a blank line so it never lands on the `Run:` command line.
+        expect(text).toBe(`${CWD_ONLY_UX_TEXT}\n\n${targetSentence("libfoo", resolvedDir)}`);
         // Policy-neutral wording: no opt-out, no pause, no manifest edit.
         expect(text).not.toMatch(/pause|opt-out|fail_open|manifest/i);
       }
@@ -169,6 +176,9 @@ describe("foreign-target block message (nested / vendored work tree)", () => {
       expect(reason).toContain("libfoo");
       expect(reason).toContain(fs.realpathSync(libfoo));
       expect(reason).toContain(`(directory \`${fs.realpathSync(libfoo)}\`)`);
+      // Neutral text is one paragraph: the sentence is appended after a single space.
+      expect(reason.endsWith(` ${targetSentence("libfoo", fs.realpathSync(libfoo))}`)).toBe(true);
+      expect(reason).not.toContain("\n\nThis command targets repository");
       expect(reason).not.toMatch(/pause|opt-out|fail_open/i);
     });
   }
@@ -256,8 +266,13 @@ describe("foreign-target sentence is not added to envelopes that name their own 
 
     expect(result.blocked).toBe(true);
     const reason = result.blockJson?.reason ?? "";
-    expect(reason).toContain("HEAD is detached");
-    expect(reason).not.toContain("targets repository");
+    // Exactly the pre-existing empty-BRANCH envelope, nothing appended.
+    expect(reason).toBe(
+      "preflight-before-push: no branch is checked out in repository `libfoo`: HEAD is detached, " +
+        "so the branch-scoped evidence this policy checks cannot be looked up. Check out a named " +
+        "branch there (`git switch <branch>`, or `git switch -c <branch>` for a new one), create " +
+        "the evidence for that branch, then retry the command.",
+    );
     expect(result.blockJson?.hookSpecificOutput?.permissionDecisionReason).toBe(reason);
   });
 
@@ -293,8 +308,14 @@ describe("foreign-target sentence is not added to envelopes that name their own 
     expect(result.blocked).toBe(true);
     expect(result.decisions.some((d) => d.outcome === "deny-degraded")).toBe(true);
     const reason = (JSON.parse(out.output().trim()) as ClaudeDenyJson).reason;
-    expect(reason).toContain("grounding-mcp timeout");
-    expect(reason).not.toContain("targets repository");
+    // Exactly the pre-existing deny-degraded envelope, nothing appended.
+    expect(reason).toBe(
+      "preflight-before-investigation: required evidence could not be read (evidence ledger " +
+        "degraded: grounding-mcp timeout after 5000ms). This block policy fails closed while its " +
+        "evidence source is unreadable; producing the required tag will not unblock it until the " +
+        "ledger is reachable again. Ask your operator to check grounding-mcp (harness doctor), " +
+        "then retry. Session: sess-bb202fb9.",
+    );
   });
 });
 
