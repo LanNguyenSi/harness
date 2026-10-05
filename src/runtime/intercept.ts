@@ -785,6 +785,20 @@ const ENVELOPE_CONTROL_CHARS = new RegExp(
 );
 
 /**
+ * Characters that are not printable text but can reorder or hide what a
+ * reader sees or start a new "line" in model-visible text: C1 controls
+ * (U+0080-U+009F, including NEL), the line and paragraph separators
+ * (U+2028, U+2029), the bidi marks (U+200E, U+200F, U+061C), the bidi
+ * embedding/override controls (U+202A-U+202E) and the bidi isolates
+ * (U+2066-U+2069). Each is replaced by a visible `\u{XXXX}` escape rather
+ * than dropped, so a reader still sees that the name carried it. Written as
+ * escapes so this source file holds none of them raw.
+ */
+const ENVELOPE_ESCAPED_CHARS = /[\u0080-\u009F\u061C\u200E\u200F\u2028\u2029\u202A-\u202E\u2066-\u2069]/;
+
+const ENVELOPE_MAX_LENGTH = 200;
+
+/**
  * Bound and clean a transport-level reason before it is interpolated
  * into the agent-facing deny-degraded envelope. The string can embed
  * output captured from the grounding-mcp SUBPROCESS (`exitDiagnostic`
@@ -801,8 +815,26 @@ const ENVELOPE_CONTROL_CHARS = new RegExp(
  * one-line stderr surface.
  */
 export function sanitizeEnvelopeReason(reason: string): string {
-  const stripped = reason.replace(ENVELOPE_CONTROL_CHARS, " ");
-  return stripped.length > 200 ? `${stripped.slice(0, 200)}...` : stripped;
+  const collapsed = reason.replace(ENVELOPE_CONTROL_CHARS, " ");
+  // Build whole tokens (a code point, or one escape) so the length bound can
+  // never cut an escape sequence or a surrogate pair in half.
+  const tokens: string[] = [];
+  for (const ch of collapsed) {
+    tokens.push(
+      ENVELOPE_ESCAPED_CHARS.test(ch)
+        ? `\\u{${ch.codePointAt(0)!.toString(16).padStart(4, "0")}}`
+        : ch,
+    );
+  }
+  let total = 0;
+  for (const t of tokens) total += t.length;
+  if (total <= ENVELOPE_MAX_LENGTH) return tokens.join("");
+  let out = "";
+  for (const t of tokens) {
+    if (out.length + t.length > ENVELOPE_MAX_LENGTH) break;
+    out += t;
+  }
+  return `${out}...`;
 }
 
 /**
