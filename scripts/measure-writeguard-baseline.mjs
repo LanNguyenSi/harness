@@ -1,4 +1,3 @@
-#!/usr/bin/env node
 // Differential measurement for the solution-acceptance write-guard's read-only
 // `|` pipeline arm (tracker task 95a3712d). It replays the fixture table
 // `tests/_helpers/writeguard-pipeline-matrix.ts` against TWO copies of the
@@ -13,7 +12,8 @@
 // Exit 0 only when all three hold for every row. The row count is printed,
 // not assumed.
 //
-// Usage (needs the repo's own devDependencies, `tsx` loads the TypeScript):
+// Usage (needs the repo's own devDependencies): it imports the TypeScript
+// sources, so run it through `tsx`, not plain `node` (hence no shebang):
 //   npx tsx scripts/measure-writeguard-baseline.mjs [--base origin/master]
 //
 // The extracted baseline reuses this checkout's node_modules through a
