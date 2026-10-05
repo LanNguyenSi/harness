@@ -1093,6 +1093,11 @@ describe.skipIf(process.platform === "win32").each(E2E_RUNTIMES)(
         expect(swapped.timedOut).toBe(false);
         expect(swapped.ms).toBeLessThan(bound);
         rt.expectBlock(swapped);
+        // Refused by the descriptor's type: the marker reads as absent. A
+        // reader that skipped the type check would read the FIFO as an empty
+        // body, which blocks too, but as a forged marker.
+        expect(swapped.stderr).toMatch(/no approval marker for session/);
+        expect(swapped.stderr).not.toMatch(/forged\/unsigned marker rejected/);
       },
       60_000,
     );
