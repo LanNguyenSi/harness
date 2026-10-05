@@ -112,6 +112,18 @@ which globs or braces obscure every segment so that neither `solution`
 nor `verdicts` survives in the text (for example `sol*verd*`), and a path
 built at runtime inside an interpreter.
 
+Read-only pipelines take the read-only fast path before any reference
+check (task 95a3712d): a command made of single `|` stages, each of which
+is read-only on its own (`grep -n 'x*y' solution-notes.md | head`,
+`cat <verdict dir>/a.json | head`), is allowed even when it carries a
+glob character and `solution`. Every `|` must be a real stage boundary:
+a `|` inside quotes, after a backslash, inside a `${...}`, `$(...)`,
+`$[...]` or extglob, an unterminated quote, an unquoted `(` or `)`, a `$`
+not followed by a name character, and any `cd`, `command` or `env` stage
+send the command back to the checks above. A pipeline with any writing
+stage (`tee`, `sort -o`, `sed -i`, a redirect) is never read-only and is
+refused as before.
+
 Anti-forgery scope is v1-honest: it closes the enumerated-write-path
 residual, not arbitrary same-uid forgery.
 
