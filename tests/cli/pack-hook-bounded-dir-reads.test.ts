@@ -17,6 +17,15 @@
 // The assertions count opens, stats, bytes read and directory reads on the fs
 // layer (a call-through `vi.mock` of `node:fs`), never wall time: an unbounded
 // reader opens every planted entry, a bounded one opens none past the bound.
+//
+// Task aa6f6570 closes the last two uncharged directory reads on the same path
+// and pins them in the two blocks at the end of this file:
+//   - the hash scan (`scanReportHashes`, a signed marker is present), both
+//     runtimes: it lists through the same early-stopping listing, so planted
+//     names cost a bounded number of directory reads and fail closed past it
+//   - the in-flight record check (`verifyInflightRecord`, Claude hook only: the
+//     Codex hook has no subagent path): a direct lookup of the one entry, never
+//     a listing of `.inflight/<session>/`
 
 import { execFileSync } from "node:child_process";
 import { Readable, Writable } from "node:stream";
@@ -34,6 +43,8 @@ const fsCounts = vi.hoisted(() => ({
   dirReads: 0,
   dirsOpened: 0,
   dirsClosed: 0,
+  /** `readdirSync` calls on watched directories (a whole-directory listing). */
+  readdirs: 0,
   fds: new Set<number>(),
 }));
 
@@ -82,6 +93,10 @@ vi.mock("node:fs", async (importOriginal) => {
         },
       });
     }) as typeof orig.opendirSync,
+    readdirSync: ((...args: Parameters<typeof orig.readdirSync>) => {
+      if (watched(args[0])) fsCounts.readdirs += 1;
+      return (orig.readdirSync as (...a: unknown[]) => unknown)(...args);
+    }) as typeof orig.readdirSync,
     statSync: ((...args: Parameters<typeof orig.statSync>) => {
       if (watched(args[0])) fsCounts.stats += 1;
       return orig.statSync(...args);
@@ -95,7 +110,7 @@ vi.mock("node:fs", async (importOriginal) => {
 });
 
 import * as fs from "node:fs";
-import { findLatestParseError } from "../../src/cli/approve/understanding.js";
+import { approveUnderstanding, findLatestParseError } from "../../src/cli/approve/understanding.js";
 import { runPackHookCodexPreToolUseCli } from "../../src/cli/pack/hook-codex-pre-tool-use.js";
 import { runPackHookPreToolUseCli } from "../../src/cli/pack/hook-pre-tool-use.js";
 import type { LedgerEntry } from "../../src/policies/index.js";
@@ -106,12 +121,20 @@ import {
   writeDelegationMarker,
 } from "../../src/policy-packs/builtin/understanding-before-execution/delegation-markers.js";
 import {
+  INFLIGHT_RECORD_DIRNAME,
+  verifyInflightRecord,
+  writeInflightRecord,
+} from "../../src/policy-packs/builtin/understanding-before-execution/inflight-records.js";
+import {
+  canonicalReportHashOfFile,
   listDirNamesBounded,
   listPersistedReportsBoundedWithSkips,
   MAX_HOOK_LISTING_ENTRIES,
   readReportFileBounded,
+  verifyApprovedReportHash,
   type ReadBudget,
 } from "../../src/policy-packs/builtin/understanding-before-execution/persisted-reports.js";
+import type { OperatorMarkerApproval } from "../../src/policy-packs/builtin/understanding-before-execution/task-markers.js";
 import { getOrCreateSigningKey } from "../../src/runtime/approval-signing.js";
 import type { LedgerWriteArgs } from "../../src/runtime/ledger-writer.js";
 import { parseManifest, type Manifest } from "../../src/schema/index.js";
@@ -275,6 +298,8 @@ interface Counted<T> {
   dirReads: number;
   dirsOpened: number;
   dirsClosed: number;
+  /** `readdirSync` calls under the watched directories. */
+  readdirs: number;
 }
 
 function resetCounts(): void {
@@ -284,13 +309,17 @@ function resetCounts(): void {
   fsCounts.dirReads = 0;
   fsCounts.dirsOpened = 0;
   fsCounts.dirsClosed = 0;
+  fsCounts.readdirs = 0;
   fsCounts.fds.clear();
 }
 
-/** Count the fs calls the callback makes under the reports and parse-errors directories. */
-async function counted<T>(fn: () => Promise<T> | T): Promise<Counted<T>> {
+/** Count the fs calls the callback makes under the reports and parse-errors directories (or under `prefixes`). */
+async function counted<T>(
+  fn: () => Promise<T> | T,
+  prefixes: string[] = [reportsDir, parseErrorsDir],
+): Promise<Counted<T>> {
   resetCounts();
-  fsCounts.prefixes = [reportsDir, parseErrorsDir];
+  fsCounts.prefixes = prefixes;
   try {
     const value = await fn();
     return {
@@ -301,6 +330,7 @@ async function counted<T>(fn: () => Promise<T> | T): Promise<Counted<T>> {
       dirReads: fsCounts.dirReads,
       dirsOpened: fsCounts.dirsOpened,
       dirsClosed: fsCounts.dirsClosed,
+      readdirs: fsCounts.readdirs,
     };
   } finally {
     fsCounts.prefixes = [];
@@ -1005,5 +1035,291 @@ describe("bounded directory reads on the hook path: delegation lookup (claude pr
       expect(out.bytes).toBeLessThanOrEqual(3 * ONE_READER_MAX_BYTES);
     },
     PLANTED_DIR_TEST_TIMEOUT_MS,
+  );
+});
+
+// The hash scan (a signed marker is present): it lists the reports directory
+// through the same early-stopping listing as the four readers above, so planted
+// names cost a bounded number of directory reads, and it fails closed past the
+// bound. The selection inside the bound is unchanged: newest name first, within
+// the byte budget.
+const REPORT_NAME = "2026-10-04T10-00-00-000Z-report-aaaa1111.json";
+const SCAN_ENTRY_BOUND_DETAIL =
+  /no report in the reports directory could be checked against the content the session approval marker was signed for \(the reports directory \S+ holds more than 8192 \*\.json entries, or more than 16384 entries of any name, more than the gate reads; remove /;
+
+/** Write the pending report and approve it, so a signed marker names its content hash. */
+async function approveSessionReport(): Promise<string> {
+  writePendingReport(REPORT_NAME);
+  const approve = await approveUnderstanding({
+    manifest: parseManifest({ version: 1 }),
+    session: SESSION,
+    reportsDir,
+    generatedDir,
+    ledgerAdd: async () => ({ ok: true }),
+  });
+  expect(approve.marker.ok).toBe(true);
+  return path.join(reportsDir, REPORT_NAME);
+}
+
+describe.each(RUNTIMES)("bounded hash scan with a signed marker present: $name", (rt) => {
+  it(
+    "planted *.json names that sort after the report, past the entry bound: the hook denies naming the bound and opens nothing (fail closed, the report is not starved into an allow)",
+    async () => {
+      await approveSessionReport();
+      expect((await rt.run({ manifest: plainManifest() })).blocked).toBe(false);
+      plantJsonEntries(BOUND);
+      const out = await counted(() => rt.run({ manifest: plainManifest() }));
+      expect(out.value.blocked).toBe(true);
+      expect(out.value.detail).toMatch(SCAN_ENTRY_BOUND_DETAIL);
+      expect(out.value.detail).not.toMatch(/the approved report was changed or removed after approval/);
+      // The report plus BOUND planted names is BOUND + 1 matching entries.
+      expect(out.opens).toBe(0);
+      expect(out.stats).toBe(0);
+      expect(out.dirsClosed).toBe(out.dirsOpened);
+    },
+    PLANTED_DIR_TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "planted late names under the entry bound: the real report is still found and the call is allowed (no starvation below the bound)",
+    async () => {
+      await approveSessionReport();
+      plantJsonEntries(REALISTIC_ENTRIES);
+      const out = await counted(() => rt.run({ manifest: plainManifest() }));
+      expect(out.value.blocked).toBe(false);
+      expect(out.value.source).toBe("marker");
+      // Newest name first: every planted late name is read before the report.
+      expect(out.opens).toBeGreaterThan(REALISTIC_ENTRIES);
+      expect(out.opens).toBeLessThanOrEqual(BOUND);
+    },
+    PLANTED_DIR_TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "more than twice the bound of non-matching names: the hook denies after reading twice the bound, whatever their names (fail closed)",
+    async () => {
+      await approveSessionReport();
+      for (let i = 0; i < 2 * BOUND + 20; i++) {
+        fs.writeFileSync(path.join(reportsDir, `junk-${String(i).padStart(6, "0")}.txt`), "");
+      }
+      const out = await counted(() => rt.run({ manifest: plainManifest() }));
+      expect(out.value.blocked).toBe(true);
+      expect(out.value.detail).toMatch(SCAN_ENTRY_BOUND_DETAIL);
+      expect(out.opens).toBe(0);
+      expect(out.dirsClosed).toBe(out.dirsOpened);
+    },
+    PLANTED_DIR_TEST_TIMEOUT_MS,
+  );
+});
+
+describe("verifyApprovedReportHash: directory reads of the hash scan (both hooks call it)", () => {
+  async function binding(): Promise<{ kind: "session"; reportContentHash: string }> {
+    const reportPath = await approveSessionReport();
+    const hash = canonicalReportHashOfFile(reportPath);
+    expect(hash).not.toBeNull();
+    return { kind: "session", reportContentHash: hash as string };
+  }
+
+  it(
+    "one past the entry bound lists BOUND + 1 entries, opens and stats nothing, never calls readdirSync, closes its handle, and denies",
+    async () => {
+      const b = await binding();
+      plantJsonEntries(BOUND);
+      const out = await counted(() => verifyApprovedReportHash(reportsDir, b));
+      expect(out.value.ok).toBe(false);
+      expect(out.value).toMatchObject({ detail: expect.stringMatching(SCAN_ENTRY_BOUND_DETAIL) });
+      // BOUND planted names plus the report: the BOUND + 1st matching name stops the listing.
+      expect(out.dirReads).toBe(BOUND + 1);
+      expect(out.dirsOpened).toBe(1);
+      expect(out.dirsClosed).toBe(1);
+      expect(out.readdirs).toBe(0);
+      expect(out.opens).toBe(0);
+      expect(out.stats).toBe(0);
+    },
+    PLANTED_DIR_TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "exactly at the entry bound (BOUND - 1 planted late names plus the report) the report is found and the check allows",
+    async () => {
+      const b = await binding();
+      plantJsonEntries(BOUND - 1);
+      const out = await counted(() => verifyApprovedReportHash(reportsDir, b));
+      expect(out.value).toEqual({ ok: true, kind: "session" });
+      // The whole directory is listed to its end (BOUND names + the final null).
+      expect(out.dirReads).toBe(BOUND + 1);
+      expect(out.readdirs).toBe(0);
+      // Newest first: every planted late name is opened before the report.
+      expect(out.opens).toBe(BOUND);
+    },
+    PLANTED_DIR_TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "a directory of non-matching names fails closed after reading twice the bound plus one, not after listing all of them",
+    async () => {
+      const b = await binding();
+      for (let i = 0; i < 2 * BOUND + 20; i++) {
+        fs.writeFileSync(path.join(reportsDir, `junk-${String(i).padStart(6, "0")}.txt`), "");
+      }
+      const out = await counted(() => verifyApprovedReportHash(reportsDir, b));
+      expect(out.value.ok).toBe(false);
+      expect(out.dirReads).toBe(2 * BOUND + 1);
+      expect(out.readdirs).toBe(0);
+      expect(out.opens).toBe(0);
+      expect(out.dirsClosed).toBe(out.dirsOpened);
+    },
+    PLANTED_DIR_TEST_TIMEOUT_MS,
+  );
+
+  it("a missing reports directory still reads as no report file (allow), not as too large", async () => {
+    const b = await binding();
+    fs.rmSync(reportsDir, { recursive: true, force: true });
+    expect(verifyApprovedReportHash(reportsDir, b)).toEqual({ ok: true, kind: "session" });
+  });
+});
+
+// The in-flight record check (Claude Code hook, a subagent call that missed the
+// marker). The record is one file, `.inflight/<session>/<agent id>`; the check
+// asks whether that one entry exists, with a direct lookup, and never lists the
+// session directory, however many entries it holds. The Codex hook has no
+// subagent path, so there is no second runtime to count here.
+describe("bounded directory reads on the hook path: in-flight record check (claude pre-tool-use only)", () => {
+  const AGENT = "agent-bounded-7777";
+  // More planted entries than any listing bound the other readers apply.
+  const PLANTED_SESSION_ENTRIES = 2 * BOUND + 100;
+  // Entries the direct lookup may stat under `.inflight/`: the root, the session
+  // directory, the entry itself, and the record read's own lstat of it (four,
+  // however many entries sit beside the record).
+  const MAX_INFLIGHT_STATS = 4;
+
+  const parent: OperatorMarkerApproval = {
+    matched: true,
+    source: "session",
+    detail: "approved via marker for the in-flight check",
+    taskCheckDetail: "approved via marker for the in-flight check",
+    expired: false,
+    forged: false,
+    sessionBindingRefused: false,
+    reportContentHash: null,
+    sessionFallback: null,
+  };
+
+  function inflightDir(): string {
+    return path.join(generatedDir, INFLIGHT_RECORD_DIRNAME);
+  }
+
+  function sessionDir(): string {
+    return path.join(inflightDir(), SESSION);
+  }
+
+  /** Issue the real signed record, then plant entries beside it in the session directory. */
+  function setUpInflight(planted: number): void {
+    getOrCreateSigningKey(generatedDir);
+    const written = writeInflightRecord({
+      generatedDir,
+      sessionId: SESSION,
+      agentId: AGENT,
+      agentType: "general-purpose",
+      parent,
+    });
+    expect(written.ok).toBe(true);
+    for (let i = 0; i < planted; i++) {
+      fs.writeFileSync(path.join(sessionDir(), `z-planted-${String(i).padStart(6, "0")}`), "");
+    }
+  }
+
+  async function runSubagent(agentId: string): Promise<Outcome> {
+    process.env["CLAUDE_CODE_SESSION_ID"] = SESSION;
+    const stderr = bufferStream();
+    const stdout = bufferStream();
+    const result = await runPackHookPreToolUseCli({
+      manifest: plainManifest(),
+      stdin: readableFromString(
+        JSON.stringify({
+          session_id: SESSION,
+          agent_id: agentId,
+          tool_name: "Edit",
+          transcript_path: transcriptPath,
+        }),
+      ),
+      stdout: stdout.stream,
+      stderr: stderr.stream,
+      reportsDir,
+      generatedDir,
+      ledgerQuery: async (): Promise<LedgerEntry[]> => [],
+      writeLedger: async (_args: LedgerWriteArgs): Promise<{ ok: true }> => ({ ok: true }),
+    });
+    return {
+      blocked: result.blocked,
+      source: result.approvalCheck.source,
+      detail: result.approvalCheck.detail,
+      stderr: `${stderr.read()}${stdout.read()}`,
+    };
+  }
+
+  it(
+    "a subagent with a record is allowed without listing a session directory of planted entries: no readdirSync, no opendir, a constant handful of stats",
+    async () => {
+      setUpInflight(PLANTED_SESSION_ENTRIES);
+      const out = await counted(() => runSubagent(AGENT), [inflightDir()]);
+      expect(out.value.blocked).toBe(false);
+      expect(out.value.source).toBe("inflight");
+      expect(out.readdirs).toBe(0);
+      expect(out.dirsOpened).toBe(0);
+      expect(out.dirReads).toBe(0);
+      expect(out.stats).toBeGreaterThan(0);
+      expect(out.stats).toBeLessThanOrEqual(MAX_INFLIGHT_STATS);
+    },
+    PLANTED_DIR_TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "a subagent without a record is refused as no record, still without a listing of the planted session directory (fail closed)",
+    async () => {
+      setUpInflight(PLANTED_SESSION_ENTRIES);
+      const out = await counted(() => runSubagent("agent-never-started"), [inflightDir()]);
+      expect(out.value.blocked).toBe(true);
+      expect(out.value.stderr).toMatch(/no in-flight approval record/);
+      expect(out.readdirs).toBe(0);
+      expect(out.dirsOpened).toBe(0);
+      expect(out.dirReads).toBe(0);
+      expect(out.stats).toBeLessThanOrEqual(MAX_INFLIGHT_STATS);
+      expect(out.opens).toBe(0);
+    },
+    PLANTED_DIR_TEST_TIMEOUT_MS,
+  );
+
+  it("verifyInflightRecord: a planted entry whose name only differs from the agent id is not the record, and no listing is made to tell", async () => {
+    setUpInflight(0);
+    fs.writeFileSync(path.join(sessionDir(), `${AGENT}-copy`), "");
+    const out = await counted(() => verifyInflightRecord(generatedDir, SESSION, `${AGENT}-copy`), [inflightDir()]);
+    // An unsigned empty file under that name: present, so it is read and refused,
+    // never matched.
+    expect(out.value.matched).toBe(false);
+    expect(out.readdirs).toBe(0);
+    expect(out.dirsOpened).toBe(0);
+    const absent = await counted(() => verifyInflightRecord(generatedDir, SESSION, "agent-absent"), [inflightDir()]);
+    expect(absent.value).toMatchObject({ matched: false, forged: false, stale: false });
+    expect(absent.value.detail).toContain('no exact entry named "agent-absent"');
+    expect(absent.readdirs).toBe(0);
+    expect(absent.dirsOpened).toBe(0);
+    expect(absent.opens).toBe(0);
+  });
+
+  it.skipIf(process.getuid?.() === 0)(
+    "verifyInflightRecord: an entry whose lookup fails for another reason than absence (an unsearchable session directory) reads as no record, never a match (fail closed)",
+    () => {
+      setUpInflight(0);
+      expect(verifyInflightRecord(generatedDir, SESSION, AGENT).matched).toBe(true);
+      fs.chmodSync(sessionDir(), 0o000);
+      try {
+        const check = verifyInflightRecord(generatedDir, SESSION, AGENT);
+        expect(check).toMatchObject({ matched: false, forged: false, stale: false });
+        expect(check.detail).toMatch(/^no in-flight record at /);
+      } finally {
+        fs.chmodSync(sessionDir(), 0o700);
+      }
+    },
   );
 });

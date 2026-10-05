@@ -366,9 +366,23 @@ export function verifyInflightRecord(
   // differently-cased sibling's record; its signature — recomputed from
   // the REQUESTED, case-variant id — would then fail to verify and be
   // classified forged, even though nothing was tampered with. A
-  // case-variant request simply names no record; `readdirSync` lists
-  // literal entry names regardless of the filesystem's own case
-  // sensitivity, so this is the one check that can tell the two apart.
+  // case-variant request simply names no record.
+  //
+  // The check is a direct lookup of the one entry, never a listing of
+  // the session directory: the directory holds only what its writers put
+  // there, and a listing costs time in proportion to its size (see the
+  // CHANGELOG entry for task aa6f6570) inside a hook whose 15 s budget the runtime
+  // treats as an allow when it is exceeded. `lstat` says whether the
+  // entry exists (a missing entry, or any error, reads as "no record":
+  // fail closed); `realpath.native` then returns the entry's name as the
+  // filesystem stores it (the true on-disk case on a case-insensitive
+  // volume), so a case-variant request is told apart from the exact one
+  // without reading the directory. A symlink entry skips that step on
+  // purpose (its realpath is the link target's name, not its own): the
+  // read below refuses it as a symlink either way. A filesystem whose
+  // `realpath` does not report the stored case lets a case-variant
+  // request through to the signature check, which fails it as forged:
+  // still not a match, only a less precise diagnostic.
   //
   // ONLY the agentId segment gets this exact-entry check. The sessionId
   // segment (the `sessionDir` lstat above) inherits whatever the
@@ -383,19 +397,27 @@ export function verifyInflightRecord(
   // section for the write side that never produces one anyway: session
   // ids are runtime-generated UUIDs, not operator-chosen strings, so a
   // case collision is not a realistic write-time input).
-  let sessionEntries: string[];
+  const noExactEntry: InflightRecordVerification = {
+    matched: false,
+    forged: false,
+    stale: false,
+    detail: `no in-flight record at ${filePath} (no exact entry named ${JSON.stringify(agentId)} in ${sessionDir})`,
+  };
+  let entryStat: fs.Stats;
   try {
-    sessionEntries = fs.readdirSync(sessionDir);
-  } catch {
+    entryStat = fs.lstatSync(filePath);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return noExactEntry;
     return { matched: false, forged: false, stale: false, detail: `no in-flight record at ${filePath}` };
   }
-  if (!sessionEntries.includes(agentId)) {
-    return {
-      matched: false,
-      forged: false,
-      stale: false,
-      detail: `no in-flight record at ${filePath} (no exact entry named ${JSON.stringify(agentId)} in ${sessionDir})`,
-    };
+  if (!entryStat.isSymbolicLink()) {
+    let storedName: string;
+    try {
+      storedName = path.basename(fs.realpathSync.native(filePath));
+    } catch {
+      return { matched: false, forged: false, stale: false, detail: `no in-flight record at ${filePath}` };
+    }
+    if (storedName !== agentId) return noExactEntry;
   }
 
   const read = readRegularFileRejectingSymlink(filePath);

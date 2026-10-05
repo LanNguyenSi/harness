@@ -8,7 +8,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OperatorMarkerApproval } from "../../src/policy-packs/builtin/understanding-before-execution/task-markers.js";
 import {
   DEFAULT_INFLIGHT_STALE_AFTER_MS,
@@ -617,6 +617,34 @@ describe("verifyInflightRecord", () => {
       expect(verifyInflightRecord(generatedDir, SESSION, "Agent-Mixed-Case").matched).toBe(true);
     },
   );
+});
+
+describe("verifyInflightRecord: stored-name check on any filesystem", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("reads as no record, never forged, when the filesystem reports a stored name other than the requested agentId", () => {
+    // Simulates the case-insensitive lookup on every platform: the entry
+    // exists for the request, but the name the filesystem stores differs
+    // from the requested agentId only by case.
+    writeInflightRecord({
+      generatedDir,
+      sessionId: SESSION,
+      agentId: AGENT,
+      agentType: "general-purpose",
+      parent: matchedParent(),
+    });
+    const realNative = fs.realpathSync.native;
+    vi.spyOn(fs.realpathSync, "native").mockImplementation(((p: fs.PathLike) => {
+      const resolved = String(realNative(p));
+      return path.join(path.dirname(resolved), path.basename(resolved).toUpperCase());
+    }) as typeof fs.realpathSync.native);
+    const check = verifyInflightRecord(generatedDir, SESSION, AGENT);
+    expect(check.matched).toBe(false);
+    expect(check.forged).toBe(false);
+    expect(check.detail).toContain("no exact entry named");
+  });
 });
 
 describe("writeInflightRecord: agentType validation", () => {
