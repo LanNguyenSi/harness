@@ -2,6 +2,7 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-10-05T07:30:29Z, task 0c6b2cb9: `parseApprovalLifecycle` (`lifecycle.ts`) now applies `DEFAULT_BOUNDARY_TOOL_NAMES` when no explicit `expire_on_tool_match` is configured (absent, non-object or keyless block), so `understanding-gate-lockout-recovery.md` no longer says an absent list means no tool boundary at runtime; the new doctor check lives in `src/cli/doctor/expire-on-tool-match.ts`. `src/cli/doctor/index.ts`, `format.ts` and `lifecycle.ts` gained lines above cited anchors, so the anchored citations in `docs/decisions/2026-08-27-ug-auto-mode-approval.md`, `docs/decisions/2026-09-08-preflight-floors.md` and this log were re-pointed. `codex-adapter-parity-gaps.md`, `gate-fail-posture-matrix.md`, `evidence-ledger-trust-boundary.md`, `debug-verb-selection.md` and `pause-vs-gate-kill-switch.md` and `understanding-gate-auto-mode-signals.md` (pack doc paragraph only) list `agent-tasks.ts` (doc comment only), the generator (comment only) or `doctor/index.ts` as sources and state no claim about the runtime default list or the doctor warning roster; re-read, timestamp-only re-stamp. `okf-kit check docs/okf` re-run after the re-stamp.
 - 2026-10-05T06:39:45Z, merge of master (task 53dd08b4) into task bb202fb9: both edited `src/runtime/intercept.ts` (53dd08b4 added `export` only, bb202fb9 the foreign-target sentence); no cited line range moved, the docs that list it are re-stamped.
 - 2026-10-05T06:25:01Z, task bb202fb9 review fixes (re-stamp): `codex-adapter-parity-gaps.md`, `debug-verb-selection.md`, `gate-fail-posture-matrix.md`, `pause-vs-gate-kill-switch.md` and `quote-model-divergence.md` list `src/runtime/intercept.ts` as a source; the fix changed one string literal in place (no line moved), their `intercept.ts` claims were re-read, timestamp-only re-stamp. `okf-kit check --require-anchors docs/okf` re-run after the re-stamp.
 - 2026-10-05T06:22:10Z, task bb202fb9 review fixes: the foreign-target sentence now puts the resolved directory in a code span like the repository name (`policy-engine-producer-wiring.md` says so and calls the rule a further presentation rule instead of the third); `ForeignTarget` is exported next to `PolicyDecision`. `src/runtime/intercept.ts` kept its line count (one string literal changed in place), so no citation moved; the doc's `intercept.ts` claims were re-read and it was re-stamped. `okf-kit check --require-anchors docs/okf` re-run after the re-stamp.
@@ -1006,15 +1007,15 @@
 
   Citations re-pointed again, since this round's source edits shifted the
   cited lines. In `docs/decisions/2026-08-27-ug-auto-mode-approval.md`:
-  `src/cli/doctor/format.ts:121-122#"modeEnv.message"` (previously at
+  `src/cli/doctor/format.ts:123-124#"modeEnv.message"` (previously at
   lines 118-119) and
-  `src/cli/doctor/format.ts:190#"in-flight subagent records on disk:"`
+  `src/cli/doctor/format.ts:196#"in-flight subagent records on disk:"`
   (previously line 179). In `docs/decisions/2026-09-08-preflight-floors.md`:
   `src/probes/memory.ts:276#"const parsed = parseProbedVersion(stdout);"`
   (previously line 268). In this file:
   `src/runtime/git-context.ts:393#"fs.realpathSync(commonDir)"` (previously
   line 387) and
-  `src/cli/doctor/format.ts:150#"sessionStartPreflightSetupVersion.projectName"`
+  `src/cli/doctor/format.ts:156#"sessionStartPreflightSetupVersion.projectName"`
   (previously line 139). Four module docs were re-stamped for the
   `docs/CLI.md` edit in the same change.
 - 2026-09-13T09:52:00Z, task `e904f25a` (implementer). SUPERSEDED by the
@@ -1304,7 +1305,7 @@
   `SessionStartPreflightSetupVersionFinding`
   (`src/cli/doctor/session-start-preflight-setup-version.ts:72#"layer_unresolvable"`,
   built directly by `doctor()` at
-  `src/cli/doctor/index.ts:1428#"layer_unresolvable"`), naming the
+  `src/cli/doctor/index.ts:1433#"layer_unresolvable"`), naming the
   layer path and the FIRST LINE of the parse error, counted in
   `warningCount`, rendered by `format.ts` as one warning line; round 1
   first shipped full silence here, round 1's own review found the
@@ -1331,7 +1332,7 @@
   rule); best-effort, a realpath failure falls back to the un-resolved
   value. `doctor`'s `sessionStartPreflightProjectName` (and the
   finding's `projectName`,
-  `src/cli/doctor/format.ts:150#"sessionStartPreflightSetupVersion.projectName"`
+  `src/cli/doctor/format.ts:156#"sessionStartPreflightSetupVersion.projectName"`
   renders it as a `(project: X)` suffix) fires only when the scoped
   load actually RESOLVED a project layer file, not merely whenever a
   name was derivable for the cwd; round 1 set it unconditionally,

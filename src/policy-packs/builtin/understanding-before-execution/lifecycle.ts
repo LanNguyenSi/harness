@@ -5,6 +5,7 @@
 // the re-exported public surface.
 
 import { InvalidDurationError, parseDurationSeconds } from "../../../policies/index.js";
+import { DEFAULT_BOUNDARY_TOOL_NAMES } from "../../../runtime/task-providers/agent-tasks.js";
 
 // approval_lifecycle (agent-tasks/d8ee60ca, harness/f54e0ecb): per-task
 // expiry of the approval marker. The legacy contract was one approval
@@ -19,9 +20,12 @@ import { InvalidDurationError, parseDurationSeconds } from "../../../policies/in
 //      pull_requests_merge, tasks_transition). An agent-tasks claim
 //      lifecycle verb expires only when the active-claim decider says
 //      the claim is released, so a task_finish that lands in review
-//      keeps the marker (task 5018c0c4). The list comes from the config
-//      alone: an absent `expire_on_tool_match` means no tool boundary
-//      at runtime.
+//      keeps the marker (task 5018c0c4). When no explicit list is
+//      configured (an absent or non-object `approval_lifecycle` block,
+//      or a block without a usable `expire_on_tool_match`), the runtime
+//      applies DEFAULT_BOUNDARY_TOOL_NAMES, the same list the generator
+//      emits into the PostToolUse matcher (task 0c6b2cb9). Only an
+//      explicit list (including `[]`) or `mode: session` replaces it.
 //   2. expire_on_bash_match: a list of regex patterns matched against
 //      the Bash tool's command string. Same expiry semantics. Used by
 //      gh-CLI / pure-Bash workflows where the task boundary is a shell
@@ -53,16 +57,22 @@ export interface ApprovalLifecycle {
   legacyMode: boolean;
 }
 
-const DEFAULT_LIFECYCLE: ApprovalLifecycle = {
-  expireOnToolMatch: [],
-  expireOnBashMatch: [],
-  legacyMode: false,
-};
+/**
+ * Fresh default lifecycle (never a shared mutable object): the default
+ * tool-boundary list, no bash patterns, no TTL.
+ */
+function defaultLifecycle(): ApprovalLifecycle {
+  return {
+    expireOnToolMatch: [...DEFAULT_BOUNDARY_TOOL_NAMES],
+    expireOnBashMatch: [],
+    legacyMode: false,
+  };
+}
 
 /**
  * Parse the optional `approval_lifecycle` block from a pack config.
- * Best-effort: malformed values fall back to the default (no expiry,
- * legacyMode=false) and write a one-line warning to the supplied
+ * Best-effort: malformed values fall back to the default (the
+ * DEFAULT_BOUNDARY_TOOL_NAMES tool boundary, legacyMode=false) and write a one-line warning to the supplied
  * stderr. The PreToolUse / PostToolUse hooks must keep working even
  * when the operator typed a typo in the YAML.
  */
@@ -70,12 +80,12 @@ export function parseApprovalLifecycle(
   raw: unknown,
   stderr?: { write: (s: string) => void } | null,
 ): ApprovalLifecycle {
-  if (raw === undefined || raw === null) return DEFAULT_LIFECYCLE;
+  if (raw === undefined || raw === null) return defaultLifecycle();
   if (typeof raw !== "object" || Array.isArray(raw)) {
     stderr?.write(
       `harness pack hook: config.approval_lifecycle ignored (expected object, got ${typeof raw})\n`,
     );
-    return DEFAULT_LIFECYCLE;
+    return defaultLifecycle();
   }
   const obj = raw as Record<string, unknown>;
   if (obj["mode"] === "session") {
@@ -87,15 +97,20 @@ export function parseApprovalLifecycle(
       legacyMode: true,
     };
   }
-  const expireOnToolMatch: string[] = [];
+  let expireOnToolMatch: string[] = [];
   const list = obj["expire_on_tool_match"];
-  if (Array.isArray(list)) {
+  if (list === undefined) {
+    expireOnToolMatch = [...DEFAULT_BOUNDARY_TOOL_NAMES];
+  } else if (Array.isArray(list)) {
     for (const v of list) {
       if (typeof v === "string" && v.length > 0) expireOnToolMatch.push(v);
     }
-  } else if (list !== undefined) {
+  } else {
+    // A malformed value falls back to the default list, as the generator
+    // does when it resolves the emitted matcher.
+    expireOnToolMatch = [...DEFAULT_BOUNDARY_TOOL_NAMES];
     stderr?.write(
-      `harness pack hook: config.approval_lifecycle.expire_on_tool_match ignored (expected string[], got ${typeof list})\n`,
+      `harness pack hook: config.approval_lifecycle.expire_on_tool_match ignored (expected string[], got ${typeof list}), using the default boundary tools\n`,
     );
   }
   const expireOnBashMatch: RegExp[] = [];

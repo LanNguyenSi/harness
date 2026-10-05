@@ -58,6 +58,7 @@ import {
   isUnderstandingPackEnabled,
 } from "./understanding-mode-env.js";
 import { checkAutoApproveMode } from "./auto-approve-mode.js";
+import { checkExpireOnToolMatch } from "./expire-on-tool-match.js";
 import { checkBypassWithoutAutoApprove } from "./bypass-without-auto-approve.js";
 import {
   checkSessionStartPreflightSetupVersion,
@@ -1160,6 +1161,10 @@ function countDiagnostics(report: Omit<DoctorReport, "errorCount" | "warningCoun
   // auto_approve configured outside grill_me (agent-tasks abfad738):
   // always advisory, never an error, see auto-approve-mode.ts.
   if (report.ugAutoApproveMode) warningCount++;
+  // Explicit expire_on_tool_match with task_finish but without task_merge
+  // (task 0c6b2cb9): always advisory, never an error, see
+  // expire-on-tool-match.ts.
+  if (report.ugExpireOnToolMatch) warningCount++;
   // bypassPermissions observed, auto_approve missing/mismatched (task
   // 8f637efd): always advisory, never an error, see
   // bypass-without-auto-approve.ts.
@@ -1515,6 +1520,7 @@ export async function doctor(opts: DoctorOptions = {}): Promise<DoctorReport> {
     opts.envOverride ?? process.env,
   );
   const ugAutoApproveMode = checkAutoApproveMode(manifest);
+  const ugExpireOnToolMatch = checkExpireOnToolMatch(manifest);
 
   // ADR docs/decisions/2026-08-27-ug-auto-mode-approval.md slice 1
   // (agent-tasks 74b4b17d), "Audit and doctor": the auto-approval
@@ -1647,6 +1653,7 @@ export async function doctor(opts: DoctorOptions = {}): Promise<DoctorReport> {
       ? { sessionStartPreflightSetupVersion }
       : {}),
     ...(ugAutoApproveMode !== undefined ? { ugAutoApproveMode } : {}),
+    ...(ugExpireOnToolMatch !== undefined ? { ugExpireOnToolMatch } : {}),
     ...(settingsDrift !== undefined ? { settingsDrift } : {}),
     ...(codexConfigDrift !== undefined ? { codexConfigDrift } : {}),
   };

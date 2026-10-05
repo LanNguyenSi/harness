@@ -14,6 +14,7 @@ import type { UgDelegationsSection } from "./ug-delegations.js";
 import type { UgInflightSection } from "./ug-inflight.js";
 import type { SettingsDriftSection } from "./settings-drift.js";
 import type { AutoApproveModeWarning } from "./auto-approve-mode.js";
+import type { ExpireOnToolMatchWarning } from "./expire-on-tool-match.js";
 import type { BypassWithoutAutoApproveFinding } from "./bypass-without-auto-approve.js";
 import type { SessionStartPreflightSetupVersionFinding } from "./session-start-preflight-setup-version.js";
 import type { CodexConfigDriftSection } from "./codex-config-drift.js";
@@ -520,6 +521,13 @@ export interface DoctorReport {
    */
   ugAutoApproveMode?: AutoApproveModeWarning;
   /**
+   * Explicit `approval_lifecycle.expire_on_tool_match` that lists
+   * `task_finish` but not `task_merge` (task 0c6b2cb9). Always advisory
+   * (rolls into `warningCount`, never `errorCount`). See
+   * `expire-on-tool-match.ts`.
+   */
+  ugExpireOnToolMatch?: ExpireOnToolMatchWarning;
+  /**
    * Settings-drift compensating control (same ADR, threat model (c)): a
    * `permissions.defaultMode` or hook entry present in a live Claude
    * Code settings file but absent from harness's own last-apply
@@ -660,6 +668,7 @@ export type {
 export type { UgDelegationsSection } from "./ug-delegations.js";
 export type { UgInflightSection } from "./ug-inflight.js";
 export type { AutoApproveModeWarning } from "./auto-approve-mode.js";
+export type { ExpireOnToolMatchWarning } from "./expire-on-tool-match.js";
 export type { BypassWithoutAutoApproveFinding } from "./bypass-without-auto-approve.js";
 export type { SettingsDriftSection } from "./settings-drift.js";
 export type { CodexConfigDriftSection } from "./codex-config-drift.js";

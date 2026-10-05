@@ -8,6 +8,7 @@ import {
   parseApprovalLifecycle,
   writeApprovalMarker,
 } from "../../src/policy-packs/builtin/understanding-before-execution-runtime.js";
+import { DEFAULT_BOUNDARY_TOOL_NAMES } from "../../src/runtime/task-providers/agent-tasks.js";
 
 let tmp: string;
 
@@ -90,7 +91,7 @@ describe("parseApprovalLifecycle (agent-tasks/d8ee60ca)", () => {
 
   it("returns default lifecycle when config is absent", () => {
     const lc = parseApprovalLifecycle(undefined, null);
-    expect(lc.expireOnToolMatch).toEqual([]);
+    expect(lc.expireOnToolMatch).toEqual([...DEFAULT_BOUNDARY_TOOL_NAMES]);
     expect(lc.maxAgeMs).toBeUndefined();
     expect(lc.legacyMode).toBe(false);
   });
@@ -121,10 +122,10 @@ describe("parseApprovalLifecycle (agent-tasks/d8ee60ca)", () => {
     expect(err.lines.some((l) => l.includes("max_age ignored"))).toBe(true);
   });
 
-  it("warns and skips a non-array expire_on_tool_match", () => {
+  it("warns and falls back to the default list for a non-array expire_on_tool_match", () => {
     const err = noopStderr();
     const lc = parseApprovalLifecycle({ expire_on_tool_match: "task_finish" }, err);
-    expect(lc.expireOnToolMatch).toEqual([]);
+    expect(lc.expireOnToolMatch).toEqual([...DEFAULT_BOUNDARY_TOOL_NAMES]);
     expect(err.lines.some((l) => l.includes("expire_on_tool_match ignored"))).toBe(true);
   });
 
