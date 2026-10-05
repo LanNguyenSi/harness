@@ -307,7 +307,9 @@ function policyHit(
   const ledgerQueries = ledgerQueriesFor(policy, ctx, builtins, attribution);
   return {
     name: policy.name,
-    // The cwd context is always the first demand the runtime makes.
+    // ledgerQuery keeps the cwd-context value for --json consumers; the runtime
+    // may omit that demand (cwd outside every repository, or the bounded case),
+    // see ledgerQueries.
     ledgerQuery: staticLedgerQuery(policy, ctx, builtins),
     ledgerQueries,
     requires: policy.requires,

@@ -502,13 +502,19 @@ describe("dry-run: trigger.input_match (task 2699b476)", () => {
   });
 });
 
-describe("dry-run — additive per-repo demands for a target-naming command", () => {
+describe("dry-run: additive per-repo demands for a target-naming command", () => {
   function makeRepo(name: string, branch: string): string {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "harness-dryrun-attr-"));
     cleanups.push(() => fs.rmSync(root, { recursive: true, force: true }));
     const repo = path.join(root, name);
     fs.mkdirSync(path.join(repo, ".git"), { recursive: true });
     fs.writeFileSync(path.join(repo, ".git", "HEAD"), `ref: refs/heads/${branch}\n`);
+    // A loose ref gives the repository a head sha, as a real checkout has.
+    fs.mkdirSync(path.join(repo, ".git", "refs", "heads"), { recursive: true });
+    fs.writeFileSync(
+      path.join(repo, ".git", "refs", "heads", branch),
+      `${"a1b2c3d4e5".repeat(4)}\n`,
+    );
     return repo;
   }
 
@@ -546,6 +552,31 @@ describe("dry-run — additive per-repo demands for a target-naming command", ()
     fs.mkdirSync(sub);
     const h = hit(`git -C ${sub} status`, a, "preflight-before-investigation");
     expect(h.ledgerQueries).toEqual(["preflight:repo-a"]);
+  });
+
+  it("keeps a BRANCH override across attributed contexts", () => {
+    const a = makeRepo("repo-a", "main");
+    const b = makeRepo("repo-b", "feature-x");
+    const r = dryRun("x", {
+      configPath: FULL_MANIFEST,
+      tool: "Bash",
+      toolArgs: JSON.stringify({ command: `git -C ${b} push origin main` }),
+      builtins: { CWD: a, BRANCH: "pinned" },
+    });
+    const h = r.report.matchingPolicies.find((p) => p.name === "preflight-before-push");
+    expect(h?.ledgerQueries).toEqual(["preflight:pinned", "preflight:pinned"]);
+  });
+
+  it("gives three foreign repos four tags and four foreign repos the bounded text", () => {
+    const a = makeRepo("repo-a", "main");
+    const others = ["b", "c", "d", "e"].map((n) => makeRepo(`repo-${n}`, "main"));
+    const cmd = (os: string[]) => os.map((o) => `git -C ${o} log`).join(" && ");
+    const three = hit(cmd(others.slice(0, 3)), a, "preflight-before-investigation");
+    expect(three.ledgerQueries).toHaveLength(4);
+    expect(three.ledgerQueries.every((q) => /^preflight:repo-/.test(q))).toBe(true);
+    const four = hit(cmd(others), a, "preflight-before-investigation");
+    expect(four.ledgerQueries).toHaveLength(1);
+    expect(four.ledgerQueries[0]).toContain("bounded");
   });
 
   it("keeps a single demand for a command naming no other repository", () => {
@@ -589,6 +620,7 @@ describe("dry-run — additive per-repo demands for a target-naming command", ()
       `git -C ${b} push origin main`,
       `git -C ${path.join(a, ".")} status`,
     ];
+    let foreignLogDecisions = 0;
     for (const command of commands) {
       const chunks: string[] = [];
       const sink = new Writable({
@@ -619,6 +651,11 @@ describe("dry-run — additive per-repo demands for a target-naming command", ()
           },
         },
       });
+      if (command === `git -C ${b} log`) {
+        foreignLogDecisions = runtime.decisions.filter(
+          (d) => d.policyName === "preflight-before-investigation",
+        ).length;
+      }
       for (const policy of ["preflight-before-investigation", "preflight-before-push"]) {
         const fromRuntime = runtime.decisions
           .filter((d) => d.policyName === policy)
@@ -636,8 +673,9 @@ describe("dry-run — additive per-repo demands for a target-naming command", ()
         expect(predicted, `${policy} for ${command}`).toEqual(fromRuntime);
       }
     }
-    // Negative control: the corpus includes a command that names a foreign
-    // repository, so the equality above is not met by cwd-only output.
-    expect(commands.some((c) => c.includes(b))).toBe(true);
+    // Negative control: the runtime itself made more than one investigation
+    // decision for the foreign-repository command, so the equality above is
+    // not met by cwd-only output.
+    expect(foreignLogDecisions).toBeGreaterThan(1);
   });
 });
