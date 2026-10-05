@@ -159,6 +159,22 @@ describe("readRegularFileRejectingSymlink: size bound", () => {
     expect(read.kind === "ok" && read.content === body).toBe(true);
   });
 
+  it("decodes multi-byte UTF-8 that straddles a read-chunk boundary, up to exactly the cap", () => {
+    // The reader reads in 64 KiB chunks; decoding each chunk on its own would
+    // turn a character split across two chunks into replacement characters.
+    const euro = String.fromCodePoint(0x20ac); // 3 bytes in UTF-8
+    const face = String.fromCodePoint(0x1f600); // 4 bytes in UTF-8
+    const head = "a".repeat(64 * 1024 - 1) + euro; // bytes 65535..65537
+    const tail = "b".repeat(MAX_REGULAR_FILE_READ_BYTES - Buffer.byteLength(head, "utf8") - 4);
+    const body = head + tail + face;
+    expect(Buffer.byteLength(body, "utf8")).toBe(MAX_REGULAR_FILE_READ_BYTES);
+    const p = path.join(tmp, "multibyte.json");
+    fs.writeFileSync(p, body, "utf8");
+    const read = readRegularFileRejectingSymlink(p);
+    expect(read.kind).toBe("ok");
+    expect(read.kind === "ok" && read.content === body).toBe(true);
+  });
+
   it("refuses a file one byte over the cap as unreadable", () => {
     const p = path.join(tmp, "over-cap.json");
     fs.writeFileSync(p, "a".repeat(MAX_REGULAR_FILE_READ_BYTES + 1), "utf8");

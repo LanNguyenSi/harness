@@ -3,8 +3,8 @@ import * as fs from "node:fs";
 /**
  * Result of a symlink-rejecting regular-file read. The kinds are deliberately
  * fine-grained because the gate readers need to keep their distinct deny
- * details (missing vs symlink vs not-regular) and one caller treats
- * exists-but-unreadable as "existence already satisfied the gate".
+ * details (missing vs symlink vs not-regular); every caller treats
+ * `unreadable` (an oversized file included) as fail-closed.
  */
 export type RegularFileRead =
   | { kind: "ok"; content: string }
