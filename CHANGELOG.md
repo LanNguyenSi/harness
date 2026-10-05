@@ -13,6 +13,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - `harness explain-policy` output gains `parity.kubectl_target_present` (a boolean, always present); consumers that validate the projection strictly should allow the new key.
 - `harness explain-action` accepts `--config` and `--project`; the manifest is read only for a command with a leading `git switch|checkout`. With no manifest at the default location and no `--config` it uses an empty manifest (the branch-switch upgrade is then a no-op, exit 0 as before); an explicit `--config` that is missing, or an invalid manifest, still exits 66.
 
+### Changed
+
+- Internal: the `remove`, `delegate`, `audit` / `session-export` / `dry-run`, `uninstall` and `migrate-home` / `pause` / `resume` command wiring moved out of `src/cli/index.ts` into per-group registration files under `src/cli/` (task 32d84940). No behaviour change; `harness --help` and every subcommand's help are byte-identical. `scripts/help-snapshot.mjs` snapshots the help of the whole command tree from the built `dist/` for before/after comparison.
+
 ### Fixed
 
 - The envelope sanitiser now also neutralises C1 controls, line and paragraph separators and bidi controls in model-visible text derived from paths, repository and branch names, and degraded-ledger reasons (task 6c278e7a). `sanitizeEnvelopeReason` used to strip only C0 and DEL, so a directory reached through a vendored tree or symlink could carry U+0085, U+2028, U+2029, the bidi embedding, override and isolate controls (U+202A-U+202E, U+2066-U+2069) and the bidi marks (U+200E, U+200F, U+061C) verbatim into the block text. Each is now replaced by a visible `\u{XXXX}` escape (C0 and DEL keep collapsing to one space); printable non-ASCII such as umlauts, CJK and emoji is kept. The 200-character bound counts the expanded escape and never cuts an escape sequence or a surrogate pair in half. Callers are unchanged. Tests: `tests/runtime/sanitize-envelope-reason.test.ts` (per class, boundary) and a symlink fixture through `runInterceptCli` in `tests/runtime/intercept-foreign-target-message.test.ts`.
