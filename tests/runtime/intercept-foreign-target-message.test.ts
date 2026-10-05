@@ -308,6 +308,35 @@ describe("a foreign target reached through a hostile symlink name", () => {
     expect(reason).toContain("\\u{202e}");
     expect(reason).toContain("\\u{0085}");
   });
+
+  it("escapes invisible format and default-ignorable characters in the real directory name", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "harness-d9a6d818-"));
+    cleanups.push(() => fs.rmSync(root, { recursive: true, force: true }));
+    const outer = path.join(root, "outer");
+    writeGitDir(outer);
+    // Tag characters, variation selectors, the BOM, word joiner, zero width
+    // space, soft hyphen, combining grapheme joiner, Hangul filler and the
+    // Mongolian vowel separator. Built from code points so this file holds
+    // none of them raw.
+    const INVISIBLE = [0xe0041, 0xe0049, 0xfe0f, 0xe0100, 0xfeff, 0x2060, 0x200b, 0xad, 0x34f, 0x3164, 0x180e];
+    const invisibleChars = INVISIBLE.map((n) => String.fromCodePoint(n));
+    const name = `v${invisibleChars.join("")}d`;
+    const real = path.join(root, name);
+    writeGitDir(real);
+    fs.mkdirSync(path.join(outer, "vendor"), { recursive: true });
+    fs.symlinkSync(real, path.join(outer, "vendor", "plain"), "dir");
+
+    const result = await run(shippedPolicy(), outer, "git -C vendor/plain log", ["preflight:outer"]);
+    expect(result.blocked).toBe(true);
+    const reason = result.blockJson?.reason ?? "";
+    expect(reason).toContain("targets repository");
+    for (const ch of invisibleChars) expect(reason).not.toContain(ch);
+    // The escapes are visible, so the name is not silently shortened.
+    expect(reason).toContain("\\u{e0041}");
+    expect(reason).toContain("\\u{feff}");
+    const structured = result.blockJson?.hookSpecificOutput?.permissionDecisionReason ?? "";
+    for (const ch of invisibleChars) expect(structured).not.toContain(ch);
+  });
 });
 
 describe("foreign-target sentence is not added to envelopes that name their own cause", () => {
