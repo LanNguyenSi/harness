@@ -59,6 +59,17 @@
 //     them needs case-folding in the textual check.
 //
 // Pure reads (`cat <dir>/x.json`) are allowed so the guard is not over-broad.
+// So is a single-`|` pipeline of pure reads (`grep -n 'a*b' solution-x.md |
+// head`; task 95a3712d): every stage must itself pass the shared read-only
+// classifier (`isReadOnlyBashPipeline`, reused unchanged), every `|` must be
+// a real stage boundary (none quoted or escaped, see
+// `pipeBoundariesAreRealStageBoundaries`) and no stage may be a `cd`. This
+// deliberately departs from the header of `src/runtime/read-only-bash.ts`,
+// which says this guard should treat no chaining as read-only: that held while
+// the pipeline arm did not exist, and it still holds for `;`, `&&`, `||`,
+// `&`, `|&`, redirects, substitution and subshells, which stay on the old
+// route. The glob/brace leaf-word heuristic in `bashReferencesVerdictDir` is
+// unchanged: a non-read-only command still trips it.
 //
 // No manifest is consulted: the decision is a pure target-vs-dir check, so
 // the guard cannot be broken by a manifest issue and never blocks a write
@@ -81,7 +92,8 @@ import {
   PACK_NAME,
   verdictDir as resolveVerdictDir,
 } from "../../policy-packs/builtin/solution-acceptance-runtime.js";
-import { isReadOnlyBashCommand } from "../../runtime/read-only-bash.js";
+import { isReadOnlyBashCommand, isReadOnlyBashPipeline } from "../../runtime/read-only-bash.js";
+import { decodeShellWord } from "../../runtime/shell-word.js";
 import type { LoaderOptions } from "../loader.js";
 import {
   checkHookPause,
@@ -227,6 +239,79 @@ function stripSurroundingQuotes(token: string): string {
  */
 const CD_TARGET_UNRESOLVABLE_CHARS = /[$~*?[{},"']/;
 
+/**
+ * True when every `|` in `command` is a real stage boundary: outside any
+ * quote and not backslash-escaped. `isReadOnlyBashPipeline` cuts the text at
+ * EVERY `|` character without modelling quoting, so a quoted or escaped pipe
+ * turns one command into fragments that are each classified on their own:
+ * `find <dir> -name 'a|cat -x' -delete` splits into `find <dir> -name 'a`
+ * and `cat -x' -delete`, both of which look read-only, while the real
+ * command deletes. A command this scan cannot vouch for (a `|` inside
+ * quotes, an escaped `|`, an unterminated quote, or an ANSI-C / locale
+ * quoted word `$'...'` / `$"..."`, whose escape rules differ from the plain
+ * quotes modelled here) is refused, so it keeps the old route through the
+ * verdict-dir reference check. Deliberately a refuse-only filter in front of
+ * the shared classifier, not a second pipeline definition.
+ */
+function pipeBoundariesAreRealStageBoundaries(command: string): boolean {
+  let quote: "'" | '"' | null = null;
+  for (let i = 0; i < command.length; i += 1) {
+    const c = command.charAt(i);
+    if (quote === "'") {
+      if (c === "|") return false;
+      if (c === "'") quote = null;
+      continue;
+    }
+    if (quote === '"') {
+      if (c === "|") return false;
+      if (c === "\\") i += 1;
+      else if (c === '"') quote = null;
+      continue;
+    }
+    if (c === "\\") {
+      if (command.charAt(i + 1) === "|") return false;
+      i += 1;
+    } else if (c === "'" || c === '"') {
+      quote = c;
+    } else if (c === "$" && (command.charAt(i + 1) === "'" || command.charAt(i + 1) === '"')) {
+      return false;
+    }
+  }
+  return quote === null;
+}
+
+/**
+ * True when some stage of the `|` pipeline is (or wraps) a `cd`. A pipeline
+ * stage runs in a subshell, so a `cd` there cannot move the calling shell,
+ * but the pre-checks above only look at a LEADING `cd`; a `cd` stage later in
+ * the pipeline must not ride the read-only fast path either, so it falls
+ * through to the verdict-dir reference check exactly as it did before. The
+ * `command` and `env` runners are included because the shared classifier
+ * recurses through them to the wrapped command. First tokens are compared
+ * raw and decoded (`'cd'`), same raw-or-decoded shape as the classifier.
+ */
+function pipelineHasCdStage(command: string): boolean {
+  return command.split("|").some((stage) => {
+    const first = stage.trim().split(/\s+/)[0] ?? "";
+    return [first, decodeShellWord(first)].some((t) => t === "cd" || t === "command" || t === "env");
+  });
+}
+
+/**
+ * The read-only fast path for a `|` pipeline: every stage is provably
+ * read-only per the shared classifier, every `|` is a real stage boundary,
+ * and no stage is a `cd`. A single command (no `|`) never reaches here as
+ * true, because the strict single-command check ran first.
+ */
+function isReadOnlyPipelineForWriteGuard(command: string): boolean {
+  return (
+    command.includes("|") &&
+    pipeBoundariesAreRealStageBoundaries(command) &&
+    !pipelineHasCdStage(command) &&
+    isReadOnlyBashPipeline(command)
+  );
+}
+
 interface Decision {
   blocked: boolean;
   reason: string;
@@ -306,6 +391,12 @@ export function evaluateWriteGuard(
 
     if (!cdTargetUnresolvable && isReadOnlyBashCommand(command)) {
       return { blocked: false, reason: "read-only Bash command" };
+    }
+    // A `|` pipeline whose every stage is read-only (task 95a3712d). Same
+    // preconditions as the arm above: the cd checks have already run, and an
+    // unresolvable `cd` target never takes a read-only fast path.
+    if (!cdTargetUnresolvable && isReadOnlyPipelineForWriteGuard(command)) {
+      return { blocked: false, reason: "read-only Bash pipeline" };
     }
     if (isInsideDir(".", dir, cwd)) {
       return {
