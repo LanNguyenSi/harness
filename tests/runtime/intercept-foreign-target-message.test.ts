@@ -251,6 +251,65 @@ describe("foreign-target block message (nested / vendored work tree)", () => {
   });
 });
 
+describe("a foreign target reached through a hostile symlink name", () => {
+  // C1 NEL, line and paragraph separators, bidi override, embedding and
+  // isolate controls and the bidi marks, plus instruction-like text. Built
+  // from code points so this file holds none of them raw.
+  const HOSTILE = [0x85, 0x2028, 0x2029, 0x202a, 0x202b, 0x202c, 0x202d, 0x202e, 0x2066, 0x2067, 0x2068, 0x2069, 0x200e, 0x200f, 0x061c];
+  const hostileChars = HOSTILE.map((n) => String.fromCodePoint(n));
+
+  function assertNoneRaw(text: string): void {
+    for (const ch of hostileChars) expect(text).not.toContain(ch);
+  }
+
+  it("shows the block text none of the hostile characters, in both the repo and the directory", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "harness-6c278e7a-"));
+    cleanups.push(() => fs.rmSync(root, { recursive: true, force: true }));
+    const outer = path.join(root, "outer");
+    writeGitDir(outer);
+    // The directory the link resolves to carries every hostile character.
+    const real = path.join(root, `real${hostileChars.join("")}dir`);
+    writeGitDir(real);
+    // U+2028 and U+2029 are whitespace to the command tokeniser, so the link
+    // name the command spells carries only the characters that are not.
+    const linkName = `lnk${hostileChars.filter((ch) => !/\s/.test(ch)).join("")}IGNORE`;
+    fs.mkdirSync(path.join(outer, "vendor"), { recursive: true });
+    fs.symlinkSync(real, path.join(outer, "vendor", linkName), "dir");
+    const command = `git -C ${path.join("vendor", linkName)} log`;
+
+    const result = await run(shippedPolicy(), outer, command, ["preflight:outer"]);
+    expect(result.blocked).toBe(true);
+    const reason = result.blockJson?.reason ?? "";
+    expect(reason).toContain("targets repository");
+    assertNoneRaw(reason);
+    expect(reason).toContain("\\u{2028}");
+    expect(reason).toContain("\\u{2029}");
+    assertNoneRaw(result.blockJson?.hookSpecificOutput?.permissionDecisionReason ?? "");
+    assertNoneRaw(JSON.stringify(result.blockJson).replace(/\\u[0-9a-fA-F]{4}/g, ""));
+  });
+
+  it("escapes the same characters when the real directory name carries them", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "harness-6c278e7a-real-"));
+    cleanups.push(() => fs.rmSync(root, { recursive: true, force: true }));
+    const outer = path.join(root, "outer");
+    writeGitDir(outer);
+    const name = `rl${hostileChars.join("")}dir`;
+    const real = path.join(root, name);
+    writeGitDir(real);
+    fs.mkdirSync(path.join(outer, "vendor"), { recursive: true });
+    fs.symlinkSync(real, path.join(outer, "vendor", "plain"), "dir");
+
+    const result = await run(shippedPolicy(), outer, "git -C vendor/plain log", ["preflight:outer"]);
+    expect(result.blocked).toBe(true);
+    const reason = result.blockJson?.reason ?? "";
+    expect(reason).toContain("targets repository");
+    assertNoneRaw(reason);
+    // The escapes are visible, so the name is not silently shortened.
+    expect(reason).toContain("\\u{202e}");
+    expect(reason).toContain("\\u{0085}");
+  });
+});
+
 describe("foreign-target sentence is not added to envelopes that name their own cause", () => {
   it("a foreign target on a detached HEAD gets the empty-BRANCH envelope, not the target sentence", async () => {
     const { outer, libfoo } = makeNestedFixture();
