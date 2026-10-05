@@ -241,19 +241,25 @@ const CD_TARGET_UNRESOLVABLE_CHARS = /[$~*?[{},"']/;
 
 /**
  * True when every `|` in `command` is a real stage boundary: outside any
- * quote and not backslash-escaped. `isReadOnlyBashPipeline` cuts the text at
- * EVERY `|` character without modelling quoting, so a quoted or escaped pipe
- * turns one command into fragments that are each classified on their own:
- * `find <dir> -name 'a|cat -x' -delete` splits into `find <dir> -name 'a`
- * and `cat -x' -delete`, both of which look read-only, while the real
- * command deletes. A command this scan cannot vouch for (a `|` inside
- * quotes, an escaped `|`, an unterminated quote, or an ANSI-C / locale
- * quoted word `$'...'` / `$"..."`, whose escape rules differ from the plain
- * quotes modelled here) is refused, so it keeps the old route through the
+ * quote, not backslash-escaped, and not inside an expansion or group the
+ * shell reads as one word. `isReadOnlyBashPipeline` cuts the text at EVERY
+ * `|` character without modelling the shell's grammar, so a `|` that is not
+ * a stage boundary turns one command into fragments that are each classified
+ * on their own: `find <dir> -name 'a|cat -x' -delete` splits into
+ * `find <dir> -name 'a` and `cat -x' -delete`, both of which look read-only,
+ * while the real command deletes. The same cut happens for
+ * `${x//a|cat -x}`, `$[1|cat -x]` and an extglob `@(a|cat -x)`. This scan
+ * refuses everything it cannot vouch for: a `|` inside quotes or escaped, an
+ * unterminated quote, an unquoted `(` or `)` (extglob, subshell, arithmetic
+ * command), and a `$` that is not followed by a plain variable-name
+ * character (`${`, `$(`, `$[`, `$'`, `$"`, a lone `$`), outside quotes and
+ * inside double quotes. A refused command keeps the old route through the
  * verdict-dir reference check. Deliberately a refuse-only filter in front of
- * the shared classifier, not a second pipeline definition.
+ * the shared classifier, not a second pipeline definition; the cost is that
+ * a read using `${VAR}` or a parenthesised group is not fast-pathed.
  */
 function pipeBoundariesAreRealStageBoundaries(command: string): boolean {
+  const isNameChar = (ch: string): boolean => /^[A-Za-z0-9_]$/.test(ch);
   let quote: "'" | '"' | null = null;
   for (let i = 0; i < command.length; i += 1) {
     const c = command.charAt(i);
@@ -262,6 +268,7 @@ function pipeBoundariesAreRealStageBoundaries(command: string): boolean {
       if (c === "'") quote = null;
       continue;
     }
+    if (c === "$" && !isNameChar(command.charAt(i + 1))) return false;
     if (quote === '"') {
       if (c === "|") return false;
       if (c === "\\") i += 1;
@@ -273,7 +280,7 @@ function pipeBoundariesAreRealStageBoundaries(command: string): boolean {
       i += 1;
     } else if (c === "'" || c === '"') {
       quote = c;
-    } else if (c === "$" && (command.charAt(i + 1) === "'" || command.charAt(i + 1) === '"')) {
+    } else if (c === "(" || c === ")") {
       return false;
     }
   }

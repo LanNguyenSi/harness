@@ -139,13 +139,24 @@ export const PIPELINE_MATRIX: readonly MatrixRow[] = [
   w("quoted-pipe", `find ${D} -name $'a|cat -x' -delete`),
   w("quoted-pipe", `find ${D} -name $'a\\'|cat -x' -delete`),
   w("quoted-pipe", `find ${D} -name $"a|cat -x" -delete`),
-  // Two `\'` escapes inside ANSI-C words flip a plain-quote scan back to
+  // An escaped quote after the ANSI-C word swings a plain-quote scan back to
   // balanced, so only the refusal of `$'` words keeps the `|` quoted.
-  w("quoted-pipe", `find ${D} -name $'a\\'|cat -x' -name $'\\'' -delete`),
+  w("quoted-pipe", `find ${D} -name $'a\\'|cat -x' -name \\'x -delete`),
+  // A `|` the shell reads as part of one word is not a stage boundary either:
+  // parameter expansion, the old `$[...]` arithmetic, an extglob group and
+  // arithmetic expansion.
+  w("quoted-pipe", `find ${D} -name \${x//a|cat -x} -delete`),
+  w("quoted-pipe", `find ${D} -name $[1|cat -x] -delete`),
+  w("quoted-pipe", `find ${D} -name @(a|cat -x) -delete`),
+  w("quoted-pipe", `find ${D} -name $((1|cat -x)) -delete`),
+  w("quoted-pipe", `find ${D} -name "\${x:-"a|cat -x"}" -delete`),
   w("quoted-pipe", `find ${D} -name 'a|cat -x' -delete | head`),
   w("quoted-pipe", `cat x | find ${D} -name "a|cat -x" -delete`),
   w("quoted-pipe", "find solution-verdict* -name 'a|cat -x' -delete"),
   w("quoted-pipe", "find solution-verdict* -name 'a|cat -x' -exec rm {} +"),
+  // Recorded over-block: a read that uses `${VAR}` is not fast-pathed (blocked
+  // on master, still blocked).
+  { group: "quoted-pipe", kind: "read", command: `cat \${XDG_STATE_HOME}/agent-grounding/solution-verdicts/a.json | head`, onMaster: "blocked", now: "blocked" },
   // Recorded over-block: a read whose quoted pattern carries `|`, with a glob
   // and the word "solution". It was blocked on master and stays blocked.
   { group: "quoted-pipe", kind: "read", command: "grep -n 'a|b*' solution-notes.md | head", onMaster: "blocked", now: "blocked" },
