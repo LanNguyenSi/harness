@@ -1022,8 +1022,9 @@ function buildHooks(
     // Bash forces a fresh Understanding Report. The runtime tool list is
     // the configured expire_on_tool_match (scaffolds: agent-tasks
     // task_finish / task_abandon / task_merge / pull_requests_merge /
-    // tasks_transition); DEFAULT_BOUNDARY_TOOL_NAMES only shapes the
-    // emitted matcher when no list is configured.
+    // tasks_transition); when no explicit list is configured,
+    // DEFAULT_BOUNDARY_TOOL_NAMES is both the emitted matcher and the
+    // runtime boundary list (parseApprovalLifecycle).
     // Operators on other task systems override the list via
     // config.approval_lifecycle.expire_on_tool_match; setting
     // `approval_lifecycle: { mode: session }` opts out entirely and
