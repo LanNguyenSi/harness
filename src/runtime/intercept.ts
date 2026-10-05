@@ -791,10 +791,10 @@ const ENVELOPE_CONTROL_CHARS = new RegExp(
  * the shared rule in `src/io/invisible-characters.ts` rather than a hand list:
  * every code point with General_Category Cf (format: bidi marks and controls,
  * U+200B, U+FEFF, U+2060-U+2064, U+206A-U+206F, U+FFF9-U+FFFB, U+180E,
- * U+00AD, the tag characters
- * U+E0001 and U+E0020-U+E007F, ...) or Default_Ignorable_Code_Point (adds
- * the variation selectors U+FE00-U+FE0F and U+E0100-U+E01EF, U+034F,
- * U+3164 and the rest of U+E0000-U+E0FFF), plus the C1 controls
+ * U+00AD, the tag characters U+E0001 and U+E0020-U+E007F, ...) or
+ * Default_Ignorable_Code_Point (adds, for example, the variation selectors
+ * U+FE00-U+FE0F and U+E0100-U+E01EF, U+034F, U+3164 and the rest of
+ * U+E0000-U+E0FFF), plus the C1 controls
  * (U+0080-U+009F, including NEL) and the line and paragraph separators
  * (U+2028, U+2029). The zero width joiner U+200D is kept, because it joins
  * emoji sequences that are printable text. The backslash is escaped too, so

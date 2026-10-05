@@ -7,8 +7,9 @@
 //
 // The rule: every code point with General_Category Cf (bidi controls, zero
 // width space, BOM, the tag characters, ...) or the property
-// Default_Ignorable_Code_Point (adds the variation selectors, U+034F, the
-// Hangul fillers U+115F, U+1160, U+3164 and U+FFA0, and the rest of
+// Default_Ignorable_Code_Point (adds, for example, the variation selectors,
+// U+034F, the Hangul fillers U+115F, U+1160, U+3164 and U+FFA0, U+17B4,
+// U+17B5, U+180B-U+180D, U+180F, U+2065, U+FFF0-U+FFF8 and the rest of
 // U+E0000-U+E0FFF).
 //
 // One documented difference between the two callers: the envelope sanitiser
