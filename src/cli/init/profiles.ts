@@ -114,13 +114,15 @@ policy_packs:
           - "Run \`harness approve understanding\` with the report attached as a quoted heredoc (harness approve understanding <<'UNDERSTANDING_REPORT' ...report... UNDERSTANDING_REPORT) so it is persisted for audit, then approve the prompt; the heredoc is the only extra shell shape the gate allows (no pipes, chaining, or other redirection)"
       # approval_lifecycle (agent-tasks/d8ee60ca + harness/f54e0ecb,
       # v0.18.0+): expire the approval marker on task-completion
-      # boundaries. Solo wires no agent-tasks MCP, so
-      # \`expire_on_tool_match\` would be dead weight; we list Bash
-      # boundaries instead (PR merges via gh-cli, pushes to the
-      # protected branch). Operators on other CLIs override this list
-      # with their own regexes. \`max_age\` is the safety net for
-      # sessions that never hit a listed command. Opt out entirely
-      # with \`approval_lifecycle: { mode: session }\`.
+      # boundaries. Solo wires no agent-tasks MCP, so this block lists
+      # Bash boundaries (PR merges via gh-cli, pushes to the protected
+      # branch). It sets no \`expire_on_tool_match\` key, so the runtime
+      # applies the default agent-tasks tool list; without the
+      # agent-tasks MCP those tools never run, so that default is inert
+      # here. Operators on other CLIs override the Bash list with their
+      # own regexes. \`max_age\` is the safety net for sessions that
+      # never hit a listed command. Opt out entirely with
+      # \`approval_lifecycle: { mode: session }\`.
       approval_lifecycle:
         expire_on_bash_match:
           - '^gh pr (merge|close)\\b'
