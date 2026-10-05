@@ -1006,15 +1006,15 @@
 
   Citations re-pointed again, since this round's source edits shifted the
   cited lines. In `docs/decisions/2026-08-27-ug-auto-mode-approval.md`:
-  `src/cli/doctor/format.ts:121-122#"modeEnv.message"` (previously at
+  `src/cli/doctor/format.ts:123-124#"modeEnv.message"` (previously at
   lines 118-119) and
-  `src/cli/doctor/format.ts:190#"in-flight subagent records on disk:"`
+  `src/cli/doctor/format.ts:196#"in-flight subagent records on disk:"`
   (previously line 179). In `docs/decisions/2026-09-08-preflight-floors.md`:
   `src/probes/memory.ts:276#"const parsed = parseProbedVersion(stdout);"`
   (previously line 268). In this file:
   `src/runtime/git-context.ts:393#"fs.realpathSync(commonDir)"` (previously
   line 387) and
-  `src/cli/doctor/format.ts:150#"sessionStartPreflightSetupVersion.projectName"`
+  `src/cli/doctor/format.ts:156#"sessionStartPreflightSetupVersion.projectName"`
   (previously line 139). Four module docs were re-stamped for the
   `docs/CLI.md` edit in the same change.
 - 2026-09-13T09:52:00Z, task `e904f25a` (implementer). SUPERSEDED by the
@@ -1304,7 +1304,7 @@
   `SessionStartPreflightSetupVersionFinding`
   (`src/cli/doctor/session-start-preflight-setup-version.ts:72#"layer_unresolvable"`,
   built directly by `doctor()` at
-  `src/cli/doctor/index.ts:1428#"layer_unresolvable"`), naming the
+  `src/cli/doctor/index.ts:1433#"layer_unresolvable"`), naming the
   layer path and the FIRST LINE of the parse error, counted in
   `warningCount`, rendered by `format.ts` as one warning line; round 1
   first shipped full silence here, round 1's own review found the
@@ -1331,7 +1331,7 @@
   rule); best-effort, a realpath failure falls back to the un-resolved
   value. `doctor`'s `sessionStartPreflightProjectName` (and the
   finding's `projectName`,
-  `src/cli/doctor/format.ts:150#"sessionStartPreflightSetupVersion.projectName"`
+  `src/cli/doctor/format.ts:156#"sessionStartPreflightSetupVersion.projectName"`
   renders it as a `(project: X)` suffix) fires only when the scoped
   load actually RESOLVED a project layer file, not merely whenever a
   name was derivable for the cwd; round 1 set it unconditionally,

@@ -77,6 +77,7 @@ function formatEnvironmentSection(report: DoctorReport): string[] {
   const modeEnv = report.understandingModeEnv;
   const ugAuto = report.ugAutoApprovals;
   const autoApproveMode = report.ugAutoApproveMode;
+  const expireOnToolMatch = report.ugExpireOnToolMatch;
   const bypassWithoutAutoApprove = report.ugBypassWithoutAutoApprove;
   const sessionStartPreflightSetupVersion = report.sessionStartPreflightSetupVersion;
   // "nothing when `.approvals/` is absent" (ug-auto-approvals.ts's AC 1):
@@ -101,6 +102,7 @@ function formatEnvironmentSection(report: DoctorReport): string[] {
     (!bin || bin.status !== "warn") &&
     !modeEnv &&
     !autoApproveMode &&
+    !expireOnToolMatch &&
     !bypassWithoutAutoApprove &&
     !sessionStartPreflightSetupVersion &&
     !showUgAuto &&
@@ -125,6 +127,10 @@ function formatEnvironmentSection(report: DoctorReport): string[] {
   if (autoApproveMode) {
     out.push(`  ⚠ ${autoApproveMode.message}`);
     for (const line of autoApproveMode.detail) out.push(`      ${line}`);
+  }
+  if (expireOnToolMatch) {
+    out.push(`  ⚠ ${expireOnToolMatch.message}`);
+    for (const line of expireOnToolMatch.detail) out.push(`      ${line}`);
   }
   if (bypassWithoutAutoApprove) {
     out.push(`  ⚠ ${bypassWithoutAutoApprove.message}`);

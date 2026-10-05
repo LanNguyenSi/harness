@@ -520,7 +520,10 @@ export function toPackageMode(mode: Mode): "fast_confirm" | "grill_me" {
 // agent-tasks verbs are the dogfood case; operators on Linear / JIRA /
 // other task systems override the list in their manifest. Kept here so
 // the PostToolUse hook always emits a sensible match pattern even when
-// the operator hasn't set the config explicitly.
+// the operator hasn't set the config explicitly. The runtime parser
+// (`parseApprovalLifecycle`) applies the same list when no explicit
+// list is configured, so the emitted matcher and the runtime boundary
+// agree (task 0c6b2cb9).
 const DEFAULT_EXPIRE_ON_TOOL_MATCH: ReadonlyArray<string> = DEFAULT_BOUNDARY_TOOL_NAMES;
 
 const POST_TOOL_USE_COMMAND_CLAUDE = "harness pack hook post-tool-use";

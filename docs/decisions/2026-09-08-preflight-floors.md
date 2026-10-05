@@ -26,7 +26,7 @@ of that task named three residuals:
 2. **Double report by design.** A freshly generated manifest with
    `setup: true`, probed against a preflight below the shared floor,
    fires BOTH the generic `hooks[]` `min_version` walk
-   (`checkHookVersion`, `src/cli/doctor/index.ts:478-517#"message: `v${token} ≥ ${hook.min_version}` };"`)
+   (`checkHookVersion`, `src/cli/doctor/index.ts:479-518#"message: `v${token} ≥ ${hook.min_version}` };"`)
    and the setup-specific check
    (`checkSessionStartPreflightSetupVersion`,
    `src/cli/doctor/session-start-preflight-setup-version.ts:145-182#"return undefined;"`).
@@ -163,9 +163,9 @@ cost of this task's narrow scope (see Who pays above), not a bug. Task
 on every `min_version` check in this codebase, not only `hooks[]`:
 
 - `tools.cli[]` in `harness doctor`
-  (`checkCli`, `src/cli/doctor/index.ts:273#"const parsed = parseProbedVersion(stdout);"`).
+  (`checkCli`, `src/cli/doctor/index.ts:274#"const parsed = parseProbedVersion(stdout);"`).
 - `tools.mcp[]` in `harness doctor`
-  (`checkMcpVersions`, `src/cli/doctor/index.ts:347#"const parsed = parseProbedVersion(stdout);"`).
+  (`checkMcpVersions`, `src/cli/doctor/index.ts:348#"const parsed = parseProbedVersion(stdout);"`).
 - `tools.cli[]` in programmatic validate calls supplying `versionProbe`
   (`src/cli/validate/checks.ts:173#"const parsed = parseProbedVersion(stdout);"`),
   a separate implementation of the same `tools.cli[]` contract; the
@@ -187,7 +187,7 @@ merely surfaced as a warning. `tools.mcp[]` in `harness doctor`
 `git-preflight` and `session_start_preflight.setup` already did. The
 policy-pack-level floor pushes a `below_floor` gap counted into
 `harness doctor`'s `warningCount`
-(`src/cli/doctor/index.ts:1091#"warningCount += report.policyPacks.versionGaps.length;"`),
+(`src/cli/doctor/index.ts:1092#"warningCount += report.policyPacks.versionGaps.length;"`),
 the same footing as `tools.mcp[]` and `memory.router`, not a hard
 failure. This is correct under semver precedence (an RC is not the
 release), not a regression, but it means the two `tools.cli[]` checks

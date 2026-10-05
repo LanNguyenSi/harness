@@ -969,3 +969,105 @@ describe("pack hook codex-post-tool-use: approval expiry aligned with the active
     expect(fs.existsSync(approvalMarkerPathFor(merged.generatedDir, "redacted-session-id"))).toBe(false);
   });
 });
+
+describe("pack hook codex-post-tool-use: runtime default boundary tools when no explicit list is configured (task 0c6b2cb9)", () => {
+  const fixturePath = path.join(
+    __dirname,
+    "..",
+    "fixtures",
+    "track-active-claim",
+    "real-posttooluse-task-finish-2.1.280.json",
+  );
+  const SESSION = "redacted-session-id";
+  const TASK = "abc-123";
+
+  function fixtureWith(status: string, toolName?: string): Record<string, unknown> {
+    const raw = JSON.parse(fs.readFileSync(fixturePath, "utf8")) as Record<string, unknown>;
+    return {
+      ...raw,
+      ...(toolName !== undefined ? { tool_name: toolName } : {}),
+      tool_response: [
+        { type: "text", text: JSON.stringify({ ok: true, task: { id: TASK, status } }) },
+      ],
+    };
+  }
+
+  /** `config` is the pack config; omit `approval_lifecycle` for an absent block. */
+  async function run(
+    event: Record<string, unknown>,
+    config: Record<string, unknown>,
+  ): Promise<{ matched: boolean; sessionKept: boolean; taskKept: boolean }> {
+    const generatedDir = path.join(tmp, "harness.generated");
+    fs.rmSync(generatedDir, { recursive: true, force: true });
+    writeApprovalMarker(generatedDir, SESSION, {
+      approvedAt: "2026-09-24T08:00:00Z",
+      approvedBy: "test-operator",
+    });
+    writeTaskApprovalMarker(generatedDir, TASK, {
+      approvedAt: "2026-09-24T08:00:00Z",
+      approvedBy: "test-operator",
+    });
+    const stderr = bufferStream();
+    const result = await runPackHookCodexPostToolUseCli({
+      manifest: manifestWithPack(config),
+      stdin: readableFromString(JSON.stringify(event)),
+      stderr: stderr.stream,
+      generatedDir,
+      reportsDir: path.join(tmp, "reports"),
+    });
+    return {
+      matched: result.matchedExpiry,
+      sessionKept: fs.existsSync(approvalMarkerPathFor(generatedDir, SESSION)),
+      taskKept: fs.existsSync(taskApprovalMarkerPathFor(generatedDir, TASK)),
+    };
+  }
+
+  const MERGE = "mcp__agent-tasks__task_merge";
+
+  it("absent approval_lifecycle block + task_merge expires the session and task markers", async () => {
+    const r = await run(fixtureWith("done", MERGE), {});
+    expect(r).toEqual({ matched: true, sessionKept: false, taskKept: false });
+  });
+
+  it("absent block + task_finish landing in review keeps both markers", async () => {
+    const r = await run(fixtureWith("review"), {});
+    expect(r).toEqual({ matched: false, sessionKept: true, taskKept: true });
+  });
+
+  it("absent block + task_finish landing in done expires both markers", async () => {
+    const r = await run(fixtureWith("done"), {});
+    expect(r).toEqual({ matched: true, sessionKept: false, taskKept: false });
+  });
+
+  it("explicit list is unchanged: a tool outside it does not expire", async () => {
+    const config = { approval_lifecycle: { expire_on_tool_match: ["mcp__agent-tasks__task_finish"] } };
+    const r = await run(fixtureWith("done", MERGE), config);
+    expect(r).toEqual({ matched: false, sessionKept: true, taskKept: true });
+  });
+
+  it("explicit empty list stays empty: task_merge does not expire", async () => {
+    const r = await run(fixtureWith("done", MERGE), {
+      approval_lifecycle: { expire_on_tool_match: [] },
+    });
+    expect(r.sessionKept).toBe(true);
+    expect(r.taskKept).toBe(true);
+  });
+
+  it("a max_age-only block + task_merge expires the markers", async () => {
+    const r = await run(fixtureWith("done", MERGE), { approval_lifecycle: { max_age: "4h" } });
+    expect(r).toEqual({ matched: true, sessionKept: false, taskKept: false });
+  });
+
+  it("an expire_on_bash_match-only block + task_merge expires the markers", async () => {
+    const r = await run(fixtureWith("done", MERGE), {
+      approval_lifecycle: { expire_on_bash_match: ["^gh pr merge\\b"] },
+    });
+    expect(r).toEqual({ matched: true, sessionKept: false, taskKept: false });
+  });
+
+  it("mode: session + task_merge does not expire", async () => {
+    const r = await run(fixtureWith("done", MERGE), { approval_lifecycle: { mode: "session" } });
+    expect(r.sessionKept).toBe(true);
+    expect(r.taskKept).toBe(true);
+  });
+});
