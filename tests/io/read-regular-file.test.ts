@@ -2,6 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { execFileSync, spawnSync } from "node:child_process";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 // `vi.spyOn` cannot target `fs.readFileSync` directly: Node's builtin
 // module namespace is non-configurable in ESM ("Cannot redefine
@@ -10,25 +12,61 @@ import * as path from "node:path";
 // own header documents for `readRegularFileRejectingSymlink`. `vi.mock`
 // with a call-through wrapper is the established workaround: it records
 // every `readFileSync` call so the probe test below can assert zero.
-const readFileSyncCallLog = vi.hoisted(() => ({ calls: 0 }));
+const readFileSyncCallLog = vi.hoisted(() => ({
+  calls: 0,
+  openFlags: [] as number[],
+  readSyncCalls: 0,
+  // When set, `readSync` throws (a read failure after a good open and fstat).
+  failReadSync: false,
+  // When set, `fstatSync` reports this size for a descriptor's stats, as if
+  // the file had been smaller when the size check ran than when it is read.
+  fstatSizeOverride: null as number | null,
+}));
 
 vi.mock("node:fs", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs")>();
   return {
     ...actual,
+    openSync: ((...args: Parameters<typeof actual.openSync>) => {
+      const flags = args[1];
+      if (typeof flags === "number") readFileSyncCallLog.openFlags.push(flags);
+      return actual.openSync(...args);
+    }) as typeof actual.openSync,
     readFileSync: ((...args: Parameters<typeof actual.readFileSync>) => {
       readFileSyncCallLog.calls += 1;
       return actual.readFileSync(...args);
     }) as typeof actual.readFileSync,
+    readSync: ((...args: Parameters<typeof actual.readSync>) => {
+      readFileSyncCallLog.readSyncCalls += 1;
+      if (readFileSyncCallLog.failReadSync) {
+        throw Object.assign(new Error("EIO: i/o error, read"), { code: "EIO" });
+      }
+      return actual.readSync(...args);
+    }) as typeof actual.readSync,
+    fstatSync: ((...args: Parameters<typeof actual.fstatSync>) => {
+      const st = actual.fstatSync(...args);
+      const size = readFileSyncCallLog.fstatSizeOverride;
+      if (size === null || !("size" in st)) return st;
+      return Object.assign(Object.create(Object.getPrototypeOf(st)), st, { size });
+    }) as typeof actual.fstatSync,
   };
 });
 
-import { probePathPresence, readRegularFileRejectingSymlink } from "../../src/io/read-regular-file.js";
+import {
+  MAX_REGULAR_FILE_READ_BYTES,
+  probePathPresence,
+  readRegularFileRejectingSymlink,
+} from "../../src/io/read-regular-file.js";
+
+const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
+const BUILT_READER = path.join(REPO_ROOT, "dist", "io", "read-regular-file.js");
 
 let tmp: string;
 
 beforeEach(() => {
   tmp = fs.mkdtempSync(path.join(os.tmpdir(), "read-regular-file-"));
+  readFileSyncCallLog.failReadSync = false;
+  readFileSyncCallLog.fstatSizeOverride = null;
 });
 
 afterEach(() => {
@@ -77,6 +115,246 @@ describe("readRegularFileRejectingSymlink", () => {
     expect(readRegularFileRejectingSymlink(p)).toEqual({ kind: "unreadable" });
   });
 });
+
+describe("readRegularFileRejectingSymlink: one descriptor, never a blocking open", () => {
+  it("opens read-only with O_NOFOLLOW and O_NONBLOCK (where the platform has them)", () => {
+    const p = path.join(tmp, "marker.json");
+    fs.writeFileSync(p, "{}", "utf8");
+    readFileSyncCallLog.openFlags.length = 0;
+    expect(readRegularFileRejectingSymlink(p)).toEqual({ kind: "ok", content: "{}" });
+    expect(readFileSyncCallLog.openFlags).toHaveLength(1);
+    const flags = readFileSyncCallLog.openFlags[0] as number;
+    expect(flags & fs.constants.O_ACCMODE).toBe(fs.constants.O_RDONLY);
+    expect(flags & (fs.constants.O_NONBLOCK ?? 0)).toBe(fs.constants.O_NONBLOCK ?? 0);
+    expect(flags & (fs.constants.O_NOFOLLOW ?? 0)).toBe(fs.constants.O_NOFOLLOW ?? 0);
+    // Guards the two checks above against a platform where both are 0.
+    expect(flags & (fs.constants.O_NOCTTY ?? 0)).toBe(fs.constants.O_NOCTTY ?? 0);
+    if (process.platform !== "win32") {
+      expect(fs.constants.O_NONBLOCK).toBeGreaterThan(0);
+      expect(fs.constants.O_NOFOLLOW).toBeGreaterThan(0);
+      expect(fs.constants.O_NOCTTY).toBeGreaterThan(0);
+    }
+  });
+
+  it("returns missing when a parent path component is a regular file (ENOTDIR)", () => {
+    const file = path.join(tmp, "plain.json");
+    fs.writeFileSync(file, "{}", "utf8");
+    expect(readRegularFileRejectingSymlink(path.join(file, "child"))).toEqual({ kind: "missing" });
+  });
+
+  it("returns symlink for a dangling symlink", () => {
+    const link = path.join(tmp, "dangling.json");
+    fs.symlinkSync(path.join(tmp, "never-created.json"), link);
+    expect(readRegularFileRejectingSymlink(link)).toEqual({ kind: "symlink" });
+  });
+});
+
+describe("readRegularFileRejectingSymlink: size bound", () => {
+  it("reads a file of exactly the cap in full", () => {
+    const p = path.join(tmp, "at-cap.json");
+    const body = "a".repeat(MAX_REGULAR_FILE_READ_BYTES);
+    fs.writeFileSync(p, body, "utf8");
+    const read = readRegularFileRejectingSymlink(p);
+    expect(read.kind).toBe("ok");
+    expect(read.kind === "ok" && read.content === body).toBe(true);
+  });
+
+  it("decodes multi-byte UTF-8 that straddles a read-chunk boundary, up to exactly the cap", () => {
+    // The reader reads in 64 KiB chunks; decoding each chunk on its own would
+    // turn a character split across two chunks into replacement characters.
+    const euro = String.fromCodePoint(0x20ac); // 3 bytes in UTF-8
+    const face = String.fromCodePoint(0x1f600); // 4 bytes in UTF-8
+    const head = "a".repeat(64 * 1024 - 1) + euro; // bytes 65535..65537
+    const tail = "b".repeat(MAX_REGULAR_FILE_READ_BYTES - Buffer.byteLength(head, "utf8") - 4);
+    const body = head + tail + face;
+    expect(Buffer.byteLength(body, "utf8")).toBe(MAX_REGULAR_FILE_READ_BYTES);
+    const p = path.join(tmp, "multibyte.json");
+    fs.writeFileSync(p, body, "utf8");
+    const read = readRegularFileRejectingSymlink(p);
+    expect(read.kind).toBe("ok");
+    expect(read.kind === "ok" && read.content === body).toBe(true);
+  });
+
+  it("refuses a file one byte over the cap as unreadable", () => {
+    const p = path.join(tmp, "over-cap.json");
+    fs.writeFileSync(p, "a".repeat(MAX_REGULAR_FILE_READ_BYTES + 1), "utf8");
+    expect(readRegularFileRejectingSymlink(p)).toEqual({ kind: "unreadable" });
+  });
+
+  it("refuses a 2 GiB sparse file at once, without reading a byte of it", () => {
+    const p = path.join(tmp, "sparse.json");
+    fs.writeFileSync(p, "");
+    fs.truncateSync(p, 2 * 1024 * 1024 * 1024);
+    readFileSyncCallLog.readSyncCalls = 0;
+    const started = Date.now();
+    expect(readRegularFileRejectingSymlink(p)).toEqual({ kind: "unreadable" });
+    expect(Date.now() - started).toBeLessThan(2_000);
+    expect(readFileSyncCallLog.readSyncCalls).toBe(0);
+  });
+
+  it("stops reading one byte past the cap when fstat reported a small size (a file that grew)", () => {
+    const p = path.join(tmp, "grown.json");
+    fs.writeFileSync(p, "a".repeat(3 * MAX_REGULAR_FILE_READ_BYTES), "utf8");
+    readFileSyncCallLog.fstatSizeOverride = 10;
+    readFileSyncCallLog.readSyncCalls = 0;
+    expect(readRegularFileRejectingSymlink(p)).toEqual({ kind: "unreadable" });
+    // 64 KiB chunks, the last one cut to cap + 1: 17 reads, never the 48 a
+    // read to EOF would take.
+    expect(readFileSyncCallLog.readSyncCalls).toBeGreaterThan(0);
+    expect(readFileSyncCallLog.readSyncCalls).toBeLessThanOrEqual(
+      Math.ceil((MAX_REGULAR_FILE_READ_BYTES + 1) / (64 * 1024)),
+    );
+  });
+
+  it("returns unreadable when the read itself fails", () => {
+    const p = path.join(tmp, "marker.json");
+    fs.writeFileSync(p, "{}", "utf8");
+    readFileSyncCallLog.failReadSync = true;
+    expect(readRegularFileRejectingSymlink(p)).toEqual({ kind: "unreadable" });
+  });
+});
+
+// The descriptor is released on every outcome. The count of open descriptors
+// is measured through /dev/fd, which lists the descriptors of this process
+// (the directory read itself holds one, the same one before and after), so a
+// reader that leaked one per call would show up as a growing count.
+describe.skipIf(process.platform === "win32")("readRegularFileRejectingSymlink: the descriptor is closed", () => {
+  const CALLS = 25;
+
+  function openDescriptorCount(): number {
+    return fs.readdirSync("/dev/fd").length;
+  }
+
+  function leakedBy(call: () => unknown): number {
+    call(); // warm any lazily opened internal descriptor first
+    openDescriptorCount();
+    const before = openDescriptorCount();
+    for (let i = 0; i < CALLS; i++) call();
+    return openDescriptorCount() - before;
+  }
+
+  it("ok", () => {
+    const p = path.join(tmp, "marker.json");
+    fs.writeFileSync(p, "{}", "utf8");
+    expect(leakedBy(() => expect(readRegularFileRejectingSymlink(p).kind).toBe("ok"))).toBe(0);
+  });
+
+  it("not-regular (a directory)", () => {
+    const dir = path.join(tmp, "a-dir");
+    fs.mkdirSync(dir);
+    expect(leakedBy(() => expect(readRegularFileRejectingSymlink(dir).kind).toBe("not-regular"))).toBe(0);
+  });
+
+  it("unreadable (over the cap)", () => {
+    const p = path.join(tmp, "sparse.json");
+    fs.writeFileSync(p, "");
+    fs.truncateSync(p, 2 * 1024 * 1024 * 1024);
+    expect(leakedBy(() => expect(readRegularFileRejectingSymlink(p).kind).toBe("unreadable"))).toBe(0);
+  });
+
+  it("unreadable (the read fails)", () => {
+    const p = path.join(tmp, "marker.json");
+    fs.writeFileSync(p, "{}", "utf8");
+    readFileSyncCallLog.failReadSync = true;
+    expect(leakedBy(() => expect(readRegularFileRejectingSymlink(p).kind).toBe("unreadable"))).toBe(0);
+  });
+
+  it("the counter really counts: an unclosed descriptor shows up", () => {
+    const p = path.join(tmp, "marker.json");
+    fs.writeFileSync(p, "{}", "utf8");
+    const held: number[] = [];
+    try {
+      expect(leakedBy(() => held.push(fs.openSync(p, "r")))).toBe(CALLS);
+    } finally {
+      for (const fd of held) fs.closeSync(fd);
+    }
+  });
+});
+
+// A FIFO with no writer makes a blocking open() wait forever, so the reader
+// runs in a child process here: the measurement is "returned within the
+// bound", and a regression shows up as a killed child, not a hung test
+// worker. The child loads the built module, so `npm run build` must have
+// run against the current sources first (same prerequisite as the hook
+// subprocess suites).
+describe.skipIf(process.platform === "win32")(
+  "readRegularFileRejectingSymlink: FIFO at the path is refused without blocking",
+  () => {
+    const BOUND_MS = 10_000;
+
+    function readInChild(target: string): { timedOut: boolean; ms: number; stdout: string; stderr: string } {
+      const started = Date.now();
+      const result = spawnSync(
+        process.execPath,
+        [
+          "--input-type=module",
+          "-e",
+          `const m = await import(${JSON.stringify(pathToFileURL(BUILT_READER).href)});` +
+            "process.stdout.write(JSON.stringify(m.readRegularFileRejectingSymlink(process.argv[1])));",
+          target,
+        ],
+        { encoding: "utf8", timeout: BOUND_MS, killSignal: "SIGKILL" },
+      );
+      return {
+        timedOut: (result.error as NodeJS.ErrnoException | undefined)?.code === "ETIMEDOUT",
+        ms: Date.now() - started,
+        stdout: result.stdout,
+        stderr: result.stderr,
+      };
+    }
+
+    it("a FIFO with no writer returns not-regular within the bound", () => {
+      const fifo = path.join(tmp, "marker.fifo");
+      execFileSync("mkfifo", [fifo]);
+      const run = readInChild(fifo);
+      expect(run.timedOut).toBe(false);
+      expect(run.ms).toBeLessThan(BOUND_MS);
+      expect(JSON.parse(run.stdout)).toEqual({ kind: "not-regular" });
+    });
+
+    it("the descriptor of a refused FIFO is closed (no leak across repeated reads)", () => {
+      const fifo = path.join(tmp, "marker.fifo");
+      execFileSync("mkfifo", [fifo]);
+      const started = Date.now();
+      // In a child for the same reason as above: without O_NONBLOCK the open
+      // would wait for a writer, and here that must show as a killed child.
+      const result = spawnSync(
+        process.execPath,
+        [
+          "--input-type=module",
+          "-e",
+          `const fs = await import("node:fs");` +
+            `const m = await import(${JSON.stringify(pathToFileURL(BUILT_READER).href)});` +
+            "const count = () => fs.readdirSync('/dev/fd').length;" +
+            "m.readRegularFileRejectingSymlink(process.argv[1]);" +
+            "count();" + // the first listing may open an internal descriptor of its own
+            "const before = count();" +
+            "const kinds = new Set();" +
+            "for (let i = 0; i < 25; i++) kinds.add(m.readRegularFileRejectingSymlink(process.argv[1]).kind);" +
+            // Count before touching process.stdout: its lazy creation opens a descriptor.
+            "const leaked = count() - before;" +
+            "process.stdout.write(JSON.stringify({ leaked, kinds: [...kinds] }));",
+          fifo,
+        ],
+        { encoding: "utf8", timeout: BOUND_MS, killSignal: "SIGKILL" },
+      );
+      expect((result.error as NodeJS.ErrnoException | undefined)?.code).not.toBe("ETIMEDOUT");
+      expect(Date.now() - started).toBeLessThan(BOUND_MS);
+      expect(JSON.parse(result.stdout)).toEqual({ leaked: 0, kinds: ["not-regular"] });
+    });
+
+    it("a symlink to a FIFO returns symlink within the bound", () => {
+      const fifo = path.join(tmp, "marker.fifo");
+      execFileSync("mkfifo", [fifo]);
+      const link = path.join(tmp, "link.json");
+      fs.symlinkSync(fifo, link);
+      const run = readInChild(link);
+      expect(run.timedOut).toBe(false);
+      expect(run.ms).toBeLessThan(BOUND_MS);
+      expect(JSON.parse(run.stdout)).toEqual({ kind: "symlink" });
+    });
+  },
+);
 
 describe("probePathPresence", () => {
   it("returns present for a regular file", () => {

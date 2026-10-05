@@ -315,8 +315,8 @@ function readAdoptedEntries(generatedDir: string, childSessionId: string): Adopt
  * `appendFileSync` opens with `O_APPEND`, so a single short write lands
  * whole even if two hooks race on the same session; no read-modify-write,
  * therefore nothing to lose. `lstatSync` (NOT `existsSync`/`statSync`)
- * gates the append the same way `readRegularFileRejectingSymlink` gates
- * the read: a symlink planted at this path would otherwise have
+ * gates the append to the same end as `readRegularFileRejectingSymlink`
+ * (O_NOFOLLOW at open plus fstat) gates the read: a symlink planted here would have
  * `appendFileSync` follow it and write the adoption record through to an
  * arbitrary target, same class of defense as the read side above.
  */
