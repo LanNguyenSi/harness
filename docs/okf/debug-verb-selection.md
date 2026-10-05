@@ -3,12 +3,13 @@ type: overview
 title: Debug verb selection — which harness verb answers which question
 description: Decision guide mapping "why did my policy (not) fire" questions to the right harness debug verb — ledger-replay vs live-hypothetical vs static-prediction vs stage-isolation vs end-to-end — with each verb's key discriminators and fail-postures.
 tags: [debugging, cli, audit, explain, dry-run, smoke]
-timestamp: 2026-10-05T09:19:49Z
+timestamp: 2026-10-05T09:35:38Z
 sources:
   - docs/for-agents.md
   - docs/CLI.md
   - docs/risk-gate.md
   - src/cli/index.ts
+  - src/cli/register-audit-group.ts
   - src/cli/dry-run.ts
   - src/runtime/command-normalize.ts
   - src/runtime/intercept.ts
@@ -48,7 +49,7 @@ The harness ships nine read-side debug verbs plus one end-to-end runner. They di
 
 ## audit — replay recorded decisions over a time window
 
-`harness audit [--since 1h] [--policy <name>] [--outcome <o>] [--session <id>] [--json]` replays `policy_decision` rows from the evidence ledger for a time window, one row per decision (timestamp, policy, outcome, reason), sorted chronologically (src/cli/index.ts, `command("audit")`; src/cli/audit.ts). Default window is 24h (`DEFAULT_SINCE = "24h"` in src/cli/audit.ts); `--outcome` accepts `allow / warn / require_approval / deny / warn-degraded / deny-degraded` (the last added by task f1aea826 for degraded-ledger denials). `--session <id>` selects the grounding session, defaulting to `$CLAUDE_SESSION_ID` then `'default'`. Next to the decisions table, `audit` also renders an `approvals` section listing the raw understanding-gate ledger facts (`understanding-approved:<sid>`, its `:forced:<field>` variant, `understanding-auto-approved:<sid>`) in the same `--since` window, filtered by `--session` only (never `--policy` / `--outcome`); empty is omitted in text, always present (as `[]`) in `--json`, and a degraded approvals-only fetch renders `approvals unavailable: <reason>` without discarding the decisions table. Use it for the coarse question "did anything fire, and what was denied", it shows outcomes, not reasoning depth (docs/for-agents.md, "The audit triumvirate").
+`harness audit [--since 1h] [--policy <name>] [--outcome <o>] [--session <id>] [--json]` replays `policy_decision` rows from the evidence ledger for a time window, one row per decision (timestamp, policy, outcome, reason), sorted chronologically (src/cli/register-audit-group.ts, `command("audit")`; src/cli/audit.ts). Default window is 24h (`DEFAULT_SINCE = "24h"` in src/cli/audit.ts); `--outcome` accepts `allow / warn / require_approval / deny / warn-degraded / deny-degraded` (the last added by task f1aea826 for degraded-ledger denials). `--session <id>` selects the grounding session, defaulting to `$CLAUDE_SESSION_ID` then `'default'`. Next to the decisions table, `audit` also renders an `approvals` section listing the raw understanding-gate ledger facts (`understanding-approved:<sid>`, its `:forced:<field>` variant, `understanding-auto-approved:<sid>`) in the same `--since` window, filtered by `--session` only (never `--policy` / `--outcome`); empty is omitted in text, always present (as `[]`) in `--json`, and a degraded approvals-only fetch renders `approvals unavailable: <reason>` without discarding the decisions table. Use it for the coarse question "did anything fire, and what was denied", it shows outcomes, not reasoning depth (docs/for-agents.md, "The audit triumvirate").
 
 ## explain — the LAST RECORDED evaluation, from the ledger
 
@@ -78,7 +79,7 @@ Use these when `explain-policy` shows a `when:` clause failing and you need to k
 
 ## session-export — one session, transcript + ledger joined chronologically
 
-`harness session-export [sessionId] [--format json|jsonl] [-o <file>]` exports "a chronological audit artifact joining the on-disk transcript JSONL and the evidence ledger for a session" (src/cli/index.ts). src/cli/session-export/index.ts merges transcript events (prompts, tool_use/tool_result blocks) with ledger entries via `mergeEvents`, sorted by timestamp, each event tagged `source: "transcript" | "ledger"`; the header reports `ledgerStatus: ok | degraded | missing` so a half-empty export is visible, and it errors if BOTH sides are empty. Default-on redaction applies `manifest.audit.redact` rules (src/cli/session-export/redact.ts). This is the "what did the agent actually do in session X" verb; it explains nothing, it reconstructs.
+`harness session-export [sessionId] [--format json|jsonl] [-o <file>]` exports "a chronological audit artifact joining the on-disk transcript JSONL and the evidence ledger for a session" (src/cli/register-audit-group.ts). src/cli/session-export/index.ts merges transcript events (prompts, tool_use/tool_result blocks) with ledger entries via `mergeEvents`, sorted by timestamp, each event tagged `source: "transcript" | "ledger"`; the header reports `ledgerStatus: ok | degraded | missing` so a half-empty export is visible, and it errors if BOTH sides are empty. Default-on redaction applies `manifest.audit.redact` rules (src/cli/session-export/redact.ts). This is the "what did the agent actually do in session X" verb; it explains nothing, it reconstructs.
 
 ## smoke — the only verb that runs a real `claude -p` end to end
 

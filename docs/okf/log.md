@@ -2,7 +2,10 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-10-05T09:35:38Z, task 32d84940 (rebase onto master after d9a6d818 and review fixes): the rebase gave the moved command wiring and `docs/CLI.md` new commit times, so `codex-adapter-parity-gaps.md`, `debug-verb-selection.md`, `pause-vs-gate-kill-switch.md` and `policy-engine-producer-wiring.md` were re-read against the rebased sources (their re-pointed `index.ts` and register-file citations still resolve; the `intercept.ts` sanitiser change from d9a6d818 touches no claim of theirs) and re-stamped. Older log entries that cited `src/cli/index.ts` line ranges from before the move now name those ranges in prose as of their own commit instead of as live citations, so the bundle check no longer reports them as exceeding the shortened file.
 - 2026-10-05T09:19:49Z, task d9a6d818: `sanitizeEnvelopeReason` escapes every General_Category Cf or Default_Ignorable_Code_Point code point plus C1, the line and paragraph separators and the backslash (zero width joiner kept); `src/runtime/intercept.ts` grew 8 doc-comment lines above `resolveAttributedContexts`, so the anchored citation in `gate-fail-posture-matrix.md` was re-pointed (1310-1338). `codex-adapter-parity-gaps.md`, `debug-verb-selection.md`, `pause-vs-gate-kill-switch.md`, `policy-engine-producer-wiring.md` and `quote-model-divergence.md` list the file as a source and state no claim about the envelope sanitiser; their other `intercept.ts` citations (564-648) sit above the edit. Re-read, timestamp-only re-stamp. `okf-kit check --require-anchors docs/okf` re-run after the re-stamp.
+- 2026-10-05T09:01:04Z, task 32d84940 (re-stamp): `docs/CLI.md` changed only by two `src/cli/index.ts` line citations in the per-repo scoping paragraph (re-pointed after the wiring move, prose untouched); `codex-adapter-parity-gaps.md`, `evidence-ledger-trust-boundary.md` and `policy-engine-producer-wiring.md` list it as a source and their `docs/CLI.md` claims were not affected, timestamp-only re-stamp.
+- 2026-10-05T09:00:12Z, task 32d84940: the `remove`, `delegate`, `audit` / `session-export` / `dry-run`, `uninstall` and `migrate-home` / `pause` / `resume` command wiring moved out of `src/cli/index.ts` into `src/cli/remove/register.ts`, `src/cli/delegate/register.ts`, `src/cli/register-audit-group.ts`, `src/cli/uninstall/register.ts` and `src/cli/register-operator-lifecycle.ts` (pure cut and paste, `--help` output byte-identical). `pause-vs-gate-kill-switch.md` now cites the `pause` help and the `pause` / `resume` registrations in `src/cli/register-operator-lifecycle.ts` (37-41, 35-95, 100-131) and lists that file as a source, and its `gate` comment citation was re-pointed within `src/cli/index.ts`; `debug-verb-selection.md` names `src/cli/register-audit-group.ts` for `audit` and `session-export` and lists it as a source; `understanding-gate-lockout-recovery.md` re-pointed its `approve understanding` flag citation within `src/cli/index.ts`. Claims re-read against the changed code, re-stamped.
 - 2026-10-05T07:30:29Z, task 0c6b2cb9: `parseApprovalLifecycle` (`lifecycle.ts`) now applies `DEFAULT_BOUNDARY_TOOL_NAMES` when no explicit `expire_on_tool_match` is configured (absent, non-object or keyless block), so `understanding-gate-lockout-recovery.md` no longer says an absent list means no tool boundary at runtime; the new doctor check lives in `src/cli/doctor/expire-on-tool-match.ts`. `src/cli/doctor/index.ts`, `format.ts` and `lifecycle.ts` gained lines above cited anchors, so the anchored citations in `docs/decisions/2026-08-27-ug-auto-mode-approval.md`, `docs/decisions/2026-09-08-preflight-floors.md` and this log were re-pointed. `codex-adapter-parity-gaps.md`, `gate-fail-posture-matrix.md`, `evidence-ledger-trust-boundary.md`, `debug-verb-selection.md` and `pause-vs-gate-kill-switch.md` and `understanding-gate-auto-mode-signals.md` (pack doc paragraph only) list `agent-tasks.ts` (doc comment only), the generator (comment only) or `doctor/index.ts` as sources and state no claim about the runtime default list or the doctor warning roster; re-read, timestamp-only re-stamp. `okf-kit check docs/okf` re-run after the re-stamp.
 - 2026-10-05T06:39:45Z, merge of master (task 53dd08b4) into task bb202fb9: both edited `src/runtime/intercept.ts` (53dd08b4 added `export` only, bb202fb9 the foreign-target sentence); no cited line range moved, the docs that list it are re-stamped.
 - 2026-10-05T06:25:01Z, task bb202fb9 review fixes (re-stamp): `codex-adapter-parity-gaps.md`, `debug-verb-selection.md`, `gate-fail-posture-matrix.md`, `pause-vs-gate-kill-switch.md` and `quote-model-divergence.md` list `src/runtime/intercept.ts` as a source; the fix changed one string literal in place (no line moved), their `intercept.ts` claims were re-read, timestamp-only re-stamp. `okf-kit check --require-anchors docs/okf` re-run after the re-stamp.
@@ -1606,8 +1609,8 @@
   `quote-model-divergence.md` and `understanding-gate-lockout-recovery.md`
   `sources-fresh` STALE against these files. Checked every line-numbered
   citation these seven docs make into the five touched files
-  (`src/cli/index.ts:1722-1737`, `:2999-3003`, `:3288-3387`,
-  `:3377-3382`; `src/cli/init/templates.ts:928`): all still match their
+  (src/cli/index.ts lines 1722-1737, 2999-3003, 3288-3387 and
+  3377-3382 at that commit; `src/cli/init/templates.ts:928`): all still match their
   quoted text verbatim (sibling-line check), since none of this round's
   edits added or removed a line above a cited line in any file a
   line-numbered citation targets. No citation needed re-pointing;
@@ -1707,7 +1710,7 @@
 - 2026-09-07T07:32:32Z, task 30183330 (orchestrator), review round 3 notes, docs and
   comments only: `docs/okf/pause-vs-gate-kill-switch.md` re-pointed its
   commands citation from a range that started inside an earlier command
-  body to `src/cli/index.ts:3342-3441` (the `pause` and `resume`
+  body to src/cli/index.ts lines 3342-3441 at that commit (the `pause` and `resume`
   registrations); `docs/okf/codex-adapter-parity-gaps.md` corrected the
   docs/CLI.md line reference for the 2s Codex hook timeout note (line 67, a
   pre-existing off-by-two, measured equal at the base commit); the
@@ -1739,12 +1742,12 @@
     descriptions add 4 lines above them: this doc bundle's three
     `src/cli/index.ts` citations in `pause-vs-gate-kill-switch.md`,
     `:2953-2957#"offending hook group out of settings.json with a
-    reversible snapshot."` -> `:2957-2961`, `:3328-3333#"in the
-    manifest."` -> `:3377-3382` (re-pointed again, task `6a037359`:
+    reversible snapshot."` -> lines 2957-2961, `:3328-3333#"in the
+    manifest."` -> lines 3377-3382 (re-pointed again, task `6a037359`:
     `src/cli/index.ts` grew a net 36 lines above it, a
     `CodexInstallRefusalError` import plus a try/catch wrapping the
-    codex-install `apply()` call), and the bare `:3290-3389` ->
-    `:3329-3428` (same shift).
+    codex-install `apply()` call), and the bare lines 3290-3389 ->
+    3329-3428 (same shift).
     Sibling-line check at both bounds of each range: the content at the
     old start/end lines is byte-identical to the content at the new
     start/end lines (verified by diffing `git show HEAD~1:src/cli/index.ts`
@@ -1769,11 +1772,11 @@
     neither is a re-point this task owes. They are recorded here so the
     re-stamps above are not read as asserting them correct.
     - FIXED: `understanding-gate-lockout-recovery.md` attributed the
-      `approve understanding` flag list to `src/cli/index.ts:1648-1663`.
+      `approve understanding` flag list to src/cli/index.ts lines 1648-1663 (at that commit).
       That range is the `harness pack list` subcommand; the seven flags the
       doc enumerates (`--config`, `--project`, `--session`, `--task`,
       `--reports-dir`, `--approved-by`, `--force`) are declared at
-      `src/cli/index.ts:1694-1709`, which the doc now cites (sibling
+      src/cli/index.ts lines 1694-1709 at that commit, which the doc then cited (sibling
       check: line 1685 closes the preceding `.description(` call and line
       1702 opens `.action(`, so the range covers exactly the option
       declarations). This doc is one of

@@ -14,7 +14,8 @@
 // `process.exit`, so the smoke runner (a future consumer, ADR "TTL, cwd,
 // and subagents": "The harness smoke runner ... is the natural first
 // consumer") and tests can call it directly. The CLI wiring in
-// `src/cli/index.ts` is a thin wrapper: flag parsing, one CLI-level
+// `src/cli/delegate/register.ts` (registered from `buildProgram` in
+// `src/cli/index.ts`) is a thin wrapper: flag parsing, one CLI-level
 // usage check with the exact ADR-specified message, and printing the
 // result in the approve CLI's line style.
 //

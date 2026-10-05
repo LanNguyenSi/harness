@@ -1,5 +1,4 @@
 import { spawnSync } from "node:child_process";
-import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { Command } from "commander";
@@ -36,7 +35,6 @@ import {
   SETTINGS_BASENAME,
   type FileApplyOutcome,
 } from "./apply/index.js";
-import { isRemoveType, KNOWN_REMOVE_TYPES, remove } from "./remove/index.js";
 import { packAdd, packList, packRemove, packReseed, packUpgrade } from "./pack/index.js";
 import { runPackHookPreToolUseCli } from "./pack/hook-pre-tool-use.js";
 import { runPackHookPostToolUseCli } from "./pack/hook-post-tool-use.js";
@@ -53,8 +51,6 @@ import { approveBranchProtection } from "./approve/branch-protection.js";
 import { approveRisk } from "./approve/risk.js";
 import { approveUnderstanding } from "./approve/understanding.js";
 import { readPipedStdin } from "./approve/stdin-report.js";
-import { issueDelegation } from "./delegate/index.js";
-import { InvalidDurationError, parseDurationSeconds } from "../policies/index.js";
 import {
   runRecordDogfood,
   runRecordReview,
@@ -83,9 +79,6 @@ import { detect as detectInit } from "./init/detect.js";
 import { init, isTemplate, KNOWN_TEMPLATES } from "./init/index.js";
 import { runInteractive } from "./init/interactive.js";
 import { isListCategory, list, type ListCategory } from "./list.js";
-import { audit, type AuditOutcome } from "./audit.js";
-import { sessionExport, type ExportFormat } from "./session-export/index.js";
-import { dryRun } from "./dry-run.js";
 import { runInterceptCli } from "./policy/intercept.js";
 import { runSessionStartPreflight } from "./session-start/index.js";
 import { writePendingApproval } from "../runtime/pending-approval.js";
@@ -109,9 +102,6 @@ import { runPackHookRuntimeRealityCli } from "./pack/hook-runtime-reality.js";
 import { gateDisable, GateDisableError } from "./gate/disable.js";
 import { gateEnable, GateEnableError } from "./gate/enable.js";
 import { DEFAULT_RETENTION_DAYS, gc } from "./gc/index.js";
-import { uninstall, UninstallError } from "./uninstall/index.js";
-import { migrateHome } from "./migrate-home/index.js";
-import { pause as pauseHarness, resume as resumeHarness } from "./pause/index.js";
 import {
   formatSmokeReport,
   runSmoke,
@@ -121,6 +111,11 @@ import {
 } from "./smoke/index.js";
 import { formatReport, validate } from "./validate/index.js";
 import { VERSION } from "../version.js";
+import { registerRemove } from "./remove/register.js";
+import { registerDelegate } from "./delegate/register.js";
+import { registerAuditGroup } from "./register-audit-group.js";
+import { registerUninstall } from "./uninstall/register.js";
+import { registerOperatorLifecycle } from "./register-operator-lifecycle.js";
 
 export interface RunOptions {
   argv?: string[];
@@ -1111,60 +1106,7 @@ export function buildProgram(opts: RunOptions = {}): Command {
       },
     );
 
-  program
-    .command("remove <type> <name>")
-    .description(
-      `Remove an entry by name. <type> is one of ${KNOWN_REMOVE_TYPES.join(" | ")}. ` +
-        "Refuses to remove a hook still referenced by a policy unless --force.",
-    )
-    .option("--config <path>", "manifest path (default: ~/.harness/harness.yaml; legacy fallback ~/.claude/harness.yaml)")
-    .option("--dry-run", "print the unified diff and exit without writing")
-    .option(
-      "--force",
-      "remove even if a policy references this entry (dangling policy.hook is then caught by schema)",
-    )
-    .action(
-      async (
-        type: string,
-        name: string,
-        options: { config?: string; dryRun?: boolean; force?: boolean },
-      ) => {
-        if (!isRemoveType(type)) {
-          throw new HarnessExitError(
-            `unknown remove type "${type}"; expected one of ${KNOWN_REMOVE_TYPES.join(", ")}`,
-            EX_USAGE,
-          );
-        }
-        const result = await remove(type, name, {
-          configPath: options.config,
-          dryRun: options.dryRun,
-          force: options.force,
-        });
-        if (result.forcedReferences.length > 0) {
-          stderr(
-            `(forced removal — referenced by: ${result.forcedReferences.join(", ")})\n`,
-          );
-        }
-        // F3 (review round 3, 99f47307 Slice 1): printed on the dry-run AND
-        // the write path. A --force'd removal of an evidence hook silently
-        // disables the workflows[]-derived merge gate (no schema safety
-        // net, unlike a dangling policy.hook), so this line is the only
-        // warning the operator gets.
-        if (result.derivedGateReferences.length > 0) {
-          stderr(
-            `(forced removal disables the workflows[]-derived merge gate for: ` +
-              `${result.derivedGateReferences.join(", ")}; harness policy intercept ` +
-              `no longer blocks merges for ${result.derivedGateReferences.length === 1 ? "this workflow" : "these workflows"} ` +
-              `and for any other workflow sharing the same merge surface)\n`,
-          );
-        }
-        if (options.dryRun) {
-          stdout(result.diff);
-          return;
-        }
-        stdout(`removed ${result.type} ${JSON.stringify(result.name)} from ${result.path}\n`);
-      },
-    );
+  registerRemove(program, { stdout, stderr });
 
   // `harness pack` subtree (Phase 6 #3): managed CRUD over policy_packs[].
   const packCmd = program
@@ -2155,122 +2097,7 @@ export function buildProgram(opts: RunOptions = {}): Command {
       },
     );
 
-  // `harness delegate` (Slice 3 of docs/decisions/2026-08-27-ug-auto-mode-approval.md,
-  // agent-tasks 37ad0b05): issue a signed pre-authorization for a
-  // headless `claude -p` child session, bound to an already-approved
-  // PARENT session. NOT an approval: the child still writes and gets its
-  // own Understanding Report checked by its own PreToolUse hook before
-  // its auto-marker is minted. Writes harness.generated/.delegations/,
-  // never .approvals/.
-  program
-    .command("delegate")
-    .description(
-      "Issue a signed delegation for a headless `claude -p` child session, bound to " +
-        "an already-approved parent session (pre-authorization, not an approval: the " +
-        "child still writes and gets its own Understanding Report checked). Writes " +
-        "harness.generated/.delegations/<child-sid>, never .approvals/. Consumption is " +
-        "Claude Code only: the Codex adapter has no delegation consumer, so a Codex " +
-        "session cannot be the delegated child. A Codex session CAN be the delegating " +
-        "parent today (parent resolution reads $CODEX_SESSION_ID and accepts any " +
-        "validly signed marker). See docs/decisions/2026-08-27-ug-auto-mode-approval.md.",
-    )
-    .requiredOption(
-      "--child-session <uuid>",
-      "session id of the claude -p child this delegation authorizes (UUID)",
-    )
-    .option(
-      "--cwd <path>",
-      "bind the delegation to this working directory; at least one of --cwd/--task is required",
-    )
-    .option(
-      "--task <id>",
-      "bind the delegation to this agent-tasks task id; at least one of --cwd/--task is required",
-    )
-    .option(
-      "--ttl <duration>",
-      "delegation lifetime (e.g. 30m, 1h); default: the pack's approval_lifecycle.max_age when set, else 1h",
-    )
-    .option(
-      "--report <path>",
-      "fallback shape: copy the child's Understanding Report to harness.generated/.delegation-reports/<child-sid>.md and bind it by content + that conventional path's hash at spawn time; the child's PreToolUse hook reads it back from there, see the pack doc",
-    )
-    .option(
-      "--session-id <id>",
-      "explicit parent session id (default: $CLAUDE_CODE_SESSION_ID, then $CLAUDE_SESSION_ID, then $CODEX_SESSION_ID, then staged .pending-approval)",
-    )
-    .option("--config <path>", "manifest path (default: ~/.harness/harness.yaml; legacy fallback ~/.claude/harness.yaml)")
-    .option("--project <name>", "apply per-project overrides")
-    .action(
-      async (options: {
-        childSession: string;
-        cwd?: string;
-        task?: string;
-        ttl?: string;
-        report?: string;
-        sessionId?: string;
-        config?: string;
-        project?: string;
-      }) => {
-        // Usage-level check ahead of every deeper resolution, with the
-        // exact message the ADR slice 3 acceptance criterion pins.
-        // `issueDelegation` carries the identical check (reason
-        // "no-binding") for callers that invoke it directly (the smoke
-        // runner, tests) without going through commander's flag parsing.
-        if (options.cwd === undefined && options.task === undefined) {
-          throw new HarnessExitError(
-            "a delegation must bind a cwd or a task",
-            EX_FAIL,
-          );
-        }
-        let ttlSeconds: number | undefined;
-        if (options.ttl) {
-          try {
-            ttlSeconds = parseDurationSeconds(options.ttl);
-          } catch (err) {
-            if (err instanceof InvalidDurationError) {
-              throw new HarnessExitError(`--ttl: ${err.message}`, EX_USAGE);
-            }
-            throw err;
-          }
-        }
-        const cliOpts: Parameters<typeof issueDelegation>[0] = {
-          childSessionId: options.childSession,
-        };
-        // `!== undefined` (not truthy), agreeing with the usage check
-        // above: a truthy check would silently drop an explicit `--cwd
-        // ''` / `--task ''` instead of letting `issueDelegation` refuse
-        // it with `invalid-cwd` / `invalid-task` (L3 fix, agent-tasks
-        // 37ad0b05).
-        if (options.cwd !== undefined) cliOpts.cwd = options.cwd;
-        if (options.task !== undefined) cliOpts.taskId = options.task;
-        if (ttlSeconds !== undefined) cliOpts.ttlSeconds = ttlSeconds;
-        if (options.report) cliOpts.reportPath = options.report;
-        if (options.sessionId) cliOpts.parentSessionId = options.sessionId;
-        if (options.config) cliOpts.configPath = options.config;
-        if (options.project) cliOpts.project = options.project;
-
-        const result = await issueDelegation(cliOpts);
-        if (!result.ok) {
-          throw new HarnessExitError(
-            `delegate refused (${result.reason}): ${result.detail}`,
-            EX_FAIL,
-          );
-        }
-        const lines: string[] = [
-          `delegation: ✓ ${result.filePath} (child ${result.childSessionId}, parent ${result.parentSessionId}, expires ${result.expiresAt})`,
-        ];
-        if (result.ledgerFact.written) {
-          lines.push(
-            `ledger:     ✓ wrote understanding-delegated:${result.childSessionId}:${result.parentSessionId} (audit only)`,
-          );
-        } else {
-          lines.push(
-            `ledger:     ⚠ skipped (${result.ledgerFact.reason ?? "unknown"}) (audit only)`,
-          );
-        }
-        stdout(`${lines.join("\n")}\n`);
-      },
-    );
+  registerDelegate(program, { stdout, stderr });
 
   const VALID_DECISION_FILTERS = [
     "allow",
@@ -2441,109 +2268,7 @@ export function buildProgram(opts: RunOptions = {}): Command {
       },
     );
 
-  program
-    .command("audit")
-    .description(
-      "Replay policy decisions from the evidence ledger for a time window, plus an approvals section listing raw understanding-gate approval facts",
-    )
-    .option("--since <duration>", "time window (default: 24h)")
-    .option("--policy <name>", "filter to a single policy by name")
-    .option(
-      "--outcome <outcome>",
-      "filter by decision outcome (allow / warn / require_approval / deny / warn-degraded / deny-degraded)",
-    )
-    .option("--config <path>", "manifest path (default: ~/.harness/harness.yaml; legacy fallback ~/.claude/harness.yaml)")
-    .option("--project <name>", "apply per-project overrides")
-    .option("--session <id>", "grounding session whose audit log to read (default: $CLAUDE_SESSION_ID, then 'default')")
-    .option("--json", "emit JSON instead of a table")
-    .action(async (options: {
-      since?: string;
-      policy?: string;
-      outcome?: string;
-      config?: string;
-      project?: string;
-      session?: string;
-      json?: boolean;
-    }) => {
-      const auditOpts: Parameters<typeof audit>[0] = {};
-      if (options.since) auditOpts.since = options.since;
-      if (options.policy) auditOpts.policy = options.policy;
-      if (options.outcome) auditOpts.outcome = options.outcome as AuditOutcome;
-      if (options.config) auditOpts.configPath = options.config;
-      if (options.project) auditOpts.project = options.project;
-      if (options.session) auditOpts.sessionId = options.session;
-      if (options.json) auditOpts.json = options.json;
-      const result = await audit(auditOpts);
-      stdout(result.output);
-    });
-
-  program
-    .command("session-export [sessionId]")
-    .description(
-      "Export a chronological audit artifact joining the on-disk transcript JSONL and the evidence ledger for a session",
-    )
-    .option("--config <path>", "manifest path (default: ~/.harness/harness.yaml; legacy fallback ~/.claude/harness.yaml)")
-    .option("--project <name>", "apply per-project overrides")
-    .option(
-      "--format <fmt>",
-      "output format: json (default) or jsonl",
-      "json",
-    )
-    .option("-o, --out <file>", "write the export to <file> instead of stdout")
-    .action(
-      async (
-        sessionIdArg: string | undefined,
-        options: { config?: string; project?: string; format?: string; out?: string },
-      ) => {
-        const fmt = options.format ?? "json";
-        if (fmt !== "json" && fmt !== "jsonl") {
-          throw new HarnessExitError(
-            `unknown --format "${fmt}"; expected json or jsonl`,
-            EX_USAGE,
-          );
-        }
-        const exportOpts: Parameters<typeof sessionExport>[0] = {
-          format: fmt as ExportFormat,
-        };
-        if (sessionIdArg) exportOpts.sessionId = sessionIdArg;
-        if (options.config) exportOpts.configPath = options.config;
-        if (options.project) exportOpts.project = options.project;
-        if (options.out) exportOpts.outFile = options.out;
-        const result = await sessionExport(exportOpts);
-        if (!options.out) {
-          stdout(result.output);
-        } else {
-          stdout(`session-export wrote ${result.events.length} events to ${options.out}\n`);
-        }
-      },
-    );
-
-  program
-    .command("dry-run <prompt>")
-    .description(
-      "Statically predict which hooks fire / policies match / memories route for a prompt",
-    )
-    .option("--config <path>", "manifest path (default: ~/.harness/harness.yaml; legacy fallback ~/.claude/harness.yaml)")
-    .option("--project <name>", "apply per-project overrides")
-    .option("--tool <name>", "simulate a PreToolUse event for this tool name")
-    .option("--tool-args <json>", "JSON for tool_input (default: {})")
-    .option("--json", "emit JSON instead of YAML")
-    .action((prompt: string, options: {
-      config?: string;
-      project?: string;
-      tool?: string;
-      toolArgs?: string;
-      json?: boolean;
-    }) => {
-      const dryRunOpts: Parameters<typeof dryRun>[1] = {};
-      if (options.config) dryRunOpts.configPath = options.config;
-      if (options.project) dryRunOpts.project = options.project;
-      if (options.tool) dryRunOpts.tool = options.tool;
-      if (options.toolArgs) dryRunOpts.toolArgs = options.toolArgs;
-      if (options.json) dryRunOpts.json = options.json;
-      const result = dryRun(prompt, dryRunOpts);
-      stdout(result.output);
-    });
+  registerAuditGroup(program, { stdout, stderr });
 
   program
     .command("smoke")
@@ -3117,297 +2842,9 @@ export function buildProgram(opts: RunOptions = {}): Command {
       }
     });
 
-  program
-    .command("uninstall")
-    .description(
-      "Clean teardown of a harness installation. Inventories harness-owned " +
-        "state (manifest, lock, harness.generated/, .understanding-gate/ under " +
-        "the state root; hook groups and mcpServers in ~/.claude/settings.json) " +
-        "and prints it. With --apply, removes it after writing a reversible " +
-        "settings.json backup + snapshot. " +
-        "settings.json.pre-harness-<TS> backups are listed but never deleted, " +
-        "so the operator can hand them to --restore-from <path> (atomic restore " +
-        "from that file) or `rm` them manually.",
-    )
-    .option("--apply", "execute the teardown (default: dry-run listing only)")
-    .option(
-      "--restore-from <path>",
-      "atomic restore: copy this file over settings.json instead of selective removal (implies --apply)",
-    )
-    .option(
-      "--home <path>",
-      "override ~/.claude/ (settings home; without --state it also overrides the state root, for tests / non-default installs)",
-    )
-    .option(
-      "--state <path>",
-      "override the harness state root (default: ~/.harness/, legacy fallback ~/.claude/)",
-    )
-    .option("--settings <path>", "override ~/.claude/settings.json")
-    .action(async (options: { apply?: boolean; restoreFrom?: string; home?: string; state?: string; settings?: string }) => {
-      const cliOpts: Parameters<typeof uninstall>[0] = {};
-      if (options.apply) cliOpts.apply = true;
-      if (options.restoreFrom) cliOpts.restoreFrom = options.restoreFrom;
-      if (options.home) cliOpts.homeDir = options.home;
-      if (options.state) cliOpts.stateDir = options.state;
-      if (options.settings) cliOpts.settingsPath = options.settings;
-      try {
-        const result = await uninstall(cliOpts);
-        const inv = result.inventory;
-        if (result.mode === "list") {
-          const nothing =
-            inv.manifestPath === null &&
-            inv.lockPath === null &&
-            inv.generatedDir === null &&
-            inv.gateStateDir === null &&
-            inv.hookGroups.length === 0 &&
-            inv.mcpServers.length === 0 &&
-            inv.mcpRegistryServers.length === 0 &&
-            inv.preHarnessBackups.length === 0;
-          const rootsLabel =
-            inv.stateDir === inv.homeDir
-              ? inv.homeDir
-              : `${inv.stateDir} (state) + ${inv.homeDir} (settings)`;
-          if (nothing) {
-            stdout(`no harness install found under ${rootsLabel}; nothing to do.\n`);
-            for (const w of inv.warnings) stderr(`warning: ${w}\n`);
-            return;
-          }
-          stdout(`harness install under ${rootsLabel}:\n`);
-          if (inv.manifestPath) stdout(`  manifest:  ${inv.manifestPath}\n`);
-          if (inv.lockPath) stdout(`  lock:      ${inv.lockPath}\n`);
-          if (inv.generatedDir) stdout(`  generated: ${inv.generatedDir}/\n`);
-          if (inv.gateStateDir) stdout(`  gate:      ${inv.gateStateDir}/ (understanding-gate state)\n`);
-          if (inv.hookGroups.length > 0) {
-            stdout(`  hook groups in ${inv.settingsPath}:\n`);
-            for (const g of inv.hookGroups) {
-              const matcherLabel = g.matcher === null ? "(no matcher)" : JSON.stringify(g.matcher);
-              stdout(`    ${g.event}[${g.index}] matcher=${matcherLabel}: ${g.description}\n`);
-            }
-          }
-          if (inv.mcpServers.length > 0) {
-            stdout(`  mcpServers in ${inv.settingsPath}: ${inv.mcpServers.join(", ")}\n`);
-          }
-          if (inv.mcpRegistryServers.length > 0) {
-            stdout(
-              `  mcpServers registered in the claude CLI user-scope registry (${inv.mcpRegistryPath}): ` +
-                `${inv.mcpRegistryServers.join(", ")}\n`,
-            );
-          }
-          if (inv.preHarnessBackups.length > 0) {
-            stdout(`  pre-harness backups:\n`);
-            for (const b of inv.preHarnessBackups) stdout(`    ${b}\n`);
-            stdout(
-              `\n  Restore from one of these with: harness uninstall --restore-from <path>\n`,
-            );
-          }
-          stdout(`\nPass --apply to remove the above. This is a dry-run.\n`);
-          for (const w of inv.warnings) stderr(`warning: ${w}\n`);
-          return;
-        }
-        if (result.mode === "restore") {
-          stdout(`restored ${inv.settingsPath} from ${result.restoredFrom}.\n`);
-          stdout(`backup:   ${result.backupPath}\n`);
-          stdout(`snapshot: ${result.snapshotPath}\n`);
-          if (result.removedFiles.length > 0) {
-            stdout(`removed:\n`);
-            for (const f of result.removedFiles) stdout(`  ${f}\n`);
-          }
-          if (result.mcpRegistryRemovals.length > 0) {
-            stdout(`claude mcp remove (user scope, ${inv.mcpRegistryPath}):\n`);
-            for (const r of result.mcpRegistryRemovals) stdout(`  ${r.name}: ${r.status}\n`);
-          }
-          stdout(
-            `\nTo finish: \`npm uninstall -g @lannguyensi/harness\` (uninstall does not touch the npm install).\n`,
-          );
-          for (const w of inv.warnings) stderr(`warning: ${w}\n`);
-          return;
-        }
-        // apply
-        if (result.backupPath !== null && result.snapshotPath !== null) {
-          stdout(`mutated ${inv.settingsPath}:\n`);
-          if (inv.hookGroups.length > 0) {
-            stdout(`  removed ${inv.hookGroups.length} hook group(s): `);
-            stdout(inv.hookGroups.map((g) => `${g.event}[${g.index}]`).join(", "));
-            stdout(`\n`);
-          }
-          if (inv.mcpServers.length > 0) {
-            stdout(`  removed mcpServers: ${inv.mcpServers.join(", ")}\n`);
-          }
-          stdout(`backup:   ${result.backupPath}\n`);
-          stdout(`snapshot: ${result.snapshotPath}\n`);
-        }
-        if (result.removedFiles.length > 0) {
-          stdout(`removed from disk:\n`);
-          for (const f of result.removedFiles) stdout(`  ${f}\n`);
-          // Explicit kept-list: name whatever survives under the state
-          // root (machines/ + projects/ override layers are
-          // operator-authored; foreign files are not ours to judge) so
-          // the operator never has to discover residue by accident.
-          try {
-            const residue = fs
-              .readdirSync(inv.stateDir)
-              .filter((name) => !name.startsWith("settings.json"));
-            if (residue.length > 0) {
-              stdout(
-                `kept under ${inv.stateDir}: ${residue.join(", ")} (not removed; operator-authored or out of scope)\n`,
-              );
-            }
-          } catch {
-            /* state root itself may be gone or unreadable; nothing to report */
-          }
-        }
-        if (result.mcpRegistryRemovals.length > 0) {
-          stdout(`claude mcp remove (user scope, ${inv.mcpRegistryPath}):\n`);
-          for (const r of result.mcpRegistryRemovals) stdout(`  ${r.name}: ${r.status}\n`);
-        }
-        if (
-          result.backupPath === null &&
-          result.snapshotPath === null &&
-          result.removedFiles.length === 0 &&
-          result.mcpRegistryRemovals.length === 0
-        ) {
-          const rootsLabel =
-            inv.stateDir === inv.homeDir
-              ? inv.homeDir
-              : `${inv.stateDir} (state) + ${inv.homeDir} (settings)`;
-          stdout(`no harness install found under ${rootsLabel}; nothing to remove.\n`);
-        } else {
-          stdout(
-            `\nTo finish: \`npm uninstall -g @lannguyensi/harness\` (uninstall does not touch the npm install).\n`,
-          );
-        }
-        for (const w of inv.warnings) stderr(`warning: ${w}\n`);
-      } catch (err) {
-        if (err instanceof UninstallError) {
-          throw new HarnessExitError(err.message, EX_FAIL);
-        }
-        throw err;
-      }
-    });
+  registerUninstall(program, { stdout, stderr });
 
-  program
-    .command("migrate-home")
-    .description(
-      "Move harness operator-state from the legacy ~/.claude/ root to the runtime-neutral " +
-        "~/.harness/ root introduced in v0.24.0. Dry-run by default; pass --apply to perform " +
-        "the move. Re-running on already-migrated state is a no-op. Moves: harness.yaml, " +
-        "harness.generated/, .understanding-gate/, harness.lock. Does NOT touch settings.json " +
-        "or any other ~/.claude/ contents.",
-    )
-    .option("--apply", "perform the move (default: dry-run report only)")
-    .action(async (options: { apply?: boolean }) => {
-      const result = migrateHome({ ...(options.apply ? { apply: true } : {}) });
-      if (result.outcome === "target-conflict") {
-        throw new HarnessExitError("", EX_FAIL);
-      }
-    });
-
-  // `harness pause` / `harness resume`: operator-only kill switch.
-  // Sibling top-level commands: `pause` must start its own
-  // `program.command(...)` statement. It was previously chained onto the
-  // `migrate-home` block above, which (Commander's `.command()` returns
-  // the new subcommand) registered it as `harness migrate-home pause`
-  // and dropped it from top-level `harness --help`.
-  program
-    .command("pause")
-    .description(
-      "Temporarily make all harness hooks dormant by writing a sentinel under harness.generated/. " +
-        "Operator-only (refuses when $CLAUDE_CODE_SESSION_ID, $CLAUDE_SESSION_ID, or $CODEX_SESSION_ID " +
-        "is set, or stdin is non-TTY). Intended for lockout recovery, debug A/B-tests, and incident " +
-        "hotfixes. NOT for routine gate bypass: for permanent per-policy disable, edit " +
-        "`policies[].enabled` in the manifest.",
-    )
-    .option("--config <path>", "manifest path (default: ~/.harness/harness.yaml; legacy fallback ~/.claude/harness.yaml)")
-    .option("--project <name>", "apply per-project overrides")
-    .option(
-      "--for <duration>",
-      "auto-resume after this duration (e.g. 5m, 1h, PT30S; default: 15m)",
-    )
-    .option("--indefinite", "skip auto-expiry (requires --i-am-the-operator-and-accept-no-auto-resume)")
-    .option(
-      "--i-am-the-operator-and-accept-no-auto-resume",
-      "acknowledge that --indefinite leaves harness dormant until you remember to resume",
-    )
-    .option("--reason <text>", "free-form reason recorded in the sentinel + announced on each hook fire")
-    .option("--i-am-the-operator", "acknowledge a scripted / non-TTY invocation (otherwise refused)")
-    .action(
-      async (options: {
-        config?: string;
-        project?: string;
-        for?: string;
-        indefinite?: boolean;
-        iAmTheOperatorAndAcceptNoAutoResume?: boolean;
-        reason?: string;
-        iAmTheOperator?: boolean;
-      }) => {
-        const cliOpts: Parameters<typeof pauseHarness>[0] = {};
-        if (options.config) cliOpts.configPath = options.config;
-        if (options.project) cliOpts.project = options.project;
-        if (options.for) cliOpts.forDuration = options.for;
-        if (options.indefinite) cliOpts.indefinite = true;
-        if (options.iAmTheOperatorAndAcceptNoAutoResume) cliOpts.acceptNoAutoResume = true;
-        if (options.reason) cliOpts.reason = options.reason;
-        if (options.iAmTheOperator) cliOpts.iAmTheOperator = true;
-        const result = await pauseHarness(cliOpts);
-        const lines: string[] = [];
-        if (result.alreadyPaused) {
-          lines.push("note:    harness was already paused; sentinel overwritten with new expiry");
-        }
-        const expiry =
-          result.sentinel.expiresAt === null
-            ? "indefinite (no auto-resume)"
-            : `auto-resumes at ${result.sentinel.expiresAt}`;
-        lines.push(`paused:  ✓ ${result.sentinelPath}`);
-        lines.push(`expiry:  ${expiry}`);
-        if (result.sentinel.reason !== null) {
-          lines.push(`reason:  ${result.sentinel.reason}`);
-        }
-        if (result.ledger.ok) {
-          lines.push(`ledger:  ✓ wrote ${result.ledger.tag} (audit)`);
-        } else {
-          lines.push(`ledger:  ⚠ skipped (${result.ledger.reason ?? "unknown"}) (audit)`);
-        }
-        lines.push("");
-        lines.push("Hooks will allow + emit a stderr notice while paused. Run `harness resume` to re-enable.");
-        stdout(`${lines.join("\n")}\n`);
-      },
-    );
-
-  program
-    .command("resume")
-    .description(
-      "Delete the pause sentinel and re-enable harness hooks. Operator-only. Idempotent: " +
-        "running against an un-paused install exits 0 with a notice.",
-    )
-    .option("--config <path>", "manifest path (default: ~/.harness/harness.yaml; legacy fallback ~/.claude/harness.yaml)")
-    .option("--project <name>", "apply per-project overrides")
-    .option("--i-am-the-operator", "acknowledge a scripted / non-TTY invocation (otherwise refused)")
-    .action(
-      async (options: { config?: string; project?: string; iAmTheOperator?: boolean }) => {
-        const cliOpts: Parameters<typeof resumeHarness>[0] = {};
-        if (options.config) cliOpts.configPath = options.config;
-        if (options.project) cliOpts.project = options.project;
-        if (options.iAmTheOperator) cliOpts.iAmTheOperator = true;
-        const result = await resumeHarness(cliOpts);
-        const lines: string[] = [];
-        if (!result.wasPaused) {
-          lines.push(`resume:  · harness was not paused (${result.sentinelPath} did not exist)`);
-        } else {
-          lines.push(`resume:  ✓ deleted ${result.sentinelPath}`);
-          if (result.previousSentinel) {
-            const prev = result.previousSentinel;
-            lines.push(`prev:    pausedAt=${prev.pausedAt} expiresAt=${prev.expiresAt ?? "indefinite"}`);
-            if (prev.reason !== null) lines.push(`reason:  ${prev.reason}`);
-          }
-          if (result.ledger.ok) {
-            lines.push(`ledger:  ✓ wrote ${result.ledger.tag} (audit)`);
-          } else {
-            lines.push(`ledger:  ⚠ skipped (${result.ledger.reason ?? "unknown"}) (audit)`);
-          }
-        }
-        stdout(`${lines.join("\n")}\n`);
-      },
-    );
+  registerOperatorLifecycle(program, { stdout, stderr });
 
   const policy = program.command("policy").description("Policy runtime verbs");
   policy
