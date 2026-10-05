@@ -137,6 +137,8 @@ export const PIPELINE_MATRIX: readonly MatrixRow[] = [
   w("quoted-pipe", `find ${D} -name "a|cat -x" -delete`),
   w("quoted-pipe", `find ${D} -name a\\|cat -delete`),
   w("quoted-pipe", `find ${D} -name $'a|cat -x' -delete`),
+  w("quoted-pipe", `find ${D} -name $'a\\'|cat -x' -delete`),
+  w("quoted-pipe", `find ${D} -name $"a|cat -x" -delete`),
   w("quoted-pipe", `find ${D} -name 'a|cat -x' -delete | head`),
   w("quoted-pipe", `cat x | find ${D} -name "a|cat -x" -delete`),
   w("quoted-pipe", "find solution-verdict* -name 'a|cat -x' -delete"),
