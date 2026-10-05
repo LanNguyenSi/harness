@@ -1188,15 +1188,20 @@ describe.each(RUNTIMES)("persisted report is evidence, not authority (task 74023
   }
 
   for (const kind of unchargedKinds) {
-    it(`scan budget: more ${kind} than the per-entry floor allows before the approved report deny with the mismatch reason (fail closed)`, async () => {
+    it(`scan bound: more ${kind} than the entry bound allows before the approved report deny, naming the bound (fail closed, nothing is opened)`, async () => {
       const generatedDir = path.join(tmp, "harness.generated");
       const reportsDir = path.join(tmp, "reports");
       await approveRealFlow(generatedDir, reportsDir);
       plantUnchargedEntries(reportsDir, kind, floorEntryLimit + 1);
       const out = await rt.run({ generatedDir, reportsDir });
       expect(out.blocked).toBe(true);
-      expect(out.detail).toMatch(MISMATCH("session"));
-      expect(out.detail).toMatch(/more report data than the gate-read scan budget covers/);
+      // The listing stops at the entry bound before the scan starts, so the
+      // reason names that bound (not the mismatch or the byte budget).
+      expect(out.detail).toMatch(
+        /no report in the reports directory could be checked against the content the session approval marker was signed for \(the reports directory holds more than 8192 \*\.json entries, or more than 16384 entries of any name, more than the gate reads; remove /,
+      );
+      expect(out.detail).not.toMatch(/the approved report was changed or removed after approval/);
+      expect(out.detail).not.toMatch(/more report data than the gate-read scan budget covers/);
     }, PLANTED_DIR_TEST_TIMEOUT_MS);
 
     it(`scan budget: just under the per-entry floor limit the same directory of ${kind} still allows`, async () => {

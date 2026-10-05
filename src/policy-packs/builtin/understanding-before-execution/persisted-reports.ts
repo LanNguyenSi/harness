@@ -1032,6 +1032,12 @@ interface ReportHashScan {
   matched: Set<string>;
   /** True when the scan stopped at the `MAX_HASH_SCAN_BYTES` budget with a wanted hash still unfound. */
   budgetExhausted: boolean;
+  /**
+   * True when the directory listing crossed {@link MAX_HOOK_LISTING_ENTRIES}
+   * `*.json` entries, or twice that many entries of any name: no entry was
+   * opened and the caller must deny (a directory this large is not read).
+   */
+  truncated: boolean;
 }
 
 /**
@@ -1047,21 +1053,34 @@ interface ReportHashScan {
  * and `MIN_SCAN_ENTRY_COST_BYTES`; once the charges reach `MAX_HASH_SCAN_BYTES`
  * with a wanted hash still unfound the scan stops and sets `budgetExhausted`,
  * so the number of entries opened and the bytes read (about 32 MiB, the last
- * file read may add up to the per-file cap) are both bounded by the budget,
- * however many entries the directory holds. The `readdir` and the name sort
- * of the directory itself are outside the budget. The evidence read a refused
- * marker falls through to has its own entry bound
- * ({@link MAX_HOOK_LISTING_ENTRIES}).
+ * file read may add up to the per-file cap) are both bounded by the budget.
+ *
+ * The directory is listed through {@link listDirNamesBounded}, one entry at a
+ * time, so the listing is bounded too: it stops as soon as it has seen more
+ * than {@link MAX_HOOK_LISTING_ENTRIES} `*.json` names, or twice that many
+ * entries of any name, and then no entry is opened and the scan sets
+ * `truncated` (the caller denies: fail closed). Within those bounds the
+ * selection is unchanged: every `*.json` name, newest first (descending byte
+ * order), within the byte budget. Planted names that sort after the report
+ * names are read first, so they spend the budget before the real report is
+ * reached once they and the other entries add up to 32 MiB of charges; past
+ * the entry bound the scan does not start. Either way it denies, never
+ * allows.
  */
 function scanReportHashes(dir: string, wanted: ReadonlySet<string>): ReportHashScan {
-  const scan: ReportHashScan = { files: 0, matched: new Set<string>(), budgetExhausted: false };
-  let names: string[];
-  try {
-    names = fs.readdirSync(dir);
-  } catch {
+  const scan: ReportHashScan = {
+    files: 0,
+    matched: new Set<string>(),
+    budgetExhausted: false,
+    truncated: false,
+  };
+  const listed = listDirNamesBounded(dir, ".json", MAX_HOOK_LISTING_ENTRIES);
+  if (listed.truncated) {
+    scan.truncated = true;
     return scan;
   }
-  names = names.filter((name) => name.endsWith(".json")).sort().reverse();
+  // Ascending byte order from the listing; the scan takes the newest name first.
+  const names = listed.names.reverse();
   let hashedBytes = 0; // budget charged so far, see the charge below
   for (const name of names) {
     scan.files += 1;
@@ -1124,16 +1143,21 @@ function scanReportHashes(dir: string, wanted: ReadonlySet<string>): ReportHashS
  * (bytes read or the floor, whichever is larger, whatever the read returned):
  * past the budget the check denies with the mismatch reason (fail closed).
  * That bounds the entries opened (8192) and the bytes read (about 32 MiB, the
- * last file read may add up to the 1 MiB per-file cap). Three costs remain.
- * A legitimate approval whose report sits behind that much newer report data
- * (by name, descending) is denied; re-approving writes a new, newest report
- * and recovers only when the newer entries are real reports: planted `*.json`
- * names that sort after the timestamped report names (for example names
- * starting with a letter) stay newer than any new report and keep denying
- * until removed. The `readdir` plus name sort of the directory itself are not
- * charged, so a directory of millions of entries still costs that listing
- * before this scan starts (the scan runs when a signed marker is present). The
- * hash scan is not the whole hook: the other full-directory reads on it (the
+ * last file read may add up to the 1 MiB per-file cap). The directory listing
+ * is bounded as well ({@link listDirNamesBounded}, one entry at a time): past
+ * {@link MAX_HOOK_LISTING_ENTRIES} `*.json` entries, or twice that many entries
+ * of any name, the check opens nothing and denies with a reason that names the
+ * bound and the remedy (fail closed), so the listing cost is bounded by that
+ * count however many names are planted. Two costs remain. A legitimate
+ * approval whose report sits behind that much newer report data (by name,
+ * descending) is denied; re-approving writes a new, newest report and recovers
+ * only when the newer entries are real reports: planted `*.json` names that
+ * sort after the timestamped report names (for example names starting with a
+ * letter) stay newer than any new report and keep denying until removed (the
+ * same holds past the entry bound, where the scan does not start at all).
+ * A reports directory with more entries than the bound is denied even when the
+ * approved report is among them, until entries are removed by hand. The hash
+ * scan is not the whole hook: the other full-directory reads on it (the
  * evidence read, the auto-approval listing, the delegation lookup and the
  * parse-error lookup) list the directory entry by entry and stop once
  * {@link MAX_HOOK_LISTING_ENTRIES} entries are crossed, and charge the entries
@@ -1175,6 +1199,20 @@ export function verifyApprovedReportHash(
     wanted.add(fallback.reportContentHash);
   }
   const scan = scanReportHashes(reportsDir, wanted);
+  if (scan.truncated) {
+    // Checked before the "no report file" allow below: a directory too large
+    // to list holds report files the gate did not read, so it is not empty.
+    const truncatedKinds =
+      fallback !== null
+        ? `${primary.kind} and ${fallback.kind} approval markers were`
+        : `${primary.kind} approval marker was`;
+    return {
+      ok: false,
+      detail:
+        `no report in the reports directory could be checked against the content the ${truncatedKinds} signed for ` +
+        `(the reports directory ${ENTRIES_TRUNCATED_DETAIL})`,
+    };
+  }
   if (scan.files === 0 || scan.matched.has(primary.reportContentHash)) {
     return { ok: true, kind: primary.kind };
   }
