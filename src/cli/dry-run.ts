@@ -10,9 +10,16 @@ import {
   normalizeCommand,
   normalizeCommandAmpAware,
   normalizeCommandQuoteAware,
+  segmentViewOf,
+  type CommandSegment,
 } from "../runtime/command-normalize.js";
-import { resolveGitContext } from "../runtime/git-context.js";
-import { emptyIdentifierGuard } from "../runtime/intercept.js";
+import { resolveGitContext, type GitRepoContext } from "../runtime/git-context.js";
+import {
+  emptyIdentifierGuard,
+  MAX_ATTRIBUTED_CONTEXTS,
+  resolveAttributedContexts,
+  usesPerRepoBuiltins,
+} from "../runtime/intercept.js";
 import type { Hook, Manifest, Policy } from "../schema/index.js";
 import { EX_USAGE, HarnessExitError } from "./exit-codes.js";
 import { loadManifest, type LoaderOptions } from "./loader.js";
@@ -34,7 +41,19 @@ export interface DryRunHookHit {
 
 export interface DryRunPolicyHit {
   name: string;
+  /**
+   * The cwd-context demand (unchanged shape; kept for `--json` consumers).
+   * For a command that names other repositories see `ledgerQueries`.
+   */
   ledgerQuery: string;
+  /**
+   * Every demand the runtime would make for this policy: the cwd context
+   * plus one per distinct repository a trigger-satisfying command segment
+   * names (additive, bounded by `MAX_ATTRIBUTED_CONTEXTS`). A single entry
+   * for a policy without per-repo builtins; one bounded-case text instead
+   * of tags when the command names too many distinct targets.
+   */
+  ledgerQueries: string[];
   requires: Policy["requires"];
   enforcement: Policy["enforcement"];
   triggerEvent: string;
@@ -68,13 +87,18 @@ export interface DryRunResult {
 
 const PROMPT_EVENTS = new Set(["UserPromptSubmit", "SessionStart"]);
 
-function builtinsFor(opts: DryRunOptions, tool: string | null): ExtractBuiltins {
+function builtinsFor(
+  opts: DryRunOptions,
+  tool: string | null,
+  gitContext: GitRepoContext,
+): ExtractBuiltins {
   const fromOpts = opts.builtins ?? {};
-  // Derive REPO / BRANCH from the cwd so the prediction matches what the
-  // intercept engine resolves at runtime; an explicit builtins override
-  // (tests, or a deliberate caller) still wins.
+  // The cwd-context REPO / BRANCH, derived from the cwd the same way the
+  // intercept engine does; an explicit builtins override (tests, or a
+  // deliberate caller) still wins. Targets a command names beyond the cwd
+  // are added per policy by `ledgerQueriesFor`, through the runtime's own
+  // `resolveAttributedContexts`.
   const cwd = fromOpts.CWD ?? process.cwd();
-  const gitContext = resolveGitContext(cwd);
   return {
     SESSION_ID: fromOpts.SESSION_ID ?? "dry-run",
     REPO: fromOpts.REPO ?? gitContext.repo,
@@ -162,11 +186,10 @@ function policyMatchesTool(
     // reintroduce that SAME class of contradiction for the bare-`&` family
     // (`A=x&env -C /tmp git status`, `echo hi & nice git status`): `policy
     // intercept` now blocks those via `normalizeCommandAmpAware`, so dry-run
-    // must try it too. The REPO/BRANCH half of this file (`builtinsFor`,
-    // cwd-only) stays in parity with the runtime, which is also cwd-only for
-    // `${REPO}`/`${BRANCH}` — see `src/cli/policy/intercept.ts`'s comment
-    // above `cwdGitContext` for why a per-command target directory is
-    // deliberately not consulted.
+    // must try it too. The REPO/BRANCH half of this file (`ledgerQueriesFor`)
+    // reuses the runtime's own per-repo attribution
+    // (`resolveAttributedContexts`), so a command naming another repository
+    // predicts the same additive demands `policy intercept` makes.
     //
     // FOURTH ARM (task f561e44c, closes the cf3dff51 follow-up): task
     // cf3dff51 wired `normalizeCommandQuoteAware` (a quote-aware BOUNDARY_RE
@@ -230,6 +253,69 @@ function staticLedgerQuery(
   return sub.result;
 }
 
+/**
+ * Predict every ledger demand for a matched policy. A policy whose
+ * `requires:` uses `${REPO}`/`${BRANCH}`/`at_head` is resolved through the
+ * runtime's own `resolveAttributedContexts` (no copy of the attribution
+ * loop), so the cwd context plus each distinct repository a trigger-
+ * satisfying segment names yield one demand each, and the runtime's bound
+ * yields one ambiguity text instead of a tag list.
+ */
+function ledgerQueriesFor(
+  policy: Policy,
+  ctx: ExtractEventContext,
+  builtins: ExtractBuiltins,
+  attribution: AttributionInput,
+): string[] {
+  if (!usesPerRepoBuiltins(policy)) return [staticLedgerQuery(policy, ctx, builtins)];
+  const result = resolveAttributedContexts(
+    policy,
+    attribution.segments,
+    builtins,
+    attribution.cwdHeadSha,
+    attribution.gitContextMemo,
+    attribution.insideRepositoryMemo,
+    attribution.repoOverridden,
+    attribution.branchOverridden,
+    ctx,
+  );
+  if (result.kind === "bounded") {
+    return [
+      `(bounded: ambiguous: this command names at least ${result.distinctCount} distinct ` +
+        `repository targets for this policy, exceeding the ${MAX_ATTRIBUTED_CONTEXTS}-context ` +
+        `bound; no context queried)`,
+    ];
+  }
+  return result.contexts.map((c) => staticLedgerQuery(policy, ctx, c.builtins));
+}
+
+interface AttributionInput {
+  segments: readonly CommandSegment[];
+  cwdHeadSha: string | undefined;
+  gitContextMemo: Map<string, GitRepoContext>;
+  insideRepositoryMemo: Map<string, boolean>;
+  repoOverridden: boolean;
+  branchOverridden: boolean;
+}
+
+function policyHit(
+  policy: Policy,
+  ctx: ExtractEventContext,
+  builtins: ExtractBuiltins,
+  attribution: AttributionInput,
+): DryRunPolicyHit {
+  const ledgerQueries = ledgerQueriesFor(policy, ctx, builtins, attribution);
+  return {
+    name: policy.name,
+    // The cwd context is always the first demand the runtime makes.
+    ledgerQuery: staticLedgerQuery(policy, ctx, builtins),
+    ledgerQueries,
+    requires: policy.requires,
+    enforcement: policy.enforcement,
+    triggerEvent: policy.trigger.event,
+  };
+}
+
 function formatYaml(report: DryRunReport): string {
   // Hide raw `null` from YAML output for the no-tool case.
   const visible: Record<string, unknown> = {
@@ -264,12 +350,23 @@ export function dryRun(prompt: string, opts: DryRunOptions = {}): DryRunResult {
     }
   }
 
-  const builtins = builtinsFor(opts, tool);
+  const cwdGitContext = resolveGitContext(opts.builtins?.CWD ?? process.cwd());
+  const builtins = builtinsFor(opts, tool, cwdGitContext);
   const ctx: ExtractEventContext = {
     toolArgs,
     event: { hook_event_name: tool ? "PreToolUse" : "UserPromptSubmit", tool_name: tool, prompt },
     session: { id: builtins.SESSION_ID },
     git: {},
+  };
+
+  const command = (toolArgs as { command?: unknown } | undefined)?.command;
+  const attribution: AttributionInput = {
+    segments: tool !== null && typeof command === "string" ? (segmentViewOf(command) ?? []) : [],
+    cwdHeadSha: cwdGitContext.sha.length > 0 ? cwdGitContext.sha : undefined,
+    gitContextMemo: new Map(),
+    insideRepositoryMemo: new Map(),
+    repoOverridden: opts.builtins?.REPO !== undefined,
+    branchOverridden: opts.builtins?.BRANCH !== undefined,
   };
 
   const hooks = buildHookHits(manifest, tool);
@@ -279,13 +376,7 @@ export function dryRun(prompt: string, opts: DryRunOptions = {}): DryRunResult {
   for (const policy of manifest.policies) {
     if (PROMPT_EVENTS.has(policy.trigger.event)) {
       if (policyMatchesPrompt(policy, prompt)) {
-        matching.push({
-          name: policy.name,
-          ledgerQuery: staticLedgerQuery(policy, ctx, builtins),
-          requires: policy.requires,
-          enforcement: policy.enforcement,
-          triggerEvent: policy.trigger.event,
-        });
+        matching.push(policyHit(policy, ctx, builtins, attribution));
       }
       continue;
     }
@@ -300,13 +391,7 @@ export function dryRun(prompt: string, opts: DryRunOptions = {}): DryRunResult {
     }
     const verdict = policyMatchesTool(policy, tool, toolArgs);
     if (verdict.matched) {
-      matching.push({
-        name: policy.name,
-        ledgerQuery: staticLedgerQuery(policy, ctx, builtins),
-        requires: policy.requires,
-        enforcement: policy.enforcement,
-        triggerEvent: policy.trigger.event,
-      });
+      matching.push(policyHit(policy, ctx, builtins, attribution));
     } else {
       couldMatch.push({
         name: policy.name,

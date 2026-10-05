@@ -2,11 +2,17 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
+import { Readable, Writable } from "node:stream";
 import { afterEach, describe, expect, it } from "vitest";
 import { dryRun } from "../../src/cli/dry-run.js";
 import { HarnessExitError } from "../../src/cli/exit-codes.js";
 import { loadManifest } from "../../src/cli/loader.js";
-import { policyMatchesEvent, type ToolEvent } from "../../src/runtime/intercept.js";
+import { runInterceptCli } from "../../src/cli/policy/intercept.js";
+import {
+  MAX_ATTRIBUTED_CONTEXTS,
+  policyMatchesEvent,
+  type ToolEvent,
+} from "../../src/runtime/intercept.js";
 import type { Policy } from "../../src/schema/index.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -493,5 +499,145 @@ describe("dry-run: trigger.input_match (task 2699b476)", () => {
     // Negative control: the payload list is not uniformly true or false,
     // so the equality above is discriminating rather than trivially met.
     expect(runtimeVerdicts).toEqual([true, false, false, false, false, false, false]);
+  });
+});
+
+describe("dry-run — additive per-repo demands for a target-naming command", () => {
+  function makeRepo(name: string, branch: string): string {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "harness-dryrun-attr-"));
+    cleanups.push(() => fs.rmSync(root, { recursive: true, force: true }));
+    const repo = path.join(root, name);
+    fs.mkdirSync(path.join(repo, ".git"), { recursive: true });
+    fs.writeFileSync(path.join(repo, ".git", "HEAD"), `ref: refs/heads/${branch}\n`);
+    return repo;
+  }
+
+  function hit(command: string, cwd: string, policy: string) {
+    const r = dryRun("look around", {
+      configPath: FULL_MANIFEST,
+      tool: "Bash",
+      toolArgs: JSON.stringify({ command }),
+      builtins: { CWD: cwd },
+    });
+    const found = r.report.matchingPolicies.find((p) => p.name === policy);
+    expect(found, `${policy} should match ${command}`).toBeDefined();
+    return found!;
+  }
+
+  it("predicts preflight:<A> and preflight:<B> for `git -C <B> log` run from A", () => {
+    const a = makeRepo("repo-a", "main");
+    const b = makeRepo("repo-b", "main");
+    const h = hit(`git -C ${b} log`, a, "preflight-before-investigation");
+    expect([...h.ledgerQueries].sort()).toEqual(["preflight:repo-a", "preflight:repo-b"]);
+    // cwd value stays for --json consumers.
+    expect(h.ledgerQuery).toBe("preflight:repo-a");
+  });
+
+  it("predicts both branch tags for `git -C <B> push` with B on another branch", () => {
+    const a = makeRepo("repo-a", "main");
+    const b = makeRepo("repo-b", "feature-x");
+    const h = hit(`git -C ${b} push origin main`, a, "preflight-before-push");
+    expect([...h.ledgerQueries].sort()).toEqual(["preflight:feature-x", "preflight:main"]);
+  });
+
+  it("collapses a subdirectory of the cwd repo into one demand", () => {
+    const a = makeRepo("repo-a", "main");
+    const sub = path.join(a, "subdir");
+    fs.mkdirSync(sub);
+    const h = hit(`git -C ${sub} status`, a, "preflight-before-investigation");
+    expect(h.ledgerQueries).toEqual(["preflight:repo-a"]);
+  });
+
+  it("keeps a single demand for a command naming no other repository", () => {
+    const a = makeRepo("repo-a", "main");
+    const h = hit("git status", a, "preflight-before-investigation");
+    expect(h.ledgerQueries).toEqual(["preflight:repo-a"]);
+  });
+
+  it("reports the bounded ambiguity text instead of tags for five distinct foreign repos", () => {
+    const a = makeRepo("repo-a", "main");
+    const others = ["b", "c", "d", "e", "f"].map((n) => makeRepo(`repo-${n}`, "main"));
+    const command = others.map((o) => `git -C ${o} log`).join(" && ");
+    const h = hit(command, a, "preflight-before-investigation");
+    expect(h.ledgerQueries).toHaveLength(1);
+    expect(h.ledgerQueries[0]).toContain("bounded");
+    expect(h.ledgerQueries[0]).toContain(`${MAX_ATTRIBUTED_CONTEXTS}-context bound`);
+    expect(h.ledgerQueries[0]).not.toMatch(/preflight:repo-/);
+  });
+
+  it("treats an explicit REPO override as an override in an attributed context", () => {
+    const a = makeRepo("repo-a", "main");
+    const b = makeRepo("repo-b", "main");
+    const r = dryRun("x", {
+      configPath: FULL_MANIFEST,
+      tool: "Bash",
+      toolArgs: JSON.stringify({ command: `git -C ${b} log` }),
+      builtins: { CWD: a, REPO: "forced" },
+    });
+    const h = r.report.matchingPolicies.find((p) => p.name === "preflight-before-investigation");
+    // Two contexts (cwd and B), both with REPO held at the override, exactly
+    // as the runtime evaluates them: B's own repo name never replaces it.
+    expect(h?.ledgerQueries).toEqual(["preflight:forced", "preflight:forced"]);
+  });
+
+  it("matches the demands `policy intercept` makes for the same command", async () => {
+    const a = makeRepo("repo-a", "main");
+    const b = makeRepo("repo-b", "feature-x");
+    const { manifest } = loadManifest({ configPath: FULL_MANIFEST });
+    const commands = [
+      `git -C ${b} log`,
+      `git -C ${b} push origin main`,
+      `git -C ${path.join(a, ".")} status`,
+    ];
+    for (const command of commands) {
+      const chunks: string[] = [];
+      const sink = new Writable({
+        write(chunk, _enc, cb) {
+          chunks.push(chunk.toString("utf8"));
+          cb();
+        },
+      });
+      const runtime = await runInterceptCli({
+        stdin: Readable.from([
+          JSON.stringify({
+            hook_event_name: "PreToolUse",
+            tool_name: "Bash",
+            tool_input: { command },
+            session_id: "dryrun-parity",
+            cwd: a,
+          }),
+        ]),
+        stdout: sink,
+        stderr: sink,
+        manifest,
+        ledger: {
+          async query() {
+            return { kind: "ok", entries: [] };
+          },
+          async record() {
+            /* no-op */
+          },
+        },
+      });
+      for (const policy of ["preflight-before-investigation", "preflight-before-push"]) {
+        const fromRuntime = runtime.decisions
+          .filter((d) => d.policyName === policy)
+          .map((d) => d.ledgerTag)
+          .sort();
+        const predicted = dryRun("x", {
+          configPath: FULL_MANIFEST,
+          tool: "Bash",
+          toolArgs: JSON.stringify({ command }),
+          builtins: { CWD: a },
+        })
+          .report.matchingPolicies.filter((p) => p.name === policy)
+          .flatMap((p) => p.ledgerQueries)
+          .sort();
+        expect(predicted, `${policy} for ${command}`).toEqual(fromRuntime);
+      }
+    }
+    // Negative control: the corpus includes a command that names a foreign
+    // repository, so the equality above is not met by cwd-only output.
+    expect(commands.some((c) => c.includes(b))).toBe(true);
   });
 });
