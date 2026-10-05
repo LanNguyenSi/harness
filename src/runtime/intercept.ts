@@ -785,16 +785,23 @@ const ENVELOPE_CONTROL_CHARS = new RegExp(
 );
 
 /**
- * Characters that are not printable text but can reorder or hide what a
- * reader sees or start a new "line" in model-visible text: C1 controls
- * (U+0080-U+009F, including NEL), the line and paragraph separators
- * (U+2028, U+2029), the bidi marks (U+200E, U+200F, U+061C), the bidi
- * embedding/override controls (U+202A-U+202E) and the bidi isolates
- * (U+2066-U+2069). Each is replaced by a visible `\u{XXXX}` escape rather
- * than dropped, so a reader still sees that the name carried it. Written as
- * escapes so this source file holds none of them raw.
+ * Characters that are not printable text but can hide, reorder or smuggle
+ * what a reader sees, or start a new "line" in model-visible text. Matched
+ * as a rule rather than a hand list: every code point with General_Category
+ * Cf (format: bidi marks and controls, U+200B, U+FEFF, U+2060-U+2064,
+ * U+206A-U+206F, U+FFF9-U+FFFB, U+180E, U+00AD, the tag characters
+ * U+E0001 and U+E0020-U+E007F, ...) or Default_Ignorable_Code_Point (adds
+ * the variation selectors U+FE00-U+FE0F and U+E0100-U+E01EF, U+034F,
+ * U+3164 and the rest of U+E0000-U+E0FFF), plus the C1 controls
+ * (U+0080-U+009F, including NEL) and the line and paragraph separators
+ * (U+2028, U+2029). The zero width joiner U+200D is kept, because it joins
+ * emoji sequences that are printable text. The backslash is escaped too, so
+ * a name that literally spells an escape cannot be mistaken for one. Each
+ * match is replaced by a visible `\u{XXXX}` escape (four or five hex
+ * digits) rather than dropped, so a reader still sees that the name carried
+ * it. Written as escapes so this source file holds none of them raw.
  */
-const ENVELOPE_ESCAPED_CHARS = /[\u0080-\u009F\u061C\u200E\u200F\u2028\u2029\u202A-\u202E\u2066-\u2069]/;
+const ENVELOPE_ESCAPED_CHARS = /(?!\u200D)[\u0080-\u009F\u2028\u2029\\\p{Cf}\p{Default_Ignorable_Code_Point}]/u;
 
 const ENVELOPE_MAX_LENGTH = 200;
 
@@ -875,8 +882,9 @@ const EMPTY_REPO_MESSAGE =
  * resolved `${REPO}` value: the work-tree basename, a `HARNESS_REPO`
  * override, or the value of a policy extract named `REPO` (which can
  * carry tool input), so it is cleaned and bounded like any other untrusted
- * text before it reaches the agent envelope: control characters blanked,
- * at most 200 characters (`sanitizeEnvelopeReason`).
+ * text before it reaches the agent envelope: C0 controls and DEL
+ * collapsed to a space, invisible and format characters escaped as
+ * `\u{XXXX}`, at most 200 characters (`sanitizeEnvelopeReason`).
  */
 function emptyBranchMessage(repo: string): string {
   const name = sanitizeEnvelopeReason(repo);
