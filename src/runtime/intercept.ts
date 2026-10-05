@@ -47,6 +47,7 @@ import {
 import { DEFAULT_SAFE_DELETION_ROOTS } from "../schema/risk.js";
 import { resolveGitContext, type GitRepoContext } from "./git-context.js";
 import { POLICY_DECISION_TYPE } from "../io/ledger-record.js";
+import { INVISIBLE_CHARACTER_CLASS } from "../io/invisible-characters.js";
 import { classifyRisk, type RiskProfile } from "./risk-classifier.js";
 import { resolveSessionId } from "./session-id.js";
 import {
@@ -786,10 +787,11 @@ const ENVELOPE_CONTROL_CHARS = new RegExp(
 
 /**
  * Characters that are not printable text but can hide, reorder or smuggle
- * what a reader sees, or start a new "line" in model-visible text. Matched
- * as a rule rather than a hand list: every code point with General_Category
- * Cf (format: bidi marks and controls, U+200B, U+FEFF, U+2060-U+2064,
- * U+206A-U+206F, U+FFF9-U+FFFB, U+180E, U+00AD, the tag characters
+ * what a reader sees, or start a new "line" in model-visible text. Matched as
+ * the shared rule in `src/io/invisible-characters.ts` rather than a hand list:
+ * every code point with General_Category Cf (format: bidi marks and controls,
+ * U+200B, U+FEFF, U+2060-U+2064, U+206A-U+206F, U+FFF9-U+FFFB, U+180E,
+ * U+00AD, the tag characters
  * U+E0001 and U+E0020-U+E007F, ...) or Default_Ignorable_Code_Point (adds
  * the variation selectors U+FE00-U+FE0F and U+E0100-U+E01EF, U+034F,
  * U+3164 and the rest of U+E0000-U+E0FFF), plus the C1 controls
@@ -801,7 +803,10 @@ const ENVELOPE_CONTROL_CHARS = new RegExp(
  * digits) rather than dropped, so a reader still sees that the name carried
  * it. Written as escapes so this source file holds none of them raw.
  */
-const ENVELOPE_ESCAPED_CHARS = /(?!\u200D)[\u0080-\u009F\u2028\u2029\\\p{Cf}\p{Default_Ignorable_Code_Point}]/u;
+const ENVELOPE_ESCAPED_CHARS = new RegExp(
+  `(?!\\u200D)[\\u0080-\\u009F\\u2028\\u2029\\\\${INVISIBLE_CHARACTER_CLASS}]`,
+  "u",
+);
 
 const ENVELOPE_MAX_LENGTH = 200;
 
