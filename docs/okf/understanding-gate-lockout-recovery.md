@@ -3,9 +3,11 @@ type: runbook
 title: Understanding-gate lockout recovery
 description: Operator procedure to unblock a session locked by the understanding-before-execution PreToolUse gate via `harness approve understanding`, including the 6-tier session-id resolution and the expiry semantics that re-arm the gate.
 tags: [runbook, understanding-gate, lockout, recovery, operator]
-timestamp: 2026-10-05T09:54:49Z
+timestamp: 2026-10-05T14:17:30Z
 sources:
   - src/cli/pack/auto-approve-path.ts
+  - src/io/display-path.ts
+  - src/io/invisible-characters.ts
   - src/cli/approve/understanding.ts
   - src/cli/audit.ts
   - src/cli/index.ts
@@ -70,7 +72,7 @@ Recovery is **operator-only**, from a shell the hooks do not gate (the `!`-shell
    5. `<generatedDir>/.pending-approval`, staged by the PreToolUse blocker on every block/ask (Claude path: `src/cli/pack/hook-pre-tool-use.ts:1000#"writePendingApproval(generatedDir, sessionId);"`; Codex path: `src/cli/pack/hook-codex-pre-tool-use.ts:524#"writePendingApproval(generatedDir, sessionId);"`) and by `harness session-start preflight` on every run with a resolved id (`src/cli/session-start/index.ts`). Deleted after a successful resolve **and** marker write, so a stale id cannot be revived; a failed marker write keeps it for retry.
    6. the freshest persisted report under the reports dir whose JSON `sessionId` is non-null **and** whose `approvalStatus` is `pending` (approved/expired reports belong to finished cycles and are never adopted, harness/56f51f2b). The CLI prints a loud "session id was GUESSED" warning naming the report file — verify it is your live session before trusting the marker.
 
-   **Terminal display.** Report-controlled strings are shown as quoted escaped literals: parse-error summaries, previous approval status, report mode, fallback creation time, and the resolved session id and marker path. A malformed-looking tier-6 session id is escaped for display rather than newly rejected; the actual session id and marker filename remain unchanged. Unicode format characters (including bidi overrides), U+2028 and U+2029 are escaped as `\uXXXX`, with two UTF-16 escapes for supplementary format characters (`escapeForDisplay`, `src/io/display-path.ts`). `harness gc` uses the same rendering for in-flight `approvedAt` diagnostics. Escaped display text is a representation, not a replacement for the stored value.
+   **Terminal display.** Report-controlled strings are shown as quoted escaped literals: parse-error summaries, previous approval status, report mode, fallback creation time, and the resolved session id and marker path. A malformed-looking tier-6 session id is escaped for display rather than newly rejected; the actual session id and marker filename remain unchanged. Every character of the shared invisible-character rule (General_Category Cf, including bidi overrides, plus Default_Ignorable_Code_Point such as variation selectors and Hangul fillers, with the zero width joiner escaped too; `src/io/invisible-characters.ts`), the C1 controls, U+2028 and U+2029 are escaped as `\uXXXX`, with two UTF-16 escapes for supplementary characters (`escapeForDisplay`, `src/io/display-path.ts`). `harness gc` uses the same rendering for in-flight `approvedAt` diagnostics. Escaped display text is a representation, not a replacement for the stored value.
 
    All six empty → `HarnessExitError`, no guess. Fastest fix per the error text: run `harness preflight` once (it stages `.pending-approval` as a side effect), then re-run `harness approve understanding`.
 
