@@ -22,6 +22,7 @@ export {
   type InterceptResult,
   type LedgerClient,
   type LedgerRecordOptions,
+  type ForeignTarget,
   type PolicyDecision,
   type PolicyDecisionPayload,
   type PolicyOutcome,

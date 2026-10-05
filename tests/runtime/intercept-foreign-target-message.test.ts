@@ -168,6 +168,7 @@ describe("foreign-target block message (nested / vendored work tree)", () => {
       const reason = result.blockJson?.reason ?? "";
       expect(reason).toContain("libfoo");
       expect(reason).toContain(fs.realpathSync(libfoo));
+      expect(reason).toContain(`(directory \`${fs.realpathSync(libfoo)}\`)`);
       expect(reason).not.toMatch(/pause|opt-out|fail_open/i);
     });
   }
@@ -184,7 +185,7 @@ describe("foreign-target block message (nested / vendored work tree)", () => {
     expect(result.blockJson?.hookSpecificOutput?.permissionDecisionReason).toBe(CWD_ONLY_UX_TEXT);
   });
 
-  it("cwd-only neutral block keeps the exact pre-existing text shape", async () => {
+  it("cwd-only neutral block carries no target sentence and no target directory", async () => {
     const { outer } = makeNestedFixture();
     const result = await run(neutralPolicy(), outer, "git log", []);
     const reason = result.blockJson?.reason ?? "";
@@ -240,9 +241,66 @@ describe("foreign-target block message (nested / vendored work tree)", () => {
   });
 });
 
+describe("foreign-target sentence is not added to envelopes that name their own cause", () => {
+  it("a foreign target on a detached HEAD gets the empty-BRANCH envelope, not the target sentence", async () => {
+    const { outer, libfoo } = makeNestedFixture();
+    // libfoo's HEAD holds a raw sha: detached, no branch.
+    fs.writeFileSync(path.join(libfoo, ".git", "HEAD"), `${"a".repeat(40)}\n`);
+    const pushPolicy = parseManifest(parseYaml(FULL_TEMPLATE)).policies.find(
+      (p) => p.name === "preflight-before-push",
+    );
+    if (!pushPolicy) throw new Error("preflight-before-push missing from FULL_TEMPLATE");
+    const result = await run(pushPolicy, outer, "git -C vendor/libfoo push origin HEAD", [
+      "preflight:main",
+    ]);
+
+    expect(result.blocked).toBe(true);
+    const reason = result.blockJson?.reason ?? "";
+    expect(reason).toContain("HEAD is detached");
+    expect(reason).not.toContain("targets repository");
+    expect(result.blockJson?.hookSpecificOutput?.permissionDecisionReason).toBe(reason);
+  });
+
+  it("a degraded ledger yields the deny-degraded envelope without the target sentence", async () => {
+    const { libfoo } = makeNestedFixture();
+    const outside = fs.mkdtempSync(path.join(os.tmpdir(), "harness-bb202fb9-out-"));
+    cleanups.push(() => fs.rmSync(outside, { recursive: true, force: true }));
+    const degraded: LedgerClient = {
+      async query() {
+        return { kind: "degraded", reason: "grounding-mcp timeout after 5000ms" };
+      },
+      async record() {
+        /* no-op */
+      },
+    };
+    const out = capture();
+    const result = await runInterceptCli({
+      stdin: streamFrom(
+        JSON.stringify({
+          hook_event_name: "PreToolUse",
+          tool_name: "Bash",
+          tool_input: { command: `git -C ${libfoo} log` },
+          session_id: "sess-bb202fb9",
+          cwd: outside,
+        }),
+      ),
+      stdout: out.stream,
+      stderr: sink(),
+      manifest: makeManifest({ policies: [shippedPolicy()] }),
+      ledger: degraded,
+    });
+
+    expect(result.blocked).toBe(true);
+    expect(result.decisions.some((d) => d.outcome === "deny-degraded")).toBe(true);
+    const reason = (JSON.parse(out.output().trim()) as ClaudeDenyJson).reason;
+    expect(reason).toContain("grounding-mcp timeout");
+    expect(reason).not.toContain("targets repository");
+  });
+});
+
 describe("the remedy named for a foreign target is real", () => {
   it("`cd <dir> && harness preflight` records preflight:<target repo> when it reports ready:true", async () => {
-    const { outer, libfoo } = makeNestedFixture();
+    const { libfoo } = makeNestedFixture();
     const cwdSpy = vi.spyOn(process, "cwd").mockReturnValue(libfoo);
     const writes: Array<{ sessionId: string; content: string }> = [];
     const result = await runSessionStartPreflight({
@@ -261,6 +319,5 @@ describe("the remedy named for a foreign target is real", () => {
     expect(writes).toHaveLength(1);
     expect(writes[0]?.content).toContain("preflight:libfoo");
     expect(writes[0]?.content).not.toContain("preflight:outer");
-    void outer;
   });
 });

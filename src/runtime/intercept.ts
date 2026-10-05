@@ -817,7 +817,7 @@ export function sanitizeEnvelopeReason(reason: string): string {
 function foreignTargetSentence(target: ForeignTarget, structured: boolean): string {
   const sentence =
     `This command targets repository \`${sanitizeEnvelopeReason(target.repo)}\` ` +
-    `(directory ${sanitizeEnvelopeReason(target.dir)}). ` +
+    `(directory \`${sanitizeEnvelopeReason(target.dir)}\`). ` +
     `The required evidence is missing for that repository, not for the working directory, ` +
     `so it has to be produced for that repository itself.`;
   return structured ? `\n\n${sentence}` : ` ${sentence}`;
