@@ -300,12 +300,11 @@ function pipelineHasCdStage(command: string): boolean {
 /**
  * The read-only fast path for a `|` pipeline: every stage is provably
  * read-only per the shared classifier, every `|` is a real stage boundary,
- * and no stage is a `cd`. A single command (no `|`) never reaches here as
- * true, because the strict single-command check ran first.
+ * and no stage is a `cd`. A command without a `|` is classified exactly as
+ * the strict single-command check already did, so it adds nothing here.
  */
 function isReadOnlyPipelineForWriteGuard(command: string): boolean {
   return (
-    command.includes("|") &&
     pipeBoundariesAreRealStageBoundaries(command) &&
     !pipelineHasCdStage(command) &&
     isReadOnlyBashPipeline(command)
