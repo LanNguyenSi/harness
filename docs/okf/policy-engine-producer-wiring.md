@@ -3,7 +3,7 @@ type: invariant
 title: Policy engine needs its producers wired
 description: "A policy with `requires:` can only be positively satisfied if grounding-mcp is wired under `tools.mcp[]`; an `operator_only: true` policy denies without querying evidence. An unwired evidence producer makes block/require_approval policies DENY every matching event (deny-degraded) unless `risk.degraded_fail_posture: fail_open` is set, while warn policies degrade non-blocking; `harness apply` hard-refuses that misconfiguration."
 tags: [policies, grounding-mcp, degraded-fail-posture, footgun, versions, bash_match, per-repo-attribution]
-timestamp: 2026-10-05T09:35:38Z
+timestamp: 2026-10-05T14:08:22Z
 sources:
   - src/cli/validate/checks.ts
   - src/cli/apply/apply.ts
@@ -29,7 +29,7 @@ A second short-circuit, added in task `6c8ebd37`: when a policy's `requires.ledg
 
 A further presentation rule, task `bb202fb9`: when the blocking decision belongs to a FOREIGN attributed context (the repository a `git -C <dir>` / `cd <dir> &&` target resolved to, carried in memory on the decision as `foreignTarget`, never written to the audit row), the block envelope (ux and neutral branches alike) ends with a policy-neutral sentence naming that repository and its resolved directory (both in code spans) and saying the required evidence is missing for that repository, not for the cwd; the decisions, outcomes and ledger tags are unchanged, the degraded and empty-identifier envelopes keep their own text, and a cwd-context block renders byte-for-byte as before. The sentence names no command (only `harness preflight` is shown, by test, to record `preflight:<target repo>` from the target directory) and no opt-out.
 
-Since task `cf3dff51` (shipped 0.45.0) `policyMatchesEvent` gained a FOURTH matching arm, tried only when the amp-aware pass above also misses: `normalizeCommandQuoteAware`, a quote-tracking boundary finder that skips a shell-boundary character sitting inside an open quote. It closes the class `VAR='a; b' git push origin master`, a shell-boundary character inside a quoted assignment value, additive-only like the two arms before it. All four arms now live in `policyMatchesEvent`, `src/runtime/intercept.ts:564-648#"return true;"`. `harness dry-run`'s own independently-copied matcher (`src/cli/dry-run.ts`) mirrors all four arms as of task `f561e44c`, closing the parity gap this bundle's debug-verb-selection.md tracks.
+Since task `cf3dff51` (shipped 0.45.0) `policyMatchesEvent` gained a FOURTH matching arm, tried only when the amp-aware pass above also misses: `normalizeCommandQuoteAware`, a quote-tracking boundary finder that skips a shell-boundary character sitting inside an open quote. It closes the class `VAR='a; b' git push origin master`, a shell-boundary character inside a quoted assignment value, additive-only like the two arms before it. All four arms now live in `policyMatchesEvent`, `src/runtime/intercept.ts:565-649#"return true;"`. `harness dry-run`'s own independently-copied matcher (`src/cli/dry-run.ts`) mirrors all four arms as of task `f561e44c`, closing the parity gap this bundle's debug-verb-selection.md tracks.
 
 ## Where it's enforced
 
