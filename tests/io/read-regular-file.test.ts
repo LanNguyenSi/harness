@@ -2,6 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { execFileSync, spawnSync } from "node:child_process";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 // `vi.spyOn` cannot target `fs.readFileSync` directly: Node's builtin
 // module namespace is non-configurable in ESM ("Cannot redefine
@@ -10,12 +12,17 @@ import * as path from "node:path";
 // own header documents for `readRegularFileRejectingSymlink`. `vi.mock`
 // with a call-through wrapper is the established workaround: it records
 // every `readFileSync` call so the probe test below can assert zero.
-const readFileSyncCallLog = vi.hoisted(() => ({ calls: 0 }));
+const readFileSyncCallLog = vi.hoisted(() => ({ calls: 0, openFlags: [] as number[] }));
 
 vi.mock("node:fs", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs")>();
   return {
     ...actual,
+    openSync: ((...args: Parameters<typeof actual.openSync>) => {
+      const flags = args[1];
+      if (typeof flags === "number") readFileSyncCallLog.openFlags.push(flags);
+      return actual.openSync(...args);
+    }) as typeof actual.openSync,
     readFileSync: ((...args: Parameters<typeof actual.readFileSync>) => {
       readFileSyncCallLog.calls += 1;
       return actual.readFileSync(...args);
@@ -24,6 +31,9 @@ vi.mock("node:fs", async (importOriginal) => {
 });
 
 import { probePathPresence, readRegularFileRejectingSymlink } from "../../src/io/read-regular-file.js";
+
+const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
+const BUILT_READER = path.join(REPO_ROOT, "dist", "io", "read-regular-file.js");
 
 let tmp: string;
 
@@ -77,6 +87,91 @@ describe("readRegularFileRejectingSymlink", () => {
     expect(readRegularFileRejectingSymlink(p)).toEqual({ kind: "unreadable" });
   });
 });
+
+describe("readRegularFileRejectingSymlink: one descriptor, never a blocking open", () => {
+  it("opens read-only with O_NOFOLLOW and O_NONBLOCK (where the platform has them)", () => {
+    const p = path.join(tmp, "marker.json");
+    fs.writeFileSync(p, "{}", "utf8");
+    readFileSyncCallLog.openFlags.length = 0;
+    expect(readRegularFileRejectingSymlink(p)).toEqual({ kind: "ok", content: "{}" });
+    expect(readFileSyncCallLog.openFlags).toHaveLength(1);
+    const flags = readFileSyncCallLog.openFlags[0] as number;
+    expect(flags & fs.constants.O_ACCMODE).toBe(fs.constants.O_RDONLY);
+    expect(flags & (fs.constants.O_NONBLOCK ?? 0)).toBe(fs.constants.O_NONBLOCK ?? 0);
+    expect(flags & (fs.constants.O_NOFOLLOW ?? 0)).toBe(fs.constants.O_NOFOLLOW ?? 0);
+    // Guards the two checks above against a platform where both are 0.
+    if (process.platform !== "win32") {
+      expect(fs.constants.O_NONBLOCK).toBeGreaterThan(0);
+      expect(fs.constants.O_NOFOLLOW).toBeGreaterThan(0);
+    }
+  });
+
+  it("returns missing when a parent path component is a regular file (ENOTDIR)", () => {
+    const file = path.join(tmp, "plain.json");
+    fs.writeFileSync(file, "{}", "utf8");
+    expect(readRegularFileRejectingSymlink(path.join(file, "child"))).toEqual({ kind: "missing" });
+  });
+
+  it("returns symlink for a dangling symlink", () => {
+    const link = path.join(tmp, "dangling.json");
+    fs.symlinkSync(path.join(tmp, "never-created.json"), link);
+    expect(readRegularFileRejectingSymlink(link)).toEqual({ kind: "symlink" });
+  });
+});
+
+// A FIFO with no writer makes a blocking open() wait forever, so the reader
+// runs in a child process here: the measurement is "returned within the
+// bound", and a regression shows up as a killed child, not a hung test
+// worker. The child loads the built module, so `npm run build` must have
+// run against the current sources first (same prerequisite as the hook
+// subprocess suites).
+describe.skipIf(process.platform === "win32")(
+  "readRegularFileRejectingSymlink: FIFO at the path is refused without blocking",
+  () => {
+    const BOUND_MS = 10_000;
+
+    function readInChild(target: string): { timedOut: boolean; ms: number; stdout: string; stderr: string } {
+      const started = Date.now();
+      const result = spawnSync(
+        process.execPath,
+        [
+          "--input-type=module",
+          "-e",
+          `const m = await import(${JSON.stringify(pathToFileURL(BUILT_READER).href)});` +
+            "process.stdout.write(JSON.stringify(m.readRegularFileRejectingSymlink(process.argv[1])));",
+          target,
+        ],
+        { encoding: "utf8", timeout: BOUND_MS, killSignal: "SIGKILL" },
+      );
+      return {
+        timedOut: (result.error as NodeJS.ErrnoException | undefined)?.code === "ETIMEDOUT",
+        ms: Date.now() - started,
+        stdout: result.stdout,
+        stderr: result.stderr,
+      };
+    }
+
+    it("a FIFO with no writer returns not-regular within the bound", () => {
+      const fifo = path.join(tmp, "marker.fifo");
+      execFileSync("mkfifo", [fifo]);
+      const run = readInChild(fifo);
+      expect(run.timedOut).toBe(false);
+      expect(run.ms).toBeLessThan(BOUND_MS);
+      expect(JSON.parse(run.stdout)).toEqual({ kind: "not-regular" });
+    });
+
+    it("a symlink to a FIFO returns symlink within the bound", () => {
+      const fifo = path.join(tmp, "marker.fifo");
+      execFileSync("mkfifo", [fifo]);
+      const link = path.join(tmp, "link.json");
+      fs.symlinkSync(fifo, link);
+      const run = readInChild(link);
+      expect(run.timedOut).toBe(false);
+      expect(run.ms).toBeLessThan(BOUND_MS);
+      expect(JSON.parse(run.stdout)).toEqual({ kind: "symlink" });
+    });
+  },
+);
 
 describe("probePathPresence", () => {
   it("returns present for a regular file", () => {

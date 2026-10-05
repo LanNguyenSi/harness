@@ -29,6 +29,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { approveUnderstanding } from "../../src/cli/approve/understanding.js";
+import { approvalMarkerPathFor } from "../../src/policy-packs/builtin/understanding-before-execution-runtime.js";
 import { parseManifest } from "../../src/schema/index.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -988,6 +989,110 @@ describe.each(E2E_RUNTIMES)(
         expect(result.ms).toBeLessThan(bound);
         rt.expectBlock(result);
         expect(result.stdout + result.stderr).not.toContain(NOTE);
+      },
+      60_000,
+    );
+  },
+);
+
+// The shared marker reader used to lstat the path and then readFileSync it by
+// name (tracker task 46434fbf). A writer that swapped the regular marker for a
+// FIFO between the two made the read block until the runtime's hook budget
+// ran out, which the runtime treats as an allow. This preload makes that swap
+// deterministic: the first time the hook process opens or reads the marker
+// path by name, the regular file is replaced by a FIFO with no writer first,
+// which is exactly where the old lstat-then-read left its window. A reader
+// that opens once (O_NONBLOCK) and checks the descriptor's type refuses the
+// FIFO at once; one that reads by path (or opens without O_NONBLOCK) blocks
+// until the child is killed at the bound. The count file records the swap so
+// a case cannot pass by never exercising it.
+const SWAP_MARKER_FOR_FIFO_PRELOAD = `import fs from "node:fs";
+import { spawnSync } from "node:child_process";
+import { syncBuiltinESMExports } from "node:module";
+const target = process.env.FIFO_SWAP_PATH;
+const countFile = process.env.FIFO_SWAP_COUNT_FILE;
+const openSync = fs.openSync;
+const readFileSync = fs.readFileSync;
+let swapped = false;
+function swap(p) {
+  if (swapped || String(p) !== target) return;
+  swapped = true;
+  fs.rmSync(target);
+  const made = spawnSync("mkfifo", [target]);
+  if (made.status !== 0) throw new Error("mkfifo failed");
+  fs.appendFileSync(countFile, "swap\\n");
+}
+fs.openSync = function (p, ...rest) {
+  swap(p);
+  return openSync.call(this, p, ...rest);
+};
+fs.readFileSync = function (p, ...rest) {
+  swap(p);
+  return readFileSync.call(this, p, ...rest);
+};
+syncBuiltinESMExports();
+`;
+
+describe.skipIf(process.platform === "win32").each(E2E_RUNTIMES)(
+  "pack hook $verb: subprocess E2E (the approval marker swapped for a FIFO after the last check)",
+  (rt) => {
+    it(
+      "a valid marker allows; the same marker swapped for a FIFO with no writer at the read blocks within the bound",
+      async () => {
+        const session = `sess-e2e-marker-swap-${rt.verb}`;
+        const configPath = path.join(tmpDir, "harness.yaml");
+        fs.writeFileSync(configPath, MANIFEST_WITH_PACK, "utf8");
+        const reportsDir = path.join(tmpDir, "reports");
+        const generatedDir = path.join(tmpDir, "harness.generated");
+        fs.mkdirSync(reportsDir, { recursive: true });
+        fs.writeFileSync(
+          path.join(reportsDir, "r1.json"),
+          JSON.stringify({
+            sessionId: session,
+            approvalStatus: "pending",
+            createdAt: new Date(Date.now() - 60_000).toISOString(),
+            content: "the understanding the operator reviewed",
+          }),
+        );
+        const approve = await approveUnderstanding({
+          manifest: parseManifest({ version: 1 }),
+          session,
+          reportsDir,
+          generatedDir,
+          ledgerAdd: async () => ({ ok: true }),
+        });
+        expect(approve.marker.ok).toBe(true);
+        const markerPath = approvalMarkerPathFor(generatedDir, session);
+        expect(fs.lstatSync(markerPath).isFile()).toBe(true);
+        const event = rt.event(session);
+
+        // Control: the untouched marker allows through the built CLI.
+        rt.expectAllow(runHook(configPath, event, { verb: rt.verb }));
+
+        const preload = path.join(tmpDir, "swap-marker-for-fifo.mjs");
+        fs.writeFileSync(preload, SWAP_MARKER_FOR_FIFO_PRELOAD);
+        const countFile = path.join(tmpDir, "fifo-swap-count");
+        fs.writeFileSync(countFile, "");
+        const bound = 10_000;
+
+        const swapped = runHook(configPath, event, {
+          verb: rt.verb,
+          timeoutMs: bound,
+          env: {
+            NODE_OPTIONS: `--import=${pathToFileURL(preload).href}`,
+            FIFO_SWAP_PATH: markerPath,
+            FIFO_SWAP_COUNT_FILE: countFile,
+          },
+        });
+
+        // The swap really happened, in the process that decided.
+        expect(fs.readFileSync(countFile, "utf8").split("\n").filter(Boolean)).toHaveLength(1);
+        expect(fs.lstatSync(markerPath).isFIFO()).toBe(true);
+        // A blocking read would wait for a writer forever; the child is killed
+        // at the bound and the run reports it as timed out.
+        expect(swapped.timedOut).toBe(false);
+        expect(swapped.ms).toBeLessThan(bound);
+        rt.expectBlock(swapped);
       },
       60_000,
     );
