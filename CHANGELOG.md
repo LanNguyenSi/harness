@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Security
+
+- The terminal display escaper for file names (`escapeForDisplay`) now escapes the same invisible characters as the agent-facing envelope sanitiser: both build their pattern from one shared rule (General_Category Cf plus Default_Ignorable_Code_Point), so variation selectors such as U+FE0F and the Hangul fillers U+115F, U+1160, U+3164 and U+FFA0 in a file name are now shown as `\uXXXX` escapes. The envelope sanitiser keeps the zero width joiner for emoji sequences; the display escaper keeps escaping it (task d9ab2d36).
+
 ## [0.64.0] - 2026-10-05
 
 ### Upgrade notes

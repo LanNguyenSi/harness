@@ -12,16 +12,23 @@
 // Lives in `src/io/` for the same reason `project-name.ts` does: it is a
 // leaf utility any layer may use (`io/` may not import from `runtime/`).
 
-/** Controls JSON leaves raw, Unicode format characters and line separators. */
-const UNSAFE_DISPLAY_CHARACTERS = /[\u007f-\u009f\p{Cf}\u2028\u2029]/gu;
+import { INVISIBLE_CHARACTER_CLASS } from "./invisible-characters.js";
+
+/** Controls JSON leaves raw, the shared invisible-character rule and line separators. */
+const UNSAFE_DISPLAY_CHARACTERS = new RegExp(
+  `[\\u007f-\\u009f\\u2028\\u2029${INVISIBLE_CHARACTER_CLASS}]`,
+  "gu",
+);
 
 /**
  * `value` as one double-quoted, single-line literal that is safe to print:
  * `JSON.stringify` escapes `"`, `\`, every C0 control character (ESC as
  * `\u001b`, CR as `\r`, LF as `\n`) and lone surrogates, and DEL and the C1
  * range, which JSON leaves raw (U+009B is a one-byte CSI on terminals that
- * honour C1), are escaped here as `\uXXXX`. Unicode format characters
- * (including bidi overrides) and line/paragraph separators are escaped too.
+ * honour C1), are escaped here as `\uXXXX`. Characters of the shared
+ * invisible-character rule (`invisible-characters.ts`: format characters
+ * including bidi overrides, variation selectors, Hangul fillers, the zero
+ * width joiner) and line/paragraph separators are escaped too.
  * Supplementary characters use two UTF-16 `\uXXXX` escapes so the result
  * stays a JSON literal that parses back to the original string.
  */
