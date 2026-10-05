@@ -139,6 +139,9 @@ export const PIPELINE_MATRIX: readonly MatrixRow[] = [
   w("quoted-pipe", `find ${D} -name $'a|cat -x' -delete`),
   w("quoted-pipe", `find ${D} -name $'a\\'|cat -x' -delete`),
   w("quoted-pipe", `find ${D} -name $"a|cat -x" -delete`),
+  // Two `\'` escapes inside ANSI-C words flip a plain-quote scan back to
+  // balanced, so only the refusal of `$'` words keeps the `|` quoted.
+  w("quoted-pipe", `find ${D} -name $'a\\'|cat -x' -name $'\\'' -delete`),
   w("quoted-pipe", `find ${D} -name 'a|cat -x' -delete | head`),
   w("quoted-pipe", `cat x | find ${D} -name "a|cat -x" -delete`),
   w("quoted-pipe", "find solution-verdict* -name 'a|cat -x' -delete"),
