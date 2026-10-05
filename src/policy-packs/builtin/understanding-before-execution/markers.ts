@@ -202,9 +202,9 @@ export function checkApprovalMarker(
       forged: false,
     };
   }
-  // Shared symlink-rejecting read (src/io/read-regular-file.ts): the lstat
-  // reject is defense-in-depth against a planted symlink
-  // (agent-tasks/d39f160e); each failure mode keeps its distinct detail.
+  // Shared symlink-rejecting read (src/io/read-regular-file.ts): O_NOFOLLOW at
+  // open (last path component only) plus fstat on the descriptor reject a
+  // planted symlink (agent-tasks/d39f160e); each failure mode keeps its detail.
   const read = readRegularFileRejectingSymlink(filePath);
   if (read.kind === "missing") {
     return {

@@ -43,12 +43,53 @@ function lstatOrNull(filePath: string): fs.Stats | null {
  * refuse a symbolic link at the final path component (`ELOOP`), so no
  * earlier `lstat` is needed for a swap to race. `O_NONBLOCK` keeps an open
  * of a FIFO with no writer from waiting for one: the open returns at once
- * and the descriptor's type then refuses it. Both are POSIX-only flags;
- * `fs.constants` leaves them `undefined` on Windows (see
+ * and the descriptor's type then refuses it. `O_NOFOLLOW` covers only the
+ * LAST path component; a symlinked parent directory is followed, as it was
+ * under the earlier lstat. `O_NOCTTY` is belt and braces for a tty node at
+ * the path. All three are POSIX-only flags; `fs.constants` leaves them
+ * `undefined` on Windows, where the code falls back to 0 (see
  * `readRegularFileRejectingSymlink` for that fallback).
  */
 const O_NOFOLLOW: number | undefined = fs.constants.O_NOFOLLOW;
 const O_NONBLOCK: number = fs.constants.O_NONBLOCK ?? 0;
+/** A marker read must never make a terminal the process's controlling one. */
+const O_NOCTTY: number = fs.constants.O_NOCTTY ?? 0;
+
+/**
+ * The most bytes the gate-marker read will return. Every caller reads a small
+ * JSON record (an approval or delegation marker, an in-flight record, a
+ * verdict, a launcher report, one adoption ledger of entry ids); the largest
+ * legitimate input is a launcher report, which the report hashing elsewhere
+ * already caps at the same 1 MiB (`MAX_HASHED_REPORT_BYTES`). A file over the
+ * cap is refused as `unreadable` (fail-closed in every caller) before any
+ * byte is read: a sparse multi-gigabyte file at a marker path otherwise
+ * takes the hook past its budget, which the runtime treats as an allow, the
+ * same fail-open a FIFO used to cause.
+ */
+export const MAX_REGULAR_FILE_READ_BYTES = 1024 * 1024;
+
+const READ_CHUNK_BYTES = 64 * 1024;
+
+/**
+ * Read the opened descriptor to EOF as utf8, never more than
+ * `MAX_REGULAR_FILE_READ_BYTES + 1` bytes: a file that grows after the
+ * `fstat` size check stays bounded too. Returns `null` when the file is over
+ * the cap. Any read error propagates to the caller.
+ */
+function readDescriptorBounded(fd: number): string | null {
+  const chunks: Buffer[] = [];
+  let total = 0;
+  for (;;) {
+    const want = Math.min(READ_CHUNK_BYTES, MAX_REGULAR_FILE_READ_BYTES + 1 - total);
+    const chunk = Buffer.allocUnsafe(want);
+    const got = fs.readSync(fd, chunk, 0, want, null);
+    if (got === 0) break;
+    total += got;
+    if (total > MAX_REGULAR_FILE_READ_BYTES) return null;
+    chunks.push(got === want ? chunk : chunk.subarray(0, got));
+  }
+  return Buffer.concat(chunks).toString("utf8");
+}
 
 /**
  * Classify a failed open by what `lstat` sees at the path now, so the
@@ -78,7 +119,10 @@ function classifyOpenFailure(filePath: string): RegularFileRead {
  * can be swapped in between a check and the read: a writer that replaces the
  * file with a FIFO or a symlink after any earlier look gets `not-regular` /
  * `symlink` back, not a read that blocks the hook past its budget (which the
- * runtime treats as an allow). The descriptor is always closed.
+ * runtime treats as an allow). The descriptor is always closed. The size is
+ * bounded too: a file over `MAX_REGULAR_FILE_READ_BYTES` by `fstat` is
+ * refused as `unreadable` without a read, and the read itself stops one byte
+ * past the cap, so a file that grows after the `fstat` is bounded as well.
  *
  * Why refuse symlinks at all: defense-in-depth against a symlink at the
  * marker path pointing at an arbitrary target the agent controls. In
@@ -113,13 +157,17 @@ export function readRegularFileRejectingSymlink(filePath: string): RegularFileRe
   }
   let fd: number;
   try {
-    fd = fs.openSync(filePath, fs.constants.O_RDONLY | (O_NOFOLLOW ?? 0) | O_NONBLOCK);
+    fd = fs.openSync(filePath, fs.constants.O_RDONLY | (O_NOFOLLOW ?? 0) | O_NONBLOCK | O_NOCTTY);
   } catch {
     return classifyOpenFailure(filePath);
   }
   try {
-    if (!fs.fstatSync(fd).isFile()) return { kind: "not-regular" };
-    return { kind: "ok", content: fs.readFileSync(fd, "utf8") };
+    const st = fs.fstatSync(fd);
+    if (!st.isFile()) return { kind: "not-regular" };
+    if (st.size > MAX_REGULAR_FILE_READ_BYTES) return { kind: "unreadable" };
+    const content = readDescriptorBounded(fd);
+    if (content === null) return { kind: "unreadable" };
+    return { kind: "ok", content };
   } catch {
     return { kind: "unreadable" };
   } finally {

@@ -1103,3 +1103,63 @@ describe.skipIf(process.platform === "win32").each(E2E_RUNTIMES)(
     );
   },
 );
+
+// The same fail-open through a regular file: a sparse multi-gigabyte file at
+// the marker path made the old read take longer than the hook budget, and the
+// runtime treats a hook that runs out of time as an allow. The reader now refuses a file over its size
+// cap from the descriptor's size, without reading it. This case is the
+// end-to-end smoke (a block, within the bound, through both built hooks).
+describe.skipIf(process.platform === "win32").each(E2E_RUNTIMES)(
+  "pack hook $verb: subprocess E2E (the approval marker replaced by a huge sparse file)",
+  (rt) => {
+    it(
+      "a valid marker allows; the same path holding a 2 GiB sparse file blocks within the bound as unreadable",
+      async () => {
+        const session = `sess-e2e-marker-sparse-${rt.verb}`;
+        const configPath = path.join(tmpDir, "harness.yaml");
+        fs.writeFileSync(configPath, MANIFEST_WITH_PACK, "utf8");
+        const reportsDir = path.join(tmpDir, "reports");
+        const generatedDir = path.join(tmpDir, "harness.generated");
+        fs.mkdirSync(reportsDir, { recursive: true });
+        fs.writeFileSync(
+          path.join(reportsDir, "r1.json"),
+          JSON.stringify({
+            sessionId: session,
+            approvalStatus: "pending",
+            createdAt: new Date(Date.now() - 60_000).toISOString(),
+            content: "the understanding the operator reviewed",
+          }),
+        );
+        const approve = await approveUnderstanding({
+          manifest: parseManifest({ version: 1 }),
+          session,
+          reportsDir,
+          generatedDir,
+          ledgerAdd: async () => ({ ok: true }),
+        });
+        expect(approve.marker.ok).toBe(true);
+        const markerPath = approvalMarkerPathFor(generatedDir, session);
+        const event = rt.event(session);
+
+        // Control: the untouched marker allows through the built CLI.
+        rt.expectAllow(runHook(configPath, event, { verb: rt.verb }));
+
+        fs.rmSync(markerPath);
+        fs.writeFileSync(markerPath, "");
+        fs.truncateSync(markerPath, 2 * 1024 * 1024 * 1024);
+        const bound = 10_000;
+        const huge = runHook(configPath, event, { verb: rt.verb, timeoutMs: bound });
+
+        expect(huge.timedOut).toBe(false);
+        expect(huge.ms).toBeLessThan(bound);
+        rt.expectBlock(huge);
+        // Refused as unreadable, which fails closed: the marker never counts as
+        // a (forged) marker body. The size refusal itself is pinned in
+        // tests/io/read-regular-file.test.ts, where the read count is visible.
+        expect(huge.stderr).toMatch(/no approval marker for session/);
+        expect(huge.stderr).not.toMatch(/forged\/unsigned marker rejected/);
+      },
+      60_000,
+    );
+  },
+);

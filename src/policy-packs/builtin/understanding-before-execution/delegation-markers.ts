@@ -854,8 +854,8 @@ export function verifyDelegation(opts: VerifyDelegationOptions): DelegationVerif
     // disagree with the write-time `realpathSync`, which would otherwise
     // surface a plain "the file is gone" as `report_path_mismatch`
     // instead of naming what actually happened. `probePathPresence`
-    // (shared home: `src/io/read-regular-file.ts`, same `lstatSync` as
-    // `readRegularFileRejectingSymlink` below) is a cheap stat-only probe,
+    // (shared home: `src/io/read-regular-file.ts`; a bare `lstatSync`, unlike
+    // the open-based `readRegularFileRejectingSymlink` below) is a cheap probe,
     // not the full read: it only asks "is anything there", so the ok path
     // still reads the file's bytes exactly once, below, after the path
     // hash and the content-hash presence have both already passed. A
