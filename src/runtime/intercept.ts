@@ -1155,7 +1155,7 @@ export function attributeTriggerSegments(
  * `at_head` against the cwd's HEAD while `${REPO}` (if present elsewhere)
  * named a different repo, the worse inconsistency D-005 rejects.
  */
-function usesPerRepoBuiltins(policy: Policy): boolean {
+export function usesPerRepoBuiltins(policy: Policy): boolean {
   const requires = policy.requires;
   if (requires === undefined) return false;
   return (
@@ -1314,7 +1314,7 @@ export type AttributedContextsResult =
  * kind of per-call cache for the cwd's own outside-every-repository
  * check, keyed by the cwd's real path, so that walk runs once per event.
  */
-function resolveAttributedContexts(
+export function resolveAttributedContexts(
   policy: Policy,
   segments: readonly CommandSegment[],
   cwdBuiltins: ExtractBuiltins,
