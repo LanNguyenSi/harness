@@ -793,6 +793,8 @@ describe("dry-run: the quote-aware shell model arm and attribution match policy 
       // The model reads env -C behind `&`; the segment view's blank cwd demand stays.
       [`A=x&env -C ${w.outer} git log`, plain, "preflight-before-investigation", ["(blank cwd)", "preflight:outer"]],
       [`cd ${w.outer}; git log`, plain, "preflight-before-investigation", ["preflight:outer"]],
+      // Matched by the model's arm only: no segment-view cwd demand.
+      [`git '-C' ${w.outer} log`, plain, "preflight-before-investigation", ["preflight:outer"]],
       // A cd into an existing directory cannot fail: `cd ..` returns to the child.
       ["cd frontend; npm test; cd ..; git status", child, "preflight-before-investigation", ["preflight:child"]],
       ["cd missing; npm test; cd ..; git status", child, "preflight-before-investigation", ["preflight:child", "preflight:outer"]],

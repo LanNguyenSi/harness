@@ -125,7 +125,7 @@ function policyMatchesTool(
   tool: string,
   toolInput: unknown,
   shellModel: ShellModelView | undefined,
-): { matched: true } | { matched: false; reason: string } {
+): { matched: true; byModelOnly: boolean } | { matched: false; reason: string } {
   if (policy.trigger.event !== "PreToolUse") {
     return { matched: false, reason: `trigger event is ${policy.trigger.event}, not PreToolUse` };
   }
@@ -213,21 +213,23 @@ function policyMatchesTool(
     // exactly as `policyMatchesEvent` scopes it (a per-repo policy, a model
     // command that names a directory), through the same exported
     // `attributeTriggerModelCommands`, so `git -C 'vendor/lib sp' log`
-    // predicts the match `policy intercept` makes.
-    if (
-      !re.test(args.command) &&
-      !re.test(normalizeCommand(args.command).normalized) &&
-      !re.test(normalizeCommandAmpAware(args.command).normalized) &&
-      !re.test(normalizeCommandQuoteAware(args.command).normalized) &&
-      !fifthArmMatches(policy, shellModel)
-    ) {
+    // predicts the match `policy intercept` makes. A match only that arm
+    // makes is reported as such (`byModelOnly`), as `policyMatchArm` does
+    // for `intercept()`: attribution then has no segment-view demand to keep.
+    const segmentArms =
+      re.test(args.command) ||
+      re.test(normalizeCommand(args.command).normalized) ||
+      re.test(normalizeCommandAmpAware(args.command).normalized) ||
+      re.test(normalizeCommandQuoteAware(args.command).normalized);
+    if (!segmentArms && !fifthArmMatches(policy, shellModel)) {
       return {
         matched: false,
         reason: `bash_match "${policy.trigger.bash_match}" did not match`,
       };
     }
+    return { matched: true, byModelOnly: !segmentArms };
   }
-  return { matched: true };
+  return { matched: true, byModelOnly: false };
 }
 
 function fifthArmMatches(policy: Policy, model: ShellModelView | undefined): boolean {
@@ -283,6 +285,7 @@ function ledgerQueriesFor(
   ctx: ExtractEventContext,
   builtins: ExtractBuiltins,
   attribution: AttributionInput,
+  byModelOnly: boolean,
 ): string[] {
   if (!usesPerRepoBuiltins(policy)) return [staticLedgerQuery(policy, ctx, builtins)];
   const result = resolveAttributedContexts(
@@ -297,6 +300,7 @@ function ledgerQueriesFor(
     ctx,
     attribution.shellModel,
     attribution.modelPaths,
+    !byModelOnly,
   );
   if (result.kind === "bounded") {
     return [
@@ -329,8 +333,9 @@ function policyHit(
   ctx: ExtractEventContext,
   builtins: ExtractBuiltins,
   attribution: AttributionInput,
+  byModelOnly = false,
 ): DryRunPolicyHit {
-  const ledgerQueries = ledgerQueriesFor(policy, ctx, builtins, attribution);
+  const ledgerQueries = ledgerQueriesFor(policy, ctx, builtins, attribution, byModelOnly);
   return {
     name: policy.name,
     // ledgerQuery keeps the cwd-context value for --json consumers; the runtime
@@ -425,7 +430,7 @@ export function dryRun(prompt: string, opts: DryRunOptions = {}): DryRunResult {
     }
     const verdict = policyMatchesTool(policy, tool, toolArgs, shellModel);
     if (verdict.matched) {
-      matching.push(policyHit(policy, ctx, builtins, attribution));
+      matching.push(policyHit(policy, ctx, builtins, attribution, verdict.byModelOnly));
     } else {
       couldMatch.push({
         name: policy.name,

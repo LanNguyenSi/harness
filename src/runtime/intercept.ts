@@ -610,14 +610,42 @@ export function policyMatchesEvent(
   quoteNormalizedCommandThunk?: () => QuoteAwareNormalizedCommand,
   shellModelThunk?: () => ShellModelView,
 ): boolean {
-  if (policy.trigger.event !== event.hook_event_name) return false;
+  return (
+    policyMatchArm(
+      policy,
+      event,
+      precomputedNormalizedCommand,
+      ampNormalizedCommandThunk,
+      quoteNormalizedCommandThunk,
+      shellModelThunk,
+    ) !== "none"
+  );
+}
+
+/**
+ * Which part of the trigger matched: `"none"`, `"model"` when only the
+ * fifth arm (the shell model) matched a `bash_match` trigger, `"segments"`
+ * otherwise (every non-Bash match, and every match one of the first four
+ * arms made). `intercept()` passes `"model"` on to
+ * `resolveAttributedContexts`: the segment view never matched such a
+ * policy, so it has no demand of its own to keep.
+ */
+export function policyMatchArm(
+  policy: Policy,
+  event: ToolEvent,
+  precomputedNormalizedCommand?: NormalizedCommand,
+  ampNormalizedCommandThunk?: () => AmpAwareNormalizedCommand,
+  quoteNormalizedCommandThunk?: () => QuoteAwareNormalizedCommand,
+  shellModelThunk?: () => ShellModelView,
+): "none" | "segments" | "model" {
+  if (policy.trigger.event !== event.hook_event_name) return "none";
   if (policy.trigger.match !== undefined) {
-    if (typeof event.tool_name !== "string") return false;
+    if (typeof event.tool_name !== "string") return "none";
     const toolNames = expandToolNameAliases(event.tool_name);
     if (
       !toolNames.some((toolName) => toolName.includes(policy.trigger.match!))
     ) {
-      return false;
+      return "none";
     }
   }
   // `input_match` (task 2699b476): literal equality against the tool
@@ -637,17 +665,17 @@ export function policyMatchesEvent(
   // trigger-matching parity paragraph.
   if (policy.trigger.input_match !== undefined) {
     if (inputMatchMismatchesEvent(policy.trigger.input_match, event)) {
-      return false;
+      return "none";
     }
   }
   if (policy.trigger.bash_match !== undefined) {
     const command = extractShellCommand(event);
-    if (command === null) return false;
+    if (command === null) return "none";
     let re: RegExp;
     try {
       re = new RegExp(policy.trigger.bash_match);
     } catch {
-      return false;
+      return "none";
     }
     // Raw-OR-normalised-OR-amp-normalised-OR-quote-normalised (D-003, run
     // 2026-07-27-gate-target-repo-resolution; third arm added task
@@ -695,15 +723,16 @@ export function policyMatchesEvent(
             // `{ git log; }`) and verbs that never run
             // (`while false; do git log; done`), a trigger-coverage
             // change this arm deliberately leaves out.
-            if (!usesPerRepoBuiltins(policy)) return false;
+            if (!usesPerRepoBuiltins(policy)) return "none";
             const model = shellModelThunk ? shellModelThunk() : shellModelViewOf(command);
-            if (attributeTriggerModelCommands(policy, model).length === 0) return false;
+            if (attributeTriggerModelCommands(policy, model).length === 0) return "none";
+            return "model";
           }
         }
       }
     }
   }
-  return true;
+  return "segments";
 }
 
 function buildEventContext(event: ToolEvent): ExtractEventContext {
@@ -1503,8 +1532,11 @@ export const OPAQUE_TARGET_REASON =
  * UNION, so it cannot make a policy weaker than the segment view alone.
  * The union is structural, not a property of the two views agreeing: the
  * segment view runs first and fills `contexts` exactly as it does without
- * the model (its cwd-only verdict when no segment satisfies the trigger,
- * its loop, its own fallback), and only then are the model's
+ * the model (its cwd-only verdict when no segment satisfies the trigger of
+ * a policy one of its arms matched, its loop, its own fallback; a policy
+ * only the model's arm matched, `segmentViewMatched === false`, never
+ * matched the segment view, which then demands nothing), and only then
+ * are the model's
  * trigger-satisfying commands (`attributeTriggerModelCommands`) read, each
  * possibility either appending a context or ending the call fail-closed
  * (`opaque-target` or `bounded`). Nothing in the model phase removes a
@@ -1542,6 +1574,7 @@ export function resolveAttributedContexts(
   extractContext: ExtractEventContext,
   shellModel?: ShellModelView,
   modelPaths?: ModelPathResolver,
+  segmentViewMatched = true,
 ): AttributedContextsResult {
   const cwdContext: AttributedContext = { builtins: cwdBuiltins, currentHeadSha: cwdCurrentHeadSha };
   if (
@@ -1699,7 +1732,14 @@ export function resolveAttributedContexts(
   // `addResolvedTarget`, decides only whether that model target brings the
   // cwd context along; a cwd context the segment view demanded is already
   // in `contexts` and stays there.
-  if (satisfying.size === 0) addCwdOnce();
+  if (satisfying.size === 0) {
+    // The segment view's verdict without a satisfying segment: the cwd
+    // context alone, for a policy one of its arms matched. A policy only
+    // the model's arm matched never matched the segment view, which has
+    // no demand of its own for it (the model phase decides alone, with
+    // the same per-target rules).
+    if (segmentViewMatched) addCwdOnce();
+  }
   for (const seg of segments) {
     if (!satisfying.has(seg)) continue;
 
@@ -1730,7 +1770,7 @@ export function resolveAttributedContexts(
   // branch above adds either the cwd context or a foreign one). Never
   // leave a matched, per-repo-builtins policy with zero contexts to
   // evaluate against.
-  if (contexts.length === 0) addCwdOnce();
+  if (satisfying.size > 0 && contexts.length === 0) addCwdOnce();
 
   // MODEL VIEW: the shell model's trigger-satisfying commands (opaque ones
   // already returned above), appended to the segment view's contexts. A
@@ -1765,7 +1805,8 @@ export function resolveAttributedContexts(
     }
   }
 
-  return { kind: "contexts", contexts };
+  // Defensive, as above: a matched policy never has zero contexts.
+  return { kind: "contexts", contexts: contexts.length > 0 ? contexts : [cwdContext] };
 }
 
 /**
@@ -2000,19 +2041,20 @@ export async function intercept(
   const modelPaths = (): ModelPathResolver =>
     (modelPathsCache ??= new ModelPathResolver(options.builtins.CWD));
   const shellModelThunk = shellModelThunkFor(options, modelPaths);
+  // Policies only the shell model's arm matched: the segment view has no
+  // demand of its own for them (see `resolveAttributedContexts`).
+  const matchedByModelOnly = new Set<Policy>();
   for (const p of manifest.policies) {
-    if (
-      !policyMatchesEvent(
-        p,
-        event,
-        options.normalizedCommand,
-        options.ampNormalizedCommandThunk,
-        options.quoteNormalizedCommandThunk,
-        shellModelThunk,
-      )
-    ) {
-      continue;
-    }
+    const arm = policyMatchArm(
+      p,
+      event,
+      options.normalizedCommand,
+      options.ampNormalizedCommandThunk,
+      options.quoteNormalizedCommandThunk,
+      shellModelThunk,
+    );
+    if (arm === "none") continue;
+    if (arm === "model") matchedByModelOnly.add(p);
     if (p.when === undefined) {
       matching.push(p);
       continue;
@@ -2056,6 +2098,7 @@ export async function intercept(
           buildEventContext(options.event),
           shellModelOnce(),
           shellModelThunk === undefined ? undefined : modelPaths(),
+          !matchedByModelOnly.has(policy),
         )
       : { kind: "contexts", contexts: [{ builtins: options.builtins, currentHeadSha: options.currentHeadSha }] };
 

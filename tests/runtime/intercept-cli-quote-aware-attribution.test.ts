@@ -592,6 +592,9 @@ describe("runInterceptCli quote-aware attribution: a working directory outside e
         ["cd <repo> && git push", (a: string) => `cd ${a} && git push`, PUSH],
         // The directory exists, so the cd cannot fail: git runs only there.
         ["cd <repo>; git push", (a: string) => `cd ${a}; git push`, PUSH],
+        // Only the model's arm matches a quoted option word: the segment
+        // view never matched this policy and has no cwd demand to keep.
+        ["git '-C' <repo> log", (a: string) => `git '-C' ${a} log`, INVESTIGATION],
       ] as Array<[string, (a: string) => string, PolicyName]>) {
         it(`${label}: the remedy the hint names is allowed on the repository's own evidence`, async () => {
           const result = await runAt(plain, command(outer), OUTER_ONLY, enforcement);
