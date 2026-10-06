@@ -47,11 +47,13 @@ import {
 import { DEFAULT_SAFE_DELETION_ROOTS } from "../schema/risk.js";
 import { resolveGitContext, type GitRepoContext } from "./git-context.js";
 import {
+  dirPossibilityKey,
   shellModelViewOf,
+  type DirPossibility,
   type ModelCommand,
-  type PathStep,
   type ShellModelView,
 } from "./shell-command-model.js";
+import { ModelPathResolver } from "./shell-model-paths.js";
 import { POLICY_DECISION_TYPE } from "../io/ledger-record.js";
 import { INVISIBLE_CHARACTER_CLASS } from "../io/invisible-characters.js";
 import { classifyRisk, type RiskProfile } from "./risk-classifier.js";
@@ -399,13 +401,25 @@ export interface InterceptOptions {
    * and by `resolveAttributedContexts` (only for a matched per-repo
    * policy), so most events never compute it. Same lazy, compute-once
    * shape as `commandSegmentsThunk`; omitted by non-Bash events and by
-   * callers/tests that do not supply one, in which case both consumers
-   * compute `shellModelViewOf` of the event's command themselves.
+   * callers/tests that do not supply one, in which case `intercept()`
+   * builds its own memoised thunk for the event's command (with
+   * `modelPathResolver` as the model's directory oracle) and both
+   * consumers read that.
    *
    * SAME INVARIANT as `normalizedCommand` / `ampNormalizedCommandThunk`
    * above: not checked against `event` at runtime.
    */
   shellModelThunk?: () => ShellModelView;
+  /**
+   * The shell model's path resolver for this event
+   * (`src/runtime/shell-model-paths.ts`, task 7d4abf84), rooted at
+   * `builtins.CWD`: the model's directory oracle and the resolver of every
+   * per-repo policy's model targets, with one per-event work budget. The
+   * caller that builds `shellModelThunk` passes the resolver that thunk's
+   * oracle uses, so both share one memo and one budget; omitted,
+   * `intercept()` creates one when it first needs it.
+   */
+  modelPathResolver?: ModelPathResolver;
   /**
    * Whether `options.builtins.REPO` / `.BRANCH` were set by an explicit
    * operator override (`HARNESS_REPO` / `HARNESS_BRANCH` env vars) rather
@@ -1360,35 +1374,6 @@ function realpathOrSelf(p: string): string {
   }
 }
 
-/**
- * Resolve a shell model path (task 7d4abf84) from the working directory,
- * one step at a time, to the real directory it names. A logical step (a
- * plain `cd` or `pushd`) is joined lexically onto the previous directory,
- * the way the shell computes its own `$PWD`; a physical step (`cd -P`,
- * `git -C`, `env -C`, `--git-dir`) is `chdir(2)` relative to the real
- * previous directory, so it is realpath'd as written from there (a `..`
- * after a symlink leaves the symlink's target, not the directory holding
- * the link). A step that names no existing directory falls back to the
- * lexical join, like `realpathOrSelf`. Never throws.
- */
-function resolveModelPath(cwd: string, steps: readonly PathStep[]): string {
-  let current = cwd;
-  for (const step of steps) {
-    if (step.mode === "logical") {
-      current = path.resolve(current, step.value);
-      continue;
-    }
-    const realBase = realpathOrSelf(current);
-    const named = path.isAbsolute(step.value) ? step.value : `${realBase}${path.sep}${step.value}`;
-    try {
-      current = fs.realpathSync.native(named);
-    } catch {
-      current = path.resolve(realBase, step.value);
-    }
-  }
-  return realpathOrSelf(current);
-}
-
 /** Discriminated result of `resolveAttributedContexts` (D-013). */
 export type AttributedContextsResult =
   | { kind: "contexts"; contexts: AttributedContext[] }
@@ -1515,18 +1500,30 @@ export const OPAQUE_TARGET_REASON =
  * SHELL MODEL (task 7d4abf84, optional `shellModel`). The quote-aware
  * shell command model (`src/runtime/shell-command-model.ts`) is a second,
  * independent view of the same command, combined with the segment view by
- * UNION, so it cannot make a policy weaker than the segment view alone:
- * its trigger-satisfying commands (`attributeTriggerModelCommands`) are
- * added to the segment view's. Any opaque possibility of one of them makes
- * the policy fail closed (`opaque-target`), checked before the segment
+ * UNION, so it cannot make a policy weaker than the segment view alone.
+ * The union is structural, not a property of the two views agreeing: the
+ * segment view runs first and fills `contexts` exactly as it does without
+ * the model (its cwd-only verdict when no segment satisfies the trigger,
+ * its loop, its own fallback), and only then are the model's
+ * trigger-satisfying commands (`attributeTriggerModelCommands`) read, each
+ * possibility either appending a context or ending the call fail-closed
+ * (`opaque-target` or `bounded`). Nothing in the model phase removes a
+ * context, so every demand of the segment view survives, including the
+ * cwd context of a working directory outside every repository (whose
+ * exception in `addResolvedTarget` only decides whether a model target
+ * brings the cwd context along). Any opaque possibility of a satisfying
+ * model command makes the policy fail closed, checked before the segment
  * loop; every other possibility adds its context through the same rules as
  * a segment's `effectiveTarget` (cwd context, the outside-every-repository
  * exception, the D-015 dedup, the `MAX_ATTRIBUTED_CONTEXTS` bound). Unlike
  * the segment view, the model composes relative paths (`cd T && git -C
  * sub log` runs in `T/sub`): each step keeps its mode and is resolved
- * against the real filesystem here (`resolveModelPath`), a logical step
- * lexically against the previous directory, a physical one through the
- * real directory it starts from. When the command could not be lexed
+ * against the real filesystem by `modelPaths` (`shell-model-paths.ts`: a
+ * logical step lexically against the previous directory, a physical one
+ * through the real directory it starts from), one resolution per distinct
+ * possibility per event, under a per-event work budget past which the
+ * policy fails closed (`opaque-target`). Omitted, `modelPaths` is a fresh
+ * resolver for the cwd. When the command could not be lexed
  * (`shellModel.commands === null`), the segment view decides alone, except
  * that a policy with a `bash_match` fails closed when the raw text holds a
  * directory-changing word (`shellModel.directoryChangeWord`). Omitted (a
@@ -1544,6 +1541,7 @@ export function resolveAttributedContexts(
   branchOverridden: boolean,
   extractContext: ExtractEventContext,
   shellModel?: ShellModelView,
+  modelPaths?: ModelPathResolver,
 ): AttributedContextsResult {
   const cwdContext: AttributedContext = { builtins: cwdBuiltins, currentHeadSha: cwdCurrentHeadSha };
   if (
@@ -1689,6 +1687,19 @@ export function resolveAttributedContexts(
     return null;
   };
 
+  // SEGMENT VIEW FIRST, exactly as it decides without the shell model:
+  // its own verdict for no satisfying segment (the cwd context alone), its
+  // loop, and its own fallback for a loop that added nothing. Only then
+  // does the model add to `contexts`. That order is what makes the union
+  // structural: every context the segment view demands is in `contexts`
+  // before the first model possibility is read, and the model phase below
+  // can only append a context, or end in `opaque-target` / `bounded` (both
+  // fail closed), never remove one. In particular the
+  // outside-every-repository exception, applied to a model target inside
+  // `addResolvedTarget`, decides only whether that model target brings the
+  // cwd context along; a cwd context the segment view demanded is already
+  // in `contexts` and stays there.
+  if (satisfying.size === 0) addCwdOnce();
   for (const seg of segments) {
     if (!satisfying.has(seg)) continue;
 
@@ -1714,26 +1725,47 @@ export function resolveAttributedContexts(
     if (bounded !== null) return bounded;
   }
 
-  // The shell model's trigger-satisfying commands (opaque ones already
-  // returned above): a possibility the command text does not name
-  // (`unknown`) or the working directory itself keeps the cwd context, a
-  // path is resolved step by step and added like a segment's target.
+  // The segment view's own defensive fallback: every satisfying segment
+  // existed but somehow none was added above (should not happen: every
+  // branch above adds either the cwd context or a foreign one). Never
+  // leave a matched, per-repo-builtins policy with zero contexts to
+  // evaluate against.
+  if (contexts.length === 0) addCwdOnce();
+
+  // MODEL VIEW: the shell model's trigger-satisfying commands (opaque ones
+  // already returned above), appended to the segment view's contexts. A
+  // possibility the command text does not name (`unknown`) or the working
+  // directory itself keeps the cwd context; a path is resolved through
+  // `modelPaths` and added like a segment's target. Each distinct
+  // possibility is read once (thousands of commands after one long `cd`
+  // chain share one), and the resolver memoises across policies and counts
+  // its filesystem work: once the per-event budget is spent, the policy
+  // fails closed (`opaque-target`) instead of resolving further.
+  const paths = modelPaths ?? new ModelPathResolver(cwdBuiltins.CWD);
+  const seenPossibilities = new Set<DirPossibility>();
+  const seenKeys = new Set<string>();
   for (const command of modelSatisfying) {
     for (const dir of command.dirs) {
+      if (seenPossibilities.has(dir)) continue;
+      seenPossibilities.add(dir);
       if (dir.kind !== "path" || dir.steps.length === 0) {
         addCwdOnce();
         continue;
       }
-      const bounded = addResolvedTarget(resolveModelPath(cwdBuiltins.CWD, dir.steps));
+      const key = dirPossibilityKey(dir);
+      if (seenKeys.has(key)) continue;
+      seenKeys.add(key);
+      const resolved = paths.resolve(dir);
+      if (resolved === null) return { kind: "opaque-target" };
+      if (resolved !== cwdReal && !resolveGitContextMemo.has(resolved) && !paths.chargeRepositoryLookup(resolved)) {
+        return { kind: "opaque-target" };
+      }
+      const bounded = addResolvedTarget(resolved);
       if (bounded !== null) return bounded;
     }
   }
 
-  // Defensive fallback: every satisfying segment existed but somehow none
-  // was added above (should not happen — every branch above adds either
-  // the cwd context or a foreign one). Never leave a matched, per-repo-
-  // builtins policy with zero contexts to evaluate against.
-  return { kind: "contexts", contexts: contexts.length > 0 ? contexts : [cwdContext] };
+  return { kind: "contexts", contexts };
 }
 
 /**
@@ -1826,17 +1858,22 @@ function resolveCommandSegments(options: InterceptOptions): CommandSegment[] {
 }
 
 /**
- * Lazily resolve the event's shell model view for attribution (task
- * 7d4abf84), the same fallback chain as `resolveCommandSegments`: the
- * injected `shellModelThunk`, else `shellModelViewOf` of the event's own
- * command, else `undefined` (no Bash command on this event: the segment
- * view decides alone).
+ * The event's shell model (task 7d4abf84) for both of its readers in one
+ * `intercept()` call, the fifth matching arm and attribution, so the two
+ * read the same view: the injected `shellModelThunk`, else a memoised
+ * thunk computing `shellModelViewOf` of the event's own command with
+ * `modelPaths` as its directory oracle, else `undefined` (no Bash command
+ * on this event: the segment view decides alone).
  */
-function resolveShellModel(options: InterceptOptions): ShellModelView | undefined {
-  if (options.shellModelThunk !== undefined) return options.shellModelThunk();
+function shellModelThunkFor(
+  options: InterceptOptions,
+  modelPaths: () => ModelPathResolver,
+): (() => ShellModelView) | undefined {
+  if (options.shellModelThunk !== undefined) return options.shellModelThunk;
   const command = extractShellCommand(options.event);
   if (command === null) return undefined;
-  return shellModelViewOf(command);
+  let cached: ShellModelView | undefined;
+  return () => (cached ??= shellModelViewOf(command, modelPaths()));
 }
 
 /**
@@ -1955,6 +1992,14 @@ export async function intercept(
   // audit flag if the mutation were still hiding inside the predicate.
   const whenFallbackMap = new Map<string, boolean>();
   const matching: Policy[] = [];
+  // The shell model's path resolver (task 7d4abf84): one per event, shared
+  // by the model's directory oracle and every policy's attribution, so a
+  // path is resolved once and the work budget is per event. Created only
+  // when the model is computed.
+  let modelPathsCache: ModelPathResolver | undefined = options.modelPathResolver;
+  const modelPaths = (): ModelPathResolver =>
+    (modelPathsCache ??= new ModelPathResolver(options.builtins.CWD));
+  const shellModelThunk = shellModelThunkFor(options, modelPaths);
   for (const p of manifest.policies) {
     if (
       !policyMatchesEvent(
@@ -1963,7 +2008,7 @@ export async function intercept(
         options.normalizedCommand,
         options.ampNormalizedCommandThunk,
         options.quoteNormalizedCommandThunk,
-        options.shellModelThunk,
+        shellModelThunk,
       )
     ) {
       continue;
@@ -1989,17 +2034,10 @@ export async function intercept(
   // `resolveAttributedContexts`'s own comment. `mayBeInsideRepositoryMemo`
   // is the same kind of per-call cache for the cwd walk.
   let segmentsForAttribution: CommandSegment[] | undefined;
-  // The shell model view (task 7d4abf84), resolved the same lazy way, at
-  // most once per event, for the per-repo policies only.
-  let shellModelResolved = false;
-  let shellModelForAttribution: ShellModelView | undefined;
-  const shellModelOnce = (): ShellModelView | undefined => {
-    if (!shellModelResolved) {
-      shellModelForAttribution = resolveShellModel(options);
-      shellModelResolved = true;
-    }
-    return shellModelForAttribution;
-  };
+  // The shell model view (task 7d4abf84), from the same memoised thunk the
+  // matching loop used, at most once per event, for the per-repo policies
+  // only.
+  const shellModelOnce = (): ShellModelView | undefined => shellModelThunk?.();
   const resolveGitContextMemo = new Map<string, GitRepoContext>();
   const mayBeInsideRepositoryMemo = new Map<string, boolean>();
 
@@ -2017,6 +2055,7 @@ export async function intercept(
           options.branchOverridden === true,
           buildEventContext(options.event),
           shellModelOnce(),
+          shellModelThunk === undefined ? undefined : modelPaths(),
         )
       : { kind: "contexts", contexts: [{ builtins: options.builtins, currentHeadSha: options.currentHeadSha }] };
 

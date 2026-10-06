@@ -134,6 +134,10 @@ afterAll(() => {
 });
 
 async function run(command: string, tags: readonly string[], enforcement: "block" | "warn" = "block") {
+  return runAt(outer, command, tags, enforcement);
+}
+
+async function runAt(cwd: string, command: string, tags: readonly string[], enforcement: "block" | "warn" = "block") {
   return runInterceptCli({
     stdin: Readable.from([
       JSON.stringify({
@@ -141,7 +145,7 @@ async function run(command: string, tags: readonly string[], enforcement: "block
         tool_name: "Bash",
         tool_input: { command },
         session_id: "sess-7d4abf84",
-        cwd: outer,
+        cwd,
       }),
     ]),
     stdout: sink(),
@@ -199,6 +203,8 @@ const SHAPES: Shape[] = [
   { label: "a:brace-group", command: (g) => `{ cd ${P}; ${g}; }`, expect: attr("libplain") },
   { label: "a:builtin-cd", command: (g) => `builtin cd ${P} && ${g}`, expect: attr("libplain") },
   { label: "a:command-cd", command: (g) => `command cd ${P} && ${g}`, expect: attr("libplain") },
+  { label: "a:time-cd", command: (g) => `time cd ${P} && ${g}`, expect: attr("libplain") },
+  { label: "a:time-p-cd", command: (g) => `time -p cd ${P} && ${g}`, expect: attr("libplain") },
   { label: "a:eval-cd", command: (g) => `eval cd ${P} && ${g}`, expect: attr("libplain") },
   { label: "a:eval-cd-quoted", command: (g) => `eval 'cd ${P}' && ${g}`, expect: attr("libplain") },
   { label: "a:CDPATH-inline", command: (g) => `CDPATH=vendor cd libplain && ${g}`, expect: FAIL },
@@ -383,6 +389,9 @@ describe("runInterceptCli quote-aware attribution: two-sided pins", () => {
       `! cd ${P} && git log`,
       "git log --grep='`x`'",
       'cd "$(git rev-parse --show-toplevel)" && git status',
+      // `command -v` / `-V` only look the name up: nothing changes directory.
+      `command -v cd ${P} && git log`,
+      `command -V cd ${P} && git log`,
     ]) {
       it(JSON.stringify(command), async () => {
         expect(await tagsFor(command, INVESTIGATION)).toEqual([outerTag(INVESTIGATION)]);
@@ -481,4 +490,173 @@ describe("runInterceptCli quote-aware attribution: two-sided pins", () => {
       expect(decisionsOf(result.decisions, INVESTIGATION).map((d) => d.ledgerTag)).toEqual([outerTag(INVESTIGATION)]);
     });
   });
+});
+
+describe("runInterceptCli quote-aware attribution: more two-sided pins", () => {
+  const INVESTIGATION: PolicyName = "preflight-before-investigation";
+
+  async function tagsAt(cwd: string, command: string, tags: readonly string[], policy: PolicyName = INVESTIGATION) {
+    const result = await runAt(cwd, command, tags);
+    return decisionsOf(result.decisions, policy)
+      .map((d) => (isFailClosed(d) ? "(fail-closed)" : d.ledgerTag))
+      .sort();
+  }
+
+  it("more repositories than the bound, reached only through the shell model, fail closed with the bounded decision", async () => {
+    // `cd -P <dir>` is a reset in the segment view, which reads every
+    // `git log` here as the working directory's: only the model names the
+    // four nested repositories, and with the cwd that is one context past
+    // the bound.
+    const command = ["vendor/libplain", "vendor/libok", "vendor/lib sp", "vendor/lib;semi"]
+      .map((rel) => `cd -P '${abs(rel)}' && git log`)
+      .join("; ");
+    for (const enforcement of ["block", "warn"] as const) {
+      const result = await run(command, EVERY_TAG, enforcement);
+      const own = decisionsOf(result.decisions, INVESTIGATION);
+      expect(own).toHaveLength(1);
+      expect(own[0]!.reason).toMatch(/names at least \d+ distinct repository targets/);
+      expect(own[0]!.outcome).toBe(enforcement === "block" ? "deny" : "warn");
+      expect(result.blocked).toBe(enforcement === "block");
+    }
+  });
+
+  describe("a working directory that is a symlink: logical steps start from the path the shell has, physical ones from the real directory", () => {
+    it("cd ../x from a symlinked working directory is logical: it lands next to the link, not next to its target", async () => {
+      // The working directory is `vendor/sidelink` (a link to side/deep);
+      // the shell's `$PWD` keeps the link, so `cd ../libplain` is
+      // `vendor/libplain`. Resolved physically it would be side/libplain,
+      // which names no repository of its own.
+      const tags = await tagsAt(abs("vendor/sidelink"), "cd ../libplain && git log", OUTER_ONLY);
+      expect(tags).toContain(nestedTag(INVESTIGATION, "libplain"));
+      expect(tags).not.toContain("preflight:side");
+    });
+
+    it("git -C .. after a cd into a symlink is physical: the parent of the link's target", async () => {
+      expect(await tagsAt(outer, "cd vendor/sidelink && git -C .. log", OUTER_ONLY)).toEqual(
+        ["preflight:side", outerTag(INVESTIGATION)].sort(),
+      );
+    });
+  });
+});
+
+describe("runInterceptCli quote-aware attribution: a working directory outside every repository", () => {
+  // The cwd context of a directory outside every repository has a blank
+  // ${REPO} / ${BRANCH}: the empty-identifier guard denies it without a
+  // ledger query, and the gate leaves it out only next to a target that
+  // resolved to a real repository. Where the segment view demands it, the
+  // shell model's own target must not take its place: every verdict below
+  // is the one the segment view alone reaches (the master build's).
+  const INVESTIGATION: PolicyName = "preflight-before-investigation";
+  const PUSH: PolicyName = "preflight-before-push";
+  let plain = "";
+  let side = "";
+
+  beforeAll(() => {
+    plain = path.join(root, "plain");
+    fs.mkdirSync(plain);
+    side = path.join(root, "side");
+    for (let dir = plain; ; dir = path.dirname(dir)) {
+      for (const name of [".git", "HEAD"]) {
+        expect(fs.existsSync(path.join(dir, name)), `${dir}/${name}`).toBe(false);
+      }
+      if (path.dirname(dir) === dir) break;
+    }
+  });
+
+  const isBlankCwd = (d: PolicyDecision): boolean => d.extractValues.REPO === "";
+
+  const KEEPS_BLANK_CWD: Array<[string, (a: string, b: string) => string, PolicyName]> = [
+    ["an assignment glued to env -C by &", (a) => `A=x&env -C ${a} git log`, INVESTIGATION],
+    ["a background job before env -C", (a) => `echo hi & env -C ${a} git log`, INVESTIGATION],
+    ["a background job before nice git -C", (a) => `echo hi & nice git -C ${a} log`, INVESTIGATION],
+    ["a push behind an assignment glued to env -C", (a) => `A=x&env -C ${a} git push`, PUSH],
+    ["GIT_DIR naming another repository", (a, b) => `echo hi & GIT_DIR=${b}/.git env -C ${a} git log`, INVESTIGATION],
+    // The cd may fail (the directory does not exist), so git may run here.
+    ["a cd that may fail", (a) => `cd ${a}/missing; git log`, INVESTIGATION],
+  ];
+
+  for (const enforcement of ["block", "warn"] as const) {
+    const failedOutcome = enforcement === "block" ? "deny" : "warn";
+    describe(`enforcement ${enforcement}`, () => {
+      for (const [label, make, policy] of KEEPS_BLANK_CWD) {
+        it(`${label}: the blank cwd context is still demanded with every tag on record`, async () => {
+          const result = await runAt(plain, make(outer, side), EVERY_TAG, enforcement);
+          const own = decisionsOf(result.decisions, policy);
+          expect(own.filter(isBlankCwd).map((d) => d.outcome)).toEqual([failedOutcome]);
+          expect(result.blocked).toBe(enforcement === "block");
+        });
+      }
+
+      for (const [label, command, policy] of [
+        ["git -C <repo> log", (a: string) => `git -C ${a} log`, INVESTIGATION],
+        ["cd <repo> && git push", (a: string) => `cd ${a} && git push`, PUSH],
+        // The directory exists, so the cd cannot fail: git runs only there.
+        ["cd <repo>; git push", (a: string) => `cd ${a}; git push`, PUSH],
+      ] as Array<[string, (a: string) => string, PolicyName]>) {
+        it(`${label}: the remedy the hint names is allowed on the repository's own evidence`, async () => {
+          const result = await runAt(plain, command(outer), OUTER_ONLY, enforcement);
+          const own = decisionsOf(result.decisions, policy);
+          expect(own.map((d) => d.ledgerTag)).toEqual([outerTag(policy)]);
+          expect(own.every((d) => d.outcome === "allow")).toBe(true);
+          expect(result.blocked).toBe(false);
+        });
+      }
+    });
+  }
+});
+
+describe("runInterceptCli quote-aware attribution: a repository nested in a parent repository", () => {
+  // The worktree layout `<parent>/wt/<child>`: a `cd` that certainly
+  // succeeds has no failure branch, so `cd frontend; ...; cd ..` comes back
+  // to the child and never reaches the parent. A `cd` that may fail keeps
+  // its failure branch, and the parent is demanded where the shell can
+  // really get there.
+  const INVESTIGATION: PolicyName = "preflight-before-investigation";
+  const CHILD = "child-repo";
+  const CHILD_BRANCH = "brchild";
+  let child = "";
+
+  beforeAll(() => {
+    const parent = path.join(root, "parent-repo");
+    makeRepo(parent, "brparent");
+    child = path.join(parent, "wt", CHILD);
+    makeRepo(child, CHILD_BRANCH);
+    fs.mkdirSync(path.join(child, "frontend"));
+    fs.mkdirSync(path.join(child, "backend"));
+  });
+
+  const CHILD_TAGS = tagsOfRepos([[CHILD, CHILD_BRANCH]]);
+
+  for (const enforcement of ["block", "warn"] as const) {
+    describe(`enforcement ${enforcement}`, () => {
+      for (const command of [
+        "cd frontend; npm test; cd ..; git status",
+        "cd frontend && npm test; cd ..; git status",
+        "cd frontend; npm test; cd ..; cd backend; npm test; cd ..; git status",
+        "cd frontend && npm test && cd .. && git status",
+        "pushd frontend; npm test; popd; git status",
+        "git status",
+      ]) {
+        it(`${JSON.stringify(command)} is decided on the child's evidence alone`, async () => {
+          const result = await runAt(child, command, CHILD_TAGS, enforcement);
+          const own = decisionsOf(result.decisions, INVESTIGATION);
+          expect(own.map((d) => d.ledgerTag)).toEqual([`preflight:${CHILD}`]);
+          expect(own[0]!.outcome).toBe("allow");
+          expect(result.blocked).toBe(false);
+        });
+      }
+
+      for (const command of ["cd missing; npm test; cd ..; git status", "cd ../.. && git status"]) {
+        it(`${JSON.stringify(command)} can run in the parent: its evidence is demanded too`, async () => {
+          const result = await runAt(child, command, CHILD_TAGS, enforcement);
+          const own = decisionsOf(result.decisions, INVESTIGATION);
+          expect(own.map((d) => d.ledgerTag).sort()).toEqual([`preflight:${CHILD}`, "preflight:parent-repo"].sort());
+          expect(own.find((d) => d.ledgerTag === "preflight:parent-repo")?.outcome).toBe(
+            enforcement === "block" ? "deny" : "warn",
+          );
+          expect(result.blocked).toBe(enforcement === "block");
+        });
+      }
+    });
+  }
 });

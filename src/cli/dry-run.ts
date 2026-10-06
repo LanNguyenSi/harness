@@ -23,6 +23,7 @@ import {
   usesPerRepoBuiltins,
 } from "../runtime/intercept.js";
 import { shellModelViewOf, type ShellModelView } from "../runtime/shell-command-model.js";
+import { ModelPathResolver } from "../runtime/shell-model-paths.js";
 import type { Hook, Manifest, Policy } from "../schema/index.js";
 import { EX_USAGE, HarnessExitError } from "./exit-codes.js";
 import { loadManifest, type LoaderOptions } from "./loader.js";
@@ -295,6 +296,7 @@ function ledgerQueriesFor(
     attribution.branchOverridden,
     ctx,
     attribution.shellModel,
+    attribution.modelPaths,
   );
   if (result.kind === "bounded") {
     return [
@@ -318,6 +320,8 @@ interface AttributionInput {
   branchOverridden: boolean;
   /** The quote-aware shell command model of the command (task 7d4abf84). */
   shellModel: ShellModelView | undefined;
+  /** The model's path resolver for this dry-run (its directory oracle too), as `policy intercept` has one per event. */
+  modelPaths: ModelPathResolver | undefined;
 }
 
 function policyHit(
@@ -384,11 +388,14 @@ export function dryRun(prompt: string, opts: DryRunOptions = {}): DryRunResult {
   };
 
   const command = (toolArgs as { command?: unknown } | undefined)?.command;
+  const modelPaths =
+    tool !== null && typeof command === "string" ? new ModelPathResolver(builtins.CWD) : undefined;
   const shellModel =
-    tool !== null && typeof command === "string" ? shellModelViewOf(command) : undefined;
+    tool !== null && typeof command === "string" ? shellModelViewOf(command, modelPaths) : undefined;
   const attribution: AttributionInput = {
     segments: tool !== null && typeof command === "string" ? (segmentViewOf(command) ?? []) : [],
     shellModel,
+    modelPaths,
     cwdHeadSha: cwdGitContext.sha.length > 0 ? cwdGitContext.sha : undefined,
     gitContextMemo: new Map(),
     insideRepositoryMemo: new Map(),

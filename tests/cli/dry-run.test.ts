@@ -777,6 +777,33 @@ describe("dry-run: the quote-aware shell model arm and attribution match policy 
     expect(policyMatchesEvent(investigation, event)).toBe(true);
   });
 
+  it("predicts the runtime's demands from a cwd outside every repository and from a repository nested in another", async () => {
+    const w = makeWorld();
+    const root = path.dirname(w.outer);
+    const plain = path.join(root, "plain");
+    fs.mkdirSync(plain);
+    const child = path.join(w.outer, "wt", "child");
+    fs.mkdirSync(path.join(child, ".git"), { recursive: true });
+    fs.writeFileSync(path.join(child, ".git", "HEAD"), "ref: refs/heads/feature-child\n");
+    fs.mkdirSync(path.join(child, "frontend"));
+    // The blank cwd context renders differently in the two (a decision tag
+    // vs a hint), both naming that no ledger query is made.
+    const blank = (tags: string[]): string[] => tags.map((t) => (t.includes("no ledger query") ? "(blank cwd)" : t));
+    const cases: Array<[string, string, string, string[]]> = [
+      // The model reads env -C behind `&`; the segment view's blank cwd demand stays.
+      [`A=x&env -C ${w.outer} git log`, plain, "preflight-before-investigation", ["(blank cwd)", "preflight:outer"]],
+      [`cd ${w.outer}; git log`, plain, "preflight-before-investigation", ["preflight:outer"]],
+      // A cd into an existing directory cannot fail: `cd ..` returns to the child.
+      ["cd frontend; npm test; cd ..; git status", child, "preflight-before-investigation", ["preflight:child"]],
+      ["cd missing; npm test; cd ..; git status", child, "preflight-before-investigation", ["preflight:child", "preflight:outer"]],
+    ];
+    for (const [command, cwd, policy, expected] of cases) {
+      const fromRuntime = blank(await runtimeTags(command, cwd, policy)).sort();
+      expect(fromRuntime, `runtime ${command}`).toEqual(expected);
+      expect(blank(predictedTags(command, cwd, policy)).sort(), `dry-run ${command}`).toEqual(fromRuntime);
+    }
+  });
+
   it("does not extend the shell model arm to a policy that is not evaluated per repository", async () => {
     const w = makeWorld();
     const command = "git '-C' vendor/libplain tag v1";
