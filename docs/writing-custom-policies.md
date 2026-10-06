@@ -346,10 +346,9 @@ resolved directory); a command that needs more fails closed (next
 section). End to end, a command at the 100000-character input bound is
 decided well under a second on the measured shapes, against the 15000 ms
 `budget_ms` of the `harness policy intercept` hooks (a hook past its
-budget allows), and a command at that bound that no policy matches (a
-chain of `cd -P a && cd b` before `npm test`) took 136 to 138 ms against
-17 ms on the base commit; the CHANGELOG entry for task `7d4abf84` records
-the measurement.
+budget allows), and a command no policy matches pays the model's cost
+too; the CHANGELOG entry for task `7d4abf84` records the measurement,
+including one for such a command.
 
 **Fallback to cwd only (no distinct second context).** A command still
 evaluates against the session's cwd alone — identical to a policy with no
