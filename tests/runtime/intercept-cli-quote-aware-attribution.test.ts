@@ -425,7 +425,9 @@ describe("runInterceptCli quote-aware attribution: two-sided pins", () => {
     });
 
     it("the last element of a pipeline may run in the current shell (zsh): its cd counts", async () => {
-      expect(await tagsFor(`echo | cd ${P} && git log`, INVESTIGATION)).toEqual(
+      // `cd -P`: the segment view does not attribute it, so only the model's
+      // reading of the pipeline can demand the nested repository here.
+      expect(await tagsFor(`echo | cd -P ${P} && git log`, INVESTIGATION)).toEqual(
         [nestedTag(INVESTIGATION, "libplain"), outerTag(INVESTIGATION)].sort(),
       );
     });
