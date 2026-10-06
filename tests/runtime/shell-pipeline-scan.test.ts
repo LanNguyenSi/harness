@@ -164,6 +164,70 @@ describe("scanShellPipeline: flags", () => {
     expect(scanShellPipeline(command)?.hasGroupParen).toBe(expected);
   });
 
+  // zsh GLOB_SUBST: `$~x` and a tilde in a `${...}` body glob-expand the value
+  // (task b647da7f).
+  it.each([
+    ["echo $x", false],
+    ["echo ${x}", false],
+    ["echo ${x:-a}", false],
+    ["echo ~/x", false],
+    ["echo '$~x'", false], // single quotes
+    ["echo \\$~x", false], // the dollar is escaped
+    ["echo '${~x}'", false],
+    ["echo ${x:-'~'}", false], // quoted tilde in ${..}
+    ['echo ${x:-"~"}', false],
+    ["echo $=x", false],
+    ["echo $^x", false],
+    ["echo $~x", true],
+    ["echo $~", true],
+    ["echo $^~x", true],
+    ["echo $^^~x", true],
+    ["echo $==~x", true],
+    ["echo ${~x}", true],
+    ["echo ${=~x}", true],
+    ["echo ${~^x}", true],
+    ["echo ${x:-~/y}", true],
+    ["echo ${x:-${~y}}", true],
+    ['echo "$~x"', true],
+    ['echo "${~x}"', true],
+  ])("hasGlobSubst(%j) is %s", (command, expected) => {
+    expect(scanShellPipeline(command)?.hasGlobSubst).toBe(expected);
+  });
+
+  // Any parenthesis inside a `${...}` body, quoted or not.
+  it.each([
+    ["echo ${x}", false],
+    ["echo ${x:-a}", false],
+    ["echo '(a)'", false],
+    ['echo "(a)"', false],
+    ["echo \\(a\\)", false],
+    ["echo ${x}(a)", false],
+    ["echo ${x:-'(a)'}", true],
+    ['echo ${x:-"(a)"}', true],
+    ["echo ${x:-$'(a)'}", true],
+    ["echo ${x:-\\(a\\)}", true],
+    ["echo ${x:-(a)}", true],
+    ["echo ${(@)x}", true],
+    ["echo ${x:-{'(a)'}}", true],
+    ['echo "${x:-\'(a)\'}"', true],
+    ["echo ${x:-${y:-'(a)'}}", true],
+  ])("hasParenInParam(%j) is %s", (command, expected) => {
+    expect(scanShellPipeline(command)?.hasParenInParam).toBe(expected);
+  });
+
+  it.each([
+    ["echo ~", false],
+    ["echo ~root", false],
+    ["echo '~[x]'", false],
+    ['echo "~[x]"', false],
+    ["echo \\~[x]", false],
+    ["echo a~[x]", true], // refused wherever the unquoted `~[` sits
+    ["echo ~[x]", true],
+    ["ls | echo ~[x]", true],
+  ])("hasDynamicNamedDir(%j) is %s", (command, expected) => {
+    expect(scanShellPipeline(command)?.hasDynamicNamedDir).toBe(expected);
+  });
+
   it("treats a trailing lone backslash as a literal character", () => {
     expect(stagesOf("cat x \\")).toEqual(["cat x \\"]);
   });

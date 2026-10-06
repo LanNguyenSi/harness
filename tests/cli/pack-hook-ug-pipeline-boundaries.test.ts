@@ -149,6 +149,18 @@ const FORMERLY_ALLOWED: ReadonlyArray<readonly [string, string]> = [
   ["zsh glob qualifier e:'..': alone", "ls *(e:'touch pwned':)"],
   ["zsh process substitution =(..) in a pipeline", "cat =(touch pwned) | head"],
   ["zsh glob qualifier +func", "cat *(+touch) | head"],
+  // zsh re-globs the value of an expansion (GLOB_SUBST), so a qualifier hidden
+  // in a quote inside `${..}` runs while no parenthesis is unquoted (task
+  // b647da7f); each row creates a file under zsh 5.9, witnessed in
+  // tests/runtime/zsh-expansion-code-execution.test.ts.
+  ["zsh ${~x:-'..'} re-glob with a quoted qualifier", "ls ${~x:-'*(e:touch pwned:)'}"],
+  ["zsh ${~x:-'..'} in a pipeline", "cat ${~x:-'*(e.touch pwned.)'} | head"],
+  ["zsh ${=~x:-'..'}", "ls ${=~x:-'*(e:touch pwned:)'}"],
+  ["zsh $~x after an assigning ${x:='..'}", "echo ${x:='*(e:touch pwned:)'} $~x"],
+  ["zsh $^~x", "ls $^~x"],
+  ["zsh $==~x", "ls $==~x"],
+  ["zsh dynamic named directory ~[..]", "echo ~[foo]"],
+  ["a quoted paren inside ${..}", "echo ${x:-'(paren)'}"],
 ];
 
 // Still refused up front, before any scan (unchanged by the scan).
@@ -173,6 +185,11 @@ const STILL_ALLOWED: ReadonlyArray<readonly [string, string]> = [
   ["escaped parentheses", "find . \\( -name a \\) | head"],
   ["quoted parentheses", "grep '(x)' f | head"],
   ["double-quoted parentheses", 'grep "(x)" f | head'],
+  ["braced variable", "cat ${HOME}/x | head"],
+  ["braced variable with a default", "echo ${x:-default} | head"],
+  ["braced variable with a suffix strip", "echo ${HOME%/*} | head"],
+  ["braced variable with a substitution", "echo ${HOME//a/b} | head"],
+  ["array-element shorthand $^x without a tilde", "ls $^x | head"],
 ];
 
 describe.each(RUNTIMES)("understanding-gate %s hook: a `|` that is not a stage boundary", (runtime, run) => {

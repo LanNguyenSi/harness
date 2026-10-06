@@ -37,6 +37,10 @@
 // modelled; callers refuse `$(` and backticks before scanning, and a stray
 // `)` makes the scan return `null`.
 //
+// The scan also reports zsh constructs that run code without any `$(`,
+// backtick or write token (tracker task b647da7f), see `hasGlobSubst`,
+// `hasParenInParam` and `hasDynamicNamedDir` on `ShellPipelineScan`.
+//
 // Not modelled, and harmless for a refuse-first caller: comments (a `|` after
 // `#` is treated as a boundary, which only makes a caller classify more
 // stages) and a trailing lone backslash (kept as a literal character).
@@ -61,7 +65,37 @@ export interface ShellPipelineScan {
   readonly hasDollarExpansion: boolean;
   /** True when an unquoted `(` or `)` was seen (extglob, subshell, `$((..))`). */
   readonly hasGroupParen: boolean;
+  /**
+   * True when zsh would re-glob an expansion result (`GLOB_SUBST`): `$~name`
+   * (also `$^~name`, `$==~name`), or an unquoted `~` anywhere in a `${...}` body (`${~x}`, `${=~x}`,
+   * `${~^x}`, `${(@)~x}`). A glob qualifier hidden in a quote inside the
+   * expansion, `${~x:-'*(e:cmd:)'}`, runs `cmd` while the glob expands; the
+   * parentheses sit inside quotes, so `hasGroupParen` stays false.
+   */
+  readonly hasGlobSubst: boolean;
+  /**
+   * True when a `(` or `)` appears anywhere inside a `${...}` body, quoted,
+   * escaped or not. The quoted spelling is the payload half of the
+   * `hasGlobSubst` vector; refusing it keeps the refusal independent of how
+   * the re-glob is spelled.
+   */
+  readonly hasParenInParam: boolean;
+  /**
+   * True when an unquoted `~[` (zsh dynamic named directory) was seen. zsh
+   * calls the `zsh_directory_name` function for it when the host defines one,
+   * so the word is not provably read-only.
+   */
+  readonly hasDynamicNamedDir: boolean;
 }
+
+/**
+ * What follows a `$` when zsh re-globs the value without braces: the
+ * shorthand flags `=`, `^`, `~`, `+` and `#` in any order and repetition
+ * ahead of the name, so `$~x`, `$^~x`, `$^^~x` and `$==~x` all glob-expand
+ * the value. Applied to a short slice right after the `$`; the longest
+ * spelling measured under zsh 5.9 is three characters, the slice leaves room.
+ */
+const DOLLAR_GLOB_SUBST_PREFIX = /^[=^~+#]*~/;
 
 type Context = "dq" | "param" | "brace" | "bracket" | "cmd" | "paren" | "backtick";
 
@@ -99,6 +133,9 @@ export function scanShellPipeline(command: string): ShellPipelineScan | null {
   let hasNonBoundaryPipe = false;
   let hasDollarExpansion = false;
   let hasGroupParen = false;
+  let hasGlobSubst = false;
+  let hasParenInParam = false;
+  let hasDynamicNamedDir = false;
 
   const top = (): Context | undefined => stack[stack.length - 1];
 
@@ -112,6 +149,7 @@ export function scanShellPipeline(command: string): ShellPipelineScan | null {
     // lone backslash is a literal.
     if (c === "\\") {
       if (next === "|") hasNonBoundaryPipe = true;
+      if ((next === "(" || next === ")") && stack.includes("param")) hasParenInParam = true;
       i += i + 1 < command.length ? 2 : 1;
       continue;
     }
@@ -122,6 +160,7 @@ export function scanShellPipeline(command: string): ShellPipelineScan | null {
         continue;
       }
       hasDollarExpansion = true;
+      if (DOLLAR_GLOB_SUBST_PREFIX.test(command.slice(i + 1, i + 8))) hasGlobSubst = true;
       if (next === "{") {
         stack.push("param");
         i += 2;
@@ -134,7 +173,9 @@ export function scanShellPipeline(command: string): ShellPipelineScan | null {
       } else if (next === "'" && ctx !== "dq") {
         const end = endOfSingleQuoted(command, i + 2, true);
         if (end < 0) return null;
-        if (command.slice(i + 2, end).includes("|")) hasNonBoundaryPipe = true;
+        const run = command.slice(i + 2, end);
+        if (run.includes("|")) hasNonBoundaryPipe = true;
+        if (/[()]/.test(run) && stack.includes("param")) hasParenInParam = true;
         i = end;
       } else if (next === '"' && ctx !== "dq") {
         stack.push("dq");
@@ -155,6 +196,7 @@ export function scanShellPipeline(command: string): ShellPipelineScan | null {
     if (ctx === "dq") {
       if (c === '"') stack.pop();
       else if (c === "|") hasNonBoundaryPipe = true;
+      else if ((c === "(" || c === ")") && stack.includes("param")) hasParenInParam = true;
       i += 1;
       continue;
     }
@@ -164,7 +206,9 @@ export function scanShellPipeline(command: string): ShellPipelineScan | null {
     if (c === "'") {
       const end = endOfSingleQuoted(command, i + 1, false);
       if (end < 0) return null;
-      if (command.slice(i + 1, end).includes("|")) hasNonBoundaryPipe = true;
+      const run = command.slice(i + 1, end);
+      if (run.includes("|")) hasNonBoundaryPipe = true;
+      if (/[()]/.test(run) && stack.includes("param")) hasParenInParam = true;
       i = end;
       continue;
     }
@@ -175,16 +219,22 @@ export function scanShellPipeline(command: string): ShellPipelineScan | null {
     }
     if (c === "(") {
       hasGroupParen = true;
+      if (stack.includes("param")) hasParenInParam = true;
       stack.push("paren");
       i += 1;
       continue;
     }
     if (c === ")") {
       hasGroupParen = true;
+      if (stack.includes("param")) hasParenInParam = true;
       if (ctx !== "paren" && ctx !== "cmd") return null;
       stack.pop();
       i += 1;
       continue;
+    }
+    if (c === "~") {
+      if (stack.includes("param")) hasGlobSubst = true;
+      else if (next === "[") hasDynamicNamedDir = true;
     }
     // Plain `{` and `[` only matter inside `${...}` (a `}` or `]` there is
     // matched against them); counting them there keeps the scan on the deep
@@ -210,5 +260,13 @@ export function scanShellPipeline(command: string): ShellPipelineScan | null {
 
   if (stack.length > 0) return null;
   stages.push(command.slice(stageStart));
-  return { stages, hasNonBoundaryPipe, hasDollarExpansion, hasGroupParen };
+  return {
+    stages,
+    hasNonBoundaryPipe,
+    hasDollarExpansion,
+    hasGroupParen,
+    hasGlobSubst,
+    hasParenInParam,
+    hasDynamicNamedDir,
+  };
 }
