@@ -92,8 +92,8 @@ export interface ShellPipelineScan {
  * What follows a `$` when zsh re-globs the value without braces: the
  * shorthand flags `=`, `^`, `~`, `+` and `#` in any order and repetition
  * ahead of the name, so `$~x`, `$^~x`, `$^^~x` and `$==~x` all glob-expand
- * the value. Applied to a short slice right after the `$`; the longest
- * spelling measured under zsh 5.9 is three characters, the slice leaves room.
+ * the value. Applied to everything after the `$` (the regex is anchored and
+ * stops at the first other character), so no flag run length escapes it.
  */
 const DOLLAR_GLOB_SUBST_PREFIX = /^[=^~+#]*~/;
 
@@ -160,7 +160,7 @@ export function scanShellPipeline(command: string): ShellPipelineScan | null {
         continue;
       }
       hasDollarExpansion = true;
-      if (DOLLAR_GLOB_SUBST_PREFIX.test(command.slice(i + 1, i + 8))) hasGlobSubst = true;
+      if (DOLLAR_GLOB_SUBST_PREFIX.test(command.slice(i + 1))) hasGlobSubst = true;
       if (next === "{") {
         stack.push("param");
         i += 2;

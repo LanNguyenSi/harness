@@ -183,6 +183,7 @@ describe("scanShellPipeline: flags", () => {
     ["echo $^~x", true],
     ["echo $^^~x", true],
     ["echo $==~x", true],
+    ["echo $^^^^^^^^^~x", true], // a flag run longer than any fixed window
     ["echo ${~x}", true],
     ["echo ${=~x}", true],
     ["echo ${~^x}", true],

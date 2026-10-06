@@ -704,6 +704,7 @@ describe("write-guard: a zsh re-glob of an expansion is not a read (task b647da7
   // dir reference is what blocks it once the command is not a provable read.
   it.each([
     `cat \${~x:-'*(e:touch ${MARKER}:)'}`,
+    // control: the pipeline route already refused this one before the change
     `ls \${=~x:-'*(e.touch ${MARKER}.)'} | head`,
     `echo \${x:='*(e:touch ${MARKER}:)'} $~x`,
     `ls $^~x ${DIR}`,
