@@ -12,6 +12,7 @@ sources:
   - src/runtime/shell-pipeline-scan.ts
   - src/runtime/intercept.ts
   - src/runtime/shell-command-model.ts
+  - src/runtime/shell-model-paths.ts
   - src/cli/policy/intercept.ts
   - src/runtime/environment-resolver.ts
   - src/cli/init/templates.ts
@@ -124,7 +125,17 @@ angebunden und ersetzt die Segment-Sicht nicht: `src/runtime/intercept.ts`
 liest es als fünften `bash_match`-Arm (nur für Policies mit
 `${REPO}`/`${BRANCH}`/`at_head`, nur für Kommandos, die ein Verzeichnis
 nennen) und vereinigt seine Ziele in `resolveAttributedContexts` mit denen
-der Segment-Sicht, sodass es keine Forderung entfernen kann. Für K1 heißt
+der Segment-Sicht, sodass es keine Forderung entfernen kann: die Forderungen
+der Segment-Sicht entstehen zuerst, genau wie ohne Modell, und das Modell
+hängt nur an (auch der leere cwd-Kontext eines Arbeitsverzeichnisses
+außerhalb jedes Repositorys bleibt, wo die Segment-Sicht ihn fordert; eine
+Policy, die nur der fünfte Arm getroffen hat, hat keine Forderung der
+Segment-Sicht). Die Pfade löst ein `ModelPathResolver` pro Ereignis auf
+(`src/runtime/shell-model-paths.ts`: jede Möglichkeit einmal, für alle
+Policies, unter einem Arbeitsbudget pro Ereignis, bei dessen Überschreitung
+die Policy fail-closed endet); derselbe Resolver beantwortet dem Modell, ob
+ein `cd` oder `pushd` auf oberster Ebene in ein beim Hook-Lauf existierendes
+Verzeichnis führt, und nur dann entfällt dessen Fehlschlag-Zweig. Für K1 heißt
 das: die Form `cd <T> && git -C sub status`, die die Tabelle unten mit `sub`
 führt, komponiert das Modell zu `T/sub` (Betreiber-Entscheidung; die frühere
 Haltung "nicht attribuierbar statt geraten" gilt damit nur noch für die
@@ -214,7 +225,7 @@ Normalisierungs-Pass (vierter Matching-Arm, siehe `intercept.ts`s
 eigenen Kommentar), eine eigene, additive Grenzsuche
 (`findNextBoundaryQuoteAware`), die einen Boundary-Charakter innerhalb
 einer offenen Quote überspringt, und verdrahtet ihn in
-`policyMatchesEvent` (`src/runtime/intercept.ts:591-692#"return true;"`) als vierten
+`policyMatchesEvent` (`src/runtime/intercept.ts:633-735#"Raw-OR-normalised-OR-amp-normalised-OR-quote-normalised"`) als vierten
 OR-Zweig: roh, dann normalisiert, dann amp-bewusst (`aabbad63`), dann
 quote-bewusst (`cf3dff51`), jeder Zweig nur additiv gegenüber den
 vorherigen. Produktions-Nachweis über dieselbe `runInterceptCli`-Messung
@@ -343,7 +354,7 @@ Ausgaben und sind nur paarweise überlappend messbar.
 
 | Modul | Ausgabe | verdrahtet an |
 |---|---|---|
-| `command-normalize.ts` | `normalized` | `bash_match` raw-OR-normalized-OR-amp-OR-quote-normalized (`src/runtime/intercept.ts:591-692#"return true;"`, dritter Arm seit `aabbad63`, vierter Arm seit `cf3dff51`) |
+| `command-normalize.ts` | `normalized` | `bash_match` raw-OR-normalized-OR-amp-OR-quote-normalized (`src/runtime/intercept.ts:633-735#"Raw-OR-normalised-OR-amp-normalised-OR-quote-normalised"`, dritter Arm seit `aabbad63`, vierter Arm seit `cf3dff51`) |
 | | `targetDir`/`targetBase` | nichts (grep-verifiziert) |
 | `bash-prefix-parse.ts` | `inlineEnv`, `cdTarget` | Risk-Gate-Kontext (`src/cli/policy/risk-envelope-enrichment.ts:157#"return { ...base, ...bashPrefix.inlineEnv };"`) |
 | `read-only-bash.ts` | Boolean | Risk-Floor, Understanding-Gate-PreToolUse (2 Hooks), Write-Guard |

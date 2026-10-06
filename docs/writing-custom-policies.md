@@ -214,8 +214,9 @@ elsewhere, with one exception: when the cwd is outside every git
 repository (neither its real path nor any ancestor up to the filesystem
 root holds an entry named `HEAD` or `.git`, and no lookup there failed
 with an error other than ENOENT), `${REPO}` is blank for the policy, and
-a segment's own target resolved to a real repository, the cwd context is
-not demanded and that target's context is demanded in full (see
+a segment's own target (or a shell model path, below) resolved to a real
+repository, the cwd context is not demanded next to that target and the
+target's context is demanded in full (see
 `mayBeInsideRepository` in `src/runtime/intercept.ts`). A detached cwd
 and every other non-blank cwd context are still never dropped. When a trigger-satisfying segment ALSO names a distinct,
 resolvable target (its own `-C`/`env -C`/`--git-dir`, or a target
@@ -228,7 +229,15 @@ session started in.
 
 **When a target gets attributed.** The engine reads the command through
 two independent views and demands the union of what both name (task
-`7d4abf84`).
+`7d4abf84`). The union is built in a fixed order: the per-segment view
+decides first, exactly as it does on its own (for a policy one of its
+matching forms matched, including the cwd-only demand below and the cwd
+context of a working directory outside every repository), and the shell
+command model then adds its own demands or a fail-closed verdict; it never
+removes a demand the per-segment view made. A policy only the shell
+command model's match (below) brought in has no per-segment demand; it is
+decided on the model's directories, with the same cwd rule as a segment
+target.
 
 The per-segment view re-tests the policy's own `bash_match` against each
 segment of the command individually (the same segmentation the trigger
@@ -270,7 +279,22 @@ directory, demands each of them:
   (subshells whose own commands are read too), and `if` / `case` branches
   follow the shell's control flow, so `cd X | git log`, `cd X & git log`,
   `(cd X) && git log`, `cd X || git log` and `! cd X && git log` stay with
-  the working directory.
+  the working directory;
+- a `cd` or `pushd` may fail (a missing directory), and the shell then
+  stays where it was, so a later command can run in either place
+  (`cd X; git log` demands the working directory and `X`). The gate drops
+  that branch where the filesystem rules it out: a `cd` or `pushd` at the
+  top level of the command (not inside `{ }`, a compound command, a
+  function body or an `eval` string), spelled so bash and zsh both run the
+  builtin (`cd`, `builtin cd`, `time cd`; not `chdir`, `command cd`,
+  `noglob cd` or `time -p cd`), with no redirection of its own and no
+  `-e`, whose target is an existing directory the gate can enter when the
+  hook runs. So `cd frontend; npm test; cd ..; git status` in a
+  repository nested inside another one runs `git status` in that
+  repository only, while `cd missing; npm test; cd ..; git status` can
+  reach the parent and demands it. The check reads the filesystem when
+  the hook runs: a command that removes or renames that directory before
+  its `cd` is read as if the directory were still there.
 
 The model also adds a match: a per-repo policy whose trigger none of the
 other forms matched still applies when a model command that names a
@@ -279,6 +303,21 @@ all before). Only such policies and only such commands: a gated verb
 spelled behind a prefix the trigger does not read (`! git log`,
 `{ git log; }`) in a command that names no directory still matches no
 policy.
+
+**Cost.** The shell command model is computed at most once per Bash
+event, and only when a per-repo policy needs it (a per-repo policy the
+other matching forms missed, or a matched per-repo policy's attribution),
+so most Bash events never compute it. Its directories are resolved once
+per distinct directory per event, for every policy, under a per-event
+work budget (`MAX_MODEL_PATH_WORK` in `src/runtime/shell-model-paths.ts`,
+4096 units: one per composition step or path component, per final
+`realpath`, per directory check, and per level of the repository lookup
+for a newly resolved directory); a command that needs more fails closed
+(next section). End to end, a command at the 100000-character input
+bound is decided well under a second on the measured shapes, against the
+15000 ms `budget_ms` of the `harness policy intercept` hooks (a hook past
+its budget allows); the CHANGELOG entry for task `7d4abf84` records the
+measurement.
 
 **Fallback to cwd only (no distinct second context).** A command still
 evaluates against the session's cwd alone — identical to a policy with no
@@ -345,6 +384,11 @@ target against it, through any later `cd` form, `cd -`, `popd` or a
   commands after the loop and for the commands inside it;
 - more than 8 possible directories for one command, or a composed path
   longer than 4096 characters;
+- directories that need more than the per-event work budget to resolve
+  (see Cost above): many distinct directories only the shell command
+  model names (the tests pin 1000 `git '-C' <dir>` commands as failing
+  closed and 10 as decided normally; the limit depends on how deep the
+  directories are), or a chain of 2000 `cd` steps;
 - a command line the model cannot lex but that may still run (for
   example subshells nested deeper than 8 levels), or one longer than the
   100000-character normalisation bound, when its text holds a
@@ -365,7 +409,8 @@ plain path (`git -C $'vendor/ok' log`), a `cd` or `pushd` with such a value
 that has nothing to do with the gated verb later in the command, a path
 that really does contain a backtick, a glob that matches exactly one
 directory, a `CDPATH` search, and a loop such as
-`for d in a b; do cd "$d"; git status; cd ..; done`. Plain unquoted paths,
+`for d in a b; do cd "$d"; git status; cd ..; done`, a command past the
+work budget. Plain unquoted paths,
 quoted plain paths and a backtick that is not a target (a `--grep='...'`
 or a commit message) are unaffected. A command whose gated verb never
 runs can also gain a demand or fail closed (a `git -C a -C b` where `b`
