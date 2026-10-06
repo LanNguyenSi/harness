@@ -18,6 +18,7 @@ import {
   emptyIdentifierGuard,
   MAX_ATTRIBUTED_CONTEXTS,
   resolveAttributedContexts,
+  OPAQUE_TARGET_REASON,
   usesPerRepoBuiltins,
 } from "../runtime/intercept.js";
 import type { Hook, Manifest, Policy } from "../schema/index.js";
@@ -285,6 +286,9 @@ function ledgerQueriesFor(
         `repository targets for this policy, exceeding the ${MAX_ATTRIBUTED_CONTEXTS}-context ` +
         `bound; no context queried)`,
     ];
+  }
+  if (result.kind === "opaque-target") {
+    return [`(opaque target: ${OPAQUE_TARGET_REASON}; no context queried)`];
   }
   return result.contexts.map((c) => staticLedgerQuery(policy, ctx, c.builtins));
 }

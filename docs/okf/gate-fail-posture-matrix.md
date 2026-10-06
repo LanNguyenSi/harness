@@ -3,7 +3,7 @@ type: overview
 title: Gate fail-posture matrix
 description: Which harness enforcement gates fail OPEN vs fail CLOSED when their evidence source (grounding-mcp ledger, approval markers, verdict files, probes) is unreachable or errors, with the exact code paths and override knobs.
 tags: [gates, fail-open, fail-closed, enforcement]
-timestamp: 2026-10-06T07:15:00Z
+timestamp: 2026-10-06T08:00:08Z
 sources:
   - src/cli/pack/auto-approve-path.ts
   - src/io/atomic-write.ts
@@ -93,7 +93,7 @@ DISTINCT repository a trigger-satisfying command segment names (its own
 persisting `cd`) — the session's own cwd context is ALWAYS also
 evaluated, never dropped except for a cwd outside every repository next to a resolved target (see the exception below; `resolveAttributedContexts`; the "always add, never replace" rule
 D-021 and its four-review-pass history are restated in-tree in that
-function's own doc comment, `src/runtime/intercept.ts:1315-1343#"disproved"`; the
+function's own doc comment, `src/runtime/intercept.ts:1327-1361#"disproved"`; the
 original decision record under
 `.ai/runs/2026-08-02-per-repo-gate-scoping-redesign/` is local run state
 and not shipped with the repo). This section covers only the FALLBACK side of that resolution,
@@ -103,12 +103,39 @@ since it is the part that changes this matrix's own fail-posture story:
   target (`--work-tree` alone, more than one repo-relocating option, a
   relative target after a preceding `cd`, a `~`/quoted/substitution
   value) falls back to the cwd context ALONE — never fail-open, never a
-  new gap.** This is identical to the cwd-only resolution every such
+  new gap, with the one exception in the next bullet.** This is identical to the cwd-only resolution every such
   policy had before this task; the fallback is a PRECISION concern (does
   the demand correctly name the touched repo), not a safety one, because
   the cwd demand is never dropped when the fallback applies (the one
   exception, below, drops the context of a cwd outside every repository
   only next to a RESOLVED target, never in a fallback).
+- **A repo-relocating value this module refuses to read fails CLOSED
+  instead of falling back (task `cfb6b390`).** A `-C`, `--git-dir` or
+  `env -C` value (every `-C` of an `env`, a `~` value included), or ANY
+  argument of a `cd` / `pushd` / `popd` (flags, redirections and a
+  `builtin` / `command` / `eval` / `VAR=value` / `{` prefix around it do
+  not hide it), that holds a backtick (quoted or not, an escaped backtick,
+  a backtick command substitution), an ANSI-C quoted value (`$'...'`,
+  which decodes escapes) or a locale quoted value (`$"..."`, which a
+  locale catalogue can translate; bash decodes no escape there), or that
+  is otherwise unattributable AND holds a control, format or separator
+  character, makes `segmentViewOf` flag the segment (`opaqueTarget`), also
+  for a later segment that inherits the directory of such a `cd` or names
+  a relative target against it.
+  `resolveAttributedContexts` then returns `opaque-target` and
+  `intercept()` records one decision without a ledger query (deny for a
+  `block` policy, warn for a `warn` policy), the same shape as the bound
+  below; no evidence can satisfy it, the remedy is a plain path, and it
+  over-blocks harmless forms such as ``git -C `pwd` log``. The same
+  fix makes the command tokeniser end a word only at a space or a tab (the
+  shell's blanks), so a U+2028, U+00A0, carriage return or form feed inside
+  an unquoted `-C` target stays in the target and the command still reads
+  as the gated `git <subcommand>`; such a target is attributed to that
+  literal directory. NOT covered, still the cwd-only fallback above: a
+  quoted value without those characters (`git -C 'vendor/lib' log`), a
+  `$(...)` substitution, a `~` or variable value, and a quoted path that
+  holds a space (the whitespace-splitting tokeniser reads it as a different
+  command and no policy matches it at all).
 - **More than `MAX_ATTRIBUTED_CONTEXTS` (4) distinct targets for one
   policy on one event fails CLOSED** — see the new table row above. This
   is the one place per-policy attribution ADDS a fail-closed posture the

@@ -2083,3 +2083,145 @@ describe("segmentViewOf", () => {
     });
   });
 });
+
+// Task cfb6b390: a repo-relocating target the module refuses to read
+// (a backtick, an ANSI-C quoted value, an unattributable value with a
+// control character) is flagged `opaqueTarget` so the gate can fail closed
+// instead of reading it as "no target", and the tokeniser ends a word only
+// at a space or a tab, as a shell does.
+describe("segmentViewOf: opaque repo-relocating targets (task cfb6b390)", () => {
+  const BACKTICK_DIR = "vendor/lib`x`y";
+
+  describe("flagged opaque", () => {
+    const cases: Array<{ label: string; command: string; segment: number; effective?: string }> = [
+      { label: "git -C with a single-quoted backtick name", command: `git -C '${BACKTICK_DIR}' log`, segment: 0 },
+      { label: "git -C with an escaped backtick name", command: "git -C vendor/lib\\`x\\`y log", segment: 0 },
+      { label: "git -C with a backtick command substitution", command: "git -C `pwd`/vendor log", segment: 0 },
+      { label: "git --git-dir= with a backtick name", command: `git --git-dir='${BACKTICK_DIR}/.git' log`, segment: 0 },
+      { label: "git --git-dir <v> with a backtick name", command: `git --git-dir '${BACKTICK_DIR}/.git' log`, segment: 0 },
+      { label: "env -C with a backtick name", command: `env -C '${BACKTICK_DIR}' git log`, segment: 0 },
+      { label: "a backtick hidden behind a second -C (the multi-flag lock)", command: `git -C vendor/ok -C '${BACKTICK_DIR}' log`, segment: 0 },
+      { label: "git -C with an ANSI-C quoted value", command: "git -C $'vendor/lib\\x60x' log", segment: 0 },
+      { label: "git -C with a quoted value carrying ESC", command: "git -C 'vendor/lib\u001bz' log", segment: 0 },
+      { label: "git -C with a quoted value carrying U+202E", command: "git -C 'vendor/lib\u202ez' log", segment: 0 },
+      { label: "git -C with a ~ value carrying BEL", command: "git -C ~/lib\u0007z log", segment: 0 },
+      { label: "the cd segment itself", command: `cd '${BACKTICK_DIR}' && git log`, segment: 0 },
+      { label: "the git segment after a cd with a backtick name", command: `cd '${BACKTICK_DIR}' && git log`, segment: 1 },
+      { label: "the git segment after a cd with a backtick name and a harmless read between", command: `cd '${BACKTICK_DIR}' && echo hi && git log`, segment: 2 },
+      { label: "a relative cd after an opaque cd (its base is unknown)", command: `cd '${BACKTICK_DIR}' && cd sub && git log`, segment: 2 },
+      { label: "a relative -C after an opaque cd", command: `cd '${BACKTICK_DIR}' && git -C sub log`, segment: 1 },
+      // A `cd` the bare `cd <path>` reading does not cover: the opaque
+      // argument still names the directory the shell moves to.
+      { label: "cd -P with an opaque value (the cd segment)", command: `cd -P '${BACKTICK_DIR}' && git log`, segment: 0 },
+      { label: "cd -P with an opaque value (the read after it)", command: `cd -P '${BACKTICK_DIR}' && git log`, segment: 1 },
+      { label: "cd -L with an opaque value", command: `cd -L '${BACKTICK_DIR}' && git log`, segment: 1 },
+      { label: "cd -- with an opaque value", command: `cd -- '${BACKTICK_DIR}' && git log`, segment: 1 },
+      { label: "pushd with an opaque value (the pushd segment)", command: `pushd '${BACKTICK_DIR}' && git log`, segment: 0 },
+      { label: "pushd with an opaque value (the read after it)", command: `pushd '${BACKTICK_DIR}' && git log`, segment: 1 },
+      { label: "cd with a redirection to /dev/null", command: `cd '${BACKTICK_DIR}' >/dev/null && git log`, segment: 1 },
+      { label: "cd with a stderr redirection", command: `cd '${BACKTICK_DIR}' 2>&1 && git log`, segment: 1 },
+      { label: "a brace group (the cd segment)", command: `{ cd '${BACKTICK_DIR}'; git log; }`, segment: 0 },
+      { label: "a brace group (the read in the group)", command: `{ cd '${BACKTICK_DIR}'; git log; }`, segment: 1 },
+      { label: "builtin cd (the cd segment)", command: `builtin cd '${BACKTICK_DIR}' && git log`, segment: 0 },
+      { label: "builtin cd (the read after it)", command: `builtin cd '${BACKTICK_DIR}' && git log`, segment: 1 },
+      { label: "command cd", command: `command cd '${BACKTICK_DIR}' && git log`, segment: 1 },
+      { label: "eval cd", command: `eval cd '${BACKTICK_DIR}' && git log`, segment: 1 },
+      { label: "a quoted cd command word", command: `"cd" '${BACKTICK_DIR}' && git log`, segment: 1 },
+      { label: "command -p cd (the wrapper's own flag)", command: `command -p cd '${BACKTICK_DIR}' && git log`, segment: 1 },
+      { label: "cd after a compound-command keyword", command: `if true; then cd '${BACKTICK_DIR}'; git log; fi`, segment: 2 },
+      { label: "a CDPATH assignment before cd", command: `CDPATH=. cd '${BACKTICK_DIR}' && git log`, segment: 1 },
+      { label: "a line continuation after the cd (the cd segment)", command: `cd '${BACKTICK_DIR}' \\\n&& git log`, segment: 0 },
+      { label: "a line continuation after the cd (the read after it)", command: `cd '${BACKTICK_DIR}' \\\n&& git log`, segment: 2 },
+      // `effective` is the one attributable value the extraction kept (the
+      // first `-C`); the flag is what makes the gate ignore it.
+      { label: "env -C with a second, opaque -C (env honours the last one)", command: `env -C sub -C '${BACKTICK_DIR}' git log`, segment: 0, effective: "sub" },
+      { label: "env -C with an opaque value glued to the flag", command: "env -C sub -C'vendor/lib`x' git log", segment: 0, effective: "sub" },
+      { label: "env --chdir= with a second, opaque value", command: `env --chdir=sub --chdir='${BACKTICK_DIR}' git log`, segment: 0, effective: "sub" },
+      { label: "env -C with a ~ value carrying ESC", command: "env -C ~/lib\u001bz git log", segment: 0 },
+      { label: "env -C with a ~ value carrying U+2028", command: "env -C ~/lib\u2028z git log", segment: 0 },
+      // Opaque cd followed by an env-wrapped git whose own relative -C is
+      // composed with the env directory: the segment inherits the opaque
+      // directory through the early-return path.
+      { label: "env -C plus a relative -C after an opaque cd", command: `cd '${BACKTICK_DIR}' && env -C sub git -C sub2 log`, segment: 1 },
+      { label: "the read after an env -C plus relative -C segment that followed an opaque cd", command: `cd '${BACKTICK_DIR}' && env -C sub git -C sub2 status && git log`, segment: 2 },
+      { label: "git -C with a locale quoted value", command: 'git -C $"vendor/x" log', segment: 0 },
+      { label: "git -C with a quoted value carrying U+2029 (written as an escape)", command: "git -C 'vendor/lib\u2029y' log", segment: 0 },
+    ];
+    for (const c of cases) {
+      it(`${c.label}: ${JSON.stringify(c.command)}`, () => {
+        const segs = segmentViewOf(c.command);
+        expect(segs).not.toBeNull();
+        const seg = segs![c.segment]!;
+        expect(seg.opaqueTarget).toBe(true);
+        // The attribution fields stay exactly as for every other
+        // unattributable form: the flag is additive.
+        expect(seg.effectiveTarget).toBe(c.effective ?? null);
+      });
+    }
+  });
+
+  describe("not flagged (the cwd-only fallback and precise attribution are unchanged)", () => {
+    const cases: Array<{ label: string; command: string; segment: number }> = [
+      { label: "a plain relative -C", command: "git -C vendor/libplain log", segment: 0 },
+      { label: "a plain absolute -C", command: "git -C /tmp/repoB log", segment: 0 },
+      { label: "a quoted plain -C (the documented quoted-value ceiling)", command: "git -C 'vendor/libplain' log", segment: 0 },
+      { label: "a ~ value", command: "git -C ~/x log", segment: 0 },
+      { label: "a variable value", command: 'git -C "$X" log', segment: 0 },
+      { label: "an unquoted value carrying ESC (attributed to that literal directory)", command: "git -C vendor/lib\u001bz log", segment: 0 },
+      { label: "a backtick in a later argument, not a target", command: "git log --grep='`x`'", segment: 0 },
+      { label: "a backtick in a commit message", command: "git commit -m 'fix `x`'", segment: 0 },
+      { label: "the git segment after a pipe from an opaque cd (each pipe side is its own subshell)", command: `cd '${BACKTICK_DIR}' | git log`, segment: 1 },
+      { label: "the git segment after an opaque cd inside a closed subshell", command: `(cd '${BACKTICK_DIR}' && git status) && git log`, segment: 3 },
+      { label: "an absolute cd after an opaque cd (names its directory outright)", command: `cd '${BACKTICK_DIR}' && cd /tmp/repoB && git log`, segment: 2 },
+      { label: "a bare cd after an opaque cd (reset)", command: `cd '${BACKTICK_DIR}' && cd && git log`, segment: 2 },
+      { label: "an opaque value that is an argument of echo, not of a cd", command: `echo cd '${BACKTICK_DIR}' && git log`, segment: 1 },
+      { label: "a backtick in a commit message that mentions cd", command: "git commit -m 'run cd `x` first'", segment: 0 },
+      { label: "cd -P with a plain value (plain-name shape unchanged)", command: "cd -P sub && git log", segment: 1 },
+      { label: "builtin cd with a plain value (plain-name shape unchanged)", command: "builtin cd sub && git log", segment: 1 },
+      { label: "env -C with two plain values", command: "env -C a -C b git log", segment: 0 },
+      { label: "env -C with a plain ~ value", command: "env -C ~/x git log", segment: 0 },
+    ];
+    for (const c of cases) {
+      it(`${c.label}: ${JSON.stringify(c.command)}`, () => {
+        const segs = segmentViewOf(c.command);
+        expect(segs).not.toBeNull();
+        expect(segs![c.segment]!.opaqueTarget).toBeUndefined();
+      });
+    }
+
+    it("an absolute cd after an opaque cd is attributed to its own directory", () => {
+      const segs = segmentViewOf(`cd '${BACKTICK_DIR}' && cd /tmp/repoB && git log`);
+      expect(segs![2]!.effectiveTarget).toBe("/tmp/repoB");
+    });
+  });
+
+  describe("tokeniser: a word ends at a space or a tab only", () => {
+    const re = policyBashMatch("preflight-before-investigation");
+    const SEPARATORS: Array<[string, string]> = [
+      ["U+2028 line separator", "\u2028"],
+      ["U+2029 paragraph separator", "\u2029"],
+      ["U+00A0 no-break space", "\u00a0"],
+      ["U+3000 ideographic space", "\u3000"],
+      ["carriage return", "\r"],
+      ["form feed", "\f"],
+      ["vertical tab", "\v"],
+    ];
+    for (const [label, ch] of SEPARATORS) {
+      it(`${label} inside a -C target stays in the target and the subcommand stays intact`, () => {
+        const target = `vendor/lib${ch}y`;
+        const segs = segmentViewOf(`git -C ${target} log`);
+        expect(segs).not.toBeNull();
+        expect(segs![0]!.text).toBe("git log");
+        expect(re.test(segs![0]!.text)).toBe(true);
+        expect(segs![0]!.ownTarget).toBe(target);
+        expect(normalizeCommand(`git -C ${target} log`).normalized).toBe("git log");
+      });
+    }
+
+    it("a tab and a space still separate words", () => {
+      const segs = segmentViewOf("git\t-C  vendor/libplain\tlog");
+      expect(segs![0]!.text).toBe("git log");
+      expect(segs![0]!.ownTarget).toBe("vendor/libplain");
+    });
+  });
+});
