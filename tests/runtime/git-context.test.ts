@@ -457,6 +457,24 @@ describe.skipIf(process.platform === "win32")(
       expect(resolveGitContext(nested)).toMatchObject({ branch: "", sha: "", refused: [".git"] });
     });
 
+    it("a symlink at `.git` to a character device (/dev/null) is refused", () => {
+      const { nested } = outerRepoWithNestedWorktree();
+      fs.symlinkSync("/dev/null", path.join(nested, ".git"));
+      expect(resolveGitContext(nested)).toMatchObject({ branch: "", sha: "", refused: [".git"] });
+    });
+
+    it("a unix socket at `.git` is refused", async () => {
+      const { nested } = outerRepoWithNestedWorktree();
+      const net = await import("node:net");
+      const server = net.createServer();
+      await new Promise<void>((resolve) => server.listen(path.join(nested, ".git"), resolve));
+      try {
+        expect(resolveGitContext(nested)).toMatchObject({ branch: "", sha: "", refused: [".git"] });
+      } finally {
+        await new Promise<void>((resolve) => server.close(() => resolve()));
+      }
+    });
+
     it("control: a MISSING `.git` still walks up to the enclosing repository", () => {
       const { nested } = outerRepoWithNestedWorktree();
       expect(resolveGitContext(nested)).toEqual({

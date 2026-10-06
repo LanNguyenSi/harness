@@ -334,6 +334,10 @@ policies: []
     expect(out.status).toBe(0);
   });
 
+  // No-regression control: this passes on the pre-change code too, because a
+  // non-regular HEAD was rejected on stat before any read. It pins that the
+  // intercept path never opens a non-regular HEAD; the loose-ref case above is
+  // the discriminating one.
   it("a Codex shell event with a FIFO at HEAD does not hold the hook past the bound", () => {
     const repo = makeRepo("main");
     fifoOver(path.join(repo, ".git", "HEAD"));

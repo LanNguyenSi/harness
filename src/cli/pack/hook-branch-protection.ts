@@ -407,7 +407,8 @@ async function runPackHookBranchProtectionCliInner(
   // A git file that is PRESENT but refused is not "outside a git work
   // tree": a FIFO, a device, a directory, an oversized or unreadable file
   // where `HEAD` belongs, or a node that is neither a directory nor a
-  // regular file at `.git` itself (the lookup then stops there rather than
+  // regular file (or an oversized or unreadable pointer file) at `.git`
+  // itself (the lookup then stops there rather than
   // walking up to an enclosing repository). In a healthy repository those
   // paths are directories or regular files, so reading it as "no branch,
   // allow" below would let a planted node switch this gate off. This gate

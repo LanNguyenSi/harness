@@ -49,14 +49,15 @@ export interface GitRepoContext {
    * or unreadable file stood where a regular file belongs (`HEAD`,
    * `refs/heads/<branch>`, `packed-refs`, `commondir`, named relative to the
    * git directory), or a node that is neither a directory nor a regular file
-   * stood at `.git` itself (the lookup then stops there instead of walking
+   * stood at `.git` itself, or a `.git` pointer file was oversized or
+   * unreadable (the lookup then stops there instead of walking
    * up to an enclosing repository, so it never resolves THAT repository's
    * branch for this checkout). The affected fields stay `""` exactly as they do for a
    * missing file, so a caller that only treats `""` as "unknown" is
    * unchanged; a deny-capable caller that must not read "unknown" as "safe"
    * (branch-protection) checks this field instead, because in a healthy
-   * repository none of these paths is ever anything but a regular file or
-   * absent. Never populated for a path that is merely missing.
+   * repository none of these paths is ever anything but a directory, a
+   * regular file or absent. Never populated for a path that is merely missing.
    */
   refused?: readonly string[];
 }
