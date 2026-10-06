@@ -52,8 +52,12 @@
 //   documented working-directory fallback; a known base stays a candidate
 //   next to it, because an empty expansion does not move.
 // - Control flow: every command has a success and a failure state (a failed
-//   `cd` stays put). `A && B` starts B from A's success state, `A || B` from
-//   its failure state, `!` swaps them, `;` / newline continue from either,
+//   `cd` stays put; with the gate's `DirectoryOracle`, a top-level `cd` or
+//   `pushd` into a directory that exists has no failure state, so
+//   `cd frontend; ...; cd ..` comes back to where it started instead of
+//   also reaching the parent). `A && B` starts B from A's success state,
+//   `A || B` from its failure state, `!` swaps them, `;` / newline continue
+//   from either,
 //   `&` restores the state the list started in. A pipeline element runs in
 //   a subshell; the last one is joined with the start state (zsh runs it in
 //   the current shell). `( )`, `$( )`, backticks and `<( )` are subshells
@@ -123,6 +127,31 @@ export type DirPossibility =
   | { readonly kind: "unknown" }
   | { readonly kind: "opaque" };
 
+/** A `path` possibility: the working directory (no steps) or a composed path. */
+export type PathPossibility = Extract<DirPossibility, { kind: "path" }>;
+
+/**
+ * The filesystem view the gate may lend the model. The model itself never
+ * touches the filesystem: without an oracle, every directory change may
+ * fail (the shell then stays where it was), so a later relative step is
+ * also composed onto the directory before the change. With one, a `cd` or
+ * `pushd` the oracle confirms (`certainDirectory`: the step, applied to the
+ * base, lands in an existing directory the shell can enter) loses that
+ * failure branch, so `cd frontend; npm test; cd ..; git status` runs
+ * `git status` in the working directory only, not also in its parent. An
+ * oracle answers `true` only when it knows; any doubt (a missing path, an
+ * error, a spent work budget) is `false`, which keeps the branch. The model
+ * asks only for a `cd` or `pushd` it can read without doubt: a literal
+ * target, a shell-neutral spelling (not `chdir`, `command cd`, `noglob cd`
+ * or `time -p cd`, which bash or zsh do not run as a directory change), no
+ * redirection of its own, not inside a `{ }` group, a compound command, a
+ * function body or an `eval` string (a failing group redirection, or a loop,
+ * can stop it from running).
+ */
+export interface DirectoryOracle {
+  certainDirectory(base: PathPossibility, step: PathStep, target: PathPossibility): boolean;
+}
+
 /** One simple command of the modelled command line. */
 export interface ModelCommand {
   /**
@@ -174,9 +203,9 @@ export function hasDirectoryChangeWord(command: string): boolean {
   );
 }
 
-/** The model view of one command; see `ShellModelView`. */
-export function shellModelViewOf(command: string): ShellModelView {
-  const commands = modelShellCommands(command);
+/** The model view of one command; see `ShellModelView` and, for `oracle`, `DirectoryOracle`. */
+export function shellModelViewOf(command: string, oracle?: DirectoryOracle): ShellModelView {
+  const commands = modelShellCommands(command, oracle);
   return {
     commands,
     directoryChangeWord: commands === null && hasDirectoryChangeWord(command),
@@ -731,12 +760,26 @@ const OPAQUE: DirPossibility = { kind: "opaque" };
 const UNKNOWN: DirPossibility = { kind: "unknown" };
 const CWD: DirPossibility = { kind: "path", steps: [] };
 
+const PATH_KEYS = new WeakMap<PathPossibility, string>();
+
 function keyOf(d: DirPossibility): string {
   if (d.kind === "opaque") return "o";
   if (d.kind === "unknown") return "u";
+  const cached = PATH_KEYS.get(d);
+  if (cached !== undefined) return cached;
   let key = "p";
   for (const step of d.steps) key += `${step.mode === "logical" ? "L" : "P"}${step.value.length}:${step.value}`;
+  PATH_KEYS.set(d, key);
   return key;
+}
+
+/**
+ * A string that identifies a possibility: two possibilities with the same
+ * key name the same directory the same way (same steps, same modes), so the
+ * gate resolves each key once per event.
+ */
+export function dirPossibilityKey(d: DirPossibility): string {
+  return keyOf(d);
 }
 
 function setOf(...items: DirPossibility[]): DirSet {
@@ -782,7 +825,7 @@ function composedLength(steps: readonly PathStep[]): number {
  * real directory `a` names).
  */
 function appendStep(base: readonly PathStep[], step: PathStep): DirPossibility {
-  const own = step.mode === "logical" ? path.posix.normalize(step.value) : step.value;
+  const own = step.mode === "logical" ? normalizeLogical(step.value) : step.value;
   let steps: PathStep[];
   const last = base[base.length - 1];
   if (path.posix.isAbsolute(step.value)) {
@@ -791,13 +834,24 @@ function appendStep(base: readonly PathStep[], step: PathStep): DirPossibility {
     const joined = `${last.value}/${step.value}`;
     steps = [
       ...base.slice(0, -1),
-      { value: step.mode === "logical" ? path.posix.normalize(joined) : joined, mode: step.mode },
+      { value: step.mode === "logical" ? normalizeLogical(joined) : joined, mode: step.mode },
     ];
   } else {
     steps = [...base, { value: own, mode: step.mode }];
   }
+  // A logical `.` names the directory before it (`cd x; cd ..` is back
+  // where it started), so it is dropped: that directory and the one the
+  // step leaves are one possibility, not two.
+  const tail = steps[steps.length - 1];
+  if (tail !== undefined && tail.mode === "logical" && tail.value === ".") steps.pop();
   if (composedLength(steps) > MAX_COMPOSED_PATH_LENGTH) return OPAQUE;
   return { kind: "path", steps };
+}
+
+/** Lexical normalisation of a logical step: `a/../b` is `b`, a trailing `/` is dropped. */
+function normalizeLogical(v: string): string {
+  const n = path.posix.normalize(v);
+  return n.length > 1 && n.endsWith("/") ? n.slice(0, -1) : n;
 }
 
 /** A word whose value the gate refuses to read as a directory (the cfb6b390 class, globs). */
@@ -819,10 +873,17 @@ function joinOne(base: DirPossibility, w: ShellWord, mode: PathStepMode, cdpathS
   return appendStep(base.steps, { value: v, mode });
 }
 
-function joinSet(set: DirSet, w: ShellWord, mode: PathStepMode, cdpathSearch: boolean): DirSet {
+function joinSet(
+  set: DirSet,
+  w: ShellWord,
+  mode: PathStepMode,
+  cdpathSearch: boolean,
+  onJoin?: (base: DirPossibility, joined: DirPossibility) => void,
+): DirSet {
   const m = new Map<string, DirPossibility>();
   for (const base of set.values()) {
     const joined = joinOne(base, w, mode, cdpathSearch);
+    onJoin?.(base, joined);
     m.set(keyOf(joined), joined);
     // A variable or substitution may expand to nothing, which stays put.
     if (w.value === null && !w.tilde && !isOpaqueTargetWord(w) && base.kind === "path") m.set(keyOf(base), base);
@@ -845,6 +906,12 @@ interface WalkState {
   cdpath: boolean;
   evalDepth: number;
   loops: LoopFrame[];
+  /**
+   * Open `{ }` groups, plus the compound commands of the enclosing walks
+   * (a subshell body or substitution inside an `if`). Only a directory
+   * change at depth 0 of every walk is asked of the oracle.
+   */
+  enclosing: number;
 }
 
 interface OutRecord {
@@ -894,12 +961,17 @@ function newState(): WalkState {
     cdpath: false,
     evalDepth: 0,
     loops: [],
+    enclosing: 0,
   };
 }
 
-/** The state a subshell starts in: a copy whose moves do not reach the parent or its loops. */
-function subshellState(st: WalkState): WalkState {
-  return { ...st, stack: st.stack.slice(), loops: [] };
+/**
+ * The state a subshell starts in: a copy whose moves do not reach the
+ * parent or its loops. `openCompounds` is the number of compound commands
+ * open in the calling walk, which the subshell body is nested in.
+ */
+function subshellState(st: WalkState, openCompounds: number): WalkState {
+  return { ...st, stack: st.stack.slice(), loops: [], enclosing: st.enclosing + openCompounds };
 }
 
 function emptyCommand(): SimpleCommand {
@@ -910,10 +982,29 @@ interface ExecInfo {
   moved: boolean;
   negated: boolean;
   evalFail: DirSet | null;
+  /** Keys of the directories a directory change certainly succeeds from (see `DirectoryOracle`). */
+  cannotFailFrom: ReadonlySet<string>;
+}
+
+const NO_KEYS: ReadonlySet<string> = new Set();
+
+/** `set` without the possibilities whose key is in `drop` (the same object when nothing is dropped). */
+function withoutKeys(set: DirSet, drop: ReadonlySet<string>): DirSet {
+  if (drop.size === 0) return set;
+  const m = new Map<string, DirPossibility>();
+  for (const [k, d] of set) if (!drop.has(k)) m.set(k, d);
+  return m;
+}
+
+/** A `cd` / `pushd` target the oracle may be asked about: a literal value, nothing dynamic or opaque. */
+function isLiteralTarget(w: ShellWord): boolean {
+  return w.value !== null && !w.tilde && w.value !== "" && !isOpaqueTargetWord(w);
 }
 
 class Walker {
   readonly out: OutRecord[] = [];
+
+  constructor(private readonly oracle: DirectoryOracle | null) {}
 
   walk(tokens: readonly ShellToken[], st: WalkState, finalUnion = true): { succ: DirSet; fail: DirSet } {
     let listStart = st.cur;
@@ -942,17 +1033,19 @@ class Walker {
       const before = { cur: st.cur, oldpwd: st.oldpwd, stack: st.stack.slice(), stackTruncated: st.stackTruncated };
       const nextIsPipe = nextOp === "|" || nextOp === "|&";
       if (nextIsPipe && !inPipe) pipeStart = start;
-      let info: ExecInfo = { moved: false, negated: false, evalFail: null };
+      let info: ExecInfo = { moved: false, negated: false, evalFail: null, cannotFailFrom: NO_KEYS };
       if (cmd.group !== null) {
         // Words before a `( )` group are keywords (`while (cmd)`, `!`,
         // `for ((...))`): read them first, then the group as a subshell.
         if (cmd.words.length > 0) info = this.execCommand({ words: cmd.words, redirs: [], group: null }, st, compound);
-        this.walk(cmd.group, subshellState(st));
+        this.walk(cmd.group, subshellState(st, compound.length));
       } else if (!casePattern) {
         info = this.execCommand(cmd, st, compound);
       }
       let cs = st.cur;
-      let cf = info.evalFail ?? (info.moved ? before.cur : st.cur);
+      // A directory change that fails stays where it was, except from a
+      // directory the oracle confirmed it cannot fail from.
+      let cf = info.evalFail ?? (info.moved ? withoutKeys(before.cur, info.cannotFailFrom) : st.cur);
       if (info.negated) [cs, cf] = [cf, cs];
       cmd = emptyCommand();
       if (nextIsPipe) {
@@ -1115,13 +1208,18 @@ class Walker {
   }
 
   private execCommand(cmd: SimpleCommand, st: WalkState, compound: CompoundFrame[]): ExecInfo {
-    const info: ExecInfo = { moved: false, negated: false, evalFail: null };
+    const info: ExecInfo = { moved: false, negated: false, evalFail: null, cannotFailFrom: NO_KEYS };
     // Substitutions in any word run first, each in a subshell.
     for (const w of [...cmd.words, ...cmd.redirs.map((r) => r.target)]) {
-      for (const sub of w.subs) this.walk(sub, subshellState(st));
+      for (const sub of w.subs) this.walk(sub, subshellState(st, compound.length));
     }
     let words = cmd.words;
     let k = 0;
+    // False once a prefix makes bash or zsh not run a `cd` as the builtin
+    // (`command cd` runs an external program in zsh, `time -p cd` fails in
+    // zsh, `noglob` / `nocorrect` exist only in zsh): such a `cd` is still
+    // modelled as a move, but never asked of the oracle.
+    let shellNeutral = true;
     for (;;) {
       const w = words[k];
       if (w === undefined) break;
@@ -1132,12 +1230,16 @@ class Walker {
         continue;
       }
       if (v === "{" || v === "}") {
+        st.enclosing = v === "{" ? st.enclosing + 1 : Math.max(0, st.enclosing - 1);
         k++;
         continue;
       }
       if (v === "time") {
         k++;
-        if (words[k]?.value === "-p") k++;
+        if (words[k]?.value === "-p") {
+          shellNeutral = false;
+          k++;
+        }
         continue;
       }
       if (v !== null && RESERVED_OPEN.has(v)) {
@@ -1206,10 +1308,12 @@ class Walker {
     for (;;) {
       const v = words[0]?.value;
       if (v === "builtin" || v === "noglob" || v === "nocorrect") {
+        if (v !== "builtin") shellNeutral = false;
         words = words.slice(1);
         continue;
       }
       if (v === "command") {
+        shellNeutral = false;
         let m = 1;
         for (;;) {
           const opt = words[m]?.value;
@@ -1231,14 +1335,24 @@ class Walker {
     }
     const savedCdpath = st.cdpath;
     if (inlineCdpath) st.cdpath = true;
+    // Whether the oracle may confirm this directory change (see
+    // `DirectoryOracle`): a shell-neutral `cd` or `pushd` with no
+    // redirection, outside every group, compound command and `eval`.
+    const confirmable =
+      this.oracle !== null &&
+      shellNeutral &&
+      cmd.redirs.length === 0 &&
+      compound.length === 0 &&
+      st.enclosing === 0 &&
+      st.evalDepth === 0;
     try {
       if (head === "cd" || head === "chdir") {
-        this.doCd(words.slice(1), st);
+        info.cannotFailFrom = this.doCd(words.slice(1), st, confirmable && head === "cd");
         info.moved = true;
         return info;
       }
       if (head === "pushd") {
-        this.doPushd(words.slice(1), st);
+        info.cannotFailFrom = this.doPushd(words.slice(1), st, confirmable);
         info.moved = true;
         return info;
       }
@@ -1308,9 +1422,17 @@ class Walker {
     st.cur = next;
   }
 
-  private doCd(args: readonly ShellWord[], st: WalkState): void {
+  /**
+   * `cd` / `chdir`. Returns the keys of the directories the move certainly
+   * succeeds from (`confirmable` and the oracle agree), so the failure
+   * branch can leave them out.
+   */
+  private doCd(args: readonly ShellWord[], st: WalkState, confirmable: boolean): ReadonlySet<string> {
     let m = 0;
     let mode: PathStepMode = "logical";
+    // `cd -Pe` may fail after it moved (bash: the new directory cannot be
+    // determined): never confirmed.
+    let mayFailAfterMove = false;
     while (m < args.length) {
       const v = args[m]!.value;
       if (v === "--") {
@@ -1321,6 +1443,7 @@ class Walker {
         for (const ch of v) {
           if (ch === "L") mode = "logical";
           else if (ch === "P") mode = "physical";
+          else if (ch === "e") mayFailAfterMove = true;
         }
         m++;
         continue;
@@ -1330,25 +1453,51 @@ class Walker {
     const rest = args.slice(m);
     if (rest.length === 0) {
       this.moveTo(st, UNKNOWN_SET, false); // $HOME
-      return;
+      return NO_KEYS;
     }
     if (rest.length >= 2) {
       this.moveTo(st, OPAQUE_SET, false); // zsh two-argument substitution
-      return;
+      return NO_KEYS;
     }
     const w = rest[0]!;
     if (w.value === "-") {
       this.moveTo(st, st.oldpwd, true);
-      return;
+      return NO_KEYS;
     }
     if (w.value !== null && /^[+-]\d+$/.test(w.value)) {
       this.moveTo(st, this.stackUnion(st), true); // zsh stack entry
-      return;
+      return NO_KEYS;
     }
-    this.moveTo(st, joinSet(st.cur, w, mode, st.cdpath), isRelativeLiteral(w));
+    const { next, cannotFailFrom } = this.joinConfirmed(st, w, mode, confirmable && !mayFailAfterMove);
+    this.moveTo(st, next, isRelativeLiteral(w));
+    return cannotFailFrom;
   }
 
-  private doPushd(args: readonly ShellWord[], st: WalkState): void {
+  /**
+   * `st.cur` joined with a `cd` / `pushd` target, and the keys of the
+   * current directories from which the oracle confirms the target is an
+   * existing directory the shell can enter.
+   */
+  private joinConfirmed(
+    st: WalkState,
+    w: ShellWord,
+    mode: PathStepMode,
+    confirmable: boolean,
+  ): { next: DirSet; cannotFailFrom: ReadonlySet<string> } {
+    const oracle = confirmable && isLiteralTarget(w) ? this.oracle : null;
+    if (oracle === null) return { next: joinSet(st.cur, w, mode, st.cdpath), cannotFailFrom: NO_KEYS };
+    const cannotFailFrom = new Set<string>();
+    const step: PathStep = { value: w.value!, mode };
+    const next = joinSet(st.cur, w, mode, st.cdpath, (base, joined) => {
+      if (base.kind === "path" && joined.kind === "path" && oracle.certainDirectory(base, step, joined)) {
+        cannotFailFrom.add(keyOf(base));
+      }
+    });
+    return { next, cannotFailFrom };
+  }
+
+  /** `pushd`; returns the directories the move certainly succeeds from, like `doCd`. */
+  private doPushd(args: readonly ShellWord[], st: WalkState, confirmable: boolean): ReadonlySet<string> {
     let rest = args;
     let noCd = false;
     while (rest[0]?.value === "-n" || rest[0]?.value === "--") {
@@ -1359,24 +1508,25 @@ class Walker {
       const top = st.stack.pop();
       if (top === undefined) {
         if (st.stackTruncated) this.moveTo(st, OPAQUE_SET, true);
-        return; // no other directory: an error, nothing moves
+        return NO_KEYS; // no other directory: an error, nothing moves
       }
       this.pushStack(st, st.cur);
       this.moveTo(st, top, true);
-      return;
+      return NO_KEYS;
     }
     const w = rest[0]!;
     if (w.value !== null && /^[+-]\d+$/.test(w.value)) {
       this.moveTo(st, this.stackUnion(st), true);
-      return;
+      return NO_KEYS;
     }
-    const target = joinSet(st.cur, w, "logical", st.cdpath);
+    const { next: target, cannotFailFrom } = this.joinConfirmed(st, w, "logical", confirmable && !noCd);
     if (noCd) {
       this.pushStack(st, target);
-      return;
+      return NO_KEYS;
     }
     this.pushStack(st, st.cur);
     this.moveTo(st, target, true);
+    return cannotFailFrom;
   }
 
   private doPopd(args: readonly ShellWord[], st: WalkState): void {
@@ -1637,13 +1787,15 @@ function namesDirectory(dirs: DirSet): boolean {
  * Model every simple command of a Bash command line with the directories
  * it can run in. `null` when the command is longer than
  * `MAX_NORMALIZE_LENGTH` or cannot be lexed, and also when the model itself
- * fails for any other reason (the gate's fallback then applies).
+ * fails for any other reason (the gate's fallback then applies). `oracle`
+ * (optional, see `DirectoryOracle`) lets the walk drop the failure branch
+ * of a directory change that certainly succeeds.
  */
-export function modelShellCommands(command: string): ModelCommand[] | null {
+export function modelShellCommands(command: string, oracle?: DirectoryOracle): ModelCommand[] | null {
   if (command.length > MAX_NORMALIZE_LENGTH) return null;
   try {
     const { tokens } = new ShellLexer(command, null).list(0, "top", 0);
-    const walker = new Walker();
+    const walker = new Walker(oracle ?? null);
     walker.walk(tokens, newState());
     return walker.out.map((rec) => ({
       canonical: rec.canonical,

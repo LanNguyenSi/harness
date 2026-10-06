@@ -6,6 +6,7 @@ import {
   MAX_COMPOSED_PATH_LENGTH,
   modelShellCommands,
   shellModelViewOf,
+  type DirectoryOracle,
   type DirPossibility,
   type ModelCommand,
   type ShellToken,
@@ -37,6 +38,26 @@ function compact(d: DirPossibility): string {
 /** The model command whose canonical text starts with `head`, as compact sorted dirs. */
 function dirsOf(command: string, head = "git log"): string[] {
   const model = modelShellCommands(command);
+  if (model === null) throw new Error(`model is null for ${JSON.stringify(command)}`);
+  const found = model.filter((c) => c.canonical === head || c.canonical.startsWith(`${head} `));
+  if (found.length !== 1) {
+    throw new Error(`expected one "${head}" in ${JSON.stringify(model.map((c) => c.canonical))}`);
+  }
+  return found[0]!.dirs.map(compact).sort();
+}
+
+/**
+ * `dirsOf` with a directory oracle that confirms exactly the targets listed
+ * (in `compact` form), and records every question it was asked.
+ */
+function dirsWithOracle(command: string, existing: readonly string[], asked: string[] = [], head = "git log"): string[] {
+  const oracle: DirectoryOracle = {
+    certainDirectory(base, step, target) {
+      asked.push(`${compact(base)} + ${step.mode === "logical" ? "L" : "P"}:${step.value} = ${compact(target)}`);
+      return existing.includes(compact(target));
+    },
+  };
+  const model = modelShellCommands(command, oracle);
   if (model === null) throw new Error(`model is null for ${JSON.stringify(command)}`);
   const found = model.filter((c) => c.canonical === head || c.canonical.startsWith(`${head} `));
   if (found.length !== 1) {
@@ -466,5 +487,84 @@ describe("shellModelViewOf / hasDirectoryChangeWord", () => {
     for (const command of ["git log", "echo abcd", "git commit -m cdx"]) {
       expect(hasDirectoryChangeWord(command), command).toBe(false);
     }
+  });
+});
+
+describe("modelShellCommands: a directory oracle drops the failure branch of a cd that certainly succeeds", () => {
+  it("without an oracle every cd may fail; a logical step back to the start is one possibility, not two", () => {
+    expect(dirsOf("cd X; git log")).toEqual(["L:X", "cwd"]);
+    // X/.. is the working directory itself: no separate `L:.` entry.
+    expect(dirsOf("cd X; cd ..; git log")).toEqual(["L:..", "L:X", "cwd"]);
+    expect(dirsOf("cd . && git log")).toEqual(["cwd"]);
+    expect(dirsOf("cd X/ && git log")).toEqual(["L:X"]);
+  });
+
+  it("a confirmed cd has no failure branch", () => {
+    expect(dirsWithOracle("cd X; git log", ["L:X"])).toEqual(["L:X"]);
+    expect(dirsWithOracle("cd X; npm test; cd ..; git log", ["L:X", "cwd"])).toEqual(["cwd"]);
+    expect(dirsWithOracle("cd X; cd ..; cd Y; cd ..; git log", ["L:X", "L:Y", "cwd"])).toEqual(["cwd"]);
+    expect(dirsWithOracle("pushd X; git log", ["L:X"])).toEqual(["L:X"]);
+    expect(dirsWithOracle("cd -P X; git log", ["P:X"])).toEqual(["P:X"]);
+    expect(dirsWithOracle("cd /abs/x; git log", ["L:/abs/x"])).toEqual(["L:/abs/x"]);
+    // `||` starts from the failure branch, which a confirmed cd does not have.
+    expect(dirsWithOracle("cd X || git log", ["L:X"])).toEqual([]);
+  });
+
+  it("an unconfirmed cd keeps its failure branch", () => {
+    expect(dirsWithOracle("cd X; git log", [])).toEqual(["L:X", "cwd"]);
+    expect(dirsWithOracle("cd missing; cd ..; git log", ["cwd", "L:.."])).toEqual(["L:..", "cwd"]);
+  });
+
+  it("asks only about a literal target of a shell-neutral cd or pushd at the top level, with no redirection", () => {
+    const notAsked: string[] = [
+      "chdir X; git log",
+      "command cd X; git log",
+      "noglob cd X; git log",
+      "time -p cd X; git log",
+      "cd X >/dev/null; git log",
+      "{ cd X; }; git log",
+      "if true; then cd X; fi; git log",
+      "eval cd X; git log",
+      "cd -Pe X; git log",
+      'cd "$D"; git log',
+      "cd ~/x; git log",
+      "cd -; git log",
+      "pushd -n X; git log",
+      "f() { cd X; }; f; git log",
+    ];
+    for (const command of notAsked) {
+      const asked: string[] = [];
+      dirsWithOracle(command, ["L:X", "P:X"], asked);
+      expect(asked, command).toEqual([]);
+    }
+    for (const command of ["cd X; git log", "builtin cd X; git log", "time cd X; git log", "! cd X; git log", "pushd X; git log"]) {
+      const asked: string[] = [];
+      dirsWithOracle(command, [], asked);
+      expect(asked, command).toEqual(["cwd + L:X = L:X"]);
+    }
+    // Inside a subshell or a substitution the same rule applies to its own top level.
+    const asked: string[] = [];
+    dirsWithOracle('echo "$(cd X; git log)"', ["L:X"], asked);
+    expect(asked).toEqual(["cwd + L:X = L:X"]);
+  });
+
+  it("asks about the cd from every directory it can start in", () => {
+    const asked: string[] = [];
+    // From A the cd cannot fail; from the working directory it can.
+    expect(dirsWithOracle("cd A; cd X; git log", ["L:A/X"], asked)).toEqual(["L:A/X", "L:X", "cwd"]);
+    expect(asked).toEqual(["cwd + L:A = L:A", "L:A + L:X = L:A/X", "cwd + L:X = L:X"]);
+  });
+});
+
+describe("modelShellCommands: time and command -v", () => {
+  it("time and time -p in front of cd are transparent", () => {
+    expect(dirsOf("time cd X && git log")).toEqual(["L:X"]);
+    expect(dirsOf("time -p cd X && git log")).toEqual(["L:X"]);
+  });
+
+  it("command -v / -V in front of cd only look the name up", () => {
+    expect(dirsOf("command -v cd X && git log")).toEqual(["cwd"]);
+    expect(dirsOf("command -V cd X && git log")).toEqual(["cwd"]);
+    expect(dirsOf("command cd X && git log")).toEqual(["L:X"]);
   });
 });
