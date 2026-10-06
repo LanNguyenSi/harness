@@ -397,14 +397,17 @@ export interface InterceptOptions {
    * (`src/runtime/shell-command-model.ts`, task 7d4abf84) for the SAME Bash
    * event's `tool_input.command`: every simple command with the
    * directories it can run in. Read by `policyMatchesEvent`'s fifth arm
-   * (only for a `usesPerRepoBuiltins` policy all four earlier arms missed)
-   * and by `resolveAttributedContexts` (only for a matched per-repo
-   * policy), so most events never compute it. Same lazy, compute-once
-   * shape as `commandSegmentsThunk`; omitted by non-Bash events and by
-   * callers/tests that do not supply one, in which case `intercept()`
-   * builds its own memoised thunk for the event's command (with
-   * `modelPathResolver` as the model's directory oracle) and both
-   * consumers read that.
+   * (for every `usesPerRepoBuiltins` policy all four earlier arms missed)
+   * and by `resolveAttributedContexts` (for a matched per-repo policy), so
+   * it is computed at most once per Bash event and, with any per-repo
+   * Bash policy in the manifest (FULL_TEMPLATE has four), effectively for
+   * every Bash event: such a policy is either missed by the four earlier
+   * arms (the fifth arm reads the model) or matched (its attribution reads
+   * it). Same lazy, compute-once shape as `commandSegmentsThunk`;
+   * omitted by non-Bash events and by callers/tests that do not supply
+   * one, in which case `intercept()` builds its own memoised thunk for the
+   * event's command (with `modelPathResolver` as the model's directory
+   * oracle) and both consumers read that.
    *
    * SAME INVARIANT as `normalizedCommand` / `ampNormalizedCommandThunk`
    * above: not checked against `event` at runtime.

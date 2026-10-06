@@ -283,18 +283,46 @@ directory, demands each of them:
 - a `cd` or `pushd` may fail (a missing directory), and the shell then
   stays where it was, so a later command can run in either place
   (`cd X; git log` demands the working directory and `X`). The gate drops
-  that branch where the filesystem rules it out: a `cd` or `pushd` at the
-  top level of the command (not inside `{ }`, a compound command, a
-  function body or an `eval` string), spelled so bash and zsh both run the
-  builtin (`cd`, `builtin cd`, `time cd`; not `chdir`, `command cd`,
-  `noglob cd` or `time -p cd`), with no redirection of its own and no
-  `-e`, whose target is an existing directory the gate can enter when the
-  hook runs. So `cd frontend; npm test; cd ..; git status` in a
-  repository nested inside another one runs `git status` in that
-  repository only, while `cd missing; npm test; cd ..; git status` can
-  reach the parent and demands it. The check reads the filesystem when
-  the hook runs: a command that removes or renames that directory before
-  its `cd` is read as if the directory were still there.
+  that branch only for a `cd` or `pushd` that meets all of these:
+  - it is at the top level of the command (not inside `{ }`, a compound
+    command, a subshell or substitution nested in one, a function body or
+    an `eval` string), spelled so bash and zsh both run the builtin (`cd`,
+    `builtin cd`, `time cd`; not `chdir`, `command cd`, `noglob cd` or
+    `time -p cd`), with no redirection of its own and no `-e`;
+  - a plain `cd` / `pushd` target has every `..` before any name (`..`,
+    `../..`, `../x`): bash and zsh fail `cd missing/../x`,
+    `cd README.md/../x` and `cd a/../b` when the name is not a directory,
+    whatever the lexical result names, so those keep the branch; a
+    `cd -P` target is followed through the real directories it names and
+    keeps the branch when a `..` leaves something that is not one;
+  - no earlier command can have made `cd` or `pushd` something other than
+    the builtin: after any function definition (any name, also zsh's
+    anonymous `() { ... }`), `enable`, `disable`, `alias`, `unalias`,
+    `unfunction`, `hash`, `unhash`, `autoload`, `functions`, `source`, `.`,
+    `trap`, a command word or `eval` argument the gate cannot read (`$CMD`,
+    `eval "$X"`), or an assignment to zsh's `functions` / `aliases` tables
+    or bash's `BASH_ALIASES` / `BASH_CMDS`, every later `cd` keeps its
+    branch;
+  - its target is an existing directory the gate can enter when the hook
+    runs.
+
+  So `cd frontend; npm test; cd ..; git status` in a repository nested
+  inside another one runs `git status` in that repository only, while
+  `cd missing; npm test; cd ..; git status` can reach the parent and
+  demands it, and `cd vendor/lib; cd missing/../../..; git push` or
+  `cd vendor/lib; cd() { :; }; cd ../..; git push` demand the nested
+  repository the push can run in. Two gaps stay open, and in both the
+  per-segment view's demands still stand (the union), so they can drop
+  only a demand of the shell command model's own: the check reads the
+  filesystem when the hook runs, so a command that removes or renames
+  that directory before its `cd` (`mv ../frontend ../fe2; cd
+  ../frontend`) is read as if the directory were still there; and the
+  hook does not see the shell the command runs in, so functions, aliases
+  and options from the shell's startup files or the agent's shell
+  environment, a `CDPATH` inherited from the environment (bash searches
+  it before the working directory), or physical `cd` (`set -P`, zsh
+  `CHASE_LINKS`) can make a `cd` the gate confirmed fail or land
+  elsewhere.
 
 The model also adds a match: a per-repo policy whose trigger none of the
 other forms matched still applies when a model command that names a
@@ -305,19 +333,23 @@ spelled behind a prefix the trigger does not read (`! git log`,
 policy.
 
 **Cost.** The shell command model is computed at most once per Bash
-event, and only when a per-repo policy needs it (a per-repo policy the
-other matching forms missed, or a matched per-repo policy's attribution),
-so most Bash events never compute it. Its directories are resolved once
-per distinct directory per event, for every policy, under a per-event
-work budget (`MAX_MODEL_PATH_WORK` in `src/runtime/shell-model-paths.ts`,
-4096 units: one per composition step or path component, per final
-`realpath`, per directory check, and per level of the repository lookup
-for a newly resolved directory); a command that needs more fails closed
-(next section). End to end, a command at the 100000-character input
-bound is decided well under a second on the measured shapes, against the
-15000 ms `budget_ms` of the `harness policy intercept` hooks (a hook past
-its budget allows); the CHANGELOG entry for task `7d4abf84` records the
-measurement.
+event and, with any per-repo Bash policy in the manifest (the full
+template has four), effectively for every Bash event: such a policy is
+either missed by the other matching forms (the model's match is then
+tried) or matched (its attribution reads the model), so a command no
+policy matches computes it too. Its directories are resolved once per
+distinct directory per event, for every policy, under a per-event work
+budget (`MAX_MODEL_PATH_WORK` in `src/runtime/shell-model-paths.ts`, 4096
+units: one per composition step or path component, per final `realpath`,
+per directory check, and per level of the repository lookup for a newly
+resolved directory); a command that needs more fails closed (next
+section). End to end, a command at the 100000-character input bound is
+decided well under a second on the measured shapes, against the 15000 ms
+`budget_ms` of the `harness policy intercept` hooks (a hook past its
+budget allows), and a command at that bound that no policy matches (a
+chain of `cd -P a && cd b` before `npm test`) took 136 to 138 ms against
+17 ms on the base commit; the CHANGELOG entry for task `7d4abf84` records
+the measurement.
 
 **Fallback to cwd only (no distinct second context).** A command still
 evaluates against the session's cwd alone — identical to a policy with no
