@@ -3,7 +3,7 @@ type: overview
 title: Gate fail-posture matrix
 description: Which harness enforcement gates fail OPEN vs fail CLOSED when their evidence source (grounding-mcp ledger, approval markers, verdict files, probes) is unreachable or errors, with the exact code paths and override knobs.
 tags: [gates, fail-open, fail-closed, enforcement]
-timestamp: 2026-10-06T12:28:45Z
+timestamp: 2026-10-06T13:45:53Z
 sources:
   - src/cli/pack/auto-approve-path.ts
   - src/io/atomic-write.ts
@@ -96,7 +96,7 @@ DISTINCT repository a trigger-satisfying command segment names (its own
 persisting `cd`) — the session's own cwd context is ALWAYS also
 evaluated, never dropped except for a cwd outside every repository next to a resolved target (see the exception below; `resolveAttributedContexts`; the "always add, never replace" rule
 D-021 and its four-review-pass history are restated in-tree in that
-function's own doc comment, `src/runtime/intercept.ts:1441-1475#"disproved"`; the
+function's own doc comment, `src/runtime/intercept.ts:1444-1478#"disproved"`; the
 original decision record under
 `.ai/runs/2026-08-02-per-repo-gate-scoping-redesign/` is local run state
 and not shipped with the repo). This section covers only the FALLBACK side of that resolution,
@@ -169,9 +169,18 @@ since it is the part that changes this matrix's own fail-posture story:
   by the event's `ModelPathResolver` in `src/runtime/shell-model-paths.ts`)
   make `resolveAttributedContexts` return `opaque-target`. A `cd` or
   `pushd` the model reads without doubt (top level, the builtin spelling,
-  no redirection of its own) into a directory that exists when the hook
+  no redirection of its own, a plain target with every `..` before any
+  name, a `cd -P` target whose every `..` leaves a directory the shell can
+  pass through, and no earlier function definition or command that can
+  redefine `cd`: `enable`, `disable`, `alias`, `unalias`, `unfunction`,
+  `hash`, `unhash`, `autoload`, `functions`, `source`, `.`, `trap`, a
+  dynamic command word or `eval`, an assignment to the shell's function,
+  alias or command tables) into a directory that exists when the hook
   runs has no failure branch (the resolver is the model's directory
-  oracle); every other `cd` keeps it. When the model cannot lex the command (or it is longer
+  oracle); every other `cd` keeps it. The check reads the filesystem when
+  the hook runs and does not see the shell's own functions, aliases,
+  options or inherited `CDPATH`; both gaps can drop only a demand of the
+  model's own, never one of the segment view's. When the model cannot lex the command (or it is longer
   than `MAX_NORMALIZE_LENGTH`), the segment view decides alone, except
   that a policy with a `bash_match` fails closed when the raw text holds
   a directory-changing word (`cd`, `pushd`, `popd`, `chdir`, `-C`,
