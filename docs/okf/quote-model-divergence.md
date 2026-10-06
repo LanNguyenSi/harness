@@ -370,7 +370,12 @@ ohne Messlauf im Repo, und ersetzt keinen; `case`-Muster mit nacktem `)`
 in `$(..)` sowie Kommentare sind nicht modelliert (der Aufrufer verwirft
 `$(` und Backtick vorab). Eine ungequotete `(` oder `)` (`hasGroupParen`)
 macht ein Kommando fuer beide Klassifikatoren nicht read-only, weil zsh
-daraus Code ausfuehrt (Glob-Qualifier `*(e:'cmd':)`, `=(cmd)`).
+daraus Code ausfuehrt (Glob-Qualifier `*(e:'cmd':)`, `=(cmd)`). Dasselbe
+gilt seit task `b647da7f` fuer zsh-GLOB_SUBST (`hasGlobSubst`: `$~x`,
+`$^~x`, ein ungequotetes `~` in einem `${..}`-Koerper), fuer jede Klammer
+innerhalb eines `${..}`-Koerpers, auch gequotet (`hasParenInParam`), und
+fuer ein ungequotetes `~[` (`hasDynamicNamedDir`): `${~x:-'*(e:cmd:)'}`
+fuehrt `cmd` unter zsh 5.9 aus, ohne dass eine Klammer ungequotet ist.
 
 ## Messdisziplin
 
