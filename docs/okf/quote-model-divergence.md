@@ -3,12 +3,13 @@ type: overview
 title: Shell quote models, measured divergence against bash
 description: The policy engine has four independent shell-word models plus a raw-regex trigger layer. This records what each actually extracts, measured against real bash, which divergences are fail-open, and the evidence-led ordering for closing them.
 tags: [policy-engine, bash-match, quote-model, fail-open, measurement]
-timestamp: 2026-10-05T14:17:30Z
+timestamp: 2026-10-06T05:12:55Z
 sources:
   - src/runtime/command-normalize.ts
   - src/cli/init/composer.ts
   - src/runtime/bash-prefix-parse.ts
   - src/runtime/read-only-bash.ts
+  - src/runtime/shell-pipeline-scan.ts
   - src/runtime/intercept.ts
   - src/cli/policy/intercept.ts
   - src/runtime/environment-resolver.ts
@@ -349,6 +350,27 @@ loest keine Werte auf, sondern zerlegt nur in Woerter, und es ist an
 keiner der drei K1/K2/K3-Messachsen beteiligt, deshalb bleibt es
 ausserhalb der Vergleichsmatrix, statt eine vierte Spalte darin zu
 werden.
+
+**Ein FUENFTER Modell, `scanShellPipeline`** (task `25c56a0f`,
+`src/runtime/shell-pipeline-scan.ts`), liegt ebenfalls ausserhalb der
+Matrix: es entscheidet nicht ueber Werte oder Flags, sondern nur, welche
+`|` echte Stage-Grenzen sind. `isReadOnlyBashPipeline` (in
+`read-only-bash.ts`) und der Write-Guard nutzen es gemeinsam; vorher
+schnitt `isReadOnlyBashPipeline` an JEDEM `|`, sodass
+`find d -name 'a|cat -x' -delete` als zwei read-only wirkende Fragmente
+galt. Modelliert sind einfache, doppelte, ANSI-C- (`$'..'`, `\'` beendet
+den Lauf nicht) und Locale-Quotes, Backslash, `${..}`, `$[..]`, `$(..)`,
+Backtick und Klammergruppen (extglob). Fail-closed: ein nicht
+abgeschlossenes Konstrukt gibt `null` zurueck, ein `|`, das keine
+Stage-Grenze ist, laesst den Aufrufer das ganze Kommando verwerfen, und wo das Modell
+mehrdeutig ist, rechnet es tiefer (ein zu Unrecht inneres `|` verwirft nur,
+ein zu Unrecht echtes `|` waere die unsichere Richtung). Es ist gegen bash
+und zsh nur stichprobenartig geprueft, ohne Messkorpus wie K1 bis K5 und
+ohne Messlauf im Repo, und ersetzt keinen; `case`-Muster mit nacktem `)`
+in `$(..)` sowie Kommentare sind nicht modelliert (der Aufrufer verwirft
+`$(` und Backtick vorab). Eine ungequotete `(` oder `)` (`hasGroupParen`)
+macht ein Kommando fuer beide Klassifikatoren nicht read-only, weil zsh
+daraus Code ausfuehrt (Glob-Qualifier `*(e:'cmd':)`, `=(cmd)`).
 
 ## Messdisziplin
 

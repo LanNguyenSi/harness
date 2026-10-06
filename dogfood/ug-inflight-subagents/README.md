@@ -100,7 +100,7 @@ One deliberate deviation from the task's literal Variant B prompt,
 found during implementation, not before: the parent's post-boundary
 probe command is `touch after.txt`, not the literal `echo after` the
 task assignment names. `echo` is a member of `SIMPLE_READ_ONLY_BINS`
-(`src/runtime/read-only-bash.ts:107-117`), and the PreToolUse blocker's
+(`src/runtime/read-only-bash.ts:113-117#"echo"`), and the PreToolUse blocker's
 read-only-Bash exemption allows any such command unconditionally,
 checked AFTER the marker/in-flight checks have already missed
 (`src/cli/pack/hook-pre-tool-use.ts`, the `isReadOnlyBashPipeline`
