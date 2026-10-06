@@ -14,7 +14,8 @@
 //
 // Usage (needs the repo's own devDependencies): it imports the TypeScript
 // sources, so run it through `tsx`, not plain `node` (hence no shebang):
-//   npx tsx scripts/measure-writeguard-baseline.mjs [--base origin/master]
+//   npx tsx scripts/measure-writeguard-baseline.mjs [--base <ref>]
+// The default <ref> is the commit before harness #634 (see DEFAULT_BASE below).
 //
 // The extracted baseline reuses this checkout's node_modules through a
 // symlink; nothing is installed and nothing outside the scratch dir and this
@@ -29,7 +30,11 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const args = process.argv.slice(2);
 const baseIdx = args.indexOf("--base");
-const baseRef = baseIdx >= 0 && args[baseIdx + 1] ? args[baseIdx + 1] : "origin/master";
+// The fixture's `onMaster` column records the verdicts of the commit before the
+// read-only pipeline arm landed (the parent of merge 6cf4ea6c, harness #634), so
+// that commit is the default baseline; origin/master already contains the arm.
+const DEFAULT_BASE = "2ceeddc8663eebbf83487d62ca29f55a1706e90d";
+const baseRef = baseIdx >= 0 && args[baseIdx + 1] ? args[baseIdx + 1] : DEFAULT_BASE;
 
 const scratch = mkdtempSync(path.join(tmpdir(), "writeguard-baseline-"));
 try {
