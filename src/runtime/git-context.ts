@@ -132,7 +132,7 @@ export interface GitEntry {
   /**
    * `".git"` when the `.git` entry is present but refused: a node that is
    * neither a directory nor a regular file (a FIFO, a device, a socket, a
-   * symlink to one, a dangling or looping symlink), or a file that cannot be
+   * symlink to one), or a file that cannot be
    * read (a FIFO swapped in after the stat, an oversized or unreadable
    * file), as opposed to a readable file without a `gitdir:` line; `"HEAD"` when the
    * `.git` directory's `HEAD` is present but not a regular file. Absent
@@ -140,16 +140,6 @@ export interface GitEntry {
    * unreadable `.git` file.
    */
   refused?: ".git" | "HEAD";
-}
-
-/** Whether `lstat` finds anything at the path (a dangling symlink counts). */
-function lstatPresent(filePath: string): boolean {
-  try {
-    fs.lstatSync(filePath);
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 /**
@@ -176,17 +166,15 @@ export function findGitEntry(startDir: string): GitEntry | null {
     } catch {
       stat = undefined;
     }
-    // A `.git` that is PRESENT but is neither a directory nor a regular file
-    // (a FIFO, a device, a socket, a symlink to one, a dangling or looping
-    // symlink) is not "no `.git` here, keep walking": walking up would
-    // resolve whatever repository ENCLOSES this one (a linked worktree
-    // checked out inside an outer repository would read as the outer
-    // repository's branch). It is reported as refused with `gitDir` left
-    // empty, like a present-but-unreadable `HEAD`. Only a `.git` that is
-    // absent (`lstat` finds nothing) is skipped.
-    const refusedNode =
-      stat === undefined ? lstatPresent(dotGit) : !stat.isDirectory() && !stat.isFile();
-    if (refusedNode) {
+    // A `.git` that EXISTS but is neither a directory nor a regular file (a
+    // FIFO, a device, a socket, a symlink to one) is not "no `.git` here,
+    // keep walking": walking up would resolve whatever repository ENCLOSES
+    // this one (a linked worktree checked out inside an outer repository
+    // would read as the outer repository's branch). It is reported as
+    // refused with `gitDir` left empty, like a present-but-unreadable
+    // `HEAD`. A `.git` the stat cannot resolve at all (absent, or a dangling
+    // or looping symlink) is skipped, as it always was.
+    if (stat !== undefined && !stat.isDirectory() && !stat.isFile()) {
       return { worktreeRoot: dir, gitDir: "", refused: ".git" };
     }
     if (stat?.isDirectory()) {

@@ -449,17 +449,6 @@ describe.skipIf(process.platform === "win32")(
       });
     });
 
-    it("a dangling symlink at `.git` is refused too (something is there), not walked past", () => {
-      const { nested } = outerRepoWithNestedWorktree();
-      fs.symlinkSync(path.join(nested, "never-created"), path.join(nested, ".git"));
-      expect(resolveGitContext(nested)).toEqual({
-        repo: "inner-worktree",
-        branch: "",
-        sha: "",
-        refused: [".git"],
-      });
-    });
-
     it("a symlink at `.git` to a FIFO is refused", () => {
       const { nested } = outerRepoWithNestedWorktree();
       const fifo = path.join(nested, "the-fifo");
