@@ -345,6 +345,23 @@ function scanCarry(state: ScanState, sessionId: string, adopted: ReadonlySet<str
 
 type TranscriptPollOutcome = "ok" | "absent" | "unreadable";
 
+// Open flags of the transcript read. `O_NONBLOCK` keeps the open of a FIFO
+// with no writer from waiting for one (the descriptor's type then refuses
+// it, below); `O_NOCTTY` keeps a tty node from becoming the controlling
+// terminal. Both are `undefined` on Windows, where they fall back to 0. A
+// symlinked transcript is still followed, as before: the descriptor's own
+// type decides.
+const TRANSCRIPT_OPEN_FLAGS =
+  fs.constants.O_RDONLY | (fs.constants.O_NONBLOCK ?? 0) | (fs.constants.O_NOCTTY ?? 0);
+
+// The most unread bytes one poll will take in. A transcript grows with the
+// session (far past the gate-marker 1 MiB cap), but the read
+// is not unbounded: a transcript path that holds more than this since the
+// previous poll (a sparse file, a runaway writer) is `unreadable`, which
+// the scan reports at once as a block, instead of allocating a buffer of
+// whatever size `fstat` claims and reading it past the hook's budget.
+const MAX_TRANSCRIPT_POLL_BYTES = 256 * 1024 * 1024;
+
 /**
  * Consume everything appended to the transcript since the previous poll,
  * updating `state` in place.
@@ -367,7 +384,7 @@ function pollTranscript(
   state.tentative = null;
   let fd: number;
   try {
-    fd = fs.openSync(transcriptPath, "r");
+    fd = fs.openSync(transcriptPath, TRANSCRIPT_OPEN_FLAGS);
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === "ENOENT") return "absent";
     return "unreadable";
@@ -391,6 +408,7 @@ function pollTranscript(
     }
     state.ino = stat.ino;
     state.dev = stat.dev;
+    if (stat.size - state.offset > MAX_TRANSCRIPT_POLL_BYTES) return "unreadable";
     if (stat.size > state.offset) {
       const chunk = readAt(fd, state.offset, stat.size - state.offset);
       state.offset += chunk.length;

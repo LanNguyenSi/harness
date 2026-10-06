@@ -401,7 +401,28 @@ async function runPackHookBranchProtectionCliInner(
     branchSourceDir = path.dirname(absTarget);
     branchSource = "target";
   }
-  const { branch } = resolveGitContext(branchSourceDir);
+  const gitContext = resolveGitContext(branchSourceDir);
+  const { branch } = gitContext;
+
+  // A git file that is PRESENT but refused is not "outside a git work
+  // tree": a FIFO, a device, a directory, an oversized or unreadable file
+  // where `HEAD` belongs, or a node that is neither a directory nor a
+  // regular file (or an oversized or unreadable pointer file) at `.git`
+  // itself (the lookup then stops there rather than
+  // walking up to an enclosing repository). In a healthy repository those
+  // paths are directories or regular files, so reading it as "no branch,
+  // allow" below would let a planted node switch this gate off. This gate
+  // fails closed on a could-not-decide state, so it blocks, naming the
+  // refused path.
+  if (branch === "" && gitContext.refused !== undefined && gitContext.refused.length > 0) {
+    const reason = `could not read the git metadata of the ${branchSource} (${gitContext.refused.join(", ")} is present but not a regular file or is oversized); refusing on failsafe`;
+    const diagnostic = `BLOCK — ${reason}`;
+    note(diagnostic);
+    stdout.write(
+      `${blockJson(toolName, "(unresolvable)", reason, protectedList, configUx, sessionId)}\n`,
+    );
+    return { exitCode: 0, blocked: true, diagnostic };
+  }
 
   // Outside a git work tree (or detached HEAD) we can't tell what the
   // edit would land on. We choose to allow here — the alternative is

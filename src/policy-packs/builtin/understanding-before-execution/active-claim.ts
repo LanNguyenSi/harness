@@ -7,6 +7,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { atomicWriteFile } from "../../../io/atomic-write.js";
+import { readTextFileBoundedOrThrow } from "../../../io/read-regular-file.js";
 
 // Active-claim tracking (harness/494fd1e5). When the agent calls
 // `mcp__agent-tasks__task_start`, a PostToolUse hook writes the claimed
@@ -77,7 +78,10 @@ export function readActiveClaim(generatedDir: string): string | null {
   const filePath = activeClaimPathFor(generatedDir);
   let raw: string;
   try {
-    raw = fs.readFileSync(filePath, "utf8");
+    // Bounded and non-blocking: a FIFO or oversized file at the claim path
+    // reads as "no active claim", the same as an absent one, instead of
+    // holding the hook past its budget.
+    raw = readTextFileBoundedOrThrow(filePath, { followSymlinks: true });
   } catch {
     return null;
   }

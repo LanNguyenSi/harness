@@ -5,6 +5,7 @@ import * as path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   deriveProjectName,
+  findGitEntry,
   isValidProjectName,
   resolveCommonDir,
   resolveGitContext,
@@ -357,13 +358,133 @@ describe("resolveGitContext", () => {
     });
     fs.mkdirSync(path.join(wtGitDir, "commondir"));
     expect(() => resolveGitContext(worktree)).not.toThrow();
+    // A `commondir` that is present but not a regular file is reported as
+    // refused (a missing one is not), and the answer is still unknown.
     expect(resolveGitContext(worktree)).toEqual({
       repo: "linked-worktree",
       branch: "wt-branch",
       sha: "",
+      refused: ["commondir"],
     });
   });
 });
+
+describe("resolveGitContext: an unreadable or looping loose ref is refused, never replaced by the older packed tip", () => {
+  const OLD_SHA = "2222222222222222222222222222222222222222";
+
+  function repoWithPackedTip(): { repo: string; loosePath: string } {
+    const repo = makeRepo(tmpDir(), "proj", "ref: refs/heads/main", FAKE_SHA);
+    fs.writeFileSync(
+      path.join(repo, ".git", "packed-refs"),
+      `# pack-refs with: peeled fully-peeled sorted\n${OLD_SHA} refs/heads/main\n`,
+    );
+    return { repo, loosePath: path.join(repo, ".git", "refs", "heads", "main") };
+  }
+
+  it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
+    "a loose ref with mode 000 resolves sha unknown and refused, not the older tip in packed-refs",
+    () => {
+      const { repo, loosePath } = repoWithPackedTip();
+      fs.chmodSync(loosePath, 0o000);
+      try {
+        expect(resolveGitContext(repo)).toEqual({
+          repo: "proj",
+          branch: "main",
+          sha: "",
+          refused: ["refs/heads/main"],
+        });
+      } finally {
+        fs.chmodSync(loosePath, 0o600);
+      }
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "a loose ref that is a self-looping symlink resolves sha unknown and refused, not the older tip in packed-refs",
+    () => {
+      const { repo, loosePath } = repoWithPackedTip();
+      fs.rmSync(loosePath);
+      fs.symlinkSync(loosePath, loosePath);
+      expect(resolveGitContext(repo)).toEqual({
+        repo: "proj",
+        branch: "main",
+        sha: "",
+        refused: ["refs/heads/main"],
+      });
+    },
+  );
+
+  it("control: a loose ref that is a dangling symlink is absent and falls back to packed-refs", () => {
+    const { repo, loosePath } = repoWithPackedTip();
+    fs.rmSync(loosePath);
+    fs.symlinkSync(path.join(path.dirname(loosePath), "never-created"), loosePath);
+    expect(resolveGitContext(repo)).toEqual({ repo: "proj", branch: "main", sha: OLD_SHA });
+  });
+});
+
+describe.skipIf(process.platform === "win32")(
+  "resolveGitContext: a `.git` that is neither a directory nor a regular file is refused, not walked past",
+  () => {
+    function outerRepoWithNestedWorktree(): { nested: string; outer: string } {
+      const root = tmpDir();
+      const outer = makeRepo(root, "outer", "ref: refs/heads/feat/outer", FAKE_SHA);
+      const nested = path.join(outer, "inner-worktree");
+      fs.mkdirSync(nested, { recursive: true });
+      return { nested, outer };
+    }
+
+    it("a FIFO at `.git` is reported as refused with no branch, never the enclosing repository's", () => {
+      const { nested } = outerRepoWithNestedWorktree();
+      execFileSync("mkfifo", [path.join(nested, ".git")]);
+      expect(resolveGitContext(nested)).toEqual({
+        repo: "inner-worktree",
+        branch: "",
+        sha: "",
+        refused: [".git"],
+      });
+      expect(findGitEntry(nested)).toEqual({
+        worktreeRoot: nested,
+        gitDir: "",
+        refused: ".git",
+      });
+    });
+
+    it("a symlink at `.git` to a FIFO is refused", () => {
+      const { nested } = outerRepoWithNestedWorktree();
+      const fifo = path.join(nested, "the-fifo");
+      execFileSync("mkfifo", [fifo]);
+      fs.symlinkSync(fifo, path.join(nested, ".git"));
+      expect(resolveGitContext(nested)).toMatchObject({ branch: "", sha: "", refused: [".git"] });
+    });
+
+    it("a symlink at `.git` to a character device (/dev/null) is refused", () => {
+      const { nested } = outerRepoWithNestedWorktree();
+      fs.symlinkSync("/dev/null", path.join(nested, ".git"));
+      expect(resolveGitContext(nested)).toMatchObject({ branch: "", sha: "", refused: [".git"] });
+    });
+
+    it("a unix socket at `.git` is refused", async () => {
+      const { nested } = outerRepoWithNestedWorktree();
+      const net = await import("node:net");
+      const server = net.createServer();
+      await new Promise<void>((resolve) => server.listen(path.join(nested, ".git"), resolve));
+      try {
+        expect(resolveGitContext(nested)).toMatchObject({ branch: "", sha: "", refused: [".git"] });
+      } finally {
+        await new Promise<void>((resolve) => server.close(() => resolve()));
+      }
+    });
+
+    it("control: a MISSING `.git` still walks up to the enclosing repository", () => {
+      const { nested } = outerRepoWithNestedWorktree();
+      expect(resolveGitContext(nested)).toEqual({
+        repo: "outer",
+        branch: "feat/outer",
+        sha: FAKE_SHA,
+      });
+    });
+  },
+);
 
 describe("resolveOriginHeadBase in a linked worktree", () => {
   it("resolves the default branch from a linked worktree's common dir, not its private gitdir (already routed through resolveCommonDir by its callers)", () => {

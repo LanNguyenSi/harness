@@ -98,13 +98,12 @@ function parseFilenameIsoMs(name: string): number | null {
   return Number.isNaN(ms) ? null : ms;
 }
 
-function readPersistedReport(filePath: string, mtimeMs: number, boundedRaw?: string): PersistedReport | null {
-  let raw: string;
-  try {
-    raw = boundedRaw ?? fs.readFileSync(filePath, "utf8");
-  } catch {
-    return null;
-  }
+function readPersistedReport(filePath: string, mtimeMs: number, boundedRaw: string): PersistedReport | null {
+  // The text always arrives from `readReportFileBounded` (a size-bounded,
+  // non-blocking read through one open descriptor). There is deliberately no
+  // by-path `readFileSync` fallback here: it blocked on a FIFO, which the
+  // runtime treats as an allow once the hook's budget runs out.
+  const raw = boundedRaw;
   const parsed = safeJsonParse(raw);
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
   const obj = parsed as Record<string, unknown>;
@@ -129,9 +128,10 @@ function readPersistedReport(filePath: string, mtimeMs: number, boundedRaw?: str
 /**
  * List persisted reports under `dir`, newest-first by creation time
  * (JSON `createdAt`, then the filename ISO prefix, then mtime). Missing
- * directory returns []; an I/O error on a single file skips it. Reads each
- * regular file IN FULL, so it must not list the agent-writable reports
- * directory (use {@link listPersistedReportsBoundedWithSkips}); no `src`
+ * directory returns []; an I/O error on a single file skips it. Every file
+ * goes through {@link readReportFileBounded} (non-blocking, size-capped), but
+ * unlike {@link listPersistedReportsBoundedWithSkips} this listing has no
+ * entry-count or total-byte budget and records no skipped entries; no `src`
  * caller remains, it stays for its tests and the pack's export surface.
  *
  * Creation time, NOT mtime, is the sort key: `harness approve
@@ -150,14 +150,14 @@ export function listPersistedReports(dir: string): PersistedReport[] {
   for (const name of names) {
     if (!name.endsWith(".json")) continue;
     const full = path.join(dir, name);
-    let stat: fs.Stats;
-    try {
-      stat = fs.statSync(full);
-    } catch {
-      continue;
-    }
-    if (!stat.isFile()) continue;
-    const report = readPersistedReport(full, stat.mtimeMs);
+    // One bounded, non-blocking descriptor read: type and size come from
+    // fstat on the open descriptor, and so does the mtime. No separate stat
+    // of the path before a by-path read (a swap to a FIFO between the two
+    // used to hang the read). A non-regular, oversized or unreadable entry
+    // is skipped as it was before.
+    const read = readReportFileBounded(full);
+    if (!read.ok) continue;
+    const report = readPersistedReport(full, read.mtimeMs, read.raw);
     if (!report) continue;
     reports.push(report);
   }

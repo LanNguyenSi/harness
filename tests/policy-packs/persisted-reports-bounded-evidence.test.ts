@@ -65,18 +65,21 @@ describe("listPersistedReportsBounded", () => {
     expect(listPersistedReportsBounded(tmp).map((r) => path.basename(r.filePath))).toEqual(["atcap.json"]);
   });
 
-  it("skips a report over the cap that the unbounded listing still sees", () => {
+  it("skips a report over the cap in the plain listing too (no by-path read fallback is left)", () => {
     fs.writeFileSync(path.join(tmp, "big.json"), oversizedReportJson());
     fs.writeFileSync(path.join(tmp, "small.json"), reportJson({ sessionId: "other" }));
 
     expect(listPersistedReportsBounded(tmp).map((r) => path.basename(r.filePath))).toEqual(["small.json"]);
-    // The operator commands rely on this listing to find and refuse or age
-    // out an oversized report, so it keeps seeing it.
+    // The plain listing used to read every report in full by path, which
+    // blocked on a FIFO; it now reads through the same bounded descriptor
+    // read, so it no longer sees an oversized report either. The operator
+    // commands that must SEE a skipped entry read through
+    // `listPersistedReportsBoundedWithSkips`, which records it.
     expect(
       listPersistedReports(tmp)
         .map((r) => path.basename(r.filePath))
         .sort(),
-    ).toEqual(["big.json", "small.json"]);
+    ).toEqual(["small.json"]);
   });
 
   it("skips a directory and a dangling symlink named *.json, and lists a symlink to a regular report", () => {

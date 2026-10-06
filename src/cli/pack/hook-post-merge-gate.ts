@@ -61,7 +61,7 @@ import {
   resolveDefaultBranchName,
 } from "../../policy-packs/builtin/post-merge-gate-runtime.js";
 import { queryLedgerByTag, type LedgerEntry } from "../../policies/index.js";
-import { resolveGitContext } from "../../runtime/git-context.js";
+import { describeRefusedGitFiles, resolveGitContext } from "../../runtime/git-context.js";
 import { renderAgentFacing } from "../../runtime/agent-facing.js";
 import { POLICY_DECISION_TYPE } from "../../io/ledger-record.js";
 import { type Manifest, type McpServer, type PolicyUx } from "../../schema/index.js";
@@ -321,9 +321,14 @@ async function runPackHookPostMergeGateCliInner(
     return { exitCode: 0, blocked: false, diagnostic };
   }
 
-  const { repo, branch, sha } = resolveGitContext(cwd);
+  const gitContext = resolveGitContext(cwd);
+  const { repo, branch, sha } = gitContext;
   if (branch === "" || sha === "" || repo === "") {
-    const diagnostic = `cannot resolve git context for ${cwd} (detached HEAD, outside a git work tree, or unresolvable sha); allowing`;
+    // This gate stays fail-open on an unresolvable context by design (it must
+    // never wedge the recovery path), so a git file that is present but
+    // refused (a FIFO, a device, an oversized file) is allowed too; the
+    // diagnostic names it so it does not read like an ordinary detached HEAD.
+    const diagnostic = `cannot resolve git context for ${cwd} (detached HEAD, outside a git work tree, or unresolvable sha)${describeRefusedGitFiles(gitContext)}; allowing`;
     note(diagnostic);
     return { exitCode: 0, blocked: false, diagnostic };
   }

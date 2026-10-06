@@ -41,6 +41,7 @@ import {
   readTopLevelMcpServers,
   resolveClaudeUserRegistryPath,
 } from "../../io/claude-mcp.js";
+import { readTextFileBoundedOrThrow } from "../../io/read-regular-file.js";
 import { assertNoRealSpawnInTests } from "../../runtime/hermetic-spawn-guard.js";
 import { resolveManifestLedgerWriter, type LedgerWriteFn } from "../../runtime/ledger-writer.js";
 import {
@@ -325,7 +326,10 @@ export function realReadOwKitVersion(workspaceRoot: string): { version?: string;
   const manifestPath = path.join(workspaceRoot, ".ai", "workflow", "manifest.json");
   let raw: string;
   try {
-    raw = fs.readFileSync(manifestPath, "utf8");
+    // Bounded and non-blocking: the path is inside the workspace, so a FIFO
+    // or an oversized file planted there must not hold the SessionStart hook
+    // (a non-ENOENT refusal lands in the `{ error }` branch below).
+    raw = readTextFileBoundedOrThrow(manifestPath, { followSymlinks: true });
   } catch (err) {
     const e = err as NodeJS.ErrnoException;
     if (e.code === "ENOENT") return {};
@@ -815,7 +819,11 @@ export async function runSessionStartToolchainParity(
   // stays scoped to the lossy case — it is about THIS profile, not about
   // a collision.
   try {
-    const existingRaw = fs.readFileSync(path.join(machineStateDir, ownFileName), "utf8");
+    // Bounded and non-blocking (the machine-state dir is synced from other
+    // machines): a non-ENOENT refusal is re-noted by the catch below.
+    const existingRaw = readTextFileBoundedOrThrow(path.join(machineStateDir, ownFileName), {
+      followSymlinks: true,
+    });
     const existingParsed = parseSnapshotJson(existingRaw);
     if (existingParsed.ok && existingParsed.snapshot.profile !== profile) {
       // The existing snapshot's `profile` field is untrusted, cross-machine
@@ -894,7 +902,9 @@ export async function runSessionStartToolchainParity(
     const filePath = path.join(machineStateDir, fileName);
     let raw: string;
     try {
-      raw = fs.readFileSync(filePath, "utf8");
+      // Bounded and non-blocking: a peer snapshot is cross-machine synced,
+      // untrusted input; a FIFO or an oversized file is reported unreadable.
+      raw = readTextFileBoundedOrThrow(filePath, { followSymlinks: true });
     } catch (err) {
       note(`peer snapshot ${fileName} unreadable: ${(err as Error).message}`);
       continue;

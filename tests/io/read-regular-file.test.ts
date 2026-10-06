@@ -53,9 +53,13 @@ vi.mock("node:fs", async (importOriginal) => {
 });
 
 import {
+  BoundedReadError,
   MAX_REGULAR_FILE_READ_BYTES,
   probePathPresence,
+  readRegularFileBounded,
+  readRegularFileBytesBounded,
   readRegularFileRejectingSymlink,
+  readTextFileBoundedOrThrow,
 } from "../../src/io/read-regular-file.js";
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
@@ -395,3 +399,180 @@ describe("probePathPresence", () => {
     expect(readFileSyncCallLog.calls).toBe(before);
   });
 });
+
+describe("readRegularFileBounded / readRegularFileBytesBounded / readTextFileBoundedOrThrow: the sibling readers of the by-path hook reads", () => {
+  it("opens read-only with O_NONBLOCK and O_NOCTTY, and with O_NOFOLLOW only when links are not followed", () => {
+    const p = path.join(tmp, "plain.txt");
+    fs.writeFileSync(p, "x", "utf8");
+    readFileSyncCallLog.openFlags.length = 0;
+    expect(readRegularFileBounded(p, { followSymlinks: true })).toEqual({ kind: "ok", content: "x" });
+    expect(readRegularFileBounded(p)).toEqual({ kind: "ok", content: "x" });
+    expect(readFileSyncCallLog.openFlags).toHaveLength(2);
+    const [following, refusing] = readFileSyncCallLog.openFlags as [number, number];
+    for (const flags of [following, refusing]) {
+      expect(flags & fs.constants.O_ACCMODE).toBe(fs.constants.O_RDONLY);
+      expect(flags & (fs.constants.O_NONBLOCK ?? 0)).toBe(fs.constants.O_NONBLOCK ?? 0);
+      expect(flags & (fs.constants.O_NOCTTY ?? 0)).toBe(fs.constants.O_NOCTTY ?? 0);
+    }
+    expect(following & (fs.constants.O_NOFOLLOW ?? 0)).toBe(0);
+    expect(refusing & (fs.constants.O_NOFOLLOW ?? 0)).toBe(fs.constants.O_NOFOLLOW ?? 0);
+    if (process.platform !== "win32") expect(fs.constants.O_NOFOLLOW).toBeGreaterThan(0);
+  });
+
+  it("never calls readFileSync by path", () => {
+    const p = path.join(tmp, "plain.txt");
+    fs.writeFileSync(p, "x", "utf8");
+    readFileSyncCallLog.calls = 0;
+    readRegularFileBounded(p, { followSymlinks: true });
+    readRegularFileBytesBounded(p);
+    readTextFileBoundedOrThrow(p);
+    expect(readFileSyncCallLog.calls).toBe(0);
+  });
+
+  it("refuses a link by default and follows one to a regular file when asked", () => {
+    const target = path.join(tmp, "real.txt");
+    fs.writeFileSync(target, "real", "utf8");
+    const link = path.join(tmp, "link.txt");
+    fs.symlinkSync(target, link);
+    expect(readRegularFileBounded(link)).toEqual({ kind: "symlink" });
+    expect(readRegularFileBounded(link, { followSymlinks: true })).toEqual({ kind: "ok", content: "real" });
+  });
+
+  it("a followed link to a directory is not-regular and a dangling one is missing", () => {
+    const dir = path.join(tmp, "a-dir");
+    fs.mkdirSync(dir);
+    const toDir = path.join(tmp, "to-dir");
+    fs.symlinkSync(dir, toDir);
+    expect(readRegularFileBounded(toDir, { followSymlinks: true })).toEqual({ kind: "not-regular" });
+    const dangling = path.join(tmp, "dangling");
+    fs.symlinkSync(path.join(tmp, "never"), dangling);
+    expect(readRegularFileBounded(dangling, { followSymlinks: true })).toEqual({ kind: "missing" });
+  });
+
+  it("a followed self-looping link is unreadable (something is there), not missing", () => {
+    const loop = path.join(tmp, "loop");
+    fs.symlinkSync(loop, loop);
+    expect(readRegularFileBounded(loop, { followSymlinks: true })).toEqual({ kind: "unreadable" });
+    // ... while a followed link to nothing stays absent.
+    const dangling = path.join(tmp, "dangling-link");
+    fs.symlinkSync(path.join(tmp, "never-created"), dangling);
+    expect(readRegularFileBounded(dangling, { followSymlinks: true })).toEqual({ kind: "missing" });
+  });
+
+  it.skipIf(process.getuid?.() === 0)("a followed mode-000 file is unreadable, not missing", () => {
+    const p = path.join(tmp, "locked.txt");
+    fs.writeFileSync(p, "secret", "utf8");
+    fs.chmodSync(p, 0o000);
+    try {
+      expect(readRegularFileBounded(p, { followSymlinks: true })).toEqual({ kind: "unreadable" });
+    } finally {
+      fs.chmodSync(p, 0o600);
+    }
+  });
+
+  it("honours maxBytes: exactly the cap reads, one byte more is unreadable, a larger cap reads past the default", () => {
+    const p = path.join(tmp, "sized.txt");
+    fs.writeFileSync(p, "a".repeat(100), "utf8");
+    expect(readRegularFileBounded(p, { maxBytes: 100 }).kind).toBe("ok");
+    expect(readRegularFileBounded(p, { maxBytes: 99 })).toEqual({ kind: "unreadable" });
+    const big = path.join(tmp, "big.txt");
+    fs.writeFileSync(big, "b".repeat(MAX_REGULAR_FILE_READ_BYTES + 1), "utf8");
+    expect(readRegularFileBounded(big)).toEqual({ kind: "unreadable" });
+    const wide = readRegularFileBounded(big, { maxBytes: 2 * MAX_REGULAR_FILE_READ_BYTES });
+    expect(wide.kind === "ok" && wide.content.length).toBe(MAX_REGULAR_FILE_READ_BYTES + 1);
+  });
+
+  it("returns raw bytes unchanged (a binary key file)", () => {
+    const p = path.join(tmp, "key.bin");
+    const bytes = Buffer.from([0x00, 0xff, 0xfe, 0x80, 0x01]);
+    fs.writeFileSync(p, bytes);
+    const read = readRegularFileBytesBounded(p);
+    expect(read.kind === "ok" && read.bytes.equals(bytes)).toBe(true);
+  });
+
+  it("the throwing form keeps ENOENT for an absent path and a distinct code for everything else", () => {
+    expect(() => readTextFileBoundedOrThrow(path.join(tmp, "absent"))).toThrowError(BoundedReadError);
+    try {
+      readTextFileBoundedOrThrow(path.join(tmp, "absent"));
+    } catch (err) {
+      expect((err as NodeJS.ErrnoException).code).toBe("ENOENT");
+    }
+    const dir = path.join(tmp, "a-dir");
+    fs.mkdirSync(dir);
+    try {
+      readTextFileBoundedOrThrow(dir);
+      throw new Error("unreachable");
+    } catch (err) {
+      expect((err as BoundedReadError).code).toBe("E_NOT_REGULAR");
+      expect((err as BoundedReadError).kind).toBe("not-regular");
+    }
+    const big = path.join(tmp, "big.txt");
+    fs.writeFileSync(big, "b".repeat(11), "utf8");
+    try {
+      readTextFileBoundedOrThrow(big, { maxBytes: 10 });
+      throw new Error("unreachable");
+    } catch (err) {
+      expect((err as BoundedReadError).code).toBe("E_UNREADABLE");
+    }
+    expect(readTextFileBoundedOrThrow(path.join(tmp, "big.txt"), { maxBytes: 11 })).toBe("b".repeat(11));
+  });
+});
+
+describe.skipIf(process.platform === "win32")(
+  "the sibling readers refuse a FIFO without blocking, whether or not links are followed",
+  () => {
+    const BOUND_MS = 10_000;
+
+    function inChild(call: string, target: string): { timedOut: boolean; stdout: string } {
+      const result = spawnSync(
+        process.execPath,
+        [
+          "--input-type=module",
+          "-e",
+          `const m = await import(${JSON.stringify(pathToFileURL(BUILT_READER).href)});` +
+            `process.stdout.write(JSON.stringify(${call}));`,
+          target,
+        ],
+        { encoding: "utf8", timeout: BOUND_MS, killSignal: "SIGKILL" },
+      );
+      return {
+        timedOut: (result.error as NodeJS.ErrnoException | undefined)?.code === "ETIMEDOUT",
+        stdout: result.stdout,
+      };
+    }
+
+    it("readRegularFileBounded returns not-regular for a FIFO with and without followSymlinks", () => {
+      const fifo = path.join(tmp, "a.fifo");
+      execFileSync("mkfifo", [fifo]);
+      for (const opts of ["{}", "{ followSymlinks: true }"]) {
+        const run = inChild(`m.readRegularFileBounded(process.argv[1], ${opts})`, fifo);
+        expect(run.timedOut).toBe(false);
+        expect(JSON.parse(run.stdout)).toEqual({ kind: "not-regular" });
+      }
+    });
+
+    it("a followed symlink to a FIFO is not-regular, not a hang", () => {
+      const fifo = path.join(tmp, "a.fifo");
+      execFileSync("mkfifo", [fifo]);
+      const link = path.join(tmp, "link-to-fifo");
+      fs.symlinkSync(fifo, link);
+      const run = inChild("m.readRegularFileBounded(process.argv[1], { followSymlinks: true })", link);
+      expect(run.timedOut).toBe(false);
+      expect(JSON.parse(run.stdout)).toEqual({ kind: "not-regular" });
+    });
+
+    it("readRegularFileBytesBounded and readTextFileBoundedOrThrow refuse a FIFO at once", () => {
+      const fifo = path.join(tmp, "a.fifo");
+      execFileSync("mkfifo", [fifo]);
+      const bytes = inChild("m.readRegularFileBytesBounded(process.argv[1])", fifo);
+      expect(bytes.timedOut).toBe(false);
+      expect(JSON.parse(bytes.stdout)).toEqual({ kind: "not-regular" });
+      const text = inChild(
+        "(() => { try { return m.readTextFileBoundedOrThrow(process.argv[1]); } catch (e) { return { code: e.code }; } })()",
+        fifo,
+      );
+      expect(text.timedOut).toBe(false);
+      expect(JSON.parse(text.stdout)).toEqual({ code: "E_NOT_REGULAR" });
+    });
+  },
+);

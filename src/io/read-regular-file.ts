@@ -71,24 +71,24 @@ export const MAX_REGULAR_FILE_READ_BYTES = 1024 * 1024;
 const READ_CHUNK_BYTES = 64 * 1024;
 
 /**
- * Read the opened descriptor to EOF as utf8, never more than
- * `MAX_REGULAR_FILE_READ_BYTES + 1` bytes: a file that grows after the
- * `fstat` size check stays bounded too. Returns `null` when the file is over
- * the cap. Any read error propagates to the caller.
+ * Read the opened descriptor to EOF, never more than `maxBytes + 1` bytes: a
+ * file that grows after the `fstat` size check stays bounded too. Returns
+ * `null` when the file is over the cap. Any read error propagates to the
+ * caller.
  */
-function readDescriptorBounded(fd: number): string | null {
+function readDescriptorBounded(fd: number, maxBytes: number): Buffer | null {
   const chunks: Buffer[] = [];
   let total = 0;
   for (;;) {
-    const want = Math.min(READ_CHUNK_BYTES, MAX_REGULAR_FILE_READ_BYTES + 1 - total);
+    const want = Math.min(READ_CHUNK_BYTES, maxBytes + 1 - total);
     const chunk = Buffer.allocUnsafe(want);
     const got = fs.readSync(fd, chunk, 0, want, null);
     if (got === 0) break;
     total += got;
-    if (total > MAX_REGULAR_FILE_READ_BYTES) return null;
+    if (total > maxBytes) return null;
     chunks.push(got === want ? chunk : chunk.subarray(0, got));
   }
-  return Buffer.concat(chunks).toString("utf8");
+  return Buffer.concat(chunks);
 }
 
 /**
@@ -101,7 +101,22 @@ function readDescriptorBounded(fd: number): string | null {
  * failed open and this `lstat` still lands on one of the five kinds, never
  * on `ok`.
  */
-function classifyOpenFailure(filePath: string): RegularFileRead {
+function classifyOpenFailure(
+  filePath: string,
+  followSymlinks = false,
+): Exclude<RegularFileRead, { kind: "ok" }> {
+  if (followSymlinks) {
+    // A link is followed by this read, so what matters is what it leads to:
+    // a dangling link (or an unreachable parent) is absent, exactly as a
+    // by-path read of it reports `ENOENT`; a link loop or an unreadable
+    // target is something there that cannot be read.
+    try {
+      return fs.statSync(filePath).isFile() ? { kind: "unreadable" } : { kind: "not-regular" };
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      return code === "ENOENT" || code === "ENOTDIR" ? { kind: "missing" } : { kind: "unreadable" };
+    }
+  }
   const stat = lstatOrNull(filePath);
   if (stat === null) return { kind: "missing" };
   if (stat.isSymbolicLink()) return { kind: "symlink" };
@@ -149,7 +164,53 @@ function classifyOpenFailure(filePath: string): RegularFileRead {
  * gets that from here instead of hand-rolling its own `lstatSync` try/catch.
  */
 export function readRegularFileRejectingSymlink(filePath: string): RegularFileRead {
-  if (O_NOFOLLOW === undefined) {
+  const read = readRegularFileBytesBounded(filePath, { followSymlinks: false });
+  return read.kind === "ok" ? { kind: "ok", content: read.bytes.toString("utf8") } : read;
+}
+
+/**
+ * Options of the sibling readers below. Both default to the gate-marker
+ * read's own behaviour (the 1 MiB cap, a symlink refused).
+ */
+export interface BoundedReadOptions {
+  /**
+   * The most bytes the read returns; a file over it is refused as
+   * `unreadable` before any byte is read, exactly like the gate-marker
+   * read's cap. Defaults to {@link MAX_REGULAR_FILE_READ_BYTES}. A caller
+   * with a legitimately larger input (a packed-refs file, a kubeconfig, a
+   * Claude Code user registry) passes its own, larger bound and justifies
+   * it at the call site; there is deliberately no way to ask for no bound.
+   */
+  maxBytes?: number;
+  /**
+   * Follow a symbolic link at the path (the open drops `O_NOFOLLOW`). For a
+   * reader of a file the operator or git legitimately keeps behind a link
+   * (a dotfiles-managed manifest, a kubeconfig); it never weakens the
+   * rest: the type of the OPENED descriptor still decides, so a link to a
+   * FIFO, a device or a directory is `not-regular` and never blocks.
+   * Defaults to `false` (a link is refused as `symlink`).
+   */
+  followSymlinks?: boolean;
+}
+
+export type RegularFileBytesRead =
+  | { kind: "ok"; bytes: Buffer }
+  | Exclude<RegularFileRead, { kind: "ok" }>;
+
+/**
+ * The one open-once, type-checked-on-the-descriptor, size-bounded read every
+ * by-path reader on a hook path stands on, returning raw bytes (a binary key
+ * file needs them, `readRegularFileBounded` decodes them). See
+ * {@link readRegularFileRejectingSymlink} for the full contract; this is the
+ * same read with the cap and the symlink policy as options.
+ */
+export function readRegularFileBytesBounded(
+  filePath: string,
+  opts: BoundedReadOptions = {},
+): RegularFileBytesRead {
+  const maxBytes = opts.maxBytes ?? MAX_REGULAR_FILE_READ_BYTES;
+  const noFollow = opts.followSymlinks !== true;
+  if (noFollow && O_NOFOLLOW === undefined) {
     const stat = lstatOrNull(filePath);
     if (stat === null) return { kind: "missing" };
     if (stat.isSymbolicLink()) return { kind: "symlink" };
@@ -157,17 +218,20 @@ export function readRegularFileRejectingSymlink(filePath: string): RegularFileRe
   }
   let fd: number;
   try {
-    fd = fs.openSync(filePath, fs.constants.O_RDONLY | (O_NOFOLLOW ?? 0) | O_NONBLOCK | O_NOCTTY);
+    fd = fs.openSync(
+      filePath,
+      fs.constants.O_RDONLY | (noFollow ? (O_NOFOLLOW ?? 0) : 0) | O_NONBLOCK | O_NOCTTY,
+    );
   } catch {
-    return classifyOpenFailure(filePath);
+    return classifyOpenFailure(filePath, !noFollow);
   }
   try {
     const st = fs.fstatSync(fd);
     if (!st.isFile()) return { kind: "not-regular" };
-    if (st.size > MAX_REGULAR_FILE_READ_BYTES) return { kind: "unreadable" };
-    const content = readDescriptorBounded(fd);
-    if (content === null) return { kind: "unreadable" };
-    return { kind: "ok", content };
+    if (st.size > maxBytes) return { kind: "unreadable" };
+    const bytes = readDescriptorBounded(fd, maxBytes);
+    if (bytes === null) return { kind: "unreadable" };
+    return { kind: "ok", bytes };
   } catch {
     return { kind: "unreadable" };
   } finally {
@@ -177,6 +241,64 @@ export function readRegularFileRejectingSymlink(filePath: string): RegularFileRe
       // Already gone; nothing left to release.
     }
   }
+}
+
+/**
+ * {@link readRegularFileBytesBounded} decoded as utf8, for the by-path
+ * readers of a file a symlink at the path is acceptable for or a larger cap
+ * is justified (see {@link BoundedReadOptions}). Same five result kinds as
+ * {@link readRegularFileRejectingSymlink}; `missing` is the one a caller may
+ * treat as "legitimately absent", every other non-`ok` kind means something
+ * is at the path that must not be read as the file (a FIFO, a device, a
+ * directory, an oversized or unreadable file) and is fail-closed or
+ * explicitly reported by the caller.
+ */
+export function readRegularFileBounded(
+  filePath: string,
+  opts: BoundedReadOptions = {},
+): RegularFileRead {
+  const read = readRegularFileBytesBounded(filePath, opts);
+  return read.kind === "ok" ? { kind: "ok", content: read.bytes.toString("utf8") } : read;
+}
+
+/**
+ * Thrown by {@link readTextFileBoundedOrThrow}. `code` is `ENOENT` for a
+ * path that is not there (so a caller's existing `ENOENT` branch keeps
+ * meaning "absent") and `E_<KIND>` (`E_SYMLINK`, `E_NOT_REGULAR`,
+ * `E_UNREADABLE`) for anything else, which never matches `ENOENT`.
+ */
+export class BoundedReadError extends Error {
+  readonly code: string;
+  readonly kind: Exclude<RegularFileRead["kind"], "ok">;
+  constructor(filePath: string, kind: Exclude<RegularFileRead["kind"], "ok">) {
+    const code = kind === "missing" ? "ENOENT" : `E_${kind.toUpperCase().replace(/-/g, "_")}`;
+    super(`${code}: ${filePath} ${DESCRIBE_KIND[kind]}`);
+    this.name = "BoundedReadError";
+    this.code = code;
+    this.kind = kind;
+  }
+}
+
+const DESCRIBE_KIND: Record<Exclude<RegularFileRead["kind"], "ok">, string> = {
+  missing: "does not exist",
+  symlink: "is a symbolic link (refused)",
+  "not-regular": "is not a regular file (refused without a read)",
+  unreadable: "is unreadable or larger than the read cap",
+};
+
+/**
+ * {@link readRegularFileBounded} for the call sites that already wrap a
+ * `fs.readFileSync(path, "utf8")` in a try/catch (and, some of them, branch
+ * on `ENOENT`): the same bounded, non-blocking read, thrown as a
+ * {@link BoundedReadError} instead of returned, so the existing catch blocks
+ * keep their shape and every FIFO, device, directory or oversized file now
+ * lands in the catch block it would have reached on any other read error,
+ * rather than blocking the process.
+ */
+export function readTextFileBoundedOrThrow(filePath: string, opts: BoundedReadOptions = {}): string {
+  const read = readRegularFileBounded(filePath, opts);
+  if (read.kind === "ok") return read.content;
+  throw new BoundedReadError(filePath, read.kind);
 }
 
 /**
