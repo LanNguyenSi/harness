@@ -2225,3 +2225,97 @@ describe("segmentViewOf: opaque repo-relocating targets (task cfb6b390)", () => 
     });
   });
 });
+
+// Task cfb6b390, prefix words and the quoting of a `$` before a quote.
+describe("segmentViewOf: opaque cd behind a prefix word, and `$'` / `$\"` quoting (task cfb6b390)", () => {
+  const T = "'vendor/lib`x`y'";
+
+  describe("a cd behind a prefix word is read as a cd", () => {
+    // Each case names the segment that runs the gated read in the
+    // directory the opaque cd moved to.
+    const cases: Array<{ label: string; command: string; segment: number }> = [
+      { label: "time", command: `time cd ${T} && git log`, segment: 1 },
+      { label: "time -p (the wrapper's own flag)", command: `time -p cd ${T} && git log`, segment: 1 },
+      { label: "! (negation)", command: `! cd ${T}; git log`, segment: 1 },
+      { label: "if", command: `if cd ${T}; then :; fi; git log`, segment: 3 },
+      { label: "while", command: `while cd ${T}; do break; done; git log`, segment: 3 },
+      { label: "until", command: `until cd ${T}; do break; done; git log`, segment: 3 },
+      { label: "do", command: `while true; do cd ${T}; break; done; git log`, segment: 4 },
+      { label: "else", command: `if false; then :; else cd ${T}; fi; git log`, segment: 4 },
+      { label: "elif", command: `if false; then :; elif cd ${T}; then :; fi; git log`, segment: 5 },
+    ];
+    for (const c of cases) {
+      it(`${c.label}: ${JSON.stringify(c.command)}`, () => {
+        const segs = segmentViewOf(c.command);
+        expect(segs).not.toBeNull();
+        expect(segs![c.segment]!.text.trim()).toBe("git log");
+        expect(segs![c.segment]!.opaqueTarget).toBe(true);
+      });
+    }
+
+    it("a subshell opener is a segment boundary, so `(cd X` arrives as a plain cd segment", () => {
+      const segs = segmentViewOf(`(cd ${T} && git status) && git log`);
+      expect(segs![1]!.text).toBe(`cd ${T} `);
+      expect(segs![1]!.opaqueTarget).toBe(true);
+    });
+  });
+
+  // Known residual, pinned as current behaviour: a `cd` whose own value is
+  // unattributable (quoted) but plain, after an opaque `cd`, resets the
+  // directory basis instead of continuing the opaque one, so the read after
+  // it falls back to the cwd. It belongs to the follow-up for the
+  // plain-name cwd-only forms (reset-class and unattributable cd after an
+  // opaque one, `cd -`, `popd`, `||`, a backslash or partly quoted command
+  // word, zsh `chdir`); this test changes when that follow-up lands.
+  it("known residual: a quoted plain relative cd after an opaque cd resets the basis", () => {
+    const segs = segmentViewOf(`cd ${T} && cd "sub" && git log`);
+    expect(segs![0]!.opaqueTarget).toBe(true);
+    expect(segs![1]!.opaqueTarget).toBeUndefined();
+    expect(segs![2]!.opaqueTarget).toBeUndefined();
+    expect(segs![2]!.effectiveTarget).toBeNull();
+  });
+
+  describe("a `$` followed by a quote is ANSI-C or locale quoting only when the `$` is unquoted", () => {
+    const flagged: Array<{ label: string; command: string; segment: number }> = [
+      { label: "ANSI-C value on git -C", command: "git -C $'vendor/x' log", segment: 0 },
+      { label: "locale value on git -C", command: 'git -C $"vendor/x" log', segment: 0 },
+      { label: "ANSI-C value on cd", command: "cd $'vendor/x' && git log", segment: 1 },
+      { label: "locale value on cd", command: 'cd $"vendor/x" && git log', segment: 1 },
+      { label: "ANSI-C run after a closed single-quoted run", command: "cd 'a'$'b' && git log", segment: 1 },
+      { label: "ANSI-C run glued to env --chdir=", command: "env --chdir=$'vendor/x' git log", segment: 0 },
+      {
+        label: "a word the tokeniser split at a quoted space (the second piece alone reads the `$'` as quoted)",
+        command: "cd 'a b'$'\\x60' && git log",
+        segment: 1,
+      },
+      {
+        label: "an ANSI-C run inside a double-quoted ${...} (bash extquote)",
+        command: "cd \"${x:-$'\\x60'}\" && git log",
+        segment: 1,
+      },
+    ];
+    for (const c of flagged) {
+      it(`flagged: ${c.label}: ${JSON.stringify(c.command)}`, () => {
+        const segs = segmentViewOf(c.command);
+        expect(segs![c.segment]!.opaqueTarget).toBe(true);
+      });
+    }
+
+    const plain: Array<{ label: string; command: string; segment: number }> = [
+      { label: "single-quoted value ending in $ on git -C", command: "git -C 'a$' log", segment: 0 },
+      { label: "double-quoted value ending in $ on cd", command: 'cd "a$" && git push', segment: 1 },
+      { label: "single-quoted lone $ on cd", command: "cd '$' && git log", segment: 1 },
+      { label: "backslash-escaped $ before a single-quoted run", command: "cd \\$'a' && git log", segment: 1 },
+      { label: "double-quoted value ending in $ on env -C", command: 'env -C "a$" git log', segment: 0 },
+      { label: "single-quoted value ending in $ on env --chdir=", command: "env --chdir='a$' git log", segment: 0 },
+      { label: "single-quoted value ending in $ on git --git-dir=", command: "git --git-dir='a$/.git' log", segment: 0 },
+    ];
+    for (const c of plain) {
+      it(`not flagged: ${c.label}: ${JSON.stringify(c.command)}`, () => {
+        const segs = segmentViewOf(c.command);
+        expect(segs![c.segment]!.opaqueTarget).toBeUndefined();
+        expect(segs![0]!.opaqueTarget).toBeUndefined();
+      });
+    }
+  });
+});

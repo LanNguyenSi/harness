@@ -111,17 +111,21 @@ since it is the part that changes this matrix's own fail-posture story:
   only next to a RESOLVED target, never in a fallback).
 - **A repo-relocating value this module refuses to read fails CLOSED
   instead of falling back (task `cfb6b390`).** A `-C`, `--git-dir` or
-  `env -C` value (every `-C` of an `env`, a `~` value included), or ANY
-  argument of a `cd` / `pushd` / `popd` (flags, redirections and a
-  `builtin` / `command` / `eval` / `VAR=value` / `{` prefix around it do
-  not hide it), that holds a backtick (quoted or not, an escaped backtick,
-  a backtick command substitution), an ANSI-C quoted value (`$'...'`,
-  which decodes escapes) or a locale quoted value (`$"..."`, which a
-  locale catalogue can translate; bash decodes no escape there), or that
-  is otherwise unattributable AND holds a control, format or separator
-  character, makes `segmentViewOf` flag the segment (`opaqueTarget`), also
-  for a later segment that inherits the directory of such a `cd` or names
-  a relative target against it.
+  `env -C` value (every `-C` of an `env`, a `~` value included), or an
+  argument of a `cd` / `pushd` / `popd` in a shape `scanCdFamily`
+  recognises (flags and redirections after it; a `{` or `!`, `builtin`,
+  `command`, `eval`, `time`, a compound-command keyword or a `VAR=value`
+  assignment in front of it), that holds a backtick (quoted or not, an
+  escaped backtick, a backtick command substitution), an ANSI-C quoted
+  value (`$'...'`, which decodes escapes) or a locale quoted value
+  (`$"..."`, which bash looks up in a locale catalogue that can translate
+  it, decoding no escape; zsh reads it as a literal `$` plus a
+  double-quoted string, where the rule over-blocks) started by an
+  unquoted, unescaped `$` (`'a$'` and `"a$"` are plain quoted values), or
+  that is otherwise unattributable AND holds a control, format or
+  separator character, makes `segmentViewOf` flag the segment
+  (`opaqueTarget`), also for a later segment that inherits the directory
+  of such a `cd` or names a relative target against it.
   `resolveAttributedContexts` then returns `opaque-target` and
   `intercept()` records one decision without a ledger query (deny for a
   `block` policy, warn for a `warn` policy), the same shape as the bound
@@ -135,7 +139,13 @@ since it is the part that changes this matrix's own fail-posture story:
   quoted value without those characters (`git -C 'vendor/lib' log`), a
   `$(...)` substitution, a `~` or variable value, and a quoted path that
   holds a space (the whitespace-splitting tokeniser reads it as a different
-  command and no policy matches it at all).
+  command and no policy matches it at all). Also NOT closed (a follow-up,
+  together with the plain-name forms): the opaque directory is not
+  carried past a later reset-class `cd` (`cd -P X`, `pushd X`, `popd`,
+  `cd -`), a later `cd` whose own value is unattributable but not opaque
+  (`cd "sub"`), or a `||`, and a backslash-escaped or partly quoted `cd`
+  command word (`\cd`, `c''d`) or the zsh `chdir` builtin is not read as
+  a `cd`.
 - **More than `MAX_ATTRIBUTED_CONTEXTS` (4) distinct targets for one
   policy on one event fails CLOSED** — see the new table row above. This
   is the one place per-policy attribution ADDS a fail-closed posture the

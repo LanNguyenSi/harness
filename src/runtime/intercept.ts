@@ -1340,7 +1340,7 @@ export const OPAQUE_TARGET_REASON =
  * cwd context: a segment flagged `opaqueTarget` (task `cfb6b390`: a
  * backtick, an ANSI-C or locale quoted value, or an unattributable value
  * carrying a control character, in a `-C` / `--git-dir` / `env -C` value
- * or in any argument of a `cd` / `pushd`, or inherited from such a `cd`)
+ * or in an argument of a recognised `cd` / `pushd`, or inherited from one)
  * makes the whole policy fail closed (`{ kind: "opaque-target" }`), because the cwd context
  * would then stand in for a nested repository the command really runs in.
  *

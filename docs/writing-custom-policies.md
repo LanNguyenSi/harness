@@ -271,14 +271,19 @@ kind of unattributable target is NOT left at the cwd fallback above,
 because the command then really runs in some nested repository and the
 cwd repository's evidence would stand in for it. A `-C`, `--git-dir` or
 `env -C` value (every `-C`, not only the first, and a `~`-prefixed one
-too), or any argument of a `cd`, `pushd` or `popd` (whatever flags,
-redirections, `builtin` / `command` / `eval` / `VAR=value` prefix or `{`
-group surround it), that holds
+too), or an argument of a `cd`, `pushd` or `popd` in a shape the gate
+recognises (flags and redirections after it; a `{` or `!`, `builtin`,
+`command`, `eval`, `time`, a compound-command keyword such as `if`,
+`then`, `do` or `else`, or a `VAR=value` assignment in front of it),
+that holds
 
 - a backtick (quoted, escaped or a command substitution),
 - an ANSI-C quoted value (`$'...'`, which decodes escapes such as `\x60`)
-  or a locale quoted value (`$"..."`, whose text a locale catalogue can
-  translate into a different name), or
+  or a locale quoted value (`$"..."`: bash looks its text up in a locale
+  catalogue that can translate it into a different name; zsh reads it as
+  a literal `$` followed by a double-quoted string, so there the rule
+  over-blocks), counted only where the `$` itself is unquoted and
+  unescaped (`git -C 'a$' log` and `cd "a$"` are plain quoted values), or
 - a control, format or separator character (C0, DEL, C1, zero-width and
   bidirectional controls, U+2028, U+2029, the byte order mark) in an
   otherwise unattributable value (a quoted or `~` value; an unquoted path
@@ -303,6 +308,13 @@ that has nothing to do with the gated verb later in the command, and a
 path that really does contain a backtick. Plain unquoted paths, quoted
 plain paths and a backtick that is not a target (a `--grep='...'` or a
 commit message) are unaffected.
+
+Not closed yet, still the cwd fallback (a follow-up): the directory of
+such a `cd` is not carried past a later reset-class `cd` (`cd -P X`,
+`pushd X`, `popd`, `cd -`), a later `cd` whose own value is quoted but
+plain (`cd "sub"`), or a `||`; a `cd` whose command word is
+backslash-escaped or partly quoted (`\cd X`, `c''d X`) and the zsh `chdir`
+builtin are not read as a `cd` at all.
 
 **The cross-repo consequence.** Because attribution is additive, holding
 evidence for ONLY the target repository named by a `-C`/`cd` is no longer

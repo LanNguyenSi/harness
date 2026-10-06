@@ -151,6 +151,15 @@ describe("runInterceptCli: a target the gate cannot attribute does not fall back
       { label: "env -C with a ~ value carrying ESC", command: () => "env -C ~/lib\u001bz git log" },
       { label: "env -C plus a relative -C after an opaque cd", command: () => `cd 'vendor/${BACKTICK_NAME}' && env -C sub git -C sub2 log` },
       { label: "a read after an env -C plus relative -C segment that followed an opaque cd", command: () => `cd 'vendor/${BACKTICK_NAME}' && env -C sub git -C sub2 status && git log` },
+      // A cd behind a prefix word, the gated read after the construct.
+      { label: "time cd", command: () => `time cd 'vendor/${BACKTICK_NAME}' && git log` },
+      { label: "! cd", command: () => `! cd 'vendor/${BACKTICK_NAME}'; git log` },
+      { label: "if cd", command: () => `if cd 'vendor/${BACKTICK_NAME}'; then :; fi; git log` },
+      { label: "while cd", command: () => `while cd 'vendor/${BACKTICK_NAME}'; do break; done; git log` },
+      { label: "until cd", command: () => `until cd 'vendor/${BACKTICK_NAME}'; do break; done; git log` },
+      { label: "do cd", command: () => `while true; do cd 'vendor/${BACKTICK_NAME}'; break; done; git log` },
+      { label: "else cd", command: () => `if false; then :; else cd 'vendor/${BACKTICK_NAME}'; fi; git log` },
+      { label: "elif cd", command: () => `if false; then :; elif cd 'vendor/${BACKTICK_NAME}'; then :; fi; git log` },
     ];
     for (const shape of shapes) {
       it(`${shape.label}: denied with the cwd-only evidence on record`, async () => {
@@ -282,6 +291,26 @@ describe("runInterceptCli: a target the gate cannot attribute does not fall back
     it("an opaque cd on the other side of a pipe does not reach the gated read", async () => {
       const world = makeWorld([BACKTICK_NAME]);
       const result = await run(`cd 'vendor/${BACKTICK_NAME}' | git log`, world.outer, OUTER_ONLY);
+      expect(result.decisions.map((d) => d.ledgerTag)).toEqual(["preflight:outer-repo"]);
+      expect(result.blocked).toBe(false);
+    });
+
+    it("a quoted value ending in a literal $ keeps the cwd-only fallback (the $ is quoted, not ANSI-C or locale quoting)", async () => {
+      const world = makeWorld(["a$"]);
+      for (const command of ["git -C 'vendor/a$' log", 'cd "vendor/a$" && git log']) {
+        const result = await run(command, world.outer, OUTER_ONLY);
+        expect(result.decisions.map((d) => d.ledgerTag)).toEqual(["preflight:outer-repo"]);
+        expect(result.blocked).toBe(false);
+      }
+    });
+
+    // Known residual, pinned as current behaviour: a quoted plain relative
+    // cd after an opaque cd resets the directory basis, so the read after
+    // it is decided on the cwd evidence alone. Part of the follow-up for
+    // the plain-name cwd-only forms; this test changes when it lands.
+    it("known residual: a quoted plain relative cd after an opaque cd falls back to the cwd", async () => {
+      const world = makeWorld([BACKTICK_NAME]);
+      const result = await run(`cd 'vendor/${BACKTICK_NAME}' && cd "sub" && git log`, world.outer, OUTER_ONLY);
       expect(result.decisions.map((d) => d.ledgerTag)).toEqual(["preflight:outer-repo"]);
       expect(result.blocked).toBe(false);
     });
