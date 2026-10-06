@@ -66,7 +66,7 @@ import {
   normalizeCommandAmpAware,
   normalizeCommandQuoteAware,
 } from "../../runtime/command-normalize.js";
-import { resolveGitContext } from "../../runtime/git-context.js";
+import { describeRefusedGitFiles, resolveGitContext } from "../../runtime/git-context.js";
 import { resolveManifestLedgerWriter, type LedgerWriteFn } from "../../runtime/ledger-writer.js";
 import type { Manifest } from "../../schema/index.js";
 import { type LoaderOptions } from "../loader.js";
@@ -191,11 +191,13 @@ export async function runPackHookPostMergeGateRecordCli(
       : typeof event.cwd === "string" && event.cwd.length > 0
         ? event.cwd
         : process.cwd();
-  const { repo, branch, sha } = resolveGitContext(cwd);
+  const gitContext = resolveGitContext(cwd);
+  const { repo, branch, sha } = gitContext;
   if (repo === "" || branch === "" || sha === "") {
     const diagnostic =
       `cannot resolve git context for ${cwd} ` +
-      `(repo=${JSON.stringify(repo)} branch=${JSON.stringify(branch)} sha=${JSON.stringify(sha)}); ` +
+      `(repo=${JSON.stringify(repo)} branch=${JSON.stringify(branch)} sha=${JSON.stringify(sha)})` +
+      `${describeRefusedGitFiles(gitContext)}; ` +
       `skipping (no fact written)`;
     note(diagnostic);
     return { exitCode: 0, wrote: false, diagnostic };

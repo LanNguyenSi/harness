@@ -9,10 +9,10 @@
 // Every failure path returns empty strings, never throws — callers
 // treat "" as "unknown".
 
-import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { parse as parseYaml } from "yaml";
+import { readTextFileBoundedOrThrow } from "../io/read-regular-file.js";
 
 export interface KubeContext {
   /** Current context name, or "" when unresolved. */
@@ -22,6 +22,12 @@ export interface KubeContext {
 }
 
 const EMPTY: KubeContext = { context: "", namespace: "" };
+
+// A kubeconfig can legitimately carry many clusters with their certificate
+// authority data inline, so the gate-marker 1 MiB cap would be too tight; a
+// file past 8 MiB is not a kubeconfig. The read is bounded either way, so a
+// sparse planted file cannot run the hook past its budget.
+const MAX_KUBECONFIG_BYTES = 8 * 1024 * 1024;
 
 export interface ResolveKubeContextOptions {
   /** Override the kubeconfig path (tests). Defaults to `~/.kube/config`. */
@@ -41,7 +47,15 @@ export function resolveKubeContext(
 
   let raw: string;
   try {
-    raw = fs.readFileSync(configPath, "utf8");
+    // Bounded, non-blocking read through the opened descriptor (a symlinked
+    // kubeconfig is followed, as before). A FIFO, a device, a directory, an
+    // oversized or unreadable file reads as "unknown" ("" / ""), exactly
+    // like an absent file (the resolver never throws); the one thing it
+    // must not do is wait.
+    raw = readTextFileBoundedOrThrow(configPath, {
+      followSymlinks: true,
+      maxBytes: MAX_KUBECONFIG_BYTES,
+    });
   } catch {
     return EMPTY;
   }

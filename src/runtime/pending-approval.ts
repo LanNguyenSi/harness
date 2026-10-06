@@ -22,6 +22,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { atomicWriteFile } from "../io/atomic-write.js";
 import { GENERATED_DIRNAME, resolveGeneratedDir } from "../io/generated-dir.js";
+import { readTextFileBoundedOrThrow } from "../io/read-regular-file.js";
 
 export { GENERATED_DIRNAME, resolveGeneratedDir };
 
@@ -49,7 +50,9 @@ export function writePendingApproval(generatedDir: string, sessionId: string): v
 export function readPendingApproval(generatedDir: string): string | null {
   let raw: string;
   try {
-    raw = fs.readFileSync(pendingApprovalPath(generatedDir), "utf8");
+    // Bounded and non-blocking (a FIFO or oversized file at the staging path
+    // reads as "no staged session id", the same as an absent one).
+    raw = readTextFileBoundedOrThrow(pendingApprovalPath(generatedDir), { followSymlinks: true });
   } catch {
     return null;
   }

@@ -33,6 +33,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { atomicWriteFile } from "../io/atomic-write.js";
+import { readTextFileBoundedOrThrow } from "../io/read-regular-file.js";
 
 export const SENTINEL_BASENAME = ".harness-paused";
 
@@ -59,7 +60,13 @@ export type ReadSentinelResult =
 export function readSentinel(generatedDir: string, now: Date = new Date()): ReadSentinelResult {
   let raw: string;
   try {
-    raw = fs.readFileSync(sentinelPath(generatedDir), "utf8");
+    // A bounded, non-blocking read: a FIFO, a device, a directory or an
+    // oversized file planted at the sentinel path cannot hold the hook past
+    // its budget (which the runtime treats as an allow) and reads as
+    // `absent`, i.e. NOT paused, so every gate stays armed (a pause is the
+    // one state that switches gates off, so an unreadable sentinel must
+    // never count as one).
+    raw = readTextFileBoundedOrThrow(sentinelPath(generatedDir), { followSymlinks: true });
   } catch {
     return { kind: "absent" };
   }

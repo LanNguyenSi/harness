@@ -116,10 +116,10 @@
 // pre-fix default-path behavior, unlike the R1 shape.
 
 import { spawn } from "node:child_process";
-import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { assertNoRealSpawnInTests } from "../runtime/hermetic-spawn-guard.js";
+import { readTextFileBoundedOrThrow } from "./read-regular-file.js";
 
 export const DEFAULT_TIMEOUT_MS = 30_000;
 
@@ -622,6 +622,9 @@ export interface RegistryReadResult {
   error: string | null;
 }
 
+/** Hard bound of the registry read, see {@link readTopLevelMcpServers}. */
+const MAX_REGISTRY_BYTES = 32 * 1024 * 1024;
+
 /**
  * Read strictly the top-level `mcpServers` key of the registry file. Never
  * reads/interprets `projects.<path>.mcpServers` — that's project-local
@@ -637,7 +640,16 @@ export interface RegistryReadResult {
 export function readTopLevelMcpServers(registryPath: string): RegistryReadResult {
   let raw: string;
   try {
-    raw = fs.readFileSync(registryPath, "utf8");
+    // Bounded and non-blocking (a FIFO or sparse file at the registry path
+    // cannot hold the SessionStart hook that reads it). The user registry
+    // grows with Claude Code's per-project state, so the 1 MiB gate-marker
+    // cap is too tight; 32 MiB is far above any real one (the one measured
+    // here is under 100 KB) and still a hard bound. A refusal comes back as
+    // the `error` of the result, like any other unreadable registry.
+    raw = readTextFileBoundedOrThrow(registryPath, {
+      followSymlinks: true,
+      maxBytes: MAX_REGISTRY_BYTES,
+    });
   } catch (err) {
     const e = err as NodeJS.ErrnoException;
     if (e.code === "ENOENT") return { servers: {}, error: null };

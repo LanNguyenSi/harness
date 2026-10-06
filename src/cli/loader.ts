@@ -8,6 +8,7 @@ import {
   type DiscriminatorOptions,
 } from "../overrides/machines.js";
 import { ManifestParseError, parseManifest, type Manifest } from "../schema/index.js";
+import { readTextFileBoundedOrThrow } from "../io/read-regular-file.js";
 import { resolveHomeDir } from "../runtime/home-dir.js";
 import { isValidProjectName } from "../runtime/git-context.js";
 import { withDerivedPolicies } from "../runtime/workflow-policies.js";
@@ -109,7 +110,13 @@ export function resolvePaths(opts: LoaderOptions = {}): ResolvedPaths {
 function readYamlFile(filePath: string, label: string): unknown {
   let raw: string;
   try {
-    raw = fs.readFileSync(filePath, "utf8");
+    // Bounded (1 MiB, far past any manifest) and non-blocking: every hook
+    // loads the manifest and its override layers through here, so a FIFO or
+    // a sparse oversized file at one of these paths must fail the load (each
+    // hook then applies its own load-failure posture) instead of holding the
+    // hook past its budget, which the runtime treats as an allow. A symlinked
+    // manifest (a dotfiles checkout) is followed, as before.
+    raw = readTextFileBoundedOrThrow(filePath, { followSymlinks: true });
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === "ENOENT") {
       // First-run DX (task 24ec07a6): a fresh machine's first command is

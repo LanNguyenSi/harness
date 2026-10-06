@@ -357,10 +357,13 @@ describe("resolveGitContext", () => {
     });
     fs.mkdirSync(path.join(wtGitDir, "commondir"));
     expect(() => resolveGitContext(worktree)).not.toThrow();
+    // A `commondir` that is present but not a regular file is reported as
+    // refused (a missing one is not), and the answer is still unknown.
     expect(resolveGitContext(worktree)).toEqual({
       repo: "linked-worktree",
       branch: "wt-branch",
       sha: "",
+      refused: ["commondir"],
     });
   });
 });

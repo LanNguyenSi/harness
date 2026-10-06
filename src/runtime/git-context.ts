@@ -23,6 +23,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { isValidProjectName } from "../io/project-name.js";
+import { readRegularFileBounded } from "../io/read-regular-file.js";
 
 export interface GitRepoContext {
   /** Basename of the work-tree root, or "" when `cwd` is not in a repo. */
@@ -42,9 +43,74 @@ export interface GitRepoContext {
    * equals the current HEAD satisfies the gate regardless of age.
    */
   sha: string;
+  /**
+   * Present (non-empty) only when a git file the lookup needed was NOT
+   * simply absent but refused: a FIFO, a device, a directory, an oversized
+   * or unreadable file stood where a regular file belongs (`.git`, `HEAD`,
+   * `refs/heads/<branch>`, `packed-refs`, `commondir`, named relative to the
+   * git directory). The affected fields stay `""` exactly as they do for a
+   * missing file, so a caller that only treats `""` as "unknown" is
+   * unchanged; a deny-capable caller that must not read "unknown" as "safe"
+   * (branch-protection) checks this field instead, because in a healthy
+   * repository none of these paths is ever anything but a regular file or
+   * absent. Never populated for a path that is merely missing.
+   */
+  refused?: readonly string[];
 }
 
 const EMPTY: GitRepoContext = { repo: "", branch: "", sha: "" };
+
+/**
+ * A short ` [git file refused ...]` suffix for a diagnostic when
+ * {@link GitRepoContext.refused} is set, `""` otherwise, so a hook that
+ * resolves an unknown from a refused git file says so instead of reading
+ * like an ordinary detached HEAD.
+ */
+export function describeRefusedGitFiles(ctx: Pick<GitRepoContext, "refused">): string {
+  if (ctx.refused === undefined || ctx.refused.length === 0) return "";
+  return ` [git file refused, present but not a regular file or over the read cap: ${ctx.refused.join(", ")}]`;
+}
+
+/**
+ * The most bytes a git ref file may have. A loose ref, `HEAD`, a `.git`
+ * pointer file and `commondir` hold one line (a sha, a ref name or a path),
+ * so the shared 1 MiB cap is generous for them. Only `packed-refs` can
+ * legitimately be large (one line per ref: a repository with hundreds of
+ * thousands of tags and branches reaches tens of MiB), see
+ * {@link MAX_PACKED_REFS_BYTES}.
+ */
+// `packed-refs` carries ~100 bytes per ref (a 40-char sha, the ref name, a
+// peeled line for an annotated tag), so 32 MiB covers on the order of
+// 300,000 refs, well past any repository whose hook budget a lookup would
+// be asked to fit, and is still a bound a sparse planted file cannot run
+// the hook past.
+const MAX_PACKED_REFS_BYTES = 32 * 1024 * 1024;
+
+/**
+ * Read one git file by path through the shared bounded, non-blocking
+ * descriptor read (the path is opened once with `O_NONBLOCK`, the type and
+ * size come from `fstat` on that descriptor). A path that is simply absent
+ * is `null`, like the old `readFileSync` throwing `ENOENT`; a path that is
+ * there but cannot be read as a regular file (a FIFO with no writer used to
+ * block the hook here until the runtime's budget ran out, which the runtime
+ * treats as an allow) is also `null` but recorded in `refused` so a caller
+ * can tell the two apart. Symlinks are followed, as before (git itself
+ * does): the descriptor's own type is what decides.
+ */
+function readGitFile(
+  filePath: string,
+  label: string,
+  refused: string[] | undefined,
+  maxBytes?: number,
+): string | null {
+  const read = readRegularFileBounded(filePath, {
+    followSymlinks: true,
+    ...(maxBytes !== undefined ? { maxBytes } : {}),
+  });
+  if (read.kind === "ok") return read.content;
+  if (read.kind !== "missing") refused?.push(label);
+  return null;
+}
 
 // A `.git` *file* (linked worktree / submodule) points at the real git
 // dir: `gitdir: <path>`.
@@ -60,6 +126,15 @@ export interface GitEntry {
   worktreeRoot: string;
   /** Resolved git directory — for a `.git` file, its `gitdir:` target. */
   gitDir: string;
+  /**
+   * `".git"` when the `.git` entry is a file that was present but refused
+   * (a FIFO swapped in after the stat, an oversized or unreadable file), as
+   * opposed to a readable file without a `gitdir:` line; `"HEAD"` when the
+   * `.git` directory's `HEAD` is present but not a regular file. Absent
+   * otherwise. `gitDir` is `""` in both cases, exactly as for any other
+   * unreadable `.git` file.
+   */
+  refused?: ".git" | "HEAD";
 }
 
 /**
@@ -87,22 +162,31 @@ export function findGitEntry(startDir: string): GitEntry | null {
       stat = undefined;
     }
     if (stat?.isDirectory()) {
+      let headStat: fs.Stats;
       try {
-        if (!fs.statSync(path.join(dotGit, "HEAD")).isFile()) return null;
+        headStat = fs.statSync(path.join(dotGit, "HEAD"));
       } catch {
         return null;
       }
+      // A `HEAD` that is PRESENT but not a regular file (a FIFO planted
+      // over it, a directory, a device) is not "no repository here": this
+      // is a git directory whose `HEAD` cannot be read, reported as
+      // refused with `gitDir` left empty (so nothing reads through it),
+      // never as "outside a work tree" (which a deny-capable caller would
+      // read as safe to allow).
+      if (!headStat.isFile()) return { worktreeRoot: dir, gitDir: "", refused: "HEAD" };
       return { worktreeRoot: dir, gitDir: dotGit };
     }
     if (stat?.isFile()) {
       let gitDir = "";
-      try {
-        const match = GITDIR_RE.exec(fs.readFileSync(dotGit, "utf8").trim());
+      const refused: string[] = [];
+      // An unreadable `.git` file leaves gitDir empty, the repo still resolves.
+      const text = readGitFile(dotGit, ".git", refused);
+      if (text !== null) {
+        const match = GITDIR_RE.exec(text.trim());
         if (match) gitDir = path.resolve(dir, match[1]!.trim());
-      } catch {
-        /* unreadable `.git` file — leave gitDir empty, repo still resolves */
       }
-      return { worktreeRoot: dir, gitDir };
+      return { worktreeRoot: dir, gitDir, ...(refused.length > 0 ? { refused: ".git" as const } : {}) };
     }
     const parent = path.dirname(dir);
     if (parent === dir) return null; // hit the filesystem root
@@ -115,27 +199,38 @@ export function findGitEntry(startDir: string): GitEntry | null {
  * Look up a branch's sha by reading the loose ref file first, then
  * falling back to `packed-refs`. Both sources are plain text; the
  * lookup stays cheap (no `git` subprocess).
+ *
+ * A loose ref that is MISSING falls through to `packed-refs` (the normal
+ * shape of a packed branch). A loose ref that is present but REFUSED (a
+ * FIFO, a device, a directory, an oversized or unreadable file) does not:
+ * `packed-refs` holds an OLDER tip of the same branch, so falling back to
+ * it would hand a caller a stale sha it would trust (a head-pinned verdict
+ * for the old tip would match), where the unknown `""` it gets instead
+ * fails closed. The same goes for a refused `packed-refs`.
  */
-function resolveBranchSha(gitDir: string, branch: string): string {
-  try {
-    const loose = fs
-      .readFileSync(path.join(gitDir, "refs", "heads", branch), "utf8")
-      .trim();
+function resolveBranchSha(gitDir: string, branch: string, refused: string[]): string {
+  const looseLabel = `refs/heads/${branch}`;
+  const refusedBefore = refused.length;
+  const looseRaw = readGitFile(path.join(gitDir, "refs", "heads", branch), looseLabel, refused);
+  if (looseRaw !== null) {
+    const loose = looseRaw.trim();
     if (SHA_RE.test(loose)) return loose;
-  } catch {
-    /* loose ref missing, try packed-refs */
+  } else if (refused.length > refusedBefore) {
+    return "";
   }
-  try {
-    const packed = fs.readFileSync(path.join(gitDir, "packed-refs"), "utf8");
-    const target = `refs/heads/${branch}`;
-    for (const raw of packed.split("\n")) {
-      const line = raw.trim();
-      if (line === "" || line.startsWith("#") || line.startsWith("^")) continue;
-      const [sha, ref] = line.split(/\s+/, 2);
-      if (ref === target && sha && SHA_RE.test(sha)) return sha;
-    }
-  } catch {
-    /* packed-refs missing too — caller treats "" as "unknown" */
+  const packed = readGitFile(
+    path.join(gitDir, "packed-refs"),
+    "packed-refs",
+    refused,
+    MAX_PACKED_REFS_BYTES,
+  );
+  if (packed === null) return "";
+  const target = `refs/heads/${branch}`;
+  for (const raw of packed.split("\n")) {
+    const line = raw.trim();
+    if (line === "" || line.startsWith("#") || line.startsWith("^")) continue;
+    const [sha, ref] = line.split(/\s+/, 2);
+    if (ref === target && sha && SHA_RE.test(sha)) return sha;
   }
   return "";
 }
@@ -153,9 +248,14 @@ export function resolveGitContext(cwd: string): GitRepoContext {
   const repo = path.basename(entry.worktreeRoot);
   let branch = "";
   let sha = "";
+  const refused: string[] = entry.refused !== undefined ? [entry.refused] : [];
   if (entry.gitDir) {
     try {
-      const head = fs.readFileSync(path.join(entry.gitDir, "HEAD"), "utf8").trim();
+      // A missing or refused HEAD leaves branch + sha "" (a refused one is
+      // also recorded in `refused`, see GitRepoContext.refused).
+      const headRaw = readGitFile(path.join(entry.gitDir, "HEAD"), "HEAD", refused);
+      if (headRaw === null) throw new Error("no readable HEAD");
+      const head = headRaw.trim();
       const match = HEAD_REF_RE.exec(head);
       if (match) {
         branch = match[1]!.trim();
@@ -165,7 +265,7 @@ export function resolveGitContext(cwd: string): GitRepoContext {
         // through it here is a no-op for the main checkout (no
         // `commondir` file, `resolveCommonDir` returns `gitDir`
         // unchanged).
-        sha = resolveBranchSha(resolveCommonDir(entry.gitDir), branch);
+        sha = resolveBranchSha(resolveCommonDir(entry.gitDir, refused), branch, refused);
       } else if (SHA_RE.test(head)) {
         // Detached HEAD: the file contains the raw sha directly.
         sha = head;
@@ -174,7 +274,7 @@ export function resolveGitContext(cwd: string): GitRepoContext {
       /* unreadable HEAD — branch + sha stay "" */
     }
   }
-  return { repo, branch, sha };
+  return { repo, branch, sha, ...(refused.length > 0 ? { refused } : {}) };
 }
 
 // ---------------------------------------------------------------------------
@@ -212,37 +312,47 @@ const ORIGIN_REMOTE_PREFIX = "refs/remotes/origin/";
  * when neither source resolves a name.
  */
 export function resolveOriginHeadBase(gitDir: string): string | null {
-  try {
-    const raw = fs
-      .readFileSync(path.join(gitDir, "refs", "remotes", "origin", "HEAD"), "utf8")
-      .trim();
-    const match = ORIGIN_HEAD_REF_RE.exec(raw);
+  // Both reads go through the bounded, non-blocking git-file read. A loose
+  // symref that is present but refused (a FIFO, a device, an oversized file)
+  // resolves to `null` and does NOT fall back to `packed-refs`, which may
+  // name a stale default branch; a missing one falls back as before.
+  const refused: string[] = [];
+  const looseRaw = readGitFile(
+    path.join(gitDir, "refs", "remotes", "origin", "HEAD"),
+    ORIGIN_HEAD_REF_PATH,
+    refused,
+  );
+  if (looseRaw !== null) {
+    const match = ORIGIN_HEAD_REF_RE.exec(looseRaw.trim());
     if (match) return match[1]!.trim();
-  } catch {
-    /* loose symref missing — try packed-refs */
+  } else if (refused.length > 0) {
+    return null;
   }
-  try {
-    const packed = fs.readFileSync(path.join(gitDir, "packed-refs"), "utf8");
-    let headSha: string | null = null;
-    const entries: Array<{ sha: string; ref: string }> = [];
-    for (const rawLine of packed.split("\n")) {
-      const line = rawLine.trim();
-      if (line === "" || line.startsWith("#") || line.startsWith("^")) continue;
-      const parts = line.split(/\s+/);
-      const sha = parts[0];
-      const ref = parts[1];
-      if (!sha || !ref || !SHA_RE.test(sha)) continue;
-      if (ref === ORIGIN_HEAD_REF_PATH) headSha = sha;
-      else entries.push({ sha, ref });
-    }
-    if (headSha) {
-      const match = entries.find(
-        (e) => e.sha === headSha && e.ref.startsWith(ORIGIN_REMOTE_PREFIX),
-      );
-      if (match) return match.ref.slice(ORIGIN_REMOTE_PREFIX.length);
-    }
-  } catch {
-    /* packed-refs missing too — caller treats null as "unresolvable" */
+  // A missing or refused `packed-refs` leaves the caller's "unresolvable".
+  const packed = readGitFile(
+    path.join(gitDir, "packed-refs"),
+    "packed-refs",
+    refused,
+    MAX_PACKED_REFS_BYTES,
+  );
+  if (packed === null) return null;
+  let headSha: string | null = null;
+  const entries: Array<{ sha: string; ref: string }> = [];
+  for (const rawLine of packed.split("\n")) {
+    const line = rawLine.trim();
+    if (line === "" || line.startsWith("#") || line.startsWith("^")) continue;
+    const parts = line.split(/\s+/);
+    const sha = parts[0];
+    const ref = parts[1];
+    if (!sha || !ref || !SHA_RE.test(sha)) continue;
+    if (ref === ORIGIN_HEAD_REF_PATH) headSha = sha;
+    else entries.push({ sha, ref });
+  }
+  if (headSha) {
+    const match = entries.find(
+      (e) => e.sha === headSha && e.ref.startsWith(ORIGIN_REMOTE_PREFIX),
+    );
+    if (match) return match.ref.slice(ORIGIN_REMOTE_PREFIX.length);
   }
   return null;
 }
@@ -261,26 +371,26 @@ export function resolveOriginHeadBase(gitDir: string): string | null {
  * always miss. Returns `gitDir` unchanged when no `commondir` file
  * exists (the normal, non-worktree case).
  */
-export function resolveCommonDir(gitDir: string): string {
-  try {
-    const raw = fs.readFileSync(path.join(gitDir, "commondir"), "utf8").trim();
-    if (raw.length > 0) {
-      // `path.normalize` on the absolute branch (review round 3,
-      // decision D-028's security finding): the relative branch already
-      // normalizes via `path.resolve`, but an absolute `commondir`
-      // value was returned verbatim, `..` segments and all. A crafted
-      // `.git` FILE pointing at a private gitdir whose `commondir` file
-      // holds an absolute path ending in unresolved `..` segments (e.g.
-      // `<gitDir>/../..`) then reached `deriveProjectName` below with
-      // those segments still literally present, `path.basename` textually
-      // returning `..` instead of the intended ancestor directory's real
-      // name. Normalizing here closes that off at the source, before
-      // either caller (`resolveOriginHeadBase`, `deriveProjectName`)
-      // ever sees the raw value.
-      return path.isAbsolute(raw) ? path.normalize(raw) : path.resolve(gitDir, raw);
-    }
-  } catch {
-    /* no commondir file — gitDir already IS the common dir */
+export function resolveCommonDir(gitDir: string, refused?: string[]): string {
+  // A `commondir` that is present but refused (a FIFO, a device, an
+  // oversized file) is reported through `refused` when the caller passes
+  // one; the answer stays `gitDir`, as for a missing file.
+  const text = readGitFile(path.join(gitDir, "commondir"), "commondir", refused);
+  const raw = (text ?? "").trim();
+  if (raw.length > 0) {
+    // `path.normalize` on the absolute branch (review round 3,
+    // decision D-028's security finding): the relative branch already
+    // normalizes via `path.resolve`, but an absolute `commondir`
+    // value was returned verbatim, `..` segments and all. A crafted
+    // `.git` FILE pointing at a private gitdir whose `commondir` file
+    // holds an absolute path ending in unresolved `..` segments (e.g.
+    // `<gitDir>/../..`) then reached `deriveProjectName` below with
+    // those segments still literally present, `path.basename` textually
+    // returning `..` instead of the intended ancestor directory's real
+    // name. Normalizing here closes that off at the source, before
+    // either caller (`resolveOriginHeadBase`, `deriveProjectName`)
+    // ever sees the raw value.
+    return path.isAbsolute(raw) ? path.normalize(raw) : path.resolve(gitDir, raw);
   }
   return gitDir;
 }

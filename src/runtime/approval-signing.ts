@@ -145,6 +145,7 @@
 import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { BoundedReadError, readRegularFileBytesBounded } from "../io/read-regular-file.js";
 
 /** Versioned algorithm tag, so a future re-key scheme can reject mismatches explicitly rather than guess. */
 export const SIGNING_ALG = "hmac-sha256-v1";
@@ -178,19 +179,28 @@ export function getOrCreateSigningKey(generatedDir: string): SigningKeyHandle {
   const filePath = signingKeyPathFor(generatedDir);
   fs.mkdirSync(generatedDir, { recursive: true });
   let fileExisted = false;
-  try {
-    const existing = fs.readFileSync(filePath);
+  // One bounded, non-blocking descriptor read (never a by-path
+  // `readFileSync`: a FIFO planted at the key path used to block this call
+  // until the hook budget ran out, which the runtime treats as an allow).
+  // Only an ABSENT key is created; anything else at the path that is not a
+  // readable regular file (a FIFO, a device, a directory, an oversized or
+  // unreadable file) throws, like every non-ENOENT read error did, and the
+  // callers turn the throw into a refusal (`verifyMarker` reports the key
+  // unavailable, so no marker verifies; the writers fail). A symlink is
+  // followed, as before: the type of the opened descriptor decides.
+  const existing = readRegularFileBytesBounded(filePath, { followSymlinks: true });
+  if (existing.kind === "ok") {
     fileExisted = true;
-    if (existing.length >= KEY_BYTES) {
-      return { key: existing, filePath, created: false };
+    if (existing.bytes.length >= KEY_BYTES) {
+      return { key: existing.bytes, filePath, created: false };
     }
     // Falls through: truncated/corrupt key file, regenerate below. `flag:
     // "w"` (not "wx") is used below precisely BECAUSE the file already
     // exists here — an exclusive create would collide with it and, on
     // EEXIST, re-read the SAME truncated bytes back, silently failing to
     // ever repair a corrupt key.
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+  } else if (existing.kind !== "missing") {
+    throw new BoundedReadError(filePath, existing.kind);
   }
   const fresh = crypto.randomBytes(KEY_BYTES);
   if (fileExisted) {
@@ -212,7 +222,9 @@ export function getOrCreateSigningKey(generatedDir: string): SigningKeyHandle {
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === "EEXIST") {
       // Lost the create race to a concurrent caller; use what they wrote.
-      return { key: fs.readFileSync(filePath), filePath, created: false };
+      const winner = readRegularFileBytesBounded(filePath, { followSymlinks: true });
+      if (winner.kind !== "ok") throw new BoundedReadError(filePath, winner.kind);
+      return { key: winner.bytes, filePath, created: false };
     }
     throw err;
   }
