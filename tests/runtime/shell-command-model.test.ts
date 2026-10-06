@@ -6,6 +6,7 @@ import {
   MAX_COMPOSED_PATH_LENGTH,
   modelShellCommands,
   shellModelViewOf,
+  stepMayBeConfirmed,
   type DirectoryOracle,
   type DirPossibility,
   type ModelCommand,
@@ -566,5 +567,123 @@ describe("modelShellCommands: time and command -v", () => {
     expect(dirsOf("command -v cd X && git log")).toEqual(["cwd"]);
     expect(dirsOf("command -V cd X && git log")).toEqual(["cwd"]);
     expect(dirsOf("command cd X && git log")).toEqual(["L:X"]);
+  });
+});
+
+describe("stepMayBeConfirmed: a logical .. only before every name", () => {
+  it("accepts leading .. components, names and absolute paths", () => {
+    for (const value of ["..", "../..", "../x", "./..", "../x/y", "x", "x/y", "/abs/x", "/..", ".", ""]) {
+      expect(stepMayBeConfirmed({ value, mode: "logical" }), value).toBe(true);
+    }
+  });
+
+  it("refuses a logical .. after a name", () => {
+    for (const value of ["missing/..", "README.md/../x", "a/../b", "../x/..", "x/./..", "/a/../b", "missing/../../.."]) {
+      expect(stepMayBeConfirmed({ value, mode: "logical" }), value).toBe(false);
+    }
+  });
+
+  it("leaves physical steps to the oracle", () => {
+    for (const value of ["missing/..", "a/../b", "../x"]) {
+      expect(stepMayBeConfirmed({ value, mode: "physical" }), value).toBe(true);
+    }
+  });
+});
+
+describe("modelShellCommands: the oracle is not asked about a logical .. after a name", () => {
+  it("asks nothing and keeps the failure branch, whatever the oracle would answer", () => {
+    for (const command of [
+      "cd missing/..; git log",
+      "cd README.md/../x; git log",
+      "cd a/../b; git log",
+      "cd ../x/..; git log",
+      "pushd a/../b; git log",
+    ]) {
+      const asked: string[] = [];
+      dirsWithOracle(command, ["cwd", "L:x", "L:b", "L:.."], asked);
+      expect(asked, command).toEqual([]);
+    }
+    // The nested layout of the review: lib is entered for certain, the
+    // second `cd` may fail and leave the shell in lib.
+    expect(dirsWithOracle("cd vendor/lib; cd missing/../../..; git log", ["L:vendor/lib", "cwd"])).toEqual([
+      "L:vendor/lib",
+      "cwd",
+    ]);
+    expect(dirsWithOracle("cd vendor/lib; cd README.md/../../..; git log", ["L:vendor/lib", "cwd"])).toEqual([
+      "L:vendor/lib",
+      "cwd",
+    ]);
+  });
+
+  it("still asks about leading .. components and physical steps", () => {
+    for (const [command, question] of [
+      ["cd ..; git log", "cwd + L:.. = L:.."],
+      ["cd ../x; git log", "cwd + L:../x = L:../x"],
+      ["cd ./..; git log", "cwd + L:./.. = L:.."],
+      ["cd -P a/../b; git log", "cwd + P:a/../b = P:a/../b"],
+    ] as const) {
+      const asked: string[] = [];
+      dirsWithOracle(command, [], asked);
+      expect(asked, command).toEqual([question]);
+    }
+    expect(dirsWithOracle("cd vendor/lib; cd ../..; git log", ["L:vendor/lib", "cwd"])).toEqual(["cwd"]);
+  });
+});
+
+describe("modelShellCommands: after a command that can redefine cd, the oracle is not asked", () => {
+  const overrides = [
+    "cd() { :; }",
+    "cd ( ) { :; }",
+    "function cd { :; }",
+    "pushd() { :; }",
+    "f() { :; }",
+    "function f { :; }",
+    "() { :; }",
+    "enable -n cd",
+    "disable cd",
+    "alias cd=:",
+    "unalias cd",
+    "unfunction cd",
+    "hash -r",
+    "unhash -f cd",
+    "autoload -Uz cd",
+    "functions -c f cd",
+    "source ./env.sh",
+    ". ./env.sh",
+    "trap false DEBUG",
+    "builtin enable -n cd",
+    "X=1 alias cd=:",
+    "'alias' cd=:",
+    "$CMD -n cd",
+    'eval "$X"',
+    "functions[cd]=:",
+    "aliases[cd]=:",
+    "BASH_ALIASES[cd]=:",
+    "BASH_CMDS[cd]=/bin/true",
+    "functions+=(cd :)",
+    "aliases=(cd :)",
+    "(alias cd=:)",
+    "eval 'cd() { :; }'",
+  ];
+
+  for (const override of overrides) {
+    it(`${JSON.stringify(override)} keeps the failure branch of every later cd`, () => {
+      const asked: string[] = [];
+      const command = `cd X; ${override}; cd ..; git log`;
+      expect(dirsWithOracle(command, ["L:X", "cwd"], asked), command).toEqual(["L:X", "cwd"]);
+      // Only the `cd X` before it was asked about.
+      expect(asked, command).toEqual(["cwd + L:X = L:X"]);
+    });
+  }
+
+  it("a cd before the override is still confirmed, and the same words as arguments change nothing", () => {
+    expect(dirsWithOracle("cd X; cd ..; cd() { :; }; git log", ["L:X", "cwd"])).toEqual(["cwd"]);
+    for (const command of ["echo enable alias source; cd X; cd ..; git log", "git log --format=hash; cd X; cd ..; git log"]) {
+      const model = modelShellCommands(command, {
+        certainDirectory: (_base, _step, target) => ["L:X", "cwd"].includes(compact(target)),
+      });
+      const last = model?.filter((c) => c.canonical.startsWith("git log")).pop();
+      expect(last?.dirs.map(compact), command).toEqual(["cwd"]);
+    }
   });
 });

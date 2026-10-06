@@ -130,3 +130,41 @@ describe("ModelPathResolver.certainDirectory (the model's directory oracle)", ()
     expect(r.overBudget).toBe(true);
   });
 });
+
+describe("ModelPathResolver.certainDirectory: a step the shell can fail on is never certain", () => {
+  it("a logical .. after a name, even when the lexical result exists and is memoised", () => {
+    const r = new ModelPathResolver(path.join(root, "cwd"));
+    expect(r.certainDirectory(at(), L("missing/../sub"), at(L("sub")))).toBe(false);
+    expect(r.certainDirectory(at(), L("file/../sub"), at(L("sub")))).toBe(false);
+    // A leading `..` leaves a directory the shell is in: certain.
+    expect(r.certainDirectory(at(L("sub")), L("../sub/deeper"), at(L("sub/deeper")))).toBe(true);
+    // `sub` itself is certain; the memo for it does not answer for a step
+    // that names it through a missing directory.
+    expect(r.certainDirectory(at(), L("sub"), at(L("sub")))).toBe(true);
+    expect(r.certainDirectory(at(), L("missing/../sub"), at(L("sub")))).toBe(false);
+  });
+
+  it("a physical .. that leaves a missing directory or a file, though the lexical result exists", () => {
+    const r = new ModelPathResolver(path.join(root, "cwd"));
+    expect(r.certainDirectory(at(), P("missing/../sub"), at(P("missing/../sub")))).toBe(false);
+    expect(r.certainDirectory(at(), P("file/../sub"), at(P("file/../sub")))).toBe(false);
+    expect(r.certainDirectory(at(), P("file/sub"), at(P("file/sub")))).toBe(false);
+    // Through real directories a physical step keeps its rule: certain.
+    expect(r.certainDirectory(at(), P("sub/../sub"), at(P("sub/../sub")))).toBe(true);
+    expect(r.certainDirectory(at(), P("link/.."), at(P("link/..")))).toBe(true);
+    // The resolution is unchanged: the lexical result.
+    expect(r.resolve(at(P("missing/../sub")))).toBe(path.join(root, "cwd", "sub"));
+    expect(r.resolve(at(P("file/../sub")))).toBe(path.join(root, "cwd", "sub"));
+    expect(r.resolve(at(P("link/..")))).toBe(path.join(root, "target"));
+  });
+
+  it("the mark survives a target walked before it was asked about, and a base the shell cannot reach", () => {
+    const r = new ModelPathResolver(path.join(root, "cwd"));
+    // resolve() walks the target first; the question is answered from that walk.
+    expect(r.resolve(at(P("missing/../sub")))).toBe(path.join(root, "cwd", "sub"));
+    expect(r.certainDirectory(at(), P("missing/../sub"), at(P("missing/../sub")))).toBe(false);
+    // A clean step from a base the shell cannot reach is not certain either.
+    expect(r.certainDirectory(at(P("missing/..")), L("sub"), at(P("missing/.."), L("sub")))).toBe(false);
+    expect(r.certainDirectory(at(P("sub/..")), L("sub"), at(P("sub/.."), L("sub")))).toBe(true);
+  });
+});

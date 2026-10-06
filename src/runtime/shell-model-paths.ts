@@ -15,8 +15,12 @@
 // one component at a time through the real directories it passes, so a
 // `..` after a symlink leaves the symlink's target, not the directory
 // holding the link. A component that names no existing directory is joined
-// lexically onto the real directory before it. The final directory is
-// realpath'd (a symlink names its target's repository).
+// lexically onto the real directory before it. A `..` that leaves a
+// directory `chdir(2)` cannot pass through (missing, a file, not
+// searchable) marks the path as one the shell cannot reach, so the oracle
+// never confirms it (`cd -P missing/../x` and `cd -P README.md/../x` fail in
+// bash and zsh, though `x` exists). The final directory is realpath'd (a
+// symlink names its target's repository).
 //
 // COST. The model can name the same directory for thousands of commands (a
 // long chain of `cd` followed by many `git log`), and the gate attributes
@@ -29,14 +33,16 @@
 // an opaque target (the policy fails closed), and `certainDirectory`
 // answers `false` (the model keeps the failure branch). One unit is one
 // step (a lexical join, or one component of a physical step: one
-// `realpath`), one final `realpath`, one directory check, or one level of
-// the repository walk the gate runs for a newly resolved directory
+// `realpath`, plus a directory check of the directory a `..` leaves), one
+// final `realpath`, one directory check, or one level of the repository
+// walk the gate runs for a newly resolved directory
 // (`chargeRepositoryLookup`).
 
 import * as fs from "node:fs";
 import * as path from "node:path";
 import {
   dirPossibilityKey,
+  stepMayBeConfirmed,
   type DirectoryOracle,
   type PathPossibility,
   type PathStep,
@@ -82,6 +88,14 @@ export class ModelPathResolver implements DirectoryOracle {
   private readonly resolved = new Map<string, string>();
   /** Key -> whether the directory exists and can be entered. */
   private readonly enterable = new Map<string, boolean>();
+  /**
+   * Keys whose physical steps apply a `..` to something `chdir(2)` cannot
+   * pass through (missing, a file, not searchable): the shell fails there,
+   * whatever the lexical result names (`cd -P missing/../x`,
+   * `cd -P README.md/../x`). Any other missing component leaves a path
+   * under a missing directory, which the final directory check refuses.
+   */
+  private readonly untraversable = new Set<string>();
 
   constructor(
     cwd: string,
@@ -109,11 +123,16 @@ export class ModelPathResolver implements DirectoryOracle {
 
   /**
    * `DirectoryOracle`: `target` is `base` with `step` applied; true only
-   * when that directory exists, is a directory and can be entered. Resolved
+   * when that directory exists, is a directory and can be entered, the step
+   * is one `stepMayBeConfirmed` accepts (a logical `..` only before every
+   * name), and a physical step passes only through directories. Resolved
    * from `base` (normally already walked), so a chain of `cd` costs one step
    * per `cd`, not the whole path each time.
    */
   certainDirectory(base: PathPossibility, step: PathStep, target: PathPossibility): boolean {
+    // Before the memo: the same target can also be named by a step that
+    // fails in the shell (`missing/../x` and `x` both name `x`).
+    if (!stepMayBeConfirmed(step)) return false;
     const key = dirPossibilityKey(target);
     const known = this.enterable.get(key);
     if (known !== undefined) return known;
@@ -123,11 +142,12 @@ export class ModelPathResolver implements DirectoryOracle {
       if (from === null) return false;
       const next = this.applyStep(from, step);
       if (next === null) return false;
-      dir = next;
+      dir = next.dir;
       this.walked.set(key, dir);
+      if (!next.traversed || this.untraversable.has(dirPossibilityKey(base))) this.untraversable.add(key);
     }
     if (!this.spend(1)) return false;
-    const enterable = isEnterableDirectory(dir);
+    const enterable = !this.untraversable.has(key) && isEnterableDirectory(dir);
     this.enterable.set(key, enterable);
     return enterable;
   }
@@ -159,26 +179,41 @@ export class ModelPathResolver implements DirectoryOracle {
     const hit = this.walked.get(key);
     if (hit !== undefined) return hit;
     let current = this.cwd;
+    let traversed = true;
     for (const step of d.steps) {
       const next = this.applyStep(current, step);
       if (next === null) return null;
-      current = next;
+      current = next.dir;
+      if (!next.traversed) traversed = false;
     }
     this.walked.set(key, current);
+    if (!traversed) this.untraversable.add(key);
     return current;
   }
 
-  private applyStep(current: string, step: PathStep): string | null {
+  /**
+   * One step from `current`. `traversed` is false when a physical step
+   * applies a `..` to something that is not a searchable directory (see
+   * `untraversable`); a logical step is lexical and always `true`
+   * (`stepMayBeConfirmed` covers its `..`).
+   */
+  private applyStep(current: string, step: PathStep): { dir: string; traversed: boolean } | null {
     if (step.mode === "logical") {
       if (!this.spend(1)) return null;
-      return path.resolve(current, step.value);
+      return { dir: path.resolve(current, step.value), traversed: true };
     }
     // Physical: a `chdir(2)` from the real directory, one component at a time.
     if (!this.spend(1)) return null;
     let real = path.isAbsolute(step.value) ? path.sep : realpathOrSelf(current);
+    let traversed = true;
     for (const part of step.value.split("/")) {
       if (part.length === 0 || part === ".") continue;
       if (!this.spend(1)) return null;
+      // `chdir(2)` passes through `real` to reach `..`, so `real` must be a
+      // directory it can search; the joined path alone does not show that
+      // (`file/..` names the file's directory, and macOS `realpath(3)`
+      // resolves it without an error).
+      if (part === ".." && !isEnterableDirectory(real)) traversed = false;
       const named = path.join(real, part);
       try {
         real = fs.realpathSync.native(named);
@@ -186,6 +221,6 @@ export class ModelPathResolver implements DirectoryOracle {
         real = path.resolve(real, part);
       }
     }
-    return real;
+    return { dir: real, traversed };
   }
 }

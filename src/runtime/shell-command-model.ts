@@ -55,7 +55,8 @@
 //   `cd` stays put; with the gate's `DirectoryOracle`, a top-level `cd` or
 //   `pushd` into a directory that exists has no failure state, so
 //   `cd frontend; ...; cd ..` comes back to where it started instead of
-//   also reaching the parent). `A && B` starts B from A's success state,
+//   also reaching the parent; see `DirectoryOracle` for when the oracle is
+//   asked at all). `A && B` starts B from A's success state,
 //   `A || B` from its failure state, `!` swaps them, `;` / newline continue
 //   from either,
 //   `&` restores the state the list started in. A pipeline element runs in
@@ -146,10 +147,35 @@ export type PathPossibility = Extract<DirPossibility, { kind: "path" }>;
  * or `time -p cd`, which bash or zsh do not run as a directory change), no
  * redirection of its own, not inside a `{ }` group, a compound command, a
  * function body or an `eval` string (a failing group redirection, or a loop,
- * can stop it from running).
+ * can stop it from running), a step `stepMayBeConfirmed` accepts (a
+ * logical `..` only before every name), and only before the first command
+ * that can make `cd` or `pushd` something other than the builtin (see
+ * `SHELL_OVERRIDE_COMMANDS`): from there on the walk asks nothing.
  */
 export interface DirectoryOracle {
   certainDirectory(base: PathPossibility, step: PathStep, target: PathPossibility): boolean;
+}
+
+/**
+ * Whether a `cd` / `pushd` step may be confirmed at all (see
+ * `DirectoryOracle`). A logical step with a `..` after a name
+ * (`missing/..`, `README.md/../x`, `a/../b`) never is: bash and zsh fail
+ * such a `cd` when the name is not a directory they can enter, while the
+ * lexical result (the name and its `..` cancel out) can exist. Only `..`
+ * components before every name (`..`, `../..`, `../x`, `./..`) are
+ * accepted; they leave directories the shell is already in. A physical
+ * step is not restricted here: the oracle walks it through the real
+ * directories it names (`ModelPathResolver.certainDirectory`).
+ */
+export function stepMayBeConfirmed(step: PathStep): boolean {
+  if (step.mode === "physical") return true;
+  let named = false;
+  for (const part of step.value.split("/")) {
+    if (part === "" || part === ".") continue;
+    if (part !== "..") named = true;
+    else if (named) return false;
+  }
+  return true;
 }
 
 /** One simple command of the modelled command line. */
@@ -941,6 +967,34 @@ const RESERVED_MID = new Set(["then", "else", "elif", "do"]);
 const RESERVED_CLOSE = new Set(["fi", "done", "esac"]);
 const LOOP_KEYWORDS = new Set(["while", "until", "for", "select"]);
 const DECLARATION_BUILTINS = new Set(["export", "declare", "typeset", "local", "readonly"]);
+/**
+ * Commands after which a later `cd` or `pushd` may not be the builtin the
+ * `DirectoryOracle` reasons about, or may not run at all: they enable,
+ * disable, alias, hash or (re)define commands (bash and zsh), run code the
+ * model does not see in the current shell (`source`, `.`), or install a
+ * trap that can skip a command (`trap ... DEBUG` under bash `extdebug`).
+ * Once the walk has seen one of them, or any function definition, a
+ * dynamic command word, a dynamic `eval` or an assignment to one of
+ * `SHELL_TABLE_PARAMETER_RE`'s tables, it asks the oracle nothing more and
+ * every later directory change keeps its failure branch.
+ */
+const SHELL_OVERRIDE_COMMANDS = new Set([
+  "enable",
+  "disable",
+  "alias",
+  "unalias",
+  "unfunction",
+  "hash",
+  "unhash",
+  "autoload",
+  "functions",
+  "source",
+  ".",
+  "trap",
+]);
+/** zsh and bash parameters whose assignment defines a function, an alias or a hashed command. */
+const SHELL_TABLE_PARAMETER_RE =
+  /^(?:functions|aliases|galiases|saliases|dis_functions|dis_aliases|dis_galiases|dis_saliases|BASH_ALIASES|BASH_CMDS)(?:\[|\+?=)/;
 const ASSIGNMENT_RE = /^([A-Za-z_][A-Za-z0-9_]*)\+?=/;
 const GIT_HEAD_RE = /^(?:\S*\/)?git$/;
 
@@ -998,6 +1052,12 @@ function withoutKeys(set: DirSet, drop: ReadonlySet<string>): DirSet {
 
 class Walker {
   readonly out: OutRecord[] = [];
+  /**
+   * True once the walk has seen a command that can make a later `cd` or
+   * `pushd` something other than the builtin (see `SHELL_OVERRIDE_COMMANDS`);
+   * from then on the oracle is not asked.
+   */
+  private builtinsInDoubt = false;
 
   constructor(private readonly oracle: DirectoryOracle | null) {}
 
@@ -1141,7 +1201,11 @@ class Walker {
       }
       if (op === "(") {
         const nextTk = tokens[i + 1];
-        if (cmd.words.length > 0 && nextTk !== undefined && nextTk.kind === "op" && nextTk.op === ")") {
+        const emptyParens = nextTk !== undefined && nextTk.kind === "op" && nextTk.op === ")";
+        // `name ( )` defines a function (any name can shadow `cd`); zsh's
+        // `( ) { ... }` is an anonymous one. Either ends the oracle's use.
+        if (emptyParens) this.builtinsInDoubt = true;
+        if (cmd.words.length > 0 && emptyParens) {
           // `name ( )`: a function definition; its body is walked in place.
           cmd = emptyCommand();
           i += 2;
@@ -1280,6 +1344,7 @@ class Walker {
       if (v === "function") {
         // `function name { body; }`: the body is walked in place, like the
         // `name ( )` form (an over-approximation: it may never be called).
+        this.builtinsInDoubt = true;
         k += 2;
         continue;
       }
@@ -1292,6 +1357,7 @@ class Walker {
     let inlineCdpath = false;
     while (a < words.length && isAssignment(words[a]!)) {
       if (assignmentName(words[a]!) === "CDPATH") inlineCdpath = true;
+      if (SHELL_TABLE_PARAMETER_RE.test(words[a]!.raw)) this.builtinsInDoubt = true;
       a++;
     }
     if (a === words.length) {
@@ -1324,7 +1390,13 @@ class Walker {
     const headWord = words[0];
     if (headWord === undefined) return info;
     const head = headWord.value;
-    if (head === null) return info; // a dynamic command word is out of scope
+    if (head === null) {
+      // A dynamic command word is out of scope, and can be any of the
+      // `SHELL_OVERRIDE_COMMANDS`.
+      this.builtinsInDoubt = true;
+      return info;
+    }
+    if (SHELL_OVERRIDE_COMMANDS.has(head) || SHELL_TABLE_PARAMETER_RE.test(head)) this.builtinsInDoubt = true;
     if (DECLARATION_BUILTINS.has(head)) {
       if (words.slice(1).some((w) => isAssignment(w) && assignmentName(w) === "CDPATH")) st.cdpath = true;
     }
@@ -1335,6 +1407,7 @@ class Walker {
     // redirection, outside every group, compound command and `eval`.
     const confirmable =
       this.oracle !== null &&
+      !this.builtinsInDoubt &&
       shellNeutral &&
       cmd.redirs.length === 0 &&
       compound.length === 0 &&
@@ -1391,7 +1464,12 @@ class Walker {
       st.cur = withPossibility(st.cur, OPAQUE);
       return null;
     }
-    if (args.some((w) => w.value === null)) return null; // a dynamic `eval` is out of scope
+    if (args.some((w) => w.value === null)) {
+      // A dynamic `eval` is out of scope, and can run any of the
+      // `SHELL_OVERRIDE_COMMANDS`.
+      this.builtinsInDoubt = true;
+      return null;
+    }
     const source = args.map((w) => w.value).join(" ");
     const last = args[args.length - 1] ?? evalWord;
     let tokens: ShellToken[];
@@ -1482,11 +1560,14 @@ class Walker {
     confirmable: boolean,
   ): { next: DirSet; cannotFailFrom: ReadonlySet<string> } {
     const oracle = confirmable ? this.oracle : null;
-    if (oracle === null) return { next: joinSet(st.cur, w, mode, st.cdpath), cannotFailFrom: NO_KEYS };
+    const step: PathStep | null = w.value === null ? null : { value: w.value, mode };
+    if (oracle === null || step === null || !stepMayBeConfirmed(step)) {
+      return { next: joinSet(st.cur, w, mode, st.cdpath), cannotFailFrom: NO_KEYS };
+    }
     const cannotFailFrom = new Set<string>();
     const next = joinSet(st.cur, w, mode, st.cdpath, (base, joined) => {
-      if (base.kind !== "path" || joined.kind !== "path" || w.value === null) return;
-      if (oracle.certainDirectory(base, { value: w.value, mode }, joined)) cannotFailFrom.add(keyOf(base));
+      if (base.kind !== "path" || joined.kind !== "path") return;
+      if (oracle.certainDirectory(base, step, joined)) cannotFailFrom.add(keyOf(base));
     });
     return { next, cannotFailFrom };
   }

@@ -617,6 +617,8 @@ describe("runInterceptCli quote-aware attribution: a repository nested in a pare
   const INVESTIGATION: PolicyName = "preflight-before-investigation";
   const CHILD = "child-repo";
   const CHILD_BRANCH = "brchild";
+  const LIB_BRANCH = "brlib";
+  const PUSH: PolicyName = "preflight-before-push";
   let child = "";
 
   beforeAll(() => {
@@ -626,6 +628,8 @@ describe("runInterceptCli quote-aware attribution: a repository nested in a pare
     makeRepo(child, CHILD_BRANCH);
     fs.mkdirSync(path.join(child, "frontend"));
     fs.mkdirSync(path.join(child, "backend"));
+    makeRepo(path.join(child, "vendor", "lib"), LIB_BRANCH);
+    fs.writeFileSync(path.join(child, "vendor", "lib", "README.md"), "lib\n");
   });
 
   const CHILD_TAGS = tagsOfRepos([[CHILD, CHILD_BRANCH]]);
@@ -664,6 +668,38 @@ describe("runInterceptCli quote-aware attribution: a repository nested in a pare
         expect(decisionsOf(result.decisions, INVESTIGATION).map((d) => [d.ledgerTag, d.outcome])).toEqual([
           [`preflight:${CHILD}`, "allow"],
         ]);
+      });
+
+      // A `cd` the shell can fail on keeps the shell in the nested `lib`
+      // (bash and zsh both stay there): a logical `..` after a missing name
+      // or a file, or any `cd` after a command that can redefine `cd`.
+      for (const [command, alsoDemanded] of [
+        ["cd vendor/lib; cd missing/../../..; git push", []],
+        ["cd vendor/lib; cd README.md/../../..; git push", []],
+        ["cd vendor/lib; cd() { :; }; cd ../..; git push", ["preflight:brparent"]],
+        ["cd vendor/lib; function cd { :; }; cd ../..; git push", []],
+        ["cd vendor/lib; pushd() { :; }; pushd ../..; git push", []],
+        ["cd vendor/lib; enable -n cd; cd ../..; git push", []],
+        ["cd vendor/lib; disable cd; cd ../..; git push", []],
+      ] as const) {
+        it(`${JSON.stringify(command)} can stay in the nested repository: its evidence is demanded`, async () => {
+          const result = await runAt(child, command, CHILD_TAGS, enforcement);
+          const own = decisionsOf(result.decisions, PUSH);
+          expect(own.map((d) => d.ledgerTag).sort()).toEqual(
+            [`preflight:${CHILD_BRANCH}`, `preflight:${LIB_BRANCH}`, ...alsoDemanded].sort(),
+          );
+          expect(own.find((d) => d.ledgerTag === `preflight:${LIB_BRANCH}`)?.outcome).toBe(
+            enforcement === "block" ? "deny" : "warn",
+          );
+          expect(result.blocked).toBe(enforcement === "block");
+        });
+      }
+
+      it("a leading .. back out of the nested repository is still confirmed: the child's evidence alone", async () => {
+        const result = await runAt(child, "cd vendor/lib; cd ../..; git push", CHILD_TAGS, enforcement);
+        const own = decisionsOf(result.decisions, PUSH);
+        expect(own.map((d) => [d.ledgerTag, d.outcome])).toEqual([[`preflight:${CHILD_BRANCH}`, "allow"]]);
+        expect(result.blocked).toBe(false);
       });
 
       for (const command of ["cd missing; npm test; cd ..; git status", "cd ../.. && git status"]) {
