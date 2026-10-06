@@ -288,7 +288,7 @@ directory, demands each of them:
     command, a subshell or substitution nested in one, a function body or
     an `eval` string), spelled so bash and zsh both run the builtin (`cd`,
     `builtin cd`, `time cd`; not `chdir`, `command cd`, `noglob cd` or
-    `time -p cd`), with no redirection of its own and no `-e`;
+    `time -p cd`), with no redirection of its own and no `-e` or `-@`;
   - a plain `cd` / `pushd` target has every `..` before any name (`..`,
     `../..`, `../x`): bash and zsh fail `cd missing/../x`,
     `cd README.md/../x` and `cd a/../b` when the name is not a directory,

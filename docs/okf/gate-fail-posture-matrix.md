@@ -169,7 +169,7 @@ since it is the part that changes this matrix's own fail-posture story:
   by the event's `ModelPathResolver` in `src/runtime/shell-model-paths.ts`)
   make `resolveAttributedContexts` return `opaque-target`. A `cd` or
   `pushd` the model reads without doubt (top level, the builtin spelling,
-  no redirection of its own, a plain target with every `..` before any
+  no redirection of its own and no `-e` / `-@`, a plain target with every `..` before any
   name, a `cd -P` target whose every `..` leaves a directory the shell can
   pass through, and no earlier function definition or command that can
   redefine `cd`: `enable`, `disable`, `alias`, `unalias`, `unfunction`,

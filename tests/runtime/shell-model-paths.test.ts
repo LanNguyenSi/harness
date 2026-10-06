@@ -117,6 +117,20 @@ describe("ModelPathResolver.certainDirectory (the model's directory oracle)", ()
     }
   });
 
+  it("a physical .. that leaves a directory without search permission is not certain", () => {
+    const locked = path.join(root, "cwd", "locked-dotdot");
+    fs.mkdirSync(locked);
+    fs.chmodSync(locked, 0o600);
+    try {
+      const r = new ModelPathResolver(path.join(root, "cwd"));
+      // bash and zsh refuse `cd -P locked-dotdot/../sub` (Permission denied); root can enter it.
+      const expected = process.getuid?.() === 0;
+      expect(r.certainDirectory(at(), P("locked-dotdot/../sub"), at(P("locked-dotdot/../sub")))).toBe(expected);
+    } finally {
+      fs.chmodSync(locked, 0o700);
+    }
+  });
+
   it("resolves the target from its base, so a chain of cd costs one step per cd", () => {
     const r = new ModelPathResolver(path.join(root, "cwd"), 4);
     // sub: 1 step + 1 check; sub/deeper from sub: 1 step + 1 check.

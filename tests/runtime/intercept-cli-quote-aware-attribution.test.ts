@@ -676,6 +676,7 @@ describe("runInterceptCli quote-aware attribution: a repository nested in a pare
       for (const [command, alsoDemanded] of [
         ["cd vendor/lib; cd missing/../../..; git push", []],
         ["cd vendor/lib; cd README.md/../../..; git push", []],
+        ["cd vendor/lib; cd -@ ../..; git push", []],
         ["cd vendor/lib; cd() { :; }; cd ../..; git push", ["preflight:brparent"]],
         ["cd vendor/lib; function cd { :; }; cd ../..; git push", []],
         ["cd vendor/lib; pushd() { :; }; pushd ../..; git push", []],

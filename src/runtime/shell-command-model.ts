@@ -1516,7 +1516,9 @@ class Walker {
         for (const ch of v) {
           if (ch === "L") mode = "logical";
           else if (ch === "P") mode = "physical";
-          else if (ch === "e") mayFailAfterMove = true;
+          // `-e` can fail after the move; `-@` is refused by bash 3.2 and zsh:
+          // neither is a cd the oracle may confirm.
+          else if (ch === "e" || ch === "@") mayFailAfterMove = true;
         }
         m++;
         continue;
