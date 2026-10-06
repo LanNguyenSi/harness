@@ -643,8 +643,8 @@ export function readTopLevelMcpServers(registryPath: string): RegistryReadResult
     // Bounded and non-blocking (a FIFO or sparse file at the registry path
     // cannot hold the SessionStart hook that reads it). The user registry
     // grows with Claude Code's per-project state, so the 1 MiB gate-marker
-    // cap is too tight; 32 MiB is far above any real one (the one measured
-    // here is under 100 KB) and still a hard bound. A refusal comes back as
+    // cap is too tight; 32 MiB is far above any real one and still a hard
+    // bound. A refusal comes back as
     // the `error` of the result, like any other unreadable registry.
     raw = readTextFileBoundedOrThrow(registryPath, {
       followSymlinks: true,

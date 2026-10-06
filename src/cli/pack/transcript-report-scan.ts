@@ -355,8 +355,7 @@ const TRANSCRIPT_OPEN_FLAGS =
   fs.constants.O_RDONLY | (fs.constants.O_NONBLOCK ?? 0) | (fs.constants.O_NOCTTY ?? 0);
 
 // The most unread bytes one poll will take in. A transcript grows with the
-// session (the largest of the 4,481 local transcripts measured was about
-// 16 MB), so the gate-marker 1 MiB cap would be far too tight, but the read
+// session (far past the gate-marker 1 MiB cap), but the read
 // is not unbounded: a transcript path that holds more than this since the
 // previous poll (a sparse file, a runaway writer) is `unreadable`, which
 // the scan reports at once as a block, instead of allocating a buffer of

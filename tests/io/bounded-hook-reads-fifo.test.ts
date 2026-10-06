@@ -279,13 +279,23 @@ describe.skipIf(process.platform === "win32")("runtime state files: a FIFO at th
     expect(run.value).toEqual({ ok: { kind: "absent" } });
   });
 
-  it("pause sentinel: an oversized sentinel is not a pause either", () => {
+  it("pause sentinel: a VALID sentinel padded past the 1 MiB cap is not a pause either, while the same one under the cap is", () => {
+    // A sparse file of zeros is malformed JSON, so it would read as absent
+    // even with no size cap. Trailing whitespace keeps the JSON valid: only
+    // the cap separates "active" from "absent" here.
     const dir = path.join(tmp, "gen");
     fs.mkdirSync(dir);
-    sparseFile(path.join(dir, ".harness-paused"), 2 * 1024 * 1024, '{"pausedAt":"2026-10-06T00:00:00.000Z"}');
-    const run = callInChild("runtime/pause-sentinel.js", "readSentinel", [dir]);
-    expectBounded(run);
-    expect(run.value).toEqual({ ok: { kind: "absent" } });
+    const sentinel = JSON.stringify({ pausedAt: "2026-10-06T00:00:00.000Z", expiresAt: null, reason: null, pausedBy: null });
+    fs.writeFileSync(path.join(dir, ".harness-paused"), `${sentinel}${" ".repeat(1024 * 1024 - sentinel.length - 1)}\n`);
+    expect(fs.statSync(path.join(dir, ".harness-paused")).size).toBe(1024 * 1024);
+    const atCap = callInChild("runtime/pause-sentinel.js", "readSentinel", [dir]);
+    expectBounded(atCap);
+    expect((atCap.value as { ok: { kind: string } }).ok.kind).toBe("active");
+
+    fs.writeFileSync(path.join(dir, ".harness-paused"), `${sentinel}${" ".repeat(1024 * 1024 + 16)}\n`);
+    const over = callInChild("runtime/pause-sentinel.js", "readSentinel", [dir]);
+    expectBounded(over);
+    expect(over.value).toEqual({ ok: { kind: "absent" } });
   });
 
   it("pending approval: a FIFO reads as no staged session id", () => {
@@ -417,6 +427,10 @@ describe.skipIf(process.platform === "win32")("persisted reports: the plain list
     createdAt: "2026-10-06T00:00:00.000Z",
   });
 
+  // No-regression controls: the directory listing already skipped anything
+  // that is not a regular `*.json` entry before this change, so these two
+  // cases pass on the base too. They pin that the converted by-path fallback
+  // did not reintroduce a by-path read of such an entry.
   it("a FIFO named *.json is skipped within the bound and the regular report is listed", () => {
     const dir = path.join(tmp, "reports");
     fs.mkdirSync(dir);

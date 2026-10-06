@@ -449,6 +449,27 @@ describe("readRegularFileBounded / readRegularFileBytesBounded / readTextFileBou
     expect(readRegularFileBounded(dangling, { followSymlinks: true })).toEqual({ kind: "missing" });
   });
 
+  it("a followed self-looping link is unreadable (something is there), not missing", () => {
+    const loop = path.join(tmp, "loop");
+    fs.symlinkSync(loop, loop);
+    expect(readRegularFileBounded(loop, { followSymlinks: true })).toEqual({ kind: "unreadable" });
+    // ... while a followed link to nothing stays absent.
+    const dangling = path.join(tmp, "dangling-link");
+    fs.symlinkSync(path.join(tmp, "never-created"), dangling);
+    expect(readRegularFileBounded(dangling, { followSymlinks: true })).toEqual({ kind: "missing" });
+  });
+
+  it.skipIf(process.getuid?.() === 0)("a followed mode-000 file is unreadable, not missing", () => {
+    const p = path.join(tmp, "locked.txt");
+    fs.writeFileSync(p, "secret", "utf8");
+    fs.chmodSync(p, 0o000);
+    try {
+      expect(readRegularFileBounded(p, { followSymlinks: true })).toEqual({ kind: "unreadable" });
+    } finally {
+      fs.chmodSync(p, 0o600);
+    }
+  });
+
   it("honours maxBytes: exactly the cap reads, one byte more is unreadable, a larger cap reads past the default", () => {
     const p = path.join(tmp, "sized.txt");
     fs.writeFileSync(p, "a".repeat(100), "utf8");

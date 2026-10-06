@@ -46,9 +46,12 @@ export interface GitRepoContext {
   /**
    * Present (non-empty) only when a git file the lookup needed was NOT
    * simply absent but refused: a FIFO, a device, a directory, an oversized
-   * or unreadable file stood where a regular file belongs (`.git`, `HEAD`,
+   * or unreadable file stood where a regular file belongs (`HEAD`,
    * `refs/heads/<branch>`, `packed-refs`, `commondir`, named relative to the
-   * git directory). The affected fields stay `""` exactly as they do for a
+   * git directory), or a node that is neither a directory nor a regular file
+   * stood at `.git` itself (the lookup then stops there instead of walking
+   * up to an enclosing repository, so it never resolves THAT repository's
+   * branch for this checkout). The affected fields stay `""` exactly as they do for a
    * missing file, so a caller that only treats `""` as "unknown" is
    * unchanged; a deny-capable caller that must not read "unknown" as "safe"
    * (branch-protection) checks this field instead, because in a healthy
@@ -127,14 +130,26 @@ export interface GitEntry {
   /** Resolved git directory — for a `.git` file, its `gitdir:` target. */
   gitDir: string;
   /**
-   * `".git"` when the `.git` entry is a file that was present but refused
-   * (a FIFO swapped in after the stat, an oversized or unreadable file), as
-   * opposed to a readable file without a `gitdir:` line; `"HEAD"` when the
+   * `".git"` when the `.git` entry is present but refused: a node that is
+   * neither a directory nor a regular file (a FIFO, a device, a socket, a
+   * symlink to one, a dangling or looping symlink), or a file that cannot be
+   * read (a FIFO swapped in after the stat, an oversized or unreadable
+   * file), as opposed to a readable file without a `gitdir:` line; `"HEAD"` when the
    * `.git` directory's `HEAD` is present but not a regular file. Absent
    * otherwise. `gitDir` is `""` in both cases, exactly as for any other
    * unreadable `.git` file.
    */
   refused?: ".git" | "HEAD";
+}
+
+/** Whether `lstat` finds anything at the path (a dangling symlink counts). */
+function lstatPresent(filePath: string): boolean {
+  try {
+    fs.lstatSync(filePath);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -160,6 +175,19 @@ export function findGitEntry(startDir: string): GitEntry | null {
       stat = fs.statSync(dotGit);
     } catch {
       stat = undefined;
+    }
+    // A `.git` that is PRESENT but is neither a directory nor a regular file
+    // (a FIFO, a device, a socket, a symlink to one, a dangling or looping
+    // symlink) is not "no `.git` here, keep walking": walking up would
+    // resolve whatever repository ENCLOSES this one (a linked worktree
+    // checked out inside an outer repository would read as the outer
+    // repository's branch). It is reported as refused with `gitDir` left
+    // empty, like a present-but-unreadable `HEAD`. Only a `.git` that is
+    // absent (`lstat` finds nothing) is skipped.
+    const refusedNode =
+      stat === undefined ? lstatPresent(dotGit) : !stat.isDirectory() && !stat.isFile();
+    if (refusedNode) {
+      return { worktreeRoot: dir, gitDir: "", refused: ".git" };
     }
     if (stat?.isDirectory()) {
       let headStat: fs.Stats;
@@ -378,10 +406,9 @@ export function resolveCommonDir(gitDir: string, refused?: string[]): string {
   const text = readGitFile(path.join(gitDir, "commondir"), "commondir", refused);
   const raw = (text ?? "").trim();
   if (raw.length > 0) {
-    // `path.normalize` on the absolute branch (review round 3,
-    // decision D-028's security finding): the relative branch already
+    // `path.normalize` on the absolute branch: the relative branch already
     // normalizes via `path.resolve`, but an absolute `commondir`
-    // value was returned verbatim, `..` segments and all. A crafted
+    // value was once returned verbatim, `..` segments and all. A crafted
     // `.git` FILE pointing at a private gitdir whose `commondir` file
     // holds an absolute path ending in unresolved `..` segments (e.g.
     // `<gitDir>/../..`) then reached `deriveProjectName` below with

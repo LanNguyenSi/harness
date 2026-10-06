@@ -48,7 +48,7 @@ import {
   resolveProtectedBranches,
 } from "../../policy-packs/builtin/branch-protection-runtime.js";
 import { resolveGeneratedDir } from "../../io/generated-dir.js";
-import { describeRefusedGitFiles, resolveGitContext } from "../../runtime/git-context.js";
+import { resolveGitContext } from "../../runtime/git-context.js";
 import { POLICY_DECISION_TYPE } from "../../io/ledger-record.js";
 import { renderAgentFacing } from "../../runtime/agent-facing.js";
 import { type Manifest, type McpServer, type PolicyUx } from "../../schema/index.js";
@@ -404,12 +404,15 @@ async function runPackHookBranchProtectionCliInner(
   const gitContext = resolveGitContext(branchSourceDir);
   const { branch } = gitContext;
 
-  // A git file that is PRESENT but refused (a FIFO, a device, a directory,
-  // an oversized or unreadable file where `.git` or `HEAD` belongs) is not
-  // "outside a git work tree": in a healthy repository those paths are
-  // regular files, so reading it as "no branch, allow" below would let a
-  // planted node switch this gate off. This gate fails closed on a
-  // could-not-decide state, so it blocks, naming the refused path.
+  // A git file that is PRESENT but refused is not "outside a git work
+  // tree": a FIFO, a device, a directory, an oversized or unreadable file
+  // where `HEAD` belongs, or a node that is neither a directory nor a
+  // regular file at `.git` itself (the lookup then stops there rather than
+  // walking up to an enclosing repository). In a healthy repository those
+  // paths are directories or regular files, so reading it as "no branch,
+  // allow" below would let a planted node switch this gate off. This gate
+  // fails closed on a could-not-decide state, so it blocks, naming the
+  // refused path.
   if (branch === "" && gitContext.refused !== undefined && gitContext.refused.length > 0) {
     const reason = `could not read the git metadata of the ${branchSource} (${gitContext.refused.join(", ")} is present but not a regular file or is oversized); refusing on failsafe`;
     const diagnostic = `BLOCK — ${reason}`;
