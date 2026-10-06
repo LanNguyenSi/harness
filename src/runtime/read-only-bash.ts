@@ -729,7 +729,10 @@ function scanHoldsZshCodeConstruct(scan: ShellPipelineScan): boolean {
 
 function hasZshCodeConstruct(trimmed: string): boolean {
   const scan = scanShellPipeline(trimmed);
-  if (scan === null) return /[()]/.test(trimmed);
+  // An unclassifiable command (for example an unterminated quote) is refused
+  // for any parenthesis or tilde, so a GLOB_SUBST spelling (`$~x`, `${~x}`)
+  // is not left to the token checks alone (task 699aafd8).
+  if (scan === null) return /[()~]/.test(trimmed);
   return scanHoldsZshCodeConstruct(scan);
 }
 

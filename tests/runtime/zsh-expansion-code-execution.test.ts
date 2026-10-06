@@ -118,6 +118,18 @@ describe("zsh GLOB_SUBST and `${...}` parentheses are not provably read-only (ta
     if (!command.includes("|")) expect(isReadOnlyBashCommand(command)).toBe(true);
     expect(isReadOnlyBashPipeline(command)).toBe(true);
   });
+
+  // scanShellPipeline returns null for these (an unterminated quote), so the
+  // refusal comes from the character fallback in hasZshCodeConstruct
+  // (task 699aafd8).
+  it.each([
+    ["$~x before an unterminated single quote", "ls $~x 'abc"],
+    ["$~x before an unterminated double quote", 'ls $~x "abc'],
+    ["${~x} before an unterminated single quote", "ls ${~x} 'abc"],
+  ])("refuses %s when the pipeline scan cannot classify it", (_label, command) => {
+    expect(isReadOnlyBashCommand(command)).toBe(false);
+    expect(isReadOnlyBashPipeline(command)).toBe(false);
+  });
 });
 
 // A fixture runner that spawns zsh as a grandchild of `node`: the suite's
