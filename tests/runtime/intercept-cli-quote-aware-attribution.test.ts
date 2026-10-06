@@ -6,7 +6,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { parse as parseYaml } from "yaml";
 import { runInterceptCli } from "../../src/cli/policy/intercept.js";
 import { FULL_TEMPLATE } from "../../src/cli/init/templates.js";
-import { OPAQUE_TARGET_REASON, type LedgerClient, type PolicyDecision } from "../../src/runtime/intercept.js";
+import { intercept, OPAQUE_TARGET_REASON, type LedgerClient, type PolicyDecision } from "../../src/runtime/intercept.js";
 import { parseManifest, type Policy } from "../../src/schema/index.js";
 import { makeManifest } from "../_helpers/manifest.js";
 
@@ -645,6 +645,23 @@ describe("runInterceptCli quote-aware attribution: a repository nested in a pare
           expect(result.blocked).toBe(false);
         });
       }
+
+      it("intercept() without an injected model reads the filesystem the same way", async () => {
+        const result = await intercept({
+          manifest: makeManifest({ policies: POLICIES[enforcement] }),
+          event: {
+            hook_event_name: "PreToolUse",
+            tool_name: "Bash",
+            tool_input: { command: "cd frontend; npm test; cd ..; git status" },
+            session_id: "sess-7d4abf84",
+          },
+          ledger: ledgerWith(CHILD_TAGS),
+          builtins: { SESSION_ID: "sess-7d4abf84", REPO: CHILD, BRANCH: CHILD_BRANCH, TOOL_NAME: "Bash", CWD: child },
+        });
+        expect(decisionsOf(result.decisions, INVESTIGATION).map((d) => [d.ledgerTag, d.outcome])).toEqual([
+          [`preflight:${CHILD}`, "allow"],
+        ]);
+      });
 
       for (const command of ["cd missing; npm test; cd ..; git status", "cd ../.. && git status"]) {
         it(`${JSON.stringify(command)} can run in the parent: its evidence is demanded too`, async () => {
