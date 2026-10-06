@@ -996,11 +996,6 @@ function withoutKeys(set: DirSet, drop: ReadonlySet<string>): DirSet {
   return m;
 }
 
-/** A `cd` / `pushd` target the oracle may be asked about: a literal value, nothing dynamic or opaque. */
-function isLiteralTarget(w: ShellWord): boolean {
-  return w.value !== null && !w.tilde && w.value !== "" && !isOpaqueTargetWord(w);
-}
-
 class Walker {
   readonly out: OutRecord[] = [];
 
@@ -1476,7 +1471,9 @@ class Walker {
   /**
    * `st.cur` joined with a `cd` / `pushd` target, and the keys of the
    * current directories from which the oracle confirms the target is an
-   * existing directory the shell can enter.
+   * existing directory the shell can enter. Only a join of a path onto a
+   * path is asked about: a dynamic, `~`, glob or otherwise opaque target
+   * joins to an `unknown` or `opaque` possibility, never a path.
    */
   private joinConfirmed(
     st: WalkState,
@@ -1484,14 +1481,12 @@ class Walker {
     mode: PathStepMode,
     confirmable: boolean,
   ): { next: DirSet; cannotFailFrom: ReadonlySet<string> } {
-    const oracle = confirmable && isLiteralTarget(w) ? this.oracle : null;
+    const oracle = confirmable ? this.oracle : null;
     if (oracle === null) return { next: joinSet(st.cur, w, mode, st.cdpath), cannotFailFrom: NO_KEYS };
     const cannotFailFrom = new Set<string>();
-    const step: PathStep = { value: w.value!, mode };
     const next = joinSet(st.cur, w, mode, st.cdpath, (base, joined) => {
-      if (base.kind === "path" && joined.kind === "path" && oracle.certainDirectory(base, step, joined)) {
-        cannotFailFrom.add(keyOf(base));
-      }
+      if (base.kind !== "path" || joined.kind !== "path" || w.value === null) return;
+      if (oracle.certainDirectory(base, { value: w.value, mode }, joined)) cannotFailFrom.add(keyOf(base));
     });
     return { next, cannotFailFrom };
   }
