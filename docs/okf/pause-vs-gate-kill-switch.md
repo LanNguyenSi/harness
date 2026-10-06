@@ -3,7 +3,7 @@ type: runbook
 title: Kill switches — pause vs gate disable
 description: harness has two distinct operator kill switches — `harness pause` (sentinel file, silences ALL hooks temporarily, operator-only enforced in code) vs `harness gate disable` (surgically removes matching hook groups from settings.json with a reversible snapshot); when to use which, exact flags, restore paths, and trust caveats.
 tags: [runbook, pause, gate-disable, kill-switch, operator]
-timestamp: 2026-10-05T14:17:30Z
+timestamp: 2026-10-06T04:39:13Z
 sources:
   - src/runtime/pause-sentinel.ts
   - src/runtime/command-normalize.ts
@@ -81,7 +81,7 @@ Measured 2026-07-27 (task `ea8becf5`): the cheapest member of that class was not
 
 **Audit trail.** Pause/resume write `harness-paused:<pausedAt>` / `harness-resumed:<pausedAt>` facts to the evidence ledger via grounding-mcp, under the synthetic session bucket `default` (`OPERATOR_LEDGER_SESSION`, `src/cli/pause/index.ts:48#"OPERATOR_LEDGER_SESSION"`) since no agent session id exists in an operator shell. `harness audit --since 24h` surfaces them. Ledger failure does not block the pause; it is reported as `ledger: ⚠ skipped`.
 
-**Trust caveat.** The sentinel is plain JSON with NO signature (`docs/for-humans.md:409-425#"auto-restrict this path"`). Neither the CLI checks nor the PreToolUse deny-policy layer above is a true boundary against an agent that already has Write access under `harness.generated/` (see "Known gap" above). Defence: deny agent writes to `harness.generated/` (blanket deny is simplest; the agent surface normally never needs to write there). Fail-open note: a malformed sentinel is treated as absent (never escalates to a block), but a forged `expiresAt` that is not a non-empty string or null is rejected as malformed rather than silently read as indefinite (`normalizeSentinel`, `src/runtime/pause-sentinel.ts:90-109#"return"`).
+**Trust caveat.** The sentinel is plain JSON with NO signature (`docs/for-humans.md:409-425#"auto-restrict this path"`). Neither the CLI checks nor the PreToolUse deny-policy layer above is a true boundary against an agent that already has Write access under `harness.generated/` (see "Known gap" above). Defence: deny agent writes to `harness.generated/` (blanket deny is simplest; the agent surface normally never needs to write there). Fail-open note: a malformed sentinel is treated as absent (never escalates to a block), and so is one that cannot be read as a regular file (a FIFO, a device or a directory at the path, or a file over 1 MiB): `readSentinel` reads it through one bounded, non-blocking descriptor read (`src/runtime/pause-sentinel.ts:69#"readTextFileBoundedOrThrow(sentinelPath"`), so planting one neither hangs the hook past its budget nor counts as a pause that switches the gates off (task 323bd5b9), but a forged `expiresAt` that is not a non-empty string or null is rejected as malformed rather than silently read as indefinite (`normalizeSentinel`, `src/runtime/pause-sentinel.ts:90-109#"return"`).
 
 ## Mechanism 2: `harness gate disable` / `harness gate enable` (settings.json surgery)
 

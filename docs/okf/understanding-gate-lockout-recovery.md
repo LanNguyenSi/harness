@@ -3,7 +3,7 @@ type: runbook
 title: Understanding-gate lockout recovery
 description: Operator procedure to unblock a session locked by the understanding-before-execution PreToolUse gate via `harness approve understanding`, including the 6-tier session-id resolution and the expiry semantics that re-arm the gate.
 tags: [runbook, understanding-gate, lockout, recovery, operator]
-timestamp: 2026-10-05T14:25:00Z
+timestamp: 2026-10-06T04:39:13Z
 sources:
   - src/cli/pack/auto-approve-path.ts
   - src/io/display-path.ts
