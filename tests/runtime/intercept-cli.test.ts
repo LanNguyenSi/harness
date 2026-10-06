@@ -1834,7 +1834,7 @@ describe("runInterceptCli — normalised bash_match trigger matching (T-002, run
     const cases: Array<{ label: string; command: string }> = [
       { label: "xargs (deliberately excluded)", command: "xargs git status" },
       { label: "quoted subcommand", command: 'git "status"' },
-      { label: "backtick command substitution", command: "echo `env -C /tmp git status`" },
+      { label: "backtick command substitution naming no directory", command: "echo `git status`" },
     ];
     for (const c of cases) {
       it(`${c.label}: "${c.command}" produces no decision (still bypasses)`, async () => {
@@ -1843,6 +1843,16 @@ describe("runInterceptCli — normalised bash_match trigger matching (T-002, run
         expect(result.blocked).toBe(false);
       });
     }
+
+    // Task 7d4abf84: the quote-aware shell command model walks substitution
+    // bodies, and its matching arm reads a command that names a directory,
+    // so this former ceiling entry is gated now.
+    it('backtick command substitution naming a directory: "echo `env -C /tmp git status`" is blocked with no ledger evidence', async () => {
+      const result = await runFor("echo `env -C /tmp git status`");
+      expect(result.decisions.length).toBeGreaterThan(0);
+      expect(result.decisions.some((d) => d.outcome === "deny")).toBe(true);
+      expect(result.blocked).toBe(true);
+    });
   });
 
   describe("superset: previously-blocked spellings still block", () => {
@@ -4073,11 +4083,19 @@ describe("runInterceptCli — 98ad072f FIX ROUND: D-011 critical bypass closure 
     // spaces — an unquoted space in a fixture's own path would corrupt the
     // git command line under test, a test-harness bug distinct from the
     // thing under test); `label` is the human-readable describe title only.
+    //
+    // Task 7d4abf84: the quote-aware shell command model composes the two the
+    // way git does (every `-C` first, then `--git-dir` relative to the
+    // result), so the repository whose git directory the command really
+    // reads is demanded next to the cwd's: `-C <forged> --git-dir=<real>/.git`
+    // reads `<real>`, the cwd itself (one decision); `--git-dir=<forged>/.git
+    // -C <real>` reads `<forged>`, demanded next to the cwd. Either way the
+    // forged repository's evidence alone never satisfies the gate.
     describe.each([
-      ["-C then --git-dir", "c-then-gitdir", (forged: string, real: string) => `git -C ${forged} --git-dir=${path.join(real, ".git")} status`],
-      ["--git-dir then -C", "gitdir-then-c", (forged: string, real: string) => `git --git-dir=${path.join(forged, ".git")} -C ${real} status`],
-    ] as const)("%s (divergent combo, order-independent)", (_label, slug, buildCommand) => {
-      it("falls back to cwd's own tag, not either flag's target", async () => {
+      ["-C then --git-dir", "c-then-gitdir", (forged: string, real: string) => `git -C ${forged} --git-dir=${path.join(real, ".git")} status`, false],
+      ["--git-dir then -C", "gitdir-then-c", (forged: string, real: string) => `git --git-dir=${path.join(forged, ".git")} -C ${real} status`, true],
+    ] as const)("%s (divergent combo, order-independent)", (_label, slug, buildCommand, demandsForged) => {
+      it("demands the cwd's own tag, never the forged flag's target alone", async () => {
         const cwdRepo = makeRepoFixture(`multic-combo-cwd-${slug}`, "main");
         const forgedRepo = makeRepoFixture(`multic-combo-forged-${slug}`, "main");
         const ledger = ledgerWithEntries([`preflight:multic-combo-forged-${slug} — evidence for the forged flag only`]);
@@ -4099,9 +4117,12 @@ describe("runInterceptCli — 98ad072f FIX ROUND: D-011 critical bypass closure 
         });
 
         expect(result.blocked).toBe(true);
-        expect(result.decisions).toHaveLength(1);
-        expect(result.decisions[0]!.ledgerTag).toBe(`preflight:multic-combo-cwd-${slug}`);
-        expect(result.decisions[0]!.outcome).toBe("deny");
+        const cwdTag = `preflight:multic-combo-cwd-${slug}`;
+        const forgedTag = `preflight:multic-combo-forged-${slug}`;
+        expect(result.decisions.map((d) => d.ledgerTag).sort()).toEqual(
+          demandsForged ? [cwdTag, forgedTag].sort() : [cwdTag],
+        );
+        expect(result.decisions.find((d) => d.ledgerTag === cwdTag)?.outcome).toBe("deny");
       });
     });
   });

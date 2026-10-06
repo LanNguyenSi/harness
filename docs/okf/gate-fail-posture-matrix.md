@@ -16,6 +16,7 @@ sources:
   - docs/runtime-reality-hook.md
   - src/runtime/intercept.ts
   - src/runtime/command-normalize.ts
+  - src/runtime/shell-command-model.ts
   - src/cli/policy/intercept.ts
   - src/cli/pack/hook-pre-tool-use.ts
   - src/cli/pack/hook-branch-protection.ts
@@ -38,6 +39,7 @@ Every harness enforcement gate has a deliberate posture for the moment its evide
 | Policy engine / Risk Gate | `harness policy intercept` → `intercept()` in `src/runtime/intercept.ts` | grounding-mcp evidence ledger | fail **CLOSED** for `block`/`require_approval`, fail **OPEN** for `warn` (task f1aea826; opt-out `risk.degraded_fail_posture: fail_open` restores fail-open for every tier) | `deny-degraded` blocks with a degraded-specific envelope for `block`/`require_approval`; `warn-degraded` never blocks for `warn` |
 | `bash_match` normalised-form matching (both passes) | `harness policy intercept` → `normalizeCommand` / `normalizeCommandAmpAware` in `src/runtime/command-normalize.ts` | command length vs `MAX_NORMALIZE_LENGTH` (100,000 chars) | fail **OPEN** above the bound | normalised-form matching skipped for BOTH the primary and the ampersand-aware second pass (task `aabbad63`) — they share the identical bound on the identical input command, so one stderr line covers both; raw match only. Previously silent, no stderr line, no audit row (G4 fix, review round 2, 2026-07-27) |
 | Per-policy target attribution bound (`${REPO}`/`${BRANCH}`/`at_head`) | `harness policy intercept` → `resolveAttributedContexts` in `src/runtime/intercept.ts` | segment-derived repository targets (a filesystem `.git`-shape check, no evidence source of its own) | fail **CLOSED** above 4 distinct targets (`MAX_ATTRIBUTED_CONTEXTS`) | one synthetic decision naming the ambiguity, mapped through the policy's OWN `enforcement:` (`block` denies, `warn` warns, `require_approval` requires approval — never a hardcoded outcome); ZERO ledger queries for that policy |
+| Quote-aware shell command model (`${REPO}`/`${BRANCH}`/`at_head` policies) | `harness policy intercept` → `resolveAttributedContexts` in `src/runtime/intercept.ts`, model in `src/runtime/shell-command-model.ts` | the command text (no evidence source of its own) | fail **CLOSED** on an opaque possibility (a target it refuses to read, a glob, an in-command `CDPATH` search, a relative step after an opaque directory, a loop that moves relatively, more than 8 possibilities, a composed path over 4096 characters) and on a command it cannot lex or longer than `MAX_NORMALIZE_LENGTH` when the text holds a directory-changing word; otherwise it only adds demands to the segment view's (task `7d4abf84`) | the same `opaque-target` decision as the row above's shape: one synthetic decision through the policy's OWN `enforcement:`, ZERO ledger queries |
 | Empty `${REPO}`/`${BRANCH}` in a `ledger_tag` | `harness policy intercept` → `evaluateOnePolicy` in `src/runtime/intercept.ts` | none queried: the value resolved for the context (cwd outside every repo, detached HEAD, empty override) | decided per the policy's OWN `enforcement:` (never fail-open to a blank tag) | `deny` / `require_approval` / `warn` with a reason naming `cd <repo>` / `git -C <repo>` or `git switch <branch>`; ZERO ledger queries; NOT `deny-degraded` (task `6c8ebd37`) |
 | understanding-before-execution | `harness pack hook pre-tool-use` (`src/cli/pack/hook-pre-tool-use.ts`) | HMAC-signed approval marker (sole authority); persisted JSON report and ledger are audit-only | fail **OPEN** on load/parse/ledger/report-scan errors | allow, exit 0, stderr diagnostic |
 | branch-protection | `harness pack hook branch-protection` (`src/cli/pack/hook-branch-protection.ts`) | `branch:non-protected:<branch>` ledger tag (5-min window) + override marker | fail **CLOSED** on any load/parse/ledger error | block envelope |
@@ -93,17 +95,23 @@ DISTINCT repository a trigger-satisfying command segment names (its own
 persisting `cd`) — the session's own cwd context is ALWAYS also
 evaluated, never dropped except for a cwd outside every repository next to a resolved target (see the exception below; `resolveAttributedContexts`; the "always add, never replace" rule
 D-021 and its four-review-pass history are restated in-tree in that
-function's own doc comment, `src/runtime/intercept.ts:1327-1361#"disproved"`; the
+function's own doc comment, `src/runtime/intercept.ts:1427-1461#"disproved"`; the
 original decision record under
 `.ai/runs/2026-08-02-per-repo-gate-scoping-redesign/` is local run state
 and not shipped with the repo). This section covers only the FALLBACK side of that resolution,
 since it is the part that changes this matrix's own fail-posture story:
 
-- **A composition the module cannot resolve to a single, unambiguous
-  target (`--work-tree` alone, more than one repo-relocating option, a
-  relative target after a preceding `cd`, a `~`/quoted/substitution
-  value) falls back to the cwd context ALONE — never fail-open, never a
-  new gap, with the one exception in the next bullet.** This is identical to the cwd-only resolution every such
+- **A composition neither view resolves to a directory (`--work-tree`
+  alone, a `~`, variable or substitution value) falls back to the cwd
+  context ALONE: never fail-open, never a new gap, with the one
+  exception in the next bullet.** Since task `7d4abf84` the quote-aware
+  shell command model (`src/runtime/shell-command-model.ts`) resolves the
+  compositions the per-segment view leaves at this fallback: more than
+  one `-C` (composed in order, `--git-dir` after them, `env`'s last
+  `-C`), a relative target after a preceding `cd` (each step resolved on
+  the real filesystem, a plain `cd` lexically, a `-C` / `cd -P` through
+  the real directory), and quoted values; its demands are added to the
+  segment view's by union, so it cannot drop one. This is identical to the cwd-only resolution every such
   policy had before this task; the fallback is a PRECISION concern (does
   the demand correctly name the touched repo), not a safety one, because
   the cwd demand is never dropped when the fallback applies (the one
@@ -135,17 +143,30 @@ since it is the part that changes this matrix's own fail-posture story:
   shell's blanks), so a U+2028, U+00A0, carriage return or form feed inside
   an unquoted `-C` target stays in the target and the command still reads
   as the gated `git <subcommand>`; such a target is attributed to that
-  literal directory. NOT covered, still the cwd-only fallback above: a
-  quoted value without those characters (`git -C 'vendor/lib' log`), a
-  `$(...)` substitution, a `~` or variable value, and a quoted path that
-  holds a space (the whitespace-splitting tokeniser reads it as a different
-  command and no policy matches it at all). Also NOT closed (a follow-up,
-  together with the plain-name forms): the opaque directory is not
-  carried past a later reset-class `cd` (`cd -P X`, `pushd X`, `popd`,
-  `cd -`), a later `cd` whose own value is unattributable but not opaque
-  (`cd "sub"`), or a `||`, and a backslash-escaped or partly quoted `cd`
-  command word (`\cd`, `c''d`) or the zsh `chdir` builtin is not read as
-  a `cd`.
+  literal directory. The per-segment view leaves a quoted value without
+  those characters (`git -C 'vendor/lib' log`) and a quoted path with a
+  space at the cwd-only fallback and does not carry the opaque directory
+  past a later reset-class `cd` (`cd -P X`, `pushd X`, `popd`, `cd -`), a
+  later `cd "sub"`, or a `||`, nor read `\cd`, `c''d` or the zsh `chdir`
+  as a `cd`; since task `7d4abf84` the shell command model reads all of
+  these (a quoted plain value is attributed, every one of the opaque
+  propagations fails closed), and the gate takes the union of both views.
+  Still the cwd-only fallback: a `$(...)` substitution, a `~` or variable
+  value.
+- **The shell command model's own fail-closed forms (task `7d4abf84`).**
+  Besides the opaque values above, an unquoted glob target (`cd
+  vendor/libpl*`; expansion is a follow-up), a relative `cd` / `pushd`
+  while an in-command `CDPATH` assignment is in effect, a loop whose body
+  changes directory relatively (for the commands after it and inside
+  it), more than 8 possible directories for one command, and a composed
+  path over 4096 characters make `resolveAttributedContexts` return
+  `opaque-target`. When the model cannot lex the command (or it is longer
+  than `MAX_NORMALIZE_LENGTH`), the segment view decides alone, except
+  that a policy with a `bash_match` fails closed when the raw text holds
+  a directory-changing word (`cd`, `pushd`, `popd`, `chdir`, `-C`,
+  `--chdir`, `--git-dir`, also with quotes or backslashes removed). The
+  over-block this adds (glob targets, `CDPATH`, verbs that never run) is
+  recorded in the CHANGELOG entry for task `7d4abf84`.
 - **More than `MAX_ATTRIBUTED_CONTEXTS` (4) distinct targets for one
   policy on one event fails CLOSED** — see the new table row above. This
   is the one place per-policy attribution ADDS a fail-closed posture the

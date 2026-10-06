@@ -682,9 +682,15 @@ export interface CommandSegment {
    *   - `ownTarget` relative AND a preceding `cd` basis is known
    *     (non-`null`) → `null`. This is the K1 divergence case
    *     (`docs/okf/quote-model-divergence.md`): `cd T && git -C sub
-   *     status` does NOT become `T/sub` here — that would need real
-   *     filesystem-shaped path joining this module deliberately does not
-   *     perform — so it is UNATTRIBUTABLE rather than guessed at.
+   *     status` does NOT become `T/sub` in THIS view, which does no
+   *     filesystem-shaped path joining. The gate no longer leaves it
+   *     there: since task 7d4abf84 (operator decision, reversing the
+   *     earlier "unattributable rather than guessed" stance) the
+   *     quote-aware shell command model (`shell-command-model.ts`)
+   *     composes relative paths step by step, each step keeping its
+   *     logical or physical mode, and `resolveAttributedContexts`
+   *     resolves them against the real filesystem; its demands are added
+   *     to this view's by union.
    *   - `ownTarget` relative AND no preceding `cd` basis is known → the
    *     raw relative value itself (deferred to a future consumer to
    *     resolve against the real cwd).
@@ -750,13 +756,15 @@ export interface CommandSegment {
    * gap and the segment must fail closed instead (task `cfb6b390`).
    * Omitted, not `false`, when not set.
    *
-   * NOT flagged (the cwd-only fallback, a known gap left to the follow-up
-   * for the plain-name forms): the inheritance ends at a later
+   * NOT flagged by THIS view: the inheritance ends at a later
    * reset-class `cd` (`cd -P X`, `pushd X`, `popd`, `cd -`) or a later
    * `cd` whose own value is unattributable but not opaque (`cd "sub"`),
    * and at a `||` (read as two `|` boundaries); a `cd` whose command word
    * is backslash-escaped or partly quoted (`\cd`, `c''d`) or the zsh
-   * `chdir` builtin is not recognised as a `cd` at all.
+   * `chdir` builtin is not recognised as a `cd` at all. The gate closes
+   * those through the quote-aware shell command model (task 7d4abf84,
+   * `shell-command-model.ts`), whose opaque possibilities make
+   * `resolveAttributedContexts` fail closed next to this flag.
    */
   opaqueTarget?: true;
 }
@@ -1432,8 +1440,9 @@ function computeSegmentTarget(
   // end the propagation. So does a later `cd` whose own value is
   // unattributable but not opaque (`cd "sub"`: `cdArg` is set, so
   // `inheritsOpaqueBasis` is false below): the shell is then in a
-  // directory relative to the opaque one, which falls back to the cwd. A
-  // known gap, left to the follow-up for the plain-name cwd-only forms.
+  // directory relative to the opaque one, which falls back to the cwd in
+  // this view; the quote-aware shell command model (task 7d4abf84) keeps
+  // such a directory opaque, and the gate reads both views.
   const inheritsOpaqueBasis =
     incomingOpaqueBasis &&
     (ownTarget === null ? cdArg === null : !path.isAbsolute(ownTarget));

@@ -45,6 +45,7 @@ import {
   type QuoteAwareNormalizedCommand,
 } from "../../runtime/command-normalize.js";
 import { extractShellCommand, SHELL_ALIASES } from "../../runtime/tool-name-aliases.js";
+import { shellModelViewOf, type ShellModelView } from "../../runtime/shell-command-model.js";
 import { loadManifest, type LoaderOptions } from "../loader.js";
 import { checkPauseFromLoader } from "../pause-check.js";
 
@@ -908,6 +909,14 @@ export async function runInterceptCli(
     bashCommand === null
       ? undefined
       : () => (quoteNormalizedCommandCache ??= normalizeCommandQuoteAware(bashCommand));
+  // Memoised thunk for the quote-aware shell command model (task
+  // 7d4abf84), the same shape again: `policyMatchesEvent`'s fifth arm reads
+  // it only for a per-repo policy the four earlier arms missed, and
+  // `intercept()`'s attribution only for a matched per-repo policy, so it
+  // is computed at most once per event and only when one of them needs it.
+  let shellModelCache: ShellModelView | undefined;
+  const shellModelThunk: (() => ShellModelView) | undefined =
+    bashCommand === null ? undefined : () => (shellModelCache ??= shellModelViewOf(bashCommand));
   // Above `MAX_NORMALIZE_LENGTH`, `normalizeCommand` skips normalisation
   // entirely and `truncated` comes back `true`. Raw matching still
   // applies regardless (`policyMatchesEvent`'s raw-OR-normalised-OR-amp-
@@ -1070,6 +1079,7 @@ export async function runInterceptCli(
       ...(ampNormalizedCommandThunk && { ampNormalizedCommandThunk }),
       ...(quoteNormalizedCommandThunk && { quoteNormalizedCommandThunk }),
       ...(commandSegmentsThunk && { commandSegmentsThunk }),
+      ...(shellModelThunk && { shellModelThunk }),
       ...(process.env.HARNESS_REPO !== undefined && { repoOverridden: true }),
       ...(process.env.HARNESS_BRANCH !== undefined && { branchOverridden: true }),
     });

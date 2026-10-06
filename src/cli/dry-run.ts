@@ -15,12 +15,14 @@ import {
 } from "../runtime/command-normalize.js";
 import { resolveGitContext, type GitRepoContext } from "../runtime/git-context.js";
 import {
+  attributeTriggerModelCommands,
   emptyIdentifierGuard,
   MAX_ATTRIBUTED_CONTEXTS,
   resolveAttributedContexts,
   OPAQUE_TARGET_REASON,
   usesPerRepoBuiltins,
 } from "../runtime/intercept.js";
+import { shellModelViewOf, type ShellModelView } from "../runtime/shell-command-model.js";
 import type { Hook, Manifest, Policy } from "../schema/index.js";
 import { EX_USAGE, HarnessExitError } from "./exit-codes.js";
 import { loadManifest, type LoaderOptions } from "./loader.js";
@@ -121,6 +123,7 @@ function policyMatchesTool(
   policy: Policy,
   tool: string,
   toolInput: unknown,
+  shellModel: ShellModelView | undefined,
 ): { matched: true } | { matched: false; reason: string } {
   if (policy.trigger.event !== "PreToolUse") {
     return { matched: false, reason: `trigger event is ${policy.trigger.event}, not PreToolUse` };
@@ -204,11 +207,18 @@ function policyMatchesTool(
     // shared helper — mirroring the amp-aware arm's own literal-duplication
     // shape immediately above (no shared-helper precedent exists yet for
     // this OR-chain to follow instead).
+    //
+    // FIFTH ARM (task 7d4abf84): the quote-aware shell command model, scoped
+    // exactly as `policyMatchesEvent` scopes it (a per-repo policy, a model
+    // command that names a directory), through the same exported
+    // `attributeTriggerModelCommands`, so `git -C 'vendor/lib sp' log`
+    // predicts the match `policy intercept` makes.
     if (
       !re.test(args.command) &&
       !re.test(normalizeCommand(args.command).normalized) &&
       !re.test(normalizeCommandAmpAware(args.command).normalized) &&
-      !re.test(normalizeCommandQuoteAware(args.command).normalized)
+      !re.test(normalizeCommandQuoteAware(args.command).normalized) &&
+      !fifthArmMatches(policy, shellModel)
     ) {
       return {
         matched: false,
@@ -217,6 +227,11 @@ function policyMatchesTool(
     }
   }
   return { matched: true };
+}
+
+function fifthArmMatches(policy: Policy, model: ShellModelView | undefined): boolean {
+  if (model === undefined || !usesPerRepoBuiltins(policy)) return false;
+  return attributeTriggerModelCommands(policy, model).length > 0;
 }
 
 function buildHookHits(manifest: Manifest, tool: string | null): DryRunHookHit[] {
@@ -279,6 +294,7 @@ function ledgerQueriesFor(
     attribution.repoOverridden,
     attribution.branchOverridden,
     ctx,
+    attribution.shellModel,
   );
   if (result.kind === "bounded") {
     return [
@@ -300,6 +316,8 @@ interface AttributionInput {
   insideRepositoryMemo: Map<string, boolean>;
   repoOverridden: boolean;
   branchOverridden: boolean;
+  /** The quote-aware shell command model of the command (task 7d4abf84). */
+  shellModel: ShellModelView | undefined;
 }
 
 function policyHit(
@@ -366,8 +384,11 @@ export function dryRun(prompt: string, opts: DryRunOptions = {}): DryRunResult {
   };
 
   const command = (toolArgs as { command?: unknown } | undefined)?.command;
+  const shellModel =
+    tool !== null && typeof command === "string" ? shellModelViewOf(command) : undefined;
   const attribution: AttributionInput = {
     segments: tool !== null && typeof command === "string" ? (segmentViewOf(command) ?? []) : [],
+    shellModel,
     cwdHeadSha: cwdGitContext.sha.length > 0 ? cwdGitContext.sha : undefined,
     gitContextMemo: new Map(),
     insideRepositoryMemo: new Map(),
@@ -395,7 +416,7 @@ export function dryRun(prompt: string, opts: DryRunOptions = {}): DryRunResult {
       });
       continue;
     }
-    const verdict = policyMatchesTool(policy, tool, toolArgs);
+    const verdict = policyMatchesTool(policy, tool, toolArgs, shellModel);
     if (verdict.matched) {
       matching.push(policyHit(policy, ctx, builtins, attribution));
     } else {
