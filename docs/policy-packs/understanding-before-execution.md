@@ -57,6 +57,20 @@ detected by a positive shape, not a denylist, so shell-quoting cannot
 launder it through). `cd`, `npm audit`, and `npm ls` now also pass this hard
 gate pre-approval, exactly as `git status` already did.
 
+A pipeline is cut into stages only at a `|` that is a real stage boundary
+(`src/runtime/shell-pipeline-scan.ts`, task 25c56a0f): a `|` inside single,
+double, ANSI-C or locale quotes, after a backslash, inside `${...}`, `$[...]`,
+`$(...)`, a backtick run or a parenthesised group (extglob) belongs to one
+word. A command that carries such a `|`, or text the scan cannot classify
+(an unterminated quote or expansion), is not read-only and needs an approved
+report, so `find <dir> -name 'a|cat -x' -delete` is no longer read as two
+read-only fragments. A quoted `|` in an otherwise read-only command
+(`grep -E 'a|b' f | head`) was already refused and stays so.
+An unquoted `(` or `)` is not read-only either, with or without a pipe:
+zsh, the shell the agent Bash tool runs, executes code from a glob qualifier
+(`cat *(e.'touch x'.)`) and from `=(cmd)`. Quoted or escaped parentheses
+(`grep '(x)' f`, `find . \( -name a \)`) keep their classification.
+
 **Consciously accepted residual: a pre-report NETWORK READ.** `git fetch`
 and `gh <noun> view/list/checks/status` already made a live network call
 before this pack's approval gate ever engaged; widening the same floor to

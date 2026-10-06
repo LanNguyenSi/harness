@@ -827,6 +827,32 @@ describe("read-only Bash pipeline classifier (isReadOnlyBashPipeline)", () => {
     });
   });
 
+  // Task 25c56a0f: the text is cut only at `|` characters that are real stage
+  // boundaries. Each row below was classified read-only before (the fragments
+  // around the `|` each looked read-only) while the real command writes.
+  describe("a `|` that is not a stage boundary does not split the command", () => {
+    it.each([
+      "find d -name 'a|cat -x' -delete", // single quote
+      'find d -name "a|cat -x" -delete', // double quote
+      "find d -name a\\|cat -delete", // backslash
+      "find d -name ${x//a|cat -x} -delete", // ${..}
+      "find d -name $[1|cat -x] -delete", // $[..]
+      "find d -name $'a|cat -x' -delete", // ANSI-C quote
+      "find d -name @(a|cat -x) -delete", // extglob
+      "find d -name 'a|cat -x -delete", // unterminated quote
+      "find d -name ${x//a|cat -x -delete", // unterminated expansion
+    ])("blocks %s", (cmd) => {
+      expect(isReadOnlyBashPipeline(cmd)).toBe(false);
+    });
+
+    it("still cuts at a real boundary next to a quoted pipe", () => {
+      // The quoted `|` is not a boundary, the second one is: the write stage
+      // after it is what blocks the command, as before.
+      expect(isReadOnlyBashPipeline("cat 'a|b' | find d -delete")).toBe(false);
+      expect(isReadOnlyBashPipeline("cat 'a b' | head")).toBe(true);
+    });
+  });
+
   it("only the pipeline variant admits a pipe; the strict classifier is unchanged", () => {
     // isReadOnlyBashCommand must keep refusing all chaining for its other
     // consumers (Risk Classifier read-only floor, solution-acceptance
@@ -902,7 +928,12 @@ describe("NUL-decoding ANSI-C escapes make a command not read-only (task 241d9e9
     // plain read-only `cat` stage and the NUL escape lands in a half with no
     // `$'` in front of it, so only a check on the whole text sees it.
     expect(isReadOnlyBashPipeline("cat $'a|cat b\\0'")).toBe(false);
-    expect(isReadOnlyBashPipeline("cat $'a|cat b'")).toBe(true);
+    // The `|` inside the `$'...'` run is not a stage boundary (task 25c56a0f):
+    // the command is no longer cut there into two read-only-looking `cat`
+    // halves, and a command holding such a `|` is refused whole (fail
+    // closed). The same run without a `|` stays a read.
+    expect(isReadOnlyBashPipeline("cat $'a|cat b'")).toBe(false);
+    expect(isReadOnlyBashPipeline("cat $'a cat b'")).toBe(true);
   });
 
   // Negative control: the non-NUL spellings of the same shapes keep their
@@ -2358,5 +2389,66 @@ describe("sed / curl are NOT part of the shared read-only predicate (task 2929c5
     // generic `<bin> --version` shape applies to every binary.
     expect(isReadOnlyBashCommand("sed --version")).toBe(true);
     expect(isReadOnlyBashCommand("curl --version")).toBe(true);
+  });
+});
+
+describe("an unquoted parenthesis is not provably read-only (zsh code execution, task 25c56a0f)", () => {
+  // The agent Bash tool runs zsh. zsh executes code from a glob qualifier
+  // (`*(e:'cmd':)`, `*(e.'cmd'.)`, `*(+func)`) and from a process
+  // substitution `=(cmd)` with no `$(`, backtick or write token, so the token
+  // checks cannot see it. Measured under zsh 5.9: each of these creates a
+  // file when run against a directory that has a matching entry.
+  const zshCodeExec = [
+    "cat *(e.'touch pwned'.)",
+    "ls *(e:'touch pwned':)",
+    "cat =(touch pwned)",
+    "cat *(+touch)",
+    "ls -d *(e.'touch pwned'.)",
+    "grep x *(e.'touch pwned'.)",
+  ];
+
+  it.each(zshCodeExec)("isReadOnlyBashCommand(%j) is false", (command) => {
+    expect(isReadOnlyBashCommand(command)).toBe(false);
+  });
+
+  it.each(zshCodeExec)("isReadOnlyBashPipeline(%j | head) is false", (command) => {
+    expect(isReadOnlyBashPipeline(`${command} | head`)).toBe(false);
+  });
+
+  it.each(zshCodeExec)("isReadOnlyBashPipeline(%j) is false without a pipe", (command) => {
+    expect(isReadOnlyBashPipeline(command)).toBe(false);
+  });
+
+  it("refuses the construct in a middle and a last stage as well", () => {
+    expect(isReadOnlyBashPipeline("cat a | cat *(e.'touch pwned'.) | head")).toBe(false);
+    expect(isReadOnlyBashPipeline("cat a | cat =(touch pwned)")).toBe(false);
+  });
+
+  it("refuses text the scan cannot classify as soon as it holds a parenthesis", () => {
+    expect(isReadOnlyBashCommand("cat a)")).toBe(false);
+    expect(isReadOnlyBashCommand("cat 'a(")).toBe(false);
+    expect(isReadOnlyBashCommand("cat ${x:-{a} *(e.'touch pwned'.)")).toBe(false);
+    // No parenthesis at all: nothing for zsh to run, classification unchanged.
+    expect(isReadOnlyBashCommand("cat 'a")).toBe(true);
+  });
+
+  // An escaped or quoted parenthesis is an ordinary argument and keeps the
+  // classification it had before.
+  it.each([
+    "find . \\( -name a \\)",
+    "grep '(x)' f",
+    'grep "(x)" f',
+    "echo \\(a\\)",
+    "cat a\\(b",
+  ])("isReadOnlyBashCommand(%j) stays true", (command) => {
+    expect(isReadOnlyBashCommand(command)).toBe(true);
+  });
+
+  it.each([
+    "find . \\( -name a \\) | head",
+    "grep '(x)' f | head",
+    "cat a | grep '(x)' | head",
+  ])("isReadOnlyBashPipeline(%j) stays true", (command) => {
+    expect(isReadOnlyBashPipeline(command)).toBe(true);
   });
 });

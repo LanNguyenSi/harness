@@ -35,6 +35,11 @@
 //   `isReadOnlyBashCommand` itself stays strict (refuses all chaining)
 //   for the Risk Classifier read-only floor and the solution-acceptance
 //   write-guard, which must not treat any chaining as read-only.
+// - An unquoted `(` or `)` makes a command not read-only, in both entry
+//   points. The agent Bash tool runs zsh on this host, and zsh executes code
+//   from a glob qualifier (`*(e:'cmd':)`) and a process substitution
+//   (`=(cmd)`) with no `$(`, backtick or write token for the checks below to
+//   see. A quoted or escaped parenthesis is unaffected.
 // - The classifier never short-circuits write detection: if a command
 //   is on the allowlist but a write indicator is also present, the
 //   write indicator wins. The shell-metachar check above accomplishes
@@ -56,6 +61,7 @@
 // parallel classifier in the future, it should mirror this allowlist
 // verbatim, not diverge.
 
+import { scanShellPipeline } from "./shell-pipeline-scan.js";
 import { decodeShellWord, hasAnsiCNulEscape } from "./shell-word.js";
 import {
   GIT_GLOBAL_NO_VALUE_FLAGS,
@@ -673,12 +679,44 @@ function hasUnsafeShellMetachar(trimmed: string): boolean {
  * NOT shell-parse or evaluate the command — that would introduce its
  * own attack surface. Instead it rejects any string that contains
  * shell metacharacters that could hide a write, then looks at the
- * first one or two tokens.
+ * first one or two tokens. An unquoted `(` or `)` is refused too (see
+ * `hasUnquotedGroupParen`): zsh runs code from a glob qualifier or `=(..)`.
  */
 export function isReadOnlyBashCommand(command: string): boolean {
   const trimmed = command.trim();
   if (trimmed === "") return false;
+  if (hasUnquotedGroupParen(trimmed)) return false;
+  return classifyBashStage(trimmed);
+}
 
+/**
+ * True when `trimmed` holds a `(` or `)` that the shell reads as syntax
+ * (outside quotes and not escaped). zsh, the shell the agent Bash tool runs
+ * on this host, executes code from such a group without any `$(`: a glob
+ * qualifier `*(e:'cmd':)` (also `*(e.'cmd'.)` and `*(+func)`) evaluates a
+ * command while the glob expands, and a process substitution `=(cmd)` runs
+ * `cmd`. Neither shows up as a write token, so the token checks cannot see
+ * it; an unquoted group is therefore not provably read-only, and an escaped
+ * or quoted parenthesis (`find . \( -name a \)`, `grep '(x)' f`) keeps its
+ * classification. Text the scan cannot classify (an unterminated quote or
+ * expansion) fails closed as soon as it holds any parenthesis at all, since
+ * the scan cannot say which one the shell would read as syntax; without a
+ * parenthesis there is nothing for zsh to run and the classification is left
+ * to the token checks, as before.
+ */
+function hasUnquotedGroupParen(trimmed: string): boolean {
+  const scan = scanShellPipeline(trimmed);
+  if (scan === null) return /[()]/.test(trimmed);
+  return scan.hasGroupParen;
+}
+
+/**
+ * The strict single-command check `isReadOnlyBashCommand` applies, without
+ * the group-parenthesis refusal. `isReadOnlyBashPipeline` classifies each cut
+ * stage through it after refusing the whole command for a group parenthesis
+ * once, so the two refusals stay independent of each other.
+ */
+function classifyBashStage(trimmed: string): boolean {
   // Reject any shell chaining, redirection, or command substitution.
   // These make the command unclassifiable even when every visible
   // piece would otherwise be read-only. Applied once to the whole
@@ -710,8 +748,14 @@ export function isReadOnlyBashCommand(command: string): boolean {
  * before the split. Everything except a single `|` is rejected up front:
  * `;`, `&` (and thus `&&`, `|&`, background `&`), `<`, `>`, backtick, and
  * `$(`. `||` (logical OR) and a leading/trailing/doubled pipe surface as
- * an empty stage and are refused. Each stage is then handed to the strict
- * `isReadOnlyBashCommand`, so the per-bin write-flag guards (`find`,
+ * an empty stage and are refused. The cut is made only at `|` characters
+ * that are real stage boundaries (`shell-pipeline-scan.ts`): a `|` inside
+ * quotes, after a backslash, or inside an expansion or group is not one, and
+ * text the scan cannot classify is refused, and so is an unquoted `(` or `)`
+ * (zsh runs code from a glob qualifier or `=(..)`, see
+ * `hasUnquotedGroupParen`). Each stage is then handed to the strict
+ * single-command check (`classifyBashStage`, the body of
+ * `isReadOnlyBashCommand`), so the per-bin write-flag guards (`find`,
  * `sort`, `tree`, `file`) and the `command`/`env` runner recursion all
  * still apply per stage.
  */
@@ -728,18 +772,40 @@ export function isReadOnlyBashPipeline(command: string): boolean {
   if (trimmed.includes("`")) return false;
   if (trimmed.includes("$(")) return false;
 
-  // Checked on the whole text as well as per stage: a `|` inside a `$'...'`
-  // run would otherwise split a NUL escape away from its opening `$'`.
+  // Defense in depth, not the primary guard: the scan below keeps a `$'...'`
+  // run in one stage, and each stage is checked for a NUL escape again by the
+  // strict classifier, so this whole-text check only matters if the scan ever
+  // cuts inside such a run.
   if (hasAnsiCNulEscape(trimmed)) return false;
 
-  // Split on the pipe and require every stage to be a non-empty, provably
-  // read-only command. An empty stage means `||`, a leading/trailing pipe,
-  // or `| |` — all refused. A single command (no pipe) yields one stage and
-  // is classified exactly as `isReadOnlyBashCommand` would.
-  return trimmed.split("|").every((stage) => {
+  // Cut at the `|` characters that are real stage boundaries only: a `|`
+  // inside quotes, after a backslash, or inside `${..}`, `$[..]`, `$(..)`,
+  // a backtick run, `$'..'` or a parenthesised group (extglob) belongs to
+  // one word, and cutting there would hand fragments of a single command to
+  // the stage classifier (`find d -name 'a|cat -x' -delete` as two
+  // read-only-looking halves). Text the scan cannot classify (unterminated
+  // quote or expansion) is refused. A command that holds such a non-boundary
+  // `|` is refused as a whole too, so it is never classified in pieces; this
+  // is fail-closed and adds no allow (the strict classifier refuses a `|`
+  // inside a stage as well).
+  const scan = scanShellPipeline(trimmed);
+  if (scan === null || scan.hasNonBoundaryPipe) return false;
+
+  // An unquoted `(` or `)` is not provably read-only: zsh, the shell the
+  // agent Bash tool runs on this host, executes code from a glob qualifier
+  // (`cat *(e.'touch x'.) | head`) and from `=(cmd)` without any `$(`. The
+  // write-guard refuses the same flag. Refused here once for the whole
+  // command; the stages below go through the check that omits it.
+  if (scan.hasGroupParen) return false;
+
+  // Require every stage to be a non-empty, provably read-only command. An
+  // empty stage means `||`, a leading/trailing pipe, or `| |` — all refused.
+  // A single command (no pipe) yields one stage and is classified exactly as
+  // `isReadOnlyBashCommand` would.
+  return scan.stages.every((stage) => {
     const s = stage.trim();
     if (s === "") return false;
-    return isReadOnlyBashCommand(s);
+    return classifyBashStage(s);
   });
 }
 

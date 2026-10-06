@@ -161,6 +161,10 @@ export const PIPELINE_MATRIX: readonly MatrixRow[] = [
   // and the word "solution". It was blocked on master and stays blocked.
   { group: "quoted-pipe", kind: "read", command: "grep -n 'a|b*' solution-notes.md | head", onMaster: "blocked", now: "blocked" },
 
+  // Recorded over-block: an unquoted parenthesis keeps the old route, whatever
+  // the shell makes of it (blocked on master, still blocked).
+  { group: "quoted-pipe", kind: "read", command: "cat solution-notes* (x) | head", onMaster: "blocked", now: "blocked" },
+
   // A `cd` stage never takes the pipeline arm.
   w("cd stage", `cd ${D} | cat`),
   w("cd stage", `cat x | cd ${D}`),
