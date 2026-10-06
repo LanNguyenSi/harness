@@ -139,6 +139,22 @@ describe("runInterceptCli: the shell model's attribution cost at the input bound
     },
   ];
 
+  it("a thousand distinct directories only the model reads: each one's repository walk counts against the work budget", async () => {
+    // The quoted option word hides the directory from the segment view, so
+    // every repository walk here is the model's. Resolving a one-step path
+    // costs 3 units, so 1000 of them alone fit the budget; with the walk
+    // the gate runs for each new directory (one unit per level of its
+    // path) they do not.
+    const command = (n: number): string => Array.from({ length: n }, (_, i) => `git '-C' d${i} log`).join("; ");
+    const many = await timed(command(1000), OUTER_TAGS);
+    const own = many.result.decisions.filter((d) => d.policyName === "preflight-before-investigation");
+    expect(own.map((d) => d.reason)).toEqual([OPAQUE_TARGET_REASON]);
+    // Ten of them fit: decided on the cwd repository's evidence.
+    const few = await timed(command(10), OUTER_TAGS);
+    expect(few.result.decisions.map((d) => [d.ledgerTag, d.outcome])).toEqual([["preflight:outerrepo", "allow"]]);
+    expect(few.result.blocked).toBe(false);
+  });
+
   for (const shape of SHAPES) {
     it(`${shape.label}: decided within a third of the hook budget`, { timeout: 120_000 }, async () => {
       const command = shape.command();
