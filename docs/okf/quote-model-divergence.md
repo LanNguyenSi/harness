@@ -134,7 +134,7 @@ Modus und wird gegen das echte Dateisystem aufgelöst). `git -C`-Ketten,
 `cd -P`, `pushd`, `popd`, `cd -` und `||` hinweg liest es ebenfalls; Globs,
 ein `CDPATH` aus demselben Kommando und relative Verzeichniswechsel in
 Schleifen enden fail-closed. Gegen den Basis-Commit mit den
-batch101-Review-Korpora und echtem bash 3.2 / zsh 5.9 als Schiedsrichter
+Review-Korpora von `cfb6b390` und echtem bash 3.2 / zsh 5.9 als Schiedsrichter
 gemessen: 0 Zellen schwächer, keine Forderung eines falschen Repositorys und
 kein Fail-closed für ein Verb, das nur im cwd lief; die Kosten (Glob-Ziele,
 `CDPATH`, Verben, die nie laufen) stehen im CHANGELOG-Eintrag von

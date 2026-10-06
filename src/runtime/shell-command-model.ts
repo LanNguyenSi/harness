@@ -22,7 +22,7 @@
 // that introduced this module set out to end; the word model reads them all
 // from one grammar.
 //
-// RULES (the design note of task 7d4abf84 names them R1 to R10):
+// RULES:
 //
 // - Directory builtins: after quote and backslash decoding and after the
 //   transparent prefixes (`!`, `{`, `}`, `time [-p]`, compound keywords,
