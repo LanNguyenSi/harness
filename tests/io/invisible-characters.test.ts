@@ -12,6 +12,7 @@ const SHARED: Array<[string, number, string, string]> = [
   ["Hangul filler U+3164", 0x3164, "\\u3164", "\\u{3164}"],
   ["Hangul choseong filler U+115F", 0x115f, "\\u115f", "\\u{115f}"],
   ["tag latin capital A", 0xe0041, "\\udb40\\udc41", "\\u{e0041}"],
+  ["variation selector 17 U+E0100 (Default_Ignorable, not Cf)", 0xe0100, "\\udb40\\udd00", "\\u{e0100}"],
   ["right-to-left override", 0x202e, "\\u202e", "\\u{202e}"],
 ];
 
