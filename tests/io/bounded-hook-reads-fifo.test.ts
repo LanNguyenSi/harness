@@ -457,6 +457,20 @@ describe.skipIf(process.platform === "win32")("transcript scan: a FIFO at the tr
     });
   });
 
+  it("a transcript with more unread bytes than the per-poll cap is unreadable at once, without a read", () => {
+    const transcript = path.join(tmp, "huge.jsonl");
+    sparseFile(transcript, 300 * 1024 * 1024, "{}\n");
+    const run = callInChild(MOD, "scanTranscriptForReport", [
+      { transcriptPath: transcript, sessionId: "s1", maxWaitMs: 4000, pollMs: 50 },
+    ]);
+    expectBounded(run);
+    expect(run.ms).toBeLessThan(4000);
+    expect((run.value as { ok: { found: boolean; reason: string } }).ok).toMatchObject({
+      found: false,
+      reason: "unreadable",
+    });
+  });
+
   it("a path that is not there is still a timeout, not unreadable (control)", () => {
     const run = callInChild(MOD, "scanTranscriptForReport", [
       { transcriptPath: path.join(tmp, "absent.jsonl"), sessionId: "s1", maxWaitMs: 100, pollMs: 50 },
