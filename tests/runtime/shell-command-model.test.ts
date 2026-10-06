@@ -687,3 +687,19 @@ describe("modelShellCommands: after a command that can redefine cd, the oracle i
     }
   });
 });
+
+describe("modelShellCommands: a subshell or substitution inside a compound command asks nothing", () => {
+  it("the compound command of the enclosing walk counts", () => {
+    for (const command of [
+      "if true; then (cd X; git log); fi",
+      "while true; do (cd X; git log); done",
+      'if true; then echo "$(cd X; git log)"; fi',
+      "if (cd X; git log); then :; fi",
+      "for i in 1; do echo `cd X; git log`; done",
+    ]) {
+      const asked: string[] = [];
+      dirsWithOracle(command, ["L:X"], asked);
+      expect(asked, command).toEqual([]);
+    }
+  });
+});

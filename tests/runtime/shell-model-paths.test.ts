@@ -167,4 +167,36 @@ describe("ModelPathResolver.certainDirectory: a step the shell can fail on is ne
     expect(r.certainDirectory(at(P("missing/..")), L("sub"), at(P("missing/.."), L("sub")))).toBe(false);
     expect(r.certainDirectory(at(P("sub/..")), L("sub"), at(P("sub/.."), L("sub")))).toBe(true);
   });
+
+  it("an executable regular file is not a directory", () => {
+    const tool = path.join(root, "cwd", "tool");
+    fs.writeFileSync(tool, "#!/bin/sh\n");
+    fs.chmodSync(tool, 0o755);
+    const r = new ModelPathResolver(path.join(root, "cwd"));
+    expect(r.certainDirectory(at(), L("tool"), at(L("tool")))).toBe(false);
+    expect(r.certainDirectory(at(), P("tool/../sub"), at(P("tool/../sub")))).toBe(false);
+  });
+});
+
+describe("ModelPathResolver.certainDirectory past the work budget", () => {
+  it("a base not walked yet that needs more than the budget is not certain", () => {
+    const r = new ModelPathResolver(path.join(root, "cwd"), 0);
+    expect(r.certainDirectory(at(L("sub")), L("deeper"), at(L("sub/deeper")))).toBe(false);
+    expect(r.overBudget).toBe(true);
+  });
+
+  it("a walked target whose directory check is past the budget is not certain", () => {
+    const r = new ModelPathResolver(path.join(root, "cwd"), 2);
+    // One step and one realpath: the budget is spent.
+    expect(r.resolve(at(L("sub")))).toBe(path.join(root, "cwd", "sub"));
+    expect(r.overBudget).toBe(false);
+    expect(r.certainDirectory(at(), L("sub"), at(L("sub")))).toBe(false);
+    expect(r.overBudget).toBe(true);
+  });
+
+  it("a step the oracle walks itself, with the check past the budget, is not certain", () => {
+    const r = new ModelPathResolver(path.join(root, "cwd"), 1);
+    expect(r.certainDirectory(at(), L("sub"), at(L("sub")))).toBe(false);
+    expect(r.overBudget).toBe(true);
+  });
 });
