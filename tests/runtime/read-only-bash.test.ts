@@ -2452,3 +2452,37 @@ describe("an unquoted parenthesis is not provably read-only (zsh code execution,
     expect(isReadOnlyBashPipeline(command)).toBe(true);
   });
 });
+
+describe("zsh GLOB_SUBST and a paren inside `${...}` are not provably read-only (task b647da7f)", () => {
+  // `${~x}` / `$~x` glob-expand the value of an expansion, so a qualifier
+  // quoted inside `${...}` runs under zsh while no parenthesis is unquoted.
+  // The executed-under-zsh witnesses live in
+  // tests/runtime/zsh-expansion-code-execution.test.ts.
+  const reglob = [
+    "ls ${~x:-'*(e:touch pwned:)'}",
+    "cat ${=~x:-'*(e.touch pwned.)'}",
+    "echo ${x:='*(e:touch pwned:)'} $~x",
+    "ls $^~x",
+    "ls ${~${:-'*(e:touch pwned:)'}}",
+    "echo ~[foo]",
+    "echo ${x:-'(paren)'}",
+  ];
+
+  it.each(reglob)("isReadOnlyBashCommand(%j) is false", (command) => {
+    expect(isReadOnlyBashCommand(command)).toBe(false);
+  });
+
+  it.each(reglob)("isReadOnlyBashPipeline(%j) is false alone and in a pipeline", (command) => {
+    expect(isReadOnlyBashPipeline(command)).toBe(false);
+    expect(isReadOnlyBashPipeline(`${command} | head`)).toBe(false);
+    expect(isReadOnlyBashPipeline(`cat a | ${command} | head`)).toBe(false);
+  });
+
+  it.each(["echo $HOME", "echo ${HOME}", "echo ${x:-default}", "echo ${HOME%/*}", "ls $^x"])(
+    "plain expansion %j stays read-only",
+    (command) => {
+      expect(isReadOnlyBashCommand(command)).toBe(true);
+      expect(isReadOnlyBashPipeline(`${command} | head`)).toBe(true);
+    },
+  );
+});

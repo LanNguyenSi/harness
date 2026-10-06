@@ -61,7 +61,7 @@
 // parallel classifier in the future, it should mirror this allowlist
 // verbatim, not diverge.
 
-import { scanShellPipeline } from "./shell-pipeline-scan.js";
+import { scanShellPipeline, type ShellPipelineScan } from "./shell-pipeline-scan.js";
 import { decodeShellWord, hasAnsiCNulEscape } from "./shell-word.js";
 import {
   GIT_GLOBAL_NO_VALUE_FLAGS,
@@ -679,41 +679,64 @@ function hasUnsafeShellMetachar(trimmed: string): boolean {
  * NOT shell-parse or evaluate the command — that would introduce its
  * own attack surface. Instead it rejects any string that contains
  * shell metacharacters that could hide a write, then looks at the
- * first one or two tokens. An unquoted `(` or `)` is refused too (see
- * `hasUnquotedGroupParen`): zsh runs code from a glob qualifier or `=(..)`.
+ * first one or two tokens. An unquoted `(` or `)` is refused too, and so is
+ * a re-glob of an expansion result or a paren inside `${...}` (see
+ * `hasZshCodeConstruct`): zsh runs code from a glob qualifier or `=(..)`.
  */
 export function isReadOnlyBashCommand(command: string): boolean {
   const trimmed = command.trim();
   if (trimmed === "") return false;
-  if (hasUnquotedGroupParen(trimmed)) return false;
+  if (hasZshCodeConstruct(trimmed)) return false;
   return classifyBashStage(trimmed);
 }
 
 /**
- * True when `trimmed` holds a `(` or `)` that the shell reads as syntax
- * (outside quotes and not escaped). zsh, the shell the agent Bash tool runs
- * on this host, executes code from such a group without any `$(`: a glob
- * qualifier `*(e:'cmd':)` (also `*(e.'cmd'.)` and `*(+func)`) evaluates a
- * command while the glob expands, and a process substitution `=(cmd)` runs
- * `cmd`. Neither shows up as a write token, so the token checks cannot see
- * it; an unquoted group is therefore not provably read-only, and an escaped
- * or quoted parenthesis (`find . \( -name a \)`, `grep '(x)' f`) keeps its
- * classification. Text the scan cannot classify (an unterminated quote or
- * expansion) fails closed as soon as it holds any parenthesis at all, since
+ * True when `scan` reports a construct through which zsh, the shell the agent
+ * Bash tool runs on this host, executes code without any `$(`, backtick or
+ * write token, so the token checks cannot see it and the command is not
+ * provably read-only:
+ *
+ * - an unquoted `(` or `)` (`hasGroupParen`): a glob qualifier
+ *   `*(e:'cmd':)` (also `*(e.'cmd'.)` and `*(+func)`) evaluates a command
+ *   while the glob expands, and a process substitution `=(cmd)` runs `cmd`.
+ *   An escaped or quoted parenthesis (`find . \( -name a \)`, `grep '(x)' f`)
+ *   outside `${...}` keeps its classification.
+ * - a re-glob of an expansion result (`hasGlobSubst`): `$~x` or `${~x}`
+ *   (also `${=~x}`, `${~^x}`) glob-expands the VALUE, so a qualifier hidden in
+ *   a quote, `${~x:-'*(e:cmd:)'}`, runs `cmd` although no parenthesis is
+ *   unquoted. Plain `$x` and `${x}` do not glob and stay unaffected.
+ * - any parenthesis inside a `${...}` body, quoted or not (`hasParenInParam`):
+ *   the payload half of the same vector, refused on its own.
+ * - an unquoted `~[` (`hasDynamicNamedDir`): zsh calls the host's
+ *   `zsh_directory_name` function for it.
+ *
+ * The other expansion flags surveyed under zsh 5.9 need an unquoted
+ * parenthesis to be spelled at all (`${(e)x}`, `${(P)x}`, `${(%)x}`) and are
+ * covered by the first item. Text the scan cannot classify (an unterminated
+ * quote or expansion) fails closed as soon as it holds any parenthesis, since
  * the scan cannot say which one the shell would read as syntax; without a
  * parenthesis there is nothing for zsh to run and the classification is left
  * to the token checks, as before.
  */
-function hasUnquotedGroupParen(trimmed: string): boolean {
+function scanHoldsZshCodeConstruct(scan: ShellPipelineScan): boolean {
+  return (
+    scan.hasGroupParen ||
+    scan.hasGlobSubst ||
+    scan.hasParenInParam ||
+    scan.hasDynamicNamedDir
+  );
+}
+
+function hasZshCodeConstruct(trimmed: string): boolean {
   const scan = scanShellPipeline(trimmed);
   if (scan === null) return /[()]/.test(trimmed);
-  return scan.hasGroupParen;
+  return scanHoldsZshCodeConstruct(scan);
 }
 
 /**
  * The strict single-command check `isReadOnlyBashCommand` applies, without
- * the group-parenthesis refusal. `isReadOnlyBashPipeline` classifies each cut
- * stage through it after refusing the whole command for a group parenthesis
+ * the zsh code-construct refusal. `isReadOnlyBashPipeline` classifies each cut
+ * stage through it after refusing the whole command for such a construct
  * once, so the two refusals stay independent of each other.
  */
 function classifyBashStage(trimmed: string): boolean {
@@ -751,9 +774,9 @@ function classifyBashStage(trimmed: string): boolean {
  * an empty stage and are refused. The cut is made only at `|` characters
  * that are real stage boundaries (`shell-pipeline-scan.ts`): a `|` inside
  * quotes, after a backslash, or inside an expansion or group is not one, and
- * text the scan cannot classify is refused, and so is an unquoted `(` or `)`
- * (zsh runs code from a glob qualifier or `=(..)`, see
- * `hasUnquotedGroupParen`). Each stage is then handed to the strict
+ * text the scan cannot classify is refused, and so is an unquoted `(` or `)`,
+ * a re-glob of an expansion result and a paren inside `${...}` (zsh runs code
+ * from a glob qualifier or `=(..)`, see `scanHoldsZshCodeConstruct`). Each stage is then handed to the strict
  * single-command check (`classifyBashStage`, the body of
  * `isReadOnlyBashCommand`), so the per-bin write-flag guards (`find`,
  * `sort`, `tree`, `file`) and the `command`/`env` runner recursion all
@@ -793,10 +816,12 @@ export function isReadOnlyBashPipeline(command: string): boolean {
 
   // An unquoted `(` or `)` is not provably read-only: zsh, the shell the
   // agent Bash tool runs on this host, executes code from a glob qualifier
-  // (`cat *(e.'touch x'.) | head`) and from `=(cmd)` without any `$(`. The
-  // write-guard refuses the same flag. Refused here once for the whole
-  // command; the stages below go through the check that omits it.
-  if (scan.hasGroupParen) return false;
+  // (`cat *(e.'touch x'.) | head`) and from `=(cmd)` without any `$(`; the
+  // same holds for a re-glob of an expansion result (`ls ${~x:-'*(e:cmd:)'}`)
+  // and any paren inside `${...}`. The write-guard refuses the same flags.
+  // Refused here once for the whole command; the stages below go through the
+  // check that omits it.
+  if (scanHoldsZshCodeConstruct(scan)) return false;
 
   // Require every stage to be a non-empty, provably read-only command. An
   // empty stage means `||`, a leading/trailing pipe, or `| |` — all refused.

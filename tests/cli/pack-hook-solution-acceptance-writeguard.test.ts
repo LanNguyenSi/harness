@@ -697,6 +697,27 @@ describe("write-guard: pipeline negative-control matrix (task 95a3712d)", () => 
   });
 });
 
+describe("write-guard: a zsh re-glob of an expansion is not a read (task b647da7f)", () => {
+  // `${~x:-'*(e:cmd:)'}` runs `cmd` under zsh while no parenthesis is
+  // unquoted. The strict single-command route used to wave it through as
+  // read-only, so a forge of the marker that names the dir slipped past; the
+  // dir reference is what blocks it once the command is not a provable read.
+  it.each([
+    `cat \${~x:-'*(e:touch ${MARKER}:)'}`,
+    // control: the pipeline route already refused this one before the change
+    `ls \${=~x:-'*(e.touch ${MARKER}.)'} | head`,
+    `echo \${x:='*(e:touch ${MARKER}:)'} $~x`,
+    `ls $^~x ${DIR}`,
+  ])("blocks %j", (command) => {
+    expect(bash(command).blocked).toBe(true);
+  });
+
+  it("still allows a plain braced read that does not name the dir", () => {
+    expect(bash("cat ${HOME}/x").blocked).toBe(false);
+    expect(bash("echo ${x:-default} | head").blocked).toBe(false);
+  });
+});
+
 describe("write-guard: monotonicity against origin/master (task 95a3712d)", () => {
   // The fixture records what master decided for each row (measured by
   // scripts/measure-writeguard-baseline.mjs against `git archive

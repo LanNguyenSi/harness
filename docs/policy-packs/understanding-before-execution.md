@@ -69,7 +69,11 @@ read-only fragments. A quoted `|` in an otherwise read-only command
 An unquoted `(` or `)` is not read-only either, with or without a pipe:
 zsh, the shell the agent Bash tool runs, executes code from a glob qualifier
 (`cat *(e.'touch x'.)`) and from `=(cmd)`. Quoted or escaped parentheses
-(`grep '(x)' f`, `find . \( -name a \)`) keep their classification.
+outside `${...}` (`grep '(x)' f`, `find . \( -name a \)`) keep their classification. The same
+holds for a re-glob of an expansion result (`$~x`, `${~x}`, task b647da7f:
+`ls ${~x:-'*(e:touch x:)'}` runs the quoted qualifier under zsh), for any
+parenthesis inside a `${...}` body, quoted or not, and for an unquoted `~[`;
+plain `$HOME` and `${HOME}` stay read-only.
 
 **Consciously accepted residual: a pre-report NETWORK READ.** `git fetch`
 and `gh <noun> view/list/checks/status` already made a live network call
