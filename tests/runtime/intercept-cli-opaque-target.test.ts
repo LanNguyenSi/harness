@@ -263,7 +263,7 @@ describe("runInterceptCli: a target the gate cannot attribute does not fall back
     });
   });
 
-  describe("two-sided effect: forms that were attributable or cwd-only stay exactly as they were", () => {
+  describe("two-sided effect: attributable forms, and the forms that stay cwd-only", () => {
     it("a plain nested -C still demands the nested tag next to the outer one", async () => {
       const world = makeWorld(["libplain"]);
       const result = await run("git -C vendor/libplain log", world.outer, OUTER_ONLY);
@@ -274,11 +274,18 @@ describe("runInterceptCli: a target the gate cannot attribute does not fall back
       ]);
     });
 
-    it("a quoted plain -C keeps the documented cwd-only fallback (one decision, outer tag)", async () => {
+    // Task 7d4abf84: a quoted plain value is decoded by the quote-aware
+    // shell command model, so it is attributed like the unquoted one
+    // (formerly the documented cwd-only fallback).
+    it("a quoted plain -C demands the nested tag next to the outer one, like the unquoted form", async () => {
       const world = makeWorld(["libplain"]);
       const result = await run("git -C 'vendor/libplain' log", world.outer, OUTER_ONLY);
-      expect(result.decisions.map((d) => d.ledgerTag)).toEqual(["preflight:outer-repo"]);
-      expect(result.blocked).toBe(false);
+      expect(result.decisions.map((d) => d.ledgerTag).sort()).toEqual([
+        "preflight:libplain",
+        "preflight:outer-repo",
+      ]);
+      expect(result.blocked).toBe(true);
+      expect(result.decisions.some((d) => d.reason.includes("cannot attribute"))).toBe(false);
     });
 
     it("a backtick in a later argument is not a target: the gated read is decided on the cwd tag", async () => {
@@ -295,24 +302,29 @@ describe("runInterceptCli: a target the gate cannot attribute does not fall back
       expect(result.blocked).toBe(false);
     });
 
-    it("a quoted value ending in a literal $ keeps the cwd-only fallback (the $ is quoted, not ANSI-C or locale quoting)", async () => {
+    // The `$` is quoted, not ANSI-C or locale quoting: the value is a plain
+    // directory name, attributed (task 7d4abf84) rather than failed closed.
+    it("a quoted value ending in a literal $ is attributed to that directory, not failed closed", async () => {
       const world = makeWorld(["a$"]);
       for (const command of ["git -C 'vendor/a$' log", 'cd "vendor/a$" && git log']) {
         const result = await run(command, world.outer, OUTER_ONLY);
-        expect(result.decisions.map((d) => d.ledgerTag)).toEqual(["preflight:outer-repo"]);
-        expect(result.blocked).toBe(false);
+        expect(result.decisions.map((d) => d.ledgerTag).sort()).toEqual(["preflight:a$", "preflight:outer-repo"]);
+        expect(result.decisions.some((d) => d.reason.includes("cannot attribute"))).toBe(false);
+        expect(result.blocked).toBe(true);
+        const both = await run(command, world.outer, [...OUTER_ONLY, "preflight:a$ - evidence for the nested repository"]);
+        expect(both.blocked).toBe(false);
       }
     });
 
-    // Known residual, pinned as current behaviour: a quoted plain relative
-    // cd after an opaque cd resets the directory basis, so the read after
-    // it is decided on the cwd evidence alone. Part of the follow-up for
-    // the plain-name cwd-only forms; this test changes when it lands.
-    it("known residual: a quoted plain relative cd after an opaque cd falls back to the cwd", async () => {
+    // Formerly a known residual (the quoted relative cd reset the directory
+    // basis to the cwd); closed by the quote-aware shell command model
+    // (task 7d4abf84): a relative step onto an opaque directory stays opaque.
+    it("a quoted plain relative cd after an opaque cd fails closed", async () => {
       const world = makeWorld([BACKTICK_NAME]);
       const result = await run(`cd 'vendor/${BACKTICK_NAME}' && cd "sub" && git log`, world.outer, OUTER_ONLY);
-      expect(result.decisions.map((d) => d.ledgerTag)).toEqual(["preflight:outer-repo"]);
-      expect(result.blocked).toBe(false);
+      expect(result.blocked).toBe(true);
+      expect(result.decisions).toHaveLength(1);
+      expect(result.decisions[0]!.reason).toContain("cannot attribute");
     });
 
     it("an absolute cd after an opaque cd names its directory outright and is attributed to it", async () => {

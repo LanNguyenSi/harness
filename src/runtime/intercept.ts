@@ -46,6 +46,14 @@ import {
 } from "./deletion-target-resolve.js";
 import { DEFAULT_SAFE_DELETION_ROOTS } from "../schema/risk.js";
 import { resolveGitContext, type GitRepoContext } from "./git-context.js";
+import {
+  dirPossibilityKey,
+  shellModelViewOf,
+  type DirPossibility,
+  type ModelCommand,
+  type ShellModelView,
+} from "./shell-command-model.js";
+import { ModelPathResolver } from "./shell-model-paths.js";
 import { POLICY_DECISION_TYPE } from "../io/ledger-record.js";
 import { INVISIBLE_CHARACTER_CLASS } from "../io/invisible-characters.js";
 import { classifyRisk, type RiskProfile } from "./risk-classifier.js";
@@ -385,6 +393,37 @@ export interface InterceptOptions {
    */
   commandSegmentsThunk?: () => CommandSegment[] | null;
   /**
+   * Memoised thunk resolving the quote-aware shell command model
+   * (`src/runtime/shell-command-model.ts`, task 7d4abf84) for the SAME Bash
+   * event's `tool_input.command`: every simple command with the
+   * directories it can run in. Read by `policyMatchesEvent`'s fifth arm
+   * (for every `usesPerRepoBuiltins` policy all four earlier arms missed)
+   * and by `resolveAttributedContexts` (for a matched per-repo policy), so
+   * it is computed at most once per Bash event and, with any per-repo
+   * Bash policy in the manifest (FULL_TEMPLATE has four), effectively for
+   * every Bash event: such a policy is either missed by the four earlier
+   * arms (the fifth arm reads the model) or matched (its attribution reads
+   * it). Same lazy, compute-once shape as `commandSegmentsThunk`;
+   * omitted by non-Bash events and by callers/tests that do not supply
+   * one, in which case `intercept()` builds its own memoised thunk for the
+   * event's command (with `modelPathResolver` as the model's directory
+   * oracle) and both consumers read that.
+   *
+   * SAME INVARIANT as `normalizedCommand` / `ampNormalizedCommandThunk`
+   * above: not checked against `event` at runtime.
+   */
+  shellModelThunk?: () => ShellModelView;
+  /**
+   * The shell model's path resolver for this event
+   * (`src/runtime/shell-model-paths.ts`, task 7d4abf84), rooted at
+   * `builtins.CWD`: the model's directory oracle and the resolver of every
+   * per-repo policy's model targets, with one per-event work budget. The
+   * caller that builds `shellModelThunk` passes the resolver that thunk's
+   * oracle uses, so both share one memo and one budget; omitted,
+   * `intercept()` creates one when it first needs it.
+   */
+  modelPathResolver?: ModelPathResolver;
+  /**
    * Whether `options.builtins.REPO` / `.BRANCH` were set by an explicit
    * operator override (`HARNESS_REPO` / `HARNESS_BRANCH` env vars) rather
    * than derived from the cwd's git context (D-015 fix round, run
@@ -561,6 +600,10 @@ function enrichEnvelope(
  * `InterceptOptions.quoteNormalizedCommandThunk`. Omitted callers fall
  * back to calling `normalizeCommandQuoteAware` directly, same shape as
  * the two fallbacks above.
+ *
+ * `shellModelThunk` (task 7d4abf84) feeds the FIFTH arm, the quote-aware
+ * shell command model; see `InterceptOptions.shellModelThunk` and the arm
+ * itself below. Omitted callers fall back to `shellModelViewOf`.
  */
 export function policyMatchesEvent(
   policy: Policy,
@@ -568,15 +611,44 @@ export function policyMatchesEvent(
   precomputedNormalizedCommand?: NormalizedCommand,
   ampNormalizedCommandThunk?: () => AmpAwareNormalizedCommand,
   quoteNormalizedCommandThunk?: () => QuoteAwareNormalizedCommand,
+  shellModelThunk?: () => ShellModelView,
 ): boolean {
-  if (policy.trigger.event !== event.hook_event_name) return false;
+  return (
+    policyMatchArm(
+      policy,
+      event,
+      precomputedNormalizedCommand,
+      ampNormalizedCommandThunk,
+      quoteNormalizedCommandThunk,
+      shellModelThunk,
+    ) !== "none"
+  );
+}
+
+/**
+ * Which part of the trigger matched: `"none"`, `"model"` when only the
+ * fifth arm (the shell model) matched a `bash_match` trigger, `"segments"`
+ * otherwise (every non-Bash match, and every match one of the first four
+ * arms made). `intercept()` passes `"model"` on to
+ * `resolveAttributedContexts`: the segment view never matched such a
+ * policy, so it has no demand of its own to keep.
+ */
+export function policyMatchArm(
+  policy: Policy,
+  event: ToolEvent,
+  precomputedNormalizedCommand?: NormalizedCommand,
+  ampNormalizedCommandThunk?: () => AmpAwareNormalizedCommand,
+  quoteNormalizedCommandThunk?: () => QuoteAwareNormalizedCommand,
+  shellModelThunk?: () => ShellModelView,
+): "none" | "segments" | "model" {
+  if (policy.trigger.event !== event.hook_event_name) return "none";
   if (policy.trigger.match !== undefined) {
-    if (typeof event.tool_name !== "string") return false;
+    if (typeof event.tool_name !== "string") return "none";
     const toolNames = expandToolNameAliases(event.tool_name);
     if (
       !toolNames.some((toolName) => toolName.includes(policy.trigger.match!))
     ) {
-      return false;
+      return "none";
     }
   }
   // `input_match` (task 2699b476): literal equality against the tool
@@ -596,17 +668,17 @@ export function policyMatchesEvent(
   // trigger-matching parity paragraph.
   if (policy.trigger.input_match !== undefined) {
     if (inputMatchMismatchesEvent(policy.trigger.input_match, event)) {
-      return false;
+      return "none";
     }
   }
   if (policy.trigger.bash_match !== undefined) {
     const command = extractShellCommand(event);
-    if (command === null) return false;
+    if (command === null) return "none";
     let re: RegExp;
     try {
       re = new RegExp(policy.trigger.bash_match);
     } catch {
-      return false;
+      return "none";
     }
     // Raw-OR-normalised-OR-amp-normalised-OR-quote-normalised (D-003, run
     // 2026-07-27-gate-target-repo-resolution; third arm added task
@@ -641,12 +713,29 @@ export function policyMatchesEvent(
           const quoted = quoteNormalizedCommandThunk
             ? quoteNormalizedCommandThunk()
             : normalizeCommandQuoteAware(command);
-          if (!re.test(quoted.normalized)) return false;
+          if (!re.test(quoted.normalized)) {
+            // FIFTH ARM (task 7d4abf84), scoped: only a policy whose
+            // `requires:` is evaluated per repository, and only a model
+            // command that names a directory (a path or an opaque one).
+            // The model decodes words and reads real operator boundaries,
+            // so it matches the gated verb in shapes the four arms above
+            // cannot read (`git -C 'vendor/lib sp' log`, `git '-C' X log`,
+            // a line continuation inside the git invocation). Additive
+            // like the others: it can only add a match. Unscoped, it
+            // would also match cwd-only head spellings (`! git log`,
+            // `{ git log; }`) and verbs that never run
+            // (`while false; do git log; done`), a trigger-coverage
+            // change this arm deliberately leaves out.
+            if (!usesPerRepoBuiltins(policy)) return "none";
+            const model = shellModelThunk ? shellModelThunk() : shellModelViewOf(command);
+            if (attributeTriggerModelCommands(policy, model).length === 0) return "none";
+            return "model";
+          }
         }
       }
     }
   }
-  return true;
+  return "segments";
 }
 
 function buildEventContext(event: ToolEvent): ExtractEventContext {
@@ -1222,6 +1311,33 @@ export function attributeTriggerSegments(
 }
 
 /**
+ * The model sibling of `attributeTriggerSegments` (task 7d4abf84): the
+ * commands of the quote-aware shell command model
+ * (`src/runtime/shell-command-model.ts`) that name a directory and whose
+ * canonical text satisfies the policy's own `bash_match` on its own. The
+ * canonical text holds no shell boundary character, so a pattern can match
+ * it only at its start: at the gated verb itself. `[]` when the policy has
+ * no `bash_match`, its regex is malformed, or the command could not be
+ * lexed. A model command that names no directory (it runs in the working
+ * directory, or in one only known at run time) is left out: the cwd
+ * context is demanded for a matched policy anyway, so it could add
+ * nothing but a match for a verb the legacy arms do not see.
+ */
+export function attributeTriggerModelCommands(
+  policy: Policy,
+  model: ShellModelView,
+): ModelCommand[] {
+  if (policy.trigger.bash_match === undefined || model.commands === null) return [];
+  let re: RegExp;
+  try {
+    re = new RegExp(policy.trigger.bash_match);
+  } catch {
+    return [];
+  }
+  return model.commands.filter((c) => c.namesDirectory && re.test(c.canonical));
+}
+
+/**
  * Does a policy's `requires:` reference the per-repo `${REPO}`/`${BRANCH}`
  * builtins, or ask for `at_head`? Only these policies pay the per-policy
  * attribution cost below — every other matching policy keeps the plain,
@@ -1303,7 +1419,8 @@ export type AttributedContextsResult =
  */
 export const OPAQUE_TARGET_REASON =
   "ambiguous: this command names a repository directory through a path this gate cannot attribute " +
-  "(a backtick, an ANSI-C or locale quoted value, or a control or separator character), " +
+  "(a backtick, an ANSI-C or locale quoted value, a control or separator character, a glob, " +
+  "a CDPATH search, a directory change repeated in a loop, or a command line the gate cannot parse), " +
   "so the evidence of the current directory's repository cannot stand in for it. Name the repository " +
   "with a plain path (`git -C <path>` or `cd <path> && ...`), or run the command from inside it";
 
@@ -1411,6 +1528,42 @@ export const OPAQUE_TARGET_REASON =
  * once per policy per segment. `mayBeInsideRepositoryMemo` is the same
  * kind of per-call cache for the cwd's own outside-every-repository
  * check, keyed by the cwd's real path, so that walk runs once per event.
+ *
+ * SHELL MODEL (task 7d4abf84, optional `shellModel`). The quote-aware
+ * shell command model (`src/runtime/shell-command-model.ts`) is a second,
+ * independent view of the same command, combined with the segment view by
+ * UNION, so it cannot make a policy weaker than the segment view alone.
+ * The union is structural, not a property of the two views agreeing: the
+ * segment view runs first and fills `contexts` exactly as it does without
+ * the model (its cwd-only verdict when no segment satisfies the trigger of
+ * a policy one of its arms matched, its loop, its own fallback; a policy
+ * only the model's arm matched, `segmentViewMatched === false`, never
+ * matched the segment view, which then demands nothing), and only then
+ * are the model's
+ * trigger-satisfying commands (`attributeTriggerModelCommands`) read, each
+ * possibility either appending a context or ending the call fail-closed
+ * (`opaque-target` or `bounded`). Nothing in the model phase removes a
+ * context, so every demand of the segment view survives, including the
+ * cwd context of a working directory outside every repository (whose
+ * exception in `addResolvedTarget` only decides whether a model target
+ * brings the cwd context along). Any opaque possibility of a satisfying
+ * model command makes the policy fail closed, checked before the segment
+ * loop; every other possibility adds its context through the same rules as
+ * a segment's `effectiveTarget` (cwd context, the outside-every-repository
+ * exception, the D-015 dedup, the `MAX_ATTRIBUTED_CONTEXTS` bound). Unlike
+ * the segment view, the model composes relative paths (`cd T && git -C
+ * sub log` runs in `T/sub`): each step keeps its mode and is resolved
+ * against the real filesystem by `modelPaths` (`shell-model-paths.ts`: a
+ * logical step lexically against the previous directory, a physical one
+ * through the real directory it starts from), one resolution per distinct
+ * possibility per event, under a per-event work budget past which the
+ * policy fails closed (`opaque-target`). Omitted, `modelPaths` is a fresh
+ * resolver for the cwd. When the command could not be lexed
+ * (`shellModel.commands === null`), the segment view decides alone, except
+ * that a policy with a `bash_match` fails closed when the raw text holds a
+ * directory-changing word (`shellModel.directoryChangeWord`). Omitted (a
+ * non-Bash event, or a caller with no model), the result is the segment
+ * view's alone.
  */
 export function resolveAttributedContexts(
   policy: Policy,
@@ -1422,10 +1575,26 @@ export function resolveAttributedContexts(
   repoOverridden: boolean,
   branchOverridden: boolean,
   extractContext: ExtractEventContext,
+  shellModel?: ShellModelView,
+  modelPaths?: ModelPathResolver,
+  segmentViewMatched = true,
 ): AttributedContextsResult {
   const cwdContext: AttributedContext = { builtins: cwdBuiltins, currentHeadSha: cwdCurrentHeadSha };
+  if (
+    shellModel !== undefined &&
+    shellModel.commands === null &&
+    shellModel.directoryChangeWord &&
+    policy.trigger.bash_match !== undefined
+  ) {
+    // The model could not read the command, and the raw text holds a
+    // directory-changing word: the segment view alone may be reading a
+    // nested repository's command as the cwd's, so fail closed.
+    return { kind: "opaque-target" };
+  }
+  const modelSatisfying = shellModel === undefined ? [] : attributeTriggerModelCommands(policy, shellModel);
+  if (modelSatisfying.some((c) => c.dirs.some((d) => d.kind === "opaque"))) return { kind: "opaque-target" };
   const satisfying = new Set(attributeTriggerSegments(policy, segments));
-  if (satisfying.size === 0) return { kind: "contexts", contexts: [cwdContext] };
+  if (satisfying.size === 0 && modelSatisfying.length === 0) return { kind: "contexts", contexts: [cwdContext] };
 
   const cwdSignature = [cwdBuiltins.REPO, cwdBuiltins.BRANCH, cwdCurrentHeadSha ?? ""].join("|");
   const seenSignatures = new Set<string>();
@@ -1458,27 +1627,10 @@ export function resolveAttributedContexts(
     cwdBuiltins.CWD.length > 0 &&
     !mayBeInsideRepositoryMemoised(cwdReal, mayBeInsideRepositoryMemo);
 
-  for (const seg of segments) {
-    if (!satisfying.has(seg)) continue;
-
-    if (seg.opaqueTarget === true) {
-      // Task `cfb6b390`: the segment names (or inherits) a repository
-      // directory through a value this module refuses to read, not just
-      // one it cannot attribute. Reading that as "cwd only" would let the
-      // outer repository's evidence stand in for a nested repository the
-      // command really runs in, so the policy fails closed instead. Every
-      // other unattributable form (a quoted path, a `~` prefix, a bare
-      // substitution) keeps the cwd-only fallback below.
-      return { kind: "opaque-target" };
-    }
-
-    if (seg.effectiveTarget === null) {
-      // D-003: fully unattributable — cwd only, no foreign target to be
-      // additive with.
-      addCwdOnce();
-      continue;
-    }
-
+  // One resolved target directory, from a segment's `effectiveTarget` or a
+  // shell model path: adds its context (or the cwd context) and returns
+  // `null`, or returns the `bounded` result once the bound is exceeded.
+  const addResolvedTarget = (resolved: string): AttributedContextsResult | null => {
     // D-021 (UNIVERSAL-ADDITIVE, operator decision after the four-pass
     // halt — see this function's own doc comment): the cwd context is
     // demanded UNCONDITIONALLY here, regardless of whether the target came
@@ -1486,13 +1638,11 @@ export function resolveAttributedContexts(
     // preceding `cd`. `seg.ownTarget` is no longer read for this decision.
     // The one exception is `cwdOutsideEveryRepository` below: it is
     // decided after the target resolved, so the cwd context is added from
-    // the branches of this loop body instead of up front, in the same
+    // the branches of this function instead of up front, in the same
     // order as before.
-    const resolvedLexical = path.resolve(cwdBuiltins.CWD, seg.effectiveTarget);
-    const resolved = realpathOrSelf(resolvedLexical);
     if (resolved === cwdReal) {
       addCwdOnce();
-      continue;
+      return null;
     }
 
     let gitCtx = resolveGitContextMemo.get(resolved);
@@ -1503,7 +1653,7 @@ export function resolveAttributedContexts(
     if (gitCtx.repo.length === 0) {
       // D-003: outside any repo → cwd fallback, not a distinct context.
       addCwdOnce();
-      continue;
+      return null;
     }
 
     const signature = [gitCtx.repo, gitCtx.branch, gitCtx.sha].join("|");
@@ -1548,9 +1698,9 @@ export function resolveAttributedContexts(
       // order — not just when a bare cwd-reading segment happened to add
       // it first.
       addCwdOnce();
-      continue;
+      return null;
     }
-    if (seenSignatures.has(signature)) continue;
+    if (seenSignatures.has(signature)) return null;
 
     if (contexts.length >= MAX_ATTRIBUTED_CONTEXTS) {
       // D-013: fail CLOSED — do not evaluate any of them, name the
@@ -1570,12 +1720,95 @@ export function resolveAttributedContexts(
       currentHeadSha: gitCtx.sha.length > 0 ? gitCtx.sha : undefined,
       foreignTarget: { repo: gitCtx.repo, dir: resolved },
     });
+    return null;
+  };
+
+  // SEGMENT VIEW FIRST, exactly as it decides without the shell model:
+  // its own verdict for no satisfying segment (the cwd context alone), its
+  // loop, and its own fallback for a loop that added nothing. Only then
+  // does the model add to `contexts`. That order is what makes the union
+  // structural: every context the segment view demands is in `contexts`
+  // before the first model possibility is read, and the model phase below
+  // can only append a context, or end in `opaque-target` / `bounded` (both
+  // fail closed), never remove one. In particular the
+  // outside-every-repository exception, applied to a model target inside
+  // `addResolvedTarget`, decides only whether that model target brings the
+  // cwd context along; a cwd context the segment view demanded is already
+  // in `contexts` and stays there.
+  if (satisfying.size === 0) {
+    // The segment view's verdict without a satisfying segment: the cwd
+    // context alone, for a policy one of its arms matched. A policy only
+    // the model's arm matched never matched the segment view, which has
+    // no demand of its own for it (the model phase decides alone, with
+    // the same per-target rules).
+    if (segmentViewMatched) addCwdOnce();
+  }
+  for (const seg of segments) {
+    if (!satisfying.has(seg)) continue;
+
+    if (seg.opaqueTarget === true) {
+      // Task `cfb6b390`: the segment names (or inherits) a repository
+      // directory through a value this module refuses to read, not just
+      // one it cannot attribute. Reading that as "cwd only" would let the
+      // outer repository's evidence stand in for a nested repository the
+      // command really runs in, so the policy fails closed instead. Every
+      // other unattributable form (a quoted path, a `~` prefix, a bare
+      // substitution) keeps the cwd-only fallback below.
+      return { kind: "opaque-target" };
+    }
+
+    if (seg.effectiveTarget === null) {
+      // D-003: fully unattributable — cwd only, no foreign target to be
+      // additive with.
+      addCwdOnce();
+      continue;
+    }
+
+    const bounded = addResolvedTarget(realpathOrSelf(path.resolve(cwdBuiltins.CWD, seg.effectiveTarget)));
+    if (bounded !== null) return bounded;
   }
 
-  // Defensive fallback: every satisfying segment existed but somehow none
-  // was added above (should not happen — every branch above adds either
-  // the cwd context or a foreign one). Never leave a matched, per-repo-
-  // builtins policy with zero contexts to evaluate against.
+  // The segment view's own defensive fallback: every satisfying segment
+  // existed but somehow none was added above (should not happen: every
+  // branch above adds either the cwd context or a foreign one). Never
+  // leave a matched, per-repo-builtins policy with zero contexts to
+  // evaluate against.
+  if (satisfying.size > 0 && contexts.length === 0) addCwdOnce();
+
+  // MODEL VIEW: the shell model's trigger-satisfying commands (opaque ones
+  // already returned above), appended to the segment view's contexts. A
+  // possibility the command text does not name (`unknown`) or the working
+  // directory itself keeps the cwd context; a path is resolved through
+  // `modelPaths` and added like a segment's target. Each distinct
+  // possibility is read once (thousands of commands after one long `cd`
+  // chain share one), and the resolver memoises across policies and counts
+  // its filesystem work: once the per-event budget is spent, the policy
+  // fails closed (`opaque-target`) instead of resolving further.
+  const paths = modelPaths ?? new ModelPathResolver(cwdBuiltins.CWD);
+  const seenPossibilities = new Set<DirPossibility>();
+  const seenKeys = new Set<string>();
+  for (const command of modelSatisfying) {
+    for (const dir of command.dirs) {
+      if (seenPossibilities.has(dir)) continue;
+      seenPossibilities.add(dir);
+      if (dir.kind !== "path" || dir.steps.length === 0) {
+        addCwdOnce();
+        continue;
+      }
+      const key = dirPossibilityKey(dir);
+      if (seenKeys.has(key)) continue;
+      seenKeys.add(key);
+      const resolved = paths.resolve(dir);
+      if (resolved === null) return { kind: "opaque-target" };
+      if (resolved !== cwdReal && !resolveGitContextMemo.has(resolved) && !paths.chargeRepositoryLookup(resolved)) {
+        return { kind: "opaque-target" };
+      }
+      const bounded = addResolvedTarget(resolved);
+      if (bounded !== null) return bounded;
+    }
+  }
+
+  // Defensive, as above: a matched policy never has zero contexts.
   return { kind: "contexts", contexts: contexts.length > 0 ? contexts : [cwdContext] };
 }
 
@@ -1666,6 +1899,25 @@ function resolveCommandSegments(options: InterceptOptions): CommandSegment[] {
   const command = extractShellCommand(options.event);
   if (command === null) return [];
   return segmentViewOf(command) ?? [];
+}
+
+/**
+ * The event's shell model (task 7d4abf84) for both of its readers in one
+ * `intercept()` call, the fifth matching arm and attribution, so the two
+ * read the same view: the injected `shellModelThunk`, else a memoised
+ * thunk computing `shellModelViewOf` of the event's own command with
+ * `modelPaths` as its directory oracle, else `undefined` (no Bash command
+ * on this event: the segment view decides alone).
+ */
+function shellModelThunkFor(
+  options: InterceptOptions,
+  modelPaths: () => ModelPathResolver,
+): (() => ShellModelView) | undefined {
+  if (options.shellModelThunk !== undefined) return options.shellModelThunk;
+  const command = extractShellCommand(options.event);
+  if (command === null) return undefined;
+  let cached: ShellModelView | undefined;
+  return () => (cached ??= shellModelViewOf(command, modelPaths()));
 }
 
 /**
@@ -1784,18 +2036,28 @@ export async function intercept(
   // audit flag if the mutation were still hiding inside the predicate.
   const whenFallbackMap = new Map<string, boolean>();
   const matching: Policy[] = [];
+  // The shell model's path resolver (task 7d4abf84): one per event, shared
+  // by the model's directory oracle and every policy's attribution, so a
+  // path is resolved once and the work budget is per event. Created only
+  // when the model is computed.
+  let modelPathsCache: ModelPathResolver | undefined = options.modelPathResolver;
+  const modelPaths = (): ModelPathResolver =>
+    (modelPathsCache ??= new ModelPathResolver(options.builtins.CWD));
+  const shellModelThunk = shellModelThunkFor(options, modelPaths);
+  // Policies only the shell model's arm matched: the segment view has no
+  // demand of its own for them (see `resolveAttributedContexts`).
+  const matchedByModelOnly = new Set<Policy>();
   for (const p of manifest.policies) {
-    if (
-      !policyMatchesEvent(
-        p,
-        event,
-        options.normalizedCommand,
-        options.ampNormalizedCommandThunk,
-        options.quoteNormalizedCommandThunk,
-      )
-    ) {
-      continue;
-    }
+    const arm = policyMatchArm(
+      p,
+      event,
+      options.normalizedCommand,
+      options.ampNormalizedCommandThunk,
+      options.quoteNormalizedCommandThunk,
+      shellModelThunk,
+    );
+    if (arm === "none") continue;
+    if (arm === "model") matchedByModelOnly.add(p);
     if (p.when === undefined) {
       matching.push(p);
       continue;
@@ -1817,6 +2079,10 @@ export async function intercept(
   // `resolveAttributedContexts`'s own comment. `mayBeInsideRepositoryMemo`
   // is the same kind of per-call cache for the cwd walk.
   let segmentsForAttribution: CommandSegment[] | undefined;
+  // The shell model view (task 7d4abf84), from the same memoised thunk the
+  // matching loop used, at most once per event, for the per-repo policies
+  // only.
+  const shellModelOnce = (): ShellModelView | undefined => shellModelThunk?.();
   const resolveGitContextMemo = new Map<string, GitRepoContext>();
   const mayBeInsideRepositoryMemo = new Map<string, boolean>();
 
@@ -1833,6 +2099,9 @@ export async function intercept(
           options.repoOverridden === true,
           options.branchOverridden === true,
           buildEventContext(options.event),
+          shellModelOnce(),
+          shellModelThunk === undefined ? undefined : modelPaths(),
+          !matchedByModelOnly.has(policy),
         )
       : { kind: "contexts", contexts: [{ builtins: options.builtins, currentHeadSha: options.currentHeadSha }] };
 

@@ -1,9 +1,9 @@
 ---
 type: overview
 title: Shell quote models, measured divergence against bash
-description: The policy engine has four independent shell-word models plus a raw-regex trigger layer. This records what each actually extracts, measured against real bash, which divergences are fail-open, and the evidence-led ordering for closing them.
+description: The policy engine has independent shell-word models plus a raw-regex trigger layer (since task 7d4abf84 also a quote-aware shell command model that feeds per-repo attribution). This records what each actually extracts, measured against real bash, which divergences are fail-open, and the evidence-led ordering for closing them.
 tags: [policy-engine, bash-match, quote-model, fail-open, measurement]
-timestamp: 2026-10-06T08:35:48Z
+timestamp: 2026-10-06T14:12:57Z
 sources:
   - src/runtime/command-normalize.ts
   - src/cli/init/composer.ts
@@ -11,6 +11,8 @@ sources:
   - src/runtime/read-only-bash.ts
   - src/runtime/shell-pipeline-scan.ts
   - src/runtime/intercept.ts
+  - src/runtime/shell-command-model.ts
+  - src/runtime/shell-model-paths.ts
   - src/cli/policy/intercept.ts
   - src/runtime/environment-resolver.ts
   - src/cli/init/templates.ts
@@ -113,6 +115,49 @@ den der Befehl selbst während der Ausführung anlegt, und ein `GIT_DIR` /
 ein detached cwd und jeder andere nicht-leere cwd-Kontext fallen weiterhin
 nie.
 
+**Seit Task `7d4abf84` gibt es ein weiteres Modell, `src/runtime/shell-command-model.ts`:**
+ein quote-bewusster Lexer (Wörter mit Quote-Herkunft, Operator-Grenzen nur
+außerhalb von Quotes, Escapes und Expansionen, Zeilenfortsetzung entfernt,
+Heredoc-Körper als Daten, `$( )`, Backticks und `<( )` rekursiv) plus ein
+Lauf, der für jedes einfache Kommando die Menge der Verzeichnisse berechnet,
+in denen es laufen kann. Es ist nicht an `bash-prefix-parse.cdTarget`
+angebunden und ersetzt die Segment-Sicht nicht: `src/runtime/intercept.ts`
+liest es als fünften `bash_match`-Arm (nur für Policies mit
+`${REPO}`/`${BRANCH}`/`at_head`, nur für Kommandos, die ein Verzeichnis
+nennen) und vereinigt seine Ziele in `resolveAttributedContexts` mit denen
+der Segment-Sicht, sodass es keine Forderung entfernen kann: die Forderungen
+der Segment-Sicht entstehen zuerst, genau wie ohne Modell, und das Modell
+hängt nur an (auch der leere cwd-Kontext eines Arbeitsverzeichnisses
+außerhalb jedes Repositorys bleibt, wo die Segment-Sicht ihn fordert; eine
+Policy, die nur der fünfte Arm getroffen hat, hat keine Forderung der
+Segment-Sicht). Die Pfade löst ein `ModelPathResolver` pro Ereignis auf
+(`src/runtime/shell-model-paths.ts`: jede Möglichkeit einmal, für alle
+Policies, unter einem Arbeitsbudget pro Ereignis, bei dessen Überschreitung
+die Policy fail-closed endet); derselbe Resolver beantwortet dem Modell, ob
+ein `cd` oder `pushd` auf oberster Ebene in ein beim Hook-Lauf existierendes
+Verzeichnis führt, und nur dann entfällt dessen Fehlschlag-Zweig (nie für
+ein logisches `..` nach einem Namen wie `missing/../x`, nie für ein
+`cd -P`, dessen `..` kein Verzeichnis verlässt, durch das die Shell gehen
+kann, und nie mehr nach einer Funktionsdefinition oder einem Befehl, der
+`cd` umdefinieren kann, etwa `enable`, `alias`, `hash`, `source` oder
+`trap`). Für K1 heißt
+das: die Form `cd <T> && git -C sub status`, die die Tabelle unten mit `sub`
+führt, komponiert das Modell zu `T/sub` (Betreiber-Entscheidung; die frühere
+Haltung "nicht attribuierbar statt geraten" gilt damit nur noch für die
+Segment-Sicht selbst, jeder Schritt behält seinen logischen oder physischen
+Modus und wird gegen das echte Dateisystem aufgelöst). `git -C`-Ketten,
+`env -C` (letzter Wert), gequotete Werte und die Opak-Propagation über
+`cd -P`, `pushd`, `popd`, `cd -` und `||` hinweg liest es ebenfalls; Globs,
+ein `CDPATH` aus demselben Kommando und relative Verzeichniswechsel in
+Schleifen enden fail-closed. Gegen den Basis-Commit mit den
+Review-Korpora von `cfb6b390` und echtem bash 3.2 / zsh 5.9 als Schiedsrichter
+gemessen: 0 Zellen schwächer, keine Forderung eines falschen Repositorys und
+kein Fail-closed für ein Verb, das nur im cwd lief; die Kosten (Glob-Ziele,
+`CDPATH`, Verben, die nie laufen) stehen im CHANGELOG-Eintrag von
+`7d4abf84`. Die Kopfschreibweisen-Lücke (`! git log`, `{ git log; }`, der
+K4-Klasse benachbart) bleibt für Kommandos ohne genanntes Verzeichnis
+offen.
+
 **Empfehlung 2, Teil (der read-only-Flag-Kanal, `fdee7d0f`) ist umgesetzt
 und ausgeliefert — als "slice 1", PR #392, nur für diesen einen der drei
 Aufrufstellen.** Neues `src/runtime/shell-word.ts` exportiert
@@ -185,7 +230,7 @@ Normalisierungs-Pass (vierter Matching-Arm, siehe `intercept.ts`s
 eigenen Kommentar), eine eigene, additive Grenzsuche
 (`findNextBoundaryQuoteAware`), die einen Boundary-Charakter innerhalb
 einer offenen Quote überspringt, und verdrahtet ihn in
-`policyMatchesEvent` (`src/runtime/intercept.ts:565-649#"return true;"`) als vierten
+`policyMatchesEvent` (`src/runtime/intercept.ts:636-683#"Raw-OR-normalised-OR-amp-normalised-OR-quote-normalised"`) als vierten
 OR-Zweig: roh, dann normalisiert, dann amp-bewusst (`aabbad63`), dann
 quote-bewusst (`cf3dff51`), jeder Zweig nur additiv gegenüber den
 vorherigen. Produktions-Nachweis über dieselbe `runInterceptCli`-Messung
@@ -314,11 +359,12 @@ Ausgaben und sind nur paarweise überlappend messbar.
 
 | Modul | Ausgabe | verdrahtet an |
 |---|---|---|
-| `command-normalize.ts` | `normalized` | `bash_match` raw-OR-normalized-OR-amp-OR-quote-normalized (`src/runtime/intercept.ts:565-649#"return true;"`, dritter Arm seit `aabbad63`, vierter Arm seit `cf3dff51`) |
+| `command-normalize.ts` | `normalized` | `bash_match` raw-OR-normalized-OR-amp-OR-quote-normalized (`src/runtime/intercept.ts:636-683#"Raw-OR-normalised-OR-amp-normalised-OR-quote-normalised"`, dritter Arm seit `aabbad63`, vierter Arm seit `cf3dff51`) |
 | | `targetDir`/`targetBase` | nichts (grep-verifiziert) |
 | `bash-prefix-parse.ts` | `inlineEnv`, `cdTarget` | Risk-Gate-Kontext (`src/cli/policy/risk-envelope-enrichment.ts:157#"return { ...base, ...bashPrefix.inlineEnv };"`) |
 | `read-only-bash.ts` | Boolean | Risk-Floor, Understanding-Gate-PreToolUse (2 Hooks), Write-Guard |
 | `read-only-bash.ts`, `splitCurlWords` | `CurlWord[] \| null` | Risk-Floor NUR (`isReadOnlyCurlCommand`, task `fdaad781`) |
+| `shell-command-model.ts` (task `7d4abf84`) | `ModelCommand[] \| null` (kanonischer Text, Verzeichnismenge) | `bash_match` fünfter Arm (nur Per-Repo-Policies, nur Kommandos, die ein Verzeichnis nennen) und `resolveAttributedContexts` (Union mit der Segment-Sicht) |
 
 Die Matrix ist daher als **drei überlappende Zwei-Wege-Vergleiche**
 geführt. Das ist ein Ergebnis, kein Scope-Cut. **Ein VIERTES Modell,

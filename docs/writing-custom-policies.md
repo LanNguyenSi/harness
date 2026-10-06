@@ -214,8 +214,9 @@ elsewhere, with one exception: when the cwd is outside every git
 repository (neither its real path nor any ancestor up to the filesystem
 root holds an entry named `HEAD` or `.git`, and no lookup there failed
 with an error other than ENOENT), `${REPO}` is blank for the policy, and
-a segment's own target resolved to a real repository, the cwd context is
-not demanded and that target's context is demanded in full (see
+a segment's own target (or a shell model path, below) resolved to a real
+repository, the cwd context is not demanded next to that target and the
+target's context is demanded in full (see
 `mayBeInsideRepository` in `src/runtime/intercept.ts`). A detached cwd
 and every other non-blank cwd context are still never dropped. When a trigger-satisfying segment ALSO names a distinct,
 resolvable target (its own `-C`/`env -C`/`--git-dir`, or a target
@@ -226,11 +227,23 @@ single `git -C <B> push` from a checkout of repo A therefore now demands
 evidence in EACH repository the command touches, not just the one the
 session started in.
 
-**When a target gets attributed.** The engine re-tests the policy's own
-`bash_match` against each segment of the command individually (the same
-segmentation the trigger already matched against). A segment is
-attributed a target when it is itself one of the segments that satisfies
-the trigger AND it names — or inherits — a resolvable directory:
+**When a target gets attributed.** The engine reads the command through
+two independent views and demands the union of what both name (task
+`7d4abf84`). The union is built in a fixed order: the per-segment view
+decides first, exactly as it does on its own (for a policy one of its
+matching forms matched, including the cwd-only demand below and the cwd
+context of a working directory outside every repository), and the shell
+command model then adds its own demands or a fail-closed verdict; it never
+removes a demand the per-segment view made. A policy only the shell
+command model's match (below) brought in has no per-segment demand; it is
+decided on the model's directories, with the same cwd rule as a segment
+target.
+
+The per-segment view re-tests the policy's own `bash_match` against each
+segment of the command individually (the same segmentation the trigger
+already matched against). A segment is attributed a target when it is
+itself one of the segments that satisfies the trigger AND it names (or
+inherits) a resolvable directory:
 
 - its own invocation carries exactly one recognised repo-relocating
   option (`-C`, `--git-dir`, or a wrapping `env -C`/`--chdir`), or
@@ -239,6 +252,103 @@ the trigger AND it names — or inherits — a resolvable directory:
   inside a subshell, before a `cd -`, or before a pipe stage does not
   count; see `command-normalize.ts`'s `CommandSegment.effectiveTarget`
   doc comment for the exact composition rules).
+
+The shell command model (`src/runtime/shell-command-model.ts`) lexes the
+command with quotes, escapes and real operator boundaries and computes,
+for every simple command, the directories it can run in. A model command
+whose decoded text satisfies the trigger on its own, and that names a
+directory, demands each of them:
+
+- `cd`, `chdir`, `pushd` and `popd` are read behind `!`, `{`, `time`, the
+  compound-command keywords, `builtin`, `command`, `eval` with literal
+  arguments, assignments and redirections, with a quoted or escaped
+  command word (`\cd`, `c''d`) and with `-L`, `-P` or `--`; `cd -` and
+  `popd` return the directory the command left;
+- quoted values are decoded (`git -C 'vendor/lib sp' log`,
+  `cd "vendor/lib;semi"`, `git '-C' X log`), and a line continuation is
+  removed;
+- relative paths compose: every `-C` of a git invocation in order, then
+  `--git-dir`; `env`'s last `-C`; a `cd` followed by a relative `cd` or
+  `-C` (`cd T && git -C sub log` runs in `T/sub`). A plain `cd` step is
+  resolved the way the shell computes `$PWD` (a `..` removes the previous
+  name), a `cd -P`, `-C`, `env -C` or `--git-dir` step through the real
+  directory it starts from (a `..` after a symlink leaves the symlink's
+  target);
+- `&&`, `||`, `!`, `;`, `&`, pipelines (each element a subshell, the last
+  one possibly the current shell, as in zsh), `( )` and substitutions
+  (subshells whose own commands are read too), and `if` / `case` branches
+  follow the shell's control flow, so `cd X | git log`, `cd X & git log`,
+  `(cd X) && git log`, `cd X || git log` and `! cd X && git log` stay with
+  the working directory;
+- a `cd` or `pushd` may fail (a missing directory), and the shell then
+  stays where it was, so a later command can run in either place
+  (`cd X; git log` demands the working directory and `X`). The gate drops
+  that branch only for a `cd` or `pushd` that meets all of these:
+  - it is at the top level of the command (not inside `{ }`, a compound
+    command, a subshell or substitution nested in one, a function body or
+    an `eval` string), spelled so bash and zsh both run the builtin (`cd`,
+    `builtin cd`, `time cd`; not `chdir`, `command cd`, `noglob cd` or
+    `time -p cd`), with no redirection of its own and no `-e` or `-@`;
+  - a plain `cd` / `pushd` target has every `..` before any name (`..`,
+    `../..`, `../x`): bash and zsh fail `cd missing/../x`,
+    `cd README.md/../x` and `cd a/../b` when the name is not a directory,
+    whatever the lexical result names, so those keep the branch; a
+    `cd -P` target is followed through the real directories it names and
+    keeps the branch when a `..` leaves something that is not one;
+  - no earlier command can have made `cd` or `pushd` something other than
+    the builtin: after any function definition (any name, also zsh's
+    anonymous `() { ... }`), `enable`, `disable`, `alias`, `unalias`,
+    `unfunction`, `hash`, `unhash`, `autoload`, `functions`, `source`, `.`,
+    `trap`, a command word or `eval` argument the gate cannot read (`$CMD`,
+    `eval "$X"`), or an assignment to zsh's `functions` / `aliases` tables
+    or bash's `BASH_ALIASES` / `BASH_CMDS`, every later `cd` keeps its
+    branch;
+  - its target is an existing directory the gate can enter when the hook
+    runs.
+
+  So `cd frontend; npm test; cd ..; git status` in a repository nested
+  inside another one runs `git status` in that repository only, while
+  `cd missing; npm test; cd ..; git status` can reach the parent and
+  demands it, and `cd vendor/lib; cd missing/../../..; git push` or
+  `cd vendor/lib; cd() { :; }; cd ../..; git push` demand the nested
+  repository the push can run in. Two gaps stay open, and in both the
+  per-segment view's demands still stand (the union), so they can drop
+  only a demand of the shell command model's own: the check reads the
+  filesystem when the hook runs, so a command that removes or renames
+  that directory before its `cd` (`mv ../frontend ../fe2; cd
+  ../frontend`) is read as if the directory were still there; and the
+  hook does not see the shell the command runs in, so functions, aliases
+  and options from the shell's startup files or the agent's shell
+  environment, a `CDPATH` inherited from the environment (bash searches
+  it before the working directory), or physical `cd` (`set -P`, zsh
+  `CHASE_LINKS`) can make a `cd` the gate confirmed fail or land
+  elsewhere.
+
+The model also adds a match: a per-repo policy whose trigger none of the
+other forms matched still applies when a model command that names a
+directory satisfies it (`git -C 'vendor/lib sp' log` matched no policy at
+all before). Only such policies and only such commands: a gated verb
+spelled behind a prefix the trigger does not read (`! git log`,
+`{ git log; }`) in a command that names no directory still matches no
+policy.
+
+**Cost.** The shell command model is computed at most once per Bash
+event and, with any per-repo Bash policy in the manifest (the full
+template has four), effectively for every Bash event: such a policy is
+either missed by the other matching forms (the model's match is then
+tried) or matched (its attribution reads the model), so a command no
+policy matches computes it too. Its directories are resolved once per
+distinct directory per event, for every policy, under a per-event work
+budget (`MAX_MODEL_PATH_WORK` in `src/runtime/shell-model-paths.ts`, 4096
+units: one per composition step or path component, per final `realpath`,
+per directory check, and per level of the repository lookup for a newly
+resolved directory); a command that needs more fails closed (next
+section). End to end, a command at the 100000-character input bound is
+decided well under a second on the measured shapes, against the 15000 ms
+`budget_ms` of the `harness policy intercept` hooks (a hook past its
+budget allows), and a command no policy matches pays the model's cost
+too; the CHANGELOG entry for task `7d4abf84` records the measurement,
+including one for such a command.
 
 **Fallback to cwd only (no distinct second context).** A command still
 evaluates against the session's cwd alone — identical to a policy with no
@@ -252,30 +362,27 @@ attribution at all — whenever:
 - the trigger matched the WHOLE, unsplit command text (a malformed
   `bash_match` regex, or one whose match genuinely spans more than one
   segment) rather than any single segment;
-- the named target's own composition is unattributable — a relative
-  `-C`/`--git-dir` value after a preceding `cd` (composing the real path
-  is deliberately not this module's job), a `~`-prefixed value, a quoted
-  or command-substitution value (apart from the fail-closed forms in the
-  next section), `--work-tree` on its own (it does not
-  relocate the git-dir, so it never proves a target), or more than one
-  repo-relocating option in the same invocation (git composes those
-  cumulatively; the module refuses to guess which one wins);
+- the named directory is only known at run time (a `~`-prefixed value,
+  a variable or a command substitution: `cd "$D"`,
+  `cd "$(git rev-parse --show-toplevel)"`), apart from the fail-closed
+  forms in the next section, or the invocation names only `--work-tree`
+  (it does not relocate the git-dir, so it never proves a target);
 - the named target resolves to the SAME repository identity as cwd (a
   subdirectory of the cwd repo reached via `-C`, or a symlink into it) —
   this collapses into the single cwd context rather than a spurious
   duplicate;
 - the named target is not inside any git repository at all.
 
-**Fail closed: a target the gate refuses to read (task `cfb6b390`).** One
-kind of unattributable target is NOT left at the cwd fallback above,
-because the command then really runs in some nested repository and the
-cwd repository's evidence would stand in for it. A `-C`, `--git-dir` or
-`env -C` value (every `-C`, not only the first, and a `~`-prefixed one
-too), or an argument of a `cd`, `pushd` or `popd` in a shape the gate
-recognises (flags and redirections after it; a `{` or `!`, `builtin`,
-`command`, `eval`, `time`, a compound-command keyword such as `if`,
-`then`, `do` or `else`, or a `VAR=value` assignment in front of it),
-that holds
+**Fail closed: a target the gate refuses to read (tasks `cfb6b390`,
+`7d4abf84`).** One kind of unattributable target is NOT left at the cwd
+fallback above, because the command then really runs in some nested
+repository and the cwd repository's evidence would stand in for it. A
+`-C`, `--git-dir` or `env -C` value (every `-C`, not only the first, and
+a `~`-prefixed one too), or an argument of a `cd`, `pushd` or `popd` in
+a shape the gate recognises (flags and redirections after it; a `{` or
+`!`, `builtin`, `command`, `eval`, `time`, a compound-command keyword
+such as `if`, `then`, `do` or `else`, or a `VAR=value` assignment in
+front of it), that holds
 
 - a backtick (quoted, escaped or a command substitution),
 - an ANSI-C quoted value (`$'...'`, which decodes escapes such as `\x60`)
@@ -291,9 +398,35 @@ that holds
 
 makes the policy fail CLOSED for that command: one deny (or the policy's
 own `warn` enforcement) with the reason "cannot attribute", recorded
-without querying the ledger. The same holds for a later segment that
-inherits the directory of such a `cd` or names a relative target against
-it. The reason for failing closed rather than guessing is that the gate
+without querying the ledger. The same holds for a later command that
+inherits the directory of such a `cd` or names a relative or dynamic
+target against it, through any later `cd` form, `cd -`, `popd` or a
+`||`. The shell command model fails closed the same way for:
+
+- an unquoted glob in a target (`cd vendor/libpl*`, `git -C x? log`, a
+  `[...]` class, a brace expansion with `,` or `..`); expanding it
+  against the filesystem instead is a follow-up;
+- a relative `cd` or `pushd` target while a `CDPATH` assignment made in
+  the same command is in effect (inline, as a statement, or through
+  `export` / `declare`); a `CDPATH` inherited from the environment is
+  not visible to the gate;
+- a loop whose body changes directory relative to where it is (a later
+  iteration starts somewhere the command text does not name), for the
+  commands after the loop and for the commands inside it;
+- more than 8 possible directories for one command, or a composed path
+  longer than 4096 characters;
+- directories that need more than the per-event work budget to resolve
+  (see Cost above): many distinct directories only the shell command
+  model names (the tests pin 1000 `git '-C' <dir>` commands as failing
+  closed and 10 as decided normally; the limit depends on how deep the
+  directories are), or a chain of 2000 `cd` steps;
+- a command line the model cannot lex but that may still run (for
+  example subshells nested deeper than 8 levels), or one longer than the
+  100000-character normalisation bound, when its text holds a
+  directory-changing word (`cd`, `pushd`, `popd`, `chdir`, `-C`,
+  `--chdir`, `--git-dir`, also partly quoted).
+
+The reason for failing closed rather than guessing is that the gate
 cannot name the directory, so it cannot name the repository whose
 evidence is needed. No evidence can clear it, neither the cwd repository's
 tag nor the nested repository's own. The remedy is to name the repository
@@ -304,17 +437,25 @@ This over-blocks some commands that are in fact harmless: a backtick
 command substitution such as ``git -C `pwd` log`` or ``cd `git rev-parse
 --show-toplevel` ``, an ANSI-C or locale quoted value even when it spells a
 plain path (`git -C $'vendor/ok' log`), a `cd` or `pushd` with such a value
-that has nothing to do with the gated verb later in the command, and a
-path that really does contain a backtick. Plain unquoted paths, quoted
-plain paths and a backtick that is not a target (a `--grep='...'` or a
-commit message) are unaffected.
+that has nothing to do with the gated verb later in the command, a path
+that really does contain a backtick, a glob that matches exactly one
+directory, a `CDPATH` search, and a loop such as
+`for d in a b; do cd "$d"; git status; cd ..; done`, a command past the
+work budget. Plain unquoted paths,
+quoted plain paths and a backtick that is not a target (a `--grep='...'`
+or a commit message) are unaffected. A command whose gated verb never
+runs can also gain a demand or fail closed (a `git -C a -C b` where `b`
+does not exist below `a`, a verb inside `while false; do ...; done`).
+The CHANGELOG entry for task `7d4abf84` records how often each of these
+occurred on the review corpora it was measured against.
 
-Not closed yet, still the cwd fallback (a follow-up): the directory of
-such a `cd` is not carried past a later reset-class `cd` (`cd -P X`,
-`pushd X`, `popd`, `cd -`), a later `cd` whose own value is quoted but
-plain (`cd "sub"`), or a `||`; a `cd` whose command word is
-backslash-escaped or partly quoted (`\cd X`, `c''d X`) and the zsh `chdir`
-builtin are not read as a `cd` at all.
+Still the cwd fallback: a directory held in a variable or a substitution
+(see above), a `GIT_DIR=` or `GIT_WORK_TREE=` assignment, a nested shell
+(`bash -c '...'`), `source`, a function call, `sudo -D`, `CDPATH` or
+`OLDPWD` inherited from the environment, and a gated verb whose own head
+is spelled behind a prefix the trigger does not read (`! git log`,
+`{ git log; }`, `eval git log`) in a command that names no directory,
+which matches no policy at all: matching those is a follow-up.
 
 **The cross-repo consequence.** Because attribution is additive, holding
 evidence for ONLY the target repository named by a `-C`/`cd` is no longer

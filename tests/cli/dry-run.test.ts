@@ -687,3 +687,137 @@ describe("dry-run: additive per-repo demands for a target-naming command", () =>
     expect(foreignLogDecisions).toBeGreaterThan(1);
   });
 });
+
+describe("dry-run: the quote-aware shell model arm and attribution match policy intercept (task 7d4abf84)", () => {
+  function makeWorld(): { outer: string; spaced: string; plain: string } {
+    const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "harness-dryrun-7d4abf84-")));
+    cleanups.push(() => fs.rmSync(root, { recursive: true, force: true }));
+    const repo = (dir: string, branch: string): string => {
+      fs.mkdirSync(path.join(dir, ".git"), { recursive: true });
+      fs.writeFileSync(path.join(dir, ".git", "HEAD"), `ref: refs/heads/${branch}\n`);
+      return dir;
+    };
+    const outer = repo(path.join(root, "outer"), "main");
+    return {
+      outer,
+      spaced: repo(path.join(outer, "vendor", "lib sp"), "feature-sp"),
+      plain: repo(path.join(outer, "vendor", "libplain"), "feature-plain"),
+    };
+  }
+
+  async function runtimeTags(command: string, cwd: string, policy: string): Promise<string[]> {
+    const { manifest } = loadManifest({ configPath: FULL_MANIFEST });
+    const sink = new Writable({
+      write(_chunk, _enc, cb) {
+        cb();
+      },
+    });
+    const runtime = await runInterceptCli({
+      stdin: Readable.from([
+        JSON.stringify({
+          hook_event_name: "PreToolUse",
+          tool_name: "Bash",
+          tool_input: { command },
+          session_id: "dryrun-7d4abf84",
+          cwd,
+        }),
+      ]),
+      stdout: sink,
+      stderr: sink,
+      manifest,
+      ledger: {
+        async query() {
+          return { kind: "ok", entries: [] };
+        },
+        async record() {
+          /* no-op */
+        },
+      },
+    });
+    return runtime.decisions
+      .filter((d) => d.policyName === policy)
+      .map((d) => (d.reason.startsWith("ambiguous: this command names a repository directory") ? "(opaque)" : d.ledgerTag))
+      .sort();
+  }
+
+  function predictedTags(command: string, cwd: string, policy: string): string[] {
+    return dryRun("x", {
+      configPath: FULL_MANIFEST,
+      tool: "Bash",
+      toolArgs: JSON.stringify({ command }),
+      builtins: { CWD: cwd },
+    })
+      .report.matchingPolicies.filter((p) => p.name === policy)
+      .flatMap((p) => p.ledgerQueries.map((q) => (q.startsWith("(opaque target:") ? "(opaque)" : q)))
+      .sort();
+  }
+
+  it("predicts the match only the shell model arm makes, with the runtime's demands", async () => {
+    const w = makeWorld();
+    const cases: Array<[string, string, string[]]> = [
+      ["git -C 'vendor/lib sp' log", "preflight-before-investigation", ["preflight:lib sp", "preflight:outer"]],
+      ["git '-C' vendor/libplain push", "preflight-before-push", ["preflight:feature-plain", "preflight:main"]],
+      ["cd vendor && git -C libplain log", "preflight-before-investigation", ["preflight:libplain", "preflight:outer"]],
+      ["cd vendor/libpl* && git log", "preflight-before-investigation", ["(opaque)"]],
+    ];
+    for (const [command, policy, expected] of cases) {
+      const fromRuntime = await runtimeTags(command, w.outer, policy);
+      expect(fromRuntime, `runtime ${command}`).toEqual(expected);
+      expect(predictedTags(command, w.outer, policy), `dry-run ${command}`).toEqual(fromRuntime);
+    }
+    // The first two match no policy without the shell model arm: the
+    // runtime's own matcher agrees with dry-run on the match itself.
+    const event: ToolEvent = {
+      hook_event_name: "PreToolUse",
+      tool_name: "Bash",
+      tool_input: { command: "git -C 'vendor/lib sp' log" },
+    };
+    const { manifest } = loadManifest({ configPath: FULL_MANIFEST });
+    const investigation = manifest.policies.find((p) => p.name === "preflight-before-investigation")!;
+    expect(policyMatchesEvent(investigation, event)).toBe(true);
+  });
+
+  it("predicts the runtime's demands from a cwd outside every repository and from a repository nested in another", async () => {
+    const w = makeWorld();
+    const root = path.dirname(w.outer);
+    const plain = path.join(root, "plain");
+    fs.mkdirSync(plain);
+    const child = path.join(w.outer, "wt", "child");
+    fs.mkdirSync(path.join(child, ".git"), { recursive: true });
+    fs.writeFileSync(path.join(child, ".git", "HEAD"), "ref: refs/heads/feature-child\n");
+    fs.mkdirSync(path.join(child, "frontend"));
+    // The blank cwd context renders differently in the two (a decision tag
+    // vs a hint), both naming that no ledger query is made.
+    const blank = (tags: string[]): string[] => tags.map((t) => (t.includes("no ledger query") ? "(blank cwd)" : t));
+    const cases: Array<[string, string, string, string[]]> = [
+      // The model reads env -C behind `&`; the segment view's blank cwd demand stays.
+      [`A=x&env -C ${w.outer} git log`, plain, "preflight-before-investigation", ["(blank cwd)", "preflight:outer"]],
+      [`cd ${w.outer}; git log`, plain, "preflight-before-investigation", ["preflight:outer"]],
+      // Matched by the model's arm only: no segment-view cwd demand.
+      [`git '-C' ${w.outer} log`, plain, "preflight-before-investigation", ["preflight:outer"]],
+      // A cd into an existing directory cannot fail: `cd ..` returns to the child.
+      ["cd frontend; npm test; cd ..; git status", child, "preflight-before-investigation", ["preflight:child"]],
+      ["cd missing; npm test; cd ..; git status", child, "preflight-before-investigation", ["preflight:child", "preflight:outer"]],
+    ];
+    for (const [command, cwd, policy, expected] of cases) {
+      const fromRuntime = blank(await runtimeTags(command, cwd, policy)).sort();
+      expect(fromRuntime, `runtime ${command}`).toEqual(expected);
+      expect(blank(predictedTags(command, cwd, policy)).sort(), `dry-run ${command}`).toEqual(fromRuntime);
+    }
+  });
+
+  it("does not extend the shell model arm to a policy that is not evaluated per repository", async () => {
+    const w = makeWorld();
+    const command = "git '-C' vendor/libplain tag v1";
+    const r = dryRun("x", {
+      configPath: FULL_MANIFEST,
+      tool: "Bash",
+      toolArgs: JSON.stringify({ command }),
+      builtins: { CWD: w.outer },
+    });
+    expect(r.report.matchingPolicies.map((p) => p.name)).not.toContain("dogfood-before-release");
+    expect(await runtimeTags(command, w.outer, "dogfood-before-release")).toEqual([]);
+    // Positive control: the policy exists and matches the unquoted spelling.
+    expect(await runtimeTags("git -C vendor/libplain tag v1", w.outer, "dogfood-before-release")).toHaveLength(1);
+  });
+});
