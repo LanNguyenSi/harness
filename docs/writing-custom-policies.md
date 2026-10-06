@@ -255,7 +255,8 @@ attribution at all — whenever:
 - the named target's own composition is unattributable — a relative
   `-C`/`--git-dir` value after a preceding `cd` (composing the real path
   is deliberately not this module's job), a `~`-prefixed value, a quoted
-  or command-substitution value, `--work-tree` on its own (it does not
+  or command-substitution value (apart from the fail-closed forms in the
+  next section), `--work-tree` on its own (it does not
   relocate the git-dir, so it never proves a target), or more than one
   repo-relocating option in the same invocation (git composes those
   cumulatively; the module refuses to guess which one wins);
@@ -264,6 +265,56 @@ attribution at all — whenever:
   this collapses into the single cwd context rather than a spurious
   duplicate;
 - the named target is not inside any git repository at all.
+
+**Fail closed: a target the gate refuses to read (task `cfb6b390`).** One
+kind of unattributable target is NOT left at the cwd fallback above,
+because the command then really runs in some nested repository and the
+cwd repository's evidence would stand in for it. A `-C`, `--git-dir` or
+`env -C` value (every `-C`, not only the first, and a `~`-prefixed one
+too), or an argument of a `cd`, `pushd` or `popd` in a shape the gate
+recognises (flags and redirections after it; a `{` or `!`, `builtin`,
+`command`, `eval`, `time`, a compound-command keyword such as `if`,
+`then`, `do` or `else`, or a `VAR=value` assignment in front of it),
+that holds
+
+- a backtick (quoted, escaped or a command substitution),
+- an ANSI-C quoted value (`$'...'`, which decodes escapes such as `\x60`)
+  or a locale quoted value (`$"..."`: bash looks its text up in a locale
+  catalogue that can translate it into a different name; zsh reads it as
+  a literal `$` followed by a double-quoted string, so there the rule
+  over-blocks), counted only where the `$` itself is unquoted and
+  unescaped (`git -C 'a$' log` and `cd "a$"` are plain quoted values), or
+- a control, format or separator character (C0, DEL, C1, zero-width and
+  bidirectional controls, U+2028, U+2029, the byte order mark) in an
+  otherwise unattributable value (a quoted or `~` value; an unquoted path
+  holding such a character is attributed to that literal directory),
+
+makes the policy fail CLOSED for that command: one deny (or the policy's
+own `warn` enforcement) with the reason "cannot attribute", recorded
+without querying the ledger. The same holds for a later segment that
+inherits the directory of such a `cd` or names a relative target against
+it. The reason for failing closed rather than guessing is that the gate
+cannot name the directory, so it cannot name the repository whose
+evidence is needed. No evidence can clear it, neither the cwd repository's
+tag nor the nested repository's own. The remedy is to name the repository
+with a plain path (`git -C <path> ...`, or `cd <path> && ...`) or to run
+the command from inside it.
+
+This over-blocks some commands that are in fact harmless: a backtick
+command substitution such as ``git -C `pwd` log`` or ``cd `git rev-parse
+--show-toplevel` ``, an ANSI-C or locale quoted value even when it spells a
+plain path (`git -C $'vendor/ok' log`), a `cd` or `pushd` with such a value
+that has nothing to do with the gated verb later in the command, and a
+path that really does contain a backtick. Plain unquoted paths, quoted
+plain paths and a backtick that is not a target (a `--grep='...'` or a
+commit message) are unaffected.
+
+Not closed yet, still the cwd fallback (a follow-up): the directory of
+such a `cd` is not carried past a later reset-class `cd` (`cd -P X`,
+`pushd X`, `popd`, `cd -`), a later `cd` whose own value is quoted but
+plain (`cd "sub"`), or a `||`; a `cd` whose command word is
+backslash-escaped or partly quoted (`\cd X`, `c''d X`) and the zsh `chdir`
+builtin are not read as a `cd` at all.
 
 **The cross-repo consequence.** Because attribution is additive, holding
 evidence for ONLY the target repository named by a `-C`/`cd` is no longer

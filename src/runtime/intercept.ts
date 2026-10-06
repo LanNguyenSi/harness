@@ -1293,7 +1293,19 @@ function realpathOrSelf(p: string): string {
 /** Discriminated result of `resolveAttributedContexts` (D-013). */
 export type AttributedContextsResult =
   | { kind: "contexts"; contexts: AttributedContext[] }
-  | { kind: "bounded"; distinctCount: number };
+  | { kind: "bounded"; distinctCount: number }
+  | { kind: "opaque-target" };
+
+/**
+ * Why a policy is denied outright for a command whose repository target
+ * cannot be attributed (task `cfb6b390`). One text for the runtime
+ * decision and the dry-run preview, so the two cannot drift.
+ */
+export const OPAQUE_TARGET_REASON =
+  "ambiguous: this command names a repository directory through a path this gate cannot attribute " +
+  "(a backtick, an ANSI-C or locale quoted value, or a control or separator character), " +
+  "so the evidence of the current directory's repository cannot stand in for it. Name the repository " +
+  "with a plain path (`git -C <path>` or `cd <path> && ...`), or run the command from inside it";
 
 /**
  * Resolve the distinct `${REPO}`/`${BRANCH}`/`currentHeadSha` contexts a
@@ -1324,7 +1336,13 @@ export type AttributedContextsResult =
  * event (the existing per-context evaluation machinery below is
  * unchanged). `seg.effectiveTarget === null` (fully unattributable —
  * D-003) still adds ONLY the cwd context — there is no foreign target to
- * be additive WITH.
+ * be additive WITH. One kind of unattributable target is NOT left at the
+ * cwd context: a segment flagged `opaqueTarget` (task `cfb6b390`: a
+ * backtick, an ANSI-C or locale quoted value, or an unattributable value
+ * carrying a control character, in a `-C` / `--git-dir` / `env -C` value
+ * or in an argument of a recognised `cd` / `pushd`, or inherited from one)
+ * makes the whole policy fail closed (`{ kind: "opaque-target" }`), because the cwd context
+ * would then stand in for a nested repository the command really runs in.
  *
  * Demanding cwd unconditionally makes the engine structurally immune to
  * misattribution of the foreign target: no gap in `command-normalize.ts`'s
@@ -1442,6 +1460,17 @@ export function resolveAttributedContexts(
 
   for (const seg of segments) {
     if (!satisfying.has(seg)) continue;
+
+    if (seg.opaqueTarget === true) {
+      // Task `cfb6b390`: the segment names (or inherits) a repository
+      // directory through a value this module refuses to read, not just
+      // one it cannot attribute. Reading that as "cwd only" would let the
+      // outer repository's evidence stand in for a nested repository the
+      // command really runs in, so the policy fails closed instead. Every
+      // other unattributable form (a quoted path, a `~` prefix, a bare
+      // substitution) keeps the cwd-only fallback below.
+      return { kind: "opaque-target" };
+    }
 
     if (seg.effectiveTarget === null) {
       // D-003: fully unattributable — cwd only, no foreign target to be
@@ -1663,18 +1692,65 @@ function boundedContextsDecision(
   cwdBuiltins: ExtractBuiltins,
   evaluatedAt: string,
 ): PolicyDecision {
+  return failClosedContextsDecision(
+    policy,
+    event,
+    cwdBuiltins,
+    evaluatedAt,
+    `ambiguous: this command names at least ${distinctCount} distinct repository targets for this policy, ` +
+      `exceeding the ${MAX_ATTRIBUTED_CONTEXTS}-context bound — refusing to evaluate all of them`,
+    "(bounded: too many distinct attributed targets — no context queried)",
+  );
+}
+
+/**
+ * The one decision shape `intercept()` records when it refuses to evaluate
+ * a policy's attributed contexts (the bound above, an opaque target below):
+ * no ledger query, the policy's own enforcement mapped through
+ * `outcomeForFailedRequires`, and `extractValues` computed against the cwd
+ * builtins so a `ux:` / `producers:` block still renders.
+ */
+function failClosedContextsDecision(
+  policy: Policy,
+  event: ToolEvent,
+  cwdBuiltins: ExtractBuiltins,
+  evaluatedAt: string,
+  reason: string,
+  ledgerTag: string,
+): PolicyDecision {
   const extract = evaluateExtract(policy.trigger.extract ?? {}, buildEventContext(event), cwdBuiltins);
   return {
     policyName: policy.name,
     enforcement: policy.enforcement,
     outcome: outcomeForFailedRequires(policy.enforcement),
-    reason:
-      `ambiguous: this command names at least ${distinctCount} distinct repository targets for this policy, ` +
-      `exceeding the ${MAX_ATTRIBUTED_CONTEXTS}-context bound — refusing to evaluate all of them`,
+    reason,
     extractValues: extract.values,
-    ledgerTag: "(bounded: too many distinct attributed targets — no context queried)",
+    ledgerTag,
     evaluatedAt,
   };
+}
+
+/**
+ * Synthesise the single decision `intercept()` records for a policy whose
+ * command names a repository target `resolveAttributedContexts` refused to
+ * attribute (task `cfb6b390`). Same shape and enforcement mapping as
+ * `boundedContextsDecision`: no ledger query, `outcomeForFailedRequires` so
+ * a `block` policy denies and a `warn` policy warns.
+ */
+function opaqueTargetDecision(
+  policy: Policy,
+  event: ToolEvent,
+  cwdBuiltins: ExtractBuiltins,
+  evaluatedAt: string,
+): PolicyDecision {
+  return failClosedContextsDecision(
+    policy,
+    event,
+    cwdBuiltins,
+    evaluatedAt,
+    OPAQUE_TARGET_REASON,
+    "(opaque target: not attributable to a repository, no context queried)",
+  );
 }
 
 export async function intercept(
@@ -1760,20 +1836,25 @@ export async function intercept(
         )
       : { kind: "contexts", contexts: [{ builtins: options.builtins, currentHeadSha: options.currentHeadSha }] };
 
-    if (attributed.kind === "bounded") {
+    if (attributed.kind === "bounded" || attributed.kind === "opaque-target") {
       // D-013: fail CLOSED without querying the ledger for any of the
       // (too many) distinct targets — one synthetic decision, one audit
       // write, then move on to the next policy. Ledger-query count for
       // THIS policy stays at zero regardless of how many distinct targets
-      // the command actually names, instead of scaling with them.
+      // the command actually names, instead of scaling with them. The
+      // `opaque-target` result (task `cfb6b390`) takes the same path: one
+      // synthetic decision, no ledger query.
       const evaluatedAt = (options.now ?? new Date()).toISOString();
-      const decision = boundedContextsDecision(
-        policy,
-        event,
-        attributed.distinctCount,
-        options.builtins,
-        evaluatedAt,
-      );
+      const decision =
+        attributed.kind === "bounded"
+          ? boundedContextsDecision(
+              policy,
+              event,
+              attributed.distinctCount,
+              options.builtins,
+              evaluatedAt,
+            )
+          : opaqueTargetDecision(policy, event, options.builtins, evaluatedAt);
       decisions.push(decision);
       try {
         await options.ledger.record(decision, resolveSessionId(event.session_id));

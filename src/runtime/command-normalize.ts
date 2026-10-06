@@ -733,6 +733,32 @@ export interface CommandSegment {
    * documented NOT-SUPPORTED list in the module header.
    */
   effectiveTarget: string | null;
+  /**
+   * Present (and `true`) only when this segment's invocation names a
+   * repo-relocating target this module cannot attribute and refuses to
+   * read as "no target": a `-C` / `--git-dir` / `env -C` value of a git
+   * invocation, or an argument of a `cd` / `pushd` / `popd` that
+   * `scanCdFamily` recognises (flags, redirections, a `{` or `!`, the
+   * `builtin` / `command` / `eval` / `time` / compound-keyword prefixes and
+   * a `NAME=value` assignment in front of it are read through) is opaque
+   * (`isOpaqueTargetValue`: a backtick, an ANSI-C or locale quoted value,
+   * or an otherwise unattributable value carrying a control character), or
+   * it inherits a directory from an earlier `cd` whose value was (or
+   * composes with a relative value after one). `effectiveTarget` is `null`
+   * for such a segment, exactly as for every other unattributable form;
+   * this flag tells the gate that the cwd-only fallback would be a silent
+   * gap and the segment must fail closed instead (task `cfb6b390`).
+   * Omitted, not `false`, when not set.
+   *
+   * NOT flagged (the cwd-only fallback, a known gap left to the follow-up
+   * for the plain-name forms): the inheritance ends at a later
+   * reset-class `cd` (`cd -P X`, `pushd X`, `popd`, `cd -`) or a later
+   * `cd` whose own value is unattributable but not opaque (`cd "sub"`),
+   * and at a `||` (read as two `|` boundaries); a `cd` whose command word
+   * is backslash-escaped or partly quoted (`\cd`, `c''d`) or the zsh
+   * `chdir` builtin is not recognised as a `cd` at all.
+   */
+  opaqueTarget?: true;
 }
 
 /** A whitespace-delimited token plus its offset within the segment it came from. */
@@ -959,11 +985,14 @@ function isTildeTarget(dir: string): boolean {
  * extraction) rather than being rejected outright. The same is true of a
  * value containing a command-substitution marker (`$(` or a backtick) —
  * this module never resolves substitutions, so a value carrying one names
- * nothing this module can vouch for as a literal path. A
- * whitespace-containing path needs no separate check here: the
- * whitespace-splitting tokeniser never captures a value containing
- * whitespace as ONE token in the first place — it becomes a different,
- * unrecognised token sequence instead (see the module header's own
+ * nothing this module can vouch for as a literal path. A path containing
+ * a space or a tab needs no separate check here: the blank-splitting
+ * tokeniser (`tokenizeWithOffsets`, which splits at a space or a tab ONLY)
+ * never captures a value containing one as ONE token in the first place:
+ * it becomes a different, unrecognised token sequence instead (a path
+ * holding any OTHER whitespace-like character, such as U+2028 or U+00A0,
+ * stays one token and is judged by `isOpaqueTargetValue` below; see the
+ * module header's own
  * "quoted directory arguments containing whitespace" note), which for
  * `segmentViewOf` purposes simply fails to produce a recognised own target
  * at all (see `parseCdSegmentTarget` below for the `cd` case).
@@ -999,6 +1028,126 @@ function isUnattributableTargetValue(value: string): boolean {
     value.includes("`") ||
     value.endsWith("$")
   );
+}
+
+/**
+ * Characters no honest directory name carries and an adversarial one can
+ * use to defeat a static reading of it: every control character (C0, DEL,
+ * C1), every format character (zero-width and bidirectional controls such
+ * as U+200B..U+200F, U+202A..U+202E, U+2066..U+2069, the byte order mark),
+ * and the line and paragraph separators U+2028 / U+2029.
+ */
+const UNUSUAL_TARGET_CHAR_RE = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u;
+
+/**
+ * A repo-relocating target value this module will not attribute AND must
+ * not silently treat as "no target" (task `cfb6b390`). Every unattributable
+ * form (`isUnattributableTargetValue`, a `~` prefix) falls back to the cwd
+ * context on its own, which is the documented posture for a quoted or
+ * substituted value. Three shapes of that fallback are different in kind:
+ *
+ *   - a value carrying a backtick: unquoted or double-quoted it is a
+ *     command substitution (the directory is whatever the substitution
+ *     prints), single-quoted it is a literal directory name this module
+ *     does not decode. Either way the invocation really operates in some
+ *     nested repository, and the cwd fallback would let the outer
+ *     repository's evidence stand in for it;
+ *   - an ANSI-C quoted value (`$'...'`), which decodes escapes and so can
+ *     spell a backtick or a control character (`$'a\x60b'`), or a locale
+ *     quoted value (`$"..."`), whose text a locale catalogue can translate
+ *     into a different name (bash does not decode escapes there; the
+ *     rejection rests on the translation, not on an escape). zsh reads
+ *     `$"..."` as a literal `$` followed by a double-quoted string, so
+ *     there the flag over-blocks; the bash reading is the one that can
+ *     hide a name. Only a `$` that is itself unquoted and unescaped starts
+ *     either quoting (`unquotedDollarQuote` below): `'a$'` and `"a$"` are
+ *     plain quoted values ending in a literal `$`;
+ *   - an otherwise unattributable value that also carries a control,
+ *     format or separator character (`UNUSUAL_TARGET_CHAR_RE`): the
+ *     character has no purpose in a path except hiding which directory is
+ *     named.
+ *
+ * `segmentViewOf` marks such a segment (`CommandSegment.opaqueTarget`) and
+ * the gate fails closed on it instead of reading it as cwd-only. A value
+ * that carries a control character but is otherwise a plain unquoted path
+ * is NOT opaque: it is attributed to that literal directory, as before.
+ */
+function isOpaqueTargetValue(value: string, segmentTokens: readonly { text: string }[]): boolean {
+  if (value.includes("`")) return true;
+  // ANSI-C quoting (`$'...'`) decodes escapes (`$'a\x60b'` is a backtick,
+  // `$'a\x1bb'` an ESC), so the raw text of such a value shows neither of
+  // the characters above. Locale quoting (`$"..."`) decodes no escape, but
+  // its text is looked up in a message catalogue and may be replaced by a
+  // translation, so the raw text does not name the directory either.
+  if (
+    (value.includes("$'") || value.includes('$"')) &&
+    unquotedDollarQuote(value, segmentTokens)
+  ) {
+    return true;
+  }
+  return (
+    (isTildeTarget(value) || isUnattributableTargetValue(value)) &&
+    UNUSUAL_TARGET_CHAR_RE.test(value)
+  );
+}
+
+/**
+ * Walk one token's quoting the way bash reads it: whether a `$` that is
+ * neither quoted nor backslash-escaped is followed by `'` or `"` (ANSI-C or
+ * locale quoting starts there), and whether the token leaves a single- or
+ * double-quoted run open at its end.
+ */
+function scanDollarQuote(text: string): { found: boolean; open: boolean } {
+  // 0: unquoted, 1: inside '...', 2: inside "...".
+  let state = 0;
+  let found = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (state === 1) {
+      if (c === "'") state = 0;
+      continue;
+    }
+    if (c === "\\") {
+      i += 1;
+      continue;
+    }
+    if (state === 2) {
+      if (c === '"') state = 0;
+      continue;
+    }
+    if (c === "'") state = 1;
+    else if (c === '"') state = 2;
+    else if (c === "$" && (text[i + 1] === "'" || text[i + 1] === '"')) found = true;
+  }
+  return { found, open: state !== 0 };
+}
+
+/**
+ * Whether `value` (a token of the segment `segmentTokens` holds, or a
+ * slice of one after a `--chdir=` / `-C` / `--git-dir=` prefix) starts an
+ * ANSI-C or locale quoted run, judged conservatively: any doubt answers
+ * yes, so a doubtful value stays opaque.
+ *
+ *   - A `$(`, `${` or `$[` in the value opens a nested quoting context the
+ *     walk does not model (bash's `extquote` even reads `$'...'` inside
+ *     `"${x:-...}"`), so the value counts as opaque.
+ *   - The walk reads one token, and the tokeniser splits at a space or a
+ *     tab whether or not it sits inside quotes. A token that is not a whole
+ *     shell word can start inside a quoted run, which inverts the walk
+ *     (`'a b'$'\x60'` splits into `'a` and `b'$'\x60'`, and the second
+ *     token alone reads the real `$'` as quoted). The first piece of such
+ *     a split word always ends with a quote left open, so when ANY token of
+ *     the segment does, the value counts as opaque whenever it holds
+ *     `$'` or `$"` at all.
+ *
+ * Otherwise the token is a whole word and the walk is exact: `'a$'` and
+ * `"a$"` hold a literal `$` and are not opaque, `$'a'`, `x$"a"` and
+ * `'a'$'b'` are.
+ */
+function unquotedDollarQuote(value: string, segmentTokens: readonly { text: string }[]): boolean {
+  if (/\$[({[]/.test(value)) return true;
+  if (segmentTokens.some((t) => scanDollarQuote(t.text).open)) return true;
+  return scanDollarQuote(value).found;
 }
 
 /**
@@ -1054,6 +1203,81 @@ function classifyCdSegment(segmentText: string): CdSegmentClass {
 }
 
 /**
+ * Words that can stand in front of a `cd` / `pushd` / `popd` and leave it
+ * the command the shell runs: a brace group and negation (`{`, `!`), the
+ * builtin selectors and `eval`, `time`, and the compound-command keywords
+ * (`then`, `do`, ...). A leading `NAME=value` assignment (`CDPATH=. cd x`)
+ * is skipped separately. A subshell `(` never reaches this list: the
+ * segment splitter (`BOUNDARY_RE`, `AMP_BOUNDARY_RE`) ends a segment at
+ * every `(`, so `(cd x` arrives as the segment `cd x`.
+ */
+const CD_PREFIX_WORDS = new Set([
+  "{",
+  "!",
+  "builtin",
+  "command",
+  "eval",
+  "time",
+  "if",
+  "then",
+  "else",
+  "elif",
+  "do",
+  "while",
+  "until",
+]);
+
+/**
+ * Whether a segment's command word (after the prefix words above) is a
+ * directory-changing builtin (`cd`, `pushd`, `popd`), and whether any
+ * argument token after it is opaque (`isOpaqueTargetValue`). The check is
+ * deliberately not tied to the shapes `classifyCdSegment` reads a target
+ * from: a flagged `cd -P X`, `cd X >/dev/null`, `pushd X`, `builtin cd X`,
+ * `command cd X`, `eval cd X`, `CDPATH=. cd X` and a group `{ cd X` all
+ * move the shell to the directory the opaque token names, and a gate that
+ * only reads the bare `cd <path>` shape would hand every later segment to
+ * the cwd-only fallback (task `cfb6b390`). A segment whose command word is
+ * anything else (`echo cd 'a`b'`, `\cd X`, `c''d X`, zsh `chdir X`) is not
+ * read as a cd.
+ */
+function scanCdFamily(tokens: readonly Token[]): { isCd: boolean; opaque: boolean } {
+  let idx = 0;
+  let afterWrapper = false;
+  for (let guard = 0; guard < tokens.length && idx < tokens.length; guard++) {
+    const text = tokens[idx]!.text;
+    if (VAR_ASSIGN_RE.test(text)) {
+      idx = consumeAssignment(tokens, idx);
+      afterWrapper = false;
+      continue;
+    }
+    if (CD_PREFIX_WORDS.has(text)) {
+      idx += 1;
+      afterWrapper = text === "command" || text === "builtin" || text === "time";
+      continue;
+    }
+    // `command -p cd x`, `time -p cd x`: the wrapper's own flags.
+    if (afterWrapper && text.startsWith("-") && text.length > 1) {
+      idx += 1;
+      continue;
+    }
+    break;
+  }
+  const head = tokens[idx]?.text;
+  if (head === undefined) return { isCd: false, opaque: false };
+  // A command word may be wrapped in quotes (`"cd" x`, `'cd' x`); the name
+  // itself is what is compared. A backslash or a partly quoted word
+  // (`\cd x`, `c''d x`) is not unwrapped and does not read as a cd.
+  const name = head.replace(/^["']+/, "").replace(/["']+$/, "");
+  if (name !== "cd" && name !== "pushd" && name !== "popd") {
+    return { isCd: false, opaque: false };
+  }
+  for (let i = idx + 1; i < tokens.length; i++) {
+    if (isOpaqueTargetValue(tokens[i]!.text, tokens)) return { isCd: true, opaque: true };
+  }
+  return { isCd: true, opaque: false };
+}
+
+/**
  * Compute one segment's `ownTarget` / `effectiveTarget` (task `98ad072f`
  * groundwork, `segmentViewOf` / `CommandSegment`) and the cd-basis to
  * carry into the NEXT segment, from: this segment's own canonicalisation
@@ -1067,9 +1291,21 @@ function classifyCdSegment(segmentText: string): CdSegmentClass {
  */
 function computeSegmentTarget(
   segmentText: string,
-  canon: { identityTargetDir: string | null; identityTargetBase: string | null; isGit: boolean },
+  canon: {
+    identityTargetDir: string | null;
+    identityTargetBase: string | null;
+    isGit: boolean;
+    relocateOpaque: boolean;
+  },
   incomingCdBasis: string | null,
-): { ownTarget: string | null; effectiveTarget: string | null; outgoingCdBasis: string | null } {
+  incomingOpaqueBasis: boolean,
+): {
+  ownTarget: string | null;
+  effectiveTarget: string | null;
+  outgoingCdBasis: string | null;
+  opaque: boolean;
+  outgoingOpaqueBasis: boolean;
+} {
   // Same-invocation `env -C`/`--chdir` base + a RELATIVE own git
   // REPO-RELOCATING target (`-C`/`--git-dir` — orchestrator follow-up
   // after the initial T-002 round, still task `98ad072f` groundwork):
@@ -1101,10 +1337,19 @@ function computeSegmentTarget(
   // is the fix. A `cd`-shaped segment never reaches this branch: it never
   // matches `GIT_TOKEN_RE`, so `canon.isGit` is always `false` for one.
   if (canon.isGit && canon.identityTargetBase !== null) {
-    return { ownTarget: null, effectiveTarget: null, outgoingCdBasis: incomingCdBasis };
+    return {
+      ownTarget: null,
+      effectiveTarget: null,
+      outgoingCdBasis: incomingCdBasis,
+      opaque: canon.relocateOpaque || incomingOpaqueBasis,
+      outgoingOpaqueBasis: incomingOpaqueBasis,
+    };
   }
 
   const cdClass = classifyCdSegment(segmentText);
+  // Task `cfb6b390`: read the directory-changing builtin independently of
+  // the shapes `classifyCdSegment` takes a target from.
+  const cdFamily = scanCdFamily(tokenizeWithOffsets(segmentText));
 
   // D-014 (fix round, run 2026-08-02-per-repo-gate-scoping-redesign): a
   // segment that GENUINELY changes directory to somewhere this module
@@ -1119,18 +1364,41 @@ function computeSegmentTarget(
   // segment fall back to cwd-only evaluation — identical to the shipped
   // baseline for an unattributable form (D-003), never a fail-open.
   if (cdClass.kind === "reset") {
-    return { ownTarget: null, effectiveTarget: null, outgoingCdBasis: null };
+    // A reset leaves the running directory for one this module cannot
+    // name. When an argument is opaque (`cd -P X`, `pushd X`, `cd X
+    // >/dev/null`, ...) that directory is the one the opaque token names,
+    // so the segment and every later one that inherits it fail closed.
+    return {
+      ownTarget: null,
+      effectiveTarget: null,
+      outgoingCdBasis: null,
+      opaque: cdFamily.opaque,
+      outgoingOpaqueBasis: cdFamily.opaque,
+    };
   }
 
   const cdArg = cdClass.kind === "cd" ? cdClass.arg : null;
   const rawOwn = cdArg !== null ? cdArg : canon.isGit ? canon.identityTargetDir : null;
+  // Task `cfb6b390`: the value is opaque when it is the `cd` argument
+  // itself, or (for a git invocation) when ANY repo-relocating value on
+  // the invocation is (`canon.relocateOpaque` looks at every `-C` /
+  // `--git-dir` / `env -C` value, including the ones the single-value
+  // extraction above drops as ambiguous).
+  const ownOpaque = cdFamily.opaque || (canon.isGit && canon.relocateOpaque);
   const ownTarget =
     rawOwn !== null && !isTildeTarget(rawOwn) && !isUnattributableTargetValue(rawOwn)
       ? rawOwn
       : null;
 
   let effectiveTarget: string | null;
-  if (ownTarget === null) {
+  if (ownTarget !== null && !path.isAbsolute(ownTarget) && incomingOpaqueBasis) {
+    // Task `cfb6b390`: a relative value composed with a directory this
+    // module could not read (an opaque `cd`) names nothing it can vouch
+    // for, the same divergence as a relative value after a readable `cd`
+    // below. Without this, an empty `incomingCdBasis` (the opaque `cd`
+    // reset it) would read the relative value against the cwd.
+    effectiveTarget = null;
+  } else if (ownTarget === null) {
     // D-014: a recognised `cd <path>` segment whose OWN value came out
     // unattributable (tilde/quoted/substitution) RESETS rather than
     // inherits — the shell genuinely changed directory to somewhere this
@@ -1154,7 +1422,30 @@ function computeSegmentTarget(
   // never itself changes the shell's directory, so the incoming basis
   // passes through unchanged.
   const outgoingCdBasis = cdArg !== null ? effectiveTarget : incomingCdBasis;
-  return { ownTarget, effectiveTarget, outgoingCdBasis };
+
+  // Opaque-directory propagation (task `cfb6b390`). An opaque `cd`
+  // argument leaves the shell in a directory this module cannot name
+  // (`effectiveTarget` is `null` above, like every unattributable `cd`),
+  // and every later segment that inherits that directory, or names a
+  // relative target against it, runs there too. An absolute own target
+  // names its directory outright and a reset (above) leaves it, so those
+  // end the propagation. So does a later `cd` whose own value is
+  // unattributable but not opaque (`cd "sub"`: `cdArg` is set, so
+  // `inheritsOpaqueBasis` is false below): the shell is then in a
+  // directory relative to the opaque one, which falls back to the cwd. A
+  // known gap, left to the follow-up for the plain-name cwd-only forms.
+  const inheritsOpaqueBasis =
+    incomingOpaqueBasis &&
+    (ownTarget === null ? cdArg === null : !path.isAbsolute(ownTarget));
+  const opaque = ownOpaque || inheritsOpaqueBasis;
+  // A `cd` shape this module did not read a target from (`builtin cd X`,
+  // `eval cd X`, `CDPATH=. cd X`, a group `{ cd X`) still moves the shell
+  // to the directory an opaque argument names.
+  const outgoingOpaqueBasis =
+    cdArg !== null
+      ? cdFamily.opaque || inheritsOpaqueBasis
+      : incomingOpaqueBasis || cdFamily.opaque;
+  return { ownTarget, effectiveTarget, outgoingCdBasis, opaque, outgoingOpaqueBasis };
 }
 
 /**
@@ -1553,6 +1844,9 @@ function segmentAndCanonicalize(
   // this never reads or writes them, and they never read or write this.
   const segments: CommandSegment[] | null = collectSegments ? [] : null;
   let cdBasis: string | null = null;
+  // Task `cfb6b390`: whether the running directory came from a `cd` whose
+  // value this module refuses to read (see `isOpaqueTargetValue`).
+  let opaqueBasis = false;
 
   // A leading `cd <dir> &&|;` prefix, parsed ONCE up front (G1 fix,
   // review round 2, 2026-07-27) instead of the two separate calls the
@@ -1620,13 +1914,20 @@ function segmentAndCanonicalize(
       //     over-eager reset here can only make a later segment fall back
       //     to cwd-only, never a fail-open.
       const incomingBasis = precedingBoundaryToken === "|" ? null : cdBasis;
-      const seg = computeSegmentTarget(segmentText, result, incomingBasis);
+      const incomingOpaqueBasis = precedingBoundaryToken === "|" ? false : opaqueBasis;
+      const seg = computeSegmentTarget(segmentText, result, incomingBasis, incomingOpaqueBasis);
       segments.push({
         text: result.text,
         ownTarget: seg.ownTarget,
         effectiveTarget: seg.effectiveTarget,
+        ...(seg.opaque ? { opaqueTarget: true as const } : {}),
       });
       cdBasis = segmentText.includes(")") ? null : seg.outgoingCdBasis;
+      // The opaque-directory flag follows the cd-basis through the same
+      // two boundary rules above (it never crosses a bare `|`, and a
+      // subshell close ends it), so an opaque `cd` reaches exactly the
+      // segments a readable one would have reached.
+      opaqueBasis = segmentText.includes(")") ? false : seg.outgoingOpaqueBasis;
     }
     if (result.isGit) {
       if (result.targetDir === null) {
@@ -2056,10 +2357,22 @@ function consumeAssignment(tokens: readonly WrapperPeelToken[], idx: number): nu
   return idx + 1;
 }
 
-/** Split a segment into whitespace-delimited tokens with their offsets. */
+/**
+ * Split a segment into blank-delimited tokens with their offsets. A token
+ * ends at a space or a tab ONLY, the two characters a shell treats as
+ * blanks between words. The earlier `\S+` also split at every other
+ * character the regex engine counts as whitespace (U+2028, U+00A0, a
+ * carriage return, a form feed, ...), which a shell hands to the command
+ * as ordinary word characters: `git -C vendor/lib<U+2028>y log` is a `-C`
+ * target `vendor/lib<U+2028>y` and the subcommand `log` for the shell, but
+ * the over-split read target `vendor/lib` and subcommand `y`, so the
+ * command no longer looked like `git log` at all and no policy matched it
+ * (task `cfb6b390`). Reading the same word the shell reads keeps the
+ * subcommand and the target that name the gated repository intact.
+ */
 function tokenizeWithOffsets(s: string): Token[] {
   const out: Token[] = [];
-  const re = /\S+/g;
+  const re = /[^ \t]+/g;
   let m: RegExpExecArray | null;
   while ((m = re.exec(s)) !== null) {
     out.push({ text: m[0], start: m.index, end: m.index + m[0].length });
@@ -2083,6 +2396,14 @@ export interface WrapperPeelResult {
    * d03af8f6, review round 3) has no analogous need and ignores it.
    */
   envTargetDir: string | null;
+  /**
+   * Task `cfb6b390`: some `env -C` / `--chdir` value in the chain is
+   * opaque (`isOpaqueTargetValue`), whichever of them `envTargetDir` kept
+   * and whether or not it was `~`-prefixed. Consumed only by
+   * `canonicalizeSegment`; the other callers of this function
+   * (`deletion-target-resolve.ts`, `destructive-shell-floor.ts`) ignore it.
+   */
+  envOpaque: boolean;
 }
 
 /**
@@ -2123,6 +2444,7 @@ export function peelWrapperPrefixes(
 ): WrapperPeelResult {
   let idx = startIdx;
   let envTargetDir: string | null = null;
+  let envOpaque = false;
   for (let guard = 0; guard < tokens.length; guard++) {
     const head = tokens[idx]?.text;
     if (head === undefined) break;
@@ -2134,6 +2456,7 @@ export function peelWrapperPrefixes(
       const r = peelEnv(tokens, idx + 1);
       idx = r.idx;
       if (envTargetDir === null) envTargetDir = r.targetDir;
+      if (r.opaque) envOpaque = true;
       continue;
     }
     if (head === "command") {
@@ -2178,7 +2501,7 @@ export function peelWrapperPrefixes(
     }
     break;
   }
-  return { idx, envTargetDir };
+  return { idx, envTargetDir, envOpaque };
 }
 
 /**
@@ -2217,6 +2540,16 @@ function canonicalizeSegment(segmentText: string): {
   /** Same relationship to `targetBase` that `identityTargetDir` has to `targetDir`. */
   identityTargetBase: string | null;
   isGit: boolean;
+  /**
+   * Task `cfb6b390`: some repo-relocating value on this git invocation
+   * (`-C`, `--git-dir`, or the wrapping `env -C` / `--chdir`) is opaque
+   * (`isOpaqueTargetValue`). Looks at EVERY such value, a `~`-prefixed one
+   * included and a repeated `-C` / `env -C` included, not only the one
+   * `identityTargetDir` kept, so an ambiguous multi-flag invocation cannot
+   * hide an opaque value behind the multi-flag lock. Always `false` for a
+   * segment that is not a recognised git invocation.
+   */
+  relocateOpaque: boolean;
 } {
   const tokens = tokenizeWithOffsets(segmentText);
   if (tokens.length === 0) {
@@ -2227,6 +2560,7 @@ function canonicalizeSegment(segmentText: string): {
       identityTargetDir: null,
       identityTargetBase: null,
       isGit: false,
+      relocateOpaque: false,
     };
   }
 
@@ -2243,6 +2577,7 @@ function canonicalizeSegment(segmentText: string): {
       identityTargetDir: null,
       identityTargetBase: null,
       isGit: false,
+      relocateOpaque: false,
     };
   }
 
@@ -2260,6 +2595,7 @@ function canonicalizeSegment(segmentText: string): {
         identityTargetDir: null,
         identityTargetBase: null,
         isGit: false,
+        relocateOpaque: false,
       };
     }
 
@@ -2321,6 +2657,8 @@ function canonicalizeSegment(segmentText: string): {
       identityTargetDir,
       identityTargetBase,
       isGit: true,
+      relocateOpaque:
+        gitOpts.relocateOpaque || peeled.envOpaque,
     };
   }
 
@@ -2360,6 +2698,7 @@ function canonicalizeSegment(segmentText: string): {
         identityTargetDir: null,
         identityTargetBase: null,
         isGit: false,
+        relocateOpaque: false,
       };
     }
     const rewritten = tokens
@@ -2373,6 +2712,7 @@ function canonicalizeSegment(segmentText: string): {
       identityTargetDir: null,
       identityTargetBase: null,
       isGit: false,
+      relocateOpaque: false,
     };
   }
 
@@ -2383,6 +2723,7 @@ function canonicalizeSegment(segmentText: string): {
     identityTargetDir: null,
     identityTargetBase: null,
     isGit: false,
+    relocateOpaque: false,
   };
 }
 
@@ -2398,9 +2739,14 @@ function canonicalizeSegment(segmentText: string): {
 function peelEnv(
   tokens: readonly WrapperPeelToken[],
   startIdx: number,
-): { idx: number; targetDir: string | null } {
+): { idx: number; targetDir: string | null; opaque: boolean } {
   let idx = startIdx;
   let targetDir: string | null = null;
+  // Task `cfb6b390`: set when ANY `-C` / `--chdir` value is opaque
+  // (`isOpaqueTargetValue`), a `~`-prefixed value included and a later
+  // value included: `env` honours the LAST `-C`, while `targetDir` above
+  // keeps the first, so the single-value extraction cannot speak for them.
+  let opaque = false;
   while (idx < tokens.length) {
     const t = tokens[idx]!.text;
     // `-S`/`--split-string` re-parses a single string argument into a
@@ -2415,6 +2761,7 @@ function peelEnv(
     if (t === "-C" || t === "--chdir") {
       const dir = tokens[idx + 1]?.text;
       if (dir === undefined) break;
+      if (isOpaqueTargetValue(dir, tokens)) opaque = true;
       if (targetDir === null && !isTildeTarget(dir)) targetDir = dir;
       idx += 2;
       continue;
@@ -2430,12 +2777,14 @@ function peelEnv(
       continue;
     }
     if (t.startsWith("-C") && t.length > 2) {
+      if (isOpaqueTargetValue(t.slice(2), tokens)) opaque = true;
       if (targetDir === null && !isTildeTarget(t.slice(2))) targetDir = t.slice(2);
       idx += 1;
       continue;
     }
     if (t.startsWith("--chdir=")) {
       const dir = t.slice("--chdir=".length);
+      if (isOpaqueTargetValue(dir, tokens)) opaque = true;
       if (targetDir === null && !isTildeTarget(dir)) targetDir = dir;
       idx += 1;
       continue;
@@ -2462,7 +2811,7 @@ function peelEnv(
     }
     break;
   }
-  return { idx, targetDir };
+  return { idx, targetDir, opaque };
 }
 
 /** Peel `command`'s own flags (e.g. `-p`, `-v`, `-V`, `--`). */
@@ -2743,12 +3092,21 @@ function parentIfDotGit(dir: string): string {
 function peelGitGlobalOptions(
   tokens: Token[],
   startIdx: number,
-): { idx: number; targetDir: string | null; relocateTargetDir: string | null; malformed: boolean } {
+): {
+  idx: number;
+  targetDir: string | null;
+  relocateTargetDir: string | null;
+  relocateOpaque: boolean;
+  malformed: boolean;
+} {
   let idx = startIdx;
   let targetDir: string | null = null;
   let relocateTargetDir: string | null = null;
   let relocateResolvedCount = 0;
   let relocateAmbiguous = false;
+  // Task `cfb6b390`: set when ANY `-C` / `--git-dir` value is opaque,
+  // independently of the single-value bookkeeping above.
+  let relocateOpaque = false;
 
   // D-018: record one repo-relocating flag's resolved value (`null` for a
   // `~`-prefixed value, which — same as the pre-fix code — never sets or
@@ -2775,21 +3133,23 @@ function peelGitGlobalOptions(
     const t = tokens[idx]!.text;
     if (t === "-C") {
       const dir = tokens[idx + 1]?.text;
-      if (dir === undefined) return { idx, targetDir, relocateTargetDir, malformed: true };
+      if (dir === undefined) return { idx, targetDir, relocateTargetDir, relocateOpaque, malformed: true };
       if (targetDir === null && !isTildeTarget(dir)) targetDir = dir;
+      if (isOpaqueTargetValue(dir, tokens)) relocateOpaque = true;
       noteRelocatingOption(isTildeTarget(dir) ? null : dir);
       idx += 2;
       continue;
     }
     if (t === "-c") {
-      if (tokens[idx + 1] === undefined) return { idx, targetDir, relocateTargetDir, malformed: true };
+      if (tokens[idx + 1] === undefined) return { idx, targetDir, relocateTargetDir, relocateOpaque, malformed: true };
       idx += 2;
       continue;
     }
     if (t === "--git-dir") {
       const dir = tokens[idx + 1]?.text;
-      if (dir === undefined) return { idx, targetDir, relocateTargetDir, malformed: true };
+      if (dir === undefined) return { idx, targetDir, relocateTargetDir, relocateOpaque, malformed: true };
       if (targetDir === null && !isTildeTarget(dir)) targetDir = parentIfDotGit(dir);
+      if (isOpaqueTargetValue(dir, tokens)) relocateOpaque = true;
       noteRelocatingOption(isTildeTarget(dir) ? null : parentIfDotGit(dir));
       idx += 2;
       continue;
@@ -2797,6 +3157,7 @@ function peelGitGlobalOptions(
     if (t.startsWith("--git-dir=")) {
       const dir = t.slice("--git-dir=".length);
       if (targetDir === null && !isTildeTarget(dir)) targetDir = parentIfDotGit(dir);
+      if (isOpaqueTargetValue(dir, tokens)) relocateOpaque = true;
       noteRelocatingOption(isTildeTarget(dir) ? null : parentIfDotGit(dir));
       idx += 1;
       continue;
@@ -2806,7 +3167,7 @@ function peelGitGlobalOptions(
       // (unchanged, unconsumed by any gate) but deliberately NEVER
       // `relocateTargetDir` — see this function's own doc comment.
       const dir = tokens[idx + 1]?.text;
-      if (dir === undefined) return { idx, targetDir, relocateTargetDir, malformed: true };
+      if (dir === undefined) return { idx, targetDir, relocateTargetDir, relocateOpaque, malformed: true };
       if (targetDir === null && !isTildeTarget(dir)) targetDir = dir;
       idx += 2;
       continue;
@@ -2826,7 +3187,7 @@ function peelGitGlobalOptions(
       continue;
     }
     if (t === "--namespace") {
-      if (tokens[idx + 1] === undefined) return { idx, targetDir, relocateTargetDir, malformed: true };
+      if (tokens[idx + 1] === undefined) return { idx, targetDir, relocateTargetDir, relocateOpaque, malformed: true };
       idx += 2;
       continue;
     }
@@ -2840,5 +3201,5 @@ function peelGitGlobalOptions(
     }
     break;
   }
-  return { idx, targetDir, relocateTargetDir, malformed: false };
+  return { idx, targetDir, relocateTargetDir, relocateOpaque, malformed: false };
 }

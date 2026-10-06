@@ -596,6 +596,14 @@ describe("dry-run: additive per-repo demands for a target-naming command", () =>
     expect(h.ledgerQueries[0]).not.toMatch(/preflight:repo-/);
   });
 
+  it("reports one opaque-target text instead of a cwd tag for a backtick -C target (task cfb6b390)", () => {
+    const a = makeRepo("repo-a", "main");
+    const h = hit("git -C 'vendor/lib`x`y' log", a, "preflight-before-investigation");
+    expect(h.ledgerQueries).toHaveLength(1);
+    expect(h.ledgerQueries[0]).toContain("opaque target");
+    expect(h.ledgerQueries[0]).not.toMatch(/preflight:repo-a/);
+  });
+
   it("treats an explicit REPO override as an override in an attributed context", () => {
     const a = makeRepo("repo-a", "main");
     const b = makeRepo("repo-b", "main");
