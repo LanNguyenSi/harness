@@ -989,7 +989,7 @@ function emptyBranchMessage(repo: string, refused: readonly string[] | undefined
     // names `resolveGitContext` reports (`.git`, `HEAD`, `commondir`, ...).
     const files = sanitizeEnvelopeReason(refused.join(", "));
     return (
-      `no branch could be determined for repository \`${name}\`: a git file there (${files}) is present but is not a readable regular file (a FIFO, a device, a directory, a symlink that does not resolve, or a file over the read cap), or sits in a git directory that has no HEAD to read, so the branch-scoped evidence this policy checks cannot be looked up. ` +
+      `no branch could be determined for repository \`${name}\`: a git file there (${files}) is present but is not a readable regular file (a FIFO, a device, a directory, a symlink that does not resolve, or a file over the read cap), or is a HEAD holding neither a ref nor an object id, or sits in a git directory that has no HEAD to read, so the branch-scoped evidence this policy checks cannot be looked up. ` +
       "This is a damaged repository state, not a detached HEAD: switching branches will not clear it. The operator has to repair or remove that entry, then retry the command."
     );
   }

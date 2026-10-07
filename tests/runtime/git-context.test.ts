@@ -204,9 +204,9 @@ describe("resolveGitContext", () => {
     expect(resolveGitContext("")).toEqual({ repo: "", branch: "", sha: "" });
   });
 
-  it("rejects a HEAD file whose sha is non-hex (treats as unresolved)", () => {
+  it("refuses a HEAD file whose content is neither a ref nor an object id (not read as a detached HEAD)", () => {
     const repo = makeRepo(tmpDir(), "bad-sha", "not-a-sha-at-all");
-    expect(resolveGitContext(repo)).toEqual({ repo: "bad-sha", branch: "", sha: "" });
+    expect(resolveGitContext(repo)).toEqual({ repo: "bad-sha", branch: "", sha: "", refused: ["HEAD"] });
   });
 
   it("resolves an attached branch in a linked worktree via commondir (refs only in the common dir)", () => {
@@ -546,13 +546,21 @@ describe.skipIf(process.platform === "win32")(
       expect(resolveGitContext(nested)).toEqual({ repo: "inner-worktree", branch: "", sha: "", refused: ["HEAD"] });
     });
 
-    it("control: a `.git` directory whose HEAD is a symlink that RESOLVES is followed, not refused", () => {
+    it("a `.git` directory whose HEAD is a symlink to an absolute path is refused even when it resolves (git takes only `refs/heads/<name>` link text)", () => {
       const { nested } = outerRepoWithNestedWorktree();
       fs.mkdirSync(path.join(nested, ".git"));
       fs.writeFileSync(path.join(nested, "real-head"), "ref: refs/heads/via-link\n");
       fs.symlinkSync(path.join(nested, "real-head"), path.join(nested, ".git", "HEAD"));
-      expect(resolveGitContext(nested)).toMatchObject({ repo: "inner-worktree", branch: "via-link" });
-      expect(resolveGitContext(nested).refused).toBeUndefined();
+      expect(findGitEntry(nested)).toEqual({ worktreeRoot: nested, gitDir: "", refused: "HEAD" });
+      expect(resolveGitContext(nested)).toEqual({ repo: "inner-worktree", branch: "", sha: "", refused: ["HEAD"] });
+    });
+
+    it("control: a `.git` directory whose HEAD is a symlink with link text `refs/heads/<name>` names that branch", () => {
+      const { nested } = outerRepoWithNestedWorktree();
+      fs.mkdirSync(path.join(nested, ".git", "refs", "heads"), { recursive: true });
+      fs.writeFileSync(path.join(nested, ".git", "refs", "heads", "via-link"), `${FAKE_SHA}\n`);
+      fs.symlinkSync("refs/heads/via-link", path.join(nested, ".git", "HEAD"));
+      expect(resolveGitContext(nested)).toEqual({ repo: "inner-worktree", branch: "via-link", sha: FAKE_SHA });
     });
 
     it.skipIf(process.getuid?.() === 0)(
@@ -678,6 +686,167 @@ describe.skipIf(process.platform === "win32")(
     );
   },
 );
+
+describe.skipIf(process.platform === "win32")(
+  "resolveGitContext: a HEAD git does not accept is refused, not walked past (task b56d95d3)",
+  () => {
+    // git takes a directory for a repository only when its HEAD holds
+    // `ref: refs/<path>` or an object id (or is a symlink whose link text is
+    // `refs/<...>`); for anything else it walks up to the enclosing
+    // repository. Present-but-unresolvable fails closed here instead.
+    function nestedDotGitDir(head: string): string {
+      const root = tmpDir();
+      const outer = makeRepo(root, "outer", "ref: refs/heads/feat/outer", FAKE_SHA);
+      const nested = path.join(outer, "inner-worktree");
+      fs.mkdirSync(path.join(nested, ".git"), { recursive: true });
+      fs.writeFileSync(path.join(nested, ".git", "HEAD"), head);
+      return nested;
+    }
+
+    const REFUSED_CONTENT: Array<[string, string]> = [
+      ["an empty HEAD", ""],
+      ["a whitespace-only HEAD", "  \n\t\n"],
+      ["a garbage HEAD", "garbage\n"],
+      ["a HEAD naming no branch (`ref: refs/heads/`)", "ref: refs/heads/\n"],
+      ["a HEAD naming a ref outside refs/ (`ref: HEAD`)", "ref: HEAD\n"],
+      ["a HEAD whose ref ends in a slash", "ref: refs/heads/feat/\n"],
+      ["a HEAD holding a 39-hex id", `${FAKE_SHA.slice(1)}\n`],
+    ];
+
+    it.each(REFUSED_CONTENT)("%s in a `.git` directory is refused (naming HEAD)", (_name, head) => {
+      const nested = nestedDotGitDir(head);
+      expect(findGitEntry(nested)).toEqual({ worktreeRoot: nested, gitDir: "", refused: "HEAD" });
+      expect(resolveGitContext(nested)).toEqual({ repo: "inner-worktree", branch: "", sha: "", refused: ["HEAD"] });
+    });
+
+    it.each(REFUSED_CONTENT)("%s in a `gitdir:` target is refused (naming HEAD once), keeping the pointer's path", (_name, head) => {
+      const { worktree, wtGitDir } = makeLinkedWorktree(tmpDir(), { commondir: "../.." });
+      fs.writeFileSync(path.join(wtGitDir, "HEAD"), head);
+      expect(findGitEntry(worktree)).toEqual({ worktreeRoot: worktree, gitDir: wtGitDir, refused: "HEAD" });
+      expect(resolveGitContext(worktree)).toEqual({ repo: "linked-worktree", branch: "", sha: "", refused: ["HEAD"] });
+    });
+
+    it("a 64-hex (SHA-256) detached HEAD is accepted, not refused (no 40-char sha to report)", () => {
+      const nested = nestedDotGitDir(`${"ab".repeat(32)}\n`);
+      expect(findGitEntry(nested)).toEqual({ worktreeRoot: nested, gitDir: path.join(nested, ".git") });
+      expect(resolveGitContext(nested)).toEqual({ repo: "inner-worktree", branch: "", sha: "" });
+    });
+
+    it("an upper-case 40-hex detached HEAD is accepted (git reads hex case-insensitively)", () => {
+      const nested = nestedDotGitDir(`${FAKE_SHA.toUpperCase()}\n`);
+      expect(resolveGitContext(nested)).toEqual({ repo: "inner-worktree", branch: "", sha: "" });
+    });
+
+    it("a reftable repository's placeholder HEAD (`ref: refs/heads/.invalid`) is accepted as before", () => {
+      const nested = nestedDotGitDir("ref: refs/heads/.invalid\n");
+      expect(findGitEntry(nested)?.refused).toBeUndefined();
+      expect(resolveGitContext(nested)).toEqual({ repo: "inner-worktree", branch: ".invalid", sha: "" });
+    });
+
+    it("a HEAD naming a ref outside refs/heads/ is accepted with no branch", () => {
+      const nested = nestedDotGitDir("ref: refs/tags/v1\n");
+      expect(resolveGitContext(nested)).toEqual({ repo: "inner-worktree", branch: "", sha: "" });
+    });
+
+    it("control: a 40-hex detached HEAD and `ref: refs/heads/<name>` stay accepted", () => {
+      expect(resolveGitContext(nestedDotGitDir(`${FAKE_SHA}\n`))).toEqual({ repo: "inner-worktree", branch: "", sha: FAKE_SHA });
+      expect(resolveGitContext(nestedDotGitDir("ref:refs/heads/feat/x\n"))).toEqual({ repo: "inner-worktree", branch: "feat/x", sha: "" });
+    });
+
+    it.each([
+      ["a FIFO", (head: string) => execFileSync("mkfifo", [head])],
+      ["a directory", (head: string) => fs.mkdirSync(head)],
+    ])("a `gitdir:` target whose HEAD is %s resolves to refused exactly ['HEAD'] (the entry and the HEAD read name it once)", (_name, plant) => {
+      const { worktree, wtGitDir } = makeLinkedWorktree(tmpDir(), { commondir: "../.." });
+      fs.rmSync(path.join(wtGitDir, "HEAD"));
+      plant(path.join(wtGitDir, "HEAD"));
+      expect(findGitEntry(worktree)).toEqual({ worktreeRoot: worktree, gitDir: wtGitDir, refused: "HEAD" });
+      expect(resolveGitContext(worktree)).toEqual({ repo: "linked-worktree", branch: "", sha: "", refused: ["HEAD"] });
+    });
+  },
+);
+
+describe.skipIf(process.platform === "win32")("resolveGitContext: a symlinked HEAD (core.preferSymlinkRefs)", () => {
+  function dotGitWithLinkHead(linkText: string): { repo: string; gitDir: string } {
+    const root = tmpDir();
+    const outer = makeRepo(root, "outer", "ref: refs/heads/feat/outer", FAKE_SHA);
+    const repo = path.join(outer, "inner");
+    const gitDir = path.join(repo, ".git");
+    fs.mkdirSync(path.join(gitDir, "refs", "heads"), { recursive: true });
+    fs.symlinkSync(linkText, path.join(gitDir, "HEAD"));
+    return { repo, gitDir };
+  }
+
+  it("link text `refs/heads/<name>` is that branch, its sha read from the loose ref", () => {
+    const { repo, gitDir } = dotGitWithLinkHead("refs/heads/feat/sym");
+    fs.mkdirSync(path.join(gitDir, "refs", "heads", "feat"), { recursive: true });
+    fs.writeFileSync(path.join(gitDir, "refs", "heads", "feat", "sym"), `${FAKE_SHA}\n`);
+    expect(resolveGitContext(repo)).toEqual({ repo: "inner", branch: "feat/sym", sha: FAKE_SHA });
+  });
+
+  it("a PACKED branch (the link dangles) is still that branch, its sha read from packed-refs", () => {
+    const { repo, gitDir } = dotGitWithLinkHead("refs/heads/packed");
+    fs.writeFileSync(path.join(gitDir, "packed-refs"), `# pack-refs with: peeled fully-peeled sorted\n${ALT_SHA} refs/heads/packed\n`);
+    expect(fs.existsSync(path.join(gitDir, "HEAD"))).toBe(false);
+    expect(findGitEntry(repo)).toEqual({ worktreeRoot: repo, gitDir });
+    expect(resolveGitContext(repo)).toEqual({ repo: "inner", branch: "packed", sha: ALT_SHA });
+  });
+
+  it("an UNBORN branch (no ref anywhere) is that branch with no sha", () => {
+    const { repo } = dotGitWithLinkHead("refs/heads/unborn");
+    expect(resolveGitContext(repo)).toEqual({ repo: "inner", branch: "unborn", sha: "" });
+  });
+
+  it.each([
+    ["a ref outside refs/heads/", "refs/tags/v1"],
+    ["`refs/heads/` naming no branch", "refs/heads/"],
+    ["a relative path that is not a ref", "../outside"],
+    ["an absolute path", "/nonexistent/HEAD"],
+  ])("other link text (%s) is refused, naming HEAD", (_name, linkText) => {
+    const { repo } = dotGitWithLinkHead(linkText);
+    expect(findGitEntry(repo)).toEqual({ worktreeRoot: repo, gitDir: "", refused: "HEAD" });
+    expect(resolveGitContext(repo)).toEqual({ repo: "inner", branch: "", sha: "", refused: ["HEAD"] });
+  });
+
+  it("a real git repository written with core.preferSymlinkRefs resolves its branch, loose and packed", (ctx) => {
+    const repo = path.join(tmpDir(), "symrefs");
+    fs.mkdirSync(repo);
+    const env: NodeJS.ProcessEnv = {
+      ...process.env,
+      GIT_CONFIG_GLOBAL: "/dev/null",
+      GIT_CONFIG_NOSYSTEM: "1",
+      GIT_AUTHOR_NAME: "t",
+      GIT_AUTHOR_EMAIL: "t@example.invalid",
+      GIT_COMMITTER_NAME: "t",
+      GIT_COMMITTER_EMAIL: "t@example.invalid",
+    };
+    for (const key of ["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR"]) delete env[key];
+    const git = (...args: string[]): string =>
+      execFileSync("git", ["-c", "core.preferSymlinkRefs=true", "-c", "init.defaultBranch=main", ...args], {
+        cwd: repo,
+        env,
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"],
+      }).trim();
+    git("init", "-q");
+    fs.writeFileSync(path.join(repo, "f"), "x\n");
+    git("add", "f");
+    git("commit", "-qm", "c");
+    git("checkout", "-q", "-b", "feat/sym");
+    const head = path.join(repo, ".git", "HEAD");
+    if (!fs.lstatSync(head).isSymbolicLink()) {
+      ctx.skip();
+      return;
+    }
+    expect(fs.readlinkSync(head)).toBe("refs/heads/feat/sym");
+    const sha = git("rev-parse", "HEAD");
+    expect(resolveGitContext(repo)).toEqual({ repo: "symrefs", branch: "feat/sym", sha });
+    git("pack-refs", "--all");
+    expect(fs.existsSync(path.join(repo, ".git", "refs", "heads", "feat", "sym"))).toBe(false);
+    expect(git("symbolic-ref", "HEAD")).toBe("refs/heads/feat/sym");
+    expect(resolveGitContext(repo)).toEqual({ repo: "symrefs", branch: "feat/sym", sha });
+  });
+});
 
 describe("resolveOriginHeadBase in a linked worktree", () => {
   it("resolves the default branch from a linked worktree's common dir, not its private gitdir (already routed through resolveCommonDir by its callers)", () => {

@@ -50,7 +50,9 @@ export interface GitRepoContext {
    * `refs/heads/<branch>`, `packed-refs`, `commondir`, named relative to the
    * git directory), or a node that is neither a directory nor a regular file
    * stood at `.git` itself, or a `.git` pointer file was oversized or
-   * unreadable (the lookup then stops there instead of walking
+   * unreadable, or a `HEAD` held neither a ref nor an object id or was a
+   * symlink whose link text is not `refs/heads/<name>` (the lookup then
+   * stops there instead of walking
    * up to an enclosing repository, so it never resolves THAT repository's
    * branch for this checkout). The affected fields stay `""` exactly as they do for a
    * missing file, so a caller that only treats `""` as "unknown" is
@@ -72,7 +74,7 @@ const EMPTY: GitRepoContext = { repo: "", branch: "", sha: "" };
  */
 export function describeRefusedGitFiles(ctx: Pick<GitRepoContext, "refused">): string {
   if (ctx.refused === undefined || ctx.refused.length === 0) return "";
-  return ` [git file refused, present but not a readable regular file (or missing from a git directory, or a link that does not resolve), or over the read cap: ${ctx.refused.join(", ")}]`;
+  return ` [git file refused, present but not a readable regular file (or missing from a git directory, or a link that does not resolve), over the read cap, or a HEAD holding neither a ref nor an object id: ${ctx.refused.join(", ")}]`;
 }
 
 /**
@@ -119,9 +121,23 @@ function readGitFile(
 // A `.git` *file* (linked worktree / submodule) points at the real git
 // dir: `gitdir: <path>`.
 const GITDIR_RE = /^gitdir:\s*(.+)$/;
-// `.git/HEAD` on a branch: `ref: refs/heads/<branch>`. A detached HEAD
-// holds a raw SHA instead and matches nothing here.
-const HEAD_REF_RE = /^ref:\s*refs\/heads\/(.+)$/;
+// A `HEAD` git accepts holds a symbolic ref, `ref: refs/<path>` (on a branch
+// `ref: refs/heads/<branch>`; a reftable repository keeps the placeholder
+// `ref: refs/heads/.invalid` there) naming a non-empty path that does not end
+// in `/`, or a raw object id (40 hex chars for SHA-1, 64 for SHA-256) on a detached HEAD.
+// Anything else (empty, whitespace, garbage, `ref: refs/heads/` naming no
+// branch) is not a `HEAD`: git does not take such a directory for a
+// repository at all and walks up to an enclosing one, so this lookup refuses
+// it instead (task b56d95d3, operator decision).
+// Like git's own HEAD check, the ref name is not validated further: a branch
+// name git would refuse to create (one with a space, say) still reads as that
+// branch, and the callers that use it validate it themselves.
+const HEAD_SYMREF_RE = /^ref:\s*(refs\/.*[^/])$/;
+const HEAD_OBJECT_ID_RE = /^(?:[0-9a-fA-F]{40}|[0-9a-fA-F]{64})$/;
+// A `HEAD` symlink (written under the legacy `core.preferSymlinkRefs`) names
+// its branch in the link text itself, relative to the git directory.
+const HEAD_LINK_RE = /^refs\/heads\/(.*[^/])$/;
+const BRANCH_REF_PREFIX = "refs/heads/";
 // A loose ref or detached-HEAD sha is exactly 40 lowercase hex chars.
 const SHA_RE = /^[0-9a-f]{40}$/;
 
@@ -138,8 +154,11 @@ export interface GitEntry {
    * file), a `.git` directory that cannot be searched, a `.git` file without
    * a `gitdir:` line, or a `gitdir:` pointer whose target is not a
    * directory; `"HEAD"` when the git directory's `HEAD` (a `.git` directory's
-   * or a pointer target's) is missing, a link that does not resolve, or not
-   * a regular file. Absent
+   * or a pointer target's) is missing, a symlink whose link text is not
+   * `refs/heads/<name>`, not a regular file, or a regular file whose trimmed
+   * content is neither `ref: refs/<path>` nor a 40- or 64-hex object id
+   * (empty, whitespace only, garbage, `ref: refs/heads/` naming no branch).
+   * Absent
    * otherwise. `gitDir` is `""` in both cases, exactly as for any other
    * unreadable `.git` file, except for a `gitdir:` pointer whose target does
    * not resolve, where it keeps the pointer's path (nothing is there to read).
@@ -147,29 +166,74 @@ export interface GitEntry {
   refused?: ".git" | "HEAD";
 }
 
+/** What a git directory's `HEAD` says, see {@link readHead}. */
+type HeadRead =
+  | { kind: "branch"; branch: string }
+  | { kind: "detached"; sha: string }
+  | { kind: "other-ref" }
+  | { kind: "missing" }
+  | { kind: "refused"; label: ".git" | "HEAD" };
+
 /**
- * Whether a git directory's `HEAD` can be looked at: `null` when it is a
- * regular file (after following links, as git does), otherwise the label of
- * what to report as refused. A `HEAD` that is a dangling or looping link, or
- * not a regular file, is `"HEAD"`, and so is one that is simply missing; a
- * git directory that cannot be searched at all (`EACCES`, `EPERM`) is
- * `".git"`, since no file in it can be named. Content and size stay with
- * `readGitFile`, which reads it.
+ * Read a git directory's `HEAD` the way git validates it. A symlink is read
+ * with `readlink`, never followed: link text `refs/heads/<name>` names that
+ * branch whether or not the loose ref file exists (a packed or unborn
+ * branch), as git reads it, and any other link text is refused. A regular
+ * file is read through the bounded, non-blocking descriptor read (a symlink
+ * swapped in after the `lstat` is refused, not followed); its trimmed content
+ * must be `ref: refs/<path>` or a 40- or 64-hex object id, anything else is
+ * refused as `"HEAD"`. A `HEAD` that is not there is `missing`; a git
+ * directory that cannot be searched (`EACCES`, `EPERM` on the `lstat`) is
+ * refused as `".git"`, since no file in it can be named. `sha` is set only
+ * for a 40-char lowercase id, the shape the rest of this module resolves.
  */
-function refusedHead(gitDir: string): ".git" | "HEAD" | null {
+function readHead(gitDir: string): HeadRead {
   const headPath = path.join(gitDir, "HEAD");
+  let lstat: fs.Stats;
   try {
-    fs.lstatSync(headPath);
+    lstat = fs.lstatSync(headPath);
   } catch (err) {
     const code = (err as NodeJS.ErrnoException).code;
-    if (code === "EACCES" || code === "EPERM") return ".git";
-    return "HEAD";
+    if (code === "EACCES" || code === "EPERM") return { kind: "refused", label: ".git" };
+    return { kind: "missing" };
   }
-  try {
-    return fs.statSync(headPath).isFile() ? null : "HEAD";
-  } catch {
-    return "HEAD";
+  if (lstat.isSymbolicLink()) {
+    let linkText: string;
+    try {
+      linkText = fs.readlinkSync(headPath);
+    } catch {
+      return { kind: "refused", label: "HEAD" };
+    }
+    const link = HEAD_LINK_RE.exec(linkText);
+    return link ? { kind: "branch", branch: link[1]! } : { kind: "refused", label: "HEAD" };
   }
+  const read = readRegularFileBounded(headPath, { followSymlinks: false });
+  if (read.kind === "missing") return { kind: "missing" };
+  if (read.kind !== "ok") return { kind: "refused", label: "HEAD" };
+  const head = read.content.trim();
+  const symref = HEAD_SYMREF_RE.exec(head);
+  if (symref) {
+    const ref = symref[1]!;
+    if (!ref.startsWith(BRANCH_REF_PREFIX)) return { kind: "other-ref" };
+    // Non-empty: the pattern ends in a character that is neither `/` nor
+    // (the content being trimmed) whitespace.
+    return { kind: "branch", branch: ref.slice(BRANCH_REF_PREFIX.length).trim() };
+  }
+  if (HEAD_OBJECT_ID_RE.test(head)) return { kind: "detached", sha: SHA_RE.test(head) ? head : "" };
+  return { kind: "refused", label: "HEAD" };
+}
+
+/**
+ * Whether a git directory's `HEAD` can be used: `null` when {@link readHead}
+ * finds a valid one, otherwise the label to report as refused (`"HEAD"` for
+ * one that is missing, a link that is not `refs/heads/<name>`, not a regular
+ * file, or holding neither a ref nor an object id; `".git"` for a git
+ * directory that cannot be searched).
+ */
+function refusedHead(gitDir: string): ".git" | "HEAD" | null {
+  const head = readHead(gitDir);
+  if (head.kind === "missing") return "HEAD";
+  return head.kind === "refused" ? head.label : null;
 }
 
 /**
@@ -226,17 +290,23 @@ export function findGitEntry(startDir: string): GitEntry | null {
     // keeps the walk going (task b56d95d3, operator decision): a nested
     // work tree whose `.git` was removed resolves the enclosing repository,
     // exactly like git itself would. The same decision covers what is
-    // INSIDE a present `.git` (a directory without a readable `HEAD`, an
-    // unsearchable one, a file without a `gitdir:` line, a `gitdir:` pointer
-    // to nothing or to a directory without a `HEAD`): see below, and
+    // INSIDE a present `.git` (a directory without a readable `HEAD`, a
+    // `HEAD` whose content is neither a ref nor an object id or a `HEAD`
+    // symlink that does not name `refs/heads/<name>`, an unsearchable
+    // directory, a file without a `gitdir:` line, a `gitdir:` pointer to
+    // nothing or to a directory without such a `HEAD`): git does not take
+    // any of those for a repository and walks up, this lookup refuses them
+    // instead (see `readHead`). See below, and
     // `docs/okf/gate-fail-posture-matrix.md` for the full list.
     if (present && (stat === undefined || (!stat.isDirectory() && !stat.isFile()))) {
       return { worktreeRoot: dir, gitDir: "", refused: ".git" };
     }
     if (stat?.isDirectory()) {
       // A present `.git` directory is a repository, whatever is inside it:
-      // a `HEAD` that is missing, a dangling or looping link, a node that
-      // is not a regular file, or a directory that cannot be searched is a
+      // a `HEAD` that is missing, a link whose text is not
+      // `refs/heads/<name>` (a dangling or looping link to an absolute path
+      // included), a node that is not a regular file, a file holding neither
+      // a ref nor an object id, or a directory that cannot be searched is a
       // git directory whose `HEAD` cannot be read. It is reported as
       // refused with `gitDir` left empty (so nothing reads through it),
       // never as "outside a work tree" (which a deny-capable caller would
@@ -262,7 +332,7 @@ export function findGitEntry(startDir: string): GitEntry | null {
       if (gitDir !== "") {
         // A `gitdir:` pointer whose target is not a git directory that can
         // be read (missing, not a directory, unsearchable, no `HEAD`, or a
-        // `HEAD` that does not resolve) is the same present-but-unresolvable
+        // `HEAD` that is refused by `readHead`) is the same present-but-unresolvable
         // state as a `.git` directory without `HEAD`: refused, never walked
         // past (task b56d95d3, operator decision). `gitDir` stays set, so a
         // caller that only derives a name from the pointer is unchanged and
@@ -343,12 +413,10 @@ export function resolveGitContext(cwd: string): GitRepoContext {
     try {
       // A missing or refused HEAD leaves branch + sha "" (a refused one is
       // also recorded in `refused`, see GitRepoContext.refused).
-      const headRaw = readGitFile(path.join(entry.gitDir, "HEAD"), "HEAD", refused);
-      if (headRaw === null) throw new Error("no readable HEAD");
-      const head = headRaw.trim();
-      const match = HEAD_REF_RE.exec(head);
-      if (match) {
-        branch = match[1]!.trim();
+      const head = readHead(entry.gitDir);
+      if (head.kind === "refused") refused.push(head.label);
+      if (head.kind === "branch") {
+        branch = head.branch;
         // `refs/heads/<branch>` and `packed-refs` are not duplicated in
         // a linked worktree's private gitdir; they live in the shared
         // common dir (see `resolveCommonDir`'s doc comment). Routing
@@ -356,9 +424,9 @@ export function resolveGitContext(cwd: string): GitRepoContext {
         // `commondir` file, `resolveCommonDir` returns `gitDir`
         // unchanged).
         sha = resolveBranchSha(resolveCommonDir(entry.gitDir, refused), branch, refused);
-      } else if (SHA_RE.test(head)) {
+      } else if (head.kind === "detached") {
         // Detached HEAD: the file contains the raw sha directly.
-        sha = head;
+        sha = head.sha;
       }
     } catch {
       /* unreadable HEAD — branch + sha stay "" */

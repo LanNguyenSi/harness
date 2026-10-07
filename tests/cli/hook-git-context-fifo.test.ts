@@ -251,6 +251,16 @@ describe.skipIf(process.platform === "win32")("pack hook branch-protection: a `.
     expectBlockedNamingGitFile(nested, /HEAD is present but not a regular file or is oversized, or does not resolve/);
   });
 
+  it.each([
+    ["an EMPTY", ""],
+    ["a GARBAGE", "garbage\n"],
+  ])("a `.git` directory with %s HEAD in a nested work tree BLOCKS, naming HEAD (git itself would resolve the outer repository)", (_name, head) => {
+    const nested = nestedInOuter();
+    fs.mkdirSync(path.join(nested, ".git"));
+    fs.writeFileSync(path.join(nested, ".git", "HEAD"), head);
+    expectBlockedNamingGitFile(nested, /\(HEAD is present but not a regular file or is oversized, or does not resolve: .*holding neither a ref nor an object id/);
+  });
+
   it("a `.git` file whose gitdir target is missing in a nested work tree BLOCKS", () => {
     const nested = nestedInOuter();
     fs.writeFileSync(path.join(nested, ".git"), `gitdir: ${path.join(nested, "no-such-gitdir")}\n`);
