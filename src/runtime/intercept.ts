@@ -1337,20 +1337,26 @@ export function attributeTriggerSegments(
  * lexed. A model command that names no directory (it runs in the working
  * directory, or in one only known at run time) is left out: the cwd
  * context is demanded for a matched policy anyway, so it could add
- * nothing but a match for a verb the legacy arms do not see.
+ * nothing but a match for a verb the legacy arms do not see. For a
+ * command line the model refused (task 9238cc27) the commands are those of
+ * its reading with the refusal checks off (`triggerCommands`), so the arm
+ * matches every policy it matched before the refusals existed;
+ * `resolveAttributedContexts` then fails such a policy closed on the
+ * refusal and never attributes these commands.
  */
 export function attributeTriggerModelCommands(
   policy: Policy,
   model: ShellModelView,
 ): ModelCommand[] {
-  if (policy.trigger.bash_match === undefined || model.commands === null) return [];
+  const commands = model.commands ?? model.triggerCommands ?? null;
+  if (policy.trigger.bash_match === undefined || commands === null) return [];
   let re: RegExp;
   try {
     re = new RegExp(policy.trigger.bash_match);
   } catch {
     return [];
   }
-  return model.commands.filter((c) => c.namesDirectory && re.test(c.canonical));
+  return commands.filter((c) => c.namesDirectory && re.test(c.canonical));
 }
 
 /**
@@ -1426,7 +1432,8 @@ function realpathOrSelf(p: string): string {
 export type AttributedContextsResult =
   | { kind: "contexts"; contexts: AttributedContext[] }
   | { kind: "bounded"; distinctCount: number }
-  | { kind: "opaque-target" };
+  | { kind: "opaque-target" }
+  | { kind: "unparsed-command"; construct: string };
 
 /**
  * Why a policy is denied outright for a command whose repository target
@@ -1439,6 +1446,21 @@ export const OPAQUE_TARGET_REASON =
   "a CDPATH search, a directory change repeated in a loop, or a command line the gate cannot parse), " +
   "so the evidence of the current directory's repository cannot stand in for it. Name the repository " +
   "with a plain path (`git -C <path>` or `cd <path> && ...`), or run the command from inside it";
+
+/**
+ * Why a policy is denied outright for a command line the shell command
+ * model refused to read (task 9238cc27): `construct` names the shape (see
+ * `REFUSAL_CONSTRUCTS` in `src/runtime/shell-command-model.ts`). One text
+ * for the runtime decision and the dry-run preview.
+ */
+export function unparsedCommandReason(construct: string): string {
+  return (
+    `unparsed: this command line holds ${construct}, which this gate cannot place in a repository directory, ` +
+    "so the evidence of the current directory's repository cannot stand in for it. Split it into separate " +
+    "commands (one plain command per step, naming the repository with `git -C <path>` or `cd <path> && ...`), " +
+    "or run the command from inside the repository"
+  );
+}
 
 /**
  * Resolve the distinct `${REPO}`/`${BRANCH}`/`currentHeadSha` contexts a
@@ -1577,9 +1599,12 @@ export const OPAQUE_TARGET_REASON =
  * resolver for the cwd. When the command could not be lexed
  * (`shellModel.commands === null`), the segment view decides alone, except
  * that a policy with a `bash_match` fails closed when the raw text holds a
- * directory-changing word (`shellModel.directoryChangeWord`). Omitted (a
- * non-Bash event, or a caller with no model), the result is the segment
- * view's alone.
+ * directory-changing word (`shellModel.directoryChangeWord`), and always
+ * when the model refused a shape it cannot place (`shellModel.refusal`,
+ * task 9238cc27: `unparsed-command`, whether or not such a word shows; a
+ * brace expansion or a glued group in the command word may spell `cd`
+ * without one). Omitted (a non-Bash event, or a caller with no model), the
+ * result is the segment view's alone.
  */
 export function resolveAttributedContexts(
   policy: Policy,
@@ -1596,16 +1621,15 @@ export function resolveAttributedContexts(
   segmentViewMatched = true,
 ): AttributedContextsResult {
   const cwdContext: AttributedContext = { builtins: cwdBuiltins, currentHeadSha: cwdCurrentHeadSha };
-  if (
-    shellModel !== undefined &&
-    shellModel.commands === null &&
-    shellModel.directoryChangeWord &&
-    policy.trigger.bash_match !== undefined
-  ) {
+  if (shellModel !== undefined && shellModel.commands === null && policy.trigger.bash_match !== undefined) {
+    // The model refused a shape it would place in the wrong directory: the
+    // segment view, which reads the same text with less structure, cannot
+    // place it either, so fail closed.
+    if (shellModel.refusal !== undefined) return { kind: "unparsed-command", construct: shellModel.refusal };
     // The model could not read the command, and the raw text holds a
     // directory-changing word: the segment view alone may be reading a
     // nested repository's command as the cwd's, so fail closed.
-    return { kind: "opaque-target" };
+    if (shellModel.directoryChangeWord) return { kind: "opaque-target" };
   }
   const modelSatisfying = shellModel === undefined ? [] : attributeTriggerModelCommands(policy, shellModel);
   if (modelSatisfying.some((c) => c.dirs.some((d) => d.kind === "opaque"))) return { kind: "opaque-target" };
@@ -2023,6 +2047,29 @@ function opaqueTargetDecision(
   );
 }
 
+/**
+ * The single decision `intercept()` records for a policy whose command line
+ * the shell command model refused (task 9238cc27). Same shape and
+ * enforcement mapping as `opaqueTargetDecision`; the reason names the
+ * refused construct.
+ */
+function unparsedCommandDecision(
+  policy: Policy,
+  event: ToolEvent,
+  cwdBuiltins: ExtractBuiltins,
+  evaluatedAt: string,
+  construct: string,
+): PolicyDecision {
+  return failClosedContextsDecision(
+    policy,
+    event,
+    cwdBuiltins,
+    evaluatedAt,
+    unparsedCommandReason(construct),
+    "(unparsed command: refused by the shell command model, no context queried)",
+  );
+}
+
 export async function intercept(
   options: InterceptOptions,
 ): Promise<InterceptResult> {
@@ -2123,7 +2170,11 @@ export async function intercept(
         )
       : { kind: "contexts", contexts: [{ builtins: options.builtins, currentHeadSha: options.currentHeadSha }] };
 
-    if (attributed.kind === "bounded" || attributed.kind === "opaque-target") {
+    if (
+      attributed.kind === "bounded" ||
+      attributed.kind === "opaque-target" ||
+      attributed.kind === "unparsed-command"
+    ) {
       // D-013: fail CLOSED without querying the ledger for any of the
       // (too many) distinct targets — one synthetic decision, one audit
       // write, then move on to the next policy. Ledger-query count for
@@ -2141,7 +2192,9 @@ export async function intercept(
               options.builtins,
               evaluatedAt,
             )
-          : opaqueTargetDecision(policy, event, options.builtins, evaluatedAt);
+          : attributed.kind === "unparsed-command"
+            ? unparsedCommandDecision(policy, event, options.builtins, evaluatedAt, attributed.construct)
+            : opaqueTargetDecision(policy, event, options.builtins, evaluatedAt);
       decisions.push(decision);
       try {
         await options.ledger.record(decision, resolveSessionId(event.session_id));

@@ -20,6 +20,7 @@ import {
   MAX_ATTRIBUTED_CONTEXTS,
   resolveAttributedContexts,
   OPAQUE_TARGET_REASON,
+  unparsedCommandReason,
   usesPerRepoBuiltins,
 } from "../runtime/intercept.js";
 import { shellModelViewOf, type ShellModelView } from "../runtime/shell-command-model.js";
@@ -318,6 +319,9 @@ function ledgerQueriesFor(
   }
   if (result.kind === "opaque-target") {
     return [`(opaque target: ${OPAQUE_TARGET_REASON}; no context queried)`];
+  }
+  if (result.kind === "unparsed-command") {
+    return [`(unparsed command: ${unparsedCommandReason(result.construct)}; no context queried)`];
   }
   return result.contexts.map((c) => staticLedgerQuery(policy, ctx, c.builtins));
 }
