@@ -3,14 +3,14 @@ type: runbook
 title: Understanding-gate lockout recovery
 description: Operator procedure to unblock a session locked by the understanding-before-execution PreToolUse gate via `harness approve understanding`, including the 6-tier session-id resolution and the expiry semantics that re-arm the gate.
 tags: [runbook, understanding-gate, lockout, recovery, operator]
-timestamp: 2026-10-07T05:25:36Z
+timestamp: 2026-10-07T08:28:24Z
 sources:
   - src/cli/pack/auto-approve-path.ts
   - src/io/display-path.ts
   - src/io/invisible-characters.ts
   - src/cli/approve/understanding.ts
   - src/cli/audit.ts
-  - src/cli/index.ts
+  - src/cli/register-approve-group.ts
   - src/runtime/session-id.ts
   - src/runtime/pending-approval.ts
   - src/runtime/home-dir.ts
@@ -63,7 +63,7 @@ Recovery is **operator-only**, from a shell the hooks do not gate (the `!`-shell
    harness approve understanding
    ```
 
-   Flags (`src/cli/index.ts:1707-1709#"enforcement"`, the `approve understanding` subcommand): `--session <id>`, `--task <ids...>` (variadic; also comma-joined `--task a,b,c`), `--reports-dir <path>`, `--approved-by <actor>` (default `harness-approve-cli`), `--force`, `--config <path>`, `--project <name>`.
+   Flags (`src/cli/register-approve-group.ts:41-43#"enforcement"`, the `approve understanding` subcommand): `--session <id>`, `--task <ids...>` (variadic; also comma-joined `--task a,b,c`), `--reports-dir <path>`, `--approved-by <actor>` (default `harness-approve-cli`), `--force`, `--config <path>`, `--project <name>`.
 
 2. **Session-id resolution** - the bare command works because the id is resolved through a 6-tier precedence chain (`resolveApprovalSessionId`, `src/runtime/session-id.ts:241#"resolveApprovalSessionId"`; used by `src/cli/approve/understanding.ts:792#"resolveApprovalSessionId"`):
    1. explicit `--session` flag

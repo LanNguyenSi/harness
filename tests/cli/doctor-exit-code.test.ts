@@ -2,7 +2,7 @@
 // regardless of report.errorCount, so CI/scripts had no way to gate on
 // doctor health. These are `run()`-level (full CLI) tests, not unit tests
 // of `doctor()` directly, because the bug lived in the CLI action's exit
-// path in src/cli/index.ts, not in the report-building logic itself.
+// path in src/cli/register-inspect-group.ts, not in the report-building logic itself.
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -152,7 +152,7 @@ describe("harness doctor — exit code wired to report.errorCount (task a07b379a
     });
     expect(code).toBe(1);
     // No rogue ledger was planted, so this exercises the `hits.length === 0`
-    // early-return branch (src/cli/index.ts ~line 290), not the
+    // early-return branch (src/cli/register-inspect-group.ts), not the
     // delete+rescan tail below.
     expect(stdout).toContain("nothing to delete");
   });
@@ -170,7 +170,7 @@ describe("harness doctor — exit code wired to report.errorCount (task a07b379a
     });
     expect(code).toBe(1);
     // Proves this run went through the actual deletion + rescan path
-    // (src/cli/index.ts ~line 317's failIfErrors), not the no-hits
+    // (src/cli/register-inspect-group.ts's failIfErrors), not the no-hits
     // short-circuit above.
     expect(stdout).toContain(`deleted: ${rogueDir}`);
     expect(stdout).toContain("rogue evidence-ledger DBs remaining: 0");

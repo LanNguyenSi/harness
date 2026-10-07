@@ -203,7 +203,7 @@ function allowResult(reason: string): HandlerResult {
  * PreToolUse event JSON on stdin, runs the drift check, writes the
  * hookSpecificOutput envelope (deny) / stderr message, and RETURNS the
  * handler result. It deliberately does NOT call `process.exit`: the
- * caller in src/cli/index.ts throws `HarnessExitError` on a nonzero
+ * caller in src/cli/register-pack-group.ts throws `HarnessExitError` on a nonzero
  * exit code, which lets `main.ts` exit only after the promise resolves
  * so the deny envelope on stdout fully flushes to the pipe first. A
  * synchronous `process.exit` here could truncate that envelope and
