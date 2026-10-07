@@ -331,20 +331,33 @@ all before). Since task `d11762ce` this holds for every `bash_match`
 policy, not only per-repo ones, and for every modelled command, not only
 one that names a directory: a gated verb behind a compound prefix
 (`! git log`, `{ git log; }`, `if ...; then git log; fi`, a loop or
-`case` body, a function body), behind `xargs` or `coproc`, or inside a
-literal `eval '...'` matches the policy the bare verb matches. The
-trigger is tested against the command as written after those prefixes,
-then after each peeled wrapper (`env`, `nohup`, `xargs`, ...), so a
-trigger on the wrapper itself (`env -u CLAUDE_SESSION_ID`) still matches
-behind another wrapper. A verb that never runs matches too
-(`while false; do git push; done`), as `false && git push` already did.
-A command the model cannot parse within `MAX_NORMALIZE_LENGTH` (a syntax
-error, which bash reaches only after running the complete lines before
-it, or compound commands, subshells or substitutions nested past the
-model's bounds) is refused for every `bash_match` policy the other forms
-missed, with the policy's own enforcement and no ledger query
-(`UNPARSED_COMMAND_REASON`). A command longer than that bound keeps the
-raw match only.
+`case` body, including `for ((;;)) do ...; done` and `for x do ...; done`
+written without a separator, a function body), behind `xargs` or
+`coproc`, behind a wrapper spelled with a directory (`/usr/bin/env`), or
+inside a literal `eval '...'` matches the policy the bare verb matches.
+The trigger is tested against the command as written after those
+prefixes, then after each peeled wrapper (`env`, `nohup`, `xargs`, ...),
+so a trigger on the wrapper itself (`env -u CLAUDE_SESSION_ID`) still
+matches behind another wrapper, and through the other forms' normalisers
+applied to the command's own words, so a compound spelling matches
+whenever those words match on their own (`{ sudo --user root git push; }`,
+`if true; then CLAUDE_SESSION_ID= ; fi`). A verb that never runs matches
+too (`while false; do git push; done`), as `false && git push` already
+did. A command the model cannot parse within `MAX_NORMALIZE_LENGTH` (a
+syntax error, which bash reaches only after running the complete lines
+before it; compound commands, subshells or substitutions nested past the
+model's bounds; an `eval` string nested past its bound or not parsable
+itself) is refused for every `bash_match` policy the other forms missed,
+with the policy's own enforcement and no ledger query
+(`UNPARSED_COMMAND_REASON`). The deny message names the parse failure and
+the refused policies instead of the policy's `ux:` remedy, which cannot
+unblock it (the same holds for an unattributable target). A command
+longer than that bound keeps the raw match only. Not read at all: nested
+shells (`sh -c '...'`, `bash -lc`, `env -S`), `find -exec`, `parallel`,
+`watch`, wrappers the model does not peel (`caffeinate`, `flock`,
+`ionice`), a command word known only at run time (`git $(echo push)`,
+`$h pause`, an alias), and the command an `xargs` reads from its input
+(`echo push | xargs git`).
 
 **Cost.** The shell command model is computed at most once per Bash
 event and, with any `bash_match` policy in the manifest, effectively for
