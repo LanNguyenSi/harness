@@ -1134,7 +1134,10 @@ export async function runInterceptCli(
     // An empty-identifier decision never reads the ledger, so no approval
     // tag could unblock it: staging a marker `harness approve risk` cannot
     // act on would misstate the recoverability of the block.
-    firstBlocking.emptyIdentifier === undefined
+    firstBlocking.emptyIdentifier === undefined &&
+    // Neither does a refusal (an unparsed command, an unattributable
+    // target): no approval tag is read for it either.
+    firstBlocking.refusal === undefined
   ) {
     const generatedDir = opts.generatedDir
       ?? (manifestPath !== undefined
@@ -1197,6 +1200,19 @@ export async function runInterceptCli(
         `Operator recovery: check the reason above, then harness doctor if it names ` +
         `the ledger; details and the availability opt-out: docs/risk-gate.md ` +
         `("Degraded mode") or rerun with HARNESS_POLICY_VERBOSE=1\n`,
+    );
+  }
+
+  // Unparsed-command operator line (task d11762ce). Default-verbosity, ONE
+  // line per event, whatever the enforcement: a `warn` refusal renders no
+  // envelope, and without this line the operator sees neither why every
+  // `bash_match` policy fired nor the remedy. Names the refused policies
+  // and the parse failure; the per-decision detail stays verbose-only.
+  const unparsed = result.decisions.filter((d) => d.refusal === "unparsed" && d.outcome !== "allow");
+  if (unparsed.length > 0) {
+    stderr.write(
+      `harness policy intercept${hookSuffix(opts.hookName)}: unparsed command: ` +
+        `${unparsed.map((d) => `${d.policyName} (${d.outcome})`).join(", ")}: ${unparsed[0]!.reason}\n`,
     );
   }
 

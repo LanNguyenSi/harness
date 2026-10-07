@@ -175,9 +175,27 @@ describe("lexShellCommand: words keep their decoded value and quote provenance",
     expect(lexShellCommand('git log "unterminated')).toBeNull();
     expect(lexShellCommand("echo $(unterminated")).toBeNull();
     expect(lexShellCommand("x".repeat(MAX_NORMALIZE_LENGTH + 1))).toBeNull();
-    // nesting past MAX_MODEL_NESTING
-    expect(lexShellCommand(`${"(".repeat(9)}true${")".repeat(9)}`)).toBeNull();
-    expect(lexShellCommand(`${"(".repeat(8)}true${")".repeat(8)}`)).not.toBeNull();
+    // nesting past MAX_MODEL_NESTING (spaced: `((` directly followed by
+    // a balanced expression and `)` is an arithmetic command, see below)
+    expect(lexShellCommand(`${"( ".repeat(9)}true${" )".repeat(9)}`)).toBeNull();
+    expect(lexShellCommand(`${"( ".repeat(8)}true${" )".repeat(8)}`)).not.toBeNull();
+  });
+
+  it("reads `(( expression ))` as one arithmetic word, as bash and zsh do", () => {
+    // `(((echo hi)))` is an arithmetic expression in bash and zsh (an
+    // error), not three subshells.
+    for (const command of ["((x++))", "(((echo hi)))", `${"(".repeat(9)}true${")".repeat(9)}`, "for ((i=0;i<1;i++)) do :; done"]) {
+      const words = lexShellCommand(command)!.filter((t) => t.kind === "word") as ShellWord[];
+      expect(words.filter((w) => w.arith === true), command).toHaveLength(1);
+    }
+    // Not followed by `)` after the inner balance: two subshells.
+    const nested = lexShellCommand("((cd x); git push)")!;
+    expect(nested.some((t) => t.kind === "word" && t.arith === true)).toBe(false);
+    expect(nested.filter((t) => t.kind === "op" && t.op === "(")).toHaveLength(2);
+    // A substitution inside the expression still runs: lexed into `subs`.
+    const sub = lexShellCommand("(( $(git push origin main) + 1 ))")![0] as ShellWord;
+    expect(sub.arith).toBe(true);
+    expect(sub.subs).toHaveLength(1);
   });
 });
 
@@ -443,9 +461,22 @@ describe("modelShellCommands: bounds", () => {
     expect(dirsOf("cd a; cd b; cd c; cd d; git log")).toEqual(["opaque"]);
   });
 
-  it("an eval nested past MAX_MODEL_EVAL_DEPTH is opaque", () => {
+  it("an eval nested past MAX_MODEL_EVAL_DEPTH, or an eval string that does not lex, makes the command not lexable", () => {
     expect(dirsOf("eval eval eval cd x; git log")).toEqual(["L:x", "cwd"]);
-    expect(dirsOf("eval eval eval eval cd x; git log")).toContain("opaque");
+    // Its commands would be lost (bash runs them), so the whole command is
+    // refused; the view still fails closed for a per-repo policy, as the
+    // opaque directory the model read before did.
+    expect(modelShellCommands("eval eval eval eval cd x; git log")).toBeNull();
+    expect(shellModelViewOf("eval eval eval eval 'git push origin main'")).toEqual({
+      commands: null,
+      directoryChangeWord: true,
+    });
+    expect(shellModelViewOf(`eval 'git push origin main\necho "x'`)).toEqual({ commands: null, directoryChangeWord: true });
+    // A walk error inside an eval string (a stray `)`) is a syntax error
+    // like one outside it: not lexable, raw-text check only.
+    expect(shellModelViewOf("eval 'git push origin main\n)'")).toEqual({ commands: null, directoryChangeWord: false });
+    // A syntax error outside every eval string keeps the raw-text check.
+    expect(shellModelViewOf("git push origin main\n)")).toEqual({ commands: null, directoryChangeWord: false });
   });
 
   it("a pushd stack past its tracked depth makes a pop past it opaque", () => {
@@ -456,7 +487,7 @@ describe("modelShellCommands: bounds", () => {
 
   it("returns null for a command it cannot lex, and for one past MAX_NORMALIZE_LENGTH", () => {
     expect(modelShellCommands("cd 'x && git log")).toBeNull();
-    expect(modelShellCommands(`${"(".repeat(9)}true${")".repeat(9)}; cd x && git log`)).toBeNull();
+    expect(modelShellCommands(`${"( ".repeat(9)}true${" )".repeat(9)}; cd x && git log`)).toBeNull();
     expect(modelShellCommands(`cd x && git log; ${"#".repeat(MAX_NORMALIZE_LENGTH)}`)).toBeNull();
     expect(modelShellCommands("git log )")).toBeNull();
   });
@@ -766,5 +797,60 @@ describe("modelShellCommands: heads, the command text at each wrapper-peeling st
   it("a wrapper with nothing after it keeps its own text instead of dropping the command", () => {
     expect(headsOf("xargs")).toEqual([["xargs"]]);
     expect(headsOf("echo x | xargs -I")).toEqual([["echo x"], ["xargs -I"]]);
+  });
+});
+
+// Task d11762ce (review round): forms the walk used to drop without
+// refusing, wrappers spelled with a directory, assignment-only commands,
+// and the head text the gate normalises like a bare command.
+describe("modelShellCommands: loop headers, wrapper paths, assignment-only commands, head text", () => {
+  const headsOf = (command: string): string[][] => (modelShellCommands(command) ?? []).map((c) => [...c.heads]);
+  const headTextsOf = (command: string): string[] => (modelShellCommands(command) ?? []).map((c) => c.headText);
+
+  it("keeps the body of a loop header written without a separator", () => {
+    expect(headsOf("for ((i=0;i<1;i++)) do git push; done")).toEqual([["git push"]]);
+    expect(headsOf("for ((i=0;i<1;i++))\ndo git push\ndone")).toEqual([["git push"]]);
+    expect(headsOf("for ((;;)) { git push; break; }")).toEqual([["git push"], ["break"]]);
+    expect(headsOf("for x do git push; done")).toEqual([["git push"]]);
+    expect(headsOf("for x { git push; }")).toEqual([["git push"]]);
+    expect(headsOf("select x do git push; done")).toEqual([["git push"]]);
+    // A `for ... in` header still ends at its separator.
+    expect(headsOf("for x in do done; do git push; done")).toEqual([["git push"]]);
+  });
+
+  it("reads `(( ))` as data and walks the substitutions inside it", () => {
+    expect(headsOf("((x++)); git push")).toEqual([["git push"]]);
+    expect(headsOf("(( $(git push) + 1 ))")).toEqual([["git push"]]);
+    expect(headsOf("while ((i++ < 3)); do git push; done")).toEqual([["git push"]]);
+  });
+
+  it("reads a word after a ( ) group as the next command (zsh short loops)", () => {
+    expect(headsOf("for x (a b) git push")).toContainEqual(["git push"]);
+    expect(headsOf("while (true) git push")).toContainEqual(["git push"]);
+  });
+
+  it("peels a wrapper spelled with a directory", () => {
+    expect(headsOf("/usr/bin/env git push")).toEqual([["/usr/bin/env git push", "git push"]]);
+    expect(headsOf("echo x | /usr/bin/xargs -I{} git push")).toEqual([["echo x"], ["/usr/bin/xargs -I{} git push", "git push"]]);
+    expect(headsOf("/usr/bin/nohup /usr/bin/nice -n 5 -- git push")).toEqual([
+      ["/usr/bin/nohup /usr/bin/nice -n 5 -- git push", "/usr/bin/nice -n 5 -- git push", "git push"],
+    ]);
+    // `coproc` is a keyword: only its own spelling is peeled.
+    expect(headsOf("/x/coproc git push")).toEqual([["/x/coproc git push"]]);
+  });
+
+  it("records an assignment-only command with its assignments as its text", () => {
+    expect(headsOf("{ CLAUDE_SESSION_ID= ; }")).toEqual([["CLAUDE_SESSION_ID="]]);
+    expect(headsOf("A=1 B=2")).toEqual([["A=1 B=2"]]);
+    expect(headTextsOf("if true; then CLAUDE_SESSION_ID= ; fi")).toEqual(["true ", "CLAUDE_SESSION_ID= "]);
+  });
+
+  it("head text: the words after the compound prefixes, metacharacters inside a word replaced, one trailing space", () => {
+    expect(headTextsOf("{ sudo --user root git push; }")).toEqual(["sudo --user root git push "]);
+    expect(headTextsOf("! nice --adjustment=5 git push")).toEqual(["nice --adjustment=5 git push "]);
+    expect(headTextsOf("git commit -m 'x; git push'")).toEqual(["git commit -m x__git_push "]);
+    expect(headTextsOf("sudo -u 'my user' git push")).toEqual(["sudo -u my_user git push "]);
+    // An eval string's commands have head texts too.
+    expect(headTextsOf("eval 'timeout --kill-after 5 10 git push'")).toEqual(["timeout --kill-after 5 10 git push "]);
   });
 });

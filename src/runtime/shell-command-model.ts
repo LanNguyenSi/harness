@@ -206,6 +206,19 @@ export interface ModelCommand {
    */
   readonly heads: readonly string[];
   /**
+   * The command written on its own, for the text arms' normalisers: its
+   * words after the compound prefixes (`!`, `{`, `if`, `time`, ...),
+   * decoded, each with its blanks and shell metacharacters replaced by `_`,
+   * joined by one space, plus one trailing space (`{ CLAUDE_SESSION_ID= ; }`
+   * gives `CLAUDE_SESSION_ID= `). The gate also tests a `bash_match`
+   * trigger against this text's normalisations (`command-normalize.ts`), so
+   * a compound spelling matches whenever the bare words match through the
+   * normalisers' wrapper and option grammar (`{ sudo --user root git push; }`).
+   * Quoting is decoded, so a boundary character inside a quoted argument
+   * (`-m 'x; git push'`) splits nothing here.
+   */
+  readonly headText: string;
+  /**
    * Offsets of the command's words in the original command text. A command
    * found inside a backtick body or an `eval` string carries the span of the
    * enclosing word or command instead.
@@ -249,10 +262,10 @@ export function hasDirectoryChangeWord(command: string): boolean {
 
 /** The model view of one command; see `ShellModelView` and, for `oracle`, `DirectoryOracle`. */
 export function shellModelViewOf(command: string, oracle?: DirectoryOracle): ShellModelView {
-  const commands = modelShellCommands(command, oracle);
+  const { commands, opaque } = modelCommandsOf(command, oracle);
   return {
     commands,
-    directoryChangeWord: commands === null && hasDirectoryChangeWord(command),
+    directoryChangeWord: commands === null && (opaque || hasDirectoryChangeWord(command)),
   };
 }
 
@@ -283,6 +296,12 @@ export interface ShellWord {
   readonly unusual: boolean;
   /** Lexed bodies of the `$( )`, backtick and `<( )` substitutions in this word. */
   readonly subs: readonly ShellToken[][];
+  /**
+   * True for an arithmetic command or `for` header, `(( expression ))`,
+   * lexed as one word (`value` is `null`): the expression is data, the
+   * substitutions inside it are lexed into `subs` and still run.
+   */
+  readonly arith?: boolean;
 }
 
 export interface ShellOperator {
@@ -303,6 +322,17 @@ export interface ShellRedirection {
 export type ShellToken = ShellWord | ShellOperator | ShellRedirection;
 
 class ShellModelError extends Error {}
+
+/**
+ * A model failure where the master model read the directory as opaque and
+ * went on: an `eval` string past `MAX_MODEL_EVAL_DEPTH`, or one that does
+ * not lex. Now the whole command is not lexable (its commands would be
+ * lost: bash runs them, and runs an `eval` string's complete lines before
+ * its syntax error), and `ShellModelView.directoryChangeWord` is set, so
+ * a per-repo policy the text arms matched still fails closed as it did on
+ * the opaque directory.
+ */
+class ShellModelOpaqueError extends ShellModelError {}
 
 const UNUSUAL_CHAR_RE = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u;
 const WORD_END_CHARS = new Set([" ", "\t", "\n", ";", "&", "|", "<", ">", ")"]);
@@ -392,6 +422,14 @@ class ShellLexer {
         i++;
         continue;
       }
+      if (c === "(" && s[i + 1] === "(") {
+        const a = this.arithmetic(i, depth);
+        if (a !== null) {
+          tokens.push(a.word);
+          i = a.end;
+          continue;
+        }
+      }
       if (c === "(") {
         parenDepth++;
         if (depth + parenDepth > MAX_MODEL_NESTING) throw new ShellModelError("nesting too deep");
@@ -436,6 +474,92 @@ class ShellLexer {
     }
     if (mode === "paren") throw new ShellModelError("unterminated $(");
     return { tokens, end: i };
+  }
+
+  /**
+   * `(( expression ))` at `i`, read as bash and zsh read it: the text up to
+   * the parenthesis that balances the second `(` is an arithmetic
+   * expression when that parenthesis is directly followed by `)`; otherwise
+   * (`((cd x); git push)`) `null`, and the two parentheses open subshells.
+   * One word, so `for ((i = 0; i < 1; i++)) do V; done` and
+   * `for ((;;)) { V; }` keep the body that follows the header. The
+   * substitutions inside the expression run, so they are lexed into
+   * `subs`; a substitution that reads past the expression is a misread, and
+   * the command is not lexable.
+   */
+  private arithmetic(i: number, depth: number): { word: ShellWord; end: number } | null {
+    const s = this.s;
+    let inner: number;
+    try {
+      inner = skipBalanced(s, i + 1, "(", ")");
+    } catch {
+      return null;
+    }
+    if (s[inner] !== ")") return null;
+    const stop = inner - 1;
+    const b: WordBuilder = {
+      literal: "",
+      unquoted: "",
+      quoted: false,
+      dynamic: true,
+      backtick: false,
+      ansiC: false,
+      locale: false,
+      glob: false,
+      tilde: false,
+      subs: [],
+    };
+    const ignore = (): void => undefined;
+    let j = i + 2;
+    while (j < stop) {
+      const c = s[j]!;
+      if (c === "\\") {
+        j += 2;
+        continue;
+      }
+      if (c === "'") {
+        j = s.indexOf("'", j + 1) + 1;
+        continue;
+      }
+      if (c === '"') {
+        j = this.doubleQuoted(j + 1, depth, b, ignore);
+        continue;
+      }
+      if (c === "$") {
+        j = this.dollar(j, depth, b, false).end;
+        continue;
+      }
+      if (c === "`") {
+        j = this.backtickBody(j, depth, b);
+        continue;
+      }
+      j++;
+    }
+    if (j !== stop) throw new ShellModelError("arithmetic expression misread");
+    const end = inner + 1;
+    const raw = s.slice(i, end);
+    const sp = this.span(i, end);
+    return {
+      word: {
+        kind: "word",
+        raw,
+        start: sp.start,
+        end: sp.end,
+        value: null,
+        literal: "",
+        quoted: false,
+        dynamic: true,
+        backtick: b.backtick,
+        ansiC: false,
+        locale: false,
+        glob: false,
+        tilde: false,
+        unusual: false,
+        subs: b.subs,
+        arith: true,
+      },
+      end,
+    };
   }
 
   /** Skip the heredoc bodies that start after a newline at `i`; their text is data. */
@@ -961,6 +1085,7 @@ interface WalkState {
 interface OutRecord {
   canonical: string;
   heads: readonly string[];
+  headText: string;
   span: Span;
   dirs: DirSet;
 }
@@ -1197,6 +1322,14 @@ class Walker {
             continue;
           }
         }
+        if (cmd.group !== null) {
+          // A word after a `( )` group: zsh's short forms run it as the
+          // body (`for x (a b) V`, `while (c) V`), bash rejects the line
+          // (`[[ ( a ) ]]` aside). Read as the next command, never folded
+          // into the keyword command before the group, where it was lost.
+          finishCommand(null);
+          endList(";");
+        }
         cmd.words.push(tk);
         i++;
         continue;
@@ -1302,6 +1435,12 @@ class Walker {
       const w = words[k];
       if (w === undefined) break;
       const v = w.quoted ? null : w.value; // reserved words are never quoted
+      if (w.arith === true) {
+        // `(( expression ))` as a command, or behind a prefix: data, its
+        // substitutions already walked above.
+        k++;
+        continue;
+      }
       if (v === "!") {
         info.negated = !info.negated;
         k++;
@@ -1333,6 +1472,24 @@ class Walker {
         };
         this.pushCompound(compound, frame);
         if (loop !== null) st.loops.push(loop);
+        if ((v === "for" || v === "select") && words[k + 1]?.arith === true) {
+          // `for (( ... ))` with its body in the same command:
+          // `for ((;;)) do V; done`, `for ((;;)) { V; }`.
+          k += 2;
+          continue;
+        }
+        const afterName = words[k + 2];
+        if (
+          (v === "for" || v === "select") &&
+          afterName !== undefined &&
+          !afterName.quoted &&
+          (afterName.value === "do" || afterName.value === "{")
+        ) {
+          // `for NAME do V; done`, `for NAME { V; }` (no `in` list, no
+          // separator; bash and zsh): the body follows the name.
+          k += 2;
+          continue;
+        }
         if (v === "for" || v === "select" || v === "case") {
           if (v === "case" && words.slice(k + 1).some((x) => x.value === "in")) {
             frame.header = false;
@@ -1384,6 +1541,17 @@ class Walker {
     }
     if (a === words.length) {
       if (inlineCdpath) st.cdpath = true;
+      // An assignment-only command is recorded with its assignments as
+      // its text, so a trigger that gates an assignment
+      // (`CLAUDE_SESSION_ID= `) reads it inside a compound command too.
+      const text = words.map(wordText).join(" ");
+      this.out.push({
+        canonical: text,
+        heads: [text],
+        headText: headTextOf(headWords),
+        span: { start: words[0]!.start, end: words[words.length - 1]!.end },
+        dirs: st.cur,
+      });
       return info;
     }
     words = words.slice(a);
@@ -1482,10 +1650,7 @@ class Walker {
   }
 
   private doEval(args: readonly ShellWord[], st: WalkState, evalWord: ShellWord): DirSet | null {
-    if (st.evalDepth >= MAX_MODEL_EVAL_DEPTH) {
-      st.cur = withPossibility(st.cur, OPAQUE);
-      return null;
-    }
+    if (st.evalDepth >= MAX_MODEL_EVAL_DEPTH) throw new ShellModelOpaqueError("eval nested too deep");
     if (args.some((w) => w.value === null)) {
       // A dynamic `eval` is out of scope, and can run any of the
       // `SHELL_OVERRIDE_COMMANDS`.
@@ -1498,8 +1663,7 @@ class Walker {
     try {
       tokens = new ShellLexer(source, { start: evalWord.start, end: last.end }).list(0, "top", 0).tokens;
     } catch {
-      st.cur = withPossibility(st.cur, OPAQUE);
-      return null;
+      throw new ShellModelOpaqueError("eval string not lexable");
     }
     const before = st.cur;
     st.evalDepth++;
@@ -1722,9 +1886,11 @@ class Walker {
     const lastWord = cmd.words[cmd.words.length - 1] ?? rest[rest.length - 1]!;
     const canonical = canonicalWords.join(" ");
     const offset = headWords.length - words.length;
+    const heads = stageTexts(headWords, [0, ...peeled.stages.map((i) => offset + i)], canonical);
     this.out.push({
       canonical,
-      heads: stageTexts(headWords, [0, ...peeled.stages.map((i) => offset + i)], canonical),
+      heads,
+      headText: headTextOf(headWords),
       span: { start: first.start, end: lastWord.end },
       dirs,
     });
@@ -1760,6 +1926,20 @@ function wordText(w: ShellWord): string {
 }
 
 /**
+ * `ModelCommand.headText`: the words after the compound prefixes, decoded,
+ * every blank and shell metacharacter inside a word replaced by `_` (so
+ * the normalisers read exactly these words, with no boundary, quote,
+ * redirection or comment inside one), joined by one space, and one
+ * trailing space, which every command has before its terminator when
+ * written on its own (`CLAUDE_SESSION_ID= ;`).
+ */
+function headTextOf(headWords: readonly ShellWord[]): string {
+  let text = "";
+  for (const w of headWords) text += `${(w.value ?? w.raw).replace(/[\s;|&()<>'"\\`$#]/g, "_")} `;
+  return text;
+}
+
+/**
  * The texts of `words` from each stage index on (deduplicated, in order),
  * then `canonical` when it differs from the last one. The words are joined
  * once and every stage is a suffix of that one string, so a long argument
@@ -1788,7 +1968,8 @@ function stageTexts(words: readonly ShellWord[], stages: readonly number[], cano
 /**
  * Peel the wrappers that run the next word as a program (`env`, `sudo`,
  * `doas`, `nice`, `timeout`, `nohup`, `setsid`, `time`, `command`, `exec`,
- * `stdbuf`, `xargs`, `coproc`) and leading assignments. `envChdir` is the
+ * `stdbuf`, `xargs`, `coproc`), also when spelled with a directory
+ * (`/usr/bin/env`), and leading assignments. `envChdir` is the
  * last `env -C` value. `stages` holds the index of every word a peel step
  * started at, and the final `idx`, in order (see `ModelCommand.heads`).
  */
@@ -1805,7 +1986,10 @@ function peelWrappers(words: readonly ShellWord[]): {
   const valueAt = (at: number): string | null | undefined => words[at]?.value;
   for (let guard = 0; guard < 64 && i < words.length; guard++) {
     const w = words[i]!;
-    const v = w.value;
+    // Wrappers are programs: `/usr/bin/env` and `/usr/bin/xargs` are
+    // peeled like `env` and `xargs` (`coproc`, a keyword, is matched as
+    // written below).
+    const v = w.value === null ? null : w.value.slice(w.value.lastIndexOf("/") + 1);
     if (stages[stages.length - 1] !== i) stages.push(i);
     if (isAssignment(w)) {
       i++;
@@ -1870,8 +2054,9 @@ function peelWrappers(words: readonly ShellWord[]): {
     if (v === "nice") {
       i++;
       const t = valueAt(i) ?? "";
-      if (t === "-n") i += 2;
-      else if (/^-\d+$|^-n./.test(t)) i++;
+      if (t === "-n" || t === "--adjustment") i += 2;
+      else if (/^-\d+$|^-n.|^--adjustment=/.test(t)) i++;
+      if (valueAt(i) === "--") i++;
       continue;
     }
     if (v === "timeout") {
@@ -1915,7 +2100,7 @@ function peelWrappers(words: readonly ShellWord[]): {
       i = skipXargsOptions(words, i + 1);
       continue;
     }
-    if (v === "coproc" && !w.quoted) {
+    if (w.value === "coproc" && !w.quoted) {
       // `coproc cmd`, `coproc { cmd; }`, `coproc NAME { cmd; }`. Peeled here,
       // not in the walker's prefix loop, because the coprocess runs in a
       // subshell: a `cd` behind it must not move the modelled shell.
@@ -1993,19 +2178,29 @@ function namesDirectory(dirs: DirSet): boolean {
  * of a directory change that certainly succeeds.
  */
 export function modelShellCommands(command: string, oracle?: DirectoryOracle): ModelCommand[] | null {
-  if (command.length > MAX_NORMALIZE_LENGTH) return null;
+  return modelCommandsOf(command, oracle).commands;
+}
+
+/** `modelShellCommands`, plus whether it failed on a `ShellModelOpaqueError`. */
+function modelCommandsOf(
+  command: string,
+  oracle?: DirectoryOracle,
+): { commands: ModelCommand[] | null; opaque: boolean } {
+  if (command.length > MAX_NORMALIZE_LENGTH) return { commands: null, opaque: false };
   try {
     const { tokens } = new ShellLexer(command, null).list(0, "top", 0);
     const walker = new Walker(oracle ?? null);
     walker.walk(tokens, newState());
-    return walker.out.map((rec) => ({
+    const commands = walker.out.map((rec) => ({
       canonical: rec.canonical,
       heads: rec.heads,
+      headText: rec.headText,
       span: rec.span,
       namesDirectory: namesDirectory(rec.dirs),
       dirs: [...rec.dirs.values()],
     }));
-  } catch {
-    return null;
+    return { commands, opaque: false };
+  } catch (err) {
+    return { commands: null, opaque: err instanceof ShellModelOpaqueError };
   }
 }

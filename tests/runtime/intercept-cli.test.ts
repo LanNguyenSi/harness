@@ -2488,7 +2488,10 @@ describe("runInterceptCli — the amp normalisation pass computes at most ONCE p
     });
     expect(result.decisions).toHaveLength(2);
     expect(result.decisions.every((d) => d.outcome === "deny")).toBe(true);
-    expect(mockedAmpAware).toHaveBeenCalledTimes(1);
+    // Once for the event's command, and once for the head text of the one
+    // model command whose own texts miss the trigger (`echo hi`), shared by
+    // both policies (task d11762ce: per model command, not per policy).
+    expect(mockedAmpAware.mock.calls.map(([text]) => text)).toEqual([command, "echo hi "]);
   });
 
   it("F4: computes the amp pass exactly ONCE for a Codex shell event whose command lives under raw_input.cmd", async () => {
@@ -2519,7 +2522,10 @@ describe("runInterceptCli — the amp normalisation pass computes at most ONCE p
     });
     expect(result.decisions).toHaveLength(2);
     expect(result.decisions.every((d) => d.outcome === "deny")).toBe(true);
-    expect(mockedAmpAware).toHaveBeenCalledTimes(1);
+    // Once for the event's command, and once for the head text of the one
+    // model command whose own texts miss the trigger (`echo hi`), shared by
+    // both policies (task d11762ce: per model command, not per policy).
+    expect(mockedAmpAware.mock.calls.map(([text]) => text)).toEqual([command, "echo hi "]);
   });
 });
 

@@ -8,6 +8,7 @@ import { dryRun } from "../../src/cli/dry-run.js";
 import { HarnessExitError } from "../../src/cli/exit-codes.js";
 import { loadManifest } from "../../src/cli/loader.js";
 import { runInterceptCli } from "../../src/cli/policy/intercept.js";
+import { MAX_NORMALIZE_LENGTH } from "../../src/runtime/command-normalize.js";
 import {
   MAX_ATTRIBUTED_CONTEXTS,
   policyMatchesEvent,
@@ -834,6 +835,28 @@ describe("dry-run: the quote-aware shell model arm and attribution match policy 
     const predicted = predictedTags(command, w.outer, "preflight-before-push");
     expect(predicted).toHaveLength(1);
     expect(predicted[0]).toMatch(/^\(unparsed command: unclassifiable: /);
+  });
+
+  it("predicts the refusal up to MAX_NORMALIZE_LENGTH characters and no refusal above it, as the runtime decides", async () => {
+    const w = makeWorld();
+    const head = 'echo "unterminated ';
+    const atBound = head + "x".repeat(MAX_NORMALIZE_LENGTH - head.length);
+    expect(atBound.length).toBe(MAX_NORMALIZE_LENGTH);
+    expect(await runtimeTags(atBound, w.outer, "preflight-before-push")).toEqual([
+      "(unparsed command: not classifiable, no context queried)",
+    ]);
+    expect(predictedTags(atBound, w.outer, "preflight-before-push")[0]).toMatch(/^\(unparsed command: /);
+    const past = `${atBound}x`;
+    expect(await runtimeTags(past, w.outer, "preflight-before-push")).toEqual([]);
+    const r = dryRun("x", {
+      configPath: FULL_MANIFEST,
+      tool: "Bash",
+      toolArgs: JSON.stringify({ command: past }),
+      builtins: { CWD: w.outer },
+    });
+    expect(r.report.matchingPolicies.map((p) => p.name)).not.toContain("preflight-before-push");
+    expect(r.report.matchingPolicies.flatMap((p) => p.ledgerQueries).some((q) => q.startsWith("(unparsed"))).toBe(false);
+    expect(r.report.couldMatchPolicies.map((p) => p.name)).toContain("preflight-before-push");
   });
 
   it("predicts the runtime's demands for cwd-only compound head spellings", async () => {

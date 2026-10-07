@@ -170,6 +170,19 @@ export interface PolicyDecision {
    * directory whose evidence is missing.
    */
   foreignTarget?: ForeignTarget;
+  /**
+   * Set when the engine refused to evaluate the policy's `requires:` for
+   * this command and decided per enforcement without a ledger query:
+   * `"unparsed"` when the command line could not be parsed
+   * (`UNPARSED_COMMAND_REASON`), `"opaque-target"` when it names a
+   * repository target that cannot be attributed (`OPAQUE_TARGET_REASON`).
+   * In-memory only (not part of the serialised audit row; `reason` and the
+   * placeholder `ledgerTag` carry the cause). The agent envelope renders
+   * `reason` with precedence over the policy's `ux:` / `producers:` text
+   * and the record hint when this is set: recording the policy's evidence
+   * cannot unblock a refusal.
+   */
+  refusal?: "unparsed" | "opaque-target";
   evaluatedAt: string;
 }
 
@@ -1359,8 +1372,36 @@ export function attributeTriggerModelCommands(
   } catch {
     return [];
   }
-  return model.commands.filter((c) => c.heads.some((text) => re.test(text)));
+  return model.commands.filter(
+    (c) => c.heads.some((text) => re.test(text)) || headTextNormalizations(c).some((text) => re.test(text)),
+  );
 }
+
+/**
+ * The normalisations the text arms apply (`normalizeCommand`,
+ * `normalizeCommandAmpAware`, `normalizeCommandQuoteAware`) of a model
+ * command's `headText`, the command written on its own, computed once per
+ * model command and shared by every policy. With the raw `headText` among
+ * them, a `bash_match` trigger matches a command inside a compound command
+ * (`{ X; }`, `if ...; then X; fi`, `! X`) whenever it matches `X` as a bare
+ * command, whatever wrapper option grammar the normalisers read
+ * (`sudo --user root`, `nice --adjustment=5`, `timeout --kill-after 5 10`).
+ */
+function headTextNormalizations(c: ModelCommand): readonly string[] {
+  let texts = HEAD_TEXT_NORMALIZATIONS.get(c);
+  if (texts === undefined) {
+    texts = [
+      c.headText,
+      normalizeCommand(c.headText).normalized,
+      normalizeCommandAmpAware(c.headText).normalized,
+      normalizeCommandQuoteAware(c.headText).normalized,
+    ];
+    HEAD_TEXT_NORMALIZATIONS.set(c, texts);
+  }
+  return texts;
+}
+
+const HEAD_TEXT_NORMALIZATIONS = new WeakMap<ModelCommand, readonly string[]>();
 
 /**
  * Does a policy's `requires:` reference the per-repo `${REPO}`/`${BRANCH}`
@@ -1442,21 +1483,28 @@ export type AttributedContextsResult =
  * cannot be attributed (task `cfb6b390`). One text for the runtime
  * decision and the dry-run preview, so the two cannot drift.
  */
-export const UNPARSED_COMMAND_REASON =
-  "unclassifiable: this gate cannot parse this command line (a syntax error, or compound commands, " +
-  "subshells or substitutions nested past the parser's bounds), so it cannot tell whether it runs a gated " +
-  "command; bash still runs the complete lines before a syntax error. Fix the syntax or flatten the nesting, " +
-  "then run it again";
-
-/** The ledger-tag text of an `UNPARSED_COMMAND_REASON` decision: no tag is queried. */
-export const UNPARSED_COMMAND_TAG = "(unparsed command: not classifiable, no context queried)";
-
 export const OPAQUE_TARGET_REASON =
   "ambiguous: this command names a repository directory through a path this gate cannot attribute " +
   "(a backtick, an ANSI-C or locale quoted value, a control or separator character, a glob, " +
   "a CDPATH search, a directory change repeated in a loop, or a command line the gate cannot parse), " +
   "so the evidence of the current directory's repository cannot stand in for it. Name the repository " +
   "with a plain path (`git -C <path>` or `cd <path> && ...`), or run the command from inside it";
+
+/**
+ * Why every `bash_match` policy the text arms missed is denied outright
+ * for a command line the shell model cannot parse within
+ * `MAX_NORMALIZE_LENGTH` (task d11762ce, `policyMatchArm`'s `"unparsed"`).
+ * One text for the runtime decision, the agent envelope, the operator's
+ * stderr line and the dry-run preview, so they cannot drift.
+ */
+export const UNPARSED_COMMAND_REASON =
+  "unclassifiable: this gate cannot parse this command line (a syntax error, or compound commands, " +
+  "subshells, substitutions or eval strings nested past the parser's bounds), so it cannot tell whether it " +
+  "runs a gated command; bash still runs the complete lines before a syntax error. Fix the syntax or flatten " +
+  "the nesting, then run it again";
+
+/** The ledger-tag text of an `UNPARSED_COMMAND_REASON` decision: no tag is queried. */
+export const UNPARSED_COMMAND_TAG = "(unparsed command: not classifiable, no context queried)";
 
 /**
  * Resolve the distinct `${REPO}`/`${BRANCH}`/`currentHeadSha` contexts a
@@ -2153,14 +2201,17 @@ export async function intercept(
               options.builtins,
               evaluatedAt,
             )
-          : failClosedContextsDecision(
-              policy,
-              event,
-              options.builtins,
-              evaluatedAt,
-              attributed.kind === "unparsed" ? UNPARSED_COMMAND_REASON : OPAQUE_TARGET_REASON,
-              attributed.kind === "unparsed" ? UNPARSED_COMMAND_TAG : OPAQUE_TARGET_TAG,
-            );
+          : {
+              ...failClosedContextsDecision(
+                policy,
+                event,
+                options.builtins,
+                evaluatedAt,
+                attributed.kind === "unparsed" ? UNPARSED_COMMAND_REASON : OPAQUE_TARGET_REASON,
+                attributed.kind === "unparsed" ? UNPARSED_COMMAND_TAG : OPAQUE_TARGET_TAG,
+              ),
+              refusal: attributed.kind,
+            };
       decisions.push(decision);
       try {
         await options.ledger.record(decision, resolveSessionId(event.session_id));
@@ -2299,6 +2350,20 @@ export async function intercept(
       // produce a tag the gate will not read in this state). Names no
       // opt-out, same reasoning as the degraded envelope above.
       reasonText = `${blocking.policyName}: ${blocking.reason}`;
+    } else if (blocking.refusal !== undefined) {
+      // A refusal (task d11762ce): the command line could not be parsed,
+      // or it names a repository target that cannot be attributed. Takes
+      // precedence over `ux:`, `producers:` and the record hint, which all
+      // name the policy's evidence as the remedy: recording it cannot
+      // unblock a refusal, which never reads the ledger. One envelope names
+      // the cause and its own remedy (fix the syntax or flatten the
+      // nesting; name the repository with a plain path) and every policy
+      // refused for the same cause, so the agent is not sent through the
+      // policies one at a time.
+      const refusedNames = decisions
+        .filter((d) => d.refusal === blocking.refusal && isBlockingDecision(d))
+        .map((d) => d.policyName);
+      reasonText = `${refusedNames.join(", ")}: ${blocking.reason}.`;
     } else if (blockingPolicy?.ux) {
       // The ux surface is operator-curated plain language. Task
       // 2929c5b7: a ux-declared policy's `cannot:` text used to be
