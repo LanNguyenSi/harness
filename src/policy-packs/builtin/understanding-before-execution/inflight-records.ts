@@ -445,7 +445,7 @@ export function verifyInflightRecord(
       matched: false,
       forged: false,
       stale: false,
-      detail: `in-flight record at ${filePath} exists but could not be read (I/O error); treating as absent since its signature cannot be verified`,
+      detail: `in-flight record at ${filePath} exists but could not be read (I/O error or over the 1 MiB size cap); treating as absent since its signature cannot be verified`,
     };
   }
 

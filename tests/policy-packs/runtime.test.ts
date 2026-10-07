@@ -450,6 +450,17 @@ describe("writeApprovalMarker / checkApprovalMarker / clearApprovalMarker (agent
     expect(r.detail).toMatch(/forged\/unsigned marker rejected/);
   });
 
+  it("a marker over the 1 MiB read cap is refused with a detail naming the cap, not forged (task f1bacdd8)", () => {
+    const markerPath = path.join(tmp, ".approvals", "sess-oversized");
+    fs.mkdirSync(path.dirname(markerPath), { recursive: true });
+    fs.writeFileSync(markerPath, "a".repeat(1024 * 1024 + 1));
+    const r = checkApprovalMarker(tmp, "sess-oversized");
+    expect(r.matched).toBe(false);
+    expect(r.forged).toBe(false);
+    expect(r.marker).toBeNull();
+    expect(r.detail).toContain("could not be read (I/O error or over the 1 MiB size cap)");
+  });
+
   // Regression test (AC #3): a marker hand-written WITHOUT the signing key
   // — simulating a forge via a non-gated write primitive (a future MCP
   // tool the Edit|Write|Bash blocker matcher does not enumerate) — must

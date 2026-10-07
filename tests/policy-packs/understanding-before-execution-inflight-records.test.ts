@@ -245,6 +245,16 @@ describe("verifyInflightRecord", () => {
     expect(check.detail).toContain("not a regular file");
   });
 
+  it("a record over the 1 MiB read cap: matched false, forged false, detail names the cap (task f1bacdd8)", () => {
+    const filePath = inflightRecordPathFor(generatedDir, SESSION, AGENT);
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.writeFileSync(filePath, "a".repeat(1024 * 1024 + 1));
+    const check = verifyInflightRecord(generatedDir, SESSION, AGENT);
+    expect(check.matched).toBe(false);
+    expect(check.forged).toBe(false);
+    expect(check.detail).toContain("could not be read (I/O error or over the 1 MiB size cap)");
+  });
+
   it("unparsable body: matched false, forged false", () => {
     const filePath = inflightRecordPathFor(generatedDir, SESSION, AGENT);
     fs.mkdirSync(path.dirname(filePath), { recursive: true });

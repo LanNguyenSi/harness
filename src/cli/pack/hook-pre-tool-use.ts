@@ -299,7 +299,7 @@ function readAdoptedEntries(generatedDir: string, childSessionId: string): Adopt
     return { ok: false, detail: `${filePath} is not a regular file` };
   }
   if (read.kind !== "ok") {
-    return { ok: false, detail: `${filePath} exists but could not be read (I/O error)` };
+    return { ok: false, detail: `${filePath} exists but could not be read (I/O error or over the 1 MiB size cap)` };
   }
   const ids = new Set<string>();
   for (const line of read.content.split("\n")) {

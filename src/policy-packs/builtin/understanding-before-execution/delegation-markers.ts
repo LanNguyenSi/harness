@@ -718,7 +718,7 @@ export function verifyDelegation(opts: VerifyDelegationOptions): DelegationVerif
     return {
       ok: false,
       reason: "unreadable",
-      detail: `delegation marker at ${filePath} exists but could not be read (I/O error); treating as no delegation since its signature cannot be verified`,
+      detail: `delegation marker at ${filePath} exists but could not be read (I/O error or over the 1 MiB size cap); treating as no delegation since its signature cannot be verified`,
     };
   }
 
