@@ -1443,7 +1443,8 @@ export type AttributedContextsResult =
 export const OPAQUE_TARGET_REASON =
   "ambiguous: this command names a repository directory through a path this gate cannot attribute " +
   "(a backtick, an ANSI-C or locale quoted value, a control or separator character, a glob, " +
-  "a CDPATH search, a directory change repeated in a loop, or a command line the gate cannot parse), " +
+  "a CDPATH search, a directory that depends on a value the gate cannot resolve, " +
+  "a directory change repeated in a loop, or a command line the gate cannot parse), " +
   "so the evidence of the current directory's repository cannot stand in for it. Name the repository " +
   "with a plain path (`git -C <path>` or `cd <path> && ...`), or run the command from inside it";
 
@@ -1794,8 +1795,10 @@ export function resolveAttributedContexts(
       // one it cannot attribute. Reading that as "cwd only" would let the
       // outer repository's evidence stand in for a nested repository the
       // command really runs in, so the policy fails closed instead. Every
-      // other unattributable form (a quoted path, a `~` prefix, a bare
-      // substitution) keeps the cwd-only fallback below.
+      // other form this segment view cannot attribute (a quoted path, a `~`
+      // prefix, a bare substitution) keeps its cwd-only fallback below; the
+      // model view added after it reads a variable or substitution target
+      // as opaque since task e927e903, and fails closed on it there.
       return { kind: "opaque-target" };
     }
 

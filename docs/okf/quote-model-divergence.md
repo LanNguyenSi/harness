@@ -3,7 +3,7 @@ type: overview
 title: Shell quote models, measured divergence against bash
 description: The policy engine has independent shell-word models plus a raw-regex trigger layer (since task 7d4abf84 also a quote-aware shell command model that feeds per-repo attribution). This records what each actually extracts, measured against real bash, which divergences are fail-open, and the evidence-led ordering for closing them.
 tags: [policy-engine, bash-match, quote-model, fail-open, measurement]
-timestamp: 2026-10-07T15:22:53Z
+timestamp: 2026-10-07T19:34:34Z
 sources:
   - src/runtime/command-normalize.ts
   - src/cli/init/composer.ts
@@ -165,7 +165,24 @@ Ledger-Tag `(unparsed command: ...)`), auch ohne verzeichniswechselndes
 Wort im Text, und der fünfte Arm trifft weiter auf der Lesart ohne
 Ablehnungen (`ShellModelView.triggerCommands`), nie auf ihr attribuiert.
 Einige weitere Wörter, die ein späteres relatives `cd` lenken, machen es
-ebenfalls opak.
+ebenfalls opak. Seit Task `e927e903` liest das Modell auch ein
+Verzeichnisziel als opak, das von einem Wert abhängt, den es nicht
+auflösen kann: einen erst zur Laufzeit bekannten Wert eines `cd`, `pushd`,
+`git -C`, `env -C` oder `--git-dir` (Variable, Kommandosubstitution,
+arithmetische Expansion), in einem solchen Wert jedes Tilde-Präfix außer
+`~` und `~/...` (`~+`, `~-`, `~N`, `~+N`, `~-N`, `~NAME`), ein `cd -` oder
+`pushd -` vor jedem Verzeichniswechsel (das vorige Verzeichnis der
+Sitzung), ein nacktes `cd`, ein `~`- oder `~/...`-Ziel und zshs `pushd`
+mit leerem Stack, wenn die Zeile irgendwo `HOME` zuweist, `cd -` und
+`pushd -`, wenn sie irgendwo `OLDPWD` zuweist, und einen `cd`-Stackindex,
+den bash als Pfad liest. Die beiden Zuweisungs-Flags kennt der Lauf von
+Anfang an: ein erster Lauf über die ganze Zeile (`steeredInLine`,
+Funktionsrümpfe, Schleifenrümpfe, Substitutionen und wörtliche
+`eval`-Strings eingeschlossen) sammelt jede Zuweisung, weil ein späterer
+Schleifendurchlauf oder eine nach der Zuweisung aufgerufene Funktion den
+Verzeichniswechsel danach ausführt; eine Zuweisung in einer Subshell oder
+vor einem anderen Befehl zählt bewusst mit (Überapproximation). Ohne
+solche Zuweisung behält nur ein `~`- oder `~/...`-Wert den cwd-Fallback.
 
 **Empfehlung 2, Teil (der read-only-Flag-Kanal, `fdee7d0f`) ist umgesetzt
 und ausgeliefert — als "slice 1", PR #392, nur für diesen einen der drei

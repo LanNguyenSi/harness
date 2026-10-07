@@ -9,9 +9,14 @@ import {
 import {
   BENIGN_ROWS,
   CDPATH_ROWS,
+  DYNAMIC_TARGET_ROWS,
+  RESOLVED_TARGET_ROWS,
   SHARED_ROWS,
   SOLE_ROWS,
+  STACK_INDEX_PATH_ROWS,
+  STEERED_ROWS,
   UNLEXABLE_BRACE_ROWS,
+  UNTRACKED_TARGET_ROWS,
 } from "../fixtures/shell-model-refusals/rows.js";
 
 // Task 9238cc27: the shell command model refuses a command line that holds
@@ -143,5 +148,37 @@ describe("modelShellCommands: the benign rows stay attributed", () => {
   it("reads the benign stack spellings next to the refused ones", () => {
     expect(shellModelViewOf("case y in x) pushd vendor; popd;; y) :;; esac; git push origin main").refusal).toBeUndefined();
     expect(shellModelViewOf("case y in x) cd vendor;; esac; cd -; git push origin main").refusal).toBeUndefined();
+  });
+});
+
+// Task e927e903: a directory target the model cannot resolve (a dynamic
+// value, a `HOME` or `OLDPWD` the line assigned, a `cd` stack index bash
+// reads as a path) makes the gated verb after it opaque, so the gate fails
+// closed instead of reading it as the working directory.
+describe("modelShellCommands: a directory target that depends on an unresolved value reads as opaque", () => {
+  for (const [label, rows] of [
+    ["a dynamic target", DYNAMIC_TARGET_ROWS],
+    ["a HOME or OLDPWD the line assigns", STEERED_ROWS],
+    ["a stack index read as a path", STACK_INDEX_PATH_ROWS],
+    ["a tilde prefix or an untracked previous directory", UNTRACKED_TARGET_ROWS],
+  ] as const) {
+    it(`reads git push after ${label} as opaque`, () => {
+      // Every row whose push does not read as opaque, listed in full on a failure.
+      const misread = rows.filter((command) => {
+        const view = shellModelViewOf(command);
+        const push = view.commands?.find((c) => c.canonical.startsWith("git push"));
+        return view.refusal !== undefined || push === undefined || !push.dirs.some((d) => d.kind === "opaque");
+      });
+      expect(misread).toEqual([]);
+    });
+  }
+
+  it("keeps the controls attributed: no opaque possibility, no refusal", () => {
+    const misread = RESOLVED_TARGET_ROWS.filter((command) => {
+      const view = shellModelViewOf(command);
+      const push = view.commands?.find((c) => c.canonical.startsWith("git push"));
+      return view.refusal !== undefined || push === undefined || push.dirs.some((d) => d.kind === "opaque");
+    });
+    expect(misread).toEqual([]);
   });
 });

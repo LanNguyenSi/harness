@@ -307,12 +307,17 @@ describe("modelShellCommands: composition and step modes", () => {
     expect(dirsOf("git -C vendor --git-dir=/abs/x/.git log")).toEqual(["P:/abs/x"]);
   });
 
-  it("a dynamic value gives unknown and keeps a known base as a candidate", () => {
-    expect(dirsOf(`git -C ${P} -C "$EMPTY" log`)).toEqual(["P:" + P, "unknown"].sort());
-    expect(dirsOf('cd "$D" && git log')).toEqual(["cwd", "unknown"]);
+  it("a dynamic value is opaque and keeps a known base as a candidate; ~ and a bare cd read home as unknown", () => {
+    // Task e927e903: a target only known at run time can name a nested
+    // repository, so it reads as opaque (formerly `unknown`, the
+    // working-directory fallback). An empty expansion still stays put.
+    expect(dirsOf(`git -C ${P} -C "$EMPTY" log`)).toEqual(["P:" + P, "opaque"].sort());
+    expect(dirsOf('cd "$D" && git log')).toEqual(["cwd", "opaque"]);
+    expect(dirsOf('cd "$(git rev-parse --show-toplevel)" && git status', "git status")).toEqual(["cwd", "opaque"]);
+    // The home directory keeps the documented fallback when the line does
+    // not assign HOME.
     expect(dirsOf("cd ~/x && git log")).toEqual(["unknown"]);
     expect(dirsOf("cd && git log")).toEqual(["unknown"]);
-    expect(dirsOf('cd "$(git rev-parse --show-toplevel)" && git status', "git status")).toEqual(["cwd", "unknown"]);
   });
 
   it("an empty value stays put", () => {
@@ -322,7 +327,9 @@ describe("modelShellCommands: composition and step modes", () => {
   it("zsh two-argument cd is opaque, cd - returns the previous directory", () => {
     expect(dirsOf("cd a b && git log")).toEqual(["opaque"]);
     expect(dirsOf(`cd ${P} && cd /tmp && cd - && git log`)).toEqual([`L:${P}`]);
-    expect(dirsOf("cd - && git log")).toEqual(["unknown"]);
+    // Task e927e903: before any move the walk has tracked no previous
+    // directory, so `cd -` reads as opaque (formerly `unknown`).
+    expect(dirsOf("cd - && git log")).toEqual(["opaque"]);
   });
 
   it("tracks the pushd stack", () => {
@@ -388,7 +395,8 @@ describe("modelShellCommands: control flow", () => {
 
   it("a command inside a loop body that moved also gets the directories a later iteration starts in", () => {
     expect(dirsOf("while true; do git log; cd /abs/x; done")).toEqual(["L:/abs/x", "cwd"]);
-    expect(dirsOf("for d in a b; do git log; cd $d; done")).toEqual(["cwd", "unknown"]);
+    // Task e927e903: the loop variable's target is opaque (formerly `unknown`).
+    expect(dirsOf("for d in a b; do git log; cd $d; done")).toEqual(["cwd", "opaque"]);
     expect(dirsOf("for d in a b; do cd ..; git log; done")).toEqual(["L:..", "cwd", "opaque"]);
     expect(dirsOf("while git log; do cd sub; done", "git log")).toEqual(["cwd", "opaque"]);
     // A loop whose body moves only in a subshell is unaffected.
@@ -424,7 +432,10 @@ describe("modelShellCommands: canonical text and namesDirectory", () => {
   it("namesDirectory is true for a named path or an opaque possibility only", () => {
     expect(commandOf("git log").namesDirectory).toBe(false);
     expect(commandOf("! git log").namesDirectory).toBe(false);
-    expect(commandOf('cd "$D" && git log').namesDirectory).toBe(false);
+    // Task e927e903: a dynamic target is opaque now, so it names a directory
+    // the gate fails closed on (formerly `unknown`, which names none).
+    expect(commandOf('cd "$D" && git log').namesDirectory).toBe(true);
+    expect(commandOf("cd ~/x && git log").namesDirectory).toBe(false);
     expect(commandOf(`git -C ${P} log`).namesDirectory).toBe(true);
     expect(commandOf(`cd ${T} && git log`).namesDirectory).toBe(true);
   });
@@ -705,6 +716,213 @@ describe("modelShellCommands: a subshell or substitution inside a compound comma
       const asked: string[] = [];
       dirsWithOracle(command, ["L:X"], asked);
       expect(asked, command).toEqual([]);
+    }
+  });
+});
+
+// Task e927e903: a `HOME` or `OLDPWD` the line assigns steers a later bare
+// `cd`, `~` / `~/...` target, `cd -` or `pushd -` somewhere the text does
+// not name, so that directory reads as opaque; an unassigned one keeps the
+// documented `unknown` (home) or the tracked previous directory. A producer
+// anywhere in the line counts for the whole line (the flags are known
+// before the walk). The tests are named by class and index; each command
+// stays in the data and in the assertion message.
+describe("modelShellCommands: a variable a directory change reads, assigned in the line", () => {
+  // [command, expected dirs of `git log`], per class.
+  const classes: Array<[string, Array<[string, string[]]>]> = [
+    [
+      // Each spelling that assigns.
+      "steering producer",
+      [
+        ["HOME=x; cd && git log", ["opaque"]],
+        ["HOME=x cd && git log", ["opaque"]],
+        ["export HOME=x; cd && git log", ["opaque"]],
+        ["typeset -g HOME=x; cd && git log", ["opaque"]],
+        ["read -r x HOME; cd && git log", ["opaque"]],
+        ["read -aHOME; cd && git log", ["opaque"]],
+        ["printf -vHOME x; cd && git log", ["opaque"]],
+        ["print -rv HOME x; cd && git log", ["opaque"]],
+        ["set -A HOME x; cd && git log", ["opaque"]],
+        ["getopts a HOME; cd && git log", ["opaque"]],
+        ["zparseopts -D h:=HOME; cd && git log", ["opaque"]],
+        ["declare -n r=HOME; cd && git log", ["opaque"]],
+        ["declare -i n=HOME=1; cd && git log", ["opaque"]],
+        ["x=HOME=1; cd && git log", ["opaque"]],
+        ["a[HOME=1]=x; cd && git log", ["opaque"]],
+        ["printf '%d' 'HOME=7'; cd && git log", ["opaque"]],
+        ["echo ${HOME:=x}; cd && git log", ["opaque"]],
+        ['echo "${HOME=x}"; cd && git log', ["opaque"]],
+        [": $((HOME)); cd && git log", ["opaque"]],
+        ["for ((HOME=1; HOME<2; HOME++)); do :; done; cd && git log", ["opaque"]],
+        ["cat {HOME}>f; cd && git log", ["opaque"]],
+        ["select OLDPWD in a; do break; done; cd - && git log", ["opaque"]],
+        ["wait -p OLDPWD; cd - && git log", ["opaque"]],
+      ],
+    ],
+    [
+      // Each reader; a `~NAME` prefix reads as opaque whatever the line
+      // assigns (formerly `unknown`).
+      "reader",
+      [
+        ["HOME=x; cd ~/y && git log", ["opaque"]],
+        ["HOME=x; pushd ~ && git log", ["opaque"]],
+        ["HOME=x; git -C ~ log", ["opaque"]],
+        ["OLDPWD=x; cd ~- && git log", ["opaque"]],
+        ["OLDPWD=x; env -C ~- git log", ["opaque"]],
+        ["OLDPWD=x; pushd - && git log", ["opaque"]],
+        ["HOME=x; cd ~user && git log", ["opaque"]],
+      ],
+    ],
+    [
+      // A subshell inherits the assignment. A producer inside a subshell or
+      // in front of one command counts for the whole line too (formerly
+      // `unknown` outside its scope): a function that subshell or command
+      // calls reads it, and the walk reads a function body where it is
+      // defined. An `eval` string may assign for good.
+      "line-wide producer",
+      [
+        ["HOME=x; (cd && git log)", ["opaque"]],
+        ["(HOME=x); cd && git log", ["opaque"]],
+        ["echo $(HOME=x); cd && git log", ["opaque"]],
+        ["HOME=x cd && cd && git log", ["opaque"]],
+        ["HOME=x true; cd && git log", ["opaque"]],
+        ["HOME=x git -C ~ log", ["opaque"]],
+        ["HOME=x eval true; cd && git log", ["opaque"]],
+      ],
+    ],
+    [
+      // Reads and look-alikes assign nothing; unset only clears the value.
+      // Nothing assigned: `pushd -` returns the tracked previous directory.
+      "control",
+      [
+        ['echo $HOME ${HOME} "${HOME:-x}" ${#HOME} ${HOME%/}; cd && git log', ["unknown"]],
+        ['printf -v x "$HOME"; cd && git log', ["unknown"]],
+        ["printf '%s' HOME; cd && git log", ["unknown"]],
+        ['declare -x PATH="$HOME/bin"; cd && git log', ["unknown"]],
+        ["set -- HOME; cd && git log", ["unknown"]],
+        ["unset HOME; cd && git log", ["unknown"]],
+        ["cat {fd}>f; cd && git log", ["unknown"]],
+        ["cd X && pushd - && git log", ["cwd"]],
+      ],
+    ],
+  ];
+  for (const [kind, rows] of classes) {
+    rows.forEach(([command, expected], index) => {
+      it(`${kind} #${index + 1}`, () => {
+        expect(dirsOf(command), command).toEqual([...expected].sort());
+      });
+    });
+  }
+
+  it("cd +N reads the stack and an opaque possibility (a path in bash); pushd +N only the stack", () => {
+    expect(dirsOf("cd +1 && git log")).toEqual(["cwd", "opaque"]);
+    expect(dirsOf("cd -- -1 && git log")).toEqual(["cwd", "opaque"]);
+    expect(dirsOf("pushd +1 && git log")).toEqual(["cwd"]);
+  });
+});
+
+// Task e927e903: the `HOME` and `OLDPWD` flags are known before the walk. A
+// reader can run after a producer that comes later in the text, in a later
+// loop iteration or in a function body (read where it is defined, run where
+// it is called), so a producer anywhere in the line sets the flag from the
+// first command on. The commands whose directories these tests read are
+// neutral (`ls`).
+describe("modelShellCommands: a producer later in the text reaches a reader before it", () => {
+  it("in a loop body, a producer after the reader reaches it in a later iteration", () => {
+    for (const command of [
+      "for i in 1 2; do cd ~ && ls; HOME=/tmp; done",
+      "while true; do cd && ls; HOME=/tmp; done",
+    ]) {
+      expect(dirsOf(command, "ls"), command).toEqual(["cwd", "opaque"]);
+    }
+  });
+
+  it("a function body read where it is defined reaches a producer before the call", () => {
+    for (const command of [
+      "f() { cd && ls; }; HOME=/tmp; f",
+      "cd sub; f() { cd - && ls; }; OLDPWD=/tmp; f",
+      // An assignment in front of the call, a subshell that calls it, a
+      // literal `eval` string.
+      "f() { cd && ls; }; HOME=/tmp f",
+      "f() { cd && ls; }; (HOME=/tmp; f)",
+      "f() { cd ~ && ls; }; eval 'HOME=/tmp'; f",
+    ]) {
+      expect(dirsOf(command, "ls"), command).toEqual(["opaque"]);
+    }
+  });
+
+  it("a reader before its producer in plain sequence reads opaque too (an accepted over-approximation)", () => {
+    for (const command of ["cd ~ && ls; HOME=/tmp", "cd sub; cd - && ls; OLDPWD=/tmp"]) {
+      expect(dirsOf(command, "ls"), command).toEqual(["opaque"]);
+    }
+  });
+
+  it("a line without a producer reads as before", () => {
+    const table: Array<[string, string[]]> = [
+      ["for i in 1 2; do cd ~ && ls; done", ["cwd", "unknown"]],
+      ["while true; do cd && ls; done", ["cwd", "unknown"]],
+      ["f() { cd && ls; }; f", ["unknown"]],
+      ["cd sub; f() { cd - && ls; }; f", ["cwd"]],
+      ["cd ~ && ls", ["unknown"]],
+      ["cd sub; cd - && ls", ["cwd"]],
+    ];
+    for (const [command, expected] of table) {
+      expect(dirsOf(command, "ls"), command).toEqual(expected);
+    }
+  });
+});
+
+// Task e927e903: bash and zsh read a tilde prefix other than `~` and `~/...`
+// as the working directory, the previous one, a directory stack entry or a
+// user's home directory, values the walk does not resolve; every join that
+// takes a target reads it as opaque. `~` and `~/...` keep the documented
+// `unknown` (home) when the line assigns no `HOME`.
+describe("modelShellCommands: a tilde prefix other than the home directory's reads as opaque", () => {
+  const KINDS = ["~+", "~-", "~2", "~+2", "~-2", "~nobody"];
+
+  KINDS.forEach((kind, index) => {
+    it(`tilde prefix kind #${index + 1}, in a cd, pushd and env -C target`, () => {
+      for (const command of [`cd ${kind} && ls`, `cd ${kind}/x && ls`, `pushd ${kind} && ls`, `env -C ${kind} ls`]) {
+        expect(dirsOf(command, "ls"), command).toEqual(["opaque"]);
+      }
+    });
+
+    it(`tilde prefix kind #${index + 1}, in a git -C target`, () => {
+      const command = `git -C ${kind} log`;
+      expect(dirsOf(command), command).toEqual(["opaque"]);
+    });
+  });
+
+  it("the home directory's prefixes keep the documented unknown without a producer", () => {
+    for (const command of ["cd ~ && ls", "cd ~/x && ls", "pushd ~/x && ls", "env -C ~/x ls"]) {
+      expect(dirsOf(command, "ls"), command).toEqual(["unknown"]);
+    }
+  });
+});
+
+// Task e927e903: `cd -` and `pushd -` read the previous directory the walk
+// tracked; before any move that is the session's previous directory, which
+// the walk does not track, so they read as opaque.
+describe("modelShellCommands: the previous directory before any move reads as opaque", () => {
+  it("cd - and pushd - at the start of a line", () => {
+    for (const command of ["cd - && ls", "pushd - && ls"]) {
+      expect(dirsOf(command, "ls"), command).toEqual(["opaque"]);
+    }
+  });
+
+  it("after a tracked literal cd they read the tracked directory", () => {
+    for (const command of ["cd sub && cd - && ls", "cd sub && pushd - && ls"]) {
+      expect(dirsOf(command, "ls"), command).toEqual(["cwd"]);
+    }
+  });
+
+  it("a return after a move to an opaque target keeps an opaque possibility unless && joins it to the next command", () => {
+    // The return itself can fail and leave the shell where it was.
+    for (const command of ['cd "$d"; cd -; ls', 'pushd "$d"; popd; ls']) {
+      expect(dirsOf(command, "ls"), command).toEqual(["cwd", "opaque"]);
+    }
+    for (const command of ['cd "$d"; cd - && ls', 'pushd "$d"; popd && ls']) {
+      expect(dirsOf(command, "ls"), command).toEqual(["cwd"]);
     }
   });
 });

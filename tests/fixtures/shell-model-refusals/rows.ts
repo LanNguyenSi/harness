@@ -1,4 +1,5 @@
-// Command rows for the shell command model's refusals (task 9238cc27).
+// Command rows for the shell command model's refusals (task 9238cc27) and
+// for the directory targets it cannot resolve (task e927e903).
 // Data only: `tests/runtime/shell-command-model-refusals.test.ts` and
 // `tests/runtime/intercept-cli-refused-shapes.test.ts` read them. Every row
 // is written for a working directory that is a repository with a nested
@@ -132,6 +133,124 @@ export const CDPATH_ROWS: readonly string[] = [
   "arr=(${CDPATH:=vendor}); cd libplain; git push origin main",
   "for CDPATH in vendor; do :; done; cd libplain; git push origin main",
   ": <<< ${CDPATH:=vendor}; cd libplain; git push origin main",
+];
+
+/**
+ * Rows whose gated verb runs in a directory named by a value the model
+ * cannot resolve (task e927e903): a dynamic `cd`, `pushd`, `git -C`,
+ * `env -C` target, mixed with literal parts and behind options too. The
+ * `git push` after it reads as opaque.
+ */
+export const DYNAMIC_TARGET_ROWS: readonly string[] = [
+  "X=vendor/libplain; cd $X; git push origin main",
+  "X=vendor/libplain; cd -P \"$X\" && git push origin main",
+  "X=vendor/libplain; builtin cd \"$X\"; git push origin main",
+  "x=libplain; cd vendor/$x && git push origin main",
+  'cd "$(echo vendor/libplain)" && git push origin main',
+  "cd $((1)) && git push origin main",
+  'X=vendor/libplain; pushd "$X" && git push origin main',
+  "X=vendor/libplain; git -C $X push origin main",
+  'git -C "$(echo vendor/libplain)" push origin main',
+  'x=libplain; git -C vendor -C "$x" push origin main',
+  'for d in vendor/libplain; do git -C "$d" push origin main; done',
+  'd=vendor/libplain; env -C "$d" git push origin main',
+  'd=vendor/libplain; env -C"$d" git push origin main',
+  'd=vendor/libplain; env --chdir="$d" git push origin main',
+];
+
+/**
+ * Rows that assign `HOME` or `OLDPWD` anywhere in the line, with a directory
+ * change that reads it (task e927e903): a bare `cd`, a `~` target, `cd -`,
+ * `pushd -`, zsh's `pushd` with an empty stack. The flags are known before
+ * the walk, so a reader that stands before its producer in the text (a later
+ * loop iteration, a function called after the producer) counts, and so does
+ * a producer in front of another command or inside a subshell (an accepted
+ * over-approximation). The `git push` after it reads as opaque.
+ */
+export const STEERED_ROWS: readonly string[] = [
+  "OLDPWD=vendor/libplain; cd -; git push origin main",
+  ": ${OLDPWD:=vendor/libplain}; cd -; git push origin main",
+  "read OLDPWD <<< vendor/libplain; cd -; git push origin main",
+  "HOME=vendor/libplain; cd; git push origin main",
+  ": ${HOME:=vendor/libplain}; cd; git push origin main",
+  "read HOME <<< vendor/libplain; cd ~; git push origin main",
+  "export HOME=vendor/libplain; cd; git push origin main",
+  "HOME=vendor/libplain cd; git push origin main",
+  "HOME=vendor/libplain eval cd; git push origin main",
+  "eval 'HOME=vendor/libplain'; cd; git push origin main",
+  "printf -v HOME vendor/libplain; cd; git push origin main",
+  "mapfile -t HOME <<< vendor/libplain; cd; git push origin main",
+  "declare -n r=HOME; r=vendor/libplain; cd; git push origin main",
+  "for HOME in vendor/libplain; do :; done; cd; git push origin main",
+  "HOME=vendor/libplain; (cd; git push origin main)",
+  "HOME=vendor/libplain; git -C ~ push origin main",
+  "HOME=vendor/libplain; pushd; git push origin main",
+  "OLDPWD=vendor/libplain; cd ~-; git push origin main",
+  "OLDPWD=vendor/libplain; pushd -; git push origin main",
+  "(( OLDPWD = 1 )); cd -; git push origin main",
+  "let OLDPWD=1; cd -; git push origin main",
+  "[[ 1 -eq HOME=1 ]]; cd; git push origin main",
+  ": ${a[HOME=1]}; cd; git push origin main",
+  'a=(1); unset "a[HOME=1]"; cd; git push origin main',
+  "exec {HOME}>/dev/null; cd; git push origin main",
+  // A producer anywhere in the line counts for the whole line (an accepted
+  // over-approximation): one in front of another command or inside a
+  // subshell reaches a function that command or subshell calls.
+  "HOME=/tmp true; cd; git push origin main",
+  "echo $(HOME=vendor/libplain); cd; git push origin main",
+  // A reader that runs after its producer in execution order but stands
+  // before it in the text: a later loop iteration, a function called after
+  // the producer.
+  "p=$PWD; for i in 1 2; do cd; HOME=$p/vendor/libplain; done; git push origin main",
+  "p=$PWD; for i in 1 2; do cd ~; HOME=$p/vendor/libplain; done; git push origin main",
+  "p=$PWD; f() { cd; git push origin main; }; HOME=$p/vendor/libplain; f",
+];
+
+/**
+ * Rows whose directory change names a value the gate cannot resolve through
+ * a tilde prefix other than `~` and `~/` (an inherited working or previous
+ * directory, a stack entry, a named directory or a user's home), or through a
+ * previous directory the line has not tracked (task e927e903). The `git push`
+ * after it reads as opaque.
+ */
+export const UNTRACKED_TARGET_ROWS: readonly string[] = [
+  "d=$PWD/vendor/libplain; cd ~d; git push origin main",
+  "pushd vendor/libplain; pushd ..; cd ~1; git push origin main",
+  "pushd vendor/libplain; pushd ..; cd ~+1; git push origin main",
+  "pushd vendor/libplain; pushd ..; cd ~-1; git push origin main",
+  "cd ~+; git push origin main",
+  "cd ~-; git push origin main",
+  "cd ~root; git push origin main",
+  "git -C ~+ push origin main",
+  "cd -; git push origin main",
+  "pushd -; git push origin main",
+];
+
+/** Rows with a `cd` stack index that bash reads as a path an earlier command of the line can create (task e927e903). */
+export const STACK_INDEX_PATH_ROWS: readonly string[] = [
+  "ln -s vendor/libplain ./+1 && cd +1; git push origin main",
+  "ln -s vendor/libplain ./-1 && cd -- -1; git push origin main",
+  "pushd vendor; cd +1; git push origin main",
+];
+
+/**
+ * Controls for the rows above that stay attributed: a literal target, a
+ * `cd -` after a literal `cd`, a bare `cd` and a `~` with nothing assigned
+ * (the home directory's documented fallback), reads of `$HOME`, and a
+ * `pushd +N` (a stack operation in both shells).
+ */
+export const RESOLVED_TARGET_ROWS: readonly string[] = [
+  "cd vendor/libplain && git push origin main",
+  "cd vendor; cd libplain; cd -; git push origin main",
+  "git -C vendor/libplain push origin main",
+  "cd; git push origin main",
+  "cd ~ && git push origin main",
+  "echo $HOME; cd vendor/libplain; git push origin main",
+  "export PATH=$HOME/bin:$PATH; git push origin main",
+  "printf '%s\\n' \"$HOME\"; cd; git push origin main",
+  'echo "${HOME:-x}"; cd ~; git push origin main',
+  'git commit -m "HOME handling"; cd; git push origin main',
+  "pushd vendor; pushd +1; git push origin main",
 ];
 
 /**
