@@ -13,6 +13,7 @@ import { explainPolicy } from "../../src/cli/explain-policy.js";
 import { HarnessExitError } from "../../src/cli/exit-codes.js";
 import type { GitRepoContext } from "../../src/runtime/git-context.js";
 import { parseManifest, type Manifest } from "../../src/schema/index.js";
+import { addGitDirSkeleton } from "../_helpers/git-dir-fixture.js";
 
 let cleanups: Array<() => void> = [];
 afterEach(() => {
@@ -348,6 +349,7 @@ describe("explainPolicy: session_start_preflight.source (task c88461c1)", () => 
     const repo = path.join(root, name);
     fs.mkdirSync(path.join(repo, ".git"), { recursive: true });
     fs.writeFileSync(path.join(repo, ".git", "HEAD"), "ref: refs/heads/main\n");
+    addGitDirSkeleton(path.join(repo, ".git"));
     return repo;
   }
 
@@ -509,6 +511,7 @@ describe("explainPolicy: the derived project layer never reaches policy evaluati
     const repo = path.join(root, name);
     fs.mkdirSync(path.join(repo, ".git"), { recursive: true });
     fs.writeFileSync(path.join(repo, ".git", "HEAD"), "ref: refs/heads/main\n");
+    addGitDirSkeleton(path.join(repo, ".git"));
     return repo;
   }
 
@@ -681,6 +684,7 @@ describe("explainPolicy: session_start_preflight degrades to setup:false/source:
     const repo = path.join(root, name);
     fs.mkdirSync(path.join(repo, ".git"), { recursive: true });
     fs.writeFileSync(path.join(repo, ".git", "HEAD"), "ref: refs/heads/main\n");
+    addGitDirSkeleton(path.join(repo, ".git"));
     return repo;
   }
 

@@ -13,6 +13,7 @@ import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { runSessionStartPreflight } from "../../../src/cli/session-start/index.js";
+import { addGitDirSkeleton } from "../../_helpers/git-dir-fixture.js";
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 const MAIN_JS = path.join(REPO_ROOT, "dist", "cli", "main.js");
@@ -181,6 +182,7 @@ describe("session-start preflight stdin: bounded read", () => {
     const repo = tmpDir("harness-stdin-partial-");
     fs.mkdirSync(path.join(repo, ".git"), { recursive: true });
     fs.writeFileSync(path.join(repo, ".git", "HEAD"), "ref: refs/heads/main\n");
+    addGitDirSkeleton(path.join(repo, ".git"));
     const json = JSON.stringify({ session_id: "partial-sess", cwd: repo });
     // Complete JSON but stdin is never closed.
     stream.write(json);
@@ -204,6 +206,7 @@ describe("session-start preflight stdin: bounded read", () => {
     const repo = tmpDir("harness-stdin-slow-");
     fs.mkdirSync(path.join(repo, ".git"), { recursive: true });
     fs.writeFileSync(path.join(repo, ".git", "HEAD"), "ref: refs/heads/main\n");
+    addGitDirSkeleton(path.join(repo, ".git"));
     const json = JSON.stringify({ session_id: "slow-sess", cwd: repo });
     const third = Math.floor(json.length / 3);
     const run = runSessionStartPreflight({
@@ -230,6 +233,7 @@ describe("session-start preflight stdin: bounded read", () => {
     const repo = tmpDir("harness-stdin-normal-");
     fs.mkdirSync(path.join(repo, ".git"), { recursive: true });
     fs.writeFileSync(path.join(repo, ".git", "HEAD"), "ref: refs/heads/main\n");
+    addGitDirSkeleton(path.join(repo, ".git"));
     const { stream: err, output } = captureStream();
     const result = await runSessionStartPreflight({
       ...hermeticOpts(repo),

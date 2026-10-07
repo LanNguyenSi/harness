@@ -10,6 +10,7 @@ import {
   runRecordReview,
   runRecordReviewSubagent,
 } from "../../../src/cli/record/index.js";
+import { addGitDirSkeleton } from "../../_helpers/git-dir-fixture.js";
 
 // Task 237cc609: the record verbs write their fact as space-separated tag
 // text and the gates match tags by substring, so a flag value carrying
@@ -35,6 +36,7 @@ function makeRepo(branch = "main"): string {
   const ref = path.join(repo, ".git", "refs", "heads", ...branch.split("/"));
   fs.mkdirSync(path.dirname(ref), { recursive: true });
   fs.writeFileSync(path.join(repo, ".git", "HEAD"), `ref: refs/heads/${branch}\n`);
+  addGitDirSkeleton(path.join(repo, ".git"));
   fs.writeFileSync(ref, "abcdef0123456789abcdef0123456789abcdef01\n");
   return repo;
 }
@@ -46,6 +48,7 @@ function makeRepoWithHeadBranch(branch: string): string {
   const repo = path.join(root, "repo");
   fs.mkdirSync(path.join(repo, ".git"), { recursive: true });
   fs.writeFileSync(path.join(repo, ".git", "HEAD"), `ref: refs/heads/${branch}\n`);
+  addGitDirSkeleton(path.join(repo, ".git"));
   return repo;
 }
 

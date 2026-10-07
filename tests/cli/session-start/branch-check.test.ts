@@ -5,6 +5,7 @@ import { Readable, Writable } from "node:stream";
 import { afterEach, describe, expect, it } from "vitest";
 import { runSessionStartBranchCheck } from "../../../src/cli/session-start/branch-check.js";
 import { parseManifest, type Manifest } from "../../../src/schema/index.js";
+import { addGitDirSkeleton } from "../../_helpers/git-dir-fixture.js";
 
 let cleanups: Array<() => void> = [];
 afterEach(() => {
@@ -33,6 +34,7 @@ function makeRepoFixture(name: string, branch = "main"): string {
   const repo = path.join(root, name);
   fs.mkdirSync(path.join(repo, ".git"), { recursive: true });
   fs.writeFileSync(path.join(repo, ".git", "HEAD"), `ref: refs/heads/${branch}\n`);
+  addGitDirSkeleton(path.join(repo, ".git"));
   return repo;
 }
 
@@ -121,6 +123,7 @@ describe("runSessionStartBranchCheck", () => {
       path.join(repo, ".git", "HEAD"),
       "9fceb02d0ae598e95dc970b74767f19372d61af8\n",
     );
+    addGitDirSkeleton(path.join(repo, ".git"));
     const writes: string[] = [];
     const { stream: err, output: errOut } = captureStream();
     const result = await runSessionStartBranchCheck({

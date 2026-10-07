@@ -9,6 +9,7 @@ import { FULL_TEMPLATE } from "../../src/cli/init/templates.js";
 import type { LedgerClient } from "../../src/runtime/intercept.js";
 import { parseManifest, type Policy } from "../../src/schema/index.js";
 import { makeManifest } from "../_helpers/manifest.js";
+import { addGitDirSkeleton } from "../_helpers/git-dir-fixture.js";
 
 // Task cfb6b390: a `-C` / `cd` target whose name carries a backtick or an
 // unusual control character used to be read as "no target", so a command
@@ -78,6 +79,7 @@ describe("runInterceptCli: a target the gate cannot attribute does not fall back
   function makeRepo(dir: string, branch = "main"): void {
     fs.mkdirSync(path.join(dir, ".git"), { recursive: true });
     fs.writeFileSync(path.join(dir, ".git", "HEAD"), `ref: refs/heads/${branch}\n`);
+    addGitDirSkeleton(path.join(dir, ".git"));
   }
 
   /** An outer repository named `outer-repo` with one nested repository per name under `vendor/`. */

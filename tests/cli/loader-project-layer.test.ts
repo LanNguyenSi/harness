@@ -31,6 +31,7 @@ import { explainPolicy } from "../../src/cli/explain-policy.js";
 import { loadManifest, resolvePaths } from "../../src/cli/loader.js";
 import type { GitRepoContext } from "../../src/runtime/git-context.js";
 import { isCaseInsensitiveFilesystem } from "../_helpers/case-sensitivity.js";
+import { addGitDirSkeleton } from "../_helpers/git-dir-fixture.js";
 
 const PROJECT_NAME = "scoped-repo";
 
@@ -226,6 +227,7 @@ describe("resolvePaths/loadManifest via explainPolicy's cwd-derivation seam: a s
     const realDir = path.join(root, "real-name");
     fs.mkdirSync(path.join(realDir, ".git"), { recursive: true });
     fs.writeFileSync(path.join(realDir, ".git", "HEAD"), "ref: refs/heads/main\n");
+    addGitDirSkeleton(path.join(realDir, ".git"));
     const linkPath = path.join(root, "link-name");
     fs.symlinkSync(realDir, linkPath, "dir");
     return { realDir, linkPath };
@@ -309,6 +311,7 @@ describe("resolvePaths/loadManifest via explainPolicy's cwd-derivation seam: a d
     const dir = path.join(root, name);
     fs.mkdirSync(path.join(dir, ".git"), { recursive: true });
     fs.writeFileSync(path.join(dir, ".git", "HEAD"), "ref: refs/heads/main\n");
+    addGitDirSkeleton(path.join(dir, ".git"));
     return dir;
   }
 

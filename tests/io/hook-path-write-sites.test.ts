@@ -24,6 +24,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { Readable, Writable } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { addGitDirSkeleton } from "../_helpers/git-dir-fixture.js";
 
 const hoisted = vi.hoisted(() => ({
   opens: [] as Array<{ path: string; flags: number }>,
@@ -147,6 +148,7 @@ describe.skipIf(process.platform === "win32")("preflight fail log: the write ope
     const repo = path.join(tmp, "widget-service");
     fs.mkdirSync(path.join(repo, ".git"), { recursive: true });
     fs.writeFileSync(path.join(repo, ".git", "HEAD"), "ref: refs/heads/main\n");
+    addGitDirSkeleton(path.join(repo, ".git"));
     return repo;
   }
 

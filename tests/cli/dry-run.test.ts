@@ -15,6 +15,7 @@ import {
   type ToolEvent,
 } from "../../src/runtime/intercept.js";
 import type { Policy } from "../../src/schema/index.js";
+import { addGitDirSkeleton } from "../_helpers/git-dir-fixture.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const REPO_ROOT = path.resolve(path.dirname(__filename), "..", "..");
@@ -191,6 +192,7 @@ describe("dry-run — REPO builtin resolves from cwd", () => {
     const repo = path.join(root, "sample-repo");
     fs.mkdirSync(path.join(repo, ".git"), { recursive: true });
     fs.writeFileSync(path.join(repo, ".git", "HEAD"), "ref: refs/heads/main\n");
+    addGitDirSkeleton(path.join(repo, ".git"));
     const r = dryRun("look around", {
       configPath: FULL_MANIFEST,
       tool: "Bash",
@@ -234,6 +236,7 @@ describe("dry-run: an empty REPO / BRANCH never shows a blank ledger tag", () =>
     const repo = path.join(tmpDir(), "detached-repo");
     fs.mkdirSync(path.join(repo, ".git"), { recursive: true });
     fs.writeFileSync(path.join(repo, ".git", "HEAD"), `${"c".repeat(40)}\n`);
+    addGitDirSkeleton(path.join(repo, ".git"));
     const query = queryFor("preflight-before-push", "git push", repo);
     expect(query).toBeDefined();
     expect(query).not.toBe("preflight:");
@@ -545,6 +548,7 @@ describe("dry-run: additive per-repo demands for a target-naming command", () =>
     const repo = path.join(root, name);
     fs.mkdirSync(path.join(repo, ".git"), { recursive: true });
     fs.writeFileSync(path.join(repo, ".git", "HEAD"), `ref: refs/heads/${branch}\n`);
+    addGitDirSkeleton(path.join(repo, ".git"));
     // A loose ref gives the repository a head sha, as a real checkout has.
     fs.mkdirSync(path.join(repo, ".git", "refs", "heads"), { recursive: true });
     fs.writeFileSync(
@@ -739,6 +743,7 @@ describe("dry-run: the quote-aware shell model arm and attribution match policy 
     const repo = (dir: string, branch: string): string => {
       fs.mkdirSync(path.join(dir, ".git"), { recursive: true });
       fs.writeFileSync(path.join(dir, ".git", "HEAD"), `ref: refs/heads/${branch}\n`);
+      addGitDirSkeleton(path.join(dir, ".git"));
       return dir;
     };
     const outer = repo(path.join(root, "outer"), "main");
@@ -829,6 +834,7 @@ describe("dry-run: the quote-aware shell model arm and attribution match policy 
     const child = path.join(w.outer, "wt", "child");
     fs.mkdirSync(path.join(child, ".git"), { recursive: true });
     fs.writeFileSync(path.join(child, ".git", "HEAD"), "ref: refs/heads/feature-child\n");
+    addGitDirSkeleton(path.join(child, ".git"));
     fs.mkdirSync(path.join(child, "frontend"));
     // The blank cwd context renders differently in the two (a decision tag
     // vs a hint), both naming that no ledger query is made.

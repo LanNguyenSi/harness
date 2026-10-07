@@ -49,6 +49,7 @@ import {
   runRecordReviewSubagent,
 } from "../../src/cli/record/index.js";
 import type { LedgerWriteFn } from "../../src/runtime/ledger-writer.js";
+import { addGitDirSkeleton } from "../_helpers/git-dir-fixture.js";
 
 // ---------------------------------------------------------------------------
 // Duplicated (not imported) from tests/e2e/policy-intercept.test.ts per the
@@ -166,6 +167,7 @@ function writeGitCheckout(branch: string): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "harness-record-e2e-checkout-"));
   fs.mkdirSync(path.join(dir, ".git"));
   fs.writeFileSync(path.join(dir, ".git", "HEAD"), `ref: refs/heads/${branch}\n`, "utf8");
+  addGitDirSkeleton(path.join(dir, ".git"));
   return dir;
 }
 

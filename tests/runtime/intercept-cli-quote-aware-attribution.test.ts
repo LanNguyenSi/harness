@@ -9,6 +9,7 @@ import { FULL_TEMPLATE } from "../../src/cli/init/templates.js";
 import { intercept, OPAQUE_TARGET_REASON, type LedgerClient, type PolicyDecision } from "../../src/runtime/intercept.js";
 import { parseManifest, type Policy } from "../../src/schema/index.js";
 import { makeManifest } from "../_helpers/manifest.js";
+import { addGitDirSkeleton } from "../_helpers/git-dir-fixture.js";
 
 // Task 7d4abf84: a command that names a nested repository through any
 // directory-changing shape is attributed to that repository or fails
@@ -115,6 +116,7 @@ let outer = "";
 function makeRepo(dir: string, branch: string): void {
   fs.mkdirSync(path.join(dir, ".git"), { recursive: true });
   fs.writeFileSync(path.join(dir, ".git", "HEAD"), `ref: refs/heads/${branch}\n`);
+  addGitDirSkeleton(path.join(dir, ".git"));
   fs.mkdirSync(path.join(dir, "sub"), { recursive: true });
 }
 

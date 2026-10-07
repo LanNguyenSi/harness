@@ -15,6 +15,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { addGitDirSkeleton } from "../_helpers/git-dir-fixture.js";
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const MAIN_JS = path.join(REPO_ROOT, "dist", "cli", "main.js");
@@ -34,6 +35,7 @@ function makeRepo(branch: string): string {
   const gitDir = path.join(repo, ".git");
   fs.mkdirSync(path.join(gitDir, "refs", "heads", path.dirname(branch)), { recursive: true });
   fs.writeFileSync(path.join(gitDir, "HEAD"), `ref: refs/heads/${branch}\n`);
+  addGitDirSkeleton(gitDir);
   fs.writeFileSync(path.join(gitDir, "refs", "heads", branch), `${SHA}\n`);
   return repo;
 }
@@ -258,6 +260,7 @@ describe.skipIf(process.platform === "win32")("pack hook branch-protection: a `.
     const nested = nestedInOuter();
     fs.mkdirSync(path.join(nested, ".git"));
     fs.writeFileSync(path.join(nested, ".git", "HEAD"), head);
+    addGitDirSkeleton(path.join(nested, ".git"));
     expectBlockedNamingGitFile(nested, /\(HEAD is present but not a regular file or is oversized, or does not resolve: .*holding neither a ref nor an object id/);
   });
 

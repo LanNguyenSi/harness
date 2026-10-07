@@ -63,6 +63,7 @@ import type {
   RiskClassifier,
 } from "../../src/schema/index.js";
 import { makeManifest } from "../_helpers/manifest.js";
+import { addGitDirSkeleton } from "../_helpers/git-dir-fixture.js";
 
 const NOW = new Date("2026-08-09T12:00:00.000Z");
 // `EnvironmentName` (production/staging/dev/local) — the resolver-
@@ -215,6 +216,7 @@ function makeGitRepo(branch: string): string {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "harness-envrank-"));
   fs.mkdirSync(path.join(root, ".git", "refs", "heads"), { recursive: true });
   fs.writeFileSync(path.join(root, ".git", "HEAD"), `ref: refs/heads/${branch}\n`);
+  addGitDirSkeleton(path.join(root, ".git"));
   fs.writeFileSync(
     path.join(root, ".git", "refs", "heads", branch),
     "9fceb02d0ae598e95dc970b74767f19372d61af8\n",

@@ -9,6 +9,7 @@ import {
 } from "../../src/cli/pack/hook-post-merge-gate-record.js";
 import { MERGED_TAG_PREFIX } from "../../src/policy-packs/builtin/post-merge-gate-runtime.js";
 import { parseManifest, type Manifest } from "../../src/schema/index.js";
+import { addGitDirSkeleton } from "../_helpers/git-dir-fixture.js";
 
 // Pass-through spies on the three normalisers, so a test can observe which
 // arms the recorder trigger actually computed.
@@ -51,6 +52,7 @@ function makeRepoFixture(name: string, branch: string, sha: string): string {
   const refPath = path.join(repo, ".git", "refs", "heads", branch);
   fs.mkdirSync(path.dirname(refPath), { recursive: true });
   fs.writeFileSync(path.join(repo, ".git", "HEAD"), `ref: refs/heads/${branch}\n`);
+  addGitDirSkeleton(path.join(repo, ".git"));
   fs.writeFileSync(refPath, `${sha}\n`);
   return repo;
 }

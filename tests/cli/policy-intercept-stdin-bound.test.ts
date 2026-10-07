@@ -19,6 +19,7 @@ import { fileURLToPath } from "node:url";
 import { afterAll, describe, expect, it } from "vitest";
 import { GENERATED_DIRNAME } from "../../src/io/generated-dir.js";
 import { writeSentinel } from "../../src/runtime/pause-sentinel.js";
+import { addGitDirSkeleton } from "../_helpers/git-dir-fixture.js";
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const MAIN_JS = path.join(REPO_ROOT, "dist", "cli", "main.js");
@@ -101,6 +102,7 @@ function makeCtx(): Ctx {
   const cwd = tmpDir("harness-intercept-stdin-repo-");
   fs.mkdirSync(path.join(cwd, ".git"), { recursive: true });
   fs.writeFileSync(path.join(cwd, ".git", "HEAD"), "ref: refs/heads/main\n");
+  addGitDirSkeleton(path.join(cwd, ".git"));
   const configPath = path.join(home, "harness.yaml");
   fs.writeFileSync(configPath, MANIFEST, "utf8");
   return { home, cwd, configPath };
