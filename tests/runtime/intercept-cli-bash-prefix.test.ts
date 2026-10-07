@@ -31,6 +31,7 @@ import type {
   RiskClassifier,
 } from "../../src/schema/index.js";
 import { makeManifest } from "../_helpers/manifest.js";
+import { addGitDirSkeleton } from "../_helpers/git-dir-fixture.js";
 
 function streamFrom(s: string): NodeJS.ReadableStream {
   return Readable.from([s]);
@@ -108,6 +109,7 @@ function makeGitRepo(branch: string): string {
     recursive: true,
   });
   fs.writeFileSync(path.join(root, ".git", "HEAD"), `ref: refs/heads/${branch}\n`);
+  addGitDirSkeleton(path.join(root, ".git"));
   fs.writeFileSync(
     path.join(root, ".git", "refs", "heads", branch),
     "9fceb02d0ae598e95dc970b74767f19372d61af8\n",

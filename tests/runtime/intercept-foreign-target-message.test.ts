@@ -10,6 +10,7 @@ import { runSessionStartPreflight } from "../../src/cli/session-start/index.js";
 import type { ClaudeDenyJson, LedgerClient } from "../../src/runtime/intercept.js";
 import { parseManifest, type Policy } from "../../src/schema/index.js";
 import { makeManifest } from "../_helpers/manifest.js";
+import { addGitDirSkeleton } from "../_helpers/git-dir-fixture.js";
 
 // Block message for a decision attributed to a foreign target (a nested or
 // vendored work tree named by `git -C <dir>` / `cd <dir> &&`). The gate
@@ -66,6 +67,7 @@ function neutralPolicy(): Policy {
 function writeGitDir(dir: string, branch = "main"): void {
   fs.mkdirSync(path.join(dir, ".git"), { recursive: true });
   fs.writeFileSync(path.join(dir, ".git", "HEAD"), `ref: refs/heads/${branch}\n`);
+  addGitDirSkeleton(path.join(dir, ".git"));
 }
 
 /** `<tmp>/outer` with `.git/HEAD`, and `outer/vendor/libfoo` with its own `.git/HEAD`. */
@@ -344,6 +346,7 @@ describe("foreign-target sentence is not added to envelopes that name their own 
     const { outer, libfoo } = makeNestedFixture();
     // libfoo's HEAD holds a raw sha: detached, no branch.
     fs.writeFileSync(path.join(libfoo, ".git", "HEAD"), `${"a".repeat(40)}\n`);
+    addGitDirSkeleton(path.join(libfoo, ".git"));
     const pushPolicy = parseManifest(parseYaml(FULL_TEMPLATE)).policies.find(
       (p) => p.name === "preflight-before-push",
     );

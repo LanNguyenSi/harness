@@ -12,6 +12,7 @@ import { runSessionStartPreflight } from "../../src/cli/session-start/index.js";
 import { readSentinel, sentinelPath } from "../../src/runtime/pause-sentinel.js";
 import { resolveVitestEntry } from "../_helpers/nested-vitest.js";
 import { createOperatorStateFixture, operatorStateChildEnv, type OperatorStateFixture } from "../_helpers/operator-state-isolation-runner.js";
+import { addGitDirSkeleton } from "../_helpers/git-dir-fixture.js";
 
 describe.skipIf(!process.env["HARNESS_INTEGRATION_TESTS"])(
   "operator-state-isolation: full suite passes with a planted pause sentinel",
@@ -78,6 +79,7 @@ describe("session-start fail-log dir resolution (task 80f49922)", () => {
     const repo = path.join(root, name);
     fs.mkdirSync(path.join(repo, ".git"), { recursive: true });
     fs.writeFileSync(path.join(repo, ".git", "HEAD"), "ref: refs/heads/main\n");
+    addGitDirSkeleton(path.join(repo, ".git"));
     return repo;
   }
 

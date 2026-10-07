@@ -7,6 +7,7 @@ import { runPackHookBranchProtectionCli } from "../../src/cli/pack/hook-branch-p
 import { writeBranchProtectionMarker } from "../../src/policy-packs/builtin/branch-protection-runtime.js";
 import type { LedgerEntry } from "../../src/policies/index.js";
 import { parseManifest, type Manifest } from "../../src/schema/index.js";
+import { addGitDirSkeleton } from "../_helpers/git-dir-fixture.js";
 
 function makeGeneratedDir(): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "harness-bp-gen-"));
@@ -41,6 +42,7 @@ function makeRepoFixture(name: string, branch: string): string {
   const repo = path.join(root, name);
   fs.mkdirSync(path.join(repo, ".git"), { recursive: true });
   fs.writeFileSync(path.join(repo, ".git", "HEAD"), `ref: refs/heads/${branch}\n`);
+  addGitDirSkeleton(path.join(repo, ".git"));
   return repo;
 }
 

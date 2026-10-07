@@ -29,6 +29,7 @@ import {
 } from "../../src/policy-packs/builtin/understanding-before-execution-runtime.js";
 import { signVerdict, type Verdict } from "../../src/policy-packs/builtin/solution-acceptance-runtime.js";
 import { parseManifest } from "../../src/schema/index.js";
+import { addGitDirSkeleton } from "../_helpers/git-dir-fixture.js";
 
 let tmp: string;
 let generatedDir: string;
@@ -243,6 +244,7 @@ describe.skipIf(process.platform === "win32")("solution-acceptance does not fall
     const repo = path.join(tmp, "repo");
     fs.mkdirSync(path.join(repo, ".git", "refs", "heads"), { recursive: true });
     fs.writeFileSync(path.join(repo, ".git", "HEAD"), "ref: refs/heads/work\n");
+    addGitDirSkeleton(path.join(repo, ".git"));
     fs.writeFileSync(path.join(repo, ".git", "refs", "heads", "work"), `${HEAD}\n`);
     return repo;
   }

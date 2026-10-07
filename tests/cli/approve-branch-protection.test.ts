@@ -20,6 +20,7 @@ import {
 import { APPROVAL_MARKER_DIRNAME } from "../../src/policy-packs/builtin/understanding-before-execution-runtime.js";
 import { makeManifest } from "../_helpers/manifest.js";
 import { parseManifest, type McpServer } from "../../src/schema/index.js";
+import { addGitDirSkeleton } from "../_helpers/git-dir-fixture.js";
 
 let cleanups: Array<() => void> = [];
 beforeEach(() => {
@@ -163,6 +164,7 @@ describe("approveBranchProtection — round-trip with the blocker", () => {
     const repo = path.join(root, "svc");
     fs.mkdirSync(path.join(repo, ".git"), { recursive: true });
     fs.writeFileSync(path.join(repo, ".git", "HEAD"), "ref: refs/heads/master\n");
+    addGitDirSkeleton(path.join(repo, ".git"));
     return repo;
   }
   const manifestPack = () =>

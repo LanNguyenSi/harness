@@ -23,6 +23,7 @@ import {
 } from "../../src/schema/index.js";
 import { makeDecision } from "../_helpers/decision.js";
 import { makeManifest } from "../_helpers/manifest.js";
+import { addGitDirSkeleton } from "../_helpers/git-dir-fixture.js";
 
 // Fix round 1, findings F2+F3+F4: a call-through mock of
 // `normalizeCommandAmpAware` used ONLY as a counting seam (never changes
@@ -662,6 +663,7 @@ describe("runInterceptCli — REPO / BRANCH builtins resolve from event.cwd", ()
     const repo = path.join(root, name);
     fs.mkdirSync(path.join(repo, ".git"), { recursive: true });
     fs.writeFileSync(path.join(repo, ".git", "HEAD"), `ref: refs/heads/${branch}\n`);
+    addGitDirSkeleton(path.join(repo, ".git"));
     return repo;
   }
 
@@ -984,6 +986,7 @@ describe("runInterceptCli — Risk Gate git context stays cwd-derived even when 
     const repo = path.join(root, name);
     fs.mkdirSync(path.join(repo, ".git"), { recursive: true });
     fs.writeFileSync(path.join(repo, ".git", "HEAD"), `ref: refs/heads/${branch}\n`);
+    addGitDirSkeleton(path.join(repo, ".git"));
     return repo;
   }
 
@@ -1111,6 +1114,7 @@ describe("runInterceptCli — 98ad072f mandatory regression pins (written FIRST 
     const repo = path.join(root, name);
     fs.mkdirSync(path.join(repo, ".git"), { recursive: true });
     fs.writeFileSync(path.join(repo, ".git", "HEAD"), `ref: refs/heads/${branch}\n`);
+    addGitDirSkeleton(path.join(repo, ".git"));
     return repo;
   }
 
@@ -2714,6 +2718,7 @@ describe("runInterceptCli — 98ad072f T-003 per-policy attribution (segment-lev
     const repo = path.join(root, name);
     fs.mkdirSync(path.join(repo, ".git"), { recursive: true });
     fs.writeFileSync(path.join(repo, ".git", "HEAD"), `ref: refs/heads/${branch}\n`);
+    addGitDirSkeleton(path.join(repo, ".git"));
     return repo;
   }
 
@@ -3256,6 +3261,7 @@ describe("runInterceptCli — 98ad072f FIX ROUND: D-011 critical bypass closure 
     const repo = path.join(root, name);
     fs.mkdirSync(path.join(repo, ".git"), { recursive: true });
     fs.writeFileSync(path.join(repo, ".git", "HEAD"), `ref: refs/heads/${branch}\n`);
+    addGitDirSkeleton(path.join(repo, ".git"));
     return repo;
   }
 
@@ -4436,6 +4442,7 @@ describe("runInterceptCli: empty REPO / BRANCH never renders a blank ledger tag"
     const repo = path.join(tmpRoot(), "detached-repo");
     fs.mkdirSync(path.join(repo, ".git"), { recursive: true });
     fs.writeFileSync(path.join(repo, ".git", "HEAD"), `${DETACHED_SHA}\n`);
+    addGitDirSkeleton(path.join(repo, ".git"));
     return repo;
   }
 
@@ -4521,6 +4528,7 @@ describe("runInterceptCli: empty REPO / BRANCH never renders a blank ledger tag"
     const repo = path.join(tmpRoot(), "named-repo");
     fs.mkdirSync(path.join(repo, ".git"), { recursive: true });
     fs.writeFileSync(path.join(repo, ".git", "HEAD"), "ref: refs/heads/feature\n");
+    addGitDirSkeleton(path.join(repo, ".git"));
 
     process.env.HARNESS_BRANCH = "";
     const emptyOverrideLedger = foreignLedger("preflight:feature");
@@ -4614,6 +4622,7 @@ describe("runInterceptCli: empty REPO / BRANCH never renders a blank ledger tag"
     const repo = path.join(tmpRoot(), "widget-service");
     fs.mkdirSync(path.join(repo, ".git"), { recursive: true });
     fs.writeFileSync(path.join(repo, ".git", "HEAD"), "ref: refs/heads/release\n");
+    addGitDirSkeleton(path.join(repo, ".git"));
 
     const allowLedger = foreignLedger("preflight:release ready:true");
     const allowed = await run({
@@ -4645,6 +4654,7 @@ describe("runInterceptCli: empty REPO / BRANCH never renders a blank ledger tag"
       const repo = path.join(parent, name);
       fs.mkdirSync(path.join(repo, ".git"), { recursive: true });
       fs.writeFileSync(path.join(repo, ".git", "HEAD"), head);
+      addGitDirSkeleton(path.join(repo, ".git"));
       return repo;
     }
     function factsLedger(...contents: string[]): LedgerClient & { tags: string[] } {

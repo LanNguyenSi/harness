@@ -23,6 +23,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { runInterceptCli } from "../../src/cli/policy/intercept.js";
 import type { LedgerClient } from "../../src/runtime/intercept.js";
 import type { LedgerQueryResult } from "../../src/policies/index.js";
+import { addGitDirSkeleton } from "../_helpers/git-dir-fixture.js";
 
 let cleanups: Array<() => void> = [];
 afterEach(() => {
@@ -36,6 +37,7 @@ function makeRepoFixture(name: string, branch: string): string {
   const repo = path.join(root, name);
   fs.mkdirSync(path.join(repo, ".git"), { recursive: true });
   fs.writeFileSync(path.join(repo, ".git", "HEAD"), `ref: refs/heads/${branch}\n`);
+  addGitDirSkeleton(path.join(repo, ".git"));
   return repo;
 }
 
