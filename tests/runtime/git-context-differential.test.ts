@@ -181,14 +181,14 @@ const REJECTED_HEADS: Array<[string, () => string]> = [
   ["whitespace before the ref prefix", () => `  ${REF}`],
   ["a line feed before the ref prefix", () => `\n${REF}`],
   ["a tab before the ref prefix", () => `\t${REF}`],
-  ["a byte-order mark before the ref prefix", () => `﻿${REF}`],
-  ["a no-break space before the ref prefix", () => ` ${REF}`],
+  ["a byte-order mark before the ref prefix", () => `\ufeff${REF}`],
+  ["a no-break space before the ref prefix", () => `\u00a0${REF}`],
   ["a vertical tab after the ref prefix", () => "ref:\u000brefs/heads/feat/x\n"],
   ["a form feed after the ref prefix", () => "ref:\u000crefs/heads/feat/x\n"],
-  ["a no-break space after the ref prefix", () => "ref: refs/heads/feat/x\n"],
-  ["a line separator after the ref prefix", () => "ref: refs/heads/feat/x\n"],
+  ["a no-break space after the ref prefix", () => "ref:\u00a0refs/heads/feat/x\n"],
+  ["a line separator after the ref prefix", () => "ref:\u2028refs/heads/feat/x\n"],
   ["whitespace before an object id", () => ` ${sha()}\n`],
-  ["a byte-order mark before an object id", () => `﻿${sha()}\n`],
+  ["a byte-order mark before an object id", () => `\ufeff${sha()}\n`],
   ["a vertical tab before an object id", () => `\u000b${sha()}\n`],
   ["an upper-case ref prefix", () => REF.replace("ref:", "REF:")],
   ["refs/ starting past git's check window", () => `ref:${" ".repeat(247)}refs/heads/feat/x\n`],
@@ -637,7 +637,7 @@ const ROWS: Row[] = [
     name: "a .git file pointer to a git directory whose HEAD git rejects",
     build: (id) => {
       const target = copyGitDir(id);
-      fs.writeFileSync(path.join(target, "HEAD"), `﻿${REF}`);
+      fs.writeFileSync(path.join(target, "HEAD"), `\ufeff${REF}`);
       return dotGitFile(id, `gitdir: ${target}\n`);
     },
   },
@@ -743,11 +743,13 @@ describe.skipIf(!GIT_AVAILABLE)("repository detection agrees with real git (diff
 
       if (entry === null) {
         expect(gitTop, "the lookup finds no repository where git finds one").toBeNull();
+        expect(row.legit, "git must take a layout it writes itself for a repository").not.toBe(true);
         return;
       }
       if (entry.refused === undefined) {
         // Never a repository git does not resolve from here.
         expect(entry.worktreeRoot, `the lookup resolves ${rel(entry.worktreeRoot)}, git ${rel(gitTop)}`).toBe(gitTop);
+        if (row.legit === true) expect(gitTop, "git must take a layout it writes itself for the repository").toBe(repoRoot);
         expect(ctxResolved.refused).toBeUndefined();
         expect(ctxResolved.repo).toBe(path.basename(entry.worktreeRoot));
         expect(row.conservative, "an allowlisted row that no longer diverges must leave the allowlist").toBeUndefined();

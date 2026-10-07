@@ -397,8 +397,8 @@ interface LocatedGitEntry {
  * `branch`/`sha` from, without re-walking the tree with duplicate
  * logic — its base-branch resolution needs the raw git directory (to
  * read `refs/remotes/origin/HEAD` / `packed-refs`), which
- * `resolveGitContext`'s return shape does not expose. Behavior is
- * unchanged; this is a visibility-only change.
+ * `resolveGitContext`'s return shape does not expose. Exporting it
+ * changed no behavior.
  *
  * An entry is accepted only when git would take it for a repository (task
  * 51bfba5a): the `.git` directory, or the target of a `.git` file read as
