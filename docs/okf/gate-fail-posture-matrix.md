@@ -3,7 +3,7 @@ type: overview
 title: Gate fail-posture matrix
 description: Which harness enforcement gates fail OPEN vs fail CLOSED when their evidence source (grounding-mcp ledger, approval markers, verdict files, probes) is unreachable or errors, with the exact code paths and override knobs.
 tags: [gates, fail-open, fail-closed, enforcement]
-timestamp: 2026-10-07T05:52:50Z
+timestamp: 2026-10-07T06:39:10Z
 sources:
   - src/cli/pack/auto-approve-path.ts
   - src/io/atomic-write.ts
@@ -206,7 +206,9 @@ since it is the part that changes this matrix's own fail-posture story:
   flattening the nesting, and the agent envelope says so (with the
   refused policies) instead of the policy's `ux:` / `producers:` evidence
   remedy, as it does for an `opaque-target` refusal and for one past the
-  attribution bound. Above
+  attribution bound. Some valid commands the model cannot lex are refused
+  the same way (an unparenthesised `case` pattern inside `$( )` or a `( )`
+  subshell, a `case` after `coproc`): an over-block, never an allow. Above
   `MAX_NORMALIZE_LENGTH` the raw match alone still applies.
 - **More than `MAX_ATTRIBUTED_CONTEXTS` (4) distinct targets for one
   policy on one event fails CLOSED** — see the new table row above. This

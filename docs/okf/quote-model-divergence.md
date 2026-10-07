@@ -3,7 +3,7 @@ type: overview
 title: Shell quote models, measured divergence against bash
 description: The policy engine has independent shell-word models plus a raw-regex trigger layer (since task 7d4abf84 also a quote-aware shell command model that feeds per-repo attribution). This records what each actually extracts, measured against real bash, which divergences are fail-open, and the evidence-led ordering for closing them.
 tags: [policy-engine, bash-match, quote-model, fail-open, measurement]
-timestamp: 2026-10-07T05:52:50Z
+timestamp: 2026-10-07T06:39:10Z
 sources:
   - src/runtime/command-normalize.ts
   - src/cli/init/composer.ts
@@ -170,9 +170,12 @@ Wrapper, zuletzt der kanonische Text) und seinen Kopftext
 Leer- und Metazeichen durch `_` ersetzt); der Trigger wird gegen jede Stufe
 und gegen die Normalisierungen der Textarme auf dem Kopftext getestet. So
 treffen `{ git push; }`, `! git push`, `if ...; then git push; fi`,
-Schleifen-, `case`- und Funktionskörper (auch `for ((;;)) do ...; done`,
-`for ((;;)) { ...; }` und `for x do ...; done` ohne Trenner; `(( ))` ist ein
-Wort, seine Substitutionen werden gelesen), `xargs git push` (GNU- und
+`{ time -p -- git push; }`,
+Schleifen-, `case`- und Funktionskörper (auch ein `case` hinter `{`, `!`,
+`time`, `then`, `do` oder `else` mit erstem Muster `(x)` oder `x)`, auch
+`for ((;;)) do ...; done`, `for ((;;)) { ...; }` und `for x do ...; done`
+ohne Trenner; `(( ))` ist ein Wort, seine Substitutionen, auch Backticks,
+werden gelesen), `xargs git push` (GNU- und
 BSD-Wertoptionen), `coproc git push`, Wrapper mit Pfad (`/usr/bin/env`),
 die lange Optionsgrammatik von `sudo`, `timeout` und `nice` und ein
 gesperrter Wrapper hinter einem anderen
@@ -191,8 +194,13 @@ Differentialmessung gegen master steht im CHANGELOG-Eintrag von
 `env -S`), `find -exec`, `parallel`, `watch`, nicht geschälte Wrapper
 (`caffeinate`, `flock`, `ionice`), dynamische Köpfe (`git $(echo push)`,
 `$h pause`, Aliase), das Kommando, das `xargs` von stdin liest
-(`echo push | xargs git`), zsh-Kurzformen außer `for x (a b) cmd` und
-Kommandos über `MAX_NORMALIZE_LENGTH` (nur der Roh-Arm).
+(`echo push | xargs git`), zsh-Kurzformen außer `for x (a b) cmd`,
+Backtick-Substitutionen in Datenkontexten (ungequoteter Heredoc-Körper,
+`${x:-...}`, `${x[...]}`, `$(( ))`, `$[ ]`, das `case`-Wort und seine
+Muster) und Kommandos über `MAX_NORMALIZE_LENGTH` (nur der Roh-Arm). Als
+nicht klassifizierbar abgelehnt, obwohl gültig: ein Muster ohne öffnende
+Klammer in `$( )` oder in einer `( )`-Subshell
+(`x=$(case y in y) echo y;; esac)`) und ein `case` hinter `coproc`.
 
 **Empfehlung 2, Teil (der read-only-Flag-Kanal, `fdee7d0f`) ist umgesetzt
 und ausgeliefert — als "slice 1", PR #392, nur für diesen einen der drei
