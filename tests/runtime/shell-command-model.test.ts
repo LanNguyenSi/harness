@@ -707,6 +707,12 @@ describe("modelShellCommands: after a command that can redefine cd, the oracle i
     });
   }
 
+  it("an arithmetic command is not an override: a later cd is still confirmed", () => {
+    for (const command of ["((i++)); cd X; cd ..; git log", "! ((i < 1)); cd X; cd ..; git log"]) {
+      expect(dirsWithOracle(command, ["L:X", "cwd"]), command).toEqual(["cwd"]);
+    }
+  });
+
   it("a cd before the override is still confirmed, and the same words as arguments change nothing", () => {
     expect(dirsWithOracle("cd X; cd ..; cd() { :; }; git log", ["L:X", "cwd"])).toEqual(["cwd"]);
     for (const command of ["echo enable alias source; cd X; cd ..; git log", "git log --format=hash; cd X; cd ..; git log"]) {

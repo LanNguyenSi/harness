@@ -175,14 +175,16 @@ export interface PolicyDecision {
    * this command and decided per enforcement without a ledger query:
    * `"unparsed"` when the command line could not be parsed
    * (`UNPARSED_COMMAND_REASON`), `"opaque-target"` when it names a
-   * repository target that cannot be attributed (`OPAQUE_TARGET_REASON`).
+   * repository target that cannot be attributed (`OPAQUE_TARGET_REASON`),
+   * `"bounded"` when it names more distinct repository targets than
+   * `MAX_ATTRIBUTED_CONTEXTS`.
    * In-memory only (not part of the serialised audit row; `reason` and the
    * placeholder `ledgerTag` carry the cause). The agent envelope renders
    * `reason` with precedence over the policy's `ux:` / `producers:` text
    * and the record hint when this is set: recording the policy's evidence
    * cannot unblock a refusal.
    */
-  refusal?: "unparsed" | "opaque-target";
+  refusal?: "unparsed" | "opaque-target" | "bounded";
   evaluatedAt: string;
 }
 
@@ -2194,13 +2196,16 @@ export async function intercept(
       const evaluatedAt = (options.now ?? new Date()).toISOString();
       const decision =
         attributed.kind === "bounded"
-          ? boundedContextsDecision(
-              policy,
-              event,
-              attributed.distinctCount,
-              options.builtins,
-              evaluatedAt,
-            )
+          ? {
+              ...boundedContextsDecision(
+                policy,
+                event,
+                attributed.distinctCount,
+                options.builtins,
+                evaluatedAt,
+              ),
+              refusal: "bounded" as const,
+            }
           : {
               ...failClosedContextsDecision(
                 policy,
@@ -2352,7 +2357,8 @@ export async function intercept(
       reasonText = `${blocking.policyName}: ${blocking.reason}`;
     } else if (blocking.refusal !== undefined) {
       // A refusal (task d11762ce): the command line could not be parsed,
-      // or it names a repository target that cannot be attributed. Takes
+      // it names a repository target that cannot be attributed, or more
+      // distinct targets than the attribution bound. Takes
       // precedence over `ux:`, `producers:` and the record hint, which all
       // name the policy's evidence as the remedy: recording it cannot
       // unblock a refusal, which never reads the ledger. One envelope names

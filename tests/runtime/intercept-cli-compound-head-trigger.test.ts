@@ -373,6 +373,23 @@ describe("the agent envelope of a refusal names its cause, not the policy's evid
       expect(r.stderr).not.toContain("unparsed command:");
     });
 
+    it("a refusal for too many distinct targets names its own cause, not the ux remedy", async () => {
+      for (const n of [1, 2, 3, 4, 5]) {
+        const dir = path.join(repo, `bounded${n}`);
+        fs.mkdirSync(path.join(dir, ".git"), { recursive: true });
+        fs.writeFileSync(path.join(dir, ".git", "HEAD"), `ref: refs/heads/b${n}\n`);
+      }
+      const command = [1, 2, 3, 4, 5].map((n) => `git -C bounded${n} log`).join("; ");
+      const r = await hook(runtime, command, FULL_BASH);
+      expect(r.blocked).toBe(true);
+      const refused = r.decisions.find((d) => d.policyName === "preflight-before-investigation");
+      expect(refused?.refusal).toBe("bounded");
+      const reason = JSON.parse(r.stdout).reason as string;
+      expect(reason).toContain("distinct repository targets");
+      expect(reason).not.toContain("Run:");
+      expect(r.stderr).not.toContain("unparsed command:");
+    });
+
     it("an eval past its bound fails a per-repo policy the text arms matched closed, whatever the evidence", async () => {
       const fullLedger: LedgerClient = {
         async query() {

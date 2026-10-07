@@ -1472,12 +1472,6 @@ class Walker {
         };
         this.pushCompound(compound, frame);
         if (loop !== null) st.loops.push(loop);
-        if ((v === "for" || v === "select") && words[k + 1]?.arith === true) {
-          // `for (( ... ))` with its body in the same command:
-          // `for ((;;)) do V; done`, `for ((;;)) { V; }`.
-          k += 2;
-          continue;
-        }
         const afterName = words[k + 2];
         if (
           (v === "for" || v === "select") &&
@@ -1486,7 +1480,9 @@ class Walker {
           (afterName.value === "do" || afterName.value === "{")
         ) {
           // `for NAME do V; done`, `for NAME { V; }` (no `in` list, no
-          // separator; bash and zsh): the body follows the name.
+          // separator; bash and zsh), and `for (( ... )) do V; done`,
+          // `for (( ... )) { V; }` (the header is one arithmetic word):
+          // the body follows the second word.
           k += 2;
           continue;
         }
