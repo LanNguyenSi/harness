@@ -33,6 +33,7 @@ import {
   verifyMatchedMarkerReport,
   type ApprovalCheckResult,
 } from "../../policy-packs/builtin/understanding-before-execution-runtime.js";
+import { renderReportsDirTooLargeNotice } from "../../policy-packs/builtin/understanding-before-execution/persisted-reports.js";
 import { findLatestParseError, renderMalformedSectionsNotice } from "../approve/understanding.js";
 import { CODEX_HARNESS } from "../../policy-packs/builtin/understanding-before-execution/auto-approve.js";
 import {
@@ -555,7 +556,11 @@ async function runPackHookCodexPreToolUseCliInner(
     stderr,
     "harness pack hook codex",
   );
-  let agentFacing = configUx
+  // A reports directory too large to read cannot be fixed by approving again,
+  // so its cleanup replaces the re-approval recipe in either envelope.
+  let agentFacing = report.reportsDirTooLarge === true
+    ? renderReportsDirTooLargeNotice(reportsDir)
+    : configUx
     ? renderAgentFacing(configUx, { SESSION_ID: sessionId, TOOL_NAME: toolName })
     : `Run \`harness approve understanding\` once you have produced and confirmed an Understanding Report.\n${renderReportSchemaHint()}`;
   // Best-effort lookup of the session's latest parse-error log (task

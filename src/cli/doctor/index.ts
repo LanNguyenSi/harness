@@ -72,6 +72,8 @@ import {
 import { buildUgAutoApprovals, DEFAULT_RECENT_SESSIONS } from "./ug-auto-approvals.js";
 import { buildUgDelegations } from "./ug-delegations.js";
 import { buildUgInflight } from "./ug-inflight.js";
+import { buildUgReportsDir } from "./ug-reports-dir.js";
+import { defaultReportsDir } from "../../policy-packs/builtin/understanding-before-execution/persisted-reports.js";
 import { buildSettingsDrift } from "./settings-drift.js";
 import { buildCodexConfigDrift, isCodexOptedIntoAutoApprove } from "./codex-config-drift.js";
 import { LOCK_BASENAME } from "../../io/harness-lock.js";
@@ -1169,6 +1171,9 @@ function countDiagnostics(report: Omit<DoctorReport, "errorCount" | "warningCoun
   // 8f637efd): always advisory, never an error, see
   // bypass-without-auto-approve.ts.
   if (report.ugBypassWithoutAutoApprove) warningCount++;
+  // Reports directory at 75 % of a gate bound or past it (task 6e001bfc):
+  // one advisory warning either way, never an error, see ug-reports-dir.ts.
+  if (report.ugReportsDir && report.ugReportsDir.state !== "ok") warningCount++;
   // session_start_preflight.setup below the build-capable preflight
   // floor (task 6993d9b5): always advisory, never an error, see
   // session-start-preflight-setup-version.ts.
@@ -1556,6 +1561,13 @@ export async function doctor(opts: DoctorOptions = {}): Promise<DoctorReport> {
   const ugInflight = understandingPackEnabled
     ? buildUgInflight(generatedDir, { ...(opts.now !== undefined ? { now: opts.now } : {}) })
     : undefined;
+  // Reports-directory size against the bounds the PreToolUse gate reads, same
+  // gate as `ugInflight` above. The directory comes from the same resolver the
+  // hooks and `harness approve understanding` use (env, else manifest-anchored);
+  // the walk stops at the gate's own bound, see ug-reports-dir.ts.
+  const ugReportsDir = understandingPackEnabled
+    ? buildUgReportsDir(defaultReportsDir(path.dirname(resolved.base)))
+    : undefined;
   // Task 8f637efd ("Amendment: install default"): bypassPermissions
   // observed (hook-side) but auto_approve missing/mismatched. Same gate
   // and same recentSessions window as ugAutoApprovals, reading a
@@ -1648,6 +1660,7 @@ export async function doctor(opts: DoctorOptions = {}): Promise<DoctorReport> {
     ...(ugAutoApprovals !== undefined ? { ugAutoApprovals } : {}),
     ...(ugDelegations !== undefined ? { ugDelegations } : {}),
     ...(ugInflight !== undefined ? { ugInflight } : {}),
+    ...(ugReportsDir !== undefined ? { ugReportsDir } : {}),
     ...(ugBypassWithoutAutoApprove !== undefined ? { ugBypassWithoutAutoApprove } : {}),
     ...(sessionStartPreflightSetupVersion !== undefined
       ? { sessionStartPreflightSetupVersion }

@@ -1038,15 +1038,15 @@
 
   Citations re-pointed again, since this round's source edits shifted the
   cited lines. In `docs/decisions/2026-08-27-ug-auto-mode-approval.md`:
-  `src/cli/doctor/format.ts:123-124#"modeEnv.message"` (previously at
+  `src/cli/doctor/format.ts:128-129#"modeEnv.message"` (previously at
   lines 118-119) and
-  `src/cli/doctor/format.ts:196#"in-flight subagent records on disk:"`
+  `src/cli/doctor/format.ts:201#"in-flight subagent records on disk:"`
   (previously line 179). In `docs/decisions/2026-09-08-preflight-floors.md`:
   `src/probes/memory.ts:276#"const parsed = parseProbedVersion(stdout);"`
   (previously line 268). In this file:
   `src/runtime/git-context.ts:519#"fs.realpathSync(commonDir)"` (previously
   line 387) and
-  `src/cli/doctor/format.ts:156#"sessionStartPreflightSetupVersion.projectName"`
+  `src/cli/doctor/format.ts:161#"sessionStartPreflightSetupVersion.projectName"`
   (previously line 139). Four module docs were re-stamped for the
   `docs/CLI.md` edit in the same change.
 - 2026-09-13T09:52:00Z, task `e904f25a` (implementer). SUPERSEDED by the
@@ -1336,7 +1336,7 @@
   `SessionStartPreflightSetupVersionFinding`
   (`src/cli/doctor/session-start-preflight-setup-version.ts:72#"layer_unresolvable"`,
   built directly by `doctor()` at
-  `src/cli/doctor/index.ts:1433#"layer_unresolvable"`), naming the
+  `src/cli/doctor/index.ts:1438#"layer_unresolvable"`), naming the
   layer path and the FIRST LINE of the parse error, counted in
   `warningCount`, rendered by `format.ts` as one warning line; round 1
   first shipped full silence here, round 1's own review found the
@@ -1363,7 +1363,7 @@
   rule); best-effort, a realpath failure falls back to the un-resolved
   value. `doctor`'s `sessionStartPreflightProjectName` (and the
   finding's `projectName`,
-  `src/cli/doctor/format.ts:156#"sessionStartPreflightSetupVersion.projectName"`
+  `src/cli/doctor/format.ts:161#"sessionStartPreflightSetupVersion.projectName"`
   renders it as a `(project: X)` suffix) fires only when the scoped
   load actually RESOLVED a project layer file, not merely whenever a
   name was derivable for the cwd; round 1 set it unconditionally,
@@ -1448,7 +1448,7 @@
   re-verified: none makes a claim about `session_start_preflight`, the
   D-028 boundary, or the commondir/name-validation fix; `timestamp:`
   re-stamped on all five regardless. `docs/decisions/2026-08-27-ug-auto-
-  mode-approval.md` line 558's `src/cli/doctor/index.ts:1136` anchor
+  mode-approval.md` line 558's `src/cli/doctor/index.ts:1138` anchor
   (`if (report.ugBypassWithoutAutoApprove) warningCount++;`) is
   unaffected: this round's doctor edits land after that line (the top of
   `doctor()` and the `session_start_preflight.setup` version-check site
@@ -2561,7 +2561,7 @@
   `probeRegularFilePresence`, or cite a span of `hook-pre-tool-use.ts`
   inside this round's edited region (lines ~940-978): `grep` across all 6
   for those terms found only `understanding-gate-lockout-recovery.md`'s
-  pre-existing citation at `src/cli/pack/hook-pre-tool-use.ts:1000#"writePendingApproval(generatedDir, sessionId);"`,
+  pre-existing citation at `src/cli/pack/hook-pre-tool-use.ts:1007#"writePendingApproval(generatedDir, sessionId);"`,
   well before the edited region, still resolving. `evidence-ledger-trust-boundary.md`
   was NOT flagged stale this round: it was itself edited (new
   `probeRegularFilePresence` paragraph, `delegation-markers.ts` added to
@@ -2613,7 +2613,7 @@
   describes only the new reason itself; neither touches any claim or
   cited span in these 7 docs (the one line-numbered citation among them,
   `understanding-gate-lockout-recovery.md`'s
-  `src/cli/pack/hook-pre-tool-use.ts:1000#"writePendingApproval(generatedDir, sessionId);"`,
+  `src/cli/pack/hook-pre-tool-use.ts:1007#"writePendingApproval(generatedDir, sessionId);"`,
   sits well before the edited comment and still resolves). Timestamp-only
   re-stamp on all 7; no content changed. `okf-kit check --json docs/okf`
   on the committed tree shows 0 errors, 0 warnings after the re-stamp.

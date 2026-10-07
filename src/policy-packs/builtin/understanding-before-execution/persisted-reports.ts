@@ -397,6 +397,13 @@ export interface PersistedReportEvidence {
   claimsApproved: boolean;
   detail: string;
   report: PersistedReport | null;
+  /**
+   * True only when the directory was too large to read (see
+   * {@link MAX_HOOK_LISTING_ENTRIES}): the hooks then swap the re-approval
+   * instruction in their agent-facing deny text for
+   * {@link renderReportsDirTooLargeNotice}, since approving again cannot fix it.
+   */
+  reportsDirTooLarge?: true;
 }
 
 /**
@@ -507,6 +514,7 @@ export function checkPersistedReport(
       claimsApproved: false,
       detail: `no report evidence read: ${reportsDir} ${listing.truncatedDetail}`,
       report: null,
+      reportsDirTooLarge: true,
     };
   }
   const reports = listing.reports;
@@ -675,13 +683,30 @@ export const MAX_HOOK_LISTING_ENTRIES = MAX_HASH_SCAN_BYTES / MIN_SCAN_ENTRY_COS
  * directories hold nothing but their `*.json` and `*.log` entries, so a
  * directory with many more names than that is planted, not real.
  */
-const HOOK_LISTING_SCAN_FACTOR = 2;
+export const HOOK_LISTING_SCAN_FACTOR = 2;
 
 const TRUNCATED_REMEDY =
   "remove non-report or stale *.json entries from it by hand (`harness gc` removes only aged approved or expired reports)";
 
 /** Clause a past-the-entry-bound listing reports; the caller supplies the subject. */
 const ENTRIES_TRUNCATED_DETAIL = `holds more than ${MAX_HOOK_LISTING_ENTRIES} *.json entries, or more than ${MAX_HOOK_LISTING_ENTRIES * HOOK_LISTING_SCAN_FACTOR} entries of any name, more than the gate reads; ${TRUNCATED_REMEDY}`;
+
+/**
+ * Agent-facing deny text for a reports directory the gate refuses to read
+ * (past {@link MAX_HOOK_LISTING_ENTRIES} `*.json` entries, past twice that many
+ * entries of any name, or past the byte budget). Both PreToolUse hooks use it
+ * in place of "run `harness approve understanding`": a new approval cannot
+ * help, because the gate would still not read the directory to confirm it.
+ */
+export function renderReportsDirTooLargeNotice(reportsDir: string): string {
+  return (
+    `The reports directory ${sanitizeDetailValue(reportsDir)} holds more than the gate reads ` +
+    `(over ${MAX_HOOK_LISTING_ENTRIES} *.json entries, over ${MAX_HOOK_LISTING_ENTRIES * HOOK_LISTING_SCAN_FACTOR} entries of any name, ` +
+    `or over ${MAX_HASH_SCAN_BYTES / (1024 * 1024)} MiB of report data), so no approval can be confirmed and approving again will not help. ` +
+    `Clean the directory up instead, then retry: run \`harness gc --apply\` (it removes only aged approved or expired reports) ` +
+    `and remove stale or non-report *.json entries from it by hand.`
+  );
+}
 
 /** Clause a past-the-byte-budget listing reports; the caller supplies the subject. */
 const BYTES_TRUNCATED_DETAIL = `holds more than ${MAX_HASH_SCAN_BYTES / (1024 * 1024)} MiB of report data, more than the gate reads; ${TRUNCATED_REMEDY}`;
