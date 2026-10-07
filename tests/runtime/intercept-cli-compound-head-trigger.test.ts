@@ -6,7 +6,8 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { parse as parseYaml } from "yaml";
 import { runInterceptCli } from "../../src/cli/policy/intercept.js";
 import { FULL_TEMPLATE } from "../../src/cli/init/templates.js";
-import type { LedgerClient, PolicyDecision } from "../../src/runtime/intercept.js";
+import { MAX_NORMALIZE_LENGTH } from "../../src/runtime/command-normalize.js";
+import { UNPARSED_COMMAND_REASON, type LedgerClient, type PolicyDecision } from "../../src/runtime/intercept.js";
 import { parseManifest, type Policy } from "../../src/schema/index.js";
 import { makeManifest } from "../_helpers/manifest.js";
 
@@ -182,6 +183,50 @@ describe("compound-command heads reach the bare verb's bash_match policy (task d
         const form = await decide(runtime, command("git push origin main"), "block", outside);
         expect(outcomeOf(form.decisions, "preflight-before-push"), JSON.stringify(command("git push"))).toBe("deny");
       }
+    });
+  });
+
+  // A command the shell model cannot lex hides whether a gated verb runs:
+  // bash runs the complete lines before a syntax error on a later line, and
+  // a compound head nested past the model's bounds hides the verb from the
+  // text arms. Every bash_match policy the text arms missed is refused for
+  // it, under its own enforcement, with no ledger query.
+  describe.each(RUNTIMES)("%s PreToolUse event: a command the gate cannot parse is refused", (runtime) => {
+    const UNPARSED: ReadonlyArray<{ label: string; command: (v: string) => string }> = [
+      { label: "stray ) on a later line", command: (v) => `{ ${v}; }\n)` },
+      { label: "unterminated quote on a later line", command: (v) => `${"! "}${v}\necho "x` },
+      { label: "if nested past the compound bound", command: (v) => `${"if true; then ".repeat(40)}${v};${" fi".repeat(40)}` },
+      {
+        label: "subshells nested past the nesting bound",
+        command: (v) => `${"( ".repeat(12)}if true; then ${v}; fi${" )".repeat(12)}`,
+      },
+    ];
+    const CASES = UNPARSED.flatMap(({ label, command }) =>
+      VERBS.map(({ verb, policy }) => ({ label, verb, policy, command: command(verb) })),
+    );
+
+    it.each(CASES)("$label, $verb: refused as unclassifiable", async ({ policy, command }) => {
+      const block = await decide(runtime, command, "block");
+      const d = block.decisions.find((x) => x.policyName === policy);
+      expect(d?.reason, JSON.stringify(command)).toBe(UNPARSED_COMMAND_REASON);
+      expect(d?.outcome).toBe("deny");
+      expect(block.blocked).toBe(true);
+      const warn = await decide(runtime, command, "warn");
+      expect(warn.decisions.find((x) => x.policyName === policy)?.outcome).toBe("warn");
+    });
+
+    it("every policy the text arms missed is refused, even with no gated verb in the text", async () => {
+      const { decisions, blocked } = await decide(runtime, 'echo "unterminated', "block");
+      expect(decisions.map((d) => d.policyName).sort()).toEqual(VERBS.map((v) => v.policy).sort());
+      expect(decisions.every((d) => d.reason === UNPARSED_COMMAND_REASON && d.outcome === "deny")).toBe(true);
+      expect(blocked).toBe(true);
+    });
+
+    it("above MAX_NORMALIZE_LENGTH the documented raw-only matching stays (no refusal)", async () => {
+      const command = `{ git push origin main; }; ${"echo hi; ".repeat(Math.ceil(MAX_NORMALIZE_LENGTH / 9))}`;
+      expect(command.length).toBeGreaterThan(MAX_NORMALIZE_LENGTH);
+      const { decisions } = await decide(runtime, command, "block");
+      expect(decisions).toEqual([]);
     });
   });
 

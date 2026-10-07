@@ -81,10 +81,16 @@
 // `sudo -D`, nested shells (`bash -c`, `sh -c`), `source`, function calls
 // (a function body is walked where it is defined, as if it ran there),
 // aliases, `env -S`, a dynamic `eval`, `CDPATH` and `OLDPWD` inherited from
-// the environment, zsh `AUTO_CD` and other zsh-only options, and a gated
-// verb whose own head is spelled through a prefix the legacy arms miss
-// (`! git log`), which this module models but the gate does not match on
-// (the matching arm is scoped to commands that name a directory).
+// the environment, and zsh `AUTO_CD` and other zsh-only options.
+//
+// TRIGGER MATCHING (task d11762ce). Every modelled command also carries its
+// texts at each wrapper-peeling stage (`ModelCommand.heads`), and the gate
+// tests every `bash_match` trigger against them for every command, so a
+// gated verb behind a compound prefix (`! git log`, `{ git log; }`,
+// `if ...; then git log; fi`, a loop body) or behind `xargs` / `coproc`
+// matches the policy the bare verb matches. Not read: commands run by a
+// nested shell or another program's argument (`sh -c`, `find -exec`,
+// `parallel`, `watch`), and wrappers not peeled here.
 
 import * as path from "node:path";
 import { MAX_NORMALIZE_LENGTH } from "./command-normalize.js";
@@ -187,6 +193,18 @@ export interface ModelCommand {
    * pattern can only anchor at the start of the text.
    */
   readonly canonical: string;
+  /**
+   * The command's text at every wrapper-peeling stage, outermost first, in
+   * the same decoded, `_`-substituted form as `canonical`, which is the
+   * last entry: the words after the compound prefixes (`!`, `{`, `time`,
+   * compound keywords) with leading assignments and `builtin` / `command`
+   * selectors, then the text after each peeled wrapper (`env`, `nohup`,
+   * `xargs`, ...). A `bash_match` trigger is tested against each entry, so
+   * a wrapper whose own spelling is gated (`env -u CLAUDE_SESSION_ID x`)
+   * still matches when another wrapper or a compound prefix stands in front
+   * of it, and a gated verb matches behind every wrapper.
+   */
+  readonly heads: readonly string[];
   /**
    * Offsets of the command's words in the original command text. A command
    * found inside a backtick body or an `eval` string carries the span of the
@@ -942,6 +960,7 @@ interface WalkState {
 
 interface OutRecord {
   canonical: string;
+  heads: readonly string[];
   span: Span;
   dirs: DirSet;
 }
@@ -1352,6 +1371,9 @@ class Walker {
     }
     words = words.slice(k);
     if (words.length === 0) return info;
+    // The command as written after the compound prefixes: the first text a
+    // `bash_match` trigger is tested against (see `ModelCommand.heads`).
+    const headWords = words;
 
     let a = 0;
     let inlineCdpath = false;
@@ -1436,7 +1458,7 @@ class Walker {
     } finally {
       st.cdpath = savedCdpath;
     }
-    this.gatedCommand(words, st, cmd);
+    this.gatedCommand(words, st, cmd, headWords);
     return info;
   }
 
@@ -1643,13 +1665,20 @@ class Walker {
   }
 
   /** A command that is not a directory builtin: peel wrappers, apply relocation options, record it. */
-  private gatedCommand(words: readonly ShellWord[], st: WalkState, cmd: SimpleCommand): void {
+  private gatedCommand(
+    words: readonly ShellWord[],
+    st: WalkState,
+    cmd: SimpleCommand,
+    headWords: readonly ShellWord[],
+  ): void {
     const peeled = peelWrappers(words);
     let dirs = st.cur;
     if (peeled.envSplit) dirs = withPossibility(dirs, UNKNOWN);
     if (peeled.envChdir !== null) dirs = joinSet(dirs, peeled.envChdir, "physical", false);
-    const rest = words.slice(peeled.idx);
-    if (rest.length === 0) return;
+    let rest: readonly ShellWord[] = words.slice(peeled.idx);
+    // Nothing left to run after the wrappers (`xargs`, `env`, `nohup -`):
+    // keep the command as written, so peeling never drops a record.
+    if (rest.length === 0) rest = words;
     const head = rest[0]!.value;
     let canonicalWords: string[];
     if (head !== null && GIT_HEAD_RE.test(head)) {
@@ -1691,8 +1720,11 @@ class Walker {
     }
     const first = cmd.words[0] ?? rest[0]!;
     const lastWord = cmd.words[cmd.words.length - 1] ?? rest[rest.length - 1]!;
+    const canonical = canonicalWords.join(" ");
+    const offset = headWords.length - words.length;
     this.out.push({
-      canonical: canonicalWords.join(" "),
+      canonical,
+      heads: stageTexts(headWords, [0, ...peeled.stages.map((i) => offset + i)], canonical),
       span: { start: first.start, end: lastWord.end },
       dirs,
     });
@@ -1728,22 +1760,53 @@ function wordText(w: ShellWord): string {
 }
 
 /**
+ * The texts of `words` from each stage index on (deduplicated, in order),
+ * then `canonical` when it differs from the last one. The words are joined
+ * once and every stage is a suffix of that one string, so a long argument
+ * list behind many wrappers is not joined once per wrapper.
+ */
+function stageTexts(words: readonly ShellWord[], stages: readonly number[], canonical: string): string[] {
+  const texts = words.map(wordText);
+  const starts: number[] = [];
+  let at = 0;
+  for (const t of texts) {
+    starts.push(at);
+    at += t.length + 1;
+  }
+  const full = texts.join(" ");
+  const out: string[] = [];
+  let last = -1;
+  for (const s of stages) {
+    if (s <= last || s >= texts.length) continue;
+    last = s;
+    out.push(full.slice(starts[s]));
+  }
+  if (out[out.length - 1] !== canonical) out.push(canonical);
+  return out;
+}
+
+/**
  * Peel the wrappers that run the next word as a program (`env`, `sudo`,
  * `doas`, `nice`, `timeout`, `nohup`, `setsid`, `time`, `command`, `exec`,
- * `stdbuf`) and leading assignments. `envChdir` is the last `env -C` value.
+ * `stdbuf`, `xargs`, `coproc`) and leading assignments. `envChdir` is the
+ * last `env -C` value. `stages` holds the index of every word a peel step
+ * started at, and the final `idx`, in order (see `ModelCommand.heads`).
  */
 function peelWrappers(words: readonly ShellWord[]): {
   idx: number;
   envChdir: ShellWord | null;
   envSplit: boolean;
+  stages: number[];
 } {
   let i = 0;
   let envChdir: ShellWord | null = null;
   let envSplit = false;
+  const stages: number[] = [];
   const valueAt = (at: number): string | null | undefined => words[at]?.value;
   for (let guard = 0; guard < 64 && i < words.length; guard++) {
     const w = words[i]!;
     const v = w.value;
+    if (stages[stages.length - 1] !== i) stages.push(i);
     if (isAssignment(w)) {
       i++;
       continue;
@@ -1848,9 +1911,69 @@ function peelWrappers(words: readonly ShellWord[]): {
       }
       continue;
     }
+    if (v === "xargs") {
+      i = skipXargsOptions(words, i + 1);
+      continue;
+    }
+    if (v === "coproc" && !w.quoted) {
+      // `coproc cmd`, `coproc { cmd; }`, `coproc NAME { cmd; }`. Peeled here,
+      // not in the walker's prefix loop, because the coprocess runs in a
+      // subshell: a `cd` behind it must not move the modelled shell.
+      i++;
+      if (words[i + 1]?.value === "{" && !words[i + 1]!.quoted && /^\w+$/.test(valueAt(i) ?? "")) i++;
+      if (words[i]?.value === "{" && !words[i]!.quoted) i++;
+      continue;
+    }
     break;
   }
-  return { idx: i, envChdir, envSplit };
+  if (stages[stages.length - 1] !== i) stages.push(i);
+  return { idx: i, envChdir, envSplit, stages };
+}
+
+/** `xargs` options whose value is the next word when not attached (GNU and BSD). */
+const XARGS_VALUE_SHORT = new Set(["a", "d", "E", "I", "J", "L", "n", "P", "R", "S", "s"]);
+/** `xargs` long options with a required value. */
+const XARGS_VALUE_LONG = ["arg-file", "delimiter", "max-args", "max-procs", "max-chars", "process-slot-var"];
+/** `xargs` long options with no value or an optional attached one. */
+const XARGS_OTHER_LONG = [
+  "null", "eof", "replace", "max-lines", "interactive", "no-run-if-empty", "verbose", "exit",
+  "show-limits", "open-tty", "help", "version",
+];
+
+/**
+ * The index of the command `xargs` runs: past its options from `i` on. A
+ * short option word is read as a getopt cluster (`-0rn1`, `-I{}`, `-I {}`);
+ * a long option takes the next word only when it is (an unambiguous prefix
+ * of) one with a required value and carries no `=`. A misread moves the
+ * head onto another word: the run command's match is then lost (the text
+ * arms and the earlier stages still apply) or an argument word is matched
+ * (over-blocking); no match another arm or stage makes is removed.
+ */
+function skipXargsOptions(words: readonly ShellWord[], start: number): number {
+  let i = start;
+  while (i < words.length) {
+    const t = words[i]!.value;
+    if (t === null || !t.startsWith("-") || t === "-") break;
+    if (t === "--") return i + 1;
+    if (t.startsWith("--")) {
+      const name = t.slice(2);
+      const takesNext =
+        !name.includes("=") &&
+        XARGS_VALUE_LONG.some((n) => n.startsWith(name)) &&
+        !XARGS_OTHER_LONG.some((n) => n.startsWith(name));
+      i += takesNext ? 2 : 1;
+      continue;
+    }
+    let next = 1;
+    for (let c = 1; c < t.length; c++) {
+      if (XARGS_VALUE_SHORT.has(t[c]!)) {
+        if (c === t.length - 1) next = 2;
+        break;
+      }
+    }
+    i += next;
+  }
+  return i;
 }
 
 function namesDirectory(dirs: DirSet): boolean {
@@ -1877,6 +2000,7 @@ export function modelShellCommands(command: string, oracle?: DirectoryOracle): M
     walker.walk(tokens, newState());
     return walker.out.map((rec) => ({
       canonical: rec.canonical,
+      heads: rec.heads,
       span: rec.span,
       namesDirectory: namesDirectory(rec.dirs),
       dirs: [...rec.dirs.values()],

@@ -27,6 +27,7 @@ import type { Manifest, Policy } from "../schema/index.js";
 import { buildActionEnvelope } from "./action-envelope.js";
 import { renderAgentFacing } from "./agent-facing.js";
 import {
+  MAX_NORMALIZE_LENGTH,
   normalizeCommand,
   normalizeCommandAmpAware,
   normalizeCommandQuoteAware,
@@ -397,13 +398,13 @@ export interface InterceptOptions {
    * (`src/runtime/shell-command-model.ts`, task 7d4abf84) for the SAME Bash
    * event's `tool_input.command`: every simple command with the
    * directories it can run in. Read by `policyMatchesEvent`'s fifth arm
-   * (for every `usesPerRepoBuiltins` policy all four earlier arms missed)
-   * and by `resolveAttributedContexts` (for a matched per-repo policy), so
-   * it is computed at most once per Bash event and, with any per-repo
-   * Bash policy in the manifest (FULL_TEMPLATE has four), effectively for
-   * every Bash event: such a policy is either missed by the four earlier
-   * arms (the fifth arm reads the model) or matched (its attribution reads
-   * it). Same lazy, compute-once shape as `commandSegmentsThunk`;
+   * (for every `bash_match` policy all four earlier arms missed, since
+   * task d11762ce) and by `resolveAttributedContexts` (for a matched
+   * per-repo policy), so it is computed at most once per Bash event and,
+   * with any `bash_match` policy in the manifest, effectively for every
+   * Bash event: such a policy is either missed by the four earlier arms
+   * (the fifth arm reads the model) or matched (a per-repo policy's
+   * attribution reads it). Same lazy, compute-once shape as `commandSegmentsThunk`;
    * omitted by non-Bash events and by callers/tests that do not supply
    * one, in which case `intercept()` builds its own memoised thunk for the
    * event's command (with `modelPathResolver` as the model's directory
@@ -632,6 +633,16 @@ export function policyMatchesEvent(
  * arms made). `intercept()` passes `"model"` on to
  * `resolveAttributedContexts`: the segment view never matched such a
  * policy, so it has no demand of its own to keep.
+ *
+ * `"unparsed"` (task d11762ce): the four text arms missed and the shell
+ * model could not lex a command within `MAX_NORMALIZE_LENGTH` (a syntax
+ * error, or nesting past the model's bounds). Bash runs the complete lines
+ * before a syntax error on a later line (`{ git push; }` then a stray `)`),
+ * and a compound head nested past the bounds hides the verb from the text
+ * arms, so such a command cannot be shown not to run a gated verb: every
+ * `bash_match` policy is refused for it as unclassifiable
+ * (`UNPARSED_COMMAND_REASON`, no ledger query). Above
+ * `MAX_NORMALIZE_LENGTH` the documented raw-only matching stays (`"none"`).
  */
 export function policyMatchArm(
   policy: Policy,
@@ -640,7 +651,7 @@ export function policyMatchArm(
   ampNormalizedCommandThunk?: () => AmpAwareNormalizedCommand,
   quoteNormalizedCommandThunk?: () => QuoteAwareNormalizedCommand,
   shellModelThunk?: () => ShellModelView,
-): "none" | "segments" | "model" {
+): "none" | "segments" | "model" | "unparsed" {
   if (policy.trigger.event !== event.hook_event_name) return "none";
   if (policy.trigger.match !== undefined) {
     if (typeof event.tool_name !== "string") return "none";
@@ -714,20 +725,25 @@ export function policyMatchArm(
             ? quoteNormalizedCommandThunk()
             : normalizeCommandQuoteAware(command);
           if (!re.test(quoted.normalized)) {
-            // FIFTH ARM (task 7d4abf84), scoped: only a policy whose
-            // `requires:` is evaluated per repository, and only a model
-            // command that names a directory (a path or an opaque one).
-            // The model decodes words and reads real operator boundaries,
-            // so it matches the gated verb in shapes the four arms above
-            // cannot read (`git -C 'vendor/lib sp' log`, `git '-C' X log`,
-            // a line continuation inside the git invocation). Additive
-            // like the others: it can only add a match. Unscoped, it
-            // would also match cwd-only head spellings (`! git log`,
-            // `{ git log; }`) and verbs that never run
-            // (`while false; do git log; done`), a trigger-coverage
-            // change this arm deliberately leaves out.
-            if (!usesPerRepoBuiltins(policy)) return "none";
+            // FIFTH ARM (task 7d4abf84; unscoped by task d11762ce): the
+            // quote-aware shell command model, for every `bash_match`
+            // policy and every simple command it models. The model decodes
+            // words, reads real operator boundaries, treats `!`, `{ }`,
+            // `time` and the compound keywords as transparent prefixes and
+            // peels wrappers (`env`, `nohup`, `xargs`, `coproc`, ...), so it
+            // matches the gated verb in shapes the four arms above cannot
+            // read: `{ git push; }`, `! git push`,
+            // `if true; then git push; fi`, a loop body, `xargs git push`,
+            // `git -C 'vendor/lib sp' log`, a line continuation inside the
+            // git invocation. Until task d11762ce it ran only for per-repo
+            // policies and only for commands naming a directory, so the
+            // cwd-only spellings matched no policy at all. Additive like
+            // the others: it can only add a match. Accepted over-match: a
+            // verb that never runs (`while false; do git push; done`, a
+            // function body never called) matches, as `false && git push`
+            // already does through the text arms.
             const model = shellModelThunk ? shellModelThunk() : shellModelViewOf(command);
+            if (model.commands === null) return command.length <= MAX_NORMALIZE_LENGTH ? "unparsed" : "none";
             if (attributeTriggerModelCommands(policy, model).length === 0) return "none";
             return "model";
           }
@@ -1313,15 +1329,24 @@ export function attributeTriggerSegments(
 /**
  * The model sibling of `attributeTriggerSegments` (task 7d4abf84): the
  * commands of the quote-aware shell command model
- * (`src/runtime/shell-command-model.ts`) that name a directory and whose
- * canonical text satisfies the policy's own `bash_match` on its own. The
- * canonical text holds no shell boundary character, so a pattern can match
- * it only at its start: at the gated verb itself. `[]` when the policy has
- * no `bash_match`, its regex is malformed, or the command could not be
- * lexed. A model command that names no directory (it runs in the working
- * directory, or in one only known at run time) is left out: the cwd
- * context is demanded for a matched policy anyway, so it could add
- * nothing but a match for a verb the legacy arms do not see.
+ * (`src/runtime/shell-command-model.ts`) one of whose texts
+ * (`ModelCommand.heads`: the command as written after the compound
+ * prefixes, then after each peeled wrapper, then its canonical text)
+ * satisfies the policy's own `bash_match` on its own. These texts hold no
+ * shell boundary character, so a pattern can match one only at its start:
+ * at the gated verb, or at a gated wrapper, itself. `[]` when the policy
+ * has no `bash_match`, its regex is malformed, or the command could not be
+ * lexed.
+ *
+ * Every model command is read, also one that runs only in the working
+ * directory (task d11762ce): that is how `{ git push; }`, `! git push`,
+ * `if ...; then git push; fi` and `xargs git push` reach the policy the
+ * bare verb reaches (the fifth matching arm in `policyMatchArm`), and,
+ * for a per-repo policy, how such a command's working-directory context
+ * is demanded next to the targets of the other satisfying commands
+ * (`resolveAttributedContexts` adds the cwd context for a possibility
+ * without steps). Until that task only commands naming a directory were
+ * read, which left those spellings matching no policy at all.
  */
 export function attributeTriggerModelCommands(
   policy: Policy,
@@ -1334,7 +1359,7 @@ export function attributeTriggerModelCommands(
   } catch {
     return [];
   }
-  return model.commands.filter((c) => c.namesDirectory && re.test(c.canonical));
+  return model.commands.filter((c) => c.heads.some((text) => re.test(text)));
 }
 
 /**
@@ -1417,6 +1442,15 @@ export type AttributedContextsResult =
  * cannot be attributed (task `cfb6b390`). One text for the runtime
  * decision and the dry-run preview, so the two cannot drift.
  */
+export const UNPARSED_COMMAND_REASON =
+  "unclassifiable: this gate cannot parse this command line (a syntax error, or compound commands, " +
+  "subshells or substitutions nested past the parser's bounds), so it cannot tell whether it runs a gated " +
+  "command; bash still runs the complete lines before a syntax error. Fix the syntax or flatten the nesting, " +
+  "then run it again";
+
+/** The ledger-tag text of an `UNPARSED_COMMAND_REASON` decision: no tag is queried. */
+export const UNPARSED_COMMAND_TAG = "(unparsed command: not classifiable, no context queried)";
+
 export const OPAQUE_TARGET_REASON =
   "ambiguous: this command names a repository directory through a path this gate cannot attribute " +
   "(a backtick, an ANSI-C or locale quoted value, a control or separator character, a glob, " +
@@ -2047,6 +2081,9 @@ export async function intercept(
   // Policies only the shell model's arm matched: the segment view has no
   // demand of its own for them (see `resolveAttributedContexts`).
   const matchedByModelOnly = new Set<Policy>();
+  // Policies refused because the command could not be parsed (task
+  // d11762ce, see `policyMatchArm`): one fail-closed decision each.
+  const matchedUnparsed = new Set<Policy>();
   for (const p of manifest.policies) {
     const arm = policyMatchArm(
       p,
@@ -2058,6 +2095,7 @@ export async function intercept(
     );
     if (arm === "none") continue;
     if (arm === "model") matchedByModelOnly.add(p);
+    if (arm === "unparsed") matchedUnparsed.add(p);
     if (p.when === undefined) {
       matching.push(p);
       continue;
@@ -2088,6 +2126,27 @@ export async function intercept(
 
   const decisions: PolicyDecision[] = [];
   for (const policy of matching) {
+    if (matchedUnparsed.has(policy)) {
+      // Refused as unclassifiable: one synthetic decision, no ledger query,
+      // the enforcement mapping of `opaqueTargetDecision`.
+      const decision = failClosedContextsDecision(
+        policy,
+        event,
+        options.builtins,
+        (options.now ?? new Date()).toISOString(),
+        UNPARSED_COMMAND_REASON,
+        UNPARSED_COMMAND_TAG,
+      );
+      decisions.push(decision);
+      try {
+        await options.ledger.record(decision, resolveSessionId(event.session_id));
+      } catch (err) {
+        (options.stderr ?? process.stderr).write(
+          `harness runtime intercept: audit-write failed for ${decision.policyName}: ${err instanceof Error ? err.message : String(err)}\n`,
+        );
+      }
+      continue;
+    }
     const attributed: AttributedContextsResult = usesPerRepoBuiltins(policy)
       ? resolveAttributedContexts(
           policy,

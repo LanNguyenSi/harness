@@ -7,6 +7,7 @@ import {
   type ExtractEventContext,
 } from "../policies/index.js";
 import {
+  MAX_NORMALIZE_LENGTH,
   normalizeCommand,
   normalizeCommandAmpAware,
   normalizeCommandQuoteAware,
@@ -20,6 +21,7 @@ import {
   MAX_ATTRIBUTED_CONTEXTS,
   resolveAttributedContexts,
   OPAQUE_TARGET_REASON,
+  UNPARSED_COMMAND_REASON,
   usesPerRepoBuiltins,
 } from "../runtime/intercept.js";
 import { shellModelViewOf, type ShellModelView } from "../runtime/shell-command-model.js";
@@ -125,7 +127,7 @@ function policyMatchesTool(
   tool: string,
   toolInput: unknown,
   shellModel: ShellModelView | undefined,
-): { matched: true; byModelOnly: boolean } | { matched: false; reason: string } {
+): { matched: true; byModelOnly: boolean; unparsed?: true } | { matched: false; reason: string } {
   if (policy.trigger.event !== "PreToolUse") {
     return { matched: false, reason: `trigger event is ${policy.trigger.event}, not PreToolUse` };
   }
@@ -209,11 +211,12 @@ function policyMatchesTool(
     // shape immediately above (no shared-helper precedent exists yet for
     // this OR-chain to follow instead).
     //
-    // FIFTH ARM (task 7d4abf84): the quote-aware shell command model, scoped
-    // exactly as `policyMatchesEvent` scopes it (a per-repo policy, a model
-    // command that names a directory), through the same exported
-    // `attributeTriggerModelCommands`, so `git -C 'vendor/lib sp' log`
-    // predicts the match `policy intercept` makes. A match only that arm
+    // FIFTH ARM (task 7d4abf84; unscoped by task d11762ce): the quote-aware
+    // shell command model, exactly as `policyMatchesEvent` reads it (every
+    // `bash_match` policy, every modelled command), through the same
+    // exported `attributeTriggerModelCommands`, so `git -C 'vendor/lib sp'
+    // log`, `{ git push; }` and `xargs git push` predict the match
+    // `policy intercept` makes. A match only that arm
     // makes is reported as such (`byModelOnly`), as `policyMatchArm` does
     // for `intercept()`: attribution then has no segment-view demand to keep.
     const segmentArms =
@@ -221,6 +224,17 @@ function policyMatchesTool(
       re.test(normalizeCommand(args.command).normalized) ||
       re.test(normalizeCommandAmpAware(args.command).normalized) ||
       re.test(normalizeCommandQuoteAware(args.command).normalized);
+    // UNPARSED (task d11762ce): the runtime refuses every `bash_match`
+    // policy the text arms missed for a command the model cannot lex within
+    // MAX_NORMALIZE_LENGTH (`policyMatchArm`'s `"unparsed"`); predicted the same.
+    if (
+      !segmentArms &&
+      shellModel !== undefined &&
+      shellModel.commands === null &&
+      args.command.length <= MAX_NORMALIZE_LENGTH
+    ) {
+      return { matched: true, byModelOnly: false, unparsed: true };
+    }
     if (!segmentArms && !fifthArmMatches(policy, shellModel)) {
       return {
         matched: false,
@@ -233,7 +247,7 @@ function policyMatchesTool(
 }
 
 function fifthArmMatches(policy: Policy, model: ShellModelView | undefined): boolean {
-  if (model === undefined || !usesPerRepoBuiltins(policy)) return false;
+  if (model === undefined) return false;
   return attributeTriggerModelCommands(policy, model).length > 0;
 }
 
@@ -334,8 +348,11 @@ function policyHit(
   builtins: ExtractBuiltins,
   attribution: AttributionInput,
   byModelOnly = false,
+  unparsed = false,
 ): DryRunPolicyHit {
-  const ledgerQueries = ledgerQueriesFor(policy, ctx, builtins, attribution, byModelOnly);
+  const ledgerQueries = unparsed
+    ? [`(unparsed command: ${UNPARSED_COMMAND_REASON}; no context queried)`]
+    : ledgerQueriesFor(policy, ctx, builtins, attribution, byModelOnly);
   return {
     name: policy.name,
     // ledgerQuery keeps the cwd-context value for --json consumers; the runtime
@@ -430,7 +447,7 @@ export function dryRun(prompt: string, opts: DryRunOptions = {}): DryRunResult {
     }
     const verdict = policyMatchesTool(policy, tool, toolArgs, shellModel);
     if (verdict.matched) {
-      matching.push(policyHit(policy, ctx, builtins, attribution, verdict.byModelOnly));
+      matching.push(policyHit(policy, ctx, builtins, attribution, verdict.byModelOnly, verdict.unparsed === true));
     } else {
       couldMatch.push({
         name: policy.name,

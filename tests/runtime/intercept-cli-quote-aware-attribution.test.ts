@@ -410,9 +410,22 @@ describe("runInterceptCli quote-aware attribution: two-sided pins", () => {
     });
   });
 
-  it("a gated verb behind a cwd-only head spelling matches no policy (the matching arm is scoped)", async () => {
-    const result = await run("! git log", OUTER_ONLY);
-    expect(result.decisions).toHaveLength(0);
+  // Task d11762ce: the model's matching arm reads every modelled command, so
+  // a cwd-only head spelling reaches the policy and demands the cwd context
+  // (a pin of the former "matches no policy" ceiling, flipped).
+  it("a gated verb behind a cwd-only head spelling demands the working directory's evidence", async () => {
+    for (const command of ["! git log", "{ git log; }", "if true; then git log; fi", "xargs git log"]) {
+      expect(await tagsFor(command, INVESTIGATION), command).toEqual([outerTag(INVESTIGATION)]);
+    }
+  });
+
+  it("a cwd-only head spelling next to a nested target demands both repositories", async () => {
+    expect(await tagsFor(`! git log; git -C ${P} log`, INVESTIGATION)).toEqual(
+      [nestedTag(INVESTIGATION, "libplain"), outerTag(INVESTIGATION)].sort(),
+    );
+    expect(await tagsFor(`{ git log; }; { git -C ${P} log; }`, INVESTIGATION)).toEqual(
+      [nestedTag(INVESTIGATION, "libplain"), outerTag(INVESTIGATION)].sort(),
+    );
   });
 
   describe("named directories are attributed", () => {

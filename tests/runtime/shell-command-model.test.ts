@@ -703,3 +703,68 @@ describe("modelShellCommands: a subshell or substitution inside a compound comma
     }
   });
 });
+
+// Task d11762ce: the texts a `bash_match` trigger is tested against for
+// every modelled command (the gate's fifth matching arm reads every
+// command, not only one naming a directory).
+describe("modelShellCommands: heads, the command text at each wrapper-peeling stage", () => {
+  const headsOf = (command: string): string[][] => (modelShellCommands(command) ?? []).map((c) => [...c.heads]);
+
+  it("a compound prefix is not part of any head; the canonical text is the last head", () => {
+    expect(headsOf("{ git push; }")).toEqual([["git push"]]);
+    expect(headsOf("! git push")).toEqual([["git push"]]);
+    expect(headsOf("if true; then git push; fi")).toEqual([["true"], ["git push"]]);
+    expect(headsOf("while git push; do :; done")).toEqual([["git push"], [":"]]);
+    expect(headsOf("case a in a) git push;; esac")).toEqual([["git push"]]);
+    expect(headsOf("git -C sub push")).toEqual([["git -C sub push", "git push"]]);
+  });
+
+  it("keeps leading assignments and every wrapper stage, so a gated wrapper spelling still matches", () => {
+    expect(headsOf("A=1 nohup env -u CLAUDE_SESSION_ID true")).toEqual([
+      ["A=1 nohup env -u CLAUDE_SESSION_ID true", "nohup env -u CLAUDE_SESSION_ID true", "env -u CLAUDE_SESSION_ID true", "true"],
+    ]);
+    expect(headsOf("{ CLAUDE_SESSION_ID= harness pause; }")).toEqual([["CLAUDE_SESSION_ID= harness pause", "harness pause"]]);
+  });
+
+  it("peels xargs with its option grammar (value options, clusters, long options, --)", () => {
+    const last = (command: string): string => {
+      const cmds = modelShellCommands(command) ?? [];
+      return cmds[cmds.length - 1]!.canonical;
+    };
+    for (const command of [
+      "xargs git push",
+      "echo x | xargs -I{} git push",
+      "echo x | xargs -I {} git push",
+      "echo x | xargs -0 -n 1 -P 2 git push",
+      "echo x | xargs -rn1 git push",
+      "echo x | xargs -n1r git push",
+      "echo x | xargs --max-args=1 git push",
+      "echo x | xargs --max-procs 2 git push",
+      "echo x | xargs --max-a 2 git push",
+      "echo x | xargs -L1 -- git push",
+      "echo x | xargs -a list -d , git push",
+      "echo x | xargs -e -t git push",
+    ]) {
+      expect(last(command), command).toBe("git push");
+    }
+    // A long option with no value or an optional attached one takes nothing.
+    expect(last("xargs --null --replace git push")).toBe("git push");
+    // `--max` is ambiguous (max-args, max-lines, ...): nothing is taken.
+    expect(last("xargs --max git push")).toBe("git push");
+  });
+
+  it("peels coproc in its three spellings without moving the modelled shell", () => {
+    expect(headsOf("coproc git push").at(-1)!.at(-1)).toBe("git push");
+    expect(headsOf("coproc { git push; }")[0]!.at(-1)).toBe("git push");
+    expect(headsOf("coproc NAME { git push; }")[0]!.at(-1)).toBe("git push");
+    // The coprocess runs in a subshell: its `cd` does not move the shell.
+    const cmds = modelShellCommands("coproc cd sub; git log") ?? [];
+    expect(cmds.map((c) => c.canonical)).toEqual(["cd sub", "git log"]);
+    expect(cmds[1]!.namesDirectory).toBe(false);
+  });
+
+  it("a wrapper with nothing after it keeps its own text instead of dropping the command", () => {
+    expect(headsOf("xargs")).toEqual([["xargs"]]);
+    expect(headsOf("echo x | xargs -I")).toEqual([["echo x"], ["xargs -I"]]);
+  });
+});

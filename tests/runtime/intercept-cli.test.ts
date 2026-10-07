@@ -1832,15 +1832,31 @@ describe("runInterceptCli — normalised bash_match trigger matching (T-002, run
   // at the normaliser's unit level.
   describe("F4: still-unsupported spellings remain a bypass (documented ceiling)", () => {
     const cases: Array<{ label: string; command: string }> = [
-      { label: "xargs (deliberately excluded)", command: "xargs git status" },
-      { label: "quoted subcommand", command: 'git "status"' },
-      { label: "backtick command substitution naming no directory", command: "echo `git status`" },
+      { label: "nested shell", command: "sh -c 'git status'" },
+      { label: "find -exec", command: "find . -maxdepth 0 -exec git status ';'" },
     ];
     for (const c of cases) {
       it(`${c.label}: "${c.command}" produces no decision (still bypasses)`, async () => {
         const result = await runFor(c.command);
         expect(result.decisions).toHaveLength(0);
         expect(result.blocked).toBe(false);
+      });
+    }
+
+    // Task d11762ce: the shell model's matching arm reads every modelled
+    // command, not only one naming a directory, and peels `xargs`, so these
+    // former ceiling entries are gated now.
+    const gated: Array<{ label: string; command: string }> = [
+      { label: "xargs", command: "xargs git status" },
+      { label: "quoted subcommand", command: 'git "status"' },
+      { label: "backtick command substitution naming no directory", command: "echo `git status`" },
+    ];
+    for (const c of gated) {
+      it(`${c.label}: "${c.command}" is blocked with no ledger evidence`, async () => {
+        const result = await runFor(c.command);
+        expect(result.decisions).toHaveLength(1);
+        expect(result.decisions[0]?.outcome).toBe("deny");
+        expect(result.blocked).toBe(true);
       });
     }
 

@@ -912,9 +912,10 @@ export async function runInterceptCli(
       : () => (quoteNormalizedCommandCache ??= normalizeCommandQuoteAware(bashCommand));
   // Memoised thunk for the quote-aware shell command model (task
   // 7d4abf84), the same shape again: `policyMatchesEvent`'s fifth arm reads
-  // it for every per-repo policy the four earlier arms missed, and
+  // it for every `bash_match` policy the four earlier arms missed (every
+  // such policy since task d11762ce, not only per-repo ones), and
   // `intercept()`'s attribution for a matched per-repo policy, so it is
-  // computed at most once per event and, with any per-repo Bash policy in
+  // computed at most once per event and, with any `bash_match` policy in
   // the manifest, effectively for every Bash event (one no policy matches
   // included).
   // Its directory oracle is the event's path resolver, which `intercept()`

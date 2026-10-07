@@ -806,18 +806,48 @@ describe("dry-run: the quote-aware shell model arm and attribution match policy 
     }
   });
 
-  it("does not extend the shell model arm to a policy that is not evaluated per repository", async () => {
+  // Task d11762ce: the shell model arm reads every bash_match policy and
+  // every modelled command (a pin of the former per-repo-only scope,
+  // flipped); dry-run predicts the same match and demands.
+  it("extends the shell model arm to a policy that is not evaluated per repository, and dry-run agrees", async () => {
     const w = makeWorld();
-    const command = "git '-C' vendor/libplain tag v1";
-    const r = dryRun("x", {
-      configPath: FULL_MANIFEST,
-      tool: "Bash",
-      toolArgs: JSON.stringify({ command }),
-      builtins: { CWD: w.outer },
-    });
-    expect(r.report.matchingPolicies.map((p) => p.name)).not.toContain("dogfood-before-release");
-    expect(await runtimeTags(command, w.outer, "dogfood-before-release")).toEqual([]);
-    // Positive control: the policy exists and matches the unquoted spelling.
+    for (const command of ["git '-C' vendor/libplain tag v1", "{ npm publish; }", "if true; then npm publish; fi"]) {
+      const r = dryRun("x", {
+        configPath: FULL_MANIFEST,
+        tool: "Bash",
+        toolArgs: JSON.stringify({ command }),
+        builtins: { CWD: w.outer },
+      });
+      expect(r.report.matchingPolicies.map((p) => p.name), `dry-run ${command}`).toContain("dogfood-before-release");
+      expect(await runtimeTags(command, w.outer, "dogfood-before-release"), `runtime ${command}`).toHaveLength(1);
+    }
+    // Positive control: the policy matches the unquoted spelling too.
     expect(await runtimeTags("git -C vendor/libplain tag v1", w.outer, "dogfood-before-release")).toHaveLength(1);
+  });
+
+  it("predicts the refusal of a command the gate cannot parse", async () => {
+    const w = makeWorld();
+    const command = "{ git push; }\n)";
+    expect(await runtimeTags(command, w.outer, "preflight-before-push")).toEqual([
+      "(unparsed command: not classifiable, no context queried)",
+    ]);
+    const predicted = predictedTags(command, w.outer, "preflight-before-push");
+    expect(predicted).toHaveLength(1);
+    expect(predicted[0]).toMatch(/^\(unparsed command: unclassifiable: /);
+  });
+
+  it("predicts the runtime's demands for cwd-only compound head spellings", async () => {
+    const w = makeWorld();
+    const cases: Array<[string, string, string[]]> = [
+      ["{ git push; }", "preflight-before-push", ["preflight:main"]],
+      ["! git log", "preflight-before-investigation", ["preflight:outer"]],
+      ["echo x | xargs -I{} git push", "preflight-before-push", ["preflight:main"]],
+      ["if true; then git -C vendor/libplain push; fi", "preflight-before-push", ["preflight:feature-plain", "preflight:main"]],
+    ];
+    for (const [command, policy, expected] of cases) {
+      const fromRuntime = await runtimeTags(command, w.outer, policy);
+      expect(fromRuntime, `runtime ${command}`).toEqual(expected);
+      expect(predictedTags(command, w.outer, policy), `dry-run ${command}`).toEqual(fromRuntime);
+    }
   });
 });
