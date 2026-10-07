@@ -3,7 +3,7 @@ type: overview
 title: Shell quote models, measured divergence against bash
 description: The policy engine has independent shell-word models plus a raw-regex trigger layer (since task 7d4abf84 also a quote-aware shell command model that feeds per-repo attribution). This records what each actually extracts, measured against real bash, which divergences are fail-open, and the evidence-led ordering for closing them.
 tags: [policy-engine, bash-match, quote-model, fail-open, measurement]
-timestamp: 2026-10-07T04:55:14Z
+timestamp: 2026-10-07T05:47:34Z
 sources:
   - src/runtime/command-normalize.ts
   - src/cli/init/composer.ts
@@ -159,27 +159,40 @@ kein Fail-closed für ein Verb, das nur im cwd lief; die Kosten (Glob-Ziele,
 K4-Klasse benachbart) blieb damals für Kommandos ohne genanntes Verzeichnis
 offen.
 
-**Seit Task `d11762ce` ist die Kopfschreibweisen-Lücke geschlossen:** der
-fünfte Arm läuft für jede `bash_match`-Policy und jedes modellierte
-Kommando. Jedes Kommando trägt seine Texte je Wrapper-Schälstufe
-(`ModelCommand.heads`: das Kommando nach den Verbund-Präfixen `!`, `{`,
-`time` und den Schlüsselwörtern, mit führenden Zuweisungen, dann nach
-jedem geschälten Wrapper, zuletzt der kanonische Text); der Trigger wird
-gegen jede Stufe getestet, sodass `{ git push; }`, `! git push`,
-`if ...; then git push; fi`, Schleifen-, `case`- und Funktionskörper,
-`xargs git push` (mit `xargs`-Optionsgrammatik), `coproc git push` und
-ein gesperrter Wrapper hinter einem anderen
-(`nohup env -u CLAUDE_SESSION_ID ...`) dieselbe Policy treffen wie das
-nackte Verb. Ein Kommando, das das Modell innerhalb von
+**Seit Task `d11762ce` ist die Kopfschreibweisen-Lücke für die gemessenen
+Formen geschlossen:** der fünfte Arm läuft für jede `bash_match`-Policy und
+jedes modellierte Kommando, reine Zuweisungen eingeschlossen. Jedes
+Kommando trägt seine Texte je Wrapper-Schälstufe (`ModelCommand.heads`:
+das Kommando nach den Verbund-Präfixen `!`, `{`, `time` und den
+Schlüsselwörtern, mit führenden Zuweisungen, dann nach jedem geschälten
+Wrapper, zuletzt der kanonische Text) und seinen Kopftext
+(`ModelCommand.headText`: die dekodierten Wörter nach den Präfixen, je Wort
+Leer- und Metazeichen durch `_` ersetzt); der Trigger wird gegen jede Stufe
+und gegen die Normalisierungen der Textarme auf dem Kopftext getestet. So
+treffen `{ git push; }`, `! git push`, `if ...; then git push; fi`,
+Schleifen-, `case`- und Funktionskörper (auch `for ((;;)) do ...; done`,
+`for ((;;)) { ...; }` und `for x do ...; done` ohne Trenner; `(( ))` ist ein
+Wort, seine Substitutionen werden gelesen), `xargs git push` (GNU- und
+BSD-Wertoptionen), `coproc git push`, Wrapper mit Pfad (`/usr/bin/env`),
+die lange Optionsgrammatik von `sudo`, `timeout` und `nice` und ein
+gesperrter Wrapper hinter einem anderen
+(`nohup env -u CLAUDE_SESSION_ID ...`) dieselbe Policy wie das nackte
+Kommando. Ein Kommando, das das Modell innerhalb von
 `MAX_NORMALIZE_LENGTH` nicht lexen kann (Syntaxfehler, den bash erst nach
-den vollständigen Zeilen davor erreicht, oder Verschachtelung über die
-Grenzen des Modells), wird für jede `bash_match`-Policy, die die
-Textarme verfehlten, als nicht klassifizierbar abgelehnt
-(`UNPARSED_COMMAND_REASON`, keine Ledger-Abfrage). Kosten: Verben, die nie
+den vollständigen Zeilen davor erreicht; Verschachtelung über die Grenzen
+des Modells; ein `eval`-String über `MAX_MODEL_EVAL_DEPTH` oder selbst
+nicht lexbar), wird für jede `bash_match`-Policy, die die Textarme
+verfehlten, als nicht klassifizierbar abgelehnt (`UNPARSED_COMMAND_REASON`,
+keine Ledger-Abfrage); die Ablehnung nennt im Agenten-Umschlag den
+Parse-Fehler statt der `ux:`-Abhilfe der Policy. Kosten: Verben, die nie
 laufen (`while false; do git push; done`), treffen ebenfalls; die
 Differentialmessung gegen master steht im CHANGELOG-Eintrag von
-`d11762ce`. Offen bleiben verschachtelte Shells (`sh -c`), `find -exec`
-und Kommandos über `MAX_NORMALIZE_LENGTH` (nur der Roh-Arm).
+`d11762ce`. Offen bleiben verschachtelte Shells (`sh -c`, `bash -lc`,
+`env -S`), `find -exec`, `parallel`, `watch`, nicht geschälte Wrapper
+(`caffeinate`, `flock`, `ionice`), dynamische Köpfe (`git $(echo push)`,
+`$h pause`, Aliase), das Kommando, das `xargs` von stdin liest
+(`echo push | xargs git`), zsh-Kurzformen außer `for x (a b) cmd` und
+Kommandos über `MAX_NORMALIZE_LENGTH` (nur der Roh-Arm).
 
 **Empfehlung 2, Teil (der read-only-Flag-Kanal, `fdee7d0f`) ist umgesetzt
 und ausgeliefert — als "slice 1", PR #392, nur für diesen einen der drei
@@ -253,7 +266,7 @@ Normalisierungs-Pass (vierter Matching-Arm, siehe `intercept.ts`s
 eigenen Kommentar), eine eigene, additive Grenzsuche
 (`findNextBoundaryQuoteAware`), die einen Boundary-Charakter innerhalb
 einer offenen Quote überspringt, und verdrahtet ihn in
-`policyMatchesEvent` (`src/runtime/intercept.ts:647-694#"Raw-OR-normalised-OR-amp-normalised-OR-quote-normalised"`) als vierten
+`policyMatchesEvent` (`src/runtime/intercept.ts:661-707#"Raw-OR-normalised-OR-amp-normalised-OR-quote-normalised"`) als vierten
 OR-Zweig: roh, dann normalisiert, dann amp-bewusst (`aabbad63`), dann
 quote-bewusst (`cf3dff51`), jeder Zweig nur additiv gegenüber den
 vorherigen. Produktions-Nachweis über dieselbe `runInterceptCli`-Messung
@@ -382,12 +395,12 @@ Ausgaben und sind nur paarweise überlappend messbar.
 
 | Modul | Ausgabe | verdrahtet an |
 |---|---|---|
-| `command-normalize.ts` | `normalized` | `bash_match` raw-OR-normalized-OR-amp-OR-quote-normalized (`src/runtime/intercept.ts:647-694#"Raw-OR-normalised-OR-amp-normalised-OR-quote-normalised"`, dritter Arm seit `aabbad63`, vierter Arm seit `cf3dff51`) |
+| `command-normalize.ts` | `normalized` | `bash_match` raw-OR-normalized-OR-amp-OR-quote-normalized (`src/runtime/intercept.ts:661-707#"Raw-OR-normalised-OR-amp-normalised-OR-quote-normalised"`, dritter Arm seit `aabbad63`, vierter Arm seit `cf3dff51`) |
 | | `targetDir`/`targetBase` | nichts (grep-verifiziert) |
 | `bash-prefix-parse.ts` | `inlineEnv`, `cdTarget` | Risk-Gate-Kontext (`src/cli/policy/risk-envelope-enrichment.ts:157#"return { ...base, ...bashPrefix.inlineEnv };"`) |
 | `read-only-bash.ts` | Boolean | Risk-Floor, Understanding-Gate-PreToolUse (2 Hooks), Write-Guard |
 | `read-only-bash.ts`, `splitCurlWords` | `CurlWord[] \| null` | Risk-Floor NUR (`isReadOnlyCurlCommand`, task `fdaad781`) |
-| `shell-command-model.ts` (task `7d4abf84`) | `ModelCommand[] \| null` (kanonischer Text, Verzeichnismenge) | `bash_match` fünfter Arm (seit `d11762ce` jede `bash_match`-Policy, jedes Kommando, jede Wrapper-Schälstufe; vorher nur Per-Repo-Policies und Kommandos, die ein Verzeichnis nennen) und `resolveAttributedContexts` (Union mit der Segment-Sicht) |
+| `shell-command-model.ts` (task `7d4abf84`) | `ModelCommand[] \| null` (kanonischer Text, Verzeichnismenge) | `bash_match` fünfter Arm (seit `d11762ce` jede `bash_match`-Policy, jedes Kommando, jede Wrapper-Schälstufe und die Normalisierungen des Kopftexts; vorher nur Per-Repo-Policies und Kommandos, die ein Verzeichnis nennen) und `resolveAttributedContexts` (Union mit der Segment-Sicht) |
 
 Die Matrix ist daher als **drei überlappende Zwei-Wege-Vergleiche**
 geführt. Das ist ein Ergebnis, kein Scope-Cut. **Ein VIERTES Modell,
