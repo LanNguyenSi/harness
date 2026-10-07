@@ -3,7 +3,7 @@ type: overview
 title: Shell quote models, measured divergence against bash
 description: The policy engine has independent shell-word models plus a raw-regex trigger layer (since task 7d4abf84 also a quote-aware shell command model that feeds per-repo attribution). This records what each actually extracts, measured against real bash, which divergences are fail-open, and the evidence-led ordering for closing them.
 tags: [policy-engine, bash-match, quote-model, fail-open, measurement]
-timestamp: 2026-10-07T10:27:00Z
+timestamp: 2026-10-07T15:22:53Z
 sources:
   - src/runtime/command-normalize.ts
   - src/cli/init/composer.ts
@@ -156,7 +156,16 @@ kein Fail-closed für ein Verb, das nur im cwd lief; die Kosten (Glob-Ziele,
 `CDPATH`, Verben, die nie laufen) stehen im CHANGELOG-Eintrag von
 `7d4abf84`. Die Kopfschreibweisen-Lücke (`! git log`, `{ git log; }`, der
 K4-Klasse benachbart) bleibt für Kommandos ohne genanntes Verzeichnis
-offen.
+offen. Seit Task `9238cc27` lehnt das Modell eine Befehlszeile ab, deren
+zusammengesetzte Struktur sein Lauf in ein falsches Verzeichnis legen
+würde (die Formen stehen bei `REFUSAL_CONSTRUCTS`, die Ablehnung in
+`ShellModelView.refusal`): eine abgelehnte Zeile endet für jede
+Per-Repo-Policy mit `bash_match` fail-closed (`unparsed-command`,
+Ledger-Tag `(unparsed command: ...)`), auch ohne verzeichniswechselndes
+Wort im Text, und der fünfte Arm trifft weiter auf der Lesart ohne
+Ablehnungen (`ShellModelView.triggerCommands`), nie auf ihr attribuiert.
+Einige weitere Wörter, die ein späteres relatives `cd` lenken, machen es
+ebenfalls opak.
 
 **Empfehlung 2, Teil (der read-only-Flag-Kanal, `fdee7d0f`) ist umgesetzt
 und ausgeliefert — als "slice 1", PR #392, nur für diesen einen der drei
@@ -364,7 +373,7 @@ Ausgaben und sind nur paarweise überlappend messbar.
 | `bash-prefix-parse.ts` | `inlineEnv`, `cdTarget` | Risk-Gate-Kontext (`src/cli/policy/risk-envelope-enrichment.ts:157#"return { ...base, ...bashPrefix.inlineEnv };"`) |
 | `read-only-bash.ts` | Boolean | Risk-Floor, Understanding-Gate-PreToolUse (2 Hooks), Write-Guard |
 | `read-only-bash.ts`, `splitCurlWords` | `CurlWord[] \| null` | Risk-Floor NUR (`isReadOnlyCurlCommand`, task `fdaad781`) |
-| `shell-command-model.ts` (task `7d4abf84`) | `ModelCommand[] \| null` (kanonischer Text, Verzeichnismenge) | `bash_match` fünfter Arm (nur Per-Repo-Policies, nur Kommandos, die ein Verzeichnis nennen) und `resolveAttributedContexts` (Union mit der Segment-Sicht) |
+| `shell-command-model.ts` (task `7d4abf84`) | `ModelCommand[] \| null` (kanonischer Text, Verzeichnismenge; `null` auch für eine abgelehnte Zeile, task `9238cc27`) | `bash_match` fünfter Arm (nur Per-Repo-Policies, nur Kommandos, die ein Verzeichnis nennen) und `resolveAttributedContexts` (Union mit der Segment-Sicht) |
 
 Die Matrix ist daher als **drei überlappende Zwei-Wege-Vergleiche**
 geführt. Das ist ein Ergebnis, kein Scope-Cut. **Ein VIERTES Modell,

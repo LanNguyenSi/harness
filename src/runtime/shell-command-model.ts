@@ -66,6 +66,17 @@
 //   `eval` with literal arguments is re-lexed and walked. Commands inside a
 //   loop body that moved also get the directories a later iteration starts
 //   in.
+// - Refusals (task 9238cc27): a command line holding a compound shape this
+//   walk would place in the wrong directory is refused as a whole instead
+//   of read (`ShellModelView.refusal` names the construct; the gate then
+//   fails closed for every per-repository `bash_match` policy, whether or
+//   not the text holds a directory-changing word). The shapes are listed
+//   at `REFUSAL_CONSTRUCTS`; each check sits where the walk would
+//   otherwise misread the shape, and none of them applies inside data (an
+//   arithmetic body, a `[[ ]]` condition, an array literal). A word that
+//   references `CDPATH` (or zsh's `cdpath`) through an expansion, an
+//   assignment, or the name position of a builtin that assigns by name
+//   sets the `CDPATH` flag for the rest of the walk.
 //
 // BOUNDS (past them a possibility reads as opaque, or the command as not
 // lexable): `MAX_NORMALIZE_LENGTH` characters, nesting depth
@@ -208,7 +219,48 @@ export interface ModelCommand {
 export interface ShellModelView {
   readonly commands: readonly ModelCommand[] | null;
   readonly directoryChangeWord: boolean;
+  /**
+   * Set only when `commands` is `null` because the walk refused a shape it
+   * cannot place (one of `REFUSAL_CONSTRUCTS`): the construct, for the
+   * gate's deny text. A refused line fails closed for every per-repository
+   * `bash_match` policy, not only when `directoryChangeWord` holds.
+   */
+  readonly refusal?: string;
+  /**
+   * Set only with `refusal`: the commands the walk reads with every refusal
+   * check off (the reading before the refusals existed), or `null` when that
+   * walk gives up too. For trigger matching only, never for attribution: a
+   * policy the shell model's arm matched on this reading still matches, and
+   * then fails closed on the refusal.
+   */
+  readonly triggerCommands?: readonly ModelCommand[] | null;
 }
+
+/**
+ * The shapes the walk refuses (task 9238cc27), by kind: each one is read
+ * by bash or zsh in a way the walk below does not follow, so a directory
+ * change in it could reach a gated verb the walk places elsewhere. The text
+ * names the construct for the gate's deny message.
+ */
+export const REFUSAL_CONSTRUCTS = {
+  "case-terminator": "a `case` arm terminator (`;;`, `;&`, `;;&`) outside an open `case` arm",
+  "case-fall-through": "a `case` arm that changes directory and falls through (`;&` or `;;&`) into the next arm",
+  "case-arm-dir-stack":
+    "a directory stack or `OLDPWD` read (`popd`, `pushd`, `cd -`, `cd +N`) in a `case` arm after an earlier arm changed directory",
+  "alternate-form":
+    "a compound command in an alternate form (a body or keyword directly after `]]` or `))`, `foreach`, `repeat`, " +
+    "`always`, an anonymous function, or a word after a closing `}`)",
+  "loop-body": "a `for` or `select` loop whose body is not a separate `do ... done` list, or a loop without its `done`",
+  "command-word-brace":
+    "a command word that starts with `{` or holds a brace expansion (or such a word in a line the gate cannot otherwise read)",
+  "command-word-glob": "a command word that holds a glob (`*`, `?`, `[...]`)",
+  coproc: "`coproc` with a compound command",
+  "negated-compound": "`!` in front of a compound command (`{ }`, `if`, a loop, `case`)",
+  "paren-after-word": "`(` after a word of a command (other than a function definition or an array assignment)",
+} as const;
+
+/** One kind of refused shape; see `REFUSAL_CONSTRUCTS`. */
+export type RefusalKind = keyof typeof REFUSAL_CONSTRUCTS;
 
 /**
  * A directory-changing word in the raw text: `cd`, `pushd`, `popd`,
@@ -231,7 +283,16 @@ export function hasDirectoryChangeWord(command: string): boolean {
 
 /** The model view of one command; see `ShellModelView` and, for `oracle`, `DirectoryOracle`. */
 export function shellModelViewOf(command: string, oracle?: DirectoryOracle): ShellModelView {
-  const commands = modelShellCommands(command, oracle);
+  const result = runModel(command, oracle);
+  if (result.kind === "refused") {
+    return {
+      commands: null,
+      directoryChangeWord: hasDirectoryChangeWord(command),
+      refusal: REFUSAL_CONSTRUCTS[result.refusal],
+      triggerCommands: result.read,
+    };
+  }
+  const commands = result.kind === "ok" ? result.commands : null;
   return {
     commands,
     directoryChangeWord: commands === null && hasDirectoryChangeWord(command),
@@ -261,8 +322,18 @@ export interface ShellWord {
   readonly ansiC: boolean;
   readonly locale: boolean;
   readonly glob: boolean;
+  /** An unquoted brace expansion (`{a,b}`, `{1..3}`); `glob` holds too. */
+  readonly brace: boolean;
+  /** An unquoted `*`, `?`, `[` or extended glob; `glob` holds too. */
+  readonly wildcard: boolean;
   readonly tilde: boolean;
   readonly unusual: boolean;
+  /**
+   * A `$CDPATH` / `${CDPATH...}` (or zsh `cdpath`) expansion, or an
+   * arithmetic expansion naming one, at this word's own level (not inside
+   * a `$( )`, backtick or `<( )` body, which runs in a subshell).
+   */
+  readonly cdpathRef: boolean;
   /** Lexed bodies of the `$( )`, backtick and `<( )` substitutions in this word. */
   readonly subs: readonly ShellToken[][];
 }
@@ -286,6 +357,13 @@ export type ShellToken = ShellWord | ShellOperator | ShellRedirection;
 
 class ShellModelError extends Error {}
 
+/** The walk met a shape it refuses to place (see `REFUSAL_CONSTRUCTS`). */
+class ShellModelRefusal extends ShellModelError {
+  constructor(readonly kind: RefusalKind) {
+    super(`refused: ${kind}`);
+  }
+}
+
 const UNUSUAL_CHAR_RE = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u;
 const WORD_END_CHARS = new Set([" ", "\t", "\n", ";", "&", "|", "<", ">", ")"]);
 const REDIRECTION_OPERATORS = ["<<<", "<<-", "<<", "<>", "<&", ">>", ">&", ">|", "<", ">"];
@@ -304,9 +382,14 @@ interface WordBuilder {
   ansiC: boolean;
   locale: boolean;
   glob: boolean;
+  wildcard: boolean;
   tilde: boolean;
+  cdpathRef: boolean;
   subs: ShellToken[][];
 }
+
+/** `CDPATH` or zsh's `cdpath` as a whole identifier. */
+const CDPATH_NAME_RE = /(?<![A-Za-z0-9_])(?:CDPATH|cdpath)(?![A-Za-z0-9_])/;
 
 class ShellLexer {
   constructor(
@@ -483,7 +566,9 @@ class ShellLexer {
       ansiC: false,
       locale: false,
       glob: false,
+      wildcard: false,
       tilde: false,
+      cdpathRef: false,
       subs: [],
     };
     const add = (text: string, quoted: boolean): void => {
@@ -511,6 +596,7 @@ class ShellLexer {
           // extglob `@( )`, `!( )`, `+( )`, `*( )`, `?( )`
           const end = skipBalanced(s, i, "(", ")");
           b.glob = true;
+          b.wildcard = true;
           add(s.slice(i, end), false);
           i = end;
           continue;
@@ -568,8 +654,10 @@ class ShellLexer {
       i++;
     }
     if (i === start) throw new ShellModelError(`empty word at ${i}`);
-    if (/[*?[]/.test(b.unquoted)) b.glob = true;
-    if (/\{[^}\u0000]*(?:,|\.\.)[^}\u0000]*\}/.test(b.unquoted)) b.glob = true;
+    if (/[*?[]/.test(b.unquoted)) b.wildcard = true;
+    if (b.wildcard) b.glob = true;
+    const brace = /\{[^}\u0000]*(?:,|\.\.)[^}\u0000]*\}/.test(b.unquoted);
+    if (brace) b.glob = true;
     const sp = this.span(start, i);
     return {
       word: {
@@ -585,8 +673,11 @@ class ShellLexer {
         ansiC: b.ansiC,
         locale: b.locale,
         glob: b.glob,
+        brace,
+        wildcard: b.wildcard,
         tilde: b.tilde,
         unusual: UNUSUAL_CHAR_RE.test(b.literal),
+        cdpathRef: b.cdpathRef,
         subs: b.subs,
       },
       end: i,
@@ -677,7 +768,9 @@ class ShellLexer {
     }
     if (nx === "(" && s[i + 2] === "(") {
       b.dynamic = true;
-      return { literal: null, end: skipBalanced(s, i + 1, "(", ")"), quoted: false };
+      const end = skipBalanced(s, i + 1, "(", ")");
+      if (CDPATH_NAME_RE.test(s.slice(i, end))) b.cdpathRef = true;
+      return { literal: null, end, quoted: false };
     }
     if (nx === "(") {
       const r = this.list(i + 2, "paren", depth + 1);
@@ -687,16 +780,22 @@ class ShellLexer {
     }
     if (nx === "{") {
       b.dynamic = true;
-      return { literal: null, end: skipBalanced(s, i + 1, "{", "}"), quoted: false };
+      const end = skipBalanced(s, i + 1, "{", "}");
+      if (CDPATH_NAME_RE.test(s.slice(i, end))) b.cdpathRef = true;
+      return { literal: null, end, quoted: false };
     }
     if (nx === "[") {
       b.dynamic = true;
-      return { literal: null, end: skipBalanced(s, i + 1, "[", "]"), quoted: false };
+      const end = skipBalanced(s, i + 1, "[", "]");
+      if (CDPATH_NAME_RE.test(s.slice(i, end))) b.cdpathRef = true;
+      return { literal: null, end, quoted: false };
     }
     if (nx !== undefined && /[A-Za-z_]/.test(nx)) {
       let j = i + 1;
       while (j < s.length && /[A-Za-z0-9_]/.test(s[j]!)) j++;
       b.dynamic = true;
+      const name = s.slice(i + 1, j);
+      if (name === "CDPATH" || name === "cdpath") b.cdpathRef = true;
       return { literal: null, end: j, quoted: false };
     }
     if (nx !== undefined && /[0-9@*#?$!-]/.test(nx)) {
@@ -938,6 +1037,14 @@ interface WalkState {
    * change at depth 0 of every walk is asked of the oracle.
    */
   enclosing: number;
+  /** Count of changes to the directory, `OLDPWD` or the stack in this shell (a subshell counts its own). */
+  moves: number;
+  /**
+   * True inside a `case` arm when an earlier arm of that `case` changed
+   * directory: the walk carries the stack and `OLDPWD` over from that arm,
+   * which the shell does not, so a read of them is refused.
+   */
+  staleDirStack: boolean;
 }
 
 interface OutRecord {
@@ -954,12 +1061,41 @@ interface CompoundFrame {
   expectPattern: boolean;
   loop: LoopFrame | null;
   outStart: number;
+  /** `case`: `WalkState.moves` when the current arm started. */
+  armMovesStart: number;
+  /** `case`: some finished arm changed directory. */
+  armMoved: boolean;
+  /** `case`: `WalkState.staleDirStack` when the frame opened, restored at `esac`. */
+  staleOuter: boolean;
+  /** `for` / `select`: the header was read and the next command must start with `do`. */
+  expectDo: boolean;
+  /** `for` / `select`: `in` was read (a header may put `in` on the next line). */
+  sawIn: boolean;
 }
+
+/** How a `( )` group of a command is read. */
+type GroupKind = "subshell" | "data";
 
 interface SimpleCommand {
   words: ShellWord[];
   redirs: ShellRedirection[];
   group: ShellToken[] | null;
+  /** Index in `words` where `group` stood (words from it on came after the group). */
+  groupAt: number;
+  /**
+   * `data`: an arithmetic body (`(( ))`, `for (( ))`), an array literal
+   * (`NAME=( )`) or parentheses inside a `[[ ]]` condition; nothing in it
+   * runs as a command, so the structural refusals do not apply in it.
+   */
+  groupKind: GroupKind;
+  /** `data` group: an arithmetic body (`(( ))`), whose bare names are variables. */
+  groupArith: boolean;
+}
+
+/** Per-walk state of the refusal checks. */
+interface WalkScope {
+  /** A `[[` condition was opened and its `]]` not read yet (the lexer splits a condition at `&&`, `||`, `(`). */
+  condOpen: boolean;
 }
 
 const RESERVED_OPEN = new Set(["if", "while", "until", "for", "select", "case"]);
@@ -1002,8 +1138,40 @@ function isAssignment(w: ShellWord): boolean {
   return ASSIGNMENT_RE.test(w.raw);
 }
 
-function assignmentName(w: ShellWord): string {
-  return ASSIGNMENT_RE.exec(w.raw)![1]!;
+/** An assignment to `CDPATH` or zsh's `cdpath` (an element of it included). */
+function isCdpathAssignment(w: ShellWord): boolean {
+  return /^(?:CDPATH|cdpath)(?:\[[^\]]*\])?\+?=/.test(w.raw);
+}
+
+/**
+ * Builtins that assign a variable named by an argument; a `CDPATH` among
+ * their arguments sets the flag. The declaration builtins are included.
+ */
+const ASSIGNING_BUILTINS = new Set([
+  ...DECLARATION_BUILTINS,
+  "read",
+  "printf",
+  "print",
+  "getopts",
+  "mapfile",
+  "readarray",
+  "let",
+  "unset",
+  "set",
+  "integer",
+  "float",
+  "vared",
+  "zparseopts",
+  "sysread",
+]);
+
+/** Words that open a compound command after `coproc` (`coproc [NAME] COMPOUND`). */
+const COMPOUND_OPENERS = new Set(["{", "[[", "if", "while", "until", "for", "select", "case", "repeat", "foreach"]);
+
+/** A word that may follow a closing `}` in one command: another closer, or a reserved middle or closing word. */
+function continuesCompound(w: ShellWord): boolean {
+  const v = bareValue(w);
+  return v !== null && (v === "}" || RESERVED_MID.has(v) || RESERVED_CLOSE.has(v));
 }
 
 function newState(): WalkState {
@@ -1016,6 +1184,8 @@ function newState(): WalkState {
     evalDepth: 0,
     loops: [],
     enclosing: 0,
+    moves: 0,
+    staleDirStack: false,
   };
 }
 
@@ -1029,7 +1199,102 @@ function subshellState(st: WalkState, openCompounds: number): WalkState {
 }
 
 function emptyCommand(): SimpleCommand {
-  return { words: [], redirs: [], group: null };
+  return { words: [], redirs: [], group: null, groupAt: -1, groupKind: "subshell", groupArith: false };
+}
+
+/** A compound frame of `kind` opened in state `st`. */
+function newFrame(kind: string, st: WalkState, outStart: number, loop: LoopFrame | null = null): CompoundFrame {
+  return {
+    kind,
+    union: st.cur,
+    entry: st.cur,
+    header: kind === "case",
+    expectPattern: false,
+    loop,
+    outStart,
+    armMovesStart: st.moves,
+    armMoved: false,
+    staleOuter: st.staleDirStack,
+    expectDo: false,
+    sawIn: false,
+  };
+}
+
+/** The unquoted value of a word (reserved words are never quoted), else `null`. */
+function bareValue(w: ShellWord | undefined): string | null {
+  return w === undefined || w.quoted ? null : w.value;
+}
+
+/** Words that keep the command position for a following `(`: `! (`, `if (`, `time -p (`, ... */
+const PAREN_PREFIX_WORDS = new Set(["!", "{", "time", "if", "then", "else", "elif", "while", "until", "do"]);
+
+/** `words` without its leading prefix words (see `PAREN_PREFIX_WORDS`; `-p` and `--` after `time`). */
+function stripPrefixWords(words: readonly ShellWord[]): readonly ShellWord[] {
+  let k = 0;
+  let afterTime = false;
+  for (; k < words.length; k++) {
+    const v = bareValue(words[k]);
+    if (v !== null && PAREN_PREFIX_WORDS.has(v)) {
+      afterTime = v === "time";
+      continue;
+    }
+    if (afterTime && (v === "-p" || v === "--")) continue;
+    break;
+  }
+  return words.slice(k);
+}
+
+/** A word that opens an array literal: `NAME=(` or `NAME+=(`. */
+const ARRAY_ASSIGNMENT_RE = /^[A-Za-z_][A-Za-z0-9_]*\+?=$/;
+
+/**
+ * True when the `(` at `open` and the `)` at `close` are the outer pair of
+ * an arithmetic `(( ... ))`: the next token is a `(` glued to the first and
+ * matched by a `)` glued to the last. `( (x) )` and `((x) )` are nested
+ * subshells in bash and zsh, and so is any pair whose inner `)` closes
+ * before the end; tokens without their own position (a backtick body, an
+ * `eval` string) are never read as arithmetic.
+ */
+function isArithmeticGroup(tokens: readonly ShellToken[], open: number, close: number): boolean {
+  const inner = tokens[open + 1];
+  const innerClose = tokens[close - 1];
+  if (inner === undefined || innerClose === undefined || close - 1 <= open + 1) return false;
+  if (inner.kind !== "op" || inner.op !== "(" || innerClose.kind !== "op" || innerClose.op !== ")") return false;
+  let d = 0;
+  for (let j = open + 1; j < close; j++) {
+    const t = tokens[j]!;
+    if (t.kind !== "op") continue;
+    if (t.op === "(") d++;
+    else if (t.op === ")") {
+      d--;
+      if (d === 0 && j !== close - 1) return false;
+    }
+  }
+  const outer = tokens[open]!;
+  const outerClose = tokens[close]!;
+  const own = (t: ShellToken): boolean => t.end - t.start === 1;
+  return (
+    own(outer) &&
+    own(inner) &&
+    own(innerClose) &&
+    own(outerClose) &&
+    outer.end === inner.start &&
+    innerClose.end === outerClose.start
+  );
+}
+
+/**
+ * Whether a data group's words name `CDPATH` in the current shell: an
+ * expansion in any word, or, in an arithmetic body, the bare name (a
+ * variable there). Substitution bodies are subshells and do not count.
+ */
+function tokensReferenceCdpath(tokens: readonly ShellToken[], arith: boolean): boolean {
+  for (const t of tokens) {
+    const w = t.kind === "word" ? t : t.kind === "redir" ? t.target : null;
+    if (w === null) continue;
+    if (w.cdpathRef || (arith && CDPATH_NAME_RE.test(w.raw))) return true;
+  }
+  return false;
 }
 
 interface ExecInfo {
@@ -1058,8 +1323,100 @@ class Walker {
    * from then on the oracle is not asked.
    */
   private builtinsInDoubt = false;
+  /**
+   * Greater than zero while the walk reads a data group (see
+   * `SimpleCommand.groupKind`): the refusals do not apply there. A
+   * substitution inside data runs as a command again and resets it.
+   */
+  private dataDepth = 0;
 
-  constructor(private readonly oracle: DirectoryOracle | null) {}
+  constructor(
+    private readonly oracle: DirectoryOracle | null,
+    /** False for the reading `ShellModelView.triggerCommands` keeps: every refusal check is off. */
+    private readonly refusals = true,
+  ) {}
+
+  /**
+   * Refuse the whole command line (see `REFUSAL_CONSTRUCTS`), except inside
+   * data. Returns only in data, where the walk goes on as before.
+   */
+  private refuse(kind: RefusalKind): void {
+    if (this.dataDepth > 0 || !this.refusals) return;
+    throw new ShellModelRefusal(kind);
+  }
+
+  /**
+   * `( )` right after `words`: a function definition (`NAME ( )`,
+   * `function NAME ( )`, behind prefix words) is read as today; zsh's
+   * anonymous functions (`( ) { ... }`, `function ( ) { ... }`) run their
+   * body at once, which the walk does not follow.
+   */
+  private checkFunctionParens(words: readonly ShellWord[]): void {
+    const rest = stripPrefixWords(words);
+    const first = bareValue(rest[0]);
+    if (rest.length === 0 || (rest.length === 1 && first === "function")) this.refuse("alternate-form");
+    else if (!(rest.length === 1 || (rest.length === 2 && first === "function"))) this.refuse("paren-after-word");
+  }
+
+  /**
+   * How a `( )` group after `cmd.words` is read. At command position (no
+   * word before it but prefix words) it is a subshell, or, glued as
+   * `(( ))`, an arithmetic body (data). After `for` / `select` only an
+   * arithmetic header is read; inside a `[[ ]]` condition and after
+   * `NAME=` it is data. Any other word before it, or a second group in one
+   * command, is refused: the walk would read the group as a subshell where
+   * bash refuses the line and zsh reads a zsh-only form.
+   */
+  private classifyGroup(cmd: SimpleCommand, arith: boolean, scope: WalkScope): GroupKind {
+    if (cmd.group !== null) {
+      this.refuse("paren-after-word");
+      return "subshell";
+    }
+    const rest = stripPrefixWords(cmd.words);
+    // Parentheses that group a `[[ ]]` condition are data too.
+    if (rest.length === 0) return arith || scope.condOpen ? "data" : "subshell";
+    const head = bareValue(rest[0]);
+    const closesCond = rest.some((w) => bareValue(w) === "]]");
+    if (head === "for" || head === "select") {
+      if (rest.length === 1 && arith) return "data";
+      // zsh's `for NAME (WORDS) ...` and a `for` without an arithmetic header.
+      this.refuse("loop-body");
+      return "subshell";
+    }
+    if (head === "foreach") {
+      this.refuse("alternate-form");
+      return "subshell";
+    }
+    if (head === "coproc" && rest.length <= 2) {
+      this.refuse("coproc");
+      return "subshell";
+    }
+    if ((head === "[[" || scope.condOpen) && !closesCond) return "data";
+    const last = rest[rest.length - 1]!;
+    if (!last.quoted && ARRAY_ASSIGNMENT_RE.test(last.raw)) return "data";
+    this.refuse("paren-after-word");
+    return "subshell";
+  }
+
+  /**
+   * Words after an arithmetic `(( ))` in one command: only a reserved word
+   * that continues or closes a compound (`then`, `do`, `fi`, `}`, ...) is
+   * read; a body glued to the condition (zsh's `if (( 1 )) cd a`,
+   * `while (( c )) { ... }`) or to a `for (( ))` header is refused.
+   */
+  private checkAfterGroup(cmd: SimpleCommand): void {
+    if (!cmd.groupArith || cmd.groupAt >= cmd.words.length) return;
+    const before = stripPrefixWords(cmd.words.slice(0, cmd.groupAt));
+    const head = bareValue(before[0]);
+    if (head === "for" || head === "select") {
+      this.refuse("loop-body");
+      return;
+    }
+    const next = bareValue(cmd.words[cmd.groupAt]);
+    if (next === null || !(RESERVED_MID.has(next) || RESERVED_CLOSE.has(next) || next === "}")) {
+      this.refuse("alternate-form");
+    }
+  }
 
   walk(tokens: readonly ShellToken[], st: WalkState, finalUnion = true): { succ: DirSet; fail: DirSet } {
     let listStart = st.cur;
@@ -1070,6 +1427,7 @@ class Walker {
     let pipeStart: DirSet | null = null;
     const compound: CompoundFrame[] = [];
     const loopsAtEntry = st.loops.length;
+    const scope: WalkScope = { condOpen: false };
     let cmd = emptyCommand();
 
     const finishCommand = (nextOp: string | null): void => {
@@ -1079,6 +1437,17 @@ class Walker {
         cmd = emptyCommand();
         return;
       }
+      if (top !== undefined && top.expectDo) {
+        // The command after a `for` / `select` header: only `do` (or the
+        // header's `in` on a line of its own) keeps the loop the walk reads;
+        // a body without `do` (zsh's short loops, a `{ }` body) never
+        // reaches the `done` that closes the loop.
+        const first = cmd.words[0];
+        const v = first === undefined || first.quoted ? null : first.value;
+        if (v === "in" && !top.sawIn) top.sawIn = true;
+        else if (v !== "do") this.refuse("loop-body");
+      }
+      if (cmd.group !== null) this.checkAfterGroup(cmd);
       let start: DirSet;
       if (inPipe && pipeStart !== null) start = pipeStart;
       else if (andOrOp === "&&" && succ !== null) start = succ;
@@ -1092,10 +1461,24 @@ class Walker {
       if (cmd.group !== null) {
         // Words before a `( )` group are keywords (`while (cmd)`, `!`,
         // `for ((...))`): read them first, then the group as a subshell.
-        if (cmd.words.length > 0) info = this.execCommand({ words: cmd.words, redirs: [], group: null }, st, compound);
-        this.walk(cmd.group, subshellState(st, compound.length));
+        if (cmd.words.length > 0) {
+          info = this.execCommand({ ...cmd, redirs: [], group: null }, st, compound, scope);
+        }
+        if (cmd.groupKind === "data") {
+          // An arithmetic body, an array literal or a condition runs in the
+          // current shell: a `CDPATH` it names reaches the walk.
+          if (tokensReferenceCdpath(cmd.group, cmd.groupArith)) st.cdpath = true;
+          this.dataDepth++;
+          try {
+            this.walk(cmd.group, subshellState(st, compound.length));
+          } finally {
+            this.dataDepth--;
+          }
+        } else {
+          this.walk(cmd.group, subshellState(st, compound.length));
+        }
       } else if (!casePattern) {
-        info = this.execCommand(cmd, st, compound);
+        info = this.execCommand(cmd, st, compound, scope);
       }
       let cs = st.cur;
       // A directory change that fails stays where it was, except from a
@@ -1146,16 +1529,11 @@ class Walker {
     while (i < tokens.length) {
       const tk = tokens[i]!;
       if (tk.kind === "word") {
+        // A `CDPATH` expansion in any word (an argument, an assignment
+        // value, a `case` subject or pattern) can assign it in this shell.
+        if (tk.cdpathRef) st.cdpath = true;
         if (cmd.words.length === 0 && !tk.quoted && tk.value === "case") {
-          this.pushCompound(compound, {
-            kind: "case",
-            union: st.cur,
-            entry: st.cur,
-            header: true,
-            expectPattern: false,
-            loop: null,
-            outStart: this.out.length,
-          });
+          this.pushCompound(compound, newFrame("case", st, this.out.length));
           i++;
           continue;
         }
@@ -1173,6 +1551,7 @@ class Walker {
             if (tk.value === "esac") {
               compound.pop();
               st.cur = union(st.cur, top.union);
+              st.staleDirStack = top.staleOuter;
             }
             i++;
             continue;
@@ -1183,6 +1562,7 @@ class Walker {
         continue;
       }
       if (tk.kind === "redir") {
+        if (tk.target.cdpathRef) st.cdpath = true;
         cmd.redirs.push(tk);
         i++;
         continue;
@@ -1204,7 +1584,10 @@ class Walker {
         const emptyParens = nextTk !== undefined && nextTk.kind === "op" && nextTk.op === ")";
         // `name ( )` defines a function (any name can shadow `cd`); zsh's
         // `( ) { ... }` is an anonymous one. Either ends the oracle's use.
-        if (emptyParens) this.builtinsInDoubt = true;
+        if (emptyParens) {
+          this.builtinsInDoubt = true;
+          this.checkFunctionParens(cmd.words);
+        }
         if (cmd.words.length > 0 && emptyParens) {
           // `name ( )`: a function definition; its body is walked in place.
           cmd = emptyCommand();
@@ -1223,11 +1606,24 @@ class Walker {
           }
         }
         if (j >= tokens.length) throw new ShellModelError("unbalanced (");
+        const arith = isArithmeticGroup(tokens, i, j);
+        const kind = this.classifyGroup(cmd, arith, scope);
         cmd.group = tokens.slice(i + 1, j);
+        cmd.groupAt = cmd.words.length;
+        cmd.groupKind = kind;
+        cmd.groupArith = arith && kind === "data";
         i = j + 1;
         continue;
       }
       if (op === ")") throw new ShellModelError("stray )");
+      const terminator = op === ";;" || op === ";&" || op === ";;&";
+      // A terminator ends an arm only while the walk is inside one: a
+      // `case` it opened itself, past its `in` and the arm's pattern. A
+      // `case` behind a prefix (`{ case`, `then case`) is a word of a
+      // simple command here, so its arms would be read as that command.
+      if (terminator && (top === undefined || top.kind !== "case" || top.header || top.expectPattern)) {
+        this.refuse("case-terminator");
+      }
       finishCommand(op);
       if (op === "&&" || op === "||") {
         andOrOp = op;
@@ -1238,12 +1634,23 @@ class Walker {
         i++;
         continue;
       }
-      if (op === ";;" || op === ";&" || op === ";;&") {
+      if (terminator) {
         endList(op);
         if (top !== undefined && top.kind === "case") {
+          // The arm's last command left another compound open.
+          if (compound[compound.length - 1] !== top) this.refuse("case-terminator");
+          const armMoved = st.moves !== top.armMovesStart;
+          // The next arm starts where this one ended, which the reset below
+          // does not follow.
+          if (armMoved && op !== ";;") this.refuse("case-fall-through");
+          if (armMoved) top.armMoved = true;
           top.union = union(top.union, st.cur);
           st.cur = top.entry;
           top.expectPattern = true;
+          top.armMovesStart = st.moves;
+          // Only `cur` is reset: the stack and `OLDPWD` of an earlier arm
+          // reach the next one, so reading them there is refused.
+          st.staleDirStack = top.staleOuter || top.armMoved;
         }
         i++;
         continue;
@@ -1252,6 +1659,9 @@ class Walker {
       i++;
     }
     finishCommand(null);
+    // A loop whose `done` the walk never read (a zsh `{ }` body, a short
+    // loop): the widening of its commands for a later iteration never ran.
+    if (compound.some((c) => c.loop !== null)) this.refuse("loop-body");
     const result = { succ: succ ?? st.cur, fail: fail ?? st.cur };
     if (finalUnion) endList(null);
     else st.cur = result.succ;
@@ -1266,11 +1676,18 @@ class Walker {
     compound.push(frame);
   }
 
-  private execCommand(cmd: SimpleCommand, st: WalkState, compound: CompoundFrame[]): ExecInfo {
+  private execCommand(cmd: SimpleCommand, st: WalkState, compound: CompoundFrame[], scope: WalkScope): ExecInfo {
     const info: ExecInfo = { moved: false, negated: false, evalFail: null, cannotFailFrom: NO_KEYS };
-    // Substitutions in any word run first, each in a subshell.
-    for (const w of [...cmd.words, ...cmd.redirs.map((r) => r.target)]) {
-      for (const sub of w.subs) this.walk(sub, subshellState(st, compound.length));
+    // Substitutions in any word run first, each in a subshell. One inside
+    // data runs as a command line of its own, so the refusals apply in it.
+    const dataDepth = this.dataDepth;
+    this.dataDepth = 0;
+    try {
+      for (const w of [...cmd.words, ...cmd.redirs.map((r) => r.target)]) {
+        for (const sub of w.subs) this.walk(sub, subshellState(st, compound.length));
+      }
+    } finally {
+      this.dataDepth = dataDepth;
     }
     let words = cmd.words;
     let k = 0;
@@ -1279,18 +1696,30 @@ class Walker {
     // zsh, `noglob` / `nocorrect` exist only in zsh): such a `cd` is still
     // modelled as a move, but never asked of the oracle.
     let shellNeutral = true;
+    // A `!` read in this run of prefix words: it applies to the whole
+    // compound command after it, while the walk applies it to the first
+    // simple command inside, so a `&&` there would start from the wrong
+    // branch.
+    let bang = false;
     for (;;) {
       const w = words[k];
       if (w === undefined) break;
       const v = w.quoted ? null : w.value; // reserved words are never quoted
       if (v === "!") {
         info.negated = !info.negated;
+        bang = true;
         k++;
         continue;
       }
+      if (bang && (v === "{" || (v !== null && RESERVED_OPEN.has(v)))) this.refuse("negated-compound");
       if (v === "{" || v === "}") {
         st.enclosing = v === "{" ? st.enclosing + 1 : Math.max(0, st.enclosing - 1);
         k++;
+        if (v === "}" && words[k] !== undefined && !continuesCompound(words[k]!)) {
+          // zsh's `{ ... } always { ... }`; any other word there is a
+          // syntax error in bash and zsh.
+          this.refuse("alternate-form");
+        }
         continue;
       }
       if (v === "time") {
@@ -1303,17 +1732,23 @@ class Walker {
       }
       if (v !== null && RESERVED_OPEN.has(v)) {
         const loop = LOOP_KEYWORDS.has(v) ? { moved: false, relative: false } : null;
-        const frame: CompoundFrame = {
-          kind: v,
-          union: st.cur,
-          entry: st.cur,
-          header: v === "case",
-          expectPattern: false,
-          loop,
-          outStart: this.out.length,
-        };
+        const frame = newFrame(v, st, this.out.length, loop);
         this.pushCompound(compound, frame);
         if (loop !== null) st.loops.push(loop);
+        if (v === "for" || v === "select") {
+          frame.expectDo = true;
+          if (cmd.groupAt !== k + 1) {
+            // `for NAME [in WORDS]`; with an arithmetic header the words
+            // after it are checked with the group (`checkAfterGroup`).
+            const name = words[k + 1];
+            const third = words[k + 2];
+            if (name !== undefined && CDPATH_NAME_RE.test(name.raw)) st.cdpath = true;
+            // `for NAME do ...` and zsh's `for NAME BODY`: the walk reads a
+            // header only, so a body glued to it would be dropped.
+            if (third !== undefined && bareValue(third) !== "in") this.refuse("loop-body");
+            if (third !== undefined) frame.sawIn = true;
+          }
+        }
         if (v === "for" || v === "select" || v === "case") {
           if (v === "case" && words.slice(k + 1).some((x) => x.value === "in")) {
             frame.header = false;
@@ -1327,6 +1762,7 @@ class Walker {
       if (v !== null && RESERVED_MID.has(v)) {
         const top = compound[compound.length - 1];
         if (top !== undefined) {
+          if (v === "do") top.expectDo = false;
           top.union = union(top.union, st.cur);
           st.cur = union(st.cur, top.union);
           // `for` / `select` bodies start at `do`; their header ran once.
@@ -1344,7 +1780,10 @@ class Walker {
       if (v === "function") {
         // `function name { body; }`: the body is walked in place, like the
         // `name ( )` form (an over-approximation: it may never be called).
+        // zsh's anonymous `function { body; }` runs the body at once.
         this.builtinsInDoubt = true;
+        const name = words[k + 1];
+        if (name === undefined || bareValue(name) === "{") this.refuse("alternate-form");
         k += 2;
         continue;
       }
@@ -1352,11 +1791,28 @@ class Walker {
     }
     words = words.slice(k);
     if (words.length === 0) return info;
+    // A `[[ ]]` condition: its words are data up to the `]]` that closes it
+    // (the lexer splits a condition at `&&`, `||` and parentheses, so the
+    // `]]` may come in a later command). Only a `}` may follow the `]]` in
+    // one command: zsh reads a glued body (`if [[ c ]] cd a`), and bash 5
+    // and zsh a glued `then` or `do`, which the walk would read as words.
+    const cond = scope.condOpen || bareValue(words[0]) === "[[";
+    if (cond) {
+      let close = -1;
+      for (let m = scope.condOpen ? 0 : 1; m < words.length; m++) {
+        if (bareValue(words[m]) === "]]") {
+          close = m;
+          break;
+        }
+      }
+      scope.condOpen = close < 0;
+      if (close >= 0 && words.slice(close + 1).some((w) => bareValue(w) !== "}")) this.refuse("alternate-form");
+    }
 
     let a = 0;
     let inlineCdpath = false;
     while (a < words.length && isAssignment(words[a]!)) {
-      if (assignmentName(words[a]!) === "CDPATH") inlineCdpath = true;
+      if (isCdpathAssignment(words[a]!)) inlineCdpath = true;
       if (SHELL_TABLE_PARAMETER_RE.test(words[a]!.raw)) this.builtinsInDoubt = true;
       a++;
     }
@@ -1389,6 +1845,9 @@ class Walker {
     }
     const headWord = words[0];
     if (headWord === undefined) return info;
+    if (!cond) this.checkCommandWord(words);
+    // zsh's subscripted `cdpath[1]=...` reads as a command word here.
+    if (isCdpathAssignment(headWord)) st.cdpath = true;
     const head = headWord.value;
     if (head === null) {
       // A dynamic command word is out of scope, and can be any of the
@@ -1398,8 +1857,11 @@ class Walker {
     }
     if (SHELL_OVERRIDE_COMMANDS.has(head) || SHELL_TABLE_PARAMETER_RE.test(head)) this.builtinsInDoubt = true;
     if (DECLARATION_BUILTINS.has(head)) {
-      if (words.slice(1).some((w) => isAssignment(w) && assignmentName(w) === "CDPATH")) st.cdpath = true;
+      if (words.slice(1).some((w) => isAssignment(w) && isCdpathAssignment(w))) st.cdpath = true;
     }
+    // A builtin that assigns a variable named by an argument (`read CDPATH`,
+    // `printf -v CDPATH`, `typeset -T`, zsh `vared cdpath`).
+    if (ASSIGNING_BUILTINS.has(head) && words.slice(1).some((w) => CDPATH_NAME_RE.test(w.raw))) st.cdpath = true;
     const savedCdpath = st.cdpath;
     if (inlineCdpath) st.cdpath = true;
     // Whether the oracle may confirm this directory change (see
@@ -1440,8 +1902,44 @@ class Walker {
     return info;
   }
 
+  /**
+   * The command word and the words after it (prefix words, assignments and
+   * `builtin` / `command` already taken off), outside a `[[ ]]` condition.
+   */
+  private checkCommandWord(words: readonly ShellWord[]): void {
+    const headWord = words[0]!;
+    // zsh reads a glued `{cd ...; }` as a group, bash a brace expansion
+    // (`{cd,a}`, `c{d,}`) as the words it expands to.
+    if ((headWord.raw.startsWith("{") && headWord.raw !== "{") || headWord.brace) this.refuse("command-word-brace");
+    const head = bareValue(headWord);
+    // A glob in the command word runs whatever file it matches (`c?` runs
+    // `cd` when a file named `cd` is in the directory). `[` and `[[` are
+    // the test commands.
+    // An element assignment (`NAME[key]=value`) is read as the command word.
+    if (headWord.wildcard && head !== "[" && head !== "[[" && !/^[A-Za-z_][A-Za-z0-9_]*\[[^\]]*\]\+?=/.test(headWord.raw)) {
+      this.refuse("command-word-glob");
+    }
+    if (head === "coproc") {
+      // `coproc COMPOUND` and bash's `coproc NAME COMPOUND` run the compound
+      // in a subshell; the walk would read it as arguments.
+      const first = bareValue(words[1]);
+      const second = bareValue(words[2]);
+      if ((first !== null && COMPOUND_OPENERS.has(first)) || (second !== null && COMPOUND_OPENERS.has(second))) {
+        this.refuse("coproc");
+      }
+    }
+    // zsh loops; `repeat N` is not a prefix there.
+    if (head === "foreach" || head === "repeat") this.refuse("alternate-form");
+    // zsh reads a `}` anywhere as the end of a group (`{ : } always { ... }`,
+    // `if { c } { ... } else { ... }`): a word after it starts a new construct.
+    for (let m = 1; m < words.length - 1; m++) {
+      if (bareValue(words[m]) === "}") this.refuse("alternate-form");
+    }
+  }
+
   /** `done`, `fi`, `esac`: join the branches; a loop that moved also widens the commands inside it. */
   private closeCompound(top: CompoundFrame, st: WalkState): void {
+    if (top.kind === "case") st.staleDirStack = top.staleOuter;
     const loop = top.loop;
     if (loop !== null) {
       const idx = st.loops.lastIndexOf(loop);
@@ -1493,6 +1991,12 @@ class Walker {
     }
     st.oldpwd = st.cur;
     st.cur = next;
+    st.moves++;
+  }
+
+  /** A read of the `pushd` stack or `OLDPWD` (see `WalkState.staleDirStack`). */
+  private readDirStack(st: WalkState): void {
+    if (st.staleDirStack) this.refuse("case-arm-dir-stack");
   }
 
   /**
@@ -1536,10 +2040,12 @@ class Walker {
     }
     const w = rest[0]!;
     if (w.value === "-") {
+      this.readDirStack(st);
       this.moveTo(st, st.oldpwd, true);
       return NO_KEYS;
     }
     if (w.value !== null && /^[+-]\d+$/.test(w.value)) {
+      this.readDirStack(st);
       this.moveTo(st, this.stackUnion(st), true); // zsh stack entry
       return NO_KEYS;
     }
@@ -1583,6 +2089,7 @@ class Walker {
       rest = rest.slice(1);
     }
     if (rest.length === 0) {
+      this.readDirStack(st);
       const top = st.stack.pop();
       if (top === undefined) {
         if (st.stackTruncated) this.moveTo(st, OPAQUE_SET, true);
@@ -1594,6 +2101,7 @@ class Walker {
     }
     const w = rest[0]!;
     if (w.value !== null && /^[+-]\d+$/.test(w.value)) {
+      this.readDirStack(st);
       this.moveTo(st, this.stackUnion(st), true);
       return NO_KEYS;
     }
@@ -1608,6 +2116,7 @@ class Walker {
   }
 
   private doPopd(args: readonly ShellWord[], st: WalkState): void {
+    this.readDirStack(st);
     let rest = args;
     let noCd = false;
     while (rest[0]?.value === "-n" || rest[0]?.value === "--") {
@@ -1624,11 +2133,15 @@ class Walker {
       if (st.stackTruncated) this.moveTo(st, OPAQUE_SET, true);
       return; // directory stack empty: an error, nothing moves
     }
-    if (noCd) return;
+    if (noCd) {
+      st.moves++;
+      return;
+    }
     this.moveTo(st, top, true);
   }
 
   private pushStack(st: WalkState, entry: DirSet): void {
+    st.moves++;
     st.stack.push(entry);
     if (st.stack.length > MAX_DIR_STACK) {
       st.stack.shift();
@@ -1870,18 +2383,67 @@ function namesDirectory(dirs: DirSet): boolean {
  * of a directory change that certainly succeeds.
  */
 export function modelShellCommands(command: string, oracle?: DirectoryOracle): ModelCommand[] | null {
-  if (command.length > MAX_NORMALIZE_LENGTH) return null;
+  const result = runModel(command, oracle);
+  return result.kind === "ok" ? result.commands : null;
+}
+
+/** The model of a command line: its commands, a refusal (see `REFUSAL_CONSTRUCTS`), or not lexable. */
+type ModelResult =
+  | { readonly kind: "ok"; readonly commands: ModelCommand[] }
+  | { readonly kind: "refused"; readonly refusal: RefusalKind; readonly read: ModelCommand[] | null }
+  | { readonly kind: "unlexable" };
+
+function runModel(command: string, oracle: DirectoryOracle | undefined): ModelResult {
+  if (command.length > MAX_NORMALIZE_LENGTH) return { kind: "unlexable" };
+  let tokens: ShellToken[];
   try {
-    const { tokens } = new ShellLexer(command, null).list(0, "top", 0);
-    const walker = new Walker(oracle ?? null);
-    walker.walk(tokens, newState());
-    return walker.out.map((rec) => ({
-      canonical: rec.canonical,
-      span: rec.span,
-      namesDirectory: namesDirectory(rec.dirs),
-      dirs: [...rec.dirs.values()],
-    }));
+    tokens = new ShellLexer(command, null).list(0, "top", 0).tokens;
+  } catch {
+    return { kind: "unlexable" };
+  }
+  try {
+    return { kind: "ok", commands: walkCommands(tokens, oracle, true) };
+  } catch (err) {
+    if (err instanceof ShellModelRefusal) {
+      return { kind: "refused", refusal: err.kind, read: readWithoutRefusals(tokens, oracle) };
+    }
+    // The walk gave up before it reached every command word. A word that
+    // starts with `{` or holds a brace expansion can spell a directory
+    // change no directory-changing word shows (`{cd,a}`), so such a line is
+    // refused rather than left to the text fallback.
+    if (holdsBraceWord(tokens)) return { kind: "refused", refusal: "command-word-brace", read: null };
+    return { kind: "unlexable" };
+  }
+}
+
+/** The model commands of a lexed command line; throws a `ShellModelError` where the walk gives up or refuses. */
+function walkCommands(tokens: readonly ShellToken[], oracle: DirectoryOracle | undefined, refusals: boolean): ModelCommand[] {
+  const walker = new Walker(oracle ?? null, refusals);
+  walker.walk(tokens, newState());
+  return walker.out.map((rec) => ({
+    canonical: rec.canonical,
+    span: rec.span,
+    namesDirectory: namesDirectory(rec.dirs),
+    dirs: [...rec.dirs.values()],
+  }));
+}
+
+/** The commands the walk reads with every refusal check off, or `null` when it gives up (see `ShellModelView.triggerCommands`). */
+function readWithoutRefusals(tokens: readonly ShellToken[], oracle: DirectoryOracle | undefined): ModelCommand[] | null {
+  try {
+    return walkCommands(tokens, oracle, false);
   } catch {
     return null;
   }
+}
+
+/** Some word of `tokens` (substitution bodies and redirection targets included) starts with `{` or holds a brace expansion. */
+function holdsBraceWord(tokens: readonly ShellToken[]): boolean {
+  for (const t of tokens) {
+    const w = t.kind === "word" ? t : t.kind === "redir" ? t.target : null;
+    if (w === null) continue;
+    if (w.brace || (w.raw.startsWith("{") && w.raw !== "{")) return true;
+    if (w.subs.some(holdsBraceWord)) return true;
+  }
+  return false;
 }

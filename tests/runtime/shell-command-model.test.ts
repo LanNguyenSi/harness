@@ -638,7 +638,6 @@ describe("modelShellCommands: after a command that can redefine cd, the oracle i
     "pushd() { :; }",
     "f() { :; }",
     "function f { :; }",
-    "() { :; }",
     "enable -n cd",
     "disable cd",
     "alias cd=:",
@@ -675,6 +674,12 @@ describe("modelShellCommands: after a command that can redefine cd, the oracle i
       expect(asked, command).toEqual(["cwd + L:X = L:X"]);
     });
   }
+
+  it("a form the model refuses is refused instead of read (task 9238cc27)", () => {
+    const view = shellModelViewOf("cd X; () { :; }; cd ..; git log");
+    expect(view.commands).toBeNull();
+    expect(view.refusal).toBeDefined();
+  });
 
   it("a cd before the override is still confirmed, and the same words as arguments change nothing", () => {
     expect(dirsWithOracle("cd X; cd ..; cd() { :; }; git log", ["L:X", "cwd"])).toEqual(["cwd"]);

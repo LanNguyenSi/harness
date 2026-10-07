@@ -3,7 +3,7 @@ type: overview
 title: Gate fail-posture matrix
 description: Which harness enforcement gates fail OPEN vs fail CLOSED when their evidence source (grounding-mcp ledger, approval markers, verdict files, probes) is unreachable or errors, with the exact code paths and override knobs.
 tags: [gates, fail-open, fail-closed, enforcement]
-timestamp: 2026-10-07T11:02:35Z
+timestamp: 2026-10-07T15:22:53Z
 sources:
   - src/cli/pack/auto-approve-path.ts
   - src/io/atomic-write.ts
@@ -40,7 +40,7 @@ Every harness enforcement gate has a deliberate posture for the moment its evide
 | Policy engine / Risk Gate | `harness policy intercept` → `intercept()` in `src/runtime/intercept.ts` | grounding-mcp evidence ledger | fail **CLOSED** for `block`/`require_approval`, fail **OPEN** for `warn` (task f1aea826; opt-out `risk.degraded_fail_posture: fail_open` restores fail-open for every tier) | `deny-degraded` blocks with a degraded-specific envelope for `block`/`require_approval`; `warn-degraded` never blocks for `warn` |
 | `bash_match` normalised-form matching (both passes) | `harness policy intercept` → `normalizeCommand` / `normalizeCommandAmpAware` in `src/runtime/command-normalize.ts` | command length vs `MAX_NORMALIZE_LENGTH` (100,000 chars) | fail **OPEN** above the bound | normalised-form matching skipped for BOTH the primary and the ampersand-aware second pass (task `aabbad63`) — they share the identical bound on the identical input command, so one stderr line covers both; raw match only. Previously silent, no stderr line, no audit row (G4 fix, review round 2, 2026-07-27) |
 | Per-policy target attribution bound (`${REPO}`/`${BRANCH}`/`at_head`) | `harness policy intercept` → `resolveAttributedContexts` in `src/runtime/intercept.ts` | segment-derived repository targets (a filesystem `.git`-shape check, no evidence source of its own) | fail **CLOSED** above 4 distinct targets (`MAX_ATTRIBUTED_CONTEXTS`) | one synthetic decision naming the ambiguity, mapped through the policy's OWN `enforcement:` (`block` denies, `warn` warns, `require_approval` requires approval — never a hardcoded outcome); ZERO ledger queries for that policy |
-| Quote-aware shell command model (`${REPO}`/`${BRANCH}`/`at_head` policies) | `harness policy intercept` → `resolveAttributedContexts` in `src/runtime/intercept.ts`, model in `src/runtime/shell-command-model.ts` | the command text (no evidence source of its own) | fail **CLOSED** on an opaque possibility (a target it refuses to read, a glob, an in-command `CDPATH` search, a relative step after an opaque directory, a loop that moves relatively, more than 8 possibilities, a composed path over 4096 characters), on model paths that need more than the per-event filesystem work budget (`MAX_MODEL_PATH_WORK`, `src/runtime/shell-model-paths.ts`), and on a command it cannot lex or longer than `MAX_NORMALIZE_LENGTH` when the text holds a directory-changing word; otherwise it only adds demands to the segment view's, which are computed first (task `7d4abf84`) | the same `opaque-target` decision as the row above's shape: one synthetic decision through the policy's OWN `enforcement:`, ZERO ledger queries |
+| Quote-aware shell command model (`${REPO}`/`${BRANCH}`/`at_head` policies) | `harness policy intercept` → `resolveAttributedContexts` in `src/runtime/intercept.ts`, model in `src/runtime/shell-command-model.ts` | the command text (no evidence source of its own) | fail **CLOSED** on an opaque possibility (a target it refuses to read, a glob, an in-command `CDPATH` search, a relative step after an opaque directory, a loop that moves relatively, more than 8 possibilities, a composed path over 4096 characters), on model paths that need more than the per-event filesystem work budget (`MAX_MODEL_PATH_WORK`, `src/runtime/shell-model-paths.ts`), and on a command it cannot lex or longer than `MAX_NORMALIZE_LENGTH` when the text holds a directory-changing word; otherwise it only adds demands to the segment view's, which are computed first (task `7d4abf84`). Also fail **CLOSED** on a command line the model refuses (an unparseable compound shape its walk would place in the wrong directory, listed at `REFUSAL_CONSTRUCTS`), whatever the text holds (task `9238cc27`) | the same `opaque-target` decision as the row above's shape: one synthetic decision through the policy's OWN `enforcement:`, ZERO ledger queries; a refused line gets the `unparsed-command` decision instead, with the ledger tag `(unparsed command: ...)` and a reason that names the construct and asks for separate commands |
 | Empty `${REPO}`/`${BRANCH}` in a `ledger_tag` | `harness policy intercept` → `evaluateOnePolicy` in `src/runtime/intercept.ts` | none queried: the value resolved for the context (cwd outside every repo, detached HEAD, empty override) | decided per the policy's OWN `enforcement:` (never fail-open to a blank tag) | `deny` / `require_approval` / `warn` with a reason naming `cd <repo>` / `git -C <repo>` or `git switch <branch>`; ZERO ledger queries; NOT `deny-degraded` (task `6c8ebd37`) |
 | understanding-before-execution | `harness pack hook pre-tool-use` (`src/cli/pack/hook-pre-tool-use.ts`) | HMAC-signed approval marker (sole authority); persisted JSON report and ledger are audit-only | fail **OPEN** on load/parse/ledger/report-scan errors | allow, exit 0, stderr diagnostic |
 | branch-protection | `harness pack hook branch-protection` (`src/cli/pack/hook-branch-protection.ts`) | `branch:non-protected:<branch>` ledger tag (5-min window) + override marker | fail **CLOSED** on any load/parse/ledger error | block envelope |
@@ -96,7 +96,7 @@ DISTINCT repository a trigger-satisfying command segment names (its own
 persisting `cd`) — the session's own cwd context is ALWAYS also
 evaluated, never dropped except for a cwd outside every repository next to a resolved target (see the exception below; `resolveAttributedContexts`; the "always add, never replace" rule
 D-021 and its four-review-pass history are restated in-tree in that
-function's own doc comment, `src/runtime/intercept.ts:1460-1494#"disproved"`; the
+function's own doc comment, `src/runtime/intercept.ts:1482-1516#"disproved"`; the
 original decision record under
 `.ai/runs/2026-08-02-per-repo-gate-scoping-redesign/` is local run state
 and not shipped with the repo). This section covers only the FALLBACK side of that resolution,
@@ -186,7 +186,21 @@ since it is the part that changes this matrix's own fail-posture story:
   a directory-changing word (`cd`, `pushd`, `popd`, `chdir`, `-C`,
   `--chdir`, `--git-dir`, also with quotes or backslashes removed). The
   over-block this adds (glob targets, `CDPATH`, verbs that never run) is
-  recorded in the CHANGELOG entry for task `7d4abf84`.
+  recorded in the CHANGELOG entry for task `7d4abf84`. Since task
+  `9238cc27` the model also refuses a command line holding a compound
+  shape its walk would place in the wrong directory (the kinds are listed
+  at `REFUSAL_CONSTRUCTS` in `src/runtime/shell-command-model.ts`). Such a line fails closed for every
+  per-repository policy (`${REPO}`, `${BRANCH}` or `at_head`) with a
+  `bash_match`, whether or not the text holds a directory-changing word,
+  as one `unparsed-command`
+  decision (ledger tag `(unparsed command: ...)`, the reason names the
+  construct and asks for separate commands). The model's own trigger arm
+  keeps matching on the reading without the refusals
+  (`ShellModelView.triggerCommands`), so a policy only that arm matched
+  fails closed too instead of dropping out. A few more words that steer
+  a later relative `cd` make it opaque as well. Valid
+  one-liners in a refused form are over-blocked until the model reads
+  them.
 - **More than `MAX_ATTRIBUTED_CONTEXTS` (4) distinct targets for one
   policy on one event fails CLOSED** — see the new table row above. This
   is the one place per-policy attribution ADDS a fail-closed posture the
