@@ -25,7 +25,7 @@
 // RULES:
 //
 // - Directory builtins: after quote and backslash decoding and after the
-//   transparent prefixes (`!`, `{`, `}`, `time [-p]`, compound keywords,
+//   transparent prefixes (`!`, `{`, `}`, `time [-p] [--]`, compound keywords,
 //   `builtin`, `command` without `-v`/`-V`, the zsh precommand modifiers
 //   `noglob` and `nocorrect`, leading assignments, redirections anywhere),
 //   the command word `cd`, `chdir`, `pushd` or `popd` moves the shell.
@@ -87,8 +87,9 @@
 // texts at each wrapper-peeling stage (`ModelCommand.heads`), and the gate
 // tests every `bash_match` trigger against them for every command, so a
 // gated verb behind a compound prefix (`! git log`, `{ git log; }`,
-// `if ...; then git log; fi`, a loop body) or behind `xargs` / `coproc`
-// matches the policy the bare verb matches. Not read: commands run by a
+// `if ...; then git log; fi`, a loop body, a `case` arm also when the `case`
+// stands behind such a prefix) or behind `xargs` / `coproc` matches the
+// policy the bare verb matches. Not read: commands run by a
 // nested shell or another program's argument (`sh -c`, `find -exec`,
 // `parallel`, `watch`), and wrappers not peeled here.
 
@@ -1176,6 +1177,71 @@ function emptyCommand(): SimpleCommand {
   return { words: [], redirs: [], group: null };
 }
 
+/**
+ * The index after the `time` at `k` and its `-p` and `--` (bash reads
+ * `time -p -- V` and `time -- V` as `V` timed); `posix` when `-p` was read.
+ */
+function timePrefixEnd(words: readonly ShellWord[], k: number): { end: number; posix: boolean } {
+  let end = k + 1;
+  const posix = words[end]?.value === "-p";
+  if (posix) end++;
+  if (words[end]?.value === "--") end++;
+  return { end, posix };
+}
+
+/**
+ * True when every one of `words` is a transparent prefix that
+ * `Walker.execCommand` reads before a command word (`!`, `{`, `}`,
+ * `time [-p] [--]`, an arithmetic word, `if` / `while` / `until`, a
+ * `for NAME do` or `select NAME do` header, `then` / `else` / `elif` / `do`,
+ * `fi` / `done` / `esac`, `function NAME`). A `case` that follows such words
+ * is the reserved word that opens a compound command (`{ case ...`,
+ * `! case ...`, `then case ...`, `do case ...`), not an argument, so the walk
+ * reads it exactly as a `case` at the start of a command.
+ */
+function onlyTransparentPrefixes(words: readonly ShellWord[]): boolean {
+  let k = 0;
+  while (k < words.length) {
+    const w = words[k]!;
+    if (w.arith === true) {
+      k++;
+      continue;
+    }
+    const v = w.quoted ? null : w.value; // reserved words are never quoted
+    if (v === null) return false;
+    if (v === "time") {
+      k = timePrefixEnd(words, k).end;
+      continue;
+    }
+    if (v === "for" || v === "select") {
+      const afterName = words[k + 2];
+      if (afterName === undefined || afterName.quoted || (afterName.value !== "do" && afterName.value !== "{")) return false;
+      k += 2;
+      continue;
+    }
+    if (v === "function") {
+      if (k + 2 > words.length) return false;
+      k += 2;
+      continue;
+    }
+    if (
+      v === "!" ||
+      v === "{" ||
+      v === "}" ||
+      v === "if" ||
+      v === "while" ||
+      v === "until" ||
+      RESERVED_MID.has(v) ||
+      RESERVED_CLOSE.has(v)
+    ) {
+      k++;
+      continue;
+    }
+    return false;
+  }
+  return true;
+}
+
 interface ExecInfo {
   moved: boolean;
   negated: boolean;
@@ -1290,6 +1356,20 @@ class Walker {
     while (i < tokens.length) {
       const tk = tokens[i]!;
       if (tk.kind === "word") {
+        if (
+          !tk.quoted &&
+          tk.value === "case" &&
+          cmd.words.length > 0 &&
+          cmd.group === null &&
+          cmd.redirs.length === 0 &&
+          onlyTransparentPrefixes(cmd.words)
+        ) {
+          // `case` behind compound prefixes (`{ case`, `! case`,
+          // `then case`, `do case`, `time case`): read the prefixes as the
+          // command they are, then the `case` as at the start of a command,
+          // so its patterns are read as patterns and its arms as commands.
+          finishCommand(null);
+        }
         if (cmd.words.length === 0 && !tk.quoted && tk.value === "case") {
           this.pushCompound(compound, {
             kind: "case",
@@ -1452,11 +1532,9 @@ class Walker {
         continue;
       }
       if (v === "time") {
-        k++;
-        if (words[k]?.value === "-p") {
-          shellNeutral = false;
-          k++;
-        }
+        const t = timePrefixEnd(words, k);
+        if (t.posix) shellNeutral = false;
+        k = t.end;
         continue;
       }
       if (v !== null && RESERVED_OPEN.has(v)) {
