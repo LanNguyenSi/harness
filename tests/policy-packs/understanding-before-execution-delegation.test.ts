@@ -1097,6 +1097,23 @@ describe("verifyDelegation", () => {
     expect(result.reason).toBe("unreadable");
   });
 
+  it("a delegation marker over the 1 MiB read cap is unreadable with a detail naming the cap (task f1bacdd8)", () => {
+    const filePath = delegationMarkerPathFor(generatedDir, CHILD);
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.writeFileSync(filePath, "a".repeat(1024 * 1024 + 1), { mode: 0o600 });
+
+    const result = verifyDelegation({
+      generatedDir,
+      childSessionId: CHILD,
+      cwd: childCwd,
+      taskId: null,
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("unreachable");
+    expect(result.reason).toBe("unreadable");
+    expect(result.detail).toContain("could not be read (I/O error or over the 1 MiB size cap)");
+  });
+
   it("a body that is not JSON at all is forged, not unreadable or unparseable (review finding F3)", () => {
     const filePath = delegationMarkerPathFor(generatedDir, CHILD);
     fs.mkdirSync(path.dirname(filePath), { recursive: true });

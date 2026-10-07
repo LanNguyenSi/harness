@@ -240,7 +240,7 @@ export function checkApprovalMarker(
     // from `forged` (no claim of an active forgery attempt).
     return {
       matched: false,
-      detail: `approval marker at ${filePath} exists but could not be read (I/O error); treating as unapproved since its signature cannot be verified`,
+      detail: `approval marker at ${filePath} exists but could not be read (I/O error or over the 1 MiB size cap); treating as unapproved since its signature cannot be verified`,
       marker: null,
       expired: false,
       forged: false,
