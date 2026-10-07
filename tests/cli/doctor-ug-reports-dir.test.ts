@@ -216,6 +216,25 @@ describe("doctor: reports directory size (Environment section)", () => {
     expect(format(report)).toContain(`reports directory ${elsewhere} holds ${WARN_AT}`);
   }, PLANT_TIMEOUT_MS);
 
+  it("a directory name carrying control characters cannot forge a doctor line: they are flattened to spaces", async () => {
+    const { home } = fixture(MANIFEST_WITH_PACK);
+    const hostile = path.join(tempDir(), "rep\nforged ✓ all clear\u001b[31mx\u007fy");
+    plant(hostile, WARN_AT, ".json");
+    process.env["UNDERSTANDING_GATE_REPORT_DIR"] = hostile;
+    const report = await run(home);
+    expect(report.ugReportsDir?.state).toBe("near");
+    const text = format(report);
+    const flattened = hostile.replace(/[\x00-\x1f\x7f]/g, " ");
+    expect(text).toContain(`⚠ understanding-gate reports directory ${flattened} holds ${WARN_AT} *.json entries`);
+    // The raw newline, escape and DEL never reach the output: the injected text stays on the warning's own line.
+    expect(text).not.toContain("rep\nforged");
+    expect(text).not.toContain("\u001b");
+    expect(text).not.toContain("\u007f");
+    const warningLine = text.split("\n").find((l) => l.includes("reports directory"));
+    expect(warningLine).toContain("forged ✓ all clear");
+    expect(text.split("\n").filter((l) => l.trimStart().startsWith("forged")).length).toBe(0);
+  }, PLANT_TIMEOUT_MS);
+
   it("is absent when the understanding pack is not declared, even for a full directory", async () => {
     const { home, reportsDir } = fixture(MANIFEST_WITHOUT_PACK);
     plant(reportsDir, WARN_AT, ".json");

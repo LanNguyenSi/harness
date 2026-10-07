@@ -1584,7 +1584,9 @@ async function runPackHookPreToolUseCliInner(
       latestParseError?.malformedSections,
       agentInstruction,
       expiryNotice,
-      report.reportsDirTooLarge === true ? renderReportsDirTooLargeNotice(reportsDir) : null,
+      report.reportsDirTooLarge !== undefined
+        ? renderReportsDirTooLargeNotice(reportsDir, report.reportsDirTooLarge)
+        : null,
     )}\n`,
   );
   return {

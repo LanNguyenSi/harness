@@ -129,6 +129,31 @@ function plantJsonEntries(count: number): void {
   }
 }
 
+/**
+ * Plant 40 report-sized entries of about 900 KiB each (36 MiB in all, far
+ * under the entry bound, each under the 1 MiB per-file cap): the byte budget
+ * is crossed, the entry bound is not. `prefix` decides whether they sort older
+ * or newer than the timestamped session report.
+ */
+function plantLargeReports(prefix: string): void {
+  fs.mkdirSync(reportsDir, { recursive: true });
+  const pad = "x".repeat(900 * 1024);
+  for (let i = 0; i < 40; i++) {
+    const name = `${prefix}T10-00-${String(i).padStart(2, "0")}-000Z-report-big${i}.json`;
+    fs.writeFileSync(
+      path.join(reportsDir, name),
+      JSON.stringify({
+        sessionId: "other",
+        approvalStatus: "expired",
+        createdAt: "2026-09-10T10:00:00.000Z",
+        mode: "grill_me",
+        currentUnderstanding: pad,
+        priorArt: ["x"],
+      }),
+    );
+  }
+}
+
 interface Denied {
   blocked: boolean;
   /** What the agent reads: the Claude hook's stdout deny reason, the Codex hook's stderr. */
@@ -252,4 +277,75 @@ describe.each(RUNTIMES)("too-large reports directory deny text: $name", (rt) => 
     expect(out.agentText).toContain("Run `harness approve understanding`");
     expect(out.agentText).not.toContain("approving again will not help");
   });
+});
+
+function expectApproveNewestThenCleanup(text: string): void {
+  expect(text).toContain(`The reports directory ${reportsDir} holds more than 32 MiB of report data`);
+  expect(text).toContain("Run `harness approve understanding` to approve the newest report");
+  expect(text).toContain("If this deny persists after approving");
+  expect(text).toContain("`harness gc --apply`");
+  expect(text).toContain("by hand");
+  // The entry-count notice's claim is false here and must not appear.
+  expect(text).not.toContain("approving again will not help");
+  expect(text).not.toContain("Clean the directory up instead");
+}
+
+describe.each(RUNTIMES)("byte-budget truncation deny text: $name", (rt) => {
+  it(
+    "no marker, over the byte budget but under the entry bound: approve the newest report first, cleanup if the deny persists",
+    async () => {
+      writePendingReport();
+      plantLargeReports("2026-09-10");
+      const out = await rt.run(manifestWith(false));
+      expect(out.blocked).toBe(true);
+      expectApproveNewestThenCleanup(out.agentText);
+    },
+    PLANT_TIMEOUT_MS,
+  );
+
+  it(
+    "a configured ux: block does not replace the byte-budget notice",
+    async () => {
+      writePendingReport();
+      plantLargeReports("2026-09-10");
+      const out = await rt.run(manifestWith(true));
+      expect(out.blocked).toBe(true);
+      expectApproveNewestThenCleanup(out.agentText);
+      expect(out.agentText).not.toContain("You cannot use write-capable tools yet.");
+    },
+    PLANT_TIMEOUT_MS,
+  );
+
+  it(
+    "the instruction is true: approving the newest report opens the gate",
+    async () => {
+      writePendingReport();
+      plantLargeReports("2026-09-10");
+      expect((await rt.run(manifestWith(false))).blocked).toBe(true);
+      const approve = await approveUnderstanding({
+        manifest: parseManifest({ version: 1 }),
+        session: SESSION,
+        reportsDir,
+        generatedDir,
+        ledgerAdd: async () => ({ ok: true }),
+      });
+      expect(approve.marker.ok).toBe(true);
+      expect((await rt.run(manifestWith(false))).blocked).toBe(false);
+    },
+    PLANT_TIMEOUT_MS,
+  );
+
+  it(
+    "a signed marker whose report sits behind newer large reports: the text never says approving will not help",
+    async () => {
+      await approveSessionReport();
+      plantLargeReports("2026-10-05");
+      const out = await rt.run(manifestWith(false));
+      expect(out.blocked).toBe(true);
+      expect(out.agentText).toContain("harness approve understanding");
+      expect(out.agentText).not.toContain("approving again will not help");
+      expect(out.agentText).not.toContain("Clean the directory up instead");
+    },
+    PLANT_TIMEOUT_MS,
+  );
 });

@@ -558,8 +558,8 @@ async function runPackHookCodexPreToolUseCliInner(
   );
   // A reports directory too large to read cannot be fixed by approving again,
   // so its cleanup replaces the re-approval recipe in either envelope.
-  let agentFacing = report.reportsDirTooLarge === true
-    ? renderReportsDirTooLargeNotice(reportsDir)
+  let agentFacing = report.reportsDirTooLarge !== undefined
+    ? renderReportsDirTooLargeNotice(reportsDir, report.reportsDirTooLarge)
     : configUx
     ? renderAgentFacing(configUx, { SESSION_ID: sessionId, TOOL_NAME: toolName })
     : `Run \`harness approve understanding\` once you have produced and confirmed an Understanding Report.\n${renderReportSchemaHint()}`;
