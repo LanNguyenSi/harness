@@ -76,9 +76,9 @@ function makeLinkedWorktree(
   const mainGitDir = path.join(root, "main-repo", ".git");
   const wtGitDir = path.join(mainGitDir, "worktrees", "wt");
   fs.mkdirSync(wtGitDir, { recursive: true });
-  if (opts.head !== undefined) {
-    fs.writeFileSync(path.join(wtGitDir, "HEAD"), `${opts.head}\n`);
-  }
+  // A real linked worktree always has a HEAD in its gitdir (a gitdir without
+  // one is refused); default to a plain branch when the caller does not care.
+  fs.writeFileSync(path.join(wtGitDir, "HEAD"), `${opts.head ?? "ref: refs/heads/main"}\n`);
   if (opts.commondir !== undefined) {
     fs.writeFileSync(path.join(wtGitDir, "commondir"), `${opts.commondir}\n`);
   }
@@ -146,11 +146,11 @@ describe("resolveGitContext", () => {
     });
   });
 
-  it("returns empty strings when a directory-form .git has no HEAD", () => {
+  it("refuses a directory-form .git with no HEAD instead of reading it as outside every repository", () => {
     const root = tmpDir();
     const repo = path.join(root, "no-head");
     fs.mkdirSync(path.join(repo, ".git"), { recursive: true });
-    expect(resolveGitContext(repo)).toEqual({ repo: "", branch: "", sha: "" });
+    expect(resolveGitContext(repo)).toEqual({ repo: "no-head", branch: "", sha: "", refused: ["HEAD"] });
   });
 
   it("resolves branch but empty sha when neither loose ref nor packed-refs has it", () => {
@@ -177,15 +177,19 @@ describe("resolveGitContext", () => {
     });
   });
 
-  it("resolves repo but empty branch + sha when a `.git` file is unparseable", () => {
+  it("resolves repo but empty branch + sha, and refuses the entry, when a `.git` file is unparseable", () => {
     const root = tmpDir();
     const worktree = path.join(root, "broken-worktree");
     fs.mkdirSync(worktree, { recursive: true });
     fs.writeFileSync(path.join(worktree, ".git"), "not a gitdir pointer\n");
+    // A `.git` file without a `gitdir:` line is there but names nothing to
+    // read: refused (naming .git), the same as any other present entry that
+    // does not resolve, never read as "outside every repository".
     expect(resolveGitContext(worktree)).toEqual({
       repo: "broken-worktree",
       branch: "",
       sha: "",
+      refused: [".git"],
     });
   });
 
@@ -200,9 +204,9 @@ describe("resolveGitContext", () => {
     expect(resolveGitContext("")).toEqual({ repo: "", branch: "", sha: "" });
   });
 
-  it("rejects a HEAD file whose sha is non-hex (treats as unresolved)", () => {
+  it("refuses a HEAD file whose content is neither a ref nor an object id (not read as a detached HEAD)", () => {
     const repo = makeRepo(tmpDir(), "bad-sha", "not-a-sha-at-all");
-    expect(resolveGitContext(repo)).toEqual({ repo: "bad-sha", branch: "", sha: "" });
+    expect(resolveGitContext(repo)).toEqual({ repo: "bad-sha", branch: "", sha: "", refused: ["HEAD"] });
   });
 
   it("resolves an attached branch in a linked worktree via commondir (refs only in the common dir)", () => {
@@ -475,6 +479,39 @@ describe.skipIf(process.platform === "win32")(
       }
     });
 
+    it("a DANGLING symlink at `.git` is refused, not walked past to the enclosing repository", () => {
+      const { nested } = outerRepoWithNestedWorktree();
+      fs.symlinkSync(path.join(nested, "gone", "gitdir"), path.join(nested, ".git"));
+      expect(resolveGitContext(nested)).toEqual({
+        repo: "inner-worktree",
+        branch: "",
+        sha: "",
+        refused: [".git"],
+      });
+      expect(findGitEntry(nested)).toEqual({ worktreeRoot: nested, gitDir: "", refused: ".git" });
+    });
+
+    it("a self-looping symlink at `.git` is refused, not walked past", () => {
+      const { nested } = outerRepoWithNestedWorktree();
+      fs.symlinkSync(path.join(nested, ".git"), path.join(nested, ".git"));
+      expect(resolveGitContext(nested)).toMatchObject({ branch: "", sha: "", refused: [".git"] });
+    });
+
+    it("a dangling `.git` symlink in a subdirectory stops the walk there for a cwd below it", () => {
+      const { nested } = outerRepoWithNestedWorktree();
+      fs.symlinkSync(path.join(nested, "gone"), path.join(nested, ".git"));
+      const below = path.join(nested, "src", "deep");
+      fs.mkdirSync(below, { recursive: true });
+      expect(findGitEntry(below)).toEqual({ worktreeRoot: nested, gitDir: "", refused: ".git" });
+    });
+
+    it("control: a symlink at `.git` that RESOLVES to a git directory is followed, not refused", () => {
+      const { nested } = outerRepoWithNestedWorktree();
+      const real = makeRepo(tmpDir(), "real", "ref: refs/heads/linked", FAKE_SHA);
+      fs.symlinkSync(path.join(real, ".git"), path.join(nested, ".git"));
+      expect(resolveGitContext(nested)).toEqual({ repo: "inner-worktree", branch: "linked", sha: FAKE_SHA });
+    });
+
     it("control: a MISSING `.git` still walks up to the enclosing repository", () => {
       const { nested } = outerRepoWithNestedWorktree();
       expect(resolveGitContext(nested)).toEqual({
@@ -483,13 +520,348 @@ describe.skipIf(process.platform === "win32")(
         sha: FAKE_SHA,
       });
     });
+
+    // A present `.git` that cannot be resolved to a readable repository is
+    // that repository, whatever is inside: never "outside every
+    // repository", never the enclosing one (task b56d95d3, operator
+    // decision).
+    it("a `.git` directory with no HEAD is refused (naming HEAD), not walked past to the enclosing repository", () => {
+      const { nested } = outerRepoWithNestedWorktree();
+      fs.mkdirSync(path.join(nested, ".git"));
+      expect(findGitEntry(nested)).toEqual({ worktreeRoot: nested, gitDir: "", refused: "HEAD" });
+      expect(resolveGitContext(nested)).toEqual({ repo: "inner-worktree", branch: "", sha: "", refused: ["HEAD"] });
+    });
+
+    it("a `.git` directory whose HEAD is a dangling symlink is refused", () => {
+      const { nested } = outerRepoWithNestedWorktree();
+      fs.mkdirSync(path.join(nested, ".git"));
+      fs.symlinkSync(path.join(nested, "gone"), path.join(nested, ".git", "HEAD"));
+      expect(resolveGitContext(nested)).toEqual({ repo: "inner-worktree", branch: "", sha: "", refused: ["HEAD"] });
+    });
+
+    it("a `.git` directory whose HEAD is a self-looping symlink is refused", () => {
+      const { nested } = outerRepoWithNestedWorktree();
+      fs.mkdirSync(path.join(nested, ".git"));
+      fs.symlinkSync(path.join(nested, ".git", "HEAD"), path.join(nested, ".git", "HEAD"));
+      expect(resolveGitContext(nested)).toEqual({ repo: "inner-worktree", branch: "", sha: "", refused: ["HEAD"] });
+    });
+
+    it("a `.git` directory whose HEAD is a symlink to an absolute path is refused even when it resolves (git takes only `refs/heads/<name>` link text)", () => {
+      const { nested } = outerRepoWithNestedWorktree();
+      fs.mkdirSync(path.join(nested, ".git"));
+      fs.writeFileSync(path.join(nested, "real-head"), "ref: refs/heads/via-link\n");
+      fs.symlinkSync(path.join(nested, "real-head"), path.join(nested, ".git", "HEAD"));
+      expect(findGitEntry(nested)).toEqual({ worktreeRoot: nested, gitDir: "", refused: "HEAD" });
+      expect(resolveGitContext(nested)).toEqual({ repo: "inner-worktree", branch: "", sha: "", refused: ["HEAD"] });
+    });
+
+    it("a `.git` directory whose HEAD is an absolute symlink to its own `refs/heads/<name>` file is refused (only relative `refs/heads/<name>` link text names a branch)", () => {
+      const { nested } = outerRepoWithNestedWorktree();
+      const refFile = path.join(nested, ".git", "refs", "heads", "via-abs");
+      fs.mkdirSync(path.dirname(refFile), { recursive: true });
+      fs.writeFileSync(refFile, `${FAKE_SHA}\n`);
+      fs.symlinkSync(refFile, path.join(nested, ".git", "HEAD"));
+      expect(findGitEntry(nested)).toEqual({ worktreeRoot: nested, gitDir: "", refused: "HEAD" });
+      expect(resolveGitContext(nested)).toEqual({ repo: "inner-worktree", branch: "", sha: "", refused: ["HEAD"] });
+    });
+
+    it("control: a `.git` directory whose HEAD is a symlink with link text `refs/heads/<name>` names that branch", () => {
+      const { nested } = outerRepoWithNestedWorktree();
+      fs.mkdirSync(path.join(nested, ".git", "refs", "heads"), { recursive: true });
+      fs.writeFileSync(path.join(nested, ".git", "refs", "heads", "via-link"), `${FAKE_SHA}\n`);
+      fs.symlinkSync("refs/heads/via-link", path.join(nested, ".git", "HEAD"));
+      expect(resolveGitContext(nested)).toEqual({ repo: "inner-worktree", branch: "via-link", sha: FAKE_SHA });
+    });
+
+    it.skipIf(process.getuid?.() === 0)(
+      "an unsearchable `.git` directory is refused (naming .git), not walked past",
+      () => {
+        const { nested } = outerRepoWithNestedWorktree();
+        const dotGit = path.join(nested, ".git");
+        fs.mkdirSync(dotGit);
+        fs.writeFileSync(path.join(dotGit, "HEAD"), "ref: refs/heads/main\n");
+        fs.chmodSync(dotGit, 0o600);
+        try {
+          expect(findGitEntry(nested)).toEqual({ worktreeRoot: nested, gitDir: "", refused: ".git" });
+          expect(resolveGitContext(nested)).toEqual({ repo: "inner-worktree", branch: "", sha: "", refused: [".git"] });
+        } finally {
+          fs.chmodSync(dotGit, 0o755);
+        }
+      },
+    );
+
+    it("a `.git` file whose gitdir target is missing is refused, not read as a detached HEAD", () => {
+      const { nested } = outerRepoWithNestedWorktree();
+      const missing = path.join(nested, "no-such-gitdir");
+      fs.writeFileSync(path.join(nested, ".git"), `gitdir: ${missing}\n`);
+      expect(findGitEntry(nested)).toEqual({ worktreeRoot: nested, gitDir: missing, refused: ".git" });
+      expect(resolveGitContext(nested)).toEqual({ repo: "inner-worktree", branch: "", sha: "", refused: [".git"] });
+    });
+
+    it("a `.git` file whose gitdir target is a regular file is refused", () => {
+      const { nested } = outerRepoWithNestedWorktree();
+      const target = path.join(nested, "a-file");
+      fs.writeFileSync(target, "x\n");
+      fs.writeFileSync(path.join(nested, ".git"), `gitdir: ${target}\n`);
+      expect(resolveGitContext(nested)).toMatchObject({ branch: "", refused: [".git"] });
+    });
+
+    it("a linked worktree whose gitdir HEAD is a dangling symlink is refused (once)", () => {
+      const { worktree, wtGitDir } = makeLinkedWorktree(tmpDir());
+      fs.rmSync(path.join(wtGitDir, "HEAD"));
+      fs.symlinkSync(path.join(wtGitDir, "gone"), path.join(wtGitDir, "HEAD"));
+      expect(resolveGitContext(worktree)).toEqual({ repo: "linked-worktree", branch: "", sha: "", refused: ["HEAD"] });
+    });
+
+    it("a `.git` file without a `gitdir:` line is refused (naming .git), not walked past to the enclosing repository", () => {
+      const { nested } = outerRepoWithNestedWorktree();
+      fs.writeFileSync(path.join(nested, ".git"), "not a gitdir pointer\n");
+      expect(findGitEntry(nested)).toEqual({ worktreeRoot: nested, gitDir: "", refused: ".git" });
+      expect(resolveGitContext(nested)).toEqual({ repo: "inner-worktree", branch: "", sha: "", refused: [".git"] });
+    });
+
+    it("an empty `.git` file is refused the same way", () => {
+      const { nested } = outerRepoWithNestedWorktree();
+      fs.writeFileSync(path.join(nested, ".git"), "");
+      expect(findGitEntry(nested)).toEqual({ worktreeRoot: nested, gitDir: "", refused: ".git" });
+    });
+
+    it("a linked worktree whose gitdir exists but has no HEAD is refused (naming HEAD), keeping the pointer's path", () => {
+      const { worktree, wtGitDir } = makeLinkedWorktree(tmpDir(), { commondir: "../.." });
+      fs.rmSync(path.join(wtGitDir, "HEAD"));
+      expect(fs.existsSync(path.join(wtGitDir, "HEAD"))).toBe(false);
+      expect(findGitEntry(worktree)).toEqual({ worktreeRoot: worktree, gitDir: wtGitDir, refused: "HEAD" });
+      expect(resolveGitContext(worktree)).toEqual({ repo: "linked-worktree", branch: "", sha: "", refused: ["HEAD"] });
+    });
+
+    it("a linked worktree nested in an outer repository whose gitdir has no HEAD is refused, not walked past", () => {
+      const { nested } = outerRepoWithNestedWorktree();
+      const gitDir = path.join(tmpDir(), "elsewhere", "worktrees", "wt");
+      fs.mkdirSync(gitDir, { recursive: true });
+      fs.writeFileSync(path.join(nested, ".git"), `gitdir: ${gitDir}\n`);
+      expect(findGitEntry(nested)).toEqual({ worktreeRoot: nested, gitDir, refused: "HEAD" });
+      expect(resolveGitContext(nested)).toEqual({ repo: "inner-worktree", branch: "", sha: "", refused: ["HEAD"] });
+    });
+
+    it("a submodule-style relative gitdir pointer to a directory without HEAD is refused", () => {
+      const { nested } = outerRepoWithNestedWorktree();
+      const modules = path.join(nested, "..", ".git-modules", "sub");
+      fs.mkdirSync(modules, { recursive: true });
+      fs.writeFileSync(path.join(nested, ".git"), "gitdir: ../.git-modules/sub\n");
+      expect(findGitEntry(nested)).toEqual({
+        worktreeRoot: nested,
+        gitDir: path.resolve(nested, "../.git-modules/sub"),
+        refused: "HEAD",
+      });
+    });
+
+    it("control: a linked worktree whose gitdir carries a HEAD is not refused", () => {
+      const { worktree } = makeLinkedWorktree(tmpDir(), { head: "ref: refs/heads/wt", commondir: "../.." });
+      expect(findGitEntry(worktree)?.refused).toBeUndefined();
+      expect(resolveGitContext(worktree).refused).toBeUndefined();
+    });
+
+    it("a `.git` that is ABSENT keeps the walk-up; an lstat that fails with ENOTDIR on it does too", () => {
+      const root = tmpDir();
+      const outer = makeRepo(root, "outer-abs", "ref: refs/heads/feat/outer", FAKE_SHA);
+      // `<outer>/file` is a regular file, so `<outer>/file/.git` fails with
+      // ENOTDIR: nothing demonstrably there, the walk continues.
+      fs.writeFileSync(path.join(outer, "file"), "x\n");
+      expect(findGitEntry(path.join(outer, "file"))).toEqual({
+        worktreeRoot: outer,
+        gitDir: path.join(outer, ".git"),
+      });
+      expect(resolveGitContext(outer)).toMatchObject({ repo: "outer-abs", branch: "feat/outer" });
+    });
+
+    it.skipIf(process.getuid?.() === 0)(
+      "an lstat of `.git` that fails with EACCES (an unsearchable parent) keeps the walk going",
+      () => {
+        const { nested, outer } = outerRepoWithNestedWorktree();
+        const locked = path.join(nested, "locked");
+        fs.mkdirSync(path.join(locked, "inner"), { recursive: true });
+        fs.mkdirSync(path.join(locked, "inner", ".git"));
+        fs.chmodSync(locked, 0o000);
+        try {
+          // `locked/inner/.git` cannot be reached: nothing demonstrably
+          // there, so the enclosing repository resolves, as it always did.
+          expect(findGitEntry(path.join(locked, "inner"))).toEqual({
+            worktreeRoot: outer,
+            gitDir: path.join(outer, ".git"),
+          });
+        } finally {
+          fs.chmodSync(locked, 0o755);
+        }
+      },
+    );
   },
 );
+
+describe.skipIf(process.platform === "win32")(
+  "resolveGitContext: a HEAD git does not accept is refused, not walked past (task b56d95d3)",
+  () => {
+    // For empty, whitespace-only or garbage HEAD content git walks up to the
+    // enclosing repository; `ref: refs/heads/` naming no branch is a
+    // repository with an unresolvable HEAD to git. Either way no branch can
+    // be read, so present-but-unresolvable fails closed here.
+    function nestedDotGitDir(head: string): string {
+      const root = tmpDir();
+      const outer = makeRepo(root, "outer", "ref: refs/heads/feat/outer", FAKE_SHA);
+      const nested = path.join(outer, "inner-worktree");
+      fs.mkdirSync(path.join(nested, ".git"), { recursive: true });
+      fs.writeFileSync(path.join(nested, ".git", "HEAD"), head);
+      return nested;
+    }
+
+    const REFUSED_CONTENT: Array<[string, string]> = [
+      ["an empty HEAD", ""],
+      ["a whitespace-only HEAD", "  \n\t\n"],
+      ["a garbage HEAD", "garbage\n"],
+      ["a HEAD naming no branch (`ref: refs/heads/`)", "ref: refs/heads/\n"],
+      ["a HEAD naming a ref outside refs/ (`ref: HEAD`)", "ref: HEAD\n"],
+      ["a HEAD whose ref ends in a slash", "ref: refs/heads/feat/\n"],
+      ["a HEAD holding a 39-hex id", `${FAKE_SHA.slice(1)}\n`],
+    ];
+
+    it.each(REFUSED_CONTENT)("%s in a `.git` directory is refused (naming HEAD)", (_name, head) => {
+      const nested = nestedDotGitDir(head);
+      expect(findGitEntry(nested)).toEqual({ worktreeRoot: nested, gitDir: "", refused: "HEAD" });
+      expect(resolveGitContext(nested)).toEqual({ repo: "inner-worktree", branch: "", sha: "", refused: ["HEAD"] });
+    });
+
+    it.each(REFUSED_CONTENT)("%s in a `gitdir:` target is refused (naming HEAD once), keeping the pointer's path", (_name, head) => {
+      const { worktree, wtGitDir } = makeLinkedWorktree(tmpDir(), { commondir: "../.." });
+      fs.writeFileSync(path.join(wtGitDir, "HEAD"), head);
+      expect(findGitEntry(worktree)).toEqual({ worktreeRoot: worktree, gitDir: wtGitDir, refused: "HEAD" });
+      expect(resolveGitContext(worktree)).toEqual({ repo: "linked-worktree", branch: "", sha: "", refused: ["HEAD"] });
+    });
+
+    it("a 64-hex (SHA-256) detached HEAD is accepted, not refused (no 40-char sha to report)", () => {
+      const nested = nestedDotGitDir(`${"ab".repeat(32)}\n`);
+      expect(findGitEntry(nested)).toEqual({ worktreeRoot: nested, gitDir: path.join(nested, ".git") });
+      expect(resolveGitContext(nested)).toEqual({ repo: "inner-worktree", branch: "", sha: "" });
+    });
+
+    it("an upper-case 40-hex detached HEAD is accepted (git reads hex case-insensitively)", () => {
+      const nested = nestedDotGitDir(`${FAKE_SHA.toUpperCase()}\n`);
+      expect(resolveGitContext(nested)).toEqual({ repo: "inner-worktree", branch: "", sha: "" });
+    });
+
+    it("a reftable repository's placeholder HEAD (`ref: refs/heads/.invalid`) is accepted as before", () => {
+      const nested = nestedDotGitDir("ref: refs/heads/.invalid\n");
+      expect(findGitEntry(nested)?.refused).toBeUndefined();
+      expect(resolveGitContext(nested)).toEqual({ repo: "inner-worktree", branch: ".invalid", sha: "" });
+    });
+
+    it("a HEAD naming a ref outside refs/heads/ is accepted with no branch", () => {
+      const nested = nestedDotGitDir("ref: refs/tags/v1\n");
+      expect(resolveGitContext(nested)).toEqual({ repo: "inner-worktree", branch: "", sha: "" });
+    });
+
+    it("control: a 40-hex detached HEAD and `ref: refs/heads/<name>` stay accepted", () => {
+      expect(resolveGitContext(nestedDotGitDir(`${FAKE_SHA}\n`))).toEqual({ repo: "inner-worktree", branch: "", sha: FAKE_SHA });
+      expect(resolveGitContext(nestedDotGitDir("ref:refs/heads/feat/x\n"))).toEqual({ repo: "inner-worktree", branch: "feat/x", sha: "" });
+    });
+
+    it.each([
+      ["a FIFO", (head: string) => execFileSync("mkfifo", [head])],
+      ["a directory", (head: string) => fs.mkdirSync(head)],
+    ])("a `gitdir:` target whose HEAD is %s resolves to refused exactly ['HEAD'] (the entry and the HEAD read name it once)", (_name, plant) => {
+      const { worktree, wtGitDir } = makeLinkedWorktree(tmpDir(), { commondir: "../.." });
+      fs.rmSync(path.join(wtGitDir, "HEAD"));
+      plant(path.join(wtGitDir, "HEAD"));
+      expect(findGitEntry(worktree)).toEqual({ worktreeRoot: worktree, gitDir: wtGitDir, refused: "HEAD" });
+      expect(resolveGitContext(worktree)).toEqual({ repo: "linked-worktree", branch: "", sha: "", refused: ["HEAD"] });
+    });
+  },
+);
+
+describe.skipIf(process.platform === "win32")("resolveGitContext: a symlinked HEAD (core.preferSymlinkRefs)", () => {
+  function dotGitWithLinkHead(linkText: string): { repo: string; gitDir: string } {
+    const root = tmpDir();
+    const outer = makeRepo(root, "outer", "ref: refs/heads/feat/outer", FAKE_SHA);
+    const repo = path.join(outer, "inner");
+    const gitDir = path.join(repo, ".git");
+    fs.mkdirSync(path.join(gitDir, "refs", "heads"), { recursive: true });
+    fs.symlinkSync(linkText, path.join(gitDir, "HEAD"));
+    return { repo, gitDir };
+  }
+
+  it("link text `refs/heads/<name>` is that branch, its sha read from the loose ref", () => {
+    const { repo, gitDir } = dotGitWithLinkHead("refs/heads/feat/sym");
+    fs.mkdirSync(path.join(gitDir, "refs", "heads", "feat"), { recursive: true });
+    fs.writeFileSync(path.join(gitDir, "refs", "heads", "feat", "sym"), `${FAKE_SHA}\n`);
+    expect(resolveGitContext(repo)).toEqual({ repo: "inner", branch: "feat/sym", sha: FAKE_SHA });
+  });
+
+  it("a PACKED branch (the link dangles) is still that branch, its sha read from packed-refs", () => {
+    const { repo, gitDir } = dotGitWithLinkHead("refs/heads/packed");
+    fs.writeFileSync(path.join(gitDir, "packed-refs"), `# pack-refs with: peeled fully-peeled sorted\n${ALT_SHA} refs/heads/packed\n`);
+    expect(fs.existsSync(path.join(gitDir, "HEAD"))).toBe(false);
+    expect(findGitEntry(repo)).toEqual({ worktreeRoot: repo, gitDir });
+    expect(resolveGitContext(repo)).toEqual({ repo: "inner", branch: "packed", sha: ALT_SHA });
+  });
+
+  it("an UNBORN branch (no ref anywhere) is that branch with no sha", () => {
+    const { repo } = dotGitWithLinkHead("refs/heads/unborn");
+    expect(resolveGitContext(repo)).toEqual({ repo: "inner", branch: "unborn", sha: "" });
+  });
+
+  it.each([
+    ["a ref outside refs/heads/", "refs/tags/v1"],
+    ["`refs/heads/` naming no branch", "refs/heads/"],
+    ["a relative path that is not a ref", "../outside"],
+    ["an absolute path", "/nonexistent/HEAD"],
+  ])("other link text (%s) is refused, naming HEAD", (_name, linkText) => {
+    const { repo } = dotGitWithLinkHead(linkText);
+    expect(findGitEntry(repo)).toEqual({ worktreeRoot: repo, gitDir: "", refused: "HEAD" });
+    expect(resolveGitContext(repo)).toEqual({ repo: "inner", branch: "", sha: "", refused: ["HEAD"] });
+  });
+
+  it("a real git repository written with core.preferSymlinkRefs resolves its branch, loose and packed", (ctx) => {
+    const repo = path.join(tmpDir(), "symrefs");
+    fs.mkdirSync(repo);
+    const env: NodeJS.ProcessEnv = {
+      ...process.env,
+      GIT_CONFIG_GLOBAL: "/dev/null",
+      GIT_CONFIG_NOSYSTEM: "1",
+      GIT_AUTHOR_NAME: "t",
+      GIT_AUTHOR_EMAIL: "t@example.invalid",
+      GIT_COMMITTER_NAME: "t",
+      GIT_COMMITTER_EMAIL: "t@example.invalid",
+    };
+    for (const key of ["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR"]) delete env[key];
+    const git = (...args: string[]): string =>
+      execFileSync("git", ["-c", "core.preferSymlinkRefs=true", "-c", "init.defaultBranch=main", ...args], {
+        cwd: repo,
+        env,
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"],
+      }).trim();
+    git("init", "-q");
+    fs.writeFileSync(path.join(repo, "f"), "x\n");
+    git("add", "f");
+    git("commit", "-qm", "c");
+    git("checkout", "-q", "-b", "feat/sym");
+    const head = path.join(repo, ".git", "HEAD");
+    if (!fs.lstatSync(head).isSymbolicLink()) {
+      ctx.skip();
+      return;
+    }
+    expect(fs.readlinkSync(head)).toBe("refs/heads/feat/sym");
+    const sha = git("rev-parse", "HEAD");
+    expect(resolveGitContext(repo)).toEqual({ repo: "symrefs", branch: "feat/sym", sha });
+    git("pack-refs", "--all");
+    expect(fs.existsSync(path.join(repo, ".git", "refs", "heads", "feat", "sym"))).toBe(false);
+    expect(git("symbolic-ref", "HEAD")).toBe("refs/heads/feat/sym");
+    expect(resolveGitContext(repo)).toEqual({ repo: "symrefs", branch: "feat/sym", sha });
+  });
+});
 
 describe("resolveOriginHeadBase in a linked worktree", () => {
   it("resolves the default branch from a linked worktree's common dir, not its private gitdir (already routed through resolveCommonDir by its callers)", () => {
     const root = tmpDir();
-    const { wtGitDir, mainGitDir } = makeLinkedWorktree(root, { commondir: "../.." });
+    const { wtGitDir, mainGitDir } = makeLinkedWorktree(root, { head: "ref: refs/heads/main", commondir: "../.." });
     // origin/HEAD lives only in the common dir, never in wtGitDir.
     const originHeadPath = path.join(mainGitDir, "refs", "remotes", "origin", "HEAD");
     fs.mkdirSync(path.dirname(originHeadPath), { recursive: true });
@@ -517,9 +889,7 @@ function makeLinkedWorktreeOfBareRepo(
   const bareDir = path.join(root, bareDirName);
   const perWorktreeDir = path.join(bareDir, "worktrees", "wt");
   fs.mkdirSync(perWorktreeDir, { recursive: true });
-  if (opts.head !== undefined) {
-    fs.writeFileSync(path.join(perWorktreeDir, "HEAD"), `${opts.head}\n`);
-  }
+  fs.writeFileSync(path.join(perWorktreeDir, "HEAD"), `${opts.head ?? "ref: refs/heads/main"}\n`);
   fs.writeFileSync(path.join(perWorktreeDir, "commondir"), "../..\n");
   const worktree = path.join(root, "bare-linked-worktree");
   fs.mkdirSync(worktree, { recursive: true });
@@ -632,6 +1002,7 @@ describe("deriveProjectName: hardening against a crafted commondir / gitdir (tas
     // the shape a hostile `.git` FILE target could produce.
     const linkedGitDir = path.join(root, "linked-private-gitdir");
     fs.mkdirSync(linkedGitDir, { recursive: true });
+    fs.writeFileSync(path.join(linkedGitDir, "HEAD"), "ref: refs/heads/main\n");
     fs.writeFileSync(path.join(linkedGitDir, "commondir"), `${mainWorktreeDir}/../..\n`);
     const linkedCheckout = path.join(root, "linked-checkout");
     fs.mkdirSync(linkedCheckout, { recursive: true });
@@ -898,7 +1269,7 @@ describe("resolveScopedProjectName (task f1eb1c5c)", () => {
 
   it("shape b (linked worktree): both surfaces' fallback resolve to the SAME main-checkout name", () => {
     const root = tmpDir();
-    const { worktree } = makeLinkedWorktree(root, { commondir: "../.." });
+    const { worktree } = makeLinkedWorktree(root, { head: "ref: refs/heads/main", commondir: "../.." });
     // A linked worktree's OWN checkout directory is named
     // "linked-worktree" (see `makeLinkedWorktree`); the producer's
     // `repo` fallback in real code is that checkout basename, which is

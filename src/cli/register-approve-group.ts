@@ -142,6 +142,13 @@ export function registerApproveGroup(
             );
           }
         }
+        if (result.activeClaimRefused !== undefined) {
+          lines.push(`claim:   ⚠ ${escapeForDisplay(result.activeClaimRefused)}`);
+          lines.push(
+            "  the session marker is bound to no task and will not satisfy the task-bound gate; repair or remove",
+          );
+          lines.push("  the active-claim entry, then approve again.");
+        }
         if (result.taskMarkers.length > 1) {
           const okCount = result.taskMarkers.filter((t) => t.ok).length;
           lines.push(

@@ -121,6 +121,10 @@ import * as ubeShim from "../../src/policy-packs/builtin/understanding-before-ex
 // MAX_HOOK_LISTING_ENTRIES and listDirNamesBounded (persisted-reports.ts):
 // the entry bound and the one listing the four PreToolUse-path readers share.
 // 94 -> 96. The BoundedDirNames type is absent for the usual reason.
+// Widened once more (harness b56d95d3, tri-state active claim) by
+// claimTaskIdOrNull (active-claim.ts): the helper for the callers that only
+// clear or replace a claim. 96 -> 97. The ActiveClaimRead type is absent
+// for the usual reason; `readActiveClaim` itself now returns it.
 //
 // Mutation-verified: temporarily re-adding `export { safeJsonParse } from
 // "./persisted-reports.js";` to
@@ -165,6 +169,7 @@ const EXPECTED_EXPORTS = [
   "checkOperatorApprovalMarkers",
   "checkPersistedReport",
   "checkSessionApprovalMarker",
+  "claimTaskIdOrNull",
   "clearActiveClaim",
   "clearApprovalMarker",
   "clearInflightRecord",
@@ -227,9 +232,9 @@ const EXPECTED_EXPORTS = [
 ] as const;
 
 describe("understanding-before-execution-runtime shim export surface", () => {
-  it("exports exactly the pinned 96-name surface, sorted", () => {
+  it("exports exactly the pinned 97-name surface, sorted", () => {
     const actual = Object.keys(ubeShim).sort();
-    expect(EXPECTED_EXPORTS).toHaveLength(96);
+    expect(EXPECTED_EXPORTS).toHaveLength(97);
     expect(actual).toEqual([...EXPECTED_EXPORTS].sort());
   });
 

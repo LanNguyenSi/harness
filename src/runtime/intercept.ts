@@ -980,8 +980,19 @@ const EMPTY_REPO_MESSAGE =
  * collapsed to a space, invisible and format characters escaped as
  * `\u{XXXX}`, at most 200 characters (`sanitizeEnvelopeReason`).
  */
-function emptyBranchMessage(repo: string): string {
+function emptyBranchMessage(repo: string, refused: readonly string[] | undefined): string {
   const name = sanitizeEnvelopeReason(repo);
+  if (refused !== undefined && refused.length > 0) {
+    // A git file that is present but not a regular file (or over the read
+    // cap) is not a detached HEAD: telling the agent to switch branches
+    // would send it after a fix it cannot make. The labels are the fixed
+    // names `resolveGitContext` reports (`.git`, `HEAD`, `commondir`, ...).
+    const files = sanitizeEnvelopeReason(refused.join(", "));
+    return (
+      `no branch could be determined for repository \`${name}\`: a git file there (${files}) is present but is not a readable regular file (a FIFO, a device, a directory, a symlink that does not resolve, or a file over the read cap), or is a HEAD holding neither a ref nor an object id, or sits in a git directory that has no HEAD to read, so the branch-scoped evidence this policy checks cannot be looked up. ` +
+      "This is a damaged repository state, not a detached HEAD: switching branches will not clear it. The operator has to repair or remove that entry, then retry the command."
+    );
+  }
   return (
     `no branch is checked out in repository \`${name}\`: HEAD is detached, so the branch-scoped evidence this policy checks cannot be looked up. ` +
     "Check out a named branch there (`git switch <branch>`, or `git switch -c <branch>` for a new one), create the evidence for that branch, then retry the command."
@@ -1014,6 +1025,7 @@ function isBlankIdentifier(value: string | undefined): boolean {
 export function emptyIdentifierGuard(
   ledgerTagTemplate: string,
   values: Record<string, string>,
+  gitRefused?: readonly string[],
 ): EmptyIdentifierGuard | null {
   const refsRepo = ledgerTagTemplate.includes("${REPO}");
   const refsBranch = ledgerTagTemplate.includes("${BRANCH}");
@@ -1023,7 +1035,7 @@ export function emptyIdentifierGuard(
   if (refsBranch && isBlankIdentifier(values.BRANCH)) {
     return isBlankIdentifier(values.REPO)
       ? { identifier: "REPO", message: EMPTY_REPO_MESSAGE }
-      : { identifier: "BRANCH", message: emptyBranchMessage(values.REPO ?? "") };
+      : { identifier: "BRANCH", message: emptyBranchMessage(values.REPO ?? "", gitRefused) };
   }
   return null;
 }
@@ -1111,7 +1123,11 @@ async function evaluateOnePolicy(
   // below: that path ends in the `deny-degraded` envelope, which blames
   // an unreadable ledger and tells the agent to ask the operator to
   // check grounding-mcp, false and misleading for an empty identifier.
-  const emptyGuard = emptyIdentifierGuard(requires.ledger_tag, extract.values);
+  const emptyGuard = emptyIdentifierGuard(
+    requires.ledger_tag,
+    extract.values,
+    options.builtins.GIT_REFUSED,
+  );
   if (emptyGuard !== null) {
     return {
       policyName: policy.name,
@@ -1612,6 +1628,7 @@ export function resolveAttributedContexts(
   const cwdGuard = emptyIdentifierGuard(
     policy.requires?.ledger_tag ?? "",
     evaluateExtract(policy.trigger.extract ?? {}, extractContext, cwdBuiltins).values,
+    cwdBuiltins.GIT_REFUSED,
   );
   // "Outside every repository" is checked on the cwd's real path: the
   // builtins resolve the path as given, while git runs in the physical
@@ -1716,6 +1733,7 @@ export function resolveAttributedContexts(
         ...cwdBuiltins,
         REPO: repoOverridden ? cwdBuiltins.REPO : gitCtx.repo,
         BRANCH: branchOverridden ? cwdBuiltins.BRANCH : gitCtx.branch,
+        GIT_REFUSED: branchOverridden ? cwdBuiltins.GIT_REFUSED : gitCtx.refused,
       },
       currentHeadSha: gitCtx.sha.length > 0 ? gitCtx.sha : undefined,
       foreignTarget: { repo: gitCtx.repo, dir: resolved },

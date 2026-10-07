@@ -52,9 +52,10 @@
 // channels are mutually exclusive per delegation, decided by whether
 // `verifyDelegation` returns a `reportPathHash`.
 
-import { appendFileSync, existsSync, lstatSync, mkdirSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync } from "node:fs";
 import * as path from "node:path";
 import { readRegularFileRejectingSymlink } from "../../io/read-regular-file.js";
+import { appendRegularFileNonBlocking } from "../../io/write-regular-file.js";
 import {
   queryLedgerByTag,
   type LedgerEntry,
@@ -77,6 +78,7 @@ import {
   noApprovalMarkerReason,
   parseAutoApprove,
   readActiveClaim,
+  claimTaskIdOrNull,
   recordPermissionModeObservation,
   sanitizeForDisplay,
   selectNewestStrictSessionReport,
@@ -313,15 +315,18 @@ function readAdoptedEntries(generatedDir: string, childSessionId: string): Adopt
  * Append one adopted entry id, creating `.delegation-adoptions/` on first
  * use with the same default directory mode `atomicWriteFile` gives
  * `.delegations/` itself (the ledger FILE is 0600, like every marker).
- * `appendFileSync` opens with `O_APPEND`, so a single short write lands
+ * The append opens with `O_APPEND`, so a single short write lands
  * whole even if two hooks race on the same session; no read-modify-write,
  * therefore nothing to lose. `lstatSync` (NOT `existsSync`/`statSync`)
- * gates the append to the same end as `readRegularFileRejectingSymlink`
- * (O_NOFOLLOW at open plus fstat) gates the read: a symlink planted here would have
- * `appendFileSync` follow it and write the adoption record through to an
- * arbitrary target, same class of defense as the read side above.
+ * gives the friendly refusal first; the append itself then opens the path
+ * once with `O_NOFOLLOW | O_NONBLOCK` and checks the descriptor with
+ * `fstat` (`appendRegularFileNonBlocking`), the same defence the read side
+ * gets from `readRegularFileRejectingSymlink`: a symlink planted here
+ * cannot make the append write the adoption record through to an arbitrary
+ * target, and a FIFO swapped in after the `lstat` cannot hold the hook.
+ * Exported only so the FIFO and symlink regression tests can drive it.
  */
-function recordAdoptedEntry(
+export function recordAdoptedEntry(
   generatedDir: string,
   childSessionId: string,
   entryId: string,
@@ -354,7 +359,10 @@ function recordAdoptedEntry(
         detail: `${filePath} exists and is not a regular file, refusing to append through it`,
       };
     }
-    appendFileSync(filePath, `${entryId}\n`, { mode: 0o600 });
+    // Opened non-blocking with O_NOFOLLOW and typed on the descriptor: the
+    // lstat above is only a friendlier refusal, it cannot close the window
+    // in which a FIFO or a symlink is swapped in before this open.
+    appendRegularFileNonBlocking(filePath, `${entryId}\n`, { mode: 0o600, noFollow: true });
     return { ok: true };
   } catch (err) {
     return { ok: false, detail: (err as Error).message };
@@ -1182,7 +1190,11 @@ async function runPackHookPreToolUseCliInner(
           // inside itself and returns only a detail string, never the id,
           // so there is no resolved value to reuse without widening that
           // shared runtime's return shape for one caller.
-          taskId: readActiveClaim(generatedDir),
+          // A refused claim path reads as `null` here, which is the safe
+          // side: a delegation bound to a task is refused for a caller
+          // that names none, and an unbound delegation never consulted
+          // the claim in the first place.
+          taskId: claimTaskIdOrNull(readActiveClaim(generatedDir)),
           launcherReportPath,
         });
         if (!verified.ok) {

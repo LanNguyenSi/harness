@@ -4826,15 +4826,6 @@ describe("runInterceptCli: empty REPO / BRANCH never renders a blank ledger tag"
     }
     it.each([
       [
-        "below a HEAD-less .git directory inside a detached repository",
-        (parent: string) => {
-          const alpha = namedRepo(parent, "alpha", `${DETACHED_SHA}\n`);
-          const cwd = path.join(alpha, "eg");
-          fs.mkdirSync(path.join(cwd, ".git"), { recursive: true });
-          return cwd;
-        },
-      ],
-      [
         "a bare repository with a detached HEAD",
         (parent: string) => {
           const bare = path.join(parent, "bare.git");
@@ -4897,9 +4888,11 @@ describe("runInterceptCli: empty REPO / BRANCH never renders a blank ledger tag"
     });
 
     // Where the check cannot rule a repository out it counts the cwd as
-    // inside, even when git would find none: any `.git` or `HEAD` entry,
-    // valid or not, and an lstat error other than ENOENT. A stray `HEAD`
-    // entry is the accepted conservative cost: it denies with the hint.
+    // inside, even when git would find none: any stray `HEAD` entry and an
+    // lstat error other than ENOENT. A stray `HEAD` entry is the accepted
+    // conservative cost: it denies with the hint. (A `.git` entry, valid or
+    // not, is part of the repository instead: see the refused-entry tests
+    // below.)
     it.each([
       [
         "a stray HEAD file above it and no git directory",
@@ -4908,23 +4901,6 @@ describe("runInterceptCli: empty REPO / BRANCH never renders a blank ledger tag"
           fs.writeFileSync(path.join(umbrella, "HEAD"), "not a ref\n");
           const cwd = path.join(umbrella, "below");
           fs.mkdirSync(cwd);
-          return cwd;
-        },
-      ],
-      [
-        "a HEAD-less .git directory",
-        (parent: string) => {
-          const cwd = path.join(nonRepoCwd(parent), "eg");
-          fs.mkdirSync(path.join(cwd, ".git"), { recursive: true });
-          return cwd;
-        },
-      ],
-      [
-        "a dangling .git symlink",
-        (parent: string) => {
-          const cwd = path.join(nonRepoCwd(parent), "dangling");
-          fs.mkdirSync(cwd);
-          fs.symlinkSync(path.join(parent, "missing-gitdir"), path.join(cwd, ".git"));
           return cwd;
         },
       ],
@@ -4952,6 +4928,138 @@ describe("runInterceptCli: empty REPO / BRANCH never renders a blank ledger tag"
       expect(result.decisions.map((d) => d.outcome)).toEqual(["deny", "allow"]);
       expect(result.decisions[0]!.emptyIdentifier).toBe("REPO");
       expect(ledger.tags).toEqual(["preflight:feature"]);
+    });
+
+    // A `.git` entry that exists but does not resolve is part of the cwd
+    // repository (task b56d95d3, operator decision): the work-tree walk
+    // refuses it instead of walking past it, which is the same call this
+    // module's own "could this be inside a repository" walk makes. The cwd
+    // context therefore resolves a REPO (the directory's name) and no
+    // branch, and the deny names the unreadable git file, not a detached HEAD.
+    it("a cwd with a dangling .git symlink keeps its cwd context next to `git -C <B> push`, denied as an unreadable git file", async () => {
+      const parent = fs.realpathSync(tmpRoot());
+      const target = namedRepo(parent, "beta", "ref: refs/heads/feature\n");
+      const cwd = path.join(nonRepoCwd(parent), "dangling");
+      fs.mkdirSync(cwd);
+      fs.symlinkSync(path.join(parent, "missing-gitdir"), path.join(cwd, ".git"));
+
+      const ledger = factsLedger("preflight:feature ready:true");
+      const { result } = await run({
+        policy: templatePolicy("preflight-before-push"),
+        command: `git -C ${target} push`,
+        cwd,
+        ledger,
+      });
+      expect(result.blocked).toBe(true);
+      expect(result.decisions.map((d) => d.outcome)).toEqual(["deny", "allow"]);
+      expect(result.decisions[0]!.emptyIdentifier).toBe("BRANCH");
+      const reason = result.decisions[0]!.reason;
+      expect(reason).toContain("a git file there (.git) is present but is not a readable regular file");
+      expect(reason).not.toContain("HEAD is detached");
+      expect(ledger.tags).toEqual(["preflight:feature"]);
+    });
+
+    // A `.git` directory with no `HEAD`, a `HEAD` that dangles or loops, an
+    // unsearchable `.git` directory and a `.git` file whose `gitdir:` target
+    // is missing are all a repository whose branch cannot be read (task
+    // b56d95d3, operator decision): never "outside every repository", never
+    // walked past to the enclosing one. The cwd context resolves the
+    // directory's name and no branch, and the deny names the unreadable git
+    // file, not a detached HEAD.
+    const refusedEntries: Array<[string, (dir: string) => void, string]> = [
+      ["a .git directory with no HEAD", (dir) => fs.mkdirSync(path.join(dir, ".git")), ".git directory has no HEAD"],
+      [
+        "a .git directory whose HEAD is a dangling symlink",
+        (dir) => {
+          fs.mkdirSync(path.join(dir, ".git"));
+          fs.symlinkSync(path.join(dir, "missing-head"), path.join(dir, ".git", "HEAD"));
+        },
+        "dangling HEAD",
+      ],
+      [
+        "a .git directory whose HEAD is a symlink loop",
+        (dir) => {
+          fs.mkdirSync(path.join(dir, ".git"));
+          fs.symlinkSync(path.join(dir, ".git", "HEAD"), path.join(dir, ".git", "HEAD"));
+        },
+        "looping HEAD",
+      ],
+      [
+        "a .git file whose gitdir target is missing",
+        (dir) => fs.writeFileSync(path.join(dir, ".git"), `gitdir: ${path.join(dir, "no-such-gitdir")}\n`),
+        "missing gitdir",
+      ],
+    ];
+    it.each(refusedEntries)(
+      "a cwd with %s keeps its cwd context next to `git -C <B> push`, denied as an unreadable git file",
+      async (_label, plant) => {
+        const parent = fs.realpathSync(tmpRoot());
+        const target = namedRepo(parent, "beta", "ref: refs/heads/feature\n");
+        const cwd = path.join(nonRepoCwd(parent), "eg");
+        fs.mkdirSync(cwd);
+        plant(cwd);
+
+        const ledger = factsLedger("preflight:feature ready:true");
+        const { result } = await run({
+          policy: templatePolicy("preflight-before-push"),
+          command: `git -C ${target} push`,
+          cwd,
+          ledger,
+        });
+        expect(result.blocked).toBe(true);
+        expect(result.decisions.map((d) => d.outcome)).toEqual(["deny", "allow"]);
+        expect(result.decisions[0]!.emptyIdentifier).toBe("BRANCH");
+        const reason = result.decisions[0]!.reason;
+        expect(reason).toContain("a git file there (");
+        expect(reason).not.toContain("HEAD is detached");
+        expect(ledger.tags).toEqual(["preflight:feature"]);
+      },
+    );
+
+    it("a HEAD-less .git directory nested in a detached repository is its own repository: its cwd context denies, the enclosing repository is not consulted", async () => {
+      const parent = fs.realpathSync(tmpRoot());
+      const target = namedRepo(parent, "beta", "ref: refs/heads/feature\n");
+      const alpha = namedRepo(parent, "alpha", "ref: refs/heads/feature\n");
+      const cwd = path.join(alpha, "eg");
+      fs.mkdirSync(path.join(cwd, ".git"), { recursive: true });
+
+      // alpha's own branch would satisfy the fact; resolving the nested
+      // directory as alpha (the walk-up) would therefore allow it.
+      const ledger = factsLedger("preflight:feature ready:true");
+      const { result } = await run({
+        policy: templatePolicy("preflight-before-push"),
+        command: `git -C ${target} push`,
+        cwd,
+        ledger,
+      });
+      expect(result.blocked).toBe(true);
+      expect(result.decisions[0]!.emptyIdentifier).toBe("BRANCH");
+      expect(result.decisions[0]!.reason).toContain("a git file there (HEAD)");
+    });
+
+    // The deny text for a refused git file must follow the TARGET the
+    // command names, not the working directory: a `git -C <B> push` whose
+    // target B has the unreadable `.git` is denied as an unreadable git file
+    // naming B, from a working directory that has no repository at all.
+    it("a foreign `git -C <B> push` target with a dangling .git is denied as an unreadable git file, naming B", async () => {
+      const parent = fs.realpathSync(tmpRoot());
+      const beta = path.join(parent, "beta");
+      fs.mkdirSync(beta);
+      fs.symlinkSync(path.join(parent, "missing-gitdir"), path.join(beta, ".git"));
+
+      const ledger = factsLedger("preflight:feature ready:true");
+      const { result } = await run({
+        policy: templatePolicy("preflight-before-push"),
+        command: `git -C ${beta} push`,
+        cwd: nonRepoCwd(parent),
+        ledger,
+      });
+      expect(result.blocked).toBe(true);
+      expect(result.decisions[0]!.emptyIdentifier).toBe("BRANCH");
+      const reason = result.decisions[0]!.reason;
+      expect(reason).toContain("repository `beta`");
+      expect(reason).toContain("a git file there (.git) is present but is not a readable regular file");
+      expect(reason).not.toContain("HEAD is detached");
     });
 
     it.skipIf(process.getuid?.() === 0)(

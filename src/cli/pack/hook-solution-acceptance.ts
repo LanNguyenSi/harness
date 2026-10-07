@@ -27,6 +27,7 @@
 import * as path from "node:path";
 import {
   readActiveClaim,
+  claimTaskIdOrNull,
 } from "../../policy-packs/builtin/understanding-before-execution-runtime.js";
 import {
   DEFAULT_PUSH_BASH_RE,
@@ -674,11 +675,30 @@ async function runPackHookSolutionAcceptanceCliInner(
           manifestPath,
         })
       : undefined);
+  // The claim read is three-way (task b56d95d3): a claim path that holds
+  // something unreadable (a FIFO, a directory, an oversized or malformed
+  // file, a link that does not resolve) is NOT "no claim". Falling through
+  // to the SOLUTION_VERDICT_ID knob there would let a refused claim file
+  // redirect a claimed task's verdict, which the precedence above forbids.
+  const claimRead =
+    opts.activeClaim === undefined && generatedDir !== undefined
+      ? readActiveClaim(generatedDir)
+      : undefined;
+  if (claimRead?.kind === "refused") {
+    const reason =
+      `the active-claim file could not be read (${claimRead.reason}), so the task this completion belongs to is unknown and no verdict id can be derived.\n` +
+      `\n` +
+      `The operator has to repair it: remove or replace the active-claim entry in harness.generated/, then call mcp__agent-tasks__task_start again to claim the task. ${VERDICT_ID_ENV} is deliberately not consulted while the claim file is unreadable.`;
+    const diagnostic = `BLOCK — ${reason}`;
+    note(diagnostic);
+    stdout.write(`${blockJson(actionLabel, toolName, "<unreadable-active-claim>", reason, configUx, sessionId)}\n`);
+    return { exitCode: 0, blocked: true, diagnostic };
+  }
   const activeClaim =
     opts.activeClaim !== undefined
       ? opts.activeClaim
-      : generatedDir !== undefined
-        ? readActiveClaim(generatedDir)
+      : claimRead !== undefined
+        ? claimTaskIdOrNull(claimRead)
         : null;
   const taskId = activeClaim ?? resolveExplicitVerdictId(env);
   if (!taskId) {

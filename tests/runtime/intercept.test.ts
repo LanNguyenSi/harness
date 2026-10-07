@@ -2384,6 +2384,37 @@ describe("intercept: empty REPO / BRANCH never renders a blank ledger tag", () =
     },
   );
 
+  it("a blank branch caused by a refused git file names the unreadable file, not a detached HEAD", async () => {
+    const ledger = makeLedger({ kind: "ok", entries: [factEntry("preflight:other-branch ready:true")] });
+    const result = await intercept({
+      manifest: manifest([templatePolicy("preflight-before-push")]),
+      event: bashEvent("git push"),
+      ledger,
+      builtins: { ...DETACHED, GIT_REFUSED: ["HEAD"] },
+      now: NOW,
+    });
+    expect(result.decisions[0]?.outcome).toBe("deny");
+    expect(result.decisions[0]?.emptyIdentifier).toBe("BRANCH");
+    expect(ledger.queryCalls).toEqual([]);
+    const reason = result.blockJson?.reason ?? "";
+    expect(reason).toContain("a git file there (HEAD) is present but is not a readable regular file");
+    expect(reason).toContain("not a detached HEAD");
+    expect(reason).not.toContain("HEAD is detached");
+    expect(reason).not.toContain("git switch");
+  });
+
+  it("control: the same blank branch with nothing refused is still the detached-HEAD reason", async () => {
+    const ledger = makeLedger({ kind: "ok", entries: [] });
+    const result = await intercept({
+      manifest: manifest([templatePolicy("preflight-before-push")]),
+      event: bashEvent("git push"),
+      ledger,
+      builtins: { ...DETACHED, GIT_REFUSED: [] },
+      now: NOW,
+    });
+    expect(result.blockJson?.reason ?? "").toContain("HEAD is detached");
+  });
+
   it("a branch-only policy outside a repo gets the no-repository reason, not the detached-HEAD one", async () => {
     const ledger = makeLedger({ kind: "ok", entries: [] });
     const result = await intercept({

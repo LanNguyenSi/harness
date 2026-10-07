@@ -99,6 +99,7 @@ function makeLinkedWorktreeFixture(defaultBranch = "main"): {
     `ref: refs/remotes/origin/${defaultBranch}\n`,
   );
   fs.mkdirSync(perWorktreeDir, { recursive: true });
+  fs.writeFileSync(path.join(perWorktreeDir, "HEAD"), "ref: refs/heads/main\n");
   // Real git writes this relative to the per-worktree directory itself.
   fs.writeFileSync(path.join(perWorktreeDir, "commondir"), "../..\n");
 

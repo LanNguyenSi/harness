@@ -68,6 +68,7 @@
 import {
   clearActiveClaim,
   readActiveClaim,
+  claimTaskIdOrNull,
   writeActiveClaim,
 } from "../../policy-packs/builtin/understanding-before-execution-runtime.js";
 import {
@@ -208,7 +209,9 @@ function releaseResult(
   stderr: NodeJS.WritableStream,
 ): PackHookTrackActiveClaimResult {
   const actedOnTaskId = taskIdFromInput(toolInput) || taskIdFromToolResponse(toolResponse);
-  const currentClaim = readActiveClaim(generatedDir);
+  // Only a readable claim can be "another task's claim, keep it"; a refused
+  // path (FIFO, directory, ...) is cleared like an absent one, best effort.
+  const currentClaim = claimTaskIdOrNull(readActiveClaim(generatedDir));
 
   if (currentClaim !== null && actedOnTaskId !== "" && currentClaim !== actedOnTaskId) {
     const diagnostic = `harness pack hook track-active-claim: kept active-claim ${currentClaim}: ${toolName} on ${actedOnTaskId}`;

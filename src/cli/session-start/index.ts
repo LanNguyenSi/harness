@@ -27,6 +27,7 @@ import {
   resolveGitContext,
   resolveScopedProjectName,
 } from "../../runtime/index.js";
+import { writeRegularFileNonBlocking } from "../../io/write-regular-file.js";
 import { resolveManifestLedgerWriter } from "../../runtime/ledger-writer.js";
 import { resolveGeneratedDir } from "../../runtime/pending-approval.js";
 import { resolveReadSessionId } from "../../runtime/session-id.js";
@@ -432,7 +433,13 @@ function persistFailLog(
       logDir,
       `${FAIL_LOG_PREFIX}${sanitizeForFilename(repo).slice(0, 100)}-${timestamp}-${unique}.json`,
     );
-    fs.writeFileSync(filePath, `${JSON.stringify(json, null, 2)}\n`, "utf8");
+    // The name is one this call just generated (timestamp plus a random
+    // suffix), so nothing legitimate is ever at it: an exclusive create
+    // (`O_EXCL`) fails with `EEXIST` on a planted symlink, FIFO or file
+    // instead of writing through or truncating it. The open is also
+    // non-blocking and typed on the opened descriptor, like every hook-path
+    // write.
+    writeRegularFileNonBlocking(filePath, `${JSON.stringify(json, null, 2)}\n`, { create: "exclusive" });
   } catch (err) {
     return { ok: false, reason: (err as Error).message };
   }

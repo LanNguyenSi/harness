@@ -2,7 +2,11 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-10-07T10:27:00Z, task b56d95d3 (review fixes, HEAD content and symlinked HEAD): `findGitEntry` and `resolveGitContext` read a git directory's `HEAD` through the new `readHead` in `src/runtime/git-context.ts`: a `HEAD` whose trimmed content is neither `ref: refs/<path>` nor a 40- or 64-hex object id is refused (`HEAD`), in a `.git` directory and in a `gitdir:` target, and a `HEAD` symlink is read by its link text (`refs/heads/<name>` is that branch, packed or unborn included; any other link text is refused). `gate-fail-posture-matrix.md` lists both in the branch-protection paragraph, re-read against `readHead` and `findGitEntry`. The refused-file texts in `hook-branch-protection.ts` and `runtime/intercept.ts` name a `HEAD` holding neither a ref nor an object id; `debug-verb-selection.md` and `policy-engine-producer-wiring.md` describe that text as naming a git file refused as unreadable, which still holds, and `codex-adapter-parity-gaps.md`, `pause-vs-gate-kill-switch.md` and `quote-model-divergence.md` make no claim about it (re-read): timestamp-only re-stamp. Citations the source edit shifted were re-pointed with their anchors verified (the matrix's `refused.length > 0` citation into `hook-branch-protection.ts` and its `refusedBefore` citation into `git-context.ts`, and the two `fs.realpathSync(commonDir)` citations in this log); `okf-kit check --require-anchors docs/okf` reports 0 findings after the re-stamp.
+- 2026-10-07T09:58:00Z, task b56d95d3 (review round 2b, merge of master): `findGitEntry` also refuses a `.git` file without a `gitdir:` line (`.git`) and a linked-worktree or submodule gitdir that exists but holds no `HEAD` (`HEAD`), which the previous entry listed as not refused; `gate-fail-posture-matrix.md` moved both into the refused list and its `refused: "HEAD"` / `".git"` claims were re-read against `src/runtime/git-context.ts` (the `.git`-directory, `.git`-file and pointer-target branches of `findGitEntry`, `refusedHead`). Master moved the command wiring out of `src/cli/index.ts` (task 87b419dc): the `claim:` warning `harness approve understanding` prints for a refused active-claim file now lives in `src/cli/register-approve-group.ts`, which `understanding-gate-lockout-recovery.md` lists as a source and whose claims were re-read against it. `codex-adapter-parity-gaps.md`, `pause-vs-gate-kill-switch.md` and `policy-engine-producer-wiring.md` changed only through the merge (moved citations, no claim of theirs touched): timestamp-only re-stamp. The two `git-context.ts` citations this branch's source edits shifted (`:307-308`, `:594`) were re-pointed in the matrix and this log; `okf-kit check --require-anchors docs/okf` reports 0 findings after the re-stamp commit.
+- 2026-10-07T09:14:11Z, task b56d95d3 (review round 2): `findGitEntry` now refuses every present-but-unresolvable git entry instead of reading it as outside every repository (a `.git` directory with no, dangling, looping or non-regular `HEAD`, an unsearchable `.git` directory, a `.git` file whose `gitdir:` target is missing or not a directory, a linked gitdir whose `HEAD` is a link that does not resolve); an absent `.git`, or an lstat of it failing with `ENOTDIR` or `EACCES`, keeps the walk-up. `gate-fail-posture-matrix.md` lists the cases (the branch-protection paragraph, with its two shifted citations re-pointed); the empty-branch text in `runtime/intercept.ts` now also names a git directory with no HEAD, and the refused-file reason in `hook-branch-protection.ts` says the entry may not resolve. `debug-verb-selection.md` and `policy-engine-producer-wiring.md` were re-read against the changed text (their refused-file claims hold), `codex-adapter-parity-gaps.md`, `pause-vs-gate-kill-switch.md` and `quote-model-divergence.md` against `runtime/intercept.ts` (one message string changed, no claim of theirs touched): timestamp-only re-stamp. The preflight fail log in `session-start/index.ts` creates its generated name exclusively; no doc claims otherwise. Citations shifted by the source edits were re-pointed (`git-context.ts`, `hook-branch-protection.ts`, `session-start/index.ts` in the matrix and this log); `okf-kit check --require-anchors docs/okf` reports 0 findings.
 - 2026-10-07T08:28:24Z, task 87b419dc: the remaining command wiring moved out of `src/cli/index.ts` into the `src/cli/register-*-group.ts` files (pure cut and paste, `--help` output byte-identical; `createCliHelpers` now lives in `src/cli/cli-helpers.ts`). `pause-vs-gate-kill-switch.md` cites the `gate` comment in `src/cli/register-gate-gc-group.ts` and lists that file instead of `src/cli/index.ts`; `understanding-gate-lockout-recovery.md` cites the `approve understanding` flags in `src/cli/register-approve-group.ts` and lists it instead of `src/cli/index.ts`; `debug-verb-selection.md` names `src/cli/register-explain-group.ts` for the `explain` family and keeps `src/cli/index.ts` for `defaultVersionProbe`. Each re-pointed citation was checked to carry the same text as before. `docs/CLI.md` changed only by two `harness preflight` / `harness session-start preflight` line citations, so `codex-adapter-parity-gaps.md`, `evidence-ledger-trust-boundary.md` and `policy-engine-producer-wiring.md` (which list it) had no claim affected; timestamp-only re-stamp. `pause-vs-gate-kill-switch.md`, `debug-verb-selection.md` and `understanding-gate-lockout-recovery.md` also list sources changed by the doctor and reports-directory commits that landed after their stamps, and those commits updated the docs in the same change, so the re-stamp covers them too. Re-stamped after the source commit.
+- 2026-10-07T08:18:20Z, task b56d95d3: `readActiveClaim` (`active-claim.ts`) returns claim / absent / refused and its consumers fail closed on refused (`hook-solution-acceptance.ts`, `markers.ts`, `task-markers.ts`; `approve/understanding.ts` and `cli/register-approve-group.ts` print a `claim:` warning); new `src/io/write-regular-file.ts` carries every hook-path write (toolchain-parity snapshot, preflight fail log, stay-in-scope audit, adoption ledger in `hook-pre-tool-use.ts`, signing key rewrite, lock target); `findGitEntry` refuses a `.git` that exists but does not resolve; `resolveKubeContext` reports an unreadable kubeconfig and `policy/intercept.ts` writes it to stderr; the empty-branch deny in `runtime/intercept.ts` names a refused git file (`GIT_REFUSED`, `io/extract.ts`, `dry-run.ts`). Re-verified and re-stamped: `evidence-ledger-trust-boundary.md` (new write-side paragraph, two new sources), `gate-fail-posture-matrix.md` (`.git` and refused-claim statements), `understanding-gate-lockout-recovery.md` (task binding on a refused claim), `debug-verb-selection.md` and `policy-engine-producer-wiring.md` (empty-branch text for a refused file); `codex-adapter-parity-gaps.md`, `pause-vs-gate-kill-switch.md`, `quote-model-divergence.md` and `understanding-gate-auto-mode-signals.md` re-read against the changed sources, no claim of theirs touched, timestamp-only re-stamp. The citations the source and doc edits shifted were re-pointed by mapping each cited line through the commit's diff (`docs/decisions/2026-08-27-ug-auto-mode-approval.md`, the okf docs and `log.md`, `docs/CLI.md`); `okf-kit check --require-anchors docs/okf` reports 0 findings after the re-stamp.
 - 2026-10-07T05:25:36Z, task 6e001bfc (review round 2 notes): the byte-budget re-approval claim is qualified in `persisted-reports.ts` JSDoc, the CHANGELOG and `understanding-gate-lockout-recovery.md` (approval opens the gate only when the session's report is the newest by name; approval rewrites in place). `understanding-gate-lockout-recovery.md` and `evidence-ledger-trust-boundary.md` re-read against the changed source, timestamp re-stamped.
 - 2026-10-07T04:56:30Z, task 6e001bfc (review round 2): `renderReportsDirTooLargeNotice` now takes the bound crossed (`entries` or `bytes`, carried as `PersistedReportEvidence.reportsDirTooLarge`): the entry-count text is unchanged, the 32 MiB byte-budget text says to run `harness approve understanding` to approve the newest report (re-approval opens the gate there when the session's report is the newest by name, measured by a reviewer; an older session report behind more than 32 MiB of newer reports stays denied, measured in the round-2 review) and names the cleanup if the deny persists; `understanding-gate-lockout-recovery.md` describes both and was re-stamped. `understanding-gate-auto-mode-signals.md` re-verified against `hook-pre-tool-use.ts` (the permission_mode read, step 9 hand-off and escape-branch `ask` claims hold), `docs/policy-packs/understanding-before-execution.md` (the `auto_approve` rows and the 2 s `report_scan.max_wait` default match `auto-approve.ts`) and `read-only-bash.ts` (the doc makes no claim about it): one claim was stale on base, that the Claude hook is the only reader of `permission_mode` on the gate path, since the Codex PreToolUse hook (slice 2) reads it and hands it to the same `attemptAutoApproval`; corrected, `hook-codex-pre-tool-use.ts` added to its sources, timestamp re-stamped. `codex-adapter-parity-gaps.md`, `evidence-ledger-trust-boundary.md` and `gate-fail-posture-matrix.md` were re-read after the round-2 source edits (none says anything about the approve-again instruction for a too-large directory), timestamp-only re-stamp.
 - 2026-10-07T04:30:48Z, task 6e001bfc (re-stamp, second part): `codex-adapter-parity-gaps.md` (the Codex hook's deny text for the bound case now names the cleanup; the doc's claim that `harness approve understanding` works the same after a Codex block concerns the ordinary block and stays true) and `debug-verb-selection.md` (doctor gained one warning-only section; its exit-status claim, warnings alone exit 0, is unchanged) were re-read against the changed sources; timestamp-only re-stamp.
@@ -825,7 +829,7 @@
   states only what `[0.28.0]` documents, dropping the unsourced
   "intentionally stays loose" design claim it carried at first; each
   rewrite kept the comment at a 4-line span so no numbered citation
-  below it shifted; verified `src/cli/approve/understanding.ts:792#"resolveApprovalSessionId"`
+  below it shifted; verified `src/cli/approve/understanding.ts:802#"resolveApprovalSessionId"`
   (this doc's own `understanding-gate-lockout-recovery.md` citation)
   still reads `resolveApprovalSessionId` after the edits, unchanged.
 
@@ -852,7 +856,7 @@
   Prior Art's presence (required since 0.4.0, same citation
   `` `CHANGELOG.md:#0.28.0` ``) and cannot judge the section's content,
   and that the approve CLI is the boundary that refuses a hollow list.
-  The edited span stayed at 4 lines (`understanding.ts` lines 483-486); `src/cli/approve/understanding.ts:792#"resolveApprovalSessionId"` still reads
+  The edited span stayed at 4 lines (`understanding.ts` lines 483-486); `src/cli/approve/understanding.ts:802#"resolveApprovalSessionId"` still reads
   `resolveApprovalSessionId` and the file's total line count is
   unchanged, so the citation above it does not shift.
   `understanding-gate-lockout-recovery.md`'s `timestamp:` is re-stamped
@@ -999,7 +1003,7 @@
   edits shifted, enumerated from the commit range rather than counted by
   hand (`git diff <base>..HEAD -U0 -- docs`, then a per-file multiset diff
   of every `path:N[-M]` token), and all re-pointed here:
-  `src/runtime/git-context.ts:392` to `:393` (this file, both occurrences,
+  `src/runtime/git-context.ts:414` to `:415` (this file, both occurrences,
   for the new `io/project-name.ts` import); `src/probes/memory.ts:277` to
   `:276` (this file and `docs/decisions/2026-09-08-preflight-floors.md`,
   for the narrowed `substituteProject` comment); and the `sha256: string;`
@@ -1049,7 +1053,7 @@
   (previously line 179). In `docs/decisions/2026-09-08-preflight-floors.md`:
   `src/probes/memory.ts:276#"const parsed = parseProbedVersion(stdout);"`
   (previously line 268). In this file:
-  `src/runtime/git-context.ts:519#"fs.realpathSync(commonDir)"` (previously
+  `src/runtime/git-context.ts:663#"fs.realpathSync(commonDir)"` (previously
   line 387) and
   `src/cli/doctor/format.ts:161#"sessionStartPreflightSetupVersion.projectName"`
   (previously line 139). Four module docs were re-stamped for the
@@ -1347,7 +1351,7 @@
   first shipped full silence here, round 1's own review found the
   silence itself was the residual gap the task's goal named ("no
   diagnostic anywhere"), closed in round 2. The producer's own stderr
-  diagnostic (`src/cli/session-start/index.ts:632#"the project-scoped"`)
+  diagnostic (`src/cli/session-start/index.ts:639#"the project-scoped"`)
   no longer blames "the project layer" for a
   base- or machine-layer parse failure (round 1's lead-in did); both
   this diagnostic and the new `doctor` finding now collapse a
@@ -1362,7 +1366,7 @@
   `{project}` substitution, both left unvalidated and out of scope.
   `deriveProjectName` now resolves the common dir through
   `fs.realpathSync` before taking its basename
-  (`src/runtime/git-context.ts:519#"fs.realpathSync(commonDir)"`), so a
+  (`src/runtime/git-context.ts:663#"fs.realpathSync(commonDir)"`), so a
   symlinked checkout resolves the SAME project layer as the real
   directory (decision D-021a's "repository identity is the common dir"
   rule); best-effort, a realpath failure falls back to the un-resolved
@@ -2544,7 +2548,7 @@
   landed at lines 969-990 (`git show b24af93 -- src/cli/pack/hook-pre-tool-use.ts`
   confirms the hunk starts at line 969); the round-3 entry's own
   freshness conclusion is unaffected, since `understanding-gate-lockout-recovery.md`'s
-  citation at `hook-pre-tool-use.ts:902` is well before either range.
+  citation at `hook-pre-tool-use.ts:910` is well before either range.
   `okf-kit check --json docs/okf` on the committed tree shows 0 errors,
   0 warnings after the re-stamp.
 - 2026-09-02T05:44:14Z, task `204efc56` round 3 (further review fixes
@@ -2566,7 +2570,7 @@
   `probeRegularFilePresence`, or cite a span of `hook-pre-tool-use.ts`
   inside this round's edited region (lines ~940-978): `grep` across all 6
   for those terms found only `understanding-gate-lockout-recovery.md`'s
-  pre-existing citation at `src/cli/pack/hook-pre-tool-use.ts:1007#"writePendingApproval(generatedDir, sessionId);"`,
+  pre-existing citation at `src/cli/pack/hook-pre-tool-use.ts:1015#"writePendingApproval(generatedDir, sessionId);"`,
   well before the edited region, still resolving. `evidence-ledger-trust-boundary.md`
   was NOT flagged stale this round: it was itself edited (new
   `probeRegularFilePresence` paragraph, `delegation-markers.ts` added to
@@ -2618,7 +2622,7 @@
   describes only the new reason itself; neither touches any claim or
   cited span in these 7 docs (the one line-numbered citation among them,
   `understanding-gate-lockout-recovery.md`'s
-  `src/cli/pack/hook-pre-tool-use.ts:1007#"writePendingApproval(generatedDir, sessionId);"`,
+  `src/cli/pack/hook-pre-tool-use.ts:1015#"writePendingApproval(generatedDir, sessionId);"`,
   sits well before the edited comment and still resolves). Timestamp-only
   re-stamp on all 7; no content changed. `okf-kit check --json docs/okf`
   on the committed tree shows 0 errors, 0 warnings after the re-stamp.
@@ -2635,12 +2639,12 @@
     `isReadOnlyCurlCommand` as a shipped floor and is rewritten for D-013.
   - `policy-engine-producer-wiring.md`: the same off-by-three re-point to
     `src/runtime/intercept.ts:538-623`, same verification. Every other
-    citation in the file (`src/cli/policy/intercept.ts:125-127`,
+    citation in the file (`src/cli/policy/intercept.ts:126-128`,
     `src/cli/validate/checks.ts:306-337`, `src/schema/tools.ts:20`,
     `src/policies/ledger-client.ts:499`,
-    `src/cli/policy/intercept.ts:387`) re-opened and confirmed unchanged.
+    `src/cli/policy/intercept.ts:388`) re-opened and confirmed unchanged.
   - `gate-fail-posture-matrix.md`: its citation of the same file moved
-    from lines 1129-1157 to `src/runtime/intercept.ts:1132-1160`,
+    from lines 1129-1157 to `src/runtime/intercept.ts:1148-1176`,
     verified against lines 1099-1127 at `72ba45a`.
   - `debug-verb-selection.md`: its `test-risk` paragraph listed a
     `curl` read-only floor among the built-ins. Corrected to name the
