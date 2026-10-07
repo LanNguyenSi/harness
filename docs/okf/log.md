@@ -2,6 +2,7 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-10-07T09:14:11Z, task b56d95d3 (review round 2): `findGitEntry` now refuses every present-but-unresolvable git entry instead of reading it as outside every repository (a `.git` directory with no, dangling, looping or non-regular `HEAD`, an unsearchable `.git` directory, a `.git` file whose `gitdir:` target is missing or not a directory, a linked gitdir whose `HEAD` is a link that does not resolve); an absent `.git`, or an lstat of it failing with `ENOTDIR` or `EACCES`, keeps the walk-up. `gate-fail-posture-matrix.md` lists the cases (the branch-protection paragraph, with its two shifted citations re-pointed); the empty-branch text in `runtime/intercept.ts` now also names a git directory with no HEAD, and the refused-file reason in `hook-branch-protection.ts` says the entry may not resolve. `debug-verb-selection.md` and `policy-engine-producer-wiring.md` were re-read against the changed text (their refused-file claims hold), `codex-adapter-parity-gaps.md`, `pause-vs-gate-kill-switch.md` and `quote-model-divergence.md` against `runtime/intercept.ts` (one message string changed, no claim of theirs touched): timestamp-only re-stamp. The preflight fail log in `session-start/index.ts` creates its generated name exclusively; no doc claims otherwise. Citations shifted by the source edits were re-pointed (`git-context.ts`, `hook-branch-protection.ts`, `session-start/index.ts` in the matrix and this log); `okf-kit check --require-anchors docs/okf` reports 0 findings.
 - 2026-10-07T08:18:20Z, task b56d95d3: `readActiveClaim` (`active-claim.ts`) returns claim / absent / refused and its consumers fail closed on refused (`hook-solution-acceptance.ts`, `markers.ts`, `task-markers.ts`; `approve/understanding.ts` and `cli/index.ts` print a `claim:` warning); new `src/io/write-regular-file.ts` carries every hook-path write (toolchain-parity snapshot, preflight fail log, stay-in-scope audit, adoption ledger in `hook-pre-tool-use.ts`, signing key rewrite, lock target); `findGitEntry` refuses a `.git` that exists but does not resolve; `resolveKubeContext` reports an unreadable kubeconfig and `policy/intercept.ts` writes it to stderr; the empty-branch deny in `runtime/intercept.ts` names a refused git file (`GIT_REFUSED`, `io/extract.ts`, `dry-run.ts`). Re-verified and re-stamped: `evidence-ledger-trust-boundary.md` (new write-side paragraph, two new sources), `gate-fail-posture-matrix.md` (`.git` and refused-claim statements), `understanding-gate-lockout-recovery.md` (task binding on a refused claim), `debug-verb-selection.md` and `policy-engine-producer-wiring.md` (empty-branch text for a refused file); `codex-adapter-parity-gaps.md`, `pause-vs-gate-kill-switch.md`, `quote-model-divergence.md` and `understanding-gate-auto-mode-signals.md` re-read against the changed sources, no claim of theirs touched, timestamp-only re-stamp. The citations the source and doc edits shifted were re-pointed by mapping each cited line through the commit's diff (`docs/decisions/2026-08-27-ug-auto-mode-approval.md`, the okf docs and `log.md`, `docs/CLI.md`); `okf-kit check --require-anchors docs/okf` reports 0 findings after the re-stamp.
 - 2026-10-07T05:25:36Z, task 6e001bfc (review round 2 notes): the byte-budget re-approval claim is qualified in `persisted-reports.ts` JSDoc, the CHANGELOG and `understanding-gate-lockout-recovery.md` (approval opens the gate only when the session's report is the newest by name; approval rewrites in place). `understanding-gate-lockout-recovery.md` and `evidence-ledger-trust-boundary.md` re-read against the changed source, timestamp re-stamped.
 - 2026-10-07T04:56:30Z, task 6e001bfc (review round 2): `renderReportsDirTooLargeNotice` now takes the bound crossed (`entries` or `bytes`, carried as `PersistedReportEvidence.reportsDirTooLarge`): the entry-count text is unchanged, the 32 MiB byte-budget text says to run `harness approve understanding` to approve the newest report (re-approval opens the gate there when the session's report is the newest by name, measured by a reviewer; an older session report behind more than 32 MiB of newer reports stays denied, measured in the round-2 review) and names the cleanup if the deny persists; `understanding-gate-lockout-recovery.md` describes both and was re-stamped. `understanding-gate-auto-mode-signals.md` re-verified against `hook-pre-tool-use.ts` (the permission_mode read, step 9 hand-off and escape-branch `ask` claims hold), `docs/policy-packs/understanding-before-execution.md` (the `auto_approve` rows and the 2 s `report_scan.max_wait` default match `auto-approve.ts`) and `read-only-bash.ts` (the doc makes no claim about it): one claim was stale on base, that the Claude hook is the only reader of `permission_mode` on the gate path, since the Codex PreToolUse hook (slice 2) reads it and hands it to the same `attemptAutoApproval`; corrected, `hook-codex-pre-tool-use.ts` added to its sources, timestamp re-stamped. `codex-adapter-parity-gaps.md`, `evidence-ledger-trust-boundary.md` and `gate-fail-posture-matrix.md` were re-read after the round-2 source edits (none says anything about the approve-again instruction for a too-large directory), timestamp-only re-stamp.
@@ -1049,7 +1050,7 @@
   (previously line 179). In `docs/decisions/2026-09-08-preflight-floors.md`:
   `src/probes/memory.ts:276#"const parsed = parseProbedVersion(stdout);"`
   (previously line 268). In this file:
-  `src/runtime/git-context.ts:541#"fs.realpathSync(commonDir)"` (previously
+  `src/runtime/git-context.ts:591#"fs.realpathSync(commonDir)"` (previously
   line 387) and
   `src/cli/doctor/format.ts:161#"sessionStartPreflightSetupVersion.projectName"`
   (previously line 139). Four module docs were re-stamped for the
@@ -1347,7 +1348,7 @@
   first shipped full silence here, round 1's own review found the
   silence itself was the residual gap the task's goal named ("no
   diagnostic anywhere"), closed in round 2. The producer's own stderr
-  diagnostic (`src/cli/session-start/index.ts:636#"the project-scoped"`)
+  diagnostic (`src/cli/session-start/index.ts:639#"the project-scoped"`)
   no longer blames "the project layer" for a
   base- or machine-layer parse failure (round 1's lead-in did); both
   this diagnostic and the new `doctor` finding now collapse a
@@ -1362,7 +1363,7 @@
   `{project}` substitution, both left unvalidated and out of scope.
   `deriveProjectName` now resolves the common dir through
   `fs.realpathSync` before taking its basename
-  (`src/runtime/git-context.ts:541#"fs.realpathSync(commonDir)"`), so a
+  (`src/runtime/git-context.ts:591#"fs.realpathSync(commonDir)"`), so a
   symlinked checkout resolves the SAME project layer as the real
   directory (decision D-021a's "repository identity is the common dir"
   rule); best-effort, a realpath failure falls back to the un-resolved
