@@ -3,7 +3,7 @@ type: overview
 title: Gate fail-posture matrix
 description: Which harness enforcement gates fail OPEN vs fail CLOSED when their evidence source (grounding-mcp ledger, approval markers, verdict files, probes) is unreachable or errors, with the exact code paths and override knobs.
 tags: [gates, fail-open, fail-closed, enforcement]
-timestamp: 2026-10-07T05:47:34Z
+timestamp: 2026-10-07T05:52:50Z
 sources:
   - src/cli/pack/auto-approve-path.ts
   - src/io/atomic-write.ts
@@ -97,7 +97,7 @@ DISTINCT repository a trigger-satisfying command segment names (its own
 persisting `cd`) — the session's own cwd context is ALWAYS also
 evaluated, never dropped except for a cwd outside every repository next to a resolved target (see the exception below; `resolveAttributedContexts`; the "always add, never replace" rule
 D-021 and its four-review-pass history are restated in-tree in that
-function's own doc comment, `src/runtime/intercept.ts:1526-1560#"disproved"`; the
+function's own doc comment, `src/runtime/intercept.ts:1528-1562#"disproved"`; the
 original decision record under
 `.ai/runs/2026-08-02-per-repo-gate-scoping-redesign/` is local run state
 and not shipped with the repo). This section covers only the FALLBACK side of that resolution,
@@ -205,7 +205,8 @@ since it is the part that changes this matrix's own fail-posture story:
   `UNPARSED_COMMAND_REASON`); the remedy is fixing the syntax or
   flattening the nesting, and the agent envelope says so (with the
   refused policies) instead of the policy's `ux:` / `producers:` evidence
-  remedy, as it does for an `opaque-target` refusal. Above
+  remedy, as it does for an `opaque-target` refusal and for one past the
+  attribution bound. Above
   `MAX_NORMALIZE_LENGTH` the raw match alone still applies.
 - **More than `MAX_ATTRIBUTED_CONTEXTS` (4) distinct targets for one
   policy on one event fails CLOSED** — see the new table row above. This
