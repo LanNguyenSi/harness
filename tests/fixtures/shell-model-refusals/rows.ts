@@ -195,6 +195,15 @@ export const STEERED_ROWS: readonly string[] = [
   // subshell reaches a function that command or subshell calls.
   "HOME=/tmp true; cd; git push origin main",
   "echo $(HOME=vendor/libplain); cd; git push origin main",
+  // A reader that runs after its producer in execution order but stands
+  // before it in the text: a later loop iteration, a function called after
+  // the producer.
+  "p=$PWD; for i in 1 2; do cd; HOME=$p/vendor/libplain; done; git push origin main",
+  "p=$PWD; for i in 1 2; do cd ~; HOME=$p/vendor/libplain; done; git push origin main",
+  "p=$PWD; f() { cd; git push origin main; }; HOME=$p/vendor/libplain; f",
+  // A tilde prefix other than ~ and ~/ (here a named directory through a
+  // parameter) names a value the gate cannot resolve.
+  "d=$PWD/vendor/libplain; cd ~d; git push origin main",
 ];
 
 /** Rows with a `cd` stack index that bash reads as a path an earlier command of the line can create (task e927e903). */
