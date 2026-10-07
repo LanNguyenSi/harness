@@ -828,6 +828,38 @@ describe("modelShellCommands: loop headers, wrapper paths, assignment-only comma
     expect(headsOf("((x++)); git push")).toEqual([["git push"]]);
     expect(headsOf("(( $(git push) + 1 ))")).toEqual([["git push"]]);
     expect(headsOf("while ((i++ < 3)); do git push; done")).toEqual([["git push"]]);
+    // A backtick substitution inside the expression runs too, as a command
+    // and inside an arithmetic `for` header.
+    expect(headsOf("(( `git push origin main` ))")).toEqual([["git push origin main"]]);
+    expect(headsOf("(( a[`git push origin main`] + 1 ))")).toEqual([["git push origin main"]]);
+    expect(headsOf("for (( i=`git push origin main`; i<1; i++ )) do :; done")).toEqual([["git push origin main"], [":"]]);
+    expect(headsOf("for ((i=0; i<`harness pause`; i++)); do :; done")).toEqual([["harness pause"], [":"]]);
+  });
+
+  it("reads a case behind compound prefixes as at the start of a command", () => {
+    for (const prefix of ["{", "!", "time", "time -p", "time --", "time -p --", "if true; then", "while true; do", "for x in a; do", "if false; then :; else", "for x do", "function f", "f()"]) {
+      for (const pattern of ["(x)", "x)"]) {
+        const command = `${prefix} case x in ${pattern} git push origin main;; (y|z) echo y;; esac`;
+        const heads = headsOf(command);
+        expect(heads, command).toContainEqual(["git push origin main"]);
+        expect(heads, command).toContainEqual(["echo y"]);
+        // Patterns are never commands.
+        expect(heads.flat().some((h) => h === "x" || h === "y" || h.startsWith("case")), command).toBe(false);
+      }
+    }
+    expect(headsOf("{ case x in x) case y in (y) git push;; esac;; esac; }")).toEqual([["git push"]]);
+    expect(headsOf("if case x in x) true;; esac; then git push; fi")).toEqual([["true"], ["git push"]]);
+    // A directory change in an arm reaches the commands after the case.
+    expect(dirsOf("{ case x in x) cd /tmp; esac; git log; }")).toEqual(["L:/tmp", "cwd"]);
+    // `case` as an argument, or behind a word that is not a prefix, is a word.
+    expect(headsOf("echo { case x in x")).toEqual([["echo { case x in x"]]);
+    expect(modelShellCommands("echo case x in x) y;; esac")).toBeNull();
+  });
+
+  it("reads `time --` and `time -p --` as transparent prefixes", () => {
+    expect(headsOf("{ time -- git push; }")).toEqual([["git push"]]);
+    expect(headsOf("! time -p -- git push")).toEqual([["git push"]]);
+    expect(dirsOf("time -p -- cd X && git log")).toEqual(["L:X"]);
   });
 
   it("reads a word after a ( ) group as the next command (zsh short loops)", () => {

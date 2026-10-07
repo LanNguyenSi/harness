@@ -56,6 +56,22 @@ const FORMS: ReadonlyArray<{ label: string; command: (v: string) => string }> = 
   { label: "for without in, brace body", command: (v) => `for x { ${v}; }` },
   { label: "arithmetic command before a brace group", command: (v) => `((1)) && { ${v}; }` },
   { label: "case arm", command: (v) => `case a in a) ${v};; esac` },
+  // A case behind a compound prefix, with both pattern spellings: the
+  // patterns are patterns and the gated arm is a command.
+  { label: "case (x) in a brace group", command: (v) => `{ case x in (x) ${v};; esac; }` },
+  { label: "case x) in a brace group", command: (v) => `{ case x in x) ${v};; esac; }` },
+  { label: "case (x) behind !", command: (v) => `! case x in (x) ${v};; esac` },
+  { label: "case x) behind !", command: (v) => `! case x in x) ${v};; esac` },
+  { label: "case (x) behind time", command: (v) => `time case x in (x) ${v};; esac` },
+  { label: "case x) behind time", command: (v) => `time case x in x) ${v};; esac` },
+  { label: "case (x) behind then", command: (v) => `if true; then case x in (x) ${v};; esac; fi` },
+  { label: "case x) behind then", command: (v) => `if true; then case x in x) ${v};; esac; fi` },
+  { label: "case (x) behind do", command: (v) => `for i in 1; do case x in (x) ${v};; esac; done` },
+  { label: "case x) behind do", command: (v) => `while true; do case x in x) ${v};; esac; break; done` },
+  { label: "case, later (x) arm behind do", command: (v) => `for i in 1; do case x in (y) :;; (x) ${v};; esac; done` },
+  { label: "case, x|y) arm behind do", command: (v) => `while true; do case x in y|x) ${v};; esac; break; done` },
+  { label: "case (x) behind else", command: (v) => `if false; then :; else case x in (x) ${v};; esac; fi` },
+  { label: "case x) behind else", command: (v) => `if false; then :; else case x in x) ${v};; esac; fi` },
   { label: "function body", command: (v) => `f() { ${v}; }; f` },
   { label: "bang", command: (v) => `! ${v}` },
   { label: "bang brace group", command: (v) => `! { ${v}; }` },
@@ -76,6 +92,12 @@ const FORMS: ReadonlyArray<{ label: string; command: (v: string) => string }> = 
   { label: "env by path in a brace group", command: (v) => `{ /usr/bin/env ${v}; }` },
   { label: "time", command: (v) => `time ${v}` },
   { label: "time -p", command: (v) => `time -p ${v}` },
+  { label: "time -- in a brace group", command: (v) => `{ time -- ${v}; }` },
+  { label: "time -p -- behind !", command: (v) => `! time -p -- ${v}` },
+  { label: "time -p -- behind then", command: (v) => `if true; then time -p -- ${v}; fi` },
+  // A backtick substitution inside an arithmetic command or `for` header runs.
+  { label: "backtick in an arithmetic command", command: (v) => `(( \`${v}\` ))` },
+  { label: "backtick in an arithmetic for header", command: (v) => `for (( i=\`${v}\`; i<1; i++ )) do :; done` },
   { label: "nohup", command: (v) => `nohup ${v}` },
   { label: "env", command: (v) => `env ${v}` },
   { label: "command", command: (v) => `command ${v}` },
@@ -193,6 +215,11 @@ describe("compound-command heads reach the bare verb's bash_match policy (task d
           outcomeOf(bare.decisions, policy),
         );
         expect(form.blocked, `${JSON.stringify(command)} under ${enforcement}`).toBe(bare.blocked);
+        // Matched through the model, not refused because it could not be read.
+        expect(
+          form.decisions.filter((d) => d.refusal === "unparsed").map((d) => d.policyName),
+          `${JSON.stringify(command)} under ${enforcement}`,
+        ).toEqual([]);
       }
     });
 
@@ -458,6 +485,8 @@ describe("a compound spelling reaches every policy its bare command reaches (tas
     "git -C . log",
     "harness pause",
     "npx harness resume",
+    "time -- git push origin main",
+    "time -p -- git push origin main",
     // Gated only through the model's own wrapper peeling (the normalisers
     // do not read these long options in front of these verbs).
     "sudo --user root env -u CLAUDE_SESSION_ID true",
@@ -484,6 +513,49 @@ describe("a compound spelling reaches every policy its bare command reaches (tas
         }
         expect(form.blocked).toBe(control.blocked);
       }
+    });
+  });
+});
+
+// A valid `case` inside a loop or `then` body, behind `{`, `!` or `time`,
+// is read like one at the start of a command: no policy matches its
+// everyday spellings, and none is refused as unparsed.
+describe("everyday case and loop spellings reach no policy (task d11762ce)", () => {
+  const BENIGN = [
+    "for f in a.ts b.js; do case $f in *.ts) echo ts;; esac; done",
+    "ls | while read f; do case $f in *.md) echo $f;; esac; done",
+    'if [ -n "$1" ]; then case $1 in a) echo a;; esac; fi',
+    "{ case $x in a) echo a;; esac; }",
+    "! case x in x) true;; esac",
+    'for f in *.json; do case "$f" in package*.json) echo pkg;; *) echo other;; esac; done',
+    "while IFS= read -r line; do case $line in '#'*) continue;; esac; echo \"$line\"; done < file.txt",
+    'for arg in "$@"; do case $arg in -v|--verbose) v=1;; -h) echo help;; esac; done',
+    "if [ -f package.json ]; then case $(uname) in Darwin) echo mac;; Linux) echo linux;; esac; fi",
+    '{ case "$OSTYPE" in darwin*) echo mac;; *) echo other;; esac; } 2>/dev/null',
+    "ls src | while read -r f; do case $f in *.test.ts) echo test;; *.ts) echo src;; esac; done",
+    "for x in a b c; do case $x in (a) echo A;; (b|c) echo BC;; esac; done",
+    'until [ -z "$1" ]; do case $1 in --) shift; break;; *) shift;; esac; done',
+    "if true; then case $x in a) echo a;; b) echo b;; esac; else echo none; fi",
+    "if false; then :; else case $x in *) echo default;; esac; fi",
+    "time case $x in a) sleep 0;; esac",
+    "! case $x in a) false;; esac",
+    "for i in 1 2 3; do\n  case $i in\n    1) echo one;;\n    *) echo many;;\n  esac\ndone",
+    "while true; do case $REPLY in q) break;; esac; done",
+    "find . -name '*.md' | while read -r f; do case \"$f\" in ./node_modules/*) ;; *) wc -l \"$f\";; esac; done",
+    "for f in a b; do case $f in a) echo a;; esac; case $f in b) echo b;; esac; done",
+    'if [ -n "$x" ]; then case $x in [0-9]*) echo num;; [a-z]*) echo word;; esac; fi',
+    "{ case $1 in start) echo starting;; stop) echo stopping;; esac; echo done; }",
+    'for d in */; do case $d in node_modules/) continue;; esac; echo "$d"; done',
+    'while read -r k v; do case $k in name) echo "$v";; esac; done <<< "name x"',
+    "if case $x in a) true;; *) false;; esac; then echo matched; fi",
+    'for f in *.ts; do case $f in *.d.ts) ;; *) echo "$f";; esac; done | sort',
+  ];
+
+  describe.each(RUNTIMES)("%s PreToolUse event", (runtime) => {
+    it.each(BENIGN)("%j", async (command) => {
+      const r = await hook(runtime, command, FULL_BASH);
+      expect(r.decisions).toEqual([]);
+      expect(r.blocked).toBe(false);
     });
   });
 });
