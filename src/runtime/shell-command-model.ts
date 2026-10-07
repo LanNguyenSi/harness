@@ -2043,7 +2043,7 @@ function peelWrappers(words: readonly ShellWord[]): {
       for (;;) {
         const t = valueAt(i);
         if (t === undefined || t === null || !t.startsWith("-")) break;
-        i += /^-[ugpCrtTDhUc]$/.test(t) ? 2 : 1;
+        i += /^-[ugpCrtTDhUc]$/.test(t) || SUDO_VALUE_LONG.has(t) ? 2 : 1;
       }
       continue;
     }
@@ -2060,7 +2060,7 @@ function peelWrappers(words: readonly ShellWord[]): {
       for (;;) {
         const t = valueAt(i);
         if (t === undefined || t === null || !t.startsWith("-")) break;
-        i += /^-[ks]$/.test(t) ? 2 : 1;
+        i += /^-[ks]$|^--(kill-after|signal)$/.test(t) ? 2 : 1;
       }
       i++; // the duration
       continue;
@@ -2110,6 +2110,12 @@ function peelWrappers(words: readonly ShellWord[]): {
   if (stages[stages.length - 1] !== i) stages.push(i);
   return { idx: i, envChdir, envSplit, stages };
 }
+
+/** `sudo` / `doas` long options whose value is the next word when not attached with `=`. */
+const SUDO_VALUE_LONG = new Set([
+  "--user", "--group", "--other-user", "--prompt", "--close-from", "--chdir", "--host", "--role", "--type",
+  "--command-timeout",
+]);
 
 /**
  * The name a wrapper word is peeled by. Wrappers are programs, so

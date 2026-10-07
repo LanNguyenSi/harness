@@ -415,6 +415,10 @@ describe("a compound spelling reaches every policy its bare command reaches (tas
     "git -C . log",
     "harness pause",
     "npx harness resume",
+    // Gated only through the model's own wrapper peeling (the normalisers
+    // do not read these long options in front of these verbs).
+    "sudo --user root env -u CLAUDE_SESSION_ID true",
+    "timeout --kill-after 5 10 npx harness resume",
   ];
   const WRAP: ReadonlyArray<{ label: string; command: (b: string) => string }> = [
     { label: "brace group", command: (b) => `{ ${b}; }` },

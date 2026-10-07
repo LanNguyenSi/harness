@@ -839,6 +839,19 @@ describe("modelShellCommands: loop headers, wrapper paths, assignment-only comma
     expect(headsOf("/x/coproc git push")).toEqual([["/x/coproc git push"]]);
   });
 
+  it("reads the sudo and timeout long options that take the next word as their value", () => {
+    expect(headsOf("sudo --user root env -u CLAUDE_SESSION_ID true")).toEqual([
+      ["sudo --user root env -u CLAUDE_SESSION_ID true", "env -u CLAUDE_SESSION_ID true", "true"],
+    ]);
+    expect(headsOf("doas --user root git push")).toEqual([["doas --user root git push", "git push"]]);
+    expect(headsOf("sudo --user=root git push")).toEqual([["sudo --user=root git push", "git push"]]);
+    expect(headsOf("timeout --kill-after 5 10 npx harness resume")).toEqual([
+      ["timeout --kill-after 5 10 npx harness resume", "npx harness resume"],
+    ]);
+    expect(headsOf("timeout --signal KILL 5 git push")).toEqual([["timeout --signal KILL 5 git push", "git push"]]);
+    expect(headsOf("nice --adjustment 5 git push")).toEqual([["nice --adjustment 5 git push", "git push"]]);
+  });
+
   it("records an assignment-only command with its assignments as its text", () => {
     expect(headsOf("{ CLAUDE_SESSION_ID= ; }")).toEqual([["CLAUDE_SESSION_ID="]]);
     expect(headsOf("A=1 B=2")).toEqual([["A=1 B=2"]]);
