@@ -748,6 +748,25 @@ describe("pack hook pre-tool-use: delegation path (ADR slice 3)", () => {
       expect(listPersistedReports(reportsDir)).toEqual([]);
     });
 
+    it("(t2) the adoption ledger file is over the 1 MiB read cap: fails closed on the READ and the detail names the cap (task f1bacdd8)", async () => {
+      const ledgerPath = path.join(generatedDir, ".delegation-adoptions", CHILD);
+      fs.mkdirSync(path.dirname(ledgerPath), { recursive: true });
+      fs.writeFileSync(ledgerPath, "a".repeat(1024 * 1024 + 1));
+      writeTranscript([userTurn(), transcriptEntry()]);
+
+      const result = await call();
+
+      expect(result.blocked).toBe(true);
+      expect(result.stderr).toMatch(
+        new RegExp(
+          `the adopted-entry ledger at .* could not be read \\(.*I/O error or over the 1 MiB size cap.*\\); refusing to capture a transcript entry that may already have been adopted for session ${CHILD}`,
+        ),
+      );
+      expect(markerExists()).toBe(false);
+      expect(ledgerCalls).toEqual([]);
+      expect(listPersistedReports(reportsDir)).toEqual([]);
+    });
+
     it("(u) the adoption ledger directory exists but cannot be written to: the read succeeds, the capture fails closed, and nothing is persisted", async () => {
       // The mirror image of (t): the ledger READ succeeds (the directory
       // exists and the per-session file inside it does not, which reads
