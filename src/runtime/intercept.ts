@@ -2017,27 +2017,14 @@ function failClosedContextsDecision(
 }
 
 /**
- * Synthesise the single decision `intercept()` records for a policy whose
- * command names a repository target `resolveAttributedContexts` refused to
- * attribute (task `cfb6b390`). Same shape and enforcement mapping as
+ * The ledger-tag text of the single decision `intercept()` records, through
+ * `failClosedContextsDecision`, for a policy whose command names a
+ * repository target `resolveAttributedContexts` refused to attribute (task
+ * `cfb6b390`). Same shape and enforcement mapping as
  * `boundedContextsDecision`: no ledger query, `outcomeForFailedRequires` so
  * a `block` policy denies and a `warn` policy warns.
  */
-function opaqueTargetDecision(
-  policy: Policy,
-  event: ToolEvent,
-  cwdBuiltins: ExtractBuiltins,
-  evaluatedAt: string,
-): PolicyDecision {
-  return failClosedContextsDecision(
-    policy,
-    event,
-    cwdBuiltins,
-    evaluatedAt,
-    OPAQUE_TARGET_REASON,
-    "(opaque target: not attributable to a repository, no context queried)",
-  );
-}
+const OPAQUE_TARGET_TAG = "(opaque target: not attributable to a repository, no context queried)";
 
 export async function intercept(
   options: InterceptOptions,
@@ -2126,28 +2113,11 @@ export async function intercept(
 
   const decisions: PolicyDecision[] = [];
   for (const policy of matching) {
-    if (matchedUnparsed.has(policy)) {
-      // Refused as unclassifiable: one synthetic decision, no ledger query,
-      // the enforcement mapping of `opaqueTargetDecision`.
-      const decision = failClosedContextsDecision(
-        policy,
-        event,
-        options.builtins,
-        (options.now ?? new Date()).toISOString(),
-        UNPARSED_COMMAND_REASON,
-        UNPARSED_COMMAND_TAG,
-      );
-      decisions.push(decision);
-      try {
-        await options.ledger.record(decision, resolveSessionId(event.session_id));
-      } catch (err) {
-        (options.stderr ?? process.stderr).write(
-          `harness runtime intercept: audit-write failed for ${decision.policyName}: ${err instanceof Error ? err.message : String(err)}\n`,
-        );
-      }
-      continue;
-    }
-    const attributed: AttributedContextsResult = usesPerRepoBuiltins(policy)
+    // A policy refused because the command could not be parsed (task
+    // d11762ce) takes the fail-closed path below without attribution.
+    const attributed: AttributedContextsResult | { kind: "unparsed" } = matchedUnparsed.has(policy)
+      ? { kind: "unparsed" }
+      : usesPerRepoBuiltins(policy)
       ? resolveAttributedContexts(
           policy,
           (segmentsForAttribution ??= resolveCommandSegments(options)),
@@ -2164,14 +2134,15 @@ export async function intercept(
         )
       : { kind: "contexts", contexts: [{ builtins: options.builtins, currentHeadSha: options.currentHeadSha }] };
 
-    if (attributed.kind === "bounded" || attributed.kind === "opaque-target") {
+    if (attributed.kind !== "contexts") {
       // D-013: fail CLOSED without querying the ledger for any of the
       // (too many) distinct targets — one synthetic decision, one audit
       // write, then move on to the next policy. Ledger-query count for
       // THIS policy stays at zero regardless of how many distinct targets
       // the command actually names, instead of scaling with them. The
-      // `opaque-target` result (task `cfb6b390`) takes the same path: one
-      // synthetic decision, no ledger query.
+      // `opaque-target` result (task `cfb6b390`) and the unparsed refusal
+      // (task d11762ce) take the same path: one synthetic decision, no
+      // ledger query.
       const evaluatedAt = (options.now ?? new Date()).toISOString();
       const decision =
         attributed.kind === "bounded"
@@ -2182,7 +2153,14 @@ export async function intercept(
               options.builtins,
               evaluatedAt,
             )
-          : opaqueTargetDecision(policy, event, options.builtins, evaluatedAt);
+          : failClosedContextsDecision(
+              policy,
+              event,
+              options.builtins,
+              evaluatedAt,
+              attributed.kind === "unparsed" ? UNPARSED_COMMAND_REASON : OPAQUE_TARGET_REASON,
+              attributed.kind === "unparsed" ? UNPARSED_COMMAND_TAG : OPAQUE_TARGET_TAG,
+            );
       decisions.push(decision);
       try {
         await options.ledger.record(decision, resolveSessionId(event.session_id));
