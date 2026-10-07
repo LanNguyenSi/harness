@@ -740,7 +740,7 @@ describe("real git — offline / no-remote / no-credentials degrade cleanly (AC4
 describe("hot-path isolation (AC3: no network on PreToolUse)", () => {
   // The actual PreToolUse entrypoint is TWO files: the thin CLI wrapper
   // `src/cli/policy/intercept.ts` (`runInterceptCli`, wired to `harness
-  // policy intercept` in cli/index.ts) delegates to the runtime engine
+  // policy intercept` in cli/register-policy-group.ts) delegates to the runtime engine
   // `src/runtime/intercept.ts`. Both are checked: the wrapper lives under
   // `src/cli/`, the SAME layer stale-base-check.ts lives in, so — unlike
   // the engine below — .dependency-cruiser.cjs's layering rules do not

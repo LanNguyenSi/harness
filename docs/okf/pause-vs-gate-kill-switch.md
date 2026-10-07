@@ -13,7 +13,7 @@ sources:
   - src/cli/gate/disable.ts
   - src/cli/gate/enable.ts
   - src/cli/gate/snapshot.ts
-  - src/cli/index.ts
+  - src/cli/register-gate-gc-group.ts
   - src/cli/register-operator-lifecycle.ts
   - src/io/generated-dir.ts
   - src/schema/policies.ts
@@ -34,7 +34,7 @@ harness has TWO separate kill-switch mechanisms. Do not conflate them: `pause` i
 | Situation | Use |
 |---|---|
 | Lockout recovery, debug A/B test, incident hotfix, short window | `harness pause --for <duration>` (all hooks dormant, auto-resumes) |
-| One specific hard-blocking hook must go, e.g. the understanding-before-execution PreToolUse gate blocks every Bash call INCLUDING its own recovery command `harness approve understanding` (the motivating case, task 8fcddb26, comment at `src/cli/index.ts:2674#"offending hook group out of settings.json with a reversible snapshot."`) | `harness gate disable --matcher <substring>` (removes only matching hook groups, reversible snapshot) |
+| One specific hard-blocking hook must go, e.g. the understanding-before-execution PreToolUse gate blocks every Bash call INCLUDING its own recovery command `harness approve understanding` (the motivating case, task 8fcddb26, comment at `src/cli/register-gate-gc-group.ts:18#"offending hook group out of settings.json with a reversible snapshot."`) | `harness gate disable --matcher <substring>` (removes only matching hook groups, reversible snapshot) |
 | Permanently turn a policy off | NEITHER. Edit `policies[].enabled` in the manifest (or `policy_packs[].enabled: false`): persistent, diff-able, source-controlled. Stated in the `harness pause` command help (`src/cli/register-operator-lifecycle.ts:37-41#"in the manifest."`) and `docs/for-humans.md:395-397#"source-controlled"` |
 | "Move fast on a prototype branch" | A branch-aware policy with a `when:` clause, not a session-wide pause (`docs/for-humans.md:398-399#"session-wide pause"`) |
 

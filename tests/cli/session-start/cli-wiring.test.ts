@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-// The session-start producers are imported directly by src/cli/index.ts, so
+// The session-start producers are imported directly by src/cli/register-record-session-group.ts, so
 // the runners are replaced at the module boundary (other exports of each
 // module stay real, since other commands import them). No network, no ledger, no
 // subprocess: each test parses a real command line through buildProgram and

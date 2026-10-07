@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- Internal: the remaining command groups (`describe`, `validate`, `doctor`, `list`, `diff`, `init`, `add`, `export`, `adopt`, `apply`, `pack` and its hooks, `approve`, `risk`, `branch-protection`, the `explain` family, `gc`, `gate`, `record`, `session-start`, `smoke`, `intercept`) moved out of `src/cli/index.ts` into per-group registration files under `src/cli/` (task 87b419dc, completes the split begun in task 32d84940). `src/cli/index.ts` now holds `buildProgram`, `run` and `defaultVersionProbe` only. No behaviour change; `harness --help` and every subcommand's help are byte-identical to the build before the move (`scripts/help-snapshot.mjs --check`). The knowledge-bundle and `docs/CLI.md` citations that pointed into `src/cli/index.ts` now point at the new files.
+
 ### Fixed
 
 - A kubeconfig over its 8 MiB cap, or one that is not a regular file, no longer loses the production kube signal silently (task b56d95d3). `resolveKubeContext` still resolves an unknown context and namespace for it (never throws), and now returns an `unreadable` text; `harness policy intercept` writes it to stderr (`kubeconfig "<path>" is unreadable or larger than the 8 MiB read cap; ...`). An absent kubeconfig stays silent. The debug verbs (`resolve-env`, `explain-policy`, `test-risk`, `explain-action`) do not print it.
