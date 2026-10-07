@@ -351,7 +351,8 @@ itself) is refused for every `bash_match` policy the other forms missed,
 with the policy's own enforcement and no ledger query
 (`UNPARSED_COMMAND_REASON`). The deny message names the parse failure and
 the refused policies instead of the policy's `ux:` remedy, which cannot
-unblock it (the same holds for an unattributable target). A command
+unblock it (the same holds for an unattributable target and for more
+distinct targets than the attribution bound). A command
 longer than that bound keeps the raw match only. Not read at all: nested
 shells (`sh -c '...'`, `bash -lc`, `env -S`), `find -exec`, `parallel`,
 `watch`, wrappers the model does not peel (`caffeinate`, `flock`,
