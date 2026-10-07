@@ -313,20 +313,20 @@ describe.skipIf(process.platform === "win32")("runtime state files: a FIFO at th
     expect(run.value).toEqual({ ok: null });
   });
 
-  it("active claim: a FIFO reads as no active claim", () => {
+  it("active claim: a FIFO reads as refused, not as no claim", () => {
     const mod = "policy-packs/builtin/understanding-before-execution/active-claim.js";
     const dir = path.join(tmp, "gen");
     fs.mkdirSync(dir);
     fs.writeFileSync(path.join(dir, "active-claim"), "task-123\n");
     const control = callInChild(mod, "readActiveClaim", [dir]);
     expectBounded(control);
-    expect(control.value).toEqual({ ok: "task-123" });
+    expect(control.value).toEqual({ ok: { kind: "claim", taskId: "task-123" } });
 
     fs.rmSync(path.join(dir, "active-claim"));
     mkfifo(path.join(dir, "active-claim"));
     const run = callInChild(mod, "readActiveClaim", [dir]);
     expectBounded(run);
-    expect(run.value).toEqual({ ok: null });
+    expect(run.value).toMatchObject({ ok: { kind: "refused" } });
   });
 
   it("kubeconfig: a FIFO reads as an unknown context; a regular file resolves", () => {
@@ -343,7 +343,7 @@ describe.skipIf(process.platform === "win32")("runtime state files: a FIFO at th
     mkfifo(cfg);
     const run = callInChild("runtime/kube-context.js", "resolveKubeContext", [{ kubeconfigPath: cfg }]);
     expectBounded(run);
-    expect(run.value).toEqual({ ok: { context: "", namespace: "" } });
+    expect(run.value).toMatchObject({ ok: { context: "", namespace: "", unreadable: expect.stringContaining("not a regular file") } });
   });
 });
 

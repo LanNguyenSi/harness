@@ -475,6 +475,39 @@ describe.skipIf(process.platform === "win32")(
       }
     });
 
+    it("a DANGLING symlink at `.git` is refused, not walked past to the enclosing repository", () => {
+      const { nested } = outerRepoWithNestedWorktree();
+      fs.symlinkSync(path.join(nested, "gone", "gitdir"), path.join(nested, ".git"));
+      expect(resolveGitContext(nested)).toEqual({
+        repo: "inner-worktree",
+        branch: "",
+        sha: "",
+        refused: [".git"],
+      });
+      expect(findGitEntry(nested)).toEqual({ worktreeRoot: nested, gitDir: "", refused: ".git" });
+    });
+
+    it("a self-looping symlink at `.git` is refused, not walked past", () => {
+      const { nested } = outerRepoWithNestedWorktree();
+      fs.symlinkSync(path.join(nested, ".git"), path.join(nested, ".git"));
+      expect(resolveGitContext(nested)).toMatchObject({ branch: "", sha: "", refused: [".git"] });
+    });
+
+    it("a dangling `.git` symlink in a subdirectory stops the walk there for a cwd below it", () => {
+      const { nested } = outerRepoWithNestedWorktree();
+      fs.symlinkSync(path.join(nested, "gone"), path.join(nested, ".git"));
+      const below = path.join(nested, "src", "deep");
+      fs.mkdirSync(below, { recursive: true });
+      expect(findGitEntry(below)).toEqual({ worktreeRoot: nested, gitDir: "", refused: ".git" });
+    });
+
+    it("control: a symlink at `.git` that RESOLVES to a git directory is followed, not refused", () => {
+      const { nested } = outerRepoWithNestedWorktree();
+      const real = makeRepo(tmpDir(), "real", "ref: refs/heads/linked", FAKE_SHA);
+      fs.symlinkSync(path.join(real, ".git"), path.join(nested, ".git"));
+      expect(resolveGitContext(nested)).toEqual({ repo: "inner-worktree", branch: "linked", sha: FAKE_SHA });
+    });
+
     it("control: a MISSING `.git` still walks up to the enclosing repository", () => {
       const { nested } = outerRepoWithNestedWorktree();
       expect(resolveGitContext(nested)).toEqual({

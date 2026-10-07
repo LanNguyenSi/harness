@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import lockfile from "proper-lockfile";
+import { writeRegularFileNonBlocking } from "./write-regular-file.js";
 
 export interface LockOptions {
   retries?: number;
@@ -80,7 +81,12 @@ export function checkFileLock(lockPath: string, options: CheckLockOptions = {}):
 function ensureLockTarget(lockPath: string): void {
   const dir = path.dirname(lockPath);
   fs.mkdirSync(dir, { recursive: true });
-  if (!fs.existsSync(lockPath)) {
-    fs.writeFileSync(lockPath, "");
+  // Create-only, never truncate: an exclusive create (`O_EXCL`) neither
+  // follows a symlink nor blocks on a FIFO that appears at the path between
+  // a check and the create, and whatever already sits there is left alone.
+  try {
+    writeRegularFileNonBlocking(lockPath, "", { create: "exclusive" });
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
   }
 }

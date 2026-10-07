@@ -22,6 +22,7 @@ import {
   resolveEnvironment,
   resolveGitContext,
   resolveKubeContext,
+  type KubeContext,
   sanitizeEnvelopeReason,
   type GitRepoContext,
   type LedgerClient,
@@ -950,6 +951,9 @@ export async function runInterceptCli(
     BRANCH: process.env.HARNESS_BRANCH ?? cwdGitContext.branch,
     TOOL_NAME: typeof event.tool_name === "string" ? event.tool_name : "",
     CWD: cwd,
+    ...(process.env.HARNESS_BRANCH === undefined && cwdGitContext.refused !== undefined
+      ? { GIT_REFUSED: cwdGitContext.refused }
+      : {}),
   };
 
   // Risk Gate ambient context — resolved only when the manifest
@@ -958,13 +962,20 @@ export async function runInterceptCli(
   // avoids the host I/O when nothing would consume it.
   let riskContext: RiskGateContext | undefined;
   if (manifest.policies.some((p) => p.when !== undefined)) {
-    const kube =
+    const kube: KubeContext =
       opts.kubeContext !== undefined || opts.kubeNamespace !== undefined
         ? {
             context: opts.kubeContext ?? "",
             namespace: opts.kubeNamespace ?? "",
           }
         : resolveKubeContext();
+    // A kubeconfig that is there but cannot be read (over its size cap, not
+    // a regular file) resolves to an unknown context, which drops the
+    // production signal a kube context would have carried. Say so, once per
+    // call, instead of letting the loss pass silently.
+    if (kube.unreadable !== undefined) {
+      stderr.write(`harness policy intercept${hookSuffix(opts.hookName)}: ${kube.unreadable}\n`);
+    }
     // Three POSIX Bash idioms (`VAR=value command`, `cd <path> &&
     // command`, and — since task 341e024b — `git switch|checkout
     // <branch> && command`) were invisible to the resolver before: the

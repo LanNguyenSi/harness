@@ -195,7 +195,9 @@ export {
   activeClaimPathFor,
   writeActiveClaim,
   readActiveClaim,
+  claimTaskIdOrNull,
   clearActiveClaim,
+  type ActiveClaimRead,
 } from "./active-claim.js";
 
 // Slice 3 of docs/decisions/2026-08-27-ug-auto-mode-approval.md: signed

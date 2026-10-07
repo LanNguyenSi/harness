@@ -4920,15 +4920,6 @@ describe("runInterceptCli: empty REPO / BRANCH never renders a blank ledger tag"
         },
       ],
       [
-        "a dangling .git symlink",
-        (parent: string) => {
-          const cwd = path.join(nonRepoCwd(parent), "dangling");
-          fs.mkdirSync(cwd);
-          fs.symlinkSync(path.join(parent, "missing-gitdir"), path.join(cwd, ".git"));
-          return cwd;
-        },
-      ],
-      [
         "a path below a regular file (lstat fails with ENOTDIR)",
         (parent: string) => {
           const file = path.join(nonRepoCwd(parent), "file");
@@ -4951,6 +4942,35 @@ describe("runInterceptCli: empty REPO / BRANCH never renders a blank ledger tag"
       expect(result.blocked).toBe(true);
       expect(result.decisions.map((d) => d.outcome)).toEqual(["deny", "allow"]);
       expect(result.decisions[0]!.emptyIdentifier).toBe("REPO");
+      expect(ledger.tags).toEqual(["preflight:feature"]);
+    });
+
+    // A `.git` entry that exists but does not resolve is part of the cwd
+    // repository (task b56d95d3, operator decision): the work-tree walk
+    // refuses it instead of walking past it, which is the same call this
+    // module's own "could this be inside a repository" walk makes. The cwd
+    // context therefore resolves a REPO (the directory's name) and no
+    // branch, and the deny names the unreadable git file, not a detached HEAD.
+    it("a cwd with a dangling .git symlink keeps its cwd context next to `git -C <B> push`, denied as an unreadable git file", async () => {
+      const parent = fs.realpathSync(tmpRoot());
+      const target = namedRepo(parent, "beta", "ref: refs/heads/feature\n");
+      const cwd = path.join(nonRepoCwd(parent), "dangling");
+      fs.mkdirSync(cwd);
+      fs.symlinkSync(path.join(parent, "missing-gitdir"), path.join(cwd, ".git"));
+
+      const ledger = factsLedger("preflight:feature ready:true");
+      const { result } = await run({
+        policy: templatePolicy("preflight-before-push"),
+        command: `git -C ${target} push`,
+        cwd,
+        ledger,
+      });
+      expect(result.blocked).toBe(true);
+      expect(result.decisions.map((d) => d.outcome)).toEqual(["deny", "allow"]);
+      expect(result.decisions[0]!.emptyIdentifier).toBe("BRANCH");
+      const reason = result.decisions[0]!.reason;
+      expect(reason).toContain("a git file there (.git) is present but is not a readable regular file");
+      expect(reason).not.toContain("HEAD is detached");
       expect(ledger.tags).toEqual(["preflight:feature"]);
     });
 

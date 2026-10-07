@@ -8,7 +8,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { atomicWriteFile } from "../../../io/atomic-write.js";
 import { signMarker } from "../../../runtime/approval-signing.js";
-import { readActiveClaim } from "./active-claim.js";
+import { claimTaskIdOrNull, readActiveClaim, REFUSED_CLAIM_BINDING } from "./active-claim.js";
 import { parseApprovalLifecycle } from "./lifecycle.js";
 import {
   APPROVAL_MARKER_DIRNAME,
@@ -99,7 +99,8 @@ export function writeTaskApprovalMarker(
 /**
  * Gate-side: resolve the active agent-tasks claim (via `active-claim`)
  * and check ONLY that task's approval marker. When no active claim is
- * recorded, this returns `matched:false` so the caller falls through
+ * recorded, or the claim path is present but unreadable, this returns
+ * `matched:false` so the caller falls through
  * to the session marker — preserving the legacy contract for solo /
  * non-agent-tasks workflows that never call `task_start`.
  *
@@ -117,8 +118,22 @@ export function checkActiveClaimApprovalMarker(
   generatedDir: string,
   opts: CheckApprovalMarkerOptions = {},
 ): MarkerCheck {
-  const claim = readActiveClaim(generatedDir);
-  if (claim === null) {
+  const claimRead = readActiveClaim(generatedDir);
+  if (claimRead.kind === "refused") {
+    // Not "no claim": something sits at the claim path that cannot be read
+    // as one. The task-scoped check cannot name a task, so it does not
+    // match, and the session marker's own binding check (which refuses on
+    // the same read) keeps this from falling through to an approval that
+    // belongs to no task.
+    return {
+      matched: false,
+      detail: `active-claim could not be read (${claimRead.reason}); task-scoped check refused`,
+      marker: null,
+      expired: false,
+      forged: false,
+    };
+  }
+  if (claimRead.kind === "absent") {
     return {
       matched: false,
       detail: `no active-claim recorded; task-scoped check skipped`,
@@ -127,6 +142,7 @@ export function checkActiveClaimApprovalMarker(
       forged: false,
     };
   }
+  const claim = claimRead.taskId;
   const markerName = `${APPROVAL_MARKER_TASK_PREFIX}${claim}`;
   const check = checkApprovalMarker(generatedDir, markerName, opts);
   if (check.matched) {
@@ -160,6 +176,7 @@ export interface SessionMarkerCheck extends MarkerCheck {
 }
 
 function describeClaim(taskId: string | null): string {
+  if (taskId === REFUSED_CLAIM_BINDING) return "an unreadable active claim";
   return taskId === null ? "no claimed task" : `task ${taskId}`;
 }
 
@@ -215,13 +232,22 @@ export function checkSessionApprovalMarker(
     forged: false,
     bindingRefused: true,
   });
+  const currentRead = readActiveClaim(generatedDir);
   if (!Object.prototype.hasOwnProperty.call(check.marker, "claimTaskId")) {
     return refused(
-      `session approval marker for ${sessionId} carries no task binding (written by a harness release before approvals were bound to the claimed task); approve once more to bind it to ${describeClaim(readActiveClaim(generatedDir))}`,
+      `session approval marker for ${sessionId} carries no task binding (written by a harness release before approvals were bound to the claimed task); approve once more to bind it to ${describeClaim(claimTaskIdOrNull(currentRead))}`,
+    );
+  }
+  if (currentRead.kind === "refused") {
+    // A claim path that holds something unreadable is not "no claim": a
+    // marker bound to null (written while nothing was claimed) must not
+    // match it. Fail closed until the path is repaired.
+    return refused(
+      `session approval for ${sessionId} cannot be matched to a task: the active claim could not be read (${currentRead.reason}); repair or remove it, then approve the Understanding Report for this task`,
     );
   }
   const boundTo = check.marker.claimTaskId ?? null;
-  const current = readActiveClaim(generatedDir);
+  const current = claimTaskIdOrNull(currentRead);
   if (boundTo !== current) {
     return refused(
       `session approval for ${sessionId} belongs to another task: it was granted for ${describeClaim(boundTo)}, the active claim is now ${describeClaim(current)}; approve the Understanding Report for this task`,

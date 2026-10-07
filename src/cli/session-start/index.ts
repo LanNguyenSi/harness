@@ -27,6 +27,7 @@ import {
   resolveGitContext,
   resolveScopedProjectName,
 } from "../../runtime/index.js";
+import { writeRegularFileNonBlocking } from "../../io/write-regular-file.js";
 import { resolveManifestLedgerWriter } from "../../runtime/ledger-writer.js";
 import { resolveGeneratedDir } from "../../runtime/pending-approval.js";
 import { resolveReadSessionId } from "../../runtime/session-id.js";
@@ -432,7 +433,10 @@ function persistFailLog(
       logDir,
       `${FAIL_LOG_PREFIX}${sanitizeForFilename(repo).slice(0, 100)}-${timestamp}-${unique}.json`,
     );
-    fs.writeFileSync(filePath, `${JSON.stringify(json, null, 2)}\n`, "utf8");
+    // Non-blocking and typed on the opened descriptor. The name carries a
+    // timestamp and a random suffix, so planting a FIFO at it takes a guess
+    // at both; the open is still never a by-path blocking one.
+    writeRegularFileNonBlocking(filePath, `${JSON.stringify(json, null, 2)}\n`);
   } catch (err) {
     return { ok: false, reason: (err as Error).message };
   }

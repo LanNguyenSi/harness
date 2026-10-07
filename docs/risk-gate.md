@@ -1143,7 +1143,11 @@ signal matches. When several resolvers fire and disagree, the
 most-dangerous environment wins (`production > staging > dev > local`).
 Branch comes from the Action Envelope. Env vars and the kube
 context/namespace start from the ambient process (`~/.kube/config` is read
-best-effort); for a Bash command the inline `VAR=value` assignments, a
+best-effort: an absent file is silently "unknown", but a kubeconfig that is
+there and cannot be read, over its 8 MiB cap or not a regular file, is also
+"unknown" and `harness policy intercept` says so on stderr, since the
+production signal a kube context would have carried is lost; the debug verbs
+do not print that line); for a Bash command the inline `VAR=value` assignments, a
 leading `cd` and a leading `git switch`/`checkout` are merged on top, the
 same way in `harness policy intercept`, `resolve-env`, `explain-policy`,
 `test-risk` and `explain-action`. An explicit `kubectl --context`/

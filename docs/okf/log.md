@@ -824,7 +824,7 @@
   states only what `[0.28.0]` documents, dropping the unsourced
   "intentionally stays loose" design claim it carried at first; each
   rewrite kept the comment at a 4-line span so no numbered citation
-  below it shifted; verified `src/cli/approve/understanding.ts:792#"resolveApprovalSessionId"`
+  below it shifted; verified `src/cli/approve/understanding.ts:802#"resolveApprovalSessionId"`
   (this doc's own `understanding-gate-lockout-recovery.md` citation)
   still reads `resolveApprovalSessionId` after the edits, unchanged.
 
@@ -851,7 +851,7 @@
   Prior Art's presence (required since 0.4.0, same citation
   `` `CHANGELOG.md:#0.28.0` ``) and cannot judge the section's content,
   and that the approve CLI is the boundary that refuses a hollow list.
-  The edited span stayed at 4 lines (`understanding.ts` lines 483-486); `src/cli/approve/understanding.ts:792#"resolveApprovalSessionId"` still reads
+  The edited span stayed at 4 lines (`understanding.ts` lines 483-486); `src/cli/approve/understanding.ts:802#"resolveApprovalSessionId"` still reads
   `resolveApprovalSessionId` and the file's total line count is
   unchanged, so the citation above it does not shift.
   `understanding-gate-lockout-recovery.md`'s `timestamp:` is re-stamped
@@ -998,7 +998,7 @@
   edits shifted, enumerated from the commit range rather than counted by
   hand (`git diff <base>..HEAD -U0 -- docs`, then a per-file multiset diff
   of every `path:N[-M]` token), and all re-pointed here:
-  `src/runtime/git-context.ts:392` to `:393` (this file, both occurrences,
+  `src/runtime/git-context.ts:414` to `:415` (this file, both occurrences,
   for the new `io/project-name.ts` import); `src/probes/memory.ts:277` to
   `:276` (this file and `docs/decisions/2026-09-08-preflight-floors.md`,
   for the narrowed `substituteProject` comment); and the `sha256: string;`
@@ -1048,7 +1048,7 @@
   (previously line 179). In `docs/decisions/2026-09-08-preflight-floors.md`:
   `src/probes/memory.ts:276#"const parsed = parseProbedVersion(stdout);"`
   (previously line 268). In this file:
-  `src/runtime/git-context.ts:519#"fs.realpathSync(commonDir)"` (previously
+  `src/runtime/git-context.ts:541#"fs.realpathSync(commonDir)"` (previously
   line 387) and
   `src/cli/doctor/format.ts:161#"sessionStartPreflightSetupVersion.projectName"`
   (previously line 139). Four module docs were re-stamped for the
@@ -1346,7 +1346,7 @@
   first shipped full silence here, round 1's own review found the
   silence itself was the residual gap the task's goal named ("no
   diagnostic anywhere"), closed in round 2. The producer's own stderr
-  diagnostic (`src/cli/session-start/index.ts:632#"the project-scoped"`)
+  diagnostic (`src/cli/session-start/index.ts:636#"the project-scoped"`)
   no longer blames "the project layer" for a
   base- or machine-layer parse failure (round 1's lead-in did); both
   this diagnostic and the new `doctor` finding now collapse a
@@ -1361,7 +1361,7 @@
   `{project}` substitution, both left unvalidated and out of scope.
   `deriveProjectName` now resolves the common dir through
   `fs.realpathSync` before taking its basename
-  (`src/runtime/git-context.ts:519#"fs.realpathSync(commonDir)"`), so a
+  (`src/runtime/git-context.ts:541#"fs.realpathSync(commonDir)"`), so a
   symlinked checkout resolves the SAME project layer as the real
   directory (decision D-021a's "repository identity is the common dir"
   rule); best-effort, a realpath failure falls back to the un-resolved
@@ -2543,7 +2543,7 @@
   landed at lines 969-990 (`git show b24af93 -- src/cli/pack/hook-pre-tool-use.ts`
   confirms the hunk starts at line 969); the round-3 entry's own
   freshness conclusion is unaffected, since `understanding-gate-lockout-recovery.md`'s
-  citation at `hook-pre-tool-use.ts:902` is well before either range.
+  citation at `hook-pre-tool-use.ts:910` is well before either range.
   `okf-kit check --json docs/okf` on the committed tree shows 0 errors,
   0 warnings after the re-stamp.
 - 2026-09-02T05:44:14Z, task `204efc56` round 3 (further review fixes
@@ -2565,7 +2565,7 @@
   `probeRegularFilePresence`, or cite a span of `hook-pre-tool-use.ts`
   inside this round's edited region (lines ~940-978): `grep` across all 6
   for those terms found only `understanding-gate-lockout-recovery.md`'s
-  pre-existing citation at `src/cli/pack/hook-pre-tool-use.ts:1007#"writePendingApproval(generatedDir, sessionId);"`,
+  pre-existing citation at `src/cli/pack/hook-pre-tool-use.ts:1015#"writePendingApproval(generatedDir, sessionId);"`,
   well before the edited region, still resolving. `evidence-ledger-trust-boundary.md`
   was NOT flagged stale this round: it was itself edited (new
   `probeRegularFilePresence` paragraph, `delegation-markers.ts` added to
@@ -2617,7 +2617,7 @@
   describes only the new reason itself; neither touches any claim or
   cited span in these 7 docs (the one line-numbered citation among them,
   `understanding-gate-lockout-recovery.md`'s
-  `src/cli/pack/hook-pre-tool-use.ts:1007#"writePendingApproval(generatedDir, sessionId);"`,
+  `src/cli/pack/hook-pre-tool-use.ts:1015#"writePendingApproval(generatedDir, sessionId);"`,
   sits well before the edited comment and still resolves). Timestamp-only
   re-stamp on all 7; no content changed. `okf-kit check --json docs/okf`
   on the committed tree shows 0 errors, 0 warnings after the re-stamp.
@@ -2634,12 +2634,12 @@
     `isReadOnlyCurlCommand` as a shipped floor and is rewritten for D-013.
   - `policy-engine-producer-wiring.md`: the same off-by-three re-point to
     `src/runtime/intercept.ts:538-623`, same verification. Every other
-    citation in the file (`src/cli/policy/intercept.ts:125-127`,
+    citation in the file (`src/cli/policy/intercept.ts:126-128`,
     `src/cli/validate/checks.ts:306-337`, `src/schema/tools.ts:20`,
     `src/policies/ledger-client.ts:499`,
-    `src/cli/policy/intercept.ts:387`) re-opened and confirmed unchanged.
+    `src/cli/policy/intercept.ts:388`) re-opened and confirmed unchanged.
   - `gate-fail-posture-matrix.md`: its citation of the same file moved
-    from lines 1129-1157 to `src/runtime/intercept.ts:1132-1160`,
+    from lines 1129-1157 to `src/runtime/intercept.ts:1148-1176`,
     verified against lines 1099-1127 at `72ba45a`.
   - `debug-verb-selection.md`: its `test-risk` paragraph listed a
     `curl` read-only floor among the built-ins. Corrected to name the

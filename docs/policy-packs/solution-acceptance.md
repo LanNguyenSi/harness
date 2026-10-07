@@ -49,6 +49,13 @@ The verdict id resolves in this order (`solution-acceptance-runtime.ts`):
    session's id stays authoritative and cannot be redirected by env;
 3. otherwise fail-closed.
 
+"No claim" means the `active-claim` path holds nothing (absent or empty). A
+node there that cannot be read as a claim (a FIFO, a directory, a file over
+the read cap, a file that is not a well-formed task id, a symlink that does
+not resolve) is not "no claim": the gate blocks with a reason naming the
+unreadable file and does not consult `SOLUTION_VERDICT_ID`, because a
+refused claim file would otherwise redirect a claimed task's verdict.
+
 A sessionId fallback is intentionally absent (the wrong-scope bug class
 the understanding gate closed). The env value is validated as a safe
 single path segment; a malformed value fails closed.
@@ -721,7 +728,7 @@ block; see Failure mode #2):
 | Variable | Effect | Default |
 |----------|--------|---------|
 | `SOLUTION_VERDICT_DIR` | Overrides the verdict directory the consumer reads. Must match where the producer writes. | `$XDG_STATE_HOME/agent-grounding/solution-verdicts`, falling back to `~/.local/state/agent-grounding/solution-verdicts` |
-| `SOLUTION_VERDICT_ID` | Verdict id for solo / non-agent-tasks sessions. Consulted only when no `active-claim` exists. Validated as a safe single path segment; malformed fails closed. Set it to the same id passed to `mcp__grounding-mcp__solution_evaluate({ id })`. Must be set in the environment at Session-Start time (an Operator decision, not agent-sideeffect-settable from within the session). | unset (fail-closed without a claim) |
+| `SOLUTION_VERDICT_ID` | Verdict id for solo / non-agent-tasks sessions. Consulted only when no `active-claim` exists (an `active-claim` path that holds something unreadable blocks instead, see the order above). Validated as a safe single path segment; malformed fails closed. Set it to the same id passed to `mcp__grounding-mcp__solution_evaluate({ id })`. Must be set in the environment at Session-Start time (an Operator decision, not agent-sideeffect-settable from within the session). | unset (fail-closed without a claim) |
 
 ## See also
 

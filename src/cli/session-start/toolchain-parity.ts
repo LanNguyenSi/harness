@@ -42,6 +42,7 @@ import {
   resolveClaudeUserRegistryPath,
 } from "../../io/claude-mcp.js";
 import { readTextFileBoundedOrThrow } from "../../io/read-regular-file.js";
+import { writeRegularFileNonBlocking } from "../../io/write-regular-file.js";
 import { assertNoRealSpawnInTests } from "../../runtime/hermetic-spawn-guard.js";
 import { resolveManifestLedgerWriter, type LedgerWriteFn } from "../../runtime/ledger-writer.js";
 import {
@@ -468,7 +469,9 @@ function writeOwnSnapshot(
 ): { ok: true; path: string } | { ok: false; reason: string } {
   const filePath = path.join(machineStateDir, ownFileName);
   try {
-    fs.writeFileSync(filePath, `${JSON.stringify(snapshot, null, 2)}\n`, "utf8");
+    // Non-blocking and typed on the opened descriptor: a FIFO planted at the
+    // own-snapshot name must fail the write, not hold the SessionStart hook.
+    writeRegularFileNonBlocking(filePath, `${JSON.stringify(snapshot, null, 2)}\n`);
     return { ok: true, path: filePath };
   } catch (err) {
     return { ok: false, reason: (err as Error).message };

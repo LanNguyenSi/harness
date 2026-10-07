@@ -12,13 +12,23 @@
 import * as os from "node:os";
 import * as path from "node:path";
 import { parse as parseYaml } from "yaml";
-import { readTextFileBoundedOrThrow } from "../io/read-regular-file.js";
+import { readRegularFileBounded } from "../io/read-regular-file.js";
 
 export interface KubeContext {
   /** Current context name, or "" when unresolved. */
   context: string;
   /** Namespace of the current context, or "" when unresolved. */
   namespace: string;
+  /**
+   * Present only when a kubeconfig IS at the path but could not be read
+   * (over the size cap, not a regular file, unreadable). `context` and
+   * `namespace` are then "" (unknown), exactly as for an absent file, but
+   * the environment signal a production kube context would have given is
+   * lost, so the hook that resolved it writes this text to stderr instead
+   * of letting the loss pass silently. Absent for a missing file and for
+   * every other outcome (a parsed config, an unparseable one).
+   */
+  unreadable?: string;
 }
 
 const EMPTY: KubeContext = { context: "", namespace: "" };
@@ -34,6 +44,17 @@ export interface ResolveKubeContextOptions {
   kubeconfigPath?: string;
 }
 
+function describeUnreadableKubeconfig(configPath: string, kind: "symlink" | "not-regular" | "unreadable"): string {
+  const why =
+    kind === "not-regular"
+      ? "is not a regular file"
+      : `is unreadable or larger than the ${MAX_KUBECONFIG_BYTES / (1024 * 1024)} MiB read cap`;
+  return (
+    `kubeconfig ${JSON.stringify(configPath)} ${why}; the kube context and namespace are treated as unknown, ` +
+    "so a production kube context cannot raise the target environment for this call"
+  );
+}
+
 /**
  * Resolve `{ context, namespace }` from `~/.kube/config`. Returns empty
  * strings when the file is absent, unparseable, or declares no
@@ -45,20 +66,22 @@ export function resolveKubeContext(
   const configPath =
     opts.kubeconfigPath ?? path.join(os.homedir(), ".kube", "config");
 
-  let raw: string;
-  try {
-    // Bounded, non-blocking read through the opened descriptor (a symlinked
-    // kubeconfig is followed, as before). A FIFO, a device, a directory, an
-    // oversized or unreadable file reads as "unknown" ("" / ""), exactly
-    // like an absent file (the resolver never throws); the one thing it
-    // must not do is wait.
-    raw = readTextFileBoundedOrThrow(configPath, {
-      followSymlinks: true,
-      maxBytes: MAX_KUBECONFIG_BYTES,
-    });
-  } catch {
-    return EMPTY;
+  // Bounded, non-blocking read through the opened descriptor (a symlinked
+  // kubeconfig is followed, as before). A FIFO, a device, a directory, an
+  // oversized or unreadable file reads as "unknown" ("" / ""), exactly
+  // like an absent file (the resolver never throws); the one thing it
+  // must not do is wait. Unlike an absent file, a kubeconfig that IS there
+  // but cannot be read is reported in `unreadable`: a real config past the
+  // cap would otherwise lose its production context with no trace.
+  const read = readRegularFileBounded(configPath, {
+    followSymlinks: true,
+    maxBytes: MAX_KUBECONFIG_BYTES,
+  });
+  if (read.kind === "missing") return EMPTY;
+  if (read.kind !== "ok") {
+    return { ...EMPTY, unreadable: describeUnreadableKubeconfig(configPath, read.kind) };
   }
+  const raw = read.content;
 
   let doc: unknown;
   try {

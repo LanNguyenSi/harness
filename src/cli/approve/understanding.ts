@@ -29,6 +29,7 @@ import {
   readReportFileBounded,
   type ReadBudget,
   readActiveClaim,
+  claimTaskIdOrNull,
   selectReportForSession,
   type SkippedReportEntry,
   TOLERANT_FALLBACK_MAX_AGE_MS,
@@ -182,6 +183,15 @@ export interface ApproveUnderstandingResult {
    * a wrong claim file can be spotted before it lands in the marker.
    */
   taskMarkers: TaskMarkerOutcome[];
+  /**
+   * Present when the active-claim path holds something that cannot be read
+   * as a claim (a FIFO, a directory, an oversized or malformed file): the
+   * reason. No task marker was auto-resolved from it and the session marker
+   * was bound to nothing (`REFUSED_CLAIM_BINDING`), so under the default
+   * task-bound lifecycle it will not satisfy the gate until the path is
+   * repaired and the report approved again. The CLI prints it loudly.
+   */
+  activeClaimRefused?: string;
   /**
    * `resolveMode`'s own warning (invalid `config.mode` in `harness.yaml`,
    * or an invalid `UNDERSTANDING_GATE_MODE` env value) surfaced verbatim
@@ -1169,6 +1179,9 @@ export async function approveUnderstanding(
   // fallback, and the other ids still get their markers.
   let resolvedTaskIds: string[] = [];
   let taskSource: "flag" | "active-claim" = "flag";
+  // Read once, after the session marker: that writer binds the marker to
+  // the same claim path, and a refused one binds to nothing.
+  const activeClaimRead = readActiveClaim(generatedDir);
   if (opts.tasks && opts.tasks.length > 0) {
     resolvedTaskIds = dedupeTaskIds(opts.tasks);
     taskSource = "flag";
@@ -1176,7 +1189,7 @@ export async function approveUnderstanding(
     resolvedTaskIds = [opts.task];
     taskSource = "flag";
   } else {
-    const fromFile = readActiveClaim(generatedDir);
+    const fromFile = claimTaskIdOrNull(activeClaimRead);
     if (fromFile !== null) {
       resolvedTaskIds = [fromFile];
       taskSource = "active-claim";
@@ -1321,6 +1334,7 @@ export async function approveUnderstanding(
     ...(modeResolution.warning !== null ? { modeWarning: modeResolution.warning } : {}),
     marker: markerResult,
     taskMarkers,
+    ...(activeClaimRead.kind === "refused" ? { activeClaimRefused: activeClaimRead.reason } : {}),
     ...(stdinReport !== undefined ? { stdinReport } : {}),
     ledger: ledgerResult.ok
       ? { ok: true, tag }

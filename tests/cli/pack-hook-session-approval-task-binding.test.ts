@@ -12,6 +12,7 @@ import {
   approvalMarkerPathFor,
   checkOperatorApprovalMarkers,
   checkSessionApprovalMarker,
+  claimTaskIdOrNull,
   readActiveClaim,
   writeActiveClaim,
   writeApprovalMarker,
@@ -19,6 +20,12 @@ import {
 } from "../../src/policy-packs/builtin/understanding-before-execution-runtime.js";
 import { signMarker } from "../../src/runtime/approval-signing.js";
 import { parseManifest, type Manifest } from "../../src/schema/index.js";
+
+// The claimed task id, or null for an absent AND a refused claim path; the
+// tri-state itself is asserted in the dedicated tests.
+function claimIdOf(generatedDir: string): string | null {
+  return claimTaskIdOrNull(readActiveClaim(generatedDir));
+}
 
 // Harness task 5018c0c4, operator decision "bind the session marker to the
 // task": a task_finish that lands in review keeps the session approval,
@@ -121,7 +128,7 @@ async function taskStart(taskId: string): Promise<void> {
     generatedDir,
   });
   expect(result.claimWritten).toBe(true);
-  expect(readActiveClaim(generatedDir)).toBe(taskId);
+  expect(claimIdOf(generatedDir)).toBe(taskId);
 }
 
 /** The operator approves: the one writer records the active claim. */
@@ -192,7 +199,7 @@ describe("session approval marker bound to the claimed task (harness 5018c0c4)",
     // The verbatim live capture: task_finish lands abc-123 in review. Both
     // markers survive (claim kept, approval kept) and the gate still opens.
     expect(await postToolUse(loadFixture())).toBe(false);
-    expect(readActiveClaim(generatedDir)).toBe(TASK);
+    expect(claimIdOf(generatedDir)).toBe(TASK);
     expect(fs.existsSync(approvalMarkerPathFor(generatedDir, SESSION))).toBe(true);
     const sameTask = await gatedEdit();
     expect(sameTask.blocked).toBe(false);

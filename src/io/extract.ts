@@ -138,6 +138,14 @@ export interface ExtractBuiltins {
   BRANCH: string;
   TOOL_NAME: string;
   CWD: string;
+  /**
+   * The git files `resolveGitContext` found present but refused for this
+   * context (`GitRepoContext.refused`). NOT an extract variable (it is not
+   * in `BUILTIN_NAMES`): it only lets the empty-identifier guard tell a
+   * blank `${BRANCH}` that comes from an unreadable git file apart from one
+   * that comes from a detached HEAD, so the deny text names the real state.
+   */
+  GIT_REFUSED?: readonly string[];
 }
 
 export type ExtractTraceSource = "extract" | "builtin" | "missing";
@@ -177,7 +185,7 @@ function stringifyResolved(value: unknown): string {
   return JSON.stringify(value);
 }
 
-const BUILTIN_NAMES: readonly (keyof ExtractBuiltins)[] = [
+const BUILTIN_NAMES: readonly Exclude<keyof ExtractBuiltins, "GIT_REFUSED">[] = [
   "SESSION_ID",
   "REPO",
   "BRANCH",

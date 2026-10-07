@@ -146,6 +146,7 @@ import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { BoundedReadError, readRegularFileBytesBounded } from "../io/read-regular-file.js";
+import { writeRegularFileNonBlocking } from "../io/write-regular-file.js";
 
 /** Versioned algorithm tag, so a future re-key scheme can reject mismatches explicitly rather than guess. */
 export const SIGNING_ALG = "hmac-sha256-v1";
@@ -208,7 +209,11 @@ export function getOrCreateSigningKey(generatedDir: string): SigningKeyHandle {
     // meaningful create-race to defend against — the file is already
     // known bad, so unconditionally replacing it can only improve on
     // the previous (unusable) contents.
-    fs.writeFileSync(filePath, fresh, { mode: 0o600 });
+    // Non-blocking and typed on the opened descriptor, not a by-path
+    // `writeFileSync`: the read above saw a regular file, but a FIFO swapped
+    // in since would hold the hook here until its budget ran out. A
+    // symlink is followed, as the read above followed it.
+    writeRegularFileNonBlocking(filePath, fresh, { mode: 0o600 });
     try {
       fs.chmodSync(filePath, 0o600);
     } catch {
@@ -217,6 +222,8 @@ export function getOrCreateSigningKey(generatedDir: string): SigningKeyHandle {
     return { key: fresh, filePath, created: true };
   }
   try {
+    // `wx` is an exclusive create (`O_EXCL`): it fails with EEXIST on a FIFO
+    // or any other node at the path instead of opening it, so it cannot block.
     fs.writeFileSync(filePath, fresh, { mode: 0o600, flag: "wx" });
     return { key: fresh, filePath, created: true };
   } catch (err) {
@@ -241,7 +248,7 @@ export function rotateSigningKey(generatedDir: string): SigningKeyHandle {
   const filePath = signingKeyPathFor(generatedDir);
   fs.mkdirSync(generatedDir, { recursive: true });
   const fresh = crypto.randomBytes(KEY_BYTES);
-  fs.writeFileSync(filePath, fresh, { mode: 0o600 });
+  writeRegularFileNonBlocking(filePath, fresh, { mode: 0o600 });
   try {
     fs.chmodSync(filePath, 0o600);
   } catch {

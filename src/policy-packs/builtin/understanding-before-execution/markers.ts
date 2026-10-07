@@ -12,7 +12,7 @@ import { readRegularFileRejectingSymlink } from "../../../io/read-regular-file.j
 import { signMarker, verifyMarkerSignature } from "../../../runtime/approval-signing.js";
 import { rejectMalformedSessionId } from "../../../runtime/reject-malformed-session-id.js";
 import { safeJsonParse } from "../../../io/safe-json-parse.js";
-import { readActiveClaim } from "./active-claim.js";
+import { readActiveClaim, REFUSED_CLAIM_BINDING } from "./active-claim.js";
 
 export const APPROVAL_MARKER_DIRNAME = ".approvals";
 
@@ -46,6 +46,15 @@ export interface ApprovalMarker {
   claimTaskId?: string | null;
 }
 
+function bindingForActiveClaim(generatedDir: string): string | null {
+  const claim = readActiveClaim(generatedDir);
+  if (claim.kind === "claim") return claim.taskId;
+  // A refused claim path is NOT "no claim": binding to null would let this
+  // marker match once the path is later cleared to absent. The sentinel
+  // binds to nothing instead (see REFUSED_CLAIM_BINDING).
+  return claim.kind === "absent" ? null : REFUSED_CLAIM_BINDING;
+}
+
 /**
  * Operator-side: write the marker file the gate consults. Atomic so a
  * crash mid-write cannot leave a half-empty file the gate would accept
@@ -65,7 +74,9 @@ export interface ApprovalMarker {
  *
  * Task binding (task 5018c0c4): every marker this writer signs records
  * the task id of the active claim at the moment of writing (`null` when
- * none is held), unless the caller passes `claimTaskId` explicitly. The
+ * none is held; a sentinel that matches no claim when the claim path is
+ * present but unreadable, see `REFUSED_CLAIM_BINDING`), unless the caller
+ * passes `claimTaskId` explicitly. The
  * binding is resolved here, at the one writer, so no approve path (the
  * `harness approve understanding` CLI, the hook's auto-approval path)
  * can mint an unbound session marker. Only the understanding gate's
@@ -81,7 +92,7 @@ export function writeApprovalMarker(
 ): string {
   const filePath = approvalMarkerPathFor(generatedDir, sessionId);
   const claimTaskId =
-    marker.claimTaskId !== undefined ? marker.claimTaskId : readActiveClaim(generatedDir);
+    marker.claimTaskId !== undefined ? marker.claimTaskId : bindingForActiveClaim(generatedDir);
   const signed = signMarker(generatedDir, sessionId, { ...marker, claimTaskId });
   atomicWriteFile(filePath, `${JSON.stringify(signed, null, 2)}\n`, { mode: 0o600 });
   return filePath;

@@ -45,7 +45,9 @@ export interface EnrichedEvent {
  * Kube seams resolve together: if either is injected, skip the
  * `~/.kube/config` read entirely (same contract `resolve-env` always had).
  */
-export function resolveKubeSeams(seams: EnrichmentSeams): { context: string; namespace: string } {
+export function resolveKubeSeams(
+  seams: EnrichmentSeams,
+): { context: string; namespace: string; unreadable?: string } {
   return seams.kubeContext !== undefined || seams.kubeNamespace !== undefined
     ? { context: seams.kubeContext ?? "", namespace: seams.kubeNamespace ?? "" }
     : resolveKubeContext();

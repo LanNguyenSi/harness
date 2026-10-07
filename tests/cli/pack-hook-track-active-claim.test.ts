@@ -6,10 +6,17 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { runPackHookTrackActiveClaimCli } from "../../src/cli/pack/hook-track-active-claim.js";
 import {
   activeClaimPathFor,
+  claimTaskIdOrNull,
   readActiveClaim,
   writeActiveClaim,
 } from "../../src/policy-packs/builtin/understanding-before-execution-runtime.js";
 import { parseManifest, type Manifest } from "../../src/schema/index.js";
+
+// The claimed task id, or null for an absent AND a refused claim path; the
+// tri-state itself is asserted in the dedicated tests.
+function claimIdOf(generatedDir: string): string | null {
+  return claimTaskIdOrNull(readActiveClaim(generatedDir));
+}
 
 let tmp: string;
 
@@ -91,7 +98,7 @@ describe("pack hook track-active-claim — task_start writes the active-claim fi
     expect(result.claimWritten).toBe(true);
     expect(result.claimCleared).toBe(false);
     expect(result.taskId).toBe("task-uuid-abc");
-    expect(readActiveClaim(generatedDir)).toBe("task-uuid-abc");
+    expect(claimIdOf(generatedDir)).toBe("task-uuid-abc");
     expect(fs.readFileSync(activeClaimPathFor(generatedDir), "utf8")).toBe(
       "task-uuid-abc\n",
     );
@@ -113,7 +120,7 @@ describe("pack hook track-active-claim — task_start writes the active-claim fi
     });
 
     expect(result.claimWritten).toBe(true);
-    expect(readActiveClaim(generatedDir)).toBe("task-new");
+    expect(claimIdOf(generatedDir)).toBe("task-new");
   });
 
   it("skips when task_start carries no taskId (defensive)", async () => {
@@ -128,7 +135,7 @@ describe("pack hook track-active-claim — task_start writes the active-claim fi
     });
 
     expect(result.claimWritten).toBe(false);
-    expect(readActiveClaim(generatedDir)).toBeNull();
+    expect(claimIdOf(generatedDir)).toBeNull();
     expect(stderr.read()).toMatch(/task_start without tool_input.taskId/);
   });
 
@@ -146,7 +153,7 @@ describe("pack hook track-active-claim — task_start writes the active-claim fi
     });
 
     expect(result.claimWritten).toBe(false);
-    expect(readActiveClaim(generatedDir)).toBeNull();
+    expect(claimIdOf(generatedDir)).toBeNull();
     expect(stderr.read()).toMatch(/writeActiveClaim failed/);
   });
 });
@@ -172,7 +179,7 @@ describe("pack hook track-active-claim: task_finish resulting status decides the
 
     expect(result.claimCleared).toBe(true);
     expect(result.claimWritten).toBe(false);
-    expect(readActiveClaim(generatedDir)).toBeNull();
+    expect(claimIdOf(generatedDir)).toBeNull();
     expect(stderr.read()).toMatch(
       /cleared active-claim after mcp__agent-tasks__task_finish/,
     );
@@ -202,7 +209,7 @@ describe("pack hook track-active-claim: task_finish resulting status decides the
 
     expect(result.claimCleared).toBe(false);
     expect(result.claimWritten).toBe(false);
-    expect(readActiveClaim(generatedDir)).toBe("task-uuid-abc");
+    expect(claimIdOf(generatedDir)).toBe("task-uuid-abc");
     expect(stderr.read()).toMatch(
       /kept active-claim after mcp__agent-tasks__task_finish \(resulting status=review\)/,
     );
@@ -224,7 +231,7 @@ describe("pack hook track-active-claim: task_finish resulting status decides the
 
     expect(result.claimCleared).toBe(true);
     expect(result.claimWritten).toBe(false);
-    expect(readActiveClaim(generatedDir)).toBeNull();
+    expect(claimIdOf(generatedDir)).toBeNull();
     expect(stderr.read()).toMatch(
       /cleared active-claim after mcp__agent-tasks__task_finish/,
     );
@@ -249,7 +256,7 @@ describe("pack hook track-active-claim: task_finish resulting status decides the
     });
 
     expect(result.claimCleared).toBe(true);
-    expect(readActiveClaim(generatedDir)).toBeNull();
+    expect(claimIdOf(generatedDir)).toBeNull();
   });
 
   it("clears the active-claim file on task_abandon", async () => {
@@ -267,7 +274,7 @@ describe("pack hook track-active-claim: task_finish resulting status decides the
     });
 
     expect(result.claimCleared).toBe(true);
-    expect(readActiveClaim(generatedDir)).toBeNull();
+    expect(claimIdOf(generatedDir)).toBeNull();
   });
 
   it("clears the active-claim file on task_merge", async () => {
@@ -286,7 +293,7 @@ describe("pack hook track-active-claim: task_finish resulting status decides the
     });
 
     expect(result.claimCleared).toBe(true);
-    expect(readActiveClaim(generatedDir)).toBeNull();
+    expect(claimIdOf(generatedDir)).toBeNull();
     expect(stderr.read()).toMatch(/cleared active-claim after mcp__agent-tasks__task_merge/);
   });
 
@@ -328,7 +335,7 @@ describe("pack hook track-active-claim: task_finish resulting status decides the
       stderr: bufferStream().stream,
       generatedDir,
     });
-    expect(readActiveClaim(generatedDir)).toBe("task-uuid-abc");
+    expect(claimIdOf(generatedDir)).toBe("task-uuid-abc");
 
     const stderr = bufferStream();
     const result = await runPackHookTrackActiveClaimCli({
@@ -341,7 +348,7 @@ describe("pack hook track-active-claim: task_finish resulting status decides the
     });
 
     expect(result.claimWritten).toBe(true);
-    expect(readActiveClaim(generatedDir)).toBe("task-uuid-abc");
+    expect(claimIdOf(generatedDir)).toBe("task-uuid-abc");
   });
 });
 
@@ -389,7 +396,7 @@ describe("pack hook track-active-claim: golden fixture, real Claude Code 2.1.280
     });
 
     expect(result.claimCleared).toBe(false);
-    expect(readActiveClaim(generatedDir)).toBe("abc-123");
+    expect(claimIdOf(generatedDir)).toBe("abc-123");
     expect(stderr.read()).toMatch(/kept active-claim after mcp__agent-tasks__task_finish \(resulting status=review\)/);
   });
 
@@ -414,7 +421,7 @@ describe("pack hook track-active-claim: golden fixture, real Claude Code 2.1.280
     });
 
     expect(result.claimCleared).toBe(true);
-    expect(readActiveClaim(generatedDir)).toBeNull();
+    expect(claimIdOf(generatedDir)).toBeNull();
     expect(stderr.read()).toMatch(/cleared active-claim after mcp__agent-tasks__task_finish/);
   });
 
@@ -445,7 +452,7 @@ describe("pack hook track-active-claim: golden fixture, real Claude Code 2.1.280
     });
 
     expect(result.claimCleared).toBe(false);
-    expect(readActiveClaim(generatedDir)).toBe("abc-123");
+    expect(claimIdOf(generatedDir)).toBe("abc-123");
   });
 });
 
@@ -477,7 +484,7 @@ describe("pack hook track-active-claim: defensive tool_response shapes beyond th
     });
 
     expect(result.claimCleared).toBe(false);
-    expect(readActiveClaim(generatedDir)).toBe("task-uuid-abc");
+    expect(claimIdOf(generatedDir)).toBe("task-uuid-abc");
   });
 
   it("unwraps a bare JSON string tool_response", async () => {
@@ -498,7 +505,7 @@ describe("pack hook track-active-claim: defensive tool_response shapes beyond th
     });
 
     expect(result.claimCleared).toBe(false);
-    expect(readActiveClaim(generatedDir)).toBe("task-uuid-abc");
+    expect(claimIdOf(generatedDir)).toBe("task-uuid-abc");
   });
 });
 
@@ -631,7 +638,7 @@ describe("pack hook track-active-claim: release verbs only clear the marker for 
     });
 
     expect(result.claimCleared).toBe(false);
-    expect(readActiveClaim(generatedDir)).toBe("task-B");
+    expect(claimIdOf(generatedDir)).toBe("task-B");
     expect(stderr.read()).toMatch(
       /kept active-claim task-B: mcp__agent-tasks__task_merge on task-A/,
     );
@@ -651,7 +658,7 @@ describe("pack hook track-active-claim: release verbs only clear the marker for 
     });
 
     expect(result.claimCleared).toBe(true);
-    expect(readActiveClaim(generatedDir)).toBeNull();
+    expect(claimIdOf(generatedDir)).toBeNull();
   });
 
   it("keeps active-claim B when task_abandon fires for a different task A", async () => {
@@ -669,7 +676,7 @@ describe("pack hook track-active-claim: release verbs only clear the marker for 
     });
 
     expect(result.claimCleared).toBe(false);
-    expect(readActiveClaim(generatedDir)).toBe("task-B");
+    expect(claimIdOf(generatedDir)).toBe("task-B");
     expect(stderr.read()).toMatch(
       /kept active-claim task-B: mcp__agent-tasks__task_abandon on task-A/,
     );
@@ -698,7 +705,7 @@ describe("pack hook track-active-claim: release verbs only clear the marker for 
     });
 
     expect(result.claimCleared).toBe(false);
-    expect(readActiveClaim(generatedDir)).toBe("task-B");
+    expect(claimIdOf(generatedDir)).toBe("task-B");
     expect(stderr.read()).toMatch(
       /kept active-claim task-B: mcp__agent-tasks__task_finish on task-A/,
     );
@@ -723,7 +730,7 @@ describe("pack hook track-active-claim: release verbs only clear the marker for 
     });
 
     expect(result.claimCleared).toBe(false);
-    expect(readActiveClaim(generatedDir)).toBe("task-B");
+    expect(claimIdOf(generatedDir)).toBe("task-B");
   });
 
   it("clears (fail-safe direction) when a marker exists but the acted-on task id is unresolvable", async () => {
@@ -739,7 +746,7 @@ describe("pack hook track-active-claim: release verbs only clear the marker for 
     });
 
     expect(result.claimCleared).toBe(true);
-    expect(readActiveClaim(generatedDir)).toBeNull();
+    expect(claimIdOf(generatedDir)).toBeNull();
   });
 
   it("still clears (fail-safe direction) when no current marker exists and the call names a task id", async () => {
@@ -756,7 +763,7 @@ describe("pack hook track-active-claim: release verbs only clear the marker for 
     });
 
     expect(result.claimCleared).toBe(true);
-    expect(readActiveClaim(generatedDir)).toBeNull();
+    expect(claimIdOf(generatedDir)).toBeNull();
   });
 });
 
@@ -779,7 +786,7 @@ describe("pack hook track-active-claim — tasks_transition v1 verb (PR #200)", 
     });
 
     expect(result.claimCleared).toBe(true);
-    expect(readActiveClaim(generatedDir)).toBeNull();
+    expect(claimIdOf(generatedDir)).toBeNull();
     expect(stderr.read()).toMatch(/cleared active-claim after tasks_transition status=done/);
   });
 
@@ -800,7 +807,7 @@ describe("pack hook track-active-claim — tasks_transition v1 verb (PR #200)", 
 
     expect(result.claimCleared).toBe(false);
     expect(result.claimWritten).toBe(false);
-    expect(readActiveClaim(generatedDir)).toBe("task-uuid-abc");
+    expect(claimIdOf(generatedDir)).toBe("task-uuid-abc");
     expect(stderr.read()).toMatch(/status=in_progress keeps claim/);
   });
 
@@ -822,7 +829,7 @@ describe("pack hook track-active-claim — tasks_transition v1 verb (PR #200)", 
     });
 
     expect(result.claimCleared).toBe(false);
-    expect(readActiveClaim(generatedDir)).toBe("task-uuid-abc");
+    expect(claimIdOf(generatedDir)).toBe("task-uuid-abc");
     expect(stderr.read()).toMatch(/status=review keeps claim/);
   });
 
@@ -842,7 +849,7 @@ describe("pack hook track-active-claim — tasks_transition v1 verb (PR #200)", 
     });
 
     expect(result.claimCleared).toBe(false);
-    expect(readActiveClaim(generatedDir)).toBe("task-uuid-abc");
+    expect(claimIdOf(generatedDir)).toBe("task-uuid-abc");
     expect(stderr.read()).toMatch(/status=\(missing\) keeps claim/);
   });
 
@@ -862,7 +869,7 @@ describe("pack hook track-active-claim — tasks_transition v1 verb (PR #200)", 
     });
 
     expect(result.claimCleared).toBe(false);
-    expect(readActiveClaim(generatedDir)).toBe("task-uuid-abc");
+    expect(claimIdOf(generatedDir)).toBe("task-uuid-abc");
   });
 });
 
@@ -889,7 +896,7 @@ describe("pack hook track-active-claim — Codex MCP tool-name alias variants (t
     });
 
     expect(result.claimWritten).toBe(true);
-    expect(readActiveClaim(generatedDir)).toBe("task-uuid-abc");
+    expect(claimIdOf(generatedDir)).toBe("task-uuid-abc");
   });
 
   it("writes active-claim on task_start with the dotted mcp__server__.tool form", async () => {
@@ -906,7 +913,7 @@ describe("pack hook track-active-claim — Codex MCP tool-name alias variants (t
     });
 
     expect(result.claimWritten).toBe(true);
-    expect(readActiveClaim(generatedDir)).toBe("task-uuid-abc");
+    expect(claimIdOf(generatedDir)).toBe("task-uuid-abc");
   });
 
   it("clears active-claim on an alias-variant task_finish tool_name", async () => {
@@ -924,7 +931,7 @@ describe("pack hook track-active-claim — Codex MCP tool-name alias variants (t
     });
 
     expect(result.claimCleared).toBe(true);
-    expect(readActiveClaim(generatedDir)).toBeNull();
+    expect(claimIdOf(generatedDir)).toBeNull();
   });
 
   it("clears active-claim on an alias-variant tasks_transition status=done", async () => {
@@ -945,7 +952,7 @@ describe("pack hook track-active-claim — Codex MCP tool-name alias variants (t
     });
 
     expect(result.claimCleared).toBe(true);
-    expect(readActiveClaim(generatedDir)).toBeNull();
+    expect(claimIdOf(generatedDir)).toBeNull();
   });
 
   it("negative control: an alias-variant tasks_transition with status=in_progress still keeps the claim", async () => {
@@ -970,7 +977,7 @@ describe("pack hook track-active-claim — Codex MCP tool-name alias variants (t
     });
 
     expect(result.claimCleared).toBe(false);
-    expect(readActiveClaim(generatedDir)).toBe("task-uuid-abc");
+    expect(claimIdOf(generatedDir)).toBe("task-uuid-abc");
   });
 });
 
@@ -999,7 +1006,7 @@ describe("pack hook track-active-claim — Codex wire-format synonyms (task cf4c
     });
 
     expect(result.claimWritten).toBe(true);
-    expect(readActiveClaim(generatedDir)).toBe("task-uuid-abc");
+    expect(claimIdOf(generatedDir)).toBe("task-uuid-abc");
   });
 
   it("writes active-claim on task_start when the tool name arrives under `tool` instead of `tool_name`", async () => {
@@ -1020,7 +1027,7 @@ describe("pack hook track-active-claim — Codex wire-format synonyms (task cf4c
     });
 
     expect(result.claimWritten).toBe(true);
-    expect(readActiveClaim(generatedDir)).toBe("task-uuid-abc");
+    expect(claimIdOf(generatedDir)).toBe("task-uuid-abc");
   });
 
   it("clears active-claim on task_finish when both synonyms (`tool` + `raw_input`) are used together", async () => {
@@ -1042,7 +1049,7 @@ describe("pack hook track-active-claim — Codex wire-format synonyms (task cf4c
     });
 
     expect(result.claimCleared).toBe(true);
-    expect(readActiveClaim(generatedDir)).toBeNull();
+    expect(claimIdOf(generatedDir)).toBeNull();
   });
 
   it("prefers tool_input over raw_input when both are present (matches the sibling codex-post-tool-use precedence)", async () => {
@@ -1064,7 +1071,7 @@ describe("pack hook track-active-claim — Codex wire-format synonyms (task cf4c
     });
 
     expect(result.claimWritten).toBe(true);
-    expect(readActiveClaim(generatedDir)).toBe("from-tool-input");
+    expect(claimIdOf(generatedDir)).toBe("from-tool-input");
   });
 
   it("negative control: missing both tool_name and tool still skips (no false-positive synonym resolution)", async () => {
@@ -1084,7 +1091,7 @@ describe("pack hook track-active-claim — Codex wire-format synonyms (task cf4c
     });
 
     expect(result.claimWritten).toBe(false);
-    expect(readActiveClaim(generatedDir)).toBeNull();
+    expect(claimIdOf(generatedDir)).toBeNull();
     expect(stderr.read()).toMatch(/missing tool_name/);
   });
 });
@@ -1104,7 +1111,7 @@ describe("pack hook track-active-claim — guards and fall-through", () => {
     });
 
     expect(result.claimWritten).toBe(false);
-    expect(readActiveClaim(generatedDir)).toBeNull();
+    expect(claimIdOf(generatedDir)).toBeNull();
     expect(stderr.read()).toMatch(/enabled:false/);
   });
 
@@ -1126,11 +1133,11 @@ describe("pack hook track-active-claim — guards and fall-through", () => {
     expect(stderr.read()).toMatch(/not tracked/);
   });
 
-  it("readActiveClaim returns null on an empty file (no false-positive resolution to empty string)", () => {
+  it("readActiveClaim reads an empty file as absent (no false-positive resolution to empty string)", () => {
     const generatedDir = path.join(tmp, "harness.generated");
     fs.mkdirSync(generatedDir, { recursive: true });
     fs.writeFileSync(activeClaimPathFor(generatedDir), "\n");
-    expect(readActiveClaim(generatedDir)).toBeNull();
+    expect(readActiveClaim(generatedDir)).toEqual({ kind: "absent" });
   });
 
   it("readActiveClaim rejects a poisoned file (defense-in-depth on read)", () => {
@@ -1140,7 +1147,8 @@ describe("pack hook track-active-claim — guards and fall-through", () => {
     // would never let this happen, but the read-side check stops a
     // downstream forged marker if it slipped through somehow.
     fs.writeFileSync(activeClaimPathFor(generatedDir), "../escape\n");
-    expect(readActiveClaim(generatedDir)).toBeNull();
+    expect(readActiveClaim(generatedDir)).toMatchObject({ kind: "refused" });
+    expect(claimIdOf(generatedDir)).toBeNull();
   });
 
   it("skips on malformed event JSON without crashing", async () => {

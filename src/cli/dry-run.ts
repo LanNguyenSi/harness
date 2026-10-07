@@ -109,6 +109,9 @@ function builtinsFor(
     BRANCH: fromOpts.BRANCH ?? gitContext.branch,
     TOOL_NAME: fromOpts.TOOL_NAME ?? (tool ?? ""),
     CWD: cwd,
+    ...(fromOpts.BRANCH === undefined && gitContext.refused !== undefined
+      ? { GIT_REFUSED: gitContext.refused }
+      : {}),
   };
 }
 
@@ -264,7 +267,11 @@ function staticLedgerQuery(
   const extract = evaluateExtract(policy.trigger.extract ?? {}, ctx, builtins);
   // Same guard as the runtime: an empty ${REPO} / ${BRANCH} never renders
   // a blank tag (`preflight:`); show the hint the agent would get instead.
-  const emptyGuard = emptyIdentifierGuard(policy.requires.ledger_tag, extract.values);
+  const emptyGuard = emptyIdentifierGuard(
+    policy.requires.ledger_tag,
+    extract.values,
+    builtins.GIT_REFUSED,
+  );
   if (emptyGuard !== null) {
     return `(no ledger query: ${emptyGuard.message})`;
   }

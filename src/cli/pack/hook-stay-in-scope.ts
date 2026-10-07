@@ -3,6 +3,7 @@
 // pack configuration so a stale generated hook safely no-ops after disable.
 
 import * as fs from "node:fs";
+import { appendRegularFileNonBlocking } from "../../io/write-regular-file.js";
 import * as path from "node:path";
 import { resolveHomeDir } from "../../runtime/home-dir.js";
 import { toolNameMatchesAny } from "../../policy-packs/builtin/understanding-before-execution-runtime.js";
@@ -118,7 +119,7 @@ function resolveLogPath(opts: PackHookStayInScopeOptions, env: NodeJS.ProcessEnv
 function appendAuditRow(logPath: string, record: StayInScopeAuditRecord): { ok: true } | { ok: false; reason: string } {
   try {
     fs.mkdirSync(path.dirname(logPath), { recursive: true });
-    fs.appendFileSync(logPath, `${JSON.stringify(record)}\n`, "utf8");
+    appendRegularFileNonBlocking(logPath, `${JSON.stringify(record)}\n`);
     return { ok: true };
   } catch (error) {
     return { ok: false, reason: (error as Error).message };

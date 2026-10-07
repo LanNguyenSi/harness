@@ -133,7 +133,7 @@ export interface GitEntry {
   /**
    * `".git"` when the `.git` entry is present but refused: a node that is
    * neither a directory nor a regular file (a FIFO, a device, a socket, a
-   * symlink to one), or a file that cannot be
+   * symlink to one), a symlink that dangles or loops, or a file that cannot be
    * read (a FIFO swapped in after the stat, an oversized or unreadable
    * file), as opposed to a readable file without a `gitdir:` line; `"HEAD"` when the
    * `.git` directory's `HEAD` is present but not a regular file. Absent
@@ -162,20 +162,42 @@ export function findGitEntry(startDir: string): GitEntry | null {
   for (let depth = 0; depth < 128; depth++) {
     const dotGit = path.join(dir, ".git");
     let stat: fs.Stats | undefined;
+    let present: boolean;
     try {
-      stat = fs.statSync(dotGit);
+      // lstat first: it tells an entry that is THERE apart from one that is
+      // not, which `stat` cannot do for a link that does not resolve.
+      fs.lstatSync(dotGit);
+      present = true;
     } catch {
-      stat = undefined;
+      // Nothing demonstrably at `<dir>/.git` (absent, or a parent that
+      // cannot be searched: `ENOENT`, `ENOTDIR`, `EACCES`, ...): keep
+      // walking, as it always did. Only an entry lstat actually SAW counts
+      // as present; the intercept's own, deliberately more conservative
+      // "could this be inside a repository" walk also counts an lstat
+      // failure as inside, which is its own fail-closed choice.
+      present = false;
     }
-    // A `.git` that EXISTS but is neither a directory nor a regular file (a
-    // FIFO, a device, a socket, a symlink to one) is not "no `.git` here,
-    // keep walking": walking up would resolve whatever repository ENCLOSES
-    // this one (a linked worktree checked out inside an outer repository
-    // would read as the outer repository's branch). It is reported as
-    // refused with `gitDir` left empty, like a present-but-unreadable
-    // `HEAD`. A `.git` the stat cannot resolve at all (absent, or a dangling
-    // or looping symlink) is skipped, as it always was.
-    if (stat !== undefined && !stat.isDirectory() && !stat.isFile()) {
+    if (present) {
+      try {
+        stat = fs.statSync(dotGit);
+      } catch {
+        stat = undefined;
+      }
+    }
+    // A `.git` that EXISTS but is not a directory or a regular file that
+    // can be looked at (a FIFO, a device, a socket, a symlink to one, a
+    // symlink that dangles or loops) is not "no `.git` here, keep walking":
+    // walking up would resolve whatever repository ENCLOSES this one (a
+    // linked worktree checked out inside an outer repository would read as
+    // the outer repository's branch, the same as if `.git` had been
+    // removed). It is reported as refused with `gitDir` left empty, like a
+    // present-but-unreadable `HEAD`, which is also what
+    // `mayBeInsideRepository` in `intercept.ts` assumes: it counts any
+    // `.git` entry, valid or not, as inside. Only a `.git` that is ABSENT
+    // keeps the walk going (task b56d95d3, operator decision): a nested
+    // work tree whose `.git` was removed resolves the enclosing repository,
+    // exactly like git itself would.
+    if (present && (stat === undefined || (!stat.isDirectory() && !stat.isFile()))) {
       return { worktreeRoot: dir, gitDir: "", refused: ".git" };
     }
     if (stat?.isDirectory()) {
