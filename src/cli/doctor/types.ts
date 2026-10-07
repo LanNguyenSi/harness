@@ -12,6 +12,7 @@ import type { ToolchainParitySection } from "./toolchain-parity.js";
 import type { UgAutoApprovalsSection } from "./ug-auto-approvals.js";
 import type { UgDelegationsSection } from "./ug-delegations.js";
 import type { UgInflightSection } from "./ug-inflight.js";
+import type { UgReportsDirSection } from "./ug-reports-dir.js";
 import type { SettingsDriftSection } from "./settings-drift.js";
 import type { AutoApproveModeWarning } from "./auto-approve-mode.js";
 import type { ExpireOnToolMatchWarning } from "./expire-on-tool-match.js";
@@ -491,6 +492,16 @@ export interface DoctorReport {
    */
   ugInflight?: UgInflightSection;
   /**
+   * Size of the understanding-gate reports directory against the bounds the
+   * PreToolUse gate reads (see `ug-reports-dir.ts`). Present only when the
+   * `understanding-before-execution` pack is declared and enabled. Rendered
+   * only when `state` is `near` or `over`, and each of those rolls exactly
+   * one warning (never an error: a past-the-bound directory fails the gate
+   * closed, a lockout that announces itself on every deny, not a fail-open
+   * gap).
+   */
+  ugReportsDir?: UgReportsDirSection;
+  /**
    * `bypassPermissions` observed (hook-side, `.permission-mode-
    * observations/`) but `auto_approve` does not cover it (task 8f637efd,
    * "Amendment: install default"). Present only when the pack is
@@ -667,6 +678,7 @@ export type {
 } from "./ug-auto-approvals.js";
 export type { UgDelegationsSection } from "./ug-delegations.js";
 export type { UgInflightSection } from "./ug-inflight.js";
+export type { UgReportsDirSection } from "./ug-reports-dir.js";
 export type { AutoApproveModeWarning } from "./auto-approve-mode.js";
 export type { ExpireOnToolMatchWarning } from "./expire-on-tool-match.js";
 export type { BypassWithoutAutoApproveFinding } from "./bypass-without-auto-approve.js";

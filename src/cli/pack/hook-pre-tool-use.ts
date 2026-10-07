@@ -90,6 +90,7 @@ import {
   toPackageMode,
 } from "../../policy-packs/builtin/understanding-before-execution.js";
 import { sha256Hex, signingKeyExists } from "../../runtime/approval-signing.js";
+import { renderReportsDirTooLargeNotice } from "../../policy-packs/builtin/understanding-before-execution/persisted-reports.js";
 import { findLatestParseError, renderMalformedSectionsNotice } from "../approve/understanding.js";
 import { persistStdinReport } from "../approve/stdin-report.js";
 import { attemptAutoApproval, AUTO_APPROVE_LEDGER_SOURCE } from "./auto-approve-path.js";
@@ -416,6 +417,7 @@ function blockJson(
   malformedSections?: string[],
   retryInstruction?: string | null,
   expiryNotice?: string | null,
+  reportsDirTooLargeNotice?: string | null,
 ): string {
   // When the pack config declares `ux:`, the agent-facing surface
   // becomes the plain-language `{ cannot, required, run }` shape, and
@@ -425,7 +427,12 @@ function blockJson(
   // engine vocabulary) still lands in stderr via the BLOCK diagnostic
   // for operator audit.
   let reasonText: string;
-  if (ux) {
+  if (reportsDirTooLargeNotice) {
+    // The reports directory is too large to read: approving again cannot
+    // open the gate, so neither envelope's "run `harness approve
+    // understanding`" recipe applies. Name the cleanup instead.
+    reasonText = `Understanding Gate: ${reason}. Tool: ${toolName}. ${reportsDirTooLargeNotice}`;
+  } else if (ux) {
     reasonText = renderAgentFacing(ux, {
       SESSION_ID: sessionId,
       TOOL_NAME: toolName,
@@ -1577,6 +1584,9 @@ async function runPackHookPreToolUseCliInner(
       latestParseError?.malformedSections,
       agentInstruction,
       expiryNotice,
+      report.reportsDirTooLarge !== undefined
+        ? renderReportsDirTooLargeNotice(reportsDir, report.reportsDirTooLarge)
+        : null,
     )}\n`,
   );
   return {

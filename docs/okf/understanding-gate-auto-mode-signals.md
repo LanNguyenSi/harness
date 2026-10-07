@@ -3,12 +3,13 @@ type: overview
 title: Understanding gate, auto-mode signal sources (measured)
 description: What signals exist for detecting an agent's own permission/auto-approval mode across Claude Code, Codex, and opencode, measured where possible, doc-only where not, with a trust-class table. Covers both launch shapes for Claude Code, headless and interactive, plus how a hook ask resolves in each and what a subagent's tool call looks like to the same hook. The rule and the decision on which signals gate anything live in the ADR, not here.
 tags: [understanding-gate, permission-mode, auto-mode, hooks, measurement, trust-boundary]
-timestamp: 2026-10-06T07:15:00Z
+timestamp: 2026-10-07T04:56:30Z
 sources:
   - src/cli/pack/auto-approve-path.ts
   - dogfood/ug-auto-mode-signals/README.md
   - dogfood/ug-auto-mode-signals/delegate-e2e.sh
   - src/cli/pack/hook-pre-tool-use.ts
+  - src/cli/pack/hook-codex-pre-tool-use.ts
   - src/policy-packs/builtin/understanding-before-execution/permission-mode-observations.ts
   - src/cli/pack/hook-bootstrap.ts
   - src/runtime/session-id.ts
@@ -134,7 +135,10 @@ it is confined to the last step of the hook's decision order:
   decision-order step 9 auto-approval attempt that runs only when the
   marker check and every exemption branch have declined and only when
   the pack config carries `auto_approve`. No other decision path
-  consults the field; `src/cli/pack/hook-bootstrap.ts` (the shared
+  consults the field except the same step in the Codex PreToolUse hook
+  (`src/cli/pack/hook-codex-pre-tool-use.ts`, added by slice 2 of the ADR),
+  which reads `permission_mode` from its payload and hands it to the same
+  `attemptAutoApproval` at the same last step; `src/cli/pack/hook-bootstrap.ts` (the shared
   payload-parsing helpers) still has zero occurrences. Before that slice
   the gate did not read the field at all. Task `8f637efd` adds a second,
   non-gating read of the same field at the same call site: right before

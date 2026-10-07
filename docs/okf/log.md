@@ -2,6 +2,10 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-10-07T05:25:36Z, task 6e001bfc (review round 2 notes): the byte-budget re-approval claim is qualified in `persisted-reports.ts` JSDoc, the CHANGELOG and `understanding-gate-lockout-recovery.md` (approval opens the gate only when the session's report is the newest by name; approval rewrites in place). `understanding-gate-lockout-recovery.md` and `evidence-ledger-trust-boundary.md` re-read against the changed source, timestamp re-stamped.
+- 2026-10-07T04:56:30Z, task 6e001bfc (review round 2): `renderReportsDirTooLargeNotice` now takes the bound crossed (`entries` or `bytes`, carried as `PersistedReportEvidence.reportsDirTooLarge`): the entry-count text is unchanged, the 32 MiB byte-budget text says to run `harness approve understanding` to approve the newest report (re-approval opens the gate there when the session's report is the newest by name, measured by a reviewer; an older session report behind more than 32 MiB of newer reports stays denied, measured in the round-2 review) and names the cleanup if the deny persists; `understanding-gate-lockout-recovery.md` describes both and was re-stamped. `understanding-gate-auto-mode-signals.md` re-verified against `hook-pre-tool-use.ts` (the permission_mode read, step 9 hand-off and escape-branch `ask` claims hold), `docs/policy-packs/understanding-before-execution.md` (the `auto_approve` rows and the 2 s `report_scan.max_wait` default match `auto-approve.ts`) and `read-only-bash.ts` (the doc makes no claim about it): one claim was stale on base, that the Claude hook is the only reader of `permission_mode` on the gate path, since the Codex PreToolUse hook (slice 2) reads it and hands it to the same `attemptAutoApproval`; corrected, `hook-codex-pre-tool-use.ts` added to its sources, timestamp re-stamped. `codex-adapter-parity-gaps.md`, `evidence-ledger-trust-boundary.md` and `gate-fail-posture-matrix.md` were re-read after the round-2 source edits (none says anything about the approve-again instruction for a too-large directory), timestamp-only re-stamp.
+- 2026-10-07T04:30:48Z, task 6e001bfc (re-stamp, second part): `codex-adapter-parity-gaps.md` (the Codex hook's deny text for the bound case now names the cleanup; the doc's claim that `harness approve understanding` works the same after a Codex block concerns the ordinary block and stays true) and `debug-verb-selection.md` (doctor gained one warning-only section; its exit-status claim, warnings alone exit 0, is unchanged) were re-read against the changed sources; timestamp-only re-stamp.
+- 2026-10-07T04:30:15Z, task 6e001bfc: both PreToolUse hooks swap the re-approval instruction in the agent-facing deny text for the cleanup when the reports directory is past the read bound (`renderReportsDirTooLargeNotice` in `persisted-reports.ts`), and `harness doctor` gained a bounded reports-directory size warning (new `src/cli/doctor/ug-reports-dir.ts`, wired in `src/cli/doctor/index.ts`). `understanding-gate-lockout-recovery.md` gained the deny-text and doctor sentence and lists the new source; `evidence-ledger-trust-boundary.md`, `gate-fail-posture-matrix.md` and `pause-vs-gate-kill-switch.md` were re-read against the changed sources and state nothing the change alters (the bound deny reason on stderr and the fail-closed posture are unchanged), so their re-stamp is timestamp-only; the source line citations the shifted lines moved are re-pointed in the decision records and this log. `understanding-gate-auto-mode-signals.md` is not re-stamped here: it was already stale against `read-only-bash.ts`, which this task does not touch.
 - 2026-10-06T14:12:57Z, task 7d4abf84 (follow-up): `src/runtime/shell-command-model.ts` no longer lets the oracle confirm a `cd -@` (bash and zsh refuse it, like `-e`); `gate-fail-posture-matrix.md` names `-e` / `-@` in the pruning condition; `debug-verb-selection.md`, `evidence-ledger-trust-boundary.md`, `policy-engine-producer-wiring.md` and `quote-model-divergence.md` make no claim about the cd options and were re-stamped without content change.
 - 2026-10-06T13:45:53Z, task 7d4abf84 (second review fixes): `src/runtime/shell-command-model.ts` asks its directory oracle about a logical `cd` / `pushd` step only when every `..` comes before any name (new `stepMayBeConfirmed`), and no longer after any function definition or a command that can redefine `cd` (`SHELL_OVERRIDE_COMMANDS`, a dynamic command word or `eval`, an assignment to the shell's function, alias or command tables); `src/runtime/shell-model-paths.ts` applies the same `..` rule ahead of its memo and marks a physical step whose `..` leaves something that is not a searchable directory, which the oracle never confirms; `src/runtime/intercept.ts` and `src/cli/policy/intercept.ts` changed comments only (the model is computed for effectively every Bash event of a manifest with a per-repo Bash policy); `docs/writing-custom-policies.md` lists every condition of the `cd` failure-branch rule and its two open gaps. `gate-fail-posture-matrix.md` and `quote-model-divergence.md` state the narrower oracle rule; re-pointed anchored citations into `src/runtime/intercept.ts` (three comment lines added above them): `disproved` 1444-1478 and `Raw-OR-normalised-OR-amp-normalised-OR-quote-normalised` 636-683 (in `quote-model-divergence.md` and `policy-engine-producer-wiring.md`). `debug-verb-selection.md` (dry-run builds the model with the resolver as its oracle, still true), `policy-engine-producer-wiring.md` (the model built at most once per event, still true), `codex-adapter-parity-gaps.md` (cites `src/cli/policy/intercept.ts` 98-109, above the edit), `pause-vs-gate-kill-switch.md` (the fifth arm still reaches only per-repo policies) and `evidence-ledger-trust-boundary.md` (cites only tripwire 4 of the policy guide) were re-read, timestamp-only re-stamp. `okf-kit check --require-anchors docs/okf` re-run after the re-stamp.
 - 2026-10-06T12:28:45Z, task 7d4abf84 (review fixes): `src/runtime/intercept.ts` builds the union in a fixed order (the per-segment demands first, the shell model's only appended; no per-segment demand for a policy only the fifth arm matched, reported by the new `policyMatchArm` that `policyMatchesEvent` wraps) and resolves model paths through the new `src/runtime/shell-model-paths.ts` (`ModelPathResolver`: one per event, memoised, a per-event work budget past which the policy fails closed); `src/runtime/shell-command-model.ts` takes that resolver as a directory oracle and drops the failure branch of a top-level builtin `cd` / `pushd` into an existing directory, and drops logical `.` steps; `src/cli/policy/intercept.ts` (one import line added near the top) and `src/cli/dry-run.ts` pass the resolver and the matched arm through. `gate-fail-posture-matrix.md`, `quote-model-divergence.md`, `policy-engine-producer-wiring.md` and `debug-verb-selection.md` state the order, the work budget and the oracle and now list `src/runtime/shell-model-paths.ts`; re-pointed anchored citations: `src/cli/policy/intercept.ts` `hookName` 98-109, `grounding-mcp` 119, `opts.ledgerTimeoutMs` 307; `src/runtime/intercept.ts` `disproved` 1441-1475 and the matching arms (now `policyMatchArm`) 633-680 with the anchor `Raw-OR-normalised-OR-amp-normalised-OR-quote-normalised` (the old `return true;` anchor is gone). `codex-adapter-parity-gaps.md` had only its citation re-pointed; `pause-vs-gate-kill-switch.md` (the fifth arm still reaches only per-repo policies, so not the operator-only deny policies) and `evidence-ledger-trust-boundary.md` (cites only tripwire 4 of `docs/writing-custom-policies.md`, which gained the union order, the `cd` failure-branch rule and the cost paragraph) were re-read, timestamp-only re-stamp. `okf-kit check --require-anchors docs/okf` re-run after the re-stamp.
@@ -1038,15 +1042,15 @@
 
   Citations re-pointed again, since this round's source edits shifted the
   cited lines. In `docs/decisions/2026-08-27-ug-auto-mode-approval.md`:
-  `src/cli/doctor/format.ts:123-124#"modeEnv.message"` (previously at
+  `src/cli/doctor/format.ts:128-129#"modeEnv.message"` (previously at
   lines 118-119) and
-  `src/cli/doctor/format.ts:196#"in-flight subagent records on disk:"`
+  `src/cli/doctor/format.ts:201#"in-flight subagent records on disk:"`
   (previously line 179). In `docs/decisions/2026-09-08-preflight-floors.md`:
   `src/probes/memory.ts:276#"const parsed = parseProbedVersion(stdout);"`
   (previously line 268). In this file:
   `src/runtime/git-context.ts:519#"fs.realpathSync(commonDir)"` (previously
   line 387) and
-  `src/cli/doctor/format.ts:156#"sessionStartPreflightSetupVersion.projectName"`
+  `src/cli/doctor/format.ts:161#"sessionStartPreflightSetupVersion.projectName"`
   (previously line 139). Four module docs were re-stamped for the
   `docs/CLI.md` edit in the same change.
 - 2026-09-13T09:52:00Z, task `e904f25a` (implementer). SUPERSEDED by the
@@ -1336,7 +1340,7 @@
   `SessionStartPreflightSetupVersionFinding`
   (`src/cli/doctor/session-start-preflight-setup-version.ts:72#"layer_unresolvable"`,
   built directly by `doctor()` at
-  `src/cli/doctor/index.ts:1433#"layer_unresolvable"`), naming the
+  `src/cli/doctor/index.ts:1438#"layer_unresolvable"`), naming the
   layer path and the FIRST LINE of the parse error, counted in
   `warningCount`, rendered by `format.ts` as one warning line; round 1
   first shipped full silence here, round 1's own review found the
@@ -1363,7 +1367,7 @@
   rule); best-effort, a realpath failure falls back to the un-resolved
   value. `doctor`'s `sessionStartPreflightProjectName` (and the
   finding's `projectName`,
-  `src/cli/doctor/format.ts:156#"sessionStartPreflightSetupVersion.projectName"`
+  `src/cli/doctor/format.ts:161#"sessionStartPreflightSetupVersion.projectName"`
   renders it as a `(project: X)` suffix) fires only when the scoped
   load actually RESOLVED a project layer file, not merely whenever a
   name was derivable for the cwd; round 1 set it unconditionally,
@@ -1448,7 +1452,7 @@
   re-verified: none makes a claim about `session_start_preflight`, the
   D-028 boundary, or the commondir/name-validation fix; `timestamp:`
   re-stamped on all five regardless. `docs/decisions/2026-08-27-ug-auto-
-  mode-approval.md` line 558's `src/cli/doctor/index.ts:1136` anchor
+  mode-approval.md` line 558's `src/cli/doctor/index.ts:1138` anchor
   (`if (report.ugBypassWithoutAutoApprove) warningCount++;`) is
   unaffected: this round's doctor edits land after that line (the top of
   `doctor()` and the `session_start_preflight.setup` version-check site
@@ -2561,7 +2565,7 @@
   `probeRegularFilePresence`, or cite a span of `hook-pre-tool-use.ts`
   inside this round's edited region (lines ~940-978): `grep` across all 6
   for those terms found only `understanding-gate-lockout-recovery.md`'s
-  pre-existing citation at `src/cli/pack/hook-pre-tool-use.ts:1000#"writePendingApproval(generatedDir, sessionId);"`,
+  pre-existing citation at `src/cli/pack/hook-pre-tool-use.ts:1007#"writePendingApproval(generatedDir, sessionId);"`,
   well before the edited region, still resolving. `evidence-ledger-trust-boundary.md`
   was NOT flagged stale this round: it was itself edited (new
   `probeRegularFilePresence` paragraph, `delegation-markers.ts` added to
@@ -2613,7 +2617,7 @@
   describes only the new reason itself; neither touches any claim or
   cited span in these 7 docs (the one line-numbered citation among them,
   `understanding-gate-lockout-recovery.md`'s
-  `src/cli/pack/hook-pre-tool-use.ts:1000#"writePendingApproval(generatedDir, sessionId);"`,
+  `src/cli/pack/hook-pre-tool-use.ts:1007#"writePendingApproval(generatedDir, sessionId);"`,
   sits well before the edited comment and still resolves). Timestamp-only
   re-stamp on all 7; no content changed. `okf-kit check --json docs/okf`
   on the committed tree shows 0 errors, 0 warnings after the re-stamp.

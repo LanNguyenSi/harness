@@ -468,6 +468,7 @@ describe("shared bound", () => {
       reports: [],
       skipped: [],
       truncated: true,
+      truncatedKind: "entries",
       truncatedDetail: expect.stringMatching(
         /^holds more than 8192 \*\.json entries, or more than 16384 entries of any name, more than the gate reads; remove /,
       ),

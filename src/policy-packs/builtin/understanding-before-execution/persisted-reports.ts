@@ -397,6 +397,16 @@ export interface PersistedReportEvidence {
   claimsApproved: boolean;
   detail: string;
   report: PersistedReport | null;
+  /**
+   * Set only when the directory was too large to read, and says which bound
+   * was crossed: `"entries"` (past {@link MAX_HOOK_LISTING_ENTRIES} `*.json`
+   * entries, or twice that many of any name; approving again cannot help) or
+   * `"bytes"` (past the byte budget; approving opens the gate only when the
+   * session's report is the newest report by name, since the hash scan reads
+   * newest first and approval rewrites the report in place). The hooks then swap
+   * their agent-facing deny text for {@link renderReportsDirTooLargeNotice}.
+   */
+  reportsDirTooLarge?: ReportsDirTruncationKind;
 }
 
 /**
@@ -507,6 +517,7 @@ export function checkPersistedReport(
       claimsApproved: false,
       detail: `no report evidence read: ${reportsDir} ${listing.truncatedDetail}`,
       report: null,
+      reportsDirTooLarge: listing.truncatedKind,
     };
   }
   const reports = listing.reports;
@@ -675,13 +686,54 @@ export const MAX_HOOK_LISTING_ENTRIES = MAX_HASH_SCAN_BYTES / MIN_SCAN_ENTRY_COS
  * directories hold nothing but their `*.json` and `*.log` entries, so a
  * directory with many more names than that is planted, not real.
  */
-const HOOK_LISTING_SCAN_FACTOR = 2;
+export const HOOK_LISTING_SCAN_FACTOR = 2;
 
 const TRUNCATED_REMEDY =
   "remove non-report or stale *.json entries from it by hand (`harness gc` removes only aged approved or expired reports)";
 
 /** Clause a past-the-entry-bound listing reports; the caller supplies the subject. */
 const ENTRIES_TRUNCATED_DETAIL = `holds more than ${MAX_HOOK_LISTING_ENTRIES} *.json entries, or more than ${MAX_HOOK_LISTING_ENTRIES * HOOK_LISTING_SCAN_FACTOR} entries of any name, more than the gate reads; ${TRUNCATED_REMEDY}`;
+
+/** Which read bound of a too-large reports directory was crossed. */
+export type ReportsDirTruncationKind = "entries" | "bytes";
+
+/**
+ * Agent-facing deny text for a reports directory the gate refuses to read.
+ * Both PreToolUse hooks use it in place of the generic "run `harness approve
+ * understanding`" recipe.
+ *
+ * `entries` (past {@link MAX_HOOK_LISTING_ENTRIES} `*.json` entries, or past
+ * twice that many entries of any name): the gate opens nothing, so a new
+ * approval cannot help and only the cleanup does.
+ *
+ * `bytes` (under the entry bound but over the byte budget): the hash scan reads
+ * the newest report first and `harness approve understanding` lists without a
+ * bound, so approving opens the gate when the session's report is the newest
+ * report by name (for example a freshly captured one). Approval rewrites the
+ * report in place, so an older session report behind more report data than the
+ * budget stays denied; the cleanup is named for that case.
+ */
+export function renderReportsDirTooLargeNotice(
+  reportsDir: string,
+  kind: ReportsDirTruncationKind,
+): string {
+  const dir = sanitizeDetailValue(reportsDir);
+  const cleanup =
+    `run \`harness gc --apply\` (it removes only aged approved or expired reports) ` +
+    `and remove stale or non-report *.json entries from it by hand.`;
+  if (kind === "bytes") {
+    return (
+      `The reports directory ${dir} holds more than ${MAX_HASH_SCAN_BYTES / (1024 * 1024)} MiB of report data, more than the gate reads in one pass. ` +
+      `Run \`harness approve understanding\` to approve the newest report (the gate reads newest first). ` +
+      `If this deny persists after approving, clean the directory up: ${cleanup}`
+    );
+  }
+  return (
+    `The reports directory ${dir} holds more than the gate reads ` +
+    `(over ${MAX_HOOK_LISTING_ENTRIES} *.json entries or over ${MAX_HOOK_LISTING_ENTRIES * HOOK_LISTING_SCAN_FACTOR} entries of any name), so no approval can be confirmed and approving again will not help. ` +
+    `Clean the directory up instead, then retry: ${cleanup}`
+  );
+}
 
 /** Clause a past-the-byte-budget listing reports; the caller supplies the subject. */
 const BYTES_TRUNCATED_DETAIL = `holds more than ${MAX_HASH_SCAN_BYTES / (1024 * 1024)} MiB of report data, more than the gate reads; ${TRUNCATED_REMEDY}`;
@@ -1287,6 +1339,8 @@ export function listPersistedReportsBoundedWithSkips(
   truncated: boolean;
   /** Why the listing was `truncated`, as a clause that follows the subject ("holds more than ..."); empty otherwise. */
   truncatedDetail: string;
+  /** Which bound the listing crossed when `truncated`; absent otherwise. */
+  truncatedKind?: ReportsDirTruncationKind;
 } {
   // `maxEntries` is set by the PreToolUse-path readers (see
   // `MAX_HOOK_LISTING_ENTRIES`); the operator commands leave it unset. Setting
@@ -1295,7 +1349,7 @@ export function listPersistedReportsBoundedWithSkips(
   const bounded = opts.maxEntries !== undefined;
   const listed = listDirNamesBounded(dir, ".json", opts.maxEntries ?? Number.POSITIVE_INFINITY);
   if (listed.truncated) {
-    return { reports: [], skipped: [], truncated: true, truncatedDetail: ENTRIES_TRUNCATED_DETAIL };
+    return { reports: [], skipped: [], truncated: true, truncatedDetail: ENTRIES_TRUNCATED_DETAIL, truncatedKind: "entries" };
   }
   const budget: ReadBudget | undefined = bounded ? { spent: 0 } : undefined;
   const reports: PersistedReport[] = [];
@@ -1308,7 +1362,7 @@ export function listPersistedReportsBoundedWithSkips(
     // All or nothing: a listing that ran out of budget cannot say which
     // report is the newest, so it returns no report at all.
     if (!read.ok && read.reason === "over-budget") {
-      return { reports: [], skipped: [], truncated: true, truncatedDetail: BYTES_TRUNCATED_DETAIL };
+      return { reports: [], skipped: [], truncated: true, truncatedDetail: BYTES_TRUNCATED_DETAIL, truncatedKind: "bytes" };
     }
     if (!read.ok) {
       skipped.push({ filePath: full, reason: read.reason, detail: read.detail });

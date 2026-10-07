@@ -1,6 +1,7 @@
 import type { DoctorReport, McpProbeResult } from "./types.js";
 import { VERSION } from "../../version.js";
 import { projectRejectionWarns } from "../../probes/memory.js";
+import { sanitizeDetailValue } from "../../policy-packs/builtin/understanding-before-execution/persisted-reports.js";
 import { sanitizeProjectForDisplay } from "../../runtime/git-context.js";
 
 function mcpLines(r: McpProbeResult, shallow: boolean): string[] {
@@ -94,6 +95,9 @@ function formatEnvironmentSection(report: DoctorReport): string[] {
   // Same "no line for a check that found nothing" convention as
   // showUgAuto / showUgDeleg: silent unless `.inflight/` actually exists.
   const showUgInflight = ugInflight !== undefined && ugInflight.inflightDirPresent;
+  const reportsDir = report.ugReportsDir;
+  // Silent unless the reports directory is at 75 % of a gate bound or past it.
+  const reportsDirWarns = reportsDir !== undefined && reportsDir.state !== "ok";
   const drift = report.settingsDrift;
   const hasDriftContent = drift !== undefined && (drift.notes.length > 0 || drift.warnings.length > 0);
   const codexDrift = report.codexConfigDrift;
@@ -109,7 +113,8 @@ function formatEnvironmentSection(report: DoctorReport): string[] {
     !showUgDeleg &&
     !showUgInflight &&
     !hasDriftContent &&
-    !hasCodexDriftContent
+    !hasCodexDriftContent &&
+    !reportsDirWarns
   )
     return [];
   const out: string[] = ["", "Environment"];
@@ -194,6 +199,26 @@ function formatEnvironmentSection(report: DoctorReport): string[] {
   }
   if (showUgInflight && ugInflight) {
     out.push(`  ℹ in-flight subagent records on disk: ${ugInflight.total} (${ugInflight.stale} stale)`);
+  }
+  if (reportsDir && reportsDir.state !== "ok") {
+    const dir = sanitizeDetailValue(reportsDir.dir);
+    const cleanup =
+      "clean it up (the gate cannot read it and re-approving does not help): `harness gc --apply` removes only aged approved or expired reports, then remove stale or non-report *.json entries from the directory by hand";
+    if (reportsDir.state === "over") {
+      out.push(
+        `  ⚠ understanding-gate reports directory ${dir} is past what the PreToolUse gate reads (over ${reportsDir.bound} *.json entries, or over ${reportsDir.scanBound} entries of any name): marker-approved calls are being denied`,
+        `      ${cleanup}`,
+      );
+    } else {
+      const byJson = reportsDir.jsonEntries >= reportsDir.warnAt;
+      const count = byJson ? reportsDir.jsonEntries : reportsDir.scannedEntries;
+      const limit = byJson ? reportsDir.bound : reportsDir.scanBound;
+      const what = byJson ? "*.json entries" : "entries of any name";
+      out.push(
+        `  ⚠ understanding-gate reports directory ${dir} holds ${count} ${what} (${Math.floor((count / limit) * 100)}% of the ${limit} the PreToolUse gate reads)`,
+        `      past that limit the gate denies marker-approved calls; ${cleanup}`,
+      );
+    }
   }
   if (drift) {
     for (const n of drift.notes) out.push(`  ℹ ${n}`);
