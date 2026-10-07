@@ -16,6 +16,7 @@ import { runPackHookCodexPreToolUseCli } from "../../src/cli/pack/hook-codex-pre
 import { runPackHookPreToolUseCli } from "../../src/cli/pack/hook-pre-tool-use.js";
 import type { LedgerEntry } from "../../src/policies/index.js";
 import type { LedgerWriteArgs } from "../../src/runtime/ledger-writer.js";
+import { renderReportsDirTooLargeNotice } from "../../src/policy-packs/builtin/understanding-before-execution/persisted-reports.js";
 import { parseManifest, type Manifest } from "../../src/schema/index.js";
 
 // The bound written out, not read from the constant.
@@ -348,4 +349,12 @@ describe.each(RUNTIMES)("byte-budget truncation deny text: $name", (rt) => {
     },
     PLANT_TIMEOUT_MS,
   );
+});
+
+describe("renderReportsDirTooLargeNotice sanitizes the directory name", () => {
+  it.each(["entries", "bytes"] as const)("flattens control characters in the %s notice", (kind) => {
+    const text = renderReportsDirTooLargeNotice("/tmp/a\nInjected: line\u001b[31m\u007f", kind);
+    expect(text).not.toMatch(/[\n\u001b\u007f]/);
+    expect(text).toContain("Injected: line");
+  });
 });

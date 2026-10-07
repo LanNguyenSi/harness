@@ -401,8 +401,9 @@ export interface PersistedReportEvidence {
    * Set only when the directory was too large to read, and says which bound
    * was crossed: `"entries"` (past {@link MAX_HOOK_LISTING_ENTRIES} `*.json`
    * entries, or twice that many of any name; approving again cannot help) or
-   * `"bytes"` (past the byte budget; a new approval is the newest report, which
-   * the hash scan reads first, so it can open the gate). The hooks then swap
+   * `"bytes"` (past the byte budget; approving opens the gate only when the
+   * session's report is the newest report by name, since the hash scan reads
+   * newest first and approval rewrites the report in place). The hooks then swap
    * their agent-facing deny text for {@link renderReportsDirTooLargeNotice}.
    */
   reportsDirTooLarge?: ReportsDirTruncationKind;
@@ -705,14 +706,16 @@ export type ReportsDirTruncationKind = "entries" | "bytes";
  * twice that many entries of any name): the gate opens nothing, so a new
  * approval cannot help and only the cleanup does.
  *
- * `bytes` (under the entry bound but over the byte budget): a new approval is
- * the newest report, which the hash scan reads first and
- * `harness approve understanding` lists without a bound, so approving again
- * does open the gate; the cleanup is named for the case the deny persists.
+ * `bytes` (under the entry bound but over the byte budget): the hash scan reads
+ * the newest report first and `harness approve understanding` lists without a
+ * bound, so approving opens the gate when the session's report is the newest
+ * report by name (for example a freshly captured one). Approval rewrites the
+ * report in place, so an older session report behind more report data than the
+ * budget stays denied; the cleanup is named for that case.
  */
 export function renderReportsDirTooLargeNotice(
   reportsDir: string,
-  kind: ReportsDirTruncationKind = "entries",
+  kind: ReportsDirTruncationKind,
 ): string {
   const dir = sanitizeDetailValue(reportsDir);
   const cleanup =
