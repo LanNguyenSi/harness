@@ -92,7 +92,17 @@ export default defineConfig({
     coverage: {
       provider: "v8",
       include: ["src/**/*.ts"],
-      exclude: ["src/**/index.ts", "src/**/types.ts", "src/cli/main.ts"],
+      // The top-level `src/cli/register-*-group.ts` files are the commander
+      // wiring that used to live in src/cli/index.ts (itself excluded above):
+      // moving it into per-group files must not change what the coverage
+      // gate measures.
+      exclude: [
+        "src/**/index.ts",
+        "src/**/types.ts",
+        "src/cli/main.ts",
+        "src/cli/register-*-group.ts",
+        "src/cli/register-operator-lifecycle.ts",
+      ],
       reporter: ["text", "html"],
       thresholds: {
         lines: 90,
