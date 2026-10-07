@@ -3,7 +3,7 @@ type: overview
 title: Gate fail-posture matrix
 description: Which harness enforcement gates fail OPEN vs fail CLOSED when their evidence source (grounding-mcp ledger, approval markers, verdict files, probes) is unreachable or errors, with the exact code paths and override knobs.
 tags: [gates, fail-open, fail-closed, enforcement]
-timestamp: 2026-10-06T14:12:57Z
+timestamp: 2026-10-07T04:52:26Z
 sources:
   - src/cli/pack/auto-approve-path.ts
   - src/io/atomic-write.ts
@@ -41,6 +41,7 @@ Every harness enforcement gate has a deliberate posture for the moment its evide
 | `bash_match` normalised-form matching (both passes) | `harness policy intercept` → `normalizeCommand` / `normalizeCommandAmpAware` in `src/runtime/command-normalize.ts` | command length vs `MAX_NORMALIZE_LENGTH` (100,000 chars) | fail **OPEN** above the bound | normalised-form matching skipped for BOTH the primary and the ampersand-aware second pass (task `aabbad63`) — they share the identical bound on the identical input command, so one stderr line covers both; raw match only. Previously silent, no stderr line, no audit row (G4 fix, review round 2, 2026-07-27) |
 | Per-policy target attribution bound (`${REPO}`/`${BRANCH}`/`at_head`) | `harness policy intercept` → `resolveAttributedContexts` in `src/runtime/intercept.ts` | segment-derived repository targets (a filesystem `.git`-shape check, no evidence source of its own) | fail **CLOSED** above 4 distinct targets (`MAX_ATTRIBUTED_CONTEXTS`) | one synthetic decision naming the ambiguity, mapped through the policy's OWN `enforcement:` (`block` denies, `warn` warns, `require_approval` requires approval — never a hardcoded outcome); ZERO ledger queries for that policy |
 | Quote-aware shell command model (`${REPO}`/`${BRANCH}`/`at_head` policies) | `harness policy intercept` → `resolveAttributedContexts` in `src/runtime/intercept.ts`, model in `src/runtime/shell-command-model.ts` | the command text (no evidence source of its own) | fail **CLOSED** on an opaque possibility (a target it refuses to read, a glob, an in-command `CDPATH` search, a relative step after an opaque directory, a loop that moves relatively, more than 8 possibilities, a composed path over 4096 characters), on model paths that need more than the per-event filesystem work budget (`MAX_MODEL_PATH_WORK`, `src/runtime/shell-model-paths.ts`), and on a command it cannot lex or longer than `MAX_NORMALIZE_LENGTH` when the text holds a directory-changing word; otherwise it only adds demands to the segment view's, which are computed first (task `7d4abf84`) | the same `opaque-target` decision as the row above's shape: one synthetic decision through the policy's OWN `enforcement:`, ZERO ledger queries |
+| Shell command model as a `bash_match` matching arm (every `bash_match` policy, task `d11762ce`) | `harness policy intercept` → `policyMatchArm` in `src/runtime/intercept.ts`, model in `src/runtime/shell-command-model.ts` | the command text (no evidence source of its own) | fail **CLOSED** when the four text arms miss and the model cannot lex a command within `MAX_NORMALIZE_LENGTH` (a syntax error, which bash reaches only after running the complete lines before it, or compound commands, subshells or substitutions nested past the model's bounds); fail **OPEN** above `MAX_NORMALIZE_LENGTH` (raw match only, the row two above) | one synthetic decision per `bash_match` policy the text arms missed (`UNPARSED_COMMAND_REASON`), through the policy's OWN `enforcement:`, ZERO ledger queries |
 | Empty `${REPO}`/`${BRANCH}` in a `ledger_tag` | `harness policy intercept` → `evaluateOnePolicy` in `src/runtime/intercept.ts` | none queried: the value resolved for the context (cwd outside every repo, detached HEAD, empty override) | decided per the policy's OWN `enforcement:` (never fail-open to a blank tag) | `deny` / `require_approval` / `warn` with a reason naming `cd <repo>` / `git -C <repo>` or `git switch <branch>`; ZERO ledger queries; NOT `deny-degraded` (task `6c8ebd37`) |
 | understanding-before-execution | `harness pack hook pre-tool-use` (`src/cli/pack/hook-pre-tool-use.ts`) | HMAC-signed approval marker (sole authority); persisted JSON report and ledger are audit-only | fail **OPEN** on load/parse/ledger/report-scan errors | allow, exit 0, stderr diagnostic |
 | branch-protection | `harness pack hook branch-protection` (`src/cli/pack/hook-branch-protection.ts`) | `branch:non-protected:<branch>` ledger tag (5-min window) + override marker | fail **CLOSED** on any load/parse/ledger error | block envelope |
@@ -96,7 +97,7 @@ DISTINCT repository a trigger-satisfying command segment names (its own
 persisting `cd`) — the session's own cwd context is ALWAYS also
 evaluated, never dropped except for a cwd outside every repository next to a resolved target (see the exception below; `resolveAttributedContexts`; the "always add, never replace" rule
 D-021 and its four-review-pass history are restated in-tree in that
-function's own doc comment, `src/runtime/intercept.ts:1444-1478#"disproved"`; the
+function's own doc comment, `src/runtime/intercept.ts:1478-1512#"disproved"`; the
 original decision record under
 `.ai/runs/2026-08-02-per-repo-gate-scoping-redesign/` is local run state
 and not shipped with the repo). This section covers only the FALLBACK side of that resolution,
@@ -187,6 +188,18 @@ since it is the part that changes this matrix's own fail-posture story:
   `--chdir`, `--git-dir`, also with quotes or backslashes removed). The
   over-block this adds (glob targets, `CDPATH`, verbs that never run) is
   recorded in the CHANGELOG entry for task `7d4abf84`.
+- **A command the model cannot lex refuses every `bash_match` policy the
+  text arms missed (task `d11762ce`).** Since that task the model is also
+  a matching arm for every `bash_match` policy (a gated verb behind a
+  compound prefix, `xargs` or `coproc` matches), so a command it cannot
+  lex within `MAX_NORMALIZE_LENGTH` cannot be shown not to run a gated
+  verb: bash runs the complete lines before a syntax error on a later
+  line, and a compound head nested past the model's bounds hides the verb
+  from the text arms. `policyMatchArm` returns `"unparsed"` and
+  `intercept()` records one decision per such policy without a ledger
+  query (deny for `block`, warn for `warn`, `UNPARSED_COMMAND_REASON`);
+  the remedy is fixing the syntax or flattening the nesting. Above
+  `MAX_NORMALIZE_LENGTH` the raw match alone still applies.
 - **More than `MAX_ATTRIBUTED_CONTEXTS` (4) distinct targets for one
   policy on one event fails CLOSED** — see the new table row above. This
   is the one place per-policy attribution ADDS a fail-closed posture the

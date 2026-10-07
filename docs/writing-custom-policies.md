@@ -324,20 +324,34 @@ directory, demands each of them:
   `CHASE_LINKS`) can make a `cd` the gate confirmed fail or land
   elsewhere.
 
-The model also adds a match: a per-repo policy whose trigger none of the
-other forms matched still applies when a model command that names a
-directory satisfies it (`git -C 'vendor/lib sp' log` matched no policy at
-all before). Only such policies and only such commands: a gated verb
-spelled behind a prefix the trigger does not read (`! git log`,
-`{ git log; }`) in a command that names no directory still matches no
-policy.
+The model also adds a match: a policy whose trigger none of the other
+forms matched still applies when one of the model's simple commands
+satisfies it on its own (`git -C 'vendor/lib sp' log` matched no policy at
+all before). Since task `d11762ce` this holds for every `bash_match`
+policy, not only per-repo ones, and for every modelled command, not only
+one that names a directory: a gated verb behind a compound prefix
+(`! git log`, `{ git log; }`, `if ...; then git log; fi`, a loop or
+`case` body, a function body), behind `xargs` or `coproc`, or inside a
+literal `eval '...'` matches the policy the bare verb matches. The
+trigger is tested against the command as written after those prefixes,
+then after each peeled wrapper (`env`, `nohup`, `xargs`, ...), so a
+trigger on the wrapper itself (`env -u CLAUDE_SESSION_ID`) still matches
+behind another wrapper. A verb that never runs matches too
+(`while false; do git push; done`), as `false && git push` already did.
+A command the model cannot parse within `MAX_NORMALIZE_LENGTH` (a syntax
+error, which bash reaches only after running the complete lines before
+it, or compound commands, subshells or substitutions nested past the
+model's bounds) is refused for every `bash_match` policy the other forms
+missed, with the policy's own enforcement and no ledger query
+(`UNPARSED_COMMAND_REASON`). A command longer than that bound keeps the
+raw match only.
 
 **Cost.** The shell command model is computed at most once per Bash
-event and, with any per-repo Bash policy in the manifest (the full
-template has four), effectively for every Bash event: such a policy is
-either missed by the other matching forms (the model's match is then
-tried) or matched (its attribution reads the model), so a command no
-policy matches computes it too. Its directories are resolved once per
+event and, with any `bash_match` policy in the manifest, effectively for
+every Bash event: such a policy is either missed by the other matching
+forms (the model's match is then tried) or matched (a per-repo policy's
+attribution reads the model), so a command no policy matches computes it
+too. Its directories are resolved once per
 distinct directory per event, for every policy, under a per-event work
 budget (`MAX_MODEL_PATH_WORK` in `src/runtime/shell-model-paths.ts`, 4096
 units: one per composition step or path component, per final `realpath`,
@@ -451,11 +465,11 @@ occurred on the review corpora it was measured against.
 
 Still the cwd fallback: a directory held in a variable or a substitution
 (see above), a `GIT_DIR=` or `GIT_WORK_TREE=` assignment, a nested shell
-(`bash -c '...'`), `source`, a function call, `sudo -D`, `CDPATH` or
-`OLDPWD` inherited from the environment, and a gated verb whose own head
-is spelled behind a prefix the trigger does not read (`! git log`,
-`{ git log; }`, `eval git log`) in a command that names no directory,
-which matches no policy at all: matching those is a follow-up.
+(`bash -c '...'`), `source`, a function call, `sudo -D`, and `CDPATH` or
+`OLDPWD` inherited from the environment. A gated verb behind a compound
+prefix in a command that names no directory (`! git log`,
+`{ git log; }`) demands the working directory's evidence (task
+`d11762ce`; before it, such a command matched no policy at all).
 
 **The cross-repo consequence.** Because attribution is additive, holding
 evidence for ONLY the target repository named by a `-C`/`cd` is no longer
