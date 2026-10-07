@@ -330,9 +330,12 @@ satisfies it on its own (`git -C 'vendor/lib sp' log` matched no policy at
 all before). Since task `d11762ce` this holds for every `bash_match`
 policy, not only per-repo ones, and for every modelled command, not only
 one that names a directory: a gated verb behind a compound prefix
-(`! git log`, `{ git log; }`, `if ...; then git log; fi`, a loop or
-`case` body, including `for ((;;)) do ...; done` and `for x do ...; done`
-written without a separator, a function body), behind `xargs` or
+(`! git log`, `{ git log; }`, `if ...; then git log; fi`, `time -p --`,
+a loop or `case` body, including a `case` that itself stands behind such
+a prefix (`{ case x in (x) git log;; esac; }`, `do case ...`), and
+`for ((;;)) do ...; done` and `for x do ...; done` written without a
+separator, a function body, a backtick substitution inside `(( ))` or an
+arithmetic `for` header), behind `xargs` or
 `coproc`, behind a wrapper spelled with a directory (`/usr/bin/env`), or
 inside a literal `eval '...'` matches the policy the bare verb matches.
 The trigger is tested against the command as written after those
@@ -357,8 +360,13 @@ longer than that bound keeps the raw match only. Not read at all: nested
 shells (`sh -c '...'`, `bash -lc`, `env -S`), `find -exec`, `parallel`,
 `watch`, wrappers the model does not peel (`caffeinate`, `flock`,
 `ionice`), a command word known only at run time (`git $(echo push)`,
-`$h pause`, an alias), and the command an `xargs` reads from its input
-(`echo push | xargs git`).
+`$h pause`, an alias), the command an `xargs` reads from its input
+(`echo push | xargs git`), and a backtick substitution in a data context
+(an unquoted heredoc body, `${x:-...}`, `${x[...]}`, `$(( ))`, `$[ ]`,
+the `case` word or its patterns). Refused as unparsed although valid: an
+unparenthesised `case` pattern inside `$( )` or a `( )` subshell
+(`x=$(case y in y) echo y;; esac)`; write `(y)` there) and a `case`
+after `coproc`.
 
 **Cost.** The shell command model is computed at most once per Bash
 event and, with any `bash_match` policy in the manifest, effectively for
