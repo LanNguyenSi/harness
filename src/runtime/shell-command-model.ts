@@ -1190,16 +1190,19 @@ function timePrefixEnd(words: readonly ShellWord[], k: number): { end: number; p
 }
 
 /**
- * True when every one of `words` is a transparent prefix that
+ * How many of `words`, from the first, are transparent prefixes that
  * `Walker.execCommand` reads before a command word (`!`, `{`, `}`,
  * `time [-p] [--]`, an arithmetic word, `if` / `while` / `until`, a
  * `for NAME do` or `select NAME do` header, `then` / `else` / `elif` / `do`,
- * `fi` / `done` / `esac`, `function NAME`). A `case` that follows such words
+ * `fi` / `done` / `esac`, `function NAME`): `words.length` when all of them
+ * are, otherwise the index of the first word that is not. The verdict at
+ * that index reads at most the two words after it, so it holds for every
+ * longer list with the same start. A `case` that follows only such words
  * is the reserved word that opens a compound command (`{ case ...`,
  * `! case ...`, `then case ...`, `do case ...`), not an argument, so the walk
  * reads it exactly as a `case` at the start of a command.
  */
-function onlyTransparentPrefixes(words: readonly ShellWord[]): boolean {
+function transparentPrefixEnd(words: readonly ShellWord[]): number {
   let k = 0;
   while (k < words.length) {
     const w = words[k]!;
@@ -1208,19 +1211,19 @@ function onlyTransparentPrefixes(words: readonly ShellWord[]): boolean {
       continue;
     }
     const v = w.quoted ? null : w.value; // reserved words are never quoted
-    if (v === null) return false;
+    if (v === null) return k;
     if (v === "time") {
       k = timePrefixEnd(words, k).end;
       continue;
     }
     if (v === "for" || v === "select") {
       const afterName = words[k + 2];
-      if (afterName === undefined || afterName.quoted || (afterName.value !== "do" && afterName.value !== "{")) return false;
+      if (afterName === undefined || afterName.quoted || (afterName.value !== "do" && afterName.value !== "{")) return k;
       k += 2;
       continue;
     }
     if (v === "function") {
-      if (k + 2 > words.length) return false;
+      if (k + 2 > words.length) return k;
       k += 2;
       continue;
     }
@@ -1237,9 +1240,9 @@ function onlyTransparentPrefixes(words: readonly ShellWord[]): boolean {
       k++;
       continue;
     }
-    return false;
+    return k;
   }
-  return true;
+  return words.length;
 }
 
 interface ExecInfo {
@@ -1281,6 +1284,18 @@ class Walker {
     const compound: CompoundFrame[] = [];
     const loopsAtEntry = st.loops.length;
     let cmd = emptyCommand();
+    // The first word of the current command's words that is not a
+    // transparent prefix, once it is final (see `transparentPrefixEnd`), so
+    // a run of `case` words behind other words costs one scan, not one per
+    // `case`.
+    let prefixMiss: { words: ShellWord[]; at: number } | null = null;
+    const onlyTransparentPrefixes = (): boolean => {
+      if (prefixMiss !== null && prefixMiss.words === cmd.words && cmd.words.length > prefixMiss.at + 2) return false;
+      const end = transparentPrefixEnd(cmd.words);
+      if (end === cmd.words.length) return true;
+      prefixMiss = { words: cmd.words, at: end };
+      return false;
+    };
 
     const finishCommand = (nextOp: string | null): void => {
       const top = compound[compound.length - 1];
@@ -1362,7 +1377,7 @@ class Walker {
           cmd.words.length > 0 &&
           cmd.group === null &&
           cmd.redirs.length === 0 &&
-          onlyTransparentPrefixes(cmd.words)
+          onlyTransparentPrefixes()
         ) {
           // `case` behind compound prefixes (`{ case`, `! case`,
           // `then case`, `do case`, `time case`): read the prefixes as the
