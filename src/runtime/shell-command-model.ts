@@ -35,10 +35,10 @@
 //   as a step that keeps its mode (logical for `cd` and `pushd`, physical
 //   for `cd -P`, `git -C`, `env -C` and `--git-dir`); an absolute target
 //   replaces. The gate resolves the steps against the real filesystem; this
-//   module never touches it. `cd` with no argument and `cd ~` give
-//   `unknown` (home), `cd -` and `pushd -` return the tracked previous
-//   directory, `pushd` and `popd` keep a tracked stack, `cd A B` (zsh
-//   substitution) is opaque.
+//   module never touches it. `cd` with no argument, `cd ~` and `cd ~/...`
+//   give `unknown` (home), `cd -` and `pushd -` return the tracked previous
+//   directory (opaque before any move), `pushd` and `popd` keep a tracked
+//   stack, `cd A B` (zsh substitution) is opaque.
 // - Relocation options: `env` honours its last `-C` / `--chdir`; git applies
 //   every `-C` in order, then `--git-dir` (its `.git` parent). Option words
 //   are compared decoded (`'-C'`, `-''C`).
@@ -53,17 +53,33 @@
 // - Values the walk cannot resolve (task e927e903): a dynamic target of a
 //   `cd`, `pushd`, `git -C`, `env -C` or `--git-dir` (`$VAR`, `${...}`,
 //   `$(...)`, `$((...))`) is opaque; a known base stays a candidate next to
-//   it, because an empty expansion does not move. A `~` prefix gives
-//   `unknown` (home), the documented working-directory fallback, except
-//   when the line assigned the variable it reads. A `HOME` or `OLDPWD`
-//   assigned in the line (an assignment, a default-assigning or arithmetic
-//   expansion, the name operand of an assigning builtin, a `for` variable,
-//   a `{NAME}` redirection) makes a bare `cd`, a `~` / `~/...` target and
-//   zsh's `pushd` with an empty stack (`HOME`), and `cd -`, `pushd -` and a
-//   `~-` target (`OLDPWD`) opaque, for the rest of the walk (see
-//   `WalkState.homeSteered`). `cd +N` / `cd -N` reads the stack entry and
-//   an opaque possibility next to it: bash reads it as a path, which an
-//   earlier command of the line can create.
+//   it, because an empty expansion does not move. In such a target a `~`
+//   or `~/...` prefix gives `unknown` (home), the documented
+//   working-directory fallback, unless the line assigns `HOME`; every other
+//   tilde prefix (`~+`, `~-`, `~N`, `~+N`, `~-N`, `~NAME`) is opaque. `cd -`
+//   and `pushd -` read the previous directory the walk tracked; before any
+//   move they read the session's previous directory, which is opaque. A
+//   `HOME` or `OLDPWD` assigned in the line (an assignment, a
+//   default-assigning or arithmetic expansion, the name operand of an
+//   assigning builtin, a `for` variable, a `{NAME}` redirection) makes a
+//   bare `cd`, a `~` / `~/...` target and zsh's `pushd` with an empty stack
+//   (`HOME`), and `cd -` and `pushd -` (`OLDPWD`) opaque (see
+//   `WalkState.homeSteered`). These two flags are known before the walk: a
+//   first walk of the whole line (`steeredInLine`; function bodies, loop
+//   bodies, substitutions and literal `eval` strings included) records
+//   every producer, and the walk starts with the flags set, because a
+//   reader can run after a producer that comes later in the text (in a
+//   later loop iteration, or in a function defined before the producer and
+//   called after it). Accepted over-approximations: a reader before its
+//   producer in plain sequence, a producer inside a subshell and an
+//   assignment in front of one command count for the whole line (a
+//   function that subshell or command calls reads them). `cd +N` /
+//   `cd -N` reads the stack entry and an opaque possibility next to it:
+//   bash reads it as a path, which an earlier command of the line can
+//   create. A `cd -` or `popd` after a move whose target is opaque keeps an
+//   opaque possibility, because the return itself can fail and leave the
+//   shell where it was; joining the return and the next command with `&&`
+//   keeps that failure branch out.
 // - Control flow: every command has a success and a failure state (a failed
 //   `cd` stays put; with the gate's `DirectoryOracle`, a top-level `cd` or
 //   `pushd` into a directory that exists has no failure state, so
@@ -103,13 +119,15 @@
 // OUT OF SCOPE (the working-directory fallback stays): `GIT_DIR=` /
 // `GIT_WORK_TREE=` assignments, `sudo -D`, nested shells (`bash -c`,
 // `sh -c`), `source`, function calls (a function body is walked where it is
-// defined, as if it ran there), aliases, `env -S`, a dynamic `eval`, a
-// variable whose name is built at run time, `CDPATH`, `HOME` and `OLDPWD`
-// inherited from the environment, `~` forms other than `~`, `~/...` and a
-// steered `~-`, zsh `AUTO_CD` and other zsh-only options, and a gated
-// verb whose own head is spelled through a prefix the legacy arms miss
-// (`! git log`), which this module models but the gate does not match on
-// (the matching arm is scoped to commands that name a directory).
+// defined, as if it ran there; only the `HOME` and `OLDPWD` flags are known
+// before the walk, the `CDPATH` flag is not), aliases, `env -S`, a dynamic
+// `eval`, a variable whose name is built at run time, `CDPATH` and `HOME`
+// inherited from the environment, the previous directory after a `cd`
+// that failed (the shell keeps the `OLDPWD` it had, the walk reads the
+// directory before that `cd`), zsh `AUTO_CD` and other zsh-only options,
+// and a gated verb whose own head is spelled through a prefix the legacy
+// arms miss (`! git log`), which this module models but the gate does not
+// match on (the matching arm is scoped to commands that name a directory).
 
 import * as path from "node:path";
 import { MAX_NORMALIZE_LENGTH } from "./command-normalize.js";
@@ -145,10 +163,11 @@ export interface PathStep {
 /**
  * One directory a command can run in. `path` with no steps is the working
  * directory itself; `unknown` is a directory the command text does not name
- * (the home directory a bare `cd` or a `~` prefix reads, or the previous
- * directory of the session), which keeps the documented working-directory
+ * (the home directory a bare `cd`, a `~` or a `~/...` target reads when the
+ * line assigns no `HOME`), which keeps the documented working-directory
  * fallback; `opaque` is a directory the gate must not guess at (fail
- * closed), a dynamic target among them.
+ * closed), a dynamic target, another tilde prefix and the session's
+ * previous directory among them.
  */
 export type DirPossibility =
   | { readonly kind: "path"; readonly steps: readonly PathStep[] }
@@ -423,9 +442,9 @@ const CDPATH_NAME_RE = /(?<![A-Za-z0-9_])(?:CDPATH|cdpath)(?![A-Za-z0-9_])/;
 /**
  * The variables other than `CDPATH` whose value a directory change reads:
  * `HOME` (a bare `cd`, a `~` or `~/...` prefix, and zsh's `pushd` with an
- * empty stack) and `OLDPWD` (`cd -`, `pushd -` and a `~-` prefix). One
- * assigned in the line steers that change somewhere the text does not name
- * (see `WalkState.homeSteered`).
+ * empty stack) and `OLDPWD` (`cd -` and `pushd -`; a `~-` prefix is opaque
+ * whatever the line assigns). One assigned in the line steers that change
+ * somewhere the text does not name (see `WalkState.homeSteered`).
  */
 const STEERED_NAMES = ["HOME", "OLDPWD"] as const;
 
@@ -477,6 +496,8 @@ function steeredIn(text: string, mention: boolean): SteeredName[] {
 }
 
 const NO_STEERS: readonly SteeredName[] = Object.freeze([]);
+const NO_STEERED: ReadonlySet<SteeredName> = new Set();
+const ALL_STEERED: ReadonlySet<SteeredName> = new Set(STEERED_NAMES);
 
 class ShellLexer {
   constructor(
@@ -1086,31 +1107,33 @@ function isOpaqueTargetWord(w: ShellWord): boolean {
 /**
  * What reading a target word depends on besides the word itself, from the
  * walk (`WalkState`): a `CDPATH` search (for a `cd` or `pushd` target only)
- * and a `HOME` or `OLDPWD` assigned in the line (for a `~` prefix, in every
+ * and a `HOME` the line assigns (for a `~` or `~/...` prefix, in every
  * target: the shell expands it before the command runs).
  */
 interface TargetContext {
   readonly cdpathSearch: boolean;
   readonly homeSteered: boolean;
-  readonly oldpwdSteered: boolean;
 }
 
 /** The context a target word is read in at this point of the walk; `cdpathSearch` only for `cd` and `pushd`. */
 function targetContext(st: WalkState, cdTarget: boolean): TargetContext {
-  return { cdpathSearch: cdTarget && st.cdpath, homeSteered: st.homeSteered, oldpwdSteered: st.oldpwdSteered };
+  return { cdpathSearch: cdTarget && st.cdpath, homeSteered: st.homeSteered };
 }
 
 /**
- * Whether a `~` prefix reads a value the line assigned: `~` and `~/...`
- * read `HOME`, `~-` and `~-/...` read `OLDPWD`. Every other `~` form keeps
- * the documented `unknown` (see `joinOne`).
+ * The tilde prefixes that read `HOME`: `~` alone and `~/...`. bash and zsh
+ * read every other prefix (`~+`, `~-`, `~N`, `~+N`, `~-N`, `~NAME`) as the
+ * working directory, the previous one, a directory stack entry or a user's
+ * home directory, each a value the walk does not resolve.
  */
-function tildeReadsSteered(w: ShellWord, ctx: TargetContext): boolean {
+const HOME_TILDE_RE = /^~(?:\/|$)/;
+
+/** Whether a `~` target word starts with a prefix that reads `HOME` (`HOME_TILDE_RE`). */
+function tildeReadsHome(w: ShellWord): boolean {
   // The raw text (a quoted `/` ends no prefix), or the value of a word that
   // stands for part of another (`--git-dir=~/x`, see `derivedWord`).
   const text = w.raw.startsWith("~") ? w.raw : (w.value ?? w.literal);
-  if (ctx.homeSteered && /^~(?:\/|$)/.test(text)) return true;
-  return ctx.oldpwdSteered && /^~-(?:\/|$)/.test(text);
+  return HOME_TILDE_RE.test(text);
 }
 
 /**
@@ -1118,13 +1141,13 @@ function tildeReadsSteered(w: ShellWord, ctx: TargetContext): boolean {
  * time is opaque (task e927e903): a value the text does not hold (a
  * variable, a command substitution, an arithmetic expansion) can name any
  * directory, a nested repository included, so the working directory's
- * evidence cannot stand in for it. A `~` prefix keeps the documented
- * `unknown` (the home directory), unless the line assigned the variable it
- * reads.
+ * evidence cannot stand in for it. A `~` or `~/...` prefix keeps the
+ * documented `unknown` (the home directory), unless the line assigns
+ * `HOME`; every other tilde prefix is opaque (`HOME_TILDE_RE`).
  */
 function joinOne(base: DirPossibility, w: ShellWord, mode: PathStepMode, ctx: TargetContext): DirPossibility {
   if (isOpaqueTargetWord(w)) return OPAQUE;
-  if (w.tilde) return base.kind === "opaque" || tildeReadsSteered(w, ctx) ? OPAQUE : UNKNOWN;
+  if (w.tilde) return base.kind !== "opaque" && tildeReadsHome(w) && !ctx.homeSteered ? UNKNOWN : OPAQUE;
   if (w.value === null) return OPAQUE;
   const v = w.value;
   if (v === "") return base; // `cd ""` and `git -C ""` stay put
@@ -1166,17 +1189,19 @@ interface WalkState {
   stackTruncated: boolean;
   cdpath: boolean;
   /**
-   * `HOME` was assigned in this shell's walk (task e927e903): a bare `cd`,
-   * a `~` or `~/...` target and zsh's `pushd` with an empty stack read the
-   * assigned value, a directory the text does not name, so they read as
-   * opaque. Like `cdpath`: set from the command that assigns on, copied
-   * into a subshell (a subshell's own assignment stays there), set only for
-   * the command itself by an assignment in front of it, and never cleared
-   * (a failing `cd` keeps the value). A join of two walk states joins it
-   * by OR.
+   * `HOME` is assigned in the line (task e927e903): a bare `cd`, a `~` or
+   * `~/...` target and zsh's `pushd` with an empty stack read the assigned
+   * value, a directory the text does not name, so they read as opaque. Set
+   * from the first command on when a producer anywhere in the line assigns
+   * it (`steeredInLine`: a reader can run after a producer later in the
+   * text, in a later loop iteration or in a function called after it).
+   * The producers set it again as the walk meets them (`Walker.steer`);
+   * like `cdpath`, it is copied into a subshell, set only for the command
+   * itself by an assignment in front of it, and never cleared (a failing
+   * `cd` keeps the value).
    */
   homeSteered: boolean;
-  /** `OLDPWD` was assigned in this shell's walk: `cd -`, `pushd -` and a `~-` target read as opaque (as `homeSteered`). */
+  /** `OLDPWD` is assigned in the line: `cd -` and `pushd -` read as opaque (as `homeSteered`). */
   oldpwdSteered: boolean;
   evalDepth: number;
   loops: LoopFrame[];
@@ -1411,15 +1436,23 @@ function continuesCompound(w: ShellWord): boolean {
   return v !== null && (v === "}" || RESERVED_MID.has(v) || RESERVED_CLOSE.has(v));
 }
 
-function newState(): WalkState {
+/**
+ * The state a walk of a whole command line starts in. `steered` holds the
+ * `STEERED_NAMES` some producer anywhere in the line assigns
+ * (`steeredInLine`): their flags are set from the first command on.
+ */
+function newState(steered: ReadonlySet<SteeredName> = NO_STEERED): WalkState {
   return {
     cur: CWD_SET,
-    oldpwd: UNKNOWN_SET,
+    // Task e927e903: the previous directory of the session is not one the
+    // walk tracked, so a `cd -` or `pushd -` before any move reads it as
+    // opaque; a move sets it (`moveTo`).
+    oldpwd: OPAQUE_SET,
     stack: [],
     stackTruncated: false,
     cdpath: false,
-    homeSteered: false,
-    oldpwdSteered: false,
+    homeSteered: steered.has("HOME"),
+    oldpwdSteered: steered.has("OLDPWD"),
     evalDepth: 0,
     loops: [],
     enclosing: 0,
@@ -1437,14 +1470,6 @@ function newState(): WalkState {
  */
 function subshellState(st: WalkState, openCompounds: number): WalkState {
   return { ...st, stack: st.stack.slice(), loops: [], enclosing: st.enclosing + openCompounds };
-}
-
-/** Record that the walk's shell assigned these `STEERED_NAMES` variables (see `WalkState.homeSteered`). */
-function steer(st: WalkState, names: Iterable<SteeredName>): void {
-  for (const name of names) {
-    if (name === "HOME") st.homeSteered = true;
-    else st.oldpwdSteered = true;
-  }
 }
 
 function emptyCommand(): SimpleCommand {
@@ -1597,12 +1622,33 @@ class Walker {
    * substitution inside data runs as a command again and resets it.
    */
   private dataDepth = 0;
+  /**
+   * Every `STEERED_NAMES` variable a producer of this walk assigned, in any
+   * shell of the line (a subshell, a substitution, a function body, a loop
+   * body, an `eval` string) and whatever its scope: what `steeredInLine`
+   * reads after its walk.
+   */
+  readonly steered = new Set<SteeredName>();
 
   constructor(
     private readonly oracle: DirectoryOracle | null,
     /** False for the reading `ShellModelView.triggerCommands` keeps: every refusal check is off. */
     private readonly refusals = true,
   ) {}
+
+  /**
+   * Record that the walk's shell assigned these `STEERED_NAMES` variables
+   * (see `WalkState.homeSteered`). The one place a producer reaches the
+   * walk: the walk's own flags and the line's record (`steered`) both come
+   * from here.
+   */
+  private steer(st: WalkState, names: Iterable<SteeredName>): void {
+    for (const name of names) {
+      this.steered.add(name);
+      if (name === "HOME") st.homeSteered = true;
+      else st.oldpwdSteered = true;
+    }
+  }
 
   /**
    * Refuse the whole command line (see `REFUSAL_CONSTRUCTS`), except inside
@@ -1737,7 +1783,7 @@ class Walker {
           // current shell: a `CDPATH` it names reaches the walk, and so does
           // a `HOME` or `OLDPWD` it assigns.
           if (tokensReferenceCdpath(cmd.group, cmd.groupArith)) st.cdpath = true;
-          steer(st, tokensSteer(cmd.group, cmd.groupArith));
+          this.steer(st, tokensSteer(cmd.group, cmd.groupArith));
           this.dataDepth++;
           try {
             this.walk(cmd.group, subshellState(st, compound.length));
@@ -1803,7 +1849,7 @@ class Walker {
         // value, a `case` subject or pattern) can assign it in this shell,
         // and so can an expansion that assigns `HOME` or `OLDPWD`.
         if (tk.cdpathRef) st.cdpath = true;
-        steer(st, tk.steers);
+        this.steer(st, tk.steers);
         if (cmd.words.length === 0 && !tk.quoted && tk.value === "case") {
           this.pushCompound(compound, newFrame("case", st, this.out.length));
           i++;
@@ -1835,8 +1881,8 @@ class Walker {
       }
       if (tk.kind === "redir") {
         if (tk.target.cdpathRef) st.cdpath = true;
-        steer(st, tk.target.steers);
-        if (isSteeredName(tk.fdVariable)) steer(st, [tk.fdVariable]);
+        this.steer(st, tk.target.steers);
+        if (isSteeredName(tk.fdVariable)) this.steer(st, [tk.fdVariable]);
         cmd.redirs.push(tk);
         i++;
         continue;
@@ -2017,7 +2063,7 @@ class Walker {
             const name = words[k + 1];
             const third = words[k + 2];
             if (name !== undefined && CDPATH_NAME_RE.test(name.raw)) st.cdpath = true;
-            if (name !== undefined) steer(st, steeredIn(name.raw, true));
+            if (name !== undefined) this.steer(st, steeredIn(name.raw, true));
             // `for NAME do ...` and zsh's `for NAME BODY`: the walk reads a
             // header only, so a body glued to it would be dropped.
             if (third !== undefined && bareValue(third) !== "in") this.refuse("loop-body");
@@ -2084,7 +2130,7 @@ class Walker {
       if (close >= 0 && words.slice(close + 1).some((w) => bareValue(w) !== "}")) this.refuse("alternate-form");
       // An arithmetic operand of the condition (`-eq`, `-lt`, ...) can
       // assign (`[[ 1 -eq HOME=1 ]]`).
-      for (const w of words) steer(st, steeredIn(w.raw, false));
+      for (const w of words) this.steer(st, steeredIn(w.raw, false));
     }
 
     let a = 0;
@@ -2098,12 +2144,12 @@ class Walker {
       if (SHELL_TABLE_PARAMETER_RE.test(words[a]!.raw)) this.builtinsInDoubt = true;
       const target = assignmentTarget(words[a]!);
       if (isSteeredName(target)) inlineSteered.add(target);
-      steer(st, steeredByAssignmentWord(words[a]!));
+      this.steer(st, steeredByAssignmentWord(words[a]!));
       a++;
     }
     if (a === words.length) {
       if (inlineCdpath) st.cdpath = true;
-      steer(st, inlineSteered);
+      this.steer(st, inlineSteered);
       return info;
     }
     words = words.slice(a);
@@ -2138,8 +2184,8 @@ class Walker {
     // subscript assigns them (`a[HOME=1]=x`).
     const headTarget = assignmentTarget(headWord);
     if (headTarget !== null) {
-      if (isSteeredName(headTarget)) steer(st, [headTarget]);
-      steer(st, steeredByAssignmentWord(headWord));
+      if (isSteeredName(headTarget)) this.steer(st, [headTarget]);
+      this.steer(st, steeredByAssignmentWord(headWord));
     }
     const head = headWord.value;
     if (head === null) {
@@ -2156,14 +2202,14 @@ class Walker {
     // `printf -v CDPATH`, `typeset -T`, zsh `vared cdpath`).
     if (ASSIGNING_BUILTINS.has(head) && words.slice(1).some((w) => CDPATH_NAME_RE.test(w.raw))) st.cdpath = true;
     // The same for `HOME` and `OLDPWD`, by name position (`steeredByBuiltin`).
-    if (STEERING_BUILTINS.has(head)) steer(st, steeredByBuiltin(head, words.slice(1)));
+    if (STEERING_BUILTINS.has(head)) this.steer(st, steeredByBuiltin(head, words.slice(1)));
     const savedCdpath = st.cdpath;
     if (inlineCdpath) st.cdpath = true;
     // An assignment in front of the command applies to it alone, except
     // after an `eval`, whose string may assign the variable for good: the
     // flag then stays set.
     const savedSteered = { home: st.homeSteered, oldpwd: st.oldpwdSteered };
-    steer(st, inlineSteered);
+    this.steer(st, inlineSteered);
     // Whether the oracle may confirm this directory change (see
     // `DirectoryOracle`): a shell-neutral `cd` or `pushd` with no
     // redirection, outside every group, compound command and `eval`.
@@ -2303,7 +2349,11 @@ class Walker {
     if (st.staleDirStack) this.refuse("case-arm-dir-stack");
   }
 
-  /** Where `cd -` and `pushd -` go: the tracked previous directory, or opaque when the line assigned `OLDPWD`. */
+  /**
+   * Where `cd -` and `pushd -` go: the previous directory the walk tracked,
+   * opaque before any move (`newState`), and opaque when the line assigns
+   * `OLDPWD`.
+   */
   private oldpwdTarget(st: WalkState): DirSet {
     this.readDirStack(st);
     return st.oldpwdSteered ? OPAQUE_SET : st.oldpwd;
@@ -2341,7 +2391,7 @@ class Walker {
     }
     const rest = args.slice(m);
     if (rest.length === 0) {
-      // `$HOME`: the documented `unknown`, or a value the line assigned.
+      // `$HOME`: the documented `unknown`, or a value the line assigns.
       this.moveTo(st, st.homeSteered ? OPAQUE_SET : UNKNOWN_SET, false);
       return NO_KEYS;
     }
@@ -2406,7 +2456,7 @@ class Walker {
       const top = st.stack.pop();
       if (top === undefined) {
         // bash: no other directory, an error, nothing moves. zsh goes to
-        // `$HOME`, the documented `unknown` unless the line assigned it.
+        // `$HOME`, the documented `unknown` unless the line assigns it.
         if (st.stackTruncated || st.homeSteered) this.moveTo(st, OPAQUE_SET, true);
         return NO_KEYS;
       }
@@ -2734,11 +2784,12 @@ function runModel(command: string, oracle: DirectoryOracle | undefined): ModelRe
   } catch {
     return { kind: "unlexable" };
   }
+  const steered = steeredInLine(tokens);
   try {
-    return { kind: "ok", commands: walkCommands(tokens, oracle, true) };
+    return { kind: "ok", commands: walkCommands(tokens, oracle, true, steered) };
   } catch (err) {
     if (err instanceof ShellModelRefusal) {
-      return { kind: "refused", refusal: err.kind, read: readWithoutRefusals(tokens, oracle) };
+      return { kind: "refused", refusal: err.kind, read: readWithoutRefusals(tokens, oracle, steered) };
     }
     // The walk gave up before it reached every command word. A word that
     // starts with `{` or holds a brace expansion can spell a directory
@@ -2749,10 +2800,43 @@ function runModel(command: string, oracle: DirectoryOracle | undefined): ModelRe
   }
 }
 
-/** The model commands of a lexed command line; throws a `ShellModelError` where the walk gives up or refuses. */
-function walkCommands(tokens: readonly ShellToken[], oracle: DirectoryOracle | undefined, refusals: boolean): ModelCommand[] {
+/**
+ * The `STEERED_NAMES` some producer anywhere in a lexed command line assigns
+ * (task e927e903). A reader can run after a producer that comes later in
+ * the text: in a later loop iteration, or in a function body, which the
+ * walk reads where it is defined while the function runs where it is
+ * called. So the line is walked once before the real walk, with every
+ * refusal check off and no oracle (it asks the filesystem nothing), and
+ * every name the walk's own producers assign (`Walker.steer`) is recorded,
+ * in every shell and scope: a subshell, a substitution, a function body, a
+ * loop body, a literal `eval` string, an assignment in front of one
+ * command. The real walk starts with those flags set. When this walk gives
+ * up, both names count: the real walk then gives up too, at the same place
+ * or at an earlier refusal.
+ */
+function steeredInLine(tokens: readonly ShellToken[]): ReadonlySet<SteeredName> {
+  const walker = new Walker(null, false);
+  try {
+    walker.walk(tokens, newState());
+  } catch {
+    return ALL_STEERED;
+  }
+  return walker.steered;
+}
+
+/**
+ * The model commands of a lexed command line, its walk started with the
+ * `steered` flags set (`steeredInLine`); throws a `ShellModelError` where
+ * the walk gives up or refuses.
+ */
+function walkCommands(
+  tokens: readonly ShellToken[],
+  oracle: DirectoryOracle | undefined,
+  refusals: boolean,
+  steered: ReadonlySet<SteeredName>,
+): ModelCommand[] {
   const walker = new Walker(oracle ?? null, refusals);
-  walker.walk(tokens, newState());
+  walker.walk(tokens, newState(steered));
   return walker.out.map((rec) => ({
     canonical: rec.canonical,
     span: rec.span,
@@ -2762,9 +2846,13 @@ function walkCommands(tokens: readonly ShellToken[], oracle: DirectoryOracle | u
 }
 
 /** The commands the walk reads with every refusal check off, or `null` when it gives up (see `ShellModelView.triggerCommands`). */
-function readWithoutRefusals(tokens: readonly ShellToken[], oracle: DirectoryOracle | undefined): ModelCommand[] | null {
+function readWithoutRefusals(
+  tokens: readonly ShellToken[],
+  oracle: DirectoryOracle | undefined,
+  steered: ReadonlySet<SteeredName>,
+): ModelCommand[] | null {
   try {
-    return walkCommands(tokens, oracle, false);
+    return walkCommands(tokens, oracle, false, steered);
   } catch {
     return null;
   }

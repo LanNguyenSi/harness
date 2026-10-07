@@ -363,11 +363,9 @@ attribution at all — whenever:
   `bash_match` regex, or one whose match genuinely spans more than one
   segment) rather than any single segment;
 - the named directory is the home directory (a bare `cd`, or a `~` or
-  `~/...` value) or the session's previous directory (`cd -` before any
-  directory change of the command), and the command does not assign the
-  variable that names it (see the next section), or the invocation names
-  only `--work-tree` (it does not relocate the git-dir, so it never
-  proves a target);
+  `~/...` value) and the command does not assign `HOME` anywhere (see the
+  next section), or the invocation names only `--work-tree` (it does not
+  relocate the git-dir, so it never proves a target);
 - the named target resolves to the SAME repository identity as cwd (a
   subdirectory of the cwd repo reached via `-C`, or a symlink into it) —
   this collapses into the single cwd context rather than a spurious
@@ -414,15 +412,25 @@ target against it, through any later `cd` form, `cd -`, `popd` or a
 - a target that depends on a value the gate cannot resolve (task
   `e927e903`): a `cd`, `pushd`, `git -C`, `env -C` or `--git-dir` value
   that is only known at run time (a variable, a command substitution or
-  an arithmetic expansion, also next to literal text); a bare `cd`, a
-  `~` or `~/...` value, zsh's `pushd` with an empty stack (they read
-  `HOME`), or `cd -`, `pushd -` and a `~-` value (they read `OLDPWD`),
-  once the same command assigns that variable (an assignment, a
+  an arithmetic expansion, also next to literal text); in any of those
+  values, a tilde prefix other than `~` and `~/...` (`~+`, `~-`, `~N`,
+  `~+N`, `~-N`, `~NAME`); a `cd -` or `pushd -` before any directory
+  change of the command (the session's previous directory); a bare `cd`,
+  a `~` or `~/...` value, zsh's `pushd` with an empty stack (they read
+  `HOME`), or `cd -` and `pushd -` (they read `OLDPWD`), when the same
+  command assigns that variable anywhere (an assignment, a
   default-assigning or arithmetic expansion, the name operand of an
   assigning builtin such as `read` or `printf -v`, a `for` variable or a
-  `{NAME}` redirection) before it; and a `cd +N` / `cd -N`, which zsh
-  reads as a stack entry and bash as a path an earlier command of the
-  line can create;
+  `{NAME}` redirection), also after the directory change in the text
+  (the assignment can run first, in a later loop iteration or before a
+  function that is called after it), inside a subshell or in front of
+  another command (a function that subshell or command calls reads the
+  value); and a `cd +N` / `cd -N`, which zsh reads as a stack entry and
+  bash as a path an earlier command of the line can create. A `cd -` or
+  `popd` after a directory change whose target fails closed keeps that
+  possibility for the commands after it, because the return itself can
+  fail and leave the shell where it was; joining the return and the next
+  command with `&&` keeps that failure branch out;
 - a loop whose body changes directory relative to where it is (a later
   iteration starts somewhere the command text does not name), for the
   commands after the loop and for the commands inside it;
@@ -455,7 +463,10 @@ that really does contain a backtick, a glob that matches exactly one
 directory, a `CDPATH` search, a `cd` or `-C` into a variable or a
 command substitution that names the repository the command already runs
 in (its top level, a loop over directories), a `cd` into `$HOME/...`
-(the `~/...` spelling keeps the fallback), a loop such as
+(the `~/...` spelling keeps the fallback), a tilde prefix such as `~+`
+that names the working directory, a `cd -` before any other directory
+change of the command, a home-directory target in a command that assigns
+`HOME` only after it, in a subshell or for another command, a loop such as
 `for d in a b; do cd "$d"; git status; cd ..; done`, and a command past
 the work budget. Plain unquoted paths,
 quoted plain paths and a backtick that is not a target (a `--grep='...'`
@@ -465,11 +476,13 @@ does not exist below `a`, a verb inside `while false; do ...; done`).
 The CHANGELOG entry for task `7d4abf84` records how often each of these
 occurred on the review corpora it was measured against.
 
-Still the cwd fallback: the home and previous directory when the command
-does not assign them (see above), the other `~` prefixes,
-a `GIT_DIR=` or `GIT_WORK_TREE=` assignment, a nested shell
-(`bash -c '...'`), `source`, a function call, `sudo -D`, a variable whose
-name is built at run time, `CDPATH`, `HOME` or `OLDPWD` inherited from the
+Still the cwd fallback: the home directory when the command does not
+assign `HOME` (see above), the previous directory after a `cd` that
+failed (the shell keeps the previous directory it had, the gate reads
+the directory before that `cd`), a `GIT_DIR=` or `GIT_WORK_TREE=`
+assignment, a nested shell (`bash -c '...'`), `source`, a function call
+(beyond the `HOME` and `OLDPWD` rule above), `sudo -D`, a variable whose
+name is built at run time, `CDPATH` or `HOME` inherited from the
 environment, and a gated verb whose own head
 is spelled behind a prefix the trigger does not read (`! git log`,
 `{ git log; }`, `eval git log`) in a command that names no directory,

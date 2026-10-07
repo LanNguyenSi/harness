@@ -243,10 +243,13 @@ describe("runInterceptCli: a directory target that depends on an unresolved valu
       // A literal nested target still demands the nested repository's evidence.
       expect((await decide(RESOLVED_TARGET_ROWS[0]!, OUTER_ONLY, runtime)).blocked).toBe(true);
       // The home directory keeps the working directory's evidence when the
-      // line assigns nothing a directory change reads.
-      for (const command of ["cd; git push origin main", "HOME=/tmp true; cd; git push origin main"]) {
-        expect((await decide(command, OUTER_ONLY, runtime)).blocked, command).toBe(false);
-      }
+      // line assigns nothing a directory change reads; an assignment
+      // anywhere in the line, even one scoped to another command, makes it
+      // opaque (a function that command calls reads it).
+      expect((await decide("cd; git push origin main", OUTER_ONLY, runtime)).blocked).toBe(false);
+      const scoped = await decide("HOME=/tmp true; cd; git push origin main", OUTER_ONLY, runtime);
+      expect(scoped.blocked).toBe(true);
+      expect(scoped.decisions.map((d) => d.reason)).toEqual([OPAQUE_TARGET_REASON]);
     }, 30_000);
   }
 });

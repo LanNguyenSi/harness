@@ -190,6 +190,11 @@ export const STEERED_ROWS: readonly string[] = [
   ": ${a[HOME=1]}; cd; git push origin main",
   'a=(1); unset "a[HOME=1]"; cd; git push origin main',
   "exec {HOME}>/dev/null; cd; git push origin main",
+  // A producer anywhere in the line counts for the whole line (an accepted
+  // over-approximation): one in front of another command or inside a
+  // subshell reaches a function that command or subshell calls.
+  "HOME=/tmp true; cd; git push origin main",
+  "echo $(HOME=vendor/libplain); cd; git push origin main",
 ];
 
 /** Rows with a `cd` stack index that bash reads as a path an earlier command of the line can create (task e927e903). */
@@ -202,8 +207,7 @@ export const STACK_INDEX_PATH_ROWS: readonly string[] = [
 /**
  * Controls for the rows above that stay attributed: a literal target, a
  * `cd -` after a literal `cd`, a bare `cd` and a `~` with nothing assigned
- * (the home directory's documented fallback), reads of `$HOME` and
- * assignments that do not reach the shell running the `cd`, and a
+ * (the home directory's documented fallback), reads of `$HOME`, and a
  * `pushd +N` (a stack operation in both shells).
  */
 export const RESOLVED_TARGET_ROWS: readonly string[] = [
@@ -216,8 +220,6 @@ export const RESOLVED_TARGET_ROWS: readonly string[] = [
   "export PATH=$HOME/bin:$PATH; git push origin main",
   "printf '%s\\n' \"$HOME\"; cd; git push origin main",
   'echo "${HOME:-x}"; cd ~; git push origin main',
-  "HOME=/tmp true; cd; git push origin main",
-  "echo $(HOME=vendor/libplain); cd; git push origin main",
   'git commit -m "HOME handling"; cd; git push origin main',
   "pushd vendor; pushd +1; git push origin main",
 ];

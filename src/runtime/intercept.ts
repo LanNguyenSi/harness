@@ -1795,8 +1795,10 @@ export function resolveAttributedContexts(
       // one it cannot attribute. Reading that as "cwd only" would let the
       // outer repository's evidence stand in for a nested repository the
       // command really runs in, so the policy fails closed instead. Every
-      // other unattributable form (a quoted path, a `~` prefix, a bare
-      // substitution) keeps the cwd-only fallback below.
+      // other form this segment view cannot attribute (a quoted path, a `~`
+      // prefix, a bare substitution) keeps its cwd-only fallback below; the
+      // model view added after it reads a variable or substitution target
+      // as opaque since task e927e903, and fails closed on it there.
       return { kind: "opaque-target" };
     }
 
