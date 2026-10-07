@@ -12,8 +12,13 @@
 // generated, and `O_NOFOLLOW` for the adoption ledger. A site that falls
 // back to a by-path `fs.writeFileSync` / `fs.appendFileSync` records no such
 // open and fails here.
+//
+// No FIFO is planted in-process: a regression to a blocking open would hang
+// the worker instead of failing the case. The recorded flags (O_NONBLOCK,
+// O_EXCL, O_NOFOLLOW) pin the non-blocking open, the symlink cases pin the
+// observable refusal, and the helper's own FIFO behaviour is pinned in a
+// killable child by `hook-path-writes-fifo.test.ts`.
 
-import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -30,7 +35,7 @@ vi.mock("node:fs", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs")>();
   const openSync = ((p: fs.PathLike, flags?: fs.OpenMode, mode?: fs.Mode | null): number => {
     hoisted.opens.push({ path: String(p), flags: typeof flags === "number" ? flags : -1 });
-    return actual.openSync(p, flags, mode);
+    return actual.openSync(p, flags as fs.OpenMode, mode);
   }) as typeof actual.openSync;
   const lstatSync = ((p: fs.PathLike, options?: unknown): unknown => {
     const answer = hoisted.lstatAnswer.get(String(p));
@@ -130,15 +135,6 @@ describe.skipIf(process.platform === "win32")("delegation adoption ledger: the a
       expect(has(opens[0]!.flags, "O_APPEND")).toBe(true);
     },
   );
-
-  it("an lstat that reports the path as absent while a FIFO sits there: refused at once, nothing blocks", () => {
-    fs.rmSync(ledgerFile());
-    execFileSync("mkfifo", [ledgerFile()]);
-    hoisted.lstatAnswer.set(ledgerFile(), Object.assign(new Error("ENOENT"), { code: "ENOENT" }));
-    const result = recordAdoptedEntry(gen(), "child-1", "uuid:a");
-    expect(result.ok).toBe(false);
-    expect((result as { detail: string }).detail).toMatch(/ENXIO/);
-  });
 });
 
 describe.skipIf(process.platform === "win32")("preflight fail log: the write opens exclusively, non-blocking", () => {
@@ -208,19 +204,5 @@ describe.skipIf(process.platform === "win32")("preflight fail log: the write ope
     expect(stderr).toContain("EEXIST");
     expect(reason).not.toContain("; log:");
     expect(fs.readFileSync(victim, "utf8")).toBe("keep\n");
-  });
-
-  it("a FIFO planted at the generated name fails EEXIST without blocking", async () => {
-    pinName();
-    const logDir = path.join(tmp, "logs");
-    const repo = repoFixture();
-    await runOnce(repo, logDir);
-    const [name] = fs.readdirSync(logDir);
-    fs.rmSync(path.join(logDir, name!));
-    execFileSync("mkfifo", [path.join(logDir, name!)]);
-
-    const { stderr } = await runOnce(repo, logDir);
-    expect(stderr).toContain("preflight fail-log write failed");
-    expect(stderr).toContain("EEXIST");
   });
 });
