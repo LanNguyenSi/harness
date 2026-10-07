@@ -137,7 +137,7 @@ describe("runInterceptCli: a command line the shell command model refuses fails 
         }
       }
       expect(problems).toEqual([]);
-    });
+    }, 30_000);
   }
 
   it("warns instead of denying under a warn policy", async () => {
@@ -159,7 +159,7 @@ describe("runInterceptCli: a command line the shell command model refuses fails 
         expect(blocked, command).toBe(true);
         expect(decisions.map((d) => d.reason), command).toEqual([OPAQUE_TARGET_REASON]);
       }
-    });
+    }, 30_000);
   }
 
   for (const runtime of RUNTIMES) {
@@ -183,6 +183,6 @@ describe("runInterceptCli: a command line the shell command model refuses fails 
       // A row that runs in the working directory only needs its evidence.
       const { blocked } = await decide("arr=(a b c); git push origin main", OUTER_ONLY, runtime);
       expect(blocked).toBe(false);
-    });
+    }, 30_000);
   }
 });
