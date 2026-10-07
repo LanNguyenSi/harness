@@ -1053,7 +1053,7 @@
   (previously line 179). In `docs/decisions/2026-09-08-preflight-floors.md`:
   `src/probes/memory.ts:276#"const parsed = parseProbedVersion(stdout);"`
   (previously line 268). In this file:
-  `src/runtime/git-context.ts:662#"fs.realpathSync(commonDir)"` (previously
+  `src/runtime/git-context.ts:663#"fs.realpathSync(commonDir)"` (previously
   line 387) and
   `src/cli/doctor/format.ts:161#"sessionStartPreflightSetupVersion.projectName"`
   (previously line 139). Four module docs were re-stamped for the
@@ -1366,7 +1366,7 @@
   `{project}` substitution, both left unvalidated and out of scope.
   `deriveProjectName` now resolves the common dir through
   `fs.realpathSync` before taking its basename
-  (`src/runtime/git-context.ts:662#"fs.realpathSync(commonDir)"`), so a
+  (`src/runtime/git-context.ts:663#"fs.realpathSync(commonDir)"`), so a
   symlinked checkout resolves the SAME project layer as the real
   directory (decision D-021a's "repository identity is the common dir"
   rule); best-effort, a realpath failure falls back to the un-resolved
