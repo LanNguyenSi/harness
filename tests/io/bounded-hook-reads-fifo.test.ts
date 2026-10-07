@@ -17,6 +17,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { addGitDirSkeleton } from "../_helpers/git-dir-fixture.js";
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const DIST = path.join(REPO_ROOT, "dist");
@@ -104,6 +105,7 @@ describe.skipIf(process.platform === "win32")("git-context: by-path git file rea
     const gitDir = path.join(repo, ".git");
     fs.mkdirSync(path.join(gitDir, "refs", "heads"), { recursive: true });
     fs.writeFileSync(path.join(gitDir, "HEAD"), `ref: refs/heads/${branch}\n`);
+    addGitDirSkeleton(gitDir);
     if (opts.loose !== null) {
       fs.writeFileSync(path.join(gitDir, "refs", "heads", branch), `${opts.loose ?? SHA_NEW}\n`);
     }
@@ -187,6 +189,7 @@ describe.skipIf(process.platform === "win32")("git-context: by-path git file rea
     const main = path.join(tmp, "main-repo");
     fs.mkdirSync(path.join(main, ".git", "refs", "heads"), { recursive: true });
     fs.writeFileSync(path.join(main, ".git", "HEAD"), "ref: refs/heads/main\n");
+    addGitDirSkeleton(path.join(main, ".git"));
     const wtGit = path.join(main, ".git", "worktrees", "wt");
     fs.mkdirSync(wtGit, { recursive: true });
     mkfifo(path.join(wtGit, "HEAD"));
@@ -198,9 +201,10 @@ describe.skipIf(process.platform === "win32")("git-context: by-path git file rea
     expect(run.value).toEqual({ ok: { repo: "wt", branch: "", sha: "", refused: ["HEAD"] } });
   });
 
-  it("a FIFO at commondir returns within the bound and is reported", () => {
+  it("a FIFO at commondir returns within the bound and is refused (no branch is read from a worktree whose common directory is unknown)", () => {
     const main = path.join(tmp, "main-repo");
     fs.mkdirSync(path.join(main, ".git", "refs", "heads"), { recursive: true });
+    addGitDirSkeleton(path.join(main, ".git"));
     const wtGit = path.join(main, ".git", "worktrees", "wt");
     fs.mkdirSync(wtGit, { recursive: true });
     fs.writeFileSync(path.join(wtGit, "HEAD"), "ref: refs/heads/main\n");
@@ -210,7 +214,7 @@ describe.skipIf(process.platform === "win32")("git-context: by-path git file rea
     fs.writeFileSync(path.join(worktree, ".git"), `gitdir: ${wtGit}\n`);
     const run = resolve(worktree);
     expectBounded(run);
-    expect(run.value).toEqual({ ok: { repo: "wt", branch: "main", sha: "", refused: ["commondir"] } });
+    expect(run.value).toEqual({ ok: { repo: "wt", branch: "", sha: "", refused: ["commondir"] } });
   });
 
   it("an oversized .git pointer file returns within the bound with the path reported", () => {

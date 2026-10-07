@@ -21,6 +21,7 @@ import { SESSION_START_PREFLIGHT_SETUP_BUILD_MIN_VERSION } from "../../src/schem
 import { parseManifest } from "../../src/schema/index.js";
 import { parse as parseYaml } from "yaml";
 import { STUB_NPM_BIN_EXEC_UNKNOWN } from "../_helpers/npm-bin-exec.js";
+import { addGitDirSkeleton } from "../_helpers/git-dir-fixture.js";
 
 function loadManifestFromYaml(raw: string) {
   return parseManifest(parseYaml(raw));
@@ -623,6 +624,7 @@ describe("doctor: session_start_preflight per-repo effective value (task c88461c
     const repo = path.join(root, name);
     fs.mkdirSync(path.join(repo, ".git"), { recursive: true });
     fs.writeFileSync(path.join(repo, ".git", "HEAD"), "ref: refs/heads/main\n");
+    addGitDirSkeleton(path.join(repo, ".git"));
     return repo;
   }
 
@@ -802,6 +804,7 @@ describe("doctor: the derived project layer never reaches any OTHER check (task 
     const repo = path.join(root, name);
     fs.mkdirSync(path.join(repo, ".git"), { recursive: true });
     fs.writeFileSync(path.join(repo, ".git", "HEAD"), "ref: refs/heads/main\n");
+    addGitDirSkeleton(path.join(repo, ".git"));
     return repo;
   }
 
@@ -874,6 +877,7 @@ describe("doctor: session_start_preflight.setup reports a layer_unresolvable war
     const repo = path.join(root, name);
     fs.mkdirSync(path.join(repo, ".git"), { recursive: true });
     fs.writeFileSync(path.join(repo, ".git", "HEAD"), "ref: refs/heads/main\n");
+    addGitDirSkeleton(path.join(repo, ".git"));
     return repo;
   }
 

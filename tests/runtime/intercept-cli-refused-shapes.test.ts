@@ -23,6 +23,7 @@ import {
   SOLE_ROWS,
   UNLEXABLE_BRACE_ROWS,
 } from "../fixtures/shell-model-refusals/rows.js";
+import { addGitDirSkeleton } from "../_helpers/git-dir-fixture.js";
 
 // Task 9238cc27: a command line the shell command model refuses fails closed
 // for a per-repository `bash_match` policy, under both runtime event shapes,
@@ -70,6 +71,7 @@ let outer = "";
 function makeRepo(dir: string, branch: string): void {
   fs.mkdirSync(path.join(dir, ".git"), { recursive: true });
   fs.writeFileSync(path.join(dir, ".git", "HEAD"), `ref: refs/heads/${branch}\n`);
+  addGitDirSkeleton(path.join(dir, ".git"));
 }
 
 beforeAll(() => {

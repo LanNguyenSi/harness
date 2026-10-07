@@ -10,6 +10,7 @@ import { OPAQUE_TARGET_REASON, type LedgerClient } from "../../src/runtime/inter
 import { MAX_NORMALIZE_LENGTH } from "../../src/runtime/command-normalize.js";
 import { parseManifest } from "../../src/schema/index.js";
 import { makeManifest } from "../_helpers/manifest.js";
+import { addGitDirSkeleton } from "../_helpers/git-dir-fixture.js";
 
 // Task 7d4abf84: the end-to-end cost of the shell model's attribution at the
 // input bound. A command that names one long composed path for thousands of
@@ -42,6 +43,7 @@ beforeAll(() => {
   ] as const) {
     fs.mkdirSync(path.join(dir, ".git"), { recursive: true });
     fs.writeFileSync(path.join(dir, ".git", "HEAD"), `ref: refs/heads/${branch}\n`);
+    addGitDirSkeleton(path.join(dir, ".git"));
   }
 });
 

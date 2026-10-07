@@ -30,6 +30,7 @@ import type {
   RiskClassifier,
 } from "../../src/schema/index.js";
 import { makeManifest, makePolicy as policy } from "../_helpers/manifest.js";
+import { addGitDirSkeleton } from "../_helpers/git-dir-fixture.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const REPO_ROOT = path.resolve(path.dirname(__filename), "..", "..");
@@ -2598,6 +2599,7 @@ describe("intercept: empty REPO / BRANCH never renders a blank ledger tag", () =
       const target = path.join(root, "widget");
       fs.mkdirSync(path.join(target, ".git"), { recursive: true });
       fs.writeFileSync(path.join(target, ".git", "HEAD"), "ref: refs/heads/main\n");
+      addGitDirSkeleton(path.join(target, ".git"));
       const ledger = makeLedger({ kind: "ok", entries: [factEntry("preflight:widget ready:true")] });
       const result = await intercept({
         manifest: manifest([templatePolicy("preflight-before-investigation")]),
@@ -2622,6 +2624,7 @@ describe("intercept: empty REPO / BRANCH never renders a blank ledger tag", () =
       const detached = path.join(root, "detached-repo");
       fs.mkdirSync(path.join(detached, ".git"), { recursive: true });
       fs.writeFileSync(path.join(detached, ".git", "HEAD"), `${"a".repeat(40)}\n`);
+      addGitDirSkeleton(path.join(detached, ".git"));
       const ledger = makeLedger({
         kind: "ok",
         entries: [factEntry("preflight:master ready:true")],

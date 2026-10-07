@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { addGitDirSkeleton } from "../_helpers/git-dir-fixture.js";
 
 // Task f1eb1c5c, round 2 divergence pin (below), relocated to its own
 // file (task 2dadec9d, batch-46 follow-up): `existsSync` is wrapped in
@@ -60,6 +61,7 @@ function makeRepoFixture(name: string): string {
   const repo = path.join(root, name);
   fs.mkdirSync(path.join(repo, ".git"), { recursive: true });
   fs.writeFileSync(path.join(repo, ".git", "HEAD"), "ref: refs/heads/main\n");
+  addGitDirSkeleton(path.join(repo, ".git"));
   return repo;
 }
 
@@ -98,6 +100,7 @@ describe("doctor: does NOT resolve a project layer when the cwd's derived name i
     fs.mkdirSync(mainWorktreeDir, { recursive: true });
     fs.writeFileSync(path.join(mainWorktreeDir, "HEAD"), "ref: refs/heads/main\n");
     fs.writeFileSync(path.join(mainWorktreeDir, "commondir"), "../..\n");
+    addGitDirSkeleton(path.join(root, mainRepoName, ".git"));
     const checkoutBasename = "doctor-divergence-checkout";
     const repo = path.join(root, checkoutBasename);
     fs.mkdirSync(repo, { recursive: true });

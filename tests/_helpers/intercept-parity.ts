@@ -12,6 +12,7 @@ import { runInterceptCli } from "../../src/cli/policy/intercept.js";
 import type { LedgerClient } from "../../src/runtime/intercept.js";
 import type { Manifest, Policy } from "../../src/schema/index.js";
 import { makeManifest } from "./manifest.js";
+import { addGitDirSkeleton } from "./git-dir-fixture.js";
 
 export const GATE_PROD: Policy = {
   name: "gate-prod-destructive",
@@ -75,6 +76,7 @@ export function makeGitRepo(branch: string): string {
     recursive: true,
   });
   fs.writeFileSync(path.join(root, ".git", "HEAD"), `ref: refs/heads/${branch}\n`);
+  addGitDirSkeleton(path.join(root, ".git"));
   fs.writeFileSync(
     path.join(root, ".git", "refs", "heads", branch),
     "9fceb02d0ae598e95dc970b74767f19372d61af8\n",

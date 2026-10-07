@@ -10,6 +10,7 @@ import {
   runRecordReview,
   runRecordReviewSubagent,
 } from "../../../src/cli/record/index.js";
+import { addGitDirSkeleton } from "../../_helpers/git-dir-fixture.js";
 
 let cleanups: Array<() => void> = [];
 afterEach(() => {
@@ -36,6 +37,7 @@ function makeRepoFixture(name: string, branch = "main"): string {
   const branchRefPath = path.join(repo, ".git", "refs", "heads", ...branch.split("/"));
   fs.mkdirSync(path.dirname(branchRefPath), { recursive: true });
   fs.writeFileSync(path.join(repo, ".git", "HEAD"), `ref: refs/heads/${branch}\n`);
+  addGitDirSkeleton(path.join(repo, ".git"));
   fs.writeFileSync(branchRefPath, "abcdef0123456789abcdef0123456789abcdef01\n");
   return repo;
 }
@@ -56,6 +58,7 @@ function makeDetachedHeadFixture(name: string): string {
     path.join(repo, ".git", "HEAD"),
     "9fceb02d0ae598e95dc970b74767f19372d61af8\n",
   );
+  addGitDirSkeleton(path.join(repo, ".git"));
   return repo;
 }
 
@@ -102,6 +105,7 @@ function makeLinkedWorktreeFixture(defaultBranch = "main"): {
   fs.writeFileSync(path.join(perWorktreeDir, "HEAD"), "ref: refs/heads/main\n");
   // Real git writes this relative to the per-worktree directory itself.
   fs.writeFileSync(path.join(perWorktreeDir, "commondir"), "../..\n");
+  addGitDirSkeleton(mainGitDir);
 
   const worktreeCwd = path.join(root, "worktree-checkout");
   fs.mkdirSync(worktreeCwd, { recursive: true });

@@ -12,6 +12,7 @@ import {
 } from "../../../src/cli/session-start/stale-base-check.js";
 import { HermeticSpawnViolationError } from "../../../src/runtime/hermetic-spawn-guard.js";
 import { parseManifest, type Manifest } from "../../../src/schema/index.js";
+import { addGitDirSkeleton } from "../../_helpers/git-dir-fixture.js";
 
 const REPO_ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 
@@ -52,6 +53,7 @@ function makeRepoFixture(name: string, branch: string): string {
   const repo = path.join(root, name);
   fs.mkdirSync(path.join(repo, ".git"), { recursive: true });
   fs.writeFileSync(path.join(repo, ".git", "HEAD"), `ref: refs/heads/${branch}\n`);
+  addGitDirSkeleton(path.join(repo, ".git"));
   return repo;
 }
 
@@ -167,6 +169,7 @@ describe("runSessionStartStaleBaseCheck — driver logic", () => {
     const repo = path.join(root, "detached");
     fs.mkdirSync(path.join(repo, ".git"), { recursive: true });
     fs.writeFileSync(path.join(repo, ".git", "HEAD"), "9fceb02d0ae598e95dc970b74767f19372d61af8\n");
+    addGitDirSkeleton(path.join(repo, ".git"));
     let checkCalled = false;
     const result = await runSessionStartStaleBaseCheck({
       stdin: streamFrom(JSON.stringify({ session_id: "s", cwd: repo })),

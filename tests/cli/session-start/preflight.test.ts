@@ -3,6 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { Readable, Writable } from "node:stream";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import { addGitDirSkeleton } from "../../_helpers/git-dir-fixture.js";
 
 // ── Suite-wide homedir safety net (task a48b9729) ──────────────────────
 // The producer's fail-log default is `os.homedir()`-based
@@ -67,6 +68,7 @@ function makeRepoFixture(name: string, branch = "main"): string {
   const repo = path.join(root, name);
   fs.mkdirSync(path.join(repo, ".git"), { recursive: true });
   fs.writeFileSync(path.join(repo, ".git", "HEAD"), `ref: refs/heads/${branch}\n`);
+  addGitDirSkeleton(path.join(repo, ".git"));
   return repo;
 }
 
@@ -134,6 +136,7 @@ describe("runSessionStartPreflight", () => {
       path.join(repo, ".git", "HEAD"),
       "9fceb02d0ae598e95dc970b74767f19372d61af8\n",
     );
+    addGitDirSkeleton(path.join(repo, ".git"));
     const writes: string[] = [];
     const { stream: err } = captureStream();
     const result = await runSessionStartPreflight({
@@ -235,6 +238,7 @@ describe("runSessionStartPreflight", () => {
     const repo = path.join(repoRoot, "no-stage-repo");
     fs.mkdirSync(path.join(repo, ".git"), { recursive: true });
     fs.writeFileSync(path.join(repo, ".git", "HEAD"), "ref: refs/heads/main\n");
+    addGitDirSkeleton(path.join(repo, ".git"));
     fs.writeFileSync(path.join(tmpHome, "harness.yaml"), "version: 1\n");
     const { stream: err } = captureStream();
     const result = await runSessionStartPreflight({
@@ -262,6 +266,7 @@ describe("runSessionStartPreflight", () => {
     const repo = path.join(repoRoot, "no-stage-repo");
     fs.mkdirSync(path.join(repo, ".git"), { recursive: true });
     fs.writeFileSync(path.join(repo, ".git", "HEAD"), "ref: refs/heads/main\n");
+    addGitDirSkeleton(path.join(repo, ".git"));
     fs.writeFileSync(path.join(tmpHome, "harness.yaml"), "version: 1\n");
     const { stream: err } = captureStream();
     const result = await runSessionStartPreflight({
@@ -283,6 +288,7 @@ describe("runSessionStartPreflight", () => {
     const repo = path.join(root, "headful");
     fs.mkdirSync(path.join(repo, ".git", "refs", "heads"), { recursive: true });
     fs.writeFileSync(path.join(repo, ".git", "HEAD"), "ref: refs/heads/main\n");
+    addGitDirSkeleton(path.join(repo, ".git"));
     fs.writeFileSync(
       path.join(repo, ".git", "refs", "heads", "main"),
       "abcdef0123456789abcdef0123456789abcdef01\n",
@@ -1426,6 +1432,7 @@ describe("runSessionStartPreflight: per-repo scoping via cwd-derived project nam
     fs.mkdirSync(perWorktreeDir, { recursive: true });
     fs.writeFileSync(path.join(perWorktreeDir, "HEAD"), `ref: refs/heads/${branch}\n`);
     fs.writeFileSync(path.join(perWorktreeDir, "commondir"), "../..\n");
+    addGitDirSkeleton(mainGitDir);
     const worktreeCwd = path.join(root, "linked-worktree-checkout");
     fs.mkdirSync(worktreeCwd, { recursive: true });
     fs.writeFileSync(path.join(worktreeCwd, ".git"), `gitdir: ${perWorktreeDir}\n`);
@@ -1852,6 +1859,7 @@ describe("HEAD-binding order (task 30183330, guards preflight tag semantics)", (
     const repo = path.join(root, "headorder");
     fs.mkdirSync(path.join(repo, ".git", "refs", "heads"), { recursive: true });
     fs.writeFileSync(path.join(repo, ".git", "HEAD"), "ref: refs/heads/main\n");
+    addGitDirSkeleton(path.join(repo, ".git"));
     const refPath = path.join(repo, ".git", "refs", "heads", "main");
     const originalSha = "1111111111111111111111111111111111111111";
     const mutatedSha = "2222222222222222222222222222222222222222";
@@ -2078,6 +2086,7 @@ describe("runSessionStartPreflight: symlinked and differently-cased event.cwd (t
     const realRepo = path.join(root, "real-name-repo");
     fs.mkdirSync(path.join(realRepo, ".git"), { recursive: true });
     fs.writeFileSync(path.join(realRepo, ".git", "HEAD"), "ref: refs/heads/main\n");
+    addGitDirSkeleton(path.join(realRepo, ".git"));
     const linkRepo = path.join(root, "link-name-repo");
     fs.symlinkSync(realRepo, linkRepo, "dir");
 
@@ -2142,6 +2151,7 @@ describe("runSessionStartPreflight: symlinked and differently-cased event.cwd (t
     const wtGitDir = path.join(realRepo, ".git", "worktrees", "wt");
     fs.mkdirSync(wtGitDir, { recursive: true });
     fs.writeFileSync(path.join(realRepo, ".git", "HEAD"), "ref: refs/heads/main\n");
+    addGitDirSkeleton(path.join(realRepo, ".git"));
     fs.writeFileSync(path.join(wtGitDir, "HEAD"), "ref: refs/heads/main\n");
     fs.writeFileSync(path.join(wtGitDir, "commondir"), "../..\n");
 

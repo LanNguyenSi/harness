@@ -19,6 +19,7 @@ import {
   type Verdict,
 } from "../../src/policy-packs/builtin/solution-acceptance-runtime.js";
 import { parseManifest, type Manifest } from "../../src/schema/index.js";
+import { addGitDirSkeleton } from "../_helpers/git-dir-fixture.js";
 
 // Passthrough spy on the marker read, so a test can count how many times one
 // hook invocation observes the marker (the single-observation invariant:
@@ -76,6 +77,7 @@ function repoAtHead(sha: string): string {
   const repo = path.join(root, "repo");
   fs.mkdirSync(path.join(repo, ".git", "refs", "heads"), { recursive: true });
   fs.writeFileSync(path.join(repo, ".git", "HEAD"), "ref: refs/heads/work\n");
+  addGitDirSkeleton(path.join(repo, ".git"));
   fs.writeFileSync(path.join(repo, ".git", "refs", "heads", "work"), `${sha}\n`);
   return repo;
 }
