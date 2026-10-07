@@ -555,6 +555,16 @@ describe.skipIf(process.platform === "win32")(
       expect(resolveGitContext(nested)).toEqual({ repo: "inner-worktree", branch: "", sha: "", refused: ["HEAD"] });
     });
 
+    it("a `.git` directory whose HEAD is an absolute symlink to its own `refs/heads/<name>` file is refused (only relative `refs/heads/<name>` link text names a branch)", () => {
+      const { nested } = outerRepoWithNestedWorktree();
+      const refFile = path.join(nested, ".git", "refs", "heads", "via-abs");
+      fs.mkdirSync(path.dirname(refFile), { recursive: true });
+      fs.writeFileSync(refFile, `${FAKE_SHA}\n`);
+      fs.symlinkSync(refFile, path.join(nested, ".git", "HEAD"));
+      expect(findGitEntry(nested)).toEqual({ worktreeRoot: nested, gitDir: "", refused: "HEAD" });
+      expect(resolveGitContext(nested)).toEqual({ repo: "inner-worktree", branch: "", sha: "", refused: ["HEAD"] });
+    });
+
     it("control: a `.git` directory whose HEAD is a symlink with link text `refs/heads/<name>` names that branch", () => {
       const { nested } = outerRepoWithNestedWorktree();
       fs.mkdirSync(path.join(nested, ".git", "refs", "heads"), { recursive: true });
@@ -690,10 +700,10 @@ describe.skipIf(process.platform === "win32")(
 describe.skipIf(process.platform === "win32")(
   "resolveGitContext: a HEAD git does not accept is refused, not walked past (task b56d95d3)",
   () => {
-    // git takes a directory for a repository only when its HEAD holds
-    // `ref: refs/<path>` or an object id (or is a symlink whose link text is
-    // `refs/<...>`); for anything else it walks up to the enclosing
-    // repository. Present-but-unresolvable fails closed here instead.
+    // For empty, whitespace-only or garbage HEAD content git walks up to the
+    // enclosing repository; `ref: refs/heads/` naming no branch is a
+    // repository with an unresolvable HEAD to git. Either way no branch can
+    // be read, so present-but-unresolvable fails closed here.
     function nestedDotGitDir(head: string): string {
       const root = tmpDir();
       const outer = makeRepo(root, "outer", "ref: refs/heads/feat/outer", FAKE_SHA);

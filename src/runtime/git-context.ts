@@ -125,10 +125,11 @@ const GITDIR_RE = /^gitdir:\s*(.+)$/;
 // `ref: refs/heads/<branch>`; a reftable repository keeps the placeholder
 // `ref: refs/heads/.invalid` there) naming a non-empty path that does not end
 // in `/`, or a raw object id (40 hex chars for SHA-1, 64 for SHA-256) on a detached HEAD.
-// Anything else (empty, whitespace, garbage, `ref: refs/heads/` naming no
-// branch) is not a `HEAD`: git does not take such a directory for a
-// repository at all and walks up to an enclosing one, so this lookup refuses
-// it instead (task b56d95d3, operator decision).
+// Anything else is refused here (task b56d95d3, operator decision: fail
+// closed). For empty, whitespace-only or garbage content git does not take
+// the directory for a repository and walks up to an enclosing one; for
+// `ref: refs/heads/` naming no branch git takes it for a repository whose
+// `HEAD` cannot be resolved. Either way no branch can be read.
 // Like git's own HEAD check, the ref name is not validated further: a branch
 // name git would refuse to create (one with a space, say) still reads as that
 // branch, and the callers that use it validate it themselves.
