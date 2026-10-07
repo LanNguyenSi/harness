@@ -72,7 +72,7 @@ const EMPTY: GitRepoContext = { repo: "", branch: "", sha: "" };
  */
 export function describeRefusedGitFiles(ctx: Pick<GitRepoContext, "refused">): string {
   if (ctx.refused === undefined || ctx.refused.length === 0) return "";
-  return ` [git file refused, present but not a regular file or over the read cap: ${ctx.refused.join(", ")}]`;
+  return ` [git file refused, present but not a readable regular file (or missing from a git directory, or a link that does not resolve), or over the read cap: ${ctx.refused.join(", ")}]`;
 }
 
 /**
@@ -135,12 +135,41 @@ export interface GitEntry {
    * neither a directory nor a regular file (a FIFO, a device, a socket, a
    * symlink to one), a symlink that dangles or loops, or a file that cannot be
    * read (a FIFO swapped in after the stat, an oversized or unreadable
-   * file), as opposed to a readable file without a `gitdir:` line; `"HEAD"` when the
-   * `.git` directory's `HEAD` is present but not a regular file. Absent
+   * file), a `.git` directory that cannot be searched, or a `gitdir:`
+   * pointer whose target is not a directory, as opposed to a readable file
+   * without a `gitdir:` line; `"HEAD"` when the git directory's `HEAD` is
+   * missing, a link that does not resolve, or not a regular file. Absent
    * otherwise. `gitDir` is `""` in both cases, exactly as for any other
-   * unreadable `.git` file.
+   * unreadable `.git` file, except for a `gitdir:` pointer whose target does
+   * not resolve, where it keeps the pointer's path (nothing is there to read).
    */
   refused?: ".git" | "HEAD";
+}
+
+/**
+ * Whether a git directory's `HEAD` can be looked at: `null` when it is a
+ * regular file (after following links, as git does), otherwise the label of
+ * what to report as refused. A `HEAD` that is a dangling or looping link, or
+ * not a regular file, is `"HEAD"`; a git directory that cannot be searched at
+ * all (`EACCES`, `EPERM`) is `".git"`, since no file in it can be named. A
+ * `HEAD` that is simply missing is `"HEAD"` too unless `missingOk`, which a
+ * `gitdir:` pointer target gets (see the caller). Content and size stay with
+ * `readGitFile`, which reads it.
+ */
+function refusedHead(gitDir: string, missingOk: boolean): ".git" | "HEAD" | null {
+  const headPath = path.join(gitDir, "HEAD");
+  try {
+    fs.lstatSync(headPath);
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === "EACCES" || code === "EPERM") return ".git";
+    return missingOk && code === "ENOENT" ? null : "HEAD";
+  }
+  try {
+    return fs.statSync(headPath).isFile() ? null : "HEAD";
+  } catch {
+    return "HEAD";
+  }
 }
 
 /**
@@ -196,24 +225,24 @@ export function findGitEntry(startDir: string): GitEntry | null {
     // `.git` entry, valid or not, as inside. Only a `.git` that is ABSENT
     // keeps the walk going (task b56d95d3, operator decision): a nested
     // work tree whose `.git` was removed resolves the enclosing repository,
-    // exactly like git itself would.
+    // exactly like git itself would. The same decision covers what is
+    // INSIDE a present `.git` (a directory without a readable `HEAD`, an
+    // unsearchable one, a `gitdir:` pointer to nothing): see below, and
+    // `docs/okf/gate-fail-posture-matrix.md` for the full list.
     if (present && (stat === undefined || (!stat.isDirectory() && !stat.isFile()))) {
       return { worktreeRoot: dir, gitDir: "", refused: ".git" };
     }
     if (stat?.isDirectory()) {
-      let headStat: fs.Stats;
-      try {
-        headStat = fs.statSync(path.join(dotGit, "HEAD"));
-      } catch {
-        return null;
-      }
-      // A `HEAD` that is PRESENT but not a regular file (a FIFO planted
-      // over it, a directory, a device) is not "no repository here": this
-      // is a git directory whose `HEAD` cannot be read, reported as
+      // A present `.git` directory is a repository, whatever is inside it:
+      // a `HEAD` that is missing, a dangling or looping link, a node that
+      // is not a regular file, or a directory that cannot be searched is a
+      // git directory whose `HEAD` cannot be read. It is reported as
       // refused with `gitDir` left empty (so nothing reads through it),
       // never as "outside a work tree" (which a deny-capable caller would
-      // read as safe to allow).
-      if (!headStat.isFile()) return { worktreeRoot: dir, gitDir: "", refused: "HEAD" };
+      // read as safe to allow) and never walked past to an enclosing
+      // repository (task b56d95d3, operator decision).
+      const headRefusal = refusedHead(dotGit, false);
+      if (headRefusal !== null) return { worktreeRoot: dir, gitDir: "", refused: headRefusal };
       return { worktreeRoot: dir, gitDir: dotGit };
     }
     if (stat?.isFile()) {
@@ -224,6 +253,25 @@ export function findGitEntry(startDir: string): GitEntry | null {
       if (text !== null) {
         const match = GITDIR_RE.exec(text.trim());
         if (match) gitDir = path.resolve(dir, match[1]!.trim());
+      }
+      if (gitDir !== "" && refused.length === 0) {
+        // A `gitdir:` pointer whose target is not a directory that can be
+        // read (missing, not a directory, unsearchable, or holding a `HEAD`
+        // that is there but does not resolve) is the same
+        // present-but-unresolvable state as a `.git` directory without
+        // `HEAD`: refused, never walked past. `gitDir` stays set, so a
+        // caller that only derives a name from the pointer is unchanged and
+        // a reader finds nothing there. A `HEAD` that is plainly missing
+        // from an existing target is not counted here (the submodule and
+        // linked-worktree fixtures that only carry `commondir` rely on it).
+        let target: fs.Stats | undefined;
+        try {
+          target = fs.statSync(gitDir);
+        } catch {
+          target = undefined;
+        }
+        const refusal = target?.isDirectory() === true ? refusedHead(gitDir, true) : ".git";
+        if (refusal !== null) return { worktreeRoot: dir, gitDir, refused: refusal };
       }
       return { worktreeRoot: dir, gitDir, ...(refused.length > 0 ? { refused: ".git" as const } : {}) };
     }
@@ -313,7 +361,9 @@ export function resolveGitContext(cwd: string): GitRepoContext {
       /* unreadable HEAD — branch + sha stay "" */
     }
   }
-  return { repo, branch, sha, ...(refused.length > 0 ? { refused } : {}) };
+  // The entry lookup and the HEAD read can name the same file twice.
+  const labels = [...new Set(refused)];
+  return { repo, branch, sha, ...(labels.length > 0 ? { refused: labels } : {}) };
 }
 
 // ---------------------------------------------------------------------------

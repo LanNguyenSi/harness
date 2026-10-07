@@ -408,14 +408,16 @@ async function runPackHookBranchProtectionCliInner(
   // tree": a FIFO, a device, a directory, an oversized or unreadable file
   // where `HEAD` belongs, or a node that is neither a directory nor a
   // regular file (or an oversized or unreadable pointer file) at `.git`
-  // itself (the lookup then stops there rather than
+  // itself, a `.git` or `HEAD` that is a link that does not resolve, a git
+  // directory with no `HEAD`, or a `gitdir:` pointer to a missing directory
+  // (the lookup then stops there rather than
   // walking up to an enclosing repository). In a healthy repository those
   // paths are directories or regular files, so reading it as "no branch,
   // allow" below would let a planted node switch this gate off. This gate
   // fails closed on a could-not-decide state, so it blocks, naming the
   // refused path.
   if (branch === "" && gitContext.refused !== undefined && gitContext.refused.length > 0) {
-    const reason = `could not read the git metadata of the ${branchSource} (${gitContext.refused.join(", ")} is present but not a regular file or is oversized); refusing on failsafe`;
+    const reason = `could not read the git metadata of the ${branchSource} (${gitContext.refused.join(", ")} is present but not a regular file or is oversized, or does not resolve: a HEAD missing from a git directory, a link that dangles or loops, a directory that cannot be searched); refusing on failsafe`;
     const diagnostic = `BLOCK — ${reason}`;
     note(diagnostic);
     stdout.write(

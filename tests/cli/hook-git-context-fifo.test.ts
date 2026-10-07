@@ -201,6 +201,63 @@ describe.skipIf(process.platform === "win32")("pack hook branch-protection: a no
   });
 });
 
+describe.skipIf(process.platform === "win32")("pack hook branch-protection: a `.git` that is present but does not resolve", () => {
+  // The outer checkout is on a non-protected branch, so resolving the
+  // enclosing repository (the walk-up) would allow the write; a present
+  // `.git` that cannot be read must block instead (task b56d95d3, operator
+  // decision), while a truly absent one keeps the walk-up.
+  const writeEvent = (cwd: string, file: string): unknown => ({
+    hook_event_name: "PreToolUse",
+    session_id: "sess-fifo",
+    tool_name: "Write",
+    cwd,
+    tool_input: { file_path: file, content: "x" },
+  });
+  const nestedInOuter = (): string => {
+    const outer = makeRepo("feat/outer");
+    const nested = path.join(outer, "nested-worktree");
+    fs.mkdirSync(nested, { recursive: true });
+    return nested;
+  };
+  const expectBlockedNamingGitFile = (nested: string, naming: RegExp): void => {
+    const out = runCli(
+      ["pack", "hook", "branch-protection", "--config", manifestWithPack("branch-protection")],
+      writeEvent(nested, path.join(nested, "src.txt")),
+    );
+    expectBounded(out);
+    expect(out.status).toBe(0);
+    const envelope = JSON.parse(out.stdout) as { decision: string; reason: string };
+    expect(envelope.decision).toBe("block");
+    expect(envelope.reason).toMatch(/could not read the git metadata/);
+    expect(envelope.reason).toMatch(naming);
+    expect(out.stderr).not.toMatch(/feat\/outer/);
+  };
+
+  it("a DANGLING symlink at `.git` in a nested work tree BLOCKS, it does not resolve the outer repository", () => {
+    const nested = nestedInOuter();
+    fs.symlinkSync(path.join(nested, "no-such-gitdir"), path.join(nested, ".git"));
+    expectBlockedNamingGitFile(nested, /\.git is present but not a regular file/);
+  });
+
+  it("a LOOPING symlink at `.git` in a nested work tree BLOCKS", () => {
+    const nested = nestedInOuter();
+    fs.symlinkSync(path.join(nested, ".git"), path.join(nested, ".git"));
+    expectBlockedNamingGitFile(nested, /\.git is present but not a regular file/);
+  });
+
+  it("a `.git` directory WITHOUT a HEAD in a nested work tree BLOCKS, naming HEAD", () => {
+    const nested = nestedInOuter();
+    fs.mkdirSync(path.join(nested, ".git"));
+    expectBlockedNamingGitFile(nested, /HEAD is present but not a regular file or is oversized, or does not resolve/);
+  });
+
+  it("a `.git` file whose gitdir target is missing in a nested work tree BLOCKS", () => {
+    const nested = nestedInOuter();
+    fs.writeFileSync(path.join(nested, ".git"), `gitdir: ${path.join(nested, "no-such-gitdir")}\n`);
+    expectBlockedNamingGitFile(nested, /\.git is present but not a regular file/);
+  });
+});
+
 describe.skipIf(process.platform === "win32")("pack hook branch-protection: Codex-shaped events with a planted FIFO", () => {
   // The Codex adapter feeds the same blocker an `apply_patch` event whose
   // target path sits in the patch text, not in a `file_path` field.

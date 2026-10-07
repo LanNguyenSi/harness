@@ -433,10 +433,13 @@ function persistFailLog(
       logDir,
       `${FAIL_LOG_PREFIX}${sanitizeForFilename(repo).slice(0, 100)}-${timestamp}-${unique}.json`,
     );
-    // Non-blocking and typed on the opened descriptor. The name carries a
-    // timestamp and a random suffix, so planting a FIFO at it takes a guess
-    // at both; the open is still never a by-path blocking one.
-    writeRegularFileNonBlocking(filePath, `${JSON.stringify(json, null, 2)}\n`);
+    // The name is one this call just generated (timestamp plus a random
+    // suffix), so nothing legitimate is ever at it: an exclusive create
+    // (`O_EXCL`) fails with `EEXIST` on a planted symlink, FIFO or file
+    // instead of writing through or truncating it. The open is also
+    // non-blocking and typed on the opened descriptor, like every hook-path
+    // write.
+    writeRegularFileNonBlocking(filePath, `${JSON.stringify(json, null, 2)}\n`, { create: "exclusive" });
   } catch (err) {
     return { ok: false, reason: (err as Error).message };
   }

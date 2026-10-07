@@ -239,6 +239,41 @@ describe("dry-run: an empty REPO / BRANCH never shows a blank ledger tag", () =>
     expect(query).toContain("git switch <branch>");
   });
 
+  it("a git directory whose HEAD is unreadable shows the unreadable-file text, not the git switch hint", () => {
+    const repo = path.join(tmpDir(), "refused-repo");
+    // A `.git` directory with no HEAD: present, but it cannot be read.
+    fs.mkdirSync(path.join(repo, ".git"), { recursive: true });
+    const query = queryFor("preflight-before-push", "git push", repo);
+    expect(query).toBeDefined();
+    expect(query).toContain("no ledger query");
+    expect(query).toContain("a git file there (HEAD) is present but is not a readable regular file");
+    expect(query).not.toContain("HEAD is detached");
+    expect(query).not.toContain("git switch <branch>");
+  });
+
+  it("a dangling `.git` symlink shows the unreadable-file text naming `.git`", () => {
+    const repo = path.join(tmpDir(), "dangling-repo");
+    fs.mkdirSync(repo, { recursive: true });
+    fs.symlinkSync(path.join(repo, "no-such-gitdir"), path.join(repo, ".git"));
+    const query = queryFor("preflight-before-push", "git push", repo);
+    expect(query).toContain("a git file there (.git) is present but is not a readable regular file");
+    expect(query).not.toContain("git switch <branch>");
+  });
+
+  it("an explicit BRANCH builtin overrides the refused-file text (the operator named the branch state)", () => {
+    const repo = path.join(tmpDir(), "refused-repo");
+    fs.mkdirSync(path.join(repo, ".git"), { recursive: true });
+    const r = dryRun("look around", {
+      configPath: FULL_MANIFEST,
+      tool: "Bash",
+      toolArgs: JSON.stringify({ command: "git push" }),
+      builtins: { CWD: repo, BRANCH: "" },
+    });
+    const query = r.report.matchingPolicies.find((p) => p.name === "preflight-before-push")?.ledgerQuery;
+    expect(query).toContain("git switch <branch>");
+    expect(query).not.toContain("a git file there");
+  });
+
   it("an explicit empty REPO builtin is guarded too", () => {
     const r = dryRun("look around", {
       configPath: FULL_MANIFEST,

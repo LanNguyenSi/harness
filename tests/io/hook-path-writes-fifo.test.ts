@@ -10,10 +10,16 @@
 // through the same child, so a case cannot pass because the module path or
 // export name was wrong.
 //
-// Sites that a FIFO can only reach through a race (the name is freshly
-// generated, or an earlier stat already refuses a FIFO) are covered through
-// the shared helper they all call: see the last describe block, which holds
-// the helper's own FIFO cases, including the one with a reader attached.
+// What each block pins: the toolchain-parity snapshot, the stay-in-scope
+// audit log, the lock target and the signing key's rotate path are pinned
+// end to end (a FIFO at the path, a bounded child). The adoption-ledger
+// blocks pin the whole append including its friendlier `lstat` refusal, which
+// is what a FIFO or symlink placed BEFORE the call hits; the open's own
+// defence (a node swapped in after the `lstat`) and the preflight fail log
+// (a freshly generated name) cannot be reached by a plain FIFO, so they are
+// pinned at the site, with the open flags recorded, in
+// `hook-path-write-sites.test.ts`. The last describe block holds the shared
+// helper's own FIFO cases, including the one with a reader attached.
 
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -205,7 +211,7 @@ describe.skipIf(process.platform === "win32")("approval signing key: rewriting a
     expect(run.value).toMatchObject({ threw: { code: "ENXIO" } });
   });
 
-  it("a truncated regular key is repaired through the same non-blocking open", () => {
+  it("a truncated regular key is repaired in place", () => {
     const dir = path.join(tmp, "gen");
     fs.mkdirSync(dir);
     fs.writeFileSync(path.join(dir, ".approval-signing.key"), "short");

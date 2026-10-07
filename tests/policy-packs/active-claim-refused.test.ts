@@ -81,6 +81,11 @@ describe.skipIf(process.platform === "win32")("readActiveClaim: claim / absent /
     ["an empty file", () => fs.writeFileSync(claimPath(), "")],
     ["a whitespace-only file", () => fs.writeFileSync(claimPath(), " \n\t\n")],
     ["a generated dir that does not exist", () => fs.rmSync(generatedDir, { recursive: true })],
+    // `<file>/active-claim` fails with ENOTDIR: nothing can be claimed there.
+    ["a generated dir that is a regular file (ENOTDIR)", () => {
+      fs.rmSync(generatedDir, { recursive: true });
+      fs.writeFileSync(generatedDir, "not a directory\n");
+    }],
   ])("%s is absent", (_label, setup) => {
     setup();
     expect(readActiveClaim(generatedDir)).toEqual({ kind: "absent" });
@@ -91,6 +96,34 @@ describe.skipIf(process.platform === "win32")("readActiveClaim: claim / absent /
     const read = readActiveClaim(generatedDir);
     expect(read.kind).toBe("refused");
     expect(claimTaskIdOrNull(read)).toBeNull();
+  });
+
+  // A claim that is THERE but cannot be opened is not "no claim": an
+  // unreadable file and a generated directory that cannot be searched are
+  // both refused (the `EACCES` is neither `ENOENT` nor `ENOTDIR`). Root
+  // ignores permission bits, so these two cannot be constructed as root.
+  it.skipIf(process.getuid?.() === 0)("a claim file with no read permission (chmod 000) is refused", () => {
+    fs.writeFileSync(claimPath(), "task-9\n");
+    fs.chmodSync(claimPath(), 0o000);
+    try {
+      const read = readActiveClaim(generatedDir);
+      expect(read.kind).toBe("refused");
+      expect(claimTaskIdOrNull(read)).toBeNull();
+    } finally {
+      fs.chmodSync(claimPath(), 0o600);
+    }
+  });
+
+  it.skipIf(process.getuid?.() === 0)("a generated directory that cannot be searched is refused, even with a claim inside", () => {
+    fs.writeFileSync(claimPath(), "task-9\n");
+    fs.chmodSync(generatedDir, 0o600);
+    try {
+      const read = readActiveClaim(generatedDir);
+      expect(read.kind).toBe("refused");
+      expect(claimTaskIdOrNull(read)).toBeNull();
+    } finally {
+      fs.chmodSync(generatedDir, 0o755);
+    }
   });
 });
 
