@@ -1886,10 +1886,9 @@ class Walker {
     const lastWord = cmd.words[cmd.words.length - 1] ?? rest[rest.length - 1]!;
     const canonical = canonicalWords.join(" ");
     const offset = headWords.length - words.length;
-    const heads = stageTexts(headWords, [0, ...peeled.stages.map((i) => offset + i)], canonical);
     this.out.push({
       canonical,
-      heads,
+      heads: stageTexts(headWords, [0, ...peeled.stages.map((i) => offset + i)], canonical),
       headText: headTextOf(headWords),
       span: { start: first.start, end: lastWord.end },
       dirs,
@@ -1986,10 +1985,7 @@ function peelWrappers(words: readonly ShellWord[]): {
   const valueAt = (at: number): string | null | undefined => words[at]?.value;
   for (let guard = 0; guard < 64 && i < words.length; guard++) {
     const w = words[i]!;
-    // Wrappers are programs: `/usr/bin/env` and `/usr/bin/xargs` are
-    // peeled like `env` and `xargs` (`coproc`, a keyword, is matched as
-    // written below).
-    const v = w.value === null ? null : w.value.slice(w.value.lastIndexOf("/") + 1);
+    const v = w.value === null ? null : wrapperName(w.value);
     if (stages[stages.length - 1] !== i) stages.push(i);
     if (isAssignment(w)) {
       i++;
@@ -2100,7 +2096,7 @@ function peelWrappers(words: readonly ShellWord[]): {
       i = skipXargsOptions(words, i + 1);
       continue;
     }
-    if (w.value === "coproc" && !w.quoted) {
+    if (v === "coproc" && !w.quoted) {
       // `coproc cmd`, `coproc { cmd; }`, `coproc NAME { cmd; }`. Peeled here,
       // not in the walker's prefix loop, because the coprocess runs in a
       // subshell: a `cd` behind it must not move the modelled shell.
@@ -2113,6 +2109,16 @@ function peelWrappers(words: readonly ShellWord[]): {
   }
   if (stages[stages.length - 1] !== i) stages.push(i);
   return { idx: i, envChdir, envSplit, stages };
+}
+
+/**
+ * The name a wrapper word is peeled by. Wrappers are programs, so
+ * `/usr/bin/env` and `/usr/bin/xargs` are peeled like `env` and `xargs`;
+ * `coproc` is a keyword, peeled only as written.
+ */
+function wrapperName(value: string): string {
+  const base = value.slice(value.lastIndexOf("/") + 1);
+  return base === "coproc" ? value : base;
 }
 
 /** `xargs` options whose value is the next word when not attached (GNU and BSD). */
