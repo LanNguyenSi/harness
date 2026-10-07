@@ -1,5 +1,5 @@
 import type { Command } from "commander";
-import { createCliHelpers } from "./register-smoke-group.js";
+import { createCliHelpers } from "./cli-helpers.js";
 import {
   runRecordDogfood,
   runRecordReview,
