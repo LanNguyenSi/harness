@@ -36,8 +36,9 @@
 //   for `cd -P`, `git -C`, `env -C` and `--git-dir`); an absolute target
 //   replaces. The gate resolves the steps against the real filesystem; this
 //   module never touches it. `cd` with no argument and `cd ~` give
-//   `unknown` (home), `cd -` returns the tracked previous directory, `pushd`
-//   and `popd` keep a tracked stack, `cd A B` (zsh substitution) is opaque.
+//   `unknown` (home), `cd -` and `pushd -` return the tracked previous
+//   directory, `pushd` and `popd` keep a tracked stack, `cd A B` (zsh
+//   substitution) is opaque.
 // - Relocation options: `env` honours its last `-C` / `--chdir`; git applies
 //   every `-C` in order, then `--git-dir` (its `.git` parent). Option words
 //   are compared decoded (`'-C'`, `-''C`).
@@ -46,11 +47,23 @@
 //   in a target that is not a plain unquoted path, an unquoted glob (`* ? [`
 //   or a brace expansion with `,` or `..`), a relative `cd` target while an
 //   in-command `CDPATH` assignment is in effect, a relative or dynamic step
-//   onto an opaque possibility, a loop body that moves relatively, and the
-//   bounds below.
-// - Dynamic values (`$VAR`, `${...}`, `$(...)`, `~...`) give `unknown`, the
-//   documented working-directory fallback; a known base stays a candidate
-//   next to it, because an empty expansion does not move.
+//   onto an opaque possibility, a loop body that moves relatively, a target
+//   that depends on a value the walk cannot resolve (below), and the bounds
+//   below.
+// - Values the walk cannot resolve (task e927e903): a dynamic target of a
+//   `cd`, `pushd`, `git -C`, `env -C` or `--git-dir` (`$VAR`, `${...}`,
+//   `$(...)`, `$((...))`) is opaque; a known base stays a candidate next to
+//   it, because an empty expansion does not move. A `~` prefix gives
+//   `unknown` (home), the documented working-directory fallback, except
+//   when the line assigned the variable it reads. A `HOME` or `OLDPWD`
+//   assigned in the line (an assignment, a default-assigning or arithmetic
+//   expansion, the name operand of an assigning builtin, a `for` variable,
+//   a `{NAME}` redirection) makes a bare `cd`, a `~` / `~/...` target and
+//   zsh's `pushd` with an empty stack (`HOME`), and `cd -`, `pushd -` and a
+//   `~-` target (`OLDPWD`) opaque, for the rest of the walk (see
+//   `WalkState.homeSteered`). `cd +N` / `cd -N` reads the stack entry and
+//   an opaque possibility next to it: bash reads it as a path, which an
+//   earlier command of the line can create.
 // - Control flow: every command has a success and a failure state (a failed
 //   `cd` stays put; with the gate's `DirectoryOracle`, a top-level `cd` or
 //   `pushd` into a directory that exists has no failure state, so
@@ -87,12 +100,13 @@
 // the gate's fallback (fail closed when the raw text holds a
 // directory-changing word) instead of crashing the hook.
 //
-// OUT OF SCOPE (the working-directory fallback stays): directories held in
-// variables or substitutions, `GIT_DIR=` / `GIT_WORK_TREE=` assignments,
-// `sudo -D`, nested shells (`bash -c`, `sh -c`), `source`, function calls
-// (a function body is walked where it is defined, as if it ran there),
-// aliases, `env -S`, a dynamic `eval`, `CDPATH` and `OLDPWD` inherited from
-// the environment, zsh `AUTO_CD` and other zsh-only options, and a gated
+// OUT OF SCOPE (the working-directory fallback stays): `GIT_DIR=` /
+// `GIT_WORK_TREE=` assignments, `sudo -D`, nested shells (`bash -c`,
+// `sh -c`), `source`, function calls (a function body is walked where it is
+// defined, as if it ran there), aliases, `env -S`, a dynamic `eval`, a
+// variable whose name is built at run time, `CDPATH`, `HOME` and `OLDPWD`
+// inherited from the environment, `~` forms other than `~`, `~/...` and a
+// steered `~-`, zsh `AUTO_CD` and other zsh-only options, and a gated
 // verb whose own head is spelled through a prefix the legacy arms miss
 // (`! git log`), which this module models but the gate does not match on
 // (the matching arm is scoped to commands that name a directory).
@@ -131,8 +145,10 @@ export interface PathStep {
 /**
  * One directory a command can run in. `path` with no steps is the working
  * directory itself; `unknown` is a directory the command text does not name
- * (home, a variable), which keeps the documented working-directory fallback;
- * `opaque` is a directory the gate must not guess at (fail closed).
+ * (the home directory a bare `cd` or a `~` prefix reads, or the previous
+ * directory of the session), which keeps the documented working-directory
+ * fallback; `opaque` is a directory the gate must not guess at (fail
+ * closed), a dynamic target among them.
  */
 export type DirPossibility =
   | { readonly kind: "path"; readonly steps: readonly PathStep[] }
@@ -334,6 +350,16 @@ export interface ShellWord {
    * a `$( )`, backtick or `<( )` body, which runs in a subshell).
    */
   readonly cdpathRef: boolean;
+  /**
+   * The variables a later `cd` reads (`STEERED_NAMES`) that an expansion of
+   * this word can assign in the current shell: a `${...}` that assigns one
+   * (a default such as `${HOME:=x}`, an arithmetic assignment in a
+   * subscript or an offset) or an arithmetic expansion that names one, at
+   * this word's own level (not inside a `$( )`, backtick or `<( )` body,
+   * which runs in a subshell). A plain read (`$HOME`, `${HOME}/x`) assigns
+   * nothing.
+   */
+  readonly steers: readonly SteeredName[];
   /** Lexed bodies of the `$( )`, backtick and `<( )` substitutions in this word. */
   readonly subs: readonly ShellToken[][];
 }
@@ -351,6 +377,8 @@ export interface ShellRedirection {
   readonly target: ShellWord;
   readonly start: number;
   readonly end: number;
+  /** The `NAME` of a `{NAME}` glued in front of the operator: bash 4.1+ and zsh assign the file descriptor to it. */
+  readonly fdVariable?: string;
 }
 
 export type ShellToken = ShellWord | ShellOperator | ShellRedirection;
@@ -385,11 +413,70 @@ interface WordBuilder {
   wildcard: boolean;
   tilde: boolean;
   cdpathRef: boolean;
+  steers: Set<SteeredName>;
   subs: ShellToken[][];
 }
 
 /** `CDPATH` or zsh's `cdpath` as a whole identifier. */
 const CDPATH_NAME_RE = /(?<![A-Za-z0-9_])(?:CDPATH|cdpath)(?![A-Za-z0-9_])/;
+
+/**
+ * The variables other than `CDPATH` whose value a directory change reads:
+ * `HOME` (a bare `cd`, a `~` or `~/...` prefix, and zsh's `pushd` with an
+ * empty stack) and `OLDPWD` (`cd -`, `pushd -` and a `~-` prefix). One
+ * assigned in the line steers that change somewhere the text does not name
+ * (see `WalkState.homeSteered`).
+ */
+const STEERED_NAMES = ["HOME", "OLDPWD"] as const;
+
+/** One of `STEERED_NAMES`. */
+type SteeredName = (typeof STEERED_NAMES)[number];
+
+function isSteeredName(name: string | null | undefined): name is SteeredName {
+  return name === "HOME" || name === "OLDPWD";
+}
+
+/** The name as a whole identifier, anywhere (an arithmetic body, where a bare name is a variable). */
+const STEERED_MENTION_RE: Readonly<Record<SteeredName, RegExp>> = {
+  HOME: /(?<![A-Za-z0-9_])HOME(?![A-Za-z0-9_])/,
+  OLDPWD: /(?<![A-Za-z0-9_])OLDPWD(?![A-Za-z0-9_])/,
+};
+
+/**
+ * The name as the target of an assignment: `NAME=` (not `==`), `NAME+=`,
+ * `NAME:=` and zsh's `NAME::=` in a `${...}`, a subscripted `NAME[i]=`, the
+ * arithmetic compound assignments (`-=`, `<<=`, ...) and an increment
+ * (`NAME++`, `--NAME`). A `$NAME` read never matches.
+ */
+function steeredAssignRe(name: SteeredName): RegExp {
+  return new RegExp(
+    `(?<![A-Za-z0-9_$])${name}\\s*(?:\\[[^\\]]*\\]\\s*)?(?:::?=|(?:[-+*/%&^|]|<<|>>)?=(?!=)|\\+\\+|--)` +
+      `|(?:\\+\\+|--)\\s*${name}(?![A-Za-z0-9_])`,
+  );
+}
+
+const STEERED_ASSIGN_RE: Readonly<Record<SteeredName, RegExp>> = {
+  HOME: steeredAssignRe("HOME"),
+  OLDPWD: steeredAssignRe("OLDPWD"),
+};
+
+/** `text` and `text` with its quotes and backslashes removed (bash 5 removes them inside an arithmetic body too). */
+function textForms(text: string): readonly string[] {
+  const bare = text.replace(/['"\\]/g, "");
+  return bare === text ? [text] : [text, bare];
+}
+
+/** The steered names `text` assigns (`STEERED_ASSIGN_RE`) or, with `mention`, names at all. */
+function steeredIn(text: string, mention: boolean): SteeredName[] {
+  const found: SteeredName[] = [];
+  for (const name of STEERED_NAMES) {
+    const re = mention ? STEERED_MENTION_RE[name] : STEERED_ASSIGN_RE[name];
+    if (textForms(text).some((t) => re.test(t))) found.push(name);
+  }
+  return found;
+}
+
+const NO_STEERS: readonly SteeredName[] = Object.freeze([]);
 
 class ShellLexer {
   constructor(
@@ -491,9 +578,11 @@ class ShellLexer {
         s[i + 1] !== "(" &&
         (/^\d+$/.test(w.word.raw) || /^\{[A-Za-z_]\w*\}$/.test(w.word.raw))
       ) {
-        // An fd number or `{var}` glued to a redirection operator.
+        // An fd number or `{var}` glued to a redirection operator; the
+        // shell assigns the descriptor it opens to the `{var}` name.
         const r = this.redirection(i, depth, pending);
-        tokens.push(r.token);
+        const fdVariable = /^\{([A-Za-z_]\w*)\}$/.exec(w.word.raw)?.[1];
+        tokens.push(fdVariable === undefined ? r.token : { ...r.token, fdVariable });
         i = r.end;
         continue;
       }
@@ -569,6 +658,7 @@ class ShellLexer {
       wildcard: false,
       tilde: false,
       cdpathRef: false,
+      steers: new Set(),
       subs: [],
     };
     const add = (text: string, quoted: boolean): void => {
@@ -678,6 +768,7 @@ class ShellLexer {
         tilde: b.tilde,
         unusual: UNUSUAL_CHAR_RE.test(b.literal),
         cdpathRef: b.cdpathRef,
+        steers: b.steers.size === 0 ? NO_STEERS : [...b.steers],
         subs: b.subs,
       },
       end: i,
@@ -770,6 +861,8 @@ class ShellLexer {
       b.dynamic = true;
       const end = skipBalanced(s, i + 1, "(", ")");
       if (CDPATH_NAME_RE.test(s.slice(i, end))) b.cdpathRef = true;
+      // An arithmetic body: a bare name there is a variable it can assign.
+      for (const name of steeredIn(s.slice(i, end), true)) b.steers.add(name);
       return { literal: null, end, quoted: false };
     }
     if (nx === "(") {
@@ -782,12 +875,16 @@ class ShellLexer {
       b.dynamic = true;
       const end = skipBalanced(s, i + 1, "{", "}");
       if (CDPATH_NAME_RE.test(s.slice(i, end))) b.cdpathRef = true;
+      // A default that assigns (`${HOME:=x}`), or an arithmetic assignment
+      // in a subscript or an offset; a plain read assigns nothing.
+      for (const name of steeredIn(s.slice(i, end), false)) b.steers.add(name);
       return { literal: null, end, quoted: false };
     }
     if (nx === "[") {
       b.dynamic = true;
       const end = skipBalanced(s, i + 1, "[", "]");
       if (CDPATH_NAME_RE.test(s.slice(i, end))) b.cdpathRef = true;
+      for (const name of steeredIn(s.slice(i, end), true)) b.steers.add(name);
       return { literal: null, end, quoted: false };
     }
     if (nx !== undefined && /[A-Za-z_]/.test(nx)) {
@@ -986,14 +1083,53 @@ function isOpaqueTargetWord(w: ShellWord): boolean {
   return w.glob;
 }
 
-/** Compose one possibility with a target word. */
-function joinOne(base: DirPossibility, w: ShellWord, mode: PathStepMode, cdpathSearch: boolean): DirPossibility {
+/**
+ * What reading a target word depends on besides the word itself, from the
+ * walk (`WalkState`): a `CDPATH` search (for a `cd` or `pushd` target only)
+ * and a `HOME` or `OLDPWD` assigned in the line (for a `~` prefix, in every
+ * target: the shell expands it before the command runs).
+ */
+interface TargetContext {
+  readonly cdpathSearch: boolean;
+  readonly homeSteered: boolean;
+  readonly oldpwdSteered: boolean;
+}
+
+/** The context a target word is read in at this point of the walk; `cdpathSearch` only for `cd` and `pushd`. */
+function targetContext(st: WalkState, cdTarget: boolean): TargetContext {
+  return { cdpathSearch: cdTarget && st.cdpath, homeSteered: st.homeSteered, oldpwdSteered: st.oldpwdSteered };
+}
+
+/**
+ * Whether a `~` prefix reads a value the line assigned: `~` and `~/...`
+ * read `HOME`, `~-` and `~-/...` read `OLDPWD`. Every other `~` form keeps
+ * the documented `unknown` (see `joinOne`).
+ */
+function tildeReadsSteered(w: ShellWord, ctx: TargetContext): boolean {
+  // The raw text (a quoted `/` ends no prefix), or the value of a word that
+  // stands for part of another (`--git-dir=~/x`, see `derivedWord`).
+  const text = w.raw.startsWith("~") ? w.raw : (w.value ?? w.literal);
+  if (ctx.homeSteered && /^~(?:\/|$)/.test(text)) return true;
+  return ctx.oldpwdSteered && /^~-(?:\/|$)/.test(text);
+}
+
+/**
+ * Compose one possibility with a target word. A target only known at run
+ * time is opaque (task e927e903): a value the text does not hold (a
+ * variable, a command substitution, an arithmetic expansion) can name any
+ * directory, a nested repository included, so the working directory's
+ * evidence cannot stand in for it. A `~` prefix keeps the documented
+ * `unknown` (the home directory), unless the line assigned the variable it
+ * reads.
+ */
+function joinOne(base: DirPossibility, w: ShellWord, mode: PathStepMode, ctx: TargetContext): DirPossibility {
   if (isOpaqueTargetWord(w)) return OPAQUE;
-  if (w.value === null || w.tilde) return base.kind === "opaque" ? OPAQUE : UNKNOWN;
+  if (w.tilde) return base.kind === "opaque" || tildeReadsSteered(w, ctx) ? OPAQUE : UNKNOWN;
+  if (w.value === null) return OPAQUE;
   const v = w.value;
   if (v === "") return base; // `cd ""` and `git -C ""` stay put
   if (path.posix.isAbsolute(v)) return appendStep([], { value: v, mode });
-  if (cdpathSearch && !/^\.\.?(\/|$)/.test(v)) return OPAQUE;
+  if (ctx.cdpathSearch && !/^\.\.?(\/|$)/.test(v)) return OPAQUE;
   if (base.kind !== "path") return base;
   return appendStep(base.steps, { value: v, mode });
 }
@@ -1002,12 +1138,12 @@ function joinSet(
   set: DirSet,
   w: ShellWord,
   mode: PathStepMode,
-  cdpathSearch: boolean,
+  ctx: TargetContext,
   onJoin?: (base: DirPossibility, joined: DirPossibility) => void,
 ): DirSet {
   const m = new Map<string, DirPossibility>();
   for (const base of set.values()) {
-    const joined = joinOne(base, w, mode, cdpathSearch);
+    const joined = joinOne(base, w, mode, ctx);
     onJoin?.(base, joined);
     m.set(keyOf(joined), joined);
     // A variable or substitution may expand to nothing, which stays put.
@@ -1029,6 +1165,19 @@ interface WalkState {
   stack: DirSet[];
   stackTruncated: boolean;
   cdpath: boolean;
+  /**
+   * `HOME` was assigned in this shell's walk (task e927e903): a bare `cd`,
+   * a `~` or `~/...` target and zsh's `pushd` with an empty stack read the
+   * assigned value, a directory the text does not name, so they read as
+   * opaque. Like `cdpath`: set from the command that assigns on, copied
+   * into a subshell (a subshell's own assignment stays there), set only for
+   * the command itself by an assignment in front of it, and never cleared
+   * (a failing `cd` keeps the value). A join of two walk states joins it
+   * by OR.
+   */
+  homeSteered: boolean;
+  /** `OLDPWD` was assigned in this shell's walk: `cd -`, `pushd -` and a `~-` target read as opaque (as `homeSteered`). */
+  oldpwdSteered: boolean;
   evalDepth: number;
   loops: LoopFrame[];
   /**
@@ -1165,6 +1314,94 @@ const ASSIGNING_BUILTINS = new Set([
   "sysread",
 ]);
 
+/**
+ * The builtins that can assign a `STEERED_NAMES` variable through an
+ * operand: `ASSIGNING_BUILTINS`, bash's `wait -p NAME` and zsh's `getln`,
+ * `zstyle -s`, `zformat` and `strftime -s`.
+ */
+const STEERING_BUILTINS = new Set([...ASSIGNING_BUILTINS, "wait", "getln", "zstyle", "zformat", "strftime"]);
+
+/** A `$NAME` / `${NAME...}` read does not count; any other whole-identifier occurrence does. */
+const STEERED_UNREAD_RE: Readonly<Record<SteeredName, RegExp>> = {
+  HOME: /(?<![A-Za-z0-9_$]|\$\{)HOME(?![A-Za-z0-9_])/,
+  OLDPWD: /(?<![A-Za-z0-9_$]|\$\{)OLDPWD(?![A-Za-z0-9_])/,
+};
+
+/**
+ * Whether an operand of an assigning builtin names `name` in a name
+ * position: the name itself (`read HOME`), with a subscript, a value or
+ * zsh's `?prompt` (`HOME[0]`, `HOME=x`, `HOME+=x`, `HOME?p`), the target of
+ * a nameref (`declare -n r=HOME`), or an option with the name glued to it
+ * (`-vHOME`). A dynamic operand counts when its literal name prefix is the
+ * name, or, without one, when its text names it other than as a `$` read.
+ */
+function operandNamesSteered(w: ShellWord, name: SteeredName): boolean {
+  const v = w.value;
+  if (v !== null) {
+    // An option word: the name may be glued to its letter (`-aHOME`).
+    if (/^[-+]/.test(v)) return v.includes(name);
+    const eq = v.indexOf("=");
+    const target = (eq < 0 ? v : v.slice(0, eq)).replace(/[[?].*$/s, "").replace(/\+$/, "");
+    return target === name || (eq >= 0 && v.slice(eq + 1) === name);
+  }
+  const lead = /^([A-Za-z_][A-Za-z0-9_]*)(?:\[|\+?=)/.exec(w.raw);
+  if (lead !== null) return lead[1] === name;
+  return STEERED_UNREAD_RE[name].test(w.raw);
+}
+
+/** The operand after an option word of `letters` that ends in `letter` (`-v NAME`, `-rv NAME`, `+A NAME`), and glued forms (`-vNAME`). */
+function optionOperandNamesSteered(args: readonly ShellWord[], letter: string, name: SteeredName): boolean {
+  for (let k = 0; k < args.length; k++) {
+    const v = args[k]!.value;
+    if (v === null || !/^[-+][A-Za-z]/.test(v) || !v.includes(letter)) continue;
+    if (v.endsWith(letter) && args[k + 1] !== undefined && operandNamesSteered(args[k + 1]!, name)) return true;
+    if (v.includes(name)) return true;
+  }
+  return false;
+}
+
+/**
+ * The steered names an assigning builtin's operands assign: by name
+ * position (`read`, `printf -v`, `print -v`, the declaration builtins,
+ * zsh's `set -A`, ...; `unset` only clears a variable, which a `cd` then
+ * fails on), and, for every one of them, an arithmetic assignment in an
+ * operand (`let HOME=1`, a subscript such as `unset 'a[HOME=1]'`, zsh's
+ * `printf %d` argument, a `declare -i` value).
+ */
+function steeredByBuiltin(head: string, args: readonly ShellWord[]): SteeredName[] {
+  const found: SteeredName[] = [];
+  for (const name of STEERED_NAMES) {
+    let named: boolean;
+    if (head === "let") named = args.some((w) => steeredIn(w.raw, true).includes(name));
+    else if (head === "unset") named = false;
+    else if (head === "printf" || head === "print") named = optionOperandNamesSteered(args, "v", name);
+    else if (head === "set") named = optionOperandNamesSteered(args, "A", name);
+    else named = args.some((w) => operandNamesSteered(w, name));
+    if (named || args.some((w) => steeredIn(w.raw, false).includes(name))) found.push(name);
+  }
+  return found;
+}
+
+/**
+ * The steered names an assignment word assigns besides its own target
+ * (which the walk scopes): an arithmetic assignment in its subscript or in
+ * a value the shell evaluates (`a[HOME=1]=x`, `n=HOME=1` for an integer
+ * `n`), and a value that is the name itself (the target of a nameref).
+ */
+function steeredByAssignmentWord(w: ShellWord): SteeredName[] {
+  const rest = w.raw.replace(/^[A-Za-z_][A-Za-z0-9_]*/, "#");
+  const found = steeredIn(rest, false);
+  const eq = w.value?.indexOf("=") ?? -1;
+  const value = eq >= 0 ? w.value!.slice(eq + 1) : null;
+  if (isSteeredName(value) && !found.includes(value)) found.push(value);
+  return found;
+}
+
+/** The target of an assignment word or a subscripted one read as a command word (`HOME=x`, `HOME[0]=x`). */
+function assignmentTarget(w: ShellWord): string | null {
+  return /^([A-Za-z_][A-Za-z0-9_]*)(?:\[[^\]]*\])?\+?=/.exec(w.raw)?.[1] ?? null;
+}
+
 /** Words that open a compound command after `coproc` (`coproc [NAME] COMPOUND`). */
 const COMPOUND_OPENERS = new Set(["{", "[[", "if", "while", "until", "for", "select", "case", "repeat", "foreach"]);
 
@@ -1181,6 +1418,8 @@ function newState(): WalkState {
     stack: [],
     stackTruncated: false,
     cdpath: false,
+    homeSteered: false,
+    oldpwdSteered: false,
     evalDepth: 0,
     loops: [],
     enclosing: 0,
@@ -1192,10 +1431,20 @@ function newState(): WalkState {
 /**
  * The state a subshell starts in: a copy whose moves do not reach the
  * parent or its loops. `openCompounds` is the number of compound commands
- * open in the calling walk, which the subshell body is nested in.
+ * open in the calling walk, which the subshell body is nested in. The
+ * flags (`cdpath`, `homeSteered`, `oldpwdSteered`) are copied: a subshell
+ * inherits the variables its parent assigned.
  */
 function subshellState(st: WalkState, openCompounds: number): WalkState {
   return { ...st, stack: st.stack.slice(), loops: [], enclosing: st.enclosing + openCompounds };
+}
+
+/** Record that the walk's shell assigned these `STEERED_NAMES` variables (see `WalkState.homeSteered`). */
+function steer(st: WalkState, names: Iterable<SteeredName>): void {
+  for (const name of names) {
+    if (name === "HOME") st.homeSteered = true;
+    else st.oldpwdSteered = true;
+  }
 }
 
 function emptyCommand(): SimpleCommand {
@@ -1295,6 +1544,25 @@ function tokensReferenceCdpath(tokens: readonly ShellToken[], arith: boolean): b
     if (w.cdpathRef || (arith && CDPATH_NAME_RE.test(w.raw))) return true;
   }
   return false;
+}
+
+/**
+ * The `STEERED_NAMES` a data group's words can assign in the current shell:
+ * an expansion that assigns one in any word, in an arithmetic body any
+ * mention (a bare name there is a variable an operator can assign), and
+ * elsewhere (an array literal, a `[[ ]]` group) a word that reads as an
+ * assignment to one. Substitution bodies are subshells and do not count.
+ */
+function tokensSteer(tokens: readonly ShellToken[], arith: boolean): Set<SteeredName> {
+  const found = new Set<SteeredName>();
+  for (const t of tokens) {
+    const w = t.kind === "word" ? t : t.kind === "redir" ? t.target : null;
+    if (t.kind === "redir" && isSteeredName(t.fdVariable)) found.add(t.fdVariable);
+    if (w === null) continue;
+    for (const name of w.steers) found.add(name);
+    for (const name of steeredIn(w.raw, arith)) found.add(name);
+  }
+  return found;
 }
 
 interface ExecInfo {
@@ -1466,8 +1734,10 @@ class Walker {
         }
         if (cmd.groupKind === "data") {
           // An arithmetic body, an array literal or a condition runs in the
-          // current shell: a `CDPATH` it names reaches the walk.
+          // current shell: a `CDPATH` it names reaches the walk, and so does
+          // a `HOME` or `OLDPWD` it assigns.
           if (tokensReferenceCdpath(cmd.group, cmd.groupArith)) st.cdpath = true;
+          steer(st, tokensSteer(cmd.group, cmd.groupArith));
           this.dataDepth++;
           try {
             this.walk(cmd.group, subshellState(st, compound.length));
@@ -1530,8 +1800,10 @@ class Walker {
       const tk = tokens[i]!;
       if (tk.kind === "word") {
         // A `CDPATH` expansion in any word (an argument, an assignment
-        // value, a `case` subject or pattern) can assign it in this shell.
+        // value, a `case` subject or pattern) can assign it in this shell,
+        // and so can an expansion that assigns `HOME` or `OLDPWD`.
         if (tk.cdpathRef) st.cdpath = true;
+        steer(st, tk.steers);
         if (cmd.words.length === 0 && !tk.quoted && tk.value === "case") {
           this.pushCompound(compound, newFrame("case", st, this.out.length));
           i++;
@@ -1563,6 +1835,8 @@ class Walker {
       }
       if (tk.kind === "redir") {
         if (tk.target.cdpathRef) st.cdpath = true;
+        steer(st, tk.target.steers);
+        if (isSteeredName(tk.fdVariable)) steer(st, [tk.fdVariable]);
         cmd.redirs.push(tk);
         i++;
         continue;
@@ -1743,6 +2017,7 @@ class Walker {
             const name = words[k + 1];
             const third = words[k + 2];
             if (name !== undefined && CDPATH_NAME_RE.test(name.raw)) st.cdpath = true;
+            if (name !== undefined) steer(st, steeredIn(name.raw, true));
             // `for NAME do ...` and zsh's `for NAME BODY`: the walk reads a
             // header only, so a body glued to it would be dropped.
             if (third !== undefined && bareValue(third) !== "in") this.refuse("loop-body");
@@ -1807,17 +2082,28 @@ class Walker {
       }
       scope.condOpen = close < 0;
       if (close >= 0 && words.slice(close + 1).some((w) => bareValue(w) !== "}")) this.refuse("alternate-form");
+      // An arithmetic operand of the condition (`-eq`, `-lt`, ...) can
+      // assign (`[[ 1 -eq HOME=1 ]]`).
+      for (const w of words) steer(st, steeredIn(w.raw, false));
     }
 
     let a = 0;
     let inlineCdpath = false;
+    // `HOME` / `OLDPWD` assigned by the assignment words in front of the
+    // command: for the command itself only, or for the rest of the walk
+    // when nothing follows them.
+    const inlineSteered = new Set<SteeredName>();
     while (a < words.length && isAssignment(words[a]!)) {
       if (isCdpathAssignment(words[a]!)) inlineCdpath = true;
       if (SHELL_TABLE_PARAMETER_RE.test(words[a]!.raw)) this.builtinsInDoubt = true;
+      const target = assignmentTarget(words[a]!);
+      if (isSteeredName(target)) inlineSteered.add(target);
+      steer(st, steeredByAssignmentWord(words[a]!));
       a++;
     }
     if (a === words.length) {
       if (inlineCdpath) st.cdpath = true;
+      steer(st, inlineSteered);
       return info;
     }
     words = words.slice(a);
@@ -1848,6 +2134,13 @@ class Walker {
     if (!cond) this.checkCommandWord(words);
     // zsh's subscripted `cdpath[1]=...` reads as a command word here.
     if (isCdpathAssignment(headWord)) st.cdpath = true;
+    // So does a subscripted assignment to `HOME` or `OLDPWD`, or one whose
+    // subscript assigns them (`a[HOME=1]=x`).
+    const headTarget = assignmentTarget(headWord);
+    if (headTarget !== null) {
+      if (isSteeredName(headTarget)) steer(st, [headTarget]);
+      steer(st, steeredByAssignmentWord(headWord));
+    }
     const head = headWord.value;
     if (head === null) {
       // A dynamic command word is out of scope, and can be any of the
@@ -1862,8 +2155,15 @@ class Walker {
     // A builtin that assigns a variable named by an argument (`read CDPATH`,
     // `printf -v CDPATH`, `typeset -T`, zsh `vared cdpath`).
     if (ASSIGNING_BUILTINS.has(head) && words.slice(1).some((w) => CDPATH_NAME_RE.test(w.raw))) st.cdpath = true;
+    // The same for `HOME` and `OLDPWD`, by name position (`steeredByBuiltin`).
+    if (STEERING_BUILTINS.has(head)) steer(st, steeredByBuiltin(head, words.slice(1)));
     const savedCdpath = st.cdpath;
     if (inlineCdpath) st.cdpath = true;
+    // An assignment in front of the command applies to it alone, except
+    // after an `eval`, whose string may assign the variable for good: the
+    // flag then stays set.
+    const savedSteered = { home: st.homeSteered, oldpwd: st.oldpwdSteered };
+    steer(st, inlineSteered);
     // Whether the oracle may confirm this directory change (see
     // `DirectoryOracle`): a shell-neutral `cd` or `pushd` with no
     // redirection, outside every group, compound command and `eval`.
@@ -1897,6 +2197,10 @@ class Walker {
       }
     } finally {
       st.cdpath = savedCdpath;
+      if (head !== "eval") {
+        st.homeSteered = savedSteered.home;
+        st.oldpwdSteered = savedSteered.oldpwd;
+      }
     }
     this.gatedCommand(words, st, cmd);
     return info;
@@ -1999,6 +2303,12 @@ class Walker {
     if (st.staleDirStack) this.refuse("case-arm-dir-stack");
   }
 
+  /** Where `cd -` and `pushd -` go: the tracked previous directory, or opaque when the line assigned `OLDPWD`. */
+  private oldpwdTarget(st: WalkState): DirSet {
+    this.readDirStack(st);
+    return st.oldpwdSteered ? OPAQUE_SET : st.oldpwd;
+  }
+
   /**
    * `cd` / `chdir`. Returns the keys of the directories the move certainly
    * succeeds from (`confirmable` and the oracle agree), so the failure
@@ -2031,7 +2341,8 @@ class Walker {
     }
     const rest = args.slice(m);
     if (rest.length === 0) {
-      this.moveTo(st, UNKNOWN_SET, false); // $HOME
+      // `$HOME`: the documented `unknown`, or a value the line assigned.
+      this.moveTo(st, st.homeSteered ? OPAQUE_SET : UNKNOWN_SET, false);
       return NO_KEYS;
     }
     if (rest.length >= 2) {
@@ -2040,13 +2351,14 @@ class Walker {
     }
     const w = rest[0]!;
     if (w.value === "-") {
-      this.readDirStack(st);
-      this.moveTo(st, st.oldpwd, true);
+      this.moveTo(st, this.oldpwdTarget(st), true);
       return NO_KEYS;
     }
     if (w.value !== null && /^[+-]\d+$/.test(w.value)) {
       this.readDirStack(st);
-      this.moveTo(st, this.stackUnion(st), true); // zsh stack entry
+      // zsh reads a stack entry; bash reads `+N` as a path, which an
+      // earlier command of the line can create, so the gate cannot name it.
+      this.moveTo(st, withPossibility(this.stackUnion(st), OPAQUE), true);
       return NO_KEYS;
     }
     const { next, cannotFailFrom } = this.joinConfirmed(st, w, mode, confirmable && !mayFailAfterMove);
@@ -2069,11 +2381,12 @@ class Walker {
   ): { next: DirSet; cannotFailFrom: ReadonlySet<string> } {
     const oracle = confirmable ? this.oracle : null;
     const step: PathStep | null = w.value === null ? null : { value: w.value, mode };
+    const ctx = targetContext(st, true);
     if (oracle === null || step === null || !stepMayBeConfirmed(step)) {
-      return { next: joinSet(st.cur, w, mode, st.cdpath), cannotFailFrom: NO_KEYS };
+      return { next: joinSet(st.cur, w, mode, ctx), cannotFailFrom: NO_KEYS };
     }
     const cannotFailFrom = new Set<string>();
-    const next = joinSet(st.cur, w, mode, st.cdpath, (base, joined) => {
+    const next = joinSet(st.cur, w, mode, ctx, (base, joined) => {
       if (base.kind !== "path" || joined.kind !== "path") return;
       if (oracle.certainDirectory(base, step, joined)) cannotFailFrom.add(keyOf(base));
     });
@@ -2092,8 +2405,10 @@ class Walker {
       this.readDirStack(st);
       const top = st.stack.pop();
       if (top === undefined) {
-        if (st.stackTruncated) this.moveTo(st, OPAQUE_SET, true);
-        return NO_KEYS; // no other directory: an error, nothing moves
+        // bash: no other directory, an error, nothing moves. zsh goes to
+        // `$HOME`, the documented `unknown` unless the line assigned it.
+        if (st.stackTruncated || st.homeSteered) this.moveTo(st, OPAQUE_SET, true);
+        return NO_KEYS;
       }
       this.pushStack(st, st.cur);
       this.moveTo(st, top, true);
@@ -2103,6 +2418,17 @@ class Walker {
     if (w.value !== null && /^[+-]\d+$/.test(w.value)) {
       this.readDirStack(st);
       this.moveTo(st, this.stackUnion(st), true);
+      return NO_KEYS;
+    }
+    if (w.value === "-") {
+      // bash and zsh read `pushd -` as `cd -`: the previous directory.
+      const target = this.oldpwdTarget(st);
+      if (noCd) {
+        this.pushStack(st, target);
+        return NO_KEYS;
+      }
+      this.pushStack(st, st.cur);
+      this.moveTo(st, target, true);
       return NO_KEYS;
     }
     const { next: target, cannotFailFrom } = this.joinConfirmed(st, w, "logical", confirmable && !noCd);
@@ -2160,7 +2486,7 @@ class Walker {
     const peeled = peelWrappers(words);
     let dirs = st.cur;
     if (peeled.envSplit) dirs = withPossibility(dirs, UNKNOWN);
-    if (peeled.envChdir !== null) dirs = joinSet(dirs, peeled.envChdir, "physical", false);
+    if (peeled.envChdir !== null) dirs = joinSet(dirs, peeled.envChdir, "physical", targetContext(st, false));
     const rest = words.slice(peeled.idx);
     if (rest.length === 0) return;
     const head = rest[0]!.value;
@@ -2174,7 +2500,7 @@ class Walker {
         if (t === "-C") {
           const val = rest[j + 1];
           if (val === undefined) return;
-          dirs = joinSet(dirs, val, "physical", false);
+          dirs = joinSet(dirs, val, "physical", targetContext(st, false));
           j++;
           continue;
         }
@@ -2196,7 +2522,7 @@ class Walker {
       }
       if (gitDir !== null) {
         const gd = gitDir.value !== null ? derivedWord(gitDir, parentIfDotGit(gitDir.value)) : gitDir;
-        dirs = joinSet(dirs, gd, "physical", false);
+        dirs = joinSet(dirs, gd, "physical", targetContext(st, false));
       }
       canonicalWords = ["git", ...rest.slice(j).map(wordText)];
     } else {
@@ -2272,9 +2598,16 @@ function peelWrappers(words: readonly ShellWord[]): {
           i++;
           break;
         }
-        if (t === "-C" || t === "--chdir") {
+        // `-C` or `--chdir` as a word of its own; a dynamic word whose
+        // literal part is `-C` holds the value glued to it (`-C"$d"`).
+        if (!dynamic && (t === "-C" || t === "--chdir")) {
           envChdir = words[i + 1] ?? null;
           i += 2;
+          continue;
+        }
+        if (dynamic && t === "-C") {
+          envChdir = derivedWord(cur, null);
+          i++;
           continue;
         }
         if (t.startsWith("--chdir=")) {

@@ -1443,7 +1443,8 @@ export type AttributedContextsResult =
 export const OPAQUE_TARGET_REASON =
   "ambiguous: this command names a repository directory through a path this gate cannot attribute " +
   "(a backtick, an ANSI-C or locale quoted value, a control or separator character, a glob, " +
-  "a CDPATH search, a directory change repeated in a loop, or a command line the gate cannot parse), " +
+  "a CDPATH search, a directory that depends on a value the gate cannot resolve, " +
+  "a directory change repeated in a loop, or a command line the gate cannot parse), " +
   "so the evidence of the current directory's repository cannot stand in for it. Name the repository " +
   "with a plain path (`git -C <path>` or `cd <path> && ...`), or run the command from inside it";
 

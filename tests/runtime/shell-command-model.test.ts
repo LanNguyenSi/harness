@@ -307,12 +307,17 @@ describe("modelShellCommands: composition and step modes", () => {
     expect(dirsOf("git -C vendor --git-dir=/abs/x/.git log")).toEqual(["P:/abs/x"]);
   });
 
-  it("a dynamic value gives unknown and keeps a known base as a candidate", () => {
-    expect(dirsOf(`git -C ${P} -C "$EMPTY" log`)).toEqual(["P:" + P, "unknown"].sort());
-    expect(dirsOf('cd "$D" && git log')).toEqual(["cwd", "unknown"]);
+  it("a dynamic value is opaque and keeps a known base as a candidate; ~ and a bare cd read home as unknown", () => {
+    // Task e927e903: a target only known at run time can name a nested
+    // repository, so it reads as opaque (formerly `unknown`, the
+    // working-directory fallback). An empty expansion still stays put.
+    expect(dirsOf(`git -C ${P} -C "$EMPTY" log`)).toEqual(["P:" + P, "opaque"].sort());
+    expect(dirsOf('cd "$D" && git log')).toEqual(["cwd", "opaque"]);
+    expect(dirsOf('cd "$(git rev-parse --show-toplevel)" && git status', "git status")).toEqual(["cwd", "opaque"]);
+    // The home directory keeps the documented fallback when the line does
+    // not assign HOME.
     expect(dirsOf("cd ~/x && git log")).toEqual(["unknown"]);
     expect(dirsOf("cd && git log")).toEqual(["unknown"]);
-    expect(dirsOf('cd "$(git rev-parse --show-toplevel)" && git status', "git status")).toEqual(["cwd", "unknown"]);
   });
 
   it("an empty value stays put", () => {
@@ -388,7 +393,8 @@ describe("modelShellCommands: control flow", () => {
 
   it("a command inside a loop body that moved also gets the directories a later iteration starts in", () => {
     expect(dirsOf("while true; do git log; cd /abs/x; done")).toEqual(["L:/abs/x", "cwd"]);
-    expect(dirsOf("for d in a b; do git log; cd $d; done")).toEqual(["cwd", "unknown"]);
+    // Task e927e903: the loop variable's target is opaque (formerly `unknown`).
+    expect(dirsOf("for d in a b; do git log; cd $d; done")).toEqual(["cwd", "opaque"]);
     expect(dirsOf("for d in a b; do cd ..; git log; done")).toEqual(["L:..", "cwd", "opaque"]);
     expect(dirsOf("while git log; do cd sub; done", "git log")).toEqual(["cwd", "opaque"]);
     // A loop whose body moves only in a subshell is unaffected.
@@ -424,7 +430,10 @@ describe("modelShellCommands: canonical text and namesDirectory", () => {
   it("namesDirectory is true for a named path or an opaque possibility only", () => {
     expect(commandOf("git log").namesDirectory).toBe(false);
     expect(commandOf("! git log").namesDirectory).toBe(false);
-    expect(commandOf('cd "$D" && git log').namesDirectory).toBe(false);
+    // Task e927e903: a dynamic target is opaque now, so it names a directory
+    // the gate fails closed on (formerly `unknown`, which names none).
+    expect(commandOf('cd "$D" && git log').namesDirectory).toBe(true);
+    expect(commandOf("cd ~/x && git log").namesDirectory).toBe(false);
     expect(commandOf(`git -C ${P} log`).namesDirectory).toBe(true);
     expect(commandOf(`cd ${T} && git log`).namesDirectory).toBe(true);
   });
@@ -706,5 +715,79 @@ describe("modelShellCommands: a subshell or substitution inside a compound comma
       dirsWithOracle(command, ["L:X"], asked);
       expect(asked, command).toEqual([]);
     }
+  });
+});
+
+// Task e927e903: a `HOME` or `OLDPWD` the line assigns steers a later bare
+// `cd`, `~` / `~-` target, `cd -` or `pushd -` somewhere the text does not
+// name, so that directory reads as opaque; an unassigned one keeps the
+// documented `unknown` (home) or the tracked previous directory.
+describe("modelShellCommands: a variable a directory change reads, assigned in the line", () => {
+  // [command, expected dirs of `git log`]
+  const table: Array<[string, string[]]> = [
+    // Each spelling that assigns.
+    ["HOME=x; cd && git log", ["opaque"]],
+    ["HOME=x cd && git log", ["opaque"]],
+    ["export HOME=x; cd && git log", ["opaque"]],
+    ["typeset -g HOME=x; cd && git log", ["opaque"]],
+    ["read -r x HOME; cd && git log", ["opaque"]],
+    ["read -aHOME; cd && git log", ["opaque"]],
+    ["printf -vHOME x; cd && git log", ["opaque"]],
+    ["print -rv HOME x; cd && git log", ["opaque"]],
+    ["set -A HOME x; cd && git log", ["opaque"]],
+    ["getopts a HOME; cd && git log", ["opaque"]],
+    ["zparseopts -D h:=HOME; cd && git log", ["opaque"]],
+    ["declare -n r=HOME; cd && git log", ["opaque"]],
+    ["declare -i n=HOME=1; cd && git log", ["opaque"]],
+    ["x=HOME=1; cd && git log", ["opaque"]],
+    ["a[HOME=1]=x; cd && git log", ["opaque"]],
+    ["printf '%d' 'HOME=7'; cd && git log", ["opaque"]],
+    ["echo ${HOME:=x}; cd && git log", ["opaque"]],
+    ['echo "${HOME=x}"; cd && git log', ["opaque"]],
+    [": $((HOME)); cd && git log", ["opaque"]],
+    ["for ((HOME=1; HOME<2; HOME++)); do :; done; cd && git log", ["opaque"]],
+    ["cat {HOME}>f; cd && git log", ["opaque"]],
+    ["select OLDPWD in a; do break; done; cd - && git log", ["opaque"]],
+    ["wait -p OLDPWD; cd - && git log", ["opaque"]],
+    // Each reader.
+    ["HOME=x; cd ~/y && git log", ["opaque"]],
+    ["HOME=x; pushd ~ && git log", ["opaque"]],
+    ["HOME=x; git -C ~ log", ["opaque"]],
+    ["OLDPWD=x; cd ~- && git log", ["opaque"]],
+    ["OLDPWD=x; env -C ~- git log", ["opaque"]],
+    ["OLDPWD=x; pushd - && git log", ["opaque"]],
+    // A subshell inherits the assignment; its own assignment stays there.
+    ["HOME=x; (cd && git log)", ["opaque"]],
+    ["(HOME=x); cd && git log", ["unknown"]],
+    ["echo $(HOME=x); cd && git log", ["unknown"]],
+    // An assignment in front of a command applies to that command alone
+    // (the tilde of a word is expanded before it), except for `eval`, whose
+    // string may assign for good.
+    ["HOME=x cd && cd && git log", ["unknown"]],
+    ["HOME=x true; cd && git log", ["unknown"]],
+    ["HOME=x git -C ~ log", ["unknown"]],
+    ["HOME=x eval true; cd && git log", ["opaque"]],
+    // Reads and look-alikes assign nothing; unset only clears the value.
+    ['echo $HOME ${HOME} "${HOME:-x}" ${#HOME} ${HOME%/}; cd && git log', ["unknown"]],
+    ['printf -v x "$HOME"; cd && git log', ["unknown"]],
+    ["printf '%s' HOME; cd && git log", ["unknown"]],
+    ['declare -x PATH="$HOME/bin"; cd && git log', ["unknown"]],
+    ["set -- HOME; cd && git log", ["unknown"]],
+    ["unset HOME; cd && git log", ["unknown"]],
+    ["cat {fd}>f; cd && git log", ["unknown"]],
+    ["HOME=x; cd ~user && git log", ["unknown"]],
+    // Nothing assigned: `pushd -` returns the tracked previous directory.
+    ["cd X && pushd - && git log", ["cwd"]],
+  ];
+  for (const [command, expected] of table) {
+    it(JSON.stringify(command), () => {
+      expect(dirsOf(command)).toEqual([...expected].sort());
+    });
+  }
+
+  it("cd +N reads the stack and an opaque possibility (a path in bash); pushd +N only the stack", () => {
+    expect(dirsOf("cd +1 && git log")).toEqual(["cwd", "opaque"]);
+    expect(dirsOf("cd -- -1 && git log")).toEqual(["cwd", "opaque"]);
+    expect(dirsOf("pushd +1 && git log")).toEqual(["cwd"]);
   });
 });

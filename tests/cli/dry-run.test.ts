@@ -10,6 +10,7 @@ import { loadManifest } from "../../src/cli/loader.js";
 import { runInterceptCli } from "../../src/cli/policy/intercept.js";
 import {
   MAX_ATTRIBUTED_CONTEXTS,
+  OPAQUE_TARGET_REASON,
   policyMatchesEvent,
   type ToolEvent,
 } from "../../src/runtime/intercept.js";
@@ -637,6 +638,14 @@ describe("dry-run: additive per-repo demands for a target-naming command", () =>
     expect(h.ledgerQueries).toHaveLength(1);
     expect(h.ledgerQueries[0]).toContain("opaque target");
     expect(h.ledgerQueries[0]).not.toMatch(/preflight:repo-a/);
+  });
+
+  it("reports the runtime's opaque-target text for a directory that depends on an unresolved value (task e927e903)", () => {
+    const a = makeRepo("repo-a", "main");
+    for (const command of ['git -C "$(echo vendor)" log', "HOME=vendor; cd; git log"]) {
+      const h = hit(command, a, "preflight-before-investigation");
+      expect(h.ledgerQueries, command).toEqual([`(opaque target: ${OPAQUE_TARGET_REASON}; no context queried)`]);
+    }
   });
 
   it("treats an explicit REPO override as an override in an attributed context", () => {

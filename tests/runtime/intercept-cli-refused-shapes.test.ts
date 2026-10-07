@@ -18,9 +18,13 @@ import { makeManifest } from "../_helpers/manifest.js";
 import {
   BENIGN_ROWS,
   CDPATH_ROWS,
+  DYNAMIC_TARGET_ROWS,
   MODEL_ARM_ROWS,
+  RESOLVED_TARGET_ROWS,
   SHARED_ROWS,
   SOLE_ROWS,
+  STACK_INDEX_PATH_ROWS,
+  STEERED_ROWS,
   UNLEXABLE_BRACE_ROWS,
 } from "../fixtures/shell-model-refusals/rows.js";
 
@@ -183,6 +187,66 @@ describe("runInterceptCli: a command line the shell command model refuses fails 
       // A row that runs in the working directory only needs its evidence.
       const { blocked } = await decide("arr=(a b c); git push origin main", OUTER_ONLY, runtime);
       expect(blocked).toBe(false);
+    }, 30_000);
+  }
+});
+
+// Task e927e903: a directory that depends on a value the shell command model
+// cannot resolve (a dynamic `cd` / `pushd` / `git -C` / `env -C` target, a
+// `HOME` or `OLDPWD` the line assigns before a directory change reads it, a
+// `cd` stack index bash reads as a path) fails closed as an opaque target
+// for a per-repository policy, under both runtime event shapes, whatever the
+// ledger holds; the controls stay decided on attributed evidence.
+describe("runInterceptCli: a directory target that depends on an unresolved value fails closed (task e927e903)", () => {
+  const UNRESOLVED = [...DYNAMIC_TARGET_ROWS, ...STEERED_ROWS, ...STACK_INDEX_PATH_ROWS];
+
+  for (const runtime of RUNTIMES) {
+    it(`denies every row as an opaque target (${runtime}), with outer-only and with every repository's evidence`, async () => {
+      // Every row the gate does not deny this way, with how it decided, listed in full on a failure.
+      const problems: string[] = [];
+      for (const command of UNRESOLVED) {
+        for (const [ledger, tags] of [["outer-only", OUTER_ONLY], ["every-repo", EVERY_REPO]] as const) {
+          const { blocked, decisions } = await decide(command, tags, runtime);
+          const denied =
+            blocked &&
+            decisions.length === 1 &&
+            decisions[0]!.outcome === "deny" &&
+            decisions[0]!.reason === OPAQUE_TARGET_REASON &&
+            decisions[0]!.ledgerTag.startsWith("(opaque target");
+          if (!denied) {
+            const seen = decisions.map((d) => `${d.ledgerTag}=${d.outcome}`).join(", ");
+            problems.push(`${ledger} ${blocked ? "blocked" : "ALLOWED"} {${seen}} ${command}`);
+          }
+        }
+      }
+      expect(problems).toEqual([]);
+    }, 60_000);
+  }
+
+  it("names the unresolved value in the reason", async () => {
+    const { decisions } = await decide(DYNAMIC_TARGET_ROWS[0]!, OUTER_ONLY, "claude");
+    expect(decisions.map((d) => d.reason)).toEqual([OPAQUE_TARGET_REASON]);
+    expect(OPAQUE_TARGET_REASON).toContain("a directory that depends on a value the gate cannot resolve");
+  });
+
+  for (const runtime of RUNTIMES) {
+    it(`keeps the controls attributed: allowed on every repository's evidence, never an opaque target (${runtime})`, async () => {
+      const problems: string[] = [];
+      for (const command of RESOLVED_TARGET_ROWS) {
+        const { blocked, decisions } = await decide(command, EVERY_REPO, runtime);
+        if (blocked || decisions.length === 0 || decisions.some((d) => d.reason === OPAQUE_TARGET_REASON)) {
+          const seen = decisions.map((d) => `${d.ledgerTag}=${d.outcome}`).join(", ");
+          problems.push(`${blocked ? "blocked" : "allowed"} {${seen}} ${command}`);
+        }
+      }
+      expect(problems).toEqual([]);
+      // A literal nested target still demands the nested repository's evidence.
+      expect((await decide(RESOLVED_TARGET_ROWS[0]!, OUTER_ONLY, runtime)).blocked).toBe(true);
+      // The home directory keeps the working directory's evidence when the
+      // line assigns nothing a directory change reads.
+      for (const command of ["cd; git push origin main", "HOME=/tmp true; cd; git push origin main"]) {
+        expect((await decide(command, OUTER_ONLY, runtime)).blocked, command).toBe(false);
+      }
     }, 30_000);
   }
 });

@@ -388,7 +388,6 @@ describe("runInterceptCli quote-aware attribution: two-sided pins", () => {
       `cd ${P} || git log`,
       `! cd ${P} && git log`,
       "git log --grep='`x`'",
-      'cd "$(git rev-parse --show-toplevel)" && git status',
       // `command -v` / `-V` only look the name up: nothing changes directory.
       `command -v cd ${P} && git log`,
       `command -V cd ${P} && git log`,
@@ -397,6 +396,16 @@ describe("runInterceptCli quote-aware attribution: two-sided pins", () => {
         expect(await tagsFor(command, INVESTIGATION)).toEqual([outerTag(INVESTIGATION)]);
       });
     }
+
+    // Task e927e903: a `cd` into a command substitution was the documented
+    // working-directory fallback. The gate cannot tell what the substitution
+    // prints (it may name a nested repository), so it now fails closed; the
+    // remedy is a plain path.
+    it("a cd into a command substitution fails closed instead of reading as cwd-only", async () => {
+      expect(await tagsFor('cd "$(git rev-parse --show-toplevel)" && git status', INVESTIGATION)).toEqual([
+        "(fail-closed)",
+      ]);
+    });
 
     it("a heredoc commit message with an apostrophe, then git push", async () => {
       const command = 'git commit -m "$(cat <<\'EOF\'\nIt\'s done\nEOF\n)" && git push';
@@ -427,10 +436,12 @@ describe("runInterceptCli quote-aware attribution: two-sided pins", () => {
       );
     });
 
-    it("a known -C directory stays a candidate next to a value that may expand to nothing", async () => {
-      expect(await tagsFor(`git -C ${P} -C "$EMPTY" log`, INVESTIGATION)).toEqual(
-        [nestedTag(INVESTIGATION, "libplain"), outerTag(INVESTIGATION)].sort(),
-      );
+    // Task e927e903: the known -C directory is still a candidate in the
+    // model (an empty expansion stays put), but the dynamic value next to it
+    // may name any directory, so the gate now fails closed instead of
+    // demanding only the known one and the cwd.
+    it("a known -C directory next to a value that may expand to anything fails closed", async () => {
+      expect(await tagsFor(`git -C ${P} -C "$EMPTY" log`, INVESTIGATION)).toEqual(["(fail-closed)"]);
     });
 
     it("the last element of a pipeline may run in the current shell (zsh): its cd counts", async () => {
