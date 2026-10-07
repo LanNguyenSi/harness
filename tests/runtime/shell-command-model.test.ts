@@ -854,6 +854,13 @@ describe("modelShellCommands: loop headers, wrapper paths, assignment-only comma
     // `case` as an argument, or behind a word that is not a prefix, is a word.
     expect(headsOf("echo { case x in x")).toEqual([["echo { case x in x"]]);
     expect(modelShellCommands("echo case x in x) y;; esac")).toBeNull();
+    // Behind a redirection or a `( )` group it is not the reserved word
+    // either (bash rejects both lines), so the stray `)` is not lexable.
+    expect(modelShellCommands("{ >/dev/null case x in x) git push;; esac; }")).toBeNull();
+    expect(modelShellCommands("{ (y) case x in x) git push;; esac; }")).toBeNull();
+    // A verdict that the next words can still change is not reused: the
+    // first `case` is not behind `function NAME` yet, the second one is.
+    expect(headsOf("function case case x in x) git push;; esac")).toEqual([["git push"]]);
   });
 
   it("reads `time --` and `time -p --` as transparent prefixes", () => {
