@@ -373,6 +373,32 @@ describe("the agent envelope of a refusal names its cause, not the policy's evid
       expect(r.stderr).not.toContain("unparsed command:");
     });
 
+    it("an eval past its bound fails a per-repo policy the text arms matched closed, whatever the evidence", async () => {
+      const fullLedger: LedgerClient = {
+        async query() {
+          return { kind: "ok", entries: [{ id: "e1", content: "preflight:main ok", createdAt: new Date().toISOString() }] };
+        },
+        async record() {
+          /* no-op */
+        },
+      };
+      const run = async (command: string) => {
+        const result = await runInterceptCli({
+          stdin: Readable.from([JSON.stringify(eventFor(runtime, command, repo))]),
+          stdout: sink(),
+          stderr: sink(),
+          manifest: makeManifest({ policies: FULL_BASH.filter((p) => p.name === "preflight-before-push") }),
+          ledger: fullLedger,
+          generatedDir,
+        });
+        return result.decisions;
+      };
+      // Control: with the evidence on record the bare push is allowed.
+      expect((await run("git push origin main")).map((d) => d.outcome)).toEqual(["allow"]);
+      const refused = await run("eval eval eval eval 'true'; git push origin main");
+      expect(refused.map((d) => [d.outcome, d.refusal])).toEqual([["deny", "opaque-target"]]);
+    });
+
     it("a require_approval refusal stages no pending approval (no approval tag is read for it)", async () => {
       const approval = FULL_BASH.map((p) => ({ ...p, enforcement: "require_approval" }) as Policy);
       const marker = pendingApprovalPath(generatedDir);
