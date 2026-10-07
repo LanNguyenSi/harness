@@ -92,16 +92,26 @@ export default defineConfig({
     coverage: {
       provider: "v8",
       include: ["src/**/*.ts"],
-      // The top-level `src/cli/register-*-group.ts` files are the commander
-      // wiring that used to live in src/cli/index.ts (itself excluded above):
-      // moving it into per-group files must not change what the coverage
-      // gate measures.
+      // The nine register files below hold the commander wiring that used to
+      // live in src/cli/index.ts (itself excluded above), moved there
+      // verbatim by the CLI split; excluding exactly them keeps the gate
+      // measuring what it measured before the move. Register files that
+      // existed before the move (register-audit-group.ts,
+      // register-operator-lifecycle.ts) and src/cli/cli-helpers.ts stay
+      // measured.
       exclude: [
         "src/**/index.ts",
         "src/**/types.ts",
         "src/cli/main.ts",
-        "src/cli/register-*-group.ts",
-        "src/cli/register-operator-lifecycle.ts",
+        "src/cli/register-inspect-group.ts",
+        "src/cli/register-setup-group.ts",
+        "src/cli/register-pack-group.ts",
+        "src/cli/register-approve-group.ts",
+        "src/cli/register-explain-group.ts",
+        "src/cli/register-smoke-group.ts",
+        "src/cli/register-record-session-group.ts",
+        "src/cli/register-gate-gc-group.ts",
+        "src/cli/register-policy-group.ts",
       ],
       reporter: ["text", "html"],
       thresholds: {

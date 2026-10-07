@@ -33,7 +33,7 @@ import * as path from "node:path";
 // deduping all five is a repo-wide refactor out of scope for this task.
 // Raised to 95 for the toolchain-parity SessionStart companion
 // (src/cli/session-start/toolchain-parity.ts): its `harness session-start
-// toolchain-parity` CLI wiring in cli/index.ts deliberately mirrors the
+// toolchain-parity` CLI wiring in cli/register-record-session-group.ts deliberately mirrors the
 // `--config`/`--project`/`--session`/`--ledger-timeout` option-parsing
 // shape `preflight` / `session-start preflight` / `session-start
 // branch-check` already share verbatim (task brief: match the siblings'
@@ -46,12 +46,12 @@ import * as path from "node:path";
 // the two existing sibling files too, out of this task's scope.
 // Raised to 102 for the `post-merge-gate` builtin policy pack (agent-tasks
 // d368e30d): its two new CLI hook verbs (`cli/pack/hook-post-merge-gate.ts`
-// / `hook-post-merge-gate-record.ts`) and their `cli/index.ts` command
+// / `hook-post-merge-gate-record.ts`) and their `cli/register-pack-group.ts` command
 // registration deliberately mirror the SAME pre-existing patterns the two
 // prior raises above already tolerate — the `--config`/`--project`/
 // `--ledger-timeout`/`--cwd` option-parsing + action-body shape shared by
 // `branch-protection` / `solution-acceptance` / `codex-pre-tool-use`'s CLI
-// wiring in `cli/index.ts`, and the `findGroundingMcp` + ledger-probe
+// wiring in `cli/register-pack-group.ts`, and the `findGroundingMcp` + ledger-probe
 // boilerplate `hook-branch-protection.ts` / `hook-solution-acceptance.ts`
 // already duplicate against each other. Checked first (per the review
 // brief) whether the two new files duplicate EACH OTHER — they do not:
@@ -78,12 +78,12 @@ import * as path from "node:path";
 // task's scope.
 // Raised to 111 for the stale-base-check SessionStart companion (task
 // ce3903b0, incident ea8becf5; `src/cli/session-start/stale-base-check.ts`
-// + its `cli/index.ts` wiring) — the SAME toolchain-parity-precedent
+// + its `cli/register-record-session-group.ts` wiring) — the SAME toolchain-parity-precedent
 // cluster above, a 4th instance now instead of a 3rd. Verified (not
 // assumed) by diffing the full jscpd `duplicates[]` set against master as
 // a MULTISET keyed on `(firstFile, secondFile, lines)` (ignoring exact
 // line offsets, since inserting the new file/CLI block shifts every later
-// line number in `cli/index.ts` without changing its content — same
+// line number in `cli/register-record-session-group.ts` without changing its content — same
 // window-shift effect the 103 raise above documents): master has 103
 // entries, this branch has 111, net +8, which decomposes as:
 //   +9  `cli/session-start/stale-base-check.ts` paired against
@@ -91,7 +91,7 @@ import * as path from "node:path";
 //       — the exact SessionStart-producer + `execGit`/spawn-wrapper
 //       boilerplate shape those three already duplicate against each
 //       other.
-//   +2  a 4th `cli/index.ts`-internal repeat of the `--config`/
+//   +2  a 4th `cli/register-record-session-group.ts`-internal repeat of the `--config`/
 //       `--project`/`--session`/`--cwd`/`--ledger-timeout` option-parsing
 //       block the toolchain-parity raise above already tolerates 3
 //       copies of.

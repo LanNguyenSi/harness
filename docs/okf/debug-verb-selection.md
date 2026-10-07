@@ -10,6 +10,8 @@ sources:
   - docs/risk-gate.md
   - src/cli/index.ts
   - src/cli/register-explain-group.ts
+  - src/cli/register-smoke-group.ts
+  - src/cli/register-inspect-group.ts
   - src/cli/register-audit-group.ts
   - src/cli/dry-run.ts
   - src/runtime/command-normalize.ts

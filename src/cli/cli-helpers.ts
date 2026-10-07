@@ -30,7 +30,7 @@ export function createCliHelpers(io: {
     await runSessionStartPreflight(cliOpts);
   };
 
-  // Shared by the three `record` verbs' action handlers below: parse
+  // Shared by the three `record` verbs' action handlers (src/cli/register-record-session-group.ts): parse
   // `--ledger-timeout <ms>` into `cliOpts.ledgerTimeoutMs`, and report a
   // `RecordResult` (print the recorded fact on success; on failure, throw
   // with the runner's own exit code and an EMPTY message, since the
@@ -42,7 +42,7 @@ export function createCliHelpers(io: {
   // `--ledger-timeout 5ooo` got the default timeout with zero
   // diagnostic. Now a malformed value warns once on stderr before
   // falling back, same "never a silent gap" convention `resolveBase`'s
-  // own degrade path already uses below.
+  // own degrade path (src/cli/record/index.ts) already uses.
   const applyLedgerTimeout = (
     raw: string | undefined,
     cliOpts: { ledgerTimeoutMs?: number },
