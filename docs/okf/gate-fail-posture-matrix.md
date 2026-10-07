@@ -3,7 +3,7 @@ type: overview
 title: Gate fail-posture matrix
 description: Which harness enforcement gates fail OPEN vs fail CLOSED when their evidence source (grounding-mcp ledger, approval markers, verdict files, probes) is unreachable or errors, with the exact code paths and override knobs.
 tags: [gates, fail-open, fail-closed, enforcement]
-timestamp: 2026-10-07T17:53:33Z
+timestamp: 2026-10-07T19:34:34Z
 sources:
   - src/cli/pack/auto-approve-path.ts
   - src/io/atomic-write.ts
@@ -103,11 +103,12 @@ and not shipped with the repo). This section covers only the FALLBACK side of th
 since it is the part that changes this matrix's own fail-posture story:
 
 - **A composition neither view resolves to a directory (`--work-tree`
-  alone, a `~` value or a bare `cd` with nothing in the command assigning
-  `HOME`) falls back to the cwd context ALONE: never fail-open, never a
-  new gap, with the one exception in the next bullet.** Since task
-  `e927e903` a variable or substitution value no longer falls back: the
-  shell command model reads it as opaque (next bullets). Since task `7d4abf84` the quote-aware
+  alone, a `~` or `~/...` value or a bare `cd` with nothing in the
+  command assigning `HOME`) falls back to the cwd context ALONE: never
+  fail-open, never a new gap, with the one exception in the next
+  bullet.** Since task `e927e903` a variable or substitution value, any
+  other tilde prefix and a `cd -` before any move no longer fall back:
+  the shell command model reads them as opaque (next bullets). Since task `7d4abf84` the quote-aware
   shell command model (`src/runtime/shell-command-model.ts`) resolves the
   compositions the per-segment view leaves at this fallback: more than
   one `-C` (composed in order, `--git-dir` after them, `env`'s last
@@ -159,8 +160,9 @@ since it is the part that changes this matrix's own fail-posture story:
   propagations fails closed), and the gate takes the union of both views.
   The segment view alone still leaves a `$(...)` substitution, a `~` or a
   variable value at the cwd-only fallback; since task `e927e903` the
-  model reads a substitution or variable value as opaque, so the union
-  fails closed on it, and only a `~` value keeps the fallback.
+  model reads a substitution or variable value, and a tilde prefix
+  other than `~` and `~/...`, as opaque, so the union fails closed on
+  them, and only a `~` or `~/...` value keeps the fallback.
 - **The shell command model's own fail-closed forms (task `7d4abf84`).**
   Besides the opaque values above, an unquoted glob target (`cd
   vendor/libpl*`; expansion is a follow-up), a relative `cd` / `pushd`
@@ -206,14 +208,21 @@ since it is the part that changes this matrix's own fail-posture story:
   directory target that depends on a value the model cannot resolve is
   opaque too (one more clause in `OPAQUE_TARGET_REASON`): a `cd`,
   `pushd`, `git -C`, `env -C` or `--git-dir` value only known at run time
-  (a variable, a command substitution, an arithmetic expansion); a bare
-  `cd`, a `~` target and zsh's empty-stack `pushd` once the command line
-  assigns `HOME`, `cd -`, `pushd -` and a `~-` target once it assigns
-  `OLDPWD` (`WalkState.homeSteered` / `oldpwdSteered`, set like the
-  `CDPATH` flag); and a `cd` stack index, which bash reads as a path. The
-  over-block it adds (a `cd` or `-C` into a substitution or variable that
-  names the cwd's own repository) is recorded in the CHANGELOG entry for
-  task `e927e903`. Valid
+  (a variable, a command substitution, an arithmetic expansion); a tilde
+  prefix other than `~` and `~/...` in such a value; a `cd -` or
+  `pushd -` before any move (the session's previous directory); a bare
+  `cd`, a `~` / `~/...` target and zsh's empty-stack `pushd` when the
+  command line assigns `HOME` anywhere, `cd -` and `pushd -` when it
+  assigns `OLDPWD` anywhere (`WalkState.homeSteered` / `oldpwdSteered`,
+  set before the walk by `steeredInLine` from every producer in the line,
+  one inside a subshell or in front of another command included, unlike
+  the `CDPATH` flag, which the walk sets when it meets its producer); and
+  a `cd` stack index, which bash reads as a path. The over-block it adds
+  (a `cd` or `-C` into a substitution or variable that names the cwd's
+  own repository, a tilde prefix that names the cwd, a `cd -` before any
+  move, a home target in a line that assigns `HOME` only after it, in a
+  subshell or for another command) is recorded in the CHANGELOG entry
+  for task `e927e903`. Valid
   one-liners in a refused form are over-blocked until the model reads
   them.
 - **More than `MAX_ATTRIBUTED_CONTEXTS` (4) distinct targets for one
