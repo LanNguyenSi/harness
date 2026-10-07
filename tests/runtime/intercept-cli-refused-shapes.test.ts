@@ -26,6 +26,7 @@ import {
   STACK_INDEX_PATH_ROWS,
   STEERED_ROWS,
   UNLEXABLE_BRACE_ROWS,
+  UNTRACKED_TARGET_ROWS,
 } from "../fixtures/shell-model-refusals/rows.js";
 
 // Task 9238cc27: a command line the shell command model refuses fails closed
@@ -198,7 +199,7 @@ describe("runInterceptCli: a command line the shell command model refuses fails 
 // for a per-repository policy, under both runtime event shapes, whatever the
 // ledger holds; the controls stay decided on attributed evidence.
 describe("runInterceptCli: a directory target that depends on an unresolved value fails closed (task e927e903)", () => {
-  const UNRESOLVED = [...DYNAMIC_TARGET_ROWS, ...STEERED_ROWS, ...STACK_INDEX_PATH_ROWS];
+  const UNRESOLVED = [...DYNAMIC_TARGET_ROWS, ...STEERED_ROWS, ...STACK_INDEX_PATH_ROWS, ...UNTRACKED_TARGET_ROWS];
 
   for (const runtime of RUNTIMES) {
     it(`denies every row as an opaque target (${runtime}), with outer-only and with every repository's evidence`, async () => {

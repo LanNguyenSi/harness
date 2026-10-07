@@ -16,6 +16,7 @@ import {
   STACK_INDEX_PATH_ROWS,
   STEERED_ROWS,
   UNLEXABLE_BRACE_ROWS,
+  UNTRACKED_TARGET_ROWS,
 } from "../fixtures/shell-model-refusals/rows.js";
 
 // Task 9238cc27: the shell command model refuses a command line that holds
@@ -157,8 +158,9 @@ describe("modelShellCommands: the benign rows stay attributed", () => {
 describe("modelShellCommands: a directory target that depends on an unresolved value reads as opaque", () => {
   for (const [label, rows] of [
     ["a dynamic target", DYNAMIC_TARGET_ROWS],
-    ["an assigned HOME or OLDPWD", STEERED_ROWS],
+    ["a HOME or OLDPWD the line assigns", STEERED_ROWS],
     ["a stack index read as a path", STACK_INDEX_PATH_ROWS],
+    ["a tilde prefix or an untracked previous directory", UNTRACKED_TARGET_ROWS],
   ] as const) {
     it(`reads git push after ${label} as opaque`, () => {
       // Every row whose push does not read as opaque, listed in full on a failure.

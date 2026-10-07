@@ -159,10 +159,13 @@ export const DYNAMIC_TARGET_ROWS: readonly string[] = [
 ];
 
 /**
- * Rows that assign `HOME` or `OLDPWD` before a directory change that reads
- * it (task e927e903): a bare `cd`, a `~` / `~-` target, `cd -`, `pushd -`,
- * zsh's `pushd` with an empty stack, in each spelling that assigns. The
- * `git push` after it reads as opaque.
+ * Rows that assign `HOME` or `OLDPWD` anywhere in the line, with a directory
+ * change that reads it (task e927e903): a bare `cd`, a `~` target, `cd -`,
+ * `pushd -`, zsh's `pushd` with an empty stack. The flags are known before
+ * the walk, so a reader that stands before its producer in the text (a later
+ * loop iteration, a function called after the producer) counts, and so does
+ * a producer in front of another command or inside a subshell (an accepted
+ * over-approximation). The `git push` after it reads as opaque.
  */
 export const STEERED_ROWS: readonly string[] = [
   "OLDPWD=vendor/libplain; cd -; git push origin main",
@@ -201,9 +204,26 @@ export const STEERED_ROWS: readonly string[] = [
   "p=$PWD; for i in 1 2; do cd; HOME=$p/vendor/libplain; done; git push origin main",
   "p=$PWD; for i in 1 2; do cd ~; HOME=$p/vendor/libplain; done; git push origin main",
   "p=$PWD; f() { cd; git push origin main; }; HOME=$p/vendor/libplain; f",
-  // A tilde prefix other than ~ and ~/ (here a named directory through a
-  // parameter) names a value the gate cannot resolve.
+];
+
+/**
+ * Rows whose directory change names a value the gate cannot resolve through
+ * a tilde prefix other than `~` and `~/` (an inherited working or previous
+ * directory, a stack entry, a named directory or a user's home), or through a
+ * previous directory the line has not tracked (task e927e903). The `git push`
+ * after it reads as opaque.
+ */
+export const UNTRACKED_TARGET_ROWS: readonly string[] = [
   "d=$PWD/vendor/libplain; cd ~d; git push origin main",
+  "pushd vendor/libplain; pushd ..; cd ~1; git push origin main",
+  "pushd vendor/libplain; pushd ..; cd ~+1; git push origin main",
+  "pushd vendor/libplain; pushd ..; cd ~-1; git push origin main",
+  "cd ~+; git push origin main",
+  "cd ~-; git push origin main",
+  "cd ~root; git push origin main",
+  "git -C ~+ push origin main",
+  "cd -; git push origin main",
+  "pushd -; git push origin main",
 ];
 
 /** Rows with a `cd` stack index that bash reads as a path an earlier command of the line can create (task e927e903). */
