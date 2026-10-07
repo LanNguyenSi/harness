@@ -135,10 +135,11 @@ export interface GitEntry {
    * neither a directory nor a regular file (a FIFO, a device, a socket, a
    * symlink to one), a symlink that dangles or loops, or a file that cannot be
    * read (a FIFO swapped in after the stat, an oversized or unreadable
-   * file), a `.git` directory that cannot be searched, or a `gitdir:`
-   * pointer whose target is not a directory, as opposed to a readable file
-   * without a `gitdir:` line; `"HEAD"` when the git directory's `HEAD` is
-   * missing, a link that does not resolve, or not a regular file. Absent
+   * file), a `.git` directory that cannot be searched, a `.git` file without
+   * a `gitdir:` line, or a `gitdir:` pointer whose target is not a
+   * directory; `"HEAD"` when the git directory's `HEAD` (a `.git` directory's
+   * or a pointer target's) is missing, a link that does not resolve, or not
+   * a regular file. Absent
    * otherwise. `gitDir` is `""` in both cases, exactly as for any other
    * unreadable `.git` file, except for a `gitdir:` pointer whose target does
    * not resolve, where it keeps the pointer's path (nothing is there to read).
@@ -150,20 +151,19 @@ export interface GitEntry {
  * Whether a git directory's `HEAD` can be looked at: `null` when it is a
  * regular file (after following links, as git does), otherwise the label of
  * what to report as refused. A `HEAD` that is a dangling or looping link, or
- * not a regular file, is `"HEAD"`; a git directory that cannot be searched at
- * all (`EACCES`, `EPERM`) is `".git"`, since no file in it can be named. A
- * `HEAD` that is simply missing is `"HEAD"` too unless `missingOk`, which a
- * `gitdir:` pointer target gets (see the caller). Content and size stay with
+ * not a regular file, is `"HEAD"`, and so is one that is simply missing; a
+ * git directory that cannot be searched at all (`EACCES`, `EPERM`) is
+ * `".git"`, since no file in it can be named. Content and size stay with
  * `readGitFile`, which reads it.
  */
-function refusedHead(gitDir: string, missingOk: boolean): ".git" | "HEAD" | null {
+function refusedHead(gitDir: string): ".git" | "HEAD" | null {
   const headPath = path.join(gitDir, "HEAD");
   try {
     fs.lstatSync(headPath);
   } catch (err) {
     const code = (err as NodeJS.ErrnoException).code;
     if (code === "EACCES" || code === "EPERM") return ".git";
-    return missingOk && code === "ENOENT" ? null : "HEAD";
+    return "HEAD";
   }
   try {
     return fs.statSync(headPath).isFile() ? null : "HEAD";
@@ -227,7 +227,8 @@ export function findGitEntry(startDir: string): GitEntry | null {
     // work tree whose `.git` was removed resolves the enclosing repository,
     // exactly like git itself would. The same decision covers what is
     // INSIDE a present `.git` (a directory without a readable `HEAD`, an
-    // unsearchable one, a `gitdir:` pointer to nothing): see below, and
+    // unsearchable one, a file without a `gitdir:` line, a `gitdir:` pointer
+    // to nothing or to a directory without a `HEAD`): see below, and
     // `docs/okf/gate-fail-posture-matrix.md` for the full list.
     if (present && (stat === undefined || (!stat.isDirectory() && !stat.isFile()))) {
       return { worktreeRoot: dir, gitDir: "", refused: ".git" };
@@ -241,7 +242,7 @@ export function findGitEntry(startDir: string): GitEntry | null {
       // never as "outside a work tree" (which a deny-capable caller would
       // read as safe to allow) and never walked past to an enclosing
       // repository (task b56d95d3, operator decision).
-      const headRefusal = refusedHead(dotGit, false);
+      const headRefusal = refusedHead(dotGit);
       if (headRefusal !== null) return { worktreeRoot: dir, gitDir: "", refused: headRefusal };
       return { worktreeRoot: dir, gitDir: dotGit };
     }
@@ -252,25 +253,27 @@ export function findGitEntry(startDir: string): GitEntry | null {
       const text = readGitFile(dotGit, ".git", refused);
       if (text !== null) {
         const match = GITDIR_RE.exec(text.trim());
-        if (match) gitDir = path.resolve(dir, match[1]!.trim());
+        // A readable `.git` file that names no `gitdir:` is not a git file
+        // at all, yet it is there: refused like any other present entry
+        // that does not resolve, never walked past.
+        if (!match) return { worktreeRoot: dir, gitDir: "", refused: ".git" };
+        gitDir = path.resolve(dir, match[1]!.trim());
       }
-      if (gitDir !== "" && refused.length === 0) {
-        // A `gitdir:` pointer whose target is not a directory that can be
-        // read (missing, not a directory, unsearchable, or holding a `HEAD`
-        // that is there but does not resolve) is the same
-        // present-but-unresolvable state as a `.git` directory without
-        // `HEAD`: refused, never walked past. `gitDir` stays set, so a
+      if (gitDir !== "") {
+        // A `gitdir:` pointer whose target is not a git directory that can
+        // be read (missing, not a directory, unsearchable, no `HEAD`, or a
+        // `HEAD` that does not resolve) is the same present-but-unresolvable
+        // state as a `.git` directory without `HEAD`: refused, never walked
+        // past (task b56d95d3, operator decision). `gitDir` stays set, so a
         // caller that only derives a name from the pointer is unchanged and
-        // a reader finds nothing there. A `HEAD` that is plainly missing
-        // from an existing target is not counted here (the submodule and
-        // linked-worktree fixtures that only carry `commondir` rely on it).
+        // a reader finds nothing there.
         let target: fs.Stats | undefined;
         try {
           target = fs.statSync(gitDir);
         } catch {
           target = undefined;
         }
-        const refusal = target?.isDirectory() === true ? refusedHead(gitDir, true) : ".git";
+        const refusal = target?.isDirectory() === true ? refusedHead(gitDir) : ".git";
         if (refusal !== null) return { worktreeRoot: dir, gitDir, refused: refusal };
       }
       return { worktreeRoot: dir, gitDir, ...(refused.length > 0 ? { refused: ".git" as const } : {}) };

@@ -256,6 +256,21 @@ describe.skipIf(process.platform === "win32")("pack hook branch-protection: a `.
     fs.writeFileSync(path.join(nested, ".git"), `gitdir: ${path.join(nested, "no-such-gitdir")}\n`);
     expectBlockedNamingGitFile(nested, /\.git is present but not a regular file/);
   });
+
+  it("a `.git` FILE without a gitdir line in a nested work tree BLOCKS, it does not resolve the outer repository", () => {
+    const nested = nestedInOuter();
+    fs.writeFileSync(path.join(nested, ".git"), "not a gitdir pointer\n");
+    expectBlockedNamingGitFile(nested, /\.git is present but not a regular file/);
+  });
+
+  it("a linked-worktree gitdir that exists but has no HEAD in a nested work tree BLOCKS, naming HEAD", () => {
+    const nested = nestedInOuter();
+    const gitDir = path.join(tmp, "main-repo", ".git", "worktrees", "wt");
+    fs.mkdirSync(gitDir, { recursive: true });
+    fs.writeFileSync(path.join(gitDir, "commondir"), "../..\n");
+    fs.writeFileSync(path.join(nested, ".git"), `gitdir: ${gitDir}\n`);
+    expectBlockedNamingGitFile(nested, /HEAD is present but not a regular file or is oversized, or does not resolve/);
+  });
 });
 
 describe.skipIf(process.platform === "win32")("pack hook branch-protection: Codex-shaped events with a planted FIFO", () => {
