@@ -12,7 +12,7 @@
 //   - `harness session-start branch-check` reads `.git/HEAD` and a
 //     protected-branch list; it has no notion of "is this branch's base
 //     current".
-//   - the post-merge-gate convention only ever fires AFTER a merge.
+//   - the removed merge-gate convention only ever fired AFTER a merge.
 // And the obvious-looking fix is itself the trap this module exists to
 // avoid: `git merge-base HEAD origin/master` LOOKS authoritative, but
 // `origin/master` is a LOCAL, cached ref — exactly the ref that was 4

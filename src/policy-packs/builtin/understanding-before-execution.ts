@@ -1131,8 +1131,7 @@ function buildInstructions(
   // wired into `settings.json` even though opencode has no declarative
   // hook/event field and `harness apply --runtime opencode` never
   // projects `hooks[]` into the generated opencode artefact (see
-  // runtime.ts's header). Mirrors post-merge-gate.ts's "## Runtime"
-  // UNSUPPORTED marker.
+  // runtime.ts's header). Carries the "## Runtime" UNSUPPORTED marker.
   const runtimeUnsupportedNote = isOpencode
     ? " (UNSUPPORTED — opencode has no declarative hook/event wiring; this pack's hooks are not projected into any opencode artefact)"
     : "";

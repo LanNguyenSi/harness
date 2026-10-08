@@ -354,19 +354,6 @@ const GATES: Gate[] = [
       }),
   },
   {
-    verb: "post-merge-gate",
-    pack: "post-merge-gate",
-    blockExit: 0,
-    reasonOn: "stdout",
-    event: (ctx) =>
-      JSON.stringify({
-        session_id: "stdin-bound-sess",
-        cwd: ctx.cwd,
-        tool_name: "Bash",
-        tool_input: { command: "git push origin main" },
-      }),
-  },
-  {
     verb: "runtime-reality",
     pack: null,
     blockExit: 2,
@@ -486,7 +473,6 @@ describe("pack hook stdin bound: every PreToolUse gate blocks on a timed-out rea
       [
         "branch-protection",
         "codex-pre-tool-use",
-        "post-merge-gate",
         "pre-tool-use",
         "runtime-reality",
         "solution-acceptance",
@@ -594,7 +580,6 @@ describe("pack hook stdin bound: the pause wins over a timed-out read for the co
 describe("pack hook stdin bound: every other hook verb treats a timeout as the bytes it read", () => {
   const verbs = [
     "post-tool-use",
-    "post-merge-gate-record",
     "track-active-claim",
     "stay-in-scope",
     "subagent-start",

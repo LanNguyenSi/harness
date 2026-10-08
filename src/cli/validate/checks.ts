@@ -1128,7 +1128,6 @@ export function checkTriggerBoundaryDrift(manifest: Manifest): Diagnostic[] {
 const LEDGER_CONSULTING_PACK_SUBCOMMANDS = [
   "pack hook pre-tool-use",
   "pack hook codex-pre-tool-use",
-  "pack hook post-merge-gate",
 ] as const;
 
 function escapeRegExp(s: string): string {
@@ -1164,18 +1163,6 @@ function isLedgerConsultingPackCommand(command: string): boolean {
   return LEDGER_CONSULTING_PACK_SUBCOMMANDS.some((s) => commandInvokesSubcommand(command, s));
 }
 
-// The one pack subcommand among LEDGER_CONSULTING_PACK_SUBCOMMANDS whose
-// OWN degraded-ledger handling fails OPEN (allow) rather than closed —
-// see hook-post-merge-gate.ts's explicit "Fail posture: OPEN" header
-// comment and its `post-merge-gate fails open, allowing` diagnostics.
-// `pre-tool-use` (understanding-before-execution) / `codex-pre-tool-use`
-// both fail CLOSED absent ledger evidence (a missing
-// or degraded query reads as "no evidence", which those hooks block or
-// ask on, not allow). Tracked separately so the diagnostic below can
-// stop attributing a fail-closed verdict this hook never produces to it
-// (review 2026-08-09, fix round 1, finding 2).
-const FAIL_OPEN_ON_DEGRADED_PACK_SUBCOMMAND = "pack hook post-merge-gate";
-
 /**
  * A ledger-consulting blocking hook, tagged with the shape of ledger
  * traffic it actually performs — used only to pick the right explanatory
@@ -1193,22 +1180,18 @@ interface LedgerConsultingHook {
    * `record()` retry `requiredHookBudgetMs`'s 2T+3R is actually derived
    * from. False for a pack-contributed blocker, which only ever calls
    * `queryLedgerByTag` (open session, one `querySummary`, dispose) —
-   * `hook-codex-pre-tool-use.ts`, `hook-pre-tool-use.ts`,
-   * `hook-post-merge-gate.ts` — never `ledger_add`, so it has no
+   * `hook-codex-pre-tool-use.ts`, `hook-pre-tool-use.ts`, never
+   * `ledger_add`, so it has no
    * deny-degraded audit-retry step of its own and its real worst case is
    * bounded at up to 2×timeout_ms, not 2T+3R.
    */
   isPolicyInterceptHook: boolean;
-  /** True only for the post-merge-gate pack subcommand (see the constant
-   * above) — its own decision on a degraded/unreachable ledger is to
-   * allow, not deny. */
-  isFailOpenOnDegraded: boolean;
 }
 
 function collectLedgerConsultingBlockingHooks(manifest: Manifest): LedgerConsultingHook[] {
   const direct: LedgerConsultingHook[] = manifest.hooks
     .filter((h) => h.blocking === "hard" && isPolicyInterceptCommand(h.command))
-    .map((hook) => ({ hook, isPolicyInterceptHook: true, isFailOpenOnDegraded: false }));
+    .map((hook) => ({ hook, isPolicyInterceptHook: true }));
   const fromPacks: LedgerConsultingHook[] = [];
   for (const pack of manifest.policy_packs) {
     if (!pack.enabled) continue;
@@ -1220,14 +1203,7 @@ function collectLedgerConsultingBlockingHooks(manifest: Manifest): LedgerConsult
       if (!resolved) continue;
       for (const hook of resolved.contribution.hooks) {
         if (hook.blocking === "hard" && isLedgerConsultingPackCommand(hook.command)) {
-          fromPacks.push({
-            hook,
-            isPolicyInterceptHook: false,
-            isFailOpenOnDegraded: commandInvokesSubcommand(
-              hook.command,
-              FAIL_OPEN_ON_DEGRADED_PACK_SUBCOMMAND,
-            ),
-          });
+          fromPacks.push({ hook, isPolicyInterceptHook: false });
         }
       }
     }
@@ -1250,7 +1226,7 @@ export function checkHookBudgetLedgerMargin(manifest: Manifest): Diagnostic[] {
   const seen = new Set<string>();
   const diags: Diagnostic[] = [];
   for (const entry of collectLedgerConsultingBlockingHooks(manifest)) {
-    const { hook, isPolicyInterceptHook, isFailOpenOnDegraded } = entry;
+    const { hook, isPolicyInterceptHook } = entry;
     // Both KNOWN_RUNTIMES resolutions of an enabled pack commonly yield a
     // hook with the same (name, budget_ms) pair — only the match/command
     // wording differs per runtime. De-dupe so one misconfigured budget
@@ -1284,16 +1260,10 @@ export function checkHookBudgetLedgerMargin(manifest: Manifest): Diagnostic[] {
       // derived worst case (which is bounded at up to 2×timeout_ms for
       // the query alone) — kept uniform rather than a separately-tested,
       // lower per-kind bound (review 2026-08-09, fix round 1, finding 2).
-      const consequence = isFailOpenOnDegraded
-        ? `this hook's OWN decision on a degraded or unreachable ledger is to fail OPEN (allow), ` +
-          `not deny — see hook-post-merge-gate.ts's "Fail posture: OPEN" note — so a hook killed by ` +
-          `the runtime's outer timeout here reaches the same allow outcome its own degraded-handling ` +
-          `would already choose. It is still flagged here so a merely SLOW (not even hard-down) ` +
-          `ledger cannot needlessly stall the gate up to its outer timeout, not because a fail-closed ` +
-          `verdict is at risk`
-        : `a merely SLOW (not even hard-down) ledger can still get this hook killed by the runtime's ` +
-          `outer hook timeout before it can even complete that query, defeating its own fail-closed ` +
-          `default on exactly this hang shape`;
+      const consequence =
+        `a merely SLOW (not even hard-down) ledger can still get this hook killed by the runtime's ` +
+        `outer hook timeout before it can even complete that query, defeating its own fail-closed ` +
+        `default on exactly this hang shape`;
       message =
         `${preamble}). This pack-contributed hook only QUERIES the ledger (queryLedgerByTag: open ` +
         `session, one querySummary, dispose) — it never calls ledger_add, so it has no ` +

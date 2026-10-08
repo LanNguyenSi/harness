@@ -366,10 +366,8 @@ async function finishRecordWrite(
 // shell-out: everything is read straight off the `.git` directory,
 // reusing runtime/git-context.ts's exported `findGitEntry` walk instead
 // of re-implementing it. `resolveOriginHeadBase` / `resolveCommonDir`
-// themselves now live in runtime/git-context.ts too (task post-merge-gate,
-// T-001) so `policy-packs/builtin/post-merge-gate-runtime.ts` can share
-// them without a policy-pack module reaching into `cli/`; imported here
-// unchanged.
+// themselves now live in runtime/git-context.ts too (task T-001), so cli/
+// modules share one implementation; imported here unchanged.
 // ---------------------------------------------------------------------------
 
 /**

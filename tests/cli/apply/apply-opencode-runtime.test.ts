@@ -150,43 +150,6 @@ describe("apply --runtime opencode", () => {
     expect(instructions).toContain("not wired");
     expect(instructions).toContain("UNSUPPORTED");
   });
-
-  it("marks post-merge-gate as UNSUPPORTED under --runtime opencode, in BOTH the instructions.md Runtime marker and the pack-level apply warning", async () => {
-    writeManifest({
-      policy_packs: [{ name: "post-merge-gate" }],
-    });
-    const result = await apply({ homeDir: tmpHome, runtime: "opencode" });
-    expect(result.outcome).toBe("applied");
-
-    // Pack-level warning (post-merge-gate.ts's resolve()): before this
-    // fix, the runtime !== "claude-code" check was `runtime === "codex"`
-    // only, so opencode silently got no warning at all even though this
-    // pack (unlike understanding-before-execution) has no opencode OR
-    // codex adapter and is fully inert under both.
-    expect(
-      result.warnings.some(
-        (w) =>
-          w.includes("policy_packs[post-merge-gate]") &&
-          w.includes("no opencode adapter") &&
-          w.includes("no declarative hook/event wiring"),
-      ),
-    ).toBe(true);
-
-    // instructions.md's "## Runtime" section carries the same
-    // UNSUPPORTED marker post-merge-gate already emits for codex,
-    // mirrored for opencode.
-    const instructions = fs.readFileSync(
-      path.join(
-        tmpHome,
-        GENERATED_DIRNAME,
-        "policy-packs",
-        "post-merge-gate",
-        "instructions.md",
-      ),
-      "utf8",
-    );
-    expect(instructions).toContain("opencode (UNSUPPORTED");
-  });
 });
 
 // task 03a917fd/H1b: apply.ts's buildExpectedFiles now threads its own

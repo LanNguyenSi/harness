@@ -147,8 +147,7 @@ export interface PackHookPreToolUseOptions extends LoaderOptions {
   ledgerQuery?: (sessionId: string) => Promise<LedgerEntry[] | { degraded: string }>;
   /**
    * Inject the ledger WRITER used for the auto-approval path's audit-only
-   * `understanding-auto-approved:<sid>` fact (test). Mirrors
-   * `hook-post-merge-gate-record.ts`'s injection point. When omitted the
+   * `understanding-auto-approved:<sid>` fact (test). When omitted the
    * writer is resolved from the manifest's `grounding-mcp` entry, exactly
    * as every other Trusted-Writer producer does; when that resolution
    * fails the auto path logs one line and continues (audit only, never a

@@ -590,10 +590,8 @@ export function resolveGitContext(cwd: string): GitRepoContext {
 //
 // Originally written for `harness record review`'s `--base` fallback
 // (task T-001, record-verbs) and lived only in `cli/record/index.ts`.
-// Exported here (task post-merge-gate, T-001) so
-// `policy-packs/builtin/post-merge-gate-runtime.ts` can resolve the same
-// "what's the default branch to switch back to" answer for its deny
-// message without a policy-pack module reaching into `cli/`. Behavior is
+// Exported here (task T-001) so cli/ modules share one implementation
+// (today the record verbs and the session-start stale-base check). Behavior is
 // unchanged; this is a visibility/location move, not a rewrite — see
 // `findGitEntry`'s doc comment above for the identical precedent
 // (record/index.ts reusing this module's git-dir walk instead of

@@ -45,21 +45,16 @@ import * as path from "node:path";
 // reseed.ts precedent above; extracting a shared base would mean touching
 // the two existing sibling files too, out of this task's scope.
 // Raised to 102 for the `post-merge-gate` builtin policy pack (agent-tasks
-// d368e30d): its two new CLI hook verbs (`cli/pack/hook-post-merge-gate.ts`
-// / `hook-post-merge-gate-record.ts`) and their `cli/register-pack-group.ts` command
-// registration deliberately mirror the SAME pre-existing patterns the two
-// prior raises above already tolerate — the `--config`/`--project`/
-// `--ledger-timeout`/`--cwd` option-parsing + action-body shape shared by
-// `branch-protection` / `solution-acceptance` / `codex-pre-tool-use`'s CLI
-// wiring in `cli/register-pack-group.ts`, and the `findGroundingMcp` + ledger-probe
-// boilerplate `hook-branch-protection.ts` / `hook-solution-acceptance.ts`
-// already duplicate against each other. Checked first (per the review
-// brief) whether the two new files duplicate EACH OTHER — they do not:
-// every one of the 8 newly-reported clone pairs is against a DIFFERENT
-// pre-existing sibling-pack file, so no shared helper between just the two
-// new verbs would remove any of them. Deduping any of them means touching
-// an existing sibling pack's file, out of this task's scope (same
-// rationale as the reseed.ts / toolchain-parity precedents above).
+// d368e30d): the two CLI hook verbs it added and their
+// `cli/register-pack-group.ts` command registration deliberately mirrored the
+// SAME pre-existing patterns the two prior raises above already tolerate:
+// the `--config`/`--project`/`--ledger-timeout`/`--cwd` option-parsing +
+// action-body shape shared by `branch-protection` / `solution-acceptance` /
+// `codex-pre-tool-use`'s CLI wiring in `cli/register-pack-group.ts`, and the
+// `findGroundingMcp` + ledger-probe boilerplate
+// `hook-branch-protection.ts` / `hook-solution-acceptance.ts` already
+// duplicate against each other. The post-merge-gate pack files were removed
+// in task 2ce6933f (see the lowering to 73 below).
 // Raised to 103 for the risk-gate read-only floor (agent-tasks fb67b402),
 // and this one is NOT new copy-paste — verified rather than assumed. That
 // task adds a `cd`-target pre-check plus a quote-stripping helper near the
@@ -67,9 +62,9 @@ import * as path from "node:path";
 // full jscpd clone set against master shows 3 pairs appearing and 2
 // disappearing, net +1, and all 3 new pairs are that file's PRE-EXISTING
 // sibling-hook boilerplate — `pathToolTarget` / `bashCommandOf` / the CLI
-// runner body — matched against `hook-branch-protection.ts` and
-// `hook-post-merge-gate-record.ts`. None of them covers a line this task
-// wrote. The added lines shifted the file's contents, which moved jscpd's
+// runner body, matched against `hook-branch-protection.ts` and a sibling
+// hook file since removed in task 2ce6933f. None of them covers a line this
+// task wrote. The added lines shifted the file's contents, which moved jscpd's
 // windows and re-partitioned the same duplicated boilerplate into a
 // different set of reported pairs. So there is nothing here to extract
 // that was not already there: the underlying duplication is the same
@@ -250,7 +245,10 @@ import * as path from "node:path";
 // `session-start branch-check` producer and the `approve branch-protection`
 // verb and dropped the ledger probe from `hook-branch-protection.ts`. The
 // check reports 82 with that change (the pin was 91).
-const MAX_CLONES = 82;
+// Lowered to 73 (task 2ce6933f): removing the post-merge-gate pack deleted its
+// two hook verbs and their register-pack-group.ts wiring; the check reports 73
+// with that change (the pin was 82).
+const MAX_CLONES = 73;
 
 // Sets process.exitCode instead of calling process.exit so the caller's
 // finally-cleanup runs on every path (process.exit skips stack unwinding).

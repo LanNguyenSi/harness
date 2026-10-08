@@ -62,6 +62,7 @@ import {
   type Runtime,
 } from "../../policy-packs/index.js";
 import { parseManifest, type Manifest } from "../../schema/index.js";
+import { formatPostureWarning } from "../../schema/removed-keys.js";
 import { withDerivedPolicies, withoutDerivedPolicies } from "../../runtime/workflow-policies.js";
 import { checkPolicyGroundingMcp } from "../validate/checks.js";
 import { EX_FAIL, EX_NOINPUT, HarnessExitError } from "../exit-codes.js";
@@ -870,7 +871,7 @@ export async function apply(opts: ApplyOptions = {}): Promise<ApplyResult> {
   };
   if (opts.homeDir !== undefined) loaderOpts.homeDir = opts.homeDir;
   if (opts.project !== undefined) loaderOpts.project = opts.project;
-  const { manifest } = loadManifest(loaderOpts);
+  const { manifest, warnings: postureWarnings } = loadManifest(loaderOpts);
 
   // Fail loud on unknown pack source / builtin name BEFORE expansion.
   // Without this, `expandPolicyPacks` silently skips the bad entry and
@@ -919,13 +920,19 @@ export async function apply(opts: ApplyOptions = {}): Promise<ApplyResult> {
   const lastApply = readLastApply(generatedDir);
   const runtimeInfo = selectRuntime(opts.runtime, lastApply, Boolean(opts.target));
   const { runtime } = runtimeInfo;
-  const { files: expected, warnings } = buildExpectedFiles(
+  const { files: expected, warnings: expectedWarnings } = buildExpectedFiles(
     manifest,
     { ...opts, runtime },
     manifestPath,
     generatedDir,
     operatorGeneratedDir,
   );
+  // Manifest posture warnings (removed keys and removed packs, table from
+  // task a4d8adc5; printed by apply since task 2ce6933f):
+  // the loader strips them and `harness validate` / `harness doctor` print
+  // them; `harness apply` prints them too so an operator applying a stale
+  // manifest sees why a pack they still name did not generate anything.
+  const warnings = [...postureWarnings.map(formatPostureWarning), ...expectedWarnings];
   // The runtime this apply records: its own, or with
   // `preserveRecordedRuntime` the previous one (recorded or inferred, else
   // whatever the field held), so a diagnostic apply leaves the operator's
