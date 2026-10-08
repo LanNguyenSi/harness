@@ -2,8 +2,8 @@
 
 Block `Write`/`Edit` (claude-code) or `apply_patch` (codex) when the tool
 call writes into a repository whose checked-out branch is protected. The
-gate fires at the **first** source mutation, complementing
-`preflight-before-push` (which fires at the last reversible step).
+gate fires at the **first** source mutation, before any edit lands on the
+protected branch.
 
 Motivating incident: a session that branches AFTER it has already
 edited master leaves an uncommitted diff on master that a second
@@ -219,9 +219,11 @@ The operator pause (`harness pause`) does not switch this gate off.
 `branch:non-protected:<branch>` ledger tag) and
 `harness approve branch-protection` (the override marker under
 `harness.generated/.approvals/`) are gone, together with the 5-minute
-freshness window and the session-id requirement. Re-run `harness apply`
-(and `harness apply --runtime codex --install`) after upgrading so the
-settings stop calling the removed producer.
+freshness window and the session-id requirement. After upgrading, re-run
+apply once per runtime you use (`harness apply --runtime claude-code`,
+`harness apply --runtime codex --install`; a plain `harness apply` reuses
+the runtime of the last apply) so the settings stop calling the removed
+producer.
 
 ## Out of scope (v1)
 

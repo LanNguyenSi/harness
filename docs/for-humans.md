@@ -251,13 +251,10 @@ evaluator step by step so you can see what matched.
 
 ## More policy patterns
 
-Three gates worth copying from
+Two gates worth copying from
 [`docs/examples/full-manifest.yaml`](examples/full-manifest.yaml) once
-the first one feels comfortable. The first two were added alongside
-this section; `dogfood-before-release` has been in the reference
-manifest since v0.4.0 and is included here so the cluster reads as a
-coherent set. Each maps to a recurring incident class rather than to a
-theoretical risk.
+the first one feels comfortable. Each maps to a recurring incident
+class rather than to a theoretical risk.
 
 **`review-subagent-before-pr-create`**: gates
 `mcp__agent-tasks__pull_requests_create` on a
@@ -273,23 +270,13 @@ which match the Bash surface and tag by `${BRANCH}`. See
 [`writing-custom-policies.md`](writing-custom-policies.md#same-gate-two-pr-surface-variants-mcp-plus-gh-cli)
 for the dual-surface pattern.
 
-**`preflight-before-push`**: gates `Bash` calls running `git push` on
-a `preflight:${BRANCH}` ledger entry with `within: 10m`. The match is
-not start-anchored, so `cd <repo> && git push` and `git -C <repo> push`
-are caught too. Complements the read-side
-`preflight-before-investigation` (which gates
-`git status / log / diff / branch`). Catches the stale-checkout class
-of incident at the last reversible step: an operator who started work
-on a 16-commits-behind branch can still notice and pull before the
-push lands on the remote.
-
 **`dogfood-before-release`**: gates `npm publish` and `git tag v*` on a
 fresh `dogfood:${SESSION_ID}` entry (`within: 24h`). Tags pushed in
 bulk only fire one workflow on GitHub, so the smoke test you skip
 sometimes ships untested versions silently. The gate makes that
 impossible.
 
-All three are written out in the reference manifest. Copy the hook
+Both are written out in the reference manifest. Copy the hook
 declaration and the policy declaration together; both sides of the
 pair are required for `harness apply` to wire the gate end-to-end.
 

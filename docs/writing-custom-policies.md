@@ -43,8 +43,8 @@ These four things bite people who skip ahead to the YAML:
    warn-mode.
 
 3. **Hook wiring is not auto-generated for custom policies.** The
-   `harness init` wizard only knows about its five named patterns
-   (`review-before-merge`, `preflight-before-investigation`, etc.).
+   `harness init` wizard only knows about its four named reference
+   policies (`review-before-merge`, `dogfood-before-release`, etc.).
    For a custom policy, you write the matching `hooks:` entry
    yourself: a hook with `command: harness policy intercept` and a
    `match:` (or `bash_match:`) that fires on the same tool the
