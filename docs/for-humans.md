@@ -326,7 +326,8 @@ harness pause --for 1h --reason "prod incident #482"
 harness resume                 # cuts the pause short
 ```
 
-While paused, every PreToolUse / PostToolUse hook emits a one-line
+While paused, every PreToolUse / PostToolUse hook except
+branch-protection emits a one-line
 stderr notice (`harness <hook>: PAUSED since 3m ago (reason: ...);
 auto-resumes in 7m. Run \`harness resume\` to re-enable.`) and allows
 the tool call without evaluating. The same sentinel also short-circuits
@@ -335,6 +336,13 @@ emit their own one-line stderr notice and skip injection/capture
 without evaluating, even though neither one is a tool call. After the
 window expires, the next hook fire silently deletes the sentinel and
 resumes normal gating.
+
+Branch-protection does not yield to a pause: it keeps refusing edits
+on a protected branch. To land an edit on a protected branch on
+purpose (a hotfix on `master`, for example), switch that gate off from
+an operator shell with `harness gate disable` and restore it with
+`harness gate enable`; see
+[Disable the gate](policy-packs/branch-protection.md#disable-the-gate-operator-only).
 
 **Operator-only by design, but the CLI check is a speed bump, not a
 boundary.** `harness pause` refuses to run when any of
@@ -442,8 +450,9 @@ implemented; treat it as a follow-up if you need a hard guarantee here.
 | Replay recent policy decisions | `harness audit --since 24h` |
 | Why did this exact policy fire just now? | `harness explain --last` |
 | Full chronological session export (transcript + ledger, redacted) | `harness session-export <sessionId>` |
-| Temporarily make all hooks dormant (recovery / debug / incident) | `harness pause --for <duration>` |
+| Temporarily make the hooks dormant, branch-protection excepted (recovery / debug / incident) | `harness pause --for <duration>` |
 | Re-enable hooks before the pause window expires | `harness resume` |
+| Edit a protected branch on purpose (branch-protection off, from an operator shell) | `harness gate disable`, then `harness gate enable` |
 
 ## Where to read next
 
