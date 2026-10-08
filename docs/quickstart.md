@@ -97,7 +97,7 @@ again.
 ## What you see
 
 While the agent works in a repository on `master`, `main` or
-`develop`, its file edit through a gated tool is refused. The deny
+`develop`, its file edits there through a gated tool are refused. The deny
 message names the branch and the protected list, and tells the agent to
 cut a feature branch:
 
