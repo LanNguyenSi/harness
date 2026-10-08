@@ -1289,6 +1289,9 @@ describe.skipIf(!GIT_AVAILABLE || process.platform === "win32")("branch-protecti
     physicalRow("an apply_patch header into the checkout on master in JSON array text inside a tool_input string, from a feature-branch cwd, is refused", (l) => apply(l.feat, { tool_input: { arguments: JSON.stringify(["apply_patch", intoProt(l)]) } }), onlyProt, (l) => l.prot),
     physicalRow("a relative apply_patch header src/x.ts with a per-call workdir on the checkout on master, from a feature-branch cwd, is refused", (l) => apply(l.feat, { tool_input: { input: patchText(["*** Update File: src/x.ts"]), workdir: l.prot } }), featAndProtSrc, protSrc),
     physicalRow("a relative apply_patch header src/x.ts with a per-call cwd on the checkout on master, from a feature-branch cwd, is refused", (l) => apply(l.feat, { tool_input: { input: patchText(["*** Update File: src/x.ts"]), cwd: l.prot } }), featAndProtSrc, protSrc),
+    physicalRow("a tool without a target path from the event cwd <feature checkout>/lnk/.. is refused", (l) => ({ tool_name: "Bash", cwd: `${l.feat}/lnk/..`, tool_input: { command: "ls" } }), onlyProt, (l) => l.prot),
+    physicalRow("an apply_patch without a header from the event cwd <feature checkout>/lnk/.. is refused", (l) => apply(`${l.feat}/lnk/..`, { tool_input: { input: "no headers here" } }), onlyProt, (l) => l.prot),
+    physicalRow("a relative apply_patch header x.ts in tool_input.command from the event cwd <feature checkout>/lnk/.. is refused", (l) => apply(`${l.feat}/lnk/..`, { tool_input: { command: patchText(["*** Update File: x.ts"]) } }), onlyProt, (l) => l.prot),
   ];
 
   /** What git, run plainly in each directory, answers: in the directory as given, or in its physical directory. */
