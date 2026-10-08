@@ -29,39 +29,52 @@ is allowed to do, under the exact context, and records why.
 ## Quick start
 
 ```bash
-npm i -g @lannguyensi/harness   # Node 20 or newer
-harness init --interactive      # guided wizard, or: --template minimal|solo|team|full (default: minimal)
+npm i -g @lannguyensi/harness                            # Node 20 or newer
+harness init                                             # minimal manifest, no policies
+harness pack add branch-protection                       # the one recommended pack
+harness validate
+harness apply --target ~/.claude/settings.json --merge   # Claude Code; then restart it
+harness apply --runtime codex --install                  # Codex, if you use it; then restart it
 ```
 
-The wizard detects your `~/.claude/` and `~/.codex/` setup, MCP
-servers already wired in `settings.json`, and the harness binary
-version, then writes a starting `harness.yaml`. Full operator
-walkthrough: [`docs/for-humans.md`](docs/for-humans.md); a five-minute
-non-interactive path plus a profile comparison table:
-[`docs/quickstart.md`](docs/quickstart.md).
+From then on, while an agent works in a repository on `master`, `main`
+or `develop`, its edits there through the file-editing tools (`Write`
+and `Edit` under Claude Code, `apply_patch` under Codex) are refused
+until it cuts a feature branch (`git checkout -b <feature>`). Codex runs
+the new hooks only once you trust them in its startup hook review. The
+step-by-step version, with what each command writes:
+[`docs/quickstart.md`](docs/quickstart.md). Full operator walkthrough:
+[`docs/for-humans.md`](docs/for-humans.md) (it still starts from the
+wizard and the `solo` template, so the note below applies to it).
+
+The `solo`, `team` and `full` templates and the
+`harness init --interactive` wizard still offer the understanding gate,
+`solution-acceptance`, `post-merge-gate`, the risk gate and the
+reference policies. harness 1.0.0 removes all of these, so a new
+install should not adopt them.
 
 ## Usage
 
-Preview which policies would fire for a tool call, before any ledger
-I/O or file write:
+See the gate decide without starting an agent: from inside a
+repository, pipe a sample `Write` event into the hook Claude Code runs
+before every `Write` or `Edit`.
 
 ```bash
-harness dry-run "merge PR 42" \
-  --tool mcp__agent-tasks__pull_requests_merge \
-  --tool-args '{"prNumber":42}'
+echo '{"session_id":"demo","tool_name":"Write","tool_input":{"file_path":"README.md"}}' \
+  | harness pack hook branch-protection
 ```
 
-Once a manifest is applied, the same shape runs live as
-`harness policy intercept` (invoked by the runtime's PreToolUse hook),
-and `harness explain <policy> --trace` / `harness audit --since 1h`
-replay what actually fired and why. The full install-to-audit
-walkthrough is in [`docs/quickstart.md`](docs/quickstart.md).
+On a protected branch it prints a deny decision naming the branch and
+the protected list; on a feature branch it allows the edit and says why
+on stderr. The protected-branch list, the agent-facing message and the
+operator controls are documented in
+[`docs/policy-packs/branch-protection.md`](docs/policy-packs/branch-protection.md).
 
 ## Documentation
 
-- [`docs/for-humans.md`](docs/for-humans.md): operator path, install through first real policy, diagnostics cheat sheet.
+- [`docs/for-humans.md`](docs/for-humans.md): operator path, install through first real policy, diagnostics cheat sheet (still starts from the wizard and the `solo` template; the Quick start note applies).
 - [`docs/for-agents.md`](docs/for-agents.md): agent integration contract, workflow lifecycle, CLI cheat sheet by side-effect class.
-- [`docs/quickstart.md`](docs/quickstart.md): five-minute bare-command path and profile comparison.
+- [`docs/quickstart.md`](docs/quickstart.md): five-minute bare-command path to the `branch-protection` gate.
 - [`docs/init-interactive.md`](docs/init-interactive.md): the `harness init --interactive` wizard, walkthrough and limitations.
 - [`docs/CLI.md`](docs/CLI.md): every CLI verb, grouped by purpose.
 - [`docs/risk-gate.md`](docs/risk-gate.md): the four-way `allow / warn / require_approval / deny` Risk Gate.
