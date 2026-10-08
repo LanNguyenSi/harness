@@ -1,13 +1,12 @@
 // Shared manifest -> grounding-mcp ledger-writer wiring (task T-001,
 // record-verbs).
 //
-// `harness session-start preflight` originally inlined this lookup
-// (find the `grounding-mcp` MCP server entry in the manifest, split its
-// `command` into an argv array, resolve a per-call timeout, and close
-// over `addLedgerFact`). `harness record {review,review-subagent,
-// dogfood}` needs the exact same wiring, so it is lifted here verbatim
-// — behavior unchanged, just made reusable. `session-start/index.ts`
-// now imports this instead of defining its own copies.
+// The removed `harness session-start preflight` producer (task f3f15290)
+// originally inlined this lookup (find the `grounding-mcp` MCP server entry
+// in the manifest, split its `command` into an argv array, resolve a
+// per-call timeout, and close over `addLedgerFact`). `harness record
+// {review,review-subagent,dogfood}` needs the exact same wiring, so it was
+// lifted here verbatim; the record verbs and the pack hooks share it.
 
 import { addLedgerFact, type AddLedgerFactResult } from "./ledger-add.js";
 import type { Manifest, McpServer } from "../schema/index.js";

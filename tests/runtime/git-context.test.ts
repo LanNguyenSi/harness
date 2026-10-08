@@ -1229,9 +1229,9 @@ describe("deriveProjectName: case-differing path on a case-insensitive filesyste
 });
 
 // Task f1eb1c5c: `harness doctor`'s second, project-scoped load
-// (`opts.project ?? deriveProjectName(...) ?? null`) and the
-// `session_start_preflight` producer (`opts.project ?? deriveProjectName(cwd)
-// ?? repo`) used two independently written copies of the same
+// (`opts.project ?? deriveProjectName(...) ?? null`) and the session-start
+// preflight producer (`opts.project ?? deriveProjectName(cwd) ?? repo`; both
+// call sites were removed in task f3f15290, the helper stays) used two independently written copies of the same
 // `opts.project ?? deriveProjectName(cwd) ?? fallback` expression, with
 // nothing pinning that the shared first two terms actually stayed
 // identical across both copies. `resolveScopedProjectName` is the single

@@ -235,7 +235,9 @@ describe("evaluateWhen — Friction-log #35 regression (benign harness floor def
   // satisfied `risk.severity_at_least: critical` and a prod-scoped
   // gate-prod-destructive policy HARD-DENIED it. With the built-in floor
   // it classifies `low`, so the severity clause no longer matches even
-  // when the environment genuinely resolves to production.
+  // when the environment genuinely resolves to production. That producer is
+  // gone (task f3f15290); `harness approve risk`, the verb a
+  // require_approval gate asks for, is the same class and is pinned here.
   const ENVELOPE_CTX: EnvelopeContext = {
     cwd: "/work/repo",
     git: { repo: "repo", branch: "main", sha: "" },
@@ -253,8 +255,8 @@ describe("evaluateWhen — Friction-log #35 regression (benign harness floor def
     "environment.name": "production",
   };
 
-  it("does NOT match gate-prod-destructive for `harness preflight` in production", () => {
-    const risk = classifyRisk(bashEnvelope("harness preflight"), []);
+  it("does NOT match gate-prod-destructive for `harness approve risk` in production", () => {
+    const risk = classifyRisk(bashEnvelope("harness approve risk"), []);
     const result = evaluateWhen(GATE_PROD_DESTRUCTIVE, { risk, environment: env("production") });
     expect(result.matched).toBe(false);
     // Crucial: the non-match is a real low-severity classification, not a

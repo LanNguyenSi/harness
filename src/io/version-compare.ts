@@ -94,9 +94,7 @@ export function parseProbedVersion(
  * from its original two consumers to all `min_version` floor checks in
  * this codebase). Consumers as of task db44ab46: `checkHookVersion` and
  * `checkCli`'s `tools.cli[]` check plus `checkMcpVersions`'s
- * `tools.mcp[]` check (all in src/cli/doctor/index.ts),
- * `checkSessionStartPreflightSetupVersion`
- * (src/cli/doctor/session-start-preflight-setup-version.ts), validate's
+ * `tools.mcp[]` check (all in src/cli/doctor/index.ts), validate's
  * `tools.cli[]` check (src/cli/validate/checks.ts), `memory.router`'s
  * version probe (src/probes/memory.ts), and the pack-level floor
  * (src/policy-packs/version-check.ts).

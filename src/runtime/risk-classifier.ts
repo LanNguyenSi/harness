@@ -65,30 +65,28 @@ const IRREVERSIBLE_CATEGORIES: ReadonlySet<RiskCategory> = new Set<RiskCategory>
 
 // Built-in benign-harness-command floor.
 //
-// harness's own read-only and gate-producer subcommands are benign: they
-// read state, record evidence, or print diagnostics, and several
-// (`harness preflight`, `harness session-start`) are REQUIRED by other
-// harness gates (require-preflight-evidence et al). Leaving them
+// harness's own read-only and approval subcommands are benign: they read
+// state, record an operator approval, or print diagnostics. Leaving them
 // unclassified lets the "unknown is not safe" fail-close treat them as
 // risk-bearing, so a `when: { risk.severity_at_least: critical,
-// environment.name: production }` policy HARD-DENIES `harness preflight`
-// the moment a session resolves to production (a main / release branch)
-// — deadlocking against the very gate that demands it. So we recognize
-// these as a `low`-severity floor.
+// environment.name: production }` policy would HARD-DENY `harness doctor`
+// or `harness approve risk` the moment a session resolves to production (a
+// main / release branch), including the approval verb that gate itself
+// asks for. So we recognize these as a `low`-severity floor. (The removed
+// `harness preflight` / `harness session-start` producers left this list
+// with them in task f3f15290.)
 //
 // Floor, not override: the contribution composes with operator
 // classifiers under the same highest-severity-wins rule, so
-// `harness preflight && rm -rf /var` still classifies `critical` (the
+// `harness doctor && rm -rf /var` still classifies `critical` (the
 // dangerous-shell tail wins) and an operator pattern can only RAISE the
 // severity, never sink below this floor. Mutating subcommands (`apply`,
 // `init`, `add`, `adopt`, `remove`, `pack`, `uninstall`, `migrate-home`,
-// `smoke`, `gate`, `pause`, `resume`) are deliberately excluded — they
+// `smoke`, `gate`, `pause`, `resume`) are deliberately excluded: they
 // stay classifiable. Anchored at the command head, so `cd /x && harness
-// preflight` does NOT match and stays unclassified (fail-safe = denied):
+// doctor` does NOT match and stays unclassified (fail-safe = denied):
 // a benign prefix must not launder a non-harness command.
 const BENIGN_HARNESS_SUBCOMMANDS: readonly string[] = [
-  "preflight",
-  "session-start",
   "approve",
   "doctor",
   "validate",

@@ -130,7 +130,7 @@ Notes:
   validated and round-tripped, but no consumer reads them yet (see the
   status comment in `src/schema/grounding.ts`). Runtime grounding
   ENFORCEMENT keys off the `tools.mcp[]` entry named `grounding-mcp`
-   (validate); `grounding:` is the section that CONFIGURES
+  (validate); `grounding:` is the section that CONFIGURES
   that entry, not a separate enforcement switch. Alongside
   `EVIDENCE_LEDGER_DB` above, the same `tools.mcp[grounding-mcp]` entry
   also gets `SOLUTION_VERDICT_SIGNING_KEY` projected onto it (task

@@ -96,7 +96,7 @@ describe("testRisk — classification", () => {
     // The debug verb must report the same classification the gate uses,
     // including the built-in floor for harness's own meta-commands —
     // even when the manifest declares no classifiers.
-    const file = writeEvent(bashEvent("harness preflight"));
+    const file = writeEvent(bashEvent("harness doctor"));
     const result = testRisk({ ...SEAMS, eventPath: file, manifest: EMPTY_MANIFEST });
     expect(result.profile.classified).toBe(true);
     expect(result.profile.severity).toBe("low");

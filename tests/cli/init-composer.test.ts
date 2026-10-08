@@ -249,13 +249,13 @@ describe("composeCustom — producer-coupling warnings", () => {
     expect(warnings.some((w) => /review-before-merge/.test(w) && /agent-tasks/.test(w))).toBe(true);
   });
 
-  it("auto-adds grounding-mcp and emits informational note when preflight-before-investigation is selected without it (H3 gate auto-repair)", () => {
-    const { manifest, warnings } = compose({ policies: ["dogfood-before-release"] });
+  it("auto-adds grounding-mcp and emits informational note when two-reviewers-required is selected without it (H3 gate auto-repair)", () => {
+    const { manifest, warnings } = compose({ policies: ["two-reviewers-required"] });
     // grounding-mcp must be auto-wired so apply accepts the manifest
     expect(manifest.tools.mcp.some((m) => m.name === "grounding-mcp")).toBe(true);
-    // the per-policy "requires a producer" warning is replaced by the auto-add note
+    // the auto-add note is the only grounding advisory; no producer warning
     expect(warnings.some((w) => /auto-wired grounding-mcp/.test(w))).toBe(true);
-    expect(warnings.some((w) => /producer/.test(w) && /every npm publish/.test(w))).toBe(false);
+    expect(warnings.some((w) => /two-reviewers-required/.test(w) && /producer/.test(w))).toBe(false);
   });
 
   it("auto-adds grounding-mcp even when understanding-before-execution pack is selected alongside a policy (pack does NOT produce ledger tags, grounding-mcp still required)", () => {

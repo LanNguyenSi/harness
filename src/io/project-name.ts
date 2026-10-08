@@ -137,14 +137,6 @@ export function isValidProjectName(name: string): boolean {
  *    field (`src/cli/list.ts`, and with it the text table derived from
  *    it).
  *
- * The `session_start_preflight.setup` finding's `(project: X)` suffix is
- * also wrapped, as defense in depth rather than as an echo of a rejected
- * value: `harness doctor` sets that finding's `projectName` only when
- * `resolvePaths` actually resolved a project layer FILE, which requires
- * the name to have passed {@link isValidProjectName} first. The wrap
- * stays so a hand-built finding or a future producer cannot reintroduce
- * a forged line through that one call site.
- *
  * Strips (rather than escapes) every character in
  * {@link PROJECT_NAME_CONTROL_CHARS}. A name with no control character
  * (`..`, `a/b`, every ordinary shape) passes through unchanged. Report
