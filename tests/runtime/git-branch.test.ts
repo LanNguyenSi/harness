@@ -10,14 +10,19 @@ import * as path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   GIT_OUTPUT_CAP_BYTES,
+  PathBoundError,
   classifyGitHeadAnswer,
   firstLine,
   gitReaderEnv,
   hasGitEntryAbove,
   nearestExistingDirectory,
+  nearestExistingDirectoryAsWritten,
   readBranch,
+  readBranchAt,
   readGitHead,
   writeTargetDirectories,
+  type GitHeadAnswer,
+  type PathResolution,
 } from "../../src/runtime/git-branch.js";
 
 const GIT_AVAILABLE = spawnSync("git", ["--version"], { stdio: "ignore" }).status === 0;
@@ -284,6 +289,90 @@ describe.skipIf(!POSIX)("writeTargetDirectories", () => {
     fs.symlinkSync(path.join(out, "b"), path.join(out, "a"));
     fs.symlinkSync(path.join(out, "a"), path.join(out, "b"));
     expect(writeTargetDirectories(path.join(out, "a"), "/")).toEqual([out]);
+  });
+});
+
+// The as-written reading: `.` and `..` resolved on the text, symlinks left
+// in the path.
+describe("nearestExistingDirectoryAsWritten", () => {
+  it("returns an existing directory itself, else the nearest existing ancestor of the text", () => {
+    const root = tmpDir("harness-gb-written-");
+    fs.writeFileSync(path.join(root, "file"), "x");
+    expect(nearestExistingDirectoryAsWritten(root)).toBe(root);
+    expect(nearestExistingDirectoryAsWritten(path.join(root, "no", "such", "dir"))).toBe(root);
+    expect(nearestExistingDirectoryAsWritten(path.join(root, "file", "below"))).toBe(root);
+  });
+
+  it.skipIf(!POSIX)("keeps a symlink in the path, and `..` after it steps up on the text", () => {
+    const root = tmpDir("harness-gb-written-");
+    const target = path.join(root, "elsewhere", "sub");
+    fs.mkdirSync(target, { recursive: true });
+    fs.mkdirSync(path.join(root, "repo"));
+    fs.symlinkSync(target, path.join(root, "repo", "lnk"));
+    expect(nearestExistingDirectoryAsWritten(path.join(root, "repo", "lnk"))).toBe(path.join(root, "repo", "lnk"));
+    expect(nearestExistingDirectoryAsWritten(`${root}/repo/lnk/..`)).toBe(path.join(root, "repo"));
+    expect(nearestExistingDirectoryAsWritten(`${root}/repo/lnk/../new/deeper`)).toBe(path.join(root, "repo"));
+    // The physical reading of the same text lands where the symlink leads.
+    expect(nearestExistingDirectory(`${root}/repo/lnk/..`)).toBe(path.join(root, "elsewhere"));
+  });
+});
+
+describe("readBranchAt", () => {
+  it.skipIf(!POSIX)("walks and asks git about the directory as given, not where a symlink in it leads", async (ctx) => {
+    const root = tmpDir("harness-gb-at-");
+    if (hasGitEntryAbove(root)) ctx.skip("the host keeps a repository above the temp directory");
+    const repo = path.join(root, "repo");
+    fs.mkdirSync(path.join(repo, ".git"), { recursive: true });
+    fs.mkdirSync(path.join(root, "outside"));
+    fs.symlinkSync(path.join(root, "outside"), path.join(repo, "to-outside"));
+    const dirs: string[] = [];
+    const reader = async (dir: string): Promise<GitHeadAnswer> => {
+      dirs.push(dir);
+      return { kind: "exited", code: 128, stdout: "", stderr: "fatal: not a git repository\n" };
+    };
+    const asGiven = path.join(repo, "to-outside");
+    expect(await readBranchAt(asGiven, { reader })).toEqual({ kind: "error", detail: "git exited 128: fatal: not a git repository" });
+    expect(dirs).toEqual([asGiven]);
+    // The physical reading of the same directory finds no .git above it.
+    expect(await readBranch(asGiven, { reader })).toEqual({ kind: "outside" });
+    expect(dirs).toEqual([asGiven]);
+  });
+});
+
+describe("resolving the paths of one event is bounded and shares a cache", () => {
+  const deepTree = (): { root: string; deep: string } => {
+    const root = tmpDir("harness-gb-bound-");
+    let deep = root;
+    for (let i = 0; i < 8; i += 1) deep = path.join(deep, `d${i}`);
+    fs.mkdirSync(deep, { recursive: true });
+    return { root, deep };
+  };
+
+  it.each<[string, (p: string, res: PathResolution) => unknown]>([
+    ["nearestExistingDirectory", (p, res) => nearestExistingDirectory(p, res)],
+    ["nearestExistingDirectoryAsWritten", (p, res) => nearestExistingDirectoryAsWritten(p, res)],
+    ["writeTargetDirectories", (p, res) => writeTargetDirectories(p, "/", res)],
+  ])("%s stops with a PathBoundError once the bound has passed, and asks before every step", (_name, resolve) => {
+    const { deep } = deepTree();
+    const target = path.join(deep, "missing", "x.ts");
+    expect(() => resolve(target, { overBound: () => true })).toThrow(PathBoundError);
+    let asked = 0;
+    expect(resolve(target, { overBound: () => (asked += 1) < 0 })).toBeDefined();
+    const steps = asked;
+    expect(steps).toBeGreaterThan(1);
+    asked = 0;
+    expect(() => resolve(target, { overBound: () => (asked += 1) >= steps })).toThrow(PathBoundError);
+  });
+
+  it("a shared cache gives the same directories and holds every prefix once", () => {
+    const { root, deep } = deepTree();
+    const memo = new Map<string, string | null>();
+    const fresh = Array.from({ length: 50 }, (_, i) => writeTargetDirectories(path.join(deep, `f${i}.ts`), "/"));
+    const cached = Array.from({ length: 50 }, (_, i) => writeTargetDirectories(path.join(deep, `f${i}.ts`), "/", { memo }));
+    expect(cached).toEqual(fresh);
+    expect(memo.get(deep)).toBe(deep);
+    expect(memo.get(path.join(root, "d0"))).toBe(path.join(root, "d0"));
+    expect(memo.size).toBeLessThan(50);
   });
 });
 

@@ -31,39 +31,58 @@ On every call the blocker asks git for the branch (task `a4d8adc5`); it
 never reads git's files itself, and it keeps no ledger tag, session
 state or override marker.
 
-1. **Directories.** Every path is taken as the operating system resolves
-   it: symlinks are followed and `..` steps up from the directory reached
-   so far. That is where the write lands and where `git -C` looks. For
-   `Write`, `Edit`, `MultiEdit` and `NotebookEdit` it takes the nearest
-   existing directory of the target path (a `Write` may create the
-   directories in between) and, when the target is itself a symlink, the
-   directory the symlink leads to as well (one that does not resolve yet is
-   followed by its text). For a Codex `apply_patch` it does the same for
-   every path named by an `*** Add File:`, `*** Update File:`,
-   `*** Delete File:` or `*** Move to:` header line found in any string of
-   the event: any field or array of `tool_input`, `raw_input` or `input`,
-   and JSON text inside a string. The field Codex carries the patch text in
-   is not pinned on a captured payload, so the blocker relies on no single
-   field. A relative path resolves against the event cwd and, when the tool
-   input names a per-call `workdir` or `cwd`, against that as well. For any
-   other tool, or a patch without a header, it takes the event cwd (and
-   that per-call directory). Each distinct directory is checked.
-2. **Presence walk.** From the physical directory up to the filesystem
-   root it looks (with `lstat`, nothing is read) for an entry named
-   `.git`. When there is none, the directory is outside every repository
-   and git is not run. An `lstat` that fails for another reason than a
-   missing path (a directory that cannot be searched, a symlink loop)
-   counts as present, and git decides.
+1. **Directories, judged twice.** Every tool call is judged in two ways,
+   and the blocker refuses when either judgment refuses or cannot answer;
+   it allows only when both allow. A write is judged in the directory its
+   path names as written and in the directory the operating system
+   resolves that path to, so the verdict does not depend on which of the
+   two the runtime writes into. The as-written judgment runs first.
+   - **As written.** Each path is made absolute against the event cwd,
+     with `.` and `..` resolved on the text (as `path.resolve` does) and
+     symlinks left in place. For `Write`, `Edit`, `MultiEdit` and
+     `NotebookEdit` it takes the nearest existing directory holding the
+     target path. For a Codex `apply_patch` it does the same for every path
+     named by an `*** Add File:`, `*** Update File:`, `*** Delete File:` or
+     `*** Move to:` header line of the patch text in `tool_input.patch`,
+     `tool_input.input` or a string `tool_input`. For any other tool, or
+     without such a header there, it takes the event cwd.
+   - **Physical.** Each path is taken as the operating system resolves it:
+     symlinks are followed and `..` steps up from the directory reached so
+     far, which is where `git -C` looks. For `Write`, `Edit`, `MultiEdit`
+     and `NotebookEdit` it takes the nearest existing directory of the
+     target path (a `Write` may create the directories in between) and,
+     when the target is itself a symlink, the directory the symlink leads
+     to as well (one that does not resolve yet is followed by its text).
+     For a Codex `apply_patch` it does the same for every path named by a
+     header line found in any string of the event: any field or array of
+     `tool_input`, `raw_input` or `input`, and JSON text inside a string.
+     The field Codex carries the patch text in is not pinned on a captured
+     payload, so this judgment relies on no single field. A relative path
+     resolves against the event cwd and, when the tool input names a
+     per-call `workdir` or `cwd`, against that as well. For any other tool,
+     or a patch without a header, it takes the event cwd (and that
+     per-call directory).
+
+   Each distinct directory is checked, and git is asked once per
+   directory it runs in.
+2. **Presence walk.** From the directory up to the filesystem root it
+   looks (with `lstat`, nothing is read) for an entry named `.git`: along
+   the directory's text for the as-written judgment, along the physical
+   directory for the other. When there is none, the directory is outside
+   every repository and git is not run. An `lstat` that fails for another
+   reason than a missing path (a directory that cannot be searched, a
+   symlink loop) counts as present, and git decides.
 3. **git.** Otherwise it runs `git -C <dir> symbolic-ref -q HEAD`
    directly (no shell), with stdin closed, each output stream capped at
    4 KiB, every `GIT_*` variable removed from git's environment
    (`LC_ALL=C`, `GIT_TERMINAL_PROMPT=0`, `GIT_OPTIONAL_LOCKS=0` set;
    `HOME` kept, so your global git configuration applies as it does to
    your own git), and a 2000 ms bound per call after which git is killed.
-   All directories of one tool call together are bounded at 3000 ms,
-   counted from the moment the hook starts (the stdin read included), well
-   below the hook budget: a hook the runtime kills at its budget would be
-   read as an allow.
+   Resolving the paths and all git calls of one tool call together are
+   bounded at 3000 ms, counted from the moment the hook starts (the stdin
+   read included); past the bound the call is refused. That is well below
+   the hook budget: a hook the runtime kills at its budget would be read
+   as an allow.
 
 ## The three outcomes
 

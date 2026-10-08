@@ -147,10 +147,11 @@ describe.skipIf(process.platform === "win32")("pack hook branch-protection: a gi
     expect(out.status).toBe(0);
     const envelope = JSON.parse(out.stdout) as { decision: string; reason: string };
     expect(envelope.decision).toBe("block");
-    // The hook names the directory as the operating system resolves it (the
-    // temp directory may sit behind a symlink, /var on macOS).
+    // The as-written judgment runs first and names the directory as the
+    // event wrote it (the temp directory may sit behind a symlink, /var on
+    // macOS).
     expect(envelope.reason).toBe(
-      `branch-protection: refusing Write: git could not report the branch of ${fs.realpathSync.native(repo)} (git did not answer within 2000 ms).`,
+      `branch-protection: refusing Write: git could not report the branch of ${repo} (git did not answer within 2000 ms).`,
     );
   });
 

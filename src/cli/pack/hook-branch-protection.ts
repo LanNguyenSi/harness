@@ -7,30 +7,41 @@
 // (`git -C <dir> symbolic-ref -q HEAD`, src/runtime/git-branch.ts); this hook
 // never reads git's files itself.
 //
-// Directories checked, each as the operating system resolves the path
-// (symlinks followed, `..` taken from the directory reached so far), which is
-// where the write lands and where `git -C` looks:
-//   - Write, Edit, MultiEdit, NotebookEdit: the nearest existing directory of
-//     the target path (a Write may create the directories in between), and,
-//     when the target is a symlink, the directory it leads to as well.
-//   - Codex `apply_patch`: the same for every path named by an
-//     `*** Add File:`, `*** Update File:`, `*** Delete File:` or
-//     `*** Move to:` header line found in any string of the event (any field
-//     or array of tool_input, raw_input or input, and JSON text inside a
-//     string: the field Codex carries the patch in is not pinned). A relative
-//     path resolves against the event cwd and, when the tool input names a
-//     per-call `workdir` or `cwd`, against that as well.
-//   - Anything else, or a patch without a header: the event cwd (and a
-//     per-call `workdir` or `cwd` of an `apply_patch`).
+// Every event is judged twice, and the hook refuses when either judgment
+// refuses or cannot answer; it allows only when both allow. The as-written
+// judgment runs first.
+//
+//   1. As written: each path made absolute against the event cwd with `.` and
+//      `..` resolved on the text (`path.resolve`), symlinks left in the path;
+//      the presence walk runs on that text and git runs in that directory.
+//      Write, Edit, MultiEdit, NotebookEdit: the nearest existing directory
+//      holding the target path. Codex `apply_patch`: the same for every path
+//      named by an `*** Add File:`, `*** Update File:`, `*** Delete File:` or
+//      `*** Move to:` header line of the patch text in tool_input.patch,
+//      tool_input.input or a string tool_input, relative to the event cwd.
+//      Anything else, or a patch without a header there: the event cwd.
+//   2. Physical, as the operating system resolves the path (symlinks
+//      followed, `..` taken from the directory reached so far), which is the
+//      directory `git -C` changes into. Write, Edit, MultiEdit, NotebookEdit:
+//      the nearest existing directory of the target path (a Write may create
+//      the directories in between), and, when the target is a symlink, the
+//      directory it leads to as well. Codex `apply_patch`: the same for every
+//      path named by a header line found in any string of the event (any
+//      field or array of tool_input, raw_input or input, and JSON text inside
+//      a string: the field Codex carries the patch in is not pinned). A
+//      relative path resolves against the event cwd and, when the tool input
+//      names a per-call `workdir` or `cwd`, against that as well. Anything
+//      else, or a patch without a header: the event cwd (and that per-call
+//      directory).
 //
 // Decision, per directory: git names a protected branch (compared
 // case-insensitively) -> refuse; git could not answer (any error, a timeout,
 // git missing, an unexpected answer) -> refuse with one fixed sentence naming
 // git's first stderr line; a detached HEAD, or no `.git` entry anywhere above
 // the directory -> allow. A manifest that does not load refuses every call.
-// Every git call is bounded, and so are all calls of one event together,
-// below the pack's hook budget: a hook the runtime kills at its budget is
-// read as an allow.
+// Resolving the paths and every git call are bounded, together, from the
+// hook's start and below the pack's hook budget (a hook the runtime kills at
+// its budget is read as an allow): past the bound the hook refuses.
 //
 // Block contract per runtime: Claude Code reads a JSON deny envelope on
 // stdout (exit 0); Codex reads exit 2 with the reason on stderr
@@ -45,11 +56,16 @@ import {
 } from "../../policy-packs/builtin/branch-protection-runtime.js";
 import {
   GIT_BRANCH_TIMEOUT_MS,
+  PathBoundError,
   absolutePath,
   nearestExistingDirectory,
-  readBranch,
+  nearestExistingDirectoryAsWritten,
+  readBranchAt,
+  resolveDirectory,
   writeTargetDirectories,
+  type BranchRead,
   type GitHeadReader,
+  type PathResolution,
 } from "../../runtime/git-branch.js";
 import { renderAgentFacing } from "../../runtime/agent-facing.js";
 import { type Manifest, type PolicyUx } from "../../schema/index.js";
@@ -62,9 +78,10 @@ import {
 } from "./hook-bootstrap.js";
 
 /**
- * Bound on all git calls of one event together, in ms, counted from the
- * moment the hook starts (the stdin read and the manifest load included), so
- * a slow stdin cannot push the git reads past the hook budget.
+ * Bound on resolving the paths and on all git calls of one event together,
+ * in ms, counted from the moment the hook starts (the stdin read and the
+ * manifest load included), so neither a slow stdin nor a large event can
+ * push the hook past its budget.
  */
 export const GIT_READ_DEADLINE_MS = 3000;
 
@@ -90,8 +107,10 @@ export interface PackHookBranchProtectionOptions extends LoaderOptions {
   gitReader?: GitHeadReader;
   /** Bound on one git call in ms (test). */
   gitTimeoutMs?: number;
-  /** Bound on all git calls of one event, from the hook's start, in ms (test). */
+  /** Bound on the path resolution and all git calls of one event, from the hook's start, in ms (test). */
   gitDeadlineMs?: number;
+  /** Inject the clock the bound is measured with, in ms (test). Defaults to Date.now. */
+  now?: () => number;
 }
 
 export interface PackHookBranchProtectionResult {
@@ -158,20 +177,31 @@ function stringsIn(value: unknown): string[] {
 
 const PATCH_HEADER = /^\*\*\*\s*(?:Add File|Update File|Delete File|Move to):\s*(.+)$/;
 
-/**
- * Every path an `apply_patch` call names in a file header line, read from
- * every string of `value` (the whole event, or any part of it).
- */
-export function patchTargetPaths(value: unknown): string[] {
+/** The paths named by the file header lines of one text. */
+function headerPaths(text: string): string[] {
   const out: string[] = [];
-  for (const text of stringsIn(value)) {
-    for (const raw of text.split("\n")) {
-      const m = PATCH_HEADER.exec(raw.trim());
-      const target = m?.[1]?.trim() ?? "";
-      if (target.length > 0) out.push(target);
-    }
+  for (const raw of text.split("\n")) {
+    const m = PATCH_HEADER.exec(raw.trim());
+    const target = m?.[1]?.trim() ?? "";
+    if (target.length > 0) out.push(target);
   }
   return out;
+}
+
+/**
+ * Every path an `apply_patch` call names in a file header line, read from
+ * every string of `value` (the whole event, or any part of it), each once.
+ */
+export function patchTargetPaths(value: unknown): string[] {
+  return [...new Set(stringsIn(value).flatMap(headerPaths))];
+}
+
+/** The patch text the as-written judgment reads: tool_input.patch, tool_input.input or a string tool_input. */
+function asWrittenPatchText(toolInput: unknown): string {
+  if (typeof toolInput === "string") return toolInput;
+  if (typeof toolInput !== "object" || toolInput === null) return "";
+  const input = toolInput as Record<string, unknown>;
+  return pickString(input["patch"], input["input"]) ?? "";
 }
 
 /**
@@ -197,15 +227,36 @@ interface CheckTargets {
   dirs: string[];
 }
 
-function checkTargets(toolName: string, event: ToolEventLite, cwd: string): CheckTargets {
+/**
+ * The directories of the as-written judgment: each path made absolute
+ * against the event cwd with `.` and `..` resolved on the text, then its
+ * nearest existing directory with symlinks left in place.
+ */
+function asWrittenTargets(toolName: string, toolInput: unknown, cwd: string, res: PathResolution): CheckTargets {
+  const single = singleTargetPath(toolName, toolInput);
+  const paths = single !== null ? [single] : toolName === "apply_patch" ? [...new Set(headerPaths(asWrittenPatchText(toolInput)))] : [];
+  if (paths.length === 0) return { source: "cwd", dirs: [nearestExistingDirectoryAsWritten(cwd, res)] };
+  const dirs = paths.map((p) => nearestExistingDirectoryAsWritten(path.dirname(path.resolve(cwd, p)), res));
+  return { source: single !== null ? "target" : "patch", dirs: [...new Set(dirs)] };
+}
+
+/** The directories of the physical judgment: where the operating system resolves each path. */
+function checkTargets(toolName: string, event: ToolEventLite, cwd: string, res: PathResolution): CheckTargets {
   const single = singleTargetPath(toolName, event.tool_input);
-  if (single !== null) return { source: "target", dirs: writeTargetDirectories(single, cwd) };
-  if (toolName !== "apply_patch") return { source: "cwd", dirs: [nearestExistingDirectory(cwd)] };
+  if (single !== null) return { source: "target", dirs: writeTargetDirectories(single, cwd, res) };
+  if (toolName !== "apply_patch") return { source: "cwd", dirs: [nearestExistingDirectory(cwd, res)] };
   const bases = patchBaseDirectories(event, cwd);
   const paths = patchTargetPaths(event);
-  if (paths.length === 0) return { source: "cwd", dirs: [...new Set(bases.map((b) => nearestExistingDirectory(b)))] };
-  const dirs = paths.flatMap((p) => (path.isAbsolute(p) ? [cwd] : bases).flatMap((b) => writeTargetDirectories(p, b)));
+  if (paths.length === 0) return { source: "cwd", dirs: [...new Set(bases.map((b) => nearestExistingDirectory(b, res)))] };
+  const dirs = paths.flatMap((p) => (path.isAbsolute(p) ? [cwd] : bases).flatMap((b) => writeTargetDirectories(p, b, res)));
   return { source: "patch", dirs: [...new Set(dirs)] };
+}
+
+/** One judgment of an event: the directories it names, and where each one is walked and asked. */
+interface Judgment {
+  targets: (res: PathResolution) => CheckTargets;
+  /** The directory the presence walk and git run in for `dir`, or why there is none. */
+  at: (dir: string) => { kind: "path"; path: string } | { kind: "error"; detail: string };
 }
 
 function claudeBlockEnvelope(reason: string): string {
@@ -248,7 +299,8 @@ function protectedBranchText(
 export async function runPackHookBranchProtectionCli(
   opts: PackHookBranchProtectionOptions = {},
 ): Promise<PackHookBranchProtectionResult> {
-  const startedAt = Date.now();
+  const now = opts.now ?? Date.now;
+  const startedAt = now();
   const stdout = opts.stdout ?? process.stdout;
   const stderr = opts.stderr ?? process.stderr;
   const note = (msg: string): void => {
@@ -300,8 +352,7 @@ export async function runPackHookBranchProtectionCli(
 
   const toolName = pickString(event.tool_name, event.tool) ?? "(unknown)";
   const sessionId = pickString(event.session_id) ?? "";
-  // Kept as written: the directories are resolved through the filesystem.
-  const cwd = absolutePath(pickString(opts.cwd, event.cwd) ?? process.cwd());
+  const cwdText = pickString(opts.cwd, event.cwd) ?? process.cwd();
 
   // Without the manifest the gate cannot know whether it is enabled or what
   // is protected, so a load failure refuses.
@@ -324,43 +375,80 @@ export async function runPackHookBranchProtectionCli(
     "harness pack hook branch-protection",
   );
 
-  const targets = checkTargets(toolName, event, cwd);
   const deadlineMs = opts.gitDeadlineMs ?? GIT_READ_DEADLINE_MS;
   const perCallMs = opts.gitTimeoutMs ?? GIT_BRANCH_TIMEOUT_MS;
   const deadline = startedAt + deadlineMs;
+  const bound: PathResolution = { overBound: () => now() >= deadline, memo: new Map() };
+  const asWritten: Judgment = {
+    targets: (res) => asWrittenTargets(toolName, event.tool_input, path.resolve(cwdText), res),
+    at: (dir) => ({ kind: "path", path: dir }),
+  };
+  const physical: Judgment = {
+    targets: (res) => checkTargets(toolName, event, absolutePath(cwdText), res),
+    at: resolveDirectory,
+  };
+  // Both judgments, the as-written one first: the hook allows only what both allow.
+  const judgments = [asWritten, physical];
+
+  // Each directory git ran in is read once per event.
+  const answers = new Map<string, BranchRead>();
+  const sources: string[] = [];
   const seen: string[] = [];
-  for (const dir of targets.dirs) {
-    const remaining = deadline - Date.now();
-    if (remaining <= 0) {
-      const detail = `the branch of ${dir} was not checked: the hook passed its ${deadlineMs} ms bound`;
-      return block(detail, `branch-protection: refusing ${toolName}: git could not report the branch of ${dir} (${detail}).`);
-    }
-    const branchRead = await readBranch(dir, {
-      ...(opts.gitReader !== undefined ? { reader: opts.gitReader } : {}),
-      timeoutMs: Math.min(perCallMs, remaining),
-    });
-    switch (branchRead.kind) {
-      case "error":
-        return block(
-          `git could not report the branch of ${dir}: ${branchRead.detail}`,
-          `branch-protection: refusing ${toolName}: git could not report the branch of ${dir} (${branchRead.detail}).`,
-        );
-      case "branch":
-        if (isProtectedBranch(branchRead.name, protectedList)) {
-          return block(
-            `branch "${branchRead.name}" of ${dir} is protected (${protectedList.join(", ")})`,
-            protectedBranchText(toolName, branchRead.name, dir, protectedList, configUx, sessionId),
-          );
+  try {
+    for (const judgment of judgments) {
+      const targets = judgment.targets(bound);
+      if (!sources.includes(targets.source)) sources.push(targets.source);
+      for (const dir of targets.dirs) {
+        const remaining = deadline - now();
+        if (remaining <= 0) {
+          const detail = `the branch of ${dir} was not checked: the hook passed its ${deadlineMs} ms bound`;
+          return block(detail, `branch-protection: refusing ${toolName}: git could not report the branch of ${dir} (${detail}).`);
         }
-        seen.push(`${dir}: branch "${branchRead.name}" is not in the protected list (${protectedList.join(", ")})`);
-        break;
-      case "detached":
-        seen.push(`${dir}: detached HEAD`);
-        break;
-      case "outside":
-        seen.push(`${dir}: outside any git repository`);
-        break;
+        const at = judgment.at(dir);
+        let branchRead: BranchRead;
+        if (at.kind === "error") {
+          branchRead = at;
+        } else {
+          const known = answers.get(at.path);
+          if (known !== undefined) continue;
+          branchRead = await readBranchAt(at.path, {
+            ...(opts.gitReader !== undefined ? { reader: opts.gitReader } : {}),
+            timeoutMs: Math.min(perCallMs, remaining),
+          });
+          answers.set(at.path, branchRead);
+        }
+        switch (branchRead.kind) {
+          case "error":
+            return block(
+              `git could not report the branch of ${dir}: ${branchRead.detail}`,
+              `branch-protection: refusing ${toolName}: git could not report the branch of ${dir} (${branchRead.detail}).`,
+            );
+          case "branch":
+            if (isProtectedBranch(branchRead.name, protectedList)) {
+              return block(
+                `branch "${branchRead.name}" of ${dir} is protected (${protectedList.join(", ")})`,
+                protectedBranchText(toolName, branchRead.name, dir, protectedList, configUx, sessionId),
+              );
+            }
+            seen.push(`${dir}: branch "${branchRead.name}" is not in the protected list (${protectedList.join(", ")})`);
+            break;
+          case "detached":
+            seen.push(`${dir}: detached HEAD`);
+            break;
+          case "outside":
+            seen.push(`${dir}: outside any git repository`);
+            break;
+        }
+      }
     }
+  } catch (err) {
+    // Fail closed: a path that could not be resolved within the bound, or
+    // any other failure while judging, refuses.
+    const detail =
+      err instanceof PathBoundError
+        ? `the paths of the tool call were not resolved: the hook passed its ${deadlineMs} ms bound`
+        : `the tool call could not be judged (${err instanceof Error ? err.message : String(err)})`;
+    return block(detail, `branch-protection: refusing ${toolName}: ${detail}.`);
   }
-  return allow(`${targets.source} ${seen.join("; ")}; allowing`);
+  return allow(`${sources.join("+")} ${seen.join("; ")}; allowing`);
 }

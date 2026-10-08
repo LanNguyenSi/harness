@@ -16,17 +16,20 @@
 // must resolve git's own branch. The reader must also report what git
 // reports, and the hook must decide from the reader's answers alone.
 //
-// "That directory" is where the write lands as the operating system
-// resolves it: the directory holding the written path (git runs there and
-// the operating system follows symlinks and `..` on the way), and, when the
-// written path is itself a symlink, the directory it leads to. The symlink
-// rows are built outside the outer repository, so the presence walk meets no
-// `.git` on the text of the path.
+// "That directory" is every directory the hook judges a write in. As the
+// operating system resolves the path: the directory holding the written path
+// (git runs there and the operating system follows symlinks and `..` on the
+// way), and, when the written path is itself a symlink, the directory it
+// leads to. As written: the path made absolute with `.` and `..` resolved on
+// the text, shortened to its nearest existing directory, symlinks left in
+// place. The hook refuses when either judgment refuses or cannot answer. Most
+// symlink rows are built outside the outer repository, so the presence walk
+// meets no `.git` on the text of the path.
 //
 // Rows that need a repository format or a worktree option the installed git
 // lacks are skipped visibly; the whole file is skipped only when there is no
 // git at all. Set HARNESS_GIT_DIFFERENTIAL_TRANSCRIPT=1 to print what both
-// sides said for every row, and the row counts.
+// sides said for every row, how long the hook took, and the row counts.
 import { execFileSync, spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -34,7 +37,14 @@ import * as path from "node:path";
 import { Readable, Writable } from "node:stream";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { runPackHookBranchProtectionCli } from "../../src/cli/pack/hook-branch-protection.js";
-import { hasGitEntryAbove, readBranch, type BranchRead } from "../../src/runtime/git-branch.js";
+import {
+  GIT_BRANCH_TIMEOUT_MS,
+  classifyGitHeadAnswer,
+  hasGitEntryAbove,
+  readBranch,
+  readGitHead,
+  type BranchRead,
+} from "../../src/runtime/git-branch.js";
 import { parseManifest } from "../../src/schema/index.js";
 
 const GIT_AVAILABLE = spawnSync("git", ["--version"], { stdio: "ignore" }).status === 0;
@@ -117,18 +127,44 @@ function sink(): { stream: NodeJS.WritableStream; text: () => string } {
   };
 }
 
-/** The hook's decision on a Write of `target` from the event cwd `cwd`. */
-async function hookOnWrite(cwd: string, target: string): Promise<{ blocked: boolean; diagnostic: string }> {
+/** The hook's decision on a Write of `target` from the event cwd `cwd`, and how long it took. */
+async function hookOnWrite(cwd: string, target: string): Promise<{ blocked: boolean; diagnostic: string; ms: number }> {
   const out = sink();
   const err = sink();
   const event = { tool_name: "Write", cwd, tool_input: { file_path: target, content: "x" } };
+  const started = performance.now();
   const r = await runPackHookBranchProtectionCli({
     stdin: Readable.from([JSON.stringify(event)]),
     stdout: out.stream,
     stderr: err.stream,
     manifest: MANIFEST,
   });
-  return { blocked: r.blocked, diagnostic: r.diagnostic };
+  return { blocked: r.blocked, diagnostic: r.diagnostic, ms: performance.now() - started };
+}
+
+/**
+ * The directory a Write of `target` names as written: the path made absolute
+ * against `cwd` with `.` and `..` resolved on the text, its parent, shortened
+ * until it names an existing directory. Symlinks stay in the result.
+ */
+function writtenDirectory(cwd: string, target: string): string {
+  let current = path.dirname(path.resolve(cwd, target));
+  for (;;) {
+    try {
+      if (fs.statSync(current).isDirectory()) return current;
+    } catch {
+      /* not there: one level up */
+    }
+    const parent = path.dirname(current);
+    if (parent === current) return current;
+    current = parent;
+  }
+}
+
+/** The gate's reading of a directory taken as written: the presence walk on its text, then git there. */
+async function readAsWritten(dir: string): Promise<BranchRead> {
+  if (!hasGitEntryAbove(dir)) return { kind: "outside" };
+  return classifyGitHeadAnswer(await readGitHead(dir, GIT_BRANCH_TIMEOUT_MS));
 }
 
 /**
@@ -880,9 +916,66 @@ const ROWS: Row[] = [
       return path.join(repo, "to-outside");
     },
   },
+
+  // As written: `..` after a symlink is resolved on the text as well.
+  {
+    name: "a target path that goes up from a symlink in a checkout on a protected branch whose target is outside every repository",
+    needs: ["posix", "no-repository-above-tmp"],
+    build: (id) => {
+      const { repo } = protectedCheckout(id);
+      const sub = path.join(outsideDir(id), "sub");
+      fs.mkdirSync(sub);
+      fs.symlinkSync(sub, path.join(repo, "lnk"));
+      return { cwd: repo, target: `${repo}/lnk/../new-file.txt` };
+    },
+  },
+  {
+    name: "a relative target path that goes up from a symlink in a checkout on a protected branch whose target is outside every repository",
+    needs: ["posix", "no-repository-above-tmp"],
+    build: (id) => {
+      const { repo } = protectedCheckout(id);
+      const sub = path.join(outsideDir(id), "sub");
+      fs.mkdirSync(sub);
+      fs.symlinkSync(sub, path.join(repo, "lnk"));
+      return { cwd: repo, target: "lnk/../new-file.txt" };
+    },
+  },
+  {
+    name: "an event cwd that goes up from a symlink in a checkout on a protected branch whose target is outside every repository",
+    needs: ["posix", "no-repository-above-tmp"],
+    build: (id) => {
+      const { repo } = protectedCheckout(id);
+      const sub = path.join(outsideDir(id), "sub");
+      fs.mkdirSync(sub);
+      fs.symlinkSync(sub, path.join(repo, "lnk"));
+      return { cwd: `${repo}/lnk/..`, target: "new-file.txt" };
+    },
+  },
+  {
+    name: "a target path that goes up from a symlink in a checkout on a feature branch whose target is outside every repository",
+    needs: ["posix", "no-repository-above-tmp"],
+    build: (id) => {
+      const repo = copyRepo(path.join(ROOT, "feature", id));
+      const sub = path.join(outsideDir(id), "sub");
+      fs.mkdirSync(sub);
+      fs.symlinkSync(sub, path.join(repo, "lnk"));
+      return { cwd: repo, target: `${repo}/lnk/../new-file.txt` };
+    },
+  },
 ];
 
-const tally = { rows: 0, skipped: 0, legit: 0, refusedProtected: 0, refusedError: 0, allowed: 0, plainNamesProtected: 0 };
+const tally = {
+  rows: 0,
+  skipped: 0,
+  legit: 0,
+  refusedProtected: 0,
+  refusedError: 0,
+  allowed: 0,
+  plainNamesProtected: 0,
+  writtenNamesProtected: 0,
+};
+/** How long the hook took per row, for the transcript's slowest rows. */
+const timings: Array<{ row: number; name: string; ms: number }> = [];
 
 describe.skipIf(!GIT_AVAILABLE)("the branch-protection gate agrees with real git (differential, task a4d8adc5)", () => {
   beforeAll(() => {
@@ -916,8 +1009,13 @@ describe.skipIf(!GIT_AVAILABLE)("the branch-protection gate agrees with real git
 
   afterAll(() => {
     if (process.env.HARNESS_GIT_DIFFERENTIAL_TRANSCRIPT === "1") {
+      const slowest = [...timings]
+        .sort((a, b) => b.ms - a.ms)
+        .slice(0, 5)
+        .map((t) => `  row ${t.row} (${t.ms.toFixed(1)} ms): ${t.name}`);
       console.log(
-        `git branch differential transcript (${ROWS.length} rows; tally ${JSON.stringify(tally)})\n${transcript.join("\n")}`,
+        `git branch differential transcript (${ROWS.length} rows; tally ${JSON.stringify(tally)})\n${transcript.join("\n")}\n` +
+          `slowest hook calls:\n${slowest.join("\n")}`,
       );
     }
     if (ROOT === "") return;
@@ -959,7 +1057,11 @@ describe.skipIf(!GIT_AVAILABLE)("the branch-protection gate agrees with real git
       const plains = landings.map((dir) => gitPlain(dir));
       const reads: BranchRead[] = [];
       for (const dir of landings) reads.push(await readBranch(dir));
+      const written = writtenDirectory(cwd, target);
+      const plainWritten = gitPlain(written);
+      const readWritten = await readAsWritten(written);
       const hook = await hookOnWrite(cwd, target);
+      timings.push({ row: index + 1, name: row.name, ms: hook.ms });
       transcript.push(
         `row ${index + 1}: ${row.name}` +
           landings
@@ -970,8 +1072,21 @@ describe.skipIf(!GIT_AVAILABLE)("the branch-protection gate agrees with real git
                 `\n  reader: ${describeRead(reads[i]!)}`,
             )
             .join("") +
-          `\n  hook: ${hook.blocked ? "refuses" : "allows"} (${hook.diagnostic})`,
+          `\n  as written ${written}: git: exit ${plainWritten.status} ${JSON.stringify(plainWritten.stdout.trim())}; reader: ${describeRead(readWritten)}` +
+          `\n  hook: ${hook.blocked ? "refuses" : "allows"} in ${hook.ms.toFixed(1)} ms (${hook.diagnostic})`,
       );
+
+      // The rule, as written: never allow where git, run plainly in the directory the path names as written, names a protected branch.
+      if (plainWritten.branch !== null && namesProtected(plainWritten.branch)) {
+        tally.writtenNamesProtected += 1;
+        expect(hook.blocked, `git names "${plainWritten.branch}" in ${written} (as written)`).toBe(true);
+      }
+      // Where the presence walk on the text finds a .git, the as-written reading is git's own answer there.
+      if (readWritten.kind !== "outside") {
+        if (plainWritten.branch !== null) expect(readWritten).toEqual({ kind: "branch", name: plainWritten.branch });
+        else if (plainWritten.status === 1 && plainWritten.stdout === "" && plainWritten.stderr === "") expect(readWritten).toEqual({ kind: "detached" });
+        else expect(readWritten.kind, `git as written: exit ${plainWritten.status} ${JSON.stringify(plainWritten.stderr)}`).toBe("error");
+      }
 
       landings.forEach((dir, i) => {
         const plain = plains[i]!;
@@ -1000,11 +1115,15 @@ describe.skipIf(!GIT_AVAILABLE)("the branch-protection gate agrees with real git
           expect(["branch", "detached"], "a layout git writes itself must not be an error").toContain(read.kind);
         }
       });
-      if (row.legit === true) tally.legit += 1;
+      if (row.legit === true) {
+        expect(["branch", "detached"], "a layout git writes itself must not be an error as written either").toContain(readWritten.kind);
+        tally.legit += 1;
+      }
 
-      // The hook decides from the readers' answers alone.
-      const anyError = reads.some((r) => r.kind === "error");
-      const shouldRefuse = anyError || reads.some((r) => r.kind === "branch" && namesProtected(r.name));
+      // The hook decides from the readers' answers alone, both judgments together.
+      const allReads = [readWritten, ...reads];
+      const anyError = allReads.some((r) => r.kind === "error");
+      const shouldRefuse = anyError || allReads.some((r) => r.kind === "branch" && namesProtected(r.name));
       expect(hook.blocked, hook.diagnostic).toBe(shouldRefuse);
       if (anyError) tally.refusedError += 1;
       else if (shouldRefuse) tally.refusedProtected += 1;

@@ -1,14 +1,13 @@
 // Branch reader for the branch-protection gate (task a4d8adc5).
 //
 // The gate asks git which branch a directory is on instead of parsing git's
-// files itself. The directory is taken as the operating system resolves it
-// (symlinks followed, `..` taken from the directory reached so far), which is
-// the directory `git -C` changes into. Two steps, both bounded:
+// files itself. A directory is read in two steps, both bounded
+// (`readBranchAt`):
 //
-//   1. Presence walk: from the physical directory up to the filesystem root,
-//      `lstat` an entry named `.git` (any type; nothing is opened or read).
-//      When no such entry exists anywhere above, the directory is outside
-//      every repository and git is not spawned at all.
+//   1. Presence walk: from the directory, as it is given, up to the
+//      filesystem root, `lstat` an entry named `.git` (any type; nothing is
+//      opened or read). When no such entry exists anywhere above, the
+//      directory is outside every repository and git is not spawned at all.
 //   2. `git -C <dir> symbolic-ref -q HEAD` through `execFile` (no shell,
 //      stdin closed at once, each output stream capped), in the process
 //      environment minus every `GIT_*` variable (so a `GIT_DIR` or
@@ -26,9 +25,17 @@
 // shape) is an error carrying git's first stderr line. The caller decides
 // what an error means; the branch-protection hook refuses on every one.
 //
-// `writeTargetDirectories` names the directories a write to a path lands in,
-// resolved the same physical way, so the hook asks about the directory the
-// write reaches and not about the text of its path.
+// A path can name a directory in two ways, and the hook judges both:
+//
+//   - as written (`nearestExistingDirectoryAsWritten`): `.` and `..` are
+//     resolved on the text (`path.resolve`), symlinks stay in the path, and
+//     `readBranchAt` walks and asks git there;
+//   - physically (`nearestExistingDirectory`, `writeTargetDirectories`,
+//     `readBranch`): symlinks followed and `..` taken from the directory
+//     reached so far, the directory `git -C` changes into.
+//
+// Resolving the paths of one event is bounded by the caller (`PathResolution`)
+// and shares one cache of physical directories.
 //
 // The process runner is injectable (`GitHeadReader`) so tests can produce a
 // timeout, a signal or a missing binary without depending on the host.
@@ -179,7 +186,8 @@ export function classifyGitHeadAnswer(answer: GitHeadAnswer): BranchRead {
  * True when an entry named `.git` exists in `dir` or any directory above it.
  * Only `lstat` is used, so the entry is never opened. An `lstat` that fails
  * for another reason than a missing path counts as present: git decides.
- * `dir` is walked as written; `readBranch` passes the physical directory.
+ * `dir` is walked as written (`..` taken on the text, symlinks left in
+ * place); `readBranch` passes the physical directory.
  */
 export function hasGitEntryAbove(dir: string): boolean {
   let current = path.resolve(dir);
@@ -200,6 +208,30 @@ export function hasGitEntryAbove(dir: string): boolean {
 /** Bound on the symlinks followed by their text for one target. */
 const MAX_LINK_HOPS = 32;
 
+/** Thrown when resolving the paths of one event passes the caller's bound. */
+export class PathBoundError extends Error {
+  constructor() {
+    super("resolving the paths passed the bound");
+    this.name = "PathBoundError";
+  }
+}
+
+/**
+ * Shared by every path of one event. `overBound` is asked before each step
+ * (a path, a path component, a symlink hop); once it returns true the
+ * resolution stops with a `PathBoundError`. `memo` keeps the physical
+ * directory of each path already resolved, so a prefix many paths share is
+ * resolved once.
+ */
+export interface PathResolution {
+  overBound?: () => boolean;
+  memo?: Map<string, string | null>;
+}
+
+function checkBound(res: PathResolution): void {
+  if (res.overBound?.() === true) throw new PathBoundError();
+}
+
 /** `p` made absolute against `base` without editing its text (`..` and symlinks stay for the filesystem). */
 export function absolutePath(p: string, base: string = process.cwd()): string {
   if (path.isAbsolute(p)) return p;
@@ -219,13 +251,18 @@ function splitPath(p: string): { root: string; parts: string[] } {
 }
 
 /** The physical path of `p` when it leads to an existing directory; null otherwise. */
-function physicalDirectory(p: string): string | null {
+function physicalDirectory(p: string, res: PathResolution): string | null {
+  const known = res.memo?.get(p);
+  if (known !== undefined) return known;
+  let found: string | null;
   try {
     const real = fs.realpathSync.native(p);
-    return fs.statSync(real).isDirectory() ? real : null;
+    found = fs.statSync(real).isDirectory() ? real : null;
   } catch {
-    return null;
+    found = null;
   }
+  res.memo?.set(p, found);
+  return found;
 }
 
 /**
@@ -236,10 +273,11 @@ function physicalDirectory(p: string): string | null {
  * text (a write may create it; a `..` there steps back over it). Returns the
  * physical directory reached and how many components below it are missing.
  */
-function walkPhysical(root: string, parts: readonly string[]): { dir: string; missing: number } {
-  let dir = physicalDirectory(root) ?? root;
+function walkPhysical(root: string, parts: readonly string[], res: PathResolution): { dir: string; missing: number } {
+  let dir = physicalDirectory(root, res) ?? root;
   const pending: string[] = [];
   for (const part of parts) {
+    checkBound(res);
     if (part === "..") {
       if (pending.length > 0) pending.pop();
       else dir = path.dirname(dir);
@@ -249,7 +287,7 @@ function walkPhysical(root: string, parts: readonly string[]): { dir: string; mi
       pending.push(part);
       continue;
     }
-    const next = physicalDirectory(path.join(dir, part));
+    const next = physicalDirectory(path.join(dir, part), res);
     if (next === null) pending.push(part);
     else dir = next;
   }
@@ -262,9 +300,31 @@ function walkPhysical(root: string, parts: readonly string[]): { dir: string; mi
  * symlinks, with `..` taken from the directory reached so far. A path that
  * cannot be examined counts as missing.
  */
-export function nearestExistingDirectory(p: string): string {
+export function nearestExistingDirectory(p: string, res: PathResolution = {}): string {
   const { root, parts } = splitPath(absolutePath(p));
-  return walkPhysical(root, parts).dir;
+  return walkPhysical(root, parts, res).dir;
+}
+
+/**
+ * The nearest directory at or above `p` that exists, with `p` taken as
+ * written: made absolute and `.` and `..` resolved on the text
+ * (`path.resolve`), then shortened from the end until it names an existing
+ * directory. Symlinks stay in the result. A path that cannot be examined
+ * counts as missing.
+ */
+export function nearestExistingDirectoryAsWritten(p: string, res: PathResolution = {}): string {
+  let current = path.resolve(p);
+  for (;;) {
+    checkBound(res);
+    try {
+      if (fs.statSync(current).isDirectory()) return current;
+    } catch {
+      /* missing or not examinable: look one level up */
+    }
+    const parent = path.dirname(current);
+    if (parent === current) return current;
+    current = parent;
+  }
 }
 
 function isSymlink(p: string): boolean {
@@ -282,25 +342,26 @@ function isSymlink(p: string): boolean {
  * link or go through it). A link that does not resolve yet is followed by
  * its text, up to a bound.
  */
-export function writeTargetDirectories(target: string, cwd: string): string[] {
+export function writeTargetDirectories(target: string, cwd: string, res: PathResolution = {}): string[] {
   const dirs: string[] = [];
   let next: string | null = absolutePath(target, cwd);
   for (let hops = 0; next !== null && hops <= MAX_LINK_HOPS; hops += 1) {
+    checkBound(res);
     const { root, parts } = splitPath(next);
     next = null;
     const name = parts[parts.length - 1];
     if (name === undefined || name === "..") {
-      dirs.push(walkPhysical(root, parts).dir);
+      dirs.push(walkPhysical(root, parts, res).dir);
       break;
     }
-    const holder = walkPhysical(root, parts.slice(0, -1));
+    const holder = walkPhysical(root, parts.slice(0, -1), res);
     dirs.push(holder.dir);
     if (holder.missing > 0) break;
     const entry = path.join(holder.dir, name);
     if (!isSymlink(entry)) break;
     try {
       const real = fs.realpathSync.native(entry);
-      dirs.push(physicalDirectory(real) ?? path.dirname(real));
+      dirs.push(physicalDirectory(real, res) ?? path.dirname(real));
     } catch {
       try {
         next = absolutePath(fs.readlinkSync(entry), holder.dir);
@@ -318,11 +379,18 @@ export interface ReadBranchOptions {
 }
 
 /**
- * Presence walk, then git, both on the physical directory of `dir` (the one
- * `git -C` changes into). `dir` should be an existing directory; one that
- * cannot be resolved is an error.
+ * Presence walk from `dir` as it is given (`..` taken on the text, symlinks
+ * left in place), then `git -C <dir>`. `dir` should be an existing absolute
+ * directory.
  */
-export async function readBranch(dir: string, opts: ReadBranchOptions = {}): Promise<BranchRead> {
+export async function readBranchAt(dir: string, opts: ReadBranchOptions = {}): Promise<BranchRead> {
+  if (!hasGitEntryAbove(dir)) return { kind: "outside" };
+  const reader = opts.reader ?? readGitHead;
+  return classifyGitHeadAnswer(await reader(dir, opts.timeoutMs ?? GIT_BRANCH_TIMEOUT_MS));
+}
+
+/** The physical path of the directory `dir` (the one `git -C` changes into), or why it has none. */
+export function resolveDirectory(dir: string): { kind: "path"; path: string } | { kind: "error"; detail: string } {
   let physical: string;
   try {
     physical = fs.realpathSync.native(dir);
@@ -330,7 +398,16 @@ export async function readBranch(dir: string, opts: ReadBranchOptions = {}): Pro
     const code = (err as NodeJS.ErrnoException).code;
     return { kind: "error", detail: `the directory could not be resolved (${typeof code === "string" ? code : "unknown"})` };
   }
-  if (!hasGitEntryAbove(physical)) return { kind: "outside" };
-  const reader = opts.reader ?? readGitHead;
-  return classifyGitHeadAnswer(await reader(physical, opts.timeoutMs ?? GIT_BRANCH_TIMEOUT_MS));
+  return { kind: "path", path: physical };
+}
+
+/**
+ * Presence walk, then git, both on the physical directory of `dir` (the one
+ * `git -C` changes into). `dir` should be an existing directory; one that
+ * cannot be resolved is an error.
+ */
+export async function readBranch(dir: string, opts: ReadBranchOptions = {}): Promise<BranchRead> {
+  const physical = resolveDirectory(dir);
+  if (physical.kind === "error") return physical;
+  return readBranchAt(physical.path, opts);
 }
