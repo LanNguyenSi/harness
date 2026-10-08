@@ -88,8 +88,8 @@ function buildHooks(runtime: Runtime): Hook[] {
       blocking: "hard",
       // 5000 (task a4d8adc5): the hook's slow parts are node start-up, the
       // manifest load and the git reads, and the hook bounds the git reads
-      // itself (2000 ms per call, 3000 ms for all target directories
-      // together, src/cli/pack/hook-branch-protection.ts), so it answers
+      // itself (2000 ms per call, 3000 ms from the hook's start for all
+      // target directories, src/cli/pack/hook-branch-protection.ts), so it answers
       // well inside this budget. A hook the runtime kills at its budget is
       // read as an allow, which is why the hook's own bound sits below it.
       budget_ms: 5000,

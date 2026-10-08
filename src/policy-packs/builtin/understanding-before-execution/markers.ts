@@ -28,8 +28,8 @@ export interface ApprovalMarker {
   /**
    * sha256 hex of the persisted-report content this approval is bound to
    * at sign-time (harness/f9485cc7). Optional on write (defaults to
-   * `null` — a marker with no report to bind, e.g. `harness approve
-   * branch-protection`, or a ledger-only approval); always present
+   * `null`, for a marker with no report to bind, e.g. a ledger-only
+   * approval); always present
    * (possibly `null`) on a marker `checkApprovalMarker` returns.
    */
   reportContentHash?: string | null;
@@ -82,8 +82,7 @@ function bindingForActiveClaim(generatedDir: string): string | null {
  * can mint an unbound session marker. Only the understanding gate's
  * session-marker reader enforces it, and only outside
  * `approval_lifecycle: { mode: session }` (the field is written in every
- * mode so a later mode change takes effect); the branch-protection marker, which
- * shares this writer under its own id, carries the field unused.
+ * mode so a later mode change takes effect).
  */
 export function writeApprovalMarker(
   generatedDir: string,

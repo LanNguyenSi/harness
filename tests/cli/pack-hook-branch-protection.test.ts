@@ -6,7 +6,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { Readable, Writable } from "node:stream";
+import { PassThrough, Readable, Writable } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildProgram } from "../../src/cli/index.js";
 import { loadManifest } from "../../src/cli/loader.js";
@@ -524,6 +524,26 @@ describe("branch-protection hook: git errors refuse (injected runner)", () => {
     expect(reader.mock.calls[0]![1]).toBeGreaterThan(0);
   });
 
+  it("the bound counts from the hook's start: a slow stdin leaves git no time and the call is refused", async () => {
+    const dir = dirWithGit();
+    const reader = vi.fn<GitHeadReader>(async () => ({ kind: "exited", code: 0, stdout: "refs/heads/feat/x\n", stderr: "" }));
+    const late = new PassThrough();
+    setTimeout(() => late.end(JSON.stringify(writeEvent(dir, path.join(dir, "x.ts")))), 200);
+    const out = capture();
+    const err = capture();
+    const result = await runPackHookBranchProtectionCli({
+      stdin: late,
+      stdout: out.stream,
+      stderr: err.stream,
+      manifest: manifestWithPack(),
+      gitReader: reader,
+      gitDeadlineMs: 150,
+    });
+    expect(result.blocked).toBe(true);
+    expect(result.diagnostic).toMatch(/the hook passed its 150 ms bound/);
+    expect(reader).not.toHaveBeenCalled();
+  });
+
   it("all target directories together are bounded: the rest is refused once the bound has passed", async () => {
     const dirs = [dirWithGit(), dirWithGit(), dirWithGit()];
     const reader = vi.fn<GitHeadReader>(
@@ -537,10 +557,92 @@ describe("branch-protection hook: git errors refuse (injected runner)", () => {
       { gitReader: reader, gitDeadlineMs: 120 },
     );
     expect(run.blocked).toBe(true);
-    expect(run.diagnostic).toMatch(/all target directories together passed the 120 ms bound/);
+    expect(run.diagnostic).toMatch(/the hook passed its 120 ms bound/);
     expect(reader.mock.calls.length).toBeLessThan(3);
     // Each call is bounded by what is left of the shared bound.
     for (const call of reader.mock.calls) expect(call[1]).toBeLessThanOrEqual(120);
+  });
+});
+
+// Every reader outcome against every tool shape, in both runtimes: the
+// verdict depends on the outcome alone, never on the shape, and every error
+// refuses.
+describe("branch-protection hook: the decision table (injected runner)", () => {
+  const branchAnswer = (name: string): GitHeadAnswer => ({ kind: "exited", code: 0, stdout: `refs/heads/${name}\n`, stderr: "" });
+  const OUTCOMES: Array<{ name: string; answer: GitHeadAnswer | "outside"; refuses: boolean }> = [
+    { name: "a protected branch", answer: branchAnswer("main"), refuses: true },
+    { name: "a protected branch in another case", answer: branchAnswer("DEVELOP"), refuses: true },
+    { name: "a non-protected branch", answer: branchAnswer("feat/x"), refuses: false },
+    { name: "a detached HEAD", answer: { kind: "exited", code: 1, stdout: "", stderr: "" }, refuses: false },
+    { name: "a fatal exit", answer: { kind: "exited", code: 128, stdout: "", stderr: "fatal: no\n" }, refuses: true },
+    { name: "exit 1 with output", answer: { kind: "exited", code: 1, stdout: "x\n", stderr: "" }, refuses: true },
+    { name: "an exit-0 answer naming a tag", answer: { kind: "exited", code: 0, stdout: "refs/tags/v1\n", stderr: "" }, refuses: true },
+    { name: "a signal", answer: { kind: "signaled", signal: "SIGKILL", stderr: "" }, refuses: true },
+    { name: "a timeout", answer: { kind: "timed-out", timeoutMs: 2000, stderr: "" }, refuses: true },
+    { name: "output past the cap", answer: { kind: "oversized", stderr: "" }, refuses: true },
+    { name: "git missing", answer: { kind: "spawn-failed", code: "ENOENT" }, refuses: true },
+    { name: "outside every repository", answer: "outside", refuses: false },
+  ];
+  const SHAPES: Array<{ name: string; event: (dir: string) => Record<string, unknown>; dirs: number }> = [
+    { name: "Write", event: (d) => writeEvent(d, path.join(d, "x.ts"), "Write"), dirs: 1 },
+    { name: "Edit", event: (d) => writeEvent(d, path.join(d, "x.ts"), "Edit"), dirs: 1 },
+    { name: "MultiEdit", event: (d) => writeEvent(d, path.join(d, "x.ts"), "MultiEdit"), dirs: 1 },
+    { name: "NotebookEdit", event: (d) => writeEvent(d, path.join(d, "x.ipynb"), "NotebookEdit"), dirs: 1 },
+    { name: "apply_patch without a header", event: (d) => ({ tool_name: "apply_patch", cwd: d, tool_input: { input: "nothing" } }), dirs: 1 },
+    { name: "apply_patch with one header", event: (d) => patchEvent(d, ["*** Add File: a/x.ts"]), dirs: 1 },
+    { name: "apply_patch with several headers", event: (d) => patchEvent(d, ["*** Add File: a/x.ts", "*** Update File: b/y.ts"]), dirs: 2 },
+    { name: "Bash (no target path)", event: (d) => ({ tool_name: "Bash", cwd: d, tool_input: { command: "ls" } }), dirs: 1 },
+  ];
+  const rows = SHAPES.flatMap((shape) => OUTCOMES.map((outcome) => ({ shape, outcome })));
+  // The outside rows need a temporary directory with no `.git` above it;
+  // on a host whose temp directory sits inside a repository they are
+  // skipped visibly.
+  const TMP_HAS_REPO_ABOVE = hasGitEntryAbove(fs.realpathSync(os.tmpdir()));
+
+  describe.each(["claude-code", "codex"])("%s", (runtime) => {
+    const inside = rows.filter((r) => r.outcome.answer !== "outside");
+    const outside = rows.filter((r) => r.outcome.answer === "outside");
+    const runRow = async ({ shape, outcome }: (typeof rows)[number]): Promise<void> => {
+      const dir = tmpDir("harness-bp-table-");
+      fs.mkdirSync(path.join(dir, "a"));
+      fs.mkdirSync(path.join(dir, "b"));
+      if (outcome.answer !== "outside") fs.mkdirSync(path.join(dir, ".git"));
+      const answerFor = outcome.answer;
+      const reader = vi.fn<GitHeadReader>(async () =>
+        answerFor === "outside" ? branchAnswer("master") : answerFor,
+      );
+      const run = await runHook(shape.event(dir), { runtime, gitReader: reader });
+      expect(run.blocked).toBe(outcome.refuses);
+      if (runtime === "codex") {
+        expect(run.exitCode).toBe(outcome.refuses ? 2 : 0);
+        expect(run.stdout).toBe("");
+      } else {
+        expect(run.exitCode).toBe(0);
+        if (outcome.refuses) expect(envelope(run).decision).toBe("block");
+        else expect(run.stdout).toBe("");
+      }
+      if (outcome.answer === "outside") expect(reader).not.toHaveBeenCalled();
+      else expect(reader).toHaveBeenCalledTimes(outcome.refuses ? 1 : shape.dirs);
+    };
+    it.each(inside.map((r) => [`${r.shape.name} x ${r.outcome.name}`, r] as const))("%s", async (_label, row) => runRow(row));
+    describe.skipIf(TMP_HAS_REPO_ABOVE)("outside every repository", () => {
+      it.each(outside.map((r) => [`${r.shape.name} x ${r.outcome.name}`, r] as const))("%s", async (_label, row) => runRow(row));
+    });
+  });
+
+  it.each([
+    ["an error", { kind: "exited", code: 128, stdout: "", stderr: "fatal: no\n" } as GitHeadAnswer],
+    ["a protected branch", branchAnswer("master")],
+  ])("several headers: a later directory with %s refuses after an earlier one passed", async (_name, second) => {
+    const dir = tmpDir("harness-bp-table-");
+    fs.mkdirSync(path.join(dir, ".git"));
+    fs.mkdirSync(path.join(dir, "a"));
+    fs.mkdirSync(path.join(dir, "b"));
+    const reader = vi.fn<GitHeadReader>(async (d) => (d === path.join(dir, "a") ? branchAnswer("feat/x") : second));
+    const run = await runHook(patchEvent(dir, ["*** Add File: a/x.ts", "*** Update File: b/y.ts"]), { gitReader: reader });
+    expect(reader.mock.calls.map((c) => c[0])).toEqual([path.join(dir, "a"), path.join(dir, "b")]);
+    expect(run.blocked).toBe(true);
+    expect(run.diagnostic).toContain(path.join(dir, "b"));
   });
 });
 

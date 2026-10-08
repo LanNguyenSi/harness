@@ -1,5 +1,5 @@
 // `harness session-start toolchain-parity` — SessionStart hook entrypoint,
-// third sibling of `harness session-start preflight` / `branch-check`.
+// sibling of `harness session-start preflight`.
 //
 // Anlass: the 2026-07-22 PATH-shim incident, where a machine ran an entire
 // session unnoticed on Node 22 + understanding-gate 0.4.6 instead of the

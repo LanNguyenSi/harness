@@ -50,6 +50,7 @@ state or override marker.
    `HOME` kept, so your global git configuration applies as it does to
    your own git), and a 2000 ms bound per call after which git is killed.
    All directories of one tool call together are bounded at 3000 ms,
+   counted from the moment the hook starts (the stdin read included), well
    below the hook budget: a hook the runtime kills at its budget would be
    read as an allow.
 
@@ -62,8 +63,8 @@ state or override marker.
 | nothing, because there is no `.git` entry above the directory (outside every repository) | **allowed** | Nothing. |
 
 A detached HEAD (git exits 1 with no output) is allowed as well: an edit
-there does not land on a protected branch by itself, and a push to a
-protected branch is the repository rule's job.
+there does not land on a protected branch by itself, and pushes are
+outside this gate's scope.
 
 A planted layout git does not accept (a broken `HEAD` in a nested
 `.git`, for example) either stops git with an error (refused) or makes

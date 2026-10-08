@@ -51,7 +51,11 @@ import {
   readStdinChecked,
 } from "./hook-bootstrap.js";
 
-/** Bound on all git calls of one event together, in ms. */
+/**
+ * Bound on all git calls of one event together, in ms, counted from the
+ * moment the hook starts (the stdin read and the manifest load included), so
+ * a slow stdin cannot push the git reads past the hook budget.
+ */
 export const GIT_READ_DEADLINE_MS = 3000;
 
 /** The runtimes whose block contract this hook speaks. */
@@ -76,7 +80,7 @@ export interface PackHookBranchProtectionOptions extends LoaderOptions {
   gitReader?: GitHeadReader;
   /** Bound on one git call in ms (test). */
   gitTimeoutMs?: number;
-  /** Bound on all git calls of one event in ms (test). */
+  /** Bound on all git calls of one event, from the hook's start, in ms (test). */
   gitDeadlineMs?: number;
 }
 
@@ -185,6 +189,7 @@ function protectedBranchText(
 export async function runPackHookBranchProtectionCli(
   opts: PackHookBranchProtectionOptions = {},
 ): Promise<PackHookBranchProtectionResult> {
+  const startedAt = Date.now();
   const stdout = opts.stdout ?? process.stdout;
   const stderr = opts.stderr ?? process.stderr;
   const note = (msg: string): void => {
@@ -262,12 +267,12 @@ export async function runPackHookBranchProtectionCli(
   const targets = checkTargets(toolName, event.tool_input, cwd);
   const deadlineMs = opts.gitDeadlineMs ?? GIT_READ_DEADLINE_MS;
   const perCallMs = opts.gitTimeoutMs ?? GIT_BRANCH_TIMEOUT_MS;
-  const deadline = Date.now() + deadlineMs;
+  const deadline = startedAt + deadlineMs;
   const seen: string[] = [];
   for (const dir of targets.dirs) {
     const remaining = deadline - Date.now();
     if (remaining <= 0) {
-      const detail = `the branch of ${dir} was not checked: all target directories together passed the ${deadlineMs} ms bound`;
+      const detail = `the branch of ${dir} was not checked: the hook passed its ${deadlineMs} ms bound`;
       return block(detail, `branch-protection: refusing ${toolName}: git could not report the branch of ${dir} (${detail}).`);
     }
     const branchRead = await readBranch(dir, {

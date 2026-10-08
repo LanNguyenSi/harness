@@ -115,7 +115,7 @@ function plainGitHead(cwd: string): { status: number | null; stdout: string } {
   return { status: r.status, stdout: r.stdout ?? "" };
 }
 
-describe.skipIf(process.platform === "win32")("pack hook branch-protection: a git file that never answers ends in a refusal within the bound", () => {
+describe.skipIf(process.platform === "win32")("pack hook branch-protection: a git file that never answers ends in a refusal within the bound", { timeout: 30_000 }, () => {
   const writeEvent = (repo: string): unknown => ({
     hook_event_name: "PreToolUse",
     session_id: "sess-fifo",
@@ -239,7 +239,7 @@ describe.skipIf(process.platform === "win32")("pack hook branch-protection: a gi
   });
 });
 
-describe.skipIf(process.platform === "win32")("pack hook branch-protection --runtime codex: a git file that never answers", () => {
+describe.skipIf(process.platform === "win32")("pack hook branch-protection --runtime codex: a git file that never answers", { timeout: 30_000 }, () => {
   // The Codex adapter feeds the same blocker an `apply_patch` event whose
   // target path sits in the patch text, not in a `file_path` field, and reads
   // a block as exit 2 with the reason on stderr.

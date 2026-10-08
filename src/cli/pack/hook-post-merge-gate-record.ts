@@ -17,8 +17,7 @@
 // is entirely unresolvable. On a confirmed merge, records a
 // `post-merge-gate:merged:<repo>:<branch>:<sha>` fact (plus PR number and
 // timestamp, audit-only) to the evidence ledger via the same
-// Trusted-Writer path `harness session-start branch-check` /
-// `harness record *` use (`resolveManifestLedgerWriter` /
+// Trusted-Writer path `harness record *` uses (`resolveManifestLedgerWriter` /
 // `addLedgerFact`) — never an agent-issued `ledger_add`.
 //
 // `<sha>` is the LOCAL branch tip observed right after the tool ran:

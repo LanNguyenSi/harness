@@ -235,5 +235,8 @@ describe("harness doctor", () => {
     expect(report.warningCount).toBeGreaterThanOrEqual(2);
     const text = format(report);
     expect(text).toContain("⚠ grounding.policies_source: removed in 1.0.0 and ignored");
+    // Its ux.run still names the removed `harness session-start branch-check`:
+    // reported as drift from the shipped default, which `pack reseed` fixes.
+    expect(report.policyPacks.uxDrift.map((d) => d.name)).toContain("branch-protection");
   });
 });

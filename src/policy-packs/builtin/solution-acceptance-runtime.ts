@@ -59,8 +59,7 @@
 // f9485cc7 made (no unsigned marker satisfies the gate). The RECOVERY shape
 // differs, though: f9485cc7's producer and consumer live in this one repo,
 // so an operator hitting that denial has a local fix (`harness approve
-// understanding` / `harness approve branch-protection`, one command, this
-// release). Here the producer is a separate package on its own release
+// understanding`, one command, this release). Here the producer is a separate package on its own release
 // cadence, so there is NO operator-side command that resolves the denial —
 // re-running `solution_evaluate` today still yields an unsigned verdict.
 // Operators running this pack should expect the completion-gate to deny
@@ -164,7 +163,8 @@ export interface Verdict {
 
 /**
  * Marker-id namespace the verdict's HMAC signature is bound to (mirrors
- * `BRANCH_PROTECTION_MARKER_PREFIX` in branch-protection-runtime.ts): a
+ * the `branch-protection-` prefix of the override markers older releases
+ * wrote): a
  * validly-signed verdict for one id can never be replayed as a validly-
  * signed verdict — or a validly-signed understanding-gate / branch-
  * protection marker — for a different id, because `markerId` is bound into
