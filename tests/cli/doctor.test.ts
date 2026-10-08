@@ -3301,7 +3301,27 @@ ${opts.hooksYaml ?? "hooks: []\n"}${opts.policyPacksYaml ?? ""}policies: []
     expect(format(report)).not.toContain("Hook budget vs ledger timeout margin");
   });
 
-  it("generic over packs: an enabled branch-protection pack is flagged (via doctor) when a raised ledger timeout outgrows its shipped budget", async () => {
+  it("generic over packs: an enabled understanding-before-execution pack is flagged (via doctor) when a raised ledger timeout outgrows its shipped budget", async () => {
+    const home = fixtureWithGroundingMcp({
+      timeoutMs: 10000,
+      policyPacksYaml: `policy_packs:
+  - name: understanding-before-execution
+    source: builtin
+    enabled: true
+`,
+    });
+    const report = await doctor({
+      configPath: path.join(home, "harness.yaml"),
+      homeOverride: home,
+      shallow: true,
+      claudeMcpExec: NO_CLAUDE_CLI,
+    });
+    expect(
+      report.hookBudgetLedgerMargin.errors.some((m) => m.includes("policy-pack:understanding-before-execution")),
+    ).toBe(true);
+  });
+
+  it("an enabled branch-protection pack is not flagged under the same raised ledger timeout (it asks git, task a4d8adc5)", async () => {
     const home = fixtureWithGroundingMcp({
       timeoutMs: 10000,
       policyPacksYaml: `policy_packs:
@@ -3316,9 +3336,7 @@ ${opts.hooksYaml ?? "hooks: []\n"}${opts.policyPacksYaml ?? ""}policies: []
       shallow: true,
       claudeMcpExec: NO_CLAUDE_CLI,
     });
-    expect(
-      report.hookBudgetLedgerMargin.errors.some((m) => m.includes("policy-pack:branch-protection")),
-    ).toBe(true);
+    expect(report.hookBudgetLedgerMargin.errors).toEqual([]);
   });
 });
 

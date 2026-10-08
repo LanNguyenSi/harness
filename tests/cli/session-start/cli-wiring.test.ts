@@ -7,7 +7,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 // asserts what the (stubbed) runner receives.
 const runners = vi.hoisted(() => ({
   preflight: vi.fn(async (..._args: unknown[]) => undefined),
-  branchCheck: vi.fn(async (..._args: unknown[]) => undefined),
   toolchainParity: vi.fn(async (..._args: unknown[]) => undefined),
   staleBase: vi.fn(async (..._args: unknown[]) => undefined),
 }));
@@ -15,10 +14,6 @@ const runners = vi.hoisted(() => ({
 vi.mock("../../../src/cli/session-start/index.js", async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   runSessionStartPreflight: runners.preflight,
-}));
-vi.mock("../../../src/cli/session-start/branch-check.js", async (importOriginal) => ({
-  ...(await importOriginal<Record<string, unknown>>()),
-  runSessionStartBranchCheck: runners.branchCheck,
 }));
 vi.mock("../../../src/cli/session-start/toolchain-parity.js", async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
@@ -44,7 +39,6 @@ beforeEach(() => {
 
 describe("session-start producers receive the command-line options", () => {
   const advisory: Array<[string, keyof typeof runners]> = [
-    ["branch-check", "branchCheck"],
     ["toolchain-parity", "toolchainParity"],
     ["stale-base-check", "staleBase"],
   ];
@@ -69,11 +63,17 @@ describe("session-start producers receive the command-line options", () => {
   });
 
   it("an advisory producer does not call a sibling runner", async () => {
-    await run(["session-start", "branch-check", "--cwd", "/x"]);
-    expect(runners.branchCheck).toHaveBeenCalledTimes(1);
+    await run(["session-start", "stale-base-check", "--cwd", "/x"]);
+    expect(runners.staleBase).toHaveBeenCalledTimes(1);
     expect(runners.toolchainParity).not.toHaveBeenCalled();
-    expect(runners.staleBase).not.toHaveBeenCalled();
     expect(runners.preflight).not.toHaveBeenCalled();
+  });
+
+  it("`session-start branch-check` is no longer a command (task a4d8adc5)", async () => {
+    const program = buildProgram({ stdout: () => {}, stderr: () => {} });
+    const sessionStart = program.commands.find((c) => c.name() === "session-start");
+    expect(sessionStart).toBeDefined();
+    expect(sessionStart!.commands.map((c) => c.name())).not.toContain("branch-check");
   });
 });
 

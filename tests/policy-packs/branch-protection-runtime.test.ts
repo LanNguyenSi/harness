@@ -1,12 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { parseManifest } from "../../src/schema/index.js";
+import * as runtime from "../../src/policy-packs/builtin/branch-protection-runtime.js";
 import {
-  ACK_TAG_PREFIX,
   DEFAULT_PROTECTED_BRANCHES,
   isProtectedBranch,
-  NON_PROTECTED_TAG_PREFIX,
   PACK_NAME,
-  PRODUCER_FRESHNESS_MS,
   resolveProtectedBranches,
 } from "../../src/policy-packs/builtin/branch-protection-runtime.js";
 
@@ -21,14 +19,17 @@ function buildPack(config: Record<string, unknown> = {}): ReturnType<typeof pars
 }
 
 describe("constants", () => {
-  it("exposes the canonical tag prefixes and pack name", () => {
+  it("exposes the pack name", () => {
     expect(PACK_NAME).toBe("branch-protection");
-    expect(NON_PROTECTED_TAG_PREFIX).toBe("branch:non-protected");
-    expect(ACK_TAG_PREFIX).toBe("branch-protection-ack");
   });
 
-  it("uses a 5-minute freshness window", () => {
-    expect(PRODUCER_FRESHNESS_MS).toBe(5 * 60 * 1000);
+  it("exports no producer tag, ledger tag, freshness window or override marker (task a4d8adc5)", () => {
+    expect(Object.keys(runtime).sort()).toEqual([
+      "DEFAULT_PROTECTED_BRANCHES",
+      "PACK_NAME",
+      "isProtectedBranch",
+      "resolveProtectedBranches",
+    ]);
   });
 
   it("defaults protected_branches to master/main/develop", () => {
@@ -82,14 +83,20 @@ describe("isProtectedBranch", () => {
     expect(isProtectedBranch("main", list)).toBe(true);
   });
 
+  it("compares case-insensitively, in both directions", () => {
+    expect(isProtectedBranch("Master", list)).toBe(true);
+    expect(isProtectedBranch("MAIN", list)).toBe(true);
+    expect(isProtectedBranch("main", ["MAIN"])).toBe(true);
+  });
+
   it("returns false for a feature branch", () => {
     expect(isProtectedBranch("feat/cool-thing", list)).toBe(false);
     expect(isProtectedBranch("develop", list)).toBe(false);
+    expect(isProtectedBranch("master2", list)).toBe(false);
+    expect(isProtectedBranch("feat/master", list)).toBe(false);
   });
 
-  it("treats an empty branch (detached HEAD) as protected", () => {
-    // We can't audit-by-name what the agent is about to commit; refuse
-    // to declare it safe.
-    expect(isProtectedBranch("", list)).toBe(true);
+  it("an empty name matches nothing (the hook never passes one: a detached HEAD is its own outcome)", () => {
+    expect(isProtectedBranch("", list)).toBe(false);
   });
 });

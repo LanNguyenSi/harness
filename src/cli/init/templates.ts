@@ -75,8 +75,6 @@ grounding:
     id_format: "gs-{repo}-{rand:8}"
   evidence_ledger:
     path: ~/.evidence-ledger/ledger.db
-    retention_days: 90
-  policies_source: ~/.claude/harness.d/policies/claim-gate.yaml
 
 tools:
   mcp:
@@ -1048,35 +1046,32 @@ policy_packs:
 ${AUTO_APPROVE_SNIPPET}
 
   # branch-protection (agent-tasks/2fdc5bbe, default-enabled since v0.17.2):
-  # blocks Write/Edit (claude-code) or apply_patch (codex) on protected
-  # branches (default: master, main, develop). Complements
-  # preflight-before-push, which fires at the LAST reversible step;
-  # branch-protection fires at the FIRST source mutation, catching the
-  # \"forgot to branch off master\" pattern earlier in the cycle.
+  # blocks Write/Edit (claude-code) or apply_patch (codex) when git names a
+  # protected branch (default: master, main, develop) for the directory the
+  # call writes into. Complements preflight-before-push, which fires at the
+  # LAST reversible step; branch-protection fires at the FIRST source
+  # mutation, catching the \"forgot to branch off master\" pattern earlier
+  # in the cycle.
   #
-  # Two satisfying signals: a fresh \`branch:non-protected:<branch>\` tag
-  # from the SessionStart producer (\`harness session-start branch-check\`),
-  # or the operator-only override marker written by
-  # \`harness approve branch-protection --session <id>\` for deliberate
-  # protected-branch edits (version bumps, CI workflow patches, hotfixes).
-  # A branch-protection-ack ledger tag is no longer a sufficient override
-  # on its own (it is agent-writable); the marker file is the trusted signal.
+  # The hook asks git (\`git -C <dir> symbolic-ref -q HEAD\`) on every call;
+  # the way forward for the agent is a feature branch
+  # (\`git checkout -b <feature>\`). Fails closed: a manifest that does not
+  # load or a git that cannot answer refuses the call. Outside a repository
+  # and on a detached HEAD the call is allowed.
   #
-  # Fails closed (any load / parse / ledger error refuses). Disable by
-  # setting \`enabled: false\` or removing this entry if your workflow
-  # routinely edits master directly. Override the protected list via
-  # \`config.protected_branches\`. Full reference:
+  # Disable by setting \`enabled: false\` or removing this entry if your
+  # workflow routinely edits master directly. Override the protected list
+  # via \`config.protected_branches\`. Full reference:
   # docs/policy-packs/branch-protection.md.
   - name: branch-protection
     source: builtin
     enabled: true
     description: Block Write/Edit on protected branches (master, main, develop) at the first source mutation.
     config:
-      # ux (agent-tasks/9806d4f8): replaces the legacy
-      # "branch-protection: refusing ..." envelope with the
-      # plain-language { cannot, required, run } shape. Engine details
-      # (the BLOCK reason naming session id / freshness window) stay
-      # on stderr for operator audit.
+      # ux (agent-tasks/9806d4f8): replaces the default
+      # "branch-protection: refusing ..." text with the plain-language
+      # { cannot, required, run } shape. Engine details (the directory
+      # git was asked about) stay on stderr for operator audit.
       #
       # KEEP IN SYNC (task 68b9ad9c): this text must match defaultUx() in
       # src/policy-packs/builtin/branch-protection.ts — see the identical
@@ -1088,7 +1083,6 @@ ${AUTO_APPROVE_SNIPPET}
           - "a checkout of a non-protected branch (current \`\${BRANCH}\` is protected)"
         run:
           - "git checkout -b feat/<your-task>"
-          - "harness session-start branch-check"
 
   # solution-acceptance (harness cc43c7a4): Verifier-gated Done. Gates the
   # task-finishing tools (agent-tasks completion verbs + git push / gh pr

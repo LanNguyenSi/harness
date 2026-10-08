@@ -14,6 +14,7 @@ import { SessionStartPreflightSchema } from "./session-start-preflight.js";
 import { AuditSchema } from "./audit.js";
 import { DoctorSchema } from "./doctor.js";
 import { ReviewTemplatesSchema, WorkflowsSchema } from "./workflows.js";
+import { stripRemovedManifestEntries, type ManifestPostureWarning } from "./removed-keys.js";
 
 export const SUPPORTED_MANIFEST_VERSION = 1;
 
@@ -123,8 +124,21 @@ function friendlyVersionIssues(issues: z.ZodIssue[], raw: unknown): z.ZodIssue[]
   });
 }
 
-export function parseManifest(raw: unknown): Manifest {
-  const result = ManifestSchema.safeParse(raw);
+export interface ParsedManifest {
+  manifest: Manifest;
+  /** Removed keys and removed packs that were stripped before the parse. */
+  warnings: ManifestPostureWarning[];
+}
+
+/**
+ * Parse a raw manifest, first stripping every removed manifest path and
+ * removed pack name (`src/schema/removed-keys.ts`): those warn and are
+ * ignored instead of failing the strict parse. Any other unknown key still
+ * fails it.
+ */
+export function parseManifestWithWarnings(raw: unknown): ParsedManifest {
+  const stripped = stripRemovedManifestEntries(raw);
+  const result = ManifestSchema.safeParse(stripped.raw);
   if (!result.success) {
     const issues = friendlyVersionIssues(result.error.issues, raw);
     const summary = issues
@@ -135,7 +149,12 @@ export function parseManifest(raw: unknown): Manifest {
       issues,
     );
   }
-  return result.data;
+  return { manifest: result.data, warnings: stripped.warnings };
+}
+
+/** `parseManifestWithWarnings` for callers that do not report the warnings. */
+export function parseManifest(raw: unknown): Manifest {
+  return parseManifestWithWarnings(raw).manifest;
 }
 
 export * from "./grounding.js";
@@ -153,3 +172,4 @@ export * from "./audit.js";
 export * from "./doctor.js";
 export * from "./extract.js";
 export * from "./requires.js";
+export * from "./removed-keys.js";

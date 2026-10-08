@@ -106,8 +106,11 @@ describe("parseManifest — happy path", () => {
   it("applies defaults when optional sections are omitted", () => {
     const m = parseManifest({ version: 1 });
     expect(m.grounding.session.auto_start).toBe(true);
-    expect(m.grounding.evidence_ledger.retention_days).toBe(90);
-    expect(m.grounding.policies_source).toBeNull();
+    expect(m.grounding.evidence_ledger.path).toBe("~/.evidence-ledger/ledger.db");
+    // Removed in task a4d8adc5 (reserved keys without a consumer): no
+    // default is filled in any more.
+    expect(m.grounding.evidence_ledger).not.toHaveProperty("retention_days");
+    expect(m.grounding).not.toHaveProperty("policies_source");
     expect(m.tools.mcp).toEqual([]);
     expect(m.tools.builtin.known).toEqual([]);
     expect(m.memory.retention.staleness_days).toBe(180);

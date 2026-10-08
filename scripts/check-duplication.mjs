@@ -246,7 +246,11 @@ import * as path from "node:path";
 // `hook-bootstrap.ts` <-> `cli/policy/intercept.ts` pair named above is gone
 // too); all five session-start and intercept entries now share
 // src/cli/bounded-stdin.ts. The check reported 93 on master and 91 after.
-const MAX_CLONES = 91;
+// Lowered to 82 (task a4d8adc5): the branch-protection rewrite deleted the
+// `session-start branch-check` producer and the `approve branch-protection`
+// verb and dropped the ledger probe from `hook-branch-protection.ts`. The
+// check reports 82 with that change (the pin was 91).
+const MAX_CLONES = 82;
 
 // Sets process.exitCode instead of calling process.exit so the caller's
 // finally-cleanup runs on every path (process.exit skips stack unwinding).

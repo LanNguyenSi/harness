@@ -162,8 +162,8 @@ export const ESCAPE_GIT_BASH_RE =
 
 /**
  * Escape allowlist, harness verbs (03-decisions.md): names any invocation
- * of harness's own CLI (recovery commands like `harness session-start
- * branch-check`, diagnostics, a future self-check), regardless of
+ * of harness's own CLI (recovery commands, diagnostics, a future
+ * self-check), regardless of
  * spelling — mirrors the `npx` / absolute-path / `./node_modules/.bin`
  * robustness the `deny-kill-switch-bash` regex in
  * `src/cli/init/templates.ts` already established for the same class of

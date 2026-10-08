@@ -7,7 +7,12 @@ import {
   resolveMachineDiscriminators,
   type DiscriminatorOptions,
 } from "../overrides/machines.js";
-import { ManifestParseError, parseManifest, type Manifest } from "../schema/index.js";
+import {
+  ManifestParseError,
+  parseManifestWithWarnings,
+  type Manifest,
+  type ManifestPostureWarning,
+} from "../schema/index.js";
 import { readTextFileBoundedOrThrow } from "../io/read-regular-file.js";
 import { resolveHomeDir } from "../runtime/home-dir.js";
 import { isValidProjectName } from "../runtime/git-context.js";
@@ -30,6 +35,11 @@ export interface ResolvedPaths {
 export interface LoadedManifest {
   manifest: Manifest;
   resolved: ResolvedPaths;
+  /**
+   * Removed manifest keys and removed packs the load stripped and ignored
+   * (src/schema/removed-keys.ts). `harness doctor` prints them.
+   */
+  warnings: ManifestPostureWarning[];
 }
 
 export interface LoadedRaw {
@@ -166,8 +176,9 @@ export function loadMergedRaw(opts: LoaderOptions = {}): LoadedRaw {
 export function loadManifest(opts: LoaderOptions = {}): LoadedManifest {
   const { mergedRaw, resolved } = loadMergedRaw(opts);
   let manifest: Manifest;
+  let warnings: ManifestPostureWarning[];
   try {
-    manifest = parseManifest(mergedRaw);
+    ({ manifest, warnings } = parseManifestWithWarnings(mergedRaw));
   } catch (err) {
     if (err instanceof ManifestParseError) {
       throw new HarnessExitError(err.message, EX_NOINPUT);
@@ -190,5 +201,5 @@ export function loadManifest(opts: LoaderOptions = {}): LoadedManifest {
   // direction (missing hooks -> no policy derived, not a silent allow).
   manifest = withDerivedPolicies(manifest);
 
-  return { manifest, resolved };
+  return { manifest, resolved, warnings };
 }

@@ -1,6 +1,6 @@
 // `harness session-start stale-base-check` — SessionStart hook
-// entrypoint, fourth sibling of `harness session-start preflight` /
-// `branch-check` / `toolchain-parity`.
+// entrypoint, sibling of `harness session-start preflight` /
+// `toolchain-parity`.
 //
 // Incident (task ea8becf5): a task branch was cut from a local `master`
 // that had not been fetched in 4 days. The v0.42.0 release had already

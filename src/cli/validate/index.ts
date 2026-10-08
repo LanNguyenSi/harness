@@ -1,5 +1,9 @@
 import * as path from "node:path";
-import { ManifestParseError, parseManifest, type Manifest } from "../../schema/index.js";
+import {
+  ManifestParseError,
+  parseManifestWithWarnings,
+  type Manifest,
+} from "../../schema/index.js";
 import { LOCK_BASENAME, readLock } from "../../io/harness-lock.js";
 import { withDerivedPolicies } from "../../runtime/workflow-policies.js";
 import { diffAssets } from "../diff/since-apply.js";
@@ -40,7 +44,17 @@ export function validate(opts: ValidateOptions = {}): ValidateResult {
   let manifest: Manifest | null = null;
   let diagnostics: Diagnostic[] = [];
   try {
-    manifest = parseManifest(mergedRaw);
+    const parsed = parseManifestWithWarnings(mergedRaw);
+    manifest = parsed.manifest;
+    // Removed keys and removed packs load as warnings (and as errors under
+    // --strict below), never as a parse failure: src/schema/removed-keys.ts.
+    diagnostics.push(
+      ...parsed.warnings.map((w): Diagnostic => ({
+        severity: "warning",
+        path: w.path,
+        message: w.message,
+      })),
+    );
   } catch (err) {
     if (err instanceof ManifestParseError) {
       diagnostics = fromZodIssues(err);

@@ -6,6 +6,7 @@
 // test pairs pause + bash-event-through-hook + resume + bash-event-through-
 // hook for at least one of the standard PreToolUse hooks."
 
+import { execFileSync } from "node:child_process";
 import { Readable, Writable } from "node:stream";
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -404,8 +405,11 @@ describe("pause → policy intercept hook → resume", () => {
   });
 });
 
-describe("pause → branch-protection hook → resume", () => {
-  it("yields branch-protection while paused, re-engages it after resume", async () => {
+describe("pause → branch-protection hook", () => {
+  // branch-protection no longer yields to the operator pause (task
+  // a4d8adc5): the kept gate is switched off from an operator shell with
+  // `harness gate disable`, never by a sentinel the hook reads.
+  it("does not yield to an active pause: a Write on a protected branch is still refused", async () => {
     await pause({
       manifest: manifestWithBranchProtection(),
       generatedDir,
@@ -415,28 +419,33 @@ describe("pause → branch-protection hook → resume", () => {
       reason: "incident hotfix",
       ledgerAdd: async () => ({ ok: true }),
     });
+    expect(fs.existsSync(sentinelPath(generatedDir))).toBe(true);
+
+    const repo = path.join(tmp, "repo");
+    fs.mkdirSync(repo);
+    const gitEnv: NodeJS.ProcessEnv = { ...process.env };
+    for (const k of Object.keys(gitEnv)) if (k.startsWith("GIT_")) delete gitEnv[k];
+    Object.assign(gitEnv, { GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" });
+    execFileSync("git", ["-c", "init.defaultBranch=master", "init", "-q"], { cwd: repo, env: gitEnv, stdio: "ignore" });
 
     const stdoutA = bufferStream();
     const stderrA = bufferStream();
     const writeEvent = JSON.stringify({
       session_id: "sess-int",
       tool_name: "Write",
-      tool_input: { file_path: path.join(tmp, "writeme.txt") },
-      cwd: tmp,
+      tool_input: { file_path: path.join(repo, "writeme.txt") },
+      cwd: repo,
     });
     const resA = await runPackHookBranchProtectionCli({
       manifest: manifestWithBranchProtection(),
       stdin: readableFromString(writeEvent),
       stdout: stdoutA.stream,
       stderr: stderrA.stream,
-      cwd: tmp,
-      ledgerQuery: async (): Promise<LedgerEntry[]> => [],
-      // Override the configPath so resolvePaths picks up our tmp tree
-      // for the pause sentinel lookup.
       configPath: path.join(tmp, "harness.yaml"),
     });
     expect(resA.exitCode).toBe(0);
-    expect(resA.blocked).toBe(false);
-    expect(stderrA.read()).toContain("PAUSED");
+    expect(resA.blocked).toBe(true);
+    expect(stdoutA.read()).toContain('"decision":"block"');
+    expect(stderrA.read()).not.toContain("PAUSED");
   });
 });

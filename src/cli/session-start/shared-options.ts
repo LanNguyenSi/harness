@@ -1,5 +1,5 @@
 // Shared plumbing for the `harness session-start` producers
-// (preflight, branch-check, toolchain-parity, stale-base-check) and the
+// (preflight, toolchain-parity, stale-base-check) and the
 // top-level `preflight` alias: the SessionStart event type, the stdin
 // read, the cwd and session-source resolution, the options every
 // producer takes, and the commander options every subcommand declares.

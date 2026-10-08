@@ -217,9 +217,11 @@ tools:
   mcp: []
 `;
 
+  // A scalar override; `grounding.evidence_ledger.path` replaced the removed
+  // `retention_days` key here (task a4d8adc5), same merge semantics.
   const overrideLayer = `grounding:
   evidence_ledger:
-    retention_days: 30
+    path: /machine/ledger-30.db
 `;
 
   function writeAt(dir: string, rel: string, contents: string): void {
@@ -242,8 +244,8 @@ tools:
     expect(r.changes).toEqual([]);
     expect(r.warnings).toEqual([]);
     // Sanity: the override actually took effect on both sides.
-    expect(r.before.grounding.evidence_ledger.retention_days).toBe(30);
-    expect(r.after.grounding.evidence_ledger.retention_days).toBe(30);
+    expect(r.before.grounding.evidence_ledger.path).toBe("/machine/ledger-30.db");
+    expect(r.after.grounding.evidence_ledger.path).toBe("/machine/ledger-30.db");
   });
 
   it("recognizes a committed override layer through a symlinked home as versioned", () => {
@@ -268,7 +270,7 @@ tools:
     });
     expect(r.changes).toEqual([]);
     expect(r.warnings).toEqual([]);
-    expect(r.after.grounding.evidence_ledger.retention_days).toBe(30);
+    expect(r.after.grounding.evidence_ledger.path).toBe("/machine/ledger-30.db");
   });
 
   it("still reports a genuine base change while an override layer is active", () => {
@@ -306,7 +308,7 @@ tools:
       homeDir: repo,
       discriminator: DISCRIMINATOR,
     });
-    expect(r.changes.map((c) => c.path)).toContain("grounding.evidence_ledger.retention_days");
+    expect(r.changes.map((c) => c.path)).toContain("grounding.evidence_ledger.path");
     expect(r.warnings).toEqual([]);
   });
 
@@ -328,18 +330,18 @@ tools:
     expect(r.warnings).toHaveLength(1);
     expect(r.warnings[0]).toContain("not versioned in this repo");
     // Constant on both sides: the override applies to before AND after.
-    expect(r.before.grounding.evidence_ledger.retention_days).toBe(30);
-    expect(r.after.grounding.evidence_ledger.retention_days).toBe(30);
+    expect(r.before.grounding.evidence_ledger.path).toBe("/machine/ledger-30.db");
+    expect(r.after.grounding.evidence_ledger.path).toBe("/machine/ledger-30.db");
   });
 
   it("applies machine and project layers in loader order on BOTH sides (project wins)", () => {
     const repo = newRepo();
     writeAt(repo, "harness.yaml", plainBase);
-    writeAt(repo, "machines/h.harness.overrides.yaml", overrideLayer); // 30
+    writeAt(repo, "machines/h.harness.overrides.yaml", overrideLayer); // ledger-30
     writeAt(
       repo,
       "projects/p/harness.overrides.yaml",
-      "grounding:\n  evidence_ledger:\n    retention_days: 45\n",
+      "grounding:\n  evidence_ledger:\n    path: /project/ledger-45.db\n",
     );
     gitCommit(repo, "base + both layers");
     const r = diff({
@@ -351,9 +353,10 @@ tools:
     });
     expect(r.changes).toEqual([]);
     // Last-wins order (machine, then project) must match loadManifest on
-    // the ref side too — an order swap in buildRefManifest flips this to 30.
-    expect(r.before.grounding.evidence_ledger.retention_days).toBe(45);
-    expect(r.after.grounding.evidence_ledger.retention_days).toBe(45);
+    // the ref side too: an order swap in buildRefManifest flips this to the
+    // machine layer's ledger-30.
+    expect(r.before.grounding.evidence_ledger.path).toBe("/project/ledger-45.db");
+    expect(r.after.grounding.evidence_ledger.path).toBe("/project/ledger-45.db");
   });
 
   it("scopes a ref-side override merge conflict to the ref in a clean error", () => {

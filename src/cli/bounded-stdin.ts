@@ -1,5 +1,5 @@
 // One idle-bounded stdin reader shared by every hook-style CLI entry that
-// parses an event JSON from stdin (session-start preflight, branch-check,
+// parses an event JSON from stdin (session-start preflight,
 // stale-base-check, toolchain-parity, policy intercept, and the pack hook
 // readers: `readStdin` / `readStdinChecked` in pack/hook-bootstrap.ts and the
 // runtime-reality reader in pack/hook-runtime-reality.ts). It also holds the

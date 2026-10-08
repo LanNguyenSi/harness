@@ -60,9 +60,9 @@ describe("understanding-before-execution.defaultProducers", () => {
 });
 
 describe("branch-protection.defaultUx", () => {
-  it("teaches the branch-check recovery command", () => {
+  it("teaches branching off as the only recovery command (task a4d8adc5: the session-start producer is gone)", () => {
     const ux = branchProtectionDefaultUx();
-    expect(ux.run).toContain("harness session-start branch-check");
+    expect(ux.run).toEqual(["git checkout -b feat/<your-task>"]);
   });
 });
 

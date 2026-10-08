@@ -59,7 +59,7 @@ export const COMPOSABLE_PACKS: ReadonlyArray<ComposableOption<CustomPackKey>> = 
     key: "branch-protection",
     label: "branch-protection",
     description:
-      "Block Write/Edit (claude-code) or apply_patch (codex) on protected branches (master, main, develop) at the first source mutation. Complements preflight-before-push at the LAST step. Two satisfying signals: a SessionStart `branch-check` tag, or the operator-only override marker written by `harness approve branch-protection`.",
+      "Block Write/Edit (claude-code) or apply_patch (codex) when git names a protected branch (master, main, develop) for the target, at the first source mutation. Complements preflight-before-push at the LAST step. The way forward is a feature branch (`git checkout -b <feature>`).",
   },
 ];
 
@@ -515,7 +515,7 @@ export function composeCustom(sel: CustomSelection): ComposeResult {
     version: 1,
     grounding: {
       session: { auto_start: true, id_format: "gs-{repo}-{rand:8}" },
-      evidence_ledger: { path: "~/.evidence-ledger/ledger.db", retention_days: 90 },
+      evidence_ledger: { path: "~/.evidence-ledger/ledger.db" },
     },
     tools: {
       builtin: {

@@ -101,7 +101,7 @@
 //
 // KEY STORAGE: `<generatedDir>/.approval-signing.key` — a raw 32-byte
 // secret, mode 0600, generated lazily on first use (by `harness approve
-// understanding` / `harness approve branch-protection`, or by `harness
+// understanding`, or by `harness
 // init` — see src/cli/init/index.ts; NEVER by the PreToolUse hook's auto
 // path, which prechecks that the key exists and blocks when it does not). Colocated with `harness.generated/`
 // (not a separate home-dir path) so:
@@ -126,7 +126,7 @@
 //
 // ROTATION: delete `<generatedDir>/.approval-signing.key` (or call
 // `rotateSigningKey`). The next `writeApprovalMarker` /
-// `writeBranchProtectionMarker` / any signature check lazily regenerates
+// any signature check lazily regenerates
 // it. Every marker signed under the OLD key immediately fails verification
 // (forged:true) and the gate demands re-approval — this is the intended,
 // documented blast radius of a rotation, not a bug.
