@@ -12,7 +12,7 @@ import { buildProgram } from "../../src/cli/index.js";
 import { loadManifest } from "../../src/cli/loader.js";
 import { GIT_READ_DEADLINE_MS, runPackHookBranchProtectionCli } from "../../src/cli/pack/hook-branch-protection.js";
 import { defaultUx } from "../../src/policy-packs/builtin/branch-protection.js";
-import { hasGitEntryAbove, type GitHeadAnswer, type GitHeadReader } from "../../src/runtime/git-branch.js";
+import { hasGitEntryAbove, readBranch, readBranchAt, readGitHead, type GitHeadAnswer, type GitHeadReader } from "../../src/runtime/git-branch.js";
 import { parseManifest, type Manifest } from "../../src/schema/index.js";
 
 const GIT_AVAILABLE = spawnSync("git", ["--version"], { stdio: "ignore" }).status === 0;
@@ -1178,5 +1178,250 @@ describe.skipIf(!GIT_AVAILABLE)("branch-protection hook: block contract per runt
     expect(envelope(claude).reason).toMatch(/the event on stdin is not a JSON object/);
     const codex = await runHook(raw, { runtime: "codex" });
     expect(codex).toMatchObject({ exitCode: 2, blocked: true, stdout: "" });
+  });
+});
+
+// Each input of each judgment, pinned on its own: in every row below exactly
+// one of the two judgments refuses and the other allows, so the verdict rests
+// on that one judgment and that one input. Two links make a path name one
+// checkout as written and the other physically: `<checkout on master>/lnk`
+// leads into a feature checkout (so `<checkout on master>/lnk/..` is the
+// checkout on master as written and the feature checkout physically), and
+// `<feature checkout>/lnk` leads into the checkout on master (the other way
+// round). Each row first asks git, run plainly in every directory of both
+// judgments, what it answers there, so the row shows which judgment refuses
+// and that the other one allows; then it runs the hook.
+describe.skipIf(!GIT_AVAILABLE || process.platform === "win32")("branch-protection hook: rows where exactly one judgment refuses, real git", () => {
+  interface Layout {
+    /** A checkout on master; `lnk` in it leads to `<feat>/sub`. */
+    prot: string;
+    /** A checkout on feat/x; `lnk` in it leads to `<prot>/src`, `link.ts` and `link.ipynb` to files there. */
+    feat: string;
+  }
+  const layout = (): Layout => {
+    const prot = makeRepo("master");
+    const feat = makeRepo("feat/x");
+    fs.mkdirSync(path.join(prot, "src"));
+    fs.writeFileSync(path.join(prot, "src", "real.ts"), "x\n");
+    fs.writeFileSync(path.join(prot, "src", "real.ipynb"), "{}\n");
+    fs.mkdirSync(path.join(feat, "sub"));
+    fs.symlinkSync(path.join(feat, "sub"), path.join(prot, "lnk"));
+    fs.symlinkSync(path.join(prot, "src"), path.join(feat, "lnk"));
+    fs.symlinkSync(path.join(prot, "src", "real.ts"), path.join(feat, "link.ts"));
+    fs.symlinkSync(path.join(prot, "src", "real.ipynb"), path.join(feat, "link.ipynb"));
+    return { prot, feat };
+  };
+
+  type Judgment = "as written" | "physically";
+  interface Row {
+    name: string;
+    refuses: Judgment;
+    event: (l: Layout) => Record<string, unknown>;
+    /** The directories the as-written judgment asks git about. */
+    asWritten: (l: Layout) => string[];
+    /** The directories the physical judgment asks git about. */
+    physical: (l: Layout) => string[];
+    /** The directory the refusal names. */
+    refusedIn: (l: Layout) => string;
+  }
+  /** Refused as written in the checkout on master, allowed physically in the feature checkout. */
+  const asWrittenRow = (name: string, event: Row["event"]): Row => ({
+    name,
+    refuses: "as written",
+    event,
+    asWritten: (l) => [l.prot],
+    physical: (l) => [l.feat],
+    refusedIn: (l) => l.prot,
+  });
+  /** Allowed as written in the feature checkout, refused physically in `refusedIn`. */
+  const physicalRow = (name: string, event: Row["event"], physical: Row["physical"], refusedIn: Row["refusedIn"]): Row => ({
+    name,
+    refuses: "physically",
+    event,
+    asWritten: (l) => [l.feat],
+    physical,
+    refusedIn,
+  });
+  const apply = (cwd: string, extra: Record<string, unknown>): Record<string, unknown> => ({
+    hook_event_name: "PreToolUse",
+    session_id: "sess-1",
+    tool_name: "apply_patch",
+    cwd,
+    ...extra,
+  });
+  /** `<checkout on master>/lnk/../<name>`: the checkout on master as written, the feature checkout physically. */
+  const viaProt = (l: Layout, name: string): string => `${l.prot}/lnk/../${name}`;
+  /** `<feature checkout>/lnk/../<name>`: the feature checkout as written, the checkout on master physically. */
+  const viaFeat = (l: Layout, name: string): string => `${l.feat}/lnk/../${name}`;
+  /** A patch whose one header names `<checkout on master>/x.ts`. */
+  const intoProt = (l: Layout): string => patchText([`*** Update File: ${path.join(l.prot, "x.ts")}`]);
+  const onlyProt = (l: Layout): string[] => [l.prot];
+  const featAndProtSrc = (l: Layout): string[] => [l.feat, path.join(l.prot, "src")];
+  const protSrc = (l: Layout): string => path.join(l.prot, "src");
+
+  const ROWS: Row[] = [
+    // Refused as written, allowed physically.
+    asWrittenRow("a Write to <checkout on master>/lnk/../f.ts from a feature-branch cwd is refused", (l) => writeEvent(l.feat, viaProt(l, "f.ts"), "Write")),
+    asWrittenRow("an Edit of <checkout on master>/lnk/../f.ts from a feature-branch cwd is refused", (l) => writeEvent(l.feat, viaProt(l, "f.ts"), "Edit")),
+    asWrittenRow("a MultiEdit of <checkout on master>/lnk/../f.ts from a feature-branch cwd is refused", (l) => writeEvent(l.feat, viaProt(l, "f.ts"), "MultiEdit")),
+    asWrittenRow("a NotebookEdit of <checkout on master>/lnk/../n.ipynb from a feature-branch cwd is refused", (l) => writeEvent(l.feat, viaProt(l, "n.ipynb"), "NotebookEdit")),
+    asWrittenRow("an apply_patch header <checkout on master>/lnk/../p.ts in tool_input.patch, from a feature-branch cwd, is refused", (l) => patchEvent(l.feat, [`*** Add File: ${viaProt(l, "p.ts")}`], "patch")),
+    asWrittenRow("an apply_patch header <checkout on master>/lnk/../p.ts in tool_input.input, from a feature-branch cwd, is refused", (l) => patchEvent(l.feat, [`*** Add File: ${viaProt(l, "p.ts")}`], "input")),
+    asWrittenRow("an apply_patch header <checkout on master>/lnk/../p.ts in a string tool_input, from a feature-branch cwd, is refused", (l) => patchEvent(l.feat, [`*** Add File: ${viaProt(l, "p.ts")}`], "string")),
+    asWrittenRow("a tool without a target path from the event cwd <checkout on master>/lnk/.. is refused", (l) => ({ tool_name: "Bash", cwd: `${l.prot}/lnk/..`, tool_input: { command: "ls" } })),
+    asWrittenRow("an apply_patch without a header from the event cwd <checkout on master>/lnk/.. is refused", (l) => apply(`${l.prot}/lnk/..`, { tool_input: { input: "no headers here" } })),
+    asWrittenRow("an apply_patch whose header into the feature checkout sits in tool_input.command, from the event cwd <checkout on master>/lnk/.., is refused", (l) => apply(`${l.prot}/lnk/..`, { tool_input: { command: patchText([`*** Update File: ${path.join(l.feat, "x.ts")}`]) } })),
+    // Allowed as written, refused physically.
+    physicalRow("a Write to <feature checkout>/lnk/../f.ts is refused", (l) => writeEvent(l.feat, viaFeat(l, "f.ts"), "Write"), onlyProt, (l) => l.prot),
+    physicalRow("an Edit of <feature checkout>/lnk/../f.ts is refused", (l) => writeEvent(l.feat, viaFeat(l, "f.ts"), "Edit"), onlyProt, (l) => l.prot),
+    physicalRow("a MultiEdit of <feature checkout>/lnk/../f.ts is refused", (l) => writeEvent(l.feat, viaFeat(l, "f.ts"), "MultiEdit"), onlyProt, (l) => l.prot),
+    physicalRow("a NotebookEdit of <feature checkout>/lnk/../n.ipynb is refused", (l) => writeEvent(l.feat, viaFeat(l, "n.ipynb"), "NotebookEdit"), onlyProt, (l) => l.prot),
+    physicalRow("a Write to a file symlink in the feature checkout leading into the checkout on master is refused", (l) => writeEvent(l.feat, path.join(l.feat, "link.ts"), "Write"), featAndProtSrc, protSrc),
+    physicalRow("an Edit of a file symlink in the feature checkout leading into the checkout on master is refused", (l) => writeEvent(l.feat, path.join(l.feat, "link.ts"), "Edit"), featAndProtSrc, protSrc),
+    physicalRow("a MultiEdit of a file symlink in the feature checkout leading into the checkout on master is refused", (l) => writeEvent(l.feat, path.join(l.feat, "link.ts"), "MultiEdit"), featAndProtSrc, protSrc),
+    physicalRow("a NotebookEdit of a notebook symlink in the feature checkout leading into the checkout on master is refused", (l) => writeEvent(l.feat, path.join(l.feat, "link.ipynb"), "NotebookEdit"), featAndProtSrc, protSrc),
+    physicalRow("an apply_patch header into the checkout on master in tool_input.command, from a feature-branch cwd, is refused", (l) => apply(l.feat, { tool_input: { command: intoProt(l) } }), onlyProt, (l) => l.prot),
+    physicalRow("an apply_patch header into the checkout on master in a tool_input.command argv array, from a feature-branch cwd, is refused", (l) => apply(l.feat, { tool_input: { command: ["apply_patch", intoProt(l)] } }), onlyProt, (l) => l.prot),
+    physicalRow("an apply_patch header into the checkout on master in a nested field of tool_input, from a feature-branch cwd, is refused", (l) => apply(l.feat, { tool_input: { args: { patch_text: intoProt(l) } } }), onlyProt, (l) => l.prot),
+    physicalRow("an apply_patch header into the checkout on master in raw_input, from a feature-branch cwd, is refused", (l) => apply(l.feat, { raw_input: { command: intoProt(l) } }), onlyProt, (l) => l.prot),
+    physicalRow("an apply_patch header into the checkout on master in a top-level input string, from a feature-branch cwd, is refused", (l) => apply(l.feat, { input: intoProt(l) }), onlyProt, (l) => l.prot),
+    physicalRow("an apply_patch header into the checkout on master in JSON object text inside a tool_input string, from a feature-branch cwd, is refused", (l) => apply(l.feat, { tool_input: { arguments: JSON.stringify({ input: intoProt(l) }) } }), onlyProt, (l) => l.prot),
+    physicalRow("an apply_patch header into the checkout on master in JSON array text inside a tool_input string, from a feature-branch cwd, is refused", (l) => apply(l.feat, { tool_input: { arguments: JSON.stringify(["apply_patch", intoProt(l)]) } }), onlyProt, (l) => l.prot),
+    physicalRow("a relative apply_patch header src/x.ts with a per-call workdir on the checkout on master, from a feature-branch cwd, is refused", (l) => apply(l.feat, { tool_input: { input: patchText(["*** Update File: src/x.ts"]), workdir: l.prot } }), featAndProtSrc, protSrc),
+    physicalRow("a relative apply_patch header src/x.ts with a per-call cwd on the checkout on master, from a feature-branch cwd, is refused", (l) => apply(l.feat, { tool_input: { input: patchText(["*** Update File: src/x.ts"]), cwd: l.prot } }), featAndProtSrc, protSrc),
+  ];
+
+  /** What git, run plainly in each directory, answers: in the directory as given, or in its physical directory. */
+  const gitAnswers = async (dirs: string[], judgment: Judgment): Promise<string[]> => {
+    const out: string[] = [];
+    for (const dir of dirs) {
+      const read = judgment === "physically" ? await readBranch(dir) : await readBranchAt(dir);
+      out.push(read.kind === "branch" ? read.name : read.kind === "error" ? `error: ${read.detail}` : read.kind);
+    }
+    return out;
+  };
+
+  const cases = ROWS.flatMap((row) => (["claude-code", "codex"] as const).map((runtime) => [`${runtime}: ${row.name} (${row.refuses} only)`, row, runtime] as const));
+  it.each(cases)("%s", async (_label, row, runtime) => {
+    const l = layout();
+    const asWritten = await gitAnswers(row.asWritten(l), "as written");
+    const physical = await gitAnswers(row.physical(l), "physically");
+    const [refusing, allowing] = row.refuses === "as written" ? [asWritten, physical] : [physical, asWritten];
+    expect(refusing).toContain("master");
+    expect(allowing.length).toBeGreaterThan(0);
+    for (const answer of allowing) expect(answer).toBe("feat/x");
+
+    const run = await runHook(row.event(l), { runtime });
+    expect(run.blocked).toBe(true);
+    expect(run.diagnostic).toBe(`BLOCK: branch "master" of ${row.refusedIn(l)} is protected (master, main, develop)`);
+    if (runtime === "codex") {
+      expect(run).toMatchObject({ exitCode: 2, stdout: "" });
+      expect(run.stderr).toContain('on protected branch "master"');
+    } else {
+      expect(run.exitCode).toBe(0);
+      expect(envelope(run).decision).toBe("block");
+    }
+  });
+});
+
+// The bound covers each judgment's path resolution on its own: an injected
+// clock that moves one millisecond per reading passes the bound while one
+// judgment resolves its paths, and the call is refused before git is asked
+// about anything. A reader that throws or rejects refuses as well.
+describe("branch-protection hook: the bound in each judgment, and a failing reader (injected clock and runner)", () => {
+  const RUNTIMES = ["claude-code", "codex"] as const;
+  const BOUND_DETAIL = "the paths of the tool call were not resolved: the hook passed its 1000 ms bound";
+  /** 300 header paths, each ten missing directories deep under `base`. */
+  const deepHeaders = (base: string): string[] =>
+    Array.from({ length: 300 }, (_, i) => `*** Update File: ${base}m${i}/d1/d2/d3/d4/d5/d6/d7/d8/d9/f.ts`);
+  const expectRefused = (run: Run, runtime: string, toolName: string, detail: string): void => {
+    expect(run.blocked).toBe(true);
+    expect(run.diagnostic).toBe(`BLOCK: ${detail}`);
+    const text = `branch-protection: refusing ${toolName}: ${detail}.`;
+    if (runtime === "codex") {
+      expect(run).toMatchObject({ exitCode: 2, stdout: "" });
+      expect(run.stderr).toContain(text);
+    } else {
+      expect(run.exitCode).toBe(0);
+      expect(envelope(run).reason).toBe(text);
+    }
+  };
+
+  it.each(RUNTIMES)("%s: the bound passing while the as-written paths are resolved (headers in tool_input.input) refuses before git is asked", async (runtime) => {
+    const dir = tmpDir("harness-bp-bound-");
+    fs.mkdirSync(path.join(dir, ".git"));
+    const reader = vi.fn<GitHeadReader>(async () => ({ kind: "exited", code: 0, stdout: "refs/heads/feat/x\n", stderr: "" }));
+    let tick = 0;
+    const run = await runHook(patchEvent(dir, deepHeaders(""), "input"), { runtime, gitReader: reader, gitDeadlineMs: 1000, now: () => tick++ });
+    expectRefused(run, runtime, "apply_patch", BOUND_DETAIL);
+    expect(reader).not.toHaveBeenCalled();
+  });
+
+  it.for(RUNTIMES)("%s: the bound passing while the physical paths are resolved (headers in tool_input.command, cwd outside every repository) refuses before git is asked", async (runtime, ctx) => {
+    const outside = tmpDir("harness-bp-outside-");
+    if (hasGitEntryAbove(outside)) ctx.skip(`${outside} has a .git entry above it on this host`);
+    const target = tmpDir("harness-bp-bound-");
+    fs.mkdirSync(path.join(target, ".git"));
+    const reader = vi.fn<GitHeadReader>(async () => ({ kind: "exited", code: 0, stdout: "refs/heads/feat/x\n", stderr: "" }));
+    let tick = 0;
+    const run = await runHook(patchEvent(outside, deepHeaders(`${target}/`), "command"), {
+      runtime,
+      gitReader: reader,
+      gitDeadlineMs: 1000,
+      now: () => tick++,
+    });
+    expectRefused(run, runtime, "apply_patch", BOUND_DETAIL);
+    expect(reader).not.toHaveBeenCalled();
+  });
+
+  it.each(
+    RUNTIMES.flatMap((runtime) => [
+      [runtime, "throws", () => {
+        throw new Error("the git reader failed");
+      }],
+      [runtime, "rejects", async () => {
+        throw new Error("the git reader failed");
+      }],
+    ] as const),
+  )("%s: a Write is refused when the git reader %s", async (runtime, _how, fail) => {
+    const dir = tmpDir("harness-bp-reader-");
+    fs.mkdirSync(path.join(dir, ".git"));
+    const reader = vi.fn<GitHeadReader>(fail);
+    const run = await runHook(writeEvent(dir, path.join(dir, "x.ts")), { runtime, gitReader: reader });
+    expect(reader).toHaveBeenCalledTimes(1);
+    expectRefused(run, runtime, "Write", "the tool call could not be judged (the git reader failed)");
+  });
+});
+
+// A directory of the physical judgment is resolved again right before git
+// is asked about it; one that can no longer be resolved then (removed while
+// git answered for an earlier directory of the same call) refuses. The real
+// git runs behind a reader that removes the second directory while git
+// answers for the first.
+describe.skipIf(!GIT_AVAILABLE)("branch-protection hook: a directory that can no longer be resolved when it is judged, real git", () => {
+  it.each(["claude-code", "codex"] as const)("%s: an apply_patch into two directories of a feature checkout is refused when the second one is removed while git answers for the first", async (runtime) => {
+    const repo = makeRepo("feat/x");
+    const a = path.join(repo, "a");
+    const b = path.join(repo, "b");
+    fs.mkdirSync(a);
+    fs.mkdirSync(b);
+    const reader = vi.fn<GitHeadReader>(async (dir, timeoutMs) => {
+      if (dir === a) fs.rmSync(b, { recursive: true, force: true });
+      return readGitHead(dir, timeoutMs);
+    });
+    // The headers sit in tool_input.command, so the as-written judgment
+    // takes the event cwd and the physical judgment takes a, then b.
+    const run = await runHook(patchEvent(repo, ["*** Add File: a/x.ts", "*** Update File: b/y.ts"], "command"), { runtime, gitReader: reader });
+    expect(reader.mock.calls.map((c) => c[0])).toEqual([repo, a]);
+    expect(run.blocked).toBe(true);
+    const detail = "the directory could not be resolved (ENOENT)";
+    expect(run.diagnostic).toBe(`BLOCK: git could not report the branch of ${b}: ${detail}`);
+    if (runtime === "codex") {
+      expect(run).toMatchObject({ exitCode: 2, stdout: "" });
+      expect(run.stderr).toContain(`branch-protection: refusing apply_patch: git could not report the branch of ${b} (${detail}).`);
+    } else {
+      expect(run.exitCode).toBe(0);
+      expect(envelope(run).reason).toBe(`branch-protection: refusing apply_patch: git could not report the branch of ${b} (${detail}).`);
+    }
   });
 });
