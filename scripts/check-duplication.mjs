@@ -54,9 +54,7 @@ import * as path from "node:path";
 // `findGroundingMcp` + ledger-probe boilerplate
 // `hook-branch-protection.ts` / `hook-solution-acceptance.ts` already
 // duplicate against each other. The post-merge-gate pack files were removed
-// in task 2ce6933f; the number is left as is because the headroom is
-// absorbed by the same sibling-pack hook cluster that still exists (lowering
-// it is a follow-up, out of this task's scope).
+// in task 2ce6933f (see the lowering to 73 below).
 // Raised to 103 for the risk-gate read-only floor (agent-tasks fb67b402),
 // and this one is NOT new copy-paste — verified rather than assumed. That
 // task adds a `cd`-target pre-check plus a quote-stripping helper near the
@@ -247,7 +245,10 @@ import * as path from "node:path";
 // `session-start branch-check` producer and the `approve branch-protection`
 // verb and dropped the ledger probe from `hook-branch-protection.ts`. The
 // check reports 82 with that change (the pin was 91).
-const MAX_CLONES = 82;
+// Lowered to 73 (task 2ce6933f): removing the post-merge-gate pack deleted its
+// two hook verbs and their register-pack-group.ts wiring; the check reports 73
+// with that change (the pin was 82).
+const MAX_CLONES = 73;
 
 // Sets process.exitCode instead of calling process.exit so the caller's
 // finally-cleanup runs on every path (process.exit skips stack unwinding).

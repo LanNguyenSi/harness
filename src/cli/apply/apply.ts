@@ -927,7 +927,8 @@ export async function apply(opts: ApplyOptions = {}): Promise<ApplyResult> {
     generatedDir,
     operatorGeneratedDir,
   );
-  // Manifest posture warnings (removed keys / removed packs, task a4d8adc5):
+  // Manifest posture warnings (removed keys and removed packs, table from
+  // task a4d8adc5; printed by apply since task 2ce6933f):
   // the loader strips them and `harness validate` / `harness doctor` print
   // them; `harness apply` prints them too so an operator applying a stale
   // manifest sees why a pack they still name did not generate anything.

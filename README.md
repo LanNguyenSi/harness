@@ -49,9 +49,12 @@ wizard and the `solo` template, so the note below applies to it).
 
 The `solo`, `team` and `full` templates and the
 `harness init --interactive` wizard still offer the understanding gate,
-`solution-acceptance`, `post-merge-gate`, the risk gate and the
+`solution-acceptance`, the risk gate and the
 reference policies. harness 1.0.0 removes all of these, so a new
 install should not adopt them.
+
+The `post-merge-gate` pack is already removed: a manifest that still
+names it loads with a warning and the entry is ignored.
 
 ## Usage
 
@@ -80,7 +83,7 @@ operator controls are documented in
 - [`docs/risk-gate.md`](docs/risk-gate.md): the four-way `allow / warn / require_approval / deny` Risk Gate.
 - [`docs/writing-custom-policies.md`](docs/writing-custom-policies.md): tripwires, worked recipes, and the policy field reference.
 - [`docs/runtime-reality-hook.md`](docs/runtime-reality-hook.md): blocking destructive runtime commands when live process state has drifted from what the docs expect.
-- [`docs/policy-packs/README.md`](docs/policy-packs/README.md): the built-in policy packs (`understanding-before-execution`, `branch-protection`, `solution-acceptance`, `post-merge-gate`).
+- [`docs/policy-packs/README.md`](docs/policy-packs/README.md): the built-in policy packs (`understanding-before-execution`, `branch-protection`, `solution-acceptance`).
 - [`docs/uninstall.md`](docs/uninstall.md): the single-command teardown, dry-run by default.
 - [`docs/examples/full-manifest.yaml`](docs/examples/full-manifest.yaml): a schema-coverage reference (not a runnable config; its header explains why).
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md): manifest schema, file layout, CLI surface (historical design intent; see its own note for the current shape).

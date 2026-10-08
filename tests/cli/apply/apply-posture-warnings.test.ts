@@ -8,6 +8,7 @@ import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { stringify as yamlStringify } from "yaml";
 import { GENERATED_DIRNAME, SETTINGS_BASENAME, apply } from "../../../src/cli/apply/index.js";
+import { run } from "../../../src/cli/index.js";
 
 let tmpHome: string;
 
@@ -64,5 +65,48 @@ describe("apply surfaces the removed-pack posture warnings", () => {
     const result = await apply({ homeDir: tmpHome });
     expect(result.outcome).toBe("applied");
     expect(result.warnings.some((w) => w.includes("post-merge-gate"))).toBe(false);
+  });
+});
+
+// CLI-level check (task 2ce6933f): the same warning reaches the operator's
+// stderr through `run()`, because the CLI prints `ApplyResult.warnings`
+// (`src/cli/register-setup-group.ts`). `--config <tmp>/harness.yaml` keeps the
+// generated dir, the lock and every write under this test's temp dir (they
+// derive from the manifest's directory), so the real home is never touched.
+describe("harness apply prints the removed-pack warning through run()", () => {
+  it("run() apply: exits 0 and prints the warning line to stderr", async () => {
+    const manifestPath = writeManifest({ policy_packs: PMG_PACKS });
+    let err = "";
+    const code = await run({
+      argv: ["apply", "--config", manifestPath],
+      stdout: () => {
+        /* swallow */
+      },
+      stderr: (s) => {
+        err += s;
+      },
+    });
+    expect(code).toBe(0);
+    expect(err).toContain(
+      'warning: policy_packs[1]: pack "post-merge-gate" was removed in 1.0.0',
+    );
+  });
+
+  it("run() apply --dry-run: exits 0 and prints the same warning line to stderr", async () => {
+    const manifestPath = writeManifest({ policy_packs: PMG_PACKS });
+    let err = "";
+    const code = await run({
+      argv: ["apply", "--dry-run", "--config", manifestPath],
+      stdout: () => {
+        /* swallow */
+      },
+      stderr: (s) => {
+        err += s;
+      },
+    });
+    expect(code).toBe(0);
+    expect(err).toContain(
+      'warning: policy_packs[1]: pack "post-merge-gate" was removed in 1.0.0',
+    );
   });
 });
