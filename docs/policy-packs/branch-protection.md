@@ -35,8 +35,8 @@ state or override marker.
    and the blocker refuses when either judgment refuses or cannot answer;
    it allows only when both allow. A write is judged in the directory its
    path names as written and in the directory the operating system
-   resolves that path to, so the verdict does not depend on which of the
-   two the runtime writes into. The as-written judgment runs first.
+   resolves that path to; the two items below say which paths each
+   judgment takes. The as-written judgment runs first.
    - **As written.** Each path is made absolute against the event cwd,
      with `.` and `..` resolved on the text (as `path.resolve` does) and
      symlinks left in place. For `Write`, `Edit`, `MultiEdit` and
