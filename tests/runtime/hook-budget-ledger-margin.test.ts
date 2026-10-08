@@ -215,12 +215,11 @@ describe("blocking ledger-consulting hooks clear the ledger's worst-case round-t
 
   it("every blocking `harness policy intercept` hook the Custom composer can emit clears the margin and the hard floor (task 7bf47554, fix round 2)", () => {
     const interceptHooks = blockingInterceptHooks(loadComposerManifest());
-    // 5 distinct hooks: review-before-merge, preflight-before-investigation,
-    // review-subagent-before-pr-create, preflight-before-push,
+    // 3 distinct hooks: review-before-merge, review-subagent-before-pr-create,
     // dogfood-before-release. two-reviewers-required dedupes onto
-    // review-before-merge's row (same hook name), so selecting all 6
-    // COMPOSABLE_POLICIES yields 5, not 6.
-    expect(interceptHooks.length).toBe(5);
+    // review-before-merge's row (same hook name), so selecting all 4
+    // COMPOSABLE_POLICIES yields 3, not 4.
+    expect(interceptHooks.length).toBe(3);
     for (const hook of interceptHooks) {
       assertHookClearsMargin(hook);
       assertHookMeetsHardFloor(hook);

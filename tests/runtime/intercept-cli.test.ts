@@ -24,6 +24,10 @@ import {
 import { makeDecision } from "../_helpers/decision.js";
 import { makeManifest } from "../_helpers/manifest.js";
 import { addGitDirSkeleton } from "../_helpers/git-dir-fixture.js";
+import {
+  legacyPreflightInvestigation,
+  legacyPreflightPush,
+} from "../_helpers/legacy-preflight-policies.js";
 
 // Fix round 1, findings F2+F3+F4: a call-through mock of
 // `normalizeCommandAmpAware` used ONLY as a counting seam (never changes
@@ -63,10 +67,16 @@ vi.mock("../../src/runtime/command-normalize.js", async (importOriginal) => {
 // behaviour. Mirrors the precedent in
 // tests/cli/init-full-template-kill-switch-deny.test.ts's
 // `policyBashMatch` helper.
+function legacyTemplatePolicy(name: string): Policy | undefined {
+  if (name === "preflight-before-investigation") return legacyPreflightInvestigation();
+  if (name === "preflight-before-push") return legacyPreflightPush();
+  return undefined;
+}
+
 function policyBashMatch(name: string): string {
   const parsed = parseManifest(parseYaml(FULL_TEMPLATE));
-  const policy = parsed.policies.find((p) => p.name === name);
-  if (!policy) throw new Error(`policy ${name} missing from FULL_TEMPLATE`);
+  const policy = parsed.policies.find((p) => p.name === name) ?? legacyTemplatePolicy(name);
+  if (!policy) throw new Error(`policy ${name} unavailable`);
   const pattern = policy.trigger.bash_match;
   if (!pattern) throw new Error(`policy ${name} declares no trigger.bash_match`);
   return pattern;
@@ -4426,8 +4436,10 @@ describe("runInterceptCli: empty REPO / BRANCH never renders a blank ledger tag"
   });
 
   const templatePolicy = (name: string): Policy => {
-    const found = parseManifest(parseYaml(FULL_TEMPLATE)).policies.find((p) => p.name === name);
-    if (!found) throw new Error(`policy ${name} missing from FULL_TEMPLATE`);
+    const found =
+      parseManifest(parseYaml(FULL_TEMPLATE)).policies.find((p) => p.name === name) ??
+      legacyTemplatePolicy(name);
+    if (!found) throw new Error(`policy ${name} unavailable`);
     return found;
   };
 

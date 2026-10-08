@@ -5,29 +5,17 @@ import {
   runRecordReview,
   runRecordReviewSubagent,
 } from "./record/index.js";
-import { runSessionStartToolchainParity } from "./session-start/toolchain-parity.js";
-import { runSessionStartStaleBaseCheck } from "./session-start/stale-base-check.js";
-import {
-  addCwdOption,
-  addIdentityOptions,
-  addLedgerTimeoutOption,
-  applyCliOptions,
-  type SessionStartCliOptions,
-  type SessionStartCliTarget,
-} from "./session-start/shared-options.js";
 
 export function registerRecordSessionGroup(
   program: Command,
   io: { stdout: (s: string) => void; stderr: (s: string) => void },
 ): void {
-  const { applyLedgerTimeout, reportRecordResult, preflightAction } =
-    createCliHelpers(io);
+  const { applyLedgerTimeout, reportRecordResult } = createCliHelpers(io);
   // `harness record {review,review-subagent,dogfood}` (task T-001):
   // evidence-ledger producers for the review-before-merge,
   // review-subagent-before-pr-create, and dogfood-before-release gate
   // families (see src/cli/init/templates.ts for the exact policies).
-  // Unlike the `preflight` / `session-start preflight` pair above,
-  // these are NOT hooks: they are invoked deliberately by an agent or
+  // These are NOT hooks: they are invoked deliberately by an agent or
   // operator, so a failure exits non-zero with a clear stderr message
   // (written by the runner itself) rather than degrading silently.
   const recordCmd = program
@@ -168,71 +156,4 @@ export function registerRecordSessionGroup(
         reportRecordResult(await runRecordDogfood(cliOpts));
       },
     );
-
-  const sessionStart = program
-    .command("session-start")
-    .description("SessionStart hook entrypoints (called by Claude Code via settings.json)");
-  addLedgerTimeoutOption(
-    addIdentityOptions(
-      sessionStart
-        .command("preflight")
-        .description(
-          "SessionStart producer: run agent-preflight against the session cwd and, on a ready:true result, " +
-            "record a `preflight:${REPO}` fact to the evidence ledger so the preflight-before-* policies have a " +
-            "fresh tag to match. Reads SessionStart event JSON from stdin ({ session_id, cwd, hook_event_name }). " +
-            "Opt-in `session_start_preflight.setup: true` (default off) passes --setup through; " +
-            "see docs/CLI.md for the trust and scope caveats. " +
-            "blocking:false \u2014 every failure path logs to stderr and exits 0.",
-        ),
-      "explicit session id (overrides stdin event + env). Use for manual / scripted invocations " +
-        "where no SessionStart event JSON is piped on stdin. Without it the resolver tries " +
-        "stdin event → $CLAUDE_SESSION_ID → newest Claude Code transcript → 'default' (which logs " +
-        "a loud warning since the literal 'default' session never satisfies a preflight-before-* gate).",
-    ).option("--timeout <ms>", "agent-preflight subprocess timeout in milliseconds (default 60000)"),
-  ).action(preflightAction);
-  // The two advisory producers below share one option set and one
-  // action shape: only the description and the runner differ.
-  const addSessionStartProducer = (
-    name: string,
-    description: string,
-    run: (opts: SessionStartCliTarget) => Promise<unknown>,
-  ): void => {
-    addLedgerTimeoutOption(
-      addCwdOption(
-        addIdentityOptions(
-          sessionStart.command(name).description(description),
-          "explicit session id (overrides stdin event + env)",
-        ),
-      ),
-    ).action(async (options: SessionStartCliOptions) => {
-      const cliOpts: SessionStartCliTarget = {};
-      applyCliOptions(options, cliOpts);
-      await run(cliOpts);
-    });
-  };
-  addSessionStartProducer(
-    "toolchain-parity",
-    "SessionStart producer (opt-in via `toolchain_parity.enabled: true`): writes THIS machine's " +
-      "toolchain snapshot (node version, npm globals, OW-Kit version, MCP server names) to " +
-      "`<machine_state_dir>/<profile>.json`, compares it against every OTHER snapshot file already " +
-      "in that directory, and records a `toolchain-parity:ok` / `toolchain-parity:drift:<n>` fact " +
-      "(with a `:unparseable-peer:<n>` suffix whenever a peer file failed to parse as JSON, so an " +
-      "unparseable peer never silently vanishes from the comparison) to the evidence ledger. " +
-      "Purely advisory \u2014 never blocking, and never touches a peer's file. " +
-      "Cross-machine transport of the snapshot files is agent-memory-sync's job, not this command's.",
-    runSessionStartToolchainParity,
-  );
-  addSessionStartProducer(
-    "stale-base-check",
-    "SessionStart producer (opt-in via `stale_base_check.enabled: true`; task ce3903b0, incident " +
-      "ea8becf5): runs a LIVE `git fetch` of the remote default branch (never trusting the local " +
-      "origin/<default> ref, which can itself be stale \u2014 that is the exact bug this closes) and, when " +
-      "the current branch's base is behind, writes a WARNING to stderr naming how many commits behind, " +
-      "how old the missing work is, and the recovery command. Records a `stale-base:ok` / " +
-      "`stale-base:behind:<n>` fact to the evidence ledger (audit-only \u2014 no gate consumes it). " +
-      "Purely advisory: never blocks, and degrades cleanly (no fact written) when offline, the remote " +
-      "or default branch can't be resolved, or credentials are missing. blocking:false \u2014 every failure " +
-      "path logs to stderr and exits 0.",
-    runSessionStartStaleBaseCheck,
-  );
 }

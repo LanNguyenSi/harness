@@ -23,7 +23,7 @@
 //   ARM A (regression, expected to currently keep every gate): for each of
 //   8 wrappers {env, nice, sudo, command, nohup, setsid, timeout, stdbuf} x
 //   4 quoted values {'a&b', "a&b", 'x & y', 'a & b & c'} x 4 gated verbs
-//   {git push origin master, gh pr merge 1 --squash, npm publish,
+//   {git tag v1.0.0, gh pr merge 1 --squash, npm publish,
 //   harness pause}, build `<wrapper> FOO=<qval> <verb>` (128 forms) and
 //   measure whether the verb's own gating policy fires via the REAL
 //   matching path (`policyMatchesEvent`, raw-OR-normalised) against
@@ -147,7 +147,7 @@ export const DEFAULT_DIST_DIR = "dist";
 export const WRAPPERS = ["env", "nice", "sudo", "command", "nohup", "setsid", "timeout", "stdbuf"];
 export const QVALS = ["'a&b'", '"a&b"', "'x & y'", "'a & b & c'"];
 export const VERBS = [
-  { verb: "git push origin master", policy: "preflight-before-push", verbHead: "git" },
+  { verb: "git tag v1.0.0", policy: "dogfood-before-release", verbHead: "git" },
   { verb: "gh pr merge 1 --squash", policy: "review-before-merge-bash", verbHead: "gh" },
   { verb: "npm publish", policy: "dogfood-before-release", verbHead: "npm" },
   { verb: "harness pause", policy: "deny-kill-switch-bypass", verbHead: "harness" },

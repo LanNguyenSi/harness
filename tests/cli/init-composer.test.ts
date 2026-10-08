@@ -104,7 +104,7 @@ describe("composeCustom — MCPs", () => {
 describe("composeCustom — policies", () => {
   it("pairs each policy with its required hook (hooks[] referenced by policies[].hook stays consistent)", () => {
     const { manifest } = compose({
-      policies: ["review-before-merge", "preflight-before-investigation", "review-subagent-before-pr-create"],
+      policies: ["review-before-merge", "review-subagent-before-pr-create", "dogfood-before-release"],
     });
     expect(manifest.policies).toHaveLength(3);
     expect(manifest.hooks).toHaveLength(3);
@@ -116,14 +116,6 @@ describe("composeCustom — policies", () => {
 });
 
 describe("composeCustom — new policy entries (task 5dd3d8a6)", () => {
-  it("preflight-before-push: emits the push-specific hook + within:10m requires", () => {
-    const { manifest } = compose({ policies: ["preflight-before-push"] });
-    const policy = manifest.policies.find((p) => p.name === "preflight-before-push");
-    expect(policy?.requires?.within).toBe("10m");
-    expect(policy?.requires?.ledger_tag).toBe("preflight:${BRANCH}");
-    expect(manifest.hooks.find((h) => h.name === "require-preflight-push-evidence")).toBeDefined();
-  });
-
   it("dogfood-before-release: matches the npm-publish/git-tag bash_match + within:24h", () => {
     const { manifest } = compose({ policies: ["dogfood-before-release"] });
     const policy = manifest.policies.find((p) => p.name === "dogfood-before-release");
@@ -258,18 +250,18 @@ describe("composeCustom — producer-coupling warnings", () => {
   });
 
   it("auto-adds grounding-mcp and emits informational note when preflight-before-investigation is selected without it (H3 gate auto-repair)", () => {
-    const { manifest, warnings } = compose({ policies: ["preflight-before-investigation"] });
+    const { manifest, warnings } = compose({ policies: ["dogfood-before-release"] });
     // grounding-mcp must be auto-wired so apply accepts the manifest
     expect(manifest.tools.mcp.some((m) => m.name === "grounding-mcp")).toBe(true);
     // the per-policy "requires a producer" warning is replaced by the auto-add note
     expect(warnings.some((w) => /auto-wired grounding-mcp/.test(w))).toBe(true);
-    expect(warnings.some((w) => /preflight-before-investigation/.test(w) && /producer/.test(w))).toBe(false);
+    expect(warnings.some((w) => /producer/.test(w) && /every npm publish/.test(w))).toBe(false);
   });
 
-  it("auto-adds grounding-mcp even when understanding-before-execution pack is selected alongside preflight-before-investigation (pack does NOT produce preflight tags, grounding-mcp still required)", () => {
+  it("auto-adds grounding-mcp even when understanding-before-execution pack is selected alongside a policy (pack does NOT produce ledger tags, grounding-mcp still required)", () => {
     const { manifest, warnings } = compose({
       packs: ["understanding-before-execution"],
-      policies: ["preflight-before-investigation"],
+      policies: ["dogfood-before-release"],
     });
     expect(manifest.tools.mcp.some((m) => m.name === "grounding-mcp")).toBe(true);
     expect(warnings.some((w) => /auto-wired grounding-mcp/.test(w))).toBe(true);
@@ -281,21 +273,12 @@ describe("composeCustom — producer-coupling warnings", () => {
       mcps: ["agent-tasks", "grounding-mcp", "memory-router"],
       policies: [
         "review-before-merge",
-        "preflight-before-investigation",
         "review-subagent-before-pr-create",
-        "preflight-before-push",
         "dogfood-before-release",
         "two-reviewers-required",
       ],
     });
     expect(warnings).toEqual([]);
-  });
-
-  it("auto-adds grounding-mcp and emits informational note when preflight-before-push is selected without it (H3 gate auto-repair)", () => {
-    const { manifest, warnings } = compose({ policies: ["preflight-before-push"] });
-    expect(manifest.tools.mcp.some((m) => m.name === "grounding-mcp")).toBe(true);
-    expect(warnings.some((w) => /auto-wired grounding-mcp/.test(w))).toBe(true);
-    expect(warnings.some((w) => /preflight-before-push/.test(w) && /producer/.test(w))).toBe(false);
   });
 
   it("auto-adds grounding-mcp and emits informational note when dogfood-before-release is selected without it (H3 gate auto-repair)", () => {
@@ -321,7 +304,7 @@ describe("composeCustom — memoryDir override", () => {
 });
 
 describe("composer surface (catalogues)", () => {
-  it("exposes the composer-surfaced subset (2 packs, 4 MCPs, 6 reference policies; intentionally smaller than FULL_TEMPLATE, which ships 8 policies including the bash-surface parallels)", () => {
+  it("exposes the composer-surfaced subset (2 packs, 4 MCPs, 4 reference policies; intentionally smaller than FULL_TEMPLATE, which ships the bash-surface parallels too)", () => {
     expect(COMPOSABLE_PACKS.map((p) => p.key)).toEqual([
       "understanding-before-execution",
       "branch-protection",
@@ -334,9 +317,7 @@ describe("composer surface (catalogues)", () => {
     ]);
     expect(COMPOSABLE_POLICIES.map((p) => p.key)).toEqual([
       "review-before-merge",
-      "preflight-before-investigation",
       "review-subagent-before-pr-create",
-      "preflight-before-push",
       "dogfood-before-release",
       "two-reviewers-required",
     ]);
@@ -380,13 +361,11 @@ describe("composeCustom — H3 gate auto-repair: grounding-mcp auto-add", () => 
     expect(warnings.some((w) => /auto-wired grounding-mcp/.test(w))).toBe(false);
   });
 
-  it("auto-add covers all six policies at once; grounding-mcp appears exactly once in tools.mcp", () => {
+  it("auto-add covers all four policies at once; grounding-mcp appears exactly once in tools.mcp", () => {
     const { manifest, warnings } = compose({
       policies: [
         "review-before-merge",
-        "preflight-before-investigation",
         "review-subagent-before-pr-create",
-        "preflight-before-push",
         "dogfood-before-release",
         "two-reviewers-required",
       ],

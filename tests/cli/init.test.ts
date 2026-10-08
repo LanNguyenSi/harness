@@ -85,19 +85,13 @@ describe("init — full template", () => {
     expect(mcpNames).toContain("grounding-mcp");
     expect(mcpNames).not.toContain("codebase-oracle");
     // Hooks: PreToolUse policy gates route through the bundled
-    // `harness policy intercept` engine, plus the `git-preflight`
-    // SessionStart producer (`harness session-start preflight`), which
-    // is the write side that satisfies the preflight-before-* policies.
-    // The `-bash` variants cover the gh-cli surface alongside the
-    // agent-tasks MCP surface (task 7eed0bb2).
+    // `harness policy intercept` engine. The `-bash` variants cover the
+    // gh-cli surface alongside the agent-tasks MCP surface (task 7eed0bb2).
     expect(hookNames).toContain("require-review-evidence");
     expect(hookNames).toContain("require-review-evidence-bash");
     expect(hookNames).toContain("require-dogfood-evidence");
-    expect(hookNames).toContain("require-preflight-evidence");
     expect(hookNames).toContain("require-review-subagent-evidence");
     expect(hookNames).toContain("require-review-subagent-evidence-bash");
-    expect(hookNames).toContain("require-preflight-push-evidence");
-    expect(hookNames).toContain("git-preflight");
     // The reference policies that drive those hooks. `two-reviewers-required`
     // is a warn-level companion to review-before-merge, sharing the same hook;
     // see docs/examples/full-manifest.yaml for the canonical definition.
@@ -107,10 +101,8 @@ describe("init — full template", () => {
     expect(policyNames).toContain("review-before-merge-bash");
     expect(policyNames).toContain("dogfood-before-release");
     expect(policyNames).toContain("two-reviewers-required");
-    expect(policyNames).toContain("preflight-before-investigation");
     expect(policyNames).toContain("review-subagent-before-pr-create");
     expect(policyNames).toContain("review-subagent-before-pr-create-bash");
-    expect(policyNames).toContain("preflight-before-push");
   });
 
 

@@ -24,7 +24,11 @@ import { getTemplate, type TemplateName } from "../../../src/cli/init/templates.
 import { packAdd } from "../../../src/cli/pack/index.js";
 import { HarnessExitError } from "../../../src/cli/exit-codes.js";
 import { KNOWN_BUILTIN_PACKS } from "../../../src/policy-packs/registry.js";
-import { REMOVED_PACK_NAMES } from "../../../src/schema/index.js";
+import {
+  REMOVED_COMMANDS,
+  REMOVED_MANIFEST_PATHS,
+  REMOVED_PACK_NAMES,
+} from "../../../src/schema/index.js";
 
 const TEMPLATE_NAMES: TemplateName[] = ["minimal", "solo", "team", "full"];
 const REPO_ROOT = path.resolve(
@@ -102,5 +106,80 @@ describe.each(REMOVED_PACK_NAMES)("removed pack %s", (removed) => {
       expect((caught as HarnessExitError).exitCode).not.toBe(0);
       expect((caught as Error).message).toMatch(/not a known builtin pack/);
     });
+  });
+});
+
+// Guard (task f3f15290): a CLI command listed in REMOVED_COMMANDS must not be
+// wired into anything an install surface generates. A hook `command:`, a
+// producer hint, or a template line that still invokes a removed command would
+// hand the operator a manifest whose gate can never be satisfied. Unlike the
+// pack guard (which parses `policy_packs[].name`), this is a substring scan of
+// the raw text: these commands appear only inside `command:`/producer strings,
+// and any surviving mention, comment included, is something the removal should
+// have erased. Data-driven over the table so every future removal inherits it.
+function templateText(name: TemplateName): string {
+  return getTemplate(name);
+}
+
+describe.each(REMOVED_COMMANDS)("removed command %s", (removed) => {
+  const cmd = removed.command;
+
+  it("is not invoked by any init template", () => {
+    for (const name of TEMPLATE_NAMES) {
+      expect(templateText(name), `template ${name}`).not.toContain(cmd);
+    }
+  });
+
+  it("is not invoked by the docs examples", () => {
+    for (const rel of DOCS_EXAMPLES) {
+      const text = fs.readFileSync(path.join(REPO_ROOT, rel), "utf8");
+      expect(text, rel).not.toContain(cmd);
+    }
+  });
+
+  it("is not invoked by the interactive wizard's custom composer", () => {
+    const selection: CustomSelection = {
+      packs: COMPOSABLE_PACKS.map((o) => o.key),
+      mcps: COMPOSABLE_MCPS.map((o) => o.key),
+      policies: COMPOSABLE_POLICIES.map((o) => o.key),
+    };
+    expect(composeCustom(selection).yaml).not.toContain(cmd);
+  });
+});
+
+// Removed manifest paths (task f3f15290): no surface may still set a key the
+// loader strips with a warning. Parsed YAML, walked along the dotted path, so
+// a comment that names the key does not count and a real block cannot hide.
+function hasPath(text: string, dotted: string): boolean {
+  let node: unknown = parseYaml(text);
+  for (const seg of dotted.split(".")) {
+    if (typeof node !== "object" || node === null || Array.isArray(node)) return false;
+    if (!Object.prototype.hasOwnProperty.call(node, seg)) return false;
+    node = (node as Record<string, unknown>)[seg];
+  }
+  return true;
+}
+
+describe.each(REMOVED_MANIFEST_PATHS)("removed manifest path $path", (removed) => {
+  it("is not set by any init template", () => {
+    for (const name of TEMPLATE_NAMES) {
+      expect(hasPath(getTemplate(name), removed.path), `template ${name}`).toBe(false);
+    }
+  });
+
+  it("is not set by the docs examples", () => {
+    for (const rel of DOCS_EXAMPLES) {
+      const text = fs.readFileSync(path.join(REPO_ROOT, rel), "utf8");
+      expect(hasPath(text, removed.path), rel).toBe(false);
+    }
+  });
+
+  it("is not set by the interactive wizard's custom composer", () => {
+    const selection: CustomSelection = {
+      packs: COMPOSABLE_PACKS.map((o) => o.key),
+      mcps: COMPOSABLE_MCPS.map((o) => o.key),
+      policies: COMPOSABLE_POLICIES.map((o) => o.key),
+    };
+    expect(hasPath(composeCustom(selection).yaml, removed.path)).toBe(false);
   });
 });

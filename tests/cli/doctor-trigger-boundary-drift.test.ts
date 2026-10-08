@@ -192,14 +192,14 @@ describe("doctor - trigger-boundary drift (task 037cfb7c)", () => {
   // both derive from FULL_TEMPLATE, so it would pass even if
   // shippedBashMatchBoundaries() were broken in a way that also broke
   // getTemplate("full")'s parse the same way). Pin the actual shape of
-  // the shipped set independently: 16 entries (8 hooks + 8 policies as
+  // the shipped set independently: 12 entries (6 hooks + 6 policies as
   // of this task), every one carrying the identical literal boundary
   // FULL_TEMPLATE ships since v0.43.0.
-  it("shippedBashMatchBoundaries() is exactly 16 entries, all with the shipped boundary", () => {
+  it("shippedBashMatchBoundaries() is exactly 12 entries, all with the shipped boundary", () => {
     const entries = shippedBashMatchBoundaries();
-    expect(entries).toHaveLength(16);
-    expect(entries.filter((e) => e.level === "hook")).toHaveLength(8);
-    expect(entries.filter((e) => e.level === "policy")).toHaveLength(8);
+    expect(entries).toHaveLength(12);
+    expect(entries.filter((e) => e.level === "hook")).toHaveLength(6);
+    expect(entries.filter((e) => e.level === "policy")).toHaveLength(6);
     for (const e of entries) {
       expect(e.boundary).toBe("^|\\n|;|\\||&|\\(");
     }
@@ -211,8 +211,8 @@ describe("doctor - trigger-boundary drift (task 037cfb7c)", () => {
     const directPolicyCount = manifest.policies.filter(
       (p) => p.trigger.bash_match !== undefined,
     ).length;
-    expect(directHookCount).toBe(8);
-    expect(directPolicyCount).toBe(8);
+    expect(directHookCount).toBe(6);
+    expect(directPolicyCount).toBe(6);
   });
 
   // AC2 (negative control 2): an entry whose name does not exist in the

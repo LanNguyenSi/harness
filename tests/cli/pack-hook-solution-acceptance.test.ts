@@ -476,10 +476,10 @@ describe("completion-gate — decision matrix", () => {
       // paragraph appended below also names both tools, so a whole-reason
       // check would pass even with the poll clause dropped from step 2.
       const i2 = reason.indexOf("  2. ");
-      const i3 = reason.indexOf("  3. ");
+      const iReconnect = reason.indexOf("Reconnecting vs. retrying");
       expect(i2).toBeGreaterThanOrEqual(0);
-      expect(i3).toBeGreaterThan(i2);
-      const step2 = reason.slice(i2, i3);
+      expect(iReconnect).toBeGreaterThan(i2);
+      const step2 = reason.slice(i2, iReconnect);
       expect(step2).toContain('An attempt for "task-42" is already live');
       expect(step2).toContain("mcp__grounding-mcp__solution_evaluate_status");
       expect(step2).toContain("mcp__grounding-mcp__solution_evaluate_result");
@@ -603,13 +603,13 @@ describe("completion-gate — decision matrix", () => {
     expect(reason).not.toMatch(/Reconnecting vs\. retrying/);
   });
 
-  it("the deny names the full convergence recipe (commit-first + both push-gates)", async () => {
-    // Regression for the #2/#9/#58/#71 livelock: after a reviewer amendment the
-    // agent commits (HEAD moves), the verdict goes stale, and the deny must
-    // name the WHOLE recipe — commit if dirty, then run solution_evaluate AND
-    // refresh `harness preflight` at the same HEAD — not just one step. A deny
-    // that names only `solution_evaluate` is what made the agent satisfy one
-    // push-gate, retry, hit the other, and churn.
+  it("the deny names the full convergence recipe (commit-first + solution_evaluate)", async () => {
+    // Regression for the #2/#9/#58/#71 livelock: after a reviewer amendment
+    // the agent commits (HEAD moves), the verdict goes stale, and the deny
+    // must name the WHOLE recipe — commit if dirty, then re-run
+    // solution_evaluate at the same HEAD — not just one step. A deny that
+    // names only the commit hint is what made the agent commit, retry, hit
+    // the still-stale verdict, and churn.
     const { res, out } = await run({
       cwd: repoAtHead(HEAD),
       verdictDir: verdictDirWith(TASK, { head: OTHER, ready: true }),
@@ -618,7 +618,6 @@ describe("completion-gate — decision matrix", () => {
     const { reason } = JSON.parse(out) as { reason: string };
     expect(reason).toMatch(/COMMIT first/);
     expect(reason).toMatch(/solution_evaluate/);
-    expect(reason).toMatch(/harness preflight/);
   });
 
   it("BLOCKS when the current HEAD is unresolvable (not a git work tree)", async () => {

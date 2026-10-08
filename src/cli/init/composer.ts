@@ -6,9 +6,8 @@
 // Current surface (parity with FULL_TEMPLATE): one policy pack
 // (understanding-before-execution), four MCPs (agent-tasks,
 // grounding-mcp, memory-router — wired under memory.router, NOT
-// tools.mcp[] — and codebase-oracle), and six reference policies
-// (review-before-merge, preflight-before-investigation,
-// review-subagent-before-pr-create, preflight-before-push,
+// tools.mcp[] — and codebase-oracle), and four reference policies
+// (review-before-merge, review-subagent-before-pr-create,
 // dogfood-before-release, two-reviewers-required). The opencode pack
 // stays disabled in the wire-now multiselect until its runtime adapter
 // (agent-tasks/f34eb233) lands.
@@ -36,9 +35,7 @@ export type CustomMcpKey =
   | "codebase-oracle";
 export type CustomPolicyKey =
   | "review-before-merge"
-  | "preflight-before-investigation"
   | "review-subagent-before-pr-create"
-  | "preflight-before-push"
   | "dogfood-before-release"
   | "two-reviewers-required";
 
@@ -59,7 +56,7 @@ export const COMPOSABLE_PACKS: ReadonlyArray<ComposableOption<CustomPackKey>> = 
     key: "branch-protection",
     label: "branch-protection",
     description:
-      "Block Write/Edit (claude-code) or apply_patch (codex) when git names a protected branch (master, main, develop) for the target, at the first source mutation. Complements preflight-before-push at the LAST step. The way forward is a feature branch (`git checkout -b <feature>`).",
+      "Block Write/Edit (claude-code) or apply_patch (codex) when git names a protected branch (master, main, develop) for the target, at the first source mutation. Complements the push-time gates at the LAST step. The way forward is a feature branch (`git checkout -b <feature>`).",
   },
 ];
 
@@ -95,22 +92,10 @@ export const COMPOSABLE_POLICIES: ReadonlyArray<ComposableOption<CustomPolicyKey
       "Block mcp__agent-tasks__pull_requests_merge unless a review:<pr-number> ledger entry exists.",
   },
   {
-    key: "preflight-before-investigation",
-    label: "preflight-before-investigation",
-    description:
-      "Block git status/log/diff/branch unless preflight:<repo> ledger entry exists for this repo (within 1h).",
-  },
-  {
     key: "review-subagent-before-pr-create",
     label: "review-subagent-before-pr-create",
     description:
       "Block mcp__agent-tasks__pull_requests_create unless a review-subagent:<task-id> ledger entry exists.",
-  },
-  {
-    key: "preflight-before-push",
-    label: "preflight-before-push",
-    description:
-      "Block git push unless preflight:<branch> ledger entry exists for the current branch (within 10m).",
   },
   {
     key: "dogfood-before-release",
@@ -193,7 +178,7 @@ interface PolicySpec {
 // a deny-degraded audit-write retry) is ~10.8-13.75s; a lower per-hook
 // budget lets Claude Code kill the subprocess before its deny JSON
 // reaches stdout, silently turning a fail-closed verdict into an
-// unintended allow. Kept uniform across all five rows for the same
+// unintended allow. Kept uniform across all three rows for the same
 // dedup-safety reason FULL_TEMPLATE documents: generate-settings.ts's
 // buildGroups collapses same-matcher hooks by (command, timeout), so a
 // non-uniform budget would split one Claude Code invocation per Bash
@@ -207,29 +192,10 @@ const HOOK_FOR_POLICY: Record<CustomPolicyKey, HookSpec> = {
     blocking: "hard",
     budget_ms: 15000,
   },
-  "preflight-before-investigation": {
-    name: "require-preflight-evidence",
-    event: "PreToolUse",
-    match: "Bash",
-    bash_match:
-      "(^|\\n|;|\\||&|\\()\\s*(\\w+=\\S+\\s+)*git( -C \\S+)* (status|log|diff|branch)\\b",
-    command: "harness policy intercept",
-    blocking: "hard",
-    budget_ms: 15000,
-  },
   "review-subagent-before-pr-create": {
     name: "require-review-subagent-evidence",
     event: "PreToolUse",
     match: "mcp__agent-tasks__pull_requests_create",
-    command: "harness policy intercept",
-    blocking: "hard",
-    budget_ms: 15000,
-  },
-  "preflight-before-push": {
-    name: "require-preflight-push-evidence",
-    event: "PreToolUse",
-    match: "Bash",
-    bash_match: "(^|\\n|;|\\||&|\\()\\s*(\\w+=\\S+\\s+)*git( -C \\S+)* push\\b",
     command: "harness policy intercept",
     blocking: "hard",
     budget_ms: 15000,
@@ -278,28 +244,6 @@ const POLICY: Record<CustomPolicyKey, PolicySpec> = {
       run: ['harness record review --pr ${PR_NUMBER} "<summary>"'],
     },
   },
-  "preflight-before-investigation": {
-    name: "preflight-before-investigation",
-    description:
-      "Block investigative git reads (status/log/diff/branch) when agent-preflight has not run recently with ready:true for the current repo.",
-    trigger: {
-      event: "PreToolUse",
-      match: "Bash",
-      bash_match:
-        "(^|\\n|;|\\||&|\\()\\s*(\\w+=\\S+\\s+)*git( -C \\S+)* (status|log|diff|branch)\\b",
-    },
-    requires: { ledger_tag: "preflight:${REPO}", within: "1h" },
-    hook: "require-preflight-evidence",
-    enforcement: "block",
-    ux: {
-      cannot: "You cannot investigate this repository yet.",
-      required: [
-        "verified repository preflight",
-        "an approved Understanding Report, if the Understanding Gate is still active (it blocks `harness preflight` itself)",
-      ],
-      run: ["harness preflight"],
-    },
-  },
   "review-subagent-before-pr-create": {
     name: "review-subagent-before-pr-create",
     description:
@@ -316,35 +260,6 @@ const POLICY: Record<CustomPolicyKey, PolicySpec> = {
       cannot: "You cannot open a pull request for task ${TASK_ID} yet.",
       required: ["a completed review-subagent pass on this task"],
       run: ['harness record review-subagent --task ${TASK_ID} --verdict <verdict>'],
-    },
-  },
-  "preflight-before-push": {
-    name: "preflight-before-push",
-    description:
-      "Block git push unless a fresh preflight ledger entry exists for the current branch. Catches the stale-checkout class of incident at the last reversible step.",
-    trigger: {
-      event: "PreToolUse",
-      match: "Bash",
-      bash_match: "(^|\\n|;|\\||&|\\()\\s*(\\w+=\\S+\\s+)*git( -C \\S+)* push\\b",
-    },
-    requires: {
-      ledger_tag: "preflight:${BRANCH}",
-      within: "10m",
-      // at_head:true lets a preflight at the current HEAD satisfy at
-      // any age (standard producer writes head:<sha>). The 10m window
-      // is the freshness ceiling for the head-mismatch case.
-      at_head: true,
-    },
-    hook: "require-preflight-push-evidence",
-    enforcement: "block",
-    ux: {
-      cannot: "You cannot push branch ${BRANCH} yet.",
-      required: [
-        "a preflight for ${BRANCH} at the current HEAD (any age) OR any preflight within the last 10 minutes. Re-run `harness preflight` if you committed since the last preflight AND it has been more than 10 minutes.",
-        "if solution-acceptance is enabled, a ready HEAD-pinned verdict at the SAME commit too (run `solution_evaluate`). `git push` trips both gates, so commit first if the tree is dirty, then satisfy both at one HEAD.",
-        "an approved Understanding Report, if the Understanding Gate is still active (it blocks `harness preflight` itself)",
-      ],
-      run: ["harness preflight"],
     },
   },
   "dogfood-before-release": {
@@ -460,10 +375,8 @@ export function composeCustom(sel: CustomSelection): ComposeResult {
 
   // Producer-consistency advisories: each policy's `requires.ledger_tag`
   // implies some producer must populate that tag. agent-tasks-coupled
-  // policies need the agent-tasks MCP wired; preflight-coupled policies
-  // need either grounding-mcp (so ledger_add reaches the gate) or a
-  // SessionStart preflight hook. The Custom v1 surface does not expose
-  // the SessionStart hook yet, so only check the MCP coupling.
+  // policies need the agent-tasks MCP wired; ledger-write-coupled policies
+  // need grounding-mcp (so ledger_add reaches the gate).
   if (sel.policies.includes("review-before-merge") && !mcpSet.has("agent-tasks")) {
     warnings.push(
       "policy review-before-merge fires on agent-tasks MCP verbs; selecting it without the agent-tasks MCP is allowed but the gate has no event to evaluate.",
@@ -482,24 +395,11 @@ export function composeCustom(sel: CustomSelection): ComposeResult {
       "policy two-reviewers-required fires on agent-tasks MCP verbs; selecting it without the agent-tasks MCP is allowed but the gate has no event to evaluate.",
     );
   }
-  // Note: understanding-before-execution does NOT produce preflight tags
+  // Note: understanding-before-execution does NOT produce ledger tags
   // (it produces the operator-approve marker, a different gate signal).
   // The pack is therefore NOT a substitute for grounding-mcp here; the
   // only Custom-surface producer the wizard can wire is grounding-mcp's
   // ledger_add.
-  if (
-    sel.policies.includes("preflight-before-investigation") &&
-    !mcpSet.has("grounding-mcp")
-  ) {
-    warnings.push(
-      "policy preflight-before-investigation requires a producer that writes preflight:<repo> tags to the evidence ledger. Without grounding-mcp (ledger_add) or a separate SessionStart preflight hook (not in the Custom surface), the gate stays closed forever.",
-    );
-  }
-  if (sel.policies.includes("preflight-before-push") && !mcpSet.has("grounding-mcp")) {
-    warnings.push(
-      "policy preflight-before-push requires a producer that writes preflight:<branch> tags to the evidence ledger. Without grounding-mcp (ledger_add) or a separate SessionStart preflight hook (not in the Custom surface), the gate stays closed forever.",
-    );
-  }
   if (sel.policies.includes("dogfood-before-release") && !mcpSet.has("grounding-mcp")) {
     warnings.push(
       "policy dogfood-before-release requires a producer that writes dogfood:<session-id> tags to the evidence ledger. Without grounding-mcp (ledger_add) the gate stays closed forever — every npm publish / git tag v* will be blocked.",

@@ -83,9 +83,9 @@ describeBlock("describe — --json", () => {
     const parsed = JSON.parse(result.output);
     expect(parsed.version).toBe(1);
     expect(parsed.tools.mcp).toHaveLength(3);
-    // 16 since task 2699b476 added review-before-task-merge and
-    // review-before-task-finish-automerge to the reference manifest.
-    expect(parsed.policies).toHaveLength(16);
+    // 14 since task f3f15290 dropped the preflight-before-investigation and
+    // preflight-before-push policies from the reference manifest.
+    expect(parsed.policies).toHaveLength(14);
   });
 
   it("emits valid filtered JSON when --pillar is combined with --json", () => {

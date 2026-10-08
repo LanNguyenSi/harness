@@ -8,9 +8,6 @@ import { PermissionProfilesSchema } from "./permission-profiles.js";
 import { PolicyPacksSchema } from "./policy-packs.js";
 import { RiskSchema } from "./risk.js";
 import { ToolsSchema } from "./tools.js";
-import { ToolchainParitySchema } from "./toolchain-parity.js";
-import { StaleBaseCheckSchema } from "./stale-base-check.js";
-import { SessionStartPreflightSchema } from "./session-start-preflight.js";
 import { AuditSchema } from "./audit.js";
 import { DoctorSchema } from "./doctor.js";
 import { ReviewTemplatesSchema, WorkflowsSchema } from "./workflows.js";
@@ -39,16 +36,6 @@ export const ManifestSchema = z
     workflows: WorkflowsSchema.default([]),
     review_templates: ReviewTemplatesSchema.default({}),
     audit: AuditSchema.default({}),
-    // Optional, default-OFF: `harness session-start toolchain-parity`
-    // snapshot + peer-drift-compare config. See ./toolchain-parity.ts.
-    toolchain_parity: ToolchainParitySchema.default({}),
-    // Optional, default-OFF: `harness session-start stale-base-check`
-    // config (task ce3903b0, incident ea8becf5). See ./stale-base-check.ts.
-    stale_base_check: StaleBaseCheckSchema.default({}),
-    // Optional, default-OFF: `harness session-start preflight` (and its
-    // `harness preflight` alias) `--setup` passthrough (task 30183330).
-    // See ./session-start-preflight.ts.
-    session_start_preflight: SessionStartPreflightSchema.default({}),
     // Optional: `harness doctor` config, e.g. the deliberate-opt-out
     // list for the template-policy-drift check. See ./doctor.ts.
     doctor: DoctorSchema.default({}),
@@ -165,7 +152,6 @@ export * from "./permission-profiles.js";
 export * from "./policies.js";
 export * from "./policy-packs.js";
 export * from "./risk.js";
-export * from "./toolchain-parity.js";
 export * from "./environments.js";
 export * from "./workflows.js";
 export * from "./audit.js";

@@ -11,10 +11,11 @@
 # explicit extract needed), within: freshness window, ux: with
 # producer command in run: so the agent knows exactly how to unblock.
 #
-# The bash_match regex below is identical to the one harness init
-# wires for its built-in preflight-before-push pattern (see
-# src/cli/init/composer.ts). If init's pattern moves, update both
-# this file and Recipe C (if relevant) and re-run the recipe vitest.
+# The bash_match regex below gates `git push` at a boundary (leading
+# `^` / newline / `;` / `|` / `&` / `(`), the same boundary alphabet the
+# shipped templates use for their Bash gates. If that boundary alphabet
+# moves, update both this file and Recipe C (if relevant) and re-run the
+# recipe vitest.
 #
 # Author loop:
 #   harness validate --config docs/examples/policies/02-clean-check-before-push.yaml

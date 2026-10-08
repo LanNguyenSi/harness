@@ -20,7 +20,6 @@ import { spawn } from "node:child_process";
 import { existsSync, accessSync, constants } from "node:fs";
 import * as path from "node:path";
 import { assertNoRealSpawnInTests } from "../../runtime/hermetic-spawn-guard.js";
-import { GIT_PREFLIGHT_HOOK_MIN_VERSION } from "./templates.js";
 
 import type { ProfileChoice } from "./interactive.js";
 import type { CustomSelection } from "./composer.js";
@@ -95,11 +94,8 @@ export const PROFILE_DEPENDENCIES: Record<Exclude<ProfileChoice, "custom">, Prof
       description: "grounding-mcp MCP server",
     },
   ],
-  // Full inherits everything from Solo + Team, and adds the
-  // SessionStart preflight producer: the `git-preflight` hook shells
-  // out to `agent-preflight` (`preflight` binary) to write
-  // `preflight:${REPO}` to the ledger, which is what the
-  // `preflight-before-*` policies match.
+  // Full inherits everything from Solo + Team and adds no extra
+  // dependencies of its own.
   //
   // codebase-oracle (`@lannguyensi/codebase-oracle`) is intentionally
   // NOT in the Full chain. It is a useful standalone MCP for multi-repo
@@ -108,25 +104,7 @@ export const PROFILE_DEPENDENCIES: Record<Exclude<ProfileChoice, "custom">, Prof
   // index run) is not worth pushing on every Full-profile operator.
   // See FULL_TEMPLATE comment under `tools.mcp` for the manual wiring
   // recipe (`harness add mcp codebase-oracle --command codebase-oracle,mcp`).
-  full: [
-    {
-      binary: "preflight",
-      npmPackage: "@lannguyensi/agent-preflight",
-      description: "agent-preflight (SessionStart preflight producer)",
-      // Reads the SAME constant as FULL_TEMPLATE's git-preflight hook
-      // `min_version` (GIT_PREFLIGHT_HOOK_MIN_VERSION,
-      // src/cli/init/templates.ts), the hook floor, not the separate
-      // setup floor `harness doctor`'s session_start_preflight.setup
-      // check enforces
-      // (src/cli/doctor/session-start-preflight-setup-version.ts),
-      // split by task 65952a0c
-      // (docs/decisions/2026-09-08-preflight-floors.md), both "0.6.0"
-      // today. This wizard-facing table must never advertise a floor
-      // lower than what the generated manifest's own `min_version`
-      // declares, which is the hook floor.
-      minVersion: GIT_PREFLIGHT_HOOK_MIN_VERSION,
-    },
-  ],
+  full: [],
 };
 
 /**
@@ -284,18 +262,6 @@ export function dependenciesForCustom(sel: CustomSelection): ProfileDependency[]
   if (sel.policies.length > 0 && !sel.mcps.includes("grounding-mcp")) {
     const groundingMcpDep = PROFILE_DEPENDENCIES.team.find((d) => d.binary === "grounding-mcp");
     if (groundingMcpDep) push(groundingMcpDep);
-  }
-  // preflight-* policies need agent-preflight on PATH (the
-  // SessionStart hook FULL_TEMPLATE wires; mirrors PROFILE_DEPENDENCIES.full).
-  // Even though the Custom surface does not expose the SessionStart hook
-  // yet, operators wiring the preflight gates will still want the
-  // producer binary installed so a manual `harness session-start preflight`
-  // invocation can populate the ledger tag.
-  const wantsPreflight = sel.policies.some((p) => p.startsWith("preflight-"));
-  if (wantsPreflight) {
-    for (const dep of PROFILE_DEPENDENCIES.full) {
-      if (dep.binary === "preflight") push(dep);
-    }
   }
   return chain;
 }

@@ -33,7 +33,7 @@ export const HookSchema = z
     // Optional `min_version` runs `version_command` via `harness doctor` and
     // emits a `warn` line when the parsed version is below this floor. Both
     // fields must be present together: hook commands are arbitrary shell
-    // strings (e.g. `harness session-start preflight`,
+    // strings (e.g. `harness policy intercept`,
     // `~/.claude/hooks/foo.sh`), so there is no useful default for
     // `version_command` and a min_version-without-command is treated as a
     // config error.

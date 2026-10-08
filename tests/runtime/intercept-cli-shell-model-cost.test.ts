@@ -11,6 +11,7 @@ import { MAX_NORMALIZE_LENGTH } from "../../src/runtime/command-normalize.js";
 import { parseManifest } from "../../src/schema/index.js";
 import { makeManifest } from "../_helpers/manifest.js";
 import { addGitDirSkeleton } from "../_helpers/git-dir-fixture.js";
+import { legacyPreflightInvestigation } from "../_helpers/legacy-preflight-policies.js";
 
 // Task 7d4abf84: the end-to-end cost of the shell model's attribution at the
 // input bound. A command that names one long composed path for thousands of
@@ -27,9 +28,17 @@ import { addGitDirSkeleton } from "../_helpers/git-dir-fixture.js";
 const HOOK_BUDGET_MS = 15_000;
 const ASSERTED_BOUND_MS = HOOK_BUDGET_MS / 3;
 
-const policies = parseManifest(parseYaml(FULL_TEMPLATE)).policies.filter(
-  (p) => p.trigger.match === "Bash" && p.trigger.bash_match !== undefined,
-);
+// The git-read `preflight-before-investigation` policy (the realistic
+// per-repo Bash trigger this cost test measured against) was removed in
+// f3f15290; it is supplied here from the engine-test fixture so the
+// attribution-cost guard keeps exercising a real git-read trigger alongside
+// the Bash policies FULL_TEMPLATE still ships.
+const policies = [
+  ...parseManifest(parseYaml(FULL_TEMPLATE)).policies.filter(
+    (p) => p.trigger.match === "Bash" && p.trigger.bash_match !== undefined,
+  ),
+  legacyPreflightInvestigation(),
+];
 
 let root = "";
 let outer = "";

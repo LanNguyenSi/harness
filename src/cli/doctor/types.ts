@@ -8,7 +8,6 @@ import type { OpencodeTargetReport } from "./opencode.js";
 import type { NpmBinReport } from "./npm-bin-path.js";
 import type { RogueLedgerDb } from "./rogue-ledger.js";
 import type { UnderstandingModeEnvDivergence } from "./understanding-mode-env.js";
-import type { ToolchainParitySection } from "./toolchain-parity.js";
 import type { UgAutoApprovalsSection } from "./ug-auto-approvals.js";
 import type { UgDelegationsSection } from "./ug-delegations.js";
 import type { UgInflightSection } from "./ug-inflight.js";
@@ -17,7 +16,6 @@ import type { SettingsDriftSection } from "./settings-drift.js";
 import type { AutoApproveModeWarning } from "./auto-approve-mode.js";
 import type { ExpireOnToolMatchWarning } from "./expire-on-tool-match.js";
 import type { BypassWithoutAutoApproveFinding } from "./bypass-without-auto-approve.js";
-import type { SessionStartPreflightSetupVersionFinding } from "./session-start-preflight-setup-version.js";
 import type { CodexConfigDriftSection } from "./codex-config-drift.js";
 
 /**
@@ -512,16 +510,6 @@ export interface DoctorReport {
   ugBypassWithoutAutoApprove?: BypassWithoutAutoApproveFinding;
 
   /**
-   * `session_start_preflight.setup: true` against a `preflight` binary
-   * below the build-capable release (task 6993d9b5). Present only when
-   * `setup` is enabled AND the probed/parsed version is below
-   * `SESSION_START_PREFLIGHT_SETUP_BUILD_MIN_VERSION` (or the probe
-   * failed/could not be parsed); always a warning (`⚠`) when present,
-   * see session-start-preflight-setup-version.ts.
-   */
-  sessionStartPreflightSetupVersion?: SessionStartPreflightSetupVersionFinding;
-
-  /**
    * `auto_approve` configured without `mode: grill_me` (agent-tasks
    * abfad738, follow-up of ADR
    * docs/decisions/2026-08-27-ug-auto-mode-approval.md slice 1).
@@ -627,17 +615,6 @@ export interface DoctorReport {
    */
   claudeMcp?: ClaudeMcpRegistrationSection;
   /**
-   * On-demand toolchain-parity comparison (task 13919613), reusing the
-   * Collector/Comparator core from `harness session-start
-   * toolchain-parity` (src/cli/doctor/toolchain-parity.ts). Present only
-   * when `toolchain_parity.enabled` is true in the manifest — absent
-   * otherwise, mirroring `grounding`'s "only when the feature is in use"
-   * gating. Always read-only: never writes a snapshot file or a ledger
-   * fact. Only `"drift"`-status peers roll into `warningCount`; the
-   * section is never an `errorCount` source (advisory, not a gate).
-   */
-  toolchainParity?: ToolchainParitySection;
-  /**
    * Phase 6 #6 follow-up: present when `--target codex` is passed.
    * Aggregates harness-side codex adapter health checks (binary
    * resolution, generated config presence, hook command resolution,
@@ -666,7 +643,6 @@ export interface DoctorReport {
 }
 
 export type { NpmBinReport } from "./npm-bin-path.js";
-export type { SessionStartPreflightSetupVersionFinding } from "./session-start-preflight-setup-version.js";
 export type {
   ClaudeMcpRegistrationSection,
   ClaudeMcpEntryReport,
@@ -684,10 +660,6 @@ export type { ExpireOnToolMatchWarning } from "./expire-on-tool-match.js";
 export type { BypassWithoutAutoApproveFinding } from "./bypass-without-auto-approve.js";
 export type { SettingsDriftSection } from "./settings-drift.js";
 export type { CodexConfigDriftSection } from "./codex-config-drift.js";
-export type {
-  ToolchainParitySection,
-  ToolchainParityPeerReport,
-} from "./toolchain-parity.js";
 
 export type {
   Manifest,

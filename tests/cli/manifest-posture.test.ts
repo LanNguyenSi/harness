@@ -88,10 +88,13 @@ const NOOP_PROBES = {
 const NO_CLAUDE_CLI: ClaudeMcpExec = async () => ({ code: 127, stdout: "", stderr: "", enoent: true, timedOut: false });
 
 describe("the removed-entry table", () => {
-  it("lists the two reserved grounding keys, each with a version and a reason", () => {
+  it("lists the reserved grounding keys and the removed producer roots, each with a version and a reason", () => {
     expect(REMOVED_MANIFEST_PATHS.map((p) => p.path)).toEqual([
       "grounding.evidence_ledger.retention_days",
       "grounding.policies_source",
+      "session_start_preflight",
+      "toolchain_parity",
+      "stale_base_check",
     ]);
     for (const p of REMOVED_MANIFEST_PATHS) {
       expect(p.removedIn).toMatch(/^\d+\.\d+\.\d+$/);

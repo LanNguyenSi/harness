@@ -1199,7 +1199,7 @@ export async function runInteractive(
           name: "Full (Team + the reference policies wired through harness policy intercept)",
           value: "full",
           description:
-            "Requires agent-tasks + @lannguyensi/agent-preflight on PATH. Ships the reference manifest with every example policy (dogfood gate, preflight gates, review-subagent gate). All hooks run through the bundled `harness policy intercept` engine.",
+            "Requires agent-tasks on PATH. Ships the reference manifest with every example policy (dogfood gate, review-subagent gate). All hooks run through the bundled `harness policy intercept` engine.",
         },
         {
           name: "Custom (advanced, bail out and hand-edit)",

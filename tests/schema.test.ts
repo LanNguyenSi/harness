@@ -36,12 +36,12 @@ describe("parseManifest — happy path", () => {
     // require-review-evidence-task-merge / -task-finish hooks and their
     // review-before-task-merge / review-before-task-finish-automerge
     // policies to the reference manifest.
-    expect(manifest.hooks).toHaveLength(14);
-    expect(manifest.policies).toHaveLength(16);
+    expect(manifest.hooks).toHaveLength(11);
+    expect(manifest.policies).toHaveLength(14);
     const reviewPolicy = manifest.policies.find((p) => p.name === "review-before-merge");
     expect(reviewPolicy?.requires?.ledger_tag).toBe("review:${PR_NUMBER}");
     expect(reviewPolicy?.trigger.extract?.PR_NUMBER).toBe("toolArgs.prNumber");
-    // Field-level invariants on the two policies added alongside this test.
+    // Field-level invariants on a policy added alongside this test.
     // Schema parsing alone would not catch a typo like `toolArgs.task_id` —
     // it's grammatical per the extract DSL but would silently never resolve
     // at runtime. Lock the load-bearing strings explicitly.
@@ -51,15 +51,6 @@ describe("parseManifest — happy path", () => {
     expect(reviewSubagentPolicy?.trigger.match).toBe("mcp__agent-tasks__pull_requests_create");
     expect(reviewSubagentPolicy?.trigger.extract?.TASK_ID).toBe("toolArgs.taskId");
     expect(reviewSubagentPolicy?.requires?.ledger_tag).toBe("review-subagent:${TASK_ID}");
-    const preflightPushPolicy = manifest.policies.find(
-      (p) => p.name === "preflight-before-push",
-    );
-    expect(preflightPushPolicy?.trigger.match).toBe("Bash");
-    expect(preflightPushPolicy?.trigger.bash_match).toBe(
-      "(^|\\n|;|\\||&|\\()\\s*(\\w+=\\S+\\s+)*git( -C \\S+)* push\\b",
-    );
-    expect(preflightPushPolicy?.requires?.ledger_tag).toBe("preflight:${BRANCH}");
-    expect(preflightPushPolicy?.requires?.within).toBe("10m");
     expect(manifest.policy_packs).toHaveLength(3);
     expect(manifest.policy_packs[0]?.name).toBe("understanding-before-execution");
     expect(manifest.policy_packs[0]?.source).toBe("builtin");
@@ -78,8 +69,8 @@ describe("parseManifest — happy path", () => {
     const packConfig = manifest.policy_packs[0]?.config as Record<string, unknown>;
     expect(packConfig?.mode).toBe("grill_me");
     expect(Array.isArray(packConfig?.producers)).toBe(true);
-    // Producers (agent-tasks/3804b785 + fa4b188b): all six reference
-    // policies must ship with remediation hints carrying an MCP path,
+    // Producers (agent-tasks/3804b785 + fa4b188b): every reference
+    // policy must ship with remediation hints carrying an MCP path,
     // since that is the ungated recovery route for Bash-lockout
     // scenarios. The full chain was completed in fa4b188b.
     for (const policyName of [
@@ -87,10 +78,8 @@ describe("parseManifest — happy path", () => {
       "review-before-merge-bash",
       "dogfood-before-release",
       "two-reviewers-required",
-      "preflight-before-investigation",
       "review-subagent-before-pr-create",
       "review-subagent-before-pr-create-bash",
-      "preflight-before-push",
     ]) {
       const p = manifest.policies.find((x) => x.name === policyName);
       expect(p?.producers, `${policyName} producers`).toBeDefined();

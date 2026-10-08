@@ -45,6 +45,21 @@ export const REMOVED_MANIFEST_PATHS: readonly RemovedManifestPath[] = [
     removedIn: "1.0.0",
     reason: "reserved and never consumed: policies live in policies[] / policy_packs[]",
   },
+  {
+    path: "session_start_preflight",
+    removedIn: "1.0.0",
+    reason: "the session-start preflight producer is removed",
+  },
+  {
+    path: "toolchain_parity",
+    removedIn: "1.0.0",
+    reason: "the session-start toolchain-parity producer is removed",
+  },
+  {
+    path: "stale_base_check",
+    removedIn: "1.0.0",
+    reason: "the session-start stale-base-check producer is removed",
+  },
 ];
 
 export const REMOVED_PACK_NAMES: readonly RemovedPackName[] = [
@@ -139,4 +154,24 @@ export function stripRemovedManifestEntries(
 /** One line per warning, as `harness validate` / `harness doctor` print it. */
 export function formatPostureWarning(w: ManifestPostureWarning): string {
   return `${w.path}: ${w.message}`;
+}
+
+/** A CLI command prefix a release removed (a generated hook or producer that still calls it fails). */
+export interface RemovedCommand {
+  /** Command prefix as it appears in a hook or producer `command`, e.g. `harness session-start`. */
+  command: string;
+  removedIn: string;
+  reason: string;
+}
+
+export const REMOVED_COMMANDS: readonly RemovedCommand[] = [
+  { command: "harness session-start", removedIn: "1.0.0", reason: "the SessionStart producers are removed" },
+  { command: "harness preflight", removedIn: "1.0.0", reason: "alias of the removed session-start preflight producer" },
+  { command: "harness pack hook post-merge-gate", removedIn: "1.0.0", reason: "the post-merge-gate pack is removed" },
+];
+
+/** True when `command` invokes a removed command (exact prefix followed by end or whitespace). */
+export function invokesRemovedCommand(command: string, table: readonly RemovedCommand[] = REMOVED_COMMANDS): RemovedCommand | undefined {
+  const trimmed = command.trim();
+  return table.find((r) => trimmed === r.command || trimmed.startsWith(`${r.command} `) || trimmed.startsWith(`${r.command}-`));
 }

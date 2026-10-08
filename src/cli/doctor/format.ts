@@ -80,7 +80,6 @@ function formatEnvironmentSection(report: DoctorReport): string[] {
   const autoApproveMode = report.ugAutoApproveMode;
   const expireOnToolMatch = report.ugExpireOnToolMatch;
   const bypassWithoutAutoApprove = report.ugBypassWithoutAutoApprove;
-  const sessionStartPreflightSetupVersion = report.sessionStartPreflightSetupVersion;
   // "nothing when `.approvals/` is absent" (ug-auto-approvals.ts's AC 1):
   // stay silent unless the directory actually exists, mirroring the rest
   // of this section's "no line for a check that found nothing" style.
@@ -108,7 +107,6 @@ function formatEnvironmentSection(report: DoctorReport): string[] {
     !autoApproveMode &&
     !expireOnToolMatch &&
     !bypassWithoutAutoApprove &&
-    !sessionStartPreflightSetupVersion &&
     !showUgAuto &&
     !showUgDeleg &&
     !showUgInflight &&
@@ -140,28 +138,6 @@ function formatEnvironmentSection(report: DoctorReport): string[] {
   if (bypassWithoutAutoApprove) {
     out.push(`  ⚠ ${bypassWithoutAutoApprove.message}`);
     for (const line of bypassWithoutAutoApprove.detail) out.push(`      ${line}`);
-  }
-  if (sessionStartPreflightSetupVersion) {
-    // task c88461c1, review round 3 residual; task `1c4eb3ea` (round 2,
-    // D-027 item 2): name the project whose layer actually DECIDED
-    // this verdict, when one was in play (only when a layer file
-    // resolved, not merely attempted, see `doctor()`), so a warning
-    // that came from a per-repo project layer is distinguishable from
-    // one that came from the base/machine value (the header's own
-    // `project:` clause above only ever reflects an EXPLICIT
-    // `--project`, never this derived name).
-    //
-    // The `sanitizeProjectForDisplay` wrap is defense in depth, not a
-    // live echo of an unvalidated value: `doctor()` sets `projectName`
-    // only when `resolvePaths` actually resolved a project layer FILE,
-    // which requires the name to have passed `isValidProjectName` (and
-    // therefore its control-character screen) first. It stays so a
-    // hand-built finding or a future producer cannot reintroduce a
-    // forged line through this one call site.
-    const project = sessionStartPreflightSetupVersion.projectName
-      ? ` (project: ${sanitizeProjectForDisplay(sessionStartPreflightSetupVersion.projectName)})`
-      : "";
-    out.push(`  ⚠ ${sessionStartPreflightSetupVersion.message}${project}`);
   }
   if (showUgAuto && ugAuto) {
     const modeParts = Object.keys(ugAuto.byMode)
@@ -654,49 +630,6 @@ function formatGroundingSection(report: DoctorReport): string[] {
   return out;
 }
 
-/**
- * Single choke point for peer-controlled strings reaching doctor's
- * plain-text output (task 13919613, mirroring the CR/LF strip
- * `note()` in src/cli/session-start/toolchain-parity.ts applies at ITS
- * own choke point). A peer snapshot's `profile` field, and every value
- * (npm package name/version, node version, OW-Kit version, MCP server
- * name) baked into a `compareToPeer` drift `message`, is untrusted,
- * cross-machine-synced content — agent-memory-sync populates the
- * machine-state directory from other machines this repo does not
- * control. A crafted `\n`/`\r` inside any of those could otherwise forge
- * a fake standalone doctor line (e.g. a spoofed "0 errors" Summary).
- * Applied at render time, not at collection time, so it protects every
- * site below regardless of which reused field the value flows through.
- */
-function stripCrLf(s: string): string {
-  return s.replace(/[\r\n]/g, " ");
-}
-
-function formatToolchainParitySection(report: DoctorReport): string[] {
-  const tp = report.toolchainParity;
-  if (tp === undefined) return [];
-  const out: string[] = ["", "Toolchain Parity"];
-  if (tp.status === "skipped" || tp.status === "no-peers") {
-    out.push(`  ~ ${stripCrLf(tp.message)}`);
-    return out;
-  }
-  for (const p of tp.peers) {
-    const marker = p.status === "ok" ? "✓" : "⚠";
-    const label = p.status === "ok" ? "ok" : `drift:${p.driftCount}`;
-    out.push(
-      `  ${marker} ${stripCrLf(p.peerProfile)}  ${label} (snapshot age ${p.ageLabel})`,
-    );
-    for (const d of p.drift) out.push(`      drift — ${stripCrLf(d.message)}`);
-  }
-  if (tp.unparseablePeers.length > 0) {
-    out.push(
-      `  ⚠ ${tp.unparseablePeers.length} peer snapshot(s) could not be parsed: ` +
-        tp.unparseablePeers.map(stripCrLf).join(", "),
-    );
-  }
-  return out;
-}
-
 function formatClaudeMcpSection(report: DoctorReport): string[] {
   const c = report.claudeMcp;
   if (c === undefined) return [];
@@ -751,7 +684,6 @@ export function format(report: DoctorReport): string {
   lines.push(...formatHookBudgetLedgerMarginSection(report));
   lines.push(...formatGroundingSection(report));
   lines.push(...formatClaudeMcpSection(report));
-  lines.push(...formatToolchainParitySection(report));
   lines.push(...formatCodexTargetSection(report));
   lines.push(...formatOpencodeTargetSection(report));
   lines.push(...formatRogueLedgerSection(report));

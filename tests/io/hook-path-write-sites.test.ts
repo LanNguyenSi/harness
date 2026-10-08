@@ -22,9 +22,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { Readable, Writable } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { addGitDirSkeleton } from "../_helpers/git-dir-fixture.js";
 
 const hoisted = vi.hoisted(() => ({
   opens: [] as Array<{ path: string; flags: number }>,
@@ -55,7 +53,6 @@ vi.mock("node:crypto", async (importOriginal) => {
 });
 
 import { recordAdoptedEntry } from "../../src/cli/pack/hook-pre-tool-use.js";
-import { runSessionStartPreflight, type RunPreflightResult } from "../../src/cli/session-start/index.js";
 import { getOrCreateSigningKey, rotateSigningKey } from "../../src/runtime/approval-signing.js";
 
 const C = fs.constants;
@@ -136,75 +133,4 @@ describe.skipIf(process.platform === "win32")("delegation adoption ledger: the a
       expect(has(opens[0]!.flags, "O_APPEND")).toBe(true);
     },
   );
-});
-
-describe.skipIf(process.platform === "win32")("preflight fail log: the write opens exclusively, non-blocking", () => {
-  const notReady = async (): Promise<RunPreflightResult> => ({
-    ok: true,
-    json: { ready: false, confidence: 0.2, checks: [{ name: "x", status: "fail", details: ["boom"] }] },
-  });
-
-  function repoFixture(): string {
-    const repo = path.join(tmp, "widget-service");
-    fs.mkdirSync(path.join(repo, ".git"), { recursive: true });
-    fs.writeFileSync(path.join(repo, ".git", "HEAD"), "ref: refs/heads/main\n");
-    addGitDirSkeleton(path.join(repo, ".git"));
-    return repo;
-  }
-
-  async function runOnce(repo: string, logDir: string): Promise<{ reason: string | undefined; stderr: string }> {
-    let err = "";
-    const stderr = new Writable({
-      write(chunk, _enc, cb): void {
-        err += chunk.toString("utf8");
-        cb();
-      },
-    });
-    const result = await runSessionStartPreflight({
-      stdin: Readable.from([JSON.stringify({ session_id: "s", cwd: repo })]),
-      stderr,
-      logDir,
-      runPreflight: notReady,
-      writeLedger: async () => ({ ok: true }),
-    });
-    return { reason: result.reason, stderr: err };
-  }
-
-  function pinName(): void {
-    hoisted.fixedRandom.on = true;
-    vi.useFakeTimers({ toFake: ["Date"] });
-    vi.setSystemTime(new Date("2026-10-07T10:00:00.123Z"));
-  }
-
-  it("the log file is created with O_EXCL | O_NONBLOCK and without O_TRUNC", async () => {
-    const logDir = path.join(tmp, "logs");
-    const { reason } = await runOnce(repoFixture(), logDir);
-    expect(reason).toContain("; log: ");
-    const [file] = fs.readdirSync(logDir);
-    const opens = writeOpens(path.join(logDir, file!));
-    expect(opens).toHaveLength(1);
-    expect(has(opens[0]!.flags, "O_EXCL")).toBe(true);
-    expect(has(opens[0]!.flags, "O_NONBLOCK")).toBe(true);
-    expect(has(opens[0]!.flags, "O_TRUNC")).toBe(false);
-  });
-
-  it("a symlink planted at the generated name fails EEXIST and its target is not written", async () => {
-    pinName();
-    const logDir = path.join(tmp, "logs");
-    const repo = repoFixture();
-    // Learn the (now deterministic) generated name from a first run.
-    await runOnce(repo, logDir);
-    const [name] = fs.readdirSync(logDir);
-    expect(name).toBe("preflight-widget-service-2026-10-07T10-00-00-123Z-abcd.json");
-    fs.rmSync(path.join(logDir, name!));
-    const victim = path.join(tmp, "victim");
-    fs.writeFileSync(victim, "keep\n");
-    fs.symlinkSync(victim, path.join(logDir, name!));
-
-    const { reason, stderr } = await runOnce(repo, logDir);
-    expect(stderr).toContain("preflight fail-log write failed");
-    expect(stderr).toContain("EEXIST");
-    expect(reason).not.toContain("; log:");
-    expect(fs.readFileSync(victim, "utf8")).toBe("keep\n");
-  });
 });

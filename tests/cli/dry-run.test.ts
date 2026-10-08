@@ -3,7 +3,8 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { Readable, Writable } from "node:stream";
-import { afterEach, describe, expect, it } from "vitest";
+import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
+import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { dryRun } from "../../src/cli/dry-run.js";
 import { HarnessExitError } from "../../src/cli/exit-codes.js";
 import { loadManifest } from "../../src/cli/loader.js";
@@ -16,10 +17,44 @@ import {
 } from "../../src/runtime/intercept.js";
 import type { Policy } from "../../src/schema/index.js";
 import { addGitDirSkeleton } from "../_helpers/git-dir-fixture.js";
+import { legacyPreflightInvestigation, legacyPreflightPush } from "../_helpers/legacy-preflight-policies.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const REPO_ROOT = path.resolve(path.dirname(__filename), "..", "..");
-const FULL_MANIFEST = path.join(REPO_ROOT, "docs", "examples", "full-manifest.yaml");
+const REFERENCE_MANIFEST = path.join(REPO_ROOT, "docs", "examples", "full-manifest.yaml");
+
+// The reference manifest dropped the preflight-before-* policies in task
+// f3f15290, but the dry-run engine tests below still exercise them as the
+// canonical `${BRANCH}` / `${REPO}` branch-tag Bash fixtures (ledger-query
+// resolution, quote-aware match parity). Build a local superset fixture: the
+// live reference manifest plus the two legacy policies and the hooks they name,
+// so those engine guards stay honest without re-shipping the policies.
+const REFERENCE_MANIFEST_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "harness-dry-run-fixture-"));
+afterAll(() => fs.rmSync(REFERENCE_MANIFEST_DIR, { recursive: true, force: true }));
+const FULL_MANIFEST = (() => {
+  const manifest = parseYaml(fs.readFileSync(REFERENCE_MANIFEST, "utf8")) as {
+    hooks: Array<Record<string, unknown>>;
+    policies: Array<Record<string, unknown>>;
+  };
+  const extra: Array<[Policy, string]> = [
+    [legacyPreflightInvestigation(), "require-preflight-evidence"],
+    [legacyPreflightPush(), "require-preflight-push-evidence"],
+  ];
+  for (const [policy, hookName] of extra) {
+    manifest.policies.push(policy as unknown as Record<string, unknown>);
+    manifest.hooks.push({
+      name: hookName,
+      event: "PreToolUse",
+      match: "Bash",
+      command: `~/.claude/hooks/${hookName}.sh`,
+      blocking: "hard",
+      budget_ms: 2000,
+    });
+  }
+  const file = path.join(REFERENCE_MANIFEST_DIR, "full-manifest.yaml");
+  fs.writeFileSync(file, stringifyYaml(manifest));
+  return file;
+})();
 
 let cleanups: Array<() => void> = [];
 afterEach(() => {

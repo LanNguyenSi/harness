@@ -31,6 +31,10 @@ import type {
 } from "../../src/schema/index.js";
 import { makeManifest, makePolicy as policy } from "../_helpers/manifest.js";
 import { addGitDirSkeleton } from "../_helpers/git-dir-fixture.js";
+import {
+  legacyPreflightInvestigation,
+  legacyPreflightPush,
+} from "../_helpers/legacy-preflight-policies.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const REPO_ROOT = path.resolve(path.dirname(__filename), "..", "..");
@@ -2288,8 +2292,12 @@ describe("intercept: empty REPO / BRANCH never renders a blank ledger tag", () =
     const found = parseManifest(parseYaml(FULL_TEMPLATE)).policies.find(
       (p) => p.name === name,
     );
-    if (!found) throw new Error(`policy ${name} missing from FULL_TEMPLATE`);
-    return found;
+    // The two preflight policies were removed from FULL_TEMPLATE (f3f15290);
+    // these engine guards keep running against verbatim copies of them.
+    if (found) return found;
+    if (name === "preflight-before-investigation") return legacyPreflightInvestigation();
+    if (name === "preflight-before-push") return legacyPreflightPush();
+    throw new Error(`policy ${name} unavailable`);
   };
   const bashEvent = (command: string): ToolEvent => ({
     hook_event_name: "PreToolUse",

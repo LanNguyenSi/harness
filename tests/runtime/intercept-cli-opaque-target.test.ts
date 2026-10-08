@@ -3,27 +3,26 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { Readable, Writable } from "node:stream";
 import { afterEach, describe, expect, it } from "vitest";
-import { parse as parseYaml } from "yaml";
 import { runInterceptCli } from "../../src/cli/policy/intercept.js";
-import { FULL_TEMPLATE } from "../../src/cli/init/templates.js";
 import type { LedgerClient } from "../../src/runtime/intercept.js";
-import { parseManifest, type Policy } from "../../src/schema/index.js";
+import type { Policy } from "../../src/schema/index.js";
 import { makeManifest } from "../_helpers/manifest.js";
 import { addGitDirSkeleton } from "../_helpers/git-dir-fixture.js";
+import { legacyPreflightInvestigation } from "../_helpers/legacy-preflight-policies.js";
 
 // Task cfb6b390: a `-C` / `cd` target whose name carries a backtick or an
 // unusual control character used to be read as "no target", so a command
 // that really runs in a nested repository was decided on the outer
-// repository's evidence alone. The shapes below run the real
-// `preflight-before-investigation` trigger through `runInterceptCli` with
-// an outer repository that has nested repositories under `vendor/` and a
-// ledger holding only the outer repository's tag.
+// repository's evidence alone. The shapes below run the real git-read
+// trigger through `runInterceptCli` with an outer repository that has nested
+// repositories under `vendor/` and a ledger holding only the outer
+// repository's tag. (The trigger came from the `preflight-before-investigation`
+// policy until f3f15290 removed it; it is now a verbatim engine-test fixture.)
 
-function policyBashMatch(name: string): string {
-  const parsed = parseManifest(parseYaml(FULL_TEMPLATE));
-  const policy = parsed.policies.find((p) => p.name === name);
-  if (!policy?.trigger.bash_match) throw new Error(`policy ${name} missing from FULL_TEMPLATE`);
-  return policy.trigger.bash_match;
+function policyBashMatch(): string {
+  const bashMatch = legacyPreflightInvestigation().trigger.bash_match;
+  if (!bashMatch) throw new Error("fixture missing bash_match");
+  return bashMatch;
 }
 
 function streamFrom(s: string): NodeJS.ReadableStream {
@@ -45,7 +44,7 @@ function policyWith(enforcement: "block" | "warn"): Policy {
     trigger: {
       event: "PreToolUse",
       match: "Bash",
-      bash_match: policyBashMatch("preflight-before-investigation"),
+      bash_match: policyBashMatch(),
     },
     requires: { ledger_tag: "preflight:${REPO}" },
     hook: "require-preflight-evidence",

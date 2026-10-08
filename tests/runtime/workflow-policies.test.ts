@@ -38,6 +38,7 @@ import {
   type Workflow,
   type WorkflowStep,
 } from "../../src/schema/index.js";
+import { legacyPreflightInvestigation } from "../_helpers/legacy-preflight-policies.js";
 
 // Real hooks, byte-identical to the pair `src/cli/init/templates.ts` wires
 // for the hand-authored merge gate (name, event, match, bash_match). Only
@@ -623,7 +624,7 @@ describe("manifest views: withDerivedPolicies / withoutDerivedPolicies / handAut
   const names = (m: { policies: Policy[] }) => m.policies.map((p) => p.name);
 
   it("withDerivedPolicies is idempotent: a second application yields the same names, no duplicates", () => {
-    const hand = { ...shippedPolicy("preflight-before-investigation") };
+    const hand = { ...legacyPreflightInvestigation() };
     const raw = makeManifest({ hooks: WIRED_HOOKS, policies: [hand], workflows: [shipWorkflow()] });
     const once = withDerivedPolicies(raw);
     const twice = withDerivedPolicies(once);
@@ -649,7 +650,7 @@ describe("manifest views: withDerivedPolicies / withoutDerivedPolicies / handAut
   });
 
   it("withoutDerivedPolicies restores the hand-authored view and is the identity on it", () => {
-    const hand = shippedPolicy("preflight-before-investigation");
+    const hand = legacyPreflightInvestigation();
     const raw = makeManifest({ hooks: WIRED_HOOKS, policies: [hand], workflows: [shipWorkflow()] });
     const derivedView = withDerivedPolicies(raw);
     const restored = withoutDerivedPolicies(derivedView);

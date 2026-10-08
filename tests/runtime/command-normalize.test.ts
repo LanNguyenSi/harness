@@ -10,6 +10,10 @@ import {
   segmentViewOf,
 } from "../../src/runtime/command-normalize.js";
 import { parseManifest } from "../../src/schema/index.js";
+import {
+  legacyPreflightInvestigation,
+  legacyPreflightPush,
+} from "../_helpers/legacy-preflight-policies.js";
 
 // Read the real `bash_match` straight out of FULL_TEMPLATE instead of a
 // hand-copied literal (F7 fix, review round 2026-07-27, run
@@ -21,8 +25,14 @@ import { parseManifest } from "../../src/schema/index.js";
 // `policyBashMatch` helper.
 function policyBashMatch(name: string): RegExp {
   const parsed = parseManifest(parseYaml(FULL_TEMPLATE));
-  const policy = parsed.policies.find((p) => p.name === name);
-  if (!policy) throw new Error(`policy ${name} missing from FULL_TEMPLATE`);
+  const policy =
+    parsed.policies.find((p) => p.name === name) ??
+    (name === "preflight-before-investigation"
+      ? legacyPreflightInvestigation()
+      : name === "preflight-before-push"
+        ? legacyPreflightPush()
+        : undefined);
+  if (!policy) throw new Error(`policy ${name} unavailable`);
   const pattern = policy.trigger.bash_match;
   if (!pattern) throw new Error(`policy ${name} declares no trigger.bash_match`);
   return new RegExp(pattern);

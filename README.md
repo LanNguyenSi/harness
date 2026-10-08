@@ -96,7 +96,7 @@ operator controls are documented in
 - [`agent-grounding`](https://github.com/LanNguyenSi/agent-grounding): evidence-ledger, claim-gate, review-claim-gate; `grounding-mcp` is the canonical client surface harness queries.
 - [`agent-memory`](https://github.com/LanNguyenSi/agent-memory): the memory surfaces the control plane inventories.
 - [`agent-tasks`](https://github.com/LanNguyenSi/agent-tasks): MCP-registered task platform whose registration and health appear in `harness describe`.
-- [`agent-preflight`](https://github.com/LanNguyenSi/agent-preflight): local preflight validator; the canonical implementation of preflight-hook content harness wires.
+- [`agent-preflight`](https://github.com/LanNguyenSi/agent-preflight): standalone local preflight validator; harness no longer ships a preflight hook or policy that wires it (task `f3f15290`), but an operator can still call it directly or from a custom hook.
 - [`codebase-oracle`](https://github.com/LanNguyenSi/codebase-oracle): opt-in MCP for multi-repo RAG search; wire via `harness add mcp codebase-oracle --command codebase-oracle,mcp`.
 - [`agent-dx`](https://github.com/LanNguyenSi/agent-dx): ships `git-batch-cli`, a day-to-day tool whose inventory appears in `harness describe`.
 
