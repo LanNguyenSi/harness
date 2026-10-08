@@ -237,7 +237,7 @@ export function classifyRisk(
   // Built-in floors. Folded in AFTER the operator loop so they compose by
   // the same highest-severity-wins rule: the benign ones only raise an
   // otherwise-unclassified action up to `low`, and never sink an operator
-  // match (a dangerous tail in `harness preflight && rm -rf /var` keeps
+  // match (a dangerous tail in `harness doctor && rm -rf /var` keeps
   // the higher severity, and a chained command is not read-only); the
   // destructive one raises to `high`/`critical` and is evaluated first,
   // so a recognized mutating head never also takes a benign floor. All
@@ -275,9 +275,9 @@ export function classifyRisk(
       if (BENIGN_HARNESS_COMMAND.test(subject)) {
         // harness's own benign meta-commands (head-anchored; see
         // BENIGN_HARNESS_COMMAND). Broader than the read-only floor: it
-        // also floors gate-PRODUCER commands like `harness preflight`
-        // and `harness approve`, which the understanding-gate read-only
-        // classifier deliberately excludes.
+        // also floors gate-PRODUCER commands like `harness approve`,
+        // which the understanding-gate read-only classifier deliberately
+        // excludes.
         severityIdx = lowIdx;
         reasons.push(
           "built-in: benign harness meta-command recognized (severity low)",
