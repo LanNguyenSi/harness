@@ -72,7 +72,7 @@ operator controls are documented in
 
 ## Documentation
 
-- [`docs/for-humans.md`](docs/for-humans.md): operator path, install through first real policy, diagnostics cheat sheet.
+- [`docs/for-humans.md`](docs/for-humans.md): operator path, install through first real policy, diagnostics cheat sheet (still starts from the wizard and the `solo` template; the Quick start note applies).
 - [`docs/for-agents.md`](docs/for-agents.md): agent integration contract, workflow lifecycle, CLI cheat sheet by side-effect class.
 - [`docs/quickstart.md`](docs/quickstart.md): five-minute bare-command path to the `branch-protection` gate.
 - [`docs/init-interactive.md`](docs/init-interactive.md): the `harness init --interactive` wizard, walkthrough and limitations.
