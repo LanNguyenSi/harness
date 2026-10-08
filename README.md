@@ -34,14 +34,18 @@ harness init                                             # minimal manifest, no 
 harness pack add branch-protection                       # the one recommended pack
 harness validate
 harness apply --target ~/.claude/settings.json --merge   # Claude Code; then restart it
-harness apply --runtime codex --install                  # Codex, if you use it
+harness apply --runtime codex --install                  # Codex, if you use it; then restart it
 ```
 
-From then on, an agent's file edit in a repository on `master`, `main`
-or `develop` is refused until it cuts a feature branch
-(`git checkout -b <feature>`). The step-by-step version, with what each
-command writes: [`docs/quickstart.md`](docs/quickstart.md). Full
-operator walkthrough: [`docs/for-humans.md`](docs/for-humans.md).
+From then on, while an agent works in a repository on `master`, `main`
+or `develop`, its edits there through the file-editing tools (`Write`
+and `Edit` under Claude Code, `apply_patch` under Codex) are refused
+until it cuts a feature branch (`git checkout -b <feature>`). Codex runs
+the new hooks only once you trust them in its startup hook review. The
+step-by-step version, with what each command writes:
+[`docs/quickstart.md`](docs/quickstart.md). Full operator walkthrough:
+[`docs/for-humans.md`](docs/for-humans.md) (it still starts from the
+wizard and the `solo` template, so the note below applies to it).
 
 The `solo`, `team` and `full` templates and the
 `harness init --interactive` wizard still offer the understanding gate,
@@ -52,8 +56,8 @@ install should not adopt them.
 ## Usage
 
 See the gate decide without starting an agent: from inside a
-repository, pipe a sample `Write` event into the hook the runtime runs
-before every edit.
+repository, pipe a sample `Write` event into the hook Claude Code runs
+before every `Write` or `Edit`.
 
 ```bash
 echo '{"session_id":"demo","tool_name":"Write","tool_input":{"file_path":"README.md"}}' \
@@ -63,7 +67,7 @@ echo '{"session_id":"demo","tool_name":"Write","tool_input":{"file_path":"README
 On a protected branch it prints a deny decision naming the branch and
 the protected list; on a feature branch it allows the edit and says why
 on stderr. The protected-branch list, the agent-facing message and the
-operator-only override are documented in
+operator controls are documented in
 [`docs/policy-packs/branch-protection.md`](docs/policy-packs/branch-protection.md).
 
 ## Documentation

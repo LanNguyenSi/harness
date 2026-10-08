@@ -1,15 +1,20 @@
 # Quickstart
 
 From nothing to a Claude Code or Codex session that refuses to edit
-files on a protected branch, in about five minutes. This is the bare
-command path. For the *why* behind each step, read
-[`for-humans.md`](for-humans.md).
+files on a protected branch, in about five minutes (Codex runs the new
+hook only once you trust it, see step 6). This is the bare command
+path. The longer operator walkthrough, [`for-humans.md`](for-humans.md),
+still starts from the wizard and the `solo` template, so the
+[note on the other templates](#a-note-on-the-other-templates-and-packs)
+applies to it.
 
 The recommended setup is one policy pack:
-[`branch-protection`](policy-packs/branch-protection.md). It refuses
-`Write` / `Edit` (Claude Code) and `apply_patch` (Codex) while the
-target repository is on a protected branch (`master`, `main` or
-`develop` by default), so an agent branches before its first edit.
+[`branch-protection`](policy-packs/branch-protection.md). It gates the
+file-editing tools of each runtime: `Write` and `Edit` under Claude
+Code, `apply_patch` under Codex. While an agent works in a repository
+whose checked-out branch is protected (`master`, `main` or `develop` by
+default), its edits there through these tools are refused, so it
+branches before its first edit.
 
 ## 1. Install
 
@@ -60,12 +65,12 @@ the runtime's built-in tools, so `validate` also prints one
 harness apply --target ~/.claude/settings.json --merge
 ```
 
-This adds two hooks to `settings.json`: a `PreToolUse` hook on
-`Write|Edit` that runs `harness pack hook branch-protection`, and a
-`SessionStart` hook that runs `harness session-start branch-check`.
-`--merge` replaces only the harness-owned keys (`hooks`, `mcpServers`)
-and preserves everything else in your `settings.json`. Restart Claude
-Code so it reloads the file.
+This writes the pack's hooks into `settings.json`, among them a
+`PreToolUse` hook on `Write|Edit` that runs
+`harness pack hook branch-protection`. `--merge` replaces only the
+harness-owned keys (`hooks`, `mcpServers`) and preserves everything
+else in your `settings.json`. Restart Claude Code so it reloads the
+file.
 
 Prefer to see the generated files first? Run `harness apply` with no
 `--target`: it writes them to `harness.generated/` next to the manifest,
@@ -78,23 +83,29 @@ harness apply --runtime codex --install
 ```
 
 This installs a marked, harness-managed hook block into
-`~/.codex/config.toml`: a `PreToolUse` hook on `apply_patch` and the
-same `SessionStart` hook. The installer replaces only that marked block;
-your own Codex settings stay as they are. Skip this step if you do not
-use Codex.
+`~/.codex/config.toml`. The block holds the pack's Codex hooks, among
+them a `PreToolUse` hook on `apply_patch`. The installer replaces only
+that marked block; your own Codex settings stay as they are. Skip this
+step if you do not use Codex.
+
+Then restart Codex. Its startup hook review lists the harness hooks as
+new, and Codex runs them only once you trust them there. If you
+continue without trusting them, they do not run and Codex edits are not
+gated. A later install that changes the hooks puts them up for review
+again.
 
 ## What you see
 
-In a repository on `master`, `main` or `develop`, the agent's file edit
-is refused. The deny message names the branch and the protected list,
-and tells the agent to cut a feature branch:
+While the agent works in a repository on `master`, `main` or
+`develop`, its file edit through a gated tool is refused. The deny
+message names the branch and the protected list, and tells the agent to
+cut a feature branch:
 
 ```bash
 git checkout -b <feature>
 ```
 
-On that branch the next edit goes through. Edits outside any git
-repository are not gated.
+On that branch the next edit goes through.
 
 To watch the gate decide without starting an agent, pipe a sample
 `Write` event into the hook from inside a repository:
@@ -108,8 +119,8 @@ On a protected branch it prints a JSON decision with
 `"permissionDecision":"deny"`. On a feature branch it prints nothing on
 stdout and notes on stderr that the branch is not in the protected list.
 
-The protected-branch list, the agent-facing message and the
-operator-only override are configured per pack; see
+The protected-branch list, the agent-facing message and the operator
+controls are documented in
 [`policy-packs/branch-protection.md`](policy-packs/branch-protection.md).
 
 ## A note on the other templates and packs
@@ -125,7 +136,7 @@ instead.
 
 ## Next
 
-- The gate itself, its configuration and its escape hatches:
+- The gate itself, its configuration and its operator controls:
   [`policy-packs/branch-protection.md`](policy-packs/branch-protection.md).
 - What an agent needs to know about the gates:
   [`for-agents.md`](for-agents.md).
