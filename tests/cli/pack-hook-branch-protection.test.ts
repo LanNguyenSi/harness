@@ -666,7 +666,7 @@ describe("branch-protection hook: the manifest", () => {
     expect(run.diagnostic).toMatch(/not_a_key/);
   });
 
-  it.skipIf(!GIT_AVAILABLE)("a live-shaped manifest carrying the two removed grounding keys loads with two warnings and still refuses on a protected branch", async () => {
+  it.skipIf(!GIT_AVAILABLE)("a live-shaped manifest carrying the two removed grounding keys loads with their two warnings (plus one for its removed ux.run command) and still refuses on a protected branch", async () => {
     const repo = makeRepo("master");
     const dir = tmpDir("harness-bp-manifest-");
     const cfg = path.join(dir, "harness.yaml");
@@ -710,6 +710,8 @@ describe("branch-protection hook: the manifest", () => {
     expect(loadManifest({ configPath: cfg }).warnings.map((w) => w.path)).toEqual([
       "grounding.evidence_ledger.retention_days",
       "grounding.policies_source",
+      // The ux.run line still calls the removed `harness session-start` (task f3f15290).
+      "policy_packs[0].config.ux.run[1]",
     ]);
     const run = await runHook(writeEvent(repo, path.join(repo, "x.ts")), { configPath: cfg });
     expect(run.blocked).toBe(true);

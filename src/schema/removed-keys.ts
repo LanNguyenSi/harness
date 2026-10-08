@@ -8,9 +8,13 @@
 // itself out the moment the new release is installed. Instead the table below
 // names every removed manifest path and every removed pack name; matching
 // entries are stripped from the raw manifest before the strict parse and
-// returned as warnings (`harness validate` and `harness doctor` print them,
-// `harness validate --strict` fails on them). A key that was never valid is
-// not in the table and still fails the parse.
+// returned as warnings (`harness validate`, `harness doctor` and `harness
+// apply` print them, `harness validate --strict` fails on them). A key that was
+// never valid is not in the table and still fails the parse.
+//
+// Removed CLI commands (REMOVED_COMMANDS below) are not stripped: a hook or
+// policy that still calls one parses fine, so `findRemovedCommandUses` reports
+// each such site through the same warning channel.
 
 /** A manifest path a release removed. */
 export interface RemovedManifestPath {
@@ -170,8 +174,103 @@ export const REMOVED_COMMANDS: readonly RemovedCommand[] = [
   { command: "harness pack hook post-merge-gate", removedIn: "1.0.0", reason: "the post-merge-gate pack is removed" },
 ];
 
-/** True when `command` invokes a removed command (exact prefix followed by end or whitespace). */
+// Leading `NAME=value` shell assignments in front of the command word. Only
+// unquoted values without shell metacharacters count: a quote, a backslash, a
+// `$` or a backtick could hide where the assignment ends, so such a command is
+// left unmatched (a missed warning) rather than guessed at (a false one).
+const LEADING_ENV_ASSIGNMENTS = /^(?:[A-Za-z_][A-Za-z0-9_]*=[^\s'"\\$`;|&<>()]*\s+)*/;
+
+/**
+ * The removed command `command` invokes, if any. Matching rule: after trimming
+ * and dropping leading plain `NAME=value` assignments, the command must start
+ * with a table entry followed by the end, whitespace or a hyphen. Anything
+ * else is not matched: a command word given as a path (`/usr/local/bin/harness
+ * preflight`), a wrapper (`npx harness preflight`), a compound command (`cd x
+ * && harness preflight`), or an assignment with a quoted or expanded value.
+ */
 export function invokesRemovedCommand(command: string, table: readonly RemovedCommand[] = REMOVED_COMMANDS): RemovedCommand | undefined {
-  const trimmed = command.trim();
+  const trimmed = command.trim().replace(LEADING_ENV_ASSIGNMENTS, "");
   return table.find((r) => trimmed === r.command || trimmed.startsWith(`${r.command} `) || trimmed.startsWith(`${r.command}-`));
+}
+
+function removedCommandMessage(removed: RemovedCommand, remedy: string): string {
+  return `calls "${removed.command}", removed in ${removed.removedIn} (${removed.reason}), so it fails with "unknown command"; ${remedy}`;
+}
+
+function stringAt(node: unknown, key: string): string | undefined {
+  if (!isPlainObject(node)) return undefined;
+  const v = node[key];
+  return typeof v === "string" ? v : undefined;
+}
+
+function arrayAt(node: unknown, key: string): unknown[] {
+  if (!isPlainObject(node)) return [];
+  const v = node[key];
+  return Array.isArray(v) ? v : [];
+}
+
+/**
+ * Every place a raw (merged) manifest still calls a removed CLI command, one
+ * warning per site. A manifest generated before the removal keeps such hooks
+ * and policies until the operator deletes them: `harness apply` renders from
+ * the manifest, so it re-emits them, and the hook or the agent-facing remedy
+ * then runs a command that no longer exists.
+ *
+ * Scanned sites: `hooks[].command`; each policy's `producers[].command` (the
+ * `bash` and `ask` kinds) and `ux.run[]`; each pack's `config.producers[].command`
+ * and `config.ux.run[]`. An entry of a removed pack is skipped (the pack
+ * itself already warns). Pure and tolerant: anything that is not the expected
+ * shape is skipped, the strict parse reports it.
+ */
+export function findRemovedCommandUses(
+  raw: unknown,
+  commands: readonly RemovedCommand[] = REMOVED_COMMANDS,
+  removedPacks: readonly RemovedPackName[] = REMOVED_PACK_NAMES,
+): ManifestPostureWarning[] {
+  const warnings: ManifestPostureWarning[] = [];
+  const check = (value: unknown, path: string, remedy: () => string): void => {
+    if (typeof value !== "string") return;
+    const removed = invokesRemovedCommand(value, commands);
+    if (removed !== undefined) warnings.push({ path, message: removedCommandMessage(removed, remedy()) });
+  };
+
+  arrayAt(raw, "hooks").forEach((hook, i) => {
+    const name = stringAt(hook, "name");
+    check(stringAt(hook, "command"), `hooks[${i}].command`, () =>
+      `delete ${name !== undefined ? `hook "${name}"` : "this hook"} from the manifest (and every policy that names it), then re-run \`harness apply\``,
+    );
+  });
+
+  arrayAt(raw, "policies").forEach((policy, i) => {
+    const name = stringAt(policy, "name");
+    const hook = stringAt(policy, "hook");
+    const remedy = (): string =>
+      `delete ${name !== undefined ? `policy "${name}"` : "this policy"} from the manifest` +
+      (hook !== undefined ? ` (and its hook "${hook}" when no other policy names it)` : "") +
+      ", then re-run `harness apply`";
+    arrayAt(policy, "producers").forEach((producer, j) => {
+      check(stringAt(producer, "command"), `policies[${i}].producers[${j}].command`, remedy);
+    });
+    const ux = isPlainObject(policy) ? policy["ux"] : undefined;
+    arrayAt(ux, "run").forEach((line, j) => {
+      check(line, `policies[${i}].ux.run[${j}]`, remedy);
+    });
+  });
+
+  arrayAt(raw, "policy_packs").forEach((pack, i) => {
+    const name = stringAt(pack, "name");
+    if (name !== undefined && removedPacks.some((p) => p.name === name)) return;
+    const config = isPlainObject(pack) ? pack["config"] : undefined;
+    const remedy = (): string =>
+      `remove the line from the pack's config, or run \`harness pack reseed ${name ?? "<name>"}\` when the pack ships a default`;
+    arrayAt(config, "producers").forEach((producer, j) => {
+      check(stringAt(producer, "command"), `policy_packs[${i}].config.producers[${j}].command`, remedy);
+    });
+    const ux = isPlainObject(config) ? config["ux"] : undefined;
+    arrayAt(ux, "run").forEach((line, j) => {
+      check(line, `policy_packs[${i}].config.ux.run[${j}]`, remedy);
+    });
+  });
+
+  return warnings;
 }

@@ -1029,7 +1029,8 @@ function manifestSection(manifest: Manifest, postureWarnings: readonly ManifestP
   // dropped. The exit-66-on-load path is the canonical signal.
   return {
     topLevelKeysPresent: present,
-    // Removed manifest keys / removed packs the load stripped and ignored
+    // Removed manifest keys / removed packs the load stripped and ignored,
+    // and sites that still call a removed command
     // (src/schema/removed-keys.ts): each one is a warning here.
     warnings: postureWarnings.map(formatPostureWarning),
   };

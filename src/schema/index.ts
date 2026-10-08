@@ -11,7 +11,11 @@ import { ToolsSchema } from "./tools.js";
 import { AuditSchema } from "./audit.js";
 import { DoctorSchema } from "./doctor.js";
 import { ReviewTemplatesSchema, WorkflowsSchema } from "./workflows.js";
-import { stripRemovedManifestEntries, type ManifestPostureWarning } from "./removed-keys.js";
+import {
+  findRemovedCommandUses,
+  stripRemovedManifestEntries,
+  type ManifestPostureWarning,
+} from "./removed-keys.js";
 
 export const SUPPORTED_MANIFEST_VERSION = 1;
 
@@ -113,7 +117,10 @@ function friendlyVersionIssues(issues: z.ZodIssue[], raw: unknown): z.ZodIssue[]
 
 export interface ParsedManifest {
   manifest: Manifest;
-  /** Removed keys and removed packs that were stripped before the parse. */
+  /**
+   * Removed keys and removed packs that were stripped before the parse, then
+   * every hook, producer or `ux.run` line that still calls a removed command.
+   */
   warnings: ManifestPostureWarning[];
 }
 
@@ -121,7 +128,9 @@ export interface ParsedManifest {
  * Parse a raw manifest, first stripping every removed manifest path and
  * removed pack name (`src/schema/removed-keys.ts`): those warn and are
  * ignored instead of failing the strict parse. Any other unknown key still
- * fails it.
+ * fails it. A manifest that parses is then scanned for sites that still call
+ * a removed command (`findRemovedCommandUses`); those warn too, with the
+ * manifest path of each site.
  */
 export function parseManifestWithWarnings(raw: unknown): ParsedManifest {
   const stripped = stripRemovedManifestEntries(raw);
@@ -136,7 +145,7 @@ export function parseManifestWithWarnings(raw: unknown): ParsedManifest {
       issues,
     );
   }
-  return { manifest: result.data, warnings: stripped.warnings };
+  return { manifest: result.data, warnings: [...stripped.warnings, ...findRemovedCommandUses(raw)] };
 }
 
 /** `parseManifestWithWarnings` for callers that do not report the warnings. */

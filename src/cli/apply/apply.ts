@@ -931,7 +931,10 @@ export async function apply(opts: ApplyOptions = {}): Promise<ApplyResult> {
   // task a4d8adc5; printed by apply since task 2ce6933f):
   // the loader strips them and `harness validate` / `harness doctor` print
   // them; `harness apply` prints them too so an operator applying a stale
-  // manifest sees why a pack they still name did not generate anything.
+  // manifest sees why a pack they still name did not generate anything. The
+  // same list carries every hook, producer or ux.run line that still calls a
+  // removed command (task f3f15290): apply re-renders those hooks as they
+  // stand, so the warning is the only place an apply run names them.
   const warnings = [...postureWarnings.map(formatPostureWarning), ...expectedWarnings];
   // The runtime this apply records: its own, or with
   // `preserveRecordedRuntime` the previous one (recorded or inferred, else
