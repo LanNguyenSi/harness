@@ -4,11 +4,17 @@
 // the table's shape and the exact matching semantics so a future edit can
 // neither drop an entry silently nor widen the prefix match into a false
 // positive.
-import { describe, expect, it } from "vitest";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
+import { loadManifest } from "../../src/cli/loader.js";
 import {
+  ManifestParseError,
   REMOVED_COMMANDS,
   findRemovedCommandUses,
   invokesRemovedCommand,
+  parseManifestWithWarnings,
   type RemovedCommand,
   type RemovedPackName,
 } from "../../src/schema/index.js";
@@ -80,6 +86,14 @@ describe("invokesRemovedCommand: leading assignments", () => {
   it("does not treat a non-assignment word as an assignment", () => {
     expect(invokesRemovedCommand("1A=x harness preflight", table)).toBeUndefined();
     expect(invokesRemovedCommand("echo X=1 harness preflight", table)).toBeUndefined();
+  });
+
+  it("does not skip an assignment whose value holds a shell operator", () => {
+    // `A=x;y harness preflight` is the assignment `A=x` followed by the command
+    // `y harness preflight`; skipping `A=x;y` as one assignment would flag it.
+    expect(invokesRemovedCommand("A=x;y harness preflight", table)).toBeUndefined();
+    expect(invokesRemovedCommand("A=x|y harness preflight", table)).toBeUndefined();
+    expect(invokesRemovedCommand("A=x&&y harness preflight", table)).toBeUndefined();
   });
 
   it("does not match a wrapper, a path or a compound command", () => {
@@ -174,5 +188,84 @@ describe("findRemovedCommandUses", () => {
     const warnings = findRemovedCommandUses({ hooks: [{ name: "g", command: "harness session-start toolchain-parity" }] });
     expect(warnings.map((w) => w.path)).toEqual(["hooks[0].command"]);
     expect(warnings[0]?.message).toContain('calls "harness session-start", removed in 1.0.0');
+  });
+});
+
+// The strict parse does not validate `policy_packs[].config`, so a pack's
+// `ux.run` and `producers` reach the scanner with whatever element types the
+// YAML holds. The scanner runs on every manifest load (including the hooks), so
+// a non-string element must be skipped, never thrown on.
+describe("non-string elements in a pack's config", () => {
+  const packConfig = {
+    ux: { run: [5, null, "harness preflight"] },
+    producers: [{ command: 7 }, { command: "harness session-start x" }],
+  };
+  const manifest = (packName: string) => ({
+    version: 1,
+    hooks: [],
+    policies: [],
+    tools: { builtin: { known: ["Read"] } },
+    policy_packs: [{ name: packName, config: packConfig }],
+  });
+  const expected = ["policy_packs[0].config.producers[1].command", "policy_packs[0].config.ux.run[2]"];
+
+  for (const packName of ["branch-protection", "my-custom-pack"]) {
+    it(`parseManifestWithWarnings does not throw and warns only at the string sites (${packName})`, () => {
+      let paths: string[] = [];
+      expect(() => {
+        paths = parseManifestWithWarnings(manifest(packName)).warnings.map((w) => w.path);
+      }).not.toThrow();
+      expect(paths).toEqual(expected);
+    });
+  }
+
+  it("findRemovedCommandUses skips non-string ux.run elements of a policy too", () => {
+    const raw = { policies: [{ name: "p", ux: { run: [5, null, { a: 1 }, "harness preflight"] } }] };
+    expect(findRemovedCommandUses(raw).map((w) => w.path)).toEqual(["policies[0].ux.run[3]"]);
+  });
+
+  // Hook commands and policy producers and ux.run are typed as strings by the
+  // strict parse, so a non-string there fails validation before the scan.
+  it("a non-string hook command fails the strict parse, not the scanner", () => {
+    const hook = { version: 1, hooks: [{ name: "h", command: 5 }], policies: [], tools: { builtin: { known: ["Read"] } } };
+    expect(() => parseManifestWithWarnings(hook)).toThrow(ManifestParseError);
+  });
+
+  describe("loadManifest on a file", () => {
+    let cleanups: Array<() => void> = [];
+    afterEach(() => {
+      for (const c of cleanups) c();
+      cleanups = [];
+    });
+
+    it("loads and warns only at the string sites", () => {
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), "harness-removed-cmd-"));
+      cleanups.push(() => fs.rmSync(dir, { recursive: true, force: true }));
+      const file = path.join(dir, "harness.yaml");
+      fs.writeFileSync(
+        file,
+        `version: 1
+hooks: []
+policies: []
+tools:
+  builtin:
+    known: [Read]
+policy_packs:
+  - name: my-custom-pack
+    config:
+      ux:
+        run: [5, null, "harness preflight"]
+      producers:
+        - command: 7
+        - command: "harness session-start x"
+`,
+        "utf8",
+      );
+      let paths: string[] = [];
+      expect(() => {
+        paths = loadManifest({ configPath: file }).warnings.map((w) => w.path);
+      }).not.toThrow();
+      expect(paths).toEqual(expected);
+    });
   });
 });
