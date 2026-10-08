@@ -340,9 +340,10 @@ resumes normal gating.
 Branch-protection does not yield to a pause: it keeps refusing edits
 on a protected branch. To land an edit on a protected branch on
 purpose (a hotfix on `master`, for example), switch that gate off from
-an operator shell with `harness gate disable` and restore it with
-`harness gate enable`; see
-[Disable the gate](policy-packs/branch-protection.md#disable-the-gate-operator-only).
+an operator shell as
+[Disable the gate](policy-packs/branch-protection.md#disable-the-gate-operator-only)
+describes (Claude Code and Codex differ), and switch it back on
+afterwards.
 
 **Operator-only by design, but the CLI check is a speed bump, not a
 boundary.** `harness pause` refuses to run when any of
@@ -452,7 +453,7 @@ implemented; treat it as a follow-up if you need a hard guarantee here.
 | Full chronological session export (transcript + ledger, redacted) | `harness session-export <sessionId>` |
 | Temporarily make the hooks dormant, branch-protection excepted (recovery / debug / incident) | `harness pause --for <duration>` |
 | Re-enable hooks before the pause window expires | `harness resume` |
-| Edit a protected branch on purpose (branch-protection off, from an operator shell) | `harness gate disable`, then `harness gate enable` |
+| Edit a protected branch on purpose (branch-protection off, from an operator shell) | see [Disable the gate](policy-packs/branch-protection.md#disable-the-gate-operator-only) |
 
 ## Where to read next
 
