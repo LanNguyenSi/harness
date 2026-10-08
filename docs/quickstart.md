@@ -1,28 +1,15 @@
 # Quickstart
 
-From nothing to a Claude Code session gated by a policy you declared, in
-about five minutes. This is the bare command path. For the *why* behind
-each step, read [`for-humans.md`](for-humans.md).
+From nothing to a Claude Code or Codex session that refuses to edit
+files on a protected branch, in about five minutes. This is the bare
+command path. For the *why* behind each step, read
+[`for-humans.md`](for-humans.md).
 
-## 0. Try it without installing
-
-`harness dry-run` reports which hooks fire and which policies match
-for a given tool call, against the reference manifest, before any
-ledger I/O:
-
-```bash
-git clone https://github.com/LanNguyenSi/harness && cd harness
-npm install && npm run build
-node dist/cli/main.js dry-run "merge PR 42" \
-  --tool mcp__agent-tasks__pull_requests_merge \
-  --tool-args '{"prNumber":42}' \
-  --config docs/examples/full-manifest.yaml
-```
-
-No global install, no `~/.harness` write. `docs/examples/full-manifest.yaml`
-is a schema-coverage example, not a runnable config (the file header
-spells out the contract). For a manifest tailored to your machine, do
-the real install below.
+The recommended setup is one policy pack:
+[`branch-protection`](policy-packs/branch-protection.md). It refuses
+`Write` / `Edit` (Claude Code) and `apply_patch` (Codex) while the
+target repository is on a protected branch (`master`, `main` or
+`develop` by default), so an agent branches before its first edit.
 
 ## 1. Install
 
@@ -30,63 +17,42 @@ the real install below.
 npm i -g @lannguyensi/harness   # Node 20 or newer
 ```
 
+The generated hooks call `harness` by name, so the binary has to be on
+the `PATH` the agent runtime sees.
+
 ## 2. Generate a manifest
 
 ```bash
-harness init --template team
+harness init
 ```
 
-Writes to the default state root (`~/.harness/harness.yaml`). The
-`team` template ships a `review-before-merge` policy: no PR merge
-without a logged review. (`--template solo` drops the agent-tasks
-wiring; `harness init --interactive` walks you through the choices
-instead.)
+With no `--template`, `init` uses the `minimal` template: a header and
+`version: 1`, no policies and no policy packs. It writes to the default
+state root (`~/.harness/harness.yaml`).
 
-### Choosing a profile
+## 3. Add the branch-protection pack
 
-| Profile | External accounts / tools required | Best for |
-|---------|------------------------------------|----------|
-| `solo`  | None. `npm` + Claude Code is enough. | Single operators who want the Understanding Gate without committing to a tasking system. |
-| `team`  | An **agent-tasks** account ([hosted](https://agent-tasks.opentriologue.ai) or [self-hosted](https://github.com/LanNguyenSi/agent-tasks)). | Teams that already use `agent-tasks` for PR review tracking. The merge gate (`review:<pr-number>` ledger tag) wires against the agent-tasks MCP. |
-| `full`  | Same as `team` plus `@lannguyensi/agent-preflight` and `gh` on PATH. | Operators who want every reference policy enforced (dogfood gate, preflight gates, review-subagent gate, merge gate). |
+```bash
+harness pack add branch-protection
+```
 
-`harness init --template` also accepts `minimal` (header only, no policy packs), which is the default when no template is given.
+This appends one entry to the manifest:
 
-**Not using agent-tasks?** Pick `solo`. The `team` review gate matches
-only the agent-tasks MCP tool names, so a `gh pr create` workflow stays
-unprotected by it. `full` adds `gh`-CLI variants of the review gates
-(`review-before-merge-bash`, `review-subagent-before-pr-create-bash`)
-that match `gh pr merge` / `gh pr create` directly.
+```yaml
+policy_packs:
+  - name: branch-protection
+```
 
-## 3. Check it
+## 4. Check it
 
 ```bash
 harness validate
 ```
 
-Expect `no validation findings`.
-
-## 4. Preview the gate before wiring anything
-
-```bash
-harness dry-run "merge PR 42" \
-  --tool mcp__agent-tasks__pull_requests_merge \
-  --tool-args '{"prNumber":42}'
-```
-
-```
-Policies that match:
-  - name: review-before-merge
-    ledgerQuery: review:42
-    requires:
-      ledger_tag: review:${PR_NUMBER}
-    enforcement: block
-    triggerEvent: PreToolUse
-# ... (dry-run also lists the hooks that would fire and the memories that would route)
-```
-
-That is the policy that will block the merge at runtime. No files
-touched yet.
+Expect `0 errors` and exit code 0. The minimal manifest does not list
+the runtime's built-in tools, so `validate` also prints one
+`tools.builtin.known` warning per built-in (`Read`, `Edit`, `Write`,
+...). Those warnings do not affect the gate.
 
 ## 5. Wire it into Claude Code
 
@@ -94,6 +60,9 @@ touched yet.
 harness apply --target ~/.claude/settings.json --merge
 ```
 
+This adds two hooks to `settings.json`: a `PreToolUse` hook on
+`Write|Edit` that runs `harness pack hook branch-protection`, and a
+`SessionStart` hook that runs `harness session-start branch-check`.
 `--merge` replaces only the harness-owned keys (`hooks`, `mcpServers`)
 and preserves everything else in your `settings.json`. Restart Claude
 Code so it reloads the file.
@@ -102,26 +71,62 @@ Prefer to see the generated files first? Run `harness apply` with no
 `--target`: it writes them to `harness.generated/` next to the manifest,
 records a `harness.lock`, and touches nothing else.
 
-## Done
-
-Once Claude Code has restarted (step 5), the gate is live. In that
-session, `mcp__agent-tasks__pull_requests_merge` is blocked until a
-`review:<pr-number>` entry exists in the evidence ledger. To inspect
-decisions:
+## 6. Wire it into Codex
 
 ```bash
-harness explain review-before-merge --trace   # why did this fire?
-harness audit --since 1h                       # what fired recently?
+harness apply --runtime codex --install
 ```
+
+This installs a marked, harness-managed hook block into
+`~/.codex/config.toml`: a `PreToolUse` hook on `apply_patch` and the
+same `SessionStart` hook. The installer replaces only that marked block;
+your own Codex settings stay as they are. Skip this step if you do not
+use Codex.
+
+## What you see
+
+In a repository on `master`, `main` or `develop`, the agent's file edit
+is refused. The deny message names the branch and the protected list,
+and tells the agent to cut a feature branch:
+
+```bash
+git checkout -b <feature>
+```
+
+On that branch the next edit goes through. Edits outside any git
+repository are not gated.
+
+To watch the gate decide without starting an agent, pipe a sample
+`Write` event into the hook from inside a repository:
+
+```bash
+echo '{"session_id":"demo","tool_name":"Write","tool_input":{"file_path":"README.md"}}' \
+  | harness pack hook branch-protection
+```
+
+On a protected branch it prints a JSON decision with
+`"permissionDecision":"deny"`. On a feature branch it prints nothing on
+stdout and notes on stderr that the branch is not in the protected list.
+
+The protected-branch list, the agent-facing message and the
+operator-only override are configured per pack; see
+[`policy-packs/branch-protection.md`](policy-packs/branch-protection.md).
+
+## A note on the other templates and packs
+
+`harness init --template solo|team|full` and the
+`harness init --interactive` wizard still offer more than
+branch-protection: the understanding gate
+(`understanding-before-execution`), `solution-acceptance`,
+`post-merge-gate`, the risk gate and the reference policies (review,
+dogfood, preflight and deny policies). harness 1.0.0 removes all of
+these, so a new install should not adopt them. Start from the path above
+instead.
 
 ## Next
 
-- Change the rule or add your own: [`for-humans.md`](for-humans.md),
-  "First hour: a real policy".
-- Every manifest field, in one file:
-  [`examples/full-manifest.yaml`](examples/full-manifest.yaml). This is
-  a schema-coverage reference, not a runnable config: `validate` will
-  flag the install-specific hook paths it references. The file's
-  header explains what to expect.
+- The gate itself, its configuration and its escape hatches:
+  [`policy-packs/branch-protection.md`](policy-packs/branch-protection.md).
 - What an agent needs to know about the gates:
   [`for-agents.md`](for-agents.md).
+- Removing everything again: [`uninstall.md`](uninstall.md).
