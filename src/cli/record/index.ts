@@ -366,9 +366,8 @@ async function finishRecordWrite(
 // shell-out: everything is read straight off the `.git` directory,
 // reusing runtime/git-context.ts's exported `findGitEntry` walk instead
 // of re-implementing it. `resolveOriginHeadBase` / `resolveCommonDir`
-// themselves now live in runtime/git-context.ts too (task T-001), where
-// they are shared with nothing else now that the post-merge-gate pack is
-// removed (task 2ce6933f); imported here unchanged.
+// themselves now live in runtime/git-context.ts too (task T-001), so cli/
+// modules share one implementation; imported here unchanged.
 // ---------------------------------------------------------------------------
 
 /**

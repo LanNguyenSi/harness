@@ -590,9 +590,8 @@ export function resolveGitContext(cwd: string): GitRepoContext {
 //
 // Originally written for `harness record review`'s `--base` fallback
 // (task T-001, record-verbs) and lived only in `cli/record/index.ts`.
-// Exported here (task T-001); the only remaining consumer is
-// `src/cli/record/index.ts` (the record verbs) since the post-merge-gate
-// pack was removed (task 2ce6933f). Behavior is
+// Exported here (task T-001) so cli/ modules share one implementation
+// (today the record verbs and the session-start stale-base check). Behavior is
 // unchanged; this is a visibility/location move, not a rewrite — see
 // `findGitEntry`'s doc comment above for the identical precedent
 // (record/index.ts reusing this module's git-dir walk instead of
