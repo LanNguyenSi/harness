@@ -146,9 +146,8 @@ tag. The example below uses [`slop-detector`](https://github.com/LanNguyenSi/age
 (a multi-pack slop linter from `agent-dx`, shipping `agent-tics`,
 `prose-slop`, `comment-slop`, `code-slop`, and `ui-slop`) as the
 producer, but the policy itself does not name that tool: substitute
-your own check (linter, typechecker, fuzzer, secrets-scan,
-`harness preflight`) by changing the producer command in `ux.run`
-and the ledger tag.
+your own check (linter, typechecker, fuzzer, secrets-scan) by
+changing the producer command in `ux.run` and the ledger tag.
 
 Full file: [`docs/examples/policies/02-clean-check-before-push.yaml`](examples/policies/02-clean-check-before-push.yaml).
 Core:
@@ -493,9 +492,9 @@ evidence for ONLY the target repository named by a `-C`/`cd` is no longer
 enough to satisfy a per-repo policy — the session's own cwd repo needs its
 own evidence too, and vice versa. If your workflow legitimately runs
 `git -C <other-repo> ...` (a monorepo helper script, a multi-repo release
-script, CI tooling), record the evidence (e.g. `harness preflight`) in
-BOTH repositories before the gated verb, not only the one the command
-names.
+script, CI tooling), record the evidence the policy requires (run its
+producer, or `ledger_add` its tag) for BOTH repositories before the gated
+verb, not only the one the command names.
 
 **The bound.** A single event naming more than 4 distinct repository
 targets for one policy fails CLOSED — one deny (or the policy's own
