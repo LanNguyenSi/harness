@@ -67,8 +67,8 @@ function makeRepoFixtureWithOriginHead(name: string, branch: string, defaultBran
 }
 
 // ---------------------------------------------------------------------
-// Real-git fixture helpers (mirrors tests/cli/pack-hook-post-merge-gate.test.ts's
-// squash-merge E2E: real local bare repos, never a real network host).
+// Real-git fixture helpers (squash-merge E2E style: real local bare repos,
+// never a real network host).
 // ---------------------------------------------------------------------
 
 function gitConfig(dir: string): void {

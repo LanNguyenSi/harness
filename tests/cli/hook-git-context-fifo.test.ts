@@ -3,7 +3,7 @@
 // until the runtime's hook budget ran out, which the runtime treats as an
 // allow (task 323bd5b9). These tests drive the BUILT CLI, one child process
 // per case under a SIGKILL timeout, through every hook that reads the
-// branch: the two pack hooks that still resolve the git context and `harness
+// branch: the pack hook that still resolves the git context and `harness
 // policy intercept`, the PreToolUse entrypoint both the Claude and the Codex
 // adapters install, plus branch-protection, which asks git itself (task
 // a4d8adc5) and so meets the FIFO through git.
@@ -298,26 +298,6 @@ describe.skipIf(process.platform === "win32")("pack hook branch-protection --run
     expectBounded(out);
     expect(out.status).toBe(0);
     expect(out.stdout).toBe("");
-  });
-});
-
-describe.skipIf(process.platform === "win32")("pack hook post-merge-gate: a planted FIFO is bounded and named in the diagnostic", () => {
-  const commitEvent = (repo: string): unknown => ({
-    hook_event_name: "PreToolUse",
-    session_id: "sess-fifo",
-    tool_name: "Bash",
-    cwd: repo,
-    tool_input: { command: "git commit -m x" },
-  });
-
-  it("a FIFO at the loose ref returns within the bound, allows (this gate fails open by design) and names the refused file", () => {
-    const repo = makeRepo("main");
-    fifoOver(path.join(repo, ".git", "refs", "heads", "main"));
-    const out = runCli(["pack", "hook", "post-merge-gate", "--config", manifestWithPack("post-merge-gate")], commitEvent(repo));
-    expectBounded(out);
-    expect(out.status).toBe(0);
-    expect(out.stdout).toBe("");
-    expect(out.stderr).toMatch(/cannot resolve git context .*\[git file refused[^\]]*refs\/heads\/main\]; allowing/);
   });
 });
 

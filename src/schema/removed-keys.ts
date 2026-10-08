@@ -47,7 +47,13 @@ export const REMOVED_MANIFEST_PATHS: readonly RemovedManifestPath[] = [
   },
 ];
 
-export const REMOVED_PACK_NAMES: readonly RemovedPackName[] = [];
+export const REMOVED_PACK_NAMES: readonly RemovedPackName[] = [
+  {
+    name: "post-merge-gate",
+    removedIn: "1.0.0",
+    reason: "opt-in ledger-backed gate removed with the harness simplification",
+  },
+];
 
 export const REMOVED_MANIFEST_TABLE: RemovedManifestTable = {
   paths: REMOVED_MANIFEST_PATHS,

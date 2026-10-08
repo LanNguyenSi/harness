@@ -10,8 +10,8 @@
 // DIRECTION RULE (binding, and the reason this module is allowed to exist
 // at all). A hand-written partial model of another language's grammar is a
 // design smell, and one was removed from this codebase on 2026-08-02 for
-// exactly that reason (see the post-merge-gate blocker's
-// `isGateEligibleCommand`). What separates the two is which side of a
+// exactly that reason (the removed gate's `isGateEligibleCommand`). What
+// separates the two is which side of a
 // security boundary the model sits on:
 //
 //   - There, the model gated a PERMISSIVE decision: every construct it

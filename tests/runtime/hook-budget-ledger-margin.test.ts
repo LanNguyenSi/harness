@@ -8,8 +8,8 @@
 // `deny-degraded`, if that decision never reached stdout before the kill.
 //
 // Every blocking (`blocking: "hard"`) `harness policy intercept` hook, and
-// every blocking hook in the understanding-before-execution / post-merge-gate
-// builtin policy packs, performs at least one live grounding-mcp round-trip
+// every blocking hook in the understanding-before-execution builtin policy
+// pack, performs at least one live grounding-mcp round-trip
 // before it can write its stdout decision (branch-protection did too until
 // task a4d8adc5; it now asks git and is pinned against its own git bound
 // below):
@@ -27,8 +27,7 @@
 //     src/cli/init/templates.ts for the full trace this test's invariant
 //     is derived from.
 //   - the policy-pack blockers (`harness pack hook pre-tool-use` /
-//     `harness pack hook codex-pre-tool-use` / `harness pack hook
-//     post-merge-gate`) each run an
+//     `harness pack hook codex-pre-tool-use`) each run an
 //     unconditional `queryLedgerByTag` / `checkLedger` probe on every
 //     invocation, bounded by the same `health.timeout_ms`.
 //
@@ -82,7 +81,6 @@ import {
 import { checkHookBudgetLedgerMargin } from "../../src/cli/validate/checks.js";
 import { GIT_READ_DEADLINE_MS } from "../../src/cli/pack/hook-branch-protection.js";
 import { resolve as resolveBranchProtection } from "../../src/policy-packs/builtin/branch-protection.js";
-import { resolve as resolvePostMergeGate } from "../../src/policy-packs/builtin/post-merge-gate.js";
 import { resolve as resolveUnderstandingBeforeExecution } from "../../src/policy-packs/builtin/understanding-before-execution.js";
 import { KNOWN_RUNTIMES } from "../../src/policy-packs/runtime.js";
 
@@ -281,19 +279,6 @@ describe("blocking ledger-consulting hooks clear the ledger's worst-case round-t
         assertHookClearsMargin(hook);
         assertHookMeetsHardFloor(hook);
       }
-    }
-  });
-
-  it("post-merge-gate's blocking hook clears the margin and the hard floor (shipped disabled by default; definition still pinned)", () => {
-    const pack = fullManifest.policy_packs.find((p) => p.name === "post-merge-gate");
-    expect(pack).toBeDefined();
-    if (!pack) return;
-    const { contribution } = resolvePostMergeGate(pack, "claude-code");
-    const blocking = contribution.hooks.filter((h) => h.blocking === "hard");
-    expect(blocking.length).toBe(1);
-    for (const hook of blocking) {
-      assertHookClearsMargin(hook);
-      assertHookMeetsHardFloor(hook);
     }
   });
 

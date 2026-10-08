@@ -12,10 +12,6 @@
       "sha256": "03c387039784442dafb4d019b8ebec6b184b31824064b635bb97e4adb1e7256d",
       "content": "# Policy Pack: branch-protection\n\n## Runtime\n\ncodex\n\n## Protected branches\n\n(truncated)\n"
     },
-    "policy-packs/post-merge-gate/instructions.md": {
-      "sha256": "78b3f234efb0ed3308aeabfc858656b5518628f2d23d402196cb9820f75e7fde",
-      "content": "# Policy Pack: post-merge-gate\n\n## Runtime\n\ncodex (UNSUPPORTED \u2014 see \"Known gaps\" below; both hooks assume the Claude Code Bash tool surface)\n\n## Trigger + signals\n\n(truncated)\n"
-    },
     "policy-packs/solution-acceptance/instructions.md": {
       "sha256": "d64a094b8ca56a2152f40760f6b3b396b394aa46d457b3fb3380e7ce974e870b",
       "content": "# Policy Pack: solution-acceptance\n\n## Runtime\n\ncodex\n\n## Producer (required)\n\n(truncated)\n"

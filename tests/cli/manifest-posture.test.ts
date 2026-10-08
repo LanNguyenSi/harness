@@ -99,8 +99,13 @@ describe("the removed-entry table", () => {
     }
   });
 
-  it("starts with no removed pack names", () => {
-    expect(REMOVED_PACK_NAMES).toEqual([]);
+  it("lists every removed builtin pack with a version and a reason", () => {
+    expect(REMOVED_PACK_NAMES.length).toBeGreaterThan(0);
+    for (const p of REMOVED_PACK_NAMES) {
+      expect(p.name.length).toBeGreaterThan(0);
+      expect(p.removedIn).toMatch(/^\d+\.\d+\.\d+$/);
+      expect(p.reason.length).toBeGreaterThan(0);
+    }
   });
 });
 

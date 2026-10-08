@@ -16,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 ### Removed
 
 - `harness session-start branch-check`, `harness approve branch-protection`, the `branch:non-protected` ledger tag, the branch-protection override marker and the hook's session-id requirement (task a4d8adc5). The reserved manifest keys `grounding.evidence_ledger.retention_days` and `grounding.policies_source` (never consumed) are removed and load with a warning. Upgrade: re-run `harness apply` and `harness apply --runtime codex --install` so the settings stop calling the removed producer, and `harness pack reseed branch-protection` to drop its line from `config.ux.run`.
+- The opt-in post-merge-gate pack and its two hook verbs (`harness pack hook post-merge-gate`, `harness pack hook post-merge-gate-record`) are removed (task 2ce6933f). A manifest that still names the pack loads with a warning and the entry is ignored; `harness validate --strict` fails on it. `harness apply` now prints these manifest warnings, and a guard test keeps removed packs out of the init templates and docs examples.
 
 ### Fixed
 
