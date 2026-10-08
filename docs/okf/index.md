@@ -9,9 +9,10 @@ deliberately do not duplicate them.
 
 ## Maintenance
 
-Anchored source citations in this bundle, including historical `log.md`
-entries, are resolved against the current tree by
-`tests/decisions-citations-resolve.test.ts`.
+No longer checked: the citation guard test and the okf-staleness CI
+workflow were removed ahead of the removal release that drops the
+components these docs describe; the bundle leaves with them. Until then
+the citations below may drift.
 
 **Rule: a `path:N[-M]` line citation into a source file carries an anchor
 (`path:N[-M]#"text on the cited end line"`); `log.md` is exempt as
