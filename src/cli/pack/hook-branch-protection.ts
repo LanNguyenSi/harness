@@ -1,66 +1,63 @@
-// `harness pack hook branch-protection` — PreToolUse blocker for the
-// `branch-protection` policy pack.
+// `harness pack hook branch-protection`: PreToolUse blocker for the
+// `branch-protection` policy pack (task a4d8adc5).
 //
-// Receives Claude Code's PreToolUse event JSON on stdin and emits a
-// `{ decision: "block" }` envelope when the agent is about to mutate
-// source on a protected branch without a satisfying ledger tag.
+// Receives the runtime's PreToolUse event JSON on stdin and refuses the tool
+// call when a directory it writes into belongs to a repository whose
+// checked-out branch is protected. The branch is git's own answer
+// (`git -C <dir> symbolic-ref -q HEAD`, src/runtime/git-branch.ts); this hook
+// never reads git's files itself.
 //
-// Two paths satisfy the gate:
+// Directories checked:
+//   - Write, Edit, MultiEdit, NotebookEdit: the nearest existing directory of
+//     the target path (a Write may create the directories in between).
+//   - Codex `apply_patch`: the nearest existing directory of every path named
+//     by an `*** Add File:`, `*** Update File:`, `*** Delete File:` or
+//     `*** Move to:` header, relative to the event cwd.
+//   - Anything else, or a patch without a header: the event cwd.
 //
-//   1. **Producer path** — a `branch:non-protected` tag exists in the
-//      ledger from within the last 5 minutes (set by
-//      `harness session-start branch-check` when the session opened on
-//      a non-protected branch).
+// Decision, per directory: git names a protected branch (compared
+// case-insensitively) -> refuse; git could not answer (any error, a timeout,
+// git missing, an unexpected answer) -> refuse with one fixed sentence naming
+// git's first stderr line; a detached HEAD, or no `.git` entry anywhere above
+// the directory -> allow. A manifest that does not load refuses every call.
+// Every git call is bounded, and so are all calls of one event together,
+// below the pack's hook budget: a hook the runtime kills at its budget is
+// read as an allow.
 //
-//   2. **Override path** — an operator-only approval marker file exists
-//      at `harness.generated/.approvals/branch-protection-<sessionId>`,
-//      written by `harness approve branch-protection` from outside the
-//      gated shell to bless a deliberate protected-branch edit (version
-//      bumps, CI workflow patches, hotfixes). The legacy
-//      `branch-protection-ack:` LEDGER tag is NO LONGER trusted as an
-//      override (audit finding #39): the agent has direct
-//      `mcp__grounding-mcp__ledger_add` access and could self-write the
-//      tag to bless its own edit. The marker lives under
-//      `harness.generated/`, which Edit / Write / Bash are all gated from
-//      writing, so only a process the operator launched can produce it.
-//      The ack ledger row is still recorded for audit and surfaced in the
-//      diagnostics, but its presence alone never satisfies the gate.
-//
-// Failure mode: any error in load / parse / ledger query resolves to
-// BLOCK. This is the inverse of understanding-before-execution's
-// fail-open contract: branch-protection's whole job is to prevent
-// edit-on-master incidents, so a bug in the blocker that silently
-// allowed Writes through would defeat the purpose. The block envelope
-// always names a recovery path so the operator is never wedged.
+// Block contract per runtime: Claude Code reads a JSON deny envelope on
+// stdout (exit 0); Codex reads exit 2 with the reason on stderr
+// (`--runtime codex`). The agent-facing text names `git checkout -b` as the
+// way forward and nothing else.
 
 import * as path from "node:path";
 import {
-  queryLedgerByTag,
-  type LedgerEntry,
-} from "../../policies/index.js";
-import {
-  ACK_TAG_PREFIX,
-  DEFAULT_PROTECTED_BRANCHES,
-  NON_PROTECTED_TAG_PREFIX,
   PACK_NAME,
-  PRODUCER_FRESHNESS_MS,
-  checkBranchProtectionMarker,
+  isProtectedBranch,
   resolveProtectedBranches,
 } from "../../policy-packs/builtin/branch-protection-runtime.js";
-import { resolveGeneratedDir } from "../../io/generated-dir.js";
-import { resolveGitContext } from "../../runtime/git-context.js";
-import { POLICY_DECISION_TYPE } from "../../io/ledger-record.js";
+import {
+  GIT_BRANCH_TIMEOUT_MS,
+  nearestExistingDirectory,
+  readBranch,
+  type GitHeadReader,
+} from "../../runtime/git-branch.js";
 import { renderAgentFacing } from "../../runtime/agent-facing.js";
-import { type Manifest, type McpServer, type PolicyUx } from "../../schema/index.js";
+import { type Manifest, type PolicyUx } from "../../schema/index.js";
 import { type LoaderOptions } from "../loader.js";
 import {
-  checkHookPause,
   loadManifestOrInjected,
   parseConfigUx,
-  readStdin,
-  runGateWithStdinRefusal,
-  stdoutBlockRefusal,
+  pickString,
+  readStdinChecked,
 } from "./hook-bootstrap.js";
+
+/** Bound on all git calls of one event together, in ms. */
+export const GIT_READ_DEADLINE_MS = 3000;
+
+/** The runtimes whose block contract this hook speaks. */
+export const BRANCH_PROTECTION_RUNTIMES = ["claude-code", "codex"] as const;
+
+const CODEX_EXIT_BLOCK = 2;
 
 export interface PackHookBranchProtectionOptions extends LoaderOptions {
   /** Defaults to process.stdin. */
@@ -69,24 +66,18 @@ export interface PackHookBranchProtectionOptions extends LoaderOptions {
   stdout?: NodeJS.WritableStream;
   /** Defaults to process.stderr. */
   stderr?: NodeJS.WritableStream;
-  /** Override "now" for deterministic freshness-window tests. */
-  now?: Date;
   /** Override the cwd resolution (test injection). */
   cwd?: string;
-  /** Per-call ledger timeout in ms. */
-  ledgerTimeoutMs?: number;
   /** Inject a manifest (test). */
   manifest?: Manifest;
-  /**
-   * Override the `harness.generated/` directory used to resolve the
-   * operator-only override marker (test injection). When the real binary
-   * loads the manifest from disk this is derived from the resolved
-   * manifest path; an injected `manifest` has no on-disk path, so tests
-   * that exercise the marker override path supply this directly.
-   */
-  generatedDir?: string;
-  /** Inject a fake ledger query (test). */
-  ledgerQuery?: (sessionId: string) => Promise<LedgerEntry[] | { degraded: string }>;
+  /** Block contract: `claude-code` (default) or `codex`. */
+  runtime?: string;
+  /** Inject the git runner (test). */
+  gitReader?: GitHeadReader;
+  /** Bound on one git call in ms (test). */
+  gitTimeoutMs?: number;
+  /** Bound on all git calls of one event in ms (test). */
+  gitDeadlineMs?: number;
 }
 
 export interface PackHookBranchProtectionResult {
@@ -99,282 +90,167 @@ export interface PackHookBranchProtectionResult {
 interface ToolEventLite {
   session_id?: unknown;
   tool_name?: unknown;
+  tool?: unknown;
   cwd?: unknown;
   tool_input?: unknown;
 }
 
-/**
- * Pull the destination file path out of a PreToolUse event's `tool_input`
- * payload for the tools that mutate a single file. Returns null for tools
- * that don't have a single resolvable target (Bash, search tools, etc.) —
- * those keep cwd-based protection.
- *
- * Path-aware tools today: Write, Edit, MultiEdit, NotebookEdit.
- */
-function extractTargetPath(toolName: string, toolInput: unknown): string | null {
+/** Target path of the Claude Code tools that write a single file. */
+function singleTargetPath(toolName: string, toolInput: unknown): string | null {
   if (typeof toolInput !== "object" || toolInput === null) return null;
   const input = toolInput as Record<string, unknown>;
   switch (toolName) {
     case "Write":
     case "Edit":
-    case "MultiEdit": {
-      const fp = input["file_path"];
-      return typeof fp === "string" && fp.length > 0 ? fp : null;
-    }
-    case "NotebookEdit": {
-      const np = input["notebook_path"];
-      return typeof np === "string" && np.length > 0 ? np : null;
-    }
+    case "MultiEdit":
+      return pickString(input["file_path"]) ?? null;
+    case "NotebookEdit":
+      return pickString(input["notebook_path"]) ?? null;
     default:
       return null;
   }
 }
 
-function findGroundingMcp(manifest: Manifest): McpServer | null {
-  return manifest.tools.mcp.find((m) => m.name === "grounding-mcp") ?? null;
+/** The patch text of a Codex `apply_patch` call, in the forms Codex sends. */
+function patchBody(toolInput: unknown): string {
+  if (typeof toolInput === "string") return toolInput;
+  if (typeof toolInput !== "object" || toolInput === null) return "";
+  const input = toolInput as Record<string, unknown>;
+  return pickString(input["patch"], input["input"]) ?? "";
 }
 
-interface LedgerCheck {
-  hasFreshProducer: boolean;
-  hasAck: boolean;
-  freshProducerContent: string | null;
-  ackContent: string | null;
-  totalEntries: number;
-  degraded: string | null;
+const PATCH_HEADER = /^\*\*\*\s*(?:Add File|Update File|Delete File|Move to):\s*(.+)$/;
+
+/** Every path an `apply_patch` body names in a file header. */
+export function patchTargetPaths(toolInput: unknown): string[] {
+  const out: string[] = [];
+  for (const raw of patchBody(toolInput).split("\n")) {
+    const m = PATCH_HEADER.exec(raw.trim());
+    const target = m?.[1]?.trim() ?? "";
+    if (target.length > 0) out.push(target);
+  }
+  return out;
 }
 
-function evaluateEntries(entries: LedgerEntry[], now: Date): LedgerCheck {
-  const cutoff = now.getTime() - PRODUCER_FRESHNESS_MS;
-  let hasFreshProducer = false;
-  let hasAck = false;
-  let freshProducerContent: string | null = null;
-  let ackContent: string | null = null;
-  for (const e of entries) {
-    // Skip policy_decision audit rows: their serialized payload
-    // incidentally contains the tag they're about (e.g. a denied
-    // decision the engine recorded for THIS pack would carry the
-    // literal "branch:non-protected" or "branch-protection-ack" in
-    // its JSON, falsely satisfying the gate). Two-tier filter
-    // mirrors `src/policies/requires.ts:75-83`: by-type for current
-    // ledger rows, by-content-prefix as a backstop for legacy rows
-    // a pre-Phase-5-#4 ledger may still carry.
-    if (e.type === POLICY_DECISION_TYPE) continue;
-    if (e.content.startsWith(`${POLICY_DECISION_TYPE}:`)) continue;
-    if (e.content.includes(ACK_TAG_PREFIX)) {
-      hasAck = true;
-      if (ackContent === null) ackContent = e.content;
-      continue;
-    }
-    if (!e.content.includes(NON_PROTECTED_TAG_PREFIX)) continue;
-    const ts = e.createdAt instanceof Date ? e.createdAt : new Date(e.createdAt);
-    if (Number.isNaN(ts.getTime())) continue;
-    if (ts.getTime() >= cutoff) {
-      hasFreshProducer = true;
-      if (freshProducerContent === null) freshProducerContent = e.content;
-    }
-  }
-  return {
-    hasFreshProducer,
-    hasAck,
-    freshProducerContent,
-    ackContent,
-    totalEntries: entries.length,
-    degraded: null,
-  };
+interface CheckTargets {
+  source: "target" | "patch" | "cwd";
+  dirs: string[];
 }
 
-async function probeLedger(
-  manifest: Manifest | null,
-  sessionId: string,
-  opts: PackHookBranchProtectionOptions,
-): Promise<LedgerCheck> {
-  if (opts.ledgerQuery) {
-    const r = await opts.ledgerQuery(sessionId);
-    if ("degraded" in r) {
-      return {
-        hasFreshProducer: false,
-        hasAck: false,
-        freshProducerContent: null,
-        ackContent: null,
-        totalEntries: 0,
-        degraded: r.degraded,
-      };
-    }
-    return evaluateEntries(r, opts.now ?? new Date());
-  }
-  if (!manifest) {
-    return {
-      hasFreshProducer: false,
-      hasAck: false,
-      freshProducerContent: null,
-      ackContent: null,
-      totalEntries: 0,
-      degraded: "manifest unavailable",
-    };
-  }
-  const server = findGroundingMcp(manifest);
-  if (!server) {
-    return {
-      hasFreshProducer: false,
-      hasAck: false,
-      freshProducerContent: null,
-      ackContent: null,
-      totalEntries: 0,
-      degraded: "grounding-mcp not declared in manifest",
-    };
-  }
-  const command = Array.isArray(server.command)
-    ? server.command
-    : server.command.trim().split(/\s+/);
-  const env = server.env ?? undefined;
-  const timeoutMs = opts.ledgerTimeoutMs ?? server.health?.timeout_ms ?? 5_000;
-  const result = await queryLedgerByTag({
-    mcpCommand: command,
-    ...(env && { mcpEnv: env }),
-    sessionId,
-    timeoutMs,
-  });
-  if (result.kind === "degraded") {
-    return {
-      hasFreshProducer: false,
-      hasAck: false,
-      freshProducerContent: null,
-      ackContent: null,
-      totalEntries: 0,
-      degraded: result.reason,
-    };
-  }
-  return evaluateEntries(result.entries, opts.now ?? new Date());
+function checkTargets(toolName: string, toolInput: unknown, cwd: string): CheckTargets {
+  const single = singleTargetPath(toolName, toolInput);
+  const paths = single !== null ? [single] : toolName === "apply_patch" ? patchTargetPaths(toolInput) : [];
+  if (paths.length === 0) return { source: "cwd", dirs: [nearestExistingDirectory(cwd)] };
+  const dirs = paths.map((p) => nearestExistingDirectory(path.dirname(path.resolve(cwd, p))));
+  return { source: single !== null ? "target" : "patch", dirs: [...new Set(dirs)] };
 }
 
-function blockJson(
-  toolName: string,
-  branch: string,
-  detail: string,
-  protectedList: readonly string[],
-  ux: PolicyUx | undefined,
-  sessionId: string,
-): string {
-  // When the pack config declares `ux:`, the agent-facing surface
-  // becomes the plain-language `{ cannot, required, run }` shape and
-  // the legacy "branch-protection: refusing ..." vocabulary is
-  // suppressed. The stderr BLOCK diagnostic keeps the engine reason
-  // (`detail`) for operator audit. `${BRANCH}` / `${TOOL_NAME}` /
-  // `${SESSION_ID}` substitute against the pack runtime context.
-  let reasonText: string;
-  if (ux) {
-    reasonText = renderAgentFacing(ux, {
-      BRANCH: branch,
-      TOOL_NAME: toolName,
-      SESSION_ID: sessionId,
-    });
-  } else {
-    const minutes = Math.round(PRODUCER_FRESHNESS_MS / 60000);
-    reasonText =
-      `branch-protection: refusing ${toolName} on protected branch "${branch}". ` +
-      `${detail}\n` +
-      `To proceed, cut a feature branch and re-run the producer:\n` +
-      `  git checkout -b <feature-slug>\n` +
-      `  harness session-start branch-check\n` +
-      `Once the gate sees a fresh ${NON_PROTECTED_TAG_PREFIX} tag (within ${minutes}m), this tool call will succeed.\n` +
-      `\n` +
-      `Override (operator only): the operator runs, from an un-hooked shell:\n` +
-      `  harness approve branch-protection --session ${sessionId}\n` +
-      `which writes the canonical approval marker the gate consults. ` +
-      `A \`${ACK_TAG_PREFIX}:<reason>\` ledger tag is no longer a sufficient override on its own ` +
-      `(it is agent-writable); the marker file under harness.generated/ is the trusted signal.\n` +
-      `\n` +
-      `Protected branches: ${protectedList.join(", ")}.`;
-  }
+function claudeBlockEnvelope(reason: string): string {
   return JSON.stringify({
     decision: "block",
-    reason: reasonText,
+    reason,
     hookSpecificOutput: {
       hookEventName: "PreToolUse",
       permissionDecision: "deny",
-      permissionDecisionReason: reasonText,
+      permissionDecisionReason: reason,
     },
   });
 }
 
-async function runPackHookBranchProtectionCliInner(
+/** Agent-facing text for a protected branch: the ux block, or the default. */
+function protectedBranchText(
+  toolName: string,
+  branch: string,
+  dir: string,
+  protectedList: readonly string[],
+  ux: PolicyUx | undefined,
+  sessionId: string,
+): string {
+  if (ux) {
+    return renderAgentFacing(ux, { BRANCH: branch, TOOL_NAME: toolName, SESSION_ID: sessionId });
+  }
+  return (
+    `branch-protection: refusing ${toolName} on protected branch "${branch}" (checked in ${dir}).\n` +
+    `Create a feature branch first, then retry:\n` +
+    `  git checkout -b <feature>\n` +
+    `Protected branches: ${protectedList.join(", ")}.`
+  );
+}
+
+/**
+ * `harness pack hook branch-protection`. `opts.runtime` selects the block
+ * contract; an unknown value refuses with exit 2, which both runtimes read as
+ * a block.
+ */
+export async function runPackHookBranchProtectionCli(
   opts: PackHookBranchProtectionOptions = {},
 ): Promise<PackHookBranchProtectionResult> {
-  const stdin = opts.stdin ?? process.stdin;
   const stdout = opts.stdout ?? process.stdout;
   const stderr = opts.stderr ?? process.stderr;
   const note = (msg: string): void => {
     stderr.write(`harness pack hook branch-protection: ${msg}\n`);
   };
-
-  // Defensive stdin parse. Empty / malformed input resolves to BLOCK
-  // (the inverse of understanding-before-execution's allow-on-malformed
-  // default): we'd rather block a Write we couldn't classify than let
-  // it through silently.
-  const raw = await readStdin(stdin);
-  let event: ToolEventLite = {};
-  try {
-    event = JSON.parse(raw.trim() || "{}") as ToolEventLite;
-  } catch {
-    /* event stays {} — handled by the sessionId check below */
-  }
-
-  // Pause sentinel — even branch-protection (the strictest gate) yields
-  // to an operator pause. The whole point of the incident-mode flow is
-  // pushing a hotfix to a protected branch when normal gates are in the
-  // way.
-  if (checkHookPause("branch-protection", stderr, opts).paused) {
-    const diagnostic = "harness paused; branch-protection allowing without evaluating.";
-    return { exitCode: 0, blocked: false, diagnostic };
-  }
-
-  const sessionId =
-    (typeof event.session_id === "string" ? event.session_id : undefined) ??
-    process.env.CLAUDE_CODE_SESSION_ID ??
-    process.env.CLAUDE_SESSION_ID ??
-    "";
-  const toolName = typeof event.tool_name === "string" ? event.tool_name : "(unknown)";
-  const cwd =
-    typeof opts.cwd === "string" && opts.cwd.length > 0
-      ? opts.cwd
-      : typeof event.cwd === "string" && event.cwd.length > 0
-        ? event.cwd
-        : process.cwd();
-
-  // Load manifest to resolve the protected-branches list AND the
-  // grounding-mcp wiring. A manifest load failure forces BLOCK with a
-  // clear hint — we can't know if the gate should fire if we can't
-  // read its config.
-  // Resolved manifest path feeds the harness.generated/ lookup below (the
-  // override-marker directory). An injected manifest (tests) has no
-  // on-disk path, so `generatedDir` falls back to opts.generatedDir.
-  let manifest: Manifest;
-  let manifestPath: string | undefined;
-  try {
-    ({ manifest, manifestPath } = loadManifestOrInjected(opts, opts.manifest));
-  } catch (err) {
-    const reason = `manifest load failed (${(err as Error).message}); refusing on failsafe`;
-    const diagnostic = `BLOCK — ${reason}`;
+  const allow = (diagnostic: string): PackHookBranchProtectionResult => {
     note(diagnostic);
-    // Manifest didn't load, so no ux config to honour; legacy
-    // envelope is the only available surface here.
-    stdout.write(
-      `${blockJson(toolName, "(unresolvable)", reason, DEFAULT_PROTECTED_BRANCHES, undefined, sessionId)}\n`,
-    );
+    return { exitCode: 0, blocked: false, diagnostic };
+  };
+
+  const runtime = opts.runtime ?? "claude-code";
+  if (!(BRANCH_PROTECTION_RUNTIMES as readonly string[]).includes(runtime)) {
+    const diagnostic = `BLOCK: unknown --runtime ${JSON.stringify(runtime)} (expected ${BRANCH_PROTECTION_RUNTIMES.join(" or ")}); refusing`;
+    note(diagnostic);
+    return { exitCode: CODEX_EXIT_BLOCK, blocked: true, diagnostic };
+  }
+  const block = (detail: string, agentText: string): PackHookBranchProtectionResult => {
+    const diagnostic = `BLOCK: ${detail}`;
+    note(diagnostic);
+    if (runtime === "codex") {
+      stderr.write(`${agentText}\n`);
+      return { exitCode: CODEX_EXIT_BLOCK, blocked: true, diagnostic };
+    }
+    stdout.write(`${claudeBlockEnvelope(agentText)}\n`);
     return { exitCode: 0, blocked: true, diagnostic };
+  };
+
+  // A read that timed out never received the whole event, so nothing can be
+  // judged: refuse. Same wording as the other gates' stdin-timeout refusal,
+  // minus their operator-pause hint: this gate does not yield to a pause.
+  const read = await readStdinChecked(opts.stdin ?? process.stdin);
+  if (read.timedOut) {
+    const reason =
+      `stdin timeout: no complete event arrived and closed on stdin within ${read.idleTimeoutMs} ms, ` +
+      `so branch-protection cannot judge the tool call and refuses it (fail closed). Retry the tool call.`;
+    return block(reason, reason);
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(read.text);
+  } catch {
+    parsed = undefined;
+  }
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    const detail = "the event on stdin is not a JSON object";
+    return block(detail, `branch-protection: refusing the tool call: ${detail}, so it cannot be judged.`);
+  }
+  const event = parsed as ToolEventLite;
+
+  const toolName = pickString(event.tool_name, event.tool) ?? "(unknown)";
+  const sessionId = pickString(event.session_id) ?? "";
+  const cwd = path.resolve(pickString(opts.cwd, event.cwd) ?? process.cwd());
+
+  // Without the manifest the gate cannot know whether it is enabled or what
+  // is protected, so a load failure refuses.
+  let manifest: Manifest;
+  try {
+    ({ manifest } = loadManifestOrInjected(opts, opts.manifest));
+  } catch (err) {
+    const detail = `the harness manifest could not be loaded (${(err as Error).message})`;
+    return block(`${detail}; refusing on failsafe`, `branch-protection: refusing ${toolName}: ${detail}.`);
   }
 
   const pack = manifest.policy_packs.find((p) => p.name === PACK_NAME);
-  if (!pack) {
-    const diagnostic = `pack "${PACK_NAME}" not declared in manifest, allowing`;
-    note(diagnostic);
-    return { exitCode: 0, blocked: false, diagnostic };
-  }
-  if (!pack.enabled) {
-    const diagnostic = `pack "${PACK_NAME}" is enabled:false, allowing`;
-    note(diagnostic);
-    return { exitCode: 0, blocked: false, diagnostic };
-  }
+  if (!pack) return allow(`pack "${PACK_NAME}" not declared in manifest, allowing`);
+  if (!pack.enabled) return allow(`pack "${PACK_NAME}" is enabled:false, allowing`);
 
   const { branches: protectedList } = resolveProtectedBranches(pack);
   const configUx = parseConfigUx(
@@ -383,152 +259,43 @@ async function runPackHookBranchProtectionCliInner(
     "harness pack hook branch-protection",
   );
 
-  // Resolve the branch context to gate against. For tools that target a
-  // single file (Write, Edit, MultiEdit, NotebookEdit), the relevant
-  // branch is whatever repo OWNS the target path — not cwd. Without this
-  // step, a Write to `~/.claude/memory/foo.md` from inside a checkout on
-  // a protected branch would be wrongly blocked, even though the target
-  // is outside any repo (memory files), or inside an unrelated repo, and
-  // the protection rules of cwd's repo have no bearing on it. For
-  // path-less tools (Bash, etc.) we fall back to cwd as before.
-  const targetPath = extractTargetPath(toolName, event.tool_input);
-  let branchSourceDir = cwd;
-  let branchSource: "target" | "cwd" = "cwd";
-  if (targetPath !== null) {
-    const absTarget = path.isAbsolute(targetPath)
-      ? targetPath
-      : path.resolve(cwd, targetPath);
-    branchSourceDir = path.dirname(absTarget);
-    branchSource = "target";
-  }
-  const gitContext = resolveGitContext(branchSourceDir);
-  const { branch } = gitContext;
-
-  // A git file that is PRESENT but refused is not "outside a git work
-  // tree": a FIFO, a device, a directory, an oversized or unreadable file
-  // where `HEAD` belongs, or a node that is neither a directory nor a
-  // regular file (or an oversized or unreadable pointer file) at `.git`
-  // itself, a `.git` or `HEAD` that is a link that does not resolve, a git
-  // directory with no `HEAD`, a `HEAD` holding neither a ref nor an object
-  // id, a `gitdir:` pointer to a missing directory, or any other git
-  // directory git would not take for a repository (task 51bfba5a)
-  // (the lookup then stops there rather than
-  // walking up to an enclosing repository). In a healthy repository those
-  // paths are directories or regular files, so reading it as "no branch,
-  // allow" below would let a planted node switch this gate off. This gate
-  // fails closed on a could-not-decide state, so it blocks, naming the
-  // refused path.
-  if (branch === "" && gitContext.refused !== undefined && gitContext.refused.length > 0) {
-    const reason = `could not read the git metadata of the ${branchSource} (${gitContext.refused.join(", ")} is present but not a regular file or is oversized, or does not resolve: a HEAD missing from a git directory or holding neither a ref nor an object id, a link that dangles or loops or a HEAD link not naming refs/heads/<name>, a directory that cannot be searched, a HEAD or a gitdir: pointer git itself would not accept, a git directory without the objects/ and refs/ directories git requires); refusing on failsafe`;
-    const diagnostic = `BLOCK — ${reason}`;
-    note(diagnostic);
-    stdout.write(
-      `${blockJson(toolName, "(unresolvable)", reason, protectedList, configUx, sessionId)}\n`,
-    );
-    return { exitCode: 0, blocked: true, diagnostic };
-  }
-
-  // Outside a git work tree (or detached HEAD) we can't tell what the
-  // edit would land on. We choose to allow here — the alternative is
-  // blocking every Write in non-git workspaces, which would be hostile
-  // to standalone-script workflows and to writes that target machine
-  // state under $HOME / /tmp. A detached HEAD on an in-repo target also
-  // lands here; arguably should block, but detached-HEAD edits don't
-  // auto-push to a protected ref so the downstream
-  // `preflight-before-push` gate still catches the actual hazard.
-  if (branch === "") {
-    const diagnostic = `${branchSource} is not on a named branch (detached HEAD or outside a git work tree); allowing`;
-    note(diagnostic);
-    return { exitCode: 0, blocked: false, diagnostic };
-  }
-
-  if (!protectedList.includes(branch)) {
-    const diagnostic = `branch "${branch}" is not in the protected list (${protectedList.join(", ")}); allowing`;
-    note(diagnostic);
-    return { exitCode: 0, blocked: false, diagnostic };
-  }
-
-  // On a protected branch: probe the ledger for either gate path.
-  if (sessionId === "") {
-    const reason = `no session_id resolvable from stdin or $CLAUDE_CODE_SESSION_ID/$CLAUDE_SESSION_ID; cannot consult ledger`;
-    const diagnostic = `BLOCK — ${reason}`;
-    note(diagnostic);
-    stdout.write(`${blockJson(toolName, branch, reason, protectedList, configUx, sessionId)}\n`);
-    return { exitCode: 0, blocked: true, diagnostic };
-  }
-
-  const check = await probeLedger(manifest, sessionId, opts);
-
-  // Override path (operator-only). The canonical override signal is a
-  // marker file under harness.generated/.approvals/ that only a process
-  // the operator launched can write — NOT the `branch-protection-ack`
-  // ledger tag, which the agent can self-write via its own ledger_add MCP
-  // access (audit finding #39; the understanding gate closed the identical
-  // backdoor in agent-tasks/88ca4bb3). The ledger ack, if present, is
-  // surfaced as a best-effort audit echo only. `generatedDir` is
-  // unresolvable only on the test-injection path (an injected manifest has
-  // no on-disk path and no opts.generatedDir); there the override is
-  // simply unavailable and the gate falls through to the producer check.
-  const generatedDir =
-    opts.generatedDir ??
-    (manifestPath !== undefined
-      ? resolveGeneratedDir({
-          ...(opts.homeDir !== undefined ? { homeDir: opts.homeDir } : {}),
-          manifestPath,
-        })
-      : undefined);
-  // Best-effort audit echo of the now-untrusted ledger ack, appended to
-  // diagnostics so an operator chasing the gate can see the historic tag
-  // without it being mistaken for the thing that opened (or failed to
-  // open) the gate.
-  const ackEcho = check.hasAck
-    ? ` [audit: ledger ${check.ackContent ?? ACK_TAG_PREFIX} present, no longer satisfies the gate]`
-    : "";
-  // Distinct audit note when the override marker FILE existed but failed
-  // signature verification (harness/f9485cc7) — missing/invalid signature,
-  // wrong alg, or a tampered payload — so it reads apart from the routine
-  // "no operator override marker" case below.
-  let markerForgedNote = "";
-  if (generatedDir !== undefined) {
-    const markerCheck = checkBranchProtectionMarker(generatedDir, sessionId);
-    if (markerCheck.matched) {
-      const diagnostic = `branch-protection override marker active (${markerCheck.detail}); allowing${ackEcho}`;
-      note(diagnostic);
-      return { exitCode: 0, blocked: false, diagnostic };
+  const targets = checkTargets(toolName, event.tool_input, cwd);
+  const deadlineMs = opts.gitDeadlineMs ?? GIT_READ_DEADLINE_MS;
+  const perCallMs = opts.gitTimeoutMs ?? GIT_BRANCH_TIMEOUT_MS;
+  const deadline = Date.now() + deadlineMs;
+  const seen: string[] = [];
+  for (const dir of targets.dirs) {
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) {
+      const detail = `the branch of ${dir} was not checked: all target directories together passed the ${deadlineMs} ms bound`;
+      return block(detail, `branch-protection: refusing ${toolName}: git could not report the branch of ${dir} (${detail}).`);
     }
-    if (markerCheck.forged) {
-      markerForgedNote = ` [forged/unsigned override marker rejected: ${markerCheck.detail}]`;
+    const branchRead = await readBranch(dir, {
+      ...(opts.gitReader !== undefined ? { reader: opts.gitReader } : {}),
+      timeoutMs: Math.min(perCallMs, remaining),
+    });
+    switch (branchRead.kind) {
+      case "error":
+        return block(
+          `git could not report the branch of ${dir}: ${branchRead.detail}`,
+          `branch-protection: refusing ${toolName}: git could not report the branch of ${dir} (${branchRead.detail}).`,
+        );
+      case "branch":
+        if (isProtectedBranch(branchRead.name, protectedList)) {
+          return block(
+            `branch "${branchRead.name}" of ${dir} is protected (${protectedList.join(", ")})`,
+            protectedBranchText(toolName, branchRead.name, dir, protectedList, configUx, sessionId),
+          );
+        }
+        seen.push(`${dir}: branch "${branchRead.name}" is not in the protected list (${protectedList.join(", ")})`);
+        break;
+      case "detached":
+        seen.push(`${dir}: detached HEAD`);
+        break;
+      case "outside":
+        seen.push(`${dir}: outside any git repository`);
+        break;
     }
   }
-  if (check.hasFreshProducer) {
-    const diagnostic = `fresh producer tag (${check.freshProducerContent ?? NON_PROTECTED_TAG_PREFIX}); allowing`;
-    note(diagnostic);
-    return { exitCode: 0, blocked: false, diagnostic };
-  }
-
-  const why =
-    check.degraded !== null
-      ? `ledger degraded (${check.degraded}); refusing on failsafe`
-      : `no fresh ${NON_PROTECTED_TAG_PREFIX} tag (${check.totalEntries} entries scanned) and no operator override marker${ackEcho}${markerForgedNote}`;
-  const diagnostic = `BLOCK — ${why}`;
-  note(diagnostic);
-  stdout.write(`${blockJson(toolName, branch, why, protectedList, configUx, sessionId)}\n`);
-  return { exitCode: 0, blocked: true, diagnostic };
-}
-
-/**
- * `harness pack hook branch-protection`. A stdin read that times out is refused here
- * instead of being handed to the gate as an empty or truncated event it would
- * treat as malformed input (task 7dfdcaaf). The operator pause still wins;
- * every other input runs the gate unchanged.
- */
-export function runPackHookBranchProtectionCli(
-  opts: PackHookBranchProtectionOptions = {},
-): Promise<PackHookBranchProtectionResult> {
-  return runGateWithStdinRefusal(
-    opts,
-    (stderr) => checkHookPause("branch-protection", stderr, opts).paused,
-    stdoutBlockRefusal("branch-protection"),
-    runPackHookBranchProtectionCliInner,
-  );
+  return allow(`${targets.source} ${seen.join("; ")}; allowing`);
 }

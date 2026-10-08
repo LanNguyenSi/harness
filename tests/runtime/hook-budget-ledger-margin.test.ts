@@ -8,9 +8,11 @@
 // `deny-degraded`, if that decision never reached stdout before the kill.
 //
 // Every blocking (`blocking: "hard"`) `harness policy intercept` hook, and
-// every blocking hook in the branch-protection / understanding-before-
-// execution / post-merge-gate builtin policy packs, performs at least one
-// live grounding-mcp round-trip before it can write its stdout decision:
+// every blocking hook in the understanding-before-execution / post-merge-gate
+// builtin policy packs, performs at least one live grounding-mcp round-trip
+// before it can write its stdout decision (branch-protection did too until
+// task a4d8adc5; it now asks git and is pinned against its own git bound
+// below):
 //   - a `requires:`-based policy queries the ledger for its verdict
 //     (src/runtime/intercept.ts, `evaluateOnePolicy`, the
 //     `options.ledger.query(...)` call).
@@ -24,9 +26,9 @@
 //     the budget-note comment above `require-review-evidence` in
 //     src/cli/init/templates.ts for the full trace this test's invariant
 //     is derived from.
-//   - the three policy-pack blockers (`harness pack hook branch-protection`
-//     / `harness pack hook pre-tool-use` / `harness pack hook codex-pre-
-//     tool-use` / `harness pack hook post-merge-gate`) each run an
+//   - the policy-pack blockers (`harness pack hook pre-tool-use` /
+//     `harness pack hook codex-pre-tool-use` / `harness pack hook
+//     post-merge-gate`) each run an
 //     unconditional `queryLedgerByTag` / `checkLedger` probe on every
 //     invocation, bounded by the same `health.timeout_ms`.
 //
@@ -78,6 +80,7 @@ import {
   requiredHookBudgetMs,
 } from "../../src/cli/policy/intercept.js";
 import { checkHookBudgetLedgerMargin } from "../../src/cli/validate/checks.js";
+import { GIT_READ_DEADLINE_MS } from "../../src/cli/pack/hook-branch-protection.js";
 import { resolve as resolveBranchProtection } from "../../src/policy-packs/builtin/branch-protection.js";
 import { resolve as resolvePostMergeGate } from "../../src/policy-packs/builtin/post-merge-gate.js";
 import { resolve as resolveUnderstandingBeforeExecution } from "../../src/policy-packs/builtin/understanding-before-execution.js";
@@ -243,7 +246,7 @@ describe("blocking ledger-consulting hooks clear the ledger's worst-case round-t
     expect(interceptHooks).toEqual([]);
   });
 
-  it("branch-protection's blocking hook clears the margin and the hard floor (both runtimes)", () => {
+  it("branch-protection's blocking hook makes no ledger round-trip; its budget clears the hook's own git bound with start-up headroom (every runtime, task a4d8adc5)", () => {
     const pack = fullManifest.policy_packs.find((p) => p.name === "branch-protection");
     expect(pack).toBeDefined();
     if (!pack) return;
@@ -252,10 +255,16 @@ describe("blocking ledger-consulting hooks clear the ledger's worst-case round-t
       const blocking = contribution.hooks.filter((h) => h.blocking === "hard");
       expect(blocking.length, `runtime ${runtime}`).toBe(1);
       for (const hook of blocking) {
-        assertHookClearsMargin(hook);
-        assertHookMeetsHardFloor(hook);
+        expect(hook.budget_ms, `runtime ${runtime}`).toBe(5000);
+        // The hook stops asking git after GIT_READ_DEADLINE_MS and refuses;
+        // the runtime's kill (read as an allow) must come well after that.
+        expect(outerTimeoutSeconds(hook.budget_ms ?? 0) * 1000 - GIT_READ_DEADLINE_MS, `runtime ${runtime}`).toBeGreaterThanOrEqual(2000);
       }
     }
+    // Not counted among the ledger-consulting hooks by the generic guard.
+    expect(
+      checkHookBudgetLedgerMargin(fullManifest).some((d) => d.path.includes("policy-pack:branch-protection")),
+    ).toBe(false);
   });
 
   it("understanding-before-execution's blocking hook clears the margin and the hard floor (both runtimes)", () => {

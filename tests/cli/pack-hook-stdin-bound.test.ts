@@ -121,6 +121,7 @@ interface Ctx {
  */
 async function runHook(opts: {
   verb: string;
+  extraArgs?: string[];
   steps?: WriteStep[];
   closeAfter?: boolean;
   manifest?: string;
@@ -128,7 +129,7 @@ async function runHook(opts: {
 }): Promise<ChildResult> {
   expect(fs.existsSync(MAIN_JS), "run `npm run build` first").toBe(true);
   const { home, cwd, configPath } = opts.ctx;
-  const args = [MAIN_JS, "pack", "hook", opts.verb];
+  const args = [MAIN_JS, "pack", "hook", opts.verb, ...(opts.extraArgs ?? [])];
   if (opts.manifest !== undefined && configPath !== undefined) {
     fs.writeFileSync(configPath, opts.manifest, "utf8");
     args.push("--config", configPath);
@@ -257,6 +258,10 @@ function expectBoundedExit(r: ChildResult): void {
 /** One PreToolUse gate verb: the pack its manifest enables and a gated event it would act on. */
 interface Gate {
   verb: string;
+  /** Test label when one verb runs in several forms (defaults to `verb`). */
+  name?: string;
+  /** Arguments after the verb (e.g. a runtime selector). */
+  extraArgs?: string[];
   /** Pack enabled in the manifest handed to the child; null for a verb that takes no config. */
   pack: string | null;
   /** The block exit code: 0 with a stdout envelope, or 2 (codex stderr / runtime-reality deny). */
@@ -304,6 +309,22 @@ const GATES: Gate[] = [
         cwd: ctx.cwd,
         tool_name: "Write",
         tool_input: { file_path: path.join(ctx.cwd, "a.txt"), content: "x" },
+      }),
+  },
+  {
+    // The Codex form of the same gate (task a4d8adc5): exit 2, reason on stderr.
+    verb: "branch-protection",
+    name: "branch-protection --runtime codex",
+    extraArgs: ["--runtime", "codex"],
+    pack: "branch-protection",
+    blockExit: 2,
+    reasonOn: "stderr",
+    event: (ctx) =>
+      JSON.stringify({
+        session_id: "stdin-bound-sess",
+        cwd: ctx.cwd,
+        tool_name: "apply_patch",
+        tool_input: { input: `*** Begin Patch\n*** Add File: ${path.join(ctx.cwd, "a.txt")}\n+x\n*** End Patch\n` },
       }),
   },
   {
@@ -368,6 +389,7 @@ function runGate(
 ): Promise<ChildResult> {
   return runHook({
     verb: gate.verb,
+    ...(gate.extraArgs !== undefined ? { extraArgs: gate.extraArgs } : {}),
     ...(steps !== undefined ? { steps } : {}),
     closeAfter,
     ...(gate.pack !== null ? { manifest: manifestWithPack(gate.pack) } : {}),
@@ -409,7 +431,7 @@ function expectTimeoutBlock(gate: Gate, r: ChildResult): void {
 describe("pack hook stdin bound: every PreToolUse gate blocks on a timed-out read", () => {
   for (const gate of GATES) {
     it.concurrent(
-      `${gate.verb}: a never-closed empty stdin BLOCKS with a reason naming the stdin timeout and the bound`,
+      `${gate.name ?? gate.verb}: a never-closed empty stdin BLOCKS with a reason naming the stdin timeout and the bound`,
       async () => {
         expectTimeoutBlock(gate, await runGate(gate, undefined, false));
       },
@@ -417,7 +439,7 @@ describe("pack hook stdin bound: every PreToolUse gate blocks on a timed-out rea
     );
 
     it.concurrent(
-      `${gate.verb}: a complete gated event on a stdin that never closes BLOCKS (a timeout is not an allow)`,
+      `${gate.name ?? gate.verb}: a complete gated event on a stdin that never closes BLOCKS (a timeout is not an allow)`,
       async () => {
         const ctx = makeCtx();
         const r = await runGate(gate, [{ afterMs: 0, data: gate.event(ctx) }], false, ctx);
@@ -427,7 +449,7 @@ describe("pack hook stdin bound: every PreToolUse gate blocks on a timed-out rea
     );
 
     it.concurrent(
-      `${gate.verb}: a writer that waits past the bound, then writes the full gated event and closes, BLOCKS`,
+      `${gate.name ?? gate.verb}: a writer that waits past the bound, then writes the full gated event and closes, BLOCKS`,
       async () => {
         const ctx = makeCtx();
         const r = await runGate(gate, [{ afterMs: LATE_MS, data: gate.event(ctx) }], true, ctx);
@@ -438,7 +460,7 @@ describe("pack hook stdin bound: every PreToolUse gate blocks on a timed-out rea
     );
 
     it.concurrent(
-      `${gate.verb}: a writer that stalls past the bound mid-event, then finishes the event and closes, BLOCKS`,
+      `${gate.name ?? gate.verb}: a writer that stalls past the bound mid-event, then finishes the event and closes, BLOCKS`,
       async () => {
         const ctx = makeCtx();
         const event = gate.event(ctx);
@@ -460,7 +482,7 @@ describe("pack hook stdin bound: every PreToolUse gate blocks on a timed-out rea
   }
 
   it("covers every PreToolUse gate verb the pack hook bootstrap reader serves, plus runtime-reality", () => {
-    expect(GATES.map((g) => g.verb).sort()).toEqual(
+    expect([...new Set(GATES.map((g) => g.verb))].sort()).toEqual(
       [
         "branch-protection",
         "codex-pre-tool-use",
@@ -475,7 +497,9 @@ describe("pack hook stdin bound: every PreToolUse gate blocks on a timed-out rea
 });
 
 describe("pack hook stdin bound: the operator pause still wins over the timeout block", () => {
-  for (const gate of GATES.filter((g) => g.pack !== null)) {
+  // branch-protection is not among them: it no longer yields to a pause
+  // (task a4d8adc5), pinned in the describe block below.
+  for (const gate of GATES.filter((g) => g.pack !== null && g.pack !== "branch-protection")) {
     it.concurrent(
       `${gate.verb}: with an active pause a never-closed empty stdin exits 0 without a block`,
       async () => {
@@ -495,6 +519,31 @@ describe("pack hook stdin bound: the operator pause still wins over the timeout 
         expect(r.stdout).not.toContain("deny");
         expect(r.stderr).not.toContain(BLOCK_REASON_HEAD);
         expect(r.stderr.toLowerCase()).toContain("paused");
+      },
+      TEST_TIMEOUT_MS,
+    );
+  }
+});
+
+describe("pack hook stdin bound: branch-protection does not yield to a pause", () => {
+  for (const gate of GATES.filter((g) => g.pack === "branch-protection")) {
+    it.concurrent(
+      `${gate.name ?? gate.verb}: with an active pause a never-closed empty stdin still BLOCKS on the timeout`,
+      async () => {
+        const ctx = makeCtx();
+        const generated = path.join(ctx.home, GENERATED_DIRNAME);
+        fs.mkdirSync(generated, { recursive: true });
+        writeSentinel(generated, {
+          pausedAt: new Date().toISOString(),
+          expiresAt: null,
+          reason: "stdin bound test",
+          pausedBy: "test",
+        });
+        const r = await runGate(gate, undefined, false, ctx);
+        expectTimeoutBlock(gate, r);
+        expect(r.stderr.toLowerCase()).not.toContain("paused");
+        // The refusal names no operator override (the pause is not one here).
+        expect(gate.reasonOn === "stdout" ? r.stdout : r.stderr).not.toMatch(/harness pause/);
       },
       TEST_TIMEOUT_MS,
     );

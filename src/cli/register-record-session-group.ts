@@ -5,7 +5,6 @@ import {
   runRecordReview,
   runRecordReviewSubagent,
 } from "./record/index.js";
-import { runSessionStartBranchCheck } from "./session-start/branch-check.js";
 import { runSessionStartToolchainParity } from "./session-start/toolchain-parity.js";
 import { runSessionStartStaleBaseCheck } from "./session-start/stale-base-check.js";
 import {
@@ -191,7 +190,7 @@ export function registerRecordSessionGroup(
         "a loud warning since the literal 'default' session never satisfies a preflight-before-* gate).",
     ).option("--timeout <ms>", "agent-preflight subprocess timeout in milliseconds (default 60000)"),
   ).action(preflightAction);
-  // The three advisory producers below share one option set and one
+  // The two advisory producers below share one option set and one
   // action shape: only the description and the runner differ.
   const addSessionStartProducer = (
     name: string,
@@ -211,15 +210,6 @@ export function registerRecordSessionGroup(
       await run(cliOpts);
     });
   };
-  addSessionStartProducer(
-    "branch-check",
-    "SessionStart producer for the branch-protection pack: read .git/HEAD for the session cwd and, " +
-      "when the branch is NOT in the operator's protected list (default: master, main, develop), " +
-      "record a `branch:non-protected:<branch>` fact to the evidence ledger so the pack's PreToolUse " +
-      "blocker has a fresh tag to satisfy its 5-minute freshness window. Also runnable on demand from " +
-      "the operator's shell. blocking:false \u2014 every failure path logs to stderr and exits 0.",
-    runSessionStartBranchCheck,
-  );
   addSessionStartProducer(
     "toolchain-parity",
     "SessionStart producer (opt-in via `toolchain_parity.enabled: true`): writes THIS machine's " +

@@ -22,8 +22,6 @@ grounding:
     id_format: "gs-{repo}-{rand:8}"
   evidence_ledger:
     path: ~/.evidence-ledger/ledger.db
-    retention_days: 90
-  policies_source: ~/.claude/harness.d/policies/claim-gate.yaml
 
 tools:
   mcp:
@@ -798,29 +796,28 @@ policy_packs:
         require_report: true
 
   # branch-protection (agent-tasks/2fdc5bbe, default-enabled since v0.17.2):
-  # blocks Write/Edit (claude-code) or apply_patch (codex) on protected
-  # branches (default: master, main, develop). Complements
-  # preflight-before-push, which fires at the LAST reversible step;
-  # branch-protection fires at the FIRST source mutation. Set
-  # config.protected_branches to override the default list, or set
-  # enabled: false if your workflow routinely edits master directly.
-  # Full reference: docs/policy-packs/branch-protection.md.
+  # blocks Write/Edit (claude-code) or apply_patch (codex) when git names a
+  # protected branch (default: master, main, develop) for the directory the
+  # call writes into, or cannot answer. Complements preflight-before-push,
+  # which fires at the LAST reversible step; branch-protection fires at the
+  # FIRST source mutation. Set config.protected_branches to override the
+  # default list, or set enabled: false if your workflow routinely edits
+  # master directly. Full reference: docs/policy-packs/branch-protection.md.
   - name: branch-protection
     source: builtin
     enabled: true
     description: Block Write/Edit on protected branches (master, main, develop) at the first source mutation.
     config:
-      # ux (agent-tasks/9806d4f8): replaces the legacy
-      # "branch-protection: refusing ..." envelope with the
-      # plain-language { cannot, required, run } shape. Engine details
-      # stay on stderr for operator audit.
+      # ux (agent-tasks/9806d4f8): replaces the default
+      # "branch-protection: refusing ..." text with the plain-language
+      # { cannot, required, run } shape. Engine details stay on stderr
+      # for operator audit.
       ux:
         cannot: "You cannot edit files on protected branch ${BRANCH} yet."
         required:
           - "a checkout of a non-protected branch (current `${BRANCH}` is protected)"
         run:
           - "git checkout -b feat/<your-task>"
-          - "harness session-start branch-check"
 
   # solution-acceptance (harness cc43c7a4): Verifier-gated Done. Gates the
   # task-finishing tools (agent-tasks completion verbs + git push / gh pr

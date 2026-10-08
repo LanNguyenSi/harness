@@ -10,7 +10,13 @@ import {
   type McpProbe,
   type McpProbeResult,
 } from "../../probes/mcp.js";
-import type { Manifest, McpServer, Policy } from "../../schema/index.js";
+import {
+  formatPostureWarning,
+  type Manifest,
+  type ManifestPostureWarning,
+  type McpServer,
+  type Policy,
+} from "../../schema/index.js";
 import {
   EVIDENCE_LEDGER_DB_ENV,
   GROUNDING_MCP_SERVER_NAME,
@@ -1030,7 +1036,7 @@ function buildGrounding(
   return { ledgerPath, ledgerPathWritable, envOverride, warnings };
 }
 
-function manifestSection(manifest: Manifest): ManifestSection {
+function manifestSection(manifest: Manifest, postureWarnings: readonly ManifestPostureWarning[]): ManifestSection {
   const topLevelKeys = [
     "grounding",
     "tools",
@@ -1049,7 +1055,9 @@ function manifestSection(manifest: Manifest): ManifestSection {
   // dropped. The exit-66-on-load path is the canonical signal.
   return {
     topLevelKeysPresent: present,
-    warnings: [],
+    // Removed manifest keys / removed packs the load stripped and ignored
+    // (src/schema/removed-keys.ts): each one is a warning here.
+    warnings: postureWarnings.map(formatPostureWarning),
   };
 }
 
@@ -1225,7 +1233,7 @@ export async function doctor(opts: DoctorOptions = {}): Promise<DoctorReport> {
   // layer through THIS one, unrelated load would let it silently reach
   // every other check in this report, for zero benefit to the one key
   // that needs it.
-  const { manifest, resolved } = loadManifest(opts);
+  const { manifest, resolved, warnings: postureWarnings } = loadManifest(opts);
   const home = opts.homeOverride ?? opts.homeDir ?? os.homedir();
   const probe = opts.mcpProbe ?? new RealMcpProbe();
 
@@ -1623,7 +1631,7 @@ export async function doctor(opts: DoctorOptions = {}): Promise<DoctorReport> {
         ...opts.toolchainParityOptions,
       })
     : undefined;
-  const manifestSec = manifestSection(manifest);
+  const manifestSec = manifestSection(manifest, postureWarnings);
 
   const rogueLedgerDbs = scanForRogueLedgers({
     homeDir: opts.rogueLedgerScanOptions?.homeDir ?? home,

@@ -161,8 +161,8 @@ export function resolveReadSessionId(
 // Shared session-id resolver for the `harness approve` verbs.
 // ---------------------------------------------------------------------------
 //
-// All three approve verbs (understanding, risk, branch-protection) resolve
-// the target session id through the same 5-tier precedence chain; only
+// Both approve verbs (understanding, risk) resolve the target session id
+// through the same 5-tier precedence chain; only
 // `approve understanding` adds a 6th tier (newest pending persisted report).
 // This section lifts that chain into one place to remove the copy-paste.
 //
@@ -188,8 +188,8 @@ export interface ResolveApprovalSessionIdOptions {
    * Optional 6th-tier callback. When provided and reached, it is called
    * once and should return the session id plus the file path of the
    * freshest qualifying persisted report, or null when none qualifies.
-   * Only `approve understanding` supplies this; `approve risk` and
-   * `approve branch-protection` omit it (they produce no persisted reports).
+   * Only `approve understanding` supplies this; `approve risk` omits it (it
+   * produces no persisted reports).
    */
   newestReportFallback?: () => { sessionId: string; filePath: string } | null;
   /**

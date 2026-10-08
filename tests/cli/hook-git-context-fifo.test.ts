@@ -2,10 +2,11 @@
 // (`.git/refs/heads/<branch>`, `.git/HEAD`) used to block `resolveGitContext`
 // until the runtime's hook budget ran out, which the runtime treats as an
 // allow (task 323bd5b9). These tests drive the BUILT CLI, one child process
-// per case under a SIGKILL timeout, through every hook that resolves the
-// git context: the three pack hooks that gate on it and `harness policy
-// intercept`, the PreToolUse entrypoint both the Claude and the Codex
-// adapters install.
+// per case under a SIGKILL timeout, through every hook that reads the
+// branch: the two pack hooks that still resolve the git context and `harness
+// policy intercept`, the PreToolUse entrypoint both the Claude and the Codex
+// adapters install, plus branch-protection, which asks git itself (task
+// a4d8adc5) and so meets the FIFO through git.
 //
 // Needs dist/ (`npm run build` before `vitest`).
 
@@ -101,7 +102,20 @@ function expectBounded(run: HookRun): void {
   expect(run.ms).toBeLessThan(BOUND_MS);
 }
 
-describe.skipIf(process.platform === "win32")("pack hook branch-protection: a planted FIFO cannot switch the gate off", () => {
+// branch-protection asks git for the branch (task a4d8adc5). A git file that
+// never answers (a FIFO at HEAD) holds git, not the hook: the hook's own
+// bound kills git and refuses, well inside the pack's 5000 ms hook budget,
+// instead of hanging until the runtime gives up and reads that as an allow.
+const BP_BUDGET_MS = 5000;
+
+function plainGitHead(cwd: string): { status: number | null; stdout: string } {
+  const env = { ...process.env };
+  for (const k of Object.keys(env)) if (k.startsWith("GIT_")) delete env[k];
+  const r = spawnSync("git", ["symbolic-ref", "-q", "HEAD"], { cwd, env, encoding: "utf8", timeout: BOUND_MS });
+  return { status: r.status, stdout: r.stdout ?? "" };
+}
+
+describe.skipIf(process.platform === "win32")("pack hook branch-protection: a git file that never answers ends in a refusal within the bound", () => {
   const writeEvent = (repo: string): unknown => ({
     hook_event_name: "PreToolUse",
     session_id: "sess-fifo",
@@ -111,223 +125,176 @@ describe.skipIf(process.platform === "win32")("pack hook branch-protection: a pl
   });
   const run = (cfg: string, repo: string): HookRun =>
     runCli(["pack", "hook", "branch-protection", "--config", cfg], writeEvent(repo));
+  const expectWithinBudget = (out: HookRun): void => {
+    expectBounded(out);
+    expect(out.ms).toBeLessThan(BP_BUDGET_MS);
+  };
 
   it("control: a regular repository on a non-protected branch allows", () => {
     const repo = makeRepo("feat/x");
     const out = run(manifestWithPack("branch-protection"), repo);
-    expectBounded(out);
+    expectWithinBudget(out);
     expect(out.status).toBe(0);
     expect(out.stdout).toBe("");
-    expect(out.stderr).toMatch(/is not in the protected list .*; allowing/);
+    expect(out.stderr).toMatch(/branch "feat\/x" is not in the protected list .*; allowing/);
   });
 
-  it("a FIFO at HEAD BLOCKS within the bound (not read as 'outside a work tree, allow')", () => {
+  it("a FIFO at HEAD refuses within the bound, naming the timeout (not read as an allow)", () => {
     const repo = makeRepo("main");
     fifoOver(path.join(repo, ".git", "HEAD"));
     const out = run(manifestWithPack("branch-protection"), repo);
-    expectBounded(out);
+    expectWithinBudget(out);
     expect(out.status).toBe(0);
     const envelope = JSON.parse(out.stdout) as { decision: string; reason: string };
     expect(envelope.decision).toBe("block");
-    expect(envelope.reason).toMatch(/could not read the git metadata/);
-    expect(envelope.reason).toMatch(/HEAD is present but not a regular file/);
+    expect(envelope.reason).toBe(
+      `branch-protection: refusing Write: git could not report the branch of ${repo} (git did not answer within 2000 ms).`,
+    );
   });
 
-  it("a FIFO at the loose ref of a non-protected branch still allows, within the bound (the branch is known)", () => {
+  it("a FIFO at HEAD of a non-protected checkout still refuses (the branch cannot be known)", () => {
     const repo = makeRepo("feat/x");
-    fifoOver(path.join(repo, ".git", "refs", "heads", "feat", "x"));
+    fifoOver(path.join(repo, ".git", "HEAD"));
     const out = run(manifestWithPack("branch-protection"), repo);
-    expectBounded(out);
-    expect(out.stdout).toBe("");
-    expect(out.stderr).toMatch(/is not in the protected list .*; allowing/);
+    expectWithinBudget(out);
+    expect((JSON.parse(out.stdout) as { decision: string }).decision).toBe("block");
+    expect(out.stderr).toMatch(/git did not answer within 2000 ms/);
   });
 
-  it("a FIFO at the loose ref of a protected branch is gated as that branch (blocked by the gate, not hung)", () => {
-    const repo = makeRepo("main");
-    fifoOver(path.join(repo, ".git", "refs", "heads", "main"));
+  // git opens the branch's loose ref too (measured), so a FIFO there also
+  // holds git until the hook's bound; the branch is then unknown and refused.
+  it.each(["feat/x", "main"])("a FIFO at the loose ref of %s refuses within the bound, naming the timeout", (branch) => {
+    const repo = makeRepo(branch);
+    fifoOver(path.join(repo, ".git", "refs", "heads", ...branch.split("/")));
     const out = run(manifestWithPack("branch-protection"), repo);
-    expectBounded(out);
+    expectWithinBudget(out);
     const envelope = JSON.parse(out.stdout) as { decision: string; reason: string };
     expect(envelope.decision).toBe("block");
-    expect(envelope.reason).toMatch(/protected branch "main"/);
+    expect(envelope.reason).toMatch(/\(git did not answer within 2000 ms\)\.$/);
   });
-});
 
-describe.skipIf(process.platform === "win32")("pack hook branch-protection: a node planted at `.git` itself", () => {
-  const writeEvent = (cwd: string, file: string): unknown => ({
-    hook_event_name: "PreToolUse",
-    session_id: "sess-fifo",
-    tool_name: "Write",
-    cwd,
-    tool_input: { file_path: file, content: "x" },
-  });
-  const run = (cfg: string, cwd: string, file: string): HookRun =>
-    runCli(["pack", "hook", "branch-protection", "--config", cfg], writeEvent(cwd, file));
-
-  it("a FIFO at `.git` BLOCKS within the bound, naming `.git` (not 'outside a work tree, allow')", () => {
+  it("a FIFO at `.git` itself refuses within the bound with git's own message", () => {
     const repo = makeRepo("main");
     fifoOver(path.join(repo, ".git"), { directory: true });
-    const out = run(manifestWithPack("branch-protection"), repo, path.join(repo, "src.txt"));
-    expectBounded(out);
-    expect(out.status).toBe(0);
+    const out = run(manifestWithPack("branch-protection"), repo);
+    expectWithinBudget(out);
     const envelope = JSON.parse(out.stdout) as { decision: string; reason: string };
     expect(envelope.decision).toBe("block");
-    expect(envelope.reason).toMatch(/could not read the git metadata/);
-    expect(envelope.reason).toMatch(/\.git is present but not a regular file/);
+    expect(envelope.reason).toMatch(/git could not report the branch of .*\(git exited 128: fatal: /);
   });
 
-  it("a FIFO at the `.git` pointer file of a linked worktree nested in an outer checkout BLOCKS, it does not resolve the OUTER repository's branch", () => {
-    // The outer checkout is on a non-protected branch, so reading the
-    // enclosing repository would have allowed the write; the nested linked
-    // worktree's `.git` FIFO must stop the lookup at the nested root.
+  it("a FIFO at the `.git` of a directory nested in a feature checkout refuses, it does not resolve the outer branch", () => {
     const outer = makeRepo("feat/outer");
     const nested = path.join(outer, "nested-worktree");
     fs.mkdirSync(nested, { recursive: true });
     execFileSync("mkfifo", [path.join(nested, ".git")]);
-    const out = run(manifestWithPack("branch-protection"), nested, path.join(nested, "src.txt"));
-    expectBounded(out);
-    const envelope = JSON.parse(out.stdout) as { decision: string; reason: string };
-    expect(envelope.decision).toBe("block");
-    expect(envelope.reason).toMatch(/\.git is present but not a regular file/);
+    const out = run(manifestWithPack("branch-protection"), nested);
+    expectWithinBudget(out);
+    expect((JSON.parse(out.stdout) as { decision: string }).decision).toBe("block");
     expect(out.stderr).not.toMatch(/feat\/outer/);
-  });
-
-  it("control: the same nested directory with a MISSING `.git` still resolves the outer repository (allowed on its non-protected branch)", () => {
-    const outer = makeRepo("feat/outer");
-    const nested = path.join(outer, "nested-worktree");
-    fs.mkdirSync(nested, { recursive: true });
-    const out = run(manifestWithPack("branch-protection"), nested, path.join(nested, "src.txt"));
-    expectBounded(out);
-    expect(out.stdout).toBe("");
-    expect(out.stderr).toMatch(/"feat\/outer" is not in the protected list .*; allowing/);
-  });
-});
-
-describe.skipIf(process.platform === "win32")("pack hook branch-protection: a `.git` that is present but does not resolve", () => {
-  // The outer checkout is on a non-protected branch, so resolving the
-  // enclosing repository (the walk-up) would allow the write; a present
-  // `.git` that cannot be read must block instead (task b56d95d3, operator
-  // decision), while a truly absent one keeps the walk-up.
-  const writeEvent = (cwd: string, file: string): unknown => ({
-    hook_event_name: "PreToolUse",
-    session_id: "sess-fifo",
-    tool_name: "Write",
-    cwd,
-    tool_input: { file_path: file, content: "x" },
-  });
-  const nestedInOuter = (): string => {
-    const outer = makeRepo("feat/outer");
-    const nested = path.join(outer, "nested-worktree");
-    fs.mkdirSync(nested, { recursive: true });
-    return nested;
-  };
-  const expectBlockedNamingGitFile = (nested: string, naming: RegExp): void => {
-    const out = runCli(
-      ["pack", "hook", "branch-protection", "--config", manifestWithPack("branch-protection")],
-      writeEvent(nested, path.join(nested, "src.txt")),
-    );
-    expectBounded(out);
-    expect(out.status).toBe(0);
-    const envelope = JSON.parse(out.stdout) as { decision: string; reason: string };
-    expect(envelope.decision).toBe("block");
-    expect(envelope.reason).toMatch(/could not read the git metadata/);
-    expect(envelope.reason).toMatch(naming);
-    expect(out.stderr).not.toMatch(/feat\/outer/);
-  };
-
-  it("a DANGLING symlink at `.git` in a nested work tree BLOCKS, it does not resolve the outer repository", () => {
-    const nested = nestedInOuter();
-    fs.symlinkSync(path.join(nested, "no-such-gitdir"), path.join(nested, ".git"));
-    expectBlockedNamingGitFile(nested, /\.git is present but not a regular file/);
-  });
-
-  it("a LOOPING symlink at `.git` in a nested work tree BLOCKS", () => {
-    const nested = nestedInOuter();
-    fs.symlinkSync(path.join(nested, ".git"), path.join(nested, ".git"));
-    expectBlockedNamingGitFile(nested, /\.git is present but not a regular file/);
-  });
-
-  it("a `.git` directory WITHOUT a HEAD in a nested work tree BLOCKS, naming HEAD", () => {
-    const nested = nestedInOuter();
-    fs.mkdirSync(path.join(nested, ".git"));
-    expectBlockedNamingGitFile(nested, /HEAD is present but not a regular file or is oversized, or does not resolve/);
   });
 
   it.each([
-    ["an EMPTY", ""],
-    ["a GARBAGE", "garbage\n"],
-  ])("a `.git` directory with %s HEAD in a nested work tree BLOCKS, naming HEAD (git itself would resolve the outer repository)", (_name, head) => {
-    const nested = nestedInOuter();
-    fs.mkdirSync(path.join(nested, ".git"));
-    fs.writeFileSync(path.join(nested, ".git", "HEAD"), head);
-    addGitDirSkeleton(path.join(nested, ".git"));
-    expectBlockedNamingGitFile(nested, /\(HEAD is present but not a regular file or is oversized, or does not resolve: .*holding neither a ref nor an object id/);
+    ["a dangling symlink at `.git`", (nested: string) => fs.symlinkSync(path.join(nested, "no-such-gitdir"), path.join(nested, ".git"))],
+    ["a looping symlink at `.git`", (nested: string) => fs.symlinkSync(path.join(nested, ".git"), path.join(nested, ".git"))],
+    ["a `.git` directory without HEAD", (nested: string) => fs.mkdirSync(path.join(nested, ".git"))],
+    ["a `.git` file with a missing gitdir target", (nested: string) => fs.writeFileSync(path.join(nested, ".git"), `gitdir: ${path.join(nested, "no-such-gitdir")}\n`)],
+    ["a `.git` file without a gitdir line", (nested: string) => fs.writeFileSync(path.join(nested, ".git"), "not a gitdir pointer\n")],
+  ] as const)("%s nested in a checkout on master: the hook refuses wherever git errors or resolves master", (_name, plant) => {
+    const outer = makeRepo("master");
+    const nested = path.join(outer, "nested-worktree");
+    fs.mkdirSync(nested, { recursive: true });
+    plant(nested);
+    const git = plainGitHead(nested);
+    const out = run(manifestWithPack("branch-protection"), nested);
+    expectWithinBudget(out);
+    // git either stops with an error or resolves the outer checkout on master;
+    // the hook refuses in both cases.
+    expect(git.status === 0 ? git.stdout : `exit ${git.status}`).toMatch(/^(refs\/heads\/master\n|exit 128)$/);
+    expect((JSON.parse(out.stdout) as { decision: string }).decision).toBe("block");
   });
 
-  it("a `.git` file whose gitdir target is missing in a nested work tree BLOCKS", () => {
-    const nested = nestedInOuter();
-    fs.writeFileSync(path.join(nested, ".git"), `gitdir: ${path.join(nested, "no-such-gitdir")}\n`);
-    expectBlockedNamingGitFile(nested, /\.git is present but not a regular file/);
-  });
-
-  it("a `.git` FILE without a gitdir line in a nested work tree BLOCKS, it does not resolve the outer repository", () => {
-    const nested = nestedInOuter();
-    fs.writeFileSync(path.join(nested, ".git"), "not a gitdir pointer\n");
-    expectBlockedNamingGitFile(nested, /\.git is present but not a regular file/);
-  });
-
-  it("a linked-worktree gitdir that exists but has no HEAD in a nested work tree BLOCKS, naming HEAD", () => {
-    const nested = nestedInOuter();
-    const gitDir = path.join(tmp, "main-repo", ".git", "worktrees", "wt");
-    fs.mkdirSync(gitDir, { recursive: true });
-    fs.writeFileSync(path.join(gitDir, "commondir"), "../..\n");
-    fs.writeFileSync(path.join(nested, ".git"), `gitdir: ${gitDir}\n`);
-    expectBlockedNamingGitFile(nested, /HEAD is present but not a regular file or is oversized, or does not resolve/);
+  it.each([
+    ["a `.git` directory without HEAD", (nested: string) => fs.mkdirSync(path.join(nested, ".git"))],
+    ["a `.git` directory with a garbage HEAD", (nested: string) => {
+      fs.mkdirSync(path.join(nested, ".git"));
+      fs.writeFileSync(path.join(nested, ".git", "HEAD"), "garbage\n");
+      addGitDirSkeleton(path.join(nested, ".git"));
+    }],
+    ["a `.git` file without a gitdir line", (nested: string) => fs.writeFileSync(path.join(nested, ".git"), "not a gitdir pointer\n")],
+  ] as const)("%s nested in a feature checkout: the hook does what git does", (_name, plant) => {
+    const outer = makeRepo("feat/outer");
+    const nested = path.join(outer, "nested-worktree");
+    fs.mkdirSync(nested, { recursive: true });
+    plant(nested);
+    const git = plainGitHead(nested);
+    const out = run(manifestWithPack("branch-protection"), nested);
+    expectWithinBudget(out);
+    if (git.status === 0 && git.stdout === "refs/heads/feat/outer\n") {
+      expect(out.stdout).toBe("");
+      expect(out.stderr).toMatch(/branch "feat\/outer" is not in the protected list/);
+    } else {
+      expect((JSON.parse(out.stdout) as { decision: string }).decision).toBe("block");
+    }
   });
 });
 
-describe.skipIf(process.platform === "win32")("pack hook branch-protection: Codex-shaped events with a planted FIFO", () => {
+describe.skipIf(process.platform === "win32")("pack hook branch-protection --runtime codex: a git file that never answers", () => {
   // The Codex adapter feeds the same blocker an `apply_patch` event whose
-  // target path sits in the patch text, not in a `file_path` field.
-  const patchEvent = (repo: string): unknown => ({
+  // target path sits in the patch text, not in a `file_path` field, and reads
+  // a block as exit 2 with the reason on stderr.
+  const patchEvent = (repo: string, files: string[]): unknown => ({
     hook_event_name: "PreToolUse",
     session_id: "sess-fifo",
     tool_name: "apply_patch",
     cwd: repo,
     tool_input: {
-      input: `*** Begin Patch\n*** Add File: ${path.join(repo, "src.txt")}\n+x\n*** End Patch\n`,
+      input: `*** Begin Patch\n${files.map((f) => `*** Add File: ${f}\n+x\n`).join("")}*** End Patch\n`,
     },
   });
-  const run = (cfg: string, repo: string): HookRun =>
-    runCli(["pack", "hook", "branch-protection", "--config", cfg], patchEvent(repo));
-  const manifest = (): string => {
-    const cfg = manifestWithPack("branch-protection");
-    fs.writeFileSync(
-      cfg,
-      fs.readFileSync(cfg, "utf8").replace("known: [Bash, Edit, Write]", "known: [Bash, Edit, Write, apply_patch]"),
-      "utf8",
+  const run = (repo: string, files: string[]): HookRun =>
+    runCli(
+      ["pack", "hook", "branch-protection", "--config", manifestWithPack("branch-protection"), "--runtime", "codex"],
+      patchEvent(repo, files),
     );
-    return cfg;
-  };
 
-  it("apply_patch with a FIFO at HEAD BLOCKS within the bound, naming HEAD", () => {
+  it("apply_patch with a FIFO at HEAD exits 2 within the bound, naming the timeout on stderr", () => {
     const repo = makeRepo("main");
     fifoOver(path.join(repo, ".git", "HEAD"));
-    const out = run(manifest(), repo);
+    const out = run(repo, [path.join(repo, "src.txt")]);
     expectBounded(out);
-    const envelope = JSON.parse(out.stdout) as { decision: string; reason: string };
-    expect(envelope.decision).toBe("block");
-    expect(envelope.reason).toMatch(/HEAD is present but not a regular file/);
+    expect(out.ms).toBeLessThan(BP_BUDGET_MS);
+    expect(out.status).toBe(2);
+    expect(out.stdout).toBe("");
+    expect(out.stderr).toMatch(/branch-protection: refusing apply_patch: git could not report the branch of .*\(git did not answer within 2000 ms\)\./);
   });
 
-  it("apply_patch with a FIFO at the loose ref of a protected branch is gated as that branch within the bound", () => {
+  it("apply_patch with a FIFO at the loose ref of a protected branch exits 2 within the bound", () => {
     const repo = makeRepo("main");
     fifoOver(path.join(repo, ".git", "refs", "heads", "main"));
-    const out = run(manifest(), repo);
+    const out = run(repo, [path.join(repo, "src.txt")]);
     expectBounded(out);
-    const envelope = JSON.parse(out.stdout) as { decision: string; reason: string };
-    expect(envelope.decision).toBe("block");
-    expect(envelope.reason).toMatch(/protected branch "main"/);
+    expect(out.ms).toBeLessThan(BP_BUDGET_MS);
+    expect(out.status).toBe(2);
+    expect(out.stdout).toBe("");
+    expect(out.stderr).toMatch(/refusing apply_patch: git could not report the branch of .*\(git did not answer within 2000 ms\)\./);
+  });
+
+  it("apply_patch on a protected branch exits 2 naming the branch", () => {
+    const repo = makeRepo("main");
+    const out = run(repo, [path.join(repo, "src.txt")]);
+    expectBounded(out);
+    expect(out.status).toBe(2);
+    expect(out.stdout).toBe("");
+    expect(out.stderr).toMatch(/refusing apply_patch on protected branch "main"/);
+  });
+
+  it("apply_patch on a non-protected branch exits 0 with nothing on stdout", () => {
+    const repo = makeRepo("feat/x");
+    const out = run(repo, [path.join(repo, "src.txt")]);
+    expectBounded(out);
+    expect(out.status).toBe(0);
+    expect(out.stdout).toBe("");
   });
 });
 

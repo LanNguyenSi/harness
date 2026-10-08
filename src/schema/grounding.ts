@@ -13,11 +13,11 @@ import { z } from "zod";
 //   RESERVED session.auto_start / session.id_format — no consumer yet;
 //            session-start derives ids from the runtime event, not from
 //            this format string.
-//   RESERVED evidence_ledger.retention_days — evidence-ledger implements
-//            no retention pruning yet; wiring an env no server reads
-//            would be decorative.
-//   RESERVED policies_source — no consumer; policies live in the
-//            manifest's `policies[]` / `policy_packs[]`.
+//
+//   REMOVED  evidence_ledger.retention_days and policies_source (task
+//            a4d8adc5): reserved keys that never had a consumer. A manifest
+//            that still carries them loads with a warning; the posture
+//            table is src/schema/removed-keys.ts.
 //
 // Reserved keys are validated and round-tripped but change no behavior.
 // Do not wire them speculatively: project an env/check only when a real
@@ -33,7 +33,6 @@ export const GroundingSessionSchema = z
 export const EvidenceLedgerSchema = z
   .object({
     path: z.string().min(1).default("~/.evidence-ledger/ledger.db"),
-    retention_days: z.number().int().positive().default(90),
   })
   .strict();
 
@@ -41,7 +40,6 @@ export const GroundingSchema = z
   .object({
     session: GroundingSessionSchema.default({}),
     evidence_ledger: EvidenceLedgerSchema.default({}),
-    policies_source: z.string().min(1).nullable().default(null),
   })
   .strict();
 

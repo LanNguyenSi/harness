@@ -384,29 +384,26 @@ export function registerPackGroup(
   packHookCmd
     .command("branch-protection")
     .description(
-      "PreToolUse blocker for the branch-protection pack: read tool-event JSON from stdin, consult the " +
-        "evidence ledger, emit a deny envelope on protected branches unless either a fresh " +
-        "`branch:non-protected` tag (within 5m) or the operator-only override marker " +
-        "(written by `harness approve branch-protection`) is present.",
+      "PreToolUse blocker for the branch-protection pack: read tool-event JSON from stdin, ask git " +
+        "(`git -C <dir> symbolic-ref -q HEAD`) for the branch of every directory the call writes into, " +
+        "and refuse when git names a protected branch or cannot answer. Claude Code gets a JSON deny " +
+        "envelope on stdout; `--runtime codex` exits 2 with the reason on stderr.",
     )
     .option("--config <path>", "manifest path (default: ~/.harness/harness.yaml; legacy fallback ~/.claude/harness.yaml)")
     .option("--project <name>", "apply per-project overrides")
-    .option("--ledger-timeout <ms>", "per-call ledger timeout in milliseconds")
     .option("--cwd <path>", "override cwd resolution (default: stdin event.cwd then process.cwd())")
+    .option("--runtime <name>", "block contract: claude-code (default) or codex")
     .action(async (options: {
       config?: string;
       project?: string;
-      ledgerTimeout?: string;
       cwd?: string;
+      runtime?: string;
     }) => {
       const cliOpts: Parameters<typeof runPackHookBranchProtectionCli>[0] = {};
       if (options.config) cliOpts.configPath = options.config;
       if (options.project) cliOpts.project = options.project;
       if (options.cwd) cliOpts.cwd = options.cwd;
-      if (options.ledgerTimeout) {
-        const n = Number.parseInt(options.ledgerTimeout, 10);
-        if (Number.isFinite(n) && n > 0) cliOpts.ledgerTimeoutMs = n;
-      }
+      if (options.runtime !== undefined) cliOpts.runtime = options.runtime;
       const result = await runPackHookBranchProtectionCli(cliOpts);
       if (result.exitCode !== 0) {
         throw new HarnessExitError("", result.exitCode);

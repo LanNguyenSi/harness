@@ -64,7 +64,6 @@ grounding:
     id_format: "gs-{repo}-{rand:8}"
   evidence_ledger:
     path: ~/.evidence-ledger/ledger.db
-    retention_days: 90
 
 tools:
   builtin:
@@ -162,7 +161,6 @@ grounding:
     id_format: "gs-{repo}-{rand:8}"
   evidence_ledger:
     path: ~/.evidence-ledger/ledger.db
-    retention_days: 90
 
 tools:
   mcp:

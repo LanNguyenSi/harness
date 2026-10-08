@@ -292,9 +292,9 @@ export function buildMcpServers(
  * - The projected value is `~`-expanded to an absolute path, so the
  *   literal-tilde child-process footgun (agent-tasks/42d224a6, the very
  *   warning above in buildMcpServers) cannot re-enter via this path.
- * - `retention_days`, `policies_source`, and `session.*` stay RESERVED:
- *   nothing consumes them yet (evidence-ledger has no retention pruning),
- *   and projecting an env no server reads would be decorative again. See
+ * - `session.*` stays RESERVED: nothing consumes it yet, and projecting
+ *   an env no server reads would be decorative again (`retention_days` and
+ *   `policies_source` were removed from the schema, task a4d8adc5). See
  *   the status comments in src/schema/grounding.ts.
  */
 function projectGroundingEnv(

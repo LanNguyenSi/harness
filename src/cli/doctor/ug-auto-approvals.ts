@@ -18,12 +18,17 @@
 
 import * as path from "node:path";
 import { readJsonDirEntriesRejectingSymlinks } from "../../io/read-json-dir-entries.js";
-import { BRANCH_PROTECTION_MARKER_PREFIX } from "../../policy-packs/builtin/branch-protection-runtime.js";
 import {
   APPROVAL_MARKER_DIRNAME,
   APPROVAL_MARKER_TASK_PREFIX,
   parseAutoApprovedBy,
 } from "../../policy-packs/builtin/understanding-before-execution/index.js";
+
+// Name prefix of the branch-protection override markers older releases wrote
+// into the same `.approvals/` directory (`harness approve branch-protection`,
+// removed by task a4d8adc5). Leftover markers are still skipped here so they
+// are never counted as understanding-gate approvals.
+const BRANCH_PROTECTION_MARKER_PREFIX = "branch-protection-";
 
 /** Default doctor window when `--recent-sessions` is not passed. */
 export const DEFAULT_RECENT_SESSIONS = 20;

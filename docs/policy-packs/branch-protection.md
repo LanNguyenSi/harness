@@ -1,8 +1,8 @@
 # Policy Pack: `branch-protection`
 
-Block `Write`/`Edit` (claude-code) or `apply_patch` (codex) when the
-agent is about to mutate source on a protected branch. The gate fires
-at the **first** source mutation, complementing
+Block `Write`/`Edit` (claude-code) or `apply_patch` (codex) when the tool
+call writes into a repository whose checked-out branch is protected. The
+gate fires at the **first** source mutation, complementing
 `preflight-before-push` (which fires at the last reversible step).
 
 Motivating incident: a session that branches AFTER it has already
@@ -22,37 +22,82 @@ harness apply
 
 ## How it works
 
-The pack contributes two hooks to `settings.json`:
+The pack contributes one hook: a **PreToolUse blocker**
+(`harness pack hook branch-protection`, `blocking: hard`, budget 5000 ms)
+on `Write|Edit` (claude-code) or `apply_patch` (codex, as
+`harness pack hook branch-protection --runtime codex`).
 
-1. **SessionStart producer** (`harness session-start branch-check`,
-   `blocking: false`): reads the cwd's `.git/HEAD`. When the branch is
-   NOT in the protected list, writes a `branch:non-protected:<branch>`
-   fact to the evidence ledger for the current session.
+On every call the blocker asks git for the branch (task `a4d8adc5`); it
+never reads git's files itself, and it keeps no ledger tag, session
+state or override marker.
 
-2. **PreToolUse blocker** (`harness pack hook branch-protection`,
-   `blocking: hard`) on `Write|Edit` (claude-code) or `apply_patch`
-   (codex): consults the ledger and emits a deny envelope unless
-   EITHER
-   - a `branch:non-protected` tag exists from within the last
-     5 minutes, OR
-   - the operator-only override marker exists at
-     `harness.generated/.approvals/branch-protection-<sessionId>`
-     (written by `harness approve branch-protection`).
+1. **Directories.** For `Write`, `Edit`, `MultiEdit` and `NotebookEdit`
+   it takes the nearest existing directory of the target path (a `Write`
+   may create the directories in between). For a Codex `apply_patch` it
+   takes the nearest existing directory of every path named by a
+   `*** Add File:`, `*** Update File:`, `*** Delete File:` or
+   `*** Move to:` header, relative to the event cwd. For any other tool,
+   or a patch without a header, it takes the event cwd. Each distinct
+   directory is checked.
+2. **Presence walk.** From the directory up to the filesystem root it
+   looks (with `lstat`, nothing is read) for an entry named `.git`. When
+   there is none, the directory is outside every repository and git is
+   not run.
+3. **git.** Otherwise it runs `git -C <dir> symbolic-ref -q HEAD`
+   directly (no shell), with stdin closed, each output stream capped at
+   4 KiB, every `GIT_*` variable removed from git's environment
+   (`LC_ALL=C`, `GIT_TERMINAL_PROMPT=0`, `GIT_OPTIONAL_LOCKS=0` set;
+   `HOME` kept, so your global git configuration applies as it does to
+   your own git), and a 2000 ms bound per call after which git is killed.
+   All directories of one tool call together are bounded at 3000 ms,
+   below the hook budget: a hook the runtime kills at its budget would be
+   read as an allow.
 
-The 5-minute freshness window lets a single branch-check satisfy a
-whole edit batch without re-running for every Write. Longer than that
-and a branch switch in the middle of a session would silently keep the
-gate open against the new HEAD.
+## The three outcomes
+
+| git says | The tool call | What to do |
+|---|---|---|
+| `refs/heads/<name>` and `<name>` is protected (compared case-insensitively, so `Master` counts as `master`) | **refused** | Branch off: `git checkout -b <feature>`, then retry. |
+| anything it cannot answer: an error exit, a signal, no answer within the bound, git missing from `PATH`, output past the cap, or an exit-0 answer that is not `refs/heads/<name>` (a `HEAD` naming a tag, for example) | **refused**, with one fixed sentence naming git's first stderr line | Fix the repository (run `git -C <dir> symbolic-ref -q HEAD` yourself to see what git says), or disable the gate from an operator shell (below). |
+| nothing, because there is no `.git` entry above the directory (outside every repository) | **allowed** | Nothing. |
+
+A detached HEAD (git exits 1 with no output) is allowed as well: an edit
+there does not land on a protected branch by itself, and a push to a
+protected branch is the repository rule's job.
+
+A planted layout git does not accept (a broken `HEAD` in a nested
+`.git`, for example) either stops git with an error (refused) or makes
+git resolve the enclosing repository, which is then judged on its own
+branch, exactly as your own git would.
 
 ## Failure mode
 
-The blocker fails **closed**. Any error in load / parse / ledger query
-forces a block. Engine-vocabulary BLOCK reason (`branch-protection: refusing Write on protected branch "master"`, ledger health, freshness window, session id) lands on stderr for operator audit. The agent surface follows the `config.ux` shape below (v0.17.3+); operators who haven't set `ux:` see the legacy envelope verbatim.
+The blocker fails **closed**: a manifest that does not load, an event on
+stdin that is not a JSON object, a stdin that never closes within 3000 ms
+and every git error refuse the call. The stderr diagnostic
+(`harness pack hook branch-protection: BLOCK: ...`) names the directory
+and what git said, for operator audit.
 
 This is the inverse of `understanding-before-execution`'s fail-open
 contract. The whole job of this pack is preventing edit-on-master
 incidents; a bug that silently allowed Writes through would defeat
 the purpose.
+
+A manifest that still carries a key or a pack a newer release removed
+does not count as one that fails to load: removed entries are stripped
+with a warning (`harness validate`, `harness doctor`) and the gate keeps
+working. Only a key that was never valid fails the load.
+
+## Block contract per runtime
+
+| Runtime | Refusal | Allow |
+|---|---|---|
+| claude-code | one JSON line on stdout, `{"decision":"block","reason":...,"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":...}}`, exit 0 | nothing on stdout, exit 0 |
+| codex (`--runtime codex`) | the reason on stderr, exit 2, nothing on stdout | nothing on stdout, exit 0 |
+
+An unknown `--runtime` value refuses with exit 2, which both runtimes read
+as a block. The agent-facing text names `git checkout -b` as the way
+forward and nothing else.
 
 ## Configuration
 
@@ -72,7 +117,6 @@ policy_packs:
           - "a checkout of a non-protected branch (current `${BRANCH}` is protected)"
         run:
           - "git checkout -b feat/<your-task>"
-          - "harness session-start branch-check"
 ```
 
 A malformed `protected_branches` value (not an array, empty, all
@@ -85,7 +129,7 @@ Since task `d78fb3c7`, the pack's `config:` block is validated by `harness valid
 
 | Key | Type | Notes |
 |---|---|---|
-| `protected_branches` | array of non-empty strings | optional; default `["master", "main", "develop"]` |
+| `protected_branches` | array of non-empty strings | optional; default `["master", "main", "develop"]`; compared case-insensitively |
 | `ux` | `PolicyUxSchema` (`cannot` + `required[]` + `run[]`) | optional; agent-facing remediation render, see below |
 
 Any other top-level key is rejected as a typo.
@@ -96,7 +140,7 @@ Any other top-level key is rejected as a typo.
 
 ### `config.ux` (v0.17.3+)
 
-The blocker reads `config.ux` and renders the plain-language `{ cannot, required, run }` shape via `renderAgentFacing` (`src/runtime/agent-facing.ts`) on every block. `${BRANCH}` substitutes from the resolved git context, so on a Write attempt against master the agent sees:
+On a protected branch the blocker renders `config.ux` in the plain-language `{ cannot, required, run }` shape via `renderAgentFacing` (`src/runtime/agent-facing.ts`). `${BRANCH}` substitutes the branch git named, so on a Write attempt against master the agent sees:
 
 ```
 You cannot edit files on protected branch master yet.
@@ -106,63 +150,47 @@ Required:
 
 Run:
   git checkout -b feat/<your-task>
-  harness session-start branch-check
 ```
 
-The engine-vocabulary BLOCK reason (naming the protected list, freshness window, ledger health, session id) still lands on stderr. Both runtime blockers, claude-code and codex, share the same renderer.
+Without `ux:` the agent sees the default text (`branch-protection: refusing Write on protected branch "master" ...`, the `git checkout -b <feature>` line and the protected list). A refusal because git could not answer always uses its fixed sentence, whatever `ux:` says. The branch-protection blocker resolves `${BRANCH}`, `${TOOL_NAME}`, and `${SESSION_ID}` (the event's session id, empty when absent); other builtins (`${REPO}`, `${CWD}`) are not provided by this pack's hook. Verbatim three-section form and the agent / operator surface split are documented in [`docs/for-agents.md`](../for-agents.md#agent-facing-block-messages-ux-block).
 
-Verbatim three-section form, the agent / operator surface split, and the full builtin set are documented in [`docs/for-agents.md`](../for-agents.md#agent-facing-block-messages-ux-block). The branch-protection blocker itself resolves `${BRANCH}`, `${TOOL_NAME}`, and `${SESSION_ID}`; other builtins (`${REPO}`, `${CWD}`) are not provided by this pack's hook.
-
-A wording fix to this text only reaches manifests generated by a fresh `harness init` after the fix ships; an already-installed manifest's `config.ux` stays on the old wording until refreshed. `harness doctor` warns on divergence and `harness pack reseed branch-protection [--dry-run]` pulls the current shipped wording in, leaving every other key on the pack entry (e.g. `config.protected_branches`) untouched — see [`docs/policy-packs/understanding-before-execution.md#refreshing-configux-after-a-harness-upgrade-harness-pack-reseed-task-68b9ad9c`](understanding-before-execution.md#refreshing-configux-after-a-harness-upgrade-harness-pack-reseed-task-68b9ad9c) for the full mechanics (shared verb, same rationale).
+A wording fix to this text only reaches manifests generated by a fresh `harness init` after the fix ships; an already-installed manifest's `config.ux` stays on the old wording until refreshed. `harness doctor` warns on divergence and `harness pack reseed branch-protection [--dry-run]` pulls the current shipped wording in, leaving every other key on the pack entry (e.g. `config.protected_branches`) untouched. A manifest whose `ux.run` still lists the removed `harness session-start branch-check` line is such a divergence: reseed drops it.
 
 ## Escape hatches
 
-### Refresh after branching
-
-When the agent cuts a new branch mid-session, the producer is
-re-runnable from the operator's `!` shell. The Understanding Gate's
-allowlist accepts bare `harness ...` invocations, so this works even
-under the Understanding Gate:
+### Branch off (the agent)
 
 ```bash
-! harness session-start branch-check
+git checkout -b <feature>
 ```
 
-The next `Write` / `Edit` will succeed within the 5-minute window.
+The next call is judged against the new branch; there is nothing to
+refresh.
 
-### Explicit override (operator only)
+### Disable the gate (operator only)
 
 When you have a deliberate reason to edit a protected branch (version
-bumps, CI workflow patches, hotfixes), run, from an un-hooked operator
-shell (in Claude Code: prefix with `! `):
+bumps, CI workflow patches, hotfixes), switch the gate off from an
+un-hooked operator shell, not from the agent's session:
 
-```text
-harness approve branch-protection --session <your session id> --reason "CI hotfix for broken workflow"
-```
+- Claude Code: `harness gate disable` (run it without `--matcher` first
+  to list the hook groups, then with the matcher of this pack's group);
+  `harness gate enable` restores them.
+- Codex: set `enabled: false` on this pack and re-run
+  `harness apply --runtime codex --install`; `harness gate disable`
+  edits the Claude Code settings only.
 
-This writes the canonical approval marker at
-`harness.generated/.approvals/branch-protection-<sessionId>`, which the
-blocker consults. Only a process the operator launched can write under
-`harness.generated/` (Edit / Write / Bash are all gated, and no
-configured MCP server exposes a filesystem write), so the marker is the
-trusted override signal.
+The operator pause (`harness pause`) does not switch this gate off.
 
-> **Security (audit finding #39).** A `branch-protection-ack:<reason>`
-> ledger tag is NO LONGER a sufficient override on its own. The agent has
-> direct `mcp__grounding-mcp__ledger_add` access, so it could self-write
-> that tag and bless its own protected-branch edit. The approve verb still
-> records the ledger tag for audit (`--reason` becomes its `:<reason>`
-> suffix), but only the marker file opens the gate.
+### Removed in task `a4d8adc5`
 
-## Detached HEAD
-
-A detached HEAD is treated as **protected** by the producer (it
-declines to write the tag) and as **safe** by the blocker (it allows,
-since git detached-HEAD edits don't auto-push to a protected ref;
-the downstream `preflight-before-push` gate still catches the
-push). This asymmetry is intentional: the producer is conservative;
-the blocker is pragmatic (alternative would block every Write in
-non-git workspaces).
+`harness session-start branch-check` (the SessionStart producer and its
+`branch:non-protected:<branch>` ledger tag) and
+`harness approve branch-protection` (the override marker under
+`harness.generated/.approvals/`) are gone, together with the 5-minute
+freshness window and the session-id requirement. Re-run `harness apply`
+(and `harness apply --runtime codex --install`) after upgrading so the
+settings stop calling the removed producer.
 
 ## Out of scope (v1)
 
@@ -173,10 +201,15 @@ non-git workspaces).
 - Allowlist of paths that are safe to edit on master (CHANGELOG.md,
   package.json version bumps). Open for v2 if operators report
   friction.
+- A bare repository's own directory: it has no `.git` entry, so the
+  presence walk counts it as outside every repository.
 
 ## Test fixtures
 
+- `tests/cli/pack-hook-branch-protection.test.ts`, the blocker against real git, the injected git runner and the per-runtime contract
+- `tests/runtime/git-branch.test.ts`, the branch reader
+- `tests/runtime/git-branch-differential.test.ts`, the gate against git run plainly over the repository layouts
+- `tests/cli/hook-git-context-fifo.test.ts`, a git file that never answers, through the built CLI
+- `tests/cli/manifest-posture.test.ts`, removed manifest keys warn and are ignored
 - `tests/policy-packs/branch-protection-runtime.test.ts`, helpers
 - `tests/policy-packs/branch-protection-expand.test.ts`, pack expansion
-- `tests/cli/session-start/branch-check.test.ts`, producer
-- `tests/cli/pack-hook-branch-protection.test.ts`, blocker

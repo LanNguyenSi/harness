@@ -5,8 +5,6 @@ grounding:
     id_format: gs-{repo}-{rand:8}
   evidence_ledger:
     path: ~/.evidence-ledger/ledger.db
-    retention_days: 90
-  policies_source: ~/.claude/harness.d/policies/claim-gate.yaml
 tools:
   mcp:
     - name: codebase-oracle
@@ -577,7 +575,6 @@ policy_packs:
           - a checkout of a non-protected branch (current `${BRANCH}` is protected)
         run:
           - git checkout -b feat/<your-task>
-          - harness session-start branch-check
   - name: solution-acceptance
     source: builtin
     enabled: false

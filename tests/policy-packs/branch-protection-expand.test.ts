@@ -7,17 +7,12 @@ function buildManifest(packs: unknown[]): ReturnType<typeof parseManifest> {
 }
 
 describe("branch-protection pack expansion", () => {
-  it("contributes one SessionStart producer + one PreToolUse blocker + instructions.md", () => {
+  it("contributes one PreToolUse blocker + instructions.md, and no SessionStart producer", () => {
     const m = buildManifest([{ name: "branch-protection" }]);
     const r = expandPolicyPacks(m);
-    expect(r.hooks).toHaveLength(2);
-    const events = r.hooks.map((h) => h.event).sort();
-    expect(events).toEqual(["PreToolUse", "SessionStart"]);
-    const names = r.hooks.map((h) => h.name).sort();
-    expect(names).toEqual([
-      "policy-pack:branch-protection:pre-tool-use",
-      "policy-pack:branch-protection:session-start",
-    ]);
+    expect(r.hooks).toHaveLength(1);
+    expect(r.hooks.map((h) => h.event)).toEqual(["PreToolUse"]);
+    expect(r.hooks.map((h) => h.name)).toEqual(["policy-pack:branch-protection:pre-tool-use"]);
     expect(r.files).toHaveLength(1);
     expect(r.files[0]?.relativePath).toBe(
       "policy-packs/branch-protection/instructions.md",
@@ -26,12 +21,16 @@ describe("branch-protection pack expansion", () => {
     expect(r.warnings).toEqual([]);
   });
 
-  it("wires the producer as blocking:false (must never break the session)", () => {
-    const m = buildManifest([{ name: "branch-protection" }]);
-    const r = expandPolicyPacks(m);
-    const producer = r.hooks.find((h) => h.event === "SessionStart");
-    expect(producer?.blocking).toBe(false);
-    expect(producer?.command).toBe("harness session-start branch-check");
+  it.each(["claude-code", "codex"] as const)("on %s contributes no SessionStart hook and names no removed verb", (rt) => {
+    const r = expandPolicyPacks(buildManifest([{ name: "branch-protection" }]), rt);
+    expect(r.hooks.some((h) => h.event === "SessionStart")).toBe(false);
+    const text = JSON.stringify(r.hooks) + (r.files[0]?.content ?? "");
+    expect(text).not.toMatch(/session-start branch-check|approve branch-protection|branch:non-protected|branch-protection-ack|ledger/);
+  });
+
+  it("budgets the blocker at 5000 ms", () => {
+    const r = expandPolicyPacks(buildManifest([{ name: "branch-protection" }]));
+    expect(r.hooks[0]?.budget_ms).toBe(5000);
   });
 
   it("wires the PreToolUse blocker as blocking:hard with the Write|Edit match on claude-code", () => {
@@ -43,11 +42,19 @@ describe("branch-protection pack expansion", () => {
     expect(blocker?.command).toBe("harness pack hook branch-protection");
   });
 
-  it("switches the PreToolUse match to apply_patch on codex", () => {
+  it("switches the PreToolUse match to apply_patch on codex, with the Codex block contract", () => {
     const m = buildManifest([{ name: "branch-protection" }]);
     const r = expandPolicyPacks(m, "codex");
     const blocker = r.hooks.find((h) => h.event === "PreToolUse");
     expect(blocker?.match).toBe("apply_patch");
+    expect(blocker?.blocking).toBe("hard");
+    expect(blocker?.command).toBe("harness pack hook branch-protection --runtime codex");
+    expect(r.files[0]?.content).toContain("Codex contract: a refusal exits 2 with the reason on stderr.");
+  });
+
+  it("names the Claude Code contract in the claude-code instructions", () => {
+    const r = expandPolicyPacks(buildManifest([{ name: "branch-protection" }]));
+    expect(r.files[0]?.content).toContain("Claude Code contract: a refusal is a JSON deny envelope on stdout (exit 0).");
   });
 
   it("renders the protected list in instructions.md", () => {

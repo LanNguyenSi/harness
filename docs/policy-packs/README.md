@@ -17,7 +17,7 @@ Manage packs with `harness pack add / remove / list`.
 Four packs ship today:
 
 - [`understanding-before-execution`](understanding-before-execution.md): forces an Understanding Report before any write-capable tool fires.
-- [`branch-protection`](branch-protection.md): blocks source mutations on protected branches without an explicit override.
+- [`branch-protection`](branch-protection.md): blocks source mutations when git names a protected branch for the target directory, or cannot answer.
 - [`solution-acceptance`](solution-acceptance.md): opt-in completion gate (added in `v0.32.0`); holds a task done until an accepted solution verdict is logged.
 - [`post-merge-gate`](post-merge-gate.md): opt-in (added in `v0.42.0`); denies mutating git/gh work on a branch whose tip has already been merged.
 

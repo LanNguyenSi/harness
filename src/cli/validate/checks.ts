@@ -1122,8 +1122,10 @@ export function checkTriggerBoundaryDrift(manifest: Manifest): Diagnostic[] {
 //      verdict marker the producer writes, never a live ledger
 //      round-trip (see solution-acceptance.ts's own header comment), so
 //      flagging them here would be a false positive.
+// `pack hook branch-protection` left this list with task a4d8adc5: it asks
+// git for the branch and makes no ledger round-trip, so its budget is not
+// tied to the ledger's timeout.
 const LEDGER_CONSULTING_PACK_SUBCOMMANDS = [
-  "pack hook branch-protection",
   "pack hook pre-tool-use",
   "pack hook codex-pre-tool-use",
   "pack hook post-merge-gate",
@@ -1166,8 +1168,8 @@ function isLedgerConsultingPackCommand(command: string): boolean {
 // OWN degraded-ledger handling fails OPEN (allow) rather than closed —
 // see hook-post-merge-gate.ts's explicit "Fail posture: OPEN" header
 // comment and its `post-merge-gate fails open, allowing` diagnostics.
-// `branch-protection` / `pre-tool-use` (understanding-before-execution) /
-// `codex-pre-tool-use` all fail CLOSED absent ledger evidence (a missing
+// `pre-tool-use` (understanding-before-execution) / `codex-pre-tool-use`
+// both fail CLOSED absent ledger evidence (a missing
 // or degraded query reads as "no evidence", which those hooks block or
 // ask on, not allow). Tracked separately so the diagnostic below can
 // stop attributing a fail-closed verdict this hook never produces to it
@@ -1191,7 +1193,6 @@ interface LedgerConsultingHook {
    * `record()` retry `requiredHookBudgetMs`'s 2T+3R is actually derived
    * from. False for a pack-contributed blocker, which only ever calls
    * `queryLedgerByTag` (open session, one `querySummary`, dispose) —
-   * `src/cli/pack/hook-branch-protection.ts`,
    * `hook-codex-pre-tool-use.ts`, `hook-pre-tool-use.ts`,
    * `hook-post-merge-gate.ts` — never `ledger_add`, so it has no
    * deny-degraded audit-retry step of its own and its real worst case is

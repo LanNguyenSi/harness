@@ -232,7 +232,7 @@ which are available even when the policy declares no `trigger.extract`:
 | `${PR_NUMBER}`, `${TASK_ID}`, ... | per-policy `trigger.extract` keys |
 
 Pack-shipped blockers add their own context. `branch-protection`
-substitutes `${BRANCH}` from the resolved git context;
+substitutes `${BRANCH}` with the branch git names for the target;
 `understanding-before-execution` reads `${SESSION_ID}` from the
 hook payload. Unresolved references are left literal so the agent
 can still read what was expected.

@@ -14,7 +14,6 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { readStdinBounded, STDIN_IDLE_TIMEOUT_MS, stdinTimeoutNote } from "../../src/cli/bounded-stdin.js";
 import { runInterceptCli } from "../../src/cli/policy/intercept.js";
-import { runSessionStartBranchCheck } from "../../src/cli/session-start/branch-check.js";
 import { runSessionStartStaleBaseCheck } from "../../src/cli/session-start/stale-base-check.js";
 import { runSessionStartToolchainParity } from "../../src/cli/session-start/toolchain-parity.js";
 import { writeSentinel } from "../../src/runtime/pause-sentinel.js";
@@ -96,11 +95,6 @@ async function runWithNeverClosedStdin(
 describe("bounded stdin: real child process with a never-closed stdin", () => {
   const cases: Array<{ name: string; args: string[]; label: string }> = [
     {
-      name: "session-start branch-check",
-      args: ["session-start", "branch-check"],
-      label: "harness session-start branch-check:",
-    },
-    {
       name: "session-start stale-base-check",
       args: ["session-start", "stale-base-check"],
       label: "harness session-start stale-base-check:",
@@ -178,17 +172,6 @@ describe("bounded stdin: each producer keeps parsing a closed stdin and a slow p
     name: string;
     run: (stdin: NodeJS.ReadableStream, stderr: NodeJS.WritableStream, idle?: number) => Promise<{ sessionId: string }>;
   }> = [
-    {
-      name: "branch-check",
-      run: (stdin, stderr, idle) =>
-        runSessionStartBranchCheck({
-          stdin,
-          stderr,
-          writeLedger: async () => ({ ok: true }),
-          manifest: bareManifest(),
-          ...(idle !== undefined && { stdinIdleTimeoutMs: idle }),
-        }),
-    },
     {
       name: "stale-base-check",
       run: (stdin, stderr, idle) =>
