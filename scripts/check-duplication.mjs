@@ -248,7 +248,9 @@ import * as path from "node:path";
 // Lowered to 73 (task 2ce6933f): removing the post-merge-gate pack deleted its
 // two hook verbs and their register-pack-group.ts wiring; the check reports 73
 // with that change (the pin was 82).
-const MAX_CLONES = 73;
+// Lowered to 69 (task f3f15290): removing the session-start producers and
+// their CLI wiring; the check reports 69 with that change (the pin was 73).
+const MAX_CLONES = 69;
 
 // Sets process.exitCode instead of calling process.exit so the caller's
 // finally-cleanup runs on every path (process.exit skips stack unwinding).
