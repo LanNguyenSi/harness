@@ -3,9 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { Readable, Writable } from "node:stream";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { parse as parseYaml } from "yaml";
 import { runInterceptCli } from "../../src/cli/policy/intercept.js";
-import { FULL_TEMPLATE } from "../../src/cli/init/templates.js";
 import {
   OPAQUE_TARGET_REASON,
   unparsedCommandReason,
@@ -13,7 +11,7 @@ import {
   type PolicyDecision,
 } from "../../src/runtime/intercept.js";
 import { REFUSAL_CONSTRUCTS, type RefusalKind } from "../../src/runtime/shell-command-model.js";
-import { parseManifest, type Policy } from "../../src/schema/index.js";
+import type { Policy } from "../../src/schema/index.js";
 import { makeManifest } from "../_helpers/manifest.js";
 import {
   BENIGN_ROWS,
@@ -29,22 +27,20 @@ import {
   UNTRACKED_TARGET_ROWS,
 } from "../fixtures/shell-model-refusals/rows.js";
 import { addGitDirSkeleton } from "../_helpers/git-dir-fixture.js";
+import { legacyPreflightPush } from "../_helpers/legacy-preflight-policies.js";
 
 // Task 9238cc27: a command line the shell command model refuses fails closed
 // for a per-repository `bash_match` policy, under both runtime event shapes,
 // even when the ledger holds the evidence of every repository of the world;
 // a directory-search row fails closed as an opaque target; the benign rows are decided
-// on attributed evidence as before. The real `preflight-before-push` policy
-// of FULL_TEMPLATE runs from an outer repository with a nested one at
-// `vendor/libplain`.
+// on attributed evidence as before. The git-push policy (the
+// `preflight-before-push` fixture, see tests/_helpers/legacy-preflight-policies.ts)
+// runs from an outer repository with a nested one at `vendor/libplain`.
 
 const POLICY = "preflight-before-push";
 
 function pushPolicy(enforcement: "block" | "warn"): Policy {
-  const parsed = parseManifest(parseYaml(FULL_TEMPLATE));
-  const policy = parsed.policies.find((p) => p.name === POLICY);
-  if (policy === undefined) throw new Error(`${POLICY} missing from FULL_TEMPLATE`);
-  return { ...policy, enforcement } as Policy;
+  return { ...legacyPreflightPush(), enforcement } as Policy;
 }
 
 function sink(): NodeJS.WritableStream {

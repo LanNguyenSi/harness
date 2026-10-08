@@ -1229,9 +1229,9 @@ describe("deriveProjectName: case-differing path on a case-insensitive filesyste
 });
 
 // Task f1eb1c5c: `harness doctor`'s second, project-scoped load
-// (`opts.project ?? deriveProjectName(...) ?? null`) and the
-// `session_start_preflight` producer (`opts.project ?? deriveProjectName(cwd)
-// ?? repo`) used two independently written copies of the same
+// (`opts.project ?? deriveProjectName(...) ?? null`) and the session-start
+// preflight producer (`opts.project ?? deriveProjectName(cwd) ?? repo`; both
+// call sites were removed in task f3f15290, the helper stays) used two independently written copies of the same
 // `opts.project ?? deriveProjectName(cwd) ?? fallback` expression, with
 // nothing pinning that the shared first two terms actually stayed
 // identical across both copies. `resolveScopedProjectName` is the single
@@ -1318,81 +1318,6 @@ describe("resolveScopedProjectName (task f1eb1c5c)", () => {
     // the point).
     expect(resolveScopedProjectName({ cwd: outside, fallback: "" })).toBe("");
     expect(resolveScopedProjectName({ cwd: outside, fallback: "some-repo" })).toBe("some-repo");
-  });
-
-  // The tests above pin the shared helper's own behaviour, but a caller
-  // could still silently stop USING it (reverting to its own inline
-  // `opts.project ?? deriveProjectName(cwd) ?? fallback` copy, with
-  // whatever fallback it likes) without any of those tests noticing,
-  // since none of them exercise `doctor()` or the `session_start_preflight`
-  // producer themselves. These source-identity assertions (same pattern
-  // as `tests/cli/doctor-session-start-preflight-setup-version.test.ts`'s
-  // "reads the SETUP floor identifier" test) read the actual source text
-  // and pin that both call sites still route through `resolveScopedProjectName`,
-  // so a caller reverting to its own inline copy is caught here even
-  // though the resulting VALUE could still happen to match today.
-  // Round 1 matched a SINGLE LINE containing `<name> =` and required
-  // `resolveScopedProjectName(` on that same line; a behaviour-identical
-  // reflow (the assignment on one line, the call on the next, exactly
-  // as a formatter/linter could produce) failed this suite with no
-  // explanation of what broke. This slices the whole assignment
-  // STATEMENT instead (from `const <name> =` to the next `;`), so the
-  // call may legally span multiple lines, and names the task plus what
-  // to update if a call site is legitimately restructured.
-  function sliceAssignmentStatement(src: string, constDeclaration: string): string | undefined {
-    const start = src.indexOf(constDeclaration);
-    if (start === -1) return undefined;
-    const end = src.indexOf(";", start);
-    return end === -1 ? src.slice(start) : src.slice(start, end + 1);
-  }
-
-  it("doctor's project-scoped load still calls resolveScopedProjectName, not an inline copy", () => {
-    const src = fs.readFileSync(
-      new URL("../../src/cli/doctor/index.ts", import.meta.url),
-      "utf8",
-    );
-    const statement = sliceAssignmentStatement(
-      src,
-      "const attemptedSessionStartPreflightProjectName =",
-    );
-    expect(
-      statement,
-      "task f1eb1c5c: no `const attemptedSessionStartPreflightProjectName =` statement found " +
-        "in src/cli/doctor/index.ts; if this call site was legitimately renamed or restructured, " +
-        "update this test's `constDeclaration` string to match",
-    ).toBeDefined();
-    expect(
-      statement,
-      "task f1eb1c5c: src/cli/doctor/index.ts's `attemptedSessionStartPreflightProjectName` " +
-        "assignment no longer calls `resolveScopedProjectName(`, meaning if this call site was " +
-        "legitimately restructured to keep sharing the resolution logic some other way, update " +
-        "this test to pin the new shape instead of reverting to an inline " +
-        "`opts.project ?? deriveProjectName(...) ?? fallback` copy",
-    ).toContain("resolveScopedProjectName(");
-    expect(src).not.toContain("deriveProjectName(opts.cwd");
-  });
-
-  it("the session_start_preflight producer still calls resolveScopedProjectName, not an inline copy", () => {
-    const src = fs.readFileSync(
-      new URL("../../src/cli/session-start/index.ts", import.meta.url),
-      "utf8",
-    );
-    const statement = sliceAssignmentStatement(src, "const sessionStartPreflightProjectName =");
-    expect(
-      statement,
-      "task f1eb1c5c: no `const sessionStartPreflightProjectName =` statement found " +
-        "in src/cli/session-start/index.ts; if this call site was legitimately renamed or " +
-        "restructured, update this test's `constDeclaration` string to match",
-    ).toBeDefined();
-    expect(
-      statement,
-      "task f1eb1c5c: src/cli/session-start/index.ts's `sessionStartPreflightProjectName` " +
-        "assignment no longer calls `resolveScopedProjectName(`, meaning if this call site was " +
-        "legitimately restructured to keep sharing the resolution logic some other way, update " +
-        "this test to pin the new shape instead of reverting to an inline " +
-        "`opts.project ?? deriveProjectName(cwd) ?? repo` copy",
-    ).toContain("resolveScopedProjectName(");
-    expect(src).not.toContain("deriveProjectName(cwd) ?? repo");
   });
 });
 

@@ -60,21 +60,21 @@ describe("buildCorpusA", () => {
       {
         arm: "env",
         wrapper: "env",
-        verb: "git push origin master",
+        verb: "git tag v1.0.0",
         verbHead: "git",
-        policy: "preflight-before-push",
+        policy: "dogfood-before-release",
         qval: "'a&b'",
-        cmd: "env FOO='a&b' git push origin master",
+        cmd: "env FOO='a&b' git tag v1.0.0",
       },
     ]);
     expect(controls).toEqual([
       {
         arm: "env",
         wrapper: "env",
-        verb: "git push origin master",
+        verb: "git tag v1.0.0",
         verbHead: "git",
-        policy: "preflight-before-push",
-        cmd: "env git push origin master",
+        policy: "dogfood-before-release",
+        cmd: "env git tag v1.0.0",
       },
     ]);
   });
@@ -177,7 +177,7 @@ describe("auditArmA", () => {
     });
     const st = must(audit.arms.get("env"), "env arm");
     expect(audit.gateReason(st)).toBe(null);
-    expect(st.notGated).toEqual(["env FOO='a&b' git push origin master"]);
+    expect(st.notGated).toEqual(["env FOO='a&b' git tag v1.0.0"]);
     expect(audit.totals.regressed).toBe(1);
     expect(audit.totals.keptGate).toBe(1);
   });
@@ -212,7 +212,7 @@ describe("renderReportA", () => {
     });
     const report = renderReportA(regressed);
     expect(report).toContain("REGRESSED");
-    expect(report).toContain(JSON.stringify("env FOO='a&b' git push origin master"));
+    expect(report).toContain(JSON.stringify("env FOO='a&b' git tag v1.0.0"));
   });
 });
 
@@ -226,13 +226,13 @@ describe("buildCorpusB", () => {
 
   it("the glued-ampersand shape has no space between the assignment and the wrapper", () => {
     const [shape] = buildCorpusB({ wrappers: ["env"], verbs: [VERBS[0]!] });
-    expect(shape!.cmd).toBe("A=x&env -C /tmp git push origin master");
+    expect(shape!.cmd).toBe("A=x&env -C /tmp git tag v1.0.0");
   });
 
   it("the background-job shape is a genuine bash background job (spaced &)", () => {
     const shapes = buildCorpusB({ verbs: [VERBS[0]!] });
     const bg = shapes.find((s) => s.family === "background-job");
-    expect(bg!.cmd).toBe("echo hi & nice git push origin master");
+    expect(bg!.cmd).toBe("echo hi & nice git tag v1.0.0");
   });
 });
 

@@ -666,7 +666,7 @@ describe("branch-protection hook: the manifest", () => {
     expect(run.diagnostic).toMatch(/not_a_key/);
   });
 
-  it.skipIf(!GIT_AVAILABLE)("a live-shaped manifest carrying the two removed grounding keys loads with two warnings and still refuses on a protected branch", async () => {
+  it.skipIf(!GIT_AVAILABLE)("a live-shaped manifest carrying the two removed grounding keys loads with their two warnings (plus one for its removed ux.run command) and still refuses on a protected branch", async () => {
     const repo = makeRepo("master");
     const dir = tmpDir("harness-bp-manifest-");
     const cfg = path.join(dir, "harness.yaml");
@@ -710,11 +710,46 @@ describe("branch-protection hook: the manifest", () => {
     expect(loadManifest({ configPath: cfg }).warnings.map((w) => w.path)).toEqual([
       "grounding.evidence_ledger.retention_days",
       "grounding.policies_source",
+      // The ux.run line still calls the removed `harness session-start` (task f3f15290).
+      "policy_packs[0].config.ux.run[1]",
     ]);
     const run = await runHook(writeEvent(repo, path.join(repo, "x.ts")), { configPath: cfg });
     expect(run.blocked).toBe(true);
     expect(run.diagnostic).toBe(`BLOCK: branch "master" of ${repo} is protected (master, main, develop)`);
     expect(envelope(run).reason).toMatch(/^You cannot edit files on protected branch master yet\./);
+  });
+
+  it.skipIf(!GIT_AVAILABLE)("a manifest that still carries the three removed session-start keys loads with three warnings and still refuses on a protected branch (task f3f15290)", async () => {
+    const repo = makeRepo("master");
+    const dir = tmpDir("harness-bp-manifest-");
+    const cfg = path.join(dir, "harness.yaml");
+    fs.writeFileSync(
+      cfg,
+      [
+        "version: 1",
+        "hooks: []",
+        "policies: []",
+        "session_start_preflight:",
+        "  setup: true",
+        "toolchain_parity:",
+        "  enabled: true",
+        "stale_base_check:",
+        "  enabled: true",
+        "policy_packs:",
+        "  - name: branch-protection",
+        "    source: builtin",
+        "    enabled: true",
+        "",
+      ].join("\n"),
+    );
+    expect(loadManifest({ configPath: cfg }).warnings.map((w) => w.path).sort()).toEqual([
+      "session_start_preflight",
+      "stale_base_check",
+      "toolchain_parity",
+    ]);
+    const run = await runHook(writeEvent(repo, path.join(repo, "x.ts")), { configPath: cfg });
+    expect(run.blocked).toBe(true);
+    expect(run.diagnostic).toBe(`BLOCK: branch "master" of ${repo} is protected (master, main, develop)`);
   });
 
   it.skipIf(!GIT_AVAILABLE)("a manifest that still names the removed post-merge-gate pack (listed first) loads with one warning and still refuses on a protected branch", async () => {
@@ -755,6 +790,20 @@ describe("removed verbs", () => {
     expect(sub("approve").length).toBeGreaterThan(0);
     expect(sub("session-start")).not.toContain("branch-check");
     expect(sub("pack").length).toBeGreaterThan(0);
+  });
+
+  // task f3f15290: the whole SessionStart producer surface is gone, not just
+  // the branch-check verb that once lived under it. Pin that the top-level
+  // `session-start` command group and the `harness preflight` alias are no
+  // longer registered at all.
+  it("the session-start command group and preflight alias are gone entirely (task f3f15290)", () => {
+    const program = buildProgram({ stdout: () => {}, stderr: () => {} });
+    const top = program.commands.map((c) => c.name());
+    expect(top).not.toContain("session-start");
+    expect(top).not.toContain("preflight");
+    const sub = (name: string): string[] =>
+      program.commands.find((c) => c.name() === name)?.commands.map((c) => c.name()) ?? [];
+    expect(sub("session-start")).toEqual([]);
   });
 });
 

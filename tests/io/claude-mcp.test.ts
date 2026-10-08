@@ -290,10 +290,8 @@ describe("realClaudeMcpExec — real spawn CLAUDE_CONFIG_DIR alignment (batch19/
   // corrupted and the full suite would stay green (the HIGH finding this
   // fixes). Pinned here via ONE real spawn, using the suite's documented
   // per-site escape hatch `HARNESS_ALLOW_REAL_SPAWN=1`
-  // (src/runtime/hermetic-spawn-guard.ts; precedent:
-  // tests/cli/session-start/stale-base-check.test.ts's
-  // `withRealSpawnAllowed`), against a throwaway `claude` SHIM this test
-  // itself writes under `os.tmpdir()` — never the real Claude Code CLI,
+  // (src/runtime/hermetic-spawn-guard.ts), against a throwaway `claude`
+  // SHIM this test itself writes under `os.tmpdir()` — never the real Claude Code CLI,
   // never the operator's real `~/.claude.json`. The shim also lives under
   // `os.tmpdir()`, so the suite-wide hermetic-spawn-allowlist backstop
   // (tests/_helpers/hermetic-spawn-allowlist.ts, D3 "a fixture the calling
@@ -343,9 +341,8 @@ describe("realClaudeMcpExec — real spawn CLAUDE_CONFIG_DIR alignment (batch19/
    * `HARNESS_ALLOW_REAL_SPAWN=1` is `realClaudeMcpExec`'s (and the
    * suite-wide hermetic-spawn-allowlist's) documented escape hatch for a
    * test that deliberately exercises the real spawn path end-to-end.
-   * Mirrors `withRealSpawnAllowed` in
-   * tests/cli/session-start/stale-base-check.test.ts. Scoped with
-   * try/finally so a thrown assertion still restores the prior value.
+   * Scoped with try/finally so a thrown assertion still restores the
+   * prior value.
    */
   async function withRealSpawnAllowed<T>(fn: () => Promise<T>): Promise<T> {
     const prev = process.env.HARNESS_ALLOW_REAL_SPAWN;

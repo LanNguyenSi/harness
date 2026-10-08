@@ -2464,8 +2464,7 @@ tools:
   // min_version check, shared across every hook that declares one
   // (not only git-preflight). A release candidate of the floor version
   // does not meet it: "0.6.0-rc.1" is below "0.6.0" (semver
-  // precedence), matching the same fix applied to
-  // checkSessionStartPreflightSetupVersion. Before this task, the
+  // precedence). Before this task, the
   // version-probe regex only captured the leading numeric run, so this
   // exact input parsed to "0.6.0" and silently passed the floor.
   it("warns below_floor when the probed hook version is a prerelease of min_version", async () => {

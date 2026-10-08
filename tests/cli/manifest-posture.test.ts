@@ -37,7 +37,8 @@ function writeManifest(text: string): string {
 
 // The shape of a live manifest that predates the removal: both removed
 // grounding keys, MCP servers, an empty hook and policy list, and the
-// branch-protection pack whose ux still names the removed producer.
+// branch-protection pack whose ux still names the removed producer (a removed
+// command, which warns too since task f3f15290).
 const LIVE_SHAPED = `version: 1
 
 grounding:
@@ -88,10 +89,13 @@ const NOOP_PROBES = {
 const NO_CLAUDE_CLI: ClaudeMcpExec = async () => ({ code: 127, stdout: "", stderr: "", enoent: true, timedOut: false });
 
 describe("the removed-entry table", () => {
-  it("lists the two reserved grounding keys, each with a version and a reason", () => {
+  it("lists the reserved grounding keys and the removed producer roots, each with a version and a reason", () => {
     expect(REMOVED_MANIFEST_PATHS.map((p) => p.path)).toEqual([
       "grounding.evidence_ledger.retention_days",
       "grounding.policies_source",
+      "session_start_preflight",
+      "toolchain_parity",
+      "stale_base_check",
     ]);
     for (const p of REMOVED_MANIFEST_PATHS) {
       expect(p.removedIn).toMatch(/^\d+\.\d+\.\d+$/);
@@ -163,9 +167,13 @@ describe("stripRemovedManifestEntries", () => {
 });
 
 describe("parsing", () => {
-  it("the live-shaped manifest parses with exactly the two warnings", () => {
+  it("the live-shaped manifest parses with the two removed-key warnings and the removed-command one", () => {
     const { manifest, warnings } = parseManifestWithWarnings(parseYaml(LIVE_SHAPED));
-    expect(warnings).toHaveLength(2);
+    expect(warnings.map((w) => w.path)).toEqual([
+      "grounding.evidence_ledger.retention_days",
+      "grounding.policies_source",
+      "policy_packs[0].config.ux.run[1]",
+    ]);
     expect(manifest.policy_packs.map((p) => p.name)).toEqual(["branch-protection"]);
     // The plain parser accepts it too (callers that do not report warnings).
     expect(() => parseManifest(parseYaml(LIVE_SHAPED))).not.toThrow();
@@ -185,6 +193,7 @@ describe("parsing", () => {
     expect(loaded.warnings.map((w) => w.path)).toEqual([
       "grounding.evidence_ledger.retention_days",
       "grounding.policies_source",
+      "policy_packs[0].config.ux.run[1]",
     ]);
   });
 });
@@ -221,7 +230,7 @@ describe("harness validate", () => {
 });
 
 describe("harness doctor", () => {
-  it("prints the two removed keys in the Manifest section and counts them as warnings", async () => {
+  it("prints the two removed keys and the removed command in the Manifest section and counts them as warnings", async () => {
     const file = writeManifest(LIVE_SHAPED);
     const home = path.dirname(file);
     const report = await doctor({
@@ -236,8 +245,9 @@ describe("harness doctor", () => {
     expect(report.manifest.warnings).toEqual([
       expect.stringMatching(/^grounding\.evidence_ledger\.retention_days: removed in 1\.0\.0 and ignored/),
       expect.stringMatching(/^grounding\.policies_source: removed in 1\.0\.0 and ignored/),
+      expect.stringMatching(/^policy_packs\[0\]\.config\.ux\.run\[1\]: calls "harness session-start", removed in 1\.0\.0/),
     ]);
-    expect(report.warningCount).toBeGreaterThanOrEqual(2);
+    expect(report.warningCount).toBeGreaterThanOrEqual(3);
     const text = format(report);
     expect(text).toContain("⚠ grounding.policies_source: removed in 1.0.0 and ignored");
     // Its ux.run still names the removed `harness session-start branch-check`:

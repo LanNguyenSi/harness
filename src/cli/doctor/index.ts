@@ -43,8 +43,7 @@ import {
 } from "../validate/checks.js";
 import type { Diagnostic } from "../validate/types.js";
 import { isDerivedPolicy } from "../../runtime/workflow-policies.js";
-import { resolveScopedProjectName } from "../../runtime/git-context.js";
-import { loadManifest, resolvePaths, type LoaderOptions } from "../loader.js";
+import { loadManifest, type LoaderOptions } from "../loader.js";
 import {
   countCodexDiagnostics,
   findOnPath,
@@ -66,15 +65,6 @@ import {
 import { checkAutoApproveMode } from "./auto-approve-mode.js";
 import { checkExpireOnToolMatch } from "./expire-on-tool-match.js";
 import { checkBypassWithoutAutoApprove } from "./bypass-without-auto-approve.js";
-import {
-  checkSessionStartPreflightSetupVersion,
-  type SessionStartPreflightSetupVersionFinding,
-} from "./session-start-preflight-setup-version.js";
-import { SESSION_START_PREFLIGHT_SETUP_BUILD_MIN_VERSION } from "../../schema/session-start-preflight.js";
-import {
-  runDoctorToolchainParity,
-  type RunDoctorToolchainParityOptions,
-} from "./toolchain-parity.js";
 import { buildUgAutoApprovals, DEFAULT_RECENT_SESSIONS } from "./ug-auto-approvals.js";
 import { buildUgDelegations } from "./ug-delegations.js";
 import { buildUgInflight } from "./ug-inflight.js";
@@ -164,16 +154,6 @@ export interface DoctorOptions extends LoaderOptions {
    */
   envOverride?: NodeJS.ProcessEnv;
   /**
-   * Test-injection knobs for the toolchain-parity comparison (task
-   * 13919613). Mirrors `codexCheckOptions`/`opencodeCheckOptions`: tests
-   * inject `runNodeVersion`/`runNpmGlobals`/`readOwKitVersion`/
-   * `readMcpServerNames` to fake the reused session-start Collector
-   * without a real spawn (see the hermetic-spawn-guard doc on those
-   * collectors); production omits this and the real collectors run,
-   * gated the same way `--shallow` gates every other live-spawn check.
-   */
-  toolchainParityOptions?: Partial<RunDoctorToolchainParityOptions>;
-  /**
    * Window size for the understanding-gate auto-approval doctor listing
    * (ADR docs/decisions/2026-08-27-ug-auto-mode-approval.md slice 1,
    * agent-tasks 74b4b17d): how many of the newest `.approvals/` session
@@ -191,12 +171,6 @@ export interface DoctorOptions extends LoaderOptions {
    * resolves its own target (`resolveTargetPath` in apply.ts, which
    * calls bare `path.resolve`). Defaults to `process.cwd()`; tests
    * inject a fixture dir to stay hermetic against the real cwd.
-   *
-   * Also the cwd `session_start_preflight.setup`'s per-repo project
-   * layer is derived from when `opts.project` is absent (task
-   * c88461c1, review round 2, decision D-021b), via the same
-   * `deriveProjectName` helper `harness session-start preflight` and
-   * `harness explain-policy` feed their own `loadManifest` calls from.
    */
   cwd?: string;
 }
@@ -1055,7 +1029,8 @@ function manifestSection(manifest: Manifest, postureWarnings: readonly ManifestP
   // dropped. The exit-66-on-load path is the canonical signal.
   return {
     topLevelKeysPresent: present,
-    // Removed manifest keys / removed packs the load stripped and ignored
+    // Removed manifest keys / removed packs the load stripped and ignored,
+    // and sites that still call a removed command
     // (src/schema/removed-keys.ts): each one is a warning here.
     warnings: postureWarnings.map(formatPostureWarning),
   };
@@ -1149,17 +1124,6 @@ function countDiagnostics(report: Omit<DoctorReport, "errorCount" | "warningCoun
     warningCount += report.claudeMcp.warnings.length;
   }
   if (report.npmGlobalBin?.status === "warn") warningCount++;
-  // Toolchain-parity drift (task 13919613): advisory-only, ALWAYS a
-  // warning, never an error — a machine running a different Node/OW-Kit/
-  // npm-global/MCP-set than a peer is a real drift signal worth flagging,
-  // but never a hard failure the way a broken MCP server or a missing
-  // required CLI is. `"skipped"` (--shallow) and `"no-peers"` (nothing to
-  // compare yet) are informational states and contribute nothing here.
-  if (report.toolchainParity) {
-    for (const p of report.toolchainParity.peers) {
-      if (p.status === "drift") warningCount++;
-    }
-  }
   // Understanding-gate mode env/config divergence (task 24abdecb):
   // always advisory, never an error — see understanding-mode-env.ts.
   if (report.understandingModeEnv) warningCount++;
@@ -1182,10 +1146,6 @@ function countDiagnostics(report: Omit<DoctorReport, "errorCount" | "warningCoun
   // Reports directory at 75 % of a gate bound or past it (task 6e001bfc):
   // one advisory warning either way, never an error, see ug-reports-dir.ts.
   if (report.ugReportsDir && report.ugReportsDir.state !== "ok") warningCount++;
-  // session_start_preflight.setup below the build-capable preflight
-  // floor (task 6993d9b5): always advisory, never an error, see
-  // session-start-preflight-setup-version.ts.
-  if (report.sessionStartPreflightSetupVersion) warningCount++;
   // ugInflight is informational only (ℹ) and never contributes here: a
   // stale or skipped record is exactly what `harness gc` sweeps, not a
   // tampering signal (see ug-inflight.ts / types.ts). Placed after every
@@ -1228,11 +1188,7 @@ export async function doctor(opts: DoctorOptions = {}): Promise<DoctorReport> {
   // (src/cli/policy/intercept.ts) and `harness dry-run`
   // (src/cli/dry-run.ts), which never consult a derived project layer
   // either, so `doctor` never reports this repo healthier or unhealthier
-  // than what actually enforces. Only `checkSessionStartPreflightSetupVersion`
-  // further down gets a project-scoped SECOND load: routing a derived
-  // layer through THIS one, unrelated load would let it silently reach
-  // every other check in this report, for zero benefit to the one key
-  // that needs it.
+  // than what actually enforces.
   const { manifest, resolved, warnings: postureWarnings } = loadManifest(opts);
   const home = opts.homeOverride ?? opts.homeDir ?? os.homedir();
   const probe = opts.mcpProbe ?? new RealMcpProbe();
@@ -1306,161 +1262,15 @@ export async function doctor(opts: DoctorOptions = {}): Promise<DoctorReport> {
 
   // One memoized probe shared across every doctor check that spawns
   // `<binary> --version` (task 6993d9b5, round 2 F3/F4): `checkHooks`,
-  // `buildPolicyPacks`, the policy-pack-expanded hook walk
+  // `buildPolicyPacks` and the policy-pack-expanded hook walk
   // (`checkPolicyPackHookVersions`, which already deduped internally but
-  // started from its own fresh cache) and the new
-  // session_start_preflight.setup check below all probe the same
+  // started from its own fresh cache) all probe the same
   // `["preflight", "--version"]` argv on a `min_version: 0.6.0` manifest.
   // Without a shared cache that argv would spawn once per caller, per
   // `doctor` run. `memoizeVersionProbe` (above) already existed for
-  // this; it just was not wired to the callers that predate the new
-  // check.
+  // this; it just was not wired to the callers that predate that sharing.
   const dedupedVersionProbe = memoizeVersionProbe(opts.versionProbe ?? (() => null));
   const hooks = checkHooks(manifest, home, { versionProbe: dedupedVersionProbe });
-  // task 6993d9b5: independent of the generic hooks[] min_version walk
-  // above, see session-start-preflight-setup-version.ts for why.
-  //
-  // Per-repo scoping (task c88461c1, review round 2, decision D-021b;
-  // scope narrowed to THIS check only, review round 3, decision D-028):
-  // an explicit `opts.project` still wins outright; otherwise derive
-  // the project name from `opts.cwd` (defaulting to `process.cwd()`)
-  // via the SAME shared `deriveProjectName` helper `harness
-  // session-start preflight` and `harness explain-policy` feed their
-  // own SECOND load from. Without this, the check judged only the
-  // base/machine-override value, so it could warn (or stay silent)
-  // against the WRONG effective value for a repo whose cwd-derived
-  // project layer flips `setup` the other way, the exact drift the
-  // producer (src/cli/session-start/index.ts) and `explain-policy` do
-  // not have, since both already derive from cwd for this same key.
-  // Deliberately a SEPARATE load from `manifest` above, not a reuse:
-  // that load feeds every OTHER check in this report and must stay
-  // project-unaware (see the doctor() top comment); folding a derived
-  // layer into it would let it silently reach checks it was never
-  // meant to touch.
-  //
-  // `sessionStartPreflightProjectName` (task c88461c1, review round 3
-  // residual; narrowed by task 1c4eb3ea's round 2, D-027 item 2) is
-  // carried onto the finding ONLY when the scoped load below actually
-  // RESOLVED a project layer file (`resolved.projectLayer !== null`,
-  // the same signal `resolvePaths` already returns), not merely
-  // whenever `deriveProjectName`/`opts.project` produced a name to
-  // TRY. Round 1 set this to the attempted name unconditionally, so
-  // the `(project: X)` suffix `format.ts` renders was byte-identical
-  // whether or not a layer actually existed on disk: `projectName` is
-  // present for every cwd inside any git work tree, layer or no
-  // layer, which made docs/CLI.md's "distinguishable from a
-  // base/machine-decided value" claim false. This version instead
-  // only names the project when the base/machine value was genuinely
-  // overridden by (or the failed load genuinely attempted) that
-  // project's own layer file.
-  //
-  // Best-effort: a config/parse failure here degrades to `setup:
-  // false` (review round 3 residual; task `1c4eb3ea`), matching the
-  // producer's own `setupEnabled` catch (`src/cli/session-start/
-  // index.ts`). Task 1c4eb3ea's round 2 (D-027 item 3) additionally
-  // reports this failure as its own `layer_unresolvable` warning
-  // (below) instead of going fully silent, but ONLY when a project
-  // layer FILE actually exists to be unresolvable about; a failure
-  // that instead comes from the base/machine layers (no project layer
-  // on disk for this cwd at all) stays silent here exactly as before,
-  // since attributing it to "the project layer" would be wrong and
-  // `doctor()`'s own top-level `loadManifest(opts)` call above already
-  // surfaces a genuine base/machine parse failure by throwing before
-  // this point is ever reached.
-  const attemptedSessionStartPreflightProjectName = resolveScopedProjectName({
-    project: opts.project,
-    cwd: opts.cwd ?? process.cwd(),
-    fallback: null,
-  });
-  const scopedLoadOpts: LoaderOptions = {
-    ...opts,
-    project: attemptedSessionStartPreflightProjectName ?? undefined,
-  };
-  let sessionStartPreflightManifest = manifest;
-  let sessionStartPreflightProjectName: string | null = null;
-  let sessionStartPreflightLayerUnresolvable:
-    | SessionStartPreflightSetupVersionFinding
-    | undefined;
-  try {
-    const scopedLoad = loadManifest(scopedLoadOpts);
-    sessionStartPreflightManifest = scopedLoad.manifest;
-    if (scopedLoad.resolved.projectLayer !== null) {
-      sessionStartPreflightProjectName = attemptedSessionStartPreflightProjectName;
-    }
-  } catch (err) {
-    // This catch itself IS reached in every shipped run with a malformed
-    // (or unreadable) project layer for the attempted name; what is
-    // actually UNREACHABLE TODAY is only the `unresolvableLayerPath ===
-    // null` sub-path below (task `1c4eb3ea`, round 2 mutation-probe
-    // replay found the round-1 probe on that line now SURVIVES, traced
-    // to this invariant): `doctor()`'s own PLAIN, unscoped
-    // `loadManifest(opts)` call at the very top of this function already
-    // reads the base manifest and every applicable machine-override
-    // layer `scopedLoadOpts` below ALSO reads (`scopedLoadOpts` differs
-    // from `opts` ONLY by adding `project`); that call has already
-    // succeeded by the time this line runs (a base/machine parse failure
-    // would have made `doctor()` itself reject before this point), so a
-    // throw reaching this catch can only come from the project layer
-    // `scopedLoadOpts.project` adds. `resolvePaths(scopedLoadOpts).projectLayer`
-    // therefore always resolves non-null here in every real invocation;
-    // the null-check below exists only so a FUTURE change to that "plain
-    // load first" invariant fails safe (silent, matching the producer's
-    // own `setupEnabled` catch) instead of leaking a stale pre-failure
-    // value, not because any fixture in this task's own suite can
-    // exercise it: constructing one would require the scoped load to
-    // fail for a reason the already-successful plain load could not also
-    // have hit, which is structurally impossible given the two calls
-    // read the identical base/machine layers.
-    //
-    // The assignment right below is itself UNOBSERVABLE today, in BOTH
-    // sub-paths: whenever `unresolvableLayerPath !== null` (every real
-    // invocation, per the invariant above), this degraded value is
-    // discarded outright by the `??` below, in favor of
-    // `sessionStartPreflightLayerUnresolvable`; the currently-
-    // unreachable `unresolvableLayerPath === null` sub-path never even
-    // runs to consume it either. It stays as a best-effort fallback for
-    // that future-invariant-change case, matching the producer's own
-    // `setupEnabled` catch, not because any path today actually reads it.
-    sessionStartPreflightManifest = {
-      ...manifest,
-      session_start_preflight: { ...manifest.session_start_preflight, setup: false },
-    };
-    // Same call the producer's own diagnostic makes
-    // (src/cli/session-start/index.ts): only names/warns about the
-    // project layer when `resolvePaths` itself can resolve one for
-    // this attempted name; otherwise the thrown error came from the
-    // base/machine layers, unrelated to project scoping, and this
-    // scoped-load catch stays silent about it (see the comment above).
-    // Deliberately unguarded, unlike the producer's copy: `resolvePaths`
-    // throws only on the HARNESS_ALLOW_REAL_GENERATED_DIR test-safety
-    // path, which the plain load at the top of doctor() has already
-    // passed; if that plain-load-first invariant ever moves, this line
-    // throws instead of degrading silently, and the producer's try/catch
-    // is the shape to copy.
-    const unresolvableLayerPath = resolvePaths(scopedLoadOpts).projectLayer;
-    if (unresolvableLayerPath !== null) {
-      sessionStartPreflightProjectName = attemptedSessionStartPreflightProjectName;
-      const errMessage = err instanceof Error ? err.message : String(err);
-      const errFirstLine = errMessage.split("\n")[0];
-      sessionStartPreflightLayerUnresolvable = {
-        kind: "layer_unresolvable",
-        actualVersion: null,
-        requiredVersion: SESSION_START_PREFLIGHT_SETUP_BUILD_MIN_VERSION,
-        message:
-          `session_start_preflight.setup: the project-scoped manifest load failed ` +
-          `(${errFirstLine}); the effective setup value for this repo could not be ` +
-          `determined (project layer: ${unresolvableLayerPath})`,
-        projectName: sessionStartPreflightProjectName,
-      };
-    }
-  }
-  const sessionStartPreflightSetupVersion =
-    sessionStartPreflightLayerUnresolvable ??
-    checkSessionStartPreflightSetupVersion(
-      sessionStartPreflightManifest,
-      dedupedVersionProbe,
-      sessionStartPreflightProjectName,
-    );
   // generatedDir resolved the same way apply.ts / interactive.ts resolve
   // it, so buildClaudeMcpRegistration's
   // desired projection carries SOLUTION_VERDICT_SIGNING_KEY too, and so
@@ -1620,17 +1430,6 @@ export async function doctor(opts: DoctorOptions = {}): Promise<DoctorReport> {
     ? buildCodexConfigDrift(driftCheckOpts)
     : undefined;
 
-  // Toolchain-parity on-demand comparison (task 13919613). Gated purely on
-  // `toolchain_parity.enabled` — mirrors `grounding`'s "only when the
-  // feature is actually in use" gating, so a manifest that never opted
-  // into the SessionStart companion sees no section at all here either.
-  const toolchainParity = manifest.toolchain_parity.enabled
-    ? await runDoctorToolchainParity(manifest, {
-        shallow: !!opts.shallow,
-        ...(opts.now !== undefined ? { now: opts.now } : {}),
-        ...opts.toolchainParityOptions,
-      })
-    : undefined;
   const manifestSec = manifestSection(manifest, postureWarnings);
 
   const rogueLedgerDbs = scanForRogueLedgers({
@@ -1661,7 +1460,6 @@ export async function doctor(opts: DoctorOptions = {}): Promise<DoctorReport> {
     hookBudgetLedgerMargin,
     ...(grounding !== undefined ? { grounding } : {}),
     ...(claudeMcp !== undefined ? { claudeMcp } : {}),
-    ...(toolchainParity !== undefined ? { toolchainParity } : {}),
     rogueLedgerDbs,
     ...(npmGlobalBin !== undefined ? { npmGlobalBin } : {}),
     ...(understandingModeEnv !== undefined ? { understandingModeEnv } : {}),
@@ -1670,9 +1468,6 @@ export async function doctor(opts: DoctorOptions = {}): Promise<DoctorReport> {
     ...(ugInflight !== undefined ? { ugInflight } : {}),
     ...(ugReportsDir !== undefined ? { ugReportsDir } : {}),
     ...(ugBypassWithoutAutoApprove !== undefined ? { ugBypassWithoutAutoApprove } : {}),
-    ...(sessionStartPreflightSetupVersion !== undefined
-      ? { sessionStartPreflightSetupVersion }
-      : {}),
     ...(ugAutoApproveMode !== undefined ? { ugAutoApproveMode } : {}),
     ...(ugExpireOnToolMatch !== undefined ? { ugExpireOnToolMatch } : {}),
     ...(settingsDrift !== undefined ? { settingsDrift } : {}),

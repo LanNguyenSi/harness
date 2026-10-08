@@ -47,7 +47,8 @@ export function validate(opts: ValidateOptions = {}): ValidateResult {
     const parsed = parseManifestWithWarnings(mergedRaw);
     manifest = parsed.manifest;
     // Removed keys and removed packs load as warnings (and as errors under
-    // --strict below), never as a parse failure: src/schema/removed-keys.ts.
+    // --strict below), never as a parse failure; so does every site that
+    // still calls a removed command: src/schema/removed-keys.ts.
     diagnostics.push(
       ...parsed.warnings.map((w): Diagnostic => ({
         severity: "warning",

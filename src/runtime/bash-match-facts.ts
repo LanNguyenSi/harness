@@ -95,17 +95,9 @@ const CURATED_BASH_MATCH_FACTS: Readonly<Record<string, CuratedPolicyFact>> = {
     ],
     verbs: ["publish", "tag"],
   },
-  "preflight-before-investigation": {
-    headTokens: [{ token: "git", class: "git" }],
-    verbs: ["status", "log", "diff", "branch"],
-  },
   "review-subagent-before-pr-create-bash": {
     headTokens: [{ token: "gh", class: "non-git-set" }],
     verbs: ["create"],
-  },
-  "preflight-before-push": {
-    headTokens: [{ token: "git", class: "git" }],
-    verbs: ["push"],
   },
   "deny-kill-switch-bypass": {
     headTokens: [{ token: "harness", class: "non-git-set" }],

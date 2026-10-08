@@ -177,13 +177,13 @@ sees a warn): three sections, verbatim from
 `formatAgentFacingMessage` in `src/runtime/agent-facing.ts`:
 
 ```
-You cannot investigate this repository yet.
+You cannot merge PR #42 yet.
 
 Required:
-- verified repository preflight
+- a recorded review of PR #42
 
 Run:
-  harness preflight
+  harness record review --pr 42 "<summary>"
 ```
 
 The three sections always appear in the same order, with `- ` prefixes
@@ -202,17 +202,17 @@ operator-facing BLOCK reason (which names the session id, the
 missing tag, and which approval sources failed) stays on stderr.
 
 ```
-┌──────────────────────────────┐    ┌──────────────────────────────┐
-│ Agent (stdout / hookOutput)  │    │ Operator (stderr / audit)    │
-├──────────────────────────────┤    ├──────────────────────────────┤
-│ You cannot push branch X.    │    │ preflight-before-push: no    │
-│                              │    │ matching ledger entry for    │
-│ Required:                    │    │ tag `preflight:feat/foo`     │
-│ - a fresh preflight for X    │    │ within 10m (matchedCount: 0) │
-│                              │    │ session: <uuid>              │
-│ Run:                         │    │                              │
-│   harness preflight          │    │ → policy_decision row written │
-└──────────────────────────────┘    └──────────────────────────────┘
+┌──────────────────────────────────────┐    ┌──────────────────────────────────────┐
+│ Agent (stdout / hookOutput)          │    │ Operator (stderr / audit)            │
+├──────────────────────────────────────┤    ├──────────────────────────────────────┤
+│ You cannot merge PR #42 yet.         │    │ review-before-merge: no              │
+│                                      │    │ matching ledger entry for            │
+│ Required:                            │    │ tag `review:42`                      │
+│ - a recorded review of PR #42        │    │ within this session                  │
+│                                      │    │ (matchedCount: 0)                    │
+│ Run:                                 │    │ session: <uuid>                      │
+│   harness record review --pr 42 "<s>"│    │ → policy_decision row written        │
+└──────────────────────────────────────┘    └──────────────────────────────────────┘
 ```
 
 ### `${VAR}` substitution context

@@ -4,26 +4,22 @@
 // families (see src/cli/init/templates.ts for the exact policy
 // definitions and tag shapes these verbs feed).
 //
-// Unlike `harness session-start preflight` (a SessionStart hook that
-// MUST exit 0 on every path so it never breaks the session loop), the
-// `record` verbs are INTERACTIVE: an agent or operator invokes them
+// The `record` verbs are INTERACTIVE: an agent or operator invokes them
 // deliberately to attach a review verdict / dogfood summary to the
 // ledger. A failure here (unreachable ledger, no git context, an empty
 // summary) is a real error the caller needs to see and react to, so
 // every verb exits non-zero with a clear stderr message on failure
 // instead of degrading silently. Each verb still returns a structured
 // `RecordResult` (not just a thrown error) so both paths are testable
-// without spawning a process — same "degrade-with-reason" convention
-// `runSessionStartPreflight` uses.
+// without spawning a process ("degrade-with-reason").
 //
-// Composition mirrors session-start/index.ts: build the ledger write
-// via the manifest's declared `grounding-mcp` server (through the
-// shared `resolveManifestLedgerWriter` — see runtime/ledger-writer.ts),
-// resolve branch via `resolveGitContext` (the SAME function the
-// preflight-before-* gates use) and session via `resolveReadSessionId`,
-// with `--branch` / `--session` as explicit overrides. No new JSON-RPC
-// or subprocess code: every ledger write goes through the existing
-// `addLedgerFact` primitive.
+// Composition: build the ledger write via the manifest's declared
+// `grounding-mcp` server (through the shared
+// `resolveManifestLedgerWriter` — see runtime/ledger-writer.ts),
+// resolve branch via `resolveGitContext` and session via
+// `resolveReadSessionId`, with `--branch` / `--session` as explicit
+// overrides. No new JSON-RPC or subprocess code: every ledger write goes
+// through the existing `addLedgerFact` primitive.
 
 import {
   findGitEntry,
@@ -93,8 +89,7 @@ function resolveSession(opts: RecordCommonOptions): string {
 
 /**
  * Write one ledger fact via the manifest's declared `grounding-mcp`
- * server (or the injected `opts.writeLedger` test seam). Mirrors the
- * manifest-wiring block `runSessionStartPreflight` uses, factored
+ * server (or the injected `opts.writeLedger` test seam), factored
  * through the shared `resolveManifestLedgerWriter` helper.
  */
 async function writeLedgerFact(
@@ -313,8 +308,8 @@ const requireFreeText = (
 
 /**
  * Resolve the branch tag `review` and `review-subagent` both require:
- * explicit `--branch` wins, otherwise `resolveGitContext(cwd)` (the SAME
- * function the preflight-before-* gates use). Returns the ready-to-
+ * explicit `--branch` wins, otherwise `resolveGitContext(cwd)`. Returns the
+ * ready-to-
  * `return`ed failure `RecordResult` on the shared "cannot resolve any
  * branch" degrade path so callers do not repeat that construction.
  */

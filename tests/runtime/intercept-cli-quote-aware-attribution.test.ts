@@ -10,6 +10,10 @@ import { intercept, OPAQUE_TARGET_REASON, type LedgerClient, type PolicyDecision
 import { parseManifest, type Policy } from "../../src/schema/index.js";
 import { makeManifest } from "../_helpers/manifest.js";
 import { addGitDirSkeleton } from "../_helpers/git-dir-fixture.js";
+import {
+  legacyPreflightInvestigation,
+  legacyPreflightPush,
+} from "../_helpers/legacy-preflight-policies.js";
 
 // Task 7d4abf84: a command that names a nested repository through any
 // directory-changing shape is attributed to that repository or fails
@@ -30,9 +34,19 @@ type PolicyName = (typeof PER_REPO_POLICIES)[number];
 
 function templatePolicies(enforcement: "block" | "warn"): Policy[] {
   const parsed = parseManifest(parseYaml(FULL_TEMPLATE));
+  const legacy = (name: PolicyName): Policy | undefined =>
+    name === "preflight-before-investigation"
+      ? legacyPreflightInvestigation()
+      : name === "preflight-before-push"
+        ? legacyPreflightPush()
+        : undefined;
   return PER_REPO_POLICIES.map((name) => {
-    const policy = parsed.policies.find((p) => p.name === name);
-    if (policy === undefined) throw new Error(`policy ${name} missing from FULL_TEMPLATE`);
+    // The two preflight policies were removed from FULL_TEMPLATE (f3f15290);
+    // they are supplied from the engine-test fixture so the attribution guard
+    // keeps running against a per-branch (`${BRANCH}`) trigger next to the
+    // per-repo (`${REPO}`) ones.
+    const policy = parsed.policies.find((p) => p.name === name) ?? legacy(name);
+    if (policy === undefined) throw new Error(`policy ${name} unavailable`);
     return { ...policy, enforcement } as Policy;
   });
 }

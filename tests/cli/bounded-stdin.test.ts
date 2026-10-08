@@ -14,8 +14,6 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { readStdinBounded, STDIN_IDLE_TIMEOUT_MS, stdinTimeoutNote } from "../../src/cli/bounded-stdin.js";
 import { runInterceptCli } from "../../src/cli/policy/intercept.js";
-import { runSessionStartStaleBaseCheck } from "../../src/cli/session-start/stale-base-check.js";
-import { runSessionStartToolchainParity } from "../../src/cli/session-start/toolchain-parity.js";
 import { writeSentinel } from "../../src/runtime/pause-sentinel.js";
 import { parseManifest } from "../../src/schema/index.js";
 
@@ -93,28 +91,6 @@ async function runWithNeverClosedStdin(
 }
 
 describe("bounded stdin: real child process with a never-closed stdin", () => {
-  const cases: Array<{ name: string; args: string[]; label: string }> = [
-    {
-      name: "session-start stale-base-check",
-      args: ["session-start", "stale-base-check"],
-      label: "harness session-start stale-base-check:",
-    },
-    {
-      name: "session-start toolchain-parity",
-      args: ["session-start", "toolchain-parity"],
-      label: "harness session-start toolchain-parity:",
-    },
-  ];
-  for (const c of cases) {
-    it(`${c.name} exits 0 within a bound with a stderr note naming the timeout (not a hang)`, async () => {
-      const r = await runWithNeverClosedStdin(c.args);
-      expect(r.hung, `pid ${r.pid} still running after ${KILL_AFTER_MS} ms; stderr: ${r.stderr}`).toBe(false);
-      expect(r.code).toBe(0);
-      expect(r.stderr).toContain(c.label);
-      expect(r.stderr).toContain("stdin never closed");
-    }, 20_000);
-  }
-
   it("policy intercept exits 0 within a bound and refuses the tool call, naming the stdin timeout (not a hang)", async () => {
     const r = await runWithNeverClosedStdin(["policy", "intercept", "--config", "/nonexistent/harness.yaml"]);
     expect(r.hung, `pid ${r.pid} still running after ${KILL_AFTER_MS} ms; stderr: ${r.stderr}`).toBe(false);
@@ -160,82 +136,6 @@ describe("bounded stdin: reader behaviour", () => {
   it("the default bound is the one the preflight path has always used", () => {
     expect(STDIN_IDLE_TIMEOUT_MS).toBe(3000);
   });
-});
-
-function hermeticProducerOpts(): { stderr: NodeJS.WritableStream; err: () => string } {
-  const { stream, output } = captureStream();
-  return { stderr: stream, err: output };
-}
-
-describe("bounded stdin: each producer keeps parsing a closed stdin and a slow payload", () => {
-  const producers: Array<{
-    name: string;
-    run: (stdin: NodeJS.ReadableStream, stderr: NodeJS.WritableStream, idle?: number) => Promise<{ sessionId: string }>;
-  }> = [
-    {
-      name: "stale-base-check",
-      run: (stdin, stderr, idle) =>
-        runSessionStartStaleBaseCheck({
-          stdin,
-          stderr,
-          writeLedger: async () => ({ ok: true }),
-          manifest: bareManifest(),
-          ...(idle !== undefined && { stdinIdleTimeoutMs: idle }),
-        }),
-    },
-    {
-      name: "toolchain-parity",
-      run: (stdin, stderr, idle) =>
-        runSessionStartToolchainParity({
-          stdin,
-          stderr,
-          writeLedger: async () => ({ ok: true }),
-          manifest: bareManifest(),
-          ...(idle !== undefined && { stdinIdleTimeoutMs: idle }),
-        }),
-    },
-  ];
-  for (const p of producers) {
-    it(`${p.name}: event JSON on a closed stdin is parsed with no timeout note`, async () => {
-      const dir = tmpDir("harness-bstdin-closed-");
-      const { stderr, err } = hermeticProducerOpts();
-      const result = await p.run(
-        Readable.from([JSON.stringify({ session_id: "closed-sess", cwd: dir })]),
-        stderr,
-      );
-      expect(result.sessionId).toBe("closed-sess");
-      expect(err()).not.toContain("stdin");
-    });
-
-    it(`${p.name}: a payload whose chunks arrive inside the idle bound still parses`, async () => {
-      const dir = tmpDir("harness-bstdin-slow-");
-      const { stderr, err } = hermeticProducerOpts();
-      const json = JSON.stringify({ session_id: "slow-sess", cwd: dir });
-      const half = Math.floor(json.length / 2);
-      const stream = new PassThrough();
-      const run = p.run(stream, stderr, 400);
-      stream.write(json.slice(0, half));
-      await new Promise((r) => setTimeout(r, 250));
-      stream.write(json.slice(half, half + 2));
-      await new Promise((r) => setTimeout(r, 250));
-      stream.end(json.slice(half + 2));
-      expect((await run).sessionId).toBe("slow-sess");
-      expect(err()).not.toContain("stdin");
-    });
-
-    it(`${p.name}: an idle stdin times out with a note and does not throw`, async () => {
-      const { stderr, err } = hermeticProducerOpts();
-      // Restore cwd in afterEach cleanup, registered before the tmp dir's own
-      // removal: a regressed bound that times out the test must not leave the
-      // process in a deleted directory for every later test in the file.
-      const prior = process.cwd();
-      cleanups.push(() => process.chdir(prior));
-      process.chdir(tmpDir("harness-bstdin-idle-"));
-      const result = await p.run(new PassThrough(), stderr, 100);
-      expect(result.sessionId).toBeDefined();
-      expect(err()).toContain("stdin never closed");
-    });
-  }
 });
 
 describe("bounded stdin: policy intercept fail posture", () => {

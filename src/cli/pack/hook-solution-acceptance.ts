@@ -550,7 +550,6 @@ function blockJson(
       `Converge in this order, all at one commit:\n` +
       `  1. If the working tree is dirty, COMMIT first. The verdict is pinned to the HEAD it was evaluated at, so any commit you make afterward makes it stale; commit the change before evaluating so the verdict pins to the final HEAD.\n` +
       convergeStep2For(taskId, nullVerdict) +
-      `  3. For \`git push\` / \`gh pr merge\`: the separate preflight-before-push gate is satisfied by a preflight at the current HEAD (its \`at_head\` rule), so refresh it at this same commit with \`harness preflight\` before retrying. Satisfy both push-gates at one HEAD.\n` +
       reconnectGuidanceFor(taskId, nullVerdict) +
       `\n` +
       `Operator override: \`harness pause\` (yields this and every other gate).`;

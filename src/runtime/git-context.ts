@@ -591,7 +591,7 @@ export function resolveGitContext(cwd: string): GitRepoContext {
 // Originally written for `harness record review`'s `--base` fallback
 // (task T-001, record-verbs) and lived only in `cli/record/index.ts`.
 // Exported here (task T-001) so cli/ modules share one implementation
-// (today the record verbs and the session-start stale-base check). Behavior is
+// (today only the record verbs read it). Behavior is
 // unchanged; this is a visibility/location move, not a rewrite — see
 // `findGitEntry`'s doc comment above for the identical precedent
 // (record/index.ts reusing this module's git-dir walk instead of
@@ -711,19 +711,17 @@ function commonDirFromText(gitDir: string, text: string): string {
 }
 
 // ---------------------------------------------------------------------------
-// Repository-identity derivation for per-repo config scoping (task
-// c88461c1, review round 2, decision D-021a).
+// Repository-identity derivation for per-repo config scoping.
 //
-// Round 1 fed `resolveGitContext(cwd).repo` (the WORK-TREE basename)
-// into the `session_start_preflight.setup` project-layer lookup. That
+// A naive implementation feeds `resolveGitContext(cwd).repo` (the
+// WORK-TREE basename) into the project-layer lookup. That
 // is wrong for a linked worktree: `git worktree add ../foo` gives the
 // linked checkout its OWN directory name, so two worktrees of the SAME
 // repository resolved two DIFFERENT project layers, and neither one
 // matched the name an operator would naturally pick for the shared
 // project override file. `repo` stays exactly as-is for its existing
-// consumer (the `preflight:${REPO}` ledger tag, `src/cli/session-start/
-// index.ts`), a ledger tag namespaced per CHECKOUT is a defensible,
-// unrelated design choice, and changing it is out of this task's scope.
+// consumers (a ledger tag namespaced per CHECKOUT is a defensible,
+// unrelated design choice), and changing it is out of scope.
 // This is a SEPARATE derivation for a SEPARATE purpose: naming the
 // `<home>/projects/<name>/harness.overrides.yaml` layer that should
 // apply to every linked worktree of one repository alike.
@@ -736,10 +734,10 @@ function commonDirFromText(gitDir: string, text: string): string {
  * the same name, unlike `resolveGitContext(cwd).repo`, which names the
  * checkout directory itself and therefore differs per worktree. Feeds
  * `LoaderOptions.project` (the same seam every command's own
- * `--project <name>` flag already uses) for `harness session-start
- * preflight`, `harness explain-policy`, and `harness doctor` alike (one
- * helper, three consumers, so the three cannot silently disagree on
- * what "this repository's project name" means).
+ * `--project <name>` flag already uses) so per-repo config scoping is
+ * derived from one helper rather than re-implemented per call site, and
+ * the consumers cannot silently disagree on what "this repository's
+ * project name" means.
  *
  * Resolution:
  *  - `findGitEntry(cwd)` walks up to the `.git` entry, exactly like
@@ -832,32 +830,21 @@ export interface ResolveScopedProjectNameOptions<T> {
   cwd: string;
   /**
    * What to return when neither `project` nor `deriveProjectName(cwd)`
-   * produced a name. Callers disagreed on this value before this helper
-   * existed: `harness doctor` used `null`, the `session_start_preflight`
-   * producer used its own already-resolved `repo` basename. Naming it
-   * here makes that difference a visible, per-call-site argument instead
-   * of an accident of two copies of the same expression drifting apart
-   * (task `f1eb1c5c`; see docs/CLI.md's PER-REPO SCOPING section).
+   * produced a name. Callers disagree on this value (some want `null`,
+   * some want an already-resolved basename), so it is a visible,
+   * per-call-site argument rather than an accident of two copies of the
+   * same expression drifting apart.
    */
   fallback: T;
 }
 
 /**
- * Shared `opts.project ?? deriveProjectName(cwd) ?? fallback` resolution,
- * used by two of the three producers of a per-repo-scoped
- * `session_start_preflight` project name: `harness doctor`'s second,
- * project-scoped load and the `session_start_preflight` producer. Both
- * surfaces agree on the first two terms (an explicit `--project`, then
- * the cwd-derived name); only the fallback differs by call site, and
- * this helper takes it as an explicit argument so that difference is
- * named rather than duplicated inline. The third producer,
- * `harness explain-policy` (`src/cli/explain-policy.ts`), keeps its own
- * copy of the same expression with a third fallback (`undefined`);
- * folding it into this helper is deliberately out of scope of task
- * `f1eb1c5c`. No observable behaviour change versus either surface's
- * own prior inline expression, other than doctor's `cwd` expression
- * now being evaluated eagerly (see the call site): this only extracts
- * the shared shape.
+ * Shared `opts.project ?? deriveProjectName(cwd) ?? fallback` resolution.
+ * Callers agree on the first two terms (an explicit `--project`, then the
+ * cwd-derived name); only the fallback differs by call site, and this
+ * helper takes it as an explicit argument so that difference is named
+ * rather than duplicated inline. Extracting the shared shape keeps every
+ * per-repo project-name derivation in one place.
  */
 export function resolveScopedProjectName<T>(opts: ResolveScopedProjectNameOptions<T>): string | T {
   return opts.project ?? deriveProjectName(opts.cwd) ?? opts.fallback;

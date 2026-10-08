@@ -1,6 +1,5 @@
 // One idle-bounded stdin reader shared by every hook-style CLI entry that
-// parses an event JSON from stdin (session-start preflight,
-// stale-base-check, toolchain-parity, policy intercept, and the pack hook
+// parses an event JSON from stdin (policy intercept, and the pack hook
 // readers: `readStdin` / `readStdinChecked` in pack/hook-bootstrap.ts and the
 // runtime-reality reader in pack/hook-runtime-reality.ts). It also holds the
 // shared stdin-timeout refusal reason and block envelope those PreToolUse
@@ -75,15 +74,19 @@ export async function readStdinBounded(
   });
 }
 
-/** Tail of the empty-read note used by the session-start producers. */
+/**
+ * Default tail of the empty-read note. Its only default caller, `harness policy
+ * intercept`, reaches the note with a non-empty read only, so it prints the
+ * partial-data note instead.
+ */
 export const DEFAULT_EMPTY_READ_TAIL = "falling back to the default session resolution";
 
 /**
  * The stderr note for a read the idle bound cut off (no trailing newline).
  * `emptyReadTail` says what the caller does when nothing was read; it defaults
- * to the session-start wording, and a caller with a different fallback (the pack
- * hook readers continue as an empty event) passes its own. The partial-data note
- * is the same for every caller.
+ * to `DEFAULT_EMPTY_READ_TAIL`, and a caller with a different fallback (the
+ * pack hook readers continue as an empty event) passes its own. The
+ * partial-data note is the same for every caller.
  */
 export function stdinTimeoutNote(
   read: StdinRead,

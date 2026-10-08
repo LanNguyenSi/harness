@@ -129,7 +129,7 @@ controls are documented in
 `harness init --interactive` wizard still offer more than
 branch-protection: the understanding gate
 (`understanding-before-execution`), `solution-acceptance`,
-the risk gate and the reference policies (review, dogfood, preflight
+the risk gate and the reference policies (review, dogfood
 and deny policies). harness 1.0.0 removes all of these, so a new install
 should not adopt them. Start from the path above instead.
 

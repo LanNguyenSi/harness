@@ -213,8 +213,8 @@ describe("classifyRisk — Phase 7 #6 ReDoS subject-length cap", () => {
 describe("classifyRisk — built-in benign harness floor", () => {
   it("recognizes a standalone benign harness command as low, not unclassified", () => {
     // No operator classifier at all: the built-in floor still applies so
-    // the fail-close gate cannot deny `harness preflight` in production.
-    const p = classifyRisk(bashEnvelope("harness preflight"), []);
+    // the fail-close gate cannot deny `harness doctor` in production.
+    const p = classifyRisk(bashEnvelope("harness doctor"), []);
     expect(p.classified).toBe(true);
     expect(p.severity).toBe("low");
     expect(p.categories).toEqual([]);
@@ -226,7 +226,7 @@ describe("classifyRisk — built-in benign harness floor", () => {
   it.each([
     "harness doctor",
     "harness validate",
-    "harness session-start preflight",
+    "harness audit --outcome deny",
     "harness approve risk",
     "harness explain-policy gate-prod-destructive",
   ])("classifies the read-only / producer command %j as low", (command) => {
@@ -234,6 +234,15 @@ describe("classifyRisk — built-in benign harness floor", () => {
     expect(p.classified).toBe(true);
     expect(p.severity).toBe("low");
   });
+
+  it.each(["harness preflight", "harness session-start preflight"])(
+    "no longer floors the removed command %j (task f3f15290): it stays unclassified",
+    (command) => {
+      const p = classifyRisk(bashEnvelope(command), [SHELL]);
+      expect(p.classified).toBe(false);
+      expect(p.severity).toBeNull();
+    },
+  );
 
   it.each(["harness apply", "harness init", "harness remove mcp foo", "harness uninstall"])(
     "leaves the mutating command %j unclassified",
@@ -247,7 +256,7 @@ describe("classifyRisk — built-in benign harness floor", () => {
   it("lets a dangerous tail win over the floor (highest-severity-wins)", () => {
     // The built-in must NOT short-circuit: a dangerous tail still drives
     // the verdict to critical so the command stays blocked.
-    const p = classifyRisk(bashEnvelope("harness preflight && rm -rf /var"), [SHELL]);
+    const p = classifyRisk(bashEnvelope("harness doctor && rm -rf /var"), [SHELL]);
     expect(p.classified).toBe(true);
     expect(p.severity).toBe("critical");
     expect(p.categories).toContain("destructive");
@@ -270,9 +279,9 @@ describe("classifyRisk — built-in benign harness floor", () => {
   });
 
   it("does not match an anchored harness command behind a cd prefix (fail-safe)", () => {
-    // `cd /x && harness preflight` is not head-anchored, so it stays
+    // `cd /x && harness doctor` is not head-anchored, so it stays
     // unclassified rather than letting a prefix launder the command.
-    const p = classifyRisk(bashEnvelope("cd /repo && harness preflight"), [SHELL]);
+    const p = classifyRisk(bashEnvelope("cd /repo && harness doctor"), [SHELL]);
     expect(p.classified).toBe(false);
   });
 
@@ -280,7 +289,7 @@ describe("classifyRisk — built-in benign harness floor", () => {
     const event = {
       hook_event_name: "PreToolUse",
       tool_name: "Write",
-      tool_input: { file_path: "/tmp/x", content: "harness preflight" },
+      tool_input: { file_path: "/tmp/x", content: "harness doctor" },
     } as ToolEvent;
     const p = classifyRisk(buildActionEnvelope(event, CTX), [SHELL]);
     expect(p.classified).toBe(false);

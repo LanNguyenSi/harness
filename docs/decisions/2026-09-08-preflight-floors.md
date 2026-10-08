@@ -1,5 +1,18 @@
 # Preflight version floors: split the hook floor from the setup floor, reject prereleases
 
+> **Partly superseded (task f3f15290).** The `session_start_preflight.setup`
+> half of this decision is gone: the session-start producers, the
+> `session_start_preflight` manifest key, the setup-build floor and its
+> `harness doctor` advisory were removed in task f3f15290, so the setup-floor
+> discussion below and the files it names for that half
+> (`src/schema/session-start-preflight.ts`,
+> `src/cli/doctor/session-start-preflight-setup-version.ts`) describe code
+> that no longer exists; line anchors into surviving files are as of the
+> original decision.
+> The other half stays authoritative: the generic `hooks[]` and
+> `policy_packs[]` `min_version` floor and the version-compare semantics
+> (strict numeric versions, prereleases rejected rather than passed through).
+
 - **Date**: 2026-09-08
 - **Status**: Accepted
 - **Decision tracker**: agent-tasks/65952a0c (batch 44, T-006; residual of task 6993d9b5, batch 41 round 2, `05-review-findings.md`)

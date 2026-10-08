@@ -38,24 +38,21 @@ describe("list — categories", () => {
   it("lists hook entries", () => {
     const r = list("hooks", { configPath: FULL_MANIFEST });
     expect(r.rows.map((row) => row.name)).toEqual([
-      "git-preflight",
       "require-review-evidence",
       "require-review-evidence-bash",
       "require-review-evidence-task-merge",
       "require-review-evidence-task-finish",
       "require-dogfood-evidence",
-      "require-preflight-evidence",
       "require-review-subagent-evidence",
       "require-review-subagent-evidence-bash",
-      "require-preflight-push-evidence",
       "deny-kill-switch-bash",
       "deny-session-env-strip-bash",
       "deny-sentinel-write-bash",
       "risk-gate",
     ]);
     const head = r.rows[0]!;
-    expect(head.event).toBe("SessionStart");
-    expect(head.blocking).toBe("false");
+    expect(head.event).toBe("PreToolUse");
+    expect(head.blocking).toBe("hard");
   });
 
   it("lists policies", () => {
@@ -67,10 +64,8 @@ describe("list — categories", () => {
       "review-before-task-finish-automerge",
       "dogfood-before-release",
       "two-reviewers-required",
-      "preflight-before-investigation",
       "review-subagent-before-pr-create",
       "review-subagent-before-pr-create-bash",
-      "preflight-before-push",
       "gate-prod-destructive",
       "gate-prod-destructive-approval",
       "gate-dev-unsafe-deletion",

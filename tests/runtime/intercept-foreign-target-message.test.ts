@@ -3,14 +3,15 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { Readable, Writable } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { parse as parseYaml } from "yaml";
 import { runInterceptCli } from "../../src/cli/policy/intercept.js";
-import { FULL_TEMPLATE } from "../../src/cli/init/templates.js";
-import { runSessionStartPreflight } from "../../src/cli/session-start/index.js";
 import type { ClaudeDenyJson, LedgerClient } from "../../src/runtime/intercept.js";
-import { parseManifest, type Policy } from "../../src/schema/index.js";
+import type { Policy } from "../../src/schema/index.js";
 import { makeManifest } from "../_helpers/manifest.js";
 import { addGitDirSkeleton } from "../_helpers/git-dir-fixture.js";
+import {
+  legacyPreflightInvestigation,
+  legacyPreflightPush,
+} from "../_helpers/legacy-preflight-policies.js";
 
 // Block message for a decision attributed to a foreign target (a nested or
 // vendored work tree named by `git -C <dir>` / `cd <dir> &&`). The gate
@@ -47,12 +48,9 @@ function sink(): NodeJS.WritableStream {
   });
 }
 
-/** The shipped preflight-before-investigation policy, verbatim (incl. `ux:`). */
+/** The preflight-before-investigation fixture, verbatim (incl. `ux:`). */
 function shippedPolicy(): Policy {
-  const parsed = parseManifest(parseYaml(FULL_TEMPLATE));
-  const policy = parsed.policies.find((p) => p.name === "preflight-before-investigation");
-  if (!policy) throw new Error("preflight-before-investigation missing from FULL_TEMPLATE");
-  return policy;
+  return legacyPreflightInvestigation();
 }
 
 /** The same policy without `ux:` and `producers:` (neutral deny envelope). */
@@ -347,10 +345,7 @@ describe("foreign-target sentence is not added to envelopes that name their own 
     // libfoo's HEAD holds a raw sha: detached, no branch.
     fs.writeFileSync(path.join(libfoo, ".git", "HEAD"), `${"a".repeat(40)}\n`);
     addGitDirSkeleton(path.join(libfoo, ".git"));
-    const pushPolicy = parseManifest(parseYaml(FULL_TEMPLATE)).policies.find(
-      (p) => p.name === "preflight-before-push",
-    );
-    if (!pushPolicy) throw new Error("preflight-before-push missing from FULL_TEMPLATE");
+    const pushPolicy = legacyPreflightPush();
     const result = await run(pushPolicy, outer, "git -C vendor/libfoo push origin HEAD", [
       "preflight:main",
     ]);
@@ -407,29 +402,5 @@ describe("foreign-target sentence is not added to envelopes that name their own 
         "ledger is reachable again. Ask your operator to check grounding-mcp (harness doctor), " +
         "then retry. Session: sess-bb202fb9.",
     );
-  });
-});
-
-describe("the remedy named for a foreign target is real", () => {
-  it("`cd <dir> && harness preflight` records preflight:<target repo> when it reports ready:true", async () => {
-    const { libfoo } = makeNestedFixture();
-    const cwdSpy = vi.spyOn(process, "cwd").mockReturnValue(libfoo);
-    const writes: Array<{ sessionId: string; content: string }> = [];
-    const result = await runSessionStartPreflight({
-      session: "sess-bb202fb9",
-      runPreflight: async () => ({ ok: true, json: { ready: true, confidence: 0.9, checks: [] } }),
-      writeLedger: async (args) => {
-        writes.push(args);
-        return { ok: true };
-      },
-      stderr: sink(),
-    });
-    cwdSpy.mockRestore();
-
-    expect(result.wrote).toBe(true);
-    expect(result.repo).toBe("libfoo");
-    expect(writes).toHaveLength(1);
-    expect(writes[0]?.content).toContain("preflight:libfoo");
-    expect(writes[0]?.content).not.toContain("preflight:outer");
   });
 });

@@ -786,26 +786,6 @@ describe("approveUnderstanding — .pending-approval session resolution (task 33
     expect((caught as Error).message).toMatch(/no session id available/);
     expect((caught as Error).message).toMatch(/\.pending-approval/);
   });
-
-  it("error message points at `harness preflight` as the fastest bootstrap fix (task 0dbc9549)", async () => {
-    // Regression for the chicken-and-egg friction the producer-side fix
-    // (preflight stages .pending-approval) closes: even when neither
-    // preflight nor a gate-block has fired yet, the error message must
-    // tell the operator what single command unblocks them.
-    let caught: unknown;
-    try {
-      await approveUnderstanding({
-        manifest: manifest(),
-        reportsDir: tmp,
-        generatedDir: path.join(tmp, "harness.generated"),
-        ledgerAdd: async () => ({ ok: true }),
-      });
-    } catch (e) {
-      caught = e;
-    }
-    expect((caught as Error).message).toMatch(/harness preflight/);
-    expect((caught as Error).message).toMatch(/Fastest fix/);
-  });
 });
 
 describe("approveUnderstanding — runtime-neutral session-id resolution (task f608b4ee)", () => {
@@ -1020,9 +1000,6 @@ describe("approveUnderstanding — runtime-neutral session-id resolution (task f
     // Claude-only transcript-grep guidance must be gone.
     expect(msg).not.toContain("~/.claude/projects/");
     expect(msg).not.toContain(".jsonl");
-    // The "harness preflight" fastest-fix line is preserved.
-    expect(msg).toMatch(/harness preflight/);
-    expect(msg).toMatch(/Fastest fix/);
   });
 });
 

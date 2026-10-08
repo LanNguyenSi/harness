@@ -9,25 +9,6 @@ import { renderAutoApproveSnippet } from "../../policy-packs/builtin/understandi
 // `mode:` / `approval_lifecycle:` under the pack's `config:` key.
 const AUTO_APPROVE_SNIPPET = renderAutoApproveSnippet(6);
 
-// The `git-preflight` SessionStart hook's own generic `min_version`
-// floor, rendered below into FULL_TEMPLATE. Through task 6993d9b5 this
-// was the SAME constant as `harness doctor`'s
-// session_start_preflight.setup version check
-// (SESSION_START_PREFLIGHT_SETUP_BUILD_MIN_VERSION,
-// src/cli/doctor/session-start-preflight-setup-version.ts); split into
-// two independent constants by task 65952a0c
-// (docs/decisions/2026-09-08-preflight-floors.md) because the two
-// floors answer different questions and a future bump to one need not
-// move the other. Bump THIS constant when an agent-preflight release
-// changes something the `git-preflight` hook needs GENERICALLY
-// (independent of the opt-in `--setup` build step); bump the setup
-// floor instead when the change is `--setup`-specific. Both are
-// `"0.6.0"` today. `src/cli/init/dependencies.ts`'s wizard-facing
-// `preflight` dependency entry reads this SAME constant (not the setup
-// floor), so the wizard table can never advertise a floor lower than
-// what the generated manifest itself declares.
-export const GIT_PREFLIGHT_HOOK_MIN_VERSION = "0.6.0";
-
 export const MINIMAL_TEMPLATE = `# ~/.harness/harness.yaml (legacy: ~/.claude/harness.yaml)
 #
 # Bootstrapped by \`harness init --template minimal\`.
@@ -159,83 +140,7 @@ memory:
 # policy below has a matching trigger (\`match\` + optional \`bash_match\`),
 # and emits Claude Code's deny envelope when the required ledger tag is
 # absent. No external shell scripts are required.
-#
-# The \`git-preflight\` SessionStart hook is the producer side of the
-# \`preflight-before-*\` policies: \`harness session-start preflight\` runs
-# agent-preflight against the session cwd and, on a ready:true result,
-# records \`preflight:\${REPO}\` to the evidence ledger. It needs the
-# \`preflight\` binary on PATH (\`npm i -g @lannguyensi/agent-preflight\`); when
-# that is absent the hook logs to stderr and exits 0, so the session is
-# never broken — the preflight gates just stay closed until a tag is
-# produced some other way.
 hooks:
-  - name: git-preflight
-    event: SessionStart
-    command: harness session-start preflight
-    blocking: false
-    # 70s budget gives the wrapped preflight (default 60s) headroom plus
-    # ledger-write time. Was 30s through v0.17.4, but a healthy preflight
-    # on a medium-size repo takes ~28s and the old 25s wrapper ceiling
-    # blew through it. Bumped together with DEFAULT_PREFLIGHT_TIMEOUT_MS
-    # (agent-tasks/7265599e).
-    budget_ms: 70000
-    # Floor raised to agent-preflight ${GIT_PREFLIGHT_HOOK_MIN_VERSION}
-    # (was 0.2.0): 0.2.0 was the release that made secret
-    # detection git-aware and diff-scoped: a gitignored+untracked .env,
-    # a .md doc, a non-git dir, or a secret in a tracked file the branch
-    # never touched is a non-blocking warn, not a hard fail. Pre-0.2.0
-    # installs hard-fail preflight on the normal correct state (a
-    # gitignored .env holding real credentials), so this SessionStart
-    # producer never writes a preflight: tag and the preflight-before-*
-    # policies stay closed forever on any repo with a local .env. (0.1.1
-    # had already fixed the wrapper-script "tool not installed" false
-    # positive.) ${GIT_PREFLIGHT_HOOK_MIN_VERSION} is also the release
-    # that made \`session_start_preflight.setup\` build code, not only
-    # install dependencies (agent-preflight PR #72, tag v0.6.0);
-    # \`harness doctor\` warns independently, off its own floor, when an
-    # existing manifest's own floor is stale
-    # (src/cli/doctor/session-start-preflight-setup-version.ts), this
-    # template bump only affects a freshly generated manifest.
-    # version_command points at the source-of-truth preflight binary,
-    # not at the \`harness session-start preflight\` wrapper.
-    min_version: "${GIT_PREFLIGHT_HOOK_MIN_VERSION}"
-    version_command: ["preflight", "--version"]
-
-  # toolchain-parity (PATH-shim incident 2026-07-22 follow-up): writes THIS
-  # machine's toolchain snapshot (node version, npm globals, OW-Kit
-  # version, MCP server names) to \`toolchain_parity.machine_state_dir\`
-  # and advisorily compares it against every peer machine's snapshot
-  # already there, warning on drift (version mismatches, missing
-  # packages, node/OW-Kit drift, MCP-name differences). Purely advisory —
-  # no policy consumes the \`toolchain-parity:\` ledger fact this writes,
-  # it exists for \`harness audit\`/operator visibility only. If a policy
-  # ever does consume it, match with the \`:unparseable-peer:<n>\` suffix
-  # in mind: requires-matching is substring-based, so a bare
-  # \`toolchain-parity:ok\` tag would also match \`ok:unparseable-peer:2\`
-  # (a partial comparison). DISABLED by
-  # default (no \`toolchain_parity:\` block above): opt in with
-  # \`toolchain_parity: { enabled: true }\` (machine_state_dir/profile/
-  # workspace_root all have sane defaults — see docs/CLI.md). No external
-  # binary to floor-check (node/npm are assumed present already), so
-  # unlike git-preflight this hook carries no min_version/version_command.
-  - name: toolchain-parity
-    event: SessionStart
-    command: harness session-start toolchain-parity
-    blocking: false
-    # node --version + npm ls -g run in PARALLEL (bounded ~2s/~4s each, so
-    # max(2s,4s)=4s worst case for that pair), plus two near-instant file
-    # reads; the ledger write runs SEQUENTIALLY after those and carries its
-    # own timeout floor (resolveManifestLedgerWriter's default 5s absent an
-    # explicit grounding-mcp health.timeout_ms or a bound
-    # SessionStartToolchainParityOptions.ledgerTimeoutMs). Worst case is
-    # therefore additive, ~4s + 5s = 9s, not the sub-5s the collectors alone
-    # would suggest — 10s still clears it, but with only ~1s of margin, not
-    # the "comfortable" headroom an earlier version of this comment claimed
-    # (task c1b5ade5). Nowhere near git-preflight's 70s (which wraps a full
-    # external test suite, a fundamentally heavier operation this hook
-    # never performs).
-    budget_ms: 10000
-
   # Budget note (task 7bf47554, follow-up to the ms/seconds unit fix
   # f2d2a29): every \`harness policy intercept\` hook below down through
   # \`risk-gate\` carries \`budget_ms: 15000\`, i.e. a Claude Code outer
@@ -341,14 +246,6 @@ hooks:
     blocking: hard
     budget_ms: 15000
 
-  - name: require-preflight-evidence
-    event: PreToolUse
-    match: "Bash"
-    bash_match: '(^|\\n|;|\\||&|\\()\\s*(\\w+=\\S+\\s+)*git( -C \\S+)* (status|log|diff|branch)\\b'
-    command: harness policy intercept
-    blocking: hard
-    budget_ms: 15000
-
   - name: require-review-subagent-evidence
     event: PreToolUse
     match: "mcp__agent-tasks__pull_requests_create"
@@ -366,14 +263,6 @@ hooks:
     event: PreToolUse
     match: "Bash"
     bash_match: '(^|\\n|;|\\||&|\\()\\s*(\\w+=\\S+\\s+)*gh pr create\\b'
-    command: harness policy intercept
-    blocking: hard
-    budget_ms: 15000
-
-  - name: require-preflight-push-evidence
-    event: PreToolUse
-    match: "Bash"
-    bash_match: '(^|\\n|;|\\||&|\\()\\s*(\\w+=\\S+\\s+)*git( -C \\S+)* push\\b'
     command: harness policy intercept
     blocking: hard
     budget_ms: 15000
@@ -634,33 +523,6 @@ policies:
         example: '{sessionId:"\${SESSION_ID}", type:"fact", content:"review:\${PR_NUMBER} — <verdict + key findings + nits>", source:"Agent(general-purpose) review (reviewer 2)"}'
         description: Same shape as review-before-merge but TWO DISTINCT reviewer entries must exist before the gate is satisfied (count.min 2). Distinguish reviewers by source so the count is honest. Warn-level enforcement, so the agent CAN merge with one reviewer but should consider spawning a second for load-bearing changes.
 
-  - name: preflight-before-investigation
-    description: Block investigative git reads (status/log/diff/branch) when agent-preflight has not run recently with ready:true for the current repo.
-    trigger:
-      event: PreToolUse
-      match: "Bash"
-      bash_match: '(^|\\n|;|\\||&|\\()\\s*(\\w+=\\S+\\s+)*git( -C \\S+)* (status|log|diff|branch)\\b'
-    requires:
-      ledger_tag: "preflight:\${REPO}"
-      within: 1h
-    hook: require-preflight-evidence
-    enforcement: block
-    producers:
-      - kind: bash
-        command: harness session-start preflight
-        description: Runs agent-preflight against the current cwd; on ready:true, records preflight:\${REPO} to the ledger. Standard producer.
-      - kind: mcp
-        verb: mcp__grounding-mcp__ledger_add
-        example: '{sessionId:"\${SESSION_ID}", type:"fact", content:"preflight:\${REPO}", source:"manual"}'
-        description: Direct ledger write. Use when the Bash hook is locked down (e.g. understanding-gate active) or when the standard producer is unavailable.
-    ux:
-      cannot: "You cannot investigate this repository yet."
-      required:
-        - "verified repository preflight"
-        - "an approved Understanding Report, if the Understanding Gate is still active (it blocks \`harness preflight\` itself)"
-      run:
-        - "harness preflight"
-
   - name: review-subagent-before-pr-create
     description: Block agent-tasks PR creation unless a review-subagent ledger entry tagged for this task already exists. Forces the rigorous review BEFORE the PR opens, not after.
     trigger:
@@ -711,40 +573,6 @@ policies:
         - "a completed review-subagent pass on branch \${BRANCH}"
       run:
         - 'harness record review-subagent --task <task-id> --verdict <verdict>'
-
-  - name: preflight-before-push
-    description: Block git push unless a fresh preflight ledger entry exists for the current branch. Catches the stale-checkout class of incident at the last reversible step.
-    trigger:
-      event: PreToolUse
-      match: "Bash"
-      bash_match: '(^|\\n|;|\\||&|\\()\\s*(\\w+=\\S+\\s+)*git( -C \\S+)* push\\b'
-    requires:
-      ledger_tag: "preflight:\${BRANCH}"
-      within: 10m
-      # at_head:true lets a preflight at the current HEAD satisfy the
-      # gate at any age (the standard producer writes head:<sha> into
-      # the tag content). The 10m window remains the freshness ceiling
-      # for the head-mismatch case (operator switched branch, preflight
-      # predates HEAD shift, runtime couldn't resolve a sha).
-      at_head: true
-    hook: require-preflight-push-evidence
-    enforcement: block
-    producers:
-      - kind: bash
-        command: harness session-start preflight
-        description: Runs agent-preflight against the current cwd; on ready:true, records preflight:\${BRANCH} ready:true confidence:<n> head:<sha> to the ledger. Standard producer.
-      - kind: mcp
-        verb: mcp__grounding-mcp__ledger_add
-        example: '{sessionId:"\${SESSION_ID}", type:"fact", content:"preflight:\${BRANCH} head:<full-sha> — <summary of what is on the branch + smoke results>", source:"manual"}'
-        description: Direct ledger write. Include head:<full-sha> if you want the entry to count under at_head; the branch is the WIP review surface and the content should summarise what is staged + the smoke evidence so a reviewer can audit later without re-reading the chat.
-    ux:
-      cannot: "You cannot push branch \${BRANCH} yet."
-      required:
-        - "a preflight for \${BRANCH} at the current HEAD (any age) OR any preflight within the last 10 minutes. Re-run \`harness preflight\` if you committed since the last preflight AND it has been more than 10 minutes."
-        - "if solution-acceptance is enabled, a ready HEAD-pinned verdict at the SAME commit too (run \`solution_evaluate\`). \`git push\` trips both gates, so commit first if the tree is dirty, then satisfy both at one HEAD."
-        - "an approved Understanding Report, if the Understanding Gate is still active (it blocks \`harness preflight\` itself)"
-      run:
-        - "harness preflight"
 
   # Phase 7 Risk Gate — the canonical built-in worked example. These two
   # policies, with the dangerous-shell classifier and production-signals
@@ -1048,7 +876,7 @@ ${AUTO_APPROVE_SNIPPET}
   # branch-protection (agent-tasks/2fdc5bbe, default-enabled since v0.17.2):
   # blocks Write/Edit (claude-code) or apply_patch (codex) when git names a
   # protected branch (default: master, main, develop) for the directory the
-  # call writes into. Complements preflight-before-push, which fires at the
+  # call writes into. Complements the push-time gates, which fire at the
   # LAST reversible step; branch-protection fires at the FIRST source
   # mutation, catching the \"forgot to branch off master\" pattern earlier
   # in the cycle.

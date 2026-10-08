@@ -288,8 +288,8 @@ export async function issueDelegation(
       reason: "parent-session-unresolved",
       detail:
         "no parent session id available. Pass --session-id <id>, or set one of " +
-        "$CLAUDE_CODE_SESSION_ID / $CLAUDE_SESSION_ID / $CODEX_SESSION_ID, or run " +
-        "`harness preflight` (or trip the gate once) so harness.generated/.pending-approval is staged.",
+        "$CLAUDE_CODE_SESSION_ID / $CLAUDE_SESSION_ID / $CODEX_SESSION_ID, or trip " +
+        "the gate once so harness.generated/.pending-approval is staged.",
     };
   }
 

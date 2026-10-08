@@ -1639,7 +1639,7 @@ describe("interactive wizard — Custom path (task 31d2fbb5)", () => {
           ["agent-tasks", "grounding-mcp", "memory-router"],
           [
             "review-before-merge",
-            "preflight-before-investigation",
+            "dogfood-before-release",
             "review-subagent-before-pr-create",
           ],
           [], // wire-now skip
@@ -1663,7 +1663,7 @@ describe("interactive wizard — Custom path (task 31d2fbb5)", () => {
     expect(content).toContain("memory-router-user-prompt-submit");
     expect(content).toMatch(/router:\s*\n\s+command:\s*\n?\s*-\s+memory-router-user-prompt-submit/);
     expect(content).toContain("review-before-merge");
-    expect(content).toContain("preflight-before-investigation");
+    expect(content).toContain("dogfood-before-release");
     expect(content).toContain("review-subagent-before-pr-create");
     // No producer-coupling warnings since agent-tasks + grounding-mcp + pack are all selected.
     expect(cap.stderr()).not.toMatch(/composer warning/);
@@ -1965,7 +1965,7 @@ describe("interactive wizard — Full profile", () => {
     // Team does not ship.
     expect(content).toContain("review-before-merge");
     expect(content).toContain("dogfood-before-release");
-    expect(content).toContain("preflight-before-investigation");
+    expect(content).toContain("two-reviewers-required");
     // Regression guard: every hook in Full now uses the bundled
     // `harness policy intercept` engine. No hook's `command:` field
     // may reference an external .sh script.

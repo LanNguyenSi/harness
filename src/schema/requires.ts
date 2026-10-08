@@ -51,10 +51,9 @@ export const RequiresSchema = z
      * when no entry head-matches (entry predates the head shift,
      * operator switched branches, producer ran on a different HEAD,
      * runtime could not resolve the current HEAD). The producer must
-     * emit `head:<sha>` into the entry content for this to bite; the
-     * standard `harness session-start preflight` producer does so as
-     * of the `at_head` rollout. Designed for `preflight-before-push`
-     * to eliminate per-commit re-preflight churn while keeping the
+     * emit `head:<sha>` into the entry content for this to bite (a
+     * manual `ledger_add` writing a `head:<sha>` token satisfies it).
+     * Eliminates per-commit re-gate churn while keeping the
      * time-window as a freshness ceiling for the head-mismatch case.
      */
     at_head: z.boolean().optional(),

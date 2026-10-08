@@ -1,7 +1,5 @@
 import type { Command } from "commander";
 import { EX_USAGE, HarnessExitError } from "./exit-codes.js";
-import { createCliHelpers } from "./cli-helpers.js";
-import { addIdentityOptions, addLedgerTimeoutOption } from "./session-start/shared-options.js";
 import {
   formatSmokeReport,
   runSmoke,
@@ -15,7 +13,6 @@ export function registerSmokeGroup(
   io: { stdout: (s: string) => void; stderr: (s: string) => void },
 ): void {
   const { stdout } = io;
-  const { preflightAction } = createCliHelpers(io);
   program
     .command("smoke")
     .description(
@@ -111,21 +108,4 @@ export function registerSmokeGroup(
         throw new HarnessExitError("", result.exitCode);
       }
     });
-
-  // Top-level alias for `harness session-start preflight`, so the
-  // policy `ux.run:` field can show the short form the agent should
-  // type: `Run: harness preflight`.
-  addLedgerTimeoutOption(
-    addIdentityOptions(
-      program
-        .command("preflight")
-        .description(
-          "Alias for `harness session-start preflight`: run agent-preflight against the session cwd " +
-            "and, on a ready:true result, record a `preflight:${REPO}` fact to the evidence ledger. " +
-            "Opt-in `session_start_preflight.setup: true` (default off) passes --setup through; " +
-            "see docs/CLI.md for the trust and scope caveats.",
-        ),
-      "explicit session id (overrides stdin event + env)",
-    ).option("--timeout <ms>", "agent-preflight subprocess timeout in milliseconds (default 60000)"),
-  ).action(preflightAction);
 }

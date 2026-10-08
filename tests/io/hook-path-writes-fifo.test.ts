@@ -10,14 +10,13 @@
 // through the same child, so a case cannot pass because the module path or
 // export name was wrong.
 //
-// What each block pins: the toolchain-parity snapshot, the stay-in-scope
-// audit log, the lock target and the signing key's rotate path are pinned
-// end to end (a FIFO at the path, a bounded child). The adoption-ledger
-// blocks pin the whole append including its friendlier `lstat` refusal, which
-// is what a FIFO or symlink placed BEFORE the call hits; the open's own
-// defence (a node swapped in after the `lstat`) and the preflight fail log
-// (a freshly generated name) cannot be reached by a plain FIFO, so they are
-// pinned at the site, with the open flags recorded, in
+// What each block pins: the stay-in-scope audit log, the lock target and the
+// signing key's rotate path are pinned end to end (a FIFO at the path, a
+// bounded child). The adoption-ledger blocks pin the whole append including
+// its friendlier `lstat` refusal, which is what a FIFO or symlink placed
+// BEFORE the call hits; the open's own defence (a node swapped in after the
+// `lstat`) cannot be reached by a plain FIFO, so it is pinned at the site,
+// with the open flags recorded, in
 // `hook-path-write-sites.test.ts`. The last describe block holds the shared
 // helper's own FIFO cases, including the one with a reader attached.
 
@@ -49,53 +48,6 @@ try {
 function callInChild(modRel: string, fn: string, args: unknown[]): ChildRun {
   return runChild(CALL_SCRIPT, [distUrl(modRel), fn, JSON.stringify(args)]);
 }
-
-describe.skipIf(process.platform === "win32")("toolchain-parity: a FIFO at the own snapshot path is reported, never waited on", () => {
-  const PARITY_SCRIPT = `
-const [, modPath, schemaPath, stateDir, ws] = process.argv;
-const { Readable, Writable } = await import("node:stream");
-const mod = await import(modPath);
-const { parseManifest } = await import(schemaPath);
-let err = "";
-const stderr = new Writable({ write(c, _e, cb) { err += c; cb(); } });
-const manifest = parseManifest({ version: 1, toolchain_parity: { enabled: true, machine_state_dir: stateDir, profile: "own", workspace_root: ws } });
-const result = await mod.runSessionStartToolchainParity({
-  stdin: Readable.from(["{}"]), stderr, manifest, session: "s1", now: new Date("2026-10-06T00:00:00Z"),
-  runNodeVersion: async () => ({ ok: true, version: "v22.1.0" }),
-  runNpmGlobals: async () => ({ ok: true, packages: {} }),
-  readOwKitVersion: () => ({}), readMcpServerNames: () => ({ names: [] }),
-  writeLedger: async () => ({ ok: true }),
-});
-process.stdout.write(JSON.stringify({ result, stderr: err }));
-`;
-  function runParity(stateDir: string): ChildRun {
-    return runChild(PARITY_SCRIPT, [
-      distUrl("cli/session-start/toolchain-parity.js"),
-      distUrl("schema/index.js"),
-      stateDir,
-      tmp,
-    ]);
-  }
-
-  it("control: a regular own snapshot is rewritten", () => {
-    const state = path.join(tmp, "machine-state");
-    fs.mkdirSync(state);
-    fs.writeFileSync(path.join(state, "own.json"), "{}");
-    const run = runParity(state);
-    expectBounded(run);
-    expect(run.value).toBeDefined();
-    expect(JSON.parse(fs.readFileSync(path.join(state, "own.json"), "utf8"))).toMatchObject({ profile: "own" });
-  });
-
-  it("a FIFO at the own snapshot path fails the write within the bound and says so", () => {
-    const state = path.join(tmp, "machine-state");
-    fs.mkdirSync(state);
-    mkfifo(path.join(state, "own.json"));
-    const run = runParity(state);
-    expectBounded(run);
-    expect((run.value as { stderr: string }).stderr).toMatch(/could not write own snapshot: /);
-  });
-});
 
 describe.skipIf(process.platform === "win32")("stay-in-scope: a FIFO at the audit log path fails the append, never waits", () => {
   const SCOPE_SCRIPT = `

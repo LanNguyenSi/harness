@@ -36,8 +36,9 @@ export interface LoadedManifest {
   manifest: Manifest;
   resolved: ResolvedPaths;
   /**
-   * Removed manifest keys and removed packs the load stripped and ignored
-   * (src/schema/removed-keys.ts). `harness doctor` prints them.
+   * Removed manifest keys and removed packs the load stripped and ignored,
+   * and sites that still call a removed command (src/schema/removed-keys.ts).
+   * `harness doctor` and `harness apply` print them.
    */
   warnings: ManifestPostureWarning[];
 }

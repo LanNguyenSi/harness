@@ -1,35 +1,14 @@
 import { HarnessExitError } from "./exit-codes.js";
 import type { RecordResult } from "./record/index.js";
-import { runSessionStartPreflight } from "./session-start/index.js";
-import { writePendingApproval } from "../runtime/pending-approval.js";
-import { applyCliOptions, type SessionStartCliOptions } from "./session-start/shared-options.js";
 
 export function createCliHelpers(io: {
   stdout: (s: string) => void;
   stderr: (s: string) => void;
 }): {
-  preflightAction: (options: SessionStartCliOptions & { timeout?: string }) => Promise<void>;
   applyLedgerTimeout: (raw: string | undefined, cliOpts: { ledgerTimeoutMs?: number }) => void;
   reportRecordResult: (result: RecordResult) => void;
 } {
   const { stdout, stderr } = io;
-  // The action shared by `harness session-start preflight` and its
-  // top-level alias `harness preflight`: the alias delegates to the same
-  // implementation, with the same CLI options.
-  const preflightAction = async (options: SessionStartCliOptions & { timeout?: string }) => {
-    const cliOpts: Parameters<typeof runSessionStartPreflight>[0] = {};
-    applyCliOptions(options, cliOpts);
-    if (options.timeout) {
-      const n = Number.parseInt(options.timeout, 10);
-      if (Number.isFinite(n) && n > 0) cliOpts.preflightTimeoutMs = n;
-    }
-    // Opt into the bootstrap-staging side effect from the CLI entry
-    // point only. Library callers (vitest cases) get the no-op default
-    // so they cannot clobber the operator's real pending-approval file.
-    cliOpts.stagePendingApproval = writePendingApproval;
-    await runSessionStartPreflight(cliOpts);
-  };
-
   // Shared by the three `record` verbs' action handlers (src/cli/register-record-session-group.ts): parse
   // `--ledger-timeout <ms>` into `cliOpts.ledgerTimeoutMs`, and report a
   // `RecordResult` (print the recorded fact on success; on failure, throw
@@ -65,5 +44,5 @@ export function createCliHelpers(io: {
       throw new HarnessExitError("", result.exitCode);
     }
   };
-  return { preflightAction, applyLedgerTimeout, reportRecordResult };
+  return { applyLedgerTimeout, reportRecordResult };
 }
