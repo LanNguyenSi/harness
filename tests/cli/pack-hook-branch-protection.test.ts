@@ -123,9 +123,16 @@ function writeEvent(cwd: string, file: string, tool = "Write"): Record<string, u
   return { hook_event_name: "PreToolUse", session_id: "sess-1", tool_name: tool, cwd, tool_input: input };
 }
 
-function patchEvent(cwd: string, headers: string[], shape: "input" | "patch" | "string" = "input"): Record<string, unknown> {
-  const body = `*** Begin Patch\n${headers.map((h) => `${h}\n+x\n`).join("")}*** End Patch\n`;
-  const toolInput = shape === "string" ? body : { [shape]: body };
+function patchText(headers: string[]): string {
+  return `*** Begin Patch\n${headers.map((h) => `${h}\n+x\n`).join("")}*** End Patch\n`;
+}
+
+type PatchShape = "input" | "patch" | "string" | "command" | "argv";
+
+function patchEvent(cwd: string, headers: string[], shape: PatchShape = "input"): Record<string, unknown> {
+  const body = patchText(headers);
+  const toolInput =
+    shape === "string" ? body : shape === "argv" ? { command: ["apply_patch", body] } : { [shape]: body };
   return { hook_event_name: "PreToolUse", session_id: "sess-1", tool_name: "apply_patch", cwd, tool_input: toolInput };
 }
 
@@ -274,6 +281,185 @@ describe.skipIf(!GIT_AVAILABLE)("branch-protection hook: protected branches, rea
     const run = await runHook({ tool_name: "Bash", cwd: repo, tool_input: { command: "ls" } });
     expect(run.blocked).toBe(true);
     expect(run.diagnostic).toContain(`of ${repo} is protected`);
+  });
+});
+
+// The field Codex carries the patch text in is not pinned on a captured
+// payload, so the hook reads header lines from every string of the event:
+// any field of tool_input, an argv array, raw_input or input, and JSON text
+// inside a string. The cwd here is a feature-branch checkout, so only the
+// header can name the protected repository.
+describe.skipIf(!GIT_AVAILABLE)("branch-protection hook: apply_patch header lines are read from every string of the event, real git", () => {
+  const into = (prod: string): string[] => [`*** Update File: ${path.join(prod, "src", "x.ts")}`];
+  const event = (cwd: string, extra: Record<string, unknown>): Record<string, unknown> => ({
+    hook_event_name: "PreToolUse",
+    session_id: "sess-1",
+    tool_name: "apply_patch",
+    cwd,
+    ...extra,
+  });
+
+  it.each<[string, (body: string) => Record<string, unknown>]>([
+    ["tool_input.command as a string", (body) => ({ tool_input: { command: body } })],
+    ["tool_input.command as an argv array", (body) => ({ tool_input: { command: ["apply_patch", body] } })],
+    ["tool_input.command as a heredoc", (body) => ({ tool_input: { command: `apply_patch <<'EOF'\n${body}EOF\n` } })],
+    ["a nested field of tool_input", (body) => ({ tool_input: { args: { patch_text: body } } })],
+    ["JSON text inside a tool_input string", (body) => ({ tool_input: { arguments: JSON.stringify({ input: body }) } })],
+    ["raw_input", (body) => ({ raw_input: { command: body } })],
+    ["a top-level input string", (body) => ({ input: body })],
+  ])("a patch into a checkout on master carried in %s is refused", async (_name, shape) => {
+    const cwdRepo = makeRepo("feat/cwd");
+    const prod = makeRepo("master");
+    const run = await runHook(event(cwdRepo, shape(patchText(into(prod)))));
+    expect(run.blocked).toBe(true);
+    expect(run.diagnostic).toBe(`BLOCK: branch "master" of ${prod} is protected (master, main, develop)`);
+  });
+
+  it("a patch carried in tool_input.command into a checkout on a feature branch is allowed and judged by that checkout", async () => {
+    const cwdRepo = makeRepo("master");
+    const feat = makeRepo("feat/x");
+    const run = await runHook(event(cwdRepo, { tool_input: { command: ["apply_patch", patchText(into(feat))] } }));
+    expect(run.blocked).toBe(false);
+    expect(run.diagnostic).toBe(`patch ${feat}: branch "feat/x" is not in the protected list (master, main, develop); allowing`);
+  });
+
+  it("relative header paths are also resolved against a per-call workdir: a patch whose workdir is a checkout on master is refused", async () => {
+    const cwdRepo = makeRepo("feat/cwd");
+    const prod = makeRepo("master");
+    fs.mkdirSync(path.join(prod, "src"));
+    const run = await runHook(
+      event(cwdRepo, { tool_input: { command: ["apply_patch", patchText(["*** Update File: src/x.ts"])], workdir: prod } }),
+    );
+    expect(run.blocked).toBe(true);
+    expect(run.diagnostic).toBe(`BLOCK: branch "master" of ${path.join(prod, "src")} is protected (master, main, develop)`);
+  });
+
+  it("a patch without a header and a per-call workdir on master is refused (the workdir is checked with the event cwd)", async () => {
+    const cwdRepo = makeRepo("feat/cwd");
+    const prod = makeRepo("master");
+    const run = await runHook(event(cwdRepo, { tool_input: { command: "apply_patch", workdir: prod } }));
+    expect(run.blocked).toBe(true);
+    expect(run.diagnostic).toBe(`BLOCK: branch "master" of ${prod} is protected (master, main, develop)`);
+  });
+
+  it("Codex: a patch carried in tool_input.command into a checkout on master exits 2 with the reason on stderr", async () => {
+    const cwdRepo = makeRepo("feat/cwd");
+    const prod = makeRepo("master");
+    const run = await runHook(event(cwdRepo, { tool_input: { command: ["apply_patch", patchText(into(prod))] } }), {
+      runtime: "codex",
+    });
+    expect(run).toMatchObject({ exitCode: 2, blocked: true, stdout: "" });
+    expect(run.stderr).toContain('branch-protection: refusing apply_patch on protected branch "master"');
+  });
+});
+
+// Paths are judged where they physically lead, as git (which changes into
+// the directory) and the write itself resolve them: through symlinks, with
+// `..` taken from the directory reached so far. A target that is itself a
+// symlink is judged by its own directory and by the directory it leads to.
+describe.skipIf(!GIT_AVAILABLE || process.platform === "win32")("branch-protection hook: paths are judged where they physically lead, real git", () => {
+  /** A directory with no `.git` entry above it, or a visible skip. */
+  const outsideDir = (ctx: { skip: (note?: string) => void }): string => {
+    const dir = tmpDir("harness-bp-outside-");
+    if (hasGitEntryAbove(dir)) ctx.skip(`${dir} has a .git entry above it on this host`);
+    return dir;
+  };
+  const protectedSrc = (): { repo: string; src: string } => {
+    const repo = makeRepo("master", { commit: true });
+    const src = path.join(repo, "src");
+    fs.mkdirSync(src);
+    fs.writeFileSync(path.join(src, "real.ts"), "x\n");
+    return { repo, src };
+  };
+
+  it("a Write through a directory symlink from outside every repository into a checkout on master is refused", async (ctx) => {
+    const outside = outsideDir(ctx);
+    const { src } = protectedSrc();
+    fs.symlinkSync(src, path.join(outside, "link"));
+    const run = await runHook(writeEvent(outside, path.join(outside, "link", "a.ts")));
+    expect(run.blocked).toBe(true);
+    expect(run.diagnostic).toBe(`BLOCK: branch "master" of ${src} is protected (master, main, develop)`);
+  });
+
+  it("an Edit of a file symlink from outside every repository to a file in a checkout on master is refused", async (ctx) => {
+    const outside = outsideDir(ctx);
+    const { src } = protectedSrc();
+    fs.symlinkSync(path.join(src, "real.ts"), path.join(outside, "file-link.ts"));
+    const run = await runHook(writeEvent(outside, path.join(outside, "file-link.ts"), "Edit"));
+    expect(run.blocked).toBe(true);
+    expect(run.diagnostic).toBe(`BLOCK: branch "master" of ${src} is protected (master, main, develop)`);
+  });
+
+  it("a Write to a dangling file symlink from outside every repository into a checkout on master is refused", async (ctx) => {
+    const outside = outsideDir(ctx);
+    const { src } = protectedSrc();
+    fs.symlinkSync(path.join(src, "new.ts"), path.join(outside, "dangling.ts"));
+    const run = await runHook(writeEvent(outside, path.join(outside, "dangling.ts")));
+    expect(run.blocked).toBe(true);
+    expect(run.diagnostic).toBe(`BLOCK: branch "master" of ${src} is protected (master, main, develop)`);
+  });
+
+  it("a Write to a path that goes up from a symlink's target lands, and is refused, in the checkout on master", async (ctx) => {
+    const outside = outsideDir(ctx);
+    const { repo, src } = protectedSrc();
+    fs.symlinkSync(src, path.join(outside, "link"));
+    const run = await runHook(writeEvent(outside, `${outside}/link/../b.ts`));
+    expect(run.blocked).toBe(true);
+    expect(run.diagnostic).toBe(`BLOCK: branch "master" of ${repo} is protected (master, main, develop)`);
+  });
+
+  it("a relative target from an event cwd that is a symlink into a checkout on master is refused", async (ctx) => {
+    const outside = outsideDir(ctx);
+    const { src } = protectedSrc();
+    fs.symlinkSync(src, path.join(outside, "link"));
+    const run = await runHook(writeEvent(path.join(outside, "link"), "a.ts", "Edit"));
+    expect(run.blocked).toBe(true);
+    expect(run.diagnostic).toBe(`BLOCK: branch "master" of ${src} is protected (master, main, develop)`);
+  });
+
+  it("a tool without a target path, from an event cwd that is a symlink to the root of a checkout on master, is refused", async (ctx) => {
+    const outside = outsideDir(ctx);
+    const { repo } = protectedSrc();
+    fs.symlinkSync(repo, path.join(outside, "repo-link"));
+    const run = await runHook({ tool_name: "Bash", cwd: path.join(outside, "repo-link"), tool_input: { command: "ls" } });
+    expect(run.blocked).toBe(true);
+    expect(run.diagnostic).toBe(`BLOCK: branch "master" of ${repo} is protected (master, main, develop)`);
+  });
+
+  it("an apply_patch header through a directory symlink from outside every repository into a checkout on master is refused", async (ctx) => {
+    const outside = outsideDir(ctx);
+    const { src } = protectedSrc();
+    fs.symlinkSync(src, path.join(outside, "link"));
+    const run = await runHook(patchEvent(outside, ["*** Add File: link/new.ts"]), { runtime: "codex" });
+    expect(run).toMatchObject({ exitCode: 2, blocked: true, stdout: "" });
+    expect(run.diagnostic).toBe(`BLOCK: branch "master" of ${src} is protected (master, main, develop)`);
+  });
+
+  it("a Write through a directory symlink in a checkout on master into a checkout on a feature branch is allowed (judged by the feature branch)", async () => {
+    const { repo } = protectedSrc();
+    const feat = makeRepo("feat/x");
+    fs.symlinkSync(feat, path.join(repo, "to-feat"));
+    const run = await runHook(writeEvent(repo, path.join(repo, "to-feat", "a.ts")));
+    expect(run.blocked).toBe(false);
+    expect(run.diagnostic).toBe(`target ${feat}: branch "feat/x" is not in the protected list (master, main, develop); allowing`);
+  });
+
+  it("a Write through a directory symlink in a checkout on master to a directory outside every repository is allowed (the write lands outside every repository)", async (ctx) => {
+    const outside = outsideDir(ctx);
+    const { repo } = protectedSrc();
+    fs.symlinkSync(outside, path.join(repo, "to-outside"));
+    const run = await runHook(writeEvent(repo, path.join(repo, "to-outside", "a.ts")));
+    expect(run.blocked).toBe(false);
+    expect(run.diagnostic).toBe(`target ${outside}: outside any git repository; allowing`);
+  });
+
+  it("an Edit of a file symlink in a checkout on a feature branch to a file in a checkout on master is refused", async () => {
+    const { src } = protectedSrc();
+    const feat = makeRepo("feat/x");
+    fs.symlinkSync(path.join(src, "real.ts"), path.join(feat, "link.ts"));
+    const run = await runHook(writeEvent(feat, path.join(feat, "link.ts"), "Edit"));
+    expect(run.blocked).toBe(true);
+    expect(run.diagnostic).toBe(`BLOCK: branch "master" of ${src} is protected (master, main, develop)`);
   });
 });
 
@@ -480,6 +666,16 @@ describe("branch-protection hook: git errors refuse (injected runner)", () => {
       "git exited 128: fatal: not a git repository (or any of the parent directories): .git",
     ],
     ["exit 1 with output", { kind: "exited", code: 1, stdout: "refs/heads/feat/x\n", stderr: "" }, "git exited 1"],
+    [
+      "exit 1 with nothing on stdout but text on stderr",
+      {
+        kind: "exited",
+        code: 1,
+        stdout: "",
+        stderr: "xcrun: error: invalid active developer path (/Library/Developer/CommandLineTools)\n",
+      },
+      "git exited 1: xcrun: error: invalid active developer path (/Library/Developer/CommandLineTools)",
+    ],
     ["output past the cap", { kind: "oversized", stderr: "" }, "git's output passed 4096 bytes"],
   ])("%s refuses with one fixed sentence naming what git said", async (_name, a, detail) => {
     const dir = dirWithGit();
@@ -506,7 +702,7 @@ describe("branch-protection hook: git errors refuse (injected runner)", () => {
     expect(run.diagnostic.endsWith("...")).toBe(true);
   });
 
-  it("an exit 1 with nothing on stdout is a detached HEAD and allows", async () => {
+  it("an exit 1 with nothing on stdout and nothing on stderr is a detached HEAD and allows", async () => {
     const dir = dirWithGit();
     const run = await runHook(writeEvent(dir, path.join(dir, "x.ts")), {
       gitReader: answer({ kind: "exited", code: 1, stdout: "", stderr: "" }),
@@ -576,6 +772,11 @@ describe("branch-protection hook: the decision table (injected runner)", () => {
     { name: "a detached HEAD", answer: { kind: "exited", code: 1, stdout: "", stderr: "" }, refuses: false },
     { name: "a fatal exit", answer: { kind: "exited", code: 128, stdout: "", stderr: "fatal: no\n" }, refuses: true },
     { name: "exit 1 with output", answer: { kind: "exited", code: 1, stdout: "x\n", stderr: "" }, refuses: true },
+    {
+      name: "exit 1 with text on stderr only",
+      answer: { kind: "exited", code: 1, stdout: "", stderr: "xcrun: error: invalid active developer path\n" },
+      refuses: true,
+    },
     { name: "an exit-0 answer naming a tag", answer: { kind: "exited", code: 0, stdout: "refs/tags/v1\n", stderr: "" }, refuses: true },
     { name: "a signal", answer: { kind: "signaled", signal: "SIGKILL", stderr: "" }, refuses: true },
     { name: "a timeout", answer: { kind: "timed-out", timeoutMs: 2000, stderr: "" }, refuses: true },
@@ -591,6 +792,12 @@ describe("branch-protection hook: the decision table (injected runner)", () => {
     { name: "apply_patch without a header", event: (d) => ({ tool_name: "apply_patch", cwd: d, tool_input: { input: "nothing" } }), dirs: 1 },
     { name: "apply_patch with one header", event: (d) => patchEvent(d, ["*** Add File: a/x.ts"]), dirs: 1 },
     { name: "apply_patch with several headers", event: (d) => patchEvent(d, ["*** Add File: a/x.ts", "*** Update File: b/y.ts"]), dirs: 2 },
+    { name: "apply_patch with one header under tool_input.command", event: (d) => patchEvent(d, ["*** Add File: a/x.ts"], "command"), dirs: 1 },
+    {
+      name: "apply_patch with several headers in a tool_input.command argv array",
+      event: (d) => patchEvent(d, ["*** Add File: a/x.ts", "*** Update File: b/y.ts"], "argv"),
+      dirs: 2,
+    },
     { name: "Bash (no target path)", event: (d) => ({ tool_name: "Bash", cwd: d, tool_input: { command: "ls" } }), dirs: 1 },
   ];
   const rows = SHAPES.flatMap((shape) => OUTCOMES.map((outcome) => ({ shape, outcome })));
@@ -681,6 +888,61 @@ describe.skipIf(!GIT_AVAILABLE)("branch-protection hook: the hook's own environm
     const run = await runHook(writeEvent(dir, path.join(dir, "x.ts")));
     expect(run.blocked).toBe(true);
     expect(run.diagnostic).toMatch(new RegExp(`^BLOCK: git could not report the branch of ${dir.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}: git exited 128: fatal: `));
+  });
+});
+
+// A detached HEAD is git exiting 1 with nothing on stdout and nothing on
+// stderr (`symbolic-ref -q` prints nothing then). An exit 1 that writes to
+// stderr is something else failing, a wrapper in front of git for example,
+// and refuses like every other error.
+describe.skipIf(!GIT_AVAILABLE || process.platform === "win32")("branch-protection hook: a git that exits 1 with a message refuses, real runner", () => {
+  const standInGit = (): void => {
+    const bin = tmpDir("harness-bp-fake-git-");
+    fs.writeFileSync(
+      path.join(bin, "git"),
+      '#!/bin/sh\necho "xcrun: error: invalid active developer path (/Library/Developer/CommandLineTools)" >&2\nexit 1\n',
+      { mode: 0o755 },
+    );
+    setEnv("PATH", `${bin}${path.delimiter}${process.env["PATH"] ?? ""}`);
+  };
+
+  it.each(["claude-code", "codex"])("%s: a Write into a checkout on main with a stand-in git (stderr text, exit 1) on PATH is refused", async (runtime) => {
+    const repo = makeRepo("main");
+    standInGit();
+    const run = await runHook(writeEvent(repo, path.join(repo, "x.ts")), { runtime });
+    expect(run.blocked).toBe(true);
+    expect(run.diagnostic).toBe(
+      `BLOCK: git could not report the branch of ${repo}: git exited 1: xcrun: error: invalid active developer path (/Library/Developer/CommandLineTools)`,
+    );
+    if (runtime === "codex") expect(run).toMatchObject({ exitCode: 2, stdout: "" });
+    else expect(envelope(run).decision).toBe("block");
+  });
+
+  const XCRUN_SHIM = process.platform === "darwin" && fs.existsSync("/usr/bin/xcrun") && fs.existsSync("/usr/bin/git");
+  it.skipIf(!XCRUN_SHIM)("macOS: the /usr/bin/git shim failing for a missing developer directory refuses a Write into a checkout on main", async () => {
+    const repo = makeRepo("main");
+    setEnv("PATH", "/usr/bin:/bin");
+    setEnv("DEVELOPER_DIR", path.join(tmpDir("harness-bp-devdir-"), "missing"));
+    const run = await runHook(writeEvent(repo, path.join(repo, "x.ts")));
+    expect(run.blocked).toBe(true);
+    expect(run.diagnostic).toMatch(/^BLOCK: git could not report the branch of .*: git exited 1: xcrun: error: /);
+  });
+});
+
+// The presence walk counts a `.git` it cannot examine (an lstat failing
+// for another reason than a missing path) as present, so git is asked; git
+// cannot answer for that directory either, and the hook refuses.
+describe.skipIf(!GIT_AVAILABLE || process.platform === "win32" || process.getuid?.() === 0)("branch-protection hook: a directory whose .git cannot be examined", () => {
+  it("a Write into a directory that cannot be searched is refused with git's own message", async (ctx) => {
+    const root = tmpDir("harness-bp-locked-");
+    if (hasGitEntryAbove(root)) ctx.skip(`${root} has a .git entry above it on this host`);
+    const locked = path.join(root, "locked");
+    fs.mkdirSync(locked);
+    fs.chmodSync(locked, 0o600);
+    cleanups.push(() => fs.chmodSync(locked, 0o755));
+    const run = await runHook(writeEvent(root, path.join(locked, "x.ts")));
+    expect(run.blocked).toBe(true);
+    expect(run.diagnostic).toMatch(new RegExp(`^BLOCK: git could not report the branch of ${locked.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}: git exited 128: fatal: `));
   });
 });
 

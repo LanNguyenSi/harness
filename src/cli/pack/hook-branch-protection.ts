@@ -7,13 +7,21 @@
 // (`git -C <dir> symbolic-ref -q HEAD`, src/runtime/git-branch.ts); this hook
 // never reads git's files itself.
 //
-// Directories checked:
+// Directories checked, each as the operating system resolves the path
+// (symlinks followed, `..` taken from the directory reached so far), which is
+// where the write lands and where `git -C` looks:
 //   - Write, Edit, MultiEdit, NotebookEdit: the nearest existing directory of
-//     the target path (a Write may create the directories in between).
-//   - Codex `apply_patch`: the nearest existing directory of every path named
-//     by an `*** Add File:`, `*** Update File:`, `*** Delete File:` or
-//     `*** Move to:` header, relative to the event cwd.
-//   - Anything else, or a patch without a header: the event cwd.
+//     the target path (a Write may create the directories in between), and,
+//     when the target is a symlink, the directory it leads to as well.
+//   - Codex `apply_patch`: the same for every path named by an
+//     `*** Add File:`, `*** Update File:`, `*** Delete File:` or
+//     `*** Move to:` header line found in any string of the event (any field
+//     or array of tool_input, raw_input or input, and JSON text inside a
+//     string: the field Codex carries the patch in is not pinned). A relative
+//     path resolves against the event cwd and, when the tool input names a
+//     per-call `workdir` or `cwd`, against that as well.
+//   - Anything else, or a patch without a header: the event cwd (and a
+//     per-call `workdir` or `cwd` of an `apply_patch`).
 //
 // Decision, per directory: git names a protected branch (compared
 // case-insensitively) -> refuse; git could not answer (any error, a timeout,
@@ -37,8 +45,10 @@ import {
 } from "../../policy-packs/builtin/branch-protection-runtime.js";
 import {
   GIT_BRANCH_TIMEOUT_MS,
+  absolutePath,
   nearestExistingDirectory,
   readBranch,
+  writeTargetDirectories,
   type GitHeadReader,
 } from "../../runtime/git-branch.js";
 import { renderAgentFacing } from "../../runtime/agent-facing.js";
@@ -97,6 +107,8 @@ interface ToolEventLite {
   tool?: unknown;
   cwd?: unknown;
   tool_input?: unknown;
+  raw_input?: unknown;
+  input?: unknown;
 }
 
 /** Target path of the Claude Code tools that write a single file. */
@@ -115,25 +127,69 @@ function singleTargetPath(toolName: string, toolInput: unknown): string | null {
   }
 }
 
-/** The patch text of a Codex `apply_patch` call, in the forms Codex sends. */
-function patchBody(toolInput: unknown): string {
-  if (typeof toolInput === "string") return toolInput;
-  if (typeof toolInput !== "object" || toolInput === null) return "";
-  const input = toolInput as Record<string, unknown>;
-  return pickString(input["patch"], input["input"]) ?? "";
+/**
+ * Every string in `value`, in document order: objects and arrays are walked,
+ * and a string holding JSON text is parsed and walked too.
+ */
+function stringsIn(value: unknown): string[] {
+  const out: string[] = [];
+  const stack: unknown[] = [value];
+  while (stack.length > 0) {
+    const v = stack.pop();
+    if (typeof v === "string") {
+      out.push(v);
+      const t = v.trim();
+      if (t.startsWith("{") || t.startsWith("[")) {
+        try {
+          stack.push(JSON.parse(t));
+        } catch {
+          /* not JSON text */
+        }
+      }
+    } else if (Array.isArray(v)) {
+      for (let i = v.length - 1; i >= 0; i -= 1) stack.push(v[i]);
+    } else if (typeof v === "object" && v !== null) {
+      const children = Object.values(v as Record<string, unknown>);
+      for (let i = children.length - 1; i >= 0; i -= 1) stack.push(children[i]);
+    }
+  }
+  return out;
 }
 
 const PATCH_HEADER = /^\*\*\*\s*(?:Add File|Update File|Delete File|Move to):\s*(.+)$/;
 
-/** Every path an `apply_patch` body names in a file header. */
-export function patchTargetPaths(toolInput: unknown): string[] {
+/**
+ * Every path an `apply_patch` call names in a file header line, read from
+ * every string of `value` (the whole event, or any part of it).
+ */
+export function patchTargetPaths(value: unknown): string[] {
   const out: string[] = [];
-  for (const raw of patchBody(toolInput).split("\n")) {
-    const m = PATCH_HEADER.exec(raw.trim());
-    const target = m?.[1]?.trim() ?? "";
-    if (target.length > 0) out.push(target);
+  for (const text of stringsIn(value)) {
+    for (const raw of text.split("\n")) {
+      const m = PATCH_HEADER.exec(raw.trim());
+      const target = m?.[1]?.trim() ?? "";
+      if (target.length > 0) out.push(target);
+    }
   }
   return out;
+}
+
+/**
+ * The directories an `apply_patch` call's relative paths resolve against:
+ * the event cwd, plus a per-call `workdir` or `cwd` named in tool_input,
+ * raw_input or input.
+ */
+function patchBaseDirectories(event: ToolEventLite, cwd: string): string[] {
+  const bases = [cwd];
+  for (const holder of [event.tool_input, event.raw_input, event.input]) {
+    if (typeof holder !== "object" || holder === null || Array.isArray(holder)) continue;
+    const fields = holder as Record<string, unknown>;
+    for (const key of ["workdir", "cwd"]) {
+      const value = pickString(fields[key]);
+      if (value !== undefined) bases.push(absolutePath(value, cwd));
+    }
+  }
+  return [...new Set(bases)];
 }
 
 interface CheckTargets {
@@ -141,12 +197,15 @@ interface CheckTargets {
   dirs: string[];
 }
 
-function checkTargets(toolName: string, toolInput: unknown, cwd: string): CheckTargets {
-  const single = singleTargetPath(toolName, toolInput);
-  const paths = single !== null ? [single] : toolName === "apply_patch" ? patchTargetPaths(toolInput) : [];
-  if (paths.length === 0) return { source: "cwd", dirs: [nearestExistingDirectory(cwd)] };
-  const dirs = paths.map((p) => nearestExistingDirectory(path.dirname(path.resolve(cwd, p))));
-  return { source: single !== null ? "target" : "patch", dirs: [...new Set(dirs)] };
+function checkTargets(toolName: string, event: ToolEventLite, cwd: string): CheckTargets {
+  const single = singleTargetPath(toolName, event.tool_input);
+  if (single !== null) return { source: "target", dirs: writeTargetDirectories(single, cwd) };
+  if (toolName !== "apply_patch") return { source: "cwd", dirs: [nearestExistingDirectory(cwd)] };
+  const bases = patchBaseDirectories(event, cwd);
+  const paths = patchTargetPaths(event);
+  if (paths.length === 0) return { source: "cwd", dirs: [...new Set(bases.map((b) => nearestExistingDirectory(b)))] };
+  const dirs = paths.flatMap((p) => (path.isAbsolute(p) ? [cwd] : bases).flatMap((b) => writeTargetDirectories(p, b)));
+  return { source: "patch", dirs: [...new Set(dirs)] };
 }
 
 function claudeBlockEnvelope(reason: string): string {
@@ -241,7 +300,8 @@ export async function runPackHookBranchProtectionCli(
 
   const toolName = pickString(event.tool_name, event.tool) ?? "(unknown)";
   const sessionId = pickString(event.session_id) ?? "";
-  const cwd = path.resolve(pickString(opts.cwd, event.cwd) ?? process.cwd());
+  // Kept as written: the directories are resolved through the filesystem.
+  const cwd = absolutePath(pickString(opts.cwd, event.cwd) ?? process.cwd());
 
   // Without the manifest the gate cannot know whether it is enabled or what
   // is protected, so a load failure refuses.
@@ -264,7 +324,7 @@ export async function runPackHookBranchProtectionCli(
     "harness pack hook branch-protection",
   );
 
-  const targets = checkTargets(toolName, event.tool_input, cwd);
+  const targets = checkTargets(toolName, event, cwd);
   const deadlineMs = opts.gitDeadlineMs ?? GIT_READ_DEADLINE_MS;
   const perCallMs = opts.gitTimeoutMs ?? GIT_BRANCH_TIMEOUT_MS;
   const deadline = startedAt + deadlineMs;

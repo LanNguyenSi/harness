@@ -31,18 +31,29 @@ On every call the blocker asks git for the branch (task `a4d8adc5`); it
 never reads git's files itself, and it keeps no ledger tag, session
 state or override marker.
 
-1. **Directories.** For `Write`, `Edit`, `MultiEdit` and `NotebookEdit`
-   it takes the nearest existing directory of the target path (a `Write`
-   may create the directories in between). For a Codex `apply_patch` it
-   takes the nearest existing directory of every path named by a
-   `*** Add File:`, `*** Update File:`, `*** Delete File:` or
-   `*** Move to:` header, relative to the event cwd. For any other tool,
-   or a patch without a header, it takes the event cwd. Each distinct
-   directory is checked.
-2. **Presence walk.** From the directory up to the filesystem root it
-   looks (with `lstat`, nothing is read) for an entry named `.git`. When
-   there is none, the directory is outside every repository and git is
-   not run.
+1. **Directories.** Every path is taken as the operating system resolves
+   it: symlinks are followed and `..` steps up from the directory reached
+   so far. That is where the write lands and where `git -C` looks. For
+   `Write`, `Edit`, `MultiEdit` and `NotebookEdit` it takes the nearest
+   existing directory of the target path (a `Write` may create the
+   directories in between) and, when the target is itself a symlink, the
+   directory the symlink leads to as well (one that does not resolve yet is
+   followed by its text). For a Codex `apply_patch` it does the same for
+   every path named by an `*** Add File:`, `*** Update File:`,
+   `*** Delete File:` or `*** Move to:` header line found in any string of
+   the event: any field or array of `tool_input`, `raw_input` or `input`,
+   and JSON text inside a string. The field Codex carries the patch text in
+   is not pinned on a captured payload, so the blocker relies on no single
+   field. A relative path resolves against the event cwd and, when the tool
+   input names a per-call `workdir` or `cwd`, against that as well. For any
+   other tool, or a patch without a header, it takes the event cwd (and
+   that per-call directory). Each distinct directory is checked.
+2. **Presence walk.** From the physical directory up to the filesystem
+   root it looks (with `lstat`, nothing is read) for an entry named
+   `.git`. When there is none, the directory is outside every repository
+   and git is not run. An `lstat` that fails for another reason than a
+   missing path (a directory that cannot be searched, a symlink loop)
+   counts as present, and git decides.
 3. **git.** Otherwise it runs `git -C <dir> symbolic-ref -q HEAD`
    directly (no shell), with stdin closed, each output stream capped at
    4 KiB, every `GIT_*` variable removed from git's environment
@@ -59,12 +70,12 @@ state or override marker.
 | git says | The tool call | What to do |
 |---|---|---|
 | `refs/heads/<name>` and `<name>` is protected (compared case-insensitively, so `Master` counts as `master`) | **refused** | Branch off: `git checkout -b <feature>`, then retry. |
-| anything it cannot answer: an error exit, a signal, no answer within the bound, git missing from `PATH`, output past the cap, or an exit-0 answer that is not `refs/heads/<name>` (a `HEAD` naming a tag, for example) | **refused**, with one fixed sentence naming git's first stderr line | Fix the repository (run `git -C <dir> symbolic-ref -q HEAD` yourself to see what git says), or disable the gate from an operator shell (below). |
+| anything it cannot answer: an error exit (an exit 1 with any output on stdout or stderr included, such as a wrapper in front of git that fails), a signal, no answer within the bound, git missing from `PATH`, output past the cap, or an exit-0 answer that is not `refs/heads/<name>` (a `HEAD` naming a tag, for example) | **refused**, with one fixed sentence naming git's first stderr line | Fix the repository (run `git -C <dir> symbolic-ref -q HEAD` yourself to see what git says), or disable the gate from an operator shell (below). |
 | nothing, because there is no `.git` entry above the directory (outside every repository) | **allowed** | Nothing. |
 
-A detached HEAD (git exits 1 with no output) is allowed as well: an edit
-there does not land on a protected branch by itself, and pushes are
-outside this gate's scope.
+A detached HEAD (git exits 1 with no output on stdout or stderr) is
+allowed as well: an edit there does not land on a protected branch by
+itself, and pushes are outside this gate's scope.
 
 A planted layout git does not accept (a broken `HEAD` in a nested
 `.git`, for example) either stops git with an error (refused) or makes
