@@ -15,8 +15,8 @@ for pre-`v0.24.0` installs; `HARNESS_HOME` and `--state` override it):
 - `harness.lock` (the post-`apply` content-hash record).
 - `harness.generated/` (the rendered tree: `settings.json` overlays,
   hook scripts, policy-pack assets, `.approvals/` markers).
-- `.understanding-gate/` (the persisted understanding-gate reports and
-  parse-error logs).
+- `.understanding-gate/` (legacy cleanup: the persisted reports and
+  parse-error logs of the removed understanding gate).
 
 The remaining items live under the Claude Code config dir `~/.claude/`,
 where `settings.json` itself lives:
