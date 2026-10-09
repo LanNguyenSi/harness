@@ -101,7 +101,6 @@ const isRemovedCommandDiag = (d: { message: string }) => d.message.includes(", r
 const NOOP_PROBES = {
   versionProbe: () => null,
   builtinRuntimeProbe: () => [] as string[],
-  gitIgnoreProbe: () => null,
 };
 
 const NO_CLAUDE_CLI: ClaudeMcpExec = async () => ({ code: 127, stdout: "", stderr: "", enoent: true, timedOut: false });

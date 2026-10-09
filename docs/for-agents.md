@@ -286,7 +286,7 @@ operator-driven flows.
 | `init --probe` | read-only | prints a JSON snapshot of detected runtimes + MCPs + manifest; no writes. |
 | `adopt` | mutating | reverse engineers a manifest from an existing settings.json. |
 | `export` | read-only (writes a file only with `-o <file>`) | prints the operator-declared manifest (overrides merged, workflows[]-derived policies omitted) to stdout; `-o <file>` writes it to a file instead. |
-| `pack add / remove / list / reseed` | mutating (add/remove/reseed), read-only (list) | manages `policy_packs:` entries in the manifest. Three builtin packs: `understanding-before-execution`, `branch-protection`, `solution-acceptance`. `reseed <name>` pulls the shipped template's config back onto a drifted entry. |
+| `pack add / remove / list / reseed` | mutating (add/remove/reseed), read-only (list) | manages `policy_packs:` entries in the manifest. Two builtin packs: `understanding-before-execution`, `branch-protection`. `reseed <name>` pulls the shipped template's config back onto a drifted entry. |
 | `approve understanding --session <id>` | mutating | operator action that approves a captured Understanding Report (round-trips evidence-ledger tag + persisted JSON). Required before write-capable tools fire under the understanding-before-execution pack. |
 | `doctor --target codex` | read-only | verifies Codex adapter wiring after `apply --runtime codex`. `--json` for machine-readable output. |
 | `doctor --target opencode` | read-only | verifies opencode adapter wiring after `apply --runtime opencode` (config artefact presence/banner + every projected MCP server's command resolves on PATH). `--json` for machine-readable output. |

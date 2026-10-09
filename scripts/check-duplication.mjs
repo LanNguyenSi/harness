@@ -49,18 +49,18 @@ import * as path from "node:path";
 // `cli/register-pack-group.ts` command registration deliberately mirrored the
 // SAME pre-existing patterns the two prior raises above already tolerate:
 // the `--config`/`--project`/`--ledger-timeout`/`--cwd` option-parsing +
-// action-body shape shared by `branch-protection` / `solution-acceptance` /
-// `codex-pre-tool-use`'s CLI wiring in `cli/register-pack-group.ts`, and the
-// `findGroundingMcp` + ledger-probe boilerplate
-// `hook-branch-protection.ts` / `hook-solution-acceptance.ts` already
-// duplicate against each other. The post-merge-gate pack files were removed
-// in task 2ce6933f (see the lowering to 73 below).
+// action-body shape shared by the pack hook verbs' CLI wiring in
+// `cli/register-pack-group.ts`, and the `findGroundingMcp` + ledger-probe
+// boilerplate the sibling pack hooks already duplicate against each other.
+// The post-merge-gate pack files were removed in task 2ce6933f (see the
+// lowering to 73 below); the `branch-protection` / `solution-acceptance`
+// hook files named as examples here include ones removed in task cc5a4152.
 // Raised to 103 for the risk-gate read-only floor (agent-tasks fb67b402),
 // and this one is NOT new copy-paste — verified rather than assumed. That
-// task adds a `cd`-target pre-check plus a quote-stripping helper near the
-// top of `cli/pack/hook-solution-acceptance-writeguard.ts`. Diffing the
-// full jscpd clone set against master shows 3 pairs appearing and 2
-// disappearing, net +1, and all 3 new pairs are that file's PRE-EXISTING
+// task added a `cd`-target pre-check plus a quote-stripping helper near the
+// top of a pack write-guard hook since removed in task cc5a4152. Diffing
+// the full jscpd clone set against master showed 3 pairs appearing and 2
+// disappearing, net +1, and all 3 new pairs were that file's PRE-EXISTING
 // sibling-hook boilerplate — `pathToolTarget` / `bashCommandOf` / the CLI
 // runner body, matched against `hook-branch-protection.ts` and a sibling
 // hook file since removed in task 2ce6933f. None of them covers a line this

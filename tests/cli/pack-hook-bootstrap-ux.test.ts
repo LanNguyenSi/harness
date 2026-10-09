@@ -21,7 +21,6 @@ const HOOK_LABELS = [
   "harness pack hook",
   "harness pack hook codex",
   "harness pack hook branch-protection",
-  "harness pack hook solution-acceptance",
 ] as const;
 
 describe("hook-bootstrap parseConfigUx (shared, task 19e293c6)", () => {

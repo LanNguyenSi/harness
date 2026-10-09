@@ -204,21 +204,6 @@ describe("packReseed", () => {
     expect((caught as Error).message).toMatch(/"ghost-pack" not found/);
   });
 
-  it("errors clearly for a pack with no registered shipped default (solution-acceptance)", async () => {
-    await packAdd(
-      { name: "solution-acceptance", enabled: false },
-      { configPath: manifestPath },
-    );
-    let caught: unknown;
-    try {
-      await packReseed("solution-acceptance", { configPath: manifestPath });
-    } catch (e) {
-      caught = e;
-    }
-    expect(caught).toBeInstanceOf(HarnessExitError);
-    expect((caught as Error).message).toMatch(/nothing to reseed/);
-  });
-
   it("errors clearly when the manifest itself fails schema validation", async () => {
     // Duplicate pack names trip PolicyPacksSchema's superRefine, so
     // `parseManifest` throws before reseed ever gets to the pack lookup.

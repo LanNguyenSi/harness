@@ -19,8 +19,8 @@
 //       <generatedDir>/.permission-mode-observations   per-session PreToolUse
 //                                          permission_mode observations (task 8f637efd)
 //       <generatedDir>/.inflight       signed in-flight subagent records (subagent-gate slice 1)
-//     The evidence ledger (grounding-mcp) and solution-acceptance
-//     verdict dirs (producer-owned) are out of scope by design.
+//     The evidence ledger (grounding-mcp, producer-owned) is out of
+//     scope by design.
 //   - Deletion failures are surfaced loudly per file, never swallowed.
 //
 // DELEGATIONS SWEEP (task 3ece079d, follow-up from UG auto-mode slice 3,

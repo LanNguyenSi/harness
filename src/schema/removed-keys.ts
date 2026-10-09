@@ -72,6 +72,11 @@ export const REMOVED_PACK_NAMES: readonly RemovedPackName[] = [
     removedIn: "1.0.0",
     reason: "opt-in ledger-backed gate removed with the harness simplification",
   },
+  {
+    name: "solution-acceptance",
+    removedIn: "1.0.0",
+    reason: "opt-in verdict-gated completion gate removed with the harness simplification",
+  },
 ];
 
 export const REMOVED_MANIFEST_TABLE: RemovedManifestTable = {

@@ -89,11 +89,8 @@ export async function add(action: AddEntry, opts: AddOptions = {}): Promise<AddR
   // kept as a parity pin against validate, and to stay correct the moment
   // a future check does read manifest.policies at error severity.
   const manifest = withDerivedPolicies(parseManifest(parseYaml(proposed)));
-  // gitIgnoreProbe stays null: the knob-ignored check is warning-only and
-  // this gate consumes errors, so the git spawn would be wasted work.
   const proposedErrors = runAssetChecks(manifest, {
     homeDir: opts.homeDir,
-    gitIgnoreProbe: () => null,
   }).filter((d) => d.severity === "error");
 
   // Compute a baseline error set from the original manifest so that
@@ -105,7 +102,6 @@ export async function add(action: AddEntry, opts: AddOptions = {}): Promise<AddR
     const baselineManifest = withDerivedPolicies(parseManifest(parseYaml(original)));
     const baselineErrors = runAssetChecks(baselineManifest, {
       homeDir: opts.homeDir,
-      gitIgnoreProbe: () => null,
     }).filter((d) => d.severity === "error");
     baselineKeys = new Set(baselineErrors.map((d) => `${d.severity}|${d.path}|${d.message}`));
   } catch {

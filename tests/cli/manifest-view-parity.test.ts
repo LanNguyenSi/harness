@@ -122,7 +122,6 @@ const names = (policies: ReadonlyArray<{ name: string }>) => policies.map((p) =>
 const NOOP_PROBES = {
   versionProbe: () => null,
   builtinRuntimeProbe: () => [] as string[],
-  gitIgnoreProbe: () => null,
 };
 
 describeSuite("manifest view parity: derived-view readers", () => {

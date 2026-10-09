@@ -1,9 +1,7 @@
 // harness b56d95d3: the active-claim path read is three-way. A node there
 // that cannot be read as a claim (a FIFO, a directory, an oversized or
 // malformed file, a link that does not resolve) is REFUSED, not "no claim":
-// reading it as absent let the solution-acceptance gate fall back to the
-// SOLUTION_VERDICT_ID knob, and let a session approval bound to "no claim"
-// match.
+// reading it as absent let a session approval bound to "no claim" match.
 
 import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
@@ -11,7 +9,6 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { Readable, Writable } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { runPackHookSolutionAcceptanceCli } from "../../src/cli/pack/hook-solution-acceptance.js";
 import { runPackHookPreToolUseCli } from "../../src/cli/pack/hook-pre-tool-use.js";
 import type { LedgerEntry } from "../../src/policies/index.js";
 import {
@@ -27,9 +24,7 @@ import {
   writeApprovalMarker,
   writeTaskApprovalMarker,
 } from "../../src/policy-packs/builtin/understanding-before-execution-runtime.js";
-import { signVerdict, type Verdict } from "../../src/policy-packs/builtin/solution-acceptance-runtime.js";
 import { parseManifest } from "../../src/schema/index.js";
-import { addGitDirSkeleton } from "../_helpers/git-dir-fixture.js";
 
 let tmp: string;
 let generatedDir: string;
@@ -233,72 +228,5 @@ describe.skipIf(process.platform === "win32")("the understanding gate blocks on 
     writeApprovalMarker(generatedDir, SESSION, { approvedAt: new Date().toISOString(), approvedBy: "op" });
     execFileSync("mkfifo", [claimPath()]);
     expect(await gatedEdit()).toBe(true);
-  });
-});
-
-describe.skipIf(process.platform === "win32")("solution-acceptance does not fall back to SOLUTION_VERDICT_ID on a refused claim", () => {
-  const HEAD = "f30767afdc14013a48cd0c024a82213f2f63855a";
-  const SOLO = "solo-verdict";
-
-  function repoAtHead(): string {
-    const repo = path.join(tmp, "repo");
-    fs.mkdirSync(path.join(repo, ".git", "refs", "heads"), { recursive: true });
-    fs.writeFileSync(path.join(repo, ".git", "HEAD"), "ref: refs/heads/work\n");
-    addGitDirSkeleton(path.join(repo, ".git"));
-    fs.writeFileSync(path.join(repo, ".git", "refs", "heads", "work"), `${HEAD}\n`);
-    return repo;
-  }
-
-  function verdictDir(): string {
-    const dir = path.join(tmp, "verdicts");
-    fs.mkdirSync(dir);
-    const verdict: Verdict = {
-      id: SOLO,
-      head: HEAD,
-      ready: true,
-      confidence: 0.9,
-      blockers: [],
-      timestamp: "2026-05-30T00:00:00.000Z",
-      source: "preflight",
-    };
-    fs.writeFileSync(path.join(dir, `${SOLO}.json`), JSON.stringify(signVerdict(generatedDir, verdict)));
-    return dir;
-  }
-
-  async function runGate(): Promise<{ blocked: boolean; out: string }> {
-    const stdout = sink();
-    const repo = repoAtHead();
-    const res = await runPackHookSolutionAcceptanceCli({
-      stdin: Readable.from([
-        JSON.stringify({ session_id: "s1", tool_name: "mcp__agent-tasks__task_finish", cwd: repo }),
-      ]),
-      stdout: stdout.stream,
-      stderr: sink().stream,
-      cwd: repo,
-      verdictDir: verdictDir(),
-      // No `activeClaim` seam: the claim is READ from generatedDir.
-      manifest: parseManifest({
-        version: 1,
-        policy_packs: [{ name: "solution-acceptance", enabled: true, config: {} }],
-      }),
-      generatedDir,
-      env: { SOLUTION_VERDICT_ID: SOLO },
-    });
-    return { blocked: res.blocked, out: stdout.read() };
-  }
-
-  it("control: with no claim file, the SOLUTION_VERDICT_ID verdict at HEAD allows", async () => {
-    const { blocked, out } = await runGate();
-    expect(blocked).toBe(false);
-    expect(out).toBe("");
-  });
-
-  it.each(REFUSED_SHAPES)("%s at the claim path blocks, and the env verdict id is not consulted", async (_label, setup) => {
-    setup();
-    const { blocked, out } = await runGate();
-    expect(blocked).toBe(true);
-    const reason = JSON.parse(out).reason as string;
-    expect(reason).toMatch(/active-claim file could not be read/);
-    expect(reason).toMatch(/deliberately not consulted/);
   });
 });

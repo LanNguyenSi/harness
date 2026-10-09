@@ -114,11 +114,6 @@ describe("resolveBuiltinDefaultConfig", () => {
     expect(result?.producers).toBeUndefined();
   });
 
-  it("solution-acceptance: no registered shipped default (null)", () => {
-    const pack = packWith("solution-acceptance");
-    expect(resolveBuiltinDefaultConfig(pack)).toBeNull();
-  });
-
   it("unknown pack name: null", () => {
     // Bypass the schema's builtin-name checks are elsewhere; this function
     // itself just needs a `PolicyPack`-shaped object with an unknown name.

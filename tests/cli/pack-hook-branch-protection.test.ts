@@ -779,6 +779,32 @@ describe("branch-protection hook: the manifest", () => {
     expect(run.blocked).toBe(true);
     expect(run.diagnostic).toBe(`BLOCK: branch "master" of ${repo} is protected (master, main, develop)`);
   });
+
+  it.skipIf(!GIT_AVAILABLE)("a manifest that still names the removed solution-acceptance pack (listed first) loads with one warning and still refuses on a protected branch", async () => {
+    const repo = makeRepo("master");
+    const dir = tmpDir("harness-bp-manifest-");
+    const cfg = path.join(dir, "harness.yaml");
+    fs.writeFileSync(
+      cfg,
+      [
+        "version: 1",
+        "hooks: []",
+        "policies: []",
+        "policy_packs:",
+        "  - name: solution-acceptance",
+        "    source: builtin",
+        "    enabled: true",
+        "  - name: branch-protection",
+        "    source: builtin",
+        "    enabled: true",
+        "",
+      ].join("\n"),
+    );
+    expect(loadManifest({ configPath: cfg }).warnings.map((w) => w.path)).toEqual(["policy_packs[0]"]);
+    const run = await runHook(writeEvent(repo, path.join(repo, "x.ts")), { configPath: cfg });
+    expect(run.blocked).toBe(true);
+    expect(run.diagnostic).toBe(`BLOCK: branch "master" of ${repo} is protected (master, main, develop)`);
+  });
 });
 
 describe("removed verbs", () => {

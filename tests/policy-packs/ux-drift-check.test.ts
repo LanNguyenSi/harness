@@ -165,21 +165,6 @@ describe("checkPolicyPackUxDrift — branch-protection", () => {
   });
 });
 
-describe("checkPolicyPackUxDrift — solution-acceptance (no registered shipped default)", () => {
-  it("never flags this pack, even with an obviously non-canonical ux", () => {
-    const m = manifestWith([
-      {
-        name: "solution-acceptance",
-        enabled: true,
-        config: {
-          ux: { cannot: "whatever", required: ["whatever"], run: ["whatever"] },
-        },
-      },
-    ]);
-    expect(checkPolicyPackUxDrift(m)).toEqual([]);
-  });
-});
-
 describe("checkPolicyPackUxDrift — cross-pack semantics", () => {
   it("preserves manifest order and reports one entry per diverging pack", () => {
     const m = manifestWith([

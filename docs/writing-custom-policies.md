@@ -19,9 +19,8 @@ These four things bite people who skip ahead to the YAML:
 
 1. **Custom *policies* are supported; custom policy *packs* are not (yet).**
    Anything you put in `policies:` is first-class: any name, any
-   trigger, any `requires`. Only `policy_packs:` is gated to the three
-   builtins (`understanding-before-execution`, `branch-protection`,
-   `solution-acceptance`).
+   trigger, any `requires`. Only `policy_packs:` is gated to the two
+   builtins (`understanding-before-execution`, `branch-protection`).
    `source: path:` / `npm:` / `git:` for packs is reserved vocabulary
    in v1, see [`policy-packs/understanding-before-execution.md`](policy-packs/understanding-before-execution.md)
    for the future contract.
@@ -750,5 +749,5 @@ Acceptance criteria for each `requires` shape:
 
 - [`for-agents.md`](for-agents.md): how agents read the policy/ledger contract, the audit triumvirate, the `ux:` rendering spec.
 - [`for-humans.md`](for-humans.md): operator path from install to first `apply`.
-- [`policy-packs/understanding-before-execution.md`](policy-packs/understanding-before-execution.md), [`policy-packs/branch-protection.md`](policy-packs/branch-protection.md), [`policy-packs/solution-acceptance.md`](policy-packs/solution-acceptance.md), [`policy-packs/post-merge-gate.md`](policy-packs/post-merge-gate.md): the four builtin packs, plus the future contract for custom-pack sources.
+- [`policy-packs/understanding-before-execution.md`](policy-packs/understanding-before-execution.md), [`policy-packs/branch-protection.md`](policy-packs/branch-protection.md): the two builtin packs, plus the future contract for custom-pack sources.
 - [`ARCHITECTURE.md`](ARCHITECTURE.md) Appendix A: full reference manifest.

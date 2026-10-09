@@ -33,7 +33,6 @@ function writeFixture(files: Record<string, string>): string {
 const NOOP_PROBES = {
   versionProbe: () => null,
   builtinRuntimeProbe: () => [] as string[],
-  gitIgnoreProbe: () => null,
 };
 
 function fixtureWithPacks(packs: unknown): string {

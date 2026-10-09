@@ -146,7 +146,6 @@ async function runHook(opts: {
   env["HARNESS_HOME"] = home;
   env["HOME"] = home;
   env["UNDERSTANDING_GATE_REPORT_DIR"] = path.join(home, "reports");
-  env["SOLUTION_VERDICT_DIR"] = path.join(home, "verdicts");
 
   await acquireSlot();
   try {
@@ -328,32 +327,6 @@ const GATES: Gate[] = [
       }),
   },
   {
-    verb: "solution-acceptance",
-    pack: "solution-acceptance",
-    blockExit: 0,
-    reasonOn: "stdout",
-    event: (ctx) =>
-      JSON.stringify({
-        session_id: "stdin-bound-sess",
-        cwd: ctx.cwd,
-        tool_name: "mcp__agent-tasks__task_finish",
-        tool_input: { taskId: "t1" },
-      }),
-  },
-  {
-    verb: "solution-acceptance-writeguard",
-    pack: null,
-    blockExit: 0,
-    reasonOn: "stdout",
-    event: (ctx) =>
-      JSON.stringify({
-        session_id: "stdin-bound-sess",
-        cwd: ctx.cwd,
-        tool_name: "Write",
-        tool_input: { file_path: path.join(ctx.home, "verdicts", "t1.json"), content: "{}" },
-      }),
-  },
-  {
     verb: "runtime-reality",
     pack: null,
     blockExit: 2,
@@ -475,8 +448,6 @@ describe("pack hook stdin bound: every PreToolUse gate blocks on a timed-out rea
         "codex-pre-tool-use",
         "pre-tool-use",
         "runtime-reality",
-        "solution-acceptance",
-        "solution-acceptance-writeguard",
       ].sort(),
     );
   });

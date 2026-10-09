@@ -198,8 +198,7 @@ describe("profile templates: single `&` is a command boundary in every policy tr
       // regression here would still mislead the validate/doctor warnings it
       // exists to exercise. Note this guard works by splitting on the
       // literal `bash_match` YAML token, which this file carries; it would
-      // NOT see a plain exported regex constant with no such token (see
-      // solution-acceptance-runtime.test.ts for those pins instead).
+      // NOT see a plain exported regex constant with no such token.
       "dogfood/harness.yaml",
     ];
     const offenders: string[] = [];

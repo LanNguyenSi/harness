@@ -47,13 +47,6 @@ export interface CheckOptions {
   pathEnv?: string;
   builtinRuntimeProbe?: () => string[];
   versionProbe?: (cmd: readonly string[]) => string | null;
-  /**
-   * Answers "is this repo-relative path git-ignored in the current working
-   * directory's repository?". `null` means "cannot tell" (not a git repo,
-   * git unavailable) and skips the dependent check. Injectable for tests;
-   * defaults to a real `git check-ignore` probe.
-   */
-  gitIgnoreProbe?: GitIgnoreProbe;
 }
 
 const DEFAULT_RUNTIME_BUILTINS = [
@@ -286,56 +279,6 @@ export function checkPolicyGroundingMcp(manifest: Manifest): Diagnostic[] {
         "evidence-consuming policies declared but grounding-mcp not wired: warn policies degrade non-blocking (warn-degraded), but block/require_approval policies will DENY every matching event (deny-degraded) until the producer is wired; risk.degraded_fail_posture: fail_open restores the availability-first behaviour — see docs/okf/gate-fail-posture-matrix.md",
     },
   ];
-}
-
-// solution-acceptance is a pure CONSUMER: it reads the verdict marker the
-// grounding-mcp producer writes. Misconfigurations can silently turn the
-// completion-gate into a permanent deny (a No-Op that LOOKS protective):
-//   1. grounding-mcp absent from tools.mcp -> the producer (solution_evaluate)
-//      is unreachable, so no verdict can ever be written -> deadlock.
-//   2. grounding-mcp declares a RELATIVE SOLUTION_VERDICT_DIR -> harness now
-//      projects the value into the hook command, but a relative path resolves
-//      against each process's cwd, which harness cannot reconcile (the
-//      producer's cwd is unknown), so producer and consumer can still diverge.
-// An ABSOLUTE non-default SOLUTION_VERDICT_DIR previously also denied (harness
-// did not project the env override into the hook); `harness apply` now projects
-// it (see `buildExpectedFiles` in apply.ts), so the absolute case is handled
-// correctly and no longer warn-worthy. Condition #1 (grounding-mcp not wired)
-// is an ERROR: solution-acceptance without a reachable producer deadlocks the
-// completion-gate on a permanent deny, so it is a hard misconfiguration rather
-// than a warning (task e3af6388). Condition #2 (a relative SOLUTION_VERDICT_DIR)
-// stays a warning: it only bites on cwd divergence between producer and hook.
-export function checkSolutionAcceptanceProducer(manifest: Manifest): Diagnostic[] {
-  const pack = manifest.policy_packs.find((p) => p.name === "solution-acceptance");
-  if (!pack || !pack.enabled) return [];
-  const grounding = manifest.tools.mcp.find((m) => m.name === "grounding-mcp");
-  if (!grounding) {
-    return [
-      {
-        severity: "error",
-        path: "policy_packs",
-        message:
-          "solution-acceptance is enabled but grounding-mcp is not wired under tools.mcp: the producer (solution_evaluate) is unreachable, so the completion-gate can never see a verdict and will deadlock on a permanent deny. Add grounding-mcp (>= 0.3.2) to tools.mcp.",
-      },
-    ];
-  }
-  // Condition #2: an absolute non-default SOLUTION_VERDICT_DIR is now projected
-  // into the hook at apply time, so it is handled and silent. A relative
-  // override cannot be reconciled (cwd divergence between producer and hook),
-  // so warn only for that unfixable case.
-  const env = (grounding.env ?? {}) as Record<string, unknown>;
-  const dir = env["SOLUTION_VERDICT_DIR"];
-  if (typeof dir === "string" && dir.trim().length > 0 && !path.isAbsolute(dir.trim())) {
-    return [
-      {
-        severity: "warning",
-        path: "tools.mcp",
-        message:
-          "solution-acceptance: grounding-mcp declares a relative SOLUTION_VERDICT_DIR; harness projects this value into the completion-gate hook, but a relative path resolves against each process's working directory, so the producer (grounding-mcp) and the hook can still land on different dirs and the gate would deny. Use an absolute path.",
-      },
-    ];
-  }
-  return [];
 }
 
 // checkWorkflowGateWiring closes the exact gap deriveWorkflowGatePolicies
@@ -572,67 +515,6 @@ export function checkWorkflows(manifest: Manifest): Diagnostic[] {
     ...checkWorkflowGateWeakOverlap(manifest),
     ...checkWorkflowMergeBeforeReview(manifest),
     ...checkWorkflowDerivedNameCollision(manifest),
-  ];
-}
-
-/**
- * Answers "is `relPath` git-ignored here?": `true` / `false`, or `null`
- * when the question has no answer (not a git repository, git not
- * installed). See `createDefaultGitIgnoreProbe` for the real
- * implementation; checks receive the probe so tests stay hermetic.
- */
-export type GitIgnoreProbe = (relPath: string) => boolean | null;
-
-/**
- * The orchestrator-workflow knob the grounding-mcp producer reads
- * (`resolveOwKnob`). Repo-relative on purpose: the knob belongs to the
- * repository whose completions the OW arm gates.
- */
-export const OW_KNOB_REL_PATH = ".ai/solution-acceptance.json";
-
-export function createDefaultGitIgnoreProbe(cwd?: string): GitIgnoreProbe {
-  return (relPath) => {
-    const res = spawnSync("git", ["check-ignore", "-q", "--", relPath], {
-      cwd: cwd ?? process.cwd(),
-      stdio: "ignore",
-    });
-    if (res.error) return null;
-    if (res.status === 0) return true;
-    if (res.status === 1) return false;
-    return null; // 128: not a git repository (or another fatal git error)
-  };
-}
-
-// Knob-reachability lint (task 24f6ceb9, ow-review-2026-07-01). The OW arm
-// of solution-acceptance reads repo state: the knob above plus run
-// completeness under `.ai/runs/`. When the knob path is git-ignored the
-// repo CANNOT commit its enforcement posture, so in a fresh clone or a git
-// worktree `.ai/runs/` is absent, the default `auto` knob silently skips
-// the OW arm, and the gate that exists to prevent process skipping is
-// itself skipped exactly where process skipping happens. Warn (not error):
-// the preflight floor still gates every completion; only the OW arm is
-// affected. A `null` probe answer (non-repo cwd, git missing) skips the
-// check — validate must stay usable for pure home-config linting.
-export function checkSolutionAcceptanceKnobIgnored(
-  manifest: Manifest,
-  probe: GitIgnoreProbe,
-): Diagnostic[] {
-  const pack = manifest.policy_packs.find((p) => p.name === "solution-acceptance");
-  if (!pack || !pack.enabled) return [];
-  if (probe(OW_KNOB_REL_PATH) !== true) return [];
-  return [
-    {
-      severity: "warning",
-      path: "policy_packs",
-      message:
-        `solution-acceptance: the orchestrator-workflow knob ${OW_KNOB_REL_PATH} ` +
-        `is git-ignored in this repository, so the OW enforcement posture cannot ` +
-        `be committed. In a fresh clone or git worktree .ai/runs/ is absent and ` +
-        `the default "auto" knob silently skips the OW arm — exactly where ` +
-        `process skipping happens. Narrow the ignore to .ai/runs/ (run state ` +
-        `stays local) and commit ${OW_KNOB_REL_PATH}; see ` +
-        `docs/policy-packs/solution-acceptance.md ("Repo state and gitignore").`,
-    },
   ];
 }
 
@@ -1117,14 +999,9 @@ export function checkTriggerBoundaryDrift(manifest: Manifest): Diagnostic[] {
 //      through the shared `resolveBuiltin` registry lookup, not a
 //      hand-maintained list of specific pack modules. Only the subset
 //      whose command names one of the LEDGER_CONSULTING_PACK_SUBCOMMANDS
-//      below is checked: `solution-acceptance` / `solution-acceptance-
-//      writeguard` are DELIBERATELY excluded — they gate on a filesystem
-//      verdict marker the producer writes, never a live ledger
-//      round-trip (see solution-acceptance.ts's own header comment), so
-//      flagging them here would be a false positive.
-// `pack hook branch-protection` left this list with task a4d8adc5: it asks
-// git for the branch and makes no ledger round-trip, so its budget is not
-// tied to the ledger's timeout.
+//      below is checked: `pack hook branch-protection` left this list
+//      with task a4d8adc5: it asks git for the branch and makes no ledger
+//      round-trip, so its budget is not tied to the ledger's timeout.
 const LEDGER_CONSULTING_PACK_SUBCOMMANDS = [
   "pack hook pre-tool-use",
   "pack hook codex-pre-tool-use",
@@ -1406,11 +1283,6 @@ export function runAssetChecks(
     ...checkHooks(manifest, home),
     ...checkBuiltinDrift(manifest, opts),
     ...checkPolicyGroundingMcp(manifest),
-    ...checkSolutionAcceptanceProducer(manifest),
-    ...checkSolutionAcceptanceKnobIgnored(
-      manifest,
-      opts.gitIgnoreProbe ?? createDefaultGitIgnoreProbe(),
-    ),
     ...checkPolicyPacks(manifest),
     ...checkPolicyPackConfigsAsDiagnostics(manifest),
     ...checkUnderstandingBeforeExecutionAutoApproveMeasured(manifest),

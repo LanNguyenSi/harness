@@ -2274,7 +2274,7 @@ describe("interactive wizard — orchestrator-workflow co-install offer (task S5
     expect(cap.stderr()).toContain("orchestrator-workflow set up");
   });
 
-  it("opt-out prints the run-gate warning and does NOT spawn", async () => {
+  it("opt-out prints the alongside-workflow warning and does NOT spawn", async () => {
     fs.mkdirSync(path.join(tmpHome, ".claude"));
     const cap = captureStreams();
     let spawned = false;
@@ -2301,8 +2301,8 @@ describe("interactive wizard — orchestrator-workflow co-install offer (task S5
     expect(result.aborted).toBe(false);
     expect(spawned).toBe(false);
     // The decline warning explains the coupling and the manual recovery.
-    expect(cap.stderr()).toContain("harness works best with orchestrator-workflow");
-    expect(cap.stderr()).toContain(".ai/runs/ run files");
+    expect(cap.stderr()).toContain("harness works best alongside orchestrator-workflow");
+    expect(cap.stderr()).toContain("run files under .ai/runs/");
     expect(cap.stderr()).toContain("npx orchestrator-workflow init");
   });
 
@@ -2390,7 +2390,7 @@ describe("interactive wizard — orchestrator-workflow co-install offer (task S5
     // Custom is intentionally excluded: no spawn, and neither the OW
     // success line nor the decline warning is printed.
     expect(spawned).toBe(false);
-    expect(cap.stderr()).not.toContain("harness works best with orchestrator-workflow");
+    expect(cap.stderr()).not.toContain("harness works best alongside orchestrator-workflow");
     expect(cap.stderr()).not.toContain("orchestrator-workflow set up");
   });
 
@@ -2442,7 +2442,7 @@ describe("interactive wizard — orchestrator-workflow co-install offer (task S5
     // The FALSE "no manifest written" abort line must NOT appear.
     expect(cap.stderr()).not.toContain("no manifest written");
     // Instead the graceful decline/skip warning is printed.
-    expect(cap.stderr()).toContain("harness works best with orchestrator-workflow");
+    expect(cap.stderr()).toContain("harness works best alongside orchestrator-workflow");
   });
 
   it("a non-solo profile (team) also reaches the OW offer and spawns on opt-in", async () => {

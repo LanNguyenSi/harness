@@ -119,8 +119,8 @@ export function registerGateGcGroup(
         "the retention window, plus stale in-flight subagent records (fixed " +
         "24h window, independent of --retention-days). Pending reports and " +
         "anything outside the enumerated harness-owned dirs are never " +
-        "touched (the evidence ledger and solution-acceptance verdict dirs " +
-        "are owned by their producers). Dry-run by default; pass --apply " +
+        "touched (the evidence ledger is owned by its producer). Dry-run " +
+        "by default; pass --apply " +
         "to delete.",
     )
     .option("--config <path>", "manifest path (default: ~/.harness/harness.yaml; legacy fallback ~/.claude/harness.yaml)")

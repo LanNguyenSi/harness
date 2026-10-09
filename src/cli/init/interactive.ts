@@ -1039,9 +1039,9 @@ interface OfferOrchestratorWorkflowOpts {
 
 /**
  * Offer to co-install orchestrator-workflow (OW) into the repo after the
- * harness manifest is written. This is harness's install-coupling: the
- * solution-acceptance run-gate reads OW's `.ai/runs/` run files, so a
- * fresh harness works best when OW is scaffolded into the same repo.
+ * harness manifest is written. orchestrator-workflow is the delivery
+ * workflow these manifests are designed alongside, so a fresh harness
+ * offers to scaffold it into the same repo.
  *
  * Trade-off — why `npx orchestrator-workflow init --yes <repoDir>` rather
  * than the alternatives:
@@ -1050,8 +1050,8 @@ interface OfferOrchestratorWorkflowOpts {
  *     PROFILE_DEPENDENCIES in dependencies.ts, which MUST stay on PATH).
  *     A global install would leave a stale package the operator has to
  *     remember to update; `npx` resolves and runs the LATEST published
- *     kit on demand, so the `.ai/runs/` layout always matches what the
- *     run-gate expects.
+ *     kit on demand, so the `.ai/runs/` layout always matches the current
+ *     OW conventions.
  *   - vs. requiring OW to be already present: that would make a fresh
  *     `harness init` fail or nag. OW is OPTIONAL — harness offers it but
  *     never depends on it.
@@ -1071,7 +1071,7 @@ async function offerOrchestratorWorkflow(o: OfferOrchestratorWorkflowOpts): Prom
     o.stderr(
       [
         "",
-        "⚠ harness works best with orchestrator-workflow: the solution-acceptance run-gate reads its .ai/runs/ run files.",
+        "⚠ harness works best alongside orchestrator-workflow (run files under .ai/runs/).",
         "  You can add it later with `npx orchestrator-workflow init`.",
         "",
       ].join("\n"),
@@ -1082,7 +1082,7 @@ async function offerOrchestratorWorkflow(o: OfferOrchestratorWorkflowOpts): Prom
   try {
     accept = await o.prompts.confirm({
       message:
-        "Set up orchestrator-workflow in this repo too? Its run files (.ai/runs/) are what the solution-acceptance run-gate reads. (recommended)",
+        "Set up orchestrator-workflow in this repo too? (recommended)",
       default: true,
     });
   } catch (err) {

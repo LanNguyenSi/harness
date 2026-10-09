@@ -17,7 +17,7 @@
 // `--shallow` and at least one manifest MCP server is enabled (nothing to
 // verify otherwise). Callers that don't want the real CLI touched (every
 // test in this repo) inject `claudeMcpExec`, mirroring the
-// `npmBinExec`/`gitIgnoreProbe` injectable-exec convention already used
+// `npmBinExec` injectable-exec convention already used
 // elsewhere in this directory.
 
 import * as fs from "node:fs";
