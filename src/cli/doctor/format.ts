@@ -293,7 +293,7 @@ function formatPolicyPacksSection(report: DoctorReport): string[] {
   for (const gap of versionGaps) {
     out.push(`  ⚠ ${gap.name}.min_version  ${gap.message}`);
     out.push(
-      `      the pack runs in degraded mode; any \`config:\` key that requires the newer release is silently ignored. Upgrade the package-side bin or lower the declared \`min_version\`.`,
+      `      builtin packs ship with harness and have no separate version to check, so this floor cannot be enforced. Remove \`min_version\` from this \`policy_packs\` entry.`,
     );
   }
   for (const drift of uxDrift) {

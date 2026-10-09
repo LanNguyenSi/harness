@@ -3263,6 +3263,16 @@ ${withFloor ? '    min_version: "1.0.0"\n' : ""}`,
     expect(missedFloor.warningCount - metFloor.warningCount).toBe(n);
     expect(missedFloor.errorCount).toBe(metFloor.errorCount);
   });
+
+  it("the text hint says a builtin pack's floor cannot be enforced and suggests removing min_version (task c09c8c38)", async () => {
+    const text = format(await reportFor(true));
+    expect(text).toContain("branch-protection.min_version");
+    expect(text).toContain(
+      "builtin packs ship with harness and have no separate version to check, so this floor cannot be enforced. Remove `min_version` from this `policy_packs` entry.",
+    );
+    expect(text).not.toContain("degraded mode");
+    expect(text).not.toContain("package-side bin");
+  });
 });
 
 // Removal of the understanding-gate doctor read side (task 95826160): with

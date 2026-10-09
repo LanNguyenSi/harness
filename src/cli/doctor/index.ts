@@ -923,11 +923,11 @@ function countDiagnostics(report: Omit<DoctorReport, "errorCount" | "warningCoun
   }
   errorCount += report.policyPacks.unresolved.length;
   errorCount += report.policyPacks.configIssues.length;
-  // Pack-level min_version gaps are warn-not-error: the pack still
-  // functions in degraded mode; only features gated on the newer
-  // release are lost. Parallel to the hook-level version probe's
-  // `status: warn`. Builtin packs have no probe, so today every gap is a
-  // `no_probe_registered` one.
+  // Pack-level min_version gaps are warn-not-error: the pack itself works,
+  // only the declared floor cannot be enforced. Builtin packs ship with
+  // harness and have no probe, so today every gap is a
+  // `no_probe_registered` one. Parallel to the hook-level version probe's
+  // `status: warn`.
   warningCount += report.policyPacks.versionGaps.length;
   // Ux drift is always warn: the pack still functions with the
   // stale wording, the operator is just missing a wording improvement.
