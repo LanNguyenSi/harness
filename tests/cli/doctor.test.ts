@@ -3484,3 +3484,59 @@ ${SILENCE_DRIFT_PACK}policy_packs:
     expect(missedFloor.errorCount).toBe(metFloor.errorCount);
   });
 });
+
+// Removal of the understanding-gate doctor read side (task 95826160): with
+// the UG pack enabled, `harness.generated/` present and its `.approvals`,
+// `.delegations` and `.inflight` directories present, the report carries
+// none of the removed fields and the formatted text renders none of the
+// removed Environment lines.
+describe("doctor - removed understanding-gate report fields (task 95826160)", () => {
+  it("drops every removed UG field and render line even with the pack enabled and harness.generated/ present", async () => {
+    const home = makeFixture({
+      "harness.yaml": `version: 1
+hooks: []
+policies: []
+${SILENCE_DRIFT}policy_packs:
+  - name: understanding-before-execution
+    source: builtin
+`,
+    });
+    fs.mkdirSync(path.join(home, "harness.generated"));
+    fs.mkdirSync(path.join(home, "harness.generated", ".approvals"), { recursive: true });
+    fs.mkdirSync(path.join(home, "harness.generated", ".delegations"), { recursive: true });
+    fs.mkdirSync(path.join(home, "harness.generated", ".inflight"), { recursive: true });
+    const report = await doctor({
+      configPath: path.join(home, "harness.yaml"),
+      homeOverride: home,
+      shallow: true,
+      versionProbe: () => null,
+      envOverride: {},
+      npmBinExec: STUB_NPM_BIN_EXEC_UNKNOWN,
+    });
+
+    for (const key of [
+      "understandingModeEnv",
+      "ugAutoApprovals",
+      "ugDelegations",
+      "ugInflight",
+      "ugReportsDir",
+      "ugBypassWithoutAutoApprove",
+      "ugAutoApproveMode",
+      "ugExpireOnToolMatch",
+      "settingsDrift",
+      "codexConfigDrift",
+    ] as const) {
+      expect(Object.keys(report)).not.toContain(key);
+    }
+
+    const text = format(report).toLowerCase();
+    for (const removed of [
+      "auto approvals in the last",
+      "delegations on disk",
+      "in-flight subagent records on disk",
+      "settings drift",
+    ]) {
+      expect(text).not.toContain(removed);
+    }
+  });
+});

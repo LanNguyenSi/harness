@@ -107,8 +107,7 @@ describe("doctor: pack expansion runtime follows the runtime apply selects", () 
   });
 
   it("malformed .last-apply: does not crash, falls back to the default and warns naming the file", async () => {
-    // No understanding pack: the settings-drift check (which reads the same
-    // record for that pack) is not in play, so doctor's own read is what is
+    // No understanding pack: doctor's own read of the record is what is
     // under test.
     const { home, configPath } = makeHome(false);
     await apply({ homeDir: home, configPath, runtime: "codex" });

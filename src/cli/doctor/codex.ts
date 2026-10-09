@@ -4,7 +4,7 @@
 // reachable (so the `harness pack hook codex-*` subcommands resolve),
 // the harness-generated `harness.generated/codex/config.toml` exists,
 // every contributed `[[hooks.*]]` stanza references a command that
-// resolves on PATH, and the persisted-report directory is writable.
+// resolves on PATH.
 //
 // The checks here intentionally do NOT exercise the actual Codex CLI
 // binary — that is a Codex-runtime concern, out of harness's scope.
@@ -15,7 +15,6 @@
 import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { defaultReportsDir } from "../../policy-packs/builtin/understanding-before-execution-runtime.js";
 import { expandPolicyPacks } from "../../policy-packs/index.js";
 import type { Hook, Manifest } from "../../schema/index.js";
 import { VERSION as HARNESS_VERSION } from "../../version.js";
@@ -41,12 +40,7 @@ export interface CodexTargetReport {
 export interface RunCodexCheckOptions {
   /** Manifest directory; the codex config is at <dir>/harness.generated/codex/config.toml. */
   manifestDir: string;
-  /**
-   * Pre-task-4f4a1178: working directory used to resolve the persisted-
-   * report path. Retained for compat but ignored — the report dir is
-   * now resolved via `defaultReportsDir(manifestDir)` so the doctor's
-   * answer matches what apply bakes into the hook commands.
-   */
+  /** Retained for compat but ignored. */
   cwd?: string;
   /** Override for $PATH lookup (test injection). */
   pathEnv?: string;
@@ -341,44 +335,6 @@ function checkHookCommands(
   return out;
 }
 
-function checkReportsDir(manifestDir: string): CodexCheckEntry {
-  // Use the same resolver the rest of the stack uses so the doctor's
-  // reported path agrees with what the Stop hook, PreToolUse blocker
-  // and `harness approve understanding` will actually touch:
-  //   1. UNDERSTANDING_GATE_REPORT_DIR if set,
-  //   2. manifest-anchored fallback otherwise.
-  const dir = defaultReportsDir(manifestDir);
-  // We do NOT require the directory to exist (a fresh project has no
-  // reports yet). What we do require is that we can either create it
-  // or write into it. Best-effort probe: if the parent is writable,
-  // we are fine.
-  const parent = path.dirname(dir);
-  let target: string;
-  if (fs.existsSync(dir)) {
-    target = dir;
-  } else if (fs.existsSync(parent)) {
-    target = parent;
-  } else {
-    target = manifestDir;
-  }
-  try {
-    fs.accessSync(target, fs.constants.W_OK);
-    return {
-      name: "persisted-report directory",
-      status: "ok",
-      message: fs.existsSync(dir)
-        ? `${dir} writable`
-        : `${dir} not present; ${target} is writable (the directory is created on first report)`,
-    };
-  } catch {
-    return {
-      name: "persisted-report directory",
-      status: "warn",
-      message: `cannot write to ${target}; the Stop-equivalent (when shipped) will fail to capture reports`,
-    };
-  }
-}
-
 export function runCodexTargetChecks(
   manifest: Manifest,
   opts: RunCodexCheckOptions,
@@ -397,7 +353,6 @@ export function runCodexTargetChecks(
   if (subcmdEntry !== null) checks.push(subcmdEntry);
   checks.push(checkConfigToml(opts.manifestDir));
   checks.push(...checkHookCommands(manifest, pathEnv, isExecutable));
-  checks.push(checkReportsDir(opts.manifestDir));
 
   return { target: "codex", checks };
 }

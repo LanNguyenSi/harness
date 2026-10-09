@@ -12,7 +12,7 @@ export function registerAuditGroup(
   program
     .command("audit")
     .description(
-      "Replay policy decisions from the evidence ledger for a time window, plus an approvals section listing raw understanding-gate approval facts",
+      "Replay policy decisions from the evidence ledger for a time window",
     )
     .option("--since <duration>", "time window (default: 24h)")
     .option("--policy <name>", "filter to a single policy by name")

@@ -1,7 +1,6 @@
 import type { DoctorReport, McpProbeResult } from "./types.js";
 import { VERSION } from "../../version.js";
 import { projectRejectionWarns } from "../../probes/memory.js";
-import { sanitizeDetailValue } from "../../policy-packs/builtin/understanding-before-execution/persisted-reports.js";
 import { sanitizeProjectForDisplay } from "../../runtime/git-context.js";
 
 function mcpLines(r: McpProbeResult, shallow: boolean): string[] {
@@ -75,134 +74,13 @@ function formatManifestSection(report: DoctorReport): string[] {
 // checks already failed loudly.
 function formatEnvironmentSection(report: DoctorReport): string[] {
   const bin = report.npmGlobalBin;
-  const modeEnv = report.understandingModeEnv;
-  const ugAuto = report.ugAutoApprovals;
-  const autoApproveMode = report.ugAutoApproveMode;
-  const expireOnToolMatch = report.ugExpireOnToolMatch;
-  const bypassWithoutAutoApprove = report.ugBypassWithoutAutoApprove;
-  // "nothing when `.approvals/` is absent" (ug-auto-approvals.ts's AC 1):
-  // stay silent unless the directory actually exists, mirroring the rest
-  // of this section's "no line for a check that found nothing" style.
-  const showUgAuto = ugAuto !== undefined && ugAuto.approvalsDirPresent;
-  const ugDeleg = report.ugDelegations;
-  // Same "no line for a check that found nothing" convention as
-  // showUgAuto: silent unless `.delegations/` actually exists. A
-  // present-but-empty directory still renders the zero-count line
-  // (ug-delegations.ts's own doc comment on `delegationsDirPresent`).
-  const showUgDeleg = ugDeleg !== undefined && ugDeleg.delegationsDirPresent;
-  const ugInflight = report.ugInflight;
-  // Same "no line for a check that found nothing" convention as
-  // showUgAuto / showUgDeleg: silent unless `.inflight/` actually exists.
-  const showUgInflight = ugInflight !== undefined && ugInflight.inflightDirPresent;
-  const reportsDir = report.ugReportsDir;
-  // Silent unless the reports directory is at 75 % of a gate bound or past it.
-  const reportsDirWarns = reportsDir !== undefined && reportsDir.state !== "ok";
-  const drift = report.settingsDrift;
-  const hasDriftContent = drift !== undefined && (drift.notes.length > 0 || drift.warnings.length > 0);
-  const codexDrift = report.codexConfigDrift;
-  const hasCodexDriftContent = codexDrift !== undefined && codexDrift.warnings.length > 0;
-  if (
-    (!bin || bin.status !== "warn") &&
-    !modeEnv &&
-    !autoApproveMode &&
-    !expireOnToolMatch &&
-    !bypassWithoutAutoApprove &&
-    !showUgAuto &&
-    !showUgDeleg &&
-    !showUgInflight &&
-    !hasDriftContent &&
-    !hasCodexDriftContent &&
-    !reportsDirWarns
-  )
-    return [];
+  if (!bin || bin.status !== "warn") return [];
   const out: string[] = ["", "Environment"];
-  if (bin && bin.status === "warn") {
-    out.push(
-      `  ⚠ npm global bin (${bin.binDir}) is not on PATH`,
-      `      harness install commands wrote binaries here but your shell will not find them.`,
-      `      Add to your shell rc (e.g. ~/.bashrc, ~/.zshrc):  ${bin.pathPatchSuggestion}`,
-    );
-  }
-  if (modeEnv) {
-    out.push(`  ⚠ ${modeEnv.message}`);
-    for (const line of modeEnv.detail) out.push(`      ${line}`);
-  }
-  if (autoApproveMode) {
-    out.push(`  ⚠ ${autoApproveMode.message}`);
-    for (const line of autoApproveMode.detail) out.push(`      ${line}`);
-  }
-  if (expireOnToolMatch) {
-    out.push(`  ⚠ ${expireOnToolMatch.message}`);
-    for (const line of expireOnToolMatch.detail) out.push(`      ${line}`);
-  }
-  if (bypassWithoutAutoApprove) {
-    out.push(`  ⚠ ${bypassWithoutAutoApprove.message}`);
-    for (const line of bypassWithoutAutoApprove.detail) out.push(`      ${line}`);
-  }
-  if (showUgAuto && ugAuto) {
-    const modeParts = Object.keys(ugAuto.byMode)
-      .sort()
-      .map((m) => `${m}: ${ugAuto.byMode[m]}`)
-      .join(", ");
-    const modeSuffix = modeParts.length > 0 ? ` (${modeParts})` : "";
-    out.push(
-      `  ℹ auto approvals in the last ${ugAuto.windowSize} sessions: ${ugAuto.autoApprovedCount}${modeSuffix}`,
-    );
-    for (const e of ugAuto.entries) {
-      out.push(`      ${e.sessionId}  ${e.mode}  ${e.approvedAt}`);
-    }
-    const harnessKeys = Object.keys(ugAuto.byHarness);
-    if (harnessKeys.length > 1) {
-      const harnessParts = harnessKeys
-        .sort()
-        .map((h) => `${h}: ${ugAuto.byHarness[h]}`)
-        .join(", ");
-      out.push(`      by harness: ${harnessParts}`);
-    }
-    if (ugAuto.unreadableCount > 0) {
-      out.push(
-        `      ${ugAuto.unreadableCount} marker${ugAuto.unreadableCount === 1 ? "" : "s"} unreadable, excluded from the count`,
-      );
-    }
-  }
-  if (showUgDeleg && ugDeleg) {
-    const marker = ugDeleg.unreadable > 0 ? "⚠" : "ℹ";
-    const line =
-      ugDeleg.total === 0
-        ? `  ${marker} delegations on disk: 0`
-        : `  ${marker} delegations on disk: ${ugDeleg.total} (${ugDeleg.expired} expired, ${ugDeleg.unreadable} unreadable)`;
-    out.push(line);
-  }
-  if (showUgInflight && ugInflight) {
-    out.push(`  ℹ in-flight subagent records on disk: ${ugInflight.total} (${ugInflight.stale} stale)`);
-  }
-  if (reportsDir && reportsDir.state !== "ok") {
-    const dir = sanitizeDetailValue(reportsDir.dir);
-    const cleanup =
-      "clean it up (the gate cannot read it and re-approving does not help): `harness gc --apply` removes only aged approved or expired reports, then remove stale or non-report *.json entries from the directory by hand";
-    if (reportsDir.state === "over") {
-      out.push(
-        `  ⚠ understanding-gate reports directory ${dir} is past what the PreToolUse gate reads (over ${reportsDir.bound} *.json entries, or over ${reportsDir.scanBound} entries of any name): marker-approved calls are being denied`,
-        `      ${cleanup}`,
-      );
-    } else {
-      const byJson = reportsDir.jsonEntries >= reportsDir.warnAt;
-      const count = byJson ? reportsDir.jsonEntries : reportsDir.scannedEntries;
-      const limit = byJson ? reportsDir.bound : reportsDir.scanBound;
-      const what = byJson ? "*.json entries" : "entries of any name";
-      out.push(
-        `  ⚠ understanding-gate reports directory ${dir} holds ${count} ${what} (${Math.floor((count / limit) * 100)}% of the ${limit} the PreToolUse gate reads)`,
-        `      past that limit the gate denies marker-approved calls; ${cleanup}`,
-      );
-    }
-  }
-  if (drift) {
-    for (const n of drift.notes) out.push(`  ℹ ${n}`);
-    for (const w of drift.warnings) out.push(`  ⚠ ${w}`);
-  }
-  if (codexDrift) {
-    for (const w of codexDrift.warnings) out.push(`  ⚠ ${w}`);
-  }
+  out.push(
+    `  ⚠ npm global bin (${bin.binDir}) is not on PATH`,
+    `      harness install commands wrote binaries here but your shell will not find them.`,
+    `      Add to your shell rc (e.g. ~/.bashrc, ~/.zshrc):  ${bin.pathPatchSuggestion}`,
+  );
   return out;
 }
 
