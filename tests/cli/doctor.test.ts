@@ -1140,7 +1140,7 @@ describe("doctor — policy pack declared-but-not-live check", () => {
 hooks: []
 policies: []
 policy_packs:
-  - name: understanding-before-execution
+  - name: branch-protection
     source: marketplace-that-does-not-exist-yet
 `,
     });
@@ -1150,14 +1150,14 @@ policy_packs:
     });
     expect(report.policyPacks.unresolved).toHaveLength(1);
     expect(report.policyPacks.unresolved[0]).toMatchObject({
-      name: "understanding-before-execution",
+      name: "branch-protection",
       reason: "unknown_source",
       source: "marketplace-that-does-not-exist-yet",
     });
     expect(report.errorCount).toBeGreaterThanOrEqual(1);
     const text = format(report);
     expect(text).toContain("Policy Packs");
-    expect(text).toContain("✗ understanding-before-execution");
+    expect(text).toContain("✗ branch-protection");
     expect(text).toContain('source "marketplace-that-does-not-exist-yet" is not recognised');
     expect(text).toContain("declared but not live");
   });
@@ -1168,7 +1168,7 @@ policy_packs:
 hooks: []
 policies: []
 policy_packs:
-  - name: understanding-before-executon
+  - name: branch-protecton
     source: builtin
 `,
     });
@@ -1178,12 +1178,12 @@ policy_packs:
     });
     expect(report.policyPacks.unresolved).toHaveLength(1);
     expect(report.policyPacks.unresolved[0]).toMatchObject({
-      name: "understanding-before-executon",
+      name: "branch-protecton",
       reason: "unknown_builtin_name",
     });
     expect(report.errorCount).toBeGreaterThanOrEqual(1);
     const text = format(report);
-    expect(text).toContain("✗ understanding-before-executon");
+    expect(text).toContain("✗ branch-protecton");
     expect(text).toContain("not a known builtin pack name");
   });
 
@@ -1193,7 +1193,7 @@ policy_packs:
 hooks: []
 policies: []
 policy_packs:
-  - name: understanding-before-execution
+  - name: branch-protection
     source: builtin
 `,
     });
@@ -1202,6 +1202,23 @@ policy_packs:
       shallow: true,
     });
     expect(report.policyPacks.unresolved).toHaveLength(0);
+    // Positive control: a typo in the pack name on the same fixture shape
+    // does flag, so the silence above is the pack check running and
+    // resolving, not the manifest being skipped.
+    const typoHome = makeFixture({
+      "harness.yaml": `version: 1
+hooks: []
+policies: []
+policy_packs:
+  - name: branch-protecton
+    source: builtin
+`,
+    });
+    const typoReport = await doctor({
+      configPath: path.join(typoHome, "harness.yaml"),
+      shallow: true,
+    });
+    expect(typoReport.policyPacks.unresolved).toHaveLength(1);
     expect(format(report)).not.toContain("Policy Packs");
   });
 
@@ -1211,7 +1228,7 @@ policy_packs:
 hooks: []
 policies: []
 policy_packs:
-  - name: understanding-before-executon
+  - name: branch-protecton
     source: builtin
     enabled: false
 `,
@@ -1221,6 +1238,24 @@ policy_packs:
       shallow: true,
     });
     expect(report.policyPacks.unresolved).toHaveLength(0);
+    // Positive control: the same unresolvable entry with enabled: true
+    // does flag, so the silence above is the disabled flag at work, not
+    // the pack check being skipped.
+    const enabledHome = makeFixture({
+      "harness.yaml": `version: 1
+hooks: []
+policies: []
+policy_packs:
+  - name: branch-protecton
+    source: builtin
+    enabled: true
+`,
+    });
+    const enabledReport = await doctor({
+      configPath: path.join(enabledHome, "harness.yaml"),
+      shallow: true,
+    });
+    expect(enabledReport.policyPacks.unresolved).toHaveLength(1);
   });
 
   // Per-pack config schema (task d78fb3c7). Doctor mirrors validate's
@@ -1233,10 +1268,10 @@ policy_packs:
 hooks: []
 policies: []
 policy_packs:
-  - name: understanding-before-execution
+  - name: branch-protection
     source: builtin
     config:
-      mode: fastConfirm
+      protected_branches: main
 `,
     });
     const report = await doctor({
@@ -1245,13 +1280,13 @@ policy_packs:
     });
     expect(report.policyPacks.configIssues).toHaveLength(1);
     expect(report.policyPacks.configIssues[0]).toMatchObject({
-      name: "understanding-before-execution",
-      configPath: "mode",
+      name: "branch-protection",
+      configPath: "protected_branches",
     });
     expect(report.errorCount).toBeGreaterThanOrEqual(1);
     const text = format(report);
     expect(text).toContain("Policy Packs");
-    expect(text).toContain("✗ understanding-before-execution.config.mode");
+    expect(text).toContain("✗ branch-protection.config.protected_branches");
     expect(text).toContain("rejected by the pack's config schema");
   });
 
@@ -1261,10 +1296,11 @@ policy_packs:
 hooks: []
 policies: []
 policy_packs:
-  - name: understanding-before-execution
+  - name: branch-protection
     source: builtin
     config:
-      permision_profile: safe-start
+      protected_brances:
+        - main
 `,
     });
     const report = await doctor({
@@ -1273,7 +1309,7 @@ policy_packs:
     });
     expect(report.policyPacks.configIssues).toHaveLength(1);
     expect(report.policyPacks.configIssues[0]?.message).toMatch(
-      /permision_profile/,
+      /protected_brances/,
     );
   });
 
@@ -1283,11 +1319,12 @@ policy_packs:
 hooks: []
 policies: []
 policy_packs:
-  - name: understanding-before-execution
+  - name: branch-protection
     source: builtin
     config:
-      mode: fast_confirm
-      permission_profile: safe-start
+      protected_branches:
+        - main
+        - develop
 `,
     });
     const report = await doctor({
@@ -1296,6 +1333,26 @@ policy_packs:
     });
     expect(report.policyPacks.unresolved).toHaveLength(0);
     expect(report.policyPacks.configIssues).toHaveLength(0);
+    // Positive control: a typo'd config key on the same fixture shape
+    // does flag, so the silence above is the config check running against
+    // this manifest and passing, not the manifest being skipped.
+    const typoHome = makeFixture({
+      "harness.yaml": `version: 1
+hooks: []
+policies: []
+policy_packs:
+  - name: branch-protection
+    source: builtin
+    config:
+      protected_brances:
+        - main
+`,
+    });
+    const typoReport = await doctor({
+      configPath: path.join(typoHome, "harness.yaml"),
+      shallow: true,
+    });
+    expect(typoReport.policyPacks.configIssues).toHaveLength(1);
     expect(format(report)).not.toContain("Policy Packs");
   });
 
@@ -1663,16 +1720,15 @@ describe("doctor — policy pack ux/producers drift check (task 68b9ad9c)", () =
 hooks: []
 policies: []
 policy_packs:
-  - name: understanding-before-execution
+  - name: branch-protection
     source: builtin
     config:
-      mode: grill_me
       ux:
-        cannot: "You cannot use write-capable tools yet."
+        cannot: "branch-protection: refusing edit on protected branch."
         required:
-          - "an approved Understanding Report for this session"
+          - "a non-protected branch"
         run:
-          - "Run \`harness approve understanding\` once you have produced and confirmed an Understanding Report."
+          - "git checkout -b feat/x"
 `;
 
   it("flags a manifest whose ux.run still teaches the pre-fix bare-command wording", async () => {
@@ -1683,14 +1739,14 @@ policy_packs:
     });
     expect(report.policyPacks.uxDrift).toHaveLength(1);
     expect(report.policyPacks.uxDrift[0]).toMatchObject({
-      name: "understanding-before-execution",
+      name: "branch-protection",
       fields: ["ux"],
     });
     expect(report.policyPacks.uxDrift[0]?.message).toMatch(/harness pack reseed/);
     expect(report.warningCount).toBeGreaterThanOrEqual(1);
     const text = format(report);
     expect(text).toContain("Policy Packs");
-    expect(text).toContain("⚠ understanding-before-execution.config.ux");
+    expect(text).toContain("⚠ branch-protection.config.ux");
   });
 
   it("stays silent when config.ux already matches the shipped template", async () => {
@@ -1699,17 +1755,15 @@ policy_packs:
 hooks: []
 policies: []
 policy_packs:
-  - name: understanding-before-execution
+  - name: branch-protection
     source: builtin
     config:
-      mode: grill_me
       ux:
-        cannot: "You cannot use write-capable tools yet."
+        cannot: "You cannot edit files on protected branch \${BRANCH} yet."
         required:
-          - "an approved Understanding Report for this session"
+          - "a checkout of a non-protected branch (current \`\${BRANCH}\` is protected)"
         run:
-          - "Write an Understanding Report covering: Current Understanding, Intended Outcome, Derived Todos, Acceptance Criteria, Assumptions, Open Questions, Out Of Scope, Risks, Verification Plan, Prior Art (state what you searched for an existing solution and what you found, with an explicit adopt-or-build judgment)"
-          - "Run \`harness approve understanding\` with the report attached as a quoted heredoc (harness approve understanding <<'UNDERSTANDING_REPORT' ...report... UNDERSTANDING_REPORT) so it is persisted for audit, then approve the prompt; the heredoc is the only extra shell shape the gate allows (no pipes, chaining, or other redirection)"
+          - "git checkout -b feat/<your-task>"
 `,
     });
     const report = await doctor({
@@ -1717,6 +1771,15 @@ policy_packs:
       shallow: true,
     });
     expect(report.policyPacks.uxDrift).toHaveLength(0);
+    // Positive control: the stale-ux sibling manifest does flag, so the
+    // silence above is the ux-drift check comparing (and matching) this
+    // manifest's ux, not the manifest being skipped.
+    const staleHome = makeFixture({ "harness.yaml": STALE_UX_MANIFEST });
+    const staleReport = await doctor({
+      configPath: path.join(staleHome, "harness.yaml"),
+      shallow: true,
+    });
+    expect(staleReport.policyPacks.uxDrift).toHaveLength(1);
     expect(format(report)).not.toContain("Policy Packs");
   });
 
@@ -1756,10 +1819,11 @@ policy_packs:
 hooks: []
 policies: []
 policy_packs:
-  - name: understanding-before-execution
+  - name: branch-protection
     source: builtin
     config:
-      mode: grill_me
+      protected_branches:
+        - main
 `,
     });
     const report = await doctor({
@@ -1767,6 +1831,26 @@ policy_packs:
       shallow: true,
     });
     expect(report.policyPacks.uxDrift).toHaveLength(0);
+    expect(report.policyPacks.configIssues).toHaveLength(0);
+    // Positive control: the same fixture shape with a value the pack's
+    // config schema rejects does flag, so the zeros above are doctor
+    // parsing this manifest's pack config, not skipping it.
+    const badValueHome = makeFixture({
+      "harness.yaml": `version: 1
+hooks: []
+policies: []
+policy_packs:
+  - name: branch-protection
+    source: builtin
+    config:
+      protected_branches: main
+`,
+    });
+    const badValueReport = await doctor({
+      configPath: path.join(badValueHome, "harness.yaml"),
+      shallow: true,
+    });
+    expect(badValueReport.policyPacks.configIssues).toHaveLength(1);
   });
 
   it("disabled packs are not checked", async () => {
@@ -3453,30 +3537,38 @@ describe("doctor - pack-level below_floor gap report-level counts (task 62d9778c
     - deny-pause-sentinel-forgery
 `;
 
-  async function reportFor(minVersion: string) {
+  // branch-protection has no version command, so the floor states are:
+  // no declared `min_version` (floor trivially met, 0 gaps) versus a
+  // declared floor (`no_probe_registered` gap, exactly 1).
+  async function reportFor(withFloor: boolean) {
     const home = makeFixture({
       "harness.yaml": `version: 1
 hooks: []
 policies: []
 ${SILENCE_DRIFT_PACK}policy_packs:
-  - name: understanding-before-execution
+  - name: branch-protection
     source: builtin
-    min_version: "${minVersion}"
-`,
+${withFloor ? '    min_version: "1.0.0"\n' : ""}`,
     });
     return doctor({
       configPath: path.join(home, "harness.yaml"),
       shallow: true,
-      versionProbe: () => "understanding-gate 0.3.1",
+      versionProbe: () => null,
     });
   }
 
   it("increments warningCount by the gap count and leaves errorCount unchanged when the floor moves from met to missed", async () => {
-    const metFloor = await reportFor("0.3.0");
-    const missedFloor = await reportFor("0.99.0");
+    const metFloor = await reportFor(false);
+    const missedFloor = await reportFor(true);
 
     expect(metFloor.policyPacks.versionGaps).toHaveLength(0);
     expect(missedFloor.policyPacks.versionGaps).toHaveLength(1);
+    // The report surface carries no `kind` field; the no_probe_registered
+    // gap kind is identifiable through its message.
+    expect(missedFloor.policyPacks.versionGaps[0]?.message).toMatch(
+      /no version probe registered/,
+    );
+    expect(missedFloor.policyPacks.versionGaps[0]?.declaredMinVersion).toBe("1.0.0");
 
     const n = missedFloor.policyPacks.versionGaps.length - metFloor.policyPacks.versionGaps.length;
     expect(n).toBe(1);

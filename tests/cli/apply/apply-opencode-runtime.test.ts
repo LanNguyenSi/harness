@@ -108,7 +108,7 @@ describe("apply --runtime opencode", () => {
 
   it("does not project policy-pack hooks into the opencode config, and warns", async () => {
     writeManifest({
-      policy_packs: [{ name: "understanding-before-execution" }],
+      policy_packs: [{ name: "branch-protection" }],
     });
     const result = await apply({ homeDir: tmpHome, runtime: "opencode" });
     expect(result.outcome).toBe("applied");
@@ -125,7 +125,7 @@ describe("apply --runtime opencode", () => {
 
     // instructions.md still ships, but its CONTENT is runtime-specific
     // (HIGH-F1, batch18 fix-round, task f34eb233): before this fix,
-    // understanding-before-execution's buildInstructions() fell through
+    // the pack's buildInstructions() fell through
     // to the claude-code `else` branch under `--runtime opencode` and
     // falsely claimed its hooks were "wired into the harness-managed
     // settings.json", even though nothing is wired for opencode (no
@@ -139,7 +139,7 @@ describe("apply --runtime opencode", () => {
         tmpHome,
         GENERATED_DIRNAME,
         "policy-packs",
-        "understanding-before-execution",
+        "branch-protection",
         "instructions.md",
       ),
       "utf8",

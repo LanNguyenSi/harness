@@ -50,7 +50,7 @@ function canonicalManifest(extra: Record<string, unknown> = {}): Manifest {
     },
     hooks: [
       {
-        name: "policy-pack:understanding-before-execution:pre-tool-use",
+        name: "policy-pack:branch-protection:pre-tool-use",
         event: "PreToolUse",
         match: "Bash",
         command: "harness policy intercept",
@@ -249,7 +249,7 @@ describe("generateOpencodeConfig", () => {
     // already covers mcp (two servers, one of them grounding-mcp to
     // exercise the homeDir-dependent EVIDENCE_LEDGER_DB projection),
     // hooks (one entry shaped exactly like a policy-pack contribution:
-    // `policy-pack:understanding-before-execution:pre-tool-use`), and
+    // `policy-pack:branch-protection:pre-tool-use`), and
     // memory.router; `homeDir: "/home/op"` is injected so the ledger
     // path is deterministic across machines.
     const { content } = generateOpencodeConfig(canonicalManifest(), {

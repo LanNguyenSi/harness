@@ -934,20 +934,19 @@ describe("expandPolicyPacks", () => {
   it("skips an enabled:false pack and records its name in `skipped`", () => {
     const m = buildManifest([
       {
-        name: "understanding-before-execution",
+        name: "branch-protection",
         enabled: false,
-        config: { mode: "strict" },
       },
     ]);
     const r = expandPolicyPacks(m);
     expect(r.hooks).toEqual([]);
     expect(r.files).toEqual([]);
-    expect(r.skipped).toEqual(["understanding-before-execution"]);
+    expect(r.skipped).toEqual(["branch-protection"]);
   });
 
   it("warns and skips when source is not 'builtin'", () => {
     const m = buildManifest([
-      { name: "understanding-before-execution", source: "path:./somewhere" },
+      { name: "branch-protection", source: "path:./somewhere" },
     ]);
     const r = expandPolicyPacks(m);
     expect(r.hooks).toEqual([]);
@@ -965,25 +964,25 @@ describe("expandPolicyPacks", () => {
     expect(r.warnings[0]).toMatch(/not a known builtin pack/);
   });
 
-  it("aggregates two enabled packs independently when both resolve cleanly", () => {
-    // Phase 6 #2 only ships one builtin (`understanding-before-execution`),
-    // so this test exercises the same builtin twice under different
-    // names. Both names fail the registry lookup; the only one that
-    // resolves is the canonical one. The second entry's purpose here is
-    // proving that the loop in expand.ts (a) iterates over every entry,
-    // (b) accumulates warnings without dropping the first pack's
-    // contributions, (c) preserves the contribution of the resolvable
-    // pack on the way through.
+  it("aggregates enabled packs independently: a resolving builtin plus an unknown name", () => {
+    // The unknown second entry proves the loop in expand.ts (a) iterates
+    // over every entry, (b) records the warning without dropping the
+    // first pack's contributions, (c) preserves the resolvable pack's
+    // contribution on the way through. `branch-protection` contributes
+    // exactly one PreToolUse blocker and one instructions file, so the
+    // counts are exact.
     const m = buildManifest([
-      { name: "understanding-before-execution" },
+      { name: "branch-protection" },
       { name: "no-such-pack" },
     ]);
     const r = expandPolicyPacks(m);
-    expect(r.hooks).toHaveLength(8); // v0.18: 3 legacy + 1 PostToolUse expiry; v2 (494fd1e5): +1 track-active-claim; 2ba06030: +1 stay-in-scope; task 496660c5: +2 SubagentStart/SubagentStop
+    expect(r.hooks).toHaveLength(1);
     expect(r.files).toHaveLength(1);
-    expect(r.warnings.some((w) => w.includes("not a known builtin pack"))).toBe(
-      true,
+    const unknownNameWarnings = r.warnings.filter((w) =>
+      w.includes("not a known builtin pack"),
     );
+    expect(unknownNameWarnings).toHaveLength(1);
+    expect(unknownNameWarnings[0]).toContain("no-such-pack");
   });
 
   it("contributes permissions when config.permission_profile names a builtin", () => {
@@ -1035,11 +1034,11 @@ describe("expandPolicyPacks", () => {
 
   it("drops a pack hook whose name collides with a manifest hooks[] entry", () => {
     const m = buildManifest(
-      [{ name: "understanding-before-execution" }],
+      [{ name: "branch-protection" }],
       [
         {
-          name: "policy-pack:understanding-before-execution:stop",
-          event: "Stop",
+          name: "policy-pack:branch-protection:pre-tool-use",
+          event: "PreToolUse",
           command: "/usr/local/bin/handler.sh",
           blocking: false,
           budget_ms: 5000,
@@ -1047,8 +1046,11 @@ describe("expandPolicyPacks", () => {
       ],
     );
     const r = expandPolicyPacks(m);
-    expect(r.hooks).toHaveLength(7); // 8 contributions - 1 dropped collision (Stop)
-    expect(r.hooks.find((h) => h.event === "Stop")).toBeUndefined();
+    expect(r.hooks).toHaveLength(0); // 1 contribution - 1 dropped collision (PreToolUse)
+    expect(
+      r.hooks.find((h) => h.name === "policy-pack:branch-protection:pre-tool-use"),
+    ).toBeUndefined();
+    expect(r.files).toHaveLength(1); // positive: the pack resolved, its instructions file remains
     expect(
       r.warnings.some((w) => w.includes("collides with a manifest hooks")),
     ).toBe(true);

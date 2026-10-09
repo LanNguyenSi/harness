@@ -70,7 +70,7 @@ function writeErroringManifest(home: string): string {
 hooks: []
 policies: []
 policy_packs:
-  - name: understanding-before-execution
+  - name: branch-protection
     source: marketplace-that-does-not-exist-yet
 `,
   );

@@ -89,18 +89,25 @@ describe("checkPolicyPackUxDrift — understanding-before-execution", () => {
     expect(drift[0]?.fields).toEqual(["ux", "producers"]);
   });
 
-  it("does not flag when config.ux / config.producers are absent entirely (missing is out of scope)", () => {
+  it("does not flag when config.ux is absent entirely (missing is out of scope)", () => {
     const m = manifestWith([
-      { name: "understanding-before-execution", config: { mode: "grill_me" } },
+      { name: "branch-protection", config: { protected_branches: ["main"] } },
     ]);
     expect(checkPolicyPackUxDrift(m)).toEqual([]);
+    // Positive control: the same fixture shape with a (stale, malformed)
+    // config.ux DOES flag, so the empty result above is the check running
+    // and passing on an absent ux, not the pack being skipped.
+    const stale = manifestWith([
+      { name: "branch-protection", config: { ux: { cannot: "x" } } },
+    ]);
+    expect(checkPolicyPackUxDrift(stale)).toHaveLength(1);
   });
 
   it("treats a malformed config.ux as diverging (not silently skipped)", () => {
     const m = manifestWith([
       {
-        name: "understanding-before-execution",
-        config: { mode: "grill_me", ux: { cannot: "x" } }, // missing required/run
+        name: "branch-protection",
+        config: { ux: { cannot: "x" } }, // missing required/run
       },
     ]);
     const drift = checkPolicyPackUxDrift(m);
@@ -111,12 +118,22 @@ describe("checkPolicyPackUxDrift — understanding-before-execution", () => {
   it("disabled packs are not checked", () => {
     const m = manifestWith([
       {
-        name: "understanding-before-execution",
+        name: "branch-protection",
         enabled: false,
-        config: { mode: "grill_me", ux: STALE_UX },
+        config: { ux: { cannot: "old", required: ["old"], run: ["old"] } },
       },
     ]);
     expect(checkPolicyPackUxDrift(m)).toEqual([]);
+    // Positive control: the same stale ux with enabled: true flags, so the
+    // empty result above is the disabled flag, not the check being skipped.
+    const enabled = manifestWith([
+      {
+        name: "branch-protection",
+        enabled: true,
+        config: { ux: { cannot: "old", required: ["old"], run: ["old"] } },
+      },
+    ]);
+    expect(checkPolicyPackUxDrift(enabled)).toHaveLength(1);
   });
 
   it("unknown pack names are skipped (source-check's job)", () => {

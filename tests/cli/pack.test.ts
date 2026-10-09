@@ -34,17 +34,17 @@ function readManifest(): { policy_packs?: Array<Record<string, unknown>> } {
 describe("pack mutate (pure YAML)", () => {
   it("applyPackAdd appends an entry under policy_packs[]", () => {
     const out = applyPackAdd("version: 1\n", {
-      name: "understanding-before-execution",
-      config: { mode: "grill_me" },
+      name: "branch-protection",
+      config: { protected_branches: ["main"] },
     });
     expect(out).toContain("policy_packs:");
-    expect(out).toContain("name: understanding-before-execution");
-    expect(out).toContain("mode: grill_me");
+    expect(out).toContain("name: branch-protection");
+    expect(out).toMatch(/protected_branches:\s*\n\s*- main/);
   });
 
   it("applyPackAdd omits unset optional fields from the inserted YAML", () => {
     const out = applyPackAdd("version: 1\n", {
-      name: "understanding-before-execution",
+      name: "branch-protection",
     });
     expect(out).not.toMatch(/\bsource:/);
     expect(out).not.toMatch(/\benabled:/);
@@ -53,40 +53,40 @@ describe("pack mutate (pure YAML)", () => {
 
   it("applyPackAdd creates the policy_packs[] sequence when absent", () => {
     const out = applyPackAdd("version: 1\nhooks: []\n", {
-      name: "understanding-before-execution",
+      name: "branch-protection",
     });
-    expect(out).toMatch(/policy_packs:[\s\n]*-\s*name: understanding-before-execution/);
+    expect(out).toMatch(/policy_packs:[\s\n]*-\s*name: branch-protection/);
   });
 
   it("planPackRemove reports found + available names", () => {
-    const yaml = "version: 1\npolicy_packs:\n  - name: understanding-before-execution\n";
-    expect(planPackRemove(yaml, "understanding-before-execution").found).toBe(true);
+    const yaml = "version: 1\npolicy_packs:\n  - name: branch-protection\n";
+    expect(planPackRemove(yaml, "branch-protection").found).toBe(true);
     expect(planPackRemove(yaml, "absent").found).toBe(false);
     expect(planPackRemove(yaml, "absent").availableNames).toEqual([
-      "understanding-before-execution",
+      "branch-protection",
     ]);
   });
 
   it("applyPackRemove drops the entry but keeps the empty sequence", () => {
-    const yaml = "version: 1\npolicy_packs:\n  - name: understanding-before-execution\n";
-    const out = applyPackRemove(yaml, "understanding-before-execution");
+    const yaml = "version: 1\npolicy_packs:\n  - name: branch-protection\n";
+    const out = applyPackRemove(yaml, "branch-protection");
     expect(out).toContain("policy_packs:");
-    expect(out).not.toContain("understanding-before-execution");
+    expect(out).not.toContain("branch-protection");
   });
 });
 
 describe("pack add", () => {
   it("appends a known builtin and round-trips through the schema", async () => {
     const r = await packAdd(
-      { name: "understanding-before-execution", config: { mode: "grill_me" } },
+      { name: "branch-protection", config: { protected_branches: ["main"] } },
       { configPath: manifestPath },
     );
     expect(r.applied).toBe(true);
     const m = readManifest();
     expect(m.policy_packs).toHaveLength(1);
     expect(m.policy_packs?.[0]).toMatchObject({
-      name: "understanding-before-execution",
-      config: { mode: "grill_me" },
+      name: "branch-protection",
+      config: { protected_branches: ["main"] },
     });
   });
 
@@ -105,7 +105,7 @@ describe("pack add", () => {
     let caught: unknown;
     try {
       await packAdd(
-        { name: "understanding-before-execution", source: "path:./somewhere" },
+        { name: "branch-protection", source: "path:./somewhere" },
         { configPath: manifestPath },
       );
     } catch (e) {
@@ -116,10 +116,10 @@ describe("pack add", () => {
   });
 
   it("rejects a duplicate pack name via the schema's superRefine", async () => {
-    await packAdd({ name: "understanding-before-execution" }, { configPath: manifestPath });
+    await packAdd({ name: "branch-protection" }, { configPath: manifestPath });
     let caught: unknown;
     try {
-      await packAdd({ name: "understanding-before-execution" }, { configPath: manifestPath });
+      await packAdd({ name: "branch-protection" }, { configPath: manifestPath });
     } catch (e) {
       caught = e;
     }
@@ -130,19 +130,19 @@ describe("pack add", () => {
   it("dry-run emits a diff and does not mutate the file", async () => {
     const before = fs.readFileSync(manifestPath, "utf8");
     const r = await packAdd(
-      { name: "understanding-before-execution" },
+      { name: "branch-protection" },
       { configPath: manifestPath, dryRun: true },
     );
     expect(r.applied).toBe(false);
-    expect(r.diff).toContain("understanding-before-execution");
+    expect(r.diff).toContain("branch-protection");
     expect(fs.readFileSync(manifestPath, "utf8")).toBe(before);
   });
 });
 
 describe("pack remove", () => {
   it("removes an entry that has not been applied yet", async () => {
-    await packAdd({ name: "understanding-before-execution" }, { configPath: manifestPath });
-    const r = await packRemove("understanding-before-execution", { configPath: manifestPath });
+    await packAdd({ name: "branch-protection" }, { configPath: manifestPath });
+    const r = await packRemove("branch-protection", { configPath: manifestPath });
     expect(r.applied).toBe(true);
     expect(r.cleanedFiles).toEqual([]);
     const m = readManifest();
@@ -161,40 +161,40 @@ describe("pack remove", () => {
   });
 
   it("refuses without --force when applied state is recorded in .last-apply", async () => {
-    await packAdd({ name: "understanding-before-execution" }, { configPath: manifestPath });
+    await packAdd({ name: "branch-protection" }, { configPath: manifestPath });
     await apply({ homeDir: tmpHome });
     let caught: unknown;
     try {
-      await packRemove("understanding-before-execution", { configPath: manifestPath });
+      await packRemove("branch-protection", { configPath: manifestPath });
     } catch (e) {
       caught = e;
     }
     expect(caught).toBeInstanceOf(HarnessExitError);
     const msg = (caught as Error).message;
     expect(msg).toMatch(/applied state present/);
-    expect(msg).toMatch(/policy-packs\/understanding-before-execution\/instructions\.md/);
+    expect(msg).toMatch(/policy-packs\/branch-protection\/instructions\.md/);
     expect(msg).toMatch(/Pass --force/);
   });
 
   it("--force removes the manifest entry, deletes pack files, and prunes .last-apply", async () => {
-    await packAdd({ name: "understanding-before-execution" }, { configPath: manifestPath });
+    await packAdd({ name: "branch-protection" }, { configPath: manifestPath });
     await apply({ homeDir: tmpHome });
 
     const packDir = path.join(
       tmpHome,
       "harness.generated",
       "policy-packs",
-      "understanding-before-execution",
+      "branch-protection",
     );
     expect(fs.existsSync(packDir)).toBe(true);
 
-    const r = await packRemove("understanding-before-execution", {
+    const r = await packRemove("branch-protection", {
       configPath: manifestPath,
       force: true,
     });
     expect(r.applied).toBe(true);
     expect(r.cleanedFiles).toContain(
-      "policy-packs/understanding-before-execution/instructions.md",
+      "policy-packs/branch-protection/instructions.md",
     );
     expect(fs.existsSync(packDir)).toBe(false);
 
@@ -203,7 +203,7 @@ describe("pack remove", () => {
       path.join(tmpHome, "harness.generated", ".last-apply"),
       "utf8",
     );
-    expect(lastApplyText).not.toContain("policy-packs/understanding-before-execution/");
+    expect(lastApplyText).not.toContain("policy-packs/branch-protection/");
 
     // A subsequent apply doesn't resurrect the pack files, but it DOES
     // need to rewrite settings.json without the pack hooks (the manifest
@@ -219,7 +219,6 @@ describe("pack remove", () => {
   });
 
   it("--force keeps the runtime .last-apply records, so the next plain apply still reuses codex (agent-tasks b9e6d63c)", async () => {
-    await packAdd({ name: "understanding-before-execution" }, { configPath: manifestPath });
     await packAdd({ name: "branch-protection" }, { configPath: manifestPath });
     await apply({ homeDir: tmpHome, runtime: "codex" });
     const generatedDir = path.join(tmpHome, "harness.generated");
@@ -279,17 +278,17 @@ describe("pack remove", () => {
   });
 
   it("dry-run --force surfaces the would-clean file list without writing", async () => {
-    await packAdd({ name: "understanding-before-execution" }, { configPath: manifestPath });
+    await packAdd({ name: "branch-protection" }, { configPath: manifestPath });
     await apply({ homeDir: tmpHome });
     const before = fs.readFileSync(manifestPath, "utf8");
-    const r = await packRemove("understanding-before-execution", {
+    const r = await packRemove("branch-protection", {
       configPath: manifestPath,
       force: true,
       dryRun: true,
     });
     expect(r.applied).toBe(false);
     expect(r.cleanedFiles).toContain(
-      "policy-packs/understanding-before-execution/instructions.md",
+      "policy-packs/branch-protection/instructions.md",
     );
     expect(fs.readFileSync(manifestPath, "utf8")).toBe(before);
     expect(
@@ -298,7 +297,7 @@ describe("pack remove", () => {
           tmpHome,
           "harness.generated",
           "policy-packs",
-          "understanding-before-execution",
+          "branch-protection",
         ),
       ),
     ).toBe(true);
@@ -336,7 +335,7 @@ describe("pack list", () => {
 
   it("--enabled-only filters out enabled: false entries", async () => {
     await packAdd(
-      { name: "understanding-before-execution", enabled: false },
+      { name: "branch-protection", enabled: false },
       { configPath: manifestPath },
     );
     const all = packList({ configPath: manifestPath });
@@ -346,10 +345,10 @@ describe("pack list", () => {
   });
 
   it("--json emits a parsable JSON array", async () => {
-    await packAdd({ name: "understanding-before-execution" }, { configPath: manifestPath });
+    await packAdd({ name: "branch-protection" }, { configPath: manifestPath });
     const r = packList({ configPath: manifestPath, json: true });
     const parsed = JSON.parse(r.output);
     expect(Array.isArray(parsed)).toBe(true);
-    expect(parsed[0].name).toBe("understanding-before-execution");
+    expect(parsed[0].name).toBe("branch-protection");
   });
 });

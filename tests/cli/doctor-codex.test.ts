@@ -40,7 +40,7 @@ function writeManifestWithPack(home: string): string {
     memory: { directories: [] },
     hooks: [],
     policies: [],
-    policy_packs: [{ name: "understanding-before-execution" }],
+    policy_packs: [{ name: "branch-protection" }],
   };
   const target = path.join(home, "harness.yaml");
   fs.writeFileSync(target, yamlStringify(manifest));
@@ -94,7 +94,7 @@ describe("doctor --target codex", () => {
     expect(
       report.codexTarget!.checks.some(
         (c) =>
-          c.name.startsWith("hook policy-pack:understanding-before-execution:codex:") &&
+          c.name.startsWith("hook policy-pack:branch-protection:") &&
           c.status === "ok",
       ),
     ).toBe(true);

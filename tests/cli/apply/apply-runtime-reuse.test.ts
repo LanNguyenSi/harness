@@ -23,6 +23,7 @@ import {
   buildLastApply,
   lastApplyPath,
   readLastApply,
+  sha256Hex,
   writeLastApply,
 } from "../../../src/io/last-apply.js";
 
@@ -42,7 +43,7 @@ beforeEach(() => {
     memory: { directories: [] },
     hooks: [],
     policies: [],
-    policy_packs: [{ name: "understanding-before-execution" }],
+    policy_packs: [{ name: "branch-protection" }],
   };
   manifestPath = path.join(tmpHome, "harness.yaml");
   fs.writeFileSync(manifestPath, yamlStringify(manifest));
@@ -59,7 +60,7 @@ function readInstructions(): string {
     path.join(
       generatedDir(),
       "policy-packs",
-      "understanding-before-execution",
+      "branch-protection",
       "instructions.md",
     ),
     "utf8",
@@ -158,6 +159,22 @@ function stripRuntime(): void {
   editLastApply((rec) => {
     delete rec["runtime"];
   });
+}
+
+// Hand-write a second policy-pack instructions.md entry into the record
+// (and onto disk, so no drift check fires). Only the single builtin pack
+// can generate real entries, but these cases need two pack entries whose
+// recorded runtimes differ.
+function injectPackEntry(name: string, runtime: string): void {
+  const key = `policy-packs/${name}/instructions.md`;
+  const content = `# Policy Pack: ${name}\n\n## Runtime\n\n${runtime}\n`;
+  editLastApply((rec) => {
+    const files = rec["files"] as Record<string, { sha256: string; content: string }>;
+    files[key] = { sha256: sha256Hex(content), content };
+  });
+  const onDisk = path.join(generatedDir(), key);
+  fs.mkdirSync(path.dirname(onDisk), { recursive: true });
+  fs.writeFileSync(onDisk, content);
 }
 
 describe("apply without --runtime after a codex apply", () => {
@@ -561,8 +578,8 @@ function setPolicyPacks(packs: Array<Record<string, unknown>>): void {
   fs.writeFileSync(manifestPath, yamlStringify(manifest));
 }
 
-const UBE = "understanding-before-execution";
 const BP = "branch-protection";
+const GHOST = "ghost-pack";
 const packEntryRuntime = (pack: string): string | undefined =>
   /## Runtime\n\n([a-z-]+)/.exec(
     readLastApply(generatedDir())?.files[`policy-packs/${pack}/instructions.md`]?.content ?? "",
@@ -586,7 +603,7 @@ describe("a pre-field record: only the packs its manifest snapshot lists settle 
 
   it("a stale codex pack entry the snapshot does not list does not infer codex", async () => {
     await staleCodexPackHistory();
-    expect(packEntryRuntime(UBE)).toBe("codex");
+    expect(packEntryRuntime(BP)).toBe("codex");
     const result = await apply({ homeDir: tmpHome, dryRun: true });
     expect(result.runtime).toBe("claude-code");
     expect(result.runtimeSource).toBe("unrecorded");
@@ -597,14 +614,16 @@ describe("a pre-field record: only the packs its manifest snapshot lists settle 
   });
 
   it("a stale codex entry next to a listed claude-code pack: infers claude-code", async () => {
-    setPolicyPacks([{ name: UBE }, { name: BP }]);
+    setPolicyPacks([{ name: BP }]);
     await apply({ homeDir: tmpHome, runtime: "codex" });
     stripRuntime();
-    setPolicyPacks([{ name: UBE }]);
     await apply({ homeDir: tmpHome, runtime: "claude-code" });
     stripRuntime();
-    expect(packEntryRuntime(BP)).toBe("codex");
-    expect(packEntryRuntime(UBE)).toBe("claude-code");
+    // The record's snapshot lists only branch-protection; the hand-written
+    // ghost-pack codex entry is the stale one the snapshot does not list.
+    injectPackEntry(GHOST, "codex");
+    expect(packEntryRuntime(BP)).toBe("claude-code");
+    expect(packEntryRuntime(GHOST)).toBe("codex");
 
     const result = await apply({ homeDir: tmpHome, dryRun: true });
     expect(result.runtime).toBe("claude-code");
@@ -618,13 +637,25 @@ describe("a pre-field record: only the packs its manifest snapshot lists settle 
   });
 
   it("a pack the snapshot lists as disabled does not count", async () => {
-    setPolicyPacks([{ name: UBE }, { name: BP }]);
+    setPolicyPacks([{ name: BP }]);
     await apply({ homeDir: tmpHome, runtime: "codex" });
     stripRuntime();
-    setPolicyPacks([{ name: UBE }, { name: BP, enabled: false }]);
     await apply({ homeDir: tmpHome, runtime: "claude-code" });
     stripRuntime();
-    expect(packEntryRuntime(BP)).toBe("codex");
+    // The hand-written codex entry stays in the record; the rewritten
+    // snapshot lists it but as disabled, so only branch-protection's
+    // regenerated claude-code entry counts.
+    injectPackEntry(GHOST, "codex");
+    editLastApply((rec) => {
+      rec["manifest"] = {
+        sha256: "0",
+        content: JSON.stringify({
+          version: 1,
+          policy_packs: [{ name: BP }, { name: GHOST, enabled: false }],
+        }),
+      };
+    });
+    expect(packEntryRuntime(GHOST)).toBe("codex");
 
     const result = await apply({ homeDir: tmpHome, dryRun: true });
     expect(result.runtime).toBe("claude-code");
@@ -701,7 +732,7 @@ describe("preserveRecordedRuntime (the harness smoke apply)", () => {
     expect(next.runtime).toBe("codex");
     expect(next.runtimeSource).toBe("last-apply");
     expect(next.files.filter((f) => f.changed).map((f) => f.basename)).toContain(
-      "policy-packs/understanding-before-execution/instructions.md",
+      "policy-packs/branch-protection/instructions.md",
     );
   });
 
