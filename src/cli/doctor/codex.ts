@@ -16,6 +16,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { expandPolicyPacks } from "../../policy-packs/index.js";
 import type { Hook, Manifest } from "../../schema/index.js";
+import { invokesRemovedCommand, removedCommandMessage } from "../../schema/removed-keys.js";
 import { countStatusDiagnostics, type DoctorCheckStatus } from "./target-checks.js";
 
 // LOW-F5 (batch18 fix-round, task f34eb233 review): re-exported for
@@ -28,6 +29,11 @@ export interface CodexCheckEntry {
   name: string;
   status: CodexCheckStatus;
   message: string;
+  /**
+   * The finding is already tallied by another doctor section (the manifest
+   * warnings), so the target tally skips it. It still renders at its status.
+   */
+  countedElsewhere?: boolean;
 }
 
 export interface CodexTargetReport {
@@ -177,20 +183,19 @@ function checkConfigToml(manifestDir: string): CodexCheckEntry {
   };
 }
 
-function codexHooksFromManifest(manifest: Manifest): Hook[] {
-  const expansion = expandPolicyPacks(manifest, "codex");
-  // The manifest's own hooks[] AND the codex-pack expansion both ship
-  // into the generated TOML, so we check both.
-  const all = [...manifest.hooks, ...expansion.hooks];
-  return all;
-}
-
-function checkHookCommands(
+/**
+ * `expansionHooks` are the hooks the codex pack expansion contributes; they
+ * default to the real expansion and are a parameter so a test can feed one
+ * that calls a removed verb.
+ */
+export function checkHookCommands(
   manifest: Manifest,
   pathEnv: string,
   isExecutable: (p: string) => boolean,
+  expansionHooks: Hook[] = expandPolicyPacks(manifest, "codex").hooks,
 ): CodexCheckEntry[] {
-  const hooks = codexHooksFromManifest(manifest);
+  const manifestHooks = new Set<Hook>(manifest.hooks);
+  const hooks = [...manifest.hooks, ...expansionHooks];
   if (hooks.length === 0) {
     return [
       {
@@ -208,6 +213,27 @@ function checkHookCommands(
         name: `hook ${h.name}`,
         status: "error",
         message: "empty command after parsing",
+      });
+      continue;
+    }
+    // A hook that calls a removed verb fails at runtime with "unknown
+    // command", so it must not pass as a healthy harness subcommand below.
+    const removed = invokesRemovedCommand(h.command);
+    if (removed !== undefined) {
+      // A manifest hook is already a manifest warning (hooks[].command), and
+      // doctor counts each site once: this line stays non-ok but is not
+      // tallied again. A pack-expansion hook has no manifest site, so its
+      // warning is the only one and is counted.
+      const fromManifest = manifestHooks.has(h);
+      out.push({
+        name: `hook ${h.name}`,
+        status: "warn",
+        message:
+          removedCommandMessage(
+            removed,
+            `delete hook "${h.name}" from the manifest (and every policy that names it), then re-run \`harness apply --runtime codex\``,
+          ) + (fromManifest ? " (counted once, in the manifest warnings)" : ""),
+        ...(fromManifest ? { countedElsewhere: true } : {}),
       });
       continue;
     }
@@ -264,5 +290,5 @@ export function runCodexTargetChecks(
 export function countCodexDiagnostics(
   report: CodexTargetReport,
 ): { errorCount: number; warningCount: number } {
-  return countStatusDiagnostics(report.checks);
+  return countStatusDiagnostics(report.checks.filter((c) => c.countedElsewhere !== true));
 }

@@ -164,4 +164,23 @@ export * from "./audit.js";
 export * from "./doctor.js";
 export * from "./extract.js";
 export * from "./requires.js";
-export * from "./removed-keys.js";
+// Named, not `export *`: `removedCommandMessage` is shared with the doctor
+// but is not part of the package API.
+export {
+  REMOVED_MANIFEST_PATHS,
+  REMOVED_PACK_NAMES,
+  REMOVED_MANIFEST_TABLE,
+  REMOVED_COMMANDS,
+  stripRemovedManifestEntries,
+  formatPostureWarning,
+  invokesRemovedCommand,
+  findRemovedCommandUses,
+} from "./removed-keys.js";
+export type {
+  RemovedManifestPath,
+  RemovedPackName,
+  RemovedManifestTable,
+  ManifestPostureWarning,
+  StrippedManifest,
+  RemovedCommand,
+} from "./removed-keys.js";

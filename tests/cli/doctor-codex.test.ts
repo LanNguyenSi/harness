@@ -7,7 +7,8 @@ import { apply } from "../../src/cli/apply/index.js";
 import { doctor } from "../../src/cli/doctor/index.js";
 import { format } from "../../src/cli/doctor/format.js";
 import type { McpProbe, McpProbeResult } from "../../src/probes/mcp.js";
-import type { McpServer } from "../../src/schema/index.js";
+import { checkHookCommands, countCodexDiagnostics } from "../../src/cli/doctor/codex.js";
+import { parseManifest, type Hook, type McpServer } from "../../src/schema/index.js";
 import { STUB_NPM_BIN_EXEC_UNKNOWN } from "../_helpers/npm-bin-exec.js";
 
 let cleanups: Array<() => void> = [];
@@ -202,5 +203,77 @@ describe("doctor --target codex", () => {
 
     expect(report.codexTarget).toBeUndefined();
     expect(format(report)).not.toContain("Target: codex");
+  });
+});
+
+describe("doctor --target codex hook commands calling removed verbs", () => {
+  async function codexReport(commands: Array<{ name: string; command: string }>, target: "codex" | undefined = "codex") {
+    const home = tempHome();
+    const manifest = {
+      version: 1,
+      tools: { mcp: [], cli: [], skills: { enabled: [], source_dirs: [] }, builtin: { known: [] } },
+      memory: { directories: [] },
+      hooks: commands.map((c) => ({ name: c.name, event: "PreToolUse", blocking: false, command: c.command })),
+      policies: [],
+    };
+    fs.writeFileSync(path.join(home, "harness.yaml"), yamlStringify(manifest));
+    const report = await doctor({
+      configPath: path.join(home, "harness.yaml"),
+      homeOverride: home,
+      mcpProbe: new FakeProbe(),
+      versionProbe: () => null,
+      pathEnv: "",
+      npmBinExec: STUB_NPM_BIN_EXEC_UNKNOWN,
+      ...(target === "codex"
+        ? { target, codexCheckOptions: { manifestDir: home, harnessBinary: fakeHarnessBinary(home), cwd: home } }
+        : {}),
+    });
+    return report;
+  }
+  async function codexChecks(commands: Array<{ name: string; command: string }>) {
+    return (await codexReport(commands)).codexTarget!.checks;
+  }
+
+  it("warns on a hook that calls a removed verb, naming the verb and the remedy", async () => {
+    const checks = await codexChecks([{ name: "stale-gate", command: "harness pack hook post-merge-gate --runtime codex" }]);
+    const entry = checks.find((c) => c.name === "hook stale-gate");
+    expect(entry?.status).toBe("warn");
+    expect(entry?.message).toContain("harness pack hook post-merge-gate");
+    expect(entry?.message).toContain("harness apply --runtime codex");
+  });
+
+  it("keeps a hook that calls a kept verb healthy", async () => {
+    const checks = await codexChecks([{ name: "kept", command: "harness policy intercept --runtime codex" }]);
+    const entry = checks.find((c) => c.name === "hook kept");
+    expect(entry?.status).toBe("ok");
+    expect(entry?.message).toContain("subcommand of harness");
+  });
+
+  it("counts a removed-verb manifest hook once: the codex line renders as a warning but adds nothing to the tally", async () => {
+    const hooks = [{ name: "stale-gate", command: "harness pack hook post-merge-gate --runtime codex" }];
+    const plain = await codexReport(hooks, undefined);
+    const withCodex = await codexReport(hooks);
+    const healthy = await codexReport([{ name: "stale-gate", command: "harness policy intercept --runtime codex" }]);
+    expect(plain.manifest.warnings).toHaveLength(1);
+    const entry = withCodex.codexTarget!.checks.find((c) => c.name === "hook stale-gate");
+    expect(entry?.status).toBe("warn");
+    expect(entry?.countedElsewhere).toBe(true);
+    expect(entry?.message).toContain("counted once, in the manifest warnings");
+    // The manifest warning is the one finding for this site: one more
+    // warning than the same codex run with a healthy hook, not two.
+    expect(withCodex.warningCount).toBe(healthy.warningCount + 1);
+    expect(format(withCodex)).toContain("hook stale-gate");
+  });
+
+  it("counts a removed-verb hook from the pack expansion, which has no manifest warning", () => {
+    const manifest = parseManifest({ version: 1 });
+    const expansionHooks: Hook[] = [
+      { name: "pack-stale", event: "PreToolUse", blocking: false, command: "harness preflight" } as Hook,
+    ];
+    const checks = checkHookCommands(manifest, "", () => false, expansionHooks);
+    const entry = checks.find((c) => c.name === "hook pack-stale");
+    expect(entry?.status).toBe("warn");
+    expect(entry?.countedElsewhere).toBeUndefined();
+    expect(countCodexDiagnostics({ target: "codex", checks }).warningCount).toBe(1);
   });
 });
