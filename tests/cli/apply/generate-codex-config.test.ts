@@ -47,6 +47,7 @@ describe("generateCodexConfig", () => {
     const header = content.split("\n").filter((l) => l.startsWith("#")).join("\n");
     expect(header).toContain("Wire format a hook command reads on stdin");
     expect(header).toContain("0 = allow, 2 = block");
+    expect(header).toContain("{ hook_event_name?: string, session_id?: string");
     expect(header).not.toContain("understanding-before-execution");
     expect(header).not.toContain("adapter scripts");
   });
