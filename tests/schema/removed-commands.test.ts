@@ -46,6 +46,30 @@ describe("REMOVED_COMMANDS table (task f3f15290)", () => {
     expect(invokesRemovedCommand("harness pack hook solution-acceptance-writeguard")).toBe(solutionAcceptance);
     expect(invokesRemovedCommand("harness pack hook branch-protection")).toBeUndefined();
   });
+
+  it("lists the ten removed understanding-gate hook verbs and harness delegate, and leaves the live verbs alone (task 7890cd34)", () => {
+    for (const verb of [
+      "pre-tool-use",
+      "post-tool-use",
+      "track-active-claim",
+      "stay-in-scope",
+      "subagent-start",
+      "subagent-stop",
+      "codex-pre-tool-use",
+      "codex-post-tool-use",
+      "codex-user-prompt-submit",
+      "codex-stop",
+    ]) {
+      const command = `harness pack hook ${verb}`;
+      expect(invokesRemovedCommand(command)?.command, command).toBe(command);
+    }
+    expect(invokesRemovedCommand("harness delegate")?.command).toBe("harness delegate");
+    expect(invokesRemovedCommand("harness delegate --task x")?.command).toBe("harness delegate");
+    expect(invokesRemovedCommand("harness pack hook branch-protection")).toBeUndefined();
+    expect(invokesRemovedCommand("harness pack hook runtime-reality")).toBeUndefined();
+    expect(invokesRemovedCommand("harness approve understanding")).toBeUndefined();
+    expect(invokesRemovedCommand("harness gc")).toBeUndefined();
+  });
 });
 
 describe("invokesRemovedCommand", () => {

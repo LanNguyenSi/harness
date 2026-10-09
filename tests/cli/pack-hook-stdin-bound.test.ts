@@ -6,8 +6,7 @@
 //
 // A PreToolUse gate must not turn a timed-out read into an allow, so every gate
 // verb is pinned to BLOCK in all of those shapes, with a reason that names the
-// stdin timeout and the 3000 ms bound. Every other hook verb is not a gate and
-// treats a timeout as the bytes it read (one stderr note, exit 0).
+// stdin timeout and the 3000 ms bound.
 
 import { spawn } from "node:child_process";
 import * as fs from "node:fs";
@@ -34,7 +33,6 @@ const TEST_TIMEOUT_MS = 120_000;
 // land after the hook's timer fired, whatever the runner's speed.
 const BOUND_MS = 3000;
 const LATE_MS = BOUND_MS + 5000;
-const TIMEOUT_NOTE = "stdin never closed";
 const BLOCK_REASON_HEAD = "stdin timeout:";
 const BOUND_TEXT = `within ${BOUND_MS} ms`;
 const MAX_CONCURRENT_CHILDREN = 8;
@@ -272,32 +270,6 @@ interface Gate {
 
 const GATES: Gate[] = [
   {
-    verb: "pre-tool-use",
-    pack: "understanding-before-execution",
-    blockExit: 0,
-    reasonOn: "stdout",
-    event: (ctx) =>
-      JSON.stringify({
-        session_id: "stdin-bound-sess",
-        cwd: ctx.cwd,
-        tool_name: "Edit",
-        tool_input: { file_path: path.join(ctx.cwd, "a.ts"), old_string: "a", new_string: "b" },
-      }),
-  },
-  {
-    verb: "codex-pre-tool-use",
-    pack: "understanding-before-execution",
-    blockExit: 2,
-    reasonOn: "stderr",
-    event: (ctx) =>
-      JSON.stringify({
-        session_id: "stdin-bound-sess",
-        cwd: ctx.cwd,
-        tool_name: "Bash",
-        tool_input: { command: "rm -rf build" },
-      }),
-  },
-  {
     verb: "branch-protection",
     pack: "branch-protection",
     blockExit: 0,
@@ -443,43 +415,9 @@ describe("pack hook stdin bound: every PreToolUse gate blocks on a timed-out rea
 
   it("covers every PreToolUse gate verb the pack hook bootstrap reader serves, plus runtime-reality", () => {
     expect([...new Set(GATES.map((g) => g.verb))].sort()).toEqual(
-      [
-        "branch-protection",
-        "codex-pre-tool-use",
-        "pre-tool-use",
-        "runtime-reality",
-      ].sort(),
+      ["branch-protection", "runtime-reality"].sort(),
     );
   });
-});
-
-describe("pack hook stdin bound: the operator pause still wins over the timeout block", () => {
-  // branch-protection is not among them: it no longer yields to a pause
-  // (task a4d8adc5), pinned in the describe block below.
-  for (const gate of GATES.filter((g) => g.pack !== null && g.pack !== "branch-protection")) {
-    it.concurrent(
-      `${gate.verb}: with an active pause a never-closed empty stdin exits 0 without a block`,
-      async () => {
-        const ctx = makeCtx();
-        const generated = path.join(ctx.home, GENERATED_DIRNAME);
-        fs.mkdirSync(generated, { recursive: true });
-        writeSentinel(generated, {
-          pausedAt: new Date().toISOString(),
-          expiresAt: null,
-          reason: "stdin bound test",
-          pausedBy: "test",
-        });
-        const r = await runGate(gate, undefined, false, ctx);
-        expectBoundedExit(r);
-        expect(r.code).toBe(0);
-        expect(r.stdout).not.toContain("block");
-        expect(r.stdout).not.toContain("deny");
-        expect(r.stderr).not.toContain(BLOCK_REASON_HEAD);
-        expect(r.stderr.toLowerCase()).toContain("paused");
-      },
-      TEST_TIMEOUT_MS,
-    );
-  }
 });
 
 describe("pack hook stdin bound: branch-protection does not yield to a pause", () => {
@@ -546,56 +484,4 @@ describe("pack hook stdin bound: the pause wins over a timed-out read for the co
       TEST_TIMEOUT_MS,
     );
   }
-});
-
-describe("pack hook stdin bound: every other hook verb treats a timeout as the bytes it read", () => {
-  const verbs = [
-    "post-tool-use",
-    "track-active-claim",
-    "stay-in-scope",
-    "subagent-start",
-    "subagent-stop",
-    "codex-post-tool-use",
-    "codex-stop",
-    "codex-user-prompt-submit",
-  ];
-  for (const verb of verbs) {
-    it.concurrent(
-      `${verb} (not a PreToolUse gate) exits 0 within a bound, with the timeout note and no block`,
-      async () => {
-        const r = await runHook({ verb, ctx: makeCtx() });
-        expectBoundedExit(r);
-        expect(r.code).toBe(0);
-        expect(r.stderr).toContain(TIMEOUT_NOTE);
-        expect(r.stderr).toContain(BOUND_TEXT);
-        expect(r.stderr).not.toContain(BLOCK_REASON_HEAD);
-        expect(r.stdout).not.toContain("block");
-      },
-      TEST_TIMEOUT_MS,
-    );
-  }
-
-  it.concurrent(
-    "a non-gate hook decides a late writer's full event like the same bytes on a closed stdin (the timeout note, then exit 0)",
-    async () => {
-      const ctx = makeCtx();
-      const r = await runHook({
-        verb: "post-tool-use",
-        steps: [
-          {
-            afterMs: LATE_MS,
-            data: JSON.stringify({ session_id: "stdin-bound-sess", tool_name: "Bash" }),
-          },
-        ],
-        closeAfter: true,
-        manifest: manifestWithPack("understanding-before-execution"),
-        ctx,
-      });
-      expectBoundedExit(r);
-      expect(r.code).toBe(0);
-      expect(r.stderr).toContain(TIMEOUT_NOTE);
-      expectExitedBeforeLateWrite(r, 0);
-    },
-    TEST_TIMEOUT_MS,
-  );
 });

@@ -490,10 +490,13 @@ const INFRA: ReadonlyArray<{ name: string; reason: string }> = [
   // (task 3a910716).
   { name: "awk", reason: "release.yml's real awk extraction program, run directly by tests/scripts/check-release-notes-size.test.ts's parity check; a direct child so this guard sees it, instead of a bash or sh -c grandchild it cannot." },
   // mkfifo: real system mkfifo, spawned directly (no `sh -c` indirection)
-  // by tests/cli/pack-hook-pre-tool-use-subprocess.test.ts to plant a FIFO
-  // in the understanding-gate reports directory; Node has no API that
+  // by the remaining FIFO-fixture tests, e.g. tests/io/bounded-hook-reads-
+  // fifo.test.ts, tests/io/hook-path-writes-fifo.test.ts, tests/cli/
+  // hook-git-context-fifo.test.ts, tests/cli/gc.test.ts, tests/cli/
+  // approve-understanding-planted-reports.test.ts and tests/policy-packs/
+  // persisted-reports-stat-to-read-flip.test.ts; Node has no API that
   // creates one (task fa423e9b).
-  { name: "mkfifo", reason: "creates the FIFO fixture for the subprocess hook test's non-blocking report read; Node has no mkfifo API." },
+  { name: "mkfifo", reason: "creates the FIFO fixtures for the tests naming mkfifo (see the comment above); Node has no mkfifo API." },
 ];
 
 function infraCandidates(name: string, cwd: string, pathEnv: string | undefined): readonly string[] {

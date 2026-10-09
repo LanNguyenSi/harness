@@ -102,7 +102,8 @@ describe("agent-tasks runtime adapter", () => {
     // ACTIVE_CLAIM_TOOL_NAMES feeds the generated PostToolUse matcher
     // (understanding-before-execution.ts's TRACK_ACTIVE_CLAIM_MATCH /
     // _CODEX); task_merge must be a member for a real task_merge tool
-    // call to dispatch to hook-track-active-claim.ts at all.
+    // call to dispatch to the active-claim hook (hook-track-active-claim
+    // .ts, removed in task 7890cd34) at all.
     expect(ACTIVE_CLAIM_TOOL_NAMES).toContain(TASK_MERGE_TOOL);
   });
 

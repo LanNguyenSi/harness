@@ -170,6 +170,31 @@ describe("harness validate on a manifest that still calls removed commands", () 
     ]);
     expect(strict.errorCount).toBeGreaterThanOrEqual(2);
   });
+
+  it("warns at an understanding-gate hook and a Codex hook naming removed verbs, and --strict fails on both (task 7890cd34)", () => {
+    const m = baseFullShaped();
+    m["hooks"] = [
+      { name: "understanding-gate", event: "PreToolUse", command: "harness pack hook pre-tool-use", blocking: "hard", budget_ms: 15000 },
+      { name: "codex-understanding-gate", event: "PreToolUse", command: "harness pack hook codex-stop", blocking: "hard", budget_ms: 15000 },
+    ];
+    m["policies"] = [];
+    const file = writeManifest(m);
+
+    const result = validate({ configPath: file, ...NOOP_PROBES });
+    expect(result.manifest).not.toBeNull();
+    expect(result.diagnostics.filter(isRemovedCommandDiag).map((d) => [d.path, d.severity])).toEqual([
+      ["hooks[0].command", "warning"],
+      ["hooks[1].command", "warning"],
+    ]);
+
+    const strict = validate({ configPath: file, strict: true, ...NOOP_PROBES });
+    const strictDiags = strict.diagnostics.filter(isRemovedCommandDiag);
+    expect(strictDiags.map((d) => [d.path, d.severity])).toEqual([
+      ["hooks[0].command", "error"],
+      ["hooks[1].command", "error"],
+    ]);
+    expect(strict.errorCount).toBeGreaterThanOrEqual(2);
+  });
 });
 
 describe("harness doctor on a manifest that still calls removed commands", () => {

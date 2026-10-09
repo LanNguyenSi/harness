@@ -187,7 +187,6 @@ describe("runSmoke: happy path", () => {
       outputDir,
       claudeBin: claude,
       applyImpl: stubApply(),
-      noDelegate: true,
       expectations: { expectHooks: ["PreToolUse"], expectExit: 0 },
       timeoutMs: 10000,
     });
@@ -215,7 +214,6 @@ describe("runSmoke: happy path", () => {
       outputDir,
       claudeBin: claude,
       applyImpl: stubApply(),
-      noDelegate: true,
       sessionId: "00000000-0000-4000-8000-000000000001",
     });
     const sidIdx = result.claudeArgv.indexOf("--session-id");
@@ -253,8 +251,6 @@ describe("runSmoke after an apply that recorded another runtime (agent-tasks b9e
         seen.push(opts);
         return apply({ ...opts, homeDir: home });
       },
-      noDelegate: true,
-      stdout: () => {},
     });
     expect(result.exitCode).toBe(0);
     expect(seen[0]?.runtime).toBe("claude-code");
@@ -290,23 +286,17 @@ describe("runSmoke after an apply that recorded another runtime (agent-tasks b9e
     expect(Object.keys(before)).toContain(".last-apply");
 
     const outputDir = makeTmpDir("smoke-runtime-keep-out-");
-    let out = "";
     const result = await runSmoke({
       prompt: "x",
       outputDir,
       claudeBin: makeFakeClaude({ stdout: `${RESULT_OK}\n` }),
       configPath,
       applyImpl: async (opts) => apply({ ...opts, homeDir: home }),
-      noDelegate: true,
-      stdout: (s: string) => {
-        out += s;
-      },
     });
     expect(result.exitCode).toBe(0);
     // The operator's tree (audit copies and the runtime record) is untouched.
     expect(snapshotTree(generatedDir)).toEqual(before);
     expect(readLastApply(generatedDir)?.runtime).toBe("codex");
-    expect(out).not.toContain("is kept");
     // smoke generated the claude-code variant into its own output dir.
     const ownDir = path.join(outputDir, GENERATED_DIRNAME);
     expect(
@@ -368,8 +358,6 @@ describe("runSmoke after an apply that recorded another runtime (agent-tasks b9e
       claudeBin: makeFakeClaude({ stdout: `${RESULT_OK}\n` }),
       configPath,
       applyImpl: async (opts) => apply({ ...opts, homeDir: home }),
-      noDelegate: true,
-      stdout: () => {},
     });
     expect(result.exitCode).toBe(0);
     const settings = fs.readFileSync(path.join(outputDir, "settings.json"), "utf8");
@@ -405,8 +393,6 @@ describe("runSmoke after an apply that recorded another runtime (agent-tasks b9e
       configPath,
       expectations: { expectHooks: ["no-such-hook"] },
       applyImpl: async (opts) => apply({ ...opts, homeDir: home }),
-      noDelegate: true,
-      stdout: () => {},
     });
     expect(result.exitCode).toBe(1);
     expect(snapshotTree(generatedDir)).toEqual(before);
@@ -442,8 +428,6 @@ describe("runSmoke after an apply that recorded another runtime (agent-tasks b9e
       claudeBin: makeFakeClaude({ stdout: `${RESULT_OK}\n` }),
       configPath,
       applyImpl: async (opts) => apply({ ...opts, homeDir: home }),
-      noDelegate: true,
-      stdout: () => {},
     });
     expect(result.exitCode).toBe(0);
     expect(fs.readFileSync(instructionsPath, "utf8")).toBe(codexInstructions);
@@ -479,20 +463,14 @@ describe("runSmoke after an apply that recorded another runtime (agent-tasks b9e
       }),
     );
     await apply({ homeDir: home, configPath, runtime: "claude-code" });
-    let out = "";
     const result = await runSmoke({
       prompt: "x",
       outputDir: makeTmpDir("smoke-runtime-cc-out-"),
       claudeBin: makeFakeClaude({ stdout: `${RESULT_OK}\n` }),
       configPath,
       applyImpl: async (opts) => apply({ ...opts, homeDir: home }),
-      noDelegate: true,
-      stdout: (s: string) => {
-        out += s;
-      },
     });
     expect(result.exitCode).toBe(0);
-    expect(out).not.toContain("runtime:");
     expect(readLastApply(path.join(home, GENERATED_DIRNAME))?.runtime).toBe("claude-code");
   });
 });
@@ -506,7 +484,6 @@ describe("runSmoke: expectation failures", () => {
       outputDir,
       claudeBin: claude,
       applyImpl: stubApply(),
-      noDelegate: true,
       expectations: { expectHooks: ["PreToolUse"] },
     });
     expect(result.exitCode).toBe(1);
@@ -523,7 +500,6 @@ describe("runSmoke: expectation failures", () => {
       outputDir,
       claudeBin: claude,
       applyImpl: stubApply(),
-      noDelegate: true,
       expectations: { expectExit: 0 },
     });
     expect(result.exitCode).toBe(1);
@@ -539,7 +515,6 @@ describe("runSmoke: expectation failures", () => {
       outputDir,
       claudeBin: claude,
       applyImpl: stubApply(),
-      noDelegate: true,
       expectations: { expectDecision: "deny" },
     });
     expect(result.exitCode).toBe(1);
@@ -556,7 +531,6 @@ describe("runSmoke: expectation failures", () => {
       outputDir,
       claudeBin: claude,
       applyImpl: stubApply(),
-      noDelegate: true,
       expectations: { expectDecision: "deny" },
     });
     expect(result.exitCode).toBe(0);
@@ -571,7 +545,6 @@ describe("runSmoke: input validation", () => {
         prompt: "",
         outputDir: makeTmpDir("smoke-usage-"),
         applyImpl: stubApply(),
-        noDelegate: true,
       }),
     ).rejects.toBeInstanceOf(HarnessExitError);
   });
@@ -583,7 +556,6 @@ describe("runSmoke: input validation", () => {
         prompt: "x",
         outputDir,
         applyImpl: stubApply(),
-        noDelegate: true,
         claudeBin: "/no/such/path/definitely-not-claude",
       }),
     ).rejects.toBeInstanceOf(HarnessExitError);
@@ -595,7 +567,6 @@ describe("runSmoke: input validation", () => {
         prompt: "x",
         outputDir: makeTmpDir("smoke-bad-dec-"),
         applyImpl: stubApply(),
-        noDelegate: true,
         // Bypass the typed enum to simulate a bad CLI value.
         expectations: { expectDecision: "maybe" as unknown as "allow" },
       }),
@@ -616,7 +587,6 @@ describe("runSmoke: timeout", () => {
       outputDir,
       claudeBin: claude,
       applyImpl: stubApply(),
-      noDelegate: true,
       timeoutMs: 200,
     });
     const elapsed = Date.now() - start;
@@ -690,7 +660,6 @@ setInterval(() => {}, 1000);
       outputDir,
       claudeBin: claudePath,
       applyImpl: stubApply(),
-      noDelegate: true,
       timeoutMs: 200,
       spawn: () => child,
     });
@@ -728,7 +697,6 @@ describe("runSmoke: implicit failure on claude crash without terminal result", (
       outputDir,
       claudeBin: claude,
       applyImpl: stubApply(),
-      noDelegate: true,
     });
     expect(result.exitCode).toBe(1);
     expect(result.failures).toHaveLength(1);
@@ -751,7 +719,6 @@ describe("runSmoke: implicit failure on claude crash without terminal result", (
       outputDir,
       claudeBin: claude,
       applyImpl: stubApply(),
-      noDelegate: true,
     });
     expect(result.exitCode).toBe(0);
     expect(result.failures).toEqual([]);
@@ -790,7 +757,6 @@ describe("runSmoke: apply refusal", () => {
         outputDir,
         claudeBin: claude,
         applyImpl: refusingApply,
-        noDelegate: true,
       }),
     ).rejects.toMatchObject({
       name: "HarnessExitError",
@@ -820,7 +786,6 @@ process.exit(0);
       outputDir,
       claudeBin: claudePath,
       applyImpl: stubApply(),
-      noDelegate: true,
     });
     const stderr = fs.readFileSync(result.stderrPath, "utf8");
     expect(stderr).toContain("HPV=1");

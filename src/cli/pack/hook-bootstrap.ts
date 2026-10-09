@@ -1,7 +1,7 @@
 // Shared bootstrap helpers for Claude Code pack hooks.
 //
-// Extracts the boilerplate pieces that all (or most) pack hooks
-// reimplemented independently:
+// Extracts the boilerplate pieces that the pack hooks reimplemented
+// independently:
 //
 //   1. stdin envelope read (the common event-stream pattern).
 //   2. pause-sentinel check with announcement (wrapping checkPauseFromLoader
@@ -12,55 +12,20 @@
 //   4. pack `config.ux` parsing (label-parameterized; formerly four
 //      byte-identical copies, task 19e293c6).
 //   5. `pickString` — first-defined-string-wins candidate picker (was three
-//      byte-identical copies across the Codex hook trio — pre-tool-use,
-//      stop, post-tool-use — before task a1348c89 extracted it here).
-//   6. `resolveToolInput` — tool_input-with-raw_input-fallback resolver
-//      (task cf4cdc93 review finding: track-active-claim and
-//      stay-in-scope read ONLY `tool_input`, silently no-op-ing on a
-//      Codex shim that sends `raw_input` instead — the exact shape
-//      `hook-codex-post-tool-use.ts`'s own private `resolveToolInput`
-//      already handles).
-//   7. `resolveHookPackContext` — the declared-pack-lookup / enabled-check /
-//      generatedDir-resolution trio that follows manifest load in nearly
-//      every hook. Its shape is closely mirrored by hook-post-tool-use.ts,
-//      hook-track-active-claim.ts, hook-pre-tool-use.ts and the Codex
-//      siblings, which were deliberately left calling their own inline
-//      copies rather than switched over here (out of scope for the task
-//      that added this helper); it was extracted for the
-//      subagent-start/subagent-stop pair, which would otherwise have
-//      re-duplicated it a further two times.
-//   8. `resolveSessionAndAgentIds` — session_id + agent_id parse and
-//      validation shared by subagent-start/subagent-stop. Pack-agnostic
-//      by construction: the agent-id validator is injected by the caller
-//      rather than imported here, so this module stays free of any
-//      understanding-before-execution-specific dependency.
-//   9. `resolveSubagentHookContext` — the pause-check / id-resolution /
-//      pack-context preamble shared verbatim by subagent-start and
-//      subagent-stop, up to the point where their bodies diverge (write
-//      vs. clear). Composes 2, 7, and 8 above.
+//      byte-identical copies across the Codex hook trio before task
+//      a1348c89 extracted it here).
 //
 // Not used by:
 //   - hook-runtime-reality.ts: it keeps an `isTTY` guard in front of the
 //     same shared idle-bounded reader (`src/cli/bounded-stdin.ts`) and
 //     composes the read itself, which is a legitimately different contract.
-//   - hook-stay-in-scope.ts: loads the current manifest so a generated hook
-//     can no-op after an operator changes its optional configuration.
-//
-// hook-codex-stop.ts and hook-codex-user-prompt-submit.ts now also call
-// the pause check (2, `checkHookPause`), on top of the stdin reader (1) and
-// manifest loader (3) they already used (tasks 63fefe3a, 1432e053); they
-// used to be listed here as "no pause check" exceptions. Neither one pulls
-// in 4-6, so "use all of the above" would overstate it.
 //
 // Per-hook decision logic, error envelopes, and early-return shapes stay local
 // to each hook. This module covers structural boilerplate only, not semantics.
 
-import { PassThrough } from "node:stream";
-import { readStdinBounded, STDIN_IDLE_TIMEOUT_MS, stdinTimeoutNote, stdinTimeoutBlockJson, stdinTimeoutBlockReason } from "../bounded-stdin.js";
+import { readStdinBounded, STDIN_IDLE_TIMEOUT_MS } from "../bounded-stdin.js";
 import { checkPauseFromLoader } from "../pause-check.js";
 import { loadManifest, type LoaderOptions } from "../loader.js";
-import { resolveGeneratedDir } from "../../runtime/pending-approval.js";
-import { rejectMalformedSessionId } from "../../runtime/reject-malformed-session-id.js";
 import { PolicyUxSchema, type Manifest, type PolicyUx } from "../../schema/index.js";
 
 // ---------------------------------------------------------------------------
@@ -98,85 +63,6 @@ export async function readStdinChecked(
   const idleTimeoutMs = opts.idleTimeoutMs ?? STDIN_IDLE_TIMEOUT_MS;
   const read = await readStdinBounded(stream, idleTimeoutMs);
   return { text: read.text, timedOut: read.timedOut, idleTimeoutMs };
-}
-
-/**
- * Promise-based stdin reader for the pack hooks that are NOT PreToolUse gates
- * (PostToolUse, Stop, SubagentStart/Stop, UserPromptSubmit and the like).
- * Resolves to the UTF-8 string read from the stream, ending at `end` or, when
- * no chunk has arrived for the idle bound, at the idle timeout (task 7dfdcaaf;
- * the shared reader is `src/cli/bounded-stdin.ts`). Rejects on stream error.
- *
- * Claude Code pipes the event and closes stdin, so a real hook never reaches
- * the bound; it only bites on an open, never-closed stdin, where an end-only
- * read held the hook until the host's own hook timeout. On a timeout the text
- * read so far is returned and one stderr note names the bound, so the caller
- * continues exactly as it does for an empty or truncated event it was handed
- * on a closed stdin. A PreToolUse gate must not use this: it calls
- * `readStdinChecked` and blocks on `timedOut`.
- */
-export async function readStdin(
-  stream: NodeJS.ReadableStream,
-  opts: ReadStdinOptions = {},
-): Promise<string> {
-  const read = await readStdinChecked(stream, opts);
-  if (read.timedOut) {
-    (opts.stderr ?? process.stderr).write(
-      `harness pack hook: ${stdinTimeoutNote(
-        { text: read.text, timedOut: true },
-        read.idleTimeoutMs,
-        "continuing as an empty event",
-      )}\n`,
-    );
-  }
-  return read.text;
-}
-
-/**
- * Run a PreToolUse gate entry behind a stdin-timeout refusal without editing
- * the entry's body: read stdin with the idle bound first, and when the read
- * timed out (and the operator pause does not apply) hand `refuse` the reason
- * instead of running the gate. Otherwise the text read is replayed to `run` on
- * a closed stream, so the gate sees exactly what it would have read itself.
- * Used by the two large gate entries whose line numbers other docs cite.
- */
-export async function runGateWithStdinRefusal<
-  O extends { stdin?: NodeJS.ReadableStream; stdout?: NodeJS.WritableStream; stderr?: NodeJS.WritableStream },
-  R,
->(
-  opts: O,
-  isPaused: (stderr: NodeJS.WritableStream) => boolean,
-  refuse: (reason: string, stdout: NodeJS.WritableStream, stderr: NodeJS.WritableStream) => R,
-  run: (opts: O) => Promise<R>,
-): Promise<R> {
-  const read = await readStdinChecked(opts.stdin ?? process.stdin);
-  const stderr = opts.stderr ?? process.stderr;
-  if (read.timedOut && !isPaused(stderr)) {
-    return refuse(stdinTimeoutBlockReason(read.idleTimeoutMs), opts.stdout ?? process.stdout, stderr);
-  }
-  const replay = new PassThrough();
-  replay.end(read.text);
-  return run({ ...opts, stdin: replay });
-}
-
-/**
- * The refusal the Claude Code gates that write a block envelope to stdout hand
- * to `runGateWithStdinRefusal`: one `harness pack hook <label>: BLOCK: ...`
- * stderr line, the block envelope on stdout, and the blocked result (exit 0).
- */
-export function stdoutBlockRefusal(
-  label: string,
-): (
-  reason: string,
-  stdout: NodeJS.WritableStream,
-  stderr: NodeJS.WritableStream,
-) => { exitCode: number; blocked: true; diagnostic: string } {
-  return (reason, stdout, stderr) => {
-    const diagnostic = `BLOCK: ${reason}`;
-    stderr.write(`harness pack hook ${label}: ${diagnostic}\n`);
-    stdout.write(`${stdinTimeoutBlockJson(reason)}\n`);
-    return { exitCode: 0, blocked: true, diagnostic };
-  };
 }
 
 // ---------------------------------------------------------------------------
@@ -264,38 +150,14 @@ export function pickString(...candidates: unknown[]): string | undefined {
 }
 
 // ---------------------------------------------------------------------------
-// 5. tool_input-with-raw_input-fallback resolver
-// ---------------------------------------------------------------------------
-
-/**
- * Resolve a PostToolUse-style event's tool arguments: prefer `tool_input`
- * (the field name real Codex sends, matching Claude Code's own
- * convention — `hook-codex-post-tool-use.ts`'s own doc comment) and fall
- * back to `raw_input` (harness's originally-published portable wire
- * format, still accepted for any shim built against harness's earlier
- * Codex adapter). Mirrors that hook's private `resolveToolInput`
- * (task a1348c89); extracted here so the agent-tasks-specific
- * PostToolUse hooks added later for Codex parity (track-active-claim,
- * stay-in-scope — task cf4cdc93) share the identical resolution instead
- * of hand-copying it a second and third time.
- */
-export function resolveToolInput(event: {
-  tool_input?: unknown;
-  raw_input?: unknown;
-}): unknown {
-  if (event.tool_input !== undefined) return event.tool_input;
-  return event.raw_input;
-}
-
-// ---------------------------------------------------------------------------
-// 6. Pack `config.ux` parser
+// 5. Pack `config.ux` parser
 // ---------------------------------------------------------------------------
 
 /**
  * Parse the optional `ux:` block from a pack config (task 19e293c6). This
- * body existed as four byte-identical copies (hook-pre-tool-use,
- * hook-codex-pre-tool-use, hook-branch-protection, and a pack hook since
- * removed) whose only difference was the stderr prefix — the exact drift the
+ * body existed as four byte-identical copies (hook-branch-protection was
+ * the only survivor of the removals; the others named their own stderr
+ * prefix) whose only difference was that prefix — the exact drift the
  * CHANGELOG had flagged at copy #3 and that landed a 4th time anyway.
  * `hookLabel` carries that prefix so the per-hook stderr warnings stay
  * byte-identical to the pre-extraction output (pinned by a test).
@@ -319,223 +181,4 @@ export function parseConfigUx(
     return undefined;
   }
   return result.data;
-}
-
-// ---------------------------------------------------------------------------
-// 7. Declared-pack-lookup / enabled-check / generatedDir-resolution trio
-// ---------------------------------------------------------------------------
-
-export interface ResolveHookPackContextOptions extends LoaderOptions {
-  pack?: string;
-  generatedDir?: string;
-  manifest?: Manifest;
-}
-
-export interface ResolvedHookPackContext {
-  manifest: Manifest;
-  declared: Manifest["policy_packs"][number];
-  generatedDir: string;
-}
-
-export type ResolveHookPackContextResult =
-  | { ok: true; context: ResolvedHookPackContext }
-  | { ok: false; diagnostic: string };
-
-/**
- * Load the manifest (or use injection), confirm `packName` is declared and
- * enabled, and resolve `generatedDir` — the fixed sequence that follows
- * `loadManifestOrInjected` in nearly every pack hook. Returns a single
- * failure shape with a ready-to-emit `${hookLabel}: ...` diagnostic instead
- * of three separate early-return blocks, so a caller wires it as:
- *
- *   const ctx = resolveHookPackContext(hookLabel, packName, opts);
- *   if (!ctx.ok) return noop(ctx.diagnostic, stderr, ...);
- */
-export function resolveHookPackContext(
-  hookLabel: string,
-  packName: string,
-  opts: ResolveHookPackContextOptions,
-): ResolveHookPackContextResult {
-  let manifest: Manifest;
-  let manifestPath: string | undefined;
-  try {
-    ({ manifest, manifestPath } = loadManifestOrInjected(opts, opts.manifest));
-  } catch (err) {
-    return {
-      ok: false,
-      diagnostic: `${hookLabel}: manifest load failed (${(err as Error).message}), skipping`,
-    };
-  }
-
-  const declared = manifest.policy_packs.find((p) => p.name === packName);
-  if (!declared) {
-    return {
-      ok: false,
-      diagnostic: `${hookLabel}: pack "${packName}" not declared in manifest, skipping`,
-    };
-  }
-  if (!declared.enabled) {
-    return {
-      ok: false,
-      diagnostic: `${hookLabel}: pack "${packName}" is enabled:false, skipping`,
-    };
-  }
-
-  const generatedDir =
-    opts.generatedDir ??
-    (manifestPath !== undefined
-      ? resolveGeneratedDir({
-          ...(opts.homeDir !== undefined ? { homeDir: opts.homeDir } : {}),
-          manifestPath,
-        })
-      : undefined);
-  if (generatedDir === undefined) {
-    return {
-      ok: false,
-      diagnostic: `${hookLabel}: generatedDir unresolvable, skipping`,
-    };
-  }
-
-  return { ok: true, context: { manifest, declared, generatedDir } };
-}
-
-// ---------------------------------------------------------------------------
-// 8. session_id + agent_id parse and validation
-// ---------------------------------------------------------------------------
-
-export interface ResolvedSessionAndAgentIds {
-  sessionId: string;
-  agentId: string;
-}
-
-export type ResolveSessionAndAgentIdsResult =
-  | { ok: true; ids: ResolvedSessionAndAgentIds }
-  | { ok: false; diagnostic: string; sessionId: string | null };
-
-/**
- * Parse and validate `session_id` + `agent_id` off an event body (the
- * subagent-start/subagent-stop shared shape). `validateAgentId` is
- * injected rather than imported here — the agent-id allowlist lives with
- * the understanding-before-execution pack's in-flight records
- * (`rejectMalformedAgentId`), and this module stays pack-agnostic on
- * purpose (see the module header).
- */
-export function resolveSessionAndAgentIds(
-  hookLabel: string,
-  event: { session_id?: unknown; agent_id?: unknown },
-  validateAgentId: (agentId: string) => void,
-): ResolveSessionAndAgentIdsResult {
-  const sessionId = pickString(event.session_id) ?? "";
-  const agentId = pickString(event.agent_id) ?? "";
-
-  if (sessionId === "") {
-    return { ok: false, diagnostic: `${hookLabel}: missing session_id, skipping`, sessionId: null };
-  }
-  // Validate sessionId right after the emptiness check, before any other
-  // early return, so every ok:false path below carries an already-rejected
-  // (never a raw, unvalidated) sessionId — a caller that echoes `sessionId`
-  // into a diagnostic or a path.join can never see an unvalidated value.
-  try {
-    rejectMalformedSessionId(sessionId);
-  } catch (err) {
-    return {
-      ok: false,
-      diagnostic: `${hookLabel}: malformed session_id (${(err as Error).message}), skipping`,
-      sessionId: null,
-    };
-  }
-  if (agentId === "") {
-    return { ok: false, diagnostic: `${hookLabel}: missing agent_id, skipping`, sessionId };
-  }
-  try {
-    validateAgentId(agentId);
-  } catch (err) {
-    return {
-      ok: false,
-      diagnostic: `${hookLabel}: malformed agent_id (${(err as Error).message}), skipping`,
-      sessionId,
-    };
-  }
-
-  return { ok: true, ids: { sessionId, agentId } };
-}
-
-// ---------------------------------------------------------------------------
-// 9. subagent-start/subagent-stop shared preamble: pause check +
-//    session/agent id resolution + pack-context resolution
-// ---------------------------------------------------------------------------
-
-export interface ResolveSubagentHookContextOptions extends ResolveHookPackContextOptions {
-  stderr: NodeJS.WritableStream;
-}
-
-export interface ResolvedSubagentHookContext {
-  sessionId: string;
-  agentId: string;
-  declared: Manifest["policy_packs"][number];
-  generatedDir: string;
-}
-
-export type ResolveSubagentHookContextResult =
-  | { ok: true; context: ResolvedSubagentHookContext }
-  | { ok: false; diagnostic: string; sessionId: string | null; agentId: string | null };
-
-/**
- * The three-step preamble subagent-start and subagent-stop both ran
- * verbatim before the point where their bodies diverge (write vs. clear):
- * pause-sentinel check, session_id/agent_id resolution, then pack-context
- * resolution. Extracted to close the residual clone between the two hook
- * files (review finding, subagent-gate). `verb` names the hook for both
- * the pause check's own stderr label and the caller-facing "paused,
- * skipping" diagnostic (e.g. "subagent-start"); `hookLabel` is the fuller
- * `harness pack hook: <verb>` prefix used in every other diagnostic.
- *
- * Each ok:false case reports a `sessionId`/`agentId` pair matching exactly
- * what the pre-extraction call sites passed to their own `noop()`: both
- * null on a pause, `sessionId` non-null (once past validation) on a
- * missing/malformed agent_id, and both non-null once ids resolved but the
- * pack context failed.
- */
-export function resolveSubagentHookContext(
-  hookLabel: string,
-  verb: string,
-  packName: string,
-  event: { session_id?: unknown; agent_id?: unknown },
-  validateAgentId: (agentId: string) => void,
-  opts: ResolveSubagentHookContextOptions,
-): ResolveSubagentHookContextResult {
-  if (checkHookPause(verb, opts.stderr, opts, opts.generatedDir).paused) {
-    return {
-      ok: false,
-      diagnostic: `harness paused; ${verb} skipping without evaluating.`,
-      sessionId: null,
-      agentId: null,
-    };
-  }
-
-  const idsResult = resolveSessionAndAgentIds(hookLabel, event, validateAgentId);
-  if (!idsResult.ok) {
-    return {
-      ok: false,
-      diagnostic: idsResult.diagnostic,
-      sessionId: idsResult.sessionId,
-      agentId: null,
-    };
-  }
-  const { sessionId, agentId } = idsResult.ids;
-
-  const ctx = resolveHookPackContext(hookLabel, packName, opts);
-  if (!ctx.ok) {
-    return { ok: false, diagnostic: ctx.diagnostic, sessionId, agentId };
-  }
-
-  return {
-    ok: true,
-    context: {
-      sessionId,
-      agentId,
-      declared: ctx.context.declared,
-      generatedDir: ctx.context.generatedDir,
-    },
-  };
 }

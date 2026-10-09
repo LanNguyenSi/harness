@@ -499,15 +499,16 @@ describe("read-only Bash classifier", () => {
 
     // ADR docs/decisions/2026-08-27-ug-auto-mode-approval.md, threat
     // model (c) and reopen criteria (agent-tasks 74b4b17d, reviewer
-    // round-1 finding #4): the auto-approval path at step 9 of
-    // hook-pre-tool-use.ts is a signing oracle that must only ever act
-    // on a call every earlier decision-order step has already declined
+    // round-1 finding #4): the auto-approval path at step 9 of the
+    // pre-tool-use hook (removed in task 7890cd34) was a signing oracle
+    // that had to only ever act
+    // on a call every earlier decision-order step had already declined
     // (step 6's read-only Bash exemption included). If `pack` ever
     // joined the harness read-only allowlist, `harness pack hook
-    // pre-tool-use` itself would short-circuit at step 6 before step 9
-    // runs, turning the auto path into something an agent could reach
-    // pre-approval by simply invoking the hook's own CLI verb. This
-    // pins that `pack` is not, and must not become, a read-only
+    // pre-tool-use` itself would have short-circuited at step 6 before
+    // step 9 ran, turning the auto path into something an agent could
+    // reach pre-approval by simply invoking the hook's own CLI verb.
+    // This pins that `pack` is not, and must not become, a read-only
     // subcommand.
     it("does not classify `harness pack ...` as read-only (auto-approval signing oracle stays post-approval-only)", () => {
       expect(isReadOnlyBashCommand("harness pack hook pre-tool-use")).toBe(false);

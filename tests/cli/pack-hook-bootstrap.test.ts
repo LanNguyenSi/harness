@@ -1,6 +1,6 @@
 // Unit tests for the shared hook-bootstrap module.
-// These verify the three shared pieces in isolation so a regression in the
-// common module is caught once, not scattered across eleven per-hook test files.
+// These verify the shared pieces in isolation so a regression in the
+// common module is caught once, not scattered across the per-hook test files.
 
 import { PassThrough, Readable } from "node:stream";
 import * as fs from "node:fs";
@@ -10,19 +10,10 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   checkHookPause,
   loadManifestOrInjected,
-  readStdin,
   readStdinChecked,
-  runGateWithStdinRefusal,
-  stdoutBlockRefusal,
-  resolveSessionAndAgentIds,
-  resolveSubagentHookContext,
 } from "../../src/cli/pack/hook-bootstrap.js";
 import { stdinTimeoutBlockJson, stdinTimeoutBlockReason } from "../../src/cli/bounded-stdin.js";
 import { parseManifest, type Manifest } from "../../src/schema/index.js";
-
-function noopValidateAgentId(): void {
-  /* accepts anything: only session-id validation ordering is under test */
-}
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -62,69 +53,8 @@ function pauseSentinelBody(expiresAt: string | null = null): string {
 }
 
 // ---------------------------------------------------------------------------
-// 1. readStdin
+// 1. readStdinChecked
 // ---------------------------------------------------------------------------
-
-describe("readStdin", () => {
-  it("reads a utf-8 string from a stream", async () => {
-    const result = await readStdin(makeReadableOf('{"tool_name":"Bash"}'));
-    expect(result).toBe('{"tool_name":"Bash"}');
-  });
-
-  it("resolves empty string for an empty stream", async () => {
-    const r = new Readable();
-    r.push(null); // EOF immediately
-    const result = await readStdin(r);
-    expect(result).toBe("");
-  });
-
-  it("a closed stdin is read whole with no timeout note", async () => {
-    const { stream, lines } = makeStderr();
-    const result = await readStdin(makeReadableOf('{"tool_name":"Bash"}'), { stderr: stream });
-    expect(result).toBe('{"tool_name":"Bash"}');
-    expect(lines).toEqual([]);
-  });
-
-  it("an idle stdin with nothing read resolves empty after the bound and notes it", async () => {
-    const { stream, lines } = makeStderr();
-    const result = await readStdin(new PassThrough(), { idleTimeoutMs: 100, stderr: stream });
-    expect(result).toBe("");
-    expect(lines).toEqual([
-      "harness pack hook: no complete event JSON on stdin within 100 ms (stdin never closed); continuing as an empty event\n",
-    ]);
-  });
-
-  it("an idle stdin with partial data resolves with the data read and notes the byte count", async () => {
-    const { stream, lines } = makeStderr();
-    const pt = new PassThrough();
-    pt.write('{"tool_name":');
-    const result = await readStdin(pt, { idleTimeoutMs: 100, stderr: stream });
-    expect(result).toBe('{"tool_name":');
-    expect(lines).toEqual([
-      "harness pack hook: stdin did not close within 100 ms of the last data; using the 13 bytes read\n",
-    ]);
-  });
-
-  it("a slow but live pipe is not cut off: each chunk restarts the bound", async () => {
-    const { stream, lines } = makeStderr();
-    const pt = new PassThrough();
-    const read = readStdin(pt, { idleTimeoutMs: 400, stderr: stream });
-    pt.write("ab");
-    await new Promise((r) => setTimeout(r, 250));
-    pt.write("cd");
-    await new Promise((r) => setTimeout(r, 250));
-    pt.end("ef");
-    expect(await read).toBe("abcdef");
-    expect(lines).toEqual([]);
-  });
-
-  it("rejects when the stream emits an error", async () => {
-    const r = new Readable({ read() {} });
-    const p = readStdin(r);
-    r.emit("error", new Error("EPIPE"));
-    await expect(p).rejects.toThrow("EPIPE");
-  });
-});
 
 describe("readStdinChecked (the PreToolUse gates' reader)", () => {
   it("a closed stdin reports the whole text and no timeout", async () => {
@@ -160,19 +90,6 @@ describe("stdin timeout block helpers", () => {
     expect(reason).toMatch(/^stdin timeout:/);
     expect(reason).toContain("within 3000 ms");
     expect(reason).toContain("fail closed");
-  });
-
-  it("stdoutBlockRefusal writes the block envelope to stdout and one BLOCK line to stderr, and returns a blocked result", () => {
-    const out: string[] = [];
-    const err: string[] = [];
-    const sink = (into: string[]): NodeJS.WritableStream =>
-      ({ write: (s: string) => (into.push(s), true) }) as unknown as NodeJS.WritableStream;
-    const reason = stdinTimeoutBlockReason(3000);
-    const result = stdoutBlockRefusal("some-gate")(reason, sink(out), sink(err));
-    expect(result).toEqual({ exitCode: 0, blocked: true, diagnostic: `BLOCK: ${reason}` });
-    expect(err).toEqual([`harness pack hook some-gate: BLOCK: ${reason}\n`]);
-    expect(out).toHaveLength(1);
-    expect(JSON.parse(out[0] as string)).toMatchObject({ decision: "block", reason });
   });
 
   it("the envelope blocks in both the legacy and the hookSpecificOutput form", () => {
@@ -286,194 +203,4 @@ describe("loadManifestOrInjected", () => {
       loadManifestOrInjected({ homeDir: tmp }, undefined),
     ).toThrow();
   });
-});
-
-// ---------------------------------------------------------------------------
-// 4. resolveSessionAndAgentIds — validation order
-// ---------------------------------------------------------------------------
-
-describe("resolveSessionAndAgentIds", () => {
-  it("rejects a malformed session_id before ever reporting a missing agent_id, and never echoes the raw id (task 496660c5)", () => {
-    // sessionId is malformed (path traversal) AND agent_id is missing.
-    // rejectMalformedSessionId must run before the agent_id emptiness
-    // check, so the failure is "malformed session_id", not "missing
-    // agent_id" with the raw traversal string echoed back in `sessionId`.
-    const result = resolveSessionAndAgentIds(
-      "harness pack hook: subagent-start",
-      { session_id: "../escape", agent_id: undefined },
-      noopValidateAgentId,
-    );
-    expect(result.ok).toBe(false);
-    if (result.ok) throw new Error("unreachable");
-    expect(result.diagnostic).toMatch(/malformed session_id/);
-    expect(result.diagnostic).not.toMatch(/missing agent_id/);
-    expect(result.sessionId).toBeNull();
-  });
-});
-
-// ---------------------------------------------------------------------------
-// 5. resolveSubagentHookContext
-// ---------------------------------------------------------------------------
-
-describe("resolveSubagentHookContext", () => {
-  let tmp: string;
-
-  beforeEach(() => {
-    tmp = fs.mkdtempSync(path.join(os.tmpdir(), "bootstrap-subagent-ctx-"));
-  });
-  afterEach(() => {
-    fs.rmSync(tmp, { recursive: true, force: true });
-  });
-
-  function manifestWithPack(): Manifest {
-    return parseManifest({
-      version: 1,
-      policy_packs: [{ name: "understanding-before-execution", enabled: true, config: {} }],
-    });
-  }
-
-  it("honours the pause sentinel before resolving ids or pack context", () => {
-    const generatedDir = path.join(tmp, "harness.generated");
-    fs.mkdirSync(generatedDir, { recursive: true });
-    fs.writeFileSync(
-      path.join(generatedDir, ".harness-paused"),
-      pauseSentinelBody(null),
-    );
-    const stderr = makeStderr();
-
-    const result = resolveSubagentHookContext(
-      "harness pack hook: subagent-start",
-      "subagent-start",
-      "understanding-before-execution",
-      { session_id: "sess-1", agent_id: "agent-1" },
-      noopValidateAgentId,
-      { manifest: manifestWithPack(), generatedDir, stderr: stderr.stream },
-    );
-
-    expect(result.ok).toBe(false);
-    if (result.ok) throw new Error("unreachable");
-    expect(result.diagnostic).toMatch(/paused/);
-    expect(result.sessionId).toBeNull();
-    expect(result.agentId).toBeNull();
-  });
-
-  it("resolves sessionId, agentId, declared pack, and generatedDir when unpaused and ids/context are valid", () => {
-    const generatedDir = path.join(tmp, "harness.generated");
-    const stderr = makeStderr();
-
-    const result = resolveSubagentHookContext(
-      "harness pack hook: subagent-start",
-      "subagent-start",
-      "understanding-before-execution",
-      { session_id: "sess-1", agent_id: "agent-1" },
-      noopValidateAgentId,
-      { manifest: manifestWithPack(), generatedDir, stderr: stderr.stream },
-    );
-
-    expect(result.ok).toBe(true);
-    if (!result.ok) throw new Error("unreachable");
-    expect(result.context.sessionId).toBe("sess-1");
-    expect(result.context.agentId).toBe("agent-1");
-    expect(result.context.generatedDir).toBe(generatedDir);
-    expect(result.context.declared.name).toBe("understanding-before-execution");
-  });
-});
-
-// ---------------------------------------------------------------------------
-// Pin: every Codex hook honours the pause sentinel (task 1432e053)
-// ---------------------------------------------------------------------------
-//
-// Source-grep rather than behavioral, deliberately: the per-hook behavioral
-// pause tests already live alongside each hook's own test file (e.g.
-// pack-hook-codex-stop.test.ts, pack-hook-codex-user-prompt-submit.test.ts,
-// pack-hook-codex-pre-tool-use.test.ts). This test's job is narrower and
-// purely textual: it pins that each file imports `checkHookPause` from
-// hook-bootstrap.js and contains a `checkHookPause(` call site somewhere in
-// its source. It does not pin that the call is reachable, correctly wired
-// into the hook's control flow, or actually honoured at runtime, that
-// coverage is what the behavioral tests in the per-hook files are for; a
-// call site could in principle sit in dead code and still satisfy this
-// pin.
-describe("codex hooks import checkHookPause (parity pin, task 1432e053)", () => {
-  const CODEX_HOOK_FILES = [
-    "hook-codex-pre-tool-use.ts",
-    "hook-codex-post-tool-use.ts",
-    "hook-codex-stop.ts",
-    "hook-codex-user-prompt-submit.ts",
-  ];
-
-  it.each(CODEX_HOOK_FILES)("%s imports checkHookPause from hook-bootstrap.js", (filename) => {
-    const src = fs.readFileSync(
-      new URL(`../../src/cli/pack/${filename}`, import.meta.url),
-      "utf8",
-    );
-    // Matches every `import { ..., checkHookPause, ... } from
-    // "./hook-bootstrap.js"` statement in the file, not just the first,
-    // a second, separate import statement from the same specifier would
-    // otherwise hide behind the first match and still pass. Union the
-    // named imports across all matches.
-    const importBlocks = [...src.matchAll(/import\s*\{([^}]*)\}\s*from\s*["']\.\/hook-bootstrap\.js["']/g)];
-    expect(importBlocks.length, `${filename}: no import from ./hook-bootstrap.js found`).toBeGreaterThan(0);
-    const names = importBlocks.flatMap((m) => (m[1] ?? "").split(",").map((s) => s.trim()));
-    expect(names).toContain("checkHookPause");
-    // The import alone is not enough: pin that the hook actually calls
-    // checkHookPause somewhere in its body, not merely imports it.
-    expect(src, `${filename}: imports checkHookPause but never calls it`).toMatch(/checkHookPause\(/);
-  });
-});
-
-describe("runGateWithStdinRefusal", () => {
-  const sink = (): NodeJS.WritableStream =>
-    ({ write: () => true }) as unknown as NodeJS.WritableStream;
-
-  it("a closed stdin is replayed whole to the gate, which runs unrefused", async () => {
-    let seen = "";
-    const result = await runGateWithStdinRefusal(
-      { stdin: makeReadableOf('{"tool_name":"Bash"}'), stdout: sink(), stderr: sink() },
-      () => false,
-      () => "refused",
-      async (opts) => {
-        seen = await readStdin(opts.stdin as NodeJS.ReadableStream);
-        return "ran";
-      },
-    );
-    expect(result).toBe("ran");
-    expect(seen).toBe('{"tool_name":"Bash"}');
-  });
-
-  it("a timed-out read refuses with the stdin-timeout reason and never runs the gate", async () => {
-    let ran = false;
-    const pt = new PassThrough();
-    pt.write('{"tool_name":');
-    const reasons: string[] = [];
-    const result = await runGateWithStdinRefusal(
-      { stdin: pt, stdout: sink(), stderr: sink() },
-      () => false,
-      (reason) => (reasons.push(reason), "refused"),
-      async () => {
-        ran = true;
-        return "ran";
-      },
-    );
-    expect(result).toBe("refused");
-    expect(ran).toBe(false);
-    expect(reasons).toEqual([stdinTimeoutBlockReason(3000)]);
-  }, 15_000);
-
-  it("the operator pause wins: a timed-out read under a pause runs the gate with the text read", async () => {
-    let seen = "";
-    const pt = new PassThrough();
-    pt.write('{"tool_name":');
-    const result = await runGateWithStdinRefusal(
-      { stdin: pt, stdout: sink(), stderr: sink() },
-      () => true,
-      () => "refused",
-      async (opts) => {
-        seen = await readStdin(opts.stdin as NodeJS.ReadableStream);
-        return "ran";
-      },
-    );
-    expect(result).toBe("ran");
-    expect(seen).toBe('{"tool_name":');
-  }, 15_000);
 });

@@ -147,47 +147,6 @@ export function taskFinishResultingStatus(toolResponse: unknown): string | null 
   return typeof status === "string" && status.length > 0 ? status : null;
 }
 
-/**
- * Read the acted-on task id off a task_finish (or any agent-tasks) tool
- * RESULT, unwrapping the same shapes as `taskFinishResultingStatus`.
- * Used as a fallback when the tool_input did not carry a `taskId` (task
- * c86e3c4a, id-equality guard on release verbs), and by the stay-in-scope
- * hook to read the created task id off a create verb's result, which never
- * carries a `taskId` input (task b5e65f5e).
- */
-export function taskIdFromToolResponse(toolResponse: unknown): string {
-  const task = unwrapToolResponseEnvelope(toolResponse)?.["task"];
-  const id = inputRecord(task)?.["id"];
-  return typeof id === "string" ? id : "";
-}
-
-/**
- * Diagnostic-only companion to `claimEffectForAgentTasksTool`: was a
- * task_finish's resulting status actually readable? This does NOT feed
- * back into the release/keep decision (that stays the classifier's
- * alone) -- it lets `hook-track-active-claim.ts` label its stderr line
- * so a silent fail-safe fallback release does not look identical to an
- * intentional `done` release in the operator's own trail (task
- * c86e3c4a).
- */
-export function taskFinishReleaseIsUnreadable(toolResponse: unknown): boolean {
-  return taskFinishResultingStatus(toolResponse) === null;
-}
-
-/**
- * Coarse shape label for a tool_response, for the same stderr diagnostic
- * above -- never used to decide anything, only to name what shape a
- * fail-safe release fell back from.
- */
-export function describeToolResponseShape(
-  toolResponse: unknown,
-): "array" | "string" | "object" | "absent" {
-  if (toolResponse === undefined || toolResponse === null) return "absent";
-  if (Array.isArray(toolResponse)) return "array";
-  if (typeof toolResponse === "string") return "string";
-  return "object";
-}
-
 export function agentTasksToolName(verb: string): string {
   return `${AGENT_TASKS_MCP_PREFIX}${verb}`;
 }
@@ -244,8 +203,9 @@ export type ClaimEffect = "acquire" | "release" | "none";
  * operator clears the file). It is not costless, and it is not merely
  * giving up an "ergonomic shortcut".
  *
- * This is the ONE place that decision is made: callers (e.g.
- * `hook-track-active-claim.ts`) do not re-derive it locally.
+ * This is the ONE place that decision is made: callers (until task
+ * 7890cd34, e.g. `hook-track-active-claim.ts`) did not re-derive it
+ * locally.
  */
 export function claimEffectForAgentTasksTool(
   toolName: string,

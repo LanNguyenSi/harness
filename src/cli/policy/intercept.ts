@@ -1112,7 +1112,8 @@ export async function runInterceptCli(
 
   // Stage the session id for a later arg-less `harness approve risk`
   // whenever the FIRST blocking decision is `require_approval`. Mirrors
-  // the Understanding Gate hook (src/cli/pack/hook-pre-tool-use.ts):
+  // what the Understanding Gate's pre-tool-use hook used to do (removed
+  // in task 7890cd34):
   // the producer side knows the live session id (it just received it on
   // the hook event), but `harness approve risk` runs from the operator's
   // `!`-shell where `$CLAUDE_SESSION_ID` is unset, so it has to read the

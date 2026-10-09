@@ -7,10 +7,7 @@ import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { Readable, Writable } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { runPackHookPreToolUseCli } from "../../src/cli/pack/hook-pre-tool-use.js";
-import type { LedgerEntry } from "../../src/policies/index.js";
 import {
   REFUSED_CLAIM_BINDING,
 } from "../../src/policy-packs/builtin/understanding-before-execution/active-claim.js";
@@ -24,7 +21,6 @@ import {
   writeApprovalMarker,
   writeTaskApprovalMarker,
 } from "../../src/policy-packs/builtin/understanding-before-execution-runtime.js";
-import { parseManifest } from "../../src/schema/index.js";
 
 let tmp: string;
 let generatedDir: string;
@@ -36,19 +32,6 @@ beforeEach(() => {
 afterEach(() => {
   fs.rmSync(tmp, { recursive: true, force: true });
 });
-
-function sink(): { stream: Writable; read: () => string } {
-  let buf = "";
-  return {
-    stream: new Writable({
-      write(chunk, _enc, cb): void {
-        buf += chunk.toString();
-        cb();
-      },
-    }),
-    read: () => buf,
-  };
-}
 
 const claimPath = (): string => activeClaimPathFor(generatedDir);
 const SESSION = "sess-claim-refused";
@@ -199,34 +182,5 @@ describe.skipIf(process.platform === "win32")("the session marker binding fails 
     const check = checkActiveClaimApprovalMarker(generatedDir);
     expect(check.matched).toBe(false);
     expect(check.detail).toMatch(/active-claim could not be read/);
-  });
-});
-
-describe.skipIf(process.platform === "win32")("the understanding gate blocks on a refused claim instead of reading it as no claim", () => {
-  async function gatedEdit(): Promise<boolean> {
-    const result = await runPackHookPreToolUseCli({
-      manifest: parseManifest({
-        version: 1,
-        policy_packs: [{ name: "understanding-before-execution", enabled: true, config: {} }],
-      }),
-      stdin: Readable.from([JSON.stringify({ session_id: SESSION, tool_name: "Edit" })]),
-      stdout: sink().stream,
-      stderr: sink().stream,
-      reportsDir: path.join(tmp, "reports"),
-      generatedDir,
-      ledgerQuery: async (): Promise<LedgerEntry[]> => [],
-    });
-    return result.blocked;
-  }
-
-  it("control: an approval given with no claim opens the gate", async () => {
-    writeApprovalMarker(generatedDir, SESSION, { approvedAt: new Date().toISOString(), approvedBy: "op" });
-    expect(await gatedEdit()).toBe(false);
-  });
-
-  it("the same approval blocks once a FIFO is planted at the claim path", async () => {
-    writeApprovalMarker(generatedDir, SESSION, { approvedAt: new Date().toISOString(), approvedBy: "op" });
-    execFileSync("mkfifo", [claimPath()]);
-    expect(await gatedEdit()).toBe(true);
   });
 });

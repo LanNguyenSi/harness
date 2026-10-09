@@ -768,10 +768,11 @@ function isNonNullObject(value: unknown): value is Record<string, unknown> {
  * absent, and the narrowed `task_finish` gate stays unarmed for a call
  * that DOES request an auto-merge.
  *
- * Mirrors the two-field handling `resolveCodexExemptionCommand`
- * (`hook-codex-pre-tool-use.ts`) already established for this exact
- * shape, but in the opposite fail-closed direction: that function
- * REFUSES an exemption when the two fields disagree (an exemption is an
+  * Mirrors the two-field handling `resolveCodexExemptionCommand` of the
+  * Codex pre-tool-use hook (both removed in task 7890cd34) had
+  * established for this exact shape, but in the opposite fail-closed
+  * direction: that function REFUSED an exemption when the two fields
+  * disagreed (an exemption is an
  * allow, so disagreement must not grant it); here a `requires:` gate is
  * a block, so disagreement must not WITHHOLD it. When both `tool_input`
  * and `raw_input` are present as non-null objects, `input_match` is

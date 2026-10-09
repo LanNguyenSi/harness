@@ -22,7 +22,6 @@ import type { RogueLedgerScanOptions } from "./doctor/rogue-ledger.js";
 import { EX_USAGE, HarnessExitError } from "./exit-codes.js";
 import { VERSION } from "../version.js";
 import { registerRemove } from "./remove/register.js";
-import { registerDelegate } from "./delegate/register.js";
 import { registerAuditGroup } from "./register-audit-group.js";
 import { registerUninstall } from "./uninstall/register.js";
 import { registerOperatorLifecycle } from "./register-operator-lifecycle.js";
@@ -86,8 +85,6 @@ export function buildProgram(opts: RunOptions = {}): Command {
   registerPackGroup(program, { stdout, stderr });
 
   registerApproveGroup(program, { stdout, stderr });
-
-  registerDelegate(program, { stdout, stderr });
 
   registerExplainGroup(program, { stdout, stderr });
 

@@ -178,6 +178,17 @@ export const REMOVED_COMMANDS: readonly RemovedCommand[] = [
   { command: "harness preflight", removedIn: "1.0.0", reason: "alias of the removed session-start preflight producer" },
   { command: "harness pack hook post-merge-gate", removedIn: "1.0.0", reason: "the post-merge-gate pack is removed" },
   { command: "harness pack hook solution-acceptance", removedIn: "1.0.0", reason: "the solution-acceptance pack is removed" },
+  { command: "harness pack hook pre-tool-use", removedIn: "1.0.0", reason: "the understanding-gate PreToolUse hook is removed" },
+  { command: "harness pack hook post-tool-use", removedIn: "1.0.0", reason: "the understanding-gate PostToolUse hook is removed" },
+  { command: "harness pack hook track-active-claim", removedIn: "1.0.0", reason: "the understanding-gate active-claim hook is removed" },
+  { command: "harness pack hook stay-in-scope", removedIn: "1.0.0", reason: "the understanding-gate stay-in-scope hook is removed" },
+  { command: "harness pack hook subagent-start", removedIn: "1.0.0", reason: "the understanding-gate subagent hooks are removed" },
+  { command: "harness pack hook subagent-stop", removedIn: "1.0.0", reason: "the understanding-gate subagent hooks are removed" },
+  { command: "harness pack hook codex-pre-tool-use", removedIn: "1.0.0", reason: "the understanding-gate Codex hooks are removed" },
+  { command: "harness pack hook codex-post-tool-use", removedIn: "1.0.0", reason: "the understanding-gate Codex hooks are removed" },
+  { command: "harness pack hook codex-user-prompt-submit", removedIn: "1.0.0", reason: "the understanding-gate Codex hooks are removed" },
+  { command: "harness pack hook codex-stop", removedIn: "1.0.0", reason: "the understanding-gate Codex hooks are removed" },
+  { command: "harness delegate", removedIn: "1.0.0", reason: "subagent delegation for the understanding gate is removed" },
 ];
 
 // Leading `NAME=value` shell assignments in front of the command word. Only

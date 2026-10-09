@@ -13,13 +13,11 @@ function bufferStream(): { stream: Writable; read: () => string } {
   return { stream, read: () => buf };
 }
 
-// The four hook labels that previously each carried their own byte-identical
-// parseConfigUx copy (task 19e293c6). These strings pin the stderr warnings
-// to the exact pre-extraction output; a label change is an operator-visible
+// The remaining hook label that carries its own stderr prefix through the
+// shared parseConfigUx (task 19e293c6). This string pins the stderr warning to
+// the exact pre-extraction output; a label change is an operator-visible
 // diagnostic change and must be deliberate.
 const HOOK_LABELS = [
-  "harness pack hook",
-  "harness pack hook codex",
   "harness pack hook branch-protection",
 ] as const;
 
