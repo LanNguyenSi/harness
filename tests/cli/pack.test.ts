@@ -7,7 +7,7 @@ import { apply } from "../../src/cli/apply/index.js";
 import { init } from "../../src/cli/init/index.js";
 import { packAdd, packList, packRemove } from "../../src/cli/pack/index.js";
 import { applyPackAdd, applyPackRemove, planPackRemove } from "../../src/cli/pack/mutate.js";
-import { buildProgram } from "../../src/cli/index.js";
+import { buildProgram, run } from "../../src/cli/index.js";
 import { HarnessExitError } from "../../src/cli/exit-codes.js";
 import { readLastApply } from "../../src/io/last-apply.js";
 import { STUB_NPM_BIN_EXEC_UNKNOWN as STUB_NPM_BIN_EXEC } from "../_helpers/npm-bin-exec.js";
@@ -88,6 +88,21 @@ describe("pack add", () => {
       name: "branch-protection",
       config: { protected_branches: ["main"] },
     });
+  });
+
+  it("rejects the removed --mode option with EX_USAGE and names it on stderr", async () => {
+    let stderr = "";
+    const code = await run({
+      argv: ["pack", "add", "branch-protection", "--mode", "x", "--config", manifestPath],
+      stdout: () => {},
+      stderr: (s) => {
+        stderr += s;
+      },
+    });
+    expect(code).toBe(64);
+    expect(stderr).toMatch(/unknown option '--mode'/);
+    // The rejection happens at parse time: the manifest is never touched.
+    expect(readManifest().policy_packs ?? []).toHaveLength(0);
   });
 
   it("rejects an unknown builtin name BEFORE the schema gate", async () => {
