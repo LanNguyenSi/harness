@@ -609,7 +609,7 @@ function buildExpectedFiles(
   // The operator's generated dir. It differs from `generatedDir` only when
   // the caller redirected apply's output (`opts.generatedDir`); values that
   // name runtime state the operator's hooks and grounding-mcp consult (the
-  // pause sentinel, the verdict signing key) stay anchored here.
+  // verdict signing key) stay anchored here.
   stateDir: string = generatedDir,
 ): { files: ExpectedFile[]; warnings: string[] } {
   // Phase 6 #2: expand policy_packs[] into hook contributions + extra

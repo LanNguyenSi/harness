@@ -1031,8 +1031,8 @@ function checkPolicyPacks(manifest: Manifest): Diagnostic[] {
 // Phase 6 follow-up (task d78fb3c7): per-pack `config:` shape check.
 // Each builtin pack registers a zod `configSchema` consumed via
 // `checkPolicyPackConfigs`; this turns the strict-mode issues into
-// validate Diagnostics so typo'd keys (`permision_profile`) and bad
-// enum values (`mode: "fastConfirm"`) fail loud at lint time. Runs
+// validate Diagnostics so typo'd keys (`protected_brnches`) and bad
+// values (`protected_branches: "master"`) fail loud at lint time. Runs
 // AFTER the source / name check above; an unknown pack name has no
 // registered schema and would be skipped silently here even without
 // the source check, but emitting both diagnostics in one run is the

@@ -48,9 +48,7 @@ const O_NOCTTY: number = fs.constants.O_NOCTTY ?? 0;
 /**
  * The most bytes the gate-marker read will return. Every caller reads a small
  * JSON record (an approval or delegation marker, an in-flight record, a
- * verdict, a launcher report, one adoption ledger of entry ids); the largest
- * legitimate input is a launcher report, which the report hashing elsewhere
- * already caps at the same 1 MiB (`MAX_HASHED_REPORT_BYTES`). A file over the
+ * verdict, a launcher report, one adoption ledger of entry ids). A file over the
  * cap is refused as `unreadable` (fail-closed in every caller) before any
  * byte is read: a sparse multi-gigabyte file at a marker path otherwise
  * takes the hook past its budget, which the runtime treats as an allow, the

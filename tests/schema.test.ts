@@ -899,7 +899,7 @@ describe("parseManifest — policy_packs", () => {
   });
 });
 
-describe("parseManifest — permission_profiles (removed key)", () => {
+describe("parseManifest: permission_profiles (removed key)", () => {
   it("no longer declares the key: a manifest without it parses to a manifest without it", () => {
     const m = parseManifest({ version: 1 });
     expect("permission_profiles" in m).toBe(false);

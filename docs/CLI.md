@@ -69,7 +69,7 @@ Removed in task `a4d8adc5`: `harness approve branch-protection` and `harness ses
 |------|-----------|
 | `harness gate disable [--matcher <pattern>] [--settings <path>]` | Remove hook groups from `~/.claude/settings.json` whose matcher substring-matches the pattern. With no `--matcher`, lists candidates without writing. Snapshots removed groups + backs up the file for `gate enable`. |
 | `harness gate enable [--settings <path>] [--force]` | Restore the most recent snapshot written by `gate disable`. |
-| `harness pause [--for 5m\|--indefinite] [--reason X] [--i-am-the-operator]` | Drop a sentinel at `harness.generated/.harness-paused` so PreToolUse / Risk / Understanding hooks short-circuit. Branch-protection does not yield to the pause; to switch it off, see [Disable the gate](policy-packs/branch-protection.md#disable-the-gate-operator-only) (Claude Code and Codex differ). Operator-only (`v0.22.0+`). `--indefinite` requires the companion `--i-am-the-operator-and-accept-no-auto-resume`. |
+| `harness pause [--for 5m\|--indefinite] [--reason X] [--i-am-the-operator]` | Drop a sentinel at `harness.generated/.harness-paused` so PreToolUse / Risk hooks short-circuit. Branch-protection does not yield to the pause; to switch it off, see [Disable the gate](policy-packs/branch-protection.md#disable-the-gate-operator-only) (Claude Code and Codex differ). Operator-only (`v0.22.0+`). `--indefinite` requires the companion `--i-am-the-operator-and-accept-no-auto-resume`. |
 | `harness resume` | Remove the pause sentinel and re-engage all gates. |
 
 ## Smoke

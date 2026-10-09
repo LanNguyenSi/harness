@@ -22,7 +22,10 @@ carries it, or the `permission_profiles` key it alone consumed, loads with a
 warning and the entry is ignored; `harness validate --strict` fails on it.
 Delete the entry (`harness pack remove --force understanding-before-execution`
 also drops the generated instructions file) and delete `permission_profiles`
-by hand, then re-run `harness apply` for each runtime.
+by hand, then re-run `harness apply` for each runtime. If you applied with
+`--target <file> --merge` while a `permission_profile` was selected, also
+delete the `permissions` block harness wrote into that file: harness no
+longer generates or manages it, so `--merge` keeps it as an operator key.
 
 Custom packs from `path:`, `npm:`, or `git:` sources are out of scope
 for v1; see each pack's own doc for the future-vocabulary contract.

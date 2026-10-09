@@ -3193,7 +3193,8 @@ ${mcpBlock}
 // alone; countDiagnostics (src/cli/doctor/index.ts) rolls
 // `report.policyPacks.versionGaps.length` into warningCount only (see
 // the comment immediately above that line). This pins the classification
-// by comparing a floor met against a floor missed: the gap count (n)
+// by comparing no declared floor against a declared floor (a
+// no_probe_registered gap): the gap count (n)
 // moves from 0 to 1, warningCount rises by exactly that much, and
 // errorCount does not move. A mutant that reclassified the gap into
 // errorCount instead of warningCount (P1) flips the errorCount side of

@@ -290,7 +290,7 @@ function formatPoliciesSection(report: DoctorReport): string[] {
 // Policy Packs section: declared-but-not-live + per-pack `config:`
 // shape gaps. A pack whose `source` or builtin `name` doesn't resolve
 // gets silently skipped by `expandPolicyPacks`; a pack whose `config:`
-// keys typo (`permision_profile`, `mode: "fastConfirm"`) falls through
+// keys typo (`protected_brnches`, `protected_branches: "master"`) falls through
 // to runtime fallbacks and only surfaces when the hook finally fires.
 // Both render ✗ here. Section stays silent when the lists are empty
 // (the healthy case is common; a noisy ✓ would dilute doctor's signal).

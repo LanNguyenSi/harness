@@ -9,7 +9,7 @@ function manifestWith(packs: unknown[]) {
 
 const STALE_UX = { cannot: "old", required: ["old"], run: ["old"] };
 
-describe("checkPolicyPackUxDrift — branch-protection", () => {
+describe("checkPolicyPackUxDrift: branch-protection", () => {
   it("flags a stale ux", () => {
     const m = manifestWith([
       {
@@ -99,7 +99,7 @@ describe("checkPolicyPackUxDrift — branch-protection", () => {
   });
 });
 
-describe("checkPolicyPackUxDrift — pack selection", () => {
+describe("checkPolicyPackUxDrift: pack selection", () => {
   it("unknown pack names are skipped (source-check's job)", () => {
     const m = manifestWith([{ name: "no-such-pack", config: { ux: STALE_UX } }]);
     expect(checkPolicyPackUxDrift(m)).toEqual([]);
@@ -115,7 +115,7 @@ describe("checkPolicyPackUxDrift — pack selection", () => {
   });
 });
 
-describe("checkPolicyPackUxDrift — cross-entry semantics", () => {
+describe("checkPolicyPackUxDrift: cross-entry semantics", () => {
   // Only one builtin pack ships, and the schema refuses two entries with the
   // same name, so the second entry is spread in after the parse: the check
   // walks whatever entries the manifest carries.

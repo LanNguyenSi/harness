@@ -45,6 +45,19 @@ describe("mergeSettings", () => {
   });
 });
 
+describe("mergeSettings: removed permissions generator", () => {
+  it("--merge keeps a permissions block harness no longer generates (documented upgrade step)", () => {
+    const permissions = { allow: ["Read"], ask: ["Bash"], deny: ["Bash(git push:*)"] };
+    const target = { env: { FOO: "1" }, hooks: { old: 1 }, permissions };
+    const before = JSON.stringify(target.permissions);
+    const r = mergeSettings(target, { hooks: { new: 1 } });
+    expect(JSON.stringify(r.merged.permissions)).toBe(before);
+    expect(r.merged.hooks).toEqual({ new: 1 });
+    expect(r.replacedKeys).toEqual(["hooks"]);
+    expect(r.preservedKeys).toContain("permissions");
+  });
+});
+
 describe("mergeSettings — mcpServers deep merge (task 059b669c)", () => {
   it("operator-added server survives; harness-declared name wins", () => {
     const r = mergeSettings(

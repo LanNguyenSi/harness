@@ -27,7 +27,7 @@ function makeTmp(): string {
   return fsActual.mkdtempSync(path.join(os.tmpdir(), "read-unreadable-"));
 }
 
-describe("readRegularFileBounded — unreadable kind (read failure after good lstat)", () => {
+describe("readRegularFileBounded: unreadable kind (read failure after good lstat)", () => {
   it("returns unreadable when the descriptor read throws on an existing regular file", () => {
     const tmp = makeTmp();
     try {
