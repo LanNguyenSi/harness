@@ -15,8 +15,9 @@
 // the gate from an un-hooked shell (`harness gate disable`).
 //
 // Enabled per-installation via `harness pack add branch-protection`.
-// The `full` init template wires it with `enabled: true` (see
-// src/cli/init/templates.ts); the `solo` / `team` templates do not.
+// The `solo`, `team` and `full` init templates wire it with
+// `enabled: true` (src/cli/init/profiles.ts, src/cli/init/templates.ts);
+// `minimal` does not.
 
 import { z } from "zod";
 import { PolicyUxSchema } from "../../schema/policies.js";
