@@ -189,6 +189,9 @@ export const REMOVED_COMMANDS: readonly RemovedCommand[] = [
   { command: "harness pack hook codex-user-prompt-submit", removedIn: "1.0.0", reason: "the understanding-gate Codex hooks are removed" },
   { command: "harness pack hook codex-stop", removedIn: "1.0.0", reason: "the understanding-gate Codex hooks are removed" },
   { command: "harness delegate", removedIn: "1.0.0", reason: "subagent delegation for the understanding gate is removed" },
+  { command: "harness approve understanding", removedIn: "1.0.0", reason: "the understanding-gate approval verb is removed" },
+  { command: "harness gc", removedIn: "1.0.0", reason: "the understanding-gate state cleanup verb is removed" },
+  { command: "harness pack upgrade", removedIn: "1.0.0", reason: "the understanding-gate auto_approve upgrade verb is removed" },
 ];
 
 // Leading `NAME=value` shell assignments in front of the command word. Only

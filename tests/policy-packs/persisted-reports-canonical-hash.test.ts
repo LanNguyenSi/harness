@@ -7,11 +7,9 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { rewriteReportApproved } from "../../src/cli/approve/understanding.js";
 import {
   canonicalReportHash,
   canonicalReportHashOfFile,
-  expirePersistedReport,
   hashReportFile,
   MAX_HASHED_REPORT_BYTES,
   readReportFileBounded,
@@ -107,23 +105,6 @@ describe("canonicalReportHash", () => {
     expect(canonicalReportHash(parsed)).not.toBe(canonicalReportHash({ a: 1 }));
   });
 
-  it("survives the approval rewrite and a later expiry rewrite of the file", () => {
-    const filePath = writeReport("r.json", { ...base(), approvalStatus: "pending" });
-    const pendingHash = canonicalReportHashOfFile(filePath);
-    expect(pendingHash).toBe(canonicalReportHash(base()));
-
-    rewriteReportApproved(filePath, "2026-10-01T10:05:00.000Z", "operator", SESSION);
-    expect(canonicalReportHashOfFile(filePath)).toBe(pendingHash);
-
-    const expired = expirePersistedReport(tmp, SESSION, new Date(), "tool:x");
-    expect(expired.ok).toBe(true);
-    expect(JSON.parse(fs.readFileSync(filePath, "utf8"))["approvalStatus"]).toBe("expired");
-    expect(canonicalReportHashOfFile(filePath)).toBe(pendingHash);
-
-    // Re-approving an expired report drops the expiry stamp; still the same hash.
-    rewriteReportApproved(filePath, "2026-10-01T12:00:00.000Z", "operator", SESSION);
-    expect(canonicalReportHashOfFile(filePath)).toBe(pendingHash);
-  });
 });
 
 describe("canonicalReportHashOfFile", () => {

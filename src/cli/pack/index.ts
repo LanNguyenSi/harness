@@ -8,14 +8,6 @@ export {
   type PackReseedResult,
 } from "./reseed.js";
 export {
-  packUpgrade,
-  applyAutoApproveUpgrade,
-  type PackUpgradeName,
-  type PackUpgradeOptions,
-  type PackUpgradeResult,
-  type ApplyAutoApproveUpgradeResult,
-} from "./upgrade.js";
-export {
   applyPackAdd,
   applyPackRemove,
   applyPackReseedUx,
