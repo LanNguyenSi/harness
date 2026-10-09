@@ -1,9 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { parse as parseYaml } from "yaml";
 import { expandPolicyPacks } from "../../src/policy-packs/expand.js";
 import { parseManifest } from "../../src/schema/index.js";
 import { expandCodexHookMatchPattern } from "../../src/runtime/tool-name-aliases.js";
-import { composeCustom } from "../../src/cli/init/composer.js";
 
 function buildManifest(
   packs: unknown[],
@@ -356,19 +354,27 @@ describe("expandPolicyPacks", () => {
     expect(post?.match).toBe("^(?:Bash)$");
   });
 
-  it("end-to-end: composeCustom()'s expire_on_bash_match actually widens the PostToolUse matcher to include Bash (agent-tasks/90eae119)", () => {
-    // Fixture-free pin (no hand-built manifest): feeds a real
-    // `harness init --interactive` Custom-profile manifest through the
-    // actual expandPolicyPacks resolver, so the composer's
-    // expire_on_bash_match wiring is proven live end-to-end, not just via
-    // the composer's own unit pins (init-composer.test.ts) or a synthetic
-    // config object (the tests above).
-    const composed = composeCustom({
-      packs: ["understanding-before-execution"],
-      mcps: [],
-      policies: [],
-    });
-    const m = parseManifest(parseYaml(composed.yaml));
+  it("end-to-end: the shipped expire_on_bash_match list widens the PostToolUse matcher to include Bash (agent-tasks/90eae119)", () => {
+    // The init surfaces no longer offer the pack, so the lifecycle the
+    // interactive Custom profile used to emit is spelled out inline.
+    const m = buildManifest([
+      {
+        name: "understanding-before-execution",
+        config: {
+          approval_lifecycle: {
+            expire_on_tool_match: [
+              "mcp__agent-tasks__task_finish",
+              "mcp__agent-tasks__task_abandon",
+              "mcp__agent-tasks__task_merge",
+              "mcp__agent-tasks__pull_requests_merge",
+              "mcp__agent-tasks__tasks_transition",
+            ],
+            expire_on_bash_match: ["^gh pr (merge|close)\\b", "^git push origin (master|main)\\b"],
+            max_age: "4h",
+          },
+        },
+      },
+    ]);
     const r = expandPolicyPacks(m);
     const post = r.hooks.find(
       (h) => h.name === "policy-pack:understanding-before-execution:post-tool-use",

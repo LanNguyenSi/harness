@@ -7,6 +7,7 @@ import {
   COMPOSABLE_PACKS,
   COMPOSABLE_POLICIES,
 } from "../../src/cli/init/composer.js";
+import { defaultUx as branchProtectionDefaultUx } from "../../src/policy-packs/builtin/branch-protection.js";
 import { parseManifest } from "../../src/schema/index.js";
 import { checkPolicyGroundingMcp } from "../../src/cli/validate/checks.js";
 
@@ -34,50 +35,15 @@ describe("composeCustom — empty selection", () => {
 });
 
 describe("composeCustom — single pack", () => {
-  it("emits policy_packs.understanding-before-execution with mode and producers", () => {
-    const { manifest } = compose({ packs: ["understanding-before-execution"] });
+  it("emits policy_packs.branch-protection with the canonical ux", () => {
+    const { manifest } = compose({ packs: ["branch-protection"] });
     expect(manifest.policy_packs).toHaveLength(1);
     const pack = manifest.policy_packs[0];
-    expect(pack?.name).toBe("understanding-before-execution");
+    expect(pack?.name).toBe("branch-protection");
     expect(pack?.source).toBe("builtin");
     expect(pack?.enabled).toBe(true);
-    // The pack's config carries the operator-approve producers introduced
-    // in agent-tasks/25bced52; an at-least-one `ask` producer is the
-    // load-bearing requirement of the gate.
-    const cfg = pack?.config as { mode?: string; producers?: Array<{ kind: string }> } | undefined;
-    expect(cfg?.mode).toBe("grill_me");
-    expect(cfg?.producers?.some((p) => p.kind === "ask")).toBe(true);
-  });
-
-  it("approval_lifecycle: emits expire_on_tool_match + expire_on_bash_match + max_age matching TEAM/FULL templates (task 90eae119)", () => {
-    // Historically the interactive composer's understanding-before-execution
-    // branch set expire_on_tool_match + max_age but never expire_on_bash_match
-    // at all, unlike SOLO_TEMPLATE/TEAM_TEMPLATE/FULL_TEMPLATE (which all ship
-    // it): a session built through `harness init --interactive` had NO
-    // Bash-boundary expiry whatsoever, relying solely on max_age and the
-    // tool-match list. Closed by task `90eae119-cb77-4941-975c-7d2930e685d8`:
-    // the composer now mirrors TEAM_TEMPLATE/FULL_TEMPLATE's own
-    // expire_on_bash_match patterns (same anchored regexes, same 4h
-    // max_age; Custom already matched their expire_on_tool_match list and
-    // max_age, so it inherits their Bash boundary too). See
-    // docs/policy-packs/understanding-before-execution.md; this pin and
-    // that doc section must not drift apart.
-    const { manifest } = compose({ packs: ["understanding-before-execution"] });
-    const pack = manifest.policy_packs.find((p) => p.name === "understanding-before-execution");
-    const cfg = pack?.config as { approval_lifecycle?: Record<string, unknown> } | undefined;
-    const lifecycle = cfg?.approval_lifecycle;
-    expect(lifecycle?.["expire_on_tool_match"]).toEqual([
-      "mcp__agent-tasks__task_finish",
-      "mcp__agent-tasks__task_abandon",
-      "mcp__agent-tasks__task_merge",
-      "mcp__agent-tasks__pull_requests_merge",
-      "mcp__agent-tasks__tasks_transition",
-    ]);
-    expect(lifecycle?.["expire_on_bash_match"]).toEqual([
-      "^gh pr (merge|close)\\b",
-      "^git push origin (master|main)\\b",
-    ]);
-    expect(lifecycle?.["max_age"]).toBe("4h");
+    const cfg = pack?.config as { ux?: unknown } | undefined;
+    expect(cfg?.ux).toEqual(branchProtectionDefaultUx());
   });
 });
 
@@ -258,9 +224,9 @@ describe("composeCustom — producer-coupling warnings", () => {
     expect(warnings.some((w) => /two-reviewers-required/.test(w) && /producer/.test(w))).toBe(false);
   });
 
-  it("auto-adds grounding-mcp even when understanding-before-execution pack is selected alongside a policy (pack does NOT produce ledger tags, grounding-mcp still required)", () => {
+  it("auto-adds grounding-mcp even when the branch-protection pack is selected alongside a policy (pack does NOT produce ledger tags, grounding-mcp still required)", () => {
     const { manifest, warnings } = compose({
-      packs: ["understanding-before-execution"],
+      packs: ["branch-protection"],
       policies: ["dogfood-before-release"],
     });
     expect(manifest.tools.mcp.some((m) => m.name === "grounding-mcp")).toBe(true);
@@ -269,7 +235,7 @@ describe("composeCustom — producer-coupling warnings", () => {
 
   it("does NOT warn when policy producers are satisfied (full pick, sans codebase-oracle)", () => {
     const { warnings } = compose({
-      packs: ["understanding-before-execution"],
+      packs: ["branch-protection"],
       mcps: ["agent-tasks", "grounding-mcp", "memory-router"],
       policies: [
         "review-before-merge",
@@ -304,11 +270,8 @@ describe("composeCustom — memoryDir override", () => {
 });
 
 describe("composer surface (catalogues)", () => {
-  it("exposes the composer-surfaced subset (2 packs, 4 MCPs, 4 reference policies; intentionally smaller than FULL_TEMPLATE, which ships the bash-surface parallels too)", () => {
-    expect(COMPOSABLE_PACKS.map((p) => p.key)).toEqual([
-      "understanding-before-execution",
-      "branch-protection",
-    ]);
+  it("exposes the composer-surfaced subset (1 pack, 4 MCPs, 4 reference policies; intentionally smaller than FULL_TEMPLATE, which ships the bash-surface parallels too)", () => {
+    expect(COMPOSABLE_PACKS.map((p) => p.key)).toEqual(["branch-protection"]);
     expect(COMPOSABLE_MCPS.map((m) => m.key)).toEqual([
       "agent-tasks",
       "grounding-mcp",
@@ -355,7 +318,7 @@ describe("composeCustom — H3 gate auto-repair: grounding-mcp auto-add", () => 
   });
 
   it("does NOT auto-add grounding-mcp when no policies are selected (empty policies, no grounding-mcp needed)", () => {
-    const { manifest, warnings } = compose({ packs: ["understanding-before-execution"] });
+    const { manifest, warnings } = compose({ packs: ["branch-protection"] });
     // grounding-mcp should not appear since no policies were selected
     expect(manifest.tools.mcp.some((m) => m.name === "grounding-mcp")).toBe(false);
     expect(warnings.some((w) => /auto-wired grounding-mcp/.test(w))).toBe(false);

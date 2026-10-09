@@ -51,19 +51,10 @@ describe("parseManifest — happy path", () => {
     expect(reviewSubagentPolicy?.trigger.match).toBe("mcp__agent-tasks__pull_requests_create");
     expect(reviewSubagentPolicy?.trigger.extract?.TASK_ID).toBe("toolArgs.taskId");
     expect(reviewSubagentPolicy?.requires?.ledger_tag).toBe("review-subagent:${TASK_ID}");
-    expect(manifest.policy_packs).toHaveLength(2);
-    expect(manifest.policy_packs[0]?.name).toBe("understanding-before-execution");
+    expect(manifest.policy_packs).toHaveLength(1);
+    expect(manifest.policy_packs[0]?.name).toBe("branch-protection");
     expect(manifest.policy_packs[0]?.source).toBe("builtin");
     expect(manifest.policy_packs[0]?.enabled).toBe(true);
-    expect(manifest.policy_packs[1]?.name).toBe("branch-protection");
-    expect(manifest.policy_packs[1]?.source).toBe("builtin");
-    expect(manifest.policy_packs[1]?.enabled).toBe(true);
-    // config carries the gate mode + the producers list extension
-    // (agent-tasks/25bced52). Assert on keys rather than deep-equality
-    // so further config additions don't churn this test.
-    const packConfig = manifest.policy_packs[0]?.config as Record<string, unknown>;
-    expect(packConfig?.mode).toBe("grill_me");
-    expect(Array.isArray(packConfig?.producers)).toBe(true);
     // Producers (agent-tasks/3804b785 + fa4b188b): every reference
     // policy must ship with remediation hints carrying an MCP path,
     // since that is the ungated recovery route for Bash-lockout

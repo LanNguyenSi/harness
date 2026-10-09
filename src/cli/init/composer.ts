@@ -4,7 +4,7 @@
 // accepts.
 //
 // Current surface (parity with FULL_TEMPLATE): one policy pack
-// (understanding-before-execution), four MCPs (agent-tasks,
+// (branch-protection), four MCPs (agent-tasks,
 // grounding-mcp, memory-router — wired under memory.router, NOT
 // tools.mcp[] — and codebase-oracle), and four reference policies
 // (review-before-merge, review-subagent-before-pr-create,
@@ -19,15 +19,9 @@
 // solo/team/full.
 
 import { stringify } from "yaml";
-import {
-  defaultProducers as understandingDefaultProducers,
-  defaultUx as understandingDefaultUx,
-  type Mode,
-} from "../../policy-packs/builtin/understanding-before-execution.js";
-import { defaultAutoApproveConfig } from "../../policy-packs/builtin/understanding-before-execution-runtime.js";
 import { defaultUx as branchProtectionDefaultUx } from "../../policy-packs/builtin/branch-protection.js";
 
-export type CustomPackKey = "understanding-before-execution" | "branch-protection";
+export type CustomPackKey = "branch-protection";
 export type CustomMcpKey =
   | "agent-tasks"
   | "grounding-mcp"
@@ -47,12 +41,6 @@ export interface ComposableOption<K extends string> {
 
 export const COMPOSABLE_PACKS: ReadonlyArray<ComposableOption<CustomPackKey>> = [
   {
-    key: "understanding-before-execution",
-    label: "understanding-before-execution",
-    description:
-      "Force agents to expose their interpretation and wait for approval before any write-capable tool fires.",
-  },
-  {
     key: "branch-protection",
     label: "branch-protection",
     description:
@@ -69,7 +57,7 @@ export const COMPOSABLE_MCPS: ReadonlyArray<ComposableOption<CustomMcpKey>> = [
   {
     key: "grounding-mcp",
     label: "grounding-mcp",
-    description: "Evidence ledger + understanding-gate approval surface.",
+    description: "Evidence ledger (ledger_add / ledger_status) for the review and dogfood gates.",
   },
   {
     key: "memory-router",
@@ -395,11 +383,9 @@ export function composeCustom(sel: CustomSelection): ComposeResult {
       "policy two-reviewers-required fires on agent-tasks MCP verbs; selecting it without the agent-tasks MCP is allowed but the gate has no event to evaluate.",
     );
   }
-  // Note: understanding-before-execution does NOT produce ledger tags
-  // (it produces the operator-approve marker, a different gate signal).
-  // The pack is therefore NOT a substitute for grounding-mcp here; the
-  // only Custom-surface producer the wizard can wire is grounding-mcp's
-  // ledger_add.
+  // Note: the only Custom-surface producer of ledger tags the wizard can
+  // wire is grounding-mcp's ledger_add; no composable pack substitutes
+  // for it.
   if (sel.policies.includes("dogfood-before-release") && !mcpSet.has("grounding-mcp")) {
     warnings.push(
       "policy dogfood-before-release requires a producer that writes dogfood:<session-id> tags to the evidence ledger. Without grounding-mcp (ledger_add) the gate stays closed forever — every npm publish / git tag v* will be blocked.",
@@ -476,62 +462,6 @@ export function composeCustom(sel: CustomSelection): ComposeResult {
   if (sel.packs.length > 0) {
     manifest.policy_packs = sel.packs.map((k) => {
       // Single-pack switch today; expand when the pack surface grows.
-      if (k === "understanding-before-execution") {
-        const understandingMode: Mode = "grill_me";
-        return {
-          name: "understanding-before-execution",
-          source: "builtin",
-          enabled: true,
-          description:
-            "Force agents to expose their task interpretation and wait for explicit human approval before any write-capable tool fires.",
-          config: {
-            mode: understandingMode,
-            // Producers + ux text: read from the builtin pack module so
-            // this stays the SAME canonical wording `harness pack reseed`
-            // pulls from (task 68b9ad9c) — one source, not a copy that can
-            // drift from the reseed path.
-            producers: understandingDefaultProducers(),
-            ux: understandingDefaultUx(understandingMode),
-            // agent-tasks/d8ee60ca: expire the approval marker on
-            // task-completion boundaries so multi-task sessions
-            // re-prompt for an Understanding Report between tasks.
-            // agent-tasks/90eae119: Custom mirrors TEAM_TEMPLATE /
-            // FULL_TEMPLATE here (same tool-match list, same 4h
-            // max_age), so it also mirrors their expire_on_bash_match
-            // Bash boundary for operators who use gh-cli in parallel
-            // (hybrid workflow) instead of relying on max_age alone.
-            // This was an oversight in the sweep that introduced
-            // expire_on_bash_match (task f54e0ecb, PR #181), which
-            // covered the SOLO/TEAM/FULL templates but missed this
-            // composer. Same shipped start-anchored patterns and the
-            // same documented fail-open limitations apply (see
-            // docs/policy-packs/understanding-before-execution.md); no
-            // shell-aware matching is added here.
-            approval_lifecycle: {
-              expire_on_tool_match: [
-                "mcp__agent-tasks__task_finish",
-                "mcp__agent-tasks__task_abandon",
-                "mcp__agent-tasks__task_merge",
-                "mcp__agent-tasks__pull_requests_merge",
-                "mcp__agent-tasks__tasks_transition",
-              ],
-              expire_on_bash_match: [
-                "^gh pr (merge|close)\\b",
-                "^git push origin (master|main)\\b",
-              ],
-              max_age: "4h",
-            },
-            // D-004 (task 8f637efd, review round 2 F3): Custom had been
-            // the one template-shaped surface this default missed;
-            // FULL_TEMPLATE / SOLO_TEMPLATE / TEAM_TEMPLATE all ship it
-            // via templates.ts's `renderAutoApproveSnippet`, but this
-            // composer builds a config OBJECT, not YAML text, so it reads
-            // the same canonical source's data form instead
-            // (`defaultAutoApproveConfig()`), never a hand-copied literal.
-            auto_approve: defaultAutoApproveConfig(),
-          },
-        };
-      }
       if (k === "branch-protection") {
         return {
           name: "branch-protection",

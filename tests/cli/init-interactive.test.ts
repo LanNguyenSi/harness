@@ -192,8 +192,6 @@ beforeEach(() => {
   delete process.env.HARNESS_HOME;
   for (const bin of [
     "memory-router-user-prompt-submit",
-    "understanding-gate-claude-hook",
-    "understanding-gate-claude-stop",
     "agent-tasks-mcp-bridge",
     "grounding-mcp",
     "preflight",
@@ -212,6 +210,37 @@ afterEach(() => {
 });
 
 describe("interactive wizard — Solo path", () => {
+  it("profile select labels never mention the understanding gate and Solo names branch-protection", async () => {
+    fs.mkdirSync(path.join(tmpHome, ".claude"));
+    const cap = captureStreams();
+    const base = mockPrompts({
+      select: ["solo"],
+      input: ["~/.claude/projects/{project}/memory"],
+      confirm: [true],
+      checkbox: [[]],
+    });
+    let seen: Array<{ name: string; description?: string }> = [];
+    const prompts: InteractivePrompts = {
+      ...base,
+      select: (async (cfg: { choices: Array<{ name: string; description?: string }> }) => {
+        seen = cfg.choices;
+        return "solo";
+      }) as unknown as InteractivePrompts["select"],
+    };
+    await runInteractive({
+      homeDir: tmpHome,
+      dependencyPathEnv: fakeDepsPath,
+      prompts,
+      stdout: cap.out,
+      stderr: cap.err,
+    });
+    expect(seen.length).toBeGreaterThan(0);
+    for (const c of seen) {
+      expect(`${c.name} ${c.description ?? ""}`).not.toMatch(/understanding/i);
+    }
+    expect(seen.find((c) => /^Solo/.test(c.name))?.name).toContain("branch-protection");
+  });
+
   it("writes a solo manifest, runs validate, returns validateClean (skip wiring)", async () => {
     fs.mkdirSync(path.join(tmpHome, ".claude"));
     const cap = captureStreams();
@@ -1150,7 +1179,7 @@ describe("interactive wizard — MCP-removal GC (task 363a6de0)", () => {
       authProbeSpawn: async () => ({ code: 0, stderr: "ok (store: keychain)\n" }),
       prompts: mockPrompts({
         select: ["custom"],
-        checkbox: [["understanding-before-execution"], ["agent-tasks"], [], ["claude-code"]],
+        checkbox: [["branch-protection"], ["agent-tasks"], [], ["claude-code"]],
         input: ["~/.claude/projects/{project}/memory"],
         confirm: [true],
       }),
@@ -1181,7 +1210,7 @@ describe("interactive wizard — MCP-removal GC (task 363a6de0)", () => {
       mcpExec: run2Cli.exec,
       prompts: mockPrompts({
         select: ["custom"],
-        checkbox: [["understanding-before-execution"], [], [], ["claude-code"]],
+        checkbox: [["branch-protection"], [], [], ["claude-code"]],
         input: ["~/.claude/projects/{project}/memory"],
         confirm: [true],
       }),
@@ -1241,7 +1270,7 @@ describe("interactive wizard — MCP-removal GC (task 363a6de0)", () => {
       mcpExec: run2Cli.exec,
       prompts: mockPrompts({
         select: ["custom"],
-        checkbox: [["understanding-before-execution"], [], [], ["claude-code"]],
+        checkbox: [["branch-protection"], [], [], ["claude-code"]],
         input: ["~/.claude/projects/{project}/memory"],
         confirm: [true],
       }),
@@ -1584,7 +1613,7 @@ describe("interactive wizard — Custom path (task 31d2fbb5)", () => {
     expect(fs.existsSync(path.join(tmpHome, ".harness", "harness.yaml"))).toBe(false);
   });
 
-  it("composes a minimal-pick manifest that harness validate accepts (just the understanding pack)", async () => {
+  it("composes a minimal-pick manifest that harness validate accepts (just the branch-protection pack)", async () => {
     fs.mkdirSync(path.join(tmpHome, ".claude"));
     const cap = captureStreams();
     const result = await runInteractive({
@@ -1592,9 +1621,9 @@ describe("interactive wizard — Custom path (task 31d2fbb5)", () => {
       dependencyPathEnv: fakeDepsPath,
       prompts: mockPrompts({
         select: ["custom"],
-        // packs: just understanding-before-execution; mcps: none; policies: none.
+        // packs: just branch-protection; mcps: none; policies: none.
         checkbox: [
-          ["understanding-before-execution"],
+          ["branch-protection"],
           [],
           [],
           [], // wire-now multiselect — skip wiring
@@ -1613,13 +1642,10 @@ describe("interactive wizard — Custom path (task 31d2fbb5)", () => {
     expect(fs.existsSync(manifestPath)).toBe(true);
     const content = fs.readFileSync(manifestPath, "utf8");
     expect(content).toContain("Custom profile");
-    expect(content).toContain("understanding-before-execution");
+    expect(content).toContain("branch-protection");
     // Minimal-pick manifest must NOT carry policies/MCPs the operator
     // didn't tick. Match the wiring shape (an MCP entry or a hook
-    // bound to one) rather than the bare string "agent-tasks", since
-    // the v0.18 approval_lifecycle defaults legitimately reference
-    // `mcp__agent-tasks__*` tool-name patterns in the pack config
-    // without wiring the MCP itself (agent-tasks/d8ee60ca).
+    // bound to one) rather than the bare string "agent-tasks".
     expect(content).not.toContain("agent-tasks-mcp-bridge");
     expect(content).not.toMatch(/^\s+- name: agent-tasks$/m);
     expect(content).not.toContain("review-before-merge");
@@ -1635,7 +1661,7 @@ describe("interactive wizard — Custom path (task 31d2fbb5)", () => {
       prompts: mockPrompts({
         select: ["custom"],
         checkbox: [
-          ["understanding-before-execution"],
+          ["branch-protection"],
           ["agent-tasks", "grounding-mcp", "memory-router"],
           [
             "review-before-merge",
@@ -1752,7 +1778,7 @@ describe("interactive wizard — overwrite guard", () => {
     expect(result.profile).toBe("solo");
     const content = fs.readFileSync(path.join(tmpHome, ".claude", "harness.yaml"), "utf8");
     expect(content).not.toContain("# old");
-    expect(content).toContain("understanding-before-execution");
+    expect(content).toContain("branch-protection");
   });
 });
 
@@ -1809,7 +1835,7 @@ describe("interactive wizard — overwrite guard at the harness home (harness/41
     expect(result.profile).toBe("solo");
     const content = fs.readFileSync(path.join(tmpHome, ".harness", "harness.yaml"), "utf8");
     expect(content).not.toContain("# old");
-    expect(content).toContain("understanding-before-execution");
+    expect(content).toContain("branch-protection");
   });
 });
 
@@ -1867,10 +1893,10 @@ describe("interactive wizard — dependency install", () => {
     expect(result.profile).toBe("solo");
     expect(spawnCalls).toHaveLength(1);
     expect(spawnCalls[0]?.slice(0, 2)).toEqual(["i", "-g"]);
-    // The two missing solo packages must show up in the install args.
+    // The one missing solo package must show up in the install args.
     expect(spawnCalls[0]).toContain("@lannguyensi/memory-router");
-    expect(spawnCalls[0]).toContain("@lannguyensi/understanding-gate");
-    expect(cap.stderr()).toMatch(/Installed 2 package\(s\) successfully/);
+    expect(spawnCalls[0]).toHaveLength(3);
+    expect(cap.stderr()).toMatch(/Installed 1 package\(s\) successfully/);
   });
 
   it("aborts and does NOT write the manifest when npm install fails", async () => {
@@ -2374,7 +2400,7 @@ describe("interactive wizard — orchestrator-workflow co-install offer (task S5
       prompts: mockPrompts({
         select: ["custom"],
         checkbox: [
-          ["understanding-before-execution"], // packs
+          ["branch-protection"], // packs
           [], // mcps
           [], // policies
           [], // wire-now skip

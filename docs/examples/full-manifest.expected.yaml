@@ -449,43 +449,6 @@ policies:
       run:
         - "Stop. Do not write, redirect, tee, or copy anything to .harness-paused. Ask the OPERATOR to silence the gates themselves, from their own terminal, using the operator-only command named under Required, if the session genuinely needs it. This gate is an unconditional deny (operator_only: true); see docs/okf/pause-vs-gate-kill-switch.md for the honest trust model and the residual bash_match coverage gap."
 policy_packs:
-  - name: understanding-before-execution
-    source: builtin
-    enabled: true
-    description: Force agents to expose their task interpretation and wait for explicit human approval before any write-capable tool fires.
-    config:
-      mode: grill_me
-      producers:
-        - kind: ask
-          command: harness approve understanding
-          description: Bare command, no pipes or chaining. The hook recognises it via isEscapeCommand and emits permissionDecision:ask; the operator's go on that prompt IS the gate approval. Golden path.
-        - kind: bash
-          command: harness approve understanding
-          description: Same command from any un-hooked terminal (operator only, not reachable from inside the gated session). Writes the canonical marker at harness.generated/.approvals/${SESSION_ID}.
-      ux:
-        cannot: You cannot use write-capable tools yet.
-        required:
-          - an approved Understanding Report for this session
-        run:
-          - "Write an Understanding Report covering: Current Understanding, Intended Outcome, Derived Todos, Acceptance Criteria, Assumptions, Open Questions, Out Of Scope, Risks, Verification Plan, Prior Art (state what you searched for an existing solution and what you found, with an explicit adopt-or-build judgment)"
-          - Run `harness approve understanding` with the report attached as a quoted heredoc (harness approve understanding <<'UNDERSTANDING_REPORT' ...report... UNDERSTANDING_REPORT) so it is persisted for audit, then approve the prompt; the heredoc is the only extra shell shape the gate allows (no pipes, chaining, or other redirection)
-      approval_lifecycle:
-        expire_on_tool_match:
-          - mcp__agent-tasks__task_finish
-          - mcp__agent-tasks__task_abandon
-          - mcp__agent-tasks__task_merge
-          - mcp__agent-tasks__pull_requests_merge
-          - mcp__agent-tasks__tasks_transition
-        expire_on_bash_match:
-          - ^gh pr (merge|close)\b
-          - ^git push origin (master|main)\b
-        max_age: 4h
-      auto_approve:
-        when:
-          - bypassPermissions
-        harnesses:
-          - claude-code
-        require_report: true
   - name: branch-protection
     source: builtin
     enabled: true

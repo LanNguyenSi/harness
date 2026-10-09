@@ -150,13 +150,12 @@ describe("init — full template", () => {
 });
 
 describe("init — solo profile", () => {
-  it("writes a manifest with memory-router + understanding-before-execution pack", async () => {
+  it("writes a manifest with memory-router + branch-protection pack", async () => {
     const r = await callInit({ homeDir: tmpHome, template: "solo" });
     expect(r.template).toBe("solo");
     const yaml = fs.readFileSync(manifestPath, "utf8");
     expect(yaml).toContain("memory-router");
-    expect(yaml).toContain("understanding-before-execution");
-    expect(yaml).toContain("mode: grill_me");
+    expect(yaml).toContain("branch-protection");
     // Solo intentionally does NOT wire agent-tasks or the merge policy.
     // The comment header may name "agent-tasks" in a negation ("No
     // agent-tasks loop") so we check the structural keys, not the
@@ -179,7 +178,7 @@ describe("init — team profile", () => {
     expect(r.template).toBe("team");
     const yaml = fs.readFileSync(manifestPath, "utf8");
     expect(yaml).toContain("memory-router");
-    expect(yaml).toContain("understanding-before-execution");
+    expect(yaml).toContain("branch-protection");
     expect(yaml).toContain("agent-tasks");
     expect(yaml).toContain("grounding-mcp");
     expect(yaml).toContain("review-before-merge");

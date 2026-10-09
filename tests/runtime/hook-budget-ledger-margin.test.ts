@@ -265,9 +265,12 @@ describe("blocking ledger-consulting hooks clear the ledger's worst-case round-t
   });
 
   it("understanding-before-execution's blocking hook clears the margin and the hard floor (both runtimes)", () => {
-    const pack = fullManifest.policy_packs.find(
-      (p) => p.name === "understanding-before-execution",
-    );
+    // The pack still ships (a manifest may carry it) but no init template
+    // offers it any more, so the manifest is built inline.
+    const pack = parseManifest({
+      version: 1,
+      policy_packs: [{ name: "understanding-before-execution", source: "builtin", enabled: true }],
+    }).policy_packs[0];
     expect(pack).toBeDefined();
     if (!pack) return;
     for (const runtime of KNOWN_RUNTIMES) {

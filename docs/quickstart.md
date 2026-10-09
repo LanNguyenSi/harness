@@ -125,12 +125,12 @@ controls are documented in
 
 ## A note on the other templates and packs
 
-`harness init --template solo|team|full` and the
+`harness init --template team|full` and the
 `harness init --interactive` wizard still offer more than
-branch-protection: the understanding gate
-(`understanding-before-execution`), `solution-acceptance`,
-the risk gate and the reference policies (review, dogfood
-and deny policies). harness 1.0.0 removes all of these, so a new install
+branch-protection: the risk gate (`full` and the wizard) and the
+reference policies (review, dogfood and deny policies; `solo` ships
+none). The understanding gate is no longer offered at
+install. harness 1.0.0 removes all of these, so a new install
 should not adopt them. Start from the path above instead.
 
 The `post-merge-gate` pack is already removed: a manifest that still

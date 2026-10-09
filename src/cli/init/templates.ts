@@ -1,14 +1,3 @@
-// D-004 (task 8f637efd, docs/decisions/2026-08-27-ug-auto-mode-approval.md,
-// "Amendment: install default"): the shipped `auto_approve` block, read
-// from the one canonical renderer so `harness init`, `harness pack
-// upgrade understanding-before-execution`, and `harness doctor`'s
-// missing-auto_approve finding cannot drift on the snippet's shape or
-// wording. See auto-approve-default.ts for the rationale.
-import { renderAutoApproveSnippet } from "../../policy-packs/builtin/understanding-before-execution-runtime.js";
-// Every template below nests `auto_approve:` at 6 spaces, a sibling of
-// `mode:` / `approval_lifecycle:` under the pack's `config:` key.
-const AUTO_APPROVE_SNIPPET = renderAutoApproveSnippet(6);
-
 export const MINIMAL_TEMPLATE = `# ~/.harness/harness.yaml (legacy: ~/.claude/harness.yaml)
 #
 # Bootstrapped by \`harness init --template minimal\`.
@@ -45,8 +34,7 @@ export const FULL_TEMPLATE = `# ~/.harness/harness.yaml (legacy: ~/.claude/harne
 # two diverge on policy names or load-bearing fields.
 #
 # What you still need on PATH (the wizard offers to \`npm i -g\` these on
-# init): agent-tasks-mcp-bridge, grounding-mcp, memory-router-*,
-# understanding-gate-claude-*.
+# init): agent-tasks-mcp-bridge, grounding-mcp, memory-router-*.
 
 version: 1
 
@@ -797,89 +785,12 @@ policies:
       run:
         - "Stop. Do not write, redirect, tee, or copy anything to .harness-paused. Ask the OPERATOR to silence the gates themselves, from their own terminal, using the operator-only command named under Required, if the session genuinely needs it. This gate is an unconditional deny (operator_only: true); see docs/okf/pause-vs-gate-kill-switch.md for the honest trust model and the residual bash_match coverage gap."
 
-# Full inherits the Solo/Team understanding-gate stack: the Stop hook
-# persists each Understanding Report and the PreToolUse pre-tool-use
-# blocker refuses Edit/Write/Bash until the report is approved. Drop
-# this block if you want the reference policies above without the
-# baseline gate.
 policy_packs:
-  - name: understanding-before-execution
-    source: builtin
-    enabled: true
-    description: Force agents to expose their task interpretation and wait for explicit human approval before any write-capable tool fires.
-    config:
-      mode: grill_me
-      # Producers (agent-tasks/25bced52): rendered into the gate's deny
-      # envelope by the same engine as policy producers. Constraint at
-      # this layer: at-least-one \`ask\`. Post-v0.14.0 the gate signal
-      # is a filesystem marker and the mcp ledger_add path no longer
-      # satisfies the gate; the canonical unblock surface is the
-      # operator-approval prompt.
-      #
-      # KEEP IN SYNC (task 68b9ad9c): this text must match
-      # defaultProducers() in
-      # src/policy-packs/builtin/understanding-before-execution.ts —
-      # that function is what \`harness pack reseed\` and \`harness doctor\`'s
-      # divergence warning treat as "the shipped template". A wording fix
-      # landed here without updating defaultProducers() would make reseed
-      # silently pull operators BACK to the stale wording. Pinned by
-      # tests/cli/init-templates-ux-parity.test.ts.
-      producers:
-        - kind: ask
-          command: harness approve understanding
-          description: "Bare command, no pipes or chaining. The hook recognises it via isEscapeCommand and emits permissionDecision:ask; the operator's go on that prompt IS the gate approval. Golden path."
-        - kind: bash
-          command: harness approve understanding
-          description: Same command from any un-hooked terminal (operator only, not reachable from inside the gated session). Writes the canonical marker at harness.generated/.approvals/\${SESSION_ID}.
-      # ux (agent-tasks/e48e3b45): replaces the legacy engine-vocabulary
-      # deny envelope with the plain-language { cannot, required, run }
-      # shape. Engine details (the BLOCK reason naming session id /
-      # marker / report state) still land in stderr for operator audit;
-      # the agent only sees this.
-      #
-      # KEEP IN SYNC (task 68b9ad9c): see the producers: comment above —
-      # same rationale applies here, against defaultUx("grill_me") in the
-      # same builtin module.
-      ux:
-        cannot: "You cannot use write-capable tools yet."
-        required:
-          - "an approved Understanding Report for this session"
-        run:
-          - "Write an Understanding Report covering: Current Understanding, Intended Outcome, Derived Todos, Acceptance Criteria, Assumptions, Open Questions, Out Of Scope, Risks, Verification Plan, Prior Art (state what you searched for an existing solution and what you found, with an explicit adopt-or-build judgment)"
-          - "Run \`harness approve understanding\` with the report attached as a quoted heredoc (harness approve understanding <<'UNDERSTANDING_REPORT' ...report... UNDERSTANDING_REPORT) so it is persisted for audit, then approve the prompt; the heredoc is the only extra shell shape the gate allows (no pipes, chaining, or other redirection)"
-      # approval_lifecycle (agent-tasks/d8ee60ca + harness/f54e0ecb,
-      # v0.18.0+): expire the approval marker on task-completion
-      # boundaries so a multi-task session re-prompts for an
-      # Understanding Report between tasks. Without this the legacy
-      # "one approval per session" contract lets a stale interpretation
-      # drive the next task's edits.
-      #
-      # Full ships both boundary kinds: the agent-tasks MCP verbs for
-      # operators on that workflow, plus a Bash regex list for hybrid
-      # operators who also use gh-cli for PR mechanics. \`max_age\` is
-      # the safety net. Operators who prefer the legacy per-session
-      # behaviour opt out with \`approval_lifecycle: { mode: session }\`.
-      # Operators on other task systems override the matchers.
-      approval_lifecycle:
-        expire_on_tool_match:
-          - mcp__agent-tasks__task_finish
-          - mcp__agent-tasks__task_abandon
-          - mcp__agent-tasks__task_merge
-          - mcp__agent-tasks__pull_requests_merge
-          - mcp__agent-tasks__tasks_transition
-        expire_on_bash_match:
-          - '^gh pr (merge|close)\\b'
-          - '^git push origin (master|main)\\b'
-        max_age: 4h
-${AUTO_APPROVE_SNIPPET}
-
   # branch-protection (agent-tasks/2fdc5bbe, default-enabled since v0.17.2):
   # blocks Write/Edit (claude-code) or apply_patch (codex) when git names a
   # protected branch (default: master, main, develop) for the directory the
-  # call writes into. Complements the push-time gates, which fire at the
-  # LAST reversible step; branch-protection fires at the FIRST source
-  # mutation, catching the \"forgot to branch off master\" pattern earlier
-  # in the cycle.
+  # call writes into. It fires at the FIRST source mutation, catching the
+  # \"forgot to branch off master\" pattern before any edit lands.
   #
   # The hook asks git (\`git -C <dir> symbolic-ref -q HEAD\`) on every call;
   # the way forward for the agent is a feature branch
@@ -902,9 +813,10 @@ ${AUTO_APPROVE_SNIPPET}
       # git was asked about) stay on stderr for operator audit.
       #
       # KEEP IN SYNC (task 68b9ad9c): this text must match defaultUx() in
-      # src/policy-packs/builtin/branch-protection.ts — see the identical
-      # note on the understanding-before-execution pack above for why.
-      # Pinned by tests/cli/init-templates-ux-parity.test.ts.
+      # src/policy-packs/builtin/branch-protection.ts: that function is
+      # what \`harness pack reseed\` and \`harness doctor\`'s divergence
+      # warning treat as \"the shipped template\". Pinned by
+      # tests/cli/init-templates-ux-parity.test.ts.
       ux:
         cannot: "You cannot edit files on protected branch \${BRANCH} yet."
         required:

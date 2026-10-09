@@ -1185,7 +1185,7 @@ export async function runInteractive(
       message: "Pick a setup profile",
       choices: [
         {
-          name: "Solo  (memory-router + understanding-before-execution)",
+          name: "Solo  (memory-router + branch-protection)",
           value: "solo",
           description: "Standalone. No external accounts required. Single-operator baseline.",
         },
