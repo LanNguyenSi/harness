@@ -1091,8 +1091,8 @@ export async function doctor(opts: DoctorOptions = {}): Promise<DoctorReport> {
   });
   // The runtime a plain `harness apply` would select, through apply's own
   // `selectRuntime` (recorded, inferred or default; `--target` is an
-  // apply flag, not a doctor input). Pack expansion below uses it, so
-  // doctor checks the hooks the machine actually gets (task 04b8abcf).
+  // apply flag, not a doctor input). The declared-but-not-live pack check
+  // below resolves packs against it (task 04b8abcf).
   // A malformed `.last-apply` must not kill doctor: fall back to the
   // default selection and warn, naming the file.
   let lastApplyRecord: ReturnType<typeof readLastApply> = null;
