@@ -13,10 +13,8 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { pause, resume } from "../../src/cli/pause/index.js";
-import { runPackHookPreToolUseCli } from "../../src/cli/pack/hook-pre-tool-use.js";
 import { runPackHookBranchProtectionCli } from "../../src/cli/pack/hook-branch-protection.js";
 import { runInterceptCli } from "../../src/cli/policy/intercept.js";
-import type { LedgerEntry } from "../../src/policies/index.js";
 import type { LedgerClient } from "../../src/runtime/intercept.js";
 import { sentinelPath } from "../../src/runtime/pause-sentinel.js";
 import { parseManifest, type Manifest } from "../../src/schema/index.js";
@@ -86,130 +84,6 @@ function bufferStream(): { stream: Writable; read: () => string } {
   });
   return { stream, read: () => buf };
 }
-
-const editEvent = JSON.stringify({
-  session_id: "sess-int",
-  tool_name: "Edit",
-  tool_input: { file_path: "/tmp/x" },
-});
-
-describe("pause → hook fire → resume → hook fire (understanding-before-execution)", () => {
-  it("hook allows + emits notice while paused; evaluates normally after resume", async () => {
-    // Step 1: pause. Use real time (no `now` injection) so the sentinel
-    // is genuinely in-window when the hook fires below — hooks read their
-    // own clock and would otherwise see a stale pause.
-    await pause({
-      manifest: manifestWithPack(),
-      generatedDir,
-      stdinIsTTY: true,
-      claudeSessionIdEnv: "",
-      forDuration: "10m",
-      reason: "integration test",
-      ledgerAdd: async () => ({ ok: true }),
-    });
-    expect(fs.existsSync(sentinelPath(generatedDir))).toBe(true);
-
-    // Step 2: hook fires while paused. Should allow + emit a notice
-    // without consulting the ledger (we'd see calls if it did).
-    const stdoutA = bufferStream();
-    const stderrA = bufferStream();
-    let ledgerWasQueriedA = false;
-    const resA = await runPackHookPreToolUseCli({
-      manifest: manifestWithPack(),
-      stdin: readableFromString(editEvent),
-      stdout: stdoutA.stream,
-      stderr: stderrA.stream,
-      generatedDir,
-      reportsDir: path.join(tmp, "no-reports"),
-      ledgerQuery: async (): Promise<LedgerEntry[]> => {
-        ledgerWasQueriedA = true;
-        return [];
-      },
-    });
-    expect(resA.exitCode).toBe(0);
-    expect(resA.blocked).toBe(false);
-    expect(ledgerWasQueriedA).toBe(false);
-    expect(stderrA.read()).toContain("PAUSED");
-    expect(stderrA.read()).toContain("integration test");
-
-    // Step 3: resume.
-    await resume({
-      manifest: manifestWithPack(),
-      generatedDir,
-      stdinIsTTY: true,
-      claudeSessionIdEnv: "",
-      ledgerAdd: async () => ({ ok: true }),
-    });
-    expect(fs.existsSync(sentinelPath(generatedDir))).toBe(false);
-
-    // Step 4: hook fires after resume. Should now evaluate normally and
-    // block on a missing approval (no marker, no report, no ledger entry).
-    const stdoutB = bufferStream();
-    const stderrB = bufferStream();
-    let ledgerWasQueriedB = false;
-    const resB = await runPackHookPreToolUseCli({
-      manifest: manifestWithPack(),
-      stdin: readableFromString(editEvent),
-      stdout: stdoutB.stream,
-      stderr: stderrB.stream,
-      generatedDir,
-      reportsDir: path.join(tmp, "no-reports"),
-      ledgerQuery: async (): Promise<LedgerEntry[]> => {
-        ledgerWasQueriedB = true;
-        return [];
-      },
-    });
-    // Post-resume the hook went through its normal evaluation path: it
-    // consulted the ledger (audit probe) and emitted a block envelope on
-    // stdout because no approval source was satisfied.
-    expect(ledgerWasQueriedB).toBe(true);
-    expect(resB.exitCode).toBe(0);
-    expect(resB.blocked).toBe(true);
-    expect(stdoutB.read()).toContain('"decision":"block"');
-  });
-
-  it("auto-expires past the --for window: hook on next fire blocks normally", async () => {
-    // Deterministic clock. The previous version paused with a 1s `--for`
-    // window and bridged it to the hook fire with a real `setTimeout`
-    // (~1100ms) before asserting expiry. `pause()` writes `expiresAt` off
-    // the wall clock and the hook checks expiry against the wall clock,
-    // but `setTimeout` counts monotonic time — on a host whose wall clock
-    // drifts relative to the monotonic timer (WSL2, a loaded CI runner),
-    // the ~100ms margin could read the sentinel as still active and the
-    // hook would short-circuit to allow, flaking `res.blocked`. Injecting
-    // `now` into both `pause()` and the hook removes the wall-clock
-    // dependency entirely: no real sleep, no race.
-    const pausedAt = new Date("2026-05-20T12:00:00.000Z");
-    await pause({
-      manifest: manifestWithPack(),
-      generatedDir,
-      stdinIsTTY: true,
-      claudeSessionIdEnv: "",
-      forDuration: "1s",
-      now: pausedAt,
-      ledgerAdd: async () => ({ ok: true }),
-    });
-
-    // Fire the hook 5s past the 1s window — unambiguously expired.
-    const afterExpiry = new Date(pausedAt.getTime() + 5000);
-    const stdout = bufferStream();
-    const stderr = bufferStream();
-    const res = await runPackHookPreToolUseCli({
-      manifest: manifestWithPack(),
-      stdin: readableFromString(editEvent),
-      stdout: stdout.stream,
-      stderr: stderr.stream,
-      generatedDir,
-      reportsDir: path.join(tmp, "no-reports"),
-      now: afterExpiry,
-      ledgerQuery: async (): Promise<LedgerEntry[]> => [],
-    });
-
-    expect(res.blocked).toBe(true);
-    // The expired sentinel got auto-deleted on the hook fire.
-    expect(fs.existsSync(sentinelPath(generatedDir))).toBe(false);
-  });
-});
 
 describe("pause → policy intercept hook → resume", () => {
   // A policy that blocks an agent-tasks PR merge unless a matching

@@ -252,7 +252,9 @@ import * as path from "node:path";
 // their CLI wiring; the check reports 69 with that change (the pin was 73).
 // Lowered to 68 (task 95826160): removing the understanding-gate doctor
 // readers; the check reports 68 with that change (the pin was 69).
-const MAX_CLONES = 68;
+// Lowered to 50 (task 7890cd34): removing the understanding-gate hook verbs
+// and `harness delegate`; the check reports 50 with that change (the pin was 68).
+const MAX_CLONES = 50;
 
 // Sets process.exitCode instead of calling process.exit so the caller's
 // finally-cleanup runs on every path (process.exit skips stack unwinding).

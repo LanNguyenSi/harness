@@ -52,7 +52,6 @@ vi.mock("node:crypto", async (importOriginal) => {
   return { ...actual, randomBytes };
 });
 
-import { recordAdoptedEntry } from "../../src/cli/pack/hook-pre-tool-use.js";
 import { getOrCreateSigningKey, rotateSigningKey } from "../../src/runtime/approval-signing.js";
 
 const C = fs.constants;
@@ -100,37 +99,4 @@ describe.skipIf(process.platform === "win32")("approval signing key: the truncat
     // open itself must not carry O_TRUNC.
     expect(has(opens[0]!.flags, "O_TRUNC")).toBe(false);
   });
-});
-
-describe.skipIf(process.platform === "win32")("delegation adoption ledger: the append after a stale lstat", () => {
-  const gen = (): string => path.join(tmp, "gen");
-  const ledgerFile = (): string => path.join(gen(), ".delegation-adoptions", "child-1");
-  const victim = (): string => path.join(tmp, "victim");
-
-  beforeEach(() => {
-    fs.mkdirSync(path.join(gen(), ".delegation-adoptions"), { recursive: true });
-    fs.writeFileSync(victim(), "keep\n");
-    fs.symlinkSync(victim(), ledgerFile());
-  });
-
-  const stale: Array<[string, () => unknown]> = [
-    ["absent", () => Object.assign(new Error("ENOENT: no such file or directory"), { code: "ENOENT" })],
-    ["a regular file", () => fs.statSync(victim())],
-  ];
-
-  it.each(stale)(
-    "an lstat that reports the path as %s while a symlink sits there: the open refuses it (ELOOP) and the target is untouched",
-    (_label, answer) => {
-      hoisted.lstatAnswer.set(ledgerFile(), answer());
-      const result = recordAdoptedEntry(gen(), "child-1", "uuid:a");
-      expect(result.ok).toBe(false);
-      expect((result as { detail: string }).detail).toMatch(/ELOOP/);
-      expect(fs.readFileSync(victim(), "utf8")).toBe("keep\n");
-      const opens = writeOpens(ledgerFile());
-      expect(opens).toHaveLength(1);
-      expect(has(opens[0]!.flags, "O_NOFOLLOW")).toBe(true);
-      expect(has(opens[0]!.flags, "O_NONBLOCK")).toBe(true);
-      expect(has(opens[0]!.flags, "O_APPEND")).toBe(true);
-    },
-  );
 });

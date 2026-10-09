@@ -41,11 +41,6 @@ export function registerSmokeGroup(
     )
     .option("--expect-exit <n>", "expected result.is_error: 0 ⇒ false, !=0 ⇒ true")
     .option("--expect-decision <kind>", "policy decision must be one of allow|deny|warn")
-    .option(
-      "--no-delegate",
-      "do not pre-authorize the spawned child (docs/decisions/2026-08-27-ug-auto-mode-approval.md); " +
-        "it then has no delegation binding it to this approved session and falls back to the plain opt-in path",
-    )
     .action(async (options: {
       prompt: string;
       outputDir: string;
@@ -58,7 +53,6 @@ export function registerSmokeGroup(
       expectNoHook?: string[];
       expectExit?: string;
       expectDecision?: string;
-      delegate?: boolean;
     }) => {
       const expectations: SmokeExpectations = {};
       if (options.expectHook && options.expectHook.length > 0) {
@@ -85,9 +79,6 @@ export function registerSmokeGroup(
         outputDir: options.outputDir,
         expectations,
       };
-      // commander's `--no-delegate` negates `options.delegate` (default
-      // true); only an explicit `--no-delegate` flips it to `false`.
-      if (options.delegate === false) smokeOpts.noDelegate = true;
       if (options.config) smokeOpts.configPath = options.config;
       if (options.project) smokeOpts.project = options.project;
       if (options.sessionId) smokeOpts.sessionId = options.sessionId;
