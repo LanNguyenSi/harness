@@ -1,7 +1,5 @@
 import type { Command } from "commander";
-import { escapeForDisplay } from "../io/display-path.js";
-import { EX_FAIL, EX_USAGE, HarnessExitError } from "./exit-codes.js";
-import { DEFAULT_RETENTION_DAYS, gc } from "./gc/index.js";
+import { EX_FAIL, HarnessExitError } from "./exit-codes.js";
 import { gateDisable, GateDisableError } from "./gate/disable.js";
 import { gateEnable, GateEnableError } from "./gate/enable.js";
 
@@ -106,90 +104,6 @@ export function registerGateGcGroup(
           throw new HarnessExitError(err.message, EX_FAIL);
         }
         throw err;
-      }
-    });
-
-  program
-    .command("gc")
-    .description(
-      "Retention-based cleanup of harness-owned gate state: terminal " +
-        "(approved/expired) understanding-gate reports, parse-error logs, " +
-        "approval markers, expired delegation markers, orphaned delegation " +
-        "adoption ledgers, and stale permission-mode observations older than " +
-        "the retention window, plus stale in-flight subagent records (fixed " +
-        "24h window, independent of --retention-days). Pending reports and " +
-        "anything outside the enumerated harness-owned dirs are never " +
-        "touched (the evidence ledger is owned by its producer). Dry-run " +
-        "by default; pass --apply " +
-        "to delete.",
-    )
-    .option("--config <path>", "manifest path (default: ~/.harness/harness.yaml; legacy fallback ~/.claude/harness.yaml)")
-    .option(
-      "--retention-days <n>",
-      `delete artifacts older than this many days (default: ${DEFAULT_RETENTION_DAYS})`,
-    )
-    .option("--apply", "delete the listed artifacts (default: dry-run listing only)")
-    .action((options: { config?: string; retentionDays?: string; apply?: boolean }) => {
-      const cliOpts: Parameters<typeof gc>[0] = {};
-      if (options.config) cliOpts.configPath = options.config;
-      if (options.apply) cliOpts.apply = true;
-      if (options.retentionDays !== undefined) {
-        const parsed = Number(options.retentionDays);
-        if (!Number.isFinite(parsed) || parsed < 1) {
-          stderr(`--retention-days must be a positive number, got ${JSON.stringify(options.retentionDays)}\n`);
-          throw new HarnessExitError("", EX_USAGE);
-        }
-        cliOpts.retentionDays = parsed;
-      }
-      const result = gc(cliOpts);
-      const sweptDirs = [
-        result.reportsDir,
-        ...(result.parseErrorsDir !== null ? [result.parseErrorsDir] : []),
-        result.approvalsDir,
-        result.delegationsDir,
-        result.adoptionLedgerDir,
-        result.permissionModeObservationsDir,
-        result.inflightRecordsDir,
-      ];
-      if (result.parseErrorsDir === null) {
-        stderr(
-          "gc: skipping the parse-errors sweep (reports dir does not have the conventional .understanding-gate/reports shape)\n",
-        );
-      }
-      if (result.unparseable.length > 0) {
-        stderr(
-          `gc: ${result.unparseable.length} file(s) could not be parsed and were left in place:\n` +
-            result.unparseable.map((u) => `  [${u.category}] ${escapeForDisplay(u.filePath)} (${u.reason})\n`).join(""),
-        );
-      }
-      if (result.candidates.length === 0) {
-        stdout(
-          `gc: nothing older than ${result.retentionDays}d (cutoff ${result.cutoffIso}) under\n` +
-            sweptDirs.map((d) => `  ${d}\n`).join("") +
-            `${result.keptCount} artifact(s) inspected and kept.\n`,
-        );
-        return;
-      }
-      const verb = result.applied ? "removing" : "would remove";
-      stdout(
-        `gc: ${verb} ${result.candidates.length} artifact(s) older than ${result.retentionDays}d (cutoff ${result.cutoffIso}); keeping ${result.keptCount}:\n`,
-      );
-      for (const c of result.candidates) {
-        stdout(`  [${c.category}] ${escapeForDisplay(c.filePath)} (${c.reason})\n`);
-      }
-      if (!result.applied) {
-        stdout(`\nDry-run; pass --apply to delete.\n`);
-        return;
-      }
-      stdout(`removed ${result.removed.length} file(s).\n`);
-      if (result.failures.length > 0) {
-        for (const f of result.failures) {
-          stderr(`gc: failed to remove ${escapeForDisplay(f.filePath)}: ${escapeForDisplay(f.reason)}\n`);
-        }
-        throw new HarnessExitError(
-          `${result.failures.length} deletion(s) failed`,
-          EX_FAIL,
-        );
       }
     });
 }

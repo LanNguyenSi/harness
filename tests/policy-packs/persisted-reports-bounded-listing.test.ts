@@ -97,24 +97,18 @@ vi.mock("node:fs", async (importOriginal) => {
 });
 
 import * as fs from "node:fs";
-import { approveUnderstanding, findLatestParseError } from "../../src/cli/approve/understanding.js";
 import {
-  canonicalReportHashOfFile,
   listDirNamesBounded,
   listPersistedReportsBoundedWithSkips,
   MAX_HOOK_LISTING_ENTRIES,
   readReportFileBounded,
-  verifyApprovedReportHash,
   type ReadBudget,
 } from "../../src/policy-packs/builtin/understanding-before-execution/persisted-reports.js";
-import { parseManifest } from "../../src/schema/index.js";
 
 
 // The bound written out, not read from the constant, so raising the constant
 // fails a test instead of silently growing what the tests plant.
 const BOUND = 8192;
-// Planting thousands of entries takes seconds on a loaded machine.
-const PLANTED_DIR_TEST_TIMEOUT_MS = 60_000;
 const SESSION = "01998f2a-bounded-reads-1";
 
 let tmp: string;
@@ -164,22 +158,6 @@ function pendingReportBody(sessionId: string, createdAt: string): Record<string,
   };
 }
 
-function writePendingReport(name = "2026-10-04T10-00-00-000Z-report-aaaa1111.json"): void {
-  fs.mkdirSync(reportsDir, { recursive: true });
-  fs.writeFileSync(
-    path.join(reportsDir, name),
-    `${JSON.stringify(pendingReportBody(SESSION, "2026-10-04T10:00:00.000Z"), null, 2)}\n`,
-  );
-}
-
-/** Plant `count` tiny `*.json` entries that sort newer than every timestamped report name. */
-function plantJsonEntries(count: number): void {
-  fs.mkdirSync(reportsDir, { recursive: true });
-  for (let i = 0; i < count; i++) {
-    fs.writeFileSync(path.join(reportsDir, `z-entry-${String(i).padStart(6, "0")}.json`), "{}");
-  }
-}
-
 /** Plant `count` realistic reports of other sessions, older than the session's own report. */
 function plantOtherSessionReports(count: number): void {
   fs.mkdirSync(reportsDir, { recursive: true });
@@ -189,25 +167,6 @@ function plantOtherSessionReports(count: number): void {
       JSON.stringify(pendingReportBody(`other-${i}`, "2026-01-01T00:00:00.000Z")),
     );
   }
-}
-
-function plantLogEntries(count: number): void {
-  fs.mkdirSync(parseErrorsDir, { recursive: true });
-  for (let i = 0; i < count; i++) {
-    fs.writeFileSync(path.join(parseErrorsDir, `z-log-${String(i).padStart(6, "0")}.log`), "{}");
-  }
-}
-
-function writeSessionParseErrorLog(): void {
-  fs.mkdirSync(parseErrorsDir, { recursive: true });
-  fs.writeFileSync(
-    path.join(parseErrorsDir, "2026-10-04T09-00-00-000Z-parse-error.log"),
-    `${JSON.stringify({
-      sessionId: SESSION,
-      message: "report did not parse",
-      malformedSections: ["priorArt"],
-    })}\n--- raw ---\nthe agent's last message\n`,
-  );
 }
 
 interface Counted<T> {
@@ -342,18 +301,6 @@ describe("shared bound", () => {
     });
   });
 
-  it("findLatestParseError: maxEntries yields no parse error past the bound without a stat or an open, and the bounded lookup still finds the log at the bound", async () => {
-    writeSessionParseErrorLog();
-    plantLogEntries(4);
-    const past = await counted(async () => findLatestParseError(parseErrorsDir, SESSION, { maxEntries: 4 }));
-    expect(past.value).toBeNull();
-    expect(past.opens).toBe(0);
-    expect(past.stats).toBe(0);
-    const atBound = findLatestParseError(parseErrorsDir, SESSION, { maxEntries: 5 });
-    expect(atBound?.malformedSections).toEqual(["priorArt"]);
-    // The operator command passes no bound.
-    expect(findLatestParseError(parseErrorsDir, SESSION)?.malformedSections).toEqual(["priorArt"]);
-  });
 });
 
 describe("listing order", () => {
@@ -462,92 +409,7 @@ describe("readReportFileBounded: the per-entry floor is charged for an entry it 
   });
 });
 
-// The hash scan (a signed marker is present): it lists the reports directory
-// through the same early-stopping listing as the four readers above, so planted
-// names cost a bounded number of directory reads, and it fails closed past the
-// bound. The selection inside the bound is unchanged: newest name first, within
-// the byte budget.
-const REPORT_NAME = "2026-10-04T10-00-00-000Z-report-aaaa1111.json";
-const SCAN_ENTRY_BOUND_DETAIL =
-  /no report in the reports directory could be checked against the content the session approval marker was signed for \(the reports directory \S+ holds more than 8192 \*\.json entries, or more than 16384 entries of any name, more than the gate reads; remove /;
-
-/** Write the pending report and approve it, so a signed marker names its content hash. */
-async function approveSessionReport(): Promise<string> {
-  writePendingReport(REPORT_NAME);
-  const approve = await approveUnderstanding({
-    manifest: parseManifest({ version: 1 }),
-    session: SESSION,
-    reportsDir,
-    generatedDir,
-    ledgerAdd: async () => ({ ok: true }),
-  });
-  expect(approve.marker.ok).toBe(true);
-  return path.join(reportsDir, REPORT_NAME);
-}
-
-describe("verifyApprovedReportHash: directory reads of the hash scan (both hooks call it)", () => {
-  async function binding(): Promise<{ kind: "session"; reportContentHash: string }> {
-    const reportPath = await approveSessionReport();
-    const hash = canonicalReportHashOfFile(reportPath);
-    expect(hash).not.toBeNull();
-    return { kind: "session", reportContentHash: hash as string };
-  }
-
-  it(
-    "one past the entry bound lists BOUND + 1 entries, opens and stats nothing, never calls readdirSync, closes its handle, and denies",
-    async () => {
-      const b = await binding();
-      plantJsonEntries(BOUND);
-      const out = await counted(() => verifyApprovedReportHash(reportsDir, b));
-      expect(out.value.ok).toBe(false);
-      expect(out.value).toMatchObject({ detail: expect.stringMatching(SCAN_ENTRY_BOUND_DETAIL) });
-      // BOUND planted names plus the report: the BOUND + 1st matching name stops the listing.
-      expect(out.dirReads).toBe(BOUND + 1);
-      expect(out.dirsOpened).toBe(1);
-      expect(out.dirsClosed).toBe(1);
-      expect(out.readdirs).toBe(0);
-      expect(out.opens).toBe(0);
-      expect(out.stats).toBe(0);
-    },
-    PLANTED_DIR_TEST_TIMEOUT_MS,
-  );
-
-  it(
-    "exactly at the entry bound (BOUND - 1 planted late names plus the report) the report is found and the check allows",
-    async () => {
-      const b = await binding();
-      plantJsonEntries(BOUND - 1);
-      const out = await counted(() => verifyApprovedReportHash(reportsDir, b));
-      expect(out.value).toEqual({ ok: true, kind: "session" });
-      // The whole directory is listed to its end (BOUND names + the final null).
-      expect(out.dirReads).toBe(BOUND + 1);
-      expect(out.readdirs).toBe(0);
-      // Newest first: every planted late name is opened before the report.
-      expect(out.opens).toBe(BOUND);
-    },
-    PLANTED_DIR_TEST_TIMEOUT_MS,
-  );
-
-  it(
-    "a directory of non-matching names fails closed after reading twice the bound plus one, not after listing all of them",
-    async () => {
-      const b = await binding();
-      for (let i = 0; i < 2 * BOUND + 20; i++) {
-        fs.writeFileSync(path.join(reportsDir, `junk-${String(i).padStart(6, "0")}.txt`), "");
-      }
-      const out = await counted(() => verifyApprovedReportHash(reportsDir, b));
-      expect(out.value.ok).toBe(false);
-      expect(out.dirReads).toBe(2 * BOUND + 1);
-      expect(out.readdirs).toBe(0);
-      expect(out.opens).toBe(0);
-      expect(out.dirsClosed).toBe(out.dirsOpened);
-    },
-    PLANTED_DIR_TEST_TIMEOUT_MS,
-  );
-
-  it("a missing reports directory still reads as no report file (allow), not as too large", async () => {
-    const b = await binding();
-    fs.rmSync(reportsDir, { recursive: true, force: true });
-    expect(verifyApprovedReportHash(reportsDir, b)).toEqual({ ok: true, kind: "session" });
-  });
-});
+// The hash scan (a signed marker is present) shares the early-stopping
+// listing with the readers pinned above; its blocks drove the approval
+// through the removed `harness approve understanding` verb and are gone with
+// it (task 9fce2cdc).

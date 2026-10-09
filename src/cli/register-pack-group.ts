@@ -1,5 +1,5 @@
 import type { Command } from "commander";
-import { packAdd, packList, packRemove, packReseed, packUpgrade } from "./pack/index.js";
+import { packAdd, packList, packRemove, packReseed } from "./pack/index.js";
 import { runPackHookBranchProtectionCli } from "./pack/hook-branch-protection.js";
 import { runPackHookRuntimeRealityCli } from "./pack/hook-runtime-reality.js";
 import { HarnessExitError } from "./exit-codes.js";
@@ -125,40 +125,6 @@ export function registerPackGroup(
         );
       },
     );
-
-  // `harness pack upgrade <name>` (task 8f637efd, D-004): text-level
-  // insertion of a pack's missing default config block into an existing
-  // manifest, idempotent, never rewrites content outside the inserted
-  // block. Today's only wired upgrade is `understanding-before-
-  // execution`'s `auto_approve` default; see upgrade.ts's module header
-  // for why this is text-level rather than a Document-API mutation like
-  // `add` / `reseed`.
-  packCmd
-    .command("upgrade <name>")
-    .description(
-      "Insert a pack's missing default config block into an existing manifest (today: " +
-        "understanding-before-execution's auto_approve default). Idempotent; " +
-        "refuses on ambiguity rather than guessing where to insert.",
-    )
-    .option("--config <path>", "manifest path (default: ~/.harness/harness.yaml; legacy fallback ~/.claude/harness.yaml)")
-    .option("--dry-run", "print the unified diff and exit without writing")
-    .action(async (name: string, options: { config?: string; dryRun?: boolean }) => {
-      const result = await packUpgrade(name, {
-        configPath: options.config,
-        dryRun: options.dryRun,
-      });
-      if (result.alreadyPresent) {
-        stdout(
-          `policy_packs entry ${JSON.stringify(result.name)} already carries this upgrade; nothing to insert (${result.path} unchanged).\n`,
-        );
-        return;
-      }
-      if (options.dryRun) {
-        stdout(result.diff);
-        return;
-      }
-      stdout(`upgraded policy_packs entry ${JSON.stringify(result.name)} in ${result.path}\n`);
-    });
 
   // `harness pack hook` runtime sub-tree (Phase 6 #4): wired by pack hook
   // contributions in settings.json; reads tool-event JSON from stdin and

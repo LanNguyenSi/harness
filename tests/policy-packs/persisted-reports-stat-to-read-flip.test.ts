@@ -45,7 +45,6 @@ vi.mock("node:fs", async (importOriginal) => {
 });
 
 import * as fs from "node:fs";
-import { findLatestParseError } from "../../src/cli/approve/understanding.js";
 import { listPersistedReportsBounded } from "../../src/policy-packs/builtin/understanding-before-execution/persisted-reports.js";
 
 let writer: ChildProcess | undefined;
@@ -111,15 +110,5 @@ describe("an entry flipped to a FIFO after a stat is never read as the FIFO", ()
     const listed = listPersistedReportsBounded(dir);
 
     expect(listed.some((r) => r.approvalStatus === "approved")).toBe(false);
-  });
-
-  it("parse-error log lookup: the FIFO's header is never read as the session's parse error", () => {
-    const header = (note: string): string =>
-      `${JSON.stringify({ sessionId: "s", message: note })}\n--- raw ---\nthe agent's last message`;
-    const { dir } = plantFlip("parse-errors", "a.log", "not a header of the session", header("FROM-THE-FIFO"));
-
-    const found = findLatestParseError(dir, "s");
-
-    expect(found).toBeNull();
   });
 });
