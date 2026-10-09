@@ -335,7 +335,7 @@ Schema per entry:
 | `budget_ms` | integer | no (default 30000) | timeout before hook is killed |
 | `description` | string | no | surfaced by `harness describe` |
 | `min_version` | string | no | semver floor; `harness doctor` runs `version_command` and emits a `⚠ outdated` line when the parsed version is below this value. Requires `version_command` (validate rejects min_version alone): hook commands are arbitrary shell strings (`harness policy intercept`, `~/.claude/hooks/foo.sh`, etc.), so no useful default exists. A hook a builtin policy pack contributes (not listed in `manifest.hooks[]` itself) can declare the same `min_version` + `version_command` pair; `harness doctor`'s "Policy-pack hooks" section probes those too (task ab634898). |
-| `version_command` | `string[]` | no | argv to spawn for the version probe; required when `min_version` is set. Point this at the **source-of-truth binary** whose version your `min_version` floor pins, not at a wrapper or launcher: for `understanding-gate-claude-hook` that wraps the `understanding-gate` CLI, use `[understanding-gate, --version]`, not `[understanding-gate-claude-hook, --version]`. |
+| `version_command` | `string[]` | no | argv to spawn for the version probe; required when `min_version` is set. Point this at the **source-of-truth binary** whose version your `min_version` floor pins, not at a wrapper or launcher: if a `mytool-launcher` wrapper ships alongside the `mytool` CLI, use `[mytool, --version]`, not `[mytool-launcher, --version]`. |
 
 Blocking semantics, three levels:
 

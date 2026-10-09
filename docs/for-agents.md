@@ -232,9 +232,8 @@ which are available even when the policy declares no `trigger.extract`:
 | `${PR_NUMBER}`, `${TASK_ID}`, ... | per-policy `trigger.extract` keys |
 
 Pack-shipped blockers add their own context. `branch-protection`
-substitutes `${BRANCH}` with the branch git names for the target;
-`understanding-before-execution` reads `${SESSION_ID}` from the
-hook payload. Unresolved references are left literal so the agent
+substitutes `${BRANCH}` with the branch git names for the target.
+Unresolved references are left literal so the agent
 can still read what was expected.
 
 ### Producers are suppressed when `ux:` is set
@@ -286,8 +285,7 @@ operator-driven flows.
 | `init --probe` | read-only | prints a JSON snapshot of detected runtimes + MCPs + manifest; no writes. |
 | `adopt` | mutating | reverse engineers a manifest from an existing settings.json. |
 | `export` | read-only (writes a file only with `-o <file>`) | prints the operator-declared manifest (overrides merged, workflows[]-derived policies omitted) to stdout; `-o <file>` writes it to a file instead. |
-| `pack add / remove / list / reseed` | mutating (add/remove/reseed), read-only (list) | manages `policy_packs:` entries in the manifest. Two builtin packs: `understanding-before-execution`, `branch-protection`. `reseed <name>` pulls the shipped template's config back onto a drifted entry. |
-| `approve understanding --session <id>` | mutating | operator action that approves a captured Understanding Report (round-trips evidence-ledger tag + persisted JSON). Required before write-capable tools fire under the understanding-before-execution pack. |
+| `pack add / remove / list / reseed` | mutating (add/remove/reseed), read-only (list) | manages `policy_packs:` entries in the manifest. One builtin pack: `branch-protection`. `reseed <name>` pulls the shipped template's config back onto a drifted entry. |
 | `doctor --target codex` | read-only | verifies Codex adapter wiring after `apply --runtime codex`. `--json` for machine-readable output. |
 | `doctor --target opencode` | read-only | verifies opencode adapter wiring after `apply --runtime opencode` (config artefact presence/banner + every projected MCP server's command resolves on PATH). `--json` for machine-readable output. |
 | `policy intercept` | runtime hook | called by Claude Code via `settings.json`, not directly by agents. |

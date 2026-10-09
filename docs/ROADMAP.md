@@ -276,11 +276,13 @@ Test + reproducibility:
 
 ## Phase 6: Understanding Gate Policy Pack
 
+The understanding gate was removed in 1.0.0 (see CHANGELOG `[Unreleased]`): the pack, `harness approve understanding`, the permission profiles and the understanding-gate hook verbs no longer exist. The rest of this Phase 6 section is the historical spec that shipped at the time, kept for the record; `branch-protection` is the only builtin pack left.
+
 ### Scope
 
-Before an agent edits files, runs shell, commits, or opens a PR, it must produce an *Understanding Report* (interpretation of the task: derived todos, acceptance criteria, assumptions, out-of-scope, risks). The user confirms, corrects, or "grills me until precise enough". Only after explicit approval is recorded in the evidence ledger may write-capable tools fire.
+Before an agent edits files, runs shell, commits, or opens a PR, it had to produce an *Understanding Report* (interpretation of the task: derived todos, acceptance criteria, assumptions, out-of-scope, risks). The user confirmed, corrected, or "grilled me until precise enough". Only after explicit approval was recorded in the evidence ledger could write-capable tools fire.
 
-Phase 6 introduces the *Policy Pack* concept as a first-class harness unit: a reusable bundle of instruction template + hooks + policies + permission profiles that ships under one name and is referenced from `harness.yaml` with one key. The Understanding Gate is the first showcase pack and the canonical reference implementation. Long-form design and rationale live in `lava-ice-logs/2026-04-30/harness-pre-execution-understanding-integration.md`.
+Phase 6 introduced the *Policy Pack* concept as a first-class harness unit: a reusable bundle of instruction template + hooks + policies + permission profiles that ships under one name and is referenced from `harness.yaml` with one key. The Understanding Gate was the first showcase pack and the canonical reference implementation (since removed in 1.0.0). Long-form design and rationale live in `lava-ice-logs/2026-04-30/harness-pre-execution-understanding-integration.md`.
 
 ### Sub-task decomposition
 
@@ -289,7 +291,7 @@ Phase 6 ships as six sequential sub-tasks. Each is a separate PR with its own do
 #### Phase 6 #1, Anchor: Policy Pack vocabulary + canonical doc *(this PR)*
 
 - New manifest key `policy_packs:` (additive, version 1, no runtime behaviour). Schema: `name` (required), `source` (default `builtin`), `enabled` (default `true`), `description` (optional), `config` (free-form record, validated by the pack itself at resolve time).
-- `docs/policy-packs/understanding-before-execution.md`: canonical pack documentation including target architecture, manifest reference, mode semantics, permission-profile sketches, adapter notes, approval state model.
+- Canonical pack documentation including target architecture, manifest reference, mode semantics, permission-profile sketches, adapter notes, approval state model (this doc was deleted with the pack in task eb7e9c5c).
 - Schema-only validation: duplicate-name rejection, `.strict()` on entry shape, integration with `parseManifest` defaults.
 - Two new invalid fixtures (`17-policy-pack-duplicate-name.yaml`, `18-policy-pack-unknown-key.yaml`).
 - `docs/examples/full-manifest.yaml` carries the canonical pack as a worked example; the byte-for-byte `describe` golden test covers the resulting output.
@@ -338,7 +340,7 @@ Phase 6 ships as six sequential sub-tasks. Each is a separate PR with its own do
 
 ### Exit gate
 
-A fresh agent on a clean repo refuses to call write-capable tools until an Understanding Report has been produced and explicitly approved. The `understanding-before-execution` pack is declarable via `harness pack add`, applies cleanly via `harness apply`, and `harness doctor` reports the wiring as healthy. The PR-level cut tags `v0.8.0` after #6 lands; intermediate sub-tasks ship as patch releases.
+A fresh agent on a clean repo refused to call write-capable tools until an Understanding Report had been produced and explicitly approved. The `understanding-before-execution` pack was declarable via `harness pack add`, applied cleanly via `harness apply`, and `harness doctor` reported the wiring as healthy. The PR-level cut tags `v0.8.0` after #6 lands; intermediate sub-tasks ship as patch releases.
 
 ## v0.24.0, runtime-neutral state root *(shipped)*
 
