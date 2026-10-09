@@ -51,9 +51,10 @@
 //     can write a validly signed session marker (`approvedBy:
 //     auto-mode:<harness>:<mode>`) when the payload's `permission_mode`
 //     is allowlisted and a strict-session `pending` report exists. Any
-//     process that can invoke `harness pack hook pre-tool-use` with a
+//     process that could invoke `harness pack hook pre-tool-use` (the
+//     verb, removed in task 7890cd34) with a
 //     stdin payload and `CLAUDE_CODE_SESSION_ID` of its choosing therefore
-//     obtains a signed marker for that session id WITHOUT reading the
+//     obtained a signed marker for that session id WITHOUT reading the
 //     key: the residual is now a DISJUNCTION, read the key, OR make the
 //     hook sign for you. Reach, honestly: pre-approval the oracle is
 //     unreachable (invoking it is a Bash call, and `pack` is not on the
@@ -89,7 +90,8 @@
 //     consumes `reportContentHash` has to branch on the artifact kind
 //     (`.approvals/` vs. `.delegations/`, or the markerId prefix)
 //     before deciding what the hash refers to; treating the two
-//     uniformly would misread one of them. `harness delegate` is
+//     uniformly would misread one of them. `harness delegate` (removed in
+//     task 7890cd34) was
 //     therefore a SECOND CLI writer into the signing scheme, beside the
 //     `harness approve` verbs: same key, same HMAC primitive, a
 //     different markerId namespace and a different meaning for one of

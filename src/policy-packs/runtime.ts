@@ -6,8 +6,9 @@
 // `harness apply` is the Claude Code `settings.json` shape under
 // `harness.generated/settings.json`.
 //
-// `codex`: hook commands point at the harness-shipped Codex adapter
-// subcommands (`harness pack hook codex-*`). Output of `harness apply`
+// `codex`: hook commands point at the Codex adapter commands the pack
+// bakes in (`harness pack hook codex-*`; those harness verbs were removed
+// in task 7890cd34). Output of `harness apply`
 // is a Codex-flavoured config artefact under
 // `harness.generated/codex/`. Phase 6 #6 ships block + allow for the
 // understanding-before-execution pack; cross-pack and additional

@@ -531,7 +531,8 @@ const GH_READ_ONLY_NOUNS: ReadonlySet<string> = new Set([
  * writes a ledger row, approve writes the approval marker. Both are
  * legitimate, but if the gate is currently blocking, classifying them
  * as read-only would let them bypass it silently. Operator-approval
- * commands have their own escape path in `isEscapeCommand`.
+ * commands used to have their own escape path in the gate hook's
+ * `isEscapeCommand` check (removed in task 7890cd34).
  */
 const HARNESS_READ_ONLY_SUBS: ReadonlySet<string> = new Set([
   "doctor", "validate", "audit", "diff", "list", "version",

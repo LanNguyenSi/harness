@@ -26,8 +26,9 @@
 //     the budget-note comment above `require-review-evidence` in
 //     src/cli/init/templates.ts for the full trace this test's invariant
 //     is derived from.
-//   - the policy-pack blockers (`harness pack hook pre-tool-use` /
-//     `harness pack hook codex-pre-tool-use`) each run an
+//   - the policy-pack blockers (the `harness pack hook pre-tool-use` /
+//     `harness pack hook codex-pre-tool-use` verbs, removed in task
+//     7890cd34) each ran an
 //     unconditional `queryLedgerByTag` / `checkLedger` probe on every
 //     invocation, bounded by the same `health.timeout_ms`.
 //

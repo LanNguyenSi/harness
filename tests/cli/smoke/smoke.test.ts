@@ -251,7 +251,6 @@ describe("runSmoke after an apply that recorded another runtime (agent-tasks b9e
         seen.push(opts);
         return apply({ ...opts, homeDir: home });
       },
-      stdout: () => {},
     });
     expect(result.exitCode).toBe(0);
     expect(seen[0]?.runtime).toBe("claude-code");
@@ -287,22 +286,17 @@ describe("runSmoke after an apply that recorded another runtime (agent-tasks b9e
     expect(Object.keys(before)).toContain(".last-apply");
 
     const outputDir = makeTmpDir("smoke-runtime-keep-out-");
-    let out = "";
     const result = await runSmoke({
       prompt: "x",
       outputDir,
       claudeBin: makeFakeClaude({ stdout: `${RESULT_OK}\n` }),
       configPath,
       applyImpl: async (opts) => apply({ ...opts, homeDir: home }),
-      stdout: (s: string) => {
-        out += s;
-      },
     });
     expect(result.exitCode).toBe(0);
     // The operator's tree (audit copies and the runtime record) is untouched.
     expect(snapshotTree(generatedDir)).toEqual(before);
     expect(readLastApply(generatedDir)?.runtime).toBe("codex");
-    expect(out).not.toContain("is kept");
     // smoke generated the claude-code variant into its own output dir.
     const ownDir = path.join(outputDir, GENERATED_DIRNAME);
     expect(
@@ -364,7 +358,6 @@ describe("runSmoke after an apply that recorded another runtime (agent-tasks b9e
       claudeBin: makeFakeClaude({ stdout: `${RESULT_OK}\n` }),
       configPath,
       applyImpl: async (opts) => apply({ ...opts, homeDir: home }),
-      stdout: () => {},
     });
     expect(result.exitCode).toBe(0);
     const settings = fs.readFileSync(path.join(outputDir, "settings.json"), "utf8");
@@ -400,7 +393,6 @@ describe("runSmoke after an apply that recorded another runtime (agent-tasks b9e
       configPath,
       expectations: { expectHooks: ["no-such-hook"] },
       applyImpl: async (opts) => apply({ ...opts, homeDir: home }),
-      stdout: () => {},
     });
     expect(result.exitCode).toBe(1);
     expect(snapshotTree(generatedDir)).toEqual(before);
@@ -436,7 +428,6 @@ describe("runSmoke after an apply that recorded another runtime (agent-tasks b9e
       claudeBin: makeFakeClaude({ stdout: `${RESULT_OK}\n` }),
       configPath,
       applyImpl: async (opts) => apply({ ...opts, homeDir: home }),
-      stdout: () => {},
     });
     expect(result.exitCode).toBe(0);
     expect(fs.readFileSync(instructionsPath, "utf8")).toBe(codexInstructions);
@@ -472,19 +463,14 @@ describe("runSmoke after an apply that recorded another runtime (agent-tasks b9e
       }),
     );
     await apply({ homeDir: home, configPath, runtime: "claude-code" });
-    let out = "";
     const result = await runSmoke({
       prompt: "x",
       outputDir: makeTmpDir("smoke-runtime-cc-out-"),
       claudeBin: makeFakeClaude({ stdout: `${RESULT_OK}\n` }),
       configPath,
       applyImpl: async (opts) => apply({ ...opts, homeDir: home }),
-      stdout: (s: string) => {
-        out += s;
-      },
     });
     expect(result.exitCode).toBe(0);
-    expect(out).not.toContain("runtime:");
     expect(readLastApply(path.join(home, GENERATED_DIRNAME))?.runtime).toBe("claude-code");
   });
 });

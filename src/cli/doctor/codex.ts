@@ -129,7 +129,7 @@ function resolveHarnessBinary(
         name: "harness binary",
         status: "error",
         message:
-          "`harness` not found on PATH; the codex-* subcommands cannot be invoked. Install harness globally or expose its bin via PATH.",
+          "`harness` not found on PATH; hook commands that invoke `harness` cannot run. Install harness globally or expose its bin via PATH.",
       },
       resolved: null,
     };

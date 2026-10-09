@@ -1476,7 +1476,8 @@ describe("runInterceptCli — Phase 7 #5: when: evaluation wiring", () => {
 
 describe("runInterceptCli — task f1df7c2d: stage .pending-approval on require_approval block", () => {
   // The Risk Gate sister to the Understanding Gate's pending-approval
-  // staging (hook-pre-tool-use.ts:520-526). Pre-fix, `harness policy
+  // staging (its hook-pre-tool-use.ts was removed in task 7890cd34).
+  // Pre-fix, `harness policy
   // intercept` returned the block JSON for a `require_approval` decision
   // but never wrote the session id to <generatedDir>/.pending-approval,
   // so a subsequent arg-less `harness approve risk` failed to resolve

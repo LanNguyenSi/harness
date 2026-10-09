@@ -1054,10 +1054,11 @@ interface LedgerConsultingHook {
    * True for a direct `manifest.hooks[]` entry invoking `harness policy
    * intercept` — the ledger client whose `query()` + deny-degraded
    * `record()` retry `requiredHookBudgetMs`'s 2T+3R is actually derived
-   * from. False for a pack-contributed blocker, which only ever calls
-   * `queryLedgerByTag` (open session, one `querySummary`, dispose) —
-   * `hook-codex-pre-tool-use.ts`, `hook-pre-tool-use.ts`, never
-   * `ledger_add`, so it has no
+    * from. False for a pack-contributed blocker (until task 7890cd34
+    * these were `hook-codex-pre-tool-use.ts` / `hook-pre-tool-use.ts`),
+    * which only ever calls
+    * `queryLedgerByTag` (open session, one `querySummary`, dispose), never
+    * `ledger_add`, so it has no
    * deny-degraded audit-retry step of its own and its real worst case is
    * bounded at up to 2×timeout_ms, not 2T+3R.
    */

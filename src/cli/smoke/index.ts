@@ -54,9 +54,6 @@ export interface SmokeOptions {
    * does.
    */
   spawnCwd?: string;
-  /** Stdout/stderr writers (defaults to process.stdout / stderr). */
-  stdout?: (s: string) => void;
-  stderr?: (s: string) => void;
 }
 
 export interface SmokeResult {

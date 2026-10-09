@@ -98,6 +98,7 @@ describe("doctor --target codex", () => {
           c.status === "ok",
       ),
     ).toBe(true);
+    expect(report.codexTarget!.checks.some((c) => c.name === "codex-* subcommands")).toBe(false);
   });
 
   it("reports a single error (no cascade) when the harness binary cannot be resolved", async () => {
