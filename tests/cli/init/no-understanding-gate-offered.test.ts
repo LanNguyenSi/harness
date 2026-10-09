@@ -39,11 +39,13 @@ function packNames(doc: unknown): string[] {
   return packs.map((p) => String(p.name));
 }
 
-const composedEverything = composeCustom({
-  packs: COMPOSABLE_PACKS.map((p) => p.key),
-  mcps: COMPOSABLE_MCPS.map((m) => m.key),
-  policies: COMPOSABLE_POLICIES.map((p) => p.key),
-});
+function composeEverything(): { yaml: string } {
+  return composeCustom({
+    packs: COMPOSABLE_PACKS.map((p) => p.key),
+    mcps: COMPOSABLE_MCPS.map((m) => m.key),
+    policies: COMPOSABLE_POLICIES.map((p) => p.key),
+  });
+}
 
 describe("init templates do not offer the understanding gate", () => {
   it.each(TEMPLATE_NAMES)("%s: no understanding pack entry, no auto_approve key, no approve-understanding text", (name) => {
@@ -76,11 +78,12 @@ describe("the interactive composer does not offer the understanding gate", () =>
   });
 
   it("with every composable pack, MCP and policy selected the manifest has no understanding pack, auto_approve key or approve-understanding text", () => {
-    const doc = parseYaml(composedEverything.yaml);
+    const { yaml } = composeEverything();
+    const doc = parseYaml(yaml);
     expect(packNames(doc)).not.toContain(UG_PACK);
     expect(packNames(doc)).toContain("branch-protection");
     expect(hasKeyDeep(doc, "auto_approve")).toBe(false);
-    expect(composedEverything.yaml).not.toContain("harness approve understanding");
+    expect(yaml).not.toContain("harness approve understanding");
   });
 
   it("an understanding selection is refused instead of silently emitted", () => {
