@@ -253,12 +253,15 @@ describe("doctor --target codex hook commands calling removed verbs", () => {
     const hooks = [{ name: "stale-gate", command: "harness pack hook post-merge-gate --runtime codex" }];
     const plain = await codexReport(hooks, undefined);
     const withCodex = await codexReport(hooks);
+    const healthy = await codexReport([{ name: "stale-gate", command: "harness policy intercept --runtime codex" }]);
     expect(plain.manifest.warnings).toHaveLength(1);
     const entry = withCodex.codexTarget!.checks.find((c) => c.name === "hook stale-gate");
     expect(entry?.status).toBe("warn");
     expect(entry?.countedElsewhere).toBe(true);
     expect(entry?.message).toContain("counted once, in the manifest warnings");
-    expect(withCodex.warningCount).toBe(plain.warningCount);
+    // The manifest warning is the one finding for this site: one more
+    // warning than the same codex run with a healthy hook, not two.
+    expect(withCodex.warningCount).toBe(healthy.warningCount + 1);
     expect(format(withCodex)).toContain("hook stale-gate");
   });
 
