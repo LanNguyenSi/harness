@@ -104,21 +104,19 @@ describe("checkPolicyPackVersions — cross-pack semantics", () => {
   });
 
   it("preserves manifest order across multiple packs with gaps", () => {
-    // `packIndex` is the order signal: the gap for the second entry must
-    // carry index 1 even though the first entry (unknown name, skipped)
-    // contributes nothing. With `branch-protection` as the only builtin
-    // that registers a gap kind here (no_probe_registered), the pair
-    // [skipped, gapped] is the strongest order fixture available; it
-    // fails if the walk loses declared order or miscounts indexes.
-    const m = manifestWith([
-      { name: "no-such-pack", min_version: "1.0.0" },
-      { name: "branch-protection", min_version: "1.0.0" },
-    ]);
+    // Two entries of the same probe-less builtin (`branch-protection`:
+    // any declared min_version yields a no_probe_registered gap), the
+    // second pushed onto the parsed manifest so the schema's duplicate-
+    // name rule never sees it. The check must report both gaps in
+    // declared order: packIndex [0, 1] carrying declaredMinVersion
+    // ["1.0.0", "2.0.0"]. Fails if the walk loses declared order,
+    // re-sorts, or miscounts indexes.
+    const m = manifestWith([{ name: "branch-protection", min_version: "1.0.0" }]);
+    m.policy_packs.push({ ...m.policy_packs[0]!, min_version: "2.0.0" });
     const gaps = checkPolicyPackVersions(m, probe("anything"));
-    expect(gaps).toHaveLength(1);
-    expect(gaps[0]?.packName).toBe("branch-protection");
-    expect(gaps[0]?.packIndex).toBe(1);
-    expect(gaps[0]?.kind).toBe("no_probe_registered");
+    expect(gaps).toHaveLength(2);
+    expect(gaps.map((g) => g.packIndex)).toEqual([0, 1]);
+    expect(gaps.map((g) => g.declaredMinVersion)).toEqual(["1.0.0", "2.0.0"]);
   });
 });
 

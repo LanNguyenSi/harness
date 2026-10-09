@@ -76,7 +76,15 @@ function writeManifestWithUgPack(): string {
 
 describe("apply --runtime codex", () => {
   it("writes harness.generated/codex/config.toml in place of settings.json", async () => {
-    writeManifestWithPack();
+    writeManifestWithPack([{ name: "branch-protection" }], [
+      {
+        name: "hand-user-prompt-submit",
+        event: "UserPromptSubmit",
+        command: "/usr/bin/true",
+        blocking: false,
+        budget_ms: 1000,
+      },
+    ]);
     const result = await apply({ homeDir: tmpHome, runtime: "codex" });
     expect(result.outcome).toBe("applied");
 
@@ -104,6 +112,10 @@ describe("apply --runtime codex", () => {
     expect(config).toContain('matcher = "apply_patch"');
     expect(config).toContain("[[hooks.PreToolUse]]");
     expect(config).toContain('hooks = [{ type = "command"');
+    // The hand-authored manifest hook flows through the codex projection
+    // too: its event table and its command both appear.
+    expect(config).toContain("[[hooks.UserPromptSubmit]]");
+    expect(config).toContain('command = "/usr/bin/true"');
     expect(config).not.toContain("[[hooks.pre_tool_use]]");
     expect(config).not.toContain("timeout_ms = ");
     expect(config).not.toContain("blocking = ");
@@ -148,7 +160,13 @@ describe("apply --runtime codex", () => {
     );
     expect(instructions).toContain("Runtime\n\ncodex");
     expect(instructions).toContain("harness.generated/codex/config.toml");
-    expect(instructions).toContain("apply_patch");
+    // Codex-only sentence from the pack's instructions renderer (the
+    // claude-code rendering says "Claude Code contract: a refusal is a
+    // JSON deny envelope on stdout (exit 0)." instead), so this pins the
+    // codex rendering rather than any rendering.
+    expect(instructions).toContain(
+      "Codex contract: a refusal exits 2 with the reason on stderr.",
+    );
     expect(instructions).toContain(
       "harness pack hook branch-protection --runtime codex",
     );

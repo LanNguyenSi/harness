@@ -39,7 +39,7 @@ describe("pack mutate (pure YAML)", () => {
     });
     expect(out).toContain("policy_packs:");
     expect(out).toContain("name: branch-protection");
-    expect(out).toContain("protected_branches");
+    expect(out).toMatch(/protected_branches:\s*\n\s*- main/);
   });
 
   it("applyPackAdd omits unset optional fields from the inserted YAML", () => {

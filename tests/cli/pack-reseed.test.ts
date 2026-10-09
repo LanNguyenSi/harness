@@ -16,6 +16,7 @@ import {
   defaultProducers,
   defaultUx,
 } from "../../src/policy-packs/builtin/understanding-before-execution.js";
+import { defaultUx as branchProtectionDefaultUx } from "../../src/policy-packs/builtin/branch-protection.js";
 import { STUB_NPM_BIN_EXEC_UNKNOWN as STUB_NPM_BIN_EXEC } from "../_helpers/npm-bin-exec.js";
 
 let tmpHome: string;
@@ -113,23 +114,16 @@ describe("packReseed", () => {
     expect(cfg["producers"]).toEqual(defaultProducers());
   });
 
-  it("is a no-op when config.ux / config.producers already match the shipped template", async () => {
+  it("is a no-op when config.ux already matches the shipped template", async () => {
     await packAdd(
-      {
-        name: "understanding-before-execution",
-        config: {
-          mode: "grill_me",
-          ux: defaultUx("grill_me"),
-          producers: defaultProducers(),
-        },
-      },
+      { name: "branch-protection", config: { ux: branchProtectionDefaultUx() } },
       { configPath: manifestPath },
     );
-    const before = fs.readFileSync(manifestPath, "utf8");
-    const r = await packReseed("understanding-before-execution", { configPath: manifestPath });
+    const before = fs.readFileSync(manifestPath);
+    const r = await packReseed("branch-protection", { configPath: manifestPath });
     expect(r.applied).toBe(false);
     expect(r.fieldsChanged).toEqual([]);
-    expect(fs.readFileSync(manifestPath, "utf8")).toBe(before);
+    expect(fs.readFileSync(manifestPath)).toEqual(before);
   });
 
   it("reseeds against the pack's OWN configured mode, not a hardcoded one", async () => {
@@ -177,13 +171,13 @@ describe("packReseed", () => {
   it("dry-run prints the diff and does not mutate the file", async () => {
     await packAdd(
       {
-        name: "understanding-before-execution",
-        config: { mode: "grill_me", ux: { cannot: "stale", required: ["stale"], run: ["stale"] } },
+        name: "branch-protection",
+        config: { ux: { cannot: "stale", required: ["stale"], run: ["stale"] } },
       },
       { configPath: manifestPath },
     );
     const before = fs.readFileSync(manifestPath, "utf8");
-    const r = await packReseed("understanding-before-execution", {
+    const r = await packReseed("branch-protection", {
       configPath: manifestPath,
       dryRun: true,
     });
@@ -223,12 +217,12 @@ describe("packReseed", () => {
     // `parseManifest` throws before reseed ever gets to the pack lookup.
     fs.writeFileSync(
       manifestPath,
-      "version: 1\npolicy_packs:\n  - name: understanding-before-execution\n  - name: understanding-before-execution\n",
+      "version: 1\npolicy_packs:\n  - name: branch-protection\n  - name: branch-protection\n",
       "utf8",
     );
     let caught: unknown;
     try {
-      await packReseed("understanding-before-execution", { configPath: manifestPath });
+      await packReseed("branch-protection", { configPath: manifestPath });
     } catch (e) {
       caught = e;
     }

@@ -10,7 +10,12 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { stringify as yamlStringify } from "yaml";
-import { GENERATED_DIRNAME, apply } from "../../../src/cli/apply/index.js";
+import {
+  CODEX_CONFIG_BASENAME,
+  GENERATED_DIRNAME,
+  SETTINGS_BASENAME,
+  apply,
+} from "../../../src/cli/apply/index.js";
 import { buildProgram } from "../../../src/cli/index.js";
 import { readLastApply } from "../../../src/io/last-apply.js";
 import { packRemove } from "../../../src/cli/pack/index.js";
@@ -401,19 +406,36 @@ describe("runSmoke after an apply that recorded another runtime (agent-tasks b9e
   it("codex apply, smoke, pack remove --force, then a plain apply still keeps codex", async () => {
     const home = makeTmpDir("smoke-runtime-packrm-home-");
     const configPath = path.join(home, "harness.yaml");
+    // Hand-authored manifest hook: survives the pack remove, so the
+    // config.toml produced by the post-remove plain apply must still
+    // carry its command. That is the proof the later apply generated
+    // for codex (a claude-code apply would produce a settings.json
+    // instead, asserted below).
+    const handHookCommand = "/usr/bin/true --smoke-runtime-hand";
     fs.writeFileSync(
       configPath,
       yamlStringify({
         version: 1,
         tools: { mcp: [], cli: [], skills: { enabled: [], source_dirs: [] }, builtin: { known: [] } },
         memory: { directories: [] },
-        hooks: [],
+        hooks: [
+          {
+            name: "hand-user-prompt-submit",
+            event: "UserPromptSubmit",
+            command: handHookCommand,
+            blocking: false,
+            budget_ms: 1000,
+          },
+        ],
         policies: [],
         policy_packs: [{ name: "branch-protection" }],
       }),
     );
     await apply({ homeDir: home, configPath, runtime: "codex" });
     const generatedDir = path.join(home, GENERATED_DIRNAME);
+    const codexConfigPath = path.join(generatedDir, CODEX_CONFIG_BASENAME);
+    const codexConfigBeforeRemove = fs.readFileSync(codexConfigPath, "utf8");
+    expect(codexConfigBeforeRemove).toContain(handHookCommand);
     const instructionsPath = path.join(
       generatedDir,
       "policy-packs",
@@ -445,9 +467,13 @@ describe("runSmoke after an apply that recorded another runtime (agent-tasks b9e
     await program.parseAsync(["apply", "--config", configPath, "--quiet"], { from: "user" });
     expect(out.startsWith("runtime: codex (from last apply; pass --runtime to change)\n")).toBe(true);
     // The pack's files are gone (force removed), and the apply over the
-    // pack-less manifest still reused codex.
+    // pack-less manifest still reused codex: the regenerated codex
+    // config.toml still carries the hand hook's command, and no
+    // claude-code settings.json was generated.
     expect(fs.existsSync(instructionsPath)).toBe(false);
-    expect(codexInstructions).toContain("## Runtime\n\ncodex");
+    expect(fs.existsSync(codexConfigPath)).toBe(true);
+    expect(fs.readFileSync(codexConfigPath, "utf8")).toContain(handHookCommand);
+    expect(fs.existsSync(path.join(generatedDir, SETTINGS_BASENAME))).toBe(false);
     expect(readLastApply(generatedDir)?.runtime).toBe("codex");
   });
 
