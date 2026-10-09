@@ -7,7 +7,8 @@ import { apply } from "../../src/cli/apply/index.js";
 import { doctor } from "../../src/cli/doctor/index.js";
 import { format } from "../../src/cli/doctor/format.js";
 import type { McpProbe, McpProbeResult } from "../../src/probes/mcp.js";
-import type { McpServer } from "../../src/schema/index.js";
+import { checkHookCommands, countCodexDiagnostics } from "../../src/cli/doctor/codex.js";
+import { parseManifest, type Hook, type McpServer } from "../../src/schema/index.js";
 import { STUB_NPM_BIN_EXEC_UNKNOWN } from "../_helpers/npm-bin-exec.js";
 
 let cleanups: Array<() => void> = [];
@@ -206,7 +207,7 @@ describe("doctor --target codex", () => {
 });
 
 describe("doctor --target codex hook commands calling removed verbs", () => {
-  async function codexChecks(commands: Array<{ name: string; command: string }>) {
+  async function codexReport(commands: Array<{ name: string; command: string }>, target: "codex" | undefined = "codex") {
     const home = tempHome();
     const manifest = {
       version: 1,
@@ -223,10 +224,14 @@ describe("doctor --target codex hook commands calling removed verbs", () => {
       versionProbe: () => null,
       pathEnv: "",
       npmBinExec: STUB_NPM_BIN_EXEC_UNKNOWN,
-      target: "codex",
-      codexCheckOptions: { manifestDir: home, harnessBinary: fakeHarnessBinary(home), cwd: home },
+      ...(target === "codex"
+        ? { target, codexCheckOptions: { manifestDir: home, harnessBinary: fakeHarnessBinary(home), cwd: home } }
+        : {}),
     });
-    return report.codexTarget!.checks;
+    return report;
+  }
+  async function codexChecks(commands: Array<{ name: string; command: string }>) {
+    return (await codexReport(commands)).codexTarget!.checks;
   }
 
   it("warns on a hook that calls a removed verb, naming the verb and the remedy", async () => {
@@ -242,5 +247,30 @@ describe("doctor --target codex hook commands calling removed verbs", () => {
     const entry = checks.find((c) => c.name === "hook kept");
     expect(entry?.status).toBe("ok");
     expect(entry?.message).toContain("subcommand of harness");
+  });
+
+  it("counts a removed-verb manifest hook once: the codex line renders as a warning but adds nothing to the tally", async () => {
+    const hooks = [{ name: "stale-gate", command: "harness pack hook post-merge-gate --runtime codex" }];
+    const plain = await codexReport(hooks, undefined);
+    const withCodex = await codexReport(hooks);
+    expect(plain.manifest.warnings).toHaveLength(1);
+    const entry = withCodex.codexTarget!.checks.find((c) => c.name === "hook stale-gate");
+    expect(entry?.status).toBe("warn");
+    expect(entry?.countedElsewhere).toBe(true);
+    expect(entry?.message).toContain("counted once, in the manifest warnings");
+    expect(withCodex.warningCount).toBe(plain.warningCount);
+    expect(format(withCodex)).toContain("hook stale-gate");
+  });
+
+  it("counts a removed-verb hook from the pack expansion, which has no manifest warning", () => {
+    const manifest = parseManifest({ version: 1 });
+    const expansionHooks: Hook[] = [
+      { name: "pack-stale", event: "PreToolUse", blocking: false, command: "harness preflight" } as Hook,
+    ];
+    const checks = checkHookCommands(manifest, "", () => false, expansionHooks);
+    const entry = checks.find((c) => c.name === "hook pack-stale");
+    expect(entry?.status).toBe("warn");
+    expect(entry?.countedElsewhere).toBeUndefined();
+    expect(countCodexDiagnostics({ target: "codex", checks }).warningCount).toBe(1);
   });
 });
