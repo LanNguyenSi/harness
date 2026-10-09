@@ -11,18 +11,18 @@ function manifest(extra: Record<string, unknown> = {}): Manifest {
     version: 1,
     hooks: [
       {
-        name: "policy-pack:understanding-before-execution:codex:pre-tool-use",
+        name: "policy-pack:branch-protection:pre-tool-use",
         event: "PreToolUse",
-        match: "apply_patch|Bash|shell|exec_command|functions.exec_command",
-        command: "harness pack hook codex-pre-tool-use",
+        match: "apply_patch",
+        command: "harness pack hook branch-protection --runtime codex",
         blocking: "hard",
         budget_ms: 5000,
         description: "Codex blocker",
       },
       {
-        name: "policy-pack:understanding-before-execution:codex:user-prompt-submit",
+        name: "hand-user-prompt-submit",
         event: "UserPromptSubmit",
-        command: "harness pack hook codex-user-prompt-submit",
+        command: "/usr/bin/true",
         blocking: false,
         budget_ms: 5000,
       },
@@ -50,14 +50,12 @@ describe("generateCodexConfig", () => {
     expect(content).toContain("[[hooks.PreToolUse]]");
     expect(content).toContain("[[hooks.UserPromptSubmit]]");
     expect(content).toContain(
-      "# harness hook: policy-pack:understanding-before-execution:codex:pre-tool-use (budget_ms=5000)",
+      "# harness hook: policy-pack:branch-protection:pre-tool-use (budget_ms=5000)",
     );
     expect(content).toContain(
-      'hooks = [{ type = "command", command = "harness pack hook codex-pre-tool-use", timeout = 5 }]',
+      'hooks = [{ type = "command", command = "harness pack hook branch-protection --runtime codex", timeout = 5 }]',
     );
-    expect(content).toContain(
-      'matcher = "apply_patch|Bash|shell|exec_command|functions.exec_command"',
-    );
+    expect(content).toContain('matcher = "apply_patch"');
     expect(content).not.toContain("timeout_ms = ");
     expect(content).not.toContain("blocking = ");
     expect(content).not.toContain("name = ");

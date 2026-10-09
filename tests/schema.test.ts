@@ -832,10 +832,10 @@ describe("parseManifest — policy_packs", () => {
   it("parses a minimal pack with only a name; source defaults to 'builtin'", () => {
     const m = parseManifest({
       version: 1,
-      policy_packs: [{ name: "understanding-before-execution" }],
+      policy_packs: [{ name: "branch-protection" }],
     });
     expect(m.policy_packs[0]).toEqual({
-      name: "understanding-before-execution",
+      name: "branch-protection",
       source: "builtin",
       enabled: true,
       config: {},
@@ -847,13 +847,13 @@ describe("parseManifest — policy_packs", () => {
       version: 1,
       policy_packs: [
         {
-          name: "understanding-before-execution",
-          config: { mode: "grill_me", custom_extra: { nested: 42 } },
+          name: "branch-protection",
+          config: { protected_branches: ["main"], custom_extra: { nested: 42 } },
         },
       ],
     });
     expect(m.policy_packs[0]?.config).toEqual({
-      mode: "grill_me",
+      protected_branches: ["main"],
       custom_extra: { nested: 42 },
     });
   });
@@ -1001,7 +1001,7 @@ describe("parseManifest — min_version numeric pattern", () => {
   function withPolicyPackMinVersion(value: string): unknown {
     return {
       version: 1,
-      policy_packs: [{ name: "understanding-before-execution", min_version: value }],
+      policy_packs: [{ name: "branch-protection", min_version: value }],
     };
   }
 

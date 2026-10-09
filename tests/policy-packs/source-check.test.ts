@@ -11,19 +11,19 @@ function manifestWith(packs: unknown[]) {
 
 describe("checkPolicyPackSources", () => {
   it("returns no issues when every enabled pack resolves cleanly", () => {
-    const m = manifestWith([{ name: "understanding-before-execution" }]);
+    const m = manifestWith([{ name: "branch-protection" }]);
     expect(checkPolicyPackSources(m)).toEqual([]);
   });
 
   it("flags an unknown source on an enabled pack", () => {
     const m = manifestWith([
-      { name: "understanding-before-execution", source: "path:./somewhere" },
+      { name: "branch-protection", source: "path:./somewhere" },
     ]);
     const issues = checkPolicyPackSources(m);
     expect(issues).toHaveLength(1);
     expect(issues[0]).toMatchObject({
       packIndex: 0,
-      packName: "understanding-before-execution",
+      packName: "branch-protection",
       kind: "unknown-source",
       source: "path:./somewhere",
       field: "source",
@@ -53,7 +53,7 @@ describe("checkPolicyPackSources", () => {
 
   it("aggregates one issue per bad enabled pack and preserves array order", () => {
     const m = manifestWith([
-      { name: "understanding-before-execution", source: "path:./a" },
+      { name: "branch-protection", source: "path:./a" },
       { name: "no-such-pack" },
     ]);
     const issues = checkPolicyPackSources(m);

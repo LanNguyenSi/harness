@@ -934,20 +934,19 @@ describe("expandPolicyPacks", () => {
   it("skips an enabled:false pack and records its name in `skipped`", () => {
     const m = buildManifest([
       {
-        name: "understanding-before-execution",
+        name: "branch-protection",
         enabled: false,
-        config: { mode: "strict" },
       },
     ]);
     const r = expandPolicyPacks(m);
     expect(r.hooks).toEqual([]);
     expect(r.files).toEqual([]);
-    expect(r.skipped).toEqual(["understanding-before-execution"]);
+    expect(r.skipped).toEqual(["branch-protection"]);
   });
 
   it("warns and skips when source is not 'builtin'", () => {
     const m = buildManifest([
-      { name: "understanding-before-execution", source: "path:./somewhere" },
+      { name: "branch-protection", source: "path:./somewhere" },
     ]);
     const r = expandPolicyPacks(m);
     expect(r.hooks).toEqual([]);
@@ -1035,11 +1034,11 @@ describe("expandPolicyPacks", () => {
 
   it("drops a pack hook whose name collides with a manifest hooks[] entry", () => {
     const m = buildManifest(
-      [{ name: "understanding-before-execution" }],
+      [{ name: "branch-protection" }],
       [
         {
-          name: "policy-pack:understanding-before-execution:stop",
-          event: "Stop",
+          name: "policy-pack:branch-protection:pre-tool-use",
+          event: "PreToolUse",
           command: "/usr/local/bin/handler.sh",
           blocking: false,
           budget_ms: 5000,
@@ -1047,8 +1046,11 @@ describe("expandPolicyPacks", () => {
       ],
     );
     const r = expandPolicyPacks(m);
-    expect(r.hooks).toHaveLength(7); // 8 contributions - 1 dropped collision (Stop)
-    expect(r.hooks.find((h) => h.event === "Stop")).toBeUndefined();
+    expect(r.hooks).toHaveLength(0); // 1 contribution - 1 dropped collision (PreToolUse)
+    expect(
+      r.hooks.find((h) => h.name === "policy-pack:branch-protection:pre-tool-use"),
+    ).toBeUndefined();
+    expect(r.files).toHaveLength(1); // positive: the pack resolved, its instructions file remains
     expect(
       r.warnings.some((w) => w.includes("collides with a manifest hooks")),
     ).toBe(true);

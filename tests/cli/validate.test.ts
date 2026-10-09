@@ -768,7 +768,7 @@ describe("validate — policy_packs (Phase 6 #2)", () => {
   }
 
   it("clean fixture: a known-builtin enabled pack produces no policy_packs diagnostics", () => {
-    const home = fixtureWithPacks([{ name: "understanding-before-execution" }]);
+    const home = fixtureWithPacks([{ name: "branch-protection" }]);
     const result = validate({
       homeDir: home,
       configPath: path.join(home, "harness.yaml"),
@@ -780,7 +780,7 @@ describe("validate — policy_packs (Phase 6 #2)", () => {
 
   it("rejects an enabled pack with an unknown source", () => {
     const home = fixtureWithPacks([
-      { name: "understanding-before-execution", source: "path:./somewhere" },
+      { name: "branch-protection", source: "path:./somewhere" },
     ]);
     const result = validate({
       homeDir: home,
@@ -827,27 +827,28 @@ describe("validate — policy_packs (Phase 6 #2)", () => {
   // has its own unit tests; this section is the validate-CLI contract:
   // are the diagnostics surfaced with the right `path` and severity?
 
-  it("rejects a typo'd `mode` value on understanding-before-execution", () => {
+  it("rejects a wrong-type `protected_branches` value on branch-protection", () => {
     const home = fixtureWithPacks([
-      { name: "understanding-before-execution", config: { mode: "fastConfirm" } },
+      { name: "branch-protection", config: { protected_branches: "main" } },
     ]);
     const result = validate({
       homeDir: home,
       configPath: path.join(home, "harness.yaml"),
       ...NOOP_PROBES,
     });
-    const modeError = result.diagnostics.find(
+    const branchesError = result.diagnostics.find(
       (d) =>
-        d.path === "policy_packs[0].config.mode" && d.severity === "error",
+        d.path === "policy_packs[0].config.protected_branches" &&
+        d.severity === "error",
     );
-    expect(modeError).toBeDefined();
+    expect(branchesError).toBeDefined();
   });
 
   it("rejects a typo'd config key (strict mode)", () => {
     const home = fixtureWithPacks([
       {
-        name: "understanding-before-execution",
-        config: { permision_profile: "safe-start" },
+        name: "branch-protection",
+        config: { protected_brances: ["main"] },
       },
     ]);
     const result = validate({
@@ -859,13 +860,13 @@ describe("validate — policy_packs (Phase 6 #2)", () => {
       (d) =>
         d.path === "policy_packs[0].config" &&
         d.severity === "error" &&
-        /permision_profile/.test(d.message),
+        /protected_brances/.test(d.message),
     );
     expect(error).toBeDefined();
   });
 
   it("missing config keys are silent (no diagnostic)", () => {
-    const home = fixtureWithPacks([{ name: "understanding-before-execution" }]);
+    const home = fixtureWithPacks([{ name: "branch-protection" }]);
     const result = validate({
       homeDir: home,
       configPath: path.join(home, "harness.yaml"),
@@ -880,8 +881,8 @@ describe("validate — policy_packs (Phase 6 #2)", () => {
   it("emits both source and config diagnostics in one run", () => {
     const home = fixtureWithPacks([
       {
-        name: "understanding-before-execution",
-        config: { mode: "fastConfirm" },
+        name: "branch-protection",
+        config: { protected_branches: "main" },
       },
       { name: "no-such-pack" },
     ]);
@@ -891,7 +892,9 @@ describe("validate — policy_packs (Phase 6 #2)", () => {
       ...NOOP_PROBES,
     });
     const configError = result.diagnostics.find(
-      (d) => d.path === "policy_packs[0].config.mode" && d.severity === "error",
+      (d) =>
+        d.path === "policy_packs[0].config.protected_branches" &&
+        d.severity === "error",
     );
     const sourceError = result.diagnostics.find(
       (d) => d.path === "policy_packs[1].name" && d.severity === "error",

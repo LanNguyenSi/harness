@@ -57,7 +57,7 @@ beforeEach(() => {
       memory: { directories: [] },
       hooks: [],
       policies: [],
-      policy_packs: [{ name: "understanding-before-execution" }],
+      policy_packs: [{ name: "branch-protection" }],
     }),
   );
 });

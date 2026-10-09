@@ -90,7 +90,7 @@ describe("checkPolicyPackVersions — cross-pack semantics", () => {
   it("disabled packs are not checked even with min_version", () => {
     const m = manifestWith([
       {
-        name: "understanding-before-execution",
+        name: "branch-protection",
         enabled: false,
         min_version: "99.0.0",
       },
@@ -104,16 +104,21 @@ describe("checkPolicyPackVersions — cross-pack semantics", () => {
   });
 
   it("preserves manifest order across multiple packs with gaps", () => {
+    // `packIndex` is the order signal: the gap for the second entry must
+    // carry index 1 even though the first entry (unknown name, skipped)
+    // contributes nothing. With `branch-protection` as the only builtin
+    // that registers a gap kind here (no_probe_registered), the pair
+    // [skipped, gapped] is the strongest order fixture available; it
+    // fails if the walk loses declared order or miscounts indexes.
     const m = manifestWith([
-      { name: "understanding-before-execution", min_version: "99.0.0" },
+      { name: "no-such-pack", min_version: "1.0.0" },
       { name: "branch-protection", min_version: "1.0.0" },
     ]);
-    const gaps = checkPolicyPackVersions(m, probe("understanding-gate 0.3.1"));
-    expect(gaps).toHaveLength(2);
-    expect(gaps[0]?.packName).toBe("understanding-before-execution");
-    expect(gaps[0]?.kind).toBe("below_floor");
-    expect(gaps[1]?.packName).toBe("branch-protection");
-    expect(gaps[1]?.kind).toBe("no_probe_registered");
+    const gaps = checkPolicyPackVersions(m, probe("anything"));
+    expect(gaps).toHaveLength(1);
+    expect(gaps[0]?.packName).toBe("branch-protection");
+    expect(gaps[0]?.packIndex).toBe(1);
+    expect(gaps[0]?.kind).toBe("no_probe_registered");
   });
 });
 

@@ -1697,38 +1697,39 @@ describe("apply — policy_packs expansion (Phase 6 #2)", () => {
   });
 
   it("is idempotent: a second apply returns no-changes and keeps the file byte-stable", async () => {
-    writePolicyPackManifest([{ name: "understanding-before-execution" }]);
+    writePolicyPackManifest([{ name: "branch-protection" }]);
     await apply({ homeDir: tmpHome });
-    const before = fs.readFileSync(instructionsPath("understanding-before-execution"), "utf8");
+    const before = fs.readFileSync(instructionsPath("branch-protection"), "utf8");
     const r2 = await apply({ homeDir: tmpHome });
     expect(r2.outcome).toBe("no-changes");
     expect(r2.written).toBe(false);
-    const after = fs.readFileSync(instructionsPath("understanding-before-execution"), "utf8");
+    const after = fs.readFileSync(instructionsPath("branch-protection"), "utf8");
     expect(after).toBe(before);
   });
 
   it("detects drift on the pack instructions file via three-state compare", async () => {
-    writePolicyPackManifest([{ name: "understanding-before-execution" }]);
+    writePolicyPackManifest([{ name: "branch-protection" }]);
     await apply({ homeDir: tmpHome });
     fs.writeFileSync(
-      instructionsPath("understanding-before-execution"),
+      instructionsPath("branch-protection"),
       "manually edited\n",
       "utf8",
     );
     const r = await apply({ homeDir: tmpHome });
     expect(r.outcome).toBe("drift-refuse");
     const driftFile = r.files.find(
-      (f) => f.basename === "policy-packs/understanding-before-execution/instructions.md",
+      (f) => f.basename === "policy-packs/branch-protection/instructions.md",
     );
     expect(driftFile?.verdict).toBe("drift-refuse");
     expect(driftFile?.diff).toContain("manually edited");
   });
 
   it("skips an enabled:false pack: no instructions file, no pack hooks", async () => {
-    writePolicyPackManifest([{ name: "understanding-before-execution", enabled: false }]);
+    writePolicyPackManifest([{ name: "branch-protection", enabled: false }]);
     const r = await apply({ homeDir: tmpHome });
     expect(r.outcome).toBe("applied");
-    expect(fs.existsSync(instructionsPath("understanding-before-execution"))).toBe(false);
+    expect(fs.existsSync(instructionsPath("branch-protection"))).toBe(false);
+    expect(fs.existsSync(settingsPath())).toBe(true); // positive: apply still wrote settings
     const settings = JSON.parse(fs.readFileSync(settingsPath(), "utf8")) as {
       hooks: Record<string, unknown[]>;
     };
@@ -1742,7 +1743,7 @@ describe("apply — policy_packs expansion (Phase 6 #2)", () => {
   // before expansion runs, parallel to `harness validate`.
   it("a pack with an unknown source fails apply with a non-zero exit naming the pack", async () => {
     writePolicyPackManifest([
-      { name: "understanding-before-execution", source: "path:./somewhere" },
+      { name: "branch-protection", source: "path:./somewhere" },
     ]);
     const err = await apply({ homeDir: tmpHome }).then(
       () => null,
@@ -1750,9 +1751,9 @@ describe("apply — policy_packs expansion (Phase 6 #2)", () => {
     );
     expect(err).toBeInstanceOf(HarnessExitError);
     expect(err?.exitCode).toBe(1);
-    expect(err?.message).toMatch(/understanding-before-execution/);
+    expect(err?.message).toMatch(/branch-protection/);
     expect(err?.message).toMatch(/only "builtin" resolves/);
-    expect(fs.existsSync(instructionsPath("understanding-before-execution"))).toBe(false);
+    expect(fs.existsSync(instructionsPath("branch-protection"))).toBe(false);
   });
 
   it("a pack with an unknown builtin name fails apply with a non-zero exit naming the pack", async () => {
@@ -1777,7 +1778,7 @@ describe("apply — policy_packs expansion (Phase 6 #2)", () => {
 
   it("aggregates multiple pack source issues into one HarnessExitError", async () => {
     writePolicyPackManifest([
-      { name: "understanding-before-execution", source: "path:./somewhere" },
+      { name: "branch-protection", source: "path:./somewhere" },
       { name: "no-such-pack" },
     ]);
     await expect(apply({ homeDir: tmpHome })).rejects.toMatchObject({
@@ -1814,14 +1815,14 @@ describe("apply — policy_packs expansion (Phase 6 #2)", () => {
   });
 
   it("re-enabling a previously-disabled pack triggers a fresh apply", async () => {
-    writePolicyPackManifest([{ name: "understanding-before-execution", enabled: false }]);
+    writePolicyPackManifest([{ name: "branch-protection", enabled: false }]);
     await apply({ homeDir: tmpHome });
-    expect(fs.existsSync(instructionsPath("understanding-before-execution"))).toBe(false);
+    expect(fs.existsSync(instructionsPath("branch-protection"))).toBe(false);
 
-    writePolicyPackManifest([{ name: "understanding-before-execution", enabled: true }]);
+    writePolicyPackManifest([{ name: "branch-protection", enabled: true }]);
     const r = await apply({ homeDir: tmpHome });
     expect(r.outcome).toBe("applied");
-    expect(fs.existsSync(instructionsPath("understanding-before-execution"))).toBe(true);
+    expect(fs.existsSync(instructionsPath("branch-protection"))).toBe(true);
   });
 });
 

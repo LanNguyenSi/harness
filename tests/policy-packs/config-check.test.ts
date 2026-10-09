@@ -137,18 +137,6 @@ describe("checkPolicyPackConfigs — understanding-before-execution", () => {
     expect(issues[0]?.configPath).toBe("approval_lifecycle");
   });
 
-  it("rejects an empty entry inside expire_on_tool_match (nested array path)", () => {
-    const m = manifestWith([
-      {
-        name: "understanding-before-execution",
-        config: { approval_lifecycle: { expire_on_tool_match: [""] } },
-      },
-    ]);
-    const issues = checkPolicyPackConfigs(m);
-    expect(issues).toHaveLength(1);
-    expect(issues[0]?.configPath).toBe("approval_lifecycle.expire_on_tool_match[0]");
-  });
-
   it("accepts a well-formed auto_approve block", () => {
     const m = manifestWith([
       {
@@ -309,34 +297,6 @@ describe("checkPolicyPackConfigs — understanding-before-execution", () => {
     expect(issues[0]?.configPath).toBe("auto_approve.when[0]");
   });
 
-  it("accepts a well-formed ux block and rejects an ux block missing `cannot`", () => {
-    const goodM = manifestWith([
-      {
-        name: "understanding-before-execution",
-        config: {
-          ux: {
-            cannot: "You cannot do that.",
-            required: ["context"],
-            run: ["harness approve understanding"],
-          },
-        },
-      },
-    ]);
-    expect(checkPolicyPackConfigs(goodM)).toEqual([]);
-
-    const badM = manifestWith([
-      {
-        name: "understanding-before-execution",
-        config: {
-          ux: { required: ["context"], run: ["harness approve understanding"] },
-        },
-      },
-    ]);
-    const issues = checkPolicyPackConfigs(badM);
-    expect(issues).toHaveLength(1);
-    expect(issues[0]?.configPath).toBe("ux.cannot");
-  });
-
   it("accepts a well-formed kind:mcp producer", () => {
     const m = manifestWith([
       {
@@ -401,15 +361,55 @@ describe("checkPolicyPackConfigs — branch-protection", () => {
     expect(issues).toHaveLength(1);
     expect(issues[0]?.code).toBe("unrecognized_keys");
   });
+
+  it("rejects an empty entry inside protected_branches (nested array path)", () => {
+    const m = manifestWith([
+      { name: "branch-protection", config: { protected_branches: ["main", ""] } },
+    ]);
+    const issues = checkPolicyPackConfigs(m);
+    expect(issues).toHaveLength(1);
+    expect(issues[0]?.configPath).toBe("protected_branches[1]");
+  });
+
+  it("accepts a well-formed ux block and rejects an ux block missing `cannot`", () => {
+    const goodM = manifestWith([
+      {
+        name: "branch-protection",
+        config: {
+          ux: {
+            cannot: "You cannot edit files on a protected branch.",
+            required: ["a non-protected checkout"],
+            run: ["git checkout -b feat/x"],
+          },
+        },
+      },
+    ]);
+    expect(checkPolicyPackConfigs(goodM)).toEqual([]);
+
+    const badM = manifestWith([
+      {
+        name: "branch-protection",
+        config: {
+          ux: {
+            required: ["a non-protected checkout"],
+            run: ["git checkout -b feat/x"],
+          },
+        },
+      },
+    ]);
+    const issues = checkPolicyPackConfigs(badM);
+    expect(issues).toHaveLength(1);
+    expect(issues[0]?.configPath).toBe("ux.cannot");
+  });
 });
 
 describe("checkPolicyPackConfigs — cross-pack semantics", () => {
   it("disabled packs are not checked", () => {
     const m = manifestWith([
       {
-        name: "understanding-before-execution",
+        name: "branch-protection",
         enabled: false,
-        config: { mode: "fastConfirm" },
+        config: { protected_branches: "master" },
       },
     ]);
     expect(checkPolicyPackConfigs(m)).toEqual([]);

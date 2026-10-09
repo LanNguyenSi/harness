@@ -54,7 +54,7 @@ afterEach(() => {
 function manifestWithPack(): Manifest {
   return parseManifest({
     version: 1,
-    policy_packs: [{ name: "understanding-before-execution", enabled: true }],
+    policy_packs: [{ name: "branch-protection", enabled: true }],
   });
 }
 

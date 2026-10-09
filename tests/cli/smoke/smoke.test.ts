@@ -234,7 +234,7 @@ describe("runSmoke after an apply that recorded another runtime (agent-tasks b9e
         memory: { directories: [] },
         hooks: [],
         policies: [],
-        policy_packs: [{ name: "understanding-before-execution" }],
+        policy_packs: [{ name: "branch-protection" }],
       }),
     );
     await apply({ homeDir: home, configPath, runtime: "codex" });
@@ -270,7 +270,7 @@ describe("runSmoke after an apply that recorded another runtime (agent-tasks b9e
         memory: { directories: [] },
         hooks: [],
         policies: [],
-        policy_packs: [{ name: "understanding-before-execution" }],
+        policy_packs: [{ name: "branch-protection" }],
       }),
     );
     await apply({ homeDir: home, configPath, runtime: "codex" });
@@ -278,7 +278,7 @@ describe("runSmoke after an apply that recorded another runtime (agent-tasks b9e
     const instructionsPath = path.join(
       generatedDir,
       "policy-packs",
-      "understanding-before-execution",
+      "branch-protection",
       "instructions.md",
     );
     expect(fs.readFileSync(instructionsPath, "utf8")).toContain("## Runtime\n\ncodex");
@@ -301,7 +301,7 @@ describe("runSmoke after an apply that recorded another runtime (agent-tasks b9e
     const ownDir = path.join(outputDir, GENERATED_DIRNAME);
     expect(
       fs.readFileSync(
-        path.join(ownDir, "policy-packs", "understanding-before-execution", "instructions.md"),
+        path.join(ownDir, "policy-packs", "branch-protection", "instructions.md"),
         "utf8",
       ),
     ).toContain("## Runtime\n\nclaude-code");
@@ -380,7 +380,7 @@ describe("runSmoke after an apply that recorded another runtime (agent-tasks b9e
         memory: { directories: [] },
         hooks: [],
         policies: [],
-        policy_packs: [{ name: "understanding-before-execution" }],
+        policy_packs: [{ name: "branch-protection" }],
       }),
     );
     await apply({ homeDir: home, configPath, runtime: "codex" });
@@ -409,7 +409,7 @@ describe("runSmoke after an apply that recorded another runtime (agent-tasks b9e
         memory: { directories: [] },
         hooks: [],
         policies: [],
-        policy_packs: [{ name: "understanding-before-execution" }, { name: "branch-protection" }],
+        policy_packs: [{ name: "branch-protection" }],
       }),
     );
     await apply({ homeDir: home, configPath, runtime: "codex" });
@@ -417,7 +417,7 @@ describe("runSmoke after an apply that recorded another runtime (agent-tasks b9e
     const instructionsPath = path.join(
       generatedDir,
       "policy-packs",
-      "understanding-before-execution",
+      "branch-protection",
       "instructions.md",
     );
     const codexInstructions = fs.readFileSync(instructionsPath, "utf8");
@@ -444,7 +444,10 @@ describe("runSmoke after an apply that recorded another runtime (agent-tasks b9e
     });
     await program.parseAsync(["apply", "--config", configPath, "--quiet"], { from: "user" });
     expect(out.startsWith("runtime: codex (from last apply; pass --runtime to change)\n")).toBe(true);
-    expect(fs.readFileSync(instructionsPath, "utf8")).toBe(codexInstructions);
+    // The pack's files are gone (force removed), and the apply over the
+    // pack-less manifest still reused codex.
+    expect(fs.existsSync(instructionsPath)).toBe(false);
+    expect(codexInstructions).toContain("## Runtime\n\ncodex");
     expect(readLastApply(generatedDir)?.runtime).toBe("codex");
   });
 
