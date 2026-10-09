@@ -4,7 +4,7 @@
 // reachable (so the `harness pack hook codex-*` subcommands resolve),
 // the harness-generated `harness.generated/codex/config.toml` exists,
 // every contributed `[[hooks.*]]` stanza references a command that
-// resolves on PATH, and the persisted-report directory is writable.
+// resolves on PATH.
 //
 // The checks here intentionally do NOT exercise the actual Codex CLI
 // binary — that is a Codex-runtime concern, out of harness's scope.

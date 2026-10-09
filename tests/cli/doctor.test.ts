@@ -3485,13 +3485,11 @@ ${SILENCE_DRIFT_PACK}policy_packs:
   });
 });
 
-// Removal of the understanding-gate doctor read side (task 95826160):
-// with the UG pack enabled AND `harness.generated/` present (the
-// strictest gate any removed section used, a superset of the
-// pack-enabled-only gates of the others), the report carries none of
-// the removed fields and the formatted text renders none of the
-// removed Environment lines (the strings below are quoted from the
-// deleted render code in format.ts).
+// Removal of the understanding-gate doctor read side (task 95826160): with
+// the UG pack enabled, `harness.generated/` present and its `.approvals`,
+// `.delegations` and `.inflight` directories present, the report carries
+// none of the removed fields and the formatted text renders none of the
+// removed Environment lines.
 describe("doctor - removed understanding-gate report fields (task 95826160)", () => {
   it("drops every removed UG field and render line even with the pack enabled and harness.generated/ present", async () => {
     const home = makeFixture({
@@ -3504,11 +3502,16 @@ ${SILENCE_DRIFT}policy_packs:
 `,
     });
     fs.mkdirSync(path.join(home, "harness.generated"));
+    fs.mkdirSync(path.join(home, "harness.generated", ".approvals"), { recursive: true });
+    fs.mkdirSync(path.join(home, "harness.generated", ".delegations"), { recursive: true });
+    fs.mkdirSync(path.join(home, "harness.generated", ".inflight"), { recursive: true });
     const report = await doctor({
       configPath: path.join(home, "harness.yaml"),
       homeOverride: home,
       shallow: true,
       versionProbe: () => null,
+      envOverride: {},
+      npmBinExec: STUB_NPM_BIN_EXEC_UNKNOWN,
     });
 
     for (const key of [
@@ -3529,8 +3532,8 @@ ${SILENCE_DRIFT}policy_packs:
     const text = format(report).toLowerCase();
     for (const removed of [
       "auto approvals in the last",
-      "delegations",
-      "in-flight",
+      "delegations on disk",
+      "in-flight subagent records on disk",
       "settings drift",
     ]) {
       expect(text).not.toContain(removed);

@@ -46,11 +46,6 @@ export interface AuditOptions extends LoaderOptions {
   ) => Promise<LedgerQueryResult>;
   /** Override "now" (tests). */
   now?: Date;
-  /**
-   * Sink for audit-only stderr notices (tests). Defaults to
-   * `process.stderr.write`.
-   */
-  stderr?: (s: string) => void;
 }
 
 export interface AuditDecisionRow {

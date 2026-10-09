@@ -124,14 +124,6 @@ export interface DoctorOptions extends LoaderOptions {
    * hermetic against the operator's real env.
    */
   envOverride?: NodeJS.ProcessEnv;
-  /**
-   * cwd relative paths resolve against, mirroring how
-   * `harness apply --target <relative path>` resolves its own target
-   * (`resolveTargetPath` in apply.ts, which calls bare `path.resolve`).
-   * Defaults to `process.cwd()`; tests inject a fixture dir to stay
-   * hermetic against the real cwd.
-   */
-  cwd?: string;
 }
 
 export { isDoctorTarget, KNOWN_DOCTOR_TARGETS };

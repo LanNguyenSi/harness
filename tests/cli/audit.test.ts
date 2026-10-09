@@ -479,3 +479,42 @@ describe("audit — input validation", () => {
     expect(err.exitCode).toBe(64);
   });
 });
+
+describe("audit: policy-decision ledger fetch shape (task 95826160)", () => {
+  it("issues exactly one ledger fetch, scoped to policy_decision: and the --since window", async () => {
+    const calls: {
+      sessionId: string;
+      filters?: { sinceIso?: string; contentPrefix?: string };
+    }[] = [];
+    await audit({
+      configPath: MANIFEST_PATH,
+      sessionId: "sess-fetch-shape",
+      now: NOW,
+      fetchLedger: async (sessionId, filters) => {
+        calls.push({ sessionId, filters });
+        return { kind: "ok", entries: [] };
+      },
+    });
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.sessionId).toBe("sess-fetch-shape");
+    expect(calls[0]!.filters?.contentPrefix).toBe("policy_decision:");
+    // DEFAULT_SINCE is "24h" in src/cli/audit.ts, and sinceIso is
+    // `new Date(now.getTime() - windowSeconds * 1000).toISOString()`.
+    const expectedSinceIso = new Date(
+      NOW.getTime() - 24 * 60 * 60 * 1000,
+    ).toISOString();
+    expect(calls[0]!.filters?.sinceIso).toBe(expectedSinceIso);
+  });
+
+  it("--json output carries no approvals or approvalsUnavailable key", async () => {
+    const result = await audit({
+      configPath: MANIFEST_PATH,
+      json: true,
+      now: NOW,
+      fetchLedger: async () => ({ kind: "ok", entries: [] }),
+    });
+    const parsed = JSON.parse(result.output);
+    expect(parsed).not.toHaveProperty("approvals");
+    expect(parsed).not.toHaveProperty("approvalsUnavailable");
+  });
+});

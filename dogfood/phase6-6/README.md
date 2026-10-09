@@ -87,8 +87,7 @@ harness doctor --config dogfood/phase6-6/harness.yaml --target codex
 
 The doctor checks: `harness` on PATH, the codex-* subcommands resolve,
 `harness.generated/codex/config.toml` is present and harness-managed,
-every contributed hook command resolves, and
-`.understanding-gate/reports/` is writable. `--json` emits a structured
+and every contributed hook command resolves. `--json` emits a structured
 `codexTarget` block whose error/warning counts roll into the top-level
 totals.
 
