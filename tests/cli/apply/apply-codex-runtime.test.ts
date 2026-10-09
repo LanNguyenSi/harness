@@ -67,13 +67,6 @@ function writeManifestWithPack(
   return target;
 }
 
-// The understanding gate pack is kept only for the cases that test its own
-// behaviour (pause-file / reports-dir wiring); everything else in this file
-// uses `branch-protection` as the generic builtin-pack fixture.
-function writeManifestWithUgPack(): string {
-  return writeManifestWithPack([{ name: "understanding-before-execution" }]);
-}
-
 describe("apply --runtime codex", () => {
   it("writes harness.generated/codex/config.toml in place of settings.json", async () => {
     writeManifestWithPack([{ name: "branch-protection" }], [
@@ -119,30 +112,6 @@ describe("apply --runtime codex", () => {
     expect(config).not.toContain("[[hooks.pre_tool_use]]");
     expect(config).not.toContain("timeout_ms = ");
     expect(config).not.toContain("blocking = ");
-  });
-
-  it("does NOT prefix the codex UserPromptSubmit hook with UNDERSTANDING_GATE_PAUSE_FILE", async () => {
-    // Apply computes `pauseFile` (sentinelPath(generatedDir)) unconditionally
-    // for every runtime and passes it to expandPolicyPacks, but the
-    // PAUSE_FILE prefix (wrapPause) is wired ONLY into the Claude Code
-    // UserPromptSubmit command (`understanding-before-execution.ts`'s
-    // codex branch uses the fixed COMMAND_USER_PROMPT_SUBMIT_CODEX with no
-    // wrap at all) — the prefix exists only for the npm-backed
-    // understanding-gate-claude-hook bin, which is Claude-Code-only; the
-    // reason the Codex hook doesn't need it isn't that the Codex path is
-    // already pause-aware. It is NOT: per src/cli/pack/hook-bootstrap.ts's
-    // own inventory comment, hook-codex-user-prompt-submit.ts does no pause
-    // check at all today. Codex pause-parity is an open, unrelated gap this
-    // task does not close (agent-tasks 63fefe3a fix-round).
-    writeManifestWithUgPack();
-    const result = await apply({ homeDir: tmpHome, runtime: "codex" });
-    expect(result.outcome).toBe("applied");
-    const config = fs.readFileSync(
-      path.join(tmpHome, GENERATED_DIRNAME, CODEX_CONFIG_BASENAME),
-      "utf8",
-    );
-    expect(config).toContain("harness pack hook codex-user-prompt-submit");
-    expect(config).not.toContain("UNDERSTANDING_GATE_PAUSE_FILE");
   });
 
   it("emits the operator audit instructions.md with runtime: codex", async () => {
@@ -249,7 +218,7 @@ describe("apply --runtime codex", () => {
   });
 
   it("recovers a stale harness-generated Codex artifact when .last-apply lacks codex/config.toml", async () => {
-    writeManifestWithUgPack();
+    writeManifestWithPack();
     await apply({ homeDir: tmpHome });
 
     const codexPath = path.join(
@@ -265,7 +234,7 @@ describe("apply --runtime codex", () => {
         "# DO NOT EDIT: re-run `harness apply --runtime codex` to regenerate.",
         "",
         "[[hooks.PreToolUse]]",
-        'hooks = [{ type = "command", command = "UNDERSTANDING_GATE_REPORT_DIR=\'/home/u/.claude/.understanding-gate/reports\' harness pack hook codex-pre-tool-use", timeout = 5 }]',
+        'hooks = [{ type = "command", command = "harness pack hook codex-pre-tool-use", timeout = 5 }]',
         "",
       ].join("\n"),
     );
@@ -286,55 +255,16 @@ describe("apply --runtime codex", () => {
     expect(codexFile?.verdict).toBe("no-drift");
 
     const generated = fs.readFileSync(codexPath, "utf8");
-    const expectedReportsDir = path.join(
-      tmpHome,
-      ".understanding-gate",
-      "reports",
-    );
-    expect(generated).toContain(
-      `UNDERSTANDING_GATE_REPORT_DIR='${expectedReportsDir}'`,
-    );
-    expect(generated).not.toContain("/.claude/.understanding-gate/reports");
+    expect(generated).toContain("harness pack hook branch-protection --runtime codex");
+    expect(generated).not.toContain("codex-pre-tool-use");
     expect(
       readLastApply(path.join(tmpHome, GENERATED_DIRNAME))?.files[
         CODEX_CONFIG_BASENAME
       ],
     ).toBeDefined();
-    expect(fs.readFileSync(codexConfig, "utf8")).toContain(
-      `UNDERSTANDING_GATE_REPORT_DIR='${expectedReportsDir}'`,
-    );
-  });
-
-  it("surfaces a warning when permission_profile is set under --runtime codex (silent-drop guard)", async () => {
-    const manifest = {
-      version: 1,
-      tools: {
-        mcp: [],
-        cli: [],
-        skills: { enabled: [], source_dirs: [] },
-        builtin: { known: [] },
-      },
-      memory: { directories: [] },
-      hooks: [],
-      policies: [],
-      policy_packs: [
-        {
-          name: "understanding-before-execution",
-          config: { permission_profile: "safe-start" },
-        },
-      ],
-    };
-    fs.writeFileSync(
-      path.join(tmpHome, "harness.yaml"),
-      yamlStringify(manifest),
-    );
-    const result = await apply({ homeDir: tmpHome, runtime: "codex" });
-    expect(result.outcome).toBe("applied");
-    expect(
-      result.warnings.some(
-        (w) => w.includes("permission") && w.includes("codex"),
-      ),
-    ).toBe(true);
+    const installed = fs.readFileSync(codexConfig, "utf8");
+    expect(installed).toContain("harness pack hook branch-protection --runtime codex");
+    expect(installed).not.toContain("codex-pre-tool-use");
   });
 
   it("installs the generated hook block into ~/.codex/config.toml and backs up the previous config", async () => {

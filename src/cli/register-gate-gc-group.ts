@@ -9,11 +9,10 @@ export function registerGateGcGroup(
 ): void {
   const { stdout, stderr } = io;
   // `harness gate` — operator escape hatch for hard-blocking hooks.
-  // Task 8fcddb26: the understanding-before-execution PreToolUse hook can
-  // lock a Claude session out of every Bash call, and the recommended
-  // recovery (`harness approve understanding`) is itself a Bash invocation
-  // and gets caught by the same gate. `gate disable` strips the
-  // offending hook group out of settings.json with a reversible snapshot.
+  // A hard-blocking PreToolUse hook can lock a Claude session out of every
+  // Bash call, and any recovery that is itself a Bash invocation gets caught
+  // by the same gate. `gate disable` strips the offending hook group out of
+  // settings.json with a reversible snapshot.
   const gate = program
     .command("gate")
     .description("Operator escape hatch: disable/restore hook groups in ~/.claude/settings.json");

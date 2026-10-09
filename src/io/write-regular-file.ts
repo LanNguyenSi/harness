@@ -107,25 +107,3 @@ export function writeRegularFileNonBlocking(
     }
   }
 }
-
-/**
- * Append `data` to `filePath` (the `fs.appendFileSync` shape: `O_APPEND`, so
- * a single short write lands whole even when two hooks race), opened
- * non-blocking and typed on the descriptor.
- */
-export function appendRegularFileNonBlocking(
-  filePath: string,
-  data: string,
-  opts: RegularFileWriteOptions = {},
-): void {
-  const fd = openRegularForWrite(filePath, writeFlags(fs.constants.O_APPEND, opts), opts.mode);
-  try {
-    writeAll(fd, data);
-  } finally {
-    try {
-      fs.closeSync(fd);
-    } catch {
-      // Already gone; nothing left to release.
-    }
-  }
-}

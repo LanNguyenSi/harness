@@ -13,10 +13,7 @@
 // At-least-one-mcp is enforced at schema-validate time for the policy
 // engine, so by the time the engine renders, the list is guaranteed to
 // carry an ungated MCP recovery path (relevant when the agent is in a
-// Bash lockout). Other consumers may enforce different constraints; the
-// understanding-before-execution policy pack requires
-// at-least-one `ask` instead, because post-v0.14.0 its gate signal is a
-// filesystem marker the mcp ledger_add path cannot write.
+// Bash lockout). Other consumers may enforce different constraints.
 
 import type { Producer } from "../schema/index.js";
 import { substituteTemplate } from "../io/extract.js";

@@ -1,4 +1,4 @@
-// The no-O_NOFOLLOW fallback of readRegularFileRejectingSymlink (Windows:
+// The no-O_NOFOLLOW fallback of readRegularFileBounded (Windows:
 // fs.constants has no O_NOFOLLOW / O_NONBLOCK there). Without the flag the
 // open alone would follow a link, so the reader must still refuse a symlink
 // and a non-regular node through an lstat before it opens. The module reads
@@ -16,7 +16,7 @@ vi.mock("node:fs", async (importOriginal) => {
   return { ...actual, constants };
 });
 
-const { readRegularFileRejectingSymlink } = await import("../../src/io/read-regular-file.js");
+const { readRegularFileBounded } = await import("../../src/io/read-regular-file.js");
 
 let tmp: string;
 
@@ -28,7 +28,7 @@ afterEach(() => {
   fs.rmSync(tmp, { recursive: true, force: true });
 });
 
-describe("readRegularFileRejectingSymlink without O_NOFOLLOW / O_NONBLOCK", () => {
+describe("readRegularFileBounded without O_NOFOLLOW / O_NONBLOCK", () => {
   it("the mock really removes the flags", () => {
     expect(fs.constants.O_NOFOLLOW).toBeUndefined();
     expect(fs.constants.O_NONBLOCK).toBeUndefined();
@@ -37,11 +37,11 @@ describe("readRegularFileRejectingSymlink without O_NOFOLLOW / O_NONBLOCK", () =
   it("still reads a regular file", () => {
     const p = path.join(tmp, "marker.json");
     fs.writeFileSync(p, '{"a":1}', "utf8");
-    expect(readRegularFileRejectingSymlink(p)).toEqual({ kind: "ok", content: '{"a":1}' });
+    expect(readRegularFileBounded(p)).toEqual({ kind: "ok", content: '{"a":1}' });
   });
 
   it("still returns missing for an absent path", () => {
-    expect(readRegularFileRejectingSymlink(path.join(tmp, "nope"))).toEqual({ kind: "missing" });
+    expect(readRegularFileBounded(path.join(tmp, "nope"))).toEqual({ kind: "missing" });
   });
 
   it("still refuses a symlink that points at a regular file", () => {
@@ -49,12 +49,12 @@ describe("readRegularFileRejectingSymlink without O_NOFOLLOW / O_NONBLOCK", () =
     fs.writeFileSync(target, "{}", "utf8");
     const link = path.join(tmp, "link.json");
     fs.symlinkSync(target, link);
-    expect(readRegularFileRejectingSymlink(link)).toEqual({ kind: "symlink" });
+    expect(readRegularFileBounded(link)).toEqual({ kind: "symlink" });
   });
 
   it("still returns not-regular for a directory", () => {
     const dir = path.join(tmp, "a-dir");
     fs.mkdirSync(dir);
-    expect(readRegularFileRejectingSymlink(dir)).toEqual({ kind: "not-regular" });
+    expect(readRegularFileBounded(dir)).toEqual({ kind: "not-regular" });
   });
 });

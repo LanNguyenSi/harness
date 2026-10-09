@@ -197,7 +197,7 @@ export function main(testsDir) {
 }
 
 // Only auto-run when invoked directly (not when imported by tests) — same
-// guard as scripts/check-ug-schema-drift.mjs.
+// guard as scripts/check-release-notes-size.mjs.
 const isDirectRun = import.meta.url === pathToFileURL(process.argv[1] ?? "").href;
 if (isDirectRun) {
   main("tests");

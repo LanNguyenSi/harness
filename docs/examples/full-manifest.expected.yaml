@@ -589,7 +589,6 @@ environments:
         kube_namespace_patterns:
           - prod
           - production
-permission_profiles: {}
 workflows:
   - name: feature-pr
     when:

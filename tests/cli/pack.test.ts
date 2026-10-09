@@ -311,26 +311,21 @@ describe("pack list", () => {
     expect(r.output).toBe("(no entries)\n");
   });
 
-  it("emits a flat row per pack with name + source + enabled + mode + description", async () => {
+  it("emits a flat row per pack with name + source + enabled + description", async () => {
     await packAdd(
-      {
-        name: "understanding-before-execution",
-        description: "test",
-        config: { mode: "strict" },
-      },
+      { name: "branch-protection", description: "test" },
       { configPath: manifestPath },
     );
     const r = packList({ configPath: manifestPath });
     expect(r.rows).toHaveLength(1);
     expect(r.rows[0]).toMatchObject({
-      name: "understanding-before-execution",
+      name: "branch-protection",
       source: "builtin",
       enabled: true,
-      mode: "strict",
       description: "test",
     });
-    expect(r.output).toContain("understanding-before-execution");
-    expect(r.output).toContain("strict");
+    expect(r.output).toContain("branch-protection");
+    expect(r.output).toContain("test");
   });
 
   it("--enabled-only filters out enabled: false entries", async () => {

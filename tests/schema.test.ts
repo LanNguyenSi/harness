@@ -3,7 +3,7 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { parse as parseYaml } from "yaml";
-import { ManifestParseError, parseManifest } from "../src/schema/index.js";
+import { ManifestParseError, parseManifest, parseManifestWithWarnings } from "../src/schema/index.js";
 import { FULL_TEMPLATE } from "../src/cli/init/templates.js";
 import { TEAM_TEMPLATE } from "../src/cli/init/profiles.js";
 
@@ -899,74 +899,21 @@ describe("parseManifest — policy_packs", () => {
   });
 });
 
-describe("parseManifest — permission_profiles (Phase 6 #5)", () => {
-  it("defaults permission_profiles to {} when absent", () => {
+describe("parseManifest — permission_profiles (removed key)", () => {
+  it("no longer declares the key: a manifest without it parses to a manifest without it", () => {
     const m = parseManifest({ version: 1 });
-    expect(m.permission_profiles).toEqual({});
+    expect("permission_profiles" in m).toBe(false);
   });
 
-  it("parses a profile with all 7 action keys + accepts boolean shorthand", () => {
-    const m = parseManifest({
-      version: 1,
-      permission_profiles: {
-        custom: {
-          description: "test",
-          actions: {
-            read: { allow: true },
-            edit: { allow: false },
-            bash: { allow: "ask" },
-            commit: { allow: "false" },
-            push: { allow: "true" },
-            pr: { allow: "limited" },
-            deploy: { allow: "ask_or_deny" },
-          },
-        },
-      },
-    });
-    expect(m.permission_profiles.custom?.actions.read?.allow).toBe("true");
-    expect(m.permission_profiles.custom?.actions.edit?.allow).toBe("false");
-    expect(m.permission_profiles.custom?.actions.deploy?.allow).toBe("ask_or_deny");
-  });
-
-  it("rejects unknown action keys via .strict()", () => {
-    expect(() =>
-      parseManifest({
-        version: 1,
-        permission_profiles: {
-          bad: { actions: { unknown_action: { allow: "true" } } },
-        },
-      }),
-    ).toThrow(/unrecognized key|unknown_action/i);
-  });
-
-  it("rejects unknown allow values", () => {
-    expect(() =>
-      parseManifest({
-        version: 1,
-        permission_profiles: {
-          bad: { actions: { read: { allow: "maybe" } } },
-        },
-      }),
-    ).toThrow();
-  });
-
-  it("permits an inline `requires:` shape on a profile action", () => {
-    const m = parseManifest({
-      version: 1,
-      permission_profiles: {
-        gated: {
-          actions: {
-            edit: {
-              allow: "true",
-              requires: { ledger_tag: "understanding-approved:${SESSION_ID}" },
-            },
-          },
-        },
-      },
-    });
-    expect(m.permission_profiles.gated?.actions.edit?.requires?.ledger_tag).toBe(
-      "understanding-approved:${SESSION_ID}",
-    );
+  it.each([
+    ["well-formed", { custom: { actions: { read: { allow: true }, deploy: { allow: "ask_or_deny" } } } }],
+    ["malformed", { bad: { actions: { unknown_action: { allow: "maybe" } } } }],
+    ["empty", {}],
+  ])("a %s permission_profiles block is stripped with one warning, never a parse failure", (_label, value) => {
+    const { manifest, warnings } = parseManifestWithWarnings({ version: 1, permission_profiles: value });
+    expect("permission_profiles" in manifest).toBe(false);
+    expect(warnings.map((w) => w.path)).toEqual(["permission_profiles"]);
+    expect(warnings[0]?.message).toContain("removed in 1.0.0");
   });
 });
 

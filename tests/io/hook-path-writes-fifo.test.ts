@@ -10,10 +10,9 @@
 // through the same child, so a case cannot pass because the module path or
 // export name was wrong.
 //
-// What each block pins: the lock target and the signing key's rotate path
-// are pinned end to end (a FIFO at the path, a bounded child). The last
-// describe block holds the shared helper's own FIFO cases, including the one
-// with a reader attached.
+// What each block pins: the lock target is pinned end to end (a FIFO at the
+// path, a bounded child). The last describe block holds the shared helper's
+// own FIFO cases, including the one with a reader attached.
 
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -83,39 +82,6 @@ try {
   });
 });
 
-describe.skipIf(process.platform === "win32")("approval signing key: rewriting a key never opens a FIFO blocking", () => {
-  const MOD = "runtime/approval-signing.js";
-
-  it("control: rotating over a regular key replaces it with a 0600 key", () => {
-    const dir = path.join(tmp, "gen");
-    fs.mkdirSync(dir);
-    fs.writeFileSync(path.join(dir, ".approval-signing.key"), "short");
-    const run = callInChild(MOD, "rotateSigningKey", [dir]);
-    expectBounded(run);
-    expect((run.value as { ok: { created: boolean } }).ok.created).toBe(true);
-    expect(fs.statSync(path.join(dir, ".approval-signing.key")).size).toBeGreaterThanOrEqual(32);
-  });
-
-  it("a FIFO at the key path makes the rewrite throw within the bound", () => {
-    const dir = path.join(tmp, "gen");
-    fs.mkdirSync(dir);
-    mkfifo(path.join(dir, ".approval-signing.key"));
-    const run = callInChild(MOD, "rotateSigningKey", [dir]);
-    expectBounded(run);
-    expect(run.value).toMatchObject({ threw: { code: "ENXIO" } });
-  });
-
-  it("a truncated regular key is repaired in place", () => {
-    const dir = path.join(tmp, "gen");
-    fs.mkdirSync(dir);
-    fs.writeFileSync(path.join(dir, ".approval-signing.key"), "short");
-    const run = callInChild(MOD, "getOrCreateSigningKey", [dir]);
-    expectBounded(run);
-    expect((run.value as { ok: { created: boolean } }).ok.created).toBe(true);
-    expect(fs.statSync(path.join(dir, ".approval-signing.key")).size).toBeGreaterThanOrEqual(32);
-  });
-});
-
 describe.skipIf(process.platform === "win32")("write helper: the one non-blocking open every hook-path write stands on", () => {
   const MOD = "io/write-regular-file.js";
   const HELD_READER_SCRIPT = `
@@ -136,13 +102,11 @@ try {
 }
 `;
 
-  it("control: write replaces and append appends, on a regular file", () => {
+  it("control: write replaces the content of a regular file", () => {
     const file = path.join(tmp, "f");
     fs.writeFileSync(file, "old content that is longer\n");
     expectBounded(callInChild(MOD, "writeRegularFileNonBlocking", [file, "new\n"]));
     expect(fs.readFileSync(file, "utf8")).toBe("new\n");
-    expectBounded(callInChild(MOD, "appendRegularFileNonBlocking", [file, "more\n"]));
-    expect(fs.readFileSync(file, "utf8")).toBe("new\nmore\n");
   });
 
   it("write: a FIFO with no reader throws ENXIO within the bound", () => {
@@ -153,24 +117,13 @@ try {
     expect(run.value).toMatchObject({ threw: { code: "ENXIO" } });
   });
 
-  it("append: a FIFO with no reader throws ENXIO within the bound", () => {
+  it("write: a FIFO WITH a reader is refused by the descriptor type check, nothing reaches the pipe", () => {
     const fifo = path.join(tmp, "fifo");
     mkfifo(fifo);
-    const run = callInChild(MOD, "appendRegularFileNonBlocking", [fifo, "x"]);
+    const run = runChild(HELD_READER_SCRIPT, [distUrl(MOD), fifo, "writeRegularFileNonBlocking"]);
     expectBounded(run);
-    expect(run.value).toMatchObject({ threw: { code: "ENXIO" } });
+    expect(run.value).toEqual({ threw: { code: "E_NOT_REGULAR" }, leaked: 0 });
   });
-
-  it.each(["writeRegularFileNonBlocking", "appendRegularFileNonBlocking"])(
-    "%s: a FIFO WITH a reader is refused by the descriptor type check, nothing reaches the pipe",
-    (fn) => {
-      const fifo = path.join(tmp, "fifo");
-      mkfifo(fifo);
-      const run = runChild(HELD_READER_SCRIPT, [distUrl(MOD), fifo, fn]);
-      expectBounded(run);
-      expect(run.value).toEqual({ threw: { code: "E_NOT_REGULAR" }, leaked: 0 });
-    },
-  );
 
   it("exclusive create: anything already at the path is EEXIST, a FIFO included", () => {
     const fifo = path.join(tmp, "fifo");
@@ -180,12 +133,12 @@ try {
     expect(run.value).toMatchObject({ threw: { code: "EEXIST" } });
   });
 
-  it("append with noFollow: a symlink at the path is refused (ELOOP), the target untouched", () => {
+  it("write with noFollow: a symlink at the path is refused (ELOOP), the target untouched", () => {
     const target = path.join(tmp, "target");
     fs.writeFileSync(target, "keep\n");
     const link = path.join(tmp, "link");
     fs.symlinkSync(target, link);
-    const run = callInChild(MOD, "appendRegularFileNonBlocking", [link, "x\n", { noFollow: true }]);
+    const run = callInChild(MOD, "writeRegularFileNonBlocking", [link, "x\n", { noFollow: true }]);
     expectBounded(run);
     expect(run.value).toMatchObject({ threw: { code: "ELOOP" } });
     expect(fs.readFileSync(target, "utf8")).toBe("keep\n");

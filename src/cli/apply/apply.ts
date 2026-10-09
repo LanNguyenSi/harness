@@ -52,7 +52,6 @@ import {
 import { unifiedDiff } from "../../io/patch.js";
 import { emitRestartHints } from "../../io/restart-hints.js";
 import { compare, type ThreeStateVerdict } from "../../io/three-state.js";
-import { reportsDirForManifest } from "../../policy-packs/builtin/understanding-before-execution-runtime.js";
 import {
   checkPolicyPackSources,
   expandPolicyPacks,
@@ -69,7 +68,6 @@ import { EX_FAIL, EX_NOINPUT, HarnessExitError } from "../exit-codes.js";
 import { loadManifest } from "../loader.js";
 import { GENERATED_DIRNAME, resolveGeneratedDir } from "../../io/generated-dir.js";
 import { resolveHomeDir } from "../../runtime/home-dir.js";
-import { sentinelPath } from "../../runtime/pause-sentinel.js";
 import {
   CODEX_GENERATED_HEADER_LINE,
   generateCodexConfig,
@@ -619,26 +617,8 @@ function buildExpectedFiles(
   // generate-settings unchanged (they're just additional Hook entries
   // in the in-memory manifest), and pack files flow through the same
   // three-state-compare + lock pipeline as settings.json / MEMORY.md.
-  //
-  // The `reportsDir` opt threads a manifest-anchored absolute path into
-  // the understanding-before-execution pack so its emitted hook commands
-  // carry `UNDERSTANDING_GATE_REPORT_DIR=<path>` — every actor that
-  // touches the persisted-report dir then resolves the same location,
-  // independent of cwd. Without this, the pack's Stop hook (cwd =
-  // session) and `harness approve understanding` (cwd = operator
-  // terminal) silently diverge.
   const runtime: Runtime = opts.runtime ?? DEFAULT_RUNTIME;
-  const reportsDir = reportsDirForManifest(manifestPath);
-  // Pause-sentinel path (agent-tasks 63fefe3a): threaded through so the
-  // Claude UserPromptSubmit hook's npm-backed bin can find the same
-  // sentinel harness's own hooks resolve via generatedDir at runtime. See
-  // `ResolvePackOptions.pauseFile`'s doc comment for why only that one hook
-  // needs it.
-  const pauseFile = sentinelPath(stateDir);
-  const packExpansion = expandPolicyPacks(manifest, runtime, {
-    reportsDir,
-    pauseFile,
-  });
+  const packExpansion = expandPolicyPacks(manifest, runtime);
   const augmentedManifest: Manifest =
     packExpansion.hooks.length === 0
       ? manifest
@@ -661,31 +641,13 @@ function buildExpectedFiles(
     // (builtin packs' buildInstructions() branch on the runtime), which is
     // why a re-apply under another runtime rewrites it.
     const codexConfig = generateCodexConfig(augmentedManifest);
-    const codexWarnings = [...codexConfig.warnings];
-    if (packExpansion.permissions) {
-      // Phase 6 #6: pack permission profiles project into Claude Code's
-      // settings.json `permissions` block. The codex generator does not
-      // yet consume them (Codex sandbox shaping is a follow-up); the
-      // contribution would otherwise vanish silently.
-      const totalPerms =
-        packExpansion.permissions.allow.length +
-        packExpansion.permissions.ask.length +
-        packExpansion.permissions.deny.length;
-      if (totalPerms > 0) {
-        codexWarnings.push(
-          `policy_packs contributed ${totalPerms} permission entr${
-            totalPerms === 1 ? "y" : "ies"
-          }; --runtime codex does not yet wire permissions into Codex's sandbox shape (filed as a Phase 6 #6 follow-up)`,
-        );
-      }
-    }
     return {
       files: [
         { basename: CODEX_CONFIG_BASENAME, content: codexConfig.content },
         { basename: MEMORY_BASENAME, content: indexResult.content },
         ...packFiles,
       ],
-      warnings: [...codexWarnings, ...indexResult.warnings, ...packExpansion.warnings],
+      warnings: [...codexConfig.warnings, ...indexResult.warnings, ...packExpansion.warnings],
     };
   }
 
@@ -706,31 +668,13 @@ function buildExpectedFiles(
     // instead of no projection at all (generateOpencodeConfig's extras have
     // no safe default for this -- see GenerateOpencodeConfigExtras).
     const opencodeConfig = generateOpencodeConfig(augmentedManifest, { generatedDir: stateDir });
-    const opencodeWarnings = [...opencodeConfig.warnings];
-    if (packExpansion.permissions) {
-      // See generate-opencode-config.ts's header ("permission -> NOT
-      // PROJECTED"): mirrors the codex branch's silent-drop guard above
-      // so a policy-pack permission contribution never vanishes without
-      // a trace.
-      const totalPerms =
-        packExpansion.permissions.allow.length +
-        packExpansion.permissions.ask.length +
-        packExpansion.permissions.deny.length;
-      if (totalPerms > 0) {
-        opencodeWarnings.push(
-          `policy_packs contributed ${totalPerms} permission entr${
-            totalPerms === 1 ? "y" : "ies"
-          }; --runtime opencode does not yet wire permissions into opencode's permission block (documented follow-up)`,
-        );
-      }
-    }
     return {
       files: [
         { basename: OPENCODE_CONFIG_BASENAME, content: opencodeConfig.content },
         { basename: MEMORY_BASENAME, content: indexResult.content },
         ...packFiles,
       ],
-      warnings: [...opencodeWarnings, ...indexResult.warnings, ...packExpansion.warnings],
+      warnings: [...opencodeConfig.warnings, ...indexResult.warnings, ...packExpansion.warnings],
     };
   }
 
@@ -738,7 +682,6 @@ function buildExpectedFiles(
   // correctness; see GenerateSettingsResult.mcpServers's doc comment for
   // why this projection is not itself observable in settings.json.
   const settingsResult = generateSettingsWithWarnings(augmentedManifest, {
-    ...(packExpansion.permissions && { packPermissions: packExpansion.permissions }),
     generatedDir: stateDir,
   });
   const settings = `${JSON.stringify(settingsResult.root, null, 2)}\n`;

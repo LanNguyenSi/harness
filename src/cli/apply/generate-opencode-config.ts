@@ -72,15 +72,13 @@
 // a pattern-keyed object as an escape hatch) that is a genuine
 // PreToolUse-blocking equivalent -- but its shape (tool key -> pattern
 // -> action) is structurally inverted from the
-// `permissions.{allow,ask,deny}: string[]` pattern-DSL that
-// `policy_packs`' `packPermissions` already produce for Claude Code, and
-// mapping one into the other is real, untested-by-this-task translation
+// `permissions.{allow,ask,deny}: string[]` pattern-DSL of Claude Code's
+// settings.json, and mapping one into the other is real, untested-by-this-task translation
 // work. `generate-codex-config.ts`'s header deferred the analogous
 // Codex sandbox-profile mapping for the same "keep v1 small" reason;
 // this adapter follows that precedent instead of inventing a rushed
-// pattern translator. `apply.ts` surfaces a warning (mirroring the
-// Codex branch) when a manifest actually contributes permissions here,
-// so the gap stays visible instead of silent.
+// pattern translator. No builtin pack contributes permissions, so there
+// is nothing to drop silently.
 //
 // Stable-output rules (load-bearing for byte-equivalent regeneration on
 // a no-op apply):

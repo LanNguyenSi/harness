@@ -5,7 +5,6 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   GENERATED_DIRNAME,
   PENDING_APPROVAL_BASENAME,
-  clearPendingApproval,
   pendingApprovalPath,
   readPendingApproval,
   resolveGeneratedDir,
@@ -82,19 +81,5 @@ describe("readPendingApproval — absent / empty", () => {
   it("returns null when the file is whitespace-only", () => {
     fs.writeFileSync(pendingApprovalPath(tmp), "  \n\t\n");
     expect(readPendingApproval(tmp)).toBeNull();
-  });
-});
-
-describe("clearPendingApproval", () => {
-  it("removes the staging file", () => {
-    writePendingApproval(tmp, "sess-1");
-    expect(readPendingApproval(tmp)).toBe("sess-1");
-    clearPendingApproval(tmp);
-    expect(readPendingApproval(tmp)).toBeNull();
-    expect(fs.existsSync(pendingApprovalPath(tmp))).toBe(false);
-  });
-
-  it("is a no-op (does not throw) when the file is already gone", () => {
-    expect(() => clearPendingApproval(tmp)).not.toThrow();
   });
 });

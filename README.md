@@ -54,8 +54,10 @@ still offer the risk gate (`full` and the wizard) and the reference
 policies (`solo` ships none). harness 1.0.0 removes all of these, so a new
 install should not adopt them.
 
-The `post-merge-gate` pack is already removed: a manifest that still
-names it loads with a warning and the entry is ignored.
+The `post-merge-gate`, `solution-acceptance` and
+`understanding-before-execution` packs are removed, and so is the
+`permission_profiles` key the last of them consumed: a manifest that still
+names one loads with a warning and the entry is ignored.
 
 ## Usage
 
@@ -84,7 +86,7 @@ operator controls are documented in
 - [`docs/risk-gate.md`](docs/risk-gate.md): the four-way `allow / warn / require_approval / deny` Risk Gate.
 - [`docs/writing-custom-policies.md`](docs/writing-custom-policies.md): tripwires, worked recipes, and the policy field reference.
 - [`docs/runtime-reality-hook.md`](docs/runtime-reality-hook.md): blocking destructive runtime commands when live process state has drifted from what the docs expect.
-- [`docs/policy-packs/README.md`](docs/policy-packs/README.md): the built-in policy packs (`understanding-before-execution`, `branch-protection`).
+- [`docs/policy-packs/README.md`](docs/policy-packs/README.md): the built-in policy pack (`branch-protection`).
 - [`docs/uninstall.md`](docs/uninstall.md): the single-command teardown, dry-run by default.
 - [`docs/examples/full-manifest.yaml`](docs/examples/full-manifest.yaml): a schema-coverage reference (not a runnable config; its header explains why).
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md): manifest schema, file layout, CLI surface (historical design intent; see its own note for the current shape).

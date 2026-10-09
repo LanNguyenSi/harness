@@ -237,9 +237,7 @@ function formatPackExpansionRuntimeSection(report: DoctorReport): string[] {
 }
 
 // Policy-pack hooks section (task ab634898): the hook-level `min_version`
-// floor on hooks a builtin policy pack contributes (understanding-gate's
-// UserPromptSubmit/Stop hooks, floored at 0.5.0, are the motivating
-// case). Distinct from the "Hooks" section above (which only walks
+// floor on hooks a builtin policy pack contributes. Distinct from the "Hooks" section above (which only walks
 // `manifest.hooks[]`, never the pack-expanded ones) and from "Policy
 // Packs" below (the pack-LEVEL `policy_packs[].min_version` floor).
 // Stays silent when there is nothing to report, same convention as

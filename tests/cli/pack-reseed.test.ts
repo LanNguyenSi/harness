@@ -12,10 +12,6 @@ import { init } from "../../src/cli/init/index.js";
 import { packAdd, packReseed } from "../../src/cli/pack/index.js";
 import { applyPackReseedUx } from "../../src/cli/pack/mutate.js";
 import { HarnessExitError } from "../../src/cli/exit-codes.js";
-import {
-  defaultProducers,
-  defaultUx,
-} from "../../src/policy-packs/builtin/understanding-before-execution.js";
 import { defaultUx as branchProtectionDefaultUx } from "../../src/policy-packs/builtin/branch-protection.js";
 import { STUB_NPM_BIN_EXEC_UNKNOWN as STUB_NPM_BIN_EXEC } from "../_helpers/npm-bin-exec.js";
 
@@ -42,24 +38,21 @@ describe("applyPackReseedUx (pure YAML mutator)", () => {
   it("overwrites config.ux while leaving sibling config keys untouched", () => {
     const yaml = `version: 1
 policy_packs:
-  - name: understanding-before-execution
+  - name: branch-protection
     source: builtin
     config:
-      mode: grill_me
+      protected_branches: [main]
       ux:
         cannot: old
         required:
           - old req
         run:
           - old run
-      approval_lifecycle:
-        max_age: 4h
 `;
-    const out = applyPackReseedUx(yaml, "understanding-before-execution", {
+    const out = applyPackReseedUx(yaml, "branch-protection", {
       ux: { cannot: "new", required: ["new req"], run: ["new run"] },
     });
-    expect(out).toContain("mode: grill_me");
-    expect(out).toContain("max_age: 4h");
+    expect(out).toContain("protected_branches: [main]");
     expect(out).toContain("cannot: new");
     expect(out).not.toContain("old req");
   });
@@ -85,33 +78,24 @@ policy_packs:
 });
 
 describe("packReseed", () => {
-  it("updates a stale ux.run to the shipped template, preserving mode + approval_lifecycle", async () => {
+  it("updates a stale config.ux to the shipped template, preserving sibling config keys", async () => {
     await packAdd(
       {
-        name: "understanding-before-execution",
+        name: "branch-protection",
         config: {
-          mode: "grill_me",
-          ux: {
-            cannot: "You cannot use write-capable tools yet.",
-            required: ["an approved Understanding Report for this session"],
-            run: [
-              "Run `harness approve understanding` once you have produced and confirmed an Understanding Report.",
-            ],
-          },
-          approval_lifecycle: { max_age: "4h" },
+          protected_branches: ["main"],
+          ux: { cannot: "stale", required: ["stale"], run: ["stale"] },
         },
       },
       { configPath: manifestPath },
     );
-    const r = await packReseed("understanding-before-execution", { configPath: manifestPath });
+    const r = await packReseed("branch-protection", { configPath: manifestPath });
     expect(r.applied).toBe(true);
-    expect(r.fieldsChanged).toEqual(["ux", "producers"]);
+    expect(r.fieldsChanged).toEqual(["ux"]);
     const m = readManifest();
     const cfg = m.policy_packs?.[0]?.["config"] as Record<string, unknown>;
-    expect(cfg["mode"]).toBe("grill_me");
-    expect(cfg["approval_lifecycle"]).toEqual({ max_age: "4h" });
-    expect(cfg["ux"]).toEqual(defaultUx("grill_me"));
-    expect(cfg["producers"]).toEqual(defaultProducers());
+    expect(cfg["protected_branches"]).toEqual(["main"]);
+    expect(cfg["ux"]).toEqual(branchProtectionDefaultUx());
   });
 
   it("is a no-op when config.ux already matches the shipped template", async () => {
@@ -124,18 +108,6 @@ describe("packReseed", () => {
     expect(r.applied).toBe(false);
     expect(r.fieldsChanged).toEqual([]);
     expect(fs.readFileSync(manifestPath)).toEqual(before);
-  });
-
-  it("reseeds against the pack's OWN configured mode, not a hardcoded one", async () => {
-    await packAdd(
-      { name: "understanding-before-execution", config: { mode: "strict" } },
-      { configPath: manifestPath },
-    );
-    const r = await packReseed("understanding-before-execution", { configPath: manifestPath });
-    expect(r.applied).toBe(true);
-    const m = readManifest();
-    const cfg = m.policy_packs?.[0]?.["config"] as Record<string, unknown>;
-    expect(cfg["ux"]).toEqual(defaultUx("strict"));
   });
 
   it("seeds config.ux when the pack declared none at all (explicit operator action, not auto-apply)", async () => {

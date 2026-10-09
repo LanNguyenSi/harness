@@ -454,8 +454,7 @@ function checkHookVersion(
 /**
  * Wraps a version probe with a per-full-argv cache, keyed on
  * `JSON.stringify(cmd)` so two commands sharing only `cmd[0]` (e.g.
- * `["understanding-gate", "--version"]` vs. `["understanding-gate",
- * "--check"]`) are never conflated into the same cache slot; only a
+ * `["some-bin", "--version"]` vs. `["some-bin", "--check"]`) are never conflated into the same cache slot; only a
  * byte-identical argv array is deduped. Exported standalone (task
  * ab634898) so this caching contract has its own focused
  * unit test independent of any particular pack's hook shape.
@@ -475,19 +474,15 @@ export function memoizeVersionProbe(
  * Hook-level `min_version` floor on policy-pack-expanded hooks (task
  * ab634898). `checkHooks` above only walks `manifest.hooks[]`, but the
  * hooks Claude Code actually runs also include whatever
- * `expandPolicyPacks` contributes, e.g. understanding-before-execution's
- * UserPromptSubmit/Stop hooks, floored at understanding-gate 0.5.0
- * (see `src/policy-packs/builtin/understanding-before-execution.ts`).
- * Those pack-expanded hooks never reached `checkHookVersion`, so an
- * operator on an older understanding-gate saw a clean doctor report
- * even though the pause wiring (or the Understanding Report's 10th
- * section) was silently degraded below the declared floor.
+ * `expandPolicyPacks` contributes when a pack hook declares its own
+ * `min_version` + `version_command`. Those pack-expanded hooks never
+ * reached `checkHookVersion`, so an operator below such a floor saw a
+ * clean doctor report.
  *
  * Reuses `checkHookVersion` verbatim so the warning wording matches the
  * manifest-hook case exactly. `versionProbe` is wrapped with a
- * per-command cache so two hooks that share one `version_command` (the
- * common case: user-prompt-submit and stop both probe
- * `understanding-gate --version`) spawn the underlying binary once, not
+ * per-command cache so two hooks that share one `version_command` (a pack whose hooks
+ * share one probe) spawn the underlying binary once, not
  * twice. Only below-floor / probe-failed / parse-failed results are
  * returned; a hook at or above its floor produces nothing, mirroring
  * the pack-level floor's "green ones produce nothing" contract
@@ -1169,8 +1164,7 @@ export async function doctor(opts: DoctorOptions = {}): Promise<DoctorReport> {
   // `selectRuntime` (recorded, inferred or default; `--target` is an
   // apply flag, not a doctor input). Pack expansion below uses it, so
   // doctor checks the hooks the machine actually gets (task 04b8abcf).
-  // A malformed `.last-apply` must not kill doctor (base doctor never read
-  // it unless the understanding pack was declared): fall back to the
+  // A malformed `.last-apply` must not kill doctor: fall back to the
   // default selection and warn, naming the file.
   let lastApplyRecord: ReturnType<typeof readLastApply> = null;
   let lastApplyWarning: string | undefined;

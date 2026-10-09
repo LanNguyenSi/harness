@@ -3,12 +3,7 @@
 // files, else the default), not always claude-code, and names it
 // (agent-tasks 04b8abcf).
 //
-// The runtime-following cases use `branch-protection` as the generic pack
-// fixture: it declares no version probe, so nothing in the
-// packExpansionRuntime surface depends on the understanding-gate pack.
-// The assertions that DO need the understanding-gate hook-level version
-// floor live in the UG-specific describe at the bottom and are removed
-// with that pack.
+// The cases use `branch-protection` as the generic pack fixture.
 
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -47,20 +42,12 @@ function makeHome(policyPacks: unknown[] = [{ name: "branch-protection" }]): {
   return { home, configPath };
 }
 
-function makeUgHome(): { home: string; configPath: string } {
-  return makeHome([{ name: "understanding-before-execution" }]);
-}
-
-// understanding-gate below the 0.5.0 floor the claude-code hooks declare.
-const BELOW_FLOOR = () => "understanding-gate 0.4.11";
-
 async function runDoctor(configPath: string) {
   return doctor({
     configPath,
     shallow: true,
     pathEnv: "",
     npmBinExec: STUB_NPM_BIN_EXEC_UNKNOWN,
-    versionProbe: BELOW_FLOOR,
   });
 }
 
@@ -131,50 +118,5 @@ describe("doctor: pack expansion runtime follows the runtime apply selects", () 
     const clean = makeHome([]);
     const cleanReport = await runDoctor(clean.configPath);
     expect(report.warningCount).toBe(cleanReport.warningCount + 1);
-  });
-});
-
-// UG-specific: these assertions need the understanding-gate hook-level
-// version floor (the claude-code hooks of the
-// `understanding-before-execution` pack declare a 0.5.0 floor, the codex
-// ones declare none) to be falsifiable at all; with any probe-less pack
-// `policyPackHookVersions` is trivially empty. They are deleted together
-// with the pack.
-describe("doctor - policyPackHookVersions follows the expansion runtime (UG-specific)", () => {
-  it("UG floor gap: a codex-expansion machine reports no hook floor gap at all", async () => {
-    const { home, configPath } = makeUgHome();
-    await apply({ homeDir: home, configPath, runtime: "codex" });
-
-    const report = await runDoctor(configPath);
-    // The codex hooks declare no understanding-gate floor, so the gap the
-    // claude-code expansion reports is not a finding on this machine.
-    expect(report.policyPackHookVersions).toHaveLength(0);
-    expect(format(report)).not.toContain("Policy-pack hooks");
-  });
-
-  it("UG floor gap: a claude-code-recorded machine keeps reporting it", async () => {
-    const { home, configPath } = makeUgHome();
-    await apply({ homeDir: home, configPath, runtime: "claude-code" });
-
-    const report = await runDoctor(configPath);
-    expect(report.policyPackHookVersions.length).toBeGreaterThanOrEqual(1);
-  });
-
-  it("UG floor gap: never applied, the default claude-code expansion reports it", async () => {
-    const { configPath } = makeUgHome();
-    const report = await runDoctor(configPath);
-    expect(report.policyPackHookVersions.length).toBeGreaterThanOrEqual(1);
-  });
-
-  it("UG floor gap: an inferred codex expansion (record without a runtime field) reports none", async () => {
-    const { home, configPath } = makeUgHome();
-    await apply({ homeDir: home, configPath, runtime: "codex" });
-    const generatedDir = path.join(home, "harness.generated");
-    const record = readLastApply(generatedDir)!;
-    const { runtime: _dropped, ...withoutRuntime } = record;
-    writeLastApply(generatedDir, withoutRuntime as typeof record);
-
-    const report = await runDoctor(configPath);
-    expect(report.policyPackHookVersions).toHaveLength(0);
   });
 });

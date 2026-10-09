@@ -4,20 +4,19 @@ import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { GENERATED_DIRNAME, resolveGeneratedDir } from "../../src/io/generated-dir.js";
 import { signingKeyEnvValue } from "../../src/cli/apply/generate-settings.js";
-import { getOrCreateSigningKey } from "../../src/runtime/approval-signing.js";
+import { signingKeyPathFor } from "../../src/runtime/approval-signing.js";
 
 // Task 8254e357: resolveGeneratedDir normalizes exactly once (expandHome +
 // path.resolve) so every consumer (apply's mkdirSync, approval-signing's
 // key writer, adopt, doctor, the signing-key env projection) agrees on the
 // same real path for a non-absolute or tilde `generatedDir`.
 
-// The real cwd this test file runs from (before any process.chdir()).
-// `getOrCreateSigningKey` on the failure path (normalization dropped or
-// broken) writes a real key file under `<cwd>/~/...` when a caller passes
-// it a raw, un-normalized tilde path (review round R1 caught exactly this
+// The real cwd this test file runs from (before any process.chdir()). A
+// caller handing a raw, un-normalized tilde path to a writer would create a
+// directory named `~` under the cwd (review round R1 caught exactly this
 // leftover directory in the repo). Every tilde-bearing test below chdirs
-// into an isolated tmp dir before calling it, and this guard confirms the
-// pollution stays contained there instead of leaking into the repo cwd.
+// into an isolated tmp dir, and this guard confirms nothing leaks into the
+// repo cwd.
 const REAL_CWD = process.cwd();
 
 let tmp: string;
@@ -108,8 +107,8 @@ describe("resolveGeneratedDir normalization", () => {
   });
 });
 
-describe("round-trip: projected env value matches the real key-file location", () => {
-  it("'~/x' homeDir: signingKeyEnvValue and the real writer agree", () => {
+describe("round-trip: projected env value matches the key-file location", () => {
+  it("'~/x' homeDir: signingKeyEnvValue and signingKeyPathFor agree on an absolute path", () => {
     const cwdBefore = process.cwd();
     process.chdir(tmp);
     try {
@@ -119,15 +118,15 @@ describe("round-trip: projected env value matches the real key-file location", (
         userHome: tmp,
       });
       const projectedEnvPath = signingKeyEnvValue(generatedDir);
-      const handle = getOrCreateSigningKey(generatedDir);
-      expect(handle.filePath).toBe(projectedEnvPath);
-      expect(fs.existsSync(projectedEnvPath)).toBe(true);
+      expect(projectedEnvPath).toBe(signingKeyPathFor(generatedDir));
+      expect(path.isAbsolute(projectedEnvPath)).toBe(true);
+      expect(projectedEnvPath.startsWith("~")).toBe(false);
     } finally {
       process.chdir(cwdBefore);
     }
   });
 
-  it("'rel/x' homeDir: signingKeyEnvValue and the real writer agree", () => {
+  it("'rel/x' homeDir: signingKeyEnvValue and signingKeyPathFor agree on an absolute path", () => {
     const cwdBefore = process.cwd();
     process.chdir(tmp);
     try {
@@ -136,9 +135,9 @@ describe("round-trip: projected env value matches the real key-file location", (
         manifestPath: "/elsewhere/harness.yaml",
       });
       const projectedEnvPath = signingKeyEnvValue(generatedDir);
-      const handle = getOrCreateSigningKey(generatedDir);
-      expect(handle.filePath).toBe(projectedEnvPath);
-      expect(fs.existsSync(projectedEnvPath)).toBe(true);
+      expect(projectedEnvPath).toBe(signingKeyPathFor(generatedDir));
+      expect(path.isAbsolute(projectedEnvPath)).toBe(true);
+      expect(projectedEnvPath.startsWith("~")).toBe(false);
     } finally {
       process.chdir(cwdBefore);
     }
@@ -159,8 +158,8 @@ describe("round-trip: projected env value matches the real key-file location", (
         manifestPath: "/elsewhere/harness.yaml",
       });
       expect(second).toBe(first);
-      const handle = getOrCreateSigningKey(second);
-      expect(signingKeyEnvValue(second)).toBe(handle.filePath);
+      expect(signingKeyEnvValue(second)).toBe(signingKeyPathFor(second));
+      expect(signingKeyEnvValue(second)).toBe(signingKeyEnvValue(first));
     } finally {
       process.chdir(cwdBefore);
     }

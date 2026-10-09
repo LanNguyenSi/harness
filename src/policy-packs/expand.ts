@@ -16,28 +16,20 @@
 // re-parse if a caller re-validates.
 
 import type { Manifest } from "../schema/index.js";
-import type { ResolvePackOptions } from "./builtin/understanding-before-execution.js";
 import { resolveBuiltin } from "./registry.js";
 import { DEFAULT_RUNTIME, type Runtime } from "./runtime.js";
 import { parsePackSource } from "./source.js";
-import type { PackExpansionResult, PackPermissionsContribution } from "./types.js";
-
-export type ExpandPolicyPacksOptions = ResolvePackOptions;
+import type { PackExpansionResult } from "./types.js";
 
 export function expandPolicyPacks(
   manifest: Manifest,
   runtime: Runtime = DEFAULT_RUNTIME,
-  opts: ExpandPolicyPacksOptions = {},
 ): PackExpansionResult {
   const out: PackExpansionResult = { hooks: [], files: [], warnings: [], skipped: [] };
   if (manifest.policy_packs.length === 0) return out;
 
   const existingHookNames = new Set(manifest.hooks.map((h) => h.name));
   const seenPackHookNames = new Set<string>();
-  const allowSet = new Set<string>();
-  const askSet = new Set<string>();
-  const denySet = new Set<string>();
-  let anyPermissions = false;
 
   for (const pack of manifest.policy_packs) {
     if (!pack.enabled) {
@@ -53,7 +45,7 @@ export function expandPolicyPacks(
       );
       continue;
     }
-    const resolved = resolveBuiltin(pack, runtime, opts);
+    const resolved = resolveBuiltin(pack, runtime);
     if (!resolved) {
       out.warnings.push(
         `policy_packs[${pack.name}]: not a known builtin pack; skipping. See docs/policy-packs/ for supported names.`,
@@ -78,33 +70,6 @@ export function expandPolicyPacks(
       out.hooks.push(hook);
     }
     out.files.push(...resolved.contribution.files);
-    if (resolved.contribution.permissions) {
-      anyPermissions = true;
-      for (const p of resolved.contribution.permissions.allow) allowSet.add(p);
-      for (const p of resolved.contribution.permissions.ask) askSet.add(p);
-      for (const p of resolved.contribution.permissions.deny) denySet.add(p);
-    }
-  }
-
-  if (anyPermissions) {
-    // Deny wins over ask wins over allow at merge time: a stricter
-    // intent from any pack should not be silently relaxed by a more
-    // permissive sibling. Concretely, a pattern present in deny is
-    // stripped from ask + allow; a pattern present in ask is stripped
-    // from allow.
-    for (const p of denySet) {
-      askSet.delete(p);
-      allowSet.delete(p);
-    }
-    for (const p of askSet) {
-      allowSet.delete(p);
-    }
-    const permissions: PackPermissionsContribution = {
-      allow: [...allowSet].sort(),
-      ask: [...askSet].sort(),
-      deny: [...denySet].sort(),
-    };
-    out.permissions = permissions;
   }
 
   return out;

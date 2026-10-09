@@ -1,12 +1,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import {
-  checkPolicyPackConfigs,
-  checkPolicyPackSources,
-  KNOWN_RUNTIMES,
-  resolveBuiltin,
-} from "../../policy-packs/index.js";
+import { checkPolicyPackConfigs, checkPolicyPackSources } from "../../policy-packs/index.js";
 import { expandHome } from "../../io/expand-home.js";
 import { parseProbedVersion, compareVersionFloor } from "../../io/version-compare.js";
 import {
@@ -15,16 +10,6 @@ import {
   shippedOperatorOnlyPolicyNames,
 } from "../init/templates.js";
 import { isPolicyInterceptCommand, requiredHookBudgetMs } from "../policy/intercept.js";
-import { PACK_NAME as UNDERSTANDING_BEFORE_EXECUTION_PACK_NAME } from "../../policy-packs/builtin/understanding-before-execution.js";
-import {
-  isMeasuredPermissionModeFor,
-  measuredPermissionModeLiteralsFor,
-  type MeasuredHarness,
-} from "../../policy-packs/builtin/understanding-before-execution/measured-permission-modes.js";
-import {
-  AUTO_APPROVE_HARNESS_VALUES,
-  DEFAULT_AUTO_APPROVE_HARNESSES,
-} from "../../policy-packs/builtin/understanding-before-execution/auto-approve.js";
 import type { Hook, Manifest } from "../../schema/index.js";
 import { DEFAULT_SAFE_DELETION_ROOTS } from "../../schema/risk.js";
 import {
@@ -982,110 +967,16 @@ export function checkTriggerBoundaryDrift(manifest: Manifest): Diagnostic[] {
 // defeating the deny-degraded fix (task f1aea826) on exactly the hang
 // shape it exists to close.
 //
-// Two hook populations are checked, both GENERICALLY — unlike
-// tests/runtime/hook-budget-ledger-margin.test.ts's pre-d20a7e0c version,
-// which hand-imported three specific pack modules and pinned a hardcoded
-// 15000ms floor instead of scaling with the manifest's own
-// health.timeout_ms:
-//   1. `manifest.hooks[]` entries that invoke `harness policy intercept`
-//      (recognised via `isPolicyInterceptCommand`, robust to how the
-//      operator or a local build spells the leading token — see that
-//      function's own doc comment for why a verbatim string compare
-//      under-recognises real manifests).
-//   2. Every hook an ENABLED `manifest.policy_packs[]` entry resolves to,
-//      for every runtime `harness apply` can target (`KNOWN_RUNTIMES`) —
-//      iterating whichever packs the operator actually has enabled
-//      through the shared `resolveBuiltin` registry lookup, not a
-//      hand-maintained list of specific pack modules. Only the subset
-//      whose command names one of the LEDGER_CONSULTING_PACK_SUBCOMMANDS
-//      below is checked: `pack hook branch-protection` left this list
-//      with task a4d8adc5: it asks git for the branch and makes no ledger
-//      round-trip, so its budget is not tied to the ledger's timeout.
-const LEDGER_CONSULTING_PACK_SUBCOMMANDS = [
-  "pack hook pre-tool-use",
-  "pack hook codex-pre-tool-use",
-] as const;
-
-function escapeRegExp(s: string): string {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-/**
- * Does `command` invoke `subcommand` as adjacent, whitespace-separated
- * tokens, regardless of a leading interpreter/env-var prefix or a
- * trailing flag? Mirrors `isPolicyInterceptCommand`'s own reasoning
- * (src/cli/policy/intercept.ts) for the pack-hook subcommand names,
- * which that function does not itself cover (it only recognises `policy
- * intercept`).
- *
- * Trailing-boundary note (review 2026-08-09, fix round 1, finding 3):
- * `isPolicyInterceptCommand` widened ITS trailing boundary to also accept
- * a semicolon/quote glued directly onto the subcommand word, because it
- * classifies OPERATOR-authored `manifest.hooks[]` commands. This
- * function's callers only ever see the exact, harness-generated pack
- * command strings (`BLOCKER_COMMAND` constants in the
- * `src/policy-packs/builtin/*.ts` sources) — a fixed, known set this
- * codebase controls byte-for-byte — so the narrower whitespace-or-end
- * boundary here is deliberately left as is rather than mirrored; there is
- * no operator-authored input on this path for a glued shell metacharacter
- * to appear in.
- */
-function commandInvokesSubcommand(command: string, subcommand: string): boolean {
-  const pattern = subcommand.split(/\s+/).map(escapeRegExp).join("\\s+");
-  return new RegExp(`(?:^|[\\s/\\\\])${pattern}(?:\\s|$)`).test(command);
-}
-
-function isLedgerConsultingPackCommand(command: string): boolean {
-  return LEDGER_CONSULTING_PACK_SUBCOMMANDS.some((s) => commandInvokesSubcommand(command, s));
-}
-
-/**
- * A ledger-consulting blocking hook, tagged with the shape of ledger
- * traffic it actually performs — used only to pick the right explanatory
- * text in `checkHookBudgetLedgerMargin`'s diagnostic message below, never
- * to change the numeric threshold (`required` stays the same
- * `requiredHookBudgetMs(health.timeout_ms)` floor for every hook here;
- * see that message's own comment for why a per-kind lower bound isn't
- * derived instead).
- */
-interface LedgerConsultingHook {
-  hook: Hook;
-  /**
-   * True for a direct `manifest.hooks[]` entry invoking `harness policy
-   * intercept` — the ledger client whose `query()` + deny-degraded
-   * `record()` retry `requiredHookBudgetMs`'s 2T+3R is actually derived
-    * from. False for a pack-contributed blocker (until task 7890cd34
-    * these were `hook-codex-pre-tool-use.ts` / `hook-pre-tool-use.ts`),
-    * which only ever calls
-    * `queryLedgerByTag` (open session, one `querySummary`, dispose), never
-    * `ledger_add`, so it has no
-   * deny-degraded audit-retry step of its own and its real worst case is
-   * bounded at up to 2×timeout_ms, not 2T+3R.
-   */
-  isPolicyInterceptHook: boolean;
-}
-
-function collectLedgerConsultingBlockingHooks(manifest: Manifest): LedgerConsultingHook[] {
-  const direct: LedgerConsultingHook[] = manifest.hooks
-    .filter((h) => h.blocking === "hard" && isPolicyInterceptCommand(h.command))
-    .map((hook) => ({ hook, isPolicyInterceptHook: true }));
-  const fromPacks: LedgerConsultingHook[] = [];
-  for (const pack of manifest.policy_packs) {
-    if (!pack.enabled) continue;
-    for (const runtime of KNOWN_RUNTIMES) {
-      const resolved = resolveBuiltin(pack, runtime);
-      // Unresolvable packs (unknown source / unknown builtin name) are
-      // already flagged separately by checkPolicyPacks; nothing to
-      // classify here.
-      if (!resolved) continue;
-      for (const hook of resolved.contribution.hooks) {
-        if (hook.blocking === "hard" && isLedgerConsultingPackCommand(hook.command)) {
-          fromPacks.push({ hook, isPolicyInterceptHook: false });
-        }
-      }
-    }
-  }
-  return [...direct, ...fromPacks];
+// The checked population is the `manifest.hooks[]` entries that invoke
+// `harness policy intercept` (recognised via `isPolicyInterceptCommand`,
+// robust to how the operator or a local build spells the leading token, see
+// that function's own doc comment for why a verbatim string compare
+// under-recognises real manifests). No builtin pack contributes a
+// ledger-consulting blocker any more: `pack hook branch-protection` asks git
+// for the branch and makes no ledger round-trip, so its budget is not tied to
+// the ledger's timeout.
+function collectLedgerConsultingBlockingHooks(manifest: Manifest): Hook[] {
+  return manifest.hooks.filter((h) => h.blocking === "hard" && isPolicyInterceptCommand(h.command));
 }
 
 export function checkHookBudgetLedgerMargin(manifest: Manifest): Diagnostic[] {
@@ -1093,62 +984,28 @@ export function checkHookBudgetLedgerMargin(manifest: Manifest): Diagnostic[] {
     (m) => m.name === "grounding-mcp" && m.enabled !== false,
   );
   // No wired producer: `harness policy intercept` falls back to the
-  // instant `degradedLedgerClient` (no subprocess, no wait), and a pack
-  // blocker with no grounding-mcp entry to query is a separate,
-  // already-reported misconfiguration (checkPolicyGroundingMcp). No live
+  // instant `degradedLedgerClient` (no subprocess, no wait). No live
   // ledger round-trip exists here for a margin to protect.
   if (!grounding) return [];
   const ledgerTimeoutMs = grounding.health?.timeout_ms ?? 5000;
   const required = requiredHookBudgetMs(ledgerTimeoutMs);
-  const seen = new Set<string>();
   const diags: Diagnostic[] = [];
-  for (const entry of collectLedgerConsultingBlockingHooks(manifest)) {
-    const { hook, isPolicyInterceptHook } = entry;
-    // Both KNOWN_RUNTIMES resolutions of an enabled pack commonly yield a
-    // hook with the same (name, budget_ms) pair — only the match/command
-    // wording differs per runtime. De-dupe so one misconfigured budget
-    // is reported once, not twice.
-    const key = `${hook.name}:${hook.budget_ms}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
+  for (const hook of collectLedgerConsultingBlockingHooks(manifest)) {
     if (hook.budget_ms >= required) continue;
-    const preamble =
+    const message =
       `hook "${hook.name}" carries budget_ms=${hook.budget_ms}, below the ${required}ms this ` +
       `manifest's grounding-mcp health.timeout_ms=${ledgerTimeoutMs}ms requires (2×timeout_ms ` +
       `+ 3× the deny-degraded audit-retry budget — see requiredHookBudgetMs in ` +
-      `src/cli/policy/intercept.ts for the derivation`;
-    let message: string;
-    if (isPolicyInterceptHook) {
-      message =
-        `${preamble}, INCLUDING that function's "KNOWN RESIDUAL" paragraph: clearing ${required}ms ` +
-        `only guarantees the fail-closed verdict on the pure-timeout hang shape, not on a ledger ` +
-        `query that errors non-timeout and then hangs on the audit write). A merely SLOW (not even ` +
-        `hard-down) ledger can get this blocking hook killed by the runtime's outer hook timeout ` +
-        `before its fail-closed deny JSON reaches stdout — both Claude Code and Codex then read the ` +
-        `kill as allow, defeating the deny-degraded fix (task f1aea826) on exactly this hang shape. ` +
-        `Raise budget_ms to at least ${required}, or lower tools.mcp.grounding-mcp.health.timeout_ms ` +
-        `(which lowers this requirement too, at the cost of a stricter ledger-latency budget); see ` +
-        `docs/okf/gate-fail-posture-matrix.md.`;
-    } else {
-      // Pack-contributed blocker: only queries the ledger (no ledger_add,
-      // no deny-degraded audit retry of its own), so the 2T+3R floor
-      // above is a deliberately conservative carryover from the direct
-      // `harness policy intercept` threshold, not this hook's own
-      // derived worst case (which is bounded at up to 2×timeout_ms for
-      // the query alone) — kept uniform rather than a separately-tested,
-      // lower per-kind bound (review 2026-08-09, fix round 1, finding 2).
-      const consequence =
-        `a merely SLOW (not even hard-down) ledger can still get this hook killed by the runtime's ` +
-        `outer hook timeout before it can even complete that query, defeating its own fail-closed ` +
-        `default on exactly this hang shape`;
-      message =
-        `${preamble}). This pack-contributed hook only QUERIES the ledger (queryLedgerByTag: open ` +
-        `session, one querySummary, dispose) — it never calls ledger_add, so it has no ` +
-        `deny-degraded audit-retry step of its own; ${consequence}. Raise budget_ms to at least ` +
-        `${required}, or lower tools.mcp.grounding-mcp.health.timeout_ms (which lowers this ` +
-        `requirement too, at the cost of a stricter ledger-latency budget); see ` +
-        `docs/okf/gate-fail-posture-matrix.md.`;
-    }
+      `src/cli/policy/intercept.ts for the derivation, INCLUDING that function's "KNOWN RESIDUAL" ` +
+      `paragraph: clearing ${required}ms ` +
+      `only guarantees the fail-closed verdict on the pure-timeout hang shape, not on a ledger ` +
+      `query that errors non-timeout and then hangs on the audit write). A merely SLOW (not even ` +
+      `hard-down) ledger can get this blocking hook killed by the runtime's outer hook timeout ` +
+      `before its fail-closed deny JSON reaches stdout — both Claude Code and Codex then read the ` +
+      `kill as allow, defeating the deny-degraded fix (task f1aea826) on exactly this hang shape. ` +
+      `Raise budget_ms to at least ${required}, or lower tools.mcp.grounding-mcp.health.timeout_ms ` +
+      `(which lowers this requirement too, at the cost of a stricter ledger-latency budget); see ` +
+      `docs/okf/gate-fail-posture-matrix.md.`;
     diags.push({
       severity: "error",
       path: `hooks[${hook.name}].budget_ms`,
@@ -1194,83 +1051,6 @@ function checkPolicyPackConfigsAsDiagnostics(manifest: Manifest): Diagnostic[] {
   });
 }
 
-// Slice 2 AC 3 (docs/decisions/2026-08-27-ug-auto-mode-approval.md): every
-// literal in `understanding-before-execution`'s `auto_approve.when` must be
-// backed by a checked-in dogfood fixture that shows a LISTED harness
-// emitting that exact `permission_mode` value; see
-// `src/policy-packs/builtin/understanding-before-execution/measured-permission-modes.ts`
-// for the registry and the sync test that keeps it honest against the
-// fixtures. `auto_approve.harnesses` (round-2 review finding) scopes WHICH
-// harnesses' evidence counts: a literal measured only for Claude Code is
-// not evidence Codex ever emits it, so this check is per-listed-harness,
-// not "any harness anywhere". Runs independently of
-// `checkPolicyPackConfigsAsDiagnostics` (the zod schema check above
-// already reports shape errors for a malformed `auto_approve` block): it
-// only inspects `when` when it is an array whose entries are all strings,
-// it leaves empty-string entries to the schema check (`min(1)`), and it
-// leaves a malformed `harnesses` (not an array, non-string/unknown/
-// duplicate entries) to the same schema check rather than reporting from
-// here, so the two never report the same literal twice and this check
-// never throws on a malformed config. Disabled packs (`enabled: false`)
-// are skipped on purpose, the same way `checkPolicyPacks` skips them: a
-// pack that contributes no hooks has no allowlist to enforce.
-function listedAutoApproveHarnesses(
-  autoApprove: Record<string, unknown>,
-): MeasuredHarness[] | null {
-  const raw = autoApprove["harnesses"];
-  if (raw === undefined) {
-    return [...DEFAULT_AUTO_APPROVE_HARNESSES] as MeasuredHarness[];
-  }
-  if (!Array.isArray(raw) || raw.length === 0) return null;
-  const harnesses: MeasuredHarness[] = [];
-  for (const entry of raw) {
-    if (
-      typeof entry !== "string" ||
-      !(AUTO_APPROVE_HARNESS_VALUES as readonly string[]).includes(entry) ||
-      harnesses.includes(entry as MeasuredHarness)
-    ) {
-      return null;
-    }
-    harnesses.push(entry as MeasuredHarness);
-  }
-  return harnesses;
-}
-
-function checkUnderstandingBeforeExecutionAutoApproveMeasured(
-  manifest: Manifest,
-): Diagnostic[] {
-  const diags: Diagnostic[] = [];
-  manifest.policy_packs.forEach((pack, packIndex) => {
-    if (!pack.enabled) return;
-    if (pack.name !== UNDERSTANDING_BEFORE_EXECUTION_PACK_NAME) return;
-    const config = pack.config as Record<string, unknown> | undefined;
-    const autoApprove = config?.["auto_approve"];
-    if (typeof autoApprove !== "object" || autoApprove === null) return;
-    const autoApproveObj = autoApprove as Record<string, unknown>;
-    const when = autoApproveObj["when"];
-    if (!Array.isArray(when)) return;
-    if (!when.every((literal) => typeof literal === "string")) return;
-    const listedHarnesses = listedAutoApproveHarnesses(autoApproveObj);
-    if (listedHarnesses === null) return;
-    when.forEach((literal: string, literalIndex: number) => {
-      if (literal.length === 0) return;
-      if (listedHarnesses.some((harness) => isMeasuredPermissionModeFor(literal, harness))) return;
-      const measuredParts = listedHarnesses
-        .map((harness) => `measured for ${harness}: ${measuredPermissionModeLiteralsFor(harness).join(", ")}`)
-        .join("; ");
-      diags.push({
-        severity: "error",
-        path: `policy_packs[${packIndex}].config.auto_approve.when[${literalIndex}]`,
-        message:
-          `auto_approve.when literal "${literal}" has no checked-in dogfood fixture showing ` +
-          `${listedHarnesses.join(" or ")} emitting it (${measuredParts}); see ` +
-          `docs/decisions/2026-08-27-ug-auto-mode-approval.md, Slice 2`,
-      });
-    });
-  });
-  return diags;
-}
-
 export function runAssetChecks(
   manifest: Manifest,
   opts: CheckOptions = {},
@@ -1285,7 +1065,6 @@ export function runAssetChecks(
     ...checkPolicyGroundingMcp(manifest),
     ...checkPolicyPacks(manifest),
     ...checkPolicyPackConfigsAsDiagnostics(manifest),
-    ...checkUnderstandingBeforeExecutionAutoApproveMeasured(manifest),
     ...checkPolicyRiskWithoutEnvScope(manifest),
     ...checkSafeDeletionRootsSyntax(manifest),
     ...checkPolicySelfAttestation(manifest),

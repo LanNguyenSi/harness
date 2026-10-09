@@ -23,8 +23,8 @@ export interface PolicyPackConfigIssue {
   packIndex: number;
   packName: string;
   /**
-   * Dotted path inside `pack.config`, e.g. `mode`, `approval_lifecycle.mode`,
-   * `permission_profile`. Empty string means the issue applies to the
+   * Dotted path inside `pack.config`, e.g. `protected_branches`, `ux.cannot`,
+   * `protected_branches[1]`. Empty string means the issue applies to the
    * config object itself (e.g. a wholly non-object value).
    */
   configPath: string;

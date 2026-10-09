@@ -4,7 +4,6 @@ import { GroundingSchema } from "./grounding.js";
 import { HooksSchema } from "./hooks.js";
 import { MemorySchema } from "./memory.js";
 import { PoliciesSchema } from "./policies.js";
-import { PermissionProfilesSchema } from "./permission-profiles.js";
 import { PolicyPacksSchema } from "./policy-packs.js";
 import { RiskSchema } from "./risk.js";
 import { ToolsSchema } from "./tools.js";
@@ -36,7 +35,6 @@ export const ManifestSchema = z
     // See docs/risk-gate.md.
     risk: RiskSchema.default({}),
     environments: EnvironmentsSchema.default({}),
-    permission_profiles: PermissionProfilesSchema.default({}),
     workflows: WorkflowsSchema.default([]),
     review_templates: ReviewTemplatesSchema.default({}),
     audit: AuditSchema.default({}),
@@ -157,7 +155,6 @@ export * from "./grounding.js";
 export * from "./tools.js";
 export * from "./memory.js";
 export * from "./hooks.js";
-export * from "./permission-profiles.js";
 export * from "./policies.js";
 export * from "./policy-packs.js";
 export * from "./risk.js";
