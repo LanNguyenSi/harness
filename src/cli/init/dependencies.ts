@@ -3,7 +3,7 @@
 //
 // Why this module exists: the wizard's templates reference binaries
 // (`memory-router-user-prompt-submit`, `grounding-mcp`, `agent-tasks-
-// mcp-bridge`, `understanding-gate-claude-hook`, etc.) that must be on
+// mcp-bridge`, etc.) that must be on
 // PATH for the resulting manifest to pass `harness doctor`. Before this
 // module, the wizard wrote a manifest and walked away, leaving the
 // operator to discover the missing binaries via doctor errors. Now the
@@ -30,8 +30,7 @@ import type { CustomSelection } from "./composer.js";
  * resolve through PATH; `npmPackage` is the package we install if the
  * binary is missing. A single npm package can ship several binaries —
  * we list them all so that a partial install still reads as "complete"
- * for whichever binaries we depend on (e.g. understanding-gate ships
- * three hook adapters; the manifest only wires two of them).
+ * for whichever binaries we depend on.
  *
  * `minVersion` is informational only today (rendered in the wizard's
  * dependency table next to the package name) so operators see the
@@ -59,26 +58,6 @@ export const PROFILE_DEPENDENCIES: Record<Exclude<ProfileChoice, "custom">, Prof
       // Mirrors the FULL_TEMPLATE memory.router min_version floor (the
       // `--version` short-circuit harness doctor expects landed in 0.3.0).
       minVersion: "0.3.0",
-    },
-    {
-      binary: "understanding-gate-claude-hook",
-      npmPackage: "@lannguyensi/understanding-gate",
-      description: "understanding gate (UserPromptSubmit injector)",
-      // 0.4.0 added the required "Prior Art" 10th section of the
-      // Understanding Report (agent-grounding PR #85, harness task
-      // 798d7173). The matching hook-level floor in
-      // `understanding-before-execution.ts` is also 0.4.0; pin the
-      // wizard's suggested install version to the same floor so a fresh
-      // install never trips the floor mid-doctor. Prior history: 0.3.1
-      // was the cli-version-fix floor (agent-grounding PRs #80 + #81);
-      // 0.3.0 added parser-side fast_confirm support (#78).
-      minVersion: "0.4.0",
-    },
-    {
-      binary: "understanding-gate-claude-stop",
-      npmPackage: "@lannguyensi/understanding-gate",
-      description: "understanding gate (Stop capture)",
-      minVersion: "0.4.0",
     },
   ],
   team: [
@@ -217,12 +196,6 @@ export function dependenciesForCustom(sel: CustomSelection): ProfileDependency[]
     seen.add(dep.binary);
     chain.push(dep);
   };
-  // Pack → understanding-gate adapters (mirrors PROFILE_DEPENDENCIES.solo).
-  if (sel.packs.includes("understanding-before-execution")) {
-    for (const dep of PROFILE_DEPENDENCIES.solo) {
-      if (dep.binary.startsWith("understanding-gate-")) push(dep);
-    }
-  }
   // MCPs → their bridges / bins. codebase-oracle is treated as a
   // first-class dep here even though FULL_TEMPLATE deliberately omits
   // it (the doc-table reasoning is that its setup cost is too high for

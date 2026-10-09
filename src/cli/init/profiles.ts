@@ -3,10 +3,10 @@
 // Two opinionated starting manifests that go beyond the bare `minimal`
 // template but stay smaller than `full`:
 //
-//   solo: memory-router + understanding-before-execution policy pack.
-//         Single-operator setup that wires the recurring "make me
-//         defend my interpretation before I touch anything write-
-//         capable" gate without dragging in the agent-tasks loop.
+//   solo: memory-router + branch-protection policy pack.
+//         Single-operator setup that refuses Write/Edit on a protected
+//         branch (master, main, develop) without dragging in the
+//         agent-tasks loop.
 //
 //   team: solo + agent-tasks MCP server + the merge-gate policies.
 //           Adds the merge gates that require a recorded review for the
@@ -20,26 +20,14 @@
 // `~/.claude/...`); operators on a different layout should override via
 // `~/.harness/machines/<host>.harness.overrides.yaml` (ARCHITECTURE §8).
 
-// D-004 (task 8f637efd, docs/decisions/2026-08-27-ug-auto-mode-approval.md,
-// "Amendment: install default"): the shipped `auto_approve` block, read
-// from the one canonical renderer FULL_TEMPLATE also uses, so the three
-// templates cannot drift on the snippet's shape or wording. See
-// auto-approve-default.ts for the rationale.
-import { renderAutoApproveSnippet } from "../../policy-packs/builtin/understanding-before-execution-runtime.js";
-
-// Both templates below nest `auto_approve:` at 6 spaces, a sibling of
-// `mode:` / `approval_lifecycle:` under the pack's `config:` key.
-const AUTO_APPROVE_SNIPPET = renderAutoApproveSnippet(6);
-
 export const SOLO_TEMPLATE = `# ~/.harness/harness.yaml (legacy: ~/.claude/harness.yaml)
 #
 # Bootstrapped by \`harness init --template solo\`.
 #
 # Single-operator profile: memory-router for cross-conversation memory
-# routing + understanding-before-execution policy pack to force an
-# explicit interpretation confirmation before any write-capable tool
-# fires. No agent-tasks loop (use --template team if you want PR
-# review-gating).
+# routing + branch-protection policy pack that refuses Write/Edit while
+# git names a protected branch (master, main, develop). No agent-tasks
+# loop (use --template team if you want PR review-gating).
 #
 # INTENTIONAL (operator decision 2026-08-08, task adf037c1): this profile
 # does NOT carry the full template's operator_only kill-switch policies
@@ -87,47 +75,27 @@ memory:
     allowed: [project, user]
 
 policy_packs:
-  - name: understanding-before-execution
+  - name: branch-protection
     source: builtin
     enabled: true
-    description: Force agents to expose their task interpretation and wait for explicit human approval before any write-capable tool fires.
+    description: Block Write/Edit on protected branches (master, main, develop) at the first source mutation.
     config:
-      mode: grill_me
-      # ux (agent-tasks/60bc93e5): replaces the legacy engine-vocabulary
-      # deny envelope with the plain-language { cannot, required, run }
-      # shape. Engine details still land in stderr for operator audit;
-      # the agent only sees this.
+      # ux (agent-tasks/9806d4f8): replaces the default
+      # "branch-protection: refusing ..." text with the plain-language
+      # { cannot, required, run } shape. Engine details (the directory
+      # git was asked about) stay on stderr for operator audit.
       #
-      # KEEP IN SYNC (task 68b9ad9c): this text must match
-      # defaultUx("grill_me") in
-      # src/policy-packs/builtin/understanding-before-execution.ts — that
-      # function is what \`harness pack reseed\` / \`harness doctor\`'s
-      # divergence warning treat as "the shipped template". Pinned by
+      # KEEP IN SYNC (task 68b9ad9c): this text must match defaultUx() in
+      # src/policy-packs/builtin/branch-protection.ts — that function is
+      # what \`harness pack reseed\` and \`harness doctor\`'s divergence
+      # warning treat as \"the shipped template\". Pinned by
       # tests/cli/init-templates-ux-parity.test.ts.
       ux:
-        cannot: "You cannot use write-capable tools yet."
+        cannot: "You cannot edit files on protected branch \${BRANCH} yet."
         required:
-          - "an approved Understanding Report for this session"
+          - "a checkout of a non-protected branch (current \`\${BRANCH}\` is protected)"
         run:
-          - "Write an Understanding Report covering: Current Understanding, Intended Outcome, Derived Todos, Acceptance Criteria, Assumptions, Open Questions, Out Of Scope, Risks, Verification Plan, Prior Art (state what you searched for an existing solution and what you found, with an explicit adopt-or-build judgment)"
-          - "Run \`harness approve understanding\` with the report attached as a quoted heredoc (harness approve understanding <<'UNDERSTANDING_REPORT' ...report... UNDERSTANDING_REPORT) so it is persisted for audit, then approve the prompt; the heredoc is the only extra shell shape the gate allows (no pipes, chaining, or other redirection)"
-      # approval_lifecycle (agent-tasks/d8ee60ca + harness/f54e0ecb,
-      # v0.18.0+): expire the approval marker on task-completion
-      # boundaries. Solo wires no agent-tasks MCP, so this block lists
-      # Bash boundaries (PR merges via gh-cli, pushes to the protected
-      # branch). It sets no \`expire_on_tool_match\` key, so the runtime
-      # applies the default agent-tasks tool list; without the
-      # agent-tasks MCP those tools never run, so that default is inert
-      # here. Operators on other CLIs override the Bash list with their
-      # own regexes. \`max_age\` is the safety net for sessions that
-      # never hit a listed command. Opt out entirely with
-      # \`approval_lifecycle: { mode: session }\`.
-      approval_lifecycle:
-        expire_on_bash_match:
-          - '^gh pr (merge|close)\\b'
-          - '^git push origin (master|main)\\b'
-        max_age: 1h
-${AUTO_APPROVE_SNIPPET}
+          - "git checkout -b feat/<your-task>"
 `;
 
 export const TEAM_TEMPLATE = `# ~/.harness/harness.yaml (legacy: ~/.claude/harness.yaml)
@@ -341,39 +309,25 @@ policies:
         - 'harness record review --pr <pr> --task \${TASK_ID} "<summary>"'
 
 policy_packs:
-  - name: understanding-before-execution
+  - name: branch-protection
     source: builtin
     enabled: true
-    description: Force agents to expose their task interpretation and wait for explicit human approval before any write-capable tool fires.
+    description: Block Write/Edit on protected branches (master, main, develop) at the first source mutation.
     config:
-      mode: grill_me
-      # ux (agent-tasks/60bc93e5): same shape as Solo's pack ux.
-      # KEEP IN SYNC (task 68b9ad9c): see the identical note on Solo's
-      # copy above — must match defaultUx("grill_me").
+      # ux (agent-tasks/9806d4f8): replaces the default
+      # "branch-protection: refusing ..." text with the plain-language
+      # { cannot, required, run } shape. Engine details (the directory
+      # git was asked about) stay on stderr for operator audit.
+      #
+      # KEEP IN SYNC (task 68b9ad9c): this text must match defaultUx() in
+      # src/policy-packs/builtin/branch-protection.ts — that function is
+      # what \`harness pack reseed\` and \`harness doctor\`'s divergence
+      # warning treat as \"the shipped template\". Pinned by
+      # tests/cli/init-templates-ux-parity.test.ts.
       ux:
-        cannot: "You cannot use write-capable tools yet."
+        cannot: "You cannot edit files on protected branch \${BRANCH} yet."
         required:
-          - "an approved Understanding Report for this session"
+          - "a checkout of a non-protected branch (current \`\${BRANCH}\` is protected)"
         run:
-          - "Write an Understanding Report covering: Current Understanding, Intended Outcome, Derived Todos, Acceptance Criteria, Assumptions, Open Questions, Out Of Scope, Risks, Verification Plan, Prior Art (state what you searched for an existing solution and what you found, with an explicit adopt-or-build judgment)"
-          - "Run \`harness approve understanding\` with the report attached as a quoted heredoc (harness approve understanding <<'UNDERSTANDING_REPORT' ...report... UNDERSTANDING_REPORT) so it is persisted for audit, then approve the prompt; the heredoc is the only extra shell shape the gate allows (no pipes, chaining, or other redirection)"
-      # approval_lifecycle (agent-tasks/d8ee60ca + harness/f54e0ecb,
-      # v0.18.0+): expire the approval marker on task-completion
-      # boundaries. Team wires agent-tasks, so the MCP task verbs are
-      # the primary boundary; the Bash list catches operators who use
-      # gh-cli in parallel (hybrid workflow). \`max_age\` is the safety
-      # net. Opt out entirely with
-      # \`approval_lifecycle: { mode: session }\`.
-      approval_lifecycle:
-        expire_on_tool_match:
-          - mcp__agent-tasks__task_finish
-          - mcp__agent-tasks__task_abandon
-          - mcp__agent-tasks__task_merge
-          - mcp__agent-tasks__pull_requests_merge
-          - mcp__agent-tasks__tasks_transition
-        expire_on_bash_match:
-          - '^gh pr (merge|close)\\b'
-          - '^git push origin (master|main)\\b'
-        max_age: 4h
-${AUTO_APPROVE_SNIPPET}
+          - "git checkout -b feat/<your-task>"
 `;

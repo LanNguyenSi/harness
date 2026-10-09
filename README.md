@@ -47,8 +47,9 @@ step-by-step version, with what each command writes:
 [`docs/for-humans.md`](docs/for-humans.md) (it still starts from the
 wizard and the `solo` template, so the note below applies to it).
 
-The `solo`, `team` and `full` templates and the
-`harness init --interactive` wizard still offer the understanding gate,
+The `solo`, `team` and `full` templates now ship the branch-protection
+pack (the understanding gate is no longer offered at install). They and
+the `harness init --interactive` wizard still offer
 `solution-acceptance`, the risk gate and the
 reference policies. harness 1.0.0 removes all of these, so a new
 install should not adopt them.

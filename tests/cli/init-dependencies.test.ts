@@ -31,7 +31,6 @@ describe("dependenciesForProfile — chain composition", () => {
     const deps = dependenciesForProfile("solo");
     const bins = deps.map((d) => d.binary);
     expect(bins).toContain("memory-router-user-prompt-submit");
-    expect(bins).toContain("understanding-gate-claude-hook");
     expect(bins).not.toContain("agent-tasks-mcp-bridge");
   });
 
@@ -64,17 +63,14 @@ describe("checkDependencies — PATH resolution", () => {
     const result = checkDependencies("solo", { pathEnv: tmpBin });
     expect(result.statuses.every((s) => !s.installed)).toBe(true);
     expect(result.missingPackages).toContain("@lannguyensi/memory-router");
-    expect(result.missingPackages).toContain("@lannguyensi/understanding-gate");
   });
 
   it("dedupes missingPackages when several binaries share one npm package", () => {
-    const result = checkDependencies("solo", { pathEnv: tmpBin });
-    // understanding-gate ships two binaries the solo profile uses; the
-    // missing-packages list should de-duplicate them.
-    const ugCount = result.missingPackages.filter(
-      (p) => p === "@lannguyensi/understanding-gate",
-    ).length;
-    expect(ugCount).toBe(1);
+    const result = checkDependencies("team", { pathEnv: tmpBin });
+    // The missing-packages list names each npm package at most once, even
+    // when several of its binaries are missing.
+    expect(new Set(result.missingPackages).size).toBe(result.missingPackages.length);
+    expect(result.missingPackages.length).toBeGreaterThan(0);
   });
 
   it("flags a present binary as installed and removes its package from the missing list", () => {
@@ -96,13 +92,10 @@ describe("formatDependencyTable — rendered surface", () => {
     // minVersion floor is shown in the missing-row arrow target so
     // operators see the floor without an extra column (agent-tasks/3a536aca).
     expect(text).toContain("→ @lannguyensi/memory-router@0.3.0+");
-    expect(text).toContain("→ @lannguyensi/understanding-gate@0.4.0+");
   });
 
   it('announces "all present" when nothing is missing', () => {
     makeExecutable("memory-router-user-prompt-submit");
-    makeExecutable("understanding-gate-claude-hook");
-    makeExecutable("understanding-gate-claude-stop");
     const result = checkDependencies("solo", { pathEnv: tmpBin });
     const text = formatDependencyTable("solo", result);
     expect(text).toContain("All required binaries are already on PATH.");
@@ -186,7 +179,7 @@ describe("dependenciesForCustom — grounding-mcp auto-add mirror", () => {
 
   it("does NOT include grounding-mcp dep when policies array is empty (no auto-add needed)", () => {
     const deps = dependenciesForCustom({
-      packs: ["understanding-before-execution"],
+      packs: ["branch-protection"],
       mcps: [],
       policies: [],
       memoryDir: "~/.claude/projects/{project}/memory",

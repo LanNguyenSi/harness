@@ -87,7 +87,7 @@ the next section walks the manual template path.
    ```
 
    Valid templates: `minimal` (header only), `solo` (memory-router +
-   understanding-before-execution pack), `team` (solo + agent-tasks +
+   branch-protection pack), `team` (solo + agent-tasks +
    review-before-merge), `full` (everything from the reference
    manifest).
 
@@ -238,9 +238,9 @@ What lands on each surface:
 
 Every built-in template (`solo` / `team` / `full`) ships `ux:`
 defaults on every block-enforcement policy and on the
-understanding-before-execution pack (since v0.17.1) and
-branch-protection pack (since v0.17.3, after the pack itself
-default-shipped in v0.17.2). Manifests without `ux:` keep the legacy envelope verbatim;
+branch-protection pack (since v0.17.3, after the pack
+itself default-shipped in v0.17.2).
+Manifests without `ux:` keep the legacy envelope verbatim;
 no migration needed for 0.16.x installs. The agent-facing reference
 is [`for-agents.md`](for-agents.md#agent-facing-block-messages-ux-block).
 

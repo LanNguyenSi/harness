@@ -10,9 +10,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { parse as parseYaml } from "yaml";
 import { approveUnderstanding } from "../../src/cli/approve/understanding.js";
-import { FULL_TEMPLATE } from "../../src/cli/init/templates.js";
 import { runPackHookCodexPostToolUseCli } from "../../src/cli/pack/hook-codex-post-tool-use.js";
 import { runPackHookCodexPreToolUseCli } from "../../src/cli/pack/hook-codex-pre-tool-use.js";
 import { runPackHookPostToolUseCli } from "../../src/cli/pack/hook-post-tool-use.js";
@@ -52,9 +50,42 @@ afterEach(() => {
   }
 });
 
-/** The shipped template's understanding pack, byte for byte as `harness init` writes it. */
+/**
+ * The understanding pack with the lifecycle the full init template used to
+ * ship (task, abandon, merge and transition boundaries plus the Bash
+ * boundaries and a 4h TTL). The template no longer offers the pack, so the
+ * manifest is built inline here.
+ */
 function fullTemplateManifest(): Manifest {
-  return parseManifest(parseYaml(FULL_TEMPLATE));
+  return parseManifest({
+    version: 1,
+    policy_packs: [
+      {
+        name: "understanding-before-execution",
+        source: "builtin",
+        enabled: true,
+        config: {
+          mode: "grill_me",
+          ux: {
+            cannot: "You cannot use write-capable tools yet.",
+            required: ["an approved Understanding Report for this session"],
+            run: ["Run `harness approve understanding` with the report attached."],
+          },
+          approval_lifecycle: {
+            expire_on_tool_match: [
+              "mcp__agent-tasks__task_finish",
+              "mcp__agent-tasks__task_abandon",
+              "mcp__agent-tasks__task_merge",
+              "mcp__agent-tasks__pull_requests_merge",
+              "mcp__agent-tasks__tasks_transition",
+            ],
+            expire_on_bash_match: ["^gh pr (merge|close)\\b", "^git push origin (master|main)\\b"],
+            max_age: "4h",
+          },
+        },
+      },
+    ],
+  });
 }
 
 function manifestWithLifecycle(lifecycle: Record<string, unknown>): Manifest {

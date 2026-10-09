@@ -18,7 +18,7 @@ The wizard is one of three ways to bootstrap a manifest:
 
 3. **Profile selection.** Four choices, with different external-account assumptions:
 
-   - **Solo** (no external accounts): `memory-router` + the `understanding-before-execution` policy pack. Single-operator baseline. Works against any PR workflow because it does not wire any PR-merge gate.
+   - **Solo** (no external accounts): `memory-router` + the `branch-protection` policy pack (Write/Edit refused on a protected branch). Single-operator baseline. Works against any PR workflow because it does not wire any PR-merge gate.
    - **Team** (requires an agent-tasks account, hosted or self-hosted): Solo + the `agent-tasks` MCP server + `grounding-mcp` + the `review-before-merge` policy. The merge gate matches the `mcp__agent-tasks__pull_requests_merge` tool only; gh-CLI workflows (`gh pr merge`) stay unguarded today.
    - **Full** (requires agent-tasks + `gh` on PATH): Team + the reference policies (`dogfood-before-release`, `review-subagent-before-pr-create`). All hooks run through the bundled `harness policy intercept` engine. Full also ships Bash-surface parallels of the review gates (`review-before-merge-bash`, `review-subagent-before-pr-create-bash`) so `gh pr merge` / `gh pr create` get the same review-evidence gate as the agent-tasks MCP verbs; tag shape switches from `${PR_NUMBER}` / `${TASK_ID}` to `${BRANCH}` on the Bash side.
    - **Custom (advanced)**: à-la-carte composer (see [Custom flow](#custom-flow) below). Pick discrete packs / MCPs / policies; the wizard composes a validate-clean manifest from your selection.
@@ -59,7 +59,7 @@ Registration" section that re-verifies the live registration via
 
 Custom is for power users who want a manifest narrower or wider than the named profiles. The wizard branches into three checkbox prompts:
 
-1. **Policy packs**: pre-checked: none (settings.json carries no pack signal today). Surface: `understanding-before-execution` and `branch-protection`.
+1. **Policy packs**: pre-checked: none (settings.json carries no pack signal today). Surface: `branch-protection`.
 2. **MCP servers**: pre-checked from `detect()`: any MCP name found in `settings.json mcpServers` is ticked. Surface: `agent-tasks`, `grounding-mcp`, `memory-router` (wired under `memory.router`, not `tools.mcp[]`; the composer puts it in the right slot), and `codebase-oracle` (requires `ORACLE_SCAN_ROOT` + `OPENAI_API_KEY` env vars that the wizard does NOT prompt for; an advisory prints when ticked).
 3. **Reference policies**: pre-checked: none. Surface mirrors `--template full`: `review-before-merge`, `review-subagent-before-pr-create`, `dogfood-before-release`, `two-reviewers-required` (warn-level companion to review-before-merge with `count.min: 2`). Each policy carries its hook entry automatically; shared hook names (e.g. `require-review-evidence` for both `review-before-merge` and `two-reviewers-required`) are deduplicated.
 
