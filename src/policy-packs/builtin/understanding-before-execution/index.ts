@@ -131,8 +131,8 @@ export {
 } from "./auto-approve.js";
 
 // D-004 shipped default (task 8f637efd): the one `auto_approve` snippet
-// `harness init`, `harness pack upgrade understanding-before-execution`
-// and `harness doctor`'s missing-auto_approve finding all render from,
+// `harness pack upgrade understanding-before-execution` renders from
+// (the init surfaces no longer use it),
 // see auto-approve-default.ts's module header for why.
 //
 // `AUTO_APPROVE_DEFAULT_WHEN`, `AUTO_APPROVE_DEFAULT_HARNESSES`, and

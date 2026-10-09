@@ -56,7 +56,7 @@ afterEach(() => {
  * boundaries and a 4h TTL). The template no longer offers the pack, so the
  * manifest is built inline here.
  */
-function fullTemplateManifest(): Manifest {
+function ugLifecycleManifest(): Manifest {
   return parseManifest({
     version: 1,
     policy_packs: [
@@ -262,7 +262,7 @@ function occurrences(haystack: string, needle: string): number {
 describe.each(RUNTIMES)("approval expiry reason in the block message: $name hook", (rt) => {
   it("PR merge before task_finish under the shipped lifecycle clears the marker; the next gate check blocks with 'approval expired because tool:<merge verb> at <time>'", async () => {
     const d = dirs();
-    const manifest = fullTemplateManifest();
+    const manifest = ugLifecycleManifest();
     writeApprovalMarker(d.generatedDir, SESSION, {
       approvedAt: new Date().toISOString(),
       approvedBy: "operator",
@@ -286,7 +286,7 @@ describe.each(RUNTIMES)("approval expiry reason in the block message: $name hook
     );
     expect(after.detail).toMatch(/^no approval marker for session sess-expiry; /);
     // The agent-facing surface (not only the stderr audit line) carries the
-    // reason exactly once, under the shipped template's `ux:` envelope: on
+    // reason exactly once, under the fixture's `ux:` envelope: on
     // Claude as the closing sentence of the stdout reason, on Codex inside the
     // engine reason of the whole stderr (no second copy is appended).
     expect(
@@ -308,7 +308,7 @@ describe.each(RUNTIMES)("approval expiry reason in the block message: $name hook
 
   it("a Bash boundary persists 'bash:/<regex>/' as the event and the agent-facing text names it", async () => {
     const d = dirs();
-    const manifest = fullTemplateManifest();
+    const manifest = ugLifecycleManifest();
     writeApprovalMarker(d.generatedDir, SESSION, {
       approvedAt: new Date().toISOString(),
       approvedBy: "operator",
@@ -350,12 +350,12 @@ describe.each(RUNTIMES)("approval expiry reason in the block message: $name hook
     }
   });
 
-  it("TTL expiry under the shipped template's lifecycle reaches the agent-facing text too", async () => {
+  it("TTL expiry under the fixture's lifecycle reaches the agent-facing text too", async () => {
     const d = dirs();
     const approvedAt = new Date(Date.now() - 5 * 60 * 60 * 1000).toISOString();
     writeApprovalMarker(d.generatedDir, SESSION, { approvedAt, approvedBy: "operator" });
     writeReport(d.reportsDir, approvedBody({ approvedAt }));
-    const out = await rt.pre(d, fullTemplateManifest());
+    const out = await rt.pre(d, ugLifecycleManifest());
     expect(out.blocked).toBe(true);
     expect(
       occurrences(out.agentFacing, `approval expired because max_age 240m elapsed (approved at ${approvedAt})`),
@@ -373,7 +373,7 @@ describe.each(RUNTIMES)("approval expiry reason in the block message: $name hook
       approvalStatus: "pending",
       createdAt: new Date().toISOString(),
     });
-    const out = await rt.pre(d, fullTemplateManifest());
+    const out = await rt.pre(d, ugLifecycleManifest());
     expect(out.blocked).toBe(true);
     expect(out.agentFacing).not.toMatch(/approval expired because/);
   });
@@ -462,7 +462,7 @@ describe.each(RUNTIMES)("approval expiry reason in the block message: $name hook
       expiredAt: "2026-10-01T00:00:00.000Z",
       expiredBy: "tool:mcp__agent-tasks__task_finish",
     });
-    const out = await rt.pre(d, fullTemplateManifest());
+    const out = await rt.pre(d, ugLifecycleManifest());
     expect(out.blocked).toBe(true);
     expect(out.detail).toMatch(/^session approval for sess-expiry belongs to another task: /);
     expectOwnReasonFirst(out, "session approval for sess-expiry belongs to another task: ");
@@ -509,7 +509,7 @@ describe("a forged in-flight record keeps its own reason and carries no expiry s
       expiredAt: "2026-10-01T00:00:00.000Z",
       expiredBy: "tool:mcp__agent-tasks__task_finish",
     });
-    const out = await claude.pre(d, fullTemplateManifest(), { agent_id: "agent-abc" });
+    const out = await claude.pre(d, ugLifecycleManifest(), { agent_id: "agent-abc" });
     expect(out.blocked).toBe(true);
     expect(out.detail).toMatch(/forged\/unsigned in-flight record for agent agent-abc rejected/);
     expect(out.agentFacing).not.toMatch(/approval expired because/);

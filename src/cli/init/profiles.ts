@@ -75,6 +75,13 @@ memory:
     allowed: [project, user]
 
 policy_packs:
+  # branch-protection: blocks Write/Edit (claude-code) or apply_patch (codex)
+  # when git names a protected branch (default: master, main, develop) for the
+  # directory the call writes into. Fails closed: a manifest that does not
+  # load or a git that cannot answer refuses the call. Outside a repository
+  # and on a detached HEAD the call is allowed.
+  # Disable with \`enabled: false\`; override the protected list via
+  # \`config.protected_branches\`. Reference: docs/policy-packs/branch-protection.md.
   - name: branch-protection
     source: builtin
     enabled: true
@@ -86,7 +93,7 @@ policy_packs:
       # git was asked about) stay on stderr for operator audit.
       #
       # KEEP IN SYNC (task 68b9ad9c): this text must match defaultUx() in
-      # src/policy-packs/builtin/branch-protection.ts — that function is
+      # src/policy-packs/builtin/branch-protection.ts: that function is
       # what \`harness pack reseed\` and \`harness doctor\`'s divergence
       # warning treat as \"the shipped template\". Pinned by
       # tests/cli/init-templates-ux-parity.test.ts.
@@ -309,6 +316,13 @@ policies:
         - 'harness record review --pr <pr> --task \${TASK_ID} "<summary>"'
 
 policy_packs:
+  # branch-protection: blocks Write/Edit (claude-code) or apply_patch (codex)
+  # when git names a protected branch (default: master, main, develop) for the
+  # directory the call writes into. Fails closed: a manifest that does not
+  # load or a git that cannot answer refuses the call. Outside a repository
+  # and on a detached HEAD the call is allowed.
+  # Disable with \`enabled: false\`; override the protected list via
+  # \`config.protected_branches\`. Reference: docs/policy-packs/branch-protection.md.
   - name: branch-protection
     source: builtin
     enabled: true
@@ -320,7 +334,7 @@ policy_packs:
       # git was asked about) stay on stderr for operator audit.
       #
       # KEEP IN SYNC (task 68b9ad9c): this text must match defaultUx() in
-      # src/policy-packs/builtin/branch-protection.ts — that function is
+      # src/policy-packs/builtin/branch-protection.ts: that function is
       # what \`harness pack reseed\` and \`harness doctor\`'s divergence
       # warning treat as \"the shipped template\". Pinned by
       # tests/cli/init-templates-ux-parity.test.ts.

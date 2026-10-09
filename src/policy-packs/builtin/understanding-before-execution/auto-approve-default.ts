@@ -1,14 +1,9 @@
 // Canonical shipped default for `auto_approve` (D-004, task 8f637efd,
 // docs/decisions/2026-08-27-ug-auto-mode-approval.md, "Amendment: install
-// default"). One source of truth for the exact shape and wording that
-// three surfaces need to agree on byte-for-byte:
-//
-//   - `harness init` (FULL_TEMPLATE, SOLO_TEMPLATE, TEAM_TEMPLATE): the
-//     block a fresh manifest ships with.
-//   - `harness pack upgrade understanding-before-execution`: the block
-//     it inserts into an existing manifest that predates this default.
-//   - `harness doctor`'s "bypassPermissions observed, auto_approve
-//     missing" finding: the snippet it prints as the remediation.
+// default"). One source of truth for the exact shape and wording
+// that `harness pack upgrade understanding-before-execution`
+// inserts into an existing manifest that predates this default. The init
+// templates and the composer no longer use it.
 //
 // Keeping these as one importable source (rather than three hand-synced
 // literals) means a future wording or shape change cannot land in one

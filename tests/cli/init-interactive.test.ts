@@ -210,6 +210,37 @@ afterEach(() => {
 });
 
 describe("interactive wizard — Solo path", () => {
+  it("profile select labels never mention the understanding gate and Solo names branch-protection", async () => {
+    fs.mkdirSync(path.join(tmpHome, ".claude"));
+    const cap = captureStreams();
+    const base = mockPrompts({
+      select: ["solo"],
+      input: ["~/.claude/projects/{project}/memory"],
+      confirm: [true],
+      checkbox: [[]],
+    });
+    let seen: Array<{ name: string; description?: string }> = [];
+    const prompts: InteractivePrompts = {
+      ...base,
+      select: (async (cfg: { choices: Array<{ name: string; description?: string }> }) => {
+        seen = cfg.choices;
+        return "solo";
+      }) as unknown as InteractivePrompts["select"],
+    };
+    await runInteractive({
+      homeDir: tmpHome,
+      dependencyPathEnv: fakeDepsPath,
+      prompts,
+      stdout: cap.out,
+      stderr: cap.err,
+    });
+    expect(seen.length).toBeGreaterThan(0);
+    for (const c of seen) {
+      expect(`${c.name} ${c.description ?? ""}`).not.toMatch(/understanding/i);
+    }
+    expect(seen.find((c) => /^Solo/.test(c.name))?.name).toContain("branch-protection");
+  });
+
   it("writes a solo manifest, runs validate, returns validateClean (skip wiring)", async () => {
     fs.mkdirSync(path.join(tmpHome, ".claude"));
     const cap = captureStreams();

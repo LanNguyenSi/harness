@@ -813,7 +813,7 @@ policy_packs:
       # git was asked about) stay on stderr for operator audit.
       #
       # KEEP IN SYNC (task 68b9ad9c): this text must match defaultUx() in
-      # src/policy-packs/builtin/branch-protection.ts — that function is
+      # src/policy-packs/builtin/branch-protection.ts: that function is
       # what \`harness pack reseed\` and \`harness doctor\`'s divergence
       # warning treat as \"the shipped template\". Pinned by
       # tests/cli/init-templates-ux-parity.test.ts.

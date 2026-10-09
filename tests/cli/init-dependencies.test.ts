@@ -4,6 +4,7 @@ import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   checkDependencies,
+  checkDependencyList,
   dependenciesForCustom,
   dependenciesForProfile,
   formatDependencyTable,
@@ -66,11 +67,15 @@ describe("checkDependencies — PATH resolution", () => {
   });
 
   it("dedupes missingPackages when several binaries share one npm package", () => {
-    const result = checkDependencies("team", { pathEnv: tmpBin });
-    // The missing-packages list names each npm package at most once, even
-    // when several of its binaries are missing.
-    expect(new Set(result.missingPackages).size).toBe(result.missingPackages.length);
-    expect(result.missingPackages.length).toBeGreaterThan(0);
+    const result = checkDependencyList(
+      [
+        { binary: "shared-pkg-bin-a", npmPackage: "@example/shared-pkg", description: "a" },
+        { binary: "shared-pkg-bin-b", npmPackage: "@example/shared-pkg", description: "b" },
+      ],
+      { pathEnv: tmpBin },
+    );
+    expect(result.statuses.every((s) => !s.installed)).toBe(true);
+    expect(result.missingPackages).toEqual(["@example/shared-pkg"]);
   });
 
   it("flags a present binary as installed and removes its package from the missing list", () => {
