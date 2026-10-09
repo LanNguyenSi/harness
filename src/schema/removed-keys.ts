@@ -72,6 +72,11 @@ export const REMOVED_PACK_NAMES: readonly RemovedPackName[] = [
     removedIn: "1.0.0",
     reason: "opt-in ledger-backed gate removed with the harness simplification",
   },
+  {
+    name: "solution-acceptance",
+    removedIn: "1.0.0",
+    reason: "opt-in verdict-gated completion gate removed with the harness simplification",
+  },
 ];
 
 export const REMOVED_MANIFEST_TABLE: RemovedManifestTable = {
@@ -172,6 +177,7 @@ export const REMOVED_COMMANDS: readonly RemovedCommand[] = [
   { command: "harness session-start", removedIn: "1.0.0", reason: "the SessionStart producers are removed" },
   { command: "harness preflight", removedIn: "1.0.0", reason: "alias of the removed session-start preflight producer" },
   { command: "harness pack hook post-merge-gate", removedIn: "1.0.0", reason: "the post-merge-gate pack is removed" },
+  { command: "harness pack hook solution-acceptance", removedIn: "1.0.0", reason: "the solution-acceptance pack is removed" },
 ];
 
 // Leading `NAME=value` shell assignments in front of the command word. Only

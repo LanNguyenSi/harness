@@ -368,19 +368,6 @@ export interface ResolvePackOptions {
    */
   reportsDir?: string;
   /**
-   * Path to the solution-verdict directory the solution-acceptance
-   * completion-gate hook should read; should be absolute (a relative value is
-   * flagged by `harness validate` because it resolves against each process's
-   * cwd and cannot be reconciled). When provided, the pack prefixes each
-   * contributed hook command with `SOLUTION_VERDICT_DIR=<path>` so the
-   * hook (consumer) and the grounding-mcp server (producer) resolve the same
-   * directory regardless of each process's cwd. Apply sets this to the value
-   * declared in `tools.mcp[grounding-mcp].env.SOLUTION_VERDICT_DIR` when
-   * present; when absent the env var is not injected and the runtime
-   * `verdictDir()` falls back to the env-var-or-XDG precedence.
-   */
-  solutionVerdictDir?: string;
-  /**
    * Absolute path to the harness pause sentinel file (`sentinelPath(generatedDir)`
    * from `src/runtime/pause-sentinel.ts`). When provided, the pack prefixes
    * ONLY the Claude UserPromptSubmit hook command with

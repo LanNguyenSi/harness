@@ -1,7 +1,6 @@
 import type { McpProbeResult } from "../../probes/mcp.js";
 import type { MemoryReport, StaleMemory } from "../../probes/memory.js";
 import type { Manifest } from "../../schema/index.js";
-import type { Diagnostic } from "../validate/types.js";
 import type { ClaudeMcpRegistrationSection } from "./claude-mcp.js";
 import type { CodexTargetReport } from "./codex.js";
 import type { OpencodeTargetReport } from "./opencode.js";
@@ -285,7 +284,6 @@ export interface PolicyPacksSection {
   configIssues: PolicyPackConfigIssue[];
   versionGaps: PolicyPackVersionGapReport[];
   uxDrift: PolicyPackUxDriftReport[];
-  solutionAcceptance: Diagnostic[];
 }
 
 export interface WorkflowEntryReport {

@@ -43,7 +43,6 @@
 //   - hook-runtime-reality.ts: it keeps an `isTTY` guard in front of the
 //     same shared idle-bounded reader (`src/cli/bounded-stdin.ts`) and
 //     composes the read itself, which is a legitimately different contract.
-//   - hook-solution-acceptance-writeguard.ts: loads no manifest.
 //   - hook-stay-in-scope.ts: loads the current manifest so a generated hook
 //     can no-op after an operator changes its optional configuration.
 //
@@ -295,8 +294,8 @@ export function resolveToolInput(event: {
 /**
  * Parse the optional `ux:` block from a pack config (task 19e293c6). This
  * body existed as four byte-identical copies (hook-pre-tool-use,
- * hook-codex-pre-tool-use, hook-branch-protection, hook-solution-acceptance)
- * whose only difference was the stderr prefix — the exact drift the
+ * hook-codex-pre-tool-use, hook-branch-protection, and a pack hook since
+ * removed) whose only difference was the stderr prefix — the exact drift the
  * CHANGELOG had flagged at copy #3 and that landed a 4th time anyway.
  * `hookLabel` carries that prefix so the per-hook stderr warnings stay
  * byte-identical to the pre-extraction output (pinned by a test).

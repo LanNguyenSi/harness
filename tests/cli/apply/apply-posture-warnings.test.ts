@@ -60,6 +60,27 @@ describe("apply surfaces the removed-pack posture warnings", () => {
     expect(settings).not.toContain("post-merge-gate");
   });
 
+  it("a manifest naming the removed solution-acceptance pack: apply succeeds, warns at policy_packs[1], and generates no solution-acceptance content", async () => {
+    writeManifest({
+      policy_packs: [
+        { name: "branch-protection" },
+        { name: "solution-acceptance", enabled: true, config: { anything: 1 } },
+      ],
+    });
+    const result = await apply({ homeDir: tmpHome });
+    expect(result.outcome).toBe("applied");
+    expect(
+      result.warnings.some((w) => w.startsWith("policy_packs[1]") && w.includes("removed in 1.0.0")),
+    ).toBe(true);
+
+    const settings = fs.readFileSync(
+      path.join(tmpHome, GENERATED_DIRNAME, SETTINGS_BASENAME),
+      "utf8",
+    );
+    expect(settings).not.toContain("solution-acceptance");
+    expect(settings).not.toContain("SOLUTION_VERDICT_DIR");
+  });
+
   it("a manifest without the removed pack: no such warning", async () => {
     writeManifest({ policy_packs: [{ name: "branch-protection" }] });
     const result = await apply({ homeDir: tmpHome });

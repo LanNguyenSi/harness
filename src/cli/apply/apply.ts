@@ -76,10 +76,7 @@ import {
 } from "./generate-codex-config.js";
 import { generateOpencodeConfig } from "./generate-opencode-config.js";
 import { generateMemoryIndex } from "./generate-memory-index.js";
-import {
-  GROUNDING_MCP_SERVER_NAME,
-  generateSettingsWithWarnings,
-} from "./generate-settings.js";
+import { generateSettingsWithWarnings } from "./generate-settings.js";
 import {
   planCodexConfigInstall,
   writeCodexConfigInstall,
@@ -632,17 +629,6 @@ function buildExpectedFiles(
   // terminal) silently diverge.
   const runtime: Runtime = opts.runtime ?? DEFAULT_RUNTIME;
   const reportsDir = reportsDirForManifest(manifestPath);
-  // Project SOLUTION_VERDICT_DIR from grounding-mcp's env into the
-  // solution-acceptance hook command so producer and consumer agree on the
-  // verdict directory. Without this, a manifest-declared override splits them
-  // onto different dirs and the completion-gate can never see a verdict.
-  const groundingMcp = manifest.tools.mcp.find((m) => m.name === GROUNDING_MCP_SERVER_NAME);
-  const groundingEnv = (groundingMcp?.env ?? {}) as Record<string, unknown>;
-  const verdictDirOverride = groundingEnv["SOLUTION_VERDICT_DIR"];
-  const solutionVerdictDir =
-    typeof verdictDirOverride === "string" && verdictDirOverride.trim().length > 0
-      ? verdictDirOverride
-      : undefined;
   // Pause-sentinel path (agent-tasks 63fefe3a): threaded through so the
   // Claude UserPromptSubmit hook's npm-backed bin can find the same
   // sentinel harness's own hooks resolve via generatedDir at runtime. See
@@ -651,7 +637,6 @@ function buildExpectedFiles(
   const pauseFile = sentinelPath(stateDir);
   const packExpansion = expandPolicyPacks(manifest, runtime, {
     reportsDir,
-    solutionVerdictDir,
     pauseFile,
   });
   const augmentedManifest: Manifest =

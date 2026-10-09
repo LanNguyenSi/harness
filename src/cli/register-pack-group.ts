@@ -11,8 +11,6 @@ import { runPackHookCodexPostToolUseCli } from "./pack/hook-codex-post-tool-use.
 import { runPackHookCodexStopCli } from "./pack/hook-codex-stop.js";
 import { runPackHookCodexUserPromptSubmitCli } from "./pack/hook-codex-user-prompt-submit.js";
 import { runPackHookBranchProtectionCli } from "./pack/hook-branch-protection.js";
-import { runPackHookSolutionAcceptanceCli } from "./pack/hook-solution-acceptance.js";
-import { runPackHookSolutionAcceptanceWriteguardCli } from "./pack/hook-solution-acceptance-writeguard.js";
 import { runPackHookRuntimeRealityCli } from "./pack/hook-runtime-reality.js";
 import { HarnessExitError } from "./exit-codes.js";
 
@@ -403,50 +401,6 @@ export function registerPackGroup(
       if (options.cwd) cliOpts.cwd = options.cwd;
       if (options.runtime !== undefined) cliOpts.runtime = options.runtime;
       const result = await runPackHookBranchProtectionCli(cliOpts);
-      if (result.exitCode !== 0) {
-        throw new HarnessExitError("", result.exitCode);
-      }
-    });
-
-  packHookCmd
-    .command("solution-acceptance")
-    .description(
-      "PreToolUse completion-gate for the solution-acceptance pack: read tool-event JSON from stdin, " +
-        "and on a task-finishing tool (agent-tasks completion verb or `git push` / `gh pr merge`) emit a " +
-        "deny envelope unless a ready solution-acceptance verdict exists at the current git HEAD for the " +
-        "active-claim task. Fail-closed.",
-    )
-    .option("--config <path>", "manifest path (default: ~/.harness/harness.yaml; legacy fallback ~/.claude/harness.yaml)")
-    .option("--project <name>", "apply per-project overrides")
-    .option("--cwd <path>", "override cwd resolution (default: stdin event.cwd then process.cwd())")
-    .action(async (options: { config?: string; project?: string; cwd?: string }) => {
-      const cliOpts: Parameters<typeof runPackHookSolutionAcceptanceCli>[0] = {};
-      if (options.config) cliOpts.configPath = options.config;
-      if (options.project) cliOpts.project = options.project;
-      if (options.cwd) cliOpts.cwd = options.cwd;
-      const result = await runPackHookSolutionAcceptanceCli(cliOpts);
-      if (result.exitCode !== 0) {
-        throw new HarnessExitError("", result.exitCode);
-      }
-    });
-
-  packHookCmd
-    .command("solution-acceptance-writeguard")
-    .description(
-      "PreToolUse anti-forgery write-guard for the solution-acceptance pack: read tool-event JSON from " +
-        "stdin, emit a deny envelope on any agent write into the solution-verdict dir (path-tool file_path " +
-        "inside it, or a non-read-only Bash command that references it). The producer (grounding-mcp) is the " +
-        "only legitimate writer.",
-    )
-    .option("--config <path>", "manifest path (default: ~/.harness/harness.yaml; legacy fallback ~/.claude/harness.yaml)")
-    .option("--project <name>", "apply per-project overrides")
-    .option("--cwd <path>", "override cwd resolution (default: stdin event.cwd then process.cwd())")
-    .action(async (options: { config?: string; project?: string; cwd?: string }) => {
-      const cliOpts: Parameters<typeof runPackHookSolutionAcceptanceWriteguardCli>[0] = {};
-      if (options.config) cliOpts.configPath = options.config;
-      if (options.project) cliOpts.project = options.project;
-      if (options.cwd) cliOpts.cwd = options.cwd;
-      const result = await runPackHookSolutionAcceptanceWriteguardCli(cliOpts);
       if (result.exitCode !== 0) {
         throw new HarnessExitError("", result.exitCode);
       }

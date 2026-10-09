@@ -33,13 +33,9 @@ import { lastApplyPath, readLastApply } from "../../io/last-apply.js";
 import {
   checkHookBudgetLedgerMargin,
   checkPolicyRiskWithoutEnvScope,
-  checkSolutionAcceptanceKnobIgnored,
-  checkSolutionAcceptanceProducer,
   checkTemplatePolicyDrift,
   checkTriggerBoundaryDrift,
   checkWorkflows,
-  createDefaultGitIgnoreProbe,
-  type GitIgnoreProbe,
 } from "../validate/checks.js";
 import type { Diagnostic } from "../validate/types.js";
 import { isDerivedPolicy } from "../../runtime/workflow-policies.js";
@@ -128,17 +124,9 @@ export interface DoctorOptions extends LoaderOptions {
    */
   npmBinExec?: NpmExec;
   /**
-   * Test-injection knob for the solution-acceptance knob-ignored check
-   * (task 24f6ceb9). Defaults to a real `git check-ignore` probe against
-   * the process cwd; `shallow` runs degrade it to `() => null` (no spawn),
-   * mirroring how the version probe degrades. An explicit probe wins over
-   * `shallow` so tests can exercise the check without paying for spawns.
-   */
-  gitIgnoreProbe?: GitIgnoreProbe;
-  /**
    * Test-injection knob for the claude-code MCP registration check (task
    * init-mcp-wiring-claude-code/T-003). Tests fake the `claude mcp list`
-   * spawn the same way `npmBinExec`/`gitIgnoreProbe` fake theirs;
+   * spawn the same way `npmBinExec` fakes theirs;
    * production omits this and the real `claude` CLI is spawned. The live
    * call itself is additionally gated on `!shallow` and at least one
    * enabled `tools.mcp[]` entry — see `buildClaudeMcpRegistration`.
@@ -706,38 +694,6 @@ function buildPolicies(manifest: Manifest): PolicyEntryReport[] {
   });
 }
 
-/**
- * Declared-but-not-live policy pack check. `expandPolicyPacks` silently
- * skips a pack whose `source:` token is unrecognised or whose builtin
- * `name:` doesn't resolve in the registry — its hooks never reach
- * `settings.json`, so the operator's gate is inert. Surface each gap
- * as a doctor error so the misconfig is impossible to miss.
- *
- * Skipped (`enabled: false`) packs are NOT checked: they're not
- * expected to be live, and flagging them would flood the report.
- */
-/**
- * Sentinel "cannot tell" probe: shallow runs answer every ignoredness
- * question with `null` instead of spawning `git check-ignore`. Exported
- * (with the resolver below) so a test can pin the no-spawn contract by
- * identity instead of mocking `node:child_process`.
- */
-export const NULL_GIT_IGNORE_PROBE: GitIgnoreProbe = () => null;
-
-/**
- * Probe resolution order: an explicit (test) probe always wins; `shallow`
- * degrades to the no-spawn sentinel, mirroring how the npm-bin probe and
- * MCP probes degrade; otherwise the real `git check-ignore` probe runs
- * against the process cwd.
- */
-export function resolveGitIgnoreProbe(
-  opts: Pick<DoctorOptions, "gitIgnoreProbe" | "shallow">,
-): GitIgnoreProbe {
-  if (opts.gitIgnoreProbe) return opts.gitIgnoreProbe;
-  if (opts.shallow) return NULL_GIT_IGNORE_PROBE;
-  return createDefaultGitIgnoreProbe();
-}
-
 function packExpansionRuntimeReport(
   selection: RuntimeSelection,
   warning?: string,
@@ -752,10 +708,19 @@ function packExpansionRuntimeReport(
   };
 }
 
+/**
+ * Declared-but-not-live policy pack check. `expandPolicyPacks` silently
+ * skips a pack whose `source:` token is unrecognised or whose builtin
+ * `name:` doesn't resolve in the registry — its hooks never reach
+ * `settings.json`, so the operator's gate is inert. Surface each gap
+ * as a doctor error so the misconfig is impossible to miss.
+ *
+ * Skipped (`enabled: false`) packs are NOT checked: they're not
+ * expected to be live, and flagging them would flood the report.
+ */
 function buildPolicyPacks(
   manifest: Manifest,
   versionProbe: (cmd: readonly string[]) => string | null,
-  gitIgnoreProbe: GitIgnoreProbe,
   runtime: Runtime,
 ): PolicyPacksSection {
   const unresolved: PolicyPackUnresolved[] = [];
@@ -799,15 +764,7 @@ function buildPolicyPacks(
     fields: drift.fields,
     message: drift.message,
   }));
-  // Same array as the producer check on purpose: countDiagnostics and the
-  // renderers already tally / print `solutionAcceptance` by severity, so
-  // the knob-ignored warning (task 24f6ceb9) inherits doctor parity with
-  // `harness validate` for free — the #308 pattern.
-  const solutionAcceptance = [
-    ...checkSolutionAcceptanceProducer(manifest),
-    ...checkSolutionAcceptanceKnobIgnored(manifest, gitIgnoreProbe),
-  ];
-  return { unresolved, configIssues, versionGaps, uxDrift, solutionAcceptance };
+  return { unresolved, configIssues, versionGaps, uxDrift };
 }
 
 function buildWorkflows(manifest: Manifest): import("./types.js").WorkflowsSectionReport {
@@ -876,7 +833,7 @@ function buildRiskGate(manifest: Manifest): RiskGateSection {
   // covers risk.severity_at_least, risk.category_in, AND action.reversible:
   // all three clauses fail-closed to matched=true on an unclassified action
   // per `runtime/when-eval.ts`. Map each Diagnostic message into a warning
-  // string, mirroring the checkSolutionAcceptanceProducer pattern above.
+  // string, appended to this section's `warnings` list.
   for (const diag of checkPolicyRiskWithoutEnvScope(manifest)) {
     warnings.push(diag.message);
   }
@@ -1084,10 +1041,6 @@ function countDiagnostics(report: Omit<DoctorReport, "errorCount" | "warningCoun
   // Fix is opt-in (`harness pack reseed <name>`), so this never escalates
   // to an error the way an unresolved pack or a rejected config value does.
   warningCount += report.policyPacks.uxDrift.length;
-  for (const d of report.policyPacks.solutionAcceptance) {
-    if (d.severity === "error") errorCount++;
-    else if (d.severity === "warning") warningCount++;
-  }
   warningCount += report.riskGate.warnings.length;
   // Workflow gate wiring (F3) + weak-overlap (F1), review round 2,
   // 99f47307 Slice 1: an unwired/mis-wired merge gate is a real
@@ -1301,7 +1254,6 @@ export async function doctor(opts: DoctorOptions = {}): Promise<DoctorReport> {
   const policyPacks = buildPolicyPacks(
     manifest,
     dedupedVersionProbe,
-    resolveGitIgnoreProbe(opts),
     applyRuntime.runtime,
   );
   const policyPackHookVersions = checkPolicyPackHookVersions(

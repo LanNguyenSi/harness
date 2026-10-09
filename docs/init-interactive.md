@@ -59,7 +59,7 @@ Registration" section that re-verifies the live registration via
 
 Custom is for power users who want a manifest narrower or wider than the named profiles. The wizard branches into three checkbox prompts:
 
-1. **Policy packs**: pre-checked: none (settings.json carries no pack signal today). Surface: `understanding-before-execution` and `branch-protection`. `solution-acceptance` is deliberately not wizard-selectable: it needs the grounding-mcp producer plus the `preflight` binary wired first, so it ships as a disabled exemplar in the `full` template and is enabled explicitly via `harness pack add solution-acceptance` (see `docs/policy-packs/solution-acceptance.md`).
+1. **Policy packs**: pre-checked: none (settings.json carries no pack signal today). Surface: `understanding-before-execution` and `branch-protection`.
 2. **MCP servers**: pre-checked from `detect()`: any MCP name found in `settings.json mcpServers` is ticked. Surface: `agent-tasks`, `grounding-mcp`, `memory-router` (wired under `memory.router`, not `tools.mcp[]`; the composer puts it in the right slot), and `codebase-oracle` (requires `ORACLE_SCAN_ROOT` + `OPENAI_API_KEY` env vars that the wizard does NOT prompt for; an advisory prints when ticked).
 3. **Reference policies**: pre-checked: none. Surface mirrors `--template full`: `review-before-merge`, `review-subagent-before-pr-create`, `dogfood-before-release`, `two-reviewers-required` (warn-level companion to review-before-merge with `count.min: 2`). Each policy carries its hook entry automatically; shared hook names (e.g. `require-review-evidence` for both `review-before-merge` and `two-reviewers-required`) are deduplicated.
 

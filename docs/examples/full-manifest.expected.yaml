@@ -497,11 +497,6 @@ policy_packs:
           - a checkout of a non-protected branch (current `${BRANCH}` is protected)
         run:
           - git checkout -b feat/<your-task>
-  - name: solution-acceptance
-    source: builtin
-    enabled: false
-    description: Gate task completion on a ready, HEAD-pinned solution-acceptance verdict earned from a real preflight run.
-    config: {}
 risk:
   classifiers:
     - name: dangerous-shell

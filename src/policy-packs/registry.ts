@@ -23,18 +23,12 @@ import {
   VERSION_COMMAND as UNDERSTANDING_BEFORE_EXECUTION_VERSION_COMMAND,
   type ResolvePackOptions,
 } from "./builtin/understanding-before-execution.js";
-import {
-  configSchema as solutionAcceptanceConfigSchema,
-  PACK_NAME as SOLUTION_ACCEPTANCE,
-  resolve as resolveSolutionAcceptance,
-} from "./builtin/solution-acceptance.js";
 import { DEFAULT_RUNTIME, type Runtime } from "./runtime.js";
 import type { PackContribution } from "./types.js";
 
 export const KNOWN_BUILTIN_PACKS = [
   UNDERSTANDING_BEFORE_EXECUTION,
   BRANCH_PROTECTION,
-  SOLUTION_ACCEPTANCE,
 ] as const;
 export type BuiltinPackName = (typeof KNOWN_BUILTIN_PACKS)[number];
 
@@ -58,8 +52,6 @@ export function resolveBuiltin(
       return resolveUnderstandingBeforeExecution(pack, runtime, opts);
     case BRANCH_PROTECTION:
       return resolveBranchProtection(pack, runtime);
-    case SOLUTION_ACCEPTANCE:
-      return resolveSolutionAcceptance(pack, runtime, opts);
   }
 }
 
@@ -79,8 +71,6 @@ export function resolveBuiltinConfigSchema(
       return understandingBeforeExecutionConfigSchema;
     case BRANCH_PROTECTION:
       return branchProtectionConfigSchema;
-    case SOLUTION_ACCEPTANCE:
-      return solutionAcceptanceConfigSchema;
   }
 }
 
@@ -103,10 +93,6 @@ export function resolveBuiltinVersionCommand(
       return UNDERSTANDING_BEFORE_EXECUTION_VERSION_COMMAND;
     case BRANCH_PROTECTION:
       return null;
-    case SOLUTION_ACCEPTANCE:
-      // Blocker is harness itself; the producer (grounding-mcp) is probed
-      // via its tools.mcp min_version, not a pack-side bin.
-      return null;
   }
 }
 
@@ -119,9 +105,8 @@ export function resolveBuiltinVersionCommand(
  * `grill_me`'s).
  *
  * Returns `null` when the pack name is not a builtin, or when the pack
- * has no canonical shipped default to compare/reseed against (e.g.
- * `solution-acceptance`, which ships `enabled: false` with no `config:`
- * block in any init template). Consumed by `checkPolicyPackUxDrift`
+ * has no canonical shipped default to compare/reseed against. Every
+ * remaining builtin ships one. Consumed by `checkPolicyPackUxDrift`
  * (`harness doctor`'s divergence warning) and `harness pack reseed`
  * (task 68b9ad9c) — the single source both read from so the two stay
  * in lockstep by construction.
@@ -156,7 +141,5 @@ export function resolveBuiltinDefaultConfig(
     }
     case BRANCH_PROTECTION:
       return { ux: branchProtectionDefaultUx() };
-    case SOLUTION_ACCEPTANCE:
-      return null;
   }
 }

@@ -301,27 +301,6 @@ describe.skipIf(process.platform === "win32")("pack hook branch-protection --run
   });
 });
 
-describe.skipIf(process.platform === "win32")("pack hook solution-acceptance: a planted FIFO at the loose ref still denies, within the bound", () => {
-  it("returns a deny envelope instead of hanging", () => {
-    const repo = makeRepo("main");
-    fifoOver(path.join(repo, ".git", "refs", "heads", "main"));
-    const out = runCli(
-      ["pack", "hook", "solution-acceptance", "--config", manifestWithPack("solution-acceptance")],
-      {
-        hook_event_name: "PreToolUse",
-        session_id: "sess-fifo",
-        tool_name: "Bash",
-        cwd: repo,
-        tool_input: { command: "git push origin main" },
-      },
-      { SOLUTION_VERDICT_ID: "task-fifo", SOLUTION_VERDICT_DIR: path.join(tmp, "verdicts") },
-    );
-    expectBounded(out);
-    const envelope = JSON.parse(out.stdout) as { decision: string };
-    expect(envelope.decision).toBe("block");
-  });
-});
-
 describe.skipIf(process.platform === "win32")("policy intercept (the Claude and Codex PreToolUse entrypoint): a planted FIFO is bounded", () => {
   const MANIFEST = `version: 1
 tools:

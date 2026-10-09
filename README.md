@@ -83,7 +83,7 @@ operator controls are documented in
 - [`docs/risk-gate.md`](docs/risk-gate.md): the four-way `allow / warn / require_approval / deny` Risk Gate.
 - [`docs/writing-custom-policies.md`](docs/writing-custom-policies.md): tripwires, worked recipes, and the policy field reference.
 - [`docs/runtime-reality-hook.md`](docs/runtime-reality-hook.md): blocking destructive runtime commands when live process state has drifted from what the docs expect.
-- [`docs/policy-packs/README.md`](docs/policy-packs/README.md): the built-in policy packs (`understanding-before-execution`, `branch-protection`, `solution-acceptance`).
+- [`docs/policy-packs/README.md`](docs/policy-packs/README.md): the built-in policy packs (`understanding-before-execution`, `branch-protection`).
 - [`docs/uninstall.md`](docs/uninstall.md): the single-command teardown, dry-run by default.
 - [`docs/examples/full-manifest.yaml`](docs/examples/full-manifest.yaml): a schema-coverage reference (not a runnable config; its header explains why).
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md): manifest schema, file layout, CLI surface (historical design intent; see its own note for the current shape).

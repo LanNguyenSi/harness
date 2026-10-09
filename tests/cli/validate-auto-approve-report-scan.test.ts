@@ -29,7 +29,6 @@ afterEach(() => {
 const NOOP_PROBES = {
   versionProbe: () => null,
   builtinRuntimeProbe: () => [] as string[],
-  gitIgnoreProbe: () => null,
 };
 
 function fixtureWithAutoApprove(autoApprove: unknown): string {

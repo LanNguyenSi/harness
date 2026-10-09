@@ -9,7 +9,6 @@ import {
   __testables,
   checkPolicySelfAttestation,
   checkWorkflowGateWiring,
-  createDefaultGitIgnoreProbe,
 } from "../../src/cli/validate/checks.js";
 import { spawnSync } from "node:child_process";
 import { writeLock, type LockEntry } from "../../src/io/harness-lock.js";
@@ -47,9 +46,6 @@ function writeFixture(files: Record<string, string>): string {
 const NOOP_PROBES = {
   versionProbe: () => null,
   builtinRuntimeProbe: () => [] as string[],
-  // "cannot tell" — keeps unrelated tests hermetic: the knob-ignored check
-  // skips instead of probing the developer's real cwd with git.
-  gitIgnoreProbe: () => null,
 };
 
 describe("validate — schema-level diagnostics on invalid fixtures", () => {
@@ -905,89 +901,6 @@ describe("validate — policy_packs (Phase 6 #2)", () => {
   });
 });
 
-describe("validate — checkSolutionAcceptanceProducer", () => {
-  function fixtureWithSolutionAcceptance(opts: {
-    withGroundingMcp: boolean;
-    verdictDirOverride?: string;
-  }): string {
-    let mcpBlock = "";
-    if (opts.withGroundingMcp) {
-      const envBlock = opts.verdictDirOverride
-        ? `\n      env:\n        SOLUTION_VERDICT_DIR: "${opts.verdictDirOverride}"`
-        : "";
-      mcpBlock = `tools:\n  mcp:\n    - name: grounding-mcp\n      command: ["/usr/bin/true"]${envBlock}\n`;
-    }
-    const yaml = `version: 1\n${mcpBlock}policy_packs:\n  - name: solution-acceptance\n    source: builtin\n    enabled: true\n`;
-    return writeFixture({ "harness.yaml": yaml });
-  }
-
-  it("errors (condition #1) when solution-acceptance enabled but grounding-mcp absent", () => {
-    const home = fixtureWithSolutionAcceptance({ withGroundingMcp: false });
-    const result = validate({
-      homeDir: home,
-      configPath: path.join(home, "harness.yaml"),
-      ...NOOP_PROBES,
-    });
-    expect(result.errorCount).toBe(1);
-    const hit = result.diagnostics.find(
-      (d) =>
-        d.severity === "error" &&
-        /grounding-mcp is not wired/.test(d.message),
-    );
-    expect(hit).toBeDefined();
-    expect(hit?.path).toBe("policy_packs");
-  });
-
-  it("emits no warning when grounding-mcp is wired with no SOLUTION_VERDICT_DIR override", () => {
-    const home = fixtureWithSolutionAcceptance({ withGroundingMcp: true });
-    const result = validate({
-      homeDir: home,
-      configPath: path.join(home, "harness.yaml"),
-      ...NOOP_PROBES,
-    });
-    const solutionWarning = result.diagnostics.find(
-      (d) =>
-        /SOLUTION_VERDICT_DIR|gate would always deny|verdict.*dir/i.test(d.message),
-    );
-    expect(solutionWarning).toBeUndefined();
-  });
-
-  it("emits NO warning when grounding-mcp has a non-default SOLUTION_VERDICT_DIR (apply now projects it)", () => {
-    const home = fixtureWithSolutionAcceptance({
-      withGroundingMcp: true,
-      verdictDirOverride: "/custom/verdict/dir",
-    });
-    const result = validate({
-      homeDir: home,
-      configPath: path.join(home, "harness.yaml"),
-      ...NOOP_PROBES,
-    });
-    const splitDirWarning = result.diagnostics.find(
-      (d) =>
-        /SOLUTION_VERDICT_DIR|gate would always deny|verdict.*dir/i.test(d.message),
-    );
-    expect(splitDirWarning).toBeUndefined();
-  });
-
-  it("warns when grounding-mcp has a RELATIVE SOLUTION_VERDICT_DIR (projection cannot reconcile cwd)", () => {
-    const home = fixtureWithSolutionAcceptance({
-      withGroundingMcp: true,
-      verdictDirOverride: "relative/verdict/dir",
-    });
-    const result = validate({
-      homeDir: home,
-      configPath: path.join(home, "harness.yaml"),
-      ...NOOP_PROBES,
-    });
-    expect(result.errorCount).toBe(0);
-    const hit = result.diagnostics.find(
-      (d) =>
-        d.severity === "warning" && /relative SOLUTION_VERDICT_DIR/.test(d.message),
-    );
-    expect(hit).toBeDefined();
-    expect(hit?.path).toBe("tools.mcp");
-  });
-});
 
 describe("validate: checkWorkflowGateWiring (99f47307 Slice 1, AC4)", () => {
   const WORKFLOW_REQUIRED = `review_templates:
@@ -1533,119 +1446,6 @@ describe("validate — friendly version-mismatch diagnostic (task 50a94127)", ()
   });
 });
 
-describe("validate — checkSolutionAcceptanceKnobIgnored", () => {
-  // grounding-mcp is wired in every fixture so the producer check stays
-  // silent and the assertions isolate the knob-ignored diagnostic.
-  function fixtureWithPack(enabled: boolean): string {
-    const yaml =
-      `version: 1\n` +
-      `tools:\n  mcp:\n    - name: grounding-mcp\n      command: ["/usr/bin/true"]\n` +
-      `policy_packs:\n  - name: solution-acceptance\n    source: builtin\n    enabled: ${enabled}\n`;
-    return writeFixture({ "harness.yaml": yaml });
-  }
-
-  it("warns when the pack is enabled and the knob path is git-ignored", () => {
-    const home = fixtureWithPack(true);
-    const probed: string[] = [];
-    const result = validate({
-      homeDir: home,
-      configPath: path.join(home, "harness.yaml"),
-      ...NOOP_PROBES,
-      gitIgnoreProbe: (relPath: string) => {
-        probed.push(relPath);
-        return true;
-      },
-    });
-    expect(probed).toEqual([".ai/solution-acceptance.json"]);
-    expect(result.errorCount).toBe(0);
-    const hit = result.diagnostics.find(
-      (d) => d.severity === "warning" && /knob .* is git-ignored/.test(d.message),
-    );
-    expect(hit).toBeDefined();
-    expect(hit?.path).toBe("policy_packs");
-    expect(hit?.message).toMatch(/fresh clone or git worktree/);
-    expect(hit?.message).toMatch(/Narrow the ignore to \.ai\/runs\//);
-  });
-
-  it("emits no warning when the knob path is not ignored (must-pass control)", () => {
-    const home = fixtureWithPack(true);
-    const result = validate({
-      homeDir: home,
-      configPath: path.join(home, "harness.yaml"),
-      ...NOOP_PROBES,
-      gitIgnoreProbe: () => false,
-    });
-    expect(result.warningCount).toBe(0);
-    expect(result.errorCount).toBe(0);
-  });
-
-  it("skips when the probe cannot tell (non-repo cwd / git unavailable)", () => {
-    const home = fixtureWithPack(true);
-    const result = validate({
-      homeDir: home,
-      configPath: path.join(home, "harness.yaml"),
-      ...NOOP_PROBES,
-      gitIgnoreProbe: () => null,
-    });
-    expect(result.warningCount).toBe(0);
-  });
-
-  it("skips when the pack is disabled even if the knob path is ignored", () => {
-    const home = fixtureWithPack(false);
-    const probed: string[] = [];
-    const result = validate({
-      homeDir: home,
-      configPath: path.join(home, "harness.yaml"),
-      ...NOOP_PROBES,
-      gitIgnoreProbe: (relPath: string) => {
-        probed.push(relPath);
-        return true;
-      },
-    });
-    expect(probed).toEqual([]);
-    expect(result.warningCount).toBe(0);
-  });
-});
-
-describe("validate — createDefaultGitIgnoreProbe (real git)", () => {
-  function makeRepo(gitignore: string | null): string {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "harness-checkignore-"));
-    cleanups.push(() => fs.rmSync(dir, { recursive: true, force: true }));
-    spawnSync("git", ["init", "-q"], { cwd: dir });
-    if (gitignore !== null) {
-      fs.writeFileSync(path.join(dir, ".gitignore"), gitignore, "utf8");
-    }
-    return dir;
-  }
-
-  it("maps git check-ignore exit codes to true / false / null", () => {
-    const ignoringRepo = makeRepo(".ai/\n");
-    expect(
-      createDefaultGitIgnoreProbe(ignoringRepo)(".ai/solution-acceptance.json"),
-    ).toBe(true);
-
-    const cleanRepo = makeRepo(".ai/runs/\n");
-    expect(
-      createDefaultGitIgnoreProbe(cleanRepo)(".ai/solution-acceptance.json"),
-    ).toBe(false);
-
-    // GIT_CEILING_DIRECTORIES keeps the assertion hermetic: without it,
-    // git would walk up from tmpdir and could find an enclosing repo on
-    // machines whose TMPDIR sits inside a checkout.
-    const nonRepo = fs.mkdtempSync(path.join(os.tmpdir(), "harness-nonrepo-"));
-    cleanups.push(() => fs.rmSync(nonRepo, { recursive: true, force: true }));
-    const savedCeiling = process.env.GIT_CEILING_DIRECTORIES;
-    process.env.GIT_CEILING_DIRECTORIES = path.dirname(nonRepo);
-    try {
-      expect(
-        createDefaultGitIgnoreProbe(nonRepo)(".ai/solution-acceptance.json"),
-      ).toBe(null);
-    } finally {
-      if (savedCeiling === undefined) delete process.env.GIT_CEILING_DIRECTORIES;
-      else process.env.GIT_CEILING_DIRECTORIES = savedCeiling;
-    }
-  });
-});
 
 describe("validate — internal helpers", () => {
   it("expandHome resolves ~ and ~/ prefixes", () => {
@@ -2297,23 +2097,6 @@ ${DIRECT_HOOK(100)}policies: []
     expect(marginDiags(result.diagnostics)).toEqual([]);
   });
 
-  it("negative control: an enabled solution-acceptance pack is NOT flagged even under the same raised ledger timeout (file-marker based, no ledger round-trip)", () => {
-    const home = fixtureWithGroundingMcp({
-      timeoutMs: 10000,
-      policyPacksYaml: `policy_packs:
-  - name: solution-acceptance
-    source: builtin
-    enabled: true
-`,
-    });
-    const result = validate({
-      homeDir: home,
-      configPath: path.join(home, "harness.yaml"),
-      ...NOOP_PROBES,
-    });
-    const hits = marginDiags(result.diagnostics);
-    expect(hits.some((h) => h.path.includes("solution-acceptance"))).toBe(false);
-  });
 });
 
 describe("validate — --json", () => {

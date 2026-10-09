@@ -416,17 +416,16 @@ function formatPoliciesSection(report: DoctorReport): string[] {
 // gets silently skipped by `expandPolicyPacks`; a pack whose `config:`
 // keys typo (`permision_profile`, `mode: "fastConfirm"`) falls through
 // to runtime fallbacks and only surfaces when the hook finally fires.
-// Both render ✗ here. Section stays silent when both lists are empty
+// Both render ✗ here. Section stays silent when the lists are empty
 // (the healthy case is common; a noisy ✓ would dilute doctor's signal).
 function formatPolicyPacksSection(report: DoctorReport): string[] {
-  const { unresolved, configIssues, versionGaps, uxDrift, solutionAcceptance } =
+  const { unresolved, configIssues, versionGaps, uxDrift } =
     report.policyPacks;
   if (
     unresolved.length === 0 &&
     configIssues.length === 0 &&
     versionGaps.length === 0 &&
-    uxDrift.length === 0 &&
-    solutionAcceptance.length === 0
+    uxDrift.length === 0
   ) {
     return [];
   }
@@ -453,13 +452,6 @@ function formatPolicyPacksSection(report: DoctorReport): string[] {
   }
   for (const drift of uxDrift) {
     out.push(`  ⚠ ${drift.name}.config.${drift.fields.join("/")}  ${drift.message}`);
-  }
-  for (const d of solutionAcceptance) {
-    if (d.severity === "error") {
-      out.push(`  ✗ ${d.path}  ${d.message}`);
-    } else {
-      out.push(`  ⚠ ${d.path}  ${d.message}`);
-    }
   }
   return out;
 }

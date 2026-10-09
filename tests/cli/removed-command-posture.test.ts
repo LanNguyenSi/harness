@@ -101,7 +101,6 @@ const isRemovedCommandDiag = (d: { message: string }) => d.message.includes(", r
 const NOOP_PROBES = {
   versionProbe: () => null,
   builtinRuntimeProbe: () => [] as string[],
-  gitIgnoreProbe: () => null,
 };
 
 const NO_CLAUDE_CLI: ClaudeMcpExec = async () => ({ code: 127, stdout: "", stderr: "", enoent: true, timedOut: false });
@@ -145,6 +144,31 @@ describe("harness validate on a manifest that still calls removed commands", () 
     const result = validate({ configPath: file, strict: true, ...NOOP_PROBES });
     expect(result.manifest).not.toBeNull();
     expect(result.diagnostics.filter(isRemovedCommandDiag)).toEqual([]);
+  });
+
+  it("warns at a solution-acceptance hook and its writeguard hyphen-sibling, and --strict fails on both", () => {
+    const m = baseFullShaped();
+    m["hooks"] = [
+      { name: "solution-acceptance", event: "SessionStart", command: "harness pack hook solution-acceptance", blocking: false, budget_ms: 15000 },
+      { name: "solution-acceptance-writeguard", event: "SessionStart", command: "harness pack hook solution-acceptance-writeguard", blocking: false, budget_ms: 15000 },
+    ];
+    m["policies"] = [];
+    const file = writeManifest(m);
+
+    const result = validate({ configPath: file, ...NOOP_PROBES });
+    expect(result.manifest).not.toBeNull();
+    expect(result.diagnostics.filter(isRemovedCommandDiag).map((d) => [d.path, d.severity])).toEqual([
+      ["hooks[0].command", "warning"],
+      ["hooks[1].command", "warning"],
+    ]);
+
+    const strict = validate({ configPath: file, strict: true, ...NOOP_PROBES });
+    const strictDiags = strict.diagnostics.filter(isRemovedCommandDiag);
+    expect(strictDiags.map((d) => [d.path, d.severity])).toEqual([
+      ["hooks[0].command", "error"],
+      ["hooks[1].command", "error"],
+    ]);
+    expect(strict.errorCount).toBeGreaterThanOrEqual(2);
   });
 });
 
