@@ -45,7 +45,6 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { buildUgAutoApprovals } from "../../src/cli/doctor/ug-auto-approvals.js";
 import { runPackHookCodexPreToolUseCli } from "../../src/cli/pack/hook-codex-pre-tool-use.js";
 import { runPackHookPreToolUseCli } from "../../src/cli/pack/hook-pre-tool-use.js";
 import type { LedgerEntry } from "../../src/policies/index.js";
@@ -1344,24 +1343,6 @@ describe("pack hook codex-pre-tool-use — auto-approval path (ADR slice 2)", ()
       expect(ledgerCalls).toEqual([]);
       expect(checkApprovalMarker(generatedDir, SESSION).matched).toBe(true);
       expect(readReport(report.filePath)["approvalStatus"]).toBe("approved");
-    });
-
-    it("A3 — a marker MINTED by this hook shows up under `codex` in the doctor auto-approval listing", async () => {
-      // The ADR's slice 2 doctor probe, end to end: the marker is not
-      // hand-written here, it is whatever the Codex hook actually mints,
-      // so the listing is read against the real `approvedBy` shape.
-      getOrCreateSigningKey(generatedDir);
-      writePendingReport();
-
-      expect((await call()).blocked).toBe(false);
-
-      const listing = buildUgAutoApprovals(generatedDir, { recentSessions: 20 });
-      expect(listing.approvalsDirPresent).toBe(true);
-      expect(listing.byHarness["codex"]).toBeGreaterThanOrEqual(1);
-      expect(listing.byMode["bypassPermissions"]).toBeGreaterThanOrEqual(1);
-      expect(listing.entries).toContainEqual(
-        expect.objectContaining({ sessionId: SESSION, harness: "codex" }),
-      );
     });
   });
 });

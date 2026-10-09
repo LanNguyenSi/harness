@@ -54,21 +54,6 @@ import {
 import { checkNpmBinPath, type NpmExec } from "./npm-bin-path.js";
 import { scanForRogueLedgers, type RogueLedgerScanOptions } from "./rogue-ledger.js";
 import { buildClaudeMcpRegistration } from "./claude-mcp.js";
-import {
-  checkUnderstandingModeEnvDivergence,
-  isUnderstandingPackEnabled,
-} from "./understanding-mode-env.js";
-import { checkAutoApproveMode } from "./auto-approve-mode.js";
-import { checkExpireOnToolMatch } from "./expire-on-tool-match.js";
-import { checkBypassWithoutAutoApprove } from "./bypass-without-auto-approve.js";
-import { buildUgAutoApprovals, DEFAULT_RECENT_SESSIONS } from "./ug-auto-approvals.js";
-import { buildUgDelegations } from "./ug-delegations.js";
-import { buildUgInflight } from "./ug-inflight.js";
-import { buildUgReportsDir } from "./ug-reports-dir.js";
-import { defaultReportsDir } from "../../policy-packs/builtin/understanding-before-execution/persisted-reports.js";
-import { buildSettingsDrift } from "./settings-drift.js";
-import { buildCodexConfigDrift, isCodexOptedIntoAutoApprove } from "./codex-config-drift.js";
-import { LOCK_BASENAME } from "../../io/harness-lock.js";
 import type { ClaudeMcpExec } from "../../io/claude-mcp.js";
 import {
   isDoctorTarget,
@@ -134,31 +119,17 @@ export interface DoctorOptions extends LoaderOptions {
   claudeMcpExec?: ClaudeMcpExec;
   /**
    * Test-injection knob for env-dependent checks: the dead settings.json
-   * `mcpServers` block lookup (honors `CLAUDE_CONFIG_DIR`), and the
-   * understanding-gate mode env/config divergence advisory (task
-   * 24abdecb, reads `UNDERSTANDING_GATE_MODE`). Defaults to
+   * `mcpServers` block lookup (honors `CLAUDE_CONFIG_DIR`). Defaults to
    * `process.env`; tests inject `{}` (or specific values) to stay
    * hermetic against the operator's real env.
    */
   envOverride?: NodeJS.ProcessEnv;
   /**
-   * Window size for the understanding-gate auto-approval doctor listing
-   * (ADR docs/decisions/2026-08-27-ug-auto-mode-approval.md slice 1,
-   * agent-tasks 74b4b17d): how many of the newest `.approvals/` session
-   * markers to scan for the "auto approvals in the last N sessions"
-   * metric. Defaults to {@link DEFAULT_RECENT_SESSIONS}. Must be an
-   * integer >= 1; `doctor()` throws otherwise (mirrors the CLI's own
-   * `--recent-sessions` validation, but also covers direct/programmatic
-   * callers that bypass the CLI parser).
-   */
-  recentSessions?: number;
-  /**
-   * cwd the two project-scoped settings-drift candidates
-   * (`.claude/settings.json`, `.claude/settings.local.json`) resolve
-   * against, mirroring how `harness apply --target <relative path>`
-   * resolves its own target (`resolveTargetPath` in apply.ts, which
-   * calls bare `path.resolve`). Defaults to `process.cwd()`; tests
-   * inject a fixture dir to stay hermetic against the real cwd.
+   * cwd relative paths resolve against, mirroring how
+   * `harness apply --target <relative path>` resolves its own target
+   * (`resolveTargetPath` in apply.ts, which calls bare `path.resolve`).
+   * Defaults to `process.cwd()`; tests inject a fixture dir to stay
+   * hermetic against the real cwd.
    */
   cwd?: string;
 }
@@ -1077,37 +1048,6 @@ function countDiagnostics(report: Omit<DoctorReport, "errorCount" | "warningCoun
     warningCount += report.claudeMcp.warnings.length;
   }
   if (report.npmGlobalBin?.status === "warn") warningCount++;
-  // Understanding-gate mode env/config divergence (task 24abdecb):
-  // always advisory, never an error — see understanding-mode-env.ts.
-  if (report.understandingModeEnv) warningCount++;
-  // ugAutoApprovals is informational only (ℹ), never contributes here.
-  // ugDelegations is informational (ℹ) UNLESS it found an unreadable
-  // file, in which case it rolls exactly one warning (ug-delegations.ts,
-  // agent-tasks 37ad0b05), not one per unreadable file.
-  if (report.ugDelegations && report.ugDelegations.unreadable > 0) warningCount++;
-  // auto_approve configured outside grill_me (agent-tasks abfad738):
-  // always advisory, never an error, see auto-approve-mode.ts.
-  if (report.ugAutoApproveMode) warningCount++;
-  // Explicit expire_on_tool_match with task_finish but without task_merge
-  // (task 0c6b2cb9): always advisory, never an error, see
-  // expire-on-tool-match.ts.
-  if (report.ugExpireOnToolMatch) warningCount++;
-  // bypassPermissions observed, auto_approve missing/mismatched (task
-  // 8f637efd): always advisory, never an error, see
-  // bypass-without-auto-approve.ts.
-  if (report.ugBypassWithoutAutoApprove) warningCount++;
-  // Reports directory at 75 % of a gate bound or past it (task 6e001bfc):
-  // one advisory warning either way, never an error, see ug-reports-dir.ts.
-  if (report.ugReportsDir && report.ugReportsDir.state !== "ok") warningCount++;
-  // ugInflight is informational only (ℹ) and never contributes here: a
-  // stale or skipped record is exactly what `harness gc` sweeps, not a
-  // tampering signal (see ug-inflight.ts / types.ts). Placed after every
-  // line this function's own docs citation anchors rather than beside
-  // its ugDelegations sibling above, for the same reason format.ts's
-  // ugInflight local moved: docs/decisions/2026-08-27-ug-auto-mode-approval.md
-  // cites a line here by exact number.
-  if (report.settingsDrift) warningCount += report.settingsDrift.warnings.length;
-  if (report.codexConfigDrift) warningCount += report.codexConfigDrift.warnings.length;
   if (report.memory.routerExecutable && !report.memory.routerExecutable.exists) errorCount++;
   if (!report.memory.routerExecutable) warningCount++;
   if (report.memory.routerVersion?.status === "warn") warningCount++;
@@ -1290,98 +1230,6 @@ export async function doctor(opts: DoctorOptions = {}): Promise<DoctorReport> {
           ...(opts.envOverride !== undefined ? { env: opts.envOverride } : {}),
         })
       : undefined;
-  const understandingModeEnv = checkUnderstandingModeEnvDivergence(
-    manifest,
-    opts.envOverride ?? process.env,
-  );
-  const ugAutoApproveMode = checkAutoApproveMode(manifest);
-  const ugExpireOnToolMatch = checkExpireOnToolMatch(manifest);
-
-  // ADR docs/decisions/2026-08-27-ug-auto-mode-approval.md slice 1
-  // (agent-tasks 74b4b17d), "Audit and doctor": the auto-approval
-  // listing + last-N metric, and the settings-drift compensating
-  // control for threat model (c)'s defaultMode/hook-roster plant. Both
-  // gated on the pack being declared and enabled (same gate as
-  // `understandingModeEnv` above) — a manifest that never uses the pack
-  // has no auto-approval markers or auto-approve config to drift.
-  const recentSessionsWindow = opts.recentSessions ?? DEFAULT_RECENT_SESSIONS;
-  if (!Number.isInteger(recentSessionsWindow) || recentSessionsWindow < 1) {
-    throw new Error(
-      `doctor: recentSessions must be an integer >= 1, got ${JSON.stringify(opts.recentSessions)}`,
-    );
-  }
-  const understandingPackEnabled = isUnderstandingPackEnabled(manifest);
-  const ugAutoApprovals = understandingPackEnabled
-    ? buildUgAutoApprovals(generatedDir, { recentSessions: recentSessionsWindow })
-    : undefined;
-  // Slice 3 (agent-tasks 37ad0b05), same "Audit and doctor"
-  // section: delegations-on-disk metric from `.delegations/`, gated on
-  // the same pack-enabled check, computed even when the directory is
-  // absent (`delegationsDirPresent: false`, `total: 0`), the render
-  // layer (format.ts) is what stays silent for that case, mirroring
-  // `ugAutoApprovals`'s own `approvalsDirPresent` gate; see
-  // ug-delegations.ts.
-  const ugDelegations = understandingPackEnabled
-    ? buildUgDelegations(generatedDir, { ...(opts.now !== undefined ? { now: opts.now } : {}) })
-    : undefined;
-  // Subagent-gate slice 1: in-flight-records-on-disk metric from
-  // `.inflight/`, same gate and "computed even when the directory is
-  // absent" posture as `ugDelegations` immediately above; see
-  // ug-inflight.ts.
-  const ugInflight = understandingPackEnabled
-    ? buildUgInflight(generatedDir, { ...(opts.now !== undefined ? { now: opts.now } : {}) })
-    : undefined;
-  // Reports-directory size against the bounds the PreToolUse gate reads, same
-  // gate as `ugInflight` above. The directory comes from the same resolver the
-  // hooks and `harness approve understanding` use (env, else manifest-anchored);
-  // the walk stops at the gate's own bound, see ug-reports-dir.ts.
-  const ugReportsDir = understandingPackEnabled
-    ? buildUgReportsDir(defaultReportsDir(path.dirname(resolved.base)))
-    : undefined;
-  // Task 8f637efd ("Amendment: install default"): bypassPermissions
-  // observed (hook-side) but auto_approve missing/mismatched. Same gate
-  // and same recentSessions window as ugAutoApprovals, reading a
-  // different on-disk directory (.permission-mode-observations/, not
-  // .approvals/).
-  const ugBypassWithoutAutoApprove = understandingPackEnabled
-    ? checkBypassWithoutAutoApprove(manifest, generatedDir, {
-        recentSessions: recentSessionsWindow,
-      })
-    : undefined;
-  // Shared option shape both drift checks below take (same manifest,
-  // same generated dir, same lock, same cwd/home/env resolution), one
-  // literal instead of two near-identical ones (`buildSettingsDrift` and
-  // `buildCodexConfigDrift` both accept exactly this shape).
-  const driftCheckOpts = {
-    generatedDir,
-    lockPath: path.join(path.dirname(resolved.base), LOCK_BASENAME),
-    cwd: opts.cwd ?? process.cwd(),
-    home,
-    env: opts.envOverride ?? process.env,
-  };
-  // Settings-drift additionally requires `harness.generated/` to exist:
-  // without at least one prior `harness apply`, there is no baseline to
-  // compare against and nothing this check owns an opinion about (a
-  // fresh manifest that declares the pack but has never been applied
-  // must stay exactly as quiet as today — see the doctor-understanding-
-  // mode-env fixture that already asserts a bare "Environment"-less
-  // report for that exact shape).
-  const settingsDrift =
-    understandingPackEnabled && fs.existsSync(generatedDir)
-      ? buildSettingsDrift(driftCheckOpts)
-      : undefined;
-  // Codex counterpart of `settingsDrift` (follow-up of slice 2 of the
-  // same ADR, agent-tasks f59ea0eb). Gated on the pack's
-  // `auto_approve.harnesses` actually listing `codex` rather than on
-  // `understandingPackEnabled` alone, and NOT gated on
-  // `harness.generated/` existing: unlike `permissions.defaultMode`,
-  // `approval_policy = "never"` is a live risk the moment it is present,
-  // whether or not a `harness apply` has ever run for this manifest (see
-  // codex-config-drift.ts's module header).
-  const codexConfigDrift = isCodexOptedIntoAutoApprove(manifest)
-    ? buildCodexConfigDrift(driftCheckOpts)
-    : undefined;
-
   const manifestSec = manifestSection(manifest, postureWarnings);
 
   const rogueLedgerDbs = scanForRogueLedgers({
@@ -1414,16 +1262,6 @@ export async function doctor(opts: DoctorOptions = {}): Promise<DoctorReport> {
     ...(claudeMcp !== undefined ? { claudeMcp } : {}),
     rogueLedgerDbs,
     ...(npmGlobalBin !== undefined ? { npmGlobalBin } : {}),
-    ...(understandingModeEnv !== undefined ? { understandingModeEnv } : {}),
-    ...(ugAutoApprovals !== undefined ? { ugAutoApprovals } : {}),
-    ...(ugDelegations !== undefined ? { ugDelegations } : {}),
-    ...(ugInflight !== undefined ? { ugInflight } : {}),
-    ...(ugReportsDir !== undefined ? { ugReportsDir } : {}),
-    ...(ugBypassWithoutAutoApprove !== undefined ? { ugBypassWithoutAutoApprove } : {}),
-    ...(ugAutoApproveMode !== undefined ? { ugAutoApproveMode } : {}),
-    ...(ugExpireOnToolMatch !== undefined ? { ugExpireOnToolMatch } : {}),
-    ...(settingsDrift !== undefined ? { settingsDrift } : {}),
-    ...(codexConfigDrift !== undefined ? { codexConfigDrift } : {}),
   };
   if (opts.target === "codex") {
     const manifestDir = path.dirname(resolved.base);

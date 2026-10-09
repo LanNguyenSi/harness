@@ -3484,3 +3484,56 @@ ${SILENCE_DRIFT_PACK}policy_packs:
     expect(missedFloor.errorCount).toBe(metFloor.errorCount);
   });
 });
+
+// Removal of the understanding-gate doctor read side (task 95826160):
+// with the UG pack enabled AND `harness.generated/` present (the
+// strictest gate any removed section used, a superset of the
+// pack-enabled-only gates of the others), the report carries none of
+// the removed fields and the formatted text renders none of the
+// removed Environment lines (the strings below are quoted from the
+// deleted render code in format.ts).
+describe("doctor - removed understanding-gate report fields (task 95826160)", () => {
+  it("drops every removed UG field and render line even with the pack enabled and harness.generated/ present", async () => {
+    const home = makeFixture({
+      "harness.yaml": `version: 1
+hooks: []
+policies: []
+${SILENCE_DRIFT}policy_packs:
+  - name: understanding-before-execution
+    source: builtin
+`,
+    });
+    fs.mkdirSync(path.join(home, "harness.generated"));
+    const report = await doctor({
+      configPath: path.join(home, "harness.yaml"),
+      homeOverride: home,
+      shallow: true,
+      versionProbe: () => null,
+    });
+
+    for (const key of [
+      "understandingModeEnv",
+      "ugAutoApprovals",
+      "ugDelegations",
+      "ugInflight",
+      "ugReportsDir",
+      "ugBypassWithoutAutoApprove",
+      "ugAutoApproveMode",
+      "ugExpireOnToolMatch",
+      "settingsDrift",
+      "codexConfigDrift",
+    ] as const) {
+      expect(Object.keys(report)).not.toContain(key);
+    }
+
+    const text = format(report).toLowerCase();
+    for (const removed of [
+      "auto approvals in the last",
+      "delegations",
+      "in-flight",
+      "settings drift",
+    ]) {
+      expect(text).not.toContain(removed);
+    }
+  });
+});

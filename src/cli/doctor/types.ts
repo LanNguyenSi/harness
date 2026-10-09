@@ -6,16 +6,6 @@ import type { CodexTargetReport } from "./codex.js";
 import type { OpencodeTargetReport } from "./opencode.js";
 import type { NpmBinReport } from "./npm-bin-path.js";
 import type { RogueLedgerDb } from "./rogue-ledger.js";
-import type { UnderstandingModeEnvDivergence } from "./understanding-mode-env.js";
-import type { UgAutoApprovalsSection } from "./ug-auto-approvals.js";
-import type { UgDelegationsSection } from "./ug-delegations.js";
-import type { UgInflightSection } from "./ug-inflight.js";
-import type { UgReportsDirSection } from "./ug-reports-dir.js";
-import type { SettingsDriftSection } from "./settings-drift.js";
-import type { AutoApproveModeWarning } from "./auto-approve-mode.js";
-import type { ExpireOnToolMatchWarning } from "./expire-on-tool-match.js";
-import type { BypassWithoutAutoApproveFinding } from "./bypass-without-auto-approve.js";
-import type { CodexConfigDriftSection } from "./codex-config-drift.js";
 
 /**
  * Phase 6 #6 follow-up — doctor target identifier. Distinct from
@@ -438,115 +428,6 @@ export interface DoctorReport {
    * doctor / harness probes. See task 4ddd78ed.
    */
   npmGlobalBin?: NpmBinReport;
-  /**
-   * Understanding-gate mode env/config divergence (task 24abdecb).
-   * Present only when `UNDERSTANDING_GATE_MODE` is set in the operator
-   * environment AND diverges from
-   * `policy_packs[understanding-before-execution].config.mode`. Always
-   * advisory (rolls into `warningCount`, never `errorCount`) — see
-   * `understanding-mode-env.ts` for the full rationale.
-   */
-  understandingModeEnv?: UnderstandingModeEnvDivergence;
-  /**
-   * Auto-approval listing + last-N metric (ADR
-   * docs/decisions/2026-08-27-ug-auto-mode-approval.md slice 1,
-   * agent-tasks 74b4b17d, "Audit and doctor"). Present only when the
-   * `understanding-before-execution` pack is declared and enabled
-   * (mirrors `understandingModeEnv`'s gate) — a manifest that never
-   * uses the pack has no `.approvals/` markers this listing owns an
-   * opinion about. Purely informational (`ℹ`); never rolls into
-   * `warningCount`.
-   */
-  ugAutoApprovals?: UgAutoApprovalsSection;
-  /**
-   * Delegations-on-disk metric (same ADR, slice 3, "Audit and doctor",
-   * agent-tasks 37ad0b05): `total`/`expired`/`unreadable` counts
-   * from `harness.generated/.delegations/`, distinct from
-   * `ugAutoApprovals` (which reads `.approvals/` only). Present only
-   * when the `understanding-before-execution` pack is declared and
-   * enabled (mirrors `ugAutoApprovals`'s gate). `delegationsDirPresent`
-   * mirrors `ugAutoApprovals`'s `approvalsDirPresent`: the rendered line
-   * stays silent when `.delegations/` does not exist at all, and shows
-   * the zero-count line when it exists but is empty (both cases resolve
-   * `total`/`expired`/`unreadable` to `0`). Informational (`ℹ`) unless
-   * `unreadable > 0`, in which case it rolls one warning into
-   * `warningCount`.
-   */
-  ugDelegations?: UgDelegationsSection;
-  /**
-   * In-flight subagent records (subagent-gate slice 1) from
-   * `harness.generated/.inflight/`, distinct from both `ugDelegations`
-   * (`.delegations/`) and `ugAutoApprovals` (`.approvals/`). Present
-   * only when the `understanding-before-execution` pack is declared and
-   * enabled (mirrors `ugDelegations`'s gate). `inflightDirPresent`
-   * mirrors `ugDelegations`'s `delegationsDirPresent`: the rendered
-   * line stays silent when `.inflight/` does not exist at all, and
-   * shows the zero-count line when it exists but is empty. Purely
-   * informational (`ℹ`) — an unreadable/skipped entry never rolls a
-   * warning here, since a record aging out unread is exactly what
-   * `harness gc` is for, not a signal of tampering.
-   */
-  ugInflight?: UgInflightSection;
-  /**
-   * Size of the understanding-gate reports directory against the bounds the
-   * PreToolUse gate reads (see `ug-reports-dir.ts`). Present only when the
-   * `understanding-before-execution` pack is declared and enabled. Rendered
-   * only when `state` is `near` or `over`, and each of those rolls exactly
-   * one warning (never an error: a past-the-bound directory fails the gate
-   * closed, a lockout that announces itself on every deny, not a fail-open
-   * gap).
-   */
-  ugReportsDir?: UgReportsDirSection;
-  /**
-   * `bypassPermissions` observed (hook-side, `.permission-mode-
-   * observations/`) but `auto_approve` does not cover it (task 8f637efd,
-   * "Amendment: install default"). Present only when the pack is
-   * declared and enabled AND at least one qualifying observation exists
-   * in the window; always a warning (`⚠`) when present, see
-   * bypass-without-auto-approve.ts.
-   */
-  ugBypassWithoutAutoApprove?: BypassWithoutAutoApproveFinding;
-
-  /**
-   * `auto_approve` configured without `mode: grill_me` (agent-tasks
-   * abfad738, follow-up of ADR
-   * docs/decisions/2026-08-27-ug-auto-mode-approval.md slice 1).
-   * Present only when the pack is declared and enabled AND
-   * `config.auto_approve` parses as a valid opt-in block. Always
-   * advisory (rolls into `warningCount`, never `errorCount`). See
-   * `auto-approve-mode.ts` for the full rationale.
-   */
-  ugAutoApproveMode?: AutoApproveModeWarning;
-  /**
-   * Explicit `approval_lifecycle.expire_on_tool_match` that lists
-   * `task_finish` but not `task_merge` (task 0c6b2cb9). Always advisory
-   * (rolls into `warningCount`, never `errorCount`). See
-   * `expire-on-tool-match.ts`.
-   */
-  ugExpireOnToolMatch?: ExpireOnToolMatchWarning;
-  /**
-   * Settings-drift compensating control (same ADR, threat model (c)): a
-   * `permissions.defaultMode` or hook entry present in a live Claude
-   * Code settings file but absent from harness's own last-apply
-   * snapshot. Present only when the understanding-gate pack is enabled
-   * AND `harness apply` has run at least once for this manifest
-   * (`harness.generated/` exists) — otherwise there is no baseline to
-   * compare against and nothing to say. `warnings` roll into
-   * `warningCount`; `notes` never do.
-   */
-  settingsDrift?: SettingsDriftSection;
-  /**
-   * Codex counterpart of `settingsDrift` (follow-up of slice 2 of the
-   * same ADR, agent-tasks f59ea0eb): a live `approval_policy = "never"`
-   * or full-access `default_permissions` selection in `$CODEX_HOME
-   * /config.toml` or `<repo>/.codex/config.toml`. Present only when the
-   * understanding-gate pack's `auto_approve.harnesses` lists `codex`;
-   * a repo that never opted Codex into the auto path has no live signal
-   * for this key to pre-set. Unlike `settingsDrift`, this always warns
-   * while the key is present and the repo is opted in (not gated on
-   * drift since the last apply); `warnings` roll into `warningCount`.
-   */
-  codexConfigDrift?: CodexConfigDriftSection;
   memory: MemoryReport;
   hooks: HookEntryReport[];
   policies: PolicyEntryReport[];
@@ -645,19 +526,6 @@ export type {
   ClaudeMcpRegistrationSection,
   ClaudeMcpEntryReport,
 } from "./claude-mcp.js";
-export type { UnderstandingModeEnvDivergence } from "./understanding-mode-env.js";
-export type {
-  UgAutoApprovalsSection,
-  AutoApprovalListingEntry,
-} from "./ug-auto-approvals.js";
-export type { UgDelegationsSection } from "./ug-delegations.js";
-export type { UgInflightSection } from "./ug-inflight.js";
-export type { UgReportsDirSection } from "./ug-reports-dir.js";
-export type { AutoApproveModeWarning } from "./auto-approve-mode.js";
-export type { ExpireOnToolMatchWarning } from "./expire-on-tool-match.js";
-export type { BypassWithoutAutoApproveFinding } from "./bypass-without-auto-approve.js";
-export type { SettingsDriftSection } from "./settings-drift.js";
-export type { CodexConfigDriftSection } from "./codex-config-drift.js";
 
 export type {
   Manifest,
