@@ -9,25 +9,23 @@ function manifestWith(packs: unknown[]) {
   });
 }
 
-const probe = (stdout: string | null) => () => stdout;
-
-describe("checkPolicyPackVersions — branch-protection (no version probe registered)", () => {
+describe("checkPolicyPackVersions: branch-protection (no version probe registered)", () => {
   it("missing min_version is silent (no probe to consult anyway)", () => {
     const m = manifestWith([{ name: "branch-protection" }]);
-    expect(checkPolicyPackVersions(m, probe("anything"))).toEqual([]);
+    expect(checkPolicyPackVersions(m)).toEqual([]);
   });
 
   it("declared min_version surfaces no_probe_registered (operator expects a floor for a probe-less pack)", () => {
     const m = manifestWith([{ name: "branch-protection", min_version: "1.0.0" }]);
-    const gaps = checkPolicyPackVersions(m, probe("anything"));
+    const gaps = checkPolicyPackVersions(m);
     expect(gaps).toHaveLength(1);
     expect(gaps[0]?.kind).toBe("no_probe_registered");
-    expect(gaps[0]?.versionCommand).toEqual([]);
-    expect(gaps[0]?.actualVersion).toBeNull();
+    expect(gaps[0]?.declaredMinVersion).toBe("1.0.0");
+    expect(gaps[0]?.message).toMatch(/no version probe registered for pack "branch-protection"/);
   });
 });
 
-describe("checkPolicyPackVersions — cross-pack semantics", () => {
+describe("checkPolicyPackVersions: pack selection", () => {
   it("disabled packs are not checked even with min_version", () => {
     const m = manifestWith([
       {
@@ -36,12 +34,12 @@ describe("checkPolicyPackVersions — cross-pack semantics", () => {
         min_version: "99.0.0",
       },
     ]);
-    expect(checkPolicyPackVersions(m, probe("0.0.0"))).toEqual([]);
+    expect(checkPolicyPackVersions(m)).toEqual([]);
   });
 
   it("unknown pack names are skipped (source-check's job)", () => {
     const m = manifestWith([{ name: "no-such-pack", min_version: "1.0.0" }]);
-    expect(checkPolicyPackVersions(m, probe("0.0.0"))).toEqual([]);
+    expect(checkPolicyPackVersions(m)).toEqual([]);
   });
 
   it("preserves manifest order across multiple packs with gaps", () => {
@@ -54,7 +52,7 @@ describe("checkPolicyPackVersions — cross-pack semantics", () => {
     // re-sorts, or miscounts indexes.
     const m = manifestWith([{ name: "branch-protection", min_version: "1.0.0" }]);
     m.policy_packs.push({ ...m.policy_packs[0]!, min_version: "2.0.0" });
-    const gaps = checkPolicyPackVersions(m, probe("anything"));
+    const gaps = checkPolicyPackVersions(m);
     expect(gaps).toHaveLength(2);
     expect(gaps.map((g) => g.packIndex)).toEqual([0, 1]);
     expect(gaps.map((g) => g.declaredMinVersion)).toEqual(["1.0.0", "2.0.0"]);

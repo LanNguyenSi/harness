@@ -20,7 +20,6 @@ export function registerPackGroup(
       "Insert a new policy_packs entry. <name> must be a known builtin (see docs/policy-packs/).",
     )
     .option("--config <path>", "manifest path (default: ~/.harness/harness.yaml; legacy fallback ~/.claude/harness.yaml)")
-    .option("--mode <mode>", "pack-specific config.mode value (e.g. fast_confirm | grill_me | strict)")
     .option("--source <src>", "pack source (default: builtin)")
     .option("--description <text>", "operator-facing description")
     .option("--disabled", "register as enabled: false")
@@ -30,7 +29,6 @@ export function registerPackGroup(
         name: string,
         options: {
           config?: string;
-          mode?: string;
           source?: string;
           description?: string;
           disabled?: boolean;
@@ -41,7 +39,6 @@ export function registerPackGroup(
         if (options.source !== undefined) entry.source = options.source;
         if (options.disabled === true) entry.enabled = false;
         if (options.description !== undefined) entry.description = options.description;
-        if (options.mode !== undefined) entry.config = { mode: options.mode };
         const result = await packAdd(entry, {
           configPath: options.config,
           dryRun: options.dryRun,
@@ -90,7 +87,7 @@ export function registerPackGroup(
     );
 
   // `harness pack reseed <name>` (task 68b9ad9c): pull the shipped
-  // builtin template's config.ux (and config.producers) into an already-
+  // builtin template's config.ux into an already-
   // installed manifest. Explicit-only, mirroring add/remove — never
   // invoked by `apply`, so an upgrade never silently rewrites an
   // operator's deliberate ux customisation. Paired with the `harness
@@ -98,8 +95,8 @@ export function registerPackGroup(
   packCmd
     .command("reseed <name>")
     .description(
-      "Pull the shipped builtin template's config.ux (and config.producers) for <name> into " +
-        "the manifest, preserving other config keys (mode, approval_lifecycle, ...). No-op if " +
+      "Pull the shipped builtin template's config.ux for <name> into " +
+        "the manifest, preserving other config keys (protected_branches, ...). No-op if " +
         "already up to date. See `harness doctor` for a divergence warning.",
     )
     .option("--config <path>", "manifest path (default: ~/.harness/harness.yaml; legacy fallback ~/.claude/harness.yaml)")

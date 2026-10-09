@@ -247,6 +247,9 @@ describe("approveRisk — degraded + error paths", () => {
     expect(msg).toContain("$CLAUDE_CODE_SESSION_ID");
     expect(msg).toContain("$CLAUDE_SESSION_ID");
     expect(msg).toContain("$CODEX_SESSION_ID");
+    // The only writer of .pending-approval is `harness policy intercept`.
+    expect(msg).toContain("`harness policy intercept` stages the session id");
+    expect(msg).not.toContain("understanding-gate");
   });
 });
 

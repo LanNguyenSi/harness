@@ -318,12 +318,19 @@ describe("pack list", () => {
     );
     const r = packList({ configPath: manifestPath });
     expect(r.rows).toHaveLength(1);
-    expect(r.rows[0]).toMatchObject({
+    // The exact key set: no `mode` column (no builtin pack has a mode).
+    expect(r.rows[0]).toEqual({
       name: "branch-protection",
       source: "builtin",
       enabled: true,
       description: "test",
     });
+    expect(r.output.split("\n")[0]!.trim().split(/\s+/)).toEqual([
+      "name",
+      "source",
+      "enabled",
+      "description",
+    ]);
     expect(r.output).toContain("branch-protection");
     expect(r.output).toContain("test");
   });
@@ -345,5 +352,6 @@ describe("pack list", () => {
     const parsed = JSON.parse(r.output);
     expect(Array.isArray(parsed)).toBe(true);
     expect(parsed[0].name).toBe("branch-protection");
+    expect(Object.keys(parsed[0])).toEqual(["name", "source", "enabled", "description"]);
   });
 });

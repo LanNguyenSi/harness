@@ -40,19 +40,6 @@ describe("checkPolicyPackUxDrift: branch-protection", () => {
     expect(checkPolicyPackUxDrift(m)).toEqual([]);
   });
 
-  it("has no canonical producers, so a declared producers list is never flagged", () => {
-    const m = manifestWith([
-      {
-        name: "branch-protection",
-        config: {
-          ux: branchProtectionDefaultUx(),
-          producers: [{ kind: "ask", command: "whatever", description: "whatever" }],
-        },
-      },
-    ]);
-    expect(checkPolicyPackUxDrift(m)).toEqual([]);
-  });
-
   it("does not flag when config.ux is absent entirely (missing is out of scope)", () => {
     const m = manifestWith([
       { name: "branch-protection", config: { protected_branches: ["main"] } },

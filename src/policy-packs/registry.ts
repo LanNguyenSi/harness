@@ -5,7 +5,7 @@
 // Non-builtin sources (path/npm/git) are out of scope for v1.
 
 import type { z } from "zod";
-import type { PolicyPack, PolicyUx, Producer } from "../schema/index.js";
+import type { PolicyPack, PolicyUx } from "../schema/index.js";
 import {
   configSchema as branchProtectionConfigSchema,
   defaultUx as branchProtectionDefaultUx,
@@ -56,28 +56,8 @@ export function resolveBuiltinConfigSchema(
 }
 
 /**
- * Canonical version-probe command for a builtin pack's package-side bin.
- * Returns `null` when the pack name is not a builtin (caller should
- * already have flagged that via `checkPolicyPackSources`), or when the
- * pack has no separate package-side bin (e.g. `branch-protection`'s
- * blocker is harness itself, no external binary to probe). Consumed by
- * `checkPolicyPackVersions` so `harness doctor` can compare the
- * installed version against an operator-declared pack-level
- * `min_version` floor.
- */
-export function resolveBuiltinVersionCommand(
-  packName: string,
-): readonly [string, string] | null {
-  if (!isBuiltinPackName(packName)) return null;
-  switch (packName as BuiltinPackName) {
-    case BRANCH_PROTECTION:
-      return null;
-  }
-}
-
-/**
- * The shipped-template `config.ux` / `config.producers` for a builtin pack,
- * as the operator's OWN pack entry would resolve them today.
+ * The shipped-template `config.ux` for a builtin pack, as the operator's OWN
+ * pack entry would resolve it today.
  *
  * Returns `null` when the pack name is not a builtin, or when the pack
  * has no canonical shipped default to compare/reseed against. Every
@@ -87,8 +67,7 @@ export function resolveBuiltinVersionCommand(
  * in lockstep by construction.
  */
 export interface BuiltinDefaultConfig {
-  ux?: PolicyUx;
-  producers?: Producer[];
+  ux: PolicyUx;
 }
 
 export function resolveBuiltinDefaultConfig(

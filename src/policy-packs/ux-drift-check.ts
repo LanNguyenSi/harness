@@ -1,4 +1,4 @@
-// Per-pack `config.ux` / `config.producers` divergence check (task
+// Per-pack `config.ux` divergence check (task
 // 68b9ad9c). Used by `harness doctor` to warn when an enabled builtin
 // pack's agent-facing deny-message text no longer matches the shipped
 // template for that pack.
@@ -24,10 +24,10 @@
 // wording that still functions, not a schema violation.
 
 import { resolveBuiltinDefaultConfig } from "./registry.js";
-import { producersEqual, safeParseProducers, safeParseUx, uxEqual } from "./ux-compare.js";
+import { safeParseUx, uxEqual } from "./ux-compare.js";
 import type { Manifest } from "../schema/index.js";
 
-export type PolicyPackUxDriftField = "ux" | "producers";
+export type PolicyPackUxDriftField = "ux";
 
 export interface PolicyPackUxDrift {
   packIndex: number;
@@ -41,16 +41,16 @@ export interface PolicyPackUxDrift {
  * Walks `manifest.policy_packs` in declared order. For each enabled
  * builtin pack that has a registered shipped default (see
  * `resolveBuiltinDefaultConfig`), compares the operator's declared
- * `config.ux` / `config.producers` (when present) against that default
- * and reports a divergence for each sub-field that differs.
+ * `config.ux` (when present) against that default and reports a
+ * divergence when it differs.
  *
- * A pack that never declared `config.ux` (or `config.producers`) at all
+ * A pack that never declared `config.ux` at all
  * is NOT flagged here: that is a distinct, pre-existing gap (the pack
  * falls back to its legacy engine-vocabulary deny text) rather than a
  * stale COPY of the shipped text, and is out of scope for this check —
  * see task 68b9ad9c's framing (an operator whose manifest predates a
  * wording fix has a STALE `ux.run`, not a MISSING one). A malformed
- * `config.ux` / `config.producers` (already reported separately by
+ * `config.ux` (already reported separately by
  * `checkPolicyPackConfigs`) is treated as diverging here too, rather
  * than being silently skipped.
  */
@@ -63,14 +63,9 @@ export function checkPolicyPackUxDrift(manifest: Manifest): PolicyPackUxDrift[] 
 
     const fields: PolicyPackUxDriftField[] = [];
     const currentUx = pack.config["ux"];
-    if (canonical.ux && currentUx !== undefined) {
+    if (currentUx !== undefined) {
       const parsed = safeParseUx(currentUx);
       if (!parsed || !uxEqual(parsed, canonical.ux)) fields.push("ux");
-    }
-    const currentProducers = pack.config["producers"];
-    if (canonical.producers && currentProducers !== undefined) {
-      const parsed = safeParseProducers(currentProducers);
-      if (!parsed || !producersEqual(parsed, canonical.producers)) fields.push("producers");
     }
     if (fields.length === 0) return;
 

@@ -1,62 +1,32 @@
-// Per-pack version-floor check. Doctor uses this to surface a warning
-// when the operator declared `policy_packs[].min_version: x.y.z` and
-// the installed package-side bin reports below that. Mirrors the
-// hook-level `checkHookVersion` design (see `src/cli/doctor/index.ts`):
-// the same warning rungs, the same parse-failure fallback, so an
-// operator reading doctor output sees a consistent shape regardless of
-// which layer raised the gap.
-//
-// The split between this and the hook-level check is deliberate: a
-// hook-level floor covers each individual hook command, this catches a
-// pack-level config-schema mismatch (a `config:` key only the newer
-// package honours). Both can fire in the same doctor run.
+// Per-pack version-floor check. A builtin pack ships inside harness itself and
+// has no separate package-side bin to probe, so a declared
+// `policy_packs[].min_version` can never be enforced. Doctor uses this to
+// surface that as a warning, rather than letting the operator believe the
+// floor protects anything. The hook-level floor (`hooks[].min_version` with a
+// `version_command`) is a different mechanism checked by `checkHookVersion`
+// in `src/cli/doctor/index.ts`.
 
-import {
-  parseProbedVersion,
-  compareVersionFloor,
-} from "../io/version-compare.js";
-import { isBuiltinPackName, resolveBuiltinVersionCommand } from "./registry.js";
+import { isBuiltinPackName } from "./registry.js";
 import type { Manifest } from "../schema/index.js";
 
 export type PolicyPackVersionGapKind =
   /** Pack declares min_version but no version probe is registered (warn). */
-  | "no_probe_registered"
-  /** Version probe returned null (binary missing / failed to launch). */
-  | "probe_failed"
-  /** Probe stdout did not match a `digit(.digit)*` token. */
-  | "parse_failed"
-  /** Probed version is below the declared floor. */
-  | "below_floor";
+  "no_probe_registered";
 
 export interface PolicyPackVersionGap {
   packIndex: number;
   packName: string;
   /** The declared floor from `policy_packs[i].min_version`. */
   declaredMinVersion: string;
-  /**
-   * The version probe command that was (or would have been) invoked.
-   * Empty array when no probe is registered for the pack.
-   */
-  versionCommand: readonly string[];
-  /**
-   * Parsed version when the probe succeeded; otherwise null. Always the
-   * NUMERIC run (`parseProbedVersion`'s `version` field), never the probed
-   * prerelease or build suffix: for a `below_floor` gap caused by a
-   * prerelease of the floor (probed "0.3.1-rc.1" against a "0.3.1"
-   * `min_version`) this field equals `declaredMinVersion`; `message`
-   * carries the full probed token for the human-facing distinction.
-   */
-  actualVersion: string | null;
   kind: PolicyPackVersionGapKind;
   message: string;
 }
 
 /**
  * Walks `manifest.policy_packs` in declared order. For each enabled
- * builtin pack that carries an explicit `min_version`, runs the
- * registered probe (or flags missing-probe), parses the version, and
- * compares against the floor. Returns one gap per offending pack;
- * green ones produce nothing.
+ * builtin pack that carries an explicit `min_version`, flags that no
+ * probe exists to enforce it. Returns one gap per offending pack; packs
+ * without a declared floor produce nothing.
  *
  * `enabled: false` packs are skipped (consistent with the source +
  * config helpers). Non-builtin pack names are skipped: the source
@@ -64,68 +34,19 @@ export interface PolicyPackVersionGap {
  */
 export function checkPolicyPackVersions(
   manifest: Manifest,
-  versionProbe: (cmd: readonly string[]) => string | null,
 ): PolicyPackVersionGap[] {
   const gaps: PolicyPackVersionGap[] = [];
   manifest.policy_packs.forEach((pack, packIndex) => {
     if (!pack.enabled) return;
     if (!isBuiltinPackName(pack.name)) return;
     if (!pack.min_version) return;
-    const versionCommand = resolveBuiltinVersionCommand(pack.name);
-    if (versionCommand === null) {
-      gaps.push({
-        packIndex,
-        packName: pack.name,
-        declaredMinVersion: pack.min_version,
-        versionCommand: [],
-        actualVersion: null,
-        kind: "no_probe_registered",
-        message: `no version probe registered for pack "${pack.name}"; the declared min_version cannot be enforced`,
-      });
-      return;
-    }
-    const stdout = versionProbe(versionCommand);
-    if (stdout === null) {
-      gaps.push({
-        packIndex,
-        packName: pack.name,
-        declaredMinVersion: pack.min_version,
-        versionCommand,
-        actualVersion: null,
-        kind: "probe_failed",
-        message: `version probe failed for ${versionCommand.join(" ")}`,
-      });
-      return;
-    }
-    // parseProbedVersion + compareVersionFloor (task db44ab46, extending
-    // the hooks[] prerelease rule to the pack-level floor): a release
-    // candidate of the pack's bin must not satisfy an equal-numeric
-    // min_version floor. See docs/decisions/2026-09-08-preflight-floors.md.
-    const parsed = parseProbedVersion(stdout);
-    if (!parsed) {
-      gaps.push({
-        packIndex,
-        packName: pack.name,
-        declaredMinVersion: pack.min_version,
-        versionCommand,
-        actualVersion: null,
-        kind: "parse_failed",
-        message: `could not parse a version from "${stdout.trim()}"`,
-      });
-      return;
-    }
-    const { version: actual, isPrerelease, token } = parsed;
-    if (compareVersionFloor(actual, isPrerelease, pack.min_version) < 0) {
-      gaps.push({
-        packIndex,
-        packName: pack.name,
-        declaredMinVersion: pack.min_version,
-        versionCommand,
-        actualVersion: actual,
-        kind: "below_floor",
-        message: `outdated: installed v${token} < required ${pack.min_version}`,
-      });
-    }
+    gaps.push({
+      packIndex,
+      packName: pack.name,
+      declaredMinVersion: pack.min_version,
+      kind: "no_probe_registered",
+      message: `no version probe registered for pack "${pack.name}"; the declared min_version cannot be enforced`,
+    });
   });
   return gaps;
 }

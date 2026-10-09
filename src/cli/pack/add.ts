@@ -1,7 +1,7 @@
 // `harness pack add <name>` — managed insert into policy_packs[].
 //
 // Mirrors src/cli/add/index.ts: schema-validate-before-write under a
-// flock; surface dup-name + bad-mode errors at the point the user runs
+// flock; surface dup-name + bad-source errors at the point the user runs
 // the command, not at the next `harness apply`.
 
 import * as fs from "node:fs";

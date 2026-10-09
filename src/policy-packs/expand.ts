@@ -10,7 +10,9 @@
 //
 // Hook-name collision handling: pack hooks are namespaced
 // (`policy-pack:<name>:<role>`) by the builtin definitions, so a user
-// hook with a colliding name is the user's mistake. We surface that as
+// hook with a colliding name is the user's mistake. Two packs cannot
+// contribute the same name: the schema rejects a duplicate
+// `policy_packs[].name`. We surface that as
 // a warning here rather than blowing up; the schema's duplicate-name
 // superRefine will reject it on the augmented manifest's downstream
 // re-parse if a caller re-validates.
@@ -29,7 +31,6 @@ export function expandPolicyPacks(
   if (manifest.policy_packs.length === 0) return out;
 
   const existingHookNames = new Set(manifest.hooks.map((h) => h.name));
-  const seenPackHookNames = new Set<string>();
 
   for (const pack of manifest.policy_packs) {
     if (!pack.enabled) {
@@ -60,13 +61,6 @@ export function expandPolicyPacks(
         );
         continue;
       }
-      if (seenPackHookNames.has(hook.name)) {
-        out.warnings.push(
-          `policy_packs[${pack.name}]: hook name "${hook.name}" was already contributed by an earlier pack; second copy dropped.`,
-        );
-        continue;
-      }
-      seenPackHookNames.add(hook.name);
       out.hooks.push(hook);
     }
     out.files.push(...resolved.contribution.files);

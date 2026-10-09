@@ -42,6 +42,15 @@ describe("generateCodexConfig", () => {
     expect(content.startsWith(CODEX_GENERATED_HEADER_LINE)).toBe(true);
   });
 
+  it("the header describes the wire format without citing a removed pack doc", () => {
+    const { content } = generateCodexConfig(manifest());
+    const header = content.split("\n").filter((l) => l.startsWith("#")).join("\n");
+    expect(header).toContain("Wire format a hook command reads on stdin");
+    expect(header).toContain("0 = allow, 2 = block");
+    expect(header).not.toContain("understanding-before-execution");
+    expect(header).not.toContain("adapter scripts");
+  });
+
   it("emits a header banner and one TOML stanza per hook", () => {
     const { content, warnings } = generateCodexConfig(manifest());
     expect(warnings).toEqual([]);

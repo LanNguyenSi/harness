@@ -23,7 +23,6 @@ import {
 } from "../apply/generate-settings.js";
 import { parsePackSource } from "../../policy-packs/source.js";
 import { resolveBuiltin } from "../../policy-packs/registry.js";
-import { expandPolicyPacks } from "../../policy-packs/index.js";
 import { checkPolicyPackConfigs } from "../../policy-packs/config-check.js";
 import { checkPolicyPackVersions } from "../../policy-packs/version-check.js";
 import { checkPolicyPackUxDrift } from "../../policy-packs/ux-drift-check.js";
@@ -67,7 +66,6 @@ import {
   type McpVersionReport,
   type PackExpansionRuntimeReport,
   type PolicyEntryReport,
-  type PolicyPackHookVersionGapReport,
   type PolicyPackUnresolved,
   type PolicyPacksSection,
   type RiskGateSection,
@@ -470,63 +468,6 @@ export function memoizeVersionProbe(
   };
 }
 
-/**
- * Hook-level `min_version` floor on policy-pack-expanded hooks (task
- * ab634898). `checkHooks` above only walks `manifest.hooks[]`, but the
- * hooks Claude Code actually runs also include whatever
- * `expandPolicyPacks` contributes when a pack hook declares its own
- * `min_version` + `version_command`. Those pack-expanded hooks never
- * reached `checkHookVersion`, so an operator below such a floor saw a
- * clean doctor report.
- *
- * Reuses `checkHookVersion` verbatim so the warning wording matches the
- * manifest-hook case exactly. `versionProbe` is wrapped with a
- * per-command cache so two hooks that share one `version_command` (a pack whose hooks
- * share one probe) spawn the underlying binary once, not
- * twice. Only below-floor / probe-failed / parse-failed results are
- * returned; a hook at or above its floor produces nothing, mirroring
- * the pack-level floor's "green ones produce nothing" contract
- * (`checkPolicyPackVersions`). Always warn, never error: the pack still
- * runs in degraded mode rather than failing outright.
- *
- * Expands against the runtime a plain `harness apply` would select
- * (`selectRuntime` in `src/cli/apply/apply.ts`: recorded in `.last-apply`,
- * inferred from its files, else the default), never `opts.target`:
- * `--target codex` / `--target opencode` additionally evaluate the
- * harness-side adapter health for that runtime, they do not change which
- * runtime is actually installed and running the hooks. Matches the
- * sibling pack-level check's `resolveBuiltin(pack, runtime)` further below
- * (task ab634898: keying this on `--target` produced a below-floor install
- * that showed no warning under `--target codex` and a spurious one under
- * `--target opencode`, where the pack never wires in the first place; task
- * 04b8abcf: expanding against the default instead of the applied runtime
- * made doctor and apply diverge on a codex-recorded machine).
- */
-function checkPolicyPackHookVersions(
-  manifest: Manifest,
-  versionProbe: (cmd: readonly string[]) => string | null,
-  runtime: Runtime,
-): PolicyPackHookVersionGapReport[] {
-  const expansion = expandPolicyPacks(manifest, runtime);
-  const dedupedProbe = memoizeVersionProbe(versionProbe);
-  const gaps: PolicyPackHookVersionGapReport[] = [];
-  for (const hook of expansion.hooks) {
-    const version = checkHookVersion(hook, dedupedProbe);
-    if (version && version.status === "warn" && hook.min_version) {
-      gaps.push({
-        name: hook.name,
-        event: hook.event,
-        declaredMinVersion: hook.min_version,
-        kind: version.kind,
-        actualVersion: version.actualVersion ?? null,
-        versionCommand: hook.version_command ?? [],
-        message: version.message,
-      });
-    }
-  }
-  return gaps;
-}
-
 function checkHooks(
   manifest: Manifest,
   home: string,
@@ -678,7 +619,6 @@ function packExpansionRuntimeReport(
  */
 function buildPolicyPacks(
   manifest: Manifest,
-  versionProbe: (cmd: readonly string[]) => string | null,
   runtime: Runtime,
 ): PolicyPacksSection {
   const unresolved: PolicyPackUnresolved[] = [];
@@ -709,14 +649,12 @@ function buildPolicyPacks(
     configPath: issue.configPath,
     message: issue.message,
   }));
-  const versionGaps = checkPolicyPackVersions(manifest, versionProbe).map(
-    (gap) => ({
-      name: gap.packName,
-      declaredMinVersion: gap.declaredMinVersion,
-      actualVersion: gap.actualVersion,
-      message: gap.message,
-    }),
-  );
+  const versionGaps = checkPolicyPackVersions(manifest).map((gap) => ({
+    name: gap.packName,
+    declaredMinVersion: gap.declaredMinVersion,
+    actualVersion: null,
+    message: gap.message,
+  }));
   const uxDrift = checkPolicyPackUxDrift(manifest).map((drift) => ({
     name: drift.packName,
     fields: drift.fields,
@@ -988,13 +926,10 @@ function countDiagnostics(report: Omit<DoctorReport, "errorCount" | "warningCoun
   // Pack-level min_version gaps are warn-not-error: the pack still
   // functions in degraded mode; only features gated on the newer
   // release are lost. Parallel to the hook-level version probe's
-  // `status: warn`.
+  // `status: warn`. Builtin packs have no probe, so today every gap is a
+  // `no_probe_registered` one.
   warningCount += report.policyPacks.versionGaps.length;
-  // Hook-level min_version gaps on pack-expanded hooks (task ab634898):
-  // always warn-not-error, mirroring both the pack-level floor above
-  // and the manifest-declared hook floor in the `report.hooks` loop.
-  warningCount += report.policyPackHookVersions.length;
-  // Ux/producers drift is always warn: the pack still functions with the
+  // Ux drift is always warn: the pack still functions with the
   // stale wording, the operator is just missing a wording improvement.
   // Fix is opt-in (`harness pack reseed <name>`), so this never escalates
   // to an error the way an unresolved pack or a rejected config value does.
@@ -1140,15 +1075,9 @@ export async function doctor(opts: DoctorOptions = {}): Promise<DoctorReport> {
     ...(opts.versionProbe !== undefined ? { versionProbe: opts.versionProbe } : {}),
   });
 
-  // One memoized probe shared across every doctor check that spawns
-  // `<binary> --version` (task 6993d9b5, round 2 F3/F4): `checkHooks`,
-  // `buildPolicyPacks` and the policy-pack-expanded hook walk
-  // (`checkPolicyPackHookVersions`, which already deduped internally but
-  // started from its own fresh cache) all probe the same
-  // `["preflight", "--version"]` argv on a `min_version: 0.6.0` manifest.
-  // Without a shared cache that argv would spawn once per caller, per
-  // `doctor` run. `memoizeVersionProbe` (above) already existed for
-  // this; it just was not wired to the callers that predate that sharing.
+  // One memoized probe for `checkHooks`: two manifest hooks that share one
+  // `version_command` spawn the underlying binary once per `doctor` run
+  // (task 6993d9b5, task ab634898).
   const dedupedVersionProbe = memoizeVersionProbe(opts.versionProbe ?? (() => null));
   const hooks = checkHooks(manifest, home, { versionProbe: dedupedVersionProbe });
   // generatedDir resolved the same way apply.ts / interactive.ts resolve
@@ -1177,16 +1106,7 @@ export async function doctor(opts: DoctorOptions = {}): Promise<DoctorReport> {
   }
   const applyRuntime = selectRuntime(undefined, lastApplyRecord, false);
   const policies = buildPolicies(manifest);
-  const policyPacks = buildPolicyPacks(
-    manifest,
-    dedupedVersionProbe,
-    applyRuntime.runtime,
-  );
-  const policyPackHookVersions = checkPolicyPackHookVersions(
-    manifest,
-    dedupedVersionProbe,
-    applyRuntime.runtime,
-  );
+  const policyPacks = buildPolicyPacks(manifest, applyRuntime.runtime);
   const workflows = buildWorkflows(manifest);
   const riskGate = buildRiskGate(manifest);
   const templateDrift = buildTemplateDrift(manifest);
@@ -1237,7 +1157,6 @@ export async function doctor(opts: DoctorOptions = {}): Promise<DoctorReport> {
     hooks,
     policies,
     policyPacks,
-    policyPackHookVersions,
     packExpansionRuntime: packExpansionRuntimeReport(applyRuntime, lastApplyWarning),
     workflows,
     riskGate,

@@ -1,4 +1,4 @@
-// Canonical shipped-default `config.ux` / `config.producers` (task
+// Canonical shipped-default `config.ux` (task
 // 68b9ad9c): the single source `harness pack reseed`, the ux-drift
 // doctor check, and the init generation surfaces (Solo/Team/Full
 // templates, the Custom composer) all read from.
@@ -23,11 +23,10 @@ describe("resolveBuiltinDefaultConfig", () => {
     }).policy_packs[0]!;
   }
 
-  it("branch-protection: ux only, no canonical producers", () => {
+  it("branch-protection: the shipped ux", () => {
     const pack = packWith("branch-protection");
     const result = resolveBuiltinDefaultConfig(pack);
     expect(result?.ux).toEqual(branchProtectionDefaultUx());
-    expect(result?.producers).toBeUndefined();
   });
 
   it("the removed understanding-before-execution pack is no longer a builtin: null", () => {

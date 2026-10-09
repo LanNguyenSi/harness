@@ -1398,6 +1398,24 @@ policy_packs:
     );
     expect(report.warningCount).toBeGreaterThanOrEqual(1);
   });
+
+  it("the report has no policyPackHookVersions field (no pack contributes a probed hook)", async () => {
+    const home = makeFixture({
+      "harness.yaml": `version: 1
+hooks: []
+policies: []
+policy_packs:
+  - name: branch-protection
+    source: builtin
+`,
+    });
+    const report = await doctor({
+      configPath: path.join(home, "harness.yaml"),
+      shallow: true,
+    });
+    expect(Object.keys(report)).not.toContain("policyPackHookVersions");
+    expect(format(report)).not.toContain("Policy-pack hooks");
+  });
 });
 
 // `memoizeVersionProbe` (task ab634898) is exported and unit-tested directly
@@ -1425,7 +1443,7 @@ describe("memoizeVersionProbe (task ab634898)", () => {
   });
 });
 
-describe("doctor — policy pack ux/producers drift check (task 68b9ad9c)", () => {
+describe("doctor: policy pack ux drift check (task 68b9ad9c)", () => {
   // Motivation: the pack's deny message is entirely driven by
   // config.ux when the operator has declared one. The init templates
   // taught a new heredoc submission form (agent-tasks/e48e3b45), but that
