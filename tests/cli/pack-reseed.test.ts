@@ -7,7 +7,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { parse as parseYaml } from "yaml";
+import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import { init } from "../../src/cli/init/index.js";
 import { packAdd, packReseed } from "../../src/cli/pack/index.js";
 import { applyPackReseedUx } from "../../src/cli/pack/mutate.js";
@@ -202,6 +202,20 @@ describe("packReseed", () => {
     }
     expect(caught).toBeInstanceOf(HarnessExitError);
     expect((caught as Error).message).toMatch(/"ghost-pack" not found/);
+  });
+
+  it("errors clearly when the pack is not a builtin and ships no default config", async () => {
+    // A non-builtin pack entry written straight into the manifest the
+    // beforeEach `init` created. `resolveBuiltinDefaultConfig` returns null
+    // for a name that is not a builtin, so reseed has nothing to pull.
+    const m = readManifest();
+    m.policy_packs = [
+      ...(m.policy_packs ?? []),
+      { name: "custom-pack", source: "path:./custom", enabled: false },
+    ];
+    fs.writeFileSync(manifestPath, stringifyYaml(m), "utf8");
+    await expect(packReseed("custom-pack", { configPath: manifestPath })).rejects.toThrow(/nothing to reseed/);
+    await expect(packReseed("custom-pack", { configPath: manifestPath })).rejects.toBeInstanceOf(HarnessExitError);
   });
 
   it("errors clearly when the manifest itself fails schema validation", async () => {

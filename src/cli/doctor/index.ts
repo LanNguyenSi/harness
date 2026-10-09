@@ -694,16 +694,6 @@ function buildPolicies(manifest: Manifest): PolicyEntryReport[] {
   });
 }
 
-/**
- * Declared-but-not-live policy pack check. `expandPolicyPacks` silently
- * skips a pack whose `source:` token is unrecognised or whose builtin
- * `name:` doesn't resolve in the registry — its hooks never reach
- * `settings.json`, so the operator's gate is inert. Surface each gap
- * as a doctor error so the misconfig is impossible to miss.
- *
-  * Skipped (`enabled: false`) packs are NOT checked: they're not
-  * expected to be live, and flagging them would flood the report.
-  */
 function packExpansionRuntimeReport(
   selection: RuntimeSelection,
   warning?: string,
@@ -718,6 +708,16 @@ function packExpansionRuntimeReport(
   };
 }
 
+/**
+ * Declared-but-not-live policy pack check. `expandPolicyPacks` silently
+ * skips a pack whose `source:` token is unrecognised or whose builtin
+ * `name:` doesn't resolve in the registry — its hooks never reach
+ * `settings.json`, so the operator's gate is inert. Surface each gap
+ * as a doctor error so the misconfig is impossible to miss.
+ *
+ * Skipped (`enabled: false`) packs are NOT checked: they're not
+ * expected to be live, and flagging them would flood the report.
+ */
 function buildPolicyPacks(
   manifest: Manifest,
   versionProbe: (cmd: readonly string[]) => string | null,
@@ -833,7 +833,7 @@ function buildRiskGate(manifest: Manifest): RiskGateSection {
   // covers risk.severity_at_least, risk.category_in, AND action.reversible:
   // all three clauses fail-closed to matched=true on an unclassified action
   // per `runtime/when-eval.ts`. Map each Diagnostic message into a warning
-  // string, mirroring the producer-gap warning pattern above.
+  // string, appended to this section's `warnings` list.
   for (const diag of checkPolicyRiskWithoutEnvScope(manifest)) {
     warnings.push(diag.message);
   }

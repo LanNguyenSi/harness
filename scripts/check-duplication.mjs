@@ -53,8 +53,8 @@ import * as path from "node:path";
 // `cli/register-pack-group.ts`, and the `findGroundingMcp` + ledger-probe
 // boilerplate the sibling pack hooks already duplicate against each other.
 // The post-merge-gate pack files were removed in task 2ce6933f (see the
-// lowering to 73 below); the `branch-protection` / `solution-acceptance`
-// hook files named as examples here include ones removed in task cc5a4152.
+// lowering to 73 below). The solution-acceptance hook files these numbers
+// were measured against were removed in task cc5a4152.
 // Raised to 103 for the risk-gate read-only floor (agent-tasks fb67b402),
 // and this one is NOT new copy-paste — verified rather than assumed. That
 // task added a `cd`-target pre-check plus a quote-stripping helper near the

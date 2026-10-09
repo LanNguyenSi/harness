@@ -36,6 +36,16 @@ describe("REMOVED_COMMANDS table (task f3f15290)", () => {
       expect(entry.reason.length).toBeGreaterThan(0);
     }
   });
+
+  it("lists the removed solution-acceptance hook verb and matches its writeguard hyphen-sibling", () => {
+    const solutionAcceptance = REMOVED_COMMANDS.find(
+      (c) => c.command === "harness pack hook solution-acceptance",
+    );
+    expect(solutionAcceptance).toBeDefined();
+    expect(invokesRemovedCommand("harness pack hook solution-acceptance")).toBe(solutionAcceptance);
+    expect(invokesRemovedCommand("harness pack hook solution-acceptance-writeguard")).toBe(solutionAcceptance);
+    expect(invokesRemovedCommand("harness pack hook branch-protection")).toBeUndefined();
+  });
 });
 
 describe("invokesRemovedCommand", () => {

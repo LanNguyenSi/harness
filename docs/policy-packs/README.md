@@ -14,7 +14,7 @@ policy_packs:
 
 Manage packs with `harness pack add / remove / list`.
 
-Three packs ship today:
+Two packs ship today:
 
 - [`understanding-before-execution`](understanding-before-execution.md): forces an Understanding Report before any write-capable tool fires.
 - [`branch-protection`](branch-protection.md): blocks source mutations when git names a protected branch for the target directory, or cannot answer.
