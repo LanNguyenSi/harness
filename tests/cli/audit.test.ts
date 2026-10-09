@@ -507,11 +507,16 @@ describe("audit: policy-decision ledger fetch shape (task 95826160)", () => {
   });
 
   it("--json output carries no approvals or approvalsUnavailable key", async () => {
+    // Any fetch not scoped to policy decisions degrades, so a reintroduced
+    // second fetch would surface as `approvalsUnavailable`.
     const result = await audit({
       configPath: MANIFEST_PATH,
       json: true,
       now: NOW,
-      fetchLedger: async () => ({ kind: "ok", entries: [] }),
+      fetchLedger: async (_sessionId, filters) =>
+        filters?.contentPrefix === "policy_decision:"
+          ? { kind: "ok", entries: [] }
+          : { kind: "degraded", reason: "not a policy-decision fetch" },
     });
     const parsed = JSON.parse(result.output);
     expect(parsed).not.toHaveProperty("approvals");
