@@ -492,10 +492,8 @@ const INFRA: ReadonlyArray<{ name: string; reason: string }> = [
   // mkfifo: real system mkfifo, spawned directly (no `sh -c` indirection)
   // by the remaining FIFO-fixture tests, e.g. tests/io/bounded-hook-reads-
   // fifo.test.ts, tests/io/hook-path-writes-fifo.test.ts, tests/cli/
-  // hook-git-context-fifo.test.ts, tests/cli/gc.test.ts, tests/cli/
-  // approve-understanding-planted-reports.test.ts and tests/policy-packs/
-  // persisted-reports-stat-to-read-flip.test.ts; Node has no API that
-  // creates one (task fa423e9b).
+  // hook-git-context-fifo.test.ts, tests/runtime/git-branch.test.ts and
+  // tests/io/atomic-write.test.ts; Node has no API that creates one (task fa423e9b).
   { name: "mkfifo", reason: "creates the FIFO fixtures for the tests naming mkfifo (see the comment above); Node has no mkfifo API." },
 ];
 

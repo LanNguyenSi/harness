@@ -277,7 +277,6 @@ describe("resolveApprovalSessionId", () => {
       session: "flag-id",
       generatedDir: "/unused",
       readPending: () => "staged-id",
-      newestReportFallback: () => ({ sessionId: "report-id", filePath: "/rpt.json" }),
     });
     expect(result).toEqual({ sessionId: "flag-id", sessionSource: "flag" });
   });
@@ -323,15 +322,6 @@ describe("resolveApprovalSessionId", () => {
     expect(result).toEqual({ sessionId: "codex-id", sessionSource: "env-codex" });
   });
 
-  it("tier 5: .pending-approval wins over newestReportFallback", () => {
-    const result = resolveApprovalSessionId({
-      generatedDir: "/unused",
-      readPending: () => "staged-id",
-      newestReportFallback: () => ({ sessionId: "report-id", filePath: "/rpt.json" }),
-    });
-    expect(result).toEqual({ sessionId: "staged-id", sessionSource: "pending-approval" });
-  });
-
   it("tier 5: reads .pending-approval from the real filesystem when no readPending seam", () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "harness-approval-sess-"));
     try {
@@ -343,48 +333,12 @@ describe("resolveApprovalSessionId", () => {
     }
   });
 
-  it("tier 6: newestReportFallback is used when all other tiers miss", () => {
-    const result = resolveApprovalSessionId({
-      generatedDir: "/unused",
-      readPending: noPending,
-      newestReportFallback: () => ({ sessionId: "report-id", filePath: "/reports/rpt.json" }),
-    });
-    expect(result).toEqual({
-      sessionId: "report-id",
-      sessionSource: "newest-report",
-      newestReportPath: "/reports/rpt.json",
-    });
-  });
-
-  it("tier 6: returning null from newestReportFallback falls through to empty result", () => {
-    const result = resolveApprovalSessionId({
-      generatedDir: "/unused",
-      readPending: noPending,
-      newestReportFallback: () => null,
-    });
-    expect(result.sessionId).toBe("");
-  });
-
-  it("returns empty sessionId when no tier resolves and no newestReportFallback given", () => {
+  it("returns empty sessionId when no tier resolves", () => {
     const result = resolveApprovalSessionId({
       generatedDir: "/unused",
       readPending: noPending,
     });
     expect(result.sessionId).toBe("");
-  });
-
-  it("newestReportFallback is NOT called when an earlier tier resolves", () => {
-    let called = false;
-    process.env.CLAUDE_SESSION_ID = "env-id";
-    resolveApprovalSessionId({
-      generatedDir: "/unused",
-      readPending: noPending,
-      newestReportFallback: () => {
-        called = true;
-        return { sessionId: "report-id", filePath: "/rpt.json" };
-      },
-    });
-    expect(called).toBe(false);
   });
 
   it("empty env vars are skipped (not treated as valid session ids)", () => {

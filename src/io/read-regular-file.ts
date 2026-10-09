@@ -14,21 +14,11 @@ export type RegularFileRead =
   | { kind: "unreadable" };
 
 /**
- * Result of a stat-only existence probe (see `probePathPresence`). No
- * `content`: this never reads the file, only classifies what lstat sees at
- * the path. `present` covers a symlink, a directory, or any other non-regular
- * node the caller wants to treat as "something is there" without yet reading
- * it or deciding whether it is a valid regular file.
- */
-export type PathPresence = { kind: "missing" } | { kind: "present" };
-
-/**
- * The single `fs.lstatSync` call both exports below stand on. Returns `null`
+ * The single `fs.lstatSync` call the readers below stand on. Returns `null`
  * on any lstat failure (absent path, or unreachable for another reason:
  * `EACCES`, `ENOTDIR`, ...); lstat cannot distinguish those cases from each
- * other, so neither export tries to. A future defensive fix here
- * (e.g. `ENOTDIR` handling) lands in this one place and is inherited by both
- * callers.
+ * other, so no caller tries to. A future defensive fix here
+ * (e.g. `ENOTDIR` handling) lands in this one place.
  */
 function lstatOrNull(filePath: string): fs.Stats | null {
   try {
@@ -48,7 +38,7 @@ function lstatOrNull(filePath: string): fs.Stats | null {
  * under the earlier lstat. `O_NOCTTY` is belt and braces for a tty node at
  * the path. All three are POSIX-only flags; `fs.constants` leaves them
  * `undefined` on Windows, where the code falls back to 0 (see
- * `readRegularFileRejectingSymlink` for that fallback).
+ * `readRegularFileBytesBounded` for that fallback).
  */
 const O_NOFOLLOW: number | undefined = fs.constants.O_NOFOLLOW;
 const O_NONBLOCK: number = fs.constants.O_NONBLOCK ?? 0;
@@ -58,9 +48,7 @@ const O_NOCTTY: number = fs.constants.O_NOCTTY ?? 0;
 /**
  * The most bytes the gate-marker read will return. Every caller reads a small
  * JSON record (an approval or delegation marker, an in-flight record, a
- * verdict, a launcher report, one adoption ledger of entry ids); the largest
- * legitimate input is a launcher report, which the report hashing elsewhere
- * already caps at the same 1 MiB (`MAX_HASHED_REPORT_BYTES`). A file over the
+ * verdict, a launcher report, one adoption ledger of entry ids). A file over the
  * cap is refused as `unreadable` (fail-closed in every caller) before any
  * byte is read: a sparse multi-gigabyte file at a marker path otherwise
  * takes the hook past its budget, which the runtime treats as an allow, the
@@ -125,52 +113,8 @@ function classifyOpenFailure(
 }
 
 /**
- * Read a marker/verdict file as utf8, refusing symlinks and non-regular
- * files. The path is opened once, read-only, with `O_NOFOLLOW` (a symlink at
- * the path is refused by the open itself) and `O_NONBLOCK` (opening a FIFO
- * with no writer returns at once instead of waiting for one). The type of
- * the OPENED descriptor then decides (`fstat`, never a separate stat of the
- * path), and the content is read through that same descriptor, so nothing
- * can be swapped in between a check and the read: a writer that replaces the
- * file with a FIFO or a symlink after any earlier look gets `not-regular` /
- * `symlink` back, not a read that blocks the hook past its budget (which the
- * runtime treats as an allow). The descriptor is always closed. The size is
- * bounded too: a file over `MAX_REGULAR_FILE_READ_BYTES` by `fstat` is
- * refused as `unreadable` without a read, and the read itself stops one byte
- * past the cap, so a file that grows after the `fstat` is bounded as well.
- *
- * Why refuse symlinks at all: defense-in-depth against a symlink at the
- * marker path pointing at an arbitrary target the agent controls. In
- * today's threat model the agent has no Edit / Write / Bash path to plant
- * such a symlink (the same PreToolUse hook gates all three), but the gate
- * contract is to assume the agent is hostile, so the refusal is cheap
- * insurance (agent-tasks/d39f160e).
- *
- * Platforms without `O_NOFOLLOW` (Windows): an `lstat` runs first and
- * refuses a symlink or a non-regular node before the open, because the open
- * alone would follow a link. That leaves the old lstat-to-open window on
- * those platforms; there is no FIFO node on the filesystem there to swap in
- * (named pipes live in a separate namespace), and `O_NONBLOCK` is a no-op
- * flag that is simply left out. The descriptor type check still runs.
- *
- * This is THE shared implementation for every gate-marker read; a future
- * defensive fix belongs here and in `classifyOpenFailure`/`lstatOrNull`, and
- * nowhere else. Its lighter-weight sibling `probePathPresence`, below,
- * shares this file for the same reason: both stand on the same
- * `lstatOrNull` helper, and a caller that only needs to know "is anything
- * there" before deciding whether to pay for the full read (e.g.
- * `verifyDelegation`'s existence-before-path-hash check in
- * `src/policy-packs/builtin/understanding-before-execution/delegation-markers.ts`)
- * gets that from here instead of hand-rolling its own `lstatSync` try/catch.
- */
-export function readRegularFileRejectingSymlink(filePath: string): RegularFileRead {
-  const read = readRegularFileBytesBounded(filePath, { followSymlinks: false });
-  return read.kind === "ok" ? { kind: "ok", content: read.bytes.toString("utf8") } : read;
-}
-
-/**
- * Options of the sibling readers below. Both default to the gate-marker
- * read's own behaviour (the 1 MiB cap, a symlink refused).
+ * Options of the readers below. They default to the gate-marker read's
+ * behaviour (the 1 MiB cap, a symlink refused).
  */
 export interface BoundedReadOptions {
   /**
@@ -200,9 +144,36 @@ export type RegularFileBytesRead =
 /**
  * The one open-once, type-checked-on-the-descriptor, size-bounded read every
  * by-path reader on a hook path stands on, returning raw bytes (a binary key
- * file needs them, `readRegularFileBounded` decodes them). See
- * {@link readRegularFileRejectingSymlink} for the full contract; this is the
- * same read with the cap and the symlink policy as options.
+ * file needs them, `readRegularFileBounded` decodes them). The cap and the
+ * symlink policy are options.
+ *
+ * The path is opened once, read-only, with `O_NOFOLLOW` (a symlink at the
+ * path is refused by the open itself) and `O_NONBLOCK` (opening a FIFO with
+ * no writer returns at once instead of waiting for one). The type of the
+ * OPENED descriptor then decides (`fstat`, never a separate stat of the
+ * path), and the content is read through that same descriptor, so nothing
+ * can be swapped in between a check and the read: a writer that replaces the
+ * file with a FIFO or a symlink after any earlier look gets `not-regular` /
+ * `symlink` back, not a read that blocks the hook past its budget (which the
+ * runtime treats as an allow). The descriptor is always closed. The size is
+ * bounded too: a file over the cap by `fstat` is refused as `unreadable`
+ * without a read, and the read itself stops one byte past the cap, so a file
+ * that grows after the `fstat` is bounded as well.
+ *
+ * Why refuse symlinks at all: defense-in-depth against a symlink at the
+ * path pointing at an arbitrary target the agent controls. The gate contract
+ * is to assume the agent is hostile, so the refusal is cheap insurance
+ * (agent-tasks/d39f160e).
+ *
+ * Platforms without `O_NOFOLLOW` (Windows): an `lstat` runs first and
+ * refuses a symlink or a non-regular node before the open, because the open
+ * alone would follow a link. That leaves the old lstat-to-open window on
+ * those platforms; there is no FIFO node on the filesystem there to swap in
+ * (named pipes live in a separate namespace), and `O_NONBLOCK` is a no-op
+ * flag that is simply left out. The descriptor type check still runs.
+ *
+ * A future defensive fix belongs here and in `classifyOpenFailure` /
+ * `lstatOrNull`, and nowhere else.
  */
 export function readRegularFileBytesBounded(
   filePath: string,
@@ -247,7 +218,7 @@ export function readRegularFileBytesBounded(
  * {@link readRegularFileBytesBounded} decoded as utf8, for the by-path
  * readers of a file a symlink at the path is acceptable for or a larger cap
  * is justified (see {@link BoundedReadOptions}). Same five result kinds as
- * {@link readRegularFileRejectingSymlink}; `missing` is the one a caller may
+ * {@link readRegularFileBytesBounded}; `missing` is the one a caller may
  * treat as "legitimately absent", every other non-`ok` kind means something
  * is at the path that must not be read as the file (a FIFO, a device, a
  * directory, an oversized or unreadable file) and is fail-closed or
@@ -299,20 +270,4 @@ export function readTextFileBoundedOrThrow(filePath: string, opts: BoundedReadOp
   const read = readRegularFileBounded(filePath, opts);
   if (read.kind === "ok") return read.content;
   throw new BoundedReadError(filePath, read.kind);
-}
-
-/**
- * Stat-only existence probe: "is anything there", nothing more. Uses the
- * same `lstatOrNull` helper (not `stat`) as `readRegularFileRejectingSymlink`
- * so a symlink or a directory answers `present`, not `missing`; this probe
- * cannot and does not classify WHAT is there (regular file, symlink,
- * directory), only whether lstat can see anything at all. A path lstat
- * cannot reach for any reason (absent, or unreachable: `EACCES`, `ENOTDIR`,
- * ...) comes back `missing`; lstat cannot distinguish those cases, so
- * neither does this probe. Callers that need the file-type distinction
- * (symlink vs directory vs regular) read the file instead, through
- * `readRegularFileRejectingSymlink`.
- */
-export function probePathPresence(filePath: string): PathPresence {
-  return lstatOrNull(filePath) === null ? { kind: "missing" } : { kind: "present" };
 }

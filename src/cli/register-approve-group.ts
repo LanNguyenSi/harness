@@ -7,9 +7,8 @@ export function registerApproveGroup(
   io: { stdout: (s: string) => void; stderr: (s: string) => void },
 ): void {
   const { stdout } = io;
-  // `harness approve` (Phase 6 #4): operator-driven approval verbs.
-  // Today only `understanding` is implemented; other packs can plug in
-  // sister sub-commands (e.g. `harness approve preflight`) without
+  // `harness approve`: operator-driven approval verbs. Today only `risk`
+  // is implemented; further verbs plug in as sister sub-commands without
   // restructuring this surface.
   const approveCmd = program
     .command("approve")

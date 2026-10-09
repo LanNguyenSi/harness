@@ -1,4 +1,4 @@
-export { expandPolicyPacks, type ExpandPolicyPacksOptions } from "./expand.js";
+export { expandPolicyPacks } from "./expand.js";
 export {
   KNOWN_BUILTIN_PACKS,
   isBuiltinPackName,
@@ -21,7 +21,6 @@ export {
   KNOWN_RUNTIMES,
   DEFAULT_RUNTIME,
   isRuntime,
-  parseRuntime,
   type Runtime,
 } from "./runtime.js";
 export { parsePackSource, type PackSourceKind, type PackSourceParseResult } from "./source.js";

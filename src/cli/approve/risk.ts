@@ -6,9 +6,8 @@
 // ${SESSION_ID}` ledger tag; this verb writes that tag so the next
 // evaluation of the same policy passes and the outcome becomes `allow`.
 //
-// Deliberately simpler than `harness approve understanding`: the Risk
-// Gate's requires-evaluator reads the evidence ledger (it is the same
-// Phase 4 evaluator), so an ordinary `ledger_add` entry IS the approval.
+// The Risk Gate's requires-evaluator reads the evidence ledger (it is the
+// same Phase 4 evaluator), so an ordinary `ledger_add` entry IS the approval.
 // There is no persisted-report flip and no filesystem marker — the
 // ledger tag is the single source of truth, exactly as Phase 7's design
 // (docs/risk-gate.md "Decision model") specifies. `agent-grounding`
@@ -197,18 +196,15 @@ async function writeLedgerTag(
 
 /**
  * Resolve the target session id and write its `risk-approved:` ledger
- * tag. Session id precedence mirrors `harness approve understanding`
- * tiers 1-4: explicit `--session`, then `$CLAUDE_CODE_SESSION_ID`
+ * tag. Session id precedence: explicit `--session`, then `$CLAUDE_CODE_SESSION_ID`
  * (the var Claude Code itself sets), then `$CLAUDE_SESSION_ID` (legacy
  * / docs name), then `$CODEX_SESSION_ID`, then the `.pending-approval`
  * file the gate hook staged on its last block. There is no
- * persisted-report tier-5 guess: the Risk Gate produces no persisted
- * reports.
+ * persisted-report guess: the Risk Gate produces no persisted reports.
  *
  * Throws `HarnessExitError(EX_FAIL)` when no session id can be resolved.
  * A degraded ledger (grounding-mcp absent / unreachable) is surfaced in
- * the result, not thrown — same best-effort contract as `approve
- * understanding`'s ledger write.
+ * the result, not thrown.
  */
 export async function approveRisk(
   opts: ApproveRiskOptions = {},
@@ -227,19 +223,14 @@ export async function approveRisk(
       manifestPath: resolvePaths(opts).base,
     });
 
-  // Session id precedence mirrors `harness approve understanding` tiers 1-5:
-  // explicit --session, then $CLAUDE_CODE_SESSION_ID (canonical Claude Code
+  // Session id precedence: explicit --session, then $CLAUDE_CODE_SESSION_ID (canonical Claude Code
   // var), then $CLAUDE_SESSION_ID (legacy), then $CODEX_SESSION_ID, then the
-  // .pending-approval file staged by the gate hook or preflight. No
-  // persisted-report tier: the Risk Gate produces no persisted reports.
-  const { sessionId, sessionSource: rawSessionSource } = resolveApprovalSessionId({
+  // .pending-approval file staged by the gate hook. No persisted-report
+  // tier: the Risk Gate produces no persisted reports.
+  const { sessionId, sessionSource } = resolveApprovalSessionId({
     session: opts.session,
     generatedDir,
   });
-  // Cast is safe: no newestReportFallback passed, so "newest-report" is
-  // unreachable at runtime. The wider return type of resolveApprovalSessionId
-  // requires the cast for TypeScript.
-  const sessionSource = rawSessionSource as ApproveRiskResult["sessionSource"];
 
   if (sessionId === "") {
     throw new HarnessExitError(

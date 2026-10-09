@@ -31,7 +31,7 @@ import { parseManifest, type Manifest } from "../../src/schema/index.js";
 // engine, and the original guard only walked the first:
 //   (a) `manifest.policies[].ux.run` — the reference/Risk-Gate policies.
 //   (b) `manifest.policy_packs[].config.ux.run` — the built-in policy
-//       packs (understanding-before-execution, branch-protection)
+//       packs (branch-protection)
 //       carry their own `ux` block under `config`,
 //       structurally separate from `policies[]`.
 //   (c) the Custom composer (`harness init --interactive`, composeCustom()

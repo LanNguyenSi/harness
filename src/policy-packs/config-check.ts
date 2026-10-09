@@ -2,8 +2,8 @@
 // `harness doctor`. The top-level `PolicyPackSchema` accepts
 // `config: z.record(string, unknown)` — any key, any value — because
 // each builtin pack owns its own config interpretation. That means a
-// typo like `mode: "fastConfirm"` (camelCase instead of `fast_confirm`)
-// or `permision_profile` (misspelled key) currently falls through to
+// typo like `protected_brnches` (misspelled key) or
+// `protected_branches: "master"` (a string instead of a list) currently falls through to
 // the runtime fallback and the operator only finds out when the hook
 // finally fires. This helper consults the per-pack `configSchema`
 // exported from each builtin module and surfaces every issue at
@@ -23,8 +23,8 @@ export interface PolicyPackConfigIssue {
   packIndex: number;
   packName: string;
   /**
-   * Dotted path inside `pack.config`, e.g. `mode`, `approval_lifecycle.mode`,
-   * `permission_profile`. Empty string means the issue applies to the
+   * Dotted path inside `pack.config`, e.g. `protected_branches`, `ux.cannot`,
+   * `protected_branches[1]`. Empty string means the issue applies to the
    * config object itself (e.g. a wholly non-object value).
    */
   configPath: string;

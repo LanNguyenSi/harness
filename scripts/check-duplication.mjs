@@ -256,7 +256,9 @@ import * as path from "node:path";
 // and `harness delegate`; the check reports 50 with that change (the pin was 68).
 // Lowered to 48 (task 9fce2cdc): removing the understanding-gate operator
 // verbs; the check reports 48 with that change (the pin was 50).
-const MAX_CLONES = 48;
+// Lowered to 47 (task 9389707f): removing the understanding-before-execution
+// pack core; the check reports 47 with that change (the pin was 48).
+const MAX_CLONES = 47;
 
 // Sets process.exitCode instead of calling process.exit so the caller's
 // finally-cleanup runs on every path (process.exit skips stack unwinding).

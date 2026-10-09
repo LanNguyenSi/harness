@@ -4,60 +4,9 @@
 // templates, the Custom composer) all read from.
 
 import { describe, expect, it } from "vitest";
-import {
-  defaultProducers,
-  defaultUx,
-} from "../../src/policy-packs/builtin/understanding-before-execution.js";
 import { defaultUx as branchProtectionDefaultUx } from "../../src/policy-packs/builtin/branch-protection.js";
 import { resolveBuiltinDefaultConfig } from "../../src/policy-packs/registry.js";
 import { parseManifest } from "../../src/schema/index.js";
-
-describe("understanding-before-execution.defaultUx", () => {
-  it("varies only the `required` line across modes", () => {
-    const grillMe = defaultUx("grill_me");
-    const strict = defaultUx("strict");
-    const fastConfirm = defaultUx("fast_confirm");
-    expect(grillMe.cannot).toBe(strict.cannot);
-    expect(grillMe.run).toEqual(strict.run);
-    expect(grillMe.required).toEqual(["an approved Understanding Report for this session"]);
-    expect(fastConfirm.required).toEqual(grillMe.required);
-    expect(strict.required).toEqual([
-      "a human-approved Understanding Report for this session",
-    ]);
-  });
-
-  it("teaches the heredoc submission form (agent-tasks/e48e3b45) in the second run: line", () => {
-    const ux = defaultUx("grill_me");
-    expect(ux.run[1]).toMatch(/<<'UNDERSTANDING_REPORT'/);
-    expect(ux.run[1]).toMatch(/no pipes, chaining, or other redirection/);
-  });
-
-  it("is schema-valid", () => {
-    const m = parseManifest({
-      version: 1,
-      policy_packs: [
-        {
-          name: "understanding-before-execution",
-          config: { mode: "grill_me", ux: defaultUx("grill_me") },
-        },
-      ],
-    });
-    expect(m.policy_packs[0]?.config["ux"]).toBeDefined();
-  });
-});
-
-describe("understanding-before-execution.defaultProducers", () => {
-  it("includes the golden-path `ask` producer and the un-hooked `bash` producer", () => {
-    const producers = defaultProducers();
-    expect(producers).toHaveLength(2);
-    expect(producers.some((p) => p.kind === "ask" && p.command === "harness approve understanding")).toBe(
-      true,
-    );
-    expect(
-      producers.some((p) => p.kind === "bash" && p.command === "harness approve understanding"),
-    ).toBe(true);
-  });
-});
 
 describe("branch-protection.defaultUx", () => {
   it("teaches branching off as the only recovery command (task a4d8adc5: the session-start producer is gone)", () => {
@@ -74,44 +23,16 @@ describe("resolveBuiltinDefaultConfig", () => {
     }).policy_packs[0]!;
   }
 
-  it("understanding-before-execution: resolves ux from the pack's OWN configured mode", () => {
-    const pack = packWith("understanding-before-execution", { mode: "strict" });
-    const result = resolveBuiltinDefaultConfig(pack);
-    expect(result?.ux).toEqual(defaultUx("strict"));
-    expect(result?.producers).toEqual(defaultProducers());
-  });
-
-  it("understanding-before-execution: defaults to grill_me when mode is unset", () => {
-    const pack = packWith("understanding-before-execution");
-    const result = resolveBuiltinDefaultConfig(pack);
-    expect(result?.ux).toEqual(defaultUx("grill_me"));
-  });
-
-  it("understanding-before-execution: ignores UNDERSTANDING_GATE_MODE — resolves from config.mode alone (task 5d73d78d review HIGH-3)", () => {
-    // `harness doctor`'s UX-drift comparison and `harness pack reseed`
-    // both read this function to know what the manifest's `config.ux`
-    // SHOULD say. If it consulted the live env, an operator who happens
-    // to have UNDERSTANDING_GATE_MODE exported in the shell they ran
-    // `harness doctor` from would see false drift (or a `pack reseed`
-    // would write different content) purely because of ambient shell
-    // state, independent of what harness.yaml actually declares.
-    const saved = process.env["UNDERSTANDING_GATE_MODE"];
-    process.env["UNDERSTANDING_GATE_MODE"] = "fast_confirm";
-    try {
-      const pack = packWith("understanding-before-execution", { mode: "strict" });
-      const result = resolveBuiltinDefaultConfig(pack);
-      expect(result?.ux).toEqual(defaultUx("strict"));
-    } finally {
-      if (saved === undefined) delete process.env["UNDERSTANDING_GATE_MODE"];
-      else process.env["UNDERSTANDING_GATE_MODE"] = saved;
-    }
-  });
-
   it("branch-protection: ux only, no canonical producers", () => {
     const pack = packWith("branch-protection");
     const result = resolveBuiltinDefaultConfig(pack);
     expect(result?.ux).toEqual(branchProtectionDefaultUx());
     expect(result?.producers).toBeUndefined();
+  });
+
+  it("the removed understanding-before-execution pack is no longer a builtin: null", () => {
+    const pack = { ...packWith("branch-protection"), name: "understanding-before-execution" };
+    expect(resolveBuiltinDefaultConfig(pack)).toBeNull();
   });
 
   it("unknown pack name: null", () => {

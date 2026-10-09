@@ -317,22 +317,6 @@ describe.skipIf(process.platform === "win32")("runtime state files: a FIFO at th
     expect(run.value).toEqual({ ok: null });
   });
 
-  it("active claim: a FIFO reads as refused, not as no claim", () => {
-    const mod = "policy-packs/builtin/understanding-before-execution/active-claim.js";
-    const dir = path.join(tmp, "gen");
-    fs.mkdirSync(dir);
-    fs.writeFileSync(path.join(dir, "active-claim"), "task-123\n");
-    const control = callInChild(mod, "readActiveClaim", [dir]);
-    expectBounded(control);
-    expect(control.value).toEqual({ ok: { kind: "claim", taskId: "task-123" } });
-
-    fs.rmSync(path.join(dir, "active-claim"));
-    mkfifo(path.join(dir, "active-claim"));
-    const run = callInChild(mod, "readActiveClaim", [dir]);
-    expectBounded(run);
-    expect(run.value).toMatchObject({ ok: { kind: "refused" } });
-  });
-
   it("kubeconfig: a FIFO reads as an unknown context; a regular file resolves", () => {
     const cfg = path.join(tmp, "kubeconfig");
     fs.writeFileSync(
@@ -348,41 +332,6 @@ describe.skipIf(process.platform === "win32")("runtime state files: a FIFO at th
     const run = callInChild("runtime/kube-context.js", "resolveKubeContext", [{ kubeconfigPath: cfg }]);
     expectBounded(run);
     expect(run.value).toMatchObject({ ok: { context: "", namespace: "", unreadable: expect.stringContaining("not a regular file") } });
-  });
-});
-
-describe.skipIf(process.platform === "win32")("approval signing key: a FIFO at the key path throws, never blocks, never regenerates", () => {
-  const MOD = "runtime/approval-signing.js";
-
-  it("control: a regular key is returned; an absent key is created", () => {
-    const dir = path.join(tmp, "gen");
-    fs.mkdirSync(dir);
-    const created = callInChild(MOD, "getOrCreateSigningKey", [dir]);
-    expectBounded(created);
-    expect((created.value as { ok: { created: boolean } }).ok.created).toBe(true);
-    const again = callInChild(MOD, "getOrCreateSigningKey", [dir]);
-    expectBounded(again);
-    expect((again.value as { ok: { created: boolean } }).ok.created).toBe(false);
-  });
-
-  it("a FIFO at the key path throws within the bound and is left in place", () => {
-    const dir = path.join(tmp, "gen");
-    fs.mkdirSync(dir);
-    const keyPath = path.join(dir, ".approval-signing.key");
-    mkfifo(keyPath);
-    const run = callInChild(MOD, "getOrCreateSigningKey", [dir]);
-    expectBounded(run);
-    expect(run.value).toEqual({ threw: { name: "BoundedReadError", code: "E_NOT_REGULAR" } });
-    expect(fs.lstatSync(keyPath).isFIFO()).toBe(true);
-  });
-
-  it("an oversized key file throws within the bound", () => {
-    const dir = path.join(tmp, "gen");
-    fs.mkdirSync(dir);
-    sparseFile(path.join(dir, ".approval-signing.key"), 2 * 1024 * 1024, "x".repeat(64));
-    const run = callInChild(MOD, "getOrCreateSigningKey", [dir]);
-    expectBounded(run);
-    expect(run.value).toEqual({ threw: { name: "BoundedReadError", code: "E_UNREADABLE" } });
   });
 });
 
@@ -420,40 +369,5 @@ describe.skipIf(process.platform === "win32")("manifest loader: a FIFO at a mani
     const run = callInChild("cli/loader.js", "loadMergedRaw", [{ configPath: cfg, homeDir: home }]);
     expectBounded(run);
     expect((run.value as { threw: { name: string } }).threw.name).toBe("HarnessExitError");
-  });
-});
-
-describe.skipIf(process.platform === "win32")("persisted reports: the plain listing reads through the bounded descriptor read", () => {
-  const MOD = "policy-packs/builtin/understanding-before-execution/persisted-reports.js";
-  const report = JSON.stringify({
-    sessionId: "s1",
-    approvalStatus: "pending",
-    createdAt: "2026-10-06T00:00:00.000Z",
-  });
-
-  // No-regression controls: the directory listing already skipped anything
-  // that is not a regular `*.json` entry before this change, so these two
-  // cases pass on the base too. They pin that the converted by-path fallback
-  // did not reintroduce a by-path read of such an entry.
-  it("a FIFO named *.json is skipped within the bound and the regular report is listed", () => {
-    const dir = path.join(tmp, "reports");
-    fs.mkdirSync(dir);
-    fs.writeFileSync(path.join(dir, "a.json"), report);
-    mkfifo(path.join(dir, "zz-fifo.json"));
-    const run = callInChild(MOD, "listPersistedReports", [dir]);
-    expectBounded(run);
-    const listed = (run.value as { ok: Array<{ filePath: string; sessionId: string }> }).ok;
-    expect(listed.map((r) => path.basename(r.filePath))).toEqual(["a.json"]);
-  });
-
-  it("a symlink to a FIFO named *.json is skipped within the bound", () => {
-    const dir = path.join(tmp, "reports");
-    fs.mkdirSync(dir);
-    fs.writeFileSync(path.join(dir, "a.json"), report);
-    mkfifo(path.join(tmp, "target-fifo"));
-    fs.symlinkSync(path.join(tmp, "target-fifo"), path.join(dir, "zz-link.json"));
-    const run = callInChild(MOD, "listPersistedReports", [dir]);
-    expectBounded(run);
-    expect((run.value as { ok: unknown[] }).ok).toHaveLength(1);
   });
 });

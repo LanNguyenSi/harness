@@ -95,6 +95,7 @@ describe("the removed-entry table", () => {
       "session_start_preflight",
       "toolchain_parity",
       "stale_base_check",
+      "permission_profiles",
     ]);
     for (const p of REMOVED_MANIFEST_PATHS) {
       expect(p.removedIn).toMatch(/^\d+\.\d+\.\d+$/);
@@ -103,7 +104,11 @@ describe("the removed-entry table", () => {
   });
 
   it("lists every removed builtin pack with a version and a reason", () => {
-    expect(REMOVED_PACK_NAMES.length).toBeGreaterThan(0);
+    expect(REMOVED_PACK_NAMES.map((p) => p.name)).toEqual([
+      "post-merge-gate",
+      "solution-acceptance",
+      "understanding-before-execution",
+    ]);
     for (const p of REMOVED_PACK_NAMES) {
       expect(p.name.length).toBeGreaterThan(0);
       expect(p.removedIn).toMatch(/^\d+\.\d+\.\d+$/);

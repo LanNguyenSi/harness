@@ -82,15 +82,8 @@ export interface SettingsMcpServer {
   env?: Record<string, string>;
 }
 
-export interface SettingsPermissions {
-  allow?: string[];
-  ask?: string[];
-  deny?: string[];
-}
-
 export interface SettingsRoot {
   hooks: Record<string, SettingsHookGroup[]>;
-  permissions?: SettingsPermissions;
 }
 
 export interface GenerateSettingsResult {
@@ -119,12 +112,6 @@ export interface GenerateSettingsResult {
 }
 
 export interface GenerateSettingsExtras {
-  /**
-   * Phase 6 #5 — pack-contributed permissions emitted into the
-   * settings.json `permissions` block. Empty buckets are dropped from
-   * the output so a no-op contribution doesn't pollute the JSON.
-   */
-  packPermissions?: SettingsPermissions;
   /**
    * Home directory used to expand `~/` in projected values (the
    * grounding evidence-ledger path). Defaults to `os.homedir()`;
@@ -196,19 +183,7 @@ export function generateSettingsWithWarnings(
   warnings.push(...desiredMcp.warnings);
   const mcp = desiredMcp.mcp;
 
-  const permissions = compactPermissions(extras.packPermissions);
-  if (permissions) out.permissions = permissions;
-
   return { root: out, warnings, mcpServers: mcp };
-}
-
-function compactPermissions(p: SettingsPermissions | undefined): SettingsPermissions | null {
-  if (!p) return null;
-  const out: SettingsPermissions = {};
-  if (p.allow && p.allow.length > 0) out.allow = [...p.allow].sort();
-  if (p.ask && p.ask.length > 0) out.ask = [...p.ask].sort();
-  if (p.deny && p.deny.length > 0) out.deny = [...p.deny].sort();
-  return Object.keys(out).length > 0 ? out : null;
 }
 
 // Translate manifest `tools.mcp[]` into Claude Code's `mcpServers` map.

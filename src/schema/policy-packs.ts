@@ -7,7 +7,7 @@ import { NUMERIC_VERSION_MESSAGE, NUMERIC_VERSION_PATTERN } from "../io/version-
 // not contain `/`, `..`, or anything else that would escape the policy-
 // packs subtree. Constrain to alphanumeric + dash + underscore + dot,
 // must start with an alphanumeric. This matches the canonical builtin
-// (`understanding-before-execution`) and is friendly to future names like
+// (`branch-protection`) and is friendly to future names like
 // `safe-shell.v2`.
 const PACK_NAME_RE = /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/;
 

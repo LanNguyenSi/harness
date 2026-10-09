@@ -90,22 +90,6 @@ describe("apply --runtime opencode", () => {
     expect(second.outcome).toBe("no-changes");
   });
 
-  it("surfaces a warning when permission_profile is set under --runtime opencode (silent-drop guard)", async () => {
-    writeManifest({
-      policy_packs: [
-        {
-          name: "understanding-before-execution",
-          config: { permission_profile: "safe-start" },
-        },
-      ],
-    });
-    const result = await apply({ homeDir: tmpHome, runtime: "opencode" });
-    expect(result.outcome).toBe("applied");
-    expect(
-      result.warnings.some((w) => w.includes("permission") && w.includes("opencode")),
-    ).toBe(true);
-  });
-
   it("does not project policy-pack hooks into the opencode config, and warns", async () => {
     writeManifest({
       policy_packs: [{ name: "branch-protection" }],

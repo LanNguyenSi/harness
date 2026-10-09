@@ -805,6 +805,48 @@ describe("branch-protection hook: the manifest", () => {
     expect(run.blocked).toBe(true);
     expect(run.diagnostic).toBe(`BLOCK: branch "master" of ${repo} is protected (master, main, develop)`);
   });
+
+  it.skipIf(!GIT_AVAILABLE)("a manifest that still names the removed understanding-before-execution pack (listed first, junk config) and carries permission_profiles loads with two warnings, still refuses on a protected branch and still allows a feature branch", async () => {
+    const dir = tmpDir("harness-bp-manifest-");
+    const cfg = path.join(dir, "harness.yaml");
+    fs.writeFileSync(
+      cfg,
+      [
+        "version: 1",
+        "hooks: []",
+        "policies: []",
+        "permission_profiles:",
+        "  custom:",
+        "    actions:",
+        "      read: { allow: true }",
+        "      deploy: { allow: ask_or_deny }",
+        "policy_packs:",
+        "  - name: understanding-before-execution",
+        "    source: builtin",
+        "    enabled: true",
+        "    config:",
+        "      mode: not-a-mode",
+        "      permission_profile: custom",
+        "      auto_approve: { when: [], bogus: 1 }",
+        "  - name: branch-protection",
+        "    source: builtin",
+        "    enabled: true",
+        "",
+      ].join("\n"),
+    );
+    expect(loadManifest({ configPath: cfg }).warnings.map((w) => w.path)).toEqual([
+      "permission_profiles",
+      "policy_packs[0]",
+    ]);
+    const protectedRepo = makeRepo("master");
+    const refused = await runHook(writeEvent(protectedRepo, path.join(protectedRepo, "x.ts")), { configPath: cfg });
+    expect(refused.blocked).toBe(true);
+    expect(refused.diagnostic).toBe(`BLOCK: branch "master" of ${protectedRepo} is protected (master, main, develop)`);
+    const featureRepo = makeRepo("feat/x");
+    const allowed = await runHook(writeEvent(featureRepo, path.join(featureRepo, "x.ts")), { configPath: cfg });
+    expect(allowed.blocked).toBe(false);
+    expect(allowed.exitCode).toBe(0);
+  });
 });
 
 describe("removed verbs", () => {

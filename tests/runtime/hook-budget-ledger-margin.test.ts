@@ -7,12 +7,10 @@
 // hook's own decision was already an internally-computed `deny` /
 // `deny-degraded`, if that decision never reached stdout before the kill.
 //
-// Every blocking (`blocking: "hard"`) `harness policy intercept` hook, and
-// every blocking hook in the understanding-before-execution builtin policy
-// pack, performs at least one live grounding-mcp round-trip
-// before it can write its stdout decision (branch-protection did too until
-// task a4d8adc5; it now asks git and is pinned against its own git bound
-// below):
+// Every blocking (`blocking: "hard"`) `harness policy intercept` hook
+// performs at least one live grounding-mcp round-trip before it can write
+// its stdout decision (branch-protection did too until task a4d8adc5; it now
+// asks git and is pinned against its own git bound below):
 //   - a `requires:`-based policy queries the ledger for its verdict
 //     (src/runtime/intercept.ts, `evaluateOnePolicy`, the
 //     `options.ledger.query(...)` call).
@@ -26,11 +24,6 @@
 //     the budget-note comment above `require-review-evidence` in
 //     src/cli/init/templates.ts for the full trace this test's invariant
 //     is derived from.
-//   - the policy-pack blockers (the `harness pack hook pre-tool-use` /
-//     `harness pack hook codex-pre-tool-use` verbs, removed in task
-//     7890cd34) each ran an
-//     unconditional `queryLedgerByTag` / `checkLedger` probe on every
-//     invocation, bounded by the same `health.timeout_ms`.
 //
 // This test pins the invariant the raised budgets (task 7bf47554) exist to
 // satisfy, against EVERY manifest-emitting surface that can ship one of
@@ -60,7 +53,7 @@
 // GENERIC guard (`checkHookBudgetLedgerMargin`, `src/cli/validate/
 // checks.ts`, exercised via `harness validate` / `harness doctor`) that
 // checks the same invariant against an ARBITRARY manifest's OWN
-// `health.timeout_ms` and OWN enabled `policy_packs[]`, instead of this
+// `health.timeout_ms` and OWN `hooks[]`, instead of this
 // file's fixed set of hand-imported template/pack surfaces — the trailing
 // describe block below closes the loop by running it against the very
 // manifests this file already builds.
@@ -82,7 +75,6 @@ import {
 import { checkHookBudgetLedgerMargin } from "../../src/cli/validate/checks.js";
 import { GIT_READ_DEADLINE_MS } from "../../src/cli/pack/hook-branch-protection.js";
 import { resolve as resolveBranchProtection } from "../../src/policy-packs/builtin/branch-protection.js";
-import { resolve as resolveUnderstandingBeforeExecution } from "../../src/policy-packs/builtin/understanding-before-execution.js";
 import { KNOWN_RUNTIMES } from "../../src/policy-packs/runtime.js";
 
 function loadFullTemplateManifest(): Manifest {
@@ -265,26 +257,6 @@ describe("blocking ledger-consulting hooks clear the ledger's worst-case round-t
     ).toBe(false);
   });
 
-  it("understanding-before-execution's blocking hook clears the margin and the hard floor (both runtimes)", () => {
-    // The pack still ships (a manifest may carry it) but no init template
-    // offers it any more, so the manifest is built inline.
-    const pack = parseManifest({
-      version: 1,
-      policy_packs: [{ name: "understanding-before-execution", source: "builtin", enabled: true }],
-    }).policy_packs[0];
-    expect(pack).toBeDefined();
-    if (!pack) return;
-    for (const runtime of KNOWN_RUNTIMES) {
-      const { contribution } = resolveUnderstandingBeforeExecution(pack, runtime);
-      const blocking = contribution.hooks.filter((h) => h.blocking === "hard");
-      expect(blocking.length, `runtime ${runtime}`).toBe(1);
-      for (const hook of blocking) {
-        assertHookClearsMargin(hook);
-        assertHookMeetsHardFloor(hook);
-      }
-    }
-  });
-
   // Mutation-probe controls (not normal regression pins): document that
   // these two assertions genuinely discriminate, at two different
   // regression depths.
@@ -325,9 +297,8 @@ describe("blocking ledger-consulting hooks clear the ledger's worst-case round-t
 // (src/cli/validate/checks.ts, wired into `harness validate` /
 // `harness doctor`) checks the SAME invariant as this file's hand-imported,
 // per-surface assertions above, but generically — it reads an arbitrary
-// manifest's OWN `tools.mcp[grounding-mcp].health.timeout_ms` and iterates
-// its OWN enabled `policy_packs[]` through the shared `resolveBuiltin`
-// registry lookup, rather than this file's fixed list of specifically-
+// manifest's OWN `tools.mcp[grounding-mcp].health.timeout_ms` and walks its
+// OWN `hooks[]`, rather than this file's fixed list of specifically-
 // imported template/pack modules. Running it against the very manifests
 // built above closes the loop: the shipped defaults these hand-written
 // assertions already pin also satisfy the durable, general-purpose guard

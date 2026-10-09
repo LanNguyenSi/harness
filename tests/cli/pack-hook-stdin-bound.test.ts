@@ -143,7 +143,6 @@ async function runHook(opts: {
   }
   env["HARNESS_HOME"] = home;
   env["HOME"] = home;
-  env["UNDERSTANDING_GATE_REPORT_DIR"] = path.join(home, "reports");
 
   await acquireSlot();
   try {

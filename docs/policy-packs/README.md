@@ -1,23 +1,32 @@
 # Policy Packs
 
-A *Policy Pack* is a reusable bundle of hooks, policies, instruction
-template, and permission profiles shipped under one name and enabled
-from `harness.yaml` with a single key:
+A *Policy Pack* is a reusable bundle of hooks and an instruction
+template shipped under one name and enabled from `harness.yaml` with a
+single key:
 
 ```yaml
 policy_packs:
-  - name: understanding-before-execution
+  - name: branch-protection
     config:
-      mode: grill_me                  # fast_confirm | grill_me | strict
-      permission_profile: safe-start  # safe-start | implementation-after-approval | high-risk-grill-me
+      protected_branches: [master, main, develop]  # the default list
 ```
 
 Manage packs with `harness pack add / remove / list`.
 
-Two packs ship today:
+One pack ships today:
 
-- [`understanding-before-execution`](understanding-before-execution.md): forces an Understanding Report before any write-capable tool fires.
 - [`branch-protection`](branch-protection.md): blocks source mutations when git names a protected branch for the target directory, or cannot answer.
+
+The `understanding-before-execution` pack is removed. A manifest that still
+carries it, or the `permission_profiles` key it alone consumed, loads with a
+warning and the entry is ignored; `harness validate --strict` fails on it.
+Delete the entry (`harness pack remove --force understanding-before-execution`
+also drops the generated instructions file) and delete `permission_profiles`
+by hand, then re-run `harness apply` for each runtime. If any
+`harness apply --target <file>` (with `--merge`, `--force` or into a new
+file) wrote a `permissions` block into that file while a `permission_profile`
+was selected, also delete that block by hand: harness no longer generates or
+manages it, so a later `--merge` keeps it as an operator key.
 
 Custom packs from `path:`, `npm:`, or `git:` sources are out of scope
 for v1; see each pack's own doc for the future-vocabulary contract.

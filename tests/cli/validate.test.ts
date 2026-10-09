@@ -2057,32 +2057,6 @@ ${DIRECT_HOOK(100)}policies: []
     expect(marginDiags(result.diagnostics)).toEqual([]);
   });
 
-  it("generic over packs: an enabled understanding-before-execution pack's blocker is checked WITHOUT any hooks[] entry, and flags when a raised ledger timeout outgrows the shipped pack budget", () => {
-    // Shipped pre-tool-use budget is 15000ms, which clears the default
-    // 5000ms ledger's 13750ms requirement, but NOT a manifest that raises
-    // tools.mcp.grounding-mcp.health.timeout_ms without raising the pack's
-    // own (fixed, non-manifest-configurable) budget_ms in lockstep:
-    // required = 2*10000 + 3*2500 = 27500ms > 15000. (This row used the
-    // branch-protection pack until task a4d8adc5 took that pack off the
-    // ledger; see the negative control below.)
-    const home = fixtureWithGroundingMcp({
-      timeoutMs: 10000,
-      policyPacksYaml: `policy_packs:
-  - name: understanding-before-execution
-    source: builtin
-    enabled: true
-`,
-    });
-    const result = validate({
-      homeDir: home,
-      configPath: path.join(home, "harness.yaml"),
-      ...NOOP_PROBES,
-    });
-    const hits = marginDiags(result.diagnostics);
-    expect(hits.length).toBeGreaterThan(0);
-    expect(hits.some((h) => h.path.includes("policy-pack:understanding-before-execution"))).toBe(true);
-  });
-
   it("negative control: an enabled branch-protection pack is NOT flagged even under the same raised ledger timeout (it asks git, no ledger round-trip, task a4d8adc5)", () => {
     const home = fixtureWithGroundingMcp({
       timeoutMs: 10000,

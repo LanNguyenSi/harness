@@ -1,24 +1,20 @@
 // Task 33abc147 — `.pending-approval` session-id staging file.
 //
-// The understanding-gate PreToolUse hook knows the running session's
-// exact `session_id` (it arrives on the hook event's stdin). `harness
-// approve`, run from the operator's `!`-shell, does NOT: $CLAUDE_SESSION_ID
+// The gate hook knows the running session's exact `session_id` (it arrives
+// on the hook event's stdin). `harness approve risk`, run from the operator's `!`-shell, does NOT: $CLAUDE_SESSION_ID
 // is unset in that shell, and guessing the id from the newest project
 // transcript is a heuristic that breaks on subagent / parallel-session
 // transcripts (the approve error message warns about exactly that).
 //
 // So the producer hands the id off instead of making the consumer guess:
 // on every block / ask the gate hook writes the `session_id` to
-// `<generatedDir>/.pending-approval`, and `harness approve` reads it when
+// `<generatedDir>/.pending-approval`, and `harness approve risk` reads it when
 // no `--session` flag and no `$CLAUDE_SESSION_ID` are given. Deterministic,
 // not a guess.
 //
 // `harness apply` only writes its own known files into harness.generated/
 // (it never wipes the directory), so the staging file survives applies.
-// `harness approve` deletes it after a successful resolve so a later
-// arg-less invocation cannot revive a stale session id.
 
-import * as fs from "node:fs";
 import * as path from "node:path";
 import { atomicWriteFile } from "../io/atomic-write.js";
 import { GENERATED_DIRNAME, resolveGeneratedDir } from "../io/generated-dir.js";
@@ -58,17 +54,4 @@ export function readPendingApproval(generatedDir: string): string | null {
   }
   const trimmed = raw.trim();
   return trimmed.length > 0 ? trimmed : null;
-}
-
-/**
- * Consumer: drop the staging file once its id has been consumed, so a
- * later arg-less `harness approve` cannot revive a stale session id.
- * Best-effort — a missing file counts as success.
- */
-export function clearPendingApproval(generatedDir: string): void {
-  try {
-    fs.rmSync(pendingApprovalPath(generatedDir));
-  } catch {
-    /* already gone (or never written) — nothing to clean up */
-  }
 }

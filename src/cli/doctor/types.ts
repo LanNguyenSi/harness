@@ -238,10 +238,8 @@ export interface PackExpansionRuntimeReport {
  * policy-pack-EXPANDED hook (task ab634898). Distinct from
  * `PolicyPackVersionGapReport` (the pack-level `policy_packs[].min_version`
  * floor, a different mechanism checked by `checkPolicyPackVersions`):
- * this covers an individual hook a builtin pack contributes, e.g.
- * understanding-before-execution's UserPromptSubmit/Stop hooks, each
- * declaring its own `min_version` + `version_command`
- * (`src/policy-packs/builtin/understanding-before-execution.ts`).
+ * this covers an individual hook a builtin pack contributes with its own
+ * `min_version` + `version_command`.
  * `expandPolicyPacks` produces the hooks Claude Code actually runs, but
  * `manifest.hooks[]` (what `HookEntryReport`/`checkHooks` walk) never
  * includes them, so without this section an operator below a pack
@@ -251,7 +249,7 @@ export interface PackExpansionRuntimeReport {
  * declares a floor meets it (or none declare one).
  */
 export interface PolicyPackHookVersionGapReport {
-  /** The pack-expanded hook's name, e.g. `policy-pack:understanding-before-execution:user-prompt-submit`. */
+  /** The pack-expanded hook's name, e.g. `policy-pack:<pack>:<role>`. */
   name: string;
   event: string;
   declaredMinVersion: string;
@@ -264,7 +262,7 @@ export interface PolicyPackHookVersionGapReport {
   kind: "below_floor" | "probe_failed" | "parse_failed";
   /** Parsed installed version when the probe succeeded; null for `probe_failed` / `parse_failed`, where it is unknown. */
   actualVersion: string | null;
-  /** The `version_command` that was probed, e.g. `["understanding-gate", "--version"]`. */
+  /** The `version_command` that was probed, e.g. `["some-bin", "--version"]`. */
   versionCommand: readonly string[];
   message: string;
 }

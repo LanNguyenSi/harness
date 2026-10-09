@@ -64,6 +64,11 @@ export const REMOVED_MANIFEST_PATHS: readonly RemovedManifestPath[] = [
     removedIn: "1.0.0",
     reason: "the session-start stale-base-check producer is removed",
   },
+  {
+    path: "permission_profiles",
+    removedIn: "1.0.0",
+    reason: "only the removed understanding-gate pack consumed permission profiles",
+  },
 ];
 
 export const REMOVED_PACK_NAMES: readonly RemovedPackName[] = [
@@ -76,6 +81,11 @@ export const REMOVED_PACK_NAMES: readonly RemovedPackName[] = [
     name: "solution-acceptance",
     removedIn: "1.0.0",
     reason: "opt-in verdict-gated completion gate removed with the harness simplification",
+  },
+  {
+    name: "understanding-before-execution",
+    removedIn: "1.0.0",
+    reason: "the understanding-gate pack is removed with the harness simplification",
   },
 ];
 

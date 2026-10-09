@@ -33,9 +33,8 @@ import {
 export { PACK_NAME };
 
 /**
- * Zod schema for this pack's `config:` block. See sibling pack
- * `understanding-before-execution.configSchema` for rationale: strict
- * by design so typo'd keys fail loud at lint time. `protected_branches`
+ * Zod schema for this pack's `config:` block. Strict by design so
+ * typo'd keys fail loud at lint time. `protected_branches`
  * is the only operator-tunable key today; new keys land here first,
  * then in `resolveProtectedBranches`.
  */

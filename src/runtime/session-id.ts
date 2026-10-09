@@ -29,7 +29,7 @@
 //
 // Both resolvers also accept `$CLAUDE_CODE_SESSION_ID` as a higher-priority
 // env tier than the legacy `$CLAUDE_SESSION_ID`, mirroring the
-// `harness approve` verbs (`src/cli/approve/{risk,understanding}.ts`).
+// `harness approve risk` verb (`src/cli/approve/risk.ts`).
 
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -158,40 +158,26 @@ export function resolveReadSessionId(
 }
 
 // ---------------------------------------------------------------------------
-// Shared session-id resolver for the `harness approve` verbs.
+// Session-id resolver for `harness approve risk`.
 // ---------------------------------------------------------------------------
 //
-// Both approve verbs (understanding, risk) resolve the target session id
-// through the same 5-tier precedence chain; only
-// `approve understanding` adds a 6th tier (newest pending persisted report).
-// This section lifts that chain into one place to remove the copy-paste.
-//
-// The callers retain their own error-throw blocks because the error messages
-// are intentionally verb-specific (they name the gate hook, the approve
+// The caller keeps its own error-throw block because the error message is
+// intentionally verb-specific (it names the gate hook, the approve
 // subcommand, and the recovery steps that are relevant to that verb).
 
-/** Session-id source for the `harness approve` verbs. */
+/** Session-id source for `harness approve risk`. */
 export type ApprovalSessionSource =
   | "flag"
   | "env-claude-code"
   | "env-claude"
   | "env-codex"
-  | "pending-approval"
-  | "newest-report";
+  | "pending-approval";
 
 export interface ResolveApprovalSessionIdOptions {
   /** Explicit --session flag value. Empty string is treated as absent. */
   session?: string;
   /** Path to the harness.generated/ directory; used to read .pending-approval. */
   generatedDir: string;
-  /**
-   * Optional 6th-tier callback. When provided and reached, it is called
-   * once and should return the session id plus the file path of the
-   * freshest qualifying persisted report, or null when none qualifies.
-   * Only `approve understanding` supplies this; `approve risk` omits it (it
-   * produces no persisted reports).
-   */
-  newestReportFallback?: () => { sessionId: string; filePath: string } | null;
   /**
    * Test seam: override the .pending-approval reader. Defaults to
    * `readPendingApproval` from pending-approval.ts. Verb-level tests use
@@ -215,25 +201,17 @@ export interface ResolveApprovalSessionIdResult {
    * is meaningless (callers throw before returning it to the operator).
    */
   sessionSource: ApprovalSessionSource;
-  /**
-   * Set only when `sessionSource === "newest-report"`. The absolute path
-   * of the persisted report whose `sessionId` field was adopted. Surfaced
-   * in the `approve understanding` CLI warning so the operator can verify
-   * the report belongs to their live session.
-   */
-  newestReportPath?: string;
 }
 
 /**
- * Shared session-id resolver for the `harness approve` verbs.
+ * Session-id resolver for `harness approve risk`.
  *
  * Precedence:
  *   1. explicit --session flag
  *   2. $CLAUDE_CODE_SESSION_ID (the var Claude Code exports into the agent shell)
  *   3. $CLAUDE_SESSION_ID (legacy / docs name; kept for older operator recipes)
  *   4. $CODEX_SESSION_ID (set inside a live Codex session)
- *   5. .pending-approval staging file (written by the gate hook or preflight)
- *   6. newestReportFallback() result -- only understanding.ts uses this tier
+ *   5. .pending-approval staging file (written by the gate hook)
  *
  * Returns `{ sessionId: "" }` when no tier resolves. The caller is
  * responsible for throwing a verb-specific HarnessExitError in that case.
@@ -273,18 +251,7 @@ export function resolveApprovalSessionId(
     return { sessionId: staged, sessionSource: "pending-approval" };
   }
 
-  if (opts.newestReportFallback !== undefined) {
-    const newest = opts.newestReportFallback();
-    if (newest !== null) {
-      return {
-        sessionId: newest.sessionId,
-        sessionSource: "newest-report",
-        newestReportPath: newest.filePath,
-      };
-    }
-  }
-
-  // Nothing resolved. Callers check sessionId === "" and throw their own
-  // verb-specific error messages.
+  // Nothing resolved. The caller checks sessionId === "" and throws its own
+  // verb-specific error message.
   return { sessionId: "", sessionSource: "flag" };
 }

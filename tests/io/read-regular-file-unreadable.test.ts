@@ -21,45 +21,19 @@ vi.mock("node:fs", async (importOriginal) => {
 
 // Import AFTER the mock declaration so the modules resolve the mocked fs.
 const fsActual = await vi.importActual<typeof import("node:fs")>("node:fs");
-const { readRegularFileRejectingSymlink } = await import("../../src/io/read-regular-file.js");
-const { checkApprovalMarker } = await import(
-  "../../src/policy-packs/builtin/understanding-before-execution-runtime.js"
-);
+const { readRegularFileBounded } = await import("../../src/io/read-regular-file.js");
 
 function makeTmp(): string {
   return fsActual.mkdtempSync(path.join(os.tmpdir(), "read-unreadable-"));
 }
 
-describe("readRegularFileRejectingSymlink — unreadable kind (read failure after good lstat)", () => {
+describe("readRegularFileBounded: unreadable kind (read failure after good lstat)", () => {
   it("returns unreadable when the descriptor read throws on an existing regular file", () => {
     const tmp = makeTmp();
     try {
       const p = path.join(tmp, "marker.json");
       fsActual.writeFileSync(p, "{}", "utf8");
-      expect(readRegularFileRejectingSymlink(p)).toEqual({ kind: "unreadable" });
-    } finally {
-      fsActual.rmSync(tmp, { recursive: true, force: true });
-    }
-  });
-
-  it("gate semantic: an existing-but-unreadable approval marker does NOT satisfy the gate (harness/f9485cc7 — signing removed the existence-only contract)", () => {
-    const tmp = makeTmp();
-    try {
-      const markerDir = path.join(tmp, ".approvals");
-      fsActual.mkdirSync(markerDir, { recursive: true });
-      fsActual.writeFileSync(
-        path.join(markerDir, "sess-unreadable"),
-        '{"approvedAt":"2026-07-02T00:00:00.000Z","approvedBy":"operator"}',
-        "utf8",
-      );
-      const r = checkApprovalMarker(tmp, "sess-unreadable");
-      expect(r.matched).toBe(false);
-      expect(r.marker).toBeNull();
-      // Distinct from `forged`: a genuine I/O read failure is not itself
-      // evidence of tampering, just fail-closed since the signature
-      // cannot be verified without reading the body.
-      expect(r.forged).toBe(false);
-      expect(r.detail).toMatch(/unreadable/);
+      expect(readRegularFileBounded(p)).toEqual({ kind: "unreadable" });
     } finally {
       fsActual.rmSync(tmp, { recursive: true, force: true });
     }

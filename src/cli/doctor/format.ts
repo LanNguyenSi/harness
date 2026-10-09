@@ -237,9 +237,7 @@ function formatPackExpansionRuntimeSection(report: DoctorReport): string[] {
 }
 
 // Policy-pack hooks section (task ab634898): the hook-level `min_version`
-// floor on hooks a builtin policy pack contributes (understanding-gate's
-// UserPromptSubmit/Stop hooks, floored at 0.5.0, are the motivating
-// case). Distinct from the "Hooks" section above (which only walks
+// floor on hooks a builtin policy pack contributes. Distinct from the "Hooks" section above (which only walks
 // `manifest.hooks[]`, never the pack-expanded ones) and from "Policy
 // Packs" below (the pack-LEVEL `policy_packs[].min_version` floor).
 // Stays silent when there is nothing to report, same convention as
@@ -292,7 +290,7 @@ function formatPoliciesSection(report: DoctorReport): string[] {
 // Policy Packs section: declared-but-not-live + per-pack `config:`
 // shape gaps. A pack whose `source` or builtin `name` doesn't resolve
 // gets silently skipped by `expandPolicyPacks`; a pack whose `config:`
-// keys typo (`permision_profile`, `mode: "fastConfirm"`) falls through
+// keys typo (`protected_brnches`, `protected_branches: "master"`) falls through
 // to runtime fallbacks and only surfaces when the hook finally fires.
 // Both render ✗ here. Section stays silent when the lists are empty
 // (the healthy case is common; a noisy ✓ would dilute doctor's signal).

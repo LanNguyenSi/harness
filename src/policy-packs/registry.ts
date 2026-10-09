@@ -1,9 +1,8 @@
 // Registry of builtin policy-pack names.
 //
-// Phase 6 #2 shipped `understanding-before-execution`; subsequent
-// builtins are added by appending to `KNOWN_BUILTIN_PACKS` and a case
-// arm in `resolveBuiltin()`. Non-builtin sources (path/npm/git) are
-// out of scope for v1; their resolution lands in a later sub-task.
+// One builtin pack ships: `branch-protection`. A further builtin is added by
+// appending to `KNOWN_BUILTIN_PACKS` and a case arm in `resolveBuiltin()`.
+// Non-builtin sources (path/npm/git) are out of scope for v1.
 
 import type { z } from "zod";
 import type { PolicyPack, PolicyUx, Producer } from "../schema/index.js";
@@ -13,23 +12,10 @@ import {
   PACK_NAME as BRANCH_PROTECTION,
   resolve as resolveBranchProtection,
 } from "./builtin/branch-protection.js";
-import {
-  configSchema as understandingBeforeExecutionConfigSchema,
-  defaultProducers as understandingBeforeExecutionDefaultProducers,
-  defaultUx as understandingBeforeExecutionDefaultUx,
-  PACK_NAME as UNDERSTANDING_BEFORE_EXECUTION,
-  resolve as resolveUnderstandingBeforeExecution,
-  resolveModeFromConfig as resolveUnderstandingBeforeExecutionMode,
-  VERSION_COMMAND as UNDERSTANDING_BEFORE_EXECUTION_VERSION_COMMAND,
-  type ResolvePackOptions,
-} from "./builtin/understanding-before-execution.js";
 import { DEFAULT_RUNTIME, type Runtime } from "./runtime.js";
 import type { PackContribution } from "./types.js";
 
-export const KNOWN_BUILTIN_PACKS = [
-  UNDERSTANDING_BEFORE_EXECUTION,
-  BRANCH_PROTECTION,
-] as const;
+export const KNOWN_BUILTIN_PACKS = [BRANCH_PROTECTION] as const;
 export type BuiltinPackName = (typeof KNOWN_BUILTIN_PACKS)[number];
 
 export function isBuiltinPackName(name: string): name is BuiltinPackName {
@@ -44,12 +30,9 @@ export interface ResolveBuiltinResult {
 export function resolveBuiltin(
   pack: PolicyPack,
   runtime: Runtime = DEFAULT_RUNTIME,
-  opts: ResolvePackOptions = {},
 ): ResolveBuiltinResult | null {
   if (!isBuiltinPackName(pack.name)) return null;
   switch (pack.name as BuiltinPackName) {
-    case UNDERSTANDING_BEFORE_EXECUTION:
-      return resolveUnderstandingBeforeExecution(pack, runtime, opts);
     case BRANCH_PROTECTION:
       return resolveBranchProtection(pack, runtime);
   }
@@ -67,8 +50,6 @@ export function resolveBuiltinConfigSchema(
 ): z.ZodTypeAny | null {
   if (!isBuiltinPackName(packName)) return null;
   switch (packName as BuiltinPackName) {
-    case UNDERSTANDING_BEFORE_EXECUTION:
-      return understandingBeforeExecutionConfigSchema;
     case BRANCH_PROTECTION:
       return branchProtectionConfigSchema;
   }
@@ -89,8 +70,6 @@ export function resolveBuiltinVersionCommand(
 ): readonly [string, string] | null {
   if (!isBuiltinPackName(packName)) return null;
   switch (packName as BuiltinPackName) {
-    case UNDERSTANDING_BEFORE_EXECUTION:
-      return UNDERSTANDING_BEFORE_EXECUTION_VERSION_COMMAND;
     case BRANCH_PROTECTION:
       return null;
   }
@@ -98,11 +77,7 @@ export function resolveBuiltinVersionCommand(
 
 /**
  * The shipped-template `config.ux` / `config.producers` for a builtin pack,
- * as the operator's OWN pack entry would resolve them today (e.g. `ux`'s
- * `required:` line is derived from the pack's currently-configured `mode`,
- * not a hardcoded default mode — an operator on `strict` should be
- * compared against, and reseeded with, the `strict` wording, not
- * `grill_me`'s).
+ * as the operator's OWN pack entry would resolve them today.
  *
  * Returns `null` when the pack name is not a builtin, or when the pack
  * has no canonical shipped default to compare/reseed against. Every
@@ -110,17 +85,6 @@ export function resolveBuiltinVersionCommand(
  * (`harness doctor`'s divergence warning) and `harness pack reseed`
  * (task 68b9ad9c) — the single source both read from so the two stay
  * in lockstep by construction.
- *
- * Mode is resolved via `resolveModeFromConfig` (config.mode only, no
- * `UNDERSTANDING_GATE_MODE` env — task 5d73d78d review HIGH-3): both
- * consumers here compare against / reseed the MANIFEST's own declared
- * state, the same generation-time artefact `resolve()`/`buildHooks`
- * produce. Reading the live env here would make `harness doctor` flag
- * false drift (or `harness pack reseed` write different content)
- * whenever the operator happens to have the env var exported in the
- * shell they ran the command from — the same class of apply-time/live
- * drift `MODE_ENV`'s own doc comment (understanding-before-execution.ts)
- * explains for the sibling generation path.
  */
 export interface BuiltinDefaultConfig {
   ux?: PolicyUx;
@@ -132,13 +96,6 @@ export function resolveBuiltinDefaultConfig(
 ): BuiltinDefaultConfig | null {
   if (!isBuiltinPackName(pack.name)) return null;
   switch (pack.name as BuiltinPackName) {
-    case UNDERSTANDING_BEFORE_EXECUTION: {
-      const { mode } = resolveUnderstandingBeforeExecutionMode(pack);
-      return {
-        ux: understandingBeforeExecutionDefaultUx(mode),
-        producers: understandingBeforeExecutionDefaultProducers(),
-      };
-    }
     case BRANCH_PROTECTION:
       return { ux: branchProtectionDefaultUx() };
   }
