@@ -2,7 +2,7 @@
 //
 // Output rows match the existing `harness list <category>` shape so the
 // rendering helper (renderText vs JSON) stays consistent across categories.
-// Today the columns are: name, source, enabled, mode, description.
+// Today the columns are: name, source, enabled, description.
 
 import type { Manifest } from "../../schema/index.js";
 import { loadManifest, type LoaderOptions } from "../loader.js";
@@ -17,11 +17,6 @@ export interface PackListResult {
   rows: Record<string, unknown>[];
 }
 
-function modeOf(pack: Manifest["policy_packs"][number]): string {
-  const raw = pack.config["mode"];
-  return typeof raw === "string" ? raw : "";
-}
-
 function buildRows(manifest: Manifest, opts: PackListOptions): Record<string, unknown>[] {
   let entries = manifest.policy_packs;
   if (opts.enabledOnly) entries = entries.filter((p) => p.enabled);
@@ -29,7 +24,6 @@ function buildRows(manifest: Manifest, opts: PackListOptions): Record<string, un
     name: p.name,
     source: p.source,
     enabled: p.enabled,
-    mode: modeOf(p),
     description: p.description ?? "",
   }));
 }

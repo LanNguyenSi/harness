@@ -81,11 +81,9 @@ export type HookVersionReport =
   | {
       status: "warn";
       /**
-       * Which outcome the probe hit, mirroring `PolicyPackVersionGapKind`
-       * (`src/policy-packs/version-check.ts`) so both hook-level and
-       * pack-level gaps share one warning vocabulary. Required on
-       * `warn`: every warn-producing branch of `checkHookVersion`
-       * classifies its outcome, so there is no warn case without one.
+       * Which outcome the probe hit. Required on `warn`: every
+       * warn-producing branch of `checkHookVersion` classifies its
+       * outcome, so there is no warn case without one.
        */
       kind: "below_floor" | "probe_failed" | "parse_failed";
       /**
@@ -186,27 +184,23 @@ export interface PolicyPackConfigIssue {
 }
 
 /**
- * Doctor surface for the pack-level `min_version` floor. Mirrors the
- * hook-level `HookEntryReport.version` shape so operators see a
- * consistent warning vocabulary regardless of which layer raised the
- * gap. Always warn-not-error: a below-floor pack still runs in degraded
- * mode; the operator just loses any feature gated on the newer release.
+ * Doctor surface for the pack-level `min_version` floor: a declared floor on
+ * a pack that has no version probe, so it cannot be enforced. Always
+ * warn-not-error.
  */
 export interface PolicyPackVersionGapReport {
   name: string;
   declaredMinVersion: string;
   /**
-   * Numeric run only (never the prerelease or build suffix), so a
-   * `below_floor` gap from a prerelease of the floor shows an
-   * `actualVersion` equal to `declaredMinVersion`; `message` carries the
-   * full probed token. Same trap as `HookVersionReport.actualVersion`.
+   * Always null: a builtin pack has no probe, so no installed version is
+   * known. Kept so the doctor JSON shape of `versionGaps` is unchanged.
    */
   actualVersion: string | null;
   message: string;
 }
 
 /**
- * A pack's declared `config.ux` / `config.producers` that textually
+ * A pack's declared `config.ux` that textually
  * diverges from the shipped builtin template for that pack (task
  * 68b9ad9c). Unlike `PolicyPackConfigIssue`, the value is still SCHEMA-
  * valid — the gap is that it teaches stale wording (e.g. a pre-fix
@@ -217,7 +211,7 @@ export interface PolicyPackVersionGapReport {
  */
 export interface PolicyPackUxDriftReport {
   name: string;
-  /** Which sub-field(s) diverge: `ux`, `producers`, or both. */
+  /** Which sub-field(s) diverge (today only `ux`). */
   fields: string[];
   message: string;
 }
@@ -231,40 +225,6 @@ export interface PackExpansionRuntimeReport {
   previousRuntime?: string;
   /** Set when the last apply's `.last-apply` could not be read; names the file. */
   warning?: string;
-}
-
-/**
- * Doctor surface for the HOOK-level `min_version` floor on a
- * policy-pack-EXPANDED hook (task ab634898). Distinct from
- * `PolicyPackVersionGapReport` (the pack-level `policy_packs[].min_version`
- * floor, a different mechanism checked by `checkPolicyPackVersions`):
- * this covers an individual hook a builtin pack contributes with its own
- * `min_version` + `version_command`.
- * `expandPolicyPacks` produces the hooks Claude Code actually runs, but
- * `manifest.hooks[]` (what `HookEntryReport`/`checkHooks` walk) never
- * includes them, so without this section an operator below a pack
- * hook's floor saw a clean doctor report. Always warn, never error;
- * mirrors the manifest-hook floor (`HookVersionReport`) and the
- * pack-level floor. Empty array when every pack-expanded hook that
- * declares a floor meets it (or none declare one).
- */
-export interface PolicyPackHookVersionGapReport {
-  /** The pack-expanded hook's name, e.g. `policy-pack:<pack>:<role>`. */
-  name: string;
-  event: string;
-  declaredMinVersion: string;
-  /**
-   * Which outcome the probe hit; mirrors `PolicyPackVersionGapKind`
-   * (`src/policy-packs/version-check.ts`) so the hook-level and
-   * pack-level sections classify gaps the same way instead of the
-   * renderer having to regex `message` back apart.
-   */
-  kind: "below_floor" | "probe_failed" | "parse_failed";
-  /** Parsed installed version when the probe succeeded; null for `probe_failed` / `parse_failed`, where it is unknown. */
-  actualVersion: string | null;
-  /** The `version_command` that was probed, e.g. `["some-bin", "--version"]`. */
-  versionCommand: readonly string[];
-  message: string;
 }
 
 export interface PolicyPacksSection {
@@ -436,15 +396,6 @@ export interface DoctorReport {
    * surfaced loudly here. Errors count toward `errorCount`.
    */
   policyPacks: PolicyPacksSection;
-  /**
-   * Hook-level `min_version` floors on policy-pack-expanded hooks (task
-   * ab634898). See `PolicyPackHookVersionGapReport` for why this is
-   * separate from both `hooks[].version` (manifest-declared hooks only)
-   * and `policyPacks.versionGaps` (the pack-level floor). Always
-   * present; empty when every pack-expanded hook that declares a floor
-   * meets it.
-   */
-  policyPackHookVersions: PolicyPackHookVersionGapReport[];
   /**
    * The runtime policy packs were expanded against for the pack checks:
    * the one a plain `harness apply` would select (recorded in

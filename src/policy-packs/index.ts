@@ -4,7 +4,6 @@ export {
   isBuiltinPackName,
   resolveBuiltin,
   resolveBuiltinConfigSchema,
-  resolveBuiltinVersionCommand,
   type BuiltinPackName,
   type ResolveBuiltinResult,
 } from "./registry.js";

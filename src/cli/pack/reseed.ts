@@ -1,5 +1,5 @@
 // `harness pack reseed <name>` — pull the shipped builtin template's
-// `config.ux` (and `config.producers`) into an already-installed manifest
+// `config.ux` into an already-installed manifest
 // (task 68b9ad9c).
 //
 // Motivation: `harness apply` only projects the manifest OUT to
@@ -16,7 +16,7 @@
 // is never silently clobbered by an upgrade — the operator has to
 // actually run this command for their manifest to change. `--dry-run`
 // prints the diff without writing so the change can be reviewed first.
-// A pack whose current `config.ux` / `config.producers` already matches
+// A pack whose current `config.ux` already matches
 // the shipped template is a no-op (nothing to write).
 
 import * as fs from "node:fs";
@@ -31,8 +31,9 @@ import {
   validateBeforeWrite,
 } from "../../io/validate-before-write.js";
 import { ManifestParseError, parseManifest } from "../../schema/index.js";
+import { REMOVED_PACK_NAMES } from "../../schema/removed-keys.js";
 import { resolveBuiltinDefaultConfig } from "../../policy-packs/registry.js";
-import { producersEqual, safeParseProducers, safeParseUx, uxEqual } from "../../policy-packs/ux-compare.js";
+import { safeParseUx, uxEqual } from "../../policy-packs/ux-compare.js";
 import { EX_FAIL, EX_NOINPUT, HarnessExitError } from "../exit-codes.js";
 import { applyPackReseedUx, type PackReseedFields } from "./mutate.js";
 
@@ -42,7 +43,7 @@ export interface PackReseedOptions {
   dryRun?: boolean;
 }
 
-export type PackReseedField = "ux" | "producers";
+export type PackReseedField = "ux";
 
 export interface PackReseedResult {
   path: string;
@@ -51,7 +52,7 @@ export interface PackReseedResult {
   applied: boolean;
   /**
    * Fields the reseed changed (or would change, on `--dry-run`):
-   * "ux", "producers", both, or an empty array when the pack already
+   * "ux", or an empty array when the pack already
    * matched the shipped template (no-op, nothing written).
    */
   fieldsChanged: PackReseedField[];
@@ -99,6 +100,14 @@ export async function packReseed(
 
   const pack = manifest.policy_packs.find((p) => p.name === name);
   if (!pack) {
+    const removed = REMOVED_PACK_NAMES.find((p) => p.name === name);
+    if (removed !== undefined) {
+      throw new HarnessExitError(
+        `policy pack ${JSON.stringify(name)} was removed in ${removed.removedIn} (${removed.reason}); ` +
+          "nothing to reseed. Delete the entry from policy_packs[] if it is still there.",
+        EX_FAIL,
+      );
+    }
     throw new HarnessExitError(
       `policy_packs entry ${JSON.stringify(name)} not found. Available entries:\n${formatNameList(
         manifest.policy_packs.map((p) => p.name),
@@ -108,9 +117,9 @@ export async function packReseed(
   }
 
   const canonical = resolveBuiltinDefaultConfig(pack);
-  if (!canonical || (canonical.ux === undefined && canonical.producers === undefined)) {
+  if (!canonical) {
     throw new HarnessExitError(
-      `no shipped default config.ux / config.producers is registered for pack ${JSON.stringify(
+      `no shipped default config.ux is registered for pack ${JSON.stringify(
         name,
       )}; nothing to reseed. See docs/policy-packs/ for which packs support reseed.`,
       EX_FAIL,
@@ -120,23 +129,11 @@ export async function packReseed(
   const fieldsChanged: PackReseedField[] = [];
   const fields: PackReseedFields = {};
 
-  if (canonical.ux !== undefined) {
-    const currentUx = pack.config["ux"];
-    const parsed = currentUx === undefined ? null : safeParseUx(currentUx);
-    const alreadyCanonical = parsed !== null && uxEqual(parsed, canonical.ux);
-    if (!alreadyCanonical) {
-      fields.ux = canonical.ux;
-      fieldsChanged.push("ux");
-    }
-  }
-  if (canonical.producers !== undefined) {
-    const currentProducers = pack.config["producers"];
-    const parsed = currentProducers === undefined ? null : safeParseProducers(currentProducers);
-    const alreadyCanonical = parsed !== null && producersEqual(parsed, canonical.producers);
-    if (!alreadyCanonical) {
-      fields.producers = canonical.producers;
-      fieldsChanged.push("producers");
-    }
+  const currentUx = pack.config["ux"];
+  const parsed = currentUx === undefined ? null : safeParseUx(currentUx);
+  if (parsed === null || !uxEqual(parsed, canonical.ux)) {
+    fields.ux = canonical.ux;
+    fieldsChanged.push("ux");
   }
 
   if (fieldsChanged.length === 0) {

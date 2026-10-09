@@ -1,5 +1,5 @@
 // `harness pack reseed <name>` (task 68b9ad9c): pull the shipped
-// builtin template's config.ux (and config.producers) into an
+// builtin template's config.ux into an
 // already-installed manifest, explicit-only (never invoked by `apply`),
 // preserving every other manifest key.
 
@@ -120,26 +120,6 @@ describe("packReseed", () => {
     expect(cfg["ux"]).toBeDefined();
   });
 
-  it("never touches config.producers for a pack with no canonical producers (branch-protection)", async () => {
-    await packAdd(
-      {
-        name: "branch-protection",
-        config: {
-          ux: { cannot: "stale", required: ["stale"], run: ["stale"] },
-          producers: [{ kind: "ask", command: "custom", description: "operator custom" }],
-        },
-      },
-      { configPath: manifestPath },
-    );
-    const r = await packReseed("branch-protection", { configPath: manifestPath });
-    expect(r.fieldsChanged).toEqual(["ux"]);
-    const m = readManifest();
-    const cfg = m.policy_packs?.[0]?.["config"] as Record<string, unknown>;
-    expect(cfg["producers"]).toEqual([
-      { kind: "ask", command: "custom", description: "operator custom" },
-    ]);
-  });
-
   it("dry-run prints the diff and does not mutate the file", async () => {
     await packAdd(
       {
@@ -168,6 +148,27 @@ describe("packReseed", () => {
     }
     expect(caught).toBeInstanceOf(HarnessExitError);
     expect((caught as Error).message).toMatch(/"ghost-pack" not found/);
+  });
+
+  it("says a removed pack was removed instead of reporting a missing entry", async () => {
+    // The manifest parse strips the removed pack's entry (with a posture
+    // warning), so reseed finds no entry; the removed-pack table turns that
+    // into a message that names the removal.
+    const m = readManifest();
+    m.policy_packs = [
+      ...(m.policy_packs ?? []),
+      { name: "understanding-before-execution", source: "builtin", enabled: true },
+    ];
+    fs.writeFileSync(manifestPath, stringifyYaml(m), "utf8");
+    let caught: unknown;
+    try {
+      await packReseed("understanding-before-execution", { configPath: manifestPath });
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught).toBeInstanceOf(HarnessExitError);
+    expect((caught as Error).message).toMatch(/was removed in 1\.0\.0/);
+    expect((caught as Error).message).not.toMatch(/not found/);
   });
 
   it("errors clearly when the pack is not a builtin and ships no default config", async () => {

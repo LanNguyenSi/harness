@@ -3,7 +3,7 @@
 // src/cli/remove/mutate.ts.
 
 import { isMap, isSeq, parseDocument } from "yaml";
-import type { PolicyUx, Producer } from "../../schema/index.js";
+import type { PolicyUx } from "../../schema/index.js";
 
 export interface PackAddEntry {
   name: string;
@@ -66,17 +66,15 @@ export function planPackRemove(yamlText: string, name: string): PackRemovePlan {
 export interface PackReseedFields {
   /** Present when the pack has a canonical shipped `config.ux`. */
   ux?: PolicyUx;
-  /** Present when the pack has a canonical shipped `config.producers`. */
-  producers?: Producer[];
 }
 
 /**
- * Overwrite `policy_packs[<name>].config.ux` (and `.config.producers`,
- * when supplied) with the given shipped-template values, leaving every
- * other key in the entry — including sibling `config:` keys like `mode`
- * or `approval_lifecycle` — untouched. Used by `harness pack reseed`
- * (task 68b9ad9c) to pull a wording fix into an already-installed
- * manifest without clobbering the operator's other customisations.
+ * Overwrite `policy_packs[<name>].config.ux` with the given
+ * shipped-template value, leaving every other key in the entry,
+ * including sibling `config:` keys like `protected_branches`, untouched.
+ * Used by `harness pack reseed` (task 68b9ad9c) to pull a wording fix
+ * into an already-installed manifest without clobbering the operator's
+ * other customisations.
  * `doc.setIn` creates the intermediate `config:` map when the entry
  * doesn't have one yet (verified: an entry with no `config:` key at all
  * round-trips to a freshly-created `config: { ux: ... }` block).
@@ -105,9 +103,6 @@ export function applyPackReseedUx(
   }
   if (fields.ux !== undefined) {
     doc.setIn(["policy_packs", index, "config", "ux"], fields.ux);
-  }
-  if (fields.producers !== undefined) {
-    doc.setIn(["policy_packs", index, "config", "producers"], fields.producers);
   }
   return doc.toString({ flowCollectionPadding: false, lineWidth: 0 });
 }
