@@ -8,7 +8,7 @@ import { spawn as spawnChildProcess, type ChildProcessWithoutNullStreams } from 
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { stringify as yamlStringify } from "yaml";
 import {
   CODEX_CONFIG_BASENAME,
@@ -19,7 +19,7 @@ import {
 import { buildProgram } from "../../../src/cli/index.js";
 import { readLastApply } from "../../../src/io/last-apply.js";
 import { packRemove } from "../../../src/cli/pack/index.js";
-import { runSmoke } from "../../../src/cli/smoke/index.js";
+import { formatSmokeReport, runSmoke } from "../../../src/cli/smoke/index.js";
 import { HarnessExitError } from "../../../src/cli/exit-codes.js";
 
 const cleanups: Array<() => void> = [];
@@ -452,14 +452,30 @@ describe("runSmoke after an apply that recorded another runtime (agent-tasks b9e
       }),
     );
     await apply({ homeDir: home, configPath, runtime: "claude-code" });
-    const result = await runSmoke({
-      prompt: "x",
-      outputDir: makeTmpDir("smoke-runtime-cc-out-"),
-      claudeBin: makeFakeClaude({ stdout: `${RESULT_OK}\n` }),
-      configPath,
-      applyImpl: async (opts) => apply({ ...opts, homeDir: home }),
-    });
+    // Capture everything runSmoke writes to the process stdout, plus the
+    // report the CLI prints; neither may carry a `runtime: ` line.
+    const written: string[] = [];
+    const writeSpy = vi
+      .spyOn(process.stdout, "write")
+      .mockImplementation((chunk: string | Uint8Array) => {
+        written.push(typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8"));
+        return true;
+      });
+    let result: Awaited<ReturnType<typeof runSmoke>>;
+    try {
+      result = await runSmoke({
+        prompt: "x",
+        outputDir: makeTmpDir("smoke-runtime-cc-out-"),
+        claudeBin: makeFakeClaude({ stdout: `${RESULT_OK}\n` }),
+        configPath,
+        applyImpl: async (opts) => apply({ ...opts, homeDir: home }),
+      });
+    } finally {
+      writeSpy.mockRestore();
+    }
     expect(result.exitCode).toBe(0);
+    const printed = `${written.join("")}${formatSmokeReport(result)}`;
+    expect(printed.split("\n").filter((line) => line.startsWith("runtime: "))).toEqual([]);
     expect(readLastApply(path.join(home, GENERATED_DIRNAME))?.runtime).toBe("claude-code");
   });
 });
