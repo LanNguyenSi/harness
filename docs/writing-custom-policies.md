@@ -22,8 +22,8 @@ These four things bite people who skip ahead to the YAML:
    trigger, any `requires`. Only `policy_packs:` is gated to the one
    builtin (`branch-protection`).
    `source: path:` / `npm:` / `git:` for packs is reserved vocabulary
-   in v1, see [`policy-packs/README.md`](policy-packs/README.md)
-   for the future contract.
+   in v1: it parses as an opaque string, and no resolution contract is
+   specified yet.
 
 2. **Evidence-consuming policies must wire `grounding-mcp` in `tools.mcp[]`,
    or their evaluation degrades — and what that means depends on the policy's
@@ -62,11 +62,11 @@ These four things bite people who skip ahead to the YAML:
    gate must *enforce* against the agent, the
    evidence has to come from an actor the agent does not control: an
    `ask`-kind producer (the operator's "go" on the prompt is the
-    approval), CI, or a distinct trusted process. The
-    `branch-protection` pack was hardened to a filesystem marker for
-    exactly this reason after a self-approval incident (see
-   [`CLI.md`](CLI.md) on branch-protection: "the ledger is
-   agent-writable and no longer opens the gate").
+   approval), CI, or a distinct trusted process. The
+   `branch-protection` pack stopped reading the agent-writable ledger
+   for exactly this reason after a self-approval incident: it now asks
+   git for the branch on every call and keeps no ledger tag or marker
+   (see [`policy-packs/branch-protection.md`](policy-packs/branch-protection.md)).
    `harness validate` warns when a `block` policy declares no
    `producers:` at all, because then the evidence source is
    undocumented and this trade-off was never made visibly.
@@ -748,5 +748,5 @@ Acceptance criteria for each `requires` shape:
 
 - [`for-agents.md`](for-agents.md): how agents read the policy/ledger contract, the audit triumvirate, the `ux:` rendering spec.
 - [`for-humans.md`](for-humans.md): operator path from install to first `apply`.
-- [`policy-packs/README.md`](policy-packs/README.md), [`policy-packs/branch-protection.md`](policy-packs/branch-protection.md): the one builtin pack, plus the future contract for custom-pack sources.
+- [`policy-packs/README.md`](policy-packs/README.md), [`policy-packs/branch-protection.md`](policy-packs/branch-protection.md): the one builtin pack.
 - [`ARCHITECTURE.md`](ARCHITECTURE.md) Appendix A: full reference manifest.

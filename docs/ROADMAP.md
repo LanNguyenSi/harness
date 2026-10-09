@@ -276,7 +276,7 @@ Test + reproducibility:
 
 ## Phase 6: Understanding Gate Policy Pack
 
-The understanding gate was removed in 1.0.0 (task eb7e9c5c): the pack, `harness approve understanding`, the permission profiles and the understanding-gate hook verbs no longer exist. Everything below this line is the historical spec that shipped at the time, kept for the record; `branch-protection` is the only builtin pack left.
+The understanding gate was removed in 1.0.0 (see CHANGELOG `[Unreleased]`): the pack, `harness approve understanding`, the permission profiles and the understanding-gate hook verbs no longer exist. The rest of this Phase 6 section is the historical spec that shipped at the time, kept for the record; `branch-protection` is the only builtin pack left.
 
 ### Scope
 
