@@ -204,3 +204,43 @@ describe("doctor --target codex", () => {
     expect(format(report)).not.toContain("Target: codex");
   });
 });
+
+describe("doctor --target codex hook commands calling removed verbs", () => {
+  async function codexChecks(commands: Array<{ name: string; command: string }>) {
+    const home = tempHome();
+    const manifest = {
+      version: 1,
+      tools: { mcp: [], cli: [], skills: { enabled: [], source_dirs: [] }, builtin: { known: [] } },
+      memory: { directories: [] },
+      hooks: commands.map((c) => ({ name: c.name, event: "PreToolUse", blocking: false, command: c.command })),
+      policies: [],
+    };
+    fs.writeFileSync(path.join(home, "harness.yaml"), yamlStringify(manifest));
+    const report = await doctor({
+      configPath: path.join(home, "harness.yaml"),
+      homeOverride: home,
+      mcpProbe: new FakeProbe(),
+      versionProbe: () => null,
+      pathEnv: "",
+      npmBinExec: STUB_NPM_BIN_EXEC_UNKNOWN,
+      target: "codex",
+      codexCheckOptions: { manifestDir: home, harnessBinary: fakeHarnessBinary(home), cwd: home },
+    });
+    return report.codexTarget!.checks;
+  }
+
+  it("warns on a hook that calls a removed verb, naming the verb and the remedy", async () => {
+    const checks = await codexChecks([{ name: "stale-gate", command: "harness pack hook post-merge-gate --runtime codex" }]);
+    const entry = checks.find((c) => c.name === "hook stale-gate");
+    expect(entry?.status).toBe("warn");
+    expect(entry?.message).toContain("harness pack hook post-merge-gate");
+    expect(entry?.message).toContain("harness apply --runtime codex");
+  });
+
+  it("keeps a hook that calls a kept verb healthy", async () => {
+    const checks = await codexChecks([{ name: "kept", command: "harness policy intercept --runtime codex" }]);
+    const entry = checks.find((c) => c.name === "hook kept");
+    expect(entry?.status).toBe("ok");
+    expect(entry?.message).toContain("subcommand of harness");
+  });
+});

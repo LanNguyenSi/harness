@@ -223,7 +223,7 @@ export function invokesRemovedCommand(command: string, table: readonly RemovedCo
   return table.find((r) => trimmed === r.command || trimmed.startsWith(`${r.command} `) || trimmed.startsWith(`${r.command}-`));
 }
 
-function removedCommandMessage(removed: RemovedCommand, remedy: string): string {
+export function removedCommandMessage(removed: RemovedCommand, remedy: string): string {
   return `calls "${removed.command}", removed in ${removed.removedIn} (${removed.reason}), so it fails with "unknown command"; ${remedy}`;
 }
 

@@ -16,6 +16,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { expandPolicyPacks } from "../../policy-packs/index.js";
 import type { Hook, Manifest } from "../../schema/index.js";
+import { invokesRemovedCommand, removedCommandMessage } from "../../schema/removed-keys.js";
 import { countStatusDiagnostics, type DoctorCheckStatus } from "./target-checks.js";
 
 // LOW-F5 (batch18 fix-round, task f34eb233 review): re-exported for
@@ -208,6 +209,20 @@ function checkHookCommands(
         name: `hook ${h.name}`,
         status: "error",
         message: "empty command after parsing",
+      });
+      continue;
+    }
+    // A hook that calls a removed verb fails at runtime with "unknown
+    // command", so it must not pass as a healthy harness subcommand below.
+    const removed = invokesRemovedCommand(h.command);
+    if (removed !== undefined) {
+      out.push({
+        name: `hook ${h.name}`,
+        status: "warn",
+        message: removedCommandMessage(
+          removed,
+          `delete hook "${h.name}" from the manifest (and every policy that names it), then re-run \`harness apply --runtime codex\``,
+        ),
       });
       continue;
     }
