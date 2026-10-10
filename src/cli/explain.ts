@@ -54,15 +54,6 @@ interface TraceProjection {
   ledgerTag: string;
   evaluatedAt: string;
   triggerMatched: { event: string; match?: string; bashMatch?: string };
-  /**
-   * Risk Classifier verdict recorded with the decision (Phase 7 #5):
-   * the classification the policy's `when:` match was made against.
-   * Absent on decisions recorded before #5, or by a manifest with no
-   * `when:`-bearing policy (the Risk Gate was inactive for the event).
-   */
-  classifier?: PolicyDecisionPayload["risk"];
-  /** Context Resolver verdict, present under the same condition as `classifier`. */
-  environment?: PolicyDecisionPayload["environment"];
   extract: Record<string, string>;
   requiresEval?: PolicyDecisionPayload["requiresEval"];
   /**
@@ -72,15 +63,6 @@ interface TraceProjection {
    * manifest (the trace already flags that case via `triggerMatched.event`).
    */
   toSatisfy?: string;
-  /**
-   * True when the policy's `when:` block matched only because the action
-   * was unclassified (the "unknown is not safe" fail-close rule). Absent
-   * when the action was genuinely classified, when the policy had no
-   * `when:` block, or when the row was recorded before M7. Surfaced here
-   * so `explain --trace` and `explain --trace --json` let an operator
-   * distinguish a fail-closed deny from a real critical-severity match.
-   */
-  whenUnclassifiedFallback?: boolean;
   ledgerQuery: { verb: "ledger_summary"; sessionId: string };
 }
 
@@ -258,10 +240,6 @@ function renderTrace(
       ...(trigger?.match !== undefined && { match: trigger.match }),
       ...(trigger?.bash_match !== undefined && { bashMatch: trigger.bash_match }),
     },
-    ...(latest.payload.risk && { classifier: latest.payload.risk }),
-    ...(latest.payload.environment && {
-      environment: latest.payload.environment,
-    }),
     extract: latest.payload.extractValues,
     ...(latest.payload.requiresEval && { requiresEval: latest.payload.requiresEval }),
     ...(policy?.requires !== undefined && {
@@ -272,13 +250,6 @@ function renderTrace(
     ...(policy?.operator_only === true && {
       toSatisfy:
         "none — operator_only: true is an unconditional deny; no in-session evidence can ever satisfy it",
-    }),
-    // M7: surface the fail-closed unclassified flag in the trace so an
-    // operator can distinguish a real critical-severity deny from a
-    // fail-closed unclassified one via `explain --trace [--json]`.
-    // Absent when the payload lacks the field (pre-M7 rows or genuine hits).
-    ...(latest.payload.whenUnclassifiedFallback === true && {
-      whenUnclassifiedFallback: true,
     }),
     ledgerQuery: { verb: "ledger_summary", sessionId },
   };

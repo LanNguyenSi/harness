@@ -16,10 +16,8 @@ import {
 } from "../../src/runtime/intercept.js";
 import {
   parseManifest,
-  type EnvironmentResolver,
   type McpServer,
   type Policy,
-  type RiskClassifier,
 } from "../../src/schema/index.js";
 import { makeDecision } from "../_helpers/decision.js";
 import { makeManifest } from "../_helpers/manifest.js";
@@ -407,15 +405,13 @@ describe("runInterceptCli — Phase 5 #3: --verbose stderr diagnostics", () => {
     const parsed = JSON.parse(outOutput().trim());
     expect(parsed.decision).toBe("block");
     const errText = errOutput();
-    // The stderr header is the OPERATOR surface and therefore names the
-    // opt-out; the agent-facing envelope must not (review 2026-08-08,
-    // high finding — pinned as absence in tests/runtime/intercept.test.ts
-    // and as presence here). Header wording is cause-neutral because
-    // deny-degraded has five causes and only one is the ledger (round 5);
-    // the true cause follows on the block's own `reason:` line.
+    // Header wording is cause-neutral because deny-degraded has five causes
+    // and only one is the ledger; the true cause follows on the block's own
+    // `reason:` line. No opt-out is named on either surface.
     expect(errText).toContain(
-      "deny-degraded (evidence could not be evaluated; failing closed per enforcement tier; operator opt-out: risk.degraded_fail_posture: fail_open)",
+      "deny-degraded (evidence could not be evaluated; failing closed per enforcement tier)",
     );
+    expect(errText).not.toContain("fail_open");
     expect(errText).toContain("grounding-mcp timeout after 5000ms");
     // Under verbose the one-line hint is suppressed (the diagnostic
     // supersedes it) — deleting the `!verbose` guard must turn this red.
@@ -525,7 +521,7 @@ describe("runInterceptCli — Phase 5 #3: --verbose stderr diagnostics", () => {
     expect(outOutput()).toBe("");
     const errText = errOutput();
     expect(errText).toContain(
-      "warn-degraded (evidence could not be evaluated; non-blocking per warn tier or fail_open opt-out)",
+      "warn-degraded (evidence could not be evaluated; non-blocking per warn tier)",
     );
     expect(errText).toContain("grounding-mcp timeout after 5000ms");
   });
@@ -967,109 +963,6 @@ describe("runInterceptCli — REPO / BRANCH builtins resolve from event.cwd", ()
   );
 });
 
-// F1 fix (CRITICAL, review round 2026-07-27): the Risk Gate's git context
-// (feeding `environments.resolvers[].signals.branch_patterns`) must
-// resolve from the hook's own cwd, NEVER from a command's TARGET repo.
-// During the 07-27 run's development, `resolverGit` briefly fell back to
-// a target-aware git context, so a `production` + `branch_patterns:
-// [main]` resolver classified the environment from the COMMAND's target
-// repo's branch instead of the cwd repo's — a command like `git -C
-// <repo-on-feature/x> log && rm -rf /data` silently skipped the resolver
-// (and every `when:`-gated policy keyed on it) because the resolver read
-// feature/x's branch, not the cwd repo's `main`. Fixed before that
-// version ever shipped. Since 98ad072f (T-003), `${REPO}`/`${BRANCH}`
-// ARE per-policy attributed to the trigger-satisfying segment's target —
-// but the Risk Gate context is a separate, deliberately untouched path:
-// this suite pins `resolverGit` staying cwd-only regardless of any
-// target the segment view or the (still-unwired) aggregate extraction
-// finds.
-describe("runInterceptCli — Risk Gate git context stays cwd-derived even when a target-naming git invocation precedes the gated command (F1 regression, review round 2026-07-27)", () => {
-  let cleanups: Array<() => void> = [];
-  afterEach(() => {
-    for (const c of cleanups) c();
-    cleanups = [];
-  });
-
-  function makeRepoFixture(name: string, branch: string): string {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "harness-f1-git-"));
-    cleanups.push(() => fs.rmSync(root, { recursive: true, force: true }));
-    const repo = path.join(root, name);
-    fs.mkdirSync(path.join(repo, ".git"), { recursive: true });
-    fs.writeFileSync(path.join(repo, ".git", "HEAD"), `ref: refs/heads/${branch}\n`);
-    addGitDirSkeleton(path.join(repo, ".git"));
-    return repo;
-  }
-
-  // Fires `production` off the CWD repo's branch, per
-  // `environments.resolvers[].signals.branch_patterns` — the exact
-  // resolver kind the finding measured.
-  const PROD_BRANCH_RESOLVER: EnvironmentResolver = {
-    name: "prod-branch",
-    environment: "production",
-    signals: { branch_patterns: ["main"] },
-  };
-
-  const RISK_POLICY: Policy = {
-    name: "gate-prod-destructive",
-    description: "block destructive actions classified as production",
-    trigger: { event: "PreToolUse", match: "Bash" },
-    when: { "environment.name": "production" },
-    requires: { ledger_tag: "risk-approved:${SESSION_ID}" },
-    hook: "h",
-    enforcement: "block",
-  } as Policy;
-
-  const emptyLedger: LedgerClient = {
-    async query() {
-      return { kind: "ok", entries: [] };
-    },
-    async record() {
-      /* no-op */
-    },
-  };
-
-  async function runFor(command: string, cwd: string) {
-    const { stream: out } = captureStream();
-    const { stream: err } = captureStream();
-    return runInterceptCli({
-      stdin: streamFrom(
-        JSON.stringify({
-          hook_event_name: "PreToolUse",
-          tool_name: "Bash",
-          tool_input: { command },
-          session_id: "sess-f1",
-          cwd,
-        }),
-      ),
-      stdout: out,
-      stderr: err,
-      manifest: makeManifest({ policies: [RISK_POLICY], resolvers: [PROD_BRANCH_RESOLVER] }),
-      ledger: emptyLedger,
-    });
-  }
-
-  it("fires for a bare command with cwd on the resolver's branch (baseline)", async () => {
-    const repoA = makeRepoFixture("f1-repo-a", "main");
-    const result = await runFor("echo hi", repoA);
-    expect(result.decisions).toHaveLength(1);
-    expect(result.decisions[0]?.environment?.name).toBe("production");
-    expect(result.blocked).toBe(true);
-  });
-
-  it("STILL fires when a target-naming git invocation on a DIFFERENT branch precedes the gated command (the regression)", async () => {
-    const repoA = makeRepoFixture("f1-repo-a-2", "main");
-    const repoB = makeRepoFixture("f1-repo-b-2", "feature/x");
-    // Pre-fix, this resolved the Risk Gate's git context from repoB
-    // (feature/x), so `branch_patterns: [main]` never matched and the
-    // policy silently produced ZERO decisions — the exact silent-bypass
-    // shape this whole run exists to close, reintroduced on the risk axis.
-    const result = await runFor(`git -C ${repoB} log && echo hi`, repoA);
-    expect(result.decisions).toHaveLength(1);
-    expect(result.decisions[0]?.environment?.name).toBe("production");
-    expect(result.blocked).toBe(true);
-  });
-});
-
 // Task 98ad072f (run 2026-08-02-per-repo-gate-scoping-redesign), T-001:
 // the three regressions measured against the FIRST (rejected) attempt at
 // per-command target-repo resolution — see
@@ -1104,8 +997,8 @@ describe("runInterceptCli — Risk Gate git context stays cwd-derived even when 
 // separators regardless of that asymmetry; which sub-cases actually flip
 // under the orchestrator's naive mutant is documented per test.
 //
-// Orchestrator decision D-010 (2026-08-02, T-003 fix round): (a) and (c)
-// below are UNCHANGED. (b)'s command shape was rewritten from a
+// Orchestrator decision D-010 (2026-08-02, T-003 fix round): (c) below is
+// UNCHANGED. (b)'s command shape was rewritten from a
 // leading-`cd` idiom to the literal `-C`-on-decoy form (see its own
 // describe block for why) — the leading-`cd` shape is now covered as a
 // DELIVERABLE (attribution correctly follows the `cd`), in the
@@ -1129,83 +1022,6 @@ describe("runInterceptCli — 98ad072f mandatory regression pins (written FIRST 
   }
 
   const emptyQuery: LedgerClient["query"] = async () => ({ kind: "ok", entries: [] });
-
-  // (a) Risk Gate (F1-shaped): a `when: environment.name: production`
-  // policy — the same shape as the shipped `gate-prod-destructive` /
-  // `gate-prod-destructive-approval` templates — still fires although a
-  // target-naming git read on a FOREIGN branch precedes the gated
-  // command. Superset of the existing F1 pin above (which covers only
-  // `&&`): `it.each` over all four separators.
-  //
-  // Measured (see this task's implementer report): under the
-  // orchestrator's mutant, the `&&`/`;` sub-cases stay green (command-
-  // normalize's own git-vs-non-git disagreement rule already nulls
-  // `targetDir` for those two), but `|`/`||` flip red — `targetDir` leaks
-  // through for those two separators today, exactly the historical Pass
-  // 2/3 asymmetry noted above.
-  describe("(a) Risk Gate: when: environment-production still fires despite a target-naming git read", () => {
-    const PROD_BRANCH_RESOLVER: EnvironmentResolver = {
-      name: "prod-branch",
-      environment: "production",
-      signals: { branch_patterns: ["main"] },
-    };
-
-    const GATE_PROD_DESTRUCTIVE: Policy = {
-      name: "gate-prod-destructive",
-      description: "block destructive actions classified as production",
-      trigger: { event: "PreToolUse", match: "Bash" },
-      when: { "environment.name": "production" },
-      requires: { ledger_tag: "risk-override:${SESSION_ID}" },
-      hook: "risk-gate",
-      enforcement: "block",
-    } as Policy;
-
-    it.each(["&&", ";", "|", "||"])(
-      "separator %s: fires (decision + audit row + block) with a foreign-branch git read ahead of the gated command",
-      async (sep) => {
-        const repoA = makeRepoFixture("prod-cwd-repo", "main");
-        const repoB = makeRepoFixture("prod-decoy-repo", "feature/x");
-        const recordCalls: PolicyDecision[] = [];
-        const ledger: LedgerClient = {
-          query: emptyQuery,
-          async record(decision) {
-            recordCalls.push(decision);
-          },
-        };
-        const { stream: out, output: outText } = captureStream();
-        const { stream: err } = captureStream();
-        const result = await runInterceptCli({
-          stdin: streamFrom(
-            JSON.stringify({
-              hook_event_name: "PreToolUse",
-              tool_name: "Bash",
-              tool_input: { command: `git -C ${repoB} log ${sep} echo hi` },
-              session_id: "sess-98ad072f-a",
-              cwd: repoA,
-            }),
-          ),
-          stdout: out,
-          stderr: err,
-          manifest: makeManifest({
-            policies: [GATE_PROD_DESTRUCTIVE],
-            resolvers: [PROD_BRANCH_RESOLVER],
-          }),
-          ledger,
-        });
-
-        expect(result.decisions).toHaveLength(1);
-        expect(result.decisions[0]?.environment?.name).toBe("production");
-        expect(result.decisions[0]?.outcome).toBe("deny");
-        expect(result.blocked).toBe(true);
-        // Deny payload actually emitted on the hook's stdout contract.
-        expect(outText()).toContain('"permissionDecision":"deny"');
-        // Audit row actually written, not just an in-memory decision.
-        expect(recordCalls).toHaveLength(1);
-        expect(recordCalls[0]?.policyName).toBe("gate-prod-destructive");
-        expect(recordCalls[0]?.environment?.name).toBe("production");
-      },
-    );
-  });
 
   // (b) Push gate: a target-NAMING read (`-C <decoy>`, the literal 07-27
   // regression form) chained with a BARE `git push` in ONE command demands
@@ -1387,91 +1203,197 @@ describe("runInterceptCli — 98ad072f mandatory regression pins (written FIRST 
   });
 });
 
-describe("runInterceptCli — Phase 7 #5: when: evaluation wiring", () => {
-  const DESTROY_CLASSIFIER: RiskClassifier = {
-    name: "dangerous-shell",
-    tool: "Bash",
-    patterns: [
-      {
-        pattern: "terraform\\s+destroy",
-        categories: ["destructive", "infrastructure_change"],
-        severity: "critical",
-      },
-    ],
-  };
-
-  // Resolves `production` from a DATABASE_URL env-var signal — exercised
-  // through the `env` seam so the test never touches the real process env.
-  const PROD_RESOLVER: EnvironmentResolver = {
-    name: "production-signals",
-    environment: "production",
-    signals: { env_var_patterns: [{ var: "DATABASE_URL", patterns: ["prod"] }] },
-  };
-
-  const RISK_POLICY: Policy = {
-    name: "gate-prod-destructive",
-    description: "require approval for destructive production actions",
+describe("runInterceptCli — a policy carrying when: never applies", () => {
+  const WHEN = { "environment.name": "production" };
+  const gateBase = {
+    description: "gate",
     trigger: { event: "PreToolUse", match: "Bash" },
-    when: { "environment.name": "production" },
-    requires: { ledger_tag: "risk-approved:${SESSION_ID}" },
+    requires: { ledger_tag: "ok:${SESSION_ID}" },
     hook: "h",
-    enforcement: "require_approval",
-  } as Policy;
-
-  const riskManifest = () =>
-    makeManifest({
-      policies: [RISK_POLICY],
-      classifiers: [DESTROY_CLASSIFIER],
-      resolvers: [PROD_RESOLVER],
-    });
-
-  const emptyLedger: LedgerClient = {
-    async query() {
-      return { kind: "ok", entries: [] };
-    },
-    async record() {
-      /* no-op */
-    },
   };
 
-  const destroyEvent = JSON.stringify({
-    hook_event_name: "PreToolUse",
-    tool_name: "Bash",
-    tool_input: { command: "terraform destroy" },
-    session_id: "sess-1",
+  // Policy shapes the matching loop treats differently before the guard; the
+  // `when:` clause alone decides the outcome, and every case also runs its
+  // twin without `when:` as a control (the event does match).
+  // `command` builds a Bash PreToolUse event; `event` replaces it for the
+  // cases on another tool or hook event.
+  const cases: Array<{
+    label: string;
+    policy: Record<string, unknown>;
+    command?: string;
+    event?: Record<string, unknown>;
+  }> = [
+    {
+      label: "enforcement block",
+      policy: { ...gateBase, name: "p", enforcement: "block" },
+      command: "terraform destroy",
+    },
+    {
+      label: "enforcement require_approval",
+      policy: { ...gateBase, name: "p", enforcement: "require_approval" },
+      command: "terraform destroy",
+    },
+    {
+      label: "enforcement warn",
+      policy: { ...gateBase, name: "p", enforcement: "warn" },
+      command: "terraform destroy",
+    },
+    {
+      label: "operator_only: true",
+      policy: {
+        name: "p",
+        description: "gate",
+        trigger: gateBase.trigger,
+        hook: "h",
+        enforcement: "block",
+        operator_only: true,
+      },
+      command: "terraform destroy",
+    },
+    {
+      label: "a trigger.bash_match",
+      policy: {
+        ...gateBase,
+        name: "p",
+        enforcement: "block",
+        trigger: { event: "PreToolUse", match: "Bash", bash_match: "terraform\\s+destroy" },
+      },
+      command: "echo hi && terraform destroy",
+    },
+    {
+      label: "a per-repo policy matched only by the shell-model arm",
+      policy: {
+        ...legacyPreflightPush(),
+        name: "p",
+        requires: { ledger_tag: "preflight:${REPO}" },
+      },
+      command: "git -C '/tmp/repo with space' push origin master",
+    },
+    {
+      label: "a Write trigger with a Write event",
+      policy: { ...gateBase, name: "p", enforcement: "block", trigger: { event: "PreToolUse", match: "Write" } },
+      event: {
+        hook_event_name: "PreToolUse",
+        tool_name: "Write",
+        tool_input: { file_path: "/tmp/a.txt", content: "x" },
+        session_id: "sess-1",
+      },
+    },
+    {
+      label: "an MCP trigger with an extract and an MCP event",
+      policy: {
+        ...gateBase,
+        name: "p",
+        enforcement: "require_approval",
+        trigger: {
+          event: "PreToolUse",
+          match: "mcp__agent-tasks__pull_requests_merge",
+          extract: { PR: "toolArgs.prNumber" },
+        },
+        requires: { ledger_tag: "review:${PR}" },
+      },
+      event: {
+        hook_event_name: "PreToolUse",
+        tool_name: "mcp__agent-tasks__pull_requests_merge",
+        tool_input: { prNumber: 42 },
+        session_id: "sess-1",
+      },
+    },
+    {
+      label: "a trigger with an event but no match",
+      policy: { ...gateBase, name: "p", enforcement: "block", trigger: { event: "PreToolUse" } },
+      event: {
+        hook_event_name: "PreToolUse",
+        tool_name: "Read",
+        tool_input: { file_path: "/tmp/a.txt" },
+        session_id: "sess-1",
+      },
+    },
+    {
+      // The hook entrypoint hands any hook event to the engine, which
+      // matches whatever event the trigger names, not only PreToolUse.
+      label: "a PostToolUse trigger with a PostToolUse event",
+      policy: { ...gateBase, name: "p", enforcement: "block", trigger: { event: "PostToolUse", match: "Bash" } },
+      event: {
+        hook_event_name: "PostToolUse",
+        tool_name: "Bash",
+        tool_input: { command: "terraform destroy" },
+        session_id: "sess-1",
+      },
+    },
+  ];
+
+  const eventFor = (c: (typeof cases)[number]) =>
+    JSON.stringify(
+      c.event ?? {
+        hook_event_name: "PreToolUse",
+        tool_name: "Bash",
+        tool_input: { command: c.command },
+        session_id: "sess-1",
+      },
+    );
+
+  /** A ledger that records every call, so "no traffic" is assertable. */
+  function recordingLedger(): LedgerClient & { calls: string[] } {
+    const calls: string[] = [];
+    return {
+      calls,
+      async query() {
+        calls.push("query");
+        return { kind: "ok", entries: [] };
+      },
+      async record() {
+        calls.push("record");
+      },
+    };
+  }
+
+  let tmpDir: string;
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "intercept-when-"));
+  });
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  it("fires a when: policy when the resolved environment matches (env seam)", async () => {
-    const { stream } = captureStdout();
-    const result = await runInterceptCli({
-      stdin: streamFrom(destroyEvent),
-      stdout: stream,
-      manifest: riskManifest(),
-      ledger: emptyLedger,
-      env: { DATABASE_URL: "postgres://prod-db/app" },
-      kubeContext: "",
-      kubeNamespace: "",
+  for (const c of cases) {
+    it(`${c.label}: no decision, no block, no output, no ledger call, no staged approval`, async () => {
+      const out = captureStdout();
+      const err = captureStream();
+      const ledger = recordingLedger();
+      const result = await runInterceptCli({
+        stdin: streamFrom(eventFor(c)),
+        stdout: out.stream,
+        stderr: err.stream,
+        manifest: makeManifest({ policies: [{ ...c.policy, when: WHEN } as unknown as Policy] }),
+        ledger,
+        generatedDir: tmpDir,
+      });
+      expect(result.decisions).toHaveLength(0);
+      expect(result.blocked).toBe(false);
+      expect(out.output()).toBe("");
+      // The only stderr line is the ordinary "no policy matched" hint: a
+      // when-gated diagnostic or any other side effect would add a line.
+      const stderrLines = err.output().split("\n").filter((l) => l !== "");
+      expect(stderrLines).toHaveLength(1);
+      expect(stderrLines[0]).toMatch(/^harness policy intercept: no policy matched event /);
+      expect(ledger.calls).toEqual([]);
+      expect(fs.readdirSync(tmpDir)).toEqual([]);
     });
-    expect(result.decisions).toHaveLength(1);
-    expect(result.decisions[0]?.outcome).toBe("require_approval");
-    // Phase 7 #6: require_approval is authoritative — it blocks.
-    expect(result.blocked).toBe(true);
-  });
 
-  it("does NOT fire the when: policy when the environment does not match", async () => {
-    const { stream } = captureStdout();
-    const result = await runInterceptCli({
-      stdin: streamFrom(destroyEvent),
-      stdout: stream,
-      manifest: riskManifest(),
-      ledger: emptyLedger,
-      env: {},
-      kubeContext: "",
-      kubeNamespace: "",
+    it(`${c.label}: the same policy without when: decides the same event (control)`, async () => {
+      const err = captureStream();
+      const result = await runInterceptCli({
+        stdin: streamFrom(eventFor(c)),
+        stdout: captureStdout().stream,
+        stderr: err.stream,
+        manifest: makeManifest({ policies: [c.policy as unknown as Policy] }),
+        ledger: recordingLedger(),
+        generatedDir: tmpDir,
+      });
+      expect(result.decisions).toHaveLength(1);
     });
-    expect(result.decisions).toHaveLength(0);
-    expect(result.blocked).toBe(false);
-  });
+  }
 });
 
 describe("runInterceptCli — task f1df7c2d: stage .pending-approval on require_approval block", () => {
@@ -1486,29 +1408,10 @@ describe("runInterceptCli — task f1df7c2d: stage .pending-approval on require_
   // operator running `harness approve risk` in their `!`-shell picks it
   // up without `--session=<id>`.
 
-  const DESTROY_CLASSIFIER: RiskClassifier = {
-    name: "dangerous-shell",
-    tool: "Bash",
-    patterns: [
-      {
-        pattern: "terraform\\s+destroy",
-        categories: ["destructive", "infrastructure_change"],
-        severity: "critical",
-      },
-    ],
-  };
-
-  const PROD_RESOLVER: EnvironmentResolver = {
-    name: "production-signals",
-    environment: "production",
-    signals: { env_var_patterns: [{ var: "DATABASE_URL", patterns: ["prod"] }] },
-  };
-
   const RISK_POLICY: Policy = {
-    name: "gate-prod-destructive",
-    description: "require approval for destructive production actions",
+    name: "gate-approval",
+    description: "require approval for Bash actions",
     trigger: { event: "PreToolUse", match: "Bash" },
-    when: { "environment.name": "production" },
     requires: { ledger_tag: "risk-approved:${SESSION_ID}" },
     hook: "h",
     enforcement: "require_approval",
@@ -1549,15 +1452,8 @@ describe("runInterceptCli — task f1df7c2d: stage .pending-approval on require_
     const result = await runInterceptCli({
       stdin: streamFrom(destroyEvent(sessionId)),
       stdout: stream,
-      manifest: makeManifest({
-        policies: [RISK_POLICY],
-        classifiers: [DESTROY_CLASSIFIER],
-        resolvers: [PROD_RESOLVER],
-      }),
+      manifest: makeManifest({ policies: [RISK_POLICY] }),
       ledger: emptyLedger,
-      env: { DATABASE_URL: "postgres://prod-db/app" },
-      kubeContext: "",
-      kubeNamespace: "",
       generatedDir: tmpDir,
     });
 
@@ -1603,15 +1499,8 @@ describe("runInterceptCli — task f1df7c2d: stage .pending-approval on require_
     const result = await runInterceptCli({
       stdin: streamFrom(eventWithoutSession),
       stdout: stream,
-      manifest: makeManifest({
-        policies: [RISK_POLICY],
-        classifiers: [DESTROY_CLASSIFIER],
-        resolvers: [PROD_RESOLVER],
-      }),
+      manifest: makeManifest({ policies: [RISK_POLICY] }),
       ledger: emptyLedger,
-      env: { DATABASE_URL: "postgres://prod-db/app" },
-      kubeContext: "",
-      kubeNamespace: "",
       generatedDir: tmpDir,
     });
 

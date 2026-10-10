@@ -24,7 +24,6 @@ import {
 } from "../policies/index.js";
 import { renderProducers } from "../policies/producers.js";
 import type { Manifest, Policy } from "../schema/index.js";
-import { buildActionEnvelope } from "./action-envelope.js";
 import { renderAgentFacing } from "./agent-facing.js";
 import {
   normalizeCommand,
@@ -36,15 +35,6 @@ import {
   type NormalizedCommand,
   type QuoteAwareNormalizedCommand,
 } from "./command-normalize.js";
-import {
-  resolveEnvironment,
-  type EnvironmentResolution,
-} from "./environment-resolver.js";
-import {
-  resolveDeletionTarget,
-  type DeletionTargetVerdict,
-} from "./deletion-target-resolve.js";
-import { DEFAULT_SAFE_DELETION_ROOTS } from "../schema/risk.js";
 import { resolveGitContext, type GitRepoContext } from "./git-context.js";
 import {
   dirPossibilityKey,
@@ -56,13 +46,11 @@ import {
 import { ModelPathResolver } from "./shell-model-paths.js";
 import { POLICY_DECISION_TYPE } from "../io/ledger-record.js";
 import { INVISIBLE_CHARACTER_CLASS } from "../io/invisible-characters.js";
-import { classifyRisk, type RiskProfile } from "./risk-classifier.js";
 import { resolveSessionId } from "./session-id.js";
 import {
   expandToolNameAliases,
   extractShellCommand,
 } from "./tool-name-aliases.js";
-import { evaluateWhen, UNCLASSIFIED_FALLBACK_SEVERITY } from "./when-eval.js";
 
 export interface ToolEvent {
   hook_event_name?: string;
@@ -73,24 +61,19 @@ export interface ToolEvent {
   [key: string]: unknown;
 }
 
-// The Risk Gate decision space (Phase 7 #5). `allow` / `deny` are the
-// Phase 4 outcomes; `warn` and `require_approval` are added here.
+// The policy decision space.
 //   allow            — `requires` satisfied (or the policy did not apply).
 //   warn             — `requires` failed, the policy's enforcement is
 //                      `warn`: the call proceeds, the warning is recorded.
 //   require_approval  — `requires` failed, enforcement is `require_approval`:
-//                      a first-class outcome the evaluator RETURNS;
-//                      Phase 7 #6 makes it block until approval evidence
-//                      exists. In Phase 7 #5 it does not block.
+//                      blocks until approval evidence exists.
 //   deny             — `requires` failed, enforcement is `block`.
 //   warn-degraded    — `requires` could not be evaluated (ledger
 //                      unreachable, unresolved template, bad `within`);
 //                      never blocks. Distinct from `warn`: `warn` is a
 //                      real verdict, `warn-degraded` is "could not decide".
 //                      Since task f1aea826 this outcome is produced only
-//                      for `enforcement: warn` policies (or for every
-//                      policy under the explicit
-//                      `risk.degraded_fail_posture: fail_open` opt-out).
+//                      for `enforcement: warn` policies.
 //   deny-degraded    — the SAME "could not decide" family, but the
 //                      policy's enforcement is `block` or
 //                      `require_approval`: the gate exists to prevent a
@@ -118,17 +101,6 @@ export interface PolicyDecision {
   ledgerTag: string;
   requiresEval?: { matchedCount: number; reason: string };
   /**
-   * Risk Classifier verdict for the action this decision was made
-   * about. Present only when the Risk Gate was active for the event
-   * (the manifest declared at least one `when:`-bearing policy); absent
-   * for a pure Phase-4 manifest, keeping its decisions byte-identical.
-   * Recorded to the audit ledger so `harness explain --trace` can
-   * replay the classification.
-   */
-  risk?: RiskProfile;
-  /** Context Resolver verdict, present under the same condition as `risk`. */
-  environment?: EnvironmentResolution;
-  /**
    * One-line "to satisfy" hint synthesised from the policy's `requires`
    * spec. Carried on the live decision so the deny-envelope formatter
    * can append it to the user-facing reason text together with the
@@ -136,19 +108,6 @@ export interface PolicyDecision {
    * threw) skips the requires evaluator and has no hint to forward.
    */
   recordHint?: string;
-  /**
-   * True when the policy's `when:` block matched because the action was
-   * unclassified (the fail-close rule in `when-eval.ts`: "unknown is not
-   * safe" for `risk.category_in` / `action.reversible`, the "treated as
-   * high" rung for `risk.severity_at_least`). Absent when the policy has
-   * no `when:` block, when the match was a genuine classification hit,
-   * or when `unclassifiedFallback` was false. Present in the audit
-   * record, the non-ux block-time deny message, AND (task 2929c5b7) the
-   * ux-declared `cannot:` deny message, so an operator — or the agent
-   * reading its own deny — can distinguish a real critical-severity
-   * match from a fail-closed unclassified command at a glance.
-   */
-  whenUnclassifiedFallback?: boolean;
   /**
    * Set when the policy's `ledger_tag` references `${REPO}` / `${BRANCH}`
    * and the value resolved for this context was empty (cwd outside every
@@ -248,27 +207,13 @@ export interface InterceptOptions {
    */
   currentHeadSha?: string;
   /**
-   * Ambient context for the Risk Gate stages — the Action Envelope
-   * build (#2) and the environment resolution (#4). Resolved by the CLI
-   * wrapper (git / user / host / kube-config / env reads) and threaded
-   * in, keeping `intercept()` itself I/O-free, the same
-   * resolved-by-the-wrapper pattern as `currentHeadSha` and `builtins`.
-   *
-   * Optional: omitted by Phase-4-era callers and by unit tests that do
-   * not exercise `when:`. When omitted, the envelope is built from the
-   * event alone — risk then classifies as unclassified and the
-   * environment resolves to `unknown`. A manifest with no `when:`
-   * policy never reads any of this regardless (see `intercept`).
-   */
-  riskContext?: RiskGateContext;
-  /**
    * Precomputed `NormalizedCommand` for a Bash event's
    * `tool_input.command`. `runInterceptCli` already calls
    * `normalizeCommand` once (for `bash_match` trigger normalisation);
    * threading the SAME result in here lets `policyMatchesEvent` reuse it
    * for every policy in the `matching` loop below instead of recomputing
    * it — same resolved-by-the-wrapper pattern as `currentHeadSha`,
-   * `builtins`, and `riskContext`. Optional: omitted by non-Bash events
+   * and `builtins`. Optional: omitted by non-Bash events
    * and by callers/tests that don't supply one, in which case
    * `policyMatchesEvent` computes it lazily per policy (correct, just
    * not de-duplicated).
@@ -456,124 +401,8 @@ export interface InterceptOptions {
 }
 
 /**
- * Ambient inputs the Risk Gate needs that the CLI wrapper resolves from
- * the host (filesystem + process). Mirrors the `EnvelopeContext` /
- * `SignalInputs` split the debug verbs already use.
- */
-export interface RiskGateContext {
-  /** Git context resolved against the event's cwd. */
-  git: GitRepoContext;
-  /** Working directory the action runs in. */
-  cwd: string;
-  /** OS user, or "" when unavailable. */
-  user: string;
-  /** Host name, or "" when unavailable. */
-  host: string;
-  /** Environment variables, for resolver `env_var_patterns`. */
-  env: Record<string, string | undefined>;
-  /** Current kube context name, or "" when unknown. */
-  kubeContext: string;
-  /** Current kube namespace, or "" when unknown. */
-  kubeNamespace: string;
-}
-
-/**
- * The sentence PREPENDED to a `ux:`-declared policy's `cannot:` text when
- * the deny was caused by the unclassified fallback rather than a real
- * classification (task 2929c5b7).
- *
- * Everything variable in it is interpolated: the RESOLVED environment
- * name and the policy's OWN declared threshold. Hard-coding "production"
- * and "critical" made both halves wrong for an unscoped
- * `severity_at_least: high` policy on a feature branch, which reported a
- * production context that had not been resolved and a critical-severity
- * comparison that never ran. The fallback rung itself comes from
- * `when-eval.ts`'s exported constant, not a second literal here.
- *
- * A policy whose `when:` block declares no `severity_at_least` can still
- * set the flag (via `risk.category_in` / `action.reversible`, which keep
- * the blanket "unknown is not safe" fallback), so the threshold-free
- * wording is a real case, not a defensive branch.
- */
-function unclassifiedFallbackPrefix(
-  environmentName: string | undefined,
-  threshold: string | undefined,
-): string {
-  const env = environmentName ?? "unknown";
-  const article = /^[aeiou]/i.test(env) ? "an" : "a";
-  const lead = `This is an unclassified action in ${article} ${env} context: no risk classifier pattern recognized it, so`;
-  return threshold === undefined
-    ? `${lead} the fail-closed unclassified rule satisfied this policy's when: clause, rather than a genuine risk classification.`
-    : `${lead} the fail-closed severity fallback (treated as ${UNCLASSIFIED_FALLBACK_SEVERITY}) satisfied this policy's severity_at_least: ${threshold}, rather than a genuine ${threshold}-severity match.`;
-}
-
-/** The Action Envelope plus the Risk Gate verdicts derived from it. */
-interface EnrichedEnvelope {
-  risk: RiskProfile;
-  environment: EnvironmentResolution;
-  /** Static deletion-target verdict (task d03af8f6); null when the
-   *  command is not a recognized deletion verb. See
-   *  `deletion-target-resolve.ts` and `when-eval.ts`'s
-   *  `action.deletion_target_unresolvable` clause. */
-  deletionTarget: DeletionTargetVerdict | null;
-}
-
-/**
- * Build the Action Envelope for an event and run it through the Risk
- * Classifier (#3) and Context Resolver (#4). Pure: every host fact
- * arrives via `riskContext`; when it is absent the envelope is built
- * from the event alone (unclassified risk, `unknown` environment).
- */
-function enrichEnvelope(
-  manifest: Manifest,
-  event: ToolEvent,
-  riskContext: RiskGateContext | undefined,
-  now: Date | undefined,
-): EnrichedEnvelope {
-  const rc = riskContext;
-  const envelope = buildActionEnvelope(event, {
-    cwd: rc?.cwd ?? (typeof event.cwd === "string" ? event.cwd : ""),
-    git: rc?.git ?? { repo: "", branch: "", sha: "" },
-    user: rc?.user ?? "",
-    host: rc?.host ?? "",
-    now: now ?? new Date(),
-  });
-  const risk = classifyRisk(envelope, manifest.risk.classifiers);
-  const environment = resolveEnvironment(
-    envelope,
-    manifest.environments.resolvers,
-    {
-      env: rc?.env ?? {},
-      kubeContext: rc?.kubeContext ?? "",
-      kubeNamespace: rc?.kubeNamespace ?? "",
-    },
-  );
-  // Static deletion-target resolution (task d03af8f6) needs only the raw
-  // command — unlike the environment resolver above, it deliberately
-  // does not consult `riskContext` (cwd, env, kube): a relative target is
-  // UNRESOLVABLE by design, not resolved against ambient cwd. See
-  // `deletion-target-resolve.ts`'s module doc for the full rationale.
-  const deletionShellCommand = extractShellCommand({ raw_input: envelope.raw_input });
-  const deletionTarget =
-    deletionShellCommand === null
-      ? null
-      : resolveDeletionTarget(
-          deletionShellCommand,
-          // Defensive fallback (not just the schema `.default()`): a
-          // hand-built `Manifest` test fixture that constructs `risk:`
-          // directly, bypassing `RiskSchema.parse`, may omit this field
-          // entirely — never trust it present.
-          manifest.risk.safe_deletion_roots ?? DEFAULT_SAFE_DELETION_ROOTS,
-        );
-  return { risk, environment, deletionTarget };
-}
-
-/**
  * Does a policy's `trigger:` match this event? This is the WHICH-tool-
- * calls filter; the WHETHER-it-applies filter is `policy.when:`,
- * evaluated separately (`evaluateWhen`). A policy fires only when both
- * hold. Exported so `harness explain-policy` can report the trigger
- * verdict on its own.
+ * calls filter.
  *
  * `precomputedNormalizedCommand` is an optional caller-supplied
  * `NormalizedCommand` for the event's command: `intercept()` below
@@ -806,19 +635,14 @@ function outcomeForFailedRequires(
 }
 
 /**
- * Does a decision abort the tool call? Phase 7 #6 makes the Risk Gate
- * authoritative at the `PreToolUse` boundary:
+ * Does a decision abort the tool call? The `PreToolUse` boundary:
  *   - `deny` aborts (a `block`-enforcement policy whose requires failed,
  *     the Phase 4 mechanism, unchanged).
- *   - `require_approval` aborts until the approval evidence exists. In
- *     Phase 7 #5 this outcome was returned but did not block; #6 makes
- *     it block. The approval tag is satisfiable through the policy's
- *     `requires:` (an operator runs `harness approve risk`); once the
- *     tag is on record the requires evaluation passes and the outcome
- *     is `allow` instead.
+ *   - `require_approval` aborts until the approval evidence exists. Once
+ *     the approval tag is on record the requires evaluation passes and
+ *     the outcome is `allow` instead.
  *   - `deny-degraded` aborts (task f1aea826): it is only ever produced
- *     for `block` / `require_approval` policies under the default
- *     `preserve_enforcement` posture (see `degradedOutcome`), so its
+ *     for `block` / `require_approval` policies (see `degradedOutcome`), so its
  *     presence alone means "an incident-preventing gate could not read
  *     its evidence" — fail closed.
  *   - `allow` / `warn` / `warn-degraded` never abort.
@@ -850,19 +674,11 @@ export function isBlockingDecision(d: PolicyDecision): boolean {
  *                                 not open because its evidence source
  *                                 is unreadable)
  *
- * The manifest-level opt-out `risk.degraded_fail_posture: fail_open`
- * restores the pre-0.45 availability-first mapping (`warn-degraded`
- * for every tier). The hand-built-manifest case (`options.manifest.risk`
- * absent, only possible past `harness validate`) defaults to the
- * fail-closed posture, matching the schema default.
  */
 function degradedOutcome(
   policy: Policy,
-  manifest: Manifest,
 ): Extract<PolicyOutcome, "warn-degraded" | "deny-degraded"> {
-  if (policy.enforcement === "warn") return "warn-degraded";
-  const posture = manifest.risk?.degraded_fail_posture ?? "preserve_enforcement";
-  return posture === "fail_open" ? "warn-degraded" : "deny-degraded";
+  return policy.enforcement === "warn" ? "warn-degraded" : "deny-degraded";
 }
 
 /**
@@ -1108,7 +924,7 @@ async function evaluateOnePolicy(
     return {
       policyName: policy.name,
       enforcement: policy.enforcement,
-      outcome: degradedOutcome(policy, options.manifest),
+      outcome: degradedOutcome(policy),
       reason:
         "policy declares neither requires: nor operator_only: true (schema invariant violated)",
       extractValues: extract.values,
@@ -1153,7 +969,7 @@ async function evaluateOnePolicy(
     return {
       policyName: policy.name,
       enforcement: policy.enforcement,
-      outcome: degradedOutcome(policy, options.manifest),
+      outcome: degradedOutcome(policy),
       reason: `template variables unresolved: ${unresolved.join(", ")}`,
       extractValues: extract.values,
       ledgerTag,
@@ -1180,7 +996,7 @@ async function evaluateOnePolicy(
     return {
       policyName: policy.name,
       enforcement: policy.enforcement,
-      outcome: degradedOutcome(policy, options.manifest),
+      outcome: degradedOutcome(policy),
       reason: queryResult.reason,
       extractValues: extract.values,
       ledgerTag,
@@ -1197,7 +1013,7 @@ async function evaluateOnePolicy(
       return {
         policyName: policy.name,
         enforcement: policy.enforcement,
-        outcome: degradedOutcome(policy, options.manifest),
+        outcome: degradedOutcome(policy),
         reason: `invalid within: ${requires.within}`,
         extractValues: extract.values,
         ledgerTag,
@@ -1225,7 +1041,7 @@ async function evaluateOnePolicy(
     return {
       policyName: policy.name,
       enforcement: policy.enforcement,
-      outcome: degradedOutcome(policy, options.manifest),
+      outcome: degradedOutcome(policy),
       reason: `requires eval threw: ${(err as Error).message}`,
       extractValues: extract.values,
       ledgerTag,
@@ -2079,31 +1895,7 @@ export async function intercept(
 ): Promise<InterceptResult> {
   const { manifest, event } = options;
 
-  // The Risk Gate is active only when some policy declares a `when:`
-  // block. A manifest with none — every Phase 4 / 5 / 6 manifest — skips
-  // envelope enrichment entirely: no `buildActionEnvelope`, no
-  // classifier, no resolver, and decisions carry no `risk` / `environment`.
-  // That keeps such manifests byte-for-byte identical to pre-Phase-7-#5.
-  const riskGateActive = manifest.policies.some((p) => p.when !== undefined);
-  const enriched: EnrichedEnvelope | undefined = riskGateActive
-    ? enrichEnvelope(manifest, event, options.riskContext, options.now)
-    : undefined;
-
-  // A policy fires only when its `trigger:` matches AND — when declared
-  // — every `when:` clause holds against the enriched envelope.
-  //
-  // For each matching when:-bearing policy we also record its
-  // `unclassifiedFallback` flag so the decision record and deny message
-  // can distinguish a genuine classification hit from a fail-closed
-  // unclassified command (M7: runtime audit + block message). Policies
-  // that have no `when:` block are not inserted into the map, so a
-  // later `whenFallbackMap.get(name) === true` test is unambiguous.
-  //
-  // Explicit loop rather than Array.filter() so the map is built as a
-  // first-class step: a filter predicate is expected to be pure, and a
-  // future refactor that parallelises the filter would silently break the
-  // audit flag if the mutation were still hiding inside the predicate.
-  const whenFallbackMap = new Map<string, boolean>();
+  // A policy fires only when its `trigger:` matches.
   const matching: Policy[] = [];
   // The shell model's path resolver (task 7d4abf84): one per event, shared
   // by the model's directory oracle and every policy's attribution, so a
@@ -2126,17 +1918,14 @@ export async function intercept(
       shellModelThunk,
     );
     if (arm === "none") continue;
+    // A policy that still carries a `when:` clause NEVER applies: the
+    // clause can no longer be evaluated, and matching on the trigger alone
+    // would widen a scoped policy to every call its trigger names.
+    // Until the schema change drops such policies at load, this guard is
+    // the interim rule. Never relax it to a trigger-only match.
+    if (p.when !== undefined) continue;
     if (arm === "model") matchedByModelOnly.add(p);
-    if (p.when === undefined) {
-      matching.push(p);
-      continue;
-    }
-    // `enriched` is defined here: a policy with `when:` set `riskGateActive`.
-    const whenEval = evaluateWhen(p.when, enriched!);
-    if (whenEval.matched) {
-      whenFallbackMap.set(p.name, whenEval.unclassifiedFallback);
-      matching.push(p);
-    }
+    matching.push(p);
   }
 
   // Per-policy attribution (task `98ad072f`, T-003): `segmentsForAttribution`
@@ -2221,22 +2010,8 @@ export async function intercept(
           ? options
           : { ...options, builtins: context.builtins, currentHeadSha: context.currentHeadSha };
       const base = await evaluateOnePolicy(policy, contextOptions);
-      // Attach the per-event Risk Gate verdicts so `harness audit` /
-      // `explain --trace` can replay the classification + environment
-      // that the `when:` match was made against. Also carry the
-      // unclassifiedFallback flag (M7) when the when: evaluation set it
-      // to true; leave the field absent otherwise so decisions from
-      // manifests without a `when:` policy stay byte-identical.
-      const whenFallback = whenFallbackMap.get(policy.name);
       const decision: PolicyDecision = {
-        ...(enriched
-          ? {
-              ...base,
-              risk: enriched.risk,
-              environment: enriched.environment,
-              ...(whenFallback === true ? { whenUnclassifiedFallback: true } : {}),
-            }
-          : base),
+        ...base,
         ...(context.foreignTarget !== undefined ? { foreignTarget: context.foreignTarget } : {}),
       };
       decisions.push(decision);
@@ -2312,14 +2087,9 @@ export async function intercept(
       // from the grounding-mcp subprocess) and the posture, so nobody
       // debugs a phantom missing tag.
       //
-      // The `risk.degraded_fail_posture: fail_open` opt-out is
-      // deliberately NOT named here (review 2026-08-08, high finding):
-      // this text is fed back to the very agent that was just blocked,
-      // and nothing prevents that agent from editing the manifest — a
-      // deny that includes its own disable recipe is not a gate. The
-      // opt-out lives on operator surfaces only: the stderr diagnostic
-      // (`formatDecisionDiagnostic`), docs/risk-gate.md, and the OKF
-      // fail-posture matrix. Same reasoning as the producer-neutrality
+      // No opt-out is named here: this text is fed back to the very
+      // agent that was just blocked, and nothing prevents that agent from
+      // editing the manifest. Same reasoning as the producer-neutrality
       // norm above and the operator-only framing of `harness pause`.
       reasonText =
         `${blocking.policyName}: required evidence could not be read ` +
@@ -2338,47 +2108,18 @@ export async function intercept(
       // opt-out, same reasoning as the degraded envelope above.
       reasonText = `${blocking.policyName}: ${blocking.reason}`;
     } else if (blockingPolicy?.ux) {
-      // The ux surface is operator-curated plain language. Task
-      // 2929c5b7: a ux-declared policy's `cannot:` text used to be
-      // rendered unchanged even when the match was a fail-closed
-      // unclassified hit, not a genuine classification — so
-      // gate-prod-destructive's "You cannot run this critical
-      // destructive action against production." was shown verbatim for
-      // an unrecognized READ (e.g. `cat`/`sed -n`/`curl`) the moment the
-      // environment resolved to production, which is exactly the false
-      // positive this task exists to fix. When `whenUnclassifiedFallback`
-      // is set, a fallback-specific sentence is PREPENDED naming the real
-      // cause before the operator's own `cannot:` text, which is left
-      // byte-for-byte intact (added to, never replaced): the operator
-      // still chose that wording for the genuine-classification case,
-      // which keeps rendering unchanged. See docs/risk-gate.md,
-      // "Unclassified actions and the fail-close rule".
+      // The ux surface is operator-curated plain language.
       const uxText = renderAgentFacing(blockingPolicy.ux, {
         ...blocking.extractValues,
         SESSION_ID: sessionId,
       });
-      reasonText = blocking.whenUnclassifiedFallback
-        ? `${unclassifiedFallbackPrefix(
-            enriched?.environment.name,
-            blockingPolicy.when?.["risk.severity_at_least"],
-          )} ${uxText}`
-        : uxText;
+      reasonText = uxText;
     } else {
       const producersBlock = renderProducers(
         blockingPolicy?.producers,
         blocking.extractValues,
       );
-      // M7: when the policy matched only because the action was
-      // unclassified (fail-closed), insert an operator-facing note so a
-      // deny caused by an unknown command is distinguishable from a deny
-      // caused by a genuine critical-severity classification. The note is
-      // placed after the base reason but BEFORE hintSuffix so the cause
-      // precedes the remedy ("why this fired" before "how to unblock").
-      // Neutral deny envelope only (not the ux path above).
-      const unclassifiedClause = blocking.whenUnclassifiedFallback
-        ? " (matched via the fail-closed unclassified rule, not a real risk classification)"
-        : "";
-      reasonText = `${blocking.policyName}: ${blocking.reason}.${unclassifiedClause}${hintSuffix}${producersBlock}`;
+      reasonText = `${blocking.policyName}: ${blocking.reason}.${hintSuffix}${producersBlock}`;
     }
     // A decision made for a foreign attributed context (a nested or
     // vendored work tree named by the command) is explained by the

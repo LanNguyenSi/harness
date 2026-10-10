@@ -222,9 +222,9 @@ function inputMatchKey(policy: Pick<Policy, "trigger">): Record<string, unknown>
  * `PR_NUMBER` from a WRONG path (say `toolArgs.pr` instead of
  * `toolArgs.prNumber`) counted as equivalent, suppressed the derived
  * gate, and then evaluated its own `review:${PR_NUMBER}` against an
- * unresolved variable. Under `risk.degraded_fail_posture: fail_open` that
- * is an allow with "template variables unresolved": the merge went
- * through with no review evidence at all. A differently-extracting policy
+ * unresolved variable, a degraded evaluation that a relaxed fail posture
+ * once turned into an allow: the merge went through with no review
+ * evidence at all. A differently-extracting policy
  * no longer dedupes: the derived gate is produced as well, both apply,
  * and `findWeakGatePolicyOverlaps` names the mismatch.
  */
@@ -242,19 +242,21 @@ function extractKey(policy: Pick<Policy, "trigger">): string | null {
 /**
  * True when a hand-authored policy sharing the derived gate's trigger
  * surface + ledger_tag is strong enough to stand in for it: `enforcement:
- * "block"`, no `when:` risk/environment scoping, and not `operator_only:
+ * "block"`, no `when:` clause (a policy carrying one never applies, so it
+ * cannot stand in for the derived gate), and not `operator_only:
  * true` (which carries no `requires:`/ledger_tag at all, so it would not
  * normally share a key, but the check is defensive since operator_only
  * would otherwise read as "block" and pass the enforcement check alone).
  *
  * F1 (review round 2, 99f47307 Slice 1): before this, `triggerSurfaceKey`
  * alone decided dedupe, so a hand-authored `enforcement: "warn"` policy
- * (or a `block` policy scoped down via `when:` to only some environments)
- * on the identical surface silently suppressed the derived BLOCK gate: a
+ * (or a `block` policy that carries a `when:` clause) on the identical
+ * surface silently suppressed the derived BLOCK gate: a
  * `spawn: "required"` workflow step that LOOKED enforced actually
- * degraded to warn-only, or to unenforced outside the `when:` scope,
+ * degraded to warn-only, or to unenforced (a `when:` policy never applies),
  * with no diagnostic anywhere. A weaker match no longer dedupes: the
- * derived block gate is ALSO produced (both apply), and
+ * derived block gate is ALSO produced (a `when:` policy never applies, so
+ * the derived gate is then the only one in force), and
  * `findWeakGatePolicyOverlaps` surfaces the overlap so validate/doctor
  * can flag it instead of leaving it silent.
  */
@@ -274,7 +276,7 @@ function isAtLeastAsStrongAsDerivedGate(policy: Policy): boolean {
 function weaknessReason(policy: Policy): string | null {
   if (isAtLeastAsStrongAsDerivedGate(policy)) return null;
   if (policy.enforcement !== "block") return `enforcement: ${policy.enforcement}`;
-  if (policy.when !== undefined) return "when: (risk/environment-scoped)";
+  if (policy.when !== undefined) return "when: (carries a when: clause, never applies)";
   if (policy.operator_only === true) return "operator_only: true";
   return "weaker than a plain block gate";
 }

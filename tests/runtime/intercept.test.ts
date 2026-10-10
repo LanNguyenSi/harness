@@ -7,13 +7,9 @@ import { describe, expect, it, vi } from "vitest";
 import { parse as parseYaml } from "yaml";
 import {
   attributeTriggerSegments,
-  buildActionEnvelope,
-  classifyRisk,
   intercept,
   policyMatchesEvent,
-  type EnvelopeContext,
   type LedgerClient,
-  type RiskGateContext,
   type ToolEvent,
 } from "../../src/runtime/index.js";
 import type { CommandSegment } from "../../src/runtime/command-normalize.js";
@@ -24,11 +20,7 @@ import type {
 } from "../../src/policies/index.js";
 import { FULL_TEMPLATE } from "../../src/cli/init/templates.js";
 import { parseManifest } from "../../src/schema/index.js";
-import type {
-  EnvironmentResolver,
-  Policy,
-  RiskClassifier,
-} from "../../src/schema/index.js";
+import type { Policy } from "../../src/schema/index.js";
 import { makeManifest, makePolicy as policy } from "../_helpers/manifest.js";
 import { addGitDirSkeleton } from "../_helpers/git-dir-fixture.js";
 import {
@@ -798,10 +790,9 @@ describe("intercept — bash_match", () => {
 // Task f1aea826: the degraded family ("could not evaluate requires") is
 // tier-aware. block/require_approval fail CLOSED (`deny-degraded`, blocks);
 // warn keeps the availability-first `warn-degraded` (never blocks);
-// `risk.degraded_fail_posture: fail_open` restores the old mapping for
-// every tier. The pre-0.45 pins asserting warn-degraded-never-blocks for a
-// block-enforcement policy were rewritten here deliberately, together with
-// docs/risk-gate.md and docs/okf/gate-fail-posture-matrix.md.
+// no manifest setting relaxes the block tier. The pre-0.45 pins asserting
+// warn-degraded-never-blocks for a block-enforcement policy were rewritten
+// deliberately.
 describe("intercept — degraded ledger (fail posture per enforcement tier)", () => {
   it("block enforcement + degraded ledger fails CLOSED as deny-degraded", async () => {
     const ledger = makeLedger({
@@ -821,11 +812,9 @@ describe("intercept — degraded ledger (fail posture per enforcement tier)", ()
     // Degraded-specific envelope: names the unreadable evidence source
     // and the operator recovery path, and must NOT read like the
     // missing-evidence deny (no "To satisfy:" producer hint — producing
-    // the tag cannot unblock an unreadable ledger). The fail_open
-    // opt-out must be ABSENT from this agent-facing text (review
-    // 2026-08-08, high finding: a deny that includes its own disable
-    // recipe is not a gate); it lives on the stderr diagnostic only,
-    // pinned in tests/runtime/intercept-cli.test.ts.
+    // the tag cannot unblock an unreadable ledger). No opt-out may appear
+    // in this agent-facing text: a deny that includes its own disable
+    // recipe is not a gate.
     const reason = result.blockJson?.reason ?? "";
     expect(reason).toContain("could not be read");
     expect(reason).toContain("grounding-mcp timeout after 1ms");
@@ -871,7 +860,7 @@ describe("intercept — degraded ledger (fail posture per enforcement tier)", ()
     expect(result.blockJson).toBeNull();
   });
 
-  it("risk.degraded_fail_posture: fail_open restores the availability-first mapping for block tier", async () => {
+  it("a manifest still carrying risk.degraded_fail_posture: fail_open no longer relaxes the block tier", async () => {
     const ledger = makeLedger({
       kind: "degraded",
       reason: "grounding-mcp timeout after 1ms",
@@ -886,8 +875,8 @@ describe("intercept — degraded ledger (fail posture per enforcement tier)", ()
       builtins: BUILTINS,
       now: NOW,
     });
-    expect(result.decisions[0]?.outcome).toBe("warn-degraded");
-    expect(result.blockJson).toBeNull();
+    expect(result.decisions[0]?.outcome).toBe("deny-degraded");
+    expect(result.blockJson).not.toBeNull();
   });
 
   it("healthy ledger with satisfying evidence still allows (no fail-closed regression)", async () => {
@@ -1215,7 +1204,7 @@ describe("intercept — audit log", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Phase 7 #5 — `policy.when:` evaluation + the four-way decision space.
+// Policies that carry a `when:` clause, and the require_approval outcome.
 // ---------------------------------------------------------------------------
 
 const BASH_DESTROY_EVENT: ToolEvent = {
@@ -1226,30 +1215,11 @@ const BASH_DESTROY_EVENT: ToolEvent = {
   cwd: "/tmp/proj",
 };
 
-const DESTROY_CLASSIFIER: RiskClassifier = {
-  name: "dangerous-shell",
-  tool: "Bash",
-  patterns: [
-    {
-      pattern: "terraform\\s+destroy",
-      categories: ["destructive", "infrastructure_change"],
-      severity: "critical",
-    },
-  ],
-};
-
-const PROD_RESOLVER: EnvironmentResolver = {
-  name: "production-signals",
-  environment: "production",
-  signals: { branch_patterns: ["main"] },
-};
-
-// gate-prod-destructive — the canonical risk policy shape from
-// docs/risk-gate.md. `enforcement: require_approval` so a failed
-// `requires` resolves to the new `require_approval` outcome.
-const RISK_POLICY: Policy = {
+// A scoped block gate: trigger `Bash`, narrowed by a `when:` clause. The
+// clause is no longer evaluated, so the policy must never apply.
+const SCOPED_BLOCK_POLICY: Policy = {
   name: "gate-prod-destructive",
-  description: "require approval for destructive production actions",
+  description: "block destructive production actions",
   trigger: { event: "PreToolUse", match: "Bash" },
   when: {
     "risk.severity_at_least": "high",
@@ -1257,86 +1227,74 @@ const RISK_POLICY: Policy = {
   },
   requires: { ledger_tag: "risk-approved:${SESSION_ID}" },
   hook: "h",
+  enforcement: "block",
+} as Policy;
+
+// The same shape without a `when:` clause and with `require_approval`
+// enforcement, to exercise the approval outcomes.
+const APPROVAL_POLICY: Policy = {
+  name: "gate-approval",
+  description: "require approval for Bash actions",
+  trigger: { event: "PreToolUse", match: "Bash" },
+  requires: { ledger_tag: "risk-approved:${SESSION_ID}" },
+  hook: "h",
   enforcement: "require_approval",
 } as Policy;
 
-const riskCtx = (branch: string): RiskGateContext => ({
-  git: { repo: "proj", branch, sha: "" },
-  cwd: "/tmp/proj",
-  user: "tester",
-  host: "testhost",
-  env: {},
-  kubeContext: "",
-  kubeNamespace: "",
-});
-
-describe("intercept — Phase 7 #5 when: evaluation", () => {
-  it("fires a when: policy only when trigger AND when both hold", async () => {
+describe("intercept — policies that carry a when: clause", () => {
+  it("never applies a when: policy, even when its trigger matches", async () => {
+    // The `when:` clause can no longer be evaluated, so a policy that still
+    // carries one is inert: matching on the trigger alone would widen a
+    // scoped gate to every call its trigger names.
     const ledger = makeLedger({ kind: "ok", entries: [] });
     const result = await intercept({
-      manifest: makeManifest({
-        policies: [RISK_POLICY],
-        classifiers: [DESTROY_CLASSIFIER],
-        resolvers: [PROD_RESOLVER],
-      }),
+      manifest: manifest([SCOPED_BLOCK_POLICY]),
       event: BASH_DESTROY_EVENT,
       ledger,
       builtins: BUILTINS,
       now: NOW,
-      riskContext: riskCtx("main"),
-    });
-    expect(result.decisions).toHaveLength(1);
-    expect(result.decisions[0]?.policyName).toBe("gate-prod-destructive");
-    // Risk Gate verdicts ride along on the decision for the audit trail.
-    expect(result.decisions[0]?.risk?.severity).toBe("critical");
-    expect(result.decisions[0]?.environment?.name).toBe("production");
-  });
-
-  it("does NOT fire when the when: environment clause fails", async () => {
-    // Branch `feature/x` matches no resolver → environment `unknown` →
-    // the `environment.name: production` clause fails → policy is not in
-    // the matching set at all, so it records no decision.
-    const ledger = makeLedger({ kind: "ok", entries: [] });
-    const result = await intercept({
-      manifest: makeManifest({
-        policies: [RISK_POLICY],
-        classifiers: [DESTROY_CLASSIFIER],
-        resolvers: [PROD_RESOLVER],
-      }),
-      event: BASH_DESTROY_EVENT,
-      ledger,
-      builtins: BUILTINS,
-      now: NOW,
-      riskContext: riskCtx("feature/x"),
     });
     expect(result.decisions).toHaveLength(0);
     expect(result.blockJson).toBeNull();
+    expect(ledger.queryCalls).toEqual([]);
+    expect(ledger.recordCalls).toEqual([]);
   });
 
-  it("fires fail-closed when the manifest declares no classifiers (unknown is not safe)", async () => {
-    // No classifier → action is unclassified → `severity_at_least`
-    // matches by the unknown-is-not-safe rule; the environment clause
-    // still holds (branch `main`), so the policy fires.
+  it("the same policy without its when: clause does apply to that event", async () => {
+    // Negative control for the test above: the event does match the trigger,
+    // so the only difference is the `when:` clause.
+    const { when: _when, ...unscoped } = SCOPED_BLOCK_POLICY;
     const ledger = makeLedger({ kind: "ok", entries: [] });
     const result = await intercept({
-      manifest: makeManifest({
-        policies: [RISK_POLICY],
-        resolvers: [PROD_RESOLVER],
-      }),
+      manifest: manifest([unscoped as Policy]),
       event: BASH_DESTROY_EVENT,
       ledger,
       builtins: BUILTINS,
       now: NOW,
-      riskContext: riskCtx("main"),
     });
     expect(result.decisions).toHaveLength(1);
-    expect(result.decisions[0]?.risk?.classified).toBe(false);
+    expect(result.decisions[0]?.outcome).toBe("deny");
+    expect(result.blockJson?.decision).toBe("block");
   });
 
-  it("a no-when: policy is unaffected and carries no risk/environment", async () => {
-    // The manifest has no `when:`-bearing policy → the Risk Gate is
-    // inactive → decisions are byte-identical to Phase 4 (no `risk` /
-    // `environment` fields).
+  it("a when: policy is skipped while a sibling policy on the same trigger still applies", async () => {
+    const sibling: Policy = {
+      ...APPROVAL_POLICY,
+      name: "sibling",
+      requires: { ledger_tag: "sibling:${SESSION_ID}" },
+    } as Policy;
+    const ledger = makeLedger({ kind: "ok", entries: [] });
+    const result = await intercept({
+      manifest: manifest([SCOPED_BLOCK_POLICY, sibling]),
+      event: BASH_DESTROY_EVENT,
+      ledger,
+      builtins: BUILTINS,
+      now: NOW,
+    });
+    expect(result.decisions.map((d) => d.policyName)).toEqual(["sibling"]);
+  });
+
+  it("decisions carry no risk, environment or fallback fields", async () => {
     const ledger = makeLedger({ kind: "ok", entries: [] });
     const result = await intercept({
       manifest: manifest([REVIEW_POLICY]),
@@ -1346,32 +1304,223 @@ describe("intercept — Phase 7 #5 when: evaluation", () => {
       now: NOW,
     });
     expect(result.decisions).toHaveLength(1);
-    expect(result.decisions[0]?.risk).toBeUndefined();
-    expect(result.decisions[0]?.environment).toBeUndefined();
+    expect(result.decisions[0]).not.toHaveProperty("risk");
+    expect(result.decisions[0]).not.toHaveProperty("environment");
+    expect(result.decisions[0]).not.toHaveProperty("whenUnclassifiedFallback");
   });
 });
 
-describe("intercept — Phase 7 #5 four-way decision", () => {
-  const fullManifest = () =>
-    makeManifest({
-      policies: [RISK_POLICY],
-      classifiers: [DESTROY_CLASSIFIER],
-      resolvers: [PROD_RESOLVER],
+const bashEvent = (command: string): ToolEvent => ({
+  hook_event_name: "PreToolUse",
+  tool_name: "Bash",
+  tool_input: { command },
+  session_id: "sess-1",
+  cwd: "/tmp/proj",
+});
+
+describe("intercept: a when: policy never applies, whatever its shape", () => {
+  // Each case is a policy shape the matching loop treats differently before
+  // the guard (enforcement tier, operator_only, a bash_match regex, the
+  // shell-model arm only). The `when:` clause alone decides the outcome, so
+  // every case also runs its twin without `when:` as a control: the event
+  // does match, and the control yields a decision.
+  const gateBase = {
+    description: "gate",
+    trigger: { event: "PreToolUse", match: "Bash" },
+    requires: { ledger_tag: "ok:${SESSION_ID}" },
+    hook: "h",
+  };
+  const WHEN = { "environment.name": "production" };
+  // `command` builds a Bash PreToolUse event; `event` replaces it for the
+  // cases on another tool or hook event.
+  const cases: Array<{
+    label: string;
+    policy: Record<string, unknown>;
+    command?: string;
+    event?: ToolEvent;
+  }> = [
+    {
+      label: "enforcement block",
+      policy: { ...gateBase, name: "p", enforcement: "block" },
+      command: "terraform destroy",
+    },
+    {
+      label: "enforcement require_approval",
+      policy: { ...gateBase, name: "p", enforcement: "require_approval" },
+      command: "terraform destroy",
+    },
+    {
+      label: "enforcement warn",
+      policy: { ...gateBase, name: "p", enforcement: "warn" },
+      command: "terraform destroy",
+    },
+    {
+      label: "operator_only: true",
+      policy: {
+        name: "p",
+        description: "gate",
+        trigger: gateBase.trigger,
+        hook: "h",
+        enforcement: "block",
+        operator_only: true,
+      },
+      command: "terraform destroy",
+    },
+    {
+      label: "a trigger.bash_match",
+      policy: {
+        ...gateBase,
+        name: "p",
+        enforcement: "block",
+        trigger: { event: "PreToolUse", match: "Bash", bash_match: "terraform\\s+destroy" },
+      },
+      command: "echo hi && terraform destroy",
+    },
+    {
+      // A per-repo policy that only the shell model's arm matches: the
+      // `-C` target is a quoted path with a space, which the segment view
+      // does not attribute.
+      label: "a per-repo policy matched only by the shell-model arm",
+      policy: {
+        ...legacyPreflightPush(),
+        name: "p",
+        requires: { ledger_tag: "preflight:${REPO}" },
+      },
+      command: "git -C '/tmp/repo with space' push origin master",
+    },
+    {
+      label: "a Write trigger with a Write event",
+      policy: { ...gateBase, name: "p", enforcement: "block", trigger: { event: "PreToolUse", match: "Write" } },
+      event: {
+        hook_event_name: "PreToolUse",
+        tool_name: "Write",
+        tool_input: { file_path: "/tmp/proj/a.txt", content: "x" },
+        session_id: "sess-1",
+        cwd: "/tmp/proj",
+      },
+    },
+    {
+      label: "an MCP trigger with an extract and an MCP event",
+      policy: {
+        ...gateBase,
+        name: "p",
+        enforcement: "require_approval",
+        trigger: {
+          event: "PreToolUse",
+          match: "mcp__agent-tasks__pull_requests_merge",
+          extract: { PR: "toolArgs.prNumber" },
+        },
+        requires: { ledger_tag: "review:${PR}" },
+      },
+      event: {
+        hook_event_name: "PreToolUse",
+        tool_name: "mcp__agent-tasks__pull_requests_merge",
+        tool_input: { prNumber: 42 },
+        session_id: "sess-1",
+        cwd: "/tmp/proj",
+      },
+    },
+    {
+      label: "a trigger with an event but no match",
+      policy: { ...gateBase, name: "p", enforcement: "block", trigger: { event: "PreToolUse" } },
+      event: {
+        hook_event_name: "PreToolUse",
+        tool_name: "Read",
+        tool_input: { file_path: "/tmp/proj/a.txt" },
+        session_id: "sess-1",
+        cwd: "/tmp/proj",
+      },
+    },
+    {
+      // The engine matches any hook event the trigger names, not only
+      // PreToolUse, so the guard must not be keyed on the event name.
+      label: "a PostToolUse trigger with a PostToolUse event",
+      policy: { ...gateBase, name: "p", enforcement: "block", trigger: { event: "PostToolUse", match: "Bash" } },
+      event: {
+        hook_event_name: "PostToolUse",
+        tool_name: "Bash",
+        tool_input: { command: "terraform destroy" },
+        session_id: "sess-1",
+        cwd: "/tmp/proj",
+      },
+    },
+  ];
+  const eventOf = (c: (typeof cases)[number]): ToolEvent => c.event ?? bashEvent(c.command!);
+
+  for (const c of cases) {
+    it(`${c.label}: no decision, no ledger traffic, no block`, async () => {
+      const ledger = makeLedger({ kind: "ok", entries: [] });
+      const result = await intercept({
+        manifest: manifest([{ ...c.policy, when: WHEN } as unknown as Policy]),
+        event: eventOf(c),
+        ledger,
+        builtins: BUILTINS,
+        now: NOW,
+      });
+      expect(result.decisions).toHaveLength(0);
+      expect(result.blockJson).toBeNull();
+      expect(ledger.queryCalls).toEqual([]);
+      expect(ledger.recordCalls).toEqual([]);
     });
 
-  it("require_approval enforcement yields a require_approval outcome AND blocks (Phase 7 #6)", async () => {
+    it(`${c.label}: the same policy without when: does apply (control)`, async () => {
+      const ledger = makeLedger({ kind: "ok", entries: [] });
+      const result = await intercept({
+        manifest: manifest([c.policy as unknown as Policy]),
+        event: eventOf(c),
+        ledger,
+        builtins: BUILTINS,
+        now: NOW,
+      });
+      expect(result.decisions).toHaveLength(1);
+    });
+  }
+
+  describe("the shipped FULL template", () => {
+    const whenPolicies = parseManifest(parseYaml(FULL_TEMPLATE)).policies.filter(
+      (p) => p.when !== undefined,
+    );
+
+    it("carries its three Risk Gate policies with when:", () => {
+      expect(whenPolicies.map((p) => p.name).sort()).toEqual([
+        "gate-dev-unsafe-deletion",
+        "gate-prod-destructive",
+        "gate-prod-destructive-approval",
+      ]);
+    });
+
+    for (const command of ["rm -rf /", "ls"]) {
+      it(`yields no decision from those policies for \`${command}\``, async () => {
+        const ledger = makeLedger({ kind: "ok", entries: [] });
+        const result = await intercept({
+          manifest: manifest(whenPolicies),
+          event: bashEvent(command),
+          ledger,
+          builtins: BUILTINS,
+          now: NOW,
+        });
+        expect(result.decisions).toHaveLength(0);
+        expect(result.blockJson).toBeNull();
+        expect(ledger.queryCalls).toEqual([]);
+      });
+    }
+  });
+});
+
+describe("intercept — require_approval and deny outcomes", () => {
+  const approvalManifest = () => manifest([APPROVAL_POLICY]);
+
+  it("require_approval enforcement yields a require_approval outcome AND blocks", async () => {
     const ledger = makeLedger({ kind: "ok", entries: [] });
     const result = await intercept({
-      manifest: fullManifest(),
+      manifest: approvalManifest(),
       event: BASH_DESTROY_EVENT,
       ledger,
       builtins: BUILTINS,
       now: NOW,
-      riskContext: riskCtx("main"),
     });
     expect(result.decisions[0]?.outcome).toBe("require_approval");
-    // Phase 7 #6 makes the Risk Gate authoritative: require_approval
-    // aborts the tool call until the approval tag exists.
+    // require_approval aborts the tool call until the approval tag exists.
     expect(result.blockJson?.decision).toBe("block");
   });
 
@@ -1383,30 +1532,24 @@ describe("intercept — Phase 7 #5 four-way decision", () => {
     };
     const ledger = makeLedger({ kind: "ok", entries: [approval] });
     const result = await intercept({
-      manifest: fullManifest(),
+      manifest: approvalManifest(),
       event: BASH_DESTROY_EVENT,
       ledger,
       builtins: BUILTINS,
       now: NOW,
-      riskContext: riskCtx("main"),
     });
     expect(result.decisions[0]?.outcome).toBe("allow");
     expect(result.blockJson).toBeNull();
   });
 
-  it("block enforcement still denies and blocks when a when: policy's requires fails", async () => {
+  it("block enforcement still denies and blocks when requires fails", async () => {
     const ledger = makeLedger({ kind: "ok", entries: [] });
     const result = await intercept({
-      manifest: makeManifest({
-        policies: [{ ...RISK_POLICY, enforcement: "block" } as Policy],
-        classifiers: [DESTROY_CLASSIFIER],
-        resolvers: [PROD_RESOLVER],
-      }),
+      manifest: manifest([{ ...APPROVAL_POLICY, enforcement: "block" } as Policy]),
       event: BASH_DESTROY_EVENT,
       ledger,
       builtins: BUILTINS,
       now: NOW,
-      riskContext: riskCtx("main"),
     });
     expect(result.decisions[0]?.outcome).toBe("deny");
     expect(result.blockJson?.decision).toBe("block");
@@ -1614,576 +1757,6 @@ describe("intercept — audit-write failure is surfaced, not swallowed", () => {
     expect(result.decisions).toHaveLength(1);
     expect(result.decisions[0]?.outcome).toBe("deny");
     expect(result.blockJson).not.toBeNull();
-  });
-});
-
-// M7: whenUnclassifiedFallback — audit record + block-message distinction.
-// ---------------------------------------------------------------------------
-//
-// Verifies that:
-//   1. An unclassified action against a risk-gating policy yields
-//      `whenUnclassifiedFallback === true` on the decision and the
-//      unclassified clause in the deny message.
-//   2. A classified action that genuinely matches has the field absent
-//      and the clause absent from the deny message.
-//   3. A no-when: policy (Phase 4 shape) is unaffected regardless.
-//
-// Mutation guards are noted per test.
-
-describe("intercept — M7 whenUnclassifiedFallback flag", () => {
-  // A minimal policy with a risk.severity_at_least clause but no
-  // environment.name scope. For these tests we use `block` enforcement
-  // so the deny message is the neutral (non-ux) path we want to inspect.
-  const RISK_BLOCK_POLICY: Policy = {
-    name: "gate-risk-unscoped",
-    description: "test policy for unclassified fallback coverage",
-    trigger: { event: "PreToolUse", match: "Bash" },
-    when: {
-      "risk.severity_at_least": "high",
-    },
-    requires: { ledger_tag: "risk-approved:${SESSION_ID}" },
-    hook: "h",
-    enforcement: "block",
-  } as Policy;
-
-  const BASH_UNKNOWN_EVENT: ToolEvent = {
-    hook_event_name: "PreToolUse",
-    tool_name: "Bash",
-    tool_input: { command: "some-unknown-command --flag" },
-    session_id: "sess-1",
-    cwd: "/tmp/proj",
-  };
-
-  it("sets whenUnclassifiedFallback=true and inserts the clause (before hintSuffix) when the action is unclassified", async () => {
-    // No classifiers → action is unclassified → fail-close rule fires.
-    // Mutation guard: remove the `whenFallbackMap.set` call in intercept.ts
-    // or the `whenUnclassifiedFallback: true` spread and this test goes red
-    // (the field will be absent and the message will not contain the clause).
-    const ledger = makeLedger({ kind: "ok", entries: [] });
-    const result = await intercept({
-      manifest: makeManifest({ policies: [RISK_BLOCK_POLICY] }),
-      event: BASH_UNKNOWN_EVENT,
-      ledger,
-      builtins: BUILTINS,
-      now: NOW,
-      riskContext: riskCtx("main"),
-    });
-    expect(result.decisions).toHaveLength(1);
-    expect(result.decisions[0]?.whenUnclassifiedFallback).toBe(true);
-    // The deny message must contain the unclassified clause.
-    expect(result.blockJson?.reason).toContain(
-      "(matched via the fail-closed unclassified rule, not a real risk classification)",
-    );
-  });
-
-  it("does NOT set whenUnclassifiedFallback and does NOT append the clause for a real classification hit", async () => {
-    // The DESTROY_CLASSIFIER matches `terraform destroy` with critical
-    // severity, so the risk clause matches on a genuine classification,
-    // not the fail-closed rule.
-    // Mutation guard: removing the `...base` spread from the decision
-    // build (so the field is always absent) would pass this test, but the
-    // previous test would fail because the decision would then lack the
-    // field for the unclassified case too.
-    const ledger = makeLedger({ kind: "ok", entries: [] });
-    const result = await intercept({
-      manifest: makeManifest({
-        policies: [RISK_BLOCK_POLICY],
-        classifiers: [DESTROY_CLASSIFIER],
-      }),
-      event: BASH_DESTROY_EVENT,
-      ledger,
-      builtins: BUILTINS,
-      now: NOW,
-      riskContext: riskCtx("main"),
-    });
-    expect(result.decisions).toHaveLength(1);
-    // A real classification hit: field must be absent (not false, absent).
-    expect(result.decisions[0]?.whenUnclassifiedFallback).toBeUndefined();
-    // The deny message must NOT contain the unclassified clause.
-    expect(result.blockJson?.reason).not.toContain(
-      "matched via the fail-closed unclassified rule",
-    );
-  });
-
-  it("does not set whenUnclassifiedFallback on a no-when: policy (Phase 4 shape stays byte-identical)", async () => {
-    // Mutation guard: adding an unconditional `whenUnclassifiedFallback: false`
-    // to every decision would break this test (field would be present).
-    const ledger = makeLedger({ kind: "ok", entries: [] });
-    const result = await intercept({
-      manifest: manifest([REVIEW_POLICY]),
-      event: MERGE_EVENT,
-      ledger,
-      builtins: BUILTINS,
-      now: NOW,
-    });
-    expect(result.decisions).toHaveLength(1);
-    expect(result.decisions[0]?.whenUnclassifiedFallback).toBeUndefined();
-  });
-
-  it("ux-path (task 2929c5b7): records whenUnclassifiedFallback=true on the audit decision AND prepends a fallback-specific sentence to the ux agent-facing reason, without altering the operator's own cannot: text", async () => {
-    // A policy with `ux:` uses the operator-curated plain-language surface.
-    // Pre-2929c5b7 this surface was left untouched even for a fail-closed
-    // unclassified match — the exact bug this task exists to fix
-    // (gate-prod-destructive's "critical destructive action" wording shown
-    // verbatim for an unrecognized READ the moment environment resolved to
-    // production). Now: the unclassifiedFallback flag still rides the
-    // decision record (audit + explain --trace can replay it), AND the
-    // block message is prefixed with a sentence naming the real cause,
-    // while the operator's own `cannot:` text is still present, unaltered.
-    // Mutation guard: removing the fallback-specific prefix logic in
-    // intercept.ts's ux branch makes the "unclassified action in a
-    // production context" assertion below go red.
-    const uxPolicy: Policy = {
-      ...RISK_BLOCK_POLICY,
-      name: "gate-risk-unscoped-ux",
-      ux: {
-        cannot: "You cannot run unrecognised commands here.",
-        required: ["explicit operator approval"],
-        run: ["harness approve risk"],
-      },
-    } as Policy;
-    const ledger = makeLedger({ kind: "ok", entries: [] });
-    const result = await intercept({
-      // The production resolver is what makes AC2's exact phrase
-      // ("in a production context") the right assertion here: the prefix
-      // interpolates the RESOLVED environment, so a manifest with no
-      // resolver would legitimately say "unknown" instead (pinned by the
-      // round-3 sibling test below).
-      manifest: makeManifest({ policies: [uxPolicy], resolvers: [PROD_RESOLVER] }),
-      event: BASH_UNKNOWN_EVENT,
-      ledger,
-      builtins: BUILTINS,
-      now: NOW,
-      riskContext: riskCtx("main"),
-    });
-    // The decision record must carry the flag.
-    expect(result.decisions[0]?.whenUnclassifiedFallback).toBe(true);
-    expect(result.decisions[0]?.environment?.name).toBe("production");
-    // The agent-facing reason must NOT contain the non-ux engine-vocabulary
-    // clause (that wording is reserved for the non-ux path).
-    expect(result.blockJson?.reason).not.toContain(
-      "matched via the fail-closed unclassified rule",
-    );
-    // AC2: the fallback-specific reason names the real cause.
-    expect(result.blockJson?.reason).toContain(
-      "unclassified action in a production context",
-    );
-    // The operator's own cannot: text is still present, unaltered.
-    expect(result.blockJson?.reason).toContain(
-      "You cannot run unrecognised commands here.",
-    );
-  });
-
-  it("ux-path: a genuine classification hit renders the operator's cannot: text with NO fallback prefix", async () => {
-    // Negative control for the test above: when the risk clause matches a
-    // REAL classification (not the fallback), the ux text is rendered
-    // exactly as the operator wrote it, with no "unclassified action in a
-    // production context" prefix — that phrase is reserved for a genuine
-    // fallback deny (AC2: "Explicitly classified critical actions keep the
-    // existing wording").
-    const uxPolicy: Policy = {
-      ...RISK_BLOCK_POLICY,
-      name: "gate-risk-unscoped-ux-classified",
-      ux: {
-        cannot: "You cannot run this critical destructive action against production.",
-        required: ["explicit operator approval"],
-        run: ["harness approve risk"],
-      },
-    } as Policy;
-    const ledger = makeLedger({ kind: "ok", entries: [] });
-    const result = await intercept({
-      manifest: makeManifest({
-        policies: [uxPolicy],
-        classifiers: [DESTROY_CLASSIFIER],
-      }),
-      event: BASH_DESTROY_EVENT,
-      ledger,
-      builtins: BUILTINS,
-      now: NOW,
-      riskContext: riskCtx("main"),
-    });
-    expect(result.decisions[0]?.whenUnclassifiedFallback).toBeUndefined();
-    expect(result.blockJson?.reason).not.toContain(
-      "unclassified action in a production context",
-    );
-    // No prefix: the operator's cannot: text is the FIRST thing rendered.
-    expect(result.blockJson?.reason?.startsWith(
-      "You cannot run this critical destructive action against production.",
-    )).toBe(true);
-  });
-
-  it("ux-path (round 3): the fallback prefix names the RESOLVED environment and the policy's OWN threshold, not a hard-coded production/critical", async () => {
-    // Round-2 shipped this prefix with "production" and "critical"
-    // hard-coded, so an unscoped `severity_at_least: high` policy on a
-    // feature branch (environment resolves to `unknown`, threshold is
-    // `high`) emitted two false halves at once. Both are interpolated now.
-    //
-    // Mutation guard: restore either literal in
-    // `unclassifiedFallbackPrefix` (src/runtime/intercept.ts) and the
-    // corresponding assertion below goes red.
-    const uxPolicy: Policy = {
-      ...RISK_BLOCK_POLICY,
-      name: "gate-risk-unscoped-ux-high",
-      ux: {
-        cannot: "You cannot run this action yet.",
-        required: ["operator approval"],
-        run: ["harness approve risk"],
-      },
-    } as Policy;
-    const ledger = makeLedger({ kind: "ok", entries: [] });
-    const result = await intercept({
-      // No resolvers at all, and a feature branch: the environment
-      // resolves to the matchable `unknown`, never `production`.
-      manifest: makeManifest({ policies: [uxPolicy] }),
-      event: BASH_UNKNOWN_EVENT,
-      ledger,
-      builtins: BUILTINS,
-      now: NOW,
-      riskContext: riskCtx("feature/x"),
-    });
-    expect(result.decisions[0]?.whenUnclassifiedFallback).toBe(true);
-    expect(result.decisions[0]?.environment?.name).toBe("unknown");
-    const reason = result.blockJson?.reason ?? "";
-    // The resolved environment, with the correct article.
-    expect(reason).toContain("unclassified action in an unknown context");
-    expect(reason).not.toContain("in a production context");
-    // The policy's OWN declared threshold, and the fallback rung.
-    expect(reason).toContain("(treated as high) satisfied this policy's severity_at_least: high");
-    expect(reason).not.toContain("critical-severity match");
-    // The operator's own text is still appended, unaltered.
-    expect(reason).toContain("You cannot run this action yet.");
-  });
-});
-
-// Task 2929c5b7 — end-to-end AC1/AC2 coverage against the REAL shipped
-// gate-prod-destructive policy shape and the REAL shipped
-// risk.classifiers[] (docs/examples/full-manifest.yaml), not a hand-
-// trimmed local fixture. Loading the real classifier list means a
-// reviewer's mutation probe (delete the `dd` pattern, delete the `cat`
-// floor) exercises the actual shipped config, not a copy that could
-// silently drift from it.
-describe("intercept — task 2929c5b7: gate-prod-destructive unclassified-fallback fix", () => {
-  const REAL_MANIFEST_PATH = path.join(REPO_ROOT, "docs", "examples", "full-manifest.yaml");
-
-  function realClassifiers(): RiskClassifier[] {
-    const raw = fs.readFileSync(REAL_MANIFEST_PATH, "utf8");
-    return parseManifest(parseYaml(raw)).risk.classifiers;
-  }
-
-  // Mirrors the shipped gate-prod-destructive policy's `when:` /
-  // `enforcement:` exactly (docs/examples/full-manifest.yaml,
-  // src/cli/init/templates.ts): severity_at_least critical + production,
-  // hard block.
-  const GATE_PROD_DESTRUCTIVE_CRITICAL: Policy = {
-    name: "gate-prod-destructive",
-    description: "deny critical-severity destructive shell actions against a production target",
-    trigger: { event: "PreToolUse", match: "Bash" },
-    when: {
-      "risk.severity_at_least": "critical",
-      "environment.name": "production",
-    },
-    requires: { ledger_tag: "risk-override:${SESSION_ID}" },
-    hook: "risk-gate",
-    enforcement: "block",
-  } as Policy;
-
-  const bashEvent = (command: string): ToolEvent => ({
-    hook_event_name: "PreToolUse",
-    tool_name: "Bash",
-    tool_input: { command },
-    session_id: "sess-1",
-    cwd: "/tmp/proj",
-  });
-
-  async function runInProdCwd(command: string) {
-    const ledger = makeLedger({ kind: "ok", entries: [] });
-    return intercept({
-      manifest: makeManifest({
-        policies: [GATE_PROD_DESTRUCTIVE_CRITICAL],
-        classifiers: realClassifiers(),
-        resolvers: [PROD_RESOLVER],
-      }),
-      event: bashEvent(command),
-      ledger,
-      builtins: BUILTINS,
-      now: NOW,
-      riskContext: riskCtx("main"),
-    });
-  }
-
-  const ENVELOPE_CTX: EnvelopeContext = {
-    cwd: "/tmp/proj",
-    git: { repo: "proj", branch: "main", sha: "" },
-    user: "agent",
-    host: "host",
-    now: NOW,
-  };
-
-  // AC1: the read-only investigation commands below must NOT be denied by
-  // gate-prod-destructive in a production cwd. This is the false-positive shape
-  // from the 2026-09-01 incident, in which a run of read-only
-  // investigation commands was denied until the cwd was moved out of the
-  // repo. The incident's own command list is recorded in the CHANGELOG
-  // entry for task 2929c5b7; this table is the SUBSET that takes prong (a),
-  // the explicit `low` floor. The incident's `curl`, `sshpass ssh` and
-  // `node -e` take prong (b) instead and are asserted in the next block.
-  //
-  // Each case asserts TWO things, deliberately: (1) `intercept()`
-  // end-to-end does not deny it, AND (2) the Risk Classifier explicitly
-  // recognizes it as `low` severity. (2) is the discriminating half —
-  // without it, deleting the `cat` floor from read-only-bash.ts would
-  // NOT fail (1): a `cat` that falls all the way to fully unclassified
-  // is ALSO not denied by the critical-threshold gate now, since prong
-  // (b) alone (unclassified no longer satisfies severity_at_least:
-  // critical) already covers that case. Asserting the real `low`
-  // classification is what actually exercises prong (a) — the explicit
-  // read-only floor — and fails when it's removed.
-  it.each([
-    ["cat", "cat notes/memory.md"],
-    ["sed -n", "sed -n '1,20p' notes/memory.md"],
-    ["grep", "grep TODO notes/memory.md"],
-  ])("does NOT deny %s in a production cwd, and it is explicitly classified `low`, not merely unclassified", async (_label, command) => {
-    const result = await runInProdCwd(command);
-    expect(result.blockJson).toBeNull();
-
-    const envelope = buildActionEnvelope(
-      { hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: { command } } as ToolEvent,
-      ENVELOPE_CTX,
-    );
-    const risk = classifyRisk(envelope, realClassifiers());
-    expect(risk.classified).toBe(true);
-    expect(risk.severity).toBe("low");
-  });
-
-  // D-011 (fix round 2): `ssh <host> <cmd>` and `node -e`/`--eval` do NOT
-  // get an explicit `low` floor. The local head cannot see the remote
-  // command or the eval'd code, so a `low` floor there would remove Risk
-  // Gate coverage entirely for those shapes (neither `severity_at_least:
-  // critical` nor `severity_at_least: high` fires on a `low` action).
-  // Instead they stay genuinely unclassified and ride prong (b)'s fallback:
-  // not hard-denied by the critical gate, but still approval-gated by the
-  // high-severity gate. Mutation probe A (re-add a `low` floor for ssh):
-  // this test's `classified: false` assertion goes red. Mutation probe B
-  // (restore old when-eval.ts fallback semantics, unclassified satisfies
-  // every severity_at_least): the "not denied by gate-prod-destructive"
-  // assertion below goes red.
-  //
-  // D-013 (fix round 4) puts `curl` in the same category, for a measured
-  // reason rather than an analogy: rounds 2 and 3 each shipped a curl
-  // `low` floor and each leaked (a write-flag denylist that missed `-o`,
-  // then a flag allowlist that still admitted `-w '%output{FILE}'`, which
-  // writes a local file since curl 8.3.0). Deciding a curl invocation is
-  // inert needs every curl flag's write capability across curl versions,
-  // so curl stays unclassified and only its write-CAPABLE spellings are
-  // named, by the destructive floor.
-  it.each([
-    ["ssh <host> <cmd>", 'ssh prod-host "cat /etc/hosts"'],
-    ["node -e", "node -e \"console.log(1+1)\""],
-    ["curl (no -X/-d)", "curl https://api.example.com/status"],
-  ])("%s stays unclassified: NOT denied by gate-prod-destructive (critical), but IS approval-gated by gate-prod-destructive-approval (high) via the fallback", async (_label, command) => {
-    const envelope = buildActionEnvelope(
-      { hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: { command } } as ToolEvent,
-      ENVELOPE_CTX,
-    );
-    const risk = classifyRisk(envelope, realClassifiers());
-    expect(risk.classified).toBe(false);
-    expect(risk.severity).toBeNull();
-
-    const critical = await runInProdCwd(command);
-    expect(critical.blockJson).toBeNull();
-
-    const ledger = makeLedger({ kind: "ok", entries: [] });
-    const approval = await intercept({
-      manifest: makeManifest({
-        policies: [
-          {
-            name: "gate-prod-destructive-approval",
-            description:
-              "require operator approval for high-severity destructive shell actions against a production target",
-            trigger: { event: "PreToolUse", match: "Bash" },
-            when: {
-              "risk.severity_at_least": "high",
-              "environment.name": "production",
-            },
-            requires: { ledger_tag: "risk-approved:${SESSION_ID}" },
-            hook: "risk-gate",
-            enforcement: "require_approval",
-          } as Policy,
-        ],
-        classifiers: realClassifiers(),
-        resolvers: [PROD_RESOLVER],
-      }),
-      event: bashEvent(command),
-      ledger,
-      builtins: BUILTINS,
-      now: NOW,
-      riskContext: riskCtx("main"),
-    });
-    expect(approval.blockJson).not.toBeNull();
-    // Denied via the fallback, not a real pattern match.
-    expect(approval.decisions[0]?.whenUnclassifiedFallback).toBe(true);
-  });
-
-  // Prong (b) itself, directly: a command NO classifier pattern
-  // reasons about at all (genuinely unclassified, not floored low by
-  // any built-in floor either) must NOT be denied by the
-  // critical-threshold gate-prod-destructive — this is the core
-  // when-eval.ts change (unclassified no longer satisfies
-  // severity_at_least: critical on its own). Mutation probe target:
-  // restore the old fallback semantics in when-eval.ts (unclassified
-  // matches EVERY severity_at_least threshold) and this test goes red.
-  it("does NOT deny a genuinely unclassified command via gate-prod-destructive (critical) — prong (b)", async () => {
-    const command = "some-unrecognized-admin-tool --flag";
-    const envelope = buildActionEnvelope(
-      { hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: { command } } as ToolEvent,
-      ENVELOPE_CTX,
-    );
-    // Confirm the premise: genuinely unclassified, not floored.
-    expect(classifyRisk(envelope, realClassifiers()).classified).toBe(false);
-
-    const result = await runInProdCwd(command);
-    expect(result.blockJson).toBeNull();
-  });
-
-  // AC1's negative control: a genuinely destructive command must still
-  // be denied — the floor/fallback change must not weaken this gate.
-  it("STILL denies `rm -rf /x` in a production cwd", async () => {
-    const result = await runInProdCwd("rm -rf /x");
-    expect(result.blockJson).not.toBeNull();
-    expect(result.decisions[0]?.policyName).toBe("gate-prod-destructive");
-    expect(result.decisions[0]?.risk?.severity).toBe("critical");
-  });
-
-  // Anti-bypass coverage, critical tier: these mutating heads must stay
-  // classified `critical` (not just risk-bearing) so the loosened
-  // fallback cannot slip them past gate-prod-destructive's hard block.
-  // Mutation probe target: delete one of these patterns from
-  // docs/examples/full-manifest.yaml's dangerous-shell classifier and
-  // the matching case below goes green->red (denied becomes
-  // not-denied — an unclassified action no longer satisfies
-  // severity_at_least: critical on its own).
-  it.each([
-    ["dd", "dd if=/dev/zero of=/dev/sda"],
-    ["truncate", "truncate -s 0 /var/log/app.log"],
-    ["shred", "shred -u secret.txt"],
-    ["mkfs", "mkfs.ext4 /dev/sdb1"],
-    ["find -delete", "find /var/www -name '*.php' -delete"],
-    ["find -exec rm", "find /var/www -exec rm {} \\;"],
-  ])("STILL denies %s in a production cwd via gate-prod-destructive (critical, explicit classification)", async (_label, command) => {
-    const result = await runInProdCwd(command);
-    expect(result.blockJson).not.toBeNull();
-    expect(result.decisions[0]?.risk?.classified).toBe(true);
-    expect(result.decisions[0]?.risk?.severity).toBe("critical");
-  });
-
-  // Anti-bypass coverage, high tier: these mutating heads are classified
-  // `high`, one rung below the tier above — gate-prod-destructive
-  // (critical) correctly does NOT fire on them (matches AC1's own scope:
-  // it only pins the six read-only heads against the critical
-  // threshold), but they must still be a REAL classification (not
-  // merely risk-bearing via the fallback) so an operator can see and
-  // tighten a specific pattern's severity if a given deployment wants
-  // these hard-blocked too. Verified against the real
-  // gate-prod-destructive-approval shape (severity_at_least: high,
-  // require_approval) — still blocks execution until approved.
-  const GATE_PROD_DESTRUCTIVE_APPROVAL_FOR_TEST: Policy = {
-    name: "gate-prod-destructive-approval",
-    description: "require operator approval for high-severity destructive shell actions against a production target",
-    trigger: { event: "PreToolUse", match: "Bash" },
-    when: {
-      "risk.severity_at_least": "high",
-      "environment.name": "production",
-    },
-    requires: { ledger_tag: "risk-approved:${SESSION_ID}" },
-    hook: "risk-gate",
-    enforcement: "require_approval",
-  } as Policy;
-  it.each([
-    ["git reset --hard", "git reset --hard HEAD~3"],
-    ["git push --force", "git push --force origin main"],
-    ["git clean -f", "git clean -fd"],
-    ["git checkout -- .", "git checkout -- ."],
-    ["git restore .", "git restore ."],
-    ["chmod -R", "chmod -R 777 /var/www"],
-    ["chown -R", "chown -R www-data:www-data /var/www"],
-    ["curl -X POST", "curl -X POST https://api.example.com/deploy"],
-    ["curl -d", "curl -d @payload.json https://api.example.com/deploy"],
-    ["sed -i", "sed -i 's/a/b/' /etc/config"],
-  ])("does NOT hard-deny %s via gate-prod-destructive (correctly high, not critical), but IS a real classification requiring approval", async (_label, command) => {
-    const critical = await runInProdCwd(command);
-    expect(critical.blockJson).toBeNull();
-
-    const ledger = makeLedger({ kind: "ok", entries: [] });
-    const approval = await intercept({
-      manifest: makeManifest({
-        policies: [GATE_PROD_DESTRUCTIVE_APPROVAL_FOR_TEST],
-        classifiers: realClassifiers(),
-        resolvers: [PROD_RESOLVER],
-      }),
-      event: bashEvent(command),
-      ledger,
-      builtins: BUILTINS,
-      now: NOW,
-      riskContext: riskCtx("main"),
-    });
-    expect(approval.blockJson).not.toBeNull();
-    expect(approval.decisions[0]?.risk?.classified).toBe(true);
-    expect(approval.decisions[0]?.risk?.severity).toBe("high");
-    // Not the fallback — a real pattern match.
-    expect(approval.decisions[0]?.whenUnclassifiedFallback).toBeUndefined();
-  });
-
-  // AC2: the envelope for an unclassified deny names the fallback,
-  // rather than reusing gate-prod-destructive's own "critical
-  // destructive action" wording, which is reserved for a genuine
-  // critical-severity classification (see the "intercept — M7
-  // whenUnclassifiedFallback flag" describe block above for the
-  // ux-rendering-layer unit coverage; this is the end-to-end version
-  // against the real shipped severity_at_least: high approval gate,
-  // where an unclassified action can still legitimately deny/require
-  // approval — see when-eval.ts's module header).
-  it("AC2: an unclassified deny via the real gate-prod-destructive-approval policy names the fallback in its envelope", async () => {
-    const GATE_PROD_DESTRUCTIVE_APPROVAL: Policy = {
-      name: "gate-prod-destructive-approval",
-      description: "require operator approval for high-severity destructive shell actions against a production target",
-      trigger: { event: "PreToolUse", match: "Bash" },
-      when: {
-        "risk.severity_at_least": "high",
-        "environment.name": "production",
-      },
-      requires: { ledger_tag: "risk-approved:${SESSION_ID}" },
-      hook: "risk-gate",
-      enforcement: "require_approval",
-      ux: {
-        cannot: "You cannot run this destructive production action yet.",
-        required: ["operator approval of this Risk Gate decision"],
-        run: ["harness approve risk"],
-      },
-    } as Policy;
-    const ledger = makeLedger({ kind: "ok", entries: [] });
-    const result = await intercept({
-      manifest: makeManifest({
-        policies: [GATE_PROD_DESTRUCTIVE_APPROVAL],
-        classifiers: realClassifiers(),
-        resolvers: [PROD_RESOLVER],
-      }),
-      // A head no classifier pattern reasons about at all (not `cat`,
-      // not `dd`) — genuinely unclassified, so the fallback (not a real
-      // classification) is what makes this deny.
-      event: bashEvent("some-unrecognized-admin-tool --flag"),
-      ledger,
-      builtins: BUILTINS,
-      now: NOW,
-      riskContext: riskCtx("main"),
-    });
-    expect(result.decisions[0]?.whenUnclassifiedFallback).toBe(true);
-    expect(result.blockJson?.reason).toContain(
-      "unclassified action in a production context",
-    );
-    // The operator's own cannot: text is still present.
-    expect(result.blockJson?.reason).toContain(
-      "You cannot run this destructive production action yet.",
-    );
   });
 });
 
@@ -2494,13 +2067,10 @@ describe("intercept: empty REPO / BRANCH never renders a blank ledger tag", () =
     expect(result.blockJson?.reason).not.toContain("grounding-mcp");
   });
 
-  it("risk.degraded_fail_posture: fail_open does not relax an empty identifier: deny, zero ledger queries", async () => {
+  it("an empty identifier denies with zero ledger queries", async () => {
     const ledger = makeLedger({ kind: "ok", entries: [factEntry("preflight:other-repo ready:true")] });
     const result = await intercept({
-      manifest: makeManifest({
-        policies: [templatePolicy("preflight-before-investigation")],
-        degradedFailPosture: "fail_open",
-      }),
+      manifest: manifest([templatePolicy("preflight-before-investigation")]),
       event: bashEvent("git status"),
       ledger,
       builtins: EMPTY_REPO,
@@ -2512,7 +2082,7 @@ describe("intercept: empty REPO / BRANCH never renders a blank ledger tag", () =
     expect(result.blockJson?.reason).toContain("cd <repo>");
   });
 
-  it("risk.degraded_fail_posture: fail_open with an empty REPO and an unresolved extract still denies, never warn-degraded", async () => {
+  it("an empty REPO with an unresolved extract denies, never warn-degraded", async () => {
     const base = templatePolicy("preflight-before-investigation");
     const withExtract = {
       ...base,
@@ -2522,7 +2092,7 @@ describe("intercept: empty REPO / BRANCH never renders a blank ledger tag", () =
     } as Policy;
     const ledger = makeLedger({ kind: "ok", entries: [factEntry("preflight:other-repo")] });
     const result = await intercept({
-      manifest: makeManifest({ policies: [withExtract], degradedFailPosture: "fail_open" }),
+      manifest: manifest([withExtract]),
       event: bashEvent("git status"),
       ledger,
       builtins: EMPTY_REPO,

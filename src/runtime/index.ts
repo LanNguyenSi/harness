@@ -11,16 +11,8 @@ export {
   type ForeignTarget,
   type PolicyDecision,
   type PolicyOutcome,
-  type RiskGateContext,
   type ToolEvent,
 } from "./intercept.js";
-export {
-  evaluateWhen,
-  type WhenClauseKey,
-  type WhenClauseResult,
-  type WhenContext,
-  type WhenEvaluation,
-} from "./when-eval.js";
 export {
   recordPolicyDecision,
   recordPolicyDecisionOnSession,
@@ -53,26 +45,6 @@ export {
   type ActionEnvelopeSession,
   type EnvelopeContext,
 } from "./action-envelope.js";
-export {
-  classifyRisk,
-  type RiskConfidence,
-  type RiskProfile,
-} from "./risk-classifier.js";
-export {
-  resolveDeletionTarget,
-  type DeletionTargetVerdict,
-} from "./deletion-target-resolve.js";
-export {
-  resolveKubeContext,
-  type KubeContext,
-  type ResolveKubeContextOptions,
-} from "./kube-context.js";
-export {
-  resolveEnvironment,
-  type EnvironmentConfidence,
-  type EnvironmentResolution,
-  type SignalInputs,
-} from "./environment-resolver.js";
 export {
   addLedgerFact,
   type AddLedgerFactOptions,

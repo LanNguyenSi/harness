@@ -4,7 +4,7 @@
 // A release cut moves CHANGELOG.md's `## [Unreleased]` notes under a new
 // dated heading and leaves `## [Unreleased]` empty. A shipped file that
 // still says "see CHANGELOG [Unreleased]" then points at nothing; four
-// comments (`src/cli/policy/intercept.ts`, `src/runtime/kubectl-target-parse.ts`,
+// comments (`src/cli/policy/intercept.ts`, `src/runtime/kubectl-target-parse.ts` (since removed),
 // `src/cli/doctor/types.ts`, `src/cli/validate/checks.ts`) did exactly this
 // and were re-pointed to the shift-proof `CHANGELOG.md:#X.Y.Z` anchor form
 // (see `rg 'CHANGELOG.md:#' src` for the existing convention this repo

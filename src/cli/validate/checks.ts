@@ -260,7 +260,7 @@ export function checkPolicyGroundingMcp(manifest: Manifest): Diagnostic[] {
       severity: "warning",
       path: "policies",
       message:
-        "evidence-consuming policies declared but grounding-mcp not wired: warn policies degrade non-blocking (warn-degraded), but block/require_approval policies will DENY every matching event (deny-degraded) until the producer is wired; risk.degraded_fail_posture: fail_open restores the availability-first behaviour — see docs/okf/gate-fail-posture-matrix.md",
+        "evidence-consuming policies declared but grounding-mcp not wired: warn policies degrade non-blocking (warn-degraded), but block/require_approval policies will DENY every matching event (deny-degraded) until the producer is wired — see docs/okf/gate-fail-posture-matrix.md",
     },
   ];
 }
@@ -594,8 +594,7 @@ export function checkPolicyRiskWithoutEnvScope(manifest: Manifest): Diagnostic[]
 }
 
 // Safe-deletion-root syntax lint (task d03af8f6, review round 2, LOW (a)).
-// `resolveDeletionTarget` (`src/runtime/deletion-target-resolve.ts`) only
-// ever treats an ABSOLUTE, plain-literal `risk.safe_deletion_roots` entry
+// The (removed) deletion-target resolver only ever treated an ABSOLUTE, plain-literal `risk.safe_deletion_roots` entry
 // as an allowlist member — a relative entry can never match any target
 // (every target the resolver considers absolute-checks against is itself
 // required to be absolute first, so a relative root is silently
@@ -629,7 +628,7 @@ export function checkSafeDeletionRootsSyntax(manifest: Manifest): Diagnostic[] {
         path: `risk.safe_deletion_roots[${i}]`,
         message:
           `risk.safe_deletion_roots entry "${root}" is not an absolute path — ` +
-          `resolveDeletionTarget only ever matches an absolute target against this list, ` +
+          `the deletion-target resolver only ever matched an absolute target against this list, ` +
           `so a relative entry can never allow anything. See docs/risk-gate.md.`,
       });
       return;

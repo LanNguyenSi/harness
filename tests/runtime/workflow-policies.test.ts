@@ -567,7 +567,7 @@ describe("F4 (review round 3): trigger.extract is part of the equivalence key", 
 describe("F7 (review round 3): weakness reasons for when-scoped and operator_only overlaps", () => {
   const shipWorkflow = () => workflow("ship", [branchStep(), reviewStep("required"), mergeStep()]);
 
-  it("reports 'when: (risk/environment-scoped)' for a block policy scoped via when:", () => {
+  it("reports the never-applies reason for a block policy that carries a when: clause", () => {
     const strong = shippedPolicy("review-before-merge");
     const whenScoped: Policy = {
       ...strong,
@@ -583,7 +583,7 @@ describe("F7 (review round 3): weakness reasons for when-scoped and operator_onl
     expect(overlaps).toHaveLength(1);
     expect(overlaps[0]).toMatchObject({
       handPolicyName: "review-before-merge-prod-only",
-      reason: "when: (risk/environment-scoped)",
+      reason: "when: (carries a when: clause, never applies)",
     });
   });
 

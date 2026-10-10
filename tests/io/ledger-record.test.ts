@@ -123,29 +123,42 @@ describe("policy_decision encoding", () => {
     expect(decoded?.requiresEval).toBeUndefined();
   });
 
-  it("M7 round-trip: whenUnclassifiedFallback=true is preserved through payloadFromDecision→encodeLedgerContent→decodeLedgerContent", () => {
-    // Verifies the serialisation path for the audit flag. Mutation guard:
-    // removing the `...(decision.whenUnclassifiedFallback === true && {...})`
-    // spread from payloadFromDecision makes this test red (the field will be
-    // absent after decode, so `decoded?.whenUnclassifiedFallback` is undefined).
-    const unclassifiedDecision: PolicyDecision = {
+  it("decodes a row recorded with the removed risk fields and ignores them", () => {
+    // Rows written by an earlier release carry `risk`, `environment` and
+    // `whenUnclassifiedFallback`. They must still decode; re-encoding a
+    // current decision never writes those fields.
+    const oldContent =
+      "policy_decision:gate-risk-unscoped:deny " +
+      JSON.stringify({
+        name: "gate-risk-unscoped",
+        outcome: "deny",
+        enforcement: "block",
+        reason: "unclassified action",
+        ledgerTag: "risk-override:s1",
+        extractValues: {},
+        risk: { severity: "critical" },
+        environment: { name: "production" },
+        whenUnclassifiedFallback: true,
+        evaluatedAt: "2026-04-30T10:00:00.000Z",
+      });
+    const decoded = decodeLedgerContent(oldContent);
+    expect(decoded?.name).toBe("gate-risk-unscoped");
+    expect(decoded?.outcome).toBe("deny");
+    expect(decoded?.evaluatedAt).toBe("2026-04-30T10:00:00.000Z");
+    // A decision object that still carries the removed fields (for example
+    // one built by an older caller) never has them serialised.
+    const legacyShaped = {
       ...decision,
+      risk: { severity: "critical" },
+      environment: { name: "production" },
       whenUnclassifiedFallback: true,
-    };
-    const payload = payloadFromDecision(unclassifiedDecision);
-    expect(payload.whenUnclassifiedFallback).toBe(true);
-    const decoded = decodeLedgerContent(encodeLedgerContent(payload));
-    expect(decoded?.whenUnclassifiedFallback).toBe(true);
-  });
-
-  it("M7 round-trip: whenUnclassifiedFallback is absent from payload when not set (no false field injected)", () => {
-    // Decisions from policies without a `when:` block must stay byte-identical.
-    // Mutation guard: setting whenUnclassifiedFallback unconditionally (even to
-    // false) in payloadFromDecision would make this test red.
-    const payload = payloadFromDecision(decision);
-    expect(payload.whenUnclassifiedFallback).toBeUndefined();
-    const decoded = decodeLedgerContent(encodeLedgerContent(payload));
-    expect(decoded?.whenUnclassifiedFallback).toBeUndefined();
+    } as PolicyDecision;
+    const written = JSON.parse(
+      encodeLedgerContent(payloadFromDecision(legacyShaped)).replace(/^[^ ]+ /, ""),
+    );
+    expect(written).not.toHaveProperty("risk");
+    expect(written).not.toHaveProperty("environment");
+    expect(written).not.toHaveProperty("whenUnclassifiedFallback");
   });
 });
 
