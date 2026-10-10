@@ -1,11 +1,9 @@
 import { z } from "zod";
-import { EnvironmentsSchema } from "./environments.js";
 import { GroundingSchema } from "./grounding.js";
 import { HooksSchema } from "./hooks.js";
 import { MemorySchema } from "./memory.js";
 import { PoliciesSchema } from "./policies.js";
 import { PolicyPacksSchema } from "./policy-packs.js";
-import { RiskSchema } from "./risk.js";
 import { ToolsSchema } from "./tools.js";
 import { AuditSchema } from "./audit.js";
 import { DoctorSchema } from "./doctor.js";
@@ -27,14 +25,6 @@ export const ManifestSchema = z
     hooks: HooksSchema.default([]),
     policies: PoliciesSchema.default([]),
     policy_packs: PolicyPacksSchema.default([]),
-    // Phase 7 Risk Gate inputs — LIVE since Phase 7 #3/#5:
-    // `risk.classifiers[]` feeds `classifyRisk` (runtime/intercept.ts)
-    // on every PreToolUse once the manifest declares at least one
-    // `when:`-bearing policy (the riskGateActive guard), and
-    // `when.risk.*` clauses consume the result in runtime/when-eval.ts.
-    // See docs/risk-gate.md.
-    risk: RiskSchema.default({}),
-    environments: EnvironmentsSchema.default({}),
     workflows: WorkflowsSchema.default([]),
     review_templates: ReviewTemplatesSchema.default({}),
     audit: AuditSchema.default({}),
@@ -124,8 +114,9 @@ export interface ParsedManifest {
 
 /**
  * Parse a raw manifest, first stripping every removed manifest path and
- * removed pack name (`src/schema/removed-keys.ts`): those warn and are
- * ignored instead of failing the strict parse. Any other unknown key still
+ * removed pack name and dropping every policy that carries a removed field
+ * (`src/schema/removed-keys.ts`): those warn and are ignored instead of
+ * failing the strict parse. Any other unknown key still
  * fails it. A manifest that parses is then scanned for sites that still call
  * a removed command (`findRemovedCommandUses`); those warn too, with the
  * manifest path of each site.
@@ -157,8 +148,6 @@ export * from "./memory.js";
 export * from "./hooks.js";
 export * from "./policies.js";
 export * from "./policy-packs.js";
-export * from "./risk.js";
-export * from "./environments.js";
 export * from "./workflows.js";
 export * from "./audit.js";
 export * from "./doctor.js";
@@ -168,6 +157,7 @@ export * from "./requires.js";
 // but is not part of the package API.
 export {
   REMOVED_MANIFEST_PATHS,
+  REMOVED_POLICY_FIELDS,
   REMOVED_PACK_NAMES,
   REMOVED_MANIFEST_TABLE,
   REMOVED_COMMANDS,
@@ -178,6 +168,7 @@ export {
 } from "./removed-keys.js";
 export type {
   RemovedManifestPath,
+  RemovedPolicyField,
   RemovedPackName,
   RemovedManifestTable,
   ManifestPostureWarning,

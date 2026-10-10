@@ -1316,8 +1316,7 @@ workflows:
     );
     expect(hit).toBeDefined();
     expect(hit?.message).toContain("enforcement: warn");
-    // Variant without when: keeps the "Both policies apply" message (the
-    // hand policy still fires, it is merely weaker than the derived gate).
+    // The hand policy still fires, it is merely weaker than the derived gate.
     expect(hit?.message).toContain("Both policies apply");
     // The derived block gate itself is still there (F1's whole point):
     // no error diagnostic for this workflow, since the gate IS enforced.
@@ -1327,7 +1326,7 @@ workflows:
     expect(errorHit).toBeUndefined();
   });
 
-  it("names the never-applies consequence when the hand policy carries a when: clause (task 6e52c044)", () => {
+  it("drops a hand policy that carries a when: clause at load, so it is no overlap and the derived gate stands alone (task 39c112e0)", () => {
     const whenPolicy = `policies:
   - name: two-reviewers-required
     description: "Block-policy sharing review-before-merge's exact surface + tag, narrowed by a when: clause."
@@ -1351,19 +1350,16 @@ workflows:
       configPath: path.join(home, "harness.yaml"),
       ...NOOP_PROBES,
     });
-    const hit = result.diagnostics.find(
-      (d) =>
-        d.severity === "warning" &&
-        /derives a block gate on/.test(d.message) &&
-        d.message.includes("two-reviewers-required"),
-    );
-    expect(hit).toBeDefined();
-    expect(hit?.message).toContain("carries a when: clause and never applies");
-    expect(hit?.message).toContain(
-      'so the derived block gate ("workflow:ship:review-before-merge") is the only gate on this surface',
-    );
-    expect(hit?.message).toContain("Remove the when: policy or drop its when: clause.");
-    expect(hit?.message).not.toContain("Both policies apply");
+    const dropped = result.diagnostics.find((d) => d.path === "policies[0]");
+    expect(dropped?.severity).toBe("warning");
+    expect(dropped?.message).toContain('policy "two-reviewers-required" dropped whole');
+    // The policy is gone before any overlap check runs, so no overlap is reported.
+    expect(result.diagnostics.find((d) => /derives a block gate on/.test(d.message))).toBeUndefined();
+    expect(result.diagnostics.find((d) => d.severity === "error" && /workflow "ship"/.test(d.message))).toBeUndefined();
+    expect(result.manifest?.policies.map((p) => p.name)).toEqual([
+      "workflow:ship:review-before-merge",
+      "workflow:ship:review-before-merge-bash",
+    ]);
   });
 
   it("no weak-overlap warning when the hand policy is at least as strong (round-1 dedupe case)", () => {

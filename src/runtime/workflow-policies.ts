@@ -242,28 +242,23 @@ function extractKey(policy: Pick<Policy, "trigger">): string | null {
 /**
  * True when a hand-authored policy sharing the derived gate's trigger
  * surface + ledger_tag is strong enough to stand in for it: `enforcement:
- * "block"`, no `when:` clause (a policy carrying one never applies, so it
- * cannot stand in for the derived gate), and not `operator_only:
- * true` (which carries no `requires:`/ledger_tag at all, so it would not
- * normally share a key, but the check is defensive since operator_only
- * would otherwise read as "block" and pass the enforcement check alone).
+ * "block"` and not `operator_only: true` (which carries no
+ * `requires:`/ledger_tag at all, so it would not normally share a key, but
+ * the check is defensive since operator_only would otherwise read as
+ * "block" and pass the enforcement check alone).
  *
  * F1 (review round 2, 99f47307 Slice 1): before this, `triggerSurfaceKey`
  * alone decided dedupe, so a hand-authored `enforcement: "warn"` policy
- * (or a `block` policy that carries a `when:` clause) on the identical
- * surface silently suppressed the derived BLOCK gate: a
+ * on the identical surface silently suppressed the derived BLOCK gate: a
  * `spawn: "required"` workflow step that LOOKED enforced actually
- * degraded to warn-only, or to unenforced (a `when:` policy never applies),
- * with no diagnostic anywhere. A weaker match no longer dedupes: the
- * derived block gate is ALSO produced (a `when:` policy never applies, so
- * the derived gate is then the only one in force), and
+ * degraded to warn-only with no diagnostic anywhere. A weaker match no
+ * longer dedupes: the derived block gate is ALSO produced, and
  * `findWeakGatePolicyOverlaps` surfaces the overlap so validate/doctor
  * can flag it instead of leaving it silent.
  */
 function isAtLeastAsStrongAsDerivedGate(policy: Policy): boolean {
   return (
     policy.enforcement === "block" &&
-    policy.when === undefined &&
     policy.operator_only !== true
   );
 }
@@ -276,7 +271,6 @@ function isAtLeastAsStrongAsDerivedGate(policy: Policy): boolean {
 function weaknessReason(policy: Policy): string | null {
   if (isAtLeastAsStrongAsDerivedGate(policy)) return null;
   if (policy.enforcement !== "block") return `enforcement: ${policy.enforcement}`;
-  if (policy.when !== undefined) return "when: (carries a when: clause, never applies)";
   if (policy.operator_only === true) return "operator_only: true";
   return "weaker than a plain block gate";
 }

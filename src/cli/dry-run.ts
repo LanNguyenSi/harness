@@ -236,17 +236,6 @@ function policyMatchesTool(
   return { matched: true, byModelOnly: false };
 }
 
-// Mirrors the runtime's interim rule: a policy that still carries a `when:`
-// clause never applies, even when its trigger matches (task 3a655f4e).
-function whenNeverAppliesHit(policy: Policy): DryRunPolicyCouldHit {
-  return {
-    name: policy.name,
-    triggerEvent: policy.trigger.event,
-    reason:
-      "carries a when: clause, which never applies (interim rule until the schema drops such policies)",
-  };
-}
-
 function fifthArmMatches(policy: Policy, model: ShellModelView | undefined): boolean {
   if (model === undefined || !usesPerRepoBuiltins(policy)) return false;
   return attributeTriggerModelCommands(policy, model).length > 0;
@@ -437,22 +426,12 @@ export function dryRun(prompt: string, opts: DryRunOptions = {}): DryRunResult {
   for (const policy of manifest.policies) {
     if (PROMPT_EVENTS.has(policy.trigger.event)) {
       if (policyMatchesPrompt(policy, prompt)) {
-        if (policy.when !== undefined) {
-          couldMatch.push(whenNeverAppliesHit(policy));
-        } else {
-          matching.push(policyHit(policy, ctx, builtins, attribution));
-        }
+        matching.push(policyHit(policy, ctx, builtins, attribution));
       }
       continue;
     }
     // PreToolUse and friends.
     if (tool === null) {
-      // A when: policy never applies, with or without --tool: say so
-      // instead of implying that --tool could make it match.
-      if (policy.when !== undefined) {
-        couldMatch.push(whenNeverAppliesHit(policy));
-        continue;
-      }
       couldMatch.push({
         name: policy.name,
         triggerEvent: policy.trigger.event,
@@ -461,9 +440,7 @@ export function dryRun(prompt: string, opts: DryRunOptions = {}): DryRunResult {
       continue;
     }
     const verdict = policyMatchesTool(policy, tool, toolArgs, shellModel);
-    if (verdict.matched && policy.when !== undefined) {
-      couldMatch.push(whenNeverAppliesHit(policy));
-    } else if (verdict.matched) {
+    if (verdict.matched) {
       matching.push(policyHit(policy, ctx, builtins, attribution, verdict.byModelOnly));
     } else {
       couldMatch.push({

@@ -24,12 +24,11 @@
 // still fell through to `"default"`. `resolveReadSessionId` adds a
 // transcript-discovery tier: when no explicit id and no env, it reads
 // the active session id off the newest Claude Code transcript JSONL.
-// That is the programmatic form of the heuristic `harness approve`'s
-// own help text recommends to humans.
+// That is the programmatic form of the transcript heuristic operators were
+// once told to use by hand.
 //
 // Both resolvers also accept `$CLAUDE_CODE_SESSION_ID` as a higher-priority
-// env tier than the legacy `$CLAUDE_SESSION_ID`, mirroring the
-// `harness approve risk` verb (`src/cli/approve/risk.ts`).
+// env tier than the legacy `$CLAUDE_SESSION_ID`.
 
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -158,14 +157,17 @@ export function resolveReadSessionId(
 }
 
 // ---------------------------------------------------------------------------
-// Session-id resolver for `harness approve risk`.
+// Session-id resolver for an operator approval verb.
 // ---------------------------------------------------------------------------
 //
+// No verb calls it since the Risk Gate approval verb was removed; it stays with
+// the pending-approval staging it reads until that staging goes.
+//
 // The caller keeps its own error-throw block because the error message is
-// intentionally verb-specific (it names the gate hook, the approve
-// subcommand, and the recovery steps that are relevant to that verb).
+// intentionally verb-specific (it names the gate hook, the verb, and the
+// recovery steps that are relevant to that verb).
 
-/** Session-id source for `harness approve risk`. */
+/** Session-id source for an operator approval verb. */
 export type ApprovalSessionSource =
   | "flag"
   | "env-claude-code"
@@ -192,7 +194,7 @@ export interface ResolveApprovalSessionIdResult {
    * The resolved session id, or an empty string when no tier matched.
    * Callers MUST check for the empty string and throw a verb-specific
    * error. The empty-string path is intentional: it lets callers produce
-   * messages that name their own gate hook, approve subcommand, and
+   * messages that name their own gate hook, verb, and
    * recovery steps without the resolver needing to know about them.
    */
   sessionId: string;
@@ -204,7 +206,7 @@ export interface ResolveApprovalSessionIdResult {
 }
 
 /**
- * Session-id resolver for `harness approve risk`.
+ * Session-id resolver for an operator approval verb.
  *
  * Precedence:
  *   1. explicit --session flag

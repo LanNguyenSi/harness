@@ -80,6 +80,19 @@ describe("REMOVED_COMMANDS table (task f3f15290)", () => {
     expect(invokesRemovedCommand("harness explain")).toBeUndefined();
     expect(invokesRemovedCommand("harness explain gate-prod-destructive --trace")).toBeUndefined();
   });
+
+  it("lists harness approve risk as one row, matched with its flags, and nothing else under approve (task 39c112e0)", () => {
+    const rows = REMOVED_COMMANDS.filter((c) => c.command.startsWith("harness approve"));
+    expect(rows.map((r) => r.command)).toEqual(["harness approve understanding", "harness approve risk"]);
+    const risk = REMOVED_COMMANDS.find((c) => c.command === "harness approve risk");
+    expect(risk?.removedIn).toBe("1.0.0");
+    expect(risk?.reason.length).toBeGreaterThan(0);
+    expect(invokesRemovedCommand("harness approve risk")).toBe(risk);
+    expect(invokesRemovedCommand("harness approve risk --scope deletion")).toBe(risk);
+    expect(invokesRemovedCommand("harness approve risk --force 'reason'")).toBe(risk);
+    expect(invokesRemovedCommand("harness approve")).toBeUndefined();
+    expect(invokesRemovedCommand("harness approve branch-protection")).toBeUndefined();
+  });
 });
 
 describe("invokesRemovedCommand", () => {

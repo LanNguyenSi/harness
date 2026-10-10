@@ -1,9 +1,7 @@
 import { z } from "zod";
-import { MatchableEnvironmentSchema } from "./environments.js";
 import { ExtractMapSchema, InputMatchMapSchema } from "./extract.js";
 import { HookEventSchema } from "./hooks.js";
 import { RequiresSchema, isBuiltinVariable, referencedVariables } from "./requires.js";
-import { RiskCategorySchema, RiskSeveritySchema } from "./risk.js";
 
 // `trigger:`: the WHICH-tool-calls filter. Every declared field is
 // ANDed: `match` on the tool name, `path_match` on the edited file path,
@@ -114,73 +112,6 @@ export const PolicyUxSchema = z
   })
   .strict();
 
-// `when:` — the risk/environment-aware match layer.
-//
-// STATUS: live as of Phase 7 #5. `harness policy intercept` ANDs a
-// declared `when:` onto the policy's `trigger:` match, evaluating it
-// against the Action Envelope enriched by the Risk Classifier (#3) and
-// Context Resolver (#4). A policy with no `when:` matches on `trigger:`
-// alone, exactly as in Phase 4. See src/runtime/when-eval.ts for the
-// evaluator and docs/risk-gate.md for the clause semantics.
-//
-// Each clause is optional and keyed by the envelope path it tests:
-//   risk.severity_at_least — envelope risk severity at or above this
-//                            rung of the ordered scale.
-//   risk.category_in       — envelope risk carries any of these
-//                            categories.
-//   environment.name       — resolved environment equals this name
-//                            (`unknown` is matchable: unknown is not
-//                            safe).
-//   action.reversible      — envelope action reversibility flag.
-//   action.deletion_target_unresolvable — a deletion-verb command (`rm
-//                            -r*`/`-f*`, `find ... -delete`, `git clean
-//                            -f*`) whose target(s) could not be
-//                            statically proven inside a declared
-//                            `risk.safe_deletion_roots` entry. UNLIKE the
-//                            four clauses above, this one is NEVER
-//                            subject to the "unknown is not safe"
-//                            fail-close: an action the deletion resolver
-//                            does not recognize as a deletion verb at
-//                            all does not satisfy this clause, so a
-//                            policy gated purely on it does not need an
-//                            `environment.name` scope to avoid firing on
-//                            every unrelated unclassified command — see
-//                            src/runtime/when-eval.ts and
-//                            src/runtime/deletion-target-resolve.ts.
-//                            ONLY `true` is a meaningful value (task
-//                            d03af8f6, review round 2): a resolver
-//                            verdict is either `unresolvable: true` (gate
-//                            it) or the action never reaches this clause
-//                            at all (a resolved-safe target or a
-//                            non-deletion command both simply fail to
-//                            match `true`) — `false` would match every
-//                            non-deletion-verb command in the manifest
-//                            (verdict `null` -> "actual" false -> equals
-//                            declared `false`), which is never the
-//                            intent of a `when:` clause naming this key.
-//                            The schema accepts only the literal `true`;
-//                            `false` is a validate-time error.
-// An empty `when: {}` is rejected: it would be a silent no-op.
-export const PolicyWhenSchema = z
-  .object({
-    "risk.severity_at_least": RiskSeveritySchema.optional(),
-    "risk.category_in": z.array(RiskCategorySchema).min(1).optional(),
-    "environment.name": MatchableEnvironmentSchema.optional(),
-    "action.reversible": z.boolean().optional(),
-    "action.deletion_target_unresolvable": z.literal(true).optional(),
-  })
-  .strict()
-  .superRefine((when, ctx) => {
-    if (Object.keys(when).length === 0) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: [],
-        message:
-          "policy.when must declare at least one clause; an empty when: {} is a silent no-op",
-      });
-    }
-  });
-
 // `operator_only: true` — the unconditional operator-only deny (task
 // 2cc73f55). Every other `block` policy names `requires.ledger_tag`
 // evidence, but the only satisfaction primitives the engine has —
@@ -201,9 +132,8 @@ export const PolicyWhenSchema = z
 // nothing an in-session actor (ledger write, marker file, env flag) can
 // ever produce that flips the outcome to allow. Restricted to
 // `enforcement: block`: `warn` and `require_approval` already have
-// their own always-evaluated evidence paths, and require_approval's
-// canonical unblock is the `harness approve risk` operator verb, not a
-// requires-satisfaction story this marker would replace.
+// their own always-evaluated evidence paths, which this marker would not
+// replace.
 //
 // Mutually exclusive with `requires:` AND `producers:` by construction
 // (both enforced below): declaring `requires:` alongside it would be
@@ -229,7 +159,6 @@ export const PolicySchema = z
     operator_only: z.boolean().optional(),
     producers: z.array(ProducerSchema).min(1).optional(),
     ux: PolicyUxSchema.optional(),
-    when: PolicyWhenSchema.optional(),
   })
   .strict()
   .superRefine((policy, ctx) => {
@@ -311,4 +240,3 @@ export const PoliciesSchema = z.array(PolicySchema).superRefine((policies, ctx) 
 export type Policy = z.infer<typeof PolicySchema>;
 export type Producer = z.infer<typeof ProducerSchema>;
 export type PolicyUx = z.infer<typeof PolicyUxSchema>;
-export type PolicyWhen = z.infer<typeof PolicyWhenSchema>;

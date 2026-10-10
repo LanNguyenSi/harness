@@ -15,6 +15,7 @@ import {
   ManifestParseError,
   REMOVED_MANIFEST_PATHS,
   REMOVED_PACK_NAMES,
+  REMOVED_POLICY_FIELDS,
   parseManifest,
   parseManifestWithWarnings,
   stripRemovedManifestEntries,
@@ -96,10 +97,20 @@ describe("the removed-entry table", () => {
       "toolchain_parity",
       "stale_base_check",
       "permission_profiles",
+      "risk",
+      "environments",
     ]);
     for (const p of REMOVED_MANIFEST_PATHS) {
       expect(p.removedIn).toMatch(/^\d+\.\d+\.\d+$/);
       expect(p.reason.length).toBeGreaterThan(0);
+    }
+  });
+
+  it("lists the removed per-policy field when:, with a version and a reason", () => {
+    expect(REMOVED_POLICY_FIELDS.map((f) => f.field)).toEqual(["when"]);
+    for (const f of REMOVED_POLICY_FIELDS) {
+      expect(f.removedIn).toMatch(/^\d+\.\d+\.\d+$/);
+      expect(f.reason.length).toBeGreaterThan(0);
     }
   });
 
@@ -154,6 +165,7 @@ describe("stripRemovedManifestEntries", () => {
     const before = JSON.stringify(raw);
     const r = stripRemovedManifestEntries(raw, {
       paths: [],
+      policyFields: [],
       packs: [{ name: "old-pack", removedIn: "9.9.9", reason: "gone for the test" }],
     });
     expect(JSON.stringify(raw)).toBe(before);
@@ -257,5 +269,150 @@ describe("harness doctor", () => {
     // Its ux.run still names the removed `harness session-start branch-check`:
     // reported as drift from the shipped default, which `pack reseed` fixes.
     expect(report.policyPacks.uxDrift.map((d) => d.name)).toContain("branch-protection");
+  });
+});
+
+// Removed Risk Gate keys (task 39c112e0): top-level `risk` and `environments`
+// are stripped with a warning, and a policy that carries `when:` is dropped
+// whole, never stripped to its trigger (that would widen a scoped gate).
+describe("removed Risk Gate keys", () => {
+  const HOOK = { name: "h", event: "PreToolUse", command: "/usr/bin/true", blocking: false };
+  const policy = (name: string, extra: Record<string, unknown> = {}) => ({
+    name,
+    description: `policy ${name}`,
+    trigger: { event: "PreToolUse", match: "Bash" },
+    requires: { ledger_tag: `ok-${name}:\${SESSION_ID}` },
+    hook: "h",
+    enforcement: "block",
+    ...extra,
+  });
+  const WHEN = { "risk.severity_at_least": "high", "environment.name": "production" };
+  const policiesOf = (raw: unknown) => (raw as { policies: Array<{ name: string }> }).policies;
+
+  it("strips risk and environments with one warning each, and leaves the input untouched", () => {
+    const raw = {
+      version: 1,
+      risk: { classifiers: [{ name: "x" }], safe_deletion_roots: ["/tmp"] },
+      environments: { resolvers: [] },
+    };
+    const before = JSON.stringify(raw);
+    const r = stripRemovedManifestEntries(raw);
+    expect(JSON.stringify(raw)).toBe(before);
+    expect(r.raw).toEqual({ version: 1 });
+    expect(r.warnings.map((w) => w.path)).toEqual(["risk", "environments"]);
+    for (const w of r.warnings) expect(w.message).toMatch(/^removed in 1\.0\.0 and ignored \(.+\); delete it from the manifest$/);
+  });
+
+  it("says fail_open is no longer honoured when the stripped risk block carried it", () => {
+    const r = stripRemovedManifestEntries({ version: 1, risk: { degraded_fail_posture: "fail_open" } });
+    expect(r.warnings).toHaveLength(1);
+    expect(r.warnings[0]!.path).toBe("risk");
+    expect(r.warnings[0]!.message).toContain("risk.degraded_fail_posture: fail_open is no longer honoured");
+    expect(r.warnings[0]!.message).toContain("block and require_approval policies fail closed");
+  });
+
+  it.each([
+    ["preserve_enforcement", { degraded_fail_posture: "preserve_enforcement" }],
+    ["no posture key", { classifiers: [] }],
+    ["a non-object value", "fail_open"],
+  ])("adds no fail_open sentence for a risk block with %s", (_name, risk) => {
+    const r = stripRemovedManifestEntries({ version: 1, risk });
+    expect(r.warnings).toHaveLength(1);
+    expect(r.warnings[0]!.message).not.toContain("fail_open");
+  });
+
+  it("drops a policy carrying when: whole, with one named warning at its original index", () => {
+    const raw = {
+      version: 1,
+      hooks: [HOOK],
+      policies: [policy("keep-a"), policy("scoped", { when: WHEN }), policy("keep-b"), policy("scoped-2", { when: { "action.reversible": false } })],
+    };
+    const before = JSON.stringify(raw);
+    const r = stripRemovedManifestEntries(raw);
+    expect(JSON.stringify(raw)).toBe(before);
+    expect(policiesOf(r.raw).map((p) => p.name)).toEqual(["keep-a", "keep-b"]);
+    expect(r.warnings.map((w) => w.path)).toEqual(["policies[1]", "policies[3]"]);
+    expect(r.warnings[0]!.message).toBe(
+      'policy "scoped" dropped whole: when: clauses are removed in 1.0.0 (the Risk Gate is removed, and keeping only the trigger would widen the policy\'s scope); delete the policy from the manifest, or re-create it without when:',
+    );
+    expect(r.warnings[1]!.message).toContain('policy "scoped-2" dropped whole');
+  });
+
+  it("never strips only the when key: no trigger-only copy of the policy survives, and the dropped policy leaves no gate", () => {
+    const { manifest, warnings } = parseManifestWithWarnings({
+      version: 1,
+      hooks: [HOOK],
+      policies: [policy("gate-prod-destructive", { when: WHEN })],
+    });
+    expect(manifest.policies).toEqual([]);
+    expect(warnings.map((w) => w.path)).toEqual(["policies[0]"]);
+  });
+
+  it.each([
+    ["an empty when: {}", {}],
+    ["a null when", null],
+  ])("drops a policy with %s as well (the key alone decides)", (_name, when) => {
+    const r = stripRemovedManifestEntries({ version: 1, policies: [policy("p", { when })] });
+    expect(policiesOf(r.raw)).toEqual([]);
+    expect(r.warnings.map((w) => w.path)).toEqual(["policies[0]"]);
+  });
+
+  it("keeps a policy that has no when: key, and an entry that is not an object for the strict parse to reject", () => {
+    const raw = { version: 1, policies: [policy("plain")] };
+    const r = stripRemovedManifestEntries(raw);
+    expect(r.raw).toBe(raw);
+    expect(r.warnings).toEqual([]);
+    expect(() => parseManifestWithWarnings({ version: 1, policies: [5] })).toThrow(ManifestParseError);
+  });
+
+  it("a manifest carrying every removed Risk Gate key loads with one warning each and the live policies intact", () => {
+    const { manifest, warnings } = parseManifestWithWarnings({
+      version: 1,
+      hooks: [HOOK],
+      risk: { degraded_fail_posture: "fail_open", classifiers: [] },
+      environments: { resolvers: [] },
+      policies: [policy("scoped", { when: WHEN }), policy("plain", { enforcement: "warn" })],
+    });
+    expect(manifest.policies.map((p) => p.name)).toEqual(["plain"]);
+    expect(manifest).not.toHaveProperty("risk");
+    expect(manifest).not.toHaveProperty("environments");
+    expect(warnings.map((w) => w.path)).toEqual(["risk", "environments", "policies[0]"]);
+  });
+
+  it("a misspelled risk-like key that was never valid still fails the parse", () => {
+    expect(() => parseManifestWithWarnings({ version: 1, risks: {} })).toThrow(ManifestParseError);
+    expect(() => parseManifestWithWarnings({ version: 1, policies: [policy("p", { whenn: WHEN })] })).toThrow(ManifestParseError);
+  });
+
+  it("harness validate warns on each, and --strict fails on each", () => {
+    const file = writeManifest(
+      [
+        "version: 1",
+        "hooks:",
+        "  - { name: h, event: PreToolUse, command: /usr/bin/true, blocking: false }",
+        "risk:",
+        "  degraded_fail_posture: fail_open",
+        "environments:",
+        "  resolvers: []",
+        "policies:",
+        "  - name: scoped",
+        "    description: scoped",
+        "    trigger: { event: PreToolUse, match: Bash }",
+        "    requires: { ledger_tag: 'ok:${SESSION_ID}' }",
+        "    hook: h",
+        "    enforcement: block",
+        "    when: { environment.name: production }",
+        "",
+      ].join("\n"),
+    );
+    const paths = ["risk", "environments", "policies[0]"];
+    const lenient = validate({ configPath: file, ...NOOP_PROBES });
+    expect(lenient.manifest).not.toBeNull();
+    const warn = lenient.diagnostics.filter((d) => paths.includes(d.path));
+    expect(warn.map((d) => [d.path, d.severity])).toEqual(paths.map((p) => [p, "warning"]));
+    const strict = validate({ configPath: file, strict: true, ...NOOP_PROBES });
+    const err = strict.diagnostics.filter((d) => paths.includes(d.path));
+    expect(err.map((d) => [d.path, d.severity])).toEqual(paths.map((p) => [p, "error"]));
+    expect(formatReport(lenient)).toContain('policy "scoped" dropped whole');
   });
 });

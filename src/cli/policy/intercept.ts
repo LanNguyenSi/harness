@@ -898,15 +898,15 @@ export async function runInterceptCli(
     ledger.dispose?.();
   }
 
-  // Stage the session id for a later arg-less `harness approve risk`
+  // Stage the session id for a later arg-less operator approval
   // whenever the FIRST blocking decision is `require_approval`. Mirrors
   // what the Understanding Gate's pre-tool-use hook used to do (removed
   // in task 7890cd34):
   // the producer side knows the live session id (it just received it on
-  // the hook event), but `harness approve risk` runs from the operator's
-  // `!`-shell where `$CLAUDE_SESSION_ID` is unset, so it has to read the
+  // the hook event), but an approval run from the operator's
+  // `!`-shell has `$CLAUDE_SESSION_ID` unset, so it has to read the
   // marker. `deny` and `deny-degraded` decisions are deliberately not
-  // staged: `harness approve risk` cannot unblock either (a deny is a
+  // staged: an approval cannot unblock either (a deny is a
   // real verdict, a deny-degraded means the evidence source is
   // unreadable, so no approval tag could even be read), and writing a
   // marker the verb cannot act on would just lie about the
@@ -931,7 +931,7 @@ export async function runInterceptCli(
     eventSessionId.length > 0 &&
     firstBlocking?.outcome === "require_approval" &&
     // An empty-identifier decision never reads the ledger, so no approval
-    // tag could unblock it: staging a marker `harness approve risk` cannot
+    // tag could unblock it: staging a marker an approval cannot
     // act on would misstate the recoverability of the block.
     firstBlocking.emptyIdentifier === undefined
   ) {

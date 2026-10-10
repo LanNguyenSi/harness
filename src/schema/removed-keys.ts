@@ -12,6 +12,13 @@
 // apply` print them, `harness validate --strict` fails on them). A key that was
 // never valid is not in the table and still fails the parse.
 //
+// A removed per-policy field is different: `policies[].when` scoped a gate to a
+// narrower set of tool calls than its `trigger` matches. Stripping only that
+// key would widen the gate to every call the trigger matches (a `block` on
+// `match: "Bash"` would then block every Bash call and lock the session), so
+// a policy entry that carries a removed field is dropped WHOLE, with one
+// warning per dropped policy (REMOVED_POLICY_FIELDS below).
+//
 // Removed CLI commands (REMOVED_COMMANDS below) are not stripped: a hook or
 // policy that still calls one parses fine, so `findRemovedCommandUses` reports
 // each such site through the same warning channel.
@@ -21,6 +28,24 @@ export interface RemovedManifestPath {
   /** Dotted path from the manifest root, e.g. `grounding.policies_source`. */
   path: string;
   /** The release that removed it. */
+  removedIn: string;
+  /** One line on why it went. */
+  reason: string;
+  /**
+   * Extra sentence for the warning, derived from the stripped value (for
+   * example a sub-setting whose removal changes behaviour). Return undefined
+   * when the value needs no extra sentence.
+   */
+  note?: (stripped: unknown) => string | undefined;
+}
+
+/**
+ * A per-policy field a release removed. A `policies[]` entry carrying it is
+ * dropped whole at load, never stripped to the remaining fields.
+ */
+export interface RemovedPolicyField {
+  /** The key on a `policies[]` entry, e.g. `when`. */
+  field: string;
   removedIn: string;
   /** One line on why it went. */
   reason: string;
@@ -35,6 +60,7 @@ export interface RemovedPackName {
 
 export interface RemovedManifestTable {
   paths: readonly RemovedManifestPath[];
+  policyFields: readonly RemovedPolicyField[];
   packs: readonly RemovedPackName[];
 }
 
@@ -69,6 +95,28 @@ export const REMOVED_MANIFEST_PATHS: readonly RemovedManifestPath[] = [
     removedIn: "1.0.0",
     reason: "only the removed understanding-gate pack consumed permission profiles",
   },
+  {
+    path: "risk",
+    removedIn: "1.0.0",
+    reason: "the Risk Gate is removed, so its classifier configuration has no consumer",
+    note: (stripped) =>
+      isPlainObject(stripped) && stripped["degraded_fail_posture"] === "fail_open"
+        ? "risk.degraded_fail_posture: fail_open is no longer honoured: block and require_approval policies fail closed when their evidence is unreadable"
+        : undefined,
+  },
+  {
+    path: "environments",
+    removedIn: "1.0.0",
+    reason: "the Risk Gate is removed, so environment resolution has no consumer",
+  },
+];
+
+export const REMOVED_POLICY_FIELDS: readonly RemovedPolicyField[] = [
+  {
+    field: "when",
+    removedIn: "1.0.0",
+    reason: "the Risk Gate is removed, and keeping only the trigger would widen the policy's scope",
+  },
 ];
 
 export const REMOVED_PACK_NAMES: readonly RemovedPackName[] = [
@@ -91,6 +139,7 @@ export const REMOVED_PACK_NAMES: readonly RemovedPackName[] = [
 
 export const REMOVED_MANIFEST_TABLE: RemovedManifestTable = {
   paths: REMOVED_MANIFEST_PATHS,
+  policyFields: REMOVED_POLICY_FIELDS,
   packs: REMOVED_PACK_NAMES,
 };
 
@@ -130,9 +179,20 @@ function withoutPath(node: unknown, segments: readonly string[]): { node: unknow
   return { node: { ...node, [head]: inner.node }, removed: true };
 }
 
+/** The value at `segments` under `node`, or undefined (own properties only). */
+function valueAt(node: unknown, segments: readonly string[]): unknown {
+  let cur: unknown = node;
+  for (const seg of segments) {
+    if (!isPlainObject(cur) || !Object.prototype.hasOwnProperty.call(cur, seg)) return undefined;
+    cur = cur[seg];
+  }
+  return cur;
+}
+
 /**
- * Strip every removed manifest path and every removed pack entry from a raw
- * (merged, not yet parsed) manifest. Pure: `raw` is not modified.
+ * Strip every removed manifest path, drop every policy that carries a removed
+ * policy field, and drop every removed pack entry from a raw (merged, not yet
+ * parsed) manifest. Pure: `raw` is not modified.
  */
 export function stripRemovedManifestEntries(
   raw: unknown,
@@ -141,14 +201,38 @@ export function stripRemovedManifestEntries(
   const warnings: ManifestPostureWarning[] = [];
   let current = raw;
   for (const entry of table.paths) {
-    const r = withoutPath(current, entry.path.split("."));
+    const segments = entry.path.split(".");
+    const stripped = valueAt(current, segments);
+    const r = withoutPath(current, segments);
     if (r.removed) {
       current = r.node;
+      const note = entry.note?.(stripped);
       warnings.push({
         path: entry.path,
-        message: `removed in ${entry.removedIn} and ignored (${entry.reason}); delete it from the manifest`,
+        message:
+          `removed in ${entry.removedIn} and ignored (${entry.reason}); delete it from the manifest` +
+          (note !== undefined ? `. ${note}` : ""),
       });
     }
+  }
+  if (isPlainObject(current) && Array.isArray(current["policies"]) && table.policyFields.length > 0) {
+    const policies = current["policies"] as unknown[];
+    const kept: unknown[] = [];
+    policies.forEach((policy, i) => {
+      const removed = isPlainObject(policy)
+        ? table.policyFields.find((f) => Object.prototype.hasOwnProperty.call(policy, f.field))
+        : undefined;
+      if (removed === undefined) {
+        kept.push(policy);
+        return;
+      }
+      const name = stringAt(policy, "name");
+      warnings.push({
+        path: `policies[${i}]`,
+        message: `${name !== undefined ? `policy "${name}"` : "policy"} dropped whole: ${removed.field}: clauses are removed in ${removed.removedIn} (${removed.reason}); delete the policy from the manifest, or re-create it without ${removed.field}:`,
+      });
+    });
+    if (kept.length !== policies.length) current = { ...current, policies: kept };
   }
   if (isPlainObject(current) && Array.isArray(current["policy_packs"]) && table.packs.length > 0) {
     const packs = current["policy_packs"] as unknown[];
@@ -205,6 +289,7 @@ export const REMOVED_COMMANDS: readonly RemovedCommand[] = [
   { command: "harness explain-action", removedIn: "1.0.0", reason: "the Risk Gate debug verbs are removed" },
   { command: "harness test-risk", removedIn: "1.0.0", reason: "the Risk Gate debug verbs are removed" },
   { command: "harness resolve-env", removedIn: "1.0.0", reason: "the Risk Gate debug verbs are removed" },
+  { command: "harness approve risk", removedIn: "1.0.0", reason: "the Risk Gate approval verb is removed" },
   { command: "harness explain-policy", removedIn: "1.0.0", reason: "the Risk Gate debug verbs are removed" },
 ];
 

@@ -375,14 +375,6 @@ policy_packs:
           - a checkout of a non-protected branch (current `${BRANCH}` is protected)
         run:
           - git checkout -b feat/<your-task>
-risk:
-  classifiers: []
-  degraded_fail_posture: preserve_enforcement
-  safe_deletion_roots:
-    - /tmp
-    - /private/tmp
-environments:
-  resolvers: []
 workflows:
   - name: feature-pr
     when:

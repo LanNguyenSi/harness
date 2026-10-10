@@ -115,7 +115,7 @@ tools:
   });
 });
 
-describe("doctor — no Risk Gate section (task 6e52c044)", () => {
+describe("doctor — no Risk Gate section, removed keys reported as warnings (tasks 6e52c044, 39c112e0)", () => {
   it("reports no riskGate field and no Risk Gate text for a manifest that still carries risk, environments and a when: policy", async () => {
     const home = makeFixture({
       "harness.yaml": `version: 1
@@ -148,10 +148,17 @@ ${SILENCE_DRIFT}`,
       npmBinExec: STUB_NPM_BIN_EXEC_UNKNOWN,
     });
     const text = format(report);
-    // The manifest loaded: the policy is listed, so the absence below is real.
-    expect(text).toContain("scoped-gate");
+    // The manifest loaded and its three removed Risk Gate sites are reported
+    // as posture warnings: risk and environments stripped, the when: policy
+    // dropped whole (so it is not listed under Policies).
+    expect(report.manifest.warnings.map((w) => w.split(":")[0])).toEqual(["risk", "environments", "policies[0]"]);
+    expect(text).toContain('policy "scoped-gate" dropped whole');
+    expect(report.policies).toEqual([]);
     expect(report).not.toHaveProperty("riskGate");
-    expect(text).not.toMatch(/Risk Gate/i);
+    // Only the posture warnings may name the Risk Gate (as the reason a key
+    // is removed); no section or other line does.
+    const otherLines = text.split("\n").filter((l) => !/removed in \d/.test(l));
+    expect(otherLines.join("\n")).not.toMatch(/Risk Gate/i);
   });
 });
 
