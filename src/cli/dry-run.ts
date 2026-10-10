@@ -447,6 +447,12 @@ export function dryRun(prompt: string, opts: DryRunOptions = {}): DryRunResult {
     }
     // PreToolUse and friends.
     if (tool === null) {
+      // A when: policy never applies, with or without --tool: say so
+      // instead of implying that --tool could make it match.
+      if (policy.when !== undefined) {
+        couldMatch.push(whenNeverAppliesHit(policy));
+        continue;
+      }
       couldMatch.push({
         name: policy.name,
         triggerEvent: policy.trigger.event,

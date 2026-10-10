@@ -77,18 +77,28 @@ function sink(): NodeJS.WritableStream {
 }
 
 async function interceptNames(home: string, command: string, project?: string): Promise<string[]> {
+  return interceptEventNames(
+    home,
+    {
+      hook_event_name: "PreToolUse",
+      tool_name: "Bash",
+      tool_input: { command },
+      session_id: "sess-parity",
+      cwd: os.tmpdir(),
+    },
+    project,
+  );
+}
+
+async function interceptEventNames(
+  home: string,
+  event: Record<string, unknown>,
+  project?: string,
+): Promise<string[]> {
   const result = await runInterceptCli({
     homeDir: home,
     ...(project !== undefined ? { project } : {}),
-    stdin: Readable.from([
-      JSON.stringify({
-        hook_event_name: "PreToolUse",
-        tool_name: "Bash",
-        tool_input: { command },
-        session_id: "sess-parity",
-        cwd: os.tmpdir(),
-      }),
-    ]),
+    stdin: Readable.from([JSON.stringify(event)]),
     stdout: sink(),
     stderr: sink(),
     ledger: emptyLedger,
@@ -193,4 +203,129 @@ describe("dry-run: a policy carrying when: never appears under matchingPolicies"
       }
     });
   }
+});
+
+describe("dry-run and policy intercept agree that a when: policy never applies, whatever its shape", () => {
+  // The same policy shapes the runtime never-applies tables cover (the
+  // matching code treats each one differently before the when: check), plus
+  // a block-tier prompt-event policy. Each case runs its twin without when:
+  // as a control: dry-run lists the twin as matching and policy intercept
+  // decides it, so the event does reach the policy.
+  const promptEvent = (prompt: string) => ({
+    hook_event_name: "UserPromptSubmit",
+    prompt,
+    session_id: "sess-parity",
+    cwd: os.tmpdir(),
+  });
+  const bashToolEvent = (command: string) => ({
+    hook_event_name: "PreToolUse",
+    tool_name: "Bash",
+    tool_input: { command },
+    session_id: "sess-parity",
+    cwd: os.tmpdir(),
+  });
+
+  type Case = {
+    label: string;
+    policy: Record<string, unknown>;
+    // Bash command for a tool case; prompt text for a prompt-event case.
+    command?: string;
+    prompt?: string;
+  };
+  const cases: Case[] = [
+    { label: "enforcement block", policy: bashPolicy("p", { enforcement: "block" }), command: "terraform destroy" },
+    {
+      label: "enforcement require_approval",
+      policy: bashPolicy("p", { enforcement: "require_approval" }),
+      command: "terraform destroy",
+    },
+    { label: "enforcement warn", policy: bashPolicy("p", { enforcement: "warn" }), command: "terraform destroy" },
+    {
+      label: "operator_only: true",
+      policy: {
+        name: "p",
+        description: "policy p",
+        trigger: { event: "PreToolUse", match: "Bash" },
+        hook: "risk-gate",
+        enforcement: "block",
+        operator_only: true,
+      },
+      command: "terraform destroy",
+    },
+    {
+      label: "a trigger.bash_match",
+      policy: bashPolicy("p", {
+        trigger: { event: "PreToolUse", match: "Bash", bash_match: "terraform\\s+destroy" },
+      }),
+      command: "echo hi && terraform destroy",
+    },
+    {
+      // Per-repo (${REPO}) policy: only the shell model reads the quoted
+      // `-C` path with a space, so dry-run reports it as matched by that arm
+      // alone (byModelOnly).
+      label: "a per-repo policy matched only by the shell-model arm",
+      policy: bashPolicy("p", {
+        trigger: {
+          event: "PreToolUse",
+          match: "Bash",
+          bash_match: "(^|\\n|;|\\||&|\\()\\s*(\\w+=\\S+\\s+)*git( -C \\S+)* push\\b",
+        },
+        requires: { ledger_tag: "preflight:${REPO}" },
+      }),
+      command: "git -C '/tmp/repo with space' push origin master",
+    },
+    {
+      label: "a block-tier prompt-event policy",
+      policy: {
+        name: "p",
+        description: "policy p",
+        trigger: { event: "UserPromptSubmit" },
+        requires: { ledger_tag: "ok:${SESSION_ID}" },
+        hook: "risk-gate",
+        enforcement: "block",
+      },
+      prompt: "please deploy now",
+    },
+  ];
+
+  function reportFor(home: string, c: Case) {
+    if (c.prompt !== undefined) {
+      return dryRun(c.prompt, {
+        homeDir: home,
+        builtins: { SESSION_ID: "sess-parity", REPO: "r", BRANCH: "feature", CWD: os.tmpdir() },
+      }).report;
+    }
+    return dryRunReport(home, c.command!);
+  }
+  const eventFor = (c: Case) => (c.prompt !== undefined ? promptEvent(c.prompt) : bashToolEvent(c.command!));
+
+  for (const c of cases) {
+    it(`${c.label}: not matching in dry-run, never-applies reason, no intercept decision`, async () => {
+      const home = makeHome(withPolicies([{ ...c.policy, when: WHEN }]));
+      const report = reportFor(home, c);
+      expect(report.matchingPolicies.map((p) => p.name)).not.toContain("p");
+      expect(report.couldMatchPolicies.find((p) => p.name === "p")?.reason).toMatch(WHEN_REASON);
+      expect(await interceptEventNames(home, eventFor(c))).toEqual([]);
+    });
+
+    it(`${c.label}: the same policy without when: matches in dry-run and is decided by intercept (control)`, async () => {
+      const home = makeHome(withPolicies([c.policy]));
+      const report = reportFor(home, c);
+      expect(report.matchingPolicies.map((p) => p.name)).toEqual(["p"]);
+      expect(await interceptEventNames(home, eventFor(c))).toEqual(["p"]);
+    });
+  }
+
+  it("without --tool, a when: policy gets the never-applies reason, not the need-a-tool reason", () => {
+    const home = makeHome(withPolicies([bashPolicy("w-bash", { when: WHEN }), bashPolicy("plain")]));
+    const { report } = dryRun("", {
+      homeDir: home,
+      builtins: { SESSION_ID: "sess-parity", REPO: "r", BRANCH: "feature", CWD: os.tmpdir() },
+    });
+    expect(report.matchingPolicies).toEqual([]);
+    expect(report.couldMatchPolicies.find((p) => p.name === "w-bash")?.reason).toMatch(WHEN_REASON);
+    expect(report.couldMatchPolicies.find((p) => p.name === "plain")?.reason).toBe(
+      "no --tool supplied; dry-run can only statically match prompt-style events",
+    );
+  });
 });
