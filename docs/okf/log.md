@@ -4,6 +4,23 @@
 
 - 2026-10-10T14:19:04Z, task f45dd0a0: `harness export` prints the manifest posture warnings on stderr; the `harness export` row of `docs/CLI.md` says so (one sentence appended in place, no line shift). `debug-verb-selection.md`, `codex-adapter-parity-gaps.md`, `evidence-ledger-trust-boundary.md` and `policy-engine-producer-wiring.md` list `docs/CLI.md` as a source; none of their claims or citations concerns the export row. Re-stamped; no body text changed.
 
+- 2026-10-10T14:13:12Z, stale references and the false policy-off advice fixed (task
+  bdb20d1c): the ask-producer comment in `src/schema/policies.ts` and the
+  slow-ledger comment in `src/cli/policy/intercept.ts` no longer name removed
+  verbs or the deleted risk-gate doc; the `harness pause` help and
+  `docs/for-humans.md` now say to remove the policy's entry (a policy has no
+  `enabled` field) or to disable a policy pack for the hooks it adds.
+  `pause-vs-gate-kill-switch.md`: decision-table row rewritten to match, with
+  citations for the strict `PolicySchema` and the pack `enabled` field
+  (`src/schema/policy-packs.ts` added to its sources), and its three
+  `docs/for-humans.md` citations re-pointed. Not re-stamped: the doc is already
+  stale against several other sources and names deleted ones, which needs a
+  full refresh. `codex-adapter-parity-gaps.md`, `gate-fail-posture-matrix.md`,
+  `policy-engine-producer-wiring.md` and `quote-model-divergence.md` list
+  `src/cli/policy/intercept.ts` as a source; the edit replaced two comment
+  lines in place (no line shift) and none of their claims concerns that
+  comment. Re-stamped; no body text changed.
+
 - 2026-10-10T00:00:00Z, task 955721ec: `codex-adapter-parity-gaps.md` rewritten against the source as it stands after the removal release. Dropped: every gap about the removed understanding-before-execution and solution-acceptance packs, the `codex-*` pack hooks, the active-claim and stay-in-scope hooks, subagent hooks, auto-approval, delegation and the Codex config-drift check, plus the permission-profile gap (the manifest key is gone). Kept after re-reading each symbol: the apply/runtime-selection behaviour, the installer ownership boundaries, `--target` exclusivity, the branch-protection `apply_patch` mapping, the Risk Gate cwd plumbing, the script-side filters, and the wire format of the branch-protection blocker and `policy intercept`. The branch-protection fail direction is now closed on a malformed event, unlike the old fail-open line. Review fixes: the block-contract and fail-direction bullets are scoped to the branch-protection hook, `policy intercept` gets its own bullet (Claude Code deny JSON and exit 0 on both runtimes), and the sandbox/permission item moved out of the differences list. `sources:` lists only files that exist; `index.md`'s entry follows.
 
 - 2026-10-09T14:20:00Z, task 8159fc94: `harness doctor --target codex` warns on a hook command that calls a removed verb (`src/cli/doctor/codex.ts`); `codex-adapter-parity-gaps.md` gained one clause on it in its list of what the codex doctor checks, and the removed reports-dir check and its pointer were dropped from that sentence. The doc is not re-stamped: other claims in it (the Codex hook entrypoints, the understanding-gate approval paragraph) still describe removed behaviour, so it stays stale until the understanding-gate removal sweep re-verifies it. No other doc was touched.

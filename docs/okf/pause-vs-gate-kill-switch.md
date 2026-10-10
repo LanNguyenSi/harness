@@ -17,6 +17,7 @@ sources:
   - src/cli/register-operator-lifecycle.ts
   - src/io/generated-dir.ts
   - src/schema/policies.ts
+  - src/schema/policy-packs.ts
   - src/runtime/intercept.ts
   - src/cli/validate/checks.ts
   - src/cli/pack/hook-bootstrap.ts
@@ -35,8 +36,8 @@ harness has TWO separate kill-switch mechanisms. Do not conflate them: `pause` i
 |---|---|
 | Lockout recovery, debug A/B test, incident hotfix, short window | `harness pause --for <duration>` (all hooks dormant, auto-resumes) |
 | One specific hard-blocking hook must go, e.g. the understanding-before-execution PreToolUse gate blocks every Bash call INCLUDING its own recovery command `harness approve understanding` (the motivating case, task 8fcddb26, comment at `src/cli/register-gate-gc-group.ts:18#"offending hook group out of settings.json with a reversible snapshot."`) | `harness gate disable --matcher <substring>` (removes only matching hook groups, reversible snapshot) |
-| Permanently turn a policy off | NEITHER. Edit `policies[].enabled` in the manifest (or `policy_packs[].enabled: false`): persistent, diff-able, source-controlled. Stated in the `harness pause` command help (`src/cli/register-operator-lifecycle.ts:37-41#"in the manifest."`) and `docs/for-humans.md:395-397#"source-controlled"` |
-| "Move fast on a prototype branch" | A policy with a narrower trigger (for example a `bash_match` that names only what you guard), not a session-wide pause (`docs/for-humans.md:398-399#"session-wide pause"`) |
+| Permanently turn a policy off | NEITHER. Remove the policy's entry from `policies:` in the manifest; for the hooks a policy pack adds, set `policy_packs[].enabled: false` (`src/schema/policy-packs.ts:24#"enabled: z.boolean().default(true),"`). A policy has no `enabled` field: `PolicySchema` is strict, so validation rejects one (`src/schema/policies.ts:151-163#".strict()"`). Persistent, diff-able, source-controlled. Stated in the `harness pause` command help (`src/cli/register-operator-lifecycle.ts:37-41#"in the manifest."`) and `docs/for-humans.md:391-395#"source-controlled"` |
+| "Move fast on a prototype branch" | A policy with a narrower trigger (for example a `bash_match` that names only what you guard), not a session-wide pause (`docs/for-humans.md:396-397#"session-wide pause"`) |
 
 ## Mechanism 1: `harness pause` / `harness resume` (sentinel)
 
@@ -81,7 +82,7 @@ Measured 2026-07-27 (task `ea8becf5`): the cheapest member of that class was not
 
 **Audit trail.** Pause/resume write `harness-paused:<pausedAt>` / `harness-resumed:<pausedAt>` facts to the evidence ledger via grounding-mcp, under the synthetic session bucket `default` (`OPERATOR_LEDGER_SESSION`, `src/cli/pause/index.ts:48#"OPERATOR_LEDGER_SESSION"`) since no agent session id exists in an operator shell. `harness audit --since 24h` surfaces them. Ledger failure does not block the pause; it is reported as `ledger: ⚠ skipped`.
 
-**Trust caveat.** The sentinel is plain JSON with NO signature (`docs/for-humans.md:409-425#"auto-restrict this path"`). Neither the CLI checks nor the PreToolUse deny-policy layer above is a true boundary against an agent that already has Write access under `harness.generated/` (see "Known gap" above). Defence: deny agent writes to `harness.generated/` (blanket deny is simplest; the agent surface normally never needs to write there). Fail-open note: a malformed sentinel is treated as absent (never escalates to a block), and so is one that cannot be read as a regular file (a FIFO, a device or a directory at the path, or a file over 1 MiB): `readSentinel` reads it through one bounded, non-blocking descriptor read (`src/runtime/pause-sentinel.ts:69#"readTextFileBoundedOrThrow(sentinelPath"`), so planting one neither hangs the hook past its budget nor counts as a pause that switches the gates off (task 323bd5b9), but a forged `expiresAt` that is not a non-empty string or null is rejected as malformed rather than silently read as indefinite (`normalizeSentinel`, `src/runtime/pause-sentinel.ts:90-109#"return"`).
+**Trust caveat.** The sentinel is plain JSON with NO signature (`docs/for-humans.md:411-423#"auto-restrict this path"`). Neither the CLI checks nor the PreToolUse deny-policy layer above is a true boundary against an agent that already has Write access under `harness.generated/` (see "Known gap" above). Defence: deny agent writes to `harness.generated/` (blanket deny is simplest; the agent surface normally never needs to write there). Fail-open note: a malformed sentinel is treated as absent (never escalates to a block), and so is one that cannot be read as a regular file (a FIFO, a device or a directory at the path, or a file over 1 MiB): `readSentinel` reads it through one bounded, non-blocking descriptor read (`src/runtime/pause-sentinel.ts:69#"readTextFileBoundedOrThrow(sentinelPath"`), so planting one neither hangs the hook past its budget nor counts as a pause that switches the gates off (task 323bd5b9), but a forged `expiresAt` that is not a non-empty string or null is rejected as malformed rather than silently read as indefinite (`normalizeSentinel`, `src/runtime/pause-sentinel.ts:90-109#"return"`).
 
 ## Mechanism 2: `harness gate disable` / `harness gate enable` (settings.json surgery)
 

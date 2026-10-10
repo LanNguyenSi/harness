@@ -434,8 +434,8 @@ export function isPolicyInterceptCommand(command: string): boolean {
  *      (the `initialize` handshake, its own T-bounded wait) and, only
  *      once THAT resolves, the actual `ledger_summary` `tools/call` (a
  *      SEPARATE T-bounded wait). A ledger that is merely SLOW rather than
- *      hard-down (the threat class docs/risk-gate.md and this file's own
- *      `deny-degraded` diagnostics already name, distinct from an
+ *      hard-down (the threat class this file's own `deny-degraded`
+ *      diagnostics already name, distinct from an
  *      instantly-refusing one) can answer `initialize` just under T and
  *      still time out on the following `ledger_summary` — the case a
  *      naive "1×T" assumption undercounts.
