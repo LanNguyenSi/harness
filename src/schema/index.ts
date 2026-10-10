@@ -10,8 +10,10 @@ import { DoctorSchema } from "./doctor.js";
 import { ReviewTemplatesSchema, WorkflowsSchema } from "./workflows.js";
 import {
   findRemovedCommandUses,
+  remapIssuePath,
   stripRemovedManifestEntries,
   type ManifestPostureWarning,
+  type StrippedIndexMaps,
 } from "./removed-keys.js";
 
 export const SUPPORTED_MANIFEST_VERSION = 1;
@@ -110,6 +112,12 @@ export interface ParsedManifest {
    * every hook, producer or `ux.run` line that still calls a removed command.
    */
   warnings: ManifestPostureWarning[];
+  /**
+   * Original positions of the policies[] / policy_packs[] entries that
+   * survived the drop, for a caller that reports a diagnostic about the
+   * parsed manifest (`remapDiagnosticPath`). Absent when nothing was dropped.
+   */
+  indexMaps?: StrippedIndexMaps;
 }
 
 /**
@@ -125,7 +133,12 @@ export function parseManifestWithWarnings(raw: unknown): ParsedManifest {
   const stripped = stripRemovedManifestEntries(raw);
   const result = ManifestSchema.safeParse(stripped.raw);
   if (!result.success) {
-    const issues = friendlyVersionIssues(result.error.issues, raw);
+    // Dropping an entry re-indexes policies[] / policy_packs[]: name the index
+    // the operator wrote, not the one the strict parse saw.
+    const issues = friendlyVersionIssues(result.error.issues, raw).map((i) => ({
+      ...i,
+      path: remapIssuePath(i.path, stripped.indexMaps),
+    }));
     const summary = issues
       .map((i) => `  ${i.path.join(".") || "<root>"}: ${i.message}`)
       .join("\n");
@@ -134,7 +147,11 @@ export function parseManifestWithWarnings(raw: unknown): ParsedManifest {
       issues,
     );
   }
-  return { manifest: result.data, warnings: [...stripped.warnings, ...findRemovedCommandUses(raw)] };
+  return {
+    manifest: result.data,
+    warnings: [...stripped.warnings, ...findRemovedCommandUses(raw)],
+    ...(stripped.indexMaps !== undefined ? { indexMaps: stripped.indexMaps } : {}),
+  };
 }
 
 /** `parseManifestWithWarnings` for callers that do not report the warnings. */
@@ -171,6 +188,8 @@ export type {
   RemovedPolicyField,
   RemovedPackName,
   RemovedManifestTable,
+  IndexMap,
+  StrippedIndexMaps,
   ManifestPostureWarning,
   StrippedManifest,
   RemovedCommand,

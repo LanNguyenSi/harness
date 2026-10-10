@@ -20,6 +20,7 @@ import {
   parseManifestWithWarnings,
   stripRemovedManifestEntries,
 } from "../../src/schema/index.js";
+import { remapDiagnosticPath } from "../../src/schema/removed-keys.js";
 import { STUB_NPM_BIN_EXEC_UNKNOWN } from "../_helpers/npm-bin-exec.js";
 
 let cleanups: Array<() => void> = [];
@@ -414,5 +415,120 @@ describe("removed Risk Gate keys", () => {
     const err = strict.diagnostics.filter((d) => paths.includes(d.path));
     expect(err.map((d) => [d.path, d.severity])).toEqual(paths.map((p) => [p, "error"]));
     expect(formatReport(lenient)).toContain('policy "scoped" dropped whole');
+  });
+
+  // Dropping an entry re-indexes policies[] and policy_packs[]. A diagnostic
+  // about a later entry has to keep the index the operator wrote, because a
+  // strict-parse error is the lockout the recovery steps start from.
+  describe("indexes in diagnostics after an entry is dropped", () => {
+    const secondPolicyManifest = (): string =>
+      writeManifest(
+        [
+          "version: 1",
+          "hooks:",
+          "  - { name: h, event: PreToolUse, command: /usr/bin/true, blocking: false }",
+          "policies:",
+          "  - name: scoped",
+          "    description: scoped",
+          "    trigger: { event: PreToolUse, match: Bash }",
+          "    requires: { ledger_tag: 'ok:${SESSION_ID}' }",
+          "    hook: h",
+          "    enforcement: block",
+          "    when: { environment.name: production }",
+          "  - name: second",
+          "    description: second",
+          "    trigger: { event: PreToolUse, match: Bash }",
+          "    requires: { ledger_tag: 'ok2:${SESSION_ID}' }",
+          "    hook: h",
+          "    enforcement: block",
+          "",
+        ].join("\n"),
+      );
+
+    it("records which original index each kept entry came from", () => {
+      const r = stripRemovedManifestEntries({
+        version: 1,
+        policies: [policy("scoped", { when: WHEN }), policy("keep-a"), policy("scoped-2", { when: WHEN }), policy("keep-b")],
+        policy_packs: [{ name: "post-merge-gate" }, { name: "branch-protection" }],
+      });
+      expect(r.indexMaps).toEqual({
+        policies: { kept: [1, 3], originalLength: 4 },
+        policy_packs: { kept: [1], originalLength: 2 },
+      });
+      expect(stripRemovedManifestEntries({ version: 1, policies: [policy("plain")] }).indexMaps).toBeUndefined();
+    });
+
+    it("strict-parse error on the policy after a dropped when policy names the index as written", () => {
+      let err: unknown;
+      try {
+        parseManifestWithWarnings({
+          version: 1,
+          hooks: [HOOK],
+          policies: [policy("scoped", { when: WHEN }), policy("typo", { enforcment: "block" })],
+        });
+      } catch (e) {
+        err = e;
+      }
+      expect(err).toBeInstanceOf(ManifestParseError);
+      const e = err as ManifestParseError;
+      expect(e.issues.map((i) => i.path)).toEqual([["policies", 1]]);
+      expect(e.message).toContain("policies.1: Unrecognized key(s) in object: 'enforcment'");
+      expect(e.message).not.toContain("policies.0");
+    });
+
+    it("strict-parse error on a non-object policy after a dropped when policy names the index as written", () => {
+      expect(() => parseManifestWithWarnings({ version: 1, policies: [policy("scoped", { when: WHEN }), 5] })).toThrow(/policies\.1:/);
+    });
+
+    it("strict-parse error on the pack after a dropped pack names the index as written", () => {
+      expect(() =>
+        parseManifestWithWarnings({
+          version: 1,
+          policy_packs: [{ name: "post-merge-gate" }, { name: "branch-protection", bogus: true }],
+        }),
+      ).toThrow(/policy_packs\.1:/);
+    });
+
+    it("a strict-parse error before any drop keeps its index", () => {
+      expect(() =>
+        parseManifestWithWarnings({
+          version: 1,
+          policies: [policy("typo", { enforcment: "block" }), policy("scoped", { when: WHEN })],
+        }),
+      ).toThrow(/policies\.0:/);
+    });
+
+    it("harness validate reports the warning about the second policy at index 1 and the posture warning at index 0", () => {
+      const result = validate({ configPath: secondPolicyManifest(), ...NOOP_PROBES });
+      const warnings = result.diagnostics.filter((d) => d.severity === "warning");
+      const posture = warnings.filter((d) => d.message.includes("dropped whole"));
+      expect(posture.map((d) => d.path)).toEqual(["policies[0]"]);
+      const selfAttestation = warnings.filter((d) => d.message.includes('policy "second" blocks on requires.ledger_tag'));
+      expect(selfAttestation.map((d) => d.path)).toEqual(["policies[1]"]);
+    });
+
+    it("harness validate reports an asset-check error about the pack after a dropped pack at its written index", () => {
+      const file = writeManifest(
+        ["version: 1", "policy_packs:", "  - { name: post-merge-gate }", "  - { name: not-a-real-pack }", ""].join("\n"),
+      );
+      const result = validate({ configPath: file, ...NOOP_PROBES });
+      expect(result.diagnostics.filter((d) => d.message.includes("not a known builtin pack")).map((d) => d.path)).toEqual([
+        "policy_packs[1].name",
+      ]);
+      expect(result.diagnostics.filter((d) => d.message.includes("post-merge-gate")).map((d) => d.path)).toEqual(["policy_packs[0]"]);
+    });
+
+    it("remaps the bracket and dotted forms, leaves other paths alone, and keeps appended entries at their written distance", () => {
+      const maps = { policies: { kept: [1, 3], originalLength: 4 } };
+      expect(remapDiagnosticPath("policies[1]", maps)).toBe("policies[3]");
+      expect(remapDiagnosticPath("policies.1.name", maps)).toBe("policies.3.name");
+      expect(remapDiagnosticPath("policies[0].producers[0].command", maps)).toBe("policies[1].producers[0].command");
+      // Past the kept entries: a derived policy appended after the parse.
+      expect(remapDiagnosticPath("policies[2]", maps)).toBe("policies[4]");
+      expect(remapDiagnosticPath("policy_packs[1]", maps)).toBe("policy_packs[1]");
+      expect(remapDiagnosticPath("policies", maps)).toBe("policies");
+      expect(remapDiagnosticPath("hooks[policies[1]].command", maps)).toBe("hooks[policies[1]].command");
+      expect(remapDiagnosticPath("policies[1]", undefined)).toBe("policies[1]");
+    });
   });
 });

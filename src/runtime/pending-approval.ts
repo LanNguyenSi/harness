@@ -29,9 +29,9 @@ export function pendingApprovalPath(generatedDir: string): string {
 }
 
 /**
- * Producer: stage `sessionId` for a later `harness approve`. `atomicWriteFile`
- * creates `generatedDir` if missing, so a hand-wired hook with no prior
- * apply still benefits. Callers treat this as best-effort — a write
+ * Producer: stage `sessionId` for a later operator approval verb.
+ * `atomicWriteFile` creates `generatedDir` if missing, so a hand-wired hook
+ * with no prior apply still benefits. Callers treat this as best-effort — a write
  * failure must never escalate a gate block into a thrown hook error.
  */
 export function writePendingApproval(generatedDir: string, sessionId: string): void {

@@ -13,7 +13,7 @@ import {
  *
  * `manifest.workflows[]` describes a review-then-merge process (schema:
  * `src/schema/workflows.ts`), but until now nothing read it at
- * enforcement time: `src/runtime/intercept.ts` (the Risk Gate / policy
+ * enforcement time: `src/runtime/intercept.ts` (the policy
  * engine `harness policy intercept` runs on every PreToolUse) only ever
  * evaluates `manifest.policies[]`. A `workflows:` declaration alone was
  * documentation, not a gate (`docs/for-agents.md`, pre-Slice-1 wording:

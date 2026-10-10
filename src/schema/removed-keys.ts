@@ -150,9 +150,63 @@ export interface ManifestPostureWarning {
   message: string;
 }
 
+/**
+ * Where the entries an array kept sat in the manifest as written. Dropping an
+ * entry re-indexes the array, so a diagnostic about a later entry would name
+ * the wrong position without it.
+ */
+export interface IndexMap {
+  /** `kept[k]` is the original index of the entry now at index `k`. */
+  kept: readonly number[];
+  /** Length of the array before any entry was dropped. */
+  originalLength: number;
+}
+
+/** Index maps of the arrays `stripRemovedManifestEntries` dropped entries from. */
+export interface StrippedIndexMaps {
+  policies?: IndexMap;
+  policy_packs?: IndexMap;
+}
+
 export interface StrippedManifest {
   raw: unknown;
   warnings: ManifestPostureWarning[];
+  /** Present only when an array lost an entry. */
+  indexMaps?: StrippedIndexMaps;
+}
+
+/**
+ * The index in the manifest as written for index `k` of the stripped array.
+ * An index past the kept entries (an entry appended after the parse, such as
+ * a workflow-derived policy) keeps its distance from the end.
+ */
+export function originalIndex(map: IndexMap | undefined, k: number): number {
+  if (map === undefined) return k;
+  const hit = map.kept[k];
+  return hit !== undefined ? hit : k + (map.originalLength - map.kept.length);
+}
+
+/** Remap a zod issue path (`["policies", 0, ...]`) to the manifest as written. */
+export function remapIssuePath(path: ReadonlyArray<string | number>, maps: StrippedIndexMaps | undefined): Array<string | number> {
+  const [head, idx, ...rest] = path;
+  if (maps === undefined || typeof idx !== "number") return [...path];
+  if (head === "policies" || head === "policy_packs") return [head, originalIndex(maps[head], idx), ...rest];
+  return [...path];
+}
+
+/**
+ * Remap a diagnostic path that names `policies[k]` or `policy_packs[k]`
+ * (also the dotted `policies.k`) to the manifest as written. Any other path
+ * is returned unchanged.
+ */
+export function remapDiagnosticPath(path: string, maps: StrippedIndexMaps | undefined): string {
+  if (maps === undefined) return path;
+  const m = /^(policies|policy_packs)(?:\[(\d+)\]|\.(\d+)(?=\.|$))/.exec(path);
+  if (m === null) return path;
+  const name = m[1] as "policies" | "policy_packs";
+  const k = Number(m[2] ?? m[3]);
+  const mapped = originalIndex(maps[name], k);
+  return `${name}${m[2] !== undefined ? `[${mapped}]` : `.${mapped}`}${path.slice(m[0].length)}`;
 }
 
 function isPlainObject(v: unknown): v is Record<string, unknown> {
@@ -199,6 +253,7 @@ export function stripRemovedManifestEntries(
   table: RemovedManifestTable = REMOVED_MANIFEST_TABLE,
 ): StrippedManifest {
   const warnings: ManifestPostureWarning[] = [];
+  const indexMaps: StrippedIndexMaps = {};
   let current = raw;
   for (const entry of table.paths) {
     const segments = entry.path.split(".");
@@ -218,12 +273,14 @@ export function stripRemovedManifestEntries(
   if (isPlainObject(current) && Array.isArray(current["policies"]) && table.policyFields.length > 0) {
     const policies = current["policies"] as unknown[];
     const kept: unknown[] = [];
+    const keptFrom: number[] = [];
     policies.forEach((policy, i) => {
       const removed = isPlainObject(policy)
         ? table.policyFields.find((f) => Object.prototype.hasOwnProperty.call(policy, f.field))
         : undefined;
       if (removed === undefined) {
         kept.push(policy);
+        keptFrom.push(i);
         return;
       }
       const name = stringAt(policy, "name");
@@ -232,16 +289,21 @@ export function stripRemovedManifestEntries(
         message: `${name !== undefined ? `policy "${name}"` : "policy"} dropped whole: ${removed.field}: clauses are removed in ${removed.removedIn} (${removed.reason}); delete the policy from the manifest, or re-create it without ${removed.field}:`,
       });
     });
-    if (kept.length !== policies.length) current = { ...current, policies: kept };
+    if (kept.length !== policies.length) {
+      current = { ...current, policies: kept };
+      indexMaps.policies = { kept: keptFrom, originalLength: policies.length };
+    }
   }
   if (isPlainObject(current) && Array.isArray(current["policy_packs"]) && table.packs.length > 0) {
     const packs = current["policy_packs"] as unknown[];
     const kept: unknown[] = [];
+    const keptFrom: number[] = [];
     packs.forEach((pack, i) => {
       const name = isPlainObject(pack) ? pack["name"] : undefined;
       const removed = typeof name === "string" ? table.packs.find((p) => p.name === name) : undefined;
       if (removed === undefined) {
         kept.push(pack);
+        keptFrom.push(i);
         return;
       }
       warnings.push({
@@ -249,9 +311,12 @@ export function stripRemovedManifestEntries(
         message: `pack "${removed.name}" was removed in ${removed.removedIn} and is skipped (${removed.reason}); delete the entry from the manifest`,
       });
     });
-    if (kept.length !== packs.length) current = { ...current, policy_packs: kept };
+    if (kept.length !== packs.length) {
+      current = { ...current, policy_packs: kept };
+      indexMaps.policy_packs = { kept: keptFrom, originalLength: packs.length };
+    }
   }
-  return { raw: current, warnings };
+  return Object.keys(indexMaps).length > 0 ? { raw: current, warnings, indexMaps } : { raw: current, warnings };
 }
 
 /** One line per warning, as `harness validate` / `harness doctor` print it. */

@@ -83,7 +83,6 @@ export function buildProgram(opts: RunOptions = {}): Command {
 
   registerPackGroup(program, { stdout, stderr });
 
-
   registerExplainGroup(program, { stdout, stderr });
 
   registerAuditGroup(program, { stdout, stderr });
