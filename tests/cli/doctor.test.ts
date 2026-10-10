@@ -115,6 +115,46 @@ tools:
   });
 });
 
+describe("doctor — no Risk Gate section (task 6e52c044)", () => {
+  it("reports no riskGate field and no Risk Gate text for a manifest that still carries risk, environments and a when: policy", async () => {
+    const home = makeFixture({
+      "harness.yaml": `version: 1
+hooks:
+  - name: gate
+    event: PreToolUse
+    match: "Bash"
+    command: harness policy intercept
+    blocking: hard
+policies:
+  - name: scoped-gate
+    description: a when-scoped block policy
+    trigger: { event: PreToolUse, match: "Bash" }
+    when: { "environment.name": production }
+    requires: { ledger_tag: "risk-override:\${SESSION_ID}" }
+    hook: gate
+    enforcement: block
+risk:
+  classifiers: []
+environments:
+  resolvers: []
+${SILENCE_DRIFT}`,
+    });
+    const report = await doctor({
+      configPath: path.join(home, "harness.yaml"),
+      homeOverride: home,
+      mcpProbe: new FakeProbe({}),
+      versionProbe: () => null,
+      pathEnv: "",
+      npmBinExec: STUB_NPM_BIN_EXEC_UNKNOWN,
+    });
+    const text = format(report);
+    // The manifest loaded: the policy is listed, so the absence below is real.
+    expect(text).toContain("scoped-gate");
+    expect(report).not.toHaveProperty("riskGate");
+    expect(text).not.toMatch(/Risk Gate/i);
+  });
+});
+
 describe("doctor — MCP probe surfacing", () => {
   it("renders broken MCP servers with the actual error message, not a generic label", async () => {
     const home = makeFixture({

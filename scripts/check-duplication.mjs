@@ -260,6 +260,8 @@ import * as path from "node:path";
 // pack core; the check reports 47 with that change (the pin was 48).
 // Lowered to 43 (task 3a655f4e): removing the Risk Gate runtime modules and the
 // hook envelope enrichment; the check reports 43 with that change (the pin was 47).
+// Lowered to 42 (task 6e52c044): removing the Risk Gate from the install
+// surfaces, validate and doctor; the check reports 42 with that change (the pin was 43).
 const MAX_CLONES = 42;
 
 // Sets process.exitCode instead of calling process.exit so the caller's

@@ -1523,15 +1523,6 @@ describe("intercept: a when: policy never applies, whatever its shape", () => {
       },
     ] as unknown as Policy[];
 
-    it("carry when: clauses and the three removed names", () => {
-      expect(GATE_POLICIES.map((p) => p.name).sort()).toEqual([
-        "gate-dev-unsafe-deletion",
-        "gate-prod-destructive",
-        "gate-prod-destructive-approval",
-      ]);
-      expect(GATE_POLICIES.every((p) => p.when !== undefined)).toBe(true);
-    });
-
     for (const command of ["rm -rf /", "ls"]) {
       it(`yields no decision from those policies for \`${command}\``, async () => {
         const ledger = makeLedger({ kind: "ok", entries: [] });
@@ -1554,6 +1545,7 @@ describe("intercept: a when: policy never applies, whatever its shape", () => {
       expect(full.policies.filter((p) => p.when !== undefined)).toEqual([]);
       expect(raw).not.toHaveProperty("risk");
       expect(raw).not.toHaveProperty("environments");
+      expect(full.hooks.map((h) => h.name)).not.toContain("risk-gate");
     });
   });
 });

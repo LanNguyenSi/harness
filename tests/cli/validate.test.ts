@@ -1359,7 +1359,9 @@ workflows:
     );
     expect(hit).toBeDefined();
     expect(hit?.message).toContain("carries a when: clause and never applies");
-    expect(hit?.message).toContain("is the only gate on this surface");
+    expect(hit?.message).toContain(
+      'so the derived block gate ("workflow:ship:review-before-merge") is the only gate on this surface',
+    );
     expect(hit?.message).toContain("Remove the when: policy or drop its when: clause.");
     expect(hit?.message).not.toContain("Both policies apply");
   });

@@ -133,8 +133,8 @@ hooks:
   # f2d2a29): every \`harness policy intercept\` hook below carries
   # \`budget_ms: 15000\`, i.e. a Claude Code outer
   # kill-timeout of \`ceil(15000/1000) = 15\` seconds (generate-settings.ts's
-  # \`hookTimeoutSeconds\`). This is deliberately UNIFORM across all thirteen
-  # of them, for two independent reasons:
+  # \`hookTimeoutSeconds\`). This is deliberately UNIFORM across all of
+  # them, for two independent reasons:
   #
   # 1. FAIL-CLOSED MARGIN. \`harness policy intercept\` evaluates its FULL
   #    \`policies:\` list against the incoming event (src/runtime/intercept.ts,
@@ -170,14 +170,14 @@ hooks:
   #    specifically so Claude Code spawns \`harness policy intercept\` ONCE
   #    per matching tool call instead of once per manifest hook name (the
   #    comment on \`buildGroups\` names this explicitly: avoiding "redundant
-  #    Node bootstraps and ledger queries per tool call"). All nine
-  #    \`match: "Bash"\` hooks below share one settings.json matcher group;
+  #    Node bootstraps and ledger queries per tool call"). Every
+  #    \`match: "Bash"\` hook below shares one settings.json matcher group;
   #    giving them a NON-uniform budget_ms would make their computed
   #    \`timeout\` values diverge, split that one group into several entries,
   #    and reintroduce exactly the redundant-invocation cost the dedup
   #    exists to avoid — on top of leaving whichever entry keeps a low
   #    timeout still exposed to the fail-open exposure above. Keeping all
-  #    thirteen at the identical 15000ms budget_ms preserves the existing
+  #    of them at the identical 15000ms budget_ms preserves the existing
   #    one-invocation-per-matcher-group collapse (previously they all
   #    collapsed onto the shared 2s floor; now they collapse onto 15s).
   - name: require-review-evidence
