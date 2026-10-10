@@ -106,7 +106,7 @@ import * as path from "node:path";
 // 110 -> 109 after the master-baseline fixture deletion, task 62fa0542.
 // 109 -> 110 -> 109 (task d03af8f6, review round 2): round 1 raised this
 // to 110 for a `deletion-target-resolve.ts` <-> `kubectl-target-parse.ts`
-// clone pair (a duplicated `firstSegment`/`tokenize` tokenizer). Round 2
+// clone pair (a duplicated `firstSegment`/`tokenize` tokenizer; both files since removed). Round 2
 // closed that pair instead of tolerating it: `kubectl-target-parse.ts`'s
 // `firstSegment` is now exported (a pure visibility change, no logic
 // touched) and imported by `deletion-target-resolve.ts`, and that

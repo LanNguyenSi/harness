@@ -1920,9 +1920,9 @@ export async function intercept(
     if (arm === "none") continue;
     // A policy that still carries a `when:` clause NEVER applies: the
     // clause can no longer be evaluated, and matching on the trigger alone
-    // would widen a scoped policy to every call its trigger names. The
-    // loader drops such policies; until then this guard is the interim
-    // rule. Never relax it to a trigger-only match.
+    // would widen a scoped policy to every call its trigger names.
+    // Until the schema change drops such policies at load, this guard is
+    // the interim rule. Never relax it to a trigger-only match.
     if (p.when !== undefined) continue;
     if (arm === "model") matchedByModelOnly.add(p);
     matching.push(p);
