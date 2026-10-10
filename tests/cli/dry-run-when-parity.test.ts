@@ -160,6 +160,25 @@ describe("dry-run: a policy carrying when: never appears under matchingPolicies"
     expect(await interceptNames(home, "ls -la", "p1")).toEqual(["plain"]);
   });
 
+  it("applies the same rule to a prompt-event policy carrying when:", async () => {
+    const promptPolicy = (name: string, extra: Record<string, unknown> = {}) => ({
+      name,
+      description: `policy ${name}`,
+      trigger: { event: "UserPromptSubmit", match: "deploy" },
+      requires: { ledger_tag: "ok:${SESSION_ID}" },
+      hook: "risk-gate",
+      enforcement: "warn",
+      ...extra,
+    });
+    const home = makeHome(withPolicies([promptPolicy("p-plain"), promptPolicy("p-when", { when: WHEN })]));
+    const { report } = dryRun("please deploy now", {
+      homeDir: home,
+      builtins: { SESSION_ID: "sess-parity", REPO: "r", BRANCH: "feature", CWD: os.tmpdir() },
+    });
+    expect(report.matchingPolicies.map((p) => p.name)).toEqual(["p-plain"]);
+    expect(report.couldMatchPolicies.find((p) => p.name === "p-when")?.reason).toMatch(WHEN_REASON);
+  });
+
   for (const command of ["rm -rf /", "ls"]) {
     it(`reports the FULL template's three gates as not applying to \`${command}\`, as policy intercept does`, async () => {
       const home = makeHome(fullTemplate());
