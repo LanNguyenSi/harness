@@ -258,7 +258,9 @@ import * as path from "node:path";
 // verbs; the check reports 48 with that change (the pin was 50).
 // Lowered to 47 (task 9389707f): removing the understanding-before-execution
 // pack core; the check reports 47 with that change (the pin was 48).
-const MAX_CLONES = 47;
+// Lowered to 43 (task 3a655f4e): removing the Risk Gate runtime modules and the
+// hook envelope enrichment; the check reports 43 with that change (the pin was 47).
+const MAX_CLONES = 43;
 
 // Sets process.exitCode instead of calling process.exit so the caller's
 // finally-cleanup runs on every path (process.exit skips stack unwinding).
