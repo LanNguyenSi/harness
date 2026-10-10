@@ -83,12 +83,8 @@ describe("curl read-only SHAPE floor (task fdaad781)", () => {
   // NEGATIVE fixtures. Each isolates exactly ONE forbidden spelling
   // against an otherwise-valid `curl -q -s '<url>'` base, so a fixture
   // only passes because of the ONE thing under test. Every write or
-  // body/method flag `destructive-shell-floor.ts` already names is raised
-  // to `high` independently of this floor forfeiting it; a spelling
-  // neither floor names stays genuinely UNCLASSIFIED. Assert the EXACT
-  // outcome, not merely "not low": a floor that classified everything
-  // `high` would pass a bare `!== "low"` check without the shape check
-  // ever running at all.
+  // body/method flag is rejected on its own; the fixtures here forfeit the
+  // shape for a reason no other check names.
   describe("negative: forfeits the shape", () => {
     it.each([
       [
