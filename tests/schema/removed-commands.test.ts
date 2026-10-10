@@ -70,6 +70,12 @@ describe("REMOVED_COMMANDS table (task f3f15290)", () => {
     expect(invokesRemovedCommand("harness approve understanding")?.command).toBe("harness approve understanding");
     expect(invokesRemovedCommand("harness gc")?.command).toBe("harness gc");
     expect(invokesRemovedCommand("harness pack upgrade")?.command).toBe("harness pack upgrade");
+    for (const verb of ["explain-action", "test-risk", "resolve-env", "explain-policy"]) {
+      const command = `harness ${verb}`;
+      expect(invokesRemovedCommand(`${command} event.json`)?.command, command).toBe(command);
+    }
+    expect(invokesRemovedCommand("harness explain")).toBeUndefined();
+    expect(invokesRemovedCommand("harness explain gate-prod-destructive --trace")).toBeUndefined();
   });
 });
 
