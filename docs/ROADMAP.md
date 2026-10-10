@@ -350,6 +350,8 @@ A fresh agent on a clean repo refused to call write-capable tools until an Under
 
 ## Phase 7: Risk Gate
 
+The Risk Gate was removed before 1.0.0 (task 2bf09e41): the four debug verbs (`explain-action`, `test-risk`, `resolve-env`, `explain-policy`), the engine-side risk classification, environment resolution and `when:` evaluation, the `risk:` / `environments:` / `policies[].when` manifest keys, the `risk-gate` hook and the three gate policies shipped in the `full` template, and `harness approve risk` are all gone. The sub-sections below are kept as the historical plan of record, as written.
+
 ### Scope
 
 Today's policy model evaluates a rule per matching trigger and returns a binary block/allow. Phase 7 makes harness reason about *the action itself*: an Action Envelope (tool + raw input + session + runtime context) is enriched by a Context Resolver (production / staging / dev / local / unknown), classified by a Risk Classifier (severity + categories + reversibility), then matched against policies whose `when:` clauses can reference `risk.severity_at_least`, `environment.name`, and similar. Decision space extends to `allow / warn / require_approval / deny`.

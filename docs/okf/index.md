@@ -3,7 +3,7 @@
 Curated OKF knowledge bundle for the harness repo. These docs capture
 cross-file semantics, invariants, and recovery procedures that no single
 source file or reference doc states on its own. For the underlying feature
-references, see `docs/` one level up (ARCHITECTURE, risk-gate,
+references, see `docs/` one level up (ARCHITECTURE,
 writing-custom-policies, the policy-pack references, CLI); these docs
 deliberately do not duplicate them.
 
@@ -109,7 +109,7 @@ reported upstream, silently ignored here.
   gap (task `aabbad63`).
 - [Debug verb selection](debug-verb-selection.md), which harness verb answers
   which "why did my policy (not) fire" question: ledger-replay vs
-  live-hypothetical vs static-prediction vs stage-isolation vs end-to-end.
+  static-prediction vs end-to-end.
 - [Understanding gate, auto-mode signal sources (measured)](understanding-gate-auto-mode-signals.md),
   what signals exist for detecting an agent's own permission/auto-approval
   mode across Claude Code, Codex, and opencode: the measured Claude Code
