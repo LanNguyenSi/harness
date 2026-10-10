@@ -242,8 +242,8 @@ describe("hasAnsiCNulEscape (task 241d9e9e)", () => {
 
 // Values decodeShellWord returned for these words before the NUL predicate
 // existed; they are pinned so the decoder stays what the deny-side callers
-// were built against (see destructive-shell-floor.test.ts and
-// deletion-target-resolve.test.ts for the consumer verdicts).
+// were built against (the consumers were the removed destructive-shell
+// floor and deletion-target resolver).
 describe("decodeShellWord keeps its decoding for a NUL escape (task 241d9e9e)", () => {
   it.each([
     ["$'-delete\\0XYZ'", "-delete\u0000XYZ"],

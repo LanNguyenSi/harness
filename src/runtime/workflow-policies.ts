@@ -222,9 +222,9 @@ function inputMatchKey(policy: Pick<Policy, "trigger">): Record<string, unknown>
  * `PR_NUMBER` from a WRONG path (say `toolArgs.pr` instead of
  * `toolArgs.prNumber`) counted as equivalent, suppressed the derived
  * gate, and then evaluated its own `review:${PR_NUMBER}` against an
- * unresolved variable. Under `risk.degraded_fail_posture: fail_open` that
- * is an allow with "template variables unresolved": the merge went
- * through with no review evidence at all. A differently-extracting policy
+ * unresolved variable, a degraded evaluation that a relaxed fail posture
+ * once turned into an allow: the merge went through with no review
+ * evidence at all. A differently-extracting policy
  * no longer dedupes: the derived gate is produced as well, both apply,
  * and `findWeakGatePolicyOverlaps` names the mismatch.
  */
@@ -242,7 +242,8 @@ function extractKey(policy: Pick<Policy, "trigger">): string | null {
 /**
  * True when a hand-authored policy sharing the derived gate's trigger
  * surface + ledger_tag is strong enough to stand in for it: `enforcement:
- * "block"`, no `when:` risk/environment scoping, and not `operator_only:
+ * "block"`, no `when:` clause (a policy carrying one never applies, so it
+ * cannot stand in for the derived gate), and not `operator_only:
  * true` (which carries no `requires:`/ledger_tag at all, so it would not
  * normally share a key, but the check is defensive since operator_only
  * would otherwise read as "block" and pass the enforcement check alone).

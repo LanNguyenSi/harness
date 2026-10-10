@@ -1,15 +1,13 @@
-// Phase 7 #2 — Action Envelope.
+// Action Envelope.
 //
-// The normalized, stable representation of a tool call that the Risk
-// Gate pipeline reasons about. The raw runtime event (`ToolEvent`, the
-// Claude Code PreToolUse hook payload) is runtime-specific and loosely
-// shaped; every downstream Risk Gate stage — the Risk Classifier (#3),
-// Context Resolver (#4), Policy Evaluator (#5) — consumes THIS shape
-// instead, so none of them re-parse a runtime-specific payload.
+// The normalized, stable representation of a tool call. The raw runtime
+// event (`ToolEvent`, the Claude Code PreToolUse hook payload) is
+// runtime-specific and loosely shaped; this shape lets a consumer avoid
+// re-parsing a runtime-specific payload.
 //
-// STATUS: built by `harness explain-action` (Phase 7 #2). NOT yet
-// consumed by `harness policy intercept` — routing the runtime through
-// the envelope is Phase 7 #5. See docs/risk-gate.md and docs/ROADMAP.md.
+// STATUS: no longer consumed by `harness policy intercept` or any CLI
+// verb (the Risk Gate stages that built it are removed); it stays as a
+// runtime export.
 //
 // Design source: lava-ice-logs/2026-04-30/harness-risk-gate-extension.md
 // ("Action Envelope" section).

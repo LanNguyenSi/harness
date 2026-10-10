@@ -2487,3 +2487,28 @@ describe("zsh GLOB_SUBST and a paren inside `${...}` are not provably read-only 
     },
   );
 });
+
+describe("the sed and curl floors stay OUT of the shared read-only predicate", () => {
+  // The load-bearing separation (the critical finding on
+  // task 2929c5b7): the understanding-gate PreToolUse blocker and the
+  // solution-acceptance write-guard consume `isReadOnlyBashCommand`
+  // directly and short-circuit on it. `sed` and `curl` were never
+  // accepted there and must not be now: `isReadOnlyCurlCommand` (task
+  // fdaad781) was never wired into the shared predicate, exactly like the
+  // sed and kubectl floors before it. These pins guard the SHARED
+  // predicate.
+  // The write-guard side of this is pinned separately in
+  // tests/cli/pack-hook-solution-acceptance-writeguard.test.ts.
+  it.each([
+    "sed -n p f",
+    "sed -n '1p' f",
+    "sed 's/a/b/' f",
+    "curl URL",
+    "curl -sL URL",
+    "curl -I https://example.com",
+    "curl -s 'https://api.example.test/status'",
+    "curl 'https://example.test'",
+  ])("isReadOnlyBashCommand(%j) is false", (command) => {
+    expect(isReadOnlyBashCommand(command)).toBe(false);
+  });
+});

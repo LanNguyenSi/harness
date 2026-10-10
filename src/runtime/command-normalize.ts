@@ -56,7 +56,7 @@
 // `${REPO}`/`${BRANCH}`/`at_head`, resolves those builtins (and
 // `currentHeadSha`) from the trigger-satisfying segment's
 // `effectiveTarget` instead of the event's cwd — lazily, memoised per
-// resolved path, never touching `resolverGit`/`riskContext`. Trust in
+// resolved path, never touching the hook's cwd git context. Trust in
 // `effectiveTarget` is UNIFORM — no distinction between a segment's own
 // explicit target and one inherited from a preceding `cd` (orchestrator
 // decision D-010: an initial revision distinguished the two and was
@@ -378,7 +378,7 @@
 //     `nohup git status` used to sit in this list. Both are now peeled
 //     the same boolean-flag-only way as `setsid` (`peelExec`/`peelNohup`,
 //     part of the shared `peelWrapperPrefixes` loop) — added while
-//     rebuilding `src/runtime/deletion-target-resolve.ts`'s own
+//     rebuilding the former deletion-target resolver's own
 //     recognition on top of this module's peelers so the deletion gate
 //     could see past `exec rm -rf ...` / `nohup rm -rf ... &`, and added
 //     HERE (not only there) so this module's own `git`/`gh`/`npm`/
@@ -780,7 +780,7 @@ interface Token {
  * The minimal shape `peelWrapperPrefixes` and every individual `peelX`
  * wrapper-peeler actually need — `.text` only, never `.start`/`.end`
  * (task d03af8f6, review round 3). Exported so
- * `src/runtime/deletion-target-resolve.ts` can hand these SAME peelers a
+ * the former deletion-target resolver can hand these SAME peelers a
  * decoded token array of its own (built from ITS quote-aware tokenizer,
  * not this module's `tokenizeWithOffsets`) without fabricating fake
  * offsets: `Token` (with real offsets) is structurally assignable to
@@ -1537,7 +1537,7 @@ export function segmentViewOf(command: string): CommandSegment[] | null {
  * `BOUNDARY_RE` — closing the same bare-`&` gap `normalizeCommandAmpAware`
  * closes for trigger matching (`echo hi & rm -rf /home/x`), but as a
  * segment VIEW rather than a rejoined string, for
- * `src/runtime/deletion-target-resolve.ts`'s multi-segment scan. Uses the
+ * the former deletion-target resolver's multi-segment scan. Uses the
  * SAME shared walk (`segmentAndCanonicalize`, parameterised on
  * `boundaryRe` since task aabbad63) as every other pass in this module —
  * no new segmentation logic. `CommandSegment.effectiveTarget`'s own
@@ -2401,7 +2401,7 @@ export interface WrapperPeelResult {
    * value — F5, treated as if absent). `null` when no `env -C`/`--chdir`
    * was peeled. Consumed only by `canonicalizeSegment`'s own
    * `targetDir`/`targetBase` bookkeeping —
-   * `src/runtime/deletion-target-resolve.ts` (the other caller, task
+   * the former deletion-target resolver (the other caller, task
    * d03af8f6, review round 3) has no analogous need and ignores it.
    */
   envTargetDir: string | null;
@@ -2410,7 +2410,7 @@ export interface WrapperPeelResult {
    * opaque (`isOpaqueTargetValue`), whichever of them `envTargetDir` kept
    * and whether or not it was `~`-prefixed. Consumed only by
    * `canonicalizeSegment`; the other callers of this function
-   * (`deletion-target-resolve.ts`, `destructive-shell-floor.ts`) ignore it.
+   * (other callers) ignore it.
    */
   envOpaque: boolean;
 }
@@ -2428,7 +2428,7 @@ export interface WrapperPeelResult {
  *
  * SHARED (task d03af8f6, review round 3) between `canonicalizeSegment`
  * below — this module's own `git`/`gh`/`npm`/`harness` trigger
- * recognition — and `src/runtime/deletion-target-resolve.ts`'s deletion-
+ * recognition — and the former deletion-target resolver's deletion-
  * verb recognition (`rm`/`find`/`git clean`), which used to hand-roll an
  * independent, narrower copy of this exact peeling vocabulary
  * (`peelWrapperHeads`, missing `-u`/`-i`/`-C` on `env`, the duration-
@@ -2437,7 +2437,7 @@ export interface WrapperPeelResult {
  * maintaining two means a future wrapper added here (or a flag fix to an
  * existing one) benefits both gates automatically, and
  * `npm run check:duplication`'s clone-count fitness function has one
- * fewer near-duplicate block to flag. `deletion-target-resolve.ts` hands
+ * fewer near-duplicate block to flag. The former deletion-target resolver handed
  * this a decoded token array built from ITS OWN quote-aware tokenizer
  * (`WrapperPeelToken[]`, `.text` only — see that interface's own
  * comment for why the offset-carrying `Token[]` this module's own
@@ -2891,7 +2891,7 @@ function peelNice(tokens: readonly WrapperPeelToken[], startIdx: number): number
  * "run in a different directory" semantic this module tracks as a
  * target directory — only `env -C`/`--chdir` does, and that stays
  * hand-written in `peelEnv`. Exported (task d03af8f6, review round 3) so
- * `src/runtime/deletion-target-resolve.ts` can reuse this SAME loop for
+ * the former deletion-target resolver can reuse this SAME loop for
  * `xargs`'s own flags (`-0`, `-n1`, ...) instead of a third
  * independently-drifting copy — that module is the reason this needs no
  * value-flag vocabulary of its own either: `xargs`'s own value-taking

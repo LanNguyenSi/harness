@@ -546,7 +546,7 @@ describe("policy intercept: manifest-driven E2E flow", () => {
     expect(parsed.reason).not.toContain("To satisfy:");
   });
 
-  it("risk.degraded_fail_posture: fail_open restores the pre-0.45 non-blocking behaviour through the real manifest parse", async () => {
+  it("a manifest still carrying risk.degraded_fail_posture: fail_open is not honoured: fails closed through the real manifest parse", async () => {
     const dir = makeTmpDir("harness-broken-mcp-optout-");
     const brokenScript = path.join(dir, "broken-grounding-mcp.sh");
     fs.writeFileSync(
@@ -570,12 +570,12 @@ describe("policy intercept: manifest-driven E2E flow", () => {
       configPath: manifestPath,
     });
 
-    expect(result.blocked).toBe(false);
-    expect(stdoutOut()).toBe("");
-    expect(result.decisions[0]?.outcome).toBe("warn-degraded");
+    expect(result.blocked).toBe(true);
+    expect(result.decisions[0]?.outcome).toBe("deny-degraded");
+    expect(JSON.parse(stdoutOut().trim()).decision).toBe("block");
   });
 
-  it("the operator hint does not fire under the fail_open opt-out (negative control)", async () => {
+  it("the operator hint still fires when the manifest carries the retired fail_open key", async () => {
     const dir = makeTmpDir("harness-broken-mcp-optout-hint-");
     const brokenScript = path.join(dir, "broken-grounding-mcp.sh");
     fs.writeFileSync(
@@ -596,13 +596,11 @@ describe("policy intercept: manifest-driven E2E flow", () => {
       stderr,
       configPath: manifestPath,
     });
-    // Positive half so the control cannot pass vacuously (round 4): the
-    // opt-out really took effect and produced the non-blocking outcome.
-    expect(result.decisions[0]?.outcome).toBe("warn-degraded");
-    expect(result.blocked).toBe(false);
-    // warn-degraded (opt-out) => no deny-degraded => no hint line. The
-    // negative control that keeps the hint's .find predicate narrow.
-    expect(stderrOut()).not.toContain("Operator recovery");
+    // The retired key changes nothing: the decision is deny-degraded, so
+    // the one-line operator hint is written.
+    expect(result.decisions[0]?.outcome).toBe("deny-degraded");
+    expect(result.blocked).toBe(true);
+    expect(stderrOut()).toContain("Operator recovery");
   });
 
   it("fails CLOSED on a genuine ledger TIMEOUT (hanging grounding-mcp, the measured 2026-08-06 shape)", async () => {

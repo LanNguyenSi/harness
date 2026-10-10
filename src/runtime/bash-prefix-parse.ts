@@ -1,20 +1,20 @@
-// Risk Gate resolver input — Bash command-prefix parser.
+// Bash command-prefix parser.
 //
-// Three normal POSIX shell idioms slip past the production environment
-// resolver when only `process.env` and the hook's starting cwd (and, for
-// the branch, its current `.git/HEAD`) are inspected:
+// Three normal POSIX shell idioms change the effective environment, working
+// directory or branch of a Bash command when only `process.env` and the
+// hook's starting cwd (and, for the branch, its current `.git/HEAD`) are
+// inspected:
 //
 //   DATABASE_URL=postgres://prod terraform destroy   # inline env
 //   cd /repos/prod-infra && terraform destroy        # working-dir hop
 //   git switch main && rm -rf node_modules && ...    # branch hop
 //
 // The hook intercept sees Claude Code's process env and starting cwd, so
-// `env_var_patterns` and `branch_patterns` miss all three signals and the
+// a consumer reading only those misses all three signals and the
 // gate silently treats a prod mutation as non-prod.
 //
 // This parser extracts the leading idioms from a Bash command string so
-// the resolver layer can merge them into its inputs before
-// `environments.resolvers[]` runs. Three POSIX forms are supported in v1
+// a caller can merge them into its inputs. Three POSIX forms are supported in v1
 // (kept narrow on purpose, see follow-up scope in the originating tasks):
 //
 //   1. Inline env: leading `\w+=value` tokens. A value is read as one
@@ -171,7 +171,7 @@ export interface BashPrefix {
    * `git switch <branch> &&` clause has been stripped. `0` when nothing
    * matched. Added (task a7eb1a71) so a caller needing to test the
    * REMAINING command's own head, such as
-   * `kubectl-target-parse.ts`'s narrow kubectl-head anchor, can do so
+   * a command-head anchor, can do so
    * without re-implementing this module's prefix grammar.
    */
   remainderStart: number;

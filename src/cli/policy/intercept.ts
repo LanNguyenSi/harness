@@ -11,29 +11,20 @@ import {
   type LedgerSession,
 } from "../../policies/index.js";
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
 import { readStdinBounded, STDIN_IDLE_TIMEOUT_MS, stdinTimeoutNote, stdinTimeoutBlockJson, stdinTimeoutBlockReason } from "../bounded-stdin.js";
 import {
-  buildActionEnvelope,
   intercept,
   isBlockingDecision,
   recordPolicyDecisionOnSession,
-  resolveEnvironment,
   resolveGitContext,
-  resolveKubeContext,
-  type KubeContext,
   sanitizeEnvelopeReason,
-  type GitRepoContext,
   type LedgerClient,
   type PolicyDecision,
-  type RiskGateContext,
   type ToolEvent,
 } from "../../runtime/index.js";
 import type { Manifest, McpServer } from "../../schema/index.js";
 import { resolveGeneratedDir, writePendingApproval } from "../../runtime/pending-approval.js";
-import { ENV_RANK, resolveBashPrefixEnrichment } from "./risk-envelope-enrichment.js";
-import { parseKubectlTarget, type KubectlTarget } from "../../runtime/kubectl-target-parse.js";
 import {
   MAX_NORMALIZE_LENGTH,
   normalizeCommand,
@@ -81,16 +72,6 @@ export interface InterceptCliOptions extends LoaderOptions {
    */
   verbose?: boolean;
   /**
-   * Risk Gate seams (Phase 7 #5). Override the ambient inputs the
-   * Context Resolver matches `environments.resolvers[]` signals
-   * against, so a test exercising a `when:` policy stays hermetic.
-   * `env` defaults to `process.env`; the kube seams bypass the
-   * `~/.kube/config` read when either is supplied.
-   */
-  env?: Record<string, string | undefined>;
-  kubeContext?: string;
-  kubeNamespace?: string;
-  /**
    * Test seam for Codex's sandbox `--command-cwd` process argument.
    * Production resolves it from `/proc/1/cmdline` when Codex does not
    * include a cwd/workdir in the hook event payload.
@@ -120,15 +101,6 @@ function findGroundingMcp(manifest: Manifest): McpServer | null {
   return manifest.tools.mcp.find((m) => m.name === "grounding-mcp") ?? null;
 }
 
-/** Resolve an `os` fact, returning "" on the (rare) lookup failure. */
-function safeOs(fn: () => string): string {
-  try {
-    return fn();
-  } catch {
-    return "";
-  }
-}
-
 /**
  * Render the hook-identity suffix for a stderr diagnostic. Returns the
  * empty string when no `--hook` flag was supplied, so an operator
@@ -145,19 +117,14 @@ function hookSuffix(hookName: string | undefined): string {
  * policy name so concurrent fires (rare but possible) stay readable.
  */
 function formatDecisionDiagnostic(decision: PolicyDecision, hookName?: string): string {
-  // The deny-degraded suffix names the fail_open opt-out ON PURPOSE and
-  // ONLY here: stderr is the operator's surface. The agent-facing deny
-  // envelope deliberately omits it (see the deny-degraded branch in
-  // `runtime/intercept.ts` — a deny that includes its own disable recipe
-  // is not a gate).
   // Both degraded arms are cause-neutral: the degraded family has five
   // causes and only one of them is the ledger; the true cause follows
   // on the block's own `reason:` line (review 2026-08-08, rounds 3+5).
   const header = `harness policy intercept${hookSuffix(hookName)}: ${decision.policyName}: ${decision.outcome}${
     decision.outcome === "warn-degraded"
-      ? " (evidence could not be evaluated; non-blocking per warn tier or fail_open opt-out)"
+      ? " (evidence could not be evaluated; non-blocking per warn tier)"
       : decision.outcome === "deny-degraded"
-        ? " (evidence could not be evaluated; failing closed per enforcement tier; operator opt-out: risk.degraded_fail_posture: fail_open)"
+        ? " (evidence could not be evaluated; failing closed per enforcement tier)"
         : ""
   }`;
   const lines: string[] = [header];
@@ -230,56 +197,6 @@ function resolvePolicyCwd(event: ToolEvent, codexCommandCwd?: string): string {
     if (procCwd) return procCwd;
   }
   return process.cwd();
-}
-
-/**
- * Explicit kubectl target, upgrade-only merge (task a7eb1a71): an
- * explicit --context/--namespace/-n on a kubectl command can only push
- * the resolved environment to something MORE dangerous than the
- * ambient kubeconfig alone already gave, never less, mirroring
- * applyBranchSwitchUpgrade exactly (both the ambient-only base and the
- * merged-candidate kube inputs run through the SAME resolveEnvironment
- * call with identical git/env inputs, so ENV_RANK picks the more
- * dangerous of the two). See the `CHANGELOG.md:#0.49.0` entry (task
- * a7eb1a71) for the measured downgrade this fixes.
- */
-function applyKubeTargetUpgrade(
-  event: ToolEvent,
-  manifest: Manifest,
-  cwd: string,
-  git: GitRepoContext,
-  ambientKube: { context: string; namespace: string },
-  kubectlTarget: KubectlTarget | null,
-  env: Record<string, string | undefined>,
-  user: string,
-  host: string,
-  now: Date | undefined,
-): { context: string; namespace: string } {
-  if (kubectlTarget === null) return ambientKube;
-  const candidateKube = {
-    context: kubectlTarget.context ?? ambientKube.context,
-    namespace: kubectlTarget.namespace ?? ambientKube.namespace,
-  };
-  if (
-    candidateKube.context === ambientKube.context &&
-    candidateKube.namespace === ambientKube.namespace
-  ) {
-    return ambientKube;
-  }
-  const effectiveNow = now ?? new Date();
-  const baseResolution = resolveEnvironment(
-    buildActionEnvelope(event, { cwd, git, user, host, now: effectiveNow }),
-    manifest.environments.resolvers,
-    { env, kubeContext: ambientKube.context, kubeNamespace: ambientKube.namespace },
-  );
-  const candidateResolution = resolveEnvironment(
-    buildActionEnvelope(event, { cwd, git, user, host, now: effectiveNow }),
-    manifest.environments.resolvers,
-    { env, kubeContext: candidateKube.context, kubeNamespace: candidateKube.namespace },
-  );
-  return ENV_RANK[candidateResolution.name] < ENV_RANK[baseResolution.name]
-    ? candidateKube
-    : ambientKube;
 }
 
 /**
@@ -763,14 +680,12 @@ export async function runInterceptCli(
   // `2026-07-27-gate-target-repo-resolution`) tried a single global
   // `targetDir` per event instead and was removed before shipping: three
   // consecutive review rounds each found a different way one event-wide
-  // target leaked into the wrong evaluation (Risk Gate risk
-  // declassification; a push-gate multi-invocation fail-open; a non-git
-  // gated verb sharing a chain with a targeted git call). This
-  // `cwdGitContext` variable, and the `builtins` object built from it
-  // below, remain exactly what they were before this task — the resolved
-  // fallback every policy without a foreign attribution still uses,
-  // including the Risk Gate's own `resolverGit` further down, which
-  // this task does not touch at all.
+  // target leaked into the wrong evaluation (a declassification; a
+  // push-gate multi-invocation fail-open; a non-git gated verb sharing a
+  // chain with a targeted git call). This `cwdGitContext` variable, and
+  // the `builtins` object built from it below, remain exactly what they
+  // were before this task — the resolved fallback every policy without a
+  // foreign attribution still uses.
   const cwd = resolvePolicyCwd(event, opts.codexCommandCwd);
   const cwdGitContext = resolveGitContext(cwd);
   // Computed once here (not per-policy) so `intercept()` below can thread
@@ -956,132 +871,6 @@ export async function runInterceptCli(
       : {}),
   };
 
-  // Risk Gate ambient context — resolved only when the manifest
-  // declares a `when:`-bearing policy, so a pure Phase-4 manifest pays
-  // no kube-config read. `intercept()` applies the same gate; this just
-  // avoids the host I/O when nothing would consume it.
-  let riskContext: RiskGateContext | undefined;
-  if (manifest.policies.some((p) => p.when !== undefined)) {
-    const kube: KubeContext =
-      opts.kubeContext !== undefined || opts.kubeNamespace !== undefined
-        ? {
-            context: opts.kubeContext ?? "",
-            namespace: opts.kubeNamespace ?? "",
-          }
-        : resolveKubeContext();
-    // A kubeconfig that is there but cannot be read (over its size cap, not
-    // a regular file) resolves to an unknown context, which drops the
-    // production signal a kube context would have carried. Say so, once per
-    // call, instead of letting the loss pass silently.
-    if (kube.unreadable !== undefined) {
-      stderr.write(`harness policy intercept${hookSuffix(opts.hookName)}: ${kube.unreadable}\n`);
-    }
-    // Three POSIX Bash idioms (`VAR=value command`, `cd <path> &&
-    // command`, and — since task 341e024b — `git switch|checkout
-    // <branch> && command`) were invisible to the resolver before: the
-    // env resolver read `process.env` and the branch resolver read
-    // `.git/HEAD` under the hook's starting cwd, so a prod signal
-    // smuggled through any of the three idioms silently passed the
-    // gate. Parse the leading prefix once from the Bash command and
-    // merge the result into the resolver inputs only. ${CWD} always
-    // names the hook's own cwd; ${REPO}/${BRANCH} (`cwdGitContext`
-    // above, feeding `builtins`) are cwd-only too — see the comment
-    // above `cwdGitContext`'s declaration. The Risk Gate resolver's git
-    // base, `resolverGit` (risk-envelope-enrichment.ts), is its own narrow parse: it
-    // recognises only a leading `cd`, never `git -C` / `--work-tree` /
-    // `--git-dir` / `env -C`. Bottom line: `resolverGit` must never read
-    // anything other than `cwdGitContext`, or the leading-`cd` target
-    // within THIS same narrow parse — this feeds `when:`-clause risk
-    // classification, not ledger-tag namespacing.
-    //
-    // G5 (review round 2, 2026-07-27): that leading-`cd` parse is itself
-    // still a live declassification lever, PRE-EXISTING and NOT changed
-    // by this run — identical on the shipped 0.42.0 control, so this is
-    // documentation of a known asymmetry, not a new gap. From a repo on
-    // `main`, `rm -rf /data` BLOCKS, but `cd <repo-on-feature/x> && rm -rf
-    // /data` is ALLOWED: the `cd` target makes the resolver read
-    // feature/x's branch instead of cwd's `main`, so `branch_patterns:
-    // [main]` no longer matches. The asymmetry cuts both ways and neither
-    // direction is fixed here: a leading `cd` can make a prod signal
-    // VISIBLE that cwd alone would have missed (cwd on a feature branch,
-    // `cd` into a repo actually on `main`) just as readily as it can make
-    // one INVISIBLE (cwd on `main`, `cd` into a repo on a feature
-    // branch, as in the example above) — `resolverGit` trusts whichever
-    // of the two the command happens to name, with no independent check
-    // that the `cd` target is the repo the destructive command actually
-    // runs against. The `git switch`/`checkout` merge in that helper
-    // (`gitForRisk`, `applyBranchSwitchUpgrade`, same module) deliberately does
-    // NOT share this bidirectional-risk shape: it is a SEPARATE,
-    // upgrade-only step layered on top of `resolverGit`, not a change to
-    // `resolverGit` itself — a switch away from a production branch can
-    // never downgrade what `resolverGit` (cwd- or cd-based) already
-    // resolved.
-    const riskUser = safeOs(() => os.userInfo().username);
-    const riskHost = safeOs(() => os.hostname());
-    // The leading-prefix parse and the three merges it feeds (inline
-    // `VAR=value` env, leading `cd`, leading `git switch|checkout`)
-    // live in `resolveBashPrefixEnrichment`, shared (via
-    // `src/cli/enriched-event.ts`) with `harness explain-policy`,
-    // `resolve-env`, `test-risk` and `explain-action` so the debug verbs
-    // cannot drift from this hook.
-    // The kubectl-target merge below stays hook-only.
-    const { bashPrefix, riskBashCommand, git: gitForRisk, env: resolverEnv } =
-      resolveBashPrefixEnrichment({
-        event,
-        manifest,
-        cwd,
-        cwdGitContext,
-        env: opts.env ?? process.env,
-        kubeContext: kube.context,
-        kubeNamespace: kube.namespace,
-        user: riskUser,
-        host: riskHost,
-        now: opts.now,
-      });
-    // Explicit `--context`/`--namespace`/`-n` on a `kubectl ...`
-    // invocation (task a7eb1a71). Fed the REMAINDER after `bashPrefix`
-    // consumed a leading `cd <path> &&` / `VAR=value` / `git switch
-    // <branch> &&` prefix, not the raw command, so a wrapped invocation
-    // like `cd /tmp && kubectl ... --context x` is still covered; see
-    // `parseKubectlTarget`'s own doc comment for the narrow,
-    // command-head-anchored scope this is otherwise kept to, and for
-    // the forms still NOT unwrapped (sudo/time/env wrappers, a kubectl
-    // that is not the first chained segment, a piped kubectl).
-    const kubectlSubject =
-      riskBashCommand === null ? null : riskBashCommand.slice(bashPrefix?.remainderStart ?? 0);
-    const kubectlTarget = kubectlSubject === null ? null : parseKubectlTarget(kubectlSubject);
-    // CONFLICT PRIORITY (task a7eb1a71): an explicit kubectl
-    // --context/--namespace/-n is merged on top of the AMBIENT kube
-    // state (`kube`), on top of `gitForRisk` above (the git context
-    // AFTER the branch-switch upgrade), upgrade-only, exactly the same
-    // asymmetric shape the branch-switch merge itself uses. Command
-    // text can only raise the resolved environment toward production,
-    // never lower an already-resolved production; see
-    // `applyKubeTargetUpgrade`'s own doc comment for the measured
-    // downgrade this fixes.
-    const kubeForRisk = applyKubeTargetUpgrade(
-      event,
-      manifest,
-      cwd,
-      gitForRisk,
-      { context: kube.context, namespace: kube.namespace },
-      kubectlTarget,
-      resolverEnv,
-      riskUser,
-      riskHost,
-      opts.now,
-    );
-    riskContext = {
-      git: gitForRisk,
-      cwd,
-      user: riskUser,
-      host: riskHost,
-      env: resolverEnv,
-      kubeContext: kubeForRisk.context,
-      kubeNamespace: kubeForRisk.namespace,
-    };
-  }
-
   let result: Awaited<ReturnType<typeof intercept>>;
   try {
     result = await intercept({
@@ -1093,7 +882,6 @@ export async function runInterceptCli(
       ...(opts.ledgerTimeoutMs !== undefined && { ledgerTimeoutMs: opts.ledgerTimeoutMs }),
       ...(opts.now && { now: opts.now }),
       ...(cwdGitContext.sha.length > 0 && { currentHeadSha: cwdGitContext.sha }),
-      ...(riskContext && { riskContext }),
       ...(normalizedCommand && { normalizedCommand }),
       ...(ampNormalizedCommandThunk && { ampNormalizedCommandThunk }),
       ...(quoteNormalizedCommandThunk && { quoteNormalizedCommandThunk }),
@@ -1123,7 +911,7 @@ export async function runInterceptCli(
   // unreadable, so no approval tag could even be read), and writing a
   // marker the verb cannot act on would just lie about the
   // recoverability of the block. The "first blocking decision" check
-  // (rather than `.some()`) matters when two `when:`-bearing policies
+  // (rather than `.some()`) matters when two blocking policies
   // fire on the same event: the runtime's `intercept()` picks the first
   // blocking decision (its `isBlockingDecision`, imported here so the
   // two surfaces cannot drift — review 2026-08-08), so a blocking-first
@@ -1181,8 +969,7 @@ export async function runInterceptCli(
 
   // Degraded-deny operator hint. Default-verbosity, ONE line per event:
   // the envelope deliberately tells the agent only to involve the
-  // operator, and the full diagnostic (which names the fail_open
-  // opt-out) is verbose-only — without this line an operator whose
+  // operator, and the full diagnostic is verbose-only — without this line an operator whose
   // fleet wedges on a degraded ledger has no default-verbosity pointer
   // at all (review 2026-08-08, round 2). Two deliberate properties:
   //   - It carries the decision's OWN reason (sanitised: it can embed
@@ -1190,11 +977,9 @@ export async function runInterceptCli(
   //     fault — deny-degraded has five causes and only one of them is
   //     the ledger; a hardcoded "ledger unreadable" sent operators of
   //     the other four down a false doctor-path (round 3, medium).
-  //   - It does NOT name the opt-out knob: hook stderr can be surfaced
-  //     to the model in some harness configurations, so the default
-  //     channel points at the operator docs and the verbose diagnostic
-  //     instead of carrying the disable recipe (deviation from round
-  //     2's suggested fix, recorded in the run's 03-decisions.md).
+  //   - It names no opt-out: hook stderr can be surfaced to the model in
+  //     some harness configurations, so the default channel points at
+  //     the verbose diagnostic.
   // Suppressed under --verbose, where formatDecisionDiagnostic already
   // prints the same reason with more context.
   const firstDegradedDeny = result.decisions.find(
@@ -1206,8 +991,7 @@ export async function runInterceptCli(
         `deny-degraded (evidence could not be evaluated: ` +
         `${sanitizeEnvelopeReason(firstDegradedDeny.reason)}); failing closed. ` +
         `Operator recovery: check the reason above, then harness doctor if it names ` +
-        `the ledger; details and the availability opt-out: docs/risk-gate.md ` +
-        `("Degraded mode") or rerun with HARNESS_POLICY_VERBOSE=1\n`,
+        `the ledger; rerun with HARNESS_POLICY_VERBOSE=1 for details\n`,
     );
   }
 

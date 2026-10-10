@@ -1,10 +1,10 @@
-// Read-only Bash command classifier, shared by two gates that must not
-// fail-close on a command that mutates nothing: the understanding-gate
-// PreToolUse blocker (allows a provably read-only Bash command without
-// an approved report) and the Risk Classifier's read-only floor
-// (classifies one as `low` instead of fail-closed unclassified). Lives
-// in runtime/ so both the cli/pack hooks and the runtime classifier
-// import it without a cli -> runtime layering inversion.
+// Read-only Bash command classifier, used by gates that must not
+// fail-close on a command that mutates nothing, such as a PreToolUse
+// blocker that allows a provably read-only Bash command. Lives in
+// runtime/ so both the cli/pack hooks and the runtime import it without a
+// cli -> runtime layering inversion. The sed, kubectl and curl floors
+// below are no longer called by the runtime (the Risk Classifier that
+// consumed them is gone); they are kept as exported predicates.
 //
 // The pack's hook matcher `Edit|Write|Bash` is too broad on its own:
 // `Bash` covers commands like `git status`, `gh pr view`, `ls`, `cat`
@@ -838,8 +838,8 @@ export function isReadOnlyBashPipeline(command: string): boolean {
   });
 }
 
-// Kubectl read-only VERB floor — used ONLY by the Risk Classifier's
-// built-in floor (`risk-classifier.ts`), never by `isReadOnlyBashCommand`
+// Kubectl read-only VERB floor — was used ONLY by the (removed) Risk
+// Classifier's built-in floor, and never by `isReadOnlyBashCommand`
 // / `isReadOnlyBashPipeline` above. Task da823721 (blast-radius decision,
 // verb list, secrets/configmap exclusion, and the fail-safe rationale
 // for each: all recorded in docs/risk-gate.md's "Kubectl read-only verb
@@ -1123,7 +1123,8 @@ export function isReadOnlyKubectlCommand(command: string): boolean {
 // `sed` read-only floor, Risk-Classifier ONLY (task 2929c5b7).
 //
 // Placed here beside `isReadOnlyKubectlCommand` above, and wired ONLY at
-// `risk-classifier.ts`'s built-in floor, for the same reason that floor is:
+// the (removed) Risk Classifier's built-in floor, for the same reason that
+// floor was:
 // `isReadOnlyBashCommand` is consumed DIRECTLY by two other gates, and both
 // short-circuit on it before running their own checks. The
 // solution-acceptance write-guard (`src/cli/pack/hook-solution-acceptance-
@@ -1146,11 +1147,10 @@ export function isReadOnlyKubectlCommand(command: string): boolean {
 // requires knowing every curl flag's write capability across curl
 // versions, and `-H @file` shows the value side has the same problem.
 // `curl` therefore stays UNCLASSIFIED, like `ssh` and `node -e`, and rides
-// the `when:` evaluator's fallback: approval-gated in a production
+// the removed `when:` evaluator's fallback: approval-gated in a production
 // context, never hard-blocked, never floored. Its write-capable spellings
-// are raised to `high` by `destructive-shell-floor.ts` instead, which only
-// has to recognise capability it CAN name. See docs/risk-gate.md's
-// "Unclassified actions and the fail-close rule".
+// were raised to `high` by the removed destructive-shell floor instead,
+// which only had to recognise capability it CAN name.
 //
 // Design: ALLOWLIST, fail closed (decision D-012, this run). Every token
 // after the head must be recognised: a known read-only flag, a known
@@ -1783,8 +1783,8 @@ function consumeCurlFlagValue(
  * curl read-only SHAPE floor for the Risk Classifier ONLY (task fdaad781,
  * decision D-026, round 2 hardening). Composes exactly like the sed and
  * kubectl floors above: it never sinks below an operator classifier,
- * and only the DESTRUCTIVE floor (evaluated first in
- * `risk-classifier.ts`) can raise above it. This comment states only
+ * and only the DESTRUCTIVE floor (evaluated first in the removed Risk
+ * Classifier) could raise above it. This comment states only
  * the grammar; see docs/risk-gate.md's "curl read-only SHAPE floor"
  * section for the full history (D-013's two leaked flag lists), the
  * round-2 changes (mandatory `-q`, dropped `-L`/`-k`, the `\r`/query-

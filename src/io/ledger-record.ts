@@ -47,20 +47,6 @@ export interface PolicyDecisionPayload {
   ledgerTag: string;
   extractValues: Record<string, string>;
   requiresEval?: { matchedCount: number; reason: string };
-  /**
-   * Risk Gate verdicts for the action (Phase 7 #5). Present only when
-   * the Risk Gate was active for the event; absent for a pure Phase-4
-   * manifest, and absent on any `policy_decision` row recorded before
-   * Phase 7 #5 — `harness explain --trace` renders them only when present.
-   */
-  risk?: PolicyDecision["risk"];
-  environment?: PolicyDecision["environment"];
-  /**
-   * See `PolicyDecision.whenUnclassifiedFallback`. Present only when
-   * the match was a fail-closed unclassified hit (M7). Absent on rows
-   * recorded before M7 or on rows where the action was classified.
-   */
-  whenUnclassifiedFallback?: boolean;
   evaluatedAt: string;
 }
 
@@ -75,15 +61,6 @@ export function payloadFromDecision(
     ledgerTag: decision.ledgerTag,
     extractValues: decision.extractValues,
     ...(decision.requiresEval && { requiresEval: decision.requiresEval }),
-    ...(decision.risk && { risk: decision.risk }),
-    ...(decision.environment && { environment: decision.environment }),
-    // M7: carry the fail-closed unclassified flag into the serialised
-    // audit row so `harness audit` / `explain --trace` can surface it.
-    // Absent (not `false`) when the action was classified or the policy
-    // had no `when:` block, keeping pre-M7 rows byte-identical.
-    ...(decision.whenUnclassifiedFallback === true && {
-      whenUnclassifiedFallback: true,
-    }),
     evaluatedAt: decision.evaluatedAt,
   };
 }

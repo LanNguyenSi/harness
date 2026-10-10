@@ -174,43 +174,42 @@ describe("explain --trace", () => {
     expect(parsed.evaluatedAt).toBe("2026-04-30T12:00:00.000Z");
   });
 
-  it("Phase 7 #5: --trace surfaces the recorded classifier + environment", async () => {
+  it("--trace reads a row recorded with the removed risk fields and does not surface them", async () => {
+    // A row written by an earlier release carries `risk`, `environment` and
+    // `whenUnclassifiedFallback`. The trace still renders; the fields are
+    // ignored.
+    const oldRow = {
+      id: "old-risk-row",
+      content:
+        "policy_decision:review-before-merge:deny " +
+        JSON.stringify({
+          name: "review-before-merge",
+          outcome: "deny",
+          enforcement: "block",
+          reason: "no matching ledger entry for tag `review:42`",
+          ledgerTag: "review:42",
+          extractValues: { PR_NUMBER: "42" },
+          risk: { classified: true, severity: "critical", categories: ["destructive"] },
+          environment: { name: "production", confidence: "medium" },
+          whenUnclassifiedFallback: true,
+          evaluatedAt: "2026-04-30T12:00:00.000Z",
+        }),
+      source: "harness-policy-intercept",
+      createdAt: "2026-04-30T12:00:00.000Z",
+    };
     const result = await explain("review-before-merge", {
       configPath: FULL_MANIFEST,
       trace: true,
       json: true,
       sessionId: "sess-1",
-      fetchLedger: async () => ({
-        kind: "ok",
-        entries: [
-          decisionEntry(
-            {
-              policyName: "review-before-merge",
-              risk: {
-                classified: true,
-                severity: "critical",
-                categories: ["destructive", "infrastructure_change"],
-                reversible: false,
-                confidence: "high",
-                reasons: ['classifier "dangerous-shell" matched'],
-              },
-              environment: {
-                name: "production",
-                confidence: "medium",
-                signals: ["branch:main ~ main"],
-                resolver: "production-signals",
-              },
-            },
-            "2026-04-30T12:00:00.000Z",
-          ),
-        ],
-      }),
+      fetchLedger: async () => ({ kind: "ok", entries: [oldRow] }),
     });
     const parsed = JSON.parse(result.output);
-    expect(parsed.classifier.severity).toBe("critical");
-    expect(parsed.classifier.categories).toContain("destructive");
-    expect(parsed.environment.name).toBe("production");
-    expect(parsed.environment.resolver).toBe("production-signals");
+    expect(parsed.decision).toBe("deny");
+    expect(parsed.extract.PR_NUMBER).toBe("42");
+    expect(parsed).not.toHaveProperty("classifier");
+    expect(parsed).not.toHaveProperty("environment");
+    expect(parsed).not.toHaveProperty("whenUnclassifiedFallback");
   });
 
   it("Phase 7 #5: --trace omits classifier/environment for a pre-#5 decision", async () => {
@@ -506,52 +505,6 @@ describe("explain --trace", () => {
     const err = caught as HarnessExitError;
     expect(err.exitCode).toBe(1);
     expect(err.message).toMatch(/cannot read audit log: grounding-mcp not reachable/);
-  });
-
-  it("M7: --trace --json surfaces whenUnclassifiedFallback=true for a fail-closed deny", async () => {
-    // Regression guard for the MEDIUM fix: when the ledger row carries
-    // `whenUnclassifiedFallback=true` the JSON projection must include
-    // the field so operators can distinguish a fail-closed deny from a
-    // real classification hit. Mutation guard: removing the conditional
-    // spread from renderTrace makes parsed.whenUnclassifiedFallback undefined.
-    const result = await explain("review-before-merge", {
-      configPath: FULL_MANIFEST,
-      trace: true,
-      json: true,
-      sessionId: "sess-1",
-      fetchLedger: async () => ({
-        kind: "ok",
-        entries: [
-          decisionEntry(
-            { policyName: "review-before-merge", whenUnclassifiedFallback: true },
-            "2026-04-30T12:00:00.000Z",
-          ),
-        ],
-      }),
-    });
-    const parsed = JSON.parse(result.output);
-    expect(parsed.whenUnclassifiedFallback).toBe(true);
-  });
-
-  it("M7: --trace --json omits whenUnclassifiedFallback for a classified hit (negative control)", async () => {
-    // A decision recorded without whenUnclassifiedFallback (classified
-    // action, pre-M7 row, or no-when policy) must NOT have the field in
-    // the JSON projection. Mutation guard: unconditionally emitting the
-    // field in renderTrace makes this test red.
-    const result = await explain("review-before-merge", {
-      configPath: FULL_MANIFEST,
-      trace: true,
-      json: true,
-      sessionId: "sess-1",
-      fetchLedger: async () => ({
-        kind: "ok",
-        entries: [
-          decisionEntry({ policyName: "review-before-merge" }, "2026-04-30T12:00:00.000Z"),
-        ],
-      }),
-    });
-    const parsed = JSON.parse(result.output);
-    expect(parsed.whenUnclassifiedFallback).toBeUndefined();
   });
 });
 

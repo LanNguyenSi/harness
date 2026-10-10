@@ -72,59 +72,63 @@ describe("audit — happy path", () => {
   });
 });
 
-describe("audit — M7 whenUnclassifiedFallback render", () => {
-  // One fail-closed (unclassified) deny carrying the flag, one ordinary
-  // classified deny without it. Both timestamps sit inside NOW's 24h window.
-  const M7_FIXTURE = [
-    decisionEntry(
-      {
-        policyName: "gate-risk-unscoped",
+describe("audit — rows recorded with the removed risk fields", () => {
+  // A policy_decision row written by an earlier release carries `risk`,
+  // `environment` and `whenUnclassifiedFallback` in its JSON payload. It must
+  // still list; the removed fields are ignored, not rendered.
+  const OLD_ROW = {
+    id: "old-risk-row",
+    content:
+      "policy_decision:gate-risk-unscoped:deny " +
+      JSON.stringify({
+        name: "gate-risk-unscoped",
         outcome: "deny",
+        enforcement: "block",
         reason: "unclassified action",
+        ledgerTag: "risk-override:s1",
+        extractValues: {},
+        risk: { severity: "critical", categories: ["destructive"], classified: true },
+        environment: { name: "production", confidence: "high" },
         whenUnclassifiedFallback: true,
-      },
-      "2026-04-30T10:00:00.000Z",
-    ),
+        evaluatedAt: "2026-04-30T10:00:00.000Z",
+      }),
+    source: "harness-policy-intercept",
+    createdAt: "2026-04-30T10:00:00.000Z",
+  };
+  const FIXTURE_WITH_OLD_ROW = [
+    OLD_ROW,
     decisionEntry(
       { policyName: "review-before-merge", outcome: "deny", reason: "missing review" },
       "2026-04-30T11:00:00.000Z",
     ),
   ];
 
-  it("--json carries whenUnclassifiedFallback on a fail-closed row and omits it on a classified row", async () => {
-    // Mutation guard: removing the rowsFromEntries spread in audit.ts makes the
-    // flagged assertion go red (the field is absent after decode); injecting it
-    // unconditionally makes the classified (negative-control) assertion go red.
+  it("--json lists the old row and drops the removed fields", async () => {
     const result = await audit({
       configPath: MANIFEST_PATH,
       json: true,
       now: NOW,
-      fetchLedger: async () => ({ kind: "ok", entries: M7_FIXTURE }),
+      fetchLedger: async () => ({ kind: "ok", entries: FIXTURE_WITH_OLD_ROW }),
     });
     const parsed = JSON.parse(result.output);
-    const flagged = parsed.decisions.find(
-      (d: { name: string }) => d.name === "gate-risk-unscoped",
-    );
-    const classified = parsed.decisions.find(
-      (d: { name: string }) => d.name === "review-before-merge",
-    );
-    expect(flagged.whenUnclassifiedFallback).toBe(true);
-    expect(classified.whenUnclassifiedFallback).toBeUndefined();
+    expect(parsed.decisions).toHaveLength(2);
+    const old = parsed.decisions.find((d: { name: string }) => d.name === "gate-risk-unscoped");
+    expect(old.outcome).toBe("deny");
+    expect(old.reason).toBe("unclassified action");
+    expect(old).not.toHaveProperty("whenUnclassifiedFallback");
+    expect(old).not.toHaveProperty("risk");
+    expect(old).not.toHaveProperty("environment");
   });
 
-  it("table output annotates the reason cell with [unclassified-fallback] only for a fail-closed row", async () => {
-    // Mutation guard: removing the formatTable annotation in audit.ts makes the
-    // first assertion go red; annotating unconditionally makes the second red.
+  it("table output lists the old row without an unclassified-fallback annotation", async () => {
     const result = await audit({
       configPath: MANIFEST_PATH,
       now: NOW,
-      fetchLedger: async () => ({ kind: "ok", entries: M7_FIXTURE }),
+      fetchLedger: async () => ({ kind: "ok", entries: FIXTURE_WITH_OLD_ROW }),
     });
-    const lines = result.output.split("\n");
-    const flaggedLine = lines.find((l) => l.includes("gate-risk-unscoped"))!;
-    const classifiedLine = lines.find((l) => l.includes("review-before-merge"))!;
-    expect(flaggedLine).toContain("[unclassified-fallback]");
-    expect(classifiedLine).not.toContain("[unclassified-fallback]");
+    const oldLine = result.output.split("\n").find((l) => l.includes("gate-risk-unscoped"))!;
+    expect(oldLine).toContain("unclassified action");
+    expect(result.output).not.toContain("[unclassified-fallback]");
   });
 });
 

@@ -138,7 +138,7 @@ describe("normalizeCommand", () => {
   // CLOSED (task d03af8f6, review round 3): `exec` and `nohup` used to sit
   // in the G2 block above. Both are now peeled by `peelWrapperPrefixes`
   // (`peelExec`/`peelNohup`) — added while rebuilding
-  // `deletion-target-resolve.ts`'s own recognition on top of this
+  // the former deletion-target resolver's own recognition on top of this
   // module's peelers, per the orchestrator decision for that task, and
   // added HERE too so this module's own trigger recognition benefits.
   describe("task d03af8f6, review round 3: exec/nohup now peel and DO normalise to a trigger match", () => {
@@ -965,7 +965,7 @@ describe("normalizeCommandAmpAware (task aabbad63: closes the bare-& gating gap 
   // CLOSED (task d03af8f6, review round 3): `nohup` is now peeled by the
   // SAME `peelWrapperPrefixes` loop both normalisation passes share (see
   // `peelNohup`'s own comment) — added while rebuilding
-  // `deletion-target-resolve.ts`'s recognition on top of this module's
+  // the former deletion-target resolver's recognition on top of this module's
   // peelers, and added HERE too per the orchestrator decision so this
   // module's own trigger recognition benefits as well. `echo hi & nohup
   // <verb>` still needs the AMP-AWARE pass specifically (the bare `&`

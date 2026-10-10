@@ -316,23 +316,6 @@ describe.skipIf(process.platform === "win32")("runtime state files: a FIFO at th
     expectBounded(run);
     expect(run.value).toEqual({ ok: null });
   });
-
-  it("kubeconfig: a FIFO reads as an unknown context; a regular file resolves", () => {
-    const cfg = path.join(tmp, "kubeconfig");
-    fs.writeFileSync(
-      cfg,
-      "current-context: prod\ncontexts:\n  - name: prod\n    context: { namespace: payments }\n",
-    );
-    const control = callInChild("runtime/kube-context.js", "resolveKubeContext", [{ kubeconfigPath: cfg }]);
-    expectBounded(control);
-    expect(control.value).toEqual({ ok: { context: "prod", namespace: "payments" } });
-
-    fs.rmSync(cfg);
-    mkfifo(cfg);
-    const run = callInChild("runtime/kube-context.js", "resolveKubeContext", [{ kubeconfigPath: cfg }]);
-    expectBounded(run);
-    expect(run.value).toMatchObject({ ok: { context: "", namespace: "", unreadable: expect.stringContaining("not a regular file") } });
-  });
 });
 
 describe.skipIf(process.platform === "win32")("manifest loader: a FIFO at a manifest path fails the load within the bound", () => {
