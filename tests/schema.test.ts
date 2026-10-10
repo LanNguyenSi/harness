@@ -3,7 +3,7 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { parse as parseYaml } from "yaml";
-import { ManifestParseError, parseManifest, parseManifestWithWarnings } from "../src/schema/index.js";
+import { ManifestParseError, PoliciesSchema, parseManifest, parseManifestWithWarnings } from "../src/schema/index.js";
 import { FULL_TEMPLATE } from "../src/cli/init/templates.js";
 import { TEAM_TEMPLATE } from "../src/cli/init/profiles.js";
 
@@ -90,64 +90,9 @@ describe("parseManifest — happy path", () => {
     expect(m.hooks).toEqual([]);
     expect(m.policies).toEqual([]);
     expect(m.policy_packs).toEqual([]);
-    expect(m.risk.classifiers).toEqual([]);
-    // Task f1aea826: the degraded fail posture defaults to fail-closed
-    // for block/require_approval tiers; the opt-out must be explicit.
-    expect(m.risk.degraded_fail_posture).toBe("preserve_enforcement");
-    expect(m.environments.resolvers).toEqual([]);
-  });
-
-  it("accepts the explicit risk.degraded_fail_posture opt-out and rejects unknown values", () => {
-    const m = parseManifest({
-      version: 1,
-      risk: { degraded_fail_posture: "fail_open" },
-    });
-    expect(m.risk.degraded_fail_posture).toBe("fail_open");
-    expect(m.risk.classifiers).toEqual([]);
-    expect(() =>
-      parseManifest({
-        version: 1,
-        risk: { degraded_fail_posture: "fail_closed_sometimes" },
-      }),
-    ).toThrow(/invalid enum|Invalid enum|invalid_value/i);
-  });
-
-  it("rejects a bare '/' risk.safe_deletion_roots entry — it would match every absolute path (task d03af8f6, review round 2, LOW (a))", () => {
-    expect(() =>
-      parseManifest({
-        version: 1,
-        risk: { safe_deletion_roots: ["/"] },
-      }),
-    ).toThrow(/filesystem root itself|defeating the allowlist/i);
-    // A trailing-slash spelling of the same mistake is caught too.
-    expect(() =>
-      parseManifest({
-        version: 1,
-        risk: { safe_deletion_roots: ["//"] },
-      }),
-    ).toThrow(/filesystem root itself|defeating the allowlist/i);
-  });
-
-  it.each(["/.", "/./", "/tmp/.."])(
-    "rejects %s — it lexically normalizes to the filesystem root too (task d03af8f6, review round 3, LOW (d))",
-    (root) => {
-      expect(() =>
-        parseManifest({
-          version: 1,
-          risk: { safe_deletion_roots: [root] },
-        }),
-      ).toThrow(/normalizes to the filesystem root|defeating the allowlist/i);
-    },
-  );
-
-  it("still accepts a genuine subdirectory whose OWN name is not just '..'/'.'", () => {
-    const m = parseManifest({
-      version: 1,
-      risk: { safe_deletion_roots: ["/tmp/../scratch"] },
-    });
-    // /tmp/../scratch normalizes to /scratch — a real, non-root
-    // subdirectory, not the filesystem root.
-    expect(m.risk.safe_deletion_roots).toEqual(["/tmp/../scratch"]);
+    // The Risk Gate keys are removed (task 39c112e0): no default is filled in.
+    expect(m).not.toHaveProperty("risk");
+    expect(m).not.toHaveProperty("environments");
   });
 
   it("accepts a string command for tools.mcp[].command", () => {
@@ -256,20 +201,6 @@ describe("parseManifest — invalid fixtures", () => {
       pattern: /duplicate policy_pack name/i,
     },
     { file: "18-policy-pack-unknown-key.yaml", pattern: /unrecognized key|bogus_field/i },
-    {
-      file: "19-risk-classifier-duplicate-name.yaml",
-      pattern: /duplicate risk classifier name/i,
-    },
-    { file: "20-risk-pattern-bad-regex.yaml", pattern: /invalid regex/i },
-    { file: "21-risk-unknown-category.yaml", pattern: /data-loss|invalid enum/i },
-    {
-      file: "22-environment-resolver-no-signals.yaml",
-      pattern: /at least one of/i,
-    },
-    {
-      file: "23-policy-when-empty.yaml",
-      pattern: /when must declare at least one clause/i,
-    },
     {
       file: "24-policy-operator-only-with-requires.yaml",
       pattern: /operator_only.*must not also declare requires/i,
@@ -1021,337 +952,45 @@ describe("parseManifest — min_version numeric pattern", () => {
   }
 });
 
-describe("parseManifest — Phase 7 risk-gate vocabulary", () => {
-  // Inline fixture carrying the `risk:` / `environments:` blocks that
-  // `docs/examples/full-manifest.yaml` used to ship (task 6e52c044
-  // removed them from the example and the full init template; the schema
-  // keeps accepting both keys until the later schema step). The YAML text
-  // is the removed FULL_TEMPLATE block, verbatim.
-  const RISK_GATE_VOCABULARY_FIXTURE = `version: 1
-risk:
-  # Fail posture when a policy's evidence cannot be READ (ledger timeout,
-  # spawn failure, unresolved template): with \`preserve_enforcement\`
-  # (the default) block/require_approval policies fail CLOSED
-  # (\`deny-degraded\`) while warn policies stay non-blocking. Set
-  # \`fail_open\` to restore the pre-0.45 availability-first behaviour
-  # where EVERY degraded evaluation was a non-blocking \`warn-degraded\`.
-  # Kept COMMENTED OUT on purpose: the schema is strict, so a manifest
-  # carrying this key fails to parse on a pre-0.45 binary, and a manifest
-  # load failure is ALLOW at the hook layer — on a mixed-version fleet an
-  # emitted default would turn a downgrade into a silent full fail-open
-  # (review 2026-08-08). See docs/okf/gate-fail-posture-matrix.md.
-  # degraded_fail_posture: preserve_enforcement
-  # Safe-deletion-root allowlist for gate-dev-unsafe-deletion's
-  # \`action.deletion_target_unresolvable\` clause (task d03af8f6): an
-  # absolute deletion target inside one of these roots is allowed; a
-  # relative path, an unexpanded \$VAR/~, or a traversal that normalizes
-  # outside every root is gated. Shown explicitly even though it matches
-  # the schema default (\`/tmp\`, \`/private/tmp\` — the two spellings this
-  # harness's own scratchpad convention can use, macOS symlinks /tmp to
-  # /private/tmp) so an operator sees the live config surface here rather
-  # than having to know the schema default exists. An override REPLACES
-  # this list, it does not merge with it. See docs/risk-gate.md.
-  safe_deletion_roots:
-    - /tmp
-    - /private/tmp
-  classifiers:
-    - name: dangerous-shell
-      tool: Bash
-      patterns:
-        - pattern: 'rm\\s+-rf\\s+(/|/var|/data|/mnt|~)'
-          categories: [destructive, data_loss]
-          severity: critical
-        - pattern: 'DROP\\s+TABLE|TRUNCATE\\s+TABLE|DELETE\\s+FROM'
-          categories: [destructive, data_loss]
-          severity: high
-        # Token-based, flag-tolerant: a flag between \`kubectl\` and
-        # \`delete\` (e.g. \`kubectl --context=x delete namespace payments\`)
-        # must not defeat the match, without matching \`kubectl
-        # get\`/\`describe\` and without exponential-backtracking on a long
-        # flag run. \`(?:\\s+-\\S+(?:\\s+(?!delete\\b)(?!-)\\S+)?)*\` consumes
-        # zero or more \`-\`/\`--\` flag tokens (each optionally taking one
-        # following, non-flag, non-"delete" value token), linear in
-        # command length. See docs/risk-gate.md for the full rationale
-        # and the earlier quadratic-alternation form this replaced.
-        - pattern: 'kubectl(?:\\s+-\\S+(?:\\s+(?!delete\\b)(?!-)\\S+)?)*\\s+delete\\s+(namespace|deployment|statefulset|pvc)'
-          categories: [destructive, infrastructure_change]
-          severity: high
-        # Same flag-tolerance treatment for terraform's own \`-chdir=DIR\`
-        # global flag, which sits between the tool name and the
-        # subcommand (\`terraform -chdir=infra destroy\`).
-        - pattern: 'terraform(?:\\s+-\\S+(?:\\s+(?!destroy\\b)(?!-)\\S+)?)*\\s+destroy'
-          categories: [destructive, infrastructure_change]
-          severity: critical
-        # Task 2929c5b7: unclassified commands no longer trivially
-        # satisfy risk.severity_at_least: critical (see when-eval.ts and
-        # docs/risk-gate.md's "Unclassified actions and the fail-close
-        # rule") — kept in lockstep with docs/examples/full-manifest.yaml
-        # by tests/cli/init-full-template-parity.test.ts.
-        #
-        # These patterns are the OPERATOR-EDITABLE MIRROR of the built-in
-        # destructive floor (src/runtime/destructive-shell-floor.ts),
-        # not the only line of defence: the floor ships in the binary and
-        # already classifies these heads for an EXISTING manifest that
-        # never adopts the patterns below. Edit, narrow, or raise these
-        # freely: an operator pattern composes with the floor under
-        # highest-severity-wins, so it can only add. The floor is
-        # argv-aware where a regex cannot be (path-qualified and wrapped
-        # spellings: /bin/dd, sudo dd, sh -c "dd ...", git -C <dir> push
-        # -f), so a few spellings are caught by the floor alone; the
-        # parity test in tests/runtime/destructive-shell-floor.test.ts
-        # pins that everything caught HERE is also caught THERE, at the
-        # same severity or higher.
-        - pattern: '\\bdd\\s[^\\n]*\\bof='
-          categories: [destructive, data_loss]
-          severity: critical
-        - pattern: '\\btruncate\\b[^\\n]*(\\s-[a-zA-Z]*s|--size)'
-          categories: [destructive, data_loss]
-          severity: critical
-        - pattern: '\\bshred\\b'
-          categories: [destructive, data_loss, irreversible_action]
-          severity: critical
-        - pattern: '\\bmkfs(\\.\\w+)?\\b'
-          categories: [destructive, data_loss, infrastructure_change]
-          severity: critical
-        - pattern: '\\bfind\\b[^\\n]*-delete\\b'
-          categories: [destructive, data_loss]
-          severity: critical
-        - pattern: '\\bfind\\b[^\\n]*-exec(dir)?\\s+rm\\b'
-          categories: [destructive, data_loss]
-          severity: critical
-        - pattern: '\\bgit\\s+reset\\b[^\\n]*--hard\\b'
-          categories: [destructive, data_loss]
-          severity: high
-        - pattern: '\\bgit\\s+push\\b[^\\n]*(--force(-with-lease)?\\b|\\s-f\\b)'
-          categories: [destructive, production_mutation, deployment_change]
-          severity: high
-        - pattern: '\\bgit\\s+clean\\b[^\\n]*(--force\\b|\\s-[a-zA-Z]*f[a-zA-Z]*\\b)'
-          categories: [destructive, data_loss]
-          severity: high
-        - pattern: '\\bgit\\s+checkout\\s+--\\s+\\.'
-          categories: [destructive, data_loss]
-          severity: high
-        - pattern: '\\bgit\\s+restore\\s+\\.(\\s|$)'
-          categories: [destructive, data_loss]
-          severity: high
-        - pattern: '\\b(chmod|chown)\\b[^\\n]*(\\s-[a-zA-Z]*R|--recursive\\b)'
-          categories: [mass_update]
-          severity: high
-        - pattern: '\\bcurl\\b[^\\n]*(-X\\s*|--request[\\s=])(?![Gg][Ee][Tt]\\b)(?![Hh][Ee][Aa][Dd]\\b)[A-Za-z]'
-          categories: [production_mutation, network_exfiltration]
-          severity: high
-        - pattern: '\\bcurl\\b[^\\n]*(\\s-[a-zA-Z]*[dFT]|--data\\b|--json\\b|--form(-string)?\\b|--upload-file\\b)'
-          categories: [production_mutation, network_exfiltration]
-          severity: high
-        - pattern: '\\bcurl\\b[^\\n]*(\\s-[a-zA-Z]*[oODcK]|--output(-dir)?\\b|--remote-name\\b|--remote-header-name\\b|--dump-header\\b|--cookie-jar\\b|--config\\b|--create-dirs\\b|--etag-save\\b|--trace(-ascii)?\\b|--stderr\\b|(\\s-[a-zA-Z]*w\\b|--write-out\\b)[^\\n]*%output)'
-          categories: [destructive, data_loss]
-          severity: high
-        - pattern: '\\bsed\\b[^\\n]*(\\s-[a-zA-Z]*i[a-zA-Z]*\\b|--in-place\\b)'
-          categories: [destructive, data_loss]
-          severity: high
-
-environments:
-  resolvers:
-    - name: production-signals
-      environment: production
-      signals:
-        branch_patterns: [main, "release/*"]
-        env_var_patterns:
-          - var: DATABASE_URL
-            patterns: [prod, production]
-        kube_context_patterns: [".*prod.*"]
-        kube_namespace_patterns: [prod, production]
-`;
-
-  it("parses the risk + environments blocks of the inline fixture", () => {
-    const raw = parseYaml(RISK_GATE_VOCABULARY_FIXTURE);
-    const manifest = parseManifest(raw);
-
-    expect(manifest.risk.classifiers).toHaveLength(1);
-    const classifier = manifest.risk.classifiers[0];
-    expect(classifier?.name).toBe("dangerous-shell");
-    expect(classifier?.tool).toBe("Bash");
-    // 4 original patterns + 16 added by task 2929c5b7 (explicit
-    // classification for mutating heads a loosened unclassified
-    // fallback could otherwise let slip past gate-prod-destructive —
-    // see docs/risk-gate.md's "Unclassified actions and the fail-close
-    // rule"). The 16th is the curl LOCAL-WRITE pattern, added in review
-    // round 4 alongside D-013's removal of the curl read-only floor.
-    expect(classifier?.patterns).toHaveLength(20);
-    expect(classifier?.patterns[0]?.severity).toBe("critical");
-    expect(classifier?.patterns[0]?.categories).toEqual(["destructive", "data_loss"]);
-
-    expect(manifest.environments.resolvers).toHaveLength(1);
-    const resolver = manifest.environments.resolvers[0];
-    expect(resolver?.name).toBe("production-signals");
-    expect(resolver?.environment).toBe("production");
-    expect(resolver?.signals.branch_patterns).toEqual(["main", "release/*"]);
-    expect(resolver?.signals.env_var_patterns?.[0]?.var).toBe("DATABASE_URL");
+describe("parseManifest — removed Risk Gate vocabulary (task 39c112e0)", () => {
+  const HOOKS = [{ name: "h", event: "PreToolUse", command: "/usr/bin/true", blocking: false }];
+  const gate = (extra: Record<string, unknown>) => ({
+    name: "p",
+    description: "d",
+    trigger: { event: "PreToolUse" },
+    requires: { ledger_tag: "risk-approved:${SESSION_ID}" },
+    hook: "h",
+    enforcement: "block",
+    ...extra,
   });
 
-  it("rejects a risk severity outside the closed scale", () => {
-    expect(() =>
-      parseManifest({
-        version: 1,
-        risk: {
-          classifiers: [
-            {
-              name: "c",
-              tool: "Bash",
-              patterns: [{ pattern: "rm", categories: ["destructive"], severity: "catastrophic" }],
-            },
-          ],
-        },
-      }),
-    ).toThrow(/severity|enum/i);
-  });
-
-  it("rejects an unknown key inside a risk classifier (.strict)", () => {
-    expect(() =>
-      parseManifest({
-        version: 1,
-        risk: {
-          classifiers: [
-            {
-              name: "c",
-              tool: "Bash",
-              patterns: [{ pattern: "rm", categories: ["destructive"], severity: "high" }],
-              bogus: true,
-            },
-          ],
-        },
-      }),
-    ).toThrow(/unrecognized key|bogus/i);
-  });
-
-  it("rejects an environment resolver asserting the unmatchable `unknown` name", () => {
-    // `unknown` is the implicit no-resolver-matched fallback; a resolver
-    // that asserts it is a contradiction the enum rejects.
-    expect(() =>
-      parseManifest({
-        version: 1,
-        environments: {
-          resolvers: [
-            { name: "r", environment: "unknown", signals: { branch_patterns: ["main"] } },
-          ],
-        },
-      }),
-    ).toThrow(/environment|enum/i);
-  });
-
-  it("rejects two environment resolvers sharing a name", () => {
-    expect(() =>
-      parseManifest({
-        version: 1,
-        environments: {
-          resolvers: [
-            { name: "r", environment: "production", signals: { branch_patterns: ["main"] } },
-            { name: "r", environment: "staging", signals: { branch_patterns: ["develop"] } },
-          ],
-        },
-      }),
-    ).toThrow(/duplicate environment resolver name/i);
-  });
-
-  it("rejects an env_var_patterns entry missing its var", () => {
-    expect(() =>
-      parseManifest({
-        version: 1,
-        environments: {
-          resolvers: [
-            {
-              name: "r",
-              environment: "production",
-              signals: { env_var_patterns: [{ patterns: ["prod"] }] },
-            },
-          ],
-        },
-      }),
-    ).toThrow(/var|required/i);
-  });
-
-  it("accepts a policy with a populated when: block", () => {
-    const m = parseManifest({
+  it("does not validate the contents of a risk or environments block any more: any shape is stripped with a warning", () => {
+    const { manifest, warnings } = parseManifestWithWarnings({
       version: 1,
-      hooks: [{ name: "h", event: "PreToolUse", command: "/usr/bin/true", blocking: false }],
-      policies: [
-        {
-          name: "gate-prod-destructive",
-          description: "d",
-          trigger: { event: "PreToolUse", match: "Bash" },
-          requires: { ledger_tag: "risk-approved:${SESSION_ID}" },
-          hook: "h",
-          enforcement: "block",
-          when: {
-            "risk.severity_at_least": "high",
-            "risk.category_in": ["destructive", "data_loss"],
-            "environment.name": "production",
-            "action.reversible": false,
-          },
-        },
-      ],
+      risk: { safe_deletion_roots: ["/"], degraded_fail_posture: "fail_closed_sometimes", classifiers: [{ severity: "nope" }] },
+      environments: { resolvers: [{ name: "unknown" }, { name: "unknown" }] },
     });
-    expect(m.policies[0]?.when?.["risk.severity_at_least"]).toBe("high");
-    expect(m.policies[0]?.when?.["environment.name"]).toBe("production");
+    expect(manifest).not.toHaveProperty("risk");
+    expect(manifest).not.toHaveProperty("environments");
+    expect(warnings.map((w) => w.path)).toEqual(["risk", "environments"]);
   });
 
-  it("accepts when.environment.name = unknown (unknown is matchable)", () => {
-    const m = parseManifest({
-      version: 1,
-      hooks: [{ name: "h", event: "PreToolUse", command: "/usr/bin/true", blocking: false }],
-      policies: [
-        {
-          name: "p",
-          description: "d",
-          trigger: { event: "PreToolUse" },
-          requires: { ledger_tag: "risk-approved:${SESSION_ID}" },
-          hook: "h",
-          enforcement: "block",
-          when: { "environment.name": "unknown" },
-        },
-      ],
-    });
-    expect(m.policies[0]?.when?.["environment.name"]).toBe("unknown");
+  it.each([
+    ["a populated when: block", { "risk.severity_at_least": "high", "environment.name": "production" }],
+    ["when.environment.name = unknown", { "environment.name": "unknown" }],
+    ["an empty when: {}", {}],
+    ["action.deletion_target_unresolvable: false", { "action.deletion_target_unresolvable": false }],
+    ["an unknown clause key", { "risk.bogus_clause": "high" }],
+  ])("drops a policy carrying %s whole, without validating the clause", (_name, when) => {
+    const { manifest, warnings } = parseManifestWithWarnings({ version: 1, hooks: HOOKS, policies: [gate({ when })] });
+    expect(manifest.policies).toEqual([]);
+    expect(warnings.map((w) => w.path)).toEqual(["policies[0]"]);
   });
 
-  it("rejects action.deletion_target_unresolvable: false — only true is a meaningful polarity (task d03af8f6, review round 2)", () => {
-    expect(() =>
-      parseManifest({
-        version: 1,
-        hooks: [{ name: "h", event: "PreToolUse", command: "/usr/bin/true", blocking: false }],
-        policies: [
-          {
-            name: "p",
-            description: "d",
-            trigger: { event: "PreToolUse" },
-            requires: { ledger_tag: "risk-approved:${SESSION_ID}" },
-            hook: "h",
-            enforcement: "block",
-            when: { "action.deletion_target_unresolvable": false },
-          },
-        ],
-      }),
-    ).toThrow(/invalid_literal|invalid literal|expected true/i);
-  });
-
-  it("rejects an unknown clause key inside when: (.strict)", () => {
-    expect(() =>
-      parseManifest({
-        version: 1,
-        hooks: [{ name: "h", event: "PreToolUse", command: "/usr/bin/true", blocking: false }],
-        policies: [
-          {
-            name: "p",
-            description: "d",
-            trigger: { event: "PreToolUse" },
-            requires: { ledger_tag: "risk-approved:${SESSION_ID}" },
-            hook: "h",
-            enforcement: "block",
-            when: { "risk.bogus_clause": "high" },
-          },
-        ],
-      }),
-    ).toThrow(/unrecognized key|bogus_clause/i);
+  it("the policy schema no longer declares when: (a parse that skips the posture strip rejects it)", () => {
+    expect(() => PoliciesSchema.parse([gate({ when: { "environment.name": "production" } })])).toThrow(
+      /unrecognized key|when/i,
+    );
   });
 });
 

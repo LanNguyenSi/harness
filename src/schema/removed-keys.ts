@@ -12,6 +12,13 @@
 // apply` print them, `harness validate --strict` fails on them). A key that was
 // never valid is not in the table and still fails the parse.
 //
+// A removed per-policy field is different: `policies[].when` scoped a gate to a
+// narrower set of tool calls than its `trigger` matches. Stripping only that
+// key would widen the gate to every call the trigger matches (a `block` on
+// `match: "Bash"` would then block every Bash call and lock the session), so
+// a policy entry that carries a removed field is dropped WHOLE, with one
+// warning per dropped policy (REMOVED_POLICY_FIELDS below).
+//
 // Removed CLI commands (REMOVED_COMMANDS below) are not stripped: a hook or
 // policy that still calls one parses fine, so `findRemovedCommandUses` reports
 // each such site through the same warning channel.
@@ -21,6 +28,24 @@ export interface RemovedManifestPath {
   /** Dotted path from the manifest root, e.g. `grounding.policies_source`. */
   path: string;
   /** The release that removed it. */
+  removedIn: string;
+  /** One line on why it went. */
+  reason: string;
+  /**
+   * Extra sentence for the warning, derived from the stripped value (for
+   * example a sub-setting whose removal changes behaviour). Return undefined
+   * when the value needs no extra sentence.
+   */
+  note?: (stripped: unknown) => string | undefined;
+}
+
+/**
+ * A per-policy field a release removed. A `policies[]` entry carrying it is
+ * dropped whole at load, never stripped to the remaining fields.
+ */
+export interface RemovedPolicyField {
+  /** The key on a `policies[]` entry, e.g. `when`. */
+  field: string;
   removedIn: string;
   /** One line on why it went. */
   reason: string;
@@ -35,6 +60,7 @@ export interface RemovedPackName {
 
 export interface RemovedManifestTable {
   paths: readonly RemovedManifestPath[];
+  policyFields: readonly RemovedPolicyField[];
   packs: readonly RemovedPackName[];
 }
 
@@ -69,6 +95,28 @@ export const REMOVED_MANIFEST_PATHS: readonly RemovedManifestPath[] = [
     removedIn: "1.0.0",
     reason: "only the removed understanding-gate pack consumed permission profiles",
   },
+  {
+    path: "risk",
+    removedIn: "1.0.0",
+    reason: "the Risk Gate is removed, so its classifier configuration has no consumer",
+    note: (stripped) =>
+      isPlainObject(stripped) && stripped["degraded_fail_posture"] === "fail_open"
+        ? "risk.degraded_fail_posture: fail_open is no longer honoured: block and require_approval policies fail closed when their evidence is unreadable"
+        : undefined,
+  },
+  {
+    path: "environments",
+    removedIn: "1.0.0",
+    reason: "the Risk Gate is removed, so environment resolution has no consumer",
+  },
+];
+
+export const REMOVED_POLICY_FIELDS: readonly RemovedPolicyField[] = [
+  {
+    field: "when",
+    removedIn: "1.0.0",
+    reason: "the Risk Gate is removed, and keeping only the trigger would widen the policy's scope",
+  },
 ];
 
 export const REMOVED_PACK_NAMES: readonly RemovedPackName[] = [
@@ -91,6 +139,7 @@ export const REMOVED_PACK_NAMES: readonly RemovedPackName[] = [
 
 export const REMOVED_MANIFEST_TABLE: RemovedManifestTable = {
   paths: REMOVED_MANIFEST_PATHS,
+  policyFields: REMOVED_POLICY_FIELDS,
   packs: REMOVED_PACK_NAMES,
 };
 
@@ -101,9 +150,63 @@ export interface ManifestPostureWarning {
   message: string;
 }
 
+/**
+ * Where the entries an array kept sat in the manifest as written. Dropping an
+ * entry re-indexes the array, so a diagnostic about a later entry would name
+ * the wrong position without it.
+ */
+export interface IndexMap {
+  /** `kept[k]` is the original index of the entry now at index `k`. */
+  kept: readonly number[];
+  /** Length of the array before any entry was dropped. */
+  originalLength: number;
+}
+
+/** Index maps of the arrays `stripRemovedManifestEntries` dropped entries from. */
+export interface StrippedIndexMaps {
+  policies?: IndexMap;
+  policy_packs?: IndexMap;
+}
+
 export interface StrippedManifest {
   raw: unknown;
   warnings: ManifestPostureWarning[];
+  /** Present only when an array lost an entry. */
+  indexMaps?: StrippedIndexMaps;
+}
+
+/**
+ * The index in the manifest as written for index `k` of the stripped array.
+ * An index past the kept entries (an entry appended after the parse, such as
+ * a workflow-derived policy) keeps its distance from the end.
+ */
+export function originalIndex(map: IndexMap | undefined, k: number): number {
+  if (map === undefined) return k;
+  const hit = map.kept[k];
+  return hit !== undefined ? hit : k + (map.originalLength - map.kept.length);
+}
+
+/** Remap a zod issue path (`["policies", 0, ...]`) to the manifest as written. */
+export function remapIssuePath(path: ReadonlyArray<string | number>, maps: StrippedIndexMaps | undefined): Array<string | number> {
+  const [head, idx, ...rest] = path;
+  if (maps === undefined || typeof idx !== "number") return [...path];
+  if (head === "policies" || head === "policy_packs") return [head, originalIndex(maps[head], idx), ...rest];
+  return [...path];
+}
+
+/**
+ * Remap a diagnostic path that names `policies[k]` or `policy_packs[k]`
+ * (also the dotted `policies.k`) to the manifest as written. Any other path
+ * is returned unchanged.
+ */
+export function remapDiagnosticPath(path: string, maps: StrippedIndexMaps | undefined): string {
+  if (maps === undefined) return path;
+  const m = /^(policies|policy_packs)(?:\[(\d+)\]|\.(\d+)(?=\.|$))/.exec(path);
+  if (m === null) return path;
+  const name = m[1] as "policies" | "policy_packs";
+  const k = Number(m[2] ?? m[3]);
+  const mapped = originalIndex(maps[name], k);
+  return `${name}${m[2] !== undefined ? `[${mapped}]` : `.${mapped}`}${path.slice(m[0].length)}`;
 }
 
 function isPlainObject(v: unknown): v is Record<string, unknown> {
@@ -130,34 +233,77 @@ function withoutPath(node: unknown, segments: readonly string[]): { node: unknow
   return { node: { ...node, [head]: inner.node }, removed: true };
 }
 
+/** The value at `segments` under `node`, or undefined (own properties only). */
+function valueAt(node: unknown, segments: readonly string[]): unknown {
+  let cur: unknown = node;
+  for (const seg of segments) {
+    if (!isPlainObject(cur) || !Object.prototype.hasOwnProperty.call(cur, seg)) return undefined;
+    cur = cur[seg];
+  }
+  return cur;
+}
+
 /**
- * Strip every removed manifest path and every removed pack entry from a raw
- * (merged, not yet parsed) manifest. Pure: `raw` is not modified.
+ * Strip every removed manifest path, drop every policy that carries a removed
+ * policy field, and drop every removed pack entry from a raw (merged, not yet
+ * parsed) manifest. Pure: `raw` is not modified.
  */
 export function stripRemovedManifestEntries(
   raw: unknown,
   table: RemovedManifestTable = REMOVED_MANIFEST_TABLE,
 ): StrippedManifest {
   const warnings: ManifestPostureWarning[] = [];
+  const indexMaps: StrippedIndexMaps = {};
   let current = raw;
   for (const entry of table.paths) {
-    const r = withoutPath(current, entry.path.split("."));
+    const segments = entry.path.split(".");
+    const stripped = valueAt(current, segments);
+    const r = withoutPath(current, segments);
     if (r.removed) {
       current = r.node;
+      const note = entry.note?.(stripped);
       warnings.push({
         path: entry.path,
-        message: `removed in ${entry.removedIn} and ignored (${entry.reason}); delete it from the manifest`,
+        message:
+          `removed in ${entry.removedIn} and ignored (${entry.reason}); delete it from the manifest` +
+          (note !== undefined ? `. ${note}` : ""),
       });
+    }
+  }
+  if (isPlainObject(current) && Array.isArray(current["policies"]) && table.policyFields.length > 0) {
+    const policies = current["policies"] as unknown[];
+    const kept: unknown[] = [];
+    const keptFrom: number[] = [];
+    policies.forEach((policy, i) => {
+      const removed = isPlainObject(policy)
+        ? table.policyFields.find((f) => Object.prototype.hasOwnProperty.call(policy, f.field))
+        : undefined;
+      if (removed === undefined) {
+        kept.push(policy);
+        keptFrom.push(i);
+        return;
+      }
+      const name = stringAt(policy, "name");
+      warnings.push({
+        path: `policies[${i}]`,
+        message: `${name !== undefined ? `policy "${name}"` : "policy"} dropped whole: ${removed.field}: clauses are removed in ${removed.removedIn} (${removed.reason}); delete the policy from the manifest, or re-create it without ${removed.field}:`,
+      });
+    });
+    if (kept.length !== policies.length) {
+      current = { ...current, policies: kept };
+      indexMaps.policies = { kept: keptFrom, originalLength: policies.length };
     }
   }
   if (isPlainObject(current) && Array.isArray(current["policy_packs"]) && table.packs.length > 0) {
     const packs = current["policy_packs"] as unknown[];
     const kept: unknown[] = [];
+    const keptFrom: number[] = [];
     packs.forEach((pack, i) => {
       const name = isPlainObject(pack) ? pack["name"] : undefined;
       const removed = typeof name === "string" ? table.packs.find((p) => p.name === name) : undefined;
       if (removed === undefined) {
         kept.push(pack);
+        keptFrom.push(i);
         return;
       }
       warnings.push({
@@ -165,9 +311,12 @@ export function stripRemovedManifestEntries(
         message: `pack "${removed.name}" was removed in ${removed.removedIn} and is skipped (${removed.reason}); delete the entry from the manifest`,
       });
     });
-    if (kept.length !== packs.length) current = { ...current, policy_packs: kept };
+    if (kept.length !== packs.length) {
+      current = { ...current, policy_packs: kept };
+      indexMaps.policy_packs = { kept: keptFrom, originalLength: packs.length };
+    }
   }
-  return { raw: current, warnings };
+  return Object.keys(indexMaps).length > 0 ? { raw: current, warnings, indexMaps } : { raw: current, warnings };
 }
 
 /** One line per warning, as `harness validate` / `harness doctor` print it. */
@@ -205,6 +354,7 @@ export const REMOVED_COMMANDS: readonly RemovedCommand[] = [
   { command: "harness explain-action", removedIn: "1.0.0", reason: "the Risk Gate debug verbs are removed" },
   { command: "harness test-risk", removedIn: "1.0.0", reason: "the Risk Gate debug verbs are removed" },
   { command: "harness resolve-env", removedIn: "1.0.0", reason: "the Risk Gate debug verbs are removed" },
+  { command: "harness approve risk", removedIn: "1.0.0", reason: "the Risk Gate approval verb is removed" },
   { command: "harness explain-policy", removedIn: "1.0.0", reason: "the Risk Gate debug verbs are removed" },
 ];
 

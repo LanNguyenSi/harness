@@ -847,15 +847,57 @@ describe("branch-protection hook: the manifest", () => {
     expect(allowed.blocked).toBe(false);
     expect(allowed.exitCode).toBe(0);
   });
+
+  it.skipIf(!GIT_AVAILABLE)("a manifest that carries every removed Risk Gate key (risk with fail_open, environments, a when: policy) loads with three warnings and still refuses on a protected branch and allows a feature branch", async () => {
+    const dir = tmpDir("harness-bp-manifest-");
+    const cfg = path.join(dir, "harness.yaml");
+    fs.writeFileSync(
+      cfg,
+      [
+        "version: 1",
+        "hooks:",
+        "  - { name: risk-gate, event: PreToolUse, match: Bash, command: harness policy intercept, blocking: hard }",
+        "risk:",
+        "  degraded_fail_posture: fail_open",
+        "  classifiers: []",
+        "environments:",
+        "  resolvers: []",
+        "policies:",
+        "  - name: gate-prod-destructive",
+        "    description: scoped gate",
+        "    trigger: { event: PreToolUse, match: Bash }",
+        "    requires: { ledger_tag: 'risk-override:${SESSION_ID}' }",
+        "    hook: risk-gate",
+        "    enforcement: block",
+        "    when: { risk.severity_at_least: critical, environment.name: production }",
+        "policy_packs:",
+        "  - name: branch-protection",
+        "    source: builtin",
+        "    enabled: true",
+        "",
+      ].join("\n"),
+    );
+    const loaded = loadManifest({ configPath: cfg });
+    expect(loaded.warnings.map((w) => w.path)).toEqual(["risk", "environments", "policies[0]"]);
+    expect(loaded.manifest.policies).toEqual([]);
+    const protectedRepo = makeRepo("master");
+    const refused = await runHook(writeEvent(protectedRepo, path.join(protectedRepo, "x.ts")), { configPath: cfg });
+    expect(refused.blocked).toBe(true);
+    expect(refused.diagnostic).toBe(`BLOCK: branch "master" of ${protectedRepo} is protected (master, main, develop)`);
+    const featureRepo = makeRepo("feat/x");
+    const allowed = await runHook(writeEvent(featureRepo, path.join(featureRepo, "x.ts")), { configPath: cfg });
+    expect(allowed.blocked).toBe(false);
+    expect(allowed.exitCode).toBe(0);
+  });
 });
 
 describe("removed verbs", () => {
-  it("`harness approve branch-protection` and `harness session-start branch-check` are no longer commands", () => {
+  it("`harness approve` (every verb), and `harness session-start branch-check`, are no longer commands", () => {
     const program = buildProgram({ stdout: () => {}, stderr: () => {} });
     const sub = (name: string): string[] =>
       program.commands.find((c) => c.name() === name)?.commands.map((c) => c.name()) ?? [];
-    expect(sub("approve")).not.toContain("branch-protection");
-    expect(sub("approve").length).toBeGreaterThan(0);
+    expect(program.commands.map((c) => c.name())).not.toContain("approve");
+    expect(sub("approve")).toEqual([]);
     expect(sub("session-start")).not.toContain("branch-check");
     expect(sub("pack").length).toBeGreaterThan(0);
   });

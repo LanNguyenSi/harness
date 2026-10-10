@@ -1,19 +1,19 @@
 import { z } from "zod";
-import { EnvironmentsSchema } from "./environments.js";
 import { GroundingSchema } from "./grounding.js";
 import { HooksSchema } from "./hooks.js";
 import { MemorySchema } from "./memory.js";
 import { PoliciesSchema } from "./policies.js";
 import { PolicyPacksSchema } from "./policy-packs.js";
-import { RiskSchema } from "./risk.js";
 import { ToolsSchema } from "./tools.js";
 import { AuditSchema } from "./audit.js";
 import { DoctorSchema } from "./doctor.js";
 import { ReviewTemplatesSchema, WorkflowsSchema } from "./workflows.js";
 import {
   findRemovedCommandUses,
+  remapIssuePath,
   stripRemovedManifestEntries,
   type ManifestPostureWarning,
+  type StrippedIndexMaps,
 } from "./removed-keys.js";
 
 export const SUPPORTED_MANIFEST_VERSION = 1;
@@ -27,14 +27,6 @@ export const ManifestSchema = z
     hooks: HooksSchema.default([]),
     policies: PoliciesSchema.default([]),
     policy_packs: PolicyPacksSchema.default([]),
-    // Phase 7 Risk Gate inputs — LIVE since Phase 7 #3/#5:
-    // `risk.classifiers[]` feeds `classifyRisk` (runtime/intercept.ts)
-    // on every PreToolUse once the manifest declares at least one
-    // `when:`-bearing policy (the riskGateActive guard), and
-    // `when.risk.*` clauses consume the result in runtime/when-eval.ts.
-    // See docs/risk-gate.md.
-    risk: RiskSchema.default({}),
-    environments: EnvironmentsSchema.default({}),
     workflows: WorkflowsSchema.default([]),
     review_templates: ReviewTemplatesSchema.default({}),
     audit: AuditSchema.default({}),
@@ -120,12 +112,19 @@ export interface ParsedManifest {
    * every hook, producer or `ux.run` line that still calls a removed command.
    */
   warnings: ManifestPostureWarning[];
+  /**
+   * Original positions of the policies[] / policy_packs[] entries that
+   * survived the drop, for a caller that reports a diagnostic about the
+   * parsed manifest (`remapDiagnosticPath`). Absent when nothing was dropped.
+   */
+  indexMaps?: StrippedIndexMaps;
 }
 
 /**
  * Parse a raw manifest, first stripping every removed manifest path and
- * removed pack name (`src/schema/removed-keys.ts`): those warn and are
- * ignored instead of failing the strict parse. Any other unknown key still
+ * removed pack name and dropping every policy that carries a removed field
+ * (`src/schema/removed-keys.ts`): those warn and are ignored instead of
+ * failing the strict parse. Any other unknown key still
  * fails it. A manifest that parses is then scanned for sites that still call
  * a removed command (`findRemovedCommandUses`); those warn too, with the
  * manifest path of each site.
@@ -134,7 +133,12 @@ export function parseManifestWithWarnings(raw: unknown): ParsedManifest {
   const stripped = stripRemovedManifestEntries(raw);
   const result = ManifestSchema.safeParse(stripped.raw);
   if (!result.success) {
-    const issues = friendlyVersionIssues(result.error.issues, raw);
+    // Dropping an entry re-indexes policies[] / policy_packs[]: name the index
+    // the operator wrote, not the one the strict parse saw.
+    const issues = friendlyVersionIssues(result.error.issues, raw).map((i) => ({
+      ...i,
+      path: remapIssuePath(i.path, stripped.indexMaps),
+    }));
     const summary = issues
       .map((i) => `  ${i.path.join(".") || "<root>"}: ${i.message}`)
       .join("\n");
@@ -143,7 +147,11 @@ export function parseManifestWithWarnings(raw: unknown): ParsedManifest {
       issues,
     );
   }
-  return { manifest: result.data, warnings: [...stripped.warnings, ...findRemovedCommandUses(raw)] };
+  return {
+    manifest: result.data,
+    warnings: [...stripped.warnings, ...findRemovedCommandUses(raw)],
+    ...(stripped.indexMaps !== undefined ? { indexMaps: stripped.indexMaps } : {}),
+  };
 }
 
 /** `parseManifestWithWarnings` for callers that do not report the warnings. */
@@ -157,8 +165,6 @@ export * from "./memory.js";
 export * from "./hooks.js";
 export * from "./policies.js";
 export * from "./policy-packs.js";
-export * from "./risk.js";
-export * from "./environments.js";
 export * from "./workflows.js";
 export * from "./audit.js";
 export * from "./doctor.js";
@@ -168,6 +174,7 @@ export * from "./requires.js";
 // but is not part of the package API.
 export {
   REMOVED_MANIFEST_PATHS,
+  REMOVED_POLICY_FIELDS,
   REMOVED_PACK_NAMES,
   REMOVED_MANIFEST_TABLE,
   REMOVED_COMMANDS,
@@ -178,8 +185,11 @@ export {
 } from "./removed-keys.js";
 export type {
   RemovedManifestPath,
+  RemovedPolicyField,
   RemovedPackName,
   RemovedManifestTable,
+  IndexMap,
+  StrippedIndexMaps,
   ManifestPostureWarning,
   StrippedManifest,
   RemovedCommand,

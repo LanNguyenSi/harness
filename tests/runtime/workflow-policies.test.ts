@@ -336,23 +336,7 @@ describe("deriveWorkflowGatePolicies", () => {
       expect(deriveWorkflowGatePolicies(manifest).length).toBeGreaterThan(0);
     });
 
-    it("a hand policy scoped via when: on the same surface also does not suppress the gate", () => {
-      const strong = shippedPolicy("review-before-merge");
-      const whenScoped: Policy = {
-        ...strong,
-        name: "review-before-merge-prod-only",
-        when: { "environment.name": "production" },
-      };
-      const manifest = makeManifest({
-        hooks: WIRED_HOOKS,
-        policies: [whenScoped],
-        workflows: [workflow("ship", [branchStep(), reviewStep("required"), mergeStep()])],
-      });
-      const derived = deriveWorkflowGatePolicies(manifest);
-      expect(derived.find((p) => p.name === "workflow:ship:review-before-merge")).toBeDefined();
-    });
-
-    it("a hand policy at LEAST as strong (block, no when, not operator_only) still dedupes", () => {
+    it("a hand policy at LEAST as strong (block, not operator_only) still dedupes", () => {
       // Unchanged round-1 behaviour, re-asserted here alongside the new
       // weak-overlap cases so the strong/weak boundary is visible in one
       // place.
@@ -563,29 +547,9 @@ describe("F4 (review round 3): trigger.extract is part of the equivalence key", 
   });
 });
 
-// F7 (review round 3): the two remaining `weaknessReason` branches.
-describe("F7 (review round 3): weakness reasons for when-scoped and operator_only overlaps", () => {
+// F7 (review round 3): the remaining `weaknessReason` branch.
+describe("F7 (review round 3): weakness reason for an operator_only overlap", () => {
   const shipWorkflow = () => workflow("ship", [branchStep(), reviewStep("required"), mergeStep()]);
-
-  it("reports the never-applies reason for a block policy that carries a when: clause", () => {
-    const strong = shippedPolicy("review-before-merge");
-    const whenScoped: Policy = {
-      ...strong,
-      name: "review-before-merge-prod-only",
-      when: { "environment.name": "production" },
-    };
-    const manifest = makeManifest({
-      hooks: WIRED_HOOKS,
-      policies: [whenScoped],
-      workflows: [shipWorkflow()],
-    });
-    const overlaps = findWeakGatePolicyOverlaps(manifest);
-    expect(overlaps).toHaveLength(1);
-    expect(overlaps[0]).toMatchObject({
-      handPolicyName: "review-before-merge-prod-only",
-      reason: "when: (carries a when: clause, never applies)",
-    });
-  });
 
   it("reports 'operator_only: true' for an operator_only block policy sharing the surface + tag", () => {
     // The schema forbids `operator_only: true` together with `requires:`
@@ -729,7 +693,6 @@ describe("deriveWorkflowGatePolicies: task-scoped merge gates (task 2699b476)", 
       expect(gate?.hook).toBe(shipped.hook);
       expect(gate?.enforcement).toBe(shipped.enforcement);
       expect(gate?.requires).toEqual(shipped.requires);
-      expect(gate?.when).toEqual(shipped.when);
       expect(gate?.operator_only).toEqual(shipped.operator_only);
     }
   });

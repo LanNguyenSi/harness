@@ -1203,8 +1203,17 @@ describe("runInterceptCli — 98ad072f mandatory regression pins (written FIRST 
   });
 });
 
-describe("runInterceptCli — a policy carrying when: never applies", () => {
+describe("runInterceptCli — a policy carrying when: is dropped at load", () => {
   const WHEN = { "environment.name": "production" };
+  // The per-repo git-push fixture without its removed-command producer and ux
+  // text (those would add unrelated posture warnings to the load).
+  const { producers: _producers, ux: _ux, ...pushShape } = legacyPreflightPush() as unknown as Record<string, unknown>;
+  const perRepoPolicy = {
+    ...pushShape,
+    name: "p",
+    hook: "h",
+    requires: { ledger_tag: "preflight:${REPO}" },
+  };
   const gateBase = {
     description: "gate",
     trigger: { event: "PreToolUse", match: "Bash" },
@@ -1212,9 +1221,11 @@ describe("runInterceptCli — a policy carrying when: never applies", () => {
     hook: "h",
   };
 
-  // Policy shapes the matching loop treats differently before the guard; the
-  // `when:` clause alone decides the outcome, and every case also runs its
-  // twin without `when:` as a control (the event does match).
+  // Policy shapes the matching loop treats differently; the `when:` clause
+  // alone decides the outcome, and every case also runs its twin without
+  // `when:` as a control (the event does match). The manifest is written to
+  // disk and loaded through the real loader, so the removed-key posture is
+  // what drops the policy.
   // `command` builds a Bash PreToolUse event; `event` replaces it for the
   // cases on another tool or hook event.
   const cases: Array<{
@@ -1262,11 +1273,7 @@ describe("runInterceptCli — a policy carrying when: never applies", () => {
     },
     {
       label: "a per-repo policy matched only by the shell-model arm",
-      policy: {
-        ...legacyPreflightPush(),
-        name: "p",
-        requires: { ledger_tag: "preflight:${REPO}" },
-      },
+      policy: perRepoPolicy,
       command: "git -C '/tmp/repo with space' push origin master",
     },
     {
@@ -1296,6 +1303,30 @@ describe("runInterceptCli — a policy carrying when: never applies", () => {
         hook_event_name: "PreToolUse",
         tool_name: "mcp__agent-tasks__pull_requests_merge",
         tool_input: { prNumber: 42 },
+        session_id: "sess-1",
+      },
+    },
+    {
+      label: "an Edit trigger with a path_match and an Edit event",
+      policy: {
+        ...gateBase,
+        name: "p",
+        enforcement: "require_approval",
+        trigger: { event: "PreToolUse", match: "Edit", path_match: "\\.env$" },
+      },
+      event: {
+        hook_event_name: "PreToolUse",
+        tool_name: "Edit",
+        tool_input: { file_path: "/tmp/.env", old_string: "a", new_string: "b" },
+        session_id: "sess-1",
+      },
+    },
+    {
+      label: "a UserPromptSubmit trigger with a prompt event",
+      policy: { ...gateBase, name: "p", enforcement: "warn", trigger: { event: "UserPromptSubmit" } },
+      event: {
+        hook_event_name: "UserPromptSubmit",
+        prompt: "terraform destroy everything",
         session_id: "sess-1",
       },
     },
@@ -1349,15 +1380,32 @@ describe("runInterceptCli — a policy carrying when: never applies", () => {
   }
 
   let tmpDir: string;
+  let homeDir: string;
   beforeEach(() => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "intercept-when-"));
+    homeDir = fs.mkdtempSync(path.join(os.tmpdir(), "intercept-when-home-"));
   });
   afterEach(() => {
     fs.rmSync(tmpDir, { recursive: true, force: true });
+    fs.rmSync(homeDir, { recursive: true, force: true });
   });
 
+  /** Write a manifest (JSON is YAML) and return the loader options for it. */
+  function manifestOn(policies: unknown[]): { configPath: string; homeDir: string } {
+    const configPath = path.join(homeDir, "harness.yaml");
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({
+        version: 1,
+        hooks: [{ name: "h", event: "PreToolUse", command: "/usr/bin/true", blocking: false }],
+        policies,
+      }),
+    );
+    return { configPath, homeDir };
+  }
+
   for (const c of cases) {
-    it(`${c.label}: no decision, no block, no output, no ledger call, no staged approval`, async () => {
+    it(`${c.label}: dropped at load, no decision, no block, no output, no ledger call, no staged approval`, async () => {
       const out = captureStdout();
       const err = captureStream();
       const ledger = recordingLedger();
@@ -1365,18 +1413,16 @@ describe("runInterceptCli — a policy carrying when: never applies", () => {
         stdin: streamFrom(eventFor(c)),
         stdout: out.stream,
         stderr: err.stream,
-        manifest: makeManifest({ policies: [{ ...c.policy, when: WHEN } as unknown as Policy] }),
+        ...manifestOn([{ ...c.policy, when: WHEN }]),
         ledger,
         generatedDir: tmpDir,
       });
       expect(result.decisions).toHaveLength(0);
       expect(result.blocked).toBe(false);
       expect(out.output()).toBe("");
-      // The only stderr line is the ordinary "no policy matched" hint: a
-      // when-gated diagnostic or any other side effect would add a line.
-      const stderrLines = err.output().split("\n").filter((l) => l !== "");
-      expect(stderrLines).toHaveLength(1);
-      expect(stderrLines[0]).toMatch(/^harness policy intercept: no policy matched event /);
+      // The load leaves zero policies, so the engine has nothing to report:
+      // no no-match hint and no other side effect on stderr.
+      expect(err.output()).toBe("");
       expect(ledger.calls).toEqual([]);
       expect(fs.readdirSync(tmpDir)).toEqual([]);
     });
@@ -1387,7 +1433,7 @@ describe("runInterceptCli — a policy carrying when: never applies", () => {
         stdin: streamFrom(eventFor(c)),
         stdout: captureStdout().stream,
         stderr: err.stream,
-        manifest: makeManifest({ policies: [c.policy as unknown as Policy] }),
+        ...manifestOn([c.policy]),
         ledger: recordingLedger(),
         generatedDir: tmpDir,
       });
@@ -1402,11 +1448,12 @@ describe("runInterceptCli — task f1df7c2d: stage .pending-approval on require_
   // Pre-fix, `harness policy
   // intercept` returned the block JSON for a `require_approval` decision
   // but never wrote the session id to <generatedDir>/.pending-approval,
-  // so a subsequent arg-less `harness approve risk` failed to resolve
-  // the session id — even though the gate that just fired knew it.
+  // so a subsequent arg-less operator approval failed to resolve the
+  // session id — even though the gate that just fired knew it.
   // Post-fix, the marker is staged before the block JSON write so an
-  // operator running `harness approve risk` in their `!`-shell picks it
-  // up without `--session=<id>`.
+  // approval run from the operator's `!`-shell can pick it up without
+  // `--session=<id>`. (The approval verb itself is removed; the staging
+  // stays until it is cut.)
 
   const RISK_POLICY: Policy = {
     name: "gate-approval",
@@ -1466,7 +1513,7 @@ describe("runInterceptCli — task f1df7c2d: stage .pending-approval on require_
 
   it("does not stage .pending-approval when no decision is require_approval", async () => {
     // A deny-only manifest (the Phase 4 review-policy fixture) blocks
-    // but is not recoverable via `harness approve risk`, so the marker
+    // but is not recoverable by an approval, so the marker
     // would be a lie. Confirm we skip the write.
     const { stream } = captureStdout();
     const mergeEvent = JSON.stringify({

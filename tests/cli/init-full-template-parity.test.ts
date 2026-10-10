@@ -65,12 +65,6 @@ type LoadBearingPolicy = {
   // decision behavior (self-satisfiable vs. genuinely unconditional)
   // silently drifts.
   operatorOnly: boolean | undefined;
-  // when (Phase 7 #5): the risk/environment-aware match clauses. Now
-  // load-bearing — `harness policy intercept` ANDs `when:` onto the
-  // trigger — so a `when:`-bearing policy must carry the identical block
-  // in both manifests or the Risk Gate's default stance silently drifts
-  // between the wizard's Full output and the reference example.
-  when: Manifest["policies"][number]["when"];
   // Producers (agent-tasks/3804b785): the structured remediation hints
   // appended to a deny envelope. Parity-pinned so a policy that declares
   // producers in one manifest must declare matching producers in the
@@ -100,7 +94,6 @@ function loadBearing(p: Manifest["policies"][number]): LoadBearingPolicy {
     countMax: p.requires?.count?.max ?? undefined,
     enforcement: p.enforcement,
     hook: p.hook,
-    when: p.when,
     producers: p.producers,
     ux: p.ux,
     operatorOnly: p.operator_only ?? undefined,

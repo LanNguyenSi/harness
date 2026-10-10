@@ -103,7 +103,7 @@ export interface ApplyOptions {
    */
   yes?: boolean;
   /**
-   * Test seam mirroring `approve risk` / `pause`: overrides the
+   * Test seam mirroring `pause`: overrides the
    * `process.stdin.isTTY` read that decides whether the default
    * confirmation prompt may run, so the non-TTY refusal can be
    * exercised hermetically.

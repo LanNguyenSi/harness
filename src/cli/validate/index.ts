@@ -4,6 +4,7 @@ import {
   parseManifestWithWarnings,
   type Manifest,
 } from "../../schema/index.js";
+import { remapDiagnosticPath, type StrippedIndexMaps } from "../../schema/removed-keys.js";
 import { LOCK_BASENAME, readLock } from "../../io/harness-lock.js";
 import { withDerivedPolicies } from "../../runtime/workflow-policies.js";
 import { diffAssets } from "../diff/since-apply.js";
@@ -43,9 +44,11 @@ export function validate(opts: ValidateOptions = {}): ValidateResult {
 
   let manifest: Manifest | null = null;
   let diagnostics: Diagnostic[] = [];
+  let indexMaps: StrippedIndexMaps | undefined;
   try {
     const parsed = parseManifestWithWarnings(mergedRaw);
     manifest = parsed.manifest;
+    indexMaps = parsed.indexMaps;
     // Removed keys and removed packs load as warnings (and as errors under
     // --strict below), never as a parse failure; so does every site that
     // still calls a removed command: src/schema/removed-keys.ts.
@@ -75,7 +78,11 @@ export function validate(opts: ValidateOptions = {}): ValidateResult {
     // what "declared" meant. See src/runtime/workflow-policies.ts's
     // `withDerivedPolicies`.
     manifest = withDerivedPolicies(manifest);
-    diagnostics.push(...runAssetChecks(manifest, opts));
+    // The checks index the parsed manifest, where a dropped policy or pack no
+    // longer holds its slot: report the index the operator wrote.
+    diagnostics.push(
+      ...runAssetChecks(manifest, opts).map((d) => ({ ...d, path: remapDiagnosticPath(d.path, indexMaps) })),
+    );
   }
 
   if (opts.checkLock) {

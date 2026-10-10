@@ -9,10 +9,11 @@ import { runInterceptCli } from "../../src/cli/policy/intercept.js";
 import type { LedgerClient } from "../../src/runtime/intercept.js";
 
 // `harness dry-run` predicts what `harness policy intercept` will do. A
-// policy that still carries a `when:` clause never applies at runtime (the
-// clause can no longer be evaluated), so dry-run must not list it as
-// matching either: it belongs in the bucket of policies that would not
-// apply, with the reason stated (task 3a655f4e).
+// manifest that still carries a policy with a `when:` clause loads with that
+// whole policy dropped (the clause cannot be evaluated, and matching on the
+// trigger alone would widen the policy), so neither surface knows the policy:
+// dry-run lists it in neither bucket and policy intercept never decides it
+// (tasks 3a655f4e, 39c112e0).
 
 type RawManifest = {
   hooks: Array<Record<string, unknown>>;
@@ -135,9 +136,12 @@ function dryRunReport(home: string, command: string, project?: string) {
   return report;
 }
 
-const WHEN_REASON = /carries a when: clause, which never applies/;
+const allNames = (report: ReturnType<typeof dryRunReport>) => [
+  ...report.matchingPolicies.map((p) => p.name),
+  ...report.couldMatchPolicies.map((p) => p.name),
+];
 
-describe("dry-run: a policy carrying when: never appears under matchingPolicies", () => {
+describe("dry-run: a policy carrying when: is dropped at load and appears in neither bucket", () => {
   it("agrees with policy intercept for a when: policy next to a plain sibling", async () => {
     const home = makeHome(
       withPolicies([
@@ -147,8 +151,7 @@ describe("dry-run: a policy carrying when: never appears under matchingPolicies"
     );
     const report = dryRunReport(home, "ls -la");
     expect(report.matchingPolicies.map((p) => p.name)).toEqual(["plain"]);
-    const bucket = report.couldMatchPolicies.find((p) => p.name === "w-bash");
-    expect(bucket?.reason).toMatch(WHEN_REASON);
+    expect(allNames(report)).not.toContain("w-bash");
     expect(await interceptNames(home, "ls -la")).toEqual(["plain"]);
   });
 
@@ -163,18 +166,15 @@ describe("dry-run: a policy carrying when: never appears under matchingPolicies"
     expect(report.matchingPolicies.map((p) => p.name)).toEqual(["plain"]);
     const other = report.couldMatchPolicies.find((p) => p.name === "other-tool");
     expect(other?.reason).toContain('does not contain trigger.match "Edit"');
-    expect(other?.reason).not.toMatch(WHEN_REASON);
   });
 
-  it("does not list a when: policy as matching when its trigger does not match either", () => {
+  it("does not list a when: policy as could-match either when its trigger does not match", () => {
     const home = makeHome(
       withPolicies([bashPolicy("w-edit", { when: WHEN, trigger: { event: "PreToolUse", match: "Edit" } })]),
     );
     const report = dryRunReport(home, "ls -la");
     expect(report.matchingPolicies).toEqual([]);
-    expect(report.couldMatchPolicies.find((p) => p.name === "w-edit")?.reason).toContain(
-      'does not contain trigger.match "Edit"',
-    );
+    expect(allNames(report)).not.toContain("w-edit");
   });
 
   it("agrees with policy intercept for a project-override policy carrying when:", async () => {
@@ -184,7 +184,7 @@ describe("dry-run: a policy carrying when: never appears under matchingPolicies"
     });
     const report = dryRunReport(home, "ls -la", "p1");
     expect(report.matchingPolicies.map((p) => p.name)).toEqual(["plain"]);
-    expect(report.couldMatchPolicies.find((p) => p.name === "proj-when")?.reason).toMatch(WHEN_REASON);
+    expect(allNames(report)).not.toContain("proj-when");
     expect(await interceptNames(home, "ls -la", "p1")).toEqual(["plain"]);
   });
 
@@ -204,11 +204,24 @@ describe("dry-run: a policy carrying when: never appears under matchingPolicies"
       builtins: { SESSION_ID: "sess-parity", REPO: "r", BRANCH: "feature", CWD: os.tmpdir() },
     });
     expect(report.matchingPolicies.map((p) => p.name)).toEqual(["p-plain"]);
-    expect(report.couldMatchPolicies.find((p) => p.name === "p-when")?.reason).toMatch(WHEN_REASON);
+    expect(allNames(report)).not.toContain("p-when");
+  });
+
+  it("a project override that adds when: to a base policy drops the merged policy whole", async () => {
+    // The override layer merges onto the base policy by name before the
+    // strip runs, so the merged entry carries `when:` and is dropped, rather
+    // than being kept as the base shape.
+    const home = makeHome(withPolicies([bashPolicy("scoped", { enforcement: "warn" })]), {
+      name: "p2",
+      contents: { version: 1, policies: [{ name: "scoped", when: WHEN }] },
+    });
+    const report = dryRunReport(home, "ls -la", "p2");
+    expect(allNames(report)).not.toContain("scoped");
+    expect(await interceptNames(home, "ls -la", "p2")).toEqual([]);
   });
 
   for (const command of ["rm -rf /", "ls"]) {
-    it(`reports the three former gate policies as not applying to \`${command}\`, as policy intercept does`, async () => {
+    it(`reports the three former gate policies as unknown to \`${command}\`, as policy intercept does`, async () => {
       // The three policies FULL_TEMPLATE shipped until task 6e52c044
       // removed them (name, trigger, when, requires and enforcement copied
       // verbatim from the removed template entries; the producers: arrays
@@ -254,16 +267,16 @@ describe("dry-run: a policy carrying when: never appears under matchingPolicies"
       for (const gate of gates) {
         expect(matching).not.toContain(gate);
         expect(decided).not.toContain(gate);
-        expect(report.couldMatchPolicies.find((p) => p.name === gate)?.reason).toMatch(WHEN_REASON);
+        expect(allNames(report)).not.toContain(gate);
       }
     });
   }
 });
 
-describe("dry-run and policy intercept agree that a when: policy never applies, whatever its shape", () => {
-  // The same policy shapes the runtime never-applies tables cover (the
-  // matching code treats each one differently before the when: check), plus
-  // a block-tier prompt-event policy. Each case runs its twin without when:
+describe("dry-run and policy intercept agree that a when: policy is dropped at load, whatever its shape", () => {
+  // The same policy shapes the runtime posture tables cover (the matching
+  // code treats each one differently), plus a block-tier prompt-event
+  // policy. Each case runs its twin without when:
   // as a control: dry-run lists the twin as matching and policy intercept
   // decides it, so the event does reach the policy.
   const promptEvent = (prompt: string) => ({
@@ -355,11 +368,10 @@ describe("dry-run and policy intercept agree that a when: policy never applies, 
   const eventFor = (c: Case) => (c.prompt !== undefined ? promptEvent(c.prompt) : bashToolEvent(c.command!));
 
   for (const c of cases) {
-    it(`${c.label}: not matching in dry-run, never-applies reason, no intercept decision`, async () => {
+    it(`${c.label}: absent from dry-run, no intercept decision`, async () => {
       const home = makeHome(withPolicies([{ ...c.policy, when: WHEN }]));
       const report = reportFor(home, c);
-      expect(report.matchingPolicies.map((p) => p.name)).not.toContain("p");
-      expect(report.couldMatchPolicies.find((p) => p.name === "p")?.reason).toMatch(WHEN_REASON);
+      expect(allNames(report)).not.toContain("p");
       expect(await interceptEventNames(home, eventFor(c))).toEqual([]);
     });
 
@@ -371,14 +383,14 @@ describe("dry-run and policy intercept agree that a when: policy never applies, 
     });
   }
 
-  it("without --tool, a when: policy gets the never-applies reason, not the need-a-tool reason", () => {
+  it("without --tool, a when: policy is absent, not given the need-a-tool reason", () => {
     const home = makeHome(withPolicies([bashPolicy("w-bash", { when: WHEN }), bashPolicy("plain")]));
     const { report } = dryRun("", {
       homeDir: home,
       builtins: { SESSION_ID: "sess-parity", REPO: "r", BRANCH: "feature", CWD: os.tmpdir() },
     });
     expect(report.matchingPolicies).toEqual([]);
-    expect(report.couldMatchPolicies.find((p) => p.name === "w-bash")?.reason).toMatch(WHEN_REASON);
+    expect(allNames(report)).not.toContain("w-bash");
     expect(report.couldMatchPolicies.find((p) => p.name === "plain")?.reason).toBe(
       "no --tool supplied; dry-run can only statically match prompt-style events",
     );

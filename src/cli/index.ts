@@ -28,7 +28,6 @@ import { registerOperatorLifecycle } from "./register-operator-lifecycle.js";
 import { registerInspectGroup } from "./register-inspect-group.js";
 import { registerSetupGroup } from "./register-setup-group.js";
 import { registerPackGroup } from "./register-pack-group.js";
-import { registerApproveGroup } from "./register-approve-group.js";
 import { registerExplainGroup } from "./register-explain-group.js";
 import { registerSmokeGroup } from "./register-smoke-group.js";
 import { registerRecordSessionGroup } from "./register-record-session-group.js";
@@ -83,8 +82,6 @@ export function buildProgram(opts: RunOptions = {}): Command {
   registerRemove(program, { stdout, stderr });
 
   registerPackGroup(program, { stdout, stderr });
-
-  registerApproveGroup(program, { stdout, stderr });
 
   registerExplainGroup(program, { stdout, stderr });
 

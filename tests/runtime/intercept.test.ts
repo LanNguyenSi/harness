@@ -19,7 +19,7 @@ import type {
   LedgerQueryResult,
 } from "../../src/policies/index.js";
 import { FULL_TEMPLATE } from "../../src/cli/init/templates.js";
-import { parseManifest } from "../../src/schema/index.js";
+import { parseManifest, parseManifestWithWarnings } from "../../src/schema/index.js";
 import type { Policy } from "../../src/schema/index.js";
 import { makeManifest, makePolicy as policy } from "../_helpers/manifest.js";
 import { addGitDirSkeleton } from "../_helpers/git-dir-fixture.js";
@@ -42,6 +42,20 @@ const BUILTINS: ExtractBuiltins = {
 };
 
 const manifest = (policies: Policy[]) => makeManifest({ policies });
+
+// A manifest loaded the way every command loads it: through the real parse, so
+// the removed-key posture (dropped `when:` policies, stripped `risk` and
+// `environments`) applies. `hooks` declares the hook names the policies below
+// reference.
+const LOADED_HOOKS = ["h", "risk-gate"].map((name) => ({
+  name,
+  event: "PreToolUse",
+  command: "/usr/bin/true",
+  blocking: false,
+}));
+function loadManifest(policies: unknown[], extra: Record<string, unknown> = {}) {
+  return parseManifestWithWarnings({ version: 1, hooks: LOADED_HOOKS, policies, ...extra });
+}
 
 function makeLedger(
   result: LedgerQueryResult,
@@ -860,16 +874,16 @@ describe("intercept — degraded ledger (fail posture per enforcement tier)", ()
     expect(result.blockJson).toBeNull();
   });
 
-  it("a manifest still carrying risk.degraded_fail_posture: fail_open no longer relaxes the block tier", async () => {
+  it("a manifest still carrying risk.degraded_fail_posture: fail_open loads with a warning and no longer relaxes the block tier", async () => {
     const ledger = makeLedger({
       kind: "degraded",
       reason: "grounding-mcp timeout after 1ms",
     });
+    const loaded = loadManifest([REVIEW_POLICY], { risk: { degraded_fail_posture: "fail_open" } });
+    expect(loaded.manifest.policies.map((p) => p.name)).toEqual(["review-before-merge"]);
+    expect(loaded.warnings.map((w) => w.path)).toEqual(["risk"]);
     const result = await intercept({
-      manifest: makeManifest({
-        policies: [REVIEW_POLICY],
-        degradedFailPosture: "fail_open",
-      }),
+      manifest: loaded.manifest,
       event: MERGE_EVENT,
       ledger,
       builtins: BUILTINS,
@@ -1215,9 +1229,9 @@ const BASH_DESTROY_EVENT: ToolEvent = {
   cwd: "/tmp/proj",
 };
 
-// A scoped block gate: trigger `Bash`, narrowed by a `when:` clause. The
-// clause is no longer evaluated, so the policy must never apply.
-const SCOPED_BLOCK_POLICY: Policy = {
+// A scoped block gate: trigger `Bash`, narrowed by a `when:` clause. A manifest
+// that still carries it drops the whole policy at load.
+const SCOPED_BLOCK_POLICY = {
   name: "gate-prod-destructive",
   description: "block destructive production actions",
   trigger: { event: "PreToolUse", match: "Bash" },
@@ -1228,7 +1242,7 @@ const SCOPED_BLOCK_POLICY: Policy = {
   requires: { ledger_tag: "risk-approved:${SESSION_ID}" },
   hook: "h",
   enforcement: "block",
-} as Policy;
+};
 
 // The same shape without a `when:` clause and with `require_approval`
 // enforcement, to exercise the approval outcomes.
@@ -1242,13 +1256,17 @@ const APPROVAL_POLICY: Policy = {
 } as Policy;
 
 describe("intercept — policies that carry a when: clause", () => {
-  it("never applies a when: policy, even when its trigger matches", async () => {
-    // The `when:` clause can no longer be evaluated, so a policy that still
-    // carries one is inert: matching on the trigger alone would widen a
-    // scoped gate to every call its trigger names.
+  it("drops a when: policy at load with a warning, so a matching event yields no decision", async () => {
+    // Matching on the trigger alone would widen a scoped gate to every call
+    // its trigger names, so the manifest posture drops the policy whole.
+    const loaded = loadManifest([SCOPED_BLOCK_POLICY]);
+    expect(loaded.manifest.policies).toEqual([]);
+    expect(loaded.warnings).toHaveLength(1);
+    expect(loaded.warnings[0]?.path).toBe("policies[0]");
+    expect(loaded.warnings[0]?.message).toContain('policy "gate-prod-destructive" dropped whole');
     const ledger = makeLedger({ kind: "ok", entries: [] });
     const result = await intercept({
-      manifest: manifest([SCOPED_BLOCK_POLICY]),
+      manifest: loaded.manifest,
       event: BASH_DESTROY_EVENT,
       ledger,
       builtins: BUILTINS,
@@ -1260,13 +1278,15 @@ describe("intercept — policies that carry a when: clause", () => {
     expect(ledger.recordCalls).toEqual([]);
   });
 
-  it("the same policy without its when: clause does apply to that event", async () => {
+  it("the same policy without its when: clause loads clean and does apply to that event", async () => {
     // Negative control for the test above: the event does match the trigger,
     // so the only difference is the `when:` clause.
     const { when: _when, ...unscoped } = SCOPED_BLOCK_POLICY;
+    const loaded = loadManifest([unscoped]);
+    expect(loaded.warnings).toEqual([]);
     const ledger = makeLedger({ kind: "ok", entries: [] });
     const result = await intercept({
-      manifest: manifest([unscoped as Policy]),
+      manifest: loaded.manifest,
       event: BASH_DESTROY_EVENT,
       ledger,
       builtins: BUILTINS,
@@ -1277,15 +1297,18 @@ describe("intercept — policies that carry a when: clause", () => {
     expect(result.blockJson?.decision).toBe("block");
   });
 
-  it("a when: policy is skipped while a sibling policy on the same trigger still applies", async () => {
-    const sibling: Policy = {
+  it("a when: policy is dropped while a sibling policy on the same trigger still applies", async () => {
+    const sibling = {
       ...APPROVAL_POLICY,
       name: "sibling",
       requires: { ledger_tag: "sibling:${SESSION_ID}" },
-    } as Policy;
+    };
+    const loaded = loadManifest([SCOPED_BLOCK_POLICY, sibling]);
+    expect(loaded.manifest.policies.map((p) => p.name)).toEqual(["sibling"]);
+    expect(loaded.warnings.map((w) => w.path)).toEqual(["policies[0]"]);
     const ledger = makeLedger({ kind: "ok", entries: [] });
     const result = await intercept({
-      manifest: manifest([SCOPED_BLOCK_POLICY, sibling]),
+      manifest: loaded.manifest,
       event: BASH_DESTROY_EVENT,
       ledger,
       builtins: BUILTINS,
@@ -1318,12 +1341,12 @@ const bashEvent = (command: string): ToolEvent => ({
   cwd: "/tmp/proj",
 });
 
-describe("intercept: a when: policy never applies, whatever its shape", () => {
-  // Each case is a policy shape the matching loop treats differently before
-  // the guard (enforcement tier, operator_only, a bash_match regex, the
-  // shell-model arm only). The `when:` clause alone decides the outcome, so
-  // every case also runs its twin without `when:` as a control: the event
-  // does match, and the control yields a decision.
+describe("intercept: a when: policy is dropped at load, whatever its shape", () => {
+  // Each case is a policy shape the matching loop treats differently
+  // (enforcement tier, operator_only, a bash_match regex, the shell-model
+  // arm only, the tool and event kind). The `when:` clause alone decides the
+  // outcome, so every case also runs its twin without `when:` as a control:
+  // the event does match, and the control yields a decision.
   const gateBase = {
     description: "gate",
     trigger: { event: "PreToolUse", match: "Bash" },
@@ -1331,6 +1354,15 @@ describe("intercept: a when: policy never applies, whatever its shape", () => {
     hook: "h",
   };
   const WHEN = { "environment.name": "production" };
+  // The per-repo git-push fixture without its removed-command producer and ux
+  // text (those would add unrelated posture warnings to the load).
+  const { producers: _producers, ux: _ux, ...pushShape } = legacyPreflightPush() as unknown as Record<string, unknown>;
+  const perRepoPolicy = {
+    ...pushShape,
+    name: "p",
+    hook: "h",
+    requires: { ledger_tag: "preflight:${REPO}" },
+  };
   // `command` builds a Bash PreToolUse event; `event` replaces it for the
   // cases on another tool or hook event.
   const cases: Array<{
@@ -1381,11 +1413,7 @@ describe("intercept: a when: policy never applies, whatever its shape", () => {
       // `-C` target is a quoted path with a space, which the segment view
       // does not attribute.
       label: "a per-repo policy matched only by the shell-model arm",
-      policy: {
-        ...legacyPreflightPush(),
-        name: "p",
-        requires: { ledger_tag: "preflight:${REPO}" },
-      },
+      policy: perRepoPolicy,
       command: "git -C '/tmp/repo with space' push origin master",
     },
     {
@@ -1421,12 +1449,38 @@ describe("intercept: a when: policy never applies, whatever its shape", () => {
       },
     },
     {
+      label: "an Edit trigger with a path_match and an Edit event",
+      policy: {
+        ...gateBase,
+        name: "p",
+        enforcement: "require_approval",
+        trigger: { event: "PreToolUse", match: "Edit", path_match: "\\.env$" },
+      },
+      event: {
+        hook_event_name: "PreToolUse",
+        tool_name: "Edit",
+        tool_input: { file_path: "/tmp/proj/.env", old_string: "a", new_string: "b" },
+        session_id: "sess-1",
+        cwd: "/tmp/proj",
+      },
+    },
+    {
       label: "a trigger with an event but no match",
       policy: { ...gateBase, name: "p", enforcement: "block", trigger: { event: "PreToolUse" } },
       event: {
         hook_event_name: "PreToolUse",
         tool_name: "Read",
         tool_input: { file_path: "/tmp/proj/a.txt" },
+        session_id: "sess-1",
+        cwd: "/tmp/proj",
+      },
+    },
+    {
+      label: "a UserPromptSubmit trigger with a prompt event",
+      policy: { ...gateBase, name: "p", enforcement: "warn", trigger: { event: "UserPromptSubmit" } },
+      event: {
+        hook_event_name: "UserPromptSubmit",
+        prompt: "terraform destroy everything",
         session_id: "sess-1",
         cwd: "/tmp/proj",
       },
@@ -1448,10 +1502,13 @@ describe("intercept: a when: policy never applies, whatever its shape", () => {
   const eventOf = (c: (typeof cases)[number]): ToolEvent => c.event ?? bashEvent(c.command!);
 
   for (const c of cases) {
-    it(`${c.label}: no decision, no ledger traffic, no block`, async () => {
+    it(`${c.label}: dropped at load with a warning, no decision, no ledger traffic, no block`, async () => {
+      const loaded = loadManifest([{ ...c.policy, when: WHEN }]);
+      expect(loaded.manifest.policies).toEqual([]);
+      expect(loaded.warnings.map((w) => w.path)).toEqual(["policies[0]"]);
       const ledger = makeLedger({ kind: "ok", entries: [] });
       const result = await intercept({
-        manifest: manifest([{ ...c.policy, when: WHEN } as unknown as Policy]),
+        manifest: loaded.manifest,
         event: eventOf(c),
         ledger,
         builtins: BUILTINS,
@@ -1463,10 +1520,13 @@ describe("intercept: a when: policy never applies, whatever its shape", () => {
       expect(ledger.recordCalls).toEqual([]);
     });
 
-    it(`${c.label}: the same policy without when: does apply (control)`, async () => {
+    it(`${c.label}: the same policy without when: loads clean and does apply (control)`, async () => {
+      const loaded = loadManifest([c.policy]);
+      expect(loaded.warnings).toEqual([]);
+      expect(loaded.manifest.policies).toHaveLength(1);
       const ledger = makeLedger({ kind: "ok", entries: [] });
       const result = await intercept({
-        manifest: manifest([c.policy as unknown as Policy]),
+        manifest: loaded.manifest,
         event: eventOf(c),
         ledger,
         builtins: BUILTINS,
@@ -1480,8 +1540,8 @@ describe("intercept: a when: policy never applies, whatever its shape", () => {
     // The three policies FULL_TEMPLATE shipped until task 6e52c044 removed
     // them (name, trigger, when, requires and enforcement copied verbatim
     // from the removed template entries; the producers: arrays are not
-    // needed here). The never-applies assertions below run on these inline
-    // shapes instead of on the template.
+    // needed here). A manifest generated from that template still carries
+    // them, so the posture assertions below run on these inline shapes.
     const GATE_POLICIES = [
       {
         name: "gate-prod-destructive",
@@ -1521,13 +1581,28 @@ describe("intercept: a when: policy never applies, whatever its shape", () => {
         hook: "risk-gate",
         enforcement: "require_approval",
       },
-    ] as unknown as Policy[];
+    ];
+
+    it("drops all three at load, one warning each, and keeps the risk and environments blocks from failing the parse", () => {
+      const loaded = loadManifest(GATE_POLICIES, {
+        risk: { classifiers: [], degraded_fail_posture: "preserve_enforcement" },
+        environments: { resolvers: [] },
+      });
+      expect(loaded.manifest.policies).toEqual([]);
+      expect(loaded.warnings.map((w) => w.path).sort()).toEqual([
+        "environments",
+        "policies[0]",
+        "policies[1]",
+        "policies[2]",
+        "risk",
+      ]);
+    });
 
     for (const command of ["rm -rf /", "ls"]) {
       it(`yields no decision from those policies for \`${command}\``, async () => {
         const ledger = makeLedger({ kind: "ok", entries: [] });
         const result = await intercept({
-          manifest: manifest(GATE_POLICIES),
+          manifest: loadManifest(GATE_POLICIES).manifest,
           event: bashEvent(command),
           ledger,
           builtins: BUILTINS,
@@ -1541,8 +1616,12 @@ describe("intercept: a when: policy never applies, whatever its shape", () => {
 
     it("FULL_TEMPLATE itself carries no policy with when: and no risk or environments key", () => {
       const raw = parseYaml(FULL_TEMPLATE) as Record<string, unknown>;
-      const full = parseManifest(raw);
-      expect(full.policies.filter((p) => p.when !== undefined)).toEqual([]);
+      const parsed = parseManifestWithWarnings(raw);
+      const rawPolicies = (raw["policies"] ?? []) as Array<Record<string, unknown>>;
+      expect(rawPolicies.filter((p) => "when" in p)).toEqual([]);
+      expect(parsed.warnings.map((w) => w.path)).not.toContain("risk");
+      expect(parsed.warnings.map((w) => w.path.startsWith("policies["))).not.toContain(true);
+      const full = parsed.manifest;
       expect(raw).not.toHaveProperty("risk");
       expect(raw).not.toHaveProperty("environments");
       expect(full.hooks.map((h) => h.name)).not.toContain("risk-gate");

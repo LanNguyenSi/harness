@@ -395,43 +395,26 @@ function checkTaskVerbGateWiring(manifest: Manifest, offending: Manifest["workfl
 /**
  * F1 (review round 2): a hand-authored policy on the identical trigger
  * surface + ledger_tag as a derived block gate, but weaker than it
- * (`enforcement: "warn"`/`"require_approval"`, or `when:`-scoped), no
- * longer suppresses the derived gate (see `isAtLeastAsStrongAsDerivedGate`
- * in workflow-policies.ts). This check surfaces that overlap as a warning
- * so an operator reading the weaker policy does not mistake it for the ONLY
- * gate on the surface. A `when:`-scoped hand-authored policy NEVER applies
- * anymore (the interim Risk Gate guard, task 6e52c044), so it gets a
- * dedicated message naming the never-applies consequence instead of the
- * "both apply" one.
+ * (`enforcement: "warn"`/`"require_approval"`), no longer suppresses the
+ * derived gate (see `isAtLeastAsStrongAsDerivedGate` in
+ * workflow-policies.ts). This check surfaces that overlap as a warning so an
+ * operator reading the weaker policy does not mistake it for the ONLY gate
+ * on the surface.
  */
 export function checkWorkflowGateWeakOverlap(manifest: Manifest): Diagnostic[] {
-  return findWeakGatePolicyOverlaps(manifest).map((overlap) => {
-    const handPolicy = manifest.policies.find((p) => p.name === overlap.handPolicyName);
-    if (handPolicy?.when !== undefined) {
-      return {
-        severity: "warning" as const,
-        path: "workflows" as const,
-        message:
-          `workflow "${overlap.workflowName}" derives a block gate on ${overlap.surface}; ` +
-          `hand-authored policy "${overlap.handPolicyName}" on the same surface carries a when: ` +
-          `clause and never applies, so the derived block gate ("${overlap.derivedPolicyName}") ` +
-          `is the only gate on this surface. Remove the when: policy or drop its when: clause.`,
-      };
-    }
-    return {
-      severity: "warning" as const,
-      path: "workflows" as const,
-      message:
-        `workflow "${overlap.workflowName}" derives a block gate on ${overlap.surface}; ` +
-        `hand-authored policy "${overlap.handPolicyName}" on the same surface is weaker ` +
-        `(${overlap.reason}). Both policies apply: the derived block gate ` +
-        `("${overlap.derivedPolicyName}") still enforces review evidence independently, so this ` +
-        "is informational, not a gap, but double-check the weaker policy is intentional. Note " +
-        "also that this overlap is not suppressed on purpose, so the same event now round-trips " +
-        "the ledger twice (once per policy); if that hook's budget_ms was sized for one policy, " +
-        "check it against two, since requiredHookBudgetMs does not scale with the policy count.",
-    };
-  });
+  return findWeakGatePolicyOverlaps(manifest).map((overlap) => ({
+    severity: "warning" as const,
+    path: "workflows" as const,
+    message:
+      `workflow "${overlap.workflowName}" derives a block gate on ${overlap.surface}; ` +
+      `hand-authored policy "${overlap.handPolicyName}" on the same surface is weaker ` +
+      `(${overlap.reason}). Both policies apply: the derived block gate ` +
+      `("${overlap.derivedPolicyName}") still enforces review evidence independently, so this ` +
+      "is informational, not a gap, but double-check the weaker policy is intentional. Note " +
+      "also that this overlap is not suppressed on purpose, so the same event now round-trips " +
+      "the ledger twice (once per policy); if that hook's budget_ms was sized for one policy, " +
+      "check it against two, since requiredHookBudgetMs does not scale with the policy count.",
+  }));
 }
 
 /**
@@ -477,7 +460,7 @@ export function checkWorkflowMergeBeforeReview(manifest: Manifest): Diagnostic[]
  * the derived view carries two policies with one name. This fires both
  * when the hand-authored policy sits on a DIFFERENT surface (dedupe never
  * even compares them), and when it sits on the SAME surface but is not
- * `isAtLeastAsStrongAsDerivedGate` (weaker enforcement or a `when:` scope
+ * `isAtLeastAsStrongAsDerivedGate` (weaker enforcement
  * — that case IS a surface match, so `findWeakGatePolicyOverlaps` also
  * reports it as an overlap; the two checks are not mutually exclusive).
  * Either way the runtime evaluates both policies (fail-safe), but every
@@ -540,10 +523,10 @@ export function checkPolicySelfAttestation(manifest: Manifest): Diagnostic[] {
   const diags: Diagnostic[] = [];
   for (let i = 0; i < manifest.policies.length; i++) {
     const p = manifest.policies[i];
-    // block-only on purpose: a require_approval policy's canonical unblock
-    // path is the operator verb (`harness approve risk`), an ask-semantics
-    // flow that exists independent of producers:, so absence of producers
-    // there does not mean the evidence source is undocumented.
+    // block-only on purpose: a require_approval policy unblocks through an
+    // operator approval, an ask-semantics flow that exists independent of
+    // producers:, so absence of producers there does not mean the evidence
+    // source is undocumented.
     if (p === undefined || p.enforcement !== "block") continue;
     // operator_only: true (task 2cc73f55) is the schema-level unconditional
     // operator-only deny: no requires:, so there is no self-satisfiable

@@ -1,14 +1,14 @@
 // Task 33abc147 — `.pending-approval` session-id staging file.
 //
 // The gate hook knows the running session's exact `session_id` (it arrives
-// on the hook event's stdin). `harness approve risk`, run from the operator's `!`-shell, does NOT: $CLAUDE_SESSION_ID
+// on the hook event's stdin). An approval run from the operator's `!`-shell does NOT: $CLAUDE_SESSION_ID
 // is unset in that shell, and guessing the id from the newest project
 // transcript is a heuristic that breaks on subagent / parallel-session
-// transcripts (the approve error message warns about exactly that).
+// transcripts.
 //
 // So the producer hands the id off instead of making the consumer guess:
 // on every block / ask the gate hook writes the `session_id` to
-// `<generatedDir>/.pending-approval`, and `harness approve risk` reads it when
+// `<generatedDir>/.pending-approval`, and an approval verb reads it when
 // no `--session` flag and no `$CLAUDE_SESSION_ID` are given. Deterministic,
 // not a guess.
 //
@@ -29,9 +29,9 @@ export function pendingApprovalPath(generatedDir: string): string {
 }
 
 /**
- * Producer: stage `sessionId` for a later `harness approve`. `atomicWriteFile`
- * creates `generatedDir` if missing, so a hand-wired hook with no prior
- * apply still benefits. Callers treat this as best-effort — a write
+ * Producer: stage `sessionId` for a later operator approval verb.
+ * `atomicWriteFile` creates `generatedDir` if missing, so a hand-wired hook
+ * with no prior apply still benefits. Callers treat this as best-effort — a write
  * failure must never escalate a gate block into a thrown hook error.
  */
 export function writePendingApproval(generatedDir: string, sessionId: string): void {
