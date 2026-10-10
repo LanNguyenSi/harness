@@ -125,11 +125,10 @@ reported upstream, silently ignored here.
 
 ## Modules
 
-- [Codex runtime adapter, parity gaps vs Claude Code](codex-adapter-parity-gaps.md),
-  what the Codex adapter emits, the enumerated behavioral gaps (the former
-  headline gap, no Codex PostToolUse hook, is closed by task `a1348c89`;
-  current top gap is the un-translated permission-profile/sandbox stanza,
-  gap 4), and the Codex wire-format contract.
+- [Codex runtime adapter](codex-adapter-parity-gaps.md), what the Codex
+  adapter emits and records, the installer's ownership boundaries for
+  `~/.codex/config.toml`, the remaining differences from the Claude Code
+  target, and the Codex wire format of the hooks that remain.
 
 ## Invariants
 
