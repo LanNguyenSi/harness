@@ -3,7 +3,7 @@ type: overview
 title: Shell quote models, measured divergence against bash
 description: The policy engine has independent shell-word models plus a raw-regex trigger layer (since task 7d4abf84 also a quote-aware shell command model that feeds per-repo attribution). This records what each actually extracts, measured against real bash, which divergences are fail-open, and the evidence-led ordering for closing them.
 tags: [policy-engine, bash-match, quote-model, fail-open, measurement]
-timestamp: 2026-10-07T19:34:34Z
+timestamp: 2026-10-10T13:44:19Z
 sources:
   - src/runtime/command-normalize.ts
   - src/cli/init/composer.ts
@@ -14,7 +14,6 @@ sources:
   - src/runtime/shell-command-model.ts
   - src/runtime/shell-model-paths.ts
   - src/cli/policy/intercept.ts
-  - src/runtime/environment-resolver.ts
   - src/cli/init/templates.ts
   - docs/examples/full-manifest.yaml
   - scripts/measure-bash-prefix-parse.mjs
@@ -94,9 +93,10 @@ behauptet: `scripts/measure-additive-attribution-matrix.mjs`
 (`npm run measure:additive-attribution-matrix -- --control <dir>`) fährt
 6 Trennzeichen x 8 Formen = 48 Zellen gegen den ausgelieferten 0.43.0-
 Kontrollbau und meldete 0/48 Zellen schwächer als 0.43.0 bei diesem Lauf.
-Der `cdTarget`-Kanal von `bash-prefix-parse.ts` selbst (Risk-Gate-Kontext,
-nicht die `${REPO}`/`${BRANCH}`-Builtins) ist von `98ad072f` unberührt und
-bleibt K1s offene Beobachtung.
+Der `cdTarget`-Kanal von `bash-prefix-parse.ts` selbst (als Risk-Gate-Kontext
+gemessen, seit der Risk-Gate-Entfernung nur noch der leading-`cd`-Durchgang
+von `normalizeCommand`; nicht die `${REPO}`/`${BRANCH}`-Builtins) war von
+`98ad072f` unberührt und bleibt K1s offene Beobachtung.
 
 Ausnahme seit Task `6c8ebd37`: liegt das cwd außerhalb jedes Git-Repositorys
 (leeres `${REPO}`, wie der Leer-Identifier-Guard es sieht), entfällt dessen
@@ -193,8 +193,9 @@ KEINE `$VAR`/`$()`/Backtick/`~`/Glob-Expansion) und wird jetzt vor jedem
 Schreib-Flag-Vergleich in `read-only-bash.ts` angewandt (`find`, `sort`,
 `file`), stets nur auf der RESTRIKTIVEN Seite (erkennt mehr Tokens als
 Schreib-Flag, nie weniger). Der mit Task `2929c5b7` ergaenzte `sed`-Floor
-(`isReadOnlySedCommand`, nur vom
-Risk-Classifier konsumiert, NICHT von `isReadOnlyBashCommand`) nutzt
+(`isReadOnlySedCommand`, bis zur
+Risk-Gate-Entfernung nur vom Risk-Classifier konsumiert, NICHT von
+`isReadOnlyBashCommand`) nutzt
 dieselbe Primitive auf der PERMISSIVEN Seite, was der Modul-Header von
 `shell-word.ts` ausdruecklich ausserhalb seiner `raw || decoded`-
 Richtungsregel verortet. Dort traegt die Fail-closed-Eigenschaft die
@@ -219,15 +220,14 @@ andere Schreibweise, einschliesslich jedes hier nicht durchdachten
 Flags, faellt weiter auf unklassifiziert zurueck statt auf `low`
 gehoben zu werden. `curl` bleibt fuer alles ausserhalb dieser Form
 unklassifiziert (approval-gated ueber den Fallback), und nur seine
-schreibfaehigen Schreibweisen werden vom `destructive-shell-floor.ts`
-auf `high` gehoben. **Runde 2 desselben Tasks (Stand dieser
+schreibfaehigen Schreibweisen wurden vom inzwischen entfernten
+`destructive-shell-floor.ts` auf `high` gehoben. **Runde 2 desselben Tasks (Stand dieser
 Aktualisierung) haertete die Form nach: `-q`/`--disable` als
 Pflicht-Zweitwort (schliesst einen `~/.curlrc`-Autoload-Fund), `-L`
 und `-k` aus dem geschlossenen Flag-Set entfernt, `?`/`*` im
 URL-Pfad neu zugelassen, `\r` in Header-Werten abgelehnt, und die
 Trenner-Klasse von `splitCurlWords` (dem vierten Shell-Wort-Modell,
-siehe unten) auf Leerzeichen/Tab verengt.** Siehe docs/risk-gate.md,
-"curl read-only SHAPE floor". **Runde 3 (Stand dieser Aktualisierung)
+siehe unten) auf Leerzeichen/Tab verengt.** **Runde 3 (Stand dieser Aktualisierung)
 aendert die akzeptierte Grammatik NICHT**: sie pinnt die `-q`-Position
 (Zweitwort, nicht irgendwo) und die `\r`-Haertung mit dedizierten
 Tests, entfernt eine unerreichbare doppelte `\n`/`\r`-Pruefung aus
@@ -387,9 +387,9 @@ Ausgaben und sind nur paarweise überlappend messbar.
 |---|---|---|
 | `command-normalize.ts` | `normalized` | `bash_match` raw-OR-normalized-OR-amp-OR-quote-normalized (`src/runtime/intercept.ts:636-683#"Raw-OR-normalised-OR-amp-normalised-OR-quote-normalised"`, dritter Arm seit `aabbad63`, vierter Arm seit `cf3dff51`) |
 | | `targetDir`/`targetBase` | nichts (grep-verifiziert) |
-| `bash-prefix-parse.ts` | `inlineEnv`, `cdTarget` | Risk-Gate-Kontext (`src/cli/policy/risk-envelope-enrichment.ts:157#"return { ...base, ...bashPrefix.inlineEnv };"`) |
-| `read-only-bash.ts` | Boolean | Risk-Floor, Understanding-Gate-PreToolUse (2 Hooks), Write-Guard |
-| `read-only-bash.ts`, `splitCurlWords` | `CurlWord[] \| null` | Risk-Floor NUR (`isReadOnlyCurlCommand`, task `fdaad781`) |
+| `bash-prefix-parse.ts` | `inlineEnv`, `cdTarget` | leading-`cd`-Durchgang von `normalizeCommand` (`command-normalize.ts`); der fruehere Verbraucher Risk-Gate-Kontext ist mit dem Risk Gate entfernt |
+| `read-only-bash.ts` | Boolean | kein Verbraucher in `src` mehr (die frueheren Verbraucher Understanding Gate, Write-Guard und Risk-Floor sind entfernt); nur noch Tests. `command-normalize.ts` importiert aus dem Modul nur die `ENV_*`-Konstanten |
+| `read-only-bash.ts`, `splitCurlWords` | `CurlWord[] \| null` | nur `isReadOnlyCurlCommand` (task `fdaad781`), das selbst keinen Verbraucher in `src` mehr hat (der Risk-Floor ist entfernt); nur noch Tests |
 | `shell-command-model.ts` (task `7d4abf84`) | `ModelCommand[] \| null` (kanonischer Text, Verzeichnismenge; `null` auch für eine abgelehnte Zeile, task `9238cc27`) | `bash_match` fünfter Arm (nur Per-Repo-Policies, nur Kommandos, die ein Verzeichnis nennen) und `resolveAttributedContexts` (Union mit der Segment-Sicht) |
 
 Die Matrix ist daher als **drei überlappende Zwei-Wege-Vergleiche**
@@ -709,7 +709,7 @@ offen.
   der Alphabet-Fix betrifft sie nicht.
 - Eine Maschine (WSL2, bash 5.x, GNU findutils). `&`-Backgrounding,
   Job-Control und `find -delete` können anderswo abweichen.
-- Die Resolver-Probe rekonstruiert den Merge-Pfad aus
-  `src/cli/policy/risk-envelope-enrichment.ts`
+- Die Resolver-Probe rekonstruierte den Merge-Pfad aus dem inzwischen
+  entfernten `src/cli/policy/risk-envelope-enrichment.ts`
   (`resolveBashPrefixEnrichment`, `resolverGit`/`env`; seit Task `7c3919a2`
   dort statt in `intercept.ts`), statt den echten PreToolUse-Hook zu fahren.

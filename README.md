@@ -50,8 +50,7 @@ wizard and the `solo` template, so the note below applies to it).
 The `solo`, `team` and `full` templates now ship the branch-protection
 pack (the understanding gate is no longer offered at install). The
 `team` and `full` templates and the `harness init --interactive` wizard
-still offer the risk gate (`full` and the wizard) and the reference
-policies (`solo` ships none). harness 1.0.0 removes all of these, so a new
+still offer the reference policies (`solo` ships none). harness 1.0.0 removes all of these, so a new
 install should not adopt them.
 
 The `post-merge-gate`, `solution-acceptance` and
@@ -83,7 +82,6 @@ operator controls are documented in
 - [`docs/quickstart.md`](docs/quickstart.md): five-minute bare-command path to the `branch-protection` gate.
 - [`docs/init-interactive.md`](docs/init-interactive.md): the `harness init --interactive` wizard, walkthrough and limitations.
 - [`docs/CLI.md`](docs/CLI.md): every CLI verb, grouped by purpose.
-- [`docs/risk-gate.md`](docs/risk-gate.md): the four-way `allow / warn / require_approval / deny` Risk Gate.
 - [`docs/writing-custom-policies.md`](docs/writing-custom-policies.md): tripwires, worked recipes, and the policy field reference.
 - [`docs/runtime-reality-hook.md`](docs/runtime-reality-hook.md): blocking destructive runtime commands when live process state has drifted from what the docs expect.
 - [`docs/policy-packs/README.md`](docs/policy-packs/README.md): the built-in policy pack (`branch-protection`).

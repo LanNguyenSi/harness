@@ -1,6 +1,6 @@
 # harness CLI reference
 
-Tracks the verbs available on the `harness` binary in the current release. Notes carry version-specific detail. For policy semantics see [`docs/policy-packs/`](policy-packs/); for the risk gate specifically see [`docs/risk-gate.md`](risk-gate.md).
+Tracks the verbs available on the `harness` binary in the current release. Notes carry version-specific detail. For policy semantics see [`docs/policy-packs/`](policy-packs/).
 
 The CLI is grouped by purpose below. Run any verb with `--help` for flags and examples.
 
@@ -38,10 +38,6 @@ The CLI is grouped by purpose below. Run any verb with `--help` for flags and ex
 |------|-----------|
 | `harness policy intercept` | The runtime evaluator that hooks call on every PreToolUse / PostToolUse. Supports `--hook <name>` (v0.29.0) to scope evaluation to a single hook generator. |
 | `harness explain [policy] [--trace] [--last]` | Print a policy's definition; `--trace` reads the last recorded evaluation; `--last` traces the most recent decision in the ledger. |
-| `harness explain-action <event.json>` | Reason about a single hook event JSON file and print the Action Envelope the Risk Gate sees (Risk Gate debug verb, Phase 7). The envelope carries the same leading-Bash-prefix git context as `harness policy intercept` (leading `cd`, leading `git switch`/`checkout`); inline `VAR=value` is not part of the envelope, so it does not show here. `--config`/`--project` select the manifest, read only for a leading `git switch`/`checkout`; with no manifest at the default location (and no `--config`) the verb uses an empty manifest, so the switch upgrade is a no-op, while an explicit `--config` that is missing still fails. |
-| `harness explain-policy <policy>` | Resolve and print a single policy by name (after merge + overrides) and whether it would apply to a tool event. The Action Envelope is enriched by the same Bash-prefix merges as `harness policy intercept` (inline `VAR=value`, leading `cd`, leading `git switch`/`checkout`), so the environment it reports matches the hook; it still reads no ledger, and its `parity` block names what it does not evaluate (`ledger_requires`, `kubectl_target`) and sets `kubectl_target_present: true` when this event's command is a `kubectl` invocation with an explicit `--context`/`--namespace`/`-n` (the merge the hook would apply but this verb skips). |
-| `harness test-risk <event.json>` | Replay an event against the Risk Gate and print the assigned tier. The tier is unchanged by the shared enrichment (the classifier reads the raw command); the verb routes through the same helper as the other debug verbs for consistency. |
-| `harness resolve-env <event.json>` | Resolve which `environment` block a given event maps to. The Bash-prefix enrichment is shared with `harness policy intercept`: inline `VAR=value` assignments, a leading `cd`, and a leading `git switch`/`checkout` are merged the way the hook merges them (so `DATABASE_URL=...prod... psql ...` resolves like the gate, not `unknown`). The `kubectl --context`/`--namespace` merge stays hook-only: `resolve-env` reports the ambient kube context, and `harness explain-policy` flags such an event with `parity.kubectl_target_present`. Ledger-free. |
 | `harness dry-run <prompt>` | Statically predict which hooks fire, which policies match, and which memories route for a prompt. |
 
 ## Hook entrypoints
@@ -55,13 +51,9 @@ These are called by Claude Code via `settings.json`; you usually do not run them
 
 ## Operator approvals
 
-`harness approve <kind>` is the operator-driven approval surface; `risk` is the only kind left (the `understanding` kind is removed together with the understanding-before-execution pack). It records a best-effort evidence-ledger tag that the Risk Gate's `requires.ledger_tag` consults. Operator surface; agents cannot self-approve.
+`harness approve` no longer exists; there is no CLI approval verb. A policy whose `requires.ledger_tag` names an approval tag is unblocked only by the operator writing that tag.
 
-| Verb | One-liner |
-|------|-----------|
-| `harness approve risk [--scope deletion] [--force <reason>] [--i-am-the-operator]` | Write `risk-approved:` to clear the current Risk Gate `require_approval` tier. `--scope deletion` writes the dev-context deletion arm's own `risk-approved:deletion:` tag instead of the shared production tag (`gate-dev-unsafe-deletion`, see docs/risk-gate.md). `--force <reason>` only unblocks `deny`-tier (writes `risk-override:`) and requires a non-empty reason; from `!`-shell calls add `--i-am-the-operator`. |
-
-Removed in task `a4d8adc5`: `harness approve branch-protection` and `harness session-start branch-check`. Removed in task `f3f15290`: the entire `harness session-start` command group (`preflight`, `toolchain-parity`, `stale-base-check`) and the top-level `harness preflight` alias. The branch-protection gate asks git for the branch on every call and keeps no ledger tag or override marker; to edit a protected branch deliberately, switch the gate off from an operator shell (`harness gate disable`, below).
+Removed in task `a4d8adc5`: `harness approve branch-protection` and `harness session-start branch-check`. Removed in task `f3f15290`: the entire `harness session-start` command group (`preflight`, `toolchain-parity`, `stale-base-check`) and the top-level `harness preflight` alias. Removed in task `39c112e0`: the entire `harness approve` command group; its last kind went with the Risk Gate. The branch-protection gate asks git for the branch on every call and keeps no ledger tag or override marker; to edit a protected branch deliberately, switch the gate off from an operator shell (`harness gate disable`, below).
 
 ## Gate kill-switches
 
@@ -123,7 +115,7 @@ This table is the canonical mapping from process gate to the ledger tag it consu
 - `harness apply` fails loud (refuses) when a manifest declares evidence-consuming policies (`requires:`) without `grounding-mcp` wired under `tools.mcp`; an unwired producer means warn policies degrade non-blocking while block/require_approval policies DENY every matching event (see docs/okf/gate-fail-posture-matrix.md). `operator_only: true` policies do not query evidence and may apply without grounding-mcp; wire `grounding-mcp` or remove the evidence-consuming policies.
 - Since `v0.34.0`: `apply --yes` (skip the `--overwrite-drift` confirmation) and non-TTY guards on the `apply`/`adopt` confirmation prompts (they refuse instead of hanging; piped `echo yes |` confirmations no longer work, use `--yes`).
 - `harness policy intercept --hook <name>` and the 2s timeout floor pinned by the Codex-hook generator both shipped in `v0.29.0`; see [CHANGELOG.md](../CHANGELOG.md).
-- Ledger tag vocabulary used by gate-mode policies: `review:`, `risk-override:`, `risk-approved:`. Only the Risk Gate's `requires.ledger_tag` actually consults a ledger tag to unblock (scoped to a Claude session id, not the agent-tasks task UUID, see `feedback-agent-grounding-merge-gate-ledger`). The branch-protection gate consults no ledger tag at all since task `a4d8adc5`; it asks git.
+- Ledger tag vocabulary used by gate-mode policies: `review:`. A policy's `requires.ledger_tag` consults the evidence ledger to unblock (scoped to a Claude session id, not the agent-tasks task UUID, see `feedback-agent-grounding-merge-gate-ledger`); the tag itself is written by a `harness record` verb or by the operator. The branch-protection gate consults no ledger tag at all since task `a4d8adc5`; it asks git.
 
 ### `--project` name validation
 

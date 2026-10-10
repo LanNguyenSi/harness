@@ -543,9 +543,9 @@ Rules the schema enforces:
   in-session-satisfiable evidence is self-contradictory.
 - **Restricted to `enforcement: block`.** `warn` and `require_approval`
   already have their own always-evaluated evidence paths;
-  `require_approval`'s canonical unblock is the `harness approve risk`
-  operator verb, not a requires-satisfaction story this marker would
-  replace.
+  `require_approval`'s canonical unblock is the operator writing the
+  ledger tag the policy's `requires.ledger_tag` names, not a
+  requires-satisfaction story this marker would replace.
 - **`harness validate` does not warn** about a missing `producers:` for
   an `operator_only: true` policy (`checkPolicySelfAttestation` treats
   it as correct-by-construction: there is no undocumented evidence
