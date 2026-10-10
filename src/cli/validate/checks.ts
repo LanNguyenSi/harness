@@ -465,8 +465,7 @@ export function checkWorkflowMergeBeforeReview(manifest: Manifest): Diagnostic[]
  * — that case IS a surface match, so `findWeakGatePolicyOverlaps` also
  * reports it as an overlap; the two checks are not mutually exclusive).
  * Either way the runtime evaluates both policies (fail-safe), but every
- * by-name reader (`explain`, `explain-policy`, `audit`, `diff`'s
- * name-keyed policy list) resolves the name to the hand-authored one and
+ * by-name reader (`explain`, `audit`, `diff`'s name-keyed policy list) resolves the name to the hand-authored one and
  * silently hides the derived gate. The schema's duplicate-name refinement
  * cannot see this (it runs on the hand-authored view), so it is an error
  * here.
@@ -482,7 +481,7 @@ export function checkWorkflowDerivedNameCollision(manifest: Manifest): Diagnosti
         `hand-authored policy "${derived.name}" collides with the policy of the same name ` +
         "derived from workflows[] (it does not stand in for the derived gate: either a " +
         "different trigger surface, or weaker / differently-extracting on the same one); " +
-        "both are enforced, but explain/explain-policy/audit/diff resolve the name to the " +
+        "both are enforced, but explain/audit/diff resolve the name to the " +
         "hand-authored one. Rename the hand-authored policy.",
     }));
 }
@@ -614,9 +613,8 @@ export function checkPolicyRiskWithoutEnvScope(manifest: Manifest): Diagnostic[]
 export function checkSafeDeletionRootsSyntax(manifest: Manifest): Diagnostic[] {
   const diags: Diagnostic[] = [];
   // Guarded (task d03af8f6, review round 3, LOW (e)) the same way
-  // `src/runtime/intercept.ts` and `src/cli/explain-policy.ts` already
-  // guard this same field: a hand-built `Manifest` that bypasses
-  // `RiskSchema.parse` (every test fixture that constructs
+  // `src/runtime/intercept.ts` already guards this same field: a
+  // hand-built `Manifest` that bypasses `RiskSchema.parse` (every test fixture that constructs
   // `{ risk: { classifiers: [...] } }` directly, per that schema's own
   // comment) can carry a `risk` with no `safe_deletion_roots` at all, or
   // no `risk` object whatsoever — `manifest.risk.safe_deletion_roots`

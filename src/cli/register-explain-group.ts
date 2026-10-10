@@ -1,10 +1,6 @@
 import type { Command } from "commander";
 import { EX_USAGE, HarnessExitError } from "./exit-codes.js";
 import { explain } from "./explain.js";
-import { explainAction } from "./explain-action.js";
-import { explainPolicy } from "./explain-policy.js";
-import { testRisk } from "./test-risk.js";
-import { resolveEnv } from "./resolve-env.js";
 
 export function registerExplainGroup(
   program: Command,
@@ -76,107 +72,6 @@ export function registerExplainGroup(
         if (options.session) explainOpts.sessionId = options.session;
         const result = await explain(policyName, explainOpts);
         stdout(result.output);
-      },
-    );
-
-  program
-    .command("explain-action <event.json>")
-    .description(
-      "Risk Gate debug verb (Phase 7): read a tool-event JSON file (the Claude Code PreToolUse hook payload shape: " +
-        "{ hook_event_name, tool_name, tool_input, session_id, cwd }) and print the normalized Action Envelope. " +
-        "Inspection surface for the envelope that downstream Risk Gate stages consume; does not evaluate policies.",
-    )
-    .option("--config <path>", "manifest path (default: ~/.harness/harness.yaml; legacy fallback ~/.claude/harness.yaml); read only for a leading `git switch|checkout`")
-    .option("--project <name>", "apply per-project overrides")
-    .option("--json", "emit the envelope as JSON instead of YAML")
-    .action((eventPath: string, options: { config?: string; project?: string; json?: boolean }) => {
-      const result = explainAction({
-        eventPath,
-        ...(options.config !== undefined && { configPath: options.config }),
-        ...(options.project !== undefined && { project: options.project }),
-        ...(options.json === true && { json: true }),
-      });
-      stdout(result.output);
-      if (!result.output.endsWith("\n")) stdout("\n");
-    });
-
-  program
-    .command("test-risk <event.json>")
-    .description(
-      "Risk Gate debug verb (Phase 7): read a tool-event JSON file, build its Action Envelope, and classify it " +
-        "against the manifest's risk.classifiers[]. Prints the risk profile (severity, categories, reversibility, " +
-        "confidence, reasons). An action no pattern matches reports as unclassified, not as safe.",
-    )
-    .option("--config <path>", "manifest path (default: ~/.harness/harness.yaml; legacy fallback ~/.claude/harness.yaml)")
-    .option("--project <name>", "apply per-project overrides")
-    .option("--json", "emit the risk profile as JSON instead of YAML")
-    .action(
-      (eventPath: string, options: { config?: string; project?: string; json?: boolean }) => {
-        const result = testRisk({
-          eventPath,
-          ...(options.config !== undefined && { configPath: options.config }),
-          ...(options.project !== undefined && { project: options.project }),
-          ...(options.json === true && { json: true }),
-        });
-        stdout(result.output);
-        if (!result.output.endsWith("\n")) stdout("\n");
-      },
-    );
-
-  program
-    .command("resolve-env <event.json>")
-    .description(
-      "Risk Gate debug verb (Phase 7): read a tool-event JSON file, build its Action Envelope, and resolve its " +
-        "target environment against the manifest's environments.resolvers[] (branch / env-var / kube-context / " +
-        "kube-namespace signals). An action no resolver matches resolves to `unknown`, not to a safe default.",
-    )
-    .option("--config <path>", "manifest path (default: ~/.harness/harness.yaml; legacy fallback ~/.claude/harness.yaml)")
-    .option("--project <name>", "apply per-project overrides")
-    .option("--json", "emit the environment resolution as JSON instead of YAML")
-    .action(
-      (eventPath: string, options: { config?: string; project?: string; json?: boolean }) => {
-        const result = resolveEnv({
-          eventPath,
-          ...(options.config !== undefined && { configPath: options.config }),
-          ...(options.project !== undefined && { project: options.project }),
-          ...(options.json === true && { json: true }),
-        });
-        stdout(result.output);
-        if (!result.output.endsWith("\n")) stdout("\n");
-      },
-    );
-
-  program
-    .command("explain-policy <policy>")
-    .description(
-      "Risk Gate debug verb (Phase 7): explain whether <policy> would APPLY to a tool event. " +
-        "Reads the event from --event, builds and enriches the Action Envelope, and shows the " +
-        "trigger match, the risk classification, the resolved environment, and a per-clause " +
-        "`when:` breakdown. Evaluates a hypothetical event live and reads nothing from the " +
-        "ledger (use `harness explain <policy> --trace` for the last recorded decision).",
-    )
-    .requiredOption("--event <event.json>", "path to the tool-event JSON file")
-    .option("--config <path>", "manifest path (default: ~/.harness/harness.yaml; legacy fallback ~/.claude/harness.yaml)")
-    .option("--project <name>", "apply per-project overrides")
-    .option("--json", "emit the explanation as JSON instead of YAML")
-    .action(
-      (
-        policyName: string,
-        options: {
-          event: string;
-          config?: string;
-          project?: string;
-          json?: boolean;
-        },
-      ) => {
-        const result = explainPolicy(policyName, {
-          eventPath: options.event,
-          ...(options.config !== undefined && { configPath: options.config }),
-          ...(options.project !== undefined && { project: options.project }),
-          ...(options.json === true && { json: true }),
-        });
-        stdout(result.output);
-        if (!result.output.endsWith("\n")) stdout("\n");
       },
     );
 }
