@@ -48,7 +48,6 @@ describe("list — categories", () => {
       "deny-kill-switch-bash",
       "deny-session-env-strip-bash",
       "deny-sentinel-write-bash",
-      "risk-gate",
     ]);
     const head = r.rows[0]!;
     expect(head.event).toBe("PreToolUse");
@@ -66,9 +65,6 @@ describe("list — categories", () => {
       "two-reviewers-required",
       "review-subagent-before-pr-create",
       "review-subagent-before-pr-create-bash",
-      "gate-prod-destructive",
-      "gate-prod-destructive-approval",
-      "gate-dev-unsafe-deletion",
       "deny-kill-switch-bypass",
       "deny-session-env-strip",
       "deny-pause-sentinel-forgery",

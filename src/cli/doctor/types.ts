@@ -268,28 +268,6 @@ export interface WorkflowsSectionReport {
 }
 
 /**
- * Phase 7 #6 — Risk Gate wiring health. Reports whether the three Risk
- * Gate surfaces (`risk.classifiers[]`, `environments.resolvers[]`, and
- * policies carrying a `when:` block) compose coherently. The `warnings`
- * catch the inert / fail-closed misconfigurations: `when:`-policies with
- * no classifier (every action unclassified), `when:`-policies with no
- * resolver (every environment `unknown`), or classifiers / resolvers
- * declared but no policy consuming them. The per-decision audit log
- * lives in `harness audit` (`policy_decision` rows carry the classifier
- * + environment as of Phase 7 #5); doctor reports wiring, not history.
- */
-export interface RiskGateSection {
-  /** Count of `risk.classifiers[]`. */
-  classifiers: number;
-  /** Count of `environments.resolvers[]`. */
-  resolvers: number;
-  /** Count of policies that declare a `when:` block. */
-  whenPolicies: number;
-  /** Coherence warnings; each rolls into the doctor `warningCount`. */
-  warnings: string[];
-}
-
-/**
  * Grounding wiring health (task 129e1b94). Present only when the manifest
  * declares an enabled `tools.mcp[grounding-mcp]` entry — without one there
  * is no consumer to check (validate's checkPolicyGroundingMcp owns the
@@ -404,8 +382,6 @@ export interface DoctorReport {
    */
   packExpansionRuntime: PackExpansionRuntimeReport;
   workflows: WorkflowsSectionReport;
-  /** Phase 7 #6 — Risk Gate wiring health (classifiers / resolvers / `when:`). */
-  riskGate: RiskGateSection;
   /**
    * Template-policy drift (task adf037c1): shipped operator_only security
    * policies missing-or-downgraded in this installed manifest (`errors`)

@@ -83,9 +83,12 @@ describeBlock("describe — --json", () => {
     const parsed = JSON.parse(result.output);
     expect(parsed.version).toBe(1);
     expect(parsed.tools.mcp).toHaveLength(3);
-    // 14 since task f3f15290 dropped the preflight-before-investigation and
-    // preflight-before-push policies from the reference manifest.
-    expect(parsed.policies).toHaveLength(14);
+    // 11 since task 6e52c044 dropped the three Risk Gate policies
+    // (gate-prod-destructive, gate-prod-destructive-approval and
+    // gate-dev-unsafe-deletion) from the reference manifest (14 before: 14
+    // after task f3f15290 dropped the preflight-before-investigation and
+    // preflight-before-push policies).
+    expect(parsed.policies).toHaveLength(11);
   });
 
   it("emits valid filtered JSON when --pillar is combined with --json", () => {

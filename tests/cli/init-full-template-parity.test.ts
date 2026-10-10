@@ -181,38 +181,3 @@ describe("FULL_TEMPLATE ↔ docs/examples/full-manifest.yaml — drift guard", (
   });
 });
 
-// Task a7eb1a71 (review round 2, MEDIUM finding): the drift guard above
-// covers policies and policy_packs but not risk.classifiers[], so a
-// kubectl/terraform classifier pattern fix landed in
-// docs/examples/full-manifest.yaml without a matching change in
-// FULL_TEMPLATE and every test still passed. Extend the same guard to
-// risk.classifiers[].patterns.
-describe("FULL_TEMPLATE risk.classifiers[] drift guard (task a7eb1a71)", () => {
-  it("matches the reference on every classifier's patterns, categories, and severities", () => {
-    const ref = loadReferenceManifest();
-    const full = loadFullTemplateManifest();
-    const refByName = new Map(ref.risk.classifiers.map((c) => [c.name, c]));
-    const fullByName = new Map(full.risk.classifiers.map((c) => [c.name, c]));
-    expect([...fullByName.keys()].sort()).toEqual([...refByName.keys()].sort());
-    for (const [name, classifier] of fullByName) {
-      const counterpart = refByName.get(name);
-      expect(counterpart, `classifier ${name} in FULL_TEMPLATE has no counterpart`).toBeDefined();
-      if (!counterpart) continue;
-      expect(classifier.patterns).toEqual(counterpart.patterns);
-    }
-  });
-});
-
-// Task d03af8f6: gate-dev-unsafe-deletion's `action.deletion_target_unresolvable`
-// clause reads `risk.safe_deletion_roots`, which the policy drift guard above
-// does not cover (it only pins policy fields and risk.classifiers[].patterns).
-// Extend the same drift-guard shape to this new config surface: a
-// safe_deletion_roots edit in one manifest without the matching edit in the
-// other must fail here rather than silently drift.
-describe("FULL_TEMPLATE risk.safe_deletion_roots drift guard (task d03af8f6)", () => {
-  it("matches the reference manifest's safe_deletion_roots exactly", () => {
-    const ref = loadReferenceManifest();
-    const full = loadFullTemplateManifest();
-    expect(full.risk.safe_deletion_roots).toEqual(ref.risk.safe_deletion_roots);
-  });
-});

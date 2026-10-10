@@ -325,40 +325,9 @@ function formatWorkflowsSection(report: DoctorReport): string[] {
   return out;
 }
 
-// Risk Gate section: render only when at least one Risk Gate surface
-// is configured (a classifier, a resolver, or a `when:`-policy).
-// A manifest that uses none stays silent — no point in a section for
-// an unused feature.
-function formatRiskGateSection(report: DoctorReport): string[] {
-  const rg = report.riskGate;
-  if (rg.classifiers === 0 && rg.resolvers === 0 && rg.whenPolicies === 0) {
-    return [];
-  }
-  const out: string[] = ["", "Risk Gate"];
-  out.push(
-    `  ${rg.classifiers} classifier${rg.classifiers === 1 ? "" : "s"}, ` +
-      `${rg.resolvers} environment resolver${rg.resolvers === 1 ? "" : "s"}, ` +
-      `${rg.whenPolicies} ${rg.whenPolicies === 1 ? "policy" : "policies"} with when:`,
-  );
-  if (rg.warnings.length === 0) {
-    out.push(`  ✓ wiring coherent`);
-  } else {
-    for (const w of rg.warnings) out.push(`  ⚠ ${w}`);
-  }
-  // Bash command-prefix parsing is unconditionally on since v0.30.1; the
-  // stat line is informational so the next "why didn't the gate fire?"
-  // debugging session does not have to grep the source for it.
-  out.push(`  ℹ resolver reads inline \`VAR=value\` env + leading \`cd <path> &&\` from Bash commands`);
-  out.push(
-    `  ℹ recent Risk Gate decisions: \`harness audit\` (filter with --outcome require_approval / deny)`,
-  );
-  return out;
-}
-
 // Template-policy drift section (task adf037c1): shipped operator_only
 // security policies missing from an aged installed manifest. Render only
-// when something is missing — a caught-up manifest stays silent, like the
-// Risk Gate section.
+// when something is missing: a caught-up manifest stays silent.
 function formatTemplateDriftSection(report: DoctorReport): string[] {
   const { errors, warnings } = report.templateDrift;
   if (errors.length === 0 && warnings.length === 0) return [];
@@ -515,7 +484,6 @@ export function format(report: DoctorReport): string {
   lines.push(...formatPoliciesSection(report));
   lines.push(...formatPolicyPacksSection(report));
   lines.push(...formatWorkflowsSection(report));
-  lines.push(...formatRiskGateSection(report));
   lines.push(...formatTemplateDriftSection(report));
   lines.push(...formatTriggerBoundaryDriftSection(report));
   lines.push(...formatHookBudgetLedgerMarginSection(report));

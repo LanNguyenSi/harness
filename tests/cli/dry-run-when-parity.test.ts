@@ -3,9 +3,8 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { Readable, Writable } from "node:stream";
 import { afterEach, describe, expect, it } from "vitest";
-import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
+import { stringify as stringifyYaml } from "yaml";
 import { dryRun } from "../../src/cli/dry-run.js";
-import { FULL_TEMPLATE } from "../../src/cli/init/templates.js";
 import { runInterceptCli } from "../../src/cli/policy/intercept.js";
 import type { LedgerClient } from "../../src/runtime/intercept.js";
 
@@ -38,13 +37,32 @@ function makeHome(base: RawManifest, project?: { name: string; contents: unknown
   return home;
 }
 
-function fullTemplate(): RawManifest {
-  return parseYaml(FULL_TEMPLATE) as RawManifest;
+/**
+ * Inline base manifest for the policy fixtures below: declares the
+ * `risk-gate` hook the fixtures' policies reference. Task 6e52c044 removed
+ * that hook (and the three gate policies) from FULL_TEMPLATE, so the
+ * fixtures no longer derive their shape from the template.
+ */
+function baseManifest(): RawManifest {
+  return {
+    version: 1,
+    hooks: [
+      {
+        name: "risk-gate",
+        event: "PreToolUse",
+        match: "Bash",
+        command: "harness policy intercept",
+        blocking: "hard",
+        budget_ms: 15000,
+      },
+    ],
+    policies: [],
+  };
 }
 
-/** The FULL template's hooks with a caller-supplied policy list. */
+/** The inline base manifest with a caller-supplied policy list. */
 function withPolicies(policies: Array<Record<string, unknown>>): RawManifest {
-  return { ...fullTemplate(), policies };
+  return { ...baseManifest(), policies };
 }
 
 const bashPolicy = (name: string, extra: Record<string, unknown> = {}): Record<string, unknown> => ({
@@ -190,9 +208,46 @@ describe("dry-run: a policy carrying when: never appears under matchingPolicies"
   });
 
   for (const command of ["rm -rf /", "ls"]) {
-    it(`reports the FULL template's three gates as not applying to \`${command}\`, as policy intercept does`, async () => {
-      const home = makeHome(fullTemplate());
+    it(`reports the three former gate policies as not applying to \`${command}\`, as policy intercept does`, async () => {
+      // The three policies FULL_TEMPLATE shipped until task 6e52c044
+      // removed them (name, trigger, when, requires and enforcement copied
+      // verbatim from the removed template entries; the producers: arrays
+      // are not needed here).
       const gates = ["gate-dev-unsafe-deletion", "gate-prod-destructive", "gate-prod-destructive-approval"];
+      const home = makeHome(
+        withPolicies([
+          {
+            name: "gate-prod-destructive",
+            description:
+              "Deny critical-severity destructive shell actions against a production target.",
+            trigger: { event: "PreToolUse", match: "Bash" },
+            when: { "risk.severity_at_least": "critical", "environment.name": "production" },
+            requires: { ledger_tag: "risk-override:${SESSION_ID}" },
+            hook: "risk-gate",
+            enforcement: "block",
+          },
+          {
+            name: "gate-prod-destructive-approval",
+            description:
+              "Require operator approval for high-severity destructive shell actions against a production target.",
+            trigger: { event: "PreToolUse", match: "Bash" },
+            when: { "risk.severity_at_least": "high", "environment.name": "production" },
+            requires: { ledger_tag: "risk-approved:${SESSION_ID}" },
+            hook: "risk-gate",
+            enforcement: "require_approval",
+          },
+          {
+            name: "gate-dev-unsafe-deletion",
+            description:
+              "Require approval for a deletion-verb command whose target cannot be statically proven safe, in every environment.",
+            trigger: { event: "PreToolUse", match: "Bash" },
+            when: { "action.deletion_target_unresolvable": true },
+            requires: { ledger_tag: "risk-approved:deletion:${SESSION_ID}" },
+            hook: "risk-gate",
+            enforcement: "require_approval",
+          },
+        ]),
+      );
       const report = dryRunReport(home, command);
       const matching = report.matchingPolicies.map((p) => p.name);
       const decided = await interceptNames(home, command);

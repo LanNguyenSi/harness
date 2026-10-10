@@ -1316,12 +1316,52 @@ workflows:
     );
     expect(hit).toBeDefined();
     expect(hit?.message).toContain("enforcement: warn");
+    // Variant without when: keeps the "Both policies apply" message (the
+    // hand policy still fires, it is merely weaker than the derived gate).
+    expect(hit?.message).toContain("Both policies apply");
     // The derived block gate itself is still there (F1's whole point):
     // no error diagnostic for this workflow, since the gate IS enforced.
     const errorHit = result.diagnostics.find(
       (d) => d.severity === "error" && /workflow "ship"/.test(d.message),
     );
     expect(errorHit).toBeUndefined();
+  });
+
+  it("names the never-applies consequence when the hand policy carries a when: clause (task 6e52c044)", () => {
+    const whenPolicy = `policies:
+  - name: two-reviewers-required
+    description: "Block-policy sharing review-before-merge's exact surface + tag, narrowed by a when: clause."
+    trigger:
+      event: PreToolUse
+      match: "mcp__agent-tasks__pull_requests_merge"
+      extract:
+        PR_NUMBER: "toolArgs.prNumber"
+    when:
+      environment.name: production
+    requires:
+      ledger_tag: "review:\${PR_NUMBER}"
+    hook: require-review-evidence
+    enforcement: block
+`;
+    const home = writeFixture({
+      "harness.yaml": `version: 1\n${WORKFLOW_REQUIRED}${whenPolicy}${WIRED_HOOKS}`,
+    });
+    const result = validate({
+      homeDir: home,
+      configPath: path.join(home, "harness.yaml"),
+      ...NOOP_PROBES,
+    });
+    const hit = result.diagnostics.find(
+      (d) =>
+        d.severity === "warning" &&
+        /derives a block gate on/.test(d.message) &&
+        d.message.includes("two-reviewers-required"),
+    );
+    expect(hit).toBeDefined();
+    expect(hit?.message).toContain("carries a when: clause and never applies");
+    expect(hit?.message).toContain("is the only gate on this surface");
+    expect(hit?.message).toContain("Remove the when: policy or drop its when: clause.");
+    expect(hit?.message).not.toContain("Both policies apply");
   });
 
   it("no weak-overlap warning when the hand policy is at least as strong (round-1 dedupe case)", () => {
@@ -1464,216 +1504,6 @@ describe("validate — internal helpers", () => {
     expect(__testables.isRootedPath("~/x")).toBe(true);
     expect(__testables.isRootedPath("npx")).toBe(false);
     expect(__testables.isRootedPath("./relative")).toBe(false);
-  });
-});
-
-describe("validate — M7 checkPolicyRiskWithoutEnvScope", () => {
-  // Helper builds a minimal harness.yaml with a single policy whose `when:`
-  // block is controlled by the caller. All fixtures share the same hook
-  // to satisfy the dangling-hook check.
-  function buildRiskScopeFixture(whenBlock: string): string {
-    const yaml = `version: 1
-hooks:
-  - name: risk-gate
-    event: PreToolUse
-    command: /usr/bin/true
-    blocking: false
-policies:
-  - name: gate-test
-    description: test policy
-    trigger:
-      event: PreToolUse
-      match: Bash
-${whenBlock}    requires:
-      ledger_tag: "risk-approved:\${SESSION_ID}"
-    hook: risk-gate
-    enforcement: block
-`;
-    return writeFixture({ "harness.yaml": yaml });
-  }
-
-  it("warns when a policy has risk.severity_at_least with no environment.name scope", () => {
-    // Mutation guard: remove the checkPolicyRiskWithoutEnvScope call from
-    // runAssetChecks (or the function body) and this test goes red.
-    const home = buildRiskScopeFixture("    when:\n      risk.severity_at_least: high\n");
-    const result = validate({
-      homeDir: home,
-      configPath: path.join(home, "harness.yaml"),
-      ...NOOP_PROBES,
-    });
-    const hit = result.diagnostics.find(
-      (d) =>
-        d.severity === "warning" &&
-        /fail-closed.*unclassified|unclassified.*environment\.name/i.test(d.message),
-    );
-    expect(hit).toBeDefined();
-    expect(hit?.path).toBe("policies[0]");
-    expect(hit?.message).toContain("environment.name");
-    expect(hit?.message).toContain("docs/risk-gate.md");
-  });
-
-  it("warns when a policy has risk.category_in with no environment.name scope", () => {
-    const home = buildRiskScopeFixture(
-      "    when:\n      risk.category_in: [destructive]\n",
-    );
-    const result = validate({
-      homeDir: home,
-      configPath: path.join(home, "harness.yaml"),
-      ...NOOP_PROBES,
-    });
-    const hit = result.diagnostics.find(
-      (d) =>
-        d.severity === "warning" &&
-        /environment\.name/.test(d.message),
-    );
-    expect(hit).toBeDefined();
-    expect(hit?.path).toBe("policies[0]");
-  });
-
-  it("warns when a policy has action.reversible with no environment.name scope", () => {
-    const home = buildRiskScopeFixture(
-      "    when:\n      action.reversible: false\n",
-    );
-    const result = validate({
-      homeDir: home,
-      configPath: path.join(home, "harness.yaml"),
-      ...NOOP_PROBES,
-    });
-    const hit = result.diagnostics.find(
-      (d) =>
-        d.severity === "warning" &&
-        /environment\.name/.test(d.message),
-    );
-    expect(hit).toBeDefined();
-    expect(hit?.path).toBe("policies[0]");
-  });
-
-  it("does NOT warn when risk.severity_at_least is paired with environment.name (negative control)", () => {
-    // Mutation guard: remove the `hasEnvNameScope` guard from
-    // checkPolicyRiskWithoutEnvScope and this test goes red (the warning
-    // would fire even when environment.name is present).
-    const home = buildRiskScopeFixture(
-      "    when:\n      risk.severity_at_least: high\n      environment.name: production\n",
-    );
-    const result = validate({
-      homeDir: home,
-      configPath: path.join(home, "harness.yaml"),
-      ...NOOP_PROBES,
-    });
-    const hit = result.diagnostics.find(
-      (d) =>
-        d.severity === "warning" &&
-        /environment\.name/.test(d.message) &&
-        /fail-closed|unclassified/.test(d.message),
-    );
-    expect(hit).toBeUndefined();
-  });
-
-  it("does NOT warn when the when: block contains only environment.name (no risk clause)", () => {
-    // environment.name alone never triggers the unclassified fallback.
-    const home = buildRiskScopeFixture(
-      "    when:\n      environment.name: production\n",
-    );
-    const result = validate({
-      homeDir: home,
-      configPath: path.join(home, "harness.yaml"),
-      ...NOOP_PROBES,
-    });
-    const hit = result.diagnostics.find(
-      (d) =>
-        d.severity === "warning" &&
-        /fail-closed|unclassified/.test(d.message),
-    );
-    expect(hit).toBeUndefined();
-  });
-
-  it("does NOT warn for a policy with no when: block at all", () => {
-    // A Phase-4 policy with no when: has no risk clauses to lint.
-    const home = writeFixture({
-      "harness.yaml": `version: 1
-hooks:
-  - name: h
-    event: PreToolUse
-    command: /usr/bin/true
-    blocking: false
-policies:
-  - name: plain-policy
-    description: test
-    trigger:
-      event: PreToolUse
-      match: Bash
-    requires:
-      ledger_tag: "review:\${SESSION_ID}"
-    hook: h
-    enforcement: block
-`,
-    });
-    const result = validate({
-      homeDir: home,
-      configPath: path.join(home, "harness.yaml"),
-      ...NOOP_PROBES,
-    });
-    const hit = result.diagnostics.find(
-      (d) =>
-        d.severity === "warning" &&
-        /fail-closed|unclassified/.test(d.message),
-    );
-    expect(hit).toBeUndefined();
-  });
-});
-
-describe("validate — checkSafeDeletionRootsSyntax (task d03af8f6, review round 2, LOW (a))", () => {
-  function buildSafeRootsFixture(roots: string): string {
-    const yaml = `version: 1
-hooks:
-  - name: h
-    event: PreToolUse
-    command: /usr/bin/true
-    blocking: false
-risk:
-  safe_deletion_roots:
-${roots}
-`;
-    return writeFixture({ "harness.yaml": yaml });
-  }
-
-  it("warns on a non-absolute risk.safe_deletion_roots entry", () => {
-    const home = buildSafeRootsFixture("    - scratch");
-    const result = validate({
-      homeDir: home,
-      configPath: path.join(home, "harness.yaml"),
-      ...NOOP_PROBES,
-    });
-    const hit = result.diagnostics.find(
-      (d) => d.severity === "warning" && /not an absolute path/i.test(d.message),
-    );
-    expect(hit).toBeDefined();
-    expect(hit?.path).toBe("risk.safe_deletion_roots[0]");
-  });
-
-  it("warns on a risk.safe_deletion_roots entry containing $ or ~", () => {
-    const home = buildSafeRootsFixture('    - "/tmp/$SCRATCH"');
-    const result = validate({
-      homeDir: home,
-      configPath: path.join(home, "harness.yaml"),
-      ...NOOP_PROBES,
-    });
-    const hit = result.diagnostics.find(
-      (d) => d.severity === "warning" && /never expands|LITERAL/i.test(d.message),
-    );
-    expect(hit).toBeDefined();
-    expect(hit?.path).toBe("risk.safe_deletion_roots[0]");
-  });
-
-  it("does NOT warn on a well-formed absolute risk.safe_deletion_roots entry (negative control)", () => {
-    const home = buildSafeRootsFixture("    - /tmp");
-    const result = validate({
-      homeDir: home,
-      configPath: path.join(home, "harness.yaml"),
-      ...NOOP_PROBES,
-    });
-    const hit = result.diagnostics.find((d) => d.path === "risk.safe_deletion_roots[0]");
-    expect(hit).toBeUndefined();
   });
 });
 
