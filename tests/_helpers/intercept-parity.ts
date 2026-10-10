@@ -1,8 +1,6 @@
-// Shared fixtures for the divergence guards that compare a Risk Gate debug
-// verb against `harness policy intercept` (explain-policy, resolve-env,
-// test-risk, explain-action): one manifest, one fixture corpus, and the
-// hook-side observation (block/allow of a `block`-enforced policy whose
-// `when:` needs production).
+// Shared fixtures for hook-side tests of `harness policy intercept`: one
+// manifest, one leading-prefix fixture corpus, and the hook-side observation
+// (block/allow of a `block`-enforced policy whose `when:` needs production).
 
 import * as fs from "node:fs";
 import * as os from "node:os";
