@@ -115,6 +115,46 @@ tools:
   });
 });
 
+describe("doctor — no Risk Gate section (task 6e52c044)", () => {
+  it("reports no riskGate field and no Risk Gate text for a manifest that still carries risk, environments and a when: policy", async () => {
+    const home = makeFixture({
+      "harness.yaml": `version: 1
+hooks:
+  - name: gate
+    event: PreToolUse
+    match: "Bash"
+    command: harness policy intercept
+    blocking: hard
+policies:
+  - name: scoped-gate
+    description: a when-scoped block policy
+    trigger: { event: PreToolUse, match: "Bash" }
+    when: { "environment.name": production }
+    requires: { ledger_tag: "risk-override:\${SESSION_ID}" }
+    hook: gate
+    enforcement: block
+risk:
+  classifiers: []
+environments:
+  resolvers: []
+${SILENCE_DRIFT}`,
+    });
+    const report = await doctor({
+      configPath: path.join(home, "harness.yaml"),
+      homeOverride: home,
+      mcpProbe: new FakeProbe({}),
+      versionProbe: () => null,
+      pathEnv: "",
+      npmBinExec: STUB_NPM_BIN_EXEC_UNKNOWN,
+    });
+    const text = format(report);
+    // The manifest loaded: the policy is listed, so the absence below is real.
+    expect(text).toContain("scoped-gate");
+    expect(report).not.toHaveProperty("riskGate");
+    expect(text).not.toMatch(/Risk Gate/i);
+  });
+});
+
 describe("doctor — MCP probe surfacing", () => {
   it("renders broken MCP servers with the actual error message, not a generic label", async () => {
     const home = makeFixture({
@@ -2184,218 +2224,6 @@ ${routerBlock}
       npmBinExec: STUB_NPM_BIN_EXEC_UNKNOWN,
     });
     expect(report.memory.routerVersion).toBeUndefined();
-  });
-});
-
-describe("doctor — Phase 7 #6 Risk Gate section", () => {
-  const RISK_GATE_MANIFEST = `version: 1
-hooks:
-  - name: risk-gate
-    event: PreToolUse
-    command: /usr/bin/true
-    blocking: false
-risk:
-  classifiers:
-    - name: dangerous-shell
-      tool: Bash
-      patterns:
-        - { pattern: 'terraform destroy', categories: [destructive], severity: critical }
-environments:
-  resolvers:
-    - name: prod
-      environment: production
-      signals: { branch_patterns: [main] }
-policies:
-  - name: gate-prod-destructive
-    description: gate destructive prod actions
-    trigger: { event: PreToolUse, match: "Bash" }
-    when: { environment.name: production }
-    requires: { ledger_tag: "risk-approved:\${SESSION_ID}" }
-    hook: risk-gate
-    enforcement: require_approval
-`;
-
-  it("reports coherent wiring when classifiers, resolvers, and a when: policy are all present", async () => {
-    const home = makeFixture({ "harness.yaml": RISK_GATE_MANIFEST });
-    const report = await doctor({
-      configPath: path.join(home, "harness.yaml"),
-      shallow: true,
-    });
-    expect(report.riskGate).toEqual({
-      classifiers: 1,
-      resolvers: 1,
-      whenPolicies: 1,
-      warnings: [],
-    });
-    expect(format(report)).toContain("Risk Gate");
-    expect(format(report)).toContain("1 classifier, 1 environment resolver, 1 policy with when:");
-    expect(format(report)).toContain("✓ wiring coherent");
-  });
-
-  it("pluralizes the Risk Gate count line when 2+ policies declare when:", async () => {
-    const twoWhenPolicies = RISK_GATE_MANIFEST.replace(
-      "policies:\n  - name: gate-prod-destructive\n",
-      "policies:\n  - name: gate-prod-destructive-2\n" +
-        "    description: second when-policy to exercise plural rendering\n" +
-        "    trigger: { event: PreToolUse, match: \"Bash\" }\n" +
-        "    when: { environment.name: production }\n" +
-        "    requires: { ledger_tag: \"risk-approved:${SESSION_ID}\" }\n" +
-        "    hook: risk-gate\n" +
-        "    enforcement: require_approval\n" +
-        "  - name: gate-prod-destructive\n",
-    );
-    const home = makeFixture({ "harness.yaml": twoWhenPolicies });
-    const report = await doctor({
-      configPath: path.join(home, "harness.yaml"),
-      shallow: true,
-    });
-    expect(report.riskGate.whenPolicies).toBe(2);
-    const formatted = format(report);
-    expect(formatted).toContain("1 classifier, 1 environment resolver, 2 policies with when:");
-    expect(formatted).toContain("✓ wiring coherent");
-    expect(formatted).not.toContain("policy policies");
-    expect(formatted).not.toContain("policys");
-  });
-
-  it("warns when a when: policy is declared but no classifier exists", async () => {
-    const noClassifier = RISK_GATE_MANIFEST.replace(
-      /risk:\n  classifiers:\n( {4}.*\n| {6,}.*\n)+/,
-      "risk:\n  classifiers: []\n",
-    );
-    const home = makeFixture({ "harness.yaml": noClassifier });
-    const report = await doctor({
-      configPath: path.join(home, "harness.yaml"),
-      shallow: true,
-    });
-    expect(report.riskGate.classifiers).toBe(0);
-    expect(report.riskGate.whenPolicies).toBe(1);
-    expect(report.riskGate.warnings.length).toBeGreaterThan(0);
-    expect(report.riskGate.warnings[0]).toMatch(/no `risk.classifiers/);
-    // The coherence warning rolls into the doctor warning tally.
-    expect(report.warningCount).toBeGreaterThan(0);
-  });
-
-  it("stays silent when the manifest configures no Risk Gate surface", async () => {
-    const home = makeFixture({
-      "harness.yaml": "version: 1\nhooks: []\npolicies: []\n",
-    });
-    const report = await doctor({
-      configPath: path.join(home, "harness.yaml"),
-      shallow: true,
-    });
-    expect(report.riskGate).toEqual({
-      classifiers: 0,
-      resolvers: 0,
-      whenPolicies: 0,
-      warnings: [],
-    });
-    expect(format(report)).not.toContain("Risk Gate");
-  });
-
-  // Task f1df7c2d Bug B: per Phase 7 #5's "unknown is not safe" rule, an
-  // unclassified envelope satisfies every risk-derived clause, so a
-  // policy that gates on `risk.*` without `environment.name` fires on
-  // EVERY Bash command. Warn the operator so the misconfiguration is
-  // visible at doctor-time rather than at first-block-time.
-  const RISK_UNSCOPED_MANIFEST = `version: 1
-hooks:
-  - name: risk-gate
-    event: PreToolUse
-    command: /usr/bin/true
-    blocking: false
-risk:
-  classifiers:
-    - name: dangerous-shell
-      tool: Bash
-      patterns:
-        - { pattern: 'terraform destroy', categories: [destructive], severity: critical }
-environments:
-  resolvers:
-    - name: prod
-      environment: production
-      signals: { branch_patterns: [main] }
-policies:
-  - name: gate-high-risk
-    description: missing environment.name scope
-    trigger: { event: PreToolUse, match: "Bash" }
-    when: { risk.severity_at_least: high }
-    requires: { ledger_tag: "risk-approved:\${SESSION_ID}" }
-    hook: risk-gate
-    enforcement: require_approval
-`;
-
-  it("warns when a policy gates on risk.* without an environment.name scope", async () => {
-    const home = makeFixture({ "harness.yaml": RISK_UNSCOPED_MANIFEST });
-    const report = await doctor({
-      configPath: path.join(home, "harness.yaml"),
-      shallow: true,
-    });
-    expect(report.riskGate.warnings.some((w) => w.includes("gate-high-risk"))).toBe(true);
-    expect(report.riskGate.warnings.some((w) => w.includes("environment.name"))).toBe(true);
-    expect(report.warningCount).toBeGreaterThan(0);
-  });
-
-  it("does not warn when the same policy also carries environment.name", async () => {
-    const scoped = RISK_UNSCOPED_MANIFEST.replace(
-      "when: { risk.severity_at_least: high }",
-      "when: { risk.severity_at_least: high, environment.name: production }",
-    );
-    const home = makeFixture({ "harness.yaml": scoped });
-    const report = await doctor({
-      configPath: path.join(home, "harness.yaml"),
-      shallow: true,
-    });
-    expect(report.riskGate.warnings.filter((w) => w.includes("gate-high-risk"))).toHaveLength(0);
-  });
-
-  it("warns when a policy gates on risk.category_in without an environment.name scope", async () => {
-    const categoryUnscoped = RISK_UNSCOPED_MANIFEST.replace(
-      "when: { risk.severity_at_least: high }",
-      "when: { risk.category_in: [destructive] }",
-    );
-    const home = makeFixture({ "harness.yaml": categoryUnscoped });
-    const report = await doctor({
-      configPath: path.join(home, "harness.yaml"),
-      shallow: true,
-    });
-    expect(report.riskGate.warnings.some((w) => w.includes("gate-high-risk"))).toBe(true);
-  });
-
-  it("warns when a policy gates on action.reversible without an environment.name scope", async () => {
-    // action.reversible also fails-closed to matched=true for an unclassified
-    // action (when-eval.ts sets unclassifiedFallback=true on the reversible
-    // arm, exactly like severity/category). Mutation guard: removing
-    // action.reversible from the checkPolicyRiskWithoutEnvScope check would
-    // make this test go red (no warning emitted).
-    const reversibleUnscoped = RISK_UNSCOPED_MANIFEST.replace(
-      "when: { risk.severity_at_least: high }",
-      "when: { action.reversible: false }",
-    );
-    const home = makeFixture({ "harness.yaml": reversibleUnscoped });
-    const report = await doctor({
-      configPath: path.join(home, "harness.yaml"),
-      shallow: true,
-    });
-    expect(report.riskGate.warnings.some((w) => w.includes("gate-high-risk"))).toBe(true);
-    expect(report.riskGate.warnings.some((w) => w.includes("environment.name"))).toBe(true);
-  });
-
-  it("does not warn on action.reversible when environment.name is also present (negative control)", async () => {
-    // Mutation guard: removing the hasEnvNameScope guard from
-    // checkPolicyRiskWithoutEnvScope would make this test go red (warning
-    // would fire even with environment.name present).
-    const reversibleScoped = RISK_UNSCOPED_MANIFEST.replace(
-      "when: { risk.severity_at_least: high }",
-      "when: { action.reversible: false, environment.name: production }",
-    );
-    const home = makeFixture({ "harness.yaml": reversibleScoped });
-    const report = await doctor({
-      configPath: path.join(home, "harness.yaml"),
-      shallow: true,
-    });
-    expect(
-      report.riskGate.warnings.filter((w) => w.includes("gate-high-risk")),
-    ).toHaveLength(0);
   });
 });
 

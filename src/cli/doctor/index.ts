@@ -31,7 +31,6 @@ import { selectRuntime, type RuntimeSelection } from "../apply/apply.js";
 import { lastApplyPath, readLastApply } from "../../io/last-apply.js";
 import {
   checkHookBudgetLedgerMargin,
-  checkPolicyRiskWithoutEnvScope,
   checkTemplatePolicyDrift,
   checkTriggerBoundaryDrift,
   checkWorkflows,
@@ -68,7 +67,6 @@ import {
   type PolicyEntryReport,
   type PolicyPackUnresolved,
   type PolicyPacksSection,
-  type RiskGateSection,
   type TemplateDriftSection,
   type TriggerBoundaryDriftSection,
   type ToolsSection,
@@ -695,48 +693,6 @@ function buildWorkflows(manifest: Manifest): import("./types.js").WorkflowsSecti
 }
 
 /**
- * Phase 7 #6 — Risk Gate wiring health. Counts the three Risk Gate
- * surfaces and flags the misconfigurations that make the gate inert or
- * silently fail-closed. Pure: manifest in, section out, no I/O.
- */
-function buildRiskGate(manifest: Manifest): RiskGateSection {
-  const classifiers = manifest.risk.classifiers.length;
-  const resolvers = manifest.environments.resolvers.length;
-  const whenPolicies = manifest.policies.filter(
-    (p) => p.when !== undefined,
-  ).length;
-  const warnings: string[] = [];
-  if (whenPolicies > 0 && classifiers === 0) {
-    warnings.push(
-      `${whenPolicies} policy(ies) declare \`when:\` but no \`risk.classifiers[]\` are declared; ` +
-        `every action classifies as unclassified, so \`risk.*\` clauses match fail-closed ("unknown is not safe")`,
-    );
-  }
-  if (whenPolicies > 0 && resolvers === 0) {
-    warnings.push(
-      `${whenPolicies} policy(ies) declare \`when:\` but no \`environments.resolvers[]\` are declared; ` +
-        `every action resolves to environment \`unknown\``,
-    );
-  }
-  if (whenPolicies === 0 && (classifiers > 0 || resolvers > 0)) {
-    warnings.push(
-      "risk classifiers / environment resolvers are declared but no policy consumes them via `when:` — the Risk Gate is inert",
-    );
-  }
-  // Risk-clause policies that forgot to scope via `environment.name`.
-  // Delegate to the shared validate check so doctor and `harness validate`
-  // stay in parity (same logic, same clauses, same thresholds). The check
-  // covers risk.severity_at_least, risk.category_in, AND action.reversible:
-  // all three clauses fail-closed to matched=true on an unclassified action
-  // per `runtime/when-eval.ts`. Map each Diagnostic message into a warning
-  // string, appended to this section's `warnings` list.
-  for (const diag of checkPolicyRiskWithoutEnvScope(manifest)) {
-    warnings.push(diag.message);
-  }
-  return { classifiers, resolvers, whenPolicies, warnings };
-}
-
-/**
  * Template-policy drift (task adf037c1): shipped operator_only security
  * policies missing from an aged installed manifest. Delegates to the
  * shared validate check so `harness doctor` and `harness validate` stay
@@ -933,7 +889,6 @@ function countDiagnostics(report: Omit<DoctorReport, "errorCount" | "warningCoun
   // Fix is opt-in (`harness pack reseed <name>`), so this never escalates
   // to an error the way an unresolved pack or a rejected config value does.
   warningCount += report.policyPacks.uxDrift.length;
-  warningCount += report.riskGate.warnings.length;
   // Workflow gate wiring (F3) + weak-overlap (F1), review round 2,
   // 99f47307 Slice 1: an unwired/mis-wired merge gate is a real
   // silent-non-enforcement gap → errorCount; a weaker hand-authored
@@ -1107,7 +1062,6 @@ export async function doctor(opts: DoctorOptions = {}): Promise<DoctorReport> {
   const policies = buildPolicies(manifest);
   const policyPacks = buildPolicyPacks(manifest, applyRuntime.runtime);
   const workflows = buildWorkflows(manifest);
-  const riskGate = buildRiskGate(manifest);
   const templateDrift = buildTemplateDrift(manifest);
   const triggerBoundaryDrift = buildTriggerBoundaryDrift(manifest);
   const hookBudgetLedgerMargin = buildHookBudgetLedgerMargin(manifest);
@@ -1158,7 +1112,6 @@ export async function doctor(opts: DoctorOptions = {}): Promise<DoctorReport> {
     policyPacks,
     packExpansionRuntime: packExpansionRuntimeReport(applyRuntime, lastApplyWarning),
     workflows,
-    riskGate,
     templateDrift,
     triggerBoundaryDrift,
     hookBudgetLedgerMargin,

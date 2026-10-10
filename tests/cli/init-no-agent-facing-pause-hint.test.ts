@@ -150,21 +150,4 @@ describe("no agent-facing ux.run line recommends the pause/resume kill switch (t
       ).toEqual([]);
     },
   );
-
-  // AC1: the specific policy the task was measured against. Assert the
-  // absence of the kill-switch hint directly (not just "does not equal the
-  // old text" — a reworded bypass recipe would still be wrong), and pin
-  // that the two legitimate agent options survive untouched.
-  it("gate-prod-destructive's ux.run has no harness pause/resume hint and stays actionable", () => {
-    const full = parseManifest(parseYaml(FULL_TEMPLATE));
-    const policy = full.policies.find((p) => p.name === "gate-prod-destructive");
-    expect(policy?.ux).toBeDefined();
-    const run = policy!.ux!.run;
-    for (const line of run) {
-      expect(KILL_SWITCH_WORD.test(stripAllowedDocLink(line))).toBe(false);
-    }
-    expect(run).toHaveLength(2);
-    expect(run[0]).toMatch(/non-destructive alternative/i);
-    expect(run[1]).toMatch(/harness approve risk --force/);
-  });
 });

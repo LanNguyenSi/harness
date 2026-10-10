@@ -68,8 +68,7 @@ export interface ClaudeMcpRegistrationSection {
   /**
    * Roll-up warnings (list unavailable for a reason other than "CLI not
    * installed", dead settings.json block). Each rolls into
-   * `warningCount`, mirroring `GroundingSection.warnings` /
-   * `RiskGateSection.warnings`.
+   * `warningCount`, mirroring `GroundingSection.warnings`.
    */
   warnings: string[];
 }

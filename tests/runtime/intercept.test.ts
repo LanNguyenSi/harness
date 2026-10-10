@@ -1476,24 +1476,58 @@ describe("intercept: a when: policy never applies, whatever its shape", () => {
     });
   }
 
-  describe("the shipped FULL template", () => {
-    const whenPolicies = parseManifest(parseYaml(FULL_TEMPLATE)).policies.filter(
-      (p) => p.when !== undefined,
-    );
-
-    it("carries its three Risk Gate policies with when:", () => {
-      expect(whenPolicies.map((p) => p.name).sort()).toEqual([
-        "gate-dev-unsafe-deletion",
-        "gate-prod-destructive",
-        "gate-prod-destructive-approval",
-      ]);
-    });
+  describe("the three former Risk Gate policy shapes", () => {
+    // The three policies FULL_TEMPLATE shipped until task 6e52c044 removed
+    // them (name, trigger, when, requires and enforcement copied verbatim
+    // from the removed template entries; the producers: arrays are not
+    // needed here). The never-applies assertions below run on these inline
+    // shapes instead of on the template.
+    const GATE_POLICIES = [
+      {
+        name: "gate-prod-destructive",
+        description:
+          "Deny critical-severity destructive shell actions against a production target.",
+        trigger: { event: "PreToolUse", match: "Bash" },
+        when: {
+          "risk.severity_at_least": "critical",
+          "environment.name": "production",
+        },
+        requires: { ledger_tag: "risk-override:${SESSION_ID}" },
+        hook: "risk-gate",
+        enforcement: "block",
+      },
+      {
+        name: "gate-prod-destructive-approval",
+        description:
+          "Require operator approval for high-severity destructive shell actions against a production target.",
+        trigger: { event: "PreToolUse", match: "Bash" },
+        when: {
+          "risk.severity_at_least": "high",
+          "environment.name": "production",
+        },
+        requires: { ledger_tag: "risk-approved:${SESSION_ID}" },
+        hook: "risk-gate",
+        enforcement: "require_approval",
+      },
+      {
+        name: "gate-dev-unsafe-deletion",
+        description:
+          "Require approval for a deletion-verb command whose target cannot be statically proven safe, in every environment.",
+        trigger: { event: "PreToolUse", match: "Bash" },
+        when: {
+          "action.deletion_target_unresolvable": true,
+        },
+        requires: { ledger_tag: "risk-approved:deletion:${SESSION_ID}" },
+        hook: "risk-gate",
+        enforcement: "require_approval",
+      },
+    ] as unknown as Policy[];
 
     for (const command of ["rm -rf /", "ls"]) {
       it(`yields no decision from those policies for \`${command}\``, async () => {
         const ledger = makeLedger({ kind: "ok", entries: [] });
         const result = await intercept({
-          manifest: manifest(whenPolicies),
+          manifest: manifest(GATE_POLICIES),
           event: bashEvent(command),
           ledger,
           builtins: BUILTINS,
@@ -1504,6 +1538,15 @@ describe("intercept: a when: policy never applies, whatever its shape", () => {
         expect(ledger.queryCalls).toEqual([]);
       });
     }
+
+    it("FULL_TEMPLATE itself carries no policy with when: and no risk or environments key", () => {
+      const raw = parseYaml(FULL_TEMPLATE) as Record<string, unknown>;
+      const full = parseManifest(raw);
+      expect(full.policies.filter((p) => p.when !== undefined)).toEqual([]);
+      expect(raw).not.toHaveProperty("risk");
+      expect(raw).not.toHaveProperty("environments");
+      expect(full.hooks.map((h) => h.name)).not.toContain("risk-gate");
+    });
   });
 });
 

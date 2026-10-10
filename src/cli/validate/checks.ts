@@ -11,7 +11,6 @@ import {
 } from "../init/templates.js";
 import { isPolicyInterceptCommand, requiredHookBudgetMs } from "../policy/intercept.js";
 import type { Hook, Manifest } from "../../schema/index.js";
-import { DEFAULT_SAFE_DELETION_ROOTS } from "../../schema/risk.js";
 import {
   deriveWorkflowGatePolicies,
   findWeakGatePolicyOverlaps,
@@ -398,24 +397,41 @@ function checkTaskVerbGateWiring(manifest: Manifest, offending: Manifest["workfl
  * surface + ledger_tag as a derived block gate, but weaker than it
  * (`enforcement: "warn"`/`"require_approval"`, or `when:`-scoped), no
  * longer suppresses the derived gate (see `isAtLeastAsStrongAsDerivedGate`
- * in workflow-policies.ts) — both apply. This check surfaces that overlap
- * as a warning so an operator reading the weaker policy does not mistake
- * it for the ONLY gate on the surface.
+ * in workflow-policies.ts). This check surfaces that overlap as a warning
+ * so an operator reading the weaker policy does not mistake it for the ONLY
+ * gate on the surface. A `when:`-scoped hand-authored policy NEVER applies
+ * anymore (the interim Risk Gate guard, task 6e52c044), so it gets a
+ * dedicated message naming the never-applies consequence instead of the
+ * "both apply" one.
  */
 export function checkWorkflowGateWeakOverlap(manifest: Manifest): Diagnostic[] {
-  return findWeakGatePolicyOverlaps(manifest).map((overlap) => ({
-    severity: "warning" as const,
-    path: "workflows",
-    message:
-      `workflow "${overlap.workflowName}" derives a block gate on ${overlap.surface}; ` +
-      `hand-authored policy "${overlap.handPolicyName}" on the same surface is weaker ` +
-      `(${overlap.reason}). Both policies apply: the derived block gate ` +
-      `("${overlap.derivedPolicyName}") still enforces review evidence independently, so this ` +
-      "is informational, not a gap, but double-check the weaker policy is intentional. Note " +
-      "also that this overlap is not suppressed on purpose, so the same event now round-trips " +
-      "the ledger twice (once per policy); if that hook's budget_ms was sized for one policy, " +
-      "check it against two, since requiredHookBudgetMs does not scale with the policy count.",
-  }));
+  return findWeakGatePolicyOverlaps(manifest).map((overlap) => {
+    const handPolicy = manifest.policies.find((p) => p.name === overlap.handPolicyName);
+    if (handPolicy?.when !== undefined) {
+      return {
+        severity: "warning" as const,
+        path: "workflows" as const,
+        message:
+          `workflow "${overlap.workflowName}" derives a block gate on ${overlap.surface}; ` +
+          `hand-authored policy "${overlap.handPolicyName}" on the same surface carries a when: ` +
+          `clause and never applies, so the derived block gate ("${overlap.derivedPolicyName}") ` +
+          `is the only gate on this surface. Remove the when: policy or drop its when: clause.`,
+      };
+    }
+    return {
+      severity: "warning" as const,
+      path: "workflows" as const,
+      message:
+        `workflow "${overlap.workflowName}" derives a block gate on ${overlap.surface}; ` +
+        `hand-authored policy "${overlap.handPolicyName}" on the same surface is weaker ` +
+        `(${overlap.reason}). Both policies apply: the derived block gate ` +
+        `("${overlap.derivedPolicyName}") still enforces review evidence independently, so this ` +
+        "is informational, not a gap, but double-check the weaker policy is intentional. Note " +
+        "also that this overlap is not suppressed on purpose, so the same event now round-trips " +
+        "the ledger twice (once per policy); if that hook's budget_ms was sized for one policy, " +
+        "check it against two, since requiredHookBudgetMs does not scale with the policy count.",
+    };
+  });
 }
 
 /**
@@ -552,99 +568,6 @@ export function checkPolicySelfAttestation(manifest: Manifest): Diagnostic[] {
         `docs/writing-custom-policies.md ("The trust model").`,
     });
   }
-  return diags;
-}
-
-// M7 validate lint: a policy that gates on risk.* / action.reversible clauses
-// WITHOUT an environment.name clause fires on EVERY unclassified command in
-// EVERY environment because those three clauses fail-closed to matched=true
-// when the action is unclassified ("unknown is not safe"). This is almost
-// never what the operator intends: an unscoped risk policy becomes a blanket
-// gate on any command the classifier does not recognise. See docs/risk-gate.md.
-export function checkPolicyRiskWithoutEnvScope(manifest: Manifest): Diagnostic[] {
-  const diags: Diagnostic[] = [];
-  for (let i = 0; i < manifest.policies.length; i++) {
-    const p = manifest.policies[i];
-    if (!p?.when) continue;
-    const when = p.when;
-    // The three clauses that fail-closed to matched=true for an unclassified
-    // action. An environment.name clause constrains the scope, so we only
-    // warn when it is absent.
-    const hasUnclassifiedFallbackClause =
-      when["risk.severity_at_least"] !== undefined ||
-      when["risk.category_in"] !== undefined ||
-      when["action.reversible"] !== undefined;
-    const hasEnvNameScope = when["environment.name"] !== undefined;
-    if (hasUnclassifiedFallbackClause && !hasEnvNameScope) {
-      diags.push({
-        severity: "warning",
-        path: `policies[${i}]`,
-        message:
-          `policy "${p.name}" declares a when: block with ` +
-          `risk.severity_at_least / risk.category_in / action.reversible ` +
-          `but no environment.name scope: those clauses fail-closed to ` +
-          `matched=true for any unclassified command, so this policy fires ` +
-          `on every unclassified action in every environment. ` +
-          `Add an environment.name clause to scope the policy to a specific ` +
-          `environment. See docs/risk-gate.md.`,
-      });
-    }
-  }
-  return diags;
-}
-
-// Safe-deletion-root syntax lint (task d03af8f6, review round 2, LOW (a)).
-// The (removed) deletion-target resolver only ever treated an ABSOLUTE, plain-literal `risk.safe_deletion_roots` entry
-// as an allowlist member — a relative entry can never match any target
-// (every target the resolver considers absolute-checks against is itself
-// required to be absolute first, so a relative root is silently
-// dead weight), and an entry containing `$` or `~` reads as a LITERAL
-// dollar-sign/tilde character (this resolver never expands either), not
-// the shell construct an operator likely intended when writing it. Both
-// shapes are a config mistake the operator would otherwise discover only
-// by noticing a deletion that should have been allowed still got gated.
-// Warning-severity (not an error): unlike the bare-`/` case in
-// `RiskSchema`'s own `superRefine` (which defeats the allowlist in the
-// DANGEROUS direction — matching too much), a malformed entry here only
-// fails to widen the allowlist — the resolver still fails CLOSED
-// (unresolvable) for a target that entry was meant to cover, so it is a
-// usability lint, not a security gap needing a parse-time refusal.
-export function checkSafeDeletionRootsSyntax(manifest: Manifest): Diagnostic[] {
-  const diags: Diagnostic[] = [];
-  // Guarded (task d03af8f6, review round 3, LOW (e)) the same way
-  // `src/runtime/intercept.ts` already guards this same field: a
-  // hand-built `Manifest` that bypasses `RiskSchema.parse` (every test fixture that constructs
-  // `{ risk: { classifiers: [...] } }` directly, per that schema's own
-  // comment) can carry a `risk` with no `safe_deletion_roots` at all, or
-  // no `risk` object whatsoever — `manifest.risk.safe_deletion_roots`
-  // would throw for either shape instead of degrading to the same
-  // default the runtime resolver itself falls back to.
-  const safeDeletionRoots = manifest.risk?.safe_deletion_roots ?? DEFAULT_SAFE_DELETION_ROOTS;
-  safeDeletionRoots.forEach((root, i) => {
-    const trimmed = root.trim();
-    if (!trimmed.startsWith("/")) {
-      diags.push({
-        severity: "warning",
-        path: `risk.safe_deletion_roots[${i}]`,
-        message:
-          `risk.safe_deletion_roots entry "${root}" is not an absolute path — ` +
-          `the deletion-target resolver only ever matched an absolute target against this list, ` +
-          `so a relative entry can never allow anything. See docs/risk-gate.md.`,
-      });
-      return;
-    }
-    if (trimmed.includes("$") || trimmed.includes("~")) {
-      diags.push({
-        severity: "warning",
-        path: `risk.safe_deletion_roots[${i}]`,
-        message:
-          `risk.safe_deletion_roots entry "${root}" contains "$" or "~" — this resolver never ` +
-          `expands a shell variable or home-directory reference, so the entry is matched as a ` +
-          `LITERAL "$"/"~" character, almost certainly not what was intended. Write the fully ` +
-          `expanded absolute path instead. See docs/risk-gate.md.`,
-      });
-    }
-  });
   return diags;
 }
 
@@ -1062,8 +985,6 @@ export function runAssetChecks(
     ...checkPolicyGroundingMcp(manifest),
     ...checkPolicyPacks(manifest),
     ...checkPolicyPackConfigsAsDiagnostics(manifest),
-    ...checkPolicyRiskWithoutEnvScope(manifest),
-    ...checkSafeDeletionRootsSyntax(manifest),
     ...checkPolicySelfAttestation(manifest),
     ...checkHookBudgetLedgerMargin(manifest),
     ...checkWorkflows(manifest),

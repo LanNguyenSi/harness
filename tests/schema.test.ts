@@ -32,12 +32,14 @@ describe("parseManifest — happy path", () => {
     expect(manifest.tools.mcp).toHaveLength(3);
     expect(manifest.tools.mcp[0]?.name).toBe("codebase-oracle");
     expect(manifest.tools.mcp[2]?.name).toBe("grounding-mcp");
-    // 14 hooks / 16 policies since task 2699b476 added the
-    // require-review-evidence-task-merge / -task-finish hooks and their
-    // review-before-task-merge / review-before-task-finish-automerge
-    // policies to the reference manifest.
-    expect(manifest.hooks).toHaveLength(11);
-    expect(manifest.policies).toHaveLength(14);
+    // 10 hooks / 11 policies since task 6e52c044 removed the risk-gate
+    // hook and the three gate-* policies from the reference manifest (11
+    // hooks / 14 policies before that; 14 hooks / 16 policies since task
+    // 2699b476 added the require-review-evidence-task-merge / -task-finish
+    // hooks and their review-before-task-merge /
+    // review-before-task-finish-automerge policies).
+    expect(manifest.hooks).toHaveLength(10);
+    expect(manifest.policies).toHaveLength(11);
     const reviewPolicy = manifest.policies.find((p) => p.name === "review-before-merge");
     expect(reviewPolicy?.requires?.ledger_tag).toBe("review:${PR_NUMBER}");
     expect(reviewPolicy?.trigger.extract?.PR_NUMBER).toBe("toolArgs.prNumber");
@@ -1020,8 +1022,149 @@ describe("parseManifest — min_version numeric pattern", () => {
 });
 
 describe("parseManifest — Phase 7 risk-gate vocabulary", () => {
-  it("parses the risk + environments blocks in the full reference manifest", () => {
-    const raw = loadYaml(path.join(EXAMPLES_DIR, "full-manifest.yaml"));
+  // Inline fixture carrying the `risk:` / `environments:` blocks that
+  // `docs/examples/full-manifest.yaml` used to ship (task 6e52c044
+  // removed them from the example and the full init template; the schema
+  // keeps accepting both keys until the later schema step). The YAML text
+  // is the removed FULL_TEMPLATE block, verbatim.
+  const RISK_GATE_VOCABULARY_FIXTURE = `version: 1
+risk:
+  # Fail posture when a policy's evidence cannot be READ (ledger timeout,
+  # spawn failure, unresolved template): with \`preserve_enforcement\`
+  # (the default) block/require_approval policies fail CLOSED
+  # (\`deny-degraded\`) while warn policies stay non-blocking. Set
+  # \`fail_open\` to restore the pre-0.45 availability-first behaviour
+  # where EVERY degraded evaluation was a non-blocking \`warn-degraded\`.
+  # Kept COMMENTED OUT on purpose: the schema is strict, so a manifest
+  # carrying this key fails to parse on a pre-0.45 binary, and a manifest
+  # load failure is ALLOW at the hook layer — on a mixed-version fleet an
+  # emitted default would turn a downgrade into a silent full fail-open
+  # (review 2026-08-08). See docs/okf/gate-fail-posture-matrix.md.
+  # degraded_fail_posture: preserve_enforcement
+  # Safe-deletion-root allowlist for gate-dev-unsafe-deletion's
+  # \`action.deletion_target_unresolvable\` clause (task d03af8f6): an
+  # absolute deletion target inside one of these roots is allowed; a
+  # relative path, an unexpanded \$VAR/~, or a traversal that normalizes
+  # outside every root is gated. Shown explicitly even though it matches
+  # the schema default (\`/tmp\`, \`/private/tmp\` — the two spellings this
+  # harness's own scratchpad convention can use, macOS symlinks /tmp to
+  # /private/tmp) so an operator sees the live config surface here rather
+  # than having to know the schema default exists. An override REPLACES
+  # this list, it does not merge with it. See docs/risk-gate.md.
+  safe_deletion_roots:
+    - /tmp
+    - /private/tmp
+  classifiers:
+    - name: dangerous-shell
+      tool: Bash
+      patterns:
+        - pattern: 'rm\\s+-rf\\s+(/|/var|/data|/mnt|~)'
+          categories: [destructive, data_loss]
+          severity: critical
+        - pattern: 'DROP\\s+TABLE|TRUNCATE\\s+TABLE|DELETE\\s+FROM'
+          categories: [destructive, data_loss]
+          severity: high
+        # Token-based, flag-tolerant: a flag between \`kubectl\` and
+        # \`delete\` (e.g. \`kubectl --context=x delete namespace payments\`)
+        # must not defeat the match, without matching \`kubectl
+        # get\`/\`describe\` and without exponential-backtracking on a long
+        # flag run. \`(?:\\s+-\\S+(?:\\s+(?!delete\\b)(?!-)\\S+)?)*\` consumes
+        # zero or more \`-\`/\`--\` flag tokens (each optionally taking one
+        # following, non-flag, non-"delete" value token), linear in
+        # command length. See docs/risk-gate.md for the full rationale
+        # and the earlier quadratic-alternation form this replaced.
+        - pattern: 'kubectl(?:\\s+-\\S+(?:\\s+(?!delete\\b)(?!-)\\S+)?)*\\s+delete\\s+(namespace|deployment|statefulset|pvc)'
+          categories: [destructive, infrastructure_change]
+          severity: high
+        # Same flag-tolerance treatment for terraform's own \`-chdir=DIR\`
+        # global flag, which sits between the tool name and the
+        # subcommand (\`terraform -chdir=infra destroy\`).
+        - pattern: 'terraform(?:\\s+-\\S+(?:\\s+(?!destroy\\b)(?!-)\\S+)?)*\\s+destroy'
+          categories: [destructive, infrastructure_change]
+          severity: critical
+        # Task 2929c5b7: unclassified commands no longer trivially
+        # satisfy risk.severity_at_least: critical (see when-eval.ts and
+        # docs/risk-gate.md's "Unclassified actions and the fail-close
+        # rule") — kept in lockstep with docs/examples/full-manifest.yaml
+        # by tests/cli/init-full-template-parity.test.ts.
+        #
+        # These patterns are the OPERATOR-EDITABLE MIRROR of the built-in
+        # destructive floor (src/runtime/destructive-shell-floor.ts),
+        # not the only line of defence: the floor ships in the binary and
+        # already classifies these heads for an EXISTING manifest that
+        # never adopts the patterns below. Edit, narrow, or raise these
+        # freely: an operator pattern composes with the floor under
+        # highest-severity-wins, so it can only add. The floor is
+        # argv-aware where a regex cannot be (path-qualified and wrapped
+        # spellings: /bin/dd, sudo dd, sh -c "dd ...", git -C <dir> push
+        # -f), so a few spellings are caught by the floor alone; the
+        # parity test in tests/runtime/destructive-shell-floor.test.ts
+        # pins that everything caught HERE is also caught THERE, at the
+        # same severity or higher.
+        - pattern: '\\bdd\\s[^\\n]*\\bof='
+          categories: [destructive, data_loss]
+          severity: critical
+        - pattern: '\\btruncate\\b[^\\n]*(\\s-[a-zA-Z]*s|--size)'
+          categories: [destructive, data_loss]
+          severity: critical
+        - pattern: '\\bshred\\b'
+          categories: [destructive, data_loss, irreversible_action]
+          severity: critical
+        - pattern: '\\bmkfs(\\.\\w+)?\\b'
+          categories: [destructive, data_loss, infrastructure_change]
+          severity: critical
+        - pattern: '\\bfind\\b[^\\n]*-delete\\b'
+          categories: [destructive, data_loss]
+          severity: critical
+        - pattern: '\\bfind\\b[^\\n]*-exec(dir)?\\s+rm\\b'
+          categories: [destructive, data_loss]
+          severity: critical
+        - pattern: '\\bgit\\s+reset\\b[^\\n]*--hard\\b'
+          categories: [destructive, data_loss]
+          severity: high
+        - pattern: '\\bgit\\s+push\\b[^\\n]*(--force(-with-lease)?\\b|\\s-f\\b)'
+          categories: [destructive, production_mutation, deployment_change]
+          severity: high
+        - pattern: '\\bgit\\s+clean\\b[^\\n]*(--force\\b|\\s-[a-zA-Z]*f[a-zA-Z]*\\b)'
+          categories: [destructive, data_loss]
+          severity: high
+        - pattern: '\\bgit\\s+checkout\\s+--\\s+\\.'
+          categories: [destructive, data_loss]
+          severity: high
+        - pattern: '\\bgit\\s+restore\\s+\\.(\\s|$)'
+          categories: [destructive, data_loss]
+          severity: high
+        - pattern: '\\b(chmod|chown)\\b[^\\n]*(\\s-[a-zA-Z]*R|--recursive\\b)'
+          categories: [mass_update]
+          severity: high
+        - pattern: '\\bcurl\\b[^\\n]*(-X\\s*|--request[\\s=])(?![Gg][Ee][Tt]\\b)(?![Hh][Ee][Aa][Dd]\\b)[A-Za-z]'
+          categories: [production_mutation, network_exfiltration]
+          severity: high
+        - pattern: '\\bcurl\\b[^\\n]*(\\s-[a-zA-Z]*[dFT]|--data\\b|--json\\b|--form(-string)?\\b|--upload-file\\b)'
+          categories: [production_mutation, network_exfiltration]
+          severity: high
+        - pattern: '\\bcurl\\b[^\\n]*(\\s-[a-zA-Z]*[oODcK]|--output(-dir)?\\b|--remote-name\\b|--remote-header-name\\b|--dump-header\\b|--cookie-jar\\b|--config\\b|--create-dirs\\b|--etag-save\\b|--trace(-ascii)?\\b|--stderr\\b|(\\s-[a-zA-Z]*w\\b|--write-out\\b)[^\\n]*%output)'
+          categories: [destructive, data_loss]
+          severity: high
+        - pattern: '\\bsed\\b[^\\n]*(\\s-[a-zA-Z]*i[a-zA-Z]*\\b|--in-place\\b)'
+          categories: [destructive, data_loss]
+          severity: high
+
+environments:
+  resolvers:
+    - name: production-signals
+      environment: production
+      signals:
+        branch_patterns: [main, "release/*"]
+        env_var_patterns:
+          - var: DATABASE_URL
+            patterns: [prod, production]
+        kube_context_patterns: [".*prod.*"]
+        kube_namespace_patterns: [prod, production]
+`;
+
+  it("parses the risk + environments blocks of the inline fixture", () => {
+    const raw = parseYaml(RISK_GATE_VOCABULARY_FIXTURE);
     const manifest = parseManifest(raw);
 
     expect(manifest.risk.classifiers).toHaveLength(1);

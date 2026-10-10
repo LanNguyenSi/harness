@@ -130,11 +130,11 @@ memory:
 # absent. No external shell scripts are required.
 hooks:
   # Budget note (task 7bf47554, follow-up to the ms/seconds unit fix
-  # f2d2a29): every \`harness policy intercept\` hook below down through
-  # \`risk-gate\` carries \`budget_ms: 15000\`, i.e. a Claude Code outer
+  # f2d2a29): every \`harness policy intercept\` hook below carries
+  # \`budget_ms: 15000\`, i.e. a Claude Code outer
   # kill-timeout of \`ceil(15000/1000) = 15\` seconds (generate-settings.ts's
-  # \`hookTimeoutSeconds\`). This is deliberately UNIFORM across all thirteen
-  # of them, for two independent reasons:
+  # \`hookTimeoutSeconds\`). This is deliberately UNIFORM across all of
+  # them, for two independent reasons:
   #
   # 1. FAIL-CLOSED MARGIN. \`harness policy intercept\` evaluates its FULL
   #    \`policies:\` list against the incoming event (src/runtime/intercept.ts,
@@ -146,7 +146,7 @@ hooks:
   #    policies (the three kill-switch denies below), whose VERDICT needs no
   #    ledger read but whose AUDIT WRITE is still a live grounding-mcp
   #    round-trip on the critical path. A \`requires:\`-based policy (the
-  #    require-*-evidence / risk-gate policies) additionally QUERIES the
+  #    require-*-evidence policies) additionally QUERIES the
   #    ledger for its verdict (intercept.ts's \`evaluateOnePolicy\`,
   #    ~L752-777) and, on a \`deny-degraded\` outcome, may retry the audit
   #    write once more on a fresh session (\`realLedgerClient\`,
@@ -170,14 +170,14 @@ hooks:
   #    specifically so Claude Code spawns \`harness policy intercept\` ONCE
   #    per matching tool call instead of once per manifest hook name (the
   #    comment on \`buildGroups\` names this explicitly: avoiding "redundant
-  #    Node bootstraps and ledger queries per tool call"). All nine
-  #    \`match: "Bash"\` hooks below share one settings.json matcher group;
+  #    Node bootstraps and ledger queries per tool call"). Every
+  #    \`match: "Bash"\` hook below shares one settings.json matcher group;
   #    giving them a NON-uniform budget_ms would make their computed
   #    \`timeout\` values diverge, split that one group into several entries,
   #    and reintroduce exactly the redundant-invocation cost the dedup
   #    exists to avoid — on top of leaving whichever entry keeps a low
-  #    timeout still exposed to the fail-open risk above. Keeping all
-  #    thirteen at the identical 15000ms budget_ms preserves the existing
+  #    timeout still exposed to the fail-open exposure above. Keeping all
+  #    of them at the identical 15000ms budget_ms preserves the existing
   #    one-invocation-per-matcher-group collapse (previously they all
   #    collapsed onto the shared 2s floor; now they collapse onto 15s).
   - name: require-review-evidence
@@ -308,20 +308,6 @@ hooks:
     command: harness policy intercept
     blocking: hard
     # 15000: same rationale as deny-kill-switch-bash above.
-    budget_ms: 15000
-
-  # risk-gate (Phase 7 #6): the Risk Gate enforcement hook. The
-  # gate-prod-destructive policies below reference it. Same generic
-  # \`harness policy intercept\` entrypoint as every other policy hook;
-  # the interceptor builds the Action Envelope, classifies risk against
-  # \`risk.classifiers[]\`, resolves the environment against
-  # \`environments.resolvers[]\`, and evaluates the policies' \`when:\`.
-  - name: risk-gate
-    event: PreToolUse
-    match: "Bash"
-    command: harness policy intercept
-    blocking: hard
-    # 15000: same rationale as the budget note above require-review-evidence.
     budget_ms: 15000
 
   # Optional: runtime-reality drift gate (NOT enabled by default).
@@ -562,123 +548,6 @@ policies:
       run:
         - 'harness record review-subagent --task <task-id> --verdict <verdict>'
 
-  # Phase 7 Risk Gate — the canonical built-in worked example. These two
-  # policies, with the dangerous-shell classifier and production-signals
-  # resolver below, are the Risk Gate's default stance: a destructive
-  # shell action whose target environment resolves to production is
-  # gated before the runtime fires it. Both fire ONLY when the
-  # environment resolves to production (a main / release branch, a
-  # prod-looking DATABASE_URL, or a prod kube context); on an ordinary
-  # feature branch the environment is unknown and neither fires. Ordered
-  # deny-first so a critical action (which also matches the high
-  # threshold) gets the hard-deny envelope. See docs/risk-gate.md.
-  - name: gate-prod-destructive
-    description: Deny critical-severity destructive shell actions against a production target.
-    trigger:
-      event: PreToolUse
-      match: "Bash"
-    when:
-      risk.severity_at_least: critical
-      environment.name: production
-    requires:
-      ledger_tag: "risk-override:\${SESSION_ID}"
-    hook: risk-gate
-    enforcement: block
-    # Operator-in-the-loop gate: the override tag is written by the
-    # operator verb (ask semantics), not by the agent. See
-    # writing-custom-policies.md, tripwire 4 (the trust model).
-    producers:
-      - kind: ask
-        command: harness approve risk --force <reason>
-        description: Deliberate operator override for a critical production mutation; run from the operator shell.
-      - kind: mcp
-        verb: mcp__grounding-mcp__ledger_add
-        example: '{sessionId:"\${SESSION_ID}", type:"fact", content:"risk-override:\${SESSION_ID} — operator-authorized <reason>", source:"operator"}'
-        description: Recovery path if the approve verb is unavailable; only meaningful when the OPERATOR authorizes the content.
-    ux:
-      cannot: "You cannot run this critical destructive action against production."
-      required:
-        - "a deliberate operator override: a critical production mutation has no benign reading"
-      run:
-        - "Choose a non-destructive alternative, or ask the OPERATOR to run the command themselves, outside the agent."
-        - "Operator override (deliberate): the OPERATOR runs \`harness approve risk --force <reason>\` from their own shell (\`! \` prefix in Claude Code, with --i-am-the-operator to acknowledge a non-TTY invocation)."
-  - name: gate-prod-destructive-approval
-    description: Require operator approval for high-severity destructive shell actions against a production target.
-    trigger:
-      event: PreToolUse
-      match: "Bash"
-    when:
-      risk.severity_at_least: high
-      environment.name: production
-    requires:
-      ledger_tag: "risk-approved:\${SESSION_ID}"
-    hook: risk-gate
-    enforcement: require_approval
-    producers:
-      - kind: ask
-        command: harness approve risk
-        description: Operator approves this Risk Gate decision from their own shell.
-      - kind: mcp
-        verb: mcp__grounding-mcp__ledger_add
-        example: '{sessionId:"\${SESSION_ID}", type:"fact", content:"risk-approved:\${SESSION_ID} — operator-authorized", source:"operator"}'
-        description: Recovery path if the approve verb is unavailable; only meaningful when the OPERATOR authorizes the content.
-    ux:
-      cannot: "You cannot run this destructive production action yet."
-      required:
-        - "operator approval of this Risk Gate decision"
-      run:
-        - "harness approve risk"
-
-  # gate-dev-unsafe-deletion (task d03af8f6): the two policies above fire
-  # ONLY when the environment resolves to production — on an ordinary
-  # task branch (environment: unknown) a deletion command runs
-  # unconfirmed even when its target is a stray variable or a relative
-  # path pointing somewhere unintended. This policy is deliberately
-  # environment-INDEPENDENT (no environment.name clause) and gates on the
-  # new \`action.deletion_target_unresolvable\` clause instead of
-  # \`risk.severity_at_least\`/\`risk.category_in\` specifically because
-  # those fail-close to matched=true for ANY unclassified action —
-  # unscoped, that would gate every unrelated unclassified Bash call in
-  # every environment. \`action.deletion_target_unresolvable\` only fires
-  # for a recognized deletion verb (\`rm -r*\`/\`-f*\`, \`find ... -delete\`,
-  # \`git clean -f*\`) whose target(s) cannot be statically proven inside
-  # \`risk.safe_deletion_roots\` (below). See docs/risk-gate.md.
-  #
-  # This policy consults its OWN ledger tag
-  # (\`risk-approved:deletion:\${SESSION_ID}\`), never the tag
-  # \`gate-prod-destructive-approval\` above consults — a routine dev-
-  # context deletion approval must not also clear the production
-  # approval gate. \`harness approve risk --scope deletion\` writes this
-  # tag; the bare \`harness approve risk\` (no \`--scope\`) keeps writing
-  # only the production tag. See CHANGELOG.md task d03af8f6 for the
-  # measured incident this fixed.
-  - name: gate-dev-unsafe-deletion
-    description: Require approval for a deletion-verb command whose target cannot be statically proven safe, in every environment.
-    trigger:
-      event: PreToolUse
-      match: "Bash"
-    when:
-      action.deletion_target_unresolvable: true
-    requires:
-      ledger_tag: "risk-approved:deletion:\${SESSION_ID}"
-    hook: risk-gate
-    enforcement: require_approval
-    producers:
-      - kind: ask
-        command: harness approve risk --scope deletion
-        description: Operator approves this Risk Gate decision from their own shell.
-      - kind: mcp
-        verb: mcp__grounding-mcp__ledger_add
-        example: '{sessionId:"\${SESSION_ID}", type:"fact", content:"risk-approved:deletion:\${SESSION_ID} — operator-authorized", source:"operator"}'
-        description: Recovery path if the approve verb is unavailable; only meaningful when the OPERATOR authorizes the content.
-    ux:
-      cannot: "You cannot run this deletion command yet — its target cannot be statically proven safe."
-      required:
-        - "operator approval of this Risk Gate decision, OR an absolute target inside a declared risk.safe_deletion_roots entry"
-      run:
-        - "harness approve risk --scope deletion"
-        - "Or point the command at a path under risk.safe_deletion_roots (default: /tmp, /private/tmp) instead of an unresolved variable, relative path, or traversal."
-
   # deny-kill-switch-bypass / deny-session-env-strip / deny-pause-sentinel-forgery
   # (task cf1fde6d): \`harness pause\`/\`harness resume\` refuse to run inside an
   # agent shell in CODE, but that CLI check (refuseIfAgentShell / refuseIfNonTTY
@@ -823,147 +692,6 @@ policy_packs:
           - "a checkout of a non-protected branch (current \`\${BRANCH}\` is protected)"
         run:
           - "git checkout -b feat/<your-task>"
-
-# Phase 7 Risk Gate vocabulary. The dangerous-shell classifier and
-# production-signals resolver feed the gate-prod-destructive policies
-# above: \`harness policy intercept\` builds the Action Envelope,
-# classifies the action against \`risk.classifiers[]\`, resolves the
-# target environment against \`environments.resolvers[]\`, and evaluates
-# each policy's \`when:\` clauses against the result. Full design and the
-# decision model: docs/risk-gate.md.
-risk:
-  # Fail posture when a policy's evidence cannot be READ (ledger timeout,
-  # spawn failure, unresolved template): with \`preserve_enforcement\`
-  # (the default) block/require_approval policies fail CLOSED
-  # (\`deny-degraded\`) while warn policies stay non-blocking. Set
-  # \`fail_open\` to restore the pre-0.45 availability-first behaviour
-  # where EVERY degraded evaluation was a non-blocking \`warn-degraded\`.
-  # Kept COMMENTED OUT on purpose: the schema is strict, so a manifest
-  # carrying this key fails to parse on a pre-0.45 binary, and a manifest
-  # load failure is ALLOW at the hook layer — on a mixed-version fleet an
-  # emitted default would turn a downgrade into a silent full fail-open
-  # (review 2026-08-08). See docs/okf/gate-fail-posture-matrix.md.
-  # degraded_fail_posture: preserve_enforcement
-  # Safe-deletion-root allowlist for gate-dev-unsafe-deletion's
-  # \`action.deletion_target_unresolvable\` clause (task d03af8f6): an
-  # absolute deletion target inside one of these roots is allowed; a
-  # relative path, an unexpanded \$VAR/~, or a traversal that normalizes
-  # outside every root is gated. Shown explicitly even though it matches
-  # the schema default (\`/tmp\`, \`/private/tmp\` — the two spellings this
-  # harness's own scratchpad convention can use, macOS symlinks /tmp to
-  # /private/tmp) so an operator sees the live config surface here rather
-  # than having to know the schema default exists. An override REPLACES
-  # this list, it does not merge with it. See docs/risk-gate.md.
-  safe_deletion_roots:
-    - /tmp
-    - /private/tmp
-  classifiers:
-    - name: dangerous-shell
-      tool: Bash
-      patterns:
-        - pattern: 'rm\\s+-rf\\s+(/|/var|/data|/mnt|~)'
-          categories: [destructive, data_loss]
-          severity: critical
-        - pattern: 'DROP\\s+TABLE|TRUNCATE\\s+TABLE|DELETE\\s+FROM'
-          categories: [destructive, data_loss]
-          severity: high
-        # Token-based, flag-tolerant: a flag between \`kubectl\` and
-        # \`delete\` (e.g. \`kubectl --context=x delete namespace payments\`)
-        # must not defeat the match, without matching \`kubectl
-        # get\`/\`describe\` and without exponential-backtracking on a long
-        # flag run. \`(?:\\s+-\\S+(?:\\s+(?!delete\\b)(?!-)\\S+)?)*\` consumes
-        # zero or more \`-\`/\`--\` flag tokens (each optionally taking one
-        # following, non-flag, non-"delete" value token), linear in
-        # command length. See docs/risk-gate.md for the full rationale
-        # and the earlier quadratic-alternation form this replaced.
-        - pattern: 'kubectl(?:\\s+-\\S+(?:\\s+(?!delete\\b)(?!-)\\S+)?)*\\s+delete\\s+(namespace|deployment|statefulset|pvc)'
-          categories: [destructive, infrastructure_change]
-          severity: high
-        # Same flag-tolerance treatment for terraform's own \`-chdir=DIR\`
-        # global flag, which sits between the tool name and the
-        # subcommand (\`terraform -chdir=infra destroy\`).
-        - pattern: 'terraform(?:\\s+-\\S+(?:\\s+(?!destroy\\b)(?!-)\\S+)?)*\\s+destroy'
-          categories: [destructive, infrastructure_change]
-          severity: critical
-        # Task 2929c5b7: unclassified commands no longer trivially
-        # satisfy risk.severity_at_least: critical (see when-eval.ts and
-        # docs/risk-gate.md's "Unclassified actions and the fail-close
-        # rule") — kept in lockstep with docs/examples/full-manifest.yaml
-        # by tests/cli/init-full-template-parity.test.ts.
-        #
-        # These patterns are the OPERATOR-EDITABLE MIRROR of the built-in
-        # destructive floor (src/runtime/destructive-shell-floor.ts),
-        # not the only line of defence: the floor ships in the binary and
-        # already classifies these heads for an EXISTING manifest that
-        # never adopts the patterns below. Edit, narrow, or raise these
-        # freely: an operator pattern composes with the floor under
-        # highest-severity-wins, so it can only add. The floor is
-        # argv-aware where a regex cannot be (path-qualified and wrapped
-        # spellings: /bin/dd, sudo dd, sh -c "dd ...", git -C <dir> push
-        # -f), so a few spellings are caught by the floor alone; the
-        # parity test in tests/runtime/destructive-shell-floor.test.ts
-        # pins that everything caught HERE is also caught THERE, at the
-        # same severity or higher.
-        - pattern: '\\bdd\\s[^\\n]*\\bof='
-          categories: [destructive, data_loss]
-          severity: critical
-        - pattern: '\\btruncate\\b[^\\n]*(\\s-[a-zA-Z]*s|--size)'
-          categories: [destructive, data_loss]
-          severity: critical
-        - pattern: '\\bshred\\b'
-          categories: [destructive, data_loss, irreversible_action]
-          severity: critical
-        - pattern: '\\bmkfs(\\.\\w+)?\\b'
-          categories: [destructive, data_loss, infrastructure_change]
-          severity: critical
-        - pattern: '\\bfind\\b[^\\n]*-delete\\b'
-          categories: [destructive, data_loss]
-          severity: critical
-        - pattern: '\\bfind\\b[^\\n]*-exec(dir)?\\s+rm\\b'
-          categories: [destructive, data_loss]
-          severity: critical
-        - pattern: '\\bgit\\s+reset\\b[^\\n]*--hard\\b'
-          categories: [destructive, data_loss]
-          severity: high
-        - pattern: '\\bgit\\s+push\\b[^\\n]*(--force(-with-lease)?\\b|\\s-f\\b)'
-          categories: [destructive, production_mutation, deployment_change]
-          severity: high
-        - pattern: '\\bgit\\s+clean\\b[^\\n]*(--force\\b|\\s-[a-zA-Z]*f[a-zA-Z]*\\b)'
-          categories: [destructive, data_loss]
-          severity: high
-        - pattern: '\\bgit\\s+checkout\\s+--\\s+\\.'
-          categories: [destructive, data_loss]
-          severity: high
-        - pattern: '\\bgit\\s+restore\\s+\\.(\\s|$)'
-          categories: [destructive, data_loss]
-          severity: high
-        - pattern: '\\b(chmod|chown)\\b[^\\n]*(\\s-[a-zA-Z]*R|--recursive\\b)'
-          categories: [mass_update]
-          severity: high
-        - pattern: '\\bcurl\\b[^\\n]*(-X\\s*|--request[\\s=])(?![Gg][Ee][Tt]\\b)(?![Hh][Ee][Aa][Dd]\\b)[A-Za-z]'
-          categories: [production_mutation, network_exfiltration]
-          severity: high
-        - pattern: '\\bcurl\\b[^\\n]*(\\s-[a-zA-Z]*[dFT]|--data\\b|--json\\b|--form(-string)?\\b|--upload-file\\b)'
-          categories: [production_mutation, network_exfiltration]
-          severity: high
-        - pattern: '\\bcurl\\b[^\\n]*(\\s-[a-zA-Z]*[oODcK]|--output(-dir)?\\b|--remote-name\\b|--remote-header-name\\b|--dump-header\\b|--cookie-jar\\b|--config\\b|--create-dirs\\b|--etag-save\\b|--trace(-ascii)?\\b|--stderr\\b|(\\s-[a-zA-Z]*w\\b|--write-out\\b)[^\\n]*%output)'
-          categories: [destructive, data_loss]
-          severity: high
-        - pattern: '\\bsed\\b[^\\n]*(\\s-[a-zA-Z]*i[a-zA-Z]*\\b|--in-place\\b)'
-          categories: [destructive, data_loss]
-          severity: high
-
-environments:
-  resolvers:
-    - name: production-signals
-      environment: production
-      signals:
-        branch_patterns: [main, "release/*"]
-        env_var_patterns:
-          - var: DATABASE_URL
-            patterns: [prod, production]
-        kube_context_patterns: [".*prod.*"]
-        kube_namespace_patterns: [prod, production]
 `;
 
 import { parse as parseYaml } from "yaml";
