@@ -101,8 +101,9 @@ Decision: deny
 
 runtime-reality-checker: drift detected for keyword 'deploy-panel' before 'compose-mutation' tool call
   - [critical] Process 'panel-frontend' expected to be running but is NOT
-Fix drift before continuing, or set RUNTIME_REALITY_DISABLE=1 to switch the hook off.
 ```
+
+To switch the hook off deliberately, set `RUNTIME_REALITY_DISABLE=1` in the hook's environment from the operator side.
 
 ## Scope
 

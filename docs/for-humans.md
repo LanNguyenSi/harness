@@ -392,7 +392,7 @@ before upgrading.
   in the manifest or set `policy_packs[].enabled: false`. Persistent,
   diff-able, source-controlled.
 - **For "I want to move fast on a prototype branch"**, define a
-  branch-aware policy with a `when:` clause, not a session-wide pause.
+  policy with a narrower trigger (for example a `bash_match` that names only what you guard), not a session-wide pause.
 - **For lockout recovery / debug / incident**, pause is the right
   tool, but always with `--for <duration>` so a forgotten pause
   cannot silently disable your gates across sessions.

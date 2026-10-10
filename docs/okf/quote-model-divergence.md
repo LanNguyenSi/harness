@@ -388,8 +388,8 @@ Ausgaben und sind nur paarweise überlappend messbar.
 | `command-normalize.ts` | `normalized` | `bash_match` raw-OR-normalized-OR-amp-OR-quote-normalized (`src/runtime/intercept.ts:636-683#"Raw-OR-normalised-OR-amp-normalised-OR-quote-normalised"`, dritter Arm seit `aabbad63`, vierter Arm seit `cf3dff51`) |
 | | `targetDir`/`targetBase` | nichts (grep-verifiziert) |
 | `bash-prefix-parse.ts` | `inlineEnv`, `cdTarget` | leading-`cd`-Durchgang von `normalizeCommand` (`command-normalize.ts`); der fruehere Verbraucher Risk-Gate-Kontext ist mit dem Risk Gate entfernt |
-| `read-only-bash.ts` | Boolean | Understanding-Gate-PreToolUse (2 Hooks), Write-Guard; der fruehere Verbraucher Risk-Floor ist mit dem Risk Gate entfernt |
-| `read-only-bash.ts`, `splitCurlWords` | `CurlWord[] \| null` | nur (`isReadOnlyCurlCommand`, task `fdaad781`), dessen Verbraucher Risk-Floor mit dem Risk Gate entfernt ist; heute nur noch die Floors-Tests |
+| `read-only-bash.ts` | Boolean | kein Verbraucher in `src` mehr (die frueheren Verbraucher Understanding Gate, Write-Guard und Risk-Floor sind entfernt); nur noch Tests. `command-normalize.ts` importiert aus dem Modul nur die `ENV_*`-Konstanten |
+| `read-only-bash.ts`, `splitCurlWords` | `CurlWord[] \| null` | nur `isReadOnlyCurlCommand` (task `fdaad781`), das selbst keinen Verbraucher in `src` mehr hat (der Risk-Floor ist entfernt); nur noch Tests |
 | `shell-command-model.ts` (task `7d4abf84`) | `ModelCommand[] \| null` (kanonischer Text, Verzeichnismenge; `null` auch für eine abgelehnte Zeile, task `9238cc27`) | `bash_match` fünfter Arm (nur Per-Repo-Policies, nur Kommandos, die ein Verzeichnis nennen) und `resolveAttributedContexts` (Union mit der Segment-Sicht) |
 
 Die Matrix ist daher als **drei überlappende Zwei-Wege-Vergleiche**

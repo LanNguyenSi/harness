@@ -53,7 +53,7 @@ These are called by Claude Code via `settings.json`; you usually do not run them
 
 `harness approve` no longer exists; there is no CLI approval verb. A policy whose `requires.ledger_tag` names an approval tag is unblocked only by the operator writing that tag.
 
-Removed in task `a4d8adc5`: `harness approve branch-protection` and `harness session-start branch-check`. Removed in task `f3f15290`: the entire `harness session-start` command group (`preflight`, `toolchain-parity`, `stale-base-check`) and the top-level `harness preflight` alias. Removed in task `2bf09e41`: the entire `harness approve` command group; its last kind went with the Risk Gate. The branch-protection gate asks git for the branch on every call and keeps no ledger tag or override marker; to edit a protected branch deliberately, switch the gate off from an operator shell (`harness gate disable`, below).
+Removed in task `a4d8adc5`: `harness approve branch-protection` and `harness session-start branch-check`. Removed in task `f3f15290`: the entire `harness session-start` command group (`preflight`, `toolchain-parity`, `stale-base-check`) and the top-level `harness preflight` alias. Removed in task `39c112e0`: the entire `harness approve` command group; its last kind went with the Risk Gate. The branch-protection gate asks git for the branch on every call and keeps no ledger tag or override marker; to edit a protected branch deliberately, switch the gate off from an operator shell (`harness gate disable`, below).
 
 ## Gate kill-switches
 
@@ -115,7 +115,7 @@ This table is the canonical mapping from process gate to the ledger tag it consu
 - `harness apply` fails loud (refuses) when a manifest declares evidence-consuming policies (`requires:`) without `grounding-mcp` wired under `tools.mcp`; an unwired producer means warn policies degrade non-blocking while block/require_approval policies DENY every matching event (see docs/okf/gate-fail-posture-matrix.md). `operator_only: true` policies do not query evidence and may apply without grounding-mcp; wire `grounding-mcp` or remove the evidence-consuming policies.
 - Since `v0.34.0`: `apply --yes` (skip the `--overwrite-drift` confirmation) and non-TTY guards on the `apply`/`adopt` confirmation prompts (they refuse instead of hanging; piped `echo yes |` confirmations no longer work, use `--yes`).
 - `harness policy intercept --hook <name>` and the 2s timeout floor pinned by the Codex-hook generator both shipped in `v0.29.0`; see [CHANGELOG.md](../CHANGELOG.md).
-- Ledger tag vocabulary used by gate-mode policies: `review:`, `risk-override:`, `risk-approved:`. A policy's `requires.ledger_tag` consults the evidence ledger to unblock (scoped to a Claude session id, not the agent-tasks task UUID, see `feedback-agent-grounding-merge-gate-ledger`); the tag itself is written by a `harness record` verb or by the operator. The branch-protection gate consults no ledger tag at all since task `a4d8adc5`; it asks git.
+- Ledger tag vocabulary used by gate-mode policies: `review:`. A policy's `requires.ledger_tag` consults the evidence ledger to unblock (scoped to a Claude session id, not the agent-tasks task UUID, see `feedback-agent-grounding-merge-gate-ledger`); the tag itself is written by a `harness record` verb or by the operator. The branch-protection gate consults no ledger tag at all since task `a4d8adc5`; it asks git.
 
 ### `--project` name validation
 
