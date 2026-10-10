@@ -326,6 +326,9 @@ export function registerSetupGroup(
           json: options.json,
           outputPath: options.output,
         });
+        for (const w of result.warnings) {
+          stderr(`warning: ${w}\n`);
+        }
         if (result.wroteTo === null) {
           stdout(result.output);
           if (!result.output.endsWith("\n")) stdout("\n");

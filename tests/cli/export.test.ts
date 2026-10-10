@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { parse as parseYaml } from "yaml";
 import { exportManifest, __testables } from "../../src/cli/export.js";
+import { buildProgram } from "../../src/cli/index.js";
 import { parseManifest } from "../../src/schema/index.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -260,5 +261,75 @@ workflows:
     const r = exportManifest({ configPath: fixture, json: true });
     const parsed = JSON.parse(r.output) as { policies: Array<{ name: string }> };
     expect(parsed.policies.find((p) => p.name === "review-before-merge")).toBeDefined();
+  });
+});
+
+describe("exportManifest — posture warnings (task f45dd0a0)", () => {
+  const HOOK = `hooks:
+  - name: gate
+    event: PreToolUse
+    match: "Bash"
+    command: harness policy intercept
+    blocking: hard
+`;
+  const WHEN_POLICY = `policies:
+  - name: scoped-gate
+    description: a when-scoped block policy
+    trigger: { event: PreToolUse, match: "Bash" }
+    when: { "environment.name": production }
+    requires: { ledger_tag: "risk-override:\${SESSION_ID}" }
+    hook: gate
+    enforcement: block
+`;
+  const REMOVED_KEYS = `risk:
+  classifiers: []
+`;
+  const write = (name: string, body: string): string => {
+    const file = path.join(tmpDir, name);
+    fs.writeFileSync(file, body, "utf8");
+    return file;
+  };
+
+  it("returns one warning per dropped when: policy and stripped key", () => {
+    const dirty = write("dirty.yaml", `version: 1\n${HOOK}${WHEN_POLICY}${REMOVED_KEYS}`);
+    const r = exportManifest({ configPath: dirty });
+    expect(r.warnings.map((w) => w.split(":")[0])).toEqual(["risk", "policies[0]"]);
+    expect(r.warnings[1]).toContain('policy "scoped-gate" dropped whole');
+  });
+
+  it("returns no warnings for a clean manifest", () => {
+    const r = exportManifest({ configPath: FULL_MANIFEST });
+    expect(r.warnings).toEqual([]);
+  });
+
+  it("keeps stdout byte-identical: a manifest with removed entries exports exactly like its clean equivalent", () => {
+    const dirty = write("dirty.yaml", `version: 1\n${HOOK}${WHEN_POLICY}${REMOVED_KEYS}`);
+    const clean = write("clean.yaml", `version: 1\n${HOOK}policies: []\n`);
+    for (const json of [false, true]) {
+      const a = exportManifest({ configPath: dirty, json });
+      const b = exportManifest({ configPath: clean, json });
+      expect(a.output).toBe(b.output);
+      expect(a.output).not.toContain("warning");
+    }
+  });
+
+  it("the export command prints each warning on stderr and only the manifest on stdout", async () => {
+    const dirty = write("dirty.yaml", `version: 1\n${HOOK}${WHEN_POLICY}${REMOVED_KEYS}`);
+    let out = "";
+    let err = "";
+    const program = buildProgram({
+      stdout: (s: string) => {
+        out += s;
+      },
+      stderr: (s: string) => {
+        err += s;
+      },
+    });
+    await program.parseAsync(["export", "--config", dirty], { from: "user" });
+    const expected = exportManifest({ configPath: dirty });
+    expect(out).toBe(expected.output.endsWith("\n") ? expected.output : `${expected.output}\n`);
+    const lines = err.split("\n").filter((l) => l.length > 0);
+    expect(lines).toEqual(expected.warnings.map((w) => `warning: ${w}`));
+    expect(lines).toHaveLength(2);
   });
 });

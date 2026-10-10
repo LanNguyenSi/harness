@@ -3,6 +3,7 @@ import * as path from "node:path";
 import { stringify as stringifyYaml } from "yaml";
 import { atomicWriteFile } from "../io/atomic-write.js";
 import type { Manifest } from "../schema/index.js";
+import { formatPostureWarning } from "../schema/removed-keys.js";
 import { withoutDerivedPolicies } from "../runtime/workflow-policies.js";
 import { loadManifest, type LoaderOptions } from "./loader.js";
 
@@ -17,6 +18,8 @@ export interface ExportResult {
   manifest: Manifest;
   sanitized: boolean;
   wroteTo: string | null;
+  /** Manifest posture warnings (removed keys, dropped `when:` policies, removed packs, removed commands), one formatted line each; the CLI prints them on stderr. */
+  warnings: string[];
 }
 
 const SECRET_KEY_PATTERN = /(?:_|^)(KEY|TOKEN|SECRET|PASSWORD|API_KEY)$/i;
@@ -29,7 +32,7 @@ export const SANITIZE_FOOTER =
   "`requires.ledger_tag` values; review before sharing.";
 
 export function exportManifest(opts: ExportOptions = {}): ExportResult {
-  const { manifest: loaded } = loadManifest(opts);
+  const { manifest: loaded, warnings } = loadManifest(opts);
   // F7 (review round 2, 99f47307 Slice 1): `loadManifest` folds
   // `workflows[]`-derived policies into `manifest.policies` (F2), but
   // `harness export` is meant to emit what the OPERATOR declared, not a
@@ -62,7 +65,7 @@ export function exportManifest(opts: ExportOptions = {}): ExportResult {
     wroteTo = target;
   }
 
-  return { output, manifest, sanitized: !!opts.sanitize, wroteTo };
+  return { output, manifest, sanitized: !!opts.sanitize, wroteTo, warnings: warnings.map(formatPostureWarning) };
 }
 
 /**

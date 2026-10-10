@@ -2,6 +2,8 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-10-10T14:19:04Z, task f45dd0a0: `harness export` prints the manifest posture warnings on stderr; the `harness export` row of `docs/CLI.md` says so (one sentence appended in place, no line shift). `debug-verb-selection.md`, `codex-adapter-parity-gaps.md`, `evidence-ledger-trust-boundary.md` and `policy-engine-producer-wiring.md` list `docs/CLI.md` as a source; none of their claims or citations concerns the export row. Re-stamped; no body text changed.
+
 - 2026-10-10T14:13:12Z, stale references and the false policy-off advice fixed (task
   bdb20d1c): the ask-producer comment in `src/schema/policies.ts` and the
   slow-ledger comment in `src/cli/policy/intercept.ts` no longer name removed

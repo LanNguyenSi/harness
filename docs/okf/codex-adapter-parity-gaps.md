@@ -3,7 +3,7 @@ type: module
 title: Codex runtime adapter
 description: "What harness's Codex runtime adapter is today: what harness apply --runtime codex emits and records, the installer's ownership boundaries for ~/.codex/config.toml, the remaining differences from the Claude Code target (--target exclusivity, branch-protection matching apply_patch only, script-side path_match/bash_match filters), and the Codex wire format of the hooks that remain (branch-protection blocker, policy intercept)."
 tags: [codex, runtime-adapter, parity, hooks]
-timestamp: 2026-10-10T14:13:12Z
+timestamp: 2026-10-10T14:19:04Z
 sources:
   - src/cli/apply/apply.ts
   - src/cli/apply/generate-codex-config.ts
