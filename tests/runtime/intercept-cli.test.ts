@@ -1204,57 +1204,135 @@ describe("runInterceptCli — 98ad072f mandatory regression pins (written FIRST 
 });
 
 describe("runInterceptCli — a policy carrying when: never applies", () => {
-  const SCOPED_POLICY: Policy = {
-    name: "gate-prod-destructive",
-    description: "block destructive production actions",
+  const WHEN = { "environment.name": "production" };
+  const gateBase = {
+    description: "gate",
     trigger: { event: "PreToolUse", match: "Bash" },
-    when: { "environment.name": "production" },
-    requires: { ledger_tag: "risk-approved:${SESSION_ID}" },
+    requires: { ledger_tag: "ok:${SESSION_ID}" },
     hook: "h",
-    enforcement: "block",
-  } as Policy;
-
-  const emptyLedger: LedgerClient = {
-    async query() {
-      return { kind: "ok", entries: [] };
-    },
-    async record() {
-      /* no-op */
-    },
   };
 
-  const destroyEvent = JSON.stringify({
-    hook_event_name: "PreToolUse",
-    tool_name: "Bash",
-    tool_input: { command: "terraform destroy" },
-    session_id: "sess-1",
+  // Policy shapes the matching loop treats differently before the guard; the
+  // `when:` clause alone decides the outcome, and every case also runs its
+  // twin without `when:` as a control (the event does match).
+  const cases: Array<{ label: string; policy: Record<string, unknown>; command: string }> = [
+    {
+      label: "enforcement block",
+      policy: { ...gateBase, name: "p", enforcement: "block" },
+      command: "terraform destroy",
+    },
+    {
+      label: "enforcement require_approval",
+      policy: { ...gateBase, name: "p", enforcement: "require_approval" },
+      command: "terraform destroy",
+    },
+    {
+      label: "enforcement warn",
+      policy: { ...gateBase, name: "p", enforcement: "warn" },
+      command: "terraform destroy",
+    },
+    {
+      label: "operator_only: true",
+      policy: {
+        name: "p",
+        description: "gate",
+        trigger: gateBase.trigger,
+        hook: "h",
+        enforcement: "block",
+        operator_only: true,
+      },
+      command: "terraform destroy",
+    },
+    {
+      label: "a trigger.bash_match",
+      policy: {
+        ...gateBase,
+        name: "p",
+        enforcement: "block",
+        trigger: { event: "PreToolUse", match: "Bash", bash_match: "terraform\\s+destroy" },
+      },
+      command: "echo hi && terraform destroy",
+    },
+    {
+      label: "a per-repo policy matched only by the shell-model arm",
+      policy: {
+        ...legacyPreflightPush(),
+        name: "p",
+        requires: { ledger_tag: "preflight:${REPO}" },
+      },
+      command: "git -C '/tmp/repo with space' push origin master",
+    },
+  ];
+
+  const eventFor = (command: string) =>
+    JSON.stringify({
+      hook_event_name: "PreToolUse",
+      tool_name: "Bash",
+      tool_input: { command },
+      session_id: "sess-1",
+    });
+
+  /** A ledger that records every call, so "no traffic" is assertable. */
+  function recordingLedger(): LedgerClient & { calls: string[] } {
+    const calls: string[] = [];
+    return {
+      calls,
+      async query() {
+        calls.push("query");
+        return { kind: "ok", entries: [] };
+      },
+      async record() {
+        calls.push("record");
+      },
+    };
+  }
+
+  let tmpDir: string;
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "intercept-when-"));
+  });
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  it("produces no decision and no block through the hook entrypoint, even though the trigger matches", async () => {
-    const { stream, output } = captureStdout();
-    const result = await runInterceptCli({
-      stdin: streamFrom(destroyEvent),
-      stdout: stream,
-      manifest: makeManifest({ policies: [SCOPED_POLICY] }),
-      ledger: emptyLedger,
+  for (const c of cases) {
+    it(`${c.label}: no decision, no block, no output, no ledger call, no staged approval`, async () => {
+      const out = captureStdout();
+      const err = captureStream();
+      const ledger = recordingLedger();
+      const result = await runInterceptCli({
+        stdin: streamFrom(eventFor(c.command)),
+        stdout: out.stream,
+        stderr: err.stream,
+        manifest: makeManifest({ policies: [{ ...c.policy, when: WHEN } as unknown as Policy] }),
+        ledger,
+        generatedDir: tmpDir,
+      });
+      expect(result.decisions).toHaveLength(0);
+      expect(result.blocked).toBe(false);
+      expect(out.output()).toBe("");
+      // The only stderr line is the ordinary "no policy matched" hint: a
+      // when-gated diagnostic or any other side effect would add a line.
+      const stderrLines = err.output().split("\n").filter((l) => l !== "");
+      expect(stderrLines).toHaveLength(1);
+      expect(stderrLines[0]).toMatch(/^harness policy intercept: no policy matched event /);
+      expect(ledger.calls).toEqual([]);
+      expect(fs.readdirSync(tmpDir)).toEqual([]);
     });
-    expect(result.decisions).toHaveLength(0);
-    expect(result.blocked).toBe(false);
-    expect(output()).toBe("");
-  });
 
-  it("the same policy without its when: clause blocks the same event", async () => {
-    const { when: _when, ...unscoped } = SCOPED_POLICY;
-    const { stream } = captureStdout();
-    const result = await runInterceptCli({
-      stdin: streamFrom(destroyEvent),
-      stdout: stream,
-      manifest: makeManifest({ policies: [unscoped as Policy] }),
-      ledger: emptyLedger,
+    it(`${c.label}: the same policy without when: decides the same event (control)`, async () => {
+      const err = captureStream();
+      const result = await runInterceptCli({
+        stdin: streamFrom(eventFor(c.command)),
+        stdout: captureStdout().stream,
+        stderr: err.stream,
+        manifest: makeManifest({ policies: [c.policy as unknown as Policy] }),
+        ledger: recordingLedger(),
+        generatedDir: tmpDir,
+      });
+      expect(result.decisions).toHaveLength(1);
     });
-    expect(result.decisions).toHaveLength(1);
-    expect(result.blocked).toBe(true);
-  });
+  }
 });
 
 describe("runInterceptCli — task f1df7c2d: stage .pending-approval on require_approval block", () => {

@@ -1310,6 +1310,139 @@ describe("intercept — policies that carry a when: clause", () => {
   });
 });
 
+const bashEvent = (command: string): ToolEvent => ({
+  hook_event_name: "PreToolUse",
+  tool_name: "Bash",
+  tool_input: { command },
+  session_id: "sess-1",
+  cwd: "/tmp/proj",
+});
+
+describe("intercept: a when: policy never applies, whatever its shape", () => {
+  // Each case is a policy shape the matching loop treats differently before
+  // the guard (enforcement tier, operator_only, a bash_match regex, the
+  // shell-model arm only). The `when:` clause alone decides the outcome, so
+  // every case also runs its twin without `when:` as a control: the event
+  // does match, and the control yields a decision.
+  const gateBase = {
+    description: "gate",
+    trigger: { event: "PreToolUse", match: "Bash" },
+    requires: { ledger_tag: "ok:${SESSION_ID}" },
+    hook: "h",
+  };
+  const WHEN = { "environment.name": "production" };
+  const cases: Array<{ label: string; policy: Record<string, unknown>; command: string }> = [
+    {
+      label: "enforcement block",
+      policy: { ...gateBase, name: "p", enforcement: "block" },
+      command: "terraform destroy",
+    },
+    {
+      label: "enforcement require_approval",
+      policy: { ...gateBase, name: "p", enforcement: "require_approval" },
+      command: "terraform destroy",
+    },
+    {
+      label: "enforcement warn",
+      policy: { ...gateBase, name: "p", enforcement: "warn" },
+      command: "terraform destroy",
+    },
+    {
+      label: "operator_only: true",
+      policy: {
+        name: "p",
+        description: "gate",
+        trigger: gateBase.trigger,
+        hook: "h",
+        enforcement: "block",
+        operator_only: true,
+      },
+      command: "terraform destroy",
+    },
+    {
+      label: "a trigger.bash_match",
+      policy: {
+        ...gateBase,
+        name: "p",
+        enforcement: "block",
+        trigger: { event: "PreToolUse", match: "Bash", bash_match: "terraform\\s+destroy" },
+      },
+      command: "echo hi && terraform destroy",
+    },
+    {
+      // A per-repo policy that only the shell model's arm matches: the
+      // `-C` target is a quoted path with a space, which the segment view
+      // does not attribute.
+      label: "a per-repo policy matched only by the shell-model arm",
+      policy: {
+        ...legacyPreflightPush(),
+        name: "p",
+        requires: { ledger_tag: "preflight:${REPO}" },
+      },
+      command: "git -C '/tmp/repo with space' push origin master",
+    },
+  ];
+
+  for (const c of cases) {
+    it(`${c.label}: no decision, no ledger traffic, no block`, async () => {
+      const ledger = makeLedger({ kind: "ok", entries: [] });
+      const result = await intercept({
+        manifest: manifest([{ ...c.policy, when: WHEN } as unknown as Policy]),
+        event: bashEvent(c.command),
+        ledger,
+        builtins: BUILTINS,
+        now: NOW,
+      });
+      expect(result.decisions).toHaveLength(0);
+      expect(result.blockJson).toBeNull();
+      expect(ledger.queryCalls).toEqual([]);
+      expect(ledger.recordCalls).toEqual([]);
+    });
+
+    it(`${c.label}: the same policy without when: does apply (control)`, async () => {
+      const ledger = makeLedger({ kind: "ok", entries: [] });
+      const result = await intercept({
+        manifest: manifest([c.policy as unknown as Policy]),
+        event: bashEvent(c.command),
+        ledger,
+        builtins: BUILTINS,
+        now: NOW,
+      });
+      expect(result.decisions).toHaveLength(1);
+    });
+  }
+
+  describe("the shipped FULL template", () => {
+    const whenPolicies = parseManifest(parseYaml(FULL_TEMPLATE)).policies.filter(
+      (p) => p.when !== undefined,
+    );
+
+    it("carries its three Risk Gate policies with when:", () => {
+      expect(whenPolicies.map((p) => p.name).sort()).toEqual([
+        "gate-dev-unsafe-deletion",
+        "gate-prod-destructive",
+        "gate-prod-destructive-approval",
+      ]);
+    });
+
+    for (const command of ["rm -rf /", "ls"]) {
+      it(`yields no decision from those policies for \`${command}\``, async () => {
+        const ledger = makeLedger({ kind: "ok", entries: [] });
+        const result = await intercept({
+          manifest: manifest(whenPolicies),
+          event: bashEvent(command),
+          ledger,
+          builtins: BUILTINS,
+          now: NOW,
+        });
+        expect(result.decisions).toHaveLength(0);
+        expect(result.blockJson).toBeNull();
+        expect(ledger.queryCalls).toEqual([]);
+      });
+    }
+  });
+});
+
 describe("intercept — require_approval and deny outcomes", () => {
   const approvalManifest = () => manifest([APPROVAL_POLICY]);
 
