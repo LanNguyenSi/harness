@@ -202,6 +202,10 @@ export const REMOVED_COMMANDS: readonly RemovedCommand[] = [
   { command: "harness approve understanding", removedIn: "1.0.0", reason: "the understanding-gate approval verb is removed" },
   { command: "harness gc", removedIn: "1.0.0", reason: "the understanding-gate state cleanup verb is removed" },
   { command: "harness pack upgrade", removedIn: "1.0.0", reason: "the understanding-gate auto_approve upgrade verb is removed" },
+  { command: "harness explain-action", removedIn: "1.0.0", reason: "the Risk Gate debug verbs are removed" },
+  { command: "harness test-risk", removedIn: "1.0.0", reason: "the Risk Gate debug verbs are removed" },
+  { command: "harness resolve-env", removedIn: "1.0.0", reason: "the Risk Gate debug verbs are removed" },
+  { command: "harness explain-policy", removedIn: "1.0.0", reason: "the Risk Gate debug verbs are removed" },
 ];
 
 // Leading `NAME=value` shell assignments in front of the command word. Only

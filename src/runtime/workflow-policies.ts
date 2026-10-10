@@ -43,7 +43,7 @@ import {
  * was a `Policy` to hand it. `src/cli/loader.ts#loadManifest` calls
  * `withDerivedPolicies` after parsing and appends the result to
  * `manifest.policies` before any consumer (the CLI `policy intercept`
- * entrypoint, `list`, `explain`, `explain-policy`) reads it.
+ * entrypoint, `list`, `explain`) reads it.
  *
  * TWO VIEWS OF ONE MANIFEST (review round 3, 99f47307 Slice 1). Every
  * reader of a parsed manifest sees exactly one of:
