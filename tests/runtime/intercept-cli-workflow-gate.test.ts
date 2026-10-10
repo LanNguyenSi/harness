@@ -6,8 +6,9 @@
 // the Claude Code `settings.json` hook and the Codex `config.toml` hook
 // invoke it (`runInterceptCli` calls `loadManifest` unless a manifest is
 // injected; that call has no runtime branching, so the same derived
-// policies apply on both runtimes, see the CHANGELOG entry for the
-// pointer into docs/okf/codex-adapter-parity-gaps.md gap 8).
+// policies apply on both runtimes; docs/okf/codex-adapter-parity-gaps.md,
+// "Risk Gate cross-runtime support" under "Differences from the Claude
+// Code target", records how far Codex honours the intercept deny).
 //
 // AC1: a skipped spawn: required step (or, per the mutation probe below,
 // no policy at all) does not block; a WIRED workflow with an empty ledger
