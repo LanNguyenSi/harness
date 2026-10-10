@@ -1215,7 +1215,14 @@ describe("runInterceptCli — a policy carrying when: never applies", () => {
   // Policy shapes the matching loop treats differently before the guard; the
   // `when:` clause alone decides the outcome, and every case also runs its
   // twin without `when:` as a control (the event does match).
-  const cases: Array<{ label: string; policy: Record<string, unknown>; command: string }> = [
+  // `command` builds a Bash PreToolUse event; `event` replaces it for the
+  // cases on another tool or hook event.
+  const cases: Array<{
+    label: string;
+    policy: Record<string, unknown>;
+    command?: string;
+    event?: Record<string, unknown>;
+  }> = [
     {
       label: "enforcement block",
       policy: { ...gateBase, name: "p", enforcement: "block" },
@@ -1262,15 +1269,69 @@ describe("runInterceptCli — a policy carrying when: never applies", () => {
       },
       command: "git -C '/tmp/repo with space' push origin master",
     },
+    {
+      label: "a Write trigger with a Write event",
+      policy: { ...gateBase, name: "p", enforcement: "block", trigger: { event: "PreToolUse", match: "Write" } },
+      event: {
+        hook_event_name: "PreToolUse",
+        tool_name: "Write",
+        tool_input: { file_path: "/tmp/a.txt", content: "x" },
+        session_id: "sess-1",
+      },
+    },
+    {
+      label: "an MCP trigger with an extract and an MCP event",
+      policy: {
+        ...gateBase,
+        name: "p",
+        enforcement: "require_approval",
+        trigger: {
+          event: "PreToolUse",
+          match: "mcp__agent-tasks__pull_requests_merge",
+          extract: { PR: "toolArgs.prNumber" },
+        },
+        requires: { ledger_tag: "review:${PR}" },
+      },
+      event: {
+        hook_event_name: "PreToolUse",
+        tool_name: "mcp__agent-tasks__pull_requests_merge",
+        tool_input: { prNumber: 42 },
+        session_id: "sess-1",
+      },
+    },
+    {
+      label: "a trigger with an event but no match",
+      policy: { ...gateBase, name: "p", enforcement: "block", trigger: { event: "PreToolUse" } },
+      event: {
+        hook_event_name: "PreToolUse",
+        tool_name: "Read",
+        tool_input: { file_path: "/tmp/a.txt" },
+        session_id: "sess-1",
+      },
+    },
+    {
+      // The hook entrypoint hands any hook event to the engine, which
+      // matches whatever event the trigger names, not only PreToolUse.
+      label: "a PostToolUse trigger with a PostToolUse event",
+      policy: { ...gateBase, name: "p", enforcement: "block", trigger: { event: "PostToolUse", match: "Bash" } },
+      event: {
+        hook_event_name: "PostToolUse",
+        tool_name: "Bash",
+        tool_input: { command: "terraform destroy" },
+        session_id: "sess-1",
+      },
+    },
   ];
 
-  const eventFor = (command: string) =>
-    JSON.stringify({
-      hook_event_name: "PreToolUse",
-      tool_name: "Bash",
-      tool_input: { command },
-      session_id: "sess-1",
-    });
+  const eventFor = (c: (typeof cases)[number]) =>
+    JSON.stringify(
+      c.event ?? {
+        hook_event_name: "PreToolUse",
+        tool_name: "Bash",
+        tool_input: { command: c.command },
+        session_id: "sess-1",
+      },
+    );
 
   /** A ledger that records every call, so "no traffic" is assertable. */
   function recordingLedger(): LedgerClient & { calls: string[] } {
@@ -1301,7 +1362,7 @@ describe("runInterceptCli — a policy carrying when: never applies", () => {
       const err = captureStream();
       const ledger = recordingLedger();
       const result = await runInterceptCli({
-        stdin: streamFrom(eventFor(c.command)),
+        stdin: streamFrom(eventFor(c)),
         stdout: out.stream,
         stderr: err.stream,
         manifest: makeManifest({ policies: [{ ...c.policy, when: WHEN } as unknown as Policy] }),
@@ -1323,7 +1384,7 @@ describe("runInterceptCli — a policy carrying when: never applies", () => {
     it(`${c.label}: the same policy without when: decides the same event (control)`, async () => {
       const err = captureStream();
       const result = await runInterceptCli({
-        stdin: streamFrom(eventFor(c.command)),
+        stdin: streamFrom(eventFor(c)),
         stdout: captureStdout().stream,
         stderr: err.stream,
         manifest: makeManifest({ policies: [c.policy as unknown as Policy] }),

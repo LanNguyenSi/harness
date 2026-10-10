@@ -1331,7 +1331,14 @@ describe("intercept: a when: policy never applies, whatever its shape", () => {
     hook: "h",
   };
   const WHEN = { "environment.name": "production" };
-  const cases: Array<{ label: string; policy: Record<string, unknown>; command: string }> = [
+  // `command` builds a Bash PreToolUse event; `event` replaces it for the
+  // cases on another tool or hook event.
+  const cases: Array<{
+    label: string;
+    policy: Record<string, unknown>;
+    command?: string;
+    event?: ToolEvent;
+  }> = [
     {
       label: "enforcement block",
       policy: { ...gateBase, name: "p", enforcement: "block" },
@@ -1381,14 +1388,71 @@ describe("intercept: a when: policy never applies, whatever its shape", () => {
       },
       command: "git -C '/tmp/repo with space' push origin master",
     },
+    {
+      label: "a Write trigger with a Write event",
+      policy: { ...gateBase, name: "p", enforcement: "block", trigger: { event: "PreToolUse", match: "Write" } },
+      event: {
+        hook_event_name: "PreToolUse",
+        tool_name: "Write",
+        tool_input: { file_path: "/tmp/proj/a.txt", content: "x" },
+        session_id: "sess-1",
+        cwd: "/tmp/proj",
+      },
+    },
+    {
+      label: "an MCP trigger with an extract and an MCP event",
+      policy: {
+        ...gateBase,
+        name: "p",
+        enforcement: "require_approval",
+        trigger: {
+          event: "PreToolUse",
+          match: "mcp__agent-tasks__pull_requests_merge",
+          extract: { PR: "toolArgs.prNumber" },
+        },
+        requires: { ledger_tag: "review:${PR}" },
+      },
+      event: {
+        hook_event_name: "PreToolUse",
+        tool_name: "mcp__agent-tasks__pull_requests_merge",
+        tool_input: { prNumber: 42 },
+        session_id: "sess-1",
+        cwd: "/tmp/proj",
+      },
+    },
+    {
+      label: "a trigger with an event but no match",
+      policy: { ...gateBase, name: "p", enforcement: "block", trigger: { event: "PreToolUse" } },
+      event: {
+        hook_event_name: "PreToolUse",
+        tool_name: "Read",
+        tool_input: { file_path: "/tmp/proj/a.txt" },
+        session_id: "sess-1",
+        cwd: "/tmp/proj",
+      },
+    },
+    {
+      // The engine matches any hook event the trigger names, not only
+      // PreToolUse, so the guard must not be keyed on the event name.
+      label: "a PostToolUse trigger with a PostToolUse event",
+      policy: { ...gateBase, name: "p", enforcement: "block", trigger: { event: "PostToolUse", match: "Bash" } },
+      event: {
+        hook_event_name: "PostToolUse",
+        tool_name: "Bash",
+        tool_input: { command: "terraform destroy" },
+        session_id: "sess-1",
+        cwd: "/tmp/proj",
+      },
+    },
   ];
+  const eventOf = (c: (typeof cases)[number]): ToolEvent => c.event ?? bashEvent(c.command!);
 
   for (const c of cases) {
     it(`${c.label}: no decision, no ledger traffic, no block`, async () => {
       const ledger = makeLedger({ kind: "ok", entries: [] });
       const result = await intercept({
         manifest: manifest([{ ...c.policy, when: WHEN } as unknown as Policy]),
-        event: bashEvent(c.command),
+        event: eventOf(c),
         ledger,
         builtins: BUILTINS,
         now: NOW,
@@ -1403,7 +1467,7 @@ describe("intercept: a when: policy never applies, whatever its shape", () => {
       const ledger = makeLedger({ kind: "ok", entries: [] });
       const result = await intercept({
         manifest: manifest([c.policy as unknown as Policy]),
-        event: bashEvent(c.command),
+        event: eventOf(c),
         ledger,
         builtins: BUILTINS,
         now: NOW,
