@@ -51,8 +51,8 @@ export const PolicyEnforcementSchema = z.enum([
 //   mcp  — MCP tool call (NOT gated by the Bash hook; the ungated
 //          recovery path for lockout scenarios — see [[feedback_understanding_gate_lockout_recovery]]).
 //   ask  — bare bash command the harness pre-tool-use hook escapes
-//          via ask-path semantics (e.g. `harness approve understanding`).
-//          Operator's "go" on the prompt IS the approval.
+//          via ask-path semantics. Operator's "go" on the prompt IS
+//          the approval.
 //
 // At least one `mcp` producer is required when the field is set, so an
 // agent that gets blocked by an unrelated gate (e.g. understanding-gate

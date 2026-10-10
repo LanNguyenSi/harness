@@ -388,9 +388,11 @@ before upgrading.
 
 **Pause is not for routine gate bypass.** Three rules of thumb:
 
-- **For permanent per-policy disable**, edit `policies[].enabled`
-  in the manifest or set `policy_packs[].enabled: false`. Persistent,
-  diff-able, source-controlled.
+- **For permanent per-policy disable**, remove the policy's entry
+  from `policies:` in the manifest; to turn off the hooks a policy
+  pack adds, set `policy_packs[].enabled: false`. A policy has no
+  `enabled` field (the policy schema is strict, so validation rejects
+  one). Persistent, diff-able, source-controlled.
 - **For "I want to move fast on a prototype branch"**, define a
   policy with a narrower trigger (for example a `bash_match` that names only what you guard), not a session-wide pause.
 - **For lockout recovery / debug / incident**, pause is the right
