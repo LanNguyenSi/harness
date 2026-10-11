@@ -3,7 +3,7 @@
 You are an operator: someone who installs harness, writes the YAML
 manifest, runs `apply`, and watches the agent it configures behave the
 way you said it should. This doc is the path from "fresh checkout" to
-"my Claude Code session is gated by ledger evidence I trust".
+"my Claude Code session is gated by the rules I declared".
 
 For the agent's view of the same system (which CLI verbs are safe to
 call, what the policy contract looks like, how to read the audit
@@ -65,14 +65,17 @@ harness init --interactive
 ```
 
 It probes your environment (existing `~/.claude/` and `~/.codex/`, MCP
-servers wired in `settings.json`, harness binary version), asks you to
+servers registered in Claude Code's user-scope registry `~/.claude.json`,
+harness binary version), asks you to
 pick a profile (`solo` / `team` / `full` / `custom`; `team` and `full` assume an agent-tasks account, `solo` is standalone), and writes a
 validate-clean starting `harness.yaml` to `~/.harness/harness.yaml`
 (legacy `~/.claude/harness.yaml` only when a pre-`v0.24.0` install is
 already there).
-Ctrl-C at any prompt aborts with no partial write. The wizard prints
-the suggested `harness apply --runtime claude-code` follow-up but does
-not run it, so you can review the manifest first. Full walkthrough and
+Ctrl-C at any prompt aborts with no partial write. At the end it
+offers to wire the manifest now: a checkbox per runtime, with the
+runtimes it detected pre-checked, and for each one you tick it runs the
+matching `harness apply`. Untick everything to review the manifest
+first; the wizard then prints the commands to wire it by hand. Full walkthrough and
 limitations in [`init-interactive.md`](init-interactive.md).
 
 If you prefer a non-interactive bootstrap (CI, fresh-VM provisioning),
@@ -128,23 +131,22 @@ harness apply --target .claude/settings.local.json
 harness apply --target ~/.claude/settings.json --merge
 ```
 
-`--merge` does a 3-way merge: harness-owned top-level keys (today
-`hooks` and `mcpServers`) come from the generated output; everything
-else in the existing target file is preserved verbatim. Within
-`mcpServers` the merge is per server name: every name the manifest
-declares is taken from the generated output; a server you hand-added
-directly to the target file survives (the apply summary names it as
-`kept ... operator-added`); and a server harness wrote on a previous
-apply that the manifest no longer emits (deleted, or `enabled: false`)
-is dropped from the target too (`dropped ... manifest-removed`), so
-disabling a server in the manifest stays effective. Provenance comes
-from `.last-apply`; on the very first merge (no prior apply recorded)
-unknown names are conservatively preserved. `hooks` has no stable
-per-entry identity in the settings shape, so it stays
-wholesale-replaced — hand-added hooks belong in the manifest
-(`harness adopt` pulls them in). Re-applying is idempotent: running
-twice produces the same target, and the second run reports
-`no changes`.
+`--merge` replaces the target's `hooks` key wholesale with the
+generated hooks and preserves every other top-level key verbatim.
+`hooks` has no stable per-entry identity in the settings shape, so
+hand-added hooks belong in the manifest (`harness adopt` pulls them
+in). Re-applying is idempotent: running twice produces the same
+target, and the second run reports `no changes`.
+
+`harness apply` does not write MCP servers into `settings.json`,
+because Claude Code does not read that block. Under `--merge`,
+`mcpServers` entries that an earlier release wrote into the target, as
+recorded in `.last-apply`, are dropped, and entries you added by hand
+stay. Claude Code MCP servers are registered with
+`claude mcp add-json --scope user <name> '<json>'`: `harness init
+--interactive` does this for every enabled `tools.mcp[]` entry, and
+after `harness add mcp` you run the command that `harness doctor`
+prints under "Claude Code MCP Registration".
 
 If the target exists and you pass neither `--merge` nor `--force`,
 `apply` refuses with a clear hint instead of clobbering. `--force`
@@ -153,18 +155,44 @@ overwrites with the generated content as-is (no merge).
 `harness.lock` records the target path plus a sha256 of the merged
 output, so `harness validate --check-lock` flags out-of-band edits.
 
+The diagram shows what one `harness apply` reads and writes for each
+runtime, and where `--target` and `--install` fit.
+
+```mermaid
+flowchart TD
+  BASE[("harness.yaml")] --> LOAD
+  MACH[("machines/*.harness.overrides.yaml")] --> LOAD
+  PROJ[("projects/name/harness.overrides.yaml")] --> LOAD
+  LOAD["load + posture warnings"] --> GATE{"requires: without grounding-mcp?"}
+  GATE -->|yes| STOP["refuse"]
+  GATE -->|no| RT["select runtime"]
+  RT --> PACKS["expand policy packs<br/>+ MEMORY.md index"]
+  PACKS -->|claude-code| SET["harness.generated/settings.json"]
+  PACKS -->|opencode| OC["harness.generated/opencode/opencode.json"]
+  PACKS -->|codex| CODEX["harness.generated/codex/config.toml"]
+  SET -->|"--target"| TGT["target settings file<br/>(--merge or --force)"]
+  SET --> LOCK["harness.lock + .last-apply"]
+  OC --> LOCK
+  CODEX --> LOCK
+  CODEX -->|"--install"| INST["~/.codex/config.toml<br/>managed block"]
+```
+
 ## First hour: a real policy
 
 Suppose you want this contract: "before merging a PR, the session must
-have logged a `review:${PR_NUMBER}` evidence-ledger entry." Sketch it
-into `harness.yaml`:
+have logged a `review:${PR_NUMBER}` evidence-ledger entry." The manifest
+must declare `grounding-mcp` under `tools.mcp` (the `team` and `full`
+templates do); without it `harness apply` refuses any policy with
+`requires:`. Sketch it into `harness.yaml`:
 
 ```yaml
 hooks:
   - name: require-review-evidence
     event: PreToolUse
+    match: "mcp__agent-tasks__pull_requests_merge"
     blocking: hard   # vocabulary: false | soft | hard
-    command: ~/.claude/hooks/require-review-evidence.sh
+    budget_ms: 15000
+    command: harness policy intercept
 
 policies:
   - name: review-before-merge
@@ -282,15 +310,18 @@ pair are required for `harness apply` to wire the gate end-to-end.
 
 ## What you should NOT do
 
-- Do not hand-edit anything under `harness.generated/`. It gets
-  clobbered on the next `apply`. Edit the manifest instead.
+- Do not hand-edit anything under `harness.generated/`. The next
+  `apply` refuses until the edit is captured with `harness adopt` or
+  discarded with `--overwrite-drift`. Edit the manifest instead.
 - Do not bypass `harness.lock` drift warnings. They are the only
   signal that something other than `apply` touched a managed file.
 - Do not mix `apply --target ...` with manual `cp harness.generated/
   ~/.claude/settings.json`. Pick one path.
 - Do not skip `validate` before committing. The schema catches
   misnamed hooks, undeclared template references, and bad duration
-  strings before they ship.
+  strings before they ship. A manifest that does not load turns off
+  every `policies[]` gate (see the fifth tripwire in
+  [`writing-custom-policies.md`](writing-custom-policies.md#read-this-first-five-tripwires)).
 
 ## Pause and resume (recovery / debug / incident-mode only)
 
@@ -313,14 +344,11 @@ harness pause --for 1h --reason "prod incident #482"
 harness resume                 # cuts the pause short
 ```
 
-While paused, every PreToolUse / PostToolUse hook except
-branch-protection emits a one-line
+While paused, the `harness policy intercept` and `harness pack hook
+runtime-reality` hooks emit a one-line
 stderr notice (`harness <hook>: PAUSED since 3m ago (reason: ...);
-auto-resumes in 7m. Run \`harness resume\` to re-enable.`) and allows
-the tool call without evaluating. The same sentinel also short-circuits
-the Codex UserPromptSubmit injector and the Codex Stop capture, which
-emit their own one-line stderr notice and skip injection/capture
-without evaluating, even though neither one is a tool call. After the
+auto-resumes in 7m. Run \`harness resume\` to re-enable.`) and allow
+the tool call without evaluating. After the
 window expires, the next hook fire silently deletes the sentinel and
 resumes normal gating.
 
@@ -452,8 +480,9 @@ implemented; treat it as a follow-up if you need a hard guarantee here.
 - [`docs/writing-custom-policies.md`](writing-custom-policies.md):
   task-oriented how-to for authoring your own policies (four worked
   recipes, validated in CI).
-- [`docs/ARCHITECTURE.md`](ARCHITECTURE.md): YAML shape, CLI surface,
-  drift handling, `requires` schema.
+- [`docs/ARCHITECTURE.md`](ARCHITECTURE.md): the original design
+  (historical); [`docs/CLI.md`](CLI.md) is the current command
+  reference, including the manifest's top-level keys.
 - [`docs/ROADMAP.md`](ROADMAP.md): phases 1 through 7 with acceptance
   criteria.
 - [`docs/VISION.md`](VISION.md): long-form positioning.

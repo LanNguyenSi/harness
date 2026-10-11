@@ -1,6 +1,6 @@
 # Contributing to harness
 
-Thanks for your interest. harness is a declarative control plane for agent harnesses: one YAML for grounding, tools, memory, hooks, and policies. The PreToolUse hook denies tool calls without ledger evidence.
+Thanks for your interest. harness is a declarative control plane for agent harnesses: one YAML for grounding, tools, memory, hooks, and policies. Its PreToolUse hooks deny tool calls that violate the declared rules: `harness policy intercept` checks `policies[]` against the evidence ledger, and the branch-protection hook asks git for the branch.
 
 ## Issues
 
@@ -21,6 +21,11 @@ Thanks for your interest. harness is a declarative control plane for agent harne
    npm run check:duplication         # clone-count pin (jscpd, scripts/check-duplication.mjs)
    npm run check:changelog-coverage  # every non-skipped commit since the last tag needs a citable entry (scripts/check-changelog-coverage.mjs)
    ```
+
+   CI also runs `typecheck`, `check:no-only`, `check:no-raw-control-bytes`,
+   `check:shipped-unreleased-pointer`, `check:readme-release-version`,
+   `check:release-notes-size`, `test:cov`, `test:integration` and
+   `check:memory-frontmatter-contract`; see `.github/workflows/ci.yml`.
 
    `check:boundaries` and `check:duplication` are architecture fitness
    functions CI enforces: layering is schema → policies → runtime →

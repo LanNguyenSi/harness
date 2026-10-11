@@ -1,6 +1,6 @@
 # Architecture
 
-> **Historical design document.** This captures the Phase-1 design intent, so some of its CLI surface and file-layout examples (for example the `~/.claude/` state root and the early `harness init [--template minimal|full]` shape) predate the shipped tool. For the authoritative current command reference see [`CLI.md`](CLI.md); for the `~/.harness/` state-root move see [`migration/v0.24.0-home-dir.md`](migration/v0.24.0-home-dir.md).
+> **Historical design document.** This captures the Phase-1 design intent, so some of its CLI surface and file-layout examples (for example the `~/.claude/` state root and the early `harness init [--template minimal|full]` shape) predate the shipped tool. For the authoritative current command reference see [`CLI.md`](CLI.md); for the `~/.harness/` state-root move see [`migration/v0.24.0-home-dir.md`](migration/v0.24.0-home-dir.md). The manifest sections (§1 to §8 and Appendix A) are historical as well; the current top-level keys are listed in the [manifest reference](CLI.md#manifest-reference).
 
 This document makes the shape of `harness` concrete. It follows [`VISION.md`](VISION.md), which established *why* a declarative control plane exists; this document decides *what* it looks like: the manifest schema, file layout, CLI surface, override rules, and implementation stack.
 
@@ -39,7 +39,9 @@ describes the shipped tool as it behaves today.
 
 ## Architecture overview
 
-The harness operates across two planes: an authoring plane that merges YAML config files into an effective manifest and runs `harness apply` to emit Claude Code runtime artifacts, and a runtime plane where Claude Code PreToolUse hook events are intercepted, risk-classified, and gate-checked against the grounding-mcp evidence ledger before being allowed or denied.
+The harness operates across two planes: an authoring plane that merges YAML config files into an effective manifest and runs `harness apply` to emit runtime artifacts, and a runtime plane where hook commands judge each tool call: `harness policy intercept` matches `policies[]` and checks their `requires:` against the grounding-mcp evidence ledger, and `harness pack hook branch-protection` asks git for the branch.
+
+The first diagram shows the authoring plane and which hook command judges a tool call at runtime, with what each one consults.
 
 ```mermaid
 flowchart TD
@@ -57,32 +59,47 @@ flowchart TD
   end
 
   subgraph RUN ["Runtime plane"]
-    EVT["Claude Code<br/>PreToolUse event"]
-    CLI["hook entrypoint<br/>src/cli/policy/intercept.ts"]
-    INT["intercept()<br/>src/runtime/intercept.ts"]
-    AE["action-envelope<br/>src/runtime/action-envelope.ts"]
-    RC["risk-classifier<br/>src/runtime/risk-classifier.ts"]
-    WE["when-eval<br/>src/runtime/when-eval.ts"]
-    PE{"policy evaluator<br/>requires check"}
-    LC["ledger-client<br/>src/policies/ledger-client.ts"]
-    GR[("grounding-mcp")]
+    EVT["PreToolUse event (stdin)"]
+    PI["harness policy intercept<br/>src/cli/policy/intercept.ts"]
+    GR[("grounding-mcp<br/>evidence ledger")]
+    BP["harness pack hook branch-protection"]
+    GIT["git -C dir symbolic-ref -q HEAD"]
+    RR["harness pack hook runtime-reality<br/>(opt-in)"]
+    PROBE["RUNTIME_REALITY_PROBE_CMD"]
 
-    EVT --> CLI
-    CLI --> INT
-    INT --> AE
-    AE --> RC
-    AE --> WE
-    RC --> PE
-    WE --> PE
-    PE --> LC
-    LC --> GR
-    GR -->|entries| LC
-    LC --> PE
-    PE -->|allow| EVT
-    PE -->|block| CLI
+    EVT -->|"policies[] hooks"| PI
+    PI <-->|"ledger_summary, ledger_add"| GR
+    EVT -->|"Write, Edit or apply_patch"| BP --> GIT
+    EVT -->|opt-in hook| RR --> PROBE
   end
 
-  OUT -.->|wires hook| EVT
+  OUT -.->|"--target or --install"| EVT
+```
+
+The second diagram shows the steps inside `harness policy intercept` (`src/cli/policy/intercept.ts`, `src/runtime/intercept.ts`). A paused harness and a manifest that fails to load both allow the call; an `operator_only` policy denies without querying the ledger.
+
+```mermaid
+flowchart TD
+  EVT["PreToolUse event (stdin)"]
+  PAUSE{"pause sentinel?"}
+  LOAD["loadManifest<br/>load failure: allow"]
+  MATCH["policyMatchArm<br/>event, match, input_match, bash_match"]
+  OO["operator_only: deny"]
+  REQ["requires check"]
+  REC["record policy_decision"]
+  ENV["deny envelope or allow"]
+  GR[("grounding-mcp<br/>evidence ledger")]
+
+  EVT --> PAUSE
+  PAUSE -->|paused| ENV
+  PAUSE -->|not paused| LOAD --> MATCH
+  MATCH --> REQ
+  MATCH --> OO
+  REQ <-->|ledger_summary| GR
+  REQ --> REC
+  OO --> REC
+  REC -->|ledger_add| GR
+  REC --> ENV
 ```
 
 ## 1. Manifest: top-level shape
@@ -103,6 +120,8 @@ policies: […]              # cross-cutting: named rules that bind hooks to tri
 
 There is no other top-level key. If a future concept (e.g. credentials, observability) does not fit under these five, that is the signal for an architecture revision, not a sixth sibling key added casually.
 
+> The shipped schema has more top-level keys than this design: besides `version` it accepts `grounding`, `tools`, `memory`, `hooks`, `policies`, `policy_packs`, `workflows`, `review_templates`, `audit` and `doctor` (`src/schema/index.ts`). See the [manifest reference](CLI.md#manifest-reference).
+
 ## 2. `grounding:` section
 
 Wires the existing `agent-grounding` primitives (evidence-ledger, claim-gate, review-claim-gate, grounding-mcp) to the harness. Schema:
@@ -114,8 +133,6 @@ grounding:
     id_format: "gs-{repo}-{timestamp:6}"      # format for auto-generated session ids
   evidence_ledger:
     path: ~/.evidence-ledger/ledger.db        # where ledger.db lives
-    retention_days: 90                        # passed to `ledger prune --older-than`
-  policies_source: ~/.claude/harness.d/policies/claim-gate.yaml
 ```
 
 Notes:
@@ -125,10 +142,13 @@ Notes:
   `EVIDENCE_LEDGER_DB` env on the `tools.mcp[grounding-mcp]` entry, which is
   the variable grounding-mcp's ledger-bridge reads. An operator-declared
   `env.EVIDENCE_LEDGER_DB` on that entry wins; `harness doctor` checks the
-  effective path is writable and flags a divergent override. The remaining
-  subkeys (`session.*`, `retention_days`, `policies_source`) are RESERVED:
-  validated and round-tripped, but no consumer reads them yet (see the
-  status comment in `src/schema/grounding.ts`). Runtime grounding
+  effective path is writable and flags a divergent override. The
+  `session.*` subkeys are RESERVED: validated and round-tripped, but no
+  consumer reads them yet (see the status comment in
+  `src/schema/grounding.ts`). The earlier `evidence_ledger.retention_days`
+  and `policies_source` keys are removed: a manifest that still carries
+  them loads with a warning, the key is stripped, and `harness validate
+  --strict` fails on that warning. Runtime grounding
   ENFORCEMENT keys off the `tools.mcp[]` entry named `grounding-mcp`
   (validate); `grounding:` is the section that CONFIGURES
   that entry, not a separate enforcement switch. Alongside
@@ -150,8 +170,7 @@ Notes:
   `signingKeyPathFor` on a raw `generatedDir` is exactly the phantom-drift
   bug the shared value function exists to prevent).
 - **`auto_start: true`** is the default because per VISION §3 Grounding the current "sessions must be started manually" mode is a sharp edge. Setting it to `false` disables auto-start for users who want to script it themselves. (RESERVED — not consumed yet.)
-- **`policies_source`** points to a file, not inline policies. Claim-gate policies are opinionated data structures (claim types × required evidence), arguably their own DSL. Keeping them out of the top-level manifest prevents the manifest from bloating and lets policy libraries be shared or versioned independently. (RESERVED — not consumed yet.)
-- **`retention_days`** is a hint, not an enforcement. It is passed to `ledger prune` by a scheduled or hook-triggered invocation; `harness` itself does not run prune. (RESERVED — evidence-ledger implements no prune yet.)
+- **`policies_source`** and **`evidence_ledger.retention_days`** were part of this design but never had a consumer. Both are removed keys: they load with a warning and are stripped.
 
 Field defaults:
 
@@ -160,8 +179,6 @@ Field defaults:
 | `session.auto_start` | `true` | |
 | `session.id_format` | `"gs-{repo}-{rand:8}"` | `{repo}`, `{timestamp:N}`, `{rand:N}` tokens |
 | `evidence_ledger.path` | `~/.evidence-ledger/ledger.db` | matches current ledger default |
-| `evidence_ledger.retention_days` | `90` | rough heuristic, tunable |
-| `policies_source` | `null` | meaning "use claim-gate's built-in POLICIES array" |
 
 ## 3. `tools:` section
 
@@ -326,15 +343,15 @@ Schema per entry:
 | Field | Type | Required | Notes |
 |---|---|---|---|
 | `name` | string | yes | unique within `hooks` |
-| `event` | enum | yes | one of `session_start` / `user_prompt_submit` / `pre_tool_use` / `post_tool_use` / `stop` / `subagent_stop` / `pre_compact` |
+| `event` | enum | yes | one of `SessionStart` / `UserPromptSubmit` / `PreToolUse` / `PostToolUse` / `Stop` / `SubagentStart` / `SubagentStop` / `PreCompact` |
 | `command` | string | yes | shell command; executable path or script with args |
 | `match` | regex (JS flavour) | no | runtime-event-scoped filter; for `PreToolUse` / `PostToolUse` this matches the tool name (e.g. `"Write\|Edit"` or `"mcp__agent-tasks__.*"`) |
-| `path_match` | glob (minimatch) | no | additional filter for events that carry a file path (e.g. `Write`, `Edit`): only fire when the path matches |
-| `bash_match` | regex (JS flavour) | no | additional filter when the matched tool is `Bash`: fires only when the command string matches |
+| `path_match` | glob (minimatch) | no | not projected into the runtime config: `harness apply` writes no filter for it (and warns for Codex), so the hook fires on every call `match` selects; the referenced script must filter on the path itself |
+| `bash_match` | regex (JS flavour) | no | not projected into the runtime config, same as `path_match`: the referenced script must filter on the command string itself. A policy's `trigger.bash_match` is evaluated by `harness policy intercept` |
 | `blocking` | enum | yes | `false` / `soft` / `hard` |
 | `budget_ms` | integer | no (default 30000) | timeout before hook is killed |
 | `description` | string | no | surfaced by `harness describe` |
-| `min_version` | string | no | semver floor; `harness doctor` runs `version_command` and emits a `⚠ outdated` line when the parsed version is below this value. Requires `version_command` (validate rejects min_version alone): hook commands are arbitrary shell strings (`harness policy intercept`, `~/.claude/hooks/foo.sh`, etc.), so no useful default exists. A hook a builtin policy pack contributes (not listed in `manifest.hooks[]` itself) can declare the same `min_version` + `version_command` pair; `harness doctor`'s "Policy-pack hooks" section probes those too (task ab634898). |
+| `min_version` | string | no | semver floor; `harness doctor` runs `version_command` and emits a `⚠ outdated` line when the parsed version is below this value. Requires `version_command` (validate rejects min_version alone): hook commands are arbitrary shell strings (`harness policy intercept`, `~/.claude/hooks/foo.sh`, etc.), so no useful default exists. |
 | `version_command` | `string[]` | no | argv to spawn for the version probe; required when `min_version` is set. Point this at the **source-of-truth binary** whose version your `min_version` floor pins, not at a wrapper or launcher: if a `mytool-launcher` wrapper ships alongside the `mytool` CLI, use `[mytool, --version]`, not `[mytool-launcher, --version]`. |
 
 Blocking semantics, three levels:
@@ -408,7 +425,7 @@ Schema:
 |---|---|---|---|
 | `name` | string | yes | unique |
 | `description` | string | yes | surfaced by `harness describe` |
-| `trigger` | object | yes | `event`, `match`, optional `path_match` / `bash_match`, optional `extract` (see below) |
+| `trigger` | object | yes | `event`, `match`, optional `bash_match` / `input_match`, optional `extract` (see below). `path_match` is accepted but not evaluated |
 | `requires` | object | yes, unless `operator_only: true` | evidence shape; discriminated union, see below |
 | `hook` | string | yes | must reference a `hooks[].name` |
 | `enforcement` | enum | yes | `block` / `warn` / `require_approval`; higher level than hook's `blocking` flag |
@@ -538,7 +555,7 @@ Rules:
 
 - **`harness.yaml` is the source of truth.** If `harness.generated/settings.json` differs from what the manifest would produce, `harness apply` regenerates it. `describe` detects drift.
 - **`harness.lock`** is a Phase-3 artefact. It pins resolved paths/SHAs of hook scripts, MCP commands, etc. so drift between "what the manifest referenced" and "what was actually applied" is deterministic. The exact schema (fields per category, hash algorithm, version pinning rules) is decided when Phase 3 starts, not here. Phase 1–2 implementations do not produce or consume it. Phase 1's "single source of truth" claim therefore applies at the **manifest** layer only; asset-content drift (a hook script edited under your feet) is detectable only after the lock ships in Phase 3. VISION §4's "diff-over-time" is layered for the same reason: manifest diffs in Phase 1, asset diffs in Phase 3. This is documented as a known limitation, not a hidden one.
-- **`harness.d/`** is for fragments imported into the main manifest. Used by `claim-gate.yaml` per §2 `policies_source`, and optionally by `hooks:` / `policies:` extension files. Imports are explicit (`policies_source: …`, not auto-scanned).
+- **`harness.d/`** is for fragments imported into the main manifest, for example `hooks:` / `policies:` extension files. Imports are explicit, not auto-scanned. (The `policies_source` import key of §2 is removed.)
 - **`harness.generated/`** is treated as a build artefact. It is `.gitignore`d and regenerated; hand-edits are overwritten on next `apply` *after the drift handling rules below run*.
 - **`projects/<proj>/harness.overrides.yaml`** is optional. Present only when a project needs to deviate from user-level defaults.
 
@@ -573,7 +590,7 @@ Project overrides merge into user-level settings with three rules, depending on 
 | Shape | Rule | Example |
 |---|---|---|
 | **Scalar** (string, number, bool) | Override replaces user value | `memory.retention.staleness_days: 30` in project overrides replaces user's `180` |
-| **Map** | Merge by key; project keys win per-key | `grounding.evidence_ledger.path` in project overrides replaces only that path; `retention_days` from user stays |
+| **Map** | Merge by key; project keys win per-key | `grounding.session.auto_start` in project overrides replaces only that key; `grounding.session.id_format` from user stays |
 | **List of entries with `name`** | Merge by `name`; project entries update matching user entries (by key), non-matching entries are appended | `tools.mcp[]` with `name: codebase-oracle` in project overrides patches just that MCP entry; other MCP entries survive unchanged |
 | **List without `name`** | Replace wholesale | `memory.directories[]` in project overrides replaces the entire list |
 
@@ -819,7 +836,7 @@ Explicitly deferred:
 
 - **Phase-by-phase acceptance criteria.** That's `ROADMAP.md`.
 - **Concrete hook scripts.** `git-preflight.sh`, `require-review-evidence.sh`, etc. get written in Phase 2 against this spec. The shape of the scripts is constrained by §5; the content is not.
-- **The claim-gate policies DSL.** `policies_source: …` points at a separate file; its schema lives in `agent-grounding/packages/claim-gate` and evolves there.
+- **The claim-gate policies DSL.** Its schema lives in `agent-grounding/packages/claim-gate` and evolves there. (The `policies_source` key that would have pointed at it is removed.)
 - **Team / multi-tenant scopes.** `memory.scopes.allowed` lists only `project` and `user` for Phase 1. Team and public scopes require coordination (auth, identity) that a local control plane cannot provide alone.
 - **Runtime integration with non-Claude-Code harnesses.** The hook-event vocabulary in §5 is Claude-Code-specific. Porting to another runtime requires mapping, not just re-implementation.
 - **`harness dry-run "<prompt>"`** requires runtime cooperation (the harness must be able to stub the agent loop). Deferred to Phase 4.
@@ -848,8 +865,6 @@ grounding:
     id_format: "gs-{repo}-{rand:8}"
   evidence_ledger:
     path: ~/.evidence-ledger/ledger.db
-    retention_days: 90
-  policies_source: ~/.claude/harness.d/policies/claim-gate.yaml
 
 tools:
   mcp:
@@ -1007,8 +1022,8 @@ policies:
 version: 1
 
 grounding:
-  evidence_ledger:
-    retention_days: 30        # this project prunes more aggressively
+  session:
+    auto_start: false         # this project starts grounding sessions itself
 
 tools:
   mcp:

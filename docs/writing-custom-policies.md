@@ -13,9 +13,9 @@ working harness.
 
 <a id="the-trust-model"></a>
 
-## Read this first (four tripwires)
+## Read this first (five tripwires)
 
-These four things bite people who skip ahead to the YAML:
+These five things bite people who skip ahead to the YAML:
 
 1. **Custom *policies* are supported; custom policy *packs* are not (yet).**
    Anything you put in `policies:` is first-class: any name, any
@@ -74,6 +74,13 @@ These four things bite people who skip ahead to the YAML:
    no evidence, agent-executable or not, should EVER satisfy it — see
    "Operator-only unconditional deny" below instead of trying to name
    an unsatisfiable `requires:`.
+
+5. **A manifest that does not load turns off every `policies[]` gate.**
+   `harness policy intercept` then allows each call and writes
+   `manifest load failed` to stderr (it does the same for malformed
+   event JSON). Run `harness validate` after every edit. A removed key
+   only warns and does not cause this. The branch-protection hook
+   refuses instead when the manifest does not load.
 
 ## Anatomy of a custom policy
 
@@ -141,8 +148,7 @@ decisions (deny then allow) land in `harness audit` as
 
 The same shape works for any check that produces a per-branch ledger
 tag. The example below uses [`slop-detector`](https://github.com/LanNguyenSi/agent-dx/tree/master/packages/slop-detector)
-(a multi-pack slop linter from `agent-dx`, shipping `agent-tics`,
-`prose-slop`, `comment-slop`, `code-slop`, and `ui-slop`) as the
+(a multi-pack slop linter from `agent-dx`) as the
 producer, but the policy itself does not name that tool: substitute
 your own check (linter, typechecker, fuzzer, secrets-scan) by
 changing the producer command in `ux.run` and the ledger tag.
@@ -167,11 +173,12 @@ policies:
       cannot: "You cannot push branch ${BRANCH} without a recent clean check."
       required: ["a clean-check:${BRANCH} ledger entry from the last 10 minutes"]
       run:
-        - "slop-detector check . --pack ui-slop,code-slop && mcp__grounding-mcp__ledger_add { tag: clean-check:${BRANCH} }"
+        - "slop-detector check . --pack ui-slop,code-slop"
+        - "mcp__grounding-mcp__ledger_add { sessionId: \"${SESSION_ID}\", type: \"fact\", content: \"clean-check:${BRANCH}: 0 findings\", source: \"slop-detector\" }"
 ```
 
 `--pack` filters slop-detector to a subset of its packs; omit the
-flag to run all five.
+flag to run every pack.
 
 Like Recipe A this is a process gate (tripwire 4): the checker runs in
 the agent's own session, and the agent writes the evidence.
@@ -632,15 +639,16 @@ Grammar and semantics:
 - **Comparison is strict equality**, same JSON type and same value.
   `autoMerge: "true"` (a string) does not satisfy `autoMerge: true`.
 - **Every entry must hold** (they are ANDed with each other and with
-  `match` / `path_match` / `bash_match`).
+  `match` / `bash_match`).
 - **A missing path never matches.** An argument the caller omitted
   leaves the narrowed policy out of the way rather than arming it.
 - **An empty map is rejected** as a silent no-op.
 
-`harness policy dry-run --tool mcp__agent-tasks__task_finish --tool-args
-'{"taskId":"...","autoMerge":true}'` predicts exactly what `harness
-policy intercept` decides, and a non-matching payload comes back in the
-"could match" bucket with the failing entry named.
+`harness dry-run "finish task" --tool mcp__agent-tasks__task_finish
+--tool-args '{"taskId":"...","autoMerge":true}'` evaluates `input_match`
+the same way `harness policy intercept` does for a single tool_input
+object. A payload that does not match lands in the "could match"
+bucket, which names the failing entry.
 
 ### Same gate, two PR-surface variants (MCP plus gh-cli)
 
@@ -708,9 +716,14 @@ harness dry-run "<description>" \     # tells you which policies would match
   --tool <tool-name> \                # without touching the ledger
   --tool-args '<json>' \
   --config <path>
-harness apply                         # wire the policy into ~/.claude/settings.json
+harness apply --target ~/.claude/settings.json --merge   # wire new hooks into Claude Code, then restart it
 harness explain <policy-name> --trace # after the first real fire, the full trace
 ```
+
+A plain `harness apply` only renders into `harness.generated/`; Claude
+Code reads the result only through `--target`. A policy that reuses an
+already-wired `harness policy intercept` hook needs no apply, because
+intercept reads the manifest on every call.
 
 Run `validate` after every edit; `dry-run` whenever you change a
 trigger or extract. Wait until both pass before `apply`. `explain`
@@ -726,12 +739,15 @@ full ledger query, extract substitutions, and match trace.
 | `policies[].trigger.event` | yes | `PreToolUse` for blockers (the most common). Other events parse but rarely make sense for `requires` gates. |
 | `policies[].trigger.match` | optional | Substring match against the tool name. For MCP tools: `mcp__<server>__<tool>`. For built-ins: `Bash`, `Edit`, `Write`, ... |
 | `policies[].trigger.bash_match` | optional | Regex against `toolArgs.command` when `match: Bash`. Anchor at command start (`^` or `(^|\n|;|\\||&|\\()`) to catch env-prefixes and subshells. |
-| `policies[].trigger.path_match` | optional | Regex against file paths for Edit/Write/MultiEdit triggers. |
+| `policies[].trigger.path_match` | optional | Accepted by the schema but not evaluated: `harness policy intercept` ignores it, so a policy fires on every call its other trigger fields match. Narrow with `match`, `bash_match` or `input_match`. |
 | `policies[].trigger.input_match` | optional | Map of a `toolArgs.`-namespaced extract expression to a literal (`string`/`number`/`boolean`), compared by strict equality and ANDed with the other trigger fields. Narrows a trigger to one MODE of a tool (`task_finish` with `autoMerge: true`). A missing path never matches; an empty map is rejected. |
 | `policies[].trigger.extract` | optional | Map of `${VAR}` → JSONPath against the tool payload. Required if `ledger_tag` references a non-builtin `${VAR}`. |
-| `policies[].requires.ledger_tag` | yes, unless `operator_only: true` | Tag the runtime queries grounding-mcp for. Substring/regex against ledger `content`. |
+| `policies[].requires.ledger_tag` | yes, unless `operator_only: true` | Tag the runtime queries grounding-mcp for. Substring match against an entry's `content` or `source`. |
 | `policies[].requires.within` | optional | Duration string (`10m`, `1h`, `24h`, `PT1H`, `86400s`). Filters to entries created in this window. |
 | `policies[].requires.count.min` | optional | Minimum number of matching entries. `0` is rejected. |
+| `policies[].requires.count.max` | optional | Maximum number of matching entries. `min` must be `<=` `max`. |
+| `policies[].requires.count.exact` | optional | Exact number of matching entries. Not combinable with `min` or `max`. |
+| `policies[].requires.at_head` | optional | `true`: an entry carrying the current HEAD sha as `head:<sha>` satisfies the gate regardless of `within`. |
 | `policies[].operator_only` | optional | `true` declares an unconditional operator-only deny: no `requires:` at all, never queries the ledger, no in-session evidence can ever satisfy it. Mutually exclusive with `requires:`; only valid with `enforcement: block`. See [Recipe C](#recipe-c-operator-only-unconditional-deny-no-self-satisfiable-requires). |
 | `policies[].hook` | yes | Name of a `hooks[]` entry whose `command: harness policy intercept` actually invokes the runtime. |
 | `policies[].enforcement` | yes | `block`, `warn`, or `require_approval`. `warn` logs a `policy_decision` row but lets the tool call through. |
@@ -749,4 +765,4 @@ Acceptance criteria for each `requires` shape:
 - [`for-agents.md`](for-agents.md): how agents read the policy/ledger contract, the audit triumvirate, the `ux:` rendering spec.
 - [`for-humans.md`](for-humans.md): operator path from install to first `apply`.
 - [`policy-packs/README.md`](policy-packs/README.md), [`policy-packs/branch-protection.md`](policy-packs/branch-protection.md): the one builtin pack.
-- [`ARCHITECTURE.md`](ARCHITECTURE.md) Appendix A: full reference manifest.
+- [`ARCHITECTURE.md`](ARCHITECTURE.md): the original design (historical); its Appendix A manifest predates the current schema. The current top-level keys are in the [manifest reference](CLI.md#manifest-reference).

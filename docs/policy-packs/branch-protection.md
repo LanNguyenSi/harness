@@ -84,6 +84,37 @@ state or override marker.
    the hook budget: a hook the runtime kills at its budget would be read
    as an allow.
 
+The diagram shows the decision path of one tool call: every answer the
+blocker cannot get refuses, and it allows only after every directory
+has been checked.
+
+```mermaid
+flowchart TD
+  READ["read event<br/>3000 ms bound"]
+  LOAD["load manifest"]
+  OFF["allow"]
+  DIRS["target dirs<br/>as written, then physical"]
+  WALK{".git entry above?"}
+  GIT["git symbolic-ref -q HEAD"]
+  NEXT["next dir"]
+  ALLOW["allow"]
+  REFUSE["refuse<br/>JSON deny or exit 2"]
+
+  READ -->|"timeout or not a JSON object"| REFUSE
+  READ --> LOAD
+  LOAD -->|fails| REFUSE
+  LOAD -->|"pack absent<br/>or enabled: false"| OFF
+  LOAD --> DIRS
+  DIRS -->|past 3000 ms| REFUSE
+  DIRS --> WALK
+  WALK -->|yes| GIT
+  WALK -->|"no: outside repo"| NEXT
+  GIT -->|"error, unknown answer<br/>or protected branch"| REFUSE
+  GIT -->|"other branch<br/>or detached"| NEXT
+  NEXT -->|dirs left| WALK
+  NEXT -->|all checked| ALLOW
+```
+
 ## The three outcomes
 
 | git says | The tool call | What to do |

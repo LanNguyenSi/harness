@@ -12,7 +12,7 @@ The wizard is one of three ways to bootstrap a manifest:
 
 ## Wizard flow
 
-1. **Environment probe.** The wizard runs the same detection as `--probe` and prints a summary to stderr (existing Claude Code / Codex config homes, existing manifest, MCP servers already wired in `~/.claude/settings.json`, harness binary version). The probe never blocks the flow, it just reports.
+1. **Environment probe.** The wizard runs the same detection as `--probe` and prints a summary to stderr (existing Claude Code / Codex config homes, existing manifest, MCP servers already registered in Claude Code's user-scope registry `~/.claude.json` (or `$CLAUDE_CONFIG_DIR/.claude.json`), harness binary version). The probe never blocks the flow, it just reports.
 
 2. **Overwrite guard.** If the resolved manifest (`~/.harness/harness.yaml` by default, legacy `~/.claude/harness.yaml` on a pre-`v0.24.0` install) already exists, the wizard asks before overwriting. Default is `false`, so a stray return key never blows away a hand-edited manifest. Decline and the wizard exits with no write.
 
@@ -23,7 +23,7 @@ The wizard is one of three ways to bootstrap a manifest:
    - **Full** (requires agent-tasks + `gh` on PATH): Team + the reference policies (`dogfood-before-release`, `review-subagent-before-pr-create`). All hooks run through the bundled `harness policy intercept` engine. Full also ships Bash-surface parallels of the review gates (`review-before-merge-bash`, `review-subagent-before-pr-create-bash`) so `gh pr merge` / `gh pr create` get the same review-evidence gate as the agent-tasks MCP verbs; tag shape switches from `${PR_NUMBER}` / `${TASK_ID}` to `${BRANCH}` on the Bash side.
    - **Custom (advanced)**: à-la-carte composer (see [Custom flow](#custom-flow) below). Pick discrete packs / MCPs / policies; the wizard composes a validate-clean manifest from your selection.
 
-4. **Agent-tasks warning (Team / Full).** If you pick `team` or `full` but the probe did not find an `agent-tasks` entry in `settings.json`, the wizard asks whether to proceed. The manifest will still be written, the hook will still fire, but two preconditions need to land before the gate is enforceable: (a) `agent-tasks-mcp-bridge` on PATH and wired into Claude's settings.json, (b) a token in the OS keychain or `AGENT_TASKS_TOKEN` env. Default is `true` because the common case is "I am setting up everything from scratch and agent-tasks is about to land alongside this manifest". After the manifest write the wizard prints a reminder line with the `agent-tasks-mcp-bridge login` recovery path.
+4. **Agent-tasks warning (Team / Full).** If you pick `team` or `full` but the probe did not find an `agent-tasks` entry in that user-scope registry, the wizard asks whether to proceed. The manifest will still be written, the hook will still fire, but two preconditions need to land before the gate is enforceable: (a) `agent-tasks-mcp-bridge` on PATH and registered with Claude Code (`claude mcp add-json --scope user`), (b) a token in the OS keychain or `AGENT_TASKS_TOKEN` env. Default is `true` because the common case is "I am setting up everything from scratch and agent-tasks is about to land alongside this manifest". After the manifest write the wizard prints a reminder line with the `agent-tasks-mcp-bridge login` recovery path.
 
 5. **Agent-tasks auth probe (Team / Full / Custom-with-bridge).** After a successful `npm i -g` of the missing packages, the wizard runs `agent-tasks-mcp-bridge status` against the freshly installed binary. Three observed outcomes:
    - **Token present, validates against the backend**: prints `✓ agent-tasks token validated against the backend.` and continues.
@@ -60,7 +60,7 @@ Registration" section that re-verifies the live registration via
 Custom is for power users who want a manifest narrower or wider than the named profiles. The wizard branches into three checkbox prompts:
 
 1. **Policy packs**: pre-checked: none (settings.json carries no pack signal today). Surface: `branch-protection`.
-2. **MCP servers**: pre-checked from `detect()`: any MCP name found in `settings.json mcpServers` is ticked. Surface: `agent-tasks`, `grounding-mcp`, `memory-router` (wired under `memory.router`, not `tools.mcp[]`; the composer puts it in the right slot), and `codebase-oracle` (requires `ORACLE_SCAN_ROOT` + `OPENAI_API_KEY` env vars that the wizard does NOT prompt for; an advisory prints when ticked).
+2. **MCP servers**: pre-checked from `detect()`: any MCP name found in the user-scope registry (`~/.claude.json`) is ticked. Surface: `agent-tasks`, `grounding-mcp`, `memory-router` (wired under `memory.router`, not `tools.mcp[]`; the composer puts it in the right slot), and `codebase-oracle` (requires `ORACLE_SCAN_ROOT` + `OPENAI_API_KEY` env vars that the wizard does NOT prompt for; an advisory prints when ticked).
 3. **Reference policies**: pre-checked: none. Surface mirrors `--template full`: `review-before-merge`, `review-subagent-before-pr-create`, `dogfood-before-release`, `two-reviewers-required` (warn-level companion to review-before-merge with `count.min: 2`). Each policy carries its hook entry automatically; shared hook names (e.g. `require-review-evidence` for both `review-before-merge` and `two-reviewers-required`) are deduplicated.
 
 Acceptance:

@@ -344,7 +344,7 @@ A fresh agent on a clean repo refused to call write-capable tools until an Under
 
 ## v0.24.0, runtime-neutral state root *(shipped)*
 
-- Harness's operator-state root moves from `~/.claude/` to `~/.harness/`. The new resolver (`src/runtime/home-dir.ts`) picks the root from explicit flag, `$HARNESS_HOME` env, existing `~/.harness/`, legacy `~/.claude/` with deprecation warning, or create-on-first-use `~/.harness/`.
+- Harness's operator-state root moves from `~/.claude/` to `~/.harness/`. The new resolver (`src/runtime/home-dir.ts`) picks the root from an explicit override (`--home` / `--state` on `harness uninstall`), `$HARNESS_HOME` env, existing `~/.harness/`, legacy `~/.claude/` with deprecation warning, or create-on-first-use `~/.harness/`.
 - New `harness migrate-home` command: dry-run by default, `--apply` to atomically move `harness.yaml`, `harness.generated/`, `.understanding-gate/`, `harness.lock` into the new root. Idempotent; refuses to overwrite. Operator guide at `docs/migration/v0.24.0-home-dir.md`.
 - Backed by agent-tasks/e65decef, surfaced during the Codex approval-UX dogfood (f608b4ee). Legacy fallback still supported; deletion targeted for a future release.
 
@@ -360,15 +360,15 @@ Motivating use case: prevent `DROP TABLE users`, `kubectl delete namespace prod`
 
 ### Sub-task decomposition
 
-Phase 7 ships as six sequential sub-tasks, mirroring the Phase 6 model: each is a separate PR with its own dogfood gate. The decomposition follows the A-E implementation phases in `lava-ice-logs/2026-04-30/harness-risk-gate-extension.md`; the canonical in-repo reference is [`docs/risk-gate.md`](risk-gate.md), which also resolves the source design's open questions.
+Phase 7 ships as six sequential sub-tasks, mirroring the Phase 6 model: each is a separate PR with its own dogfood gate. The decomposition follows the A-E implementation phases in `lava-ice-logs/2026-04-30/harness-risk-gate-extension.md`; the in-repo reference at the time was `docs/risk-gate.md`, removed with the Risk Gate.
 
-The architectural split is settled: the Risk Gate lives entirely inside harness, layered onto the Phase 4 `policy intercept` runtime. `agent-grounding` stays the evidence backend the gate reads through `grounding-mcp`; it gains no risk-gate code. See `docs/risk-gate.md` for the full rationale.
+The architectural split is settled: the Risk Gate lives entirely inside harness, layered onto the Phase 4 `policy intercept` runtime. `agent-grounding` stays the evidence backend the gate reads through `grounding-mcp`; it gains no risk-gate code.
 
 #### Phase 7 #1, Anchor: Risk Gate vocabulary + canonical doc *(this PR)*
 
 - New top-level manifest keys `risk:` (`classifiers[]`: name, tool, regex `patterns[]` mapping to closed `categories` + `severity` enums) and `environments:` (`resolvers[]`: name, asserted environment, branch / env-var / kube-context / kube-namespace signals). Additive, version 1.
 - New optional `policy.when:` block (`risk.severity_at_least`, `risk.category_in`, `environment.name`, `action.reversible`), parsed and validated alongside the existing `trigger:` / `requires:`.
-- `docs/risk-gate.md`: canonical reference covering target architecture, manifest reference, decision model, the harness-vs-agent-grounding split, and the resolved open questions.
+- `docs/risk-gate.md` (removed with the Risk Gate): canonical reference covering target architecture, manifest reference, decision model, the harness-vs-agent-grounding split, and the resolved open questions.
 - Schema-only: duplicate-name rejection, `.strict()` entry shapes, regex validation of classifier patterns, closed category/severity/environment enums. Five invalid fixtures (`19`-`23`). `docs/examples/full-manifest.yaml` carries a worked `dangerous-shell` classifier + `production-signals` resolver; the byte-for-byte `describe` golden covers the output.
 
 **Out of scope here:** any code that reads `risk:` / `environments:` / `policy.when:` at runtime, the Action Envelope, the `require_approval` decision value, any new CLI verb. Those land in #2 through #6. A `when:` block today is parsed and inert; `harness policy intercept` still matches on `trigger:` alone.

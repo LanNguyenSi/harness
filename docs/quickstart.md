@@ -67,9 +67,9 @@ harness apply --target ~/.claude/settings.json --merge
 
 This writes the pack's hooks into `settings.json`, among them a
 `PreToolUse` hook on `Write|Edit` that runs
-`harness pack hook branch-protection`. `--merge` replaces only the
-harness-owned keys (`hooks`, `mcpServers`) and preserves everything
-else in your `settings.json`. Restart Claude Code so it reloads the
+`harness pack hook branch-protection`. `--merge` replaces the `hooks`
+key and preserves everything else in your `settings.json` (it only
+drops `mcpServers` entries an earlier harness release wrote there). Restart Claude Code so it reloads the
 file.
 
 Prefer to see the generated files first? Run `harness apply` with no
@@ -141,4 +141,5 @@ names it loads with a warning and the entry is ignored.
   [`policy-packs/branch-protection.md`](policy-packs/branch-protection.md).
 - What an agent needs to know about the gates:
   [`for-agents.md`](for-agents.md).
-- Removing everything again: [`uninstall.md`](uninstall.md).
+- Removing everything again: [`uninstall.md`](uninstall.md) (after a
+  Codex install, also see its Codex section).
