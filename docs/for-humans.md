@@ -29,7 +29,8 @@ flowchart LR
     memidx[MEMORY.md indexes]
     lock[harness.lock]
     cc[Claude Code session]
-    hooks[hook scripts<br/>+ memory dirs]
+    intercept["harness policy intercept<br/>(hook command)"]
+    memdirs[memory dirs]
     ledger[(evidence-ledger)]
 
     yaml --> apply
@@ -39,8 +40,9 @@ flowchart LR
     apply --> lock
     settings --> cc
     memidx --> cc
-    cc <--> hooks
-    hooks --> ledger
+    cc <--> intercept
+    intercept -->|"policy_decision,<br/>via grounding-mcp"| ledger
+    cc -. reads .-> memdirs
     cc -. reads .-> ledger
 ```
 
@@ -144,7 +146,8 @@ because Claude Code does not read that block. Under `--merge`,
 recorded in `.last-apply`, are dropped, and entries you added by hand
 stay. Claude Code MCP servers are registered with
 `claude mcp add-json --scope user <name> '<json>'`: `harness init
---interactive` does this for every enabled `tools.mcp[]` entry, and
+--interactive` does this for every enabled `tools.mcp[]` entry when
+you tick claude-code in its wire-now step, and
 after `harness add mcp` you run the command that `harness doctor`
 prints under "Claude Code MCP Registration".
 
@@ -166,7 +169,7 @@ flowchart TD
   BASE[("harness.yaml")] --> LOAD
   MACH[("machines/*.harness.overrides.yaml")] --> LOAD
   PROJ[("projects/name/harness.overrides.yaml")] --> LOAD
-  LOAD["load + posture warnings"] --> GATE{"requires: without grounding-mcp?"}
+  LOAD["load<br/>(warns on removed keys)"] --> GATE{"requires: without grounding-mcp?"}
   GATE -->|yes| STOP["refuse"]
   GATE -->|no| RT["select runtime"]
   RT --> PACKS["expand policy packs<br/>+ MEMORY.md index"]
@@ -178,7 +181,7 @@ flowchart TD
   OC --> LAST
   CODEX --> LAST
   CODEX -->|"--install"| INST["~/.codex/config.toml<br/>managed block"]
-  LOAD -->|"referenced hook and<br/>MCP commands, skills,<br/>memory dirs"| LOCK["harness.lock"]
+  RT -->|"referenced hook and<br/>MCP commands, skills,<br/>memory dirs"| LOCK["harness.lock"]
   TGT -->|"sha256"| LOCK
 ```
 

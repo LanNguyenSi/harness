@@ -85,8 +85,8 @@ state or override marker.
    as an allow.
 
 The diagram shows the decision path of one tool call: every answer the
-blocker cannot get refuses, and it allows only after every directory
-has been checked.
+blocker cannot get refuses, and, when the pack is on, it allows only
+after every directory has been checked.
 
 ```mermaid
 flowchart TD
@@ -111,7 +111,7 @@ flowchart TD
   WALK -->|"no: outside repo"| NEXT
   GIT -->|"error, unknown answer<br/>or protected branch"| REFUSE
   GIT -->|"other branch<br/>or detached"| NEXT
-  NEXT -->|dirs left| WALK
+  NEXT -->|dirs left| DIRS
   NEXT -->|all checked| ALLOW
 ```
 

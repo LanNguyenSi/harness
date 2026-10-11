@@ -157,7 +157,7 @@ Variables the `harness` binary reads. For the `RUNTIME_REALITY_*` variables of t
 | `HARNESS_HOME` | every verb that resolves the state root | Pins the state root, ahead of `~/.harness/` and the legacy `~/.claude/`. |
 | `HARNESS_POLICY_VERBOSE` | `harness policy intercept` | Same as `--verbose`: a stderr diagnostic block for each non-allow decision. `0`, `false`, `no` and `off` disable it. |
 | `HARNESS_REPO`, `HARNESS_BRANCH` | `harness policy intercept` | When set in the hook's environment, replace the git-derived `${REPO}` and `${BRANCH}` for every policy. A set `HARNESS_BRANCH` also suppresses the signal that git refused to answer for the working directory. |
-| `CLAUDE_CODE_SESSION_ID`, `CLAUDE_SESSION_ID` | `harness policy intercept`, the `harness record` verbs | Session id fallback, in this order, when the event or `--session` carries none. |
+| `CLAUDE_CODE_SESSION_ID`, `CLAUDE_SESSION_ID` | `harness policy intercept`, the `harness record` verbs, `harness audit`, `harness explain`, `harness session-export` | Session id fallback, in this order, when the event or `--session` carries none. `audit` and `explain` then fall back to the newest Claude Code transcript. |
 | `CLAUDE_CODE_SESSION_ID`, `CLAUDE_SESSION_ID`, `CODEX_SESSION_ID` | `harness pause`, `harness resume` | Any of them set makes the verb refuse, because it then runs inside an agent shell. |
 | `CLAUDE_BIN` | `harness smoke` | Default for `--claude-bin`; without either, `claude` on PATH. |
 | `CLAUDE_CONFIG_DIR` | `harness init --interactive`, `harness doctor`, `harness adopt`, `harness uninstall` | Moves the Claude Code user-scope MCP registry these verbs read from `~/.claude.json` to `$CLAUDE_CONFIG_DIR/.claude.json`. |

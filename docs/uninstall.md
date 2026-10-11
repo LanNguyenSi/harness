@@ -41,8 +41,9 @@ state-root move that split these two locations.
 ## Codex
 
 `harness uninstall` does not edit `~/.codex/config.toml`. Before
-`npm uninstall -g`, delete the lines from
-`# BEGIN harness-managed codex hooks` through
+`npm uninstall -g`, delete the
+`# Harness Codex hook wiring. Generated source: ...` line and the lines
+from `# BEGIN harness-managed codex hooks` through
 `# END harness-managed codex hooks` that `harness apply --runtime codex
 --install` wrote, then restart Codex.
 

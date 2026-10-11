@@ -50,7 +50,7 @@ flowchart TD
     OV[("machines/ + projects/<br/>harness.overrides.yaml")]
     LM["loader + merge<br/>src/cli/loader.ts"]
     APL["harness apply<br/>src/cli/apply/"]
-    OUT[("apply outputs<br/>settings.json · MEMORY.md · harness.lock")]
+    OUT[("apply outputs<br/>settings.json or codex/config.toml<br/>MEMORY.md · harness.lock")]
 
     HY --> LM
     OV --> LM
@@ -73,10 +73,10 @@ flowchart TD
     EVT -->|opt-in hook| RR --> PROBE
   end
 
-  OUT -.->|"--target or --install"| EVT
+  OUT -.->|"wired by<br/>--target or --install"| EVT
 ```
 
-The second diagram shows the steps inside `harness policy intercept` (`src/cli/policy/intercept.ts`, `src/runtime/intercept.ts`). A paused harness and a manifest that fails to load both allow the call; an `operator_only` policy denies without querying the ledger.
+The second diagram shows the steps inside `harness policy intercept` (`src/cli/policy/intercept.ts`, `src/runtime/intercept.ts`). A paused harness and a manifest that fails to load both allow the call; a call no policy matches is allowed without a record; an `operator_only` policy denies without querying the ledger.
 
 ```mermaid
 flowchart TD
@@ -93,6 +93,7 @@ flowchart TD
   EVT --> PAUSE
   PAUSE -->|paused| ENV
   PAUSE -->|not paused| LOAD --> MATCH
+  MATCH -->|no policy matches| ENV
   MATCH --> REQ
   MATCH --> OO
   REQ <-->|ledger_summary| GR

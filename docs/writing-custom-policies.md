@@ -722,8 +722,9 @@ harness explain <policy-name> --trace # after the first real fire, the full trac
 
 A plain `harness apply` only renders into `harness.generated/`; Claude
 Code reads the result only through `--target`. A policy that reuses an
-already-wired `harness policy intercept` hook needs no apply, because
-intercept reads the manifest on every call.
+already-wired `harness policy intercept` hook needs no apply as long
+as that hook's `match` already covers the tool the policy's trigger
+names, because intercept reads the manifest on every call.
 
 Run `validate` after every edit; `dry-run` whenever you change a
 trigger or extract. Wait until both pass before `apply`. `explain`

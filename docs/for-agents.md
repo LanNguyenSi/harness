@@ -43,7 +43,7 @@ stateDiagram-v2
     merge --> [*]: workflow complete
 ```
 
-Each named state corresponds to a step kind in the manifest.
+Each state except `claimed` and `pr_open` corresponds to a step kind in the manifest.
 `branch` codifies the one-branch-per-task rule. `review_subagent`
 with `spawn: required` forces a checklist-driven review before the
 PR opens; if findings come back, the on_findings policy
@@ -137,16 +137,16 @@ sequenceDiagram
     participant Ledger as evidence-ledger
     participant Audit as audit / explain / session-export
 
-    CC->>Hook: PreToolUse {tool, toolArgs, sessionId}
+    CC->>Hook: PreToolUse {tool_name, tool_input, session_id}
     Hook->>Manifest: load policies matching tool
-    Hook->>Ledger: query ledger_tag for sessionId
+    Hook->>Ledger: query ledger_tag for session_id
     Ledger-->>Hook: matching entries
     alt requires satisfied
-        Hook-->>CC: allow
         Hook->>Ledger: write policy_decision (allow)
+        Hook-->>CC: allow
     else requires not satisfied
-        Hook-->>CC: {decision: block, hookSpecificOutput.permissionDecision: deny, reason}
         Hook->>Ledger: write policy_decision (deny)
+        Hook-->>CC: {decision: block, hookSpecificOutput.permissionDecision: deny, reason}
     end
     Note over Audit,Ledger: read-side surfaces replay these rows
 ```
