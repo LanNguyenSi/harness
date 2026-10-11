@@ -156,7 +156,10 @@ overwrites with the generated content as-is (no merge).
 output, so `harness validate --check-lock` flags out-of-band edits.
 
 The diagram shows what one `harness apply` reads and writes for each
-runtime, and where `--target` and `--install` fit.
+runtime, and where `--target` and `--install` fit. `.last-apply` keeps
+the generated files; `harness.lock` hashes the hook and MCP commands,
+skills and memory directories the manifest references, plus the
+`--target` file.
 
 ```mermaid
 flowchart TD
@@ -171,10 +174,12 @@ flowchart TD
   PACKS -->|opencode| OC["harness.generated/opencode/opencode.json"]
   PACKS -->|codex| CODEX["harness.generated/codex/config.toml"]
   SET -->|"--target"| TGT["target settings file<br/>(--merge or --force)"]
-  SET --> LOCK["harness.lock + .last-apply"]
-  OC --> LOCK
-  CODEX --> LOCK
+  SET --> LAST[".last-apply<br/>generated files"]
+  OC --> LAST
+  CODEX --> LAST
   CODEX -->|"--install"| INST["~/.codex/config.toml<br/>managed block"]
+  LOAD -->|"referenced hook and<br/>MCP commands, skills,<br/>memory dirs"| LOCK["harness.lock"]
+  TGT -->|"sha256"| LOCK
 ```
 
 ## First hour: a real policy

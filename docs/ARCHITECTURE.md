@@ -531,7 +531,7 @@ Variables appear in `requires.ledger_tag` and are substituted at policy-evaluati
 ~/.claude/
 ├── harness.yaml                          ← user-level manifest; hand-edited
 ├── harness.lock                          ← (Phase 3) locked resolutions (SHAs, paths); does not exist in Phase 1–2
-├── harness.d/                            ← imported fragments
+├── harness.d/                            ← planned imported fragments; nothing reads it
 │   ├── policies/
 │   │   └── claim-gate.yaml
 │   └── hooks/
@@ -555,7 +555,7 @@ Rules:
 
 - **`harness.yaml` is the source of truth.** If `harness.generated/settings.json` differs from what the manifest would produce, `harness apply` regenerates it. `describe` detects drift.
 - **`harness.lock`** is a Phase-3 artefact. It pins resolved paths/SHAs of hook scripts, MCP commands, etc. so drift between "what the manifest referenced" and "what was actually applied" is deterministic. The exact schema (fields per category, hash algorithm, version pinning rules) is decided when Phase 3 starts, not here. Phase 1–2 implementations do not produce or consume it. Phase 1's "single source of truth" claim therefore applies at the **manifest** layer only; asset-content drift (a hook script edited under your feet) is detectable only after the lock ships in Phase 3. VISION §4's "diff-over-time" is layered for the same reason: manifest diffs in Phase 1, asset diffs in Phase 3. This is documented as a known limitation, not a hidden one.
-- **`harness.d/`** is for fragments imported into the main manifest, for example `hooks:` / `policies:` extension files. Imports are explicit, not auto-scanned. (The `policies_source` import key of §2 is removed.)
+- **`harness.d/`** was planned for fragments imported into the main manifest, for example `hooks:` / `policies:` extension files, with explicit imports rather than auto-scanning. No import mechanism shipped: nothing reads `harness.d/`, and the `policies_source` import key of §2 is removed.
 - **`harness.generated/`** is treated as a build artefact. It is `.gitignore`d and regenerated; hand-edits are overwritten on next `apply` *after the drift handling rules below run*.
 - **`projects/<proj>/harness.overrides.yaml`** is optional. Present only when a project needs to deviate from user-level defaults.
 

@@ -32,8 +32,8 @@ where `settings.json` itself lives:
   `claude mcp remove --scope user`), even if you registered one of
   those names yourself; the dry-run lists them first.
 
-Leftover `settings.json.pre-harness-<TS>` backups from prior `apply`
-runs are listed but never deleted. Your own hook groups and your own
+Any `settings.json.pre-harness-<TS>` copies you made yourself before
+installing (harness never writes one) are listed but never deleted. Your own hook groups and your own
 memory notes are left alone. See
 [`migration/v0.24.0-home-dir.md`](migration/v0.24.0-home-dir.md) for the
 state-root move that split these two locations.
@@ -56,8 +56,8 @@ npm uninstall -g @lannguyensi/harness                  # drop the CLI itself
 ```
 
 `--restore-from <file>` copies a settings file over `settings.json`.
-Use a `settings.json.pre-harness-<TS>` backup or the
-`settings.json.bak.uninstall.<TS>` file that `--apply` printed, never
+Use a `settings.json.pre-harness-<TS>` copy you made before installing,
+or the `settings.json.bak.uninstall.<TS>` file that `--apply` printed, never
 the `harness.uninstall.<TS>.json` record: the only check on the source
 is that it is a JSON object. A restore also removes the manifest, lock
 and generated tree and deregisters harness-owned MCP servers.

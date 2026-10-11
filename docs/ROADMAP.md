@@ -448,7 +448,7 @@ Tool-asset files (hook scripts, MCP entrypoints, skill SKILL.md) stay one-entry-
 **Decision: both, with clear separation.**
 
 - **Inline** (`harness.yaml policies:`): the runtime-firing policies. These are tightly coupled to the `hooks:` block (each policy references a hook by name), and inlining keeps the wiring legible at a glance.
-- **Imported** (`harness.d/policies/<name>.yaml` via explicit `policies_source:` keys): library-style definitions for a *different DSL*: today, `agent-grounding`'s claim-gate policies via `grounding.policies_source`. The harness `policies:` top-level key does NOT support a `policies_source:` indirection in v1; if cross-manifest policy sharing becomes a real need, it lands as a v2 schema addition.
+- **Imported** (`harness.d/policies/<name>.yaml` via explicit `policies_source:` keys): library-style definitions for a *different DSL*: planned for `agent-grounding`'s claim-gate policies via `grounding.policies_source`. That key never had a consumer and is now a removed key: it loads with a warning and is stripped. The harness `policies:` top-level key does NOT support a `policies_source:` indirection in v1; if cross-manifest policy sharing becomes a real need, it lands as a v2 schema addition.
 
 The reasoning is the one already encoded in `ARCHITECTURE.md` §2: claim-gate policies are their own opinionated DSL with their own evolution; they belong in their own file. Harness runtime policies are wiring, not data; they belong inline next to the hooks they reference.
 
