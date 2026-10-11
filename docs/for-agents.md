@@ -43,7 +43,7 @@ stateDiagram-v2
     merge --> [*]: workflow complete
 ```
 
-Each named state corresponds to a step kind in the manifest.
+Each state except `claimed` and `pr_open` corresponds to a step kind in the manifest.
 `branch` codifies the one-branch-per-task rule. `review_subagent`
 with `spawn: required` forces a checklist-driven review before the
 PR opens; if findings come back, the on_findings policy
@@ -137,16 +137,16 @@ sequenceDiagram
     participant Ledger as evidence-ledger
     participant Audit as audit / explain / session-export
 
-    CC->>Hook: PreToolUse {tool, toolArgs, sessionId}
+    CC->>Hook: PreToolUse {tool_name, tool_input, session_id}
     Hook->>Manifest: load policies matching tool
-    Hook->>Ledger: query ledger_tag for sessionId
+    Hook->>Ledger: query ledger_tag for session_id
     Ledger-->>Hook: matching entries
     alt requires satisfied
-        Hook-->>CC: allow
         Hook->>Ledger: write policy_decision (allow)
+        Hook-->>CC: allow
     else requires not satisfied
-        Hook-->>CC: {decision: block, hookSpecificOutput.permissionDecision: deny, reason}
         Hook->>Ledger: write policy_decision (deny)
+        Hook-->>CC: {decision: block, hookSpecificOutput.permissionDecision: deny, reason}
     end
     Note over Audit,Ledger: read-side surfaces replay these rows
 ```
@@ -289,6 +289,8 @@ operator-driven flows.
 | `doctor --target codex` | read-only | verifies Codex adapter wiring after `apply --runtime codex`. `--json` for machine-readable output. |
 | `doctor --target opencode` | read-only | verifies opencode adapter wiring after `apply --runtime opencode` (config artefact presence/banner + every projected MCP server's command resolves on PATH). `--json` for machine-readable output. |
 | `policy intercept` | runtime hook | called by Claude Code via `settings.json`, not directly by agents. |
+| `record review / review-subagent / dogfood` | writes one ledger fact | producers for the review and dogfood gates; see "Tag semantics" in [`CLI.md`](CLI.md). |
+| `smoke` | mutating | runs a real `claude -p` session against the applied manifest; needs `--prompt` and `--output-dir`. |
 
 ## The audit triumvirate
 
@@ -329,8 +331,9 @@ reach for `audit`.
   diagnostic block is the canonical "why did this fire" output.
 - Do not force-push to `master`, even when you "are sure". The
   workflow always cuts a fresh branch off the latest master.
-- Do not hand-edit `harness.generated/`. The next `apply` clobbers
-  it. Edit `harness.yaml` instead.
+- Do not hand-edit `harness.generated/`. The next `apply` refuses
+  until the edit is captured with `harness adopt` or discarded with
+  `--overwrite-drift`. Edit `harness.yaml` instead.
 - Do not commit secrets in tool_use input. The default
   `audit.redact[]` regex catches the obvious patterns at
   `session-export` time, but the safer move is to never put a token
@@ -340,9 +343,9 @@ reach for `audit`.
 
 - [`docs/for-humans.md`](for-humans.md): operator-side guide. Useful
   when you need to ask the operator for a manifest change.
-- [`docs/ARCHITECTURE.md`](ARCHITECTURE.md): authoritative YAML
-  shape, CLI surface, drift handling, `requires` schema, hook
-  contract.
+- [`docs/ARCHITECTURE.md`](ARCHITECTURE.md): the original design
+  (historical); [`docs/CLI.md`](CLI.md) is the current command
+  reference and `src/schema/` the current schema.
 - [`docs/examples/full-manifest.yaml`](examples/full-manifest.yaml):
   a manifest exercising every field, including `workflows:`,
   `review_templates:`, and `audit.redact[]`.

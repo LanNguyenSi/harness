@@ -9,7 +9,7 @@ The CLI is grouped by purpose below. Run any verb with `--help` for flags and ex
 | Verb | One-liner |
 |------|-----------|
 | `harness init [--template minimal\|solo\|team\|full] [--interactive] [--probe]` | Bootstrap a starter `harness.yaml` (default template: `minimal`). `--interactive` walks the wire-up Q&A and writes `harness.lock` + `harness.generated/`. `--probe` emits a JSON snapshot of detected runtimes and exits. |
-| `harness apply [--runtime claude-code\|codex\|opencode] [--target <path>] [--merge\|--force]` | Render the manifest into the config files the agent runtime actually reads. Without `--runtime`, apply reuses the runtime the last apply recorded in `harness.generated/.last-apply` and says so (`runtime: codex (from last apply; pass --runtime to change)`); an explicit `--runtime` that differs is honoured and both `--dry-run` and the apply name the switch (`runtime: codex -> claude-code`). A `.last-apply` from an older release, which has no runtime field, is read through its files map (only `codex/config.toml` means codex, and so on; when both `settings.json` and `codex/config.toml` are present, the recorded policy-pack `instructions.md` entries decide if every one names the same runtime in its `## Runtime` section; only the packs the record's own manifest snapshot lists count, when it has a readable one) and the output says the runtime was inferred; when that is ambiguous, or with no `.last-apply` at all, the default is `claude-code` (for an older record the output says so and names the runtimes the record holds files for, e.g. `generated files for claude-code and codex; pass --runtime codex to keep codex`), which writes `~/.claude/settings.json` / `harness.generated/*`; `--runtime codex` emits `harness.generated/codex/config.toml` (`--install` merges it into `~/.codex/config.toml`); `--runtime opencode` emits `harness.generated/opencode/opencode.json` (MCP servers only, not auto-installed). `--target <path>` (claude-code only: without `--runtime` it implies `claude-code` and the output names it; rejected with an explicit `--runtime codex` or `--runtime opencode`) additionally writes settings.json to `<path>`, `--merge` 3-way-merges it, `--force` overwrites it. |
+| `harness apply [--runtime claude-code\|codex\|opencode] [--target <path>] [--merge\|--force]` | Render the manifest into the config files the agent runtime actually reads. Without `--runtime`, apply reuses the runtime the last apply recorded in `harness.generated/.last-apply` and says so (`runtime: codex (from last apply; pass --runtime to change)`); an explicit `--runtime` that differs is honoured and both `--dry-run` and the apply name the switch (`runtime: codex -> claude-code`). A `.last-apply` from an older release, which has no runtime field, is read through its files map (only `codex/config.toml` means codex, and so on; when both `settings.json` and `codex/config.toml` are present, the recorded policy-pack `instructions.md` entries decide if every one names the same runtime in its `## Runtime` section; only the packs the record's own manifest snapshot lists count, when it has a readable one) and the output says the runtime was inferred; when that is ambiguous, or with no `.last-apply` at all, the default is `claude-code` (for an older record the output says so and names the runtimes the record holds files for, e.g. `generated files for claude-code and codex; pass --runtime codex to keep codex`), which writes `harness.generated/settings.json` (Claude Code reads it only through `--target`); `--runtime codex` emits `harness.generated/codex/config.toml` (`--install` merges it into `~/.codex/config.toml`); `--runtime opencode` emits `harness.generated/opencode/opencode.json` (MCP servers only, not auto-installed). `--target <path>` (claude-code only: without `--runtime` it implies `claude-code` and the output names it; rejected with an explicit `--runtime codex` or `--runtime opencode`) additionally writes settings.json to `<path>`, `--merge` 3-way-merges it, `--force` overwrites it. |
 | `harness describe` | Print the effective merged manifest (inherited packs + local overrides). |
 | `harness validate` | Lint the manifest and referenced assets without writing anything; do not execute manifest version commands. `tools.cli[].min_version` warns to run `harness doctor` (`--strict` promotes the warning to an error). |
 | `harness diff` | Show what `apply` would change against the currently rendered config. |
@@ -20,6 +20,46 @@ The CLI is grouped by purpose below. Run any verb with `--help` for flags and ex
 | `harness pack add <name>` / `harness pack remove <name>` / `harness pack list` / `harness pack reseed <name> [--dry-run]` | Manage `policy_packs[]` entries (`list` takes no name; its columns are `name`, `source`, `enabled` and `description`, and `--json` emits the same keys). `remove --force` also deletes the pack's generated files and prunes their entries from `harness.generated/.last-apply`, keeping the record's other fields, including the runtime it records, so the next plain `harness apply` still reuses that runtime. `reseed` pulls the shipped builtin template's `config.ux` for `<name>` into the manifest, preserving every other key (for example `protected_branches`); this is the supported way to pick up a deny-message wording fix on an already-installed manifest. A manifest that still names the removed `understanding-before-execution` pack loads with a warning and the entry is ignored (`remove --force` still deletes the entry and its generated files). The same `pack` namespace also carries the runtime hook entrypoints under `harness pack hook ...` (see below); there is no separate top-level `harness hook` runtime namespace. |
 | `harness uninstall` | One-command teardown across the state root (`~/.harness/`, legacy `~/.claude/`) and `~/.claude/settings.json`. Dry-run by default; pass `--apply` to commit. |
 | `harness migrate-home` | Move state from `~/.claude/` to `~/.harness/` (introduced in `v0.24.0`, legacy fallback still live). Dry-run by default; pass `--apply` to commit. |
+
+## Manifest reference
+
+The manifest (`harness.yaml`) accepts these top-level keys besides the required `version: 1` (`src/schema/index.ts`). Any other top-level key fails the load, unless it is a removed key (below).
+
+| Key | Holds |
+|---|---|
+| `grounding` | `session.*` (reserved, no consumer yet) and `evidence_ledger.path`, which `harness apply` projects as `EVIDENCE_LEDGER_DB` onto the `grounding-mcp` entry |
+| `tools` | `mcp[]`, `cli[]`, `skills` and `builtin`: the tool inventory `harness doctor` checks and `harness apply` wires |
+| `memory` | `directories[]`, `router`, `retention` and `scopes`: memory directories indexed into `MEMORY.md` |
+| `hooks` | runtime hook entries (`event`, `command`, `match`, `blocking`, `budget_ms`, ...) that `harness apply` writes into the runtime config |
+| `policies` | named rules evaluated by `harness policy intercept`; see [`writing-custom-policies.md`](writing-custom-policies.md) |
+| `policy_packs` | builtin packs such as `branch-protection`; see [`policy-packs/`](policy-packs/) |
+| `workflows` | per-task workflow steps (`branch`, `review_subagent`, `ci_gate`, `merge`) from which merge-gate policies are derived |
+| `review_templates` | named review prompt texts that a `review_subagent` workflow step references by `template` |
+| `audit` | `redact[]`: regex or env-var rules that `harness session-export` applies to its output |
+| `doctor` | `ignore_template_drift[]`: shipped policy names `harness doctor` should not report as template drift |
+
+### Override layers
+
+The loader merges these files in order, later layers winning (`src/cli/loader.ts`, `src/overrides/machines.ts`). Every path except the base is under the state root (`~/.harness/`, or `$HARNESS_HOME`):
+
+1. the base manifest: `harness.yaml` in the state root, or the file `--config` names;
+2. `machines/default.harness.overrides.yaml`;
+3. `machines/<os>.harness.overrides.yaml`, where `<os>` is `linux`, `darwin`, `wsl2` or `win32`;
+4. `machines/<hostname>.harness.overrides.yaml`, with the hostname lowercased;
+5. `projects/<name>/harness.overrides.yaml`, when `--project <name>` is given.
+
+`--config` moves only the base manifest; the override layers still load from the state root.
+
+### Removed keys, packs and commands
+
+A key, pack or command that a release removed does not fail the load (`src/schema/removed-keys.ts`):
+
+- a removed manifest key (for example `grounding.policies_source` or `risk`) is stripped with a warning;
+- a policy that carries the removed `when:` field is dropped whole, with one warning, because keeping only its trigger would widen the gate;
+- a removed pack name in `policy_packs[]` is ignored with a warning;
+- a hook or policy that still calls a removed CLI command is reported with a warning.
+
+`harness validate`, `harness doctor`, `harness apply` and `harness export` print these warnings, and `harness validate --strict` fails on them. A key that was never valid is not on the removed list and still fails the load.
 
 ## Health, audit, and observability
 
@@ -36,7 +76,7 @@ The CLI is grouped by purpose below. Run any verb with `--help` for flags and ex
 
 | Verb | One-liner |
 |------|-----------|
-| `harness policy intercept` | The runtime evaluator that hooks call on every PreToolUse / PostToolUse. Supports `--hook <name>` (v0.29.0) to scope evaluation to a single hook generator. |
+| `harness policy intercept` | The runtime evaluator that hooks call on every PreToolUse / PostToolUse. Supports `--hook <name>` (v0.29.0), which tags its stderr diagnostics with the manifest hook name (the Codex projection passes it); it does not narrow which policies are evaluated. `--verbose` (or `HARNESS_POLICY_VERBOSE=1`) prints a diagnostic block for each non-allow decision. |
 | `harness explain [policy] [--trace] [--last]` | Print a policy's definition; `--trace` reads the last recorded evaluation; `--last` traces the most recent decision in the ledger. |
 | `harness dry-run <prompt>` | Statically predict which hooks fire, which policies match, and which memories route for a prompt. |
 
@@ -61,14 +101,14 @@ Removed in task `a4d8adc5`: `harness approve branch-protection` and `harness ses
 |------|-----------|
 | `harness gate disable [--matcher <pattern>] [--settings <path>]` | Remove hook groups from `~/.claude/settings.json` whose matcher substring-matches the pattern. With no `--matcher`, lists candidates without writing. Snapshots removed groups + backs up the file for `gate enable`. |
 | `harness gate enable [--settings <path>] [--force]` | Restore the most recent snapshot written by `gate disable`. |
-| `harness pause [--for 5m\|--indefinite] [--reason X] [--i-am-the-operator]` | Drop a sentinel at `harness.generated/.harness-paused` so PreToolUse / Risk hooks short-circuit. Branch-protection does not yield to the pause; to switch it off, see [Disable the gate](policy-packs/branch-protection.md#disable-the-gate-operator-only) (Claude Code and Codex differ). Operator-only (`v0.22.0+`). `--indefinite` requires the companion `--i-am-the-operator-and-accept-no-auto-resume`. |
+| `harness pause [--for 5m\|--indefinite] [--reason X] [--i-am-the-operator]` | Drop a sentinel at `harness.generated/.harness-paused` so the `harness policy intercept` and `harness pack hook runtime-reality` hooks short-circuit. Branch-protection does not yield to the pause; to switch it off, see [Disable the gate](policy-packs/branch-protection.md#disable-the-gate-operator-only) (Claude Code and Codex differ). Operator-only (`v0.22.0+`). `--indefinite` requires the companion `--i-am-the-operator-and-accept-no-auto-resume`. |
 | `harness resume` | Remove the pause sentinel and re-engage all gates. |
 
 ## Smoke
 
 | Verb | One-liner |
 |------|-----------|
-| `harness smoke` | End-to-end smoke run for the installed harness (hook plumbing, ledger write, policy evaluation). Useful after a fresh `init --interactive` or a version bump. smoke applies the `claude-code` variant into its own `<output-dir>/harness.generated/` (next to the rendered `settings.json`, kept with the other run artifacts and not cleaned up), never into the operator's `harness.generated/`: the apply output (the generated files and `.last-apply`) of the operator's tree stays byte-identical, so a codex machine's audit copies and recorded runtime are untouched and the next plain `harness apply` has nothing to restore. The rendered settings still point at the operator's pause sentinel, and the opencode config and grounding-mcp registration at the operator's signing key. Runtime state is still written into the operator's `harness.generated/`: the spawned session's hooks keep their session state there. |
+| `harness smoke --prompt <text> --output-dir <dir> [--expect-hook <names>] [--expect-no-hook <names>] [--expect-exit <n>] [--expect-decision allow\|deny\|warn]` | End-to-end smoke run for the installed harness (hook plumbing, ledger write, policy evaluation). `--prompt` and `--output-dir` are required. Runs a real `claude -p` session (the Claude Code CLI on PATH, `$CLAUDE_BIN`, or `--claude-bin`) and exits 1 on any missed expectation. Useful after a fresh `init --interactive` or a version bump. smoke applies the `claude-code` variant into its own `<output-dir>/harness.generated/` (next to the rendered `settings.json`, kept with the other run artifacts and not cleaned up), never into the operator's `harness.generated/`: the apply output (the generated files and `.last-apply`) of the operator's tree stays byte-identical, so a codex machine's audit copies and recorded runtime are untouched and the next plain `harness apply` has nothing to restore. The rendered settings still point at the operator's pause sentinel, and the opencode config and grounding-mcp registration at the operator's signing key. Runtime state is still written into the operator's `harness.generated/`: the spawned session's hooks keep their session state there. |
 
 ## Evidence-ledger producers (`harness record`)
 
@@ -108,6 +148,22 @@ This table is the canonical mapping from process gate to the ledger tag it consu
 
 **`--base` for non-default-base PRs.** `record review`'s `review:<base>` tag defaults to the repo's remote default branch (read from `refs/remotes/origin/HEAD`, packed-refs fallback — including through a linked worktree's `commondir` indirection), which is correct for an ordinary feature PR merging into `main`/`master`. A PR that targets a non-default base — for example a `release/*` branch — needs an explicit `--base <branch>` so the recorded `review:<base>` tag reflects the PR's actual target instead of silently recording against the wrong base; omitting `--base` when neither the flag nor origin/HEAD resolves prints a loud stderr warning rather than dropping the tag silently.
 
+## Environment variables
+
+Variables the `harness` binary reads. For the `RUNTIME_REALITY_*` variables of the runtime-reality hook see [`runtime-reality-hook.md`](runtime-reality-hook.md).
+
+| Variable | Read by | Effect |
+|---|---|---|
+| `HARNESS_HOME` | every verb that resolves the state root | Pins the state root, ahead of `~/.harness/` and the legacy `~/.claude/`. |
+| `HARNESS_POLICY_VERBOSE` | `harness policy intercept` | Same as `--verbose`: a stderr diagnostic block for each non-allow decision. `0`, `false`, `no` and `off` disable it. |
+| `HARNESS_REPO`, `HARNESS_BRANCH` | `harness policy intercept` | When set in the hook's environment, replace the git-derived `${REPO}` and `${BRANCH}` for every policy. A set `HARNESS_BRANCH` also suppresses the signal that git refused to answer for the working directory. |
+| `CLAUDE_CODE_SESSION_ID`, `CLAUDE_SESSION_ID` | `harness policy intercept`, the `harness record` verbs, `harness audit`, `harness explain`, `harness session-export` | Session id fallback, in this order, when the event or `--session` carries none. `audit` and `explain` then fall back to the newest Claude Code transcript. |
+| `CLAUDE_CODE_SESSION_ID`, `CLAUDE_SESSION_ID`, `CODEX_SESSION_ID` | `harness pause`, `harness resume` | Any of them set makes the verb refuse, because it then runs inside an agent shell. |
+| `CLAUDE_BIN` | `harness smoke` | Default for `--claude-bin`; without either, `claude` on PATH. |
+| `CLAUDE_CONFIG_DIR` | `harness init --interactive`, `harness doctor`, `harness adopt`, `harness uninstall` | Moves the Claude Code user-scope MCP registry these verbs read from `~/.claude.json` to `$CLAUDE_CONFIG_DIR/.claude.json`. |
+
+`harness` itself does not read `EVIDENCE_LEDGER_DB` or `SOLUTION_VERDICT_SIGNING_KEY`: `harness apply` projects them onto the `grounding-mcp` server entry, which reads them.
+
 ## Notes
 
 - `harness doctor` now exits non-zero (`1`) whenever the report has `errorCount > 0`, in both prose and `--json` output; previously it always exited `0` regardless of errors, so CI/scripts had no way to gate on doctor health (task a07b379a). Warnings-only reports (`warningCount > 0`, `errorCount === 0`) are unaffected and still exit `0`; this pass intentionally does not add a `--strict` flag to promote warnings to errors. Non-interactive `harness init` is unrelated and unchanged: it keeps its existing loud-stderr-but-exit-0 contract.
@@ -115,7 +171,7 @@ This table is the canonical mapping from process gate to the ledger tag it consu
 - `harness apply` fails loud (refuses) when a manifest declares evidence-consuming policies (`requires:`) without `grounding-mcp` wired under `tools.mcp`; an unwired producer means warn policies degrade non-blocking while block/require_approval policies DENY every matching event (see docs/okf/gate-fail-posture-matrix.md). `operator_only: true` policies do not query evidence and may apply without grounding-mcp; wire `grounding-mcp` or remove the evidence-consuming policies.
 - Since `v0.34.0`: `apply --yes` (skip the `--overwrite-drift` confirmation) and non-TTY guards on the `apply`/`adopt` confirmation prompts (they refuse instead of hanging; piped `echo yes |` confirmations no longer work, use `--yes`).
 - `harness policy intercept --hook <name>` and the 2s timeout floor pinned by the Codex-hook generator both shipped in `v0.29.0`; see [CHANGELOG.md](../CHANGELOG.md).
-- Ledger tag vocabulary used by gate-mode policies: `review:`. A policy's `requires.ledger_tag` consults the evidence ledger to unblock (scoped to a Claude session id, not the agent-tasks task UUID, see `feedback-agent-grounding-merge-gate-ledger`); the tag itself is written by a `harness record` verb or by the operator. The branch-protection gate consults no ledger tag at all since task `a4d8adc5`; it asks git.
+- Ledger tag vocabulary used by gate-mode policies: `review:`. A policy's `requires.ledger_tag` consults the evidence ledger to unblock (scoped to a Claude session id, not the agent-tasks task UUID); the tag itself is written by a `harness record` verb or by the operator. The branch-protection gate consults no ledger tag at all since task `a4d8adc5`; it asks git.
 
 ### `--project` name validation
 

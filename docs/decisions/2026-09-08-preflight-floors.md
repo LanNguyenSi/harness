@@ -9,9 +9,12 @@
 > `src/cli/doctor/session-start-preflight-setup-version.ts`) describe code
 > that no longer exists; line anchors into surviving files are as of the
 > original decision.
-> The other half stays authoritative: the generic `hooks[]` and
-> `policy_packs[]` `min_version` floor and the version-compare semantics
-> (strict numeric versions, prereleases rejected rather than passed through).
+> The git-preflight hook and `GIT_PREFLIGHT_HOOK_MIN_VERSION` were removed
+> with the producers. What remains is the generic `hooks[]` `min_version`
+> check and the version-compare semantics (strict numeric versions,
+> prereleases rejected rather than passed through). A
+> `policy_packs[].min_version` only produces a "no version probe
+> registered" warning, because no builtin pack has a probe.
 
 - **Date**: 2026-09-08
 - **Status**: Accepted
