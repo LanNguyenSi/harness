@@ -157,8 +157,11 @@ export interface AnnouncePauseOptions {
 }
 
 /**
- * Hook integration helper. One call from each PreToolUse / PostToolUse
- * hook covers:
+ * Hook integration helper for the hooks that honour the pause:
+ * `harness policy intercept` and `harness pack hook runtime-reality`
+ * (both through their pause-check wrappers). The branch-protection hook
+ * never calls it, so a pause does not switch that gate off. One call
+ * covers:
  *   - active sentinel  → emit one stderr line; caller exits 0 (allow).
  *   - expired sentinel → silently delete (auto-resume); caller proceeds.
  *   - absent sentinel  → no-op; caller proceeds.

@@ -234,3 +234,20 @@ describe("profile templates: single `&` is a command boundary in every policy tr
     }
   });
 });
+
+describe("FULL_TEMPLATE: pause-sentinel forgery description names the real pause scope", () => {
+  it("names the hooks that honour the pause and says branch-protection does not read the sentinel", () => {
+    const m = parseManifest(parseYaml(FULL_TEMPLATE));
+    const policy = m.policies.find((p) => p.name === "deny-pause-sentinel-forgery");
+    expect(policy, "FULL_TEMPLATE must declare a deny-pause-sentinel-forgery policy").toBeDefined();
+    expect(policy?.description).toContain("harness policy intercept");
+    expect(policy?.description).toContain("branch-protection hook does not read it");
+    expect(policy?.description).not.toContain("silences every gate");
+
+    const example = readFileSync("docs/examples/full-manifest.yaml", "utf8");
+    expect(example).toContain(
+      "a forged file makes `harness policy intercept` and the runtime-reality hook dormant exactly like a real operator pause (the branch-protection hook does not read it).",
+    );
+    expect(example).not.toContain("silences every gate");
+  });
+});
