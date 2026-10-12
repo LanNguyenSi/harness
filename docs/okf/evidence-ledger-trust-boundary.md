@@ -3,7 +3,7 @@ type: invariant
 title: Evidence-ledger trust boundary
 description: The agent-writable evidence ledger never opens a builtin enforcement gate (branch-protection asks git, operator_only policies read no evidence at all); every requires.ledger_tag policy is a process gate by design, and the hook-path file reads and writes go through bounded, non-blocking, descriptor-typed helpers.
 tags: [evidence-ledger, trust-boundary, security]
-timestamp: 2026-10-12T15:56:42Z
+timestamp: 2026-10-12T15:58:41Z
 sources:
   - src/io/read-regular-file.ts
   - src/io/write-regular-file.ts

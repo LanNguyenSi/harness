@@ -3,7 +3,7 @@ type: overview
 title: Debug verb selection — which harness verb answers which question
 description: Decision guide mapping "why did my policy (not) fire" questions to the right harness debug verb (ledger-replay, static-prediction, end-to-end), with each verb's key discriminators and fail-postures.
 tags: [debugging, cli, audit, explain, dry-run, smoke]
-timestamp: 2026-10-12T15:56:42Z
+timestamp: 2026-10-12T15:58:41Z
 sources:
   - docs/for-agents.md
   - docs/CLI.md

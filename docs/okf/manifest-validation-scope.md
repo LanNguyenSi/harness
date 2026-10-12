@@ -3,7 +3,7 @@ type: invariant
 title: Managed mutations validate the whole manifest
 description: harness add/remove schema-validate the ENTIRE proposed harness.yaml (no baseline diff), so a pre-existing schema error anywhere blocks an unrelated call; add's asset gate DOES baseline-diff, so pre-existing asset errors warn instead of block, while remove runs no asset checks at all.
 tags: [add, remove, validation, manifest, footgun]
-timestamp: 2026-10-12T15:56:42Z
+timestamp: 2026-10-12T15:58:41Z
 sources:
   - src/cli/add/index.ts
   - src/cli/remove/index.ts
@@ -31,7 +31,7 @@ What the asset gate actually checks (`runAssetChecks`, `src/cli/validate/checks.
 - `checkSkills` (`src/cli/validate/checks.ts:170-188#"SKILL.md not found in any"`): every `tools.skills.required[]` name must have a `SKILL.md` under some `source_dirs` entry.
 - `checkHooks` (`src/cli/validate/checks.ts:195-222#"not executable (chmod +x)"`): rooted hook command paths must exist, be regular files, and be executable.
 - Policy-pack source and config resolution (`checkPolicyPacks` `src/cli/validate/checks.ts:926-930#"message: issue.message,"`, `checkPolicyPackConfigsAsDiagnostics` `src/cli/validate/checks.ts:943-952#"message: issue.message,"`), keyed at `policy_packs[N]...`.
-- `checkPolicyTriggerPathMatch` (`src/cli/validate/checks.ts:970-986#"return diags;"`): a `policies[].trigger.path_match` is an error, because the policy engine never evaluates it. Keyed at `policies[N].trigger.path_match`.
+- `checkPolicyTriggerPathMatch` (`src/cli/validate/checks.ts:970-983#"documentation only, so the hook"`): a `policies[].trigger.path_match` is an error, because the policy engine never evaluates it. Keyed at `policies[N].trigger.path_match`.
 - `checkHookBudgetLedgerMargin` (`src/cli/validate/checks.ts:885-918#"return diags;"`): once `grounding-mcp` is wired, a `blocking: hard` hook that runs `harness policy intercept` and carries a `budget_ms` below the margin its ledger timeout requires is an error at `hooks[<name>].budget_ms`.
 - The workflow checks, `checkWorkflows` (`src/cli/validate/checks.ts:494-501#"...checkWorkflowDerivedNameCollision(manifest),"`). Error severity: `checkWorkflowGateWiring` (`src/cli/validate/checks.ts:294-339#"checkTaskVerbGateWiring(manifest, offending)"`; a `spawn: "required"` review-then-merge workflow whose evidence hooks are missing, or declared under the right name but wired to the wrong trigger surface or command, see the function's own header comment) and `checkWorkflowDerivedNameCollision` (`src/cli/validate/checks.ts:472-484#"Rename the hand-authored policy."`). Their warning-severity siblings (the task-verb wiring gap, the weak-overlap and merge-before-review checks) never block.
 - Warning-severity only, so never blocking: `checkBuiltinDrift`, `checkPolicyGroundingMcp` (evidence-consuming policies declared but `grounding-mcp` not wired) and `checkPolicySelfAttestation`.
