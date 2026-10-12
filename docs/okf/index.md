@@ -9,87 +9,17 @@ deliberately do not duplicate them.
 
 ## Maintenance
 
-No longer checked: the citation guard test and the okf-staleness CI
-workflow were removed ahead of the removal release that drops the
-components these docs describe; the bundle leaves with them. Until then
-the citations below may drift.
-
-**Rule: a `path:N[-M]` line citation into a source file carries an anchor
+Run `okf-kit check docs/okf` (add `--require-anchors` to also check
+that every in-repo line citation carries an anchor) after changing a
+source file that a doc lists under `sources:`. The check is manual: no
+CI job or test runs it. Re-read the claims of a doc that reports a stale
+source, fix what drifted, and re-stamp its `timestamp`. A `path:N[-M]`
+citation into a source file carries an anchor
 (`path:N[-M]#"text on the cited end line"`); `log.md` is exempt as
-history.** Before task `898f9925`, only ANCHORED docs/okf line citations
-were checked (the filter above); a BARE `path:N` citation into a source
-file was checked by nothing, so a shifted line silently drifted (batch-44:
-`quote-model-divergence.md` cited `src/cli/init/templates.ts` at line 928
-while the described sentence had moved to line 940; okf-kit's `sources-fresh` compares
-commit timestamps only and does not see line-level drift). The guard now
-also: (1) pins, via a docs/okf-shaped fixture, that an anchored citation
-whose cited line has shifted off its anchor text actually fails; (2)
-asserts zero bare (unanchored) line citations into non-Markdown sources
-outside `log.md` and reports `log.md`'s own historical count (its
-historical prose narrates past re-points) in a computed title, never
-asserted; (3) requires every anchored citation's anchor, in both
-docs/okf and docs/decisions, to contain at least one word character, so a
-punctuation-only anchor (a bare closing delimiter, which pins nothing
-against a line shift) fails; (4) requires every anchored docs/okf citation's
-anchor to not start or end with whitespace, since a leading/trailing-space
-anchor's uniqueness rests on formatting that a reformat of the cited source
-can silently change, turning a routine reflow into a confusing guard
-failure instead of a clear re-anchoring prompt (task `98025e15`). The
-reproducible measurement is `npx vitest run
-tests/decisions-citations-resolve.test.ts`: its test titles report the
-live bare-citation count outside `log.md` (asserted at zero) and `log.md`'s
-own historical count (reported, not asserted). Per-doc conversion tallies
-at the time of the round-1/round-2 conversions are recorded in
-`CHANGELOG.md`'s corresponding entry, not here, so this section does not
-go stale as new docs are added or citations shift.
-
-**Rule: no continuation-form citation (a bare, path-less `` `:N[-M]` ``
-token, or a comma-separated tail inside a governing citation's own
-backtick span, chained to a governing citation stated earlier in the
-doc) outside `log.md`; `log.md` is exempt as history, same as the
-bare-citation rule above.** This is the spelling docs/okf carried before
-task `8765987a` (PR #537) re-anchored every citation; task `ea733314`
-added the extractor and ratchet. The same test file asserts it: its test
-titles report the live continuation count outside `log.md` (asserted at
-zero) and `log.md`'s own historical count (reported, not asserted), the
-same two-count convention the bare-citation rule above uses.
-The extractor cannot tell an escaped, illustrative example of the forbidden
-spelling from a live citation, so outside `log.md` the spelling is written
-with the digit-free placeholder above; a concrete example belongs in `log.md`
-or in `tests/fixtures/continuation-citations/`.
-
-Do not list `CHANGELOG.md` under a doc's frontmatter `sources:`: `okf-kit`'s
-`sources-fresh` check flags a `sources:` entry by file path and commit
-recency alone, with no per-section scoping, so every CHANGELOG edit
-anywhere in the repo would re-stale the doc; cite the specific release
-inline instead with a `CHANGELOG.md:#0.24.0`-style heading-section
-citation, which `citations-resolve` checks and which stays accurate as
-new releases are prepended above it (task `419ecfad`).
-
-`tests/decisions-citations-resolve.test.ts` also blocks (not just warns)
-on this bundle's heading-section citations themselves (the
-`path.md`-plus-`#heading` form, e.g. `CHANGELOG.md:#0.24.0` above, and its
-optional content-anchor variant (a `path.md` target, `#heading`, then a
-quoted `#"text"`); task
-`ee494719`): it resolves each one against the target's own Markdown
-heading structure, mirroring okf-kit@0.10.0's `citations-resolve`
-heading-form semantics (the version this repo's `okf-staleness` CI job
-pins) including its `heading-section-empty` check (a resolved section
-whose body is entirely blank up to the next heading of the same or
-higher level, or EOF, fails, task `9fec3839`), and additionally requires
-a `CHANGELOG.md` target's matching heading to take this repo's own exact
-`## [x.y.z]` bracket form. Before
-this guard, only okf-kit's warn-only `citations-resolve` rule (run
-through the `okf-staleness` CI job) checked these citations, so a renamed
-or removed release heading only warned; a CI failure here now blocks.
-Scope cut vs okf-kit: path resolution here is repo-root-relative only, not
-okf-kit's full sources/doc-relative/ancestor/repo-wide resolution chain,
-so a sibling-relative citation (e.g. a bare "log.md:#Overview" written
-from inside this same directory) that upstream would resolve fails here; every
-citation actually written in this bundle already uses a full
-repo-root-relative path, so this has not yet caused a false failure. A
-second scope cut: malformed heading-section forms are extracted-and-
-reported upstream, silently ignored here.
+history. Do not list `CHANGELOG.md` under a doc's `sources:`, since every
+CHANGELOG edit anywhere in the repo would re-stale the doc; cite a
+release inline with a `CHANGELOG.md:#0.24.0`-style heading-section
+citation instead.
 
 ## Overview
 
@@ -103,25 +33,14 @@ reported upstream, silently ignored here.
   operator-only deny, closed at template level in v0.43.0 (task
   `d834a065`); an existing `full` install picks it up only after re-running
   `harness init --template full --force`. In v0.44.0 the same fix reached
-  the pack regexes and this repo's own dogfood trigger (task `76671e5a`),
+  the pack regexes (those packs are since removed) and this repo's own
+  dogfood trigger (task `76671e5a`),
   and a second, independent normalization pass, consulted as a third
   additive matching arm, closed the adjacent command-normalize boundary
   gap (task `aabbad63`).
 - [Debug verb selection](debug-verb-selection.md), which harness verb answers
   which "why did my policy (not) fire" question: ledger-replay vs
   static-prediction vs end-to-end.
-- [Understanding gate, auto-mode signal sources (measured)](understanding-gate-auto-mode-signals.md),
-  what signals exist for detecting an agent's own permission/auto-approval
-  mode across Claude Code, Codex, and opencode: the measured Claude Code
-  hook-payload `permission_mode` field per event and mode, in both the
-  headless and the interactive launch shape, the hook process env, the
-  transcript-visibility probe, the resolution of a hook `ask` (a denial
-  under `-p`, an operator prompt interactively, an auto-allow in neither),
-  the block-and-retry behaviour of a `-p` child, what a subagent's tool
-  call carries (the parent's session id plus `agent_id` / `agent_type`,
-  with its transcript in a separate file), and a trust-class table;
-  the rule and decision on which signals may relax the gate live in the
-  companion ADR, not here.
 
 ## Modules
 
@@ -133,8 +52,9 @@ reported upstream, silently ignored here.
 ## Invariants
 
 - [Evidence-ledger trust boundary](evidence-ledger-trust-boundary.md), the
-  agent-writable ledger is audit-only for builtin enforcement gates; only
-  operator- or trusted-process-authored filesystem markers open them.
+  agent-writable ledger never opens a builtin enforcement gate
+  (branch-protection asks git, `operator_only` policies read no evidence);
+  `requires.ledger_tag` policies are process gates by design.
 - [Policy engine needs its producers wired](policy-engine-producer-wiring.md),
   a policy is only ever POSITIVELY satisfied if grounding-mcp is wired under
   tools.mcp[]; an unwired producer denies block/require_approval tiers
@@ -148,9 +68,6 @@ reported upstream, silently ignored here.
 
 ## Runbooks
 
-- [Understanding-gate lockout recovery](understanding-gate-lockout-recovery.md),
-  the operator procedure to unblock a locked session, the 6-tier session-id
-  resolution, and the expiry semantics that re-arm the gate.
 - [Kill switches, pause vs gate disable](pause-vs-gate-kill-switch.md), the two
   distinct kill-switch mechanisms (`harness pause` mutes the policy-intercept
   and runtime-reality hooks, never branch-protection; `harness gate disable`

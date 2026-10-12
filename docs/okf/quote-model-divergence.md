@@ -3,7 +3,7 @@ type: overview
 title: Shell quote models, measured divergence against bash
 description: The policy engine has independent shell-word models plus a raw-regex trigger layer (since task 7d4abf84 also a quote-aware shell command model that feeds per-repo attribution). This records what each actually extracts, measured against real bash, which divergences are fail-open, and the evidence-led ordering for closing them.
 tags: [policy-engine, bash-match, quote-model, fail-open, measurement]
-timestamp: 2026-10-12T11:28:39Z
+timestamp: 2026-10-12T15:56:42Z
 sources:
   - src/runtime/command-normalize.ts
   - src/cli/init/composer.ts
@@ -42,17 +42,19 @@ zieht sie erst nach erneutem `harness init --template full --force`
 Fehlalarm-Korpus mitgemessen (3 vorbestehende + 6 neue Fehlalarme); die in
 Empfehlung 1 offen gelassene Präzisionsseite (K4, 75/75 ungemessen) läuft
 als Folge-Task `b150745c`, die gemeinsame `decodeShellWord`-Primitive aus
-Empfehlung 2 als `fdee7d0f`. **`76671e5a` ist inzwischen umgesetzt und
-ausgeliefert, in v0.44.0:** die drei Policy-Pack-Runtime-Regexe
-(`CURATED_MUTATION_BASH_RE`, `GH_PR_MERGE_BASH_RE` in
-`src/policy-packs/builtin/post-merge-gate-runtime.ts`,
-`DEFAULT_PUSH_BASH_RE` in `src/policy-packs/builtin/solution-acceptance-runtime.ts`)
-UND dieses Repos eigener `dogfood/harness.yaml`-`dogfood-recency`-Trigger
-erkennen jetzt ebenfalls einzelnes `&` als Boundary (`&&` bleibt
+Empfehlung 2 als `fdee7d0f`. **`76671e5a` wurde in v0.44.0
+ausgeliefert** und gilt nur noch zum Teil: Es hat einzelnes `&` als
+Boundary in drei Policy-Pack-Runtime-Regexe aufgenommen (die der Packs
+`post-merge-gate` und `solution-acceptance`) und in den
+`dogfood-recency`-Trigger aus `dogfood/harness.yaml` (`&&` bleibt
 subsumiert, kein Verlust gemessen über einen 49.999-String-Korpus mit
-bestandener Positivkontrolle). Bewusst weiterhin NICHT gesweept:
-`ESCAPE_GIT_BASH_RE`/`ESCAPE_HARNESS_BASH_RE` (Allow-Listen im selben
-Pack, wo Verbreitern eine Gate LOCKERT statt sie zu härten). **Die
+bestandener Positivkontrolle). Die beiden Packs und ihre Regexe sind
+inzwischen entfernt: sie stehen nicht mehr im Baum, und ein Manifest, das
+sie noch nennt, lädt mit einer Warnung (`src/schema/removed-keys.ts`).
+Übrig ist der `dogfood-recency`-Trigger, der `&` weiterhin als Boundary
+kennt. Die damalige Ausnahme, die Allow-Listen-Regexe
+(`ESCAPE_GIT_BASH_RE`/`ESCAPE_HARNESS_BASH_RE`) bewusst nicht zu
+verbreitern, ist mit dem Pack entfallen. **Die
 benachbarte `command-normalize`-Boundary-Lücke** (`A=x&env -C /tmp git
 status`, deren naiver `&`-in-`BOUNDARY_RE`-Fix 140 von 140 gequotete
 Wert-Formen regressiert) **ist als `aabbad63` ebenfalls inzwischen
@@ -256,7 +258,7 @@ Normalisierungs-Pass (vierter Matching-Arm, siehe `intercept.ts`s
 eigenen Kommentar), eine eigene, additive Grenzsuche
 (`findNextBoundaryQuoteAware`), die einen Boundary-Charakter innerhalb
 einer offenen Quote überspringt, und verdrahtet ihn in
-`policyMatchesEvent` (`src/runtime/intercept.ts:636-683#"Raw-OR-normalised-OR-amp-normalised-OR-quote-normalised"`) als vierten
+`policyMatchesEvent` (`src/runtime/intercept.ts:512#"Raw-OR-normalised-OR-amp-normalised-OR-quote-normalised"`) als vierten
 OR-Zweig: roh, dann normalisiert, dann amp-bewusst (`aabbad63`), dann
 quote-bewusst (`cf3dff51`), jeder Zweig nur additiv gegenüber den
 vorherigen. Produktions-Nachweis über dieselbe `runInterceptCli`-Messung
@@ -385,7 +387,7 @@ Ausgaben und sind nur paarweise überlappend messbar.
 
 | Modul | Ausgabe | verdrahtet an |
 |---|---|---|
-| `command-normalize.ts` | `normalized` | `bash_match` raw-OR-normalized-OR-amp-OR-quote-normalized (`src/runtime/intercept.ts:636-683#"Raw-OR-normalised-OR-amp-normalised-OR-quote-normalised"`, dritter Arm seit `aabbad63`, vierter Arm seit `cf3dff51`) |
+| `command-normalize.ts` | `normalized` | `bash_match` raw-OR-normalized-OR-amp-OR-quote-normalized (`src/runtime/intercept.ts:512#"Raw-OR-normalised-OR-amp-normalised-OR-quote-normalised"`, dritter Arm seit `aabbad63`, vierter Arm seit `cf3dff51`) |
 | | `targetDir`/`targetBase` | nichts (grep-verifiziert) |
 | `bash-prefix-parse.ts` | `inlineEnv`, `cdTarget` | leading-`cd`-Durchgang von `normalizeCommand` (`command-normalize.ts`); der fruehere Verbraucher Risk-Gate-Kontext ist mit dem Risk Gate entfernt |
 | `read-only-bash.ts` | Boolean | kein Verbraucher in `src` mehr (die frueheren Verbraucher Understanding Gate, Write-Guard und Risk-Floor sind entfernt); nur noch Tests. `command-normalize.ts` importiert aus dem Modul nur die `ENV_*`-Konstanten |
@@ -596,7 +598,7 @@ keine Session-Evidenz erfüllbar. Ein einzelnes `&` umging ihn zum
 Zeitpunkt dieser Messung (seither geschlossen, siehe "Einordnung je
 Klasse" unten). Zwei Einordnungen dazu, damit die Schwere nicht
 überlesen wird:
-`src/cli/init/templates.ts:940#"bash_match"` benennt "bash_match's regex coverage of
+`src/cli/init/templates.ts:623#"bash_match"` benennt "bash_match's regex coverage of
 exotic shell shapes" bereits als bekannte Restlücke, neu ist, dass ein
 einzelnes `&` dazugehört. Und `A=x&harness pause` ist nicht read-only,
 das Understanding-Gate blockt es in einer nicht approvten Session
