@@ -653,6 +653,87 @@ ${withinBlock}${countBlock}    hook: h
   });
 });
 
+describe("validate — policies[].trigger.path_match is not evaluated", () => {
+  function manifestWithTrigger(triggerExtra: string): string {
+    const home = writeFixture({ "harness.yaml": ``, "hooks/h.sh": "#!/bin/sh\nexit 0\n" });
+    fs.chmodSync(path.join(home, "hooks", "h.sh"), 0o755);
+    const yaml = `version: 1
+hooks:
+  - name: h
+    event: PreToolUse
+    command: ${path.join(home, "hooks", "h.sh")}
+    blocking: false
+policies:
+  - name: guard-env-files
+    description: test
+    trigger:
+      event: PreToolUse
+      match: Edit
+${triggerExtra}    operator_only: true
+    hook: h
+    enforcement: block
+`;
+    fs.writeFileSync(path.join(home, "harness.yaml"), yaml, "utf8");
+    return home;
+  }
+
+  it("parses a manifest that sets it (the load must not fail) and reports a validate error naming the policy", () => {
+    const home = manifestWithTrigger(`      path_match: '\\.env$'\n`);
+    const result = validate({
+      homeDir: home,
+      configPath: path.join(home, "harness.yaml"),
+      ...NOOP_PROBES,
+    });
+    // The manifest parsed: only the lint reports it.
+    expect(result.manifest).not.toBeNull();
+    const hits = result.diagnostics.filter((d) => /path_match/.test(d.message));
+    expect(hits).toHaveLength(1);
+    const hit = hits[0];
+    expect(hit?.severity).toBe("error");
+    expect(hit?.path).toBe("policies[0].trigger.path_match");
+    expect(hit?.message).toContain('policy "guard-env-files"');
+    expect(hit?.message).toMatch(/does not evaluate/);
+    expect(hit?.message).toMatch(/trigger\.bash_match/);
+    expect(result.errorCount).toBe(1);
+  });
+
+  it("stays clean for the same policy without path_match", () => {
+    const home = manifestWithTrigger(``);
+    const result = validate({
+      homeDir: home,
+      configPath: path.join(home, "harness.yaml"),
+      ...NOOP_PROBES,
+    });
+    expect(result.diagnostics.filter((d) => /path_match/.test(d.message))).toEqual([]);
+    expect(result.errorCount).toBe(0);
+  });
+
+  it("does not flag hook-level path_match (script-enforced documentation)", () => {
+    const home = writeFixture({ "harness.yaml": ``, "hooks/h.sh": "#!/bin/sh\nexit 0\n" });
+    fs.chmodSync(path.join(home, "hooks", "h.sh"), 0o755);
+    fs.writeFileSync(
+      path.join(home, "harness.yaml"),
+      `version: 1
+hooks:
+  - name: h
+    event: PreToolUse
+    match: Edit
+    path_match: '**/*.env'
+    command: ${path.join(home, "hooks", "h.sh")}
+    blocking: false
+`,
+      "utf8",
+    );
+    const result = validate({
+      homeDir: home,
+      configPath: path.join(home, "harness.yaml"),
+      ...NOOP_PROBES,
+    });
+    expect(result.diagnostics.filter((d) => /path_match/.test(d.message))).toEqual([]);
+    expect(result.errorCount).toBe(0);
+  });
+});
+
 describe("validate: --check-lock", () => {
   // Helper builds a minimal valid manifest + a single locked hook script,
   // then writes harness.lock with the script's actual sha256. The caller

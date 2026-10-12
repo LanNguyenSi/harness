@@ -426,7 +426,7 @@ Schema:
 |---|---|---|---|
 | `name` | string | yes | unique |
 | `description` | string | yes | surfaced by `harness describe` |
-| `trigger` | object | yes | `event`, `match`, optional `bash_match` / `input_match`, optional `extract` (see below). `path_match` is accepted but not evaluated |
+| `trigger` | object | yes | `event`, `match`, optional `bash_match` / `input_match`, optional `extract` (see below). `path_match` parses but is not evaluated, and `harness validate` reports it as an error |
 | `requires` | object | yes, unless `operator_only: true` | evidence shape; discriminated union, see below |
 | `hook` | string | yes | must reference a `hooks[].name` |
 | `enforcement` | enum | yes | `block` / `warn` / `require_approval`; higher level than hook's `blocking` flag |

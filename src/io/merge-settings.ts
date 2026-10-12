@@ -1,9 +1,11 @@
 // 3-way merge for `harness apply --target <path> --merge`.
 //
-// Merge semantics: harness owns whichever top-level keys appear in the
-// generated output (today: `hooks` and `mcpServers`). Owned keys are
-// replaced wholesale — EXCEPT `mcpServers`, which is deep-merged by
-// server name (task 059b669c, operator decision 2026-07-02). Per name:
+// Merge semantics: harness owns the `hooks` key of the generated output,
+// which is replaced wholesale. The generated settings.json carries no
+// `mcpServers` (Claude Code does not read that block there), so the
+// `mcpServers` handling below only drops entries an earlier apply wrote
+// and keeps everything else. It deep-merges by server name (task
+// 059b669c, operator decision 2026-07-02). Per name:
 //
 //   - declared in the current generated output → generated value wins
 //     (the manifest stays the source of truth for what it declares);

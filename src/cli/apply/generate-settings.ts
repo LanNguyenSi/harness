@@ -26,10 +26,10 @@
 //     fires". Per the canonical example in ARCHITECTURE.md Appendix A
 //     (e.g. `require-preflight-evidence` with `bash_match: "^git ..."`),
 //     these filters are enforced inside the referenced hook script, not by
-//     harness's wiring. The manifest fields are documentation: they tell
-//     `harness validate`/`doctor` what the script claims to filter on, so
-//     the script's behaviour can be cross-checked, but `harness apply`
-//     does not synthesise wrapper shell to enforce them. Wrapping was
+//     harness's wiring. The manifest fields document what the script is
+//     meant to filter on; neither `harness validate` nor `harness doctor`
+//     cross-checks the script against them, and `harness apply` does not
+//     synthesise wrapper shell to enforce them. Wrapping was
 //     considered and rejected: it (a) doubles the surface for hook bugs,
 //     (b) hard-codes shell semantics into the manifest projection, and
 //     (c) the canonical hook scripts already enforce these filters.

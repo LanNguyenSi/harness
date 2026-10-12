@@ -55,6 +55,19 @@ export interface UninstallSnapshot {
   removedMcpServers: RemovedMcpServer[];
 }
 
+/**
+ * True when `value` has the shape of an uninstall snapshot record: a
+ * `version` key together with a `removedHookGroups` array. A real
+ * settings.json backup never carries `removedHookGroups`, even when it
+ * happens to have a `version` key of its own, so the pair is what
+ * separates the two.
+ */
+export function looksLikeUninstallSnapshot(value: unknown): boolean {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
+  const rec = value as Record<string, unknown>;
+  return "version" in rec && Array.isArray(rec["removedHookGroups"]);
+}
+
 export function sha256Hex(input: string | Buffer): string {
   return crypto.createHash("sha256").update(input).digest("hex");
 }

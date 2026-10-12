@@ -30,9 +30,9 @@ npm run build                         # rebuild dist/
 ```
 
 `run-smoke.sh` renders a per-run manifest (`transcript/effective-manifest.yaml`)
-from `harness.yaml`, substituting `HARNESS_DIR` / `GROUNDING_DIR`. Defaults match
-the canonical `~/git/pandora/{harness,agent-grounding}` layout; override either
-variable to run against a different checkout.
+from `harness.yaml`, substituting `HARNESS_DIR` / `GROUNDING_DIR`. `HARNESS_DIR`
+defaults to this checkout and `GROUNDING_DIR` to an `agent-grounding` checkout
+next to it; override either variable to run against a different checkout.
 
 Every run uses a fresh, timestamped `sessionId` (`phase5-dogfood-<unix>-<pid>`)
 scoped inside `~/.evidence-ledger/ledger.db`. **The smoke does NOT isolate the
@@ -101,7 +101,7 @@ the harness side of the contract.
 
 What remains optional is a fully-interactive Claude Code session
 attempting `mcp__agent-tasks__pull_requests_merge` against PR 42 in a
-sandbox repo (copy `dogfood/phase5/harness.yaml` to `~/.claude/`,
+sandbox repo (copy `dogfood/phase5/harness.yaml` to `~/.harness/harness.yaml`,
 `harness apply`, then make the call by hand). The expectation matches
 Step 1 above. The two automated smokes should catch any regression
 before that manual run is needed.

@@ -14,8 +14,9 @@ export function registerUninstall(
       "Clean teardown of a harness installation. Inventories harness-owned " +
         "state (manifest, lock, harness.generated/, .understanding-gate/ under " +
         "the state root; hook groups and mcpServers in ~/.claude/settings.json) " +
-        "and prints it. With --apply, removes it after writing a reversible " +
-        "settings.json backup + snapshot. " +
+        "and prints it. With --apply, backs up settings.json (reversible, with " +
+        "a snapshot of what was removed) and then removes the inventory; the " +
+        "manifest, lock and generated tree are deleted without a backup. " +
         "settings.json.pre-harness-<TS> backups are listed but never deleted, " +
         "so the operator can hand them to --restore-from <path> (atomic restore " +
         "from that file) or `rm` them manually.",

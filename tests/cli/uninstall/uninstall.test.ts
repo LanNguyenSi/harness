@@ -434,6 +434,47 @@ describe("uninstall — --restore-from", () => {
     );
   });
 
+  it("refuses an uninstall snapshot record as the restore source and leaves settings.json untouched", async () => {
+    const live = { theme: "dark", hooks: { PreToolUse: [] } };
+    writeSettings(live);
+    fs.writeFileSync(path.join(homeDir, "harness.yaml"), "version: 1\n");
+    const snapshotRecord = path.join(tmp, "harness.uninstall.2026-05-16T10-00-00.000Z.json");
+    fs.writeFileSync(
+      snapshotRecord,
+      `${JSON.stringify({
+        version: 1,
+        createdAt: "2026-05-16T10:00:00.000Z",
+        settingsPath,
+        settingsBackupPath: `${settingsPath}.bak.uninstall.x`,
+        settingsBeforeSha256: "a",
+        settingsAfterSha256: "b",
+        removedHookGroups: [],
+        removedMcpServers: [],
+      })}\n`,
+    );
+    await expect(
+      uninstall({ homeDir, settingsPath, restoreFrom: snapshotRecord, mcpExec: execThrowsIfCalled() }),
+    ).rejects.toThrow(/uninstall snapshot record, not a settings file/);
+    expect(readJson(settingsPath)).toEqual(live);
+    // Refused before any teardown: the manifest is still there.
+    expect(fs.existsSync(path.join(homeDir, "harness.yaml"))).toBe(true);
+  });
+
+  it("still restores a real settings backup that happens to carry a version key", async () => {
+    const pristine = { version: 3, theme: "dark" };
+    const backupSource = path.join(homeDir, "settings.json.pre-harness-2026-05-11");
+    fs.writeFileSync(backupSource, `${JSON.stringify(pristine, null, 2)}\n`);
+    writeSettings({ theme: "light" });
+    const r = await uninstall({
+      homeDir,
+      settingsPath,
+      restoreFrom: backupSource,
+      mcpExec: execThrowsIfCalled(),
+    });
+    expect(r.mode).toBe("restore");
+    expect(readJson(settingsPath)).toEqual(pristine);
+  });
+
   it("refuses when settings.json does not exist", async () => {
     const src = path.join(tmp, "src.json");
     fs.writeFileSync(src, `${JSON.stringify({ theme: "dark" })}\n`);

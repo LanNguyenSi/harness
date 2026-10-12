@@ -59,6 +59,7 @@ import { GENERATED_DIRNAME } from "../../io/generated-dir.js";
 import { resolveHomeDir as resolveHarnessStateRoot } from "../../runtime/home-dir.js";
 import {
   backupPath,
+  looksLikeUninstallSnapshot,
   type RemovedHookGroup,
   type RemovedMcpServer,
   sha256Hex,
@@ -995,6 +996,12 @@ export async function uninstall(opts: UninstallOptions = {}): Promise<UninstallR
       ) {
         throw new UninstallError(
           `restore source ${opts.restoreFrom} is not a JSON object; refusing.`,
+        );
+      }
+      if (looksLikeUninstallSnapshot(parsedRestore)) {
+        throw new UninstallError(
+          `restore source ${opts.restoreFrom} is a harness uninstall snapshot record, not a settings file; ` +
+            `refusing. Restore from the settings.json.bak.uninstall.<TS> backup or a settings.json.pre-harness-<TS> copy instead.`,
         );
       }
     } catch (err) {
