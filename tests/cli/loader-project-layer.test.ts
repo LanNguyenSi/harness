@@ -181,6 +181,16 @@ describe("an override layer that nulls when: on a policy (task 4ee45b99)", () =>
     expect(same).toEqual([]);
   });
 
+  it("reports only the layer that nulls when:, not an earlier layer that re-scoped it", () => {
+    const w = findWhenTombstones({ policies: [SCOPED] }, [
+      { raw: { policies: [{ name: "scoped", when: { "environment.name": "staging" } }] }, label: "L1" },
+      { raw: { policies: [{ name: "scoped", when: null }] }, label: "L2" },
+    ]);
+    expect(w).toHaveLength(1);
+    expect(w[0]!.message).toContain("L2");
+    expect(w[0]!.message).not.toContain("L1");
+  });
+
   it("does not warn when a later layer sets when: again", () => {
     const w = findWhenTombstones({ policies: [SCOPED] }, [
       { raw: { policies: [{ name: "scoped", when: null }] }, label: "L1" },
