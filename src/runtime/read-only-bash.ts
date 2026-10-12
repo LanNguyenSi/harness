@@ -843,8 +843,8 @@ export function isReadOnlyBashPipeline(command: string): boolean {
 // / `isReadOnlyBashPipeline` above. Task da823721 (blast-radius decision,
 // verb list, secrets/configmap exclusion, and the fail-safe rationale
 // for each) now live in the lists and comments below, which are the
-// single source of truth for the scope; the design doc that once held
-// them was retired.
+// single source of truth for the scope; the design doc that held
+// them was removed in commit 323e99a5 (read it at its parent).
 //
 // Design: two ALLOWLISTS, not a metacharacter denylist. Round 1 and
 // round 2 of this task each patched one more shell-metacharacter
@@ -975,8 +975,8 @@ function kubectlArgMentionsSecret(tokens: readonly string[]): boolean {
  * True when any raw token mentions "configmap", or is (or contains, as
  * one comma-separated resource-list segment) the bare abbreviation
  * `cm` — `get cm`, `get cm/my-map`, `get pods,cm`, `get cm,pods` are
- * all caught. ConfigMap data is a common credential store (so
- * it is excluded like Secrets), so it gets the same fail-safe exclusion as
+ * all caught. ConfigMap data is a common credential store, so it gets
+ * the same fail-safe exclusion as
  * Secrets. The `cm` check is segment-based rather than a bare substring
  * match so it does not fire on an unrelated word that merely starts or
  * ends with "cm" (`cmd`, `cmagent`).
@@ -1721,9 +1721,9 @@ const CURL_VALUE_LONG_FLAGS: ReadonlyMap<string, string> = new Map([
  * single-parameter read-only query-string spelling this floor used to
  * forfeit (a MULTI-parameter query string joined by `&` still forfeits
  * even single-quoted; that stays out of scope). Admitting `?`/`*` was
- * a measured widening of the URL shape. Do not
- * "clean up" further without
- * re-deriving it.
+ * a measured widening of the URL shape (curl section of the design
+ * doc removed in commit 323e99a5). Do not "clean up" further
+ * without re-deriving it.
  */
 const CURL_SHAPE_URL_RE = /^https:\/\/[A-Za-z0-9.-]+(:[0-9]+)?(\/[^'\s{}[\]\\`$]*)?$/;
 
@@ -1740,8 +1740,8 @@ const CURL_SHAPE_URL_RE = /^https:\/\/[A-Za-z0-9.-]+(:[0-9]+)?(\/[^'\s{}[\]\\`$]
  * `hasUnsafeShellMetachar` guard already refuses both for the entire
  * command before any word is split out, so this function forfeits on
  * neither character itself (round 3, task fdaad781: they were dropped
- * from this regex as dead, unreachable code; the
- * `\r` guard itself was motivated by a measured case).
+ * from this regex as dead, unreachable code; the `\r` guard itself
+ * came from a measured case, see the curl section of the retired doc).
  * A timeout value must be a bare non-negative
  * integer, `^[0-9]+$` exactly.
  */
@@ -1786,9 +1786,9 @@ function consumeCurlFlagValue(
  * and only the DESTRUCTIVE floor (evaluated first in the removed Risk
  * Classifier) could raise above it. This comment states only
  * the grammar; the history behind it (two leaked flag lists, mandatory
- * `-q`, dropped `-L`/`-k`, the `\r`/query-string fixes) is in
- * git history. An operator can still
- * approve whatever the shape forfeits.
+ * `-q`, dropped `-L`/`-k`, the `\r`/query-string fixes) is in the
+ * design doc removed in commit 323e99a5 (read it at its parent). An
+ * operator can still approve whatever the shape forfeits.
  *
  * `true` requires ALL of: no shell chaining, redirection, substitution,
  * or background `&` anywhere in the whole command (the same whole-string
@@ -1800,8 +1800,8 @@ function consumeCurlFlagValue(
  * as the first argument, and skipping it leaves `$CURL_HOME/.curlrc` /
  * `$XDG_CONFIG_HOME/curlrc` / `~/.curlrc` free to set `output`,
  * `request`, `data`, or `upload-file` underneath every other spelling
- * this shape would otherwise accept -- a measured
- * case); every remaining word is either a flag
+ * this shape would otherwise accept -- measured, see the retired
+ * doc above); every remaining word is either a flag
  * drawn from the closed allowlists above (no flag on this list names a
  * file, and the only method any of them selects is HEAD, which is
  * read-only; curl's config surface is closed off by the mandatory
