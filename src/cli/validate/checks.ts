@@ -954,6 +954,38 @@ function checkPolicyPackConfigsAsDiagnostics(manifest: Manifest): Diagnostic[] {
   });
 }
 
+// `policies[].trigger.path_match` is declared by the schema but no policy
+// engine path reads it (`policyMatchArm` in src/runtime/intercept.ts, the
+// `harness dry-run` evaluator and the rest of the engine match on `match`,
+// `bash_match` and `input_match` only), so a policy that sets it fires on
+// every call its other trigger fields match, wider than its author meant.
+// For a `block` policy that is a gate that blocks more than intended.
+// The schema keeps ACCEPTING the key on purpose: every hook loads the
+// manifest, and a parse failure there makes the branch-protection hook
+// refuse every edit, so rejecting at parse time would lock a machine out
+// the moment it carries one. Reporting it as a validate ERROR surfaces it
+// at lint time without that risk. Hook-level `hooks[].path_match` is a
+// different field (documentation for a filter the referenced script must
+// enforce itself) and is not checked here.
+export function checkPolicyTriggerPathMatch(manifest: Manifest): Diagnostic[] {
+  return manifest.policies.flatMap((p, i): Diagnostic[] =>
+    p.trigger.path_match === undefined
+      ? []
+      : [
+          {
+            severity: "error",
+            path: `policies[${i}].trigger.path_match`,
+            message:
+              `policy "${p.name}" sets trigger.path_match, which harness does not evaluate: ` +
+              `the policy would fire on every call its other trigger fields match. ` +
+              `Remove it and narrow the policy with trigger.match, trigger.bash_match ` +
+              `or trigger.input_match; a hook-level path_match (hooks[].path_match) is ` +
+              `documentation only, so the hook's script must filter on the path itself.`,
+          },
+        ],
+  );
+}
+
 export function runAssetChecks(
   manifest: Manifest,
   opts: CheckOptions = {},
@@ -969,6 +1001,7 @@ export function runAssetChecks(
     ...checkPolicyPacks(manifest),
     ...checkPolicyPackConfigsAsDiagnostics(manifest),
     ...checkPolicySelfAttestation(manifest),
+    ...checkPolicyTriggerPathMatch(manifest),
     ...checkHookBudgetLedgerMargin(manifest),
     ...checkWorkflows(manifest),
   ];

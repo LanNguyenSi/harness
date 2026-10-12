@@ -2170,8 +2170,11 @@ describe("interactive wizard — runtime multiselect (task 696f7560)", () => {
     ).toBe(true);
     expect(result.apply).toBeDefined();
     expect(result.apply?.targetWritten).toBe(true);
-    // Operator gets the lock-drift caveat (documented in apply.ts).
-    expect(cap.stderr()).toMatch(/harness\.lock will reflect the last-applied runtime/);
+    // No stale lock-drift caveat: .last-apply keeps both runtimes' files and
+    // the lock does not depend on the runtime, so no follow-up apply is asked for.
+    expect(cap.stderr()).not.toMatch(/Multi-runtime wiring/);
+    expect(cap.stderr()).not.toMatch(/last-applied runtime/);
+    expect(cap.stderr()).not.toMatch(/refresh drift baselines/);
   });
 
   it("uncheck-all skips wiring entirely and surfaces both manual fallback commands", async () => {

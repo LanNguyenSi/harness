@@ -1546,12 +1546,6 @@ async function runPostInitTail(t: PostInitTailOpts): Promise<InteractiveResult> 
     return { aborted: false, profile, init: initResult, validateClean, binResolutionClean, applies: [] };
   }
 
-  if (selectedRuntimes.length > 1) {
-    stderr(
-      "\nMulti-runtime wiring: harness.lock will reflect the last-applied runtime; re-run `harness apply --runtime <name>` to refresh drift baselines.\n",
-    );
-  }
-
   const applies: RuntimeApplyOutcome[] = [];
   for (const runtime of selectedRuntimes) {
     const wireOpts: Parameters<typeof wireRuntime>[0] = {

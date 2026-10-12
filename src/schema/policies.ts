@@ -3,10 +3,10 @@ import { ExtractMapSchema, InputMatchMapSchema } from "./extract.js";
 import { HookEventSchema } from "./hooks.js";
 import { RequiresSchema, isBuiltinVariable, referencedVariables } from "./requires.js";
 
-// `trigger:`: the WHICH-tool-calls filter. Every declared field is
-// ANDed: `match` on the tool name, `path_match` on the edited file path,
-// `bash_match` on the shell command text, and `input_match` (task
-// 2699b476) on the tool call's own arguments.
+// `trigger:`: the WHICH-tool-calls filter. Every EVALUATED field is ANDed:
+// `match` on the tool name, `bash_match` on the shell command text, and
+// `input_match` (task 2699b476) on the tool call's own arguments.
+// `path_match` is parsed but NOT evaluated; see the note at the end of this file.
 //
 // `input_match` exists because the other three cannot express "this MCP
 // verb, but only in the mode that actually does the dangerous thing".
@@ -17,7 +17,7 @@ import { RequiresSchema, isBuiltinVariable, referencedVariables } from "./requir
 // `extract` uses, `src/schema/extract.ts` + `src/io/extract.ts`), values
 // are literals compared by strict equality; a missing path never matches.
 // See `firstInputMatchMismatch` in `src/io/extract.ts` for the evaluator
-// `policyMatchesEvent` and `harness policy dry-run` both call.
+// `policyMatchesEvent` and `harness dry-run` both call.
 export const PolicyTriggerSchema = z
   .object({
     event: HookEventSchema,
@@ -240,3 +240,11 @@ export const PoliciesSchema = z.array(PolicySchema).superRefine((policies, ctx) 
 export type Policy = z.infer<typeof PolicySchema>;
 export type Producer = z.infer<typeof ProducerSchema>;
 export type PolicyUx = z.infer<typeof PolicyUxSchema>;
+
+// `trigger.path_match` is declared but never evaluated: no policy engine path
+// reads it, so a policy that sets it fires on every call its other trigger
+// fields match. The schema still ACCEPTS the key, because a parse failure here
+// makes every hook refuse (the manifest load is shared), so rejecting it at
+// parse time could lock a machine out. `harness validate` reports it as an
+// error instead (`checkPolicyTriggerPathMatch`, src/cli/validate/checks.ts).
+// Narrow a policy with `match`, `bash_match` or `input_match`.

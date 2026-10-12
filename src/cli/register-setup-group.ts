@@ -423,7 +423,7 @@ export function registerSetupGroup(
     )
     .option(
       "--merge",
-      "with --target, 3-way merge into an existing target file (replace owned keys, preserve others)",
+      "with --target, merge into an existing target file: replaces its `hooks` key, drops `mcpServers` entries an earlier apply wrote, preserves every other key",
     )
     .option("--force", "with --target, overwrite an existing target file (no merge)")
     .option(

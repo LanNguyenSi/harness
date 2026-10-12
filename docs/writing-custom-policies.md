@@ -338,7 +338,7 @@ policy.
 
 **Cost.** The shell command model is computed at most once per Bash
 event and, with any per-repo Bash policy in the manifest (the full
-template has four), effectively for every Bash event: such a policy is
+template has two), effectively for every Bash event: such a policy is
 either missed by the other matching forms (the model's match is then
 tried) or matched (its attribution reads the model), so a command no
 policy matches computes it too. Its directories are resolved once per
@@ -740,7 +740,7 @@ full ledger query, extract substitutions, and match trace.
 | `policies[].trigger.event` | yes | `PreToolUse` for blockers (the most common). Other events parse but rarely make sense for `requires` gates. |
 | `policies[].trigger.match` | optional | Substring match against the tool name. For MCP tools: `mcp__<server>__<tool>`. For built-ins: `Bash`, `Edit`, `Write`, ... |
 | `policies[].trigger.bash_match` | optional | Regex against `toolArgs.command` when `match: Bash`. Anchor at command start (`^` or `(^|\n|;|\\||&|\\()`) to catch env-prefixes and subshells. |
-| `policies[].trigger.path_match` | optional | Accepted by the schema but not evaluated: `harness policy intercept` ignores it, so a policy fires on every call its other trigger fields match. Narrow with `match`, `bash_match` or `input_match`. |
+| `policies[].trigger.path_match` | optional | Not evaluated: `harness policy intercept` and `harness dry-run` ignore it, so a policy would fire on every call its other trigger fields match. The schema still parses the key (a parse failure would make every hook refuse), but `harness validate` reports it as an error. Narrow with `match`, `bash_match` or `input_match`; a hook-level `path_match` is documentation only (the hook's script must filter on the path itself). |
 | `policies[].trigger.input_match` | optional | Map of a `toolArgs.`-namespaced extract expression to a literal (`string`/`number`/`boolean`), compared by strict equality and ANDed with the other trigger fields. Narrows a trigger to one MODE of a tool (`task_finish` with `autoMerge: true`). A missing path never matches; an empty map is rejected. |
 | `policies[].trigger.extract` | optional | Map of `${VAR}` → JSONPath against the tool payload. Required if `ledger_tag` references a non-builtin `${VAR}`. |
 | `policies[].requires.ledger_tag` | yes, unless `operator_only: true` | Tag the runtime queries grounding-mcp for. Substring match against an entry's `content` or `source`. |

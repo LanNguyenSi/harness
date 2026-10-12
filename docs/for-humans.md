@@ -412,15 +412,15 @@ init --template full` (or hand-add the same three) to pick this up;
 `apply` does not retroactively add new default policies to an existing
 manifest.
 
-**Upgrade note for `harness validate --strict` in CI.** All three deny
-policies intentionally declare no `producers:` (see the "Enforcement
-layer" section of the OKF doc for why), so `harness validate` emits a
-`declares no producers` warning for each on a `full`-template manifest.
-Under `--strict`, warnings become errors: expect 3 new errors where
-`master` produced 0. This is intentional, not a bug; do not "fix" it by
-adding a producer, which would just document a forgery path as if it
-were sanctioned. If you gate CI on `validate --strict`, budget for this
-before upgrading.
+**Upgrade note for `harness validate --strict` in CI.** The three deny
+policies are `operator_only: true`, so `harness validate` skips them in
+its `declares no producers` warning (an unconditional deny has no
+evidence source to document), and `--strict` adds no errors for them on
+a `full`-template manifest: the result is the same as before the
+upgrade. Do not add a `producers:` entry to one of them; that would
+document a forgery path as if it were sanctioned. The "Enforcement
+layer" section of the OKF doc says why they carry none. If you gate CI
+on `validate --strict`, these three policies need no budget.
 
 **Pause is not for routine gate bypass.** Three rules of thumb:
 
