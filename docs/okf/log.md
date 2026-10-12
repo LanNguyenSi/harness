@@ -2,6 +2,8 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-10-12T11:28:39Z, task 6c47374d: `src/runtime/read-only-bash.ts` no longer cites the deleted risk-gate doc; nine comment pointers were dropped or replaced by a short inline reason or a pointer to commit 323e99a5, comments only, line count unchanged. `quote-model-divergence.md` lists the file as a source; its claims concern the module's consumers and `splitCurlWords`, not those comments. Re-stamped; no body text changed. `understanding-gate-auto-mode-signals.md` also lists it but was already stale on the base commit against this file, so it is left as it was.
+
 - 2026-10-10T14:19:04Z, task f45dd0a0: `harness export` prints the manifest posture warnings on stderr; the `harness export` row of `docs/CLI.md` says so (one sentence appended in place, no line shift). `debug-verb-selection.md`, `codex-adapter-parity-gaps.md`, `evidence-ledger-trust-boundary.md` and `policy-engine-producer-wiring.md` list `docs/CLI.md` as a source; none of their claims or citations concerns the export row. Re-stamped; no body text changed.
 
 - 2026-10-10T14:13:12Z, stale references and the false policy-off advice fixed (task
