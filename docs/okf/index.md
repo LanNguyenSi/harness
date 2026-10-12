@@ -152,5 +152,7 @@ reported upstream, silently ignored here.
   the operator procedure to unblock a locked session, the 6-tier session-id
   resolution, and the expiry semantics that re-arm the gate.
 - [Kill switches, pause vs gate disable](pause-vs-gate-kill-switch.md), the two
-  distinct kill-switch mechanisms, when to use which, restore paths, and trust
-  caveats.
+  distinct kill-switch mechanisms (`harness pause` mutes the policy-intercept
+  and runtime-reality hooks, never branch-protection; `harness gate disable`
+  edits settings.json), when to use which, restore paths, the `operator_only`
+  deny policies that guard both, and trust caveats.
