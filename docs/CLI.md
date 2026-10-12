@@ -57,7 +57,7 @@ A key, pack or command that a release removed does not fail the load (`src/schem
 - a removed manifest key (for example `grounding.policies_source` or `risk`) is stripped with a warning;
 - a policy that carries the removed `when:` field is dropped whole, with one warning, because keeping only its trigger would widen the gate;
 - a removed pack name in `policy_packs[]` is ignored with a warning;
-- a hook or policy that still calls a removed CLI command is reported with a warning.
+- a hook or policy that still calls a removed CLI command is reported with a warning;
 - an override layer that sets a policy's `when:` to null (`null`, `~` or empty) while a lower layer carries `when:` is reported with a warning, because the merge deletes the key and the policy would load trigger-only.
 
 `harness validate`, `harness doctor`, `harness apply` and `harness export` print these warnings, and `harness validate --strict` fails on them. A key that was never valid is not on the removed list and still fails the load.
