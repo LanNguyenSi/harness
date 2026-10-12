@@ -178,16 +178,19 @@ function policiesOf(raw: unknown): unknown[] {
 }
 
 /**
- * A layer that sets `when` to null (`when: null`, `when: ~`, an empty
- * `when:`) on a policy whose lower layers carry `when:` deletes the key in
- * the merge, so the policy loads trigger-only instead of being dropped as a
- * `when:` policy. One warning per such policy and layer; the path names the
+ * Merge the override layers onto the base in load order and report every
+ * layer that sets `when` to null (`when: null`, `when: ~`, an empty
+ * `when:`) on a policy whose lower layers carry `when:`. The merge deletes
+ * the key, so the policy would load trigger-only instead of being dropped
+ * as a `when:` policy. A hit is reported only when the policy survives the
+ * whole merge without `when:` (a later layer that deletes the policy or
+ * sets `when:` again leaves nothing to warn about). The path names the
  * policy's index in the merged manifest.
  */
-export function findWhenTombstones(
+export function mergeLayersWithWhenTombstones(
   baseRaw: unknown,
   layers: ReadonlyArray<{ raw: unknown; label: string }>,
-): ManifestPostureWarning[] {
+): { merged: unknown; warnings: ManifestPostureWarning[] } {
   const hits: Array<{ name: string; label: string }> = [];
   let current: unknown = baseRaw;
   for (const layer of layers) {
@@ -203,14 +206,27 @@ export function findWhenTombstones(
     }
     current = applyLayers(current, layer.raw);
   }
-  const merged = policiesOf(current);
-  return hits.map(({ name, label }) => {
-    const idx = merged.findIndex((p) => isPlainRecord(p) && p["name"] === name);
-    return {
-      path: idx >= 0 ? `policies[${idx}]` : "policies",
+  const mergedPolicies = policiesOf(current);
+  const warnings: ManifestPostureWarning[] = [];
+  for (const { name, label } of hits) {
+    const idx = mergedPolicies.findIndex((p) => isPlainRecord(p) && p["name"] === name);
+    if (idx < 0) continue;
+    const policy = mergedPolicies[idx];
+    if (isPlainRecord(policy) && Object.prototype.hasOwnProperty.call(policy, "when")) continue;
+    warnings.push({
+      path: `policies[${idx}]`,
       message: `the ${label} sets when: to null on policy "${name}", whose lower layers carry when:; the merge deletes the key, so the policy loads trigger-only (matching every call its trigger names) instead of being dropped. Remove the when: line from the layer, or remove the policy.`,
-    };
-  });
+    });
+  }
+  return { merged: current, warnings };
+}
+
+/** The warnings of `mergeLayersWithWhenTombstones` alone. */
+export function findWhenTombstones(
+  baseRaw: unknown,
+  layers: ReadonlyArray<{ raw: unknown; label: string }>,
+): ManifestPostureWarning[] {
+  return mergeLayersWithWhenTombstones(baseRaw, layers).warnings;
 }
 
 export function loadMergedRaw(opts: LoaderOptions = {}): LoadedRaw {
@@ -224,8 +240,9 @@ export function loadMergedRaw(opts: LoaderOptions = {}): LoadedRaw {
     ? readYamlFile(resolved.projectLayer, "project override layer")
     : undefined;
 
-  const mergedRaw = applyLayers(baseRaw, ...machineLayers, projectLayer);
-  const warnings = findWhenTombstones(baseRaw, [
+  // One merge: the walk merges every layer in load order (the same order
+  // `applyLayers` uses) and returns the merged manifest with the warnings.
+  const { merged: mergedRaw, warnings } = mergeLayersWithWhenTombstones(baseRaw, [
     ...machineLayers.map((raw, i) => ({ raw, label: `machine override layer ${i + 1} (${resolved.machineLayers[i]})` })),
     ...(resolved.projectLayer ? [{ raw: projectLayer, label: `project override layer (${resolved.projectLayer})` }] : []),
   ]);
