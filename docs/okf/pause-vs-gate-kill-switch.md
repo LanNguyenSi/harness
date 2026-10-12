@@ -3,7 +3,7 @@ type: runbook
 title: Kill switches — pause vs gate disable
 description: harness has two distinct operator kill switches, `harness pause` (sentinel file, makes the `harness policy intercept` and runtime-reality hooks dormant temporarily, operator-only checked in the CLI) versus `harness gate disable` (surgically removes matching hook groups from settings.json with a reversible snapshot); when to use which, exact flags, restore paths, and trust caveats.
 tags: [runbook, pause, gate-disable, kill-switch, operator]
-timestamp: 2026-10-12T11:26:35Z
+timestamp: 2026-10-12T11:37:30Z
 sources:
   - src/runtime/pause-sentinel.ts
   - src/runtime/command-normalize.ts
@@ -27,6 +27,8 @@ sources:
   - src/cli/pack/hook-bootstrap.ts
   - src/cli/pack/hook-runtime-reality.ts
   - src/cli/pack/hook-branch-protection.ts
+  - src/policy-packs/builtin/branch-protection.ts
+  - src/cli/init/index.ts
   - docs/policy-packs/branch-protection.md
   - docs/for-humans.md
   - docs/CLI.md
@@ -97,6 +99,6 @@ Net effect: these three policies are a hard boundary against ANY in-session evid
 ## Quick recovery recipes
 
 - Bash locked out by a `harness policy intercept` gate (recovery command itself blocked): `harness pause --for 15m --reason "recovery"` from your OWN terminal outside the agent session silences it. If a custom hook group blocks and `pause` does not mute it, run `harness gate disable` (list), find the group's matcher, `harness gate disable --matcher <substring>`, fix the underlying state, then `harness gate enable`.
-- Edit or write refused on a protected branch (branch-protection; its hook matches only `Write|Edit` on Claude Code and `apply_patch` on Codex, `src/policy-packs/builtin/branch-protection.ts:70-71#"PRE_TOOL_USE_MATCH_CODEX"`, and does not yield to a pause). Claude Code: `harness gate disable` (list), `harness gate disable --matcher Write|Edit`, do the edit, then `harness gate enable`. Codex: set `enabled: false` on the pack and run `harness apply --runtime codex --install`, do the edit, then revert both.
+- Edit or write refused on a protected branch (branch-protection; its hook matches only `Write|Edit` on Claude Code and `apply_patch` on Codex, `src/policy-packs/builtin/branch-protection.ts:70-71#"PRE_TOOL_USE_MATCH_CODEX"`, and does not yield to a pause). Claude Code: `harness gate disable` (list), `harness gate disable --matcher 'Write|Edit'` (quoted: an unquoted `|` is a shell pipe), do the edit, then `harness gate enable`. Codex: set `enabled: false` on the pack and run `harness apply --runtime codex --install`, do the edit, then revert both.
 - Debugging whether harness causes a behavior: `harness pause --for 15m --reason "A/B test"`, reproduce, `harness resume` (or let it auto-expire).
 - Check pause state: stat `<generatedDir>/.harness-paused`, or just run any hooked tool and read the stderr notice; audit history via `harness audit --since 24h` (session bucket `default`).
