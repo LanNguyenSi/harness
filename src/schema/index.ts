@@ -182,6 +182,7 @@ export {
   formatPostureWarning,
   invokesRemovedCommand,
   findRemovedCommandUses,
+  remapDiagnosticPath,
 } from "./removed-keys.js";
 export type {
   RemovedManifestPath,
