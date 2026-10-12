@@ -34,7 +34,9 @@ export function registerOperatorLifecycle(
   program
     .command("pause")
     .description(
-      "Temporarily make all harness hooks dormant by writing a sentinel under harness.generated/. " +
+      "Temporarily make the hooks that honour the pause sentinel dormant (`harness policy intercept` and " +
+        "`harness pack hook runtime-reality`; the branch-protection hook does not yield to a pause) " +
+        "by writing a sentinel under harness.generated/. " +
         "Operator-only (refuses when $CLAUDE_CODE_SESSION_ID, $CLAUDE_SESSION_ID, or $CODEX_SESSION_ID " +
         "is set, or stdin is non-TTY). Intended for lockout recovery, debug A/B-tests, and incident " +
         "hotfixes. NOT for routine gate bypass: for permanent per-policy disable, remove the " +

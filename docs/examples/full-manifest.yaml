@@ -464,7 +464,7 @@ policies:
         - "Stop. If you believe you have a legitimate reason to run a command without one of these env vars set, ask the OPERATOR to do it from their own terminal instead. This gate is an unconditional deny (operator_only: true); see docs/okf/pause-vs-gate-kill-switch.md for the honest trust model and the residual bash_match coverage gap."
 
   - name: deny-pause-sentinel-forgery
-    description: Deny Bash writes (redirect, tee, cp) to the harness pause sentinel file (.harness-paused). The sentinel is unsigned JSON; a forged file silences every gate exactly like a real operator pause. Reads (cat, stat) are unaffected.
+    description: Deny Bash writes (redirect, tee, cp) to the harness pause sentinel file (.harness-paused). The sentinel is unsigned JSON; a forged file makes `harness policy intercept` and the runtime-reality hook dormant exactly like a real operator pause (the branch-protection hook does not read it). Reads (cat, stat) are unaffected.
     trigger:
       event: PreToolUse
       match: "Bash"

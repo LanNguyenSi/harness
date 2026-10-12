@@ -57,4 +57,14 @@ describe("harness pause (top-level operator command)", () => {
     expect(stdout).toMatch(/\bpause\b/);
     expect(stdout).toMatch(/\bresume\b/);
   });
+
+  it("the pause description names the hooks that honour the sentinel and excludes branch-protection", () => {
+    const program = buildProgram();
+    const pause = program.commands.find((c) => c.name() === "pause");
+    const d = pause?.description() ?? "";
+    expect(d).toContain("harness policy intercept");
+    expect(d).toContain("harness pack hook runtime-reality");
+    expect(d).toContain("branch-protection hook does not yield");
+    expect(d).not.toContain("all harness hooks");
+  });
 });
