@@ -968,22 +968,22 @@ function checkPolicyPackConfigsAsDiagnostics(manifest: Manifest): Diagnostic[] {
 // different field (documentation for a filter the referenced script must
 // enforce itself) and is not checked here.
 export function checkPolicyTriggerPathMatch(manifest: Manifest): Diagnostic[] {
-  const diags: Diagnostic[] = [];
-  for (let i = 0; i < manifest.policies.length; i++) {
-    const p = manifest.policies[i];
-    if (p === undefined || p.trigger.path_match === undefined) continue;
-    diags.push({
-      severity: "error",
-      path: `policies[${i}].trigger.path_match`,
-      message:
-        `policy "${p.name}" sets trigger.path_match, which harness does not evaluate: ` +
-        `the policy would fire on every call its other trigger fields match. ` +
-        `Remove it and narrow the policy with trigger.match, trigger.bash_match ` +
-        `or trigger.input_match; a hook-level path_match (hooks[].path_match) is ` +
-        `documentation only, so the hook's script must filter on the path itself.`,
-    });
-  }
-  return diags;
+  return manifest.policies.flatMap((p, i): Diagnostic[] =>
+    p.trigger.path_match === undefined
+      ? []
+      : [
+          {
+            severity: "error",
+            path: `policies[${i}].trigger.path_match`,
+            message:
+              `policy "${p.name}" sets trigger.path_match, which harness does not evaluate: ` +
+              `the policy would fire on every call its other trigger fields match. ` +
+              `Remove it and narrow the policy with trigger.match, trigger.bash_match ` +
+              `or trigger.input_match; a hook-level path_match (hooks[].path_match) is ` +
+              `documentation only, so the hook's script must filter on the path itself.`,
+          },
+        ],
+  );
 }
 
 export function runAssetChecks(
