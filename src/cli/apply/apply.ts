@@ -61,7 +61,7 @@ import {
   type Runtime,
 } from "../../policy-packs/index.js";
 import { parseManifest, type Manifest } from "../../schema/index.js";
-import { formatPostureWarning } from "../../schema/removed-keys.js";
+import { formatPostureWarning, originalIndex } from "../../schema/removed-keys.js";
 import { withDerivedPolicies, withoutDerivedPolicies } from "../../runtime/workflow-policies.js";
 import { checkPolicyGroundingMcp } from "../validate/checks.js";
 import { EX_FAIL, EX_NOINPUT, HarnessExitError } from "../exit-codes.js";
@@ -799,7 +799,7 @@ export async function apply(opts: ApplyOptions = {}): Promise<ApplyResult> {
   };
   if (opts.homeDir !== undefined) loaderOpts.homeDir = opts.homeDir;
   if (opts.project !== undefined) loaderOpts.project = opts.project;
-  const { manifest, warnings: postureWarnings } = loadManifest(loaderOpts);
+  const { manifest, warnings: postureWarnings, indexMaps } = loadManifest(loaderOpts);
 
   // Fail loud on unknown pack source / builtin name BEFORE expansion.
   // Without this, `expandPolicyPacks` silently skips the bad entry and
@@ -809,7 +809,7 @@ export async function apply(opts: ApplyOptions = {}): Promise<ApplyResult> {
   const packSourceIssues = checkPolicyPackSources(manifest);
   if (packSourceIssues.length > 0) {
     const lines = packSourceIssues.map(
-      (i) => `policy_packs[${i.packIndex}] (${i.packName}).${i.field}: ${i.message}`,
+      (i) => `policy_packs[${originalIndex(indexMaps?.policy_packs, i.packIndex)}] (${i.packName}).${i.field}: ${i.message}`,
     );
     throw new HarnessExitError(
       `harness apply: ${lines.length} policy pack issue${

@@ -223,6 +223,23 @@ describe("add — asset gate baseline diff", () => {
     expect(result.warnings[0]).toContain("harness validate");
   });
 
+  it("names the written policy_packs index in a pre-existing pack error after a dropped pack (task 4ee45b99)", async () => {
+    fs.writeFileSync(
+      manifestPath,
+      ["version: 1", "policy_packs:", "  - { name: post-merge-gate }", "  - { name: no-such-pack }"].join("\n") + "\n",
+    );
+    const script = path.join(hooksDir, "clean-hook-2.sh");
+    fs.writeFileSync(script, "#!/bin/sh\nexit 0\n");
+    fs.chmodSync(script, 0o755);
+    const result = await add(
+      { type: "hook", entry: { name: "clean-hook-2", event: "SessionStart", command: script, blocking: false } },
+      { configPath: manifestPath, homeDir: tmpHome, dryRun: true },
+    );
+    const text = result.warnings.join("\n");
+    expect(text).toContain("policy_packs[1]");
+    expect(text).not.toContain("policy_packs[0]");
+  });
+
   it("Scenario B: a new asset error introduced by the add still blocks", async () => {
     await expect(
       add(

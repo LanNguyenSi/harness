@@ -12,6 +12,7 @@ import {
   parseManifestWithWarnings,
   type Manifest,
   type ManifestPostureWarning,
+  type StrippedIndexMaps,
 } from "../schema/index.js";
 import { readTextFileBoundedOrThrow } from "../io/read-regular-file.js";
 import { resolveHomeDir } from "../runtime/home-dir.js";
@@ -41,11 +42,18 @@ export interface LoadedManifest {
    * `harness doctor` and `harness apply` print them.
    */
   warnings: ManifestPostureWarning[];
+  /**
+   * Original positions of the policies[] / policy_packs[] entries that
+   * survived the load-time drop (`parseManifestWithWarnings`); absent when
+   * nothing was dropped. Used to name an index as written in a diagnostic.
+   */
+  indexMaps?: StrippedIndexMaps;
 }
 
 export interface LoadedRaw {
   mergedRaw: unknown;
   resolved: ResolvedPaths;
+  warnings: ManifestPostureWarning[];
 }
 
 const DEFAULT_BASENAME = "harness.yaml";
@@ -159,6 +167,52 @@ function readYamlFile(filePath: string, label: string): unknown {
   }
 }
 
+function isPlainRecord(v: unknown): v is Record<string, unknown> {
+  return typeof v === "object" && v !== null && !Array.isArray(v);
+}
+
+function policiesOf(raw: unknown): unknown[] {
+  if (!isPlainRecord(raw)) return [];
+  const p = raw["policies"];
+  return Array.isArray(p) ? p : [];
+}
+
+/**
+ * A layer that sets `when` to null (`when: null`, `when: ~`, an empty
+ * `when:`) on a policy whose lower layers carry `when:` deletes the key in
+ * the merge, so the policy loads trigger-only instead of being dropped as a
+ * `when:` policy. One warning per such policy and layer; the path names the
+ * policy's index in the merged manifest.
+ */
+export function findWhenTombstones(
+  baseRaw: unknown,
+  layers: ReadonlyArray<{ raw: unknown; label: string }>,
+): ManifestPostureWarning[] {
+  const hits: Array<{ name: string; label: string }> = [];
+  let current: unknown = baseRaw;
+  for (const layer of layers) {
+    if (layer.raw === undefined) continue;
+    const lower = policiesOf(current);
+    for (const entry of policiesOf(layer.raw)) {
+      if (!isPlainRecord(entry) || typeof entry["name"] !== "string") continue;
+      if (!Object.prototype.hasOwnProperty.call(entry, "when") || entry["when"] !== null) continue;
+      const name = entry["name"];
+      const target = lower.find((p) => isPlainRecord(p) && p["name"] === name);
+      if (!isPlainRecord(target) || !Object.prototype.hasOwnProperty.call(target, "when")) continue;
+      hits.push({ name, label: layer.label });
+    }
+    current = applyLayers(current, layer.raw);
+  }
+  const merged = policiesOf(current);
+  return hits.map(({ name, label }) => {
+    const idx = merged.findIndex((p) => isPlainRecord(p) && p["name"] === name);
+    return {
+      path: idx >= 0 ? `policies[${idx}]` : "policies",
+      message: `the ${label} sets when: to null on policy "${name}", whose lower layers carry when:; the merge deletes the key, so the policy loads trigger-only (matching every call its trigger names) instead of being dropped. Remove the when: line from the layer, or remove the policy.`,
+    };
+  });
+}
+
 export function loadMergedRaw(opts: LoaderOptions = {}): LoadedRaw {
   const resolved = resolvePaths(opts);
 
@@ -171,15 +225,20 @@ export function loadMergedRaw(opts: LoaderOptions = {}): LoadedRaw {
     : undefined;
 
   const mergedRaw = applyLayers(baseRaw, ...machineLayers, projectLayer);
-  return { mergedRaw, resolved };
+  const warnings = findWhenTombstones(baseRaw, [
+    ...machineLayers.map((raw, i) => ({ raw, label: `machine override layer ${i + 1} (${resolved.machineLayers[i]})` })),
+    ...(resolved.projectLayer ? [{ raw: projectLayer, label: `project override layer (${resolved.projectLayer})` }] : []),
+  ]);
+  return { mergedRaw, resolved, warnings };
 }
 
 export function loadManifest(opts: LoaderOptions = {}): LoadedManifest {
-  const { mergedRaw, resolved } = loadMergedRaw(opts);
+  const { mergedRaw, resolved, warnings: layerWarnings } = loadMergedRaw(opts);
   let manifest: Manifest;
   let warnings: ManifestPostureWarning[];
+  let indexMaps: StrippedIndexMaps | undefined;
   try {
-    ({ manifest, warnings } = parseManifestWithWarnings(mergedRaw));
+    ({ manifest, warnings, indexMaps } = parseManifestWithWarnings(mergedRaw));
   } catch (err) {
     if (err instanceof ManifestParseError) {
       throw new HarnessExitError(err.message, EX_NOINPUT);
@@ -202,5 +261,10 @@ export function loadManifest(opts: LoaderOptions = {}): LoadedManifest {
   // direction (missing hooks -> no policy derived, not a silent allow).
   manifest = withDerivedPolicies(manifest);
 
-  return { manifest, resolved, warnings };
+  return {
+    manifest,
+    resolved,
+    warnings: [...layerWarnings, ...warnings],
+    ...(indexMaps !== undefined ? { indexMaps } : {}),
+  };
 }

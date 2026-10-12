@@ -20,7 +20,8 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { loadManifest, resolvePaths } from "../../src/cli/loader.js";
+import { findWhenTombstones, loadManifest, resolvePaths } from "../../src/cli/loader.js";
+import { validate } from "../../src/cli/validate/index.js";
 
 const PROJECT_NAME = "scoped-repo";
 
@@ -128,5 +129,60 @@ describe("resolvePaths: rejects an unsafe opts.project at its own path.join sink
     expect(resolved.projectLayer).toBe(
       path.join(tmpHome, "projects", PROJECT_NAME, "harness.overrides.yaml"),
     );
+  });
+});
+
+describe("an override layer that nulls when: on a policy (task 4ee45b99)", () => {
+  const SCOPED = { name: "scoped", when: { "environment.name": "production" } };
+  const PLAIN = { name: "plain" };
+
+  it("warns once, naming the policy and the layer, for when: null, when: ~ and an empty when:", () => {
+    for (const layer of [{ policies: [{ name: "scoped", when: null }] }]) {
+      const w = findWhenTombstones({ policies: [PLAIN, SCOPED] }, [{ raw: layer, label: "project override layer (x.yaml)" }]);
+      expect(w).toHaveLength(1);
+      expect(w[0]!.path).toBe("policies[1]");
+      expect(w[0]!.message).toContain('policy "scoped"');
+      expect(w[0]!.message).toContain("project override layer (x.yaml)");
+    }
+  });
+
+  it("does not warn when the policy has no when: below the layer", () => {
+    const w = findWhenTombstones({ policies: [PLAIN] }, [{ raw: { policies: [{ name: "plain", when: null }] }, label: "L" }]);
+    expect(w).toEqual([]);
+  });
+
+  it("does not warn for a layer that leaves when: alone", () => {
+    const w = findWhenTombstones({ policies: [SCOPED] }, [{ raw: { policies: [{ name: "scoped", description: "x" }] }, label: "L" }]);
+    expect(w).toEqual([]);
+  });
+
+  it("loadManifest and validate --strict report it from a real project layer file", () => {
+    const base = [
+      "version: 1",
+      "hooks:",
+      "  - { name: h, event: PreToolUse, command: /usr/bin/true, blocking: false }",
+      "policies:",
+      "  - name: scoped",
+      "    description: scoped",
+      "    trigger: { event: PreToolUse, match: Bash }",
+      "    requires: { ledger_tag: 'ok:${SESSION_ID}' }",
+      "    hook: h",
+      "    enforcement: block",
+      "    when: { environment.name: production }",
+      "",
+    ].join("\n");
+    fs.writeFileSync(path.join(tmpHome, "harness.yaml"), base);
+    for (const whenLine of ["    when: null", "    when: ~", "    when:"]) {
+      fs.writeFileSync(
+        path.join(tmpHome, "projects", PROJECT_NAME, "harness.overrides.yaml"),
+        ["policies:", "  - name: scoped", whenLine, ""].join("\n"),
+      );
+      const loaded = loadManifest({ homeDir: tmpHome, project: PROJECT_NAME });
+      const hits = loaded.warnings.filter((w) => w.message.includes("sets when: to null"));
+      expect(hits).toHaveLength(1);
+      expect(hits[0]!.message).toContain("project override layer");
+      const strict = validate({ homeDir: tmpHome, project: PROJECT_NAME, strict: true, versionProbe: () => null, builtinRuntimeProbe: () => [] });
+      expect(strict.diagnostics.some((d) => d.severity === "error" && d.message.includes("sets when: to null"))).toBe(true);
+    }
   });
 });
