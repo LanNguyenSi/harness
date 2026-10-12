@@ -490,7 +490,7 @@ export function policyMatchArm(
   // when a payload carries both as non-null objects (review round 1,
   // task 2699b476 round 2, see `inputMatchMismatchesEvent` below).
   // Mirrored in `policyMatchesTool` (`src/cli/dry-run.ts`) for the
-  // single-envelope case only, since dry-run's `--input` is always one
+  // single-envelope case only, since dry-run's `--tool-args` is always one
   // object; `harness dry-run` cannot reproduce the mixed-envelope
   // arm. Both `input_match` parity and the mixed-envelope-is-intercept-only
   // caveat are recorded in docs/okf/debug-verb-selection.md's

@@ -149,7 +149,7 @@ function policyMatchesTool(
   // contradiction the bash_match arms below already document once for
   // their own family: dry-run reporting "no policy matches" for a call
   // `policy intercept` blocks. Parity holds only for what dry-run can
-  // express: `--input` is always a single JSON object, so it cannot
+  // express: `--tool-args` is always a single JSON object, so it cannot
   // reproduce the runtime's mixed tool_input/raw_input envelope
   // (review round 1, task 2699b476 round 2): that arm is
   // intercept-only by construction, not a gap in this mirror.
