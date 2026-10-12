@@ -40,7 +40,7 @@ function fromZodIssues(err: ManifestParseError): Diagnostic[] {
 }
 
 export function validate(opts: ValidateOptions = {}): ValidateResult {
-  const { mergedRaw, resolved } = loadMergedRaw(opts);
+  const { mergedRaw, resolved, warnings: layerWarnings } = loadMergedRaw(opts);
 
   let manifest: Manifest | null = null;
   let diagnostics: Diagnostic[] = [];
@@ -66,6 +66,10 @@ export function validate(opts: ValidateOptions = {}): ValidateResult {
       throw err;
     }
   }
+
+  diagnostics.push(
+    ...layerWarnings.map((w): Diagnostic => ({ severity: "warning", path: w.path, message: w.message })),
+  );
 
   if (manifest) {
     // F2 (review round 2, 99f47307 Slice 1): fold `workflows[]`-derived

@@ -1613,6 +1613,17 @@ describe("apply — policy_packs expansion (Phase 6 #2)", () => {
     expect(err?.message).toMatch(/not a known builtin pack/);
   });
 
+  it("names the written policy_packs index when a removed pack before the failing one was dropped (task 4ee45b99)", async () => {
+    writePolicyPackManifest([{ name: "post-merge-gate" }, { name: "no-such-pack" }]);
+    const err = await apply({ homeDir: tmpHome }).then(
+      () => null,
+      (e: unknown) => e as HarnessExitError,
+    );
+    expect(err).toBeInstanceOf(HarnessExitError);
+    expect(err?.message).toContain("policy_packs[1] (no-such-pack)");
+    expect(err?.message).not.toContain("policy_packs[0] (no-such-pack)");
+  });
+
   it("does not flag an enabled:false pack with a bogus source or name", async () => {
     writePolicyPackManifest([
       { name: "no-such-pack", source: "git:https://x.git", enabled: false },

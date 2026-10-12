@@ -9,7 +9,8 @@ import {
   formatValidationErrors,
   validateBeforeWrite,
 } from "../../io/validate-before-write.js";
-import { parseManifest } from "../../schema/index.js";
+import { parseManifestWithWarnings } from "../../schema/index.js";
+import { remapDiagnosticPath } from "../../schema/removed-keys.js";
 import { withDerivedPolicies } from "../../runtime/workflow-policies.js";
 import { runAssetChecks } from "../validate/checks.js";
 import { fmtDiagnostic } from "../validate/types.js";
@@ -88,10 +89,15 @@ export async function add(action: AddEntry, opts: AddOptions = {}): Promise<AddR
   // known to exist right now (review round 3, F2). The derived view is
   // kept as a parity pin against validate, and to stay correct the moment
   // a future check does read manifest.policies at error severity.
-  const manifest = withDerivedPolicies(parseManifest(parseYaml(proposed)));
+  const proposedParsed = parseManifestWithWarnings(parseYaml(proposed));
+  const manifest = withDerivedPolicies(proposedParsed.manifest);
+  // Diagnostics index the parsed manifest, where a dropped policy or pack no
+  // longer holds its slot: name the index as written, like `harness validate`.
   const proposedErrors = runAssetChecks(manifest, {
     homeDir: opts.homeDir,
-  }).filter((d) => d.severity === "error");
+  })
+    .filter((d) => d.severity === "error")
+    .map((d) => ({ ...d, path: remapDiagnosticPath(d.path, proposedParsed.indexMaps) }));
 
   // Compute a baseline error set from the original manifest so that
   // pre-existing asset problems unrelated to this add do not block it.
@@ -99,10 +105,13 @@ export async function add(action: AddEntry, opts: AddOptions = {}): Promise<AddR
   // blocking on all proposed errors so the gate never weakens on a broken base.
   let baselineKeys = new Set<string>();
   try {
-    const baselineManifest = withDerivedPolicies(parseManifest(parseYaml(original)));
+    const baselineParsed = parseManifestWithWarnings(parseYaml(original));
+    const baselineManifest = withDerivedPolicies(baselineParsed.manifest);
     const baselineErrors = runAssetChecks(baselineManifest, {
       homeDir: opts.homeDir,
-    }).filter((d) => d.severity === "error");
+    })
+      .filter((d) => d.severity === "error")
+      .map((d) => ({ ...d, path: remapDiagnosticPath(d.path, baselineParsed.indexMaps) }));
     baselineKeys = new Set(baselineErrors.map((d) => `${d.severity}|${d.path}|${d.message}`));
   } catch {
     // Defensive backstop: a base manifest that cannot be parsed is normally
