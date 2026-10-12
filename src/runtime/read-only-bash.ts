@@ -656,7 +656,7 @@ const VERSION_OR_HELP_FLAGS: ReadonlySet<string> = new Set([
  * floor it used to also serve), and directly by `isReadOnlyCurlCommand`
  * (task fdaad781, round 2:
  * added `\r` after a measured bare-CR header-injection reaching curl's
- * wire, see docs/risk-gate.md's curl section). NOT reused by
+ * wire). NOT reused by
  * `isReadOnlyBashPipeline`, which deliberately admits a bare `|` (see
  * its own doc comment) and so needs a narrower reject set.
  */
@@ -842,9 +842,9 @@ export function isReadOnlyBashPipeline(command: string): boolean {
 // Classifier's built-in floor, and never by `isReadOnlyBashCommand`
 // / `isReadOnlyBashPipeline` above. Task da823721 (blast-radius decision,
 // verb list, secrets/configmap exclusion, and the fail-safe rationale
-// for each: all recorded in docs/risk-gate.md's "Kubectl read-only verb
-// floor" section — this is the single source of truth for the scope,
-// keep it there rather than duplicating it here).
+// for each) now live in the lists and comments below, which are the
+// single source of truth for the scope; the design doc that held
+// them was removed in commit 323e99a5 (read it at its parent).
 //
 // Design: two ALLOWLISTS, not a metacharacter denylist. Round 1 and
 // round 2 of this task each patched one more shell-metacharacter
@@ -975,8 +975,8 @@ function kubectlArgMentionsSecret(tokens: readonly string[]): boolean {
  * True when any raw token mentions "configmap", or is (or contains, as
  * one comma-separated resource-list segment) the bare abbreviation
  * `cm` — `get cm`, `get cm/my-map`, `get pods,cm`, `get cm,pods` are
- * all caught. ConfigMap data is a common credential store (see
- * docs/risk-gate.md), so it gets the same fail-safe exclusion as
+ * all caught. ConfigMap data is a common credential store, so it gets
+ * the same fail-safe exclusion as
  * Secrets. The `cm` check is segment-based rather than a bare substring
  * match so it does not fire on an unrelated word that merely starts or
  * ends with "cm" (`cmd`, `cmagent`).
@@ -1687,8 +1687,8 @@ function splitCurlWords(s: string): CurlWord[] | null {
  * (`--insecure`) from this set: `-L` follows a redirect and forwards a
  * custom `-H` header cross-host over plaintext; `-k` is a deliberate
  * TLS-verification bypass that should stay approval-gated. Both now
- * forfeit the shape. See docs/risk-gate.md's curl section for the
- * measurement behind the `-L` finding.
+ * forfeit the shape. The `-L` finding rests on the cross-host header
+ * forwarding described above.
  */
 const CURL_NO_VALUE_SHORT_CHARS: ReadonlySet<string> = new Set(["s", "S", "f", "I"]);
 /** curl long flags that take no value: no flag on this list names a file, and the only method any of them selects is HEAD (`--head`), which is read-only. See `CURL_NO_VALUE_SHORT_CHARS` for why `--location` and `--insecure` are not on it. */
@@ -1720,9 +1720,9 @@ const CURL_VALUE_LONG_FLAGS: ReadonlyMap<string, string> = new Map([
  * so admitting them widens no shape gap and closes the most common
  * single-parameter read-only query-string spelling this floor used to
  * forfeit (a MULTI-parameter query string joined by `&` still forfeits
- * even single-quoted -- see docs/risk-gate.md's Residuals for why that
- * stays out of scope). See docs/risk-gate.md's curl section for the
- * measurement behind admitting `?`/`*`. Do not "clean up" further
+ * even single-quoted; that stays out of scope). Admitting `?`/`*` was
+ * a measured widening of the URL shape (curl section of the design
+ * doc removed in commit 323e99a5). Do not "clean up" further
  * without re-deriving it.
  */
 const CURL_SHAPE_URL_RE = /^https:\/\/[A-Za-z0-9.-]+(:[0-9]+)?(\/[^'\s{}[\]\\`$]*)?$/;
@@ -1740,9 +1740,9 @@ const CURL_SHAPE_URL_RE = /^https:\/\/[A-Za-z0-9.-]+(:[0-9]+)?(\/[^'\s{}[\]\\`$]
  * `hasUnsafeShellMetachar` guard already refuses both for the entire
  * command before any word is split out, so this function forfeits on
  * neither character itself (round 3, task fdaad781: they were dropped
- * from this regex as dead, unreachable code; see docs/risk-gate.md's
- * curl section for the measurement that motivated the `\r` guard in
- * the first place). A timeout value must be a bare non-negative
+ * from this regex as dead, unreachable code; the `\r` guard itself
+ * came from a measured case, see the curl section of the retired doc).
+ * A timeout value must be a bare non-negative
  * integer, `^[0-9]+$` exactly.
  */
 function isAllowedCurlFlagValue(key: string, value: CurlWord): boolean {
@@ -1785,10 +1785,10 @@ function consumeCurlFlagValue(
  * kubectl floors above: it never sinks below an operator classifier,
  * and only the DESTRUCTIVE floor (evaluated first in the removed Risk
  * Classifier) could raise above it. This comment states only
- * the grammar; see docs/risk-gate.md's "curl read-only SHAPE floor"
- * section for the full history (D-013's two leaked flag lists), the
- * round-2 changes (mandatory `-q`, dropped `-L`/`-k`, the `\r`/query-
- * string fixes), the residuals, and the operator escape hatch.
+ * the grammar; the history behind it (two leaked flag lists, mandatory
+ * `-q`, dropped `-L`/`-k`, the `\r`/query-string fixes) is in the
+ * design doc removed in commit 323e99a5 (read it at its parent). An
+ * operator can still approve whatever the shape forfeits.
  *
  * `true` requires ALL of: no shell chaining, redirection, substitution,
  * or background `&` anywhere in the whole command (the same whole-string
@@ -1800,8 +1800,8 @@ function consumeCurlFlagValue(
  * as the first argument, and skipping it leaves `$CURL_HOME/.curlrc` /
  * `$XDG_CONFIG_HOME/curlrc` / `~/.curlrc` free to set `output`,
  * `request`, `data`, or `upload-file` underneath every other spelling
- * this shape would otherwise accept -- see docs/risk-gate.md's curl
- * section for the measurement); every remaining word is either a flag
+ * this shape would otherwise accept -- measured, see the retired
+ * doc above); every remaining word is either a flag
  * drawn from the closed allowlists above (no flag on this list names a
  * file, and the only method any of them selects is HEAD, which is
  * read-only; curl's config surface is closed off by the mandatory
