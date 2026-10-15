@@ -995,7 +995,7 @@ export async function doctor(opts: DoctorOptions = {}): Promise<DoctorReport> {
   const policyPacks = buildPolicyPacks(manifest, applyRuntime.runtime);
   const templateDrift = buildTemplateDrift(manifest);
   const triggerBoundaryDrift = buildTriggerBoundaryDrift(manifest);
-    const groundingServer =
+  const groundingServer =
     manifest.tools.mcp.find(
       (m) => m.name === GROUNDING_MCP_SERVER_NAME && m.enabled !== false,
     ) ?? null;

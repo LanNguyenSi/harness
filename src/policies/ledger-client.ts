@@ -180,9 +180,8 @@ function startSubprocess(
   try {
     child = spawn(exe, args, {
       cwd: opts.cwd,
-      // Defense-in-depth parity with `recordPolicyDecision`
-      // (agent-tasks/973596d7): expand leading `~/` in env values so a
-      // manifest that bypassed validate cannot scatter cwd-relative
+      // Defense in depth (agent-tasks/973596d7): expand leading `~/` in
+      // env values so a manifest that bypassed validate cannot scatter cwd-relative
       // `./~/…` paths through the query path either.
       env: { ...process.env, ...(expandHomeInEnv(opts.mcpEnv) ?? {}) },
       stdio: ["pipe", "pipe", "pipe"],

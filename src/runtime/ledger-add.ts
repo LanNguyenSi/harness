@@ -1,8 +1,7 @@
 // Phase 6 #4 — generic `ledger_add` writer for harness-side runtime tags.
 //
-// Smaller cousin of `recordPolicyDecision`: writes one fact-typed
-// ledger row via grounding-mcp's `ledger_add` verb, with a caller-
-// supplied content string and source. The pack-side approval flow
+// Writes one fact-typed ledger row via grounding-mcp's `ledger_add` verb,
+// with a caller-supplied content string and source. The pack-side approval flow
 // uses this to write `understanding-approved:${SESSION_ID}` tags.
 //
 // All failure paths resolve to `{ ok: false, reason }` so callers can

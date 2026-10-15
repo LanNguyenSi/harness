@@ -28,7 +28,7 @@ export interface DerivedHook {
    * settings.json `timeout` is documented in seconds, NOT milliseconds
    * like the manifest's `budget_ms`). apply's `hookTimeoutSeconds`
    * (generate-settings.ts) converts `budget_ms` -> seconds via
-   * `Math.ceil(budget_ms / 1000)` (with a policy-intercept floor); the
+   * `Math.ceil(budget_ms / 1000)` (with a 1s floor); the
    * consumer of this field (`buildHookEntry` in ./index.ts) applies the
    * inverse `* 1000` when writing it back into `budget_ms`, so the
    * adopt→apply round-trip stays drift-free by construction for any
