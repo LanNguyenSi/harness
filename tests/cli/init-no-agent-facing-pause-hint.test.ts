@@ -16,7 +16,7 @@ import { parseManifest, type Manifest } from "../../src/schema/index.js";
 // in a surface an agent reads.
 //
 // `ux.run` (src/schema/policies.ts) is specifically the agent-facing
-// "what to do next" list — `renderAgentFacing` (src/runtime/intercept.ts)
+// "what to do next" list — `renderAgentFacing` (src/runtime/agent-facing.ts)
 // substitutes it straight into the PreToolUse deny JSON the agent reads.
 // `ux.cannot` / `ux.required` are allowed to keep naming `harness pause`/
 // `harness resume` (they describe what is already denied, e.g. on the

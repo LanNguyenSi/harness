@@ -290,24 +290,6 @@ export interface TriggerBoundaryDriftSection {
   warnings: string[];
 }
 
-/**
- * Hook-budget-vs-ledger-timeout margin (task d20a7e0c, follow-up to
- * f1aea826/7bf47554): blocking, ledger-consulting hooks (both directly
- * declared `harness policy intercept` hooks and enabled policy-pack
- * blockers) whose `budget_ms` does not clear
- * `requiredHookBudgetMs(health.timeout_ms)` — see
- * `checkHookBudgetLedgerMargin` in `validate/checks.ts` for the full
- * derivation. Every entry is a real fail-open gap (a merely SLOW ledger
- * can get the hook killed before it can write its fail-closed verdict),
- * so each rolls into `errorCount`, mirroring `templateDrift.errors`
- * above. Always present; empty when every such hook clears the margin
- * (or none exist, or grounding-mcp is not wired).
- */
-export interface HookBudgetLedgerMarginSection {
-  /** Each entry names an under-budgeted hook; rolls into errorCount. */
-  errors: string[];
-}
-
 export interface DoctorReport {
   manifestPath: string;
   manifestVersion: number;
@@ -356,12 +338,6 @@ export interface DoctorReport {
    * doctor.ignore_template_drift).
    */
   triggerBoundaryDrift: TriggerBoundaryDriftSection;
-  /**
-   * Hook-budget-vs-ledger-timeout margin (task d20a7e0c). Always
-   * present; `errors` empty when every blocking, ledger-consulting hook
-   * clears the derived margin.
-   */
-  hookBudgetLedgerMargin: HookBudgetLedgerMarginSection;
   /**
    * Grounding wiring health (task 129e1b94). Absent when no enabled
    * grounding-mcp entry is declared.

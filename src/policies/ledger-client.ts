@@ -5,13 +5,9 @@
 // ledger entries normalised to harness's LedgerEntry shape (see
 // src/policies/requires.ts). Any failure path resolves to
 // `{ kind: "degraded", reason }` — this TRANSPORT layer never decides
-// what degradation means. The policy evaluator routes a degraded result
-// through `degradedOutcome` (src/runtime/intercept.ts, task f1aea826):
-// `warn` policies degrade to the non-blocking `warn-degraded`,
-// `block`/`require_approval` policies fail CLOSED as `deny-degraded`.
-// (The original Phase 4 acceptance — unreachable ledger defaults to
-// warn-equivalent for every tier — is superseded; see the note in
-// docs/ROADMAP.md and docs/okf/gate-fail-posture-matrix.md.)
+// what degradation means; the caller decides. (The policy evaluator that
+// used to route a degraded result to `warn-degraded` / `deny-degraded` has
+// been removed.)
 
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import type { LedgerEntry } from "./requires.js";
@@ -184,9 +180,8 @@ function startSubprocess(
   try {
     child = spawn(exe, args, {
       cwd: opts.cwd,
-      // Defense-in-depth parity with `recordPolicyDecision`
-      // (agent-tasks/973596d7): expand leading `~/` in env values so a
-      // manifest that bypassed validate cannot scatter cwd-relative
+      // Defense in depth (agent-tasks/973596d7): expand leading `~/` in
+      // env values so a manifest that bypassed validate cannot scatter cwd-relative
       // `./~/…` paths through the query path either.
       env: { ...process.env, ...(expandHomeInEnv(opts.mcpEnv) ?? {}) },
       stdio: ["pipe", "pipe", "pipe"],
@@ -466,7 +461,7 @@ export type LedgerSessionCallResult =
  * spawns ONE subprocess lazily on first use, performs the initialize
  * handshake once, and multiplexes every subsequent `ledger_summary` /
  * `ledger_add` over the same stdio pipe. `dispose()` terminates the child;
- * the owner (e.g. the intercept CLI wrapper) MUST call it when done.
+ * the owner MUST call it when done.
  */
 export interface LedgerSession {
   querySummary(query: LedgerSessionQuery): Promise<LedgerQueryResult>;
@@ -682,7 +677,7 @@ export async function queryLedgerByTag(
 ): Promise<LedgerQueryResult> {
   // One-shot convenience wrapper: open a session, run the single summary
   // query, tear the subprocess down. Callers with more than one ledger
-  // round-trip per event (the runtime intercept) hold a session instead.
+  // round-trip per event hold a session instead.
   const session = openLedgerSession(opts);
   try {
     return await session.querySummary({

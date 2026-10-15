@@ -2,11 +2,9 @@
 // (`.git/refs/heads/<branch>`, `.git/HEAD`) used to block `resolveGitContext`
 // until the runtime's hook budget ran out, which the runtime treats as an
 // allow (task 323bd5b9). These tests drive the BUILT CLI, one child process
-// per case under a SIGKILL timeout, through every hook that reads the
-// branch: the pack hook that still resolves the git context and `harness
-// policy intercept`, the PreToolUse entrypoint both the Claude and the Codex
-// adapters install, plus branch-protection, which asks git itself (task
-// a4d8adc5) and so meets the FIFO through git.
+// per case under a SIGKILL timeout, through the hook that reads the branch:
+// branch-protection, which asks git itself (task a4d8adc5) and so meets the
+// FIFO through git.
 //
 // Needs dist/ (`npm run build` before `vitest`).
 
@@ -298,65 +296,5 @@ describe.skipIf(process.platform === "win32")("pack hook branch-protection --run
     expectBounded(out);
     expect(out.status).toBe(0);
     expect(out.stdout).toBe("");
-  });
-});
-
-describe.skipIf(process.platform === "win32")("policy intercept (the Claude and Codex PreToolUse entrypoint): a planted FIFO is bounded", () => {
-  const MANIFEST = `version: 1
-tools:
-  builtin:
-    known: [Read, Edit, Write, Bash]
-hooks: []
-policies: []
-`;
-  it("a FIFO at the loose ref does not hold the hook past the bound", () => {
-    const repo = makeRepo("main");
-    fifoOver(path.join(repo, ".git", "refs", "heads", "main"));
-    const cfg = path.join(tmp, "harness.yaml");
-    fs.writeFileSync(cfg, MANIFEST, "utf8");
-    const out = runCli(["policy", "intercept", "--config", cfg], {
-      hook_event_name: "PreToolUse",
-      session_id: "sess-fifo",
-      tool_name: "Read",
-      cwd: repo,
-      tool_input: { file_path: path.join(repo, "x") },
-    });
-    expectBounded(out);
-    expect(out.status).toBe(0);
-  });
-
-  // Codex's shell tool is an alias of Bash for the policy matcher; its event
-  // carries the command in `raw_input`.
-  const codexShellEvent = (repo: string): unknown => ({
-    hook_event_name: "PreToolUse",
-    session_id: "sess-fifo",
-    tool_name: "shell",
-    cwd: repo,
-    raw_input: { command: "git status" },
-  });
-  const runCodexShell = (repo: string): HookRun => {
-    const cfg = path.join(tmp, "harness.yaml");
-    fs.writeFileSync(cfg, MANIFEST, "utf8");
-    return runCli(["policy", "intercept", "--config", cfg], codexShellEvent(repo));
-  };
-
-  it("a Codex shell event with a FIFO at the loose ref does not hold the hook past the bound", () => {
-    const repo = makeRepo("main");
-    fifoOver(path.join(repo, ".git", "refs", "heads", "main"));
-    const out = runCodexShell(repo);
-    expectBounded(out);
-    expect(out.status).toBe(0);
-  });
-
-  // No-regression control: this passes on the pre-change code too, because a
-  // non-regular HEAD was rejected on stat before any read. It pins that the
-  // intercept path never opens a non-regular HEAD; the loose-ref case above is
-  // the discriminating one.
-  it("a Codex shell event with a FIFO at HEAD does not hold the hook past the bound", () => {
-    const repo = makeRepo("main");
-    fifoOver(path.join(repo, ".git", "HEAD"));
-    const out = runCodexShell(repo);
-    expectBounded(out);
-    expect(out.status).toBe(0);
   });
 });

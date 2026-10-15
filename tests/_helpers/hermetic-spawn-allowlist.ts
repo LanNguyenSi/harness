@@ -69,14 +69,11 @@
 // launched, in turn spawns on its own. Allowlisting the INFRA binaries listed
 // below (D6) is a deliberate, scoped trust decision about what THIS
 // suite's fixture setup genuinely needs — not a claim that everything
-// downstream of them is guarded too. One in-tree test deliberately
-// depends on this residual scope: the e2e in
-// tests/scripts/measure-bash-prefix-parse.test.ts runs its real-bash
-// corpus by spawning `node <tool> --self-test` (INFRA-allowed) and
-// letting bash run as the grandchild, rather than adding `bash` to
-// INFRA for a single consumer — recorded here (task 47297478 review)
-// so the next reader of this list knows that hole has a known,
-// intentional user.
+// downstream of them is guarded too. (A former in-tree test depended on this
+// residual scope: it ran a real-bash corpus by spawning `node <tool>
+// --self-test` and letting bash run as the grandchild, rather than adding
+// `bash` to INFRA for a single consumer; it was removed with the measure
+// scripts.)
 //
 // --- Why patching via require(), not `import`/`import *` ---
 // Named ESM imports of a CJS builtin (`import { spawn } from

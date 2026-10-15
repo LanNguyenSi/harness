@@ -1,9 +1,8 @@
 // Shared rule for characters that are not printable text but can hide,
 // reorder or smuggle what a reader sees. The terminal display escaper
-// (`escapeForDisplay` in `src/io/display-path.ts`) and the agent-facing
-// envelope sanitiser (`sanitizeEnvelopeReason` in `src/runtime/intercept.ts`)
-// both build their pattern from this one class, so a character covered here
-// is covered by both.
+// (`escapeForDisplay` in `src/io/display-path.ts`) and any other consumer
+// that renders untrusted text build their pattern from this one class, so a
+// character covered here is covered everywhere it is used.
 //
 // The rule: every code point with General_Category Cf (bidi controls, zero
 // width space, BOM, the tag characters, ...) or the property
@@ -12,10 +11,8 @@
 // U+17B5, U+180B-U+180D, U+180F, U+2065, U+FFF0-U+FFF8 and the rest of
 // U+E0000-U+E0FFF).
 //
-// One documented difference between the two callers: the envelope sanitiser
-// keeps the zero width joiner U+200D, because it joins emoji sequences in
-// model-visible prose; the display escaper escapes it, because it prints
-// file names whose exact identity matters and a joiner between two letters
+// The display escaper escapes the zero width joiner U+200D too: it prints
+// file names whose exact identity matters, and a joiner between two letters
 // renders as nothing.
 
 /** Regex character-class body (no brackets) of the shared rule; use with the `u` flag. */

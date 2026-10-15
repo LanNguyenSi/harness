@@ -69,9 +69,7 @@ export type Requires = z.infer<typeof RequiresSchema>;
 //
 // Resolution sources (all live as of Phase 5, see ARCHITECTURE §6):
 //   - SESSION_ID — `src/runtime/session-id.ts:resolveSessionId`, fed from
-//     the hook event's `session_id` or `$CLAUDE_SESSION_ID`. End-to-end
-//     coverage in `tests/runtime/intercept.test.ts` (the `dogfood:${SESSION_ID}`
-//     fixture).
+//     the hook event's `session_id` or `$CLAUDE_SESSION_ID`.
 //   - REPO / BRANCH / CWD — populated by the runtime from git + process state
 //     before `evaluateExtract` runs (`src/io/extract.ts:ExtractBuiltins`).
 //   - TOOL_NAME — taken from the hook event payload.

@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { expandPolicyPacks } from "../../src/policy-packs/expand.js";
 import { parseManifest } from "../../src/schema/index.js";
+import { GIT_READ_DEADLINE_MS } from "../../src/cli/pack/hook-branch-protection.js";
+import { hookTimeoutSeconds } from "../../src/cli/apply/generate-settings.js";
+import { resolve as resolveBranchProtection } from "../../src/policy-packs/builtin/branch-protection.js";
+import { KNOWN_RUNTIMES } from "../../src/policy-packs/runtime.js";
 
 function buildManifest(packs: unknown[]): ReturnType<typeof parseManifest> {
   return parseManifest({ version: 1, policy_packs: packs });
@@ -82,5 +86,27 @@ describe("branch-protection pack expansion", () => {
     expect(r.hooks).toEqual([]);
     expect(r.files).toEqual([]);
     expect(r.skipped).toEqual(["branch-protection"]);
+  });
+
+  it("the blocking hook's runtime kill comes at least 2000 ms after its own git deadline, on every runtime (task af5c3d60)", () => {
+    // The hook stops asking git after GIT_READ_DEADLINE_MS and refuses; a
+    // hook the runtime kills at its timeout is read as an allow, so the kill
+    // must come well after the hook's own refusal. Both projections (Claude
+    // settings and Codex config) take the timeout from hookTimeoutSeconds.
+    const pack = buildManifest([{ name: "branch-protection" }]).policy_packs[0];
+    expect(pack).toBeDefined();
+    if (!pack) return;
+    for (const runtime of KNOWN_RUNTIMES) {
+      const { contribution } = resolveBranchProtection(pack, runtime);
+      const blocking = contribution.hooks.filter((h) => h.blocking === "hard");
+      expect(blocking.length, `runtime ${runtime}`).toBe(1);
+      for (const hook of blocking) {
+        expect(hook.budget_ms, `runtime ${runtime}`).toBe(5000);
+        expect(
+          hookTimeoutSeconds(hook) * 1000 - GIT_READ_DEADLINE_MS,
+          `runtime ${runtime}`,
+        ).toBeGreaterThanOrEqual(2000);
+      }
+    }
   });
 });

@@ -1,23 +1,20 @@
 // Phase 5 #2 — shared sessionId resolver.
 //
-// Three Phase 4 verbs (`audit`, `explain --trace`, `policy intercept`)
-// previously defaulted to the literal string `"default"` when no
-// session was given. Real Claude Code sessions are UUIDs that arrive
+// Session-aware verbs once defaulted to the literal string `"default"` when
+// no session was given. Real Claude Code sessions are UUIDs that arrive
 // via the hook event's `session_id`. When the user later runs
-// `harness audit` or `harness explain --trace` without `--session`, the
-// read path looked at `"default"` and silently returned an empty
-// audit/trace even though the writes had landed correctly under the
-// real UUID.
+// `harness audit` without `--session`, the read path looked at
+// `"default"` and silently returned an empty audit even though the writes
+// had landed correctly under the real UUID.
 //
-// `resolveSessionId` lifts the precedence chain into one place for the
-// WRITE path (`policy intercept`), which always carries a concrete
-// `event.session_id`:
+// `resolveSessionId` lifts the precedence chain into one place for callers
+// that already carry a concrete `event.session_id` (the write side):
 //   1. explicit value (the runtime's `event.session_id`)
 //   2. `$CLAUDE_CODE_SESSION_ID` env (the var Claude Code actually exports)
 //   3. `$CLAUDE_SESSION_ID` env (legacy fallback)
 //   4. literal `"default"`
 //
-// The READ path (`audit`, `explain --trace/--last`) needs more. The
+// The READ path (`audit`) needs more. The
 // Phase 5 #2 fix assumed `$CLAUDE_SESSION_ID` is exported into the
 // session's shell environment — it is not (Claude Code does not put it
 // in the Bash tool env), so tier 2 is inert in practice and the readers
@@ -124,8 +121,7 @@ export interface ResolveReadSessionOptions extends DiscoverSessionOptions {
 }
 
 /**
- * Resolve the session id for the READ path (`audit`,
- * `explain --trace/--last`).
+ * Resolve the session id for the READ path (`audit`).
  *
  * Precedence:
  *   1. explicit value (the `--session` flag)

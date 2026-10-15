@@ -1,5 +1,5 @@
 // One idle-bounded stdin reader shared by every hook-style CLI entry that
-// parses an event JSON from stdin (policy intercept, and the pack hook
+// parses an event JSON from stdin (the pack hook
 // readers: `readStdin` / `readStdinChecked` in pack/hook-bootstrap.ts and the
 // runtime-reality reader in pack/hook-runtime-reality.ts). It also holds the
 // shared stdin-timeout refusal reason and block envelope those PreToolUse
@@ -75,9 +75,8 @@ export async function readStdinBounded(
 }
 
 /**
- * Default tail of the empty-read note. Its only default caller, `harness policy
- * intercept`, reaches the note with a non-empty read only, so it prints the
- * partial-data note instead.
+ * Default tail of the empty-read note. Callers that reach the note with a
+ * non-empty read print the partial-data note instead.
  */
 export const DEFAULT_EMPTY_READ_TAIL = "falling back to the default session resolution";
 
@@ -116,8 +115,7 @@ export function stdinTimeoutBlockReason(idleTimeoutMs: number): string {
 /**
  * The Claude Code block envelope for a stdin-timeout refusal: `decision:
  * "block"` for legacy CLIs plus the 2.1+ `hookSpecificOutput` PreToolUse deny.
- * Same shape every PreToolUse gate under src/cli/pack/ and `harness policy
- * intercept` emit for a block.
+ * Same shape every PreToolUse gate under src/cli/pack/ emits for a block.
  */
 export function stdinTimeoutBlockJson(reason: string): string {
   return JSON.stringify({

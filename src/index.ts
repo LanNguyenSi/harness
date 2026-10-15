@@ -11,21 +11,9 @@ export { format as formatDoctor } from "./cli/doctor/format.js";
 export { RealMcpProbe, type McpProbe, type McpProbeResult } from "./probes/mcp.js";
 export { inspectMemory, type MemoryReport, type StaleMemory } from "./probes/memory.js";
 export {
-  intercept,
-  recordPolicyDecision,
-  payloadFromDecision,
   encodeLedgerContent,
   decodeLedgerContent,
-  type ClaudeDenyJson,
-  type InterceptOptions,
-  type InterceptResult,
-  type LedgerClient,
-  type LedgerRecordOptions,
-  type ForeignTarget,
-  type PolicyDecision,
   type PolicyDecisionPayload,
-  type PolicyOutcome,
-  type ToolEvent,
 } from "./runtime/index.js";
 export {
   evaluateRequires,

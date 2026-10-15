@@ -2588,19 +2588,13 @@ doctor:
   });
 });
 
-// Hook-budget-vs-ledger-timeout margin (task d20a7e0c, follow-up to
-// f1aea826/7bf47554). Delegates to checkHookBudgetLedgerMargin
-// (validate/checks.ts, unit-tested there); this section pins the doctor
-// surface — errorCount + `format()` rendering — mirroring the
-// template-policy-drift describe block immediately above.
-describe("doctor — hook-budget-vs-ledger-timeout margin (task d20a7e0c)", () => {
-  function fixtureWithGroundingMcp(opts: {
-    timeoutMs?: number;
-    hooksYaml?: string;
-    policyPacksYaml?: string;
-  }): string {
-    const timeoutMs = opts.timeoutMs ?? 5000;
-    return makeFixture({
+// The hook-budget-vs-ledger-timeout margin section went away with the policy
+// engine: a hook whose command is still `harness policy intercept` is an
+// ordinary hook command now, so its budget_ms is not compared with the
+// grounding-mcp ledger timeout and doctor renders no margin section.
+describe("doctor — no hook-budget-vs-ledger-timeout margin section", () => {
+  it("an under-budgeted `harness policy intercept` hook adds no margin report, error or section", async () => {
+    const home = makeFixture({
       "harness.yaml": `version: 1
 ${SILENCE_DRIFT}tools:
   mcp:
@@ -2608,60 +2602,15 @@ ${SILENCE_DRIFT}tools:
       command: ["/usr/bin/true"]
       health:
         verb: ledger_summary
-        timeout_ms: ${timeoutMs}
-${opts.hooksYaml ?? "hooks: []\n"}${opts.policyPacksYaml ?? ""}policies: []
-`,
-    });
-  }
-
-  const DIRECT_HOOK = (budgetMs: number): string =>
-    `hooks:
+        timeout_ms: 5000
+hooks:
   - name: review-before-merge-hook
     event: PreToolUse
     match: "mcp__agent-tasks__pull_requests_merge"
     command: harness policy intercept
     blocking: hard
-    budget_ms: ${budgetMs}
-`;
-
-  it("reports an under-budgeted hook as an error, naming the hook and rolling into errorCount + format()", async () => {
-    const home = fixtureWithGroundingMcp({ timeoutMs: 5000, hooksYaml: DIRECT_HOOK(5000) });
-    const report = await doctor({
-      configPath: path.join(home, "harness.yaml"),
-      homeOverride: home,
-      shallow: true,
-      claudeMcpExec: NO_CLAUDE_CLI,
-    });
-    expect(report.hookBudgetLedgerMargin.errors).toHaveLength(1);
-    expect(report.hookBudgetLedgerMargin.errors[0]).toContain("review-before-merge-hook");
-    // Both numbers named, matching the validate-side AC.
-    expect(report.hookBudgetLedgerMargin.errors[0]).toContain("budget_ms=5000");
-    expect(report.hookBudgetLedgerMargin.errors[0]).toContain("health.timeout_ms=5000ms");
-    expect(report.errorCount).toBeGreaterThanOrEqual(1);
-    const text = format(report);
-    expect(text).toContain("Hook budget vs ledger timeout margin");
-    expect(text).toContain("review-before-merge-hook");
-  });
-
-  it("reports no margin errors when the hook clears the derived requirement", async () => {
-    const home = fixtureWithGroundingMcp({ timeoutMs: 5000, hooksYaml: DIRECT_HOOK(15000) });
-    const report = await doctor({
-      configPath: path.join(home, "harness.yaml"),
-      homeOverride: home,
-      shallow: true,
-      claudeMcpExec: NO_CLAUDE_CLI,
-    });
-    expect(report.hookBudgetLedgerMargin.errors).toHaveLength(0);
-    expect(format(report)).not.toContain("Hook budget vs ledger timeout margin");
-  });
-
-  it("an enabled branch-protection pack is not flagged under the same raised ledger timeout (it asks git, task a4d8adc5)", async () => {
-    const home = fixtureWithGroundingMcp({
-      timeoutMs: 10000,
-      policyPacksYaml: `policy_packs:
-  - name: branch-protection
-    source: builtin
-    enabled: true
+    budget_ms: 5000
+policies: []
 `,
     });
     const report = await doctor({
@@ -2670,7 +2619,10 @@ ${opts.hooksYaml ?? "hooks: []\n"}${opts.policyPacksYaml ?? ""}policies: []
       shallow: true,
       claudeMcpExec: NO_CLAUDE_CLI,
     });
-    expect(report.hookBudgetLedgerMargin.errors).toEqual([]);
+    expect(report).not.toHaveProperty("hookBudgetLedgerMargin");
+    const text = format(report);
+    expect(text).not.toContain("Hook budget vs ledger timeout margin");
+    expect(report.errorCount).toBe(0);
   });
 });
 

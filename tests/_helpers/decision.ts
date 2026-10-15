@@ -1,17 +1,40 @@
-// Phase 5 #6 — shared `PolicyDecision` + ledger-entry test fixture.
+// Shared `policy_decision` ledger-entry test fixture.
 //
-// audit, explain, and (now) intercept-cli all needed near-identical
+// The tests that read old policy-decision rows (audit) need near-identical
 // `decisionEntry()` builders. Centralising the shape here keeps the
 // defaults consistent (one place to update when, e.g., the
-// `requiresEval.matchedCount` default changes) and removes ~20 lines
-// of boilerplate per test file.
+// `requiresEval.matchedCount` default changes).
 
 import type { LedgerEntry } from "../../src/policies/index.js";
-import type { PolicyDecision } from "../../src/runtime/intercept.js";
 import {
   encodeLedgerContent,
-  payloadFromDecision,
+  type PolicyDecisionPayload,
 } from "../../src/io/ledger-record.js";
+
+/** The fields of a decision a fixture sets; `policyName` becomes the row's `name`. */
+export interface PolicyDecision {
+  policyName: string;
+  enforcement: PolicyDecisionPayload["enforcement"];
+  outcome: PolicyDecisionPayload["outcome"];
+  reason: string;
+  extractValues: Record<string, string>;
+  ledgerTag: string;
+  requiresEval?: { matchedCount: number; reason: string };
+  evaluatedAt: string;
+}
+
+function payloadFromDecision(decision: PolicyDecision): PolicyDecisionPayload {
+  return {
+    name: decision.policyName,
+    outcome: decision.outcome,
+    enforcement: decision.enforcement,
+    reason: decision.reason,
+    ledgerTag: decision.ledgerTag,
+    extractValues: decision.extractValues,
+    ...(decision.requiresEval && { requiresEval: decision.requiresEval }),
+    evaluatedAt: decision.evaluatedAt,
+  };
+}
 
 const DEFAULTS: Omit<PolicyDecision, "policyName"> = {
   enforcement: "block",
@@ -33,7 +56,7 @@ export function makeDecision(
 }
 
 /**
- * Build the `LedgerEntry` shape that audit/explain consume — a fact
+ * Build the `LedgerEntry` shape that audit consumes — a fact
  * row whose `content` is the encoded `policy_decision:` payload.
  *
  * `evaluatedAt` defaults to `createdAt` so a test that doesn't care

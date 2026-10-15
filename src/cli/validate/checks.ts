@@ -9,8 +9,7 @@ import {
   shippedBashMatchBoundaries,
   shippedOperatorOnlyPolicyNames,
 } from "../init/templates.js";
-import { isPolicyInterceptCommand, requiredHookBudgetMs } from "../policy/intercept.js";
-import type { Hook, Manifest } from "../../schema/index.js";
+import type { Manifest } from "../../schema/index.js";
 import type { Diagnostic } from "./types.js";
 
 export interface CheckOptions {
@@ -604,72 +603,6 @@ export function checkTriggerBoundaryDrift(manifest: Manifest): Diagnostic[] {
   return diags;
 }
 
-// Hook-budget-vs-ledger-timeout margin (task d20a7e0c, follow-up to
-// f1aea826/7bf47554). A blocking (`blocking: "hard"`) hook that consults
-// the evidence ledger before it can write its own decision is bounded
-// TWICE: once by its own `budget_ms` (the runtime's outer kill-timeout —
-// Claude Code and Codex both treat a KILLED hook as ALLOW, never as its
-// own pending verdict) and once by the ledger round-trip it is waiting
-// on. `budget_ms` below `requiredHookBudgetMs(health.timeout_ms)`
-// (src/cli/policy/intercept.ts — see that function's doc comment for the
-// full derivation from `realLedgerClient`'s own two round-trip shapes,
-// INCLUDING the "KNOWN RESIDUAL" paragraph there: this check guarantees
-// delivery on the pure-timeout hang shape only, not on a query() that
-// degrades via a non-timeout ledger error and then hangs on record())
-// means a merely SLOW (not even hard-down) ledger can get the hook
-// killed before its fail-closed `deny` / `deny-degraded` JSON reaches
-// stdout — silently turning the verdict into an unintended allow,
-// defeating the deny-degraded fix (task f1aea826) on exactly the hang
-// shape it exists to close.
-//
-// The checked population is the `manifest.hooks[]` entries that invoke
-// `harness policy intercept` (recognised via `isPolicyInterceptCommand`,
-// robust to how the operator or a local build spells the leading token, see
-// that function's own doc comment for why a verbatim string compare
-// under-recognises real manifests). No builtin pack contributes a
-// ledger-consulting blocker any more: `pack hook branch-protection` asks git
-// for the branch and makes no ledger round-trip, so its budget is not tied to
-// the ledger's timeout.
-function collectLedgerConsultingBlockingHooks(manifest: Manifest): Hook[] {
-  return manifest.hooks.filter((h) => h.blocking === "hard" && isPolicyInterceptCommand(h.command));
-}
-
-export function checkHookBudgetLedgerMargin(manifest: Manifest): Diagnostic[] {
-  const grounding = manifest.tools.mcp.find(
-    (m) => m.name === "grounding-mcp" && m.enabled !== false,
-  );
-  // No wired producer: `harness policy intercept` falls back to the
-  // instant `degradedLedgerClient` (no subprocess, no wait). No live
-  // ledger round-trip exists here for a margin to protect.
-  if (!grounding) return [];
-  const ledgerTimeoutMs = grounding.health?.timeout_ms ?? 5000;
-  const required = requiredHookBudgetMs(ledgerTimeoutMs);
-  const diags: Diagnostic[] = [];
-  for (const hook of collectLedgerConsultingBlockingHooks(manifest)) {
-    if (hook.budget_ms >= required) continue;
-    const message =
-      `hook "${hook.name}" carries budget_ms=${hook.budget_ms}, below the ${required}ms this ` +
-      `manifest's grounding-mcp health.timeout_ms=${ledgerTimeoutMs}ms requires (2×timeout_ms ` +
-      `+ 3× the deny-degraded audit-retry budget — see requiredHookBudgetMs in ` +
-      `src/cli/policy/intercept.ts for the derivation, INCLUDING that function's "KNOWN RESIDUAL" ` +
-      `paragraph: clearing ${required}ms ` +
-      `only guarantees the fail-closed verdict on the pure-timeout hang shape, not on a ledger ` +
-      `query that errors non-timeout and then hangs on the audit write). A merely SLOW (not even ` +
-      `hard-down) ledger can get this blocking hook killed by the runtime's outer hook timeout ` +
-      `before its fail-closed deny JSON reaches stdout — both Claude Code and Codex then read the ` +
-      `kill as allow, defeating the deny-degraded fix (task f1aea826) on exactly this hang shape. ` +
-      `Raise budget_ms to at least ${required}, or lower tools.mcp.grounding-mcp.health.timeout_ms ` +
-      `(which lowers this requirement too, at the cost of a stricter ledger-latency budget); see ` +
-      `docs/okf/gate-fail-posture-matrix.md.`;
-    diags.push({
-      severity: "error",
-      path: `hooks[${hook.name}].budget_ms`,
-      message,
-    });
-  }
-  return diags;
-}
-
 // Phase 6 #2: surface pack-resolution problems at lint time, not at
 // `harness apply` time. Delegates to the shared `checkPolicyPackSources`
 // so the apply path (which now also fails loudly on these conditions)
@@ -706,12 +639,11 @@ function checkPolicyPackConfigsAsDiagnostics(manifest: Manifest): Diagnostic[] {
   });
 }
 
-// `policies[].trigger.path_match` is declared by the schema but no policy
-// engine path reads it (`policyMatchArm` in src/runtime/intercept.ts, the
-// `harness dry-run` evaluator and the rest of the engine match on `match`,
-// `bash_match` and `input_match` only), so a policy that sets it fires on
-// every call its other trigger fields match, wider than its author meant.
-// For a `block` policy that is a gate that blocks more than intended.
+// `policies[].trigger.path_match` is declared by the schema but nothing
+// reads it (no policy engine remains in harness, and the former one matched
+// on `match`, `bash_match` and `input_match` only), so a policy that sets
+// it would, if it were evaluated, fire on every call its other trigger
+// fields match, wider than its author meant.
 // The schema keeps ACCEPTING the key on purpose: every hook loads the
 // manifest, and a parse failure there makes the branch-protection hook
 // refuse every edit, so rejecting at parse time would lock a machine out
@@ -754,7 +686,6 @@ export function runAssetChecks(
     ...checkPolicyPackConfigsAsDiagnostics(manifest),
     ...checkPolicySelfAttestation(manifest),
     ...checkPolicyTriggerPathMatch(manifest),
-    ...checkHookBudgetLedgerMargin(manifest),
   ];
 }
 

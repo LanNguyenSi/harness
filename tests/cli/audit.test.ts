@@ -132,6 +132,69 @@ describe("audit — rows recorded with the removed risk fields", () => {
   });
 });
 
+describe("audit — rows written by the removed policy engine", () => {
+  // The engine that wrote policy_decision rows is gone, but the rows stay in
+  // ledgers. `harness audit` must keep reading every field of such a row.
+  const ENGINE_ROW = {
+    id: "engine-row",
+    content:
+      "policy_decision:two-reviewers-required:require_approval " +
+      JSON.stringify({
+        name: "two-reviewers-required",
+        outcome: "require_approval",
+        enforcement: "require_approval",
+        reason: "1 of required 2 entries found",
+        ledgerTag: "review:42",
+        extractValues: { PR_NUMBER: "42", SESSION_ID: "sess-1" },
+        requiresEval: { matchedCount: 1, reason: "1 of required 2 entries found" },
+        evaluatedAt: "2026-04-30T09:00:00.123Z",
+      }),
+    source: "harness-policy-intercept",
+    createdAt: "2026-04-30T09:00:00.000Z",
+  };
+
+  it("--json carries every decoded field of an old row", async () => {
+    const result = await audit({
+      configPath: MANIFEST_PATH,
+      json: true,
+      now: NOW,
+      fetchLedger: async () => ({ kind: "ok", entries: [ENGINE_ROW] }),
+    });
+    expect(JSON.parse(result.output).decisions).toEqual([
+      {
+        timestamp: "2026-04-30T09:00:00.000Z",
+        name: "two-reviewers-required",
+        outcome: "require_approval",
+        enforcement: "require_approval",
+        reason: "1 of required 2 entries found",
+        ledgerTag: "review:42",
+        extractValues: { PR_NUMBER: "42", SESSION_ID: "sess-1" },
+      },
+    ]);
+  });
+
+  it("orders old rows by the millisecond evaluatedAt, not the one-second createdAt", async () => {
+    const rowAt = (id: string, name: string, evaluatedAt: string) => ({
+      ...ENGINE_ROW,
+      id,
+      content: ENGINE_ROW.content
+        .replaceAll("two-reviewers-required", name)
+        .replace("2026-04-30T09:00:00.123Z", evaluatedAt),
+    });
+    // Same createdAt second; the entry listed first was evaluated last.
+    const evaluatedLast = rowAt("a", "evaluated-last", "2026-04-30T09:00:00.900Z");
+    const evaluatedFirst = rowAt("b", "evaluated-first", "2026-04-30T09:00:00.100Z");
+    const result = await audit({
+      configPath: MANIFEST_PATH,
+      json: true,
+      now: NOW,
+      fetchLedger: async () => ({ kind: "ok", entries: [evaluatedLast, evaluatedFirst] }),
+    });
+    const names = JSON.parse(result.output).decisions.map((d: { name: string }) => d.name);
+    expect(names).toEqual(["evaluated-first", "evaluated-last"]);
+  });
+});
+
 describe("audit — filters", () => {
   it("--since 1h drops entries older than 1h before now", async () => {
     const result = await audit({

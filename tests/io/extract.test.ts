@@ -228,10 +228,8 @@ describe("substituteTemplate", () => {
   });
 });
 
-// Task 2699b476: the `trigger.input_match` evaluator both
-// `policyMatchesEvent` (src/runtime/intercept.ts) and dry-run's
-// `policyMatchesTool` (src/cli/dry-run.ts) call, so the two cannot
-// disagree about what a predicate means.
+// Task 2699b476: the `trigger.input_match` evaluator. Its callers (the
+// policy engine and the dry-run verb) have been removed.
 describe("resolveExtractPathValue", () => {
   it("returns the RAW value, not the stringified one evaluateExtract produces", () => {
     const ctx = { toolArgs: { autoMerge: true, retries: 0, name: "x" } };
