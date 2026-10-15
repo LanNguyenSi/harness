@@ -150,7 +150,7 @@ describe("CLI program — init --probe", () => {
   });
 });
 
-describe("CLI program — list + explain commands", () => {
+describe("CLI program — list commands", () => {
   it("list mcp emits a name-keyed table on stdout", async () => {
     const r = await exec(["list", "mcp", "--config", FULL_MANIFEST]);
     expect(r.code).toBe(0);
@@ -170,39 +170,6 @@ describe("CLI program — list + explain commands", () => {
     const r = await exec(["list", "bogus", "--config", FULL_MANIFEST]);
     expect(r.code).toBe(64);
     expect(r.stderr).toMatch(/unknown list category/i);
-  });
-
-  it("explain on a known policy exits 0 with structured YAML", async () => {
-    const r = await exec(["explain", "review-before-merge", "--config", FULL_MANIFEST]);
-    expect(r.code).toBe(0);
-    expect(r.stdout).toMatch(/^name: review-before-merge/);
-  });
-
-  it("explain on an unknown policy exits 64 and lists available", async () => {
-    const r = await exec(["explain", "nope", "--config", FULL_MANIFEST]);
-    expect(r.code).toBe(64);
-    expect(r.stderr).toMatch(/no policy named "nope"/);
-    expect(r.stderr).toMatch(/review-before-merge/);
-  });
-
-  it("explain rejects <policy> together with --last as EX_USAGE", async () => {
-    const r = await exec(["explain", "review-before-merge", "--last", "--config", FULL_MANIFEST]);
-    expect(r.code).toBe(64);
-    expect(r.stderr).toMatch(/<policy> and --last are mutually exclusive/);
-  });
-
-  it("explain --decision without --last is rejected as EX_USAGE", async () => {
-    const r = await exec(["explain", "--decision", "deny", "--config", FULL_MANIFEST]);
-    expect(r.code).toBe(64);
-    expect(r.stderr).toMatch(/--decision requires --last/);
-  });
-
-  it("explain --last --decision with an invalid outcome is rejected as EX_USAGE", async () => {
-    const r = await exec(["explain", "--last", "--decision", "bogus", "--config", FULL_MANIFEST]);
-    expect(r.code).toBe(64);
-    expect(r.stderr).toMatch(
-      /--decision must be one of allow, warn, require_approval, deny, warn-degraded, deny-degraded/,
-    );
   });
 });
 

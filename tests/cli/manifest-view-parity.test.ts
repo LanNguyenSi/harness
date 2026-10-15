@@ -22,8 +22,6 @@ import { apply, GENERATED_DIRNAME } from "../../src/cli/apply/index.js";
 import { describe } from "../../src/cli/describe.js";
 import { diff } from "../../src/cli/diff/index.js";
 import { doctor } from "../../src/cli/doctor/index.js";
-import { dryRun } from "../../src/cli/dry-run.js";
-import { explain } from "../../src/cli/explain.js";
 import { exportManifest } from "../../src/cli/export.js";
 import { list } from "../../src/cli/list.js";
 import { loadManifest } from "../../src/cli/loader.js";
@@ -168,20 +166,6 @@ describeSuite("manifest view parity: derived-view readers", () => {
     const r = describe({ homeDir: home, configPath, pillar: "policies", json: true });
     const parsed = JSON.parse(r.output) as { policies: { name: string }[] };
     expect(names(parsed.policies)).toEqual([...HAND, ...DERIVED]);
-  });
-
-  it("explain <derived policy>: resolves the derived name", async () => {
-    const { home, configPath } = fixture();
-    const r = await explain("workflow:ship:review-before-merge", { homeDir: home, configPath, json: true });
-    const parsed = JSON.parse(r.output) as { name: string; hook: string };
-    expect(parsed.name).toBe("workflow:ship:review-before-merge");
-    expect(parsed.hook).toBe("require-review-evidence");
-  });
-
-  it("dry-run: predicts the derived bash gate for `gh pr merge`", () => {
-    const { home, configPath } = fixture();
-    const r = dryRun("merge it", { homeDir: home, configPath, tool: "Bash", toolArgs: '{"command":"gh pr merge 1"}' });
-    expect(r.report.matchingPolicies.map((p) => p.name)).toContain("workflow:ship:review-before-merge-bash");
   });
 
   // F2 (review round 3, 99f47307 Slice 1): the previous "add's asset gate"

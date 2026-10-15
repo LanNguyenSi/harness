@@ -19,10 +19,6 @@
 #
 # Author loop:
 #   harness validate --config docs/examples/policies/02-clean-check-before-push.yaml
-#   harness dry-run "git push" \
-#     --tool Bash \
-#     --tool-args '{"command":"git push origin feat/foo"}' \
-#     --config docs/examples/policies/02-clean-check-before-push.yaml
 
 version: 1
 

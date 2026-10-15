@@ -2,7 +2,6 @@ import type { Command } from "commander";
 import { EX_USAGE, HarnessExitError } from "./exit-codes.js";
 import { audit, type AuditOutcome } from "./audit.js";
 import { sessionExport, type ExportFormat } from "./session-export/index.js";
-import { dryRun } from "./dry-run.js";
 
 export function registerAuditGroup(
   program: Command,
@@ -85,31 +84,4 @@ export function registerAuditGroup(
         }
       },
     );
-
-  program
-    .command("dry-run <prompt>")
-    .description(
-      "Statically predict which hooks fire / policies match / memories route for a prompt",
-    )
-    .option("--config <path>", "manifest path (default: ~/.harness/harness.yaml; legacy fallback ~/.claude/harness.yaml)")
-    .option("--project <name>", "apply per-project overrides")
-    .option("--tool <name>", "simulate a PreToolUse event for this tool name")
-    .option("--tool-args <json>", "JSON for tool_input (default: {})")
-    .option("--json", "emit JSON instead of YAML")
-    .action((prompt: string, options: {
-      config?: string;
-      project?: string;
-      tool?: string;
-      toolArgs?: string;
-      json?: boolean;
-    }) => {
-      const dryRunOpts: Parameters<typeof dryRun>[1] = {};
-      if (options.config) dryRunOpts.configPath = options.config;
-      if (options.project) dryRunOpts.project = options.project;
-      if (options.tool) dryRunOpts.tool = options.tool;
-      if (options.toolArgs) dryRunOpts.toolArgs = options.toolArgs;
-      if (options.json) dryRunOpts.json = options.json;
-      const result = dryRun(prompt, dryRunOpts);
-      stdout(result.output);
-    });
 }
