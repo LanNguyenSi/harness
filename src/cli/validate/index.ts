@@ -71,7 +71,7 @@ export function validate(opts: ValidateOptions = {}): ValidateResult {
   );
 
   if (manifest) {
-    // The checks index the parsed manifest, where a dropped policy or pack no
+    // The checks index the parsed manifest, where a dropped pack no
     // longer holds its slot: report the index the operator wrote.
     diagnostics.push(
       ...runAssetChecks(manifest, opts).map((d) => ({ ...d, path: remapDiagnosticPath(d.path, indexMaps) })),

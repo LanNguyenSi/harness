@@ -1777,110 +1777,57 @@ describe("apply: preserves sibling state under harness.generated/ (agent-tasks/b
   });
 });
 
-describe("apply — grounding-mcp policy-degradation gate (discovery H3)", () => {
-  function writePolicyManifest(
-    withGroundingMcp: boolean,
-    kind: "evidence" | "operator_only" | "mixed" = "evidence",
-  ): void {
+// The grounding-mcp policy-degradation gate went away with the policy
+// engine: `policies:` is a removed key (task 10e2ff0a), so declaring
+// evidence-consuming policies without grounding-mcp wired is no longer
+// something apply can refuse.
+describe("apply — policies declared without grounding-mcp", () => {
+  function writePolicyManifest(): void {
     const manifest = {
       version: 1,
       tools: {
-        mcp: withGroundingMcp ? [{ name: "grounding-mcp", command: ["/usr/bin/true"] }] : [],
+        mcp: [],
         cli: [],
         skills: { enabled: [], source_dirs: [] },
         builtin: { known: [] },
       },
       memory: { directories: [] },
-      hooks: [
-        {
-          name: "h",
-          event: "PreToolUse",
-          command: "harness policy intercept",
-          blocking: false,
-        },
-      ],
+      hooks: [{ name: "h", event: "PreToolUse", command: "/usr/bin/true", blocking: false }],
       policies: [
-        ...(kind !== "operator_only"
-          ? [{
-              name: "p",
-              description: "consumes ledger evidence",
-              trigger: { event: "PreToolUse" },
-              requires: { ledger_tag: "review:${SESSION_ID}" },
-              hook: "h",
-              enforcement: "block",
-            }]
-          : []),
-        ...(kind !== "evidence"
-          ? [{
-              name: "operator-only-p",
-              description: "unconditional operator-only deny",
-              trigger: { event: "PreToolUse" },
-              operator_only: true,
-              hook: "h",
-              enforcement: "block",
-            }]
-          : []),
+        {
+          name: "p",
+          description: "consumes ledger evidence",
+          trigger: { event: "PreToolUse" },
+          requires: { ledger_tag: "review:${SESSION_ID}" },
+          hook: "h",
+          enforcement: "block",
+        },
       ],
     };
     fs.writeFileSync(path.join(tmpHome, "harness.yaml"), yamlStringify(manifest));
   }
 
-  it("fails apply when policies are declared but grounding-mcp is not wired", async () => {
-    writePolicyManifest(false);
-    await expect(apply({ homeDir: tmpHome })).rejects.toMatchObject({
-      name: "HarnessExitError",
-      exitCode: 1,
-      // Name the tier-aware degradation (task f1aea826: block-tier
-      // hard-denies, no longer silent warn-mode) AND the actionable fix
-      // AND point at validate. Pins the message so it cannot drift from
-      // the runtime contract again (review 2026-08-08, round 2).
-      message: expect.stringMatching(
-        /grounding-mcp not wired.*will DENY every matching event \(deny-degraded\).*Wire grounding-mcp under tools\.mcp.*harness validate/s,
-      ),
-    });
-  });
-
-  it("does not write settings.json when the degradation gate fails (fail-closed)", async () => {
-    writePolicyManifest(false);
-    await apply({ homeDir: tmpHome }).catch(() => undefined);
-    expect(fs.existsSync(settingsPath())).toBe(false);
-  });
-
-  it("succeeds when policies are declared and grounding-mcp is wired", async () => {
-    writePolicyManifest(true);
+  it("applies, writes settings.json with the hook, and warns once that the policies are no longer evaluated", async () => {
+    writePolicyManifest();
     const r = await apply({ homeDir: tmpHome });
     expect(r.outcome).toBe("applied");
-  });
-
-  it("applies an operator_only-only manifest without grounding-mcp and preserves its hook", async () => {
-    writePolicyManifest(false, "operator_only");
-    const r = await apply({ homeDir: tmpHome });
-    expect(r.outcome).toBe("applied");
+    expect(r.warnings.filter((w) => w.startsWith("policies:"))).toEqual([
+      expect.stringContaining('1 policy is no longer evaluated ("p")'),
+    ]);
     const settings = JSON.parse(fs.readFileSync(settingsPath(), "utf8"));
     expect(settings.hooks.PreToolUse).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          hooks: expect.arrayContaining([
-            expect.objectContaining({ command: "harness policy intercept" }),
-          ]),
+          hooks: expect.arrayContaining([expect.objectContaining({ command: "/usr/bin/true" })]),
         }),
       ]),
     );
   });
-
-  it("refuses a mixed operator_only and evidence-consuming manifest without grounding-mcp", async () => {
-    writePolicyManifest(false, "mixed");
-    await expect(apply({ homeDir: tmpHome })).rejects.toMatchObject({
-      name: "HarnessExitError",
-      exitCode: 1,
-      message: expect.stringMatching(/evidence-consuming policies declared but grounding-mcp not wired/),
-    });
-  });
 });
 
 // The `.last-apply` manifest snapshot stores the manifest exactly as it
-// loaded (a manifest that declares `workflows:` still yields an empty
-// `policies:` snapshot), and the restart-hint reader parses the stored
+// loaded (a manifest that declares `workflows:` or `policies:` stores neither
+// key: both are removed keys), and the restart-hint reader parses the stored
 // content the same way, so re-applying an unchanged manifest emits no
 // hints.
 describe("apply — the .last-apply snapshot with a workflows[] manifest", () => {
@@ -1927,13 +1874,20 @@ policies: []
     );
   }
 
-  it("stores only hand-authored policies in the snapshot, and a second apply emits no restart hint", async () => {
+  it("stores none of the removed keys in the snapshot, and a second apply emits no restart hint", async () => {
     writeWorkflowManifest();
     const r1 = await apply({ homeDir: tmpHome });
     expect(r1.outcome).toBe("applied");
     const record = readLastApply(path.join(tmpHome, GENERATED_DIRNAME));
-    const snapshot = JSON.parse(record!.manifest!.content) as { policies: { name: string }[] };
-    expect(snapshot.policies).toEqual([]);
+    const snapshot = JSON.parse(record!.manifest!.content) as Record<string, unknown>;
+    for (const key of ["policies", "workflows", "review_templates", "doctor"]) {
+      expect(snapshot).not.toHaveProperty(key);
+    }
+    expect((snapshot["hooks"] as Array<Record<string, unknown>>).map((h) => h["name"])).toEqual([
+      "require-review-evidence",
+      "require-review-evidence-bash",
+    ]);
+    for (const h of snapshot["hooks"] as Array<Record<string, unknown>>) expect(h).not.toHaveProperty("bash_match");
 
     const r2 = await apply({ homeDir: tmpHome });
     expect(r2.restartHints).toEqual([]);

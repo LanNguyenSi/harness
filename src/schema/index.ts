@@ -2,12 +2,9 @@ import { z } from "zod";
 import { GroundingSchema } from "./grounding.js";
 import { HooksSchema } from "./hooks.js";
 import { MemorySchema } from "./memory.js";
-import { PoliciesSchema } from "./policies.js";
 import { PolicyPacksSchema } from "./policy-packs.js";
 import { ToolsSchema } from "./tools.js";
 import { AuditSchema } from "./audit.js";
-import { DoctorSchema } from "./doctor.js";
-import { ReviewTemplatesSchema, WorkflowsSchema } from "./workflows.js";
 import {
   findRemovedCommandUses,
   remapIssuePath,
@@ -25,42 +22,10 @@ export const ManifestSchema = z
     tools: ToolsSchema.default({}),
     memory: MemorySchema.default({}),
     hooks: HooksSchema.default([]),
-    policies: PoliciesSchema.default([]),
     policy_packs: PolicyPacksSchema.default([]),
-    workflows: WorkflowsSchema.default([]),
-    review_templates: ReviewTemplatesSchema.default({}),
     audit: AuditSchema.default({}),
-    // Optional: `harness doctor` config, e.g. the deliberate-opt-out
-    // list for the template-policy-drift check. See ./doctor.ts.
-    doctor: DoctorSchema.default({}),
   })
-  .strict()
-  .superRefine((manifest, ctx) => {
-    const hookNames = new Set(manifest.hooks.map((h) => h.name));
-    manifest.policies.forEach((p, i) => {
-      if (!hookNames.has(p.hook)) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ["policies", i, "hook"],
-          message: `policy "${p.name}" references hook "${p.hook}" which is not declared in hooks[]`,
-        });
-      }
-    });
-    const templateNames = new Set(Object.keys(manifest.review_templates));
-    manifest.workflows.forEach((wf, wi) => {
-      wf.steps.forEach((step, si) => {
-        if (step.kind === "review_subagent" && step.template !== undefined) {
-          if (!templateNames.has(step.template)) {
-            ctx.addIssue({
-              code: z.ZodIssueCode.custom,
-              path: ["workflows", wi, "steps", si, "template"],
-              message: `review_subagent.template "${step.template}" is not defined in review_templates`,
-            });
-          }
-        }
-      });
-    });
-  });
+  .strict();
 
 export type Manifest = z.infer<typeof ManifestSchema>;
 
@@ -108,12 +73,13 @@ function friendlyVersionIssues(issues: z.ZodIssue[], raw: unknown): z.ZodIssue[]
 export interface ParsedManifest {
   manifest: Manifest;
   /**
-   * Removed keys and removed packs that were stripped before the parse, then
-   * every hook, producer or `ux.run` line that still calls a removed command.
+   * Removed keys, removed hook fields and removed packs that were stripped
+   * before the parse, then every hook command or pack `producers` / `ux.run`
+   * line that still calls a removed command.
    */
   warnings: ManifestPostureWarning[];
   /**
-   * Original positions of the policies[] / policy_packs[] entries that
+   * Original positions of the policy_packs[] entries that
    * survived the drop, for a caller that reports a diagnostic about the
    * parsed manifest (`remapDiagnosticPath`). Absent when nothing was dropped.
    */
@@ -121,11 +87,10 @@ export interface ParsedManifest {
 }
 
 /**
- * Parse a raw manifest, first stripping every removed manifest path and
- * removed pack name and dropping every policy that carries a removed field
- * (`src/schema/removed-keys.ts`): those warn and are ignored instead of
- * failing the strict parse. Any other unknown key still
- * fails it. A manifest that parses is then scanned for sites that still call
+ * Parse a raw manifest, first stripping every removed manifest path, every
+ * removed hook field and every removed pack name (`src/schema/removed-keys.ts`):
+ * those warn (an empty value of a removed key does not) and are ignored
+ * instead of failing the strict parse. Any other unknown key still fails it. A manifest that parses is then scanned for sites that still call
  * a removed command (`findRemovedCommandUses`); those warn too, with the
  * manifest path of each site.
  */
@@ -133,8 +98,8 @@ export function parseManifestWithWarnings(raw: unknown): ParsedManifest {
   const stripped = stripRemovedManifestEntries(raw);
   const result = ManifestSchema.safeParse(stripped.raw);
   if (!result.success) {
-    // Dropping an entry re-indexes policies[] / policy_packs[]: name the index
-    // the operator wrote, not the one the strict parse saw.
+    // Dropping an entry re-indexes policy_packs[]: name the index the
+    // operator wrote, not the one the strict parse saw.
     const issues = friendlyVersionIssues(result.error.issues, raw).map((i) => ({
       ...i,
       path: remapIssuePath(i.path, stripped.indexMaps),
@@ -163,22 +128,22 @@ export * from "./grounding.js";
 export * from "./tools.js";
 export * from "./memory.js";
 export * from "./hooks.js";
-export * from "./policies.js";
+export * from "./policy-ux.js";
 export * from "./policy-packs.js";
-export * from "./workflows.js";
 export * from "./audit.js";
-export * from "./doctor.js";
-export * from "./extract.js";
-export * from "./requires.js";
 // Named, not `export *`: `removedCommandMessage` is shared with the doctor
 // but is not part of the package API.
 export {
   REMOVED_MANIFEST_PATHS,
-  REMOVED_POLICY_FIELDS,
+  REMOVED_HOOK_FIELDS,
   REMOVED_PACK_NAMES,
   REMOVED_MANIFEST_TABLE,
   REMOVED_COMMANDS,
+  REMOVED_LIST_CATEGORIES,
+  REMOVED_DESCRIBE_PILLARS,
+  removedInspectNameMessage,
   stripRemovedManifestEntries,
+  stripRemovedManifestPaths,
   formatPostureWarning,
   invokesRemovedCommand,
   findRemovedCommandUses,
@@ -186,7 +151,7 @@ export {
 } from "./removed-keys.js";
 export type {
   RemovedManifestPath,
-  RemovedPolicyField,
+  RemovedHookField,
   RemovedPackName,
   RemovedManifestTable,
   IndexMap,
@@ -194,4 +159,5 @@ export type {
   ManifestPostureWarning,
   StrippedManifest,
   RemovedCommand,
+  RemovedInspectName,
 } from "./removed-keys.js";

@@ -215,7 +215,7 @@ describe("findRemovedCommandUses", () => {
   const removedPacks: readonly RemovedPackName[] = [{ name: "old-pack", removedIn: "1.0.0", reason: "gone" }];
   const paths = (raw: unknown) => findRemovedCommandUses(raw, commands, removedPacks).map((w) => w.path);
 
-  it("reports hook commands, bash and ask producers, and ux.run lines of policies and packs, one per site", () => {
+  it("reports hook commands and the producers and ux.run lines of packs, one per site, and no longer scans policies", () => {
     const raw = {
       hooks: [
         { name: "live", command: "harness policy intercept" },
@@ -243,27 +243,26 @@ describe("findRemovedCommandUses", () => {
         },
       ],
     };
+    // The policies' producers and ux.run lines name removed commands too
+    // (policies[0].producers[1], [2], ux.run[1]); `policies:` is a removed key
+    // (task 10e2ff0a), so they are not sites.
     expect(paths(raw)).toEqual([
       "hooks[1].command",
-      "policies[0].producers[1].command",
-      "policies[0].producers[2].command",
-      "policies[0].ux.run[1]",
       "policy_packs[0].config.producers[0].command",
       "policy_packs[0].config.ux.run[1]",
     ]);
   });
 
-  it("names the hook, the policy and its hook, or the pack in the remedy", () => {
+  it("names the hook or the pack in the remedy", () => {
     const raw = {
       hooks: [{ name: "gone", command: "harness preflight" }],
-      policies: [{ name: "p", hook: "h", ux: { run: ["harness preflight"] } }],
       policy_packs: [{ name: "bp", config: { ux: { run: ["harness preflight"] } } }],
     };
-    const [hook, policy, pack] = findRemovedCommandUses(raw, commands, removedPacks).map((w) => w.message);
+    const [hook, pack, ...rest] = findRemovedCommandUses(raw, commands, removedPacks).map((w) => w.message);
+    expect(rest).toEqual([]);
     expect(hook).toBe(
-      'calls "harness preflight", removed in 1.0.0 (alias gone), so it fails with "unknown command"; delete hook "gone" from the manifest (and every policy that names it), then re-run `harness apply`',
+      'calls "harness preflight", removed in 1.0.0 (alias gone), so it fails with "unknown command"; delete hook "gone" from the manifest, then re-run `harness apply`',
     );
-    expect(policy).toContain('delete policy "p" from the manifest (and its hook "h" when no other policy names it), then re-run `harness apply`');
     expect(pack).toContain("remove the line from the pack's config, or run `harness pack reseed bp` when the pack ships a default");
   });
 
@@ -282,8 +281,7 @@ describe("findRemovedCommandUses", () => {
   it("reports nothing for a manifest that calls only live commands", () => {
     expect(
       paths({
-        hooks: [{ name: "a", command: "harness policy intercept" }, { name: "b", command: "harness pack hook branch-protection" }],
-        policies: [{ name: "p", hook: "a", producers: [{ kind: "bash", command: "harness record review" }], ux: { run: ["harness record review"] } }],
+        hooks: [{ name: "a", command: "harness doctor" }, { name: "b", command: "harness pack hook branch-protection" }],
       }),
     ).toEqual([]);
   });
@@ -323,9 +321,9 @@ describe("non-string elements in a pack's config", () => {
     });
   }
 
-  it("findRemovedCommandUses skips non-string ux.run elements of a policy too", () => {
+  it("findRemovedCommandUses reads no policy: a policy's ux.run line is not a site", () => {
     const raw = { policies: [{ name: "p", ux: { run: [5, null, { a: 1 }, "harness preflight"] } }] };
-    expect(findRemovedCommandUses(raw).map((w) => w.path)).toEqual(["policies[0].ux.run[3]"]);
+    expect(findRemovedCommandUses(raw).map((w) => w.path)).toEqual([]);
   });
 
   // Hook commands and policy producers and ux.run are typed as strings by the

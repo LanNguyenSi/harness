@@ -165,24 +165,6 @@ export function generateCodexConfig(manifest: Manifest): CodexConfigResult {
     if (a.event !== b.event) return a.event < b.event ? -1 : 1;
     return a.command < b.command ? -1 : a.command > b.command ? 1 : 0;
   });
-  // Surface a warning for hook entries that carry path_match / bash_match
-  // filters; we do not project those into the emitted TOML (the harness
-  // schema treats them as documentation that the underlying script
-  // enforces internally, identical to the Claude Code projection in
-  // generate-settings.ts). The warning makes the silent-drop visible
-  // to operators who might expect TOML-level filtering.
-  for (const h of hooks) {
-    if (h.path_match !== undefined) {
-      warnings.push(
-        `hook ${JSON.stringify(h.name)}: path_match is not projected into Codex config (script-side filter only)`,
-      );
-    }
-    if (h.bash_match !== undefined) {
-      warnings.push(
-        `hook ${JSON.stringify(h.name)}: bash_match is not projected into Codex config (script-side filter only)`,
-      );
-    }
-  }
   if (hooks.length === 0) {
     warnings.push(
       "manifest contributes no hooks; the emitted Codex config has no [[hooks.*]] entries",

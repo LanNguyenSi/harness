@@ -62,7 +62,6 @@ import {
 } from "../../policy-packs/index.js";
 import { parseManifest, type Manifest } from "../../schema/index.js";
 import { formatPostureWarning, originalIndex } from "../../schema/removed-keys.js";
-import { checkPolicyGroundingMcp } from "../validate/checks.js";
 import { EX_FAIL, EX_NOINPUT, HarnessExitError } from "../exit-codes.js";
 import { loadManifest } from "../loader.js";
 import { GENERATED_DIRNAME, resolveGeneratedDir } from "../../io/generated-dir.js";
@@ -813,30 +812,6 @@ export async function apply(opts: ApplyOptions = {}): Promise<ApplyResult> {
     );
   }
 
-  // grounding-mcp policy-degradation gate: a manifest with evidence-consuming
-  // policies but no grounding-mcp under tools.mcp deploys policies whose
-  // requires evaluation degrades at runtime. operator_only policies never
-  // query the ledger and do not need this provider. Since task f1aea826 that means
-  // warn policies degrade non-blocking while block/require_approval
-  // policies DENY every matching event (deny-degraded) — no longer the
-  // pre-0.45 allow-everything footgun, but a config that hard-blocks
-  // until the producer is wired. validate only WARNS on this; apply must
-  // fail loud so an operator who runs apply without validate cannot ship
-  // the misconfigured manifest either way.
-  const groundingIssues = checkPolicyGroundingMcp(manifest);
-  if (groundingIssues.length > 0) {
-    throw new HarnessExitError(
-      `harness apply: ${groundingIssues
-        .map((d) => d.message)
-        .join(
-          "; ",
-        )}. Wire grounding-mcp under tools.mcp, or remove the evidence-consuming ` +
-        "policies. Run `harness " +
-        "validate` for the full report.",
-      EX_FAIL,
-    );
-  }
-
   const lastApply = readLastApply(generatedDir);
   const runtimeInfo = selectRuntime(opts.runtime, lastApply, Boolean(opts.target));
   const { runtime } = runtimeInfo;
@@ -847,14 +822,15 @@ export async function apply(opts: ApplyOptions = {}): Promise<ApplyResult> {
     generatedDir,
     operatorGeneratedDir,
   );
-  // Manifest posture warnings (removed keys and removed packs, table from
+  // Manifest posture warnings (removed keys, hook fields and packs, table from
   // task a4d8adc5; printed by apply since task 2ce6933f):
   // the loader strips them and `harness validate` / `harness doctor` print
   // them; `harness apply` prints them too so an operator applying a stale
   // manifest sees why a pack they still name did not generate anything. The
-  // same list carries every hook, producer or ux.run line that still calls a
-  // removed command (task f3f15290): apply re-renders those hooks as they
-  // stand, so the warning is the only place an apply run names them.
+  // same list carries every hook command or pack producer / ux.run line that
+  // still calls a removed command (task f3f15290): apply re-renders those
+  // hooks as they stand, so the warning is the only place an apply run names
+  // them.
   const warnings = [...postureWarnings.map(formatPostureWarning), ...expectedWarnings];
   // The runtime this apply records: its own, or with
   // `preserveRecordedRuntime` the previous one (recorded or inferred, else

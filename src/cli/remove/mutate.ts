@@ -1,4 +1,4 @@
-import { isMap, isScalar, isSeq, parseDocument, type Document } from "yaml";
+import { isMap, isScalar, isSeq, parseDocument } from "yaml";
 
 export type RemoveType = "mcp" | "cli" | "skill" | "hook";
 
@@ -12,8 +12,6 @@ const TYPE_TO_PATH: Record<RemoveType, readonly string[]> = {
 export interface RemovePlan {
   found: boolean;
   availableNames: string[];
-  /** For type=hook only: the policies that reference this hook. */
-  referencingPolicies: string[];
 }
 
 export function planRemove(
@@ -25,9 +23,7 @@ export function planRemove(
   const list = doc.getIn(TYPE_TO_PATH[type]);
   const availableNames = listEntryNames(list, type);
   const found = availableNames.includes(name);
-  const referencingPolicies =
-    type === "hook" ? findPoliciesReferencingHook(doc, name) : [];
-  return { found, availableNames, referencingPolicies };
+  return { found, availableNames };
 }
 
 export function applyRemove(
@@ -68,22 +64,4 @@ function entryNameOf(item: unknown, type: RemoveType): string | undefined {
     if (typeof n === "string") return n;
   }
   return undefined;
-}
-
-function findPoliciesReferencingHook(
-  doc: Document.Parsed,
-  hookName: string,
-): string[] {
-  const policies = doc.get("policies");
-  if (!isSeq(policies)) return [];
-  const refs: string[] = [];
-  for (const item of policies.items) {
-    if (!isMap(item)) continue;
-    const hook = item.get("hook");
-    if (typeof hook === "string" && hook === hookName) {
-      const name = item.get("name");
-      if (typeof name === "string") refs.push(name);
-    }
-  }
-  return refs;
 }

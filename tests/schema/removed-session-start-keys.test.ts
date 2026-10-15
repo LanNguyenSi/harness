@@ -48,9 +48,17 @@ describe("stripRemovedManifestEntries removes the producer roots", () => {
   });
 
   it("leaves a manifest without producer roots as the same object with no warnings", () => {
-    const raw = { version: 1, hooks: [], policies: [] };
+    const raw = { version: 1, hooks: [] };
     const r = stripRemovedManifestEntries(raw);
     expect(r.raw).toBe(raw);
+    expect(r.warnings).toEqual([]);
+  });
+
+  it("strips an empty policies list silently: no warning, the input is not mutated (task 10e2ff0a)", () => {
+    const raw = { version: 1, hooks: [], policies: [] };
+    const r = stripRemovedManifestEntries(raw);
+    expect(r.raw).toEqual({ version: 1, hooks: [] });
+    expect(raw).toHaveProperty("policies");
     expect(r.warnings).toEqual([]);
   });
 

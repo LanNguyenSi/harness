@@ -1,9 +1,7 @@
 // Agent-facing block message renderer.
 //
-// Translates a policy's `ux:` declaration into the plain-language form
-// the agent sees on block. The internal model (session IDs, ledger
-// entries, attestations, provenance chains, policy DAGs) is unchanged
-// and continues to feed the audit ledger; this module is concerned
+// Translates a policy pack's `config.ux` declaration (branch-protection) into
+// the plain-language form the agent sees on block. This module is concerned
 // only with the user-facing surface.
 //
 // Output shape, verbatim:
@@ -22,14 +20,38 @@
 // `Required:` and a two-space indent under `Run:` so the eye lands on
 // the command as something to type.
 //
-// `${VAR}` references in any of the three fields resolve against the
-// same extract.values map the ledger_tag was substituted with, plus
-// the builtins (SESSION_ID / REPO / BRANCH / TOOL_NAME / CWD).
-// Unresolved vars are left literal so the agent can still read what
-// was expected (mirrors renderProducers' best-effort substitution).
+// `${VAR}` references in any of the three fields resolve against the values
+// map the caller passes (the branch-protection hook supplies `BRANCH`).
+// Unresolved vars are left literal so the agent can still read what was
+// expected.
 
-import { substituteTemplate } from "../io/extract.js";
 import type { PolicyUx } from "../schema/index.js";
+
+const TEMPLATE_VAR_RE = /\$\{([A-Z][A-Z0-9_]*)\}/g;
+
+export interface SubstituteTemplateResult {
+  result: string;
+  missing: string[];
+}
+
+/**
+ * Replace each `${NAME}` in `template` with `values[NAME]`. A name without a
+ * value stays literal and is listed in `missing`.
+ */
+export function substituteTemplate(
+  template: string,
+  values: Record<string, string>,
+): SubstituteTemplateResult {
+  const missing: string[] = [];
+  const result = template.replace(TEMPLATE_VAR_RE, (whole, name: string) => {
+    if (Object.prototype.hasOwnProperty.call(values, name)) {
+      return values[name]!;
+    }
+    if (!missing.includes(name)) missing.push(name);
+    return whole;
+  });
+  return { result, missing };
+}
 
 export interface AgentFacingBlock {
   cannot: string;

@@ -4,7 +4,7 @@
 // opt-in write-side fix, src/cli/pack/reseed.ts) so the two can never
 // independently drift on what "matches the shipped template" means.
 
-import { PolicyUxSchema } from "../schema/policies.js";
+import { PolicyUxSchema } from "../schema/policy-ux.js";
 import type { PolicyUx } from "../schema/index.js";
 
 function stringArrayEqual(a: readonly string[], b: readonly string[]): boolean {

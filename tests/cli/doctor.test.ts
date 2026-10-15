@@ -60,7 +60,7 @@ class FakeProbe implements McpProbe {
 }
 
 describe("doctor — Appendix D structure", () => {
-  it("renders Manifest / Tools / Memory / Hooks / Policies / Summary sections in order", async () => {
+  it("renders Manifest / Tools / Memory / Hooks / Summary sections in order, with no Policies section (task 10e2ff0a)", async () => {
     const home = makeFixture({
       "harness.yaml": `version: 1
 hooks: []
@@ -86,18 +86,18 @@ tools:
     expect(text).toMatch(/\nTools\n/);
     expect(text).toMatch(/\nMemory\n/);
     expect(text).toMatch(/\nHooks\n/);
-    expect(text).toMatch(/\nPolicies\n/);
+    expect(text).not.toMatch(/\nPolicies\n/);
+    expect(report).not.toHaveProperty("policies");
     expect(text).toMatch(/\nSummary\n/);
     expect(text.indexOf("Manifest")).toBeLessThan(text.indexOf("Tools"));
     expect(text.indexOf("Tools")).toBeLessThan(text.indexOf("Memory"));
     expect(text.indexOf("Memory")).toBeLessThan(text.indexOf("Hooks"));
-    expect(text.indexOf("Hooks")).toBeLessThan(text.indexOf("Policies"));
-    expect(text.indexOf("Policies")).toBeLessThan(text.indexOf("Summary"));
+    expect(text.indexOf("Hooks")).toBeLessThan(text.indexOf("Summary"));
   });
 });
 
 describe("doctor — no Risk Gate section, removed keys reported as warnings (tasks 6e52c044, 39c112e0)", () => {
-  it("reports no riskGate field and no Risk Gate text for a manifest that still carries risk, environments and a when: policy", async () => {
+  it("reports no riskGate field and no Risk Gate text for a manifest that still carries risk, environments and a when: policy and a hook bash_match", async () => {
     const home = makeFixture({
       "harness.yaml": `version: 1
 hooks:
@@ -105,6 +105,7 @@ hooks:
     event: PreToolUse
     match: "Bash"
     command: harness policy intercept
+    bash_match: "^git push"
     blocking: hard
 policies:
   - name: scoped-gate
@@ -129,17 +130,19 @@ environments:
       npmBinExec: STUB_NPM_BIN_EXEC_UNKNOWN,
     });
     const text = format(report);
-    // The manifest loaded and its three removed Risk Gate sites (plus the removed hook command) are reported
-    // as posture warnings: risk and environments stripped, the when: policy
-    // dropped whole (so it is not listed under Policies).
+    // The manifest loaded and its removed sites are reported as posture
+    // warnings: risk, environments and policies stripped, the hook's
+    // bash_match stripped with the hook kept, and the removed hook command.
     expect(report.manifest.warnings.map((w) => w.split(":")[0])).toEqual([
       "risk",
       "environments",
-      "policies[0]",
+      "policies",
+      "hooks[0]",
       "hooks[0].command",
     ]);
-    expect(text).toContain('policy "scoped-gate" dropped whole');
-    expect(report.policies).toEqual([]);
+    expect(text).toContain("1 policy is no longer evaluated");
+    expect(text).toContain('hook "gate" carries bash_match');
+    expect(report.hooks.map((h) => h.name)).toEqual(["gate"]);
     expect(report).not.toHaveProperty("riskGate");
     // Only the posture warnings may name the Risk Gate (as the reason a key
     // is removed); no section or other line does.
@@ -918,248 +921,6 @@ policies: []
     expect(text).toContain(`(version 1) [shallow]`);
   });
 });
-
-describe("doctor — policy producer-gap check (task ce50df99)", () => {
-  // alpha: block + within, no hook produces `alpha:` → GAP
-  // beta:  block + within, `produce-beta` hook produces `beta:` → no gap
-  // gamma: block, NO within → no gap (one-time tag, satisfied by workflow)
-  // delta: `warn` enforcement + within, no producer → no gap (not block)
-  // epsilon: block + within; the ONLY hook whose command contains
-  //          `epsilon` is epsilon's own consumer hook, which the
-  //          `h.name !== policy.hook` exclusion must skip → GAP
-  // zeta:  block + within, leading-colon tag `:zeta` → empty prefix,
-  //        must not vacuously match every hook → GAP
-  // eta:   block + within, NO automatic producer hook, but the policy
-  //        itself declares a `producers:` array (task f97e152f) →
-  //        the schema-blessed manual recovery path counts as documented
-  //        producer → NO GAP (suppression refinement)
-  const MANIFEST = `version: 1
-tools:
-  builtin:
-    known: [Read, Edit, Bash]
-hooks:
-  - name: consume-alpha
-    event: PreToolUse
-    match: Bash
-    command: harness policy intercept
-    blocking: hard
-  - name: consume-beta
-    event: PreToolUse
-    match: Bash
-    command: harness policy intercept
-    blocking: hard
-  - name: produce-beta
-    event: SessionStart
-    command: beta-runner --emit
-    blocking: soft
-  - name: consume-gamma
-    event: PreToolUse
-    match: Bash
-    command: harness policy intercept
-    blocking: hard
-  - name: consume-delta
-    event: PreToolUse
-    match: Bash
-    command: harness policy intercept
-    blocking: hard
-  - name: epsilon-policy-runner
-    event: PreToolUse
-    match: Bash
-    command: harness policy intercept --pack epsilon
-    blocking: hard
-  - name: consume-zeta
-    event: PreToolUse
-    match: Bash
-    command: harness policy intercept
-    blocking: hard
-  - name: consume-eta
-    event: PreToolUse
-    match: Bash
-    command: harness policy intercept
-    blocking: hard
-policies:
-  - name: alpha-gate
-    description: gated on a freshness-windowed alpha tag with no producer
-    trigger:
-      event: PreToolUse
-      match: Bash
-    requires:
-      ledger_tag: "alpha:\${REPO}"
-      within: 1h
-    hook: consume-alpha
-    enforcement: block
-  - name: beta-gate
-    description: gated on beta, but a SessionStart hook produces it
-    trigger:
-      event: PreToolUse
-      match: Bash
-    requires:
-      ledger_tag: "beta:\${REPO}"
-      within: 1h
-    hook: consume-beta
-    enforcement: block
-  - name: gamma-gate
-    description: block policy with no within window
-    trigger:
-      event: PreToolUse
-      match: Bash
-    requires:
-      ledger_tag: "gamma:\${REPO}"
-    hook: consume-gamma
-    enforcement: block
-  - name: delta-gate
-    description: warn-enforcement policy with a within window
-    trigger:
-      event: PreToolUse
-      match: Bash
-    requires:
-      ledger_tag: "delta:\${REPO}"
-      within: 1h
-    hook: consume-delta
-    enforcement: warn
-  - name: epsilon-gate
-    description: its own consumer hook command names the prefix, but must not self-satisfy
-    trigger:
-      event: PreToolUse
-      match: Bash
-    requires:
-      ledger_tag: "epsilon:\${REPO}"
-      within: 1h
-    hook: epsilon-policy-runner
-    enforcement: block
-  - name: zeta-gate
-    description: leading-colon tag yields an empty prefix
-    trigger:
-      event: PreToolUse
-      match: Bash
-    requires:
-      ledger_tag: ":zeta"
-      within: 1h
-    hook: consume-zeta
-    enforcement: block
-  - name: eta-gate
-    description: block + within, no automatic producer, but documents a manual producer in producers[]
-    trigger:
-      event: PreToolUse
-      match: Bash
-    requires:
-      ledger_tag: "eta:\${REPO}"
-      within: 1h
-    hook: consume-eta
-    enforcement: block
-    producers:
-      - kind: mcp
-        verb: mcp__grounding-mcp__ledger_add
-        example: '{type:"fact", content:"eta:\${REPO} (operator-driven smoke summary)"}'
-        description: Document what was exercised so the gate has an auditable manual recovery path.
-`;
-
-  async function run() {
-    const home = makeFixture({ "harness.yaml": MANIFEST });
-    const report = await doctor({
-      configPath: path.join(home, "harness.yaml"),
-      homeOverride: home,
-      mcpProbe: new FakeProbe({}),
-      versionProbe: () => null,
-      pathEnv: "",
-      // Stub npm bin probe to the silent "unknown" branch (non-zero
-      // exit) so the new check (task 4ddd78ed) does not add an
-      // env-dependent warning to the count assertion below. The real
-      // probe is covered by its own test file with all three branches.
-      npmBinExec: STUB_NPM_BIN_EXEC_UNKNOWN,
-    });
-    return report;
-  }
-
-  it("flags a block policy whose within-gated tag has no producer hook", async () => {
-    const report = await run();
-    const alpha = report.policies.find((p) => p.name === "alpha-gate");
-    expect(alpha?.producerGap).toEqual({ ledgerTag: "alpha:${REPO}", within: "1h" });
-  });
-
-  it("does not flag a policy whose tag IS produced by a manifest hook", async () => {
-    const report = await run();
-    const beta = report.policies.find((p) => p.name === "beta-gate");
-    expect(beta?.producerGap).toBeUndefined();
-  });
-
-  it("does not flag a block policy without a within window", async () => {
-    const report = await run();
-    const gamma = report.policies.find((p) => p.name === "gamma-gate");
-    expect(gamma?.producerGap).toBeUndefined();
-  });
-
-  it("does not flag a warn-enforcement policy even with a within window", async () => {
-    const report = await run();
-    const delta = report.policies.find((p) => p.name === "delta-gate");
-    expect(delta?.producerGap).toBeUndefined();
-  });
-
-  it("excludes the policy's own consumer hook from producer detection", async () => {
-    const report = await run();
-    const epsilon = report.policies.find((p) => p.name === "epsilon-gate");
-    // epsilon-policy-runner is epsilon-gate's `hook:` (the consumer) AND
-    // its command literally contains `epsilon`. It must not count as the
-    // producer of `epsilon:` — the `h.name !== policy.hook` exclusion is
-    // what keeps this a gap; drop that clause and this test fails.
-    expect(epsilon?.producerGap).toEqual({
-      ledgerTag: "epsilon:${REPO}",
-      within: "1h",
-    });
-  });
-
-  it("does not let a leading-colon (empty-prefix) tag vacuously match every hook", async () => {
-    const report = await run();
-    const zeta = report.policies.find((p) => p.name === "zeta-gate");
-    // `:zeta` has an empty prefix; a naive `command.includes("")` would
-    // match every hook and silently suppress the gap. It must still flag.
-    expect(zeta?.producerGap).toEqual({ ledgerTag: ":zeta", within: "1h" });
-  });
-
-  it("does not flag a policy that declares a non-empty producers[] array (task f97e152f)", async () => {
-    const report = await run();
-    const eta = report.policies.find((p) => p.name === "eta-gate");
-    // eta-gate has NO automatic producer hook but DOES declare a
-    // producers[] entry. The producers field IS the schema-blessed
-    // manual recovery path (the agent sees it in the deny envelope),
-    // so doctor must not flag a gap that doesn't exist from the
-    // agent's perspective. Drop the `p.producers === undefined || ...`
-    // clause in buildPolicies and this test fails.
-    expect(eta?.producerGap).toBeUndefined();
-  });
-
-  it("counts each producer gap as a warning and renders the ⚠ line", async () => {
-    const report = await run();
-    const gaps = report.policies.filter((p) => p.producerGap);
-    expect(gaps.map((p) => p.name).sort()).toEqual([
-      "alpha-gate",
-      "epsilon-gate",
-      "zeta-gate",
-    ]);
-    // This fixture declares no `memory:` block, which on its own yields
-    // exactly one warning ("no memory router declared"). The three
-    // producer gaps push that to 4, and the seven hooks that still call the
-    // removed `harness policy intercept` add one removed-command warning
-    // each: 4 + 7 = 11, proving each gap is counted.
-    expect(report.warningCount).toBe(11);
-    const text = format(report);
-    expect(text).toContain(
-      "⚠ alpha-gate  requires fresh `alpha:${REPO}` (within 1h) but no manifest hook produces it",
-    );
-    expect(text).toContain("add a producer hook (e.g. a SessionStart runner)");
-    // Refinement (task f97e152f): warning text now also names the
-    // schema-blessed manual recovery path so operators do not assume
-    // the only way out is a SessionStart hook.
-    expect(text).toContain("OR document the manual recovery path in the policy's `producers:` array");
-    expect(text).toContain("✓ beta-gate");
-    expect(text).toContain("✓ gamma-gate");
-    // eta-gate is the producers-suppression case: must render as ✓
-    // (no ⚠ line) even though it has within + no automatic producer.
-    expect(text).toContain("✓ eta-gate");
-    expect(text).not.toMatch(/⚠ eta-gate/);
-  });
-});
-
 
 describe("doctor — policy pack declared-but-not-live check", () => {
   // expandPolicyPacks silently skips a pack whose `source:` is

@@ -8,9 +8,7 @@ export type ListCategory =
   | "cli"
   | "skills"
   | "memories"
-  | "hooks"
-  | "policies"
-  | "workflows";
+  | "hooks";
 
 const CATEGORIES: readonly ListCategory[] = [
   "mcp",
@@ -18,8 +16,6 @@ const CATEGORIES: readonly ListCategory[] = [
   "skills",
   "memories",
   "hooks",
-  "policies",
-  "workflows",
 ];
 
 export function isListCategory(s: string): s is ListCategory {
@@ -120,33 +116,6 @@ function buildHookRows(manifest: Manifest): Record<string, unknown>[] {
   }));
 }
 
-function buildPolicyRows(manifest: Manifest): Record<string, unknown>[] {
-  return manifest.policies.map((p) => ({
-    name: p.name,
-    enforcement: p.enforcement,
-    event: p.trigger.event,
-    hook: p.hook,
-    // `operator_only: true` policies (task 2cc73f55) declare no
-    // `requires:` at all — there is no tag to show.
-    requires_tag: p.requires?.ledger_tag ?? "(operator-only)",
-  }));
-}
-
-function buildWorkflowRows(manifest: Manifest): Record<string, unknown>[] {
-  return manifest.workflows.map((wf) => {
-    const review = wf.steps.find((s) => s.kind === "review_subagent");
-    const merge = wf.steps.find((s) => s.kind === "merge");
-    return {
-      name: wf.name,
-      steps: wf.steps.length,
-      review_spawn: review?.kind === "review_subagent" ? review.spawn : "",
-      review_template: review?.kind === "review_subagent" ? (review.template ?? "") : "",
-      merge_gate: merge?.kind === "merge" ? merge.gate : "",
-      task_label: wf.when.task_label?.join(",") ?? "",
-    };
-  });
-}
-
 function buildRows(category: ListCategory, manifest: Manifest, opts: ListOptions) {
   switch (category) {
     case "mcp":
@@ -159,10 +128,6 @@ function buildRows(category: ListCategory, manifest: Manifest, opts: ListOptions
       return buildMemoryRows(manifest, opts);
     case "hooks":
       return buildHookRows(manifest);
-    case "policies":
-      return buildPolicyRows(manifest);
-    case "workflows":
-      return buildWorkflowRows(manifest);
   }
 }
 

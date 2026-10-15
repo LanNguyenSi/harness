@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import { parse as parseYaml } from "yaml";
-import { OverrideMergeError, applyLayers } from "../../overrides/merge.js";
+import { OverrideMergeError } from "../../overrides/merge.js";
+import { mergeLayersStrippingRemovedPaths } from "../../overrides/merge-layers.js";
 import { ManifestParseError, parseManifest, type Manifest } from "../../schema/index.js";
 import { EX_NOINPUT, EX_USAGE, HarnessExitError } from "../exit-codes.js";
 import { loadManifest, resolvePaths, type LoaderOptions } from "../loader.js";
@@ -43,8 +44,8 @@ function parseRefYaml(raw: string, label: string): unknown {
 
 /**
  * Parse the ref-side manifest into the SAME view the working side gets
- * from `loadManifest`: exactly the policies the operator wrote under
- * `policies:`, so an unchanged manifest never diffs as a policy change.
+ * from `loadManifest`: removed keys are stripped the same way, so an
+ * unchanged manifest never diffs as a change.
  */
 function parseRefSchema(parsed: unknown): Manifest {
   try {
@@ -121,7 +122,14 @@ function buildRefManifest(
   const baseRaw = parseRefYaml(refRaw, "manifest at git ref");
   if (refLayerRaws.length === 0) return parseRefSchema(baseRaw);
   try {
-    return parseRefSchema(applyLayers(baseRaw, ...refLayerRaws));
+    // Removed keys are stripped from the ref-time base and layers before the
+    // merge, as the working side does (the ref-side warnings are not reported).
+    return parseRefSchema(
+      mergeLayersStrippingRemovedPaths(
+        baseRaw,
+        refLayerRaws.map((raw) => ({ raw, label: "override layer" })),
+      ).merged,
+    );
   } catch (err) {
     // A shape conflict between the REF-time base and a layer is a new
     // error surface the override-naive ref path never had (e.g. the base's

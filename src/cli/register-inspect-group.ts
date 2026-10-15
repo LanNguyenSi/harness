@@ -11,6 +11,11 @@ import { deleteRogueLedgers, scanForRogueLedgers } from "./doctor/rogue-ledger.j
 import { EX_FAIL, EX_USAGE, HarnessExitError } from "./exit-codes.js";
 import { isListCategory, list, type ListCategory } from "./list.js";
 import { formatReport, validate } from "./validate/index.js";
+import {
+  REMOVED_DESCRIBE_PILLARS,
+  REMOVED_LIST_CATEGORIES,
+  removedInspectNameMessage,
+} from "../schema/removed-keys.js";
 
 export function registerInspectGroup(
   program: Command,
@@ -25,15 +30,18 @@ export function registerInspectGroup(
     .option("--project <name>", "apply per-project overrides for this project name")
     .option(
       "--pillar <pillar>",
-      "filter output to one section: grounding | tools | memory | hooks | policies | workflows | review_templates",
+      "filter output to one section: grounding | tools | memory | hooks",
     )
     .option("--json", "emit JSON instead of YAML")
     .action((options: { config?: string; project?: string; pillar?: string; json?: boolean }) => {
       let pillar: Pillar | undefined;
       if (options.pillar !== undefined) {
         if (!isPillar(options.pillar)) {
+          const removed = REMOVED_DESCRIBE_PILLARS.find((r) => r.name === options.pillar);
           throw new HarnessExitError(
-            `unknown pillar "${options.pillar}"; expected one of grounding, tools, memory, hooks, policies, workflows, review_templates`,
+            removed !== undefined
+              ? `${removedInspectNameMessage("pillar", removed)}; expected one of grounding, tools, memory, hooks`
+              : `unknown pillar "${options.pillar}"; expected one of grounding, tools, memory, hooks`,
             EX_USAGE,
           );
         }
@@ -205,7 +213,7 @@ export function registerInspectGroup(
   program
     .command("list <category>")
     .description(
-      "Flat denormalised listing per category: mcp / cli / skills / memories / hooks / policies / workflows",
+      "Flat denormalised listing per category: mcp / cli / skills / memories / hooks",
     )
     .option("--config <path>", "manifest path (default: ~/.harness/harness.yaml; legacy fallback ~/.claude/harness.yaml)")
     .option("--project <name>", "apply per-project overrides")
@@ -217,8 +225,11 @@ export function registerInspectGroup(
         options: { config?: string; project?: string; filter?: string; json?: boolean },
       ) => {
         if (!isListCategory(category)) {
+          const removed = REMOVED_LIST_CATEGORIES.find((r) => r.name === category);
           throw new HarnessExitError(
-            `unknown list category "${category}"; expected one of mcp, cli, skills, memories, hooks, policies, workflows`,
+            removed !== undefined
+              ? `${removedInspectNameMessage("list category", removed)}; expected one of mcp, cli, skills, memories, hooks`
+              : `unknown list category "${category}"; expected one of mcp, cli, skills, memories, hooks`,
             EX_USAGE,
           );
         }

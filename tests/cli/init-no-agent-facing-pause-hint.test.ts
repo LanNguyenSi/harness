@@ -91,12 +91,8 @@ function packUxRunLines(manifest: Manifest): Array<{ policy: string; line: strin
 
 function agentFacingRunLines(manifest: Manifest): Array<{ policy: string; line: string }> {
   const out: Array<{ policy: string; line: string }> = [];
-  for (const policy of manifest.policies) {
-    if (!policy.ux) continue;
-    for (const line of policy.ux.run) {
-      out.push({ policy: policy.name, line });
-    }
-  }
+  // Manifest `policies[]` entries (and their ux.run lines) are a removed key
+  // (task 10e2ff0a): the pack config is the only agent-facing ux.run source.
   out.push(...packUxRunLines(manifest));
   return out;
 }

@@ -24,7 +24,8 @@ describe("composeCustom — empty selection", () => {
     const { manifest, warnings, yaml } = compose({});
     expect(manifest.version).toBe(1);
     expect(manifest.hooks).toEqual([]);
-    expect(manifest.policies).toEqual([]);
+    expect(manifest).not.toHaveProperty("policies");
+    expect(yaml).not.toMatch(/^policies:/m);
     expect(manifest.policy_packs).toEqual([]);
     expect(warnings).toEqual([]);
     expect(yaml).toContain("Custom profile");
@@ -84,7 +85,7 @@ describe("composeCustom — no policies and no hooks (task bcdcde36)", () => {
       packs: COMPOSABLE_PACKS.map((p) => p.key),
       mcps: COMPOSABLE_MCPS.map((m) => m.key),
     });
-    expect(manifest.policies).toEqual([]);
+    expect(manifest).not.toHaveProperty("policies");
     expect(manifest.hooks).toEqual([]);
     expect(yaml).not.toContain("harness policy intercept");
     expect(yaml).not.toContain("harness record");

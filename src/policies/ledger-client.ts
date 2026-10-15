@@ -2,20 +2,33 @@
 //
 // Spawns the configured grounding-mcp server, performs the standard
 // init / notifications/initialized / tools/call handshake, and returns
-// ledger entries normalised to harness's LedgerEntry shape (see
-// src/policies/requires.ts). Any failure path resolves to
+// ledger entries normalised to harness's LedgerEntry shape (below). Any
+// failure path resolves to
 // `{ kind: "degraded", reason }` — this TRANSPORT layer never decides
 // what degradation means; the caller decides. (The policy evaluator that
 // used to route a degraded result to `warn-degraded` / `deny-degraded` has
 // been removed.)
 
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import type { LedgerEntry } from "./requires.js";
 import { expandHome, expandHomeInEnv } from "../io/expand-home.js";
 import { POLICY_DECISION_TYPE } from "../io/ledger-record.js";
 import { VERSION } from "../version.js";
 
 const DEFAULT_TIMEOUT_MS = 5_000;
+
+export interface LedgerEntry {
+  id: string;
+  content: string;
+  source?: string;
+  createdAt: string | Date;
+  /**
+   * The wire bucket the entry came from. `flattenSummary` populates this from
+   * the `entries.<bucket>` key in the ledger_summary payload, mapping bucket
+   * names back to evidence-ledger types (`facts` → `fact`, `policyDecisions`
+   * → `policy_decision`, etc.), so a reader can tell evidence from audit rows.
+   */
+  type?: string;
+}
 
 export interface LedgerClientOptions {
   /** argv[0..]: the grounding-mcp binary + flags. e.g. `["node", "/path/to/grounding-mcp/dist/server.js"]`. */

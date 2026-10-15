@@ -20,7 +20,7 @@
 // `minimal` does not.
 
 import { z } from "zod";
-import { PolicyUxSchema } from "../../schema/policies.js";
+import { PolicyUxSchema } from "../../schema/policy-ux.js";
 import type { Hook, PolicyPack, PolicyUx } from "../../schema/index.js";
 import { DEFAULT_RUNTIME, type Runtime } from "../runtime.js";
 import type { PackContribution, PackContributionFile } from "../types.js";
