@@ -3,7 +3,9 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { run } from "../../src/cli/index.js";
 import { loadManifest } from "../../src/cli/loader.js";
+import { remove } from "../../src/cli/remove/index.js";
 import { validate } from "../../src/cli/validate/index.js";
 import { doctor } from "../../src/cli/doctor/index.js";
 import { format } from "../../src/cli/doctor/format.js";
@@ -110,8 +112,35 @@ describe("workflows[] no longer derives policies (task e62f03ea)", () => {
       configPath: configPathOf(home),
       ...NOOP_PROBES,
     });
-    expect(result.diagnostics.filter((d) => d.path === "workflows")).toEqual([]);
+    expect(result.diagnostics.filter((d) => d.path.startsWith("workflows"))).toEqual([]);
+    expect(result.diagnostics.filter((d) => /workflow/i.test(d.message))).toEqual([]);
     expect(result.manifest?.policies.filter((p) => p.name.startsWith("workflow:"))).toEqual([]);
+  });
+
+  it("remove hook of an unreferenced evidence hook succeeds without force and reports no derived references", async () => {
+    const home = writeFixture();
+    const configPath = configPathOf(home);
+    const r = await remove("hook", "require-review-evidence-bash", { configPath, homeDir: home });
+    expect(r.applied).toBe(true);
+    expect(r).not.toHaveProperty("derivedGateReferences");
+
+    // The CLI path must stay silent too: the old derived-gate warning on
+    // stderr is gone together with the derivation.
+    const home2 = writeFixture();
+    let stdout = "";
+    let stderr = "";
+    const code = await run({
+      argv: ["remove", "hook", "require-review-evidence-bash", "--config", configPathOf(home2)],
+      stdout: (s) => {
+        stdout += s;
+      },
+      stderr: (s) => {
+        stderr += s;
+      },
+    });
+    expect(code).toBe(0);
+    expect(stdout).toContain("removed hook");
+    expect(stderr).toBe("");
   });
 
   it("the doctor report has no workflows section and no derived flag on policies", async () => {

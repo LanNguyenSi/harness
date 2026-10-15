@@ -1883,16 +1883,16 @@ describe("apply — grounding-mcp policy-degradation gate (discovery H3)", () =>
 // `policies:` snapshot), and the restart-hint reader parses the stored
 // content the same way, so re-applying an unchanged manifest emits no
 // hints.
-describe("apply — the .last-apply snapshot with a workflows[] manifest (review round 3)", () => {
-  function writeWorkflowManifest(withGroundingMcp = true): void {
-    const groundingMcp = withGroundingMcp
-      ? "  mcp:\n    - name: grounding-mcp\n      command: [node, /x/grounding.js]\n"
-      : "  mcp: []\n";
+describe("apply — the .last-apply snapshot with a workflows[] manifest", () => {
+  function writeWorkflowManifest(): void {
     fs.writeFileSync(
       path.join(tmpHome, "harness.yaml"),
       `version: 1
 tools:
-${groundingMcp}  cli: []
+  mcp:
+    - name: grounding-mcp
+      command: [node, /x/grounding.js]
+  cli: []
   skills: {enabled: [], source_dirs: []}
   builtin: {known: []}
 memory:
@@ -1937,17 +1937,5 @@ policies: []
 
     const r2 = await apply({ homeDir: tmpHome });
     expect(r2.restartHints).toEqual([]);
-  });
-
-  it("a snapshot without the derived pair (pre-derivation release shape) yields no phantom hooks hint", async () => {
-    writeWorkflowManifest();
-    await apply({ homeDir: tmpHome });
-    // The stored snapshot already lacks the derived pair; make the
-    // pre-derivation shape explicit by asserting it, then re-apply.
-    const generatedDir = path.join(tmpHome, GENERATED_DIRNAME);
-    const record = readLastApply(generatedDir)!;
-    expect(record.manifest!.content).not.toContain("workflow:ship:");
-    const r = await apply({ homeDir: tmpHome });
-    expect(r.restartHints).not.toContain(RESTART_HINT_HOOKS);
   });
 });
