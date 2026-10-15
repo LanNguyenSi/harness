@@ -19,9 +19,9 @@ is one loop:
 flowchart LR
     declare["1. Declare<br/><code>harness.yaml</code>"]
     apply["2. Apply<br/><code>harness apply</code>"]
-    enforce["3. Enforce<br/>hooks + policies<br/>at runtime"]
+    enforce["3. Enforce<br/>hooks at runtime"]
     record[("4. Record<br/>evidence ledger")]
-    observe["5. Observe<br/><code>audit</code> / <code>explain</code> /<br/><code>session-export</code>"]
+    observe["5. Observe<br/><code>audit</code> / <code>session-export</code>"]
 
     declare --> apply
     apply --> enforce
@@ -31,15 +31,18 @@ flowchart LR
 ```
 
 Observe → refine → declare is the whole loop. The read-side surfaces
-(`audit`, `explain --trace`, `session-export`) replay rows the runtime
-already recorded, so what flows back into the manifest is grounded in
-what actually happened. Unlike the historical CLI-surface examples
-elsewhere in this document (see the callout above), this loop
-describes the shipped tool as it behaves today.
+(`audit`, `session-export`) replay rows already in the evidence
+ledger, so what flows back into the manifest is grounded in what
+actually happened. As of 1.0.0 the loop ships with one caveat: the
+policy engine was removed, so the Enforce step no longer consults the
+Record step (the shipped branch-protection gate asks git, not the
+ledger), and `explain --trace` left Observe with it. The ledger itself
+is real: grounding-mcp and the pause / resume verbs still write rows,
+and `audit` replays the pre-1.0.0 `policy_decision` history.
 
 ## Architecture overview
 
-The harness operates across two planes: an authoring plane that merges YAML config files into an effective manifest and runs `harness apply` to emit runtime artifacts, and a runtime plane where hook commands judge each tool call: `harness policy intercept` matches `policies[]` and checks their `requires:` against the grounding-mcp evidence ledger, and `harness pack hook branch-protection` asks git for the branch.
+The harness operates across two planes: an authoring plane that merges YAML config files into an effective manifest and runs `harness apply` to emit runtime artifacts, and a runtime plane where hook commands judge each tool call. Today that is `harness pack hook branch-protection` asking git for the branch, plus the opt-in `harness pack hook runtime-reality`. (The original third judge, `harness policy intercept`, matched `policies[]` and checked their `requires:` against the grounding-mcp evidence ledger; the policy engine was removed in 1.0.0. The diagrams below show it as designed.)
 
 The first diagram shows the authoring plane and which hook command judges a tool call at runtime, with what each one consults.
 
@@ -76,7 +79,7 @@ flowchart TD
   OUT -.->|"wired by<br/>--target or --install"| EVT
 ```
 
-The second diagram shows the steps inside `harness policy intercept` (`src/cli/policy/intercept.ts`, `src/runtime/intercept.ts`). A paused harness and a manifest that fails to load both allow the call; a call no policy matches is allowed without a record; an `operator_only` policy denies without querying the ledger.
+The second diagram shows the steps inside `harness policy intercept` (`src/cli/policy/intercept.ts`, `src/runtime/intercept.ts`), as designed at the time; that engine and both files were removed in 1.0.0, so the diagram is the historical design, not the shipped behavior. A paused harness and a manifest that fails to load both allowed the call; a call no policy matched was allowed without a record; an `operator_only` policy denied without querying the ledger.
 
 ```mermaid
 flowchart TD
@@ -121,7 +124,7 @@ policies: […]              # cross-cutting: named rules that bind hooks to tri
 
 There is no other top-level key. If a future concept (e.g. credentials, observability) does not fit under these five, that is the signal for an architecture revision, not a sixth sibling key added casually.
 
-> The shipped schema has more top-level keys than this design: besides `version` it accepts `grounding`, `tools`, `memory`, `hooks`, `policies`, `policy_packs`, `workflows`, `review_templates`, `audit` and `doctor` (`src/schema/index.ts`). See the [manifest reference](CLI.md#manifest-reference).
+> The shipped schema grew beyond this design and then shrank again: as of 1.0.0 the accepted top-level keys are `version`, `grounding`, `tools`, `memory`, `hooks`, `policy_packs` and `audit` (`src/schema/index.ts`). `policies`, `workflows`, `review_templates` and `doctor` were accepted until 1.0.0 and are now removed keys (they load with a warning and are stripped). See the [manifest reference](CLI.md#manifest-reference).
 
 ## 2. `grounding:` section
 
@@ -311,6 +314,8 @@ Notes:
 
 ## 5. `hooks:` section
 
+> **Field note (1.0.0).** The `path_match` and `bash_match` hook fields below were removed in 1.0.0: a hook that still declares one loads with a warning and the field is stripped (the hook is kept). The table describes the pre-1.0.0 design.
+
 Each hook is a shell command bound to a runtime event, with optional match pattern, blocking mode, and timeout budget. This is the surface that `harness apply` translates into `~/.claude/settings.json`'s `hooks` section in Phase 3.
 
 ```yaml
@@ -391,6 +396,8 @@ A v2 schema may add a higher-level `command_pattern:` field for the most common 
 
 ## 6. `policies:` section
 
+> **Removed in 1.0.0.** The `policies:` key, the `harness policy intercept` engine that evaluated it, and every field below were removed in 1.0.0; a manifest that still declares the key loads with a warning and the entry is stripped. This section documents the pre-1.0.0 design as it was written.
+
 Named rules. Each policy names a trigger (matching the same event/match shape as `hooks`) and declares what the trigger *requires*, typically an evidence-ledger entry of a given tag. Policies reference hooks by name; the hook is the machinery, the policy is the rule.
 
 ```yaml
@@ -430,7 +437,7 @@ Schema:
 | `requires` | object | yes, unless `operator_only: true` | evidence shape; discriminated union, see below |
 | `hook` | string | yes | must reference a `hooks[].name` |
 | `enforcement` | enum | yes | `block` / `warn` / `require_approval`; higher level than hook's `blocking` flag |
-| `operator_only` | boolean | no | `true` declares an unconditional operator-only deny: no `requires:` at all (mutually exclusive with it), only valid with `enforcement: block`. `harness policy intercept` never queries the ledger for this policy — no in-session evidence (ledger write, marker file, flag) can ever satisfy it. For a `requires:`-based policy, whoever can write the ledger can open the gate (see [`writing-custom-policies.md`](writing-custom-policies.md) tripwire 4); `operator_only: true` is the schema's answer for a gate that must never open from inside the session. See [`writing-custom-policies.md`](writing-custom-policies.md#recipe-c-operator-only-unconditional-deny-no-self-satisfiable-requires). |
+| `operator_only` | boolean | no | `true` declares an unconditional operator-only deny: no `requires:` at all (mutually exclusive with it), only valid with `enforcement: block`. `harness policy intercept` never queries the ledger for this policy — no in-session evidence (ledger write, marker file, flag) can ever satisfy it. For a `requires:`-based policy, whoever can write the ledger can open the gate; `operator_only: true` was the schema's answer for a gate that must never open from inside the session. |
 | `producers` | array | no | structured remediation hints rendered into the deny envelope; discriminated union of `bash` / `mcp` / `ask` kinds. At least one `mcp` producer is required when set (the ungated recovery path when Bash is locked down). |
 | `ux` | object | no | agent-facing block message; `{ cannot, required[], run[] }`. When set, replaces the engine-vocabulary text on the agent surface (`permissionDecisionReason`) with a plain-language three-section form; the operator-facing reason and audit ledger are unchanged. `${VAR}` references resolve against the same extract map the `ledger_tag` was substituted with, plus builtins (`SESSION_ID` / `REPO` / `BRANCH` / `TOOL_NAME` / `CWD`). Suppresses `producers:` rendering on the agent surface to avoid two competing remedy lists. See [`for-agents.md`](for-agents.md#agent-facing-block-messages-ux-block) for the verbatim form. |
 

@@ -18,12 +18,12 @@ The wizard is one of three ways to bootstrap a manifest:
 
 3. **Profile selection.** Four choices, with different external-account assumptions:
 
-   - **Solo** (no external accounts): `memory-router` + the `branch-protection` policy pack (Write/Edit refused on a protected branch). Single-operator baseline. Works against any PR workflow because it does not wire any PR-merge gate.
-   - **Team** (requires an agent-tasks account, hosted or self-hosted): Solo + the `agent-tasks` MCP server + `grounding-mcp` + the three merge-gate policies (`review-before-merge`, `review-before-task-merge`, `review-before-task-finish-automerge`). They match the `mcp__agent-tasks__pull_requests_merge`, `mcp__agent-tasks__task_merge` and `mcp__agent-tasks__task_finish` (with `autoMerge: true`) tools only; gh-CLI workflows (`gh pr merge`) stay unguarded today.
-   - **Full** (requires agent-tasks + `gh` on PATH): Team + the reference policies (`dogfood-before-release`, `review-subagent-before-pr-create`). All hooks run through the bundled `harness policy intercept` engine. Full also ships Bash-surface parallels of the review gates (`review-before-merge-bash`, `review-subagent-before-pr-create-bash`) so `gh pr merge` / `gh pr create` get the same review-evidence gate as the agent-tasks MCP verbs; tag shape switches from `${PR_NUMBER}` / `${TASK_ID}` to `${BRANCH}` on the Bash side.
-   - **Custom (advanced)**: à-la-carte composer (see [Custom flow](#custom-flow) below). Pick discrete packs / MCPs / policies; the wizard composes a validate-clean manifest from your selection.
+    - **Solo** (no external accounts): `memory-router` + the `branch-protection` policy pack (Write/Edit refused on a protected branch). Single-operator baseline. Works against any PR workflow because it does not wire any PR-merge gate.
+    - **Team** (requires an agent-tasks account, hosted or self-hosted): Solo + the `agent-tasks` MCP server + `grounding-mcp`.
+    - **Full** (requires agent-tasks + `gh` on PATH): Team + the reference tool inventory (the `gh` CLI entry, skills, version floors, min-version floors on the MCP entries). (The reference policies, their Bash-surface parallels and the `harness policy intercept` engine they ran through were removed in 1.0.0; no template writes policies or policy-intercept hooks.)
+    - **Custom (advanced)**: à-la-carte composer (see [Custom flow](#custom-flow) below). Pick discrete packs / MCPs; the wizard composes a validate-clean manifest from your selection.
 
-4. **Agent-tasks warning (Team / Full).** If you pick `team` or `full` but the probe did not find an `agent-tasks` entry in that user-scope registry, the wizard asks whether to proceed. The manifest will still be written, the hook will still fire, but two preconditions need to land before the gate is enforceable: (a) `agent-tasks-mcp-bridge` on PATH and registered with Claude Code (`claude mcp add-json --scope user`), (b) a token in the OS keychain or `AGENT_TASKS_TOKEN` env. Default is `true` because the common case is "I am setting up everything from scratch and agent-tasks is about to land alongside this manifest". After the manifest write the wizard prints a reminder line with the `agent-tasks-mcp-bridge login` recovery path.
+4. **Agent-tasks warning (Team / Full).** If you pick `team` or `full` but the probe did not find an `agent-tasks` entry in that user-scope registry, the wizard asks whether to proceed. The manifest will still be written, but two preconditions need to land before the bridge is usable: (a) `agent-tasks-mcp-bridge` on PATH and registered with Claude Code (`claude mcp add-json --scope user`), (b) a token in the OS keychain or `AGENT_TASKS_TOKEN` env. Default is `true` because the common case is "I am setting up everything from scratch and agent-tasks is about to land alongside this manifest". After the manifest write the wizard prints a reminder line with the `agent-tasks-mcp-bridge login` recovery path.
 
 5. **Agent-tasks auth probe (Team / Full / Custom-with-bridge).** After a successful `npm i -g` of the missing packages, the wizard runs `agent-tasks-mcp-bridge status` against the freshly installed binary. Three observed outcomes:
    - **Token present, validates against the backend**: prints `✓ agent-tasks token validated against the backend.` and continues.
@@ -57,17 +57,17 @@ Registration" section that re-verifies the live registration via
 
 ## Custom flow
 
-Custom is for power users who want a manifest narrower or wider than the named profiles. The wizard branches into three checkbox prompts:
+Custom is for power users who want a manifest narrower or wider than the named profiles. The wizard branches into two checkbox prompts:
 
 1. **Policy packs**: pre-checked: none (settings.json carries no pack signal today). Surface: `branch-protection`.
-2. **MCP servers**: pre-checked from `detect()`: any MCP name found in the user-scope registry (`~/.claude.json`) is ticked. Surface: `agent-tasks`, `grounding-mcp`, `memory-router` (wired under `memory.router`, not `tools.mcp[]`; the composer puts it in the right slot), and `codebase-oracle` (requires `ORACLE_SCAN_ROOT` + `OPENAI_API_KEY` env vars that the wizard does NOT prompt for; an advisory prints when ticked).
-3. **Reference policies**: pre-checked: none. Surface mirrors `--template full`: `review-before-merge`, `review-subagent-before-pr-create`, `dogfood-before-release`, `two-reviewers-required` (warn-level companion to review-before-merge with `count.min: 2`). Each policy carries its hook entry automatically; shared hook names (e.g. `require-review-evidence` for both `review-before-merge` and `two-reviewers-required`) are deduplicated.
+2. **MCP servers / routers**: pre-checked from `detect()`: any MCP name found in the user-scope registry (`~/.claude.json`) is ticked. Surface: `agent-tasks`, `grounding-mcp`, `memory-router` (wired under `memory.router`, not `tools.mcp[]`; the composer puts it in the right slot), and `codebase-oracle` (requires `ORACLE_SCAN_ROOT` + `OPENAI_API_KEY` env vars that the wizard does NOT prompt for; an advisory prints when ticked).
+
+(A third checkbox, "pick reference policies", existed until 1.0.0; it went with the policy engine, and the composer emits no policies.)
 
 Acceptance:
 
-- **Empty selection** across all three prompts aborts the wizard with no write.
+- **Empty selection** across both prompts aborts the wizard with no write.
 - **A Custom selection** rejoins the shared tail (dependency check → memory dir → confirm → write → validate → wire-now multiselect), so write semantics are identical to the named profiles.
-- **Producer-coupling advisories** print to stderr when a selected policy has no producer for its ledger tag (e.g. `dogfood-before-release` selected without `grounding-mcp` would block every `npm publish`). These are warnings, not blockers; `harness validate` still passes.
 
 ## Ctrl-C semantics
 
@@ -84,5 +84,5 @@ harness validate            # expect: no validation findings
 
 ## Limitations (will land later)
 
-- **Custom-profile per-field editing.** Whole packs / MCPs / policies are pickable; field-level edits (e.g. tweaking `within:` windows, swapping a `match:` regex) still require hand-editing the YAML.
+- **Custom-profile per-field editing.** Whole packs / MCPs are pickable; field-level edits (e.g. tweaking a pack's `protectedBranches` config, an MCP entry's env block) still require hand-editing the YAML.
 - **Wizard wire-now for `opencode`.** The runtime adapter itself has shipped (task `f34eb233`): `harness apply --runtime opencode` works standalone. Only wiring the wizard's wire-now checkbox up to call it remains, tracked as task `c5287b80`; the checkbox stays disabled until then.

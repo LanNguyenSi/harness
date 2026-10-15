@@ -490,7 +490,7 @@ export interface LedgerSession {
    * or without its own override) short-circuits to `degraded` without a
    * new round-trip.
    *
-   * Cost-bound caveat (OKF gate-fail-posture-matrix): the latch's promise
+   * Cost-bound caveat: the latch's promise
    * that a dead ledger costs a session at most ~1× its `timeoutMs` holds
    * only while per-call overrides on the enforcement critical path stay
    * ≤ the session default. The override exists for tests and non-critical

@@ -460,8 +460,7 @@ function locateGitEntry(startDir: string): LocatedGitEntry | null {
     // its `HEAD`, its `commondir`, the `objects/` and `refs/` directories of
     // its common directory), and a file that is not a pointer as git reads
     // one. git walks up past such a directory (or stops with an error); this
-    // lookup refuses it instead. See below, and
-    // `docs/okf/gate-fail-posture-matrix.md` for the full list.
+    // lookup refuses it instead. See below for the full list.
     if (present && (stat === undefined || (!stat.isDirectory() && !stat.isFile()))) {
       return { entry: { worktreeRoot: dir, gitDir: "", refused: ".git" } };
     }

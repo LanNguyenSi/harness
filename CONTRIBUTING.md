@@ -1,6 +1,6 @@
 # Contributing to harness
 
-Thanks for your interest. harness is a declarative control plane for agent harnesses: one YAML for grounding, tools, memory, hooks, and policies. Its PreToolUse hooks deny tool calls that violate the declared rules: `harness policy intercept` checks `policies[]` against the evidence ledger, and the branch-protection hook asks git for the branch.
+Thanks for your interest. harness is a declarative control plane for agent harnesses: one YAML for grounding, tools, memory, hooks, and policy packs. Its PreToolUse hooks deny tool calls that violate the declared rules: the branch-protection hook asks git for the branch and refuses edits on a protected branch.
 
 ## Issues
 
@@ -68,12 +68,12 @@ Match the surrounding code. Prefer small, reviewable diffs.
 
 ## Canonical manifests
 
-Two files describe the example policy surface and must stay in sync:
+Two files describe the example manifest surface and must stay in sync:
 
-- `docs/examples/full-manifest.yaml`: canonical schema-coverage reference. Use this file as the source of truth when adding or editing an example policy or policy_pack entry.
-- `src/cli/init/templates.ts` (`FULL_TEMPLATE`): the runnable manifest emitted by `harness init --template full`. Intentionally different on `tools.mcp` commands, hook commands, and the optional `workflows` / `review_templates` / `audit` blocks, but its `policies` and `policy_packs` sections must mirror the reference.
+- `docs/examples/full-manifest.yaml`: canonical schema-coverage reference. Use this file as the source of truth when adding or editing an example policy_pack entry.
+- `src/cli/init/templates.ts` (`FULL_TEMPLATE`): the runnable manifest emitted by `harness init --template full`. Intentionally different on `tools.mcp` commands, hook commands, and the optional `audit` block, but its `policy_packs` section must mirror the reference.
 
-The parity vitest `tests/cli/init-full-template-parity.test.ts` fails the build on drift in policy names, load-bearing policy fields (`trigger.match`, `trigger.extract`, `requires.*`, `enforcement`, `hook`), or `policy_packs` definitions. If you add a policy to one file, add it to the other in the same PR.
+The parity vitest `tests/cli/init-full-template-parity.test.ts` fails the build on drift in the `policy_packs` definitions, and on either manifest shipping `policies`, `hooks`, or a removed manifest key (`policies:`, `workflows:`, `review_templates:`, `doctor:`). If you add a policy pack entry to one file, add it to the other in the same PR.
 
 ## Releasing
 
