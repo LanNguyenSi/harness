@@ -84,25 +84,10 @@ describe("init — full template", () => {
     expect(mcpNames).toContain("agent-tasks");
     expect(mcpNames).toContain("grounding-mcp");
     expect(mcpNames).not.toContain("codebase-oracle");
-    // Hooks: PreToolUse policy gates route through the bundled
-    // `harness policy intercept` engine. The `-bash` variants cover the
-    // gh-cli surface alongside the agent-tasks MCP surface (task 7eed0bb2).
-    expect(hookNames).toContain("require-review-evidence");
-    expect(hookNames).toContain("require-review-evidence-bash");
-    expect(hookNames).toContain("require-dogfood-evidence");
-    expect(hookNames).toContain("require-review-subagent-evidence");
-    expect(hookNames).toContain("require-review-subagent-evidence-bash");
-    // The reference policies that drive those hooks. `two-reviewers-required`
-    // is a warn-level companion to review-before-merge, sharing the same hook;
-    // see docs/examples/full-manifest.yaml for the canonical definition.
-    // The `-bash` variants are the tool-agnostic parallels of the MCP
-    // policies for operators on the gh-cli workflow (task 7eed0bb2).
-    expect(policyNames).toContain("review-before-merge");
-    expect(policyNames).toContain("review-before-merge-bash");
-    expect(policyNames).toContain("dogfood-before-release");
-    expect(policyNames).toContain("two-reviewers-required");
-    expect(policyNames).toContain("review-subagent-before-pr-create");
-    expect(policyNames).toContain("review-subagent-before-pr-create-bash");
+    // No policies and no policy-intercept hooks are written any more.
+    expect(hookNames).toEqual([]);
+    expect(policyNames).toEqual([]);
+    expect(yaml).not.toContain("harness policy intercept");
   });
 
 
@@ -156,12 +141,12 @@ describe("init — solo profile", () => {
     const yaml = fs.readFileSync(manifestPath, "utf8");
     expect(yaml).toContain("memory-router");
     expect(yaml).toContain("branch-protection");
-    // Solo intentionally does NOT wire agent-tasks or the merge policy.
+    // Solo intentionally does NOT wire agent-tasks.
     // The comment header may name "agent-tasks" in a negation ("No
     // agent-tasks loop") so we check the structural keys, not the
     // raw string.
     expect(yaml).not.toMatch(/^\s*- name: agent-tasks/m);
-    expect(yaml).not.toMatch(/^\s*- name: review-before-merge/m);
+    expect(yaml).not.toMatch(/^policies:/m);
   });
 
   it("the solo template passes harness validate cleanly (0 errors, 0 warnings)", async () => {
@@ -173,7 +158,7 @@ describe("init — solo profile", () => {
 });
 
 describe("init — team profile", () => {
-  it("writes a manifest with solo content plus agent-tasks + review-before-merge", async () => {
+  it("writes a manifest with solo content plus agent-tasks + grounding-mcp", async () => {
     const r = await callInit({ homeDir: tmpHome, template: "team" });
     expect(r.template).toBe("team");
     const yaml = fs.readFileSync(manifestPath, "utf8");
@@ -181,10 +166,11 @@ describe("init — team profile", () => {
     expect(yaml).toContain("branch-protection");
     expect(yaml).toContain("agent-tasks");
     expect(yaml).toContain("grounding-mcp");
-    expect(yaml).toContain("review-before-merge");
-    expect(yaml).toContain("mcp__agent-tasks__pull_requests_merge");
-    // Hook command uses the built-in CLI verb, not a placeholder shell script.
-    expect(yaml).toContain("command: harness policy intercept");
+    // No policies and no policy-intercept hooks.
+    expect(yaml).not.toMatch(/^policies:/m);
+    expect(yaml).not.toMatch(/^hooks:/m);
+    expect(yaml).not.toContain("harness policy intercept");
+    expect(yaml).not.toContain("harness record");
   });
 
   it("the team template passes harness validate cleanly (0 errors, 0 warnings)", async () => {
@@ -194,30 +180,15 @@ describe("init — team profile", () => {
     expect(v.warningCount).toBe(0);
   });
 
-  it("review-before-merge ux.run points at `harness record review`, not a raw ledger_add (task 27ba3570)", async () => {
+  it("wires agent-tasks and grounding-mcp under tools.mcp and validates with no grounding warning", async () => {
     await callInit({ homeDir: tmpHome, template: "team" });
-    const yaml = fs.readFileSync(manifestPath, "utf8");
-    const parsed = parseYaml(yaml) as {
-      policies?: Array<{ name: string; ux?: { run?: string[] } }>;
+    const parsed = parseYaml(fs.readFileSync(manifestPath, "utf8")) as {
+      tools?: { mcp?: { name: string }[] };
     };
-    const policy = parsed.policies?.find((p) => p.name === "review-before-merge");
-    expect(policy?.ux?.run).toEqual(['harness record review --pr ${PR_NUMBER} "<summary>"']);
-  });
-
-  it("wires grounding-mcp so the review-before-merge policy evaluates against a real ledger", async () => {
-    // Memory `feedback_harness_policies_warn_mode`: a manifest with
-    // policies: that doesn't declare grounding-mcp in tools.mcp cannot
-    // evaluate evidence (pre-0.45 that silently let all policies
-    // through; since task f1aea826 block-tier policies deny instead).
-    // The team profile must include grounding-mcp explicitly.
-    await callInit({ homeDir: tmpHome, template: "team" });
+    const names = (parsed.tools?.mcp ?? []).map((m) => m.name);
+    expect(names).toEqual(["agent-tasks", "grounding-mcp"]);
     const v = validate({ configPath: manifestPath });
-    const hasPolicyWarning = v.diagnostics.some(
-      (d) =>
-        d.severity === "warning" &&
-        d.message.includes("grounding-mcp not wired"),
-    );
-    expect(hasPolicyWarning).toBe(false);
+    expect(v.diagnostics.some((d) => d.message.includes("grounding-mcp not wired"))).toBe(false);
   });
 });
 

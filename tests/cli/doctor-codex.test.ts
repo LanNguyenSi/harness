@@ -243,7 +243,7 @@ describe("doctor --target codex hook commands calling removed verbs", () => {
   });
 
   it("keeps a hook that calls a kept verb healthy", async () => {
-    const checks = await codexChecks([{ name: "kept", command: "harness policy intercept --runtime codex" }]);
+    const checks = await codexChecks([{ name: "kept", command: "harness doctor --runtime codex" }]);
     const entry = checks.find((c) => c.name === "hook kept");
     expect(entry?.status).toBe("ok");
     expect(entry?.message).toContain("subcommand of harness");
@@ -253,7 +253,7 @@ describe("doctor --target codex hook commands calling removed verbs", () => {
     const hooks = [{ name: "stale-gate", command: "harness pack hook post-merge-gate --runtime codex" }];
     const plain = await codexReport(hooks, undefined);
     const withCodex = await codexReport(hooks);
-    const healthy = await codexReport([{ name: "stale-gate", command: "harness policy intercept --runtime codex" }]);
+    const healthy = await codexReport([{ name: "stale-gate", command: "harness doctor --runtime codex" }]);
     expect(plain.manifest.warnings).toHaveLength(1);
     const entry = withCodex.codexTarget!.checks.find((c) => c.name === "hook stale-gate");
     expect(entry?.status).toBe("warn");

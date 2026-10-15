@@ -4,13 +4,11 @@
 // accepts.
 //
 // Current surface (parity with FULL_TEMPLATE): one policy pack
-// (branch-protection), four MCPs (agent-tasks,
+// (branch-protection) and four MCPs (agent-tasks,
 // grounding-mcp, memory-router — wired under memory.router, NOT
-// tools.mcp[] — and codebase-oracle), and four reference policies
-// (review-before-merge, review-subagent-before-pr-create,
-// dogfood-before-release, two-reviewers-required). The opencode pack
-// stays disabled in the wire-now multiselect until its runtime adapter
-// (agent-tasks/f34eb233) lands.
+// tools.mcp[] — and codebase-oracle). The composer emits no policies and
+// no hooks. The opencode pack stays disabled in the wire-now multiselect
+// until its runtime adapter (agent-tasks/f34eb233) lands.
 //
 // Design: build a plain object matching the Manifest schema, then
 // serialise via the `yaml` library. The shared `init()` path
@@ -27,11 +25,6 @@ export type CustomMcpKey =
   | "grounding-mcp"
   | "memory-router"
   | "codebase-oracle";
-export type CustomPolicyKey =
-  | "review-before-merge"
-  | "review-subagent-before-pr-create"
-  | "dogfood-before-release"
-  | "two-reviewers-required";
 
 export interface ComposableOption<K extends string> {
   key: K;
@@ -57,7 +50,7 @@ export const COMPOSABLE_MCPS: ReadonlyArray<ComposableOption<CustomMcpKey>> = [
   {
     key: "grounding-mcp",
     label: "grounding-mcp",
-    description: "Evidence ledger (ledger_add / ledger_status) for the review and dogfood gates.",
+    description: "Evidence ledger (ledger_add / ledger_status).",
   },
   {
     key: "memory-router",
@@ -72,37 +65,9 @@ export const COMPOSABLE_MCPS: ReadonlyArray<ComposableOption<CustomMcpKey>> = [
   },
 ];
 
-export const COMPOSABLE_POLICIES: ReadonlyArray<ComposableOption<CustomPolicyKey>> = [
-  {
-    key: "review-before-merge",
-    label: "review-before-merge",
-    description:
-      "Block mcp__agent-tasks__pull_requests_merge unless a review:<pr-number> ledger entry exists.",
-  },
-  {
-    key: "review-subagent-before-pr-create",
-    label: "review-subagent-before-pr-create",
-    description:
-      "Block mcp__agent-tasks__pull_requests_create unless a review-subagent:<task-id> ledger entry exists.",
-  },
-  {
-    key: "dogfood-before-release",
-    label: "dogfood-before-release",
-    description:
-      "Block npm publish / git tag v* unless a dogfood:<session-id> ledger entry exists in this session (within 24h).",
-  },
-  {
-    key: "two-reviewers-required",
-    label: "two-reviewers-required  (warn-level companion to review-before-merge)",
-    description:
-      "Warn when PR-merge runs without TWO distinct review:<pr-number> ledger entries. Enforcement: warn.",
-  },
-];
-
 export interface CustomSelection {
   packs: CustomPackKey[];
   mcps: CustomMcpKey[];
-  policies: CustomPolicyKey[];
   /** Optional override for memory.directories[0].path; defaults to the wizard's standard. */
   memoryDir?: string;
 }
@@ -110,180 +75,13 @@ export interface CustomSelection {
 export interface ComposeResult {
   yaml: string;
   /**
-   * Non-fatal advisories: policy selected without its producing MCP,
-   * pack selected without its baseline tools, etc. These are surfaced
+   * Non-fatal advisories (an MCP that needs env vars the wizard cannot
+   * prompt for, etc.). These are surfaced
    * to stderr by the wizard so the operator can adjust without the
    * manifest itself being rejected (`harness validate` stays clean).
    */
   warnings: string[];
 }
-
-interface HookSpec {
-  name: string;
-  event: string;
-  match: string;
-  bash_match?: string;
-  command: string;
-  blocking: string;
-  budget_ms: number;
-}
-
-interface PolicySpec {
-  name: string;
-  description: string;
-  trigger: {
-    event: string;
-    match: string;
-    bash_match?: string;
-    extract?: Record<string, string>;
-  };
-  requires: {
-    ledger_tag: string;
-    within?: string;
-    count?: { min?: number; max?: number; exact?: number };
-    at_head?: boolean;
-  };
-  hook: string;
-  enforcement: string;
-  ux?: {
-    cannot: string;
-    required: string[];
-    run: string[];
-  };
-}
-
-// Budget note (task 7bf47554, fix round 2): every blocking `harness policy
-// intercept` hook below carries budget_ms: 15000 (a 15s Claude Code outer
-// kill-timeout, generate-settings.ts's hookTimeoutSeconds), matching
-// FULL_TEMPLATE's uniform 15000ms floor (src/cli/init/templates.ts, see
-// the full budget-note comment above its `require-review-evidence` entry
-// for the derivation). Short version: `intercept()` writes every matched
-// policy's decision to the evidence ledger before returning
-// (src/runtime/intercept.ts, `options.ledger.record(...)`), a live
-// grounding-mcp round-trip on the critical path for every one of these
-// hooks, and a `requires:`-based policy additionally queries the ledger
-// for its verdict first. Measured worst case (health.timeout_ms=5000 +
-// a deny-degraded audit-write retry) is ~10.8-13.75s; a lower per-hook
-// budget lets Claude Code kill the subprocess before its deny JSON
-// reaches stdout, silently turning a fail-closed verdict into an
-// unintended allow. Kept uniform across all three rows for the same
-// dedup-safety reason FULL_TEMPLATE documents: generate-settings.ts's
-// buildGroups collapses same-matcher hooks by (command, timeout), so a
-// non-uniform budget would split one Claude Code invocation per Bash
-// call into several redundant ones.
-const HOOK_FOR_POLICY: Record<CustomPolicyKey, HookSpec> = {
-  "review-before-merge": {
-    name: "require-review-evidence",
-    event: "PreToolUse",
-    match: "mcp__agent-tasks__pull_requests_merge",
-    command: "harness policy intercept",
-    blocking: "hard",
-    budget_ms: 15000,
-  },
-  "review-subagent-before-pr-create": {
-    name: "require-review-subagent-evidence",
-    event: "PreToolUse",
-    match: "mcp__agent-tasks__pull_requests_create",
-    command: "harness policy intercept",
-    blocking: "hard",
-    budget_ms: 15000,
-  },
-  "dogfood-before-release": {
-    name: "require-dogfood-evidence",
-    event: "PreToolUse",
-    match: "Bash",
-    bash_match:
-      "(^|\\n|;|\\||&|\\()\\s*(\\w+=\\S+\\s+)*(npm publish\\b|git( -C \\S+)* tag v)",
-    command: "harness policy intercept",
-    blocking: "hard",
-    budget_ms: 15000,
-  },
-  // two-reviewers-required shares review-before-merge's hook; the policy
-  // intercept engine evaluates both policies under the same trigger and
-  // each enforces independently (block vs warn). We still need a hook
-  // entry so the policy's `hook:` field round-trips through validate,
-  // but it's the same row as require-review-evidence.
-  "two-reviewers-required": {
-    name: "require-review-evidence",
-    event: "PreToolUse",
-    match: "mcp__agent-tasks__pull_requests_merge",
-    command: "harness policy intercept",
-    blocking: "hard",
-    budget_ms: 15000,
-  },
-};
-
-const POLICY: Record<CustomPolicyKey, PolicySpec> = {
-  "review-before-merge": {
-    name: "review-before-merge",
-    description:
-      "Block PR merges unless a ledger entry tagged review:<pr-number> exists for this session.",
-    trigger: {
-      event: "PreToolUse",
-      match: "mcp__agent-tasks__pull_requests_merge",
-      extract: { PR_NUMBER: "toolArgs.prNumber" },
-    },
-    requires: { ledger_tag: "review:${PR_NUMBER}" },
-    hook: "require-review-evidence",
-    enforcement: "block",
-    ux: {
-      cannot: "You cannot merge PR #${PR_NUMBER} yet.",
-      required: ["a recorded review of PR #${PR_NUMBER}"],
-      run: ['harness record review --pr ${PR_NUMBER} "<summary>"'],
-    },
-  },
-  "review-subagent-before-pr-create": {
-    name: "review-subagent-before-pr-create",
-    description:
-      "Block agent-tasks PR creation unless a review-subagent ledger entry tagged for this task already exists. Forces the rigorous review BEFORE the PR opens, not after.",
-    trigger: {
-      event: "PreToolUse",
-      match: "mcp__agent-tasks__pull_requests_create",
-      extract: { TASK_ID: "toolArgs.taskId" },
-    },
-    requires: { ledger_tag: "review-subagent:${TASK_ID}" },
-    hook: "require-review-subagent-evidence",
-    enforcement: "block",
-    ux: {
-      cannot: "You cannot open a pull request for task ${TASK_ID} yet.",
-      required: ["a completed review-subagent pass on this task"],
-      run: ['harness record review-subagent --task ${TASK_ID} --verdict <verdict>'],
-    },
-  },
-  "dogfood-before-release": {
-    name: "dogfood-before-release",
-    description: "Block npm publish / git tag v* without a recent dogfood ledger entry.",
-    trigger: {
-      event: "PreToolUse",
-      match: "Bash",
-      bash_match:
-        "(^|\\n|;|\\||&|\\()\\s*(\\w+=\\S+\\s+)*(npm publish\\b|git( -C \\S+)* tag v)",
-    },
-    requires: { ledger_tag: "dogfood:${SESSION_ID}", within: "24h" },
-    hook: "require-dogfood-evidence",
-    enforcement: "block",
-    ux: {
-      cannot: "You cannot publish a release yet.",
-      required: ["an end-to-end dogfood run in this session"],
-      run: ['harness record dogfood "<was wurde real ausprobiert>"'],
-    },
-  },
-  "two-reviewers-required": {
-    name: "two-reviewers-required",
-    description: "At least two distinct reviewer ledger entries must exist for the PR.",
-    trigger: {
-      event: "PreToolUse",
-      match: "mcp__agent-tasks__pull_requests_merge",
-      extract: { PR_NUMBER: "toolArgs.prNumber" },
-    },
-    requires: { ledger_tag: "review:${PR_NUMBER}", count: { min: 2 } },
-    hook: "require-review-evidence",
-    enforcement: "warn",
-    // No `ux:`: this policy is warn-only and never blocks, so the
-    // agent never sees its message. The audit ledger still gets the
-    // engine-internal trace.
-  },
-};
 
 interface McpEntry {
   name: string;
@@ -339,58 +137,6 @@ export function composeCustom(sel: CustomSelection): ComposeResult {
   const warnings: string[] = [];
   const mcpSet = new Set(sel.mcps);
 
-  // H3 gate auto-repair: `harness apply` hard-fails (checkPolicyGroundingMcp)
-  // when evidence-consuming policies are selected AND grounding-mcp is absent from
-  // tools.mcp — every policy evaluation would degrade at runtime (since
-  // task f1aea826 that means block/require_approval policies DENY every
-  // matching event, warn policies degrade non-blocking; before 0.45 it
-  // was the universal warn-mode allow-everything footgun). Mirror the
-  // exact same predicate here: all current Custom selections carry
-  // `requires:` evidence, so if a selection carries any policy and the
-  // operator did not pick grounding-mcp explicitly,
-  // auto-wire it so the emitted manifest passes apply without a
-  // HarnessExitError. An informational advisory replaces the per-policy
-  // "requires a producer" warnings that would otherwise fire for the
-  // grounding-mcp–coupled policies.
-  let autoAddedGroundingMcp = false;
-  if (sel.policies.length > 0 && !mcpSet.has("grounding-mcp")) {
-    mcpSet.add("grounding-mcp");
-    autoAddedGroundingMcp = true;
-    warnings.push(
-      "auto-wired grounding-mcp to tools.mcp (required by the selected policies: without it harness apply rejects the manifest).",
-    );
-  }
-
-  // Producer-consistency advisories: each policy's `requires.ledger_tag`
-  // implies some producer must populate that tag. agent-tasks-coupled
-  // policies need the agent-tasks MCP wired; ledger-write-coupled policies
-  // need grounding-mcp (so ledger_add reaches the gate).
-  if (sel.policies.includes("review-before-merge") && !mcpSet.has("agent-tasks")) {
-    warnings.push(
-      "policy review-before-merge fires on agent-tasks MCP verbs; selecting it without the agent-tasks MCP is allowed but the gate has no event to evaluate.",
-    );
-  }
-  if (
-    sel.policies.includes("review-subagent-before-pr-create") &&
-    !mcpSet.has("agent-tasks")
-  ) {
-    warnings.push(
-      "policy review-subagent-before-pr-create fires on agent-tasks MCP verbs; selecting it without the agent-tasks MCP is allowed but the gate has no event to evaluate.",
-    );
-  }
-  if (sel.policies.includes("two-reviewers-required") && !mcpSet.has("agent-tasks")) {
-    warnings.push(
-      "policy two-reviewers-required fires on agent-tasks MCP verbs; selecting it without the agent-tasks MCP is allowed but the gate has no event to evaluate.",
-    );
-  }
-  // Note: the only Custom-surface producer of ledger tags the wizard can
-  // wire is grounding-mcp's ledger_add; no composable pack substitutes
-  // for it.
-  if (sel.policies.includes("dogfood-before-release") && !mcpSet.has("grounding-mcp")) {
-    warnings.push(
-      "policy dogfood-before-release requires a producer that writes dogfood:<session-id> tags to the evidence ledger. Without grounding-mcp (ledger_add) the gate stays closed forever — every npm publish / git tag v* will be blocked.",
-    );
-  }
   if (mcpSet.has("codebase-oracle")) {
     warnings.push(
       "MCP codebase-oracle requires ORACLE_SCAN_ROOT (absolute path; tilde is NOT expanded) and OPENAI_API_KEY (or ORACLE_LLM_PROVIDER + the matching provider key) set in your shell or in Claude's settings.json env block before the first call. The wizard does NOT prompt for these.",
@@ -424,11 +170,6 @@ export function composeCustom(sel: CustomSelection): ComposeResult {
   const mcpEntries = sel.mcps
     .filter((m): m is Exclude<CustomMcpKey, "memory-router"> => m !== "memory-router")
     .map((k) => MCP_ENTRY[k]);
-  // If grounding-mcp was auto-added (H3 gate auto-repair), inject the same
-  // entry shape the PRESET/FULL_TEMPLATE emits so apply and validate agree.
-  if (autoAddedGroundingMcp) {
-    mcpEntries.push(MCP_ENTRY["grounding-mcp"]);
-  }
   if (mcpEntries.length > 0) {
     (manifest.tools as Record<string, unknown>).mcp = mcpEntries;
   }
@@ -439,24 +180,6 @@ export function composeCustom(sel: CustomSelection): ComposeResult {
       min_version: "0.3.0",
       enabled: true,
     };
-  }
-
-  if (sel.policies.length > 0) {
-    // Dedup hooks by name: two-reviewers-required + review-before-merge
-    // both reference `require-review-evidence`, but the schema's
-    // superRefine rejects duplicate hook names (each hook entry must be
-    // unique). Emit each hook at most once; the same row services every
-    // referencing policy.
-    const seenHookName = new Set<string>();
-    const hooks: HookSpec[] = [];
-    for (const p of sel.policies) {
-      const h = HOOK_FOR_POLICY[p];
-      if (seenHookName.has(h.name)) continue;
-      seenHookName.add(h.name);
-      hooks.push(h);
-    }
-    manifest.hooks = hooks;
-    manifest.policies = sel.policies.map((p) => POLICY[p]);
   }
 
   if (sel.packs.length > 0) {

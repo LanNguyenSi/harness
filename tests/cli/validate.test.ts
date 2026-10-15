@@ -12,9 +12,6 @@ import {
 import { spawnSync } from "node:child_process";
 import { writeLock, type LockEntry } from "../../src/io/harness-lock.js";
 import * as crypto from "node:crypto";
-import { parse as parseYaml } from "yaml";
-import { FULL_TEMPLATE } from "../../src/cli/init/templates.js";
-import { parseManifest } from "../../src/schema/index.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const REPO_ROOT = path.resolve(path.dirname(__filename), "..", "..");
@@ -1203,21 +1200,6 @@ policies:
     expect(
       result.diagnostics.find((d) => /any ledger writer/i.test(d.message)),
     ).toBeUndefined();
-  });
-
-  // Direct regression guard (reviewer follow-up, task 2cc73f55): drives
-  // checkPolicySelfAttestation itself against the REAL shipped FULL_TEMPLATE
-  // manifest, bypassing validate()'s unrelated diagnostics (grounding-mcp
-  // wiring, lock drift, etc.) entirely. FULL_TEMPLATE's three migrated
-  // deny-* kill-switch policies (operator_only: true, no producers:) must
-  // produce ZERO self-attestation diagnostics; a future edit that
-  // reintroduces a bare requires:-based block policy with no producers:,
-  // or that regresses the operator_only skip in checkPolicySelfAttestation,
-  // fails this directly instead of only being caught indirectly through
-  // `harness validate --strict`.
-  it("returns zero diagnostics for the real FULL_TEMPLATE manifest", () => {
-    const manifest = parseManifest(parseYaml(FULL_TEMPLATE));
-    expect(checkPolicySelfAttestation(manifest)).toEqual([]);
   });
 });
 

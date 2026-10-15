@@ -73,11 +73,9 @@ import {
 import {
   COMPOSABLE_MCPS,
   COMPOSABLE_PACKS,
-  COMPOSABLE_POLICIES,
   composeCustom,
   type CustomMcpKey,
   type CustomPackKey,
-  type CustomPolicyKey,
   type CustomSelection,
 } from "./composer.js";
 
@@ -254,9 +252,8 @@ function summariseDetection(d: DetectionResult): string {
 }
 
 function profileNeedsAgentTasks(profile: ProfileChoice): boolean {
-  // Full inherits the team layer, including the agent-tasks MCP and
-  // the review-before-merge policy, so it has the same Claude-side
-  // wiring requirement as Team.
+  // Full inherits the team layer, including the agent-tasks MCP, so it
+  // has the same Claude-side wiring requirement as Team.
   return profile === "team" || profile === "full";
 }
 
@@ -1190,16 +1187,16 @@ export async function runInteractive(
           description: "Standalone. No external accounts required. Single-operator baseline.",
         },
         {
-          name: "Team  (Solo + agent-tasks MCP + review-before-merge policy)",
+          name: "Team  (Solo + agent-tasks MCP + grounding-mcp)",
           value: "team",
           description:
-            "Requires an agent-tasks account (hosted or self-hosted). Adds the merge gate that blocks PR-merge MCP calls without a review ledger entry. The gate matches the agent-tasks MCP only; gh-CLI PR workflows stay unguarded today.",
+            "Requires an agent-tasks account (hosted or self-hosted). Adds the agent-tasks MCP server and grounding-mcp to the Solo baseline.",
         },
         {
-          name: "Full (Team + the reference policies wired through harness policy intercept)",
+          name: "Full (Team + the reference tool inventory)",
           value: "full",
           description:
-            "Requires agent-tasks on PATH. Ships the reference manifest with every example policy (dogfood gate, review-subagent gate). All hooks run through the bundled `harness policy intercept` engine.",
+            "Requires agent-tasks on PATH. Ships the reference manifest: grounding, the full tool inventory (agent-tasks, grounding-mcp, gh, skills), memory-router and branch-protection.",
         },
         {
           name: "Custom (advanced, bail out and hand-edit)",
@@ -1437,32 +1434,18 @@ async function runPostInitTail(t: PostInitTailOpts): Promise<InteractiveResult> 
   const binResolutionClean = initResult.binResolutionErrorCount === 0;
 
   if (profile === "team" || profile === "full") {
-    // Reminder splits at the "Not using agent-tasks?" paragraph because
-    // Full ships review-before-merge-bash + review-subagent-before-pr-create-bash
-    // (PR #188, v0.20.0) so its `gh pr (merge|create)` Bash calls ARE
-    // gated, while Team still matches only the agent-tasks MCP verbs.
     const head = [
       "",
-      "ℹ This profile wires the agent-tasks MCP and its review-merge gate.",
+      "ℹ This profile wires the agent-tasks MCP.",
       "  Already use agent-tasks? Run `agent-tasks-mcp-bridge login` to store",
       "  a token in your OS keychain (or set AGENT_TASKS_TOKEN). Without a",
       "  token the MCP loads but every tool call returns an auth error.",
       "",
     ];
-    const tail =
-      profile === "team"
-        ? [
-            "  Not using agent-tasks? The review-merge gate only matches",
-            "  agent-tasks MCP tool names today, not `gh pr` Bash calls. Re-run",
-            "  with --template solo to drop the agent-tasks coupling.",
-          ]
-        : [
-            "  Both `mcp__agent-tasks__pull_requests_*` AND `gh pr (merge|create)`",
-            "  Bash calls are gated. Tag shape differs: `review:${PR_NUMBER}` for",
-            "  the MCP surface, `review:${BRANCH}` for the gh-cli surface. Re-run",
-            "  with --template team if you want only the MCP gate, or",
-            "  --template solo to drop the agent-tasks coupling.",
-          ];
+    const tail = [
+      "  Not using agent-tasks? Re-run with --template solo to drop the",
+      "  agent-tasks coupling.",
+    ];
     stderr([...head, ...tail, ""].join("\n"));
   }
 
@@ -1584,18 +1567,18 @@ interface RunCustomOpts {
 }
 
 /**
- * Custom-profile à-la-carte builder (task 31d2fbb5). Drives three
- * checkbox prompts (packs / MCPs / policies), feeds them into the
+ * Custom-profile à-la-carte builder (task 31d2fbb5). Drives two
+ * checkbox prompts (packs / MCPs), feeds them into the
  * composer, then rejoins the shared write + wire-now tail. v1 surface
  * is intentionally a subset of the FULL template; remaining packs,
- * MCPs, and policies are tracked as follow-up.
+ * and MCPs are tracked as follow-up.
  */
 async function runCustomProfile(rc: RunCustomOpts): Promise<InteractiveResult> {
   const { detection, prompts, stderr, stdout, opts } = rc;
   const profile: ProfileChoice = "custom";
 
   // Pre-check MCPs whose names appear in detected settings.json
-  // mcpServers. Packs and policies have no detection signal today
+  // mcpServers. Packs have no detection signal today
   // (settings.json doesn't carry them), so they start unchecked and
   // the operator opts in.
   const detectedMcpNames = new Set(detection.mcpServers.map((s) => s.name));
@@ -1625,21 +1608,12 @@ async function runCustomProfile(rc: RunCustomOpts): Promise<InteractiveResult> {
     })),
   })) as CustomMcpKey[];
 
-  const policies = (await prompts.checkbox({
-    message: "Custom: pick reference policies",
-    choices: COMPOSABLE_POLICIES.map((p) => ({
-      name: `${p.label}  ${p.description}`,
-      value: p.key,
-      checked: false,
-    })),
-  })) as CustomPolicyKey[];
-
-  if (packs.length === 0 && mcps.length === 0 && policies.length === 0) {
+  if (packs.length === 0 && mcps.length === 0) {
     stderr(
       [
         "",
         "Custom: no components selected — nothing to compose. Aborted; no manifest written.",
-        "Re-run `harness init --interactive` and pick at least one pack, MCP, or policy.",
+        "Re-run `harness init --interactive` and pick at least one pack or MCP.",
         "",
       ].join("\n"),
     );
@@ -1648,7 +1622,7 @@ async function runCustomProfile(rc: RunCustomOpts): Promise<InteractiveResult> {
 
   // Dependency check uses the Custom-specific dep resolver. Same install
   // UX as the named-profile path.
-  const customDeps = dependenciesForCustom({ packs, mcps, policies });
+  const customDeps = dependenciesForCustom({ packs, mcps });
   const depResult = checkDependencyList(
     customDeps,
     opts.dependencyPathEnv !== undefined ? { pathEnv: opts.dependencyPathEnv } : {},
@@ -1723,7 +1697,7 @@ async function runCustomProfile(rc: RunCustomOpts): Promise<InteractiveResult> {
     return { aborted: true, profile };
   }
 
-  const selection: CustomSelection = { packs, mcps, policies, memoryDir: memoryDir.trim() };
+  const selection: CustomSelection = { packs, mcps, memoryDir: memoryDir.trim() };
   const composed = composeCustom(selection);
   for (const w of composed.warnings) {
     stderr(`composer warning: ${w}\n`);

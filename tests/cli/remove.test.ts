@@ -21,9 +21,7 @@ beforeEach(async () => {
   await init({ homeDir: tmpHome, template: "full", npmBinExec: STUB_NPM_BIN_EXEC });
   // Drop `required: true` from the full template's CLI entries (`gh`) so
   // the post-mutate asset check does not trip on CI hosts that lack the
-  // binary. Hook scripts no longer apply: the full template since
-  // `harness@>0.9.1` wires every PreToolUse hook through the bundled
-  // `harness policy intercept` engine, so there is nothing to chmod.
+  // binary. The full template ships no hooks, so there is nothing to chmod.
   const yaml = fs
     .readFileSync(manifestPath, "utf8")
     .replace(/required: true\n/g, "required: false\n");
@@ -78,8 +76,35 @@ describe("remove mcp / cli / skill", () => {
   });
 });
 
+// The full template ships no hooks or policies any more (task bcdcde36), so
+// the reference-check tests add a hook and a policy that names it.
+function addReferencedHook(): void {
+  const script = path.join(hooksDir, "gate.sh");
+  fs.writeFileSync(script, "#!/bin/sh\nexit 0\n");
+  fs.chmodSync(script, 0o755);
+  fs.appendFileSync(
+    manifestPath,
+    `
+hooks:
+  - name: require-review-evidence
+    event: PreToolUse
+    match: "Bash"
+    command: ${script}
+    blocking: hard
+policies:
+  - name: review-before-merge
+    description: test
+    trigger: { event: PreToolUse, match: "Bash" }
+    requires: { ledger_tag: "review:\${SESSION_ID}" }
+    hook: require-review-evidence
+    enforcement: block
+`,
+  );
+}
+
 describe("remove hook — reference check", () => {
   it("refuses to remove a hook referenced by a policy without --force", async () => {
+    addReferencedHook();
     await expect(
       remove("hook", "require-review-evidence", { configPath: manifestPath, homeDir: tmpHome }),
     ).rejects.toMatchObject({
@@ -113,7 +138,8 @@ describe("remove hook — reference check", () => {
   });
 
   it("--force on a referenced hook fails the schema gate (dangling policy.hook)", async () => {
-    // The full template wires `review-before-merge` -> `require-review-evidence`.
+    addReferencedHook();
+    // The fixture wires `review-before-merge` -> `require-review-evidence`.
     // --force lets remove past the human-friendly pre-check, but the schema gate
     // still rejects the dangling reference. This is the documented contract.
     await expect(

@@ -167,12 +167,11 @@ describe("CLI program — list commands", () => {
     expect(r.stdout).toMatch(/agent-tasks/);
   });
 
-  it("list policies --json emits a parseable JSON array", async () => {
+  it("list policies --json emits a parseable (empty) JSON array for the reference manifest", async () => {
     const r = await exec(["list", "policies", "--config", FULL_MANIFEST, "--json"]);
     expect(r.code).toBe(0);
     const parsed = JSON.parse(r.stdout);
-    expect(Array.isArray(parsed)).toBe(true);
-    expect(parsed[0].name).toBe("review-before-merge");
+    expect(parsed).toEqual([]);
   });
 
   it("list with an unknown category exits 64", async () => {
@@ -272,11 +271,24 @@ describe("CLI program — describe command", () => {
       "--config",
       FULL_MANIFEST,
       "--pillar",
+      "memory",
+    ]);
+    expect(r.code).toBe(0);
+    expect(r.stdout).toMatch(/\nmemory:\n/);
+    expect(r.stdout).not.toMatch(/\ntools:\n/);
+  });
+
+  it("supports filtering to the hooks pillar", async () => {
+    const r = await exec([
+      "describe",
+      "--config",
+      FULL_MANIFEST,
+      "--pillar",
       "hooks",
     ]);
     expect(r.code).toBe(0);
-    expect(r.stdout).toMatch(/\nhooks:\n/);
-    expect(r.stdout).not.toMatch(/\ntools:\n/);
+    expect(r.stdout).toMatch(/\nhooks: \[\]\n/);
+    expect(r.stdout).not.toMatch(/\nmemory:\n/);
   });
 });
 

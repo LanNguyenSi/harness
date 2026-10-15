@@ -299,32 +299,6 @@ function formatPolicyPacksSection(report: DoctorReport): string[] {
   return out;
 }
 
-// Template-policy drift section (task adf037c1): shipped operator_only
-// security policies missing from an aged installed manifest. Render only
-// when something is missing: a caught-up manifest stays silent.
-function formatTemplateDriftSection(report: DoctorReport): string[] {
-  const { errors, warnings } = report.templateDrift;
-  if (errors.length === 0 && warnings.length === 0) return [];
-  const out: string[] = ["", "Template drift (shipped security policies)"];
-  for (const m of errors) out.push(`  ✗ ${m}`);
-  for (const w of warnings) out.push(`  ⚠ ${w}`);
-  return out;
-}
-
-// Trigger-boundary drift section (task 037cfb7c): shipped-by-name
-// bash_match triggers whose boundary alternation has fallen behind
-// FULL_TEMPLATE's. Render only when something is stale, a caught-up
-// manifest stays silent, like the template-drift section immediately
-// above.
-function formatTriggerBoundaryDriftSection(report: DoctorReport): string[] {
-  const { errors, warnings } = report.triggerBoundaryDrift;
-  if (errors.length === 0 && warnings.length === 0) return [];
-  const out: string[] = ["", "Trigger boundary drift (shipped bash_match triggers)"];
-  for (const m of errors) out.push(`  ✗ ${m}`);
-  for (const w of warnings) out.push(`  ⚠ ${w}`);
-  return out;
-}
-
 function formatCodexTargetSection(report: DoctorReport): string[] {
   if (!report.codexTarget) return [];
   const out: string[] = ["", "Target: codex"];
@@ -444,8 +418,6 @@ export function format(report: DoctorReport): string {
   lines.push(...formatPackExpansionRuntimeSection(report));
   lines.push(...formatPoliciesSection(report));
   lines.push(...formatPolicyPacksSection(report));
-  lines.push(...formatTemplateDriftSection(report));
-  lines.push(...formatTriggerBoundaryDriftSection(report));
   lines.push(...formatGroundingSection(report));
   lines.push(...formatClaudeMcpSection(report));
   lines.push(...formatCodexTargetSection(report));

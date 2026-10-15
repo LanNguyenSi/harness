@@ -7,10 +7,6 @@ import {
   memoizeVersionProbe,
 } from "../../src/cli/doctor/index.js";
 import { format } from "../../src/cli/doctor/format.js";
-import { checkTemplatePolicyDrift } from "../../src/cli/validate/checks.js";
-import { getTemplate } from "../../src/cli/init/templates.js";
-import { parseManifest } from "../../src/schema/index.js";
-import { parse as parseYaml } from "yaml";
 import { VERSION } from "../../src/version.js";
 import type { McpProbe, McpProbeResult } from "../../src/probes/mcp.js";
 import type { McpServer } from "../../src/schema/index.js";
@@ -41,21 +37,6 @@ const NO_CLAUDE_CLI: ClaudeMcpExec = async () => ({
   enoent: true,
   timedOut: false,
 });
-
-// Silences the template-policy-drift check (task adf037c1) for fixtures
-// whose focus is another doctor section. The three shipped operator_only
-// kill-switch policies are absent from these minimal fixtures, so the
-// drift check would otherwise add 3 errors and swamp each test's own
-// errorCount assertion. Listing the names under doctor.ignore_template_drift
-// is the deliberate-opt-out channel — the same one an operator uses — so
-// these tests stay about the concern they actually exercise. Tests that
-// DO exercise drift build their own manifest without this block.
-const SILENCE_DRIFT = `doctor:
-  ignore_template_drift:
-    - deny-kill-switch-bypass
-    - deny-session-env-strip
-    - deny-pause-sentinel-forgery
-`;
 
 function makeFixture(files: Record<string, string>): string {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "harness-doctor-"));
@@ -137,7 +118,7 @@ risk:
   classifiers: []
 environments:
   resolvers: []
-${SILENCE_DRIFT}`,
+`,
     });
     const report = await doctor({
       configPath: path.join(home, "harness.yaml"),
@@ -148,10 +129,15 @@ ${SILENCE_DRIFT}`,
       npmBinExec: STUB_NPM_BIN_EXEC_UNKNOWN,
     });
     const text = format(report);
-    // The manifest loaded and its three removed Risk Gate sites are reported
+    // The manifest loaded and its three removed Risk Gate sites (plus the removed hook command) are reported
     // as posture warnings: risk and environments stripped, the when: policy
     // dropped whole (so it is not listed under Policies).
-    expect(report.manifest.warnings.map((w) => w.split(":")[0])).toEqual(["risk", "environments", "policies[0]"]);
+    expect(report.manifest.warnings.map((w) => w.split(":")[0])).toEqual([
+      "risk",
+      "environments",
+      "policies[0]",
+      "hooks[0].command",
+    ]);
     expect(text).toContain('policy "scoped-gate" dropped whole');
     expect(report.policies).toEqual([]);
     expect(report).not.toHaveProperty("riskGate");
@@ -168,7 +154,7 @@ describe("doctor — MCP probe surfacing", () => {
       "harness.yaml": `version: 1
 hooks: []
 policies: []
-${SILENCE_DRIFT}tools:
+tools:
   mcp:
     - name: codebase-oracle
       command: [/usr/bin/true]
@@ -228,7 +214,7 @@ tools:
       "harness.yaml": `version: 1
 hooks: []
 policies: []
-${SILENCE_DRIFT}tools:
+tools:
   mcp:
     - name: agent-tasks
       command: [/usr/bin/true]
@@ -1152,8 +1138,10 @@ policies:
     ]);
     // This fixture declares no `memory:` block, which on its own yields
     // exactly one warning ("no memory router declared"). The three
-    // producer gaps push the total to 4 — proving each gap is counted.
-    expect(report.warningCount).toBe(4);
+    // producer gaps push that to 4, and the seven hooks that still call the
+    // removed `harness policy intercept` add one removed-command warning
+    // each: 4 + 7 = 11, proving each gap is counted.
+    expect(report.warningCount).toBe(11);
     const text = format(report);
     expect(text).toContain(
       "⚠ alpha-gate  requires fresh `alpha:${REPO}` (within 1h) but no manifest hook produces it",
@@ -2375,50 +2363,8 @@ policies: []
   });
 });
 
-describe("doctor — template-policy drift (task adf037c1)", () => {
-  // The three shipped operator_only kill-switch policies + their hooks,
-  // minimal but schema-valid, for the "manifest is caught up" fixtures.
-  // Names must match src/cli/init/templates.ts's shipped set exactly; the
-  // parity test keeps the template honest, and shippedOperatorOnlyPolicyNames()
-  // reads the template, so a rename there flows through automatically.
-  const KILL_SWITCH_POLICIES = `hooks:
-  - name: deny-kill-switch-bash
-    event: PreToolUse
-    command: harness policy intercept
-    blocking: hard
-  - name: deny-session-env-strip-bash
-    event: PreToolUse
-    command: harness policy intercept
-    blocking: hard
-  - name: deny-sentinel-write-bash
-    event: PreToolUse
-    command: harness policy intercept
-    blocking: hard
-policies:
-  - name: deny-kill-switch-bypass
-    description: test
-    trigger: { event: PreToolUse, match: "Bash", bash_match: "x" }
-    operator_only: true
-    hook: deny-kill-switch-bash
-    enforcement: block
-  - name: deny-session-env-strip
-    description: test
-    trigger: { event: PreToolUse, match: "Bash", bash_match: "y" }
-    operator_only: true
-    hook: deny-session-env-strip-bash
-    enforcement: block
-  - name: deny-pause-sentinel-forgery
-    description: test
-    trigger: { event: PreToolUse, match: "Bash", bash_match: "z" }
-    operator_only: true
-    hook: deny-sentinel-write-bash
-    enforcement: block
-`;
-
-  // AC1: a manifest missing the shipped kill-switch policies reports drift,
-  // names each policy + the remediation path, and fails per doctor's
-  // error-count exit convention.
-  it("reports drift as an error, naming each missing kill-switch policy and the remediation", async () => {
+describe("doctor - no template-drift checks (task bcdcde36)", () => {
+  it("a manifest without the old kill-switch policies reports no drift section and no error", async () => {
     const home = makeFixture({
       "harness.yaml": `version: 1
 hooks: []
@@ -2430,161 +2376,12 @@ policies: []
       homeOverride: home,
       shallow: true,
     });
-    expect(report.templateDrift.errors).toHaveLength(3);
-    expect(report.errorCount).toBeGreaterThanOrEqual(3);
-    for (const name of [
-      "deny-kill-switch-bypass",
-      "deny-session-env-strip",
-      "deny-pause-sentinel-forgery",
-    ]) {
-      expect(report.templateDrift.errors.some((m) => m.includes(name))).toBe(true);
-    }
+    expect(report).not.toHaveProperty("templateDrift");
+    expect(report).not.toHaveProperty("triggerBoundaryDrift");
+    expect(report.errorCount).toBe(0);
     const text = format(report);
-    expect(text).toContain("Template drift (shipped security policies)");
-    expect(text).toContain("deny-kill-switch-bypass");
-    // Remediation path is named (rehydrate from the full template / opt out).
-    expect(text).toContain("harness init --template full");
-    expect(text).toContain("doctor.ignore_template_drift");
-  });
-
-  // AC2: a manifest that carries the kill-switch policies reports no drift.
-  it("reports no drift when the manifest carries the shipped kill-switch policies", async () => {
-    const home = makeFixture({
-      "harness.yaml": `version: 1
-${KILL_SWITCH_POLICIES}`,
-    });
-    const report = await doctor({
-      configPath: path.join(home, "harness.yaml"),
-      homeOverride: home,
-      shallow: true,
-    });
-    expect(report.templateDrift.errors).toHaveLength(0);
-    expect(format(report)).not.toContain("Template drift");
-  });
-
-  // AC3 (reinterpreted per operator decision 2026-08-08): the deliberate
-  // opt-out is doctor.ignore_template_drift, NOT a policies[].enabled flag
-  // (which the runtime would ignore — a footgun). A listed name is not drift.
-  it("respects doctor.ignore_template_drift as a deliberate opt-out", async () => {
-    const home = makeFixture({
-      "harness.yaml": `version: 1
-hooks: []
-policies: []
-doctor:
-  ignore_template_drift:
-    - deny-kill-switch-bypass
-    - deny-session-env-strip
-    - deny-pause-sentinel-forgery
-`,
-    });
-    const report = await doctor({
-      configPath: path.join(home, "harness.yaml"),
-      homeOverride: home,
-      shallow: true,
-    });
-    expect(report.templateDrift.errors).toHaveLength(0);
-    expect(report.errorCount).toBe(0);
-  });
-
-  // AC4 (narrowed per operator decision to a single operator_only error
-  // tier — the scope is operator_only-only, so there is no cosmetic tier):
-  // a partial manifest names exactly the missing operator_only policies as
-  // errors, and a present one is not re-reported.
-  it("reports only the missing operator_only policies, each as an error", async () => {
-    const home = makeFixture({
-      "harness.yaml": `version: 1
-hooks:
-  - name: deny-kill-switch-bash
-    event: PreToolUse
-    command: harness policy intercept
-    blocking: hard
-policies:
-  - name: deny-kill-switch-bypass
-    description: test
-    trigger: { event: PreToolUse, match: "Bash", bash_match: "x" }
-    operator_only: true
-    hook: deny-kill-switch-bash
-    enforcement: block
-`,
-    });
-    const report = await doctor({
-      configPath: path.join(home, "harness.yaml"),
-      homeOverride: home,
-      shallow: true,
-    });
-    // The present one is not flagged; the two absent ones are.
-    expect(report.templateDrift.errors).toHaveLength(2);
-    expect(report.templateDrift.errors.some((m) => m.includes("deny-kill-switch-bypass"))).toBe(false);
-    expect(report.templateDrift.errors.some((m) => m.includes("deny-session-env-strip"))).toBe(true);
-    expect(report.templateDrift.errors.some((m) => m.includes("deny-pause-sentinel-forgery"))).toBe(true);
-    expect(report.errorCount).toBeGreaterThanOrEqual(2);
-  });
-
-  // Review finding 2026-08-08: a kill-switch policy PRESENT by name but no
-  // longer operator_only (the historical requires-shape a ledger write can
-  // satisfy, or enforcement:warn) is a real bypass — name-presence alone
-  // must not pass it as no-drift.
-  it("flags a present-but-downgraded kill-switch policy (operator_only dropped)", async () => {
-    const home = makeFixture({
-      "harness.yaml": `version: 1
-hooks:
-  - name: deny-kill-switch-bash
-    event: PreToolUse
-    command: harness policy intercept
-    blocking: hard
-policies:
-  - name: deny-kill-switch-bypass
-    description: downgraded copy — name kept, operator_only dropped, requires shape restored
-    trigger: { event: PreToolUse, match: "Bash", bash_match: "x" }
-    requires: { ledger_tag: "kill-switch-ok:\${SESSION_ID}" }
-    hook: deny-kill-switch-bash
-    enforcement: block
-doctor:
-  ignore_template_drift:
-    - deny-session-env-strip
-    - deny-pause-sentinel-forgery
-`,
-    });
-    const report = await doctor({
-      configPath: path.join(home, "harness.yaml"),
-      homeOverride: home,
-      shallow: true,
-    });
-    // Only the downgraded one is flagged (the other two are opted out).
-    expect(report.templateDrift.errors).toHaveLength(1);
-    expect(report.templateDrift.errors[0]).toContain("deny-kill-switch-bypass");
-    expect(report.templateDrift.errors[0]).toContain("DOWNGRADED");
-    expect(report.errorCount).toBeGreaterThanOrEqual(1);
-  });
-
-  // Review finding 2026-08-08: a stale/typo'd opt-out entry suppresses
-  // nothing and must be surfaced (warning, not error) so a rename cannot
-  // silently strand an acknowledgement — and it must NOT suppress a real
-  // missing policy.
-  it("warns on a stale ignore_template_drift entry without suppressing real drift", async () => {
-    const home = makeFixture({
-      "harness.yaml": `version: 1
-hooks: []
-policies: []
-doctor:
-  ignore_template_drift:
-    - deny-kill-switch-bypass
-    - deny-session-env-strip
-    - deny-pause-sentinel-forgery
-    - not-a-real-policy-name
-`,
-    });
-    const report = await doctor({
-      configPath: path.join(home, "harness.yaml"),
-      homeOverride: home,
-      shallow: true,
-    });
-    // The three real names are opted out (no errors); the bogus entry warns.
-    expect(report.templateDrift.errors).toHaveLength(0);
-    expect(report.templateDrift.warnings).toHaveLength(1);
-    expect(report.templateDrift.warnings[0]).toContain("not-a-real-policy-name");
-    expect(report.errorCount).toBe(0);
-    expect(report.warningCount).toBeGreaterThanOrEqual(1);
+    expect(text).not.toContain("Template drift");
+    expect(text).not.toContain("Trigger boundary drift");
   });
 });
 
@@ -2596,7 +2393,7 @@ describe("doctor — no hook-budget-vs-ledger-timeout margin section", () => {
   it("an under-budgeted `harness policy intercept` hook adds no margin report, error or section", async () => {
     const home = makeFixture({
       "harness.yaml": `version: 1
-${SILENCE_DRIFT}tools:
+tools:
   mcp:
     - name: grounding-mcp
       command: ["/usr/bin/true"]
@@ -2623,23 +2420,6 @@ policies: []
     const text = format(report);
     expect(text).not.toContain("Hook budget vs ledger timeout margin");
     expect(report.errorCount).toBe(0);
-  });
-});
-
-describe("checkTemplatePolicyDrift — cross-profile floor (task adf037c1)", () => {
-  // Pins the operator decision (2026-08-08) that the kill-switch drift is
-  // reported REGARDLESS of profile: solo/team ship none of the three, so a
-  // fresh install of either must report all three as drift. Guards against
-  // a future 'fix' that silently narrows the check to the full profile and
-  // removes the profile-independent security floor.
-  it("reports all three kill-switch policies as drift for solo and team, none for full", () => {
-    const drift = (tpl: "full" | "solo" | "team"): number =>
-      checkTemplatePolicyDrift(parseManifest(parseYaml(getTemplate(tpl)))).filter(
-        (d) => d.severity === "error",
-      ).length;
-    expect(drift("solo")).toBe(3);
-    expect(drift("team")).toBe(3);
-    expect(drift("full")).toBe(0);
   });
 });
 
@@ -3005,13 +2785,6 @@ ${mcpBlock}
 // errorCount instead of warningCount (P1) flips the errorCount side of
 // this comparison and fails the test.
 describe("doctor - pack-level version gap report-level counts (task 62d9778c)", () => {
-  const SILENCE_DRIFT_PACK = `doctor:
-  ignore_template_drift:
-    - deny-kill-switch-bypass
-    - deny-session-env-strip
-    - deny-pause-sentinel-forgery
-`;
-
   // branch-protection has no version command, so the floor states are:
   // no declared `min_version` (floor trivially met, 0 gaps) versus a
   // declared floor (`no_probe_registered` gap, exactly 1).
@@ -3020,7 +2793,7 @@ describe("doctor - pack-level version gap report-level counts (task 62d9778c)", 
       "harness.yaml": `version: 1
 hooks: []
 policies: []
-${SILENCE_DRIFT_PACK}policy_packs:
+policy_packs:
   - name: branch-protection
     source: builtin
 ${withFloor ? '    min_version: "1.0.0"\n' : ""}`,
@@ -3073,7 +2846,7 @@ describe("doctor - removed understanding-gate report fields (task 95826160)", ()
       "harness.yaml": `version: 1
 hooks: []
 policies: []
-${SILENCE_DRIFT}policy_packs:
+policy_packs:
   - name: branch-protection
     source: builtin
 `,

@@ -29,11 +29,6 @@ import { checkPolicyPackUxDrift } from "../../policy-packs/ux-drift-check.js";
 import type { Runtime } from "../../policy-packs/runtime.js";
 import { selectRuntime, type RuntimeSelection } from "../apply/apply.js";
 import { lastApplyPath, readLastApply } from "../../io/last-apply.js";
-import {
-  checkTemplatePolicyDrift,
-  checkTriggerBoundaryDrift,
-} from "../validate/checks.js";
-import type { Diagnostic } from "../validate/types.js";
 import { loadManifest, type LoaderOptions } from "../loader.js";
 import {
   countCodexDiagnostics,
@@ -63,8 +58,6 @@ import {
   type PolicyEntryReport,
   type PolicyPackUnresolved,
   type PolicyPacksSection,
-  type TemplateDriftSection,
-  type TriggerBoundaryDriftSection,
   type ToolsSection,
 } from "./types.js";
 
@@ -651,52 +644,6 @@ function buildPolicyPacks(
 }
 
 /**
- * Template-policy drift (task adf037c1): shipped operator_only security
- * policies missing from an aged installed manifest. Delegates to the
- * shared validate check so `harness doctor` and `harness validate` stay
- * in parity. Each Diagnostic is a missing kill-switch defense and maps to
- * errorCount (see countDiagnostics), the doctor-convention signal that a
- * dogfood/CI run should fail until the manifest is caught up or the name
- * is explicitly acknowledged under doctor.ignore_template_drift.
- */
-/**
- * Splits a `Diagnostic[]` into the `{ errors, warnings }` message-array
- * shape every drift-style doctor section uses (task 037cfb7c review round
- * 3: `buildTemplateDrift` and `buildTriggerBoundaryDrift` had become
- * byte-identical bodies around two different `checkX(manifest)` calls;
- * this is the one place that split lives now).
- */
-function partitionDiagnosticsBySeverity(diags: readonly Diagnostic[]): {
-  errors: string[];
-  warnings: string[];
-} {
-  return {
-    errors: diags.filter((d) => d.severity === "error").map((d) => d.message),
-    warnings: diags.filter((d) => d.severity === "warning").map((d) => d.message),
-  };
-}
-
-function buildTemplateDrift(manifest: Manifest): TemplateDriftSection {
-  return partitionDiagnosticsBySeverity(checkTemplatePolicyDrift(manifest));
-}
-
-/**
- * Trigger-boundary drift (task 037cfb7c): shipped-by-name `bash_match`
- * triggers (hook- and policy-level) missing a boundary alternative the
- * template has, or missing a boundary group entirely. Doctor-only, like
- * `checkTemplatePolicyDrift` immediately above: `checkTriggerBoundaryDrift`
- * is deliberately not wired into validate's `runAssetChecks`, so
- * `harness validate` does not run it (only `harness doctor` does). Uses
- * the same `partitionDiagnosticsBySeverity` split as `buildTemplateDrift`
- * above: `checkTriggerBoundaryDrift` only emits `error`-severity
- * diagnostics today, but a future non-`error` diagnostic now surfaces in
- * `warnings` instead of being silently dropped.
- */
-function buildTriggerBoundaryDrift(manifest: Manifest): TriggerBoundaryDriftSection {
-  return partitionDiagnosticsBySeverity(checkTriggerBoundaryDrift(manifest));
-}
-
-/**
  * Grounding wiring health (task 129e1b94). Only meaningful when an enabled
  * `grounding-mcp` entry exists — callers skip the section otherwise. Checks:
  *   1. The evidence-ledger path (the value `harness apply` projects as
@@ -834,19 +781,6 @@ function countDiagnostics(report: Omit<DoctorReport, "errorCount" | "warningCoun
   // Fix is opt-in (`harness pack reseed <name>`), so this never escalates
   // to an error the way an unresolved pack or a rejected config value does.
   warningCount += report.policyPacks.uxDrift.length;
-  // Template-policy drift: each missing-or-downgraded shipped operator_only
-  // security policy is a real defense gap → errorCount; stale opt-out
-  // entries are warn-only (task adf037c1).
-  errorCount += report.templateDrift.errors.length;
-  warningCount += report.templateDrift.warnings.length;
-  // Trigger-boundary drift (task 037cfb7c): every entry is a measured,
-  // exploitable gate bypass (see checkTriggerBoundaryDrift's header),
-  // mapped to errorCount, mirroring templateDrift.errors immediately
-  // above; warnings mirrors templateDrift.warnings the same way (no
-  // warning-severity diagnostic exists today, but the pathway is wired
-  // so one would count instead of vanishing).
-  errorCount += report.triggerBoundaryDrift.errors.length;
-  warningCount += report.triggerBoundaryDrift.warnings.length;
   if (report.grounding !== undefined) {
     warningCount += report.grounding.warnings.length;
   }
@@ -881,11 +815,10 @@ function countDiagnostics(report: Omit<DoctorReport, "errorCount" | "warningCoun
 }
 
 export async function doctor(opts: DoctorOptions = {}): Promise<DoctorReport> {
-  // PLAIN load (task c88461c1, review round 3, decision D-028): every
+  // PLAIN load (task c88461c1): every
   // check this report builds from `manifest` below -- MCP/CLI/hook
   // probes, memory, policies, policy packs, the risk gate,
-  // template and trigger-boundary drift, grounding, and everything
-  // else -- reads the base/machine/explicit-`--project` manifest only,
+  // grounding, and everything else -- reads the base/machine/explicit-`--project` manifest only,
   // an explicit `opts.project` still wins outright but NOTHING is
   // derived from cwd here, so `doctor` reports the same manifest from any
   // directory and never reports this repo healthier or unhealthier than the
@@ -993,8 +926,6 @@ export async function doctor(opts: DoctorOptions = {}): Promise<DoctorReport> {
   const applyRuntime = selectRuntime(undefined, lastApplyRecord, false);
   const policies = buildPolicies(manifest);
   const policyPacks = buildPolicyPacks(manifest, applyRuntime.runtime);
-  const templateDrift = buildTemplateDrift(manifest);
-  const triggerBoundaryDrift = buildTriggerBoundaryDrift(manifest);
   const groundingServer =
     manifest.tools.mcp.find(
       (m) => m.name === GROUNDING_MCP_SERVER_NAME && m.enabled !== false,
@@ -1041,8 +972,6 @@ export async function doctor(opts: DoctorOptions = {}): Promise<DoctorReport> {
     policies,
     policyPacks,
     packExpansionRuntime: packExpansionRuntimeReport(applyRuntime, lastApplyWarning),
-    templateDrift,
-    triggerBoundaryDrift,
     ...(grounding !== undefined ? { grounding } : {}),
     ...(claudeMcp !== undefined ? { claudeMcp } : {}),
     rogueLedgerDbs,
