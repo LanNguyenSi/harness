@@ -26,6 +26,7 @@ import {
   REMOVED_HOOK_FIELDS,
   REMOVED_MANIFEST_PATHS,
   parseManifestWithWarnings,
+  stripRemovedManifestPaths,
 } from "../../src/schema/index.js";
 import { STUB_NPM_BIN_EXEC_UNKNOWN } from "../_helpers/npm-bin-exec.js";
 
@@ -163,6 +164,12 @@ describe("a YAML-typed value of a removed key warns", () => {
     fs.writeFileSync(path.join(home, "harness.yaml"), `version: 1\n${line}\n`, "utf8");
     const key = line.slice(0, line.indexOf(":"));
     expect(loadManifest({ homeDir: home }).warnings.map((w) => w.path)).toEqual([key]);
+  });
+});
+
+describe("an empty map without a prototype stays silent", () => {
+  it("Object.create(null) counts as {}", () => {
+    expect(stripRemovedManifestPaths({ version: 1, doctor: Object.create(null) }).warnings).toEqual([]);
   });
 });
 
@@ -453,7 +460,9 @@ describe.skipIf(!GIT_AVAILABLE)("branch-protection with a removed key in a machi
   // without --project. A merge-hostile removed key that only the machine layer
   // carries must not fail the load on either runtime.
   it("refuses on a protected branch and allows a feature branch", async () => {
-    const home = makeHome({ policy_packs: BRANCH_PROTECTION });
+    // The base carries named lists, so the layer's mixed lists collide with
+    // them: without the pre-merge strip the layer merge would throw.
+    const home = makeHome({ policy_packs: BRANCH_PROTECTION, policies: [{ name: "x" }], workflows: [{ name: "y" }] });
     const machines = path.join(home, "machines");
     fs.mkdirSync(machines, { recursive: true });
     fs.writeFileSync(
@@ -462,7 +471,8 @@ describe.skipIf(!GIT_AVAILABLE)("branch-protection with a removed key in a machi
       "utf8",
     );
     const loaded = loadManifest({ homeDir: home });
-    expect(loaded.warnings.map((w) => w.path).sort()).toEqual(["policies", "workflows"]);
+    expect(loaded.warnings.map((w) => w.path).sort()).toEqual(["policies", "policies", "workflows", "workflows"]);
+    expect(loaded.warnings.filter((w) => /found in the /.test(w.message))).toHaveLength(2);
     expect(loaded.manifest.policy_packs.map((p) => p.name)).toEqual(["branch-protection"]);
     const protectedRepo = makeRepo("master");
     const featureRepo = makeRepo("feat/x");
