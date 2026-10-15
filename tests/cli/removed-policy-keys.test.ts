@@ -151,6 +151,21 @@ describe.each<Where>(["base", "project layer"])("a removed key in the %s", (wher
   });
 });
 
+// YAML-typed values have no own enumerable keys, like `{}`, but they configure
+// something, so they warn. Written as YAML text so the tags survive.
+describe("a YAML-typed value of a removed key warns", () => {
+  it.each<[string, string]>([
+    ["a !!set", "policies: !!set {a, b}"],
+    ["an !!omap", "workflows: !!omap [ {a: 1} ]"],
+    ["a !!timestamp", "doctor: !!timestamp 2001-12-14"],
+  ])("%s", (_label, line) => {
+    const home = tmpDir("harness-removed-keys-");
+    fs.writeFileSync(path.join(home, "harness.yaml"), `version: 1\n${line}\n`, "utf8");
+    const key = line.slice(0, line.indexOf(":"));
+    expect(loadManifest({ homeDir: home }).warnings.map((w) => w.path)).toEqual([key]);
+  });
+});
+
 describe("the notes on the non-empty policies and workflows keys", () => {
   const warningFor = (key: string, value: unknown): string => {
     const { opts } = homeWith("base", { [key]: value });
@@ -169,6 +184,11 @@ describe("the notes on the non-empty policies and workflows keys", () => {
     expect(warningFor("policies", policies)).toContain(
       '7 policies are no longer evaluated ("a", "b", "c", "d", "e", and 2 more)',
     );
+  });
+
+  it("policies without names counts them and lists no names", () => {
+    const message = warningFor("policies", ["a", "b"]);
+    expect(message).toMatch(/ 2 policies are no longer evaluated$/);
   });
 
   it("policies that is not a list still says it is no longer evaluated", () => {
@@ -369,7 +389,11 @@ function makeRepo(branch: string): string {
   return repo;
 }
 
-async function decide(configOpts: { homeDir: string; project?: string }, repo: string): Promise<{ blocked: boolean; exitCode: number }> {
+async function decide(
+  configOpts: { homeDir: string; project?: string },
+  repo: string,
+  runtime: "claude-code" | "codex" = "claude-code",
+): Promise<{ blocked: boolean; exitCode: number }> {
   const stdin = new PassThrough();
   stdin.end(
     JSON.stringify({
@@ -387,6 +411,7 @@ async function decide(configOpts: { homeDir: string; project?: string }, repo: s
     stderr: sink,
     configPath: path.join(configOpts.homeDir, "harness.yaml"),
     ...configOpts,
+    runtime,
   });
   return { blocked: r.blocked, exitCode: r.exitCode };
 }
@@ -420,6 +445,31 @@ describe.skipIf(!GIT_AVAILABLE)("branch-protection still decides on a manifest t
       const featureRepo = makeRepo("feat/x");
       expect(await decide(opts, featureRepo)).toEqual({ blocked: false, exitCode: 0 });
     }
+  });
+});
+
+describe.skipIf(!GIT_AVAILABLE)("branch-protection with a removed key in a machine override layer, on both runtimes", () => {
+  // The generated hook reads the machine layers (machines/default|<os>|<host>)
+  // without --project. A merge-hostile removed key that only the machine layer
+  // carries must not fail the load on either runtime.
+  it("refuses on a protected branch and allows a feature branch", async () => {
+    const home = makeHome({ policy_packs: BRANCH_PROTECTION });
+    const machines = path.join(home, "machines");
+    fs.mkdirSync(machines, { recursive: true });
+    fs.writeFileSync(
+      path.join(machines, "default.harness.overrides.yaml"),
+      JSON.stringify({ policies: [{ name: "a" }, "bare", 5], workflows: [{ name: "w" }, "bare"] }),
+      "utf8",
+    );
+    const loaded = loadManifest({ homeDir: home });
+    expect(loaded.warnings.map((w) => w.path).sort()).toEqual(["policies", "workflows"]);
+    expect(loaded.manifest.policy_packs.map((p) => p.name)).toEqual(["branch-protection"]);
+    const protectedRepo = makeRepo("master");
+    const featureRepo = makeRepo("feat/x");
+    expect(await decide({ homeDir: home }, protectedRepo)).toEqual({ blocked: true, exitCode: 0 });
+    expect(await decide({ homeDir: home }, featureRepo)).toEqual({ blocked: false, exitCode: 0 });
+    expect(await decide({ homeDir: home }, protectedRepo, "codex")).toMatchObject({ blocked: true, exitCode: 2 });
+    expect(await decide({ homeDir: home }, featureRepo, "codex")).toEqual({ blocked: false, exitCode: 0 });
   });
 });
 

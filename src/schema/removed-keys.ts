@@ -326,11 +326,18 @@ function valueAt(node: unknown, segments: readonly string[]): unknown {
   return cur;
 }
 
-/** True for a value that configures nothing: null, `[]` or `{}`. */
+/**
+ * True for a value that configures nothing: null, `[]` or `{}`. Only a
+ * prototype-plain object counts as `{}`: a YAML-typed value (a `!!set` Set, an
+ * `!!omap` Map, a `!!timestamp` Date) has no own enumerable keys either, but
+ * it is not empty, so it warns.
+ */
 function isEmptyValue(v: unknown): boolean {
   if (v === null) return true;
   if (Array.isArray(v)) return v.length === 0;
-  return isPlainObject(v) && Object.keys(v).length === 0;
+  if (!isPlainObject(v)) return false;
+  const proto = Object.getPrototypeOf(v) as unknown;
+  return (proto === Object.prototype || proto === null) && Object.keys(v).length === 0;
 }
 
 /**
