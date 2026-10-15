@@ -25,16 +25,13 @@ export const HookSchema = z
     event: HookEventSchema,
     command: z.string().min(1),
     match: z.string().min(1).optional(),
-    path_match: z.string().min(1).optional(),
-    bash_match: z.string().min(1).optional(),
     blocking: HookBlockingSchema,
     budget_ms: z.number().int().positive().default(30000),
     description: z.string().optional(),
     // Optional `min_version` runs `version_command` via `harness doctor` and
     // emits a `warn` line when the parsed version is below this floor. Both
     // fields must be present together: hook commands are arbitrary shell
-    // strings (e.g. `harness policy intercept`,
-    // `~/.claude/hooks/foo.sh`), so there is no useful default for
+    // strings (e.g. `~/.claude/hooks/foo.sh`), so there is no useful default for
     // `version_command` and a min_version-without-command is treated as a
     // config error.
     min_version: z

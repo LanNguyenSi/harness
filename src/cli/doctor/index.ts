@@ -15,7 +15,6 @@ import {
   type Manifest,
   type ManifestPostureWarning,
   type McpServer,
-  type Policy,
 } from "../../schema/index.js";
 import {
   EVIDENCE_LEDGER_DB_ENV,
@@ -55,7 +54,6 @@ import {
   type ManifestSection,
   type McpVersionReport,
   type PackExpansionRuntimeReport,
-  type PolicyEntryReport,
   type PolicyPackUnresolved,
   type PolicyPacksSection,
   type ToolsSection,
@@ -490,89 +488,6 @@ function checkHooks(
   });
 }
 
-/** The literal prefix of a ledger tag — the part before the first `:`. */
-function ledgerTagPrefix(ledgerTag: string): string {
-  const colon = ledgerTag.indexOf(":");
-  return colon === -1 ? ledgerTag : ledgerTag.slice(0, colon);
-}
-
-/**
- * Does any manifest hook plausibly *produce* `prefix`-tagged ledger
- * entries? The policy's own consumer hook (`policy.hook`) is excluded:
- * a gate that reads the tag cannot also be what satisfies it.
- *
- * "Plausibly produces" is a coarse substring match of the tag prefix
- * against the hook command — a producer is typically a SessionStart
- * runner like `agent-preflight` whose command names the domain. The
- * match is prefix-granular by necessity: the command is an opaque
- * shell string, and the full `preflight:${BRANCH}` tag never appears
- * in it literally. So the signal is asymmetric. "No producer found"
- * is reliable. "Producer found" is a heuristic that can give false
- * reassurance: a hook producing `preflight:${REPO}` will mask a
- * `preflight:${BRANCH}` gap, and a once-per-session producer will mask
- * a `within: 10m` window it cannot actually keep fresh. This check is
- * therefore a floor (it catches the total-absence case), not a proof
- * of satisfiability.
- */
-function hasProducerHook(manifest: Manifest, policy: Policy, prefix: string): boolean {
-  // An empty prefix (a leading-colon tag like `:foo`) would
-  // substring-match every hook command. Treat it as "no producer
-  // identifiable" so the gap is surfaced rather than silently
-  // suppressed by a vacuous match.
-  if (prefix === "") return false;
-  return manifest.hooks.some(
-    (h) => h.name !== policy.hook && h.command.includes(prefix),
-  );
-}
-
-function buildPolicies(manifest: Manifest): PolicyEntryReport[] {
-  return manifest.policies.map((p) => {
-    const report: PolicyEntryReport = {
-      name: p.name,
-      schemaValid: true,
-      caveat: "schema valid; last-evaluated tracking ships in Phase 4",
-    };
-    // Producer-gap check (task ce50df99): a `block` policy whose
-    // required tag carries a `within` freshness window cannot stay
-    // satisfied by a one-time action — it needs a recurring producer.
-    // If no manifest hook produces the tag, the gate silently walls
-    // off whatever it triggers on (the founding-incident lockout:
-    // `preflight-before-investigation` blocking every `git status`).
-    // Policies without `within` only need the tag to exist once, which
-    // the normal review / PR workflow supplies, so they are not
-    // flagged.
-    //
-    // Refinement (task f97e152f): a non-empty `producers:` array on
-    // the policy itself is the schema's way of declaring the recovery
-    // path. For example `dogfood-before-release` deliberately wants
-    // the operator to record a manual smoke summary; an automatic
-    // SessionStart producer would defeat the gate's purpose. When that
-    // documented producer exists the warning would be a false positive
-    // and is suppressed. The check still fires when both kinds are
-    // absent. The `length === 0` clause is defensive: the schema
-    // already enforces `producers: .min(1).optional()`, so a defined
-    // array is guaranteed non-empty for any manifest that loaded.
-    if (
-      p.enforcement === "block" &&
-      // operator_only: true (task 2cc73f55) policies declare no
-      // requires: at all — there is no ledger_tag/within to go stale, so
-      // there is nothing for a producer to keep fresh.
-      p.requires !== undefined &&
-      p.requires.within !== undefined &&
-      (p.producers === undefined || p.producers.length === 0)
-    ) {
-      const prefix = ledgerTagPrefix(p.requires.ledger_tag);
-      if (!hasProducerHook(manifest, p, prefix)) {
-        report.producerGap = {
-          ledgerTag: p.requires.ledger_tag,
-          within: p.requires.within,
-        };
-      }
-    }
-    return report;
-  });
-}
-
 function packExpansionRuntimeReport(
   selection: RuntimeSelection,
   warning?: string,
@@ -701,9 +616,7 @@ function buildGrounding(
     ledgerPathWritable = false;
     warnings.push(
       `evidence-ledger path ${ledgerPath} is not writable (and not creatable) — ` +
-        `grounding-mcp cannot persist evidence; warn policies degrade non-blocking, ` +
-        `block/require_approval policies DENY matching events (deny-degraded) while ` +
-        `their evidence is unreadable`,
+        `grounding-mcp cannot persist evidence`,
     );
   }
 
@@ -716,9 +629,6 @@ function manifestSection(manifest: Manifest, postureWarnings: readonly ManifestP
     "tools",
     "memory",
     "hooks",
-    "policies",
-    "workflows",
-    "review_templates",
   ];
   const present = topLevelKeys.filter(
     (k) => (manifest as Record<string, unknown>)[k] !== undefined,
@@ -764,9 +674,6 @@ function countDiagnostics(report: Omit<DoctorReport, "errorCount" | "warningCoun
     if (h.status === "error") errorCount++;
     else if (h.status === "warn") warningCount++;
     if (h.version?.status === "warn") warningCount++;
-  }
-  for (const p of report.policies) {
-    if (p.producerGap) warningCount++;
   }
   errorCount += report.policyPacks.unresolved.length;
   errorCount += report.policyPacks.configIssues.length;
@@ -817,7 +724,7 @@ function countDiagnostics(report: Omit<DoctorReport, "errorCount" | "warningCoun
 export async function doctor(opts: DoctorOptions = {}): Promise<DoctorReport> {
   // PLAIN load (task c88461c1): every
   // check this report builds from `manifest` below -- MCP/CLI/hook
-  // probes, memory, policies, policy packs, the risk gate,
+  // probes, memory, policy packs, the risk gate,
   // grounding, and everything else -- reads the base/machine/explicit-`--project` manifest only,
   // an explicit `opts.project` still wins outright but NOTHING is
   // derived from cwd here, so `doctor` reports the same manifest from any
@@ -924,7 +831,6 @@ export async function doctor(opts: DoctorOptions = {}): Promise<DoctorReport> {
       "expanding policy packs against the default runtime";
   }
   const applyRuntime = selectRuntime(undefined, lastApplyRecord, false);
-  const policies = buildPolicies(manifest);
   const policyPacks = buildPolicyPacks(manifest, applyRuntime.runtime);
   const groundingServer =
     manifest.tools.mcp.find(
@@ -969,7 +875,6 @@ export async function doctor(opts: DoctorOptions = {}): Promise<DoctorReport> {
     tools,
     memory,
     hooks,
-    policies,
     policyPacks,
     packExpansionRuntime: packExpansionRuntimeReport(applyRuntime, lastApplyWarning),
     ...(grounding !== undefined ? { grounding } : {}),

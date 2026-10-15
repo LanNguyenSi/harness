@@ -878,8 +878,8 @@ describe("branch-protection hook: the manifest", () => {
       ].join("\n"),
     );
     const loaded = loadManifest({ configPath: cfg });
-    expect(loaded.warnings.map((w) => w.path)).toEqual(["risk", "environments", "policies[0]"]);
-    expect(loaded.manifest.policies).toEqual([]);
+    expect(loaded.warnings.map((w) => w.path)).toEqual(["risk", "environments", "policies"]);
+    expect(loaded.manifest).not.toHaveProperty("policies");
     const protectedRepo = makeRepo("master");
     const refused = await runHook(writeEvent(protectedRepo, path.join(protectedRepo, "x.ts")), { configPath: cfg });
     expect(refused.blocked).toBe(true);

@@ -317,8 +317,8 @@ describe("generateCodexConfig", () => {
     expect(controlRe.test(commandLine!)).toBe(false);
   });
 
-  it("warns when a hook carries path_match or bash_match (not projected)", () => {
-    const { warnings } = generateCodexConfig(
+  it("projects a hook that carries path_match or bash_match like one without them (removed keys, stripped at load; no projection warning any more)", () => {
+    const { warnings, content } = generateCodexConfig(
       parseManifest({
         version: 1,
         hooks: [
@@ -334,8 +334,9 @@ describe("generateCodexConfig", () => {
         ],
       }),
     );
-    expect(warnings.some((w) => w.includes("path_match"))).toBe(true);
-    expect(warnings.some((w) => w.includes("bash_match"))).toBe(true);
+    expect(warnings.some((w) => w.includes("path_match") || w.includes("bash_match"))).toBe(false);
+    expect(content).toContain('command = "/usr/bin/true"');
+    expect(content).not.toMatch(/path_match|bash_match/);
   });
 
   it("projects memory.router into a user_prompt_submit hook (PR #203)", () => {

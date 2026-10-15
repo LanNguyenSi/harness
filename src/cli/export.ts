@@ -17,7 +17,7 @@ export interface ExportResult {
   manifest: Manifest;
   sanitized: boolean;
   wroteTo: string | null;
-  /** Manifest posture warnings (removed keys, dropped `when:` policies, removed packs, removed commands), one formatted line each; the CLI prints them on stderr. */
+  /** Manifest posture warnings (removed keys, removed hook fields, removed packs, removed commands), one formatted line each; the CLI prints them on stderr. */
   warnings: string[];
 }
 
@@ -27,14 +27,12 @@ const REDACTED = "<REDACTED>";
 export const SANITIZE_FOOTER =
   "# sanitised: /home/<user>/ paths replaced with ~/; env values whose key " +
   "matches /(_|^)(KEY|TOKEN|SECRET|PASSWORD|API_KEY)$/i are redacted. The " +
-  "sanitiser does NOT touch secrets in command:[] arrays or in policy " +
-  "`requires.ledger_tag` values; review before sharing.";
+  "sanitiser does NOT touch secrets in command:[] arrays; review before sharing.";
 
 export function exportManifest(opts: ExportOptions = {}): ExportResult {
   const { manifest, warnings } = loadManifest(opts);
   // `harness export` emits the manifest exactly as `loadManifest` parsed
-  // it: the policies the operator declared under `policies:`, nothing
-  // computed on top of them.
+  // it, nothing computed on top of it.
   const projection: Record<string, unknown> = manifest as unknown as Record<string, unknown>;
   const projected = opts.sanitize ? sanitize(projection, os.homedir()) : projection;
 
@@ -64,7 +62,7 @@ export function exportManifest(opts: ExportOptions = {}): ExportResult {
  * Best-effort sanitiser. Walks the manifest, replaces `/home/<user>/...` paths
  * with `~/...` and redacts env values whose key looks credential-shaped. Does
  * NOT touch command:[] entries (they often contain absolute paths that are
- * intentional and not secret) and does NOT inspect policy ledger_tag values.
+ * intentional and not secret).
  */
 export function sanitize(value: unknown, homeDir: string): unknown {
   return walk(value, homeDir, []);

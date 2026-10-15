@@ -4,19 +4,20 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { parse as parseYaml } from "yaml";
 import { FULL_TEMPLATE } from "../../src/cli/init/templates.js";
-import { parseManifest, type Manifest } from "../../src/schema/index.js";
+import { parseManifest, parseManifestWithWarnings, type Manifest } from "../../src/schema/index.js";
 
 // Drift guard: the policy_packs section of FULL_TEMPLATE (emitted by
 // `harness init --template full`) must stay in lockstep with
 // docs/examples/full-manifest.yaml (the schema-coverage reference, golden-
 // tested by tests/cli/describe.test.ts). Neither ships policies or policy
-// hooks any more (task bcdcde36); both are pinned empty below.
+// hooks any more (task bcdcde36); both are pinned empty below, and neither
+// carries a removed manifest key (task 10e2ff0a).
 //
 // The two manifests are intentionally different elsewhere:
 //   - tools.mcp commands (FULL_TEMPLATE uses published npm bins;
 //     full-manifest.yaml uses local Pandora checkout paths)
-//   - full-manifest.yaml carries workflows, review_templates, audit blocks
-//     that FULL_TEMPLATE intentionally omits.
+//   - full-manifest.yaml carries an audit block that FULL_TEMPLATE
+//     intentionally omits.
 
 const __filename = fileURLToPath(import.meta.url);
 const REPO_ROOT = path.resolve(path.dirname(__filename), "..", "..");
@@ -36,10 +37,14 @@ function loadFullTemplateManifest(): Manifest {
 }
 
 describe("FULL_TEMPLATE ↔ docs/examples/full-manifest.yaml — drift guard", () => {
-  it("neither manifest ships policies or hooks", () => {
-    for (const m of [loadReferenceManifest(), loadFullTemplateManifest()]) {
-      expect(m.policies).toEqual([]);
-      expect(m.hooks).toEqual([]);
+  it("neither manifest ships policies or hooks, and neither carries a removed key", () => {
+    const reference = fs.readFileSync(REFERENCE_YAML, "utf8");
+    for (const text of [reference, FULL_TEMPLATE]) {
+      const { manifest, warnings } = parseManifestWithWarnings(parseYaml(text));
+      expect(manifest).not.toHaveProperty("policies");
+      expect(text).not.toMatch(/^(policies|workflows|review_templates|doctor):/m);
+      expect(warnings).toEqual([]);
+      expect(manifest.hooks).toEqual([]);
     }
   });
 

@@ -46,22 +46,20 @@ describe("validateBeforeWrite", () => {
     expect(r.ok).toBe(false);
   });
 
-  it("rejects a policy referencing a missing hook", () => {
+  it("accepts every removed policy key in any shape: the write path strips them like the load (task 10e2ff0a)", () => {
     const r = validateBeforeWrite({
       version: 1,
-      hooks: [{ name: "h", event: "PreToolUse", command: "/usr/bin/true", blocking: false }],
-      policies: [
-        {
-          name: "p",
-          description: "x",
-          trigger: { event: "PreToolUse", match: "Bash" },
-          requires: { ledger_tag: "x" },
-          hook: "missing-hook",
-          enforcement: "block",
-        },
-      ],
+      hooks: [{ name: "h", event: "PreToolUse", command: "/usr/bin/true", blocking: false, bash_match: "^git" }],
+      policies: [{ name: "p", hook: "missing-hook" }, "bare"],
+      workflows: "no",
+      review_templates: [1],
+      doctor: 7,
     });
-    expect(r.ok).toBe(false);
+    expect(r.ok).toBe(true);
+  });
+
+  it("still rejects a key that was never valid", () => {
+    expect(validateBeforeWrite({ version: 1, policys: [] }).ok).toBe(false);
   });
 
   it("formats errors with leading two-space indent", () => {

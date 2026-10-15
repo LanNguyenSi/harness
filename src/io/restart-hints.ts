@@ -11,7 +11,7 @@
 //   - hooks structure       changed → settings.json reload hint
 //   - description-only changes      → no hints (description is metadata)
 
-import type { Hook, Manifest, Policy } from "../schema/index.js";
+import type { Hook, Manifest } from "../schema/index.js";
 
 export const RESTART_HINT_MCP =
   "mcp servers changed; /mcp reconnect required";
@@ -47,10 +47,6 @@ function hooksMaterial(hooks: Hook[]): unknown {
   return hooks.map(stripDescription);
 }
 
-function policiesMaterial(policies: Policy[]): unknown {
-  return policies.map(stripDescription);
-}
-
 export function emitRestartHints(prev: Manifest, next: Manifest): string[] {
   const hints: string[] = [];
 
@@ -64,10 +60,7 @@ export function emitRestartHints(prev: Manifest, next: Manifest): string[] {
     hints.push(RESTART_HINT_MEMORY_ROUTER);
   }
 
-  if (
-    !deepEqual(hooksMaterial(prev.hooks), hooksMaterial(next.hooks)) ||
-    !deepEqual(policiesMaterial(prev.policies), policiesMaterial(next.policies))
-  ) {
+  if (!deepEqual(hooksMaterial(prev.hooks), hooksMaterial(next.hooks))) {
     hints.push(RESTART_HINT_HOOKS);
   }
 

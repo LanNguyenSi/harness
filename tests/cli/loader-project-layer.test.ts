@@ -20,13 +20,9 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import {
-  findWhenTombstones,
-  loadManifest,
-  mergeLayersWithWhenTombstones,
-  resolvePaths,
-} from "../../src/cli/loader.js";
-import { applyLayers } from "../../src/overrides/merge.js";
+import { loadManifest, loadMergedRaw, resolvePaths } from "../../src/cli/loader.js";
+import { OverrideMergeError, applyLayers } from "../../src/overrides/merge.js";
+import { mergeLayersStrippingRemovedPaths } from "../../src/overrides/merge-layers.js";
 import { validate } from "../../src/cli/validate/index.js";
 
 const PROJECT_NAME = "scoped-repo";
@@ -138,116 +134,97 @@ describe("resolvePaths: rejects an unsafe opts.project at its own path.join sink
   });
 });
 
-describe("an override layer that nulls when: on a policy (task 4ee45b99)", () => {
-  const SCOPED = { name: "scoped", when: { "environment.name": "production" } };
-  const PLAIN = { name: "plain" };
+// Removed manifest keys in an override layer (task 10e2ff0a). The layer merge
+// walks name-keyed lists and throws OverrideMergeError on a shape it cannot
+// reconcile; every hook loads the manifest, so a stale layer whose removed
+// `policies:` / `workflows:` list has such a shape must not fail the load.
+describe("a removed manifest key in an override layer", () => {
+  const NAMED = [{ name: "a", description: "x" }];
+  // Each pair makes `applyLayers` throw: a list that mixes named and unnamed
+  // entries, and a plain list laid over a named one.
+  const HOSTILE: Array<[string, Record<string, unknown>, Record<string, unknown>]> = [
+    ["policies: mixed named and unnamed entries in the layer", { policies: NAMED }, { policies: [{ name: "b" }, "not-an-entry"] }],
+    ["policies: a plain list over a named one", { policies: NAMED }, { policies: ["plain"] }],
+    ["workflows: mixed named and unnamed entries in the layer", { workflows: NAMED }, { workflows: [{ name: "b" }, 5] }],
+    ["workflows: a plain list over a named one", { workflows: NAMED }, { workflows: [1, 2] }],
+    [
+      "policies: a nested producers list that mixes shapes",
+      { policies: [{ name: "a", producers: [{ name: "p" }] }] },
+      { policies: [{ name: "a", producers: [{ name: "p" }, "bare"] }] },
+    ],
+  ];
 
-  it("warns once with the merged index, naming the policy and the layer", () => {
-    const layer = { policies: [{ name: "scoped", when: null }] };
-    const w = findWhenTombstones({ policies: [PLAIN, SCOPED] }, [{ raw: layer, label: "project override layer (x.yaml)" }]);
-    expect(w).toHaveLength(1);
-    expect(w[0]!.path).toBe("policies[1]");
-    expect(w[0]!.message).toContain('policy "scoped"');
-    expect(w[0]!.message).toContain("project override layer (x.yaml)");
+  it.each(HOSTILE)("%s: the plain merge throws, the posture merge does not", (_label, base, layer) => {
+    expect(() => applyLayers({ version: 1, ...base }, layer)).toThrow(OverrideMergeError);
+    const { merged } = mergeLayersStrippingRemovedPaths({ version: 1, ...base }, [{ raw: layer, label: "L" }]);
+    expect(merged).toEqual({ version: 1 });
   });
 
-  it("does not warn for a layer that re-scopes when: to another value", () => {
-    const w = findWhenTombstones({ policies: [SCOPED] }, [
-      { raw: { policies: [{ name: "scoped", when: { "environment.name": "staging" } }] }, label: "L" },
-    ]);
-    expect(w).toEqual([]);
+  it.each(HOSTILE)("%s: loadManifest loads the manifest and warns, naming the layer", (_label, base, layer) => {
+    fs.writeFileSync(path.join(tmpHome, "harness.yaml"), JSON.stringify({ version: 1, ...base }));
+    fs.writeFileSync(path.join(tmpHome, "projects", PROJECT_NAME, "harness.overrides.yaml"), JSON.stringify(layer));
+    const loaded = loadManifest({ homeDir: tmpHome, project: PROJECT_NAME });
+    const key = Object.keys(layer)[0]!;
+    expect(loaded.manifest).not.toHaveProperty(key);
+    const fromLayer = loaded.warnings.filter((w) => w.path === key && w.message.includes("found in the project override layer"));
+    expect(fromLayer).toHaveLength(1);
+    // The base warns on its own, without a layer name.
+    expect(loaded.warnings.filter((w) => w.path === key && !w.message.includes("found in the"))).toHaveLength(1);
   });
 
-  it("walks the layers in order: a later layer that nulls when: added by an earlier layer warns, labelled with the later layer", () => {
-    const w = findWhenTombstones({ policies: [PLAIN] }, [
-      { raw: { policies: [SCOPED] }, label: "L1" },
-      { raw: { policies: [{ name: "scoped", when: null }] }, label: "L2" },
-    ]);
-    expect(w).toHaveLength(1);
-    expect(w[0]!.path).toBe("policies[1]");
-    expect(w[0]!.message).toContain("L2");
-    expect(w[0]!.message).not.toContain("L1");
+  it("loadMergedRaw (validate, the library) strips the keys too, so validate --strict fails on a non-empty layer value", () => {
+    fs.writeFileSync(path.join(tmpHome, "harness.yaml"), JSON.stringify({ version: 1, policies: NAMED }));
+    fs.writeFileSync(
+      path.join(tmpHome, "projects", PROJECT_NAME, "harness.overrides.yaml"),
+      JSON.stringify({ policies: [{ name: "b" }, "not-an-entry"] }),
+    );
+    expect(loadMergedRaw({ homeDir: tmpHome, project: PROJECT_NAME }).mergedRaw).toEqual({ version: 1 });
+    const lenient = validate({ homeDir: tmpHome, project: PROJECT_NAME, versionProbe: () => null, builtinRuntimeProbe: () => [] });
+    expect(lenient.manifest).not.toBeNull();
+    expect(lenient.diagnostics.filter((d) => d.path === "policies").map((d) => d.severity)).toEqual(["warning", "warning"]);
+    const strict = validate({ homeDir: tmpHome, project: PROJECT_NAME, strict: true, versionProbe: () => null, builtinRuntimeProbe: () => [] });
+    expect(strict.diagnostics.filter((d) => d.path === "policies").map((d) => d.severity)).toEqual(["error", "error"]);
   });
 
-  it("does not warn when a later layer, or the same layer, deletes the policy", () => {
-    const later = findWhenTombstones({ policies: [SCOPED] }, [
-      { raw: { policies: [{ name: "scoped", when: null }] }, label: "L1" },
-      { raw: { policies: [{ name: "scoped", _delete: true }] }, label: "L2" },
+  it("a null in the layer does not hide the base's key: the base value still warns", () => {
+    const { merged, warnings } = mergeLayersStrippingRemovedPaths({ version: 1, policies: NAMED }, [
+      { raw: { policies: null }, label: "L" },
     ]);
-    expect(later).toEqual([]);
-    const same = findWhenTombstones({ policies: [SCOPED] }, [
-      { raw: { policies: [{ name: "scoped", when: null, _delete: true }] }, label: "L1" },
-    ]);
-    expect(same).toEqual([]);
+    expect(merged).toEqual({ version: 1 });
+    expect(warnings.map((w) => w.path)).toEqual(["policies"]);
+    expect(warnings[0]!.message).not.toContain("found in");
   });
 
-  it("reports only the layer that nulls when:, not an earlier layer that re-scoped it", () => {
-    const w = findWhenTombstones({ policies: [SCOPED] }, [
-      { raw: { policies: [{ name: "scoped", when: { "environment.name": "staging" } }] }, label: "L1" },
-      { raw: { policies: [{ name: "scoped", when: null }] }, label: "L2" },
+  it("an empty removed key in the layer stays silent, and the layers still merge as before", () => {
+    const { merged, warnings } = mergeLayersStrippingRemovedPaths({ version: 1, grounding: { session: { auto_start: true } } }, [
+      { raw: { policies: [], workflows: [], review_templates: {}, doctor: {}, grounding: { session: { auto_start: false } } }, label: "L" },
+      { raw: undefined, label: "skipped" },
     ]);
-    expect(w).toHaveLength(1);
-    expect(w[0]!.message).toContain("L2");
-    expect(w[0]!.message).not.toContain("L1");
+    expect(warnings).toEqual([]);
+    expect(merged).toEqual({ version: 1, grounding: { session: { auto_start: false } } });
   });
 
-  it("does not warn when a later layer sets when: again", () => {
-    const w = findWhenTombstones({ policies: [SCOPED] }, [
-      { raw: { policies: [{ name: "scoped", when: null }] }, label: "L1" },
-      { raw: { policies: [{ name: "scoped", when: { "environment.name": "staging" } }] }, label: "L2" },
-    ]);
-    expect(w).toEqual([]);
-  });
-
-  it("mergeLayersWithWhenTombstones returns the same merged manifest as applyLayers", () => {
-    const base = { version: 1, policies: [PLAIN, SCOPED] };
-    const l1 = { policies: [{ name: "scoped", when: null }] };
-    const l2 = { policies: [{ name: "extra" }] };
-    const { merged } = mergeLayersWithWhenTombstones(base, [
+  it("merges the layers exactly like applyLayers when no removed key is present", () => {
+    const base = { version: 1, tools: { mcp: [{ name: "m", command: "x" }] } };
+    const l1 = { tools: { mcp: [{ name: "m", enabled: false }] } };
+    const l2 = { tools: { mcp: [{ name: "n", command: "y" }] } };
+    const { merged, warnings } = mergeLayersStrippingRemovedPaths(base, [
       { raw: l1, label: "L1" },
       { raw: undefined, label: "skipped" },
       { raw: l2, label: "L2" },
     ]);
     expect(merged).toEqual(applyLayers(base, l1, undefined, l2));
+    expect(warnings).toEqual([]);
   });
 
-  it("does not warn when the policy has no when: below the layer", () => {
-    const w = findWhenTombstones({ policies: [PLAIN] }, [{ raw: { policies: [{ name: "plain", when: null }] }, label: "L" }]);
-    expect(w).toEqual([]);
-  });
-
-  it("does not warn for a layer that leaves when: alone", () => {
-    const w = findWhenTombstones({ policies: [SCOPED] }, [{ raw: { policies: [{ name: "scoped", description: "x" }] }, label: "L" }]);
-    expect(w).toEqual([]);
-  });
-
-  it("loadManifest and validate --strict report it from a real project layer file", () => {
-    const base = [
-      "version: 1",
-      "hooks:",
-      "  - { name: h, event: PreToolUse, command: /usr/bin/true, blocking: false }",
-      "policies:",
-      "  - name: scoped",
-      "    description: scoped",
-      "    trigger: { event: PreToolUse, match: Bash }",
-      "    requires: { ledger_tag: 'ok:${SESSION_ID}' }",
-      "    hook: h",
-      "    enforcement: block",
-      "    when: { environment.name: production }",
-      "",
-    ].join("\n");
-    fs.writeFileSync(path.join(tmpHome, "harness.yaml"), base);
-    for (const whenLine of ["    when: null", "    when: ~", "    when:"]) {
-      fs.writeFileSync(
-        path.join(tmpHome, "projects", PROJECT_NAME, "harness.overrides.yaml"),
-        ["policies:", "  - name: scoped", whenLine, ""].join("\n"),
-      );
-      const loaded = loadManifest({ homeDir: tmpHome, project: PROJECT_NAME });
-      const hits = loaded.warnings.filter((w) => w.message.includes("sets when: to null"));
-      expect(hits).toHaveLength(1);
-      expect(hits[0]!.message).toContain("project override layer");
-      const strict = validate({ homeDir: tmpHome, project: PROJECT_NAME, strict: true, versionProbe: () => null, builtinRuntimeProbe: () => [] });
-      expect(strict.diagnostics.some((d) => d.severity === "error" && d.message.includes("sets when: to null"))).toBe(true);
-    }
+  it("labels each layer's warning with that layer, and the base's with none", () => {
+    const { warnings } = mergeLayersStrippingRemovedPaths({ version: 1, doctor: { ignore_template_drift: ["x"] } }, [
+      { raw: { workflows: NAMED }, label: "machine override layer 1 (/m.yaml)" },
+      { raw: { policies: NAMED }, label: "project override layer (/p.yaml)" },
+    ]);
+    expect(warnings.map((w) => w.path)).toEqual(["doctor", "workflows", "policies"]);
+    expect(warnings[0]!.message).not.toContain("found in");
+    expect(warnings[1]!.message).toContain("found in the machine override layer 1 (/m.yaml)");
+    expect(warnings[2]!.message).toContain("found in the project override layer (/p.yaml)");
   });
 });

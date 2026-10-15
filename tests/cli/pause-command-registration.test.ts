@@ -62,7 +62,9 @@ describe("harness pause (top-level operator command)", () => {
     const program = buildProgram();
     const pause = program.commands.find((c) => c.name() === "pause");
     const d = pause?.description() ?? "";
-    expect(d).toContain("harness policy intercept");
+    // The policy-intercept hook and the `policies:` manifest key are gone (task 10e2ff0a).
+    expect(d).not.toContain("harness policy intercept");
+    expect(d).not.toContain("policies:");
     expect(d).toContain("harness pack hook runtime-reality");
     expect(d).toContain("branch-protection hook does not yield");
     expect(d).not.toContain("all harness hooks");

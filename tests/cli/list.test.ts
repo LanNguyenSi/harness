@@ -9,29 +9,22 @@ const __filename = fileURLToPath(import.meta.url);
 const REPO_ROOT = path.resolve(path.dirname(__filename), "..", "..");
 const FULL_MANIFEST = path.join(REPO_ROOT, "docs", "examples", "full-manifest.yaml");
 
-// The reference manifest ships no hooks or policies any more (task
-// bcdcde36); the row shapes of those two categories are exercised against
-// this small inline manifest instead.
-const HOOK_POLICY_MANIFEST = `version: 1
+// The reference manifest ships no hooks any more (task bcdcde36); the row
+// shape of that category is exercised against this small inline manifest
+// instead.
+const HOOK_MANIFEST = `version: 1
 hooks:
   - name: gate-hook
     event: PreToolUse
     match: "Bash"
     command: /usr/bin/true
     blocking: hard
-policies:
-  - name: gate-policy
-    description: a block policy
-    trigger: { event: PreToolUse, match: "Bash" }
-    requires: { ledger_tag: "x:\${SESSION_ID}" }
-    hook: gate-hook
-    enforcement: block
 `;
 
-function hookPolicyManifestPath(): string {
+function hookManifestPath(): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "harness-list-"));
   const file = path.join(dir, "harness.yaml");
-  fs.writeFileSync(file, HOOK_POLICY_MANIFEST, "utf8");
+  fs.writeFileSync(file, HOOK_MANIFEST, "utf8");
   return file;
 }
 
@@ -62,22 +55,15 @@ describe("list — categories", () => {
   });
 
   it("lists hook entries", () => {
-    const r = list("hooks", { configPath: hookPolicyManifestPath() });
+    const r = list("hooks", { configPath: hookManifestPath() });
     expect(r.rows.map((row) => row.name)).toEqual(["gate-hook"]);
     const head = r.rows[0]!;
     expect(head.event).toBe("PreToolUse");
     expect(head.blocking).toBe("hard");
   });
 
-  it("lists policies", () => {
-    const r = list("policies", { configPath: hookPolicyManifestPath() });
-    expect(r.rows.map((row) => row.name)).toEqual(["gate-policy"]);
-    expect(r.rows[0]!.enforcement).toBe("block");
-  });
-
-  it("lists no hooks and no policies for the reference manifest", () => {
+  it("lists no hooks for the reference manifest", () => {
     expect(list("hooks", { configPath: FULL_MANIFEST }).rows).toEqual([]);
-    expect(list("policies", { configPath: FULL_MANIFEST }).rows).toEqual([]);
   });
 
   it("lists memory directories", () => {
@@ -159,7 +145,7 @@ describe("list — --filter", () => {
   });
 
   it("returns empty when filter matches nothing", () => {
-    const r = list("policies", { configPath: hookPolicyManifestPath(), filter: "nope" });
+    const r = list("hooks", { configPath: hookManifestPath(), filter: "nope" });
     expect(r.rows).toHaveLength(0);
     expect(r.output).toMatch(/no entries|^\[\]/);
   });
@@ -167,12 +153,12 @@ describe("list — --filter", () => {
 
 describe("list — --json", () => {
   it("emits a parseable JSON array with no leading prose", () => {
-    const r = list("policies", { configPath: hookPolicyManifestPath(), json: true });
+    const r = list("hooks", { configPath: hookManifestPath(), json: true });
     const trimmed = r.output.trim();
     expect(trimmed.startsWith("[")).toBe(true);
     const parsed = JSON.parse(trimmed);
     expect(Array.isArray(parsed)).toBe(true);
     expect(parsed[0]).toHaveProperty("name");
-    expect(parsed[0]).toHaveProperty("enforcement");
+    expect(parsed[0]).toHaveProperty("event");
   });
 });

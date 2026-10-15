@@ -3,6 +3,7 @@ import {
   buildAgentFacingBlock,
   formatAgentFacingMessage,
   renderAgentFacing,
+  substituteTemplate,
 } from "../../src/runtime/agent-facing.js";
 import type { PolicyUx } from "../../src/schema/index.js";
 
@@ -92,5 +93,19 @@ describe("renderAgentFacing", () => {
         "  harness review record 42",
       ].join("\n"),
     );
+  });
+});
+
+describe("substituteTemplate", () => {
+  it("replaces every known ${VAR}", () => {
+    const r = substituteTemplate("a:${X}/b:${Y}", { X: "1", Y: "2" });
+    expect(r.result).toBe("a:1/b:2");
+    expect(r.missing).toEqual([]);
+  });
+
+  it("leaves unknown vars in place and reports them once", () => {
+    const r = substituteTemplate("${X}/${X}/${Y}", { Y: "ok" });
+    expect(r.result).toBe("${X}/${X}/ok");
+    expect(r.missing).toEqual(["X"]);
   });
 });

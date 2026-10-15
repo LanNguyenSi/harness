@@ -386,4 +386,23 @@ tools:
       expect((err as HarnessExitError).exitCode).toBe(66);
     }
   });
+
+  it("does not fail the ref-side override merge on a removed key whose layer shape the merge cannot reconcile (task 10e2ff0a)", () => {
+    const repo = newRepo();
+    // A named policies list in the base and a layer that mixes named and
+    // unnamed entries: the plain merge throws OverrideMergeError on it, but
+    // `policies:` is a removed key, stripped from both sides before the merge.
+    writeAt(repo, "harness.yaml", `${plainBase.replace("policies: []\n", "")}policies:\n  - name: old\n    description: x\n`);
+    writeAt(repo, "machines/h.harness.overrides.yaml", 'policies:\n  - name: other\n  - "bare"\n');
+    gitCommit(repo, "base + removed-key layer");
+    const r = diff({
+      configPath: path.join(repo, "harness.yaml"),
+      since: "master",
+      homeDir: repo,
+      discriminator: DISCRIMINATOR,
+    });
+    expect(r.changes).toEqual([]);
+    expect(r.before).not.toHaveProperty("policies");
+    expect(r.after).not.toHaveProperty("policies");
+  });
 });

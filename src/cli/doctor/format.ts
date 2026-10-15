@@ -236,24 +236,6 @@ function formatPackExpansionRuntimeSection(report: DoctorReport): string[] {
   ];
 }
 
-function formatPoliciesSection(report: DoctorReport): string[] {
-  const out: string[] = ["", "Policies"];
-  for (const p of report.policies) {
-    if (p.producerGap) {
-      out.push(
-        `  ⚠ ${p.name}  requires fresh \`${p.producerGap.ledgerTag}\` (within ${p.producerGap.within}) but no manifest hook produces it AND the policy declares no \`producers:\` array`,
-      );
-      out.push(
-        `      the gate will block its trigger until the tag is supplied out-of-band; add a producer hook (e.g. a SessionStart runner) OR document the manual recovery path in the policy's \`producers:\` array`,
-      );
-    } else {
-      out.push(`  ✓ ${p.name}  ${p.caveat}`);
-    }
-  }
-  if (report.policies.length === 0) out.push(`  (no policies declared)`);
-  return out;
-}
-
 // Policy Packs section: declared-but-not-live + per-pack `config:`
 // shape gaps. A pack whose `source` or builtin `name` doesn't resolve
 // gets silently skipped by `expandPolicyPacks`; a pack whose `config:`
@@ -416,7 +398,6 @@ export function format(report: DoctorReport): string {
   lines.push(...formatMemorySection(report));
   lines.push(...formatHooksSection(report));
   lines.push(...formatPackExpansionRuntimeSection(report));
-  lines.push(...formatPoliciesSection(report));
   lines.push(...formatPolicyPacksSection(report));
   lines.push(...formatGroundingSection(report));
   lines.push(...formatClaudeMcpSection(report));

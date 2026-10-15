@@ -16,7 +16,6 @@ export interface RemoveOptions {
   configPath?: string;
   homeDir?: string;
   dryRun?: boolean;
-  force?: boolean;
 }
 
 export interface RemoveResult {
@@ -25,7 +24,6 @@ export interface RemoveResult {
   name: string;
   diff: string;
   applied: boolean;
-  forcedReferences: string[];
 }
 
 const DEFAULT_BASENAME = "harness.yaml";
@@ -67,15 +65,6 @@ export async function remove(
     );
   }
 
-  if (plan.referencingPolicies.length > 0 && !opts.force) {
-    const refList = plan.referencingPolicies.map((p) => `"${p}"`).join(", ");
-    const verb = plan.referencingPolicies.length === 1 ? "policy" : "policies";
-    throw new HarnessExitError(
-      `${verb} ${refList} reference${plan.referencingPolicies.length === 1 ? "s" : ""} this hook; remove the ${verb} first or pass --force`,
-      EX_FAIL,
-    );
-  }
-
   const proposed = applyRemove(original, type, name);
   const diff = unifiedDiff({
     fileName: path.basename(target),
@@ -85,11 +74,7 @@ export async function remove(
     newHeader: "proposed",
   });
 
-  // Schema gate. With --force on a referenced hook, the resulting manifest
-  // contains a dangling policy.hook reference, which the schema rejects.
-  // That refusal is the contract: --force does not let you ship a broken
-  // manifest, it just tells remove to skip the human-readable hook-reference
-  // pre-check. The actual safety net is the schema, which still fires.
+  // Schema gate: the resulting manifest has to parse.
   const schemaResult = validateBeforeWrite(parseYaml(proposed));
   if (!schemaResult.ok) {
     throw new HarnessExitError(
@@ -99,18 +84,7 @@ export async function remove(
   }
 
   if (opts.dryRun) {
-    // forcedReferences is informational on dry-run: it shows the user which
-    // policies would have been overridden if the schema gate did not refuse.
-    // On the write path below it is always [] because --force on a referenced
-    // hook never reaches that point — the schema rejects the dangling reference.
-    return {
-      path: target,
-      type,
-      name,
-      diff,
-      applied: false,
-      forcedReferences: opts.force ? plan.referencingPolicies : [],
-    };
+    return { path: target, type, name, diff, applied: false };
   }
 
   const lockPath = path.join(path.dirname(target), LOCK_BASENAME);
@@ -133,10 +107,6 @@ export async function remove(
     name,
     diff,
     applied: true,
-    // Always [] on the write path — schema gate rejects --force on a referenced
-    // hook, so the only way to reach here with --force is when there are no
-    // referencing policies to begin with.
-    forcedReferences: [],
   };
 }
 

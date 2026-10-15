@@ -60,10 +60,10 @@ tools:
     const r = await exec([
       "validate",
       "--config",
-      path.resolve(REPO_ROOT, "docs/examples/invalid/03-policy-undeclared-variable.yaml"),
+      path.resolve(REPO_ROOT, "docs/examples/invalid/09-skills-required-not-enabled.yaml"),
     ]);
     expect(r.code).toBe(1);
-    expect(r.stderr).toMatch(/PR_NUMBER/);
+    expect(r.stderr).toMatch(/required.*subset.*enabled/i);
     expect(r.stdout).toBe("");
   });
 });
@@ -167,12 +167,23 @@ describe("CLI program — list commands", () => {
     expect(r.stdout).toMatch(/agent-tasks/);
   });
 
-  it("list policies --json emits a parseable (empty) JSON array for the reference manifest", async () => {
-    const r = await exec(["list", "policies", "--config", FULL_MANIFEST, "--json"]);
+  it("list hooks --json emits a parseable (empty) JSON array for the reference manifest", async () => {
+    const r = await exec(["list", "hooks", "--config", FULL_MANIFEST, "--json"]);
     expect(r.code).toBe(0);
     const parsed = JSON.parse(r.stdout);
     expect(parsed).toEqual([]);
   });
+
+  it.each(["policies", "workflows"])(
+    "list %s exits 64 with a message saying the category was removed, not a crash",
+    async (category) => {
+      const r = await exec(["list", category, "--config", FULL_MANIFEST]);
+      expect(r.code).toBe(64);
+      expect(r.stdout).toBe("");
+      expect(r.stderr).toContain(`list category "${category}" was removed in 1.0.0`);
+      expect(r.stderr).not.toMatch(/unknown list category/i);
+    },
+  );
 
   it("list with an unknown category exits 64", async () => {
     const r = await exec(["list", "bogus", "--config", FULL_MANIFEST]);
@@ -206,11 +217,6 @@ describe("CLI program — doctor command", () => {
         `version: 1
 hooks: []
 policies: []
-doctor:
-  ignore_template_drift:
-    - deny-kill-switch-bypass
-    - deny-session-env-strip
-    - deny-pause-sentinel-forgery
 tools:
   builtin:
     known: [Read]
@@ -229,7 +235,6 @@ tools:
       expect(r.stdout).toContain("Tools");
       expect(r.stdout).toContain("Memory");
       expect(r.stdout).toContain("Hooks");
-      expect(r.stdout).toContain("Policies");
       expect(r.stdout).toContain("Summary");
       expect(r.stdout).toContain("[shallow]");
     } finally {
@@ -258,6 +263,17 @@ describe("CLI program — describe command", () => {
     expect(r.code).toBe(64);
     expect(r.stderr).toMatch(/unknown pillar/i);
   });
+
+  it.each(["policies", "workflows", "review_templates"])(
+    "rejects the removed --pillar %s with EX_USAGE and says it was removed",
+    async (pillar) => {
+      const r = await exec(["describe", "--config", FULL_MANIFEST, "--pillar", pillar]);
+      expect(r.code).toBe(64);
+      expect(r.stdout).toBe("");
+      expect(r.stderr).toContain(`pillar "${pillar}" was removed in 1.0.0`);
+      expect(r.stderr).not.toMatch(/unknown pillar/i);
+    },
+  );
 
   it("returns EX_NOINPUT when the manifest file is missing", async () => {
     const r = await exec(["describe", "--config", "/nonexistent/harness.yaml"]);

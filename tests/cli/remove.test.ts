@@ -7,6 +7,7 @@ import { run } from "../../src/cli/index.js";
 import { init } from "../../src/cli/init/index.js";
 import { remove } from "../../src/cli/remove/index.js";
 import { applyRemove, planRemove } from "../../src/cli/remove/mutate.js";
+import { parseManifest } from "../../src/schema/index.js";
 import { STUB_NPM_BIN_EXEC_UNKNOWN as STUB_NPM_BIN_EXEC } from "../_helpers/npm-bin-exec.js";
 
 let tmpHome: string;
@@ -77,21 +78,36 @@ describe("remove mcp / cli / skill", () => {
 });
 
 // The full template ships no hooks or policies any more (task bcdcde36), so
-// the reference-check tests add a hook and a policy that names it.
-function addReferencedHook(): void {
-  const script = path.join(hooksDir, "gate.sh");
+// the hook tests add their own hooks.
+function addHook(name: string, extra = ""): void {
+  const script = path.join(hooksDir, `${name}.sh`);
   fs.writeFileSync(script, "#!/bin/sh\nexit 0\n");
   fs.chmodSync(script, 0o755);
   fs.appendFileSync(
     manifestPath,
     `
 hooks:
-  - name: require-review-evidence
+  - name: ${name}
     event: PreToolUse
     match: "Bash"
     command: ${script}
     blocking: hard
-policies:
+${extra}`,
+  );
+}
+
+describe("remove hook", () => {
+  it("removes a hook", async () => {
+    addHook("sacrificial");
+    const r = await remove("hook", "sacrificial", { configPath: manifestPath, homeDir: tmpHome });
+    expect(r.applied).toBe(true);
+    expect(readManifest()).not.toHaveProperty("hooks.0");
+  });
+
+  it("is not blocked by a stale policies: entry that names the hook (the key is removed, task 10e2ff0a)", async () => {
+    addHook(
+      "require-review-evidence",
+      `policies:
   - name: review-before-merge
     description: test
     trigger: { event: PreToolUse, match: "Bash" }
@@ -99,59 +115,22 @@ policies:
     hook: require-review-evidence
     enforcement: block
 `,
-  );
-}
-
-describe("remove hook — reference check", () => {
-  it("refuses to remove a hook referenced by a policy without --force", async () => {
-    addReferencedHook();
-    await expect(
-      remove("hook", "require-review-evidence", { configPath: manifestPath, homeDir: tmpHome }),
-    ).rejects.toMatchObject({
-      name: "HarnessExitError",
-      exitCode: 1,
-      message: expect.stringMatching(/review-before-merge.*remove the polic.*first or pass --force/),
-    });
-  });
-
-  it("removes a hook with --force when no policy references it (no schema fallout)", async () => {
-    // Insert the sacrificial hook via the same Document AST applyAdd uses,
-    // bypassing asset checks (host-dependent: git-batch on PATH, etc.) since
-    // this test is about the reference-check semantics, not asset validation.
-    const sacrificial = path.join(hooksDir, "sacrificial.sh");
-    fs.writeFileSync(sacrificial, "#!/bin/sh\nexit 0\n");
-    fs.chmodSync(sacrificial, 0o755);
-    const { applyAdd } = await import("../../src/cli/add/mutate.js");
-    const yaml = fs.readFileSync(manifestPath, "utf8");
-    const next = applyAdd(yaml, {
-      type: "hook",
-      entry: { name: "sacrificial", event: "SessionStart", command: sacrificial, blocking: false },
-    });
-    fs.writeFileSync(manifestPath, next);
-    const r = await remove("hook", "sacrificial", {
-      configPath: manifestPath,
-      homeDir: tmpHome,
-      force: true,
-    });
+    );
+    const r = await remove("hook", "require-review-evidence", { configPath: manifestPath, homeDir: tmpHome });
     expect(r.applied).toBe(true);
-    expect(r.forcedReferences).toEqual([]);
+    // The dangling policy is left for `harness validate` to report as the
+    // removed key it is; it does not stop the load.
+    const written = fs.readFileSync(manifestPath, "utf8");
+    expect(written).toContain("review-before-merge");
+    expect(() => parseManifest(parseYaml(written))).not.toThrow();
   });
 
-  it("--force on a referenced hook fails the schema gate (dangling policy.hook)", async () => {
-    addReferencedHook();
-    // The fixture wires `review-before-merge` -> `require-review-evidence`.
-    // --force lets remove past the human-friendly pre-check, but the schema gate
-    // still rejects the dangling reference. This is the documented contract.
-    await expect(
-      remove("hook", "require-review-evidence", {
-        configPath: manifestPath,
-        homeDir: tmpHome,
-        force: true,
-      }),
-    ).rejects.toMatchObject({
-      name: "HarnessExitError",
-      message: expect.stringMatching(/review-before-merge.*not declared in hooks/),
-    });
+  it("has no --force option any more: it only existed to override the policy reference check", async () => {
+    addHook("sacrificial");
+    const r = await runCli(["remove", "hook", "sacrificial", "--force", "--config", manifestPath]);
+    expect(r.code).toBe(64);
+    expect(r.stderr).toMatch(/unknown option '--force'/);
+    expect(fs.readFileSync(manifestPath, "utf8")).toContain("sacrificial");
   });
 });
 
@@ -166,24 +145,6 @@ describe("remove — unknown name", () => {
       // just need the error to surface an available-name suggestion.
       message: expect.stringMatching(/agent-tasks|grounding-mcp/),
     });
-  });
-});
-
-describe("remove --dry-run + --force + referenced hook", () => {
-  it("populates forcedReferences in the dry-run result so the user can see what would be forced", async () => {
-    // The write path with --force on a referenced hook is rejected by the schema gate
-    // (dangling policy.hook). Dry-run skips the gate's effect on disk but still computes
-    // forcedReferences so the user can preview the override.
-    const r = await remove("hook", "require-review-evidence", {
-      configPath: manifestPath,
-      homeDir: tmpHome,
-      dryRun: true,
-      force: true,
-    }).catch((e) => e);
-    // The schema gate fires for dry-run too because we still validate the proposed YAML.
-    // That's the documented contract: --force lets remove past the human-friendly
-    // pre-check, but the schema is the safety net for both write and dry-run paths.
-    expect(r).toMatchObject({ name: "HarnessExitError" });
   });
 });
 
@@ -218,33 +179,6 @@ describe("planRemove — pure", () => {
     expect(plan.found).toBe(false);
     expect(plan.availableNames).toEqual(["a", "b"]);
   });
-
-  it("collects referencing policies for a hook target", () => {
-    const yaml = [
-      "version: 1",
-      "hooks:",
-      "  - name: h1",
-      "    event: PreToolUse",
-      "    command: /usr/bin/true",
-      "    blocking: false",
-      "policies:",
-      "  - name: p1",
-      "    description: x",
-      "    trigger: { event: PreToolUse, match: Bash }",
-      "    requires: { ledger_tag: x }",
-      "    hook: h1",
-      "    enforcement: block",
-      "  - name: p2",
-      "    description: x",
-      "    trigger: { event: PreToolUse, match: Bash }",
-      "    requires: { ledger_tag: y }",
-      "    hook: h1",
-      "    enforcement: block",
-      "",
-    ].join("\n");
-    const plan = planRemove(yaml, "hook", "h1");
-    expect(plan.referencingPolicies.sort()).toEqual(["p1", "p2"]);
-  });
 });
 
 describe("applyRemove — defensive errors", () => {
@@ -265,12 +199,6 @@ describe("planRemove — entry shapes", () => {
     const plan = planRemove(yaml, "skill", "review");
     expect(plan.found).toBe(true);
     expect(plan.availableNames.sort()).toEqual(["review", "simplify"]);
-  });
-
-  it("returns empty referencingPolicies for non-hook types", () => {
-    const yaml = "version: 1\ntools:\n  mcp:\n    - name: a\n";
-    const plan = planRemove(yaml, "mcp", "a");
-    expect(plan.referencingPolicies).toEqual([]);
   });
 });
 

@@ -82,7 +82,7 @@ export async function add(action: AddEntry, opts: AddOptions = {}): Promise<AddR
   // cannot disagree about what "declared" means.
   const proposedParsed = parseManifestWithWarnings(parseYaml(proposed));
   const manifest = proposedParsed.manifest;
-  // Diagnostics index the parsed manifest, where a dropped policy or pack no
+  // Diagnostics index the parsed manifest, where a dropped pack no
   // longer holds its slot: name the index as written, like `harness validate`.
   const proposedErrors = runAssetChecks(manifest, {
     homeDir: opts.homeDir,

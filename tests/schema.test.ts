@@ -3,7 +3,7 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { parse as parseYaml } from "yaml";
-import { ManifestParseError, PoliciesSchema, parseManifest, parseManifestWithWarnings } from "../src/schema/index.js";
+import { ManifestParseError, parseManifest, parseManifestWithWarnings } from "../src/schema/index.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const REPO_ROOT = path.resolve(path.dirname(__filename), "..");
@@ -30,10 +30,8 @@ describe("parseManifest — happy path", () => {
     expect(manifest.tools.mcp).toHaveLength(3);
     expect(manifest.tools.mcp[0]?.name).toBe("codebase-oracle");
     expect(manifest.tools.mcp[2]?.name).toBe("grounding-mcp");
-    // The reference manifest ships no hooks and no policies any more
-    // (task bcdcde36).
+    // The reference manifest ships no hooks any more (task bcdcde36).
     expect(manifest.hooks).toHaveLength(0);
-    expect(manifest.policies).toHaveLength(0);
     expect(manifest.policy_packs).toHaveLength(1);
     expect(manifest.policy_packs[0]?.name).toBe("branch-protection");
     expect(manifest.policy_packs[0]?.source).toBe("builtin");
@@ -53,8 +51,11 @@ describe("parseManifest — happy path", () => {
     expect(m.memory.retention.staleness_days).toBe(180);
     expect(m.memory.scopes.default).toBe("project");
     expect(m.hooks).toEqual([]);
-    expect(m.policies).toEqual([]);
     expect(m.policy_packs).toEqual([]);
+    // The policy keys are removed (task 10e2ff0a): no default is filled in.
+    for (const key of ["policies", "workflows", "review_templates", "doctor"]) {
+      expect(m).not.toHaveProperty(key);
+    }
     // The Risk Gate keys are removed (task 39c112e0): no default is filled in.
     expect(m).not.toHaveProperty("risk");
     expect(m).not.toHaveProperty("environments");
@@ -67,121 +68,22 @@ describe("parseManifest — happy path", () => {
     });
     expect(m.tools.mcp[0]?.command).toBe("node /tmp/x.js");
   });
-
-  it("rejects a policy whose producers list has no mcp entry", () => {
-    // The MCP path is the ungated recovery route for Bash-lockout
-    // scenarios. A producers list that omits it would leave agents
-    // stuck. The schema's superRefine enforces at-least-one-mcp.
-    expect(() =>
-      parseManifest({
-        version: 1,
-        hooks: [{ name: "h", event: "PreToolUse", command: "/usr/bin/true", blocking: false }],
-        policies: [
-          {
-            name: "p",
-            description: "d",
-            trigger: { event: "PreToolUse" },
-            requires: { ledger_tag: "x:${SESSION_ID}" },
-            hook: "h",
-            enforcement: "block",
-            producers: [
-              { kind: "bash", command: "harness do-thing", description: "the standard producer" },
-            ],
-          },
-        ],
-      }),
-    ).toThrow(/at least one producer with kind:mcp/);
-  });
-
-  it("accepts a policy with mixed-kind producers (bash + mcp)", () => {
-    const m = parseManifest({
-      version: 1,
-      hooks: [{ name: "h", event: "PreToolUse", command: "/usr/bin/true", blocking: false }],
-      policies: [
-        {
-          name: "p",
-          description: "d",
-          trigger: { event: "PreToolUse" },
-          requires: { ledger_tag: "x:${SESSION_ID}" },
-          hook: "h",
-          enforcement: "block",
-          producers: [
-            { kind: "bash", command: "harness do-thing", description: "standard" },
-            { kind: "mcp", verb: "mcp__x__write", example: '{tag:"x:${SESSION_ID}"}', description: "ungated fallback" },
-          ],
-        },
-      ],
-    });
-    expect(m.policies[0]?.producers).toHaveLength(2);
-    expect(m.policies[0]?.producers?.[1]?.kind).toBe("mcp");
-  });
-
-  it("accepts ISO-8601 and shorthand within values", () => {
-    for (const within of ["24h", "30m", "7d", "60s", "PT1H", "P1D"]) {
-      const m = parseManifest({
-        version: 1,
-        hooks: [{ name: "h", event: "PreToolUse", command: "/usr/bin/true", blocking: false }],
-        policies: [
-          {
-            name: "p",
-            description: "d",
-            trigger: { event: "PreToolUse" },
-            requires: { ledger_tag: "x:${SESSION_ID}", within },
-            hook: "h",
-            enforcement: "block",
-          },
-        ],
-      });
-      expect(m.policies[0]?.requires?.within).toBe(within);
-    }
-  });
 });
 
 describe("parseManifest — invalid fixtures", () => {
   const cases: Array<{ file: string; pattern: RegExp }> = [
     { file: "01-unknown-version.yaml", pattern: /version/i },
     { file: "02-unknown-toplevel-key.yaml", pattern: /unrecognized key|foo/i },
-    { file: "03-policy-undeclared-variable.yaml", pattern: /PR_NUMBER/ },
-    { file: "04-policy-dangling-hook.yaml", pattern: /nonexistent-hook/ },
-    { file: "05-bad-extract-grammar.yaml", pattern: /unknown namespace|extract expression|toolArgs/i },
-    { file: "06-bad-within-duration.yaml", pattern: /duration/i },
-    { file: "07-count-min-zero.yaml", pattern: /count/i },
     { file: "08-duplicate-mcp-name.yaml", pattern: /duplicate mcp/i },
     { file: "09-skills-required-not-enabled.yaml", pattern: /required.*subset.*enabled/i },
     { file: "10-memory-default-not-allowed.yaml", pattern: /default.*allowed/i },
     { file: "11-bad-blocking-enum.yaml", pattern: /blocking|invalid/i },
     { file: "12-missing-version.yaml", pattern: /version/i },
-    { file: "13-workflow-duplicate-name.yaml", pattern: /duplicate workflow name/i },
-    {
-      file: "14-workflow-template-not-defined.yaml",
-      pattern: /ghost-template.*not defined in review_templates/i,
-    },
-    {
-      file: "15-workflow-required-without-template.yaml",
-      pattern: /spawn:\s*"required".*template/i,
-    },
-    { file: "16-workflow-unknown-step-kind.yaml", pattern: /invalid_union_discriminator|kind/i },
     {
       file: "17-policy-pack-duplicate-name.yaml",
       pattern: /duplicate policy_pack name/i,
     },
     { file: "18-policy-pack-unknown-key.yaml", pattern: /unrecognized key|bogus_field/i },
-    {
-      file: "24-policy-operator-only-with-requires.yaml",
-      pattern: /operator_only.*must not also declare requires/i,
-    },
-    {
-      file: "25-policy-operator-only-wrong-enforcement.yaml",
-      pattern: /operator_only.*only meaningful for enforcement: block/i,
-    },
-    {
-      file: "26-policy-missing-requires-and-operator-only.yaml",
-      pattern: /requires is mandatory unless.*operator_only/i,
-    },
-    {
-      file: "27-policy-operator-only-with-producers.yaml",
-      pattern: /operator_only.*must not also declare producers/i,
-    },
   ];
 
   for (const c of cases) {
@@ -197,237 +99,6 @@ describe("parseManifest — invalid fixtures", () => {
       expectIssueMatching(caught, c.pattern);
     });
   }
-});
-
-describe("parseManifest — built-in variables bypass trigger.extract", () => {
-  // The five runtime-resolved built-ins listed in `src/schema/requires.ts`
-  // may be referenced in `requires.ledger_tag` without a matching
-  // `trigger.extract` entry. This guards against an accidental tightening
-  // that would break dogfood manifests + ARCHITECTURE §6 examples.
-  const BUILTINS = ["SESSION_ID", "REPO", "BRANCH", "TOOL_NAME", "CWD"];
-
-  for (const name of BUILTINS) {
-    it(`accepts \${${name}} with no trigger.extract entry`, () => {
-      expect(() =>
-        parseManifest({
-          version: 1,
-          hooks: [{ name: "h", event: "PreToolUse", command: "/usr/bin/true", blocking: false }],
-          policies: [
-            {
-              name: "p",
-              description: "d",
-              trigger: { event: "PreToolUse" },
-              requires: { ledger_tag: `t:\${${name}}` },
-              hook: "h",
-              enforcement: "block",
-            },
-          ],
-        }),
-      ).not.toThrow();
-    });
-  }
-
-  it("still rejects a non-built-in reference without trigger.extract", () => {
-    expect(() =>
-      parseManifest({
-        version: 1,
-        hooks: [{ name: "h", event: "PreToolUse", command: "/usr/bin/true", blocking: false }],
-        policies: [
-          {
-            name: "p",
-            description: "d",
-            trigger: { event: "PreToolUse" },
-            requires: { ledger_tag: "t:${CUSTOM_VAR}" },
-            hook: "h",
-            enforcement: "block",
-          },
-        ],
-      }),
-    ).toThrow(/CUSTOM_VAR/);
-  });
-});
-
-describe("parseManifest — requires shapes", () => {
-  function buildPolicyManifest(requires: unknown): unknown {
-    return {
-      version: 1,
-      hooks: [{ name: "h", event: "PreToolUse", command: "/usr/bin/true", blocking: false }],
-      policies: [
-        {
-          name: "p",
-          description: "d",
-          trigger: { event: "PreToolUse" },
-          requires,
-          hook: "h",
-          enforcement: "block",
-        },
-      ],
-    };
-  }
-
-  it("accepts shape 1 (ledger_tag only)", () => {
-    expect(() => parseManifest(buildPolicyManifest({ ledger_tag: "x:${SESSION_ID}" }))).not.toThrow();
-  });
-
-  it("accepts shape 1 + within", () => {
-    expect(() =>
-      parseManifest(buildPolicyManifest({ ledger_tag: "x:${SESSION_ID}", within: "24h" })),
-    ).not.toThrow();
-  });
-
-  it("accepts shape 1 + count", () => {
-    expect(() =>
-      parseManifest(buildPolicyManifest({ ledger_tag: "x:${SESSION_ID}", count: { min: 2 } })),
-    ).not.toThrow();
-  });
-
-  it("accepts all three shapes composed together", () => {
-    expect(() =>
-      parseManifest(
-        buildPolicyManifest({
-          ledger_tag: "x:${SESSION_ID}",
-          within: "PT1H",
-          count: { exact: 1 },
-        }),
-      ),
-    ).not.toThrow();
-  });
-
-  it("rejects count.exact alongside count.min", () => {
-    expect(() =>
-      parseManifest(
-        buildPolicyManifest({
-          ledger_tag: "x:${SESSION_ID}",
-          count: { min: 2, exact: 3 },
-        }),
-      ),
-    ).toThrow(/exact.*min|count/i);
-  });
-
-  it("rejects count with no constraints declared", () => {
-    expect(() =>
-      parseManifest(buildPolicyManifest({ ledger_tag: "x:${SESSION_ID}", count: {} })),
-    ).toThrow(/count/i);
-  });
-
-  it("rejects count.min greater than count.max", () => {
-    expect(() =>
-      parseManifest(
-        buildPolicyManifest({
-          ledger_tag: "x:${SESSION_ID}",
-          count: { min: 5, max: 2 },
-        }),
-      ),
-    ).toThrow(/min.*<=.*max/i);
-  });
-});
-
-describe("parseManifest — operator_only unconditional deny (task 2cc73f55)", () => {
-  function buildOperatorOnlyManifest(overrides: Record<string, unknown> = {}): unknown {
-    return {
-      version: 1,
-      hooks: [{ name: "h", event: "PreToolUse", command: "/usr/bin/true", blocking: false }],
-      policies: [
-        {
-          name: "p",
-          description: "d",
-          trigger: { event: "PreToolUse" },
-          hook: "h",
-          enforcement: "block",
-          operator_only: true,
-          ...overrides,
-        },
-      ],
-    };
-  }
-
-  it("accepts operator_only: true with enforcement: block and no requires:", () => {
-    const m = parseManifest(buildOperatorOnlyManifest());
-    expect(m.policies[0]?.operator_only).toBe(true);
-    expect(m.policies[0]?.requires).toBeUndefined();
-  });
-
-  it("rejects operator_only: true alongside a requires: block (self-contradictory)", () => {
-    expect(() =>
-      parseManifest(
-        buildOperatorOnlyManifest({ requires: { ledger_tag: "x:${SESSION_ID}" } }),
-      ),
-    ).toThrow(/operator_only.*must not also declare requires/i);
-  });
-
-  it("rejects operator_only: true alongside a declared producers: array (same mutual-exclusion class)", () => {
-    // producers: documents a legitimate way to SATISFY the gate; an
-    // unconditional deny never evaluates any evidence, so declaring both
-    // would misrepresent the gate as satisfiable.
-    expect(() =>
-      parseManifest(
-        buildOperatorOnlyManifest({
-          producers: [
-            {
-              kind: "mcp",
-              verb: "mcp__grounding-mcp__ledger_add",
-              example: '{sessionId:"x", type:"fact", content:"x"}',
-              description: "bogus",
-            },
-          ],
-        }),
-      ),
-    ).toThrow(/operator_only.*must not also declare producers/i);
-  });
-
-  it("rejects operator_only: true with enforcement: warn", () => {
-    expect(() =>
-      parseManifest(buildOperatorOnlyManifest({ enforcement: "warn" })),
-    ).toThrow(/operator_only.*only meaningful for enforcement: block/i);
-  });
-
-  it("rejects operator_only: true with enforcement: require_approval", () => {
-    expect(() =>
-      parseManifest(buildOperatorOnlyManifest({ enforcement: "require_approval" })),
-    ).toThrow(/operator_only.*only meaningful for enforcement: block/i);
-  });
-
-  it("still rejects a plain block policy with neither requires: nor operator_only: true", () => {
-    expect(() =>
-      parseManifest(
-        buildOperatorOnlyManifest({ operator_only: undefined }),
-      ),
-    ).toThrow(/requires is mandatory unless.*operator_only/i);
-  });
-
-  it("existing requires-carrying block policies are unaffected (regression pin)", () => {
-    // operator_only is absent entirely here — the pre-existing mandatory-
-    // requires path must still work byte-identically.
-    expect(() =>
-      parseManifest({
-        version: 1,
-        hooks: [{ name: "h", event: "PreToolUse", command: "/usr/bin/true", blocking: false }],
-        policies: [
-          {
-            name: "p",
-            description: "d",
-            trigger: { event: "PreToolUse" },
-            requires: { ledger_tag: "x:${SESSION_ID}" },
-            hook: "h",
-            enforcement: "block",
-          },
-        ],
-      }),
-    ).not.toThrow();
-  });
-
-  it("does not warn/error the self-attestation check for an operator_only policy with no producers", async () => {
-    // checkPolicySelfAttestation lives in src/cli/validate/checks.ts and
-    // is exercised end-to-end (via `validate()`) in
-    // tests/cli/validate.test.ts; this is a light schema-layer sanity
-    // check that the parsed shape (operator_only true, no producers) is
-    // exactly what that check inspects.
-    const m = parseManifest(buildOperatorOnlyManifest());
-    const p = m.policies[0];
-    expect(p?.enforcement).toBe("block");
-    expect(p?.operator_only).toBe(true);
-    expect(p?.producers).toBeUndefined();
-  });
 });
 
 describe("parseManifest — uniqueness checks", () => {
@@ -522,33 +193,6 @@ describe("parseManifest — uniqueness checks", () => {
     ).not.toThrow();
   });
 
-  it("rejects duplicate policy names", () => {
-    expect(() =>
-      parseManifest({
-        version: 1,
-        hooks: [{ name: "h", event: "PreToolUse", command: "/usr/bin/true", blocking: false }],
-        policies: [
-          {
-            name: "p",
-            description: "d",
-            trigger: { event: "PreToolUse" },
-            requires: { ledger_tag: "x:${SESSION_ID}" },
-            hook: "h",
-            enforcement: "block",
-          },
-          {
-            name: "p",
-            description: "d2",
-            trigger: { event: "PostToolUse" },
-            requires: { ledger_tag: "y:${SESSION_ID}" },
-            hook: "h",
-            enforcement: "warn",
-          },
-        ],
-      }),
-    ).toThrow(/duplicate policy/i);
-  });
-
   it("rejects duplicate cli tool names", () => {
     expect(() =>
       parseManifest({
@@ -561,149 +205,6 @@ describe("parseManifest — uniqueness checks", () => {
         },
       }),
     ).toThrow(/duplicate cli/i);
-  });
-});
-
-describe("parseManifest — workflows", () => {
-  it("defaults workflows and review_templates to empty when absent", () => {
-    const m = parseManifest({ version: 1 });
-    expect(m.workflows).toEqual([]);
-    expect(m.review_templates).toEqual({});
-  });
-
-  it("parses a minimal workflow with default step values", () => {
-    const m = parseManifest({
-      version: 1,
-      workflows: [
-        {
-          name: "feature-pr",
-          steps: [
-            { kind: "branch" },
-            { kind: "merge" },
-          ],
-        },
-      ],
-    });
-    const wf = m.workflows[0]!;
-    expect(wf.name).toBe("feature-pr");
-    const branch = wf.steps[0];
-    if (branch?.kind !== "branch") throw new Error("expected branch step");
-    expect(branch.from).toBe("master");
-    expect(branch.per_task).toBe(true);
-    const merge = wf.steps[1];
-    if (merge?.kind !== "merge") throw new Error("expected merge step");
-    expect(merge.method).toBe("squash");
-    expect(merge.gate).toBe("solo");
-  });
-
-  it("parses a full workflow with review_subagent referencing a defined template", () => {
-    const m = parseManifest({
-      version: 1,
-      workflows: [
-        {
-          name: "feature-pr",
-          when: { task_label: ["feat", "fix"], project: "harness" },
-          steps: [
-            { kind: "branch", from: "master", per_task: true },
-            {
-              kind: "review_subagent",
-              spawn: "required",
-              agent_type: "Explore",
-              rigor: "rigorous",
-              template: "rigorous",
-              on_findings: "fix_then_remerge",
-            },
-            { kind: "ci_gate", wait_for: "completed/success" },
-            { kind: "merge", method: "squash", gate: "solo" },
-          ],
-        },
-      ],
-      review_templates: {
-        rigorous: "Rigorous checklist...\n",
-      },
-    });
-    expect(m.workflows[0]?.steps).toHaveLength(4);
-    const review = m.workflows[0]?.steps[1];
-    if (review?.kind !== "review_subagent") throw new Error("expected review step");
-    expect(review.template).toBe("rigorous");
-  });
-
-  it("accepts spawn: optional without a template", () => {
-    expect(() =>
-      parseManifest({
-        version: 1,
-        workflows: [
-          {
-            name: "docs-pr",
-            steps: [{ kind: "review_subagent", spawn: "optional" }],
-          },
-        ],
-      }),
-    ).not.toThrow();
-  });
-
-  it("rejects spawn: required without a template", () => {
-    expect(() =>
-      parseManifest({
-        version: 1,
-        workflows: [
-          {
-            name: "feature-pr",
-            steps: [{ kind: "review_subagent", spawn: "required" }],
-          },
-        ],
-      }),
-    ).toThrow(/spawn:\s*"required".*template/i);
-  });
-
-  it("rejects review_subagent.template referencing a non-existent template", () => {
-    expect(() =>
-      parseManifest({
-        version: 1,
-        workflows: [
-          {
-            name: "feature-pr",
-            steps: [{ kind: "review_subagent", spawn: "required", template: "ghost" }],
-          },
-        ],
-        review_templates: { rigorous: "..." },
-      }),
-    ).toThrow(/ghost.*not defined in review_templates/i);
-  });
-
-  it("rejects duplicate workflow names", () => {
-    expect(() =>
-      parseManifest({
-        version: 1,
-        workflows: [
-          { name: "feature-pr", steps: [{ kind: "branch" }] },
-          { name: "feature-pr", steps: [{ kind: "merge" }] },
-        ],
-      }),
-    ).toThrow(/duplicate workflow name/i);
-  });
-
-  it("rejects unknown step.kind values", () => {
-    expect(() =>
-      parseManifest({
-        version: 1,
-        workflows: [
-          {
-            name: "feature-pr",
-            steps: [{ kind: "deploy" } as unknown],
-          },
-        ],
-      }),
-    ).toThrow();
-  });
-
-  it("rejects empty steps array", () => {
-    expect(() =>
-      parseManifest({
-        version: 1,
-        workflows: [{ name: "wf", steps: [] }],
-      }),
-    ).toThrow();
   });
 });
 
@@ -904,17 +405,6 @@ describe("parseManifest — min_version numeric pattern", () => {
 });
 
 describe("parseManifest — removed Risk Gate vocabulary (task 39c112e0)", () => {
-  const HOOKS = [{ name: "h", event: "PreToolUse", command: "/usr/bin/true", blocking: false }];
-  const gate = (extra: Record<string, unknown>) => ({
-    name: "p",
-    description: "d",
-    trigger: { event: "PreToolUse" },
-    requires: { ledger_tag: "risk-approved:${SESSION_ID}" },
-    hook: "h",
-    enforcement: "block",
-    ...extra,
-  });
-
   it("does not validate the contents of a risk or environments block any more: any shape is stripped with a warning", () => {
     const { manifest, warnings } = parseManifestWithWarnings({
       version: 1,
@@ -924,24 +414,6 @@ describe("parseManifest — removed Risk Gate vocabulary (task 39c112e0)", () =>
     expect(manifest).not.toHaveProperty("risk");
     expect(manifest).not.toHaveProperty("environments");
     expect(warnings.map((w) => w.path)).toEqual(["risk", "environments"]);
-  });
-
-  it.each([
-    ["a populated when: block", { "risk.severity_at_least": "high", "environment.name": "production" }],
-    ["when.environment.name = unknown", { "environment.name": "unknown" }],
-    ["an empty when: {}", {}],
-    ["action.deletion_target_unresolvable: false", { "action.deletion_target_unresolvable": false }],
-    ["an unknown clause key", { "risk.bogus_clause": "high" }],
-  ])("drops a policy carrying %s whole, without validating the clause", (_name, when) => {
-    const { manifest, warnings } = parseManifestWithWarnings({ version: 1, hooks: HOOKS, policies: [gate({ when })] });
-    expect(manifest.policies).toEqual([]);
-    expect(warnings.map((w) => w.path)).toEqual(["policies[0]"]);
-  });
-
-  it("the policy schema no longer declares when: (a parse that skips the posture strip rejects it)", () => {
-    expect(() => PoliciesSchema.parse([gate({ when: { "environment.name": "production" } })])).toThrow(
-      /unrecognized key|when/i,
-    );
   });
 });
 
@@ -1019,101 +491,5 @@ describe("parseManifest — version-message variants for non-newer values (task 
       const text = (err as ManifestParseError).issues.map((i) => i.message).join("\n");
       expect(text).not.toMatch(/supports manifest version/);
     }
-  });
-});
-
-// Task 2699b476: `trigger.input_match`. The namespace restriction and the
-// empty-map rejection live in the SCHEMA (PolicyTriggerSchema), the same
-// layer `bash_match` / `path_match` are declared at, so every consumer
-// that parses a manifest refuses the bad shape: `harness validate`,
-// `apply`, `doctor`, `loadManifest`, the intercept entrypoint.
-describe("parseManifest: trigger.input_match (task 2699b476)", () => {
-  function manifestWithInputMatch(inputMatch: unknown): unknown {
-    return {
-      version: 1,
-      hooks: [
-        {
-          name: "h",
-          event: "PreToolUse",
-          match: "mcp__agent-tasks__task_finish",
-          command: "harness policy intercept",
-          blocking: "hard",
-        },
-      ],
-      policies: [
-        {
-          name: "p",
-          description: "d",
-          trigger: {
-            event: "PreToolUse",
-            match: "mcp__agent-tasks__task_finish",
-            input_match: inputMatch,
-            extract: { TASK_ID: "toolArgs.taskId" },
-          },
-          requires: { ledger_tag: "review:${TASK_ID}" },
-          hook: "h",
-          enforcement: "block",
-        },
-      ],
-    };
-  }
-
-  function parseError(inputMatch: unknown): unknown {
-    try {
-      parseManifest(manifestWithInputMatch(inputMatch));
-    } catch (err) {
-      return err;
-    }
-    throw new Error("expected parseManifest to reject");
-  }
-
-  it("accepts boolean, string and number literals on toolArgs paths", () => {
-    const manifest = parseManifest(
-      manifestWithInputMatch({
-        "toolArgs.autoMerge": true,
-        "toolArgs.mergeMethod": "squash",
-        "toolArgs.retries": 3,
-        'toolArgs["odd key"]': "x",
-      }),
-    );
-    expect(manifest.policies[0]?.trigger.input_match).toEqual({
-      "toolArgs.autoMerge": true,
-      "toolArgs.mergeMethod": "squash",
-      "toolArgs.retries": 3,
-      'toolArgs["odd key"]': "x",
-    });
-  });
-
-  it("rejects a non-toolArgs namespace with a message naming the namespace", () => {
-    expectIssueMatching(
-      parseError({ "event.autoMerge": true }),
-      /input_match keys must read from the toolArgs namespace.*reads from event/,
-    );
-  });
-
-  it("rejects session / git namespaces too", () => {
-    expectIssueMatching(parseError({ "session.id": "x" }), /reads from session/);
-    expectIssueMatching(parseError({ "git.branch": "x" }), /reads from git/);
-  });
-
-  it("rejects a bare namespace with no segment (same grammar as trigger.extract)", () => {
-    expectIssueMatching(
-      parseError({ toolArgs: true }),
-      /at least one segment after the namespace/,
-    );
-  });
-
-  it("rejects an unknown namespace with the extract grammar's own message", () => {
-    expectIssueMatching(parseError({ "toolArguments.autoMerge": true }), /unknown namespace/);
-  });
-
-  it("rejects an empty map as a silent no-op", () => {
-    expectIssueMatching(parseError({}), /at least one entry.*silent no-op/);
-  });
-
-  it("rejects a non-literal value (object / array / null)", () => {
-    expectIssueMatching(parseError({ "toolArgs.a": { nested: true } }), /input_match/i);
-    expectIssueMatching(parseError({ "toolArgs.a": [1] }), /input_match/i);
-    expectIssueMatching(parseError({ "toolArgs.a": null }), /input_match/i);
   });
 });

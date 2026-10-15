@@ -30,11 +30,11 @@ describe("generateSettings", () => {
     expect(out).toEqual({ hooks: {} });
   });
 
-  it("intentionally drops path_match and bash_match (hook-script enforced, not wiring)", () => {
-    // ARCHITECTURE Appendix A canonical pattern (e.g. require-preflight-evidence
-    // with bash_match) shows these filters are enforced inside the referenced
-    // hook script, not by settings.json. We assert current behaviour so a
-    // future contributor sees a failing test if they add wrapping logic.
+  it("never projects path_match and bash_match (removed keys, stripped at load, not wiring)", () => {
+    // The filters were never projected into settings.json: a hook script
+    // filters internally. The manifest parse strips both keys now (task
+    // 10e2ff0a); we assert the resulting behaviour so a future contributor
+    // sees a failing test if they add wrapping logic.
     const m = manifestOf([
       {
         name: "h",

@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { parse as parseYaml } from "yaml";
-import { applyLayers } from "../overrides/merge.js";
+import { mergeLayersStrippingRemovedPaths } from "../overrides/merge-layers.js";
 import {
   machineOverrideCandidates,
   resolveMachineDiscriminators,
@@ -36,13 +36,14 @@ export interface LoadedManifest {
   manifest: Manifest;
   resolved: ResolvedPaths;
   /**
-   * Removed manifest keys and removed packs the load stripped and ignored,
-   * and sites that still call a removed command (src/schema/removed-keys.ts).
+   * Removed manifest keys, removed hook fields and removed packs the load
+   * stripped and ignored, and sites that still call a removed command
+   * (src/schema/removed-keys.ts).
    * `harness doctor` and `harness apply` print them.
    */
   warnings: ManifestPostureWarning[];
   /**
-   * Original positions of the policies[] / policy_packs[] entries that
+   * Original positions of the policy_packs[] entries that
    * survived the load-time drop (`parseManifestWithWarnings`); absent when
    * nothing was dropped. Used to name an index as written in a diagnostic.
    */
@@ -166,68 +167,6 @@ function readYamlFile(filePath: string, label: string): unknown {
   }
 }
 
-function isPlainRecord(v: unknown): v is Record<string, unknown> {
-  return typeof v === "object" && v !== null && !Array.isArray(v);
-}
-
-function policiesOf(raw: unknown): unknown[] {
-  if (!isPlainRecord(raw)) return [];
-  const p = raw["policies"];
-  return Array.isArray(p) ? p : [];
-}
-
-/**
- * Merge the override layers onto the base in load order and report every
- * layer that sets `when` to null (`when: null`, `when: ~`, an empty
- * `when:`) on a policy whose lower layers carry `when:`. The merge deletes
- * the key, so the policy would load trigger-only instead of being dropped
- * as a `when:` policy. A hit is reported only when the policy survives the
- * whole merge without `when:` (a later layer that deletes the policy or
- * sets `when:` again leaves nothing to warn about). The path names the
- * policy's index in the merged manifest.
- */
-export function mergeLayersWithWhenTombstones(
-  baseRaw: unknown,
-  layers: ReadonlyArray<{ raw: unknown; label: string }>,
-): { merged: unknown; warnings: ManifestPostureWarning[] } {
-  const hits: Array<{ name: string; label: string }> = [];
-  let current: unknown = baseRaw;
-  for (const layer of layers) {
-    if (layer.raw === undefined) continue;
-    const lower = policiesOf(current);
-    for (const entry of policiesOf(layer.raw)) {
-      if (!isPlainRecord(entry) || typeof entry["name"] !== "string") continue;
-      if (!Object.prototype.hasOwnProperty.call(entry, "when") || entry["when"] !== null) continue;
-      const name = entry["name"];
-      const target = lower.find((p) => isPlainRecord(p) && p["name"] === name);
-      if (!isPlainRecord(target) || !Object.prototype.hasOwnProperty.call(target, "when")) continue;
-      hits.push({ name, label: layer.label });
-    }
-    current = applyLayers(current, layer.raw);
-  }
-  const mergedPolicies = policiesOf(current);
-  const warnings: ManifestPostureWarning[] = [];
-  for (const { name, label } of hits) {
-    const idx = mergedPolicies.findIndex((p) => isPlainRecord(p) && p["name"] === name);
-    if (idx < 0) continue;
-    const policy = mergedPolicies[idx];
-    if (isPlainRecord(policy) && Object.prototype.hasOwnProperty.call(policy, "when")) continue;
-    warnings.push({
-      path: `policies[${idx}]`,
-      message: `the ${label} sets when: to null on policy "${name}", whose lower layers carry when:; the merge deletes the key, so the policy loads trigger-only (matching every call its trigger names) instead of being dropped. Remove the when: line from the layer, or remove the policy.`,
-    });
-  }
-  return { merged: current, warnings };
-}
-
-/** The warnings of `mergeLayersWithWhenTombstones` alone. */
-export function findWhenTombstones(
-  baseRaw: unknown,
-  layers: ReadonlyArray<{ raw: unknown; label: string }>,
-): ManifestPostureWarning[] {
-  return mergeLayersWithWhenTombstones(baseRaw, layers).warnings;
-}
-
 export function loadMergedRaw(opts: LoaderOptions = {}): LoadedRaw {
   const resolved = resolvePaths(opts);
 
@@ -239,9 +178,10 @@ export function loadMergedRaw(opts: LoaderOptions = {}): LoadedRaw {
     ? readYamlFile(resolved.projectLayer, "project override layer")
     : undefined;
 
-  // One merge: the walk merges every layer in load order (the same order
-  // `applyLayers` uses) and returns the merged manifest with the warnings.
-  const { merged: mergedRaw, warnings } = mergeLayersWithWhenTombstones(baseRaw, [
+  // One merge in load order. Removed manifest paths are stripped from the base
+  // and from each layer first, so a stale key with a shape the merge cannot
+  // reconcile fails nothing (the warnings come back with the merged manifest).
+  const { merged: mergedRaw, warnings } = mergeLayersStrippingRemovedPaths(baseRaw, [
     ...machineLayers.map((raw, i) => ({ raw, label: `machine override layer ${i + 1} (${resolved.machineLayers[i]})` })),
     ...(resolved.projectLayer ? [{ raw: projectLayer, label: `project override layer (${resolved.projectLayer})` }] : []),
   ]);

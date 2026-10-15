@@ -210,11 +210,11 @@ describe("exportManifest — posture warnings (task f45dd0a0)", () => {
     return file;
   };
 
-  it("returns one warning per dropped when: policy and stripped key", () => {
+  it("returns one warning per stripped key", () => {
     const dirty = write("dirty.yaml", `version: 1\n${HOOK}${WHEN_POLICY}${REMOVED_KEYS}`);
     const r = exportManifest({ configPath: dirty });
-    expect(r.warnings.map((w) => w.split(":")[0])).toEqual(["risk", "policies[0]"]);
-    expect(r.warnings[1]).toContain('policy "scoped-gate" dropped whole');
+    expect(r.warnings.map((w) => w.split(":")[0])).toEqual(["risk", "policies"]);
+    expect(r.warnings[1]).toContain("1 policy is no longer evaluated");
   });
 
   it("returns no warnings for a clean manifest", () => {

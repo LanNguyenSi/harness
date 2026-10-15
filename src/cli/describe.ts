@@ -6,19 +6,13 @@ export type Pillar =
   | "grounding"
   | "tools"
   | "memory"
-  | "hooks"
-  | "policies"
-  | "workflows"
-  | "review_templates";
+  | "hooks";
 
 const PILLARS: readonly Pillar[] = [
   "grounding",
   "tools",
   "memory",
   "hooks",
-  "policies",
-  "workflows",
-  "review_templates",
 ];
 
 export function isPillar(value: string): value is Pillar {

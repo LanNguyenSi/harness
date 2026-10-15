@@ -115,34 +115,6 @@ export interface HookEntryReport {
 }
 
 /**
- * A `block`-enforcement policy whose required ledger tag carries a
- * `within` freshness window, but no manifest hook produces that tag
- * AND the policy itself declares no `producers:` array. The gate will
- * wall off whatever it triggers on until the tag is supplied
- * out-of-band, with no in-manifest way to keep it satisfied or any
- * recovery path visible to the agent. Policies that document the
- * recovery in `producers:` (e.g. dogfood-before-release deliberately
- * wanting an operator-driven manual smoke summary) are NOT flagged
- * here, since that producer is the schema-blessed manual path. See
- * tasks ce50df99 (initial check) and f97e152f (producers-respect
- * refinement).
- */
-export interface PolicyProducerGap {
-  /** The unresolved `requires.ledger_tag`, e.g. `preflight:${REPO}`. */
-  ledgerTag: string;
-  /** The `requires.within` window the tag must stay fresh inside. */
-  within: string;
-}
-
-export interface PolicyEntryReport {
-  name: string;
-  schemaValid: boolean;
-  caveat: string;
-  /** Present when this policy has an unproduced freshness-gated tag. */
-  producerGap?: PolicyProducerGap;
-}
-
-/**
  * A declared policy pack whose `source` or builtin name does not
  * resolve. The pack appears in `manifest.policy_packs[]` (so the
  * operator believes it is active) but `expandPolicyPacks` silently
@@ -229,8 +201,7 @@ export interface PolicyPacksSection {
 /**
  * Grounding wiring health (task 129e1b94). Present only when the manifest
  * declares an enabled `tools.mcp[grounding-mcp]` entry — without one there
- * is no consumer to check (validate's checkPolicyGroundingMcp owns the
- * "policies without grounding-mcp" warning). Doctor verifies the projected
+ * is no consumer to check. Doctor verifies the projected
  * evidence-ledger path is usable and that an operator env override does
  * not silently diverge from `grounding.evidence_ledger.path`.
  */
@@ -262,7 +233,6 @@ export interface DoctorReport {
   npmGlobalBin?: NpmBinReport;
   memory: MemoryReport;
   hooks: HookEntryReport[];
-  policies: PolicyEntryReport[];
   /**
    * Declared-but-not-live policy packs. Each entry is a pack the
    * operator listed in `policy_packs[]` whose `source` or builtin

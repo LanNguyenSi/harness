@@ -59,7 +59,6 @@ describeBlock("describe — --pillar filter", () => {
     expect(result.output).not.toContain("\ngrounding:");
     expect(result.output).not.toContain("\nmemory:");
     expect(result.output).not.toContain("\nhooks:");
-    expect(result.output).not.toContain("\npolicies:");
   });
 
   it("filters to grounding only", () => {
@@ -83,20 +82,23 @@ describeBlock("describe — --json", () => {
     const parsed = JSON.parse(result.output);
     expect(parsed.version).toBe(1);
     expect(parsed.tools.mcp).toHaveLength(3);
-    // The reference manifest ships no policies any more (task bcdcde36).
-    expect(parsed.policies).toHaveLength(0);
+    // The policy keys are removed (task 10e2ff0a): the effective manifest
+    // carries none of them.
+    for (const key of ["policies", "workflows", "review_templates", "doctor"]) {
+      expect(parsed).not.toHaveProperty(key);
+    }
   });
 
   it("emits valid filtered JSON when --pillar is combined with --json", () => {
     const result = describe({
       configPath: FULL_MANIFEST,
-      pillar: "policies",
+      pillar: "hooks",
       json: true,
       discriminator: { hostname: "h", platform: "linux", procVersionPath: "/nonexistent" },
     });
     const parsed = JSON.parse(result.output);
-    expect(Object.keys(parsed)).toEqual(["version", "policies"]);
-    expect(parsed.policies).toEqual([]);
+    expect(Object.keys(parsed)).toEqual(["version", "hooks"]);
+    expect(parsed.hooks).toEqual([]);
   });
 });
 

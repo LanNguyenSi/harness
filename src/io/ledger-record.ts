@@ -9,13 +9,12 @@
 // `harness audit` and the ledger client use to read the rows that already
 // exist in a ledger.
 
-// Type-only on purpose: `policies/ledger-client.ts` and
-// `policies/requires.ts` value-import POLICY_DECISION_TYPE from this
-// module, so a VALUE import of LedgerEntry back would
-// re-create the TDZ cycle pinned absent by
+// Type-only on purpose: `policies/ledger-client.ts` value-imports
+// POLICY_DECISION_TYPE from this module, so a VALUE import of LedgerEntry back
+// would re-create the TDZ cycle pinned absent by
 // tests/io/ledger-record-no-cycle.test.ts. `import type` is erased
 // at compile time and adds no runtime edge.
-import type { LedgerEntry } from "../policies/requires.js";
+import type { LedgerEntry } from "../policies/ledger-client.js";
 import { parseLedgerTimestamp } from "../policies/timestamp.js";
 
 /**

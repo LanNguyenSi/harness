@@ -20,19 +20,12 @@
 //     UNIT: Claude Code's settings.json `timeout` is documented in SECONDS,
 //     not milliseconds like the manifest's `budget_ms`; see
 //     `hookTimeoutSeconds` below for the conversion and its history.
-//   - `path_match` and `bash_match` are NOT projected. Claude Code's
-//     settings.json `matcher` filters only on the tool name, so there is
-//     no native settings.json field for "additional filter when this hook
-//     fires". Per the canonical example in ARCHITECTURE.md Appendix A
-//     (e.g. `require-preflight-evidence` with `bash_match: "^git ..."`),
-//     these filters are enforced inside the referenced hook script, not by
-//     harness's wiring. The manifest fields document what the script is
-//     meant to filter on; neither `harness validate` nor `harness doctor`
-//     cross-checks the script against them, and `harness apply` does not
-//     synthesise wrapper shell to enforce them. Wrapping was
-//     considered and rejected: it (a) doubles the surface for hook bugs,
-//     (b) hard-codes shell semantics into the manifest projection, and
-//     (c) the canonical hook scripts already enforce these filters.
+//   - Hook-level filters beyond the tool-name `match` do not exist in the
+//     manifest: `hooks[].path_match` and `hooks[].bash_match` were never
+//     projected (Claude Code's settings.json `matcher` filters only on the
+//     tool name) and are removed keys that the manifest load strips with a
+//     warning (src/schema/removed-keys.ts). A hook script filters on whatever
+//     it needs to by itself.
 //   - `blocking` is harness-internal: it tells `validate`/`doctor` how to
 //     classify a hook for soft/hard-failure reporting. Claude Code's
 //     settings.json has no documented equivalent (verified against the
