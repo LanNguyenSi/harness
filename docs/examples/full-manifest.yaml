@@ -9,11 +9,8 @@
 # errors for those hook scripts (and a few warnings for binaries that
 # only exist in a real install, e.g. git-batch, ledger). That is
 # expected: validate is doing its job, the manifest is doing its job,
-# the assets just only exist on a wired-up host. To explore policy
-# matching against this manifest without touching disk, use
-#   harness dry-run "<intent>" --tool <tool> --config docs/examples/full-manifest.yaml
-# (see README "Try it yourself"). Run `harness init --template full`
-# for a manifest tailored to your machine.
+# the assets just only exist on a wired-up host. Run
+# `harness init --template full` for a manifest tailored to your machine.
 version: 1
 
 grounding:

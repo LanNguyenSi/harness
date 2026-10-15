@@ -6,10 +6,6 @@
 #
 # Author loop:
 #   harness validate --config docs/examples/policies/01-review-before-merge.yaml
-#   harness dry-run "merge PR 42" \
-#     --tool mcp__agent-tasks__pull_requests_merge \
-#     --tool-args '{"prNumber":42}' \
-#     --config docs/examples/policies/01-review-before-merge.yaml
 
 version: 1
 

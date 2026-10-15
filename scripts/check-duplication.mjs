@@ -262,7 +262,13 @@ import * as path from "node:path";
 // hook envelope enrichment; the check reports 43 with that change (the pin was 47).
 // Lowered to 42 (task 6e52c044): removing the Risk Gate from the install
 // surfaces, validate and doctor; the check reports 42 with that change (the pin was 43).
-const MAX_CLONES = 42;
+// Lowered to 39 (task bfe5efb4): removing the `harness record`, `harness dry-run`
+// and `harness explain` verbs and the files only they used; the check reports 39
+// with that change (the pin was 42). One named file is gone from the history
+// above: the `cli/register-record-session-group.ts` the toolchain-parity and
+// stale-base-check raise notes cite was deleted by this task; the notes stay
+// as the history of the measurements they recorded.
+const MAX_CLONES = 39;
 
 // Sets process.exitCode instead of calling process.exit so the caller's
 // finally-cleanup runs on every path (process.exit skips stack unwinding).

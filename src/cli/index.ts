@@ -28,9 +28,7 @@ import { registerOperatorLifecycle } from "./register-operator-lifecycle.js";
 import { registerInspectGroup } from "./register-inspect-group.js";
 import { registerSetupGroup } from "./register-setup-group.js";
 import { registerPackGroup } from "./register-pack-group.js";
-import { registerExplainGroup } from "./register-explain-group.js";
 import { registerSmokeGroup } from "./register-smoke-group.js";
-import { registerRecordSessionGroup } from "./register-record-session-group.js";
 import { registerGateGcGroup } from "./register-gate-gc-group.js";
 import { registerPolicyGroup } from "./register-policy-group.js";
 
@@ -83,13 +81,9 @@ export function buildProgram(opts: RunOptions = {}): Command {
 
   registerPackGroup(program, { stdout, stderr });
 
-  registerExplainGroup(program, { stdout, stderr });
-
   registerAuditGroup(program, { stdout, stderr });
 
   registerSmokeGroup(program, { stdout, stderr });
-
-  registerRecordSessionGroup(program, { stdout, stderr });
 
   registerGateGcGroup(program, { stdout, stderr });
 

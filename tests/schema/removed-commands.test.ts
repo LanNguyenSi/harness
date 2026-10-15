@@ -72,13 +72,38 @@ describe("REMOVED_COMMANDS table (task f3f15290)", () => {
     expect(invokesRemovedCommand("harness pack upgrade")?.command).toBe("harness pack upgrade");
   });
 
-  it("lists the four removed Risk Gate debug verbs and leaves harness explain alone (task 65807a1b)", () => {
+  it("lists the four removed Risk Gate debug verbs; harness explain was removed too, by a later entry (task 65807a1b, task bfe5efb4)", () => {
     for (const verb of ["explain-action", "test-risk", "resolve-env", "explain-policy"]) {
       const command = `harness ${verb}`;
       expect(invokesRemovedCommand(`${command} event.json`)?.command, command).toBe(command);
     }
-    expect(invokesRemovedCommand("harness explain")).toBeUndefined();
-    expect(invokesRemovedCommand("harness explain gate-prod-destructive --trace")).toBeUndefined();
+    expect(invokesRemovedCommand("harness explain")?.command).toBe("harness explain");
+    expect(invokesRemovedCommand("harness explain gate-prod-destructive --trace")?.command).toBe("harness explain");
+  });
+
+  it("lists harness dry-run and harness explain, keeps explain-action and explain-policy on their own rows, and leaves look-alikes alone (task bfe5efb4)", () => {
+    // The `harness explain` row is a prefix of `harness explain-action` and
+    // `harness explain-policy` (hyphen continuation) and lookup takes the
+    // FIRST matching row, so the row order is pinned here: each of the two
+    // longer rows must still resolve to ITSELF, which fails the moment the
+    // `harness explain` row is moved above it.
+    const dryRunRow = REMOVED_COMMANDS.find((c) => c.command === "harness dry-run");
+    const explainRow = REMOVED_COMMANDS.find((c) => c.command === "harness explain");
+    expect(dryRunRow).toBeDefined();
+    expect(explainRow).toBeDefined();
+    expect(dryRunRow?.removedIn).toBe("1.0.0");
+    expect(explainRow?.removedIn).toBe("1.0.0");
+    expect(invokesRemovedCommand('harness dry-run "x"')?.command).toBe("harness dry-run");
+    expect(invokesRemovedCommand("harness explain foo")?.command).toBe("harness explain");
+    const actionRow = REMOVED_COMMANDS.find((c) => c.command === "harness explain-action");
+    const policyRow = REMOVED_COMMANDS.find((c) => c.command === "harness explain-policy");
+    expect(invokesRemovedCommand("harness explain-action")?.command).toBe("harness explain-action");
+    expect(invokesRemovedCommand("harness explain-action event.json")?.reason).toBe(actionRow?.reason);
+    expect(invokesRemovedCommand("harness explain-policy")?.command).toBe("harness explain-policy");
+    expect(invokesRemovedCommand("harness explain-policy event.json")?.reason).toBe(policyRow?.reason);
+    // No space or hyphen boundary: a different verb, not a match.
+    expect(invokesRemovedCommand("harness explainer")).toBeUndefined();
+    expect(invokesRemovedCommand("harness audit")).toBeUndefined();
   });
 
   it("lists harness approve risk as one row, matched with its flags, and nothing else under approve (task 39c112e0)", () => {
