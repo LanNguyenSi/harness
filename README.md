@@ -10,10 +10,9 @@ hook scripts, per-project overrides. No single file answers "what can
 this agent do right now, and why is it set up that way?" `harness`
 puts all of it in one zod-validated YAML manifest you read, validate,
 and diff; generates the config the agent runtime loads from it; and at
-runtime blocks tool calls that violate the declared rules. Decisions
-of `policies[]` are recorded to an evidence ledger through
-grounding-mcp when it is wired; the branch-protection gate asks git and
-records nothing. Most config tools describe what an agent is configured
+runtime blocks tool calls that violate the declared rules. The
+branch-protection gate asks git and records nothing. Most config tools
+describe what an agent is configured
 to use; `harness` decides what it is allowed to do, under the exact
 context.
 
@@ -21,12 +20,11 @@ context.
 
 | Term | What it is |
 |------|-----------|
-| **manifest** | The one YAML file (`harness.yaml`) where you declare everything: tools, hooks, policies, memory. |
+| **manifest** | The one YAML file (`harness.yaml`) where you declare everything: tools, hooks, policy packs, memory. |
 | **apply** | `harness apply` renders the manifest into the config files the agent runtime actually reads. |
-| **policy** | A rule of the form *when the agent does X, require evidence Y*. Evaluated at runtime; can block the call. |
-| **evidence ledger** | An append-only log of facts an agent records during a session. Policies check it; `audit` / `explain` replay it. |
-| **hook** | A script the agent runtime runs at a lifecycle event (session start, before every tool call, ...). How policies get enforced. |
-| **policy pack** | A reusable bundle of policies, hooks, and templates shipped under one name and enabled with a single manifest key. |
+| **evidence ledger** | An append-only log of facts an agent records during a session. `audit` / `session-export` replay it. |
+| **hook** | A script the agent runtime runs at a lifecycle event (session start, before every tool call, ...). How gates get wired in. |
+| **policy pack** | A bundle of hooks, instructions, and templates shipped under one name and enabled with a single manifest key. |
 
 ## Quick start
 
@@ -51,9 +49,9 @@ wizard and the `solo` template, so the note below applies to it).
 
 The `solo`, `team` and `full` templates now ship the branch-protection
 pack (the understanding gate is no longer offered at install). The
-`team` and `full` templates and the `harness init --interactive` wizard
-still offer the reference policies (`solo` ships none). harness 1.0.0 removes all of these, so a new
-install should not adopt them.
+reference policies and the "pick reference policies" wizard step were
+removed in 1.0.0, so no template writes policies or policy-intercept
+hooks.
 
 The `post-merge-gate`, `solution-acceptance` and
 `understanding-before-execution` packs are removed, and so is the
@@ -79,12 +77,11 @@ operator controls are documented in
 
 ## Documentation
 
-- [`docs/for-humans.md`](docs/for-humans.md): operator path, install through first real policy, diagnostics cheat sheet (still starts from the wizard and the `solo` template; the Quick start note applies).
+- [`docs/for-humans.md`](docs/for-humans.md): operator path, install through the first refusing gate, diagnostics cheat sheet (still starts from the wizard and the `solo` template; the Quick start note applies).
 - [`docs/for-agents.md`](docs/for-agents.md): agent integration contract, workflow lifecycle, CLI cheat sheet by side-effect class.
 - [`docs/quickstart.md`](docs/quickstart.md): five-minute bare-command path to the `branch-protection` gate.
 - [`docs/init-interactive.md`](docs/init-interactive.md): the `harness init --interactive` wizard, walkthrough and limitations.
 - [`docs/CLI.md`](docs/CLI.md): every CLI verb, grouped by purpose.
-- [`docs/writing-custom-policies.md`](docs/writing-custom-policies.md): tripwires, worked recipes, and the policy field reference.
 - [`docs/runtime-reality-hook.md`](docs/runtime-reality-hook.md): blocking destructive runtime commands when live process state has drifted from what the docs expect.
 - [`docs/policy-packs/README.md`](docs/policy-packs/README.md): the built-in policy pack (`branch-protection`).
 - [`docs/uninstall.md`](docs/uninstall.md): the single-command teardown, dry-run by default.

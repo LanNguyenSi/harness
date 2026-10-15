@@ -3535,3 +3535,27 @@
   to state the demote-to-warning reality with the mutate-union citation.
   Two range attributions tightened (newErrors versus the throw site in
   src/cli/add/index.ts; the risk-gate sentence spans two lines).
+
+- 2026-10-15T14:04:01Z, task 16823ac4 (documentation truth pass after the
+  policy-engine removal): deleted `gate-fail-posture-matrix.md`,
+  `quote-model-divergence.md`, `policy-engine-producer-wiring.md` and
+  `debug-verb-selection.md` with their `index.md` entries (all four documented
+  the removed `policies:` engine, its shell-quote models, its producer wiring
+  and its debug verbs). Rewritten: `pause-vs-gate-kill-switch.md` (the three
+  `operator_only` deny policies, the enforcement layer and the two doctor drift
+  checks are gone, so the doc now states the CLI checks are the only guard and
+  re-anchors its `docs/for-humans.md` and `src/cli` citations),
+  `evidence-ledger-trust-boundary.md` (the invariant is now that no shipped
+  gate reads the ledger at all; the bounded-reader/writer paragraphs
+  unchanged), `manifest-validation-scope.md` (asset-check list rebuilt from
+  the current `runAssetChecks`; policy/workflow checks and their citations
+  dropped; add/remove/fail-closed citations re-pointed),
+  `codex-adapter-parity-gaps.md` (intercept plumbing, `--hook`, the 2s floor
+  and the script-side-filter warning items replaced by a gone-with-the-engine
+  item; uniform 1s `hookTimeoutSeconds` floor). `index.md`'s four removed
+  entries and stale summaries updated.
+  `npx okf-kit check docs/okf` re-run before and after; prose docs
+  (`README.md`, `docs/CLI.md`, `docs/for-agents.md`, `docs/for-humans.md`,
+  `docs/quickstart.md`, `docs/init-interactive.md`, `docs/ROADMAP.md`,
+  `docs/ARCHITECTURE.md`), `vitest.config.ts` and `CHANGELOG.md` were cleaned
+  in the same pass; `docs/writing-custom-policies.md` was deleted.

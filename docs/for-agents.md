@@ -2,8 +2,8 @@
 
 You are an agent (or the contributor onboarding one). harness is the
 thing your hooks are configured by. You do not speak to it directly at
-runtime; you read its outputs (`audit`, `explain --trace`,
-`session-export`) and you emit ledger entries that policies require.
+runtime; you read its outputs (`audit`, `session-export`) and you
+obey the hooks it wires.
 This doc is the integration contract.
 
 For the operator's view of the same system (install, `apply`, drift
@@ -11,251 +11,70 @@ handling), see [`for-humans.md`](for-humans.md).
 
 ## Orientation in three sentences
 
-1. The manifest declares hooks, policies, and workflows. `harness
+1. The manifest declares hooks and policy packs. `harness
    apply` materialises them into `settings.json`. Claude Code loads
    that and fires hooks at the events the manifest listed.
-2. When a policy hook fires, `harness policy intercept` evaluates the policy
-   against the evidence ledger. If the required `ledger_tag` has no
-   matching entry, the call is denied and the deny is recorded as a
-   `policy_decision` row.
-3. Your job, as the agent, is to log the evidence the policies
-   require: a `review:${PR_NUMBER}` entry before a merge, a
-   `dogfood:${SESSION_ID}` entry before a release, and so on. Do that
-   via `mcp__grounding-mcp__ledger_add` (or whatever ledger surface
-   the host repo provides).
+2. When a gate hook fires, it decides from its own source of truth.
+   The shipped one, branch-protection, asks git for the branch of the
+   directory the call writes into and refuses `Write` / `Edit` (or
+   `apply_patch` on Codex) when git names a protected branch; it
+   consults no ledger and keeps no override marker.
+3. Your job, as the agent, is to work the way the gate expects: cut a
+   feature branch (`git checkout -b <feature>`) before editing source
+   in a repository whose default branches are protected, and read the
+   deny message for the exact command to run.
 
-## Workflow lifecycle
-
-When the manifest declares a `workflows:` block (PR #66), the
-expected lifecycle for any unit of work you pick up walks the four
-step kinds the schema defines: `branch`, `review_subagent`,
-`ci_gate`, `merge`.
-
-```mermaid
-stateDiagram-v2
-    [*] --> claimed: claim work
-    claimed --> branch: workflow.steps[branch]
-    branch --> review_subagent: workflow.steps[review_subagent]
-    review_subagent --> branch: findings (on_findings: fix_then_remerge)
-    review_subagent --> pr_open: open PR
-    pr_open --> ci_gate: workflow.steps[ci_gate]
-    ci_gate --> merge: workflow.steps[merge]
-    merge --> [*]: workflow complete
-```
-
-Each state except `claimed` and `pr_open` corresponds to a step kind in the manifest.
-`branch` codifies the one-branch-per-task rule. `review_subagent`
-with `spawn: required` forces a checklist-driven review before the
-PR opens; if findings come back, the on_findings policy
-(`fix_then_remerge` by default) sends you back to the branch step
-to fix and re-review. `merge.gate: solo` (in soloMode projects) or
-`agent_tasks_label` (in dual-review projects) decides who is
-allowed to press the green button.
-
-If you skip the `review_subagent` step you are violating the
-workflow contract, and for the `merge` step specifically this can now
-be enforced at runtime: when a workflow declares a `review_subagent`
-step with `spawn: "required"` followed by a `merge` step, and the
-manifest's `hooks:` list declares BOTH `require-review-evidence` and
-`require-review-evidence-bash` (`src/cli/init/templates.ts`), `harness
-policy intercept` derives the same `review-before-merge` /
-`review-before-merge-bash` policy pair `harness init --template full`
-hand-authors and blocks `mcp__agent-tasks__pull_requests_merge` /
-`gh pr merge` until a `review:<pr-number>` or `review:<branch>` ledger
-entry exists for the session (`src/runtime/workflow-policies.ts`).
-The same mechanism covers the two task-scoped agent-tasks merge verbs
-when their hooks are declared as well: `require-review-evidence-task-merge`
-derives `review-before-task-merge` for `mcp__agent-tasks__task_merge`,
-and `require-review-evidence-task-finish` derives
-`review-before-task-finish-automerge` for `mcp__agent-tasks__task_finish`
-narrowed by `trigger.input_match` to `autoMerge: true`. Both key on
-`review:<task-id>`; a plain `task_finish` merges nothing and is not
-intercepted at all.
-`harness validate` errors if a workflow needs the gate but the two
-hooks are not correctly wired — missing entirely, or declared under
-the right name but bound to the wrong trigger surface or a `command`
-that isn't `harness policy intercept` — (`checkWorkflowGateWiring`),
-so "declared required, gate silently inert" cannot pass unnoticed;
-a warning names a weaker (or differently-extracting) hand-authored
-policy sharing the derived gate's trigger surface instead of letting
-it look like the only gate (`checkWorkflowGateWeakOverlap`); a
-hand-authored policy that is at least as strong and extracts the same
-variables replaces the derived pair outright. `harness list policies`
-and `harness doctor` show the derived pair marked "(derived from
-workflows[])"; `harness export` and the `.last-apply` snapshot carry
-only what you declared. This is scoped to the merge step
-only, but there it now covers all four merge surfaces:
-`mcp__agent-tasks__pull_requests_merge`, `gh pr merge`,
-`mcp__agent-tasks__task_merge`, and `mcp__agent-tasks__task_finish` in
-its `autoMerge: true` mode. Record the review ONCE with `harness record
-review --pr <pr> --task <task-id> "<summary>"` and the single fact it
-writes carries `review:<pr>`, `review:<branch>`, `review:<base>` and
-`review:<task-id>` together, so whichever surface you actually use is
-satisfied without predicting it in advance. Two operational notes: an
-install created before this landed picks up the two new template
-policies (and the two hooks that wire them into settings.json) only by
-re-running `harness init` / `harness apply`; and the workflows-derived
-form of the two task-scoped gates is produced only for a manifest that
-declares the matching hooks, since a derived gate whose hook is not in
-settings.json would never be invoked and would read as enforced while
-doing nothing. The `branch` and `ci_gate` steps, PR-open gating
-from `workflows:` itself (today only reachable via the separate
-hand-authored `review-subagent-before-pr-create` / `-bash` policies),
-step-ordering validation, and `when.task_label`/project-based workflow
-selection are NOT enforced by this mechanism and remain schema-only
-for now. And as with every ledger-tag gate, this is a process gate, not a
-hostile-agent-safe one (see
-[`docs/okf/evidence-ledger-trust-boundary.md`](okf/evidence-ledger-trust-boundary.md)):
-a session that can call `mcp__grounding-mcp__ledger_add` can write the
-`review:*` tag itself. The `review_templates:` block still tells you
-exactly what checklist a real review is supposed to work through. Use
-it.
-
-### If you use agent-tasks MCP
-
-harness does not depend on agent-tasks. The lifecycle above is
-generic; bind it to whatever task system you actually use. As one
-concrete example, an agent with `mcp__agent-tasks__*` connected
-maps the harness states to MCP verbs roughly like this: `claim
-work` is `task_start` (transitions the task to `in_progress`);
-`open PR` is `pull_requests_create`; `workflow complete` is
-`pull_requests_merge` (which today lands the task on `done` via
-the REST endpoint regardless of project mode). Other task systems
-(linear, jira, github projects) fit the same lifecycle by binding
-their own claim / open-PR / close-task verbs to the same harness
-steps.
-
-## Policy / ledger sequence
-
-A `PreToolUse` policy gate looks like this end to end:
-
-```mermaid
-sequenceDiagram
-    participant CC as Claude Code
-    participant Hook as harness policy intercept
-    participant Manifest as harness.yaml
-    participant Ledger as evidence-ledger
-    participant Audit as audit / explain / session-export
-
-    CC->>Hook: PreToolUse {tool_name, tool_input, session_id}
-    Hook->>Manifest: load policies matching tool
-    Hook->>Ledger: query ledger_tag for session_id
-    Ledger-->>Hook: matching entries
-    alt requires satisfied
-        Hook->>Ledger: write policy_decision (allow)
-        Hook-->>CC: allow
-    else requires not satisfied
-        Hook->>Ledger: write policy_decision (deny)
-        Hook-->>CC: {decision: block, hookSpecificOutput.permissionDecision: deny, reason}
-    end
-    Note over Audit,Ledger: read-side surfaces replay these rows
-```
-
-The runtime path is `harness policy intercept` (a subcommand under
-`policy`). The read-side surfaces (`audit`, `explain --trace`,
-`session-export`) never write; they replay `policy_decision` rows
-the runtime already recorded.
+(The policy engine, its ledger-tag gates and the `workflows:` block
+that derived review-gate policies were removed in 1.0.0; nothing
+ships `policies:` or policy-intercept hooks any more.)
 
 ## Agent-facing block messages (`ux:` block)
 
-When a policy denies your tool call, the runtime can render the
-deny envelope in one of two shapes. Which one you see is decided
-per-policy by whether the manifest declares a `ux:` block on that
-policy (or on the pack `config:` for pack-shipped blockers).
+When a gate hook denies your tool call, a pack blocker renders the
+deny envelope from the pack's `config.ux:` block if the manifest
+declares one (branch-protection ships one by default).
 
-**Legacy shape** (no `ux:` declared): the `permissionDecisionReason`
-text leaks engine vocabulary, e.g.
-
-```
-review-before-merge: no matching ledger entry for tag `review:42`
-```
-
-**Agent-facing shape** (`ux:` declared, default for every built-in
-block-enforcement policy and pack as of v0.17.x; the warn-only
-`two-reviewers-required` policy omits it because the agent never
-sees a warn): three sections, verbatim from
-`formatAgentFacingMessage` in `src/runtime/agent-facing.ts`:
+**Agent-facing shape** (`ux:` declared): three sections, verbatim from
+`renderAgentFacing` in `src/runtime/agent-facing.ts`:
 
 ```
-You cannot merge PR #42 yet.
+You cannot edit files on protected branch main yet.
 
 Required:
-- a recorded review of PR #42
+- a checkout of a non-protected branch (current `main` is protected)
 
 Run:
-  harness record review --pr 42 "<summary>"
+  git checkout -b feat/<your-task>
 ```
 
 The three sections always appear in the same order, with `- ` prefixes
 under `Required:` and a two-space indent under `Run:`. Read them as
-state (what is blocked), requirement (in plain words, never "ledger
-entry for tag X"), remedy (the exact command to type).
+state (what is blocked), requirement (in plain words), remedy (the
+exact command to type).
 
 ### What changes between the two readers
 
-The agent-facing shape replaces only the agent surface. The
-engine-internal model (session IDs, ledger entries, `recordHint`,
-`matchedCount`, `ledgerTag`, policy DAGs) is unchanged and still
-feeds the audit ledger, so `harness audit`, `harness explain
---trace`, and `harness session-export` keep their full trace. The
-operator-facing BLOCK reason (which names the session id, the
-missing tag, and which approval sources failed) stays on stderr.
-
-```
-┌──────────────────────────────────────┐    ┌──────────────────────────────────────┐
-│ Agent (stdout / hookOutput)          │    │ Operator (stderr / audit)            │
-├──────────────────────────────────────┤    ├──────────────────────────────────────┤
-│ You cannot merge PR #42 yet.         │    │ review-before-merge: no              │
-│                                      │    │ matching ledger entry for            │
-│ Required:                            │    │ tag `review:42`                      │
-│ - a recorded review of PR #42        │    │ within this session                  │
-│                                      │    │ (matchedCount: 0)                    │
-│ Run:                                 │    │ session: <uuid>                      │
-│   harness record review --pr 42 "<s>"│    │ → policy_decision row written        │
-└──────────────────────────────────────┘    └──────────────────────────────────────┘
-```
+The `ux:` shape replaces only the agent surface. The operator-facing
+diagnostic (which names the directory git was asked about and the
+protected list) stays on stderr, so the operator keeps the engine
+detail the plain-language message leaves out.
 
 ### `${VAR}` substitution context
 
-`cannot`, `required[]`, and `run[]` are templates. `${VAR}`
-references resolve against the same `extract.values` map the
-policy's `ledger_tag` was substituted with, plus the builtins,
-which are available even when the policy declares no `trigger.extract`:
-
-| Variable | Source |
-|---|---|
-| `${SESSION_ID}` | Claude Code session id |
-| `${REPO}` | basename of the git worktree root (`git rev-parse --show-toplevel`), so a subdirectory of a checkout still resolves to the repo name; `""` when not in a git repo. An empty `${REPO}` never renders a blank ledger tag: a gate whose `requires.ledger_tag` references it decides from the policy's own `enforcement:` with a reason that names `cd <repo>` or `git -C <repo> ...`, and queries no ledger |
-| `${BRANCH}` | branch name from git HEAD; `""` on a detached HEAD or outside a git worktree (there is no `(detached)` placeholder). An empty `${BRANCH}` never renders a blank ledger tag: a gate whose `requires.ledger_tag` references it decides from the policy's own `enforcement:` with a reason that names `git switch <branch>`, and queries no ledger |
-| `${TOOL_NAME}` | the tool the agent invoked |
-| `${CWD}` | the agent's working directory |
-| `${PR_NUMBER}`, `${TASK_ID}`, ... | per-policy `trigger.extract` keys |
-
-Pack-shipped blockers add their own context. `branch-protection`
-substitutes `${BRANCH}` with the branch git names for the target.
-Unresolved references are left literal so the agent
-can still read what was expected.
-
-### Producers are suppressed when `ux:` is set
-
-A policy with both `producers:` and `ux:` shows only the `ux:`
-shape on the agent surface. The `run:` list is the canonical
-remedy; rendering both would give you two different command
-suggestions for the same block. `producers:` still feeds
-`harness explain --trace` for operator-side diagnostics.
+`cannot`, `required[]`, and `run[]` are templates. `branch-protection`
+substitutes `${BRANCH}` with the branch git names for the target, plus
+`${TOOL_NAME}` and `${SESSION_ID}`. Unresolved references are left
+literal so the agent can still read what was expected.
 
 ### When you encounter a block
 
 1. Read the three sections in order: state, requirement, remedy.
-2. Run the `Run:` command. If it is a bare `harness ...` invocation,
-   the Bash gate accepts it; if it is an `mcp__grounding-mcp__ledger_add`
-   recipe, write it via the MCP tool (the ungated recovery path when
-   Bash is locked down).
+2. Run the `Run:` command (for branch-protection: `git checkout -b
+   feat/<your-task>`).
 3. Retry the original tool call. The same call goes straight through
    once the requirement is satisfied, no restart needed.
 4. If you cannot satisfy the requirement, ask the operator. The
-   stderr diagnostic gives them the engine-vocabulary detail to
-   debug from.
+   stderr diagnostic gives them the detail to debug from.
 
 ## CLI cheat sheet
 
@@ -269,14 +88,12 @@ operator-driven flows.
 | Verb | Side effect | Notes |
 |------|------|------|
 | `describe` | read-only | effective merged manifest as YAML or JSON. `--pillar` filters. |
-| `list <category>` | read-only | flat row-per-entry table. categories: mcp, cli, skills, memories, hooks, policies, workflows. |
+| `list <category>` | read-only | flat row-per-entry table. categories: mcp, cli, skills, memories, hooks (`policies` and `workflows` were removed in 1.0.0). |
 | `validate` | read-only | schema + asset checks. `--check-lock` adds drift detection. |
 | `doctor` | read-only | health summary. `--shallow` skips MCP probes. |
 | `diff` | read-only | manifest vs git ref or `--since-apply` last-rendered output. |
-| `audit` | read-only | replays recent `policy_decision` rows from the ledger. |
-| `explain [policy]` | read-only | per-policy trace. `--last` resolves the most recent decision in this session. |
+| `audit` | read-only | replays `policy_decision` rows from the ledger (written by pre-1.0.0 releases). |
 | `session-export <sid>` | read-only | joins the on-disk transcript JSONL with ledger rows for the session, redacts secrets, emits json/jsonl. |
-| `dry-run <prompt>` | read-only | predicts which hooks fire and which policies match for a prompt + tool, without ledger I/O. |
 | `apply` | mutating | renders manifest to `harness.generated/` (or `--target`), updates `harness.lock`. |
 | `add` | mutating | mutates `harness.yaml` in place to add an mcp / cli / skill / hook entry. |
 | `remove` | mutating | removes an entry by type + name from the manifest. |
@@ -284,28 +101,21 @@ operator-driven flows.
 | `init --interactive` | mutating | operator-facing wizard (`@inquirer/prompts`). Detects env, picks a profile, writes the manifest. Not for agent driver scripts. |
 | `init --probe` | read-only | prints a JSON snapshot of detected runtimes + MCPs + manifest; no writes. |
 | `adopt` | mutating | reverse engineers a manifest from an existing settings.json. |
-| `export` | read-only (writes a file only with `-o <file>`) | prints the operator-declared manifest (overrides merged, workflows[]-derived policies omitted) to stdout; `-o <file>` writes it to a file instead. |
+| `export` | read-only (writes a file only with `-o <file>`) | prints the operator-declared manifest (overrides merged) to stdout; `-o <file>` writes it to a file instead. |
 | `pack add / remove / list / reseed` | mutating (add/remove/reseed), read-only (list) | manages `policy_packs:` entries in the manifest. One builtin pack: `branch-protection`. `reseed <name>` pulls the shipped template's config back onto a drifted entry. |
 | `doctor --target codex` | read-only | verifies Codex adapter wiring after `apply --runtime codex`. `--json` for machine-readable output. |
 | `doctor --target opencode` | read-only | verifies opencode adapter wiring after `apply --runtime opencode` (config artefact presence/banner + every projected MCP server's command resolves on PATH). `--json` for machine-readable output. |
-| `policy intercept` | runtime hook | called by Claude Code via `settings.json`, not directly by agents. |
-| `record review / review-subagent / dogfood` | writes one ledger fact | producers for the review and dogfood gates; see "Tag semantics" in [`CLI.md`](CLI.md). |
 | `smoke` | mutating | runs a real `claude -p` session against the applied manifest; needs `--prompt` and `--output-dir`. |
 
-## The audit triumvirate
+## Reading the ledger back
 
-Three CLI surfaces read the ledger. Pick the right one for the
+Two CLI surfaces read the evidence ledger. Pick the right one for the
 question you are asking.
 
 - `harness audit --since 1h [--policy <name>] [--outcome deny]`. "What
-  decisions fired recently?" Returns one row per `policy_decision`,
-  sorted chronologically. Good for "is this gate even firing?" or
-  "show me everything that has been denied today".
-- `harness explain --last` (or `harness explain <policy> --trace`).
-  "Why did this exact decision land where it did?" Walks the requires
-  evaluator: which entries were considered, which `within:` window
-  applied, what extracted variables resolved to. Good for "I just got
-  a deny and I do not understand which entry was missing".
+  decisions were recorded?" Returns one row per `policy_decision`,
+  sorted chronologically. The policy engine that wrote those rows was
+  removed in 1.0.0, so this now replays the historical ledger.
 - `harness session-export <sessionId>`. "Reconstruct the entire
   session as one chronological audit artifact." Joins the on-disk
   Claude Code transcript JSONL (prompts, tool_use blocks, tool_result
@@ -315,20 +125,17 @@ question you are asking.
   actually happened in session X".
 
 If a teammate asks "what did the agent do in this session", reach
-for `session-export`. If they ask "why did this gate fire", reach for
-`explain --trace`. If they ask "is the gate firing at all today",
-reach for `audit`.
+for `session-export`. If they ask "why did this gate fire", read the
+hook's stderr: the shipped gates decide at call time and say their
+reason there.
 
 ## Things you must NOT do as an agent
 
-- Do not skip the `review_subagent` step in the workflow. The
-  rigorous-review checklist exists because batch-approval drift has
-  cost real merges in the past.
 - Do not bypass hook scripts with `--no-verify` or by editing the
   generated `settings.json` directly. If a hook is failing, the fix
-  is to fix the hook (or the policy), not to silence it.
-- Do not swallow stderr from `harness policy intercept`. The `--verbose`
-  diagnostic block is the canonical "why did this fire" output.
+  is to fix the hook, not to silence it.
+- Do not swallow hook stderr. It carries the reason a gate refused or
+  degraded, and it is the first thing the operator will ask for.
 - Do not force-push to `master`, even when you "are sure". The
   workflow always cuts a fresh branch off the latest master.
 - Do not hand-edit `harness.generated/`. The next `apply` refuses
@@ -347,7 +154,6 @@ reach for `audit`.
   (historical); [`docs/CLI.md`](CLI.md) is the current command
   reference and `src/schema/` the current schema.
 - [`docs/examples/full-manifest.yaml`](examples/full-manifest.yaml):
-  a manifest exercising every field, including `workflows:`,
-  `review_templates:`, and `audit.redact[]`.
+  a manifest exercising every field, including `audit.redact[]`.
 - [`CHANGELOG.md`](../CHANGELOG.md): what shipped when, with the PR
   number that introduced each surface.

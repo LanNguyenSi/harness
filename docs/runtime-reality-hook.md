@@ -34,7 +34,7 @@ hooks:
 
 > `harness init --template full` ships this exact entry **commented out** under `hooks:`, so you can discover and enable it in place rather than authoring it from scratch. It stays commented because an active entry without the three env values above would degrade to a silent allow (a no-op that looks like protection).
 
-Note: the trigger matching runs inside the hook binary, so the entry needs no `bash_match`. The hook self-filters to the destructive command set and short-circuits everything else.
+Note: the trigger matching runs inside the hook binary, so the entry needs no trigger-side match field. The hook self-filters to the destructive command set and short-circuits everything else.
 
 ## 2. Write the expectations file
 

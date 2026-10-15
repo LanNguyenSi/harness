@@ -125,12 +125,14 @@ controls are documented in
 
 ## A note on the other templates and packs
 
-`harness init --template team|full` and the
-`harness init --interactive` wizard still offer more than
-branch-protection: the reference policies (review, dogfood and deny
-policies; `solo` ships none). The understanding gate is no longer
-offered at install. harness 1.0.0 removes all of these, so a new
-install should not adopt them. Start from the path above instead.
+1.0.0 removed the reference policies (review, dogfood and deny
+policies), the understanding gate, and every other install-time gate
+except branch-protection. The `team` and `full` templates and the
+`harness init --interactive` wizard now add only MCP servers, the
+tool inventory and memory wiring on top of the `solo` baseline; no
+template ships policies or policy-intercept hooks. If you are reading
+a pre-1.0.0 walkthrough that expects those, this is the section that
+changed.
 
 The `post-merge-gate` pack is already removed: a manifest that still
 names it loads with a warning and the entry is ignored.
