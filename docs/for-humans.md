@@ -188,11 +188,12 @@ flowchart TD
 The shipped gate is `branch-protection`: a `PreToolUse` hook that asks
 git for the branch of the directory each `Write` / `Edit` (or
 `apply_patch` on Codex) call writes into, and refuses when git names a
-protected branch (default: `master`, `main`, `develop`). Enable it and
-render the config:
+protected branch (default: `master`, `main`, `develop`). The `solo`,
+`team` and `full` templates of `harness init` already enable it; on a
+`minimal` or hand-written manifest add it with
+`harness pack add branch-protection`. Then render the config:
 
 ```bash
-harness pack add branch-protection
 harness validate
 harness apply --target ~/.claude/settings.json --merge   # Claude Code; then restart it
 ```

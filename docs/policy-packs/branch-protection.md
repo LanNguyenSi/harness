@@ -140,9 +140,8 @@ and every git error refuse the call. The stderr diagnostic
 (`harness pack hook branch-protection: BLOCK: ...`) names the directory
 and what git said, for operator audit.
 
-This is the inverse of `understanding-before-execution`'s fail-open
-contract. The whole job of this pack is preventing edit-on-master
-incidents; a bug that silently allowed Writes through would defeat
+The pack fails closed on purpose. Its whole job is preventing
+edit-on-master incidents; a bug that silently allowed Writes through would defeat
 the purpose.
 
 A manifest that still carries a key or a pack a newer release removed

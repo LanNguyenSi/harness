@@ -119,7 +119,7 @@ Variables the `harness` binary reads. For the `RUNTIME_REALITY_*` variables of t
 - `harness doctor` now exits non-zero (`1`) whenever the report has `errorCount > 0`, in both prose and `--json` output; previously it always exited `0` regardless of errors, so CI/scripts had no way to gate on doctor health (task a07b379a). Warnings-only reports (`warningCount > 0`, `errorCount === 0`) are unaffected and still exit `0`; this pass intentionally does not add a `--strict` flag to promote warnings to errors. Non-interactive `harness init` is unrelated and unchanged: it keeps its existing loud-stderr-but-exit-0 contract.
 - Since `v0.36.0`: `harness doctor --rm-rogue-ledgers` (with `--yes` to skip the per-hit prompt) opts into deleting rogue evidence-ledger directories that doctor reports.
 - Since `v0.34.0`: `apply --yes` (skip the `--overwrite-drift` confirmation) and non-TTY guards on the `apply`/`adopt` confirmation prompts (they refuse instead of hanging; piped `echo yes |` confirmations no longer work, use `--yes`).
-- The `review:` ledger tag vocabulary belonged to the gate-mode policies removed in 1.0.0 (with the `harness record` verbs that wrote the tags). The branch-protection gate consults no ledger tag at all since task `a4d8adc5`; it asks git.
+- The `review:` ledger tag vocabulary belonged to the gate-mode policies removed in 1.0.0 (with the `harness record` verbs that wrote the tags). The branch-protection gate consults no ledger tag at all; it asks git.
 
 ### `--project` name validation
 

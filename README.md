@@ -44,8 +44,8 @@ until it cuts a feature branch (`git checkout -b <feature>`). Codex runs
 the new hooks only once you trust them in its startup hook review. The
 step-by-step version, with what each command writes:
 [`docs/quickstart.md`](docs/quickstart.md). Full operator walkthrough:
-[`docs/for-humans.md`](docs/for-humans.md) (it still starts from the
-wizard and the `solo` template, so the note below applies to it).
+[`docs/for-humans.md`](docs/for-humans.md) (it starts from the wizard
+and the `solo` template).
 
 The `solo`, `team` and `full` templates now ship the branch-protection
 pack (the understanding gate is no longer offered at install). The
