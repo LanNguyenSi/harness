@@ -1878,13 +1878,12 @@ describe("apply — grounding-mcp policy-degradation gate (discovery H3)", () =>
   });
 });
 
-// Review round 3 (99f47307 Slice 1): the `.last-apply` manifest snapshot
-// serialised the DERIVED view (hand-authored plus workflows[]-derived
-// policies). It now stores the hand-authored view and the restart-hint
-// reader re-derives, so the comparison is derived-vs-derived by the same
-// code and a snapshot written before the derivation existed cannot emit
-// a one-time phantom "hooks changed" hint.
-describe("apply — workflows[]-derived policies and the .last-apply snapshot (review round 3)", () => {
+// The `.last-apply` manifest snapshot stores the manifest exactly as it
+// loaded (a manifest that declares `workflows:` still yields an empty
+// `policies:` snapshot), and the restart-hint reader parses the stored
+// content the same way, so re-applying an unchanged manifest emits no
+// hints.
+describe("apply — the .last-apply snapshot with a workflows[] manifest (review round 3)", () => {
   function writeWorkflowManifest(withGroundingMcp = true): void {
     const groundingMcp = withGroundingMcp
       ? "  mcp:\n    - name: grounding-mcp\n      command: [node, /x/grounding.js]\n"
@@ -1927,16 +1926,6 @@ policies: []
       "utf8",
     );
   }
-
-  it("refuses a required workflow-derived evidence gate without grounding-mcp before writing settings", async () => {
-    writeWorkflowManifest(false);
-    await expect(apply({ homeDir: tmpHome })).rejects.toMatchObject({
-      name: "HarnessExitError",
-      exitCode: 1,
-      message: expect.stringMatching(/evidence-consuming policies declared but grounding-mcp not wired/),
-    });
-    expect(fs.existsSync(settingsPath())).toBe(false);
-  });
 
   it("stores only hand-authored policies in the snapshot, and a second apply emits no restart hint", async () => {
     writeWorkflowManifest();

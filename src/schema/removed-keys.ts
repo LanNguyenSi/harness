@@ -177,8 +177,8 @@ export interface StrippedManifest {
 
 /**
  * The index in the manifest as written for index `k` of the stripped array.
- * An index past the kept entries (an entry appended after the parse, such as
- * a workflow-derived policy) keeps its distance from the end.
+ * An index past the kept entries (an entry appended after the parse) keeps
+ * its distance from the end.
  */
 export function originalIndex(map: IndexMap | undefined, k: number): number {
   if (map === undefined) return k;
