@@ -93,6 +93,9 @@ describe("REMOVED_COMMANDS table (task f3f15290)", () => {
     expect(explainRow).toBeDefined();
     expect(dryRunRow?.removedIn).toBe("1.0.0");
     expect(explainRow?.removedIn).toBe("1.0.0");
+    // The reason is what validate, doctor and apply print to the operator.
+    expect(dryRunRow?.reason).toBe("the policy engine's debug verbs are removed");
+    expect(explainRow?.reason).toBe("the policy engine's debug verbs are removed");
     expect(invokesRemovedCommand('harness dry-run "x"')?.command).toBe("harness dry-run");
     expect(invokesRemovedCommand("harness explain foo")?.command).toBe("harness explain");
     const actionRow = REMOVED_COMMANDS.find((c) => c.command === "harness explain-action");
