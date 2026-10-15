@@ -523,7 +523,7 @@ describe("removed Risk Gate keys", () => {
       expect(remapDiagnosticPath("policies[1]", maps)).toBe("policies[3]");
       expect(remapDiagnosticPath("policies.1.name", maps)).toBe("policies.3.name");
       expect(remapDiagnosticPath("policies[0].producers[0].command", maps)).toBe("policies[1].producers[0].command");
-      // Past the kept entries: a derived policy appended after the parse.
+      // Past the kept entries: an entry appended after the parse.
       expect(remapDiagnosticPath("policies[2]", maps)).toBe("policies[4]");
       expect(remapDiagnosticPath("policy_packs[1]", maps)).toBe("policy_packs[1]");
       expect(remapDiagnosticPath("policies", maps)).toBe("policies");

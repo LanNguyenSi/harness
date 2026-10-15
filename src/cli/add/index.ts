@@ -11,7 +11,6 @@ import {
 } from "../../io/validate-before-write.js";
 import { parseManifestWithWarnings } from "../../schema/index.js";
 import { remapDiagnosticPath } from "../../schema/removed-keys.js";
-import { withDerivedPolicies } from "../../runtime/workflow-policies.js";
 import { runAssetChecks } from "../validate/checks.js";
 import { fmtDiagnostic } from "../validate/types.js";
 import { EX_FAIL, EX_NOINPUT, HarnessExitError } from "../exit-codes.js";
@@ -78,19 +77,11 @@ export async function add(action: AddEntry, opts: AddOptions = {}): Promise<AddR
   // Asset gate — surfaces hook +x failures, missing required CLIs, etc.
   // We use parseManifest (not the result of validateBeforeWrite) so we have a
   // typed Manifest for runAssetChecks. defaults flow through. Both this and
-  // the baseline below take the DERIVED view (workflows[]-derived policies
-  // folded in), the same view `harness validate` checks, so the gate here
-  // and validate cannot disagree about what "declared" means (review round
-  // 3, 99f47307 Slice 1); the derived entries cancel out in the baseline
-  // comparison unless the add itself changes what is derived. This is
-  // consistency-only, not a behavioral difference today: no error-severity
-  // check in runAssetChecks reads manifest.policies, so no fixture that
-  // parseManifest alone would pass and withDerivedPolicies would fail is
-  // known to exist right now (review round 3, F2). The derived view is
-  // kept as a parity pin against validate, and to stay correct the moment
-  // a future check does read manifest.policies at error severity.
+  // the baseline below take the manifest exactly as the operator wrote it,
+  // the same view `harness validate` checks, so the gate here and validate
+  // cannot disagree about what "declared" means.
   const proposedParsed = parseManifestWithWarnings(parseYaml(proposed));
-  const manifest = withDerivedPolicies(proposedParsed.manifest);
+  const manifest = proposedParsed.manifest;
   // Diagnostics index the parsed manifest, where a dropped policy or pack no
   // longer holds its slot: name the index as written, like `harness validate`.
   const proposedErrors = runAssetChecks(manifest, {
@@ -106,7 +97,7 @@ export async function add(action: AddEntry, opts: AddOptions = {}): Promise<AddR
   let baselineKeys = new Set<string>();
   try {
     const baselineParsed = parseManifestWithWarnings(parseYaml(original));
-    const baselineManifest = withDerivedPolicies(baselineParsed.manifest);
+    const baselineManifest = baselineParsed.manifest;
     const baselineErrors = runAssetChecks(baselineManifest, {
       homeDir: opts.homeDir,
     })

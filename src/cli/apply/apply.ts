@@ -62,7 +62,6 @@ import {
 } from "../../policy-packs/index.js";
 import { parseManifest, type Manifest } from "../../schema/index.js";
 import { formatPostureWarning, originalIndex } from "../../schema/removed-keys.js";
-import { withDerivedPolicies, withoutDerivedPolicies } from "../../runtime/workflow-policies.js";
 import { checkPolicyGroundingMcp } from "../validate/checks.js";
 import { EX_FAIL, EX_NOINPUT, HarnessExitError } from "../exit-codes.js";
 import { loadManifest } from "../loader.js";
@@ -720,14 +719,10 @@ function buildPrevManifestForHints(record: LastApplyRecord | null): Manifest | n
     return null;
   }
   try {
-    // The snapshot stores the HAND-AUTHORED view (see
-    // buildMergedLastApplyRecord); fold the workflows[]-derived policies
-    // back in with the CURRENT derivation so both sides of
-    // `emitRestartHints` are the same view. A snapshot written by a
-    // release that predates the derivation therefore compares equal to
-    // today's manifest instead of emitting a one-time phantom "hooks
-    // changed" hint (task 99f47307, Slice 1).
-    return withDerivedPolicies(parseManifest(parsed));
+    // The snapshot stores the manifest exactly as the current load parses
+    // it, so parsing the stored content here yields the SAME view the
+    // restart-hint comparison runs against on the live side.
+    return parseManifest(parsed);
   } catch {
     return null;
   }
@@ -762,11 +757,10 @@ function buildMergedLastApplyRecord(
       if (next.files[relPath] === undefined) next.files[relPath] = entry;
     }
   }
-  // Serialise the hand-authored view only: a derived policy stored as if
-  // the operator had declared it would be re-derived on top of itself on
-  // the next read, and the `isDerivedPolicy` identity does not survive a
-  // JSON round-trip anyway. `buildPrevManifestForHints` re-derives.
-  const manifestSnapshotJson = JSON.stringify(withoutDerivedPolicies(manifest));
+  // Serialise the manifest as loaded: `buildPrevManifestForHints` parses
+  // the stored content with the same schema, so both sides of
+  // `emitRestartHints` compare the same view of the manifest.
+  const manifestSnapshotJson = JSON.stringify(manifest);
   next.manifest = {
     sha256: sha256Hex(manifestSnapshotJson),
     content: manifestSnapshotJson,
@@ -836,10 +830,8 @@ export async function apply(opts: ApplyOptions = {}): Promise<ApplyResult> {
         .map((d) => d.message)
         .join(
           "; ",
-        )}. This count includes policies derived from workflows[] (a review_subagent step ` +
-        `with spawn: "required" before a merge step) as well as hand-authored ones under ` +
-        `policies:. Wire grounding-mcp under tools.mcp, or remove the evidence-consuming policies (for a derived ` +
-        `policy, set the workflow's spawn to "optional" or "skip" instead). Run \`harness ` +
+        )}. Wire grounding-mcp under tools.mcp, or remove the evidence-consuming ` +
+        "policies. Run `harness " +
         "validate` for the full report.",
       EX_FAIL,
     );

@@ -17,7 +17,6 @@ import {
 import { readTextFileBoundedOrThrow } from "../io/read-regular-file.js";
 import { resolveHomeDir } from "../runtime/home-dir.js";
 import { isValidProjectName } from "../runtime/git-context.js";
-import { withDerivedPolicies } from "../runtime/workflow-policies.js";
 import { EX_NOINPUT, HarnessExitError } from "./exit-codes.js";
 
 export interface LoaderOptions {
@@ -262,21 +261,6 @@ export function loadManifest(opts: LoaderOptions = {}): LoadedManifest {
     }
     throw err;
   }
-
-  // 99f47307 Slice 1: turn `workflows:` into runtime enforcement by
-  // appending the derived review-before-merge policy pair (when the two
-  // evidence hooks are wired) to `manifest.policies` right after parse,
-  // so every `loadManifest` caller sees them with no `harness apply`
-  // round-trip: `harness policy intercept` (the actual PreToolUse
-  // enforcement entrypoint, src/cli/policy/intercept.ts), `harness list
-  // policies`, `harness explain[-policy]`, and `harness doctor` all load
-  // the manifest through this function. `withDerivedPolicies` (F2, review
-  // round 2) is the single place this append happens now — `src/cli/
-  // validate/index.ts` calls the same function so `validate` sees the
-  // identical effective policy set `apply` does, instead of diverging.
-  // See src/runtime/workflow-policies.ts for the derivation and its fail
-  // direction (missing hooks -> no policy derived, not a silent allow).
-  manifest = withDerivedPolicies(manifest);
 
   return {
     manifest,

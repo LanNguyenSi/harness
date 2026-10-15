@@ -140,14 +140,6 @@ export interface PolicyEntryReport {
   caveat: string;
   /** Present when this policy has an unproduced freshness-gated tag. */
   producerGap?: PolicyProducerGap;
-  /**
-   * True when this policy object was derived from `workflows[]`
-   * (`isDerivedPolicy`, F7, review round 2) rather than hand-authored
-   * under `policies:`. Rendered as "(derived from workflows[])" so an
-   * operator reading `harness doctor` output can tell provenance apart
-   * without cross-referencing `workflows:` themselves.
-   */
-  derived?: boolean;
 }
 
 /**
@@ -232,39 +224,6 @@ export interface PolicyPacksSection {
   configIssues: PolicyPackConfigIssue[];
   versionGaps: PolicyPackVersionGapReport[];
   uxDrift: PolicyPackUxDriftReport[];
-}
-
-export interface WorkflowEntryReport {
-  name: string;
-  steps: number;
-  reviewSpawn: "required" | "optional" | "skip" | null;
-  reviewTemplate: string | null;
-  mergeGate: "solo" | "agent_tasks_label" | "none" | null;
-  taskLabels: string[];
-}
-
-export interface WorkflowsSectionReport {
-  declared: number;
-  templates: number;
-  entries: WorkflowEntryReport[];
-  /**
-   * `checkWorkflowGateWiring` errors (F3, review round 2, 99f47307 Slice
-   * 1): a `spawn: "required"` review-then-merge workflow whose runtime
-   * merge gate is not correctly wired (a missing evidence hook, or one
-   * declared under the right name but the wrong trigger surface/command).
-   * `harness doctor` previously imported checks selectively and never ran
-   * this one, so it showed green on exactly this misconfiguration.
-   * Delegates to the shared validate check, mirroring `templateDrift`.
-   * Each rolls into `errorCount`.
-   */
-  errors: string[];
-  /**
-   * `checkWorkflowGateWeakOverlap` warnings (F1, review round 2): a
-   * hand-authored policy sharing a derived gate's trigger surface but
-   * weaker than it (does not suppress the derived gate, just worth
-   * flagging). Each rolls into `warningCount`.
-   */
-  warnings: string[];
 }
 
 /**
@@ -381,7 +340,6 @@ export interface DoctorReport {
    * 04b8abcf). Always present.
    */
   packExpansionRuntime: PackExpansionRuntimeReport;
-  workflows: WorkflowsSectionReport;
   /**
    * Template-policy drift (task adf037c1): shipped operator_only security
    * policies missing-or-downgraded in this installed manifest (`errors`)

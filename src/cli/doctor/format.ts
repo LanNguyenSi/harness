@@ -239,18 +239,15 @@ function formatPackExpansionRuntimeSection(report: DoctorReport): string[] {
 function formatPoliciesSection(report: DoctorReport): string[] {
   const out: string[] = ["", "Policies"];
   for (const p of report.policies) {
-    // F7 (review round 2): mark derived-from-workflows[] provenance so
-    // this list does not read as though every policy was hand-authored.
-    const provenance = p.derived ? " (derived from workflows[])" : "";
     if (p.producerGap) {
       out.push(
-        `  ⚠ ${p.name}${provenance}  requires fresh \`${p.producerGap.ledgerTag}\` (within ${p.producerGap.within}) but no manifest hook produces it AND the policy declares no \`producers:\` array`,
+        `  ⚠ ${p.name}  requires fresh \`${p.producerGap.ledgerTag}\` (within ${p.producerGap.within}) but no manifest hook produces it AND the policy declares no \`producers:\` array`,
       );
       out.push(
         `      the gate will block its trigger until the tag is supplied out-of-band; add a producer hook (e.g. a SessionStart runner) OR document the manual recovery path in the policy's \`producers:\` array`,
       );
     } else {
-      out.push(`  ✓ ${p.name}${provenance}  ${p.caveat}`);
+      out.push(`  ✓ ${p.name}  ${p.caveat}`);
     }
   }
   if (report.policies.length === 0) out.push(`  (no policies declared)`);
@@ -299,29 +296,6 @@ function formatPolicyPacksSection(report: DoctorReport): string[] {
   for (const drift of uxDrift) {
     out.push(`  ⚠ ${drift.name}.config.${drift.fields.join("/")}  ${drift.message}`);
   }
-  return out;
-}
-
-function formatWorkflowsSection(report: DoctorReport): string[] {
-  const w = report.workflows;
-  if (w.declared === 0 && w.templates === 0) return [];
-  const out: string[] = ["", "Workflows"];
-  out.push(
-    `  ${w.declared} declared, ${w.templates} review template${w.templates === 1 ? "" : "s"}`,
-  );
-  for (const e of w.entries) {
-    const review = e.reviewSpawn
-      ? `review: ${e.reviewSpawn}${e.reviewTemplate ? ` (${e.reviewTemplate})` : ""}`
-      : "no review_subagent step";
-    const merge = e.mergeGate ? `, merge.gate: ${e.mergeGate}` : "";
-    const labels = e.taskLabels.length > 0 ? `, labels: ${e.taskLabels.join(",")}` : "";
-    out.push(`  ✓ ${e.name}  ${e.steps} steps, ${review}${merge}${labels}`);
-  }
-  // Runtime merge-gate wiring health (F3 errors / F1 warnings, review
-  // round 2, 99f47307 Slice 1). Rendered inline in the same section as
-  // the declared workflows, above.
-  for (const m of w.errors) out.push(`  ✗ ${m}`);
-  for (const m of w.warnings) out.push(`  ⚠ ${m}`);
   return out;
 }
 
@@ -483,7 +457,6 @@ export function format(report: DoctorReport): string {
   lines.push(...formatPackExpansionRuntimeSection(report));
   lines.push(...formatPoliciesSection(report));
   lines.push(...formatPolicyPacksSection(report));
-  lines.push(...formatWorkflowsSection(report));
   lines.push(...formatTemplateDriftSection(report));
   lines.push(...formatTriggerBoundaryDriftSection(report));
   lines.push(...formatHookBudgetLedgerMarginSection(report));

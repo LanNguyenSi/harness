@@ -268,7 +268,10 @@ import * as path from "node:path";
 // above: the `cli/register-record-session-group.ts` the toolchain-parity and
 // stale-base-check raise notes cite was deleted by this task; the notes stay
 // as the history of the measurements they recorded.
-const MAX_CLONES = 39;
+// Lowered to 37 (task e62f03ea): removing the workflows[] policy derivation
+// and its validate/doctor readers; the check reports 37 with that change
+// (the pin was 39).
+const MAX_CLONES = 37;
 
 // Sets process.exitCode instead of calling process.exit so the caller's
 // finally-cleanup runs on every path (process.exit skips stack unwinding).

@@ -33,10 +33,8 @@ import {
   checkHookBudgetLedgerMargin,
   checkTemplatePolicyDrift,
   checkTriggerBoundaryDrift,
-  checkWorkflows,
 } from "../validate/checks.js";
 import type { Diagnostic } from "../validate/types.js";
-import { isDerivedPolicy } from "../../runtime/workflow-policies.js";
 import { loadManifest, type LoaderOptions } from "../loader.js";
 import {
   countCodexDiagnostics,
@@ -542,13 +540,6 @@ function buildPolicies(manifest: Manifest): PolicyEntryReport[] {
       name: p.name,
       schemaValid: true,
       caveat: "schema valid; last-evaluated tracking ships in Phase 4",
-      // F7 (review round 2): mark provenance so the rendered list can
-      // append "(derived from workflows[])" instead of listing a
-      // workflow-derived policy indistinguishably from a hand-authored
-      // one. `doctor` loads via `loadManifest`, which now folds derived
-      // policies in via `withDerivedPolicies` (F2), so this manifest's
-      // `policies[]` already contains them.
-      ...(isDerivedPolicy(p) ? { derived: true } : {}),
     };
     // Producer-gap check (task ce50df99): a `block` policy whose
     // required tag carries a `within` freshness window cannot stay
@@ -659,37 +650,6 @@ function buildPolicyPacks(
     message: drift.message,
   }));
   return { unresolved, configIssues, versionGaps, uxDrift };
-}
-
-function buildWorkflows(manifest: Manifest): import("./types.js").WorkflowsSectionReport {
-  const entries = manifest.workflows.map((wf) => {
-    const review = wf.steps.find((s) => s.kind === "review_subagent");
-    const merge = wf.steps.find((s) => s.kind === "merge");
-    return {
-      name: wf.name,
-      steps: wf.steps.length,
-      reviewSpawn: review?.kind === "review_subagent" ? review.spawn : null,
-      reviewTemplate:
-        review?.kind === "review_subagent" ? (review.template ?? null) : null,
-      mergeGate: merge?.kind === "merge" ? merge.gate : null,
-      taskLabels: wf.when.task_label ?? [],
-    };
-  });
-  // F3 (review round 2, 99f47307 Slice 1): doctor previously imported
-  // validate's workflow-gate check nowhere, so a spawn: "required"
-  // workflow with the merge gate unwired (or wired to the wrong hook
-  // trigger, F5) showed green here even though `harness validate` errors
-  // on it. Delegates to the shared `checkWorkflows` aggregate (review
-  // round 3: the one list validate runs too, so the two cannot drift
-  // again), mirroring `buildTemplateDrift` / `buildTriggerBoundaryDrift`.
-  const workflowChecks = partitionDiagnosticsBySeverity(checkWorkflows(manifest));
-  return {
-    declared: manifest.workflows.length,
-    templates: Object.keys(manifest.review_templates).length,
-    entries,
-    errors: workflowChecks.errors,
-    warnings: workflowChecks.warnings,
-  };
 }
 
 /**
@@ -889,13 +849,6 @@ function countDiagnostics(report: Omit<DoctorReport, "errorCount" | "warningCoun
   // Fix is opt-in (`harness pack reseed <name>`), so this never escalates
   // to an error the way an unresolved pack or a rejected config value does.
   warningCount += report.policyPacks.uxDrift.length;
-  // Workflow gate wiring (F3) + weak-overlap (F1), review round 2,
-  // 99f47307 Slice 1: an unwired/mis-wired merge gate is a real
-  // silent-non-enforcement gap → errorCount; a weaker hand-authored
-  // policy sharing the derived gate's surface is informational →
-  // warningCount.
-  errorCount += report.workflows.errors.length;
-  warningCount += report.workflows.warnings.length;
   // Template-policy drift: each missing-or-downgraded shipped operator_only
   // security policy is a real defense gap → errorCount; stale opt-out
   // entries are warn-only (task adf037c1).
@@ -949,7 +902,7 @@ function countDiagnostics(report: Omit<DoctorReport, "errorCount" | "warningCoun
 export async function doctor(opts: DoctorOptions = {}): Promise<DoctorReport> {
   // PLAIN load (task c88461c1, review round 3, decision D-028): every
   // check this report builds from `manifest` below -- MCP/CLI/hook
-  // probes, memory, policies, policy packs, workflows, the risk gate,
+  // probes, memory, policies, policy packs, the risk gate,
   // template and trigger-boundary drift, grounding, and everything
   // else -- reads the base/machine/explicit-`--project` manifest only,
   // an explicit `opts.project` still wins outright but NOTHING is
@@ -1061,7 +1014,6 @@ export async function doctor(opts: DoctorOptions = {}): Promise<DoctorReport> {
   const applyRuntime = selectRuntime(undefined, lastApplyRecord, false);
   const policies = buildPolicies(manifest);
   const policyPacks = buildPolicyPacks(manifest, applyRuntime.runtime);
-  const workflows = buildWorkflows(manifest);
   const templateDrift = buildTemplateDrift(manifest);
   const triggerBoundaryDrift = buildTriggerBoundaryDrift(manifest);
   const hookBudgetLedgerMargin = buildHookBudgetLedgerMargin(manifest);
@@ -1111,7 +1063,6 @@ export async function doctor(opts: DoctorOptions = {}): Promise<DoctorReport> {
     policies,
     policyPacks,
     packExpansionRuntime: packExpansionRuntimeReport(applyRuntime, lastApplyWarning),
-    workflows,
     templateDrift,
     triggerBoundaryDrift,
     hookBudgetLedgerMargin,
