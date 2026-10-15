@@ -4,8 +4,9 @@
 # NOT a runnable config. This file is a schema-coverage example that
 # exercises the supported fields. Running
 #   harness validate --config docs/examples/full-manifest.yaml
-# on an arbitrary machine WILL report warnings for binaries that only
-# exist in a real install (e.g. git-batch, ledger). That is expected:
+# on an arbitrary machine WILL report binaries that only exist in a real
+# install: the required git-batch as an error, others (e.g. ledger) as
+# warnings. That is expected:
 # validate is doing its job, the manifest is doing its job, the assets
 # just only exist on a wired-up host. Run
 # `harness init --template full` for a manifest tailored to your machine.

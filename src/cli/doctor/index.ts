@@ -29,8 +29,6 @@ import { checkPolicyPackUxDrift } from "../../policy-packs/ux-drift-check.js";
 import type { Runtime } from "../../policy-packs/runtime.js";
 import { selectRuntime, type RuntimeSelection } from "../apply/apply.js";
 import { lastApplyPath, readLastApply } from "../../io/last-apply.js";
-import {
-} from "../validate/checks.js";
 import { loadManifest, type LoaderOptions } from "../loader.js";
 import {
   countCodexDiagnostics,

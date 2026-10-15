@@ -277,6 +277,19 @@ describe("CLI program — describe command", () => {
     expect(r.stdout).toMatch(/\nmemory:\n/);
     expect(r.stdout).not.toMatch(/\ntools:\n/);
   });
+
+  it("supports filtering to the hooks pillar", async () => {
+    const r = await exec([
+      "describe",
+      "--config",
+      FULL_MANIFEST,
+      "--pillar",
+      "hooks",
+    ]);
+    expect(r.code).toBe(0);
+    expect(r.stdout).toMatch(/\nhooks: \[\]\n/);
+    expect(r.stdout).not.toMatch(/\nmemory:\n/);
+  });
 });
 
 describe("CLI program — apply --quiet / --json", () => {

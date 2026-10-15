@@ -117,7 +117,7 @@ describe("the dependency installer does not list understanding-gate binaries", (
     const deps = dependenciesForCustom({
       packs: COMPOSABLE_PACKS.map((p) => p.key),
       mcps: COMPOSABLE_MCPS.map((m) => m.key),
-      });
+    });
     expect(deps.length).toBeGreaterThan(0);
     for (const dep of deps) {
       expect(dep.binary.startsWith("understanding-gate")).toBe(false);
