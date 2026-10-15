@@ -271,7 +271,10 @@ import * as path from "node:path";
 // Lowered to 37 (task e62f03ea): removing the workflows[] policy derivation
 // and its validate/doctor readers; the check reports 37 with that change
 // (the pin was 39).
-const MAX_CLONES = 37;
+// Lowered to 32 (task af5c3d60): removing the policy engine, the shell command
+// model and the measure scripts; the check reports 32 with that change (the
+// pin was 37).
+const MAX_CLONES = 32;
 
 // Sets process.exitCode instead of calling process.exit so the caller's
 // finally-cleanup runs on every path (process.exit skips stack unwinding).

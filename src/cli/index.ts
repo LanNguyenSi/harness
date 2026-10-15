@@ -30,7 +30,6 @@ import { registerSetupGroup } from "./register-setup-group.js";
 import { registerPackGroup } from "./register-pack-group.js";
 import { registerSmokeGroup } from "./register-smoke-group.js";
 import { registerGateGcGroup } from "./register-gate-gc-group.js";
-import { registerPolicyGroup } from "./register-policy-group.js";
 
 export interface RunOptions {
   argv?: string[];
@@ -90,8 +89,6 @@ export function buildProgram(opts: RunOptions = {}): Command {
   registerUninstall(program, { stdout, stderr });
 
   registerOperatorLifecycle(program, { stdout, stderr });
-
-  registerPolicyGroup(program, { stdout, stderr });
 
   return program;
 }

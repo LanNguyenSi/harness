@@ -1,17 +1,16 @@
 // Hook-side wrapper around the pause sentinel. Every PreToolUse /
-// PostToolUse hook — the policy-intercept gate and the pack hooks alike —
-// calls `checkPauseFromLoader` immediately after parsing stdin and BEFORE
-// attempting to load the manifest: a broken install (corrupted YAML,
+// PostToolUse pack hook that honours a pause calls `checkPauseFromLoader`
+// immediately after parsing stdin and BEFORE attempting to load the
+// manifest: a broken install (corrupted YAML,
 // missing file) must still honour an operator pause, since the
 // lockout-recovery flow is the exact scenario where the install is in a
 // degraded state.
 //
-// Lives at the `cli/` root rather than under `cli/pack/` because it is a
-// cross-layer helper, consumed by `cli/policy/intercept.ts` as well as the
-// pack hooks. Keeping it out of `src/runtime/pause-sentinel.ts` preserves
-// the runtime tree's no-loader rule: runtime/ already imports io/, but
-// pulling in cli/loader.ts would transitively drag YAML parsing into
-// every consumer.
+// Lives at the `cli/` root, consumed by the pack hooks through
+// `cli/pack/hook-bootstrap.ts`. Keeping it out of
+// `src/runtime/pause-sentinel.ts` preserves the runtime tree's no-loader
+// rule: runtime/ already imports io/, but pulling in cli/loader.ts would
+// transitively drag YAML parsing into every consumer.
 
 import { resolveGeneratedDir } from "../io/generated-dir.js";
 import { maybeAnnouncePause } from "../runtime/pause-sentinel.js";

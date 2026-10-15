@@ -146,10 +146,10 @@ describe("generateSettings", () => {
 
   it("dedupes identical (command, timeout) pairs inside one matcher group", () => {
     // The full template wires every PreToolUse policy to the same
-    // `harness policy intercept` engine; several of those share the
+    // `harness policy intercept` command; several of those share the
     // Bash matcher. Claude Code spawns each entry in hooks[] for the
     // same event, so emitting duplicates burns CPU on identical
-    // ledger queries. Lock the dedupe contract: identical
+    // spawns. Lock the dedupe contract: identical
     // (command, timeout) tuples collapse to one entry per group.
     const m = manifestOf([
       {
@@ -211,9 +211,9 @@ describe("generateSettings", () => {
     const out = generateSettings(m);
     const bashGroup = out.hooks.PreToolUse?.find((g) => g.matcher === "Bash");
     expect(bashGroup?.hooks).toHaveLength(2);
-    // budget_ms 1000 -> ceil(1000/1000)=1, floored to the policy-intercept
-    // minimum of 2s; budget_ms 5000 -> ceil(5000/1000)=5. Still distinct.
-    expect(bashGroup?.hooks.map((h) => h.timeout).sort()).toEqual([2, 5]);
+    // budget_ms 1000 -> ceil(1000/1000)=1; budget_ms 5000 -> ceil(5000/1000)=5.
+    // Still distinct.
+    expect(bashGroup?.hooks.map((h) => h.timeout).sort()).toEqual([1, 5]);
   });
 
   // task 0b747433: the dedupe fingerprint (buildGroups) used to join
@@ -565,13 +565,15 @@ describe("hookTimeoutSeconds (Claude-hook-timeout-was-1000x, task 7bf47554)", ()
     expect(hookTimeoutSeconds(hook(1_000))).toBe(1);
   });
 
-  it("floors `harness policy intercept` hooks at 2 seconds even for a tiny budget_ms", () => {
-    expect(hookTimeoutSeconds(hook(1, "harness policy intercept"))).toBe(2);
-    expect(hookTimeoutSeconds(hook(1_000, "harness policy intercept"))).toBe(2);
+  it("gives `harness policy intercept` hooks the generic 1 second floor, like any other command", () => {
+    expect(hookTimeoutSeconds(hook(1, "harness policy intercept"))).toBe(1);
+    expect(hookTimeoutSeconds(hook(1_000, "harness policy intercept"))).toBe(1);
+    expect(hookTimeoutSeconds(hook(2_000, "harness policy intercept"))).toBe(2);
   });
 
-  it("floors non-policy-intercept hooks at 1 second even for a sub-second budget_ms", () => {
+  it("floors every hook at 1 second even for a sub-second budget_ms", () => {
     expect(hookTimeoutSeconds(hook(1))).toBe(1);
+    expect(hookTimeoutSeconds(hook(0))).toBe(1);
   });
 
   it("rounds up a non-multiple-of-1000 budget_ms (ceil, never truncates to 0)", () => {

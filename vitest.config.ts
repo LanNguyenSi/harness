@@ -104,7 +104,6 @@ export default defineConfig({
         "src/cli/register-smoke-group.ts",
         "src/cli/register-record-session-group.ts",
         "src/cli/register-gate-gc-group.ts",
-        "src/cli/register-policy-group.ts",
       ],
       reporter: ["text", "html"],
       thresholds: {

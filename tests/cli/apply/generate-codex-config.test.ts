@@ -142,19 +142,17 @@ describe("generateCodexConfig", () => {
     expect(content).toContain(
       "# harness hook: policy-intercept-shell (budget_ms=1000)",
     );
+    // `harness policy intercept` is an ordinary command now: it is emitted
+    // verbatim, with no `--hook <name>` tag and the generic 1 s floor.
     expect(content).toContain(
-      'hooks = [{ type = "command", command = "harness policy intercept --hook policy-intercept-shell", timeout = 2 }]',
+      'hooks = [{ type = "command", command = "harness policy intercept", timeout = 1 }]',
     );
-    expect(content).toContain(
-      'hooks = [{ type = "command", command = "harness policy intercept --hook policy-intercept-agent-tasks", timeout = 2 }]',
-    );
+    expect(content).not.toContain("--hook");
   });
 
-  it("keeps the 2s policy-intercept floor when budget_ms ceil already meets it", () => {
-    // Guards against a regression where the timeout floor would shadow
-    // (rather than coexist with) a legitimate >=2000ms budget. The
-    // intercept hooks at 2000ms must still surface as timeout=2, not be
-    // floored back down to 2 by accident (Math.max picks the larger).
+  it("emits a hook whose command is `harness policy intercept` verbatim, with the budget as its timeout", () => {
+    // The command is no longer special: a >=2000ms budget surfaces as its
+    // own seconds value and the command text carries no `--hook` tag.
     const { content } = generateCodexConfig(
       parseManifest({
         version: 1,
@@ -171,11 +169,12 @@ describe("generateCodexConfig", () => {
       }),
     );
     expect(content).toContain(
-      'hooks = [{ type = "command", command = "harness policy intercept --hook policy-intercept-shell", timeout = 2 }]',
+      'hooks = [{ type = "command", command = "harness policy intercept", timeout = 2 }]',
     );
+    expect(content).not.toContain("--hook");
   });
 
-  it("does NOT append --hook to non-policy-intercept commands", () => {
+  it("does NOT append --hook to any command", () => {
     const { content } = generateCodexConfig(
       parseManifest({
         version: 1,
@@ -196,11 +195,10 @@ describe("generateCodexConfig", () => {
     expect(content).not.toContain("--hook");
   });
 
-  it("skips --hook injection when the hook name contains unsafe characters", () => {
-    // Defence: Hook.name schema is z.string().min(1); an exotic value
-    // ("space in name", "weird;name") would otherwise slip into the
-    // emitted command literal and break shell parsing. The fallback is
-    // the un-tagged emission; the preceding TOML comment still names it.
+  it("never appends --hook, whatever the hook name contains", () => {
+    // Hook.name is z.string().min(1); an exotic value ("space in name",
+    // "weird;name") must never reach the emitted command literal. The
+    // preceding TOML comment still names the hook.
     const { content } = generateCodexConfig(
       parseManifest({
         version: 1,
@@ -217,7 +215,7 @@ describe("generateCodexConfig", () => {
       }),
     );
     expect(content).toContain(
-      'hooks = [{ type = "command", command = "harness policy intercept", timeout = 2 }]',
+      'hooks = [{ type = "command", command = "harness policy intercept", timeout = 1 }]',
     );
     expect(content).not.toContain("--hook");
   });

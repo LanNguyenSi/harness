@@ -50,8 +50,7 @@ export function makeManifest(opts: MakeManifestOptions = {}): Manifest {
 
 /**
  * Convenience wrapper for the common `Policy` shape: pin the required
- * keys, default the rest. Mirrors the per-test `policy()` helpers that
- * existed in `tests/runtime/intercept.test.ts`.
+ * keys, default the rest.
  */
 export function makePolicy(
   overrides: Partial<Policy> & Pick<Policy, "name" | "trigger" | "requires" | "hook">,

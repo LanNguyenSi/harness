@@ -482,12 +482,10 @@ function buildGroups(hooks: Hook[]): SettingsHookGroup[] {
   const groups: SettingsHookGroup[] = [];
   for (const key of matcherKeys) {
     const groupHooks = byMatcher.get(key) ?? [];
-    // Multiple harness hooks frequently share the same command (the
-    // generic `harness policy intercept` engine is the obvious case:
-    // every PreToolUse policy in the full template wires to it). Claude
+    // Multiple harness hooks can share the same command. Claude
     // Code spawns each entry in `hooks[]` independently for the same
     // tool event, so emitting duplicates causes redundant Node bootstraps
-    // and ledger queries per tool call. Dedupe by (command, timeout)
+    // per tool call. Dedupe by (command, timeout)
     // inside each matcher group so only one spawn happens per
     // logically-identical hook, regardless of how many manifest entries
     // map to it.
@@ -524,15 +522,10 @@ function buildGroups(hooks: Hook[]): SettingsHookGroup[] {
  * helper is the single source of truth both projections now share so they
  * cannot diverge again.
  *
- * `Math.ceil` never rounds a budget down to 0s. The floor (2s for `harness
- * policy intercept`, 1s otherwise) matches Codex's existing floor rationale
- * (generate-codex-config.ts): the policy-intercept engine's own ledger
- * round-trip regularly needs slightly longer than a bare 1s floor would
- * allow.
+ * `Math.ceil` never rounds a budget down to 0s: every hook gets a 1s floor.
  */
 export function hookTimeoutSeconds(h: Hook): number {
-  const minimumSeconds = h.command.trim() === "harness policy intercept" ? 2 : 1;
-  return Math.max(minimumSeconds, Math.ceil(h.budget_ms / 1000));
+  return Math.max(1, Math.ceil(h.budget_ms / 1000));
 }
 
 function toSettingsCommand(h: Hook): SettingsHookCommand {

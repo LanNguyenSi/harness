@@ -36,8 +36,7 @@ export interface RequiresEvaluation {
    * advertise a self-service path to an agent that the operator may
    * not want it to take (see agent-tasks/88ca4bb3). Set on both allow
    * and deny so consumers can show the same satisfaction contract
-   * uniformly (e.g. `harness explain <policy>` displaying it on a
-   * green-path policy).
+   * uniformly (e.g. a display of the contract on a green-path policy).
    */
   recordHint: string;
 }
@@ -120,12 +119,12 @@ function describeBound(c: NonNullable<Requires["count"]>): string {
 }
 
 /**
- * Build a one-line "to satisfy" hint from a `requires` spec. Exported so
- * `harness explain <policy>` can show the same hint that `evaluateRequires`
- * surfaces in its deny path, without having to fire an actual evaluation.
+ * Build a one-line "to satisfy" hint from a `requires` spec. Exported so a
+ * caller can show the same hint that `evaluateRequires` surfaces in its deny
+ * path, without having to fire an actual evaluation.
  * `tag` is normally `requires.ledger_tag` after `${VAR}` substitution; the
- * caller may also pass the un-substituted template (explain non-trace path)
- * so the hint reads as a contract instead of a per-event message.
+ * caller may also pass the un-substituted template so the hint reads as a
+ * contract instead of a per-event message.
  */
 export function buildRecordHint(requires: Requires, tag: string): string {
   const count = requires.count;

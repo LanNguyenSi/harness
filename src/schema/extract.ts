@@ -48,8 +48,8 @@ export type ExtractMap = z.infer<typeof ExtractMapSchema>;
 //
 // This is the same layer `bash_match` and `path_match` are declared at
 // (`PolicyTriggerSchema`), so every consumer that parses a manifest,
-// `harness validate`, `apply`, `doctor`, `loadManifest`, the intercept
-// entrypoint, refuses the bad shape, not just the two report verbs.
+// `harness validate`, `apply`, `doctor`, `loadManifest`,
+// refuses the bad shape, not just the two report verbs.
 export const ToolArgsExtractExpressionSchema = z
   .string()
   .min(1)

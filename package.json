@@ -50,9 +50,6 @@
     "check:shipped-unreleased-pointer": "node scripts/check-shipped-unreleased-pointer.mjs",
     "check:readme-release-version": "node scripts/check-readme-release-version.mjs",
     "check:release-notes-size": "node scripts/check-release-notes-size.mjs",
-    "measure:bash-prefix-parse": "node scripts/measure-bash-prefix-parse.mjs",
-    "measure:command-normalize": "node scripts/measure-command-normalize.mjs",
-    "measure:additive-attribution-matrix": "node scripts/measure-additive-attribution-matrix.mjs",
     "prepublishOnly": "npm run build"
   },
   "dependencies": {

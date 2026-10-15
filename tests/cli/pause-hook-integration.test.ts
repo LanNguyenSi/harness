@@ -1,10 +1,5 @@
-// Pair-test: `harness pause` writes a sentinel, the PreToolUse hook
-// reads it on its next fire and allows without evaluating, `harness
-// resume` deletes it, and the next hook fire evaluates normally.
-//
-// This is the acceptance test the task description calls out: "Integration
-// test pairs pause + bash-event-through-hook + resume + bash-event-through-
-// hook for at least one of the standard PreToolUse hooks."
+// Integration test: `harness pause` writes a sentinel and the kept
+// branch-protection PreToolUse hook does not read it.
 
 import { execFileSync } from "node:child_process";
 import { Readable, Writable } from "node:stream";
@@ -12,13 +7,10 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { pause, resume } from "../../src/cli/pause/index.js";
+import { pause } from "../../src/cli/pause/index.js";
 import { runPackHookBranchProtectionCli } from "../../src/cli/pack/hook-branch-protection.js";
-import { runInterceptCli } from "../../src/cli/policy/intercept.js";
-import type { LedgerClient } from "../../src/runtime/intercept.js";
 import { sentinelPath } from "../../src/runtime/pause-sentinel.js";
 import { parseManifest, type Manifest } from "../../src/schema/index.js";
-import { makeManifest, makePolicy } from "../_helpers/manifest.js";
 
 let tmp: string;
 let generatedDir: string;
@@ -84,200 +76,6 @@ function bufferStream(): { stream: Writable; read: () => string } {
   });
   return { stream, read: () => buf };
 }
-
-describe("pause → policy intercept hook → resume", () => {
-  // A policy that blocks an agent-tasks PR merge unless a matching
-  // `review:${PR_NUMBER}` ledger entry exists. With an empty ledger it
-  // always blocks, so it is a clean probe for "did the gate evaluate?".
-  const blockingPolicy = makePolicy({
-    name: "review-before-merge",
-    description: "block merges without review evidence",
-    trigger: {
-      event: "PreToolUse",
-      match: "mcp__agent-tasks__pull_requests_merge",
-      extract: { PR_NUMBER: "toolArgs.prNumber" },
-    },
-    requires: { ledger_tag: "review:${PR_NUMBER}" },
-    hook: "h",
-    enforcement: "block",
-  });
-
-  const mergeEvent = JSON.stringify({
-    hook_event_name: "PreToolUse",
-    tool_name: "mcp__agent-tasks__pull_requests_merge",
-    tool_input: { prNumber: 42 },
-    session_id: "sess-int",
-  });
-
-  it("policy intercept yields while paused, re-engages after resume", async () => {
-    await pause({
-      manifest: manifestWithPack(),
-      generatedDir,
-      stdinIsTTY: true,
-      claudeSessionIdEnv: "",
-      forDuration: "10m",
-      reason: "wedged preflight gate",
-      ledgerAdd: async () => ({ ok: true }),
-    });
-    expect(fs.existsSync(sentinelPath(generatedDir))).toBe(true);
-
-    // While paused: the gate must short-circuit BEFORE evaluating, so the
-    // injected ledger is never consulted and nothing is written to stdout.
-    let ledgerQueriedWhilePaused = false;
-    const pausedLedger: LedgerClient = {
-      async query() {
-        ledgerQueriedWhilePaused = true;
-        return { kind: "ok", entries: [] };
-      },
-      async record() {
-        /* no-op */
-      },
-    };
-    const stdoutA = bufferStream();
-    const stderrA = bufferStream();
-    const resA = await runInterceptCli({
-      stdin: readableFromString(mergeEvent),
-      stdout: stdoutA.stream,
-      stderr: stderrA.stream,
-      manifest: makeManifest({ policies: [blockingPolicy] }),
-      ledger: pausedLedger,
-      generatedDir,
-    });
-    expect(resA.blocked).toBe(false);
-    expect(resA.exitCode).toBe(0);
-    expect(ledgerQueriedWhilePaused).toBe(false);
-    expect(stdoutA.read()).toBe("");
-    // The notice carries the policy-intercept hook label, the one value
-    // that diverges from the reference pack hook.
-    expect(stderrA.read()).toContain("policy intercept: PAUSED");
-    expect(stderrA.read()).toContain("wedged preflight gate");
-
-    // Resume.
-    await resume({
-      manifest: manifestWithPack(),
-      generatedDir,
-      stdinIsTTY: true,
-      claudeSessionIdEnv: "",
-      ledgerAdd: async () => ({ ok: true }),
-    });
-    expect(fs.existsSync(sentinelPath(generatedDir))).toBe(false);
-
-    // After resume: the gate evaluates normally, consults the ledger, and
-    // blocks the merge because no review evidence exists.
-    let ledgerQueriedAfterResume = false;
-    const liveLedger: LedgerClient = {
-      async query() {
-        ledgerQueriedAfterResume = true;
-        return { kind: "ok", entries: [] };
-      },
-      async record() {
-        /* no-op */
-      },
-    };
-    const stdoutB = bufferStream();
-    const stderrB = bufferStream();
-    const resB = await runInterceptCli({
-      stdin: readableFromString(mergeEvent),
-      stdout: stdoutB.stream,
-      stderr: stderrB.stream,
-      manifest: makeManifest({ policies: [blockingPolicy] }),
-      ledger: liveLedger,
-      generatedDir,
-    });
-    expect(ledgerQueriedAfterResume).toBe(true);
-    expect(resB.blocked).toBe(true);
-    expect(resB.exitCode).toBe(0);
-    expect(stdoutB.read()).toContain('"decision":"block"');
-  });
-
-  it("honours an injected pause time even when the real clock sees an expired sentinel", async () => {
-    const realNow = Date.now();
-    const pausedAt = new Date(realNow - 24 * 60 * 60 * 1000);
-    const duringPause = new Date(pausedAt.getTime() + 5 * 60 * 1000);
-    await pause({
-      manifest: manifestWithPack(),
-      generatedDir,
-      stdinIsTTY: true,
-      claudeSessionIdEnv: "",
-      forDuration: "10m",
-      now: pausedAt,
-      reason: "injected clock pause",
-      ledgerAdd: async () => ({ ok: true }),
-    });
-    const sentinel = JSON.parse(fs.readFileSync(sentinelPath(generatedDir), "utf8"));
-    expect(Date.parse(sentinel.expiresAt)).toBeGreaterThan(duringPause.getTime());
-    expect(Date.parse(sentinel.expiresAt)).toBeLessThan(realNow);
-
-    let ledgerQueried = false;
-    const stdout = bufferStream();
-    const stderr = bufferStream();
-    const res = await runInterceptCli({
-      stdin: readableFromString(mergeEvent),
-      stdout: stdout.stream,
-      stderr: stderr.stream,
-      manifest: makeManifest({ policies: [blockingPolicy] }),
-      ledger: {
-        async query() {
-          ledgerQueried = true;
-          return { kind: "ok", entries: [] };
-        },
-        async record() {
-          /* no-op */
-        },
-      },
-      generatedDir,
-      now: duringPause,
-    });
-
-    expect(res.exitCode).toBe(0);
-    expect(res.blocked).toBe(false);
-    expect(res.decisions).toEqual([]);
-    expect(ledgerQueried).toBe(false);
-    expect(stdout.read()).toBe("");
-    expect(stderr.read()).toContain("policy intercept: PAUSED");
-    expect(stderr.read()).toContain("injected clock pause");
-    expect(fs.existsSync(sentinelPath(generatedDir))).toBe(true);
-  });
-
-  it("auto-expires past the --for window: policy intercept evaluates normally", async () => {
-    const pausedAt = new Date("2026-05-20T12:00:00.000Z");
-    await pause({
-      manifest: manifestWithPack(),
-      generatedDir,
-      stdinIsTTY: true,
-      claudeSessionIdEnv: "",
-      forDuration: "1s",
-      now: pausedAt,
-      ledgerAdd: async () => ({ ok: true }),
-    });
-
-    // Fire 5s past the 1s window — unambiguously expired.
-    const afterExpiry = new Date(pausedAt.getTime() + 5000);
-    const stdout = bufferStream();
-    const stderr = bufferStream();
-    const res = await runInterceptCli({
-      stdin: readableFromString(mergeEvent),
-      stdout: stdout.stream,
-      stderr: stderr.stream,
-      manifest: makeManifest({ policies: [blockingPolicy] }),
-      ledger: {
-        async query() {
-          return { kind: "ok", entries: [] };
-        },
-        async record() {
-          /* no-op */
-        },
-      },
-      generatedDir,
-      now: afterExpiry,
-    });
-
-    expect(res.blocked).toBe(true);
-    expect(stdout.read()).toContain('"decision":"block"');
-    // The expired sentinel got auto-deleted on the hook fire.
-    expect(fs.existsSync(sentinelPath(generatedDir))).toBe(false);
-  });
-});
 
 describe("pause → branch-protection hook", () => {
   // branch-protection no longer yields to the operator pause (task

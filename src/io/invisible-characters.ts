@@ -1,9 +1,8 @@
 // Shared rule for characters that are not printable text but can hide,
 // reorder or smuggle what a reader sees. The terminal display escaper
-// (`escapeForDisplay` in `src/io/display-path.ts`) and the agent-facing
-// envelope sanitiser (`sanitizeEnvelopeReason` in `src/runtime/intercept.ts`)
-// both build their pattern from this one class, so a character covered here
-// is covered by both.
+// (`escapeForDisplay` in `src/io/display-path.ts`) and any other consumer
+// that renders untrusted text build their pattern from this one class, so a
+// character covered here is covered everywhere it is used.
 //
 // The rule: every code point with General_Category Cf (bidi controls, zero
 // width space, BOM, the tag characters, ...) or the property

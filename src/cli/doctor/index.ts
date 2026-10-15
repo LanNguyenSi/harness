@@ -30,7 +30,6 @@ import type { Runtime } from "../../policy-packs/runtime.js";
 import { selectRuntime, type RuntimeSelection } from "../apply/apply.js";
 import { lastApplyPath, readLastApply } from "../../io/last-apply.js";
 import {
-  checkHookBudgetLedgerMargin,
   checkTemplatePolicyDrift,
   checkTriggerBoundaryDrift,
 } from "../validate/checks.js";
@@ -57,7 +56,6 @@ import {
   type CliEntryReport,
   type DoctorReport,
   type DoctorTarget,
-  type HookBudgetLedgerMarginSection,
   type HookEntryReport,
   type ManifestSection,
   type McpVersionReport,
@@ -699,19 +697,6 @@ function buildTriggerBoundaryDrift(manifest: Manifest): TriggerBoundaryDriftSect
 }
 
 /**
- * Hook-budget-vs-ledger-timeout margin (task d20a7e0c). Delegates to the
- * shared validate check so `harness doctor` and `harness validate` stay
- * in parity, mirroring `buildTemplateDrift` immediately above.
- * `checkHookBudgetLedgerMargin` only ever emits `error`-severity
- * diagnostics (an under-budgeted blocking hook is always a real
- * fail-open gap, never a stylistic warning), so every message maps
- * straight to `errors`.
- */
-function buildHookBudgetLedgerMargin(manifest: Manifest): HookBudgetLedgerMarginSection {
-  return { errors: checkHookBudgetLedgerMargin(manifest).map((d) => d.message) };
-}
-
-/**
  * Grounding wiring health (task 129e1b94). Only meaningful when an enabled
  * `grounding-mcp` entry exists — callers skip the section otherwise. Checks:
  *   1. The evidence-ledger path (the value `harness apply` projects as
@@ -862,10 +847,6 @@ function countDiagnostics(report: Omit<DoctorReport, "errorCount" | "warningCoun
   // so one would count instead of vanishing).
   errorCount += report.triggerBoundaryDrift.errors.length;
   warningCount += report.triggerBoundaryDrift.warnings.length;
-  // Hook-budget-vs-ledger-timeout margin (task d20a7e0c): every entry is
-  // a real fail-open gap, mirroring templateDrift.errors immediately
-  // above.
-  errorCount += report.hookBudgetLedgerMargin.errors.length;
   if (report.grounding !== undefined) {
     warningCount += report.grounding.warnings.length;
   }
@@ -906,11 +887,9 @@ export async function doctor(opts: DoctorOptions = {}): Promise<DoctorReport> {
   // template and trigger-boundary drift, grounding, and everything
   // else -- reads the base/machine/explicit-`--project` manifest only,
   // an explicit `opts.project` still wins outright but NOTHING is
-  // derived from cwd here. This mirrors `harness policy intercept`
-  // (src/cli/policy/intercept.ts) and `harness dry-run`
-  // (src/cli/dry-run.ts), which never consult a derived project layer
-  // either, so `doctor` never reports this repo healthier or unhealthier
-  // than what actually enforces.
+  // derived from cwd here, so `doctor` reports the same manifest from any
+  // directory and never reports this repo healthier or unhealthier than the
+  // machine-level install it describes.
   const { manifest, resolved, warnings: postureWarnings } = loadManifest(opts);
   const home = opts.homeOverride ?? opts.homeDir ?? os.homedir();
   const probe = opts.mcpProbe ?? new RealMcpProbe();
@@ -1016,8 +995,7 @@ export async function doctor(opts: DoctorOptions = {}): Promise<DoctorReport> {
   const policyPacks = buildPolicyPacks(manifest, applyRuntime.runtime);
   const templateDrift = buildTemplateDrift(manifest);
   const triggerBoundaryDrift = buildTriggerBoundaryDrift(manifest);
-  const hookBudgetLedgerMargin = buildHookBudgetLedgerMargin(manifest);
-  const groundingServer =
+    const groundingServer =
     manifest.tools.mcp.find(
       (m) => m.name === GROUNDING_MCP_SERVER_NAME && m.enabled !== false,
     ) ?? null;
@@ -1065,7 +1043,6 @@ export async function doctor(opts: DoctorOptions = {}): Promise<DoctorReport> {
     packExpansionRuntime: packExpansionRuntimeReport(applyRuntime, lastApplyWarning),
     templateDrift,
     triggerBoundaryDrift,
-    hookBudgetLedgerMargin,
     ...(grounding !== undefined ? { grounding } : {}),
     ...(claudeMcp !== undefined ? { claudeMcp } : {}),
     rogueLedgerDbs,

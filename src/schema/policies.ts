@@ -16,8 +16,9 @@ import { RequiresSchema, isBuiltinVariable, referencedVariables } from "./requir
 // `toolArgs.`-namespaced extract expressions (the SAME grammar and parser
 // `extract` uses, `src/schema/extract.ts` + `src/io/extract.ts`), values
 // are literals compared by strict equality; a missing path never matches.
-// See `firstInputMatchMismatch` in `src/io/extract.ts` for the evaluator
-// `policyMatchesEvent` and `harness dry-run` both call.
+// `firstInputMatchMismatch` in `src/io/extract.ts` is the matching
+// evaluator; no policy engine remains to call it, so nothing evaluates a
+// manifest's policies any more.
 export const PolicyTriggerSchema = z
   .object({
     event: HookEventSchema,
@@ -126,7 +127,7 @@ export const PolicyUxSchema = z
 //
 // `operator_only: true` closes that gap by omission rather than by
 // naming a fake evidence source: the policy declares NO `requires:` at
-// all, and `intercept()` (`src/runtime/intercept.ts`) short-circuits
+// all, and the former policy engine short-circuited
 // before the `requires` pipeline entirely — no ledger query, no
 // template substitution, no `evaluateRequires` call — so there is
 // nothing an in-session actor (ledger write, marker file, env flag) can

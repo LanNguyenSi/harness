@@ -27,9 +27,8 @@
 // tests/dependency-cruiser-config.test.ts, which fails if any rule in
 // this file ever gains a `to.pathNot`):
 //   - src/io/claude-mcp.ts imports src/runtime/hermetic-spawn-guard.ts
-//   - src/io/ledger-record.ts imports src/policies/ledger-client.ts,
-//     src/policies/requires.ts, src/policies/timestamp.ts (values) and
-//     src/runtime/intercept.ts (type-only); it is not a leaf.
+//   - src/io/ledger-record.ts imports src/policies/timestamp.ts (value) and
+//     src/policies/requires.ts (type-only); it is not a leaf.
 // Assign io/probes/overrides a real layer position if/when the shared
 // utilities get sorted for real (out of scope for this task).
 /** @type {import('dependency-cruiser').IConfiguration} */

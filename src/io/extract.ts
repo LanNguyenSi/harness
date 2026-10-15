@@ -176,7 +176,7 @@ function walkPath(path: ExtractPath, ctx: ExtractEventContext): unknown {
  * Stringify a resolved extract value for substitution into a `${VAR}` template.
  * Strings pass through; numbers/booleans/bigints get `String(...)`. Objects and
  * arrays fall through to `JSON.stringify` — uncommon for v1 paths but stable
- * enough that audit / `explain --trace` consumers can rely on the shape.
+ * enough that consumers of the substituted text can rely on the shape.
  */
 function stringifyResolved(value: unknown): string {
   if (typeof value === "string") return value;
