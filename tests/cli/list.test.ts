@@ -1,3 +1,5 @@
+import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
@@ -6,6 +8,32 @@ import { list } from "../../src/cli/list.js";
 const __filename = fileURLToPath(import.meta.url);
 const REPO_ROOT = path.resolve(path.dirname(__filename), "..", "..");
 const FULL_MANIFEST = path.join(REPO_ROOT, "docs", "examples", "full-manifest.yaml");
+
+// The reference manifest ships no hooks or policies any more (task
+// bcdcde36); the row shapes of those two categories are exercised against
+// this small inline manifest instead.
+const HOOK_POLICY_MANIFEST = `version: 1
+hooks:
+  - name: gate-hook
+    event: PreToolUse
+    match: "Bash"
+    command: /usr/bin/true
+    blocking: hard
+policies:
+  - name: gate-policy
+    description: a block policy
+    trigger: { event: PreToolUse, match: "Bash" }
+    requires: { ledger_tag: "x:\${SESSION_ID}" }
+    hook: gate-hook
+    enforcement: block
+`;
+
+function hookPolicyManifestPath(): string {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "harness-list-"));
+  const file = path.join(dir, "harness.yaml");
+  fs.writeFileSync(file, HOOK_POLICY_MANIFEST, "utf8");
+  return file;
+}
 
 describe("list — categories", () => {
   it("lists mcp servers from the reference manifest", () => {
@@ -34,40 +62,22 @@ describe("list — categories", () => {
   });
 
   it("lists hook entries", () => {
-    const r = list("hooks", { configPath: FULL_MANIFEST });
-    expect(r.rows.map((row) => row.name)).toEqual([
-      "require-review-evidence",
-      "require-review-evidence-bash",
-      "require-review-evidence-task-merge",
-      "require-review-evidence-task-finish",
-      "require-dogfood-evidence",
-      "require-review-subagent-evidence",
-      "require-review-subagent-evidence-bash",
-      "deny-kill-switch-bash",
-      "deny-session-env-strip-bash",
-      "deny-sentinel-write-bash",
-    ]);
+    const r = list("hooks", { configPath: hookPolicyManifestPath() });
+    expect(r.rows.map((row) => row.name)).toEqual(["gate-hook"]);
     const head = r.rows[0]!;
     expect(head.event).toBe("PreToolUse");
     expect(head.blocking).toBe("hard");
   });
 
   it("lists policies", () => {
-    const r = list("policies", { configPath: FULL_MANIFEST });
-    expect(r.rows.map((row) => row.name)).toEqual([
-      "review-before-merge",
-      "review-before-merge-bash",
-      "review-before-task-merge",
-      "review-before-task-finish-automerge",
-      "dogfood-before-release",
-      "two-reviewers-required",
-      "review-subagent-before-pr-create",
-      "review-subagent-before-pr-create-bash",
-      "deny-kill-switch-bypass",
-      "deny-session-env-strip",
-      "deny-pause-sentinel-forgery",
-    ]);
+    const r = list("policies", { configPath: hookPolicyManifestPath() });
+    expect(r.rows.map((row) => row.name)).toEqual(["gate-policy"]);
     expect(r.rows[0]!.enforcement).toBe("block");
+  });
+
+  it("lists no hooks and no policies for the reference manifest", () => {
+    expect(list("hooks", { configPath: FULL_MANIFEST }).rows).toEqual([]);
+    expect(list("policies", { configPath: FULL_MANIFEST }).rows).toEqual([]);
   });
 
   it("lists memory directories", () => {
@@ -149,7 +159,7 @@ describe("list — --filter", () => {
   });
 
   it("returns empty when filter matches nothing", () => {
-    const r = list("policies", { configPath: FULL_MANIFEST, filter: "nope" });
+    const r = list("policies", { configPath: hookPolicyManifestPath(), filter: "nope" });
     expect(r.rows).toHaveLength(0);
     expect(r.output).toMatch(/no entries|^\[\]/);
   });
@@ -157,7 +167,7 @@ describe("list — --filter", () => {
 
 describe("list — --json", () => {
   it("emits a parseable JSON array with no leading prose", () => {
-    const r = list("policies", { configPath: FULL_MANIFEST, json: true });
+    const r = list("policies", { configPath: hookPolicyManifestPath(), json: true });
     const trimmed = r.output.trim();
     expect(trimmed.startsWith("[")).toBe(true);
     const parsed = JSON.parse(trimmed);

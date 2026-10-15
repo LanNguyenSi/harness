@@ -16,7 +16,6 @@ import { parse as parseYaml } from "yaml";
 import {
   COMPOSABLE_MCPS,
   COMPOSABLE_PACKS,
-  COMPOSABLE_POLICIES,
   composeCustom,
   type CustomSelection,
 } from "../../../src/cli/init/composer.js";
@@ -71,7 +70,6 @@ describe.each(REMOVED_PACK_NAMES)("removed pack %s", (removed) => {
     const selection: CustomSelection = {
       packs: COMPOSABLE_PACKS.map((o) => o.key),
       mcps: COMPOSABLE_MCPS.map((o) => o.key),
-      policies: COMPOSABLE_POLICIES.map((o) => o.key),
     };
     const result = composeCustom(selection);
     expect(packNames(result.yaml)).not.toContain(removed.name);
@@ -141,7 +139,6 @@ describe.each(REMOVED_COMMANDS)("removed command %s", (removed) => {
     const selection: CustomSelection = {
       packs: COMPOSABLE_PACKS.map((o) => o.key),
       mcps: COMPOSABLE_MCPS.map((o) => o.key),
-      policies: COMPOSABLE_POLICIES.map((o) => o.key),
     };
     expect(composeCustom(selection).yaml).not.toContain(cmd);
   });
@@ -178,7 +175,6 @@ describe.each(REMOVED_MANIFEST_PATHS)("removed manifest path $path", (removed) =
     const selection: CustomSelection = {
       packs: COMPOSABLE_PACKS.map((o) => o.key),
       mcps: COMPOSABLE_MCPS.map((o) => o.key),
-      policies: COMPOSABLE_POLICIES.map((o) => o.key),
     };
     expect(hasPath(composeCustom(selection).yaml, removed.path)).toBe(false);
   });

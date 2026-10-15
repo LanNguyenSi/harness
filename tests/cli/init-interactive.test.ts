@@ -1179,7 +1179,7 @@ describe("interactive wizard — MCP-removal GC (task 363a6de0)", () => {
       authProbeSpawn: async () => ({ code: 0, stderr: "ok (store: keychain)\n" }),
       prompts: mockPrompts({
         select: ["custom"],
-        checkbox: [["branch-protection"], ["agent-tasks"], [], ["claude-code"]],
+        checkbox: [["branch-protection"], ["agent-tasks"], ["claude-code"]],
         input: ["~/.claude/projects/{project}/memory"],
         confirm: [true],
       }),
@@ -1210,7 +1210,7 @@ describe("interactive wizard — MCP-removal GC (task 363a6de0)", () => {
       mcpExec: run2Cli.exec,
       prompts: mockPrompts({
         select: ["custom"],
-        checkbox: [["branch-protection"], [], [], ["claude-code"]],
+        checkbox: [["branch-protection"], [], ["claude-code"]],
         input: ["~/.claude/projects/{project}/memory"],
         confirm: [true],
       }),
@@ -1243,7 +1243,7 @@ describe("interactive wizard — MCP-removal GC (task 363a6de0)", () => {
       authProbeSpawn: async () => ({ code: 0, stderr: "ok (store: keychain)\n" }),
       prompts: mockPrompts({
         select: ["custom"],
-        checkbox: [[], ["agent-tasks"], [], ["claude-code"]],
+        checkbox: [[], ["agent-tasks"], ["claude-code"]],
         input: ["~/.claude/projects/{project}/memory"],
         confirm: [true],
       }),
@@ -1270,7 +1270,7 @@ describe("interactive wizard — MCP-removal GC (task 363a6de0)", () => {
       mcpExec: run2Cli.exec,
       prompts: mockPrompts({
         select: ["custom"],
-        checkbox: [["branch-protection"], [], [], ["claude-code"]],
+        checkbox: [["branch-protection"], [], ["claude-code"]],
         input: ["~/.claude/projects/{project}/memory"],
         confirm: [true],
       }),
@@ -1600,8 +1600,8 @@ describe("interactive wizard — Custom path (task 31d2fbb5)", () => {
       homeDir: tmpHome,
       prompts: mockPrompts({
         select: ["custom"],
-        // packs / mcps / policies all empty.
-        checkbox: [[], [], []],
+        // packs / mcps both empty.
+        checkbox: [[], []],
       }),
       stdout: cap.out,
       stderr: cap.err,
@@ -1621,10 +1621,9 @@ describe("interactive wizard — Custom path (task 31d2fbb5)", () => {
       dependencyPathEnv: fakeDepsPath,
       prompts: mockPrompts({
         select: ["custom"],
-        // packs: just branch-protection; mcps: none; policies: none.
+        // packs: just branch-protection; mcps: none.
         checkbox: [
           ["branch-protection"],
-          [],
           [],
           [], // wire-now multiselect — skip wiring
         ],
@@ -1651,7 +1650,7 @@ describe("interactive wizard — Custom path (task 31d2fbb5)", () => {
     expect(content).not.toContain("review-before-merge");
   });
 
-  it("composes a full-equivalent pick (every checkbox, with the three reference policies)", async () => {
+  it("composes a full-equivalent pick (every checkbox)", async () => {
     fs.mkdirSync(path.join(tmpHome, ".claude"));
     const cap = captureStreams();
     const result = await runInteractive({
@@ -1663,11 +1662,6 @@ describe("interactive wizard — Custom path (task 31d2fbb5)", () => {
         checkbox: [
           ["branch-protection"],
           ["agent-tasks", "grounding-mcp", "memory-router"],
-          [
-            "review-before-merge",
-            "dogfood-before-release",
-            "review-subagent-before-pr-create",
-          ],
           [], // wire-now skip
         ],
         input: ["~/.claude/projects/{project}/memory"],
@@ -1688,10 +1682,10 @@ describe("interactive wizard — Custom path (task 31d2fbb5)", () => {
     // composer must NOT emit it as an MCP entry.
     expect(content).toContain("memory-router-user-prompt-submit");
     expect(content).toMatch(/router:\s*\n\s+command:\s*\n?\s*-\s+memory-router-user-prompt-submit/);
-    expect(content).toContain("review-before-merge");
-    expect(content).toContain("dogfood-before-release");
-    expect(content).toContain("review-subagent-before-pr-create");
-    // No producer-coupling warnings since agent-tasks + grounding-mcp + pack are all selected.
+    expect(content).not.toContain("harness policy intercept");
+    expect(content).not.toMatch(/^policies:/m);
+    expect(content).not.toMatch(/^hooks:/m);
+    // No composer warnings: the picks need no env vars the wizard cannot prompt for.
     expect(cap.stderr()).not.toMatch(/composer warning/);
   });
 
@@ -1707,7 +1701,7 @@ describe("interactive wizard — Custom path (task 31d2fbb5)", () => {
     let capturedMcpChoices: { value: string; checked: boolean }[] = [];
     const cap = captureStreams();
     const recordingCheckbox = (async (args: { choices: { value: string; checked?: boolean }[] }) => {
-      // Capture the second checkbox call (MCPs); first is packs, third is policies.
+      // Capture the second checkbox call (MCPs); the first is packs.
       if (args.choices.some((c) => c.value === "agent-tasks")) {
         capturedMcpChoices = args.choices.map((c) => ({
           value: c.value,
@@ -1987,14 +1981,9 @@ describe("interactive wizard — Full profile", () => {
     expect(result.binResolutionClean).toBe(true);
     expect(fs.existsSync(path.join(tmpHome, ".harness", "harness.yaml"))).toBe(true);
     const content = fs.readFileSync(path.join(tmpHome, ".harness", "harness.yaml"), "utf8");
-    // Full template carries the additional reference policies that
-    // Team does not ship.
-    expect(content).toContain("review-before-merge");
-    expect(content).toContain("dogfood-before-release");
-    expect(content).toContain("two-reviewers-required");
-    // Regression guard: every hook in Full now uses the bundled
-    // `harness policy intercept` engine. No hook's `command:` field
-    // may reference an external .sh script.
+    // Full ships no policies and no policy-intercept hooks any more.
+    expect(content).not.toMatch(/^policies:/m);
+    expect(content).not.toContain("harness policy intercept");
     expect(content).not.toMatch(/^\s*command:.*\.sh\b/m);
     // The Glob + Grep builtins should be listed so doctor stops
     // emitting the spurious "runtime advertises X but manifest does not
@@ -2003,7 +1992,7 @@ describe("interactive wizard — Full profile", () => {
     expect(content).toContain("Grep");
   });
 
-  it("prints the Full-specific reminder that mentions both MCP and gh-cli coverage", async () => {
+  it("prints the agent-tasks reminder for Full without promising any merge or PR gate", async () => {
     fs.mkdirSync(path.join(tmpHome, ".claude"));
     const cap = captureStreams();
     await runInteractive({
@@ -2020,15 +2009,11 @@ describe("interactive wizard — Full profile", () => {
       stderr: cap.err,
     });
     const err = cap.stderr();
-    // Full ships review-before-merge-bash + review-subagent-before-pr-create-bash
-    // (PR #188), so the reminder must explicitly state that gh-cli PR
-    // calls are also gated, not just the agent-tasks MCP verbs.
     expect(err).toContain("agent-tasks-mcp-bridge login");
-    expect(err).toContain("gh pr (merge|create)");
-    expect(err).toContain("--template team");
-    // The Team-only "review-merge gate only matches agent-tasks MCP tool
-    // names today" sentence must NOT appear for Full.
-    expect(err).not.toContain("only matches\n  agent-tasks MCP tool names today");
+    expect(err).toContain("--template solo");
+    expect(err).not.toContain("review-merge gate");
+    expect(err).not.toContain("gh pr (merge|create)");
+    expect(err).not.toContain("gated");
   });
 });
 
@@ -2405,7 +2390,6 @@ describe("interactive wizard — orchestrator-workflow co-install offer (task S5
         checkbox: [
           ["branch-protection"], // packs
           [], // mcps
-          [], // policies
           [], // wire-now skip
         ],
         input: ["~/.claude/projects/{project}/memory"],

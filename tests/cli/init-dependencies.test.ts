@@ -157,39 +157,25 @@ describe("installPackagesGlobally — runner contract", () => {
   });
 });
 
-describe("dependenciesForCustom — grounding-mcp auto-add mirror", () => {
-  it("includes grounding-mcp dep when policies are non-empty and grounding-mcp is not in sel.mcps (mirrors composeCustom H3 auto-add predicate)", () => {
-    const deps = dependenciesForCustom({
-      packs: [],
-      mcps: [],
-      policies: ["review-before-merge"],
-      memoryDir: "~/.claude/projects/{project}/memory",
-    });
-    const bins = deps.map((d) => d.binary);
-    expect(bins).toContain("grounding-mcp");
-    const gmDep = deps.find((d) => d.binary === "grounding-mcp");
-    expect(gmDep?.npmPackage).toBe("@lannguyensi/grounding-mcp");
-  });
-
-  it("does NOT double-add grounding-mcp when it is already in sel.mcps", () => {
-    const deps = dependenciesForCustom({
-      packs: [],
-      mcps: ["grounding-mcp"],
-      policies: ["review-before-merge"],
-      memoryDir: "~/.claude/projects/{project}/memory",
-    });
-    const gmEntries = deps.filter((d) => d.binary === "grounding-mcp");
-    expect(gmEntries).toHaveLength(1);
-  });
-
-  it("does NOT include grounding-mcp dep when policies array is empty (no auto-add needed)", () => {
+describe("dependenciesForCustom — no policy-driven grounding-mcp auto-add (task bcdcde36)", () => {
+  it("does NOT include the grounding-mcp dep when it is not in sel.mcps", () => {
     const deps = dependenciesForCustom({
       packs: ["branch-protection"],
       mcps: [],
-      policies: [],
       memoryDir: "~/.claude/projects/{project}/memory",
     });
     const bins = deps.map((d) => d.binary);
     expect(bins).not.toContain("grounding-mcp");
+  });
+
+  it("includes the grounding-mcp dep exactly once when it is picked", () => {
+    const deps = dependenciesForCustom({
+      packs: [],
+      mcps: ["grounding-mcp"],
+      memoryDir: "~/.claude/projects/{project}/memory",
+    });
+    const gmEntries = deps.filter((d) => d.binary === "grounding-mcp");
+    expect(gmEntries).toHaveLength(1);
+    expect(gmEntries[0]?.npmPackage).toBe("@lannguyensi/grounding-mcp");
   });
 });

@@ -4,8 +4,6 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { parse as parseYaml } from "yaml";
 import { ManifestParseError, PoliciesSchema, parseManifest, parseManifestWithWarnings } from "../src/schema/index.js";
-import { FULL_TEMPLATE } from "../src/cli/init/templates.js";
-import { TEAM_TEMPLATE } from "../src/cli/init/profiles.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const REPO_ROOT = path.resolve(path.dirname(__filename), "..");
@@ -32,47 +30,14 @@ describe("parseManifest — happy path", () => {
     expect(manifest.tools.mcp).toHaveLength(3);
     expect(manifest.tools.mcp[0]?.name).toBe("codebase-oracle");
     expect(manifest.tools.mcp[2]?.name).toBe("grounding-mcp");
-    // 10 hooks / 11 policies since task 6e52c044 removed the risk-gate
-    // hook and the three gate-* policies from the reference manifest (11
-    // hooks / 14 policies before that; 14 hooks / 16 policies since task
-    // 2699b476 added the require-review-evidence-task-merge / -task-finish
-    // hooks and their review-before-task-merge /
-    // review-before-task-finish-automerge policies).
-    expect(manifest.hooks).toHaveLength(10);
-    expect(manifest.policies).toHaveLength(11);
-    const reviewPolicy = manifest.policies.find((p) => p.name === "review-before-merge");
-    expect(reviewPolicy?.requires?.ledger_tag).toBe("review:${PR_NUMBER}");
-    expect(reviewPolicy?.trigger.extract?.PR_NUMBER).toBe("toolArgs.prNumber");
-    // Field-level invariants on a policy added alongside this test.
-    // Schema parsing alone would not catch a typo like `toolArgs.task_id` —
-    // it's grammatical per the extract DSL but would silently never resolve
-    // at runtime. Lock the load-bearing strings explicitly.
-    const reviewSubagentPolicy = manifest.policies.find(
-      (p) => p.name === "review-subagent-before-pr-create",
-    );
-    expect(reviewSubagentPolicy?.trigger.match).toBe("mcp__agent-tasks__pull_requests_create");
-    expect(reviewSubagentPolicy?.trigger.extract?.TASK_ID).toBe("toolArgs.taskId");
-    expect(reviewSubagentPolicy?.requires?.ledger_tag).toBe("review-subagent:${TASK_ID}");
+    // The reference manifest ships no hooks and no policies any more
+    // (task bcdcde36).
+    expect(manifest.hooks).toHaveLength(0);
+    expect(manifest.policies).toHaveLength(0);
     expect(manifest.policy_packs).toHaveLength(1);
     expect(manifest.policy_packs[0]?.name).toBe("branch-protection");
     expect(manifest.policy_packs[0]?.source).toBe("builtin");
     expect(manifest.policy_packs[0]?.enabled).toBe(true);
-    // Producers (agent-tasks/3804b785 + fa4b188b): every reference
-    // policy must ship with remediation hints carrying an MCP path,
-    // since that is the ungated recovery route for Bash-lockout
-    // scenarios. The full chain was completed in fa4b188b.
-    for (const policyName of [
-      "review-before-merge",
-      "review-before-merge-bash",
-      "dogfood-before-release",
-      "two-reviewers-required",
-      "review-subagent-before-pr-create",
-      "review-subagent-before-pr-create-bash",
-    ]) {
-      const p = manifest.policies.find((x) => x.name === policyName);
-      expect(p?.producers, `${policyName} producers`).toBeDefined();
-      expect(p?.producers?.some((pr) => pr.kind === "mcp"), `${policyName} has mcp producer`).toBe(true);
-    }
   });
 
   it("applies defaults when optional sections are omitted", () => {
@@ -449,20 +414,6 @@ describe("parseManifest — operator_only unconditional deny (task 2cc73f55)", (
         ],
       }),
     ).not.toThrow();
-  });
-
-  it("the three shipped operator_only kill-switch policies in FULL_TEMPLATE are unaffected by the producers: restriction (they use ux:, not producers:)", () => {
-    const m = parseManifest(parseYaml(FULL_TEMPLATE));
-    for (const name of [
-      "deny-kill-switch-bypass",
-      "deny-session-env-strip",
-      "deny-pause-sentinel-forgery",
-    ]) {
-      const p = m.policies.find((x) => x.name === name);
-      expect(p?.operator_only, `${name} operator_only`).toBe(true);
-      expect(p?.producers, `${name} producers`).toBeUndefined();
-      expect(p?.ux, `${name} ux`).toBeDefined();
-    }
   });
 
   it("does not warn/error the self-attestation check for an operator_only policy with no producers", async () => {
@@ -1164,49 +1115,5 @@ describe("parseManifest: trigger.input_match (task 2699b476)", () => {
     expectIssueMatching(parseError({ "toolArgs.a": { nested: true } }), /input_match/i);
     expectIssueMatching(parseError({ "toolArgs.a": [1] }), /input_match/i);
     expectIssueMatching(parseError({ "toolArgs.a": null }), /input_match/i);
-  });
-
-  it("the shipped FULL_TEMPLATE gate narrows task_finish to autoMerge: true", () => {
-    const manifest = parseManifest(parseYaml(FULL_TEMPLATE));
-    const gate = manifest.policies.find((p) => p.name === "review-before-task-finish-automerge");
-    expect(gate?.trigger.input_match).toEqual({ "toolArgs.autoMerge": true });
-    expect(gate?.trigger.extract).toEqual({ TASK_ID: "toolArgs.taskId" });
-    expect(gate?.requires?.ledger_tag).toBe("review:${TASK_ID}");
-    const merge = manifest.policies.find((p) => p.name === "review-before-task-merge");
-    expect(merge?.trigger.match).toBe("mcp__agent-tasks__task_merge");
-    expect(merge?.trigger.input_match).toBeUndefined();
-    expect(merge?.requires?.ledger_tag).toBe("review:${TASK_ID}");
-  });
-
-  // MEDIUM tests (review round 1, task 2699b476 round 2): TEAM_TEMPLATE
-  // (src/cli/init/profiles.ts) ships its OWN copy of these two policies,
-  // separate from FULL_TEMPLATE's. Nothing previously asserted on
-  // TEAM_TEMPLATE's `input_match` at all, so deleting that block from
-  // TEAM_TEMPLATE left the whole suite green: Team operators would lose
-  // the narrowed task_finish gate silently. Mutation probe: re-apply that
-  // deletion (drop the `input_match: { toolArgs.autoMerge: true }` lines
-  // from TEAM_TEMPLATE's `review-before-task-finish-automerge` policy) and
-  // this test goes red.
-  it("TEAM_TEMPLATE's task-scoped merge gates have the same trigger/requires/hook/enforcement as FULL_TEMPLATE's", () => {
-    const fullManifest = parseManifest(parseYaml(FULL_TEMPLATE));
-    const teamManifest = parseManifest(parseYaml(TEAM_TEMPLATE));
-
-    for (const name of ["review-before-task-merge", "review-before-task-finish-automerge"]) {
-      const fromFull = fullManifest.policies.find((p) => p.name === name);
-      const fromTeam = teamManifest.policies.find((p) => p.name === name);
-      expect(fromFull, `FULL_TEMPLATE is missing policy "${name}"`).toBeDefined();
-      expect(fromTeam, `TEAM_TEMPLATE is missing policy "${name}"`).toBeDefined();
-      // Producer descriptions are allowed to differ (they already do);
-      // everything that decides whether and how the gate fires must not.
-      expect(fromTeam?.trigger).toEqual(fromFull?.trigger);
-      expect(fromTeam?.requires).toEqual(fromFull?.requires);
-      expect(fromTeam?.hook).toBe(fromFull?.hook);
-      expect(fromTeam?.enforcement).toBe(fromFull?.enforcement);
-    }
-
-    const teamGate = teamManifest.policies.find(
-      (p) => p.name === "review-before-task-finish-automerge",
-    );
-    expect(teamGate?.trigger.input_match).toEqual({ "toolArgs.autoMerge": true });
   });
 });

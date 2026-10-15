@@ -189,7 +189,7 @@ describe("exportManifest — posture warnings (task f45dd0a0)", () => {
   - name: gate
     event: PreToolUse
     match: "Bash"
-    command: harness policy intercept
+    command: /usr/bin/true
     blocking: hard
 `;
   const WHEN_POLICY = `policies:

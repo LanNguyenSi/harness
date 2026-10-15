@@ -47,9 +47,10 @@ const intercept = (name: string, match: string, bashMatch?: string) => ({
   budget_ms: 15000,
 });
 
-// The removed producer hooks and the two preflight policies with their
-// require-preflight-* hooks, in the order the pre-removal full template
-// declared them, plus a live hook and a live policy that must stay silent.
+// The removed producer hooks, the policy-intercept hooks and the policies
+// with their `harness record` / preflight remedies, in the order the
+// pre-removal full template declared them, plus a live hook and a live policy
+// (last in each array) that must stay silent.
 function baseFullShaped(): Record<string, unknown> {
   const investigation = legacyPreflightInvestigation();
   const push = legacyPreflightPush();
@@ -64,11 +65,12 @@ function baseFullShaped(): Record<string, unknown> {
       intercept("require-review-evidence", "mcp__github__merge_pull_request"),
       intercept("require-preflight-evidence", "Bash", investigation.trigger.bash_match),
       intercept("require-preflight-push-evidence", "Bash", push.trigger.bash_match),
+      { name: "live-gate", event: "PreToolUse", match: "Bash", command: "harness doctor", blocking: "hard", budget_ms: 15000 },
     ],
     policies: [
       {
         name: "review-before-merge",
-        description: "Live policy: its producer and ux.run lines name live commands.",
+        description: "Removed-command policy: its producer and ux.run lines name `harness record`.",
         trigger: { event: "PreToolUse", match: "mcp__github__merge_pull_request" },
         requires: { ledger_tag: "review:${SESSION_ID}", within: "1h" },
         hook: "require-review-evidence",
@@ -81,6 +83,19 @@ function baseFullShaped(): Record<string, unknown> {
       },
       investigation,
       push,
+      {
+        name: "live-policy",
+        description: "Live policy: its producer and ux.run lines name live commands.",
+        trigger: { event: "PreToolUse", match: "Bash" },
+        requires: { ledger_tag: "live:${SESSION_ID}", within: "1h" },
+        hook: "live-gate",
+        enforcement: "block",
+        producers: [
+          { kind: "bash", command: "harness doctor", description: "A live command." },
+          { kind: "mcp", verb: "mcp__grounding-mcp__ledger_add", example: "{}", description: "Direct write." },
+        ],
+        ux: { cannot: "You cannot proceed yet.", required: ["a doctor run"], run: ["harness doctor"] },
+      },
     ],
   };
 }
@@ -90,6 +105,11 @@ const EXPECTED_SITES = [
   "hooks[0].command",
   "hooks[1].command",
   "hooks[2].command",
+  "hooks[3].command",
+  "hooks[4].command",
+  "hooks[5].command",
+  "policies[0].producers[0].command",
+  "policies[0].ux.run[0]",
   "policies[1].producers[0].command",
   "policies[1].ux.run[0]",
   "policies[2].producers[0].command",
@@ -125,6 +145,14 @@ describe("harness validate on a manifest that still calls removed commands", () 
     expect(byPath.get("policies[2].producers[0].command")).toContain(
       'delete policy "preflight-before-push" from the manifest (and its hook "require-preflight-push-evidence"',
     );
+    expect(byPath.get("hooks[3].command")).toBe(
+      'calls "harness policy intercept", removed in 1.0.0 (the policy engine behind the PreToolUse intercept hook is removed), so it fails with "unknown command"; ' +
+        'delete hook "require-review-evidence" from the manifest (and every policy that names it), then re-run `harness apply`',
+    );
+    expect(byPath.get("policies[0].ux.run[0]")).toBe(
+      'calls "harness record", removed in 1.0.0 (the evidence recording verbs for the removed policy gates are removed), so it fails with "unknown command"; ' +
+        'delete policy "review-before-merge" from the manifest (and its hook "require-review-evidence" when no other policy names it), then re-run `harness apply`',
+    );
     expect(formatReport(result)).toContain('WARN  hooks[1].command: calls "harness session-start", removed in 1.0.0');
   });
 
@@ -138,8 +166,8 @@ describe("harness validate on a manifest that still calls removed commands", () 
 
   it("a manifest without removed commands gives none, also under --strict", () => {
     const m = baseFullShaped();
-    m["hooks"] = (m["hooks"] as Array<{ name: string }>).filter((h) => h.name === "require-review-evidence");
-    m["policies"] = (m["policies"] as Array<{ name: string }>).filter((p) => p.name === "review-before-merge");
+    m["hooks"] = (m["hooks"] as Array<{ name: string }>).filter((h) => h.name === "live-gate");
+    m["policies"] = (m["policies"] as Array<{ name: string }>).filter((p) => p.name === "live-policy");
     const file = writeManifest(m);
     const result = validate({ configPath: file, strict: true, ...NOOP_PROBES });
     expect(result.manifest).not.toBeNull();
@@ -217,8 +245,8 @@ describe("harness doctor on a manifest that still calls removed commands", () =>
 
   it("reports no such warning for a manifest without removed commands", async () => {
     const m = baseFullShaped();
-    m["hooks"] = (m["hooks"] as Array<{ name: string }>).filter((h) => h.name === "require-review-evidence");
-    m["policies"] = (m["policies"] as Array<{ name: string }>).filter((p) => p.name === "review-before-merge");
+    m["hooks"] = (m["hooks"] as Array<{ name: string }>).filter((h) => h.name === "live-gate");
+    m["policies"] = (m["policies"] as Array<{ name: string }>).filter((p) => p.name === "live-policy");
     const file = writeManifest(m);
     const report = await doctor({
       configPath: file,

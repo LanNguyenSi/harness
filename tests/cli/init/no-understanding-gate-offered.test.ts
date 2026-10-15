@@ -10,7 +10,6 @@ import { parse as parseYaml } from "yaml";
 import {
   COMPOSABLE_MCPS,
   COMPOSABLE_PACKS,
-  COMPOSABLE_POLICIES,
   composeCustom,
 } from "../../../src/cli/init/composer.js";
 import {
@@ -43,7 +42,6 @@ function composeEverything(): { yaml: string } {
   return composeCustom({
     packs: COMPOSABLE_PACKS.map((p) => p.key),
     mcps: COMPOSABLE_MCPS.map((m) => m.key),
-    policies: COMPOSABLE_POLICIES.map((p) => p.key),
   });
 }
 
@@ -77,7 +75,7 @@ describe("the interactive composer does not offer the understanding gate", () =>
     expect(COMPOSABLE_PACKS.map((p) => String(p.key))).not.toContain(UG_PACK);
   });
 
-  it("with every composable pack, MCP and policy selected the manifest has no understanding pack, auto_approve key or approve-understanding text", () => {
+  it("with every composable pack and MCP selected the manifest has no understanding pack, auto_approve key or approve-understanding text", () => {
     const { yaml } = composeEverything();
     const doc = parseYaml(yaml);
     expect(packNames(doc)).not.toContain(UG_PACK);
@@ -93,7 +91,6 @@ describe("the interactive composer does not offer the understanding gate", () =>
         // to prove the composer has no branch left for it.
         packs: [UG_PACK as never],
         mcps: [],
-        policies: [],
       }),
     ).toThrow(/unknown pack/);
   });
@@ -116,12 +113,11 @@ describe("the dependency installer does not list understanding-gate binaries", (
     }
   });
 
-  it("the Custom resolver with every pack, MCP and policy selected resolves no understanding-gate binary", () => {
+  it("the Custom resolver with every pack and MCP selected resolves no understanding-gate binary", () => {
     const deps = dependenciesForCustom({
       packs: COMPOSABLE_PACKS.map((p) => p.key),
       mcps: COMPOSABLE_MCPS.map((m) => m.key),
-      policies: COMPOSABLE_POLICIES.map((p) => p.key),
-    });
+      });
     expect(deps.length).toBeGreaterThan(0);
     for (const dep of deps) {
       expect(dep.binary.startsWith("understanding-gate")).toBe(false);

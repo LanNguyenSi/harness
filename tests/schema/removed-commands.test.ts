@@ -121,6 +121,25 @@ describe("REMOVED_COMMANDS table (task f3f15290)", () => {
     expect(invokesRemovedCommand("harness approve")).toBeUndefined();
     expect(invokesRemovedCommand("harness approve branch-protection")).toBeUndefined();
   });
+
+  it("lists harness policy intercept and harness record as their own rows, matched with subcommands and flags (task bcdcde36)", () => {
+    const intercept = REMOVED_COMMANDS.find((c) => c.command === "harness policy intercept");
+    const record = REMOVED_COMMANDS.find((c) => c.command === "harness record");
+    expect(intercept).toBeDefined();
+    expect(record).toBeDefined();
+    expect(intercept?.removedIn).toBe("1.0.0");
+    expect(record?.removedIn).toBe("1.0.0");
+    expect(intercept?.reason.length).toBeGreaterThan(0);
+    expect(record?.reason.length).toBeGreaterThan(0);
+    expect(invokesRemovedCommand("harness policy intercept")).toBe(intercept);
+    expect(invokesRemovedCommand("harness policy intercept --hook y")).toBe(intercept);
+    expect(invokesRemovedCommand("harness record")).toBe(record);
+    expect(invokesRemovedCommand("harness record review --pr 1 x")).toBe(record);
+    expect(invokesRemovedCommand('harness record dogfood "tried it"')).toBe(record);
+    // Look-alikes: another policy verb and a different word are not matches.
+    expect(invokesRemovedCommand("harness policy list")).toBeUndefined();
+    expect(invokesRemovedCommand("harness recorder")).toBeUndefined();
+  });
 });
 
 describe("invokesRemovedCommand", () => {

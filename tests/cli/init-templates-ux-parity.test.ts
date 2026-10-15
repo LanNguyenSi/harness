@@ -45,7 +45,7 @@ describe("init generation surfaces stay in lockstep with the canonical defaults 
   });
 
   it("the Custom composer's branch-protection ux matches the canonical default", () => {
-    const r = composeCustom({ packs: ["branch-protection"], mcps: [], policies: [] });
+    const r = composeCustom({ packs: ["branch-protection"], mcps: [] });
     const m = parseManifest(parseYaml(r.yaml));
     const cfg = packConfig(m, "branch-protection");
     expect(cfg.ux).toEqual(branchProtectionDefaultUx());

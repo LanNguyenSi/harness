@@ -856,7 +856,7 @@ describe("branch-protection hook: the manifest", () => {
       [
         "version: 1",
         "hooks:",
-        "  - { name: risk-gate, event: PreToolUse, match: Bash, command: harness policy intercept, blocking: hard }",
+        "  - { name: risk-gate, event: PreToolUse, match: Bash, command: /usr/bin/true, blocking: hard }",
         "risk:",
         "  degraded_fail_posture: fail_open",
         "  classifiers: []",

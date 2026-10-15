@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import { parse as parseYaml } from "yaml";
 import { FULL_TEMPLATE } from "../../src/cli/init/templates.js";
 import { SOLO_TEMPLATE, TEAM_TEMPLATE } from "../../src/cli/init/profiles.js";
-import { COMPOSABLE_PACKS, COMPOSABLE_POLICIES, composeCustom } from "../../src/cli/init/composer.js";
+import { COMPOSABLE_PACKS, composeCustom } from "../../src/cli/init/composer.js";
 import { parseManifest, type Manifest } from "../../src/schema/index.js";
 
 // Regression guard for task 70781cf6: the agent-facing deny envelope of
@@ -111,15 +111,13 @@ const SOURCES: Array<{ name: string; load: () => Manifest }> = [
   },
   {
     // Finding 1(c): the Custom composer builds its manifest in memory. Pick
-    // every composable pack and policy so every ux.run line the composer
-    // can emit is scanned in one pass, not just whatever a default
-    // selection would happen to include.
-    name: "composeCustom(all packs + policies)",
+    // every composable pack so every ux.run line the composer can emit is
+    // scanned in one pass (it emits no policies since task bcdcde36).
+    name: "composeCustom(all packs)",
     load: () => {
       const composed = composeCustom({
         packs: COMPOSABLE_PACKS.map((p) => p.key),
         mcps: [],
-        policies: COMPOSABLE_POLICIES.map((p) => p.key),
       });
       return parseManifest(parseYaml(composed.yaml));
     },
