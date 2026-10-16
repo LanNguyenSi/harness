@@ -27,7 +27,6 @@ import { format } from "../../src/cli/doctor/format.js";
 import { buildDesiredMcpServers } from "../../src/cli/apply/generate-settings.js";
 import { parseManifest } from "../../src/schema/index.js";
 import { posixSingleQuote, type ClaudeMcpExec } from "../../src/io/claude-mcp.js";
-import { signingKeyPathFor } from "../../src/runtime/approval-signing.js";
 import { HermeticSpawnViolationError } from "../../src/runtime/hermetic-spawn-guard.js";
 import { STUB_NPM_BIN_EXEC_UNKNOWN as STUB_NPM_BIN_EXEC } from "../_helpers/npm-bin-exec.js";
 
@@ -497,17 +496,13 @@ describe("doctor — hermetic spawn guard, claude-mcp path (task 0d80e969)", () 
   });
 });
 
-// Review round H1, Finding 2 (STRUCTURAL fix): before `buildDesiredMcpServers`
-// existed, `buildClaudeMcpRegistration` called `buildMcpServers` +
-// `projectGroundingEnv` directly and never called `projectSigningKeyEnv` at
-// all, so the "not registered, run this `claude mcp add-json ...`" hint for
-// grounding-mcp silently omitted SOLUTION_VERDICT_SIGNING_KEY — 3 of the 4
-// producers of this shape (apply, init --interactive, opencode) carried the
-// var, doctor did not. This pins the fix: the hint now matches
-// `buildDesiredMcpServers`'s output byte-for-byte, the same call every other
-// producer makes.
-describe("doctor — SOLUTION_VERDICT_SIGNING_KEY parity in the add-json hint (review round H1, Finding 2)", () => {
-  it("the not-registered add-json hint for grounding-mcp carries SOLUTION_VERDICT_SIGNING_KEY and matches buildDesiredMcpServers byte-for-byte", async () => {
+// The "not registered, run this `claude mcp add-json ...`" hint for
+// grounding-mcp matches `buildDesiredMcpServers`'s output byte-for-byte, the
+// same call every other producer of this shape makes (apply, init
+// --interactive, opencode). The hint carries the EVIDENCE_LEDGER_DB
+// projection and no approval-signing key (task 21a2c508).
+describe("doctor — the add-json hint matches buildDesiredMcpServers", () => {
+  it("the not-registered add-json hint for grounding-mcp matches buildDesiredMcpServers byte-for-byte and carries no signing key", async () => {
     const home = makeFixture({
       "harness.yaml": manifestWithMcp(
         `    - name: grounding-mcp\n      command: [node, /opt/g/server.js]\n      enabled: true`,
@@ -527,20 +522,16 @@ describe("doctor — SOLUTION_VERDICT_SIGNING_KEY parity in the add-json hint (r
     });
     const entry = report.claudeMcp?.entries.find((e) => e.name === "grounding-mcp");
     expect(entry?.status).toBe("error");
-    expect(entry?.message).toContain("SOLUTION_VERDICT_SIGNING_KEY");
+    expect(entry?.message).toContain("claude mcp add-json");
+    expect(entry?.message).toContain("EVIDENCE_LEDGER_DB");
+    expect(entry?.message).not.toContain("SOLUTION_VERDICT_SIGNING_KEY");
 
     // Independently recompute the desired projection the exact way doctor
-    // does it (no explicit `homeDir` LoaderOptions override in this call,
-    // so `generatedDir` resolves to `<fixture root>/harness.generated`,
-    // same as apply.ts's / interactive.ts's own default-homeDir path) and
-    // assert the hint is byte-identical to it, not just "mentions the var
-    // name".
+    // does it and assert the hint is byte-identical to it, not just "mentions
+    // the var name".
     const manifest = parseManifest(parseYaml(fs.readFileSync(manifestPath, "utf8")));
-    const generatedDir = path.join(home, "harness.generated");
-    const { mcp: desired } = buildDesiredMcpServers(manifest, { homeDir: home, generatedDir });
-    expect(desired["grounding-mcp"]?.env?.SOLUTION_VERDICT_SIGNING_KEY).toBe(
-      signingKeyPathFor(generatedDir),
-    );
+    const { mcp: desired } = buildDesiredMcpServers(manifest, { homeDir: home });
+    expect(desired["grounding-mcp"]?.env).not.toHaveProperty("SOLUTION_VERDICT_SIGNING_KEY");
     const expectedHint =
       "not registered with the claude CLI — run `harness init --interactive` or " +
       `\`claude mcp add-json --scope user grounding-mcp ${posixSingleQuote(

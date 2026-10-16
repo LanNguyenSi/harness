@@ -85,18 +85,6 @@ export interface BuildClaudeMcpRegistrationOptions {
   shallow?: boolean;
   /** Test-injection knob; production omits this and the real `claude` CLI is spawned. */
   claudeMcpExec?: ClaudeMcpExec;
-  /**
-   * The `harness.generated/` directory for the manifest in use (review
-   * round H1, Finding 2), threaded to `buildDesiredMcpServers` so the
-   * desired projection — and therefore the "not registered" `claude mcp
-   * add-json ...` hint — carries `SOLUTION_VERDICT_SIGNING_KEY` exactly
-   * like `apply`/`init --interactive`/opencode's config generator project
-   * it. The caller (doctor/index.ts) resolves this the same way apply.ts
-   * and interactive.ts do: `resolveGeneratedDir({homeDir, manifestPath})`.
-   * Omitted -> no signing-key projection, mirroring
-   * `BuildDesiredMcpServersOptions.generatedDir`'s own no-safe-default rule.
-   */
-  generatedDir?: string;
 }
 
 /**
@@ -180,11 +168,9 @@ export async function buildClaudeMcpRegistration(
   // apply/init pass no homeDir and fall back to os.homedir(); the two only
   // diverge when doctor is pointed at a DIFFERENT home than the one the
   // process runs as, in which case doctor's hint is the correct one for
-  // that home. For the signing key the shared signingKeyEnvValue resolves
-  // non-absolute generatedDir inputs the same way at every call site.
+  // that home.
   const { mcp: desired } = buildDesiredMcpServers(manifest, {
     homeDir: opts.home,
-    generatedDir: opts.generatedDir,
   });
   const desiredNames = Object.keys(desired).sort();
 

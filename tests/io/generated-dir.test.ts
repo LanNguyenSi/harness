@@ -3,13 +3,10 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { GENERATED_DIRNAME, resolveGeneratedDir } from "../../src/io/generated-dir.js";
-import { signingKeyEnvValue } from "../../src/cli/apply/generate-settings.js";
-import { signingKeyPathFor } from "../../src/runtime/approval-signing.js";
 
 // Task 8254e357: resolveGeneratedDir normalizes exactly once (expandHome +
-// path.resolve) so every consumer (apply's mkdirSync, approval-signing's
-// key writer, adopt, doctor, the signing-key env projection) agrees on the
-// same real path for a non-absolute or tilde `generatedDir`.
+// path.resolve) so every consumer (apply's mkdirSync, adopt, doctor, init)
+// agrees on the same real path for a non-absolute or tilde `generatedDir`.
 
 // The real cwd this test file runs from (before any process.chdir()). A
 // caller handing a raw, un-normalized tilde path to a writer would create a
@@ -74,7 +71,7 @@ describe("resolveGeneratedDir normalization", () => {
     }
   });
 
-  it("resolves a relative homeDir against cwd (matches signingKeyEnvValue's own base)", () => {
+  it("resolves a relative homeDir against cwd (path.resolve against cwd)", () => {
     const relative = "rel/x";
     const result = resolveGeneratedDir({ homeDir: relative, manifestPath: "/elsewhere/harness.yaml" });
     expect(result).toBe(path.resolve(relative, GENERATED_DIRNAME));
@@ -103,65 +100,5 @@ describe("resolveGeneratedDir normalization", () => {
       manifestPath: "/elsewhere/harness.yaml",
     });
     expect(second).toBe(first);
-    expect(signingKeyEnvValue(second)).toBe(signingKeyEnvValue(first));
-  });
-});
-
-describe("round-trip: projected env value matches the key-file location", () => {
-  it("'~/x' homeDir: signingKeyEnvValue and signingKeyPathFor agree on an absolute path", () => {
-    const cwdBefore = process.cwd();
-    process.chdir(tmp);
-    try {
-      const generatedDir = resolveGeneratedDir({
-        homeDir: "~/x",
-        manifestPath: "/elsewhere/harness.yaml",
-        userHome: tmp,
-      });
-      const projectedEnvPath = signingKeyEnvValue(generatedDir);
-      expect(projectedEnvPath).toBe(signingKeyPathFor(generatedDir));
-      expect(path.isAbsolute(projectedEnvPath)).toBe(true);
-      expect(projectedEnvPath.startsWith("~")).toBe(false);
-    } finally {
-      process.chdir(cwdBefore);
-    }
-  });
-
-  it("'rel/x' homeDir: signingKeyEnvValue and signingKeyPathFor agree on an absolute path", () => {
-    const cwdBefore = process.cwd();
-    process.chdir(tmp);
-    try {
-      const generatedDir = resolveGeneratedDir({
-        homeDir: "rel/x",
-        manifestPath: "/elsewhere/harness.yaml",
-      });
-      const projectedEnvPath = signingKeyEnvValue(generatedDir);
-      expect(projectedEnvPath).toBe(signingKeyPathFor(generatedDir));
-      expect(path.isAbsolute(projectedEnvPath)).toBe(true);
-      expect(projectedEnvPath.startsWith("~")).toBe(false);
-    } finally {
-      process.chdir(cwdBefore);
-    }
-  });
-
-  it("fixed-point generatedDir: re-normalizing yields the same real key-file path", () => {
-    const cwdBefore = process.cwd();
-    process.chdir(tmp);
-    try {
-      const first = resolveGeneratedDir({
-        homeDir: "~/x",
-        manifestPath: "/elsewhere/harness.yaml",
-        userHome: tmp,
-      });
-      const renormalizedHome = path.dirname(first);
-      const second = resolveGeneratedDir({
-        homeDir: renormalizedHome,
-        manifestPath: "/elsewhere/harness.yaml",
-      });
-      expect(second).toBe(first);
-      expect(signingKeyEnvValue(second)).toBe(signingKeyPathFor(second));
-      expect(signingKeyEnvValue(second)).toBe(signingKeyEnvValue(first));
-    } finally {
-      process.chdir(cwdBefore);
-    }
   });
 });

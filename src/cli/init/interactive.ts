@@ -471,16 +471,6 @@ interface DesiredMcpServers {
  * (`os.homedir()`) here, mirroring `apply.ts`'s own `buildExpectedFiles`
  * call, which never overrides it either.
  *
- * `generatedDir` (task 03a917fd/H1b) has no safe default, so it is
- * resolved here the same way `readPriorLastApply` above resolves it:
- * `resolveGeneratedDir({homeDir: harnessHomeDir, manifestPath: configPath})`.
- * THIS is the real, live MCP-registration path (the `claude mcp` CLI via
- * `ensureMcpServers`, called by `wireClaudeMcp` below) -- unlike
- * `apply.ts`'s `buildExpectedFiles`, whose equivalent
- * `GenerateSettingsResult.mcpServers` is never serialized into
- * settings.json (see that field's own doc comment) and therefore never
- * reaches Claude Code's real MCP registry through THAT path.
- *
  * Returns `null` when the manifest can't be reloaded (should not happen
  * right after a successful `init()`, but a hand-edited/deleted manifest
  * between write and this read is possible); callers degrade gracefully.
@@ -498,11 +488,7 @@ function loadDesiredMcpServers(
   } catch {
     return null;
   }
-  const generatedDir = resolveGeneratedDir({
-    ...(harnessHomeDir !== undefined ? { homeDir: harnessHomeDir } : {}),
-    manifestPath: configPath,
-  });
-  const { mcp: desired, warnings } = buildDesiredMcpServers(manifest, { generatedDir });
+  const { mcp: desired, warnings } = buildDesiredMcpServers(manifest);
   return { manifest, desired, warnings };
 }
 

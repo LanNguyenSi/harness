@@ -807,9 +807,8 @@ export async function doctor(opts: DoctorOptions = {}): Promise<DoctorReport> {
   const dedupedVersionProbe = memoizeVersionProbe(opts.versionProbe ?? (() => null));
   const hooks = checkHooks(manifest, home, { versionProbe: dedupedVersionProbe });
   // generatedDir resolved the same way apply.ts / interactive.ts resolve
-  // it, so buildClaudeMcpRegistration's
-  // desired projection carries SOLUTION_VERDICT_SIGNING_KEY too, and so
-  // the runtime below is read from the very `.last-apply` apply reads.
+  // it, so the runtime below is read from the very `.last-apply` apply
+  // reads.
   const generatedDir = resolveGeneratedDir({
     ...(opts.homeDir !== undefined ? { homeDir: opts.homeDir } : {}),
     manifestPath: resolved.base,
@@ -850,7 +849,6 @@ export async function doctor(opts: DoctorOptions = {}): Promise<DoctorReport> {
     manifest.tools.mcp.length > 0
       ? await buildClaudeMcpRegistration(manifest, {
           home,
-          generatedDir,
           shallow: !!opts.shallow,
           ...(opts.claudeMcpExec !== undefined ? { claudeMcpExec: opts.claudeMcpExec } : {}),
           ...(opts.envOverride !== undefined ? { env: opts.envOverride } : {}),

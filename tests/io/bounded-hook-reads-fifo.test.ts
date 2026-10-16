@@ -264,23 +264,6 @@ describe.skipIf(process.platform === "win32")("git-context: by-path git file rea
   });
 });
 
-describe.skipIf(process.platform === "win32")("runtime state files: a FIFO at the path reads as absent, within the bound", () => {
-  it("pending approval: a FIFO reads as no staged session id", () => {
-    const dir = path.join(tmp, "gen");
-    fs.mkdirSync(dir);
-    fs.writeFileSync(path.join(dir, ".pending-approval"), "sess-1\n");
-    const control = callInChild("runtime/pending-approval.js", "readPendingApproval", [dir]);
-    expectBounded(control);
-    expect(control.value).toEqual({ ok: "sess-1" });
-
-    fs.rmSync(path.join(dir, ".pending-approval"));
-    mkfifo(path.join(dir, ".pending-approval"));
-    const run = callInChild("runtime/pending-approval.js", "readPendingApproval", [dir]);
-    expectBounded(run);
-    expect(run.value).toEqual({ ok: null });
-  });
-});
-
 describe.skipIf(process.platform === "win32")("manifest loader: a FIFO at a manifest path fails the load within the bound", () => {
   it("control: a regular manifest loads", () => {
     const cfg = path.join(tmp, "harness.yaml");

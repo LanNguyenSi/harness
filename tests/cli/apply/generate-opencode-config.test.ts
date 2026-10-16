@@ -5,12 +5,8 @@ import {
   type OpencodeLocalMcpServer,
   type OpencodeMcpEntry,
 } from "../../../src/cli/apply/generate-opencode-config.js";
-import {
-  EVIDENCE_LEDGER_DB_ENV,
-  SOLUTION_VERDICT_SIGNING_KEY_ENV,
-} from "../../../src/cli/apply/generate-settings.js";
+import { EVIDENCE_LEDGER_DB_ENV } from "../../../src/cli/apply/generate-settings.js";
 import { parseManifest, type Manifest } from "../../../src/schema/index.js";
-import { signingKeyPathFor } from "../../../src/runtime/approval-signing.js";
 
 // LOW-F4 (batch18 fix-round, task f34eb233 review): `mcp` entries are
 // now `OpencodeLocalMcpServer | OpencodeDisabledMcpServer`. Tests that
@@ -331,29 +327,18 @@ describe("generateOpencodeConfig", () => {
   });
 });
 
-// task 03a917fd/H1b: mirrors the "runs against a canonical manifest and
-// projects tools.mcp[] ..." EVIDENCE_LEDGER_DB coverage above, for the
-// SOLUTION_VERDICT_SIGNING_KEY projection generateOpencodeConfig now
-// reuses from generate-settings.ts's projectSigningKeyEnv.
-describe("generateOpencodeConfig — SOLUTION_VERDICT_SIGNING_KEY projection (task 03a917fd/H1b)", () => {
-  it("projects the absolute approval-signing key path onto grounding-mcp when generatedDir is given", () => {
-    const { mcp } = generateOpencodeConfig(canonicalManifest(), {
-      homeDir: "/home/op",
-      generatedDir: "/home/op/harness.generated",
-    });
-    const groundingEntry = asLocal(mcp["grounding-mcp"]);
-    expect(groundingEntry.environment?.[SOLUTION_VERDICT_SIGNING_KEY_ENV]).toBe(
-      signingKeyPathFor("/home/op/harness.generated"),
-    );
-  });
-
-  it("does not project SOLUTION_VERDICT_SIGNING_KEY when generatedDir is omitted", () => {
+// The opencode grounding-mcp entry carries the EVIDENCE_LEDGER_DB projection
+// and no approval-signing key (task 21a2c508); an operator-declared value
+// passes through as an ordinary environment entry.
+describe("generateOpencodeConfig — grounding-mcp environment (task 21a2c508)", () => {
+  it("projects EVIDENCE_LEDGER_DB and no SOLUTION_VERDICT_SIGNING_KEY", () => {
     const { mcp } = generateOpencodeConfig(canonicalManifest(), { homeDir: "/home/op" });
     const groundingEntry = asLocal(mcp["grounding-mcp"]);
-    expect(groundingEntry.environment?.[SOLUTION_VERDICT_SIGNING_KEY_ENV]).toBeUndefined();
+    expect(groundingEntry.environment?.EVIDENCE_LEDGER_DB).toBeDefined();
+    expect(groundingEntry.environment).not.toHaveProperty("SOLUTION_VERDICT_SIGNING_KEY");
   });
 
-  it("does not override an operator-declared SOLUTION_VERDICT_SIGNING_KEY", () => {
+  it("passes an operator-declared SOLUTION_VERDICT_SIGNING_KEY through unchanged", () => {
     const manifest = canonicalManifest({
       tools: {
         mcp: [
@@ -365,12 +350,9 @@ describe("generateOpencodeConfig — SOLUTION_VERDICT_SIGNING_KEY projection (ta
         ],
       },
     });
-    const { mcp } = generateOpencodeConfig(manifest, {
-      homeDir: "/home/op",
-      generatedDir: "/home/op/harness.generated",
-    });
+    const { mcp } = generateOpencodeConfig(manifest, { homeDir: "/home/op" });
     const groundingEntry = asLocal(mcp["grounding-mcp"]);
-    expect(groundingEntry.environment?.[SOLUTION_VERDICT_SIGNING_KEY_ENV]).toBe(
+    expect(groundingEntry.environment?.SOLUTION_VERDICT_SIGNING_KEY).toBe(
       "/custom/signing.key",
     );
   });

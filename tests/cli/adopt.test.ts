@@ -14,11 +14,8 @@ import {
   synthesizeName,
 } from "../../src/cli/adopt/derive.js";
 import {
-  SOLUTION_VERDICT_SIGNING_KEY_ENV,
   generateSettingsWithWarnings,
-  signingKeyEnvValue,
 } from "../../src/cli/apply/generate-settings.js";
-import { signingKeyPathFor } from "../../src/runtime/approval-signing.js";
 import { init } from "../../src/cli/init/index.js";
 import { parseManifest } from "../../src/schema/index.js";
 import { STUB_NPM_BIN_EXEC_WARN } from "../_helpers/npm-bin-exec.js";
@@ -871,75 +868,17 @@ describe("apply -> adopt round-trip for the grounding projection", () => {
   });
 });
 
-// task 03a917fd/H1b: exact same round-trip requirement as above, for
-// apply's SOLUTION_VERDICT_SIGNING_KEY projection (generate-settings.ts,
-// projectSigningKeyEnv): the manifest-side mirror in derive.ts's
-// manifestMcpProjection must carry the same key or every apply->adopt
-// cycle reports phantom "modified" drift on grounding-mcp for it.
-describe("apply -> adopt round-trip for the signing-key projection (task 03a917fd/H1b)", () => {
-  const GROUNDING_MANIFEST = parseManifest({
-    version: 1,
-    tools: {
-      mcp: [
-        { name: "grounding-mcp", command: ["node", "/opt/g/server.js"], enabled: true },
-      ],
-      cli: [],
-      skills: { enabled: [], source_dirs: [] },
-      builtin: { known: [] },
-    },
-    memory: { directories: [] },
-    hooks: [],
-    policies: [],
-  });
-  const GENERATED_DIR = "/home/op/harness.generated";
-
-  it("reports zero MCP drift for a registry entry matching the signing-key projection", () => {
-    const { mcpServers } = generateSettingsWithWarnings(GROUNDING_MANIFEST, {
-      homeDir: "/home/op",
-      generatedDir: GENERATED_DIR,
-    });
-    const settings = { hooks: {}, mcpServers };
-    const settingsMcp = parseSettingsMcpServers(settings);
-    const projection = manifestMcpProjection(GROUNDING_MANIFEST, "/home/op", GENERATED_DIR);
-    expect(computeMcpDrift(settingsMcp, projection)).toEqual([]);
-    // Sanity: the key really is present and absolute, not just absent on
-    // both sides (which would also compute zero drift vacuously).
-    expect(mcpServers["grounding-mcp"]?.env?.[SOLUTION_VERDICT_SIGNING_KEY_ENV]).toBe(
-      signingKeyPathFor(GENERATED_DIR),
-    );
-  });
-
-  it("still reports drift when the operator value diverges from the signing-key projection", () => {
-    const { mcpServers } = generateSettingsWithWarnings(GROUNDING_MANIFEST, {
-      homeDir: "/home/op",
-      generatedDir: GENERATED_DIR,
-    });
-    const settings = { hooks: {}, mcpServers };
-    // Simulate an out-of-band edit to a live registry entry.
-    settings.mcpServers["grounding-mcp"]!.env!.SOLUTION_VERDICT_SIGNING_KEY = "/elsewhere/other.key";
-    const settingsMcp = parseSettingsMcpServers(settings);
-    const projection = manifestMcpProjection(GROUNDING_MANIFEST, "/home/op", GENERATED_DIR);
-    const drift = computeMcpDrift(settingsMcp, projection);
-    expect(drift).toHaveLength(1);
-    expect(drift[0]?.reason).toBe("modified");
-  });
-});
-
-// Review round H1, Finding 3: the two round-trip describe blocks above call
+// The round-trip describe above calls
 // `manifestMcpProjection` / `computeMcpDrift` / `parseSettingsMcpServers`
-// directly, bypassing `adopt()` (and therefore adopt/index.ts's own
-// `resolveGeneratedDir({homeDir: opts.homeDir, manifestPath})` call)
-// entirely. A regression that drops the `generatedDir` argument at that
-// real call site would not be caught by them. This is the missing real
-// e2e: a bare grounding-mcp manifest entry (no env declared at all), an
-// effective registry carrying BOTH projected envs, run through the actual
+// directly, bypassing `adopt()` entirely. This is the real e2e: a bare
+// grounding-mcp manifest entry (no env declared at all), an effective
+// registry carrying the projected EVIDENCE_LEDGER_DB, run through the actual
 // `adopt()` function end to end.
-describe("adopt — real e2e for the grounding + signing-key round-trip (review round H1, Finding 3)", () => {
+describe("adopt — real e2e for the grounding round-trip", () => {
   // Absolute, no leading `~`, so EVIDENCE_LEDGER_DB's expansion is
   // independent of `os.homedir()` on whatever machine runs this test
   // (adopt/index.ts threads `homeDir: undefined` into the EVIDENCE_LEDGER_DB
-  // mirror, out of this task's scope to change — see the comment at that
-  // call site).
+  // mirror).
   const LEDGER_PATH = "/var/tmp/h1-finding3-ledger.db";
 
   it("adopt() sees zero MCP drift and leaves the manifest untouched", async () => {
@@ -963,18 +902,11 @@ policies: []
 `,
     );
     writeSettings({});
-    // No explicit homeDir passed to runAdopt below, so adopt/index.ts
-    // resolves generatedDir the same way apply.ts / interactive.ts do
-    // without an explicit homeDir: `<dirname(manifestPath)>/harness.generated`.
-    const generatedDir = path.join(tmpHome, "harness.generated");
     writeRegistry({
       "grounding-mcp": {
         command: "node",
         args: ["/opt/g/server.js"],
-        env: {
-          EVIDENCE_LEDGER_DB: LEDGER_PATH,
-          SOLUTION_VERDICT_SIGNING_KEY: signingKeyPathFor(generatedDir),
-        },
+        env: { EVIDENCE_LEDGER_DB: LEDGER_PATH },
       },
     });
     const before = fs.readFileSync(manifestPath, "utf8");
@@ -994,14 +926,11 @@ policies: []
     expect(fs.readFileSync(manifestPath, "utf8")).toBe(before);
   });
 
-  // Review round H1-R2, M1: apply and adopt must agree on the projected
-  // value for NON-ABSOLUTE generatedDir inputs too (shared
-  // `signingKeyEnvValue`); with a hand-rolled `signingKeyPathFor(raw)` on
-  // either side these report phantom "modified" drift.
-  it.each([
-    ["literal-tilde", "~/h1r2-home/harness.generated"],
-    ["relative", "rel-h1r2/harness.generated"],
-  ])("adopt() sees zero drift for a %s generatedDir (shared signingKeyEnvValue)", async (_label, rawGeneratedDir) => {
+  // Upgrade path (task 21a2c508): a grounding-mcp entry registered by an
+  // older apply still carries SOLUTION_VERDICT_SIGNING_KEY. The manifest no
+  // longer projects it, so adopt reports that entry as modified drift until
+  // it is re-registered.
+  it("adopt() reports modified MCP drift for a registry entry that still carries the legacy signing key", async () => {
     fs.writeFileSync(
       manifestPath,
       `version: 1
@@ -1022,29 +951,22 @@ policies: []
 `,
     );
     writeSettings({});
-    // The registry carries what the (normalizing) apply-side projection
-    // would have registered for this raw generatedDir.
     writeRegistry({
       "grounding-mcp": {
         command: "node",
         args: ["/opt/g/server.js"],
         env: {
           EVIDENCE_LEDGER_DB: LEDGER_PATH,
-          SOLUTION_VERDICT_SIGNING_KEY: signingKeyEnvValue(rawGeneratedDir),
+          SOLUTION_VERDICT_SIGNING_KEY: "/home/op/harness.generated/.approval-signing.key",
         },
       },
     });
-    const before = fs.readFileSync(manifestPath, "utf8");
     const drift = computeMcpDrift(
-      manifestMcpProjection(
-        parseManifest(parseYaml(fs.readFileSync(manifestPath, "utf8"))),
-        undefined,
-        rawGeneratedDir,
-      ),
+      manifestMcpProjection(parseManifest(parseYaml(fs.readFileSync(manifestPath, "utf8")))),
       parseSettingsMcpServers(JSON.parse(fs.readFileSync(registryPath, "utf8"))),
     );
-    expect(drift).toEqual([]);
-    expect(fs.readFileSync(manifestPath, "utf8")).toBe(before);
+    expect(drift).toHaveLength(1);
+    expect(drift[0]?.reason).toBe("modified");
   });
 });
 

@@ -28,7 +28,6 @@ import {
   RESTART_HINT_HOOKS,
   RESTART_HINT_MCP,
 } from "../../../src/io/restart-hints.js";
-import { signingKeyPathFor } from "../../../src/runtime/approval-signing.js";
 
 let tmpHome: string;
 
@@ -1657,122 +1656,75 @@ describe("apply — policy_packs expansion (Phase 6 #2)", () => {
 });
 
 describe("apply: preserves sibling state under harness.generated/ (agent-tasks/bf8e1be8)", () => {
-  // Regression guard for the v0.14.0 marker introduction. `harness apply`
-  // is allowed to write its own known files into harness.generated/ but
-  // MUST NOT wipe sibling state. Two files in particular live there now:
-  //
-  //   - .approvals/<sessionId>: operator-written canonical gate signal
-  //     (agent-tasks/88ca4bb3, PR #132). Wiping it on apply would silently
-  //     re-block every live session.
-  //   - .pending-approval: staged session id the gate hook writes when
-  //     it blocks. Same survival contract; existing behaviour pre-#132,
-  //     pinned here for completeness.
+  // Regression guard: `harness apply` writes its own known files into
+  // harness.generated/ but MUST NOT wipe sibling files it does not own, in
+  // a subdirectory or flat, text or binary, with their mode intact. The
+  // fixtures use neutral names on purpose: the guard is about unknown
+  // siblings, not about any one feature's state files.
 
-  it("approval marker at harness.generated/.approvals/<sid> survives apply unchanged", async () => {
-    writeManifest({
-      hooks: [
-        {
-          name: "h",
-          event: "SessionStart",
-          command: "/h.sh",
-          blocking: false,
-          budget_ms: 30000,
-        },
-      ],
-    });
+  const hookManifest = {
+    hooks: [
+      {
+        name: "h",
+        event: "SessionStart",
+        command: "/h.sh",
+        blocking: false,
+        budget_ms: 30000,
+      },
+    ],
+  };
+
+  it("a file in a subdirectory of harness.generated/ survives apply unchanged", async () => {
+    writeManifest(hookManifest);
     const generatedDir = path.join(tmpHome, GENERATED_DIRNAME);
-    const markerPath = path.join(generatedDir, ".approvals", "sess-live");
-    fs.mkdirSync(path.dirname(markerPath), { recursive: true });
-    const markerBody = `${JSON.stringify(
-      { approvedAt: "2026-05-15T19:00:00Z", approvedBy: "test-operator" },
-      null,
-      2,
-    )}\n`;
-    fs.writeFileSync(markerPath, markerBody);
+    const siblingPath = path.join(generatedDir, "operator-notes", "sess-live");
+    fs.mkdirSync(path.dirname(siblingPath), { recursive: true });
+    const siblingBody = `${JSON.stringify({ note: "keep me", by: "test-operator" }, null, 2)}\n`;
+    fs.writeFileSync(siblingPath, siblingBody);
 
     const r = await apply({ homeDir: tmpHome });
     expect(r.outcome).toBe("applied");
-    expect(fs.existsSync(markerPath)).toBe(true);
-    expect(fs.readFileSync(markerPath, "utf8")).toBe(markerBody);
+    expect(fs.existsSync(siblingPath)).toBe(true);
+    expect(fs.readFileSync(siblingPath, "utf8")).toBe(siblingBody);
   });
 
-  it("a subsequent (no-op) apply also leaves the marker intact", async () => {
-    writeManifest({
-      hooks: [
-        {
-          name: "h",
-          event: "SessionStart",
-          command: "/h.sh",
-          blocking: false,
-          budget_ms: 30000,
-        },
-      ],
-    });
+  it("a subsequent (no-op) apply also leaves the subdirectory file intact", async () => {
+    writeManifest(hookManifest);
     await apply({ homeDir: tmpHome });
     const generatedDir = path.join(tmpHome, GENERATED_DIRNAME);
-    const markerPath = path.join(generatedDir, ".approvals", "sess-live");
-    fs.mkdirSync(path.dirname(markerPath), { recursive: true });
-    const markerBody = `${JSON.stringify(
-      { approvedAt: "2026-05-15T19:00:00Z", approvedBy: "test-operator" },
-      null,
-      2,
-    )}\n`;
-    fs.writeFileSync(markerPath, markerBody);
+    const siblingPath = path.join(generatedDir, "operator-notes", "sess-live");
+    fs.mkdirSync(path.dirname(siblingPath), { recursive: true });
+    const siblingBody = `${JSON.stringify({ note: "keep me", by: "test-operator" }, null, 2)}\n`;
+    fs.writeFileSync(siblingPath, siblingBody);
 
     const r2 = await apply({ homeDir: tmpHome });
     expect(r2.outcome).toBe("no-changes");
-    expect(fs.readFileSync(markerPath, "utf8")).toBe(markerBody);
+    expect(fs.readFileSync(siblingPath, "utf8")).toBe(siblingBody);
   });
 
-  it(".pending-approval staging file is also preserved", async () => {
-    // Pinned alongside .approvals/ so a future "clean up harness.generated/"
-    // refactor cannot regress the staging file without flipping this test.
-    writeManifest({
-      hooks: [
-        {
-          name: "h",
-          event: "SessionStart",
-          command: "/h.sh",
-          blocking: false,
-          budget_ms: 30000,
-        },
-      ],
-    });
-    const stagingPath = path.join(tmpHome, GENERATED_DIRNAME, ".pending-approval");
-    fs.mkdirSync(path.dirname(stagingPath), { recursive: true });
-    fs.writeFileSync(stagingPath, "sess-staged\n");
+  it("a flat file directly under harness.generated/ is also preserved", async () => {
+    writeManifest(hookManifest);
+    const flatPath = path.join(tmpHome, GENERATED_DIRNAME, ".staged-note");
+    fs.mkdirSync(path.dirname(flatPath), { recursive: true });
+    fs.writeFileSync(flatPath, "sess-staged\n");
 
     await apply({ homeDir: tmpHome });
-    expect(fs.readFileSync(stagingPath, "utf8")).toBe("sess-staged\n");
+    expect(fs.readFileSync(flatPath, "utf8")).toBe("sess-staged\n");
   });
 
-  it("the HMAC approval-signing key (.approval-signing.key) survives apply unchanged (harness/f9485cc7)", async () => {
-    // Regression guard for the marker-signing feature: the key is a
-    // sibling of .approvals/ directly under harness.generated/, written
-    // outside apply's own known-files set. Losing it on a re-apply would
-    // silently invalidate every previously-signed marker.
-    writeManifest({
-      hooks: [
-        {
-          name: "h",
-          event: "SessionStart",
-          command: "/h.sh",
-          blocking: false,
-          budget_ms: 30000,
-        },
-      ],
-    });
+  it("a 0600 binary file directly under harness.generated/ survives apply with its bytes and mode", async () => {
+    writeManifest(hookManifest);
     const generatedDir = path.join(tmpHome, GENERATED_DIRNAME);
-    const keyPath = signingKeyPathFor(generatedDir);
-    fs.mkdirSync(path.dirname(keyPath), { recursive: true });
-    const keyBytes = crypto.randomBytes(32);
-    fs.writeFileSync(keyPath, keyBytes, { mode: 0o600 });
+    const secretPath = path.join(generatedDir, ".operator-secret.bin");
+    fs.mkdirSync(path.dirname(secretPath), { recursive: true });
+    const secretBytes = crypto.randomBytes(32);
+    fs.writeFileSync(secretPath, secretBytes, { mode: 0o600 });
 
     const r = await apply({ homeDir: tmpHome });
     expect(r.outcome).toBe("applied");
-    expect(fs.existsSync(keyPath)).toBe(true);
-    expect(fs.readFileSync(keyPath).equals(keyBytes)).toBe(true);
-    const mode = fs.statSync(keyPath).mode & 0o777;
+    expect(fs.existsSync(secretPath)).toBe(true);
+    expect(fs.readFileSync(secretPath).equals(secretBytes)).toBe(true);
+    const mode = fs.statSync(secretPath).mode & 0o777;
     expect(mode).toBe(0o600);
   });
 });
