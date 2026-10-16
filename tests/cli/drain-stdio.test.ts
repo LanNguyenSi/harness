@@ -1,7 +1,7 @@
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import { describe, expect, it } from "vitest";
-import { drainStdio } from "../../src/cli/drain-stdio.js";
+import { drainStdio, tolerateClosedStdio } from "../../src/cli/drain-stdio.js";
 
 /** A stream whose write callbacks fire after `delayMs`, or never. */
 function fakeStream(delayMs: number | null, extra: { destroyed?: boolean; writable?: boolean } = {}) {
@@ -110,5 +110,25 @@ describe("drainStdio", () => {
     expect(Date.now() - started).toBeGreaterThanOrEqual(180);
     expect(first.writes).toEqual([""]);
     expect(second.writes).toEqual([""]);
+  });
+});
+
+describe("tolerateClosedStdio", () => {
+  it("lets a stream error that no one else listens for pass without throwing", () => {
+    const stream = new PassThrough();
+    expect(stream.listenerCount("error")).toBe(0);
+    tolerateClosedStdio([stream]);
+    expect(() => stream.emit("error", Object.assign(new Error("write EPIPE"), { code: "EPIPE" }))).not.toThrow();
+  });
+
+  it("adds one listener per stream however often it is called", () => {
+    const stream = new PassThrough();
+    tolerateClosedStdio([stream]);
+    tolerateClosedStdio([stream]);
+    expect(stream.listenerCount("error")).toBe(1);
+  });
+
+  it("skips a stream without an on() method", () => {
+    expect(() => tolerateClosedStdio([{} as never])).not.toThrow();
   });
 });

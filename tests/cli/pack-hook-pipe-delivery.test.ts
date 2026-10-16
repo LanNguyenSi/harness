@@ -146,11 +146,14 @@ function oversizedManifest(dir: string): string {
   return configPath;
 }
 
-/** A real repository with `master` checked out (unborn), so a write inside it is refused. */
-function protectedRepo(): string {
+/**
+ * A real repository with `branch` checked out (unborn). The default `master`
+ * is protected, so a write inside it is refused.
+ */
+function protectedRepo(branch = "master"): string {
   const repo = path.join(tmpDir("harness-pipe-repo-"), "repo");
   fs.mkdirSync(repo);
-  execFileSync("git", ["-c", "init.defaultBranch=master", "init", "-q"], {
+  execFileSync("git", ["-c", `init.defaultBranch=${branch}`, "init", "-q"], {
     cwd: repo,
     env: { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" },
     stdio: "ignore",
@@ -163,6 +166,32 @@ function packManifest(): string {
   const dir = tmpDir("harness-pipe-cfg-");
   const configPath = path.join(dir, "harness.yaml");
   fs.writeFileSync(configPath, "version: 1\npolicy_packs:\n  - name: branch-protection\n    enabled: true\n");
+  return configPath;
+}
+
+/**
+ * Like packManifest, plus a `config.ux` block the schema rejects, so the hook
+ * writes its `config.ux ignored` warning to stderr before it asks git for the
+ * branch (an await), i.e. while run() is still pending.
+ */
+function packManifestWithBadUx(): string {
+  const dir = tmpDir("harness-pipe-cfg-ux-");
+  const configPath = path.join(dir, "harness.yaml");
+  fs.writeFileSync(
+    configPath,
+    [
+      "version: 1",
+      "policy_packs:",
+      "  - name: branch-protection",
+      "    enabled: true",
+      "    config:",
+      "      ux:",
+      "        cannot: x",
+      "        required: []",
+      "        run: [y]",
+      "",
+    ].join("\n"),
+  );
   return configPath;
 }
 
@@ -419,4 +448,95 @@ describe("a closed reader does not change the exit code", () => {
       TEST_TIMEOUT_MS,
     );
   }
+});
+
+// The warning for a bad `config.ux` is written while run() is still awaiting
+// git. A closed reader's EPIPE is emitted then, before the exit path attaches
+// its listener, so without an earlier listener it is an uncaught exception
+// (exit 1, read as allow by both hosts).
+describe("a closed reader at the early config.ux warning does not change the exit code", () => {
+  it(
+    "claude-code: stderr reader closed, a protected-branch block still exits 0 with the deny envelope",
+    async () => {
+      const repo = protectedRepo();
+      const run = await runWithSlowReader({
+        args: ["pack", "hook", "branch-protection", "--config", packManifestWithBadUx()],
+        stdin: writeEventIn(repo),
+        closeStderr: true,
+        cwd: repo,
+        home: repo,
+      });
+      expect(run.hung).toBe(false);
+      expect(run.signal).toBeNull();
+      expect(run.code).toBe(0);
+      const env = JSON.parse(run.stdout.toString("utf8")) as {
+        decision: string;
+        reason: string;
+        hookSpecificOutput: { permissionDecision: string };
+      };
+      expect(env.decision).toBe("block");
+      expect(env.hookSpecificOutput.permissionDecision).toBe("deny");
+      expect(env.reason).toContain('protected branch "master"');
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "claude-code: both readers closed, a protected-branch block still exits 0",
+    async () => {
+      const repo = protectedRepo();
+      const run = await runWithSlowReader({
+        args: ["pack", "hook", "branch-protection", "--config", packManifestWithBadUx()],
+        stdin: writeEventIn(repo),
+        closeStdout: true,
+        closeStderr: true,
+        cwd: repo,
+        home: repo,
+      });
+      expect(run.hung).toBe(false);
+      expect(run.signal).toBeNull();
+      expect(run.code).toBe(0);
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "codex: stderr reader closed, a protected-branch block still exits 2",
+    async () => {
+      const repo = protectedRepo();
+      const run = await runWithSlowReader({
+        args: ["pack", "hook", "branch-protection", "--config", packManifestWithBadUx(), "--runtime", "codex"],
+        stdin: writeEventIn(repo),
+        closeStderr: true,
+        cwd: repo,
+        home: repo,
+      });
+      expect(run.hung).toBe(false);
+      expect(run.signal).toBeNull();
+      expect(run.code).toBe(2);
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "an allow keeps exit 0 (claude-code and codex) with the stderr reader closed",
+    async () => {
+      for (const runtimeArgs of [[], ["--runtime", "codex"]]) {
+        // A repository on an unprotected branch: git is asked the same way as for a block.
+        const dir = protectedRepo("feature");
+        const run = await runWithSlowReader({
+          args: ["pack", "hook", "branch-protection", "--config", packManifestWithBadUx(), ...runtimeArgs],
+          stdin: writeEventIn(dir),
+          closeStderr: true,
+          cwd: dir,
+          home: dir,
+        });
+        expect(run.hung).toBe(false);
+        expect(run.signal).toBeNull();
+        expect(run.code).toBe(0);
+        expect(run.stdout.length).toBe(0);
+      }
+    },
+    TEST_TIMEOUT_MS,
+  );
 });
