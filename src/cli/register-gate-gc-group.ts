@@ -127,7 +127,8 @@ export function registerGateGcGroup(
         "restored without `--force` only when skipping the units that are back already rebuilds " +
         "the pre-disable bytes; otherwise it refuses, and `--force` restores every unit the snapshot " +
         "names that is still disabled (found by id), leaves a unit that is enabled again as it is " +
-        "and keeps every other edit; it refuses when a unit is missing or changed.",
+        "and keeps every other edit. A unit that is missing, or changed while still disabled, refuses " +
+        "with or without `--force` and the message names the ways out.",
     )
     .option("--settings <path>", "override ~/.claude/settings.json (--runtime claude)")
     .option("--config <path>", "override ~/.codex/config.toml (--runtime codex)")

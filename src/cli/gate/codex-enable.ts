@@ -24,12 +24,15 @@
 // post-disable sha, each unit it names gets its original `hooks = [...]`
 // line back and the result must hash to its pre-disable sha, so the restore
 // is byte-identical. When the config was edited since, the restore skips every
-// unit that is back already (present and not neutralised: its current line is
-// never overwritten) and restores the rest, found by id in the block as it is
-// now. If that rebuilds the pre-disable bytes exactly (a crashed merge, a unit
-// put back by hand) it is applied without `--force`; otherwise enable refuses
-// unless `--force`, which applies it anyway, keeps every other edit, and still
-// refuses when a unit is missing or was changed (another event or matcher).
+// unit that is back already (present once and not neutralised, whatever its
+// event or matcher: its current line is never overwritten) and restores the
+// rest, found by id in the block as it is now. If that rebuilds the
+// pre-disable bytes exactly (a crashed merge, a unit put back by hand) it is
+// applied without `--force`; otherwise enable refuses unless `--force`, which
+// applies it anyway and keeps every other edit. A unit that is missing, listed
+// twice, or still neutralised under another event or matcher cannot be
+// restored by either: that refusal comes first and names the ways out
+// (re-install, the backup, or moving the snapshot aside), never `--force`.
 // The applied snapshot is retired as restored. Units still disabled at the end
 // are reported in `stillDisabled`, units skipped as already enabled in
 // `skippedEnabled`, other live snapshots in `remaining`, and units the snapshot
@@ -45,10 +48,10 @@ import {
 } from "../apply/install-codex-config.js";
 import { atomicWriteFile } from "../../io/atomic-write.js";
 import {
-  type CodexDisabledUnit,
-  type CodexGateSnapshot,
+  codexSnapshotExits,
   type CodexRetiredSnapshot,
   latestInstall,
+  planCodexRestore,
   readLiveCodexSnapshots,
   resolveCodexConfig,
   retireCodexSnapshot,
@@ -111,56 +114,6 @@ function disabledIds(text: string, configPath: string): string[] {
   return readBlock(text, configPath)?.units.filter((u) => u.disabled).map((u) => u.id) ?? [];
 }
 
-type RestorePlan =
-  | { ok: true; text: string; restored: CodexDisabledUnit[]; skipped: string[] }
-  | { ok: false; reason: string };
-
-/** The config with each still-neutralised unit of the snapshot given its
- * original `hooks` line back. A unit is found by id in the block as it is now
- * and must still be the same event and matcher. A unit that is present and
- * not neutralised is already back: it is skipped and named in `skipped`, its
- * current line is never overwritten. */
-function planRestore(current: string, configPath: string, snapshot: CodexGateSnapshot): RestorePlan {
-  const block = readBlock(current, configPath);
-  if (block === null) {
-    return {
-      ok: false,
-      reason:
-        `${configPath} has no harness-managed Codex hook block any more; cannot restore units into it. ` +
-        "Run `harness apply --runtime codex --install` to write the block.",
-    };
-  }
-  const edits: Array<{ start: number; end: number; text: string }> = [];
-  const restored: CodexDisabledUnit[] = [];
-  const skipped: string[] = [];
-  for (const wanted of snapshot.neutralised) {
-    const found = block.units.filter((u) => u.id === wanted.id);
-    const unit = found.length === 1 ? found[0]! : undefined;
-    if (unit === undefined || unit.event !== wanted.event || unit.matcher !== wanted.matcher) {
-      return {
-        ok: false,
-        reason:
-          `the hook unit ${JSON.stringify(wanted.id)} from the snapshot is not in the block of ${configPath} ` +
-          "as it was (missing, listed twice, or changed event or matcher); cannot restore it. The config is untouched.",
-      };
-    }
-    if (!unit.disabled) {
-      skipped.push(wanted.id);
-      continue;
-    }
-    edits.push({ start: unit.hooksStart, end: unit.hooksEnd, text: wanted.hooksText });
-    restored.push(wanted);
-  }
-  edits.sort((a, b) => a.start - b.start);
-  let out = "";
-  let cursor = 0;
-  for (const edit of edits) {
-    out += current.slice(cursor, edit.start) + edit.text;
-    cursor = edit.end;
-  }
-  return { ok: true, text: out + current.slice(cursor), restored, skipped };
-}
-
 export function codexGateEnable(opts: CodexGateEnableOptions = {}): CodexGateEnableResult {
   const { requestedPath, configPath } = resolveCodexConfig(opts, (m) => new GateEnableError(m));
   const { own, foreign: skippedForeign } = readLiveCodexSnapshots(requestedPath, (m) => new GateEnableError(m));
@@ -173,7 +126,7 @@ export function codexGateEnable(opts: CodexGateEnableOptions = {}): CodexGateEna
     if ((err as NodeJS.ErrnoException).code === "ENOENT") {
       if (live === undefined) return { mode: "no-snapshots", configPath: requestedPath, stillDisabled: [], skippedForeign };
       throw new GateEnableError(
-        `Codex config not found: ${requestedPath}; cannot restore into a missing target`,
+        `Codex config not found: ${requestedPath}; cannot restore into a missing target. ${codexSnapshotExits(live)}`,
       );
     }
     throw new GateEnableError(`cannot read ${requestedPath}: ${(err as Error).message}`);
@@ -203,13 +156,29 @@ export function codexGateEnable(opts: CodexGateEnableOptions = {}): CodexGateEna
   let skipped: string[] = [];
   // Nothing is applied when the snapshot only names units that were deleted from the block: it stays live.
   if (retire === null && missing.length === 0) {
-    const exact = currentSha === snapshot.configAfterSha256;
     // The restore skips a unit that is back already and never overwrites a
-    // live line. An edited config is restored without --force only when that
+    // live line. Every check that would also stop --force runs first, so the
+    // edited-since refusal names --force only when --force would write.
+    const plan = planCodexRestore(original, units, configPath, live);
+    if (!plan.ok) throw new GateEnableError(plan.reason);
+    const counts: Record<string, number> = {};
+    for (const unit of plan.restored) counts[unit.event] = (counts[unit.event] ?? 0) + 1;
+    try {
+      assertCodexHookEditInvariant(original, plan.text, configPath, { direction: "restore", counts });
+    } catch (err) {
+      throw toGateError(err, (m) => new GateEnableError(m));
+    }
+    // An edited config is restored without --force only when the restore
     // provably rebuilds the pre-disable bytes (a crashed merge, a unit put
-    // back by hand); otherwise it refuses.
-    const plan = planRestore(original, configPath, snapshot);
-    const proven = plan.ok && sha256Hex(plan.text) === snapshot.configBeforeSha256;
+    // back by hand). An unedited one must rebuild them, --force or not.
+    const exact = currentSha === snapshot.configAfterSha256;
+    const proven = sha256Hex(plan.text) === snapshot.configBeforeSha256;
+    if (exact && !proven) {
+      throw new GateEnableError(
+        `the snapshot ${live.path} does not rebuild the config it was taken from (the restored text does not ` +
+          `match its recorded pre-disable sha); refusing to write. The config is untouched. ${codexSnapshotExits(live)}`,
+      );
+    }
     if (!exact && !proven && !opts.force) {
       throw new GateEnableError(
         `the Codex config has been edited since the snapshot was taken (${live.path}; current sha ` +
@@ -218,20 +187,6 @@ export function codexGateEnable(opts: CodexGateEnableOptions = {}): CodexGateEna
           "still neutralised (found by id), leaves a unit that is enabled again as it is, keeps every other edit " +
           "and retires the snapshot.",
       );
-    }
-    if (!plan.ok) throw new GateEnableError(plan.reason);
-    if (exact && !proven) {
-      throw new GateEnableError(
-        `the snapshot ${live.path} does not rebuild the config it was taken from (the restored text does not ` +
-          "match its recorded pre-disable sha); refusing to write. The config is untouched.",
-      );
-    }
-    const counts: Record<string, number> = {};
-    for (const unit of plan.restored) counts[unit.event] = (counts[unit.event] ?? 0) + 1;
-    try {
-      assertCodexHookEditInvariant(original, plan.text, configPath, { direction: "restore", counts });
-    } catch (err) {
-      throw toGateError(err, (m) => new GateEnableError(m));
     }
     current = plan.text;
     restoredCount = plan.restored.length;
@@ -248,16 +203,8 @@ export function codexGateEnable(opts: CodexGateEnableOptions = {}): CodexGateEna
   // a forced restore), which the next enable retires.
   let retired: CodexRetiredSnapshot | null = null;
   if (retire !== null) {
-    let to: string;
-    try {
-      to = retireCodexSnapshot(live.path, retire.why);
-    } catch (err) {
-      throw new GateEnableError(
-        `${backup !== undefined ? `restored ${restoredCount} hook unit(s) into ${requestedPath}, but ` : ""}` +
-          `cannot retire the snapshot ${live.path} (${(err as Error).message}); ` +
-          "move it out of the directory by hand so it is never applied again.",
-      );
-    }
+    const done = backup !== undefined ? `restored ${restoredCount} hook unit(s) into ${requestedPath}, but ` : "";
+    const to = retireCodexSnapshot(live.path, retire.why, (m) => new GateEnableError(m), done);
     retired = { from: live.path, to, ...retire };
   }
   const base = {

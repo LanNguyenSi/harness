@@ -755,15 +755,38 @@ describe("codexGateDisable: one live snapshot per config", () => {
     expect(read()).toBe(edited);
   });
 
-  it("a second disable keeps a live snapshot that names a unit deleted from the block: nothing is retired, it refuses and names --force", () => {
+  it("a second disable keeps a live snapshot that names a unit deleted from the block: nothing is retired, it refuses and names the ways out, not --force", () => {
     installConfig(configPath);
     const first = disableAt(configPath, "apply_patch", at(1));
     const units = readCodexManagedHookUnits(read(), configPath)!.units;
     const gone = `${read().slice(0, units[0]!.start)}${read().slice(units[1]!.start)}`;
     fs.writeFileSync(configPath, gone);
-    expect(() => codexGateDisable({ configPath, matcher: "Bash", now: at(2) })).toThrow(/cannot join it/);
+    const message = thrownMessage(() => codexGateDisable({ configPath, matcher: "Bash", now: at(2) }));
+    expect(message).toMatch(/cannot join it\. the hook unit .* is not in the block/);
+    expect(message).toContain("harness apply --runtime codex --install");
+    expect(message).not.toContain("--force");
     expect(listCodexSnapshots(path.dirname(configPath))).toEqual([first]);
     expect(read()).toBe(gone);
+  });
+
+  it("a disable that finds the live snapshot spent but cannot retire it (the retired name is taken) writes nothing and names the file and the move-aside step", () => {
+    const original = installConfig(configPath);
+    const first = disableAt(configPath, "apply_patch", at(1));
+    fs.writeFileSync(configPath, original);
+    fs.mkdirSync(retired(first));
+    fs.writeFileSync(path.join(retired(first), "keep"), "");
+    const dir = path.dirname(configPath);
+    const entries = fs.readdirSync(dir).sort();
+    const message = thrownMessage(() => codexGateDisable({ configPath, matcher: "Bash", now: at(2) }));
+    expect(message).toContain(
+      `nothing was written: the live gate snapshot is spent (enable would only retire it), but cannot retire the snapshot ${first}`,
+    );
+    expect(message).toContain("move it out of this directory by hand so it is never applied again, then run the command again");
+    expect(read()).toBe(original);
+    expect(fs.readdirSync(dir).sort()).toEqual(entries);
+    // The way out it names: move the snapshot aside, run the disable again.
+    fs.renameSync(first, path.join(tmp, "aside.json"));
+    expect(disableAt(configPath, "Bash", at(3))).not.toBe(first);
   });
 
   it("refuses a disable while a live snapshot of this config is unreadable, and writes nothing", () => {
@@ -1333,7 +1356,109 @@ describe("codexGateEnable: a merged snapshot the config no longer matches", () =
     const gone = `${read().slice(0, units[0]!.start)}${read().slice(units[1]!.start)}`;
     fs.writeFileSync(configPath, gone);
     expect(() => codexGateEnable({ configPath, force: true, now: at(3) })).toThrow(/is not in the block of .* as it was/);
+    // Without --force the first message is the same one, not the edited-since refusal that would name --force.
+    expect(() => codexGateEnable({ configPath, now: at(3) })).toThrow(/is not in the block of .* as it was/);
     expect(read()).toBe(gone);
+  });
+});
+
+/** The config with one unit's comment, header, matcher and hooks lines deleted by hand. */
+function deleteUnit(text: string, id: string): string {
+  const unit = readCodexManagedHookUnits(text, configPath)!.units.find((u) => u.id === id)!;
+  return `${text.slice(0, unit.start)}${text.slice(text.indexOf("\n", unit.hooksEnd) + 1)}`;
+}
+
+describe("codex gate: a snapshot unit no gate command can restore", () => {
+  /** Two disables merged (branch-protection, shell guard), then the shell guard's whole unit deleted by hand while
+   * branch-protection is still off. */
+  function unitDeleted(): { original: string; snapshotPath: string; state: string; backup: string } {
+    const original = installConfig(configPath, { withEditGuard: true });
+    const snapshotPath = disableAt(configPath, "apply_patch", at(1));
+    expect(disableAt(configPath, "Bash", at(2))).toBe(snapshotPath);
+    const state = deleteUnit(read(), SG);
+    fs.writeFileSync(configPath, state);
+    const snap = readCodexSnapshot(snapshotPath);
+    if (!snap.ok) throw new Error("snapshot unreadable");
+    return { original, snapshotPath, state, backup: snap.snapshot.configBackupPath };
+  }
+
+  it("refuses disable, enable and enable --force alike with the ways out, never --force, and writes nothing", () => {
+    const { snapshotPath, state, backup } = unitDeleted();
+    const dir = path.dirname(configPath);
+    const body = fs.readFileSync(snapshotPath, "utf8");
+    const entries = fs.readdirSync(dir).sort();
+    for (const call of [
+      () => codexGateDisable({ configPath, matcher: "Edit", now: at(3) }),
+      () => codexGateEnable({ configPath, now: at(4) }),
+      () => codexGateEnable({ configPath, force: true, now: at(5) }),
+    ]) {
+      const message = thrownMessage(call);
+      expect(message).toContain(`the hook unit ${JSON.stringify(SG)} of the snapshot ${snapshotPath} is not in the block`);
+      expect(message).toContain("Ways out: run `harness apply --runtime codex --install`");
+      expect(message).toContain(`restore the config from ${backup}`);
+      expect(message).toContain(`move ${snapshotPath} out of this directory`);
+      expect(message).not.toContain("--force");
+      expect(read()).toBe(state);
+      expect(fs.readFileSync(snapshotPath, "utf8")).toBe(body);
+      expect(fs.readdirSync(dir).sort()).toEqual(entries);
+    }
+  });
+
+  it("way out 1: a re-install supersedes the snapshot, and the refused disable then works", () => {
+    unitDeleted();
+    const snapshotPath = listCodexSnapshots(path.dirname(configPath))[0]!;
+    const v2 = reinstall(configPath, at(3));
+    const d = codexGateDisable({ configPath, matcher: "Bash", now: at(4) });
+    if (d.mode !== "remove") throw new Error("expected remove");
+    expect(d.retired?.from).toBe(snapshotPath);
+    expect(d.retired?.why).toBe("superseded");
+    const e = codexGateEnable({ configPath, now: at(5) });
+    expect(e.mode).toBe("restored");
+    expect(e.stillDisabled).toEqual([]);
+    expect(read()).toBe(v2);
+  });
+
+  it("way out 2: the backup the refusal names puts the config back, and enable retires the snapshot with nothing left off", () => {
+    const { original, snapshotPath, backup } = unitDeleted();
+    fs.copyFileSync(backup, configPath);
+    const e = codexGateEnable({ configPath, now: at(3) });
+    expect(e.mode).toBe("already-restored");
+    expect(e.mode !== "no-snapshots" && [e.retired?.from, e.retired?.why, e.missing]).toEqual([snapshotPath, "restored", []]);
+    expect(e.stillDisabled).toEqual([]);
+    expect(read()).toBe(original);
+  });
+
+  it("way out 3: with the snapshot moved aside the refused disable works, and enable names the unit still off", () => {
+    const { snapshotPath } = unitDeleted();
+    fs.renameSync(snapshotPath, path.join(tmp, "aside.json"));
+    const d = codexGateDisable({ configPath, matcher: "Edit", now: at(3) });
+    if (d.mode !== "remove") throw new Error("expected remove");
+    expect(d.retired).toBeNull();
+    const e = codexGateEnable({ configPath, now: at(4) });
+    expect(e.mode).toBe("restored");
+    expect(e.stillDisabled).toEqual([BP]);
+  });
+
+  it("a unit put back live with a changed matcher counts as enabled: --force restores the rest and keeps that line, and each refusal before it names --force", () => {
+    const original = installConfig(configPath, { withEditGuard: true });
+    const snapshotPath = disableAt(configPath, "apply_patch", at(1));
+    disableAt(configPath, "Bash", at(2));
+    const changed = putBack(SG).replace('matcher = "Bash|shell', 'matcher = "Bash|Shell|shell');
+    const sg = readCodexManagedHookUnits(changed, configPath)!.units.find((u) => u.id === SG)!;
+    expect([sg.matcher?.startsWith("Bash|Shell|"), sg.disabled]).toEqual([true, false]);
+    fs.writeFileSync(configPath, changed);
+    expect(thrownMessage(() => codexGateDisable({ configPath, matcher: "Edit", now: at(3) }))).toContain(
+      "cannot join it. Run `harness gate enable --runtime codex --force`",
+    );
+    expect(thrownMessage(() => codexGateEnable({ configPath, now: at(4) }))).toMatch(/edited since the snapshot was taken.*--force/);
+    expect(read()).toBe(changed);
+    const e = codexGateEnable({ configPath, force: true, now: at(5) });
+    if (e.mode !== "restored") throw new Error("expected restored");
+    expect([e.restoredCount, e.skippedEnabled, e.stillDisabled]).toEqual([1, [SG], []]);
+    expect(e.snapshotPath).toBe(retired(snapshotPath));
+    expect(read()).toBe(original.replace('matcher = "Bash|shell', 'matcher = "Bash|Shell|shell'));
+    // The disable the first refusal stopped now starts a fresh snapshot.
+    expect(disableAt(configPath, "Edit", at(6))).not.toBe(snapshotPath);
   });
 });
 
@@ -1480,6 +1605,10 @@ describe("codexGateEnable: integrity", () => {
     expect(() => codexGateEnable({ configPath, force: true, now: T1 })).toThrow(
       /could not read this file|would not parse/,
     );
+    // Without --force the guard's refusal comes first too, instead of an edited-since refusal pointing at --force.
+    const plain = thrownMessage(() => codexGateEnable({ configPath, now: T1 }));
+    expect(plain).toMatch(/could not read this file|would not parse/);
+    expect(plain).not.toContain("--force");
     expect(fs.readFileSync(configPath, "utf8")).toBe(edited);
   });
 
@@ -1501,6 +1630,12 @@ describe("codexGateEnable: integrity", () => {
     fs.writeFileSync(d.snapshotPath, JSON.stringify(snap));
     expect(() => codexGateEnable({ configPath, now: T1 })).toThrow(/does not rebuild the config/);
     expect(fs.readFileSync(configPath, "utf8")).toBe(disabled);
+    // --force does not bypass it: the snapshot's lines are wrong, not the config, and the message names the ways out.
+    const forced = thrownMessage(() => codexGateEnable({ configPath, force: true, now: T1 }));
+    expect(forced).toMatch(/does not rebuild the config/);
+    expect(forced).toContain(`restore the config from ${d.backupPath}`);
+    expect(fs.readFileSync(configPath, "utf8")).toBe(disabled);
+    expect(listCodexSnapshots(path.dirname(configPath))).toEqual([d.snapshotPath]);
   });
 
   it("skips a snapshot taken for another config, names it and leaves it live", () => {
@@ -1523,7 +1658,9 @@ describe("codexGateEnable: integrity", () => {
     installConfig(configPath);
     codexGateDisable({ configPath, matcher: "apply_patch", now: T0 });
     fs.rmSync(configPath);
-    expect(() => codexGateEnable({ configPath })).toThrow(/Codex config not found/);
+    const message = thrownMessage(() => codexGateEnable({ configPath }));
+    expect(message).toMatch(/Codex config not found/);
+    expect(message).toContain("Ways out: run `harness apply --runtime codex --install`");
   });
 });
 

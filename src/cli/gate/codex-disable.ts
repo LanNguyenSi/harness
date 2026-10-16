@@ -21,7 +21,9 @@
 // pre-disable state, or every unit it names is enabled again) is retired by
 // the disable itself, which then starts a fresh snapshot. Any other live
 // snapshot the config no longer matches refuses the disable and names
-// `gate enable --force`. Text outside the fences, and every operator-authored
+// `gate enable --force`, or, when a unit it names is missing or changed so
+// that `--force` would refuse too, the ways out of that snapshot. Text
+// outside the fences, and every operator-authored
 // table, is never touched. The block is read by the installer's own scanner
 // (`readCodexManagedHookUnits`), so a duplicate BEGIN marker, a foreign table
 // wedged in the block or a missing END marker refuse instead of guessing.
@@ -47,6 +49,7 @@ import {
   type CodexGateSnapshot,
   type CodexRetiredSnapshot,
   latestInstall,
+  planCodexRestore,
   readLiveCodexSnapshots,
   resolveCodexConfig,
   retireCodexSnapshot,
@@ -187,21 +190,20 @@ export function codexGateDisable(opts: CodexGateDisableOptions = {}): CodexGateD
       latestInstall(requestedPath, configPath),
     ).retire;
     if (spent !== null) {
-      try {
-        retired = { from: live.path, to: retireCodexSnapshot(live.path, spent.why), ...spent };
-      } catch (err) {
-        throw new GateDisableError(
-          `the live gate snapshot ${live.path} is spent (enable would only retire it) but cannot be retired ` +
-            `(${(err as Error).message}); move it aside by hand and run the command again. The file is untouched.`,
-        );
-      }
+      const done = "nothing was written: the live gate snapshot is spent (enable would only retire it), but ";
+      const to = retireCodexSnapshot(live.path, spent.why, (m) => new GateDisableError(m), done);
+      retired = { from: live.path, to, ...spent };
       live = undefined;
     } else if (sha256Hex(text) !== live.snapshot.configAfterSha256) {
+      // Names --force only when it would restore; otherwise the ways out of a snapshot no gate command can apply.
+      const plan = planCodexRestore(text, block.units, configPath, live);
       throw new GateDisableError(
         `the live gate snapshot ${live.path} no longer matches ${requestedPath} (edited since the last disable) ` +
-          "and still names units that are off, so this disable cannot join it. Run `harness gate enable " +
-          "--runtime codex --force`: it puts back every unit the snapshot names that is still off, keeps your " +
-          "other edits and retires the snapshot. Then disable again. The file is untouched.",
+          "and names a unit that is still off or missing, so this disable cannot join it. " +
+          (plan.ok
+            ? "Run `harness gate enable --runtime codex --force`: it puts back every unit the snapshot names that " +
+              "is still off, keeps your other edits and retires the snapshot. Then disable again. The file is untouched."
+            : plan.reason),
       );
     }
   }
@@ -258,8 +260,8 @@ export function codexGateDisable(opts: CodexGateDisableOptions = {}): CodexGateD
       } catch (rollbackErr) {
         throw new GateDisableError(
           `cannot write ${requestedPath}: ${(err as Error).message}; and the snapshot ${snapPath}, already merged, ` +
-            `could not be put back (${(rollbackErr as Error).message}). \`harness gate enable --runtime codex\` ` +
-            "restores what is off (add --force if it refuses).",
+            `could not be put back (${(rollbackErr as Error).message}). Once the config can be written again, ` +
+            "`harness gate enable --runtime codex` restores what is off.",
         );
       }
     }

@@ -380,6 +380,26 @@ describe("harness gate --runtime codex", () => {
     expect(fs.readdirSync(tmp)).toContain(snap);
   });
 
+  it("names the ways out, never --force, when a merged snapshot's unit was deleted while another is still off; a re-install then clears it", async () => {
+    installTwoUnits();
+    await gate("disable", "--runtime", "codex", "--config", configPath, "--matcher", "apply_patch");
+    await gate("disable", "--runtime", "codex", "--config", configPath, "--matcher", "Bash");
+    const text = fs.readFileSync(configPath, "utf8");
+    const begin = text.indexOf("# harness hook: shell-guard");
+    fs.writeFileSync(configPath, `${text.slice(0, begin)}${text.slice(text.indexOf("# END harness-managed codex hooks"))}`);
+    for (const extra of [[], ["--force"]]) {
+      const r = await gate("enable", "--runtime", "codex", "--config", configPath, ...extra);
+      expect(r.code).toBe(EX_FAIL);
+      expect(r.stderr).toContain('the hook unit "shell-guard" of the snapshot');
+      expect(r.stderr).toContain("Ways out: run `harness apply --runtime codex --install`");
+      expect(r.stderr).not.toContain("--force");
+    }
+    reinstallAt(new Date("2099-01-01T00:00:00.000Z"));
+    const on = await gate("enable", "--runtime", "codex", "--config", configPath);
+    expect(on.code).toBe(EX_OK);
+    expect(on.stdout).toContain("re-rendered its units.");
+  });
+
   it("exits non-zero with the restored-but-cannot-retire message when the retired name is taken by a directory", async () => {
     const original = fs.readFileSync(configPath, "utf8");
     await gate("disable", "--runtime", "codex", "--config", configPath, "--matcher", "apply_patch");

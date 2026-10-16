@@ -23,6 +23,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import {
   CodexInstallRefusalError,
+  type CodexManagedHookUnit,
   defaultCodexConfigPath,
   latestCodexInstallBackup,
   resolveConfigSymlink,
@@ -163,11 +164,93 @@ export interface CodexRetiredSnapshot {
 }
 
 /** Renames a live snapshot to its retired name and returns that name; the
- * file stays for audit. A rename failure surfaces as the fs error. */
-export function retireCodexSnapshot(snapPath: string, why: CodexSnapshotRetirement): string {
+ * file stays for audit. A failed rename surfaces as `makeError`: `context`
+ * (what the call has done so far) and the move-aside step. */
+export function retireCodexSnapshot(
+  snapPath: string,
+  why: CodexSnapshotRetirement,
+  makeError: (message: string) => Error,
+  context = "",
+): string {
   const to = retiredCodexSnapshotPath(snapPath, why);
-  fs.renameSync(snapPath, to);
+  try {
+    fs.renameSync(snapPath, to);
+  } catch (err) {
+    throw makeError(
+      `${context}cannot retire the snapshot ${snapPath} (${(err as Error).message}); move it out of this ` +
+        "directory by hand so it is never applied again, then run the command again.",
+    );
+  }
   return to;
+}
+
+/** The ways out of a live snapshot that no gate command can apply. */
+export function codexSnapshotExits(live: LoadedCodexSnapshot): string {
+  return (
+    "Ways out: run `harness apply --runtime codex --install`, which re-renders the block and supersedes the " +
+    `snapshot, or restore the config from ${live.snapshot.configBackupPath} (its state before the snapshot's ` +
+    "first disable); either way the next `harness gate enable --runtime codex` (or disable) retires the " +
+    `snapshot. Or move ${live.path} out of this directory and put back by hand any unit it names that is ` +
+    "still disabled."
+  );
+}
+
+export type CodexRestorePlan =
+  | { ok: true; text: string; restored: CodexDisabledUnit[]; skipped: string[] }
+  | { ok: false; reason: string };
+
+/** The config with each still-neutralised unit of the snapshot given its
+ * original `hooks` line back, found by id in the block as it is now. A unit
+ * that is present once and not neutralised is back already, whatever its
+ * event or matcher now: it is skipped and named in `skipped`, and its current
+ * line is never overwritten. A unit that is missing, listed twice, or still
+ * neutralised under another event or matcher cannot be restored by any gate
+ * command, so the plan fails and its reason names the ways out. `units` is
+ * null when the config has no managed block. */
+export function planCodexRestore(
+  current: string,
+  units: readonly CodexManagedHookUnit[] | null,
+  configPath: string,
+  live: LoadedCodexSnapshot,
+): CodexRestorePlan {
+  if (units === null) {
+    return {
+      ok: false,
+      reason:
+        `${configPath} has no harness-managed Codex hook block any more; the snapshot ${live.path} cannot ` +
+        `restore units into it. The config is untouched. ${codexSnapshotExits(live)}`,
+    };
+  }
+  const edits: Array<{ start: number; end: number; text: string }> = [];
+  const restored: CodexDisabledUnit[] = [];
+  const skipped: string[] = [];
+  for (const wanted of live.snapshot.neutralised) {
+    const found = units.filter((u) => u.id === wanted.id);
+    const unit = found.length === 1 ? found[0]! : undefined;
+    if (unit !== undefined && !unit.disabled) {
+      skipped.push(wanted.id);
+      continue;
+    }
+    if (unit === undefined || unit.event !== wanted.event || unit.matcher !== wanted.matcher) {
+      return {
+        ok: false,
+        reason:
+          `the hook unit ${JSON.stringify(wanted.id)} of the snapshot ${live.path} is not in the block of ` +
+          `${configPath} as it was (missing, listed twice, or changed event or matcher while still disabled), ` +
+          `so no gate command can restore it. The config is untouched. ${codexSnapshotExits(live)}`,
+      };
+    }
+    edits.push({ start: unit.hooksStart, end: unit.hooksEnd, text: wanted.hooksText });
+    restored.push(wanted);
+  }
+  edits.sort((a, b) => a.start - b.start);
+  let out = "";
+  let cursor = 0;
+  for (const edit of edits) {
+    out += current.slice(cursor, edit.start) + edit.text;
+    cursor = edit.end;
+  }
+  return { ok: true, text: out + current.slice(cursor), restored, skipped };
 }
 
 /** The installer's newest write of the config, read from its backups beside
