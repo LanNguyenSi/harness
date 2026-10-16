@@ -2204,6 +2204,34 @@ function timestampForBackup(now: Date): string {
   return now.toISOString().replace(/[:.]/g, "-");
 }
 
+const INSTALL_BACKUP_STAMP_RE = /^(\d{4}-\d{2}-\d{2})T(\d{2})-(\d{2})-(\d{2})-(\d{3})Z$/;
+
+/** The time of the newest install that rewrote the config at `filePath`, in
+ * epoch milliseconds, read from the `<filePath>.harness-backup-<timestamp>`
+ * files `writeCodexConfigInstall` leaves beside it (one per write of an
+ * existing config), or null when there is none. `harness gate enable
+ * --runtime codex` uses it to tell a snapshot taken before a re-install
+ * (whose units that install re-rendered) from one taken after it. Reads the
+ * directory only. */
+export function latestCodexInstallBackupMs(filePath: string): number | null {
+  const prefix = `${path.basename(filePath)}.harness-backup-`;
+  let names: string[];
+  try {
+    names = fs.readdirSync(path.dirname(filePath));
+  } catch {
+    return null;
+  }
+  let latest: number | null = null;
+  for (const name of names) {
+    if (!name.startsWith(prefix)) continue;
+    const m = INSTALL_BACKUP_STAMP_RE.exec(name.slice(prefix.length));
+    if (m === null) continue;
+    const ms = Date.parse(`${m[1]}T${m[2]}:${m[3]}:${m[4]}.${m[5]}Z`);
+    if (!Number.isNaN(ms) && (latest === null || ms > latest)) latest = ms;
+  }
+  return latest;
+}
+
 /** The config holds operator secrets (API tokens under `[mcp_servers.*]`,
  * Codex hook trust hashes); the install must never widen its permissions.
  * Preserves the existing file's own mode for both the rewritten config and

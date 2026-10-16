@@ -12,6 +12,10 @@
 // `version: 3` and `target: "codex"`, so a Claude settings snapshot (version
 // 1, no target) can never be restored into TOML and a Codex snapshot can
 // never be read as a settings.json one (`readSnapshot` rejects version 3).
+// Once `gate enable` has applied a snapshot, or found it applied or
+// superseded, it renames the file to `*.restored.json` or
+// `*.superseded.json`: the file stays for audit, `listCodexSnapshots` never
+// offers it again.
 
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -20,9 +24,14 @@ import {
   defaultCodexConfigPath,
   resolveConfigSymlink,
 } from "../apply/install-codex-config.js";
-import { SNAPSHOT_BASENAME_SUFFIX, snapshotFieldProblem } from "./snapshot.js";
+import { listSnapshots, SNAPSHOT_BASENAME_SUFFIX, snapshotFieldProblem } from "./snapshot.js";
 
 export const CODEX_SNAPSHOT_BASENAME_PREFIX = "harness.gate-disable-codex.";
+/** Why `gate enable --runtime codex` retired a snapshot: it was applied or
+ * found already applied (`restored`), or its units were brought back by
+ * something else since it was taken, such as a re-install (`superseded`). */
+export type CodexSnapshotRetirement = "restored" | "superseded";
+const RETIRED_SUFFIXES: readonly string[] = [".restored", ".superseded"].map((s) => `${s}${SNAPSHOT_BASENAME_SUFFIX}`);
 export const CODEX_SNAPSHOT_VERSION = 3 as const;
 export const CODEX_SNAPSHOT_TARGET = "codex" as const;
 /** The value a neutralised unit's `hooks` line carries. */
@@ -123,6 +132,19 @@ export function codexSnapshotPath(requestedPath: string, now: Date): string {
   );
 }
 
+/** The name a snapshot is renamed to once retired. The file stays for audit;
+ * `listCodexSnapshots` never offers it again. */
+export function retiredCodexSnapshotPath(snapPath: string, why: CodexSnapshotRetirement): string {
+  return `${snapPath.slice(0, snapPath.length - SNAPSHOT_BASENAME_SUFFIX.length)}.${why}${SNAPSHOT_BASENAME_SUFFIX}`;
+}
+
+/** The Codex snapshots beside a config that are still live (not retired). */
+export function listCodexSnapshots(dir: string): string[] {
+  return listSnapshots(dir, CODEX_SNAPSHOT_BASENAME_PREFIX).filter(
+    (p) => !RETIRED_SUFFIXES.some((suffix) => p.endsWith(suffix)),
+  );
+}
+
 export interface CodexSnapshotReadOk {
   ok: true;
   snapshot: CodexGateSnapshot;
@@ -193,6 +215,10 @@ export function readCodexSnapshot(filePath: string): CodexSnapshotReadOk | Codex
     "configAfterSha256",
   ]);
   if (problem !== null) return { ok: false, reason: problem };
+  // The walk orders snapshots by this time, never by file mtime.
+  if (Number.isNaN(Date.parse(obj["createdAt"] as string))) {
+    return { ok: false, reason: `snapshot ${filePath} has a "createdAt" that is not a timestamp` };
+  }
   const units = obj["neutralised"];
   if (!Array.isArray(units) || units.length === 0 || !units.every(isDisabledUnit)) {
     return { ok: false, reason: `snapshot ${filePath} has a malformed "neutralised" list` };

@@ -11,6 +11,7 @@ import {
   CODEX_MANAGED_BEGIN,
   CODEX_MANAGED_END,
   CodexInstallRefusalError,
+  latestCodexInstallBackupMs,
   planCodexConfigInstall,
   readCodexManagedHookUnits,
   writeCodexConfigInstall,
@@ -22,8 +23,11 @@ import {
   CODEX_SNAPSHOT_BASENAME_PREFIX,
   CODEX_SNAPSHOT_TARGET,
   CODEX_SNAPSHOT_VERSION,
+  type CodexSnapshotRetirement,
   gateWording,
+  listCodexSnapshots,
   readCodexSnapshot,
+  retiredCodexSnapshotPath,
 } from "../../../src/cli/gate/codex-snapshot.js";
 import { gateDisable, GateDisableError } from "../../../src/cli/gate/disable.js";
 import { gateEnable, GateEnableError } from "../../../src/cli/gate/enable.js";
@@ -57,7 +61,7 @@ const OPERATOR_AFTER = [
   "",
 ].join("\n");
 
-function manifest() {
+function manifest(shellGuardCommand = "harness pack hook shell-guard --runtime codex") {
   return parseManifest({
     version: 1,
     hooks: [
@@ -73,7 +77,7 @@ function manifest() {
         name: "hand-shell-guard",
         event: "PreToolUse",
         match: "Bash",
-        command: "harness pack hook shell-guard --runtime codex",
+        command: shellGuardCommand,
         blocking: "hard",
         budget_ms: 5000,
       },
@@ -107,6 +111,18 @@ function installConfig(
   const full = `${installed}${opts.after ?? OPERATOR_AFTER}`;
   fs.writeFileSync(plan.configPath, full);
   return full;
+}
+
+/** Re-runs the installer over the config at `now`, as `harness apply --runtime codex --install`
+ * does after a manifest change: it re-renders the whole block and leaves its
+ * `<config>.harness-backup-<now>` file beside the config. */
+function reinstall(target: string, now: Date, shellGuardCommand?: string): string {
+  const generated = generateCodexConfig(manifest(shellGuardCommand));
+  writeCodexConfigInstall(
+    planCodexConfigInstall({ configPath: target, generatedPath: "/gen/codex/config.toml", generatedContent: generated.content }),
+    { now },
+  );
+  return fs.readFileSync(target, "utf8");
 }
 
 beforeEach(() => {
@@ -148,6 +164,11 @@ function neutraliseByHand(text: string, ...ids: string[]): string {
 
 function touch(file: string, when: Date): void {
   fs.utimesSync(file, when, when);
+}
+
+/** The name the enable walk gives a snapshot it retires. */
+function retired(snapPath: string, why: CodexSnapshotRetirement = "restored"): string {
+  return retiredCodexSnapshotPath(snapPath, why);
 }
 
 const BP = "policy-pack:branch-protection:pre-tool-use";
@@ -511,8 +532,9 @@ describe("codexGateDisable / codexGateEnable: round trip", () => {
     codexGateDisable({ configPath, matcher: "apply_patch", now: T0 });
     codexGateEnable({ configPath, now: T1 });
     const entries = fs.readdirSync(path.dirname(configPath)).sort();
+    // The first enable retired the snapshot it applied, so nothing is left to walk.
     const again = codexGateEnable({ configPath, now: new Date("2026-10-02T12:00:00.000Z") });
-    expect(again.mode).toBe("already-restored");
+    expect(again.mode).toBe("no-snapshots");
     expect(again.stillDisabled).toEqual([]);
     expect(fs.readFileSync(configPath, "utf8")).toBe(original);
     expect(fs.readdirSync(path.dirname(configPath)).sort()).toEqual(entries);
@@ -567,12 +589,13 @@ describe("codexGateEnable: more than one disable", () => {
     const { original, first, second } = twoDisables();
     const e = codexGateEnable({ configPath, now: new Date("2026-10-02T12:00:00.000Z") });
     if (e.mode !== "restored") throw new Error("expected restored");
-    expect(e.snapshotPaths).toEqual([second, first]);
+    expect(e.snapshotPaths).toEqual([retired(second), retired(first)]);
     expect(e.restoredCount).toBe(2);
     expect(e.stillDisabled).toEqual([]);
     expect(fs.readFileSync(configPath, "utf8")).toBe(original);
+    expect(listCodexSnapshots(path.dirname(configPath))).toEqual([]);
     const again = codexGateEnable({ configPath, now: new Date("2026-10-02T13:00:00.000Z") });
-    expect(again.mode).toBe("already-restored");
+    expect(again.mode).toBe("no-snapshots");
     expect(again.stillDisabled).toEqual([]);
   });
 
@@ -583,9 +606,9 @@ describe("codexGateEnable: more than one disable", () => {
     if (e.mode !== "restored") throw new Error("expected restored");
     expect(e.stillDisabled).toEqual([BP]);
     expect(fs.readFileSync(configPath, "utf8")).not.toBe(original);
-    // The call after it finds the newest snapshot already restored, yet the unit is still off.
+    // The call after it finds no live snapshot (the applied one is retired), yet the unit is still off.
     const again = codexGateEnable({ configPath, now: new Date("2026-10-02T13:00:00.000Z") });
-    expect(again.mode).toBe("already-restored");
+    expect(again.mode).toBe("no-snapshots");
     expect(again.stillDisabled).toEqual([BP]);
   });
 
@@ -612,9 +635,14 @@ describe("codexGateEnable: more than one disable", () => {
 
     const e = codexGateEnable({ configPath, force: true, now: new Date("2026-10-02T12:00:00.000Z") });
     if (e.mode !== "restored") throw new Error("expected restored");
-    expect(e.snapshotPaths).toEqual([second]);
+    expect(e.snapshotPaths).toEqual([retired(second)]);
     expect(e.restoredCount).toBe(1);
     expect(e.stillDisabled).toEqual(["hand-user-prompt-submit"]);
+    // The older snapshot's unit is on again: it is retired as superseded, not left to match later.
+    expect(e.retired.map((r) => [path.basename(r.to), r.why])).toEqual([
+      [path.basename(retired(second)), "restored"],
+      [path.basename(retired(first, "superseded")), "superseded"],
+    ]);
     const units = readCodexManagedHookUnits(fs.readFileSync(configPath, "utf8"), configPath)!.units;
     expect(units.map((u) => [u.id, u.disabled])).toEqual([
       [BP, false],
@@ -634,6 +662,205 @@ describe("codexGateEnable: more than one disable", () => {
     if (e.mode !== "restored") throw new Error("expected restored");
     expect(e.snapshotPaths).toHaveLength(1);
     expect(e.stillDisabled).toEqual([BP]);
+  });
+});
+
+const SG = "hand-shell-guard";
+const OLD_SG_LINE = 'command = "harness pack hook shell-guard --runtime codex"';
+const V2 = "harness pack hook shell-guard --runtime codex --v2";
+const at = (hour: number): Date => new Date(`2026-10-02T${String(hour).padStart(2, "0")}:00:00.000Z`);
+const read = (): string => fs.readFileSync(configPath, "utf8");
+
+function disableAt(target: string, matcher: string, now: Date): string {
+  const d = codexGateDisable({ configPath: target, matcher, now });
+  if (d.mode !== "remove") throw new Error("expected remove");
+  return d.snapshotPath;
+}
+
+describe("codexGateEnable: retired snapshots are never applied again", () => {
+  it("renames each snapshot it applies to *.restored.json, keeps it on disk and never lists it again", () => {
+    installConfig(configPath);
+    const s0 = disableAt(configPath, "Bash", T0);
+    const body = fs.readFileSync(s0, "utf8");
+    const e = codexGateEnable({ configPath, now: T1 });
+    expect(e.mode).toBe("restored");
+    expect(fs.existsSync(s0)).toBe(false);
+    expect(fs.readFileSync(retired(s0), "utf8")).toBe(body);
+    expect(listCodexSnapshots(path.dirname(configPath))).toEqual([]);
+    // The same unit neutralised again by hand: no snapshot offers its line back.
+    fs.writeFileSync(configPath, neutraliseByHand(read(), SG));
+    const again = codexGateEnable({ configPath, now: at(12) });
+    expect(again.mode).toBe("no-snapshots");
+    expect(again.stillDisabled).toEqual([SG]);
+  });
+
+  it("retires a snapshot the config already matches (restored by hand, or a crash after the write) as restored", () => {
+    const original = installConfig(configPath);
+    const s0 = disableAt(configPath, "Bash", T0);
+    fs.writeFileSync(configPath, original);
+    const e = codexGateEnable({ configPath, now: T1 });
+    expect(e.mode).toBe("already-restored");
+    expect(e.mode === "already-restored" && e.snapshotPath).toBe(retired(s0));
+    expect(listCodexSnapshots(path.dirname(configPath))).toEqual([]);
+    expect(read()).toBe(original);
+    fs.writeFileSync(configPath, neutraliseByHand(original, SG));
+    expect(codexGateEnable({ configPath, now: at(12) }).mode).toBe("no-snapshots");
+  });
+
+  it("STALE: disable, enable, re-install with a changed command, neutralise by hand, disable another unit, enable: the old line never comes back", () => {
+    installConfig(configPath);
+    disableAt(configPath, "Bash", at(1));
+    codexGateEnable({ configPath, now: at(2) });
+    const v2 = reinstall(configPath, at(3), V2);
+    expect(v2).toContain(V2);
+    fs.writeFileSync(configPath, neutraliseByHand(v2, SG));
+    disableAt(configPath, "apply_patch", at(4));
+    const e = codexGateEnable({ configPath, now: at(5) });
+    if (e.mode !== "restored") throw new Error("expected restored");
+    expect(e.restoredCount).toBe(1);
+    expect(e.stillDisabled).toEqual([SG]);
+    expect(read()).not.toContain(OLD_SG_LINE);
+    expect(read()).toBe(neutraliseByHand(v2, SG));
+  });
+
+  it("COLLIDE: the same unit disabled again through the gate after a re-install, with inverted mtimes and the old snapshot copied back live: the current line comes back", () => {
+    installConfig(configPath);
+    const s0 = disableAt(configPath, "Bash", at(1));
+    const afterS0 = read();
+    codexGateEnable({ configPath, now: at(2) });
+    const v2 = reinstall(configPath, at(3), V2);
+    const s1 = disableAt(configPath, "Bash", at(4));
+    // The trap: neutralising erased the only bytes that differ between the two installs.
+    expect(read()).toBe(afterS0);
+    // A copy of the directory taken before the enable brings S0 back live, with the newest mtime.
+    fs.copyFileSync(retired(s0), s0);
+    touch(s1, at(10));
+    touch(s0, at(20));
+    const e = codexGateEnable({ configPath, now: at(5) });
+    if (e.mode !== "restored") throw new Error("expected restored");
+    expect(e.snapshotPaths).toEqual([retired(s1)]);
+    expect(e.stillDisabled).toEqual([]);
+    expect(read()).toBe(v2);
+    expect(read()).not.toContain(OLD_SG_LINE);
+    expect(listCodexSnapshots(path.dirname(configPath))).toEqual([]);
+  });
+
+  it("a snapshot taken before a re-install is superseded: neutralising the re-rendered unit by hand never brings the old line back", () => {
+    installConfig(configPath);
+    const s0 = disableAt(configPath, "Bash", at(1));
+    const v2 = reinstall(configPath, at(2), V2);
+    const hand = neutraliseByHand(v2, SG);
+    fs.writeFileSync(configPath, hand);
+    const snap = readCodexSnapshot(s0);
+    expect(snap.ok && snap.snapshot.configAfterSha256).toBe(sha(hand));
+    const e = codexGateEnable({ configPath, now: at(3) });
+    expect(e.mode).toBe("already-restored");
+    expect(e.stillDisabled).toEqual([SG]);
+    expect(e.mode !== "no-snapshots" && e.retired).toEqual([
+      { from: s0, to: retired(s0, "superseded"), why: "superseded" },
+    ]);
+    expect(read()).toBe(hand);
+    expect(listCodexSnapshots(path.dirname(configPath))).toEqual([]);
+  });
+
+  it("retires a snapshot whose units were all enabled again by other means, instead of refusing over the edit", () => {
+    const original = installConfig(configPath);
+    const s0 = disableAt(configPath, "Bash", T0);
+    // The operator put the line back by hand, and the file was edited elsewhere too.
+    const edited = `${original}\n[tui]\nnotifications = true\n`;
+    fs.writeFileSync(configPath, edited);
+    const e = codexGateEnable({ configPath, now: T1 });
+    expect(e.mode).toBe("already-restored");
+    expect(e.stillDisabled).toEqual([]);
+    expect(e.mode !== "no-snapshots" && e.retired).toEqual([
+      { from: s0, to: retired(s0, "superseded"), why: "superseded" },
+    ]);
+    expect(read()).toBe(edited);
+  });
+});
+
+describe("codexGateEnable: the walk order and the chain", () => {
+  it("walks by the snapshots' recorded time, not by file mtime: inverted mtimes still restore both disables", () => {
+    const original = installConfig(configPath);
+    const a = disableAt(configPath, "apply_patch", T0);
+    const b = disableAt(configPath, "Bash", T1);
+    touch(a, at(23));
+    touch(b, at(1));
+    const e = codexGateEnable({ configPath, now: at(12) });
+    if (e.mode !== "restored") throw new Error("expected restored");
+    expect(e.snapshotPaths).toEqual([retired(b), retired(a)]);
+    expect(read()).toBe(original);
+  });
+
+  it("chains to an older snapshot only when it matches the file byte for byte; --force then applies it and keeps the edit", () => {
+    const original = installConfig(configPath);
+    const a = disableAt(configPath, "apply_patch", T0);
+    const edit = "\n[tui]\nnotifications = true\n";
+    fs.appendFileSync(configPath, edit);
+    const b = disableAt(configPath, "Bash", T1);
+    const e = codexGateEnable({ configPath, now: at(12) });
+    if (e.mode !== "restored") throw new Error("expected restored");
+    expect(e.snapshotPaths).toEqual([retired(b)]);
+    expect(e.stillDisabled).toEqual([BP]);
+    expect(e.unapplied).toEqual([a]);
+    expect(read()).not.toContain("harness pack hook branch-protection");
+
+    const f = codexGateEnable({ configPath, force: true, now: at(13) });
+    if (f.mode !== "restored") throw new Error("expected restored");
+    expect(f.snapshotPaths).toEqual([retired(a)]);
+    expect(f.stillDisabled).toEqual([]);
+    expect(read()).toBe(`${original}${edit}`);
+  });
+
+  it("does not chain to a snapshot with the same recorded time as the one just applied; the next enable applies it", () => {
+    const original = installConfig(configPath);
+    const a = disableAt(configPath, "apply_patch", T0);
+    const b = disableAt(configPath, "Bash", T1);
+    const snapB = JSON.parse(fs.readFileSync(b, "utf8"));
+    snapB.createdAt = T0.toISOString();
+    fs.writeFileSync(b, JSON.stringify(snapB));
+    const e = codexGateEnable({ configPath, now: at(12) });
+    if (e.mode !== "restored") throw new Error("expected restored");
+    expect(e.snapshotPaths).toEqual([retired(b)]);
+    expect(e.stillDisabled).toEqual([BP]);
+    expect(e.unapplied).toEqual([a]);
+    const f = codexGateEnable({ configPath, now: at(13) });
+    expect(f.mode === "restored" && f.snapshotPaths).toEqual([retired(a)]);
+    expect(read()).toBe(original);
+  });
+
+  it("each config's enable restores its own units when two configs share the directory and their disables interleave", () => {
+    const dir = path.dirname(configPath);
+    const other = path.join(dir, "b.toml");
+    const originalA = installConfig(configPath);
+    const originalB = installConfig(other);
+    disableAt(configPath, "apply_patch", at(1));
+    const b1 = disableAt(other, "apply_patch", at(2));
+    disableAt(configPath, "Bash", at(3));
+
+    const ea = codexGateEnable({ configPath, now: at(4) });
+    if (ea.mode !== "restored") throw new Error("expected restored");
+    expect(ea.restoredCount).toBe(2);
+    expect(ea.skippedForeign).toEqual([b1]);
+    expect(read()).toBe(originalA);
+    expect(listCodexSnapshots(dir)).toEqual([b1]);
+
+    const eb = codexGateEnable({ configPath: other, now: at(5) });
+    if (eb.mode !== "restored") throw new Error("expected restored");
+    expect(eb.skippedForeign).toEqual([]);
+    expect(fs.readFileSync(other, "utf8")).toBe(originalB);
+  });
+});
+
+describe("latestCodexInstallBackupMs", () => {
+  it("reads the newest install write from the installer's backup names, and null when there is none", () => {
+    expect(latestCodexInstallBackupMs(configPath)).toBeNull();
+    installConfig(configPath);
+    reinstall(configPath, at(7), V2);
+    const dir = path.dirname(configPath);
+    fs.writeFileSync(`${configPath}.harness-backup-not-a-time`, "");
+    fs.writeFileSync(path.join(dir, "other.toml.harness-backup-2026-12-01T00-00-00-000Z"), "");
+    expect(latestCodexInstallBackupMs(configPath)).toBe(at(7).getTime());
   });
 });
 
@@ -788,6 +1015,25 @@ describe("codexGateEnable: integrity", () => {
     expect(fs.readFileSync(configPath, "utf8")).toBe(rematched);
   });
 
+  it("--force refuses a unit whose id is now neutralised under another event with the same matcher, and writes nothing", () => {
+    installConfig(configPath);
+    codexGateDisable({ configPath, matcher: "Bash", now: T0 });
+    // By hand: the shell guard's unit moves to PostToolUse, matcher unchanged, still neutralised.
+    const moved = read().replace(
+      /(# harness hook: hand-shell-guard[^\n]*\n)\[\[hooks\.PreToolUse\]\]/,
+      "$1[[hooks.PostToolUse]]",
+    );
+    expect(moved).not.toBe(read());
+    fs.writeFileSync(configPath, moved);
+    const unit = readCodexManagedHookUnits(moved, configPath)!.units.find((u) => u.id === "hand-shell-guard")!;
+    const snap = readCodexSnapshot(listCodexSnapshots(path.dirname(configPath))[0]!);
+    if (!snap.ok) throw new Error("snapshot unreadable");
+    expect([unit.event, unit.matcher, unit.disabled]).toEqual(["PostToolUse", snap.snapshot.neutralised[0]!.matcher, true]);
+    expect(snap.snapshot.neutralised[0]!.event).toBe("PreToolUse");
+    expect(() => codexGateEnable({ configPath, force: true, now: T1 })).toThrow(/changed event or matcher/);
+    expect(read()).toBe(moved);
+  });
+
   it("--force refuses a restore whose result the post-edit guard cannot read (the guard runs on enable)", () => {
     installConfig(configPath);
     codexGateDisable({ configPath, matcher: "apply_patch", now: T0 });
@@ -820,14 +1066,20 @@ describe("codexGateEnable: integrity", () => {
     expect(fs.readFileSync(configPath, "utf8")).toBe(disabled);
   });
 
-  it("refuses a snapshot taken for another config", () => {
+  it("skips a snapshot taken for another config, names it and leaves it live", () => {
     installConfig(configPath);
     const d = codexGateDisable({ configPath, matcher: "apply_patch", now: T0 });
     if (d.mode !== "remove") throw new Error("expected remove");
+    const disabled = fs.readFileSync(configPath, "utf8");
     const snap = JSON.parse(fs.readFileSync(d.snapshotPath, "utf8"));
     snap.configPath = path.join(tmp, "elsewhere.toml");
     fs.writeFileSync(d.snapshotPath, JSON.stringify(snap));
-    expect(() => codexGateEnable({ configPath })).toThrow(/was taken for/);
+    const e = codexGateEnable({ configPath });
+    expect(e.mode).toBe("no-snapshots");
+    expect(e.skippedForeign).toEqual([d.snapshotPath]);
+    expect(e.stillDisabled).toEqual([BP]);
+    expect(fs.readFileSync(configPath, "utf8")).toBe(disabled);
+    expect(listCodexSnapshots(path.dirname(configPath))).toEqual([d.snapshotPath]);
   });
 
   it("refuses when the config is gone", () => {
@@ -871,6 +1123,11 @@ describe("readCodexSnapshot", () => {
     ]) {
       expect(readWith(change).ok).toBe(false);
     }
+  });
+
+  it("refuses a createdAt that is not a timestamp (the walk orders by it)", () => {
+    const r = readWith((c) => void (c["createdAt"] = "yesterday"));
+    expect(r).toEqual({ ok: false, reason: expect.stringMatching(/"createdAt" that is not a timestamp/) });
   });
 
   it("refuses a version 2 Codex snapshot with a message that says what to do", () => {
@@ -1031,9 +1288,9 @@ describe("codex gate: snapshot isolation from the Claude gate", () => {
     expect(fs.readFileSync(settingsPath, "utf8")).not.toBe(originalSettings);
 
     // Codex snapshot newer than the Claude one.
-    codexGateDisable({ configPath, matcher: "apply_patch", now: new Date("2026-10-02T12:00:00.000Z") });
-    const newest = listSnapshots(path.dirname(configPath), CODEX_SNAPSHOT_BASENAME_PREFIX)[0]!;
-    touch(newest, new Date("2026-10-02T13:00:00.000Z"));
+    const again = codexGateDisable({ configPath, matcher: "apply_patch", now: new Date("2026-10-02T12:00:00.000Z") });
+    if (again.mode !== "remove") throw new Error("expected remove");
+    touch(again.snapshotPath, new Date("2026-10-02T13:00:00.000Z"));
     touch(claude.snapshotPath, new Date("2026-10-02T09:00:00.000Z"));
     const e = gateEnable({ settingsPath });
     expect(e.mode).toBe("restored");

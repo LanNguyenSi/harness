@@ -68,6 +68,38 @@ afterEach(() => {
   fs.rmSync(tmp, { recursive: true, force: true });
 });
 
+/** Re-installs the block with two units (branch-protection on apply_patch, a shell guard on Bash). */
+function installTwoUnits(): string {
+  const generated = generateCodexConfig(
+    parseManifest({
+      version: 1,
+      hooks: [
+        {
+          name: "policy-pack:branch-protection:pre-tool-use",
+          event: "PreToolUse",
+          match: "apply_patch",
+          command: "harness pack hook branch-protection --runtime codex",
+          blocking: "hard",
+          budget_ms: 5000,
+        },
+        {
+          name: "shell-guard",
+          event: "PreToolUse",
+          match: "Bash",
+          command: "harness pack hook shell-guard --runtime codex",
+          blocking: "hard",
+          budget_ms: 5000,
+        },
+      ],
+    }),
+  );
+  writeCodexConfigInstall(
+    planCodexConfigInstall({ configPath, generatedPath: "/gen/codex/config.toml", generatedContent: generated.content }),
+    { now: new Date("2026-10-01T01:00:00.000Z") },
+  );
+  return fs.readFileSync(configPath, "utf8");
+}
+
 describe("harness gate --runtime codex", () => {
   it("lists, disables and re-enables the Codex block through the CLI", async () => {
     const original = fs.readFileSync(configPath, "utf8");
@@ -77,6 +109,9 @@ describe("harness gate --runtime codex", () => {
     expect(list.stdout).toContain(`candidate hook units in ${configPath}:`);
     expect(list.stdout).toContain('PreToolUse[0] matcher="apply_patch": harness pack hook branch-protection --runtime codex');
     expect(list.stdout).toContain("harness gate enable --runtime codex");
+    // Codex units are neutralised in place, so the footer never speaks of removal.
+    expect(list.stdout).toContain("Pass --matcher <substring> to disable a unit (its `hooks` array is emptied in place");
+    expect(list.stdout).not.toMatch(/to remove a|Removal is/);
     expect(fs.readFileSync(configPath, "utf8")).toBe(original);
 
     const off = await gate("disable", "--runtime", "codex", "--config", configPath, "--matcher", "apply_patch");
@@ -91,10 +126,11 @@ describe("harness gate --runtime codex", () => {
     expect(on.stdout).toContain(`restored 1 hook unit(s) into ${configPath}`);
     expect(fs.readFileSync(configPath, "utf8")).toBe(original);
 
+    // The applied snapshot was retired, so a second enable has nothing to walk.
     const again = await gate("enable", "--runtime", "codex", "--config", configPath);
     expect(again.code).toBe(EX_OK);
-    expect(again.stdout).toContain("no hook unit of the harness-managed block");
-    expect(again.stdout).toContain("is disabled; no write needed");
+    expect(again.stdout).toContain("nothing to restore");
+    expect(again.stderr).toBe("");
   });
 
   it("lists a neutralised unit as disabled", async () => {
@@ -170,10 +206,52 @@ describe("harness gate --runtime codex", () => {
     expect(partial.stdout).toContain("restored 1 hook unit(s)");
     expect(partial.stderr).toContain("1 hook unit(s)");
     expect(partial.stderr).toContain("are still disabled: policy-pack:branch-protection:pre-tool-use");
+    expect(partial.stderr).toContain("No Codex gate snapshot restores them.");
+    expect(partial.stderr).not.toContain("--force");
     const stuck = await gate("enable", "--runtime", "codex", "--config", configPath);
     expect(stuck.code).toBe(EX_FAIL);
     expect(stuck.stdout).not.toContain("no write needed");
     expect(stuck.stderr).toContain("are still disabled");
+  });
+
+  it("says what --force does: the edited-since refusal, and the still-disabled message when a snapshot names the unit", async () => {
+    const installed = installTwoUnits();
+    await gate("disable", "--runtime", "codex", "--config", configPath, "--matcher", "apply_patch");
+    const edit = "\n[tui]\nnotifications = true\n";
+    fs.appendFileSync(configPath, edit);
+
+    const refused = await gate("enable", "--runtime", "codex", "--config", configPath);
+    expect(refused.code).toBe(EX_FAIL);
+    expect(refused.stderr).toContain("edited since the snapshot was taken");
+    expect(refused.stderr).toContain(
+      "--force swaps only this snapshot's hooks lines back into the units it names (found by id) and keeps every other edit",
+    );
+    expect(refused.stderr).not.toContain("overwrite");
+
+    await gate("disable", "--runtime", "codex", "--config", configPath, "--matcher", "Bash");
+    const partial = await gate("enable", "--runtime", "codex", "--config", configPath);
+    expect(partial.code).toBe(EX_FAIL);
+    expect(partial.stdout).toContain("restored 1 hook unit(s)");
+    expect(partial.stderr).toContain("are still disabled: policy-pack:branch-protection:pre-tool-use");
+    expect(partial.stderr).toContain("still name a disabled unit but no longer match the config byte for byte");
+    expect(partial.stderr).toContain("`harness gate enable --runtime codex --force`");
+    expect(partial.stderr).not.toContain("No Codex gate snapshot restores them");
+
+    const forced = await gate("enable", "--runtime", "codex", "--config", configPath, "--force");
+    expect(forced.code).toBe(EX_OK);
+    expect(forced.stdout).toContain("restored 1 hook unit(s)");
+    expect(fs.readFileSync(configPath, "utf8")).toBe(`${installed}${edit}`);
+  });
+
+  it("names a snapshot taken for another config in the same directory and skips it", async () => {
+    const other = path.join(tmp, "other.toml");
+    fs.copyFileSync(configPath, other);
+    await gate("disable", "--runtime", "codex", "--config", other, "--matcher", "apply_patch");
+    const [foreign] = fs.readdirSync(tmp).filter((n) => n.startsWith("harness.gate-disable-codex."));
+    const r = await gate("enable", "--runtime", "codex", "--config", configPath);
+    expect(r.code).toBe(EX_OK);
+    expect(r.stdout).toContain(`skipped ${path.join(tmp, foreign!)}: taken for another config.`);
+    expect(fs.readdirSync(tmp)).toContain(foreign);
   });
 
   it("exits non-zero for a missing config, a config without a block and a duplicate BEGIN marker", async () => {
