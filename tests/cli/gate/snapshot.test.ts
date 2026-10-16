@@ -12,8 +12,11 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+  listLiveSnapshots,
   listSnapshots,
   readSnapshot,
+  retireSnapshot,
+  retiredSnapshotPath,
   SNAPSHOT_BASENAME_PREFIX,
   SNAPSHOT_BASENAME_SUFFIX,
   SNAPSHOT_VERSION,
@@ -79,12 +82,21 @@ describe("readSnapshot: rejection reasons", () => {
   it("rejects an unsupported version, quoting found and expected", () => {
     const file = writeSnapshot(
       "harness.gate-disable.v2.json",
-      JSON.stringify({ ...validSnapshot(), version: 2 }),
+      JSON.stringify({ ...validSnapshot(), version: 3 }),
     );
     const r = readSnapshot(file);
     expect(r.ok).toBe(false);
     if (r.ok) return;
-    expect(r.reason).toContain("unsupported version 2; expected 1");
+    expect(r.reason).toContain("unsupported version 3; expected 1 or 2");
+  });
+
+  it("still reads a version 1 snapshot (written before merging existed)", () => {
+    const file = writeSnapshot(
+      "harness.gate-disable.v1.json",
+      JSON.stringify({ ...validSnapshot(), version: 1 }),
+    );
+    const r = readSnapshot(file);
+    expect(r.ok).toBe(true);
   });
 
   it("rejects a snapshot missing a required string field, naming it", () => {
@@ -179,5 +191,67 @@ describe("listSnapshots: candidate filtering and ordering", () => {
       path.join("/home/op/.claude", "harness.gate-disable.2026-08-01T10-11-12.013Z.json"),
     );
     expect(p).not.toContain(":");
+  });
+});
+
+describe("retireSnapshot / listLiveSnapshots", () => {
+  const settings = () => path.join(tmp, "settings.json");
+  function put(stamp: string, overrides: Partial<GateDisableSnapshot> = {}, mtimeMs?: number): string {
+    const full = path.join(tmp, `${SNAPSHOT_BASENAME_PREFIX}${stamp}${SNAPSHOT_BASENAME_SUFFIX}`);
+    fs.writeFileSync(full, JSON.stringify(validSnapshot({ createdAt: stamp, ...overrides })), "utf8");
+    if (mtimeMs !== undefined) fs.utimesSync(full, new Date(mtimeMs), new Date(mtimeMs));
+    return full;
+  }
+
+  it("retiredSnapshotPath swaps the .json suffix for .restored.json", () => {
+    expect(retiredSnapshotPath("/d/harness.gate-disable.X.json")).toBe("/d/harness.gate-disable.X.restored.json");
+  });
+
+  it("retireSnapshot renames the file, keeps the content and returns the new path", () => {
+    const live = put("2026-08-01T10:00:00.000Z");
+    const before = fs.readFileSync(live, "utf8");
+    const retired = retireSnapshot(live);
+    expect(retired).toBe(retiredSnapshotPath(live));
+    expect(fs.existsSync(live)).toBe(false);
+    expect(fs.readFileSync(retired, "utf8")).toBe(before);
+  });
+
+  it("lists live snapshots newest first by createdAt, ignoring mtime and retired files", () => {
+    const older = put("2026-08-01T10:00:00.000Z", {}, 9_000_000);
+    const newer = put("2026-08-02T10:00:00.000Z", {}, 1_000_000);
+    retireSnapshot(put("2026-08-03T10:00:00.000Z"));
+    const r = listLiveSnapshots(settings());
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.live.map((l) => l.path)).toEqual([newer, older]);
+  });
+
+  it("skips a snapshot taken for another settings file in the same directory", () => {
+    const mine = put("2026-08-01T10:00:00.000Z");
+    put("2026-08-02T10:00:00.000Z", { settingsPath: path.join(tmp, "settings.local.json") });
+    const r = listLiveSnapshots(settings());
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.live.map((l) => l.path)).toEqual([mine]);
+  });
+
+  it("reports an unreadable live snapshot instead of leaving it out", () => {
+    put("2026-08-01T10:00:00.000Z");
+    const bad = path.join(tmp, `${SNAPSHOT_BASENAME_PREFIX}2026-08-02T10:00:00.000Z${SNAPSHOT_BASENAME_SUFFIX}`);
+    fs.writeFileSync(bad, "{ not json");
+    const r = listLiveSnapshots(settings());
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.reason).toContain("is not valid JSON");
+    expect(r.reason).toContain(bad);
+  });
+
+  it("breaks a createdAt tie by path, newest name first", () => {
+    const a = put("2026-08-01T10:00:00.000Z");
+    const b = path.join(tmp, `${SNAPSHOT_BASENAME_PREFIX}2026-08-01T10:00:00.000Z0${SNAPSHOT_BASENAME_SUFFIX}`);
+    fs.writeFileSync(b, JSON.stringify(validSnapshot({ createdAt: "2026-08-01T10:00:00.000Z" })));
+    const r = listLiveSnapshots(settings());
+    if (!r.ok) throw new Error("expected ok");
+    expect(r.live.map((l) => l.path)).toEqual([b, a]);
   });
 });

@@ -5,7 +5,10 @@
 // `--matcher`, removes them, writes a snapshot of the removed groups to
 // `<settings-dir>/harness.gate-disable.<ISO>.json`, backs up the original
 // to `<settings.json>.bak.<ISO>`, and atomically rewrites settings.json
-// without the matching groups.
+// without the matching groups. There is one live snapshot per settings.json:
+// when one already exists, the newly removed groups are merged into it (and
+// the backup of this call is added to its audit trail) instead of starting a
+// second one, so a single `gate enable` brings every removed group back.
 //
 // With NO `--matcher`, this verb is a pure listing — it prints the
 // candidate groups and exits without writing. That's the no-args
@@ -22,7 +25,9 @@ import { atomicWriteFile } from "../../io/atomic-write.js";
 import {
   backupPath,
   type GateDisableSnapshot,
+  listLiveSnapshots,
   type RemovedGroup,
+  retireSnapshot,
   sha256Hex,
   SNAPSHOT_VERSION,
   snapshotPath,
@@ -70,6 +75,8 @@ export type GateDisableResult =
       backupPath: string;
       snapshotPath: string;
       removed: RemovedGroup[];
+      /** True when the groups were merged into an already live snapshot. */
+      merged: boolean;
     };
 
 export class GateDisableError extends Error {
@@ -228,7 +235,27 @@ export function gateDisable(opts: GateDisableOptions = {}): GateDisableResult {
   const beforeSha = sha256Hex(parsed.raw);
   const now = opts.now ?? new Date();
   const backup = backupPath(settingsPath, now);
-  const snapPath = snapshotPath(settingsPath, now);
+
+  const found = listLiveSnapshots(settingsPath);
+  if (!found.ok) {
+    throw new GateDisableError(
+      `${found.reason}. A live snapshot beside ${settingsPath} that cannot be read would be left out of this ` +
+        `disable; move it aside (or rename it to *.restored.json once its groups are back) and run this again.`,
+    );
+  }
+  // A live snapshot whose pre-disable state is exactly the file now was
+  // restored by hand: its groups are in the file, so merging into it would
+  // splice them in twice later. Retire it and start fresh.
+  const live = found.live.filter((l) => {
+    if (l.snapshot.settingsBeforeSha256 !== beforeSha) return true;
+    retireSnapshot(l.path);
+    return false;
+  });
+  const target = live[0];
+  const step =
+    target === undefined ? 0 : Math.max(...target.snapshot.removed.map((r) => r.step ?? 0), 0) + 1;
+  const stepped: RemovedGroup[] = removed.map((r) => ({ ...r, step }));
+  const snapPath = target?.path ?? snapshotPath(settingsPath, now);
 
   // Backup BEFORE we touch the live file. If the backup write fails we
   // bail without having mutated anything.
@@ -246,16 +273,37 @@ export function gateDisable(opts: GateDisableOptions = {}): GateDisableResult {
   const newSettings = `${JSON.stringify(newObj, null, 2)}\n`;
   const afterSha = sha256Hex(newSettings);
 
-  const snapshot: GateDisableSnapshot = {
-    version: SNAPSHOT_VERSION,
-    createdAt: now.toISOString(),
-    settingsPath,
-    settingsBackupPath: backup,
-    settingsBeforeSha256: beforeSha,
-    settingsAfterSha256: afterSha,
-    filter: { matcher: matcherPattern },
-    removed,
-  };
+  // A merge keeps the original pre-disable state (sha, backup, filter) and
+  // moves only the post-disable sha forward; the snapshot is upgraded to the
+  // current version because the stepped positions are not readable by a
+  // release that only knows version 1.
+  const snapshot: GateDisableSnapshot =
+    target === undefined
+      ? {
+          version: SNAPSHOT_VERSION,
+          createdAt: now.toISOString(),
+          settingsPath,
+          settingsBackupPath: backup,
+          settingsBeforeSha256: beforeSha,
+          settingsAfterSha256: afterSha,
+          filter: { matcher: matcherPattern },
+          removed: stepped,
+        }
+      : {
+          ...target.snapshot,
+          version: SNAPSHOT_VERSION,
+          settingsAfterSha256: afterSha,
+          removed: [...target.snapshot.removed, ...stepped],
+          merges: [
+            ...(target.snapshot.merges ?? []),
+            {
+              step,
+              createdAt: now.toISOString(),
+              matcher: matcherPattern,
+              settingsBackupPath: backup,
+            },
+          ],
+        };
 
   // Snapshot lands BEFORE the live settings.json rewrite: the snapshot
   // is the operator's reversibility insurance, so we don't want to be
@@ -270,5 +318,6 @@ export function gateDisable(opts: GateDisableOptions = {}): GateDisableResult {
     backupPath: backup,
     snapshotPath: snapPath,
     removed,
+    merged: target !== undefined,
   };
 }

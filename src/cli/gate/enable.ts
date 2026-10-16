@@ -1,23 +1,28 @@
-// `harness gate enable` — restore the most recent `gate disable` snapshot.
+// `harness gate enable` — restore the live `gate disable` snapshot.
 //
-// Reads the newest `harness.gate-disable.*.json` next to settings.json,
-// merges its `removed[]` groups back into `hooks[event][]` at their
-// original indices, and atomically rewrites settings.json. Refuses if
-// settings.json has been edited since the snapshot was taken (the
-// recorded `settingsAfterSha256` no longer matches the on-disk content)
-// unless `--force` is passed, so a hand-edit between disable and enable
-// is not silently overwritten. Idempotent on an already-restored file
-// (the snapshot's `settingsBeforeSha256` matches the current sha →
-// nothing to do).
+// There is one live `harness.gate-disable.*.json` per settings.json (a
+// second disable merges into it). Enable puts every removed group back at
+// its recorded index and atomically rewrites settings.json, then retires the
+// snapshot (renamed to `*.restored.json`, kept for audit, never applied
+// again). Refuses if settings.json has been edited since the snapshot was
+// taken (the recorded `settingsAfterSha256` no longer matches the on-disk
+// content) unless `--force` is passed, which splices the snapshot's groups
+// into the file as it is and keeps the edits; a group that is already in the
+// file is never spliced in a second time. A file that already matches the
+// pre-disable state has nothing to restore: the snapshot is retired. A
+// directory holding several live snapshots (version 1 releases left one per
+// disable) is handled one snapshot per call, newest first; the result names
+// the ones still live so the caller can refuse an all-clear.
 
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import { atomicWriteFile } from "../../io/atomic-write.js";
 import {
   type GateDisableSnapshot,
-  listSnapshots,
-  readSnapshot,
+  listLiveSnapshots,
+  retireSnapshot,
   sha256Hex,
 } from "./snapshot.js";
 
@@ -32,7 +37,8 @@ export interface GateEnableOptions {
    * `--force`: restore even when the on-disk settings.json sha differs
    * from the snapshot's recorded post-disable sha. Without it, a
    * mismatch refuses (the operator edited the file between disable and
-   * enable; silent overwrite would lose their changes).
+   * enable; silent overwrite would lose their changes). The snapshot's
+   * groups are spliced into the file as it is; the edits stay.
    */
   force?: boolean;
 }
@@ -45,13 +51,19 @@ export type GateEnableResult =
   | {
       mode: "already-restored";
       settingsPath: string;
+      /** The snapshot under its retired name. */
       snapshotPath: string;
+      /** Snapshots still live after this call (version 1 leftovers), newest first. */
+      remaining: string[];
     }
   | {
       mode: "restored";
       settingsPath: string;
+      /** The snapshot under its retired name. */
       snapshotPath: string;
       restoredCount: number;
+      /** Snapshots still live after this call (version 1 leftovers), newest first. */
+      remaining: string[];
     };
 
 export class GateEnableError extends Error {
@@ -117,14 +129,26 @@ function readCurrentSettings(settingsPath: string): CurrentSettings {
   return { raw, obj, hooks };
 }
 
+function groupLabel(event: string, group: unknown): string {
+  const matcher =
+    group !== null && typeof group === "object" && !Array.isArray(group)
+      ? (group as Record<string, unknown>)["matcher"]
+      : undefined;
+  return `${event} matcher=${JSON.stringify(typeof matcher === "string" ? matcher : null)}`;
+}
+
 function reinsertRemoved(
   hooks: Record<string, unknown[]>,
   snapshot: GateDisableSnapshot,
 ): number {
-  // Sort removed entries by event, then by ascending index, so we splice
-  // them back in growing order — that way an earlier insertion never
-  // shifts a later insertion's target index past the array end.
+  // Each removal step recorded its indices against the array as it stood just
+  // before that step, so the steps are undone newest first, and inside a step
+  // by event and ascending index: an earlier insertion never shifts a later
+  // insertion's target index past the array end.
   const sorted = [...snapshot.removed].sort((a, b) => {
+    const stepA = a.step ?? 0;
+    const stepB = b.step ?? 0;
+    if (stepA !== stepB) return stepB - stepA;
     if (a.event !== b.event) return a.event < b.event ? -1 : 1;
     return a.index - b.index;
   });
@@ -141,26 +165,30 @@ function reinsertRemoved(
 
 export function gateEnable(opts: GateEnableOptions = {}): GateEnableResult {
   const settingsPath = resolveSettingsPath(opts);
-  const settingsDir = path.dirname(settingsPath);
 
-  const snapshotPaths = listSnapshots(settingsDir);
-  if (snapshotPaths.length === 0) {
+  const found = listLiveSnapshots(settingsPath);
+  if (!found.ok) {
+    throw new GateEnableError(found.reason);
+  }
+  const [newest, ...older] = found.live;
+  if (newest === undefined) {
     return { mode: "no-snapshots", settingsPath };
   }
-  const latest = snapshotPaths[0]!;
-  const readResult = readSnapshot(latest);
-  if (!readResult.ok) {
-    throw new GateEnableError(readResult.reason);
-  }
-  const snapshot = readResult.snapshot;
+  const snapshot = newest.snapshot;
+  const remaining = older.map((l) => l.path);
 
   const current = readCurrentSettings(settingsPath);
   const currentSha = sha256Hex(current.raw);
 
   if (currentSha === snapshot.settingsBeforeSha256) {
-    // The current file already matches the pre-disable state: nothing
-    // to restore. Idempotent return.
-    return { mode: "already-restored", settingsPath, snapshotPath: latest };
+    // The current file already matches the pre-disable state: nothing to
+    // restore. The snapshot is spent, so retire it and never offer it again.
+    return {
+      mode: "already-restored",
+      settingsPath,
+      snapshotPath: retireSnapshot(newest.path),
+      remaining,
+    };
   }
 
   if (currentSha !== snapshot.settingsAfterSha256 && !opts.force) {
@@ -169,6 +197,21 @@ export function gateEnable(opts: GateEnableOptions = {}): GateEnableResult {
         `snapshot's post-disable sha ${snapshot.settingsAfterSha256.slice(0, 12)}…). ` +
         `Re-running would overwrite those edits. Inspect the diff against ` +
         `${snapshot.settingsBackupPath}, then pass --force to restore anyway.`,
+    );
+  }
+
+  // A group the file already holds would be spliced in a second time. The
+  // file is then not the state the snapshot expects; refuse and let the
+  // operator look at it.
+  const present = snapshot.removed.filter((r) =>
+    (current.hooks[r.event] ?? []).some((g) => isDeepStrictEqual(g, r.group)),
+  );
+  if (present.length > 0) {
+    throw new GateEnableError(
+      `settings.json already holds ${present.length} hook group(s) the snapshot would restore ` +
+        `(${present.map((r) => groupLabel(r.event, r.group)).join("; ")}); restoring would duplicate them. ` +
+        `Inspect the diff against ${snapshot.settingsBackupPath}; nothing was changed and the snapshot ` +
+        `${newest.path} stays live.`,
     );
   }
 
@@ -183,8 +226,11 @@ export function gateEnable(opts: GateEnableOptions = {}): GateEnableResult {
   const newSettings = `${JSON.stringify(newObj, null, 2)}\n`;
   atomicWriteFile(settingsPath, newSettings);
 
-  return { mode: "restored", settingsPath, snapshotPath: latest, restoredCount };
+  return {
+    mode: "restored",
+    settingsPath,
+    snapshotPath: retireSnapshot(newest.path),
+    restoredCount,
+    remaining,
+  };
 }
-
-/** Test-helper: re-export for the test suite to inspect snapshot pickup. */
-export { listSnapshots };

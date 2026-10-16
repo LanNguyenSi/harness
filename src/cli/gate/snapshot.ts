@@ -1,12 +1,15 @@
 // Snapshot file format + I/O for `harness gate disable` / `harness gate enable`.
 //
-// A snapshot is the on-disk record of one `gate disable` invocation. It
-// captures (a) which hook groups were removed and where they came from,
-// (b) the SHA-256 of `settings.json` immediately before and after the
-// removal, and (c) the path the original was backed up to. `gate enable`
-// reads the newest snapshot in the settings directory, refuses to restore
-// over a settings.json the operator has edited since (`--force` overrides),
-// and writes the removed groups back into place.
+// A snapshot is the on-disk record of the `gate disable` calls made against
+// one settings.json since the last restore. It captures (a) which hook groups
+// were removed and where they came from, (b) the SHA-256 of `settings.json`
+// before the first removal and after the latest one, and (c) the path the
+// original was backed up to. There is at most ONE live snapshot per
+// settings.json: a second `gate disable` merges its groups into it. `gate
+// enable` restores that snapshot, refuses to restore over a settings.json the
+// operator has edited since (`--force` overrides), writes the removed groups
+// back into place and then retires the snapshot (renamed to
+// `*.restored.json`, kept for audit, never applied again).
 //
 // The format is intentionally narrow: no compression, no transform, just
 // the literal JSON groups as they were read out of settings.json.
@@ -17,19 +20,38 @@ import * as path from "node:path";
 
 export const SNAPSHOT_BASENAME_PREFIX = "harness.gate-disable.";
 export const SNAPSHOT_BASENAME_SUFFIX = ".json";
-export const SNAPSHOT_VERSION = 1 as const;
+/** Written by this version. Adds `step` on every removed group and `merges`. */
+export const SNAPSHOT_VERSION = 2 as const;
+/** Written by releases before a second disable merged into the live snapshot; still restorable. */
+export const LEGACY_SNAPSHOT_VERSION = 1 as const;
+/** A retired snapshot keeps its name with this suffix instead of plain `.json`. */
+export const RETIRED_SNAPSHOT_SUFFIX = ".restored.json";
 
 export interface RemovedGroup {
   /** Hook event the group lived under, e.g. "PreToolUse". */
   event: string;
-  /** Position of the group inside `hooks[event][]` at the time of removal. */
+  /**
+   * Position of the group inside `hooks[event][]` just before the removal
+   * step that took it out (a later merged disable records positions in the
+   * already-reduced array). Restore therefore undoes the steps newest first.
+   */
   index: number;
+  /** Which disable call removed it: 0 for the first, 1 for the next merged one, and so on. Absent in version 1 snapshots (read as 0). */
+  step?: number;
   /** The literal JSON value of the removed group; preserved verbatim. */
   group: unknown;
 }
 
+/** A later `gate disable` that was merged into a live snapshot. */
+export interface SnapshotMerge {
+  step: number;
+  createdAt: string;
+  matcher: string;
+  settingsBackupPath: string;
+}
+
 export interface GateDisableSnapshot {
-  version: typeof SNAPSHOT_VERSION;
+  version: typeof SNAPSHOT_VERSION | typeof LEGACY_SNAPSHOT_VERSION;
   /** ISO-8601 UTC timestamp of the disable call. */
   createdAt: string;
   /** Absolute path to the settings.json that was mutated. */
@@ -37,20 +59,26 @@ export interface GateDisableSnapshot {
   /** Absolute path the pre-mutation copy was written to. */
   settingsBackupPath: string;
   /**
-   * SHA-256 of `settings.json` content BEFORE the removal. `gate enable`
-   * compares the live settings.json sha against this to detect operator
-   * edits since the disable; a mismatch refuses unless `--force`.
+   * SHA-256 of `settings.json` content BEFORE the first removal. When the
+   * live file already has this sha there is nothing to restore (the snapshot
+   * is retired).
    */
   settingsBeforeSha256: string;
-  /** SHA-256 of `settings.json` content AFTER the removal. */
+  /**
+   * SHA-256 of `settings.json` content AFTER the latest removal. `gate
+   * enable` compares the live settings.json sha against this to detect
+   * operator edits since the disable; a mismatch refuses unless `--force`.
+   */
   settingsAfterSha256: string;
-  /** The filter the operator applied — recorded for the audit trail. */
+  /** The filter of the first disable, recorded for the audit trail. */
   filter: {
     matcher?: string;
     event?: string;
   };
-  /** Groups removed, in stable order (sorted by event then ascending index). */
+  /** Groups removed by every step, in the order they were taken out. */
   removed: RemovedGroup[];
+  /** Later disables merged into this snapshot, oldest first (absent when there were none). */
+  merges?: SnapshotMerge[];
 }
 
 export function sha256Hex(input: string | Buffer): string {
@@ -164,10 +192,12 @@ export function readSnapshot(filePath: string): SnapshotReadOk | SnapshotReadErr
     return { ok: false, reason: `snapshot ${filePath} is not a JSON object` };
   }
   const obj = parsed as Record<string, unknown>;
-  if (obj["version"] !== SNAPSHOT_VERSION) {
+  if (obj["version"] !== SNAPSHOT_VERSION && obj["version"] !== LEGACY_SNAPSHOT_VERSION) {
     return {
       ok: false,
-      reason: `snapshot ${filePath} has unsupported version ${JSON.stringify(obj["version"])}; expected ${SNAPSHOT_VERSION}`,
+      reason:
+        `snapshot ${filePath} has unsupported version ${JSON.stringify(obj["version"])}; ` +
+        `expected ${LEGACY_SNAPSHOT_VERSION} or ${SNAPSHOT_VERSION}`,
     };
   }
   const problem = snapshotFieldProblem(filePath, obj, [
@@ -182,4 +212,51 @@ export function readSnapshot(filePath: string): SnapshotReadOk | SnapshotReadErr
     return { ok: false, reason: `snapshot ${filePath} is missing array field "removed"` };
   }
   return { ok: true, snapshot: obj as unknown as GateDisableSnapshot };
+}
+
+/** The name a snapshot is renamed to once retired. The file stays for audit. */
+export function retiredSnapshotPath(snapPath: string): string {
+  return `${snapPath.slice(0, -SNAPSHOT_BASENAME_SUFFIX.length)}${RETIRED_SNAPSHOT_SUFFIX}`;
+}
+
+/** Retire `snapPath` (rename it, keep it for audit) and return the new path. */
+export function retireSnapshot(snapPath: string): string {
+  const to = retiredSnapshotPath(snapPath);
+  fs.renameSync(snapPath, to);
+  return to;
+}
+
+export interface LiveSnapshot {
+  path: string;
+  snapshot: GateDisableSnapshot;
+}
+
+export type LiveSnapshotsResult =
+  | { ok: true; live: LiveSnapshot[] }
+  | { ok: false; reason: string };
+
+/**
+ * The live (not retired) snapshots beside `settingsPath` that were taken for
+ * that file, newest first by `createdAt`. A snapshot for another settings
+ * file in the same directory is skipped. A live snapshot that cannot be read
+ * is an error: its target cannot be told, so neither disable nor enable may
+ * go on as if it did not exist.
+ */
+export function listLiveSnapshots(settingsPath: string): LiveSnapshotsResult {
+  const target = path.resolve(settingsPath);
+  const live: LiveSnapshot[] = [];
+  for (const file of listSnapshots(path.dirname(settingsPath))) {
+    if (file.endsWith(RETIRED_SNAPSHOT_SUFFIX)) continue;
+    const read = readSnapshot(file);
+    if (!read.ok) return { ok: false, reason: read.reason };
+    if (path.resolve(read.snapshot.settingsPath) !== target) continue;
+    live.push({ path: file, snapshot: read.snapshot });
+  }
+  live.sort((a, b) => {
+    if (a.snapshot.createdAt !== b.snapshot.createdAt) {
+      return a.snapshot.createdAt < b.snapshot.createdAt ? 1 : -1;
+    }
+    return a.path < b.path ? 1 : -1;
+  });
+  return { ok: true, live };
 }
