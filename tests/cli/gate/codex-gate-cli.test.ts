@@ -209,7 +209,8 @@ describe("harness gate --runtime codex", () => {
     expect(fs.readdirSync(tmp).filter((n) => n.startsWith("harness.gate-disable-codex.") && !n.includes(".restored."))).toEqual([]);
   });
 
-  it("exits non-zero and names how many live snapshots remain when an earlier build left several", async () => {
+  /** Rebuilds what an earlier build wrote for two disables: one live snapshot each (apply_patch first, then Bash). */
+  async function legacyPair(): Promise<{ installed: string; first: string }> {
     const installed = installTwoUnits();
     await gate("disable", "--runtime", "codex", "--config", configPath, "--matcher", "apply_patch");
     const [first] = fs.readdirSync(tmp).filter((n) => n.startsWith("harness.gate-disable-codex."));
@@ -217,11 +218,9 @@ describe("harness gate --runtime codex", () => {
     const firstBody = fs.readFileSync(path.join(tmp, first!), "utf8");
     await gate("disable", "--runtime", "codex", "--config", configPath, "--matcher", "Bash");
     const merged = JSON.parse(fs.readFileSync(path.join(tmp, first!), "utf8"));
-    // Rebuild what an earlier build wrote: one snapshot per disable.
     fs.writeFileSync(path.join(tmp, first!), firstBody);
-    const secondName = first!.replace(/\d{4}-\d\d-\d\dT[\d.-]+Z/, "2999-01-01T00-00-00.000Z");
     fs.writeFileSync(
-      path.join(tmp, secondName),
+      path.join(tmp, first!.replace(/\d{4}-\d\d-\d\dT[\d.-]+Z/, "2999-01-01T00-00-00.000Z")),
       JSON.stringify({
         ...merged,
         createdAt: "2999-01-01T00:00:00.000Z",
@@ -229,14 +228,31 @@ describe("harness gate --runtime codex", () => {
         neutralised: merged.neutralised.slice(1),
       }),
     );
+    return { installed, first: path.join(tmp, first!) };
+  }
 
+  it("exits non-zero and names how many live snapshots remain when an earlier build left several", async () => {
+    const { installed, first } = await legacyPair();
     const one = await gate("enable", "--runtime", "codex", "--config", configPath);
     expect(one.code).toBe(EX_FAIL);
     expect(one.stdout).toContain("restored 1 hook unit(s)");
     expect(one.stderr).toContain("are still disabled: policy-pack:branch-protection:pre-tool-use");
-    expect(one.stderr).toContain(`1 more live Codex gate snapshot(s) remain`);
-    expect(one.stderr).toContain(path.join(tmp, first!));
+    expect(one.stderr).toContain("1 more live Codex gate snapshot(s) remain");
+    expect(one.stderr).toContain(first);
     expect(one.stderr).not.toContain("No Codex gate snapshot restores them");
+    const two = await gate("enable", "--runtime", "codex", "--config", configPath);
+    expect(two.code).toBe(EX_OK);
+    expect(fs.readFileSync(configPath, "utf8")).toBe(installed);
+  });
+
+  it("still exits non-zero for a remaining live snapshot when no unit is disabled any more", async () => {
+    const { installed, first } = await legacyPair();
+    fs.writeFileSync(configPath, installed);
+    const one = await gate("enable", "--runtime", "codex", "--config", configPath);
+    expect(one.code).toBe(EX_FAIL);
+    expect(one.stderr).toContain("1 more live Codex gate snapshot(s) remain");
+    expect(one.stderr).toContain(first);
+    expect(one.stderr).not.toContain("still disabled");
     const two = await gate("enable", "--runtime", "codex", "--config", configPath);
     expect(two.code).toBe(EX_OK);
     expect(fs.readFileSync(configPath, "utf8")).toBe(installed);
