@@ -632,6 +632,7 @@ Effective manifest for that project has `codebase-oracle` with `enabled: false` 
 | Case | Behaviour |
 |---|---|
 | **`null` value in project override** | Removes the key from the effective manifest (tombstone). `memory.router: null` unwires the router entirely, not "inherit". |
+| **Empty, comment-only or `null` layer file** | The layer is skipped with a warning naming the file and the manifest loads as if it were absent. A layer whose root is a scalar or a list fails the load with an error naming the file (exit 66): an override layer must be a mapping. |
 | **Empty list `[]`** | Clears the list in the effective manifest. `tools.mcp: []` disables all MCP servers; same for any other list-valued key. This is the explicit way to say "no entries here". |
 | **New name-keyed entry not in user** | Appended, in project-declaration order, after user entries. Two projects adding the same `name` to their overrides is a no-op conflict (each project overrides only its own effective manifest). |
 | **Mixed-shape list (some entries with `name`, some without)** | `validate` error. A list is either name-keyed or not; mixing is not supported. |

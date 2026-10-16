@@ -21,6 +21,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { loadManifest, loadMergedRaw, resolvePaths } from "../../src/cli/loader.js";
+import { EX_NOINPUT, HarnessExitError } from "../../src/cli/exit-codes.js";
 import { OverrideMergeError, applyLayers } from "../../src/overrides/merge.js";
 import { mergeLayersStrippingRemovedPaths } from "../../src/overrides/merge-layers.js";
 import { validate } from "../../src/cli/validate/index.js";
@@ -226,5 +227,93 @@ describe("a removed manifest key in an override layer", () => {
     expect(warnings[0]!.message).not.toContain("found in");
     expect(warnings[1]!.message).toContain("found in the machine override layer 1 (/m.yaml)");
     expect(warnings[2]!.message).toContain("found in the project override layer (/p.yaml)");
+  });
+});
+
+// An empty or comment-only override layer parses to YAML `null`. Merged, that
+// null was a root tombstone: the whole manifest disappeared, the strict parse
+// failed with `<root>: Required`, and every hook (the branch-protection hook
+// first, which fails closed on any load error) refused every Write/Edit. Such
+// a layer is now skipped with one warning naming the file, and the manifest
+// loads as if the layer were absent. A layer whose root is a scalar or a list
+// is not an absent layer but a broken one, and fails the load with an error
+// naming the file.
+describe("an override layer that is empty, comment-only, or not a mapping", () => {
+  type LayerCase = [name: string, file: () => string, opts: () => { homeDir: string; project?: string }];
+
+  const MACHINE_FILE = (): string => path.join(tmpHome, "machines", "default.harness.overrides.yaml");
+  const PROJECT_FILE = (): string => path.join(tmpHome, "projects", PROJECT_NAME, "harness.overrides.yaml");
+
+  const LAYERS: LayerCase[] = [
+    ["machine layer", MACHINE_FILE, () => ({ homeDir: tmpHome })],
+    ["project layer", PROJECT_FILE, () => ({ homeDir: tmpHome, project: PROJECT_NAME })],
+  ];
+
+  function writeLayer(file: () => string, content: string): void {
+    const target = file();
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.writeFileSync(target, content);
+  }
+
+  const NO_DOCUMENT: Array<[string, string]> = [
+    ["an empty file", ""],
+    ["a comment-only file", "# only a comment\n"],
+  ];
+
+  it.each(LAYERS)("%s: an empty or comment-only file loads as if the layer were absent, with one warning naming it", (_name, file, opts) => {
+    // The manifest with no such layer on disk is the expected result.
+    fs.rmSync(file(), { force: true });
+    const without = loadManifest(opts());
+    expect(without.warnings).toEqual([]);
+    for (const [label, content] of NO_DOCUMENT) {
+      writeLayer(file, content);
+      const loaded = loadManifest(opts());
+      expect(loaded.manifest, `${_name}: ${label}`).toEqual(without.manifest);
+      expect(loaded.warnings, `${_name}: ${label}`).toHaveLength(1);
+      expect(loaded.warnings[0]!.path).toBe("<root>");
+      expect(loaded.warnings[0]!.message).toContain(file());
+    }
+  });
+
+  it.each(LAYERS)("%s: a scalar or list root fails the load with an error naming the file", (_name, file, opts) => {
+    const NON_MAPPING: Array<[string, string, RegExp]> = [
+      ["a number", "42\n", /is a number$/],
+      ["a string", "nope\n", /is a string$/],
+      ["a list", "- a\n- b\n", /is a list$/],
+    ];
+    for (const [label, content, shape] of NON_MAPPING) {
+      writeLayer(file, content);
+      let caught: unknown;
+      try {
+        loadManifest(opts());
+      } catch (err) {
+        caught = err;
+      }
+      expect(caught, label).toBeInstanceOf(HarnessExitError);
+      const err = caught as HarnessExitError;
+      expect(err.exitCode, label).toBe(EX_NOINPUT);
+      expect(err.message, label).toContain("must be a mapping");
+      expect(err.message, label).toMatch(shape);
+      expect(err.message, label).toContain(file());
+    }
+  });
+
+  it("warns exactly once per skipped layer, naming that layer's own file", () => {
+    writeLayer(MACHINE_FILE, "");
+    writeLayer(PROJECT_FILE, "# nothing\n");
+    const loaded = loadManifest({ homeDir: tmpHome, project: PROJECT_NAME });
+    expect(loaded.warnings).toHaveLength(2);
+    expect(loaded.warnings.map((w) => w.path)).toEqual(["<root>", "<root>"]);
+    expect(loaded.warnings[0]!.message).toContain(MACHINE_FILE());
+    expect(loaded.warnings[0]!.message).not.toContain(PROJECT_FILE());
+    expect(loaded.warnings[1]!.message).toContain(PROJECT_FILE());
+  });
+
+  it("keeps merging the other layers around a skipped one", () => {
+    writeLayer(MACHINE_FILE, "");
+    fs.writeFileSync(path.join(tmpHome, "harness.yaml"), JSON.stringify({ version: 1 }));
+    const loaded = loadManifest({ homeDir: tmpHome, project: PROJECT_NAME });
+    // The project layer (PROJECT_LAYER, written by beforeEach) still applies.
+    expect(loaded.manifest.grounding?.evidence_ledger?.path).toBe(PROJECT_LEDGER_PATH);
   });
 });

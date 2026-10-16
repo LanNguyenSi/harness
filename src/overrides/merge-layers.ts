@@ -1,3 +1,4 @@
+import { EX_NOINPUT, HarnessExitError } from "../cli/exit-codes.js";
 import { stripRemovedManifestPaths, type ManifestPostureWarning } from "../schema/removed-keys.js";
 import { applyLayers } from "./merge.js";
 
@@ -18,6 +19,15 @@ import { applyLayers } from "./merge.js";
  * The warnings are the ones the strip of each source produced; a layer's
  * warnings name the layer, so an operator can tell which file to edit. The
  * base's warnings are unlabelled, as they are for a manifest without layers.
+ *
+ * A layer that parses to no YAML document at all (an empty or comment-only
+ * file parses to `null`) is skipped with one warning naming it: merging the
+ * `null` would tombstone the root, erasing the whole manifest, and every hook
+ * (the branch-protection hook first) fails closed on a failed load, so such a
+ * layer would lock the machine out of every edit. A layer whose root is a
+ * scalar or a list is a different mistake, not an absent layer, and fails the
+ * load with an error naming the file: silently ignoring it would let an
+ * override the operator believes applied stay silently unapplied.
  */
 export function mergeLayersStrippingRemovedPaths(
   baseRaw: unknown,
@@ -28,6 +38,21 @@ export function mergeLayersStrippingRemovedPaths(
   let current: unknown = base.raw;
   for (const layer of layers) {
     if (layer.raw === undefined) continue;
+    if (layer.raw === null) {
+      warnings.push({
+        path: "<root>",
+        message:
+          "this override layer has no YAML document in it (an empty or comment-only file parses to no value); " +
+          `it is skipped and the manifest loads as if it were absent; found in the ${layer.label}`,
+      });
+      continue;
+    }
+    if (!isPlainObject(layer.raw)) {
+      throw new HarnessExitError(
+        `an override layer must be a mapping of manifest keys to their overrides, but the ${layer.label} is ${rootShape(layer.raw)}`,
+        EX_NOINPUT,
+      );
+    }
     const stripped = stripRemovedManifestPaths(layer.raw);
     for (const w of stripped.warnings) {
       warnings.push({ path: w.path, message: `${w.message}; found in the ${layer.label}` });
@@ -35,4 +60,18 @@ export function mergeLayersStrippingRemovedPaths(
     current = applyLayers(current, stripped.raw);
   }
   return { merged: current, warnings };
+}
+
+function isPlainObject(v: unknown): v is Record<string, unknown> {
+  if (v === null || typeof v !== "object" || Array.isArray(v)) return false;
+  const proto = Object.getPrototypeOf(v);
+  return proto === Object.prototype || proto === null;
+}
+
+/** How a non-mapping layer root reads in the error: what it is, not its content. */
+function rootShape(value: unknown): string {
+  if (Array.isArray(value)) return "a list";
+  const t = typeof value;
+  if (t === "object") return "a YAML value that is not a mapping";
+  return `a ${t}`;
 }

@@ -483,6 +483,29 @@ describe.skipIf(!GIT_AVAILABLE)("branch-protection with a removed key in a machi
   });
 });
 
+describe.skipIf(!GIT_AVAILABLE)("branch-protection on a machine with an empty override layer", () => {
+  // An empty or comment-only layer file parses to YAML null. Merged as a root
+  // tombstone it erased the whole manifest and failed the strict parse, so the
+  // hook (fail-closed on any load error) refused every edit. It is now skipped
+  // with a warning, and the hook keeps deciding.
+  it("refuses on a protected branch and allows a feature branch with the layer empty, comment-only, and absent", async () => {
+    const home = makeHome({ policy_packs: BRANCH_PROTECTION });
+    const machines = path.join(home, "machines");
+    fs.mkdirSync(machines, { recursive: true });
+    const layer = path.join(machines, "default.harness.overrides.yaml");
+    const protectedRepo = makeRepo("master");
+    const featureRepo = makeRepo("feat/x");
+    for (const content of ["", "# a comment only\n"]) {
+      fs.writeFileSync(layer, content, "utf8");
+      const loaded = loadManifest({ homeDir: home });
+      expect(loaded.manifest.policy_packs.map((p) => p.name)).toEqual(["branch-protection"]);
+      expect(loaded.warnings.filter((w) => w.path === "<root>")).toHaveLength(1);
+      expect(await decide({ homeDir: home }, protectedRepo)).toEqual({ blocked: true, exitCode: 0 });
+      expect(await decide({ homeDir: home }, featureRepo)).toEqual({ blocked: false, exitCode: 0 });
+    }
+  });
+});
+
 describe("a key that was never valid still fails the load", () => {
   it.each([["policy"], ["workflow"], ["review_template"], ["doctors"]])("%s", (key) => {
     const home = makeHome({ [key]: [] });
