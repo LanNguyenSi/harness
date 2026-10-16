@@ -303,6 +303,31 @@ describe("gateEnable: two disables, one enable", () => {
     }
   });
 
+  it("restores in place several groups one disable took out of two events", () => {
+    writeSettings({
+      hooks: {
+        PreToolUse: [
+          { matcher: "A-x", hooks: [{ command: "ax" }] },
+          { matcher: "B", hooks: [{ command: "b" }] },
+          { matcher: "A-y", hooks: [{ command: "ay" }] },
+          { matcher: "C", hooks: [{ command: "c" }] },
+        ],
+        Stop: [
+          { matcher: "S", hooks: [{ command: "s" }] },
+          { matcher: "A-z", hooks: [{ command: "az" }] },
+        ],
+      },
+    });
+    const original = fs.readFileSync(settingsPath, "utf8");
+    gateDisable({ settingsPath, matcher: "A-", now: T1 });
+    expect(matchersOf()).toEqual(["B", "C"]);
+    const r = gateEnable({ settingsPath });
+    expect(r.mode).toBe("restored");
+    if (r.mode !== "restored") return;
+    expect(r.restoredCount).toBe(3);
+    expect(fs.readFileSync(settingsPath, "utf8")).toBe(original);
+  });
+
   it("restores across events when a later step empties an event", () => {
     writeSettings({
       hooks: {
