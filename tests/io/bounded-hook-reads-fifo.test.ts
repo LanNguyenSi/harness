@@ -265,43 +265,6 @@ describe.skipIf(process.platform === "win32")("git-context: by-path git file rea
 });
 
 describe.skipIf(process.platform === "win32")("runtime state files: a FIFO at the path reads as absent, within the bound", () => {
-  it("pause sentinel: a FIFO is NOT a pause (gates stay armed); a regular sentinel is", () => {
-    const dir = path.join(tmp, "gen");
-    fs.mkdirSync(dir);
-    fs.writeFileSync(
-      path.join(dir, ".harness-paused"),
-      JSON.stringify({ pausedAt: "2026-10-06T00:00:00.000Z", expiresAt: null, reason: null, pausedBy: null }),
-    );
-    const control = callInChild("runtime/pause-sentinel.js", "readSentinel", [dir]);
-    expectBounded(control);
-    expect((control.value as { ok: { kind: string } }).ok.kind).toBe("active");
-
-    fs.rmSync(path.join(dir, ".harness-paused"));
-    mkfifo(path.join(dir, ".harness-paused"));
-    const run = callInChild("runtime/pause-sentinel.js", "readSentinel", [dir]);
-    expectBounded(run);
-    expect(run.value).toEqual({ ok: { kind: "absent" } });
-  });
-
-  it("pause sentinel: a VALID sentinel padded past the 1 MiB cap is not a pause either, while the same one under the cap is", () => {
-    // A sparse file of zeros is malformed JSON, so it would read as absent
-    // even with no size cap. Trailing whitespace keeps the JSON valid: only
-    // the cap separates "active" from "absent" here.
-    const dir = path.join(tmp, "gen");
-    fs.mkdirSync(dir);
-    const sentinel = JSON.stringify({ pausedAt: "2026-10-06T00:00:00.000Z", expiresAt: null, reason: null, pausedBy: null });
-    fs.writeFileSync(path.join(dir, ".harness-paused"), `${sentinel}${" ".repeat(1024 * 1024 - sentinel.length - 1)}\n`);
-    expect(fs.statSync(path.join(dir, ".harness-paused")).size).toBe(1024 * 1024);
-    const atCap = callInChild("runtime/pause-sentinel.js", "readSentinel", [dir]);
-    expectBounded(atCap);
-    expect((atCap.value as { ok: { kind: string } }).ok.kind).toBe("active");
-
-    fs.writeFileSync(path.join(dir, ".harness-paused"), `${sentinel}${" ".repeat(1024 * 1024 + 16)}\n`);
-    const over = callInChild("runtime/pause-sentinel.js", "readSentinel", [dir]);
-    expectBounded(over);
-    expect(over.value).toEqual({ ok: { kind: "absent" } });
-  });
-
   it("pending approval: a FIFO reads as no staged session id", () => {
     const dir = path.join(tmp, "gen");
     fs.mkdirSync(dir);

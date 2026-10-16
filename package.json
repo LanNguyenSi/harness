@@ -37,7 +37,6 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:cov": "vitest run --coverage",
-    "test:integration": "HARNESS_INTEGRATION_TESTS=1 vitest run tests/integration/",
     "typecheck": "tsc --noEmit",
     "typecheck:tests": "tsc --noEmit -p tsconfig.test.json",
     "check:memory-frontmatter-contract": "node scripts/memory-frontmatter-contract.mjs check",

@@ -31,7 +31,6 @@ import {
 } from "@lannguyensi/runtime-reality-checker/policy";
 import type { ActualProcessState } from "@lannguyensi/runtime-reality-checker";
 import { readStdinBounded, STDIN_IDLE_TIMEOUT_MS, stdinTimeoutBlockReason } from "../bounded-stdin.js";
-import { checkHookPause } from "./hook-bootstrap.js";
 
 /** Hard ceiling on a single probe invocation. The hook's own budget_ms
  *  (default 30s) is the outer bound; keep the probe well inside it so a
@@ -181,17 +180,6 @@ export interface RuntimeRealityCliOptions {
   stderr?: NodeJS.WritableStream;
   /** Idle bound for the stdin read in ms; defaults to the shared 3000 ms bound. */
   stdinIdleTimeoutMs?: number;
-  /**
-   * Test-injected harness.generated/ directory for the pause sentinel lookup.
-   * In production this is resolved automatically from the manifest path; tests
-   * supply it directly so a real manifest install is not required.
-   */
-  generatedDir?: string;
-  /**
-   * Override "now" for deterministic pause-expiry tests. Forwarded to
-   * `checkPauseFromLoader` / `maybeAnnouncePause`.
-   */
-  now?: Date;
 }
 
 function allowResult(reason: string): HandlerResult {
@@ -225,21 +213,11 @@ export async function runPackHookRuntimeRealityCli(
     return allowResult("stdin read failed, degraded to allow");
   }
 
-  // Pause sentinel — operator-only kill switch. Honoured BEFORE the probe
-  // and drift evaluation so an active pause always allows, matching the
-  // universal contract of every other gate hook in the harness. This verb
-  // is env-driven and exposes no --config/--project flags, so the sentinel
-  // resolves from the default generated dir rather than forwarded
-  // loaderOpts; that is intentional, not an omission.
-  if (checkHookPause("runtime-reality", stderr, undefined, opts.generatedDir, opts.now).paused) {
-    return allowResult("harness paused; runtime-reality allowing without evaluating.");
-  }
-
   // A timed-out read means the event never finished arriving, so this
   // PreToolUse gate cannot tell whether the tool call is a deploy trigger:
   // refuse it instead of handing the empty or truncated text to the handler,
-  // which would degrade to allow. The operator pause above and the
-  // package's own RUNTIME_REALITY_DISABLE switch still yield.
+  // which would degrade to allow. The package's own RUNTIME_REALITY_DISABLE
+  // switch still yields.
   if (timedOut && !envOn(process.env.RUNTIME_REALITY_DISABLE)) {
     const denied = stdinTimeoutDenyResult(idleTimeoutMs);
     stdout.write(denied.stdout);

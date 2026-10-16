@@ -68,8 +68,8 @@ let h2Dir: string;
 let h2Result: NestedRunResult;
 
 // resolveVitestEntry is now shared via tests/_helpers/nested-vitest.ts
-// (task 052f9d5b review H1) — also reused by
-// tests/integration/operator-state-isolation.test.ts's own nested spawn.
+// (task 052f9d5b review H1) — the one place the suite's nested vitest
+// spawns take their entry point from.
 
 /**
  * @param extraEnv G5: merged on TOP of the current process's env (not a

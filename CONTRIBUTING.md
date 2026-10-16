@@ -24,7 +24,7 @@ Thanks for your interest. harness is a declarative control plane for agent harne
 
    CI also runs `typecheck`, `check:no-only`, `check:no-raw-control-bytes`,
    `check:shipped-unreleased-pointer`, `check:readme-release-version`,
-   `check:release-notes-size`, `test:cov`, `test:integration` and
+   `check:release-notes-size`, `test:cov` and
    `check:memory-frontmatter-contract`; see `.github/workflows/ci.yml`.
 
    `check:boundaries` and `check:duplication` are architecture fitness
