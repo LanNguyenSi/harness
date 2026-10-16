@@ -19,9 +19,10 @@ function flushed(stream: FlushableStream): Promise<void> {
       // also catches an earlier write's error that is emitted after run() has
       // settled. An error emitted while run() is still awaiting I/O (before
       // drainStdio is called) is covered only for a stream that
-      // tolerateClosedStdio already got a listener. A failed stream has nothing left to wait
-      // for, so the error also settles the flush, whether or not the stream
-      // calls the write callback. The exit code is already decided.
+      // tolerateClosedStdio already gave a listener. A failed stream has
+      // nothing left to wait for, so the error also settles the flush,
+      // whether or not the stream calls the write callback. The exit code is
+      // already decided.
       stream.on?.("error", () => resolve());
       if (stream.destroyed || !stream.writable) {
         resolve();
@@ -43,7 +44,7 @@ const tolerated = new WeakSet<object>();
  * reader has gone fails with EPIPE, and a stream with no listener turns that
  * event into an uncaught exception: the process exits 1, which a hook host
  * reads as allow. A hook calls this at its entry, before its first write, so
- * an error emitted while the hook is still awaiting (git, a probe) cannot
+ * an error emitted while the hook is still awaiting (git, for example) cannot
  * change its exit code; drainStdio only covers errors emitted after the hook
  * has settled. The decision is already made by the time a write fails, so the
  * error carries nothing the caller could act on.

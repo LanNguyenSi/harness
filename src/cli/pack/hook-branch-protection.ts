@@ -307,7 +307,7 @@ export async function runPackHookBranchProtectionCli(
   const stderr = opts.stderr ?? process.stderr;
   // Before the first write of any kind: a reader that has gone makes a write
   // fail with EPIPE, and the error is emitted while this function is still
-  // awaiting (git, stdin), so a listener attached only at exit comes too late.
+  // awaiting git, so a listener attached only at exit comes too late.
   // The exit code is the decision's, whatever happens to the pipe.
   tolerateClosedStdio([stdout, stderr]);
   const note = (msg: string): void => {
