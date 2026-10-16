@@ -393,6 +393,16 @@ describe("planRestore", () => {
     expect(plan.restored.map((r) => r.group)).toEqual([group("B", "two")]);
   });
 
+  it("pairs a group only with groups of its own event, whichever event that is", () => {
+    const back = planRestore({ Stop: [group("B")] }, snap([{ event: "Stop", index: 0, group: group("B") }]));
+    expect(back.alreadyBack).toHaveLength(1);
+    expect(back.restored).toEqual([]);
+    const elsewhere = planRestore({ PreToolUse: [group("B")] }, snap([{ event: "Stop", index: 0, group: group("B") }]));
+    expect(elsewhere.alreadyBack).toEqual([]);
+    expect(elsewhere.restored).toHaveLength(1);
+    expect(elsewhere.hooks["Stop"]).toEqual([group("B")]);
+  });
+
   it("does not take a group of another event for a match", () => {
     const plan = planRestore({ Stop: [group("B")] }, snap([{ event: "PreToolUse", index: 0, group: group("B") }]));
     expect(plan.restored).toHaveLength(1);
