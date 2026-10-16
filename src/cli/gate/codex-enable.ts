@@ -11,7 +11,7 @@
 // config after it was taken (the installer's `<config>.harness-backup-<ts>`
 // dates that write; an install re-renders every unit, so the snapshot's
 // hooks lines may be outdated) or when none of its units is disabled any
-// more. A retired snapshot stays on disk for audit and is never offered
+// more and every one is still in the block. A retired snapshot stays on disk for audit and is never offered
 // again, so a neutralised unit can never get an outdated line back from an
 // old snapshot whose post-disable bytes happen to match.
 //
@@ -27,9 +27,10 @@
 // matches the file as it now stands byte for byte and was taken earlier (the
 // chain), so two disables need one enable, and `--force` applies one
 // snapshot per run. Every applied snapshot is retired as restored. Units
-// still disabled at the end are reported in `stillDisabled`, and snapshots
-// that still name one in `unapplied`: enable never reports an all-clear
-// while one remains. A backup of the config is written before every
+// still disabled at the end are reported in `stillDisabled`, snapshots
+// that still name one in `unapplied`, and units a live snapshot names that
+// were deleted from the block in `missing` (that snapshot stays live):
+// enable never reports an all-clear while one remains. A backup of the config is written before every
 // rewrite, with the config's own mode.
 
 import * as fs from "node:fs";
@@ -37,7 +38,7 @@ import * as path from "node:path";
 import {
   assertCodexHookEditInvariant,
   existingFileMode,
-  latestCodexInstallBackupMs,
+  latestCodexInstallBackup,
   readCodexManagedHookUnits,
 } from "../apply/install-codex-config.js";
 import { atomicWriteFile } from "../../io/atomic-write.js";
@@ -74,6 +75,8 @@ export interface CodexRetiredSnapshot {
   from: string;
   to: string;
   why: CodexSnapshotRetirement;
+  /** For an install-superseded snapshot: the installer backup that dates the install. */
+  installBackup?: string;
 }
 
 interface WalkBase extends EnableBase {
@@ -81,6 +84,9 @@ interface WalkBase extends EnableBase {
   /** Snapshots left live that still name a disabled unit: they no longer
    * match the config byte for byte (a forced enable applies the newest). */
   unapplied: string[];
+  /** Ids of units a live snapshot names that are gone from the block (deleted
+   * by hand): the snapshot stays live, and enable never reports an all-clear. */
+  missing: string[];
 }
 
 export type CodexGateEnableResult =
@@ -115,9 +121,9 @@ function newestFirst(a: LoadedSnapshot, b: LoadedSnapshot): number {
 /** The newest install write of the config, read from the installer's
  * backups beside the requested path (and beside the resolved target, where
  * an install through the target's own path leaves them). */
-function latestInstallMs(requestedPath: string, configPath: string): number | null {
-  const times = [requestedPath, configPath].map(latestCodexInstallBackupMs).filter((t) => t !== null);
-  return times.length === 0 ? null : Math.max(...times);
+function latestInstall(requestedPath: string, configPath: string): { ms: number; path: string } | null {
+  const found = [requestedPath, configPath].map(latestCodexInstallBackup).filter((t) => t !== null);
+  return found.reduce<{ ms: number; path: string } | null>((a, b) => (a === null || b.ms > a.ms ? b : a), null);
 }
 
 function readBlock(text: string, configPath: string): ReturnType<typeof readCodexManagedHookUnits> {
@@ -132,6 +138,12 @@ function readBlock(text: string, configPath: string): ReturnType<typeof readCode
 function disabledIdsOrNull(text: string, configPath: string): string[] | null {
   const block = readBlock(text, configPath);
   return block === null ? null : block.units.filter((u) => u.disabled).map((u) => u.id);
+}
+
+/** Ids of the block's units (every unit, enabled or not), or null when there is no block. */
+function presentIdsOrNull(text: string, configPath: string): string[] | null {
+  const block = readBlock(text, configPath);
+  return block === null ? null : block.units.map((u) => u.id);
 }
 
 type RestorePlan = { ok: true; text: string } | { ok: false; reason: string };
@@ -222,18 +234,19 @@ export function codexGateEnable(opts: CodexGateEnableOptions = {}): CodexGateEna
     };
   }
 
-  const installedMs = latestInstallMs(requestedPath, configPath);
+  const install = latestInstall(requestedPath, configPath);
   let current = original;
   const applied: LoadedSnapshot[] = [];
-  const retire: Array<{ from: string; why: CodexSnapshotRetirement }> = [];
+  const retire: Array<{ from: string; why: CodexSnapshotRetirement; installBackup?: string }> = [];
   const unapplied: string[] = [];
+  const missing: string[] = [];
   let restoredCount = 0;
   for (const loaded of own) {
     const snapshot = loaded.snapshot;
     // A re-install after the snapshot re-rendered every unit it names: its
     // hooks lines may be outdated, so it is never applied again.
-    if (installedMs !== null && installedMs > loaded.createdMs) {
-      retire.push({ from: loaded.path, why: "superseded" });
+    if (install !== null && install.ms > loaded.createdMs) {
+      retire.push({ from: loaded.path, why: "superseded", installBackup: install.path });
       continue;
     }
     const currentSha = sha256Hex(current);
@@ -243,8 +256,17 @@ export function codexGateEnable(opts: CodexGateEnableOptions = {}): CodexGateEna
     }
     const disabledNow = disabledIdsOrNull(current, configPath);
     if (disabledNow !== null && !snapshot.neutralised.some((u) => disabledNow.includes(u.id))) {
-      // None of its units is disabled any more: something else enabled them.
-      retire.push({ from: loaded.path, why: "superseded" });
+      // None of its units is disabled any more. Retired as enabled again only
+      // when every unit it names is still in the block: a unit deleted by hand
+      // is neither enabled nor restorable, so the snapshot stays live and the
+      // unit is reported.
+      const present = presentIdsOrNull(current, configPath) ?? [];
+      const gone = snapshot.neutralised.map((u) => u.id).filter((id) => !present.includes(id));
+      if (gone.length > 0) {
+        for (const id of gone) if (!missing.includes(id)) missing.push(id);
+      } else {
+        retire.push({ from: loaded.path, why: "superseded" });
+      }
       continue;
     }
     const exact = currentSha === snapshot.configAfterSha256;
@@ -297,7 +319,7 @@ export function codexGateEnable(opts: CodexGateEnableOptions = {}): CodexGateEna
   // Retired only after the config write: a crash in between leaves a
   // snapshot the file already matches (or whose units are all enabled after
   // a forced restore), which the next enable retires.
-  const retired: CodexRetiredSnapshot[] = retire.map(({ from, why }) => {
+  const retired: CodexRetiredSnapshot[] = retire.map(({ from, why, installBackup }) => {
     const to = retiredCodexSnapshotPath(from, why);
     try {
       fs.renameSync(from, to);
@@ -308,10 +330,10 @@ export function codexGateEnable(opts: CodexGateEnableOptions = {}): CodexGateEna
           "move it out of the directory by hand so it is never applied again.",
       );
     }
-    return { from, to, why };
+    return { from, to, why, ...(installBackup !== undefined ? { installBackup } : {}) };
   });
   const renamed = (p: string): string => retired.find((r) => r.from === p)?.to ?? p;
-  const base = { configPath: requestedPath, stillDisabled, skippedForeign, retired, unapplied };
+  const base = { configPath: requestedPath, stillDisabled, skippedForeign, retired, unapplied, missing };
   if (backup === undefined) return { ...base, mode: "already-restored", snapshotPath: renamed(own[0]!.path) };
   return {
     ...base,

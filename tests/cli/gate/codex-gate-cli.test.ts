@@ -243,6 +243,80 @@ describe("harness gate --runtime codex", () => {
     expect(fs.readFileSync(configPath, "utf8")).toBe(`${installed}${edit}`);
   });
 
+  /** The branch-protection unit's own `hooks = [...]` line replaced by the neutralised one, as a hand edit would. */
+  function neutraliseFirstUnit(): void {
+    const text = fs.readFileSync(configPath, "utf8");
+    fs.writeFileSync(configPath, text.replace(/^hooks = \[\{.*\}\]$/m, "hooks = []"));
+  }
+
+  function reinstallAt(now: Date): void {
+    const generated = generateCodexConfig(
+      parseManifest({
+        version: 1,
+        hooks: [
+          {
+            name: "policy-pack:branch-protection:pre-tool-use",
+            event: "PreToolUse",
+            match: "apply_patch",
+            command: "harness pack hook branch-protection --runtime codex --v2",
+            blocking: "hard",
+            budget_ms: 5000,
+          },
+        ],
+      }),
+    );
+    writeCodexConfigInstall(
+      planCodexConfigInstall({ configPath, generatedPath: "/gen/codex/config.toml", generatedContent: generated.content }),
+      { now },
+    );
+  }
+
+  it("prints the retired-as-superseded line naming the install backup, and exits non-zero while the unit stays off", async () => {
+    await gate("disable", "--runtime", "codex", "--config", configPath, "--matcher", "apply_patch");
+    const [snap] = fs.readdirSync(tmp).filter((n) => n.startsWith("harness.gate-disable-codex."));
+    reinstallAt(new Date("2099-01-01T00:00:00.000Z"));
+    neutraliseFirstUnit();
+    const r = await gate("enable", "--runtime", "codex", "--config", configPath);
+    const backup = `${configPath}.harness-backup-2099-01-01T00-00-00-000Z`;
+    expect(r.code).toBe(EX_FAIL);
+    expect(r.stdout).toContain(
+      `retired ${path.join(tmp, snap!)} as ${path.join(tmp, snap!.replace(/\.json$/, ".superseded.json"))}: ` +
+        `a later install (${backup}) re-rendered its units.`,
+    );
+    expect(r.stderr).toContain("are still disabled: policy-pack:branch-protection:pre-tool-use");
+    expect(fs.readFileSync(configPath, "utf8")).not.toContain("harness pack hook branch-protection --runtime codex\"");
+    expect(fs.readdirSync(tmp)).toContain(snap!.replace(/\.json$/, ".superseded.json"));
+  });
+
+  it("exits non-zero and names a unit that was deleted from the block, keeping its snapshot live", async () => {
+    await gate("disable", "--runtime", "codex", "--config", configPath, "--matcher", "apply_patch");
+    const [snap] = fs.readdirSync(tmp).filter((n) => n.startsWith("harness.gate-disable-codex."));
+    const text = fs.readFileSync(configPath, "utf8");
+    const begin = text.indexOf("# harness hook:");
+    const end = text.indexOf("# END harness-managed codex hooks");
+    fs.writeFileSync(configPath, `${text.slice(0, begin)}${text.slice(end)}`);
+    const r = await gate("enable", "--runtime", "codex", "--config", configPath);
+    expect(r.code).toBe(EX_FAIL);
+    expect(r.stdout).not.toContain("no write needed");
+    expect(r.stderr).toContain("missing from the harness-managed block");
+    expect(r.stderr).toContain("policy-pack:branch-protection:pre-tool-use");
+    expect(fs.readdirSync(tmp)).toContain(snap);
+  });
+
+  it("exits non-zero with the restored-but-cannot-retire message when the retired name is taken by a directory", async () => {
+    const original = fs.readFileSync(configPath, "utf8");
+    await gate("disable", "--runtime", "codex", "--config", configPath, "--matcher", "apply_patch");
+    const [snap] = fs.readdirSync(tmp).filter((n) => n.startsWith("harness.gate-disable-codex."));
+    const taken = path.join(tmp, snap!.replace(/\.json$/, ".restored.json"));
+    fs.mkdirSync(taken);
+    fs.writeFileSync(path.join(taken, "keep"), "");
+    const r = await gate("enable", "--runtime", "codex", "--config", configPath);
+    expect(r.code).toBe(EX_FAIL);
+    expect(r.stderr).toContain("restored 1 hook unit(s) into");
+    expect(r.stderr).toContain("but cannot retire the snapshot");
+    expect(fs.readFileSync(configPath, "utf8")).toBe(original);
+  });
+
   it("names a snapshot taken for another config in the same directory and skips it", async () => {
     const other = path.join(tmp, "other.toml");
     fs.copyFileSync(configPath, other);

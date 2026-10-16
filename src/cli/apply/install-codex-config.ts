@@ -2214,6 +2214,12 @@ const INSTALL_BACKUP_STAMP_RE = /^(\d{4}-\d{2}-\d{2})T(\d{2})-(\d{2})-(\d{2})-(\
  * (whose units that install re-rendered) from one taken after it. Reads the
  * directory only. */
 export function latestCodexInstallBackupMs(filePath: string): number | null {
+  return latestCodexInstallBackup(filePath)?.ms ?? null;
+}
+
+/** Like {@link latestCodexInstallBackupMs}, and also the path of the newest
+ * backup file, so a message can name the install that dated a snapshot. */
+export function latestCodexInstallBackup(filePath: string): { ms: number; path: string } | null {
   const prefix = `${path.basename(filePath)}.harness-backup-`;
   let names: string[];
   try {
@@ -2221,13 +2227,15 @@ export function latestCodexInstallBackupMs(filePath: string): number | null {
   } catch {
     return null;
   }
-  let latest: number | null = null;
+  let latest: { ms: number; path: string } | null = null;
   for (const name of names) {
     if (!name.startsWith(prefix)) continue;
     const m = INSTALL_BACKUP_STAMP_RE.exec(name.slice(prefix.length));
     if (m === null) continue;
     const ms = Date.parse(`${m[1]}T${m[2]}:${m[3]}:${m[4]}.${m[5]}Z`);
-    if (!Number.isNaN(ms) && (latest === null || ms > latest)) latest = ms;
+    if (!Number.isNaN(ms) && (latest === null || ms > latest.ms)) {
+      latest = { ms, path: path.join(path.dirname(filePath), name) };
+    }
   }
   return latest;
 }

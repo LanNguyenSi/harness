@@ -113,7 +113,7 @@ export function registerGateGcGroup(
         "the config, then each older one that matches the result byte for byte, so two disables " +
         "need one enable. An applied snapshot, or one the config already matches, is renamed to " +
         "`*.restored.json`; one taken before a later `harness apply --runtime codex --install`, " +
-        "or whose units are all enabled again, is renamed to `*.superseded.json`; neither is " +
+        "or whose units are all enabled again (not deleted), is renamed to `*.superseded.json`; neither is " +
         "applied again. It exits non-zero and names the units when any hook unit stays " +
         "disabled. `--force` applies the newest snapshot to a config edited since: it swaps " +
         "only that snapshot's hooks lines back into the units it names (found by id) and keeps " +
@@ -139,12 +139,13 @@ export function registerGateGcGroup(
               });
         const target = "configPath" in result ? result.configPath : result.settingsPath;
         const stillDisabled = "stillDisabled" in result ? result.stillDisabled : [];
+        const missing = "missing" in result ? result.missing : [];
         if (result.mode === "no-snapshots") {
           if (stillDisabled.length === 0) {
             stdout(`no gate-disable snapshots found next to ${target}; nothing to restore.\n`);
           }
         } else if (result.mode === "already-restored") {
-          if (stillDisabled.length === 0) {
+          if (stillDisabled.length === 0 && missing.length === 0) {
             stdout(
               (runtime === "codex"
                 ? `no hook unit of the harness-managed block in ${target} is disabled; no write needed. `
@@ -166,9 +167,22 @@ export function registerGateGcGroup(
         if ("retired" in result) {
           for (const r of result.retired) {
             if (r.why === "superseded") {
-              stdout(`retired ${r.from} as ${r.to}: its units were re-rendered by a later install or enabled again.\n`);
+              stdout(
+                r.installBackup !== undefined
+                  ? `retired ${r.from} as ${r.to}: a later install (${r.installBackup}) re-rendered its units.\n`
+                  : `retired ${r.from} as ${r.to}: its units were enabled again.\n`,
+              );
             }
           }
+        }
+        if (missing.length > 0) {
+          throw new HarnessExitError(
+            `${missing.length} hook unit(s) a gate snapshot names are missing from the harness-managed block in ${target}: ` +
+              `${missing.join(", ")}. The snapshot stays live and nothing was retired for them. Run ` +
+              "`harness apply --runtime codex --install` to re-render the block, or restore the config from the " +
+              "backup beside it (<config>.bak.<timestamp>).",
+            EX_FAIL,
+          );
         }
         if (stillDisabled.length > 0) {
           const unapplied = "unapplied" in result ? result.unapplied : [];
