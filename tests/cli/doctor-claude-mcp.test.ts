@@ -533,10 +533,40 @@ describe("doctor: the add-json hint matches buildDesiredMcpServers", () => {
     const { mcp: desired } = buildDesiredMcpServers(manifest, { homeDir: home });
     expect(desired["grounding-mcp"]?.env).not.toHaveProperty("SOLUTION_VERDICT_SIGNING_KEY");
     const expectedHint =
-      "not registered with the claude CLI — run `harness init --interactive` or " +
+      "not registered with the claude CLI; run " +
       `\`claude mcp add-json --scope user grounding-mcp ${posixSingleQuote(
         JSON.stringify(desired["grounding-mcp"]),
-      )}\``;
+      )}\`` +
+      " (`harness init --interactive` also registers, but on an existing install it offers to overwrite harness.yaml)";
     expect(entry?.message).toBe(expectedHint);
+  });
+
+  // Task 114961db: the hint must LEAD with the exact add-json line. On an
+  // existing install `harness init --interactive` asks to overwrite
+  // harness.yaml (declining aborts before the MCP step; accepting replaces
+  // the manifest with a profile template), so it may only appear after the
+  // add-json line and only with that caveat.
+  it("the not-registered hint leads with the add-json line, wizard mention only after with the overwrite caveat", async () => {
+    const home = makeFixture({
+      "harness.yaml": manifestWithMcp(
+        `    - name: alpha\n      command: [/usr/bin/true]\n      enabled: true`,
+      ),
+    });
+    const report = await doctor({
+      configPath: path.join(home, "harness.yaml"),
+      homeOverride: home,
+      pathEnv: "",
+      npmBinExec: STUB_NPM_BIN_EXEC,
+      claudeMcpExec: execWithStdout(""),
+      envOverride: {},
+    });
+    const message = report.claudeMcp?.entries.find((e) => e.name === "alpha")?.message ?? "";
+    expect(message.startsWith("not registered with the claude CLI; run `claude mcp add-json")).toBe(
+      true,
+    );
+    expect(message.indexOf("claude mcp add-json")).toBeLessThan(
+      message.indexOf("init --interactive"),
+    );
+    expect(message).toContain("offers to overwrite harness.yaml");
   });
 });

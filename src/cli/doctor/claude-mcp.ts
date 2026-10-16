@@ -215,10 +215,11 @@ export async function buildClaudeMcpRegistration(
             name,
             status: "error",
             message:
-              "not registered with the claude CLI — run `harness init --interactive` or " +
+              "not registered with the claude CLI; run " +
               `\`claude mcp add-json --scope user ${name} ${posixSingleQuote(
                 JSON.stringify(desired[name]),
-              )}\``,
+              )}\`` +
+              " (`harness init --interactive` also registers, but on an existing install it offers to overwrite harness.yaml)",
           });
           continue;
         }
