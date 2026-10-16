@@ -79,7 +79,7 @@ flowchart TD
   OUT -.->|"wired by<br/>--target or --install"| EVT
 ```
 
-The second diagram shows the steps inside `harness policy intercept` (`src/cli/policy/intercept.ts`, `src/runtime/intercept.ts`), as designed at the time; that engine and both files were removed in 1.0.0, so the diagram is the historical design, not the shipped behavior. A paused harness and a manifest that fails to load both allowed the call; a call no policy matched was allowed without a record; an `operator_only` policy denied without querying the ledger. The `pause sentinel?` node at the head of the diagram is gone too: the sentinel and the `harness pause` / `harness resume` verbs that wrote it were removed in 1.0.0 (task 973163a4), and `harness gate disable` is the operator off switch now.
+The second diagram shows the steps inside `harness policy intercept` (`src/cli/policy/intercept.ts`, `src/runtime/intercept.ts`), as designed at the time; that engine and both files were removed in 1.0.0, so the diagram is the historical design, not the shipped behavior. A paused harness and a manifest that fails to load both allowed the call; a call no policy matched was allowed without a record; an `operator_only` policy denied without querying the ledger. The mechanism behind the `pause sentinel?` node at the head of the diagram is gone too: the sentinel and the `harness pause` / `harness resume` verbs that wrote it were removed in 1.0.0 (task 973163a4), and `harness gate disable` is the operator off switch now.
 
 ```mermaid
 flowchart TD
