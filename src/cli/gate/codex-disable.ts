@@ -12,7 +12,11 @@
 // handler, so no other hook of any event moves or loses its trust. A backup
 // of the original (`<config>.bak.<ISO>`) and a snapshot of the original
 // `hooks` lines (`harness.gate-disable-codex.<ISO>.json`) land before the
-// atomic rewrite. Text outside the fences, and every operator-authored
+// atomic rewrite. At most one snapshot per config is live: a disable made
+// while one exists merges its units into that snapshot (keeping the original
+// pre-disable sha and recording the new post-disable sha) instead of writing a
+// second one, and refuses when the config no longer matches that snapshot's
+// post-disable sha. Text outside the fences, and every operator-authored
 // table, is never touched. The block is read by the installer's own scanner
 // (`readCodexManagedHookUnits`), so a duplicate BEGIN marker, a foreign table
 // wedged in the block or a missing END marker refuse instead of guessing.
@@ -36,6 +40,7 @@ import {
   codexSnapshotPath,
   type CodexDisabledUnit,
   type CodexGateSnapshot,
+  readLiveCodexSnapshots,
   resolveCodexConfig,
   toGateError,
 } from "./codex-snapshot.js";
@@ -154,9 +159,20 @@ export function codexGateDisable(opts: CodexGateDisableOptions = {}): CodexGateD
     throw toGateError(err, (m) => new GateDisableError(m));
   }
 
+  // At most one live snapshot per config: this disable joins it. It can only
+  // join when the config is exactly what that snapshot left behind, since its
+  // pre-disable sha must stay the one state a restore rebuilds.
+  const live = readLiveCodexSnapshots(requestedPath, (m) => new GateDisableError(m)).own[0];
+  if (live !== undefined && sha256Hex(text) !== live.snapshot.configAfterSha256) {
+    throw new GateDisableError(
+      `the live gate snapshot ${live.path} no longer matches ${requestedPath} (edited, or re-rendered by an ` +
+        "install since the last disable), so this disable cannot join it. Run `harness gate enable --runtime " +
+        "codex` first (add --force if it refuses). The file is untouched.",
+    );
+  }
+
   const now = opts.now ?? new Date();
   const backup = backupPath(requestedPath, now);
-  const snapPath = codexSnapshotPath(requestedPath, now);
   const mode = existingFileMode(configPath);
   const neutralised: CodexDisabledUnit[] = active.map(({ unit, ordinal, eventIndex }) => ({
     event: unit.event,
@@ -166,17 +182,24 @@ export function codexGateDisable(opts: CodexGateDisableOptions = {}): CodexGateD
     matcher: unit.matcher,
     hooksText: text.slice(unit.hooksStart, unit.hooksEnd),
   }));
-  const snapshot: CodexGateSnapshot = {
-    version: CODEX_SNAPSHOT_VERSION,
-    target: CODEX_SNAPSHOT_TARGET,
-    createdAt: now.toISOString(),
-    configPath: requestedPath,
-    configBackupPath: backup,
-    configBeforeSha256: sha256Hex(text),
-    configAfterSha256: sha256Hex(next),
-    filter: { matcher: pattern },
-    neutralised,
-  };
+  const snapPath = live?.path ?? codexSnapshotPath(requestedPath, now);
+  const snapshot: CodexGateSnapshot = live
+    ? {
+        ...live.snapshot,
+        configAfterSha256: sha256Hex(next),
+        neutralised: [...live.snapshot.neutralised, ...neutralised].sort((a, b) => a.ordinal - b.ordinal),
+      }
+    : {
+        version: CODEX_SNAPSHOT_VERSION,
+        target: CODEX_SNAPSHOT_TARGET,
+        createdAt: now.toISOString(),
+        configPath: requestedPath,
+        configBackupPath: backup,
+        configBeforeSha256: sha256Hex(text),
+        configAfterSha256: sha256Hex(next),
+        filter: { matcher: pattern },
+        neutralised,
+      };
 
   // Backup and snapshot land BEFORE the live rewrite, with the config's own
   // mode (it holds secrets and hook trust hashes): a crash between the writes

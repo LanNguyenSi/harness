@@ -6,16 +6,17 @@
 // Codex keys a user hook's trust and enabled state by its position in the
 // event's array, and an empty group takes its position without registering
 // a handler, so every other hook keeps its trust. A Codex snapshot records
-// one such call: per neutralised unit its identity and the verbatim original
-// `hooks = [...]` line, plus the sha256 of the config before and after. It
-// lives beside the Codex config under its own file prefix and carries
-// `version: 3` and `target: "codex"`, so a Claude settings snapshot (version
-// 1, no target) can never be restored into TOML and a Codex snapshot can
-// never be read as a settings.json one (`readSnapshot` rejects version 3).
-// Once `gate enable` has applied a snapshot, or found it applied or
-// superseded, it renames the file to `*.restored.json` or
-// `*.superseded.json`: the file stays for audit, `listCodexSnapshots` never
-// offers it again.
+// the neutralised units: per unit its identity and the verbatim original
+// `hooks = [...]` line, plus the sha256 of the config before the first
+// disable and after the latest one. At most one snapshot per config is live:
+// a later disable merges its units into it. It lives beside the Codex config
+// under its own file prefix and carries `version: 3` and `target: "codex"`,
+// so a Claude settings snapshot (version 1, no target) can never be restored
+// into TOML and a Codex snapshot can never be read as a settings.json one
+// (`readSnapshot` rejects version 3). Once `gate enable` has applied a
+// snapshot, or found it applied or superseded, it renames the file to
+// `*.restored.json` or `*.superseded.json`: the file stays for audit,
+// `listCodexSnapshots` never offers it again.
 
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -57,10 +58,12 @@ export interface CodexGateSnapshot {
   configPath: string;
   /** Absolute path the pre-mutation copy was written to. */
   configBackupPath: string;
+  /** The config before the first disable this snapshot covers. */
   configBeforeSha256: string;
+  /** The config after the latest disable merged into this snapshot. */
   configAfterSha256: string;
   filter: { matcher?: string };
-  /** The neutralised units in block order. */
+  /** The neutralised units in block order, merged over every disable since the snapshot was created. */
   neutralised: CodexDisabledUnit[];
 }
 
@@ -145,6 +148,33 @@ export function listCodexSnapshots(dir: string): string[] {
   );
 }
 
+export interface LoadedCodexSnapshot {
+  path: string;
+  snapshot: CodexGateSnapshot;
+}
+
+/** The live snapshots beside a config, split into those taken for it, newest
+ * first by their recorded `createdAt` (equal times by file name, newest name
+ * first; never by file mtime, which a directory copy reorders), and the
+ * paths of those taken for another config. An unreadable one refuses via
+ * `makeError`. */
+export function readLiveCodexSnapshots(
+  requestedPath: string,
+  makeError: (message: string) => Error,
+): { own: LoadedCodexSnapshot[]; foreign: string[] } {
+  const own: LoadedCodexSnapshot[] = [];
+  const foreign: string[] = [];
+  for (const snapPath of listCodexSnapshots(path.dirname(requestedPath))) {
+    const read = readCodexSnapshot(snapPath);
+    if (!read.ok) throw makeError(read.reason);
+    if (read.snapshot.configPath === requestedPath) own.push({ path: snapPath, snapshot: read.snapshot });
+    else foreign.push(snapPath);
+  }
+  const time = (l: LoadedCodexSnapshot): number => Date.parse(l.snapshot.createdAt);
+  own.sort((a, b) => time(b) - time(a) || (a.path < b.path ? 1 : -1));
+  return { own, foreign };
+}
+
 export interface CodexSnapshotReadOk {
   ok: true;
   snapshot: CodexGateSnapshot;
@@ -215,7 +245,7 @@ export function readCodexSnapshot(filePath: string): CodexSnapshotReadOk | Codex
     "configAfterSha256",
   ]);
   if (problem !== null) return { ok: false, reason: problem };
-  // The walk orders snapshots by this time, never by file mtime.
+  // Several live snapshots (an earlier build kept one per disable) are ordered by this time, never by file mtime.
   if (Number.isNaN(Date.parse(obj["createdAt"] as string))) {
     return { ok: false, reason: `snapshot ${filePath} has a "createdAt" that is not a timestamp` };
   }

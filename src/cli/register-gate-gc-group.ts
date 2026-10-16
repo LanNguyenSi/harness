@@ -53,7 +53,8 @@ export function registerGateGcGroup(
         "so `harness gate enable` can restore them. With `--runtime codex` the matching hook units " +
         "of the harness-managed block in ~/.codex/config.toml are neutralised in place instead " +
         "(`hooks = []`, so the position of every other hook stays) and their original lines go " +
-        "to `harness.gate-disable-codex.<ts>.json`. With no `--matcher` flag, lists the candidate " +
+        "to `harness.gate-disable-codex.<ts>.json` (a later disable joins the live snapshot). " +
+        "With no `--matcher` flag, lists the candidate " +
         "groups without writing.",
     )
     .option("--matcher <pattern>", "remove groups whose matcher includes this substring")
@@ -107,18 +108,16 @@ export function registerGateGcGroup(
       "Restore hook groups from the newest `harness.gate-disable.*.json` snapshot next to " +
         "settings.json. Refuses if settings.json has been edited since the snapshot was taken " +
         "(use `--force` to restore anyway). Idempotent: if settings.json already matches the " +
-        "pre-disable state, exits 0 without writing. With `--runtime codex` it walks the " +
-        "`harness.gate-disable-codex.*.json` snapshots taken for that config (another config's " +
-        "are skipped) by their recorded time, newest first: it applies the newest that matches " +
-        "the config, then each older one that matches the result byte for byte, so two disables " +
-        "need one enable. An applied snapshot, or one the config already matches, is renamed to " +
-        "`*.restored.json`; one taken before a later `harness apply --runtime codex --install`, " +
-        "or whose units are all enabled again (not deleted), is renamed to `*.superseded.json`; neither is " +
-        "applied again. It exits non-zero and names the units when any hook unit stays " +
-        "disabled. `--force` applies the newest snapshot to a config edited since: it swaps " +
+        "pre-disable state, exits 0 without writing. With `--runtime codex` there is at most one " +
+        "live `harness.gate-disable-codex.*.json` snapshot per config (another config's is skipped): " +
+        "a later disable merges its units into it, and one enable applies it. A snapshot it applies, " +
+        "or the config already matches, is renamed to `*.restored.json`; one taken before a later " +
+        "`harness apply --runtime codex --install`, or whose units are all enabled again (not deleted), " +
+        "is renamed to `*.superseded.json`; neither is applied again. It exits non-zero and names the " +
+        "units when any hook unit stays disabled, and names how many live snapshots remain when an " +
+        "earlier build left several (it handles the newest per run). `--force` applies the snapshot to a config edited since: it swaps " +
         "only that snapshot's hooks lines back into the units it names (found by id) and keeps " +
-        "every other edit, one snapshot per run; it refuses when a unit is missing, changed or " +
-        "not disabled.",
+        "every other edit; it refuses when a unit is missing, changed or not disabled.",
     )
     .option("--settings <path>", "override ~/.claude/settings.json (--runtime claude)")
     .option("--config <path>", "override ~/.codex/config.toml (--runtime codex)")
@@ -154,48 +153,44 @@ export function registerGateGcGroup(
             );
           }
         } else {
-          const from =
-            "snapshotPaths" in result ? result.snapshotPaths.join(", ") : result.snapshotPath;
           stdout(
             `restored ${result.restoredCount} ${runtime === "codex" ? "hook unit(s)" : "hook group(s)"} ` +
-              `into ${target} from ${from}.\n`,
+              `into ${target} from ${result.snapshotPath}.\n`,
           );
         }
         if ("skippedForeign" in result) {
           for (const p of result.skippedForeign) stdout(`skipped ${p}: taken for another config.\n`);
         }
-        if ("retired" in result) {
-          for (const r of result.retired) {
-            if (r.why === "superseded") {
-              stdout(
-                r.installBackup !== undefined
-                  ? `retired ${r.from} as ${r.to}: a later install (${r.installBackup}) re-rendered its units.\n`
-                  : `retired ${r.from} as ${r.to}: its units were enabled again.\n`,
-              );
-            }
-          }
-        }
-        if (missing.length > 0) {
-          throw new HarnessExitError(
-            `${missing.length} hook unit(s) a gate snapshot names are missing from the harness-managed block in ${target}: ` +
-              `${missing.join(", ")}. The snapshot stays live and nothing was retired for them. Run ` +
-              "`harness apply --runtime codex --install` to re-render the block, or restore the config from the " +
-              "backup beside it (<config>.bak.<timestamp>).",
-            EX_FAIL,
+        if ("retired" in result && result.retired?.why === "superseded") {
+          const r = result.retired;
+          stdout(
+            r.installBackup !== undefined
+              ? `retired ${r.from} as ${r.to}: a later install (${r.installBackup}) re-rendered its units.\n`
+              : `retired ${r.from} as ${r.to}: its units were enabled again.\n`,
           );
         }
-        if (stillDisabled.length > 0) {
-          const unapplied = "unapplied" in result ? result.unapplied : [];
+        const remaining = "remaining" in result ? result.remaining : [];
+        if (missing.length > 0 || stillDisabled.length > 0 || remaining.length > 0) {
           throw new HarnessExitError(
-            `${stillDisabled.length} hook unit(s) in ${target} are still disabled: ${stillDisabled.join(", ")}. ` +
-              (unapplied.length > 0
-                ? `The snapshot(s) ${unapplied.join(", ")} still name a disabled unit but no longer match ` +
-                  "the config byte for byte. Inspect them, then run `harness gate enable --runtime codex " +
-                  "--force`: it swaps only the newest one's hooks lines back and keeps every other edit " +
-                  "(one snapshot per run). "
-                : "No Codex gate snapshot restores them. ") +
-              `${unapplied.length > 0 ? "Or restore" : "Restore"} the config from the backup beside it (<config>.bak.<timestamp>), or ` +
-              "re-run `harness apply --runtime codex --install` to re-render the block.",
+            [
+              missing.length > 0 &&
+                `${missing.length} hook unit(s) a gate snapshot names are missing from the harness-managed block in ${target}: ` +
+                  `${missing.join(", ")}. The snapshot ${"snapshotPath" in result ? result.snapshotPath : ""} stays live and ` +
+                  "nothing was retired for them. Run `harness apply --runtime codex --install` to re-render the block, " +
+                  "restore the config from the backup beside it (<config>.bak.<timestamp>), or move the snapshot " +
+                  "aside by hand if they are gone for good.",
+              stillDisabled.length > 0 &&
+                `${stillDisabled.length} hook unit(s) in ${target} are still disabled: ${stillDisabled.join(", ")}.` +
+                  (remaining.length > 0
+                    ? ""
+                    : " No Codex gate snapshot restores them. Restore the config from the backup beside it " +
+                      "(<config>.bak.<timestamp>), or re-run `harness apply --runtime codex --install` to re-render the block."),
+              remaining.length > 0 &&
+                `${remaining.length} more live Codex gate snapshot(s) remain (an earlier build wrote one per disable): ` +
+                  `${remaining.join(", ")}. Run \`harness gate enable --runtime codex\` again for the next one.`,
+            ]
+              .filter((m) => m !== false)
+              .join(" "),
             EX_FAIL,
           );
         }
