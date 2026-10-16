@@ -128,3 +128,71 @@ describe("last-apply", () => {
     expect(sha256Hex(entry!.content)).toBe(entry!.sha256);
   });
 });
+
+// The readers of `.last-apply` (apply's runtime reuse, doctor, diff
+// --since-apply) all trust the validated shape; the validators below are
+// the only thing standing between a hand-edited or corrupted file and
+// those readers. Each rejection is asserted here (task e345db80).
+describe("last-apply: shape validation on read", () => {
+  function writeRaw(payload: unknown): void {
+    fs.writeFileSync(lastApplyPath(tmpDir), JSON.stringify(payload), "utf8");
+  }
+
+  it("accepts the optional manifest and memoryDirs snapshots on a round-trip", () => {
+    const record = buildLastApply({ "settings.json": "{}\n" });
+    const manifestEntry = { sha256: sha256Hex("version: 1\n"), content: "version: 1\n" };
+    const memoryDirs = {
+      "mem/a": { sha256: "a".repeat(64), fileHashes: { "b.md": "2".repeat(64), "a.md": "1".repeat(64) } },
+    };
+    writeLastApply(tmpDir, { ...record, manifest: manifestEntry, memoryDirs });
+    const loaded = readLastApply(tmpDir);
+    expect(loaded?.manifest).toEqual(manifestEntry);
+    expect(loaded?.memoryDirs).toEqual(memoryDirs);
+    // writeLastApply sorts memoryDirs by dir key and per-file hash keys.
+    const onDisk = fs.readFileSync(lastApplyPath(tmpDir), "utf8");
+    expect(onDisk.indexOf("a.md")).toBeLessThan(onDisk.indexOf("b.md"));
+  });
+
+  it("throws on a top-level JSON null (not an object)", () => {
+    writeRaw(null);
+    expect(() => readLastApply(tmpDir)).toThrow(/malformed/);
+  });
+
+  it("throws when a files-map entry is a primitive", () => {
+    writeRaw({ files: { "a.json": 5 } });
+    expect(() => readLastApply(tmpDir)).toThrow(/malformed/);
+  });
+
+  it("throws on a malformed optional manifest entry (missing content)", () => {
+    writeRaw({ files: {}, manifest: { sha256: "abc" } });
+    expect(() => readLastApply(tmpDir)).toThrow(/malformed/);
+  });
+
+  it("throws when memoryDirs is not an object", () => {
+    writeRaw({ files: {}, memoryDirs: 42 });
+    expect(() => readLastApply(tmpDir)).toThrow(/malformed/);
+  });
+
+  it("throws on a memoryDirs entry that is not an object", () => {
+    writeRaw({ files: {}, memoryDirs: { "mem/a": null } });
+    expect(() => readLastApply(tmpDir)).toThrow(/malformed/);
+  });
+
+  it("throws on a memoryDirs entry without a string sha256", () => {
+    writeRaw({ files: {}, memoryDirs: { "mem/a": { sha256: 7, fileHashes: {} } } });
+    expect(() => readLastApply(tmpDir)).toThrow(/malformed/);
+  });
+
+  it("throws on a memoryDirs entry without a fileHashes object", () => {
+    writeRaw({ files: {}, memoryDirs: { "mem/a": { sha256: "a".repeat(64) } } });
+    expect(() => readLastApply(tmpDir)).toThrow(/malformed/);
+  });
+
+  it("throws on a memoryDirs entry with a non-string per-file hash", () => {
+    writeRaw({
+      files: {},
+      memoryDirs: { "mem/a": { sha256: "a".repeat(64), fileHashes: { "a.md": 1 } } },
+    });
+    expect(() => readLastApply(tmpDir)).toThrow(/malformed/);
+  });
+});

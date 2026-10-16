@@ -13,6 +13,7 @@ import {
   removeMcpServer,
   resolveClaudeUserRegistryPath,
   resolveMcpConfigDirOverride,
+  readTopLevelMcpServers,
   stripOwnedMcpServers,
   type ClaudeMcpExec,
   type ClaudeMcpExecResult,
@@ -534,6 +535,145 @@ describe("ensureMcpServers", () => {
     // `foo` is absent from the TOP-LEVEL mcpServers (the projects.*.foo
     // entry must not satisfy it), so it's added, not treated as a match.
     expect(r.results).toEqual([{ name: "foo", action: "add", add: { status: "added", message: "added", code: 0 } }]);
+  });
+});
+
+describe("readTopLevelMcpServers: malformed registry shapes (task e345db80)", () => {
+  let tmpDir: string;
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "claude-mcp-read-"));
+  });
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("treats a missing registry file as an empty registry, error-free", () => {
+    const r = readTopLevelMcpServers(path.join(tmpDir, ".claude.json"));
+    expect(r).toEqual({ servers: {}, error: null });
+  });
+
+  it("rejects a registry document that is not a JSON object", () => {
+    const p = path.join(tmpDir, ".claude.json");
+    fs.writeFileSync(p, "[1,2]", "utf8");
+    const r = readTopLevelMcpServers(p);
+    expect(r.servers).toEqual({});
+    expect(r.error).toContain("is not a JSON object");
+  });
+
+  it("treats a registry without an mcpServers key as empty, error-free", () => {
+    const p = path.join(tmpDir, ".claude.json");
+    fs.writeFileSync(p, JSON.stringify({ theme: "dark", projects: {} }), "utf8");
+    expect(readTopLevelMcpServers(p)).toEqual({ servers: {}, error: null });
+  });
+
+  it("rejects an mcpServers value that is not a JSON object", () => {
+    const p = path.join(tmpDir, ".claude.json");
+    fs.writeFileSync(p, JSON.stringify({ mcpServers: "nope" }), "utf8");
+    const r = readTopLevelMcpServers(p);
+    expect(r.servers).toEqual({});
+    expect(r.error).toContain("`mcpServers` is not a JSON object");
+  });
+});
+
+// Every other comparison arm of `specsEqual` (via ensureMcpServers' drift
+// detection) had a test; these shape-mismatch and env-arg drift arms were
+// uncovered (task e345db80). Each must classify as drift (a replace),
+// never as a silent no-op.
+describe("ensureMcpServers: spec-equality drift arms (task e345db80)", () => {
+  let tmpDir: string;
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "claude-mcp-drift-"));
+  });
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  function registryPath(): string {
+    return path.join(tmpDir, ".claude.json");
+  }
+
+  async function ensureAgainstRegistry(registered: unknown, desired: {
+    command: string;
+    args?: string[];
+    env?: Record<string, string>;
+  }) {
+    fs.writeFileSync(registryPath(), JSON.stringify({ mcpServers: { foo: registered } }), "utf8");
+    const calls: string[] = [];
+    const exec: ClaudeMcpExec = async (args) => {
+      calls.push(args[1] ?? "");
+      return ok("");
+    };
+    const r = await ensureMcpServers({ desired: { foo: desired }, exec, registryPath: registryPath() });
+    return { r, calls };
+  }
+
+  it("treats a non-object registry entry as drift (replace, not no-op)", async () => {
+    const { r, calls } = await ensureAgainstRegistry(5, { command: "c" });
+    expect(r.results[0]?.action).toBe("replace");
+    expect(calls).toEqual(["remove", "add-json"]);
+  });
+
+  it("treats more registered args than desired as drift", async () => {
+    const { r } = await ensureAgainstRegistry({ command: "c", args: ["--x", "--y"] }, {
+      command: "c",
+      args: ["--x"],
+    });
+    expect(r.results[0]?.action).toBe("replace");
+  });
+
+  it("treats same-length args with a different value as drift", async () => {
+    const { r } = await ensureAgainstRegistry({ command: "c", args: ["--x"] }, {
+      command: "c",
+      args: ["--z"],
+    });
+    expect(r.results[0]?.action).toBe("replace");
+  });
+
+  it("treats an env key added on the desired side as drift", async () => {
+    const { r } = await ensureAgainstRegistry({ command: "c", env: { A: "1" } }, {
+      command: "c",
+      env: { A: "1", B: "2" },
+    });
+    expect(r.results[0]?.action).toBe("replace");
+  });
+
+  it("treats a renamed env key (same count) as drift", async () => {
+    const { r } = await ensureAgainstRegistry({ command: "c", env: { A: "1" } }, {
+      command: "c",
+      env: { B: "1" },
+    });
+    expect(r.results[0]?.action).toBe("replace");
+  });
+
+  it("treats a changed env value (same key) as drift", async () => {
+    const { r } = await ensureAgainstRegistry({ command: "c", env: { A: "1" } }, {
+      command: "c",
+      env: { A: "2" },
+    });
+    expect(r.results[0]?.action).toBe("replace");
+  });
+
+  it("keeps a non-object registered env as an empty env match when desired has none", async () => {
+    // Negative control for the previous six: shape tolerance must not
+    // tip into "everything is drift", a hand-edited non-object env that
+    // the comparison already normalizes to {} stays a no-op.
+    fs.writeFileSync(
+      registryPath(),
+      JSON.stringify({ mcpServers: { foo: { command: "c", env: "oops" } } }),
+      "utf8",
+    );
+    let execCalls = 0;
+    const exec: ClaudeMcpExec = async () => {
+      execCalls++;
+      return ok("");
+    };
+    const r = await ensureMcpServers({
+      desired: { foo: { command: "c" } },
+      exec,
+      registryPath: registryPath(),
+    });
+    expect(r.results[0]?.action).toBe("noop");
+    expect(execCalls).toBe(0);
   });
 });
 

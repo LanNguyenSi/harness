@@ -67,6 +67,31 @@ describe("diff — semantic engine", () => {
     const out = formatDiff(diffManifests(before, after));
     expect(out).toContain("## tools");
   });
+
+  // The engine keys on the five pillars for grouping; anything else
+  // (a new top-level key, a removed key) must still surface as a real
+  // added/removed change under the catch-all "(other)" group, with the
+  // formatter rendering the +/- lines. Uncovered until task e345db80.
+  it("reports an added top-level key as an added change and renders it under (other)", () => {
+    const changes = diffManifests({ version: 1 }, { version: 1, audit: { path: "a" } });
+    expect(changes).toEqual([{ kind: "added", path: "audit", after: { path: "a" } }]);
+    const out = formatDiff(changes);
+    expect(out).toContain("## (other)");
+    expect(out).toContain('+ audit: {"path":"a"}');
+  });
+
+  it("reports a removed top-level key as a removed change and renders it under (other)", () => {
+    const changes = diffManifests({ version: 1, audit: { path: "a" } }, { version: 1 });
+    expect(changes).toEqual([{ kind: "removed", path: "audit", before: { path: "a" } }]);
+    const out = formatDiff(changes);
+    expect(out).toContain("## (other)");
+    expect(out).toContain('- audit: {"path":"a"}');
+  });
+
+  it("renders a scalar added value verbatim (no JSON quoting)", () => {
+    const out = formatDiff(diffManifests({}, { retention: "keep-forever" }));
+    expect(out).toContain("+ retention: keep-forever");
+  });
 });
 
 describe("diff — git integration", () => {

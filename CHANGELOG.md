@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- The claude-mcp doctor tests are hermetic (task e345db80): every test that reaches the `settings.json` check in `src/cli/doctor/claude-mcp.ts` points the Claude settings path at a temp dir (through the `envOverride` / `homeOverride` seams, or a file-scoped `CLAUDE_CONFIG_DIR` pin in `tests/cli/doctor.test.ts`), so the check no longer reads the developer's real settings file and local and CI coverage agree. New tests cover previously untested live code in `src/cli/gate/snapshot.ts`, `src/io/last-apply.ts`, `src/cli/diff/engine.ts` and `src/io/claude-mcp.ts`, raising statements coverage from 90.05% to 90.64% against the 90% gate. No shipped behavior changed.
+
 - `harness apply`'s policy-pack error and `harness add`'s asset errors now name the `policy_packs` index as written after a removed pack was dropped, like `harness validate` (task 4ee45b99).
 
 - Docs-audit follow-ups (task 852cbdc5). `harness uninstall --restore-from` refuses an `harness.uninstall.<TS>.json` snapshot record (a file with a `version` key and a `removedHookGroups` array) instead of copying it over `settings.json`; a settings backup, including one with a `version` key, restores as before. `harness init --interactive` no longer prints the multi-runtime note that `harness.lock` reflects the last-applied runtime, which was wrong. The `harness apply --merge` and `harness uninstall` help texts, several code comments and the docs now describe what the code does.

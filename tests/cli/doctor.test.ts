@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, describe, expect, it } from "vitest";
 import {
   doctor,
   memoizeVersionProbe,
@@ -17,6 +17,26 @@ let cleanups: Array<() => void> = [];
 afterEach(() => {
   for (const c of cleanups) c();
   cleanups = [];
+});
+
+// Hermeticity (task e345db80): most tests here declare an enabled
+// `tools.mcp[]` entry, so the claude-mcp dead settings.json block check
+// (src/cli/doctor/claude-mcp.ts) runs on every doctor() call in this
+// file. Its `env` seam falls back to `process.env` when a test omits
+// `envOverride`, so on a machine with a real `CLAUDE_CONFIG_DIR` the
+// check read the OPERATOR's settings file, making local coverage of
+// that branch differ from CI's (and letting host state into assertions).
+// Pin the fallback to an empty temp config dir for the whole file (test
+// files run in isolated workers, so this cannot leak across files) and
+// restore the original afterwards. Tests that want a settings file pass
+// `envOverride` explicitly, which wins over this.
+const SAVED_CLAUDE_CONFIG_DIR = process.env["CLAUDE_CONFIG_DIR"];
+const PINNED_CLAUDE_CONFIG_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "harness-doctor-ccd-"));
+process.env["CLAUDE_CONFIG_DIR"] = PINNED_CLAUDE_CONFIG_DIR;
+afterAll(() => {
+  if (SAVED_CLAUDE_CONFIG_DIR === undefined) delete process.env["CLAUDE_CONFIG_DIR"];
+  else process.env["CLAUDE_CONFIG_DIR"] = SAVED_CLAUDE_CONFIG_DIR;
+  fs.rmSync(PINNED_CLAUDE_CONFIG_DIR, { recursive: true, force: true });
 });
 
 /**
@@ -2013,6 +2033,8 @@ policies: []
     const fixture = makeFixture({ "harness.yaml": manifest });
     const report = await doctor({
       configPath: path.join(fixture, "harness.yaml"),
+      homeOverride: fixture,
+      envOverride: {},
       shallow: true,
     });
     expect(report.grounding).toBeDefined();
@@ -2052,6 +2074,8 @@ policies: []
     });
     const report = await doctor({
       configPath: path.join(fixture, "harness.yaml"),
+      homeOverride: fixture,
+      envOverride: {},
       shallow: true,
     });
     expect(report.grounding?.envOverride).toBe(override);
@@ -2069,20 +2093,26 @@ policies: []
     const home = makeFixture({});
     const declared = path.join(home, "a", "ledger.db");
     const override = path.join(home, "b", "other.db");
+    // `homeOverride` + `envOverride` pin the claude-mcp dead-block check
+    // (this manifest declares grounding-mcp) to the fixture: without them
+    // it falls back to os.homedir()/process.env and reads the operator's
+    // real Claude settings (task e345db80 hermeticity).
+    const cleanFixture = makeFixture({
+      "harness.yaml": groundingManifest({ ledgerPath: declared }),
+    });
     const clean = await doctor({
-      configPath: path.join(
-        makeFixture({ "harness.yaml": groundingManifest({ ledgerPath: declared }) }),
-        "harness.yaml",
-      ),
+      configPath: path.join(cleanFixture, "harness.yaml"),
+      homeOverride: cleanFixture,
+      envOverride: {},
       shallow: true,
     });
+    const driftedFixture = makeFixture({
+      "harness.yaml": groundingManifest({ ledgerPath: declared, env: override }),
+    });
     const drifted = await doctor({
-      configPath: path.join(
-        makeFixture({
-          "harness.yaml": groundingManifest({ ledgerPath: declared, env: override }),
-        }),
-        "harness.yaml",
-      ),
+      configPath: path.join(driftedFixture, "harness.yaml"),
+      homeOverride: driftedFixture,
+      envOverride: {},
       shallow: true,
     });
     expect(clean.grounding?.warnings).toEqual([]);
@@ -2115,6 +2145,8 @@ policies: []
     });
     const report = await doctor({
       configPath: path.join(fixture, "harness.yaml"),
+      homeOverride: fixture,
+      envOverride: {},
       shallow: true,
     });
     expect(report.grounding?.ledgerPathWritable).toBe(false);
