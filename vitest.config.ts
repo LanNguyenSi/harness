@@ -3,7 +3,7 @@ import { defineConfig } from "vitest/config";
 // A small family of files (tests/policies/ledger-client.test.ts,
 // tests/probes/mcp.test.ts, tests/runtime/ledger-add.test.ts,
 // tests/io/ledger-record.test.ts, tests/cli/doctor-codex.test.ts, and
-// with their own per-test budgets tests/cli/smoke/smoke.test.ts and
+// with their own per-test budgets
 // tests/scripts/memory-frontmatter-contract.test.ts)
 // spawns real child processes (execa) and races their own
 // spawn/init/exit/IPC latency against a fixed local test-timeout budget
@@ -85,7 +85,7 @@ export default defineConfig({
     coverage: {
       provider: "v8",
       include: ["src/**/*.ts"],
-      // The five register files below hold the commander wiring that used to
+      // The four register files below hold the commander wiring that used to
       // live in src/cli/index.ts (itself excluded above), moved there
       // verbatim by the CLI split; excluding exactly them keeps the gate
       // measuring what it measured before the move. Register files that
@@ -98,7 +98,6 @@ export default defineConfig({
         "src/cli/register-inspect-group.ts",
         "src/cli/register-setup-group.ts",
         "src/cli/register-pack-group.ts",
-        "src/cli/register-smoke-group.ts",
         "src/cli/register-gate-gc-group.ts",
       ],
       reporter: ["text", "html"],

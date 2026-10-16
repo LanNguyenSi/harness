@@ -3,7 +3,7 @@ type: module
 title: Codex runtime adapter
 description: "What harness's Codex runtime adapter is today: what harness apply --runtime codex emits and records, the installer's ownership boundaries for ~/.codex/config.toml, the remaining differences from the Claude Code target (--target exclusivity, branch-protection matching apply_patch only), and the Codex wire format of the hooks that remain (the branch-protection blocker)."
 tags: [codex, runtime-adapter, parity, hooks]
-timestamp: 2026-10-15T14:04:01Z
+timestamp: 2026-10-16T07:36:51Z
 sources:
   - src/cli/apply/apply.ts
   - src/cli/apply/generate-codex-config.ts
@@ -12,7 +12,6 @@ sources:
   - src/cli/doctor/codex.ts
   - src/cli/doctor/format.ts
   - src/cli/doctor/index.ts
-  - src/cli/smoke/index.ts
   - src/cli/pack/remove.ts
   - src/cli/pack/hook-branch-protection.ts
   - src/policy-packs/builtin/branch-protection.ts
@@ -30,7 +29,7 @@ The understanding-gate and solution-acceptance gaps this doc used to enumerate e
 
 `harness apply --runtime codex` selects the Codex adapter instead of the default `claude-code`, and records `runtime: codex` in `harness.generated/.last-apply`, so a later `harness apply` without `--runtime` (including `--install`) reuses codex and prints `runtime: codex (from last apply; pass --runtime to change)` instead of switching back to `claude-code`. A `.last-apply` from an older release without the field is read through its files map (`inferRuntimeFromFiles`): only `codex/config.toml` means codex; with both `settings.json` and `codex/config.toml`, the recorded pack `instructions.md` entries decide when every one names the same runtime in its `## Runtime` section (only the packs the record's own manifest snapshot lists count, when it has a readable one), and the output says the runtime was inferred. `--target` without `--runtime` implies `claude-code` (`selectRuntime`, `src/cli/apply/apply.ts`).
 
-`harness smoke` applies the `claude-code` variant into its own `<output-dir>/harness.generated/` (the `generatedDir` apply option, `src/cli/smoke/index.ts`), so the operator's generated files and `.last-apply` (a recorded `codex` included) stay byte-identical and the next plain apply has nothing to restore. `harness pack remove --force` prunes only the pack's entries from `.last-apply` and keeps its other fields, the recorded runtime included (`pruneRecord`, `src/cli/pack/remove.ts`). `harness doctor` expands packs against the runtime a plain apply would select (`selectRuntime`: recorded, inferred or default), not always `claude-code`, and the report names it (`Pack expansion runtime:`, `formatPackExpansionRuntimeSection`, `src/cli/doctor/format.ts`).
+`harness pack remove --force` prunes only the pack's entries from `.last-apply` and keeps its other fields, the recorded runtime included (`pruneRecord`, `src/cli/pack/remove.ts`). `harness doctor` expands packs against the runtime a plain apply would select (`selectRuntime`: recorded, inferred or default), not always `claude-code`, and the report names it (`Pack expansion runtime:`, `formatPackExpansionRuntimeSection`, `src/cli/doctor/format.ts`).
 
 A codex apply does NOT write `settings.json`; it emits `harness.generated/codex/config.toml` (`CODEX_CONFIG_BASENAME = "codex/config.toml"`, `src/cli/apply/apply.ts`) containing only harness-managed hook stanzas, one `[[hooks.<Event>]]` table per hook with `hooks = [{ type = "command", command = "...", timeout = N }]` (`emitHook`, `emitCommandHook`, `src/cli/apply/generate-codex-config.ts`). The hooks come from the manifest's `hooks`, from the policy packs' expansion for the `codex` runtime (branch-protection is the only builtin pack) and from the `memory.router` projection, a `UserPromptSubmit` hook shared with the Claude Code projection (`buildMemoryRouterHook`, `src/cli/apply/generate-settings.ts`). `MEMORY.md` ships runtime-agnostic and unchanged; pack `instructions.md` ships under every runtime, but its content differs per runtime (the builtin pack's `buildInstructions()` writes a `## Runtime` section), which is why an apply under another runtime rewrites it.
 

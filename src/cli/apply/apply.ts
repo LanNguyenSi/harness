@@ -165,7 +165,7 @@ export interface ApplyOptions {
   prompt?: (message: string) => Promise<string>;
   /**
    * Keep the runtime `.last-apply` records instead of recording this
-   * apply's runtime. For a diagnostic apply (`harness smoke`) that must
+   * apply's runtime. For a diagnostic apply that must
    * run under a fixed runtime without changing the operator's runtime
    * selection: the files map is still updated, so the next plain apply
    * reuses the kept runtime and rewrites that runtime's files back. A
@@ -177,7 +177,7 @@ export interface ApplyOptions {
   preserveRecordedRuntime?: boolean;
   /**
    * Generate into this directory instead of the `harness.generated/` next
-   * to the manifest. For a diagnostic apply (`harness smoke`) that must
+   * to the manifest. For a diagnostic apply that must
    * leave the operator's generated tree and its `.last-apply` record
    * untouched; the runtime selection then reads the `.last-apply` of THIS
    * directory, not the operator's. Resolved to an absolute path. Only the

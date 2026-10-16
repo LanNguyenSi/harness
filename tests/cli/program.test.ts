@@ -111,6 +111,14 @@ describe("CLI program — --version + --help", () => {
     expect(lines).toHaveLength(1);
     expect(lines[0]).toMatch(/unknown command 'policy'/i);
   });
+
+  it("`harness smoke` is an unknown command: exit 64, no `smoke` command registered", async () => {
+    const r = await exec(["smoke"]);
+    expect(r.code).toBe(64);
+    expect(r.stdout).toBe("");
+    const lines = r.stderr.split("\n").filter((l) => l.trim().length > 0);
+    expect(lines[0]).toMatch(/unknown command 'smoke'/i);
+  });
 });
 
 describe("CLI program — init --probe", () => {
