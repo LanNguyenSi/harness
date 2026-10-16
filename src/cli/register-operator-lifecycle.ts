@@ -4,7 +4,7 @@ import { migrateHome } from "./migrate-home/index.js";
 
 export function registerOperatorLifecycle(
   program: Command,
-  io: { stdout: (s: string) => void; stderr: (s: string) => void },
+  _io: { stdout: (s: string) => void; stderr: (s: string) => void },
 ): void {
   program
     .command("migrate-home")

@@ -68,10 +68,13 @@ describe("stdin timeout block reason", () => {
     expect(reason).toMatch(/^stdin timeout:/);
     expect(reason).toContain("within 3000 ms");
     expect(reason).toContain("fail closed");
-    // The operator override it names is the gate disable verb, not the
-    // removed pause (task 973163a4).
-    expect(reason).toContain("Operator override: `harness gate disable`");
-    expect(reason).toContain("`harness gate disable --runtime codex`");
+    // The operator override it names is the hook's own environment switch
+    // and the matcher-scoped gate disable verb, never the removed pause
+    // (task 973163a4): a hook whose manifest entry has no `match` (the
+    // documented runtime-reality setup) cannot be targeted by
+    // `harness gate disable` without a matcher.
+    expect(reason).toContain("RUNTIME_REALITY_DISABLE=1");
+    expect(reason).toContain("harness gate disable --matcher");
     expect(reason).not.toContain("harness pause");
   });
 });

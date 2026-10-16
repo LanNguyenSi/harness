@@ -71,8 +71,8 @@ module.exports = {
         "a4d8adc5): it must not import the understanding gate, the ledger " +
         "client or writer (nor the src/policies barrel that re-exports it), " +
         "approval signing, pending approvals, git-context or the pause " +
-        "machinery. Those components are removed, and the kept gate " +
-        "must not depend on any of them.",
+        "machinery. The pause machinery is removed and the others are " +
+        "being removed; the kept gate must not depend on any of them.",
       severity: "error",
       from: { path: "^src/(cli/pack/hook-branch-protection|policy-packs/builtin/branch-protection|runtime/git-branch)" },
       to: {

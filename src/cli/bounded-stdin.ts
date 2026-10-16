@@ -82,7 +82,8 @@ export function stdinTimeoutBlockReason(idleTimeoutMs: number): string {
   return (
     `stdin timeout: no complete event arrived and closed on stdin within ${idleTimeoutMs} ms, ` +
     `so this gate cannot judge the tool call and refuses it (fail closed). ` +
-    `Retry the tool call. Operator override: \`harness gate disable\` ` +
-    `(Codex: \`harness gate disable --runtime codex\`).`
+    `Retry the tool call. Operator override: set \`RUNTIME_REALITY_DISABLE=1\` for this hook, ` +
+    `or, when its manifest entry has a \`match\`, run \`harness gate disable --matcher <match>\` ` +
+    `(Codex: add \`--runtime codex\`).`
   );
 }
