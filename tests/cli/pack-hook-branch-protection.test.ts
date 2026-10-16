@@ -1421,6 +1421,16 @@ describe.skipIf(!GIT_AVAILABLE)("branch-protection hook: block contract per runt
     expect(run.stderr).toMatch(/unknown --runtime "opencode"/);
   });
 
+  it("an unknown runtime value of any size is cut in the diagnostic", async () => {
+    const MARKER_ALLOWANCE = 64;
+    const run = await runHook(writeEvent("/tmp", "/tmp/x.ts"), { runtime: "o".repeat(10 * BLOCK_TEXT_MAX_BYTES) });
+    expect(run).toMatchObject({ exitCode: 2, blocked: true, stdout: "" });
+    expect(run.diagnostic).toMatch(/\n\[truncated \d+ bytes\]$/);
+    expect(Buffer.byteLength(run.diagnostic)).toBeLessThanOrEqual(BLOCK_TEXT_MAX_BYTES + MARKER_ALLOWANCE);
+    expect(run.stderr).toMatch(/\[truncated \d+ bytes\]\n$/);
+    expect(Buffer.byteLength(run.stderr)).toBeLessThanOrEqual(BLOCK_TEXT_MAX_BYTES + MARKER_ALLOWANCE + 64);
+  });
+
   it.each([
     ["malformed JSON", "{not json"],
     ["an empty event", ""],

@@ -314,7 +314,10 @@ export async function runPackHookBranchProtectionCli(
 
   const runtime = opts.runtime ?? "claude-code";
   if (!(BRANCH_PROTECTION_RUNTIMES as readonly string[]).includes(runtime)) {
-    const diagnostic = `BLOCK: unknown --runtime ${JSON.stringify(runtime)} (expected ${BRANCH_PROTECTION_RUNTIMES.join(" or ")}); refusing`;
+    // The value comes from the command line, so the diagnostic is bounded like every other block detail.
+    const diagnostic = boundUtf8(
+      `BLOCK: unknown --runtime ${JSON.stringify(runtime)} (expected ${BRANCH_PROTECTION_RUNTIMES.join(" or ")}); refusing`,
+    );
     note(diagnostic);
     return { exitCode: CODEX_EXIT_BLOCK, blocked: true, diagnostic };
   }
