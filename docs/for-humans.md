@@ -267,7 +267,8 @@ neutralises the matching hook unit of the harness-managed block of
 `~/.codex/config.toml` in place (`hooks = []`), so every other hook
 keeps its position and Codex keeps its trust; a later
 `harness apply --runtime codex --install` re-renders the block and
-retires a snapshot taken before it. Each config keeps one live
+retires the snapshots of the config it finds (the runbook names the
+link cases it cannot find). Each config keeps one live
 snapshot: a second `gate disable` joins it only while the file is
 exactly the state the snapshot left (a spent snapshot is retired, any
 other state refuses and names the way out), and `gate enable` restores
