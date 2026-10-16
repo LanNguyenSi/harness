@@ -213,6 +213,11 @@ export interface CodexConfigInstallOutcome {
   /** Foreign table headers preserved from a stray-END drift cleanup
    * (task 6a037359). */
   foreignSectionsPreserved: string[];
+  /** Live Codex gate snapshots of this config the write retired as
+   * `*.superseded.json` (the retired paths). */
+  supersededSnapshots?: string[];
+  /** A snapshot the write could not retire or read: what to do by hand. */
+  snapshotWarnings?: string[];
 }
 
 export interface ApplyResult {
@@ -563,6 +568,12 @@ function codexInstallOutcome(
     foreignSectionsPreserved: result.foreignSectionsPreserved,
     ...("backupPath" in result && result.backupPath !== undefined
       ? { backupPath: result.backupPath }
+      : {}),
+    ...("supersededSnapshots" in result && result.supersededSnapshots !== undefined
+      ? { supersededSnapshots: result.supersededSnapshots }
+      : {}),
+    ...("snapshotWarnings" in result && result.snapshotWarnings !== undefined
+      ? { snapshotWarnings: result.snapshotWarnings }
       : {}),
   };
 }

@@ -4,6 +4,9 @@ import * as path from "node:path";
 import { parse as parseTomlDocument, TomlError } from "smol-toml";
 import { atomicWriteFile } from "../../io/atomic-write.js";
 import { EX_FAIL, HarnessExitError } from "../exit-codes.js";
+// Import cycle: codex-snapshot.ts imports this module too. It is safe because
+// neither module touches the other's bindings at top level; they are used only
+// inside function bodies. Keep it that way (no top-level use of these three).
 import { listCodexSnapshots, readCodexSnapshot, retireCodexSnapshot } from "../gate/codex-snapshot.js";
 
 export const CODEX_MANAGED_SOURCE_PREFIX = "# Harness Codex hook wiring.";
@@ -150,7 +153,8 @@ export interface CodexConfigInstallResult extends CodexConfigInstallPlan {
    * longer exists. */
   supersededSnapshots?: string[];
   /** A snapshot that could not be retired or read (the install itself
-   * succeeded): what to do by hand. Also written to stderr. */
+   * succeeded): what to do by hand. The callers print them through their own
+   * io. */
   snapshotWarnings?: string[];
 }
 
@@ -2316,8 +2320,8 @@ function findSnapshotsOfConfig(plan: CodexConfigInstallPlan): { matched: string[
  * outdated line back: every such snapshot (beside the config, and beside the
  * link of a symlinked one) is renamed to `*.superseded.json` right after the
  * write, whatever backup files exist. A rename that fails never fails the
- * install, which is already on disk: it is a warning (stderr and
- * `snapshotWarnings`) naming the snapshot and the move-aside step. The
+ * install, which is already on disk: it is a warning (`snapshotWarnings`,
+ * printed by the caller) naming the snapshot and the move-aside step. The
  * backup-file dating in `gate enable` stays as a second line of defence for
  * a snapshot written while an older installer ran.
  */
@@ -2367,7 +2371,6 @@ export function writeCodexConfigInstall(
   if (superseded.length > 0) result.supersededSnapshots = superseded;
   if (warnings.length > 0) {
     result.snapshotWarnings = warnings;
-    for (const w of warnings) process.stderr.write(`harness: warning: ${w}\n`);
   }
   return result;
 }

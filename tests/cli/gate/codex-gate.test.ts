@@ -2075,7 +2075,8 @@ describe("the installer retires live gate snapshots of the block it rewrites", (
       expect(result.snapshotWarnings).toHaveLength(1);
       expect(result.snapshotWarnings![0]).toContain(s0);
       expect(result.snapshotWarnings![0]).toMatch(/move it out of this directory/);
-      expect(stderr).toHaveBeenCalledWith(expect.stringContaining(`cannot retire the snapshot ${s0}`));
+      // The installer reports through its result; the callers print it through their io.
+      expect(stderr).not.toHaveBeenCalled();
     } finally {
       stderr.mockRestore();
     }
@@ -2092,7 +2093,7 @@ describe("the installer retires live gate snapshots of the block it rewrites", (
       expect(result.written).toBe(true);
       expect(result.snapshotWarnings).toHaveLength(1);
       expect(result.snapshotWarnings![0]).toContain(junk);
-      expect(stderr).toHaveBeenCalledWith(expect.stringContaining(junk));
+      expect(stderr).not.toHaveBeenCalled();
     } finally {
       stderr.mockRestore();
     }
