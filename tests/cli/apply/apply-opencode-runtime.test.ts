@@ -11,8 +11,6 @@ import {
   apply,
 } from "../../../src/cli/apply/index.js";
 import { HarnessExitError } from "../../../src/cli/exit-codes.js";
-import { SOLUTION_VERDICT_SIGNING_KEY_ENV } from "../../../src/cli/apply/generate-settings.js";
-import { signingKeyPathFor } from "../../../src/runtime/approval-signing.js";
 
 let tmpHome: string;
 
@@ -136,18 +134,10 @@ describe("apply --runtime opencode", () => {
   });
 });
 
-// task 03a917fd/H1b: apply.ts's buildExpectedFiles now threads its own
-// resolved `generatedDir` into generateOpencodeConfig's extras (mirroring
-// the settings.json branch's equivalent generateSettingsWithWarnings call
-// -- see that call site's comment for why THIS branch, unlike the
-// settings.json one, is where the projection is actually observable:
-// opencode's generated config file carries its `mcp` block verbatim,
-// while settings.json never serializes mcpServers post-T-002). These
-// tests exercise the real apply() pipeline end-to-end, not just the
-// generate-settings.ts/generate-opencode-config.ts primitives (already
-// unit-tested separately), so they double as the mutation-testable proof
-// that apply.ts's generatedDir wiring is actually live.
-describe("apply --runtime opencode — SOLUTION_VERDICT_SIGNING_KEY projection (task 03a917fd/H1b)", () => {
+// The opencode config apply writes carries the grounding-mcp EVIDENCE_LEDGER_DB
+// projection and no approval-signing key (task 21a2c508); an operator-declared
+// value passes through. These run the real apply() pipeline end to end.
+describe("apply --runtime opencode: grounding-mcp environment (task 21a2c508)", () => {
   function readOpencodeMcp(): Record<string, { environment?: Record<string, string> }> {
     const opencodePath = path.join(tmpHome, GENERATED_DIRNAME, OPENCODE_CONFIG_BASENAME);
     const jsonBody = fs
@@ -159,7 +149,7 @@ describe("apply --runtime opencode — SOLUTION_VERDICT_SIGNING_KEY projection (
       .mcp;
   }
 
-  it("projects an absolute, real SOLUTION_VERDICT_SIGNING_KEY onto grounding-mcp in the generated opencode config", async () => {
+  it("writes EVIDENCE_LEDGER_DB and no SOLUTION_VERDICT_SIGNING_KEY onto grounding-mcp", async () => {
     writeManifest({
       tools: {
         mcp: [{ name: "grounding-mcp", command: ["grounding-mcp-server"] }],
@@ -171,43 +161,12 @@ describe("apply --runtime opencode — SOLUTION_VERDICT_SIGNING_KEY projection (
     const result = await apply({ homeDir: tmpHome, runtime: "opencode" });
     expect(result.outcome).toBe("applied");
 
-    const expectedKeyPath = signingKeyPathFor(path.join(tmpHome, GENERATED_DIRNAME));
-    expect(path.isAbsolute(expectedKeyPath)).toBe(true);
-    const mcp = readOpencodeMcp();
-    expect(mcp["grounding-mcp"]?.environment?.[SOLUTION_VERDICT_SIGNING_KEY_ENV]).toBe(
-      expectedKeyPath,
-    );
+    const env = readOpencodeMcp()["grounding-mcp"]?.environment;
+    expect(env?.["EVIDENCE_LEDGER_DB"]).toBeDefined();
+    expect(env).not.toHaveProperty("SOLUTION_VERDICT_SIGNING_KEY");
   });
 
-  it("with a redirected generatedDir, writes there but keeps the signing-key path on the operator's generated dir", async () => {
-    writeManifest({
-      tools: {
-        mcp: [{ name: "grounding-mcp", command: ["grounding-mcp-server"] }],
-        cli: [],
-        skills: { enabled: [], source_dirs: [] },
-        builtin: { known: [] },
-      },
-    });
-    const redirected = path.join(tmpHome, "elsewhere", GENERATED_DIRNAME);
-    const result = await apply({ homeDir: tmpHome, runtime: "opencode", generatedDir: redirected });
-    expect(result.outcome).toBe("applied");
-    expect(result.generatedDir).toBe(redirected);
-    expect(fs.existsSync(path.join(redirected, OPENCODE_CONFIG_BASENAME))).toBe(true);
-    expect(fs.existsSync(path.join(tmpHome, GENERATED_DIRNAME, OPENCODE_CONFIG_BASENAME))).toBe(false);
-
-    const jsonBody = fs
-      .readFileSync(path.join(redirected, OPENCODE_CONFIG_BASENAME), "utf8")
-      .split("\n")
-      .filter((l) => !l.startsWith("//"))
-      .join("\n");
-    const mcp = (JSON.parse(jsonBody) as { mcp: Record<string, { environment?: Record<string, string> }> })
-      .mcp;
-    expect(mcp["grounding-mcp"]?.environment?.[SOLUTION_VERDICT_SIGNING_KEY_ENV]).toBe(
-      signingKeyPathFor(path.join(tmpHome, GENERATED_DIRNAME)),
-    );
-  });
-
-  it("does not override an operator-declared SOLUTION_VERDICT_SIGNING_KEY", async () => {
+  it("passes an operator-declared SOLUTION_VERDICT_SIGNING_KEY through", async () => {
     writeManifest({
       tools: {
         mcp: [
@@ -226,7 +185,7 @@ describe("apply --runtime opencode — SOLUTION_VERDICT_SIGNING_KEY projection (
     expect(result.outcome).toBe("applied");
 
     const mcp = readOpencodeMcp();
-    expect(mcp["grounding-mcp"]?.environment?.[SOLUTION_VERDICT_SIGNING_KEY_ENV]).toBe(
+    expect(mcp["grounding-mcp"]?.environment?.["SOLUTION_VERDICT_SIGNING_KEY"]).toBe(
       "/operator/own.key",
     );
   });

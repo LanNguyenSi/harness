@@ -28,9 +28,8 @@
 // command: string[], cwd?, environment?: Record<string,string>,
 // enabled?, timeout? }`). We reuse generate-settings.ts's
 // `buildDesiredMcpServers` (Claude Code's `{command, args, env}` shape,
-// already covering the grounding-mcp EVIDENCE_LEDGER_DB and
-// SOLUTION_VERDICT_SIGNING_KEY projections and the literal-tilde
-// env-value warning) and reshape the
+// already covering the grounding-mcp EVIDENCE_LEDGER_DB projection and
+// the literal-tilde env-value warning) and reshape the
 // result into opencode's `{type: "local", command: [...], environment}`
 // instead of hand-rolling a third copy of that logic that could drift
 // from the other two runtimes.
@@ -189,14 +188,6 @@ export interface GenerateOpencodeConfigExtras {
    * convention as `GenerateSettingsExtras.homeDir` in generate-settings.ts.
    */
   homeDir?: string;
-  /**
-   * Absolute `harness.generated/` directory for the manifest in use (task
-   * 03a917fd/H1b), threaded through to `projectSigningKeyEnv` exactly like
-   * `GenerateSettingsExtras.generatedDir` in generate-settings.ts. Same
-   * no-safe-default rule: omitting this yields NO
-   * `SOLUTION_VERDICT_SIGNING_KEY` projection rather than a guessed path.
-   */
-  generatedDir?: string;
 }
 
 function toOpencodeMcpServer(server: SettingsMcpServer): OpencodeLocalMcpServer {
@@ -215,11 +206,10 @@ export function generateOpencodeConfig(
   extras: GenerateOpencodeConfigExtras = {},
 ): OpencodeConfigResult {
   // Claude Code's {command, args, env} shape already carries the
-  // grounding-mcp EVIDENCE_LEDGER_DB and SOLUTION_VERDICT_SIGNING_KEY
-  // projections plus the literal-tilde warning, via `buildDesiredMcpServers`
-  // (review round H1, Finding 2 -- the single choke point every producer of
-  // this shape now shares, instead of hand-rolling a third copy of the
-  // buildMcpServers/projectGroundingEnv/projectSigningKeyEnv sequence).
+  // grounding-mcp EVIDENCE_LEDGER_DB projection plus the literal-tilde
+  // warning, via `buildDesiredMcpServers` (the single choke point every
+  // producer of this shape shares, instead of hand-rolling a third copy of
+  // the buildMcpServers/projectGroundingEnv sequence).
   // `buildMcpServers` (inside the helper) returns keys pre-sorted ascending
   // by name (see its own header) AND drops `enabled: false` entries
   // entirely. That drop is correct for the Claude-Code-shaped intermediate
@@ -229,7 +219,6 @@ export function generateOpencodeConfig(
   // review — see this module's "enabled:false" header note for why).
   const { mcp: claudeShapeMcp, warnings } = buildDesiredMcpServers(manifest, {
     homeDir: extras.homeDir,
-    generatedDir: extras.generatedDir,
   });
 
   // Built by iterating manifest.tools.mcp SORTED ascending by name (not

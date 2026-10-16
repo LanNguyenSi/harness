@@ -30,7 +30,6 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { readPendingApproval } from "./pending-approval.js";
 
 const FALLBACK = "default";
 
@@ -60,7 +59,7 @@ export interface DiscoverSessionOptions {
 }
 
 // Claude Code names each session's transcript `<uuid>.jsonl`. Anchored
-// so sibling files (memory dirs, `.pending-approval`, etc.) are ignored.
+// so sibling files (memory dirs, state files, etc.) are ignored.
 const SESSION_TRANSCRIPT_RE =
   /^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$/i;
 
@@ -150,106 +149,4 @@ export function resolveReadSessionId(
   });
   if (typeof discovered === "string" && discovered.length > 0) return discovered;
   return FALLBACK;
-}
-
-// ---------------------------------------------------------------------------
-// Session-id resolver for an operator approval verb.
-// ---------------------------------------------------------------------------
-//
-// No verb calls it since the Risk Gate approval verb was removed; it stays with
-// the pending-approval staging it reads until that staging goes.
-//
-// The caller keeps its own error-throw block because the error message is
-// intentionally verb-specific (it names the gate hook, the verb, and the
-// recovery steps that are relevant to that verb).
-
-/** Session-id source for an operator approval verb. */
-export type ApprovalSessionSource =
-  | "flag"
-  | "env-claude-code"
-  | "env-claude"
-  | "env-codex"
-  | "pending-approval";
-
-export interface ResolveApprovalSessionIdOptions {
-  /** Explicit --session flag value. Empty string is treated as absent. */
-  session?: string;
-  /** Path to the harness.generated/ directory; used to read .pending-approval. */
-  generatedDir: string;
-  /**
-   * Test seam: override the .pending-approval reader. Defaults to
-   * `readPendingApproval` from pending-approval.ts. Verb-level tests use
-   * real tmp directories and do not need this; unit tests for the resolver
-   * itself use it to avoid creating directories.
-   */
-  readPending?: (dir: string) => string | null;
-}
-
-export interface ResolveApprovalSessionIdResult {
-  /**
-   * The resolved session id, or an empty string when no tier matched.
-   * Callers MUST check for the empty string and throw a verb-specific
-   * error. The empty-string path is intentional: it lets callers produce
-   * messages that name their own gate hook, verb, and
-   * recovery steps without the resolver needing to know about them.
-   */
-  sessionId: string;
-  /**
-   * Where the session id came from. When `sessionId` is empty this field
-   * is meaningless (callers throw before returning it to the operator).
-   */
-  sessionSource: ApprovalSessionSource;
-}
-
-/**
- * Session-id resolver for an operator approval verb.
- *
- * Precedence:
- *   1. explicit --session flag
- *   2. $CLAUDE_CODE_SESSION_ID (the var Claude Code exports into the agent shell)
- *   3. $CLAUDE_SESSION_ID (legacy / docs name; kept for older operator recipes)
- *   4. $CODEX_SESSION_ID (set inside a live Codex session)
- *   5. .pending-approval staging file (written by the gate hook)
- *
- * Returns `{ sessionId: "" }` when no tier resolves. The caller is
- * responsible for throwing a verb-specific HarnessExitError in that case.
- */
-export function resolveApprovalSessionId(
-  opts: ResolveApprovalSessionIdOptions,
-): ResolveApprovalSessionIdResult {
-  const readPending = opts.readPending ?? readPendingApproval;
-
-  if (typeof opts.session === "string" && opts.session.length > 0) {
-    return { sessionId: opts.session, sessionSource: "flag" };
-  }
-  if (
-    typeof process.env.CLAUDE_CODE_SESSION_ID === "string" &&
-    process.env.CLAUDE_CODE_SESSION_ID.length > 0
-  ) {
-    return {
-      sessionId: process.env.CLAUDE_CODE_SESSION_ID,
-      sessionSource: "env-claude-code",
-    };
-  }
-  if (
-    typeof process.env.CLAUDE_SESSION_ID === "string" &&
-    process.env.CLAUDE_SESSION_ID.length > 0
-  ) {
-    return { sessionId: process.env.CLAUDE_SESSION_ID, sessionSource: "env-claude" };
-  }
-  if (
-    typeof process.env.CODEX_SESSION_ID === "string" &&
-    process.env.CODEX_SESSION_ID.length > 0
-  ) {
-    return { sessionId: process.env.CODEX_SESSION_ID, sessionSource: "env-codex" };
-  }
-
-  const staged = readPending(opts.generatedDir);
-  if (staged !== null) {
-    return { sessionId: staged, sessionSource: "pending-approval" };
-  }
-
-  // Nothing resolved. The caller checks sessionId === "" and throws its own
-  // verb-specific error message.
-  return { sessionId: "", sessionSource: "flag" };
 }

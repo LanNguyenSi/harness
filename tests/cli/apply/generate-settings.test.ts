@@ -1,4 +1,3 @@
-import * as path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   DEFAULT_BUDGET_MS,
@@ -12,7 +11,6 @@ import {
 import { generateCodexConfig } from "../../../src/cli/apply/generate-codex-config.js";
 import { manifestProjection, parseSettingsHooks } from "../../../src/cli/adopt/derive.js";
 import { parseManifest, type Hook, type Manifest, type McpServer } from "../../../src/schema/index.js";
-import { signingKeyPathFor } from "../../../src/runtime/approval-signing.js";
 
 function manifestOf(hooks: unknown[], mcp: unknown[] = []): Manifest {
   return parseManifest({
@@ -1025,139 +1023,45 @@ describe("generateSettings — grounding: projection (task 129e1b94)", () => {
   });
 });
 
-// task 03a917fd/H1 (agent-grounding 9b6c4beb comment 2, Option 2): the
-// harness's own approval-signing key path
-// (`<generatedDir>/.approval-signing.key`, `signingKeyPathFor`) is
-// projected as the `SOLUTION_VERDICT_SIGNING_KEY` env on the grounding-mcp
-// entry, exactly mirroring the `EVIDENCE_LEDGER_DB` projection above. Only
-// the PATH is projected, never key bytes; the producer (grounding-mcp
-// >= 0.8.0) reads this var primarily and throws on a non-absolute value.
-describe("generateSettings — SOLUTION_VERDICT_SIGNING_KEY projection (task 03a917fd/H1)", () => {
+// The grounding-mcp entry carries exactly the EVIDENCE_LEDGER_DB projection
+// (task 21a2c508 removed the approval-signing key projection). An env value
+// the operator declares on the manifest entry is an ordinary env value and
+// passes through untouched, including a SOLUTION_VERDICT_SIGNING_KEY that a
+// grounding-mcp deployment may still read.
+describe("generateSettings: grounding-mcp env after the signing-key projection removal (task 21a2c508)", () => {
   const GROUNDING_MCP = {
     name: "grounding-mcp",
     command: ["node", "/opt/grounding-mcp/dist/server.js"],
     enabled: true,
   };
-  const GENERATED_DIR = "/home/op/.harness/harness.generated";
 
-  it("projects signingKeyPathFor(generatedDir) as SOLUTION_VERDICT_SIGNING_KEY, absolute, no tilde", () => {
+  it("projects EVIDENCE_LEDGER_DB and no SOLUTION_VERDICT_SIGNING_KEY", () => {
     const m = manifestOf([], [GROUNDING_MCP]);
-    const { root, mcpServers } = generateSettingsWithWarnings(m, {
-      generatedDir: GENERATED_DIR,
-    });
+    const { root, mcpServers } = generateSettingsWithWarnings(m, { homeDir: "/home/op" });
     expect(root).not.toHaveProperty("mcpServers");
-    const projected = mcpServers["grounding-mcp"]?.env?.SOLUTION_VERDICT_SIGNING_KEY;
-    expect(projected).toBe(signingKeyPathFor(GENERATED_DIR));
-    expect(projected).toBe("/home/op/.harness/harness.generated/.approval-signing.key");
-    // Absolute, no literal tilde — the producer throws on a non-absolute
-    // value (agent-grounding 9b6c4beb comment 2).
-    expect(typeof projected).toBe("string");
-    expect(path.isAbsolute(projected as string)).toBe(true);
-    expect((projected as string).startsWith("~")).toBe(false);
+    const env = mcpServers["grounding-mcp"]?.env;
+    expect(env?.EVIDENCE_LEDGER_DB).toBeDefined();
+    expect(Object.keys(env ?? {}).sort()).toEqual(["EVIDENCE_LEDGER_DB"]);
+    expect(env).not.toHaveProperty("SOLUTION_VERDICT_SIGNING_KEY");
   });
 
-  it("never projects key MATERIAL, only the path string", () => {
-    // No key file exists at GENERATED_DIR in this test (nothing creates
-    // one); the projection is pure path arithmetic and must never read
-    // or embed file contents.
-    const m = manifestOf([], [GROUNDING_MCP]);
-    const { mcpServers } = generateSettingsWithWarnings(m, {
-      generatedDir: GENERATED_DIR,
-    });
-    const projected = mcpServers["grounding-mcp"]?.env?.SOLUTION_VERDICT_SIGNING_KEY;
-    expect(projected).toBe(
-      path.join(GENERATED_DIR, ".approval-signing.key"),
-    );
-  });
-
-  it("an operator env override on the entry wins over the projected path", () => {
+  it("passes an operator-declared SOLUTION_VERDICT_SIGNING_KEY through as an ordinary env value", () => {
     const m = manifestOf([], [
       { ...GROUNDING_MCP, env: { SOLUTION_VERDICT_SIGNING_KEY: "/custom/signing.key" } },
     ]);
-    const { mcpServers } = generateSettingsWithWarnings(m, {
-      generatedDir: GENERATED_DIR,
-    });
+    const { mcpServers } = generateSettingsWithWarnings(m, { homeDir: "/home/op" });
     expect(mcpServers["grounding-mcp"]?.env?.SOLUTION_VERDICT_SIGNING_KEY).toBe(
       "/custom/signing.key",
     );
+    expect(mcpServers["grounding-mcp"]?.env?.EVIDENCE_LEDGER_DB).toBeDefined();
   });
 
-  it("treats an empty-string operator override as absent (projection replaces it)", () => {
-    const m = manifestOf([], [
-      { ...GROUNDING_MCP, env: { SOLUTION_VERDICT_SIGNING_KEY: "" } },
-    ]);
-    const { mcpServers } = generateSettingsWithWarnings(m, {
-      generatedDir: GENERATED_DIR,
-    });
-    expect(mcpServers["grounding-mcp"]?.env?.SOLUTION_VERDICT_SIGNING_KEY).toBe(
-      signingKeyPathFor(GENERATED_DIR),
-    );
-  });
-
-  it("without a grounding-mcp entry: no crash, no var", () => {
-    const m = manifestOf([], [
-      { name: "agent-tasks", command: ["node", "/opt/agent-tasks/mcp.js"], enabled: true },
-    ]);
-    expect(() =>
-      generateSettingsWithWarnings(m, { generatedDir: GENERATED_DIR }),
-    ).not.toThrow();
-    const { mcpServers } = generateSettingsWithWarnings(m, {
-      generatedDir: GENERATED_DIR,
-    });
-    expect(mcpServers["agent-tasks"]?.env).toBeUndefined();
-    expect(mcpServers["grounding-mcp"]).toBeUndefined();
-  });
-
-  it("without generatedDir: no crash, no var, even with a grounding-mcp entry", () => {
-    const m = manifestOf([], [GROUNDING_MCP]);
-    expect(() => generateSettingsWithWarnings(m)).not.toThrow();
-    const { mcpServers } = generateSettingsWithWarnings(m);
-    expect(mcpServers["grounding-mcp"]?.env?.SOLUTION_VERDICT_SIGNING_KEY).toBeUndefined();
-  });
-
-  it("does not project onto other servers (selective to grounding-mcp only)", () => {
+  it("adds no env to other servers", () => {
     const m = manifestOf([], [
       GROUNDING_MCP,
       { name: "agent-tasks", command: ["node", "/opt/agent-tasks/mcp.js"], enabled: true },
     ]);
-    const { mcpServers } = generateSettingsWithWarnings(m, {
-      generatedDir: GENERATED_DIR,
-    });
-    expect(mcpServers["grounding-mcp"]?.env?.SOLUTION_VERDICT_SIGNING_KEY).toBe(
-      signingKeyPathFor(GENERATED_DIR),
-    );
-    expect(mcpServers["agent-tasks"]?.env?.SOLUTION_VERDICT_SIGNING_KEY).toBeUndefined();
-  });
-
-  // Review round H1, Finding 1: `generatedDir` is normalized at the
-  // projection boundary (expandHome + path.resolve, mirroring
-  // `groundingLedgerEnvValue`'s idiom for EVIDENCE_LEDGER_DB) instead of
-  // being rejected. A relative or literal-tilde `generatedDir` must still
-  // project an ABSOLUTE, tilde-free SOLUTION_VERDICT_SIGNING_KEY, since
-  // grounding-mcp throws on a non-absolute value.
-  it("normalizes a RELATIVE generatedDir to an absolute path (Finding 1)", () => {
-    const m = manifestOf([], [GROUNDING_MCP]);
-    const relative = "relative/harness.generated";
-    const { mcpServers } = generateSettingsWithWarnings(m, { generatedDir: relative });
-    const projected = mcpServers["grounding-mcp"]?.env?.SOLUTION_VERDICT_SIGNING_KEY;
-    expect(typeof projected).toBe("string");
-    expect(path.isAbsolute(projected as string)).toBe(true);
-    expect((projected as string).startsWith("~")).toBe(false);
-    expect(projected).toBe(signingKeyPathFor(path.resolve(relative)));
-  });
-
-  it("normalizes a LITERAL-TILDE generatedDir to an absolute path (Finding 1)", () => {
-    const m = manifestOf([], [GROUNDING_MCP]);
-    const { mcpServers } = generateSettingsWithWarnings(m, {
-      homeDir: "/home/op",
-      generatedDir: "~/my-harness/harness.generated",
-    });
-    const projected = mcpServers["grounding-mcp"]?.env?.SOLUTION_VERDICT_SIGNING_KEY;
-    expect(typeof projected).toBe("string");
-    expect(path.isAbsolute(projected as string)).toBe(true);
-    expect((projected as string).startsWith("~")).toBe(false);
-    expect(projected).toBe(
-      signingKeyPathFor("/home/op/my-harness/harness.generated"),
-    );
+    const { mcpServers } = generateSettingsWithWarnings(m, { homeDir: "/home/op" });
+    expect(mcpServers["agent-tasks"]?.env).toBeUndefined();
   });
 });

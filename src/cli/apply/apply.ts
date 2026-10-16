@@ -175,18 +175,6 @@ export interface ApplyOptions {
    * stays absent.
    */
   preserveRecordedRuntime?: boolean;
-  /**
-   * Generate into this directory instead of the `harness.generated/` next
-   * to the manifest. For a diagnostic apply that must
-   * leave the operator's generated tree and its `.last-apply` record
-   * untouched; the runtime selection then reads the `.last-apply` of THIS
-   * directory, not the operator's. Resolved to an absolute path. Only the
-   * apply output (generated files, audit copies, `.last-apply`) moves;
-   * the settings' pause sentinel and the opencode/grounding-mcp signing-key
-   * path stay anchored to the operator's generated dir, since the
-   * operator's hooks and grounding-mcp resolve them there.
-   */
-  generatedDir?: string;
 }
 
 export type ApplyOutcome =
@@ -604,11 +592,6 @@ function buildExpectedFiles(
   opts: ApplyOptions,
   manifestPath: string,
   generatedDir: string,
-  // The operator's generated dir. It differs from `generatedDir` only when
-  // the caller redirected apply's output (`opts.generatedDir`); values that
-  // name runtime state the operator's hooks and grounding-mcp consult (the
-  // verdict signing key) stay anchored here.
-  stateDir: string = generatedDir,
 ): { files: ExpectedFile[]; warnings: string[] } {
   // Phase 6 #2: expand policy_packs[] into hook contributions + extra
   // generated files BEFORE settings projection. Pack hooks flow through
@@ -661,11 +644,7 @@ function buildExpectedFiles(
     // field, so `packExpansion.hooks` computed below is never
     // projected into the opencode artefact either) -- the file still
     // ships either way, its CONTENT differs per runtime.
-    // generatedDir threaded in (task 03a917fd/H1b) so the opencode config's
-    // grounding-mcp entry gets a real, resolved SOLUTION_VERDICT_SIGNING_KEY
-    // instead of no projection at all (generateOpencodeConfig's extras have
-    // no safe default for this -- see GenerateOpencodeConfigExtras).
-    const opencodeConfig = generateOpencodeConfig(augmentedManifest, { generatedDir: stateDir });
+    const opencodeConfig = generateOpencodeConfig(augmentedManifest);
     return {
       files: [
         { basename: OPENCODE_CONFIG_BASENAME, content: opencodeConfig.content },
@@ -676,12 +655,7 @@ function buildExpectedFiles(
     };
   }
 
-  // generatedDir threaded in (task 03a917fd/H1b) for SOLUTION_VERDICT_SIGNING_KEY
-  // correctness; see GenerateSettingsResult.mcpServers's doc comment for
-  // why this projection is not itself observable in settings.json.
-  const settingsResult = generateSettingsWithWarnings(augmentedManifest, {
-    generatedDir: stateDir,
-  });
+  const settingsResult = generateSettingsWithWarnings(augmentedManifest);
   const settings = `${JSON.stringify(settingsResult.root, null, 2)}\n`;
   return {
     files: [
@@ -782,9 +756,7 @@ export async function apply(opts: ApplyOptions = {}): Promise<ApplyResult> {
     );
   }
 
-  const operatorGeneratedDir = resolveGeneratedDir({ homeDir: opts.homeDir, manifestPath });
-  const generatedDir =
-    opts.generatedDir !== undefined ? path.resolve(opts.generatedDir) : operatorGeneratedDir;
+  const generatedDir = resolveGeneratedDir({ homeDir: opts.homeDir, manifestPath });
   const lockPath = path.join(path.dirname(manifestPath), LOCK_BASENAME);
 
   const loaderOpts: Parameters<typeof loadManifest>[0] = {
@@ -820,7 +792,6 @@ export async function apply(opts: ApplyOptions = {}): Promise<ApplyResult> {
     { ...opts, runtime },
     manifestPath,
     generatedDir,
-    operatorGeneratedDir,
   );
   // Manifest posture warnings (removed keys, hook fields and packs, table from
   // task a4d8adc5; printed by apply since task 2ce6933f):

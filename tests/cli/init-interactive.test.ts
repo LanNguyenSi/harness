@@ -8,7 +8,6 @@ import {
   type RunInteractiveOptions,
 } from "../../src/cli/init/interactive.js";
 import { HermeticSpawnViolationError } from "../../src/runtime/hermetic-spawn-guard.js";
-import { signingKeyPathFor } from "../../src/runtime/approval-signing.js";
 import { STUB_NPM_BIN_EXEC_WARN } from "../_helpers/npm-bin-exec.js";
 
 // Stub for `npm prefix -g` (task npm-prefix-g-hermeticity-guard/T-004).
@@ -525,14 +524,10 @@ describe("interactive wizard — MCP registration + settings.json migration (tas
     expect(registry.mcpServers["grounding-mcp"]?.env?.["EVIDENCE_LEDGER_DB"]).toContain(
       ".evidence-ledger/ledger.db",
     );
-    // task 03a917fd/H1b: same real-registration path also carries
-    // SOLUTION_VERDICT_SIGNING_KEY now (loadDesiredMcpServers ->
-    // projectSigningKeyEnv), an absolute path to the harness's own
-    // approval-signing key under the SAME generatedDir apply() itself
-    // used for this run (outcome.apply.generatedDir).
-    expect(outcome?.apply?.generatedDir).toBeDefined();
-    expect(registry.mcpServers["grounding-mcp"]?.env?.["SOLUTION_VERDICT_SIGNING_KEY"]).toBe(
-      signingKeyPathFor(outcome!.apply!.generatedDir),
+    // The registration carries exactly the ledger projection: no
+    // approval-signing key is projected (task 21a2c508).
+    expect(registry.mcpServers["grounding-mcp"]?.env).not.toHaveProperty(
+      "SOLUTION_VERDICT_SIGNING_KEY",
     );
 
     // Migration: harness-owned names stripped from the dead settings.json
@@ -547,6 +542,55 @@ describe("interactive wizard — MCP registration + settings.json migration (tas
     ]);
     expect(cap.stderr()).toContain("registered 2 MCP server(s) with the claude CLI");
     expect(cap.stderr()).toContain("removed 2 dead mcpServers entries");
+  });
+
+  it("ensureMcpServers replaces a grounding-mcp entry whose registered env still carries SOLUTION_VERDICT_SIGNING_KEY (task 21a2c508 env-comparison pin; init overwrites the manifest, so this is not the operator remedy)", async () => {
+    fs.mkdirSync(path.join(tmpHome, ".claude"));
+    const registryPath = path.join(tmpHome, ".claude.json");
+    const runOnce = async (forceOverwrite: boolean, confirms: boolean[]) => {
+      const { exec: runExec } = fakeClaudeCli(registryPath);
+      const cap = captureStreams();
+      const result = await runInteractive({
+        homeDir: tmpHome,
+        dependencyPathEnv: fakeDepsPath,
+        forceOverwrite,
+        mcpExec: runExec,
+        authProbeSpawn: async () => ({ code: 0, stderr: "ok (store: keychain)\n" }),
+        prompts: mockPrompts({
+          select: ["team"],
+          confirm: confirms,
+          checkbox: [["claude-code"]],
+          input: ["~/.claude/projects/{project}/memory"],
+        }),
+        stdout: cap.out,
+        stderr: cap.err,
+      });
+      return result.applies?.[0];
+    };
+    await runOnce(false, [true, true]);
+
+    // An older release also registered the signing key path on the entry.
+    const legacy = JSON.parse(fs.readFileSync(registryPath, "utf8")) as {
+      mcpServers: Record<string, { command: string; env?: Record<string, string> }>;
+    };
+    legacy.mcpServers["grounding-mcp"]!.env = {
+      ...legacy.mcpServers["grounding-mcp"]!.env,
+      SOLUTION_VERDICT_SIGNING_KEY: "/home/op/.harness/harness.generated/.approval-signing.key",
+    };
+    fs.writeFileSync(registryPath, JSON.stringify(legacy, null, 2));
+
+    const second = await runOnce(true, [true]);
+    const actions = Object.fromEntries(
+      (second?.mcpEnsure?.results ?? []).map((r) => [r.name, r.action]),
+    );
+    expect(actions).toEqual({ "agent-tasks": "noop", "grounding-mcp": "replace" });
+    const registry = JSON.parse(fs.readFileSync(registryPath, "utf8")) as {
+      mcpServers: Record<string, { env?: Record<string, string> }>;
+    };
+    expect(registry.mcpServers["grounding-mcp"]?.env).not.toHaveProperty(
+      "SOLUTION_VERDICT_SIGNING_KEY",
+    );
+    expect(registry.mcpServers["grounding-mcp"]?.env?.["EVIDENCE_LEDGER_DB"]).toBeDefined();
   });
 
   it("second init run is fully idempotent: no further claude CLI calls, no settings.json write", async () => {
