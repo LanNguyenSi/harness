@@ -70,6 +70,7 @@ import {
 import { renderAgentFacing } from "../../runtime/agent-facing.js";
 import { boundUtf8 } from "../../runtime/bounded-text.js";
 import { type Manifest, type PolicyUx } from "../../schema/index.js";
+import { tolerateClosedStdio } from "../drain-stdio.js";
 import { type LoaderOptions } from "../loader.js";
 import {
   loadManifestOrInjected,
@@ -304,6 +305,11 @@ export async function runPackHookBranchProtectionCli(
   const startedAt = now();
   const stdout = opts.stdout ?? process.stdout;
   const stderr = opts.stderr ?? process.stderr;
+  // Before the first write of any kind: a reader that has gone makes a write
+  // fail with EPIPE, and the error is emitted while this function is still
+  // awaiting git, so a listener attached only at exit comes too late.
+  // The exit code is the decision's, whatever happens to the pipe.
+  tolerateClosedStdio([stdout, stderr]);
   const note = (msg: string): void => {
     stderr.write(`harness pack hook branch-protection: ${msg}\n`);
   };
