@@ -1743,7 +1743,7 @@ function missingEndOfLinkChain(start: string): string | undefined {
  * unresolvable chain (a loop, a permission error) or a link to anything
  * other than a regular file is refused before anything is written.
  */
-function resolveConfigSymlink(requestedPath: string): string {
+export function resolveConfigSymlink(requestedPath: string): string {
   let linkStat: fs.Stats;
   try {
     linkStat = fs.lstatSync(requestedPath);
@@ -2204,13 +2204,49 @@ function timestampForBackup(now: Date): string {
   return now.toISOString().replace(/[:.]/g, "-");
 }
 
+const INSTALL_BACKUP_STAMP_RE = /^(\d{4}-\d{2}-\d{2})T(\d{2})-(\d{2})-(\d{2})-(\d{3})Z$/;
+
+/** The time of the newest install that rewrote the config at `filePath`, in
+ * epoch milliseconds, read from the `<filePath>.harness-backup-<timestamp>`
+ * files `writeCodexConfigInstall` leaves beside it (one per write of an
+ * existing config), or null when there is none. `harness gate enable
+ * --runtime codex` uses it to tell a snapshot taken before a re-install
+ * (whose units that install re-rendered) from one taken after it. Reads the
+ * directory only. */
+export function latestCodexInstallBackupMs(filePath: string): number | null {
+  return latestCodexInstallBackup(filePath)?.ms ?? null;
+}
+
+/** Like {@link latestCodexInstallBackupMs}, and also the path of the newest
+ * backup file, so a message can name the install that dated a snapshot. */
+export function latestCodexInstallBackup(filePath: string): { ms: number; path: string } | null {
+  const prefix = `${path.basename(filePath)}.harness-backup-`;
+  let names: string[];
+  try {
+    names = fs.readdirSync(path.dirname(filePath));
+  } catch {
+    return null;
+  }
+  let latest: { ms: number; path: string } | null = null;
+  for (const name of names) {
+    if (!name.startsWith(prefix)) continue;
+    const m = INSTALL_BACKUP_STAMP_RE.exec(name.slice(prefix.length));
+    if (m === null) continue;
+    const ms = Date.parse(`${m[1]}T${m[2]}:${m[3]}:${m[4]}.${m[5]}Z`);
+    if (!Number.isNaN(ms) && (latest === null || ms > latest.ms)) {
+      latest = { ms, path: path.join(path.dirname(filePath), name) };
+    }
+  }
+  return latest;
+}
+
 /** The config holds operator secrets (API tokens under `[mcp_servers.*]`,
  * Codex hook trust hashes); the install must never widen its permissions.
  * Preserves the existing file's own mode for both the rewritten config and
  * its backup, and falls back to `0o600` (owner read/write only) when
  * creating a config that did not exist before this install, rather than
  * `atomicWriteFile`'s own `0o644` default. */
-function existingFileMode(filePath: string): number {
+export function existingFileMode(filePath: string): number {
   try {
     return fs.statSync(filePath).mode & 0o777;
   } catch (err) {
@@ -2245,4 +2281,251 @@ export function writeCodexConfigInstall(
   atomicWriteFile(backupPath, plan.currentContent, { mode });
   atomicWriteFile(plan.configPath, plan.nextContent, { mode });
   return { ...plan, backupPath, written: true };
+}
+
+/** One harness-owned hook unit inside the fenced managed block: the block
+ * `generate-codex-config.ts`'s `emitHook` writes (a `# harness hook:` comment
+ * line, the `[[hooks.<Event>]]` header, an optional `matcher =` line and the
+ * `hooks = [...]` line). `harness gate disable` neutralises a unit in place
+ * by replacing its `hooks = [...]` value with `hooks = []`; such a unit is
+ * `disabled`. */
+export interface CodexManagedHookUnit {
+  /** The id in the comment line, e.g. `policy-pack:branch-protection:pre-tool-use`. */
+  id: string;
+  event: string;
+  matcher: string | null;
+  commands: string[];
+  /** True when the unit's `hooks` array is empty (neutralised by the gate). */
+  disabled: boolean;
+  /** Offset of the unit's comment line. */
+  start: number;
+  /** Offsets `[hooksStart, hooksEnd)` of the `hooks = [...]` line, without
+   * its indentation, trailing blanks or line terminator, so a replacement
+   * leaves LF and CRLF files byte-for-byte alike outside that span. */
+  hooksStart: number;
+  hooksEnd: number;
+}
+
+export interface CodexManagedHookBlock {
+  units: CodexManagedHookUnit[];
+}
+
+const HOOK_UNIT_HEADER_RE = /^\[\[hooks\.([A-Za-z][A-Za-z0-9_]*)\]\]$/;
+
+/**
+ * The harness-owned hook units of the fenced managed block in `text`, with
+ * exact offsets, for `harness gate` (the operator's switch for a blocking
+ * hook). It reuses the installer's own range scan (`findManagedRange`), so
+ * the refusals that scan raises (a duplicate BEGIN marker, a foreign table
+ * wedged inside the block) apply here unchanged, and adds the stricter
+ * reading an edit needs: the block must be fenced by BEGIN and a closing END
+ * marker line, every non-blank line inside it must be a comment or part of a
+ * unit of the exact shape the generator writes, and no harness hook comment
+ * may sit outside the block (`assertNoOrphanHarnessHookTable`). Anything else
+ * refuses instead of guessing which bytes are harness-owned. Returns null
+ * when the file holds no managed block. Reads only; the file is never touched.
+ */
+export function readCodexManagedHookUnits(
+  text: string,
+  configPath: string,
+): CodexManagedHookBlock | null {
+  const range = findManagedRange(text, configPath);
+  if (range === null) return null;
+  const refuse = (why: string): never => refuseHookBlockEdit(configPath, why);
+  const beginLine = findMarkerLine(text, CODEX_MANAGED_BEGIN, "prefix", range.start, range.end);
+  if (beginLine === -1) {
+    return refuse(
+      `the harness block has no '${CODEX_MANAGED_BEGIN}' fence (written by an older install); ` +
+        "re-run `harness apply --runtime codex --install` once to rewrite it with fences",
+    );
+  }
+  assertNoOrphanHarnessHookTable(text, configPath, range);
+  const endLine = lineStartAt(text, range.end - 1);
+  // A drifted END (a foreign table between the last unit and the END marker)
+  // ends the range before that table, so the range's last line is not the
+  // END marker line and the same check refuses it.
+  if (!createMarkerLineProbe(text)(endLine, CODEX_MANAGED_END, "whole")) {
+    return refuse(
+      `the block is not closed by a '${CODEX_MANAGED_END}' marker line right after its hook tables ` +
+        "(move any table that sits between the last hook unit and the END marker to below the END " +
+        "marker, or re-run `harness apply --runtime codex --install` to rewrite the block)",
+    );
+  }
+
+  const isMarkerLine = createMarkerLineProbe(text);
+  const units: CodexManagedHookUnit[] = [];
+  let pos = lineEndAfter(text, beginLine);
+  const lineAt = (at: number): string => text.slice(at, lineEndAfter(text, at)).trim();
+  while (pos < endLine) {
+    const trimmed = lineAt(pos);
+    const isUnitComment = trimmed.startsWith("#") && isMarkerLine(pos, HARNESS_HOOK_COMMENT_PREFIX, "prefix");
+    if (trimmed === "" || (trimmed.startsWith("#") && !isUnitComment)) {
+      if (units.length > 0 && trimmed !== "") {
+        return refuse(`line ${lineNumberAt(text, pos)} inside the block is a comment between hook units`);
+      }
+      pos = lineEndAfter(text, pos);
+      continue;
+    }
+    if (!isUnitComment) {
+      return refuse(`line ${lineNumberAt(text, pos)} inside the block is not part of a generated hook unit`);
+    }
+    const id = HOOK_ID_LINE_RE.exec(trimmed)?.[1];
+    if (id === undefined) {
+      return refuse(`the hook comment at line ${lineNumberAt(text, pos)} is not in the generated shape`);
+    }
+    const unitStart = pos;
+    const body: string[] = [];
+    let lastLineAt = pos;
+    pos = lineEndAfter(text, pos);
+    while (pos < endLine && lineAt(pos) !== "" && !lineAt(pos).startsWith("#")) {
+      body.push(lineAt(pos));
+      lastLineAt = pos;
+      pos = lineEndAfter(text, pos);
+    }
+    units.push(parseHookUnit(id, body, unitStart, lastLineAt, text, refuse));
+  }
+  return { units };
+}
+
+function refuseHookBlockEdit(configPath: string, why: string): never {
+  throw new CodexInstallRefusalError(
+    `Codex config ${configPath}: ${why}; refusing to edit the harness-managed hook block. ` +
+      "The file is untouched.",
+    configPath,
+  );
+}
+
+function parseHookUnit(
+  id: string,
+  body: string[],
+  start: number,
+  lastLineAt: number,
+  text: string,
+  refuse: (why: string) => never,
+): CodexManagedHookUnit {
+  const where = `the hook unit at line ${lineNumberAt(text, start)}`;
+  const header = HOOK_UNIT_HEADER_RE.exec(body[0] ?? "");
+  const shapeOk =
+    header !== null &&
+    (body.length === 2 || (body.length === 3 && body[1]!.startsWith("matcher = "))) &&
+    body[body.length - 1]!.startsWith("hooks = [");
+  if (!shapeOk) {
+    return refuse(`${where} is not the generated shape (header, optional matcher, hooks array)`);
+  }
+  let doc: unknown;
+  try {
+    doc = parseToml(body.join("\n"));
+  } catch (err) {
+    return refuse(`${where} does not parse as TOML (${describeTomlParseError(err)})`);
+  }
+  const event = header![1]!;
+  const hooksTable = isTomlTable(doc) ? doc.hooks : undefined;
+  const entries = isTomlTable(hooksTable) ? hooksTable[event] : undefined;
+  const entry = Array.isArray(entries) && entries.length === 1 ? entries[0] : undefined;
+  if (!isTomlTable(entry) || !Array.isArray(entry.hooks)) {
+    return refuse(`${where} does not define one ${event} entry with a hooks array`);
+  }
+  const matcher = entry.matcher;
+  if (matcher !== undefined && typeof matcher !== "string") {
+    return refuse(`${where} has a matcher that is not a string`);
+  }
+  const commands = entry.hooks.flatMap((h: unknown) =>
+    isTomlTable(h) && typeof h.command === "string" ? [h.command] : [],
+  );
+  const rawLine = text.slice(lastLineAt, lineEndAfter(text, lastLineAt));
+  return {
+    id,
+    event,
+    matcher: matcher ?? null,
+    commands,
+    disabled: entry.hooks.length === 0,
+    start,
+    hooksStart: lastLineAt + (rawLine.length - rawLine.trimStart().length),
+    hooksEnd: lastLineAt + rawLine.trimEnd().length,
+  };
+}
+
+/** What a gate edit of the managed block is allowed to change. A `disable`
+ * neutralises units (a unit's `hooks` array becomes empty); an `enable` puts
+ * the original `hooks` arrays back. `counts` is how many entries of each hook
+ * event the edit changes. */
+export interface CodexHookEditExpectation {
+  direction: "neutralise" | "restore";
+  counts: Record<string, number>;
+}
+
+/**
+ * The safety net for a gate edit of the managed block. First the installer's
+ * own semantic invariant (both documents parse, and everything outside the
+ * hook event arrays is deep-equal), then the part that invariant leaves out
+ * on purpose, compared entry by entry: per hook event the arrays have the
+ * same length, every entry is deep-equal to its counterpart except exactly
+ * `expected.counts[event]` entries, and each of those differs only in its
+ * `hooks` array (emptied by a neutralise, filled again by a restore). So a
+ * gate edit can neither drop, add or reorder an entry nor move a key from one
+ * entry to another, and Codex keeps every other hook at the position its
+ * trust state was recorded for.
+ */
+export function assertCodexHookEditInvariant(
+  before: string,
+  after: string,
+  configPath: string,
+  expected: CodexHookEditExpectation,
+): void {
+  assertConfigSemanticInvariant(before, after, configPath);
+  const eventArrays = (doc: unknown): Map<string, unknown[]> => {
+    const arrays = new Map<string, unknown[]>();
+    const hooks = isTomlTable(doc) ? doc.hooks : undefined;
+    if (!isTomlTable(hooks)) return arrays;
+    for (const [key, value] of Object.entries(hooks)) {
+      if (Array.isArray(value)) arrays.set(key, value);
+    }
+    return arrays;
+  };
+  const same = (a: unknown, b: unknown): boolean => firstDifferingKeyPath(a, b, []) === null;
+  const withHooks = (entry: unknown, hooks: unknown[]): unknown =>
+    isTomlTable(entry) ? { ...entry, hooks } : entry;
+  const hooksOf = (entry: unknown): unknown =>
+    isTomlTable(entry) ? entry.hooks : undefined;
+  const emptied = (entry: unknown): boolean => {
+    const hooks = hooksOf(entry);
+    return Array.isArray(hooks) && hooks.length === 0;
+  };
+  const filled = (entry: unknown): boolean => {
+    const hooks = hooksOf(entry);
+    return Array.isArray(hooks) && hooks.length > 0;
+  };
+  const refuse = (event: string, why: string): never => {
+    throw new CodexInstallRefusalError(
+      `Codex config ${configPath}: the gate edit would ${why} in the '${event}' hook entries; ` +
+        "refusing to write. The file is untouched.",
+      configPath,
+    );
+  };
+
+  const was = eventArrays(parseToml(before));
+  const now = eventArrays(parseToml(after));
+  for (const event of new Set([...was.keys(), ...now.keys(), ...Object.keys(expected.counts)])) {
+    const a = was.get(event) ?? [];
+    const b = now.get(event) ?? [];
+    if (a.length !== b.length) {
+      refuse(event, `change the number of entries from ${a.length} to ${b.length}`);
+    }
+    let changed = 0;
+    for (let i = 0; i < a.length; i += 1) {
+      if (same(a[i], b[i])) continue;
+      changed += 1;
+      const relationHolds =
+        expected.direction === "neutralise"
+          ? filled(a[i]) && emptied(b[i]) && same(withHooks(a[i], []), b[i])
+          : emptied(a[i]) && filled(b[i]) && same(withHooks(b[i], []), a[i]);
+      if (!relationHolds) {
+        refuse(event, `change entry ${i} by more than its hooks array`);
+      }
+    }
+    const want = expected.counts[event] ?? 0;
+    if (changed !== want) {
+      refuse(event, `change ${changed} entries, expected ${want}`);
+    }
+  }
 }
