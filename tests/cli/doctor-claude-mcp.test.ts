@@ -13,9 +13,9 @@
 // so `resolveSettingsPath` can never fall back to `process.env` and pick
 // up the developer's real `CLAUDE_CONFIG_DIR` (or, transitively, their
 // real home's `~/.claude/settings.json`). Before this, the
-// `mcpServers`-absent branch at `claude-mcp.ts:155` read local-only
-// coverage from the operator's settings file, making the local and CI
-// numbers differ.
+// absent / non-object `mcpServers` early return in
+// `findDeadSettingsMcpNames` read local-only coverage from the operator's
+// settings file, making the local and CI numbers differ.
 
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -397,9 +397,10 @@ describe("doctor — dead settings.json mcpServers block", () => {
 
 // `findDeadSettingsMcpNames` never throws: a missing file, malformed
 // JSON, a non-object document, and a non-object `mcpServers` value all
-// resolve to "nothing to report". These three shapes were each covered
-// only accidentally (or not at all) because the check used to fall back
-// to `process.env` and read the operator's settings file (task e345db80).
+// resolve to "nothing to report". These shapes were each covered only
+// accidentally (or not at all) because the tests omitted the env seam, so
+// the check fell back to `process.env` and the operator's settings file
+// (task e345db80).
 // Here every shape lives in a temp dir reached through the temp
 // `homeOverride` (HOME seam) or a temp `CLAUDE_CONFIG_DIR` (env seam),
 // and each test asserts the rolled-up result, not just that the run
@@ -446,8 +447,9 @@ describe("doctor: dead settings.json block: malformed shapes never throw", () =>
 
   it("treats a settings.json without an mcpServers key as nothing to report", async () => {
     // This is the exact shape of a real operator `~/.claude/settings.json`
-    // that made `claude-mcp.ts:155` read as covered locally but uncovered
-    // on CI; the branch is now pinned here instead.
+    // that made the absent / non-object `mcpServers` early return in
+    // `findDeadSettingsMcpNames` read as covered locally but uncovered on
+    // CI; the branch is now pinned here instead.
     const report = await reportWithSettings('{"theme":"dark"}', false);
     expect(report.claudeMcp?.deadSettingsBlockNames).toEqual([]);
     expect(report.claudeMcp?.warnings).toEqual([]);
