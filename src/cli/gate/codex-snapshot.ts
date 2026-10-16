@@ -11,7 +11,7 @@
 // disable and after the latest one. At most one snapshot per config is live:
 // a later disable merges its units into it. It lives beside the Codex config
 // under its own file prefix and carries `version: 3` and `target: "codex"`,
-// so a Claude settings snapshot (version 1, no target) can never be restored
+// so a Claude settings snapshot (version 1 or 2, no target) can never be restored
 // into TOML and a Codex snapshot can never be read as a settings.json one
 // (`readSnapshot` rejects version 3). Once `gate enable` has applied a
 // snapshot, or found it applied or superseded, it renames the file to

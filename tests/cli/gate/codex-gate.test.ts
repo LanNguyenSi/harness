@@ -34,6 +34,7 @@ import { gateDisable, GateDisableError } from "../../../src/cli/gate/disable.js"
 import { gateEnable, GateEnableError } from "../../../src/cli/gate/enable.js";
 import { listSnapshots } from "../../../src/cli/gate/snapshot.js";
 import { parseManifest } from "../../../src/schema/index.js";
+import { downgradeToVersion1 } from "../../_helpers/claude-gate-legacy.js";
 
 // The Codex gate edits the config `harness apply --runtime codex --install`
 // writes, so every fixture here is built by the installer itself.
@@ -1935,6 +1936,7 @@ describe("codex gate: snapshot isolation from the Claude gate", () => {
     writeSettings();
     const d = gateDisable({ settingsPath, matcher: "Edit", now: T0 });
     if (d.mode !== "remove") throw new Error("expected remove");
+    downgradeToVersion1(d.snapshotPath);
     const snap = JSON.parse(fs.readFileSync(d.snapshotPath, "utf8"));
     expect(snap.version).toBe(1);
     expect(snap.target).toBeUndefined();
