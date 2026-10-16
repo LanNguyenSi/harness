@@ -15,9 +15,10 @@ function flushed(stream: FlushableStream): Promise<void> {
       // A write to a pipe whose reader has gone fails with EPIPE, and the
       // stream emits that as an 'error' event. With no listener the event is
       // an uncaught exception: the process exits 1, which a hook host reads
-      // as allow. The listener goes on before the empty write below and, as
-      // drainStdio calls this synchronously, before any earlier write's error
-      // is emitted on a later tick. A failed stream has nothing left to wait
+      // as allow. The listener goes on before the empty write below, and it
+      // also catches an earlier write's error that is emitted after run() has
+      // settled. An error emitted while run() is still awaiting I/O (before
+      // drainStdio is called) is not covered here. A failed stream has nothing left to wait
       // for, so the error also settles the flush, whether or not the stream
       // calls the write callback. The exit code is already decided.
       stream.on?.("error", () => resolve());
