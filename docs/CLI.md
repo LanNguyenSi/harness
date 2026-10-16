@@ -91,8 +91,6 @@ Removed in task `a4d8adc5`: `harness approve branch-protection` and `harness ses
 |------|-----------|
 | `harness gate disable [--matcher <pattern>] [--runtime claude\|codex] [--settings <path>] [--config <path>]` | Remove hook groups from `~/.claude/settings.json` whose matcher substring-matches the pattern; with `--runtime codex`, neutralise the matching hook units of the harness-managed block of `~/.codex/config.toml` in place (`hooks = []`, so other hooks keep their position and trust; `--config` overrides the path). With no `--matcher`, lists candidates without writing. Snapshots what it changed + backs up the file for `gate enable`. |
 | `harness gate enable [--runtime claude\|codex] [--settings <path>] [--config <path>] [--force]` | Restore the most recent snapshot written by `gate disable` for that runtime (a Claude snapshot is never applied to the Codex config, or the reverse). With `--runtime codex` it walks the snapshots taken for that config by their recorded time and restores the newest that matches the config and each older one that matches the result byte for byte, retires every applied snapshot (renamed to `*.restored.json`) and every one a later install or a hand edit superseded (`*.superseded.json`), and exits non-zero naming any unit that stays disabled; `--force` applies the newest snapshot to an edited config, swapping only its hooks lines back (units found by id) and keeping every other edit. |
-| `harness pause [--for 5m\|--indefinite] [--reason X] [--i-am-the-operator]` | Drop a sentinel at `harness.generated/.harness-paused` so the `harness pack hook runtime-reality` hook short-circuits. Branch-protection does not yield to the pause; to switch it off, see [Disable the gate](policy-packs/branch-protection.md#disable-the-gate-operator-only) (Claude Code and Codex differ). Operator-only (`v0.22.0+`). `--indefinite` requires the companion `--i-am-the-operator-and-accept-no-auto-resume`. |
-| `harness resume` | Remove the pause sentinel and re-engage all gates. |
 
 ## Environment variables
 
@@ -102,10 +100,9 @@ Variables the `harness` binary reads. For the `RUNTIME_REALITY_*` variables of t
 |---|---|---|
 | `HARNESS_HOME` | every verb that resolves the state root | Pins the state root, ahead of `~/.harness/` and the legacy `~/.claude/`. |
 | `CLAUDE_CODE_SESSION_ID`, `CLAUDE_SESSION_ID` | `harness audit`, `harness session-export` | Session id fallback, in this order, when `--session` carries none. `audit` then falls back to the newest Claude Code transcript. |
-| `CLAUDE_CODE_SESSION_ID`, `CLAUDE_SESSION_ID`, `CODEX_SESSION_ID` | `harness pause`, `harness resume` | Any of them set makes the verb refuse, because it then runs inside an agent shell. |
 | `CLAUDE_CONFIG_DIR` | `harness init --interactive`, `harness doctor`, `harness adopt`, `harness uninstall` | Moves the Claude Code user-scope MCP registry these verbs read from `~/.claude.json` to `$CLAUDE_CONFIG_DIR/.claude.json`. |
 
-`harness` itself does not read `EVIDENCE_LEDGER_DB` or `SOLUTION_VERDICT_SIGNING_KEY`: `harness apply` projects them onto the `grounding-mcp` server entry, which reads them.
+`harness` itself does not read `EVIDENCE_LEDGER_DB` or `SOLUTION_VERDICT_SIGNING_KEY`: `harness apply` projects only `EVIDENCE_LEDGER_DB` onto the `grounding-mcp` server entry, which reads it. It no longer projects `SOLUTION_VERDICT_SIGNING_KEY` (task 21a2c508): grounding-mcp falls back to `<harness-home>/harness.generated/.approval-signing.key` when the variable is unset, and an operator-declared `env.SOLUTION_VERDICT_SIGNING_KEY` on the manifest entry still passes through.
 
 ## Notes
 

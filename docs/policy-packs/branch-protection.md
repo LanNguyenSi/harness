@@ -248,7 +248,7 @@ un-hooked operator shell, not from the agent's session:
   brings the unit back. Alternatively set `enabled: false` on this pack
   and re-run `harness apply --runtime codex --install`.
 
-The operator pause (`harness pause`) does not switch this gate off.
+The off switch for this gate is the `harness gate disable` / `harness gate enable` pair above; the removed `harness pause` verb (task 973163a4) never switched this gate off either.
 
 ### Removed in task `a4d8adc5`
 

@@ -40,8 +40,10 @@ citation instead.
 
 ## Runbooks
 
-- [Kill switches, pause vs gate disable](pause-vs-gate-kill-switch.md), the two
-  distinct kill-switch mechanisms (`harness pause` mutes the
-  runtime-reality hook only, never branch-protection; `harness gate
-  disable` edits settings.json), when to use which, restore paths,
-  and the operator-only CLI checks guarding both.
+- [Kill switch: harness gate disable/enable](gate-kill-switch.md), the shipped
+  operator off switch (`harness gate disable` / `gate enable` remove hook
+  groups from settings.json on Claude Code and, with `--runtime codex`,
+  neutralise hook units of the harness-managed block of
+  `~/.codex/config.toml` in place), when to use it, restore paths, hooks
+  without a matcher, and the recovery recipes; `harness pause` / `resume`
+  were removed in 1.0.0 and the gate is their replacement.
