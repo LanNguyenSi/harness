@@ -975,6 +975,81 @@ policies: []
   });
 });
 
+// apply drops `enabled: false` MCP entries in buildMcpServers
+// (generate-settings.ts) BEFORE projectGroundingEnv runs, so a disabled
+// grounding-mcp entry never receives the EVIDENCE_LEDGER_DB projection.
+// manifestMcpProjection must mirror that guard: mirroring the ledger env
+// onto a disabled entry would report phantom "modified" drift for every
+// registry that legitimately lacks the entry's env.
+describe("adopt: disabled grounding-mcp entry never mirrors EVIDENCE_LEDGER_DB", () => {
+  const LEDGER_PATH = "/var/tmp/h1-finding3-ledger.db";
+
+  it("manifestMcpProjection leaves env untouched on an enabled: false grounding-mcp entry", () => {
+    const manifest = parseManifest({
+      version: 1,
+      grounding: { evidence_ledger: { path: LEDGER_PATH } },
+      tools: {
+        mcp: [
+          { name: "grounding-mcp", command: ["node", "/opt/g/server.js"], enabled: false },
+        ],
+        cli: [],
+        skills: { enabled: [], source_dirs: [] },
+        builtin: { known: [] },
+      },
+      memory: { directories: [] },
+      hooks: [],
+      policies: [],
+    });
+    const projection = manifestMcpProjection(manifest, "/home/op");
+    expect(projection).toEqual([
+      { name: "grounding-mcp", command: ["node", "/opt/g/server.js"] },
+    ]);
+    const entry = projection.find((m) => m.name === "grounding-mcp");
+    expect(entry?.env?.EVIDENCE_LEDGER_DB).toBeUndefined();
+  });
+
+  it("adopt() reports zero MCP drift for a registry grounding-mcp entry vs a disabled manifest entry", async () => {
+    fs.writeFileSync(
+      manifestPath,
+      `version: 1
+grounding:
+  evidence_ledger:
+    path: "${LEDGER_PATH}"
+tools:
+  mcp:
+    - name: grounding-mcp
+      command: [node, /opt/g/server.js]
+      enabled: false
+  cli: []
+  skills: { enabled: [], source_dirs: [] }
+  builtin: { known: [] }
+memory: { directories: [] }
+hooks: []
+policies: []
+`,
+    );
+    writeSettings({});
+    writeRegistry({
+      "grounding-mcp": { command: "node", args: ["/opt/g/server.js"] },
+    });
+    const before = fs.readFileSync(manifestPath, "utf8");
+    // Same seam as the enabled-entry e2e above: under a regression (the
+    // projection mirroring EVIDENCE_LEDGER_DB onto the disabled entry)
+    // this surfaces as outcome "declined" with spurious modified drift on
+    // grounding-mcp, never as a write.
+    const r = await runAdopt(settingsPath, {
+      configPath: manifestPath,
+      stdinIsTTY: true,
+      prompt: async () => "n",
+    });
+    expect(r.outcome).toBe("no-drift");
+    expect(r.mcpDriftCount).toBe(0);
+    expect(r.adoptedMcpNames).toEqual([]);
+    expect(r.replacedMcpNames).toEqual([]);
+    expect(fs.readFileSync(manifestPath, "utf8")).toBe(before);
+  });
+});
+
 describe("adopt — round-trip fidelity (task 059b669c)", () => {
   it("captures a settings hook `timeout` (seconds) into budget_ms (ms) and apply round-trips it (task 7bf47554 unit fix)", async () => {
     // settings.json `timeout` is Claude Code's own unit: SECONDS. adopt
