@@ -1,3 +1,4 @@
+import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import { describe, expect, it } from "vitest";
 import { drainStdio } from "../../src/cli/drain-stdio.js";
@@ -67,5 +68,47 @@ describe("drainStdio", () => {
     }, 60);
     await drainStdio(3000, [pt as never]);
     expect(seen).toBe(64);
+  });
+
+  it("settles on an error event even when the write callback never fires, and keeps swallowing later ones", async () => {
+    // A stream whose reader has gone: the error is emitted on a later tick
+    // (here one pending from an earlier write, one from the drain's own
+    // write) and the callback is never called. Without a listener, EventEmitter
+    // throws on an 'error' event; the throw is collected so a missing listener
+    // shows as a result, not as an uncaught exception.
+    const thrown: unknown[] = [];
+    const emitter = new EventEmitter();
+    const emitError = (): void => {
+      try {
+        emitter.emit("error", new Error("write EPIPE"));
+      } catch (err) {
+        thrown.push(err);
+      }
+    };
+    const gone = Object.assign(emitter, {
+      destroyed: false,
+      writable: true,
+      write(): boolean {
+        setImmediate(emitError);
+        return false;
+      },
+    });
+    process.nextTick(emitError);
+    const started = Date.now();
+    await drainStdio(3000, [gone as never]);
+    expect(Date.now() - started).toBeLessThan(1500);
+    emitError();
+    expect(thrown).toEqual([]);
+  });
+
+  it("drains every stream, not only the first", async () => {
+    const first = fakeStream(0);
+    const second = fakeStream(null);
+    const started = Date.now();
+    await drainStdio(200, [first as never, second as never]);
+    // The second stream never completes, so the wait runs to the bound.
+    expect(Date.now() - started).toBeGreaterThanOrEqual(180);
+    expect(first.writes).toEqual([""]);
+    expect(second.writes).toEqual([""]);
   });
 });

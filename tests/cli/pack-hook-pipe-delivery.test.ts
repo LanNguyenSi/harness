@@ -5,10 +5,15 @@
 // queued, which on macOS cut stdout at the buffer size. A cut envelope is not
 // JSON, so Claude Code saw no refusal.
 //
+// A reader that is gone is a third case: the host closed its end of a pipe, a
+// write gets EPIPE, and the hook must still end with the exit code it would
+// have had without the wait for the pipe to drain (0 for a Claude Code block,
+// 2 for a Codex block). A crash there exits 1, which both hosts read as allow.
+//
 // These tests run dist/cli/main.js with piped stdio and a reader that starts
-// late. Build first (`npm run build`).
+// late or never. Build first (`npm run build`).
 
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -56,7 +61,13 @@ async function runWithSlowReader(opts: {
   args: string[];
   stdin?: string;
   preloadQueuedBytes?: number;
+  preloadQueuedStderrBytes?: number;
   readerDelayMs?: number;
+  /** Close the parent's read end of the child's stdout before the child writes. */
+  closeStdout?: boolean;
+  /** Close the parent's read end of the child's stderr before the child writes. */
+  closeStderr?: boolean;
+  extraEnv?: Record<string, string>;
   cwd: string;
   home: string;
 }): Promise<PipeRun> {
@@ -65,12 +76,19 @@ async function runWithSlowReader(opts: {
   delete env["CLAUDE_CODE_SESSION_ID"];
   delete env["CLAUDE_SESSION_ID"];
   delete env["CODEX_SESSION_ID"];
+  for (const key of Object.keys(env)) if (key.startsWith("GIT_")) delete env[key];
   env["HARNESS_HOME"] = opts.home;
   env["HOME"] = opts.home;
+  Object.assign(env, opts.extraEnv);
   const nodeArgs: string[] = [];
-  if (opts.preloadQueuedBytes !== undefined) {
+  if (opts.preloadQueuedBytes !== undefined || opts.preloadQueuedStderrBytes !== undefined) {
     nodeArgs.push("--require", QUEUED_STDOUT_PRELOAD);
-    env["HARNESS_TEST_QUEUED_STDOUT_BYTES"] = String(opts.preloadQueuedBytes);
+    if (opts.preloadQueuedBytes !== undefined) {
+      env["HARNESS_TEST_QUEUED_STDOUT_BYTES"] = String(opts.preloadQueuedBytes);
+    }
+    if (opts.preloadQueuedStderrBytes !== undefined) {
+      env["HARNESS_TEST_QUEUED_STDERR_BYTES"] = String(opts.preloadQueuedStderrBytes);
+    }
   }
   const child = spawn(process.execPath, [...nodeArgs, MAIN_JS, ...opts.args], {
     cwd: opts.cwd,
@@ -90,6 +108,10 @@ async function runWithSlowReader(opts: {
   // Paused: nothing is read, so the pipes back up, until the reader starts.
   child.stdout.pause();
   child.stderr.pause();
+  // The child needs far longer than this to start and write, so its first
+  // write lands on a pipe nobody reads any more.
+  if (opts.closeStdout === true) child.stdout.destroy();
+  if (opts.closeStderr === true) child.stderr.destroy();
   const out: Buffer[] = [];
   const err: Buffer[] = [];
   child.stdout.on("data", (c: Buffer) => out.push(c));
@@ -122,6 +144,35 @@ function oversizedManifest(dir: string): string {
     `version: 1\npolicy_packs:\n  - name: branch-protection\n    enabled: true\nhooks:\n${"  - 1\n".repeat(INVALID_HOOK_ENTRIES)}`,
   );
   return configPath;
+}
+
+/** A real repository with `master` checked out (unborn), so a write inside it is refused. */
+function protectedRepo(): string {
+  const repo = path.join(tmpDir("harness-pipe-repo-"), "repo");
+  fs.mkdirSync(repo);
+  execFileSync("git", ["-c", "init.defaultBranch=master", "init", "-q"], {
+    cwd: repo,
+    env: { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" },
+    stdio: "ignore",
+  });
+  return repo;
+}
+
+/** A valid manifest that enables the pack, so a write on `master` is refused for the branch. */
+function packManifest(): string {
+  const dir = tmpDir("harness-pipe-cfg-");
+  const configPath = path.join(dir, "harness.yaml");
+  fs.writeFileSync(configPath, "version: 1\npolicy_packs:\n  - name: branch-protection\n    enabled: true\n");
+  return configPath;
+}
+
+function writeEventIn(repo: string): string {
+  return JSON.stringify({
+    hook_event_name: "PreToolUse",
+    tool_name: "Write",
+    cwd: repo,
+    tool_input: { file_path: path.join(repo, "x.txt"), content: "x" },
+  });
 }
 
 const EVENT = JSON.stringify({
@@ -235,4 +286,137 @@ describe("the entry point drains stdout before it exits", () => {
     },
     TEST_TIMEOUT_MS,
   );
+
+  it(
+    "output queued on stderr past the pipe buffer reaches a slow reader whole",
+    async () => {
+      const dir = tmpDir("harness-pipe-drain-err-");
+      const run = await runWithSlowReader({
+        args: ["--version"],
+        preloadQueuedStderrBytes: QUEUED_BYTES,
+        cwd: dir,
+        home: dir,
+      });
+      expect(run.hung).toBe(false);
+      expect(run.code).toBe(0);
+      expect(run.stderr.toString("utf8")).toBe("E".repeat(QUEUED_BYTES));
+      expect(run.stdout.toString("utf8")).toMatch(/^\d+\.\d+\.\d+\S*\n$/);
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "a rejection that escapes run() drains stdout before it exits 70",
+    async () => {
+      const dir = tmpDir("harness-pipe-reject-");
+      // One enabled MCP server makes `doctor` reach a real spawn; under the
+      // test runner's VITEST variable the spawn guard throws a
+      // HermeticSpawnViolationError, which run() rethrows to the entry point.
+      const configPath = path.join(dir, "harness.yaml");
+      fs.writeFileSync(
+        configPath,
+        "version: 1\ntools:\n  mcp:\n    - name: x\n      command: [/usr/bin/true]\n",
+      );
+      const run = await runWithSlowReader({
+        args: ["doctor", "--config", configPath],
+        preloadQueuedBytes: QUEUED_BYTES,
+        extraEnv: { VITEST: "true" },
+        cwd: dir,
+        home: dir,
+      });
+      expect(run.hung).toBe(false);
+      expect(run.code).toBe(70);
+      expect(run.stderr.toString("utf8")).toContain("Refusing to spawn a REAL");
+      expect(run.stdout.toString("utf8")).toBe("Q".repeat(QUEUED_BYTES));
+    },
+    TEST_TIMEOUT_MS,
+  );
+});
+
+// The host may close a read end before the hook has written: the write gets
+// EPIPE, which a stream with no 'error' listener turns into an uncaught
+// exception (exit 1, read as allow by both hosts). Each row asserts the exit
+// code the hook has with no wait for a drain: 0 for Claude Code, 2 for Codex.
+describe("a closed reader does not change the exit code", () => {
+  const CLOSED: ReadonlyArray<{ name: string; closeStdout: boolean; closeStderr: boolean }> = [
+    { name: "stdout", closeStdout: true, closeStderr: false },
+    { name: "stderr", closeStdout: false, closeStderr: true },
+    { name: "stdout and stderr", closeStdout: true, closeStderr: true },
+  ];
+
+  for (const closed of CLOSED) {
+    it(
+      `claude-code: a protected-branch block with the ${closed.name} reader closed exits 0 and delivers what is still open`,
+      async () => {
+        const repo = protectedRepo();
+        const run = await runWithSlowReader({
+          args: ["pack", "hook", "branch-protection", "--config", packManifest()],
+          stdin: writeEventIn(repo),
+          closeStdout: closed.closeStdout,
+          closeStderr: closed.closeStderr,
+          cwd: repo,
+          home: repo,
+        });
+        expect(run.hung).toBe(false);
+        expect(run.signal).toBeNull();
+        expect(run.code).toBe(0);
+        if (!closed.closeStdout) {
+          const env = JSON.parse(run.stdout.toString("utf8")) as {
+            decision: string;
+            reason: string;
+            hookSpecificOutput: { permissionDecision: string };
+          };
+          expect(env.decision).toBe("block");
+          expect(env.hookSpecificOutput.permissionDecision).toBe("deny");
+          expect(env.reason).toContain('protected branch "master"');
+        }
+        if (!closed.closeStderr) {
+          expect(run.stderr.toString("utf8")).not.toMatch(/EPIPE|Unhandled|node:events/);
+        }
+      },
+      TEST_TIMEOUT_MS,
+    );
+
+    it(
+      `codex: a protected-branch block with the ${closed.name} reader closed exits 2 and delivers what is still open`,
+      async () => {
+        const repo = protectedRepo();
+        const run = await runWithSlowReader({
+          args: ["pack", "hook", "branch-protection", "--config", packManifest(), "--runtime", "codex"],
+          stdin: writeEventIn(repo),
+          closeStdout: closed.closeStdout,
+          closeStderr: closed.closeStderr,
+          cwd: repo,
+          home: repo,
+        });
+        expect(run.hung).toBe(false);
+        expect(run.signal).toBeNull();
+        expect(run.code).toBe(2);
+        if (!closed.closeStderr) {
+          const text = run.stderr.toString("utf8");
+          expect(text).toContain("refusing Write on protected branch");
+          expect(text).not.toMatch(/EPIPE|Unhandled|node:events/);
+        }
+      },
+      TEST_TIMEOUT_MS,
+    );
+
+    it(
+      `a plain verb (--version) with the ${closed.name} reader closed exits 0`,
+      async () => {
+        const dir = tmpDir("harness-pipe-verb-");
+        const run = await runWithSlowReader({
+          args: ["--version"],
+          closeStdout: closed.closeStdout,
+          closeStderr: closed.closeStderr,
+          cwd: dir,
+          home: dir,
+        });
+        expect(run.hung).toBe(false);
+        expect(run.signal).toBeNull();
+        expect(run.code).toBe(0);
+      },
+      TEST_TIMEOUT_MS,
+    );
+  }
 });
