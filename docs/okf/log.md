@@ -2,6 +2,8 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-10-16T07:49:41Z: re-stamped `manifest-validation-scope.md` (its source `src/schema/removed-keys.ts` gained the removed-command row for `harness smoke`) and `pause-vs-gate-kill-switch.md` (its source `docs/CLI.md` lost the smoke section); both re-read, no claim changed.
+- 2026-10-16T07:36:51Z: `harness smoke` removed from the CLI. `codex-adapter-parity-gaps.md`: its `src/cli/smoke/index.ts` source and the sentence on smoke's diagnostic apply (the `generatedDir` option keeping the operator's generated tree and `.last-apply` byte-identical) are gone; every other source and citation re-checked against the current files and unchanged; re-stamped.
 - 2026-10-15T14:04:01Z, task 16823ac4 (documentation truth pass after the
   policy-engine removal): deleted `gate-fail-posture-matrix.md`,
   `quote-model-divergence.md`, `policy-engine-producer-wiring.md` and

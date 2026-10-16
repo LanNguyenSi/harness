@@ -712,7 +712,7 @@ describe("--install without --runtime on a claude-code record", () => {
   });
 });
 
-describe("preserveRecordedRuntime (the harness smoke apply)", () => {
+describe("preserveRecordedRuntime (a diagnostic apply)", () => {
   it("keeps a recorded codex runtime while generating claude-code files", async () => {
     await apply({ homeDir: tmpHome, runtime: "codex" });
     const result = await apply({

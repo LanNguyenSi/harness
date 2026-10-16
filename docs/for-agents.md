@@ -105,7 +105,6 @@ operator-driven flows.
 | `pack add / remove / list / reseed` | mutating (add/remove/reseed), read-only (list) | manages `policy_packs:` entries in the manifest. One builtin pack: `branch-protection`. `reseed <name>` pulls the shipped template's config back onto a drifted entry. |
 | `doctor --target codex` | read-only | verifies Codex adapter wiring after `apply --runtime codex`. `--json` for machine-readable output. |
 | `doctor --target opencode` | read-only | verifies opencode adapter wiring after `apply --runtime opencode` (config artefact presence/banner + every projected MCP server's command resolves on PATH). `--json` for machine-readable output. |
-| `smoke` | mutating | runs a real `claude -p` session against the applied manifest; needs `--prompt` and `--output-dir`. |
 
 ## Reading the ledger back
 

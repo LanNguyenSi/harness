@@ -470,6 +470,7 @@ export const REMOVED_COMMANDS: readonly RemovedCommand[] = [
   { command: "harness dry-run", removedIn: "1.0.0", reason: "the policy engine's debug verbs are removed" },
   { command: "harness policy intercept", removedIn: "1.0.0", reason: "the policy engine behind the PreToolUse intercept hook is removed" },
   { command: "harness record", removedIn: "1.0.0", reason: "the evidence recording verbs for the removed policy gates are removed" },
+  { command: "harness smoke", removedIn: "1.0.0", reason: "the end-to-end smoke verb, whose decision mode read the removed policy engine, is removed" },
   // `harness explain` is a prefix of `harness explain-action` and
   // `harness explain-policy` (hyphen continuation) and lookup takes the
   // FIRST matching row, so this row must stay below both of them; pinned

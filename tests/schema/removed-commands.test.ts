@@ -140,6 +140,17 @@ describe("REMOVED_COMMANDS table (task f3f15290)", () => {
     expect(invokesRemovedCommand("harness policy list")).toBeUndefined();
     expect(invokesRemovedCommand("harness recorder")).toBeUndefined();
   });
+
+  it("lists harness smoke as its own row, matched with its flags", () => {
+    const smoke = REMOVED_COMMANDS.find((c) => c.command === "harness smoke");
+    expect(smoke).toBeDefined();
+    expect(smoke?.removedIn).toBe("1.0.0");
+    expect(smoke?.reason.length).toBeGreaterThan(0);
+    expect(invokesRemovedCommand("harness smoke")).toBe(smoke);
+    expect(invokesRemovedCommand("harness smoke --prompt x --output-dir y")).toBe(smoke);
+    // Look-alike: another word that merely starts the same way is not a match.
+    expect(invokesRemovedCommand("harness smoker")).toBeUndefined();
+  });
 });
 
 describe("invokesRemovedCommand", () => {

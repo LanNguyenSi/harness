@@ -94,12 +94,6 @@ Removed in task `a4d8adc5`: `harness approve branch-protection` and `harness ses
 | `harness pause [--for 5m\|--indefinite] [--reason X] [--i-am-the-operator]` | Drop a sentinel at `harness.generated/.harness-paused` so the `harness pack hook runtime-reality` hook short-circuits. Branch-protection does not yield to the pause; to switch it off, see [Disable the gate](policy-packs/branch-protection.md#disable-the-gate-operator-only) (Claude Code and Codex differ). Operator-only (`v0.22.0+`). `--indefinite` requires the companion `--i-am-the-operator-and-accept-no-auto-resume`. |
 | `harness resume` | Remove the pause sentinel and re-engage all gates. |
 
-## Smoke
-
-| Verb | One-liner |
-|------|-----------|
-| `harness smoke --prompt <text> --output-dir <dir> [--expect-hook <names>] [--expect-no-hook <names>] [--expect-exit <n>] [--expect-decision allow\|deny\|warn]` | End-to-end smoke run for the installed harness (hook plumbing, ledger write, gate decisions). `--prompt` and `--output-dir` are required. Runs a real `claude -p` session (the Claude Code CLI on PATH, `$CLAUDE_BIN`, or `--claude-bin`) and exits 1 on any missed expectation. Useful after a fresh `init --interactive` or a version bump. smoke applies the `claude-code` variant into its own `<output-dir>/harness.generated/` (next to the rendered `settings.json`, kept with the other run artifacts and not cleaned up), never into the operator's `harness.generated/`: the apply output (the generated files and `.last-apply`) of the operator's tree stays byte-identical, so a codex machine's audit copies and recorded runtime are untouched and the next plain `harness apply` has nothing to restore. The rendered settings still point at the operator's pause sentinel, and the opencode config and grounding-mcp registration at the operator's signing key. Runtime state is still written into the operator's `harness.generated/`: the spawned session's hooks keep their session state there. |
-
 ## Environment variables
 
 Variables the `harness` binary reads. For the `RUNTIME_REALITY_*` variables of the runtime-reality hook see [`runtime-reality-hook.md`](runtime-reality-hook.md).
@@ -109,7 +103,6 @@ Variables the `harness` binary reads. For the `RUNTIME_REALITY_*` variables of t
 | `HARNESS_HOME` | every verb that resolves the state root | Pins the state root, ahead of `~/.harness/` and the legacy `~/.claude/`. |
 | `CLAUDE_CODE_SESSION_ID`, `CLAUDE_SESSION_ID` | `harness audit`, `harness session-export` | Session id fallback, in this order, when `--session` carries none. `audit` then falls back to the newest Claude Code transcript. |
 | `CLAUDE_CODE_SESSION_ID`, `CLAUDE_SESSION_ID`, `CODEX_SESSION_ID` | `harness pause`, `harness resume` | Any of them set makes the verb refuse, because it then runs inside an agent shell. |
-| `CLAUDE_BIN` | `harness smoke` | Default for `--claude-bin`; without either, `claude` on PATH. |
 | `CLAUDE_CONFIG_DIR` | `harness init --interactive`, `harness doctor`, `harness adopt`, `harness uninstall` | Moves the Claude Code user-scope MCP registry these verbs read from `~/.claude.json` to `$CLAUDE_CONFIG_DIR/.claude.json`. |
 
 `harness` itself does not read `EVIDENCE_LEDGER_DB` or `SOLUTION_VERDICT_SIGNING_KEY`: `harness apply` projects them onto the `grounding-mcp` server entry, which reads them.
