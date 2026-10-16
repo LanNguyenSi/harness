@@ -3,7 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { parse as parseTomlForTest } from "smol-toml";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { generateCodexConfig } from "../../../src/cli/apply/generate-codex-config.js";
 import {
   assertCodexHookEditInvariant,
@@ -35,6 +35,7 @@ import { gateEnable, GateEnableError } from "../../../src/cli/gate/enable.js";
 import { listSnapshots } from "../../../src/cli/gate/snapshot.js";
 import { parseManifest } from "../../../src/schema/index.js";
 import { downgradeToVersion1 } from "../../_helpers/claude-gate-legacy.js";
+import { asLegacyInstall } from "./legacy-install.js";
 
 // The Codex gate edits the config `harness apply --runtime codex --install`
 // writes, so every fixture here is built by the installer itself.
@@ -132,9 +133,13 @@ function installConfig(
  * `<config>.harness-backup-<now>` file beside the config. */
 function reinstall(target: string, now: Date, shellGuardCommand?: string): string {
   const generated = generateCodexConfig(manifest(shellGuardCommand));
-  writeCodexConfigInstall(
-    planCodexConfigInstall({ configPath: target, generatedPath: "/gen/codex/config.toml", generatedContent: generated.content }),
-    { now },
+  // As an installer that predates the install-time supersede would leave the snapshots: the
+  // gate's own dating by the installer's backup files is what these callers exercise.
+  asLegacyInstall(path.dirname(target), () =>
+    writeCodexConfigInstall(
+      planCodexConfigInstall({ configPath: target, generatedPath: "/gen/codex/config.toml", generatedContent: generated.content }),
+      { now },
+    ),
   );
   return fs.readFileSync(target, "utf8");
 }
@@ -1539,9 +1544,11 @@ describe("codexGateEnable: integrity", () => {
     codexGateDisable({ configPath, matcher: "apply_patch", now: T0 });
     // A fresh install re-renders the whole block, every unit enabled again.
     const generated = generateCodexConfig(manifest());
-    writeCodexConfigInstall(
-      planCodexConfigInstall({ configPath, generatedPath: "/gen/codex/config.toml", generatedContent: generated.content }),
-      { now: new Date("2026-10-02T09:00:00.000Z") },
+    asLegacyInstall(path.dirname(configPath), () =>
+      writeCodexConfigInstall(
+        planCodexConfigInstall({ configPath, generatedPath: "/gen/codex/config.toml", generatedContent: generated.content }),
+        { now: new Date("2026-10-02T09:00:00.000Z") },
+      ),
     );
     const reinstalled = fs.readFileSync(configPath, "utf8");
     const e = codexGateEnable({ configPath, force: true, now: T1 });
@@ -1941,5 +1948,140 @@ describe("codex gate: snapshot isolation from the Claude gate", () => {
     expect(snap.version).toBe(1);
     expect(snap.target).toBeUndefined();
     expect(gateEnable({ settingsPath }).mode).toBe("restored");
+  });
+});
+
+/** The real installer over `target` (no legacy simulation): returns its result. */
+function installOver(target: string, now: Date, shellGuardCommand = V2): ReturnType<typeof writeCodexConfigInstall> {
+  const generated = generateCodexConfig(manifest(shellGuardCommand));
+  return writeCodexConfigInstall(
+    planCodexConfigInstall({ configPath: target, generatedPath: "/gen/codex/config.toml", generatedContent: generated.content }),
+    { now },
+  );
+}
+
+describe("the installer retires live gate snapshots of the block it rewrites", () => {
+  it("renames the live snapshot of a direct config to *.superseded.json, whatever backup files exist", () => {
+    installConfig(configPath);
+    const s0 = disableAt(configPath, "Bash", at(1));
+    const body = fs.readFileSync(s0, "utf8");
+    const result = installOver(configPath, at(2));
+    expect(result.supersededSnapshots).toEqual([retired(s0, "superseded")]);
+    expect(result.snapshotWarnings).toBeUndefined();
+    expect(fs.existsSync(s0)).toBe(false);
+    expect(fs.readFileSync(retired(s0, "superseded"), "utf8")).toBe(body);
+    expect(listCodexSnapshots(path.dirname(configPath))).toEqual([]);
+  });
+
+  it("an install that changes nothing leaves the live snapshot alone", () => {
+    installConfig(configPath);
+    const s0 = disableAt(configPath, "Bash", at(1));
+    // The block is neutralised in place, so re-rendering the unchanged manifest rewrites it: use the
+    // plan's own no-op case instead, where the generated block equals the current one.
+    const plan = planCodexConfigInstall({
+      configPath,
+      generatedPath: "/gen/codex/config.toml",
+      generatedContent: generateCodexConfig(manifest(V2)).content,
+    });
+    writeCodexConfigInstall({ ...plan, changed: false }, { now: at(2) });
+    expect(listCodexSnapshots(path.dirname(configPath))).toEqual([s0]);
+  });
+
+  it("retires a snapshot taken through a symlink when the install runs on the link, beside the link", () => {
+    const real = path.join(tmp, "dotfiles", "config.toml");
+    installConfig(real);
+    const linkDir = path.join(tmp, "codex-home");
+    fs.mkdirSync(linkDir);
+    const link = path.join(linkDir, "config.toml");
+    fs.symlinkSync(real, link);
+    const s0 = disableAt(link, "Bash", at(1));
+    expect(path.dirname(s0)).toBe(linkDir);
+    const result = installOver(link, at(2));
+    expect(result.supersededSnapshots).toEqual([retired(s0, "superseded")]);
+    expect(listCodexSnapshots(linkDir)).toEqual([]);
+    expect(fs.lstatSync(link).isSymbolicLink()).toBe(true);
+  });
+
+  it("retires a snapshot of the target that sits beside the target, and one recorded under another name of the same file", () => {
+    installConfig(configPath);
+    const dir = path.dirname(configPath);
+    const s0 = disableAt(configPath, "Bash", at(1));
+    // A snapshot whose recorded path is a hard link to the config: same file, different spelling.
+    const alias = path.join(dir, "alias.toml");
+    fs.linkSync(configPath, alias);
+    const body = JSON.parse(fs.readFileSync(s0, "utf8"));
+    body.configPath = alias;
+    const s1 = path.join(dir, `${CODEX_SNAPSHOT_BASENAME_PREFIX}2026-10-02T05-00-00.000Z.json`);
+    fs.writeFileSync(s1, JSON.stringify(body));
+    const result = installOver(configPath, at(6));
+    expect([...(result.supersededSnapshots ?? [])].sort()).toEqual([retired(s0, "superseded"), retired(s1, "superseded")].sort());
+    expect(listCodexSnapshots(dir)).toEqual([]);
+  });
+
+  it("a stale snapshot with every install backup deleted no longer restores an outdated hooks line", () => {
+    installConfig(configPath);
+    const s0 = disableAt(configPath, "Bash", at(1));
+    const v2 = installOver(configPath, at(2)) && read();
+    for (const name of fs.readdirSync(path.dirname(configPath))) {
+      if (name.includes(".harness-backup-")) fs.rmSync(path.join(path.dirname(configPath), name));
+    }
+    expect(fs.readdirSync(path.dirname(configPath)).some((n) => n.includes("harness-backup"))).toBe(false);
+    const hand = neutraliseByHand(v2, SG);
+    fs.writeFileSync(configPath, hand);
+    const e = codexGateEnable({ configPath, now: at(3) });
+    expect(e.mode).toBe("no-snapshots");
+    expect(read()).toBe(hand);
+    expect(read()).not.toContain(OLD_SG_LINE);
+    expect(fs.existsSync(s0)).toBe(false);
+  });
+
+  it("leaves the live snapshot of another config in the same directory alone", () => {
+    installConfig(configPath);
+    const dir = path.dirname(configPath);
+    const other = path.join(dir, "other.toml");
+    installConfig(other);
+    const a = disableAt(configPath, "Bash", at(1));
+    const b = disableAt(other, "Bash", at(2));
+    const result = installOver(configPath, at(3));
+    expect(result.supersededSnapshots).toEqual([retired(a, "superseded")]);
+    expect(listCodexSnapshots(dir)).toEqual([b]);
+  });
+
+  it("a rename that fails never fails the install: it warns, names the snapshot and the move-aside step, and keeps the snapshot", () => {
+    installConfig(configPath);
+    const s0 = disableAt(configPath, "Bash", at(1));
+    // A directory sits where the retired name would go, so the rename fails.
+    fs.mkdirSync(path.join(retired(s0, "superseded"), "blocker"), { recursive: true });
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    try {
+      const result = installOver(configPath, at(2));
+      expect(result.written).toBe(true);
+      expect(read()).toContain(V2);
+      expect(result.supersededSnapshots).toBeUndefined();
+      expect(result.snapshotWarnings).toHaveLength(1);
+      expect(result.snapshotWarnings![0]).toContain(s0);
+      expect(result.snapshotWarnings![0]).toMatch(/move it out of this directory/);
+      expect(stderr).toHaveBeenCalledWith(expect.stringContaining(`cannot retire the snapshot ${s0}`));
+    } finally {
+      stderr.mockRestore();
+    }
+    expect(listCodexSnapshots(path.dirname(configPath))).toEqual([s0]);
+  });
+
+  it("an unreadable live snapshot is left in place and reported, and the install still succeeds", () => {
+    installConfig(configPath);
+    const junk = path.join(path.dirname(configPath), `${CODEX_SNAPSHOT_BASENAME_PREFIX}2026-10-02T00-30-00.000Z.json`);
+    fs.writeFileSync(junk, "{ not json");
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    try {
+      const result = installOver(configPath, at(2));
+      expect(result.written).toBe(true);
+      expect(result.snapshotWarnings).toHaveLength(1);
+      expect(result.snapshotWarnings![0]).toContain(junk);
+      expect(stderr).toHaveBeenCalledWith(expect.stringContaining(junk));
+    } finally {
+      stderr.mockRestore();
+    }
+    expect(fs.existsSync(junk)).toBe(true);
   });
 });

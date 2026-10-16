@@ -11,6 +11,7 @@ import {
 import { EX_FAIL, EX_OK, EX_USAGE } from "../../../src/cli/exit-codes.js";
 import { run } from "../../../src/cli/index.js";
 import { parseManifest } from "../../../src/schema/index.js";
+import { asLegacyInstall } from "./legacy-install.js";
 
 let tmp: string;
 let configPath: string;
@@ -281,9 +282,12 @@ describe("harness gate --runtime codex", () => {
         ],
       }),
     );
-    writeCodexConfigInstall(
-      planCodexConfigInstall({ configPath, generatedPath: "/gen/codex/config.toml", generatedContent: generated.content }),
-      { now },
+    // As an installer that predates the install-time supersede would leave the snapshots.
+    asLegacyInstall(path.dirname(configPath), () =>
+      writeCodexConfigInstall(
+        planCodexConfigInstall({ configPath, generatedPath: "/gen/codex/config.toml", generatedContent: generated.content }),
+        { now },
+      ),
     );
   }
 
