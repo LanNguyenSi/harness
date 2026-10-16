@@ -549,6 +549,15 @@ describe("codexGateDisable — refusals leave the file byte-identical", () => {
     expectRefusal(text, "apply_patch", /not closed by a '# END harness-managed codex hooks' marker/);
   });
 
+  it("a drifted END marker (a foreign table between the last unit and the END line)", () => {
+    const text = installConfig(configPath, { after: "" });
+    const drifted = text.replace(
+      CODEX_MANAGED_END,
+      `[wedge]\nkey = "v"\n${CODEX_MANAGED_END}`,
+    );
+    expectRefusal(drifted, "apply_patch", /not closed by a '# END harness-managed codex hooks' marker/);
+  });
+
   it("a foreign table wedged between the fences", () => {
     const text = installConfig(configPath);
     const wedged = text.replace(

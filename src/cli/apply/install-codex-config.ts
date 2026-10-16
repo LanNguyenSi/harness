@@ -2301,10 +2301,10 @@ export function readCodexManagedHookUnits(
   }
   assertNoOrphanHarnessHookTable(text, configPath, range);
   const endLine = lineStartAt(text, range.end - 1);
-  if (
-    range.strayEnd !== undefined ||
-    !createMarkerLineProbe(text)(endLine, CODEX_MANAGED_END, "whole")
-  ) {
+  // A drifted END (a foreign table between the last unit and the END marker)
+  // ends the range before that table, so the range's last line is not the
+  // END marker line and the same check refuses it.
+  if (!createMarkerLineProbe(text)(endLine, CODEX_MANAGED_END, "whole")) {
     return refuse(
       `the block is not closed by a '${CODEX_MANAGED_END}' marker line right after its hook tables`,
     );
