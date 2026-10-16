@@ -255,7 +255,7 @@ The verbs:
 ```bash
 harness gate disable                          # list hook groups, write nothing
 harness gate disable --matcher 'Write|Edit'   # remove matching groups (Claude Code)
-harness gate enable                           # restore the newest snapshot
+harness gate enable                           # restore the live snapshot
 harness gate disable --runtime codex --matcher apply_patch  # Codex hook units
 harness gate enable  --runtime codex
 ```
@@ -266,7 +266,12 @@ On Claude Code the verb removes the matching hook groups from
 neutralises the matching hook unit of the harness-managed block of
 `~/.codex/config.toml` in place (`hooks = []`), so every other hook
 keeps its position and Codex keeps its trust; a later
-`harness apply --runtime codex --install` re-renders the block. A hook
+`harness apply --runtime codex --install` re-renders the block and
+retires a snapshot taken before it. Each config keeps one live
+snapshot: a second `gate disable` merges into it, and `gate enable`
+restores it and retires it. If you edited the file in between, enable
+refuses and names the way out (`--force` restores what is still off
+and keeps your edits). A hook
 whose manifest entry declares no `match` (the documented
 runtime-reality hook entry, for example) has no matcher to target;
 switch it off with its own switch (`RUNTIME_REALITY_DISABLE=1` for
