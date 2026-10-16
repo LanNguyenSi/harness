@@ -161,7 +161,7 @@ A manifest that cannot be loaded refuses every call.
 
 - **Branch off**: \`git checkout -b <feature>\` and retry; the next call
   is judged against the new branch.
-- **Operator only**: ${isCodex ? "set \`enabled: false\` on this pack and re-run \`harness apply --runtime codex --install\` from an un-hooked shell (\`harness gate disable\` edits the Claude Code settings only)." : "disable the gate from an un-hooked shell with \`harness gate disable\` (without \`--matcher\` it only lists the hook groups; \`harness gate enable\` restores them), or set \`enabled: false\` on this pack and re-run \`harness apply\`."}
+- **Operator only**: ${isCodex ? "disable the gate from an un-hooked shell with \`harness gate disable --runtime codex\` (without \`--matcher\` it only lists the hook units; \`harness gate enable --runtime codex\` restores them), or set \`enabled: false\` on this pack and re-run \`harness apply --runtime codex --install\`." : "disable the gate from an un-hooked shell with \`harness gate disable\` (without \`--matcher\` it only lists the hook groups; \`harness gate enable\` restores them), or set \`enabled: false\` on this pack and re-run \`harness apply\`."}
 
 ## Out of scope (v1)
 

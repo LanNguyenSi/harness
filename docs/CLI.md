@@ -89,8 +89,8 @@ Removed in task `a4d8adc5`: `harness approve branch-protection` and `harness ses
 
 | Verb | One-liner |
 |------|-----------|
-| `harness gate disable [--matcher <pattern>] [--settings <path>]` | Remove hook groups from `~/.claude/settings.json` whose matcher substring-matches the pattern. With no `--matcher`, lists candidates without writing. Snapshots removed groups + backs up the file for `gate enable`. |
-| `harness gate enable [--settings <path>] [--force]` | Restore the most recent snapshot written by `gate disable`. |
+| `harness gate disable [--matcher <pattern>] [--runtime claude\|codex] [--settings <path>] [--config <path>]` | Remove hook groups from `~/.claude/settings.json` whose matcher substring-matches the pattern; with `--runtime codex`, remove the matching hook units from the harness-managed block of `~/.codex/config.toml` (`--config` overrides the path). With no `--matcher`, lists candidates without writing. Snapshots what it removed + backs up the file for `gate enable`. |
+| `harness gate enable [--runtime claude\|codex] [--settings <path>] [--config <path>] [--force]` | Restore the most recent snapshot written by `gate disable` for that runtime (a Claude snapshot is never applied to the Codex config, or the reverse). |
 | `harness pause [--for 5m\|--indefinite] [--reason X] [--i-am-the-operator]` | Drop a sentinel at `harness.generated/.harness-paused` so the `harness pack hook runtime-reality` hook short-circuits. Branch-protection does not yield to the pause; to switch it off, see [Disable the gate](policy-packs/branch-protection.md#disable-the-gate-operator-only) (Claude Code and Codex differ). Operator-only (`v0.22.0+`). `--indefinite` requires the companion `--i-am-the-operator-and-accept-no-auto-resume`. |
 | `harness resume` | Remove the pause sentinel and re-engage all gates. |
 

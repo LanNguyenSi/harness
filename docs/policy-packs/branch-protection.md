@@ -237,9 +237,14 @@ un-hooked operator shell, not from the agent's session:
 - Claude Code: `harness gate disable` (run it without `--matcher` first
   to list the hook groups, then with the matcher of this pack's group);
   `harness gate enable` restores them.
-- Codex: set `enabled: false` on this pack and re-run
-  `harness apply --runtime codex --install`; `harness gate disable`
-  edits the Claude Code settings only.
+- Codex: `harness gate disable --runtime codex` (run it without
+  `--matcher` first to list the hook units of the harness-managed block
+  in `~/.codex/config.toml`, then with the matcher of this pack's unit,
+  for example `apply_patch`); `harness gate enable --runtime codex`
+  restores them. A later `harness apply --runtime codex --install`
+  re-renders the block and brings the unit back. Alternatively set
+  `enabled: false` on this pack and re-run
+  `harness apply --runtime codex --install`.
 
 The operator pause (`harness pause`) does not switch this gate off.
 

@@ -80,9 +80,14 @@ export function backupPath(settingsPath: string, now: Date): string {
  * Return all gate-disable snapshot paths in `settingsDir`, newest-first
  * by mtime. Missing directory returns []. Any file that isn't a valid
  * snapshot is silently skipped — `gate enable` re-parses the candidates
- * and surfaces format errors at that point.
+ * and surfaces format errors at that point. `prefix` selects the snapshot
+ * family: the Claude settings snapshots by default, the Codex ones when the
+ * Codex gate passes its own prefix (`codex-snapshot.ts`).
  */
-export function listSnapshots(settingsDir: string): string[] {
+export function listSnapshots(
+  settingsDir: string,
+  prefix: string = SNAPSHOT_BASENAME_PREFIX,
+): string[] {
   let names: string[];
   try {
     names = fs.readdirSync(settingsDir);
@@ -91,7 +96,7 @@ export function listSnapshots(settingsDir: string): string[] {
   }
   const candidates: Array<{ filePath: string; mtimeMs: number }> = [];
   for (const name of names) {
-    if (!name.startsWith(SNAPSHOT_BASENAME_PREFIX)) continue;
+    if (!name.startsWith(prefix)) continue;
     if (!name.endsWith(SNAPSHOT_BASENAME_SUFFIX)) continue;
     const full = path.join(settingsDir, name);
     try {
@@ -104,6 +109,27 @@ export function listSnapshots(settingsDir: string): string[] {
   }
   candidates.sort((a, b) => b.mtimeMs - a.mtimeMs);
   return candidates.map((c) => c.filePath);
+}
+
+/**
+ * The reason a parsed snapshot lacks one of the required string fields or
+ * its `filter` object, or null when it has them all. Shared by the Claude
+ * and Codex snapshot readers so the two cannot drift apart.
+ */
+export function snapshotFieldProblem(
+  filePath: string,
+  obj: Record<string, unknown>,
+  stringFields: string[],
+): string | null {
+  for (const field of stringFields) {
+    if (typeof obj[field] !== "string") {
+      return `snapshot ${filePath} is missing string field "${field}"`;
+    }
+  }
+  if (typeof obj["filter"] !== "object" || obj["filter"] === null) {
+    return `snapshot ${filePath} is missing object field "filter"`;
+  }
+  return null;
 }
 
 export interface SnapshotReadOk {
@@ -144,20 +170,14 @@ export function readSnapshot(filePath: string): SnapshotReadOk | SnapshotReadErr
       reason: `snapshot ${filePath} has unsupported version ${JSON.stringify(obj["version"])}; expected ${SNAPSHOT_VERSION}`,
     };
   }
-  for (const field of [
+  const problem = snapshotFieldProblem(filePath, obj, [
     "createdAt",
     "settingsPath",
     "settingsBackupPath",
     "settingsBeforeSha256",
     "settingsAfterSha256",
-  ]) {
-    if (typeof obj[field] !== "string") {
-      return { ok: false, reason: `snapshot ${filePath} is missing string field "${field}"` };
-    }
-  }
-  if (typeof obj["filter"] !== "object" || obj["filter"] === null) {
-    return { ok: false, reason: `snapshot ${filePath} is missing object field "filter"` };
-  }
+  ]);
+  if (problem !== null) return { ok: false, reason: problem };
   if (!Array.isArray(obj["removed"])) {
     return { ok: false, reason: `snapshot ${filePath} is missing array field "removed"` };
   }
