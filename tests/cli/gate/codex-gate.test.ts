@@ -592,6 +592,32 @@ describe("codexGateEnable: more than one disable", () => {
     expect(r.stillDisabled).toEqual(["hand-shell-guard"]);
   });
 
+  it("a forced walk skips an older snapshot whose unit was enabled again, and names the unit nobody can restore", () => {
+    const { first, second } = twoDisables();
+    // By hand: the branch-protection line goes back (its snapshot is now stale), another unit is
+    // neutralised without any snapshot, and the config is edited, so only --force can proceed.
+    const snapA = readCodexSnapshot(first);
+    if (!snapA.ok) throw new Error("snapshot unreadable");
+    let text = fs.readFileSync(configPath, "utf8");
+    const bp = readCodexManagedHookUnits(text, configPath)!.units[0]!;
+    text = `${text.slice(0, bp.hooksStart)}${snapA.snapshot.neutralised[0]!.hooksText}${text.slice(bp.hooksEnd)}`;
+    text = `${neutraliseByHand(text, "hand-user-prompt-submit")}\n[tui]\nx = 1\n`;
+    fs.writeFileSync(configPath, text);
+    expect(() => codexGateEnable({ configPath, now: T1 })).toThrow(/edited since the snapshot was taken/);
+
+    const e = codexGateEnable({ configPath, force: true, now: new Date("2026-10-02T12:00:00.000Z") });
+    if (e.mode !== "restored") throw new Error("expected restored");
+    expect(e.snapshotPaths).toEqual([second]);
+    expect(e.restoredCount).toBe(1);
+    expect(e.stillDisabled).toEqual(["hand-user-prompt-submit"]);
+    const units = readCodexManagedHookUnits(fs.readFileSync(configPath, "utf8"), configPath)!.units;
+    expect(units.map((u) => [u.id, u.disabled])).toEqual([
+      [BP, false],
+      ["hand-shell-guard", false],
+      ["hand-user-prompt-submit", true],
+    ]);
+  });
+
   it("stops at an older snapshot that no longer applies and says which unit is left", () => {
     const { first } = twoDisables();
     // The older snapshot's recorded shas no longer fit the chain.
