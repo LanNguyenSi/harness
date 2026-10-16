@@ -6,6 +6,16 @@
 // `claudeMcpExec` (and, where relevant, `npmBinExec`) so no real `claude`
 // / `npm` CLI is ever spawned — see `src/cli/doctor/claude-mcp.ts` for
 // the injectable-exec convention this mirrors.
+//
+// Hermeticity (task e345db80): every test that reaches the dead
+// settings.json block check passes `envOverride` (the `env` seam in
+// `BuildClaudeMcpRegistrationOptions`) alongside the temp `homeOverride`,
+// so `resolveSettingsPath` can never fall back to `process.env` and pick
+// up the developer's real `CLAUDE_CONFIG_DIR` (or, transitively, their
+// real home's `~/.claude/settings.json`). Before this, the
+// absent / non-object `mcpServers` early return in
+// `findDeadSettingsMcpNames` read local-only coverage from the operator's
+// settings file, making the local and CI numbers differ.
 
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -104,6 +114,7 @@ tools:
     const report = await doctor({
       configPath: path.join(home, "harness.yaml"),
       homeOverride: home,
+      envOverride: {},
       pathEnv: "",
       npmBinExec: STUB_NPM_BIN_EXEC,
       claudeMcpExec: execThrowsIfCalled(),
@@ -123,6 +134,7 @@ tools:
     const report = await doctor({
       configPath: path.join(home, "harness.yaml"),
       homeOverride: home,
+      envOverride: {},
       shallow: true,
       pathEnv: "",
       claudeMcpExec: execThrowsIfCalled(),
@@ -156,6 +168,7 @@ describe("doctor — claude-code MCP per-server status mapping", () => {
     const doctorOpts = {
       configPath: path.join(home, "harness.yaml"),
       homeOverride: home,
+      envOverride: {},
       pathEnv: "",
       npmBinExec: STUB_NPM_BIN_EXEC,
     };
@@ -213,6 +226,7 @@ describe("doctor — claude-code MCP per-server status mapping", () => {
     const doctorOpts = {
       configPath: path.join(home, "harness.yaml"),
       homeOverride: home,
+      envOverride: {},
       pathEnv: "",
       npmBinExec: STUB_NPM_BIN_EXEC,
     };
@@ -239,6 +253,7 @@ describe("doctor — claude-code MCP per-server status mapping", () => {
     const doctorOpts = {
       configPath: path.join(home, "harness.yaml"),
       homeOverride: home,
+      envOverride: {},
       pathEnv: "",
       npmBinExec: STUB_NPM_BIN_EXEC,
     };
@@ -377,6 +392,73 @@ describe("doctor — dead settings.json mcpServers block", () => {
       envOverride: { CLAUDE_CONFIG_DIR: configDir },
     });
     expect(report.claudeMcp?.deadSettingsBlockNames).toEqual([]);
+  });
+});
+
+// `findDeadSettingsMcpNames` never throws: a missing file, malformed
+// JSON, a non-object document, and a non-object `mcpServers` value all
+// resolve to "nothing to report". These shapes were each covered only
+// accidentally (or not at all) because the tests omitted the env seam, so
+// the check fell back to `process.env` and the operator's settings file
+// (task e345db80).
+// Here every shape lives in a temp dir reached through the temp
+// `homeOverride` (HOME seam) or a temp `CLAUDE_CONFIG_DIR` (env seam),
+// and each test asserts the rolled-up result, not just that the run
+// survives.
+describe("doctor: dead settings.json block: malformed shapes never throw", () => {
+  async function reportWithSettings(settingsContents: string, useConfigDir: boolean) {
+    const home = makeFixture({
+      "harness.yaml": manifestWithMcp(
+        `    - name: alpha\n      command: [/usr/bin/true]\n      enabled: true`,
+      ),
+    });
+    let envOverride: Record<string, string> = {};
+    if (useConfigDir) {
+      // Env seam: the settings file lives under a temp CLAUDE_CONFIG_DIR.
+      const configDir = makeFixture({ "settings.json": settingsContents });
+      envOverride = { CLAUDE_CONFIG_DIR: configDir };
+    } else {
+      // HOME seam: the settings file lives under the temp homeOverride.
+      fs.mkdirSync(path.join(home, ".claude"), { recursive: true });
+      fs.writeFileSync(path.join(home, ".claude", "settings.json"), settingsContents, "utf8");
+    }
+    return doctor({
+      configPath: path.join(home, "harness.yaml"),
+      homeOverride: home,
+      envOverride,
+      pathEnv: "",
+      npmBinExec: STUB_NPM_BIN_EXEC,
+      claudeMcpExec: execWithStdout("alpha: /usr/bin/true - ✔ Connected"),
+    });
+  }
+
+  it("treats a malformed-JSON settings.json as nothing to report", async () => {
+    const report = await reportWithSettings("{ not valid json", false);
+    expect(report.claudeMcp?.listStatus).toBe("ok");
+    expect(report.claudeMcp?.deadSettingsBlockNames).toEqual([]);
+    expect(report.claudeMcp?.warnings.some((w) => w.includes("dead"))).toBe(false);
+  });
+
+  it("treats a non-object settings.json document as nothing to report", async () => {
+    const report = await reportWithSettings('["alpha"]', false);
+    expect(report.claudeMcp?.deadSettingsBlockNames).toEqual([]);
+    expect(format(report)).not.toContain("dead `mcpServers` block");
+  });
+
+  it("treats a settings.json without an mcpServers key as nothing to report", async () => {
+    // This is the exact shape of a real operator `~/.claude/settings.json`
+    // that made the absent / non-object `mcpServers` early return in
+    // `findDeadSettingsMcpNames` read as covered locally but uncovered on
+    // CI; the branch is now pinned here instead.
+    const report = await reportWithSettings('{"theme":"dark"}', false);
+    expect(report.claudeMcp?.deadSettingsBlockNames).toEqual([]);
+    expect(report.claudeMcp?.warnings).toEqual([]);
+  });
+
+  it("treats a non-object mcpServers value as nothing to report (CLAUDE_CONFIG_DIR seam)", async () => {
+    const report = await reportWithSettings('{"mcpServers": []}', true);
+    expect(report.claudeMcp?.deadSettingsBlockNames).toEqual([]);
+    expect(report.claudeMcp?.warnings.some((w) => w.includes("dead"))).toBe(false);
   });
 });
 
