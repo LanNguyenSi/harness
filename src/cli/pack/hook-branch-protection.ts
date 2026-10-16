@@ -68,6 +68,7 @@ import {
   type PathResolution,
 } from "../../runtime/git-branch.js";
 import { renderAgentFacing } from "../../runtime/agent-facing.js";
+import { boundUtf8 } from "../../runtime/bounded-text.js";
 import { type Manifest, type PolicyUx } from "../../schema/index.js";
 import { type LoaderOptions } from "../loader.js";
 import {
@@ -317,14 +318,19 @@ export async function runPackHookBranchProtectionCli(
     note(diagnostic);
     return { exitCode: CODEX_EXIT_BLOCK, blocked: true, diagnostic };
   }
+  // Every block flows through here, so the detail and the agent text are cut
+  // to a fixed size once, whatever they embed (a manifest parse error grows
+  // with the manifest). The envelope is built from the cut text with
+  // JSON.stringify, so the cut cannot break the JSON.
   const block = (detail: string, agentText: string): PackHookBranchProtectionResult => {
-    const diagnostic = `BLOCK: ${detail}`;
+    const diagnostic = boundUtf8(`BLOCK: ${detail}`);
+    const bounded = boundUtf8(agentText);
     note(diagnostic);
     if (runtime === "codex") {
-      stderr.write(`${agentText}\n`);
+      stderr.write(`${bounded}\n`);
       return { exitCode: CODEX_EXIT_BLOCK, blocked: true, diagnostic };
     }
-    stdout.write(`${claudeBlockEnvelope(agentText)}\n`);
+    stdout.write(`${claudeBlockEnvelope(bounded)}\n`);
     return { exitCode: 0, blocked: true, diagnostic };
   };
 

@@ -18,14 +18,18 @@
 // homeDir/configPath there or hoist this assignment above the import.
 process.env["HARNESS_ALLOW_REAL_GENERATED_DIR"] = "1";
 
+import { drainStdio } from "./drain-stdio.js";
 import { EX_SOFTWARE } from "./exit-codes.js";
 import { run } from "./index.js";
 
 run().then(
-  (code) => {
+  async (code) => {
+    // process.exit drops what is still queued for a pipe whose reader is
+    // behind, so wait (bounded) for stdout and stderr first.
+    await drainStdio();
     process.exit(code);
   },
-  (err) => {
+  async (err) => {
     // Review finding F3 (task T-007): without this `.catch()`, an error
     // re-thrown past `run()`'s own top-level catch — today that is only
     // `HermeticSpawnViolationError` (see src/cli/index.ts's `run()` and
@@ -33,6 +37,7 @@ run().then(
     // rejection with a raw stack trace instead of a formatted message and
     // a clean non-zero exit.
     process.stderr.write(`${(err as Error).message ?? err}\n`);
+    await drainStdio();
     process.exit(EX_SOFTWARE);
   },
 );
