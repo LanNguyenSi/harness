@@ -269,9 +269,11 @@ keeps its position and Codex keeps its trust; a later
 `harness apply --runtime codex --install` re-renders the block and
 retires a snapshot taken before it. Each config keeps one live
 snapshot: a second `gate disable` merges into it, and `gate enable`
-restores it and retires it. If you edited the file in between, enable
-refuses and names the way out (`--force` restores what is still off
-and keeps your edits). A hook
+restores it and retires it. On Codex the restore is byte for byte
+when the config is unchanged since the disable; if you edited the file
+in between, enable refuses and names the way out, unless skipping the
+units already back rebuilds the pre-disable bytes (`--force` restores
+what is still off and keeps your edits). A hook
 whose manifest entry declares no `match` (the documented
 runtime-reality hook entry, for example) has no matcher to target;
 switch it off with its own switch (`RUNTIME_REALITY_DISABLE=1` for
