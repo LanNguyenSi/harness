@@ -623,6 +623,9 @@ export function registerSetupGroup(
             if (result.codexConfigInstall.backupPath) {
               stdout(`backup written to ${result.codexConfigInstall.backupPath}\n`);
             }
+            for (const retired of result.codexConfigInstall.supersededSnapshots ?? []) {
+              stdout(`retired gate snapshot as ${retired}: the install replaced the hooks block it was taken from\n`);
+            }
           }
           stdout(`harness.lock written to ${result.lockPath}\n`);
 
@@ -680,6 +683,9 @@ export function registerSetupGroup(
           }
         }
         for (const w of result.warnings) {
+          stderr(`warning: ${w}\n`);
+        }
+        for (const w of result.codexConfigInstall?.snapshotWarnings ?? []) {
           stderr(`warning: ${w}\n`);
         }
         for (const h of result.restartHints) {

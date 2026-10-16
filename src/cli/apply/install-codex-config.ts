@@ -4,6 +4,10 @@ import * as path from "node:path";
 import { parse as parseTomlDocument, TomlError } from "smol-toml";
 import { atomicWriteFile } from "../../io/atomic-write.js";
 import { EX_FAIL, HarnessExitError } from "../exit-codes.js";
+// Import cycle: codex-snapshot.ts imports this module too. It is safe because
+// neither module touches the other's bindings at top level; they are used only
+// inside function bodies. Keep it that way (no top-level use of these three).
+import { listCodexSnapshots, readCodexSnapshot, retireCodexSnapshot } from "../gate/codex-snapshot.js";
 
 export const CODEX_MANAGED_SOURCE_PREFIX = "# Harness Codex hook wiring.";
 export const CODEX_MANAGED_BEGIN = "# BEGIN harness-managed codex hooks";
@@ -144,6 +148,14 @@ export interface CodexConfigInstallPlan {
 export interface CodexConfigInstallResult extends CodexConfigInstallPlan {
   backupPath?: string;
   written: boolean;
+  /** Live `harness gate disable --runtime codex` snapshots of this config the
+   * write retired as `*.superseded.json`: the block they were taken from no
+   * longer exists. */
+  supersededSnapshots?: string[];
+  /** A snapshot that could not be retired or read (the install itself
+   * succeeded): what to do by hand. The callers print them through their own
+   * io. */
+  snapshotWarnings?: string[];
 }
 
 export interface CodexConfigInstallOptions {
@@ -2256,6 +2268,63 @@ export function existingFileMode(filePath: string): number {
   }
 }
 
+/** Identity of a file as the filesystem sees it, so a snapshot's recorded
+ * path (the link, the target, or a hard link) is matched to the config by
+ * what it is, not by how it is spelled. */
+function fileIdentity(filePath: string): string | null {
+  try {
+    const st = fs.statSync(filePath);
+    return `${st.dev}:${st.ino}`;
+  } catch {
+    return null;
+  }
+}
+
+/** Whether `recorded` names the file `target` with identity `targetId`
+ * (taken before the install replaced it): the same absolute path, or the
+ * same device and inode, which covers a symlink and a hard link to it. */
+function namesFile(recorded: string, target: string, targetId: string | null): boolean {
+  if (path.resolve(recorded) === path.resolve(target)) return true;
+  const recordedId = fileIdentity(recorded);
+  return targetId !== null && recordedId !== null && targetId === recordedId;
+}
+
+/** The live Codex gate snapshots, beside the link and beside the target, that
+ * were taken from the config an install is about to rewrite. Read before the
+ * write: the write replaces the file, which changes its inode. A snapshot
+ * that cannot be read is not matched; it is reported so the operator knows
+ * the gate will refuse on it. */
+function findSnapshotsOfConfig(plan: CodexConfigInstallPlan): { matched: string[]; unreadable: string[] } {
+  const requested = plan.linkPath ?? plan.configPath;
+  const id = fileIdentity(plan.configPath);
+  const dirs = [...new Set([path.dirname(requested), path.dirname(plan.configPath)])];
+  const matched: string[] = [];
+  const unreadable: string[] = [];
+  for (const dir of dirs) {
+    for (const snapPath of listCodexSnapshots(dir)) {
+      const read = readCodexSnapshot(snapPath);
+      if (!read.ok) {
+        unreadable.push(snapPath);
+        continue;
+      }
+      const recorded = read.snapshot.configPath;
+      if (namesFile(recorded, plan.configPath, id) || namesFile(recorded, requested, id)) matched.push(snapPath);
+    }
+  }
+  return { matched, unreadable };
+}
+
+/**
+ * Writes the install. A live gate snapshot of the config holds the hook
+ * lines of the block this write replaces, so enabling it later would put an
+ * outdated line back: every such snapshot (beside the config, and beside the
+ * link of a symlinked one) is renamed to `*.superseded.json` right after the
+ * write, whatever backup files exist. A rename that fails never fails the
+ * install, which is already on disk: it is a warning (`snapshotWarnings`,
+ * printed by the caller) naming the snapshot and the move-aside step. The
+ * backup-file dating in `gate enable` stays as a second line of defence for
+ * a snapshot written while an older installer ran.
+ */
 export function writeCodexConfigInstall(
   plan: CodexConfigInstallPlan,
   opts: { now?: Date } = {},
@@ -2263,24 +2332,47 @@ export function writeCodexConfigInstall(
   if (!plan.changed) return { ...plan, written: false };
   fs.mkdirSync(path.dirname(plan.configPath), { recursive: true });
   const mode = existingFileMode(plan.configPath);
+  const snapshots = findSnapshotsOfConfig(plan);
   // Only back up a config that actually existed before this install (task
   // 461ec064): a fresh install has nothing to protect, and writing a
   // 0-byte backup for it misreported a write that never happened.
+  let result: CodexConfigInstallResult;
   if (!plan.configExisted) {
     atomicWriteFile(plan.configPath, plan.nextContent, { mode });
-    return { ...plan, written: true };
+    result = { ...plan, written: true };
+  } else {
+    // A symlinked config's backup sits beside the link (task 1637fbc8), not
+    // beside the resolved target: the config holds secrets, and the target's
+    // directory is typically a dotfiles git work tree where an untracked
+    // backup is one `git add` away from being pushed. The backup is a fresh
+    // file, so it need not share the target's filesystem; only the atomic
+    // write of the target itself (temp file plus rename) must.
+    const backupBase = plan.linkPath ?? plan.configPath;
+    const backupPath = `${backupBase}.harness-backup-${timestampForBackup(opts.now ?? new Date())}`;
+    atomicWriteFile(backupPath, plan.currentContent, { mode });
+    atomicWriteFile(plan.configPath, plan.nextContent, { mode });
+    result = { ...plan, backupPath, written: true };
   }
-  // A symlinked config's backup sits beside the link (task 1637fbc8), not
-  // beside the resolved target: the config holds secrets, and the target's
-  // directory is typically a dotfiles git work tree where an untracked
-  // backup is one `git add` away from being pushed. The backup is a fresh
-  // file, so it need not share the target's filesystem; only the atomic
-  // write of the target itself (temp file plus rename) must.
-  const backupBase = plan.linkPath ?? plan.configPath;
-  const backupPath = `${backupBase}.harness-backup-${timestampForBackup(opts.now ?? new Date())}`;
-  atomicWriteFile(backupPath, plan.currentContent, { mode });
-  atomicWriteFile(plan.configPath, plan.nextContent, { mode });
-  return { ...plan, backupPath, written: true };
+  const superseded: string[] = [];
+  const warnings = snapshots.unreadable.map(
+    (p) =>
+      `the Codex gate snapshot ${p} cannot be read, so the install could not tell whether it belongs to ` +
+      "this config; `harness gate enable` will refuse on it until you move it out of this directory.",
+  );
+  for (const snapPath of snapshots.matched) {
+    try {
+      superseded.push(
+        retireCodexSnapshot(snapPath, "superseded", (m) => new Error(m), "the config was installed, but "),
+      );
+    } catch (err) {
+      warnings.push((err as Error).message);
+    }
+  }
+  if (superseded.length > 0) result.supersededSnapshots = superseded;
+  if (warnings.length > 0) {
+    result.snapshotWarnings = warnings;
+  }
+  return result;
 }
 
 /** One harness-owned hook unit inside the fenced managed block: the block

@@ -255,7 +255,7 @@ The verbs:
 ```bash
 harness gate disable                          # list hook groups, write nothing
 harness gate disable --matcher 'Write|Edit'   # remove matching groups (Claude Code)
-harness gate enable                           # restore the newest snapshot
+harness gate enable                           # restore the live snapshot
 harness gate disable --runtime codex --matcher apply_patch  # Codex hook units
 harness gate enable  --runtime codex
 ```
@@ -266,7 +266,22 @@ On Claude Code the verb removes the matching hook groups from
 neutralises the matching hook unit of the harness-managed block of
 `~/.codex/config.toml` in place (`hooks = []`), so every other hook
 keeps its position and Codex keeps its trust; a later
-`harness apply --runtime codex --install` re-renders the block. A hook
+`harness apply --runtime codex --install` re-renders the block and
+retires the snapshots of the config it finds (the runbook names the
+link cases it cannot find). Each config keeps one live
+snapshot: a second `gate disable` joins it only while the file is
+exactly the state the snapshot left (a spent snapshot is retired, any
+other state refuses and names the way out), and `gate enable` restores
+it and retires it. On Claude a removed group counts as back only when
+the file holds an unchanged copy; a group with the same matcher but
+other content makes enable refuse unless `--force`, and a snapshot
+that names another settings file in the same directory is foreign.
+See [`docs/okf/gate-kill-switch.md`](okf/gate-kill-switch.md). On
+Codex the restore is byte for byte
+when the config is unchanged since the disable; if you edited the file
+in between, enable refuses and names the way out, unless skipping the
+units already back rebuilds the pre-disable bytes (`--force` restores
+what is still off and keeps your edits). A hook
 whose manifest entry declares no `match` (the documented
 runtime-reality hook entry, for example) has no matcher to target;
 switch it off with its own switch (`RUNTIME_REALITY_DISABLE=1` for

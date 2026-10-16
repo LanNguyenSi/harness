@@ -438,9 +438,13 @@ async function wireRuntime(o: WireRuntimeOpts): Promise<RuntimeApplyOutcome> {
       if (install.backupPath) {
         o.stderr(`backup written to ${install.backupPath}\n`);
       }
+      for (const retired of install.supersededSnapshots ?? []) {
+        o.stderr(`retired gate snapshot as ${retired}: the install replaced the hooks block it was taken from\n`);
+      }
     } else {
       o.stderr(`codex config already up to date at ${writtenPath}\n`);
     }
+    for (const w of install?.snapshotWarnings ?? []) o.stderr(`warning: ${w}\n`);
     for (const hint of r.restartHints) o.stderr(`restart hint: ${hint}\n`);
     const recoveryHint = `harness apply --runtime codex --install --codex-config ${o.codexConfigPath}`;
     return { runtime: "codex", apply: r, recoveryHint };

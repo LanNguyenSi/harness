@@ -130,3 +130,53 @@ describe("codex gate disable: write order and snapshot rollback", () => {
     expect(e.mode === "restored" && [e.restoredCount, e.skippedEnabled]).toEqual([1, ["shell-guard"]]);
   });
 });
+
+function reinstall(hour: number): ReturnType<typeof writeCodexConfigInstall> {
+  const generated = generateCodexConfig(
+    parseManifest({
+      version: 1,
+      hooks: [
+        {
+          name: "branch-protection",
+          event: "PreToolUse",
+          match: "apply_patch",
+          command: "harness pack hook branch-protection --runtime codex --reinstalled",
+          blocking: "hard",
+          budget_ms: 5000,
+        },
+      ],
+    }),
+  );
+  return writeCodexConfigInstall(
+    planCodexConfigInstall({ configPath, generatedPath: "/gen/codex/config.toml", generatedContent: generated.content }),
+    { now: at(hour) },
+  );
+}
+
+describe("codex install: the snapshots are retired only after the config is written", () => {
+  it("writes the backup, then the config, and only then renames the live snapshot", () => {
+    const snap = disable("apply_patch", 1).snapshotPath;
+    writes.length = 0;
+    const result = reinstall(2);
+    expect(writes).toEqual([result.backupPath, configPath]);
+    expect(result.supersededSnapshots).toEqual([snap.replace(/\.json$/, ".superseded.json")]);
+    expect(listCodexSnapshots(tmp)).toEqual([]);
+  });
+
+  it("keeps every matched snapshot live when the config write fails, and rethrows that error", () => {
+    const snap = disable("apply_patch", 1).snapshotPath;
+    const configBefore = fs.readFileSync(configPath, "utf8");
+    failOn = (filePath) => (filePath === configPath ? new Error("disk full") : null);
+    expect(() => reinstall(2)).toThrow("disk full");
+    expect(listCodexSnapshots(tmp)).toEqual([snap]);
+    expect(fs.existsSync(snap.replace(/\.json$/, ".superseded.json"))).toBe(false);
+    expect(fs.readFileSync(configPath, "utf8")).toBe(configBefore);
+  });
+
+  it("keeps every matched snapshot live when the backup write fails", () => {
+    const snap = disable("apply_patch", 1).snapshotPath;
+    failOn = (filePath) => (filePath.includes(".harness-backup-") ? new Error("no space") : null);
+    expect(() => reinstall(2)).toThrow("no space");
+    expect(listCodexSnapshots(tmp)).toEqual([snap]);
+  });
+});

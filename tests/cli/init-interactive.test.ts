@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { codexGateDisable } from "../../src/cli/gate/codex-disable.js";
 import {
   runInteractive as runInteractiveReal,
   type InteractivePrompts,
@@ -2172,6 +2173,41 @@ describe("interactive wizard — runtime multiselect (task 696f7560)", () => {
     expect(cap.stderr()).toContain(
       `codex config installed into ${target} (via symlink ${link})`,
     );
+  });
+
+  it("a re-install reports the gate snapshot it retires and the one it cannot read, through the stderr stream", async () => {
+    fs.mkdirSync(path.join(tmpHome, ".claude"));
+    const wire = async (forceOverwrite: boolean): Promise<ReturnType<typeof captureStreams>> => {
+      const cap = captureStreams();
+      const result = await runInteractive({
+        homeDir: tmpHome,
+        dependencyPathEnv: fakeDepsPath,
+        forceOverwrite,
+        prompts: mockPrompts({
+          select: ["solo"],
+          input: ["~/.claude/projects/{project}/memory"],
+          confirm: [true],
+          checkbox: [["codex"]],
+        }),
+        stdout: cap.out,
+        stderr: cap.err,
+      });
+      expect(result.aborted).toBe(false);
+      return cap;
+    };
+    await wire(false);
+    const config = path.join(tmpHome, ".codex", "config.toml");
+    const listed = codexGateDisable({ configPath: config });
+    if (listed.mode !== "list") throw new Error("expected the unit list");
+    const off = codexGateDisable({ configPath: config, matcher: listed.candidates[0]!.matcher ?? "" });
+    if (off.mode !== "remove") throw new Error("expected remove");
+    // Re-render the block so the re-install changes the config the snapshot was taken from.
+    fs.writeFileSync(config, fs.readFileSync(config, "utf8").replace(/timeout = \d+/, "timeout = 7"));
+    const junk = path.join(path.dirname(config), "harness.gate-disable-codex.2026-10-02T00-30-00.000Z.json");
+    fs.writeFileSync(junk, "{ not json");
+    const cap = await wire(true);
+    expect(cap.stderr()).toContain(`retired gate snapshot as ${off.snapshotPath.replace(/\.json$/, ".superseded.json")}`);
+    expect(cap.stderr()).toContain(`warning: the Codex gate snapshot ${junk} cannot be read`);
   });
 
   it("wires both runtimes in one run when the operator picks both", async () => {
