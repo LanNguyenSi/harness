@@ -218,6 +218,11 @@ describe("readCodexManagedHookUnits", () => {
     expect(() => readCodexManagedHookUnits(reshaped, configPath)).toThrow(/not the generated shape/);
   });
 
+  it("refuses a unit whose matcher is not a string", () => {
+    const text = installConfig(configPath).replace('matcher = "apply_patch"', "matcher = 7");
+    expect(() => readCodexManagedHookUnits(text, configPath)).toThrow(/matcher that is not a string/);
+  });
+
   it("refuses a comment between two hook units", () => {
     const text = installConfig(configPath);
     const noted = text.replace(
