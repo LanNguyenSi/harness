@@ -945,6 +945,21 @@ describe("codexGateEnable: retired snapshots are never applied again", () => {
     expect(listCodexSnapshots(path.dirname(configPath))).toEqual([]);
   });
 
+  it("--force on a snapshot superseded by a re-install retires it and never brings the old line back either", () => {
+    installConfig(configPath);
+    const s0 = disableAt(configPath, "Bash", at(1));
+    const v2 = reinstall(configPath, at(2), V2);
+    const hand = neutraliseByHand(v2, SG);
+    fs.writeFileSync(configPath, hand);
+    const e = codexGateEnable({ configPath, force: true, now: at(3) });
+    expect(e.mode).toBe("already-restored");
+    expect(e.stillDisabled).toEqual([SG]);
+    expect(e.mode !== "no-snapshots" && e.retired?.why).toBe("superseded");
+    expect(read()).toBe(hand);
+    expect(read()).not.toContain(OLD_SG_LINE);
+    expect(listCodexSnapshots(path.dirname(configPath))).toEqual([]);
+  });
+
   it("retires a snapshot whose units were all enabled again by other means, instead of refusing over the edit", () => {
     const original = installConfig(configPath);
     const s0 = disableAt(configPath, "Bash", T0);
