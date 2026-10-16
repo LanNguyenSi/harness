@@ -3,7 +3,7 @@ type: invariant
 title: Managed mutations validate the whole manifest
 description: harness add/remove schema-validate the ENTIRE proposed harness.yaml (no baseline diff), so a pre-existing schema error anywhere blocks an unrelated call; add's asset gate DOES baseline-diff, so pre-existing asset errors warn instead of block, while remove runs no asset checks at all.
 tags: [add, remove, validation, manifest, footgun]
-timestamp: 2026-10-16T07:49:41Z
+timestamp: 2026-10-16T17:45:02Z
 sources:
   - src/cli/add/index.ts
   - src/cli/remove/index.ts

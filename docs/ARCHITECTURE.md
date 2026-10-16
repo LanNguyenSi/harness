@@ -37,8 +37,8 @@ actually happened. As of 1.0.0 the loop ships with one caveat: the
 policy engine was removed, so the Enforce step no longer consults the
 Record step (the shipped branch-protection gate asks git, not the
 ledger), and `explain --trace` left Observe with it. The ledger itself
-is real: grounding-mcp and the pause / resume verbs still write rows,
-and `audit` replays the pre-1.0.0 `policy_decision` history.
+is real: grounding-mcp still writes rows, and `audit` replays the
+pre-1.0.0 `policy_decision` history.
 
 ## Architecture overview
 
@@ -79,7 +79,7 @@ flowchart TD
   OUT -.->|"wired by<br/>--target or --install"| EVT
 ```
 
-The second diagram shows the steps inside `harness policy intercept` (`src/cli/policy/intercept.ts`, `src/runtime/intercept.ts`), as designed at the time; that engine and both files were removed in 1.0.0, so the diagram is the historical design, not the shipped behavior. A paused harness and a manifest that fails to load both allowed the call; a call no policy matched was allowed without a record; an `operator_only` policy denied without querying the ledger.
+The second diagram shows the steps inside `harness policy intercept` (`src/cli/policy/intercept.ts`, `src/runtime/intercept.ts`), as designed at the time; that engine and both files were removed in 1.0.0, so the diagram is the historical design, not the shipped behavior. A paused harness and a manifest that fails to load both allowed the call; a call no policy matched was allowed without a record; an `operator_only` policy denied without querying the ledger. The `pause sentinel?` node at the head of the diagram is gone too: the sentinel and the `harness pause` / `harness resume` verbs that wrote it were removed in 1.0.0 (task 973163a4), and `harness gate disable` is the operator off switch now.
 
 ```mermaid
 flowchart TD
@@ -156,23 +156,24 @@ Notes:
   ENFORCEMENT keys off the `tools.mcp[]` entry named `grounding-mcp`
   (validate); `grounding:` is the section that CONFIGURES
   that entry, not a separate enforcement switch. Alongside
-  `EVIDENCE_LEDGER_DB` above, the same `tools.mcp[grounding-mcp]` entry
-  also gets `SOLUTION_VERDICT_SIGNING_KEY` projected onto it (task
-  03a917fd/H1): the harness's own `<harness.generated>/.approval-signing.key`
-  path, which grounding-mcp (>= 0.8.0) reads to verify solution-verdict
-  signatures. Same override semantics (an operator-declared
-  `env.SOLUTION_VERDICT_SIGNING_KEY` wins) but no safe fallback — without a
-  resolvable `generatedDir` for the manifest in use, nothing is projected
-  at all. Every producer of this shape (`harness apply`, `init
-  --interactive`'s `claude mcp` wiring, `harness doctor`'s registration
-  check, and the opencode config generator) shares one call,
-  `buildDesiredMcpServers` in `generate-settings.ts`; the adopt-side drift
-  mirror (`adopt/derive.ts`) additionally shares the projected VALUES
-  themselves (`groundingLedgerEnvValue` / `signingKeyEnvValue`), so the
-  projections cannot drift apart between producers as long as every new
-  producer goes through those shared functions (a hand-rolled
-  `signingKeyPathFor` on a raw `generatedDir` is exactly the phantom-drift
-  bug the shared value function exists to prevent).
+  the `EVIDENCE_LEDGER_DB` projection above, harness no longer projects
+  `SOLUTION_VERDICT_SIGNING_KEY` onto the `tools.mcp[grounding-mcp]`
+  entry (task 21a2c508, which also removed `signingKeyPathFor` and
+  `signingKeyEnvValue`): the entry carries `EVIDENCE_LEDGER_DB` and
+  whatever env the manifest entry declares, so an operator-declared
+  `env.SOLUTION_VERDICT_SIGNING_KEY` still passes through. grounding-mcp
+  owns its default path and falls back to
+  `<harness-home>/harness.generated/.approval-signing.key` when the
+  variable is unset, so the key location does not move for the default
+  harness home; harness itself never read the key. Every producer of
+  this shape (`harness apply`, `init --interactive`'s `claude mcp`
+  wiring, `harness doctor`'s registration check, and the opencode config
+  generator) shares one call, `buildDesiredMcpServers` in
+  `generate-settings.ts`; the adopt-side drift mirror (`adopt/derive.ts`)
+  shares the projected ledger value
+  (`groundingLedgerEnvValue`), so the projections cannot drift apart
+  between producers as long as every new producer goes through those
+  shared functions.
 - **`auto_start: true`** is the default because per VISION §3 Grounding the current "sessions must be started manually" mode is a sharp edge. Setting it to `false` disables auto-start for users who want to script it themselves. (RESERVED — not consumed yet.)
 - **`policies_source`** and **`evidence_ledger.retention_days`** were part of this design but never had a consumer. Both are removed keys: they load with a warning and are stripped.
 

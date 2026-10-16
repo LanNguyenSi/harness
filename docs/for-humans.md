@@ -240,101 +240,60 @@ Full pack reference:
   manifest that does not load fails the branch-protection hook closed:
   it refuses every edit until the manifest loads again.
 
-## Pause and resume (recovery / debug / incident-mode only)
+## Switching a gate off (recovery / debug / incident-mode only)
 
-Three situations need a way to make harness hooks dormant for a few
-minutes without `npm uninstall -g` and without hand-editing
-`settings.json`:
+Three situations need a way to take one hard-blocking hook out of the
+live runtime config without `npm uninstall -g` and without
+hand-editing `settings.json` or `~/.codex/config.toml`: lockout
+recovery (a misconfigured gate is rejecting your shell), an A/B test
+of "is this harness or my code?", and an incident hotfix (for example
+a deliberate edit on a protected branch, which the branch-protection
+gate refuses).
 
-1. **Lockout recovery.** A misconfigured gate is rejecting your shell.
-2. **"Is this harness or my code?" debug.** You want to A/B-test
-   whether a gate is responsible for a surprising block.
-3. **Incident / hotfix.** Prod is down, an unrelated preflight is
-   failing, and you need to push the fix now.
-
-The verbs are intentionally narrow:
+The verbs:
 
 ```bash
-harness pause                  # default 15m auto-resume
-harness pause --for 5m         # explicit window
-harness pause --for 1h --reason "prod incident #482"
-harness resume                 # cuts the pause short
+harness gate disable                          # list hook groups, write nothing
+harness gate disable --matcher 'Write|Edit'   # remove matching groups (Claude Code)
+harness gate enable                           # restore the newest snapshot
+harness gate disable --runtime codex --matcher apply_patch  # Codex hook units
+harness gate enable  --runtime codex
 ```
 
-While paused, the `harness pack hook
-runtime-reality` hook emits a one-line
-stderr notice (`harness <hook>: PAUSED since 3m ago (reason: ...);
-auto-resumes in 7m. Run \`harness resume\` to re-enable.`) and allow
-the tool call without evaluating. After the
-window expires, the next hook fire silently deletes the sentinel and
-resumes normal gating.
-
-Branch-protection does not yield to a pause: it keeps refusing edits
-on a protected branch. To land an edit on a protected branch on
-purpose (a hotfix on `master`, for example), switch that gate off from
-an operator shell as
+On Claude Code the verb removes the matching hook groups from
+`~/.claude/settings.json`, keeping a backup and a reversible snapshot;
+`harness gate enable` puts the groups back. With `--runtime codex` it
+neutralises the matching hook unit of the harness-managed block of
+`~/.codex/config.toml` in place (`hooks = []`), so every other hook
+keeps its position and Codex keeps its trust; a later
+`harness apply --runtime codex --install` re-renders the block. A hook
+whose manifest entry declares no `match` (the documented
+runtime-reality hook entry, for example) has no matcher to target;
+switch it off with its own switch (`RUNTIME_REALITY_DISABLE=1` for
+runtime-reality) or give the entry a `match` and re-apply.
+Branch-protection keeps refusing edits until you switch it off for real: to
+land an edit on a protected branch on purpose (a hotfix on `master`,
+for example), use the recipe above or
 [Disable the gate](policy-packs/branch-protection.md#disable-the-gate-operator-only)
-describes (Claude Code and Codex differ), and switch it back on
-afterwards.
+(Claude Code and Codex differ), and switch it back on afterwards.
 
-**Operator-only by design, but the CLI check is a speed bump, not a
-boundary.** `harness pause` refuses to run when any of
-`$CLAUDE_CODE_SESSION_ID` (what Claude Code actually exports),
-`$CLAUDE_SESSION_ID` (legacy), or `$CODEX_SESSION_ID` is set, and
-refuses non-TTY stdin without `--i-am-the-operator`. Do **not** try to
-satisfy this by prefixing the command with `! ` in Claude Code: the `!
-`-prefixed shell inherits this same session's environment *and* its
-non-TTY stdin, so it is indistinguishable from an agent Bash call and
-trips the exact same checks (verified live). Run the verb from a
-terminal genuinely **outside** the agent session (a separate terminal
-window or tab, not spawned by or nested inside this one). If an agent
-ever asks you to pass `--i-am-the-operator` on its behalf, that request
-IS the attack this guard exists to stop: refuse it.
+The verbs are operator-only by intent and documentation, not by an
+enforced check: there is no agent-session env-var or TTY refusal in
+the CLI, so nothing in harness stops an agent with a Bash tool from
+running them. The reversible snapshot and the `.bak.<timestamp>` file
+next to the edited config are the recovery record either way. The
+trust model, the exact flags and the recovery recipes are documented
+in [`docs/okf/gate-kill-switch.md`](okf/gate-kill-switch.md).
 
-The CLI check is all there is. The PreToolUse deny-policy layer that
-used to deny `harness pause` / `harness resume` / `harness gate
-disable` / `harness gate enable` from the agent's Bash tool went with
-the policy engine (removed in 1.0.0), so nothing in harness stops an
-agent that strips the session environment (`env -u
-CLAUDE_CODE_SESSION_ID ... harness pause --for 1h --i-am-the-operator`)
-or runs `harness gate disable` from its Bash tool. The checks above
-still refuse the honest mistakes (an agent Bash call that inherits the
-session env, a `! `-prefixed shell); treat them as a speed bump, not
-a boundary. The trust model is documented in
-[`docs/okf/pause-vs-gate-kill-switch.md`](okf/pause-vs-gate-kill-switch.md).
+**The gate kill switch is not for routine bypass.** To turn a shipped
+gate off for good, set `policy_packs[].enabled: false` on the pack
+(branch-protection) or remove the hook entry from the manifest, then
+re-apply. Persistent, diff-able, source-controlled.
 
-**Pause is not for routine gate bypass.** Two rules of thumb:
-
-- **To turn a shipped gate off for good**, set `policy_packs[].enabled:
-  false` on the pack (branch-protection) or remove the hook entry from
-  the manifest, then re-apply. Persistent, diff-able,
-  source-controlled.
-- **For lockout recovery / debug / incident**, pause is the right
-  tool, but always with `--for <duration>` so a forgotten pause
-  cannot silently disable your gates across sessions.
-
-`--indefinite` exists for genuinely open-ended recovery flows but
-requires `--i-am-the-operator-and-accept-no-auto-resume` as a separate
-flag; the verbose flag itself is the friction.
-
-Audit trail: every pause / resume writes an
-`harness-paused:<pausedAt>` / `harness-resumed:<pausedAt>` fact to
-the evidence ledger, under the `default` session bucket (an operator
-shell has no agent session id). `harness audit` replays only
-`policy_decision` rows, so these facts are read back through
-grounding-mcp's ledger query, not through `harness audit`.
-
-**Trust boundary.** The sentinel file is plain JSON at
-`<generatedDir>/.harness-paused` with no signature. The
-operator-only CLI checks (agent-session env-var refusal, any of
-`$CLAUDE_CODE_SESSION_ID`, `$CLAUDE_SESSION_ID`, `$CODEX_SESSION_ID`,
-plus non-TTY refusal) are not a boundary against an agent that
-strips the environment before calling the verb, and they do not see
-a direct filesystem write to the sentinel path from a non-Bash tool
-at all. The agent surface typically does not need write access to
-`harness.generated/` for anything else. Signing
-the sentinel (HMAC) would close this class properly but is not
-implemented; treat it as a follow-up if you need a hard guarantee here.
+`harness pause` and `harness resume` were removed in 1.0.0 (task
+973163a4): both verbs are unknown now, and `harness gate disable` /
+`harness gate enable` are the operator off switch they used to
+complement.
 
 ## Diagnostics cheat-sheet
 
@@ -349,8 +308,8 @@ implemented; treat it as a follow-up if you need a hard guarantee here.
 | What changed since I last ran `apply` | `harness diff --since-apply` |
 | Replay the historical policy decision rows (written pre-1.0.0) | `harness audit --since 24h` |
 | Full chronological session export (transcript + ledger, redacted) | `harness session-export <sessionId>` |
-| Temporarily make the hooks dormant, branch-protection excepted (recovery / debug / incident) | `harness pause --for <duration>` |
-| Re-enable hooks before the pause window expires | `harness resume` |
+| Take one hook group out of the live config (recovery / debug / incident), Claude Code | `harness gate disable --matcher <substring>` then `harness gate enable` |
+| Take one hook unit out of the live config (recovery / debug / incident), Codex | `harness gate disable --runtime codex --matcher <substring>` then `harness gate enable --runtime codex` |
 | Edit a protected branch on purpose (branch-protection off, from an operator shell) | see [Disable the gate](policy-packs/branch-protection.md#disable-the-gate-operator-only) |
 
 ## Where to read next

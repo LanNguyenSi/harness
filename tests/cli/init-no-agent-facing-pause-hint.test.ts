@@ -46,7 +46,7 @@ import { parseManifest, type Manifest } from "../../src/schema/index.js";
 // pack and policy selected, so (c) is covered too.
 //
 // One legitimate, non-actionable exception is allow-listed: the "see also"
-// link to docs/okf/pause-vs-gate-kill-switch.md, which the three
+// link to docs/okf/gate-kill-switch.md, which the three
 // kill-switch deny policies' own `run:` text points operators/readers at
 // for the honest trust model. That is a doc citation, not a recommendation
 // to run pause/resume, and its filename happens to contain the substring
@@ -65,7 +65,7 @@ const __filename = fileURLToPath(import.meta.url);
 const REPO_ROOT = path.resolve(path.dirname(__filename), "..", "..");
 const REFERENCE_YAML = path.join(REPO_ROOT, "docs", "examples", "full-manifest.yaml");
 
-const ALLOWED_DOC_LINK = "docs/okf/pause-vs-gate-kill-switch.md";
+const ALLOWED_DOC_LINK = "docs/okf/gate-kill-switch.md";
 const KILL_SWITCH_WORD = /\b(pause|resume)\b|\bgate\s+(?:disable|enable)\b/i;
 
 function stripAllowedDocLink(text: string): string {
