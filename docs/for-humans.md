@@ -268,8 +268,15 @@ neutralises the matching hook unit of the harness-managed block of
 keeps its position and Codex keeps its trust; a later
 `harness apply --runtime codex --install` re-renders the block and
 retires a snapshot taken before it. Each config keeps one live
-snapshot: a second `gate disable` merges into it, and `gate enable`
-restores it and retires it. On Codex the restore is byte for byte
+snapshot: a second `gate disable` joins it only while the file is
+exactly the state the snapshot left (a spent snapshot is retired, any
+other state refuses and names the way out), and `gate enable` restores
+it and retires it. On Claude a removed group counts as back only when
+the file holds an unchanged copy; a group with the same matcher but
+other content makes enable refuse unless `--force`, and a snapshot
+that names another settings file in the same directory is foreign.
+See [`docs/okf/gate-kill-switch.md`](okf/gate-kill-switch.md). On
+Codex the restore is byte for byte
 when the config is unchanged since the disable; if you edited the file
 in between, enable refuses and names the way out, unless skipping the
 units already back rebuilds the pre-disable bytes (`--force` restores
