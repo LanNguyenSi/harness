@@ -180,9 +180,12 @@ export function registerGateGcGroup(
             stdout(
               (runtime === "codex"
                 ? `no hook unit of the harness-managed block in ${target} is disabled; no write needed. `
-                : alreadyBack.length > 0 || accepted.length > 0
-                  ? `${target} already holds every hook group the snapshot removed; no write needed. `
-                  : `settings.json already matches the pre-disable state; no write needed. `) +
+                : accepted.length > 0
+                  ? `nothing to put back into ${target}: each hook group the snapshot removed is there unchanged or ` +
+                    `taken as back under --force (below); no write needed. `
+                  : alreadyBack.length > 0
+                    ? `${target} already holds every hook group the snapshot removed; no write needed. `
+                    : `settings.json already matches the pre-disable state; no write needed. `) +
                 `(snapshot: ${result.snapshotPath})\n`,
             );
           }
@@ -279,7 +282,10 @@ function foreignSnapshotsNote(
           `${f.path}: run \`harness gate enable --settings ${f.settingsPath}\`` +
           (f.settingsExists
             ? ""
-            : ` (no file is at that name now: if the settings file was renamed after the disable, rename it back first)`),
+            : ` (no file is at that name now: if the settings file was renamed after the disable, rename it back ` +
+              `first; if it is gone, restore it from ${f.settingsBackupPath}, which is the file before that disable, ` +
+              `then run that command, which retires the snapshot; or move the snapshot out of the directory by hand ` +
+              `once its groups are back)`),
       )
       .join("; ") +
     "."

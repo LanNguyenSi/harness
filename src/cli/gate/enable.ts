@@ -30,6 +30,7 @@ import {
   type ForeignSnapshot,
   groupLabel,
   listLiveSnapshots,
+  missingLabel,
   planRestore,
   retireSnapshot,
   sha256Hex,
@@ -201,7 +202,7 @@ export function gateEnable(opts: GateEnableOptions = {}): GateEnableResult {
         `that shares the matcher, so it does not count as back.` +
         (plan.restored.length > 0
           ? ` ${plan.restored.length} more hook group(s) it removed are missing ` +
-            `(${plan.restored.map((r) => groupLabel(r.event, r.group)).join("; ")}).`
+            `(${plan.restored.map(missingLabel).join("; ")}).`
           : "") +
         ` Nothing was changed and the snapshot stays live. If the file's group stands in for the snapshot's, run ` +
         `\`harness gate enable --force\`: it takes it as back (the snapshot's group is not put back), puts the ` +
@@ -243,7 +244,7 @@ export function gateEnable(opts: GateEnableOptions = {}): GateEnableResult {
       `settings.json has been edited since the snapshot was taken (current sha ${currentSha.slice(0, 12)}..., ` +
         `snapshot's post-disable sha ${snapshot.settingsAfterSha256.slice(0, 12)}...), and ` +
         `${plan.restored.length} hook group(s) it removed are still missing ` +
-        `(${plan.restored.map((r) => groupLabel(r.event, r.group)).join("; ")}). Nothing was changed and the ` +
+        `(${plan.restored.map(missingLabel).join("; ")}). Nothing was changed and the ` +
         `snapshot ${newest.path} stays live. Inspect the diff against ${snapshot.settingsBackupPath}, then run ` +
         `\`harness gate enable --force\`: it puts the missing groups back, leaves a group that is already ` +
         `there alone and keeps every other edit.`,

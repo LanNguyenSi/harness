@@ -420,7 +420,9 @@ describe("gateEnable: --force", () => {
       hooks: { PreToolUse: [{ matcher: "Bash", hooks: [{ command: "bash-hook --by-hand" }] }] },
     };
     fs.writeFileSync(settingsPath, `${JSON.stringify(edited, null, 2)}\n`);
-    expect(() => gateEnable({ settingsPath })).toThrow(/1 more hook group\(s\) it removed are missing \(PreToolUse matcher="Write\|Edit"\)/);
+    expect(() => gateEnable({ settingsPath })).toThrow(
+      /1 more hook group\(s\) it removed are missing \(PreToolUse matcher="Write\|Edit" running `branch-protection`\)/,
+    );
     const r = gateEnable({ settingsPath, force: true });
     expect(r.mode).toBe("restored");
     if (r.mode !== "restored") return;
@@ -654,7 +656,9 @@ describe("gateEnable: snapshot identity", () => {
     if (o.mode !== "remove") throw new Error("expected remove");
     const r = gateEnable({ settingsPath });
     expect(r.mode).toBe("no-snapshots");
-    expect(r.foreign).toEqual([{ path: o.snapshotPath, settingsPath: other, settingsExists: true }]);
+    expect(r.foreign).toEqual([
+      { path: o.snapshotPath, settingsPath: other, settingsExists: true, settingsBackupPath: o.backupPath },
+    ]);
   });
 });
 

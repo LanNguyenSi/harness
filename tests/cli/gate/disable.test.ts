@@ -394,7 +394,9 @@ describe("gateDisable: a live snapshot the file no longer matches", () => {
     expect(message).toContain("`branch-protection --v1`");
     expect(message).toContain("`branch-protection --v2`");
     expect(message).toContain("do not count as back");
-    expect(message).toContain("harness gate enable --force");
+    expect(message).toContain("If the file's group stands in for the snapshot's, run `harness gate enable --force`");
+    // The way that keeps the gate's group when the file's is another hook: the backup has it, plain enable then this.
+    expect(message).toContain(`Otherwise make the file hold the snapshot's group (${first.backupPath} has it) and run \`harness gate enable\`.`);
     expect(message).toContain("Nothing was changed.");
     expect(message).not.toContain("still missing");
     expect(fs.readFileSync(settingsPath, "utf8")).toBe(file);

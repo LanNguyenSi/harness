@@ -62,8 +62,8 @@ export interface GateDisableSnapshot {
    * Absolute path to the settings.json that was mutated (snapshots written
    * by earlier releases may hold the path as it was typed, relative to a
    * working directory that is gone). Only its basename is used to tell which
-   * file a snapshot belongs to (snapshots always sit beside their file): in
-   * the target's directory it must name the same file as the target.
+   * file a snapshot belongs to (snapshots always sit beside their file): the
+   * target must name that directory entry, see `listLiveSnapshots`.
    */
   settingsPath: string;
   /** Absolute path the pre-mutation copy was written to. */
@@ -249,6 +249,8 @@ export interface ForeignSnapshot {
   settingsPath: string;
   /** Whether a file is at `settingsPath` now (a settings file renamed since the disable is not). */
   settingsExists: boolean;
+  /** The backup its first disable wrote: the pre-disable copy of that file, the way back when the file is gone. */
+  settingsBackupPath: string;
 }
 
 export type LiveSnapshotsResult =
@@ -265,15 +267,42 @@ export type LiveSnapshotsResult =
       path: string;
     };
 
-/** Whether two paths name the same file (same device and inode), or null when either cannot be stat'ed. */
-function sameFile(a: string, b: string): boolean | null {
+/** Whether two names differ at most in letter case or Unicode normalization form. */
+function foldsTo(a: string, b: string): boolean {
+  return a.normalize("NFC").toLowerCase() === b.normalize("NFC").toLowerCase();
+}
+
+/**
+ * Whether `recordedName`, in `dir`, is the directory entry `targetName`
+ * names. The same spelling is, by definition: snapshots sit beside their
+ * file and record its basename, so the name is the identity. A spelling that
+ * differs only in letter case or normalization is the same entry only on a
+ * filesystem that folds those (APFS by default), which `lstat` tells: both
+ * names must resolve to one regular file (neither a symlink) whose link
+ * count is 1, so no second name of that inode could be the one that matched.
+ * Every other name is another entry (a hard link, a symlink, a renamed file):
+ * restoring through it would write a new file at that name and leave the
+ * recorded file as the disable left it.
+ */
+function namesSameEntry(dir: string, recordedName: string, targetName: string): boolean {
+  if (recordedName === targetName) return true;
+  if (!foldsTo(recordedName, targetName)) return false;
+  let recorded: fs.BigIntStats;
+  let target: fs.BigIntStats;
   try {
-    const sa = fs.statSync(a, { bigint: true });
-    const sb = fs.statSync(b, { bigint: true });
-    return sa.dev === sb.dev && sa.ino === sb.ino;
+    recorded = fs.lstatSync(path.join(dir, recordedName), { bigint: true });
+    target = fs.lstatSync(path.join(dir, targetName), { bigint: true });
   } catch {
-    return null;
+    return false;
   }
+  return (
+    recorded.isFile() &&
+    target.isFile() &&
+    recorded.dev === target.dev &&
+    recorded.ino === target.ino &&
+    recorded.nlink === 1n &&
+    target.nlink === 1n
+  );
 }
 
 /**
@@ -282,14 +311,15 @@ function sameFile(a: string, b: string): boolean | null {
  * file, so only the basename of the recorded settings path counts, never how
  * the directory was spelled when it was written (relative to some other
  * working directory, or through a symlink): a snapshot belongs to the file
- * when that basename, in this directory, is the same file as `settingsPath`
- * (same device and inode, so another spelling of the name on a
- * case-insensitive filesystem, or a hard link, still counts). Only when one
- * of the two cannot be stat'ed (the file is missing) do the basenames decide.
- * A snapshot for another settings file in the same directory is listed in
- * `skippedForeign`, never dropped silently. A live snapshot that cannot be
- * read is an error: its target cannot be told, so neither disable nor enable
- * may go on as if it did not exist.
+ * when the target names the directory entry that basename names
+ * (`namesSameEntry`: the same spelling, or another spelling of the one entry
+ * on a case-insensitive filesystem). A hard link or a symlink to the file
+ * under another name is another entry, so a snapshot recorded for either is
+ * foreign to the other, whether or not the files exist. A snapshot for
+ * another settings file in the same directory is listed in `skippedForeign`,
+ * never dropped silently. A live snapshot that cannot be read is an error:
+ * its target cannot be told, so neither disable nor enable may go on as if
+ * it did not exist.
  */
 export function listLiveSnapshots(settingsPath: string): LiveSnapshotsResult {
   const dir = path.dirname(settingsPath);
@@ -301,9 +331,14 @@ export function listLiveSnapshots(settingsPath: string): LiveSnapshotsResult {
     const read = readSnapshot(file);
     if (!read.ok) return { ok: false, reason: read.reason, path: file };
     const recordedName = path.basename(read.snapshot.settingsPath);
-    const recordedPath = path.join(dir, recordedName);
-    if (!(sameFile(recordedPath, settingsPath) ?? recordedName === targetName)) {
-      skippedForeign.push({ path: file, settingsPath: recordedPath, settingsExists: fs.existsSync(recordedPath) });
+    if (!namesSameEntry(dir, recordedName, targetName)) {
+      const recordedPath = path.join(dir, recordedName);
+      skippedForeign.push({
+        path: file,
+        settingsPath: recordedPath,
+        settingsExists: fs.existsSync(recordedPath),
+        settingsBackupPath: read.snapshot.settingsBackupPath,
+      });
       continue;
     }
     live.push({ path: file, snapshot: read.snapshot });
@@ -345,6 +380,15 @@ export function groupCommands(group: unknown): string[] {
 function commandsText(group: unknown): string {
   const cmds = groupCommands(group);
   return cmds.length === 0 ? "no command" : cmds.map((c) => `\`${c}\``).join(", ");
+}
+
+/**
+ * How a refusal names a removed group that is still missing: its event and
+ * matcher plus its commands, so that when another group shares the matcher
+ * the operator can tell which one is out of the file.
+ */
+export function missingLabel(entry: RemovedGroup): string {
+  return `${groupLabel(entry.event, entry.group)} running ${commandsText(entry.group)}`;
 }
 
 /**

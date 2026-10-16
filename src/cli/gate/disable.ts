@@ -34,9 +34,9 @@ import {
   changedLabel,
   type GateDisableSnapshot,
   groupCommands,
-  groupLabel,
   listLiveSnapshots,
   type LiveSnapshot,
+  missingLabel,
   planRestore,
   type RemovedGroup,
   retireSnapshot,
@@ -398,7 +398,7 @@ function chooseSnapshot(
       ...(plan.restored.length > 0
         ? [
             `${plan.restored.length} hook group(s) it removed are still missing ` +
-              `(${plan.restored.map((r) => groupLabel(r.event, r.group)).join("; ")})`,
+              `(${plan.restored.map(missingLabel).join("; ")})`,
           ]
         : []),
       ...(plan.changed.length > 0
@@ -408,15 +408,24 @@ function chooseSnapshot(
           ]
         : []),
     ];
+    // A group that only shares the matcher may be another hook: --force takes
+    // it for the snapshot's and leaves the snapshot's out, so the refusal also
+    // names the way that puts the snapshot's group back instead.
+    const wayOut =
+      plan.changed.length > 0
+        ? `If the file's group stands in for the snapshot's, run \`harness gate enable --force\` (same --settings): ` +
+          `it takes it as back (the snapshot's group is not put back), puts the missing groups back and keeps every ` +
+          `other edit. Otherwise make the file hold the snapshot's group (${snap.settingsBackupPath} has it) and run ` +
+          `\`harness gate enable\`. Then run this again.`
+        : `Run \`harness gate enable --force\` (same --settings): it puts the missing groups back, leaves a group ` +
+          `that is already there alone and keeps every other edit. Then run this again.`;
     throw new GateDisableError(
       `${settingsPath} is not the state the live snapshot ${candidate.path} left, and ${problems.join("; ")}; ` +
         `merging this disable into it would lose track of them. ` +
         (retired.length > 0
           ? `Retired the spent snapshot(s) walked past first (${retired.join(", ")}); nothing else was changed. `
           : `Nothing was changed. `) +
-        `Run \`harness gate enable --force\` (same --settings): it puts the missing groups back, takes a group ` +
-        `with the same event and matcher as back and prints both groups' commands, and keeps every other edit. ` +
-        `Then run this again.`,
+        wayOut,
     );
   }
   return { target: undefined, spent };

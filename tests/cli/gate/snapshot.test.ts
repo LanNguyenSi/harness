@@ -17,6 +17,7 @@ import {
   groupLabel,
   listLiveSnapshots,
   listSnapshots,
+  missingLabel,
   planRestore,
   readSnapshot,
   retireSnapshot,
@@ -27,8 +28,19 @@ import {
   snapshotPath,
   type GateDisableSnapshot,
 } from "../../../src/cli/gate/snapshot.js";
+import { isCaseInsensitiveFilesystem } from "../../_helpers/case-sensitivity.js";
 
 let tmp: string;
+
+/** Whether the temp directory's filesystem folds the case of names (APFS and HFS+ by default). */
+function tmpIsCaseInsensitive(): boolean {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "harness-gate-snapshot-case-"));
+  try {
+    return isCaseInsensitiveFilesystem(dir);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
 
 beforeEach(() => {
   tmp = fs.mkdtempSync(path.join(os.tmpdir(), "harness-gate-snapshot-"));
@@ -245,29 +257,106 @@ describe("retireSnapshot / listLiveSnapshots", () => {
     const r = listLiveSnapshots(settings());
     if (!r.ok) throw new Error("expected ok");
     expect(r.skippedForeign).toEqual([
-      { path: foreign, settingsPath: path.join(tmp, "settings.local.json"), settingsExists: false },
+      {
+        path: foreign,
+        settingsPath: path.join(tmp, "settings.local.json"),
+        settingsExists: false,
+        settingsBackupPath: path.join(tmp, "settings.json.bak"),
+      },
     ]);
   });
 
   it("names the recorded file beside the target, whatever directory the snapshot recorded, and whether it exists", () => {
     fs.writeFileSync(path.join(tmp, "settings.local.json"), "{}\n");
-    const foreign = put("2026-08-02T10:00:00.000Z", { settingsPath: "/elsewhere/settings.local.json" });
+    const foreign = put("2026-08-02T10:00:00.000Z", {
+      settingsPath: "/elsewhere/settings.local.json",
+      settingsBackupPath: "/elsewhere/settings.local.json.bak.2026-08-02T10-00-00.000Z",
+    });
     const r = listLiveSnapshots(settings());
     if (!r.ok) throw new Error("expected ok");
     expect(r.skippedForeign).toEqual([
-      { path: foreign, settingsPath: path.join(tmp, "settings.local.json"), settingsExists: true },
+      {
+        path: foreign,
+        settingsPath: path.join(tmp, "settings.local.json"),
+        settingsExists: true,
+        settingsBackupPath: "/elsewhere/settings.local.json.bak.2026-08-02T10-00-00.000Z",
+      },
     ]);
   });
 
-  it("counts a snapshot recorded under another name of the same file (a hard link) as the file's", () => {
+  it("a snapshot recorded under another name of the same inode (a hard link) is another file's, not this one's", () => {
     fs.writeFileSync(settings(), "{}\n");
-    fs.linkSync(settings(), path.join(tmp, "alias.json"));
-    const mine = put("2026-08-01T10:00:00.000Z", { settingsPath: "/old/dir/alias.json" });
+    const alias = path.join(tmp, "alias.json");
+    fs.linkSync(settings(), alias);
+    const theirs = put("2026-08-01T10:00:00.000Z", { settingsPath: "/old/dir/alias.json" });
     const r = listLiveSnapshots(settings());
     if (!r.ok) throw new Error("expected ok");
-    expect(r.live.map((l) => l.path)).toEqual([mine]);
-    expect(r.skippedForeign).toEqual([]);
+    expect(r.live).toEqual([]);
+    expect(r.skippedForeign.map((f) => [f.path, f.settingsPath, f.settingsExists])).toEqual([[theirs, alias, true]]);
+    // And the other way round: the file's own snapshot is not the alias's.
+    const mine = put("2026-08-02T10:00:00.000Z");
+    const viaAlias = listLiveSnapshots(alias);
+    if (!viaAlias.ok) throw new Error("expected ok");
+    expect(viaAlias.live.map((l) => l.path)).toEqual([theirs]);
+    expect(viaAlias.skippedForeign.map((f) => f.path)).toEqual([mine]);
   });
+
+  it("a snapshot recorded under a symlink to the file is the symlink's, not the file's", () => {
+    fs.writeFileSync(settings(), "{}\n");
+    const link = path.join(tmp, "link.json");
+    fs.symlinkSync(settings(), link);
+    const theirs = put("2026-08-01T10:00:00.000Z", { settingsPath: link });
+    const r = listLiveSnapshots(settings());
+    if (!r.ok) throw new Error("expected ok");
+    expect(r.live).toEqual([]);
+    expect(r.skippedForeign.map((f) => [f.path, f.settingsPath, f.settingsExists])).toEqual([[theirs, link, true]]);
+  });
+
+  it("another spelling of the name is foreign while no file is at either name", () => {
+    const theirs = put("2026-08-01T10:00:00.000Z", { settingsPath: path.join(tmp, "Settings.json") });
+    const r = listLiveSnapshots(settings());
+    if (!r.ok) throw new Error("expected ok");
+    expect(r.live).toEqual([]);
+    expect(r.skippedForeign.map((f) => [f.path, f.settingsExists])).toEqual([[theirs, false]]);
+  });
+
+  it.skipIf(!tmpIsCaseInsensitive())(
+    "on a case-insensitive filesystem another spelling of the one entry is the file's, unless the inode has a second name",
+    () => {
+      fs.writeFileSync(settings(), "{}\n");
+      const mine = put("2026-08-01T10:00:00.000Z", { settingsPath: path.join(tmp, "Settings.json") });
+      const own = listLiveSnapshots(settings());
+      if (!own.ok) throw new Error("expected ok");
+      expect(own.live.map((l) => l.path)).toEqual([mine]);
+      expect(own.skippedForeign).toEqual([]);
+      // A hard link elsewhere makes the inode's link count 2: the spelling can no longer be told to be this entry.
+      fs.linkSync(settings(), path.join(tmp, "alias.json"));
+      const linked = listLiveSnapshots(settings());
+      if (!linked.ok) throw new Error("expected ok");
+      expect(linked.live).toEqual([]);
+      expect(linked.skippedForeign.map((f) => f.path)).toEqual([mine]);
+    },
+  );
+
+  it.skipIf(tmpIsCaseInsensitive())(
+    "on a case-sensitive filesystem another spelling is another entry: a second file, or a symlink, under that spelling is foreign",
+    () => {
+      fs.writeFileSync(settings(), "{}\n");
+      const variant = path.join(tmp, "Settings.json");
+      fs.writeFileSync(variant, "{}\n");
+      const theirs = put("2026-08-01T10:00:00.000Z", { settingsPath: variant });
+      const twoFiles = listLiveSnapshots(settings());
+      if (!twoFiles.ok) throw new Error("expected ok");
+      expect(twoFiles.live).toEqual([]);
+      expect(twoFiles.skippedForeign.map((f) => f.path)).toEqual([theirs]);
+      fs.rmSync(variant);
+      fs.symlinkSync(settings(), variant);
+      const viaLink = listLiveSnapshots(settings());
+      if (!viaLink.ok) throw new Error("expected ok");
+      expect(viaLink.live).toEqual([]);
+      expect(viaLink.skippedForeign.map((f) => f.path)).toEqual([theirs]);
+    },
+  );
 
   it("does not count a snapshot recorded for another existing file in the directory", () => {
     fs.writeFileSync(settings(), "{}\n");
@@ -443,6 +532,16 @@ describe("planRestore", () => {
       "(they differ in another field)",
     );
     expect(changedLabel({ entry, current: { matcher: "Write|Edit", hooks: [] } })).toContain("the file's group runs no command");
+  });
+
+  it("names a missing group with its commands, so two groups sharing a matcher can be told apart", () => {
+    expect(missingLabel({ event: "PreToolUse", index: 1, group: group("Write|Edit", "own-guard v1") })).toBe(
+      'PreToolUse matcher="Write|Edit" running `own-guard v1`',
+    );
+    expect(missingLabel({ event: "PreToolUse", index: 0, group: { matcher: "Bash", hooks: [{ command: "a" }, { command: "b" }] } })).toBe(
+      'PreToolUse matcher="Bash" running `a`, `b`',
+    );
+    expect(missingLabel({ event: "Stop", index: 0, group: { hooks: [] } })).toBe("Stop matcher=null running no command");
   });
 
   it("lists a group's commands, none for a malformed group", () => {
