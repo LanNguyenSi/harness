@@ -2250,24 +2250,28 @@ export function writeCodexConfigInstall(
 /** One harness-owned hook unit inside the fenced managed block: the block
  * `generate-codex-config.ts`'s `emitHook` writes (a `# harness hook:` comment
  * line, the `[[hooks.<Event>]]` header, an optional `matcher =` line and the
- * `hooks = [...]` line). `start` is the offset of the comment line and `end`
- * the offset where the next unit's comment line, or the END marker line,
- * begins, so the slab `[start, end)` holds the unit and the blank lines that
- * separate it from the next one. */
+ * `hooks = [...]` line). `harness gate disable` neutralises a unit in place
+ * by replacing its `hooks = [...]` value with `hooks = []`; such a unit is
+ * `disabled`. */
 export interface CodexManagedHookUnit {
   /** The id in the comment line, e.g. `policy-pack:branch-protection:pre-tool-use`. */
   id: string;
   event: string;
   matcher: string | null;
   commands: string[];
+  /** True when the unit's `hooks` array is empty (neutralised by the gate). */
+  disabled: boolean;
+  /** Offset of the unit's comment line. */
   start: number;
-  end: number;
+  /** Offsets `[hooksStart, hooksEnd)` of the `hooks = [...]` line, without
+   * its indentation, trailing blanks or line terminator, so a replacement
+   * leaves LF and CRLF files byte-for-byte alike outside that span. */
+  hooksStart: number;
+  hooksEnd: number;
 }
 
 export interface CodexManagedHookBlock {
   units: CodexManagedHookUnit[];
-  /** Offset of the END marker line: where the last unit's slab ends. */
-  endMarkerStart: number;
 }
 
 const HOOK_UNIT_HEADER_RE = /^\[\[hooks\.([A-Za-z][A-Za-z0-9_]*)\]\]$/;
@@ -2306,7 +2310,9 @@ export function readCodexManagedHookUnits(
   // END marker line and the same check refuses it.
   if (!createMarkerLineProbe(text)(endLine, CODEX_MANAGED_END, "whole")) {
     return refuse(
-      `the block is not closed by a '${CODEX_MANAGED_END}' marker line right after its hook tables`,
+      `the block is not closed by a '${CODEX_MANAGED_END}' marker line right after its hook tables ` +
+        "(move any table that sits between the last hook unit and the END marker to below the END " +
+        "marker, or re-run `harness apply --runtime codex --install` to rewrite the block)",
     );
   }
 
@@ -2333,17 +2339,16 @@ export function readCodexManagedHookUnits(
     }
     const unitStart = pos;
     const body: string[] = [];
+    let lastLineAt = pos;
     pos = lineEndAfter(text, pos);
     while (pos < endLine && lineAt(pos) !== "" && !lineAt(pos).startsWith("#")) {
       body.push(lineAt(pos));
+      lastLineAt = pos;
       pos = lineEndAfter(text, pos);
     }
-    units.push(parseHookUnit(id, body, unitStart, text, refuse));
+    units.push(parseHookUnit(id, body, unitStart, lastLineAt, text, refuse));
   }
-  for (let i = 0; i < units.length; i += 1) {
-    units[i]!.end = units[i + 1]?.start ?? endLine;
-  }
-  return { units, endMarkerStart: endLine };
+  return { units };
 }
 
 function refuseHookBlockEdit(configPath: string, why: string): never {
@@ -2358,6 +2363,7 @@ function parseHookUnit(
   id: string,
   body: string[],
   start: number,
+  lastLineAt: number,
   text: string,
   refuse: (why: string) => never,
 ): CodexManagedHookUnit {
@@ -2390,43 +2396,100 @@ function parseHookUnit(
   const commands = entry.hooks.flatMap((h: unknown) =>
     isTomlTable(h) && typeof h.command === "string" ? [h.command] : [],
   );
-  return { id, event, matcher: matcher ?? null, commands, start, end: start };
+  const rawLine = text.slice(lastLineAt, lineEndAfter(text, lastLineAt));
+  return {
+    id,
+    event,
+    matcher: matcher ?? null,
+    commands,
+    disabled: entry.hooks.length === 0,
+    start,
+    hooksStart: lastLineAt + (rawLine.length - rawLine.trimStart().length),
+    hooksEnd: lastLineAt + rawLine.trimEnd().length,
+  };
+}
+
+/** What a gate edit of the managed block is allowed to change. A `disable`
+ * neutralises units (a unit's `hooks` array becomes empty); an `enable` puts
+ * the original `hooks` arrays back. `counts` is how many entries of each hook
+ * event the edit changes. */
+export interface CodexHookEditExpectation {
+  direction: "neutralise" | "restore";
+  counts: Record<string, number>;
 }
 
 /**
  * The safety net for a gate edit of the managed block. First the installer's
  * own semantic invariant (both documents parse, and everything outside the
  * hook event arrays is deep-equal), then the part that invariant leaves out
- * on purpose: the hook event arrays must differ by exactly `deltas`
- * (`{ PreToolUse: -1 }` after removing one PreToolUse unit), so a gate edit
- * can neither drop an operator-authored hook entry nor add one.
+ * on purpose, compared entry by entry: per hook event the arrays have the
+ * same length, every entry is deep-equal to its counterpart except exactly
+ * `expected.counts[event]` entries, and each of those differs only in its
+ * `hooks` array (emptied by a neutralise, filled again by a restore). So a
+ * gate edit can neither drop, add or reorder an entry nor move a key from one
+ * entry to another, and Codex keeps every other hook at the position its
+ * trust state was recorded for.
  */
 export function assertCodexHookEditInvariant(
   before: string,
   after: string,
   configPath: string,
-  deltas: Record<string, number>,
+  expected: CodexHookEditExpectation,
 ): void {
   assertConfigSemanticInvariant(before, after, configPath);
-  const eventCounts = (doc: unknown): Map<string, number> => {
-    const counts = new Map<string, number>();
+  const eventArrays = (doc: unknown): Map<string, unknown[]> => {
+    const arrays = new Map<string, unknown[]>();
     const hooks = isTomlTable(doc) ? doc.hooks : undefined;
-    if (!isTomlTable(hooks)) return counts;
+    if (!isTomlTable(hooks)) return arrays;
     for (const [key, value] of Object.entries(hooks)) {
-      if (Array.isArray(value)) counts.set(key, value.length);
+      if (Array.isArray(value)) arrays.set(key, value);
     }
-    return counts;
+    return arrays;
   };
-  const was = eventCounts(parseToml(before));
-  const now = eventCounts(parseToml(after));
-  for (const event of new Set([...was.keys(), ...now.keys(), ...Object.keys(deltas)])) {
-    const change = (now.get(event) ?? 0) - (was.get(event) ?? 0);
-    if (change !== (deltas[event] ?? 0)) {
-      throw new CodexInstallRefusalError(
-        `Codex config ${configPath}: the edit would change the number of '${event}' hook entries ` +
-          `by ${change}, expected ${deltas[event] ?? 0}; refusing to write. The file is untouched.`,
-        configPath,
-      );
+  const same = (a: unknown, b: unknown): boolean => firstDifferingKeyPath(a, b, []) === null;
+  const withHooks = (entry: unknown, hooks: unknown[]): unknown =>
+    isTomlTable(entry) ? { ...entry, hooks } : entry;
+  const hooksOf = (entry: unknown): unknown =>
+    isTomlTable(entry) ? entry.hooks : undefined;
+  const emptied = (entry: unknown): boolean => {
+    const hooks = hooksOf(entry);
+    return Array.isArray(hooks) && hooks.length === 0;
+  };
+  const filled = (entry: unknown): boolean => {
+    const hooks = hooksOf(entry);
+    return Array.isArray(hooks) && hooks.length > 0;
+  };
+  const refuse = (event: string, why: string): never => {
+    throw new CodexInstallRefusalError(
+      `Codex config ${configPath}: the gate edit would ${why} in the '${event}' hook entries; ` +
+        "refusing to write. The file is untouched.",
+      configPath,
+    );
+  };
+
+  const was = eventArrays(parseToml(before));
+  const now = eventArrays(parseToml(after));
+  for (const event of new Set([...was.keys(), ...now.keys(), ...Object.keys(expected.counts)])) {
+    const a = was.get(event) ?? [];
+    const b = now.get(event) ?? [];
+    if (a.length !== b.length) {
+      refuse(event, `change the number of entries from ${a.length} to ${b.length}`);
+    }
+    let changed = 0;
+    for (let i = 0; i < a.length; i += 1) {
+      if (same(a[i], b[i])) continue;
+      changed += 1;
+      const relationHolds =
+        expected.direction === "neutralise"
+          ? filled(a[i]) && emptied(b[i]) && same(withHooks(a[i], []), b[i])
+          : emptied(a[i]) && filled(b[i]) && same(withHooks(b[i], []), a[i]);
+      if (!relationHolds) {
+        refuse(event, `change entry ${i} by more than its hooks array`);
+      }
+    }
+    const want = expected.counts[event] ?? 0;
+    if (changed !== want) {
+      refuse(event, `change ${changed} entries, expected ${want}`);
     }
   }
 }

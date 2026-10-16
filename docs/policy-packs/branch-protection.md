@@ -241,10 +241,12 @@ un-hooked operator shell, not from the agent's session:
   `--matcher` first to list the hook units of the harness-managed block
   in `~/.codex/config.toml`, then with the matcher of this pack's unit,
   for example `apply_patch`); `harness gate enable --runtime codex`
-  restores them. A later `harness apply --runtime codex --install`
-  re-renders the block and brings the unit back. Alternatively set
-  `enabled: false` on this pack and re-run
-  `harness apply --runtime codex --install`.
+  restores it. The gate empties the unit's `hooks` array in place
+  (`hooks = []`) instead of deleting the unit, so every other hook keeps
+  its position and Codex keeps its trust. A later
+  `harness apply --runtime codex --install` re-renders the block and
+  brings the unit back. Alternatively set `enabled: false` on this pack
+  and re-run `harness apply --runtime codex --install`.
 
 The operator pause (`harness pause`) does not switch this gate off.
 

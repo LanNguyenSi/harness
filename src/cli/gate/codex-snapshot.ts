@@ -1,14 +1,17 @@
 // Snapshot file format and shared path handling for `harness gate disable
 // --runtime codex` / `harness gate enable --runtime codex`.
 //
-// A Codex snapshot records one `gate disable --runtime codex` call: the hook
-// units removed from the harness-managed block of the Codex config, with
-// their exact text and offsets in the config as it was before the removal,
-// plus the sha256 of the config before and after. It lives beside the Codex
-// config under its own file prefix and carries `version: 2` and
-// `target: "codex"`, so a Claude settings snapshot (version 1, no target)
-// can never be restored into TOML and a Codex snapshot can never be read as
-// a settings.json one (`readSnapshot` rejects version 2).
+// `gate disable --runtime codex` does not delete a hook unit: it neutralises
+// it in place, replacing the unit's `hooks = [...]` line with `hooks = []`.
+// Codex keys a user hook's trust and enabled state by its position in the
+// event's array, and an empty group takes its position without registering
+// a handler, so every other hook keeps its trust. A Codex snapshot records
+// one such call: per neutralised unit its identity and the verbatim original
+// `hooks = [...]` line, plus the sha256 of the config before and after. It
+// lives beside the Codex config under its own file prefix and carries
+// `version: 3` and `target: "codex"`, so a Claude settings snapshot (version
+// 1, no target) can never be restored into TOML and a Codex snapshot can
+// never be read as a settings.json one (`readSnapshot` rejects version 3).
 
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -20,22 +23,21 @@ import {
 import { SNAPSHOT_BASENAME_SUFFIX, snapshotFieldProblem } from "./snapshot.js";
 
 export const CODEX_SNAPSHOT_BASENAME_PREFIX = "harness.gate-disable-codex.";
-export const CODEX_SNAPSHOT_VERSION = 2 as const;
+export const CODEX_SNAPSHOT_VERSION = 3 as const;
 export const CODEX_SNAPSHOT_TARGET = "codex" as const;
+/** The value a neutralised unit's `hooks` line carries. */
+export const CODEX_NEUTRALISED_HOOKS = "hooks = []";
 
-export interface CodexRemovedUnit {
+export interface CodexDisabledUnit {
   event: string;
-  /** Position of the unit among the units of its event, at removal time. */
+  /** Position of the unit among the units of its event in the block. */
   eventIndex: number;
-  /** Position of the unit among all units of the block, at removal time. */
+  /** Position of the unit among all units of the block. */
   ordinal: number;
   id: string;
   matcher: string | null;
-  /** Offsets of the slab `[start, end)` in the config BEFORE the removal. */
-  start: number;
-  end: number;
-  /** The slab text, verbatim (`text.length === end - start`). */
-  text: string;
+  /** The unit's original `hooks = [...]` line, verbatim, without its line terminator. */
+  hooksText: string;
 }
 
 export interface CodexGateSnapshot {
@@ -49,8 +51,8 @@ export interface CodexGateSnapshot {
   configBeforeSha256: string;
   configAfterSha256: string;
   filter: { matcher?: string };
-  /** Removed units in ascending offset order. */
-  removed: CodexRemovedUnit[];
+  /** The neutralised units in block order. */
+  neutralised: CodexDisabledUnit[];
 }
 
 export interface ResolvedCodexConfig {
@@ -58,6 +60,37 @@ export interface ResolvedCodexConfig {
   requestedPath: string;
   /** The regular file read and written (the symlink's target when linked). */
   configPath: string;
+}
+
+/** Installer refusal texts are worded for `harness apply --install`. Reached
+ * through the gate they would tell the operator about an install that never
+ * ran, so each known phrase is mapped to the gate's own wording. */
+const GATE_WORDING: ReadonlyArray<readonly [string, string]> = [
+  [
+    "refusing to install, because without parsing it harness cannot confirm that every table outside the harness-managed hook block would survive the install",
+    "refusing to edit, because without parsing it harness cannot confirm that every table outside the harness-managed hook block would survive the edit",
+  ],
+  ["installing would change", "the gate edit would change"],
+  ["refusing to install rather than risk", "refusing to edit rather than risk"],
+  ["refusing to install, nothing was written", "refusing to edit, nothing was written"],
+  ["The Codex config harness would write to", "The Codex config the gate would write to"],
+  [
+    "restore it from the most recent .harness-backup-* file (if one exists)",
+    "restore it from the backup the gate wrote beside it (<config>.bak.<timestamp>, if one exists)",
+  ],
+];
+
+/** The message of an installer refusal in the gate's wording. */
+export function gateWording(message: string): string {
+  let out = message;
+  for (const [from, to] of GATE_WORDING) out = out.split(from).join(to);
+  return out;
+}
+
+/** An installer refusal becomes the gate verb's own error type (same text in
+ * the gate's wording); anything else is rethrown unchanged by the caller. */
+export function toGateError(err: unknown, makeError: (message: string) => Error): unknown {
+  return err instanceof CodexInstallRefusalError ? makeError(gateWording(err.message)) : err;
 }
 
 /** Resolves `--config` (or the default `~/.codex/config.toml`) the way the
@@ -75,7 +108,7 @@ export function resolveCodexConfig(
   try {
     return { requestedPath, configPath: resolveConfigSymlink(requestedPath) };
   } catch (err) {
-    throw err instanceof CodexInstallRefusalError ? makeError(err.message) : err;
+    throw toGateError(err, makeError);
   }
 }
 
@@ -100,24 +133,26 @@ export interface CodexSnapshotReadErr {
   reason: string;
 }
 
-function isRemovedUnit(value: unknown): value is CodexRemovedUnit {
+function isNonNegativeInteger(value: unknown): boolean {
+  return Number.isInteger(value) && (value as number) >= 0;
+}
+
+function isDisabledUnit(value: unknown): value is CodexDisabledUnit {
   if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
   const u = value as Record<string, unknown>;
   return (
     typeof u["event"] === "string" &&
     typeof u["id"] === "string" &&
     (u["matcher"] === null || typeof u["matcher"] === "string") &&
-    Number.isInteger(u["eventIndex"]) &&
-    Number.isInteger(u["ordinal"]) &&
-    Number.isInteger(u["start"]) &&
-    Number.isInteger(u["end"]) &&
-    typeof u["text"] === "string" &&
-    (u["end"] as number) - (u["start"] as number) === u["text"].length &&
-    (u["start"] as number) >= 0
+    isNonNegativeInteger(u["eventIndex"]) &&
+    isNonNegativeInteger(u["ordinal"]) &&
+    typeof u["hooksText"] === "string" &&
+    u["hooksText"].startsWith("hooks = [") &&
+    !/[\r\n]/.test(u["hooksText"])
   );
 }
 
-/** Parses a Codex snapshot. Anything that is not a version-2 snapshot with
+/** Parses a Codex snapshot. Anything that is not a version-3 snapshot with
  * `target: "codex"` is refused, so a Claude snapshot renamed into place is
  * never restored into a TOML file. */
 export function readCodexSnapshot(filePath: string): CodexSnapshotReadOk | CodexSnapshotReadErr {
@@ -131,6 +166,16 @@ export function readCodexSnapshot(filePath: string): CodexSnapshotReadOk | Codex
     return { ok: false, reason: `snapshot ${filePath} is not a JSON object` };
   }
   const obj = parsed as Record<string, unknown>;
+  if (obj["target"] === CODEX_SNAPSHOT_TARGET && obj["version"] === 2) {
+    return {
+      ok: false,
+      reason:
+        `snapshot ${filePath} is a version 2 Codex gate snapshot, written by an earlier build that ` +
+        "deleted the hook unit instead of neutralising it; it cannot be restored. Re-run " +
+        "`harness apply --runtime codex --install` to rewrite the block, or restore the config " +
+        "from the backup beside it, then remove this snapshot.",
+    };
+  }
   if (obj["version"] !== CODEX_SNAPSHOT_VERSION || obj["target"] !== CODEX_SNAPSHOT_TARGET) {
     return {
       ok: false,
@@ -148,9 +193,17 @@ export function readCodexSnapshot(filePath: string): CodexSnapshotReadOk | Codex
     "configAfterSha256",
   ]);
   if (problem !== null) return { ok: false, reason: problem };
-  const removed = obj["removed"];
-  if (!Array.isArray(removed) || removed.length === 0 || !removed.every(isRemovedUnit)) {
-    return { ok: false, reason: `snapshot ${filePath} has a malformed "removed" list` };
+  const units = obj["neutralised"];
+  if (!Array.isArray(units) || units.length === 0 || !units.every(isDisabledUnit)) {
+    return { ok: false, reason: `snapshot ${filePath} has a malformed "neutralised" list` };
+  }
+  const ids = new Set(units.map((u: CodexDisabledUnit) => u.id));
+  const ordinals = new Set(units.map((u: CodexDisabledUnit) => u.ordinal));
+  if (ids.size !== units.length || ordinals.size !== units.length) {
+    return {
+      ok: false,
+      reason: `snapshot ${filePath} lists the same hook unit id or block position twice in "neutralised"`,
+    };
   }
   return { ok: true, snapshot: obj as unknown as CodexGateSnapshot };
 }

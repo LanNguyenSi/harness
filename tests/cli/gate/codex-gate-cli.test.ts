@@ -84,7 +84,7 @@ describe("harness gate --runtime codex", () => {
     expect(off.stdout).toContain(`disabled 1 hook unit(s) in ${configPath}:`);
     expect(off.stdout).toContain('PreToolUse[0] matcher="apply_patch"');
     expect(off.stdout).toContain("harness gate enable --runtime codex");
-    expect(fs.readFileSync(configPath, "utf8")).not.toContain("branch-protection");
+    expect(fs.readFileSync(configPath, "utf8")).not.toContain("harness pack hook branch-protection");
 
     const on = await gate("enable", "--runtime", "codex", "--config", configPath);
     expect(on.code).toBe(EX_OK);
@@ -93,7 +93,108 @@ describe("harness gate --runtime codex", () => {
 
     const again = await gate("enable", "--runtime", "codex", "--config", configPath);
     expect(again.code).toBe(EX_OK);
-    expect(again.stdout).toContain("Codex config already matches the pre-disable state");
+    expect(again.stdout).toContain("no hook unit of the harness-managed block");
+    expect(again.stdout).toContain("is disabled; no write needed");
+  });
+
+  it("lists a neutralised unit as disabled", async () => {
+    await gate("disable", "--runtime", "codex", "--config", configPath, "--matcher", "apply_patch");
+    const list = await gate("disable", "--runtime", "codex", "--config", configPath);
+    expect(list.code).toBe(EX_OK);
+    expect(list.stdout).toContain("PreToolUse[0] matcher=\"apply_patch\": policy-pack:branch-protection:pre-tool-use [disabled]");
+  });
+
+  it("refuses a second disable of the same unit with a non-zero exit and writes nothing", async () => {
+    await gate("disable", "--runtime", "codex", "--config", configPath, "--matcher", "apply_patch");
+    const disabled = fs.readFileSync(configPath, "utf8");
+    const again = await gate("disable", "--runtime", "codex", "--config", configPath, "--matcher", "apply_patch");
+    expect(again.code).toBe(EX_FAIL);
+    expect(again.stderr).toContain("already disabled");
+    expect(fs.readFileSync(configPath, "utf8")).toBe(disabled);
+  });
+
+  it("one enable restores two disables; a unit no snapshot covers exits non-zero and is named", async () => {
+    const original = fs.readFileSync(configPath, "utf8");
+    const second = generateCodexConfig(
+      parseManifest({
+        version: 1,
+        hooks: [
+          {
+            name: "policy-pack:branch-protection:pre-tool-use",
+            event: "PreToolUse",
+            match: "apply_patch",
+            command: "harness pack hook branch-protection --runtime codex",
+            blocking: "hard",
+            budget_ms: 5000,
+          },
+          {
+            name: "shell-guard",
+            event: "PreToolUse",
+            match: "Bash",
+            command: "harness pack hook shell-guard --runtime codex",
+            blocking: "hard",
+            budget_ms: 5000,
+          },
+        ],
+      }),
+    );
+    writeCodexConfigInstall(
+      planCodexConfigInstall({ configPath, generatedPath: "/gen/codex/config.toml", generatedContent: second.content }),
+      { now: new Date("2026-10-01T01:00:00.000Z") },
+    );
+    const installed = fs.readFileSync(configPath, "utf8");
+    expect(installed).not.toBe(original);
+
+    await gate("disable", "--runtime", "codex", "--config", configPath, "--matcher", "apply_patch");
+    await gate("disable", "--runtime", "codex", "--config", configPath, "--matcher", "Bash");
+    const snaps = fs
+      .readdirSync(tmp)
+      .filter((n) => n.startsWith("harness.gate-disable-codex."))
+      .sort();
+    expect(snaps).toHaveLength(2);
+    // Both snapshots were taken within one second; order them by mtime for the walk.
+    fs.utimesSync(path.join(tmp, snaps[0]!), new Date("2026-10-02T10:00:00Z"), new Date("2026-10-02T10:00:00Z"));
+    fs.utimesSync(path.join(tmp, snaps[1]!), new Date("2026-10-02T11:00:00Z"), new Date("2026-10-02T11:00:00Z"));
+    const on = await gate("enable", "--runtime", "codex", "--config", configPath);
+    expect(on.code).toBe(EX_OK);
+    expect(on.stdout).toContain("restored 2 hook unit(s)");
+    expect(fs.readFileSync(configPath, "utf8")).toBe(installed);
+
+    // Now drop the older snapshot after two fresh disables: one unit stays off, and enable says so.
+    await gate("disable", "--runtime", "codex", "--config", configPath, "--matcher", "apply_patch");
+    const fresh = fs.readdirSync(tmp).filter((n) => n.startsWith("harness.gate-disable-codex."));
+    for (const name of fresh) fs.rmSync(path.join(tmp, name));
+    await gate("disable", "--runtime", "codex", "--config", configPath, "--matcher", "Bash");
+    const partial = await gate("enable", "--runtime", "codex", "--config", configPath);
+    expect(partial.code).toBe(EX_FAIL);
+    expect(partial.stdout).toContain("restored 1 hook unit(s)");
+    expect(partial.stderr).toContain("1 hook unit(s)");
+    expect(partial.stderr).toContain("are still disabled: policy-pack:branch-protection:pre-tool-use");
+    const stuck = await gate("enable", "--runtime", "codex", "--config", configPath);
+    expect(stuck.code).toBe(EX_FAIL);
+    expect(stuck.stdout).not.toContain("no write needed");
+    expect(stuck.stderr).toContain("are still disabled");
+  });
+
+  it("exits non-zero for a missing config, a config without a block and a duplicate BEGIN marker", async () => {
+    const missing = await gate("disable", "--runtime", "codex", "--config", path.join(tmp, "absent.toml"), "--matcher", "x");
+    expect(missing.code).toBe(EX_FAIL);
+    expect(missing.stderr).toContain("Codex config not found");
+
+    const plain = path.join(tmp, "plain.toml");
+    fs.writeFileSync(plain, 'model = "gpt-5.5"\n');
+    const noBlock = await gate("disable", "--runtime", "codex", "--config", plain, "--matcher", "x");
+    expect(noBlock.code).toBe(EX_FAIL);
+    expect(noBlock.stderr).toContain("no harness-managed Codex hook block");
+    expect(fs.readFileSync(plain, "utf8")).toBe('model = "gpt-5.5"\n');
+
+    const twice = path.join(tmp, "twice.toml");
+    fs.writeFileSync(twice, `${fs.readFileSync(configPath, "utf8")}\n# BEGIN harness-managed codex hooks\n`);
+    const before = fs.readFileSync(twice, "utf8");
+    const dup = await gate("disable", "--runtime", "codex", "--config", twice, "--matcher", "apply_patch");
+    expect(dup.code).toBe(EX_FAIL);
+    expect(dup.stderr).toContain("more than one");
+    expect(fs.readFileSync(twice, "utf8")).toBe(before);
   });
 
   it("exits non-zero with the reason and writes nothing when no unit matches", async () => {

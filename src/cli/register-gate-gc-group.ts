@@ -7,8 +7,9 @@ import { gateEnable, GateEnableError } from "./gate/enable.js";
 
 const RUNTIME_HELP =
   "which runtime's hook config to edit: claude (default, ~/.claude/settings.json) or codex " +
-  "(~/.codex/config.toml, the harness-managed block). A later `harness apply --runtime codex " +
-  "--install` re-renders that block and brings removed units back";
+  "(~/.codex/config.toml, the harness-managed block). With codex, a unit is neutralised in place " +
+  "(its `hooks` array becomes empty, so other hooks keep their trust because positions do not move). " +
+  "A later `harness apply --runtime codex --install` re-renders that block and brings disabled units back";
 
 /** Validates `--runtime` and the path flag that belongs to it. */
 function parseGateRuntime(
@@ -49,9 +50,10 @@ export function registerGateGcGroup(
       "Remove hook groups from ~/.claude/settings.json whose `matcher` substring-matches " +
         "`--matcher <pattern>`. Writes a snapshot of the removed groups next to settings.json " +
         "(`harness.gate-disable.<ts>.json`) and backs up the original to `settings.json.bak.<ts>` " +
-        "so `harness gate enable` can restore them. With `--runtime codex` the same happens to the " +
-        "hook units of the harness-managed block in ~/.codex/config.toml (snapshot " +
-        "`harness.gate-disable-codex.<ts>.json`). With no `--matcher` flag, lists the candidate " +
+        "so `harness gate enable` can restore them. With `--runtime codex` the matching hook units " +
+        "of the harness-managed block in ~/.codex/config.toml are neutralised in place instead " +
+        "(`hooks = []`, so the position of every other hook stays) and their original lines go " +
+        "to `harness.gate-disable-codex.<ts>.json`. With no `--matcher` flag, lists the candidate " +
         "groups without writing.",
     )
     .option("--matcher <pattern>", "remove groups whose matcher includes this substring")
@@ -71,7 +73,7 @@ export function registerGateGcGroup(
           stdout(`candidate ${plural} in ${result.path}:\n`);
           for (const c of result.candidates) {
             const matcherLabel = c.matcher === null ? "(no matcher)" : JSON.stringify(c.matcher);
-            stdout(`  ${c.event}[${c.index}] matcher=${matcherLabel}: ${c.description}\n`);
+            stdout(`  ${c.event}[${c.index}] matcher=${matcherLabel}: ${c.description}${c.disabled ? " [disabled]" : ""}\n`);
           }
           stdout(
             `\nPass --matcher <substring> to remove ${runtime === "codex" ? "a unit" : "a group"}. Removal is reversible via ` +
@@ -103,8 +105,12 @@ export function registerGateGcGroup(
       "Restore hook groups from the newest `harness.gate-disable.*.json` snapshot next to " +
         "settings.json. Refuses if settings.json has been edited since the snapshot was taken " +
         "(use `--force` to restore anyway). Idempotent: if settings.json already matches the " +
-        "pre-disable state, exits 0 without writing. With `--runtime codex` it restores the newest " +
-        "`harness.gate-disable-codex.*.json` snapshot next to ~/.codex/config.toml the same way.",
+        "pre-disable state, exits 0 without writing. With `--runtime codex` it walks the " +
+        "`harness.gate-disable-codex.*.json` snapshots next to ~/.codex/config.toml newest first " +
+        "and restores every one that still applies, so two disables need one enable. It exits " +
+        "non-zero and names the units when any hook unit stays disabled. `--force` restores a " +
+        "unit of the snapshot into the block as it is now, found by its id, even when the " +
+        "config was edited since; it refuses when that unit is missing or not disabled.",
     )
     .option("--settings <path>", "override ~/.claude/settings.json (--runtime claude)")
     .option("--config <path>", "override ~/.codex/config.toml (--runtime codex)")
@@ -112,7 +118,6 @@ export function registerGateGcGroup(
     .option("--force", "restore even when the config has been edited since the snapshot")
     .action(async (options: { settings?: string; config?: string; runtime?: string; force?: boolean }) => {
       const runtime = parseGateRuntime(options);
-      const label = runtime === "codex" ? "Codex config" : "settings.json";
       try {
         const result =
           runtime === "codex"
@@ -125,21 +130,37 @@ export function registerGateGcGroup(
                 ...(options.force ? { force: true } : {}),
               });
         const target = "configPath" in result ? result.configPath : result.settingsPath;
+        const stillDisabled = "stillDisabled" in result ? result.stillDisabled : [];
         if (result.mode === "no-snapshots") {
-          stdout(`no gate-disable snapshots found next to ${target}; nothing to restore.\n`);
-          return;
-        }
-        if (result.mode === "already-restored") {
+          if (stillDisabled.length === 0) {
+            stdout(`no gate-disable snapshots found next to ${target}; nothing to restore.\n`);
+          }
+        } else if (result.mode === "already-restored") {
+          if (stillDisabled.length === 0) {
+            stdout(
+              (runtime === "codex"
+                ? `no hook unit of the harness-managed block in ${target} is disabled; no write needed. `
+                : `settings.json already matches the pre-disable state; no write needed. `) +
+                `(snapshot: ${result.snapshotPath})\n`,
+            );
+          }
+        } else {
+          const from =
+            "snapshotPaths" in result ? result.snapshotPaths.join(", ") : result.snapshotPath;
           stdout(
-            `${label} already matches the pre-disable state; no write needed. ` +
-              `(snapshot: ${result.snapshotPath})\n`,
+            `restored ${result.restoredCount} ${runtime === "codex" ? "hook unit(s)" : "hook group(s)"} ` +
+              `into ${target} from ${from}.\n`,
           );
-          return;
         }
-        stdout(
-          `restored ${result.restoredCount} ${runtime === "codex" ? "hook unit(s)" : "hook group(s)"} ` +
-            `into ${target} from ${result.snapshotPath}.\n`,
-        );
+        if (stillDisabled.length > 0) {
+          throw new HarnessExitError(
+            `${stillDisabled.length} hook unit(s) in ${target} are still disabled: ${stillDisabled.join(", ")}. ` +
+              "No Codex gate snapshot restores them. Restore the config from the backup beside it " +
+              "(<config>.bak.<timestamp>), or re-run `harness apply --runtime codex --install` to " +
+              "re-render the block.",
+            EX_FAIL,
+          );
+        }
       } catch (err) {
         if (err instanceof GateEnableError) {
           throw new HarnessExitError(err.message, EX_FAIL);
@@ -152,7 +173,14 @@ export function registerGateGcGroup(
 interface GateDisableView {
   mode: "list" | "remove";
   path: string;
-  candidates: Array<{ event: string; index: number; matcher: string | null; description: string }>;
+  candidates: Array<{
+    event: string;
+    index: number;
+    matcher: string | null;
+    description: string;
+    /** Codex only: the unit was neutralised by an earlier `gate disable`. */
+    disabled?: boolean;
+  }>;
   backupPath: string;
   snapshotPath: string;
   removed: Array<{ event: string; index: number; matcher: string | null }>;
@@ -176,7 +204,7 @@ function runGateDisable(
       path: r.configPath,
       backupPath: r.backupPath,
       snapshotPath: r.snapshotPath,
-      removed: r.removed.map((u) => ({ event: u.event, index: u.eventIndex, matcher: u.matcher })),
+      removed: r.neutralised.map((u) => ({ event: u.event, index: u.eventIndex, matcher: u.matcher })),
     };
   }
   const r = gateDisable({
