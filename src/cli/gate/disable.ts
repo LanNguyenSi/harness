@@ -11,9 +11,11 @@
 // added to its audit trail) instead of starting a second one, so a single
 // `gate enable` brings every removed group back. A live snapshot that is
 // spent (the file is back at its pre-disable state, or holds every group it
-// names) is retired first and a fresh one is started; a live snapshot the
-// file has drifted from while groups are still missing makes this verb
-// refuse, writing nothing, and points at `gate enable --force`.
+// names unchanged) is retired first and a fresh one is started; a live
+// snapshot the file has drifted from while a group is still missing, or is
+// there only with other content, makes this verb refuse, writing nothing but
+// the retire of the spent snapshots it walked past, and points at
+// `gate enable --force`.
 //
 // With NO `--matcher`, this verb is a pure listing — it prints the
 // candidate groups and exits without writing. That's the no-args
@@ -29,7 +31,9 @@ import * as path from "node:path";
 import { atomicWriteFile } from "../../io/atomic-write.js";
 import {
   backupPath,
+  changedLabel,
   type GateDisableSnapshot,
+  groupCommands,
   groupLabel,
   listLiveSnapshots,
   type LiveSnapshot,
@@ -161,15 +165,7 @@ function summarizeGroup(group: unknown): string {
   if (group === null || typeof group !== "object" || Array.isArray(group)) {
     return "<malformed group>";
   }
-  const obj = group as Record<string, unknown>;
-  const inner = Array.isArray(obj["hooks"]) ? (obj["hooks"] as unknown[]) : [];
-  const cmds: string[] = [];
-  for (const h of inner) {
-    if (h !== null && typeof h === "object" && !Array.isArray(h)) {
-      const cmd = (h as Record<string, unknown>)["command"];
-      if (typeof cmd === "string") cmds.push(cmd);
-    }
-  }
+  const cmds = groupCommands(group);
   if (cmds.length === 0) return "<no commands>";
   // Truncate aggressively — operators reading the list want to scan
   // matchers, not full command paths.
@@ -259,7 +255,7 @@ export function gateDisable(opts: GateDisableOptions = {}): GateDisableResult {
     target === undefined ? 0 : Math.max(...target.snapshot.removed.map((r) => r.step ?? 0), 0) + 1;
   const stepped: RemovedGroup[] = removed.map((r) => ({ ...r, step }));
   const snapPath = target?.path ?? snapshotPath(settingsPath, now);
-  const retired = spent.map((l) => retireSnapshot(l.path));
+  const retired = retireSpent(spent, settingsPath);
 
   // Backup BEFORE we touch the live file. If the backup write fails we
   // bail without having mutated anything.
@@ -320,13 +316,19 @@ export function gateDisable(opts: GateDisableOptions = {}): GateDisableResult {
   } catch (err) {
     if (priorSnapshot !== undefined) {
       // The merged snapshot now describes a removal that never happened to
-      // the file. Put the live snapshot back to what it was, best effort; if
-      // that fails too, `gate enable` still restores it, because it skips a
-      // group the file still holds.
+      // the file. Put the live snapshot back to what it was; if that fails
+      // too, `gate enable` still restores it, because it leaves a group the
+      // file still holds unchanged alone, and the operator is told so.
       try {
         atomicWriteFile(snapPath, priorSnapshot);
-      } catch {
-        // Nothing more to do; the original error is the one to report.
+      } catch (rollbackErr) {
+        throw new GateDisableError(
+          `cannot write ${settingsPath}: ${(err as Error).message}; and the snapshot ${snapPath}, already merged, ` +
+            `could not be put back (${(rollbackErr as Error).message}). ${settingsPath} still holds the groups this ` +
+            `disable meant to remove. Run \`harness gate enable\` (same --settings) to put back what the earlier ` +
+            `disables removed (add --force if it refuses; a group the file still holds is left alone), then run ` +
+            `this disable again.`,
+        );
       }
     }
     throw err;
@@ -344,15 +346,36 @@ export function gateDisable(opts: GateDisableOptions = {}): GateDisableResult {
 }
 
 /**
+ * Retires the spent snapshots a disable walked past, returning their retired
+ * names. A failed rename stops the disable before it writes anything, naming
+ * the snapshot and the way out instead of a bare errno.
+ */
+function retireSpent(spent: LiveSnapshot[], settingsPath: string): string[] {
+  return spent.map((l) => {
+    try {
+      return retireSnapshot(l.path);
+    } catch (err) {
+      throw new GateDisableError(
+        `the live gate snapshot ${l.path} is spent (${settingsPath} holds every group it names, enable would only ` +
+          `retire it) but cannot be retired (${(err as Error).message}). Move it out of the directory by hand (or ` +
+          `rename it to *.restored.json) and run this again. ${settingsPath} was not changed.`,
+      );
+    }
+  });
+}
+
+/**
  * Which live snapshot a new disable joins, and which spent ones it retires
  * first. Newest first, for each live snapshot:
  * - the file is exactly the state it left (post-disable sha): join it;
- * - the file already holds every group it names (same event and matcher),
- *   which includes being back at its pre-disable state: it is spent, `gate
- *   enable` would only retire it, so retire it here and look at the next
- *   older one;
- * - otherwise the file has drifted while groups are still missing: refuse
- *   (nothing is written yet) and name the way out.
+ * - the file already holds every group it names unchanged, which includes
+ *   being back at its pre-disable state: it is spent, `gate enable` would
+ *   only retire it, so retire it here and look at the next older one;
+ * - otherwise the file has drifted while a group is still missing, or is
+ *   there only with other content (which may be another hook sharing the
+ *   matcher): retire the spent snapshots walked past, so the way out stays
+ *   `gate enable --force` and this disable again, then refuse before
+ *   writing anything else.
  * No live snapshot left to join means a fresh snapshot.
  */
 function chooseSnapshot(
@@ -366,17 +389,34 @@ function chooseSnapshot(
     const snap = candidate.snapshot;
     if (snap.settingsAfterSha256 === beforeSha) return { target: candidate, spent };
     const plan = planRestore(parsed.hooks ?? {}, snap);
-    if (plan.restored.length === 0) {
+    if (plan.restored.length === 0 && plan.changed.length === 0) {
       spent.push(candidate);
       continue;
     }
+    const retired = retireSpent(spent, settingsPath);
+    const problems = [
+      ...(plan.restored.length > 0
+        ? [
+            `${plan.restored.length} hook group(s) it removed are still missing ` +
+              `(${plan.restored.map((r) => groupLabel(r.event, r.group)).join("; ")})`,
+          ]
+        : []),
+      ...(plan.changed.length > 0
+        ? [
+            `${plan.changed.length} hook group(s) of the file have the event and matcher of one it removed but other ` +
+              `content, so they do not count as back (${plan.changed.map(changedLabel).join("; ")})`,
+          ]
+        : []),
+    ];
     throw new GateDisableError(
-      `${settingsPath} is not the state the live snapshot ${candidate.path} left, and ` +
-        `${plan.restored.length} hook group(s) it removed are still missing ` +
-        `(${plan.restored.map((r) => groupLabel(r.event, r.group)).join("; ")}); merging this disable into it ` +
-        `would lose track of them. Nothing was changed. Run \`harness gate enable --force\` to put them back ` +
-        `(a group that is already there is left alone, other edits stay; use the same --settings), then run ` +
-        `this again.`,
+      `${settingsPath} is not the state the live snapshot ${candidate.path} left, and ${problems.join("; ")}; ` +
+        `merging this disable into it would lose track of them. ` +
+        (retired.length > 0
+          ? `Retired the spent snapshot(s) walked past first (${retired.join(", ")}); nothing else was changed. `
+          : `Nothing was changed. `) +
+        `Run \`harness gate enable --force\` (same --settings): it puts the missing groups back, takes a group ` +
+        `with the same event and matcher as back and prints both groups' commands, and keeps every other edit. ` +
+        `Then run this again.`,
     );
   }
   return { target: undefined, spent };

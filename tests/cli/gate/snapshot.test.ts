@@ -12,6 +12,8 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+  changedLabel,
+  groupCommands,
   groupLabel,
   listLiveSnapshots,
   listSnapshots,
@@ -242,7 +244,49 @@ describe("retireSnapshot / listLiveSnapshots", () => {
     const foreign = put("2026-08-02T10:00:00.000Z", { settingsPath: path.join(tmp, "settings.local.json") });
     const r = listLiveSnapshots(settings());
     if (!r.ok) throw new Error("expected ok");
-    expect(r.skippedForeign).toEqual([foreign]);
+    expect(r.skippedForeign).toEqual([
+      { path: foreign, settingsPath: path.join(tmp, "settings.local.json"), settingsExists: false },
+    ]);
+  });
+
+  it("names the recorded file beside the target, whatever directory the snapshot recorded, and whether it exists", () => {
+    fs.writeFileSync(path.join(tmp, "settings.local.json"), "{}\n");
+    const foreign = put("2026-08-02T10:00:00.000Z", { settingsPath: "/elsewhere/settings.local.json" });
+    const r = listLiveSnapshots(settings());
+    if (!r.ok) throw new Error("expected ok");
+    expect(r.skippedForeign).toEqual([
+      { path: foreign, settingsPath: path.join(tmp, "settings.local.json"), settingsExists: true },
+    ]);
+  });
+
+  it("counts a snapshot recorded under another name of the same file (a hard link) as the file's", () => {
+    fs.writeFileSync(settings(), "{}\n");
+    fs.linkSync(settings(), path.join(tmp, "alias.json"));
+    const mine = put("2026-08-01T10:00:00.000Z", { settingsPath: "/old/dir/alias.json" });
+    const r = listLiveSnapshots(settings());
+    if (!r.ok) throw new Error("expected ok");
+    expect(r.live.map((l) => l.path)).toEqual([mine]);
+    expect(r.skippedForeign).toEqual([]);
+  });
+
+  it("does not count a snapshot recorded for another existing file in the directory", () => {
+    fs.writeFileSync(settings(), "{}\n");
+    fs.writeFileSync(path.join(tmp, "other.json"), "{}\n");
+    const foreign = put("2026-08-01T10:00:00.000Z", { settingsPath: path.join(tmp, "other.json") });
+    const r = listLiveSnapshots(settings());
+    if (!r.ok) throw new Error("expected ok");
+    expect(r.live).toEqual([]);
+    expect(r.skippedForeign.map((f) => f.path)).toEqual([foreign]);
+  });
+
+  it("falls back to the basename when the target does not exist", () => {
+    const mine = put("2026-08-01T10:00:00.000Z");
+    const foreign = put("2026-08-02T10:00:00.000Z", { settingsPath: path.join(tmp, "settings.local.json") });
+    fs.writeFileSync(path.join(tmp, "settings.local.json"), "{}\n");
+    const r = listLiveSnapshots(settings());
+    if (!r.ok) throw new Error("expected ok");
+    expect(r.live.map((l) => l.path)).toEqual([mine]);
+    expect(r.skippedForeign.map((f) => f.path)).toEqual([foreign]);
   });
 
   it("tells the file by the basename of the recorded path, however the directory was spelled", () => {
@@ -291,12 +335,62 @@ describe("planRestore", () => {
     expect(current.PreToolUse).toHaveLength(2);
   });
 
-  it("leaves a group alone when the file holds one with the same event and matcher, in any form", () => {
+  it("reports a group with the same event and matcher but other content as changed: not back, never spliced in", () => {
     const current = { PreToolUse: [group("B", "rewritten")] };
+    const entry = { event: "PreToolUse", index: 0, group: group("B", "original") };
+    const plan = planRestore(current, snap([entry]));
+    expect(plan.restored).toEqual([]);
+    expect(plan.alreadyBack).toEqual([]);
+    expect(plan.changed).toEqual([{ entry, current: group("B", "rewritten") }]);
+    expect(plan.hooks["PreToolUse"]).toEqual(current.PreToolUse);
+  });
+
+  it("leaves a group alone when the file holds an unchanged copy of it", () => {
+    const current = { PreToolUse: [group("B", "original")] };
     const plan = planRestore(current, snap([{ event: "PreToolUse", index: 0, group: group("B", "original") }]));
     expect(plan.restored).toEqual([]);
     expect(plan.alreadyBack).toHaveLength(1);
+    expect(plan.changed).toEqual([]);
     expect(plan.hooks["PreToolUse"]).toEqual(current.PreToolUse);
+  });
+
+  it("pairs unchanged copies first, so another group sharing the matcher never hides a missing one", () => {
+    // Both Write|Edit groups were removed; only the operator's own came back.
+    const gate = group("Write|Edit", "branch-protection");
+    const own = group("Write|Edit", "my-guard");
+    const plan = planRestore(
+      { PreToolUse: [own] },
+      snap([
+        { event: "PreToolUse", index: 0, group: gate },
+        { event: "PreToolUse", index: 1, group: own },
+      ]),
+    );
+    expect(plan.alreadyBack.map((r) => r.group)).toEqual([own]);
+    expect(plan.changed).toEqual([]);
+    expect(plan.restored.map((r) => r.group)).toEqual([gate]);
+    expect(plan.hooks["PreToolUse"]).toEqual([gate, own]);
+  });
+
+  it("takes two groups as equal whatever order their keys were written in", () => {
+    const written = { hooks: [{ command: "b", type: "command" }], matcher: "B" };
+    const plan = planRestore(
+      { PreToolUse: [written] },
+      snap([{ event: "PreToolUse", index: 0, group: { matcher: "B", hooks: [{ type: "command", command: "b" }] } }]),
+    );
+    expect(plan.alreadyBack).toHaveLength(1);
+    expect(plan.changed).toEqual([]);
+  });
+
+  it("pairs a file group with one changed entry only", () => {
+    const plan = planRestore(
+      { PreToolUse: [group("B", "three")] },
+      snap([
+        { event: "PreToolUse", index: 0, group: group("B", "one") },
+        { event: "PreToolUse", index: 1, group: group("B", "two") },
+      ]),
+    );
+    expect(plan.changed.map((c) => c.entry.group)).toEqual([group("B", "one")]);
+    expect(plan.restored.map((r) => r.group)).toEqual([group("B", "two")]);
   });
 
   it("does not take a group of another event for a match", () => {
@@ -328,6 +422,24 @@ describe("planRestore", () => {
       ]),
     );
     expect(plan.hooks["PreToolUse"]?.map((g) => (g as { matcher: string }).matcher)).toEqual(["A", "B", "C"]);
+  });
+
+  it("names a changed group with the commands of both versions", () => {
+    const entry = { event: "PreToolUse", index: 0, group: group("Write|Edit", "branch-protection") };
+    expect(changedLabel({ entry, current: group("Write|Edit", "formatter") })).toBe(
+      'PreToolUse matcher="Write|Edit": the snapshot\'s group runs `branch-protection`, the file\'s group runs `formatter`',
+    );
+    expect(changedLabel({ entry, current: { ...group("Write|Edit", "branch-protection"), timeout: 5 } })).toContain(
+      "(they differ in another field)",
+    );
+    expect(changedLabel({ entry, current: { matcher: "Write|Edit", hooks: [] } })).toContain("the file's group runs no command");
+  });
+
+  it("lists a group's commands, none for a malformed group", () => {
+    expect(groupCommands({ hooks: [{ command: "a" }, { type: "x" }, "junk", { command: "b" }] })).toEqual(["a", "b"]);
+    expect(groupCommands({ hooks: "nope" })).toEqual([]);
+    expect(groupCommands(["not", "an", "object"])).toEqual([]);
+    expect(groupCommands(null)).toEqual([]);
   });
 
   it("names a group by event and matcher, null for one without", () => {

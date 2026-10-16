@@ -11,7 +11,9 @@
 // since unless the result is exactly the pre-disable file (`--force`
 // overrides), writes the removed groups back into place and then retires the
 // snapshot (renamed to `*.restored.json`, kept for audit, never applied
-// again).
+// again). A removed group counts as back only when the file holds an
+// unchanged copy of it; a group that merely shares its event and matcher is
+// taken for it only under `--force`.
 //
 // The format is intentionally narrow: no compression, no transform, just
 // the literal JSON groups as they were read out of settings.json.
@@ -60,7 +62,8 @@ export interface GateDisableSnapshot {
    * Absolute path to the settings.json that was mutated (snapshots written
    * by earlier releases may hold the path as it was typed, relative to a
    * working directory that is gone). Only its basename is used to tell which
-   * file a snapshot belongs to: snapshots always sit beside their file.
+   * file a snapshot belongs to (snapshots always sit beside their file): in
+   * the target's directory it must name the same file as the target.
    */
   settingsPath: string;
   /** Absolute path the pre-mutation copy was written to. */
@@ -238,12 +241,22 @@ export interface LiveSnapshot {
   snapshot: GateDisableSnapshot;
 }
 
+/** A live snapshot beside the target that was taken for another settings file. */
+export interface ForeignSnapshot {
+  /** The snapshot file. */
+  path: string;
+  /** The file it was taken for: its recorded basename in the target's directory. */
+  settingsPath: string;
+  /** Whether a file is at `settingsPath` now (a settings file renamed since the disable is not). */
+  settingsExists: boolean;
+}
+
 export type LiveSnapshotsResult =
   | {
       ok: true;
       live: LiveSnapshot[];
       /** Live snapshots beside the file that name another settings file; never read as this one's. */
-      skippedForeign: string[];
+      skippedForeign: ForeignSnapshot[];
     }
   | {
       ok: false;
@@ -252,27 +265,45 @@ export type LiveSnapshotsResult =
       path: string;
     };
 
+/** Whether two paths name the same file (same device and inode), or null when either cannot be stat'ed. */
+function sameFile(a: string, b: string): boolean | null {
+  try {
+    const sa = fs.statSync(a, { bigint: true });
+    const sb = fs.statSync(b, { bigint: true });
+    return sa.dev === sb.dev && sa.ino === sb.ino;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * The live (not retired) snapshots beside `settingsPath` that were taken for
- * that file, newest first by `createdAt`. A snapshot belongs to the file when
- * the basename of its recorded settings path is the basename of
- * `settingsPath`: it sits in the same directory, so how the directory was
- * spelled when it was written (relative to some other working directory, or
- * through a symlink) must not decide. A snapshot for another settings file in
- * the same directory is listed in `skippedForeign`, never dropped silently. A
- * live snapshot that cannot be read is an error: its target cannot be told,
- * so neither disable nor enable may go on as if it did not exist.
+ * that file, newest first by `createdAt`. Snapshots always sit beside their
+ * file, so only the basename of the recorded settings path counts, never how
+ * the directory was spelled when it was written (relative to some other
+ * working directory, or through a symlink): a snapshot belongs to the file
+ * when that basename, in this directory, is the same file as `settingsPath`
+ * (same device and inode, so another spelling of the name on a
+ * case-insensitive filesystem, or a hard link, still counts). Only when one
+ * of the two cannot be stat'ed (the file is missing) do the basenames decide.
+ * A snapshot for another settings file in the same directory is listed in
+ * `skippedForeign`, never dropped silently. A live snapshot that cannot be
+ * read is an error: its target cannot be told, so neither disable nor enable
+ * may go on as if it did not exist.
  */
 export function listLiveSnapshots(settingsPath: string): LiveSnapshotsResult {
+  const dir = path.dirname(settingsPath);
   const targetName = path.basename(settingsPath);
   const live: LiveSnapshot[] = [];
-  const skippedForeign: string[] = [];
-  for (const file of listSnapshots(path.dirname(settingsPath))) {
+  const skippedForeign: ForeignSnapshot[] = [];
+  for (const file of listSnapshots(dir)) {
     if (file.endsWith(RETIRED_SNAPSHOT_SUFFIX)) continue;
     const read = readSnapshot(file);
     if (!read.ok) return { ok: false, reason: read.reason, path: file };
-    if (path.basename(read.snapshot.settingsPath) !== targetName) {
-      skippedForeign.push(file);
+    const recordedName = path.basename(read.snapshot.settingsPath);
+    const recordedPath = path.join(dir, recordedName);
+    if (!(sameFile(recordedPath, settingsPath) ?? recordedName === targetName)) {
+      skippedForeign.push({ path: file, settingsPath: recordedPath, settingsExists: fs.existsSync(recordedPath) });
       continue;
     }
     live.push({ path: file, snapshot: read.snapshot });
@@ -297,63 +328,128 @@ export function groupLabel(event: string, group: unknown): string {
   return `${event} matcher=${JSON.stringify(groupMatcherOf(group))}`;
 }
 
+/** The `command` strings of a hook group's hooks, in order; empty for a malformed group. */
+export function groupCommands(group: unknown): string[] {
+  if (group === null || typeof group !== "object" || Array.isArray(group)) return [];
+  const inner = (group as Record<string, unknown>)["hooks"];
+  const cmds: string[] = [];
+  for (const h of Array.isArray(inner) ? inner : []) {
+    if (h !== null && typeof h === "object" && !Array.isArray(h)) {
+      const cmd = (h as Record<string, unknown>)["command"];
+      if (typeof cmd === "string") cmds.push(cmd);
+    }
+  }
+  return cmds;
+}
+
+function commandsText(group: unknown): string {
+  const cmds = groupCommands(group);
+  return cmds.length === 0 ? "no command" : cmds.map((c) => `\`${c}\``).join(", ");
+}
+
+/**
+ * JSON with the keys of every object sorted, so two groups compare equal
+ * whatever order an editor or an apply wrote their keys in.
+ */
+function canonicalJson(value: unknown): string {
+  return JSON.stringify(value, (_key, v: unknown) =>
+    v !== null && typeof v === "object" && !Array.isArray(v)
+      ? Object.fromEntries(Object.entries(v as Record<string, unknown>).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)))
+      : v,
+  );
+}
+
+/** A snapshot entry and the group of the file with its event and matcher but other content. */
+export interface ChangedGroup {
+  entry: RemovedGroup;
+  /** The group the file holds in its place. */
+  current: unknown;
+}
+
+/** Names a changed group and the commands of both versions, so the operator can tell whether it is the gate's. */
+export function changedLabel(changed: ChangedGroup): string {
+  const was = commandsText(changed.entry.group);
+  const now = commandsText(changed.current);
+  return (
+    `${groupLabel(changed.entry.event, changed.entry.group)}: the snapshot's group runs ${was}, ` +
+    `the file's group runs ${now}${was === now ? " (they differ in another field)" : ""}`
+  );
+}
+
 export interface RestorePlan {
   /** The hooks block with the groups that were still missing spliced back in; the input is not modified. */
   hooks: Record<string, unknown[]>;
   /** Entries spliced back in. */
   restored: RemovedGroup[];
   /**
-   * Entries left alone because the file already holds a group with the same
-   * event and matcher (put back by hand, re-rendered by an apply, in whatever
-   * form). Never spliced in a second time.
+   * Entries the file already holds unchanged (deep-equal, put back by hand
+   * or by an apply). Left alone, never spliced in a second time.
    */
   alreadyBack: RemovedGroup[];
+  /**
+   * Entries the file holds no unchanged copy of, but a group with the same
+   * event and matcher and other content. That group may be the gate's,
+   * re-rendered, or another hook that happens to share the matcher, so it is
+   * never taken for the entry on its own: `gate enable` and `gate disable`
+   * refuse while there is one, and only `gate enable --force` accepts it as
+   * back. Never spliced in.
+   */
+  changed: ChangedGroup[];
 }
 
 /**
- * What putting a snapshot's removed groups back into `current` would do. An
- * entry is "back" when the file holds a group with its event and matcher
- * (one such group covers one entry, so two removed groups with the same
- * matcher need two in the file). The rest are spliced in at their recorded
- * positions: each removal step recorded its indices against the array as it
- * stood just before that step, so the steps are undone newest first, and
- * inside a step by event and ascending index (an earlier insertion never
- * shifts a later insertion's target index past the array end).
+ * What putting a snapshot's removed groups back into `current` would do. The
+ * entries are paired with the groups of the file one to one: first every
+ * entry with a deep-equal group of the same event (`alreadyBack`), then each
+ * entry left over, in the order the snapshot recorded them, with the first
+ * group still unpaired that has its event and matcher (`changed`). The rest
+ * are spliced in at their recorded positions: each removal step recorded its
+ * indices against the array as it stood just before that step, so the steps
+ * are undone newest first, and inside a step by event and ascending index (an
+ * earlier insertion never shifts a later insertion's target index past the
+ * array end).
  */
 export function planRestore(
   current: Record<string, unknown[]>,
   snapshot: GateDisableSnapshot,
 ): RestorePlan {
   const hooks: Record<string, unknown[]> = {};
-  const present = new Map<string, number>();
+  const unpaired = new Map<string, unknown[]>();
   for (const [event, groups] of Object.entries(current)) {
     hooks[event] = groups.slice();
-    for (const group of groups) {
-      const key = JSON.stringify([event, groupMatcherOf(group)]);
-      present.set(key, (present.get(key) ?? 0) + 1);
-    }
+    unpaired.set(event, groups.slice());
   }
-  const sorted = [...snapshot.removed].sort((a, b) => {
+  const take = (entry: RemovedGroup, same: (group: unknown) => boolean): unknown[] => {
+    const pool = unpaired.get(entry.event) ?? [];
+    const at = pool.findIndex(same);
+    return at === -1 ? [] : pool.splice(at, 1);
+  };
+  const alreadyBack: RemovedGroup[] = [];
+  const leftover: RemovedGroup[] = [];
+  for (const entry of snapshot.removed) {
+    const wanted = canonicalJson(entry.group);
+    if (take(entry, (g) => canonicalJson(g) === wanted).length > 0) alreadyBack.push(entry);
+    else leftover.push(entry);
+  }
+  const changed: ChangedGroup[] = [];
+  const missing: RemovedGroup[] = [];
+  for (const entry of leftover) {
+    const matcher = groupMatcherOf(entry.group);
+    const [match] = take(entry, (g) => groupMatcherOf(g) === matcher);
+    if (match !== undefined) changed.push({ entry, current: match });
+    else missing.push(entry);
+  }
+  const restored = missing.sort((a, b) => {
     const stepA = a.step ?? 0;
     const stepB = b.step ?? 0;
     if (stepA !== stepB) return stepB - stepA;
     if (a.event !== b.event) return a.event < b.event ? -1 : 1;
     return a.index - b.index;
   });
-  const restored: RemovedGroup[] = [];
-  const alreadyBack: RemovedGroup[] = [];
-  for (const entry of sorted) {
-    const key = JSON.stringify([entry.event, groupMatcherOf(entry.group)]);
-    const count = present.get(key) ?? 0;
-    if (count > 0) {
-      present.set(key, count - 1);
-      alreadyBack.push(entry);
-      continue;
-    }
+  for (const entry of restored) {
     const arr = hooks[entry.event] ?? [];
     arr.splice(Math.min(entry.index, arr.length), 0, entry.group);
     hooks[entry.event] = arr;
-    restored.push(entry);
   }
-  return { hooks, restored, alreadyBack };
+  return { hooks, restored, alreadyBack, changed };
 }

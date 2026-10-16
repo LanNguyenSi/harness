@@ -4,6 +4,7 @@ import { codexGateDisable } from "./gate/codex-disable.js";
 import { codexGateEnable } from "./gate/codex-enable.js";
 import { gateDisable, GateDisableError } from "./gate/disable.js";
 import { gateEnable, GateEnableError } from "./gate/enable.js";
+import type { ForeignSnapshot } from "./gate/snapshot.js";
 
 const RUNTIME_HELP =
   "which runtime's hook config to edit: claude (default, ~/.claude/settings.json) or codex " +
@@ -123,13 +124,16 @@ export function registerGateGcGroup(
     .description(
       "Restore the hook groups of the live `harness.gate-disable.*.json` snapshot next to " +
         "settings.json (every `gate disable` since the last restore is merged into it) and retire " +
-        "it as `*.restored.json`. A group settings.json already holds (same event and matcher) is " +
-        "left alone, never added twice. If settings.json has been edited since the snapshot was " +
-        "taken, the groups still missing are put back only when that gives exactly the " +
-        "pre-disable file; otherwise it refuses and `--force` puts them back into the edited file " +
-        "(edits stay). If settings.json already matches the pre-disable state, or holds every " +
-        "group, it only retires the snapshot. Older releases left one snapshot per disable: each call " +
-        "handles the newest, and exits non-zero while another stays live. With `--runtime codex` there is at most one " +
+        "it as `*.restored.json`. A group settings.json already holds unchanged is left alone, " +
+        "never added twice; one with the same event and matcher but other content makes it refuse " +
+        "and name both groups' commands, and `--force` takes it as back. If settings.json has been " +
+        "edited since the snapshot was taken, the groups still missing are put back only when that " +
+        "gives exactly the pre-disable file; otherwise it refuses and `--force` puts them back into " +
+        "the edited file (edits stay). If settings.json already matches the pre-disable state, or " +
+        "holds every group unchanged, it only retires the snapshot. Older releases left one snapshot " +
+        "per disable: each call handles the newest, and exits non-zero while another stays live. It " +
+        "also exits non-zero while a live snapshot beside settings.json was taken for another " +
+        "settings file, naming the `--settings` that restores it. With `--runtime codex` there is at most one " +
         "live `harness.gate-disable-codex.*.json` snapshot per config (another config's is skipped): " +
         "a later disable merges its units into it, and one enable applies it. A snapshot it applies, " +
         "or the config already matches, is renamed to `*.restored.json`; one taken before a later " +
@@ -165,8 +169,10 @@ export function registerGateGcGroup(
         const liveLeft = "remaining" in result ? result.remaining : [];
         const missing = "missing" in result ? result.missing : [];
         const alreadyBack = "alreadyBack" in result ? result.alreadyBack : [];
+        const accepted = "accepted" in result ? result.accepted : [];
+        const foreign = "foreign" in result ? result.foreign : [];
         if (result.mode === "no-snapshots") {
-          if (stillDisabled.length === 0) {
+          if (stillDisabled.length === 0 && foreign.length === 0) {
             stdout(`no gate-disable snapshots found next to ${target}; nothing to restore.\n`);
           }
         } else if (result.mode === "already-restored") {
@@ -174,7 +180,7 @@ export function registerGateGcGroup(
             stdout(
               (runtime === "codex"
                 ? `no hook unit of the harness-managed block in ${target} is disabled; no write needed. `
-                : alreadyBack.length > 0
+                : alreadyBack.length > 0 || accepted.length > 0
                   ? `${target} already holds every hook group the snapshot removed; no write needed. `
                   : `settings.json already matches the pre-disable state; no write needed. `) +
                 `(snapshot: ${result.snapshotPath})\n`,
@@ -188,6 +194,11 @@ export function registerGateGcGroup(
         }
         if (result.mode === "restored" && alreadyBack.length > 0) {
           stdout(`left alone, already in ${target}: ${alreadyBack.join("; ")}.\n`);
+        }
+        if (accepted.length > 0) {
+          stdout(
+            `taken as back under --force, not put back (same event and matcher, other content): ${accepted.join("; ")}.\n`,
+          );
         }
         if ("skippedForeign" in result) {
           for (const p of result.skippedForeign) {
@@ -206,13 +217,15 @@ export function registerGateGcGroup(
           );
         }
         // Claude only: the Codex result's `remaining` is folded into the one error below.
+        const foreignNote = foreign.length > 0 ? foreignSnapshotsNote(target, foreign) : "";
         if (runtime === "claude" && liveLeft.length > 0) {
           throw new HarnessExitError(
             `${liveLeft.length} more gate snapshot(s) are still live next to ${target}: ${liveLeft.join(", ")}. ` +
-              "Their groups are not restored yet; run `harness gate enable` again.",
+              `Their groups are not restored yet; run \`harness gate enable\` again.${foreignNote ? ` ${foreignNote}` : ""}`,
             EX_FAIL,
           );
         }
+        if (foreignNote) throw new HarnessExitError(foreignNote, EX_FAIL);
         const remaining = "remaining" in result ? result.remaining : [];
         if (missing.length > 0 || stillDisabled.length > 0 || remaining.length > 0) {
           throw new HarnessExitError(
@@ -245,6 +258,31 @@ export function registerGateGcGroup(
         throw err;
       }
     });
+}
+
+/**
+ * Why a Claude `gate enable` does not exit 0 while live snapshots of another
+ * settings file sit beside the target: their groups are still removed from
+ * that file. Names each one with the command that restores it.
+ */
+function foreignSnapshotsNote(
+  target: string,
+  foreign: ForeignSnapshot[],
+): string {
+  return (
+    `${foreign.length} gate snapshot(s) beside ${target} were taken for another settings file and their groups ` +
+    `are not restored yet: ` +
+    foreign
+      .map(
+        (f) =>
+          `${f.path}: run \`harness gate enable --settings ${f.settingsPath}\`` +
+          (f.settingsExists
+            ? ""
+            : ` (no file is at that name now: if the settings file was renamed after the disable, rename it back first)`),
+      )
+      .join("; ") +
+    "."
+  );
 }
 
 interface GateDisableView {

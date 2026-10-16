@@ -344,19 +344,46 @@ describe("gateEnable: --force", () => {
     expect(matchersOf()).toEqual(["Write|Edit", "Bash"]);
   });
 
-  it("skips a group the file already holds, in whatever form, and never splices a second copy", () => {
+  it("takes a group with the same event and matcher but other content as back, names both commands, and never splices a second copy", () => {
     editedAfterDisable();
     // The group came back in a changed form (say an apply re-rendered it).
     const handEdited = JSON.parse(fs.readFileSync(settingsPath, "utf8")) as { hooks: { PreToolUse: unknown[] } };
     handEdited.hooks.PreToolUse.push({ matcher: "Write|Edit", hooks: [{ command: "branch-protection --changed" }] });
     fs.writeFileSync(settingsPath, `${JSON.stringify(handEdited, null, 2)}\n`);
+    const before = fs.readFileSync(settingsPath, "utf8");
     const r = gateEnable({ settingsPath, force: true });
     expect(r.mode).toBe("already-restored");
     if (r.mode !== "already-restored") return;
-    expect(r.alreadyBack).toEqual(['PreToolUse matcher="Write|Edit"']);
+    expect(r.alreadyBack).toEqual([]);
+    expect(r.accepted).toEqual([
+      'PreToolUse matcher="Write|Edit": the snapshot\'s group runs `branch-protection`, the file\'s group runs `branch-protection --changed`',
+    ]);
+    expect(fs.readFileSync(settingsPath, "utf8")).toBe(before);
     expect(matchersOf()).toEqual(["Bash", "Write|Edit"]);
     expect(liveSnapshotNames(settingsPath)).toEqual([]);
     expect(retiredSnapshotNames(settingsPath)).toHaveLength(1);
+  });
+
+  it("without --force refuses on such a group, names both commands and --force, and keeps the snapshot live", () => {
+    editedAfterDisable();
+    const handEdited = JSON.parse(fs.readFileSync(settingsPath, "utf8")) as { hooks: { PreToolUse: unknown[] } };
+    handEdited.hooks.PreToolUse.push({ matcher: "Write|Edit", hooks: [{ command: "branch-protection --changed" }] });
+    fs.writeFileSync(settingsPath, `${JSON.stringify(handEdited, null, 2)}\n`);
+    const before = fs.readFileSync(settingsPath, "utf8");
+    let message = "";
+    try {
+      gateEnable({ settingsPath });
+    } catch (err) {
+      expect(err).toBeInstanceOf(GateEnableError);
+      message = (err as Error).message;
+    }
+    expect(message).toContain("`branch-protection`");
+    expect(message).toContain("`branch-protection --changed`");
+    expect(message).toContain("does not count as back");
+    expect(message).toContain("harness gate enable --force");
+    expect(message).not.toContain("more hook group(s) it removed are missing");
+    expect(fs.readFileSync(settingsPath, "utf8")).toBe(before);
+    expect(liveSnapshotNames(settingsPath)).toHaveLength(1);
   });
 
   it("restores what is still missing and skips what is back when only some groups came back by hand", () => {
@@ -368,12 +395,15 @@ describe("gateEnable: --force", () => {
       hooks: { PreToolUse: [{ matcher: "Bash", hooks: [{ command: "bash-hook --by-hand" }] }] },
     };
     fs.writeFileSync(settingsPath, `${JSON.stringify(edited, null, 2)}\n`);
-    expect(() => gateEnable({ settingsPath })).toThrow(/edited since the snapshot/);
+    expect(() => gateEnable({ settingsPath })).toThrow(/1 more hook group\(s\) it removed are missing \(PreToolUse matcher="Write\|Edit"\)/);
     const r = gateEnable({ settingsPath, force: true });
     expect(r.mode).toBe("restored");
     if (r.mode !== "restored") return;
     expect(r.restoredCount).toBe(1);
-    expect(r.alreadyBack).toEqual(['PreToolUse matcher="Bash"']);
+    expect(r.alreadyBack).toEqual([]);
+    expect(r.accepted).toEqual([
+      'PreToolUse matcher="Bash": the snapshot\'s group runs `bash-hook`, the file\'s group runs `bash-hook --by-hand`',
+    ]);
     expect(matchersOf()).toEqual(["Write|Edit", "Bash"]);
     expect(liveSnapshotNames(settingsPath)).toEqual([]);
     expect(gateEnable({ settingsPath, force: true }).mode).toBe("no-snapshots");
@@ -492,8 +522,8 @@ describe("gateEnable: a file that matches neither state", () => {
       operatorAddedKey: "keep",
       hooks: {
         PreToolUse: [
+          { matcher: "Bash", hooks: [{ command: "bash-hook" }] },
           { matcher: "Write|Edit", hooks: [{ command: "branch-protection" }] },
-          { matcher: "Bash", hooks: [{ command: "bash-hook --v2" }] },
         ],
       },
     });
@@ -507,7 +537,7 @@ describe("gateEnable: a file that matches neither state", () => {
     expect(retiredSnapshotNames(settingsPath)).toHaveLength(1);
   });
 
-  it("matches the groups by event and matcher, one file group per snapshot entry", () => {
+  it("pairs a changed group with one snapshot entry only, under --force", () => {
     writeSettings({
       hooks: {
         PreToolUse: [
@@ -531,7 +561,9 @@ describe("gateEnable: a file that matches neither state", () => {
     expect(r.mode).toBe("restored");
     if (r.mode !== "restored") return;
     expect(r.restoredCount).toBe(1);
-    expect(r.alreadyBack).toHaveLength(1);
+    expect(r.alreadyBack).toEqual([]);
+    expect(r.accepted).toHaveLength(1);
+    expect(r.accepted[0]).toContain("`one --v2`");
     expect(matchersOf()).toEqual(["Bash", "Bash", "Task"]);
   });
 });
@@ -597,7 +629,7 @@ describe("gateEnable: snapshot identity", () => {
     if (o.mode !== "remove") throw new Error("expected remove");
     const r = gateEnable({ settingsPath });
     expect(r.mode).toBe("no-snapshots");
-    expect(r.skippedForeign).toEqual([o.snapshotPath]);
+    expect(r.foreign).toEqual([{ path: o.snapshotPath, settingsPath: other, settingsExists: true }]);
   });
 });
 

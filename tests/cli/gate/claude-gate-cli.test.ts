@@ -13,11 +13,27 @@ import {
 let tmp: string;
 let settingsPath: string;
 
+/** Whether the temp directory's filesystem folds the case of names (APFS and HFS+ by default). */
+function caseInsensitiveFs(): boolean {
+  const dir = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), "harness-claude-gate-case-"));
+  try {
+    fs.writeFileSync(path.join(dir, "probe.json"), "{}");
+    return fs.existsSync(path.join(dir, "PROBE.json"));
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
 async function gate(...argv: string[]): Promise<{ stdout: string; stderr: string; code: number }> {
+  return gateOn(settingsPath, ...argv);
+}
+
+/** Runs a gate verb with `--settings file`. */
+async function gateOn(file: string, ...argv: string[]): Promise<{ stdout: string; stderr: string; code: number }> {
   let stdout = "";
   let stderr = "";
   const code = await run({
-    argv: ["gate", ...argv, "--settings", settingsPath],
+    argv: ["gate", ...argv, "--settings", file],
     stdout: (s) => {
       stdout += s;
     },
@@ -173,20 +189,92 @@ describe("harness gate (claude): which file a snapshot belongs to", () => {
     }
   });
 
-  it("names a snapshot taken for another settings file instead of staying silent about it", async () => {
+  it("exits non-zero while a snapshot taken for another settings file beside it is live, naming the --settings that restores it", async () => {
     const other = path.join(tmp, "settings.local.json");
     fs.writeFileSync(other, `${JSON.stringify({ hooks: { PreToolUse: [{ matcher: "Bash", hooks: [{ command: "x" }] }] } }, null, 2)}\n`);
-    const off = await run({
-      argv: ["gate", "disable", "--matcher", "Bash", "--settings", other],
-      stdout: () => undefined,
-      stderr: () => undefined,
-    });
-    expect(off).toBe(EX_OK);
+    const off = await gateOn(other, "disable", "--matcher", "Bash");
+    expect(off.code).toBe(EX_OK);
+    const [snap] = liveSnapshotNames(settingsPath);
+    const on = await gate("enable");
+    expect(on.code).toBe(EX_FAIL);
+    expect(on.stdout).not.toContain("nothing to restore");
+    expect(on.stderr).toContain(`${path.join(tmp, snap ?? "")}: run \`harness gate enable --settings ${other}\``);
+    expect(on.stderr).toContain("taken for another settings file");
+    expect(on.stderr).not.toContain("rename it back");
+
+    // The way out named there works, and then the directory is clean.
+    expect((await gateOn(other, "enable")).code).toBe(EX_OK);
+    const clean = await gate("enable");
+    expect(clean.code).toBe(EX_OK);
+    expect(clean.stdout).toContain("nothing to restore");
+  });
+
+  it("restores its own snapshot and still exits non-zero while another file's snapshot beside it is live", async () => {
+    const original = fs.readFileSync(settingsPath, "utf8");
+    const other = path.join(tmp, "settings.local.json");
+    fs.writeFileSync(other, `${JSON.stringify({ hooks: { PreToolUse: [{ matcher: "Bash", hooks: [{ command: "x" }] }] } }, null, 2)}\n`);
+    expect((await gateOn(other, "disable", "--matcher", "Bash")).code).toBe(EX_OK);
+    expect((await gate("disable", "--matcher", "Write|Edit")).code).toBe(EX_OK);
+    const on = await gate("enable");
+    expect(on.code).toBe(EX_FAIL);
+    expect(on.stdout).toContain("restored 1 hook group(s)");
+    expect(on.stderr).toContain(`harness gate enable --settings ${other}`);
+    expect(fs.readFileSync(settingsPath, "utf8")).toBe(original);
+  });
+
+  it("an enable for a file of another name exits non-zero and names the --settings of the file the snapshot was taken for", async () => {
+    expect((await gate("disable", "--matcher", "Write|Edit")).code).toBe(EX_OK);
+    const on = await gateOn(path.join(tmp, "settings.local.json"), "enable");
+    expect(on.code).toBe(EX_FAIL);
+    expect(on.stdout).not.toContain("nothing to restore");
+    expect(on.stderr).toContain(`harness gate enable --settings ${settingsPath}`);
+    expect((await gate("enable")).code).toBe(EX_OK);
+    expect(groups()).toEqual(["Write|Edit", "Bash"]);
+  });
+
+  it("a settings file renamed after the disable: enable names the recorded name and says to rename it back", async () => {
+    const original = fs.readFileSync(settingsPath, "utf8");
+    expect((await gate("disable", "--matcher", "Write|Edit")).code).toBe(EX_OK);
+    const renamed = path.join(tmp, "settings.renamed.json");
+    fs.renameSync(settingsPath, renamed);
+    const on = await gateOn(renamed, "enable");
+    expect(on.code).toBe(EX_FAIL);
+    expect(on.stdout).not.toContain("nothing to restore");
+    expect(on.stderr).toContain(`harness gate enable --settings ${settingsPath}`);
+    expect(on.stderr).toContain("if the settings file was renamed after the disable, rename it back first");
+    fs.renameSync(renamed, settingsPath);
+    expect((await gate("enable")).code).toBe(EX_OK);
+    expect(fs.readFileSync(settingsPath, "utf8")).toBe(original);
+  });
+
+  it("a snapshot recorded under another name of the same file (a hard link) is restored as the file's", async () => {
+    const original = fs.readFileSync(settingsPath, "utf8");
+    expect((await gate("disable", "--matcher", "Write|Edit")).code).toBe(EX_OK);
+    const [name] = liveSnapshotNames(settingsPath);
+    const snapFile = path.join(tmp, name ?? "");
+    const snap = JSON.parse(fs.readFileSync(snapFile, "utf8")) as Record<string, unknown>;
+    snap["settingsPath"] = path.join(tmp, "alias.json");
+    fs.writeFileSync(snapFile, `${JSON.stringify(snap, null, 2)}\n`);
+    fs.linkSync(settingsPath, path.join(tmp, "alias.json"));
     const on = await gate("enable");
     expect(on.code).toBe(EX_OK);
-    expect(on.stdout).toContain("nothing to restore");
-    expect(on.stdout).toMatch(/skipped .*harness\.gate-disable\..*\.json: taken for another settings file/);
+    expect(on.stdout).toContain("restored 1 hook group(s)");
+    expect(fs.readFileSync(settingsPath, "utf8")).toBe(original);
   });
+
+  it.skipIf(!caseInsensitiveFs())(
+    "a disable through another spelling of the name on a case-insensitive filesystem is restored by the usual spelling",
+    async () => {
+      const original = fs.readFileSync(settingsPath, "utf8");
+      expect((await gateOn(path.join(tmp, "Settings.json"), "disable", "--matcher", "Write|Edit")).code).toBe(EX_OK);
+      const on = await gate("enable");
+      expect(on.code).toBe(EX_OK);
+      expect(on.stdout).toContain("restored 1 hook group(s)");
+      expect(on.stdout).not.toContain("nothing to restore");
+      expect(fs.readFileSync(settingsPath, "utf8")).toBe(original);
+      expect(liveSnapshotNames(settingsPath)).toEqual([]);
+    },
+  );
 });
 
 describe("harness gate (claude): spent and stale snapshots", () => {
@@ -206,8 +294,10 @@ describe("harness gate (claude): spent and stale snapshots", () => {
     const forced = await gate("enable", "--force");
     expect(forced.code).toBe(EX_OK);
     expect(forced.stdout).toContain("restored 1 hook group(s)");
-    expect(forced.stdout).toContain('left alone, already in');
-    expect(forced.stdout).toContain('PreToolUse matcher="Bash"');
+    expect(forced.stdout).toContain(
+      'taken as back under --force, not put back (same event and matcher, other content): PreToolUse matcher="Bash": ' +
+        "the snapshot's group runs `bash-hook`, the file's group runs `by-hand`.",
+    );
     expect(groups()).toEqual(["Write|Edit", "Bash", "Task"]);
     const again = await gate("enable", "--force");
     expect(again.code).toBe(EX_OK);
@@ -219,7 +309,7 @@ describe("harness gate (claude): spent and stale snapshots", () => {
     await gate("disable", "--matcher", "Write|Edit");
     const [snap] = liveSnapshotNames(settingsPath);
     const edited = JSON.parse(fs.readFileSync(settingsPath, "utf8")) as { hooks: { PreToolUse: unknown[] }; model?: string };
-    edited.hooks.PreToolUse.unshift({ matcher: "Write|Edit", hooks: [{ command: "branch-protection --v2" }] });
+    edited.hooks.PreToolUse.unshift({ matcher: "Write|Edit", hooks: [{ command: "branch-protection" }] });
     edited.model = "x";
     fs.writeFileSync(settingsPath, `${JSON.stringify(edited, null, 2)}\n`);
     const off = await gate("disable", "--matcher", "Bash");
@@ -231,7 +321,7 @@ describe("harness gate (claude): spent and stale snapshots", () => {
   it("an enable that finds every group already back retires the snapshot and says so", async () => {
     await gate("disable", "--matcher", "Write|Edit");
     const edited = JSON.parse(fs.readFileSync(settingsPath, "utf8")) as { hooks: { PreToolUse: unknown[] }; model?: string };
-    edited.hooks.PreToolUse.unshift({ matcher: "Write|Edit", hooks: [{ command: "branch-protection --v2" }] });
+    edited.hooks.PreToolUse.unshift({ matcher: "Write|Edit", hooks: [{ command: "branch-protection" }] });
     edited.model = "x";
     fs.writeFileSync(settingsPath, `${JSON.stringify(edited, null, 2)}\n`);
     const on = await gate("enable");
@@ -246,5 +336,143 @@ describe("harness gate (claude): spent and stale snapshots", () => {
     const on = await gate("enable");
     expect(on.code).toBe(EX_FAIL);
     expect(on.stderr).toContain(`Move ${bad} aside`);
+  });
+});
+
+describe("harness gate (claude): a group that only shares the gate's event and matcher", () => {
+  const command = (c: string) => ({ type: "command", command: c });
+  const gateGroup = { matcher: "Write|Edit", hooks: [command("harness pack hook branch-protection")] };
+  const logger = { matcher: "Bash", hooks: [command("logger")] };
+  const formatter = { matcher: "Write|Edit", hooks: [command("some-formatter-guard")] };
+  const own = { matcher: "Write|Edit", hooks: [command("my-secret-guard")] };
+
+  function write(obj: Record<string, unknown>): string {
+    fs.writeFileSync(settingsPath, `${JSON.stringify(obj, null, 2)}\n`);
+    return fs.readFileSync(settingsPath, "utf8");
+  }
+
+  function addGroup(group: unknown): string {
+    const obj = JSON.parse(fs.readFileSync(settingsPath, "utf8")) as { hooks: { PreToolUse: unknown[] } };
+    obj.hooks.PreToolUse.push(group);
+    return write(obj);
+  }
+
+  function commands(): string[] {
+    const hooks = (JSON.parse(fs.readFileSync(settingsPath, "utf8")) as { hooks?: Record<string, Array<{ hooks: Array<{ command: string }> }>> }).hooks;
+    return (hooks?.["PreToolUse"] ?? []).map((g) => g.hooks[0]?.command ?? "");
+  }
+
+  it("plain enable refuses, names both groups' commands and --force, and keeps the snapshot live; --force takes the file's group as back", async () => {
+    write({ hooks: { PreToolUse: [logger, gateGroup] } });
+    expect((await gate("disable", "--matcher", "Write|Edit")).code).toBe(EX_OK);
+    // Another hook with the gate's matcher is added while the gate is off.
+    const before = addGroup(formatter);
+
+    const on = await gate("enable");
+    expect(on.code).toBe(EX_FAIL);
+    expect(on.stdout).toBe("");
+    expect(on.stderr).toContain('PreToolUse matcher="Write|Edit"');
+    expect(on.stderr).toContain("`harness pack hook branch-protection`");
+    expect(on.stderr).toContain("`some-formatter-guard`");
+    expect(on.stderr).toContain("harness gate enable --force");
+    expect(fs.readFileSync(settingsPath, "utf8")).toBe(before);
+    expect(liveSnapshotNames(settingsPath)).toHaveLength(1);
+    expect(retiredSnapshotNames(settingsPath)).toEqual([]);
+
+    // --force is the operator's call: it takes the file's group as back, prints both commands, writes nothing and retires.
+    const forced = await gate("enable", "--force");
+    expect(forced.code).toBe(EX_OK);
+    expect(forced.stdout).toContain(
+      'taken as back under --force, not put back (same event and matcher, other content): PreToolUse matcher="Write|Edit": ' +
+        "the snapshot's group runs `harness pack hook branch-protection`, the file's group runs `some-formatter-guard`.",
+    );
+    expect(fs.readFileSync(settingsPath, "utf8")).toBe(before);
+    expect(liveSnapshotNames(settingsPath)).toEqual([]);
+  });
+
+  it("a second disable does not retire the snapshot as spent: it refuses naming both commands, and enable --force then the disable is the way out", async () => {
+    write({ hooks: { PreToolUse: [logger, gateGroup] } });
+    expect((await gate("disable", "--matcher", "Write|Edit")).code).toBe(EX_OK);
+    const snap = liveSnapshotNames(settingsPath);
+    const before = addGroup(formatter);
+
+    const off = await gate("disable", "--matcher", "Bash");
+    expect(off.code).toBe(EX_FAIL);
+    expect(off.stdout).toBe("");
+    expect(off.stderr).toContain("`harness pack hook branch-protection`");
+    expect(off.stderr).toContain("`some-formatter-guard`");
+    expect(off.stderr).toContain("harness gate enable --force");
+    expect(fs.readFileSync(settingsPath, "utf8")).toBe(before);
+    expect(liveSnapshotNames(settingsPath)).toEqual(snap);
+    expect(retiredSnapshotNames(settingsPath)).toEqual([]);
+
+    expect((await gate("enable", "--force")).code).toBe(EX_OK);
+    expect((await gate("disable", "--matcher", "Bash")).code).toBe(EX_OK);
+  });
+
+  it("restores the gate's group without --force when only the operator's own group with the same matcher came back", async () => {
+    const original = write({ hooks: { PreToolUse: [gateGroup, own] } });
+    expect((await gate("disable", "--matcher", "Write|Edit")).code).toBe(EX_OK);
+    write({ hooks: { PreToolUse: [own] } });
+    const on = await gate("enable");
+    expect(on.code).toBe(EX_OK);
+    expect(on.stdout).toContain("restored 1 hook group(s)");
+    expect(on.stdout).toContain('left alone, already in');
+    expect(fs.readFileSync(settingsPath, "utf8")).toBe(original);
+  });
+
+  it("--force restores the gate's group and never duplicates the operator's own group with the same matcher", async () => {
+    write({ hooks: { PreToolUse: [gateGroup, own] } });
+    expect((await gate("disable", "--matcher", "Write|Edit")).code).toBe(EX_OK);
+    write({ model: "x", hooks: { PreToolUse: [own] } });
+    expect((await gate("enable")).code).toBe(EX_FAIL);
+    const forced = await gate("enable", "--force");
+    expect(forced.code).toBe(EX_OK);
+    expect(forced.stdout).not.toContain("taken as back");
+    expect(commands()).toEqual(["harness pack hook branch-protection", "my-secret-guard"]);
+    expect((await gate("enable", "--force")).code).toBe(EX_OK);
+    expect(commands()).toEqual(["harness pack hook branch-protection", "my-secret-guard"]);
+  });
+
+  it("--force with the operator's own group first restores the gate's group behind it", async () => {
+    write({ hooks: { PreToolUse: [own, gateGroup] } });
+    expect((await gate("disable", "--matcher", "Write|Edit")).code).toBe(EX_OK);
+    write({ hooks: { PreToolUse: [own] } });
+    expect((await gate("enable", "--force")).code).toBe(EX_OK);
+    expect(commands()).toEqual(["my-secret-guard", "harness pack hook branch-protection"]);
+  });
+});
+
+describe("harness gate (claude): several live snapshots left by an earlier release", () => {
+  it("a disable refusal retires the spent snapshots it walked past, so enable --force and the disable again are the way out", async () => {
+    const group = (m: string, c: string) => ({ matcher: m, hooks: [{ command: c }] });
+    fs.writeFileSync(
+      settingsPath,
+      `${JSON.stringify({ hooks: { PreToolUse: [group("Write|Edit", "branch-protection"), group("Bash", "bash-hook"), group("Task", "task-hook")] } }, null, 2)}\n`,
+    );
+    const [older, newest] = writeLegacyChain(
+      settingsPath,
+      { matcher: "Write|Edit", now: new Date("2026-01-01T00:00:01.000Z") },
+      { matcher: "Bash", now: new Date("2026-01-01T00:00:02.000Z") },
+    );
+    // A released enable put the newest snapshot's group back and left it live; then the file was edited.
+    fs.writeFileSync(
+      settingsPath,
+      `${JSON.stringify({ model: "x", hooks: { PreToolUse: [group("Task", "task-hook"), group("Bash", "bash-hook")] } }, null, 2)}\n`,
+    );
+
+    const off = await gate("disable", "--matcher", "Task");
+    expect(off.code).toBe(EX_FAIL);
+    expect(off.stderr).toContain(older);
+    expect(off.stderr).toContain(`Retired the spent snapshot(s) walked past first (${newest.replace(/\.json$/, ".restored.json")})`);
+    expect(off.stderr).toContain("harness gate enable --force");
+    expect(liveSnapshotNames(settingsPath)).toEqual([path.basename(older)]);
+
+    const forced = await gate("enable", "--force");
+    expect(forced.code).toBe(EX_OK);
+    expect(forced.stderr).toBe("");
+    const again = await gate("disable", "--matcher", "Task");
+    expect(again.code).toBe(EX_OK);
+    expect(groups()).toEqual(["Write|Edit", "Bash"]);
   });
 });
