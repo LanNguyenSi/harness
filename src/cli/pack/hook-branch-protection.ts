@@ -68,6 +68,7 @@ import {
   type PathResolution,
 } from "../../runtime/git-branch.js";
 import { renderAgentFacing } from "../../runtime/agent-facing.js";
+import { boundUtf8 } from "../../runtime/bounded-text.js";
 import { type Manifest, type PolicyUx } from "../../schema/index.js";
 import { type LoaderOptions } from "../loader.js";
 import {
@@ -313,18 +314,26 @@ export async function runPackHookBranchProtectionCli(
 
   const runtime = opts.runtime ?? "claude-code";
   if (!(BRANCH_PROTECTION_RUNTIMES as readonly string[]).includes(runtime)) {
-    const diagnostic = `BLOCK: unknown --runtime ${JSON.stringify(runtime)} (expected ${BRANCH_PROTECTION_RUNTIMES.join(" or ")}); refusing`;
+    // The value comes from the command line, so the diagnostic is bounded like every other block detail.
+    const diagnostic = boundUtf8(
+      `BLOCK: unknown --runtime ${JSON.stringify(runtime)} (expected ${BRANCH_PROTECTION_RUNTIMES.join(" or ")}); refusing`,
+    );
     note(diagnostic);
     return { exitCode: CODEX_EXIT_BLOCK, blocked: true, diagnostic };
   }
+  // Every block flows through here, so the detail and the agent text are cut
+  // to a fixed size once, whatever they embed (a manifest parse error grows
+  // with the manifest). The envelope is built from the cut text with
+  // JSON.stringify, so the cut cannot break the JSON.
   const block = (detail: string, agentText: string): PackHookBranchProtectionResult => {
-    const diagnostic = `BLOCK: ${detail}`;
+    const diagnostic = boundUtf8(`BLOCK: ${detail}`);
+    const bounded = boundUtf8(agentText);
     note(diagnostic);
     if (runtime === "codex") {
-      stderr.write(`${agentText}\n`);
+      stderr.write(`${bounded}\n`);
       return { exitCode: CODEX_EXIT_BLOCK, blocked: true, diagnostic };
     }
-    stdout.write(`${claudeBlockEnvelope(agentText)}\n`);
+    stdout.write(`${claudeBlockEnvelope(bounded)}\n`);
     return { exitCode: 0, blocked: true, diagnostic };
   };
 

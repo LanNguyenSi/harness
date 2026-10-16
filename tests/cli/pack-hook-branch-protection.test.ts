@@ -10,6 +10,7 @@ import { PassThrough, Readable, Writable } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildProgram } from "../../src/cli/index.js";
 import { loadManifest } from "../../src/cli/loader.js";
+import { BLOCK_TEXT_MAX_BYTES } from "../../src/runtime/bounded-text.js";
 import { GIT_READ_DEADLINE_MS, runPackHookBranchProtectionCli } from "../../src/cli/pack/hook-branch-protection.js";
 import { defaultUx } from "../../src/policy-packs/builtin/branch-protection.js";
 import { hasGitEntryAbove, readBranch, readBranchAt, readGitHead, type GitHeadAnswer, type GitHeadReader } from "../../src/runtime/git-branch.js";
@@ -646,6 +647,71 @@ describe.skipIf(!GIT_AVAILABLE)("branch-protection hook: config", () => {
     });
     expect(run.stderr).toContain("harness pack hook branch-protection: config.ux ignored (");
     expect(envelope(run).reason).toContain("branch-protection: refusing Write");
+  });
+});
+
+describe("branch-protection hook: the agent-facing text is bounded", () => {
+  // A cut text is the cap plus a marker line naming the dropped bytes.
+  const MARKER_ALLOWANCE = 64;
+
+  function oversizedManifestFile(): string {
+    const dir = tmpDir("harness-bp-big-manifest-");
+    const cfg = path.join(dir, "harness.yaml");
+    fs.writeFileSync(
+      cfg,
+      `version: 1\npolicy_packs:\n  - name: branch-protection\nhooks:\n${"  - 1\n".repeat(5000)}`,
+    );
+    return cfg;
+  }
+
+  it("an oversized manifest load error is cut in the envelope, the reason and the diagnostic, and the envelope stays valid JSON", async () => {
+    const run = await runHook(writeEvent("/tmp", "/tmp/x.ts"), { configPath: oversizedManifestFile() });
+    expect(run.blocked).toBe(true);
+    expect(run.exitCode).toBe(0);
+    const env = envelope(run);
+    expect(env.decision).toBe("block");
+    expect(env.hookSpecificOutput["permissionDecision"]).toBe("deny");
+    expect(env.reason).toMatch(/^branch-protection: refusing Write: the harness manifest could not be loaded/);
+    expect(env.reason).toMatch(/\n\[truncated \d+ bytes\]$/);
+    expect(Buffer.byteLength(env.reason)).toBeLessThanOrEqual(BLOCK_TEXT_MAX_BYTES + MARKER_ALLOWANCE);
+    expect(env.hookSpecificOutput["permissionDecisionReason"]).toBe(env.reason);
+    expect(Buffer.byteLength(run.diagnostic)).toBeLessThanOrEqual(BLOCK_TEXT_MAX_BYTES + MARKER_ALLOWANCE);
+    expect(run.diagnostic).toMatch(/\[truncated \d+ bytes\]$/);
+    expect(Buffer.byteLength(run.stderr)).toBeLessThanOrEqual(BLOCK_TEXT_MAX_BYTES + MARKER_ALLOWANCE + 64);
+  });
+
+  it("the Codex contract writes the same cut reason to stderr and still exits 2", async () => {
+    const run = await runHook(writeEvent("/tmp", "/tmp/x.ts"), {
+      configPath: oversizedManifestFile(),
+      runtime: "codex",
+    });
+    expect(run.exitCode).toBe(2);
+    expect(run.blocked).toBe(true);
+    expect(run.stdout).toBe("");
+    const lines = run.stderr.trimEnd().split("\n");
+    expect(lines[0]).toMatch(/^harness pack hook branch-protection: BLOCK: /);
+    expect(run.stderr).toContain("branch-protection: refusing Write: the harness manifest could not be loaded");
+    expect(run.stderr.match(/\[truncated \d+ bytes\]/g)).toHaveLength(2);
+    expect(Buffer.byteLength(run.stderr)).toBeLessThanOrEqual(2 * (BLOCK_TEXT_MAX_BYTES + MARKER_ALLOWANCE) + 200);
+  });
+
+  it.skipIf(!GIT_AVAILABLE)("an oversized config.ux text on a protected branch is cut too (the bound is not specific to the load path)", async () => {
+    const repo = makeRepo("master");
+    const ux = { ...defaultUx(), cannot: `${"x".repeat(3 * BLOCK_TEXT_MAX_BYTES)} ${"\u00e9".repeat(100)}` };
+    const run = await runHook(writeEvent(repo, path.join(repo, "x.ts")), { manifest: manifestWithPack({ ux }) });
+    expect(run.blocked).toBe(true);
+    const env = envelope(run);
+    expect(env.reason.startsWith("xxxx")).toBe(true);
+    expect(env.reason).toMatch(/\n\[truncated \d+ bytes\]$/);
+    expect(Buffer.byteLength(env.reason)).toBeLessThanOrEqual(BLOCK_TEXT_MAX_BYTES + MARKER_ALLOWANCE);
+  });
+
+  it.skipIf(!GIT_AVAILABLE)("a reason that fits is delivered whole, without a marker", async () => {
+    const repo = makeRepo("master");
+    const run = await runHook(writeEvent(repo, path.join(repo, "x.ts")));
+    const env = envelope(run);
+    expect(env.reason).toContain("Protected branches: master, main, develop.");
+    expect(env.reason).not.toContain("[truncated");
   });
 });
 
@@ -1353,6 +1419,16 @@ describe.skipIf(!GIT_AVAILABLE)("branch-protection hook: block contract per runt
     const run = await runHook(writeEvent("/tmp", "/tmp/x.ts"), { runtime: "opencode" });
     expect(run).toMatchObject({ exitCode: 2, blocked: true, stdout: "" });
     expect(run.stderr).toMatch(/unknown --runtime "opencode"/);
+  });
+
+  it("an unknown runtime value of any size is cut in the diagnostic", async () => {
+    const MARKER_ALLOWANCE = 64;
+    const run = await runHook(writeEvent("/tmp", "/tmp/x.ts"), { runtime: "o".repeat(10 * BLOCK_TEXT_MAX_BYTES) });
+    expect(run).toMatchObject({ exitCode: 2, blocked: true, stdout: "" });
+    expect(run.diagnostic).toMatch(/\n\[truncated \d+ bytes\]$/);
+    expect(Buffer.byteLength(run.diagnostic)).toBeLessThanOrEqual(BLOCK_TEXT_MAX_BYTES + MARKER_ALLOWANCE);
+    expect(run.stderr).toMatch(/\[truncated \d+ bytes\]\n$/);
+    expect(Buffer.byteLength(run.stderr)).toBeLessThanOrEqual(BLOCK_TEXT_MAX_BYTES + MARKER_ALLOWANCE + 64);
   });
 
   it.each([
