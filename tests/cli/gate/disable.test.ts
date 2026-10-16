@@ -525,12 +525,15 @@ describe("gateDisable: a live snapshot the file no longer matches", () => {
     try {
       process.chdir(tmp);
       const r = gateDisable({ settingsPath: "settings.json", matcher: "Task", now: T1 });
-      if (r.mode !== "remove") throw new Error("expected remove");
+      const merged = gateDisable({ settingsPath: "settings.json", matcher: "Bash", now: T2 });
+      if (r.mode !== "remove" || merged.mode !== "remove") throw new Error("expected remove");
+      expect(merged.merged).toBe(true);
       process.chdir(cwd);
       const read = readSnapshot(path.resolve(tmp, r.snapshotPath));
       if (!read.ok) throw new Error(read.reason);
       expect(read.snapshot.settingsPath).toBe(path.join(fs.realpathSync(tmp), "settings.json"));
       expect(path.isAbsolute(read.snapshot.settingsBackupPath)).toBe(true);
+      expect(read.snapshot.merges?.map((m) => path.isAbsolute(m.settingsBackupPath))).toEqual([true]);
     } finally {
       process.chdir(cwd);
     }
