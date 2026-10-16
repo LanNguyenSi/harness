@@ -777,6 +777,8 @@ describe("codexGateDisable: one live snapshot per config", () => {
     fs.writeFileSync(path.join(retired(first), "keep"), "");
     const dir = path.dirname(configPath);
     const entries = fs.readdirSync(dir).sort();
+    // The gate's own error type, so the CLI exits with its refusal code and message rather than a crash.
+    expect(() => codexGateDisable({ configPath, matcher: "Bash", now: at(2) })).toThrow(GateDisableError);
     const message = thrownMessage(() => codexGateDisable({ configPath, matcher: "Bash", now: at(2) }));
     expect(message).toContain(
       `nothing was written: the live gate snapshot is spent (enable would only retire it), but cannot retire the snapshot ${first}`,
