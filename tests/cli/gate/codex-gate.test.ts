@@ -605,6 +605,19 @@ describe("codexGateDisable: one live snapshot per config", () => {
     expect(fs.readFileSync(second.backupPath, "utf8")).toBe(afterFirst);
   });
 
+  it("keeps the merged units in block order whichever disable came first", () => {
+    const original = installConfig(configPath);
+    const first = disableAt(configPath, "Bash", T0);
+    expect(disableAt(configPath, "apply_patch", T1)).toBe(first);
+    const snap = readCodexSnapshot(first);
+    expect(snap.ok && snap.snapshot.neutralised.map((u) => [u.id, u.ordinal])).toEqual([
+      [BP, 0],
+      ["hand-shell-guard", 1],
+    ]);
+    codexGateEnable({ configPath, now: at(12) });
+    expect(read()).toBe(original);
+  });
+
   it("one enable restores both disables byte-identically and retires the snapshot; a second enable is a clean no-op", () => {
     const { original, snapshotPath } = twoDisables();
     const e = codexGateEnable({ configPath, now: at(12) });
