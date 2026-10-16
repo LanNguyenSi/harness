@@ -20,35 +20,39 @@
 // offered again, so a neutralised unit can never get an outdated line back
 // from an old snapshot whose post-disable bytes happen to match.
 //
-// Otherwise the snapshot is applied when the config's sha equals its
-// post-disable sha: each unit it names gets its original `hooks = [...]`
-// line back, and the result must hash to its pre-disable sha, so the restore
-// is byte-identical. When the config was edited since, enable refuses unless
-// `--force`; a forced restore swaps only the snapshot's hooks lines back
-// into the units it names, found by id in the block as it is now, keeps
-// every other edit, and refuses when a unit is missing, was changed (another
-// event or matcher) or is not neutralised (it would run twice). The applied
-// snapshot is retired as restored. Units still disabled at the end are
-// reported in `stillDisabled`, other live snapshots in `remaining`, and units
-// the snapshot names that were deleted from the block in `missing` (that
-// snapshot stays live): enable never reports an all-clear while one remains.
-// A backup of the config is written before every rewrite, with the config's
-// own mode.
+// Otherwise the snapshot is applied. When the config's sha equals its
+// post-disable sha, each unit it names gets its original `hooks = [...]`
+// line back and the result must hash to its pre-disable sha, so the restore
+// is byte-identical. When the config was edited since, the restore skips every
+// unit that is back already (present and not neutralised: its current line is
+// never overwritten) and restores the rest, found by id in the block as it is
+// now. If that rebuilds the pre-disable bytes exactly (a crashed merge, a unit
+// put back by hand) it is applied without `--force`; otherwise enable refuses
+// unless `--force`, which applies it anyway, keeps every other edit, and still
+// refuses when a unit is missing or was changed (another event or matcher).
+// The applied snapshot is retired as restored. Units still disabled at the end
+// are reported in `stillDisabled`, units skipped as already enabled in
+// `skippedEnabled`, other live snapshots in `remaining`, and units the snapshot
+// names that were deleted from the block in `missing` (that snapshot stays
+// live): enable never reports an all-clear while one remains. A backup of the
+// config is written before every rewrite, with the config's own mode.
 
 import * as fs from "node:fs";
 import {
   assertCodexHookEditInvariant,
   existingFileMode,
-  latestCodexInstallBackup,
   readCodexManagedHookUnits,
 } from "../apply/install-codex-config.js";
 import { atomicWriteFile } from "../../io/atomic-write.js";
 import {
+  type CodexDisabledUnit,
   type CodexGateSnapshot,
-  type CodexSnapshotRetirement,
+  type CodexRetiredSnapshot,
+  latestInstall,
   readLiveCodexSnapshots,
   resolveCodexConfig,
-  retiredCodexSnapshotPath,
+  retireCodexSnapshot,
+  spentCodexSnapshot,
   toGateError,
 } from "./codex-snapshot.js";
 import { GateEnableError } from "./enable.js";
@@ -70,15 +74,6 @@ interface EnableBase {
   skippedForeign: string[];
 }
 
-/** The snapshot this call retired: `from` was renamed to `to`. */
-export interface CodexRetiredSnapshot {
-  from: string;
-  to: string;
-  why: CodexSnapshotRetirement;
-  /** For an install-superseded snapshot: the installer backup that dates the install. */
-  installBackup?: string;
-}
-
 interface SnapshotBase extends EnableBase {
   /** The snapshot this call retired, or null when it stays live. */
   retired: CodexRetiredSnapshot | null;
@@ -95,15 +90,13 @@ interface SnapshotBase extends EnableBase {
 export type CodexGateEnableResult =
   | (EnableBase & { mode: "no-snapshots" })
   | (SnapshotBase & { mode: "already-restored" })
-  | (SnapshotBase & { mode: "restored"; backupPath: string; restoredCount: number });
-
-/** The installer's newest write of the config, read from its backups beside
- * the requested path (and beside the resolved target, where an install
- * through the target's own path leaves them). */
-function latestInstall(requestedPath: string, configPath: string): { ms: number; path: string } | null {
-  const found = [requestedPath, configPath].map(latestCodexInstallBackup).filter((t) => t !== null);
-  return found.reduce<{ ms: number; path: string } | null>((a, b) => (a === null || b.ms > a.ms ? b : a), null);
-}
+  | (SnapshotBase & {
+      mode: "restored";
+      backupPath: string;
+      restoredCount: number;
+      /** Ids the snapshot names that were enabled again already: left as they are. */
+      skippedEnabled: string[];
+    });
 
 function readBlock(text: string, configPath: string): ReturnType<typeof readCodexManagedHookUnits> {
   try {
@@ -118,11 +111,15 @@ function disabledIds(text: string, configPath: string): string[] {
   return readBlock(text, configPath)?.units.filter((u) => u.disabled).map((u) => u.id) ?? [];
 }
 
-type RestorePlan = { ok: true; text: string } | { ok: false; reason: string };
+type RestorePlan =
+  | { ok: true; text: string; restored: CodexDisabledUnit[]; skipped: string[] }
+  | { ok: false; reason: string };
 
-/** The config with each unit of the snapshot given its original `hooks` line
- * back. The unit is found by id in the block as it is now and must still be
- * the same event and matcher, and neutralised. */
+/** The config with each still-neutralised unit of the snapshot given its
+ * original `hooks` line back. A unit is found by id in the block as it is now
+ * and must still be the same event and matcher. A unit that is present and
+ * not neutralised is already back: it is skipped and named in `skipped`, its
+ * current line is never overwritten. */
 function planRestore(current: string, configPath: string, snapshot: CodexGateSnapshot): RestorePlan {
   const block = readBlock(current, configPath);
   if (block === null) {
@@ -134,6 +131,8 @@ function planRestore(current: string, configPath: string, snapshot: CodexGateSna
     };
   }
   const edits: Array<{ start: number; end: number; text: string }> = [];
+  const restored: CodexDisabledUnit[] = [];
+  const skipped: string[] = [];
   for (const wanted of snapshot.neutralised) {
     const found = block.units.filter((u) => u.id === wanted.id);
     const unit = found.length === 1 ? found[0]! : undefined;
@@ -146,15 +145,11 @@ function planRestore(current: string, configPath: string, snapshot: CodexGateSna
       };
     }
     if (!unit.disabled) {
-      return {
-        ok: false,
-        reason:
-          `the hook unit ${JSON.stringify(wanted.id)} from the snapshot is not disabled in the block of ` +
-          `${configPath} (already enabled, or re-rendered by an install); restoring it again could run it twice. ` +
-          "The config is untouched.",
-      };
+      skipped.push(wanted.id);
+      continue;
     }
     edits.push({ start: unit.hooksStart, end: unit.hooksEnd, text: wanted.hooksText });
+    restored.push(wanted);
   }
   edits.sort((a, b) => a.start - b.start);
   let out = "";
@@ -163,7 +158,7 @@ function planRestore(current: string, configPath: string, snapshot: CodexGateSna
     out += current.slice(cursor, edit.start) + edit.text;
     cursor = edit.end;
   }
-  return { ok: true, text: out + current.slice(cursor) };
+  return { ok: true, text: out + current.slice(cursor), restored, skipped };
 }
 
 export function codexGateEnable(opts: CodexGateEnableOptions = {}): CodexGateEnableResult {
@@ -193,53 +188,54 @@ export function codexGateEnable(opts: CodexGateEnableOptions = {}): CodexGateEna
   }
 
   const { snapshot } = live;
-  const install = latestInstall(requestedPath, configPath);
   const currentSha = sha256Hex(original);
   const units = readBlock(original, configPath)?.units ?? null;
-  const ids = snapshot.neutralised.map((u) => u.id);
-  const missing: string[] = [];
-  let retire: { why: CodexSnapshotRetirement; installBackup?: string } | null = null;
+  const { retire: spent, missing } = spentCodexSnapshot(
+    snapshot,
+    currentSha,
+    units,
+    latestInstall(requestedPath, configPath),
+  );
+  let retire = spent;
   let current = original;
   let backup: string | undefined;
-  if (install !== null && install.ms > Date.parse(snapshot.createdAt)) {
-    // A re-install after the snapshot re-rendered every unit it names: its
-    // hooks lines may be outdated, so it is never applied.
-    retire = { why: "superseded", installBackup: install.path };
-  } else if (currentSha === snapshot.configBeforeSha256) {
-    retire = { why: "restored" };
-  } else if (units !== null && !units.some((u) => u.disabled && ids.includes(u.id))) {
-    // None of its units is disabled any more. Retired as enabled again only
-    // when every unit it names is still in the block: a unit deleted by hand
-    // is neither enabled nor restorable, so the snapshot stays live and the
-    // unit is reported.
-    missing.push(...ids.filter((id) => !units.some((u) => u.id === id)));
-    if (missing.length === 0) retire = { why: "superseded" };
-  } else {
+  let restoredCount = 0;
+  let skipped: string[] = [];
+  // Nothing is applied when the snapshot only names units that were deleted from the block: it stays live.
+  if (retire === null && missing.length === 0) {
     const exact = currentSha === snapshot.configAfterSha256;
-    if (!exact && !opts.force) {
+    // The restore skips a unit that is back already and never overwrites a
+    // live line. An edited config is restored without --force only when that
+    // provably rebuilds the pre-disable bytes (a crashed merge, a unit put
+    // back by hand); otherwise it refuses.
+    const plan = planRestore(original, configPath, snapshot);
+    const proven = plan.ok && sha256Hex(plan.text) === snapshot.configBeforeSha256;
+    if (!exact && !proven && !opts.force) {
       throw new GateEnableError(
         `the Codex config has been edited since the snapshot was taken (${live.path}; current sha ` +
           `${currentSha.slice(0, 12)}..., snapshot's post-disable sha ${snapshot.configAfterSha256.slice(0, 12)}...). ` +
-          `Inspect the diff against ${snapshot.configBackupPath}. --force swaps only this snapshot's hooks ` +
-          "lines back into the units it names (found by id) and keeps every other edit.",
+          `Inspect the diff against ${snapshot.configBackupPath}. --force restores every unit the snapshot names that is ` +
+          "still neutralised (found by id), leaves a unit that is enabled again as it is, keeps every other edit " +
+          "and retires the snapshot.",
       );
     }
-    const plan = planRestore(original, configPath, snapshot);
     if (!plan.ok) throw new GateEnableError(plan.reason);
-    if (exact && sha256Hex(plan.text) !== snapshot.configBeforeSha256) {
+    if (exact && !proven) {
       throw new GateEnableError(
         `the snapshot ${live.path} does not rebuild the config it was taken from (the restored text does not ` +
           "match its recorded pre-disable sha); refusing to write. The config is untouched.",
       );
     }
     const counts: Record<string, number> = {};
-    for (const unit of snapshot.neutralised) counts[unit.event] = (counts[unit.event] ?? 0) + 1;
+    for (const unit of plan.restored) counts[unit.event] = (counts[unit.event] ?? 0) + 1;
     try {
       assertCodexHookEditInvariant(original, plan.text, configPath, { direction: "restore", counts });
     } catch (err) {
       throw toGateError(err, (m) => new GateEnableError(m));
     }
     current = plan.text;
+    restoredCount = plan.restored.length;
+    skipped = plan.skipped;
     retire = { why: "restored" };
     const mode = existingFileMode(configPath);
     backup = backupPath(requestedPath, opts.now ?? new Date());
@@ -252,13 +248,13 @@ export function codexGateEnable(opts: CodexGateEnableOptions = {}): CodexGateEna
   // a forced restore), which the next enable retires.
   let retired: CodexRetiredSnapshot | null = null;
   if (retire !== null) {
-    const to = retiredCodexSnapshotPath(live.path, retire.why);
+    let to: string;
     try {
-      fs.renameSync(live.path, to);
+      to = retireCodexSnapshot(live.path, retire.why);
     } catch (err) {
       throw new GateEnableError(
-        `${backup !== undefined ? `restored ${ids.length} hook unit(s) into ${requestedPath}, but ` : ""}` +
-          `cannot retire the snapshot ${live.path} (rename to ${to}: ${(err as Error).message}); ` +
+        `${backup !== undefined ? `restored ${restoredCount} hook unit(s) into ${requestedPath}, but ` : ""}` +
+          `cannot retire the snapshot ${live.path} (${(err as Error).message}); ` +
           "move it out of the directory by hand so it is never applied again.",
       );
     }
@@ -274,5 +270,5 @@ export function codexGateEnable(opts: CodexGateEnableOptions = {}): CodexGateEna
     snapshotPath: retired?.to ?? live.path,
   };
   if (backup === undefined) return { ...base, mode: "already-restored" };
-  return { ...base, mode: "restored", backupPath: backup, restoredCount: ids.length };
+  return { ...base, mode: "restored", backupPath: backup, restoredCount, skippedEnabled: skipped };
 }

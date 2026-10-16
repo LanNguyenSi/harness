@@ -62,7 +62,7 @@ const OPERATOR_AFTER = [
   "",
 ].join("\n");
 
-function manifest(shellGuardCommand = "harness pack hook shell-guard --runtime codex") {
+function manifest(shellGuardCommand = "harness pack hook shell-guard --runtime codex", withEditGuard = false) {
   return parseManifest({
     version: 1,
     hooks: [
@@ -89,6 +89,18 @@ function manifest(shellGuardCommand = "harness pack hook shell-guard --runtime c
         blocking: false,
         budget_ms: 5000,
       },
+      ...(withEditGuard
+        ? [
+            {
+              name: "hand-edit-guard",
+              event: "PreToolUse",
+              match: "Edit",
+              command: "harness pack hook edit-guard --runtime codex",
+              blocking: "hard",
+              budget_ms: 5000,
+            },
+          ]
+        : []),
     ],
   });
 }
@@ -96,12 +108,12 @@ function manifest(shellGuardCommand = "harness pack hook shell-guard --runtime c
 /** Installs the generated block into `target` with the installer, between operator content. */
 function installConfig(
   target: string,
-  opts: { before?: string; after?: string; mode?: number } = {},
+  opts: { before?: string; after?: string; mode?: number; withEditGuard?: boolean } = {},
 ): string {
   fs.mkdirSync(path.dirname(target), { recursive: true });
   fs.writeFileSync(target, opts.before ?? OPERATOR_BEFORE);
   if (opts.mode !== undefined) fs.chmodSync(target, opts.mode);
-  const generated = generateCodexConfig(manifest());
+  const generated = generateCodexConfig(manifest(undefined, opts.withEditGuard));
   const plan = planCodexConfigInstall({
     configPath: target,
     generatedPath: "/gen/codex/config.toml",
@@ -163,6 +175,17 @@ function neutraliseByHand(text: string, ...ids: string[]): string {
   return out;
 }
 
+/** The current config with the unit's `hooks` line put back by hand: the snapshot's original line, or `line`. */
+function putBack(id: string, line?: string): string {
+  const live = listCodexSnapshots(path.dirname(configPath))[0]!;
+  const snap = readCodexSnapshot(live);
+  if (!snap.ok) throw new Error("snapshot unreadable");
+  const text = fs.readFileSync(configPath, "utf8");
+  const unit = readCodexManagedHookUnits(text, configPath)!.units.find((u) => u.id === id)!;
+  const original = snap.snapshot.neutralised.find((u) => u.id === id)!.hooksText;
+  return `${text.slice(0, unit.hooksStart)}${line ?? original}${text.slice(unit.hooksEnd)}`;
+}
+
 function touch(file: string, when: Date): void {
   fs.utimesSync(file, when, when);
 }
@@ -173,6 +196,16 @@ function retired(snapPath: string, why: CodexSnapshotRetirement = "restored"): s
 }
 
 const BP = "policy-pack:branch-protection:pre-tool-use";
+
+/** The message a call throws; fails when it does not throw. */
+function thrownMessage(call: () => unknown): string {
+  try {
+    call();
+  } catch (err) {
+    return (err as Error).message;
+  }
+  throw new Error("expected the call to throw");
+}
 
 describe("readCodexManagedHookUnits", () => {
   it("returns the generated units with the exact span of their hooks line, and null for a file with no block", () => {
@@ -601,6 +634,12 @@ describe("codexGateDisable: one live snapshot per config", () => {
     expect(snap.snapshot.configBeforeSha256).toBe(sha(original));
     expect(snap.snapshot.configAfterSha256).toBe(sha(fs.readFileSync(configPath, "utf8")));
     expect(snap.snapshot.configAfterSha256).not.toBe(sha(afterFirst));
+    // The merge is recorded for audit: when, with which matcher, and the backup it wrote.
+    expect(snap.snapshot.merges).toEqual([
+      { createdAt: T1.toISOString(), matcher: "Bash", configBackupPath: second.backupPath },
+    ]);
+    expect(snap.snapshot.createdAt).toBe(T0.toISOString());
+    expect(snap.snapshot.filter).toEqual({ matcher: "apply_patch" });
     // The second disable still backs up the file as it stood.
     expect(fs.readFileSync(second.backupPath, "utf8")).toBe(afterFirst);
   });
@@ -641,26 +680,73 @@ describe("codexGateDisable: one live snapshot per config", () => {
     const entries = fs.readdirSync(path.dirname(configPath)).sort();
     const body = fs.readFileSync(first, "utf8");
     expect(() => codexGateDisable({ configPath, matcher: "Bash", now: T1 })).toThrow(
-      /no longer matches .*cannot join it\. Run `harness gate enable --runtime codex` first/,
+      /no longer matches .*cannot join it\. Run `harness gate enable --runtime codex --force`/,
     );
     expect(read()).toBe(edited);
     expect(fs.readdirSync(path.dirname(configPath)).sort()).toEqual(entries);
     expect(fs.readFileSync(first, "utf8")).toBe(body);
   });
 
-  it("refuses a second disable after an install re-rendered the block; enable retires the stale snapshot, then a disable starts a fresh one", () => {
+  it("a second disable after an install re-rendered the block retires the superseded snapshot and starts a fresh one, with no enable in between", () => {
     installConfig(configPath);
     const first = disableAt(configPath, "apply_patch", at(1));
     const v2 = reinstall(configPath, at(2), V2);
-    expect(() => codexGateDisable({ configPath, matcher: "Bash", now: at(3) })).toThrow(/cannot join it/);
+    const d = codexGateDisable({ configPath, matcher: "Bash", now: at(3) });
+    if (d.mode !== "remove") throw new Error("expected remove");
+    expect(d.retired).toEqual({
+      from: first,
+      to: retired(first, "superseded"),
+      why: "superseded",
+      installBackup: `${configPath}.harness-backup-2026-10-02T02-00-00-000Z`,
+    });
+    expect(fs.existsSync(retired(first, "superseded"))).toBe(true);
+    // The fresh snapshot covers only what this disable neutralised, rebuilt from the re-rendered config.
+    expect(d.snapshotPath).not.toBe(first);
+    expect(listCodexSnapshots(path.dirname(configPath))).toEqual([d.snapshotPath]);
+    const snap = readCodexSnapshot(d.snapshotPath);
+    if (!snap.ok) throw new Error("snapshot unreadable");
+    expect(snap.snapshot.neutralised.map((u) => u.id)).toEqual([SG]);
+    expect(snap.snapshot.configBeforeSha256).toBe(sha(v2));
+    expect(snap.snapshot.merges).toBeUndefined();
+    // One enable brings back exactly the re-rendered block.
+    expect(codexGateEnable({ configPath, now: at(4) }).mode).toBe("restored");
     expect(read()).toBe(v2);
-    const e = codexGateEnable({ configPath, now: at(4) });
-    expect(e.mode).toBe("already-restored");
-    expect(e.mode !== "no-snapshots" && e.retired?.why).toBe("superseded");
-    expect(listCodexSnapshots(path.dirname(configPath))).toEqual([]);
-    const fresh = disableAt(configPath, "Bash", at(5));
-    expect(fresh).not.toBe(first);
-    expect(listCodexSnapshots(path.dirname(configPath))).toEqual([fresh]);
+  });
+
+  it("a second disable retires a snapshot whose config was put back at the pre-disable state (restored from the backup), and starts a fresh one", () => {
+    const original = installConfig(configPath);
+    const first = disableAt(configPath, "apply_patch", at(1));
+    fs.writeFileSync(configPath, original);
+    const d = codexGateDisable({ configPath, matcher: "Bash", now: at(2) });
+    if (d.mode !== "remove") throw new Error("expected remove");
+    expect(d.retired).toEqual({ from: first, to: retired(first, "restored"), why: "restored" });
+    expect(listCodexSnapshots(path.dirname(configPath))).toEqual([d.snapshotPath]);
+    expect(codexGateEnable({ configPath, now: at(3) }).mode).toBe("restored");
+    expect(read()).toBe(original);
+  });
+
+  it("a second disable retires a snapshot whose units were all put back by hand, even with another edit in the file", () => {
+    const original = installConfig(configPath);
+    const first = disableAt(configPath, "apply_patch", at(1));
+    const edited = `${original}\n[tui]\nnotifications = true\n`;
+    fs.writeFileSync(configPath, edited);
+    const d = codexGateDisable({ configPath, matcher: "Bash", now: at(2) });
+    if (d.mode !== "remove") throw new Error("expected remove");
+    expect(d.retired).toEqual({ from: first, to: retired(first, "superseded"), why: "superseded" });
+    expect(listCodexSnapshots(path.dirname(configPath))).toEqual([d.snapshotPath]);
+    expect(codexGateEnable({ configPath, now: at(3) }).mode).toBe("restored");
+    expect(read()).toBe(edited);
+  });
+
+  it("a second disable keeps a live snapshot that names a unit deleted from the block: nothing is retired, it refuses and names --force", () => {
+    installConfig(configPath);
+    const first = disableAt(configPath, "apply_patch", at(1));
+    const units = readCodexManagedHookUnits(read(), configPath)!.units;
+    const gone = `${read().slice(0, units[0]!.start)}${read().slice(units[1]!.start)}`;
+    fs.writeFileSync(configPath, gone);
+    expect(() => codexGateDisable({ configPath, matcher: "Bash", now: at(2) })).toThrow(/cannot join it/);
+    expect(listCodexSnapshots(path.dirname(configPath))).toEqual([first]);
+    expect(read()).toBe(gone);
   });
 
   it("refuses a disable while a live snapshot of this config is unreadable, and writes nothing", () => {
@@ -668,7 +754,9 @@ describe("codexGateDisable: one live snapshot per config", () => {
     const first = disableAt(configPath, "apply_patch", T0);
     fs.writeFileSync(first, "{ not json");
     const before = read();
-    expect(() => codexGateDisable({ configPath, matcher: "Bash", now: T1 })).toThrow(/cannot read snapshot/);
+    const message = thrownMessage(() => codexGateDisable({ configPath, matcher: "Bash", now: T1 }));
+    expect(message).toContain(`cannot read snapshot ${first}`);
+    expect(message).toContain(`move ${first} aside`);
     expect(read()).toBe(before);
     expect(listCodexSnapshots(path.dirname(configPath))).toEqual([first]);
   });
@@ -828,6 +916,20 @@ describe("codexGateEnable: retired snapshots are never applied again", () => {
     expect(read()).toBe(edited);
   });
 
+  it("retires a single snapshot whose units are all enabled again even while an unrelated unit is neutralised by hand, and names that unit", () => {
+    installConfig(configPath);
+    const s0 = disableAt(configPath, "apply_patch", T0);
+    // The snapshot's unit goes back by hand, and a unit the snapshot does not name is neutralised by hand.
+    fs.writeFileSync(configPath, neutraliseByHand(putBack(BP), SG));
+    const hand = read();
+    const e = codexGateEnable({ configPath, now: T1 });
+    expect(e.mode).toBe("already-restored");
+    expect(e.mode !== "no-snapshots" && e.retired).toEqual({ from: s0, to: retired(s0, "superseded"), why: "superseded" });
+    expect(e.stillDisabled).toEqual([SG]);
+    expect(read()).toBe(hand);
+    expect(listCodexSnapshots(path.dirname(configPath))).toEqual([]);
+  });
+
   it("a re-install through the symlink's target path still supersedes a snapshot taken through the link", () => {
     const real = path.join(tmp, "dotfiles", "config.toml");
     installConfig(real);
@@ -955,6 +1057,55 @@ describe("codexGateEnable: several live snapshots left by an earlier build", () 
     expect(e.mode === "restored" && e.remaining).toEqual([first]);
   });
 
+  it("a disable among several legacy live snapshots joins the newest, leaves the older byte for byte, and two enables restore the original", () => {
+    const original = installConfig(configPath, { withEditGuard: true });
+    const first = disableAt(configPath, "apply_patch", at(1));
+    const afterFirst = read();
+    const firstBody = fs.readFileSync(first, "utf8");
+    // Rebuild what an earlier build left: the Bash disable as a second live snapshot of its own.
+    disableAt(configPath, "Bash", at(2));
+    const merged = JSON.parse(fs.readFileSync(first, "utf8"));
+    const second = codexSnapshotPath(configPath, at(2));
+    fs.writeFileSync(first, firstBody);
+    fs.writeFileSync(
+      second,
+      JSON.stringify({
+        ...merged,
+        createdAt: at(2).toISOString(),
+        configBeforeSha256: sha(afterFirst),
+        neutralised: merged.neutralised.filter((u: { id: string }) => u.id === SG),
+        merges: undefined,
+      }),
+    );
+    // Make the older snapshot the first one the file system lists and the newest by mtime, so only createdAt tells them apart.
+    touch(first, at(23));
+    touch(second, at(1));
+    const joined = disableAt(configPath, "Edit", at(3));
+    expect(joined).toBe(second);
+    expect(fs.readFileSync(first, "utf8")).toBe(firstBody);
+    const snap = readCodexSnapshot(second);
+    if (!snap.ok) throw new Error("snapshot unreadable");
+    expect(snap.snapshot.neutralised.map((u) => u.id).sort()).toEqual([SG, "hand-edit-guard"].sort());
+    const ordinals = snap.snapshot.neutralised.map((u) => u.ordinal);
+    expect(ordinals).toEqual([...ordinals].sort((x, y) => x - y));
+    expect(snap.snapshot.configBeforeSha256).toBe(sha(afterFirst));
+    expect(snap.snapshot.configAfterSha256).toBe(sha(read()));
+    expect(snap.snapshot.merges?.map((m) => m.matcher)).toEqual(["Edit"]);
+    expect(listCodexSnapshots(path.dirname(configPath)).sort()).toEqual([first, second].sort());
+
+    const one = codexGateEnable({ configPath, now: at(4) });
+    if (one.mode !== "restored") throw new Error("expected restored");
+    expect(one.snapshotPath).toBe(retired(second));
+    expect(one.restoredCount).toBe(2);
+    expect(one.remaining).toEqual([first]);
+    expect(read()).toBe(afterFirst);
+    const two = codexGateEnable({ configPath, now: at(5) });
+    if (two.mode !== "restored") throw new Error("expected restored");
+    expect(two.snapshotPath).toBe(retired(first));
+    expect(two.remaining).toEqual([]);
+    expect(read()).toBe(original);
+  });
+
   it("does not chain: an edit since makes the newest refuse, and --force applies only that one and keeps the edit", () => {
     const { original, first, second } = legacyPair();
     const edit = "\n[tui]\nnotifications = true\n";
@@ -1064,15 +1215,16 @@ describe("codex gate: file mode", () => {
     expect(fs.statSync(e.backupPath).mode & 0o777).toBe(0o600);
   });
 
-  it("writes the backup and the merged snapshot before the config: a failed config write leaves both on disk and the config untouched", () => {
+  it("a failed config write on the merge path rolls the snapshot back to its pre-merge body, keeps the backup, and a retry then works", () => {
     const real = path.join(tmp, "dotfiles", "config.toml");
-    installConfig(real);
+    const original = installConfig(real);
     const linkDir = path.join(tmp, "codex-home");
     fs.mkdirSync(linkDir);
     const link = path.join(linkDir, "config.toml");
     fs.symlinkSync(real, link);
     const first = disableAt(link, "apply_patch", at(1));
     const afterFirst = fs.readFileSync(real, "utf8");
+    const bodyBefore = fs.readFileSync(first, "utf8");
     // The config lives in a directory the write cannot create its temp file in; backup and snapshot sit beside the link.
     fs.chmodSync(path.dirname(real), 0o500);
     try {
@@ -1081,9 +1233,90 @@ describe("codex gate: file mode", () => {
       fs.chmodSync(path.dirname(real), 0o700);
     }
     expect(fs.readFileSync(real, "utf8")).toBe(afterFirst);
-    const snap = readCodexSnapshot(first);
-    expect(snap.ok && snap.snapshot.neutralised.map((u) => u.id)).toEqual([BP, "hand-shell-guard"]);
+    // The snapshot names only the unit that is really off, byte for byte as before the merge.
+    expect(fs.readFileSync(first, "utf8")).toBe(bodyBefore);
     expect(fs.readdirSync(linkDir).filter((n) => n.startsWith("config.toml.bak."))).toHaveLength(2);
+    expect(listCodexSnapshots(linkDir)).toEqual([first]);
+    // Not stuck: the retry joins the snapshot, and one enable restores everything.
+    expect(disableAt(link, "Bash", at(3))).toBe(first);
+    expect(codexGateEnable({ configPath: link, now: at(4) }).mode).toBe("restored");
+    expect(fs.readFileSync(real, "utf8")).toBe(original);
+  });
+});
+
+describe("codexGateEnable: a merged snapshot the config no longer matches", () => {
+  /** Two disables merged into one snapshot; returns the pre-disable text, the state after the first and the merged snapshot. */
+  function merged(): { original: string; afterFirst: string; afterBoth: string; snapshotPath: string } {
+    const original = installConfig(configPath);
+    const snapshotPath = disableAt(configPath, "apply_patch", at(1));
+    const afterFirst = read();
+    expect(disableAt(configPath, "Bash", at(2))).toBe(snapshotPath);
+    return { original, afterFirst, afterBoth: read(), snapshotPath };
+  }
+
+  it("a crash after the merged snapshot was written but before the config was (residue): enable restores what is still off without --force", () => {
+    const { original, afterFirst, snapshotPath } = merged();
+    fs.writeFileSync(configPath, afterFirst);
+    // disable cannot join a snapshot that names a unit the file still has enabled, and names the way out
+    expect(thrownMessage(() => codexGateDisable({ configPath, matcher: "Bash", now: at(3) }))).toContain(
+      "enable --runtime codex --force",
+    );
+    const e = codexGateEnable({ configPath, now: at(4) });
+    if (e.mode !== "restored") throw new Error("expected restored");
+    expect(e.restoredCount).toBe(1);
+    expect(e.skippedEnabled).toEqual([SG]);
+    expect(e.snapshotPath).toBe(retired(snapshotPath));
+    expect(e.stillDisabled).toEqual([]);
+    expect(read()).toBe(original);
+    expect(listCodexSnapshots(path.dirname(configPath))).toEqual([]);
+  });
+
+  it("the same residue is also restored by enable --force, which reports the unit it skipped", () => {
+    const { original, afterFirst } = merged();
+    fs.writeFileSync(configPath, afterFirst);
+    const e = codexGateEnable({ configPath, force: true, now: at(4) });
+    expect(e.mode === "restored" && [e.restoredCount, e.skippedEnabled]).toEqual([1, [SG]]);
+    expect(read()).toBe(original);
+    expect(listCodexSnapshots(path.dirname(configPath))).toEqual([]);
+  });
+
+  it("one unit of a merged snapshot put back by hand with its original line: enable restores the other without --force", () => {
+    const { original, snapshotPath } = merged();
+    fs.writeFileSync(configPath, putBack(BP));
+    const e = codexGateEnable({ configPath, now: at(3) });
+    if (e.mode !== "restored") throw new Error("expected restored");
+    expect(e.restoredCount).toBe(1);
+    expect(e.skippedEnabled).toEqual([BP]);
+    expect(e.snapshotPath).toBe(retired(snapshotPath));
+    expect(read()).toBe(original);
+  });
+
+  it("with another edit in the file the same state refuses without --force; --force restores the unit still off and keeps the edit", () => {
+    const { original } = merged();
+    const edited = `${putBack(BP)}\n[tui]\nnotifications = true\n`;
+    fs.writeFileSync(configPath, edited);
+    expect(() => codexGateEnable({ configPath, now: at(3) })).toThrow(/edited since the snapshot was taken/);
+    expect(read()).toBe(edited);
+    const e = codexGateEnable({ configPath, force: true, now: at(4) });
+    expect(e.mode === "restored" && e.skippedEnabled).toEqual([BP]);
+    expect(read()).toBe(`${original}\n[tui]\nnotifications = true\n`);
+  });
+
+  it("a hand-put-back line that differs from the recorded one is not proven to rebuild the pre-disable bytes: it refuses without --force", () => {
+    merged();
+    const changed = putBack(BP, 'hooks = [{ type = "command", command = "my-own-guard", timeout = 3 }]');
+    fs.writeFileSync(configPath, changed);
+    expect(() => codexGateEnable({ configPath, now: at(3) })).toThrow(/edited since the snapshot was taken/);
+    expect(read()).toBe(changed);
+  });
+
+  it("a restore that cannot be proven also refuses when a unit it names is missing from the block, and writes nothing", () => {
+    merged();
+    const units = readCodexManagedHookUnits(read(), configPath)!.units;
+    const gone = `${read().slice(0, units[0]!.start)}${read().slice(units[1]!.start)}`;
+    fs.writeFileSync(configPath, gone);
+    expect(() => codexGateEnable({ configPath, force: true, now: at(3) })).toThrow(/is not in the block of .* as it was/);
+    expect(read()).toBe(gone);
   });
 });
 
@@ -1157,19 +1390,33 @@ describe("codexGateEnable: integrity", () => {
     expect(reinstalled.split("harness pack hook branch-protection").length - 1).toBe(1);
   });
 
-  it("--force refuses a unit of the snapshot that is already enabled while another unit is still disabled", () => {
+  it("--force restores only the units that are still disabled: a unit put back by hand is skipped and named, never added twice", () => {
+    const original = installConfig(configPath);
+    codexGateDisable({ configPath, matcher: "a", now: T0 });
+    // The operator put the branch-protection hooks line back by hand and edited elsewhere; the shell guard stays disabled.
+    const handFixed = `${putBack(BP)}\n[tui]\nx = 1\n`;
+    fs.writeFileSync(configPath, handFixed);
+    const e = codexGateEnable({ configPath, force: true, now: T1 });
+    if (e.mode !== "restored") throw new Error("expected restored");
+    expect(e.restoredCount).toBe(1);
+    expect(e.skippedEnabled).toEqual([BP]);
+    expect(e.stillDisabled).toEqual([]);
+    expect(read()).toBe(`${original}\n[tui]\nx = 1\n`);
+    expect(read().split("harness pack hook branch-protection").length - 1).toBe(1);
+    expect(listCodexSnapshots(path.dirname(configPath))).toEqual([]);
+  });
+
+  it("--force never overwrites a line that is live again, even one the operator changed", () => {
     installConfig(configPath);
     codexGateDisable({ configPath, matcher: "a", now: T0 });
-    // The operator put the branch-protection hooks line back by hand; the shell guard stays disabled.
-    const current = fs.readFileSync(configPath, "utf8");
-    const snap = readCodexSnapshot(listSnapshots(path.dirname(configPath), CODEX_SNAPSHOT_BASENAME_PREFIX)[0]!);
-    if (!snap.ok) throw new Error("snapshot unreadable");
-    const bp = readCodexManagedHookUnits(current, configPath)!.units[0]!;
-    const handFixed = `${current.slice(0, bp.hooksStart)}${snap.snapshot.neutralised[0]!.hooksText}${current.slice(bp.hooksEnd)}\n[tui]\nx = 1\n`;
-    fs.writeFileSync(configPath, handFixed);
-    expect(() => codexGateEnable({ configPath, force: true, now: T1 })).toThrow(/is not disabled in the block/);
-    expect(fs.readFileSync(configPath, "utf8")).toBe(handFixed);
-    expect(handFixed.split("harness pack hook branch-protection").length - 1).toBe(1);
+    const handChanged = putBack(BP, 'hooks = [{ type = "command", command = "my-own-guard", timeout = 3 }]');
+    fs.writeFileSync(configPath, handChanged);
+    const e = codexGateEnable({ configPath, force: true, now: T1 });
+    if (e.mode !== "restored") throw new Error("expected restored");
+    expect(e.skippedEnabled).toEqual([BP]);
+    expect(read()).toContain("my-own-guard");
+    expect(read()).not.toContain("harness pack hook branch-protection --runtime codex");
+    expect(read()).toContain("harness pack hook shell-guard --runtime codex");
   });
 
   it("--force refuses a unit that is missing from the block, or whose matcher changed", () => {
@@ -1334,10 +1581,20 @@ describe("readCodexSnapshot", () => {
     expect(!sameOrdinal.ok && sameOrdinal.reason).toMatch(/twice/);
   });
 
-  it("makes enable refuse a tampered snapshot without writing", () => {
+  it("refuses a malformed merges list and accepts an empty one", () => {
+    for (const merges of ["x", [{ createdAt: "t", matcher: 1, configBackupPath: "p" }], [null]]) {
+      const r = readWith((c) => void (c["merges"] = merges));
+      expect(r.ok).toBe(false);
+      expect(!r.ok && r.reason).toMatch(/malformed "merges" list/);
+    }
+    expect(readWith((c) => void (c["merges"] = [])).ok).toBe(true);
+  });
+
+  it("makes enable refuse a tampered snapshot without writing, naming the file and how to get unstuck", () => {
     const disabled = fs.readFileSync(configPath, "utf8");
     fs.writeFileSync(snapshotPath, JSON.stringify({ ...snap, neutralised: [] }));
     expect(() => codexGateEnable({ configPath })).toThrow(GateEnableError);
+    expect(thrownMessage(() => codexGateEnable({ configPath }))).toContain(`move ${snapshotPath} aside`);
     expect(fs.readFileSync(configPath, "utf8")).toBe(disabled);
   });
 });

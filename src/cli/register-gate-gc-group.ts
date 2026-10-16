@@ -53,7 +53,8 @@ export function registerGateGcGroup(
         "so `harness gate enable` can restore them. With `--runtime codex` the matching hook units " +
         "of the harness-managed block in ~/.codex/config.toml are neutralised in place instead " +
         "(`hooks = []`, so the position of every other hook stays) and their original lines go " +
-        "to `harness.gate-disable-codex.<ts>.json` (a later disable joins the live snapshot). " +
+        "to `harness.gate-disable-codex.<ts>.json` (a later disable joins the live snapshot, or retires it " +
+        "first when it has nothing left to restore). " +
         "With no `--matcher` flag, lists the candidate " +
         "groups without writing.",
     )
@@ -90,6 +91,13 @@ export function registerGateGcGroup(
         for (const r of result.removed) {
           stdout(`  ${r.event}[${r.index}] matcher=${JSON.stringify(r.matcher)}\n`);
         }
+        if (result.retired !== undefined) {
+          stdout(
+            result.retired.installBackup !== undefined
+              ? `retired ${result.retired.from} as ${result.retired.to}: a later install (${result.retired.installBackup}) re-rendered its units; this disable starts a fresh snapshot.\n`
+              : `retired ${result.retired.from} as ${result.retired.to}: it had nothing left to restore; this disable starts a fresh snapshot.\n`,
+          );
+        }
         stdout(`backup:   ${result.backupPath}\n`);
         stdout(`snapshot: ${result.snapshotPath}\n`);
         stdout(
@@ -115,9 +123,11 @@ export function registerGateGcGroup(
         "`harness apply --runtime codex --install`, or whose units are all enabled again (not deleted), " +
         "is renamed to `*.superseded.json`; neither is applied again. It exits non-zero and names the " +
         "units when any hook unit stays disabled, and names how many live snapshots remain when an " +
-        "earlier build left several (it handles the newest per run). `--force` applies the snapshot to a config edited since: it swaps " +
-        "only that snapshot's hooks lines back into the units it names (found by id) and keeps " +
-        "every other edit; it refuses when a unit is missing, changed or not disabled.",
+        "earlier build left several (it handles the newest per run). A config edited since is " +
+        "restored without `--force` only when skipping the units that are back already rebuilds " +
+        "the pre-disable bytes; otherwise it refuses, and `--force` restores every unit the snapshot " +
+        "names that is still disabled (found by id), leaves a unit that is enabled again as it is " +
+        "and keeps every other edit; it refuses when a unit is missing or changed.",
     )
     .option("--settings <path>", "override ~/.claude/settings.json (--runtime claude)")
     .option("--config <path>", "override ~/.codex/config.toml (--runtime codex)")
@@ -160,6 +170,9 @@ export function registerGateGcGroup(
         }
         if ("skippedForeign" in result) {
           for (const p of result.skippedForeign) stdout(`skipped ${p}: taken for another config.\n`);
+        }
+        if ("skippedEnabled" in result && result.skippedEnabled.length > 0) {
+          stdout(`left as they are: ${result.skippedEnabled.join(", ")} (already enabled again).\n`);
         }
         if ("retired" in result && result.retired?.why === "superseded") {
           const r = result.retired;
@@ -217,6 +230,8 @@ interface GateDisableView {
   backupPath: string;
   snapshotPath: string;
   removed: Array<{ event: string; index: number; matcher: string | null }>;
+  /** Codex only: a spent live snapshot the disable retired before starting a fresh one. */
+  retired?: { from: string; to: string; why: string; installBackup?: string };
 }
 
 /** Runs the disable verb for one runtime and flattens both results into the one shape the printer reads. */
@@ -238,6 +253,7 @@ function runGateDisable(
       backupPath: r.backupPath,
       snapshotPath: r.snapshotPath,
       removed: r.neutralised.map((u) => ({ event: u.event, index: u.eventIndex, matcher: u.matcher })),
+      ...(r.retired !== null ? { retired: r.retired } : {}),
     };
   }
   const r = gateDisable({

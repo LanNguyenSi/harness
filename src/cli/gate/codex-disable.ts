@@ -14,9 +14,14 @@
 // `hooks` lines (`harness.gate-disable-codex.<ISO>.json`) land before the
 // atomic rewrite. At most one snapshot per config is live: a disable made
 // while one exists merges its units into that snapshot (keeping the original
-// pre-disable sha and recording the new post-disable sha) instead of writing a
-// second one, and refuses when the config no longer matches that snapshot's
-// post-disable sha. Text outside the fences, and every operator-authored
+// pre-disable sha, recording the new post-disable sha and an audit entry in
+// `merges`) instead of writing a second one; if the config write then fails,
+// the snapshot is put back as it was. A live snapshot that `gate enable` would
+// only retire (an install re-rendered the block, the config is back at the
+// pre-disable state, or every unit it names is enabled again) is retired by
+// the disable itself, which then starts a fresh snapshot. Any other live
+// snapshot the config no longer matches refuses the disable and names
+// `gate enable --force`. Text outside the fences, and every operator-authored
 // table, is never touched. The block is read by the installer's own scanner
 // (`readCodexManagedHookUnits`), so a duplicate BEGIN marker, a foreign table
 // wedged in the block or a missing END marker refuse instead of guessing.
@@ -40,8 +45,12 @@ import {
   codexSnapshotPath,
   type CodexDisabledUnit,
   type CodexGateSnapshot,
+  type CodexRetiredSnapshot,
+  latestInstall,
   readLiveCodexSnapshots,
   resolveCodexConfig,
+  retireCodexSnapshot,
+  spentCodexSnapshot,
   toGateError,
 } from "./codex-snapshot.js";
 import { backupPath, sha256Hex } from "./snapshot.js";
@@ -69,6 +78,8 @@ export type CodexGateDisableResult =
       backupPath: string;
       snapshotPath: string;
       neutralised: CodexDisabledUnit[];
+      /** A spent live snapshot this disable retired before starting a fresh one. */
+      retired: CodexRetiredSnapshot | null;
     };
 
 export function codexGateDisable(opts: CodexGateDisableOptions = {}): CodexGateDisableResult {
@@ -159,16 +170,40 @@ export function codexGateDisable(opts: CodexGateDisableOptions = {}): CodexGateD
     throw toGateError(err, (m) => new GateDisableError(m));
   }
 
-  // At most one live snapshot per config: this disable joins it. It can only
-  // join when the config is exactly what that snapshot left behind, since its
-  // pre-disable sha must stay the one state a restore rebuilds.
-  const live = readLiveCodexSnapshots(requestedPath, (m) => new GateDisableError(m)).own[0];
-  if (live !== undefined && sha256Hex(text) !== live.snapshot.configAfterSha256) {
-    throw new GateDisableError(
-      `the live gate snapshot ${live.path} no longer matches ${requestedPath} (edited, or re-rendered by an ` +
-        "install since the last disable), so this disable cannot join it. Run `harness gate enable --runtime " +
-        "codex` first (add --force if it refuses). The file is untouched.",
-    );
+  // At most one live snapshot per config. A spent one (enable would only
+  // retire it: an install re-rendered the block, the config is back at the
+  // pre-disable state, or every unit it names is enabled again) is retired
+  // here and this disable starts a fresh snapshot. Otherwise this disable
+  // joins it, which is only possible when the config is exactly what the
+  // snapshot left behind, since its pre-disable sha must stay the one state a
+  // restore rebuilds.
+  let live = readLiveCodexSnapshots(requestedPath, (m) => new GateDisableError(m)).own[0];
+  let retired: CodexRetiredSnapshot | null = null;
+  if (live !== undefined) {
+    const spent = spentCodexSnapshot(
+      live.snapshot,
+      sha256Hex(text),
+      block.units,
+      latestInstall(requestedPath, configPath),
+    ).retire;
+    if (spent !== null) {
+      try {
+        retired = { from: live.path, to: retireCodexSnapshot(live.path, spent.why), ...spent };
+      } catch (err) {
+        throw new GateDisableError(
+          `the live gate snapshot ${live.path} is spent (enable would only retire it) but cannot be retired ` +
+            `(${(err as Error).message}); move it aside by hand and run the command again. The file is untouched.`,
+        );
+      }
+      live = undefined;
+    } else if (sha256Hex(text) !== live.snapshot.configAfterSha256) {
+      throw new GateDisableError(
+        `the live gate snapshot ${live.path} no longer matches ${requestedPath} (edited since the last disable) ` +
+          "and still names units that are off, so this disable cannot join it. Run `harness gate enable " +
+          "--runtime codex --force`: it puts back every unit the snapshot names that is still off, keeps your " +
+          "other edits and retires the snapshot. Then disable again. The file is untouched.",
+      );
+    }
   }
 
   const now = opts.now ?? new Date();
@@ -188,6 +223,10 @@ export function codexGateDisable(opts: CodexGateDisableOptions = {}): CodexGateD
         ...live.snapshot,
         configAfterSha256: sha256Hex(next),
         neutralised: [...live.snapshot.neutralised, ...neutralised].sort((a, b) => a.ordinal - b.ordinal),
+        merges: [
+          ...(live.snapshot.merges ?? []),
+          { createdAt: now.toISOString(), matcher: pattern, configBackupPath: backup },
+        ],
       }
     : {
         version: CODEX_SNAPSHOT_VERSION,
@@ -204,9 +243,35 @@ export function codexGateDisable(opts: CodexGateDisableOptions = {}): CodexGateD
   // Backup and snapshot land BEFORE the live rewrite, with the config's own
   // mode (it holds secrets and hook trust hashes): a crash between the writes
   // leaves the config untouched and the way back on disk.
+  // A merge changes the live snapshot before the config, so a failed config
+  // write puts the snapshot back as it was: a merged snapshot over an
+  // unchanged config would name units that are still enabled.
+  const priorBody = live === undefined ? undefined : fs.readFileSync(live.path, "utf8");
   atomicWriteFile(backup, text, { mode });
   atomicWriteFile(snapPath, `${JSON.stringify(snapshot, null, 2)}\n`, { mode });
-  atomicWriteFile(configPath, next, { mode });
+  try {
+    atomicWriteFile(configPath, next, { mode });
+  } catch (err) {
+    if (priorBody !== undefined) {
+      try {
+        atomicWriteFile(snapPath, priorBody, { mode });
+      } catch (rollbackErr) {
+        throw new GateDisableError(
+          `cannot write ${requestedPath}: ${(err as Error).message}; and the snapshot ${snapPath}, already merged, ` +
+            `could not be put back (${(rollbackErr as Error).message}). \`harness gate enable --runtime codex\` ` +
+            "restores what is off (add --force if it refuses).",
+        );
+      }
+    }
+    throw err;
+  }
 
-  return { mode: "remove", configPath: requestedPath, backupPath: backup, snapshotPath: snapPath, neutralised };
+  return {
+    mode: "remove",
+    configPath: requestedPath,
+    backupPath: backup,
+    snapshotPath: snapPath,
+    neutralised,
+    retired,
+  };
 }
