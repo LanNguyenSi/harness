@@ -2002,6 +2002,20 @@ describe("the installer retires live gate snapshots of the block it rewrites", (
     expect(fs.lstatSync(link).isSymbolicLink()).toBe(true);
   });
 
+  it("an install run on the link also retires a snapshot taken on the target's own path, which sits beside the target", () => {
+    const real = path.join(tmp, "dotfiles", "config.toml");
+    installConfig(real);
+    const linkDir = path.join(tmp, "codex-home");
+    fs.mkdirSync(linkDir);
+    const link = path.join(linkDir, "config.toml");
+    fs.symlinkSync(real, link);
+    const s0 = disableAt(real, "Bash", at(1));
+    expect(path.dirname(s0)).toBe(path.dirname(real));
+    const result = installOver(link, at(2));
+    expect(result.supersededSnapshots).toEqual([retired(s0, "superseded")]);
+    expect(listCodexSnapshots(path.dirname(real))).toEqual([]);
+  });
+
   it("retires a snapshot of the target that sits beside the target, and one recorded under another name of the same file", () => {
     installConfig(configPath);
     const dir = path.dirname(configPath);
