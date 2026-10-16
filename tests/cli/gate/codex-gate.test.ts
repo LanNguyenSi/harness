@@ -644,6 +644,23 @@ describe("codexGateDisable: one live snapshot per config", () => {
     expect(fs.readFileSync(second.backupPath, "utf8")).toBe(afterFirst);
   });
 
+  it("lists every merge in order, three disables into one snapshot, and one enable restores all three byte-identically", () => {
+    const original = installConfig(configPath, { withEditGuard: true });
+    const first = disableAt(configPath, "apply_patch", at(1));
+    expect(disableAt(configPath, "Bash", at(2))).toBe(first);
+    expect(disableAt(configPath, "Edit", at(3))).toBe(first);
+    const snap = readCodexSnapshot(first);
+    if (!snap.ok) throw new Error("snapshot unreadable");
+    expect(snap.snapshot.merges?.map((m) => [m.createdAt, m.matcher])).toEqual([
+      [at(2).toISOString(), "Bash"],
+      [at(3).toISOString(), "Edit"],
+    ]);
+    expect(snap.snapshot.neutralised).toHaveLength(3);
+    const e = codexGateEnable({ configPath, now: at(4) });
+    expect(e.mode === "restored" && e.restoredCount).toBe(3);
+    expect(read()).toBe(original);
+  });
+
   it("keeps the merged units in block order whichever disable came first", () => {
     const original = installConfig(configPath);
     const first = disableAt(configPath, "Bash", T0);
