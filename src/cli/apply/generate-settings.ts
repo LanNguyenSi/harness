@@ -291,11 +291,11 @@ export interface DesiredMcpServersResult {
  * Single choke point for the manifest -> Claude-Code-shaped MCP
  * server-spec projection (review round H1, Finding 2 — STRUCTURAL fix).
  * Encapsulates the fixed sequence `buildMcpServers` -> `projectGroundingEnv`
- * so every producer of this shape — `harness apply`'s settings.json
+ * so every producer of this shape, `harness apply`'s settings.json
  * generation (this module), the init wizard's `claude mcp` CLI wiring
  * (`src/cli/init/interactive.ts`), the doctor registration-health check
  * (`src/cli/doctor/claude-mcp.ts`), and the opencode config generator
- * (`generate-opencode-config.ts`) — calls this ONE function instead of
+ * (`generate-opencode-config.ts`), calls this ONE function instead of
  * hand-rolling the same sequence. A NEW projected env only needs to be
  * added here once, and cannot reach only some of the call sites.
  */

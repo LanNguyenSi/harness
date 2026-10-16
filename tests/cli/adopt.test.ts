@@ -874,7 +874,7 @@ describe("apply -> adopt round-trip for the grounding projection", () => {
 // grounding-mcp manifest entry (no env declared at all), an effective
 // registry carrying the projected EVIDENCE_LEDGER_DB, run through the actual
 // `adopt()` function end to end.
-describe("adopt — real e2e for the grounding round-trip", () => {
+describe("adopt: real e2e for the grounding round-trip", () => {
   // Absolute, no leading `~`, so EVIDENCE_LEDGER_DB's expansion is
   // independent of `os.homedir()` on whatever machine runs this test
   // (adopt/index.ts threads `homeDir: undefined` into the EVIDENCE_LEDGER_DB
@@ -961,12 +961,17 @@ policies: []
         },
       },
     });
-    const drift = computeMcpDrift(
-      manifestMcpProjection(parseManifest(parseYaml(fs.readFileSync(manifestPath, "utf8")))),
-      parseSettingsMcpServers(JSON.parse(fs.readFileSync(registryPath, "utf8"))),
-    );
-    expect(drift).toHaveLength(1);
-    expect(drift[0]?.reason).toBe("modified");
+    const before = fs.readFileSync(manifestPath, "utf8");
+    const r = await runAdopt(settingsPath, {
+      configPath: manifestPath,
+      stdinIsTTY: true,
+      prompt: async () => "n",
+    });
+    expect(r.outcome).toBe("declined");
+    expect(r.mcpDriftCount).toBe(1);
+    expect(r.replacedMcpNames).toEqual(["grounding-mcp"]);
+    // Declining never writes the manifest.
+    expect(fs.readFileSync(manifestPath, "utf8")).toBe(before);
   });
 });
 

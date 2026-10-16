@@ -501,7 +501,7 @@ describe("doctor — hermetic spawn guard, claude-mcp path (task 0d80e969)", () 
 // same call every other producer of this shape makes (apply, init
 // --interactive, opencode). The hint carries the EVIDENCE_LEDGER_DB
 // projection and no approval-signing key (task 21a2c508).
-describe("doctor — the add-json hint matches buildDesiredMcpServers", () => {
+describe("doctor: the add-json hint matches buildDesiredMcpServers", () => {
   it("the not-registered add-json hint for grounding-mcp matches buildDesiredMcpServers byte-for-byte and carries no signing key", async () => {
     const home = makeFixture({
       "harness.yaml": manifestWithMcp(

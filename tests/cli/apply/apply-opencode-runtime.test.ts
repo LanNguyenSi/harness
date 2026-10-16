@@ -137,7 +137,7 @@ describe("apply --runtime opencode", () => {
 // The opencode config apply writes carries the grounding-mcp EVIDENCE_LEDGER_DB
 // projection and no approval-signing key (task 21a2c508); an operator-declared
 // value passes through. These run the real apply() pipeline end to end.
-describe("apply --runtime opencode — grounding-mcp environment (task 21a2c508)", () => {
+describe("apply --runtime opencode: grounding-mcp environment (task 21a2c508)", () => {
   function readOpencodeMcp(): Record<string, { environment?: Record<string, string> }> {
     const opencodePath = path.join(tmpHome, GENERATED_DIRNAME, OPENCODE_CONFIG_BASENAME);
     const jsonBody = fs

@@ -330,7 +330,7 @@ describe("generateOpencodeConfig", () => {
 // The opencode grounding-mcp entry carries the EVIDENCE_LEDGER_DB projection
 // and no approval-signing key (task 21a2c508); an operator-declared value
 // passes through as an ordinary environment entry.
-describe("generateOpencodeConfig — grounding-mcp environment (task 21a2c508)", () => {
+describe("generateOpencodeConfig: grounding-mcp environment (task 21a2c508)", () => {
   it("projects EVIDENCE_LEDGER_DB and no SOLUTION_VERDICT_SIGNING_KEY", () => {
     const { mcp } = generateOpencodeConfig(canonicalManifest(), { homeDir: "/home/op" });
     const groundingEntry = asLocal(mcp["grounding-mcp"]);

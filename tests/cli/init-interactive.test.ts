@@ -544,7 +544,7 @@ describe("interactive wizard — MCP registration + settings.json migration (tas
     expect(cap.stderr()).toContain("removed 2 dead mcpServers entries");
   });
 
-  it("re-registers a grounding-mcp entry that an older release registered with SOLUTION_VERDICT_SIGNING_KEY (task 21a2c508 upgrade path)", async () => {
+  it("ensureMcpServers replaces a grounding-mcp entry whose registered env still carries SOLUTION_VERDICT_SIGNING_KEY (task 21a2c508 env-comparison pin; init overwrites the manifest, so this is not the operator remedy)", async () => {
     fs.mkdirSync(path.join(tmpHome, ".claude"));
     const registryPath = path.join(tmpHome, ".claude.json");
     const runOnce = async (forceOverwrite: boolean, confirms: boolean[]) => {

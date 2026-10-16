@@ -1028,7 +1028,7 @@ describe("generateSettings — grounding: projection (task 129e1b94)", () => {
 // the operator declares on the manifest entry is an ordinary env value and
 // passes through untouched, including a SOLUTION_VERDICT_SIGNING_KEY that a
 // grounding-mcp deployment may still read.
-describe("generateSettings — grounding-mcp env after the signing-key projection removal (task 21a2c508)", () => {
+describe("generateSettings: grounding-mcp env after the signing-key projection removal (task 21a2c508)", () => {
   const GROUNDING_MCP = {
     name: "grounding-mcp",
     command: ["node", "/opt/grounding-mcp/dist/server.js"],
