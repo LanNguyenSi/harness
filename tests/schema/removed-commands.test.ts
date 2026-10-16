@@ -151,6 +151,25 @@ describe("REMOVED_COMMANDS table (task f3f15290)", () => {
     // Look-alike: another word that merely starts the same way is not a match.
     expect(invokesRemovedCommand("harness smoker")).toBeUndefined();
   });
+
+  it("lists harness pause and harness resume as their own rows, matched with flags, and keeps harness explain the last row (task 973163a4)", () => {
+    const pauseRow = REMOVED_COMMANDS.find((c) => c.command === "harness pause");
+    const resumeRow = REMOVED_COMMANDS.find((c) => c.command === "harness resume");
+    expect(pauseRow).toBeDefined();
+    expect(resumeRow).toBeDefined();
+    expect(pauseRow?.removedIn).toBe("1.0.0");
+    expect(resumeRow?.removedIn).toBe("1.0.0");
+    expect(pauseRow?.reason.length).toBeGreaterThan(0);
+    expect(resumeRow?.reason.length).toBeGreaterThan(0);
+    expect(invokesRemovedCommand("harness pause --for 1h")).toBe(pauseRow);
+    expect(invokesRemovedCommand("harness resume")).toBe(resumeRow);
+    // Look-alike: no space or hyphen boundary, so `harness pauses` is a
+    // different verb and matches nothing.
+    expect(invokesRemovedCommand("harness pauses")).toBeUndefined();
+    // Lookup takes the FIRST matching row, so the `harness explain` row must
+    // stay the LAST row of the table.
+    expect(REMOVED_COMMANDS[REMOVED_COMMANDS.length - 1]?.command).toBe("harness explain");
+  });
 });
 
 describe("invokesRemovedCommand", () => {
@@ -174,7 +193,7 @@ describe("invokesRemovedCommand", () => {
   });
 
   it("leaves live commands alone", () => {
-    expect(invokesRemovedCommand("harness pause", table)).toBeUndefined();
+    expect(invokesRemovedCommand("harness gate disable", table)).toBeUndefined();
     expect(invokesRemovedCommand("harness policy intercept", table)).toBeUndefined();
     expect(invokesRemovedCommand("", table)).toBeUndefined();
   });

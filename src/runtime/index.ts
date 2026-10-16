@@ -19,8 +19,3 @@ export {
   type GitRepoContext,
   type ResolveScopedProjectNameOptions,
 } from "./git-context.js";
-export {
-  addLedgerFact,
-  type AddLedgerFactOptions,
-  type AddLedgerFactResult,
-} from "./ledger-add.js";

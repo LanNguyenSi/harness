@@ -28,6 +28,6 @@ describe("the registration walk itself", () => {
   it("resolves commands that are still registered", () => {
     const program = buildProgram();
     expect(resolves(program, ["pack", "hook", "branch-protection"])).toBe(true);
-    expect(resolves(program, ["pause"])).toBe(true);
+    expect(resolves(program, ["gate"])).toBe(true);
   });
 });

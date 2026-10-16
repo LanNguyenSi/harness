@@ -573,7 +573,7 @@ describe("G3 (task 052f9d5b review, second pass): D4's metacharacter check scans
 
 describe(
   "H1 (task 052f9d5b review, third pass): the exact spawn shape " +
-    "tests/integration/operator-state-isolation.test.ts now uses (process.execPath + " +
+    "tests/_helpers/nested-vitest.ts provides (process.execPath + " +
     "resolveVitestEntry(), replacing the CI-breaking npx-based spawn) is allowed under the " +
     "ACTIVE hook",
   () => {

@@ -8,11 +8,10 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
-  checkHookPause,
   loadManifestOrInjected,
   readStdinChecked,
 } from "../../src/cli/pack/hook-bootstrap.js";
-import { stdinTimeoutBlockJson, stdinTimeoutBlockReason } from "../../src/cli/bounded-stdin.js";
+import { stdinTimeoutBlockReason } from "../../src/cli/bounded-stdin.js";
 import { parseManifest, type Manifest } from "../../src/schema/index.js";
 
 // ---------------------------------------------------------------------------
@@ -26,30 +25,9 @@ function makeReadableOf(content: string): Readable {
   return r;
 }
 
-function makeStderr(): { stream: NodeJS.WritableStream; lines: string[] } {
-  const lines: string[] = [];
-  const stream = {
-    write(s: string) {
-      lines.push(s);
-      return true;
-    },
-  } as unknown as NodeJS.WritableStream;
-  return { stream, lines };
-}
-
 // Minimal valid manifest: version 1, all optional sections default.
 function minimalManifest(): Manifest {
   return parseManifest({ version: 1 });
-}
-
-// Sentinel body the pause module expects.
-function pauseSentinelBody(expiresAt: string | null = null): string {
-  return JSON.stringify({
-    pausedAt: new Date().toISOString(),
-    expiresAt,
-    reason: null,
-    pausedBy: null,
-  });
 }
 
 // ---------------------------------------------------------------------------
@@ -84,93 +62,22 @@ describe("readStdinChecked (the PreToolUse gates' reader)", () => {
   });
 });
 
-describe("stdin timeout block helpers", () => {
+describe("stdin timeout block reason", () => {
   it("the reason names the stdin timeout and the bound", () => {
     const reason = stdinTimeoutBlockReason(3000);
     expect(reason).toMatch(/^stdin timeout:/);
     expect(reason).toContain("within 3000 ms");
     expect(reason).toContain("fail closed");
-  });
-
-  it("the envelope blocks in both the legacy and the hookSpecificOutput form", () => {
-    const parsed = JSON.parse(stdinTimeoutBlockJson("why"));
-    expect(parsed).toEqual({
-      decision: "block",
-      reason: "why",
-      hookSpecificOutput: {
-        hookEventName: "PreToolUse",
-        permissionDecision: "deny",
-        permissionDecisionReason: "why",
-      },
-    });
+    // The operator override it names is the gate disable verb, not the
+    // removed pause (task 973163a4).
+    expect(reason).toContain("Operator override: `harness gate disable`");
+    expect(reason).toContain("`harness gate disable --runtime codex`");
+    expect(reason).not.toContain("harness pause");
   });
 });
 
 // ---------------------------------------------------------------------------
-// 2. checkHookPause
-// ---------------------------------------------------------------------------
-
-describe("checkHookPause", () => {
-  let tmp: string;
-
-  beforeEach(() => {
-    tmp = fs.mkdtempSync(path.join(os.tmpdir(), "bootstrap-pause-"));
-  });
-  afterEach(() => {
-    fs.rmSync(tmp, { recursive: true, force: true });
-  });
-
-  it("returns { paused: false } when no sentinel exists", () => {
-    const { stream } = makeStderr();
-    const result = checkHookPause("test-hook", stream, undefined, tmp);
-    expect(result.paused).toBe(false);
-  });
-
-  it("returns { paused: true } and writes a notice when an indefinite sentinel exists", () => {
-    fs.writeFileSync(
-      path.join(tmp, ".harness-paused"),
-      pauseSentinelBody(null),
-    );
-    const { stream, lines } = makeStderr();
-    const result = checkHookPause("test-hook", stream, undefined, tmp);
-    expect(result.paused).toBe(true);
-    // The pause announcement should mention the hook label.
-    expect(lines.join("")).toContain("test-hook");
-  });
-
-  it("returns { paused: false } when an expired sentinel exists", () => {
-    // expiresAt is in the past relative to `now`.
-    const now = new Date("2026-06-01T12:00:00.000Z");
-    const past = new Date(now.getTime() - 60_000).toISOString();
-    fs.writeFileSync(
-      path.join(tmp, ".harness-paused"),
-      pauseSentinelBody(past),
-    );
-    const { stream } = makeStderr();
-    // Pass `now` so the sentinel is evaluated as expired.
-    const result = checkHookPause("test-hook", stream, undefined, tmp, now);
-    expect(result.paused).toBe(false);
-  });
-
-  it("resolves the sentinel from loaderOpts.homeDir when no generatedDir is passed", () => {
-    // Locks the loaderOpts passthrough: the manifest-loading hooks rely on
-    // checkHookPause forwarding loaderOpts so the sentinel is read from the
-    // loader-derived <homeDir>/harness.generated/ dir, not an explicit one.
-    const generatedDir = path.join(tmp, "harness.generated");
-    fs.mkdirSync(generatedDir, { recursive: true });
-    fs.writeFileSync(
-      path.join(generatedDir, ".harness-paused"),
-      pauseSentinelBody(null),
-    );
-    const { stream, lines } = makeStderr();
-    const result = checkHookPause("test-hook", stream, { homeDir: tmp }, undefined);
-    expect(result.paused).toBe(true);
-    expect(lines.join("")).toContain("test-hook");
-  });
-});
-
-// ---------------------------------------------------------------------------
-// 3. loadManifestOrInjected
+// 2. loadManifestOrInjected
 // ---------------------------------------------------------------------------
 
 describe("loadManifestOrInjected", () => {

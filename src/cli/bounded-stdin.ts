@@ -1,9 +1,8 @@
 // One idle-bounded stdin reader shared by every hook-style CLI entry that
-// parses an event JSON from stdin (the pack hook
-// readers: `readStdin` / `readStdinChecked` in pack/hook-bootstrap.ts and the
-// runtime-reality reader in pack/hook-runtime-reality.ts). It also holds the
-// shared stdin-timeout refusal reason and block envelope those PreToolUse
-// gates emit when the read timed out.
+// parses an event JSON from stdin (`readStdinChecked` in
+// pack/hook-bootstrap.ts and the runtime-reality reader in
+// pack/hook-runtime-reality.ts). It also holds the shared stdin-timeout
+// refusal reason those PreToolUse gates emit when the read timed out.
 //
 // A hook pipes the event JSON and closes stdin at once, so a real pipe never
 // gets near the bound; it only bites when stdin is an open pipe or a TTY that
@@ -75,31 +74,6 @@ export async function readStdinBounded(
 }
 
 /**
- * Default tail of the empty-read note. Callers that reach the note with a
- * non-empty read print the partial-data note instead.
- */
-export const DEFAULT_EMPTY_READ_TAIL = "falling back to the default session resolution";
-
-/**
- * The stderr note for a read the idle bound cut off (no trailing newline).
- * `emptyReadTail` says what the caller does when nothing was read; it defaults
- * to `DEFAULT_EMPTY_READ_TAIL`, and a caller with a different fallback (the
- * pack hook readers continue as an empty event) passes its own. The
- * partial-data note is the same for every caller.
- */
-export function stdinTimeoutNote(
-  read: StdinRead,
-  idleTimeoutMs: number,
-  emptyReadTail: string = DEFAULT_EMPTY_READ_TAIL,
-): string {
-  return read.text.length === 0
-    ? `no complete event JSON on stdin within ${idleTimeoutMs} ms (stdin never closed); ` +
-        emptyReadTail
-    : `stdin did not close within ${idleTimeoutMs} ms of the last data; ` +
-        `using the ${Buffer.byteLength(read.text)} bytes read`;
-}
-
-/**
  * The block reason a PreToolUse gate gives when its stdin read timed out. It
  * names the stdin timeout and the bound; the gate fails closed because an
  * event that did not finish arriving cannot be judged.
@@ -108,23 +82,7 @@ export function stdinTimeoutBlockReason(idleTimeoutMs: number): string {
   return (
     `stdin timeout: no complete event arrived and closed on stdin within ${idleTimeoutMs} ms, ` +
     `so this gate cannot judge the tool call and refuses it (fail closed). ` +
-    `Retry the tool call. Operator override: \`harness pause\`.`
+    `Retry the tool call. Operator override: \`harness gate disable\` ` +
+    `(Codex: \`harness gate disable --runtime codex\`).`
   );
-}
-
-/**
- * The Claude Code block envelope for a stdin-timeout refusal: `decision:
- * "block"` for legacy CLIs plus the 2.1+ `hookSpecificOutput` PreToolUse deny.
- * Same shape every PreToolUse gate under src/cli/pack/ emits for a block.
- */
-export function stdinTimeoutBlockJson(reason: string): string {
-  return JSON.stringify({
-    decision: "block",
-    reason,
-    hookSpecificOutput: {
-      hookEventName: "PreToolUse",
-      permissionDecision: "deny",
-      permissionDecisionReason: reason,
-    },
-  });
 }

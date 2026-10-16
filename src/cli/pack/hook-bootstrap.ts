@@ -4,14 +4,12 @@
 // independently:
 //
 //   1. stdin envelope read (the common event-stream pattern).
-//   2. pause-sentinel check with announcement (wrapping checkPauseFromLoader
-//      so callers skip the conditional-opts-building block).
-//   3. manifest load with injection support (the common if-injected / else
+//   2. manifest load with injection support (the common if-injected / else
 //      loadManifest pattern; callers wrap the call in their own try/catch
 //      because error semantics differ per hook).
-//   4. pack `config.ux` parsing (label-parameterized; formerly four
+//   3. pack `config.ux` parsing (label-parameterized; formerly four
 //      byte-identical copies, task 19e293c6).
-//   5. `pickString` — first-defined-string-wins candidate picker (was three
+//   4. `pickString` — first-defined-string-wins candidate picker (was three
 //      byte-identical copies across the Codex hook trio before task
 //      a1348c89 extracted it here).
 //
@@ -24,7 +22,6 @@
 // to each hook. This module covers structural boilerplate only, not semantics.
 
 import { readStdinBounded, STDIN_IDLE_TIMEOUT_MS } from "../bounded-stdin.js";
-import { checkPauseFromLoader } from "../pause-check.js";
 import { loadManifest, type LoaderOptions } from "../loader.js";
 import { PolicyUxSchema, type Manifest, type PolicyUx } from "../../schema/index.js";
 
@@ -66,32 +63,7 @@ export async function readStdinChecked(
 }
 
 // ---------------------------------------------------------------------------
-// 2. Pause-sentinel check helper
-// ---------------------------------------------------------------------------
-
-/**
- * Thin wrapper around `checkPauseFromLoader` that removes the
- * conditional-opts-building block each hook previously duplicated. Callers
- * can express the pause check in a single expression:
- *
- *   if (checkHookPause("my-hook", stderr, opts, opts.generatedDir).paused) { ... }
- *
- * Pass `undefined` for `loaderOpts`, `generatedDir`, or `now` when the hook
- * does not supply them — the underlying `checkPauseFromLoader` already handles
- * `undefined` for all optional fields.
- */
-export function checkHookPause(
-  hookLabel: string,
-  stderr: NodeJS.WritableStream,
-  loaderOpts?: LoaderOptions,
-  generatedDir?: string,
-  now?: Date,
-): { paused: boolean } {
-  return checkPauseFromLoader({ hookLabel, stderr, loaderOpts, generatedDir, now });
-}
-
-// ---------------------------------------------------------------------------
-// 3. Manifest loader with injection support
+// 2. Manifest loader with injection support
 // ---------------------------------------------------------------------------
 
 export interface ManifestLoadResult {
@@ -132,7 +104,7 @@ export function loadManifestOrInjected(
 }
 
 // ---------------------------------------------------------------------------
-// 4. First-defined-string-wins candidate picker
+// 3. First-defined-string-wins candidate picker
 // ---------------------------------------------------------------------------
 
 /**
@@ -150,7 +122,7 @@ export function pickString(...candidates: unknown[]): string | undefined {
 }
 
 // ---------------------------------------------------------------------------
-// 5. Pack `config.ux` parser
+// 4. Pack `config.ux` parser
 // ---------------------------------------------------------------------------
 
 /**

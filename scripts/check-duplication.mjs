@@ -274,7 +274,10 @@ import * as path from "node:path";
 // Lowered to 32 (task af5c3d60): removing the policy engine, the shell command
 // model and the measure scripts; the check reports 32 with that change (the
 // pin was 37).
-const MAX_CLONES = 32;
+// Lowered to 31 (task 973163a4): removing the pause verbs, the pause sentinel
+// and the hook-side pause check; the check reports 31 with that change (the
+// pin was 32).
+const MAX_CLONES = 31;
 
 // Sets process.exitCode instead of calling process.exit so the caller's
 // finally-cleanup runs on every path (process.exit skips stack unwinding).

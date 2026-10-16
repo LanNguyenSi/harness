@@ -72,8 +72,8 @@ export function resolvePaths(opts: LoaderOptions = {}): ResolvedPaths {
     process.env["HARNESS_ALLOW_REAL_GENERATED_DIR"] !== "1"
   ) {
     // Defense against the recurring test-isolation class (v0.21.1 preflight
-    // stage leak, v0.22.0 approveUnderstanding marker leak, latent post-pause
-    // pause-sentinel read leak): without an explicit `homeDir` or
+    // stage leak, v0.22.0 approveUnderstanding marker leak, latent
+    // operator-state read leak): without an explicit `homeDir` or
     // `configPath`, this resolver would silently fall back to the
     // operator's real `~/.harness/` (or legacy `~/.claude/`) and the
     // caller would read/write that real state dir. The harness CLI

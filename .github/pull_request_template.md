@@ -11,7 +11,6 @@
 - [ ] `npm run typecheck`
 - [ ] `npm run build`
 - [ ] `npm test`
-- [ ] `npm run test:integration`
 - [ ] the `check:*` scripts that `.github/workflows/ci.yml` runs (`check:boundaries`, `check:duplication`, `check:no-only`, `check:no-raw-control-bytes`, `check:changelog-coverage`, `check:shipped-unreleased-pointer`, `check:readme-release-version`, `check:release-notes-size`, `check:memory-frontmatter-contract`)
 - [ ] Dogfooded against `dogfood/` examples
 - [ ] Manual smoke check: <!-- command or scenario -->

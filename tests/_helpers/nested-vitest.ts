@@ -6,9 +6,9 @@
 // (task 052f9d5b review H1): `npx` resolves to a real, standalone binary
 // (typically /usr/local/bin/npx or similar) that is neither a D3 tmpdir
 // fixture nor a D6 INFRA entry — spawning it under the active guard is a
-// genuine, correctly-blocked violation, not a false positive. CI runs
-// `npm run test:integration` (package.json; .github/workflows/ci.yml)
-// unconditionally, using the SAME vitest.config.ts (same setupFiles), so
+// genuine, correctly-blocked violation, not a false positive. CI runs the
+// suite unconditionally (`.github/workflows/ci.yml`), using the SAME
+// vitest.config.ts (same setupFiles), so
 // a nested spawn that uses `npx` breaks CI every time, not just when a
 // contributor happens to run the suite locally with the hook active.
 // `process.execPath` is the exact node binary already running vitest —

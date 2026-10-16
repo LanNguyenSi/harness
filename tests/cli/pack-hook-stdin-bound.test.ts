@@ -14,8 +14,6 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, describe, expect, it } from "vitest";
-import { GENERATED_DIRNAME } from "../../src/io/generated-dir.js";
-import { writeSentinel } from "../../src/runtime/pause-sentinel.js";
 import { addGitDirSkeleton } from "../_helpers/git-dir-fixture.js";
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
@@ -417,70 +415,4 @@ describe("pack hook stdin bound: every PreToolUse gate blocks on a timed-out rea
       ["branch-protection", "runtime-reality"].sort(),
     );
   });
-});
-
-describe("pack hook stdin bound: branch-protection does not yield to a pause", () => {
-  for (const gate of GATES.filter((g) => g.pack === "branch-protection")) {
-    it.concurrent(
-      `${gate.name ?? gate.verb}: with an active pause a never-closed empty stdin still BLOCKS on the timeout`,
-      async () => {
-        const ctx = makeCtx();
-        const generated = path.join(ctx.home, GENERATED_DIRNAME);
-        fs.mkdirSync(generated, { recursive: true });
-        writeSentinel(generated, {
-          pausedAt: new Date().toISOString(),
-          expiresAt: null,
-          reason: "stdin bound test",
-          pausedBy: "test",
-        });
-        const r = await runGate(gate, undefined, false, ctx);
-        expectTimeoutBlock(gate, r);
-        expect(r.stderr.toLowerCase()).not.toContain("paused");
-        // The refusal names no operator override (the pause is not one here).
-        expect(gate.reasonOn === "stdout" ? r.stdout : r.stderr).not.toMatch(/harness pause/);
-      },
-      TEST_TIMEOUT_MS,
-    );
-  }
-});
-
-// The two gates that take no --config resolve the pause sentinel from the
-// default generated dir, so the sentinel is written under both layouts the
-// default home can resolve to.
-describe("pack hook stdin bound: the pause wins over a timed-out read for the config-less gates", () => {
-  for (const gate of GATES.filter((g) => g.pack === null)) {
-    it.concurrent(
-      `${gate.verb}: a complete event on a stdin that never closes is allowed while paused, and blocked once unpaused`,
-      async () => {
-        // Control: no pause, the same timed-out read is refused.
-        const control = makeCtx();
-        expectTimeoutBlock(
-          gate,
-          await runGate(gate, [{ afterMs: 0, data: gate.event(control) }], false, control),
-        );
-
-        const ctx = makeCtx();
-        for (const generated of [
-          path.join(ctx.home, GENERATED_DIRNAME),
-          path.join(ctx.home, ".harness", GENERATED_DIRNAME),
-        ]) {
-          fs.mkdirSync(generated, { recursive: true });
-          writeSentinel(generated, {
-            pausedAt: new Date().toISOString(),
-            expiresAt: null,
-            reason: "stdin bound test",
-            pausedBy: "test",
-          });
-        }
-        const r = await runGate(gate, [{ afterMs: 0, data: gate.event(ctx) }], false, ctx);
-        expectBoundedExit(r);
-        expect(r.code, `stdout: ${r.stdout}; stderr: ${r.stderr}`).toBe(0);
-        expect(r.stdout).not.toContain("block");
-        expect(r.stdout).not.toContain("deny");
-        expect(r.stderr).not.toContain(BLOCK_REASON_HEAD);
-        expect(r.stderr.toLowerCase()).toContain("paused");
-      },
-      TEST_TIMEOUT_MS,
-    );
-  }
 });

@@ -101,7 +101,7 @@ export interface ApplyOptions {
    */
   yes?: boolean;
   /**
-   * Test seam mirroring `pause`: overrides the
+   * Test seam: overrides the
    * `process.stdin.isTTY` read that decides whether the default
    * confirmation prompt may run, so the non-TTY refusal can be
    * exercised hermetically.
