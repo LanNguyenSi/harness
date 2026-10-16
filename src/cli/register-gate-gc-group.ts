@@ -200,9 +200,10 @@ export function registerGateGcGroup(
             `taken as back under --force, not put back (same event and matcher, other content): ${accepted.join("; ")}.\n`,
           );
         }
+        // Codex only: a Claude result names another settings file's snapshots in `foreign` (an error below).
         if ("skippedForeign" in result) {
           for (const p of result.skippedForeign) {
-            stdout(`skipped ${p}: taken for another ${runtime === "codex" ? "config" : "settings file"}.\n`);
+            stdout(`skipped ${p}: taken for another config.\n`);
           }
         }
         if ("skippedEnabled" in result && result.skippedEnabled.length > 0) {
