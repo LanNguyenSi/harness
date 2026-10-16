@@ -6,22 +6,26 @@
 // Codex keys a user hook's trust and enabled state by its position in the
 // event's array, and an empty group takes its position without registering
 // a handler, so every other hook keeps its trust. A Codex snapshot records
-// one such call: per neutralised unit its identity and the verbatim original
-// `hooks = [...]` line, plus the sha256 of the config before and after. It
-// lives beside the Codex config under its own file prefix and carries
-// `version: 3` and `target: "codex"`, so a Claude settings snapshot (version
-// 1, no target) can never be restored into TOML and a Codex snapshot can
-// never be read as a settings.json one (`readSnapshot` rejects version 3).
-// Once `gate enable` has applied a snapshot, or found it applied or
-// superseded, it renames the file to `*.restored.json` or
-// `*.superseded.json`: the file stays for audit, `listCodexSnapshots` never
-// offers it again.
+// the neutralised units: per unit its identity and the verbatim original
+// `hooks = [...]` line, plus the sha256 of the config before the first
+// disable and after the latest one. At most one snapshot per config is live:
+// a later disable merges its units into it. It lives beside the Codex config
+// under its own file prefix and carries `version: 3` and `target: "codex"`,
+// so a Claude settings snapshot (version 1, no target) can never be restored
+// into TOML and a Codex snapshot can never be read as a settings.json one
+// (`readSnapshot` rejects version 3). Once `gate enable` has applied a
+// snapshot, or found it applied or superseded, it renames the file to
+// `*.restored.json` or `*.superseded.json`, and so does a `gate disable` that
+// finds the live snapshot spent: the file stays for audit,
+// `listCodexSnapshots` never offers it again.
 
 import * as fs from "node:fs";
 import * as path from "node:path";
 import {
   CodexInstallRefusalError,
+  type CodexManagedHookUnit,
   defaultCodexConfigPath,
+  latestCodexInstallBackup,
   resolveConfigSymlink,
 } from "../apply/install-codex-config.js";
 import { listSnapshots, SNAPSHOT_BASENAME_SUFFIX, snapshotFieldProblem } from "./snapshot.js";
@@ -49,6 +53,14 @@ export interface CodexDisabledUnit {
   hooksText: string;
 }
 
+/** One later `gate disable` merged into a live snapshot, kept for audit. */
+export interface CodexSnapshotMerge {
+  createdAt: string;
+  matcher: string;
+  /** The pre-merge copy of the config that disable wrote. */
+  configBackupPath: string;
+}
+
 export interface CodexGateSnapshot {
   version: typeof CODEX_SNAPSHOT_VERSION;
   target: typeof CODEX_SNAPSHOT_TARGET;
@@ -57,11 +69,15 @@ export interface CodexGateSnapshot {
   configPath: string;
   /** Absolute path the pre-mutation copy was written to. */
   configBackupPath: string;
+  /** The config before the first disable this snapshot covers. */
   configBeforeSha256: string;
+  /** The config after the latest disable merged into this snapshot. */
   configAfterSha256: string;
   filter: { matcher?: string };
-  /** The neutralised units in block order. */
+  /** The neutralised units in block order, merged over every disable since the snapshot was created. */
   neutralised: CodexDisabledUnit[];
+  /** Later disables merged into this snapshot, oldest first (absent when there were none). */
+  merges?: CodexSnapshotMerge[];
 }
 
 export interface ResolvedCodexConfig {
@@ -138,11 +154,175 @@ export function retiredCodexSnapshotPath(snapPath: string, why: CodexSnapshotRet
   return `${snapPath.slice(0, snapPath.length - SNAPSHOT_BASENAME_SUFFIX.length)}.${why}${SNAPSHOT_BASENAME_SUFFIX}`;
 }
 
+/** The snapshot a call retired: `from` was renamed to `to`. */
+export interface CodexRetiredSnapshot {
+  from: string;
+  to: string;
+  why: CodexSnapshotRetirement;
+  /** For an install-superseded snapshot: the installer backup that dates the install. */
+  installBackup?: string;
+}
+
+/** Renames a live snapshot to its retired name and returns that name; the
+ * file stays for audit. A failed rename surfaces as `makeError`: `context`
+ * (what the call has done so far) and the move-aside step. */
+export function retireCodexSnapshot(
+  snapPath: string,
+  why: CodexSnapshotRetirement,
+  makeError: (message: string) => Error,
+  context = "",
+): string {
+  const to = retiredCodexSnapshotPath(snapPath, why);
+  try {
+    fs.renameSync(snapPath, to);
+  } catch (err) {
+    throw makeError(
+      `${context}cannot retire the snapshot ${snapPath} (${(err as Error).message}); move it out of this ` +
+        "directory by hand so it is never applied again, then run the command again.",
+    );
+  }
+  return to;
+}
+
+/** The ways out of a live snapshot that no gate command can apply. */
+export function codexSnapshotExits(live: LoadedCodexSnapshot): string {
+  return (
+    "Ways out: run `harness apply --runtime codex --install`, which re-renders the block and supersedes the " +
+    `snapshot, or restore the config from ${live.snapshot.configBackupPath} (its state before the snapshot's ` +
+    "first disable); either way the next `harness gate enable --runtime codex` (or disable) retires the " +
+    `snapshot. Or move ${live.path} out of this directory and put back by hand any unit it names that is ` +
+    "still disabled."
+  );
+}
+
+export type CodexRestorePlan =
+  | { ok: true; text: string; restored: CodexDisabledUnit[]; skipped: string[] }
+  | { ok: false; reason: string };
+
+/** The config with each still-neutralised unit of the snapshot given its
+ * original `hooks` line back, found by id in the block as it is now. A unit
+ * that is present once and not neutralised is back already, whatever its
+ * event or matcher now: it is skipped and named in `skipped`, and its current
+ * line is never overwritten. A unit that is missing, listed twice, or still
+ * neutralised under another event or matcher cannot be restored by any gate
+ * command, so the plan fails and its reason names the ways out. `units` is
+ * null when the config has no managed block. */
+export function planCodexRestore(
+  current: string,
+  units: readonly CodexManagedHookUnit[] | null,
+  configPath: string,
+  live: LoadedCodexSnapshot,
+): CodexRestorePlan {
+  if (units === null) {
+    return {
+      ok: false,
+      reason:
+        `${configPath} has no harness-managed Codex hook block any more; the snapshot ${live.path} cannot ` +
+        `restore units into it. The config is untouched. ${codexSnapshotExits(live)}`,
+    };
+  }
+  const edits: Array<{ start: number; end: number; text: string }> = [];
+  const restored: CodexDisabledUnit[] = [];
+  const skipped: string[] = [];
+  for (const wanted of live.snapshot.neutralised) {
+    const found = units.filter((u) => u.id === wanted.id);
+    const unit = found.length === 1 ? found[0]! : undefined;
+    if (unit !== undefined && !unit.disabled) {
+      skipped.push(wanted.id);
+      continue;
+    }
+    if (unit === undefined || unit.event !== wanted.event || unit.matcher !== wanted.matcher) {
+      return {
+        ok: false,
+        reason:
+          `the hook unit ${JSON.stringify(wanted.id)} of the snapshot ${live.path} is not in the block of ` +
+          `${configPath} as it was (missing, listed twice, or changed event or matcher while still disabled), ` +
+          `so no gate command can restore it. The config is untouched. ${codexSnapshotExits(live)}`,
+      };
+    }
+    edits.push({ start: unit.hooksStart, end: unit.hooksEnd, text: wanted.hooksText });
+    restored.push(wanted);
+  }
+  edits.sort((a, b) => a.start - b.start);
+  let out = "";
+  let cursor = 0;
+  for (const edit of edits) {
+    out += current.slice(cursor, edit.start) + edit.text;
+    cursor = edit.end;
+  }
+  return { ok: true, text: out + current.slice(cursor), restored, skipped };
+}
+
+/** The installer's newest write of the config, read from its backups beside
+ * the requested path (and beside the resolved target, where an install
+ * through the target's own path leaves them). */
+export function latestInstall(requestedPath: string, configPath: string): { ms: number; path: string } | null {
+  const found = [requestedPath, configPath].map(latestCodexInstallBackup).filter((t) => t !== null);
+  return found.reduce<{ ms: number; path: string } | null>((a, b) => (a === null || b.ms > a.ms ? b : a), null);
+}
+
+/** Whether a live snapshot is spent, i.e. `gate enable` would only retire it
+ * without writing: an install re-rendered the block after it was taken (its
+ * hooks lines may be outdated), the config already matches its pre-disable
+ * sha, or none of its units is disabled any more. The last case counts only
+ * when every unit it names is still in the block: a unit deleted by hand is
+ * neither enabled nor restorable, so the snapshot stays live and `missing`
+ * names it. `units` is null when the config has no managed block. */
+export function spentCodexSnapshot(
+  snapshot: CodexGateSnapshot,
+  currentSha: string,
+  units: ReadonlyArray<{ id: string; disabled: boolean }> | null,
+  install: { ms: number; path: string } | null,
+): { retire: { why: CodexSnapshotRetirement; installBackup?: string } | null; missing: string[] } {
+  if (install !== null && install.ms > Date.parse(snapshot.createdAt)) {
+    return { retire: { why: "superseded", installBackup: install.path }, missing: [] };
+  }
+  if (currentSha === snapshot.configBeforeSha256) return { retire: { why: "restored" }, missing: [] };
+  const ids = snapshot.neutralised.map((u) => u.id);
+  if (units !== null && !units.some((u) => u.disabled && ids.includes(u.id))) {
+    const missing = ids.filter((id) => !units.some((u) => u.id === id));
+    return { retire: missing.length === 0 ? { why: "superseded" } : null, missing };
+  }
+  return { retire: null, missing: [] };
+}
+
 /** The Codex snapshots beside a config that are still live (not retired). */
 export function listCodexSnapshots(dir: string): string[] {
   return listSnapshots(dir, CODEX_SNAPSHOT_BASENAME_PREFIX).filter(
     (p) => !RETIRED_SUFFIXES.some((suffix) => p.endsWith(suffix)),
   );
+}
+
+export interface LoadedCodexSnapshot {
+  path: string;
+  snapshot: CodexGateSnapshot;
+}
+
+/** The live snapshots beside a config, split into those taken for it, newest
+ * first by their recorded `createdAt` (equal times by file name, newest name
+ * first; never by file mtime, which a directory copy reorders), and the
+ * paths of those taken for another config. An unreadable one refuses via
+ * `makeError`. */
+export function readLiveCodexSnapshots(
+  requestedPath: string,
+  makeError: (message: string) => Error,
+): { own: LoadedCodexSnapshot[]; foreign: string[] } {
+  const own: LoadedCodexSnapshot[] = [];
+  const foreign: string[] = [];
+  for (const snapPath of listCodexSnapshots(path.dirname(requestedPath))) {
+    const read = readCodexSnapshot(snapPath);
+    if (!read.ok) {
+      throw makeError(
+        `${read.reason.replace(/\.$/, "")}. A live Codex snapshot beside ${requestedPath} that harness cannot read blocks the gate: ` +
+          `move ${snapPath} aside (rename it out of this directory) and run the command again.`,
+      );
+    }
+    if (read.snapshot.configPath === requestedPath) own.push({ path: snapPath, snapshot: read.snapshot });
+    else foreign.push(snapPath);
+  }
+  const time = (l: LoadedCodexSnapshot): number => Date.parse(l.snapshot.createdAt);
+  own.sort((a, b) => time(b) - time(a) || (a.path < b.path ? 1 : -1));
+  return { own, foreign };
 }
 
 export interface CodexSnapshotReadOk {
@@ -157,6 +337,12 @@ export interface CodexSnapshotReadErr {
 
 function isNonNegativeInteger(value: unknown): boolean {
   return Number.isInteger(value) && (value as number) >= 0;
+}
+
+function isMerge(value: unknown): value is CodexSnapshotMerge {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
+  const m = value as Record<string, unknown>;
+  return typeof m["createdAt"] === "string" && typeof m["matcher"] === "string" && typeof m["configBackupPath"] === "string";
 }
 
 function isDisabledUnit(value: unknown): value is CodexDisabledUnit {
@@ -215,7 +401,7 @@ export function readCodexSnapshot(filePath: string): CodexSnapshotReadOk | Codex
     "configAfterSha256",
   ]);
   if (problem !== null) return { ok: false, reason: problem };
-  // The walk orders snapshots by this time, never by file mtime.
+  // Several live snapshots (an earlier build kept one per disable) are ordered by this time, never by file mtime.
   if (Number.isNaN(Date.parse(obj["createdAt"] as string))) {
     return { ok: false, reason: `snapshot ${filePath} has a "createdAt" that is not a timestamp` };
   }
@@ -230,6 +416,10 @@ export function readCodexSnapshot(filePath: string): CodexSnapshotReadOk | Codex
       ok: false,
       reason: `snapshot ${filePath} lists the same hook unit id or block position twice in "neutralised"`,
     };
+  }
+  const merges = obj["merges"];
+  if (merges !== undefined && !(Array.isArray(merges) && merges.every(isMerge))) {
+    return { ok: false, reason: `snapshot ${filePath} has a malformed "merges" list` };
   }
   return { ok: true, snapshot: obj as unknown as CodexGateSnapshot };
 }

@@ -1,3 +1,4 @@
+import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -149,63 +150,31 @@ describe("harness gate --runtime codex", () => {
     expect(fs.readFileSync(configPath, "utf8")).toBe(disabled);
   });
 
-  it("one enable restores two disables; a unit no snapshot covers exits non-zero and is named", async () => {
+  it("one enable restores two disables through one merged snapshot; a unit no snapshot covers exits non-zero and is named", async () => {
     const original = fs.readFileSync(configPath, "utf8");
-    const second = generateCodexConfig(
-      parseManifest({
-        version: 1,
-        hooks: [
-          {
-            name: "policy-pack:branch-protection:pre-tool-use",
-            event: "PreToolUse",
-            match: "apply_patch",
-            command: "harness pack hook branch-protection --runtime codex",
-            blocking: "hard",
-            budget_ms: 5000,
-          },
-          {
-            name: "shell-guard",
-            event: "PreToolUse",
-            match: "Bash",
-            command: "harness pack hook shell-guard --runtime codex",
-            blocking: "hard",
-            budget_ms: 5000,
-          },
-        ],
-      }),
-    );
-    writeCodexConfigInstall(
-      planCodexConfigInstall({ configPath, generatedPath: "/gen/codex/config.toml", generatedContent: second.content }),
-      { now: new Date("2026-10-01T01:00:00.000Z") },
-    );
-    const installed = fs.readFileSync(configPath, "utf8");
+    const installed = installTwoUnits();
     expect(installed).not.toBe(original);
 
     await gate("disable", "--runtime", "codex", "--config", configPath, "--matcher", "apply_patch");
-    await gate("disable", "--runtime", "codex", "--config", configPath, "--matcher", "Bash");
-    const snaps = fs
-      .readdirSync(tmp)
-      .filter((n) => n.startsWith("harness.gate-disable-codex."))
-      .sort();
-    expect(snaps).toHaveLength(2);
-    // Both snapshots were taken within one second; order them by mtime for the walk.
-    fs.utimesSync(path.join(tmp, snaps[0]!), new Date("2026-10-02T10:00:00Z"), new Date("2026-10-02T10:00:00Z"));
-    fs.utimesSync(path.join(tmp, snaps[1]!), new Date("2026-10-02T11:00:00Z"), new Date("2026-10-02T11:00:00Z"));
+    const second = await gate("disable", "--runtime", "codex", "--config", configPath, "--matcher", "Bash");
+    expect(second.code).toBe(EX_OK);
+    const snaps = fs.readdirSync(tmp).filter((n) => n.startsWith("harness.gate-disable-codex."));
+    expect(snaps).toHaveLength(1);
+    expect(second.stdout).toContain(`snapshot: ${path.join(tmp, snaps[0]!)}`);
     const on = await gate("enable", "--runtime", "codex", "--config", configPath);
     expect(on.code).toBe(EX_OK);
     expect(on.stdout).toContain("restored 2 hook unit(s)");
     expect(fs.readFileSync(configPath, "utf8")).toBe(installed);
+    expect(fs.readdirSync(tmp).filter((n) => n.startsWith("harness.gate-disable-codex.") && !n.includes(".restored."))).toEqual([]);
 
-    // Now drop the older snapshot after two fresh disables: one unit stays off, and enable says so.
+    // A unit neutralised by hand beyond the snapshot: enable restores the snapshot's unit and says the other stays off.
+    fs.writeFileSync(configPath, fs.readFileSync(configPath, "utf8").replace(/^hooks = \[\{.*shell-guard.*\}\]$/m, "hooks = []"));
     await gate("disable", "--runtime", "codex", "--config", configPath, "--matcher", "apply_patch");
-    const fresh = fs.readdirSync(tmp).filter((n) => n.startsWith("harness.gate-disable-codex."));
-    for (const name of fresh) fs.rmSync(path.join(tmp, name));
-    await gate("disable", "--runtime", "codex", "--config", configPath, "--matcher", "Bash");
     const partial = await gate("enable", "--runtime", "codex", "--config", configPath);
     expect(partial.code).toBe(EX_FAIL);
     expect(partial.stdout).toContain("restored 1 hook unit(s)");
     expect(partial.stderr).toContain("1 hook unit(s)");
-    expect(partial.stderr).toContain("are still disabled: policy-pack:branch-protection:pre-tool-use");
+    expect(partial.stderr).toContain("are still disabled: shell-guard");
     expect(partial.stderr).toContain("No Codex gate snapshot restores them.");
     expect(partial.stderr).not.toContain("--force");
     const stuck = await gate("enable", "--runtime", "codex", "--config", configPath);
@@ -214,7 +183,7 @@ describe("harness gate --runtime codex", () => {
     expect(stuck.stderr).toContain("are still disabled");
   });
 
-  it("says what --force does: the edited-since refusal, and the still-disabled message when a snapshot names the unit", async () => {
+  it("says what --force does: the edited-since refusal, and that a forced restore keeps the edit and retires the snapshot", async () => {
     const installed = installTwoUnits();
     await gate("disable", "--runtime", "codex", "--config", configPath, "--matcher", "apply_patch");
     const edit = "\n[tui]\nnotifications = true\n";
@@ -224,23 +193,70 @@ describe("harness gate --runtime codex", () => {
     expect(refused.code).toBe(EX_FAIL);
     expect(refused.stderr).toContain("edited since the snapshot was taken");
     expect(refused.stderr).toContain(
-      "--force swaps only this snapshot's hooks lines back into the units it names (found by id) and keeps every other edit",
+      "--force restores every unit the snapshot names that is still neutralised (found by id), leaves a unit that is enabled again as it is, keeps every other edit and retires the snapshot",
     );
     expect(refused.stderr).not.toContain("overwrite");
 
-    await gate("disable", "--runtime", "codex", "--config", configPath, "--matcher", "Bash");
-    const partial = await gate("enable", "--runtime", "codex", "--config", configPath);
-    expect(partial.code).toBe(EX_FAIL);
-    expect(partial.stdout).toContain("restored 1 hook unit(s)");
-    expect(partial.stderr).toContain("are still disabled: policy-pack:branch-protection:pre-tool-use");
-    expect(partial.stderr).toContain("still name a disabled unit but no longer match the config byte for byte");
-    expect(partial.stderr).toContain("`harness gate enable --runtime codex --force`");
-    expect(partial.stderr).not.toContain("No Codex gate snapshot restores them");
+    // A second disable cannot join a snapshot the file no longer matches.
+    const blocked = await gate("disable", "--runtime", "codex", "--config", configPath, "--matcher", "Bash");
+    expect(blocked.code).toBe(EX_FAIL);
+    expect(blocked.stderr).toContain("cannot join it");
+    expect(blocked.stderr).toContain("harness gate enable --runtime codex --force");
 
     const forced = await gate("enable", "--runtime", "codex", "--config", configPath, "--force");
     expect(forced.code).toBe(EX_OK);
     expect(forced.stdout).toContain("restored 1 hook unit(s)");
     expect(fs.readFileSync(configPath, "utf8")).toBe(`${installed}${edit}`);
+    expect(fs.readdirSync(tmp).filter((n) => n.startsWith("harness.gate-disable-codex.") && !n.includes(".restored."))).toEqual([]);
+  });
+
+  /** Rebuilds what an earlier build wrote for two disables: one live snapshot each (apply_patch first, then Bash). */
+  async function legacyPair(): Promise<{ installed: string; first: string }> {
+    const installed = installTwoUnits();
+    await gate("disable", "--runtime", "codex", "--config", configPath, "--matcher", "apply_patch");
+    const [first] = fs.readdirSync(tmp).filter((n) => n.startsWith("harness.gate-disable-codex."));
+    const afterFirst = fs.readFileSync(configPath, "utf8");
+    const firstBody = fs.readFileSync(path.join(tmp, first!), "utf8");
+    await gate("disable", "--runtime", "codex", "--config", configPath, "--matcher", "Bash");
+    const merged = JSON.parse(fs.readFileSync(path.join(tmp, first!), "utf8"));
+    fs.writeFileSync(path.join(tmp, first!), firstBody);
+    fs.writeFileSync(
+      path.join(tmp, first!.replace(/\d{4}-\d\d-\d\dT[\d.-]+Z/, "2999-01-01T00-00-00.000Z")),
+      JSON.stringify({
+        ...merged,
+        createdAt: "2999-01-01T00:00:00.000Z",
+        configBeforeSha256: crypto.createHash("sha256").update(afterFirst).digest("hex"),
+        neutralised: merged.neutralised.slice(1),
+      }),
+    );
+    return { installed, first: path.join(tmp, first!) };
+  }
+
+  it("exits non-zero and names how many live snapshots remain when an earlier build left several", async () => {
+    const { installed, first } = await legacyPair();
+    const one = await gate("enable", "--runtime", "codex", "--config", configPath);
+    expect(one.code).toBe(EX_FAIL);
+    expect(one.stdout).toContain("restored 1 hook unit(s)");
+    expect(one.stderr).toContain("are still disabled: policy-pack:branch-protection:pre-tool-use");
+    expect(one.stderr).toContain("1 more live Codex gate snapshot(s) remain");
+    expect(one.stderr).toContain(first);
+    expect(one.stderr).not.toContain("No Codex gate snapshot restores them");
+    const two = await gate("enable", "--runtime", "codex", "--config", configPath);
+    expect(two.code).toBe(EX_OK);
+    expect(fs.readFileSync(configPath, "utf8")).toBe(installed);
+  });
+
+  it("still exits non-zero for a remaining live snapshot when no unit is disabled any more", async () => {
+    const { installed, first } = await legacyPair();
+    fs.writeFileSync(configPath, installed);
+    const one = await gate("enable", "--runtime", "codex", "--config", configPath);
+    expect(one.code).toBe(EX_FAIL);
+    expect(one.stderr).toContain("1 more live Codex gate snapshot(s) remain");
+    expect(one.stderr).toContain(first);
+    expect(one.stderr).not.toContain("still disabled");
+    const two = await gate("enable", "--runtime", "codex", "--config", configPath);
+    expect(two.code).toBe(EX_OK);
+    expect(fs.readFileSync(configPath, "utf8")).toBe(installed);
   });
 
   /** The branch-protection unit's own `hooks = [...]` line replaced by the neutralised one, as a hand edit would. */
@@ -288,6 +304,66 @@ describe("harness gate --runtime codex", () => {
     expect(fs.readdirSync(tmp)).toContain(snap!.replace(/\.json$/, ".superseded.json"));
   });
 
+  it("recovers a merged snapshot whose config lost one unit's neutralisation by hand: enable restores the other and says which it left alone", async () => {
+    const installed = installTwoUnits();
+    await gate("disable", "--runtime", "codex", "--config", configPath, "--matcher", "apply_patch");
+    const afterFirst = fs.readFileSync(configPath, "utf8");
+    await gate("disable", "--runtime", "codex", "--config", configPath, "--matcher", "Bash");
+    // The config is back at the state after the first disable (a crash before the second rewrite).
+    fs.writeFileSync(configPath, afterFirst);
+    const blocked = await gate("disable", "--runtime", "codex", "--config", configPath, "--matcher", "Bash");
+    expect(blocked.code).toBe(EX_FAIL);
+    expect(blocked.stderr).toContain("harness gate enable --runtime codex --force");
+    const on = await gate("enable", "--runtime", "codex", "--config", configPath);
+    expect(on.code).toBe(EX_OK);
+    expect(on.stdout).toContain("restored 1 hook unit(s)");
+    expect(on.stdout).toContain("left as they are: shell-guard (already enabled again).");
+    expect(fs.readFileSync(configPath, "utf8")).toBe(installed);
+  });
+
+  it("exits non-zero and names the unit that stays off when the snapshot's own unit is back and another was neutralised by hand", async () => {
+    installTwoUnits();
+    await gate("disable", "--runtime", "codex", "--config", configPath, "--matcher", "apply_patch");
+    const [snap] = fs.readdirSync(tmp).filter((n) => n.startsWith("harness.gate-disable-codex."));
+    const body = JSON.parse(fs.readFileSync(path.join(tmp, snap!), "utf8"));
+    // The snapshot's unit goes back by hand; the shell guard, which no snapshot names, is neutralised by hand.
+    let text = fs.readFileSync(configPath, "utf8").replace("hooks = []", body.neutralised[0].hooksText);
+    text = text.replace(/^hooks = \[\{.*shell-guard.*\}\]$/m, "hooks = []");
+    fs.writeFileSync(configPath, text);
+    const r = await gate("enable", "--runtime", "codex", "--config", configPath);
+    expect(r.code).toBe(EX_FAIL);
+    expect(r.stdout).toContain("its units were enabled again.");
+    expect(r.stderr).toContain("are still disabled: shell-guard");
+    expect(fs.readFileSync(configPath, "utf8")).toBe(text);
+    expect(fs.readdirSync(tmp)).toContain(snap!.replace(/\.json$/, ".superseded.json"));
+  });
+
+  it("a disable that retires a spent snapshot says so and starts a fresh one", async () => {
+    installTwoUnits();
+    await gate("disable", "--runtime", "codex", "--config", configPath, "--matcher", "apply_patch");
+    const [snap] = fs.readdirSync(tmp).filter((n) => n.startsWith("harness.gate-disable-codex."));
+    reinstallAt(new Date("2099-01-01T00:00:00.000Z"));
+    const r = await gate("disable", "--runtime", "codex", "--config", configPath, "--matcher", "apply_patch");
+    expect(r.code).toBe(EX_OK);
+    expect(r.stdout).toContain(
+      `retired ${path.join(tmp, snap!)} as ${path.join(tmp, snap!.replace(/\.json$/, ".superseded.json"))}: a later install ` +
+        `(${configPath}.harness-backup-2099-01-01T00-00-00-000Z) re-rendered its units; this disable starts a fresh snapshot.`,
+    );
+    const live = fs.readdirSync(tmp).filter((n) => n.startsWith("harness.gate-disable-codex.") && !n.includes(".superseded."));
+    expect(live).toHaveLength(1);
+    expect(live[0]).not.toBe(snap);
+  });
+
+  it("a disable that retires a snapshot with nothing left to restore names no install", async () => {
+    const installed = installTwoUnits();
+    await gate("disable", "--runtime", "codex", "--config", configPath, "--matcher", "apply_patch");
+    fs.writeFileSync(configPath, installed);
+    const r = await gate("disable", "--runtime", "codex", "--config", configPath, "--matcher", "Bash");
+    expect(r.code).toBe(EX_OK);
+    expect(r.stdout).toContain(": it had nothing left to restore; this disable starts a fresh snapshot.");
+    expect(r.stdout).not.toContain("a later install");
+  });
+
   it("exits non-zero and names a unit that was deleted from the block, keeping its snapshot live", async () => {
     await gate("disable", "--runtime", "codex", "--config", configPath, "--matcher", "apply_patch");
     const [snap] = fs.readdirSync(tmp).filter((n) => n.startsWith("harness.gate-disable-codex."));
@@ -300,7 +376,28 @@ describe("harness gate --runtime codex", () => {
     expect(r.stdout).not.toContain("no write needed");
     expect(r.stderr).toContain("missing from the harness-managed block");
     expect(r.stderr).toContain("policy-pack:branch-protection:pre-tool-use");
+    expect(r.stderr).toContain(`The snapshot ${path.join(tmp, snap!)} stays live`);
     expect(fs.readdirSync(tmp)).toContain(snap);
+  });
+
+  it("names the ways out, never --force, when a merged snapshot's unit was deleted while another is still off; a re-install then clears it", async () => {
+    installTwoUnits();
+    await gate("disable", "--runtime", "codex", "--config", configPath, "--matcher", "apply_patch");
+    await gate("disable", "--runtime", "codex", "--config", configPath, "--matcher", "Bash");
+    const text = fs.readFileSync(configPath, "utf8");
+    const begin = text.indexOf("# harness hook: shell-guard");
+    fs.writeFileSync(configPath, `${text.slice(0, begin)}${text.slice(text.indexOf("# END harness-managed codex hooks"))}`);
+    for (const extra of [[], ["--force"]]) {
+      const r = await gate("enable", "--runtime", "codex", "--config", configPath, ...extra);
+      expect(r.code).toBe(EX_FAIL);
+      expect(r.stderr).toContain('the hook unit "shell-guard" of the snapshot');
+      expect(r.stderr).toContain("Ways out: run `harness apply --runtime codex --install`");
+      expect(r.stderr).not.toContain("--force");
+    }
+    reinstallAt(new Date("2099-01-01T00:00:00.000Z"));
+    const on = await gate("enable", "--runtime", "codex", "--config", configPath);
+    expect(on.code).toBe(EX_OK);
+    expect(on.stdout).toContain("re-rendered its units.");
   });
 
   it("exits non-zero with the restored-but-cannot-retire message when the retired name is taken by a directory", async () => {
