@@ -222,6 +222,21 @@ describe("harness gate (claude): which file a snapshot belongs to", () => {
     expect(fs.readFileSync(settingsPath, "utf8")).toBe(original);
   });
 
+  it("names another file's live snapshot also when its own older snapshots are still live", async () => {
+    writeLegacyChain(
+      settingsPath,
+      { matcher: "Write|Edit", now: new Date("2026-01-01T00:00:01.000Z") },
+      { matcher: "Bash", now: new Date("2026-01-01T00:00:02.000Z") },
+    );
+    const other = path.join(tmp, "settings.local.json");
+    fs.writeFileSync(other, `${JSON.stringify({ hooks: { PreToolUse: [{ matcher: "Task", hooks: [{ command: "t" }] }] } }, null, 2)}\n`);
+    expect((await gateOn(other, "disable", "--matcher", "Task")).code).toBe(EX_OK);
+    const one = await gate("enable");
+    expect(one.code).toBe(EX_FAIL);
+    expect(one.stderr).toContain("run `harness gate enable` again.");
+    expect(one.stderr).toContain(`harness gate enable --settings ${other}`);
+  });
+
   it("an enable for a file of another name exits non-zero and names the --settings of the file the snapshot was taken for", async () => {
     expect((await gate("disable", "--matcher", "Write|Edit")).code).toBe(EX_OK);
     const on = await gateOn(path.join(tmp, "settings.local.json"), "enable");
@@ -382,6 +397,7 @@ describe("harness gate (claude): a group that only shares the gate's event and m
     // --force is the operator's call: it takes the file's group as back, prints both commands, writes nothing and retires.
     const forced = await gate("enable", "--force");
     expect(forced.code).toBe(EX_OK);
+    expect(forced.stdout).toContain("already holds every hook group the snapshot removed; no write needed");
     expect(forced.stdout).toContain(
       'taken as back under --force, not put back (same event and matcher, other content): PreToolUse matcher="Write|Edit": ' +
         "the snapshot's group runs `harness pack hook branch-protection`, the file's group runs `some-formatter-guard`.",
