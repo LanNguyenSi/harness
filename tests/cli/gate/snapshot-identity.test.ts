@@ -144,6 +144,25 @@ describe("snapshot ownership by another spelling of the name", () => {
     expect(ownership()).toEqual({ live: [], foreign: [snapshotFile] });
   });
 
+  it("is the file's when the spelling differs only in Unicode normalization (NFD recorded, NFC given)", () => {
+    const nfc = "café.json";
+    const nfd = "café.json";
+    const target = path.join(tmp, nfc);
+    const recorded = path.join(tmp, nfd);
+    fs.writeFileSync(target, "{}\n");
+    const own = path.join(tmp, `${SNAPSHOT_BASENAME_PREFIX}2026-08-01T11-00-00.000Z${SNAPSHOT_BASENAME_SUFFIX}`);
+    fs.writeFileSync(
+      own,
+      fs.readFileSync(snapshotFile, "utf8").split(JSON.stringify(variantPath)).join(JSON.stringify(recorded)),
+    );
+    const real = fs.lstatSync(target, { bigint: true });
+    const same = Object.assign(Object.create(Object.getPrototypeOf(real) as object) as fs.BigIntStats, real, { nlink: 1n });
+    fake.answer = (p) => (p === recorded || p === target ? same : null);
+    const r = listLiveSnapshots(target);
+    if (!r.ok) throw new Error(r.reason);
+    expect(r.live.map((l) => l.path)).toEqual([own]);
+  });
+
   it("never consults lstat for the same spelling, and never for a name that differs beyond case", () => {
     const asked: string[] = [];
     fake.answer = (p) => {
