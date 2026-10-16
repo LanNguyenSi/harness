@@ -447,6 +447,17 @@ describe("codexGateEnable — integrity", () => {
     expect(fs.readFileSync(configPath, "utf8")).toBe(restored);
   });
 
+  it("--force refuses a restore whose result would not parse (the post-edit guard on enable)", () => {
+    installConfig(configPath);
+    // "a" removes both PreToolUse units. The operator then defines hooks.PreToolUse as a plain
+    // table, which a restored [[hooks.PreToolUse]] unit earlier in the file would contradict.
+    codexGateDisable({ configPath, matcher: "a", now: T0 });
+    fs.appendFileSync(configPath, '\n[hooks.PreToolUse]\nnote = "x"\n');
+    const edited = fs.readFileSync(configPath, "utf8");
+    expect(() => codexGateEnable({ configPath, force: true, now: T1 })).toThrow(/would not parse as TOML/);
+    expect(fs.readFileSync(configPath, "utf8")).toBe(edited);
+  });
+
   it("--force refuses when the harness block is gone from the config", () => {
     installConfig(configPath);
     codexGateDisable({ configPath, matcher: "apply_patch", now: T0 });
