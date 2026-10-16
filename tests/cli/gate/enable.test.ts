@@ -226,6 +226,32 @@ describe("gateEnable: applied snapshots are retired", () => {
   });
 });
 
+describe("gateEnable: a file written in another layout", () => {
+  it("restores every group into a file that was not 2-space JSON: same content, the layout is the gate's", () => {
+    const groups = [
+      { matcher: "Write|Edit", hooks: [{ command: "branch-protection" }] },
+      { matcher: "Bash", hooks: [{ command: "bash-hook" }] },
+    ];
+    fs.writeFileSync(settingsPath, `${JSON.stringify({ hooks: { PreToolUse: groups } }, null, 4)}\n`);
+    gateDisable({ settingsPath, matcher: "Write|Edit", now: T1 });
+    const r = gateEnable({ settingsPath });
+    expect(r.mode).toBe("restored");
+    expect(JSON.parse(fs.readFileSync(settingsPath, "utf8"))).toEqual({ hooks: { PreToolUse: groups } });
+    expect(liveSnapshotNames(settingsPath)).toEqual([]);
+  });
+
+  it("restores an event the disable emptied as a new last event: same content, key order may change", () => {
+    const stop = [{ matcher: "stop", hooks: [{ command: "s" }] }];
+    const pre = [{ matcher: "Bash", hooks: [{ command: "b" }] }];
+    writeSettings({ hooks: { Stop: stop, PreToolUse: pre } });
+    gateDisable({ settingsPath, matcher: "stop", now: T1 });
+    gateEnable({ settingsPath });
+    const final = JSON.parse(fs.readFileSync(settingsPath, "utf8")) as { hooks: Record<string, unknown> };
+    expect(final.hooks).toEqual({ Stop: stop, PreToolUse: pre });
+    expect(Object.keys(final.hooks)).toEqual(["PreToolUse", "Stop"]);
+  });
+});
+
 describe("gateEnable: two disables, one enable", () => {
   it("restores both groups byte for byte and exits clean; no all-clear while a group is missing", () => {
     const original = twoGroupSettings();
@@ -318,17 +344,54 @@ describe("gateEnable: --force", () => {
     expect(matchersOf()).toEqual(["Write|Edit", "Bash"]);
   });
 
-  it("refuses a group the file already holds instead of splicing a second copy, and keeps the snapshot live", () => {
+  it("skips a group the file already holds, in whatever form, and never splices a second copy", () => {
     editedAfterDisable();
+    // The group came back in a changed form (say an apply re-rendered it).
     const handEdited = JSON.parse(fs.readFileSync(settingsPath, "utf8")) as { hooks: { PreToolUse: unknown[] } };
-    handEdited.hooks.PreToolUse.push({ matcher: "Write|Edit", hooks: [{ command: "branch-protection" }] });
+    handEdited.hooks.PreToolUse.push({ matcher: "Write|Edit", hooks: [{ command: "branch-protection --changed" }] });
     fs.writeFileSync(settingsPath, `${JSON.stringify(handEdited, null, 2)}\n`);
-    const before = fs.readFileSync(settingsPath, "utf8");
-    expect(() => gateEnable({ settingsPath, force: true })).toThrow(GateEnableError);
-    expect(() => gateEnable({ settingsPath, force: true })).toThrow(/would duplicate them/);
-    expect(() => gateEnable({ settingsPath, force: true })).toThrow(/PreToolUse matcher="Write\|Edit"/);
-    expect(fs.readFileSync(settingsPath, "utf8")).toBe(before);
-    expect(liveSnapshotNames(settingsPath)).toHaveLength(1);
+    const r = gateEnable({ settingsPath, force: true });
+    expect(r.mode).toBe("already-restored");
+    if (r.mode !== "already-restored") return;
+    expect(r.alreadyBack).toEqual(['PreToolUse matcher="Write|Edit"']);
+    expect(matchersOf()).toEqual(["Bash", "Write|Edit"]);
+    expect(liveSnapshotNames(settingsPath)).toEqual([]);
+    expect(retiredSnapshotNames(settingsPath)).toHaveLength(1);
+  });
+
+  it("restores what is still missing and skips what is back when only some groups came back by hand", () => {
+    twoGroupSettings();
+    gateDisable({ settingsPath, matcher: "Write|Edit", now: T1 });
+    gateDisable({ settingsPath, matcher: "Bash", now: T2 });
+    const edited = {
+      operatorAddedKey: 1,
+      hooks: { PreToolUse: [{ matcher: "Bash", hooks: [{ command: "bash-hook --by-hand" }] }] },
+    };
+    fs.writeFileSync(settingsPath, `${JSON.stringify(edited, null, 2)}\n`);
+    expect(() => gateEnable({ settingsPath })).toThrow(/edited since the snapshot/);
+    const r = gateEnable({ settingsPath, force: true });
+    expect(r.mode).toBe("restored");
+    if (r.mode !== "restored") return;
+    expect(r.restoredCount).toBe(1);
+    expect(r.alreadyBack).toEqual(['PreToolUse matcher="Bash"']);
+    expect(matchersOf()).toEqual(["Write|Edit", "Bash"]);
+    expect(liveSnapshotNames(settingsPath)).toEqual([]);
+    expect(gateEnable({ settingsPath, force: true }).mode).toBe("no-snapshots");
+    expect(matchersOf()).toEqual(["Write|Edit", "Bash"]);
+  });
+
+  it("a refusal names the missing groups, the snapshot, the backup and the way out", () => {
+    editedAfterDisable();
+    let message = "";
+    try {
+      gateEnable({ settingsPath });
+    } catch (err) {
+      message = (err as Error).message;
+    }
+    expect(message).toContain('PreToolUse matcher="Write|Edit"');
+    expect(message).toContain("stays live");
+    expect(message).toContain(".bak.");
+    expect(message).toContain("harness gate enable --force");
   });
 
   it("keeps operator edits and restores every merged group", () => {
@@ -406,12 +469,158 @@ describe("gateEnable: snapshots written by released versions (version 1)", () =>
   });
 });
 
+describe("gateEnable: a file that matches neither state", () => {
+  it("restores without --force when the groups still missing give exactly the pre-disable file", () => {
+    const original = twoGroupSettings();
+    gateDisable({ settingsPath, matcher: "Write|Edit", now: T1 });
+    gateDisable({ settingsPath, matcher: "Bash", now: T2 });
+    // The operator put one group back by hand, in the form the snapshot has.
+    writeSettings({ hooks: { PreToolUse: [{ matcher: "Bash", hooks: [{ command: "bash-hook" }] }] } });
+    const r = gateEnable({ settingsPath });
+    expect(r.mode).toBe("restored");
+    if (r.mode !== "restored") return;
+    expect(r.restoredCount).toBe(1);
+    expect(r.alreadyBack).toEqual(['PreToolUse matcher="Bash"']);
+    expect(fs.readFileSync(settingsPath, "utf8")).toBe(original);
+    expect(liveSnapshotNames(settingsPath)).toEqual([]);
+  });
+
+  it("only retires the snapshot when every group it names is back, even if the file was edited since", () => {
+    twoGroupSettings();
+    gateDisable({ settingsPath, matcher: "Bash", now: T1 });
+    writeSettings({
+      operatorAddedKey: "keep",
+      hooks: {
+        PreToolUse: [
+          { matcher: "Write|Edit", hooks: [{ command: "branch-protection" }] },
+          { matcher: "Bash", hooks: [{ command: "bash-hook --v2" }] },
+        ],
+      },
+    });
+    const before = fs.readFileSync(settingsPath, "utf8");
+    const r = gateEnable({ settingsPath });
+    expect(r.mode).toBe("already-restored");
+    if (r.mode !== "already-restored") return;
+    expect(r.alreadyBack).toEqual(['PreToolUse matcher="Bash"']);
+    expect(fs.readFileSync(settingsPath, "utf8")).toBe(before);
+    expect(liveSnapshotNames(settingsPath)).toEqual([]);
+    expect(retiredSnapshotNames(settingsPath)).toHaveLength(1);
+  });
+
+  it("matches the groups by event and matcher, one file group per snapshot entry", () => {
+    writeSettings({
+      hooks: {
+        PreToolUse: [
+          { matcher: "Bash", hooks: [{ command: "one" }] },
+          { matcher: "Bash", hooks: [{ command: "two" }] },
+          { matcher: "Task", hooks: [{ command: "t" }] },
+        ],
+      },
+    });
+    gateDisable({ settingsPath, matcher: "Bash", now: T1 });
+    // One of the two removed groups came back (re-rendered), the other did not.
+    writeSettings({
+      hooks: {
+        PreToolUse: [
+          { matcher: "Bash", hooks: [{ command: "one --v2" }] },
+          { matcher: "Task", hooks: [{ command: "t" }] },
+        ],
+      },
+    });
+    const r = gateEnable({ settingsPath, force: true });
+    expect(r.mode).toBe("restored");
+    if (r.mode !== "restored") return;
+    expect(r.restoredCount).toBe(1);
+    expect(r.alreadyBack).toHaveLength(1);
+    expect(matchersOf()).toEqual(["Bash", "Bash", "Task"]);
+  });
+});
+
+describe("gateEnable: snapshot identity", () => {
+  it("finds a snapshot that recorded the settings path relative, from another working directory", () => {
+    twoGroupSettings();
+    const original = fs.readFileSync(settingsPath, "utf8");
+    const cwd = process.cwd();
+    const other = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), "harness-gate-other-cwd-"));
+    try {
+      process.chdir(tmp);
+      const d = gateDisable({ settingsPath: "settings.json", matcher: "Write|Edit", now: T1 });
+      if (d.mode !== "remove") throw new Error("expected remove");
+      const recorded = (JSON.parse(fs.readFileSync(d.snapshotPath, "utf8")) as { settingsPath: string }).settingsPath;
+      expect(path.isAbsolute(recorded)).toBe(true);
+      process.chdir(other);
+      const r = gateEnable({ settingsPath });
+      expect(r.mode).toBe("restored");
+      expect(fs.readFileSync(settingsPath, "utf8")).toBe(original);
+    } finally {
+      process.chdir(cwd);
+      fs.rmSync(other, { recursive: true, force: true });
+    }
+  });
+
+  it("finds a snapshot whose recorded path is relative (written by an earlier release)", () => {
+    twoGroupSettings();
+    const original = fs.readFileSync(settingsPath, "utf8");
+    const d = gateDisable({ settingsPath, matcher: "Write|Edit", now: T1 });
+    if (d.mode !== "remove") throw new Error("expected remove");
+    const snap = JSON.parse(fs.readFileSync(d.snapshotPath, "utf8")) as Record<string, unknown>;
+    snap["settingsPath"] = "settings.json";
+    fs.writeFileSync(d.snapshotPath, JSON.stringify(snap));
+    const r = gateEnable({ settingsPath });
+    expect(r.mode).toBe("restored");
+    expect(fs.readFileSync(settingsPath, "utf8")).toBe(original);
+  });
+
+  it("finds the snapshot when the settings directory is reached through a symlink", () => {
+    twoGroupSettings();
+    const original = fs.readFileSync(settingsPath, "utf8");
+    const linkParent = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), "harness-gate-link-"));
+    const link = path.join(linkParent, "claude");
+    try {
+      fs.symlinkSync(tmp, link);
+      const d = gateDisable({ settingsPath: path.join(link, "settings.json"), matcher: "Write|Edit", now: T1 });
+      if (d.mode !== "remove") throw new Error("expected remove");
+      const r = gateEnable({ settingsPath });
+      expect(r.mode).toBe("restored");
+      expect(fs.readFileSync(settingsPath, "utf8")).toBe(original);
+      expect(liveSnapshotNames(settingsPath)).toEqual([]);
+    } finally {
+      fs.rmSync(linkParent, { recursive: true, force: true });
+    }
+  });
+
+  it("reports a snapshot for another settings file in the directory instead of skipping it silently", () => {
+    twoGroupSettings();
+    const other = path.join(tmp, "settings.local.json");
+    fs.writeFileSync(other, `${JSON.stringify({ hooks: { PreToolUse: [{ matcher: "Bash", hooks: [{ command: "x" }] }] } }, null, 2)}\n`);
+    const o = gateDisable({ settingsPath: other, matcher: "Bash", now: T1 });
+    if (o.mode !== "remove") throw new Error("expected remove");
+    const r = gateEnable({ settingsPath });
+    expect(r.mode).toBe("no-snapshots");
+    expect(r.skippedForeign).toEqual([o.snapshotPath]);
+  });
+});
+
 describe("gateEnable: which snapshots count", () => {
   it("fails on a live snapshot it cannot read instead of reporting nothing to restore", () => {
     twoGroupSettings();
     fs.writeFileSync(path.join(tmp, "harness.gate-disable.2026-01-01T00-00-00.000Z.json"), "{ broken");
     expect(() => gateEnable({ settingsPath })).toThrow(GateEnableError);
     expect(() => gateEnable({ settingsPath })).toThrow(/not valid JSON/);
+  });
+
+  it("names the unreadable snapshot and says to move it aside and run enable again", () => {
+    twoGroupSettings();
+    const bad = path.join(tmp, "harness.gate-disable.2026-01-01T00-00-00.000Z.json");
+    fs.writeFileSync(bad, "{ broken");
+    let message = "";
+    try {
+      gateEnable({ settingsPath });
+    } catch (err) {
+      message = (err as Error).message;
+    }
+    expect(message).toContain(`Move ${bad} aside`);
+    expect(message).toContain("harness gate enable");
   });
 
   it("ignores a snapshot taken for another settings file in the same directory", () => {

@@ -6,9 +6,14 @@
 // `<settings-dir>/harness.gate-disable.<ISO>.json`, backs up the original
 // to `<settings.json>.bak.<ISO>`, and atomically rewrites settings.json
 // without the matching groups. There is one live snapshot per settings.json:
-// when one already exists, the newly removed groups are merged into it (and
-// the backup of this call is added to its audit trail) instead of starting a
-// second one, so a single `gate enable` brings every removed group back.
+// when one already exists and the file is exactly the state it left, the
+// newly removed groups are merged into it (and the backup of this call is
+// added to its audit trail) instead of starting a second one, so a single
+// `gate enable` brings every removed group back. A live snapshot that is
+// spent (the file is back at its pre-disable state, or holds every group it
+// names) is retired first and a fresh one is started; a live snapshot the
+// file has drifted from while groups are still missing makes this verb
+// refuse, writing nothing, and points at `gate enable --force`.
 //
 // With NO `--matcher`, this verb is a pure listing — it prints the
 // candidate groups and exits without writing. That's the no-args
@@ -25,7 +30,10 @@ import { atomicWriteFile } from "../../io/atomic-write.js";
 import {
   backupPath,
   type GateDisableSnapshot,
+  groupLabel,
   listLiveSnapshots,
+  type LiveSnapshot,
+  planRestore,
   type RemovedGroup,
   retireSnapshot,
   sha256Hex,
@@ -77,6 +85,8 @@ export type GateDisableResult =
       removed: RemovedGroup[];
       /** True when the groups were merged into an already live snapshot. */
       merged: boolean;
+      /** Spent snapshots this call retired, under their retired names. */
+      retired: string[];
     };
 
 export class GateDisableError extends Error {
@@ -240,22 +250,16 @@ export function gateDisable(opts: GateDisableOptions = {}): GateDisableResult {
   if (!found.ok) {
     throw new GateDisableError(
       `${found.reason}. A live snapshot beside ${settingsPath} that cannot be read would be left out of this ` +
-        `disable; move it aside (or rename it to *.restored.json once its groups are back) and run this again.`,
+        `disable; nothing was changed. Move ${found.path} aside (or rename it to *.restored.json once its groups ` +
+        `are back) and run this again.`,
     );
   }
-  // A live snapshot whose pre-disable state is exactly the file now was
-  // restored by hand: its groups are in the file, so merging into it would
-  // splice them in twice later. Retire it and start fresh.
-  const live = found.live.filter((l) => {
-    if (l.snapshot.settingsBeforeSha256 !== beforeSha) return true;
-    retireSnapshot(l.path);
-    return false;
-  });
-  const target = live[0];
+  const { target, spent } = chooseSnapshot(found.live, parsed, beforeSha, settingsPath);
   const step =
     target === undefined ? 0 : Math.max(...target.snapshot.removed.map((r) => r.step ?? 0), 0) + 1;
   const stepped: RemovedGroup[] = removed.map((r) => ({ ...r, step }));
   const snapPath = target?.path ?? snapshotPath(settingsPath, now);
+  const retired = spent.map((l) => retireSnapshot(l.path));
 
   // Backup BEFORE we touch the live file. If the backup write fails we
   // bail without having mutated anything.
@@ -282,8 +286,8 @@ export function gateDisable(opts: GateDisableOptions = {}): GateDisableResult {
       ? {
           version: SNAPSHOT_VERSION,
           createdAt: now.toISOString(),
-          settingsPath,
-          settingsBackupPath: backup,
+          settingsPath: path.resolve(settingsPath),
+          settingsBackupPath: path.resolve(backup),
           settingsBeforeSha256: beforeSha,
           settingsAfterSha256: afterSha,
           filter: { matcher: matcherPattern },
@@ -300,7 +304,7 @@ export function gateDisable(opts: GateDisableOptions = {}): GateDisableResult {
               step,
               createdAt: now.toISOString(),
               matcher: matcherPattern,
-              settingsBackupPath: backup,
+              settingsBackupPath: path.resolve(backup),
             },
           ],
         };
@@ -309,8 +313,24 @@ export function gateDisable(opts: GateDisableOptions = {}): GateDisableResult {
   // is the operator's reversibility insurance, so we don't want to be
   // left in a "settings.json mutated but snapshot missing" state if the
   // process dies between the two writes.
+  const priorSnapshot = target === undefined ? undefined : fs.readFileSync(target.path, "utf8");
   atomicWriteFile(snapPath, `${JSON.stringify(snapshot, null, 2)}\n`);
-  atomicWriteFile(settingsPath, newSettings);
+  try {
+    atomicWriteFile(settingsPath, newSettings);
+  } catch (err) {
+    if (priorSnapshot !== undefined) {
+      // The merged snapshot now describes a removal that never happened to
+      // the file. Put the live snapshot back to what it was, best effort; if
+      // that fails too, `gate enable` still restores it, because it skips a
+      // group the file still holds.
+      try {
+        atomicWriteFile(snapPath, priorSnapshot);
+      } catch {
+        // Nothing more to do; the original error is the one to report.
+      }
+    }
+    throw err;
+  }
 
   return {
     mode: "remove",
@@ -319,5 +339,45 @@ export function gateDisable(opts: GateDisableOptions = {}): GateDisableResult {
     snapshotPath: snapPath,
     removed,
     merged: target !== undefined,
+    retired,
   };
+}
+
+/**
+ * Which live snapshot a new disable joins, and which spent ones it retires
+ * first. Newest first, for each live snapshot:
+ * - the file is exactly the state it left (post-disable sha): join it;
+ * - the file already holds every group it names (same event and matcher),
+ *   which includes being back at its pre-disable state: it is spent, `gate
+ *   enable` would only retire it, so retire it here and look at the next
+ *   older one;
+ * - otherwise the file has drifted while groups are still missing: refuse
+ *   (nothing is written yet) and name the way out.
+ * No live snapshot left to join means a fresh snapshot.
+ */
+function chooseSnapshot(
+  live: LiveSnapshot[],
+  parsed: ParsedSettings,
+  beforeSha: string,
+  settingsPath: string,
+): { target: LiveSnapshot | undefined; spent: LiveSnapshot[] } {
+  const spent: LiveSnapshot[] = [];
+  for (const candidate of live) {
+    const snap = candidate.snapshot;
+    if (snap.settingsAfterSha256 === beforeSha) return { target: candidate, spent };
+    const plan = planRestore(parsed.hooks ?? {}, snap);
+    if (plan.restored.length === 0) {
+      spent.push(candidate);
+      continue;
+    }
+    throw new GateDisableError(
+      `${settingsPath} is not the state the live snapshot ${candidate.path} left, and ` +
+        `${plan.restored.length} hook group(s) it removed are still missing ` +
+        `(${plan.restored.map((r) => groupLabel(r.event, r.group)).join("; ")}); merging this disable into it ` +
+        `would lose track of them. Nothing was changed. Run \`harness gate enable --force\` to put them back ` +
+        `(a group that is already there is left alone, other edits stay; use the same --settings), then run ` +
+        `this again.`,
+    );
+  }
+  return { target: undefined, spent };
 }

@@ -99,6 +99,9 @@ export function registerGateGcGroup(
               : `retired ${result.retired.from} as ${result.retired.to}: it had nothing left to restore; this disable starts a fresh snapshot.\n`,
           );
         }
+        for (const r of result.retiredSpent) {
+          stdout(`retired a spent snapshot as ${r}: its groups were already back in ${result.path}.\n`);
+        }
         stdout(`backup:   ${result.backupPath}\n`);
         stdout(
           result.merged
@@ -120,10 +123,12 @@ export function registerGateGcGroup(
     .description(
       "Restore the hook groups of the live `harness.gate-disable.*.json` snapshot next to " +
         "settings.json (every `gate disable` since the last restore is merged into it) and retire " +
-        "it as `*.restored.json`. Refuses if settings.json has been edited since the snapshot was " +
-        "taken (use `--force` to splice the groups into the edited file; edits stay, a group " +
-        "already present is refused). If settings.json already matches the pre-disable state, it " +
-        "only retires the snapshot. Older releases left one snapshot per disable: each call " +
+        "it as `*.restored.json`. A group settings.json already holds (same event and matcher) is " +
+        "left alone, never added twice. If settings.json has been edited since the snapshot was " +
+        "taken, the groups still missing are put back only when that gives exactly the " +
+        "pre-disable file; otherwise it refuses and `--force` puts them back into the edited file " +
+        "(edits stay). If settings.json already matches the pre-disable state, or holds every " +
+        "group, it only retires the snapshot. Older releases left one snapshot per disable: each call " +
         "handles the newest, and exits non-zero while another stays live. With `--runtime codex` there is at most one " +
         "live `harness.gate-disable-codex.*.json` snapshot per config (another config's is skipped): " +
         "a later disable merges its units into it, and one enable applies it. A snapshot it applies, " +
@@ -159,6 +164,7 @@ export function registerGateGcGroup(
         const stillDisabled = "stillDisabled" in result ? result.stillDisabled : [];
         const liveLeft = "remaining" in result ? result.remaining : [];
         const missing = "missing" in result ? result.missing : [];
+        const alreadyBack = "alreadyBack" in result ? result.alreadyBack : [];
         if (result.mode === "no-snapshots") {
           if (stillDisabled.length === 0) {
             stdout(`no gate-disable snapshots found next to ${target}; nothing to restore.\n`);
@@ -168,7 +174,9 @@ export function registerGateGcGroup(
             stdout(
               (runtime === "codex"
                 ? `no hook unit of the harness-managed block in ${target} is disabled; no write needed. `
-                : `settings.json already matches the pre-disable state; no write needed. `) +
+                : alreadyBack.length > 0
+                  ? `${target} already holds every hook group the snapshot removed; no write needed. `
+                  : `settings.json already matches the pre-disable state; no write needed. `) +
                 `(snapshot: ${result.snapshotPath})\n`,
             );
           }
@@ -178,8 +186,13 @@ export function registerGateGcGroup(
               `into ${target} from ${result.snapshotPath}.\n`,
           );
         }
+        if (result.mode === "restored" && alreadyBack.length > 0) {
+          stdout(`left alone, already in ${target}: ${alreadyBack.join("; ")}.\n`);
+        }
         if ("skippedForeign" in result) {
-          for (const p of result.skippedForeign) stdout(`skipped ${p}: taken for another config.\n`);
+          for (const p of result.skippedForeign) {
+            stdout(`skipped ${p}: taken for another ${runtime === "codex" ? "config" : "settings file"}.\n`);
+          }
         }
         if ("skippedEnabled" in result && result.skippedEnabled.length > 0) {
           stdout(`left as they are: ${result.skippedEnabled.join(", ")} (already enabled again).\n`);
@@ -252,6 +265,8 @@ interface GateDisableView {
   retired?: { from: string; to: string; why: string; installBackup?: string };
   /** Claude only: the groups went into an already live snapshot. */
   merged: boolean;
+  /** Claude only: spent snapshots this disable retired first (their retired names). */
+  retiredSpent: string[];
 }
 
 /** Runs the disable verb for one runtime and flattens both results into the one shape the printer reads. */
@@ -259,7 +274,7 @@ function runGateDisable(
   runtime: "claude" | "codex",
   options: { matcher?: string; settings?: string; config?: string },
 ): GateDisableView {
-  const empty = { candidates: [], backupPath: "", snapshotPath: "", removed: [], merged: false };
+  const empty = { candidates: [], backupPath: "", snapshotPath: "", removed: [], merged: false, retiredSpent: [] };
   if (runtime === "codex") {
     const r = codexGateDisable({
       ...(options.matcher ? { matcher: options.matcher } : {}),
@@ -288,6 +303,7 @@ function runGateDisable(
     backupPath: r.backupPath,
     snapshotPath: r.snapshotPath,
     merged: r.merged,
+    retiredSpent: r.retired,
     removed: r.removed.map((g) => ({
       event: g.event,
       index: g.index,

@@ -12,8 +12,10 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+  groupLabel,
   listLiveSnapshots,
   listSnapshots,
+  planRestore,
   readSnapshot,
   retireSnapshot,
   retiredSnapshotPath,
@@ -235,6 +237,23 @@ describe("retireSnapshot / listLiveSnapshots", () => {
     expect(r.live.map((l) => l.path)).toEqual([mine]);
   });
 
+  it("names a snapshot taken for another settings file in skippedForeign instead of dropping it silently", () => {
+    put("2026-08-01T10:00:00.000Z");
+    const foreign = put("2026-08-02T10:00:00.000Z", { settingsPath: path.join(tmp, "settings.local.json") });
+    const r = listLiveSnapshots(settings());
+    if (!r.ok) throw new Error("expected ok");
+    expect(r.skippedForeign).toEqual([foreign]);
+  });
+
+  it("tells the file by the basename of the recorded path, however the directory was spelled", () => {
+    const relative = put("2026-08-01T10:00:00.000Z", { settingsPath: "settings.json" });
+    const elsewhere = put("2026-08-02T10:00:00.000Z", { settingsPath: "/some/link/to/dir/settings.json" });
+    const r = listLiveSnapshots(settings());
+    if (!r.ok) throw new Error("expected ok");
+    expect(r.live.map((l) => l.path)).toEqual([elsewhere, relative]);
+    expect(r.skippedForeign).toEqual([]);
+  });
+
   it("reports an unreadable live snapshot instead of leaving it out", () => {
     put("2026-08-01T10:00:00.000Z");
     const bad = path.join(tmp, `${SNAPSHOT_BASENAME_PREFIX}2026-08-02T10:00:00.000Z${SNAPSHOT_BASENAME_SUFFIX}`);
@@ -244,6 +263,7 @@ describe("retireSnapshot / listLiveSnapshots", () => {
     if (r.ok) return;
     expect(r.reason).toContain("is not valid JSON");
     expect(r.reason).toContain(bad);
+    expect(r.path).toBe(bad);
   });
 
   it("breaks a createdAt tie by path, newest name first", () => {
@@ -253,5 +273,66 @@ describe("retireSnapshot / listLiveSnapshots", () => {
     const r = listLiveSnapshots(settings());
     if (!r.ok) throw new Error("expected ok");
     expect(r.live.map((l) => l.path)).toEqual([b, a]);
+  });
+});
+
+describe("planRestore", () => {
+  const group = (matcher: string, command = matcher) => ({ matcher, hooks: [{ command }] });
+  function snap(removed: GateDisableSnapshot["removed"]): GateDisableSnapshot {
+    return validSnapshot({ removed });
+  }
+
+  it("splices the missing groups back at their recorded positions and leaves its input alone", () => {
+    const current = { PreToolUse: [group("A"), group("C")] };
+    const plan = planRestore(current, snap([{ event: "PreToolUse", index: 1, group: group("B") }]));
+    expect(plan.hooks["PreToolUse"]?.map((g) => (g as { matcher: string }).matcher)).toEqual(["A", "B", "C"]);
+    expect(plan.restored).toHaveLength(1);
+    expect(plan.alreadyBack).toEqual([]);
+    expect(current.PreToolUse).toHaveLength(2);
+  });
+
+  it("leaves a group alone when the file holds one with the same event and matcher, in any form", () => {
+    const current = { PreToolUse: [group("B", "rewritten")] };
+    const plan = planRestore(current, snap([{ event: "PreToolUse", index: 0, group: group("B", "original") }]));
+    expect(plan.restored).toEqual([]);
+    expect(plan.alreadyBack).toHaveLength(1);
+    expect(plan.hooks["PreToolUse"]).toEqual(current.PreToolUse);
+  });
+
+  it("does not take a group of another event for a match", () => {
+    const plan = planRestore({ Stop: [group("B")] }, snap([{ event: "PreToolUse", index: 0, group: group("B") }]));
+    expect(plan.restored).toHaveLength(1);
+    expect(plan.hooks["PreToolUse"]).toHaveLength(1);
+  });
+
+  it("lets one file group cover one entry only", () => {
+    const plan = planRestore(
+      { PreToolUse: [group("B", "one")] },
+      snap([
+        { event: "PreToolUse", index: 0, group: group("B", "one") },
+        { event: "PreToolUse", index: 1, group: group("B", "two") },
+      ]),
+    );
+    expect(plan.restored).toHaveLength(1);
+    expect(plan.alreadyBack).toHaveLength(1);
+    expect(plan.hooks["PreToolUse"]).toHaveLength(2);
+  });
+
+  it("undoes the newest step first, so a later removal that shifted positions still lands in place", () => {
+    // Start [A, B, C]; step 0 removed C (index 2), step 1 removed A (index 0 of [A, B]).
+    const plan = planRestore(
+      { PreToolUse: [group("B")] },
+      snap([
+        { event: "PreToolUse", index: 2, step: 0, group: group("C") },
+        { event: "PreToolUse", index: 0, step: 1, group: group("A") },
+      ]),
+    );
+    expect(plan.hooks["PreToolUse"]?.map((g) => (g as { matcher: string }).matcher)).toEqual(["A", "B", "C"]);
+  });
+
+  it("names a group by event and matcher, null for one without", () => {
+    expect(groupLabel("PreToolUse", group("Bash"))).toBe('PreToolUse matcher="Bash"');
+    expect(groupLabel("Stop", { hooks: [] })).toBe("Stop matcher=null");
+    expect(groupLabel("Stop", "junk")).toBe("Stop matcher=null");
   });
 });
