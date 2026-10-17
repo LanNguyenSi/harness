@@ -1134,6 +1134,26 @@ describe("harness gate (claude): the file a settings symlink leads to sits in a 
     expect(on.stderr).toContain("EACCES");
     expect(on.stderr).not.toContain("is a symlink to");
   });
+
+  it.skipIf(cannotWrite)("a read-only directory under a plain path spelled with `..` after a directory link is not described as a link", async () => {
+    // home/in -> a, so home/in/../b/settings.json is the plain file b/settings.json; a lexical fold names home/b.
+    fs.mkdirSync(path.join(tmp, "home"));
+    fs.symlinkSync(path.join(tmp, "a"), path.join(tmp, "home", "in"));
+    const spelled = `${tmp}/home/in/../b/settings.json`;
+    fs.chmodSync(bDir, 0o555);
+    const off = await gateOn(spelled, "disable", "--matcher", "Write|Edit");
+    expect(off.code).not.toBe(EX_OK);
+    expect(off.stderr).toContain("EACCES");
+    expect(off.stderr).not.toContain("is a symlink to");
+    expect(fs.readFileSync(bPath, "utf8")).toBe(original);
+    fs.chmodSync(bDir, 0o755);
+    expect((await gateOn(spelled, "disable", "--matcher", "Write|Edit")).code).toBe(EX_OK);
+    fs.chmodSync(bDir, 0o555);
+    const on = await gateOn(spelled, "enable");
+    expect(on.code).not.toBe(EX_OK);
+    expect(on.stderr).toContain("EACCES");
+    expect(on.stderr).not.toContain("is a symlink to");
+  });
 });
 
 describe("harness gate (claude): a snapshot beside a settings path that became a symlink", () => {
