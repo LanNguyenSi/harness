@@ -84,3 +84,26 @@ export function walkLinkChain(start: string): LinkChain {
 export function linkChain(start: string): string[] {
   return walkLinkChain(start).chain;
 }
+
+/**
+ * A path spelled with a `..` segment, replaced by its directory as the kernel
+ * resolves it plus the same last name. Joining a name to a directory (and
+ * `path.resolve`, `path.normalize`) folds `..` lexically, which leads
+ * elsewhere when the name before it is a directory link (`via/..` is the
+ * parent of where `via` leads, not the directory that holds `via`). `..` is
+ * the only segment such a fold moves (`.` and empty segments fold to the same
+ * directory), so every other spelling is kept as given. A directory that
+ * cannot be resolved leaves the spelling as given: nothing can be read or
+ * written through it.
+ */
+export function kernelEntry(spelled: string): string {
+  if (!spelled.split(path.sep).includes("..")) return spelled;
+  const dir = path.dirname(spelled);
+  try {
+    // The kernel's own lookup first: the native `realpath` of macOS walks `file/..` back to the file's directory.
+    fs.statSync(dir);
+    return path.join(fs.realpathSync.native(dir), path.basename(spelled));
+  } catch {
+    return spelled;
+  }
+}

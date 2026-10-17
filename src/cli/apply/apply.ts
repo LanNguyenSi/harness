@@ -524,6 +524,23 @@ function resolveTargetPath(target: string, homeDir?: string): string {
   return path.resolve(p);
 }
 
+/**
+ * The Codex config path handed to the installer. A `..` after a directory link
+ * leads elsewhere than a lexical fold of the spelling (`via/..` is the parent
+ * of where `via` leads), so a path with a `..` segment is made absolute without
+ * folding and the installer takes it through the directory the kernel reaches.
+ * A leading `~/` is expanded by concatenation, not `path.join` (which folds):
+ * a shell passes `--codex-config=~/x` literally, so this expansion is the
+ * normal route for a `~` spelling. A path without a `..` (a bare `~` included)
+ * resolves as `resolveTargetPath` does.
+ */
+function resolveCodexConfigPath(target: string): string {
+  let spelled = target;
+  if (target.startsWith("~/")) spelled = `${os.homedir()}${path.sep}${target.slice(2)}`;
+  if (!spelled.split(path.sep).includes("..")) return resolveTargetPath(spelled);
+  return path.isAbsolute(spelled) ? spelled : `${process.cwd()}${path.sep}${spelled}`;
+}
+
 function readTargetJson(targetPath: string): {
   parsed: Record<string, unknown> | null;
   parseError: string | null;
@@ -1020,7 +1037,7 @@ export async function apply(opts: ApplyOptions = {}): Promise<ApplyResult> {
     }
     codexInstallPlan = planCodexConfigInstall({
       ...(opts.codexConfigPath !== undefined
-        ? { configPath: resolveTargetPath(opts.codexConfigPath) }
+        ? { configPath: resolveCodexConfigPath(opts.codexConfigPath) }
         : {}),
       ...(opts.homeDir !== undefined ? { homeDir: opts.homeDir } : {}),
       generatedPath: path.join(generatedDir, CODEX_CONFIG_BASENAME),

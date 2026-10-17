@@ -28,7 +28,7 @@ import {
   latestCodexInstallBackup,
   resolveConfigSymlink,
 } from "../apply/install-codex-config.js";
-import { linkChain } from "./link-chain.js";
+import { kernelEntry, linkChain } from "./link-chain.js";
 import { shellQuote } from "./shell-quote.js";
 import { listSnapshots, namesSameEntry, SNAPSHOT_BASENAME_SUFFIX, snapshotFieldProblem } from "./snapshot.js";
 
@@ -128,6 +128,18 @@ export function toGateError(err: unknown, makeError: (message: string) => Error)
   return err instanceof CodexInstallRefusalError ? makeError(gateWording(err.message)) : err;
 }
 
+/** The absolute spelling of a config path. One with a `..` segment is taken
+ * through the directory the kernel reaches (`kernelEntry`), not folded
+ * lexically: `via/..` is the parent of where the directory link `via` leads,
+ * and the snapshot and the backup sit beside the config as the kernel finds it. */
+function absoluteEntry(spelled: string): string {
+  if (!spelled.split(path.sep).includes("..")) return path.resolve(spelled);
+  const entry = kernelEntry(spelled);
+  // A directory that cannot be resolved stays as written (nothing can be read
+  // or written through it), made absolute without a fold.
+  return path.isAbsolute(entry) ? entry : `${process.cwd()}${path.sep}${entry}`;
+}
+
 /** Resolves `--config` (or the default `~/.codex/config.toml`) the way the
  * installer does: a symlinked config is edited at its resolved target. The
  * symlink refusals (dangling, not a regular file) surface as `makeError`. */
@@ -136,7 +148,7 @@ export function resolveCodexConfig(
   makeError: (message: string) => Error,
 ): ResolvedCodexConfig {
   const named = typeof opts.configPath === "string" && opts.configPath.length > 0;
-  const requestedPath = path.resolve(named ? opts.configPath! : defaultCodexConfigPath(opts.homeDir));
+  const requestedPath = absoluteEntry(named ? opts.configPath! : defaultCodexConfigPath(opts.homeDir));
   try {
     return { requestedPath, configPath: resolveConfigSymlink(requestedPath), namedPath: named ? requestedPath : null };
   } catch (err) {

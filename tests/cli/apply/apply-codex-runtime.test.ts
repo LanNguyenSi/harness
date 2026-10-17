@@ -3093,22 +3093,25 @@ describe("apply --runtime codex --install through a symlinked config (task `1637
       expect(siblingNames(path.dirname(codexConfig))).toEqual(["config.toml", "d", "target.toml"]);
     });
 
-    it("is not called dangling when the kernel reaches a file that the lexical reading misses", async () => {
+    it("is installed through when the kernel reaches a file that the lexical reading misses, never refused as unresolvable", async () => {
       fs.writeFileSync(physical, BEFORE);
       expect(fs.readFileSync(codexConfig, "utf8")).toBe(BEFORE);
 
-      const err = await installAt().then(
-        () => {
-          throw new Error("expected the install to refuse");
-        },
-        (e: unknown) => e,
-      );
+      const result = await installAt();
 
-      expect(err).toBeInstanceOf(CodexInstallRefusalError);
-      expect((err as Error).message).toContain(`${codexConfig} is a symlink that cannot be resolved (ENOENT`);
-      expect((err as Error).message).not.toContain("dangling");
-      expect(fs.readFileSync(physical, "utf8")).toBe(BEFORE);
-      expect(siblingNames(path.dirname(codexConfig))).toEqual(["config.toml", "d"]);
+      expect(result.codexConfigInstall?.written).toBe(true);
+      expect(result.codexConfigInstall?.configPath).toBe(physical);
+      expect(fs.readFileSync(physical, "utf8")).toContain(CODEX_MANAGED_BEGIN);
+      expect(fs.readFileSync(codexConfig, "utf8")).toBe(fs.readFileSync(physical, "utf8"));
+      expect(fs.readlinkSync(codexConfig)).toBe("d/../target.toml");
+      // The file a lexical reading names was never created.
+      expect(fs.existsSync(lexical)).toBe(false);
+      expect(siblingNames(path.dirname(codexConfig))).toEqual([
+        "config.toml",
+        `config.toml.harness-backup-${STAMP}`,
+        "d",
+      ]);
+      expect(fs.readFileSync(`${codexConfig}.harness-backup-${STAMP}`, "utf8")).toBe(BEFORE);
     });
   });
 
@@ -4656,4 +4659,161 @@ describe("apply --runtime codex --install: an operator-authored [[hooks.*]] tabl
       expect(await installOver(installed)).toBe(installed);
     });
   }
+});
+
+describe("apply --codex-config spelled with `..` after a directory link", () => {
+  // home/in -> dot/b, so home/in/../a is dot/a. home/a is where a lexical fold of the spelling lands.
+  let spelled: string;
+  let kernelFile: string;
+  let foldedDir: string;
+
+  beforeEach(() => {
+    writeManifestWithPack();
+    fs.mkdirSync(path.join(tmpHome, "dot", "a"), { recursive: true });
+    fs.mkdirSync(path.join(tmpHome, "dot", "b"));
+    foldedDir = path.join(tmpHome, "home", "a");
+    fs.mkdirSync(foldedDir, { recursive: true });
+    fs.symlinkSync(path.join(tmpHome, "dot", "b"), path.join(tmpHome, "home", "in"));
+    kernelFile = path.join(tmpHome, "dot", "a", "config.toml");
+    fs.writeFileSync(kernelFile, 'model = "gpt-5.5"\n');
+    spelled = `${tmpHome}/home/in/../a/config.toml`;
+  });
+
+  it("installs into the file the kernel reaches and leaves the folded directory empty", async () => {
+    const result = await apply({ homeDir: tmpHome, runtime: "codex", installCodex: true, codexConfigPath: spelled });
+
+    expect(result.codexConfigInstall?.written).toBe(true);
+    expect(result.codexConfigInstall?.configPath).toBe(kernelFile);
+    expect(fs.readFileSync(kernelFile, "utf8")).toContain(CODEX_MANAGED_BEGIN);
+    expect(fs.readdirSync(foldedDir)).toEqual([]);
+    expect(fs.readdirSync(path.join(tmpHome, "dot", "a")).some((n) => n.includes(".harness-backup-"))).toBe(true);
+  });
+
+  it("installs into the file the kernel reaches although a decoy sits where a lexical fold lands", async () => {
+    const decoy = path.join(foldedDir, "config.toml");
+    fs.writeFileSync(decoy, 'model = "decoy"\n');
+
+    await apply({ homeDir: tmpHome, runtime: "codex", installCodex: true, codexConfigPath: spelled });
+
+    expect(fs.readFileSync(kernelFile, "utf8")).toContain(CODEX_MANAGED_BEGIN);
+    expect(fs.readFileSync(decoy, "utf8")).toBe('model = "decoy"\n');
+    expect(fs.readdirSync(foldedDir)).toEqual(["config.toml"]);
+  });
+
+  it("does the same through the CLI entry with a relative --codex-config", async () => {
+    const before = process.cwd();
+    process.chdir(tmpHome);
+    try {
+      await buildProgram({ stdout: () => {}, stderr: () => {} }).parseAsync(
+        ["apply", "--config", path.join(tmpHome, "harness.yaml"), "--runtime", "codex", "--install", "--codex-config", "home/in/../a/config.toml"],
+        { from: "user" },
+      );
+    } finally {
+      process.chdir(before);
+    }
+
+    expect(fs.readFileSync(kernelFile, "utf8")).toContain(CODEX_MANAGED_BEGIN);
+    expect(fs.readdirSync(foldedDir)).toEqual([]);
+  });
+
+  it("makes a relative spelling absolute without folding it when its directory leads nowhere", async () => {
+    const before = process.cwd();
+    process.chdir(tmpHome);
+    try {
+      const result = await apply({
+        homeDir: tmpHome,
+        runtime: "codex",
+        installCodex: true,
+        dryRun: true,
+        codexConfigPath: "nodir/../x/config.toml",
+      });
+      expect(result.codexConfigInstall?.configPath).toBe(`${tmpHome}/nodir/../x/config.toml`);
+    } finally {
+      process.chdir(before);
+    }
+  });
+
+  // A shell passes `--codex-config=~/...` literally, so the `~` is expanded by harness: HOME is the temp tree.
+  const withHome = async <T>(fn: () => Promise<T>): Promise<T> => {
+    const before = process.env.HOME;
+    process.env.HOME = tmpHome;
+    try {
+      return await fn();
+    } finally {
+      if (before === undefined) delete process.env.HOME;
+      else process.env.HOME = before;
+    }
+  };
+
+  it("installs a `~` spelling into the file the kernel reaches, and leaves the folded directory empty", async () => {
+    const result = await withHome(() =>
+      apply({ homeDir: tmpHome, runtime: "codex", installCodex: true, codexConfigPath: "~/home/in/../a/config.toml" }),
+    );
+
+    expect(result.codexConfigInstall?.written).toBe(true);
+    expect(result.codexConfigInstall?.configPath).toBe(kernelFile);
+    expect(fs.readFileSync(kernelFile, "utf8")).toContain(CODEX_MANAGED_BEGIN);
+    expect(fs.readdirSync(foldedDir)).toEqual([]);
+  });
+
+  it("does the same through the CLI entry with the `=~/...` form a shell leaves unexpanded", async () => {
+    await withHome(async () => {
+      await buildProgram({ stdout: () => {}, stderr: () => {} }).parseAsync(
+        ["apply", "--config", path.join(tmpHome, "harness.yaml"), "--runtime", "codex", "--install", "--codex-config=~/home/in/../a/config.toml"],
+        { from: "user" },
+      );
+    });
+
+    expect(fs.readFileSync(kernelFile, "utf8")).toContain(CODEX_MANAGED_BEGIN);
+    expect(fs.readdirSync(foldedDir)).toEqual([]);
+  });
+
+  it("keeps a `~` path without `..` resolving as before", async () => {
+    const result = await withHome(() =>
+      apply({ homeDir: tmpHome, runtime: "codex", installCodex: true, dryRun: true, codexConfigPath: "~/y/./x/config.toml" }),
+    );
+    expect(result.codexConfigInstall?.configPath).toBe(path.join(tmpHome, "y", "x", "config.toml"));
+  });
+
+  it("expands a bare `~` to HOME, which is a directory and so refused as a config", async () => {
+    await expect(
+      withHome(() => apply({ homeDir: tmpHome, runtime: "codex", installCodex: true, dryRun: true, codexConfigPath: "~" })),
+    ).rejects.toThrow("EISDIR");
+  });
+
+  it("creates a config directory that does not exist yet where the kernel reaches it", async () => {
+    const via = `${tmpHome}/home/in/../fresh/config.toml`;
+    const result = await apply({ homeDir: tmpHome, runtime: "codex", installCodex: true, codexConfigPath: via });
+
+    const fresh = path.join(tmpHome, "dot", "fresh", "config.toml");
+    expect(result.codexConfigInstall?.written).toBe(true);
+    expect(result.codexConfigInstall?.configPath).toBe(fresh);
+    expect(fs.readFileSync(fresh, "utf8")).toContain(CODEX_MANAGED_BEGIN);
+    expect(fs.readdirSync(path.dirname(fresh))).toEqual(["config.toml"]);
+    expect(fs.existsSync(path.join(tmpHome, "home", "fresh"))).toBe(false);
+  });
+
+  it("keeps a path without `..` resolving as before", async () => {
+    const plain = path.join(tmpHome, "plain", "config.toml");
+    fs.mkdirSync(path.dirname(plain));
+    fs.writeFileSync(plain, 'model = "gpt-5.5"\n');
+    const result = await apply({ homeDir: tmpHome, runtime: "codex", installCodex: true, codexConfigPath: `${tmpHome}/plain/./config.toml` });
+    expect(result.codexConfigInstall?.configPath).toBe(plain);
+  });
+});
+
+describe("apply --target spelled with `..` after a directory link (Claude side, unchanged)", () => {
+  it("still folds the spelling lexically, as before: the settings land in the folded directory", async () => {
+    // Pins the existing behaviour of resolveTargetPath for every target other than the Codex config path.
+    writeManifestWithPack();
+    fs.mkdirSync(path.join(tmpHome, "dot", "a"), { recursive: true });
+    fs.mkdirSync(path.join(tmpHome, "dot", "b"));
+    fs.mkdirSync(path.join(tmpHome, "home", "a"), { recursive: true });
+    fs.symlinkSync(path.join(tmpHome, "dot", "b"), path.join(tmpHome, "home", "in"));
+
+    await apply({ homeDir: tmpHome, target: `${tmpHome}/home/in/../a/settings.json` });
+
+    expect(fs.existsSync(path.join(tmpHome, "home", "a", "settings.json"))).toBe(true);
+    expect(fs.existsSync(path.join(tmpHome, "dot", "a", "settings.json"))).toBe(false);
+  });
 });
