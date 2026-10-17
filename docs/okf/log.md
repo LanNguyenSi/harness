@@ -2,6 +2,7 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-10-17T10:18:28Z: re-verified `gate-kill-switch.md` against the changed `docs/policy-packs/branch-protection.md` (its block-contract row now names the exit 2 when the Claude Code envelope cannot be written) and re-stamped it; its citations into that doc did not move and none of its claims concern the block contract.
 - 2026-10-17T10:10:20Z: re-verified `evidence-ledger-trust-boundary.md` against the changed `src/cli/pack/hook-branch-protection.ts` and `docs/policy-packs/branch-protection.md` (its block-contract row now names the exit 2 when the Claude Code envelope cannot be written) and re-stamped it. Its claims about the hook (git asked per directory; refusal on a protected branch, an unanswerable read or any error; no ledger, session state or override marker) still hold; it cites no line of the hook.
 - 2026-10-17T09:52:00Z: re-verified `codex-adapter-parity-gaps.md` against the changed `src/cli/pack/hook-branch-protection.ts` and re-stamped it. A Claude Code block now awaits its envelope write (at most the stdio drain bound) and exits 2 with the reason on stderr when that write fails or stdout is closed, instead of exit 0 without an envelope; an open stdout keeps exit 0, the allow path and the Codex contract are unchanged. The "Block contract" and "Fail direction" bullets say so; no citation into the hook source moved.
 

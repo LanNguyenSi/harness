@@ -1788,11 +1788,13 @@ describe.skipIf(!GIT_AVAILABLE)("branch-protection hook: a block whose envelope 
     expect(run.stderr).toContain("(write EPIPE); exiting 2");
   });
 
-  it("a write callback that errors after a macrotask, inside the wait, exits 2", async () => {
+  it("a write callback that errors shortly before the wait ends exits 2", async () => {
     const repo = makeRepo("master");
     const out = new Writable({
       write(_chunk, _encoding, cb) {
-        setTimeout(() => cb(new Error("write EPIPE")), 100);
+        // Close to the bound, so a shortened wait fails this test; the hook's own
+        // timer is created first in the same synchronous run and fires later.
+        setTimeout(() => cb(new Error("write EPIPE")), STDIO_DRAIN_TIMEOUT_MS - 100);
       },
     });
     out.on("error", () => undefined);
