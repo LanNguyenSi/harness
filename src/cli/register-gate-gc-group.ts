@@ -135,7 +135,7 @@ export function registerGateGcGroup(
         "per disable: each call handles the newest, and exits non-zero while another stays live. It " +
         "also exits non-zero while a live snapshot beside settings.json was taken for another " +
         "settings file, naming the `--settings` that restores it. With `--runtime codex` there is at most one " +
-        "live `harness.gate-disable-codex.*.json` snapshot per config (another config's is skipped): " +
+        "live `harness.gate-disable-codex.*.json` snapshot per config (another config's is skipped and named with the `--config` that restores it): " +
         "a later disable merges its units into it, and one enable applies it. A snapshot it applies, " +
         "or the config already matches, is renamed to `*.restored.json`; one taken before a later " +
         "`harness apply --runtime codex --install`, or whose units are all enabled again (not deleted), " +
