@@ -283,8 +283,18 @@ function foldsTo(a: string, b: string): boolean {
  * Every other name is another entry (a hard link, a symlink, a renamed file):
  * restoring through it would write a new file at that name and leave the
  * recorded file as the disable left it.
+ *
+ * `symlinks` lets the entry be a symlink itself (a symlinked Codex config,
+ * which the gate edits at its resolved target): two spellings then name one
+ * entry when `lstat` gives both the same device and inode and a link count of
+ * 1, as for a regular file. The Claude gate never sets it.
  */
-function namesSameEntry(dir: string, recordedName: string, targetName: string): boolean {
+export function namesSameEntry(
+  dir: string,
+  recordedName: string,
+  targetName: string,
+  opts: { symlinks?: boolean } = {},
+): boolean {
   if (recordedName === targetName) return true;
   if (!foldsTo(recordedName, targetName)) return false;
   let recorded: fs.BigIntStats;
@@ -295,9 +305,11 @@ function namesSameEntry(dir: string, recordedName: string, targetName: string): 
   } catch {
     return false;
   }
+  const kind = (st: fs.BigIntStats): "file" | "link" | null =>
+    st.isFile() ? "file" : opts.symlinks === true && st.isSymbolicLink() ? "link" : null;
   return (
-    recorded.isFile() &&
-    target.isFile() &&
+    kind(recorded) !== null &&
+    kind(recorded) === kind(target) &&
     recorded.dev === target.dev &&
     recorded.ino === target.ino &&
     recorded.nlink === 1n &&

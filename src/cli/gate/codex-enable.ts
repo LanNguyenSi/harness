@@ -4,7 +4,10 @@
 // Reads the live `harness.gate-disable-codex.*.json` snapshot beside the
 // config (a Claude `harness.gate-disable.*.json` snapshot is never
 // considered). At most one is live per config: every disable merges into it.
-// Another config's snapshot is skipped and named. An earlier build kept one
+// Another config's snapshot is skipped and named with the `--config` that
+// restores it; a snapshot recorded under another spelling of this config's
+// own directory entry (case or normalization on a folding filesystem) is this
+// config's own. An earlier build kept one
 // snapshot per disable; with several live ones for this config, enable
 // handles the newest by its recorded `createdAt` (never by file mtime) per
 // run and names the rest in `remaining`, so the caller exits non-zero until
@@ -50,6 +53,7 @@ import { atomicWriteFile } from "../../io/atomic-write.js";
 import {
   codexSnapshotExits,
   type CodexRetiredSnapshot,
+  type ForeignCodexSnapshot,
   latestInstall,
   planCodexRestore,
   readLiveCodexSnapshots,
@@ -73,8 +77,9 @@ interface EnableBase {
   configPath: string;
   /** Ids of the block's units that are still neutralised after this call. */
   stillDisabled: string[];
-  /** Live snapshots beside the config that were taken for another config. */
-  skippedForeign: string[];
+  /** Live snapshots beside the config that were taken for another config
+   * (another file, or the same file under a name harness cannot prove is its own). */
+  skippedForeign: ForeignCodexSnapshot[];
 }
 
 interface SnapshotBase extends EnableBase {
@@ -115,7 +120,7 @@ function disabledIds(text: string, configPath: string): string[] {
 }
 
 export function codexGateEnable(opts: CodexGateEnableOptions = {}): CodexGateEnableResult {
-  const { requestedPath, configPath } = resolveCodexConfig(opts, (m) => new GateEnableError(m));
+  const { requestedPath, configPath, namedPath } = resolveCodexConfig(opts, (m) => new GateEnableError(m));
   const { own, foreign: skippedForeign } = readLiveCodexSnapshots(requestedPath, (m) => new GateEnableError(m));
   const live = own[0];
 
@@ -126,7 +131,7 @@ export function codexGateEnable(opts: CodexGateEnableOptions = {}): CodexGateEna
     if ((err as NodeJS.ErrnoException).code === "ENOENT") {
       if (live === undefined) return { mode: "no-snapshots", configPath: requestedPath, stillDisabled: [], skippedForeign };
       throw new GateEnableError(
-        `Codex config not found: ${requestedPath}; cannot restore into a missing target. ${codexSnapshotExits(live)}`,
+        `Codex config not found: ${requestedPath}; cannot restore into a missing target. ${codexSnapshotExits(live, namedPath)}`,
       );
     }
     throw new GateEnableError(`cannot read ${requestedPath}: ${(err as Error).message}`);
@@ -159,7 +164,7 @@ export function codexGateEnable(opts: CodexGateEnableOptions = {}): CodexGateEna
     // The restore skips a unit that is back already and never overwrites a
     // live line. Every check that would also stop --force runs first, so the
     // edited-since refusal names --force only when --force would write.
-    const plan = planCodexRestore(original, units, configPath, live);
+    const plan = planCodexRestore(original, units, configPath, live, namedPath);
     if (!plan.ok) throw new GateEnableError(plan.reason);
     const counts: Record<string, number> = {};
     for (const unit of plan.restored) counts[unit.event] = (counts[unit.event] ?? 0) + 1;
@@ -176,7 +181,7 @@ export function codexGateEnable(opts: CodexGateEnableOptions = {}): CodexGateEna
     if (exact && !proven) {
       throw new GateEnableError(
         `the snapshot ${live.path} does not rebuild the config it was taken from (the restored text does not ` +
-          `match its recorded pre-disable sha); refusing to write. The config is untouched. ${codexSnapshotExits(live)}`,
+          `match its recorded pre-disable sha); refusing to write. The config is untouched. ${codexSnapshotExits(live, namedPath)}`,
       );
     }
     if (!exact && !proven && !opts.force) {

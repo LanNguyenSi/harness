@@ -122,7 +122,7 @@ describe("codex gate disable: write order and snapshot rollback", () => {
     }
     expect(message).toContain("disk full");
     expect(message).toContain("snapshot gone");
-    expect(message).toContain("harness gate enable --runtime codex");
+    expect(message).toContain(`harness gate enable --runtime codex --config ${configPath}`);
     // The merged snapshot stays, and enable still restores everything it names that is off.
     failOn = () => null;
     const e = codexGateEnable({ configPath, now: at(3) });

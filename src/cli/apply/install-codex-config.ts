@@ -8,6 +8,7 @@ import { EX_FAIL, HarnessExitError } from "../exit-codes.js";
 // neither module touches the other's bindings at top level; they are used only
 // inside function bodies. Keep it that way (no top-level use of these three).
 import { listCodexSnapshots, readCodexSnapshot, retireCodexSnapshot } from "../gate/codex-snapshot.js";
+import { namesSameEntry } from "../gate/snapshot.js";
 
 export const CODEX_MANAGED_SOURCE_PREFIX = "# Harness Codex hook wiring.";
 export const CODEX_MANAGED_BEGIN = "# BEGIN harness-managed codex hooks";
@@ -2230,26 +2231,63 @@ export function latestCodexInstallBackupMs(filePath: string): number | null {
 }
 
 /** Like {@link latestCodexInstallBackupMs}, and also the path of the newest
- * backup file, so a message can name the install that dated a snapshot. */
+ * backup file, so a message can name the install that dated a snapshot. A
+ * backup whose name spells the file in another letter case or normalization
+ * form (an install that ran through `Config.toml` for `config.toml` on a
+ * filesystem that folds those) counts when both spellings are one entry
+ * (`namesSameEntry`); on a filesystem that keeps them apart, another file's
+ * backups never do. */
 export function latestCodexInstallBackup(filePath: string): { ms: number; path: string } | null {
-  const prefix = `${path.basename(filePath)}.harness-backup-`;
+  const dir = path.dirname(filePath);
+  const base = path.basename(filePath);
+  const marker = ".harness-backup-";
   let names: string[];
   try {
-    names = fs.readdirSync(path.dirname(filePath));
+    names = fs.readdirSync(dir);
   } catch {
     return null;
   }
   let latest: { ms: number; path: string } | null = null;
   for (const name of names) {
-    if (!name.startsWith(prefix)) continue;
-    const m = INSTALL_BACKUP_STAMP_RE.exec(name.slice(prefix.length));
+    const at = name.lastIndexOf(marker);
+    if (at <= 0) continue;
+    const spelled = name.slice(0, at);
+    if (!namesSameEntry(dir, spelled, base, { symlinks: true })) continue;
+    const m = INSTALL_BACKUP_STAMP_RE.exec(name.slice(at + marker.length));
     if (m === null) continue;
     const ms = Date.parse(`${m[1]}T${m[2]}:${m[3]}:${m[4]}.${m[5]}Z`);
     if (!Number.isNaN(ms) && (latest === null || ms > latest.ms)) {
-      latest = { ms, path: path.join(path.dirname(filePath), name) };
+      latest = { ms, path: path.join(dir, name) };
     }
   }
   return latest;
+}
+
+/**
+ * The link chain of a config path: the path itself, then each path its
+ * symlink text leads to, ending at the first path that is not a symlink (the
+ * target) or at the point where the chain cannot be walked (dangling, a loop,
+ * an unreadable hop). A relative link text is resolved against the physical
+ * directory of the link holding it, as the kernel does. A snapshot or an
+ * install backup can sit beside any of these paths, depending on which
+ * spelling the gate or the installer was run through.
+ */
+export function codexConfigLinkChain(requestedPath: string): string[] {
+  const MAX_HOPS = 40;
+  const chain = [requestedPath];
+  let current = requestedPath;
+  for (let hop = 0; hop < MAX_HOPS; hop++) {
+    let next: string;
+    try {
+      if (!fs.lstatSync(current).isSymbolicLink()) break;
+      next = path.resolve(fs.realpathSync(path.dirname(current)), fs.readlinkSync(current));
+    } catch {
+      break;
+    }
+    chain.push(next);
+    current = next;
+  }
+  return chain;
 }
 
 /** The config holds operator secrets (API tokens under `[mcp_servers.*]`,
@@ -2289,7 +2327,8 @@ function namesFile(recorded: string, target: string, targetId: string | null): b
   return targetId !== null && recordedId !== null && targetId === recordedId;
 }
 
-/** The live Codex gate snapshots, beside the link and beside the target, that
+/** The live Codex gate snapshots, beside the requested path, beside every
+ * further hop of its link chain and beside the target, that
  * were taken from the config an install is about to rewrite. Read before the
  * write: the write replaces the file, which changes its inode. A snapshot
  * that cannot be read is not matched; it is reported so the operator knows
@@ -2297,7 +2336,24 @@ function namesFile(recorded: string, target: string, targetId: string | null): b
 function findSnapshotsOfConfig(plan: CodexConfigInstallPlan): { matched: string[]; unreadable: string[] } {
   const requested = plan.linkPath ?? plan.configPath;
   const id = fileIdentity(plan.configPath);
-  const dirs = [...new Set([path.dirname(requested), path.dirname(plan.configPath)])];
+  // A snapshot sits beside the spelling the gate was run through, and every
+  // hop of the chain from the requested path to the target is such a spelling.
+  // One directory under two spellings (a symlinked directory) is read once:
+  // a snapshot found twice would be renamed once and then fail to rename.
+  const dirs: string[] = [];
+  const seenDirs = new Set<string>();
+  for (const spelled of [...codexConfigLinkChain(requested), plan.configPath]) {
+    const dir = path.dirname(spelled);
+    let physical = dir;
+    try {
+      physical = fs.realpathSync(dir);
+    } catch {
+      // A directory that cannot be resolved is compared by its spelling.
+    }
+    if (seenDirs.has(physical)) continue;
+    seenDirs.add(physical);
+    dirs.push(dir);
+  }
   const matched: string[] = [];
   const unreadable: string[] = [];
   for (const dir of dirs) {
@@ -2317,8 +2373,8 @@ function findSnapshotsOfConfig(plan: CodexConfigInstallPlan): { matched: string[
 /**
  * Writes the install. A live gate snapshot of the config holds the hook
  * lines of the block this write replaces, so enabling it later would put an
- * outdated line back: every such snapshot (beside the config, and beside the
- * link of a symlinked one) is renamed to `*.superseded.json` right after the
+ * outdated line back: every such snapshot (beside every hop of the requested
+ * path's link chain and beside the target) is renamed to `*.superseded.json` right after the
  * write, whatever backup files exist. A rename that fails never fails the
  * install, which is already on disk: it is a warning (`snapshotWarnings`,
  * printed by the caller) naming the snapshot and the move-aside step. The

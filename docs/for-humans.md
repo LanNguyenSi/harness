@@ -275,7 +275,9 @@ other state refuses and names the way out), and `gate enable` restores
 it and retires it. On Claude a removed group counts as back only when
 the file holds an unchanged copy; a group with the same matcher but
 other content makes enable refuse unless `--force`, and a snapshot
-that names another settings file in the same directory is foreign.
+that names another settings file in the same directory is foreign. On
+Codex a snapshot of another config beside it keeps `gate enable`
+non-zero and is named with the `--config` that restores it.
 See [`docs/okf/gate-kill-switch.md`](okf/gate-kill-switch.md). On
 Codex the restore is byte for byte
 when the config is unchanged since the disable; if you edited the file
