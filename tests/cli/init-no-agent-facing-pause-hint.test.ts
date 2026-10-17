@@ -45,12 +45,11 @@ import { parseManifest, type Manifest } from "../../src/schema/index.js";
 // the fifth SOURCES entry exercises the composer with every composable
 // pack and policy selected, so (c) is covered too.
 //
-// One legitimate, non-actionable exception is allow-listed: the "see also"
-// link to docs/okf/gate-kill-switch.md, which the three
-// kill-switch deny policies' own `run:` text points operators/readers at
-// for the honest trust model. That is a doc citation, not a recommendation
-// to run pause/resume, and its filename happens to contain the substring
-// "pause".
+// (An earlier revision strip-allow-listed a "see also" link to
+// docs/okf/gate-kill-switch.md before matching, but no shipped `ux.run` line
+// ever carried that link, it appears only in src code comments, so the
+// pre-match strip was a no-op on every scanned line and has been removed;
+// every line is now matched against KILL_SWITCH_WORD directly.)
 //
 // LIMITATION (documented, not fixed here): this is a literal-vocabulary
 // guard, not a semantic one. KILL_SWITCH_WORD also catches the sibling
@@ -65,12 +64,7 @@ const __filename = fileURLToPath(import.meta.url);
 const REPO_ROOT = path.resolve(path.dirname(__filename), "..", "..");
 const REFERENCE_YAML = path.join(REPO_ROOT, "docs", "examples", "full-manifest.yaml");
 
-const ALLOWED_DOC_LINK = "docs/okf/gate-kill-switch.md";
 const KILL_SWITCH_WORD = /\b(pause|resume)\b|\bgate\s+(?:disable|enable)\b/i;
-
-function stripAllowedDocLink(text: string): string {
-  return text.split(ALLOWED_DOC_LINK).join("");
-}
 
 // Finding 1(b): manifest.policy_packs[].config.ux.run. `config` is an
 // untyped `Record<string, unknown>` in the schema (each pack owns its own
@@ -135,9 +129,7 @@ describe("no agent-facing ux.run line recommends the pause/resume kill switch (t
         lines.length,
         `${name}: scanned zero ux.run lines — the guard verified nothing`,
       ).toBeGreaterThan(0);
-      const offenders = lines.filter(({ line }) =>
-        KILL_SWITCH_WORD.test(stripAllowedDocLink(line)),
-      );
+      const offenders = lines.filter(({ line }) => KILL_SWITCH_WORD.test(line));
       expect(
         offenders,
         `agent-facing ux.run line(s) still recommend pause/resume: ${JSON.stringify(offenders)}`,

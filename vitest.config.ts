@@ -80,7 +80,18 @@ export default defineConfig({
     // "Residual exposure" note. Full rationale, the
     // seven-vs-four-entry-point finding, and the allowlist itself live in
     // the setup file.
-    setupFiles: ["./tests/_helpers/hermetic-spawn-allowlist.ts"],
+    //
+    // hermetic-config-dirs.ts unsets an inherited
+    // CLAUDE_CONFIG_DIR and repoints HOME at a fresh temp dir per test
+    // process, so no test reads the developer's real ~/.claude /
+    // $CLAUDE_CONFIG_DIR and both `npm test` and
+    // `CLAUDE_CONFIG_DIR=... npm test` behave identically. Its own rationale
+    // and the precedence rule (a test setting HOME / CLAUDE_CONFIG_DIR itself
+    // still wins) live in that file.
+    setupFiles: [
+      "./tests/_helpers/hermetic-spawn-allowlist.ts",
+      "./tests/_helpers/hermetic-config-dirs.ts",
+    ],
     maxWorkers: 6,
     coverage: {
       provider: "v8",

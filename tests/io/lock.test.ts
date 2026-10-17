@@ -58,8 +58,11 @@ describe("withFileLock — concurrency via fork", () => {
     // lead-time: worker A appends "A:lock-acquired" the instant lockfile.lock()
     // resolves, so we fork B only once A is provably holding the lock. B then
     // blocks on acquire until A releases, so the [A,B] order no longer depends on
-    // process-startup latency winning a 50ms window under CPU load (the same
-    // fixed-window flake class fixed in the smoke SIGKILL test, #330).
+    // process-startup latency winning a 50ms window under CPU load, the same
+    // fixed-window flake class this readiness handshake replaces. (An earlier
+    // pointer here named the harness-smoke SIGKILL test that first used this
+    // handshake technique, but that whole suite was removed with the
+    // `harness smoke` feature and no surviving test carries that coverage.)
     const a = forkWorker(workerPath, { lockPath, dataPath, label: "A", holdMs: 300 });
     await waitForAcquired(dataPath, "A", 10_000);
     const b = forkWorker(workerPath, { lockPath, dataPath, label: "B", holdMs: 100 });
@@ -84,7 +87,7 @@ describe("withFileLock — concurrency via fork", () => {
  * lockfile.lock() resolves. Synchronizing on the child's own readiness signal
  * instead of assuming it acquires within a fixed startup window is what makes
  * the [A,B] ordering deterministic under CPU contention. The 10ms interval is a
- * poll cadence, not an ordering tiebreaker. Mirrors the #330 smoke handshake.
+ * poll cadence, not an ordering tiebreaker.
  */
 async function waitForAcquired(dataPath: string, label: string, timeoutMs: number): Promise<void> {
   const marker = `${label}:lock-acquired`;

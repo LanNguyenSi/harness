@@ -34,6 +34,12 @@ jobs:
       - name: Type check
         run: npm run typecheck
 
+      - name: Type check (tests)
+        # tsc --noEmit -p tsconfig.test.json, type-checks tests/ too, so a
+        # test-only type error (e.g. a property the Node typings do not
+        # declare) is caught here rather than only at review time.
+        run: npm run typecheck:tests
+
       - name: Import boundaries
         # dependency-cruiser fitness function for the layering
         # (schema -> policies -> runtime -> policy-packs -> cli); the

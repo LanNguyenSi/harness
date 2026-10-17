@@ -100,6 +100,12 @@ async function runWithSlowReader(opts: {
   });
   const pid = child.pid as number;
   cleanups.push(() => {
+    // Only signal a child this run still owns. Once the child has exited
+    // (either a clean `exitCode` or a `signalCode` death) its pid is back in
+    // the OS's reusable pool, so an unconditional kill could land on an
+    // unrelated process that reused the pid since. A live child has both
+    // still null.
+    if (child.exitCode !== null || child.signalCode !== null) return;
     try {
       process.kill(pid, "SIGKILL");
     } catch {
