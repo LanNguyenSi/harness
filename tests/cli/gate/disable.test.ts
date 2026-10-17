@@ -486,6 +486,23 @@ describe("gateDisable: a live snapshot the file no longer matches", () => {
     expect(again.mode === "remove" && again.merged).toBe(false);
   });
 
+  it("refuses naming enable --force with the call's --settings when only a removed group is missing", () => {
+    threeGroups();
+    gateDisable({ settingsPath, matcher: "Write|Edit", now: T1 });
+    // An edit since: a new group, and the removed one is still out of the file.
+    writeSettings({ hooks: { PreToolUse: [{ matcher: "Bash", hooks: [{ command: "bash-hook" }] }, { matcher: "Task", hooks: [{ command: "task-hook" }] }, { matcher: "Read", hooks: [{ command: "read-hook" }] }] } });
+    let message = "";
+    try {
+      gateDisable({ settingsPath, matcher: "Task", now: T2 });
+    } catch (err) {
+      expect(err).toBeInstanceOf(GateDisableError);
+      message = (err as Error).message;
+    }
+    expect(message).toContain("still missing");
+    expect(message).not.toContain("do not count as back");
+    expect(message).toContain(`Run \`harness gate enable --force --settings ${settingsPath}\`: it puts the missing groups back`);
+  });
+
   it("does not start a second snapshot when the retry finds the live one still describing the file", () => {
     threeGroups();
     gateDisable({ settingsPath, matcher: "Write|Edit", now: T1 });
