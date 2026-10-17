@@ -2373,8 +2373,8 @@ function findSnapshotsOfConfig(plan: CodexConfigInstallPlan): { matched: string[
 /**
  * Writes the install. A live gate snapshot of the config holds the hook
  * lines of the block this write replaces, so enabling it later would put an
- * outdated line back: every such snapshot (beside the config, and beside the
- * link of a symlinked one) is renamed to `*.superseded.json` right after the
+ * outdated line back: every such snapshot (beside every hop of the requested
+ * path's link chain and beside the target) is renamed to `*.superseded.json` right after the
  * write, whatever backup files exist. A rename that fails never fails the
  * install, which is already on disk: it is a warning (`snapshotWarnings`,
  * printed by the caller) naming the snapshot and the move-aside step. The
