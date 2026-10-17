@@ -407,15 +407,19 @@ function isNonNegativeInteger(value: unknown): boolean {
   return Number.isInteger(value) && (value as number) >= 0;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
 function isMerge(value: unknown): value is CodexSnapshotMerge {
-  if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
-  const m = value as Record<string, unknown>;
+  if (!isRecord(value)) return false;
+  const m = value;
   return typeof m["createdAt"] === "string" && typeof m["matcher"] === "string" && typeof m["configBackupPath"] === "string";
 }
 
 function isDisabledUnit(value: unknown): value is CodexDisabledUnit {
-  if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
-  const u = value as Record<string, unknown>;
+  if (!isRecord(value)) return false;
+  const u = value;
   return (
     typeof u["event"] === "string" &&
     typeof u["id"] === "string" &&
@@ -438,10 +442,10 @@ export function readCodexSnapshot(filePath: string): CodexSnapshotReadOk | Codex
   } catch (err) {
     return { ok: false, reason: `cannot read snapshot ${filePath}: ${(err as Error).message}` };
   }
-  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+  if (!isRecord(parsed)) {
     return { ok: false, reason: `snapshot ${filePath} is not a JSON object` };
   }
-  const obj = parsed as Record<string, unknown>;
+  const obj = parsed;
   if (obj["target"] === CODEX_SNAPSHOT_TARGET && obj["version"] === 2) {
     return {
       ok: false,

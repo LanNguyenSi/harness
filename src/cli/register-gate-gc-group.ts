@@ -97,9 +97,7 @@ export function registerGateGcGroup(
         }
         if (result.retired !== undefined) {
           stdout(
-            result.retired.installBackup !== undefined
-              ? `retired ${result.retired.from} as ${result.retired.to}: a later install (${result.retired.installBackup}) re-rendered its units; this disable starts a fresh snapshot.\n`
-              : `retired ${result.retired.from} as ${result.retired.to}: it had nothing left to restore; this disable starts a fresh snapshot.\n`,
+            retiredLine(result.retired, "it had nothing left to restore", "; this disable starts a fresh snapshot"),
           );
         }
         for (const r of result.retiredSpent) {
@@ -219,12 +217,7 @@ export function registerGateGcGroup(
           stdout(`left as they are: ${result.skippedEnabled.join(", ")} (already enabled again).\n`);
         }
         if ("retired" in result && result.retired?.why === "superseded") {
-          const r = result.retired;
-          stdout(
-            r.installBackup !== undefined
-              ? `retired ${r.from} as ${r.to}: a later install (${r.installBackup}) re-rendered its units.\n`
-              : `retired ${r.from} as ${r.to}: its units were enabled again.\n`,
-          );
+          stdout(retiredLine(result.retired, "its units were enabled again", ""));
         }
         // Claude only: the Codex result's `remaining` is folded into the one error below.
         const foreignNote = foreign.length > 0 ? foreignSnapshotsNote(target, foreign) : "";
@@ -287,6 +280,16 @@ export function registerGateGcGroup(
         throw err;
       }
     });
+}
+
+/** The stdout line for a Codex snapshot a call retired; `noInstall` says why when no install dated it. */
+function retiredLine(
+  r: { from: string; to: string; installBackup?: string },
+  noInstall: string,
+  tail: string,
+): string {
+  const why = r.installBackup !== undefined ? `a later install (${r.installBackup}) re-rendered its units` : noInstall;
+  return `retired ${r.from} as ${r.to}: ${why}${tail}.\n`;
 }
 
 /**

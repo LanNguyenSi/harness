@@ -208,6 +208,19 @@ describe("readCodexSnapshot: the recorded config must name a file", () => {
   });
 });
 
+describe("readCodexSnapshot: object shapes", () => {
+  it("refuses a snapshot whose body is not a JSON object, and one whose neutralised entry or merge is an array", () => {
+    const body = JSON.parse(fs.readFileSync(codexSnapshot, "utf8")) as Record<string, unknown>;
+    const file = path.join(tmp, "shapes.json");
+    fs.writeFileSync(file, JSON.stringify([body]));
+    expect(readCodexSnapshot(file)).toEqual({ ok: false, reason: `snapshot ${file} is not a JSON object` });
+    fs.writeFileSync(file, JSON.stringify({ ...body, neutralised: [[]] }));
+    expect(readCodexSnapshot(file)).toEqual({ ok: false, reason: `snapshot ${file} has a malformed "neutralised" list` });
+    fs.writeFileSync(file, JSON.stringify({ ...body, merges: [[]] }));
+    expect(readCodexSnapshot(file)).toEqual({ ok: false, reason: `snapshot ${file} has a malformed "merges" list` });
+  });
+});
+
 describe("namesSameEntry symlinks option", () => {
   it("accepts two spellings of one symlink entry only when asked, and never a second name or another inode", () => {
     const link = path.join(tmp, "link.toml");
