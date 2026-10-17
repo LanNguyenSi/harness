@@ -51,7 +51,7 @@ The loader merges these files in order, later layers winning (`src/cli/loader.ts
 A key, pack or command that a release removed does not fail the load (`src/schema/removed-keys.ts`):
 
 - a removed manifest key (for example `grounding.policies_source` or `risk`, and since 1.0.0 `policies:`, `workflows:`, `review_templates:` and `doctor:`) is stripped with a warning (an empty value is stripped without one);
-- a removed per-hook field (`bash_match`, `path_match`, removed in 1.0.0) is stripped from the hook, which is kept, with one warning per hook;
+- a removed per-hook field (`bash_match`, `path_match`, removed in 1.0.0) is stripped from the hook, which is kept, with one warning per hook per source (the base manifest and each override layer that carries it, a layer's warning naming its file);
 - a removed pack name in `policy_packs[]` is ignored with a warning;
 - a hook or a pack config site that still calls a removed CLI command (for example `harness policy intercept` or `harness record`, both removed in 1.0.0) is reported with a warning.
 

@@ -26,6 +26,7 @@ import {
   REMOVED_HOOK_FIELDS,
   REMOVED_MANIFEST_PATHS,
   parseManifestWithWarnings,
+  stripRemovedHookFields,
   stripRemovedManifestPaths,
 } from "../../src/schema/index.js";
 import { STUB_NPM_BIN_EXEC_UNKNOWN } from "../_helpers/npm-bin-exec.js";
@@ -305,6 +306,69 @@ describe("hooks[].bash_match and hooks[].path_match", () => {
   it("a hooks value that is not a list, and entries that are not maps, are left for the strict parse", () => {
     expect(() => parseManifestWithWarnings({ version: 1, hooks: "no" })).toThrow();
     expect(() => parseManifestWithWarnings({ version: 1, hooks: ["no"] })).toThrow();
+  });
+});
+
+// The loader path strips the hook fields twice: before the merge
+// (`stripRemovedHookFields`, used by `mergeLayersStrippingRemovedPaths`, so a
+// list that collides across sources cannot throw), and after it
+// (`stripRemovedManifestEntries`, the safety net for callers that parse a
+// single file without merging). The pre-merge strip leaves the post-merge one
+// nothing: a field warns once per source that carries it, never twice.
+describe("hooks[].bash_match through the loader: one warning per source, never twice", () => {
+  const hookWith = (bashMatch: unknown) => ({
+    name: "h",
+    event: "Stop",
+    command: "x",
+    blocking: false,
+    bash_match: bashMatch,
+  });
+
+  it("in the base only: exactly one bash_match warning from merge plus parse, unlabelled", () => {
+    const { opts } = homeWith("base", { hooks: [hookWith("^git push")] });
+    const loaded = loadManifest(opts);
+    const warned = loaded.warnings.filter((w) => w.path === "hooks[0]");
+    expect(warned).toHaveLength(1);
+    expect(warned[0]!.message).toContain('hook "h" carries bash_match');
+    expect(warned[0]!.message).not.toContain("found in the");
+    expect(loaded.manifest.hooks.map((h) => h.name)).toEqual(["h"]);
+    expect(loaded.manifest.hooks[0]).not.toHaveProperty("bash_match");
+  });
+
+  it("in the base and in a project layer with colliding list shapes: one warning per source (base unlabelled, layer labelled), and the load does not fail", () => {
+    const home = makeHome({ hooks: [hookWith([{ name: "a", pattern: "x" }])] }, { hooks: [hookWith(["git push"])] });
+    const loaded = loadManifest({ homeDir: home, project: PROJECT });
+    const warned = loaded.warnings.filter((w) => w.path === "hooks[0]");
+    expect(warned).toHaveLength(2);
+    expect(warned.filter((w) => !w.message.includes("found in the"))).toHaveLength(1);
+    expect(warned.filter((w) => w.message.includes("found in the project override layer"))).toHaveLength(1);
+    expect(loaded.manifest.hooks.map((h) => h.name)).toEqual(["h"]);
+    expect(loaded.manifest.hooks[0]).not.toHaveProperty("bash_match");
+  });
+
+  it("a valid string bash_match in the base only: behaviour and warning text unchanged (text pinned)", () => {
+    const { opts } = homeWith("base", { hooks: [HOOKS[0]] });
+    const loaded = loadManifest(opts);
+    expect(loaded.manifest.hooks.map((h) => h.name)).toEqual(["only-bash"]);
+    expect(loaded.manifest.hooks[0]).not.toHaveProperty("bash_match");
+    const warned = loaded.warnings.filter((w) => w.path === "hooks[0]");
+    expect(warned).toHaveLength(1);
+    expect(warned[0]!.message).toBe(
+      'hook "only-bash" carries bash_match, removed in 1.0.0 and ignored (it was never projected into settings.json or the Codex config, so the hook runs on the same events with or without it); the hook is kept, delete the key from it',
+    );
+  });
+});
+
+describe("stripRemovedHookFields (the pre-merge strip of one raw source)", () => {
+  it("strips the removed fields from the hooks, warns one per hook, keeps the rest, and does not mutate its input", () => {
+    const src = { version: 1, hooks: [{ name: "a", bash_match: "x" }, { name: "b", path_match: ["y"] }], policies: [] };
+    const before = JSON.stringify(src);
+    const { raw, warnings } = stripRemovedHookFields(src);
+    expect(raw).toEqual({ version: 1, hooks: [{ name: "a" }, { name: "b" }], policies: [] });
+    expect(warnings.map((w) => w.path)).toEqual(["hooks[0]", "hooks[1]"]);
+    expect(warnings[0]!.message).toContain('hook "a" carries bash_match');
+    expect(warnings[1]!.message).toContain('hook "b" carries path_match');
+    expect(JSON.stringify(src)).toBe(before);
   });
 });
 

@@ -2,6 +2,10 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-10-17T05:29:01Z: re-stamped `codex-adapter-parity-gaps.md` after the removed-hook-field bullet of `docs/CLI.md` was reworded (one warning per source); its claims concern the Codex install and flags and are unchanged.
+
+- 2026-10-17T05:24:27Z: re-stamped `gate-kill-switch.md` and `manifest-validation-scope.md` after the removed per-hook fields started being stripped from the base manifest and each override layer before the merge. `gate-kill-switch.md`: one `removed-keys.ts` citation re-pointed, claims unchanged. `manifest-validation-scope.md`: its claims do not cover the merge order and are unchanged.
+
 - 2026-10-16T21:45:47Z: re-stamped `codex-adapter-parity-gaps.md` after the `gate disable` / `gate enable` rows of `docs/CLI.md` were reworded; its claims concern the Codex install and flags, not the gate rows, and are unchanged.
 
 - 2026-10-16T21:35:43Z: `gate-kill-switch.md` re-verified after the install-time snapshot supersede was rebased onto the Claude gate rework and re-stamped. The Claude claims in the doc (one live snapshot per settings file, content-first pairing, foreign aliases, enable looking only beside the given path) are unchanged and the Codex section keeps its install-time supersede text. `docs/CLI.md` and `docs/for-humans.md` now state the Claude behaviour of the two verbs and point here.

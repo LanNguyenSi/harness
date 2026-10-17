@@ -24,6 +24,7 @@ import { loadManifest, loadMergedRaw, resolvePaths } from "../../src/cli/loader.
 import { EX_NOINPUT, HarnessExitError } from "../../src/cli/exit-codes.js";
 import { OverrideMergeError, applyLayers } from "../../src/overrides/merge.js";
 import { mergeLayersStrippingRemovedPaths } from "../../src/overrides/merge-layers.js";
+import { stripRemovedHookFields } from "../../src/schema/index.js";
 import { validate } from "../../src/cli/validate/index.js";
 
 const PROJECT_NAME = "scoped-repo";
@@ -227,6 +228,60 @@ describe("a removed manifest key in an override layer", () => {
     expect(warnings[0]!.message).not.toContain("found in");
     expect(warnings[1]!.message).toContain("found in the machine override layer 1 (/m.yaml)");
     expect(warnings[2]!.message).toContain("found in the project override layer (/p.yaml)");
+  });
+});
+
+// A removed per-hook field whose value is a list collides across sources the
+// same way a removed top-level key does: `hooks[].bash_match` as a list of
+// named objects in one source and a plain list in the other (same hook name)
+// makes the name-keyed list merge throw, and every hook loads the manifest,
+// so the load would lock the machine out. `stripRemovedHookFields`
+// (src/schema/removed-keys.ts) strips the field from the base and from each
+// layer before `applyLayers` runs; the hook is kept, and each source warns
+// once for its own copy of the field (the layer's warning naming its label).
+describe("a removed hooks[].bash_match list in base and layer", () => {
+  const NAMED = [{ name: "a", pattern: "x" }];
+  const PLAIN = ["git push"];
+  const hookWith = (bashMatch: unknown) => ({
+    name: "h",
+    event: "Stop",
+    command: "x",
+    blocking: false,
+    bash_match: bashMatch,
+  });
+  const COLLIDING: Array<[string, Record<string, unknown>, Record<string, unknown>]> = [
+    ["a named list in the base, a plain list in the layer", { version: 1, hooks: [hookWith(NAMED)] }, { hooks: [hookWith(PLAIN)] }],
+    ["a plain list in the base, a named list in the layer", { version: 1, hooks: [hookWith(PLAIN)] }, { hooks: [hookWith(NAMED)] }],
+  ];
+
+  it.each(COLLIDING)("%s: the plain merge throws, the posture merge strips the field first and keeps the hook", (_label, base, layer) => {
+    expect(() => applyLayers(base, layer)).toThrow(OverrideMergeError);
+    const { merged, warnings } = mergeLayersStrippingRemovedPaths(base, [{ raw: layer, label: "L" }]);
+    expect(merged).toEqual({ version: 1, hooks: [{ name: "h", event: "Stop", command: "x", blocking: false }] });
+    expect(warnings.map((w) => w.path)).toEqual(["hooks[0]", "hooks[0]"]);
+    expect(warnings[0]!.message).toContain('hook "h" carries bash_match');
+    expect(warnings[0]!.message).not.toContain("found in the");
+    expect(warnings[1]!.message).toContain('hook "h" carries bash_match');
+    expect(warnings[1]!.message).toContain("found in the L");
+  });
+
+  it("does not mutate the base or the layer it merges", () => {
+    const base = { version: 1, hooks: [hookWith(NAMED)] };
+    const layer = { hooks: [hookWith(PLAIN)] };
+    const baseBefore = JSON.stringify(base);
+    const layerBefore = JSON.stringify(layer);
+    mergeLayersStrippingRemovedPaths(base, [{ raw: layer, label: "L" }]);
+    expect(JSON.stringify(base)).toBe(baseBefore);
+    expect(JSON.stringify(layer)).toBe(layerBefore);
+  });
+
+  it("stripRemovedHookFields leaves a source without the fields untouched, returning the same object", () => {
+    const clean = { version: 1, hooks: [{ name: "h", event: "Stop", command: "x", blocking: false }] };
+    const stripped = stripRemovedHookFields(clean);
+    expect(stripped.raw).toBe(clean);
+    expect(stripped.warnings).toEqual([]);
+    const noHooks = { version: 1 };
+    expect(stripRemovedHookFields(noHooks).raw).toBe(noHooks);
   });
 });
 

@@ -144,6 +144,7 @@ export {
   removedInspectNameMessage,
   stripRemovedManifestEntries,
   stripRemovedManifestPaths,
+  stripRemovedHookFields,
   formatPostureWarning,
   invokesRemovedCommand,
   findRemovedCommandUses,
