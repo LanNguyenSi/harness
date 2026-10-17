@@ -46,7 +46,10 @@
 // Block contract per runtime: Claude Code reads a JSON deny envelope on
 // stdout (exit 0); Codex reads exit 2 with the reason on stderr
 // (`--runtime codex`). The agent-facing text names `git checkout -b` as the
-// way forward and nothing else.
+// way forward and nothing else. A Claude Code block whose envelope cannot be
+// written (the reader has gone, or the stream is closed) fails closed too:
+// exit 2 with the reason on stderr, since exit 0 without an envelope is read
+// as an allow.
 
 import * as path from "node:path";
 import {
@@ -70,7 +73,7 @@ import {
 import { renderAgentFacing } from "../../runtime/agent-facing.js";
 import { boundUtf8 } from "../../runtime/bounded-text.js";
 import { type Manifest, type PolicyUx } from "../../schema/index.js";
-import { tolerateClosedStdio } from "../drain-stdio.js";
+import { STDIO_DRAIN_TIMEOUT_MS, tolerateClosedStdio } from "../drain-stdio.js";
 import { type LoaderOptions } from "../loader.js";
 import {
   loadManifestOrInjected,
@@ -254,6 +257,50 @@ function checkTargets(toolName: string, event: ToolEventLite, cwd: string, res: 
   return { source: "patch", dirs: [...new Set(dirs)] };
 }
 
+type EnvelopeWrite = { delivered: true } | { delivered: false; why: string };
+
+/**
+ * Write `text` to `stream` and wait for the write to complete, for at most
+ * `timeoutMs`. The write counts as failed when the stream is already closed,
+ * when the completion callback carries an error, when the stream emits
+ * 'error' during the wait, or when it has closed by the time the wait ends.
+ * A wait that ends with the stream still open is a slow reader, not a failed
+ * write: the entry point's drain gives the rest of the text its own bounded
+ * wait.
+ */
+function writeAndAwait(stream: NodeJS.WritableStream, text: string, timeoutMs: number): Promise<EnvelopeWrite> {
+  const closedReason = (): string | undefined => {
+    const s = stream as { destroyed?: boolean; writable?: boolean };
+    return s.destroyed === true || s.writable === false ? "stdout is closed" : undefined;
+  };
+  return new Promise<EnvelopeWrite>((resolve) => {
+    const before = closedReason();
+    if (before !== undefined) {
+      resolve({ delivered: false, why: before });
+      return;
+    }
+    let timer: NodeJS.Timeout | undefined;
+    const onError = (err: Error): void => settle({ delivered: false, why: err.message });
+    const settle = (result: EnvelopeWrite): void => {
+      clearTimeout(timer);
+      stream.removeListener("error", onError);
+      resolve(result);
+    };
+    stream.on("error", onError);
+    timer = setTimeout(() => {
+      const why = closedReason();
+      settle(why === undefined ? { delivered: true } : { delivered: false, why });
+    }, timeoutMs);
+    try {
+      stream.write(text, (err?: Error | null) => {
+        settle(err ? { delivered: false, why: err.message } : { delivered: true });
+      });
+    } catch (err) {
+      settle({ delivered: false, why: err instanceof Error ? err.message : String(err) });
+    }
+  });
+}
+
 /** One judgment of an event: the directories it names, and where each one is walked and asked. */
 interface Judgment {
   targets: (res: PathResolution) => CheckTargets;
@@ -331,7 +378,7 @@ export async function runPackHookBranchProtectionCli(
   // to a fixed size once, whatever they embed (a manifest parse error grows
   // with the manifest). The envelope is built from the cut text with
   // JSON.stringify, so the cut cannot break the JSON.
-  const block = (detail: string, agentText: string): PackHookBranchProtectionResult => {
+  const block = async (detail: string, agentText: string): Promise<PackHookBranchProtectionResult> => {
     const diagnostic = boundUtf8(`BLOCK: ${detail}`);
     const bounded = boundUtf8(agentText);
     note(diagnostic);
@@ -339,8 +386,19 @@ export async function runPackHookBranchProtectionCli(
       stderr.write(`${bounded}\n`);
       return { exitCode: CODEX_EXIT_BLOCK, blocked: true, diagnostic };
     }
-    stdout.write(`${claudeBlockEnvelope(bounded)}\n`);
-    return { exitCode: 0, blocked: true, diagnostic };
+    const written = await writeAndAwait(stdout, `${claudeBlockEnvelope(bounded)}\n`, STDIO_DRAIN_TIMEOUT_MS);
+    if (written.delivered) return { exitCode: 0, blocked: true, diagnostic };
+    // Exit 0 without the envelope would be read as an allow, so the block
+    // falls back to the exit code both runtimes read as one.
+    try {
+      stderr.write(
+        `harness pack hook branch-protection: the block envelope could not be written to stdout (${written.why}); ` +
+          `exiting ${CODEX_EXIT_BLOCK} so the refusal still counts as a block.\n${bounded}\n`,
+      );
+    } catch {
+      // best effort: stderr may be gone as well; the exit code carries the decision
+    }
+    return { exitCode: CODEX_EXIT_BLOCK, blocked: true, diagnostic };
   };
 
   // A read that timed out never received the whole event, so nothing can be
@@ -351,7 +409,7 @@ export async function runPackHookBranchProtectionCli(
     const reason =
       `stdin timeout: no complete event arrived and closed on stdin within ${read.idleTimeoutMs} ms, ` +
       `so branch-protection cannot judge the tool call and refuses it (fail closed). Retry the tool call.`;
-    return block(reason, reason);
+    return await block(reason, reason);
   }
   let parsed: unknown;
   try {
@@ -361,7 +419,7 @@ export async function runPackHookBranchProtectionCli(
   }
   if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
     const detail = "the event on stdin is not a JSON object";
-    return block(detail, `branch-protection: refusing the tool call: ${detail}, so it cannot be judged.`);
+    return await block(detail, `branch-protection: refusing the tool call: ${detail}, so it cannot be judged.`);
   }
   const event = parsed as ToolEventLite;
 
@@ -376,7 +434,7 @@ export async function runPackHookBranchProtectionCli(
     ({ manifest } = loadManifestOrInjected(opts, opts.manifest));
   } catch (err) {
     const detail = `the harness manifest could not be loaded (${(err as Error).message})`;
-    return block(`${detail}; refusing on failsafe`, `branch-protection: refusing ${toolName}: ${detail}.`);
+    return await block(`${detail}; refusing on failsafe`, `branch-protection: refusing ${toolName}: ${detail}.`);
   }
 
   const pack = manifest.policy_packs.find((p) => p.name === PACK_NAME);
@@ -417,7 +475,7 @@ export async function runPackHookBranchProtectionCli(
         const remaining = deadline - now();
         if (remaining <= 0) {
           const detail = `the branch of ${dir} was not checked: the hook passed its ${deadlineMs} ms bound`;
-          return block(detail, `branch-protection: refusing ${toolName}: git could not report the branch of ${dir} (${detail}).`);
+          return await block(detail, `branch-protection: refusing ${toolName}: git could not report the branch of ${dir} (${detail}).`);
         }
         const at = judgment.at(dir);
         let branchRead: BranchRead;
@@ -434,13 +492,13 @@ export async function runPackHookBranchProtectionCli(
         }
         switch (branchRead.kind) {
           case "error":
-            return block(
+            return await block(
               `git could not report the branch of ${dir}: ${branchRead.detail}`,
               `branch-protection: refusing ${toolName}: git could not report the branch of ${dir} (${branchRead.detail}).`,
             );
           case "branch":
             if (isProtectedBranch(branchRead.name, protectedList)) {
-              return block(
+              return await block(
                 `branch "${branchRead.name}" of ${dir} is protected (${protectedList.join(", ")})`,
                 protectedBranchText(toolName, branchRead.name, dir, protectedList, configUx, sessionId),
               );
@@ -463,7 +521,7 @@ export async function runPackHookBranchProtectionCli(
       err instanceof PathBoundError
         ? `the paths of the tool call were not resolved: the hook passed its ${deadlineMs} ms bound`
         : `the tool call could not be judged (${err instanceof Error ? err.message : String(err)})`;
-    return block(detail, `branch-protection: refusing ${toolName}: ${detail}.`);
+    return await block(detail, `branch-protection: refusing ${toolName}: ${detail}.`);
   }
   return allow(`${sources.join("+")} ${seen.join("; ")}; allowing`);
 }

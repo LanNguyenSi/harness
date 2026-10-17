@@ -6,9 +6,12 @@
 // JSON, so Claude Code saw no refusal.
 //
 // A reader that is gone is a third case: the host closed its end of a pipe, a
-// write gets EPIPE, and the hook must still end with the exit code it would
-// have had without the wait for the pipe to drain (0 for a Claude Code block,
-// 2 for a Codex block). A crash there exits 1, which both hosts read as allow.
+// write gets EPIPE, and the hook must still end with a decision's exit code,
+// never a crash (exit 1, which both hosts read as allow). A Codex block is
+// exit 2 whatever happens to the pipes. A Claude Code block is exit 0 only
+// when its envelope was written; with stdout closed the envelope is lost and
+// exit 0 would read as an allow, so that block exits 2 with the reason on
+// stderr.
 //
 // These tests run dist/cli/main.js with piped stdio and a reader that starts
 // late or never. Build first (`npm run build`).
@@ -365,8 +368,9 @@ describe("the entry point drains stdout before it exits", () => {
 // The host may close a read end before the hook has written: the write gets
 // EPIPE, which a stream with no 'error' listener turns into an uncaught
 // exception (exit 1, read as allow by both hosts). Each row asserts the exit
-// code the hook has with no wait for a drain: 0 for Claude Code, 2 for Codex.
-describe("a closed reader does not change the exit code", () => {
+// code of the decision: a Claude Code block is 0 with its envelope delivered,
+// or 2 with the reason on stderr when stdout is closed; a Codex block is 2.
+describe("a closed reader and the exit code of a block", () => {
   const CLOSED: ReadonlyArray<{ name: string; closeStdout: boolean; closeStderr: boolean }> = [
     { name: "stdout", closeStdout: true, closeStderr: false },
     { name: "stderr", closeStdout: false, closeStderr: true },
@@ -375,7 +379,9 @@ describe("a closed reader does not change the exit code", () => {
 
   for (const closed of CLOSED) {
     it(
-      `claude-code: a protected-branch block with the ${closed.name} reader closed exits 0 and delivers what is still open`,
+      closed.closeStdout
+        ? `claude-code: a protected-branch block with the ${closed.name} reader closed exits 2 (the envelope is lost) and delivers the reason on what is still open`
+        : `claude-code: a protected-branch block with the ${closed.name} reader closed exits 0 and delivers the envelope`,
       async () => {
         const repo = protectedRepo();
         const run = await runWithSlowReader({
@@ -388,7 +394,7 @@ describe("a closed reader does not change the exit code", () => {
         });
         expect(run.hung).toBe(false);
         expect(run.signal).toBeNull();
-        expect(run.code).toBe(0);
+        expect(run.code).toBe(closed.closeStdout ? 2 : 0);
         if (!closed.closeStdout) {
           const env = JSON.parse(run.stdout.toString("utf8")) as {
             decision: string;
@@ -400,8 +406,37 @@ describe("a closed reader does not change the exit code", () => {
           expect(env.reason).toContain('protected branch "master"');
         }
         if (!closed.closeStderr) {
-          expect(run.stderr.toString("utf8")).not.toMatch(/EPIPE|Unhandled|node:events/);
+          const text = run.stderr.toString("utf8");
+          expect(text).not.toMatch(/Unhandled|node:events/);
+          if (closed.closeStdout) {
+            expect(text).toContain("the block envelope could not be written to stdout");
+            expect(text).toContain("exiting 2");
+            expect(text).toContain('refusing Write on protected branch "master"');
+          } else {
+            expect(text).not.toMatch(/EPIPE|could not be written/);
+          }
         }
+      },
+      TEST_TIMEOUT_MS,
+    );
+
+    it(
+      `claude-code: an allow with the ${closed.name} reader closed exits 0 and writes no envelope`,
+      async () => {
+        const repo = protectedRepo("feature");
+        const run = await runWithSlowReader({
+          args: ["pack", "hook", "branch-protection", "--config", packManifest()],
+          stdin: writeEventIn(repo),
+          closeStdout: closed.closeStdout,
+          closeStderr: closed.closeStderr,
+          cwd: repo,
+          home: repo,
+        });
+        expect(run.hung).toBe(false);
+        expect(run.signal).toBeNull();
+        expect(run.code).toBe(0);
+        expect(run.stdout.length).toBe(0);
+        if (!closed.closeStderr) expect(run.stderr.toString("utf8")).not.toContain("could not be written");
       },
       TEST_TIMEOUT_MS,
     );
@@ -454,7 +489,7 @@ describe("a closed reader does not change the exit code", () => {
 // git. A closed reader's EPIPE is emitted then, before the exit path attaches
 // its listener, so without an earlier listener it is an uncaught exception
 // (exit 1, read as allow by both hosts).
-describe("a closed reader at the early config.ux warning does not change the exit code", () => {
+describe("a closed reader at the early config.ux warning does not turn a block into a crash", () => {
   it(
     "claude-code: stderr reader closed, a protected-branch block still exits 0 with the deny envelope",
     async () => {
@@ -482,7 +517,7 @@ describe("a closed reader at the early config.ux warning does not change the exi
   );
 
   it(
-    "claude-code: both readers closed, a protected-branch block still exits 0",
+    "claude-code: both readers closed, a protected-branch block exits 2 (the envelope is lost), not a crash",
     async () => {
       const repo = protectedRepo();
       const run = await runWithSlowReader({
@@ -495,7 +530,7 @@ describe("a closed reader at the early config.ux warning does not change the exi
       });
       expect(run.hung).toBe(false);
       expect(run.signal).toBeNull();
-      expect(run.code).toBe(0);
+      expect(run.code).toBe(2);
     },
     TEST_TIMEOUT_MS,
   );
@@ -536,6 +571,82 @@ describe("a closed reader at the early config.ux warning does not change the exi
         expect(run.code).toBe(0);
         expect(run.stdout.length).toBe(0);
       }
+    },
+    TEST_TIMEOUT_MS,
+  );
+});
+
+// A Claude Code block is exit 0 plus the envelope. The envelope write is
+// awaited for at most the drain bound; only a write that failed or a stream
+// that is closed turns the block into exit 2. An open stdout, however slow
+// its reader, keeps exit 0.
+describe("a Claude Code block on an open stdout keeps exit 0 and its envelope", () => {
+  // The bytes the hook wrote for this event on an open stdout before the
+  // write was awaited: the envelope, then one newline.
+  const goldenEnvelope = (repo: string): string => {
+    const where = JSON.stringify(repo).slice(1, -1);
+    const reason = String.raw`branch-protection: refusing Write on protected branch \"master\" (checked in ${where}).\nCreate a feature branch first, then retry:\n  git checkout -b <feature>\nProtected branches: master, main, develop.`;
+    return (
+      String.raw`{"decision":"block","reason":"${reason}","hookSpecificOutput":{"hookEventName":"PreToolUse",` +
+      String.raw`"permissionDecision":"deny","permissionDecisionReason":"${reason}"}}` +
+      "\n"
+    );
+  };
+
+  it(
+    "the exact stdout bytes are the envelope and one newline, exit 0",
+    async () => {
+      const repo = protectedRepo();
+      const run = await runWithSlowReader({
+        args: ["pack", "hook", "branch-protection", "--config", packManifest()],
+        stdin: writeEventIn(repo),
+        cwd: repo,
+        home: repo,
+      });
+      expect(run.hung).toBe(false);
+      expect(run.code).toBe(0);
+      expect(run.stdout.toString("utf8")).toBe(goldenEnvelope(repo));
+      expect(run.stderr.toString("utf8")).not.toContain("could not be written");
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "the envelope queued behind a full pipe reaches a reader that starts late, exit 0",
+    async () => {
+      const repo = protectedRepo();
+      const run = await runWithSlowReader({
+        args: ["pack", "hook", "branch-protection", "--config", packManifest()],
+        stdin: writeEventIn(repo),
+        preloadQueuedBytes: QUEUED_BYTES,
+        cwd: repo,
+        home: repo,
+      });
+      expect(run.hung).toBe(false);
+      expect(run.code).toBe(0);
+      expect(run.stdout.toString("utf8")).toBe("Q".repeat(QUEUED_BYTES) + goldenEnvelope(repo));
+      expect(run.stderr.toString("utf8")).not.toContain("could not be written");
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "a reader that does not read within the bound is a slow reader, not a failed write: exit 0",
+    async () => {
+      const repo = protectedRepo();
+      const run = await runWithSlowReader({
+        args: ["pack", "hook", "branch-protection", "--config", packManifest()],
+        stdin: writeEventIn(repo),
+        preloadQueuedBytes: QUEUED_BYTES,
+        // Starts after the write wait and the drain bound have both passed.
+        readerDelayMs: 4000,
+        cwd: repo,
+        home: repo,
+      });
+      expect(run.hung).toBe(false);
+      expect(run.signal).toBeNull();
+      expect(run.code).toBe(0);
+      expect(run.stderr.toString("utf8")).not.toContain("could not be written");
     },
     TEST_TIMEOUT_MS,
   );
