@@ -1716,20 +1716,6 @@ export function assertConfigSemanticInvariant(
 }
 
 /**
- * The first path of a dangling link chain that does not exist, so a dangling
- * refusal names the missing file rather than the first hop (which may be an
- * existing intermediate link). The chain is the one the gate walks (each
- * relative link text resolved against the physical directory of the link
- * holding it). Undefined when the chain does not end at a missing file (it
- * changed under us, or a hop is not readable); the caller then words the
- * refusal generically.
- */
-function missingEndOfLinkChain(start: string): string | undefined {
-  const { chain, end } = walkLinkChain(start);
-  return end === "dangling" ? chain[chain.length - 1] : undefined;
-}
-
-/**
  * Resolves a symlinked config path to the regular file it points at (task
  * 1637fbc8). `atomicWriteFile` renames a temp file over its destination,
  * which would replace a symlink with a regular file and leave the link's
@@ -1750,21 +1736,28 @@ export function resolveConfigSymlink(requestedPath: string): string {
   }
   if (!linkStat.isSymbolicLink()) return requestedPath;
 
+  // Whether the link dangles is decided by the gate's link walker, which
+  // resolves every hop as the kernel does. The JavaScript realpath below folds
+  // `d/..` before it looks at `d`: on its own it would call a link that reaches
+  // a file dangling, or resolve a link that reaches nothing to another file.
+  // The refusal names the end of the chain, not the first hop (which may be an
+  // existing link).
+  const walked = walkLinkChain(requestedPath);
+  if (walked.end === "dangling") {
+    throw new CodexInstallRefusalError(
+      `Codex config ${requestedPath} is a dangling symlink (its link chain ends at ` +
+        `${walked.chain[walked.chain.length - 1]}, which does not exist); refusing to install, ` +
+        `nothing was written. Create the link's target file (or point the link at an ` +
+        `existing config) and re-run.`,
+      requestedPath,
+    );
+  }
+
   let resolved: string;
   try {
     resolved = fs.realpathSync(requestedPath);
   } catch (err) {
     const e = err as NodeJS.ErrnoException;
-    if (e.code === "ENOENT") {
-      const missing = missingEndOfLinkChain(requestedPath);
-      throw new CodexInstallRefusalError(
-        `Codex config ${requestedPath} is a dangling symlink (its link chain ends at ` +
-          `${missing ?? "a missing file"}, which does not exist); refusing to install, ` +
-          `nothing was written. Create the link's target file (or point the link at an ` +
-          `existing config) and re-run.`,
-        requestedPath,
-      );
-    }
     throw new CodexInstallRefusalError(
       `Codex config ${requestedPath} is a symlink that cannot be resolved ` +
         `(${e.code ?? "error"}: ${e.message}); refusing to install, nothing was written. ` +
