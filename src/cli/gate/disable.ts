@@ -44,10 +44,12 @@ import {
   missingLabel,
   planRestore,
   readOnlyLinkTargetText,
+  readOnlyWritablePlace,
   type RemovedGroup,
   resolveSettingsEntry,
   retireSnapshot,
   settingsFlag,
+  settingsOwnEntry,
   sha256Hex,
   SNAPSHOT_VERSION,
   snapshotPath,
@@ -216,9 +218,13 @@ function matcherMatches(group: unknown, pattern: string): boolean {
   return m.includes(pattern);
 }
 
-/** Whether two existing directories are the same one, however each was spelled. */
+/**
+ * Whether two existing directories are the same one, however each was spelled:
+ * the native `realpath` takes `d/..` through the real location of `d`, as the
+ * kernel does when it lists the directory.
+ */
 function sameDirectory(a: string, b: string): boolean {
-  return fs.realpathSync(a) === fs.realpathSync(b);
+  return fs.realpathSync.native(a) === fs.realpathSync.native(b);
 }
 
 /**
@@ -226,20 +232,38 @@ function sameDirectory(a: string, b: string): boolean {
  * settings path is a symlink into it, or null when the failure is anything
  * else. `effect` says what was and was not written, so the message can say
  * truthfully that settings.json was not changed.
+ *
+ * Making the directory writable always works. A copy of the file in place of
+ * the link is offered only when the link sits in another directory (the copy
+ * is written there) and no live snapshot sits beside the file: an enable
+ * through the copy looks only beside the copy, so it would report nothing to
+ * restore while the groups those snapshots removed are still missing. Such
+ * snapshots are named instead, with the enable that restores them first.
  */
 function readOnlyTargetError(
   settingsPath: string,
+  own: string,
   entry: string,
   matcher: string,
+  live: LiveSnapshot[],
   err: unknown,
   effect: string,
 ): GateDisableError | null {
-  if (entry === settingsPath || !isReadOnlyWriteError(err)) return null;
-  return new GateDisableError(
-    `${readOnlyLinkTargetText(settingsPath, entry, err)} ${effect} To disable anyway, replace the link with a copy ` +
-      `of its file (\`${copyOverLinkCommand(settingsPath, entry)}\`) or make ${path.dirname(entry)} writable, ` +
-      `then run \`harness gate disable --matcher ${shellQuote(matcher)} ${settingsFlag(settingsPath)}\` again.`,
-  );
+  if (entry === own || !isReadOnlyWriteError(err)) return null;
+  const again = `then run \`harness gate disable --matcher ${shellQuote(matcher)} ${settingsFlag(settingsPath)}\` again.`;
+  const writable = `make ${readOnlyWritablePlace(entry, err)} writable`;
+  const besideFile = live.filter((l) => sameDirectory(path.dirname(l.path), path.dirname(entry))).map((l) => l.path);
+  const wayOut =
+    besideFile.length > 0
+      ? `To disable anyway, ${writable}, ${again} Do not replace the link with a copy of its file while the live ` +
+        `snapshot(s) beside that file are there (${besideFile.join(", ")}): they hold groups an earlier disable ` +
+        `removed, and an enable through the copy would not look for them. To switch to a copy, first ${writable} ` +
+        `and run \`harness gate enable ${settingsFlag(settingsPath)}\`, which restores them, then replace the link.`
+      : sameDirectory(path.dirname(own), path.dirname(entry))
+        ? `To disable anyway, ${writable}, ${again}`
+        : `To disable anyway, replace the link with a copy of its file ` +
+          `(\`${copyOverLinkCommand(settingsPath, entry)}\`) or ${writable}, ${again}`;
+  return new GateDisableError(`${readOnlyLinkTargetText(settingsPath, entry, err)} ${effect} ${wayOut}`);
 }
 
 export function gateDisable(opts: GateDisableOptions = {}): GateDisableResult {
@@ -271,7 +295,7 @@ export function gateDisable(opts: GateDisableOptions = {}): GateDisableResult {
   if (removed.length === 0) {
     throw new GateDisableError(
       `no hook groups matched matcher substring ${JSON.stringify(matcherPattern)} in ${settingsPath}. ` +
-        `Run \`harness gate disable\` (no args) to list the available candidates.`,
+        `Run \`harness gate disable ${settingsFlag(settingsPath)}\` (no --matcher) to list the available candidates.`,
     );
   }
 
@@ -279,7 +303,10 @@ export function gateDisable(opts: GateDisableOptions = {}): GateDisableResult {
   const now = opts.now ?? new Date();
   // Every write goes to the file itself: a settings.json that is a symlink
   // (dotfiles) stays a symlink, and its backup and snapshot sit beside the
-  // file it leads to, where an enable through either spelling looks.
+  // file it leads to, where an enable through either spelling looks. A
+  // spelling with `..` is taken through its real directory, so no path built
+  // from it is folded into another directory.
+  const own = settingsOwnEntry(settingsPath);
   const entry = resolveSettingsEntry(settingsPath);
   const backup = backupPath(entry, now);
 
@@ -307,13 +334,15 @@ export function gateDisable(opts: GateDisableOptions = {}): GateDisableResult {
         ? path.join(path.dirname(entry), path.basename(target.path))
         : target.path;
   const retired = retireSpent(spent, settingsPath);
+  // The snapshots still live after that retire, for a refusal that names the ones beside the file.
+  const stillLive = found.live.filter((l) => !spent.includes(l));
 
   // Backup BEFORE we touch the live file. If the backup write fails we
   // bail without having mutated anything.
   try {
     atomicWriteFile(backup, parsed.raw);
   } catch (err) {
-    throw readOnlyTargetError(settingsPath, entry, matcherPattern, err, "Nothing was changed.") ?? err;
+    throw readOnlyTargetError(settingsPath, own, entry, matcherPattern, stillLive, err, `${settingsPath} was not changed.`) ?? err;
   }
 
   const newObj: Record<string, unknown> = { ...parsed.obj };
@@ -372,8 +401,10 @@ export function gateDisable(opts: GateDisableOptions = {}): GateDisableResult {
     throw (
       readOnlyTargetError(
         settingsPath,
+        own,
         entry,
         matcherPattern,
+        stillLive,
         err,
         `The backup ${backup} was written; ${settingsPath} and the snapshots were not changed.`,
       ) ?? err
@@ -404,8 +435,10 @@ export function gateDisable(opts: GateDisableOptions = {}): GateDisableResult {
     throw (
       readOnlyTargetError(
         settingsPath,
+        own,
         entry,
         matcherPattern,
+        stillLive,
         err,
         `${settingsPath} was not changed (the backup ${backup} was written` +
           `${relocated || priorSnapshot !== undefined ? "" : `, and the snapshot ${snapPath}, which a later gate call retires`}).`,
@@ -424,7 +457,7 @@ export function gateDisable(opts: GateDisableOptions = {}): GateDisableResult {
         `removed ${removed.length} hook group(s) from ${settingsPath} and merged the live snapshot into ${snapPath}, ` +
           `but cannot retire the earlier snapshot ${target.path} (${(err as Error).message}). Move it out of the ` +
           `directory by hand (or rename it to *.superseded.json) so it is never offered again; until then ` +
-          `\`harness gate enable\` exits non-zero on it.`,
+          `\`harness gate enable ${settingsFlag(settingsPath)}\` exits non-zero on it.`,
       );
     }
   }

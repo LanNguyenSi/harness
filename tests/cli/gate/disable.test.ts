@@ -176,6 +176,10 @@ describe("gateDisable — removal", () => {
     expect(() => gateDisable({ settingsPath, matcher: "DoesNotExist" })).toThrow(
       GateDisableError,
     );
+    // The listing it names reaches the same settings file.
+    expect(() => gateDisable({ settingsPath, matcher: "DoesNotExist" })).toThrow(
+      `Run \`harness gate disable --settings ${settingsPath}\` (no --matcher) to list the available candidates.`,
+    );
   });
 
   it("drops the `hooks` key entirely when removal empties every event", () => {

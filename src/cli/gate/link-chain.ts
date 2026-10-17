@@ -13,11 +13,11 @@ const MAX_HOPS = 40;
 export type LinkChainEnd =
   /** The last path exists and is not a symlink. */
   | "target"
-  /** The last path does not exist: a symlink leads to a file that is gone, or the path itself is absent. */
+  /** The last path does not exist: a symlink leads to a file that is gone, or to a directory that is gone, or the path itself is absent. */
   | "dangling"
   /** The hop budget ran out while every hop was still a symlink. */
   | "loop"
-  /** A hop could not be read (no permission, a directory that vanished). */
+  /** A hop could not be read (no permission, a directory on the way that is a file). */
   | "unreadable";
 
 export interface LinkChain {
@@ -30,51 +30,49 @@ export interface LinkChain {
   end: LinkChainEnd;
 }
 
-/**
- * The text of a symlink resolved the way the kernel does: against the
- * physical directory that holds the link, and, when the text climbs out of a
- * directory it entered (`d/../f`), through that directory's real location. A
- * lexical `path.dirname` of the link would be wrong whenever a directory on
- * the way to the link is itself a symlink: `..` then means the parent of the
- * directory it points to, not of the one it was reached through. The native
- * `realpath` is used because the JavaScript one folds `..` away lexically
- * before it resolves anything.
- */
-function hopTarget(link: string, text: string): string {
-  const realDir = fs.realpathSync.native(path.dirname(link));
-  const lexical = path.resolve(realDir, text);
-  if (path.isAbsolute(text) || !climbsOutOfADirectory(text)) return lexical;
-  try {
-    const raw = `${realDir}${path.sep}${text}`;
-    return path.join(fs.realpathSync.native(path.dirname(raw)), path.basename(raw));
-  } catch {
-    return lexical;
-  }
-}
-
-/** Whether a relative link text has a `..` that follows a directory name (`d/../f`), not just leading ones. */
-function climbsOutOfADirectory(text: string): boolean {
-  const segs = text.split("/");
-  return segs.some((seg, i) => seg === ".." && i > 0 && segs[i - 1] !== ".." && segs[i - 1] !== "." && segs[i - 1] !== "");
+/** How a failed step of the walk ends the chain: nothing at the path, or a path that cannot be read. */
+function endOf(err: unknown): "dangling" | "unreadable" {
+  return (err as NodeJS.ErrnoException).code === "ENOENT" ? "dangling" : "unreadable";
 }
 
 /**
- * Walks the symlink chain of `start` one hop at a time. A relative link text
- * is resolved against the physical directory of the link holding it, so a
- * link reached through a directory symlink and written with `..` leads where
- * the kernel takes it.
+ * Walks the symlink chain of `start` one hop at a time, resolving each hop
+ * the way the kernel does. A relative link text is appended, as written, to
+ * the physical directory that holds the link (an absolute text is taken as
+ * written), and everything but the last name of that path is then resolved by
+ * the native `realpath`, which walks `..`, `.` and empty segments through the
+ * real directories one step at a time. Nothing is folded lexically: `d/..` is
+ * the parent of the directory `d` leads to, not the directory holding `d`,
+ * whether the text is relative or absolute (the JavaScript `realpath` and
+ * `path.resolve` fold `d/..` away before they look at `d`). The last name is
+ * kept as written, since it may be the next link. When the directory part
+ * leads nowhere (a directory on the way is gone), the chain ends dangling at
+ * that path as the link wrote it, never at a lexical guess of where it might
+ * have led.
  */
 export function walkLinkChain(start: string): LinkChain {
   const chain = [start];
   let current = start;
   for (let hop = 0; hop < MAX_HOPS; hop++) {
-    let next: string;
+    let raw: string;
     try {
-      next = hopTarget(current, fs.readlinkSync(current));
+      const text = fs.readlinkSync(current);
+      const linkDir = fs.realpathSync.native(path.dirname(current));
+      // Appended as written: `path.join` would fold `d/..` before the kernel's walk below.
+      raw = path.isAbsolute(text) ? text : `${linkDir.endsWith(path.sep) ? linkDir : `${linkDir}${path.sep}`}${text}`;
     } catch (err) {
       // `readlink` answers EINVAL for anything that exists and is not a symlink.
-      const code = (err as NodeJS.ErrnoException).code;
-      return { chain, end: code === "EINVAL" ? "target" : code === "ENOENT" ? "dangling" : "unreadable" };
+      return { chain, end: (err as NodeJS.ErrnoException).code === "EINVAL" ? "target" : endOf(err) };
+    }
+    let next: string;
+    try {
+      // The kernel's own lookup first: the native `realpath` of macOS walks
+      // `file/..` back to the file's directory, where the kernel answers ENOTDIR.
+      fs.statSync(path.dirname(raw));
+      next = path.join(fs.realpathSync.native(path.dirname(raw)), path.basename(raw));
+    } catch (err) {
+      chain.push(raw);
+      return { chain, end: endOf(err) };
     }
     chain.push(next);
     current = next;

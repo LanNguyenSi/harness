@@ -352,29 +352,61 @@ export function namesSameEntry(
 }
 
 /**
+ * The spelling of `settingsPath` the gate builds every other path from: the
+ * backup, the snapshot, the listing beside it, and the atomic write's temp
+ * file. Joining a name to a directory folds `..` lexically, which leads
+ * elsewhere when the name before it is a directory link (`via/..` is the
+ * parent of where `via` leads, not the directory that holds `via`), so a
+ * spelling with a `..` segment is replaced by its directory as the kernel
+ * resolves it, with the same last name. `..` is the only segment such a fold
+ * moves (`.` and empty segments fold to the same directory), so every other
+ * spelling is kept as given and the paths the gate prints read the way they
+ * were written. A directory that cannot be resolved leaves the spelling as
+ * given: nothing can be read or written through it.
+ */
+export function settingsOwnEntry(settingsPath: string): string {
+  if (!settingsPath.split(path.sep).includes("..")) return settingsPath;
+  const dir = path.dirname(settingsPath);
+  try {
+    // The kernel's own lookup first: the native `realpath` of macOS walks `file/..` back to the file's directory.
+    fs.statSync(dir);
+    return path.join(fs.realpathSync.native(dir), path.basename(settingsPath));
+  } catch {
+    return settingsPath;
+  }
+}
+
+/**
  * The file `gate disable` and `gate enable` read and write for `settingsPath`.
  * That is the path itself unless its last component is a symlink (a dotfiles
  * setup): then it is the entry the link leads to, which may sit in another
  * directory. Writing through the resolved entry keeps the link a link, and
  * the snapshots sit beside the file itself, so a disable through either
  * spelling is found by an enable through the other. Every hop of the chain is
- * resolved against the physical directory that holds it (`walkLinkChain`, the
- * walker the Codex gate uses too), so a link written with `..` and reached
- * through a directory symlink leads where the kernel takes it. A link whose
- * target is gone resolves to where the target would be, so the snapshots
- * taken for that target are still found; a loop resolves to the path as given.
+ * resolved the way the kernel resolves it (`walkLinkChain`, the walker the
+ * Codex gate uses too), so the file is the one reading through the path
+ * gives, `..` in a link text included. A link whose file is gone resolves to
+ * where the file would be, so the snapshots taken for it are still found; a
+ * link whose text passes through a directory that is gone resolves to that
+ * text as written (nothing can sit beside it). A path that is no link, and a
+ * loop, resolve to the path's own entry (`settingsOwnEntry`).
  */
 export function resolveSettingsEntry(settingsPath: string): string {
   const { chain, end } = walkLinkChain(settingsPath);
-  if (chain.length === 1 || end === "loop") return settingsPath;
-  // Every hop's directory is already physical, so the last hop is the file's real path.
+  if (chain.length === 1 || end === "loop") return settingsOwnEntry(settingsPath);
+  // Every hop after the first is a physical directory and a name (the file's real path), unless the walk ended
+  // in a directory that is gone: then it is the link text as written.
   return chain[chain.length - 1] ?? settingsPath;
 }
 
-/** The identity of a file across spellings of its directory, or the path itself when it cannot be resolved. */
+/**
+ * The identity of a file across spellings of its directory, or the path itself
+ * when it cannot be resolved. The native `realpath` takes `d/..` through the
+ * real location of `d`, as the listing that found the file did.
+ */
 function fileIdentity(file: string): string {
   try {
-    return fs.realpathSync(file);
+    return fs.realpathSync.native(file);
   } catch {
     return file;
   }
@@ -401,9 +433,10 @@ function fileIdentity(file: string): string {
  * told, so neither disable nor enable may go on as if it did not exist.
  */
 export function listLiveSnapshots(settingsPath: string): LiveSnapshotsResult {
+  const own = settingsOwnEntry(settingsPath);
   const resolved = resolveSettingsEntry(settingsPath);
-  const places = [{ dir: path.dirname(settingsPath), name: path.basename(settingsPath) }];
-  if (resolved !== settingsPath) {
+  const places = [{ dir: path.dirname(own), name: path.basename(own) }];
+  if (resolved !== own) {
     places.push({ dir: path.dirname(resolved), name: path.basename(resolved) });
   }
   const live = new Map<string, LiveSnapshot>();
@@ -450,14 +483,26 @@ export function isReadOnlyWriteError(err: unknown): boolean {
 
 /**
  * What a gate refusal says first when the file a settings symlink leads to
- * sits in a directory the gate cannot write: what the link is and which
- * directory refuses. Each verb adds its own way out.
+ * cannot be written where it sits: what the link is and what refuses. EACCES
+ * and EROFS come from the directory (the gate writes a temp file beside the
+ * file and renames it into place); EPERM can come from the file or from the
+ * directory (an immutable flag, a sticky directory), so it names both without
+ * saying which. Each verb adds its own way out.
  */
 export function readOnlyLinkTargetText(settingsPath: string, entry: string, err: unknown): string {
-  return (
-    `${settingsPath} is a symlink to ${entry}, and the directory ${path.dirname(entry)} that holds that file ` +
-    `cannot be written (${(err as NodeJS.ErrnoException).code}), so the gate cannot write beside it.`
-  );
+  const code = (err as NodeJS.ErrnoException).code;
+  const refuses =
+    code === "EPERM"
+      ? `the file ${entry} or the directory ${path.dirname(entry)} that holds it`
+      : `the directory ${path.dirname(entry)} that holds that file`;
+  return `${settingsPath} is a symlink to ${entry}, and ${refuses} cannot be written (${code}), so the gate cannot write there.`;
+}
+
+/** What a read-only refusal tells the operator to make writable: the directory, and for EPERM the file too. */
+export function readOnlyWritablePlace(entry: string, err: unknown): string {
+  return (err as NodeJS.ErrnoException).code === "EPERM"
+    ? `${entry} and ${path.dirname(entry)}`
+    : path.dirname(entry);
 }
 
 /** The command that puts a copy of the file a symlink leads to in place of the link. */

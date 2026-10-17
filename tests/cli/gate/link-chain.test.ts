@@ -77,12 +77,6 @@ describe("walkLinkChain: where a hop leads", () => {
     expect(walkLinkChain(link).chain).toEqual([link, path.join(tmp, "elsewhere", "out", "gone.json")]);
   });
 
-  it("falls back to the lexical reading when the directory a climbing text enters does not exist", () => {
-    fs.mkdirSync(path.join(tmp, "base"));
-    fs.symlinkSync("nodir/../gone.json", path.join(tmp, "base", "link.json"));
-    const link = path.join(tmp, "base", "link.json");
-    expect(walkLinkChain(link).chain).toEqual([link, path.join(tmp, "base", "gone.json")]);
-  });
 
   it("follows an absolute text as written", () => {
     const file = path.join(tmp, "f.json");
@@ -98,5 +92,72 @@ describe("walkLinkChain: where a hop leads", () => {
     const link = path.join(tmp, "abs.json");
     fs.symlinkSync(file, link);
     expect(linkChain(link)).toEqual([link, file]);
+  });
+});
+
+describe("walkLinkChain: every hop lands on the file the kernel reads through the link", () => {
+  // base/d is a link to real/inner, so `d/..` is real, not base. base/f.json is
+  // where a lexical reading of `d/..` lands; real/f.json is what the kernel reads.
+  let base: string;
+  let physical: string;
+  let lexical: string;
+
+  beforeEach(() => {
+    base = path.join(tmp, "base");
+    fs.mkdirSync(path.join(tmp, "real", "inner"), { recursive: true });
+    fs.mkdirSync(base);
+    fs.symlinkSync(path.join(tmp, "real", "inner"), path.join(base, "d"));
+    physical = path.join(tmp, "real", "f.json");
+    lexical = path.join(base, "f.json");
+    fs.writeFileSync(physical, "physical\n");
+    fs.writeFileSync(lexical, "lexical\n");
+  });
+
+  /** The link's walk ends at a target whose content is what reading through the link gives. */
+  function expectKernelFile(link: string): void {
+    expect(fs.readFileSync(link, "utf8")).toBe("physical\n");
+    expect(walkLinkChain(link)).toEqual({ chain: [link, physical], end: "target" });
+  }
+
+  it("takes `..` in an absolute text through the real location of the directory link before it", () => {
+    const link = path.join(tmp, "abs.json");
+    fs.symlinkSync(`${base}/d/../f.json`, link);
+    expectKernelFile(link);
+  });
+
+  it("takes `d/./..` through the real location of d", () => {
+    const link = path.join(base, "dot.json");
+    fs.symlinkSync("d/./../f.json", link);
+    expectKernelFile(link);
+  });
+
+  it("takes `d//..` through the real location of d", () => {
+    const link = path.join(base, "empty.json");
+    fs.symlinkSync("d//../f.json", link);
+    expectKernelFile(link);
+  });
+
+  it("follows a later hop written with `..` the same way", () => {
+    const first = path.join(tmp, "first.json");
+    const second = path.join(base, "second.json");
+    fs.symlinkSync(second, first);
+    fs.symlinkSync("d/../f.json", second);
+    expect(fs.readFileSync(first, "utf8")).toBe("physical\n");
+    expect(walkLinkChain(first)).toEqual({ chain: [first, second, physical], end: "target" });
+  });
+
+  it("ends dangling at the text as written when a directory it passes through does not exist, not at a lexical guess", () => {
+    const link = path.join(base, "nodir.json");
+    fs.symlinkSync("nodir/../f.json", link);
+    expect(() => fs.readFileSync(link)).toThrow(/ENOENT/);
+    // A lexical reading would land on base/f.json, which exists.
+    expect(walkLinkChain(link)).toEqual({ chain: [link, `${base}/nodir/../f.json`], end: "dangling" });
+  });
+
+  it("ends unreadable at the text as written when a name it passes through is a file", () => {
+    const link = path.join(base, "notdir.json");
+    fs.symlinkSync("f.json/../f.json", link);
+    expect(() => fs.readFileSync(link)).toThrow(/ENOTDIR/);
+    expect(walkLinkChain(link)).toEqual({ chain: [link, `${base}/f.json/../f.json`], end: "unreadable" });
   });
 });

@@ -12,6 +12,7 @@ import {
   readSnapshot,
   resolveSettingsEntry,
   settingsFlag,
+  settingsOwnEntry,
   SNAPSHOT_BASENAME_PREFIX,
   SNAPSHOT_BASENAME_SUFFIX,
   SNAPSHOT_VERSION,
@@ -103,6 +104,32 @@ describe("resolveSettingsEntry", () => {
     const names = ["one.json", "two.json", "three.json"].map((n) => path.join(tmp, n));
     names.forEach((n, i) => fs.symlinkSync(names[(i + 1) % names.length] ?? n, n));
     expect(resolveSettingsEntry(names[0] ?? "")).toBe(names[0]);
+  });
+});
+
+describe("settingsOwnEntry", () => {
+  it("keeps a spelling without `..` as given, through a directory link or relative", () => {
+    fs.mkdirSync(path.join(tmp, "real"));
+    fs.symlinkSync(path.join(tmp, "real"), path.join(tmp, "via"));
+    expect(settingsOwnEntry(path.join(tmp, "via", "settings.json"))).toBe(path.join(tmp, "via", "settings.json"));
+    expect(settingsOwnEntry(`${tmp}/./via//settings.json`)).toBe(`${tmp}/./via//settings.json`);
+    expect(settingsOwnEntry("settings.json")).toBe("settings.json");
+  });
+
+  it("takes a `..` spelling through the real directory the kernel reaches", () => {
+    fs.mkdirSync(path.join(tmp, "dot", "a"), { recursive: true });
+    fs.mkdirSync(path.join(tmp, "dot", "b"));
+    fs.mkdirSync(path.join(tmp, "home"));
+    fs.symlinkSync(path.join(tmp, "dot", "b"), path.join(tmp, "home", "in"));
+    // A lexical fold would give home/a/settings.json.
+    expect(settingsOwnEntry(`${tmp}/home/in/../a/settings.json`)).toBe(path.join(tmp, "dot", "a", "settings.json"));
+  });
+
+  it("keeps a `..` spelling as given when its directory leads nowhere, or through a name that is a file", () => {
+    fs.writeFileSync(path.join(tmp, "plain"), "x");
+    expect(settingsOwnEntry(`${tmp}/nodir/../settings.json`)).toBe(`${tmp}/nodir/../settings.json`);
+    // The kernel answers ENOTDIR here; the native realpath of macOS would walk back to tmp.
+    expect(settingsOwnEntry(`${tmp}/plain/../settings.json`)).toBe(`${tmp}/plain/../settings.json`);
   });
 });
 

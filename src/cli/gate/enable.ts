@@ -34,9 +34,11 @@ import {
   missingLabel,
   planRestore,
   readOnlyLinkTargetText,
+  readOnlyWritablePlace,
   resolveSettingsEntry,
   retireSnapshot,
   settingsFlag,
+  settingsOwnEntry,
   sha256Hex,
 } from "./snapshot.js";
 
@@ -269,14 +271,15 @@ export function gateEnable(opts: GateEnableOptions = {}): GateEnableResult {
   try {
     atomicWriteFile(entry, newSettings);
   } catch (err) {
-    if (entry === settingsPath || !isReadOnlyWriteError(err)) throw err;
-    // A copy in place of the link would not find the snapshot, which sits beside the file.
+    if (entry === settingsOwnEntry(settingsPath) || !isReadOnlyWriteError(err)) throw err;
+    // A copy in place of the link would not find the snapshot, which sits beside the file. Moving the snapshot
+    // aside needs the directory writable too, so the by-hand way defers that step.
     throw new GateEnableError(
       `${readOnlyLinkTargetText(settingsPath, entry, err)} Nothing was changed and the snapshot ${newest.path} stays ` +
-        `live. Make ${path.dirname(entry)} writable and run \`harness gate enable${opts.force ? " --force" : ""} ` +
-        `${settingsFlag(settingsPath)}\` again, or put the groups back by hand (the snapshot lists them; ` +
-        `${snapshot.settingsBackupPath} is the file as it was before the disable) and rename the snapshot to ` +
-        `*.restored.json.`,
+        `live. Make ${readOnlyWritablePlace(entry, err)} writable and run \`harness gate enable${opts.force ? " --force" : ""} ` +
+        `${settingsFlag(settingsPath)}\` again; or by hand: put the groups back (the snapshot lists them; ` +
+        `${snapshot.settingsBackupPath} is the file as it was before the disable), then move the snapshot aside ` +
+        `(rename it to *.restored.json) once you can write its directory.`,
     );
   }
 
