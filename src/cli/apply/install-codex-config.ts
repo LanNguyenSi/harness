@@ -8,6 +8,7 @@ import { EX_FAIL, HarnessExitError } from "../exit-codes.js";
 // neither module touches the other's bindings at top level; they are used only
 // inside function bodies. Keep it that way (no top-level use of these three).
 import { listCodexSnapshots, readCodexSnapshot, retireCodexSnapshot } from "../gate/codex-snapshot.js";
+import { linkChain } from "../gate/link-chain.js";
 import { namesSameEntry } from "../gate/snapshot.js";
 
 export const CODEX_MANAGED_SOURCE_PREFIX = "# Harness Codex hook wiring.";
@@ -2263,33 +2264,6 @@ export function latestCodexInstallBackup(filePath: string): { ms: number; path: 
   return latest;
 }
 
-/**
- * The link chain of a config path: the path itself, then each path its
- * symlink text leads to, ending at the first path that is not a symlink (the
- * target) or at the point where the chain cannot be walked (dangling, a loop,
- * an unreadable hop). A relative link text is resolved against the physical
- * directory of the link holding it, as the kernel does. A snapshot or an
- * install backup can sit beside any of these paths, depending on which
- * spelling the gate or the installer was run through.
- */
-export function codexConfigLinkChain(requestedPath: string): string[] {
-  const MAX_HOPS = 40;
-  const chain = [requestedPath];
-  let current = requestedPath;
-  for (let hop = 0; hop < MAX_HOPS; hop++) {
-    let next: string;
-    try {
-      if (!fs.lstatSync(current).isSymbolicLink()) break;
-      next = path.resolve(fs.realpathSync(path.dirname(current)), fs.readlinkSync(current));
-    } catch {
-      break;
-    }
-    chain.push(next);
-    current = next;
-  }
-  return chain;
-}
-
 /** The config holds operator secrets (API tokens under `[mcp_servers.*]`,
  * Codex hook trust hashes); the install must never widen its permissions.
  * Preserves the existing file's own mode for both the rewritten config and
@@ -2342,7 +2316,7 @@ function findSnapshotsOfConfig(plan: CodexConfigInstallPlan): { matched: string[
   // a snapshot found twice would be renamed once and then fail to rename.
   const dirs: string[] = [];
   const seenDirs = new Set<string>();
-  for (const spelled of [...codexConfigLinkChain(requested), plan.configPath]) {
+  for (const spelled of [...linkChain(requested), plan.configPath]) {
     const dir = path.dirname(spelled);
     let physical = dir;
     try {

@@ -88,6 +88,17 @@ describe("resolveSettingsEntry", () => {
     expect(resolveSettingsEntry(path.join(tmp, "viaDir", "x.json"))).toBe(path.join(real, "y.json"));
   });
 
+  it("follows a dangling relative link written with .. from a link reached through a directory symlink to where the kernel leads", () => {
+    const dot = path.join(tmp, "dot");
+    fs.mkdirSync(path.join(dot, "real"), { recursive: true });
+    fs.mkdirSync(path.join(dot, "x"));
+    fs.mkdirSync(path.join(tmp, "home"));
+    fs.symlinkSync(path.join(dot, "real"), path.join(tmp, "home", "via"));
+    fs.symlinkSync(path.join("..", "x", "settings.json"), path.join(dot, "real", "settings.json"));
+    // Read from home/via, `..` would be home; from dot/real, where the link is, it is dot.
+    expect(resolveSettingsEntry(path.join(tmp, "home", "via", "settings.json"))).toBe(path.join(dot, "x", "settings.json"));
+  });
+
   it("leaves a link loop as it was given", () => {
     const names = ["one.json", "two.json", "three.json"].map((n) => path.join(tmp, n));
     names.forEach((n, i) => fs.symlinkSync(names[(i + 1) % names.length] ?? n, n));
@@ -202,5 +213,11 @@ describe("settingsFlag", () => {
     expect(settingsFlag("/tmp/my dir/settings.json")).toBe("--settings '/tmp/my dir/settings.json'");
     expect(settingsFlag("/tmp/a'b/settings.json")).toBe(`--settings '/tmp/a'\\''b/settings.json'`);
     expect(settingsFlag("/tmp/$HOME/s.json")).toBe("--settings '/tmp/$HOME/s.json'");
+  });
+
+  it("single-quotes a leading tilde and an equals sign, which a shell expands in a bare word", () => {
+    expect(settingsFlag("~/x")).toBe("--settings '~/x'");
+    expect(settingsFlag("=x")).toBe("--settings '=x'");
+    expect(settingsFlag("/tmp/100%/s.json")).toBe("--settings '/tmp/100%/s.json'");
   });
 });

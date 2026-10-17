@@ -29,9 +29,11 @@ import {
   changedLabel,
   type ForeignSnapshot,
   groupLabel,
+  isReadOnlyWriteError,
   listLiveSnapshots,
   missingLabel,
   planRestore,
+  readOnlyLinkTargetText,
   resolveSettingsEntry,
   retireSnapshot,
   settingsFlag,
@@ -264,7 +266,19 @@ export function gateEnable(opts: GateEnableOptions = {}): GateEnableResult {
     );
   }
 
-  atomicWriteFile(entry, newSettings);
+  try {
+    atomicWriteFile(entry, newSettings);
+  } catch (err) {
+    if (entry === settingsPath || !isReadOnlyWriteError(err)) throw err;
+    // A copy in place of the link would not find the snapshot, which sits beside the file.
+    throw new GateEnableError(
+      `${readOnlyLinkTargetText(settingsPath, entry, err)} Nothing was changed and the snapshot ${newest.path} stays ` +
+        `live. Make ${path.dirname(entry)} writable and run \`harness gate enable${opts.force ? " --force" : ""} ` +
+        `${settingsFlag(settingsPath)}\` again, or put the groups back by hand (the snapshot lists them; ` +
+        `${snapshot.settingsBackupPath} is the file as it was before the disable) and rename the snapshot to ` +
+        `*.restored.json.`,
+    );
+  }
 
   return {
     mode: "restored",

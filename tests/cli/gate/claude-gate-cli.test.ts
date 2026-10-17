@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -7,6 +8,7 @@ import { run } from "../../../src/cli/index.js";
 import {
   liveSnapshotNames,
   retiredSnapshotNames,
+  supersededSnapshotNames,
   writeLegacyChain,
 } from "../../_helpers/claude-gate-legacy.js";
 
@@ -797,5 +799,171 @@ describe("harness gate (claude): the command a refusal prints reaches the call's
     const on = await gateOn(file, "enable");
     expect(on.code).toBe(EX_FAIL);
     expect(on.stderr).toContain(`run \`harness gate enable --settings '${other}'\``);
+  });
+});
+
+describe("harness gate (claude): a link written with .. and reached through a directory symlink", () => {
+  // home/via -> dot/real, and dot/real/link.json -> ../x/settings.json. The kernel takes `..` from dot/real,
+  // so the file is dot/x/settings.json; a lexical reading from home/via would look in home/x.
+  let viaLink: string;
+  let file: string;
+  let original: string;
+
+  beforeEach(() => {
+    const dot = path.join(tmp, "dot");
+    fs.mkdirSync(path.join(dot, "real"), { recursive: true });
+    fs.mkdirSync(path.join(dot, "x"));
+    fs.mkdirSync(path.join(tmp, "home", "x"), { recursive: true });
+    fs.symlinkSync(path.join(dot, "real"), path.join(tmp, "home", "via"));
+    fs.symlinkSync(path.join("..", "x", "settings.json"), path.join(dot, "real", "link.json"));
+    file = path.join(dot, "x", "settings.json");
+    fs.renameSync(settingsPath, file);
+    original = fs.readFileSync(file, "utf8");
+    viaLink = path.join(tmp, "home", "via", "link.json");
+  });
+
+  it("a disable through it finds the file, and an enable after the file went missing exits non-zero instead of reporting nothing to restore", async () => {
+    expect((await gateOn(file, "disable", "--matcher", "Write|Edit")).code).toBe(EX_OK);
+    const away = `${file}.away`;
+    fs.renameSync(file, away);
+    const on = await gateOn(viaLink, "enable");
+    expect(on.code).toBe(EX_FAIL);
+    expect(on.stdout).not.toContain("nothing to restore");
+    expect(on.stderr).toContain(`settings file not found: ${file}`);
+    expect(liveSnapshotNames(file)).toHaveLength(1);
+    fs.renameSync(away, file);
+    expect((await gateOn(viaLink, "enable")).code).toBe(EX_OK);
+    expect(fs.readFileSync(file, "utf8")).toBe(original);
+  });
+
+  it("a disable through it writes the file the kernel resolves to and keeps the link", async () => {
+    expect((await gateOn(viaLink, "disable", "--matcher", "Write|Edit")).code).toBe(EX_OK);
+    expect(fs.readdirSync(path.join(tmp, "home", "x"))).toEqual([]);
+    expect(liveSnapshotNames(file)).toHaveLength(1);
+    expect(fs.lstatSync(path.join(tmp, "dot", "real", "link.json")).isSymbolicLink()).toBe(true);
+    expect((await gateOn(viaLink, "enable")).code).toBe(EX_OK);
+    expect(fs.readFileSync(file, "utf8")).toBe(original);
+  });
+});
+
+describe("harness gate (claude): the file a settings symlink leads to sits in a directory the gate cannot write", () => {
+  const cannotWrite = process.platform === "win32" || (typeof process.getuid === "function" && process.getuid() === 0);
+  let aPath: string;
+  let bDir: string;
+  let bPath: string;
+  let original: string;
+
+  beforeEach(() => {
+    const aDir = path.join(tmp, "a");
+    bDir = path.join(tmp, "b");
+    fs.mkdirSync(aDir);
+    fs.mkdirSync(bDir);
+    aPath = path.join(aDir, "settings.json");
+    bPath = path.join(bDir, "settings.json");
+    fs.renameSync(settingsPath, bPath);
+    original = fs.readFileSync(bPath, "utf8");
+    fs.symlinkSync(bPath, aPath);
+  });
+
+  afterEach(() => {
+    fs.chmodSync(bDir, 0o755);
+  });
+
+  it.skipIf(cannotWrite)("a disable says nothing was changed, names the read-only directory and a way out that works as printed", async () => {
+    fs.chmodSync(bDir, 0o555);
+    const off = await gateOn(aPath, "disable", "--matcher", "Write|Edit");
+    expect(off.code).toBe(EX_FAIL);
+    expect(off.stderr).toContain(`${aPath} is a symlink to ${bPath}`);
+    expect(off.stderr).toContain(`the directory ${bDir} that holds that file cannot be written (EACCES)`);
+    expect(off.stderr).toContain("Nothing was changed.");
+    expect(fs.readdirSync(bDir)).toEqual(["settings.json"]);
+    expect(fs.readFileSync(bPath, "utf8")).toBe(original);
+    expect(fs.lstatSync(aPath).isSymbolicLink()).toBe(true);
+
+    // The copy command it prints, run as printed, turns the link into a file the gate can edit.
+    const copy = /\(`(cp [^`]+)`\)/.exec(off.stderr)?.[1];
+    expect(copy).toBe(`cp ${bPath} ${aPath}.copy && mv ${aPath}.copy ${aPath}`);
+    execFileSync("sh", ["-c", copy ?? "false"]);
+    expect(fs.lstatSync(aPath).isSymbolicLink()).toBe(false);
+    // The command it names to run again reaches the same file, with the matcher quoted for the shell.
+    expect(off.stderr).toContain(`run \`harness gate disable --matcher 'Write|Edit' --settings ${aPath}\` again`);
+    expect((await gateOn(aPath, "disable", "--matcher", "Write|Edit")).code).toBe(EX_OK);
+    expect(fs.readFileSync(bPath, "utf8")).toBe(original);
+  });
+
+  it.skipIf(cannotWrite)("an enable says nothing was changed and the snapshot stays live; once the directory is writable the same command restores", async () => {
+    expect((await gateOn(bPath, "disable", "--matcher", "Write|Edit")).code).toBe(EX_OK);
+    const disabled = fs.readFileSync(bPath, "utf8");
+    fs.chmodSync(bDir, 0o555);
+    const on = await gateOn(aPath, "enable");
+    expect(on.code).toBe(EX_FAIL);
+    expect(on.stdout).not.toContain("nothing to restore");
+    expect(on.stderr).toContain(`${aPath} is a symlink to ${bPath}`);
+    expect(on.stderr).toContain("cannot be written (EACCES)");
+    expect(on.stderr).toContain("Nothing was changed and the snapshot");
+    expect(on.stderr).toContain(`Make ${bDir} writable and run \`harness gate enable --settings ${aPath}\` again`);
+    expect(fs.readFileSync(bPath, "utf8")).toBe(disabled);
+    expect(liveSnapshotNames(bPath)).toHaveLength(1);
+    fs.chmodSync(bDir, 0o755);
+    expect((await gateOn(aPath, "enable")).code).toBe(EX_OK);
+    expect(fs.readFileSync(bPath, "utf8")).toBe(original);
+  });
+
+  it.skipIf(cannotWrite)("a read-only directory under a plain path is not described as a link", async () => {
+    fs.chmodSync(bDir, 0o555);
+    const off = await gateOn(bPath, "disable", "--matcher", "Write|Edit");
+    expect(off.code).not.toBe(EX_OK);
+    expect(off.stderr).toContain("EACCES");
+    expect(off.stderr).not.toContain("is a symlink to");
+    fs.chmodSync(bDir, 0o755);
+    expect((await gateOn(bPath, "disable", "--matcher", "Write|Edit")).code).toBe(EX_OK);
+    fs.chmodSync(bDir, 0o555);
+    const on = await gateOn(bPath, "enable");
+    expect(on.code).not.toBe(EX_OK);
+    expect(on.stderr).toContain("EACCES");
+    expect(on.stderr).not.toContain("is a symlink to");
+  });
+});
+
+describe("harness gate (claude): a snapshot beside a settings path that became a symlink", () => {
+  it("a disable through the link moves the merged snapshot beside the file, so an enable through the file restores both groups", async () => {
+    const aDir = path.join(tmp, "a");
+    const bDir = path.join(tmp, "b");
+    fs.mkdirSync(aDir);
+    fs.mkdirSync(bDir);
+    const aPath = path.join(aDir, "settings.json");
+    const bPath = path.join(bDir, "settings.json");
+    fs.renameSync(settingsPath, aPath);
+    const original = fs.readFileSync(aPath, "utf8");
+    // The first disable ran while a/settings.json was a regular file; the file then moved and a link took its place.
+    expect((await gateOn(aPath, "disable", "--matcher", "Write|Edit")).code).toBe(EX_OK);
+    const [oldName] = liveSnapshotNames(aPath);
+    fs.renameSync(aPath, bPath);
+    fs.symlinkSync(bPath, aPath);
+
+    const off = await gateOn(aPath, "disable", "--matcher", "Bash");
+    expect(off.code).toBe(EX_OK);
+    expect(off.stdout).toContain("(merged into the snapshot that was already live)");
+    expect(off.stdout).toContain(`retired ${path.join(aDir, oldName ?? "")} as `);
+    expect(off.stdout).toContain(`its groups were carried into ${path.join(bDir, oldName ?? "")}, beside the file ${aPath} leads to`);
+    expect(fs.lstatSync(aPath).isSymbolicLink()).toBe(true);
+    // The merged snapshot sits beside the file and records it; the old one is retired, not restored.
+    expect(liveSnapshotNames(bPath)).toEqual([oldName]);
+    expect(liveSnapshotNames(aPath)).toEqual([]);
+    expect(supersededSnapshotNames(aPath)).toHaveLength(1);
+    expect(retiredSnapshotNames(aPath)).toEqual([]);
+    const merged = JSON.parse(fs.readFileSync(path.join(bDir, oldName ?? ""), "utf8")) as {
+      settingsPath: string;
+      removed: unknown[];
+    };
+    expect(merged.settingsPath).toBe(bPath);
+    expect(merged.removed).toHaveLength(2);
+
+    // An enable through the file's own path finds it and restores both groups, as one through the link does.
+    const on = await gateOn(bPath, "enable");
+    expect(on.code).toBe(EX_OK);
+    expect(on.stdout).toContain("restored 2 hook group(s)");
+    expect(fs.readFileSync(bPath, "utf8")).toBe(original);
+    expect(fs.lstatSync(aPath).isSymbolicLink()).toBe(true);
   });
 });

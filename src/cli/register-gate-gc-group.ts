@@ -53,7 +53,8 @@ export function registerGateGcGroup(
         "`--matcher <pattern>`. Writes a snapshot of the removed groups next to settings.json " +
         "(`harness.gate-disable.<ts>.json`) and backs up the original to `settings.json.bak.<ts>` " +
         "so `harness gate enable` can restore them; a later disable while that snapshot is live " +
-        "is merged into it. With `--runtime codex` the matching hook units " +
+        "is merged into it. A settings.json that is a symlink is written through, never replaced: " +
+        "the snapshot and the backup sit beside the file settings.json leads to. With `--runtime codex` the matching hook units " +
         "of the harness-managed block in ~/.codex/config.toml are neutralised in place instead " +
         "(`hooks = []`, so the position of every other hook stays) and their original lines go " +
         "to `harness.gate-disable-codex.<ts>.json` (a later disable joins the live snapshot, or retires it " +
@@ -104,6 +105,12 @@ export function registerGateGcGroup(
         }
         for (const r of result.retiredSpent) {
           stdout(`retired a spent snapshot as ${r}: its groups were already back in ${result.path}.\n`);
+        }
+        if (result.carriedFrom !== undefined) {
+          stdout(
+            `retired ${result.carriedFrom.from} as ${result.carriedFrom.to}: its groups were carried into ` +
+              `${result.snapshotPath}, beside the file ${result.path} leads to.\n`,
+          );
         }
         stdout(`backup:   ${result.backupPath}\n`);
         stdout(
@@ -345,6 +352,8 @@ interface GateDisableView {
   merged: boolean;
   /** Claude only: spent snapshots this disable retired first (their retired names). */
   retiredSpent: string[];
+  /** Claude only: the snapshot a merge moved beside the file the settings path leads to, and what it was retired as. */
+  carriedFrom?: { from: string; to: string };
 }
 
 /** Runs the disable verb for one runtime and flattens both results into the one shape the printer reads. */
@@ -382,6 +391,7 @@ function runGateDisable(
     snapshotPath: r.snapshotPath,
     merged: r.merged,
     retiredSpent: r.retired,
+    ...(r.carriedFrom !== undefined ? { carriedFrom: r.carriedFrom } : {}),
     removed: r.removed.map((g) => ({
       event: g.event,
       index: g.index,

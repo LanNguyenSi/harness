@@ -28,7 +28,8 @@ vi.mock("node:fs", async (importOriginal) => {
   return { ...actual, lstatSync, default: { ...(withDefault.default ?? {}), lstatSync } };
 });
 
-import { codexConfigLinkChain, latestCodexInstallBackup } from "../../../src/cli/apply/install-codex-config.js";
+import { latestCodexInstallBackup } from "../../../src/cli/apply/install-codex-config.js";
+import { linkChain } from "../../../src/cli/gate/link-chain.js";
 import {
   CODEX_SNAPSHOT_BASENAME_PREFIX,
   CODEX_SNAPSHOT_TARGET,
@@ -271,10 +272,10 @@ describe("the installer's backup dating by another spelling of the name", () => 
   });
 });
 
-describe("codexConfigLinkChain", () => {
+describe("linkChain on a Codex config path", () => {
   it("is just the path for a regular file or a path that does not exist", () => {
-    expect(codexConfigLinkChain(configPath)).toEqual([configPath]);
-    expect(codexConfigLinkChain(path.join(tmp, "absent.toml"))).toEqual([path.join(tmp, "absent.toml")]);
+    expect(linkChain(configPath)).toEqual([configPath]);
+    expect(linkChain(path.join(tmp, "absent.toml"))).toEqual([path.join(tmp, "absent.toml")]);
   });
 
   it("lists every hop to the target, resolving a relative link text against the physical directory of the link holding it", () => {
@@ -286,8 +287,8 @@ describe("codexConfigLinkChain", () => {
     const l2 = path.join(dirB, "mid.toml");
     fs.symlinkSync(path.join("..", "b", "mid.toml"), l1);
     fs.symlinkSync(path.join("..", "config.toml"), l2);
-    expect(codexConfigLinkChain(l1)).toEqual([l1, l2, configPath]);
-    expect(codexConfigLinkChain(l2)).toEqual([l2, configPath]);
+    expect(linkChain(l1)).toEqual([l1, l2, configPath]);
+    expect(linkChain(l2)).toEqual([l2, configPath]);
   });
 
   it("resolves a relative link text against the physical directory of a link that sits under a symlinked directory", () => {
@@ -301,18 +302,18 @@ describe("codexConfigLinkChain", () => {
     fs.symlinkSync(path.join(dotfiles, "codex"), path.join(tmp, "home", ".codex"));
     const requested = path.join(tmp, "home", ".codex", "config.toml");
     // `..` is taken from dotfiles/codex, where the link is, not from home/.codex, the way it was asked for.
-    expect(codexConfigLinkChain(requested)).toEqual([requested, target]);
+    expect(linkChain(requested)).toEqual([requested, target]);
   });
 
   it("stops at a dangling link and at a loop instead of failing or spinning", () => {
     const dangling = path.join(tmp, "dangling.toml");
     fs.symlinkSync(path.join(tmp, "missing.toml"), dangling);
-    expect(codexConfigLinkChain(dangling)).toEqual([dangling, path.join(tmp, "missing.toml")]);
+    expect(linkChain(dangling)).toEqual([dangling, path.join(tmp, "missing.toml")]);
     const x = path.join(tmp, "x.toml");
     const y = path.join(tmp, "y.toml");
     fs.symlinkSync(y, x);
     fs.symlinkSync(x, y);
-    const chain = codexConfigLinkChain(x);
+    const chain = linkChain(x);
     expect(chain.length).toBe(41);
     expect(new Set(chain)).toEqual(new Set([x, y]));
   });

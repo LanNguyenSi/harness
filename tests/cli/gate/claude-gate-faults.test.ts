@@ -6,7 +6,7 @@ import { EX_FAIL } from "../../../src/cli/exit-codes.js";
 import { gateDisable, GateDisableError } from "../../../src/cli/gate/disable.js";
 import { gateEnable, GateEnableError } from "../../../src/cli/gate/enable.js";
 import { run } from "../../../src/cli/index.js";
-import { liveSnapshotNames, retiredSnapshotNames } from "../../_helpers/claude-gate-legacy.js";
+import { liveSnapshotNames, retiredSnapshotNames, supersededSnapshotNames } from "../../_helpers/claude-gate-legacy.js";
 
 // The Claude gate's writes go through atomicWriteFile. Every write is
 // reported to `fault.onWrite` before it happens; a hook that throws makes
@@ -26,6 +26,10 @@ vi.mock("../../../src/cli/gate/snapshot.js", async (importOriginal) => {
     retireSnapshot: (snapPath: string) => {
       fault.onRetire?.(snapPath);
       return actual.retireSnapshot(snapPath);
+    },
+    supersedeSnapshot: (snapPath: string) => {
+      fault.onRetire?.(snapPath);
+      return actual.supersedeSnapshot(snapPath);
     },
   };
 });
@@ -305,5 +309,184 @@ describe("a retire the filesystem refuses", () => {
     fault.onRetire = renameRefused;
     expect(() => gateEnable({ settingsPath })).toThrow(GateEnableError);
     expect(() => gateEnable({ settingsPath })).toThrow(/needed no write, but cannot retire the snapshot .*EACCES/);
+  });
+});
+
+describe("a settings path that is a symlink: the write the filesystem refuses", () => {
+  let link: string;
+
+  /** What a directory the user cannot write to answers to the open of a temp file. */
+  function readOnly(code = "EACCES"): never {
+    const err = new Error(`${code}: write refused, open`) as NodeJS.ErrnoException;
+    err.code = code;
+    throw err;
+  }
+
+  beforeEach(() => {
+    link = path.join(tmp, "link.json");
+    fs.symlinkSync(settingsPath, link);
+  });
+
+  it("the snapshot write: the settings file and the snapshots stay as they were, the message says which backup was left", () => {
+    const original = fs.readFileSync(settingsPath, "utf8");
+    fault.onWrite = (p) => {
+      if (kindOf(p) === "snapshot") readOnly();
+    };
+    let message = "";
+    try {
+      gateDisable({ settingsPath: link, matcher: "Write|Edit", now: T1 });
+    } catch (err) {
+      expect(err).toBeInstanceOf(GateDisableError);
+      message = (err as Error).message;
+    }
+    expect(message).toContain(`${link} is a symlink to ${settingsPath}`);
+    expect(message).toMatch(/The backup .*\.bak\..* was written; .*link\.json and the snapshots were not changed\./);
+    expect(message).toContain(`harness gate disable --matcher 'Write|Edit' --settings ${link}\` again`);
+    expect(fs.readFileSync(settingsPath, "utf8")).toBe(original);
+    expect(liveSnapshotNames(settingsPath)).toEqual([]);
+  });
+
+  it("the settings write after a fresh snapshot: the message says the file is unchanged and the snapshot is retired by a later gate call", () => {
+    const original = fs.readFileSync(settingsPath, "utf8");
+    fault.onWrite = (p) => {
+      if (kindOf(p) === "settings") readOnly();
+    };
+    let message = "";
+    try {
+      gateDisable({ settingsPath: link, matcher: "Write|Edit", now: T1 });
+    } catch (err) {
+      expect(err).toBeInstanceOf(GateDisableError);
+      message = (err as Error).message;
+    }
+    expect(message).toMatch(/was not changed \(the backup .* was written, and the snapshot .* which a later gate call retires\)\./);
+    expect(fs.readFileSync(settingsPath, "utf8")).toBe(original);
+    fault.onWrite = null;
+    // The snapshot describes a removal that did not happen: the retry retires it as spent and starts a fresh one.
+    const retry = gateDisable({ settingsPath: link, matcher: "Write|Edit", now: T2 });
+    expect(retry.mode === "remove" && retry.retired).toHaveLength(1);
+  });
+
+  it("the settings write on a merge: the snapshot is put back and the message does not claim a leftover snapshot", () => {
+    gateDisable({ settingsPath: link, matcher: "Write|Edit", now: T1 });
+    const [name] = liveSnapshotNames(settingsPath);
+    const premerge = fs.readFileSync(path.join(tmp, name ?? ""), "utf8");
+    fault.onWrite = (p) => {
+      if (kindOf(p) === "settings") readOnly();
+    };
+    let message = "";
+    try {
+      gateDisable({ settingsPath: link, matcher: "Bash", now: T2 });
+    } catch (err) {
+      expect(err).toBeInstanceOf(GateDisableError);
+      message = (err as Error).message;
+    }
+    expect(message).toMatch(/was not changed \(the backup .* was written\)\./);
+    expect(message).not.toContain("which a later gate call retires");
+    expect(fs.readFileSync(path.join(tmp, name ?? ""), "utf8")).toBe(premerge);
+  });
+
+  it("the backup write: nothing was changed, and a failure that is not a permission refusal is rethrown as it is", () => {
+    fault.onWrite = (p) => {
+      if (kindOf(p) === "backup") readOnly();
+    };
+    expect(() => gateDisable({ settingsPath: link, matcher: "Write|Edit", now: T1 })).toThrow(/Nothing was changed\./);
+    fault.onWrite = (p) => {
+      if (kindOf(p) === "backup") throw new Error("disk full");
+    };
+    expect(() => gateDisable({ settingsPath: link, matcher: "Write|Edit", now: T1 })).toThrow(/^disk full$/);
+  });
+
+  it.each(["EACCES", "EPERM", "EROFS"])("%s on the backup write is a refusal naming the link; ENOSPC is not", (code) => {
+    fault.onWrite = (p) => {
+      if (kindOf(p) === "backup") readOnly(code);
+    };
+    expect(() => gateDisable({ settingsPath: link, matcher: "Write|Edit", now: T1 })).toThrow(
+      new RegExp(`cannot be written \\(${code}\\)`),
+    );
+    fault.onWrite = (p) => {
+      if (kindOf(p) === "backup") readOnly("ENOSPC");
+    };
+    expect(() => gateDisable({ settingsPath: link, matcher: "Write|Edit", now: T1 })).toThrow(/^ENOSPC: write refused/);
+  });
+
+  it("an enable whose settings write is refused names the link, keeps the snapshot live and passes --force on", () => {
+    gateDisable({ settingsPath: link, matcher: "Write|Edit", now: T1 });
+    fault.onWrite = (p) => {
+      if (kindOf(p) === "settings") readOnly();
+    };
+    expect(() => gateEnable({ settingsPath: link })).toThrow(/run `harness gate enable --settings .*link\.json` again/);
+    expect(() => gateEnable({ settingsPath: link, force: true })).toThrow(/harness gate enable --force --settings .*link\.json/);
+    expect(liveSnapshotNames(settingsPath)).toHaveLength(1);
+    // A write that fails for another reason is rethrown as it is.
+    fault.onWrite = (p) => {
+      if (kindOf(p) === "settings") throw new Error("disk full");
+    };
+    expect(() => gateEnable({ settingsPath: link })).toThrow(/^disk full$/);
+  });
+});
+
+describe("a merge that moves the snapshot beside the file a settings link leads to", () => {
+  let aPath: string;
+  let bPath: string;
+  let oldSnap: string;
+
+  /** A snapshot beside a/settings.json taken while it was a regular file, which a link to b/settings.json then replaced. */
+  beforeEach(() => {
+    const aDir = path.join(tmp, "a");
+    const bDir = path.join(tmp, "b");
+    fs.mkdirSync(aDir);
+    fs.mkdirSync(bDir);
+    aPath = path.join(aDir, "settings.json");
+    bPath = path.join(bDir, "settings.json");
+    fs.renameSync(settingsPath, aPath);
+    gateDisable({ settingsPath: aPath, matcher: "Write|Edit", now: T1 });
+    oldSnap = path.join(aDir, liveSnapshotNames(aPath)[0] ?? "");
+    fs.renameSync(aPath, bPath);
+    fs.symlinkSync(bPath, aPath);
+  });
+
+  it("a settings write that fails removes the copy and leaves the earlier snapshot live and untouched", () => {
+    const body = fs.readFileSync(oldSnap, "utf8");
+    fault.onWrite = (p) => {
+      if (kindOf(p) === "settings") throw new Error("write failed");
+    };
+    expect(() => gateDisable({ settingsPath: aPath, matcher: "Bash", now: T2 })).toThrow(/write failed/);
+    expect(liveSnapshotNames(bPath)).toEqual([]);
+    expect(fs.readFileSync(oldSnap, "utf8")).toBe(body);
+    expect(supersededSnapshotNames(aPath)).toEqual([]);
+  });
+
+  it.skipIf(process.platform === "win32" || (typeof process.getuid === "function" && process.getuid() === 0))(
+    "a copy that cannot be removed after the failed write is reported with the way out",
+    () => {
+      fault.onWrite = (p) => {
+        if (kindOf(p) === "settings") {
+          fs.chmodSync(path.dirname(bPath), 0o555);
+          throw new Error("write failed");
+        }
+      };
+      try {
+        expect(() => gateDisable({ settingsPath: aPath, matcher: "Bash", now: T2 })).toThrow(/could not be put back/);
+      } finally {
+        fs.chmodSync(path.dirname(bPath), 0o755);
+      }
+    },
+  );
+
+  it("an earlier snapshot that cannot be retired after the write is named, with what was done", () => {
+    fault.onRetire = renameRefused;
+    let message = "";
+    try {
+      gateDisable({ settingsPath: aPath, matcher: "Bash", now: T2 });
+    } catch (err) {
+      expect(err).toBeInstanceOf(GateDisableError);
+      message = (err as Error).message;
+    }
+    expect(message).toContain(`removed 1 hook group(s) from ${aPath} and merged the live snapshot into`);
+    expect(message).toContain(`cannot retire the earlier snapshot ${oldSnap}`);
+    expect(message).toContain("EACCES");
+    expect(message).toContain("rename it to *.superseded.json");
+    const hooks = (JSON.parse(fs.readFileSync(bPath, "utf8")) as { hooks: { PreToolUse: Array<{ matcher: string }> } }).hooks;
+    expect(hooks.PreToolUse.map((g) => g.matcher)).toEqual(["Task"]);
   });
 });

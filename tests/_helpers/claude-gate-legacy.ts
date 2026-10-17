@@ -45,7 +45,13 @@ export function writeLegacyChain(
 export function liveSnapshotNames(settingsPath: string): string[] {
   return fs
     .readdirSync(path.dirname(settingsPath))
-    .filter((n) => n.startsWith("harness.gate-disable.") && !n.endsWith(".restored.json") && n.endsWith(".json"))
+    .filter(
+      (n) =>
+        n.startsWith("harness.gate-disable.") &&
+        !n.endsWith(".restored.json") &&
+        !n.endsWith(".superseded.json") &&
+        n.endsWith(".json"),
+    )
     .sort();
 }
 
@@ -54,5 +60,13 @@ export function retiredSnapshotNames(settingsPath: string): string[] {
   return fs
     .readdirSync(path.dirname(settingsPath))
     .filter((n) => n.startsWith("harness.gate-disable.") && n.endsWith(".restored.json"))
+    .sort();
+}
+
+/** The snapshot files beside a settings file whose groups were carried into a snapshot elsewhere, by name. */
+export function supersededSnapshotNames(settingsPath: string): string[] {
+  return fs
+    .readdirSync(path.dirname(settingsPath))
+    .filter((n) => n.startsWith("harness.gate-disable.") && n.endsWith(".superseded.json"))
     .sort();
 }

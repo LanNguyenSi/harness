@@ -23,12 +23,12 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import {
   CodexInstallRefusalError,
-  codexConfigLinkChain,
   type CodexManagedHookUnit,
   defaultCodexConfigPath,
   latestCodexInstallBackup,
   resolveConfigSymlink,
 } from "../apply/install-codex-config.js";
+import { linkChain } from "./link-chain.js";
 import { shellQuote } from "./shell-quote.js";
 import { listSnapshots, namesSameEntry, SNAPSHOT_BASENAME_SUFFIX, snapshotFieldProblem } from "./snapshot.js";
 
@@ -268,7 +268,7 @@ export function planCodexRestore(
  * through, which may be any of these). An install through a link outside this
  * chain leaves its backups where this cannot look. */
 export function latestInstall(requestedPath: string, configPath: string): { ms: number; path: string } | null {
-  const found = [...new Set([...codexConfigLinkChain(requestedPath), configPath])]
+  const found = [...new Set([...linkChain(requestedPath), configPath])]
     .map(latestCodexInstallBackup)
     .filter((t) => t !== null);
   return found.reduce<{ ms: number; path: string } | null>((a, b) => (a === null || b.ms > a.ms ? b : a), null);

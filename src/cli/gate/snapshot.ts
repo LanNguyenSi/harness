@@ -21,6 +21,8 @@
 import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { walkLinkChain } from "./link-chain.js";
+import { shellQuote } from "./shell-quote.js";
 
 export const SNAPSHOT_BASENAME_PREFIX = "harness.gate-disable.";
 export const SNAPSHOT_BASENAME_SUFFIX = ".json";
@@ -30,6 +32,8 @@ export const SNAPSHOT_VERSION = 2 as const;
 export const LEGACY_SNAPSHOT_VERSION = 1 as const;
 /** A retired snapshot keeps its name with this suffix instead of plain `.json`. */
 export const RETIRED_SNAPSHOT_SUFFIX = ".restored.json";
+/** A snapshot whose groups were carried into a snapshot at another place keeps its name with this suffix. */
+export const SUPERSEDED_SNAPSHOT_SUFFIX = ".superseded.json";
 
 export interface RemovedGroup {
   /** Hook event the group lived under, e.g. "PreToolUse". */
@@ -248,6 +252,17 @@ export function retiredSnapshotPath(snapPath: string): string {
   return `${snapPath.slice(0, -SNAPSHOT_BASENAME_SUFFIX.length)}${RETIRED_SNAPSHOT_SUFFIX}`;
 }
 
+/**
+ * Retire `snapPath` as superseded (rename it, keep it for audit) and return
+ * the new path: its groups were merged into a snapshot beside the file they
+ * were removed from, so it is not restored and never offered again.
+ */
+export function supersedeSnapshot(snapPath: string): string {
+  const to = `${snapPath.slice(0, -SNAPSHOT_BASENAME_SUFFIX.length)}${SUPERSEDED_SNAPSHOT_SUFFIX}`;
+  fs.renameSync(snapPath, to);
+  return to;
+}
+
 /** Retire `snapPath` (rename it, keep it for audit) and return the new path. */
 export function retireSnapshot(snapPath: string): string {
   const to = retiredSnapshotPath(snapPath);
@@ -336,41 +351,29 @@ export function namesSameEntry(
   );
 }
 
-const MAX_LINK_HOPS = 40;
-
 /**
  * The file `gate disable` and `gate enable` read and write for `settingsPath`.
  * That is the path itself unless its last component is a symlink (a dotfiles
  * setup): then it is the entry the link leads to, which may sit in another
  * directory. Writing through the resolved entry keeps the link a link, and
  * the snapshots sit beside the file itself, so a disable through either
- * spelling is found by an enable through the other. A link whose target is
- * gone is followed by hand to where the target would be, so the snapshots
+ * spelling is found by an enable through the other. Every hop of the chain is
+ * resolved against the physical directory that holds it (`walkLinkChain`, the
+ * walker the Codex gate uses too), so a link written with `..` and reached
+ * through a directory symlink leads where the kernel takes it. A link whose
+ * target is gone resolves to where the target would be, so the snapshots
  * taken for that target are still found; a loop resolves to the path as given.
  */
 export function resolveSettingsEntry(settingsPath: string): string {
+  const { chain, end } = walkLinkChain(settingsPath);
+  const last = chain[chain.length - 1] ?? settingsPath;
+  if (chain.length === 1 || end === "loop") return settingsPath;
+  if (end !== "target") return last;
   try {
-    fs.readlinkSync(settingsPath);
+    return fs.realpathSync(last);
   } catch {
-    // Not a symlink (EINVAL), or nothing there.
-    return settingsPath;
+    return last;
   }
-  try {
-    return fs.realpathSync(settingsPath);
-  } catch {
-    // A dangling link or a loop: walk the chain by hand below.
-  }
-  let current = path.resolve(settingsPath);
-  for (let hop = 0; hop < MAX_LINK_HOPS; hop++) {
-    let next: string;
-    try {
-      next = fs.readlinkSync(current);
-    } catch {
-      return current;
-    }
-    current = path.resolve(path.dirname(current), next);
-  }
-  return settingsPath;
 }
 
 /** The identity of a file across spellings of its directory, or the path itself when it cannot be resolved. */
@@ -393,9 +396,10 @@ function fileIdentity(file: string): string {
  * case-insensitive filesystem). When `settingsPath` is itself a symlink
  * (`resolveSettingsEntry`), the directory of the file it leads to is searched
  * too, with the resolved entry as the target there: the snapshot of a disable
- * made through the other spelling sits beside that file. A hard link or a
- * symlink to the file under another name is another entry, so a snapshot
- * recorded for either is foreign to the other, whether or not the files
+ * made through the other spelling sits beside that file. A hard link to the
+ * file, a renamed file, or a snapshot found beside the file a symlink leads
+ * to but recorded under the symlink's own name is another entry, so a
+ * snapshot recorded for one is foreign to the other, whether or not the files
  * exist. A snapshot for another settings file in the same directory is
  * listed in `skippedForeign`, never dropped silently. A live snapshot that
  * cannot be read, or records no target, is an error: its target cannot be
@@ -411,7 +415,7 @@ export function listLiveSnapshots(settingsPath: string): LiveSnapshotsResult {
   const foreign = new Map<string, ForeignSnapshot>();
   for (const { dir, name: targetName } of places) {
     for (const file of listSnapshots(dir)) {
-      if (file.endsWith(RETIRED_SNAPSHOT_SUFFIX)) continue;
+      if (file.endsWith(RETIRED_SNAPSHOT_SUFFIX) || file.endsWith(SUPERSEDED_SNAPSHOT_SUFFIX)) continue;
       const id = fileIdentity(file);
       const read = readSnapshot(file);
       if (!read.ok) return { ok: false, reason: read.reason, path: file };
@@ -441,14 +445,39 @@ export function listLiveSnapshots(settingsPath: string): LiveSnapshotsResult {
   return { ok: true, live: liveList, skippedForeign };
 }
 
+const READ_ONLY_CODES: ReadonlySet<string> = new Set(["EACCES", "EPERM", "EROFS"]);
+
+/** Whether a write failed because the directory or filesystem does not allow it to be written. */
+export function isReadOnlyWriteError(err: unknown): boolean {
+  const code = (err as NodeJS.ErrnoException | null)?.code;
+  return typeof code === "string" && READ_ONLY_CODES.has(code);
+}
+
+/**
+ * What a gate refusal says first when the file a settings symlink leads to
+ * sits in a directory the gate cannot write: what the link is and which
+ * directory refuses. Each verb adds its own way out.
+ */
+export function readOnlyLinkTargetText(settingsPath: string, entry: string, err: unknown): string {
+  return (
+    `${settingsPath} is a symlink to ${entry}, and the directory ${path.dirname(entry)} that holds that file ` +
+    `cannot be written (${(err as NodeJS.ErrnoException).code}), so the gate cannot write beside it.`
+  );
+}
+
+/** The command that puts a copy of the file a symlink leads to in place of the link. */
+export function copyOverLinkCommand(settingsPath: string, entry: string): string {
+  const copy = `${settingsPath}.copy`;
+  return `cp ${shellQuote(entry)} ${shellQuote(copy)} && mv ${shellQuote(copy)} ${shellQuote(settingsPath)}`;
+}
+
 /**
  * How a command prints a `--settings` target so that it works as printed: a
- * path with a character the shell would act on is single-quoted.
+ * path with a character the shell would act on (a space, a quote, `~`, `=`,
+ * `%`, `$`) is single-quoted by the one quoting helper the gate shares.
  */
 export function settingsFlag(settingsPath: string): string {
-  return /^[A-Za-z0-9_@%+=:,./~-]+$/.test(settingsPath)
-    ? `--settings ${settingsPath}`
-    : `--settings '${settingsPath.replace(/'/g, `'\\''`)}'`;
+  return `--settings ${shellQuote(settingsPath)}`;
 }
 
 function groupMatcherOf(group: unknown): string | null {
