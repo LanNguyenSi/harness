@@ -567,6 +567,15 @@ describe.skipIf(!GIT_AVAILABLE)("branch-protection on a machine with an empty ov
       expect(await decide({ homeDir: home }, protectedRepo)).toEqual({ blocked: true, exitCode: 0 });
       expect(await decide({ homeDir: home }, featureRepo)).toEqual({ blocked: false, exitCode: 0 });
     }
+    // And absent: no machine override file at all (the normal state on a
+    // machine that never wrote one). There is nothing to skip, so no <root>
+    // warning is emitted, but the hook must still decide on both branches.
+    fs.rmSync(layer, { force: true });
+    const absent = loadManifest({ homeDir: home });
+    expect(absent.manifest.policy_packs.map((p) => p.name)).toEqual(["branch-protection"]);
+    expect(absent.warnings.filter((w) => w.path === "<root>")).toHaveLength(0);
+    expect(await decide({ homeDir: home }, protectedRepo)).toEqual({ blocked: true, exitCode: 0 });
+    expect(await decide({ homeDir: home }, featureRepo)).toEqual({ blocked: false, exitCode: 0 });
   });
 });
 

@@ -5,6 +5,18 @@ import * as path from "node:path";
 import { execFileSync, spawnSync } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
+// The O_RDONLY/O_WRONLY/O_RDWR access-mode mask. Node's runtime
+// `fs.constants` carries `O_ACCMODE` (0o3) where the platform exports it,
+// but @types/node's `constants` interface does not declare the property, so
+// the two flag-mask assertions below (`flags & O_ACCMODE === O_RDONLY`) fail
+// `npm run typecheck:tests` on the direct `fs.constants.O_ACCMODE` access.
+// Read the SAME property through this narrow cast so the runtime expression
+// is byte-for-byte what it was: where the platform exports it the value is
+// the real mask; where it does not (e.g. node on macOS) it stays `undefined`
+// and the `&` coerces it to 0 exactly as before, leaving the assertion's
+// outcome unchanged. Only the static type is supplied here.
+const O_ACCMODE = (fs.constants as unknown as { O_ACCMODE: number }).O_ACCMODE;
+
 // `vi.spyOn` cannot target `fs.readFileSync` directly: Node's builtin
 // module namespace is non-configurable in ESM ("Cannot redefine
 // property"). `vi.mock` with a call-through wrapper is the established
@@ -124,7 +136,7 @@ describe("readRegularFileBounded: one descriptor, never a blocking open", () => 
     expect(readRegularFileBounded(p)).toEqual({ kind: "ok", content: "{}" });
     expect(readFileSyncCallLog.openFlags).toHaveLength(1);
     const flags = readFileSyncCallLog.openFlags[0] as number;
-    expect(flags & fs.constants.O_ACCMODE).toBe(fs.constants.O_RDONLY);
+    expect(flags & O_ACCMODE).toBe(fs.constants.O_RDONLY);
     expect(flags & (fs.constants.O_NONBLOCK ?? 0)).toBe(fs.constants.O_NONBLOCK ?? 0);
     expect(flags & (fs.constants.O_NOFOLLOW ?? 0)).toBe(fs.constants.O_NOFOLLOW ?? 0);
     // Guards the two checks above against a platform where both are 0.
@@ -366,7 +378,7 @@ describe("readRegularFileBounded / readRegularFileBytesBounded / readTextFileBou
     expect(readFileSyncCallLog.openFlags).toHaveLength(2);
     const [following, refusing] = readFileSyncCallLog.openFlags as [number, number];
     for (const flags of [following, refusing]) {
-      expect(flags & fs.constants.O_ACCMODE).toBe(fs.constants.O_RDONLY);
+      expect(flags & O_ACCMODE).toBe(fs.constants.O_RDONLY);
       expect(flags & (fs.constants.O_NONBLOCK ?? 0)).toBe(fs.constants.O_NONBLOCK ?? 0);
       expect(flags & (fs.constants.O_NOCTTY ?? 0)).toBe(fs.constants.O_NOCTTY ?? 0);
     }
