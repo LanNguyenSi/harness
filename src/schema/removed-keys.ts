@@ -25,11 +25,17 @@
 // dropping the key does not change what the hook runs on, while dropping the
 // hook would remove an operator's own script. There is one warning per hook.
 //
-// Removed manifest paths are also stripped from every override layer BEFORE
-// the layers are merged (`stripRemovedManifestPaths`, used by
+// Removed manifest paths and removed per-hook fields are also stripped from
+// the base and from every override layer BEFORE the layers are merged
+// (`stripRemovedManifestPaths` and `stripRemovedHookFields`, used by
 // `mergeLayersStrippingRemovedPaths` in src/overrides): the merge walks
 // name-keyed lists and throws on a shape it cannot reconcile, and that throw
-// happens before the strip of the merged manifest runs.
+// happens before the strip of the merged manifest runs. A removed hook field
+// can collide the same way (`bash_match` as a list of named objects in the
+// base under a plain list in a layer), so its strip runs pre-merge too; the
+// post-merge strip of `stripRemovedManifestEntries` stays as the safety net
+// for callers that parse a single source without merging, where it finds
+// nothing left and warns no second time.
 //
 // Removed CLI commands (REMOVED_COMMANDS below) are not stripped: a hook or
 // pack config that still calls one parses fine, so `findRemovedCommandUses`
@@ -371,9 +377,69 @@ export function stripRemovedManifestPaths(
 }
 
 /**
+ * Strip every removed field from the hooks that carry it (the hook stays,
+ * one warning per hook), over one `hooks` array. Shared by
+ * `stripRemovedHookFields` (one raw source, before the merge) and
+ * `stripRemovedManifestEntries` (the merged manifest), so the wording exists
+ * once. Pure: `hooks` is not modified.
+ */
+function stripRemovedHookFieldsFromHooks(
+  hooks: readonly unknown[],
+  hookFields: readonly RemovedHookField[],
+): { hooks: unknown[]; changed: boolean; warnings: ManifestPostureWarning[] } {
+  const warnings: ManifestPostureWarning[] = [];
+  let changed = false;
+  const next = hooks.map((hook, i) => {
+    if (!isPlainObject(hook)) return hook;
+    const found = hookFields.filter((f) => Object.prototype.hasOwnProperty.call(hook, f.field));
+    if (found.length === 0) return hook;
+    changed = true;
+    const copy: Record<string, unknown> = { ...hook };
+    for (const f of found) delete copy[f.field];
+    const name = stringAt(hook, "name");
+    warnings.push({
+      path: `hooks[${i}]`,
+      message:
+        `${name !== undefined ? `hook "${name}"` : "this hook"} carries ${found.map((f) => f.field).join(" and ")}, ` +
+        `removed in ${found[0]!.removedIn} and ignored (${[...new Set(found.map((f) => f.reason))].join("; ")}); the hook is kept, delete the ` +
+        `${found.length === 1 ? "key" : "keys"} from it`,
+    });
+    return copy;
+  });
+  return { hooks: next, changed, warnings };
+}
+
+/**
+ * Strip every removed per-hook field from one raw source (the base manifest
+ * or one override layer) BEFORE it is merged: the merge walks name-keyed
+ * lists and throws on a shape it cannot reconcile, and a removed field like
+ * `bash_match` can carry exactly such colliding shapes across sources. The
+ * hooks stay; one warning per hook that carried a key, as in
+ * `stripRemovedManifestEntries`, whose post-merge strip stays as the safety
+ * net for callers that parse without merging (it then finds nothing left).
+ * Pure: `raw` is not modified, and the same object is returned when nothing
+ * was stripped.
+ */
+export function stripRemovedHookFields(
+  raw: unknown,
+  hookFields: readonly RemovedHookField[] = REMOVED_HOOK_FIELDS,
+): { raw: unknown; warnings: ManifestPostureWarning[] } {
+  if (!isPlainObject(raw) || !Array.isArray(raw["hooks"]) || hookFields.length === 0) {
+    return { raw, warnings: [] };
+  }
+  const stripped = stripRemovedHookFieldsFromHooks(raw["hooks"] as unknown[], hookFields);
+  if (!stripped.changed) return { raw, warnings: [] };
+  return { raw: { ...raw, hooks: stripped.hooks }, warnings: stripped.warnings };
+}
+
+/**
  * Strip every removed manifest path, strip every removed field from the
  * hooks that carry it (the hook stays), and drop every removed pack entry
- * from a raw (merged, not yet parsed) manifest. Pure: `raw` is not modified.
+ * from a raw (merged, not yet parsed) manifest. After a
+ * `mergeLayersStrippingRemovedPaths` merge the hook fields are already
+ * stripped (they went before the merge), so this strip finds nothing left of
+ * them and warns no second time; it stays for callers that parse a single
+ * source without merging. Pure: `raw` is not modified.
  */
 export function stripRemovedManifestEntries(
   raw: unknown,
@@ -384,26 +450,9 @@ export function stripRemovedManifestEntries(
   const warnings: ManifestPostureWarning[] = paths.warnings;
   let current = paths.raw;
   if (isPlainObject(current) && Array.isArray(current["hooks"]) && table.hookFields.length > 0) {
-    const hooks = current["hooks"] as unknown[];
-    let changed = false;
-    const next = hooks.map((hook, i) => {
-      if (!isPlainObject(hook)) return hook;
-      const found = table.hookFields.filter((f) => Object.prototype.hasOwnProperty.call(hook, f.field));
-      if (found.length === 0) return hook;
-      changed = true;
-      const copy: Record<string, unknown> = { ...hook };
-      for (const f of found) delete copy[f.field];
-      const name = stringAt(hook, "name");
-      warnings.push({
-        path: `hooks[${i}]`,
-        message:
-          `${name !== undefined ? `hook "${name}"` : "this hook"} carries ${found.map((f) => f.field).join(" and ")}, ` +
-          `removed in ${found[0]!.removedIn} and ignored (${[...new Set(found.map((f) => f.reason))].join("; ")}); the hook is kept, delete the ` +
-          `${found.length === 1 ? "key" : "keys"} from it`,
-      });
-      return copy;
-    });
-    if (changed) current = { ...current, hooks: next };
+    const stripped = stripRemovedHookFieldsFromHooks(current["hooks"] as unknown[], table.hookFields);
+    warnings.push(...stripped.warnings);
+    if (stripped.changed) current = { ...current, hooks: stripped.hooks };
   }
   if (isPlainObject(current) && Array.isArray(current["policy_packs"]) && table.packs.length > 0) {
     const packs = current["policy_packs"] as unknown[];

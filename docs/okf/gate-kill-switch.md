@@ -23,7 +23,7 @@ sources:
 
 # Kill switch: `harness gate disable` / `harness gate enable`
 
-harness ships ONE operator kill switch: `harness gate disable` takes the hook groups or hook units whose matcher matches a substring out of the live runtime config with a reversible snapshot, and `harness gate enable` puts them back. `harness pause` and `harness resume` were removed in 1.0.0 (task 973163a4), and the gate verbs are their replacement: both are `REMOVED_COMMANDS` entries now, so a hook or `ux.run` line that still calls one is reported by validate, doctor and apply (`src/schema/removed-keys.ts:474-475#"the operator pause is removed"`).
+harness ships ONE operator kill switch: `harness gate disable` takes the hook groups or hook units whose matcher matches a substring out of the live runtime config with a reversible snapshot, and `harness gate enable` puts them back. `harness pause` and `harness resume` were removed in 1.0.0 (task 973163a4), and the gate verbs are their replacement: both are `REMOVED_COMMANDS` entries now, so a hook or `ux.run` line that still calls one is reported by validate, doctor and apply (`src/schema/removed-keys.ts:523-524#"the operator pause is removed"`).
 
 ## When to use this
 
