@@ -460,6 +460,35 @@ describe("uninstall — --restore-from", () => {
     expect(fs.existsSync(path.join(homeDir, "harness.yaml"))).toBe(true);
   });
 
+  const variants: Array<[string, unknown]> = [
+    ["object-shaped removedHookGroups", { version: 1, removedHookGroups: {} }],
+    ["removedHookGroups without version", { removedHookGroups: [] }],
+    ["other marker key only", { settingsBeforeSha256: "a" }],
+    ["snapshot wrapped under another key", { snapshot: { version: 1, removedHookGroups: [] } }],
+  ];
+  for (const [label, body] of variants) {
+    it(`refuses a snapshot variant (${label}) and leaves settings.json untouched`, async () => {
+      const live = { theme: "dark" };
+      writeSettings(live);
+      const src = path.join(tmp, "variant.json");
+      fs.writeFileSync(src, `${JSON.stringify(body)}\n`);
+      await expect(
+        uninstall({ homeDir, settingsPath, restoreFrom: src, mcpExec: execThrowsIfCalled() }),
+      ).rejects.toThrow(/variant\.json is a harness uninstall snapshot record, not a settings file/);
+      expect(readJson(settingsPath)).toEqual(live);
+    });
+  }
+
+  it("restores a settings backup with unrelated nested objects (single top-level key)", async () => {
+    const pristine = { env: { removedNote: { a: 1 } } };
+    const src = path.join(homeDir, "settings.json.pre-harness-2026-05-11");
+    fs.writeFileSync(src, `${JSON.stringify(pristine)}\n`);
+    writeSettings({ theme: "light" });
+    const r = await uninstall({ homeDir, settingsPath, restoreFrom: src, mcpExec: execThrowsIfCalled() });
+    expect(r.mode).toBe("restore");
+    expect(readJson(settingsPath)).toEqual(pristine);
+  });
+
   it("still restores a real settings backup that happens to carry a version key", async () => {
     const pristine = { version: 3, theme: "dark" };
     const backupSource = path.join(homeDir, "settings.json.pre-harness-2026-05-11");
