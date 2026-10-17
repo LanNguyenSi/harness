@@ -8,7 +8,7 @@ import { EX_FAIL, HarnessExitError } from "../exit-codes.js";
 // neither module touches the other's bindings at top level; they are used only
 // inside function bodies. Keep it that way (no top-level use of these three).
 import { listCodexSnapshots, readCodexSnapshot, retireCodexSnapshot } from "../gate/codex-snapshot.js";
-import { linkChain } from "../gate/link-chain.js";
+import { linkChain, walkLinkChain } from "../gate/link-chain.js";
 import { namesSameEntry } from "../gate/snapshot.js";
 
 export const CODEX_MANAGED_SOURCE_PREFIX = "# Harness Codex hook wiring.";
@@ -1716,35 +1716,17 @@ export function assertConfigSemanticInvariant(
 }
 
 /**
- * Follows a dangling link chain hop by hop with `readlink` and returns the
- * first path in it that does not exist, so a dangling refusal names the
- * missing file rather than the first hop (which may be an existing
- * intermediate link). Each relative link text is resolved against the
- * physical directory of the link holding it, as the kernel does. Returns
- * undefined when the chain cannot be walked (it changed under us, or a
- * hop is not readable); the caller then words the refusal generically.
+ * The first path of a dangling link chain that does not exist, so a dangling
+ * refusal names the missing file rather than the first hop (which may be an
+ * existing intermediate link). The chain is the one the gate walks (each
+ * relative link text resolved against the physical directory of the link
+ * holding it). Undefined when the chain does not end at a missing file (it
+ * changed under us, or a hop is not readable); the caller then words the
+ * refusal generically.
  */
 function missingEndOfLinkChain(start: string): string | undefined {
-  const MAX_HOPS = 40;
-  let current = start;
-  for (let hop = 0; hop < MAX_HOPS; hop++) {
-    let next: string;
-    try {
-      const linkText = fs.readlinkSync(current);
-      next = path.resolve(fs.realpathSync(path.dirname(current)), linkText);
-    } catch {
-      return undefined;
-    }
-    let nextStat: fs.Stats;
-    try {
-      nextStat = fs.lstatSync(next);
-    } catch (err) {
-      return (err as NodeJS.ErrnoException).code === "ENOENT" ? next : undefined;
-    }
-    if (!nextStat.isSymbolicLink()) return undefined;
-    current = next;
-  }
-  return undefined;
+  const { chain, end } = walkLinkChain(start);
+  return end === "dangling" ? chain[chain.length - 1] : undefined;
 }
 
 /**
