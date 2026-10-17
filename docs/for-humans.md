@@ -275,7 +275,12 @@ other state refuses and names the way out), and `gate enable` restores
 it and retires it. On Claude a removed group counts as back only when
 the file holds an unchanged copy; a group with the same matcher but
 other content makes enable refuse unless `--force`, and a snapshot
-that names another settings file in the same directory is foreign. On
+that names another settings file in the same directory is foreign. A
+`settings.json` that is a symlink (a dotfiles setup), given with
+`--settings` or the default, is followed and written through: the file
+it leads to is rewritten, the link stays a link, and the snapshot and the
+backup sit beside that file (in a dotfiles repository they show up in its
+working tree, so ignore `harness.gate-disable.*` and `*.bak.*` there). On
 Codex a snapshot of another config beside it keeps `gate enable`
 non-zero and is named with the `--config` that restores it.
 See [`docs/okf/gate-kill-switch.md`](okf/gate-kill-switch.md). On
