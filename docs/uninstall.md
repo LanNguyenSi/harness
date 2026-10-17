@@ -63,8 +63,9 @@ the `harness.uninstall.<TS>.json` record. The source must be a JSON
 object, and a file with the snapshot record's shape is refused, so the
 record cannot replace `settings.json`: any top-level
 `removedHookGroups`, `removedMcpServers`, `settingsBackupPath`,
-`settingsBeforeSha256` or `settingsAfterSha256` key (in any shape, with or
-without `version`), or an object whose only key wraps such a record. A restore also removes the manifest, lock
+`settingsBeforeSha256`, `settingsAfterSha256` or `restoredFrom` key (in any
+shape, with or without `version`), or an object whose only key holds an
+object carrying one of those keys (one wrapper level, no deeper). A restore also removes the manifest, lock
 and generated tree and deregisters harness-owned MCP servers.
 
 Flags: `--home <path>` overrides the settings home `~/.claude/` (and,

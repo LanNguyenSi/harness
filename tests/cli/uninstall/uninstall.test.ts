@@ -3,6 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { uninstall, UninstallError } from "../../../src/cli/uninstall/index.js";
+import { SNAPSHOT_MARKER_KEYS } from "../../../src/cli/uninstall/snapshot.js";
 import {
   BACKUP_INFIX,
   SNAPSHOT_BASENAME_PREFIX,
@@ -478,6 +479,72 @@ describe("uninstall — --restore-from", () => {
       expect(readJson(settingsPath)).toEqual(live);
     });
   }
+
+  it("pins the snapshot marker key list", () => {
+    expect([...SNAPSHOT_MARKER_KEYS]).toEqual([
+      "removedHookGroups",
+      "removedMcpServers",
+      "settingsBackupPath",
+      "settingsBeforeSha256",
+      "settingsAfterSha256",
+      "restoredFrom",
+    ]);
+  });
+
+  for (const key of SNAPSHOT_MARKER_KEYS) {
+    it(`refuses a source whose only key is the marker ${key}`, async () => {
+      const live = { theme: "dark" };
+      writeSettings(live);
+      const src = path.join(tmp, "variant.json");
+      fs.writeFileSync(src, `${JSON.stringify({ [key]: "x" })}\n`);
+      await expect(
+        uninstall({ homeDir, settingsPath, restoreFrom: src, mcpExec: execThrowsIfCalled() }),
+      ).rejects.toThrow(/is a harness uninstall snapshot record, not a settings file/);
+      expect(readJson(settingsPath)).toEqual(live);
+    });
+
+    it(`refuses a source with the marker ${key} next to other top-level keys`, async () => {
+      const live = { theme: "dark" };
+      writeSettings(live);
+      const src = path.join(tmp, "variant.json");
+      fs.writeFileSync(src, `${JSON.stringify({ theme: "light", [key]: "x" })}\n`);
+      await expect(
+        uninstall({ homeDir, settingsPath, restoreFrom: src, mcpExec: execThrowsIfCalled() }),
+      ).rejects.toThrow(/is a harness uninstall snapshot record, not a settings file/);
+      expect(readJson(settingsPath)).toEqual(live);
+    });
+  }
+
+  it("refuses a one-level wrapper around a marker key", async () => {
+    const live = { theme: "dark" };
+    writeSettings(live);
+    const src = path.join(tmp, "variant.json");
+    fs.writeFileSync(src, `${JSON.stringify({ env: { settingsBackupPath: "/x" } })}\n`);
+    await expect(
+      uninstall({ homeDir, settingsPath, restoreFrom: src, mcpExec: execThrowsIfCalled() }),
+    ).rejects.toThrow(/is a harness uninstall snapshot record, not a settings file/);
+    expect(readJson(settingsPath)).toEqual(live);
+  });
+
+  it("restores a two-level wrapper around a marker key (the check stops at one level)", async () => {
+    const body = { a: { b: { removedHookGroups: [] } } };
+    writeSettings({ theme: "light" });
+    const src = path.join(homeDir, "two-level.json");
+    fs.writeFileSync(src, `${JSON.stringify(body)}\n`);
+    const r = await uninstall({ homeDir, settingsPath, restoreFrom: src, mcpExec: execThrowsIfCalled() });
+    expect(r.mode).toBe("restore");
+    expect(readJson(settingsPath)).toEqual(body);
+  });
+
+  it("restores a single-key wrapper whose inner object has no marker key", async () => {
+    const body = { env: { FOO: "1" } };
+    writeSettings({ theme: "light" });
+    const src = path.join(homeDir, "env-only.json");
+    fs.writeFileSync(src, `${JSON.stringify(body)}\n`);
+    const r = await uninstall({ homeDir, settingsPath, restoreFrom: src, mcpExec: execThrowsIfCalled() });
+    expect(r.mode).toBe("restore");
+    expect(readJson(settingsPath)).toEqual(body);
+  });
 
   it("restores a settings backup with unrelated nested objects (single top-level key)", async () => {
     const pristine = { env: { removedNote: { a: 1 } } };

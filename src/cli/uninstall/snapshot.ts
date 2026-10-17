@@ -67,26 +67,31 @@ export const SNAPSHOT_MARKER_KEYS = [
   "settingsBackupPath",
   "settingsBeforeSha256",
   "settingsAfterSha256",
+  "restoredFrom",
 ] as const;
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
+function hasMarkerKey(value: Record<string, unknown>): boolean {
+  return SNAPSHOT_MARKER_KEYS.some((k) => Object.prototype.hasOwnProperty.call(value, k));
+}
+
 /**
  * True when `value` is an uninstall snapshot record, or a hand-edited or
  * partial one: a top-level object carrying any snapshot marker key in any
- * shape (with or without `version`), or an object whose only key wraps
- * such a record. A plain settings.json, nested objects included, is not.
+ * shape (with or without `version`), or an object whose only key holds a
+ * plain object that carries one (one wrapper level, no deeper). A plain
+ * settings.json, nested objects included, is not.
  */
 export function looksLikeUninstallSnapshot(value: unknown): boolean {
   if (!isPlainObject(value)) return false;
-  if (SNAPSHOT_MARKER_KEYS.some((k) => Object.prototype.hasOwnProperty.call(value, k))) {
-    return true;
-  }
+  if (hasMarkerKey(value)) return true;
   const keys = Object.keys(value);
-  if (keys.length === 1) return looksLikeUninstallSnapshot(value[keys[0] as string]);
-  return false;
+  if (keys.length !== 1) return false;
+  const inner = value[keys[0] as string];
+  return isPlainObject(inner) && hasMarkerKey(inner);
 }
 
 export function sha256Hex(input: string | Buffer): string {

@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
-- `harness uninstall --restore-from` refuses a hand-edited or partial uninstall snapshot as well as the exact record: any top-level `removedHookGroups`, `removedMcpServers`, `settingsBackupPath`, `settingsBeforeSha256` or `settingsAfterSha256` key in any shape, with or without `version`, and an object whose only key wraps such a record. A settings backup, including one with a `version` key or unrelated nested objects, restores as before (task bb7f4c07).
+- `harness uninstall --restore-from` refuses a hand-edited or partial uninstall snapshot as well as the exact record: any top-level `removedHookGroups`, `removedMcpServers`, `settingsBackupPath`, `settingsBeforeSha256`, `settingsAfterSha256` or `restoredFrom` key in any shape, with or without `version`, and an object whose only key holds an object carrying one of those keys (one wrapper level, no deeper). A settings backup, including one with a `version` key or unrelated nested objects, restores as before (task bb7f4c07).
 
 - The knowledge bundle's `pause-vs-gate-kill-switch.md` runbook is replaced by `docs/okf/gate-kill-switch.md`, a gate-only runbook for `harness gate disable` / `enable` on both runtimes, and `docs/CLI.md`, `docs/for-humans.md`, `docs/ARCHITECTURE.md`, `docs/policy-packs/branch-protection.md` and the remaining knowledge-bundle docs no longer describe `harness pause` / `harness resume`, the approval-signing key projection or pending approvals (task 2ef35911).
 
