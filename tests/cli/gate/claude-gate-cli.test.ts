@@ -975,6 +975,11 @@ describe("harness gate (claude): a snapshot recorded under the link's own name, 
     await mergeAndRestoreThrough("settings.json", (...argv) => runIn(aDir, ...argv));
   });
 
+  it.skipIf(!caseInsensitiveFs())("through another letter case of the directory, on a filesystem that folds case", async () => {
+    // The listing finds the snapshot under dot/A as given and under dot/a, where the link leads: one file, one entry.
+    await mergeAndRestoreThrough(path.join(tmp, "dot", "A", "settings.json"), (...argv) => runIn(tmp, ...argv));
+  });
+
   it("through `..` after a directory link, which the kernel takes from the link's real location", async () => {
     // home/in -> dot/b, so home/in/../a is dot/a; a lexical reading would look for home/a, which does not exist.
     fs.mkdirSync(path.join(tmp, "dot", "b"));

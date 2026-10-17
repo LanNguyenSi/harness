@@ -59,7 +59,7 @@ export function walkLinkChain(start: string): LinkChain {
       const text = fs.readlinkSync(current);
       const linkDir = fs.realpathSync.native(path.dirname(current));
       // Appended as written: `path.join` would fold `d/..` before the kernel's walk below.
-      raw = path.isAbsolute(text) ? text : `${linkDir.endsWith(path.sep) ? linkDir : `${linkDir}${path.sep}`}${text}`;
+      raw = path.isAbsolute(text) ? text : `${linkDir}${path.sep}${text}`;
     } catch (err) {
       // `readlink` answers EINVAL for anything that exists and is not a symlink.
       return { chain, end: (err as NodeJS.ErrnoException).code === "EINVAL" ? "target" : endOf(err) };
