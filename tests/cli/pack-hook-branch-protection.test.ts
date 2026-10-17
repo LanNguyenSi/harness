@@ -3,12 +3,14 @@
 // temporary repositories; the error rows inject the git runner so a timeout,
 // a signal or a missing binary can be produced on any host.
 import { execFileSync, spawnSync } from "node:child_process";
+import { EventEmitter } from "node:events";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { PassThrough, Readable, Writable } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildProgram } from "../../src/cli/index.js";
+import { STDIO_DRAIN_TIMEOUT_MS } from "../../src/cli/drain-stdio.js";
 import { loadManifest } from "../../src/cli/loader.js";
 import { BLOCK_TEXT_MAX_BYTES } from "../../src/runtime/bounded-text.js";
 import { GIT_READ_DEADLINE_MS, runPackHookBranchProtectionCli } from "../../src/cli/pack/hook-branch-protection.js";
@@ -1689,5 +1691,159 @@ describe.skipIf(!GIT_AVAILABLE)("branch-protection hook: a directory that can no
       expect(run.exitCode).toBe(0);
       expect(envelope(run).reason).toBe(`branch-protection: refusing apply_patch: git could not report the branch of ${b} (${detail}).`);
     }
+  });
+});
+
+// A Claude Code block is the deny envelope on stdout plus exit 0. When the
+// envelope cannot be written, exit 0 would be read as an allow, so the block
+// fails closed: exit 2 with the reason on stderr. Allow decisions, the Codex
+// contract and a reader that is merely slow keep their exit codes.
+describe.skipIf(!GIT_AVAILABLE)("branch-protection hook: a block whose envelope cannot be written to stdout fails closed, real git", () => {
+  // The bytes the unchanged code wrote for this event on an open stdout,
+  // captured from the base revision: the envelope, then one newline.
+  const goldenEnvelope = (repo: string): string => {
+    const where = JSON.stringify(repo).slice(1, -1);
+    const reason = String.raw`branch-protection: refusing Write on protected branch \"master\" (checked in ${where}).\nCreate a feature branch first, then retry:\n  git checkout -b <feature>\nProtected branches: master, main, develop.`;
+    return (
+      String.raw`{"decision":"block","reason":"${reason}","hookSpecificOutput":{"hookEventName":"PreToolUse",` +
+      String.raw`"permissionDecision":"deny","permissionDecisionReason":"${reason}"}}` +
+      "\n"
+    );
+  };
+
+  /** A stdout whose write callback reports EPIPE, like a pipe whose reader has gone. */
+  function epipeStdout(): { stream: Writable; writes: string[] } {
+    const writes: string[] = [];
+    const stream = new Writable({
+      write(chunk, _enc, cb) {
+        writes.push(chunk.toString("utf8"));
+        cb(Object.assign(new Error("write EPIPE"), { code: "EPIPE" }));
+      },
+    });
+    // The host's hook also carries a listener; the stream still emits the error.
+    stream.on("error", () => undefined);
+    return { stream, writes };
+  }
+
+  async function runWith(
+    stdout: NodeJS.WritableStream,
+    repo: string,
+    opts: { runtime?: string } = {},
+  ): Promise<{ exitCode: number; blocked: boolean; diagnostic: string; stderr: string }> {
+    const err = capture();
+    const result = await runPackHookBranchProtectionCli({
+      stdin: streamFrom(JSON.stringify(writeEvent(repo, path.join(repo, "x.txt")))),
+      stdout,
+      stderr: err.stream,
+      manifest: manifestWithPack(),
+      ...opts,
+    });
+    return { ...result, stderr: err.output() };
+  }
+
+  it("a write callback that reports EPIPE exits 2 with the reason on stderr", async () => {
+    const repo = makeRepo("master");
+    const out = epipeStdout();
+    const run = await runWith(out.stream, repo);
+    expect(run.blocked).toBe(true);
+    expect(run.exitCode).toBe(2);
+    expect(out.writes).toEqual([goldenEnvelope(repo)]);
+    expect(run.stderr).toContain("the block envelope could not be written to stdout (write EPIPE); exiting 2");
+    expect(run.stderr).toContain(`branch-protection: refusing Write on protected branch "master" (checked in ${repo}).`);
+    expect(run.stderr).toContain("git checkout -b <feature>");
+  });
+
+  it("a stdout that is already destroyed exits 2 without writing to it", async () => {
+    const repo = makeRepo("master");
+    const out = epipeStdout();
+    out.stream.destroy();
+    const run = await runWith(out.stream, repo);
+    expect(run).toMatchObject({ blocked: true, exitCode: 2 });
+    expect(out.writes).toEqual([]);
+    expect(run.stderr).toContain("the block envelope could not be written to stdout (stdout is closed); exiting 2");
+    expect(run.stderr).toContain('refusing Write on protected branch "master"');
+  });
+
+  it("an 'error' event during the wait, with no callback, exits 2", async () => {
+    const repo = makeRepo("master");
+    const fake = new EventEmitter() as EventEmitter & { write: (text: string, cb: () => void) => boolean };
+    fake.write = () => {
+      queueMicrotask(() => fake.emit("error", new Error("write EPIPE")));
+      return true;
+    };
+    const run = await runWith(fake as unknown as NodeJS.WritableStream, repo);
+    expect(run).toMatchObject({ blocked: true, exitCode: 2 });
+    expect(run.stderr).toContain("(write EPIPE); exiting 2");
+  });
+
+  it("a write that throws exits 2", async () => {
+    const repo = makeRepo("master");
+    const fake = new EventEmitter() as EventEmitter & { write: () => boolean };
+    fake.write = () => {
+      throw new Error("write after end");
+    };
+    const run = await runWith(fake as unknown as NodeJS.WritableStream, repo);
+    expect(run).toMatchObject({ blocked: true, exitCode: 2 });
+    expect(run.stderr).toContain("(write after end); exiting 2");
+  });
+
+  it("a stdout that closes while the write is pending exits 2", async () => {
+    const repo = makeRepo("master");
+    const fake = new EventEmitter() as EventEmitter & { write: () => boolean; destroyed: boolean; writable: boolean };
+    fake.destroyed = false;
+    fake.writable = true;
+    fake.write = () => {
+      // The callback never comes; the stream is closed by the time the wait ends.
+      fake.destroyed = true;
+      fake.writable = false;
+      return false;
+    };
+    const run = await runWith(fake as unknown as NodeJS.WritableStream, repo);
+    expect(run).toMatchObject({ blocked: true, exitCode: 2 });
+    expect(run.stderr).toContain("(stdout is closed); exiting 2");
+  });
+
+  it("the normal block writes exactly the envelope and one newline and exits 0", async () => {
+    const repo = makeRepo("master");
+    const out = capture();
+    const run = await runWith(out.stream, repo);
+    expect(run).toMatchObject({ blocked: true, exitCode: 0 });
+    expect(out.output()).toBe(goldenEnvelope(repo));
+    expect(run.stderr).not.toContain("could not be written");
+  });
+
+  it("a slow but live reader (the write is still pending when the bound ends) keeps exit 0", async () => {
+    const repo = makeRepo("master");
+    const queued: string[] = [];
+    // An open stream whose write callback does not come within the bound.
+    const slow = new Writable({
+      write(chunk, _enc, cb) {
+        queued.push(chunk.toString("utf8"));
+        setTimeout(cb, STDIO_DRAIN_TIMEOUT_MS * 2).unref();
+      },
+    });
+    const run = await runWith(slow, repo);
+    expect(run).toMatchObject({ blocked: true, exitCode: 0 });
+    expect(queued).toEqual([goldenEnvelope(repo)]);
+    expect(run.stderr).not.toContain("could not be written");
+  });
+
+  it("an allow with an EPIPE stdout keeps exit 0 and writes no envelope", async () => {
+    const repo = makeRepo("feat/x");
+    const out = epipeStdout();
+    const run = await runWith(out.stream, repo);
+    expect(run).toMatchObject({ blocked: false, exitCode: 0 });
+    expect(out.writes).toEqual([]);
+    expect(run.stderr).not.toContain("could not be written");
+  });
+
+  it("the Codex contract is unchanged with an EPIPE stdout: exit 2 and the text on stderr", async () => {
+    const repo = makeRepo("master");
+    const out = epipeStdout();
+    const run = await runWith(out.stream, repo, { runtime: "codex" });
+    expect(run).toMatchObject({ blocked: true, exitCode: 2 });
+    expect(out.writes).toEqual([]);
+    expect(run.stderr).toContain('refusing Write on protected branch "master"');
+    expect(run.stderr).not.toContain("could not be written");
   });
 });
