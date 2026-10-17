@@ -858,6 +858,59 @@ function disableAt(target: string, matcher: string, now: Date): string {
   return d.snapshotPath;
 }
 
+describe("the commands a refusal prints repeat the call's --config only when it had one", () => {
+  const home = (): string => path.join(tmp, "home");
+  const homeConfig = (): string => path.join(home(), ".codex", "config.toml");
+
+  it("names the install and the list command for a config without a block or a matcher that matches", () => {
+    fs.mkdirSync(path.dirname(configPath), { recursive: true });
+    fs.writeFileSync(configPath, OPERATOR_BEFORE);
+    expect(thrownMessage(() => codexGateDisable({ configPath, matcher: "x", now: T0 }))).toContain(
+      `\`harness apply --runtime codex --install --codex-config ${configPath}\` writes that block.`,
+    );
+    installConfig(configPath);
+    expect(thrownMessage(() => codexGateDisable({ configPath, matcher: "no-such", now: T0 }))).toContain(
+      `Run \`harness gate disable --runtime codex --config ${configPath}\` (no --matcher)`,
+    );
+    // Without --config the commands are the bare ones.
+    installConfig(homeConfig());
+    const bare = thrownMessage(() => codexGateDisable({ homeDir: home(), matcher: "no-such", now: T0 }));
+    expect(bare).toContain("Run `harness gate disable --runtime codex` (no --matcher)");
+    expect(bare).not.toContain("--config");
+  });
+
+  it("names the enable command for a unit that is off already, and the install for two units with one id", () => {
+    installConfig(configPath);
+    codexGateDisable({ configPath, matcher: "apply_patch", now: T0 });
+    expect(thrownMessage(() => codexGateDisable({ configPath, matcher: "apply_patch", now: T1 }))).toContain(
+      `\`harness gate enable --runtime codex --config ${configPath}\` restores them.`,
+    );
+    installConfig(homeConfig());
+    codexGateDisable({ homeDir: home(), matcher: "apply_patch", now: T0 });
+    const bare = thrownMessage(() => codexGateDisable({ homeDir: home(), matcher: "apply_patch", now: T1 }));
+    expect(bare).toContain("`harness gate enable --runtime codex` restores them.");
+    expect(bare).not.toContain("--config");
+
+    const other = path.join(tmp, "twins", "config.toml");
+    const text = installConfig(other);
+    fs.writeFileSync(other, text.replace("# harness hook: hand-shell-guard", `# harness hook: ${BP}`));
+    expect(thrownMessage(() => codexGateDisable({ configPath: other, matcher: "apply_patch", now: T0 }))).toContain(
+      `Re-run \`harness apply --runtime codex --install --codex-config ${other}\` to rewrite the block.`,
+    );
+  });
+
+  it("names the ways out with the call's --config when a snapshot cannot be restored, and bare ones without", () => {
+    installConfig(homeConfig());
+    codexGateDisable({ homeDir: home(), matcher: "Bash", now: T0 });
+    fs.rmSync(homeConfig());
+    const bare = thrownMessage(() => codexGateEnable({ homeDir: home() }));
+    expect(bare).toContain("Ways out: run `harness apply --runtime codex --install`,");
+    expect(bare).toContain("the next `harness gate enable --runtime codex` (or disable) retires the snapshot");
+    expect(bare).not.toContain("--config");
+    expect(bare).not.toContain("--codex-config");
+  });
+});
+
 describe("codexGateEnable: retired snapshots are never applied again", () => {
   it("renames each snapshot it applies to *.restored.json, keeps it on disk and never lists it again", () => {
     installConfig(configPath);
