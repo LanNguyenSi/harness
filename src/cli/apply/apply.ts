@@ -524,6 +524,20 @@ function resolveTargetPath(target: string, homeDir?: string): string {
   return path.resolve(p);
 }
 
+/**
+ * The Codex config path handed to the installer. A `..` after a directory link
+ * leads elsewhere than a lexical fold of the spelling (`via/..` is the parent
+ * of where `via` leads), so a path with a `..` segment is made absolute without
+ * folding and the installer takes it through the directory the kernel reaches.
+ * Every other spelling, and a `~` path, resolves as `resolveTargetPath` does.
+ */
+function resolveCodexConfigPath(target: string): string {
+  if (target === "~" || target.startsWith("~/") || !target.split(path.sep).includes("..")) {
+    return resolveTargetPath(target);
+  }
+  return path.isAbsolute(target) ? target : `${process.cwd()}${path.sep}${target}`;
+}
+
 function readTargetJson(targetPath: string): {
   parsed: Record<string, unknown> | null;
   parseError: string | null;
@@ -1020,7 +1034,7 @@ export async function apply(opts: ApplyOptions = {}): Promise<ApplyResult> {
     }
     codexInstallPlan = planCodexConfigInstall({
       ...(opts.codexConfigPath !== undefined
-        ? { configPath: resolveTargetPath(opts.codexConfigPath) }
+        ? { configPath: resolveCodexConfigPath(opts.codexConfigPath) }
         : {}),
       ...(opts.homeDir !== undefined ? { homeDir: opts.homeDir } : {}),
       generatedPath: path.join(generatedDir, CODEX_CONFIG_BASENAME),
