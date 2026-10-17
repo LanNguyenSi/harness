@@ -153,7 +153,7 @@ working. Only a key that was never valid fails the load.
 
 | Runtime | Refusal | Allow |
 |---|---|---|
-| claude-code | one JSON line on stdout, `{"decision":"block","reason":...,"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":...}}`, exit 0 | nothing on stdout, exit 0 |
+| claude-code | one JSON line on stdout, `{"decision":"block","reason":...,"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":...}}`, exit 0; when the envelope cannot be written to stdout (the reader is gone or the write fails), the reason on stderr, exit 2 | nothing on stdout, exit 0 |
 | codex (`--runtime codex`) | the reason on stderr, exit 2, nothing on stdout | nothing on stdout, exit 0 |
 
 An unknown `--runtime` value refuses with exit 2, which both runtimes read

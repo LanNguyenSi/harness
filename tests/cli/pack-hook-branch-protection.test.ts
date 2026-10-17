@@ -1776,6 +1776,31 @@ describe.skipIf(!GIT_AVAILABLE)("branch-protection hook: a block whose envelope 
     expect(run.stderr).toContain("(write EPIPE); exiting 2");
   });
 
+  it("an 'error' event that arrives after a macrotask, inside the wait, exits 2", async () => {
+    const repo = makeRepo("master");
+    const fake = new EventEmitter() as EventEmitter & { write: (text: string, cb: () => void) => boolean };
+    fake.write = () => {
+      setTimeout(() => fake.emit("error", new Error("write EPIPE")), 100);
+      return false;
+    };
+    const run = await runWith(fake as unknown as NodeJS.WritableStream, repo);
+    expect(run).toMatchObject({ blocked: true, exitCode: 2 });
+    expect(run.stderr).toContain("(write EPIPE); exiting 2");
+  });
+
+  it("a write callback that errors after a macrotask, inside the wait, exits 2", async () => {
+    const repo = makeRepo("master");
+    const out = new Writable({
+      write(_chunk, _encoding, cb) {
+        setTimeout(() => cb(new Error("write EPIPE")), 100);
+      },
+    });
+    out.on("error", () => undefined);
+    const run = await runWith(out, repo);
+    expect(run).toMatchObject({ blocked: true, exitCode: 2 });
+    expect(run.stderr).toContain("exiting 2");
+  });
+
   it("a write that throws exits 2", async () => {
     const repo = makeRepo("master");
     const fake = new EventEmitter() as EventEmitter & { write: () => boolean };
