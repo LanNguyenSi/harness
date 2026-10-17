@@ -1695,7 +1695,10 @@ describe("codexGateEnable: integrity", () => {
     installConfig(configPath);
     codexGateDisable({ configPath, matcher: "apply_patch", now: T0 });
     fs.writeFileSync(configPath, OPERATOR_BEFORE);
-    expect(() => codexGateEnable({ configPath, force: true })).toThrow(/no harness-managed Codex hook block/);
+    const message = thrownMessage(() => codexGateEnable({ configPath, force: true }));
+    expect(message).toMatch(/no harness-managed Codex hook block/);
+    expect(message).toContain(`Ways out: run \`harness apply --runtime codex --install --codex-config ${configPath}\``);
+    expect(message).toContain(`the next \`harness gate enable --runtime codex --config ${configPath}\` (or disable) retires`);
     expect(fs.readFileSync(configPath, "utf8")).toBe(OPERATOR_BEFORE);
   });
 
@@ -1713,6 +1716,7 @@ describe("codexGateEnable: integrity", () => {
     const forced = thrownMessage(() => codexGateEnable({ configPath, force: true, now: T1 }));
     expect(forced).toMatch(/does not rebuild the config/);
     expect(forced).toContain(`restore the config from ${d.backupPath}`);
+    expect(forced).toContain(`Ways out: run \`harness apply --runtime codex --install --codex-config ${configPath}\``);
     expect(fs.readFileSync(configPath, "utf8")).toBe(disabled);
     expect(listCodexSnapshots(path.dirname(configPath))).toEqual([d.snapshotPath]);
   });
