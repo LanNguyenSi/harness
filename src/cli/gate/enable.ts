@@ -29,10 +29,16 @@ import {
   changedLabel,
   type ForeignSnapshot,
   groupLabel,
+  isReadOnlyWriteError,
   listLiveSnapshots,
   missingLabel,
   planRestore,
+  readOnlyLinkTargetText,
+  readOnlyWritablePlace,
+  resolveSettingsEntry,
   retireSnapshot,
+  settingsFlag,
+  settingsOwnEntry,
   sha256Hex,
 } from "./snapshot.js";
 
@@ -112,14 +118,15 @@ interface CurrentSettings {
   hooks: Record<string, unknown[]>;
 }
 
-function readCurrentSettings(settingsPath: string): CurrentSettings {
+/** `missingWayOut` ends the message when the file is not there: what to do with the live snapshot waiting for it. */
+function readCurrentSettings(settingsPath: string, missingWayOut: string): CurrentSettings {
   let raw: string;
   try {
     raw = fs.readFileSync(settingsPath, "utf8");
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === "ENOENT") {
       throw new GateEnableError(
-        `settings file not found: ${settingsPath}; cannot restore into a missing target`,
+        `settings file not found: ${settingsPath}; cannot restore into a missing target. ${missingWayOut}`,
       );
     }
     throw new GateEnableError(`cannot read ${settingsPath}: ${(err as Error).message}`);
@@ -157,12 +164,18 @@ function readCurrentSettings(settingsPath: string): CurrentSettings {
 export function gateEnable(opts: GateEnableOptions = {}): GateEnableResult {
   const settingsPath = resolveSettingsPath(opts);
 
+  // Reads and writes go to the file itself, so a settings.json that is a
+  // symlink stays one; the snapshots of either spelling are found by the listing.
+  const entry = resolveSettingsEntry(settingsPath);
+
   const found = listLiveSnapshots(settingsPath);
   if (!found.ok) {
     throw new GateEnableError(
-      `${found.reason}. Nothing was restored: a live snapshot that cannot be read may name groups still removed ` +
-        `from ${settingsPath}. Move ${found.path} aside (or rename it to *.restored.json once its groups are back) ` +
-        `and run \`harness gate enable\` again.`,
+      `${found.reason}. Nothing was restored: a live snapshot that cannot be read, or that records no target, may ` +
+        `name groups still removed from ${settingsPath}. Move ${found.path} aside (or rename it to ` +
+        `*.restored.json once its groups are back; if it names groups that are still removed, put them back by ` +
+        `hand first, the snapshot's settingsBackupPath names the file as it was before the disable) and run ` +
+        `\`harness gate enable ${settingsFlag(settingsPath)}\` again.`,
     );
   }
   const foreign = found.skippedForeign;
@@ -173,7 +186,11 @@ export function gateEnable(opts: GateEnableOptions = {}): GateEnableResult {
   const snapshot = newest.snapshot;
   const remaining = older.map((l) => l.path);
 
-  const current = readCurrentSettings(settingsPath);
+  const current = readCurrentSettings(
+    entry,
+    `The snapshot ${newest.path} stays live. Restore the file from ${snapshot.settingsBackupPath} (the file as it ` +
+      `was before the disable), then run \`harness gate enable ${settingsFlag(settingsPath)}\` again.`,
+  );
   const currentSha = sha256Hex(current.raw);
 
   if (currentSha === snapshot.settingsBeforeSha256) {
@@ -205,9 +222,9 @@ export function gateEnable(opts: GateEnableOptions = {}): GateEnableResult {
             `(${plan.restored.map(missingLabel).join("; ")}).`
           : "") +
         ` Nothing was changed and the snapshot stays live. If the file's group stands in for the snapshot's, run ` +
-        `\`harness gate enable --force\`: it takes it as back (the snapshot's group is not put back), puts the ` +
+        `\`harness gate enable --force ${settingsFlag(settingsPath)}\`: it takes it as back (the snapshot's group is not put back), puts the ` +
         `missing groups back and keeps every other edit. Otherwise make the file hold the snapshot's group ` +
-        `(${snapshot.settingsBackupPath} has it) and run \`harness gate enable\` again.`,
+        `(${snapshot.settingsBackupPath} has it) and run \`harness gate enable ${settingsFlag(settingsPath)}\` again.`,
     );
   }
   if (plan.restored.length === 0) {
@@ -246,12 +263,25 @@ export function gateEnable(opts: GateEnableOptions = {}): GateEnableResult {
         `${plan.restored.length} hook group(s) it removed are still missing ` +
         `(${plan.restored.map(missingLabel).join("; ")}). Nothing was changed and the ` +
         `snapshot ${newest.path} stays live. Inspect the diff against ${snapshot.settingsBackupPath}, then run ` +
-        `\`harness gate enable --force\`: it puts the missing groups back, leaves a group that is already ` +
+        `\`harness gate enable --force ${settingsFlag(settingsPath)}\`: it puts the missing groups back, leaves a group that is already ` +
         `there alone and keeps every other edit.`,
     );
   }
 
-  atomicWriteFile(settingsPath, newSettings);
+  try {
+    atomicWriteFile(entry, newSettings);
+  } catch (err) {
+    if (entry === settingsOwnEntry(settingsPath) || !isReadOnlyWriteError(err)) throw err;
+    // A copy in place of the link would not find the snapshot, which sits beside the file. Moving the snapshot
+    // aside needs the directory writable too, so the by-hand way defers that step.
+    throw new GateEnableError(
+      `${readOnlyLinkTargetText(settingsPath, entry, err)} Nothing was changed and the snapshot ${newest.path} stays ` +
+        `live. Make ${readOnlyWritablePlace(entry, err)} writable and run \`harness gate enable${opts.force ? " --force" : ""} ` +
+        `${settingsFlag(settingsPath)}\` again; or by hand: put the groups back (the snapshot lists them; ` +
+        `${snapshot.settingsBackupPath} is the file as it was before the disable), then move the snapshot aside ` +
+        `(rename it to *.restored.json) once you can write its directory.`,
+    );
+  }
 
   return {
     mode: "restored",

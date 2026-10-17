@@ -8,6 +8,7 @@ import { EX_FAIL, HarnessExitError } from "../exit-codes.js";
 // neither module touches the other's bindings at top level; they are used only
 // inside function bodies. Keep it that way (no top-level use of these three).
 import { listCodexSnapshots, readCodexSnapshot, retireCodexSnapshot } from "../gate/codex-snapshot.js";
+import { linkChain, walkLinkChain } from "../gate/link-chain.js";
 import { namesSameEntry } from "../gate/snapshot.js";
 
 export const CODEX_MANAGED_SOURCE_PREFIX = "# Harness Codex hook wiring.";
@@ -1715,38 +1716,6 @@ export function assertConfigSemanticInvariant(
 }
 
 /**
- * Follows a dangling link chain hop by hop with `readlink` and returns the
- * first path in it that does not exist, so a dangling refusal names the
- * missing file rather than the first hop (which may be an existing
- * intermediate link). Each relative link text is resolved against the
- * physical directory of the link holding it, as the kernel does. Returns
- * undefined when the chain cannot be walked (it changed under us, or a
- * hop is not readable); the caller then words the refusal generically.
- */
-function missingEndOfLinkChain(start: string): string | undefined {
-  const MAX_HOPS = 40;
-  let current = start;
-  for (let hop = 0; hop < MAX_HOPS; hop++) {
-    let next: string;
-    try {
-      const linkText = fs.readlinkSync(current);
-      next = path.resolve(fs.realpathSync(path.dirname(current)), linkText);
-    } catch {
-      return undefined;
-    }
-    let nextStat: fs.Stats;
-    try {
-      nextStat = fs.lstatSync(next);
-    } catch (err) {
-      return (err as NodeJS.ErrnoException).code === "ENOENT" ? next : undefined;
-    }
-    if (!nextStat.isSymbolicLink()) return undefined;
-    current = next;
-  }
-  return undefined;
-}
-
-/**
  * Resolves a symlinked config path to the regular file it points at (task
  * 1637fbc8). `atomicWriteFile` renames a temp file over its destination,
  * which would replace a symlink with a regular file and leave the link's
@@ -1767,21 +1736,28 @@ export function resolveConfigSymlink(requestedPath: string): string {
   }
   if (!linkStat.isSymbolicLink()) return requestedPath;
 
+  // Whether the link dangles is decided by the gate's link walker, which
+  // resolves every hop as the kernel does. The JavaScript realpath below folds
+  // `d/..` before it looks at `d`: on its own it would call a link that reaches
+  // a file dangling, or resolve a link that reaches nothing to another file.
+  // The refusal names the end of the chain, not the first hop (which may be an
+  // existing link).
+  const walked = walkLinkChain(requestedPath);
+  if (walked.end === "dangling") {
+    throw new CodexInstallRefusalError(
+      `Codex config ${requestedPath} is a dangling symlink (its link chain ends at ` +
+        `${walked.chain[walked.chain.length - 1]}, which does not exist); refusing to install, ` +
+        `nothing was written. Create the link's target file (or point the link at an ` +
+        `existing config) and re-run.`,
+      requestedPath,
+    );
+  }
+
   let resolved: string;
   try {
     resolved = fs.realpathSync(requestedPath);
   } catch (err) {
     const e = err as NodeJS.ErrnoException;
-    if (e.code === "ENOENT") {
-      const missing = missingEndOfLinkChain(requestedPath);
-      throw new CodexInstallRefusalError(
-        `Codex config ${requestedPath} is a dangling symlink (its link chain ends at ` +
-          `${missing ?? "a missing file"}, which does not exist); refusing to install, ` +
-          `nothing was written. Create the link's target file (or point the link at an ` +
-          `existing config) and re-run.`,
-        requestedPath,
-      );
-    }
     throw new CodexInstallRefusalError(
       `Codex config ${requestedPath} is a symlink that cannot be resolved ` +
         `(${e.code ?? "error"}: ${e.message}); refusing to install, nothing was written. ` +
@@ -2263,33 +2239,6 @@ export function latestCodexInstallBackup(filePath: string): { ms: number; path: 
   return latest;
 }
 
-/**
- * The link chain of a config path: the path itself, then each path its
- * symlink text leads to, ending at the first path that is not a symlink (the
- * target) or at the point where the chain cannot be walked (dangling, a loop,
- * an unreadable hop). A relative link text is resolved against the physical
- * directory of the link holding it, as the kernel does. A snapshot or an
- * install backup can sit beside any of these paths, depending on which
- * spelling the gate or the installer was run through.
- */
-export function codexConfigLinkChain(requestedPath: string): string[] {
-  const MAX_HOPS = 40;
-  const chain = [requestedPath];
-  let current = requestedPath;
-  for (let hop = 0; hop < MAX_HOPS; hop++) {
-    let next: string;
-    try {
-      if (!fs.lstatSync(current).isSymbolicLink()) break;
-      next = path.resolve(fs.realpathSync(path.dirname(current)), fs.readlinkSync(current));
-    } catch {
-      break;
-    }
-    chain.push(next);
-    current = next;
-  }
-  return chain;
-}
-
 /** The config holds operator secrets (API tokens under `[mcp_servers.*]`,
  * Codex hook trust hashes); the install must never widen its permissions.
  * Preserves the existing file's own mode for both the rewritten config and
@@ -2342,7 +2291,7 @@ function findSnapshotsOfConfig(plan: CodexConfigInstallPlan): { matched: string[
   // a snapshot found twice would be renamed once and then fail to rename.
   const dirs: string[] = [];
   const seenDirs = new Set<string>();
-  for (const spelled of [...codexConfigLinkChain(requested), plan.configPath]) {
+  for (const spelled of [...linkChain(requested), plan.configPath]) {
     const dir = path.dirname(spelled);
     let physical = dir;
     try {

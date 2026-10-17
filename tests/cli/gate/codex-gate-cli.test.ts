@@ -704,14 +704,14 @@ describe("harness gate without --runtime, and with --runtime claude, behave as b
       expect(list.stdout).toContain(`candidate hook groups in ${settingsPath}:`);
       expect(list.stdout).toContain('PreToolUse[0] matcher="Edit|Write": claude-gate');
       expect(list.stdout).toContain(
-        "Pass --matcher <substring> to remove a group. Removal is reversible via `harness gate enable`.",
+        `Pass --matcher <substring> to remove a group. Removal is reversible via \`harness gate enable --settings ${settingsPath}\`.`,
       );
 
       const off = await gate("disable", ...flags, "--settings", settingsPath, "--matcher", "Edit");
       expect(off.code).toBe(EX_OK);
       expect(off.stdout).toContain(`disabled 1 hook group(s) in ${settingsPath}:`);
       expect(off.stdout).toContain('PreToolUse[0] matcher="Edit|Write"');
-      expect(off.stdout).toContain("This is reversible: run `harness gate enable` to restore.");
+      expect(off.stdout).toContain(`This is reversible: run \`harness gate enable --settings ${settingsPath}\` to restore.`);
       expect(JSON.parse(fs.readFileSync(settingsPath, "utf8"))).toEqual({});
 
       const on = await gate("enable", ...flags, "--settings", settingsPath);

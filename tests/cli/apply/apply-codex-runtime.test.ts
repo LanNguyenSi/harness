@@ -3057,6 +3057,61 @@ describe("apply --runtime codex --install through a symlinked config (task `1637
     expect(siblingNames(dotfilesDir)).toEqual([]);
   });
 
+  describe("a link written with `d/..` where d is a directory link", () => {
+    // ~/.codex/d -> dotfiles/real/inner and ~/.codex/config.toml -> d/../target.toml: the kernel takes `..` from
+    // dotfiles/real/inner, so the link leads to dotfiles/real/target.toml; a lexical reading lands on ~/.codex/target.toml.
+    let codexConfig: string;
+    let physical: string;
+    let lexical: string;
+
+    beforeEach(() => {
+      ({ codexConfig } = setUpDotfiles());
+      const inner = path.join(tmpHome, "dotfiles", "real", "inner");
+      fs.mkdirSync(inner, { recursive: true });
+      fs.symlinkSync(inner, path.join(path.dirname(codexConfig), "d"));
+      fs.symlinkSync("d/../target.toml", codexConfig);
+      physical = path.join(tmpHome, "dotfiles", "real", "target.toml");
+      lexical = path.join(path.dirname(codexConfig), "target.toml");
+    });
+
+    it("is refused as dangling, naming the file the kernel looks for, when only the lexical reading finds a file", async () => {
+      fs.writeFileSync(lexical, BEFORE);
+      expect(() => fs.readFileSync(codexConfig)).toThrow(/ENOENT/);
+
+      const err = await installAt().then(
+        () => {
+          throw new Error("expected the install to refuse");
+        },
+        (e: unknown) => e,
+      );
+
+      expect(err).toBeInstanceOf(CodexInstallRefusalError);
+      expect((err as Error).message).toContain(`${codexConfig} is a dangling symlink (its link chain ends at ${physical}, which`);
+      // Nothing written: neither the file a lexical reading finds nor the one the link names.
+      expect(fs.readFileSync(lexical, "utf8")).toBe(BEFORE);
+      expect(fs.existsSync(physical)).toBe(false);
+      expect(siblingNames(path.dirname(codexConfig))).toEqual(["config.toml", "d", "target.toml"]);
+    });
+
+    it("is not called dangling when the kernel reaches a file that the lexical reading misses", async () => {
+      fs.writeFileSync(physical, BEFORE);
+      expect(fs.readFileSync(codexConfig, "utf8")).toBe(BEFORE);
+
+      const err = await installAt().then(
+        () => {
+          throw new Error("expected the install to refuse");
+        },
+        (e: unknown) => e,
+      );
+
+      expect(err).toBeInstanceOf(CodexInstallRefusalError);
+      expect((err as Error).message).toContain(`${codexConfig} is a symlink that cannot be resolved (ENOENT`);
+      expect((err as Error).message).not.toContain("dangling");
+      expect(fs.readFileSync(physical, "utf8")).toBe(BEFORE);
+      expect(siblingNames(path.dirname(codexConfig))).toEqual(["config.toml", "d"]);
+    });
+  });
+
   it("--dry-run through a symlink names the resolved target and writes nothing", async () => {
     const { codexConfig, dotfilesDir, target } = setUpDotfiles();
     fs.writeFileSync(target, BEFORE);

@@ -15,7 +15,9 @@
 // snapshot the file has drifted from while a group is still missing, or is
 // there only with other content, makes this verb refuse, writing nothing but
 // the retire of the spent snapshots it walked past, and points at
-// `gate enable --force`.
+// `gate enable --force`. A settings.json that is itself a symlink is written
+// through: the link stays a link, and the backup and snapshot sit beside the
+// file it leads to (`resolveSettingsEntry`).
 //
 // With NO `--matcher`, this verb is a pure listing — it prints the
 // candidate groups and exits without writing. That's the no-args
@@ -29,20 +31,29 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { atomicWriteFile } from "../../io/atomic-write.js";
+import { shellQuote } from "./shell-quote.js";
 import {
   backupPath,
   changedLabel,
+  copyOverLinkCommand,
   type GateDisableSnapshot,
   groupCommands,
+  isReadOnlyWriteError,
   listLiveSnapshots,
   type LiveSnapshot,
   missingLabel,
   planRestore,
+  readOnlyLinkTargetText,
+  readOnlyWritablePlace,
   type RemovedGroup,
+  resolveSettingsEntry,
   retireSnapshot,
+  settingsFlag,
+  settingsOwnEntry,
   sha256Hex,
   SNAPSHOT_VERSION,
   snapshotPath,
+  supersedeSnapshot,
 } from "./snapshot.js";
 
 const DEFAULT_SETTINGS_REL = path.join(".claude", "settings.json");
@@ -91,6 +102,8 @@ export type GateDisableResult =
       merged: boolean;
       /** Spent snapshots this call retired, under their retired names. */
       retired: string[];
+      /** A merge into a snapshot beside the settings path moved the snapshot beside the file the path leads to; the old one, under its retired name. */
+      carriedFrom?: { from: string; to: string };
     };
 
 export class GateDisableError extends Error {
@@ -205,6 +218,54 @@ function matcherMatches(group: unknown, pattern: string): boolean {
   return m.includes(pattern);
 }
 
+/**
+ * Whether two existing directories are the same one, however each was spelled:
+ * the native `realpath` takes `d/..` through the real location of `d`, as the
+ * kernel does when it lists the directory.
+ */
+function sameDirectory(a: string, b: string): boolean {
+  return fs.realpathSync.native(a) === fs.realpathSync.native(b);
+}
+
+/**
+ * The refusal for a write that a read-only directory turned down while the
+ * settings path is a symlink into it, or null when the failure is anything
+ * else. `effect` says what was and was not written, so the message can say
+ * truthfully that settings.json was not changed.
+ *
+ * Making the directory writable always works. A copy of the file in place of
+ * the link is offered only when the link sits in another directory (the copy
+ * is written there) and no live snapshot sits beside the file: an enable
+ * through the copy looks only beside the copy, so it would report nothing to
+ * restore while the groups those snapshots removed are still missing. Such
+ * snapshots are named instead, with the enable that restores them first.
+ */
+function readOnlyTargetError(
+  settingsPath: string,
+  own: string,
+  entry: string,
+  matcher: string,
+  live: LiveSnapshot[],
+  err: unknown,
+  effect: string,
+): GateDisableError | null {
+  if (entry === own || !isReadOnlyWriteError(err)) return null;
+  const again = `then run \`harness gate disable --matcher ${shellQuote(matcher)} ${settingsFlag(settingsPath)}\` again.`;
+  const writable = `make ${readOnlyWritablePlace(entry, err)} writable`;
+  const besideFile = live.filter((l) => sameDirectory(path.dirname(l.path), path.dirname(entry))).map((l) => l.path);
+  const wayOut =
+    besideFile.length > 0
+      ? `To disable anyway, ${writable}, ${again} Do not replace the link with a copy of its file while the live ` +
+        `snapshot(s) beside that file are there (${besideFile.join(", ")}): they hold groups an earlier disable ` +
+        `removed, and an enable through the copy would not look for them. To switch to a copy, first ${writable} ` +
+        `and run \`harness gate enable ${settingsFlag(settingsPath)}\`, which restores them, then replace the link.`
+      : sameDirectory(path.dirname(own), path.dirname(entry))
+        ? `To disable anyway, ${writable}, ${again}`
+        : `To disable anyway, replace the link with a copy of its file ` +
+          `(\`${copyOverLinkCommand(settingsPath, entry)}\`) or ${writable}, ${again}`;
+  return new GateDisableError(`${readOnlyLinkTargetText(settingsPath, entry, err)} ${effect} ${wayOut}`);
+}
+
 export function gateDisable(opts: GateDisableOptions = {}): GateDisableResult {
   const settingsPath = resolveSettingsPath(opts);
   const parsed = readSettings(settingsPath);
@@ -234,32 +295,55 @@ export function gateDisable(opts: GateDisableOptions = {}): GateDisableResult {
   if (removed.length === 0) {
     throw new GateDisableError(
       `no hook groups matched matcher substring ${JSON.stringify(matcherPattern)} in ${settingsPath}. ` +
-        `Run \`harness gate disable\` (no args) to list the available candidates.`,
+        `Run \`harness gate disable ${settingsFlag(settingsPath)}\` (no --matcher) to list the available candidates.`,
     );
   }
 
   const beforeSha = sha256Hex(parsed.raw);
   const now = opts.now ?? new Date();
-  const backup = backupPath(settingsPath, now);
+  // Every write goes to the file itself: a settings.json that is a symlink
+  // (dotfiles) stays a symlink, and its backup and snapshot sit beside the
+  // file it leads to, where an enable through either spelling looks. A
+  // spelling with `..` is taken through its real directory, so no path built
+  // from it is folded into another directory.
+  const own = settingsOwnEntry(settingsPath);
+  const entry = resolveSettingsEntry(settingsPath);
+  const backup = backupPath(entry, now);
 
   const found = listLiveSnapshots(settingsPath);
   if (!found.ok) {
     throw new GateDisableError(
       `${found.reason}. A live snapshot beside ${settingsPath} that cannot be read would be left out of this ` +
         `disable; nothing was changed. Move ${found.path} aside (or rename it to *.restored.json once its groups ` +
-        `are back) and run this again.`,
+        `are back; if it names groups that are still removed, put them back by hand first, the snapshot's ` +
+        `settingsBackupPath names the file as it was before the disable) and run this again.`,
     );
   }
   const { target, spent } = chooseSnapshot(found.live, parsed, beforeSha, settingsPath);
   const step =
     target === undefined ? 0 : Math.max(...target.snapshot.removed.map((r) => r.step ?? 0), 0) + 1;
   const stepped: RemovedGroup[] = removed.map((r) => ({ ...r, step }));
-  const snapPath = target?.path ?? snapshotPath(settingsPath, now);
+  // A merge keeps the snapshot beside the file it describes. One found beside
+  // the settings path while the path is a symlink to a file elsewhere is moved
+  // there: an enable through the file's own path looks only in its directory.
+  const relocated = target !== undefined && !sameDirectory(path.dirname(target.path), path.dirname(entry));
+  const snapPath =
+    target === undefined
+      ? snapshotPath(entry, now)
+      : relocated
+        ? path.join(path.dirname(entry), path.basename(target.path))
+        : target.path;
   const retired = retireSpent(spent, settingsPath);
+  // The snapshots still live after that retire, for a refusal that names the ones beside the file.
+  const stillLive = found.live.filter((l) => !spent.includes(l));
 
   // Backup BEFORE we touch the live file. If the backup write fails we
   // bail without having mutated anything.
-  atomicWriteFile(backup, parsed.raw);
+  try {
+    atomicWriteFile(backup, parsed.raw);
+  } catch (err) {
+    throw readOnlyTargetError(settingsPath, own, entry, matcherPattern, stillLive, err, `${settingsPath} was not changed.`) ?? err;
+  }
 
   const newObj: Record<string, unknown> = { ...parsed.obj };
   if (Object.keys(keptHooks).length === 0) {
@@ -282,7 +366,7 @@ export function gateDisable(opts: GateDisableOptions = {}): GateDisableResult {
       ? {
           version: SNAPSHOT_VERSION,
           createdAt: now.toISOString(),
-          settingsPath: path.resolve(settingsPath),
+          settingsPath: path.resolve(entry),
           settingsBackupPath: path.resolve(backup),
           settingsBeforeSha256: beforeSha,
           settingsAfterSha256: afterSha,
@@ -292,6 +376,7 @@ export function gateDisable(opts: GateDisableOptions = {}): GateDisableResult {
       : {
           ...target.snapshot,
           version: SNAPSHOT_VERSION,
+          ...(relocated ? { settingsPath: path.resolve(entry) } : {}),
           settingsAfterSha256: afterSha,
           removed: [...target.snapshot.removed, ...stepped],
           merges: [
@@ -309,29 +394,72 @@ export function gateDisable(opts: GateDisableOptions = {}): GateDisableResult {
   // is the operator's reversibility insurance, so we don't want to be
   // left in a "settings.json mutated but snapshot missing" state if the
   // process dies between the two writes.
-  const priorSnapshot = target === undefined ? undefined : fs.readFileSync(target.path, "utf8");
-  atomicWriteFile(snapPath, `${JSON.stringify(snapshot, null, 2)}\n`);
+  const priorSnapshot = target === undefined || relocated ? undefined : fs.readFileSync(target.path, "utf8");
   try {
-    atomicWriteFile(settingsPath, newSettings);
+    atomicWriteFile(snapPath, `${JSON.stringify(snapshot, null, 2)}\n`);
   } catch (err) {
-    if (priorSnapshot !== undefined) {
+    throw (
+      readOnlyTargetError(
+        settingsPath,
+        own,
+        entry,
+        matcherPattern,
+        stillLive,
+        err,
+        `The backup ${backup} was written; ${settingsPath} and the snapshots were not changed.`,
+      ) ?? err
+    );
+  }
+  try {
+    atomicWriteFile(entry, newSettings);
+  } catch (err) {
+    if (relocated || priorSnapshot !== undefined) {
       // The merged snapshot now describes a removal that never happened to
-      // the file. Put the live snapshot back to what it was; if that fails
-      // too, `gate enable` still restores it, because it leaves a group the
-      // file still holds unchanged alone, and the operator is told so.
+      // the file. Put the live snapshot back to what it was (a relocated
+      // merge: remove the copy, the earlier snapshot was never touched); if
+      // that fails too, `gate enable` still restores it, because it leaves a
+      // group the file still holds unchanged alone, and the operator is told so.
       try {
-        atomicWriteFile(snapPath, priorSnapshot);
+        if (priorSnapshot !== undefined) atomicWriteFile(snapPath, priorSnapshot);
+        else fs.unlinkSync(snapPath);
       } catch (rollbackErr) {
         throw new GateDisableError(
           `cannot write ${settingsPath}: ${(err as Error).message}; and the snapshot ${snapPath}, already merged, ` +
             `could not be put back (${(rollbackErr as Error).message}). ${settingsPath} still holds the groups this ` +
-            `disable meant to remove. Run \`harness gate enable\` (same --settings) to put back what the earlier ` +
+            `disable meant to remove. Run \`harness gate enable ${settingsFlag(settingsPath)}\` to put back what the earlier ` +
             `disables removed (add --force if it refuses; a group the file still holds is left alone), then run ` +
             `this disable again.`,
         );
       }
     }
-    throw err;
+    throw (
+      readOnlyTargetError(
+        settingsPath,
+        own,
+        entry,
+        matcherPattern,
+        stillLive,
+        err,
+        `${settingsPath} was not changed (the backup ${backup} was written` +
+          `${relocated || priorSnapshot !== undefined ? "" : `, and the snapshot ${snapPath}, which a later gate call retires`}).`,
+      ) ?? err
+    );
+  }
+
+  // The earlier snapshot's groups now live in the one beside the file; retire it
+  // under a name that says so, never as restored.
+  let carriedFrom: { from: string; to: string } | undefined;
+  if (relocated && target !== undefined) {
+    try {
+      carriedFrom = { from: target.path, to: supersedeSnapshot(target.path) };
+    } catch (err) {
+      throw new GateDisableError(
+        `removed ${removed.length} hook group(s) from ${settingsPath} and merged the live snapshot into ${snapPath}, ` +
+          `but cannot retire the earlier snapshot ${target.path} (${(err as Error).message}). Move it out of the ` +
+          `directory by hand (or rename it to *.superseded.json) so it is never offered again; until then ` +
+          `\`harness gate enable ${settingsFlag(settingsPath)}\` exits non-zero on it.`,
+      );
+    }
   }
 
   return {
@@ -342,6 +470,7 @@ export function gateDisable(opts: GateDisableOptions = {}): GateDisableResult {
     removed,
     merged: target !== undefined,
     retired,
+    ...(carriedFrom !== undefined ? { carriedFrom } : {}),
   };
 }
 
@@ -413,11 +542,11 @@ function chooseSnapshot(
     // names the way that puts the snapshot's group back instead.
     const wayOut =
       plan.changed.length > 0
-        ? `If the file's group stands in for the snapshot's, run \`harness gate enable --force\` (same --settings): ` +
+        ? `If the file's group stands in for the snapshot's, run \`harness gate enable --force ${settingsFlag(settingsPath)}\`: ` +
           `it takes it as back (the snapshot's group is not put back), puts the missing groups back and keeps every ` +
           `other edit. Otherwise make the file hold the snapshot's group (${snap.settingsBackupPath} has it) and run ` +
-          `\`harness gate enable\`. Then run this again.`
-        : `Run \`harness gate enable --force\` (same --settings): it puts the missing groups back, leaves a group ` +
+          `\`harness gate enable ${settingsFlag(settingsPath)}\`. Then run this again.`
+        : `Run \`harness gate enable --force ${settingsFlag(settingsPath)}\`: it puts the missing groups back, leaves a group ` +
           `that is already there alone and keeps every other edit. Then run this again.`;
     throw new GateDisableError(
       `${settingsPath} is not the state the live snapshot ${candidate.path} left, and ${problems.join("; ")}; ` +

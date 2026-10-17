@@ -176,6 +176,10 @@ describe("gateDisable — removal", () => {
     expect(() => gateDisable({ settingsPath, matcher: "DoesNotExist" })).toThrow(
       GateDisableError,
     );
+    // The listing it names reaches the same settings file.
+    expect(() => gateDisable({ settingsPath, matcher: "DoesNotExist" })).toThrow(
+      `Run \`harness gate disable --settings ${settingsPath}\` (no --matcher) to list the available candidates.`,
+    );
   });
 
   it("drops the `hooks` key entirely when removal empties every event", () => {
@@ -394,9 +398,9 @@ describe("gateDisable: a live snapshot the file no longer matches", () => {
     expect(message).toContain("`branch-protection --v1`");
     expect(message).toContain("`branch-protection --v2`");
     expect(message).toContain("do not count as back");
-    expect(message).toContain("If the file's group stands in for the snapshot's, run `harness gate enable --force`");
+    expect(message).toContain(`If the file's group stands in for the snapshot's, run \`harness gate enable --force --settings ${settingsPath}\``);
     // The way that keeps the gate's group when the file's is another hook: the backup has it, plain enable then this.
-    expect(message).toContain(`Otherwise make the file hold the snapshot's group (${first.backupPath} has it) and run \`harness gate enable\`.`);
+    expect(message).toContain(`Otherwise make the file hold the snapshot's group (${first.backupPath} has it) and run \`harness gate enable --settings ${settingsPath}\`.`);
     expect(message).toContain("Nothing was changed.");
     expect(message).not.toContain("still missing");
     expect(fs.readFileSync(settingsPath, "utf8")).toBe(file);
@@ -484,6 +488,23 @@ describe("gateDisable: a live snapshot the file no longer matches", () => {
     expect(matchers()).toEqual(["Write|Edit", "Bash", "Task"]);
     const again = gateDisable({ settingsPath, matcher: "Task", now: T3 });
     expect(again.mode === "remove" && again.merged).toBe(false);
+  });
+
+  it("refuses naming enable --force with the call's --settings when only a removed group is missing", () => {
+    threeGroups();
+    gateDisable({ settingsPath, matcher: "Write|Edit", now: T1 });
+    // An edit since: a new group, and the removed one is still out of the file.
+    writeSettings({ hooks: { PreToolUse: [{ matcher: "Bash", hooks: [{ command: "bash-hook" }] }, { matcher: "Task", hooks: [{ command: "task-hook" }] }, { matcher: "Read", hooks: [{ command: "read-hook" }] }] } });
+    let message = "";
+    try {
+      gateDisable({ settingsPath, matcher: "Task", now: T2 });
+    } catch (err) {
+      expect(err).toBeInstanceOf(GateDisableError);
+      message = (err as Error).message;
+    }
+    expect(message).toContain("still missing");
+    expect(message).not.toContain("do not count as back");
+    expect(message).toContain(`Run \`harness gate enable --force --settings ${settingsPath}\`: it puts the missing groups back`);
   });
 
   it("does not start a second snapshot when the retry finds the live one still describing the file", () => {
