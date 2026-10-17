@@ -1,47 +1,13 @@
-// `harness gate enable --runtime codex`: put back the hook units that
-// `harness gate disable --runtime codex` neutralised.
-//
-// Reads the live `harness.gate-disable-codex.*.json` snapshot beside the
-// config (a Claude `harness.gate-disable.*.json` snapshot is never
-// considered). At most one is live per config: every disable merges into it.
-// Another config's snapshot is skipped and named with the `--config` that
-// restores it; a snapshot recorded under another spelling of this config's
-// own directory entry (case or normalization on a folding filesystem) is this
-// config's own. An earlier build kept one
-// snapshot per disable; with several live ones for this config, enable
-// handles the newest by its recorded `createdAt` (never by file mtime) per
-// run and names the rest in `remaining`, so the caller exits non-zero until
-// none is left.
-//
-// The snapshot is retired first when it can no longer be applied: renamed to
-// `*.restored.json` when the config already matches its pre-disable sha, or
-// to `*.superseded.json` when an install rewrote the config after it was
-// taken (the installer's `<config>.harness-backup-<ts>` dates that write; an
-// install re-renders every unit, so the snapshot's hooks lines may be
-// outdated) or when none of its units is disabled any more and every one is
-// still in the block. A retired snapshot stays on disk for audit and is never
-// offered again, so a neutralised unit can never get an outdated line back
-// from an old snapshot whose post-disable bytes happen to match.
-//
-// Otherwise the snapshot is applied. When the config's sha equals its
-// post-disable sha, each unit it names gets its original `hooks = [...]`
-// line back and the result must hash to its pre-disable sha, so the restore
-// is byte-identical. When the config was edited since, the restore skips every
-// unit that is back already (present once and not neutralised, whatever its
-// event or matcher: its current line is never overwritten) and restores the
-// rest, found by id in the block as it is now. If that rebuilds the
-// pre-disable bytes exactly (a crashed merge, a unit put back by hand) it is
-// applied without `--force`; otherwise enable refuses unless `--force`, which
-// applies it anyway and keeps every other edit. A unit that is missing, listed
-// twice, or still neutralised under another event or matcher cannot be
-// restored by either: that refusal comes first and names the ways out
-// (re-install, the backup, or moving the snapshot aside), never `--force`.
-// The applied snapshot is retired as restored. Units still disabled at the end
-// are reported in `stillDisabled`, units skipped as already enabled in
-// `skippedEnabled`, other live snapshots in `remaining`, and units the snapshot
-// names that were deleted from the block in `missing` (that snapshot stays
-// live): enable never reports an all-clear while one remains. A backup of the
-// config is written before every rewrite, with the config's own mode.
+// `harness gate enable --runtime codex`: puts back the hook units that
+// `gate disable --runtime codex` neutralised, from the live
+// `harness.gate-disable-codex.*.json` snapshot beside the config (another
+// config's snapshot is skipped and named; several live ones for this config
+// are handled newest first by `createdAt`, one per run, the rest in
+// `remaining`). A snapshot that can no longer be applied is retired as
+// `*.restored.json` or `*.superseded.json`; otherwise it is applied, with
+// `--force` needed when the config was edited since and the restore does not
+// rebuild the pre-disable bytes. A backup is written before every rewrite.
+// Why and how: docs/okf/gate-kill-switch.md (Codex section).
 
 import * as fs from "node:fs";
 import {

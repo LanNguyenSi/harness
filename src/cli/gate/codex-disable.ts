@@ -1,36 +1,13 @@
-// `harness gate disable --runtime codex`: the operator's switch for a
-// blocking hook in the Codex config.
-//
-// Reads `~/.codex/config.toml` (or `--config <path>`), finds the hook units
-// of the harness-managed block (the `# BEGIN harness-managed codex hooks`
-// fence that `harness apply --runtime codex --install` writes) whose
-// `matcher` substring-matches `--matcher`, and neutralises exactly those
-// units in place: the comment line, the `[[hooks.<Event>]]` header and the
-// `matcher` line stay, the `hooks = [...]` line becomes `hooks = []`. Codex
-// keys a user hook's trust and enabled state by its position in the event's
-// array, and an empty group takes its position without registering a
-// handler, so no other hook of any event moves or loses its trust. A backup
-// of the original (`<config>.bak.<ISO>`) and a snapshot of the original
-// `hooks` lines (`harness.gate-disable-codex.<ISO>.json`) land before the
-// atomic rewrite. At most one snapshot per config is live: a disable made
-// while one exists merges its units into that snapshot (keeping the original
-// pre-disable sha, recording the new post-disable sha and an audit entry in
-// `merges`) instead of writing a second one; if the config write then fails,
-// the snapshot is put back as it was. A live snapshot that `gate enable` would
-// only retire (an install re-rendered the block, the config is back at the
-// pre-disable state, or every unit it names is enabled again) is retired by
-// the disable itself, which then starts a fresh snapshot. Any other live
-// snapshot the config no longer matches refuses the disable and names
-// `gate enable --force`, or, when a unit it names is missing or changed so
-// that `--force` would refuse too, the ways out of that snapshot. Text
-// outside the fences, and every operator-authored
-// table, is never touched. The block is read by the installer's own scanner
-// (`readCodexManagedHookUnits`), so a duplicate BEGIN marker, a foreign table
-// wedged in the block or a missing END marker refuse instead of guessing.
-//
-// With NO `--matcher` this verb is a pure listing, like the Claude one. A
-// later `harness apply --runtime codex --install` re-renders the whole block
+// `harness gate disable --runtime codex`: neutralises the harness-managed
+// hook units whose `matcher` contains `--matcher` by emptying their
+// `hooks = [...]` line in place, after writing a backup and a snapshot of the
+// original lines. With no `--matcher` it only lists the units. At most one
+// snapshot per config is live: a disable merges into it, retires it first
+// when it is spent, or refuses when the config no longer matches it. The
+// block is read by the installer's own scanner, so a malformed block refuses.
+// A later `harness apply --runtime codex --install` re-renders the whole block
 // and so brings the units back.
+// Why and how: docs/okf/gate-kill-switch.md (Codex section).
 
 import * as fs from "node:fs";
 import {
