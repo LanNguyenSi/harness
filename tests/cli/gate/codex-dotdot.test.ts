@@ -506,6 +506,32 @@ describe("codex install: the walk and the kernel have to agree on the file", () 
   });
 });
 
+describe("codex install into a config directory that does not exist yet, spelled with `..` after a directory link", () => {
+  // home/via -> dot/real, so home/via/../newdir is dot/newdir; home/newdir is where a lexical fold lands.
+  const arrange = (foldedExists: boolean): string => {
+    mk(J(root, "dot/real"));
+    ln(J(root, "dot/real"), J(root, "home/via"));
+    if (foldedExists) mk(J(root, "home/newdir"));
+    return `${root}/home/via/../newdir/config.toml`;
+  };
+
+  for (const foldedExists of [false, true]) {
+    it(`creates the directory where the kernel reaches it and writes the file there (the folded directory ${foldedExists ? "exists" : "is missing"})`, () => {
+      const spell = arrange(foldedExists);
+      const result = installThrough(spell);
+
+      expect(result.written).toBe(true);
+      expect(result.configPath).toBe(J(root, "dot/newdir/config.toml"));
+      expect(fs.readFileSync(J(root, "dot/newdir/config.toml"), "utf8")).toContain("harness-managed codex hooks");
+      expect(fs.readFileSync(spell, "utf8")).toBe(fs.readFileSync(J(root, "dot/newdir/config.toml"), "utf8"));
+      // The temp file of the atomic write never left the directory it was written in.
+      expect(fs.readdirSync(J(root, "dot/newdir"))).toEqual(["config.toml"]);
+      expect(fs.existsSync(J(root, "home/newdir"))).toBe(foldedExists);
+      if (foldedExists) expect(fs.readdirSync(J(root, "home/newdir"))).toEqual([]);
+    });
+  }
+});
+
 describe("codex install: the snapshots superseded by an install", () => {
   function snapshotNames(dir: string): string[] {
     return fs.readdirSync(dir).filter((n) => n.startsWith("harness.gate-disable-codex."));

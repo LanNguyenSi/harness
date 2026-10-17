@@ -1773,9 +1773,9 @@ export function resolveConfigSymlink(requestedPath: string): string {
   if (walked.end !== "target") throw cannotResolve(`the link chain ends in a ${walked.end}`);
   const resolved = walked.chain[walked.chain.length - 1] ?? requestedPath;
   const atEnd = fs.statSync(resolved);
-  // The walker and the kernel have to agree on the file: a walk that ends at a
-  // file the kernel does not reach through the path (a link text ending in a
-  // slash after a regular file) would otherwise write a file Codex never reads.
+  // Defence in depth: the walker and the kernel have to agree on the file, and
+  // a disagreement of any kind (a walker defect, a platform difference in how
+  // a text is read) would otherwise write a file Codex never reads.
   if (read.dev !== atEnd.dev || read.ino !== atEnd.ino) {
     throw cannotResolve(`a read through it reaches another file than ${resolved}`);
   }
@@ -2350,11 +2350,17 @@ function findSnapshotsOfConfig(plan: CodexConfigInstallPlan): { matched: string[
  * a snapshot written while an older installer ran.
  */
 export function writeCodexConfigInstall(
-  plan: CodexConfigInstallPlan,
+  planned: CodexConfigInstallPlan,
   opts: { now?: Date } = {},
 ): CodexConfigInstallResult {
-  if (!plan.changed) return { ...plan, written: false };
-  fs.mkdirSync(path.dirname(plan.configPath), { recursive: true });
+  if (!planned.changed) return { ...planned, written: false };
+  fs.mkdirSync(path.dirname(planned.configPath), { recursive: true });
+  // A config directory that did not exist at plan time, spelled with `..`
+  // after a directory link, could not be resolved then (`kernelEntry` keeps
+  // such a spelling). It exists now, so the paths built from the spelling (the
+  // temp file, the snapshot listing) go through the directory the kernel
+  // reaches instead of a lexical fold into another one.
+  const plan = { ...planned, configPath: kernelEntry(planned.configPath) };
   const mode = existingFileMode(plan.configPath);
   const snapshots = findSnapshotsOfConfig(plan);
   // Only back up a config that actually existed before this install (task

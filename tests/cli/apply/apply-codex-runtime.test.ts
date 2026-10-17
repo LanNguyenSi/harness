@@ -4733,15 +4733,64 @@ describe("apply --codex-config spelled with `..` after a directory link", () => 
     }
   });
 
-  it("keeps a `~` path resolving as before, a `..` in it folded (a dry run, so nothing is written)", async () => {
-    const result = await apply({
-      homeDir: tmpHome,
-      runtime: "codex",
-      installCodex: true,
-      dryRun: true,
-      codexConfigPath: "~/y/../x/config.toml",
+  // A shell passes `--codex-config=~/...` literally, so the `~` is expanded by harness: HOME is the temp tree.
+  const withHome = async <T>(fn: () => Promise<T>): Promise<T> => {
+    const before = process.env.HOME;
+    process.env.HOME = tmpHome;
+    try {
+      return await fn();
+    } finally {
+      if (before === undefined) delete process.env.HOME;
+      else process.env.HOME = before;
+    }
+  };
+
+  it("installs a `~` spelling into the file the kernel reaches, and leaves the folded directory empty", async () => {
+    const result = await withHome(() =>
+      apply({ homeDir: tmpHome, runtime: "codex", installCodex: true, codexConfigPath: "~/home/in/../a/config.toml" }),
+    );
+
+    expect(result.codexConfigInstall?.written).toBe(true);
+    expect(result.codexConfigInstall?.configPath).toBe(kernelFile);
+    expect(fs.readFileSync(kernelFile, "utf8")).toContain(CODEX_MANAGED_BEGIN);
+    expect(fs.readdirSync(foldedDir)).toEqual([]);
+  });
+
+  it("does the same through the CLI entry with the `=~/...` form a shell leaves unexpanded", async () => {
+    await withHome(async () => {
+      await buildProgram({ stdout: () => {}, stderr: () => {} }).parseAsync(
+        ["apply", "--config", path.join(tmpHome, "harness.yaml"), "--runtime", "codex", "--install", "--codex-config=~/home/in/../a/config.toml"],
+        { from: "user" },
+      );
     });
-    expect(result.codexConfigInstall?.configPath).toBe(path.join(os.homedir(), "x", "config.toml"));
+
+    expect(fs.readFileSync(kernelFile, "utf8")).toContain(CODEX_MANAGED_BEGIN);
+    expect(fs.readdirSync(foldedDir)).toEqual([]);
+  });
+
+  it("keeps a `~` path without `..` resolving as before", async () => {
+    const result = await withHome(() =>
+      apply({ homeDir: tmpHome, runtime: "codex", installCodex: true, dryRun: true, codexConfigPath: "~/y/./x/config.toml" }),
+    );
+    expect(result.codexConfigInstall?.configPath).toBe(path.join(tmpHome, "y", "x", "config.toml"));
+  });
+
+  it("expands a bare `~` to HOME, which is a directory and so refused as a config", async () => {
+    await expect(
+      withHome(() => apply({ homeDir: tmpHome, runtime: "codex", installCodex: true, dryRun: true, codexConfigPath: "~" })),
+    ).rejects.toThrow("EISDIR");
+  });
+
+  it("creates a config directory that does not exist yet where the kernel reaches it", async () => {
+    const via = `${tmpHome}/home/in/../fresh/config.toml`;
+    const result = await apply({ homeDir: tmpHome, runtime: "codex", installCodex: true, codexConfigPath: via });
+
+    const fresh = path.join(tmpHome, "dot", "fresh", "config.toml");
+    expect(result.codexConfigInstall?.written).toBe(true);
+    expect(result.codexConfigInstall?.configPath).toBe(fresh);
+    expect(fs.readFileSync(fresh, "utf8")).toContain(CODEX_MANAGED_BEGIN);
+    expect(fs.readdirSync(path.dirname(fresh))).toEqual(["config.toml"]);
+    expect(fs.existsSync(path.join(tmpHome, "home", "fresh"))).toBe(false);
   });
 
   it("keeps a path without `..` resolving as before", async () => {

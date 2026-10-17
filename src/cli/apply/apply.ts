@@ -529,13 +529,17 @@ function resolveTargetPath(target: string, homeDir?: string): string {
  * leads elsewhere than a lexical fold of the spelling (`via/..` is the parent
  * of where `via` leads), so a path with a `..` segment is made absolute without
  * folding and the installer takes it through the directory the kernel reaches.
- * Every other spelling, and a `~` path, resolves as `resolveTargetPath` does.
+ * A leading `~` is expanded by concatenation, not `path.join` (which folds):
+ * a shell passes `--codex-config=~/x` literally, so this expansion is the
+ * normal route for a `~` spelling. A path without a `..` resolves as
+ * `resolveTargetPath` does.
  */
 function resolveCodexConfigPath(target: string): string {
-  if (target === "~" || target.startsWith("~/") || !target.split(path.sep).includes("..")) {
-    return resolveTargetPath(target);
-  }
-  return path.isAbsolute(target) ? target : `${process.cwd()}${path.sep}${target}`;
+  let spelled = target;
+  if (target === "~") spelled = os.homedir();
+  else if (target.startsWith("~/")) spelled = `${os.homedir()}${path.sep}${target.slice(2)}`;
+  if (!spelled.split(path.sep).includes("..")) return resolveTargetPath(spelled);
+  return path.isAbsolute(spelled) ? spelled : `${process.cwd()}${path.sep}${spelled}`;
 }
 
 function readTargetJson(targetPath: string): {
