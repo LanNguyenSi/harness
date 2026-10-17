@@ -405,7 +405,8 @@ describe("gateEnable: --force", () => {
     expect(message).toContain("`branch-protection`");
     expect(message).toContain("`branch-protection --changed`");
     expect(message).toContain("does not count as back");
-    expect(message).toContain("harness gate enable --force");
+    expect(message).toContain(`harness gate enable --force --settings ${settingsPath}`);
+    expect(message).toContain(`and run \`harness gate enable --settings ${settingsPath}\` again.`);
     expect(message).not.toContain("more hook group(s) it removed are missing");
     expect(fs.readFileSync(settingsPath, "utf8")).toBe(before);
     expect(liveSnapshotNames(settingsPath)).toHaveLength(1);
@@ -448,7 +449,7 @@ describe("gateEnable: --force", () => {
     expect(message).toContain('PreToolUse matcher="Write|Edit"');
     expect(message).toContain("stays live");
     expect(message).toContain(".bak.");
-    expect(message).toContain("harness gate enable --force");
+    expect(message).toContain(`harness gate enable --force --settings ${settingsPath}`);
   });
 
   it("keeps operator edits and restores every merged group", () => {

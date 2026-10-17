@@ -218,9 +218,9 @@ export function gateEnable(opts: GateEnableOptions = {}): GateEnableResult {
             `(${plan.restored.map(missingLabel).join("; ")}).`
           : "") +
         ` Nothing was changed and the snapshot stays live. If the file's group stands in for the snapshot's, run ` +
-        `\`harness gate enable --force\`: it takes it as back (the snapshot's group is not put back), puts the ` +
+        `\`harness gate enable --force ${settingsFlag(settingsPath)}\`: it takes it as back (the snapshot's group is not put back), puts the ` +
         `missing groups back and keeps every other edit. Otherwise make the file hold the snapshot's group ` +
-        `(${snapshot.settingsBackupPath} has it) and run \`harness gate enable\` again.`,
+        `(${snapshot.settingsBackupPath} has it) and run \`harness gate enable ${settingsFlag(settingsPath)}\` again.`,
     );
   }
   if (plan.restored.length === 0) {
@@ -259,7 +259,7 @@ export function gateEnable(opts: GateEnableOptions = {}): GateEnableResult {
         `${plan.restored.length} hook group(s) it removed are still missing ` +
         `(${plan.restored.map(missingLabel).join("; ")}). Nothing was changed and the ` +
         `snapshot ${newest.path} stays live. Inspect the diff against ${snapshot.settingsBackupPath}, then run ` +
-        `\`harness gate enable --force\`: it puts the missing groups back, leaves a group that is already ` +
+        `\`harness gate enable --force ${settingsFlag(settingsPath)}\`: it puts the missing groups back, leaves a group that is already ` +
         `there alone and keeps every other edit.`,
     );
   }
