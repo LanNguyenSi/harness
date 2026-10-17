@@ -81,7 +81,7 @@ export default defineConfig({
     // seven-vs-four-entry-point finding, and the allowlist itself live in
     // the setup file.
     //
-    // hermetic-config-dirs.ts (task b133-t09 item 2) unsets an inherited
+    // hermetic-config-dirs.ts unsets an inherited
     // CLAUDE_CONFIG_DIR and repoints HOME at a fresh temp dir per test
     // process, so no test reads the developer's real ~/.claude /
     // $CLAUDE_CONFIG_DIR and both `npm test` and

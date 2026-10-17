@@ -47,7 +47,7 @@ import { parseManifest, type Manifest } from "../../src/schema/index.js";
 //
 // (An earlier revision strip-allow-listed a "see also" link to
 // docs/okf/gate-kill-switch.md before matching, but no shipped `ux.run` line
-// ever carried that link — it appears only in src code comments — so the
+// ever carried that link, it appears only in src code comments, so the
 // pre-match strip was a no-op on every scanned line and has been removed;
 // every line is now matched against KILL_SWITCH_WORD directly.)
 //

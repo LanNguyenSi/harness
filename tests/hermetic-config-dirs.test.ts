@@ -3,8 +3,8 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
 
-// Acceptance tests for the hermetic-config-dirs.ts vitest setupFile
-// (task b133-t09 item 2). The setup runs before this file is imported, so each
+// Acceptance tests for the hermetic-config-dirs.ts vitest setupFile.
+// The setup runs before this file is imported, so each
 // `it` below observes the ALREADY-neutralised environment. The three cases are
 // the precedence contract the setup must satisfy:
 //

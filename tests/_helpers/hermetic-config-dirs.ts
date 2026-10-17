@@ -1,4 +1,4 @@
-// Hermetic config dirs (vitest setupFile, task b133-t09 item 2).
+// Hermetic config dirs (vitest setupFile).
 //
 // A family of tests reads the operator's real Claude config, either directly
 // or transitively: `resolveClaudeUserRegistryPath`/`resolveMcpConfigDirOverride`
@@ -28,7 +28,7 @@
 // effects) before the test file is imported, and a test's own body / beforeEach
 // runs after that. So a test that deliberately sets `process.env.HOME` or
 // `process.env.CLAUDE_CONFIG_DIR` itself sets it AFTER this file and wins for
-// that test — the tests that exercise the `CLAUDE_CONFIG_DIR` seam or a temp
+// that test, the tests that exercise the `CLAUDE_CONFIG_DIR` seam or a temp
 // home on purpose (adopt, doctor-claude-mcp, claude-mcp real-spawn, program,
 // apply-codex, generated-dir) keep working unchanged. This file only clears the
 // ambient, inherited value; it never overwrites one a test set.
@@ -40,8 +40,8 @@
 // directory path is therefore stashed in a sentinel env var and the home is
 // re-asserted from it on every evaluation, creating a fresh directory only once
 // per process (and only if the stashed one is gone). Nothing in the suite
-// writes into the ambient `$HOME` — every test that needs a writable home does
-// so through its own `homeDir`/`HARNESS_HOME`/`homeOverride` seam — so the
+// writes into the ambient `$HOME`, every test that needs a writable home does
+// so through its own `homeDir`/`HARNESS_HOME`/`homeOverride` seam, so the
 // shared directory stays empty and cannot couple two files.
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -64,7 +64,7 @@ function ensureHermeticHome(): string {
       // OS) that removed it must not leave `HOME` dangling.
       if (fs.statSync(existing).isDirectory()) return existing;
     } catch {
-      // Stale sentinel (directory gone) — fall through and recreate.
+      // Stale sentinel (directory gone), fall through and recreate.
     }
   }
   // `fs.mkdtempSync` under `os.tmpdir()` is fine here: it runs inside the test

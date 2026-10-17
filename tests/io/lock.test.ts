@@ -58,7 +58,7 @@ describe("withFileLock — concurrency via fork", () => {
     // lead-time: worker A appends "A:lock-acquired" the instant lockfile.lock()
     // resolves, so we fork B only once A is provably holding the lock. B then
     // blocks on acquire until A releases, so the [A,B] order no longer depends on
-    // process-startup latency winning a 50ms window under CPU load — the same
+    // process-startup latency winning a 50ms window under CPU load, the same
     // fixed-window flake class this readiness handshake replaces. (An earlier
     // pointer here named the harness-smoke SIGKILL test that first used this
     // handshake technique, but that whole suite was removed with the
