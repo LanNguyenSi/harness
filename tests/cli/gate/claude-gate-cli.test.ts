@@ -365,7 +365,7 @@ describe("harness gate (claude): spent and stale snapshots", () => {
     const before = fs.readFileSync(settingsPath, "utf8");
     const refused = await gate("disable", "--matcher", "Task");
     expect(refused.code).toBe(EX_FAIL);
-    expect(refused.stderr).toContain("harness gate enable --force");
+    expect(refused.stderr).toContain(`harness gate enable --force --settings ${settingsPath}`);
     expect(refused.stderr).toContain('still missing (PreToolUse matcher="Write|Edit" running `branch-protection`)');
     expect(fs.readFileSync(settingsPath, "utf8")).toBe(before);
 
