@@ -354,6 +354,24 @@ function formatGroundingSection(report: DoctorReport): string[] {
   return out;
 }
 
+function formatHookLivenessSection(report: DoctorReport): string[] {
+  const section = report.hookLiveness;
+  if (section === undefined) return [];
+  const out: string[] = ["", "Hook liveness (generated hooks vs live config)"];
+  for (const r of section.runtimes) {
+    out.push(`  ${r.runtime}: ${r.livePath}`);
+    if (r.entries.length === 0) {
+      out.push("    (no generated hooks to compare)");
+      continue;
+    }
+    for (const e of r.entries) {
+      const marker = e.status === "ok" ? "✓" : e.status === "warn" ? "⚠" : e.status === "info" ? "ℹ" : "✗";
+      out.push(`    ${marker} ${e.message}`);
+    }
+  }
+  return out;
+}
+
 function formatClaudeMcpSection(report: DoctorReport): string[] {
   const c = report.claudeMcp;
   if (c === undefined) return [];
@@ -397,6 +415,7 @@ export function format(report: DoctorReport): string {
   lines.push(...formatToolsSection(report));
   lines.push(...formatMemorySection(report));
   lines.push(...formatHooksSection(report));
+  lines.push(...formatHookLivenessSection(report));
   lines.push(...formatPackExpansionRuntimeSection(report));
   lines.push(...formatPolicyPacksSection(report));
   lines.push(...formatGroundingSection(report));

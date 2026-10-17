@@ -2203,11 +2203,28 @@ hooks:
 policies: []
 `,
     });
+    // The generated hook is installed, so the hook-liveness check is clean and
+    // this test keeps asserting only the absence of the margin section.
+    fs.mkdirSync(path.join(home, ".claude"), { recursive: true });
+    fs.writeFileSync(
+      path.join(home, ".claude", "settings.json"),
+      JSON.stringify({
+        hooks: {
+          PreToolUse: [
+            {
+              matcher: "mcp__agent-tasks__pull_requests_merge",
+              hooks: [{ type: "command", command: "harness policy intercept", timeout: 5 }],
+            },
+          ],
+        },
+      }),
+    );
     const report = await doctor({
       configPath: path.join(home, "harness.yaml"),
       homeOverride: home,
       shallow: true,
       claudeMcpExec: NO_CLAUDE_CLI,
+      envOverride: {},
     });
     expect(report).not.toHaveProperty("hookBudgetLedgerMargin");
     const text = format(report);

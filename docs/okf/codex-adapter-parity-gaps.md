@@ -3,7 +3,7 @@ type: module
 title: Codex runtime adapter
 description: "What harness's Codex runtime adapter is today: what harness apply --runtime codex emits and records, the installer's ownership boundaries for ~/.codex/config.toml, the remaining differences from the Claude Code target (--target exclusivity, branch-protection matching apply_patch only), and the Codex wire format of the hooks that remain (the branch-protection blocker)."
 tags: [codex, runtime-adapter, parity, hooks]
-timestamp: 2026-10-17T11:48:06Z
+timestamp: 2026-10-17T15:07:40Z
 sources:
   - src/cli/apply/apply.ts
   - src/cli/apply/generate-codex-config.ts
@@ -11,6 +11,7 @@ sources:
   - src/cli/apply/install-codex-config.ts
   - src/cli/doctor/codex.ts
   - src/cli/doctor/format.ts
+  - src/cli/doctor/hook-liveness.ts
   - src/cli/doctor/index.ts
   - src/cli/pack/remove.ts
   - src/cli/pack/hook-branch-protection.ts
@@ -29,7 +30,7 @@ The understanding-gate and solution-acceptance gaps this doc used to enumerate e
 
 `harness apply --runtime codex` selects the Codex adapter instead of the default `claude-code`, and records `runtime: codex` in `harness.generated/.last-apply`, so a later `harness apply` without `--runtime` (including `--install`) reuses codex and prints `runtime: codex (from last apply; pass --runtime to change)` instead of switching back to `claude-code`. A `.last-apply` from an older release without the field is read through its files map (`inferRuntimeFromFiles`): only `codex/config.toml` means codex; with both `settings.json` and `codex/config.toml`, the recorded pack `instructions.md` entries decide when every one names the same runtime in its `## Runtime` section (only the packs the record's own manifest snapshot lists count, when it has a readable one), and the output says the runtime was inferred. `--target` without `--runtime` implies `claude-code` (`selectRuntime`, `src/cli/apply/apply.ts`).
 
-`harness pack remove --force` prunes only the pack's entries from `.last-apply` and keeps its other fields, the recorded runtime included (`pruneRecord`, `src/cli/pack/remove.ts`). `harness doctor` expands packs against the runtime a plain apply would select (`selectRuntime`: recorded, inferred or default), not always `claude-code`, and the report names it (`Pack expansion runtime:`, `formatPackExpansionRuntimeSection`, `src/cli/doctor/format.ts`).
+`harness pack remove --force` prunes only the pack's entries from `.last-apply` and keeps its other fields, the recorded runtime included (`pruneRecord`, `src/cli/pack/remove.ts`). `harness doctor` expands packs against the runtime a plain apply would select (`selectRuntime`: recorded, inferred or default), not always `claude-code`, and the report names it (`Pack expansion runtime:`, `formatPackExpansionRuntimeSection`, `src/cli/doctor/format.ts`). It also compares the generated hooks with the live config of that runtime (`buildHookLiveness`, `src/cli/doctor/hook-liveness.ts`): under Codex, or under `--target codex`, the hooks of `~/.codex/config.toml` by event, matcher and command; a missing or differing hook is an error, a unit neutralised by `harness gate disable --runtime codex` a warning only when `harness gate enable --runtime codex` would restore it, with `--force` when the config was edited since the disable (doctor applies the gate's own predicates, `spentCodexSnapshot` and `planCodexRestore` from `src/cli/gate/codex-snapshot.ts`, to the own snapshots `readLiveCodexSnapshots` returns: the hooks array is empty, a snapshot no install has superseded names the unit by id, and the original hooks text carries the expected command), and the warning names that command, `--force` included when the restore needs it; any other emptied unit, a hand-emptied one, one a superseded snapshot still names or one in a block the gate cannot read, is a missing error, a live hook harness did not generate an info line, and a gate snapshot that cannot be read an error naming it. Only the user-scope config is compared; `--codex-config` installs are not.
 
 A codex apply does NOT write `settings.json`; it emits `harness.generated/codex/config.toml` (`CODEX_CONFIG_BASENAME = "codex/config.toml"`, `src/cli/apply/apply.ts`) containing only harness-managed hook stanzas, one `[[hooks.<Event>]]` table per hook with `hooks = [{ type = "command", command = "...", timeout = N }]` (`emitHook`, `emitCommandHook`, `src/cli/apply/generate-codex-config.ts`). The hooks come from the manifest's `hooks`, from the policy packs' expansion for the `codex` runtime (branch-protection is the only builtin pack) and from the `memory.router` projection, a `UserPromptSubmit` hook shared with the Claude Code projection (`buildMemoryRouterHook`, `src/cli/apply/generate-settings.ts`). `MEMORY.md` ships runtime-agnostic and unchanged; pack `instructions.md` ships under every runtime, but its content differs per runtime (the builtin pack's `buildInstructions()` writes a `## Runtime` section), which is why an apply under another runtime rewrites it.
 

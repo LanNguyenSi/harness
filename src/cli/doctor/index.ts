@@ -43,6 +43,7 @@ import {
 import { checkNpmBinPath, type NpmExec } from "./npm-bin-path.js";
 import { scanForRogueLedgers, type RogueLedgerScanOptions } from "./rogue-ledger.js";
 import { buildClaudeMcpRegistration } from "./claude-mcp.js";
+import { buildHookLiveness, countHookLiveness, livenessRuntimes } from "./hook-liveness.js";
 import type { ClaudeMcpExec } from "../../io/claude-mcp.js";
 import {
   isDoctorTarget,
@@ -84,6 +85,11 @@ export interface DoctorOptions extends LoaderOptions {
    * usually override both plus `fsInterface`.
    */
   rogueLedgerScanOptions?: Partial<RogueLedgerScanOptions>;
+  /**
+   * Test-injection knob for the hook-liveness check: the Codex config to
+   * compare. Defaults to `~/.codex/config.toml` under the operator home.
+   */
+  codexLiveConfigPath?: string;
   /**
    * Test-injection knob for the npm global-bin PATH check (task
    * 4ddd78ed). Tests fake the `npm prefix -g` invocation by passing a
@@ -675,6 +681,11 @@ function countDiagnostics(report: Omit<DoctorReport, "errorCount" | "warningCoun
     else if (h.status === "warn") warningCount++;
     if (h.version?.status === "warn") warningCount++;
   }
+  if (report.hookLiveness !== undefined) {
+    const liveness = countHookLiveness(report.hookLiveness);
+    errorCount += liveness.errorCount;
+    warningCount += liveness.warningCount;
+  }
   errorCount += report.policyPacks.unresolved.length;
   errorCount += report.policyPacks.configIssues.length;
   // Pack-level min_version gaps are warn-not-error: the pack itself works,
@@ -864,6 +875,17 @@ export async function doctor(opts: DoctorOptions = {}): Promise<DoctorReport> {
       : {}),
   });
 
+  const livenessTargets = livenessRuntimes(applyRuntime.runtime, opts.target);
+  const hookLiveness =
+    livenessTargets.length > 0
+      ? buildHookLiveness(manifest, {
+          home,
+          env: opts.envOverride ?? process.env,
+          runtimes: livenessTargets,
+          ...(opts.codexLiveConfigPath !== undefined ? { codexConfigPath: opts.codexLiveConfigPath } : {}),
+        })
+      : undefined;
+
   const partial: Omit<DoctorReport, "errorCount" | "warningCount"> = {
     manifestPath: resolved.base,
     manifestVersion: manifest.version,
@@ -873,6 +895,7 @@ export async function doctor(opts: DoctorOptions = {}): Promise<DoctorReport> {
     tools,
     memory,
     hooks,
+    ...(hookLiveness !== undefined ? { hookLiveness } : {}),
     policyPacks,
     packExpansionRuntime: packExpansionRuntimeReport(applyRuntime, lastApplyWarning),
     ...(grounding !== undefined ? { grounding } : {}),
