@@ -60,9 +60,12 @@ npm uninstall -g @lannguyensi/harness                  # drop the CLI itself
 Use a `settings.json.pre-harness-<TS>` copy you made before installing,
 or the `settings.json.bak.uninstall.<TS>` file that `--apply` printed, never
 the `harness.uninstall.<TS>.json` record. The source must be a JSON
-object, and a file with the snapshot record's shape (a `version` key
-together with a `removedHookGroups` array) is refused, so the record
-cannot replace `settings.json`. A restore also removes the manifest, lock
+object, and a file with the snapshot record's shape is refused, so the
+record cannot replace `settings.json`: any top-level
+`removedHookGroups`, `removedMcpServers`, `settingsBackupPath`,
+`settingsBeforeSha256`, `settingsAfterSha256` or `restoredFrom` key (in any
+shape, with or without `version`), or an object whose only key holds an
+object carrying one of those keys (one wrapper level, no deeper). A restore also removes the manifest, lock
 and generated tree and deregisters harness-owned MCP servers.
 
 Flags: `--home <path>` overrides the settings home `~/.claude/` (and,

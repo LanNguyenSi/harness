@@ -56,16 +56,42 @@ export interface UninstallSnapshot {
 }
 
 /**
- * True when `value` has the shape of an uninstall snapshot record: a
- * `version` key together with a `removedHookGroups` array. A real
- * settings.json backup never carries `removedHookGroups`, even when it
- * happens to have a `version` key of its own, so the pair is what
- * separates the two.
+ * Top-level keys only the uninstall snapshot writer emits. A settings.json
+ * has no use for any of them. Generic keys the record also carries
+ * (`version`, `createdAt`, `settingsPath`) are left out on purpose, so a
+ * settings backup that has its own `version` key still restores.
+ */
+export const SNAPSHOT_MARKER_KEYS = [
+  "removedHookGroups",
+  "removedMcpServers",
+  "settingsBackupPath",
+  "settingsBeforeSha256",
+  "settingsAfterSha256",
+  "restoredFrom",
+] as const;
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function hasMarkerKey(value: Record<string, unknown>): boolean {
+  return SNAPSHOT_MARKER_KEYS.some((k) => Object.prototype.hasOwnProperty.call(value, k));
+}
+
+/**
+ * True when `value` is an uninstall snapshot record, or a hand-edited or
+ * partial one: a top-level object carrying any snapshot marker key in any
+ * shape (with or without `version`), or an object whose only key holds a
+ * plain object that carries one (one wrapper level, no deeper). A plain
+ * settings.json, nested objects included, is not.
  */
 export function looksLikeUninstallSnapshot(value: unknown): boolean {
-  if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
-  const rec = value as Record<string, unknown>;
-  return "version" in rec && Array.isArray(rec["removedHookGroups"]);
+  if (!isPlainObject(value)) return false;
+  if (hasMarkerKey(value)) return true;
+  const keys = Object.keys(value);
+  if (keys.length !== 1) return false;
+  const inner = value[keys[0] as string];
+  return isPlainObject(inner) && hasMarkerKey(inner);
 }
 
 export function sha256Hex(input: string | Buffer): string {
