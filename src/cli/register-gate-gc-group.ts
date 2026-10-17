@@ -5,7 +5,7 @@ import { codexGateEnable } from "./gate/codex-enable.js";
 import { codexConfigFlag, foreignCodexExit } from "./gate/codex-snapshot.js";
 import { gateDisable, GateDisableError } from "./gate/disable.js";
 import { gateEnable, GateEnableError } from "./gate/enable.js";
-import type { ForeignSnapshot } from "./gate/snapshot.js";
+import { type ForeignSnapshot, settingsFlag } from "./gate/snapshot.js";
 
 const RUNTIME_HELP =
   "which runtime's hook config to edit: claude (default, ~/.claude/settings.json) or codex " +
@@ -67,6 +67,8 @@ export function registerGateGcGroup(
     .option("--runtime <runtime>", RUNTIME_HELP)
     .action(async (options: { matcher?: string; settings?: string; config?: string; runtime?: string }) => {
       const runtime = parseGateRuntime(options);
+      // The restore command the output prints has to reach the same settings file as this call.
+      const enableTarget = options.settings ? ` ${settingsFlag(options.settings)}` : "";
       try {
         const result = runGateDisable(runtime, options);
         const plural = runtime === "codex" ? "hook units" : "hook groups";
@@ -85,7 +87,7 @@ export function registerGateGcGroup(
               ? "\nPass --matcher <substring> to disable a unit (its `hooks` array is emptied in place; " +
                   "nothing is removed). This is reversible via " +
                   `\`harness gate enable --runtime codex${codexConfigFlag(options.config ? result.path : null)}\`.\n`
-              : "\nPass --matcher <substring> to remove a group. Removal is reversible via `harness gate enable`.\n",
+              : `\nPass --matcher <substring> to remove a group. Removal is reversible via \`harness gate enable${enableTarget}\`.\n`,
           );
           return;
         }
@@ -111,7 +113,7 @@ export function registerGateGcGroup(
         );
         stdout(
           `This is reversible: run \`harness gate enable${
-            runtime === "codex" ? ` --runtime codex${codexConfigFlag(options.config ? result.path : null)}` : ""
+            runtime === "codex" ? ` --runtime codex${codexConfigFlag(options.config ? result.path : null)}` : enableTarget
           }\` to restore.\n`,
         );
       } catch (err) {
@@ -221,10 +223,13 @@ export function registerGateGcGroup(
         }
         // Claude only: the Codex result's `remaining` is folded into the one error below.
         const foreignNote = foreign.length > 0 ? foreignSnapshotsNote(target, foreign) : "";
+        // The command the message prints has to reach the same target as this call.
+        const enableTarget = options.settings ? ` ${settingsFlag(options.settings)}` : "";
         if (runtime === "claude" && liveLeft.length > 0) {
           throw new HarnessExitError(
             `${liveLeft.length} more gate snapshot(s) are still live next to ${target}: ${liveLeft.join(", ")}. ` +
-              `Their groups are not restored yet; run \`harness gate enable\` again.${foreignNote ? ` ${foreignNote}` : ""}`,
+              `Their groups are not restored yet; run \`harness gate enable${enableTarget}\` again.` +
+              `${foreignNote ? ` ${foreignNote}` : ""}`,
             EX_FAIL,
           );
         }
@@ -307,7 +312,7 @@ function foreignSnapshotsNote(
     foreign
       .map(
         (f) =>
-          `${f.path}: run \`harness gate enable --settings ${f.settingsPath}\`` +
+          `${f.path}: run \`harness gate enable ${settingsFlag(f.settingsPath)}\`` +
           (f.settingsExists
             ? ""
             : ` (no file is at that name now: if the settings file was renamed after the disable, rename it back ` +

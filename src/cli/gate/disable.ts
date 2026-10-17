@@ -15,7 +15,9 @@
 // snapshot the file has drifted from while a group is still missing, or is
 // there only with other content, makes this verb refuse, writing nothing but
 // the retire of the spent snapshots it walked past, and points at
-// `gate enable --force`.
+// `gate enable --force`. A settings.json that is itself a symlink is written
+// through: the link stays a link, and the backup and snapshot sit beside the
+// file it leads to (`resolveSettingsEntry`).
 //
 // With NO `--matcher`, this verb is a pure listing — it prints the
 // candidate groups and exits without writing. That's the no-args
@@ -39,7 +41,9 @@ import {
   missingLabel,
   planRestore,
   type RemovedGroup,
+  resolveSettingsEntry,
   retireSnapshot,
+  settingsFlag,
   sha256Hex,
   SNAPSHOT_VERSION,
   snapshotPath,
@@ -240,21 +244,26 @@ export function gateDisable(opts: GateDisableOptions = {}): GateDisableResult {
 
   const beforeSha = sha256Hex(parsed.raw);
   const now = opts.now ?? new Date();
-  const backup = backupPath(settingsPath, now);
+  // Every write goes to the file itself: a settings.json that is a symlink
+  // (dotfiles) stays a symlink, and its backup and snapshot sit beside the
+  // file it leads to, where an enable through either spelling looks.
+  const entry = resolveSettingsEntry(settingsPath);
+  const backup = backupPath(entry, now);
 
   const found = listLiveSnapshots(settingsPath);
   if (!found.ok) {
     throw new GateDisableError(
       `${found.reason}. A live snapshot beside ${settingsPath} that cannot be read would be left out of this ` +
         `disable; nothing was changed. Move ${found.path} aside (or rename it to *.restored.json once its groups ` +
-        `are back) and run this again.`,
+        `are back; if it names groups that are still removed, put them back by hand first, the snapshot's ` +
+        `settingsBackupPath names the file as it was before the disable) and run this again.`,
     );
   }
   const { target, spent } = chooseSnapshot(found.live, parsed, beforeSha, settingsPath);
   const step =
     target === undefined ? 0 : Math.max(...target.snapshot.removed.map((r) => r.step ?? 0), 0) + 1;
   const stepped: RemovedGroup[] = removed.map((r) => ({ ...r, step }));
-  const snapPath = target?.path ?? snapshotPath(settingsPath, now);
+  const snapPath = target?.path ?? snapshotPath(entry, now);
   const retired = retireSpent(spent, settingsPath);
 
   // Backup BEFORE we touch the live file. If the backup write fails we
@@ -282,7 +291,7 @@ export function gateDisable(opts: GateDisableOptions = {}): GateDisableResult {
       ? {
           version: SNAPSHOT_VERSION,
           createdAt: now.toISOString(),
-          settingsPath: path.resolve(settingsPath),
+          settingsPath: path.resolve(entry),
           settingsBackupPath: path.resolve(backup),
           settingsBeforeSha256: beforeSha,
           settingsAfterSha256: afterSha,
@@ -312,7 +321,7 @@ export function gateDisable(opts: GateDisableOptions = {}): GateDisableResult {
   const priorSnapshot = target === undefined ? undefined : fs.readFileSync(target.path, "utf8");
   atomicWriteFile(snapPath, `${JSON.stringify(snapshot, null, 2)}\n`);
   try {
-    atomicWriteFile(settingsPath, newSettings);
+    atomicWriteFile(entry, newSettings);
   } catch (err) {
     if (priorSnapshot !== undefined) {
       // The merged snapshot now describes a removal that never happened to
@@ -325,7 +334,7 @@ export function gateDisable(opts: GateDisableOptions = {}): GateDisableResult {
         throw new GateDisableError(
           `cannot write ${settingsPath}: ${(err as Error).message}; and the snapshot ${snapPath}, already merged, ` +
             `could not be put back (${(rollbackErr as Error).message}). ${settingsPath} still holds the groups this ` +
-            `disable meant to remove. Run \`harness gate enable\` (same --settings) to put back what the earlier ` +
+            `disable meant to remove. Run \`harness gate enable ${settingsFlag(settingsPath)}\` to put back what the earlier ` +
             `disables removed (add --force if it refuses; a group the file still holds is left alone), then run ` +
             `this disable again.`,
         );
@@ -413,11 +422,11 @@ function chooseSnapshot(
     // names the way that puts the snapshot's group back instead.
     const wayOut =
       plan.changed.length > 0
-        ? `If the file's group stands in for the snapshot's, run \`harness gate enable --force\` (same --settings): ` +
+        ? `If the file's group stands in for the snapshot's, run \`harness gate enable --force ${settingsFlag(settingsPath)}\`: ` +
           `it takes it as back (the snapshot's group is not put back), puts the missing groups back and keeps every ` +
           `other edit. Otherwise make the file hold the snapshot's group (${snap.settingsBackupPath} has it) and run ` +
-          `\`harness gate enable\`. Then run this again.`
-        : `Run \`harness gate enable --force\` (same --settings): it puts the missing groups back, leaves a group ` +
+          `\`harness gate enable ${settingsFlag(settingsPath)}\`. Then run this again.`
+        : `Run \`harness gate enable --force ${settingsFlag(settingsPath)}\`: it puts the missing groups back, leaves a group ` +
           `that is already there alone and keeps every other edit. Then run this again.`;
     throw new GateDisableError(
       `${settingsPath} is not the state the live snapshot ${candidate.path} left, and ${problems.join("; ")}; ` +

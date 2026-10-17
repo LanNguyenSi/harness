@@ -181,6 +181,17 @@ export interface SnapshotReadErr {
 }
 
 /**
+ * Whether a snapshot's recorded `settingsPath` names a file: only its
+ * basename tells which directory entry the snapshot belongs to, so a path
+ * that has none (empty, or ending in `.` or `..`) records no target.
+ */
+function hasRecordedTarget(recorded: unknown): boolean {
+  if (typeof recorded !== "string") return false;
+  const name = path.basename(recorded);
+  return name !== "" && name !== "." && name !== "..";
+}
+
+/**
  * Parse a snapshot file. Validates structural shape only — the body's
  * `removed[].group` payload is opaque (preserved verbatim from
  * settings.json) and not re-validated against a hook schema.
@@ -208,6 +219,14 @@ export function readSnapshot(filePath: string): SnapshotReadOk | SnapshotReadErr
       reason:
         `snapshot ${filePath} has unsupported version ${JSON.stringify(obj["version"])}; ` +
         `expected ${LEGACY_SNAPSHOT_VERSION} or ${SNAPSHOT_VERSION}`,
+    };
+  }
+  if (!hasRecordedTarget(obj["settingsPath"])) {
+    return {
+      ok: false,
+      reason:
+        `snapshot ${filePath} has no recorded target (its "settingsPath" is missing or empty), so it cannot be ` +
+        `matched to a settings file`,
     };
   }
   const problem = snapshotFieldProblem(filePath, obj, [
@@ -317,51 +336,121 @@ export function namesSameEntry(
   );
 }
 
+const MAX_LINK_HOPS = 40;
+
 /**
- * The live (not retired) snapshots beside `settingsPath` that were taken for
- * that file, newest first by `createdAt`. Snapshots always sit beside their
- * file, so only the basename of the recorded settings path counts, never how
- * the directory was spelled when it was written (relative to some other
- * working directory, or through a symlink): a snapshot belongs to the file
- * when the target names the directory entry that basename names
- * (`namesSameEntry`: the same spelling, or another spelling of the one entry
- * on a case-insensitive filesystem). A hard link or a symlink to the file
- * under another name is another entry, so a snapshot recorded for either is
- * foreign to the other, whether or not the files exist. A snapshot for
- * another settings file in the same directory is listed in `skippedForeign`,
- * never dropped silently. A live snapshot that cannot be read is an error:
- * its target cannot be told, so neither disable nor enable may go on as if
- * it did not exist.
+ * The file `gate disable` and `gate enable` read and write for `settingsPath`.
+ * That is the path itself unless its last component is a symlink (a dotfiles
+ * setup): then it is the entry the link leads to, which may sit in another
+ * directory. Writing through the resolved entry keeps the link a link, and
+ * the snapshots sit beside the file itself, so a disable through either
+ * spelling is found by an enable through the other. A link whose target is
+ * gone is followed by hand to where the target would be, so the snapshots
+ * taken for that target are still found; a loop resolves to the path as given.
+ */
+export function resolveSettingsEntry(settingsPath: string): string {
+  try {
+    fs.readlinkSync(settingsPath);
+  } catch {
+    // Not a symlink (EINVAL), or nothing there.
+    return settingsPath;
+  }
+  try {
+    return fs.realpathSync(settingsPath);
+  } catch {
+    // A dangling link or a loop: walk the chain by hand below.
+  }
+  let current = path.resolve(settingsPath);
+  for (let hop = 0; hop < MAX_LINK_HOPS; hop++) {
+    let next: string;
+    try {
+      next = fs.readlinkSync(current);
+    } catch {
+      return current;
+    }
+    current = path.resolve(path.dirname(current), next);
+  }
+  return settingsPath;
+}
+
+/** The identity of a file across spellings of its directory, or the path itself when it cannot be resolved. */
+function fileIdentity(file: string): string {
+  try {
+    return fs.realpathSync(file);
+  } catch {
+    return file;
+  }
+}
+
+/**
+ * The live (not retired) snapshots that were taken for `settingsPath`,
+ * newest first by `createdAt`. Snapshots always sit beside their file, so
+ * only the basename of the recorded settings path counts, never how the
+ * directory was spelled when it was written (relative to some other working
+ * directory, or through a symlink): a snapshot belongs to the file when the
+ * target names the directory entry that basename names (`namesSameEntry`:
+ * the same spelling, or another spelling of the one entry on a
+ * case-insensitive filesystem). When `settingsPath` is itself a symlink
+ * (`resolveSettingsEntry`), the directory of the file it leads to is searched
+ * too, with the resolved entry as the target there: the snapshot of a disable
+ * made through the other spelling sits beside that file. A hard link or a
+ * symlink to the file under another name is another entry, so a snapshot
+ * recorded for either is foreign to the other, whether or not the files
+ * exist. A snapshot for another settings file in the same directory is
+ * listed in `skippedForeign`, never dropped silently. A live snapshot that
+ * cannot be read, or records no target, is an error: its target cannot be
+ * told, so neither disable nor enable may go on as if it did not exist.
  */
 export function listLiveSnapshots(settingsPath: string): LiveSnapshotsResult {
-  const dir = path.dirname(settingsPath);
-  const targetName = path.basename(settingsPath);
-  const live: LiveSnapshot[] = [];
-  const skippedForeign: ForeignSnapshot[] = [];
-  for (const file of listSnapshots(dir)) {
-    if (file.endsWith(RETIRED_SNAPSHOT_SUFFIX)) continue;
-    const read = readSnapshot(file);
-    if (!read.ok) return { ok: false, reason: read.reason, path: file };
-    const recordedName = path.basename(read.snapshot.settingsPath);
-    if (!namesSameEntry(dir, recordedName, targetName)) {
-      const recordedPath = path.join(dir, recordedName);
-      skippedForeign.push({
-        path: file,
-        settingsPath: recordedPath,
-        settingsExists: fs.existsSync(recordedPath),
-        settingsBackupPath: read.snapshot.settingsBackupPath,
-      });
-      continue;
-    }
-    live.push({ path: file, snapshot: read.snapshot });
+  const resolved = resolveSettingsEntry(settingsPath);
+  const places = [{ dir: path.dirname(settingsPath), name: path.basename(settingsPath) }];
+  if (resolved !== settingsPath) {
+    places.push({ dir: path.dirname(resolved), name: path.basename(resolved) });
   }
-  live.sort((a, b) => {
+  const live = new Map<string, LiveSnapshot>();
+  const foreign = new Map<string, ForeignSnapshot>();
+  for (const { dir, name: targetName } of places) {
+    for (const file of listSnapshots(dir)) {
+      if (file.endsWith(RETIRED_SNAPSHOT_SUFFIX)) continue;
+      const id = fileIdentity(file);
+      const read = readSnapshot(file);
+      if (!read.ok) return { ok: false, reason: read.reason, path: file };
+      const recordedName = path.basename(read.snapshot.settingsPath);
+      if (!namesSameEntry(dir, recordedName, targetName)) {
+        const recordedPath = path.join(dir, recordedName);
+        if (!foreign.has(id)) {
+          foreign.set(id, {
+            path: file,
+            settingsPath: recordedPath,
+            settingsExists: fs.existsSync(recordedPath),
+            settingsBackupPath: read.snapshot.settingsBackupPath,
+          });
+        }
+        continue;
+      }
+      live.set(id, { path: file, snapshot: read.snapshot });
+    }
+  }
+  const liveList = [...live.values()];
+  liveList.sort((a, b) => {
     if (a.snapshot.createdAt !== b.snapshot.createdAt) {
       return a.snapshot.createdAt < b.snapshot.createdAt ? 1 : -1;
     }
     return a.path < b.path ? 1 : -1;
   });
-  return { ok: true, live, skippedForeign };
+  // A snapshot the other spelling's directory owns is not foreign to the file.
+  const skippedForeign = [...foreign].filter(([id]) => !live.has(id)).map(([, f]) => f);
+  return { ok: true, live: liveList, skippedForeign };
+}
+
+/**
+ * How a command prints a `--settings` target so that it works as printed: a
+ * path with a character the shell would act on is single-quoted.
+ */
+export function settingsFlag(settingsPath: string): string {
+  return /^[A-Za-z0-9_@%+=:,./~-]+$/.test(settingsPath)
+    ? `--settings ${settingsPath}`
+    : `--settings '${settingsPath.replace(/'/g, `'\\''`)}'`;
 }
 
 function groupMatcherOf(group: unknown): string | null {

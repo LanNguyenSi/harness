@@ -185,7 +185,7 @@ describe("gateDisable: the settings.json write fails after the snapshot was writ
     const message = (thrown as Error).message;
     expect(message).toContain(`cannot write ${settingsPath}: write failed`);
     expect(message).toContain(`the snapshot ${path.join(tmp, name ?? "")}, already merged, could not be put back (rollback failed)`);
-    expect(message).toContain("Run `harness gate enable`");
+    expect(message).toContain(`Run \`harness gate enable --settings ${settingsPath}\``);
     // The merged snapshot stayed, the file is still the first disable's state.
     expect(matchers()).toEqual(["Bash", "Task"]);
 
