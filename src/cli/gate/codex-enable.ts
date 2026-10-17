@@ -4,7 +4,10 @@
 // Reads the live `harness.gate-disable-codex.*.json` snapshot beside the
 // config (a Claude `harness.gate-disable.*.json` snapshot is never
 // considered). At most one is live per config: every disable merges into it.
-// Another config's snapshot is skipped and named. An earlier build kept one
+// Another config's snapshot is skipped and named with the `--config` that
+// restores it; a snapshot recorded under another spelling of this config's
+// own directory entry (case or normalization on a folding filesystem) is this
+// config's own. An earlier build kept one
 // snapshot per disable; with several live ones for this config, enable
 // handles the newest by its recorded `createdAt` (never by file mtime) per
 // run and names the rest in `remaining`, so the caller exits non-zero until
@@ -50,6 +53,7 @@ import { atomicWriteFile } from "../../io/atomic-write.js";
 import {
   codexSnapshotExits,
   type CodexRetiredSnapshot,
+  type ForeignCodexSnapshot,
   latestInstall,
   planCodexRestore,
   readLiveCodexSnapshots,
@@ -73,8 +77,9 @@ interface EnableBase {
   configPath: string;
   /** Ids of the block's units that are still neutralised after this call. */
   stillDisabled: string[];
-  /** Live snapshots beside the config that were taken for another config. */
-  skippedForeign: string[];
+  /** Live snapshots beside the config that were taken for another config
+   * (another file, or the same file under a name harness cannot prove is its own). */
+  skippedForeign: ForeignCodexSnapshot[];
 }
 
 interface SnapshotBase extends EnableBase {

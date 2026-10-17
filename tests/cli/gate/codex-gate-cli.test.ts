@@ -177,6 +177,7 @@ describe("harness gate --runtime codex", () => {
     expect(partial.stderr).toContain("1 hook unit(s)");
     expect(partial.stderr).toContain("are still disabled: shell-guard");
     expect(partial.stderr).toContain("No Codex gate snapshot restores them.");
+    expect(partial.stderr).toContain("run enable with that same `--config`");
     expect(partial.stderr).not.toContain("--force");
     const stuck = await gate("enable", "--runtime", "codex", "--config", configPath);
     expect(stuck.code).toBe(EX_FAIL);
@@ -425,7 +426,9 @@ describe("harness gate --runtime codex", () => {
     const [foreign] = fs.readdirSync(tmp).filter((n) => n.startsWith("harness.gate-disable-codex."));
     const r = await gate("enable", "--runtime", "codex", "--config", configPath);
     expect(r.code).toBe(EX_OK);
-    expect(r.stdout).toContain(`skipped ${path.join(tmp, foreign!)}: taken for another config.`);
+    expect(r.stdout).toContain(
+      `skipped ${path.join(tmp, foreign!)}: taken for another config; run \`harness gate enable --runtime codex --config ${other}\`.`,
+    );
     expect(fs.readdirSync(tmp)).toContain(foreign);
   });
 
@@ -481,6 +484,91 @@ describe("harness gate --runtime codex", () => {
     expect(wrongConfig.code).toBe(EX_USAGE);
     expect(wrongConfig.stderr).toContain("--config only applies to --runtime codex");
   });
+});
+
+/** Whether the volume under `dir` treats `Config.toml` and `config.toml` as one name. */
+function foldsCase(dir: string): boolean {
+  const probe = path.join(dir, "case-probe.tmp");
+  fs.writeFileSync(probe, "");
+  try {
+    return fs.existsSync(path.join(dir, "CASE-PROBE.TMP"));
+  } finally {
+    fs.rmSync(probe, { force: true });
+  }
+}
+
+describe("harness gate enable --runtime codex through another name of the config", () => {
+  it("through a hard link to the config: the snapshot stays foreign, and the message names the recorded --config as the exit", async () => {
+    await gate("disable", "--runtime", "codex", "--config", configPath, "--matcher", "apply_patch");
+    const disabled = fs.readFileSync(configPath, "utf8");
+    const [snap] = fs.readdirSync(tmp).filter((n) => n.startsWith("harness.gate-disable-codex."));
+    const alias = path.join(tmp, "alias.toml");
+    fs.linkSync(configPath, alias);
+
+    const r = await gate("enable", "--runtime", "codex", "--config", alias);
+    expect(r.code).toBe(EX_FAIL);
+    expect(r.stdout).toContain(
+      `skipped ${path.join(tmp, snap!)}: taken for another config; run \`harness gate enable --runtime codex --config ${configPath}\`.`,
+    );
+    expect(r.stderr).toContain("are still disabled: policy-pack:branch-protection:pre-tool-use.");
+    expect(r.stderr).toContain(`${path.join(tmp, snap!)}: run \`harness gate enable --runtime codex --config ${configPath}\``);
+    expect(r.stderr).not.toContain("No Codex gate snapshot restores them");
+    expect(r.stderr).not.toContain(".bak.");
+    expect(r.stdout).not.toContain("nothing to restore");
+    expect(fs.readFileSync(configPath, "utf8")).toBe(disabled);
+    expect(fs.existsSync(path.join(tmp, snap!))).toBe(true);
+
+    // The named command restores the config the snapshot was taken for.
+    const exit = await gate("enable", "--runtime", "codex", "--config", configPath);
+    expect(exit.code).toBe(EX_OK);
+    expect(exit.stdout).toContain(`restored 1 hook unit(s) into ${configPath}`);
+  });
+
+  it("when the recorded config is gone, the exit adds the rename-back and restore-from-backup steps", async () => {
+    await gate("disable", "--runtime", "codex", "--config", configPath, "--matcher", "apply_patch");
+    const moved = path.join(tmp, "moved.toml");
+    fs.renameSync(configPath, moved);
+    const r = await gate("enable", "--runtime", "codex", "--config", moved);
+    expect(r.code).toBe(EX_FAIL);
+    expect(r.stderr).toContain(`run \`harness gate enable --runtime codex --config ${configPath}\` (no file is at that name now:`);
+    expect(r.stderr).toMatch(/restore it from .*config\.toml\.bak\./);
+  });
+
+  it("a config with no units off and a snapshot of another config beside it still exits 0 and names that snapshot's exit", async () => {
+    const other = path.join(tmp, "other.toml");
+    fs.copyFileSync(configPath, other);
+    await gate("disable", "--runtime", "codex", "--config", other, "--matcher", "apply_patch");
+    const r = await gate("enable", "--runtime", "codex", "--config", configPath);
+    expect(r.code).toBe(EX_OK);
+    expect(r.stdout).toContain(`run \`harness gate enable --runtime codex --config ${other}\`.`);
+    expect(r.stdout).not.toContain("nothing to restore");
+  });
+
+  it.skipIf(!foldsCase(os.tmpdir()))(
+    "through a case variant of the config's own name on a case-insensitive volume: its snapshot is restored, not skipped (skipped on a case-sensitive volume)",
+    async () => {
+      const original = fs.readFileSync(configPath, "utf8");
+      const variant = path.join(tmp, "Config.toml");
+      await gate("disable", "--runtime", "codex", "--config", variant, "--matcher", "apply_patch");
+      const r = await gate("enable", "--runtime", "codex", "--config", configPath);
+      expect(r.code).toBe(EX_OK);
+      expect(r.stdout).toContain("restored 1 hook unit(s)");
+      expect(r.stdout).not.toContain("skipped");
+      expect(fs.readFileSync(configPath, "utf8")).toBe(original);
+    },
+  );
+
+  it.skipIf(!foldsCase(os.tmpdir()))(
+    "through a case variant of a config with a second name: foreign, and the exit is the recorded --config (skipped on a case-sensitive volume)",
+    async () => {
+      await gate("disable", "--runtime", "codex", "--config", configPath, "--matcher", "apply_patch");
+      fs.linkSync(configPath, path.join(tmp, "second-name.toml"));
+      const r = await gate("enable", "--runtime", "codex", "--config", path.join(tmp, "Config.toml"));
+      expect(r.code).toBe(EX_FAIL);
+      expect(r.stderr).toContain(`run \`harness gate enable --runtime codex --config ${configPath}\``);
+      expect(r.stderr).not.toContain("No Codex gate snapshot restores them");
+    },
+  );
 });
 
 describe("harness gate without --runtime, and with --runtime claude, behave as before", () => {

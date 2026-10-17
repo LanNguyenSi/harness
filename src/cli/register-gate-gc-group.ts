@@ -2,6 +2,7 @@ import type { Command } from "commander";
 import { EX_FAIL, EX_USAGE, HarnessExitError } from "./exit-codes.js";
 import { codexGateDisable } from "./gate/codex-disable.js";
 import { codexGateEnable } from "./gate/codex-enable.js";
+import { foreignCodexExit } from "./gate/codex-snapshot.js";
 import { gateDisable, GateDisableError } from "./gate/disable.js";
 import { gateEnable, GateEnableError } from "./gate/enable.js";
 import type { ForeignSnapshot } from "./gate/snapshot.js";
@@ -171,8 +172,10 @@ export function registerGateGcGroup(
         const alreadyBack = "alreadyBack" in result ? result.alreadyBack : [];
         const accepted = "accepted" in result ? result.accepted : [];
         const foreign = "foreign" in result ? result.foreign : [];
+        // Codex only: another config's snapshots, each with the `--config` that restores it.
+        const skippedForeign = "skippedForeign" in result ? result.skippedForeign : [];
         if (result.mode === "no-snapshots") {
-          if (stillDisabled.length === 0 && foreign.length === 0) {
+          if (stillDisabled.length === 0 && foreign.length === 0 && skippedForeign.length === 0) {
             stdout(`no gate-disable snapshots found next to ${target}; nothing to restore.\n`);
           }
         } else if (result.mode === "already-restored") {
@@ -204,10 +207,8 @@ export function registerGateGcGroup(
           );
         }
         // Codex only: a Claude result names another settings file's snapshots in `foreign` (an error below).
-        if ("skippedForeign" in result) {
-          for (const p of result.skippedForeign) {
-            stdout(`skipped ${p}: taken for another config.\n`);
-          }
+        for (const f of skippedForeign) {
+          stdout(`skipped ${f.path}: taken for another config; ${foreignCodexExit(f)}.\n`);
         }
         if ("skippedEnabled" in result && result.skippedEnabled.length > 0) {
           stdout(`left as they are: ${result.skippedEnabled.join(", ")} (already enabled again).\n`);
@@ -244,8 +245,14 @@ export function registerGateGcGroup(
                 `${stillDisabled.length} hook unit(s) in ${target} are still disabled: ${stillDisabled.join(", ")}.` +
                   (remaining.length > 0
                     ? ""
-                    : " No Codex gate snapshot restores them. Restore the config from the backup beside it " +
-                      "(<config>.bak.<timestamp>), or re-run `harness apply --runtime codex --install` to re-render the block."),
+                    : skippedForeign.length > 0
+                      ? " A live Codex gate snapshot beside it was taken for another config; if these units are the " +
+                        "ones it neutralised (the same config under another name), restore them through it: " +
+                        `${skippedForeign.map((f) => `${f.path}: ${foreignCodexExit(f)}`).join("; ")}.`
+                      : " No Codex gate snapshot restores them. Restore the config from the backup beside it " +
+                        "(<config>.bak.<timestamp>), or re-run `harness apply --runtime codex --install` to re-render the block. " +
+                        "A gate snapshot sits beside the path `harness gate disable` was given: if this config is also " +
+                        "reached through a link or another name, run enable with that same `--config`."),
               remaining.length > 0 &&
                 `${remaining.length} more live Codex gate snapshot(s) remain (an earlier build wrote one per disable): ` +
                   `${remaining.join(", ")}. Run \`harness gate enable --runtime codex\` again for the next one.`,

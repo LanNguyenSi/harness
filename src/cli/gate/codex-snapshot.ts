@@ -23,12 +23,13 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import {
   CodexInstallRefusalError,
+  codexConfigLinkChain,
   type CodexManagedHookUnit,
   defaultCodexConfigPath,
   latestCodexInstallBackup,
   resolveConfigSymlink,
 } from "../apply/install-codex-config.js";
-import { listSnapshots, SNAPSHOT_BASENAME_SUFFIX, snapshotFieldProblem } from "./snapshot.js";
+import { listSnapshots, namesSameEntry, SNAPSHOT_BASENAME_SUFFIX, snapshotFieldProblem } from "./snapshot.js";
 
 export const CODEX_SNAPSHOT_BASENAME_PREFIX = "harness.gate-disable-codex.";
 /** Why `gate enable --runtime codex` retired a snapshot: it was applied or
@@ -254,10 +255,14 @@ export function planCodexRestore(
 }
 
 /** The installer's newest write of the config, read from its backups beside
- * the requested path (and beside the resolved target, where an install
- * through the target's own path leaves them). */
+ * the requested path, beside every further hop of its link chain and beside
+ * the resolved target (an install leaves them beside the path it was run
+ * through, which may be any of these). An install through a link outside this
+ * chain leaves its backups where this cannot look. */
 export function latestInstall(requestedPath: string, configPath: string): { ms: number; path: string } | null {
-  const found = [requestedPath, configPath].map(latestCodexInstallBackup).filter((t) => t !== null);
+  const found = [...new Set([...codexConfigLinkChain(requestedPath), configPath])]
+    .map(latestCodexInstallBackup)
+    .filter((t) => t !== null);
   return found.reduce<{ ms: number; path: string } | null>((a, b) => (a === null || b.ms > a.ms ? b : a), null);
 }
 
@@ -298,18 +303,53 @@ export interface LoadedCodexSnapshot {
   snapshot: CodexGateSnapshot;
 }
 
+/** A live snapshot beside a config that was taken for another config. */
+export interface ForeignCodexSnapshot {
+  /** The snapshot file. */
+  path: string;
+  /** The config it was taken for: its recorded basename in the snapshot's directory. */
+  configPath: string;
+  /** Whether a file (or link) is at `configPath` now. */
+  configExists: boolean;
+  /** The backup its first disable wrote: the pre-disable copy of that config. */
+  configBackupPath: string;
+}
+
+/** The way out of a snapshot taken for another config: the gate command that
+ * restores the config the snapshot was taken for (with the extra steps when
+ * no file is at that name any more). */
+export function foreignCodexExit(f: ForeignCodexSnapshot): string {
+  return (
+    `run \`harness gate enable --runtime codex --config ${f.configPath}\`` +
+    (f.configExists
+      ? ""
+      : ` (no file is at that name now: if the config was renamed after the disable, rename it back first; ` +
+        `if it is gone, restore it from ${f.configBackupPath}, which is the file before that disable, then run ` +
+        "that command, which retires the snapshot; or move the snapshot out of the directory by hand once its " +
+        "units are back)")
+  );
+}
+
 /** The live snapshots beside a config, split into those taken for it, newest
  * first by their recorded `createdAt` (equal times by file name, newest name
- * first; never by file mtime, which a directory copy reorders), and the
- * paths of those taken for another config. An unreadable one refuses via
- * `makeError`. */
+ * first; never by file mtime, which a directory copy reorders), and those
+ * taken for another config. Snapshots sit beside their config and record its
+ * path, so only the basename counts, never how the directory was spelled; a
+ * snapshot is the config's own when the requested path names the directory
+ * entry that basename names (`namesSameEntry`, the Claude gate's rule): the
+ * same spelling, or another spelling of the one entry on a filesystem that
+ * folds letter case or normalization. A hard link or a symlink to the config
+ * under another name is another entry, so a snapshot recorded for either is
+ * foreign to the other. An unreadable snapshot refuses via `makeError`. */
 export function readLiveCodexSnapshots(
   requestedPath: string,
   makeError: (message: string) => Error,
-): { own: LoadedCodexSnapshot[]; foreign: string[] } {
+): { own: LoadedCodexSnapshot[]; foreign: ForeignCodexSnapshot[] } {
   const own: LoadedCodexSnapshot[] = [];
-  const foreign: string[] = [];
-  for (const snapPath of listCodexSnapshots(path.dirname(requestedPath))) {
+  const foreign: ForeignCodexSnapshot[] = [];
+  const dir = path.dirname(requestedPath);
+  const targetName = path.basename(requestedPath);
+  for (const snapPath of listCodexSnapshots(dir)) {
     const read = readCodexSnapshot(snapPath);
     if (!read.ok) {
       throw makeError(
@@ -317,12 +357,32 @@ export function readLiveCodexSnapshots(
           `move ${snapPath} aside (rename it out of this directory) and run the command again.`,
       );
     }
-    if (read.snapshot.configPath === requestedPath) own.push({ path: snapPath, snapshot: read.snapshot });
-    else foreign.push(snapPath);
+    const recordedName = path.basename(read.snapshot.configPath);
+    if (namesSameEntry(dir, recordedName, targetName, { symlinks: true })) {
+      own.push({ path: snapPath, snapshot: read.snapshot });
+    } else {
+      const configPath = path.join(dir, recordedName);
+      foreign.push({
+        path: snapPath,
+        configPath,
+        configExists: pathExists(configPath),
+        configBackupPath: read.snapshot.configBackupPath,
+      });
+    }
   }
   const time = (l: LoadedCodexSnapshot): number => Date.parse(l.snapshot.createdAt);
   own.sort((a, b) => time(b) - time(a) || (a.path < b.path ? 1 : -1));
   return { own, foreign };
+}
+
+/** Whether anything, a dangling symlink included, is at `p`. */
+function pathExists(p: string): boolean {
+  try {
+    fs.lstatSync(p);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export interface CodexSnapshotReadOk {
