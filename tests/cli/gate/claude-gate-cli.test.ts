@@ -926,44 +926,63 @@ describe("harness gate (claude): the file a settings symlink leads to sits in a 
 });
 
 describe("harness gate (claude): a snapshot beside a settings path that became a symlink", () => {
-  it("a disable through the link moves the merged snapshot beside the file, so an enable through the file restores both groups", async () => {
-    const aDir = path.join(tmp, "a");
-    const bDir = path.join(tmp, "b");
+  let aDir: string;
+  let bDir: string;
+  let aPath: string;
+  let bPath: string;
+  let original: string;
+  let oldName: string;
+  let off: { stdout: string; stderr: string; code: number };
+
+  beforeEach(async () => {
+    aDir = path.join(tmp, "a");
+    bDir = path.join(tmp, "b");
     fs.mkdirSync(aDir);
     fs.mkdirSync(bDir);
-    const aPath = path.join(aDir, "settings.json");
-    const bPath = path.join(bDir, "settings.json");
+    aPath = path.join(aDir, "settings.json");
+    bPath = path.join(bDir, "settings.json");
     fs.renameSync(settingsPath, aPath);
-    const original = fs.readFileSync(aPath, "utf8");
+    original = fs.readFileSync(aPath, "utf8");
     // The first disable ran while a/settings.json was a regular file; the file then moved and a link took its place.
     expect((await gateOn(aPath, "disable", "--matcher", "Write|Edit")).code).toBe(EX_OK);
-    const [oldName] = liveSnapshotNames(aPath);
+    oldName = liveSnapshotNames(aPath)[0] ?? "";
     fs.renameSync(aPath, bPath);
     fs.symlinkSync(bPath, aPath);
+    off = await gateOn(aPath, "disable", "--matcher", "Bash");
+  });
 
-    const off = await gateOn(aPath, "disable", "--matcher", "Bash");
+  it("a disable through the link moves the merged snapshot beside the file and retires the old one as superseded", () => {
     expect(off.code).toBe(EX_OK);
     expect(off.stdout).toContain("(merged into the snapshot that was already live)");
-    expect(off.stdout).toContain(`retired ${path.join(aDir, oldName ?? "")} as `);
-    expect(off.stdout).toContain(`its groups were carried into ${path.join(bDir, oldName ?? "")}, beside the file ${aPath} leads to`);
+    expect(off.stdout).toContain(`retired ${path.join(aDir, oldName)} as `);
+    expect(off.stdout).toContain(`its groups were carried into ${path.join(bDir, oldName)}, beside the file ${aPath} leads to`);
     expect(fs.lstatSync(aPath).isSymbolicLink()).toBe(true);
-    // The merged snapshot sits beside the file and records it; the old one is retired, not restored.
     expect(liveSnapshotNames(bPath)).toEqual([oldName]);
     expect(liveSnapshotNames(aPath)).toEqual([]);
     expect(supersededSnapshotNames(aPath)).toHaveLength(1);
     expect(retiredSnapshotNames(aPath)).toEqual([]);
-    const merged = JSON.parse(fs.readFileSync(path.join(bDir, oldName ?? ""), "utf8")) as {
+    const merged = JSON.parse(fs.readFileSync(path.join(bDir, oldName), "utf8")) as {
       settingsPath: string;
       removed: unknown[];
     };
     expect(merged.settingsPath).toBe(bPath);
     expect(merged.removed).toHaveLength(2);
+  });
 
-    // An enable through the file's own path finds it and restores both groups, as one through the link does.
+  it("an enable through the file's own path finds the merged snapshot and restores both groups", async () => {
     const on = await gateOn(bPath, "enable");
     expect(on.code).toBe(EX_OK);
     expect(on.stdout).toContain("restored 2 hook group(s)");
     expect(fs.readFileSync(bPath, "utf8")).toBe(original);
     expect(fs.lstatSync(aPath).isSymbolicLink()).toBe(true);
+  });
+
+  it("an enable through the link does not take the superseded snapshot beside it for a live one", async () => {
+    const on = await gateOn(aPath, "enable");
+    expect(on.code).toBe(EX_OK);
+    expect(on.stdout).toContain("restored 2 hook group(s)");
+    expect(on.stderr).toBe("");
+    expect(fs.readFileSync(bPath, "utf8")).toBe(original);
+    expect(supersededSnapshotNames(aPath)).toHaveLength(1);
   });
 });

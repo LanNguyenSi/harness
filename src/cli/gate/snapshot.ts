@@ -366,14 +366,9 @@ export function namesSameEntry(
  */
 export function resolveSettingsEntry(settingsPath: string): string {
   const { chain, end } = walkLinkChain(settingsPath);
-  const last = chain[chain.length - 1] ?? settingsPath;
   if (chain.length === 1 || end === "loop") return settingsPath;
-  if (end !== "target") return last;
-  try {
-    return fs.realpathSync(last);
-  } catch {
-    return last;
-  }
+  // Every hop's directory is already physical, so the last hop is the file's real path.
+  return chain[chain.length - 1] ?? settingsPath;
 }
 
 /** The identity of a file across spellings of its directory, or the path itself when it cannot be resolved. */
