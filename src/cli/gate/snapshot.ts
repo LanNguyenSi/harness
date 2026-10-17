@@ -418,14 +418,12 @@ export function listLiveSnapshots(settingsPath: string): LiveSnapshotsResult {
       const recordedName = path.basename(read.snapshot.settingsPath);
       if (!namesSameEntry(dir, recordedName, targetName)) {
         const recordedPath = path.join(dir, recordedName);
-        if (!foreign.has(id)) {
-          foreign.set(id, {
-            path: file,
-            settingsPath: recordedPath,
-            settingsExists: fs.existsSync(recordedPath),
-            settingsBackupPath: read.snapshot.settingsBackupPath,
-          });
-        }
+        foreign.set(id, {
+          path: file,
+          settingsPath: recordedPath,
+          settingsExists: fs.existsSync(recordedPath),
+          settingsBackupPath: read.snapshot.settingsBackupPath,
+        });
         continue;
       }
       live.set(id, { path: file, snapshot: read.snapshot });

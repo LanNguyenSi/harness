@@ -71,12 +71,27 @@ describe("resolveSettingsEntry", () => {
     expect(resolveSettingsEntry(path.join(tmp, "outer.json"))).toBe(gone);
   });
 
+  it("follows a chain of relative links whose file is gone", () => {
+    fs.mkdirSync(path.join(tmp, "x"));
+    fs.mkdirSync(path.join(tmp, "y"));
+    fs.symlinkSync(path.join("..", "y", "mid.json"), path.join(tmp, "x", "first.json"));
+    fs.symlinkSync("gone.json", path.join(tmp, "y", "mid.json"));
+    expect(resolveSettingsEntry(path.join(tmp, "x", "first.json"))).toBe(path.join(tmp, "y", "gone.json"));
+  });
+
+  it("resolves a directory link on the way as well as the final link", () => {
+    const real = path.join(tmp, "real");
+    fs.mkdirSync(real);
+    fs.symlinkSync(real, path.join(tmp, "viaDir"));
+    fs.writeFileSync(path.join(real, "y.json"), "{}\n");
+    fs.symlinkSync("y.json", path.join(real, "x.json"));
+    expect(resolveSettingsEntry(path.join(tmp, "viaDir", "x.json"))).toBe(path.join(real, "y.json"));
+  });
+
   it("leaves a link loop as it was given", () => {
-    const one = path.join(tmp, "one.json");
-    const two = path.join(tmp, "two.json");
-    fs.symlinkSync(two, one);
-    fs.symlinkSync(one, two);
-    expect(resolveSettingsEntry(one)).toBe(one);
+    const names = ["one.json", "two.json", "three.json"].map((n) => path.join(tmp, n));
+    names.forEach((n, i) => fs.symlinkSync(names[(i + 1) % names.length] ?? n, n));
+    expect(resolveSettingsEntry(names[0] ?? "")).toBe(names[0]);
   });
 });
 

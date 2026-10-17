@@ -663,6 +663,23 @@ describe("harness gate (claude): a settings file reached through a symlink", () 
     expect(fs.readFileSync(bPath, "utf8")).toBe(original);
   });
 
+  it("a link under another name than the file records the file's name, so both spellings find the snapshot", async () => {
+    const dotfile = path.join(tmp, "dotfile.json");
+    fs.symlinkSync(bPath, dotfile);
+    expect((await gateOn(dotfile, "disable", "--matcher", "Write|Edit")).code).toBe(EX_OK);
+    expect(fs.lstatSync(dotfile).isSymbolicLink()).toBe(true);
+    const [name] = liveSnapshotNames(bPath);
+    const snap = JSON.parse(fs.readFileSync(path.join(bDir, name ?? ""), "utf8")) as { settingsPath: string };
+    expect(snap.settingsPath).toBe(bPath);
+    const viaFile = await gateOn(bPath, "enable");
+    expect(viaFile.code).toBe(EX_OK);
+    expect(viaFile.stdout).toContain("restored 1 hook group(s)");
+    expect(fs.readFileSync(bPath, "utf8")).toBe(original);
+    expect((await gateOn(dotfile, "disable", "--matcher", "Bash")).code).toBe(EX_OK);
+    expect((await gateOn(dotfile, "enable")).code).toBe(EX_OK);
+    expect(fs.readFileSync(bPath, "utf8")).toBe(original);
+  });
+
   it("a symlink chain is followed to the file", async () => {
     const outer = path.join(tmp, "outer.json");
     fs.symlinkSync(aPath, outer);
@@ -767,5 +784,18 @@ describe("harness gate (claude): the command a refusal prints reaches the call's
     const one = await gateOn(file, "enable");
     expect(one.code).toBe(EX_FAIL);
     expect(one.stderr).toContain(`run \`harness gate enable --settings '${file}'\` again`);
+  });
+
+  it("quotes the --settings of a snapshot taken for another file too", async () => {
+    const spaced = path.join(tmp, "my dir");
+    fs.mkdirSync(spaced);
+    const file = path.join(spaced, "settings.json");
+    const other = path.join(spaced, "settings.local.json");
+    fs.copyFileSync(settingsPath, file);
+    fs.copyFileSync(settingsPath, other);
+    expect((await gateOn(other, "disable", "--matcher", "Write|Edit")).code).toBe(EX_OK);
+    const on = await gateOn(file, "enable");
+    expect(on.code).toBe(EX_FAIL);
+    expect(on.stderr).toContain(`run \`harness gate enable --settings '${other}'\``);
   });
 });
