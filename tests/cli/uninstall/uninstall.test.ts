@@ -536,6 +536,16 @@ describe("uninstall — --restore-from", () => {
     expect(readJson(settingsPath)).toEqual(body);
   });
 
+  it("restores a multi-key object whose first key wraps a marker key (the wrapper needs exactly one key)", async () => {
+    const body = { env: { settingsBackupPath: "/x" }, theme: "dark" };
+    writeSettings({ theme: "light" });
+    const src = path.join(homeDir, "multi-key.json");
+    fs.writeFileSync(src, `${JSON.stringify(body)}\n`);
+    const r = await uninstall({ homeDir, settingsPath, restoreFrom: src, mcpExec: execThrowsIfCalled() });
+    expect(r.mode).toBe("restore");
+    expect(readJson(settingsPath)).toEqual(body);
+  });
+
   it("restores a single-key wrapper whose inner object has no marker key", async () => {
     const body = { env: { FOO: "1" } };
     writeSettings({ theme: "light" });
