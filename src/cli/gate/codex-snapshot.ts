@@ -29,6 +29,7 @@ import {
   latestCodexInstallBackup,
   resolveConfigSymlink,
 } from "../apply/install-codex-config.js";
+import { shellQuote } from "./shell-quote.js";
 import { listSnapshots, namesSameEntry, SNAPSHOT_BASENAME_SUFFIX, snapshotFieldProblem } from "./snapshot.js";
 
 export const CODEX_SNAPSHOT_BASENAME_PREFIX = "harness.gate-disable-codex.";
@@ -86,6 +87,14 @@ export interface ResolvedCodexConfig {
   requestedPath: string;
   /** The regular file read and written (the symlink's target when linked). */
   configPath: string;
+  /** `requestedPath` when the call named a config (`--config`), else null: a
+   * command a message prints repeats the flag only when the call had it. */
+  namedPath: string | null;
+}
+
+/** ` <flag> <path>` with the path shell-quoted when the call named a config, else "". */
+export function codexConfigFlag(namedPath: string | null, flag = "--config"): string {
+  return namedPath === null ? "" : ` ${flag} ${shellQuote(namedPath)}`;
 }
 
 /** Installer refusal texts are worded for `harness apply --install`. Reached
@@ -126,13 +135,10 @@ export function resolveCodexConfig(
   opts: { configPath?: string | undefined; homeDir?: string | undefined },
   makeError: (message: string) => Error,
 ): ResolvedCodexConfig {
-  const requestedPath = path.resolve(
-    typeof opts.configPath === "string" && opts.configPath.length > 0
-      ? opts.configPath
-      : defaultCodexConfigPath(opts.homeDir),
-  );
+  const named = typeof opts.configPath === "string" && opts.configPath.length > 0;
+  const requestedPath = path.resolve(named ? opts.configPath! : defaultCodexConfigPath(opts.homeDir));
   try {
-    return { requestedPath, configPath: resolveConfigSymlink(requestedPath) };
+    return { requestedPath, configPath: resolveConfigSymlink(requestedPath), namedPath: named ? requestedPath : null };
   } catch (err) {
     throw toGateError(err, makeError);
   }
@@ -186,11 +192,12 @@ export function retireCodexSnapshot(
 }
 
 /** The ways out of a live snapshot that no gate command can apply. */
-export function codexSnapshotExits(live: LoadedCodexSnapshot): string {
+export function codexSnapshotExits(live: LoadedCodexSnapshot, namedPath: string | null = null): string {
   return (
-    "Ways out: run `harness apply --runtime codex --install`, which re-renders the block and supersedes the " +
-    `snapshot, or restore the config from ${live.snapshot.configBackupPath} (its state before the snapshot's ` +
-    "first disable); either way the next `harness gate enable --runtime codex` (or disable) retires the " +
+    `Ways out: run \`harness apply --runtime codex --install${codexConfigFlag(namedPath, "--codex-config")}\`, which ` +
+    `re-renders the block and supersedes the snapshot, or restore the config from ${live.snapshot.configBackupPath} ` +
+    `(its state before the snapshot's first disable); either way the next ` +
+    `\`harness gate enable --runtime codex${codexConfigFlag(namedPath)}\` (or disable) retires the ` +
     `snapshot. Or move ${live.path} out of this directory and put back by hand any unit it names that is ` +
     "still disabled."
   );
@@ -213,13 +220,14 @@ export function planCodexRestore(
   units: readonly CodexManagedHookUnit[] | null,
   configPath: string,
   live: LoadedCodexSnapshot,
+  namedPath: string | null = null,
 ): CodexRestorePlan {
   if (units === null) {
     return {
       ok: false,
       reason:
         `${configPath} has no harness-managed Codex hook block any more; the snapshot ${live.path} cannot ` +
-        `restore units into it. The config is untouched. ${codexSnapshotExits(live)}`,
+        `restore units into it. The config is untouched. ${codexSnapshotExits(live, namedPath)}`,
     };
   }
   const edits: Array<{ start: number; end: number; text: string }> = [];
@@ -238,7 +246,7 @@ export function planCodexRestore(
         reason:
           `the hook unit ${JSON.stringify(wanted.id)} of the snapshot ${live.path} is not in the block of ` +
           `${configPath} as it was (missing, listed twice, or changed event or matcher while still disabled), ` +
-          `so no gate command can restore it. The config is untouched. ${codexSnapshotExits(live)}`,
+          `so no gate command can restore it. The config is untouched. ${codexSnapshotExits(live, namedPath)}`,
       };
     }
     edits.push({ start: unit.hooksStart, end: unit.hooksEnd, text: wanted.hooksText });
@@ -320,7 +328,7 @@ export interface ForeignCodexSnapshot {
  * no file is at that name any more). */
 export function foreignCodexExit(f: ForeignCodexSnapshot): string {
   return (
-    `run \`harness gate enable --runtime codex --config ${f.configPath}\`` +
+    `run \`harness gate enable --runtime codex --config ${shellQuote(f.configPath)}\`` +
     (f.configExists
       ? ""
       : ` (no file is at that name now: if the config was renamed after the disable, rename it back first; ` +
@@ -461,6 +469,11 @@ export function readCodexSnapshot(filePath: string): CodexSnapshotReadOk | Codex
     "configAfterSha256",
   ]);
   if (problem !== null) return { ok: false, reason: problem };
+  // Ownership is decided by the recorded file name, so a path with none (empty, `.`, `..`, `/`) is unreadable.
+  const recordedName = path.basename(obj["configPath"] as string);
+  if (recordedName === "" || recordedName === "." || recordedName === "..") {
+    return { ok: false, reason: `snapshot ${filePath} has a "configPath" that names no file` };
+  }
   // Several live snapshots (an earlier build kept one per disable) are ordered by this time, never by file mtime.
   if (Number.isNaN(Date.parse(obj["createdAt"] as string))) {
     return { ok: false, reason: `snapshot ${filePath} has a "createdAt" that is not a timestamp` };

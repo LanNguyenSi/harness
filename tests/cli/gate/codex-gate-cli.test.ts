@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -11,6 +12,7 @@ import {
 import { EX_FAIL, EX_OK, EX_USAGE } from "../../../src/cli/exit-codes.js";
 import { run } from "../../../src/cli/index.js";
 import { parseManifest } from "../../../src/schema/index.js";
+import { foldsCase } from "./fold-case.js";
 import { asLegacyInstall } from "./legacy-install.js";
 
 let tmp: string;
@@ -30,6 +32,20 @@ async function gate(...argv: string[]): Promise<{ stdout: string; stderr: string
     },
   });
   return { stdout, stderr, code };
+}
+
+/** The `harness ...` command a message prints (the first backtick-quoted one that starts with `harness gate enable`). */
+function printedGateEnable(message: string): string {
+  const m = /`harness (gate enable[^`]*)`/.exec(message);
+  if (m === null) throw new Error(`no printed gate enable command in: ${message}`);
+  return m[1]!;
+}
+
+/** The words a POSIX shell hands a command for `text`, found by asking one to do the splitting. */
+function shellWords(text: string): string[] {
+  const r = spawnSync("/bin/sh", ["-c", `printf '%s\\0' ${text}`], { encoding: "utf8" });
+  if (r.status !== 0) throw new Error(`sh could not split ${text}: ${r.stderr}`);
+  return r.stdout.split("\0").slice(0, -1);
 }
 
 beforeEach(() => {
@@ -178,6 +194,7 @@ describe("harness gate --runtime codex", () => {
     expect(partial.stderr).toContain("are still disabled: shell-guard");
     expect(partial.stderr).toContain("No Codex gate snapshot restores them.");
     expect(partial.stderr).toContain("run enable with that same `--config`");
+    expect(partial.stderr).toContain(`re-run \`harness apply --runtime codex --install --codex-config ${configPath}\``);
     expect(partial.stderr).not.toContain("--force");
     const stuck = await gate("enable", "--runtime", "codex", "--config", configPath);
     expect(stuck.code).toBe(EX_FAIL);
@@ -203,7 +220,7 @@ describe("harness gate --runtime codex", () => {
     const blocked = await gate("disable", "--runtime", "codex", "--config", configPath, "--matcher", "Bash");
     expect(blocked.code).toBe(EX_FAIL);
     expect(blocked.stderr).toContain("cannot join it");
-    expect(blocked.stderr).toContain("harness gate enable --runtime codex --force");
+    expect(blocked.stderr).toContain(`harness gate enable --runtime codex --config ${configPath} --force`);
 
     const forced = await gate("enable", "--runtime", "codex", "--config", configPath, "--force");
     expect(forced.code).toBe(EX_OK);
@@ -242,10 +259,24 @@ describe("harness gate --runtime codex", () => {
     expect(one.stderr).toContain("are still disabled: policy-pack:branch-protection:pre-tool-use");
     expect(one.stderr).toContain("1 more live Codex gate snapshot(s) remain");
     expect(one.stderr).toContain(first);
+    expect(one.stderr).toContain(`Run \`harness gate enable --runtime codex --config ${configPath}\` again for the next one.`);
     expect(one.stderr).not.toContain("No Codex gate snapshot restores them");
     const two = await gate("enable", "--runtime", "codex", "--config", configPath);
     expect(two.code).toBe(EX_OK);
     expect(fs.readFileSync(configPath, "utf8")).toBe(installed);
+  });
+
+  it("with an earlier build's extra snapshot and another config's snapshot both live, the error names both", async () => {
+    const { installed, first } = await legacyPair();
+    const other = path.join(tmp, "other.toml");
+    fs.writeFileSync(other, installed);
+    await gate("disable", "--runtime", "codex", "--config", other, "--matcher", "apply_patch");
+    const r = await gate("enable", "--runtime", "codex", "--config", configPath);
+    expect(r.code).toBe(EX_FAIL);
+    expect(r.stderr).toContain("1 more live Codex gate snapshot(s) remain");
+    expect(r.stderr).toContain(first);
+    expect(r.stderr).toContain(`were taken for another config and their units are not restored yet: `);
+    expect(r.stderr).toContain(`run \`harness gate enable --runtime codex --config ${other}\``);
   });
 
   it("still exits non-zero for a remaining live snapshot when no unit is disabled any more", async () => {
@@ -318,7 +349,7 @@ describe("harness gate --runtime codex", () => {
     fs.writeFileSync(configPath, afterFirst);
     const blocked = await gate("disable", "--runtime", "codex", "--config", configPath, "--matcher", "Bash");
     expect(blocked.code).toBe(EX_FAIL);
-    expect(blocked.stderr).toContain("harness gate enable --runtime codex --force");
+    expect(blocked.stderr).toContain(`harness gate enable --runtime codex --config ${configPath} --force`);
     const on = await gate("enable", "--runtime", "codex", "--config", configPath);
     expect(on.code).toBe(EX_OK);
     expect(on.stdout).toContain("restored 1 hook unit(s)");
@@ -380,6 +411,7 @@ describe("harness gate --runtime codex", () => {
     expect(r.code).toBe(EX_FAIL);
     expect(r.stdout).not.toContain("no write needed");
     expect(r.stderr).toContain("missing from the harness-managed block");
+    expect(r.stderr).toContain(`Run \`harness apply --runtime codex --install --codex-config ${configPath}\` to re-render the block`);
     expect(r.stderr).toContain("policy-pack:branch-protection:pre-tool-use");
     expect(r.stderr).toContain(`The snapshot ${path.join(tmp, snap!)} stays live`);
     expect(fs.readdirSync(tmp)).toContain(snap);
@@ -396,7 +428,7 @@ describe("harness gate --runtime codex", () => {
       const r = await gate("enable", "--runtime", "codex", "--config", configPath, ...extra);
       expect(r.code).toBe(EX_FAIL);
       expect(r.stderr).toContain('the hook unit "shell-guard" of the snapshot');
-      expect(r.stderr).toContain("Ways out: run `harness apply --runtime codex --install`");
+      expect(r.stderr).toContain(`Ways out: run \`harness apply --runtime codex --install --codex-config ${configPath}\``);
       expect(r.stderr).not.toContain("--force");
     }
     reinstallAt(new Date("2099-01-01T00:00:00.000Z"));
@@ -425,9 +457,13 @@ describe("harness gate --runtime codex", () => {
     await gate("disable", "--runtime", "codex", "--config", other, "--matcher", "apply_patch");
     const [foreign] = fs.readdirSync(tmp).filter((n) => n.startsWith("harness.gate-disable-codex."));
     const r = await gate("enable", "--runtime", "codex", "--config", configPath);
-    expect(r.code).toBe(EX_OK);
+    expect(r.code).toBe(EX_FAIL);
     expect(r.stdout).toContain(
       `skipped ${path.join(tmp, foreign!)}: taken for another config; run \`harness gate enable --runtime codex --config ${other}\`.`,
+    );
+    expect(r.stderr).toContain(
+      `1 live Codex gate snapshot(s) beside ${configPath} were taken for another config and their units are not restored yet: ` +
+        `${path.join(tmp, foreign!)}: run \`harness gate enable --runtime codex --config ${other}\`.`,
     );
     expect(fs.readdirSync(tmp)).toContain(foreign);
   });
@@ -486,17 +522,6 @@ describe("harness gate --runtime codex", () => {
   });
 });
 
-/** Whether the volume under `dir` treats `Config.toml` and `config.toml` as one name. */
-function foldsCase(dir: string): boolean {
-  const probe = path.join(dir, "case-probe.tmp");
-  fs.writeFileSync(probe, "");
-  try {
-    return fs.existsSync(path.join(dir, "CASE-PROBE.TMP"));
-  } finally {
-    fs.rmSync(probe, { force: true });
-  }
-}
-
 describe("harness gate enable --runtime codex through another name of the config", () => {
   it("through a hard link to the config: the snapshot stays foreign, and the message names the recorded --config as the exit", async () => {
     await gate("disable", "--runtime", "codex", "--config", configPath, "--matcher", "apply_patch");
@@ -513,7 +538,10 @@ describe("harness gate enable --runtime codex through another name of the config
     expect(r.stderr).toContain("are still disabled: policy-pack:branch-protection:pre-tool-use.");
     expect(r.stderr).toContain(`${path.join(tmp, snap!)}: run \`harness gate enable --runtime codex --config ${configPath}\``);
     expect(r.stderr).not.toContain("No Codex gate snapshot restores them");
-    expect(r.stderr).not.toContain(".bak.");
+    // The recorded --config comes first; the backup and re-install ways out stay as the otherwise.
+    expect(r.stderr.indexOf(`--config ${configPath}`)).toBeGreaterThan(-1);
+    expect(r.stderr.indexOf(`--config ${configPath}`)).toBeLessThan(r.stderr.indexOf("Otherwise restore the config from the backup"));
+    expect(r.stderr).toContain(`re-run \`harness apply --runtime codex --install --codex-config ${alias}\``);
     expect(r.stdout).not.toContain("nothing to restore");
     expect(fs.readFileSync(configPath, "utf8")).toBe(disabled);
     expect(fs.existsSync(path.join(tmp, snap!))).toBe(true);
@@ -534,17 +562,113 @@ describe("harness gate enable --runtime codex through another name of the config
     expect(r.stderr).toMatch(/restore it from .*config\.toml\.bak\./);
   });
 
-  it("a config with no units off and a snapshot of another config beside it still exits 0 and names that snapshot's exit", async () => {
+  it("a config with no units off and a snapshot of another config beside it exits non-zero and names that snapshot's exit", async () => {
+    const original = fs.readFileSync(configPath, "utf8");
     const other = path.join(tmp, "other.toml");
     fs.copyFileSync(configPath, other);
     await gate("disable", "--runtime", "codex", "--config", other, "--matcher", "apply_patch");
     const r = await gate("enable", "--runtime", "codex", "--config", configPath);
-    expect(r.code).toBe(EX_OK);
+    expect(r.code).toBe(EX_FAIL);
     expect(r.stdout).toContain(`run \`harness gate enable --runtime codex --config ${other}\`.`);
     expect(r.stdout).not.toContain("nothing to restore");
+    expect(r.stderr).toContain(`run \`harness gate enable --runtime codex --config ${other}\``);
+    expect(fs.readFileSync(configPath, "utf8")).toBe(original);
+
+    // The named command restores that config, and the first config then exits 0.
+    expect((await gate("enable", "--runtime", "codex", "--config", other)).code).toBe(EX_OK);
+    const clean = await gate("enable", "--runtime", "codex", "--config", configPath);
+    expect(clean.code).toBe(EX_OK);
+    expect(clean.stdout).toContain("nothing to restore");
   });
 
-  it.skipIf(!foldsCase(os.tmpdir()))(
+  it("a hard-link alias detached from the config (the disable rewrote one name only): the clean config exits non-zero naming the recorded --config", async () => {
+    const original = fs.readFileSync(configPath, "utf8");
+    const alias = path.join(tmp, "alias.toml");
+    fs.linkSync(configPath, alias);
+    // The disable replaces the alias's file, so the two names part: config.toml keeps the clean original.
+    await gate("disable", "--runtime", "codex", "--config", alias, "--matcher", "apply_patch");
+    expect(fs.lstatSync(configPath).nlink).toBe(1);
+    expect(fs.readFileSync(configPath, "utf8")).toBe(original);
+    const r = await gate("enable", "--runtime", "codex", "--config", configPath);
+    expect(r.code).toBe(EX_FAIL);
+    expect(r.stderr).toContain(`run \`harness gate enable --runtime codex --config ${alias}\``);
+    expect(r.stdout).not.toContain("nothing to restore");
+    expect((await gate("enable", "--runtime", "codex", "--config", alias)).code).toBe(EX_OK);
+    expect(fs.readFileSync(alias, "utf8")).toBe(original);
+  });
+
+  it("a mistyped --config in the config's directory exits non-zero and names the recorded --config", async () => {
+    await gate("disable", "--runtime", "codex", "--config", configPath, "--matcher", "apply_patch");
+    const typo = path.join(tmp, "confg.toml");
+    const r = await gate("enable", "--runtime", "codex", "--config", typo);
+    expect(r.code).toBe(EX_FAIL);
+    expect(r.stderr).toContain(`run \`harness gate enable --runtime codex --config ${configPath}\``);
+    expect(r.stdout).not.toContain("nothing to restore");
+    expect(fs.existsSync(typo)).toBe(false);
+    expect((await gate("enable", "--runtime", "codex", "--config", configPath)).code).toBe(EX_OK);
+  });
+
+  it.each([
+    ["an empty path", ""],
+    ["the current directory", "."],
+    ["the parent directory", ".."],
+    ["the root", "/"],
+  ])("a live snapshot whose recorded config is %s is unreadable: the gate refuses and says to move it aside", async (_title, recorded) => {
+    installTwoUnits();
+    await gate("disable", "--runtime", "codex", "--config", configPath, "--matcher", "apply_patch");
+    const [name] = fs.readdirSync(tmp).filter((n) => n.startsWith("harness.gate-disable-codex."));
+    const file = path.join(tmp, name!);
+    fs.writeFileSync(file, JSON.stringify({ ...JSON.parse(fs.readFileSync(file, "utf8")), configPath: recorded }));
+    for (const verb of ["enable", "disable"]) {
+      const r = await gate(verb, "--runtime", "codex", "--config", configPath, ...(verb === "disable" ? ["--matcher", "Bash"] : []));
+      expect(r.code).toBe(EX_FAIL);
+      expect(r.stderr).toContain(`snapshot ${file} has a "configPath" that names no file`);
+      expect(r.stderr).toContain(`move ${file} aside`);
+    }
+    expect(fs.existsSync(file)).toBe(true);
+  });
+
+  it("a printed --config is shell-quoted: with a space and a quote in the name, the command as a shell reads it restores the right config", async () => {
+    const original = fs.readFileSync(configPath, "utf8");
+    const dir = path.join(tmp, "my configs");
+    fs.mkdirSync(dir);
+    const quirky = path.join(dir, "it's other.toml");
+    const plain = path.join(dir, "config.toml");
+    fs.copyFileSync(configPath, quirky);
+    fs.copyFileSync(configPath, plain);
+    await gate("disable", "--runtime", "codex", "--config", quirky, "--matcher", "apply_patch");
+    const disabled = fs.readFileSync(quirky, "utf8");
+    expect(disabled).not.toBe(original);
+
+    const r = await gate("enable", "--runtime", "codex", "--config", plain);
+    expect(r.code).toBe(EX_FAIL);
+    expect(r.stderr).toContain(`--config '${dir}/it'\\''s other.toml'`);
+    const words = shellWords(printedGateEnable(r.stderr));
+    expect(words).toEqual(["gate", "enable", "--runtime", "codex", "--config", quirky]);
+    expect(fs.readFileSync(quirky, "utf8")).toBe(disabled);
+    const exit = await gate(...words.slice(1));
+    expect(exit.code).toBe(EX_OK);
+    expect(exit.stdout).toContain(`restored 1 hook unit(s) into ${quirky}`);
+    expect(fs.readFileSync(quirky, "utf8")).toBe(original);
+    expect((await gate("enable", "--runtime", "codex", "--config", plain)).code).toBe(EX_OK);
+  });
+
+  it("every printed command repeats the call's --config when one was given, shell-quoted", async () => {
+    const dir = path.join(tmp, "my configs");
+    fs.mkdirSync(dir);
+    const spaced = path.join(dir, "config.toml");
+    fs.copyFileSync(configPath, spaced);
+    const q = `'${spaced}'`;
+    const list = await gate("disable", "--runtime", "codex", "--config", spaced);
+    expect(list.stdout).toContain(`This is reversible via \`harness gate enable --runtime codex --config ${q}\`.`);
+    const off = await gate("disable", "--runtime", "codex", "--config", spaced, "--matcher", "apply_patch");
+    expect(off.stdout).toContain(`This is reversible: run \`harness gate enable --runtime codex --config ${q}\` to restore.`);
+    const again = await gate("disable", "--runtime", "codex", "--config", spaced, "--matcher", "apply_patch");
+    expect(again.stderr).toContain(`\`harness gate enable --runtime codex --config ${q}\` restores them.`);
+    expect((await gate("enable", "--runtime", "codex", "--config", spaced)).code).toBe(EX_OK);
+  });
+
+  it.skipIf(!foldsCase())(
     "through a case variant of the config's own name on a case-insensitive volume: its snapshot is restored, not skipped (skipped on a case-sensitive volume)",
     async () => {
       const original = fs.readFileSync(configPath, "utf8");
@@ -558,7 +682,7 @@ describe("harness gate enable --runtime codex through another name of the config
     },
   );
 
-  it.skipIf(!foldsCase(os.tmpdir()))(
+  it.skipIf(!foldsCase())(
     "through a case variant of a config with a second name: foreign, and the exit is the recorded --config (skipped on a case-sensitive volume)",
     async () => {
       await gate("disable", "--runtime", "codex", "--config", configPath, "--matcher", "apply_patch");

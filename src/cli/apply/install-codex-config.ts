@@ -2338,9 +2338,22 @@ function findSnapshotsOfConfig(plan: CodexConfigInstallPlan): { matched: string[
   const id = fileIdentity(plan.configPath);
   // A snapshot sits beside the spelling the gate was run through, and every
   // hop of the chain from the requested path to the target is such a spelling.
-  const dirs = [
-    ...new Set([...codexConfigLinkChain(requested), plan.configPath].map((p) => path.dirname(p))),
-  ];
+  // One directory under two spellings (a symlinked directory) is read once:
+  // a snapshot found twice would be renamed once and then fail to rename.
+  const dirs: string[] = [];
+  const seenDirs = new Set<string>();
+  for (const spelled of [...codexConfigLinkChain(requested), plan.configPath]) {
+    const dir = path.dirname(spelled);
+    let physical = dir;
+    try {
+      physical = fs.realpathSync(dir);
+    } catch {
+      // A directory that cannot be resolved is compared by its spelling.
+    }
+    if (seenDirs.has(physical)) continue;
+    seenDirs.add(physical);
+    dirs.push(dir);
+  }
   const matched: string[] = [];
   const unreadable: string[] = [];
   for (const dir of dirs) {

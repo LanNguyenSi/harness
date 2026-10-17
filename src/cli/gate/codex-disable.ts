@@ -44,6 +44,7 @@ import {
   CODEX_NEUTRALISED_HOOKS,
   CODEX_SNAPSHOT_TARGET,
   CODEX_SNAPSHOT_VERSION,
+  codexConfigFlag,
   codexSnapshotPath,
   type CodexDisabledUnit,
   type CodexGateSnapshot,
@@ -86,7 +87,7 @@ export type CodexGateDisableResult =
     };
 
 export function codexGateDisable(opts: CodexGateDisableOptions = {}): CodexGateDisableResult {
-  const { requestedPath, configPath } = resolveCodexConfig(opts, (m) => new GateDisableError(m));
+  const { requestedPath, configPath, namedPath } = resolveCodexConfig(opts, (m) => new GateDisableError(m));
   let text: string;
   try {
     text = fs.readFileSync(configPath, "utf8");
@@ -106,7 +107,8 @@ export function codexGateDisable(opts: CodexGateDisableOptions = {}): CodexGateD
   if (block === null) {
     throw new GateDisableError(
       `${requestedPath} has no harness-managed Codex hook block (no '# BEGIN harness-managed codex hooks' ` +
-        `fence); nothing to disable. \`harness apply --runtime codex --install\` writes that block.`,
+        `fence); nothing to disable. \`harness apply --runtime codex --install${codexConfigFlag(namedPath, "--codex-config")}\` ` +
+        "writes that block.",
     );
   }
 
@@ -136,7 +138,7 @@ export function codexGateDisable(opts: CodexGateDisableOptions = {}): CodexGateD
   if (matched.length === 0) {
     throw new GateDisableError(
       `no hook units matched matcher substring ${JSON.stringify(pattern)} in the harness-managed block of ` +
-        `${requestedPath}. Run \`harness gate disable --runtime codex\` (no --matcher) to list the available candidates.`,
+        `${requestedPath}. Run \`harness gate disable --runtime codex${codexConfigFlag(namedPath)}\` (no --matcher) to list the available candidates.`,
     );
   }
   const active = matched.filter(({ unit }) => !unit.disabled);
@@ -144,7 +146,7 @@ export function codexGateDisable(opts: CodexGateDisableOptions = {}): CodexGateD
     throw new GateDisableError(
       `every hook unit matching ${JSON.stringify(pattern)} in ${requestedPath} is already disabled ` +
         `(${matched.map(({ unit }) => unit.id).join(", ")}); nothing to do. ` +
-        "`harness gate enable --runtime codex` restores them.",
+        `\`harness gate enable --runtime codex${codexConfigFlag(namedPath)}\` restores them.`,
     );
   }
   // The snapshot finds a unit again by its id, so two units must not share one.
@@ -152,7 +154,8 @@ export function codexGateDisable(opts: CodexGateDisableOptions = {}): CodexGateD
   if (ids.size !== block.units.length) {
     throw new GateDisableError(
       `two hook units of the harness-managed block in ${requestedPath} carry the same id; ` +
-        "refusing to guess which one a restore would mean. Re-run `harness apply --runtime codex --install` " +
+        "refusing to guess which one a restore would mean. Re-run " +
+        `\`harness apply --runtime codex --install${codexConfigFlag(namedPath, "--codex-config")}\` ` +
         "to rewrite the block. The file is untouched.",
     );
   }
@@ -196,13 +199,14 @@ export function codexGateDisable(opts: CodexGateDisableOptions = {}): CodexGateD
       live = undefined;
     } else if (sha256Hex(text) !== live.snapshot.configAfterSha256) {
       // Names --force only when it would restore; otherwise the ways out of a snapshot no gate command can apply.
-      const plan = planCodexRestore(text, block.units, configPath, live);
+      const plan = planCodexRestore(text, block.units, configPath, live, namedPath);
       throw new GateDisableError(
         `the live gate snapshot ${live.path} no longer matches ${requestedPath} (edited since the last disable) ` +
           "and names a unit that is still off or missing, so this disable cannot join it. " +
           (plan.ok
-            ? "Run `harness gate enable --runtime codex --force`: it puts back every unit the snapshot names that " +
-              "is still off, keeps your other edits and retires the snapshot. Then disable again. The file is untouched."
+            ? `Run \`harness gate enable --runtime codex${codexConfigFlag(namedPath)} --force\`: it puts back every unit ` +
+              "the snapshot names that is still off, keeps your other edits and retires the snapshot. Then disable " +
+              "again. The file is untouched."
             : plan.reason),
       );
     }
@@ -261,7 +265,7 @@ export function codexGateDisable(opts: CodexGateDisableOptions = {}): CodexGateD
         throw new GateDisableError(
           `cannot write ${requestedPath}: ${(err as Error).message}; and the snapshot ${snapPath}, already merged, ` +
             `could not be put back (${(rollbackErr as Error).message}). Once the config can be written again, ` +
-            "`harness gate enable --runtime codex` restores what is off.",
+            `\`harness gate enable --runtime codex${codexConfigFlag(namedPath)}\` restores what is off.`,
         );
       }
     }

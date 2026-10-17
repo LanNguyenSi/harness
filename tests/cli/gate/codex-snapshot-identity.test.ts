@@ -33,6 +33,7 @@ import {
   CODEX_SNAPSHOT_BASENAME_PREFIX,
   CODEX_SNAPSHOT_TARGET,
   CODEX_SNAPSHOT_VERSION,
+  readCodexSnapshot,
   readLiveCodexSnapshots,
 } from "../../../src/cli/gate/codex-snapshot.js";
 import {
@@ -194,6 +195,19 @@ describe("Codex snapshot ownership by another spelling of the name", () => {
   });
 });
 
+describe("readCodexSnapshot: the recorded config must name a file", () => {
+  it("accepts a snapshot that records a file name and refuses one that records an empty path, `.`, `..` or `/`", () => {
+    expect(readCodexSnapshot(codexSnapshot).ok).toBe(true);
+    const body = JSON.parse(fs.readFileSync(codexSnapshot, "utf8")) as Record<string, unknown>;
+    for (const recorded of ["", ".", "..", "/", "/.."]) {
+      const file = path.join(tmp, "named-nothing.json");
+      fs.writeFileSync(file, JSON.stringify({ ...body, configPath: recorded }));
+      const r = readCodexSnapshot(file);
+      expect(r).toEqual({ ok: false, reason: `snapshot ${file} has a "configPath" that names no file` });
+    }
+  });
+});
+
 describe("namesSameEntry symlinks option", () => {
   it("accepts two spellings of one symlink entry only when asked, and never a second name or another inode", () => {
     const link = path.join(tmp, "link.toml");
@@ -261,6 +275,20 @@ describe("codexConfigLinkChain", () => {
     fs.symlinkSync(path.join("..", "config.toml"), l2);
     expect(codexConfigLinkChain(l1)).toEqual([l1, l2, configPath]);
     expect(codexConfigLinkChain(l2)).toEqual([l2, configPath]);
+  });
+
+  it("resolves a relative link text against the physical directory of a link that sits under a symlinked directory", () => {
+    const dotfiles = path.join(tmp, "dotfiles");
+    fs.mkdirSync(path.join(dotfiles, "codex"), { recursive: true });
+    fs.mkdirSync(path.join(dotfiles, "shared"));
+    const target = path.join(dotfiles, "shared", "config.toml");
+    fs.writeFileSync(target, "x = 1\n");
+    fs.symlinkSync(path.join("..", "shared", "config.toml"), path.join(dotfiles, "codex", "config.toml"));
+    fs.mkdirSync(path.join(tmp, "home"));
+    fs.symlinkSync(path.join(dotfiles, "codex"), path.join(tmp, "home", ".codex"));
+    const requested = path.join(tmp, "home", ".codex", "config.toml");
+    // `..` is taken from dotfiles/codex, where the link is, not from home/.codex, the way it was asked for.
+    expect(codexConfigLinkChain(requested)).toEqual([requested, target]);
   });
 
   it("stops at a dangling link and at a loop instead of failing or spinning", () => {

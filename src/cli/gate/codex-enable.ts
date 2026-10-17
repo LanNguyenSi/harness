@@ -120,7 +120,7 @@ function disabledIds(text: string, configPath: string): string[] {
 }
 
 export function codexGateEnable(opts: CodexGateEnableOptions = {}): CodexGateEnableResult {
-  const { requestedPath, configPath } = resolveCodexConfig(opts, (m) => new GateEnableError(m));
+  const { requestedPath, configPath, namedPath } = resolveCodexConfig(opts, (m) => new GateEnableError(m));
   const { own, foreign: skippedForeign } = readLiveCodexSnapshots(requestedPath, (m) => new GateEnableError(m));
   const live = own[0];
 
@@ -131,7 +131,7 @@ export function codexGateEnable(opts: CodexGateEnableOptions = {}): CodexGateEna
     if ((err as NodeJS.ErrnoException).code === "ENOENT") {
       if (live === undefined) return { mode: "no-snapshots", configPath: requestedPath, stillDisabled: [], skippedForeign };
       throw new GateEnableError(
-        `Codex config not found: ${requestedPath}; cannot restore into a missing target. ${codexSnapshotExits(live)}`,
+        `Codex config not found: ${requestedPath}; cannot restore into a missing target. ${codexSnapshotExits(live, namedPath)}`,
       );
     }
     throw new GateEnableError(`cannot read ${requestedPath}: ${(err as Error).message}`);
@@ -164,7 +164,7 @@ export function codexGateEnable(opts: CodexGateEnableOptions = {}): CodexGateEna
     // The restore skips a unit that is back already and never overwrites a
     // live line. Every check that would also stop --force runs first, so the
     // edited-since refusal names --force only when --force would write.
-    const plan = planCodexRestore(original, units, configPath, live);
+    const plan = planCodexRestore(original, units, configPath, live, namedPath);
     if (!plan.ok) throw new GateEnableError(plan.reason);
     const counts: Record<string, number> = {};
     for (const unit of plan.restored) counts[unit.event] = (counts[unit.event] ?? 0) + 1;
@@ -181,7 +181,7 @@ export function codexGateEnable(opts: CodexGateEnableOptions = {}): CodexGateEna
     if (exact && !proven) {
       throw new GateEnableError(
         `the snapshot ${live.path} does not rebuild the config it was taken from (the restored text does not ` +
-          `match its recorded pre-disable sha); refusing to write. The config is untouched. ${codexSnapshotExits(live)}`,
+          `match its recorded pre-disable sha); refusing to write. The config is untouched. ${codexSnapshotExits(live, namedPath)}`,
       );
     }
     if (!exact && !proven && !opts.force) {

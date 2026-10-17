@@ -35,6 +35,7 @@ import { gateEnable, GateEnableError } from "../../../src/cli/gate/enable.js";
 import { listSnapshots } from "../../../src/cli/gate/snapshot.js";
 import { parseManifest } from "../../../src/schema/index.js";
 import { downgradeToVersion1 } from "../../_helpers/claude-gate-legacy.js";
+import { foldsCase } from "./fold-case.js";
 import { asLegacyInstall } from "./legacy-install.js";
 
 // The Codex gate edits the config `harness apply --runtime codex --install`
@@ -703,7 +704,7 @@ describe("codexGateDisable: one live snapshot per config", () => {
     const entries = fs.readdirSync(path.dirname(configPath)).sort();
     const body = fs.readFileSync(first, "utf8");
     expect(() => codexGateDisable({ configPath, matcher: "Bash", now: T1 })).toThrow(
-      /no longer matches .*cannot join it\. Run `harness gate enable --runtime codex --force`/,
+      /no longer matches .*cannot join it\. Run `harness gate enable --runtime codex --config \S+ --force`/,
     );
     expect(read()).toBe(edited);
     expect(fs.readdirSync(path.dirname(configPath)).sort()).toEqual(entries);
@@ -1322,7 +1323,7 @@ describe("codexGateEnable: a merged snapshot the config no longer matches", () =
     fs.writeFileSync(configPath, afterFirst);
     // disable cannot join a snapshot that names a unit the file still has enabled, and names the way out
     expect(thrownMessage(() => codexGateDisable({ configPath, matcher: "Bash", now: at(3) }))).toContain(
-      "enable --runtime codex --force",
+      `enable --runtime codex --config ${configPath} --force`,
     );
     const e = codexGateEnable({ configPath, now: at(4) });
     if (e.mode !== "restored") throw new Error("expected restored");
@@ -1417,7 +1418,7 @@ describe("codex gate: a snapshot unit no gate command can restore", () => {
     ]) {
       const message = thrownMessage(call);
       expect(message).toContain(`the hook unit ${JSON.stringify(SG)} of the snapshot ${snapshotPath} is not in the block`);
-      expect(message).toContain("Ways out: run `harness apply --runtime codex --install`");
+      expect(message).toContain(`Ways out: run \`harness apply --runtime codex --install --codex-config ${configPath}\``);
       expect(message).toContain(`restore the config from ${backup}`);
       expect(message).toContain(`move ${snapshotPath} out of this directory`);
       expect(message).not.toContain("--force");
@@ -1471,7 +1472,7 @@ describe("codex gate: a snapshot unit no gate command can restore", () => {
     expect([sg.matcher?.startsWith("Bash|Shell|"), sg.disabled]).toEqual([true, false]);
     fs.writeFileSync(configPath, changed);
     expect(thrownMessage(() => codexGateDisable({ configPath, matcher: "Edit", now: at(3) }))).toContain(
-      "cannot join it. Run `harness gate enable --runtime codex --force`",
+      `cannot join it. Run \`harness gate enable --runtime codex --config ${configPath} --force\``,
     );
     expect(thrownMessage(() => codexGateEnable({ configPath, now: at(4) }))).toMatch(/edited since the snapshot was taken.*--force/);
     expect(read()).toBe(changed);
@@ -1692,7 +1693,7 @@ describe("codexGateEnable: integrity", () => {
     fs.rmSync(configPath);
     const message = thrownMessage(() => codexGateEnable({ configPath }));
     expect(message).toMatch(/Codex config not found/);
-    expect(message).toContain("Ways out: run `harness apply --runtime codex --install`");
+    expect(message).toContain(`Ways out: run \`harness apply --runtime codex --install --codex-config ${configPath}\``);
   });
 });
 
@@ -2108,16 +2109,6 @@ describe("the installer retires live gate snapshots of the block it rewrites", (
   });
 });
 
-/** Whether the volume under `dir` treats `Config.toml` and `config.toml` as one name. */
-function foldsCase(dir: string): boolean {
-  const probe = path.join(dir, "case-probe.tmp");
-  fs.writeFileSync(probe, "");
-  try {
-    return fs.existsSync(path.join(dir, "CASE-PROBE.TMP"));
-  } finally {
-    fs.rmSync(probe, { force: true });
-  }
-}
 
 /** Runs the real installer (it supersedes the gate snapshots it can find) over `target`. */
 function installThrough(target: string, now: Date, shellGuardCommand?: string): ReturnType<typeof writeCodexConfigInstall> {
@@ -2190,10 +2181,32 @@ describe("codex gate: one config reached through several names", () => {
   it("an install through an intermediate link retires a snapshot taken beside the target's directory, not one of a link above it", () => {
     chain();
     const s0 = disableAt(l1, "Bash", at(1));
-    const result = installThrough(l2, at(2), V2);
+    const beside = disableAt(real, "apply_patch", at(2));
+    expect(path.dirname(beside)).toBe(path.dirname(real));
+    const result = installThrough(l2, at(3), V2);
     // The installer cannot know the link above the one it was run through: only the enable-side dating covers that.
-    expect(result.supersededSnapshots).toBeUndefined();
+    expect(result.supersededSnapshots).toEqual([retired(beside, "superseded")]);
+    expect(result.snapshotWarnings).toBeUndefined();
+    expect(listCodexSnapshots(path.dirname(real))).toEqual([]);
     expect(listCodexSnapshots(dirA)).toEqual([s0]);
+  });
+
+  it("a target whose directory is also reached through a directory symlink is looked at once: its snapshot is retired with no warning", () => {
+    const d = path.join(tmp, "d");
+    fs.mkdirSync(d);
+    fs.symlinkSync(d, path.join(tmp, "dl"));
+    real = path.join(d, "real.toml");
+    installConfig(real);
+    const link = path.join(tmp, "a", "config.toml");
+    fs.mkdirSync(path.dirname(link));
+    // Resolved against the physical directory of the link, this text leads through the symlinked directory `dl`.
+    fs.symlinkSync(path.join("..", "dl", "real.toml"), link);
+    const snap = disableAt(real, "Bash", at(1));
+    const result = installThrough(link, at(2), V2);
+    // Retired once, under the first spelling of the directory that reached it; found a second time under `d` it would not rename.
+    expect(result.supersededSnapshots?.map((p) => fs.realpathSync(p))).toEqual([fs.realpathSync(retired(snap, "superseded"))]);
+    expect(result.snapshotWarnings).toBeUndefined();
+    expect(listCodexSnapshots(d)).toEqual([]);
   });
 
   it("a snapshot beside the top link, an install through an intermediate link, then enable through the top link: the install is dated by its backup, the old line stays out", () => {
@@ -2247,7 +2260,7 @@ describe("codex gate: one config reached through several names", () => {
     expect(codexGateEnable({ configPath: first, now: at(3) }).mode).toBe("no-snapshots");
   });
 
-  it.skipIf(!foldsCase(os.tmpdir()))(
+  it.skipIf(!foldsCase())(
     "a case variant of the config's name is the same entry: disable through either spelling, enable through the other (skipped on a case-sensitive volume)",
     () => {
       const original = installConfig(configPath);
@@ -2267,7 +2280,7 @@ describe("codex gate: one config reached through several names", () => {
     },
   );
 
-  it.skipIf(!foldsCase(os.tmpdir()))(
+  it.skipIf(!foldsCase())(
     "a disable through a case variant joins the live snapshot taken through the exact name (skipped on a case-sensitive volume)",
     () => {
       installConfig(configPath);
@@ -2278,7 +2291,7 @@ describe("codex gate: one config reached through several names", () => {
     },
   );
 
-  it.skipIf(!foldsCase(os.tmpdir()))(
+  it.skipIf(!foldsCase())(
     "the install's backup is dated through a case variant of the name: a snapshot taken through one spelling is superseded by an install through the other (skipped on a case-sensitive volume)",
     () => {
       installConfig(configPath);
@@ -2294,7 +2307,7 @@ describe("codex gate: one config reached through several names", () => {
     },
   );
 
-  it.skipIf(!foldsCase(os.tmpdir()))(
+  it.skipIf(!foldsCase())(
     "a case variant of a config with a second name stays foreign, and the foreign entry carries the recorded path (skipped on a case-sensitive volume)",
     () => {
       installConfig(configPath);
