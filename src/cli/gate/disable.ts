@@ -216,16 +216,9 @@ function matcherMatches(group: unknown, pattern: string): boolean {
   return m.includes(pattern);
 }
 
-/** Whether two paths name one directory, however it was spelled. */
+/** Whether two existing directories are the same one, however each was spelled. */
 function sameDirectory(a: string, b: string): boolean {
-  const real = (p: string): string => {
-    try {
-      return fs.realpathSync(p);
-    } catch {
-      return path.resolve(p);
-    }
-  };
-  return real(a) === real(b);
+  return fs.realpathSync(a) === fs.realpathSync(b);
 }
 
 /**
