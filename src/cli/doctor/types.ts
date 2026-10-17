@@ -5,6 +5,7 @@ import type { ClaudeMcpRegistrationSection } from "./claude-mcp.js";
 import type { CodexTargetReport } from "./codex.js";
 import type { OpencodeTargetReport } from "./opencode.js";
 import type { NpmBinReport } from "./npm-bin-path.js";
+import type { HookLivenessSection } from "./hook-liveness.js";
 import type { RogueLedgerDb } from "./rogue-ledger.js";
 
 /**
@@ -233,6 +234,13 @@ export interface DoctorReport {
   npmGlobalBin?: NpmBinReport;
   memory: MemoryReport;
   hooks: HookEntryReport[];
+  /**
+   * Generated hooks compared with the live runtime config (Claude Code
+   * `settings.json`, Codex `config.toml`). Missing or differing entries are
+   * errors, a gate disabled through `harness gate disable` is a warning, and
+   * extra live hooks are info only. See `hook-liveness.ts`.
+   */
+  hookLiveness?: HookLivenessSection;
   /**
    * Declared-but-not-live policy packs. Each entry is a pack the
    * operator listed in `policy_packs[]` whose `source` or builtin
