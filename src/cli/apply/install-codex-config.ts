@@ -8,7 +8,7 @@ import { EX_FAIL, HarnessExitError } from "../exit-codes.js";
 // neither module touches the other's bindings at top level; they are used only
 // inside function bodies. Keep it that way (no top-level use of these three).
 import { listCodexSnapshots, readCodexSnapshot, retireCodexSnapshot } from "../gate/codex-snapshot.js";
-import { linkChain, walkLinkChain } from "../gate/link-chain.js";
+import { kernelEntry, linkChain, walkLinkChain } from "../gate/link-chain.js";
 import { namesSameEntry } from "../gate/snapshot.js";
 
 export const CODEX_MANAGED_SOURCE_PREFIX = "# Harness Codex hook wiring.";
@@ -1723,7 +1723,11 @@ export function assertConfigSemanticInvariant(
  * resolved target instead keeps the link intact. A non-symlink path
  * (including a missing one) is returned unchanged. A dangling link, an
  * unresolvable chain (a loop, a permission error) or a link to anything
- * other than a regular file is refused before anything is written.
+ * other than a regular file is refused before anything is written. The
+ * chain is walked as the kernel walks it (`walkLinkChain`): a `..` after a
+ * directory link climbs out of the directory that link leads to, so the file
+ * written is the one a read through the path gives. The path itself is taken
+ * as given; a caller passes a spelling with `..` through `kernelEntry` first.
  */
 export function resolveConfigSymlink(requestedPath: string): string {
   let linkStat: fs.Stats;
@@ -1736,12 +1740,12 @@ export function resolveConfigSymlink(requestedPath: string): string {
   }
   if (!linkStat.isSymbolicLink()) return requestedPath;
 
-  // Whether the link dangles is decided by the gate's link walker, which
-  // resolves every hop as the kernel does. The JavaScript realpath below folds
-  // `d/..` before it looks at `d`: on its own it would call a link that reaches
-  // a file dangling, or resolve a link that reaches nothing to another file.
-  // The refusal names the end of the chain, not the first hop (which may be an
-  // existing link).
+  // The gate's link walker decides where the chain ends, resolving every hop
+  // as the kernel does. The JavaScript realpath folds `d/..` before it looks at
+  // `d`: on its own it would call a link that reaches a file dangling, refuse
+  // one the kernel resolves, or resolve one that reaches nothing to another
+  // file. The refusal names the end of the chain, not the first hop (which may
+  // be an existing link).
   const walked = walkLinkChain(requestedPath);
   if (walked.end === "dangling") {
     throw new CodexInstallRefusalError(
@@ -1752,20 +1756,30 @@ export function resolveConfigSymlink(requestedPath: string): string {
       requestedPath,
     );
   }
-
-  let resolved: string;
-  try {
-    resolved = fs.realpathSync(requestedPath);
-  } catch (err) {
-    const e = err as NodeJS.ErrnoException;
-    throw new CodexInstallRefusalError(
-      `Codex config ${requestedPath} is a symlink that cannot be resolved ` +
-        `(${e.code ?? "error"}: ${e.message}); refusing to install, nothing was written. ` +
-        `Fix the link chain and re-run.`,
+  const cannotResolve = (cause: string): CodexInstallRefusalError =>
+    new CodexInstallRefusalError(
+      `Codex config ${requestedPath} is a symlink that cannot be resolved (${cause}); ` +
+        `refusing to install, nothing was written. Fix the link chain and re-run.`,
       requestedPath,
     );
+  // The kernel's own lookup of the path is what Codex reads through.
+  let read: fs.Stats;
+  try {
+    read = fs.statSync(requestedPath);
+  } catch (err) {
+    const e = err as NodeJS.ErrnoException;
+    throw cannotResolve(`${e.code ?? "error"}: ${e.message}`);
   }
-  if (!fs.statSync(resolved).isFile()) {
+  if (walked.end !== "target") throw cannotResolve(`the link chain ends in a ${walked.end}`);
+  const resolved = walked.chain[walked.chain.length - 1] ?? requestedPath;
+  const atEnd = fs.statSync(resolved);
+  // The walker and the kernel have to agree on the file: a walk that ends at a
+  // file the kernel does not reach through the path (a link text ending in a
+  // slash after a regular file) would otherwise write a file Codex never reads.
+  if (read.dev !== atEnd.dev || read.ino !== atEnd.ino) {
+    throw cannotResolve(`a read through it reaches another file than ${resolved}`);
+  }
+  if (!atEnd.isFile()) {
     throw new CodexInstallRefusalError(
       `Codex config ${requestedPath} is a symlink to ${resolved}, which is not a regular ` +
         `file; refusing to install, nothing was written. Point the link at a config file and re-run.`,
@@ -2087,7 +2101,10 @@ export function planCodexConfigInstall(
 ): CodexConfigInstallPlan {
   validateCodexManagedConfig(opts.generatedContent);
 
-  const requestedPath = opts.configPath ?? defaultCodexConfigPath(opts.homeDir);
+  // A `..` after a directory link leads elsewhere than a lexical fold of the
+  // spelling: every path built from it (the temp file, the backup) goes
+  // through the directory the kernel reaches.
+  const requestedPath = kernelEntry(opts.configPath ?? defaultCodexConfigPath(opts.homeDir));
   const configPath = resolveConfigSymlink(requestedPath);
   const linkPath = configPath !== requestedPath ? requestedPath : undefined;
   const viaLink = linkPath !== undefined ? ` (via symlink ${linkPath})` : "";
@@ -2295,13 +2312,15 @@ function findSnapshotsOfConfig(plan: CodexConfigInstallPlan): { matched: string[
     const dir = path.dirname(spelled);
     let physical = dir;
     try {
-      physical = fs.realpathSync(dir);
+      physical = fs.realpathSync.native(dir);
     } catch {
       // A directory that cannot be resolved is compared by its spelling.
     }
     if (seenDirs.has(physical)) continue;
     seenDirs.add(physical);
-    dirs.push(dir);
+    // Listed as spelled, except that a `..` is taken through the directory the
+    // kernel reaches: the listing joins names to the directory, which folds it.
+    dirs.push(dir.split(path.sep).includes("..") ? physical : dir);
   }
   const matched: string[] = [];
   const unreadable: string[] = [];

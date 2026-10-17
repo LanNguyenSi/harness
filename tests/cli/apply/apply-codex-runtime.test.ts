@@ -3093,22 +3093,25 @@ describe("apply --runtime codex --install through a symlinked config (task `1637
       expect(siblingNames(path.dirname(codexConfig))).toEqual(["config.toml", "d", "target.toml"]);
     });
 
-    it("is not called dangling when the kernel reaches a file that the lexical reading misses", async () => {
+    it("is installed through when the kernel reaches a file that the lexical reading misses, never refused as unresolvable", async () => {
       fs.writeFileSync(physical, BEFORE);
       expect(fs.readFileSync(codexConfig, "utf8")).toBe(BEFORE);
 
-      const err = await installAt().then(
-        () => {
-          throw new Error("expected the install to refuse");
-        },
-        (e: unknown) => e,
-      );
+      const result = await installAt();
 
-      expect(err).toBeInstanceOf(CodexInstallRefusalError);
-      expect((err as Error).message).toContain(`${codexConfig} is a symlink that cannot be resolved (ENOENT`);
-      expect((err as Error).message).not.toContain("dangling");
-      expect(fs.readFileSync(physical, "utf8")).toBe(BEFORE);
-      expect(siblingNames(path.dirname(codexConfig))).toEqual(["config.toml", "d"]);
+      expect(result.codexConfigInstall?.written).toBe(true);
+      expect(result.codexConfigInstall?.configPath).toBe(physical);
+      expect(fs.readFileSync(physical, "utf8")).toContain(CODEX_MANAGED_BEGIN);
+      expect(fs.readFileSync(codexConfig, "utf8")).toBe(fs.readFileSync(physical, "utf8"));
+      expect(fs.readlinkSync(codexConfig)).toBe("d/../target.toml");
+      // The file a lexical reading names was never created.
+      expect(fs.existsSync(lexical)).toBe(false);
+      expect(siblingNames(path.dirname(codexConfig))).toEqual([
+        "config.toml",
+        `config.toml.harness-backup-${STAMP}`,
+        "d",
+      ]);
+      expect(fs.readFileSync(`${codexConfig}.harness-backup-${STAMP}`, "utf8")).toBe(BEFORE);
     });
   });
 

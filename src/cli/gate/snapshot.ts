@@ -21,7 +21,7 @@
 import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { walkLinkChain } from "./link-chain.js";
+import { kernelEntry, walkLinkChain } from "./link-chain.js";
 import { shellQuote } from "./shell-quote.js";
 
 export const SNAPSHOT_BASENAME_PREFIX = "harness.gate-disable.";
@@ -354,26 +354,14 @@ export function namesSameEntry(
 /**
  * The spelling of `settingsPath` the gate builds every other path from: the
  * backup, the snapshot, the listing beside it, and the atomic write's temp
- * file. Joining a name to a directory folds `..` lexically, which leads
- * elsewhere when the name before it is a directory link (`via/..` is the
- * parent of where `via` leads, not the directory that holds `via`), so a
- * spelling with a `..` segment is replaced by its directory as the kernel
- * resolves it, with the same last name. `..` is the only segment such a fold
- * moves (`.` and empty segments fold to the same directory), so every other
+ * file. A spelling with a `..` segment is replaced by its directory as the
+ * kernel resolves it (`kernelEntry`, which the Codex gate uses as well), so
+ * no path built from it is folded into another directory; every other
  * spelling is kept as given and the paths the gate prints read the way they
- * were written. A directory that cannot be resolved leaves the spelling as
- * given: nothing can be read or written through it.
+ * were written.
  */
 export function settingsOwnEntry(settingsPath: string): string {
-  if (!settingsPath.split(path.sep).includes("..")) return settingsPath;
-  const dir = path.dirname(settingsPath);
-  try {
-    // The kernel's own lookup first: the native `realpath` of macOS walks `file/..` back to the file's directory.
-    fs.statSync(dir);
-    return path.join(fs.realpathSync.native(dir), path.basename(settingsPath));
-  } catch {
-    return settingsPath;
-  }
+  return kernelEntry(settingsPath);
 }
 
 /**
