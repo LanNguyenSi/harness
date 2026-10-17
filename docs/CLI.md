@@ -76,7 +76,7 @@ These are called by Claude Code via `settings.json`; you usually do not run them
 
 | Verb | Called from |
 |------|-------------|
-| `harness pack hook branch-protection [--runtime claude-code\|codex]` | `PreToolUse` branch-guard for the protected branches (task `a4d8adc5`): asks git (`git -C <dir> symbolic-ref -q HEAD`) for the branch of every directory the call writes into and refuses when git names a protected branch (compared case-insensitively) or cannot answer; outside every repository and on a detached HEAD it allows. Claude Code gets a JSON deny envelope on stdout (exit 0); `--runtime codex` exits 2 with the reason on stderr. See [`docs/policy-packs/branch-protection.md`](policy-packs/branch-protection.md). |
+| `harness pack hook branch-protection [--runtime claude-code\|codex]` | `PreToolUse` branch-guard for the protected branches (task `a4d8adc5`): asks git (`git -C <dir> symbolic-ref -q HEAD`) for the branch of every directory the call writes into and refuses when git names a protected branch (compared case-insensitively) or cannot answer; outside every repository and on a detached HEAD it allows. Claude Code gets a JSON deny envelope on stdout (exit 0), or exit 2 with the reason on stderr when the envelope cannot be written to stdout; `--runtime codex` exits 2 with the reason on stderr. See [`docs/policy-packs/branch-protection.md`](policy-packs/branch-protection.md). |
 | `harness pack hook runtime-reality` | `PreToolUse` drift gate (v0.31.0, opt-in): before destructive runtime commands, probes live process state and denies on critical drift against the expectations file. Fail-open on probe errors. See [`docs/runtime-reality-hook.md`](runtime-reality-hook.md). |
 
 ## Operator approvals
