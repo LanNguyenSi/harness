@@ -441,7 +441,7 @@ export function gateDisable(opts: GateDisableOptions = {}): GateDisableResult {
         stillLive,
         err,
         `${settingsPath} was not changed (the backup ${backup} was written` +
-          `${relocated || priorSnapshot !== undefined ? "" : `, and the snapshot ${snapPath}, which a later gate call retires`}).`,
+          `${relocated || priorSnapshot !== undefined ? "" : `, and the snapshot ${snapPath}, which an enable through ${settingsPath} retires`}).`,
       ) ?? err
     );
   }

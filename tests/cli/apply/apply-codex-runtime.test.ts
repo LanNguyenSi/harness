@@ -4788,6 +4788,8 @@ describe("apply --codex-config spelled with `..` after a directory link", () => 
     const fresh = path.join(tmpHome, "dot", "fresh", "config.toml");
     expect(result.codexConfigInstall?.written).toBe(true);
     expect(result.codexConfigInstall?.configPath).toBe(fresh);
+    expect(result.codexConfigInstall?.summary).toBe(`installed harness-managed Codex hook block into ${fresh}`);
+    expect(result.codexConfigInstall?.summary).not.toContain("/in/../");
     expect(fs.readFileSync(fresh, "utf8")).toContain(CODEX_MANAGED_BEGIN);
     expect(fs.readdirSync(path.dirname(fresh))).toEqual(["config.toml"]);
     expect(fs.existsSync(path.join(tmpHome, "home", "fresh"))).toBe(false);

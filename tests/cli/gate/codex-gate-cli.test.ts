@@ -257,7 +257,7 @@ describe("harness gate --runtime codex", () => {
     expect(one.code).toBe(EX_FAIL);
     expect(one.stdout).toContain("restored 1 hook unit(s)");
     expect(one.stderr).toContain("are still disabled: policy-pack:branch-protection:pre-tool-use");
-    expect(one.stderr).toContain("1 more live Codex gate snapshot(s) remain");
+    expect(one.stderr).toContain("1 more live Codex gate snapshot(s) remain (an earlier build wrote one per disable, or a copied directory brought a retired one back)");
     expect(one.stderr).toContain(first);
     expect(one.stderr).toContain(`Run \`harness gate enable --runtime codex --config ${configPath}\` again for the next one.`);
     expect(one.stderr).not.toContain("No Codex gate snapshot restores them");

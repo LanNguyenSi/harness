@@ -2361,6 +2361,10 @@ export function writeCodexConfigInstall(
   // temp file, the snapshot listing) go through the directory the kernel
   // reaches instead of a lexical fold into another one.
   const plan = { ...planned, configPath: kernelEntry(planned.configPath) };
+  // The summary was built from the plan-time spelling: name the path written.
+  if (plan.configPath !== planned.configPath) {
+    plan.summary = plan.summary.replace(planned.configPath, () => plan.configPath);
+  }
   const mode = existingFileMode(plan.configPath);
   const snapshots = findSnapshotsOfConfig(plan);
   // Only back up a config that actually existed before this install (task
