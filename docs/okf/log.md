@@ -2,6 +2,7 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-10-18T06:39:22Z, task 33fe3b24: re-stamped `codex-adapter-parity-gaps.md` after `docs/CLI.md` reworded the skipped override layer sentence (explicit null documents included); the doc makes no claim about override layers, claims unchanged.
 - 2026-10-18T06:36:02Z, task 33fe3b24: re-stamped `gate-kill-switch.md` and `manifest-validation-scope.md` after rebasing onto the Codex flag-threading change (task e2089759); claims unchanged.
 - 2026-10-18T06:27:44Z, task 33fe3b24: re-verified `gate-kill-switch.md` and `manifest-validation-scope.md` against the changed `src/schema/removed-keys.ts` and re-stamped both. Only the removed hook-field warning's wording changed (it now says the field is ignored and no longer claims the hook is kept, which a later override layer deleting the hook made false); the line count is unchanged, so the runbook's pause/resume range citation into that table still lands, and no claim of either doc covers the per-hook field wording. Timestamp-only re-stamp.
 - 2026-10-18T06:17:18Z, task e2089759: `gate-kill-switch.md` now says `harness doctor`'s install hint repeats a named config only when a caller hands doctor a non-default config, which only the doctor API can do today (the CLI compares the default config alone, `docs/CLI.md`); re-stamped, no other claim changed.

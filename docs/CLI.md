@@ -44,7 +44,7 @@ The loader merges these files in order, later layers winning (`src/cli/loader.ts
 4. `machines/<hostname>.harness.overrides.yaml`, with the hostname lowercased;
 5. `projects/<name>/harness.overrides.yaml`, when `--project <name>` is given.
 
-`--config` moves only the base manifest; the override layers still load from the state root. A layer file that holds no YAML document (empty, or comments only) is skipped with a warning and the manifest loads as if it were absent; a layer whose root is a scalar or a list fails the load with an error naming the file, since an override layer must be a mapping.
+`--config` moves only the base manifest; the override layers still load from the state root. A layer whose parsed value is null (an empty or comment-only file, or a document of `null`, `~` or a bare `---`) is skipped with a warning and the manifest loads as if it were absent; a layer whose root is a scalar or a list fails the load with an error naming the file, since an override layer must be a mapping.
 
 ### Removed keys, packs and commands
 
