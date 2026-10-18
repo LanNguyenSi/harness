@@ -38,6 +38,7 @@ import { init, type InitResult } from "./index.js";
 import type { NpmExec } from "../doctor/npm-bin-path.js";
 import { validate } from "../validate/index.js";
 import { apply, CODEX_CONFIG_BASENAME, SETTINGS_BASENAME, type ApplyResult } from "../apply/index.js";
+import { codexConfigFlag } from "../gate/codex-snapshot.js";
 import {
   buildDesiredMcpServers,
   type SettingsMcpServer,
@@ -446,11 +447,11 @@ async function wireRuntime(o: WireRuntimeOpts): Promise<RuntimeApplyOutcome> {
     }
     for (const w of install?.snapshotWarnings ?? []) o.stderr(`warning: ${w}\n`);
     for (const hint of r.restartHints) o.stderr(`restart hint: ${hint}\n`);
-    const recoveryHint = `harness apply --runtime codex --install --codex-config ${o.codexConfigPath}`;
+    const recoveryHint = `harness apply --runtime codex --install${codexConfigFlag(o.codexConfigPath, "--codex-config")}`;
     return { runtime: "codex", apply: r, recoveryHint };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    const recoveryHint = `harness apply --runtime codex --install --codex-config ${o.codexConfigPath}`;
+    const recoveryHint = `harness apply --runtime codex --install${codexConfigFlag(o.codexConfigPath, "--codex-config")}`;
     o.stderr(`\nFailed to generate codex config: ${message}\n`);
     o.stderr(`To retry manually:\n  ${recoveryHint}\n`);
     return { runtime: "codex", recoveryHint };
@@ -1512,7 +1513,7 @@ async function runPostInitTail(t: PostInitTailOpts): Promise<InteractiveResult> 
               ...mcpLines.map((l) => `    ${l}`),
             ]
           : []),
-        `  codex:       harness apply --runtime codex --install --codex-config ${codexConfigPath}`,
+        `  codex:       harness apply --runtime codex --install${codexConfigFlag(codexConfigPath, "--codex-config")}`,
         "",
       ].join("\n"),
     );

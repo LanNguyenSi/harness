@@ -1875,8 +1875,12 @@ describe("codexGateDisable: refusals leave the file byte-identical", () => {
   it("a missing END marker, with the way out in the message", () => {
     const text = installConfig(configPath, { after: "" }).replace(CODEX_MANAGED_END, "# not the end");
     expectRefusal(text, "apply_patch", /not closed by a '# END harness-managed codex hooks' marker/);
+    // The call named its config, so the way out names it too.
     expect(() => codexGateDisable({ configPath, matcher: "apply_patch" })).toThrow(
-      /move any table .* below the END marker, or re-run `harness apply --runtime codex --install`/,
+      new RegExp(
+        "move any table .* below the END marker, or re-run `harness apply --runtime codex --install " +
+          `--codex-config ${configPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\``,
+      ),
     );
   });
 

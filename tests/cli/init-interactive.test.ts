@@ -2713,3 +2713,83 @@ describe("interactive wizard — hermetic spawn guard, claude-mcp path (task 0d8
     expect(cap.stderr()).not.toContain("Failed to wire");
   });
 });
+
+describe("interactive wizard: Codex install hints name the config, shell-quoted", () => {
+  const INSTALL = "harness apply --runtime codex --install";
+  let spacedHome: string;
+
+  beforeEach(() => {
+    spacedHome = makeTmpRoot("harness wizard spaced-");
+  });
+
+  afterEach(() => {
+    fs.rmSync(spacedHome, { recursive: true, force: true });
+  });
+
+  async function wizard(home: string, runtimes: string[]) {
+    fs.mkdirSync(path.join(home, ".claude"), { recursive: true });
+    const cap = captureStreams();
+    const result = await runInteractive({
+      homeDir: home,
+      dependencyPathEnv: fakeDepsPath,
+      prompts: mockPrompts({
+        select: ["solo"],
+        input: ["~/.claude/projects/{project}/memory"],
+        confirm: [true],
+        checkbox: [runtimes],
+      }),
+      stdout: cap.out,
+      stderr: cap.err,
+    });
+    return { cap, result };
+  }
+
+  it("the manual hint printed when no runtime is picked quotes a config path with a space", async () => {
+    const { cap } = await wizard(spacedHome, []);
+    const config = path.join(spacedHome, ".codex", "config.toml");
+    expect(cap.stderr()).toContain(`  codex:       ${INSTALL} --codex-config '${config}'\n`);
+  });
+
+  it("the same hint leaves a plain config path bare", async () => {
+    const { cap } = await wizard(tmpHome, []);
+    const config = path.join(tmpHome, ".codex", "config.toml");
+    expect(cap.stderr()).toContain(`  codex:       ${INSTALL} --codex-config ${config}\n`);
+  });
+
+  it("the recovery hint of a codex wire quotes the path with a space and leaves a plain one bare", async () => {
+    const spaced = await wizard(spacedHome, ["codex"]);
+    const spacedConfig = path.join(spacedHome, ".codex", "config.toml");
+    expect(spaced.result.applies?.[0]?.recoveryHint).toBe(`${INSTALL} --codex-config '${spacedConfig}'`);
+    const plain = await wizard(tmpHome, ["codex"]);
+    const plainConfig = path.join(tmpHome, ".codex", "config.toml");
+    expect(plain.result.applies?.[0]?.recoveryHint).toBe(`${INSTALL} --codex-config ${plainConfig}`);
+  });
+
+  it("the retry hint printed when the codex install fails is quoted too", async () => {
+    const config = path.join(spacedHome, ".codex", "config.toml");
+    fs.mkdirSync(path.dirname(config), { recursive: true });
+    // A block a foreign table splits in two: the install refuses it.
+    fs.writeFileSync(
+      config,
+      [
+        "# BEGIN harness-managed codex hooks",
+        "# harness hook: example-a (budget_ms=2000)",
+        "[[hooks.PreToolUse]]",
+        'hooks = [{ type = "command", command = "harness pack hook a", timeout = 2 }]',
+        "",
+        "[a-foreign-table-inserted-mid-block]",
+        'value = "surprise"',
+        "",
+        "# harness hook: example-b (budget_ms=2000)",
+        "[[hooks.Stop]]",
+        'hooks = [{ type = "command", command = "harness pack hook b", timeout = 2 }]',
+        "# END harness-managed codex hooks",
+        "",
+      ].join("\n"),
+    );
+    const { cap, result } = await wizard(spacedHome, ["codex"]);
+    const hint = `${INSTALL} --codex-config '${config}'`;
+    expect(result.applies?.[0]?.recoveryHint).toBe(hint);
+    expect(cap.stderr()).toContain(`To retry manually:\n  ${hint}\n`);
+  });
+});

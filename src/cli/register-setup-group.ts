@@ -652,6 +652,7 @@ export function registerSetupGroup(
                 opencodeConfigPath,
                 anyChanged,
                 runtime: result.runtime,
+                ...(options.codexConfig !== undefined ? { codexInstallTarget: options.codexConfig } : {}),
                 ...((result.targetWritten || result.targetInSync) && result.targetPath
                   ? { targetPath: result.targetPath }
                   : {}),

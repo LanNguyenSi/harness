@@ -25,6 +25,7 @@
 // so the two stay consistent if the banners change.
 
 import type { Runtime } from "../../policy-packs/index.js";
+import { CODEX_INSTALL_COMMAND, codexConfigFlag } from "../gate/codex-snapshot.js";
 
 export interface NextStepsContext {
   /** Set when --target was passed and the target file was actually written. */
@@ -51,6 +52,13 @@ export interface NextStepsContext {
    * wording `harness apply --help` already uses) when omitted.
    */
   codexConfigPath?: string;
+  /**
+   * The Codex config the call named with `--codex-config`, as typed. Only read
+   * when `runtime === "codex"` and no install ran: the printed install command
+   * repeats it (shell-quoted), so it installs where the call pointed. Absent
+   * when the call named none (the default `~/.codex/config.toml`).
+   */
+  codexInstallTarget?: string;
   /**
    * Path of harness.generated/opencode/opencode.json. Only read when
    * `runtime === "opencode"`; falls back to the relative path (matching
@@ -102,13 +110,24 @@ function formatCodexNextSteps(ctx: NextStepsContext): string {
   // Mirrors generate-codex-config.ts's HEADER banner ("Install into
   // ~/.codex/config.toml with: harness apply --runtime codex --install"),
   // the same text `--codex-config <path>`'s --help already documents.
+  if (ctx.codexInstallTarget !== undefined) {
+    return [
+      "",
+      lede,
+      `  ${configPath}`,
+      "",
+      `Install the harness-managed hook block into ${ctx.codexInstallTarget}:`,
+      `  ${CODEX_INSTALL_COMMAND}${codexConfigFlag(ctx.codexInstallTarget, "--codex-config")}`,
+      "",
+    ].join("\n");
+  }
   return [
     "",
     lede,
     `  ${configPath}`,
     "",
     "Install the harness-managed hook block into ~/.codex/config.toml:",
-    "  harness apply --runtime codex --install",
+    `  ${CODEX_INSTALL_COMMAND}`,
     "",
     "Override the install path with --codex-config <path>.",
     "",

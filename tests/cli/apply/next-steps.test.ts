@@ -162,6 +162,31 @@ describe("formatNextSteps", () => {
     );
   });
 
+  it("runtime codex without --install and a named config: the install command repeats it, shell-quoted, and the generic override line is gone", () => {
+    const base = {
+      generatedSettingsPath: "/abs/harness.generated/settings.json",
+      codexConfigPath: "/abs/harness.generated/codex/config.toml",
+      runtime: "codex",
+    } as const;
+    expect(formatNextSteps({ ...base, codexInstallTarget: "/home/x y/it's/config.toml" })).toBe(
+      [
+        "",
+        "Codex config generated. Nothing is installed into Codex yet.",
+        "  /abs/harness.generated/codex/config.toml",
+        "",
+        "Install the harness-managed hook block into /home/x y/it's/config.toml:",
+        "  harness apply --runtime codex --install --codex-config '/home/x y/it'\\''s/config.toml'",
+        "",
+      ].join("\n"),
+    );
+    // A plain path stays bare; the command still carries the flag.
+    expect(formatNextSteps({ ...base, codexInstallTarget: "/home/x/c.toml" })).toContain(
+      "  harness apply --runtime codex --install --codex-config /home/x/c.toml\n",
+    );
+    // No named config: no flag in the command.
+    expect(formatNextSteps(base)).not.toContain("install --codex-config");
+  });
+
   it("runtime opencode: no settings.json / --target recommendation, points at $OPENCODE_CONFIG / mcp-block-copy instead", () => {
     const s = formatNextSteps({
       generatedSettingsPath: "/abs/harness.generated/settings.json",

@@ -7,7 +7,13 @@ import { EX_FAIL, HarnessExitError } from "../exit-codes.js";
 // Import cycle: codex-snapshot.ts imports this module too. It is safe because
 // neither module touches the other's bindings at top level; they are used only
 // inside function bodies. Keep it that way (no top-level use of these three).
-import { listCodexSnapshots, readCodexSnapshot, retireCodexSnapshot } from "../gate/codex-snapshot.js";
+import {
+  codexConfigFlag,
+  listCodexSnapshots,
+  nameInstallConfig,
+  readCodexSnapshot,
+  retireCodexSnapshot,
+} from "../gate/codex-snapshot.js";
 import { kernelEntry, linkChain, walkLinkChain } from "../gate/link-chain.js";
 import { namesSameEntry } from "../gate/snapshot.js";
 
@@ -96,6 +102,12 @@ export interface CodexConfigInstallPlan {
    * directory is typically a dotfiles git work tree.
    */
   linkPath?: string;
+  /**
+   * The requested config path, set only when the call named one
+   * (`--codex-config`). A command a message prints repeats the flag only
+   * then, so a pasted command acts on the config the call acted on.
+   */
+  namedConfigPath?: string;
   generatedPath: string;
   currentContent: string;
   nextContent: string;
@@ -2099,6 +2111,24 @@ function assertKeptHookTablesAreOperatorOwned(
 export function planCodexConfigInstall(
   opts: CodexConfigInstallOptions,
 ): CodexConfigInstallPlan {
+  try {
+    return planCodexConfigInstallUnnamed(opts);
+  } catch (err) {
+    // Every refusal below names the bare install command; the call's config
+    // is added here, once, where it is known.
+    if (err instanceof CodexInstallRefusalError && opts.configPath !== undefined) {
+      throw new CodexInstallRefusalError(
+        nameInstallConfig(err.message, kernelEntry(opts.configPath)),
+        err.configPath,
+      );
+    }
+    throw err;
+  }
+}
+
+function planCodexConfigInstallUnnamed(
+  opts: CodexConfigInstallOptions,
+): CodexConfigInstallPlan {
   validateCodexManagedConfig(opts.generatedContent);
 
   // A `..` after a directory link leads elsewhere than a lexical fold of the
@@ -2191,6 +2221,7 @@ export function planCodexConfigInstall(
   return {
     configPath,
     ...(linkPath !== undefined ? { linkPath } : {}),
+    ...(opts.configPath !== undefined ? { namedConfigPath: requestedPath } : {}),
     generatedPath: opts.generatedPath,
     currentContent,
     nextContent,
@@ -2391,7 +2422,8 @@ export function writeCodexConfigInstall(
   const warnings = snapshots.unreadable.map(
     (p) =>
       `the Codex gate snapshot ${p} cannot be read, so the install could not tell whether it belongs to ` +
-      "this config; `harness gate enable` will refuse on it until you move it out of this directory.",
+      `this config; \`harness gate enable --runtime codex${codexConfigFlag(plan.namedConfigPath ?? null)}\` will refuse on it ` +
+      "until you move it out of this directory.",
   );
   for (const snapPath of snapshots.matched) {
     try {
