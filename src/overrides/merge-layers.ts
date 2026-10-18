@@ -27,9 +27,10 @@ import { applyLayers } from "./merge.js";
  * warnings name the layer, so an operator can tell which file to edit. The
  * base's warnings are unlabelled, as they are for a manifest without layers.
  *
- * A layer that parses to no YAML document at all (an empty or comment-only
- * file parses to `null`) is skipped with one warning naming it: merging the
- * `null` would tombstone the root, erasing the whole manifest, and every hook
+ * A layer whose parsed value is `null` is skipped with one warning naming it
+ * (an empty or comment-only file parses to no document, and an explicit
+ * `null` or `~`, or a bare `---`, is a document whose value is null):
+ * merging the `null` would tombstone the root, erasing the whole manifest, and every hook
  * (the branch-protection hook first) fails closed on a failed load, so such a
  * layer would lock the machine out of every edit. A layer whose root is a
  * scalar or a list is a different mistake, not an absent layer, and fails the
@@ -50,8 +51,9 @@ export function mergeLayersStrippingRemovedPaths(
       warnings.push({
         path: "<root>",
         message:
-          "this override layer has no YAML document in it (an empty or comment-only file parses to no value); " +
-          `it is skipped and the manifest loads as if it were absent; found in the ${layer.label}`,
+          "this override layer has no value to merge (an empty or comment-only file has no YAML document in it; " +
+          "`null`, `~`, and a bare `---` are documents whose value is null); it is skipped and the manifest loads " +
+          `as if it were absent; found in the ${layer.label}`,
       });
       continue;
     }

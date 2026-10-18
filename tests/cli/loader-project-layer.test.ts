@@ -285,14 +285,16 @@ describe("a removed hooks[].bash_match list in base and layer", () => {
   });
 });
 
-// An empty or comment-only override layer parses to YAML `null`. Merged, that
-// null was a root tombstone: the whole manifest disappeared, the strict parse
-// failed with `<root>: Required`, and every hook (the branch-protection hook
-// first, which fails closed on any load error) refused every Write/Edit. Such
-// a layer is now skipped with one warning naming the file, and the manifest
-// loads as if the layer were absent. A layer whose root is a scalar or a list
-// is not an absent layer but a broken one, and fails the load with an error
-// naming the file.
+// Five layer contents parse to a value of `null` to merge: an empty file and
+// a comment-only file parse to no YAML document at all, and an explicit
+// `null`, `~`, or a bare `---` is a document whose value is null. Merged,
+// that null was a root tombstone: the whole manifest disappeared, the strict
+// parse failed with `<root>: Required`, and every hook (the branch-protection
+// hook first, which fails closed on any load error) refused every Write/Edit.
+// Such a layer is now skipped with one warning naming the file, and the
+// manifest loads as if the layer were absent. A layer whose root is a scalar
+// or a list is not an absent layer but a broken one, and fails the load with
+// an error naming the file.
 describe("an override layer that is empty, comment-only, or not a mapping", () => {
   type LayerCase = [name: string, file: () => string, opts: () => { homeDir: string; project?: string }];
 
@@ -310,12 +312,20 @@ describe("an override layer that is empty, comment-only, or not a mapping", () =
     fs.writeFileSync(target, content);
   }
 
+  const EMPTY_LAYER_WARNING =
+    "this override layer has no value to merge (an empty or comment-only file has no YAML document in it; " +
+    "`null`, `~`, and a bare `---` are documents whose value is null); it is skipped and the manifest loads " +
+    "as if it were absent";
+
   const NO_DOCUMENT: Array<[string, string]> = [
     ["an empty file", ""],
     ["a comment-only file", "# only a comment\n"],
+    ["a document whose value is an explicit null", "null\n"],
+    ["a document whose value is a tilde", "~\n"],
+    ["a bare --- document", "---\n"],
   ];
 
-  it.each(LAYERS)("%s: an empty or comment-only file loads as if the layer were absent, with one warning naming it", (_name, file, opts) => {
+  it.each(LAYERS)("%s: a layer with no value to merge loads as if it were absent, with one warning naming it", (_name, file, opts) => {
     // The manifest with no such layer on disk is the expected result.
     fs.rmSync(file(), { force: true });
     const without = loadManifest(opts());
@@ -325,8 +335,9 @@ describe("an override layer that is empty, comment-only, or not a mapping", () =
       const loaded = loadManifest(opts());
       expect(loaded.manifest, `${_name}: ${label}`).toEqual(without.manifest);
       expect(loaded.warnings, `${_name}: ${label}`).toHaveLength(1);
-      expect(loaded.warnings[0]!.path).toBe("<root>");
-      expect(loaded.warnings[0]!.message).toContain(file());
+      expect(loaded.warnings[0]!.path, `${_name}: ${label}`).toBe("<root>");
+      expect(loaded.warnings[0]!.message, `${_name}: ${label}`).toContain(EMPTY_LAYER_WARNING);
+      expect(loaded.warnings[0]!.message, `${_name}: ${label}`).toContain(file());
     }
   });
 

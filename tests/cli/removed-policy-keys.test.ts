@@ -241,7 +241,7 @@ describe("hooks[].bash_match and hooks[].path_match", () => {
     expect(warned[1]!.message).toContain('hook "only-path" carries path_match');
     expect(warned[2]!.message).toContain('hook "both" carries bash_match and path_match');
     expect(warned[3]!.message).toContain('hook "empty-string" carries bash_match');
-    for (const w of warned) expect(w.message).toContain("the hook is kept");
+    for (const w of warned) expect(w.message).toContain("the field is ignored");
   });
 
   it("do not change what the hooks are projected into: settings.json is identical with and without them", () => {
@@ -346,16 +346,30 @@ describe("hooks[].bash_match through the loader: one warning per source, never t
     expect(loaded.manifest.hooks[0]).not.toHaveProperty("bash_match");
   });
 
-  it("a valid string bash_match in the base only: behaviour and warning text unchanged (text pinned)", () => {
+  // The warning text, pinned. It says the FIELD is ignored and never claims
+  // the hook survives: the strip runs per source before the merge, and a
+  // later layer can still delete the hook (`_delete`, `hooks: null`), so no
+  // wording about the hook would be true in every case.
+  const CARRIED = 'carries bash_match, removed in 1.0.0 (it was never projected into settings.json or the Codex config, so the hook runs on the same events with or without it); the field is ignored, delete the key from it';
+
+  it("a valid string bash_match in the base only: the hook survives, warning text pinned", () => {
     const { opts } = homeWith("base", { hooks: [HOOKS[0]] });
     const loaded = loadManifest(opts);
     expect(loaded.manifest.hooks.map((h) => h.name)).toEqual(["only-bash"]);
     expect(loaded.manifest.hooks[0]).not.toHaveProperty("bash_match");
     const warned = loaded.warnings.filter((w) => w.path === "hooks[0]");
     expect(warned).toHaveLength(1);
-    expect(warned[0]!.message).toBe(
-      'hook "only-bash" carries bash_match, removed in 1.0.0 and ignored (it was never projected into settings.json or the Codex config, so the hook runs on the same events with or without it); the hook is kept, delete the key from it',
-    );
+    expect(warned[0]!.message).toBe(`hook "only-bash" ${CARRIED}`);
+  });
+
+  it("in the base hook, deleted by a later layer: the same pinned warning, and the hook is gone", () => {
+    const home = makeHome({ hooks: [hookWith("^git push")] }, { hooks: [{ name: "h", _delete: true }] });
+    const loaded = loadManifest({ homeDir: home, project: PROJECT });
+    expect(loaded.manifest.hooks).toEqual([]);
+    const warned = loaded.warnings.filter((w) => w.path === "hooks[0]");
+    expect(warned).toHaveLength(1);
+    expect(warned[0]!.message).toBe(`hook "h" ${CARRIED}`);
+    expect(warned[0]!.message).not.toContain("found in the");
   });
 });
 
@@ -548,22 +562,24 @@ describe.skipIf(!GIT_AVAILABLE)("branch-protection with a removed key in a machi
 });
 
 describe.skipIf(!GIT_AVAILABLE)("branch-protection on a machine with an empty override layer", () => {
-  // An empty or comment-only layer file parses to YAML null. Merged as a root
-  // tombstone it erased the whole manifest and failed the strict parse, so the
-  // hook (fail-closed on any load error) refused every edit. It is now skipped
-  // with a warning, and the hook keeps deciding.
-  it("refuses on a protected branch and allows a feature branch with the layer empty, comment-only, and absent", async () => {
+  // A layer whose parsed value is null (an empty or comment-only file, or a
+  // document of `null`, `~` or a bare `---`) merged as a root tombstone erased
+  // the whole manifest and failed the strict parse, so the hook (fail-closed
+  // on any load error) refused every edit. It is now skipped with a warning,
+  // and the hook keeps deciding.
+  it("refuses on a protected branch and allows a feature branch with the layer holding no value, and with it absent", async () => {
     const home = makeHome({ policy_packs: BRANCH_PROTECTION });
     const machines = path.join(home, "machines");
     fs.mkdirSync(machines, { recursive: true });
     const layer = path.join(machines, "default.harness.overrides.yaml");
     const protectedRepo = makeRepo("master");
     const featureRepo = makeRepo("feat/x");
-    for (const content of ["", "# a comment only\n"]) {
+    for (const content of ["", "# a comment only\n", "null\n", "~\n", "---\n"]) {
       fs.writeFileSync(layer, content, "utf8");
       const loaded = loadManifest({ homeDir: home });
       expect(loaded.manifest.policy_packs.map((p) => p.name)).toEqual(["branch-protection"]);
       expect(loaded.warnings.filter((w) => w.path === "<root>")).toHaveLength(1);
+      expect(loaded.warnings.some((w) => w.message.includes("has no value to merge"))).toBe(true);
       expect(await decide({ homeDir: home }, protectedRepo)).toEqual({ blocked: true, exitCode: 0 });
       expect(await decide({ homeDir: home }, featureRepo)).toEqual({ blocked: false, exitCode: 0 });
     }
