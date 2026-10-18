@@ -20,9 +20,14 @@
  * The warning names the command that puts the entry back as that runtime's
  * gate takes it: `harness gate enable` for Claude Code, with `--settings` when
  * the compared file is not the one the gate targets by default (for example
- * under `CLAUDE_CONFIG_DIR`); `harness gate enable --runtime codex` for Codex,
- * with `--config` for a config other than the default one and `--force` when
- * the config was edited since the disable (the restore refuses without it).
+ * under `CLAUDE_CONFIG_DIR`) and `--force` when the gate would refuse the
+ * plain command (by its own refusal decision, `claudeEnableRefusal`: the file
+ * holds a group with the event and matcher of a removed one but other
+ * content, or it was edited since the disable and the still-missing groups do
+ * not add up to the pre-disable file); `harness gate enable --runtime codex`
+ * for Codex, with `--config` for a config other than the default one and
+ * `--force` when the config was edited since the disable (the restore refuses
+ * without it).
  * A live hook that is not in the generated set is an info line, never counted.
  * A live file that is missing or unreadable is one error finding, and so is a
  * gate snapshot that cannot be read: the disabled state is then unknowable, so
@@ -51,7 +56,16 @@ import {
   spentCodexSnapshot,
 } from "../gate/codex-snapshot.js";
 import { shellQuote } from "../gate/shell-quote.js";
-import { listLiveSnapshots, settingsFlag, sha256Hex } from "../gate/snapshot.js";
+import {
+  claudeEnableRefusal,
+  type ClaudeEnableRefusal,
+  type LiveSnapshot,
+  listLiveSnapshots,
+  nextEnableSnapshots,
+  planRestore,
+  settingsFlag,
+  sha256Hex,
+} from "../gate/snapshot.js";
 import { resolveSettingsPath } from "./claude-mcp.js";
 
 export type HookLivenessStatus = "ok" | "warn" | "error" | "info";
@@ -290,12 +304,28 @@ export function checkClaudeLiveHooks(
   const removedIds = new Set(removed.map(keyId));
   // The gate does not read CLAUDE_CONFIG_DIR: any other file than its default needs --settings.
   const enable = `harness gate enable${settingsPath === opts.gateDefaultPath ? "" : ` ${settingsFlag(settingsPath)}`}`;
+  // A disabled hook comes back with `gate enable` alone, or with `gate enable
+  // --force`, by the gate's own decision: when the gate refuses the snapshot
+  // the next plain call applies without `--force`, that snapshot marks every
+  // group it removed, so the warning names the flag exactly when the plain
+  // command would refuse and say why.
+  const forceOf = claudeEnableForce(read.text, doc, snaps.ok ? snaps.live : []);
   report.entries.push(
     ...compare(
       expected,
       live,
       (k) => removedIds.has(keyId(k)),
-      (k) => `disabled via \`harness gate disable\`: ${describeHook(k)}; run \`${enable}\` to put it back`,
+      (k) => {
+        const head = `disabled via \`harness gate disable\`: ${describeHook(k)}; `;
+        const force = forceOf.get(keyId(k));
+        return force === undefined
+          ? `${head}run \`${enable}\` to put it back`
+          : `${head}run \`${enable} --force\` to put it back: ` +
+              (force.reason === "changed-group"
+                ? "settings.json holds a group with the event and matcher of the removed one but other content"
+                : "settings.json was edited since the disable") +
+              `, so the restore refuses without \`--force\` (inspect the diff against ${force.settingsBackupPath} first)`;
+      },
       "settings.json",
       ({ extraOrDisabled }) =>
         snapshotProblem
@@ -308,6 +338,54 @@ export function checkClaudeLiveHooks(
     ),
   );
   return report;
+}
+
+/**
+ * Why doctor must name `--force` for each group a live snapshot removed, by
+ * the gate's own decision and not a copy of it: the snapshots a plain
+ * `gate enable` applies next are the only refusal the operator is about to
+ * meet. `nextEnableSnapshots` answers which those are (the newest; an older
+ * one waits until that restore changed the file, so its own decision against
+ * this file is never what the next plain enable does). When one of them needs
+ * `--force`, the plain command refuses for every gate-disabled group, so
+ * every group any live snapshot removed is marked with that refusal. A
+ * `hooks` shape the gate refuses to read marks nothing: that refusal is not
+ * one of the two `--force` answers this warning could name.
+ */
+function claudeEnableForce(
+  text: string,
+  doc: Record<string, unknown>,
+  live: readonly LiveSnapshot[],
+): Map<string, { reason: ClaudeEnableRefusal; settingsBackupPath: string }> {
+  const out = new Map<string, { reason: ClaudeEnableRefusal; settingsBackupPath: string }>();
+  const hooks = settingsHooksOf(doc);
+  if (hooks === null) return out;
+  for (const { snapshot } of nextEnableSnapshots(live)) {
+    const reason = claudeEnableRefusal(sha256Hex(text), doc, planRestore(hooks, snapshot), snapshot);
+    if (reason === null) continue;
+    for (const { snapshot: named } of live) {
+      for (const r of named.removed) {
+        for (const k of flattenHookTable({ [r.event]: [r.group] })) {
+          if (!out.has(keyId(k))) out.set(keyId(k), { reason, settingsBackupPath: snapshot.settingsBackupPath });
+        }
+      }
+    }
+    break;
+  }
+  return out;
+}
+
+/** The `hooks` of a parsed settings.json as the gate reads them: an array of groups per event; null for any other shape. */
+function settingsHooksOf(doc: Record<string, unknown>): Record<string, unknown[]> | null {
+  const rawHooks = doc["hooks"];
+  const hooks: Record<string, unknown[]> = {};
+  if (rawHooks === undefined) return hooks;
+  if (!isRecord(rawHooks)) return null;
+  for (const [event, groups] of Object.entries(rawHooks)) {
+    if (!Array.isArray(groups)) return null;
+    hooks[event] = groups.slice();
+  }
+  return hooks;
 }
 
 export function checkCodexLiveHooks(

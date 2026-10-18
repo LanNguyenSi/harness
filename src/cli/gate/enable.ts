@@ -27,15 +27,18 @@ import * as path from "node:path";
 import { atomicWriteFile } from "../../io/atomic-write.js";
 import {
   changedLabel,
+  claudeEnableRefusal,
   type ForeignSnapshot,
   groupLabel,
   isReadOnlyWriteError,
   listLiveSnapshots,
   missingLabel,
+  nextEnableSnapshots,
   planRestore,
   readOnlyLinkTargetText,
   readOnlyWritablePlace,
   resolveSettingsEntry,
+  restoredSettingsText,
   retireSnapshot,
   settingsFlag,
   settingsOwnEntry,
@@ -179,7 +182,8 @@ export function gateEnable(opts: GateEnableOptions = {}): GateEnableResult {
     );
   }
   const foreign = found.skippedForeign;
-  const [newest, ...older] = found.live;
+  const [newest] = nextEnableSnapshots(found.live);
+  const older = found.live.filter((l) => l !== newest);
   if (newest === undefined) {
     return { mode: "no-snapshots", settingsPath, foreign };
   }
@@ -210,7 +214,8 @@ export function gateEnable(opts: GateEnableOptions = {}): GateEnableResult {
   const plan = planRestore(current.hooks, snapshot);
   const alreadyBack = plan.alreadyBack.map((r) => groupLabel(r.event, r.group));
   const accepted = plan.changed.map(changedLabel);
-  if (accepted.length > 0 && !opts.force) {
+  const refusal = claudeEnableRefusal(currentSha, current.obj, plan, snapshot);
+  if (refusal === "changed-group" && !opts.force) {
     // A group with the matcher of the gate's but other content may be another
     // hook entirely: taking it for the gate's would leave the gate off.
     throw new GateEnableError(
@@ -241,22 +246,12 @@ export function gateEnable(opts: GateEnableOptions = {}): GateEnableResult {
     };
   }
 
-  const newObj: Record<string, unknown> = { ...current.obj };
-  if (Object.keys(plan.hooks).length === 0) {
-    delete newObj["hooks"];
-  } else {
-    newObj["hooks"] = plan.hooks;
-  }
-  const newSettings = `${JSON.stringify(newObj, null, 2)}\n`;
+  const newSettings = restoredSettingsText(current.obj, plan.hooks);
 
   // The file is not the state the snapshot left, and the groups still missing
   // do not add up to the pre-disable file: an edit would be written over
   // without the operator having seen it.
-  if (
-    currentSha !== snapshot.settingsAfterSha256 &&
-    sha256Hex(newSettings) !== snapshot.settingsBeforeSha256 &&
-    !opts.force
-  ) {
+  if (refusal === "edited-settings" && !opts.force) {
     throw new GateEnableError(
       `settings.json has been edited since the snapshot was taken (current sha ${currentSha.slice(0, 12)}..., ` +
         `snapshot's post-disable sha ${snapshot.settingsAfterSha256.slice(0, 12)}...), and ` +

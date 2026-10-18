@@ -13,6 +13,7 @@ import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   changedLabel,
+  claudeEnableRefusal,
   groupCommands,
   groupLabel,
   listLiveSnapshots,
@@ -22,6 +23,7 @@ import {
   readSnapshot,
   retireSnapshot,
   retiredSnapshotPath,
+  sha256Hex,
   SNAPSHOT_BASENAME_PREFIX,
   SNAPSHOT_BASENAME_SUFFIX,
   SNAPSHOT_VERSION,
@@ -555,5 +557,31 @@ describe("planRestore", () => {
     expect(groupLabel("PreToolUse", group("Bash"))).toBe('PreToolUse matcher="Bash"');
     expect(groupLabel("Stop", { hooks: [] })).toBe("Stop matcher=null");
     expect(groupLabel("Stop", "junk")).toBe("Stop matcher=null");
+  });
+});
+
+describe("claudeEnableRefusal", () => {
+  const group = (matcher: string, command = matcher) => ({ matcher, hooks: [{ command }] });
+
+  it("a file that already matches the pre-disable state never refuses, even when the plan still wants to splice a group in", () => {
+    // A hand-built snapshot whose `removed` list names a group the pre-disable file
+    // never held: `planRestore` reports it missing although the current file IS the
+    // pre-disable file. `gate enable` cannot reach the predicate in that state (it
+    // retires the snapshot on the same sha), doctor can, and the pre-disable match
+    // decides first there: nothing is put back, so neither refusal holds.
+    const before = { hooks: { PreToolUse: [group("A")] } };
+    const beforeText = `${JSON.stringify(before, null, 2)}\n`;
+    const snapshot = validSnapshot({
+      settingsBeforeSha256: sha256Hex(beforeText),
+      settingsAfterSha256: sha256Hex(`${JSON.stringify({ hooks: {} }, null, 2)}\n`),
+      removed: [{ event: "PreToolUse", index: 1, group: group("B") }],
+    });
+    const plan = planRestore(before.hooks, snapshot);
+    // The guard's premise: a plan that still wants to splice a group into a file that
+    // already matches the pre-disable state, and a spliced file that is neither recorded
+    // sha. Without the pre-disable match the call would report `edited-settings`.
+    expect(plan.restored).toHaveLength(1);
+    expect(plan.changed).toEqual([]);
+    expect(claudeEnableRefusal(sha256Hex(beforeText), before, plan, snapshot)).toBeNull();
   });
 });
