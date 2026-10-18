@@ -63,6 +63,14 @@ function manifest() {
         budget_ms: 5000,
       },
       {
+        name: "hand-shell-guard",
+        event: "PreToolUse",
+        match: "Bash",
+        command: "harness pack hook shell-guard --runtime codex",
+        blocking: "hard",
+        budget_ms: 5000,
+      },
+      {
         name: "hand-user-prompt-submit",
         event: "UserPromptSubmit",
         command: "/usr/bin/true",
@@ -196,13 +204,19 @@ describe("installer refusals reached through the gate", () => {
       if (d.mode !== "remove") throw new Error("expected a snapshot");
       const snap = JSON.parse(fs.readFileSync(d.snapshotPath, "utf8")) as Record<string, unknown>;
       fs.writeFileSync(d.snapshotPath, JSON.stringify({ ...snap, version: 2 }));
-      const err = thrown(() => codexGateEnable(named ? { configPath: target } : { homeDir: tmp }));
-      expect(err.message).toContain("version 2 Codex gate snapshot");
-      if (named) {
-        expect(err.message).toContain(`\`${INSTALL} --codex-config ${spacedWord}\` to rewrite the block`);
-      } else {
-        expect(err.message).toContain(`\`${INSTALL}\` to rewrite the block`);
-        expect(err.message).not.toContain("--codex-config");
+      // Both verbs read the live snapshot first.
+      const where = named ? { configPath: target } : { homeDir: tmp };
+      for (const err of [
+        thrown(() => codexGateEnable(where)),
+        thrown(() => codexGateDisable({ ...where, matcher: "Bash" })),
+      ]) {
+        expect(err.message).toContain("version 2 Codex gate snapshot");
+        if (named) {
+          expect(err.message).toContain(`\`${INSTALL} --codex-config ${spacedWord}\` to rewrite the block`);
+        } else {
+          expect(err.message).toContain(`\`${INSTALL}\` to rewrite the block`);
+          expect(err.message).not.toContain("--codex-config");
+        }
       }
     }
   });
@@ -249,6 +263,24 @@ describe("the doctor's install hint", () => {
     const plain = atDefault.entries.map((e) => e.message).join("\n");
     expect(plain).toContain(`run \`${INSTALL}\``);
     expect(plain).not.toContain("--codex-config");
+  });
+});
+
+describe("the doctor's message for a version 2 gate snapshot", () => {
+  it("repeats the config the doctor reads when it is not the default; the default prints the bare command", () => {
+    install(spaced);
+    const d = codexGateDisable({ configPath: spaced, matcher: "apply_patch", now: new Date("2026-10-02T10:00:00.000Z") });
+    if (d.mode !== "remove") throw new Error("expected a snapshot");
+    const snap = JSON.parse(fs.readFileSync(d.snapshotPath, "utf8")) as Record<string, unknown>;
+    fs.writeFileSync(d.snapshotPath, JSON.stringify({ ...snap, version: 2 }));
+    const messages = (gateDefaultPath: string): string =>
+      checkCodexLiveHooks(manifest(), spaced, { gateDefaultPath })
+        .entries.map((e) => e.message)
+        .join("\n");
+    expect(messages(defaultConfig)).toContain(`\`${INSTALL} --codex-config ${spacedWord}\` to rewrite the block`);
+    const atDefault = messages(spaced);
+    expect(atDefault).toContain(`\`${INSTALL}\` to rewrite the block`);
+    expect(atDefault).not.toContain("--codex-config");
   });
 });
 
