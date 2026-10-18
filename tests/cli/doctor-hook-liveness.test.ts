@@ -100,6 +100,18 @@ function codexSnapshotPath(f: Fixture): string {
     .map((n) => path.join(f.dir, ".codex", n))[0]!;
 }
 
+function claudeSnapshotPath(f: Fixture): string {
+  return fs
+    .readdirSync(path.join(f.dir, ".claude"))
+    .filter((n) => n.startsWith("harness.gate-disable.") && !n.endsWith(".restored.json"))
+    .map((n) => path.join(f.dir, ".claude", n))[0]!;
+}
+
+function claudeSnapshotBackupPath(f: Fixture): string {
+  return (JSON.parse(fs.readFileSync(claudeSnapshotPath(f), "utf8")) as { settingsBackupPath: string })
+    .settingsBackupPath;
+}
+
 function editCodexSnapshot(f: Fixture, edit: (n: { id: string; eventIndex: number }) => void): void {
   const p = codexSnapshotPath(f);
   const snap = JSON.parse(fs.readFileSync(p, "utf8"));
@@ -182,6 +194,111 @@ describe("hook liveness: Claude settings.json", () => {
     expect(r.entries.find((e) => e.kind === "disabled")!.message).toContain(
       `run \`harness gate enable --settings '${target}'\` to put it back`,
     );
+  });
+
+  it("a group with the event and matcher of the removed one but other content: the warning names --force, which is what `gate enable` needs", () => {
+    const f = fixture();
+    installClaude(f);
+    gateDisable({ settingsPath: f.settingsPath, matcher: "Write|Edit" });
+    const backup = claudeSnapshotBackupPath(f);
+    const s = JSON.parse(fs.readFileSync(f.settingsPath, "utf8")) as { hooks: Record<string, unknown[]> };
+    // The gate's own group was the only one on the event; the file now holds a changed stand-in.
+    s.hooks["PreToolUse"] = [{ matcher: "Write|Edit", hooks: [{ type: "command", command: "other-guard check" }] }];
+    fs.writeFileSync(f.settingsPath, `${JSON.stringify(s, null, 2)}\n`);
+    const r = checkClaudeLiveHooks(f.manifest, f.settingsPath, { gateDefaultPath: f.settingsPath });
+    expect(kinds(r)).toEqual(["disabled:warn", "extra:info", "present:ok"]);
+    const msg = r.entries.find((e) => e.kind === "disabled")!.message;
+    expect(msg).toContain("run `harness gate enable --force` to put it back");
+    expect(msg).toContain("holds a group with the event and matcher of the removed one but other content");
+    expect(msg).toContain(backup);
+    expect(msg).not.toContain("--settings");
+    // The gate agrees: without --force it refuses on such a group, with it the snapshot is spent and retired.
+    expect(() => gateEnable({ settingsPath: f.settingsPath })).toThrow(/does not count as back/);
+    expect(gateEnable({ settingsPath: f.settingsPath, force: true }).mode).toBe("already-restored");
+  });
+
+  it("settings.json edited since the disable: the warning names --force, which is what `gate enable` needs", () => {
+    const f = fixture();
+    installClaude(f);
+    gateDisable({ settingsPath: f.settingsPath, matcher: "Write|Edit" });
+    const backup = claudeSnapshotBackupPath(f);
+    const edited = JSON.parse(fs.readFileSync(f.settingsPath, "utf8")) as Record<string, unknown>;
+    edited["operatorAddedKey"] = "preserve me";
+    fs.writeFileSync(f.settingsPath, `${JSON.stringify(edited, null, 2)}\n`);
+    const r = checkClaudeLiveHooks(f.manifest, f.settingsPath, { gateDefaultPath: f.settingsPath });
+    expect(kinds(r)).toEqual(["disabled:warn", "present:ok"]);
+    const msg = r.entries.find((e) => e.kind === "disabled")!.message;
+    expect(msg).toContain("run `harness gate enable --force` to put it back");
+    expect(msg).toContain("was edited since the disable");
+    expect(msg).toContain(backup);
+    // The gate agrees: without --force it refuses, with it the hook comes back and the edit stays.
+    expect(() => gateEnable({ settingsPath: f.settingsPath })).toThrow(/edited since the snapshot/);
+    expect(gateEnable({ settingsPath: f.settingsPath, force: true }).mode).toBe("restored");
+    expect(kinds(checkClaudeLiveHooks(f.manifest, f.settingsPath, { gateDefaultPath: f.settingsPath }))).toEqual([
+      "present:ok",
+      "present:ok",
+    ]);
+    expect(fs.readFileSync(f.settingsPath, "utf8")).toContain("preserve me");
+  });
+
+  it("a changed group and an edit since the disable at once: the warning names --force with the changed-group reason, as the gate's own refusal words it", () => {
+    const f = fixture(`version: 1
+hooks:
+  - {name: a, event: PreToolUse, match: "Write", command: a-bin check, blocking: hard, budget_ms: 5000}
+  - {name: b, event: PreToolUse, match: "Edit", command: b-bin check, blocking: hard, budget_ms: 5000}
+policies: []
+`);
+    installClaude(f);
+    gateDisable({ settingsPath: f.settingsPath, matcher: "Write" });
+    gateDisable({ settingsPath: f.settingsPath, matcher: "Edit" });
+    // One removed group came back in a changed form, the other is still missing, and the file was edited.
+    const handEdited = {
+      operatorAddedKey: 1,
+      hooks: { PreToolUse: [{ matcher: "Write", hooks: [{ type: "command", command: "a-bin --other" }] }] },
+    };
+    fs.writeFileSync(f.settingsPath, `${JSON.stringify(handEdited, null, 2)}\n`);
+    const r = checkClaudeLiveHooks(f.manifest, f.settingsPath, { gateDefaultPath: f.settingsPath });
+    expect(kinds(r)).toEqual(["disabled:warn", "disabled:warn", "extra:info"]);
+    const msgs = r.entries.filter((e) => e.kind === "disabled").map((e) => e.message);
+    expect(msgs).toHaveLength(2);
+    for (const msg of msgs) {
+      expect(msg).toContain("run `harness gate enable --force` to put it back");
+      expect(msg).toContain("holds a group with the event and matcher of the removed one but other content");
+      expect(msg).not.toContain("was edited since the disable");
+    }
+    // The gate agrees: it refuses with the changed-group message, naming the missing group too, and --force wins.
+    let gateMessage = "";
+    try {
+      gateEnable({ settingsPath: f.settingsPath });
+    } catch (err) {
+      gateMessage = (err as Error).message;
+    }
+    expect(gateMessage).toContain("does not count as back");
+    expect(gateMessage).toContain("1 more hook group(s) it removed are missing");
+    expect(gateEnable({ settingsPath: f.settingsPath, force: true }).mode).toBe("restored");
+  });
+
+  it("an unedited file: the warning names no --force, and that plain command puts the hook back", () => {
+    const f = fixture();
+    installClaude(f);
+    gateDisable({ settingsPath: f.settingsPath, matcher: "Write|Edit" });
+    const r = checkClaudeLiveHooks(f.manifest, f.settingsPath, { gateDefaultPath: f.settingsPath });
+    const msg = r.entries.find((e) => e.kind === "disabled")!.message;
+    expect(msg).toContain("run `harness gate enable` to put it back");
+    expect(msg).not.toContain("--force");
+    expect(gateEnable({ settingsPath: f.settingsPath }).mode).toBe("restored");
+    expect(kinds(checkClaudeLiveHooks(f.manifest, f.settingsPath))).toEqual(["present:ok", "present:ok"]);
+  });
+
+  it("settings.json already restored to the pre-disable bytes: no disabled warning, and `gate enable` only retires the live snapshot", () => {
+    const f = fixture();
+    installClaude(f);
+    const original = fs.readFileSync(f.settingsPath, "utf8");
+    gateDisable({ settingsPath: f.settingsPath, matcher: "Write|Edit" });
+    fs.writeFileSync(f.settingsPath, original);
+    const r = checkClaudeLiveHooks(f.manifest, f.settingsPath, { gateDefaultPath: f.settingsPath });
+    expect(kinds(r)).toEqual(["present:ok", "present:ok"]);
+    expect(gateEnable({ settingsPath: f.settingsPath }).mode).toBe("already-restored");
   });
 
   it("removed by hand without a snapshot: still a missing error, not a disabled warn", () => {

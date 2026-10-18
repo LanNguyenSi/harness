@@ -653,3 +653,54 @@ export function planRestore(
   }
   return { hooks, restored, alreadyBack, changed };
 }
+
+/**
+ * The settings text `gate enable` writes when it puts `plan`'s groups back
+ * into the parsed settings file `obj`: `obj` with its `hooks` key replaced by
+ * `plan.hooks` (and removed when the plan holds no group at all).
+ */
+export function restoredSettingsText(obj: Record<string, unknown>, hooks: Record<string, unknown[]>): string {
+  const newObj: Record<string, unknown> = { ...obj };
+  if (Object.keys(hooks).length === 0) {
+    delete newObj["hooks"];
+  } else {
+    newObj["hooks"] = hooks;
+  }
+  return `${JSON.stringify(newObj, null, 2)}\n`;
+}
+
+/** Why `harness gate enable` needs `--force` for a snapshot; see `claudeEnableRefusal`. */
+export type ClaudeEnableRefusal = "changed-group" | "edited-settings";
+
+/**
+ * The one decision of why `harness gate enable` refuses a snapshot against
+ * the current settings.json unless it was called with `--force`, or null when
+ * it restores or retires it without one:
+ * - `"changed-group"`: the file holds a group with the event and matcher of a
+ *   removed one but other content, which may be another hook sharing the
+ *   matcher, so it never counts as back on its own;
+ * - `"edited-settings"`: the file is not the state the snapshot left and the
+ *   groups that are still missing do not add up to the pre-disable file, so
+ *   a restore would write over an operator edit.
+ * The current file already matching the pre-disable state, and a snapshot
+ * whose every group is back, never refuse: nothing is put back. A changed
+ * group wins when both hold, as `gate enable` refuses for it before it
+ * reaches the edit check. `gate enable` throws on it, and `harness doctor`
+ * calls it to decide whether its warning for a gate-disabled hook must name
+ * `--force`; the two callers never re-implement the conditions.
+ */
+export function claudeEnableRefusal(
+  currentSha: string,
+  currentObj: Record<string, unknown>,
+  plan: RestorePlan,
+  snapshot: GateDisableSnapshot,
+): ClaudeEnableRefusal | null {
+  if (currentSha === snapshot.settingsBeforeSha256) return null;
+  if (plan.changed.length > 0) return "changed-group";
+  if (plan.restored.length === 0) return null;
+  const restoredSha = sha256Hex(restoredSettingsText(currentObj, plan.hooks));
+  if (currentSha !== snapshot.settingsAfterSha256 && restoredSha !== snapshot.settingsBeforeSha256) {
+    return "edited-settings";
+  }
+  return null;
+}
