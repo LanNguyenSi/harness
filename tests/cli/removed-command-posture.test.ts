@@ -136,7 +136,10 @@ const EXPECTED_SITES = [
   "hooks[5].command",
 ];
 
-const isRemovedCommandDiag = (d: { message: string }) => d.message.includes(", removed in 1.0.0 (");
+// The removed-command warnings are the only ones quoting a command before
+// the comma; the removed hook-field warnings (task 33fe3b24) now read
+// `carries bash_match, removed in 1.0.0 (...)` and must not match here.
+const isRemovedCommandDiag = (d: { message: string }) => d.message.includes('", removed in 1.0.0 (');
 
 const NOOP_PROBES = {
   versionProbe: () => null,
@@ -250,7 +253,7 @@ describe("harness doctor on a manifest that still calls removed commands", () =>
       npmBinExec: STUB_NPM_BIN_EXEC_UNKNOWN,
       claudeMcpExec: NO_CLAUDE_CLI,
     });
-    const sites = report.manifest.warnings.filter((w) => w.includes(", removed in 1.0.0 ("));
+    const sites = report.manifest.warnings.filter((w) => w.includes('", removed in 1.0.0 ('));
     expect(sites.map((w) => w.slice(0, w.indexOf(": ")))).toEqual(EXPECTED_SITES);
     expect(report.warningCount).toBeGreaterThanOrEqual(EXPECTED_SITES.length);
     expect(format(report)).toContain('⚠ hooks[0].command: calls "harness session-start", removed in 1.0.0');
@@ -270,7 +273,7 @@ describe("harness doctor on a manifest that still calls removed commands", () =>
       npmBinExec: STUB_NPM_BIN_EXEC_UNKNOWN,
       claudeMcpExec: NO_CLAUDE_CLI,
     });
-    expect(report.manifest.warnings.filter((w) => w.includes(", removed in 1.0.0 ("))).toEqual([]);
+    expect(report.manifest.warnings.filter((w) => w.includes('", removed in 1.0.0 ('))).toEqual([]);
   });
 });
 
@@ -288,7 +291,7 @@ describe("harness apply on a manifest that still calls removed commands", () => 
     const file = writeManifest(hooksOnly());
     const result = await apply({ configPath: file, homeDir: path.dirname(file) });
     expect(result.outcome).toBe("applied");
-    expect(result.warnings.filter((w) => w.includes(", removed in 1.0.0 ("))).toEqual([
+    expect(result.warnings.filter((w) => w.includes('", removed in 1.0.0 ('))).toEqual([
       expect.stringMatching(/^hooks\[0\]\.command: calls "harness session-start"/),
       expect.stringMatching(/^hooks\[1\]\.command: calls "harness session-start"/),
       expect.stringMatching(/^hooks\[2\]\.command: calls "harness session-start"/),

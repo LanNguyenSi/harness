@@ -64,7 +64,7 @@ export interface RemovedManifestPath {
 
 /**
  * A field of a `hooks[]` entry a release removed. The field is stripped and
- * the hook is kept, with one warning per hook.
+ * ignored, with one warning per hook; a later layer may still delete the hook.
  */
 export interface RemovedHookField {
   /** The key on a `hooks[]` entry, e.g. `bash_match`. */
@@ -401,7 +401,7 @@ function stripRemovedHookFieldsFromHooks(
       path: `hooks[${i}]`,
       message:
         `${name !== undefined ? `hook "${name}"` : "this hook"} carries ${found.map((f) => f.field).join(" and ")}, ` +
-        `removed in ${found[0]!.removedIn} and ignored (${[...new Set(found.map((f) => f.reason))].join("; ")}); the hook is kept, delete the ` +
+        `removed in ${found[0]!.removedIn} (${[...new Set(found.map((f) => f.reason))].join("; ")}); the field is ignored, delete the ` +
         `${found.length === 1 ? "key" : "keys"} from it`,
     });
     return copy;
