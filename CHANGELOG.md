@@ -13,6 +13,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- Three message wordings (task d88fa968). `harness gate enable --runtime codex` says its remaining live snapshots come from an earlier build that wrote one per disable, or from a copied directory that brought a retired one back. `harness gate disable` on a protected settings file names the call that retires the snapshot it just wrote, an enable through the settings file, in place of "a later gate call". The install summary of `harness apply --runtime codex --install` names the config path actually written when the config directory did not exist yet and was spelled with `..` after a directory link, as `--json` `configPath` already did.
+
 - `harness uninstall --restore-from` refuses a hand-edited or partial uninstall snapshot as well as the exact record: any top-level `removedHookGroups`, `removedMcpServers`, `settingsBackupPath`, `settingsBeforeSha256`, `settingsAfterSha256` or `restoredFrom` key in any shape, with or without `version`, and an object whose only key holds an object carrying one of those keys (one wrapper level, no deeper). A settings backup, including one with a `version` key or unrelated nested objects, restores as before (task bb7f4c07).
 
 - The knowledge bundle's `pause-vs-gate-kill-switch.md` runbook is replaced by `docs/okf/gate-kill-switch.md`, a gate-only runbook for `harness gate disable` / `enable` on both runtimes, and `docs/CLI.md`, `docs/for-humans.md`, `docs/ARCHITECTURE.md`, `docs/policy-packs/branch-protection.md` and the remaining knowledge-bundle docs no longer describe `harness pause` / `harness resume`, the approval-signing key projection or pending approvals (task 2ef35911).

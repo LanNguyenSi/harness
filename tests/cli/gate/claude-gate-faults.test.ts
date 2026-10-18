@@ -358,7 +358,8 @@ describe("a settings path that is a symlink: the write the filesystem refuses", 
       expect(err).toBeInstanceOf(GateDisableError);
       message = (err as Error).message;
     }
-    expect(message).toMatch(/was not changed \(the backup .* was written, and the snapshot .* which a later gate call retires\)\./);
+    expect(message).toMatch(/was not changed \(the backup .* was written, and the snapshot .*, which an enable through .* retires\)\./);
+    expect(message).not.toContain("a later gate call");
     expect(fs.readFileSync(settingsPath, "utf8")).toBe(original);
     fault.onWrite = null;
     // The snapshot describes a removal that did not happen: the retry retires it as spent and starts a fresh one.
@@ -381,7 +382,7 @@ describe("a settings path that is a symlink: the write the filesystem refuses", 
       message = (err as Error).message;
     }
     expect(message).toMatch(/was not changed \(the backup .* was written\)\./);
-    expect(message).not.toContain("which a later gate call retires");
+    expect(message).not.toContain("retires");
     expect(fs.readFileSync(path.join(tmp, name ?? ""), "utf8")).toBe(premerge);
   });
 

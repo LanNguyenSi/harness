@@ -273,7 +273,7 @@ export function registerGateGcGroup(
                         "A gate snapshot sits beside the path `harness gate disable` was given: if this config is also " +
                         "reached through a link or another name, run enable with that same `--config`."),
               remaining.length > 0 &&
-                `${remaining.length} more live Codex gate snapshot(s) remain (an earlier build wrote one per disable): ` +
+                `${remaining.length} more live Codex gate snapshot(s) remain (an earlier build wrote one per disable, or a copied directory brought a retired one back): ` +
                   `${remaining.join(", ")}. Run \`harness gate enable --runtime codex${configFlag}\` again for the next one.`,
               skippedForeign.length > 0 &&
                 !foreignNamed &&
