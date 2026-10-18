@@ -598,7 +598,7 @@ describe("a refused write behind a settings link in another directory: which way
       expect(snap).toBeDefined();
       const enable = `harness gate enable --settings ${aPath}`;
       const copy = `cp ${bPath} ${aPath}.copy && mv ${aPath}.copy ${aPath}`;
-      expect(message).toContain(`first run \`${enable}\` (or move ${path.join(tmp, "b", snap ?? "")} aside)`);
+      expect(message).toContain(`first run \`${enable}\` (it retires that snapshot) or move ${path.join(tmp, "b", snap ?? "")} aside`);
       expect(message.indexOf(enable)).toBeGreaterThan(-1);
       expect(message.indexOf(enable)).toBeLessThan(message.indexOf(copy));
       // The advice, followed: the enable through the link retires the snapshot of the unchanged file.

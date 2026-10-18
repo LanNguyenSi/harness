@@ -270,8 +270,8 @@ function readOnlyTargetError(
       : sameDirectory(path.dirname(own), path.dirname(entry))
         ? `To disable anyway, ${writable}, ${again}`
         : written !== undefined
-          ? `To disable anyway, first run \`harness gate enable ${settingsFlag(settingsPath)}\` (or move ${written} aside), ` +
-            `which retires that snapshot: once the link is a copy, an enable through it looks only beside the copy and ` +
+          ? `To disable anyway, first run \`harness gate enable ${settingsFlag(settingsPath)}\` (it retires that snapshot) ` +
+            `or move ${written} aside: once the link is a copy, an enable through it looks only beside the copy and ` +
             `would leave the snapshot live beside ${entry}. Then replace the link with a copy of its file ` +
             `(\`${copyOverLinkCommand(settingsPath, entry)}\`) or ${writable}, ${again}`
           : `To disable anyway, replace the link with a copy of its file ` +
