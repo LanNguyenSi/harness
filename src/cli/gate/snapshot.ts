@@ -712,8 +712,9 @@ export function claudeEnableRefusal(
  * the newest alone: an older snapshot waits until that restore changed the
  * file, which is exactly why its own refusal against the CURRENT file is not
  * what the next plain enable will decide. `harness doctor` asks this question
- * before it words the warning for a gate-disabled hook, so the two never pick
- * a snapshot on their own and cannot drift apart on which one decides.
+ * before it words the warning for a gate-disabled hook, and `gate enable` takes
+ * its snapshot through it too, so the two cannot drift apart on which one
+ * decides.
  */
 export function nextEnableSnapshots(live: readonly LiveSnapshot[]): readonly LiveSnapshot[] {
   return live.slice(0, 1);

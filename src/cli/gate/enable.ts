@@ -33,6 +33,7 @@ import {
   isReadOnlyWriteError,
   listLiveSnapshots,
   missingLabel,
+  nextEnableSnapshots,
   planRestore,
   readOnlyLinkTargetText,
   readOnlyWritablePlace,
@@ -181,7 +182,8 @@ export function gateEnable(opts: GateEnableOptions = {}): GateEnableResult {
     );
   }
   const foreign = found.skippedForeign;
-  const [newest, ...older] = found.live;
+  const [newest] = nextEnableSnapshots(found.live);
+  const older = found.live.filter((l) => l !== newest);
   if (newest === undefined) {
     return { mode: "no-snapshots", settingsPath, foreign };
   }

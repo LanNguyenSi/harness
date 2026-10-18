@@ -344,10 +344,11 @@ export function checkClaudeLiveHooks(
  * Why doctor must name `--force` for each group a live snapshot removed, by
  * the gate's own decision and not a copy of it: the snapshots a plain
  * `gate enable` applies next are the only refusal the operator is about to
- * meet, and one of them that needs `--force` marks every group it removed.
- * `nextEnableSnapshots` answers which those are (the newest; an older one
- * waits until that restore changed the file, so its own decision against this
- * file is never what the next plain enable does and never names the flag). A
+ * meet. `nextEnableSnapshots` answers which those are (the newest; an older
+ * one waits until that restore changed the file, so its own decision against
+ * this file is never what the next plain enable does). When one of them needs
+ * `--force`, the plain command refuses for every gate-disabled group, so
+ * every group any live snapshot removed is marked with that refusal. A
  * `hooks` shape the gate refuses to read marks nothing: that refusal is not
  * one of the two `--force` answers this warning could name.
  */
@@ -362,11 +363,14 @@ function claudeEnableForce(
   for (const { snapshot } of nextEnableSnapshots(live)) {
     const reason = claudeEnableRefusal(sha256Hex(text), doc, planRestore(hooks, snapshot), snapshot);
     if (reason === null) continue;
-    for (const r of snapshot.removed) {
-      for (const k of flattenHookTable({ [r.event]: [r.group] })) {
-        out.set(keyId(k), { reason, settingsBackupPath: snapshot.settingsBackupPath });
+    for (const { snapshot: named } of live) {
+      for (const r of named.removed) {
+        for (const k of flattenHookTable({ [r.event]: [r.group] })) {
+          if (!out.has(keyId(k))) out.set(keyId(k), { reason, settingsBackupPath: snapshot.settingsBackupPath });
+        }
       }
     }
+    break;
   }
   return out;
 }

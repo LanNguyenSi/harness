@@ -385,6 +385,43 @@ policies: []
     expect(gateEnable({ settingsPath: f.settingsPath, force: true }).mode).toBe("restored");
   });
 
+  it("two live snapshots name different groups and the newest refuses: every disabled hook names --force with the newest snapshot's backup, as the plain enable refuses for all of them", () => {
+    const f = fixture(`version: 1
+hooks:
+  - {name: a, event: PreToolUse, match: "Write", command: a-bin check, blocking: hard, budget_ms: 5000}
+  - {name: b, event: PreToolUse, match: "Edit", command: b-bin check, blocking: hard, budget_ms: 5000}
+policies: []
+`);
+    installClaude(f);
+    const olderRun = gateDisable({ settingsPath: f.settingsPath, matcher: "Write", now: new Date("2026-09-01T10:00:00.000Z") });
+    if (olderRun.mode !== "remove") throw new Error("expected remove");
+    const older = olderRun.snapshotPath;
+    // Park the older snapshot so the second disable writes its own instead of merging (the
+    // one-snapshot-per-disable state older releases left behind).
+    fs.renameSync(older, `${older}.parked`);
+    const newerRun = gateDisable({ settingsPath: f.settingsPath, matcher: "Edit", now: new Date("2026-09-01T11:00:00.000Z") });
+    if (newerRun.mode !== "remove") throw new Error("expected remove");
+    const newer = newerRun.snapshotPath;
+    fs.renameSync(`${older}.parked`, older);
+    downgradeToVersion1(older);
+    downgradeToVersion1(newer);
+    // An edit after the last disable: the snapshot the next plain enable applies (the newest) refuses.
+    const edited = JSON.parse(fs.readFileSync(f.settingsPath, "utf8")) as Record<string, unknown>;
+    edited["operatorAddedKey"] = 1;
+    fs.writeFileSync(f.settingsPath, `${JSON.stringify(edited, null, 2)}\n`);
+    const r = checkClaudeLiveHooks(f.manifest, f.settingsPath, { gateDefaultPath: f.settingsPath });
+    const msgs = r.entries.filter((e) => e.kind === "disabled").map((e) => e.message);
+    expect(msgs).toHaveLength(2);
+    for (const msg of msgs) {
+      expect(msg).toContain("run `harness gate enable --force` to put it back");
+      expect(msg).toContain("was edited since the disable");
+      expect(msg).toContain(snapshotBackupOf(newer));
+    }
+    // The gate agrees: the plain call refuses on the newest snapshot, whichever group the hook belongs to.
+    expect(() => gateEnable({ settingsPath: f.settingsPath })).toThrow(/edited since the snapshot/);
+    expect(gateEnable({ settingsPath: f.settingsPath, force: true }).mode).toBe("restored");
+  });
+
   it("a hooks shape the gate refuses to read: the disabled warning names no --force", () => {
     for (const malformed of [[], { PreToolUse: {} }]) {
       const f = fixture();
