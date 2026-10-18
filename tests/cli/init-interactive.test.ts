@@ -2714,7 +2714,7 @@ describe("interactive wizard — hermetic spawn guard, claude-mcp path (task 0d8
   });
 });
 
-describe("interactive wizard — Codex install hints name the config, shell-quoted", () => {
+describe("interactive wizard: Codex install hints name the config, shell-quoted", () => {
   const INSTALL = "harness apply --runtime codex --install";
   let spacedHome: string;
 
