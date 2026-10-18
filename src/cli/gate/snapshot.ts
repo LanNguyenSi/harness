@@ -704,3 +704,17 @@ export function claudeEnableRefusal(
   }
   return null;
 }
+
+/**
+ * The live snapshots a plain `harness gate enable` applies on its next call,
+ * in the order it applies them, from `listLiveSnapshots`' newest-first list.
+ * `gate enable` restores ONE snapshot per call and retires it, so today it is
+ * the newest alone: an older snapshot waits until that restore changed the
+ * file, which is exactly why its own refusal against the CURRENT file is not
+ * what the next plain enable will decide. `harness doctor` asks this question
+ * before it words the warning for a gate-disabled hook, so the two never pick
+ * a snapshot on their own and cannot drift apart on which one decides.
+ */
+export function nextEnableSnapshots(live: readonly LiveSnapshot[]): readonly LiveSnapshot[] {
+  return live.slice(0, 1);
+}

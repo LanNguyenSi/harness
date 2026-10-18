@@ -61,6 +61,7 @@ import {
   type ClaudeEnableRefusal,
   type LiveSnapshot,
   listLiveSnapshots,
+  nextEnableSnapshots,
   planRestore,
   settingsFlag,
   sha256Hex,
@@ -304,9 +305,10 @@ export function checkClaudeLiveHooks(
   // The gate does not read CLAUDE_CONFIG_DIR: any other file than its default needs --settings.
   const enable = `harness gate enable${settingsPath === opts.gateDefaultPath ? "" : ` ${settingsFlag(settingsPath)}`}`;
   // A disabled hook comes back with `gate enable` alone, or with `gate enable
-  // --force`, by the gate's own decision: a live snapshot the gate refuses
-  // without `--force` marks every group it removed, so the warning names the
-  // flag exactly when the plain command would refuse and say why.
+  // --force`, by the gate's own decision: when the gate refuses the snapshot
+  // the next plain call applies without `--force`, that snapshot marks every
+  // group it removed, so the warning names the flag exactly when the plain
+  // command would refuse and say why.
   const forceOf = claudeEnableForce(read.text, doc, snaps.ok ? snaps.live : []);
   report.entries.push(
     ...compare(
@@ -339,13 +341,15 @@ export function checkClaudeLiveHooks(
 }
 
 /**
- * Why doctor must name `--force` for each group the live snapshots removed,
- * by the gate's own decision and not a copy of it: a snapshot
- * `gate enable` would refuse without `--force` marks every group it removed.
- * Newest snapshot first, the order `gate enable` applies them; the first
- * reason naming a group wins. A `hooks` shape the gate refuses to read marks
- * nothing: that refusal is not one of the two `--force` answers this warning
- * could name.
+ * Why doctor must name `--force` for each group a live snapshot removed, by
+ * the gate's own decision and not a copy of it: the snapshots a plain
+ * `gate enable` applies next are the only refusal the operator is about to
+ * meet, and one of them that needs `--force` marks every group it removed.
+ * `nextEnableSnapshots` answers which those are (the newest; an older one
+ * waits until that restore changed the file, so its own decision against this
+ * file is never what the next plain enable does and never names the flag). A
+ * `hooks` shape the gate refuses to read marks nothing: that refusal is not
+ * one of the two `--force` answers this warning could name.
  */
 function claudeEnableForce(
   text: string,
@@ -353,15 +357,14 @@ function claudeEnableForce(
   live: readonly LiveSnapshot[],
 ): Map<string, { reason: ClaudeEnableRefusal; settingsBackupPath: string }> {
   const out = new Map<string, { reason: ClaudeEnableRefusal; settingsBackupPath: string }>();
-  for (const { snapshot } of live) {
-    const hooks = settingsHooksOf(doc);
-    if (hooks === null) break;
+  const hooks = settingsHooksOf(doc);
+  if (hooks === null) return out;
+  for (const { snapshot } of nextEnableSnapshots(live)) {
     const reason = claudeEnableRefusal(sha256Hex(text), doc, planRestore(hooks, snapshot), snapshot);
     if (reason === null) continue;
     for (const r of snapshot.removed) {
       for (const k of flattenHookTable({ [r.event]: [r.group] })) {
-        const id = keyId(k);
-        if (!out.has(id)) out.set(id, { reason, settingsBackupPath: snapshot.settingsBackupPath });
+        out.set(keyId(k), { reason, settingsBackupPath: snapshot.settingsBackupPath });
       }
     }
   }
