@@ -41,6 +41,7 @@ import {
   readCodexManagedHookUnits,
 } from "../apply/install-codex-config.js";
 import {
+  CODEX_INSTALL_COMMAND,
   codexConfigFlag,
   latestInstall,
   type LoadedCodexSnapshot,
@@ -317,7 +318,8 @@ export function checkCodexLiveHooks(
   const report: HookLivenessRuntimeReport = { runtime: "codex", livePath: configPath, entries: [] };
   const expected = expectedCodexHooks(manifest);
   if (expected.length === 0) return report;
-  const fixHint = "run `harness apply --runtime codex --install`";
+  const namedPath = configPath === opts.gateDefaultPath ? null : configPath;
+  const fixHint = `run \`${CODEX_INSTALL_COMMAND}${codexConfigFlag(namedPath, "--codex-config")}\``;
   const read = readText(configPath, fixHint);
   if (!read.ok) {
     report.entries.push(fileFinding(read.message));
@@ -345,7 +347,7 @@ export function checkCodexLiveHooks(
   let snapshotProblem = false;
   let ownSnapshots: LoadedCodexSnapshot[] = [];
   try {
-    ownSnapshots = readLiveCodexSnapshots(configPath, (m) => new Error(m)).own;
+    ownSnapshots = readLiveCodexSnapshots(configPath, (m) => new Error(m), namedPath).own;
   } catch (err) {
     snapshotProblem = true;
     report.entries.push(
@@ -360,7 +362,7 @@ export function checkCodexLiveHooks(
     disabledUnits.push(...restorableCodexUnits(read.text, configPath, ownSnapshots));
   }
   const recordsOf = (k: HookKey): RestorableCodexUnit[] => disabledUnits.filter((d) => keyId(d.key) === keyId(k));
-  const enable = `harness gate enable --runtime codex${codexConfigFlag(configPath === opts.gateDefaultPath ? null : configPath)}`;
+  const enable = `harness gate enable --runtime codex${codexConfigFlag(namedPath)}`;
   const disabledMessage = (k: HookKey): string => {
     const head = `disabled via \`harness gate disable --runtime codex\`: ${describeHook(k)}; `;
     const edited = recordsOf(k).find((d) => d.needsForce);

@@ -72,22 +72,30 @@ export type CodexGateEnableResult =
       skippedEnabled: string[];
     });
 
-function readBlock(text: string, configPath: string): ReturnType<typeof readCodexManagedHookUnits> {
+function readBlock(
+  text: string,
+  configPath: string,
+  namedPath: string | null,
+): ReturnType<typeof readCodexManagedHookUnits> {
   try {
     return readCodexManagedHookUnits(text, configPath);
   } catch (err) {
-    throw toGateError(err, (m) => new GateEnableError(m));
+    throw toGateError(err, (m) => new GateEnableError(m), namedPath);
   }
 }
 
 /** Ids of the block's neutralised units; none when the config has no block. */
-function disabledIds(text: string, configPath: string): string[] {
-  return readBlock(text, configPath)?.units.filter((u) => u.disabled).map((u) => u.id) ?? [];
+function disabledIds(text: string, configPath: string, namedPath: string | null): string[] {
+  return readBlock(text, configPath, namedPath)?.units.filter((u) => u.disabled).map((u) => u.id) ?? [];
 }
 
 export function codexGateEnable(opts: CodexGateEnableOptions = {}): CodexGateEnableResult {
   const { requestedPath, configPath, namedPath } = resolveCodexConfig(opts, (m) => new GateEnableError(m));
-  const { own, foreign: skippedForeign } = readLiveCodexSnapshots(requestedPath, (m) => new GateEnableError(m));
+  const { own, foreign: skippedForeign } = readLiveCodexSnapshots(
+    requestedPath,
+    (m) => new GateEnableError(m),
+    namedPath,
+  );
   const live = own[0];
 
   let original: string;
@@ -106,14 +114,14 @@ export function codexGateEnable(opts: CodexGateEnableOptions = {}): CodexGateEna
     return {
       mode: "no-snapshots",
       configPath: requestedPath,
-      stillDisabled: disabledIds(original, configPath),
+      stillDisabled: disabledIds(original, configPath, namedPath),
       skippedForeign,
     };
   }
 
   const { snapshot } = live;
   const currentSha = sha256Hex(original);
-  const units = readBlock(original, configPath)?.units ?? null;
+  const units = readBlock(original, configPath, namedPath)?.units ?? null;
   const { retire: spent, missing } = spentCodexSnapshot(
     snapshot,
     currentSha,
@@ -137,7 +145,7 @@ export function codexGateEnable(opts: CodexGateEnableOptions = {}): CodexGateEna
     try {
       assertCodexHookEditInvariant(original, plan.text, configPath, { direction: "restore", counts });
     } catch (err) {
-      throw toGateError(err, (m) => new GateEnableError(m));
+      throw toGateError(err, (m) => new GateEnableError(m), namedPath);
     }
     // An edited config is restored without --force only when the restore
     // provably rebuilds the pre-disable bytes (a crashed merge, a unit put
@@ -180,7 +188,7 @@ export function codexGateEnable(opts: CodexGateEnableOptions = {}): CodexGateEna
   }
   const base = {
     configPath: requestedPath,
-    stillDisabled: disabledIds(current, configPath),
+    stillDisabled: disabledIds(current, configPath, namedPath),
     skippedForeign,
     retired,
     remaining: own.slice(1).map((l) => l.path),

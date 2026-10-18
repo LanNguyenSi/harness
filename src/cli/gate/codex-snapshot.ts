@@ -97,6 +97,21 @@ export function codexConfigFlag(namedPath: string | null, flag = "--config"): st
   return namedPath === null ? "" : ` ${flag} ${shellQuote(namedPath)}`;
 }
 
+/** The install command the installer's refusal texts and hints print. */
+export const CODEX_INSTALL_COMMAND = "harness apply --runtime codex --install";
+
+/** `message` with every bare install command followed by the call's
+ * `--codex-config <path>` (shell-quoted) when the call named a config, so a
+ * pasted command acts on the config the call acted on and not on the default
+ * `~/.codex/config.toml`. A call without a named config prints it unchanged.
+ * Apply once, at the boundary that knows the call's path. */
+export function nameInstallConfig(message: string, namedPath: string | null): string {
+  if (namedPath === null) return message;
+  return message
+    .split(CODEX_INSTALL_COMMAND)
+    .join(`${CODEX_INSTALL_COMMAND}${codexConfigFlag(namedPath, "--codex-config")}`);
+}
+
 /** Installer refusal texts are worded for `harness apply --install`. Reached
  * through the gate they would tell the operator about an install that never
  * ran, so each known phrase is mapped to the gate's own wording. */
@@ -123,9 +138,16 @@ export function gateWording(message: string): string {
 }
 
 /** An installer refusal becomes the gate verb's own error type (same text in
- * the gate's wording); anything else is rethrown unchanged by the caller. */
-export function toGateError(err: unknown, makeError: (message: string) => Error): unknown {
-  return err instanceof CodexInstallRefusalError ? makeError(gateWording(err.message)) : err;
+ * the gate's wording, its install commands naming the config the call named,
+ * `namedPath`); anything else is rethrown unchanged by the caller. */
+export function toGateError(
+  err: unknown,
+  makeError: (message: string) => Error,
+  namedPath: string | null = null,
+): unknown {
+  return err instanceof CodexInstallRefusalError
+    ? makeError(nameInstallConfig(gateWording(err.message), namedPath))
+    : err;
 }
 
 /** The absolute spelling of a config path. One with a `..` segment is taken
@@ -152,7 +174,7 @@ export function resolveCodexConfig(
   try {
     return { requestedPath, configPath: resolveConfigSymlink(requestedPath), namedPath: named ? requestedPath : null };
   } catch (err) {
-    throw toGateError(err, makeError);
+    throw toGateError(err, makeError, named ? requestedPath : null);
   }
 }
 
@@ -364,13 +386,14 @@ export function foreignCodexExit(f: ForeignCodexSnapshot): string {
 export function readLiveCodexSnapshots(
   requestedPath: string,
   makeError: (message: string) => Error,
+  namedPath: string | null = null,
 ): { own: LoadedCodexSnapshot[]; foreign: ForeignCodexSnapshot[] } {
   const own: LoadedCodexSnapshot[] = [];
   const foreign: ForeignCodexSnapshot[] = [];
   const dir = path.dirname(requestedPath);
   const targetName = path.basename(requestedPath);
   for (const snapPath of listCodexSnapshots(dir)) {
-    const read = readCodexSnapshot(snapPath);
+    const read = readCodexSnapshot(snapPath, namedPath);
     if (!read.ok) {
       throw makeError(
         `${read.reason.replace(/\.$/, "")}. A live Codex snapshot beside ${requestedPath} that harness cannot read blocks the gate: ` +
@@ -447,7 +470,7 @@ function isDisabledUnit(value: unknown): value is CodexDisabledUnit {
 /** Parses a Codex snapshot. Anything that is not a version-3 snapshot with
  * `target: "codex"` is refused, so a Claude snapshot renamed into place is
  * never restored into a TOML file. */
-export function readCodexSnapshot(filePath: string): CodexSnapshotReadOk | CodexSnapshotReadErr {
+export function readCodexSnapshot(filePath: string, namedPath: string | null = null): CodexSnapshotReadOk | CodexSnapshotReadErr {
   let parsed: unknown;
   try {
     parsed = JSON.parse(fs.readFileSync(filePath, "utf8"));
@@ -464,7 +487,7 @@ export function readCodexSnapshot(filePath: string): CodexSnapshotReadOk | Codex
       reason:
         `snapshot ${filePath} is a version 2 Codex gate snapshot, written by an earlier build that ` +
         "deleted the hook unit instead of neutralising it; it cannot be restored. Re-run " +
-        "`harness apply --runtime codex --install` to rewrite the block, or restore the config " +
+        `\`${CODEX_INSTALL_COMMAND}${codexConfigFlag(namedPath, "--codex-config")}\` to rewrite the block, or restore the config ` +
         "from the backup beside it, then remove this snapshot.",
     };
   }

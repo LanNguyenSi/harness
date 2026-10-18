@@ -346,7 +346,7 @@ describe("a settings path that is a symlink: the write the filesystem refuses", 
     expect(liveSnapshotNames(settingsPath)).toEqual([]);
   });
 
-  it("the settings write after a fresh snapshot: the message says the file is unchanged and the snapshot is retired by a later gate call", () => {
+  it("the settings write after a fresh snapshot: the message says the file is unchanged and names the snapshot an enable or a disable run again retires", () => {
     const original = fs.readFileSync(settingsPath, "utf8");
     fault.onWrite = (p) => {
       if (kindOf(p) === "settings") readOnly();
@@ -358,8 +358,12 @@ describe("a settings path that is a symlink: the write the filesystem refuses", 
       expect(err).toBeInstanceOf(GateDisableError);
       message = (err as Error).message;
     }
-    expect(message).toMatch(/was not changed \(the backup .* was written, and the snapshot .*, which an enable through .* retires\)\./);
+    expect(message).toMatch(
+      /was not changed \(the backup .* was written, and the snapshot .*, which an enable or this disable run again through .* retires\)\./,
+    );
     expect(message).not.toContain("a later gate call");
+    // The link sits beside the file, so no copy is offered and no order of enable and copy is named.
+    expect(message).not.toContain("replace the link with a copy");
     expect(fs.readFileSync(settingsPath, "utf8")).toBe(original);
     fault.onWrite = null;
     // The snapshot describes a removal that did not happen: the retry retires it as spent and starts a fresh one.
@@ -573,6 +577,47 @@ describe("a refused write behind a settings link in another directory: which way
     const message = refusal();
     expect(message).toContain(`(\`cp ${bPath} ${aPath}.copy && mv ${aPath}.copy ${aPath}\`)`);
     expect(message).not.toContain("Do not replace the link");
+  });
+
+  describe("the settings write refused after this call wrote its own snapshot", () => {
+    function settingsRefused(): void {
+      fault.onWrite = (p) => {
+        if (kindOf(p) === "settings") {
+          const err = new Error("EACCES: write refused, open") as NodeJS.ErrnoException;
+          err.code = "EACCES";
+          throw err;
+        }
+      };
+    }
+
+    it("names the enable through the link before the copy, and following that order leaves no live snapshot", () => {
+      const original = fs.readFileSync(bPath, "utf8");
+      settingsRefused();
+      const message = refusal();
+      const [snap] = liveSnapshotNames(bPath);
+      expect(snap).toBeDefined();
+      const enable = `harness gate enable --settings ${aPath}`;
+      const copy = `cp ${bPath} ${aPath}.copy && mv ${aPath}.copy ${aPath}`;
+      expect(message).toContain(`first run \`${enable}\` (or move ${path.join(tmp, "b", snap ?? "")} aside)`);
+      expect(message.indexOf(enable)).toBeGreaterThan(-1);
+      expect(message.indexOf(enable)).toBeLessThan(message.indexOf(copy));
+      // The advice, followed: the enable through the link retires the snapshot of the unchanged file.
+      fault.onWrite = null;
+      gateEnable({ settingsPath: aPath });
+      expect(liveSnapshotNames(bPath)).toEqual([]);
+      expect(fs.readFileSync(bPath, "utf8")).toBe(original);
+    });
+
+    it("the other order is why: an enable through the copy finds nothing, and the snapshot stays live beside the original file", () => {
+      settingsRefused();
+      refusal();
+      expect(liveSnapshotNames(bPath)).toHaveLength(1);
+      fault.onWrite = null;
+      fs.rmSync(aPath);
+      fs.copyFileSync(bPath, aPath);
+      expect(gateEnable({ settingsPath: aPath }).mode).toBe("no-snapshots");
+      expect(liveSnapshotNames(bPath)).toHaveLength(1);
+    });
   });
 
   it("a live snapshot beside the file is named and the copy is not offered", () => {

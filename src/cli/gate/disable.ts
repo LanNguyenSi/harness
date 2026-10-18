@@ -239,6 +239,13 @@ function sameDirectory(a: string, b: string): boolean {
  * through the copy looks only beside the copy, so it would report nothing to
  * restore while the groups those snapshots removed are still missing. Such
  * snapshots are named instead, with the enable that restores them first.
+ *
+ * `written` is the snapshot this call wrote before the refusal (the file is
+ * unchanged, so the snapshot describes a removal that never happened). The
+ * same reason applies: once the link is a copy, an enable or a disable run
+ * again through the settings path looks only beside the copy and leaves it
+ * live beside the original file. The copy is therefore offered only after
+ * the enable through the link, which retires it, or after it is moved aside.
  */
 function readOnlyTargetError(
   settingsPath: string,
@@ -248,6 +255,7 @@ function readOnlyTargetError(
   live: LiveSnapshot[],
   err: unknown,
   effect: string,
+  written?: string,
 ): GateDisableError | null {
   if (entry === own || !isReadOnlyWriteError(err)) return null;
   const again = `then run \`harness gate disable --matcher ${shellQuote(matcher)} ${settingsFlag(settingsPath)}\` again.`;
@@ -261,8 +269,13 @@ function readOnlyTargetError(
         `and run \`harness gate enable ${settingsFlag(settingsPath)}\`, which restores them, then replace the link.`
       : sameDirectory(path.dirname(own), path.dirname(entry))
         ? `To disable anyway, ${writable}, ${again}`
-        : `To disable anyway, replace the link with a copy of its file ` +
-          `(\`${copyOverLinkCommand(settingsPath, entry)}\`) or ${writable}, ${again}`;
+        : written !== undefined
+          ? `To disable anyway, first run \`harness gate enable ${settingsFlag(settingsPath)}\` (or move ${written} aside), ` +
+            `which retires that snapshot: once the link is a copy, an enable through it looks only beside the copy and ` +
+            `would leave the snapshot live beside ${entry}. Then replace the link with a copy of its file ` +
+            `(\`${copyOverLinkCommand(settingsPath, entry)}\`) or ${writable}, ${again}`
+          : `To disable anyway, replace the link with a copy of its file ` +
+            `(\`${copyOverLinkCommand(settingsPath, entry)}\`) or ${writable}, ${again}`;
   return new GateDisableError(`${readOnlyLinkTargetText(settingsPath, entry, err)} ${effect} ${wayOut}`);
 }
 
@@ -395,6 +408,8 @@ export function gateDisable(opts: GateDisableOptions = {}): GateDisableResult {
   // left in a "settings.json mutated but snapshot missing" state if the
   // process dies between the two writes.
   const priorSnapshot = target === undefined || relocated ? undefined : fs.readFileSync(target.path, "utf8");
+  // Written by this call alone: nothing earlier to put back if the settings write fails.
+  const freshSnapshot = !relocated && priorSnapshot === undefined;
   try {
     atomicWriteFile(snapPath, `${JSON.stringify(snapshot, null, 2)}\n`);
   } catch (err) {
@@ -441,7 +456,8 @@ export function gateDisable(opts: GateDisableOptions = {}): GateDisableResult {
         stillLive,
         err,
         `${settingsPath} was not changed (the backup ${backup} was written` +
-          `${relocated || priorSnapshot !== undefined ? "" : `, and the snapshot ${snapPath}, which an enable through ${settingsPath} retires`}).`,
+          `${freshSnapshot ? `, and the snapshot ${snapPath}, which an enable or this disable run again through ${settingsPath} retires` : ""}).`,
+        freshSnapshot ? snapPath : undefined,
       ) ?? err
     );
   }

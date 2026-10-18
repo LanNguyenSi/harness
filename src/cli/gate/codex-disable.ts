@@ -79,7 +79,7 @@ export function codexGateDisable(opts: CodexGateDisableOptions = {}): CodexGateD
   try {
     block = readCodexManagedHookUnits(text, configPath);
   } catch (err) {
-    throw toGateError(err, (m) => new GateDisableError(m));
+    throw toGateError(err, (m) => new GateDisableError(m), namedPath);
   }
   if (block === null) {
     throw new GateDisableError(
@@ -150,7 +150,7 @@ export function codexGateDisable(opts: CodexGateDisableOptions = {}): CodexGateD
   try {
     assertCodexHookEditInvariant(text, next, configPath, { direction: "neutralise", counts });
   } catch (err) {
-    throw toGateError(err, (m) => new GateDisableError(m));
+    throw toGateError(err, (m) => new GateDisableError(m), namedPath);
   }
 
   // At most one live snapshot per config. A spent one (enable would only
@@ -160,7 +160,7 @@ export function codexGateDisable(opts: CodexGateDisableOptions = {}): CodexGateD
   // joins it, which is only possible when the config is exactly what the
   // snapshot left behind, since its pre-disable sha must stay the one state a
   // restore rebuilds.
-  let live = readLiveCodexSnapshots(requestedPath, (m) => new GateDisableError(m)).own[0];
+  let live = readLiveCodexSnapshots(requestedPath, (m) => new GateDisableError(m), namedPath).own[0];
   let retired: CodexRetiredSnapshot | null = null;
   if (live !== undefined) {
     const spent = spentCodexSnapshot(
