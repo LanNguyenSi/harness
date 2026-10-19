@@ -318,13 +318,22 @@ export function checkClaudeLiveHooks(
       (k) => {
         const head = `disabled via \`harness gate disable\`: ${describeHook(k)}; `;
         const force = forceOf.get(keyId(k));
-        return force === undefined
-          ? `${head}run \`${enable}\` to put it back`
-          : `${head}run \`${enable} --force\` to put it back: ` +
-              (force.reason === "changed-group"
-                ? "settings.json holds a group with the event and matcher of the removed one but other content"
-                : "settings.json was edited since the disable") +
-              `, so the restore refuses without \`--force\` (inspect the diff against ${force.settingsBackupPath} first)`;
+        if (force === undefined) return `${head}run \`${enable}\` to put it back`;
+        // An edit since the disable is a fact about the file, true for every
+        // hook; a changed group is a fact about the refusing snapshot's own
+        // removed groups, so a hook only another live snapshot removed must
+        // name the refusing snapshot instead of claiming such a group stands
+        // in for ITS removed one.
+        const reason =
+          force.reason !== "changed-group"
+            ? "settings.json was edited since the disable"
+            : force.removedByRefusing
+              ? "settings.json holds a group with the event and matcher of the removed one but other content"
+              : "the snapshot the next `harness gate enable` applies refuses, because settings.json holds a group with the event and matcher of a group that snapshot removed, but other content";
+        return (
+          `${head}run \`${enable} --force\` to put it back: ${reason}` +
+          `, so the restore refuses without \`--force\` (inspect the diff against ${force.settingsBackupPath} first)`
+        );
       },
       "settings.json",
       ({ extraOrDisabled }) =>
@@ -348,25 +357,38 @@ export function checkClaudeLiveHooks(
  * one waits until that restore changed the file, so its own decision against
  * this file is never what the next plain enable does). When one of them needs
  * `--force`, the plain command refuses for every gate-disabled group, so
- * every group any live snapshot removed is marked with that refusal. A
- * `hooks` shape the gate refuses to read marks nothing: that refusal is not
- * one of the two `--force` answers this warning could name.
+ * every group any live snapshot removed is marked with that refusal, and the
+ * mark says whether the refusing snapshot itself removed the group: a changed
+ * group is a fact about that snapshot's own removed groups, so the warning
+ * for a group only an older snapshot removed must name the refusing snapshot
+ * rather than claim the changed group stands in for that group. A `hooks`
+ * shape the gate refuses to read marks nothing: that refusal is not one of
+ * the two `--force` answers this warning could name.
  */
 function claudeEnableForce(
   text: string,
   doc: Record<string, unknown>,
   live: readonly LiveSnapshot[],
-): Map<string, { reason: ClaudeEnableRefusal; settingsBackupPath: string }> {
-  const out = new Map<string, { reason: ClaudeEnableRefusal; settingsBackupPath: string }>();
+): Map<string, { reason: ClaudeEnableRefusal; settingsBackupPath: string; removedByRefusing: boolean }> {
+  const out = new Map<string, { reason: ClaudeEnableRefusal; settingsBackupPath: string; removedByRefusing: boolean }>();
   const hooks = settingsHooksOf(doc);
   if (hooks === null) return out;
   for (const { snapshot } of nextEnableSnapshots(live)) {
     const reason = claudeEnableRefusal(sha256Hex(text), doc, planRestore(hooks, snapshot), snapshot);
     if (reason === null) continue;
-    for (const { snapshot: named } of live) {
+    // The refusing snapshot first, so the "first one wins" below counts a
+    // group both it and an older snapshot removed as removed by the refusing
+    // one: the refusal's reason is then a fact about that group's own slot.
+    for (const named of [snapshot, ...live.map((s) => s.snapshot).filter((s) => s !== snapshot)]) {
       for (const r of named.removed) {
         for (const k of flattenHookTable({ [r.event]: [r.group] })) {
-          if (!out.has(keyId(k))) out.set(keyId(k), { reason, settingsBackupPath: snapshot.settingsBackupPath });
+          if (!out.has(keyId(k))) {
+            out.set(keyId(k), {
+              reason,
+              settingsBackupPath: snapshot.settingsBackupPath,
+              removedByRefusing: named === snapshot,
+            });
+          }
         }
       }
     }
