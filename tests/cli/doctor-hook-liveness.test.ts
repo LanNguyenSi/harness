@@ -742,6 +742,48 @@ policies: []
     expect(kinds(checkCodexLiveHooks(f.manifest, f.codexPath))).toEqual(["missing:error", "present:ok"]);
   });
 
+  it("a live snapshot whose block an install re-rendered with other content (another generation marker) does not make a hand-emptied unit disabled, with no install backup left", () => {
+    const f = fixture();
+    installCodex(f);
+    codexGateDisable({ configPath: f.codexPath, matcher: "Write|Edit", now: new Date("2026-01-01T00:00:00.000Z") });
+    const snapPath = codexSnapshotPath(f);
+    const snapText = fs.readFileSync(snapPath, "utf8");
+    // The re-install renders one more hook, so the block carries another generation marker.
+    const otherYaml = path.join(f.dir, "other.yaml");
+    fs.writeFileSync(
+      otherYaml,
+      MANIFEST_YAML.replace(
+        "policies: []\n",
+        "  - name: extra\n    event: Stop\n    command: extra-bin stop\n    blocking: false\n    budget_ms: 5000\npolicies: []\n",
+      ),
+    );
+    const other = loadManifest({ configPath: otherYaml }).manifest;
+    writeCodexConfigInstall(
+      planCodexConfigInstall({
+        configPath: f.codexPath,
+        generatedPath: path.join(f.dir, "codex.generated.toml"),
+        generatedContent: generateCodexConfig({ ...other, hooks: [...other.hooks, ...expandPolicyPacks(other, "codex").hooks] })
+          .content,
+      }),
+    );
+    // A stale snapshot the install could not see, and no install backup to date it by.
+    for (const n of fs.readdirSync(path.dirname(snapPath))) {
+      const p = path.join(path.dirname(snapPath), n);
+      if (n.startsWith("harness.gate-disable-codex.") || n.includes(".harness-backup-")) fs.rmSync(p);
+    }
+    fs.writeFileSync(snapPath, snapText);
+    const text = fs.readFileSync(f.codexPath, "utf8");
+    const emptied = text.replace(/(\[\[hooks\.PreToolUse\]\]\n(?:matcher[^\n]*\n)?)hooks = \[[^\n]*\]/, "$1hooks = []");
+    expect(emptied).not.toBe(text);
+    fs.writeFileSync(f.codexPath, emptied);
+    // The extra hook the re-install rendered is reported as such; the emptied unit is missing, not disabled.
+    expect(kinds(checkCodexLiveHooks(f.manifest, f.codexPath))).toEqual(["extra:info", "missing:error", "present:ok"]);
+    // The gate agrees: enable retires the snapshot as superseded and leaves the unit off.
+    const e = codexGateEnable({ configPath: f.codexPath });
+    expect(e.mode !== "no-snapshots" && e.retired?.generation).toBeDefined();
+    expect(e.stillDisabled).toHaveLength(1);
+  });
+
   it("a snapshot naming a unit that was deleted from the block: `gate enable` refuses, so the other unit is not disabled either", () => {
     const f = fixture(`version: 1
 hooks:

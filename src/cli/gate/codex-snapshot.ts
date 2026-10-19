@@ -8,9 +8,11 @@
 // a handler, so every other hook keeps its trust. A Codex snapshot records
 // the neutralised units: per unit its identity and the verbatim original
 // `hooks = [...]` line, plus the sha256 of the config before the first
-// disable and after the latest one. At most one snapshot per config is live:
-// a later disable merges its units into it. It lives beside the Codex config
-// under its own file prefix and carries `version: 3` and `target: "codex"`,
+// disable and after the latest one, and the generation marker of the block it
+// was taken from, which dates it against a later install. At most one
+// snapshot per config is live: a later disable merges its units into it. It
+// lives beside the Codex config under its own file prefix and carries
+// `version: 3` and `target: "codex"`,
 // so a Claude settings snapshot (version 1 or 2, no target) can never be restored
 // into TOML and a Codex snapshot can never be read as a settings.json one
 // (`readSnapshot` rejects version 3). Once `gate enable` has applied a
@@ -80,6 +82,10 @@ export interface CodexGateSnapshot {
   neutralised: CodexDisabledUnit[];
   /** Later disables merged into this snapshot, oldest first (absent when there were none). */
   merges?: CodexSnapshotMerge[];
+  /** The generation marker of the block the snapshot was taken from
+   * (`CODEX_BLOCK_GENERATION_PREFIX`); absent when that block carried none,
+   * and in a snapshot written before the marker existed. */
+  blockGeneration?: string;
 }
 
 export interface ResolvedCodexConfig {
@@ -202,6 +208,9 @@ export interface CodexRetiredSnapshot {
   why: CodexSnapshotRetirement;
   /** For an install-superseded snapshot: the installer backup that dates the install. */
   installBackup?: string;
+  /** For a snapshot superseded because the block carries another generation
+   * marker than the one it recorded: both markers. */
+  generation?: { snapshot: string; block: string };
 }
 
 /** Renames a live snapshot to its retired name and returns that name; the
@@ -314,15 +323,34 @@ export function latestInstall(requestedPath: string, configPath: string): { ms: 
  * sha, or none of its units is disabled any more. The last case counts only
  * when every unit it names is still in the block: a unit deleted by hand is
  * neither enabled nor restorable, so the snapshot stays live and `missing`
- * names it. `units` is null when the config has no managed block. */
+ * names it. `units` is null when the config has no managed block.
+ *
+ * An install is dated two ways: by the installer's backup files (`install`,
+ * newer than the snapshot), and by the block's generation marker
+ * (`blockGeneration`, null when the block carries none): a snapshot that
+ * recorded a marker and finds the block carrying another one was taken from a
+ * block an install has re-rendered since, which no link spelling and no
+ * deleted backup file hides. A snapshot without a recorded marker, or a block
+ * without one, is dated by the backup files alone. */
 export function spentCodexSnapshot(
   snapshot: CodexGateSnapshot,
   currentSha: string,
   units: ReadonlyArray<{ id: string; disabled: boolean }> | null,
   install: { ms: number; path: string } | null,
-): { retire: { why: CodexSnapshotRetirement; installBackup?: string } | null; missing: string[] } {
+  blockGeneration: string | null,
+): {
+  retire: Pick<CodexRetiredSnapshot, "why" | "installBackup" | "generation"> | null;
+  missing: string[];
+} {
   if (install !== null && install.ms > Date.parse(snapshot.createdAt)) {
     return { retire: { why: "superseded", installBackup: install.path }, missing: [] };
+  }
+  const recorded = snapshot.blockGeneration;
+  if (recorded !== undefined && blockGeneration !== null && recorded !== blockGeneration) {
+    return {
+      retire: { why: "superseded", generation: { snapshot: recorded, block: blockGeneration } },
+      missing: [],
+    };
   }
   if (currentSha === snapshot.configBeforeSha256) return { retire: { why: "restored" }, missing: [] };
   const ids = snapshot.neutralised.map((u) => u.id);
@@ -438,6 +466,9 @@ export interface CodexSnapshotReadErr {
   reason: string;
 }
 
+/** A block generation marker as the installer writes it: a sha256 in lowercase hex. */
+const GENERATION_RE = /^[0-9a-f]{64}$/;
+
 function isNonNegativeInteger(value: unknown): boolean {
   return Number.isInteger(value) && (value as number) >= 0;
 }
@@ -532,6 +563,11 @@ export function readCodexSnapshot(filePath: string, namedPath: string | null = n
   const merges = obj["merges"];
   if (merges !== undefined && !(Array.isArray(merges) && merges.every(isMerge))) {
     return { ok: false, reason: `snapshot ${filePath} has a malformed "merges" list` };
+  }
+  // The marker decides whether the snapshot is applied at all, so a value that is not one is not guessed at.
+  const generation = obj["blockGeneration"];
+  if (generation !== undefined && !(typeof generation === "string" && GENERATION_RE.test(generation))) {
+    return { ok: false, reason: `snapshot ${filePath} has a "blockGeneration" that is not a block generation marker` };
   }
   return { ok: true, snapshot: obj as unknown as CodexGateSnapshot };
 }
