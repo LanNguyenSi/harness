@@ -422,6 +422,76 @@ policies: []
     expect(gateEnable({ settingsPath: f.settingsPath, force: true }).mode).toBe("restored");
   });
 
+  it("two live snapshots name different groups and the newest refuses with a changed group: every disabled hook names --force with the newest snapshot's backup, the hook the newest removed with the changed-group reason, the hook only the older removed with a reason naming the refusing snapshot", () => {
+    const f = fixture(`version: 1
+hooks:
+  - {name: a, event: PreToolUse, match: "Write", command: a-bin check, blocking: hard, budget_ms: 5000}
+  - {name: b, event: PreToolUse, match: "Edit", command: b-bin check, blocking: hard, budget_ms: 5000}
+policies: []
+`);
+    installClaude(f);
+    const olderRun = gateDisable({ settingsPath: f.settingsPath, matcher: "Write", now: new Date("2026-09-01T10:00:00.000Z") });
+    if (olderRun.mode !== "remove") throw new Error("expected remove");
+    const older = olderRun.snapshotPath;
+    fs.renameSync(older, `${older}.parked`);
+    const newerRun = gateDisable({ settingsPath: f.settingsPath, matcher: "Edit", now: new Date("2026-09-01T11:00:00.000Z") });
+    if (newerRun.mode !== "remove") throw new Error("expected remove");
+    const newer = newerRun.snapshotPath;
+    fs.renameSync(`${older}.parked`, older);
+    downgradeToVersion1(older);
+    downgradeToVersion1(newer);
+    // A changed stand-in for the group ONLY the newest snapshot removed: that
+    // snapshot refuses for the changed group, whichever hook the warning words.
+    // The second disable took the last group out, so the hooks key is gone.
+    const s = JSON.parse(fs.readFileSync(f.settingsPath, "utf8")) as Record<string, unknown>;
+    s["hooks"] = { PreToolUse: [{ matcher: "Edit", hooks: [{ type: "command", command: "other-guard check" }] }] };
+    fs.writeFileSync(f.settingsPath, `${JSON.stringify(s, null, 2)}\n`);
+    const r = checkClaudeLiveHooks(f.manifest, f.settingsPath, { gateDefaultPath: f.settingsPath });
+    const byMatcher = new Map(r.entries.filter((e) => e.kind === "disabled").map((e) => [e.matcher, e.message]));
+    expect([...byMatcher.keys()].sort()).toEqual(["Edit", "Write"]);
+    const tail = `, so the restore refuses without \`--force\` (inspect the diff against ${snapshotBackupOf(newer)} first)`;
+    // The hook the refusing snapshot itself removed: the refusal's reason is a
+    // fact about its own slot, so the unchanged text names that group.
+    const own = byMatcher.get("Edit")!;
+    expect(own).toContain("run `harness gate enable --force` to put it back");
+    expect(own).toContain("holds a group with the event and matcher of the removed one but other content");
+    expect(own).not.toContain("a group that snapshot removed");
+    expect(own).toContain(tail);
+    // The hook only the OLDER snapshot removed: no such group stands in for
+    // ITS removed one; the text must name the refusing snapshot instead.
+    const neutral = byMatcher.get("Write")!;
+    expect(neutral).toContain("run `harness gate enable --force` to put it back");
+    expect(neutral).toContain(
+      "the snapshot the next `harness gate enable` applies refuses, because settings.json holds a group with the event and matcher of a group that snapshot removed, but other content",
+    );
+    expect(neutral).not.toContain("of the removed one but other content");
+    expect(neutral).toContain(tail);
+    expect(neutral).not.toContain(snapshotBackupOf(older));
+    // The gate agrees: the plain call refuses on the newest snapshot's changed group.
+    expect(() => gateEnable({ settingsPath: f.settingsPath })).toThrow(/does not count as back/);
+  });
+
+  it("two live snapshots name the SAME group and the newest refuses with a changed group: the hook keeps the unchanged text, as the refusing snapshot removed it too", () => {
+    const f = fixture();
+    const [older, newer] = twoLiveSnapshotsSameGroup(f);
+    // A changed stand-in where the group of BOTH snapshots belonged: the
+    // snapshot the next plain enable applies (the newest) refuses for it.
+    const s = JSON.parse(fs.readFileSync(f.settingsPath, "utf8")) as { hooks: Record<string, unknown[]> };
+    s.hooks["PreToolUse"] = [{ matcher: "Write|Edit", hooks: [{ type: "command", command: "other-guard check" }] }];
+    fs.writeFileSync(f.settingsPath, `${JSON.stringify(s, null, 2)}\n`);
+    const r = checkClaudeLiveHooks(f.manifest, f.settingsPath, { gateDefaultPath: f.settingsPath });
+    const msg = r.entries.find((e) => e.kind === "disabled")!.message;
+    expect(msg).toContain("run `harness gate enable --force` to put it back");
+    expect(msg).toContain("holds a group with the event and matcher of the removed one but other content");
+    expect(msg).not.toContain("a group that snapshot removed");
+    expect(msg).toContain(
+      `, so the restore refuses without \`--force\` (inspect the diff against ${snapshotBackupOf(newer)} first)`,
+    );
+    expect(msg).not.toContain(snapshotBackupOf(older));
+    // The gate agrees: the plain call refuses on the newest snapshot's changed group.
+    expect(() => gateEnable({ settingsPath: f.settingsPath })).toThrow(/does not count as back/);
+  });
+
   it("a hooks shape the gate refuses to read: the disabled warning names no --force", () => {
     for (const malformed of [[], { PreToolUse: {} }]) {
       const f = fixture();
