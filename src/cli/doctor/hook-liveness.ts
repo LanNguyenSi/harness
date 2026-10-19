@@ -488,8 +488,11 @@ function restorableCodexUnits(
   snapshots: readonly LoadedCodexSnapshot[],
 ): RestorableCodexUnit[] {
   let units: CodexManagedHookUnit[] | null;
+  let generation: string | null;
   try {
-    units = readCodexManagedHookUnits(text, configPath)?.units ?? null;
+    const block = readCodexManagedHookUnits(text, configPath);
+    units = block?.units ?? null;
+    generation = block?.generation ?? null;
   } catch {
     // A block the scanner refuses yields no record; the entry stays a plain missing error.
     return [];
@@ -508,7 +511,7 @@ function restorableCodexUnits(
   const out: RestorableCodexUnit[] = [];
   for (const live of snapshots) {
     const { snapshot } = live;
-    const spent = spentCodexSnapshot(snapshot, sha, units, install);
+    const spent = spentCodexSnapshot(snapshot, sha, units, install, generation);
     if (spent.retire !== null) continue;
     const plan = planCodexRestore(text, units, configPath, live);
     if (!plan.ok) continue;

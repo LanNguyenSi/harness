@@ -197,6 +197,14 @@ function touch(file: string, when: Date): void {
   fs.utimesSync(file, when, when);
 }
 
+/** `file` as an installer from before the block generation marker wrote it: the marker line
+ * removed (rewritten in place), so only the installer's backup files date an install. */
+function preMarker(file: string): string {
+  const text = fs.readFileSync(file, "utf8").replace(/^# harness block generation: [0-9a-f]{64}\n/m, "");
+  fs.writeFileSync(file, text);
+  return text;
+}
+
 /** The name the enable walk gives a snapshot it retires. */
 function retired(snapPath: string, why: CodexSnapshotRetirement = "restored"): string {
   return retiredCodexSnapshotPath(snapPath, why);
@@ -986,8 +994,12 @@ describe("codexGateEnable: retired snapshots are never applied again", () => {
 
   it("a snapshot taken before a re-install is superseded: neutralising the re-rendered unit by hand never brings the old line back", () => {
     installConfig(configPath);
+    // Installs from before the block generation marker: the backup files alone date the re-install,
+    // even for a config that is exactly what the snapshot left behind.
+    preMarker(configPath);
     const s0 = disableAt(configPath, "Bash", at(1));
-    const v2 = reinstall(configPath, at(2), V2);
+    reinstall(configPath, at(2), V2);
+    const v2 = preMarker(configPath);
     const hand = neutraliseByHand(v2, SG);
     fs.writeFileSync(configPath, hand);
     const snap = readCodexSnapshot(s0);
@@ -2272,8 +2284,11 @@ describe("codex gate: one config reached through several names", () => {
 
   it("a snapshot beside the top link, an install through an intermediate link, then enable through the top link: the install is dated by its backup, the old line stays out", () => {
     chain();
+    // Installs from before the block generation marker, as in the snapshot dating test above.
+    preMarker(real);
     const s0 = disableAt(l1, "Bash", at(1));
-    const v2 = reinstallThrough(l2, at(2), V2, dirA);
+    reinstallThrough(l2, at(2), V2, dirA);
+    const v2 = preMarker(real);
     const hand = neutraliseByHand(v2, SG);
     fs.writeFileSync(real, hand);
     const snap = readCodexSnapshot(s0);

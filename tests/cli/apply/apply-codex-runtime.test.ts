@@ -1,3 +1,4 @@
+import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -645,6 +646,8 @@ describe("apply --runtime codex --install against a config whose END marker drif
     const freshManagedBlock = [
       `# Harness Codex hook wiring. Generated source: ${generatedCodexConfigPath}`,
       CODEX_MANAGED_BEGIN,
+      // The block's generation marker: the sha256 of the content it holds.
+      `# harness block generation: ${crypto.createHash("sha256").update(generatedContent.trimEnd()).digest("hex")}`,
       generatedContent.trimEnd(),
       CODEX_MANAGED_END,
       "",

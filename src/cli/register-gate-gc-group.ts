@@ -296,11 +296,18 @@ export function registerGateGcGroup(
 
 /** The stdout line for a Codex snapshot a call retired; `noInstall` says why when no install dated it. */
 function retiredLine(
-  r: { from: string; to: string; installBackup?: string },
+  r: { from: string; to: string; installBackup?: string; generation?: { snapshot: string; block: string } },
   noInstall: string,
   tail: string,
 ): string {
-  const why = r.installBackup !== undefined ? `a later install (${r.installBackup}) re-rendered its units` : noInstall;
+  const why =
+    r.installBackup !== undefined
+      ? `a later install (${r.installBackup}) re-rendered its units`
+      : r.generation !== undefined
+        ? `a later install re-rendered the harness-managed block (its generation marker is now ` +
+          `${r.generation.block.slice(0, 12)}..., the snapshot recorded ${r.generation.snapshot.slice(0, 12)}...), ` +
+          "so its hooks lines may be outdated"
+        : noInstall;
   return `retired ${r.from} as ${r.to}: ${why}${tail}.\n`;
 }
 
@@ -347,7 +354,7 @@ interface GateDisableView {
   snapshotPath: string;
   removed: Array<{ event: string; index: number; matcher: string | null }>;
   /** Codex only: a spent live snapshot the disable retired before starting a fresh one. */
-  retired?: { from: string; to: string; why: string; installBackup?: string };
+  retired?: { from: string; to: string; why: string; installBackup?: string; generation?: { snapshot: string; block: string } };
   /** Claude only: the groups went into an already live snapshot. */
   merged: boolean;
   /** Claude only: spent snapshots this disable retired first (their retired names). */

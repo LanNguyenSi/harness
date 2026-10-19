@@ -168,6 +168,7 @@ export function codexGateDisable(opts: CodexGateDisableOptions = {}): CodexGateD
       sha256Hex(text),
       block.units,
       latestInstall(requestedPath, configPath),
+      block.generation,
     ).retire;
     if (spent !== null) {
       const done = "nothing was written: the live gate snapshot is spent (enable would only retire it), but ";
@@ -221,6 +222,9 @@ export function codexGateDisable(opts: CodexGateDisableOptions = {}): CodexGateD
         configAfterSha256: sha256Hex(next),
         filter: { matcher: pattern },
         neutralised,
+        // Dates the snapshot against a later install of another block. A merge
+        // keeps the joined snapshot's marker: it joins only an unchanged config.
+        ...(block.generation !== null ? { blockGeneration: block.generation } : {}),
       };
 
   // Backup and snapshot land BEFORE the live rewrite, with the config's own

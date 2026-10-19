@@ -121,12 +121,14 @@ export function codexGateEnable(opts: CodexGateEnableOptions = {}): CodexGateEna
 
   const { snapshot } = live;
   const currentSha = sha256Hex(original);
-  const units = readBlock(original, configPath, namedPath)?.units ?? null;
+  const block = readBlock(original, configPath, namedPath);
+  const units = block?.units ?? null;
   const { retire: spent, missing } = spentCodexSnapshot(
     snapshot,
     currentSha,
     units,
     latestInstall(requestedPath, configPath),
+    block?.generation ?? null,
   );
   let retire = spent;
   let current = original;

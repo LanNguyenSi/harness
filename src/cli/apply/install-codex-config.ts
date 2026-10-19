@@ -15,11 +15,31 @@ import {
   retireCodexSnapshot,
 } from "../gate/codex-snapshot.js";
 import { kernelEntry, linkChain, walkLinkChain } from "../gate/link-chain.js";
-import { namesSameEntry } from "../gate/snapshot.js";
+import { namesSameEntry, sha256Hex } from "../gate/snapshot.js";
 
 export const CODEX_MANAGED_SOURCE_PREFIX = "# Harness Codex hook wiring.";
 export const CODEX_MANAGED_BEGIN = "# BEGIN harness-managed codex hooks";
 export const CODEX_MANAGED_END = "# END harness-managed codex hooks";
+/**
+ * The comment line the installer writes directly under the BEGIN fence,
+ * followed by the block's generation: the sha256 of the generated content
+ * the block holds (`codexBlockGeneration`). `harness gate disable --runtime
+ * codex` records it in its snapshot, and a snapshot whose recorded generation
+ * differs from the block's is one a later install re-rendered the block over:
+ * it is retired as superseded and never applied, wherever it sits and whatever
+ * backup files exist. A comment adds, removes and reorders no hook entry, so
+ * Codex keeps every hook at the position its trust state was recorded for.
+ * The same content renders the same line, so an install of an unchanged
+ * manifest stays a no-op.
+ */
+export const CODEX_BLOCK_GENERATION_PREFIX = "# harness block generation: ";
+const BLOCK_GENERATION_LINE_RE = /^# harness block generation: ([0-9a-f]{64})$/;
+
+/** The generation of a block holding `renderedContent` (the generated
+ * content as the block holds it, without its trailing newline). */
+function codexBlockGeneration(renderedContent: string): string {
+  return sha256Hex(renderedContent);
+}
 
 /**
  * Thrown instead of a plain `Error` when the install refuses rather than
@@ -1465,10 +1485,12 @@ function buildManagedBlock(
   generatedContent: string,
   generatedPath: string,
 ): string {
+  const rendered = ensureTrailingNewline(generatedContent).trimEnd();
   return [
     `${CODEX_MANAGED_SOURCE_PREFIX} Generated source: ${generatedPath}`,
     CODEX_MANAGED_BEGIN,
-    ensureTrailingNewline(generatedContent).trimEnd(),
+    `${CODEX_BLOCK_GENERATION_PREFIX}${codexBlockGeneration(rendered)}`,
+    rendered,
     CODEX_MANAGED_END,
     "",
   ].join("\n");
@@ -2376,9 +2398,12 @@ function findSnapshotsOfConfig(plan: CodexConfigInstallPlan): { matched: string[
  * path's link chain and beside the target) is renamed to `*.superseded.json` right after the
  * write, whatever backup files exist. A rename that fails never fails the
  * install, which is already on disk: it is a warning (`snapshotWarnings`,
- * printed by the caller) naming the snapshot and the move-aside step. The
- * backup-file dating in `gate enable` stays as a second line of defence for
- * a snapshot written while an older installer ran.
+ * printed by the caller) naming the snapshot and the move-aside step. A
+ * snapshot this cannot find (beside a link outside that chain) records the
+ * block's generation marker, which this write changes when the content
+ * changes, so `gate enable` and `gate disable` retire it on sight. The
+ * backup-file dating in the gate stays as a further line of defence for a
+ * snapshot without a marker (taken before the marker existed).
  */
 export function writeCodexConfigInstall(
   planned: CodexConfigInstallPlan,
@@ -2466,6 +2491,14 @@ export interface CodexManagedHookUnit {
 
 export interface CodexManagedHookBlock {
   units: CodexManagedHookUnit[];
+  /**
+   * The block's generation (`CODEX_BLOCK_GENERATION_PREFIX`): the hash on the
+   * line right under the BEGIN fence, or null when that line is not exactly
+   * that shape (a block an older install wrote, or a line removed or edited by
+   * hand). A null generation dates nothing, so the gate falls back to its
+   * other rules and never refuses an enable for the line alone.
+   */
+  generation: string | null;
 }
 
 const HOOK_UNIT_HEADER_RE = /^\[\[hooks\.([A-Za-z][A-Za-z0-9_]*)\]\]$/;
@@ -2481,7 +2514,9 @@ const HOOK_UNIT_HEADER_RE = /^\[\[hooks\.([A-Za-z][A-Za-z0-9_]*)\]\]$/;
  * unit of the exact shape the generator writes, and no harness hook comment
  * may sit outside the block (`assertNoOrphanHarnessHookTable`). Anything else
  * refuses instead of guessing which bytes are harness-owned. Returns null
- * when the file holds no managed block. Reads only; the file is never touched.
+ * when the file holds no managed block. The block's generation marker is read
+ * too, never required: a block without it reads as `generation: null`.
+ * Reads only; the file is never touched.
  */
 export function readCodexManagedHookUnits(
   text: string,
@@ -2514,6 +2549,9 @@ export function readCodexManagedHookUnits(
   const units: CodexManagedHookUnit[] = [];
   let pos = lineEndAfter(text, beginLine);
   const lineAt = (at: number): string => text.slice(at, lineEndAfter(text, at)).trim();
+  // Only the line right under BEGIN carries the generation; it is a comment,
+  // so the scan below passes over it like the generated header.
+  const generation = pos < endLine ? (BLOCK_GENERATION_LINE_RE.exec(lineAt(pos))?.[1] ?? null) : null;
   while (pos < endLine) {
     const trimmed = lineAt(pos);
     const isUnitComment = trimmed.startsWith("#") && isMarkerLine(pos, HARNESS_HOOK_COMMENT_PREFIX, "prefix");
@@ -2542,7 +2580,7 @@ export function readCodexManagedHookUnits(
     }
     units.push(parseHookUnit(id, body, unitStart, lastLineAt, text, refuse));
   }
-  return { units };
+  return { units, generation };
 }
 
 function refuseHookBlockEdit(configPath: string, why: string): never {
