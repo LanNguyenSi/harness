@@ -56,13 +56,16 @@ const sha = (s: string): string => crypto.createHash("sha256").update(s).digest(
 const at = (hour: number): Date => new Date(`2026-10-02T${String(hour).padStart(2, "0")}:00:00.000Z`);
 const readFile = (file: string): string => fs.readFileSync(file, "utf8");
 
-function generated(shellGuard = V1): string {
+/** The generated content; `shellGuard: null` leaves the shell guard out of the manifest. */
+function generated(shellGuard: string | null = V1): string {
   return generateCodexConfig(
     parseManifest({
       version: 1,
       hooks: [
         { name: BP, event: "PreToolUse", match: "apply_patch", command: "harness pack hook branch-protection --runtime codex", blocking: "hard", budget_ms: 5000 },
-        { name: SG, event: "PreToolUse", match: "Bash", command: shellGuard, blocking: "hard", budget_ms: 5000 },
+        ...(shellGuard === null
+          ? []
+          : [{ name: SG, event: "PreToolUse", match: "Bash", command: shellGuard, blocking: "hard", budget_ms: 5000 }]),
         { name: "prompt-note", event: "UserPromptSubmit", command: "/usr/bin/true", blocking: false, budget_ms: 5000 },
       ],
     }),
@@ -75,7 +78,7 @@ function expectedGeneration(content: string): string {
 }
 
 /** Runs the real installer through `target` at `now` (it supersedes the snapshots it can find). */
-function install(target: string, now: Date, shellGuard = V1): ReturnType<typeof writeCodexConfigInstall> {
+function install(target: string, now: Date, shellGuard: string | null = V1): ReturnType<typeof writeCodexConfigInstall> {
   return writeCodexConfigInstall(
     planCodexConfigInstall({ configPath: target, generatedPath: "/gen/codex/config.toml", generatedContent: generated(shellGuard) }),
     { now },
@@ -366,6 +369,37 @@ describe("a stale snapshot beside a second link (on neither the install's chain 
     expect(codexGateEnable({ configPath: f.b, now: at(5) }).mode).toBe("restored");
     expect(codexGateEnable({ configPath: f.a, now: at(6) }).mode).toBe("restored");
     expect(readFile(f.real)).toBe(f.v2);
+  });
+
+  it("with every unit enabled again by the install, enable via B retires it naming the markers and writes nothing", () => {
+    const f = twoLinks();
+    const s1 = disable(f.b, "Bash", at(1));
+    install(f.a, at(2), V2);
+    const v2 = readFile(f.real);
+    const e = codexGateEnable({ configPath: f.b, now: at(3) });
+    expect(e.mode).toBe("already-restored");
+    expect(e.mode !== "no-snapshots" && e.retired).toEqual({
+      from: s1,
+      to: retiredCodexSnapshotPath(s1, "superseded"),
+      why: "superseded",
+      generation: { snapshot: markerIn(f.original), block: markerIn(v2) },
+    });
+    expect(e.stillDisabled).toEqual([]);
+    expect(readFile(f.real)).toBe(v2);
+  });
+
+  it("when the install dropped a unit the snapshot names, enable via B retires it instead of keeping it live for the missing unit", () => {
+    const f = twoLinks();
+    const s1 = disable(f.b, "Bash", at(1));
+    install(f.a, at(2), null);
+    const without = readFile(f.real);
+    expect(readCodexManagedHookUnits(without, f.real)!.units.map((u) => u.id)).not.toContain(SG);
+    const e = codexGateEnable({ configPath: f.b, now: at(3) });
+    expect(e.mode).toBe("already-restored");
+    expect(e.mode !== "no-snapshots" && e.missing).toEqual([]);
+    expect(e.mode !== "no-snapshots" && e.retired?.generation).toEqual({ snapshot: markerIn(f.original), block: markerIn(without) });
+    expect(listCodexSnapshots(f.dirB)).toEqual([]);
+    expect(readFile(f.real)).toBe(without);
   });
 
   it("enable via B names the retired snapshot and why, and exits non-zero pointing at the --config the disable used", async () => {
