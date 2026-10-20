@@ -2,6 +2,7 @@ import type { DoctorReport, McpProbeResult } from "./types.js";
 import { VERSION } from "../../version.js";
 import { projectRejectionWarns } from "../../probes/memory.js";
 import { sanitizeProjectForDisplay } from "../../runtime/git-context.js";
+import { shellQuote } from "../shell-quote.js";
 
 function mcpLines(r: McpProbeResult, shallow: boolean): string[] {
   switch (r.outcome.kind) {
@@ -301,19 +302,12 @@ function formatOpencodeTargetSection(report: DoctorReport): string[] {
   return out;
 }
 
-/**
- * Wrap a filesystem path for safe inclusion inside a single-quoted shell
- * argument. Repo directory names under $HOME/git/* can contain quotes or
- * metacharacters (rare but possible: `foo's-repo`, `weird;name`); the
- * cleanup hint we render is meant to be copy-pasted into a shell, so the
- * quoted form must survive that round trip without rewriting other
- * directories. Standard POSIX recipe: close the open quote, insert an
- * escaped quote, reopen.
- */
-function shellQuoteSingle(p: string): string {
-  return `'${p.replace(/'/g, `'\\''`)}'`;
-}
-
+// The cleanup hint rendered below is meant to be copy-pasted into a shell,
+// so its path goes through the one quoting helper the CLI shares: a repo
+// directory name under $HOME/git/* can contain quotes or metacharacters
+// (rare but possible: `foo's-repo`, `weird;name`) and the quoted form must
+// survive that round trip without rewriting other directories; a plain path
+// prints bare.
 function formatRogueLedgerSection(report: DoctorReport): string[] {
   if (report.rogueLedgerDbs.length === 0) return [];
   const out: string[] = ["", "Rogue evidence-ledger DBs"];
@@ -322,7 +316,7 @@ function formatRogueLedgerSection(report: DoctorReport): string[] {
     out.push(
       `      left over from the EVIDENCE_LEDGER_DB literal-tilde bug (agent-tasks/42d224a6).`,
     );
-    out.push(`      safe to delete: \`rm -rf ${shellQuoteSingle(r.rogueDir)}\``);
+    out.push(`      safe to delete: \`rm -rf ${shellQuote(r.rogueDir)}\``);
   }
   return out;
 }

@@ -17,6 +17,7 @@ import { GIT_READ_DEADLINE_MS, runPackHookBranchProtectionCli } from "../../src/
 import { defaultUx } from "../../src/policy-packs/builtin/branch-protection.js";
 import { hasGitEntryAbove, readBranch, readBranchAt, readGitHead, type GitHeadAnswer, type GitHeadReader } from "../../src/runtime/git-branch.js";
 import { parseManifest, type Manifest } from "../../src/schema/index.js";
+import { goldenEnvelope } from "../_helpers/branch-protection-envelope.js";
 
 const GIT_AVAILABLE = spawnSync("git", ["--version"], { stdio: "ignore" }).status === 0;
 
@@ -1699,18 +1700,6 @@ describe.skipIf(!GIT_AVAILABLE)("branch-protection hook: a directory that can no
 // fails closed: exit 2 with the reason on stderr. Allow decisions, the Codex
 // contract and a reader that is merely slow keep their exit codes.
 describe.skipIf(!GIT_AVAILABLE)("branch-protection hook: a block whose envelope cannot be written to stdout fails closed, real git", () => {
-  // The bytes the unchanged code wrote for this event on an open stdout,
-  // captured from the base revision: the envelope, then one newline.
-  const goldenEnvelope = (repo: string): string => {
-    const where = JSON.stringify(repo).slice(1, -1);
-    const reason = String.raw`branch-protection: refusing Write on protected branch \"master\" (checked in ${where}).\nCreate a feature branch first, then retry:\n  git checkout -b <feature>\nProtected branches: master, main, develop.`;
-    return (
-      String.raw`{"decision":"block","reason":"${reason}","hookSpecificOutput":{"hookEventName":"PreToolUse",` +
-      String.raw`"permissionDecision":"deny","permissionDecisionReason":"${reason}"}}` +
-      "\n"
-    );
-  };
-
   /** A stdout whose write callback reports EPIPE, like a pipe whose reader has gone. */
   function epipeStdout(): { stream: Writable; writes: string[] } {
     const writes: string[] = [];
