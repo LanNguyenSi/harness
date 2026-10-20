@@ -374,7 +374,12 @@ describe("harness gate --runtime codex", () => {
     expect(r.code).toBe(EX_FAIL);
     expect(r.stderr).toContain("are still disabled: policy-pack:branch-protection:pre-tool-use");
     expect(r.stderr).toContain(`run \`harness gate enable --runtime codex --config ${other}\``);
-    expect(r.stderr).toContain("Run `harness gate enable --runtime codex --config <that spelling>`");
+    // The fact comes first; the ways out follow as the alternative to the foreign snapshot's own exit.
+    expect(r.stderr).toContain(
+      "superseded by a later install, so its hooks lines may be outdated. " +
+        "Otherwise run `harness gate enable --runtime codex --config <that spelling>`",
+    );
+    expect(r.stderr).not.toContain("Otherwise the live snapshot");
     expect(r.stderr).toContain("put the units' `hooks` lines back by hand");
     expect(r.stderr).not.toContain(".bak.<timestamp>");
     expect(r.stderr.indexOf(`--config ${other}`)).toBeLessThan(

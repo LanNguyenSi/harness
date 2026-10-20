@@ -254,9 +254,11 @@ export function registerGateGcGroup(
         const retiredSuperseded =
           retired?.why === "superseded" &&
           (retired.installBackup !== undefined || retired.generation !== undefined);
-        const supersededWaysOut =
-          "The live snapshot this call retired was superseded by a later install, so its hooks lines may be " +
-          "outdated. Run `harness gate enable --runtime codex --config <that spelling>` for another spelling of " +
+        const supersededFact =
+          "The live snapshot this call retired was superseded by a later install, so its hooks lines may be outdated.";
+        // `lead` is the verb that opens the ways out: "Run" as a sentence of its own, "run" after "Otherwise".
+        const supersededWaysOut = (lead: string): string =>
+          `${lead} \`harness gate enable --runtime codex --config <that spelling>\` for another spelling of ` +
           "this config (a second link or name for it, the one `harness gate disable` was given) to restore " +
           "through the snapshot that sits beside it; or re-run " +
           `\`harness apply --runtime codex --install${applyFlag}\` to re-render the block; or put the units' ` +
@@ -279,12 +281,12 @@ export function registerGateGcGroup(
                         "ones it neutralised (the same config under another name), restore them through it: " +
                         `${foreignExits}. ` +
                         (retiredSuperseded
-                          ? `Otherwise ${supersededWaysOut.charAt(0).toLowerCase()}${supersededWaysOut.slice(1)}`
+                          ? `${supersededFact} Otherwise ${supersededWaysOut("run")}`
                           : "Otherwise restore the config from the backup beside it " +
                             `(<config>.bak.<timestamp>), or re-run \`harness apply --runtime codex --install${applyFlag}\` ` +
                             "to re-render the block.")
                       : retiredSuperseded
-                        ? ` No Codex gate snapshot restores them. ${supersededWaysOut}`
+                        ? ` No Codex gate snapshot restores them. ${supersededFact} ${supersededWaysOut("Run")}`
                         : " No Codex gate snapshot restores them. Restore the config from the backup beside it " +
                           `(<config>.bak.<timestamp>), or re-run \`harness apply --runtime codex --install${applyFlag}\` ` +
                           "to re-render the block. " +
