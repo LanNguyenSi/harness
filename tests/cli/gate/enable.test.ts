@@ -274,6 +274,7 @@ describe("gateEnable: two disables, one enable", () => {
     expect(matchersOf()).toEqual(["Write|Edit", "Bash"]);
   });
 
+  // 24 orders x 5 fsync-heavy gate ops: measured 1.3-4.4s alone, 4.2-7.1s under 4x-concurrent load (default 5000ms timed out), so 24000ms > 3x the worst.
   it("restores in place whatever order the groups were disabled in (index shifts across steps)", () => {
     // g4 stays: an event that loses every group is re-created at the end of
     // `hooks` on restore, which would change the key order and hide this check.
@@ -301,7 +302,7 @@ describe("gateEnable: two disables, one enable", () => {
         if (f.startsWith("harness.gate-disable.")) fs.rmSync(path.join(tmp, f));
       }
     }
-  });
+  }, 24000);
 
   it("restores in place several groups one disable took out of two events", () => {
     writeSettings({
