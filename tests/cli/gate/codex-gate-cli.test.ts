@@ -350,7 +350,10 @@ describe("harness gate --runtime codex", () => {
     const r = await gate("enable", "--runtime", "codex", "--config", configPath);
     expect(r.code).toBe(EX_FAIL);
     expect(r.stderr).toContain("are still disabled: policy-pack:branch-protection:pre-tool-use");
-    expect(r.stderr).toContain("Run `harness gate enable --runtime codex --config <that spelling>`");
+    expect(r.stderr).toContain(
+      "No Codex gate snapshot restores them. The live snapshot this call retired was superseded by a later " +
+        "install, so its hooks lines may be outdated. Run `harness gate enable --runtime codex --config <that spelling>`",
+    );
     expect(r.stderr).toContain("put the units' `hooks` lines back by hand");
     expect(r.stderr).not.toContain(".bak.<timestamp>");
     expect(r.stderr.indexOf("--config <that spelling>")).toBeLessThan(
