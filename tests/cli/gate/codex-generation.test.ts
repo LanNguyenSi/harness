@@ -415,7 +415,26 @@ describe("a stale snapshot beside a second link (on neither the install's chain 
         `${markerIn(f.original).slice(0, 12)}...), so its hooks lines may be outdated.`,
     );
     expect(r.stderr).toContain(`are still disabled: ${SG}`);
-    expect(r.stderr).toContain("run enable with that same `--config`");
+    expect(r.stderr).toContain("Run `harness gate enable --runtime codex --config <that spelling>`");
+    expect(readFile(f.real)).toBe(f.offAgain);
+  });
+
+  it("enable via B never offers the stale backup: it names the --config re-run, then the re-install, then the by-hand line", async () => {
+    const f = staleBesideB("a");
+    const r = await gate("enable", "--runtime", "codex", "--config", f.b);
+    expect(r.code).toBe(EX_FAIL);
+    expect(r.stderr).toContain(`are still disabled: ${SG}`);
+    expect(r.stderr).toContain("Run `harness gate enable --runtime codex --config <that spelling>`");
+    expect(r.stderr).toContain(`\`harness apply --runtime codex --install --codex-config ${f.b}\``);
+    expect(r.stderr).toContain("put the units' `hooks` lines back by hand");
+    expect(r.stderr).not.toContain(".bak.<timestamp>");
+    // The other spelling's enable comes before the re-install, and the re-install before the by-hand line.
+    expect(r.stderr.indexOf("--config <that spelling>")).toBeLessThan(
+      r.stderr.indexOf("`harness apply --runtime codex --install"),
+    );
+    expect(r.stderr.indexOf("`harness apply --runtime codex --install")).toBeLessThan(
+      r.stderr.indexOf("put the units' `hooks` lines back by hand"),
+    );
     expect(readFile(f.real)).toBe(f.offAgain);
   });
 

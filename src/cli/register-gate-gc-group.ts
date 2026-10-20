@@ -248,6 +248,19 @@ export function registerGateGcGroup(
         const applyFlag = codexConfigFlag(runtime === "codex" && options.config ? target : null, "--codex-config");
         const foreignExits = skippedForeign.map((f) => `${f.path}: ${foreignCodexExit(f)}`).join("; ");
         const foreignNamed = stillDisabled.length > 0 && remaining.length === 0;
+        // A snapshot this call retired as superseded: a later install re-rendered its units (its own backup
+        // predates that install and holds the outdated hooks line, so it is never offered here).
+        const retired = "retired" in result ? result.retired : null;
+        const retiredSuperseded =
+          retired?.why === "superseded" &&
+          (retired.installBackup !== undefined || retired.generation !== undefined);
+        const supersededWaysOut =
+          "The live snapshot this call retired was superseded by a later install, so its hooks lines may be " +
+          "outdated. Run `harness gate enable --runtime codex --config <that spelling>` for another spelling of " +
+          "this config (a second link or name for it, the one `harness gate disable` was given) to restore " +
+          "through the snapshot that sits beside it; or re-run " +
+          `\`harness apply --runtime codex --install${applyFlag}\` to re-render the block; or put the units' ` +
+          "`hooks` lines back by hand.";
         if (missing.length > 0 || stillDisabled.length > 0 || remaining.length > 0 || skippedForeign.length > 0) {
           throw new HarnessExitError(
             [
@@ -264,14 +277,19 @@ export function registerGateGcGroup(
                     : skippedForeign.length > 0
                       ? " A live Codex gate snapshot beside it was taken for another config; if these units are the " +
                         "ones it neutralised (the same config under another name), restore them through it: " +
-                        `${foreignExits}. Otherwise restore the config from the backup beside it ` +
-                        `(<config>.bak.<timestamp>), or re-run \`harness apply --runtime codex --install${applyFlag}\` ` +
-                        "to re-render the block."
-                      : " No Codex gate snapshot restores them. Restore the config from the backup beside it " +
-                        `(<config>.bak.<timestamp>), or re-run \`harness apply --runtime codex --install${applyFlag}\` ` +
-                        "to re-render the block. " +
-                        "A gate snapshot sits beside the path `harness gate disable` was given: if this config is also " +
-                        "reached through a link or another name, run enable with that same `--config`."),
+                        `${foreignExits}. ` +
+                        (retiredSuperseded
+                          ? supersededWaysOut
+                          : "Otherwise restore the config from the backup beside it " +
+                            `(<config>.bak.<timestamp>), or re-run \`harness apply --runtime codex --install${applyFlag}\` ` +
+                            "to re-render the block.")
+                      : retiredSuperseded
+                        ? ` No Codex gate snapshot restores them. ${supersededWaysOut}`
+                        : " No Codex gate snapshot restores them. Restore the config from the backup beside it " +
+                          `(<config>.bak.<timestamp>), or re-run \`harness apply --runtime codex --install${applyFlag}\` ` +
+                          "to re-render the block. " +
+                          "A gate snapshot sits beside the path `harness gate disable` was given: if this config is also " +
+                          "reached through a link or another name, run enable with that same `--config`."),
               remaining.length > 0 &&
                 `${remaining.length} more live Codex gate snapshot(s) remain (an earlier build wrote one per disable, or a copied directory brought a retired one back): ` +
                   `${remaining.join(", ")}. Run \`harness gate enable --runtime codex${configFlag}\` again for the next one.`,

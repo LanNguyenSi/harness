@@ -193,6 +193,8 @@ describe("harness gate --runtime codex", () => {
     expect(partial.stderr).toContain("1 hook unit(s)");
     expect(partial.stderr).toContain("are still disabled: shell-guard");
     expect(partial.stderr).toContain("No Codex gate snapshot restores them.");
+    // Nothing was retired as superseded here, so the backup stays an offered way out.
+    expect(partial.stderr).toContain("Restore the config from the backup beside it (<config>.bak.<timestamp>)");
     expect(partial.stderr).toContain("run enable with that same `--config`");
     expect(partial.stderr).toContain(`re-run \`harness apply --runtime codex --install --codex-config ${configPath}\``);
     expect(partial.stderr).not.toContain("--force");
@@ -200,6 +202,7 @@ describe("harness gate --runtime codex", () => {
     expect(stuck.code).toBe(EX_FAIL);
     expect(stuck.stdout).not.toContain("no write needed");
     expect(stuck.stderr).toContain("are still disabled");
+    expect(stuck.stderr).toContain("Restore the config from the backup beside it (<config>.bak.<timestamp>)");
   });
 
   it("says what --force does: the edited-since refusal, and that a forced restore keeps the edit and retires the snapshot", async () => {
@@ -338,6 +341,45 @@ describe("harness gate --runtime codex", () => {
     expect(r.stderr).toContain("are still disabled: policy-pack:branch-protection:pre-tool-use");
     expect(fs.readFileSync(configPath, "utf8")).not.toContain("harness pack hook branch-protection --runtime codex\"");
     expect(fs.readdirSync(tmp)).toContain(snap!.replace(/\.json$/, ".superseded.json"));
+  });
+
+  it("for an install-superseded snapshot the still-disabled message names the --config re-run and the re-install, never the backup", async () => {
+    await gate("disable", "--runtime", "codex", "--config", configPath, "--matcher", "apply_patch");
+    reinstallAt(new Date("2099-01-01T00:00:00.000Z"));
+    neutraliseFirstUnit();
+    const r = await gate("enable", "--runtime", "codex", "--config", configPath);
+    expect(r.code).toBe(EX_FAIL);
+    expect(r.stderr).toContain("are still disabled: policy-pack:branch-protection:pre-tool-use");
+    expect(r.stderr).toContain("Run `harness gate enable --runtime codex --config <that spelling>`");
+    expect(r.stderr).toContain("put the units' `hooks` lines back by hand");
+    expect(r.stderr).not.toContain(".bak.<timestamp>");
+    expect(r.stderr.indexOf("--config <that spelling>")).toBeLessThan(
+      r.stderr.indexOf("`harness apply --runtime codex --install"),
+    );
+    expect(r.stderr.indexOf("`harness apply --runtime codex --install")).toBeLessThan(
+      r.stderr.indexOf("put the units' `hooks` lines back by hand"),
+    );
+  });
+
+  it("an install-superseded retirement beside another config's live snapshot: the recorded --config leads, the backup is not offered", async () => {
+    await gate("disable", "--runtime", "codex", "--config", configPath, "--matcher", "apply_patch");
+    reinstallAt(new Date("2099-01-01T00:00:00.000Z"));
+    // The other config keeps the unit enabled, so its own disable is what leaves a live snapshot beside it.
+    const other = path.join(tmp, "other.toml");
+    fs.copyFileSync(configPath, other);
+    neutraliseFirstUnit();
+    const off = await gate("disable", "--runtime", "codex", "--config", other, "--matcher", "apply_patch");
+    expect(off.code).toBe(EX_OK);
+    const r = await gate("enable", "--runtime", "codex", "--config", configPath);
+    expect(r.code).toBe(EX_FAIL);
+    expect(r.stderr).toContain("are still disabled: policy-pack:branch-protection:pre-tool-use");
+    expect(r.stderr).toContain(`run \`harness gate enable --runtime codex --config ${other}\``);
+    expect(r.stderr).toContain("Run `harness gate enable --runtime codex --config <that spelling>`");
+    expect(r.stderr).toContain("put the units' `hooks` lines back by hand");
+    expect(r.stderr).not.toContain(".bak.<timestamp>");
+    expect(r.stderr.indexOf(`--config ${other}`)).toBeLessThan(
+      r.stderr.indexOf("`harness apply --runtime codex --install"),
+    );
   });
 
   it("recovers a merged snapshot whose config lost one unit's neutralisation by hand: enable restores the other and says which it left alone", async () => {
