@@ -195,6 +195,31 @@ describe("doctor — rogue evidence-ledger scan", () => {
     expect(text).toContain(`safe to delete: \`rm -rf '/tmp/weird'\\''s-repo/~'\``);
   });
 
+  it("a path that needs no quoting prints bare; one with a space is single-quoted", async () => {
+    const home = tempHome();
+    writeMinimalManifest(home);
+    const planted = plantRogueLedger(home);
+    const report = await doctor({
+      configPath: path.join(home, "harness.yaml"),
+      homeOverride: home,
+      mcpProbe: new FakeProbe(),
+      versionProbe: () => null,
+      pathEnv: "",
+      npmBinExec: STUB_NPM_BIN_EXEC_UNKNOWN,
+      rogueLedgerScanOptions: { homeDir: home, cwd: home },
+    });
+    report.rogueLedgerDbs[0] = {
+      path: planted.dbPath,
+      rogueDir: "/Users/dev/git/my repo",
+    };
+    expect(format(report)).toContain("safe to delete: `rm -rf '/Users/dev/git/my repo'`");
+    report.rogueLedgerDbs[0] = {
+      path: planted.dbPath,
+      rogueDir: "/Users/dev/git/my-repo",
+    };
+    expect(format(report)).toContain("safe to delete: `rm -rf /Users/dev/git/my-repo`");
+  });
+
   it("does not render the rogue section on a clean host", async () => {
     const home = tempHome();
     const cwd = tempHome();

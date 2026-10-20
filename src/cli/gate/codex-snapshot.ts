@@ -31,7 +31,7 @@ import {
   resolveConfigSymlink,
 } from "../apply/install-codex-config.js";
 import { kernelEntry, linkChain } from "./link-chain.js";
-import { shellQuote } from "./shell-quote.js";
+import { shellQuote } from "../shell-quote.js";
 import { listSnapshots, namesSameEntry, SNAPSHOT_BASENAME_SUFFIX, snapshotFieldProblem } from "./snapshot.js";
 
 export const CODEX_SNAPSHOT_BASENAME_PREFIX = "harness.gate-disable-codex.";

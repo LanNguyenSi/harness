@@ -55,13 +55,14 @@ import {
   resolveCodexConfig,
   spentCodexSnapshot,
 } from "../gate/codex-snapshot.js";
-import { shellQuote } from "../gate/shell-quote.js";
+import { shellQuote } from "../shell-quote.js";
 import {
   claudeEnableRefusal,
   type ClaudeEnableRefusal,
   type LiveSnapshot,
   listLiveSnapshots,
   nextEnableSnapshots,
+  parseSettingsHooks,
   planRestore,
   settingsFlag,
   sha256Hex,
@@ -371,10 +372,10 @@ function claudeEnableForce(
   live: readonly LiveSnapshot[],
 ): Map<string, { reason: ClaudeEnableRefusal; settingsBackupPath: string; removedByRefusing: boolean }> {
   const out = new Map<string, { reason: ClaudeEnableRefusal; settingsBackupPath: string; removedByRefusing: boolean }>();
-  const hooks = settingsHooksOf(doc);
-  if (hooks === null) return out;
+  const parsedHooks = parseSettingsHooks(doc);
+  if (!parsedHooks.ok) return out;
   for (const { snapshot } of nextEnableSnapshots(live)) {
-    const reason = claudeEnableRefusal(sha256Hex(text), doc, planRestore(hooks, snapshot), snapshot);
+    const reason = claudeEnableRefusal(sha256Hex(text), doc, planRestore(parsedHooks.hooks, snapshot), snapshot);
     if (reason === null) continue;
     // The refusing snapshot first, so the "first one wins" below counts a
     // group both it and an older snapshot removed as removed by the refusing
@@ -395,19 +396,6 @@ function claudeEnableForce(
     break;
   }
   return out;
-}
-
-/** The `hooks` of a parsed settings.json as the gate reads them: an array of groups per event; null for any other shape. */
-function settingsHooksOf(doc: Record<string, unknown>): Record<string, unknown[]> | null {
-  const rawHooks = doc["hooks"];
-  const hooks: Record<string, unknown[]> = {};
-  if (rawHooks === undefined) return hooks;
-  if (!isRecord(rawHooks)) return null;
-  for (const [event, groups] of Object.entries(rawHooks)) {
-    if (!Array.isArray(groups)) return null;
-    hooks[event] = groups.slice();
-  }
-  return hooks;
 }
 
 export function checkCodexLiveHooks(

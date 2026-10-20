@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
-import { shellQuote } from "../../../src/cli/gate/shell-quote.js";
+import { shellQuote } from "../../../src/cli/shell-quote.js";
 
 /** What a POSIX shell makes of `word` when it is written into a command line. */
 function shellRead(word: string): string {

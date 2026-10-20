@@ -31,7 +31,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { atomicWriteFile } from "../../io/atomic-write.js";
-import { shellQuote } from "./shell-quote.js";
+import { shellQuote } from "../shell-quote.js";
 import {
   backupPath,
   changedLabel,

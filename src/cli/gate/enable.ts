@@ -34,6 +34,7 @@ import {
   listLiveSnapshots,
   missingLabel,
   nextEnableSnapshots,
+  parseSettingsHooks,
   planRestore,
   readOnlyLinkTargetText,
   readOnlyWritablePlace,
@@ -146,22 +147,18 @@ function readCurrentSettings(settingsPath: string, missingWayOut: string): Curre
     throw new GateEnableError(`${settingsPath} is not a JSON object; refusing to operate.`);
   }
   const obj = parsed as Record<string, unknown>;
-  const rawHooks = obj["hooks"];
-  let hooks: Record<string, unknown[]> = {};
-  if (rawHooks !== undefined) {
-    if (rawHooks === null || typeof rawHooks !== "object" || Array.isArray(rawHooks)) {
-      throw new GateEnableError(`${settingsPath} \`hooks\` field is not an object.`);
-    }
-    for (const [event, groups] of Object.entries(rawHooks)) {
-      if (!Array.isArray(groups)) {
-        throw new GateEnableError(
-          `${settingsPath} \`hooks.${event}\` is not an array; refusing to operate.`,
-        );
-      }
-      hooks[event] = groups.slice();
-    }
+  // One shared walk of the `hooks` field (the doctor reads the same shape
+  // through it); the two failure reasons keep their exact messages here.
+  const parsedHooks = parseSettingsHooks(obj);
+  if (!parsedHooks.ok) {
+    const event = parsedHooks.reason === "event-not-array" ? parsedHooks.event : "";
+    throw new GateEnableError(
+      parsedHooks.reason === "hooks-not-object"
+        ? `${settingsPath} \`hooks\` field is not an object.`
+        : `${settingsPath} \`hooks.${event}\` is not an array; refusing to operate.`,
+    );
   }
-  return { raw, obj, hooks };
+  return { raw, obj, hooks: parsedHooks.hooks };
 }
 
 export function gateEnable(opts: GateEnableOptions = {}): GateEnableResult {

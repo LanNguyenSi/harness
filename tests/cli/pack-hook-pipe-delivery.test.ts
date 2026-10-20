@@ -23,6 +23,7 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, describe, expect, it } from "vitest";
 import { BLOCK_TEXT_MAX_BYTES } from "../../src/runtime/bounded-text.js";
+import { goldenEnvelope } from "../_helpers/branch-protection-envelope.js";
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const MAIN_JS = path.join(REPO_ROOT, "dist", "cli", "main.js");
@@ -587,18 +588,6 @@ describe("a closed reader at the early config.ux warning does not turn a block i
 // that is closed turns the block into exit 2. An open stdout, however slow
 // its reader, keeps exit 0.
 describe("a Claude Code block on an open stdout keeps exit 0 and its envelope", () => {
-  // The bytes the hook wrote for this event on an open stdout before the
-  // write was awaited: the envelope, then one newline.
-  const goldenEnvelope = (repo: string): string => {
-    const where = JSON.stringify(repo).slice(1, -1);
-    const reason = String.raw`branch-protection: refusing Write on protected branch \"master\" (checked in ${where}).\nCreate a feature branch first, then retry:\n  git checkout -b <feature>\nProtected branches: master, main, develop.`;
-    return (
-      String.raw`{"decision":"block","reason":"${reason}","hookSpecificOutput":{"hookEventName":"PreToolUse",` +
-      String.raw`"permissionDecision":"deny","permissionDecisionReason":"${reason}"}}` +
-      "\n"
-    );
-  };
-
   it(
     "the exact stdout bytes are the envelope and one newline, exit 0",
     async () => {

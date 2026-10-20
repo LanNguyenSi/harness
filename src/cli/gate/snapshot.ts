@@ -22,7 +22,7 @@ import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { kernelEntry, walkLinkChain } from "./link-chain.js";
-import { shellQuote } from "./shell-quote.js";
+import { shellQuote } from "../shell-quote.js";
 
 export const SNAPSHOT_BASENAME_PREFIX = "harness.gate-disable.";
 export const SNAPSHOT_BASENAME_SUFFIX = ".json";
@@ -718,4 +718,35 @@ export function claudeEnableRefusal(
  */
 export function nextEnableSnapshots(live: readonly LiveSnapshot[]): readonly LiveSnapshot[] {
   return live.slice(0, 1);
+}
+
+export type SettingsHooksParse =
+  | { ok: true; hooks: Record<string, unknown[]> }
+  | { ok: false; reason: "hooks-not-object" }
+  | { ok: false; reason: "event-not-array"; event: string };
+
+/**
+ * The `hooks` of a parsed settings.json as the gate reads them: an array of
+ * groups per event, each array copied, so a caller never mutates the parsed
+ * document. A `hooks` key that is absent reads as no groups at all; any other
+ * shape the gate refuses to read is a failure reason, not a guess:
+ * `hooks-not-object` when the field itself is not an object, and
+ * `event-not-array` naming the first event whose value is not an array.
+ * `gate enable` turns the two reasons into its two refusal messages, and
+ * `harness doctor` reads them the same way when it asks the gate what a
+ * plain `gate enable` would do with the file it compares; the two never
+ * re-implement the walk.
+ */
+export function parseSettingsHooks(doc: Record<string, unknown>): SettingsHooksParse {
+  const rawHooks = doc["hooks"];
+  const hooks: Record<string, unknown[]> = {};
+  if (rawHooks === undefined) return { ok: true, hooks };
+  if (rawHooks === null || typeof rawHooks !== "object" || Array.isArray(rawHooks)) {
+    return { ok: false, reason: "hooks-not-object" };
+  }
+  for (const [event, groups] of Object.entries(rawHooks)) {
+    if (!Array.isArray(groups)) return { ok: false, reason: "event-not-array", event };
+    hooks[event] = groups.slice();
+  }
+  return { ok: true, hooks };
 }
