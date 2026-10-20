@@ -98,18 +98,21 @@ const CASES: Array<[name: string, hooks: unknown, refuse: string | null]> = [
   ["one event an object", { PreToolUse: { matcher: "Bash" } }, "PreToolUse"],
   ["one event null", { PreToolUse: null }, "PreToolUse"],
   [
+    "a later event not an array after a valid one",
+    { SessionStart: [{ hooks: [{ type: "command", command: "session-bin start" }] }], Stop: "nope" },
+    "Stop",
+  ],
+  [
     "valid groups",
     { SessionStart: [{ hooks: [{ type: "command", command: "session-bin start" }] }] },
     null,
   ],
 ];
 
-function expectedGateMessage(settingsPath: string, refuse: string | null): RegExp {
-  if (refuse === null) return /has been edited since the snapshot was taken/;
-  if (refuse === "object") return new RegExp(`${settingsPath} \`hooks\` field is not an object\\.`);
-  return new RegExp(
-    `${settingsPath} \`hooks\\.${refuse}\` is not an array; refusing to operate\\.`,
-  );
+/** The exact refusal message for an unreadable shape; null for a readable one (the edited-settings refusal). */
+function expectedRefusal(settingsPath: string, refuse: string): string {
+  if (refuse === "object") return `${settingsPath} \`hooks\` field is not an object.`;
+  return `${settingsPath} \`hooks.${refuse}\` is not an array; refusing to operate.`;
 }
 
 describe.each(CASES)("hooks parser parity: %s", (_name, hooks, refuse) => {
@@ -123,7 +126,8 @@ describe.each(CASES)("hooks parser parity: %s", (_name, hooks, refuse) => {
     } catch (err) {
       message = (err as Error).message;
     }
-    expect(message).toMatch(expectedGateMessage(s.settingsPath, refuse));
+    if (refuse === null) expect(message).toMatch(/has been edited since the snapshot was taken/);
+    else expect(message).toBe(expectedRefusal(s.settingsPath, refuse));
   });
 
   it("the doctor warning names --force exactly when the shape is readable", () => {
