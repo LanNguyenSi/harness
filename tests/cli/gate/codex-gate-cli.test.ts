@@ -412,6 +412,10 @@ describe("harness gate --runtime codex", () => {
     expect(r.code).toBe(EX_FAIL);
     expect(r.stdout).toContain("its units were enabled again.");
     expect(r.stderr).toContain("are still disabled: shell-guard");
+    // The snapshot was retired as superseded only because its own units came back by hand (no install, no
+    // generation marker), so the backup is not stale here and stays an offered way out.
+    expect(r.stderr).toContain("Restore the config from the backup beside it (<config>.bak.<timestamp>)");
+    expect(r.stderr).not.toContain("superseded by a later install");
     expect(fs.readFileSync(configPath, "utf8")).toBe(text);
     expect(fs.readdirSync(tmp)).toContain(snap!.replace(/\.json$/, ".superseded.json"));
   });

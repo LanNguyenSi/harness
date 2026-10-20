@@ -279,7 +279,7 @@ export function registerGateGcGroup(
                         "ones it neutralised (the same config under another name), restore them through it: " +
                         `${foreignExits}. ` +
                         (retiredSuperseded
-                          ? supersededWaysOut
+                          ? `Otherwise ${supersededWaysOut.charAt(0).toLowerCase()}${supersededWaysOut.slice(1)}`
                           : "Otherwise restore the config from the backup beside it " +
                             `(<config>.bak.<timestamp>), or re-run \`harness apply --runtime codex --install${applyFlag}\` ` +
                             "to re-render the block.")
