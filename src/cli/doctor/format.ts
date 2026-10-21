@@ -1,7 +1,7 @@
 import type { DoctorReport, McpProbeResult } from "./types.js";
 import { VERSION } from "../../version.js";
 import { projectRejectionWarns } from "../../probes/memory.js";
-import { sanitizeProjectForDisplay } from "../../runtime/git-context.js";
+import { sanitizeProjectForDisplay } from "../../io/project-name.js";
 import { shellQuote } from "../shell-quote.js";
 
 function mcpLines(r: McpProbeResult, shallow: boolean): string[] {

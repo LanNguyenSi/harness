@@ -1,6 +1,6 @@
 import { inspectMemory } from "../probes/memory.js";
 import type { Manifest } from "../schema/index.js";
-import { sanitizeProjectForDisplay } from "../runtime/git-context.js";
+import { sanitizeProjectForDisplay } from "../io/project-name.js";
 import { loadManifest, type LoaderOptions } from "./loader.js";
 
 export type ListCategory =
