@@ -27,10 +27,9 @@ import {
 // (PR #527) fixed in tests/runtime/hermetic-spawn-allowlist.test.ts:
 // nothing in this test derives an expected path from the script's own
 // location or from os.tmpdir() at all, so there is no location assumption
-// to correct. Fixed the same way tests/policies/ledger-client.test.ts's
-// tools/list diagnostic already is: an explicit, generous per-test
-// timeout (20000ms) as the third argument to `it(...)`, below, instead of
-// weakening or removing any assertion. The test body is synchronous, so
+// to correct. Fixed with an explicit, generous per-test timeout (20000ms)
+// as the third argument to `it(...)`, below, instead of weakening or
+// removing any assertion. The test body is synchronous, so
 // the argument is a reporting ceiling vitest applies after the body
 // returns, not an abort guard and not a performance bound. Measurements
 // are recorded in CHANGELOG.md ([Unreleased], Fixed).

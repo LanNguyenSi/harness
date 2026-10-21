@@ -69,7 +69,8 @@ module.exports = {
         "The branch-protection gate (its hook, its pack modules and the git " +
         "branch reader) asks git for the branch and nothing else (task " +
         "a4d8adc5): it must not import the understanding gate, the ledger " +
-        "client or writer (nor the src/policies barrel that re-exports it), " +
+        "client or writer (nor a src/policies barrel, removed with the " +
+        "ledger client in task 82169840 and kept as a re-introduction guard), " +
         "git-context (removed, task b5321c53; kept as a re-introduction " +
         "guard) or the pause machinery. Approval signing, pending " +
         "approvals and the pause machinery are removed; the kept gate must " +

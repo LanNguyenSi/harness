@@ -104,6 +104,7 @@ describe("the removed-entry table", () => {
       "workflows",
       "review_templates",
       "doctor",
+      "audit",
     ]);
     for (const p of REMOVED_MANIFEST_PATHS) {
       expect(p.removedIn).toMatch(/^\d+\.\d+\.\d+$/);

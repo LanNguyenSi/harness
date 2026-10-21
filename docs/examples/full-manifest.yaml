@@ -107,10 +107,3 @@ policy_packs:
           - "a checkout of a non-protected branch (current `${BRANCH}` is protected)"
         run:
           - "git checkout -b feat/<your-task>"
-
-audit:
-  redact:
-    - regex: "Bearer\\s+[A-Za-z0-9._-]+"
-      replacement: "Bearer <REDACTED>"
-    - env_var: AGENT_TASKS_TOKEN
-    - env_var: OPENAI_API_KEY

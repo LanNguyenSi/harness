@@ -21,7 +21,6 @@ export function defaultVersionProbe(cmd: readonly string[]): string | null {
 import { EX_USAGE, HarnessExitError } from "./exit-codes.js";
 import { VERSION } from "../version.js";
 import { registerRemove } from "./remove/register.js";
-import { registerAuditGroup } from "./register-audit-group.js";
 import { registerUninstall } from "./uninstall/register.js";
 import { registerOperatorLifecycle } from "./register-operator-lifecycle.js";
 import { registerInspectGroup } from "./register-inspect-group.js";
@@ -69,8 +68,6 @@ export function buildProgram(opts: RunOptions = {}): Command {
   registerRemove(program, { stdout, stderr });
 
   registerPackGroup(program, { stdout, stderr });
-
-  registerAuditGroup(program, { stdout, stderr });
 
   registerGateGcGroup(program, { stdout, stderr });
 

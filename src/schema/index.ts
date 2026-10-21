@@ -4,7 +4,6 @@ import { HooksSchema } from "./hooks.js";
 import { MemorySchema } from "./memory.js";
 import { PolicyPacksSchema } from "./policy-packs.js";
 import { ToolsSchema } from "./tools.js";
-import { AuditSchema } from "./audit.js";
 import {
   findRemovedCommandUses,
   remapIssuePath,
@@ -23,7 +22,6 @@ export const ManifestSchema = z
     memory: MemorySchema.default({}),
     hooks: HooksSchema.default([]),
     policy_packs: PolicyPacksSchema.default([]),
-    audit: AuditSchema.default({}),
   })
   .strict();
 
@@ -130,7 +128,6 @@ export * from "./memory.js";
 export * from "./hooks.js";
 export * from "./policy-ux.js";
 export * from "./policy-packs.js";
-export * from "./audit.js";
 // Named, not `export *`: `removedCommandMessage` is shared with the doctor
 // but is not part of the package API.
 export {

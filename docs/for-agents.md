@@ -2,7 +2,7 @@
 
 You are an agent (or the contributor onboarding one). harness is the
 thing your hooks are configured by. You do not speak to it directly at
-runtime; you read its outputs (`session-export`) and you
+runtime; you read its outputs (a hook's stderr, `doctor`) and you
 obey the hooks it wires.
 This doc is the integration contract.
 
@@ -92,7 +92,6 @@ operator-driven flows.
 | `validate` | read-only | schema + asset checks. `--check-lock` adds drift detection. |
 | `doctor` | read-only | health summary. `--shallow` skips MCP probes. |
 | `diff` | read-only | manifest vs git ref or `--since-apply` last-rendered output. |
-| `session-export <sid>` | read-only | joins the on-disk transcript JSONL with ledger rows for the session, redacts secrets, emits json/jsonl. |
 | `apply` | mutating | renders manifest to `harness.generated/` (or `--target`), updates `harness.lock`. |
 | `add` | mutating | mutates `harness.yaml` in place to add an mcp / cli / skill / hook entry. |
 | `remove` | mutating | removes an entry by type + name from the manifest. |
@@ -107,22 +106,13 @@ operator-driven flows.
 
 ## Reading the ledger back
 
-One CLI surface reads the evidence ledger (the `harness audit` policy-decision
-replay is removed, task 0231f90f; [`docs/CLI.md`](CLI.md) says how to read
-old `policy_decision:` rows).
+harness reads no evidence-ledger rows any more: the `harness audit`
+policy-decision replay (task 0231f90f) and `harness session-export`
+(task 82169840) are removed. [`docs/CLI.md`](CLI.md) says how to read
+old `policy_decision:` rows with the evidence-ledger CLI.
 
-- `harness session-export <sessionId>`. "Reconstruct the entire
-  session as one chronological audit artifact." Joins the on-disk
-  Claude Code transcript JSONL (prompts, tool_use blocks, tool_result
-  blocks, assistant text) with ledger rows for the same session.
-  Default-on regex redaction strips obvious secrets; `audit.redact[]`
-  in the manifest extends the denylist. Good for "show me what
-  actually happened in session X".
-
-If a teammate asks "what did the agent do in this session", reach
-for `session-export`. If they ask "why did this gate fire", read the
-hook's stderr: the shipped gates decide at call time and say their
-reason there.
+If a teammate asks "why did this gate fire", read the hook's stderr:
+the shipped gates decide at call time and say their reason there.
 
 ## Things you must NOT do as an agent
 
@@ -136,10 +126,9 @@ reason there.
 - Do not hand-edit `harness.generated/`. The next `apply` refuses
   until the edit is captured with `harness adopt` or discarded with
   `--overwrite-drift`. Edit `harness.yaml` instead.
-- Do not commit secrets in tool_use input. The default
-  `audit.redact[]` regex catches the obvious patterns at
-  `session-export` time, but the safer move is to never put a token
-  in a tool argument in the first place.
+- Do not put secrets in a tool argument (a token in a command line or
+  in tool_use input): it lands in transcripts and logs, which harness
+  does not redact.
 
 ## Where to read next
 
@@ -149,6 +138,6 @@ reason there.
   (historical); [`docs/CLI.md`](CLI.md) is the current command
   reference and `src/schema/` the current schema.
 - [`docs/examples/full-manifest.yaml`](examples/full-manifest.yaml):
-  a manifest exercising every field, including `audit.redact[]`.
+  a manifest exercising every field.
 - [`CHANGELOG.md`](../CHANGELOG.md): what shipped when, with the PR
   number that introduced each surface.

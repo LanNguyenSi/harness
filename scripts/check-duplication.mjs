@@ -279,7 +279,9 @@ import * as path from "node:path";
 // pin was 32).
 // Lowered to 29 (task b5321c53): removing the git-context module; the check
 // reports 29 with that change (the pin was 31).
-const MAX_CLONES = 29;
+// Lowered to 27 (task 82169840): removing `harness session-export` and the ledger
+// client; the check reports 27 with that change (the pin was 29).
+const MAX_CLONES = 27;
 
 // Sets process.exitCode instead of calling process.exit so the caller's
 // finally-cleanup runs on every path (process.exit skips stack unwinding).

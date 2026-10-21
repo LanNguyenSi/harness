@@ -158,6 +158,12 @@ export const REMOVED_MANIFEST_PATHS: readonly RemovedManifestPath[] = [
     reason: "its only setting, ignore_template_drift, has no reader since the template drift check was removed",
     silentWhenEmpty: true,
   },
+  {
+    path: "audit",
+    removedIn: "1.0.0",
+    reason: "only the removed `harness session-export` read audit.redact",
+    silentWhenEmpty: true,
+  },
 ];
 
 /** How many policy names the `policies` note spells out. */
@@ -532,6 +538,7 @@ export const REMOVED_COMMANDS: readonly RemovedCommand[] = [
   { command: "harness pause", removedIn: "1.0.0", reason: "the operator pause is removed; use `harness gate disable`" },
   { command: "harness resume", removedIn: "1.0.0", reason: "the operator pause is removed; use `harness gate enable`" },
   { command: "harness audit", removedIn: "1.0.0", reason: "the policy-decision replay is removed; read the ledger with the evidence-ledger CLI" },
+  { command: "harness session-export", removedIn: "1.0.0", reason: "the transcript and ledger export is removed; harness no longer reads the evidence ledger" },
   // `harness explain` is a prefix of `harness explain-action` and
   // `harness explain-policy` (hyphen continuation) and lookup takes the
   // FIRST matching row, so this row must stay below both of them; pinned
