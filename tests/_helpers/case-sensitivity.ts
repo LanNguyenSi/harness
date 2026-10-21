@@ -9,7 +9,8 @@
 // Consolidated what were independent copies of this probe (the
 // session-start preflight tests, tests/cli/loader-project-layer.test.ts)
 // into one. Since task f3f15290 removed the session-start tests and the
-// per-repo scoping tests that used it, no test imports this export.
+// per-repo scoping tests that used it, its importer is
+// tests/cli/gate/snapshot.test.ts.
 import * as fs from "node:fs";
 import * as path from "node:path";
 

@@ -76,10 +76,11 @@ const PROJECT_NAME_CONTROL_CHARS_GLOBAL = new RegExp(PROJECT_NAME_CONTROL_CHARS.
  * rejected-`--project` warn line.
  *
  * Exported (task c88461c1; task `1c4eb3ea` of the batch-44 follow-up run)
- * so `resolvePaths` (`src/cli/loader.ts`) can apply the SAME guard at its own `path.join` sink, defense in
- * depth: an `opts.project` reaching `resolvePaths` from anywhere (the
- * explicit `--project` flag, a caller building `LoaderOptions` by hand,
- * a future producer) is checked there. Applied a SECOND time at
+ * so `resolvePaths` (`src/cli/loader.ts`) can apply the SAME guard at
+ * its own `path.join` sink, defense in depth: an `opts.project`
+ * reaching `resolvePaths` from anywhere (the explicit `--project`
+ * flag, a caller building `LoaderOptions` by hand, a future producer)
+ * is checked there. Applied a SECOND time at
  * `substituteProject`'s own sink (`src/probes/memory.ts`, task
  * `e904f25a`): an invalid name there degrades to the "no project
  * supplied" branch instead of being interpolated into the `{project}`
@@ -94,9 +95,10 @@ const PROJECT_NAME_CONTROL_CHARS_GLOBAL = new RegExp(PROJECT_NAME_CONTROL_CHARS.
  * into a path unvalidated, left unguarded (reached only via the explicit
  * `--project` CLI flag; see CHANGELOG.md for the reservation/follow-up).
  * That one call site calls this function nowhere, so it inherits NOTHING
- * from the control-character screen above either: a caller reading this comment should not assume this
- * function guards every `{project}`-shaped sink in the codebase, for
- * path escapes or for control characters.
+ * from the control-character screen above either: a caller reading
+ * this comment should not assume this function guards every
+ * `{project}`-shaped sink in the codebase, for path escapes or for
+ * control characters.
  */
 export function isValidProjectName(name: string): boolean {
   if (name.length === 0) return false;
