@@ -100,7 +100,7 @@ Variables the `harness` binary reads. For the `RUNTIME_REALITY_*` variables of t
 | Variable | Read by | Effect |
 |---|---|---|
 | `HARNESS_HOME` | every verb that resolves the state root | Pins the state root, ahead of `~/.harness/` and the legacy `~/.claude/`. |
-| `CLAUDE_CODE_SESSION_ID`, `CLAUDE_SESSION_ID` | `harness session-export` | Session id fallback, in this order, when `--session` carries none. |
+| `CLAUDE_CODE_SESSION_ID`, `CLAUDE_SESSION_ID` | `harness session-export` | Session id fallback, in this order, when no `sessionId` argument is given. |
 | `CLAUDE_CONFIG_DIR` | `harness init --interactive`, `harness doctor`, `harness adopt`, `harness uninstall` | Moves the Claude Code user-scope MCP registry these verbs read from `~/.claude.json` to `$CLAUDE_CONFIG_DIR/.claude.json`. |
 
 `harness` itself does not read `EVIDENCE_LEDGER_DB` or `SOLUTION_VERDICT_SIGNING_KEY`: `harness apply` projects only `EVIDENCE_LEDGER_DB` onto the `grounding-mcp` server entry, which reads it. It no longer projects `SOLUTION_VERDICT_SIGNING_KEY` (task 21a2c508): grounding-mcp falls back to `<harness-home>/harness.generated/.approval-signing.key` when the variable is unset, and an operator-declared `env.SOLUTION_VERDICT_SIGNING_KEY` on the manifest entry still passes through.
