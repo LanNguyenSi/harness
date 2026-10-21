@@ -73,6 +73,38 @@ describe("walkLinkChain: why the walk stops", () => {
     fs.symlinkSync("d/", link);
     expect(walkLinkChain(link)).toEqual({ chain: [link, dir], end: "target" });
   });
+
+  it("lets a trailing separator on a link to a loop end in a loop, not an unreadable end", () => {
+    const loopa = path.join(tmp, "loopa");
+    const loopb = path.join(tmp, "loopb");
+    fs.symlinkSync(path.basename(loopb), loopa);
+    fs.symlinkSync(path.basename(loopa), loopb);
+    // statting `loopa/` as spelled answers ELOOP; the walker must walk the
+    // link instead, so the hop budget ends the chain, as it does unslashed.
+    const link = path.join(tmp, "loophop");
+    fs.symlinkSync("loopa/", link);
+    const walked = walkLinkChain(link);
+    expect(walked.end).toBe("loop");
+    expect(new Set(walked.chain)).toEqual(new Set([link, loopa, loopb]));
+  });
+
+  it("follows a trailing separator on a dangling link to its missing target, as without the slash", () => {
+    const missing = path.join(tmp, "gone");
+    const dangl = path.join(tmp, "dangl");
+    fs.symlinkSync(path.basename(missing), dangl);
+    const slashed = path.join(tmp, "dlink-slashed");
+    fs.symlinkSync("dangl/", slashed);
+    const unslashed = path.join(tmp, "dlink-plain");
+    fs.symlinkSync("dangl", unslashed);
+    expect(walkLinkChain(slashed)).toEqual({
+      chain: [slashed, dangl, missing],
+      end: "dangling",
+    });
+    expect(walkLinkChain(unslashed)).toEqual({
+      chain: [unslashed, dangl, missing],
+      end: "dangling",
+    });
+  });
 });
 
 describe("walkLinkChain: where a hop leads", () => {

@@ -1,5 +1,5 @@
 import { stripRemovedHookFields, stripRemovedManifestPaths, isPlainObject, type ManifestPostureWarning } from "../schema/removed-keys.js";
-import { applyLayers, OverrideMergeError } from "./merge.js";
+import { applyLayers, OverrideLayerShapeError } from "./merge.js";
 
 /**
  * Merge the base manifest and its override layers (in load order), stripping
@@ -57,7 +57,7 @@ export function mergeLayersStrippingRemovedPaths(
       continue;
     }
     if (!isPlainObject(layer.raw)) {
-      throw new OverrideMergeError(
+      throw new OverrideLayerShapeError(
         `an override layer must be a mapping of manifest keys to their overrides, but the ${layer.label} is ${rootShape(layer.raw)}`,
       );
     }

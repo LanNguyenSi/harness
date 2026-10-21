@@ -1663,8 +1663,8 @@ describe("interactive wizard — Custom path (task 31d2fbb5)", () => {
     // An EMPTY PATH dir: every binary reads as missing, so the dep check
     // for the picked agent-tasks MCP must surface its bridge on the
     // wizard's dependency list (guards the { packs, mcps } hand-off at
-    // src/cli/init/interactive.ts:1616 — dropping mcps there empties the
-    // list and this test fails).
+    // dependenciesForCustom({ packs, mcps }): dropping mcps there empties
+    // the list and this test fails).
     const emptyDepsPath = makeTmpRoot("harness-wizard-nodeps-");
     const cap = captureStreams();
     try {

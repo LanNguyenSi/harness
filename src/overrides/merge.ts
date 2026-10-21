@@ -2,19 +2,34 @@ import { isPlainObject } from "../schema/removed-keys.js";
 
 /**
  * The merge engine's domain error: a shape it cannot reconcile. `path`
- * locates the failure inside the merged document; the empty path (a
- * whole-document failure, e.g. a layer root that is not a mapping) keeps
- * the message exactly as given, so the CLI can surface it verbatim.
+ * locates the failure inside the merged document and the message carries
+ * it as a prefix; the empty path reads as `<root>`.
  */
 export class OverrideMergeError extends Error {
-  constructor(message: string, public readonly path: string[] = []) {
-    super(path.length === 0 ? message : `override merge failed at ${formatPath(path)}: ${message}`);
+  constructor(message: string, public readonly path: string[]) {
+    super(`override merge failed at ${formatPath(path)}: ${message}`);
     this.name = "OverrideMergeError";
   }
 }
 
+/**
+ * An override layer whose ROOT is not a mapping (a scalar, a list): there
+ * is no path inside the document to point at, and the failure names the
+ * whole layer file, so `message` is the whole message verbatim, without
+ * the `override merge failed at` prefix. The CLI maps only this class to
+ * EX_NOINPUT; every other OverrideMergeError (a shape conflict at a path)
+ * propagates as an unexpected failure, as before.
+ */
+export class OverrideLayerShapeError extends OverrideMergeError {
+  constructor(message: string) {
+    super(message, []);
+    this.message = message;
+    this.name = "OverrideLayerShapeError";
+  }
+}
+
 function formatPath(path: string[]): string {
-  return path.join(".");
+  return path.length === 0 ? "<root>" : path.join(".");
 }
 
 const TOMBSTONE: unique symbol = Symbol("override-tombstone");
