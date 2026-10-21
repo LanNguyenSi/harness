@@ -2,7 +2,7 @@
 
 You are an agent (or the contributor onboarding one). harness is the
 thing your hooks are configured by. You do not speak to it directly at
-runtime; you read its outputs (`audit`, `session-export`) and you
+runtime; you read its outputs (`session-export`) and you
 obey the hooks it wires.
 This doc is the integration contract.
 
@@ -92,7 +92,6 @@ operator-driven flows.
 | `validate` | read-only | schema + asset checks. `--check-lock` adds drift detection. |
 | `doctor` | read-only | health summary. `--shallow` skips MCP probes. |
 | `diff` | read-only | manifest vs git ref or `--since-apply` last-rendered output. |
-| `audit` | read-only | replays `policy_decision` rows from the ledger (written by pre-1.0.0 releases). |
 | `session-export <sid>` | read-only | joins the on-disk transcript JSONL with ledger rows for the session, redacts secrets, emits json/jsonl. |
 | `apply` | mutating | renders manifest to `harness.generated/` (or `--target`), updates `harness.lock`. |
 | `add` | mutating | mutates `harness.yaml` in place to add an mcp / cli / skill / hook entry. |
@@ -108,13 +107,10 @@ operator-driven flows.
 
 ## Reading the ledger back
 
-Two CLI surfaces read the evidence ledger. Pick the right one for the
-question you are asking.
+One CLI surface reads the evidence ledger (the `harness audit` policy-decision
+replay is removed, task 0231f90f; [`docs/CLI.md`](CLI.md) says how to read
+old `policy_decision:` rows).
 
-- `harness audit --since 1h [--policy <name>] [--outcome deny]`. "What
-  decisions were recorded?" Returns one row per `policy_decision`,
-  sorted chronologically. The policy engine that wrote those rows was
-  removed in 1.0.0, so this now replays the historical ledger.
 - `harness session-export <sessionId>`. "Reconstruct the entire
   session as one chronological audit artifact." Joins the on-disk
   Claude Code transcript JSONL (prompts, tool_use blocks, tool_result

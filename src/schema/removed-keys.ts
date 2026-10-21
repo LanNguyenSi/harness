@@ -531,6 +531,7 @@ export const REMOVED_COMMANDS: readonly RemovedCommand[] = [
   { command: "harness smoke", removedIn: "1.0.0", reason: "the end-to-end smoke verb, whose decision mode read the removed policy engine, is removed" },
   { command: "harness pause", removedIn: "1.0.0", reason: "the operator pause is removed; use `harness gate disable`" },
   { command: "harness resume", removedIn: "1.0.0", reason: "the operator pause is removed; use `harness gate enable`" },
+  { command: "harness audit", removedIn: "1.0.0", reason: "the policy-decision replay is removed; read the ledger with the evidence-ledger CLI" },
   // `harness explain` is a prefix of `harness explain-action` and
   // `harness explain-policy` (hyphen continuation) and lookup takes the
   // FIRST matching row, so this row must stay below both of them; pinned

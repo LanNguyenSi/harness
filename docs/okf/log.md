@@ -2,6 +2,8 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-10-21T12:27:10Z, task 0231f90f: `evidence-ledger-trust-boundary.md` no longer names `harness audit` as a reader of the pre-1.0.0 policy_decision rows (the command is removed); `gate-kill-switch.md` and `manifest-validation-scope.md` re-verified against `src/schema/removed-keys.ts` (one REMOVED_COMMANDS row added after the cited pause/resume rows, no cited line moved) and `codex-adapter-parity-gaps.md` against `src/runtime/session-id.ts`. Review correction: the trust-boundary sentence now says harness no longer replays the rows while `harness session-export` still includes them, and the codex adapter doc's session-id sentence names only `resolveSessionId` (the read path with its transcript-discovery tier was removed); the other two re-stamps are timestamp-only.
+
 - 2026-10-21T12:00:36Z, task 8ad81de7: re-verified `codex-adapter-parity-gaps.md` against the changed doctor files and `docs/CLI.md` (rogue evidence-ledger scan and `--rm-rogue-ledgers` removed); no claim of the doc covers them; timestamp-only re-stamp.
 
 - 2026-10-21T11:10:40Z, task b5321c53: re-verified `codex-adapter-parity-gaps.md` against the changed `docs/CLI.md` (only the `--project` name validation note changed: it no longer names the removed git-context module or a cwd-derived name) and re-stamped it. The doc's Codex adapter content lists `docs/CLI.md` as a source but does not cite that note.

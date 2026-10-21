@@ -11,7 +11,6 @@
 
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { expandHome, expandHomeInEnv } from "../io/expand-home.js";
-import { POLICY_DECISION_TYPE } from "../io/ledger-record.js";
 import { VERSION } from "../version.js";
 
 const DEFAULT_TIMEOUT_MS = 5_000;
@@ -131,7 +130,9 @@ const BUCKET_TO_TYPE: Record<string, string> = {
   hypotheses: "hypothesis",
   rejected: "rejected",
   unknowns: "unknown",
-  policyDecisions: POLICY_DECISION_TYPE,
+  // Local literal, same value as the removed `POLICY_DECISION_TYPE` constant:
+  // session-export reads the bucket's `type`, so the mapping stays.
+  policyDecisions: "policy_decision",
 };
 
 function flattenSummary(payload: unknown): LedgerEntry[] | null {
@@ -432,9 +433,9 @@ function extractToolPayload(result: unknown): unknown {
   return null;
 }
 
-/** Arguments to `LedgerSession.querySummary` — per-call, unlike the
+/** Arguments to `McpSession.querySummary`: per-call, unlike the
  *  connection-scoped `LedgerClientOptions`. */
-export interface LedgerSessionQuery {
+interface SessionQuery {
   sessionId: string;
   sinceIso?: string;
   contentPrefix?: string;
@@ -446,65 +447,26 @@ export interface LedgerSessionQuery {
    * the session default). Omitted, behaviour is byte-for-byte identical
    * to before this option existed: the session's own `timeoutMs` is
    * used. A timeout on an overridden call still sets the session-wide
-   * latch exactly like a timeout on the session default would — see
-   * `LedgerSession.callTool`'s `options.timeoutMs` doc for the shared
-   * latch contract and the enforcement-path cost-bound caveat.
+   * latch exactly like a timeout on the session default would.
    */
   timeoutMs?: number;
 }
 
 /**
- * Result of a generic `LedgerSession.callTool` round-trip. Three-way so a
- * caller can distinguish a server-side JSON-RPC error (retryable with a
- * different payload — the `policy_decision` → `fact` fallback) from a
- * degraded transport (spawn failure / exit / timeout — nothing to retry).
- */
-export type LedgerSessionCallResult =
-  | { status: "ok"; payload: unknown }
-  | { status: "error"; errorMessage: string }
-  | { status: "degraded"; reason: string };
-
-/**
- * One grounding-mcp connection serving multiple calls.
+ * One grounding-mcp connection serving multiple calls (module-private:
+ * only `queryLedgerByTag` opens one).
  *
- * The PreToolUse runtime gate evaluates K policies per tool event, and each
- * used to spawn its own subprocess for the query plus a second one for the
- * audit record — 2K sequential spawns per event, the fail-open-under-load
- * risk the 2026-07-01 review flagged against the 30s hook budget. A session
- * spawns ONE subprocess lazily on first use, performs the initialize
- * handshake once, and multiplexes every subsequent `ledger_summary` /
- * `ledger_add` over the same stdio pipe. `dispose()` terminates the child;
- * the owner MUST call it when done.
+ * A session spawns ONE subprocess lazily on first use, performs the
+ * initialize handshake once, and multiplexes every subsequent
+ * `ledger_summary` over the same stdio pipe. `dispose()` terminates the
+ * child; the owner MUST call it when done.
  */
-export interface LedgerSession {
-  querySummary(query: LedgerSessionQuery): Promise<LedgerQueryResult>;
-  /**
-   * `options.timeoutMs` (task 2026-07-18 subprocess-test-deflake, T-003)
-   * is an optional per-call override of the session's `timeoutMs` for
-   * THIS call only; every other call on the session keeps using the
-   * session default. Omitted, behaviour is byte-for-byte identical to
-   * before this option existed. Fail-open/degrade semantics and the
-   * session-wide timeout latch are unchanged either way: a timeout on an
-   * overridden call latches the session exactly like a timeout on the
-   * session default does — every subsequent call (on this session, with
-   * or without its own override) short-circuits to `degraded` without a
-   * new round-trip.
-   *
-   * Cost-bound caveat: the latch's promise
-   * that a dead ledger costs a session at most ~1× its `timeoutMs` holds
-   * only while per-call overrides on the enforcement critical path stay
-   * ≤ the session default. The override exists for tests and non-critical
-   * callers; do not pass a LARGER override on the PreToolUse gate path.
-   */
-  callTool(
-    name: string,
-    args: Record<string, unknown>,
-    options?: { timeoutMs?: number },
-  ): Promise<LedgerSessionCallResult>;
+interface McpSession {
+  querySummary(query: SessionQuery): Promise<LedgerQueryResult>;
   dispose(): void;
 }
 
-export function openLedgerSession(opts: LedgerClientOptions): LedgerSession {
+function openSession(opts: LedgerClientOptions): McpSession {
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   let ctl: CallResult | null = null;
   let startFailure: string | null = null;
@@ -570,7 +532,7 @@ export function openLedgerSession(opts: LedgerClientOptions): LedgerSession {
     `grounding-mcp timed out earlier in this session (${timedOutAtMs}ms); skipping further ledger calls`;
 
   return {
-    async querySummary(query: LedgerSessionQuery): Promise<LedgerQueryResult> {
+    async querySummary(query: SessionQuery): Promise<LedgerQueryResult> {
       if (timedOut) return { kind: "degraded", reason: latchedReason() };
       const initError = await ensureInitialized();
       if (initError !== null) return { kind: "degraded", reason: initError };
@@ -643,42 +605,6 @@ export function openLedgerSession(opts: LedgerClientOptions): LedgerSession {
       return { kind: "ok", entries };
     },
 
-    async callTool(
-      name: string,
-      args: Record<string, unknown>,
-      options?: { timeoutMs?: number },
-    ): Promise<LedgerSessionCallResult> {
-      if (timedOut) return { status: "degraded", reason: latchedReason() };
-      const initError = await ensureInitialized();
-      if (initError !== null) return { status: "degraded", reason: initError };
-      const c = ctl!;
-      const effectiveTimeoutMs = options?.timeoutMs ?? timeoutMs;
-      const result = await c.call(
-        nextId++,
-        "tools/call",
-        { name, arguments: args },
-        effectiveTimeoutMs,
-      );
-      if (result === "exit") {
-        return { status: "degraded", reason: `grounding-mcp ${exitDiagnostic(c)}` };
-      }
-      if (result === "timeout") {
-        timedOut = true;
-        timedOutAtMs = effectiveTimeoutMs;
-        return {
-          status: "degraded",
-          reason: `grounding-mcp timeout after ${effectiveTimeoutMs}ms`,
-        };
-      }
-      if (result.error) {
-        return {
-          status: "error",
-          errorMessage: result.error.message ?? "unknown",
-        };
-      }
-      return { status: "ok", payload: extractToolPayload(result.result) };
-    },
-
     dispose(): void {
       ctl?.cleanup();
     },
@@ -689,9 +615,8 @@ export async function queryLedgerByTag(
   opts: QueryLedgerOptions,
 ): Promise<LedgerQueryResult> {
   // One-shot convenience wrapper: open a session, run the single summary
-  // query, tear the subprocess down. Callers with more than one ledger
-  // round-trip per event hold a session instead.
-  const session = openLedgerSession(opts);
+  // query, tear the subprocess down.
+  const session = openSession(opts);
   try {
     return await session.querySummary({
       sessionId: opts.sessionId,

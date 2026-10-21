@@ -7,8 +7,8 @@ const config = require("../.dependency-cruiser.cjs");
 // deliberately moved away from (structural-concentration slice 4,
 // agent-tasks 61a37b25, replaced per-file target exemptions with a real
 // relocation instead); this test exists so that shape cannot silently
-// creep back in on a future rule. The two known src/io upward-import
-// exceptions (src/io/claude-mcp.ts, src/io/ledger-record.ts) use a
+// creep back in on a future rule. The one known src/io upward-import
+// exception (src/io/claude-mcp.ts) uses a
 // documented `from.pathNot` exemption instead, which this test does not
 // forbid -- `from.pathNot` narrows which SOURCE files a rule applies to
 // (an explicit, reviewable allowlist of exempted files), not which target
@@ -25,11 +25,11 @@ describe("dependency-cruiser config ratchet", () => {
     expect(offenders).toEqual([]);
   });
 
-  it("names exactly the two known io-no-upward-imports exemptions via from.pathNot", () => {
+  it("names exactly the one known io-no-upward-imports exemption via from.pathNot", () => {
     const rule = (config.forbidden as Array<{ name: string; from?: { pathNot?: unknown } }>).find(
       (r) => r.name === "io-no-upward-imports",
     );
     expect(rule).toBeDefined();
-    expect(rule?.from?.pathNot).toBe("^src/io/(claude-mcp|ledger-record)\\.ts$");
+    expect(rule?.from?.pathNot).toBe("^src/io/claude-mcp\\.ts$");
   });
 });
