@@ -21,7 +21,7 @@ flowchart LR
     apply["2. Apply<br/><code>harness apply</code>"]
     enforce["3. Enforce<br/>hooks at runtime"]
     record[("4. Record<br/>evidence ledger")]
-    observe["5. Observe<br/><code>audit</code> / <code>session-export</code>"]
+    observe["5. Observe<br/>evidence ledger via grounding-mcp"]
 
     declare --> apply
     apply --> enforce
@@ -31,14 +31,15 @@ flowchart LR
 ```
 
 Observe → refine → declare is the whole loop. The read-side surfaces
-(`audit`, `session-export`) replay rows already in the evidence
-ledger, so what flows back into the manifest is grounded in what
-actually happened. As of 1.0.0 the loop ships with one caveat: the
-policy engine was removed, so the Enforce step no longer consults the
-Record step (the shipped branch-protection gate asks git, not the
-ledger), and `explain --trace` left Observe with it. The ledger itself
-is real: grounding-mcp still writes rows, and `audit` replays the
-pre-1.0.0 `policy_decision` history.
+once replayed rows already in the evidence ledger, so what flowed back
+into the manifest was grounded in what actually happened; `audit` and
+`session-export` have since been removed (tasks 0231f90f and 82169840)
+and harness reads no ledger rows. As of 1.0.0 the loop ships with one
+caveat: the policy engine was removed, so the Enforce step no longer
+consults the Record step (the shipped branch-protection gate asks git,
+not the ledger), and `explain --trace` left Observe with it. The ledger
+itself is real: grounding-mcp still writes rows, and old
+`policy_decision` history is read with the evidence-ledger CLI.
 
 ## Architecture overview
 
@@ -124,7 +125,7 @@ policies: […]              # cross-cutting: named rules that bind hooks to tri
 
 There is no other top-level key. If a future concept (e.g. credentials, observability) does not fit under these five, that is the signal for an architecture revision, not a sixth sibling key added casually.
 
-> The shipped schema grew beyond this design and then shrank again: as of 1.0.0 the accepted top-level keys are `version`, `grounding`, `tools`, `memory`, `hooks`, `policy_packs` and `audit` (`src/schema/index.ts`). `policies`, `workflows`, `review_templates` and `doctor` were accepted until 1.0.0 and are now removed keys (they load with a warning and are stripped). See the [manifest reference](CLI.md#manifest-reference).
+> The shipped schema grew beyond this design and then shrank again: as of 1.0.0 the accepted top-level keys are `version`, `grounding`, `tools`, `memory`, `hooks` and `policy_packs` (`src/schema/index.ts`). `policies`, `workflows`, `review_templates`, `doctor` and `audit` were accepted until they were removed and are now removed keys (they load with a warning and are stripped). See the [manifest reference](CLI.md#manifest-reference).
 
 ## 2. `grounding:` section
 
@@ -541,8 +542,6 @@ Variables appear in `requires.ledger_tag` and are substituted at policy-evaluati
 ├── harness.yaml                          ← user-level manifest; hand-edited
 ├── harness.lock                          ← (Phase 3) locked resolutions (SHAs, paths); does not exist in Phase 1–2
 ├── harness.d/                            ← planned imported fragments; nothing reads it
-│   ├── policies/
-│   │   └── claim-gate.yaml
 │   └── hooks/
 │       └── team-defaults.yaml
 ├── harness.generated/                    ← Phase 3+ outputs; gitignored
@@ -759,10 +758,6 @@ harness dry-run "<prompt>"
   Simulate what would happen if the prompt were submitted now — which hooks
   would fire, which policies apply, which memories route. Requires the runtime
   to cooperate; Phase 4 feature.
-
-harness audit [--since <when>]
-  Replay the evidence-ledger for a time window; cross-reference with harness
-  decisions. Provenance tool.
 ```
 
 ### Common flags
