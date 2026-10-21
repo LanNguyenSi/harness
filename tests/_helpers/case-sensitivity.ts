@@ -6,12 +6,10 @@
 // either reports a distinct inode or fails to find the uppercase
 // spelling at all, both treated as case-sensitive here.
 //
-// Consolidated what were three independent copies of this probe
-// (tests/runtime/git-context.test.ts inline, the session-start preflight
-// tests, tests/cli/loader-project-layer.test.ts) into one.
-// tests/runtime/git-context.test.ts keeps its own inline copy. Since task
-// f3f15290 removed the session-start tests and the per-repo scoping tests
-// that used it, no test imports this export.
+// Consolidated what were independent copies of this probe (the
+// session-start preflight tests, tests/cli/loader-project-layer.test.ts)
+// into one. Since task f3f15290 removed the session-start tests and the
+// per-repo scoping tests that used it, no test imports this export.
 import * as fs from "node:fs";
 import * as path from "node:path";
 

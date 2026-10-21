@@ -277,7 +277,9 @@ import * as path from "node:path";
 // Lowered to 31 (task 973163a4): removing the pause verbs, the pause sentinel
 // and the hook-side pause check; the check reports 31 with that change (the
 // pin was 32).
-const MAX_CLONES = 31;
+// Lowered to 29 (task b5321c53): removing the git-context module; the check
+// reports 29 with that change (the pin was 31).
+const MAX_CLONES = 29;
 
 // Sets process.exitCode instead of calling process.exit so the caller's
 // finally-cleanup runs on every path (process.exit skips stack unwinding).
