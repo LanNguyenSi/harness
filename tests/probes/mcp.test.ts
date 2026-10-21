@@ -154,14 +154,14 @@ process.stdin.on("data", (d) => {
     // spawn time (src/probes/mcp.ts, the init Promise.race), so anything
     // that slows the child from spawn to its init answer races that timer
     // and yields "initialize timed out after 250ms" instead of the asserted
-    // verb-phase message (the exact full-suite baseline failure). Two costs
-    // sat in that window: macOS validates a freshly written script file on
-    // its FIRST exec (measured 52-277 ms per fresh mkdtemp path; the second
-    // exec of the same path is 5-11 ms), and a node interpreter child adds
-    // 100-135 ms of startup. So the server is a POSIX sh script (warm exec,
-    // init answered in ~5 ms) and its exec is warmed on the exact path
-    // before the timed call: spawn it once, close stdin, let the read-EOF
-    // end it. What keeps the 250 ms budget is only what the test checks,
+    // verb-phase message (the exact full-suite baseline failure). The cause
+    // reproduced everywhere is node interpreter startup (100-135 ms) inside
+    // that shared window, so the server is a POSIX sh script (init answered
+    // in ~5 ms). The first exec of a freshly written script can also be slow
+    // (measured 52-277 ms in some environments, e.g. under a sandbox or heavy
+    // parallel load, and not reproduced in others), so the script is exec'd
+    // once on the exact path before the timed call: spawn it, close stdin,
+    // let the read-EOF end it. What keeps the 250 ms budget is only what the test checks,
     // the verb-phase timeout of the server that hangs after initialize.
     const script = makeScript(`#!/bin/sh
 while IFS= read -r line; do
