@@ -68,46 +68,37 @@ const PROJECT_NAME_CONTROL_CHARS_GLOBAL = new RegExp(PROJECT_NAME_CONTROL_CHARS.
  * to occupy and against it carrying control characters anywhere
  * downstream.
  *
- * WHAT A REJECTION LOOKS LIKE. `deriveProjectName` validates its own
- * return value at every exit, so a
- * checkout directory whose basename contains a control character now
- * takes the same path a `".."` basename already took: the helper returns
- * `null`, no project override layer is looked up for that repository,
- * and the base/machine value applies unchanged. There is no error and no
- * warning; the operator sees the host-wide value instead of a per-repo
- * one (`harness doctor`'s setup-version finding then carries
- * `projectName: null` and renders no `(project: X)` suffix). An explicit
- * `--project` carrying a control character is instead reported:
+ * WHAT A REJECTION LOOKS LIKE. An explicit `--project` carrying a control
+ * character or a path-escaping shape is reported, not silently used:
  * `resolvePaths` resolves no project layer for it, and
  * `substituteProject` (`src/probes/memory.ts`) degrades to the "no
  * project supplied" branch, which `harness doctor` surfaces as its
  * rejected-`--project` warn line.
  *
- * Exported (task c88461c1, review round 3 residual; task `1c4eb3ea`
- * of the batch-44 follow-up run) so `resolvePaths` (`src/cli/loader.ts`)
- * can apply the SAME guard at its own `path.join` sink, defense in
- * depth: this function already rejects an unsafe name at every
- * `deriveProjectName` exit, but an `opts.project` reaching
- * `resolvePaths`' OWN sink from anywhere else (a caller building
- * `LoaderOptions` by hand, a future producer) had no equivalent check
- * of its own until now. Applied a THIRD time at `substituteProject`'s
- * own sink (`src/probes/memory.ts`, task `e904f25a`): an invalid name
- * there degrades to the "no project supplied" branch instead of being
- * interpolated into the `{project}` placeholder. Applied a FOURTH time
- * at `buildLockEntries`' own sink (`src/io/harness-lock.ts`, task
- * `b5e6ccb0`): an invalid name there skips the templated directory's
- * lock entry instead of the raw value being interpolated into the path
- * this function stats, hashes and writes into `harness.lock`.
+ * Exported (task c88461c1; task `1c4eb3ea` of the batch-44 follow-up run)
+ * so `resolvePaths` (`src/cli/loader.ts`) can apply the SAME guard at
+ * its own `path.join` sink, defense in depth: an `opts.project`
+ * reaching `resolvePaths` from anywhere (the explicit `--project`
+ * flag, a caller building `LoaderOptions` by hand, a future producer)
+ * is checked there. Applied a SECOND time at
+ * `substituteProject`'s own sink (`src/probes/memory.ts`, task
+ * `e904f25a`): an invalid name there degrades to the "no project
+ * supplied" branch instead of being interpolated into the `{project}`
+ * placeholder. Applied a THIRD time at `buildLockEntries`' own sink
+ * (`src/io/harness-lock.ts`, task `b5e6ccb0`): an invalid name there
+ * skips the templated directory's lock entry instead of the raw value
+ * being interpolated into the path this function stats, hashes and
+ * writes into `harness.lock`.
  * `resolvePaths`, `substituteProject` and `buildLockEntries` are now all
  * guarded; one `{project}` sink is NOT: `generate-memory-index.ts`'s own
  * substitution still interpolates an operator-supplied `--project` value
  * into a path unvalidated, left unguarded (reached only via the explicit
- * CLI flag, not this module's derivation; see CHANGELOG.md for the
- * reservation/follow-up). That one call site calls this function
- * nowhere, so it inherits NOTHING from the control-character screen
- * above either: a caller reading this comment should not assume this
- * function guards every `{project}`-shaped sink in the codebase, for
- * path escapes or for control characters.
+ * `--project` CLI flag; see CHANGELOG.md for the reservation/follow-up).
+ * That one call site calls this function nowhere, so it inherits NOTHING
+ * from the control-character screen above either: a caller reading
+ * this comment should not assume this function guards every
+ * `{project}`-shaped sink in the codebase, for path escapes or for
+ * control characters.
  */
 export function isValidProjectName(name: string): boolean {
   if (name.length === 0) return false;

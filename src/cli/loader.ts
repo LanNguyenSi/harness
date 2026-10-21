@@ -99,19 +99,15 @@ export function resolvePaths(opts: LoaderOptions = {}): ResolvedPaths {
     if (fs.existsSync(candidatePath)) machineLayers.push(candidatePath);
   }
 
-  // Defense in depth (task c88461c1, review round 3 residual; task
-  // `1c4eb3ea` of the batch-44 follow-up run): the name's own
-  // derivation already validates the name it returns with the SAME
-  // `isValidProjectName` guard (`src/io/project-name.ts`) at every one
-  // of its own exits, so a value reaching this sink through that
-  // derivation is already safe. This check guards the sink itself, for an
-  // `opts.project` that reaches `resolvePaths` from anywhere else (a
-  // caller building `LoaderOptions` by hand, a future producer that
-  // feeds an unvalidated string through `--project`), so a name like
-  // `".."` or one containing a path separator can never be joined into
-  // `<home>/projects/<name>/harness.overrides.yaml` regardless of
-  // where it came from. An invalid name is treated exactly like "no
-  // project layer on disk" (`projectLayer: null`), matching the
+  // Defense in depth (task c88461c1; task `1c4eb3ea` of the batch-44
+  // follow-up run): this check guards the sink itself, for an
+  // `opts.project` that reaches `resolvePaths` from
+  // the explicit `--project` flag, a caller building `LoaderOptions` by
+  // hand, or a future producer that feeds an unvalidated string, so a
+  // name like `".."` or one containing a path separator can never be
+  // joined into `<home>/projects/<name>/harness.overrides.yaml`
+  // regardless of where it came from. An invalid name is treated exactly
+  // like "no project layer on disk" (`projectLayer: null`), matching the
   // existing "file does not exist" degrade below, not a thrown error.
   let projectLayer: string | null = null;
   if (opts.project && isValidProjectName(opts.project)) {

@@ -1,6 +1,6 @@
 // Differential test of the branch-protection gate against real git (task
-// a4d8adc5), adapted from the repository-detection differential in
-// tests/runtime/git-context-differential.test.ts: the same layouts, built the
+// a4d8adc5), adapted from the repository-detection differential of the former
+// git-context module (removed, task b5321c53): the same layouts, built the
 // same way, inside an outer repository on `master`. Every row asks two sides
 // about the row's directory: git, run plainly there (`git symbolic-ref -q
 // HEAD`), and the gate (the presence walk plus the git reader of
@@ -71,9 +71,9 @@ interface Row {
   legit?: boolean;
 }
 
-// The hermetic git environment of tests/runtime/git-context.test.ts: no
-// global or system config, a fixed identity, and none of the variables that
-// point git somewhere other than the directory it runs in.
+// A hermetic git environment: no global or system config, a fixed identity,
+// and none of the variables that point git somewhere other than the
+// directory it runs in.
 const gitEnv: NodeJS.ProcessEnv = { ...process.env };
 for (const key of Object.keys(gitEnv)) if (key.startsWith("GIT_")) delete gitEnv[key];
 Object.assign(gitEnv, {

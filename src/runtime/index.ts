@@ -11,11 +11,3 @@ export {
   renderAgentFacing,
   type AgentFacingBlock,
 } from "./agent-facing.js";
-export {
-  resolveGitContext,
-  deriveProjectName,
-  isValidProjectName,
-  resolveScopedProjectName,
-  type GitRepoContext,
-  type ResolveScopedProjectNameOptions,
-} from "./git-context.js";
