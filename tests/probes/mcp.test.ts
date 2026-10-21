@@ -161,8 +161,8 @@ process.stdin.on("data", (d) => {
     // (measured 52-277 ms in some environments, e.g. under a sandbox or heavy
     // parallel load, and not reproduced in others), so the script is exec'd
     // once on the exact path before the timed call: spawn it, close stdin,
-    // let the read-EOF end it. What keeps the 250 ms budget is only what the test checks,
-    // the verb-phase timeout of the server that hangs after initialize.
+    // let the read-EOF end it. The 250 ms budget then only has to cover the
+    // verb-phase timeout of a server that hangs after initialize.
     const script = makeScript(`#!/bin/sh
 while IFS= read -r line; do
   case "$line" in

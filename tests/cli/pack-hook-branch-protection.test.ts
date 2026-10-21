@@ -1174,11 +1174,12 @@ describe.skipIf(!GIT_AVAILABLE)("branch-protection hook: a patch with thousands 
   // measured as the minimum of 3 runs before the ratio is formed, which
   // bounds the noise-free ratio again: a linear work cost stays within
   // (1.0, 2.0] (measured alone: master 10/11 ms, feat/x 166/98 ms).
-  // Quadratic work multiplies again between half size and full size and
-  // crosses the 3x bound (mutation check: a per-header prefix-Set rebuild
-  // in the patch-target loop fails the feature row; multiplying the
-  // measured elapsed by 10 fails it too, so the bound is the
-  // discriminator). There is no second, absolute arm: the product's own
+  // Only a heavy superlinear cost crosses the 3x bound on the feature row
+  // (multiplying the measured elapsed by 10 fails it); a moderate quadratic
+  // (a per-header Set over the prefix, about 700 ms at 6000 headers)
+  // stays inside it, as it stayed inside the old 3000 ms bound. The master
+  // rows (about 10 ms) are a verdict check, not a timing check: the 100 ms
+  // slack dominates there. There is no second, absolute arm: the product's own
   // GIT_READ_DEADLINE_MS (3000 ms from hook start) is the absolute bound,
   // and it is asserted through the verdicts, the feature row staying
   // unblocked and the master row still naming the protected branch, which
