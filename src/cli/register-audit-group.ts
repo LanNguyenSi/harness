@@ -1,6 +1,5 @@
 import type { Command } from "commander";
 import { EX_USAGE, HarnessExitError } from "./exit-codes.js";
-import { audit, type AuditOutcome } from "./audit.js";
 import { sessionExport, type ExportFormat } from "./session-export/index.js";
 
 export function registerAuditGroup(
@@ -8,42 +7,6 @@ export function registerAuditGroup(
   io: { stdout: (s: string) => void; stderr: (s: string) => void },
 ): void {
   const { stdout } = io;
-  program
-    .command("audit")
-    .description(
-      "Replay policy decisions from the evidence ledger for a time window",
-    )
-    .option("--since <duration>", "time window (default: 24h)")
-    .option("--policy <name>", "filter to a single policy by name")
-    .option(
-      "--outcome <outcome>",
-      "filter by decision outcome (allow / warn / require_approval / deny / warn-degraded / deny-degraded)",
-    )
-    .option("--config <path>", "manifest path (default: ~/.harness/harness.yaml; legacy fallback ~/.claude/harness.yaml)")
-    .option("--project <name>", "apply per-project overrides")
-    .option("--session <id>", "grounding session whose audit log to read (default: $CLAUDE_SESSION_ID, then 'default')")
-    .option("--json", "emit JSON instead of a table")
-    .action(async (options: {
-      since?: string;
-      policy?: string;
-      outcome?: string;
-      config?: string;
-      project?: string;
-      session?: string;
-      json?: boolean;
-    }) => {
-      const auditOpts: Parameters<typeof audit>[0] = {};
-      if (options.since) auditOpts.since = options.since;
-      if (options.policy) auditOpts.policy = options.policy;
-      if (options.outcome) auditOpts.outcome = options.outcome as AuditOutcome;
-      if (options.config) auditOpts.configPath = options.config;
-      if (options.project) auditOpts.project = options.project;
-      if (options.session) auditOpts.sessionId = options.session;
-      if (options.json) auditOpts.json = options.json;
-      const result = await audit(auditOpts);
-      stdout(result.output);
-    });
-
   program
     .command("session-export [sessionId]")
     .description(

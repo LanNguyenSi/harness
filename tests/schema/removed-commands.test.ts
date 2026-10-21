@@ -106,7 +106,8 @@ describe("REMOVED_COMMANDS table (task f3f15290)", () => {
     expect(invokesRemovedCommand("harness explain-policy event.json")?.reason).toBe(policyRow?.reason);
     // No space or hyphen boundary: a different verb, not a match.
     expect(invokesRemovedCommand("harness explainer")).toBeUndefined();
-    expect(invokesRemovedCommand("harness audit")).toBeUndefined();
+    // `harness audit` is a removed row since task 0231f90f, so it matches.
+    expect(invokesRemovedCommand("harness audit")?.command).toBe("harness audit");
   });
 
   it("lists harness approve risk as one row, matched with its flags, and nothing else under approve (task 39c112e0)", () => {
@@ -168,6 +169,21 @@ describe("REMOVED_COMMANDS table (task f3f15290)", () => {
     expect(invokesRemovedCommand("harness pauses")).toBeUndefined();
     // Lookup takes the FIRST matching row, so the `harness explain` row must
     // stay the LAST row of the table.
+    expect(REMOVED_COMMANDS[REMOVED_COMMANDS.length - 1]?.command).toBe("harness explain");
+  });
+
+  it("lists harness audit as its own row, matched with flags, keeps the no-boundary look-alike out, and keeps harness explain the last row (task 0231f90f)", () => {
+    const auditRow = REMOVED_COMMANDS.find((c) => c.command === "harness audit");
+    expect(auditRow).toBeDefined();
+    expect(auditRow?.removedIn).toBe("1.0.0");
+    expect(auditRow?.reason.length).toBeGreaterThan(0);
+    expect(invokesRemovedCommand("harness audit")).toBe(auditRow);
+    expect(invokesRemovedCommand("harness audit --since 1h")).toBe(auditRow);
+    // Look-alike: no space or hyphen boundary, so `harness auditing` is a
+    // different verb and matches nothing.
+    expect(invokesRemovedCommand("harness auditing")).toBeUndefined();
+    // The audit row sits after the pause/resume rows and before the
+    // `harness explain` row, which must stay the LAST row of the table.
     expect(REMOVED_COMMANDS[REMOVED_COMMANDS.length - 1]?.command).toBe("harness explain");
   });
 });

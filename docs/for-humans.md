@@ -328,7 +328,7 @@ complement.
 | Schema issues, plus drift since last `apply` | `harness validate --check-lock` |
 | Health summary across all pillars (MCP probes, hook executability, memory dir state) | `harness doctor` |
 | What changed since I last ran `apply` | `harness diff --since-apply` |
-| Replay the historical policy decision rows (written pre-1.0.0) | `harness audit --since 24h` |
+| Replay the historical policy decision rows (written pre-1.0.0) | removed (task 0231f90f); how to read old rows: [CLI.md](CLI.md) |
 | Full chronological session export (transcript + ledger, redacted) | `harness session-export <sessionId>` |
 | Take one hook group out of the live config (recovery / debug / incident), Claude Code | `harness gate disable --matcher <substring>` then `harness gate enable` |
 | Take one hook unit out of the live config (recovery / debug / incident), Codex | `harness gate disable --runtime codex --matcher <substring>` then `harness gate enable --runtime codex` |

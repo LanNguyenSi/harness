@@ -21,14 +21,14 @@
 // utilities opened: src/io is no longer a structurally invisible zone
 // where any upward import silently escapes the layer rules. New files
 // under src/io must not import from policies/runtime/policy-packs/cli.
-// Exactly two pre-existing files still do, and are exempted by an
-// explicit `from.pathNot` naming those two files (NOT a `to.pathNot`
+// Exactly one pre-existing file still does, and is exempted by an
+// explicit `from.pathNot` naming that file (NOT a `to.pathNot`
 // grandfather -- see the ratchet test in
 // tests/dependency-cruiser-config.test.ts, which fails if any rule in
 // this file ever gains a `to.pathNot`):
 //   - src/io/claude-mcp.ts imports src/runtime/hermetic-spawn-guard.ts
-//   - src/io/ledger-record.ts imports src/policies/timestamp.ts (value) and
-//     src/policies/ledger-client.ts (type-only); it is not a leaf.
+// (src/io/ledger-record.ts, the second exemption until task 0231f90f, was
+// removed with the `harness audit` replay it served.)
 // Assign io/probes/overrides a real layer position if/when the shared
 // utilities get sorted for real (out of scope for this task).
 /** @type {import('dependency-cruiser').IConfiguration} */
@@ -84,15 +84,14 @@ module.exports = {
     {
       name: "io-no-upward-imports",
       comment:
-        "io/ must not import from policies/runtime/policy-packs/cli. Two " +
-        "pre-existing files are exempted by exact file path (from.pathNot, " +
+        "io/ must not import from policies/runtime/policy-packs/cli. One " +
+        "pre-existing file is exempted by exact file path (from.pathNot, " +
         "not a to.pathNot grandfather -- see the header comment above and " +
-        "tests/dependency-cruiser-config.test.ts): src/io/claude-mcp.ts and " +
-        "src/io/ledger-record.ts.",
+        "tests/dependency-cruiser-config.test.ts): src/io/claude-mcp.ts.",
       severity: "error",
       from: {
         path: "^src/io",
-        pathNot: "^src/io/(claude-mcp|ledger-record)\\.ts$",
+        pathNot: "^src/io/claude-mcp\\.ts$",
       },
       to: { path: "^src/(policies|runtime|policy-packs|cli)" },
     },
