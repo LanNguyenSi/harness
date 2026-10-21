@@ -1,4 +1,3 @@
-import * as os from "node:os";
 import type { Command } from "commander";
 import { defaultVersionProbe, type RunOptions } from "./index.js";
 import { describe, isPillar, type Pillar } from "./describe.js";
@@ -7,7 +6,6 @@ import { diffSinceApply } from "./diff/since-apply.js";
 import { doctor, isDoctorTarget, KNOWN_DOCTOR_TARGETS } from "./doctor/index.js";
 import { format as formatDoctor } from "./doctor/format.js";
 import type { DoctorTarget } from "./doctor/types.js";
-import { deleteRogueLedgers, scanForRogueLedgers } from "./doctor/rogue-ledger.js";
 import { EX_FAIL, EX_USAGE, HarnessExitError } from "./exit-codes.js";
 import { isListCategory, list, type ListCategory } from "./list.js";
 import { formatReport, validate } from "./validate/index.js";
@@ -115,12 +113,7 @@ export function registerInspectGroup(
       "--target <runtime>",
       `additionally evaluate the harness-side adapter health for a runtime (allowed: ${KNOWN_DOCTOR_TARGETS.join(", ")})`,
     )
-    .option("--json", "emit a structured JSON DoctorReport instead of prose (--rm-rogue-ledgers is ignored with --json)")
-    .option(
-      "--rm-rogue-ledgers",
-      "after reporting, delete each rogue evidence-ledger directory found (prompts per hit; combine with --yes to skip prompts)",
-    )
-    .option("--yes", "with --rm-rogue-ledgers, skip per-hit confirmation prompts")
+    .option("--json", "emit a structured JSON DoctorReport instead of prose")
     .action(
       async (options: {
         config?: string;
@@ -128,8 +121,6 @@ export function registerInspectGroup(
         shallow?: boolean;
         target?: string;
         json?: boolean;
-        rmRogueLedgers?: boolean;
-        yes?: boolean;
       }) => {
         let target: DoctorTarget | undefined;
         if (options.target !== undefined) {
@@ -147,17 +138,13 @@ export function registerInspectGroup(
           shallow: options.shallow,
           versionProbe: defaultVersionProbe,
           ...(target !== undefined ? { target } : {}),
-          ...(opts.rogueLedgerScanOptions !== undefined
-            ? { rogueLedgerScanOptions: opts.rogueLedgerScanOptions }
-            : {}),
         });
         // Non-zero exit when the report carries errors (task a07b379a):
         // callers previously had no way to gate CI/scripts on doctor
         // health, since this action always fell through to exit 0
         // regardless of report.errorCount. Warnings alone still exit 0.
-        // Checked before every return below (json / no --rm-rogue-ledgers /
-        // no hits found / after the delete+rescan flow) so the exit code
-        // is consistent across all output modes.
+        // Checked before every return below (json and prose) so the exit
+        // code is consistent across all output modes.
         const failIfErrors = (): void => {
           if (report.errorCount > 0) {
             throw new HarnessExitError("", EX_FAIL);
@@ -170,42 +157,6 @@ export function registerInspectGroup(
           return;
         }
         stdout(formatDoctor(report));
-
-        if (!options.rmRogueLedgers) {
-          failIfErrors();
-          return;
-        }
-
-        const hits = report.rogueLedgerDbs;
-        if (hits.length === 0) {
-          stdout("no rogue evidence-ledger DBs found; nothing to delete\n");
-          failIfErrors();
-          return;
-        }
-
-        const result = await deleteRogueLedgers(hits, { yes: options.yes });
-
-        for (const hit of result.deleted) {
-          stdout(`deleted: ${hit.rogueDir}\n`);
-        }
-        for (const hit of result.skipped) {
-          stdout(`skipped: ${hit.rogueDir}\n`);
-        }
-
-        // Re-scan and print clean delta so the operator can confirm the
-        // on-disk state after deletion. Uses the same scan options as the
-        // initial scan (injectable via RunOptions.rogueLedgerScanOptions for
-        // tests; production falls back to os.homedir() / process.cwd()).
-        const afterScan = scanForRogueLedgers({
-          homeDir: opts.rogueLedgerScanOptions?.homeDir ?? os.homedir(),
-          cwd: opts.rogueLedgerScanOptions?.cwd ?? process.cwd(),
-          ...(opts.rogueLedgerScanOptions?.fsInterface !== undefined
-            ? { fsInterface: opts.rogueLedgerScanOptions.fsInterface }
-            : {}),
-        });
-        stdout(
-          `rogue evidence-ledger DBs remaining: ${afterScan.length}\n`,
-        );
         failIfErrors();
       },
     );
