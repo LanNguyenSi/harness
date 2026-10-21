@@ -163,18 +163,6 @@ export interface ApplyOptions {
   now?: Date;
   /** Test-injectable confirmation prompt; defaults to a stdin readline. */
   prompt?: (message: string) => Promise<string>;
-  /**
-   * Keep the runtime `.last-apply` records instead of recording this
-   * apply's runtime. For a diagnostic apply that must
-   * run under a fixed runtime without changing the operator's runtime
-   * selection: the files map is still updated, so the next plain apply
-   * reuses the kept runtime and rewrites that runtime's files back. A
-   * record without a runtime field gets the runtime inferred from it
-   * stamped instead (this apply's own files would otherwise change what
-   * the next apply infers); with nothing recorded or inferable the field
-   * stays absent.
-   */
-  preserveRecordedRuntime?: boolean;
 }
 
 export type ApplyOutcome =
@@ -748,7 +736,7 @@ function buildMergedLastApplyRecord(
   previous: LastApplyRecord | null,
   manifest: Manifest,
   memoryDirSnapshots: Record<string, { sha256: string; fileHashes: Record<string, string> }>,
-  runtime: string | undefined,
+  runtime: string,
 ): LastApplyRecord {
   const next: LastApplyRecord = buildLastApply(
     Object.fromEntries(expected.map((f) => [f.basename, f.content])),
@@ -769,9 +757,7 @@ function buildMergedLastApplyRecord(
   if (Object.keys(memoryDirSnapshots).length > 0) {
     next.memoryDirs = memoryDirSnapshots;
   }
-  // Absent only for `preserveRecordedRuntime` over a record with no
-  // recorded or inferable runtime: the field then stays absent.
-  if (runtime !== undefined) next.runtime = runtime;
+  next.runtime = runtime;
   return next;
 }
 
@@ -831,18 +817,10 @@ export async function apply(opts: ApplyOptions = {}): Promise<ApplyResult> {
   // hooks as they stand, so the warning is the only place an apply run names
   // them.
   const warnings = [...postureWarnings.map(formatPostureWarning), ...expectedWarnings];
-  // The runtime this apply records: its own, or with
-  // `preserveRecordedRuntime` the previous one (recorded or inferred, else
-  // whatever the field held), so a diagnostic apply leaves the operator's
-  // runtime selection alone.
-  const recordRuntime: string | undefined = opts.preserveRecordedRuntime
-    ? (runtimeInfo.previousRuntime ?? lastApply?.runtime)
-    : runtime;
-  // The recorded runtime is missing or differs from the one to record:
+  // The recorded runtime is missing or differs from this apply's runtime:
   // persist it on the next .last-apply write even when no generated file
   // changed, so the next plain apply reuses it.
-  const runtimeRecordStale =
-    lastApply !== null && recordRuntime !== undefined && lastApply.runtime !== recordRuntime;
+  const runtimeRecordStale = lastApply !== null && lastApply.runtime !== runtime;
   const reusedHint =
     runtimeInfo.runtimeSource === "last-apply" || runtimeInfo.runtimeSource === "inferred"
       ? ` (runtime ${runtime} ${runtimeInfo.runtimeSource === "inferred" ? "inferred from the last apply's generated files" : "reused from the last apply"}; pass --runtime codex to change)`
@@ -1210,12 +1188,12 @@ export async function apply(opts: ApplyOptions = {}): Promise<ApplyResult> {
       );
       writeLastApply(
         generatedDir,
-        buildMergedLastApplyRecord(expected, lastApply, manifest, refreshedMemoryDirs, recordRuntime),
+        buildMergedLastApplyRecord(expected, lastApply, manifest, refreshedMemoryDirs, runtime),
       );
     } else if (runtimeRecordStale) {
       // Nothing else to refresh: only stamp the runtime so the next plain
       // apply reuses it.
-      writeLastApply(generatedDir, { ...lastApply, runtime: recordRuntime });
+      writeLastApply(generatedDir, { ...lastApply, runtime });
     }
     const result: ApplyResult = {
       manifestPath,
@@ -1297,7 +1275,7 @@ export async function apply(opts: ApplyOptions = {}): Promise<ApplyResult> {
     const memoryDirSnapshots = collectMemoryDirSnapshots(lockEntries);
     writeLastApply(
       generatedDir,
-      buildMergedLastApplyRecord(expected, lastApply, manifest, memoryDirSnapshots, recordRuntime),
+      buildMergedLastApplyRecord(expected, lastApply, manifest, memoryDirSnapshots, runtime),
     );
   }
   writeLock(lockPath, lockEntriesWithTarget);

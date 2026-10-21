@@ -1,6 +1,5 @@
-import { EX_NOINPUT, HarnessExitError } from "../cli/exit-codes.js";
-import { stripRemovedHookFields, stripRemovedManifestPaths, type ManifestPostureWarning } from "../schema/removed-keys.js";
-import { applyLayers } from "./merge.js";
+import { stripRemovedHookFields, stripRemovedManifestPaths, isPlainObject, type ManifestPostureWarning } from "../schema/removed-keys.js";
+import { applyLayers, OverrideLayerShapeError } from "./merge.js";
 
 /**
  * Merge the base manifest and its override layers (in load order), stripping
@@ -58,9 +57,8 @@ export function mergeLayersStrippingRemovedPaths(
       continue;
     }
     if (!isPlainObject(layer.raw)) {
-      throw new HarnessExitError(
+      throw new OverrideLayerShapeError(
         `an override layer must be a mapping of manifest keys to their overrides, but the ${layer.label} is ${rootShape(layer.raw)}`,
-        EX_NOINPUT,
       );
     }
     const strippedPaths = stripRemovedManifestPaths(layer.raw);
@@ -71,12 +69,6 @@ export function mergeLayersStrippingRemovedPaths(
     current = applyLayers(current, stripped.raw);
   }
   return { merged: current, warnings };
-}
-
-function isPlainObject(v: unknown): v is Record<string, unknown> {
-  if (v === null || typeof v !== "object" || Array.isArray(v)) return false;
-  const proto = Object.getPrototypeOf(v);
-  return proto === Object.prototype || proto === null;
 }
 
 /** How a non-mapping layer root reads in the error: what it is, not its content. */

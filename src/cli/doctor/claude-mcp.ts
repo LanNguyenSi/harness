@@ -241,15 +241,6 @@ export async function buildClaudeMcpRegistration(
               message: found.statusText || "Needs authentication",
             });
             break;
-          default:
-            // Defensive: markerToStatus in io/claude-mcp.ts only returns
-            // "unknown" for a marker glyph the verified CLI contract has
-            // never produced. Warn rather than silently drop it.
-            entries.push({
-              name,
-              status: "warn",
-              message: `unrecognised claude mcp list status (${found.statusText || "unknown"})`,
-            });
         }
       }
     }

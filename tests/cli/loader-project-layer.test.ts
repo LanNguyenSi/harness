@@ -21,7 +21,8 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { loadManifest, loadMergedRaw, resolvePaths } from "../../src/cli/loader.js";
-import { EX_NOINPUT, HarnessExitError } from "../../src/cli/exit-codes.js";
+import { run } from "../../src/cli/index.js";
+import { EX_NOINPUT, EX_SOFTWARE, HarnessExitError } from "../../src/cli/exit-codes.js";
 import { OverrideMergeError, applyLayers } from "../../src/overrides/merge.js";
 import { mergeLayersStrippingRemovedPaths } from "../../src/overrides/merge-layers.js";
 import { stripRemovedHookFields } from "../../src/schema/index.js";
@@ -296,14 +297,19 @@ describe("a removed hooks[].bash_match list in base and layer", () => {
 // or a list is not an absent layer but a broken one, and fails the load with
 // an error naming the file.
 describe("an override layer that is empty, comment-only, or not a mapping", () => {
-  type LayerCase = [name: string, file: () => string, opts: () => { homeDir: string; project?: string }];
+  type LayerCase = [
+    name: string,
+    file: () => string,
+    opts: () => { homeDir: string; project?: string },
+    label: () => string,
+  ];
 
   const MACHINE_FILE = (): string => path.join(tmpHome, "machines", "default.harness.overrides.yaml");
   const PROJECT_FILE = (): string => path.join(tmpHome, "projects", PROJECT_NAME, "harness.overrides.yaml");
 
   const LAYERS: LayerCase[] = [
-    ["machine layer", MACHINE_FILE, () => ({ homeDir: tmpHome })],
-    ["project layer", PROJECT_FILE, () => ({ homeDir: tmpHome, project: PROJECT_NAME })],
+    ["machine layer", MACHINE_FILE, () => ({ homeDir: tmpHome }), () => `machine override layer 1 (${MACHINE_FILE()})`],
+    ["project layer", PROJECT_FILE, () => ({ homeDir: tmpHome, project: PROJECT_NAME }), () => `project override layer (${PROJECT_FILE()})`],
   ];
 
   function writeLayer(file: () => string, content: string): void {
@@ -341,11 +347,11 @@ describe("an override layer that is empty, comment-only, or not a mapping", () =
     }
   });
 
-  it.each(LAYERS)("%s: a scalar or list root fails the load with an error naming the file", (_name, file, opts) => {
-    const NON_MAPPING: Array<[string, string, RegExp]> = [
-      ["a number", "42\n", /is a number$/],
-      ["a string", "nope\n", /is a string$/],
-      ["a list", "- a\n- b\n", /is a list$/],
+  it.each(LAYERS)("%s: a scalar or list root fails the load with an error naming the file", (_name, file, opts, layerLabel) => {
+    const NON_MAPPING: Array<[string, string, string]> = [
+      ["a number", "42\n", "a number"],
+      ["a string", "nope\n", "a string"],
+      ["a list", "- a\n- b\n", "a list"],
     ];
     for (const [label, content, shape] of NON_MAPPING) {
       writeLayer(file, content);
@@ -358,9 +364,12 @@ describe("an override layer that is empty, comment-only, or not a mapping", () =
       expect(caught, label).toBeInstanceOf(HarnessExitError);
       const err = caught as HarnessExitError;
       expect(err.exitCode, label).toBe(EX_NOINPUT);
-      expect(err.message, label).toContain("must be a mapping");
-      expect(err.message, label).toMatch(shape);
-      expect(err.message, label).toContain(file());
+      // The WHOLE message, anchored: the layer-root error surfaces verbatim
+      // (no `override merge failed at` prefix), so a prefix added back to
+      // the message fails here.
+      expect(err.message, label).toBe(
+        `an override layer must be a mapping of manifest keys to their overrides, but the ${layerLabel()} is ${shape}`,
+      );
     }
   });
 
@@ -381,5 +390,76 @@ describe("an override layer that is empty, comment-only, or not a mapping", () =
     const loaded = loadManifest({ homeDir: tmpHome, project: PROJECT_NAME });
     // The project layer (PROJECT_LAYER, written by beforeEach) still applies.
     expect(loaded.manifest.grounding?.evidence_ledger?.path).toBe(PROJECT_LEDGER_PATH);
+  });
+});
+
+// The CLI-side split the loader keeps: a layer root that is not
+// a mapping is a bad input and exits EX_NOINPUT, while a shape conflict at a
+// path (any other OverrideMergeError) is not an input problem and reaches
+// run()'s generic failure path (exit 70) with the merge error's own message,
+// exactly as it did before the layer-root error moved into the overrides
+// library. Pinned through run() with $HARNESS_HOME at the fixture home (the
+// binary's own env opt-in, set by src/cli/main.ts, so resolvePaths accepts
+// the no-configPath resolution; nothing outside tmpHome is read).
+describe("run(): a layer-root failure exits 66, a merge shape conflict exits 70", () => {
+  let savedHomeEnv: string | undefined;
+  let savedGenEnv: string | undefined;
+
+  beforeEach(() => {
+    savedHomeEnv = process.env["HARNESS_HOME"];
+    savedGenEnv = process.env["HARNESS_ALLOW_REAL_GENERATED_DIR"];
+    process.env["HARNESS_HOME"] = tmpHome;
+    process.env["HARNESS_ALLOW_REAL_GENERATED_DIR"] = "1";
+  });
+
+  afterEach(() => {
+    if (savedHomeEnv === undefined) delete process.env["HARNESS_HOME"];
+    else process.env["HARNESS_HOME"] = savedHomeEnv;
+    if (savedGenEnv === undefined) delete process.env["HARNESS_ALLOW_REAL_GENERATED_DIR"];
+    else process.env["HARNESS_ALLOW_REAL_GENERATED_DIR"] = savedGenEnv;
+  });
+
+  it("a project-layer shape conflict (plain list over a named one) exits 70 with the merge message", async () => {
+    fs.writeFileSync(
+      path.join(tmpHome, "harness.yaml"),
+      JSON.stringify({ version: 1, hooks: [{ name: "h", event: "Stop", command: "x" }] }),
+    );
+    fs.writeFileSync(
+      path.join(tmpHome, "projects", PROJECT_NAME, "harness.overrides.yaml"),
+      JSON.stringify({ hooks: ["plain"] }),
+    );
+    let stderr = "";
+    const code = await run({
+      argv: ["validate", "--project", PROJECT_NAME],
+      stdout: () => {},
+      stderr: (s) => {
+        stderr += s;
+      },
+    });
+    expect(code).toBe(EX_SOFTWARE);
+    expect(stderr).toBe(
+      "override merge failed at hooks: cannot merge override plain-list onto base named-list; " +
+        "declare the override as the same shape or omit it\n",
+    );
+  });
+
+  it("a project layer whose root is a list exits 66 with the layer-naming message", async () => {
+    fs.writeFileSync(
+      path.join(tmpHome, "projects", PROJECT_NAME, "harness.overrides.yaml"),
+      "- a\n- b\n",
+    );
+    let stderr = "";
+    const code = await run({
+      argv: ["validate", "--project", PROJECT_NAME],
+      stdout: () => {},
+      stderr: (s) => {
+        stderr += s;
+      },
+    });
+    expect(code).toBe(EX_NOINPUT);
+    expect(stderr).toBe(
+      "an override layer must be a mapping of manifest keys to their overrides, but the " +
+        `project override layer (${path.join(tmpHome, "projects", PROJECT_NAME, "harness.overrides.yaml")}) is a list\n`,
+    );
   });
 });

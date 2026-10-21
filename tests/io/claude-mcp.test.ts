@@ -210,6 +210,25 @@ describe("parseClaudeMcpListOutput", () => {
     expect(entries.map((e) => e.name)).toEqual(["agent-tasks", "codebase-oracle"]);
   });
 
+  it("skips a line whose marker glyph is outside the three known markers", () => {
+    const entries = parseClaudeMcpListOutput(
+      [
+        "agent-tasks: /bin/agent-tasks - ✔ Connected",
+        "svc-thing: /bin/svc --flag - ? Pending",
+        "plain-thing: /bin/plain - ? Pending",
+      ].join("\n"),
+    );
+    expect(entries).toEqual([
+      {
+        name: "agent-tasks",
+        command: "/bin/agent-tasks",
+        args: [],
+        status: "connected",
+        statusText: "Connected",
+      },
+    ]);
+  });
+
   it("returns an empty array for empty stdout", () => {
     expect(parseClaudeMcpListOutput("")).toEqual([]);
   });

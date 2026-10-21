@@ -1,7 +1,30 @@
+import { isPlainObject } from "../schema/removed-keys.js";
+
+/**
+ * The merge engine's domain error: a shape it cannot reconcile. `path`
+ * locates the failure inside the merged document and the message carries
+ * it as a prefix; the empty path reads as `<root>`.
+ */
 export class OverrideMergeError extends Error {
   constructor(message: string, public readonly path: string[]) {
     super(`override merge failed at ${formatPath(path)}: ${message}`);
     this.name = "OverrideMergeError";
+  }
+}
+
+/**
+ * An override layer whose ROOT is not a mapping (a scalar, a list): there
+ * is no path inside the document to point at, and the failure names the
+ * whole layer file, so `message` is the whole message verbatim, without
+ * the `override merge failed at` prefix. The CLI maps only this class to
+ * EX_NOINPUT; every other OverrideMergeError (a shape conflict at a path)
+ * propagates as an unexpected failure, as before.
+ */
+export class OverrideLayerShapeError extends OverrideMergeError {
+  constructor(message: string) {
+    super(message, []);
+    this.message = message;
+    this.name = "OverrideLayerShapeError";
   }
 }
 
@@ -11,13 +34,6 @@ function formatPath(path: string[]): string {
 
 const TOMBSTONE: unique symbol = Symbol("override-tombstone");
 type Tombstone = typeof TOMBSTONE;
-
-function isPlainObject(v: unknown): v is Record<string, unknown> {
-  if (v === null || typeof v !== "object") return false;
-  if (Array.isArray(v)) return false;
-  const proto = Object.getPrototypeOf(v);
-  return proto === Object.prototype || proto === null;
-}
 
 function isNameKeyedEntry(v: unknown): v is Record<string, unknown> & { name: string } {
   return isPlainObject(v) && typeof v.name === "string" && v.name.length > 0;

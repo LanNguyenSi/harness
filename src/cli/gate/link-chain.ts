@@ -48,11 +48,16 @@ function endOf(err: unknown): "dangling" | "unreadable" {
  * kept as written, since it may be the next link. When the directory part
  * leads nowhere (a directory on the way is gone), the chain ends dangling at
  * that path as the link wrote it, never at a lexical guess of where it might
- * have led.
+ * have led. A trailing separator asks the kernel for a directory: over a real
+ * directory it walks to it, over a link it hops on and carries the directory
+ * requirement to where the chain lands (a chain ending at a file then ends
+ * unreadable, the kernel's `ENOTDIR`), and a same-named file ends unreadable
+ * at the text as written.
  */
 export function walkLinkChain(start: string): LinkChain {
   const chain = [start];
   let current = start;
+  let requireDir = false;
   for (let hop = 0; hop < MAX_HOPS; hop++) {
     let raw: string;
     try {
@@ -62,13 +67,39 @@ export function walkLinkChain(start: string): LinkChain {
       raw = path.isAbsolute(text) ? text : `${linkDir}${path.sep}${text}`;
     } catch (err) {
       // `readlink` answers EINVAL for anything that exists and is not a symlink.
-      return { chain, end: (err as NodeJS.ErrnoException).code === "EINVAL" ? "target" : endOf(err) };
+      if ((err as NodeJS.ErrnoException).code !== "EINVAL") return { chain, end: endOf(err) };
+      if (requireDir) {
+        // A trailing separator earlier in the chain asked for a directory and
+        // the chain landed on a non-link: a same-named file answers that
+        // lookup ENOTDIR, unreadable, as reading through the link does.
+        try {
+          if (!fs.statSync(current).isDirectory()) return { chain, end: "unreadable" };
+        } catch (statErr) {
+          return { chain, end: endOf(statErr) };
+        }
+      }
+      return { chain, end: "target" };
     }
     let next: string;
     try {
       // The kernel's own lookup first: the native `realpath` of macOS walks
       // `file/..` back to the file's directory, where the kernel answers ENOTDIR.
       fs.statSync(path.dirname(raw));
+      if (raw.endsWith(path.sep)) {
+        // A trailing separator asks the kernel for a directory: strip every
+        // trailing separator (an all-separator text is the root). A link hops
+        // on and carries the directory requirement to where the chain lands
+        // (a loop still ends loop, a dangling link is followed to its missing
+        // target, a link to a file ends unreadable above), while a same-named
+        // file answers ENOTDIR, unreadable.
+        const stripped = raw.replace(/\/+$/, "") || path.sep;
+        if (fs.lstatSync(stripped).isSymbolicLink()) {
+          requireDir = true;
+          raw = stripped;
+        } else {
+          fs.statSync(raw);
+        }
+      }
       next = path.join(fs.realpathSync.native(path.dirname(raw)), path.basename(raw));
     } catch (err) {
       chain.push(raw);

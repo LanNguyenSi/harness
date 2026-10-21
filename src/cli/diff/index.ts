@@ -92,7 +92,9 @@ function buildRefManifest(
   layerPaths: string[],
   warnings: string[],
 ): Manifest {
-  const refLayerRaws: unknown[] = [];
+  // Label each ref-side layer with its file path, so a layer root that is
+  // not a mapping names the file in the error, as on the working side.
+  const refLayers: Array<{ raw: unknown; label: string }> = [];
   for (const layerPath of layerPaths) {
     const rel = repoRelativePath(ctx, layerPath);
     if (rel === null) {
@@ -112,23 +114,20 @@ function buildRefManifest(
           EX_NOINPUT,
         );
       }
-      refLayerRaws.push(parseRefYaml(raw, `override layer ${layerPath}`));
+      refLayers.push({ raw: parseRefYaml(raw, `override layer ${layerPath}`), label: `override layer ${layerPath}` });
       continue;
     }
     const atRef = readFileAtRefOrNull(ctx, since, rel);
     if (atRef === null) continue; // layer added since <ref>: a real change
-    refLayerRaws.push(parseRefYaml(atRef, `override layer ${rel} at git ref "${since}"`));
+    refLayers.push({ raw: parseRefYaml(atRef, `override layer ${rel} at git ref "${since}"`), label: `override layer ${layerPath}` });
   }
   const baseRaw = parseRefYaml(refRaw, "manifest at git ref");
-  if (refLayerRaws.length === 0) return parseRefSchema(baseRaw);
+  if (refLayers.length === 0) return parseRefSchema(baseRaw);
   try {
     // Removed keys are stripped from the ref-time base and layers before the
     // merge, as the working side does (the ref-side warnings are not reported).
     return parseRefSchema(
-      mergeLayersStrippingRemovedPaths(
-        baseRaw,
-        refLayerRaws.map((raw) => ({ raw, label: "override layer" })),
-      ).merged,
+      mergeLayersStrippingRemovedPaths(baseRaw, refLayers).merged,
     );
   } catch (err) {
     // A shape conflict between the REF-time base and a layer is a new

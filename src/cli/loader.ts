@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { parse as parseYaml } from "yaml";
 import { mergeLayersStrippingRemovedPaths } from "../overrides/merge-layers.js";
+import { OverrideLayerShapeError } from "../overrides/merge.js";
 import {
   machineOverrideCandidates,
   resolveMachineDiscriminators,
@@ -181,10 +182,24 @@ export function loadMergedRaw(opts: LoaderOptions = {}): LoadedRaw {
   // One merge in load order. Removed manifest paths are stripped from the base
   // and from each layer first, so a stale key with a shape the merge cannot
   // reconcile fails nothing (the warnings come back with the merged manifest).
-  const { merged: mergedRaw, warnings } = mergeLayersStrippingRemovedPaths(baseRaw, [
-    ...machineLayers.map((raw, i) => ({ raw, label: `machine override layer ${i + 1} (${resolved.machineLayers[i]})` })),
-    ...(resolved.projectLayer ? [{ raw: projectLayer, label: `project override layer (${resolved.projectLayer})` }] : []),
-  ]);
+  // A layer root that is not a mapping leaves this library as a clean CLI
+  // failure: EX_NOINPUT with the error's own message, which already names
+  // the layer file. A shape conflict at a path (any other OverrideMergeError)
+  // is not a missing input and propagates, as it did before the merge's
+  // domain error existed: run() reports it as an unexpected failure (exit 70).
+  let mergedRaw: unknown;
+  let warnings: ManifestPostureWarning[];
+  try {
+    ({ merged: mergedRaw, warnings } = mergeLayersStrippingRemovedPaths(baseRaw, [
+      ...machineLayers.map((raw, i) => ({ raw, label: `machine override layer ${i + 1} (${resolved.machineLayers[i]})` })),
+      ...(resolved.projectLayer ? [{ raw: projectLayer, label: `project override layer (${resolved.projectLayer})` }] : []),
+    ]));
+  } catch (err) {
+    if (err instanceof OverrideLayerShapeError) {
+      throw new HarnessExitError(err.message, EX_NOINPUT);
+    }
+    throw err;
+  }
   return { mergedRaw, resolved, warnings };
 }
 

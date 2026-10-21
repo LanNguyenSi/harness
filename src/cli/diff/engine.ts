@@ -18,20 +18,6 @@ function isNameKeyedList(arr: unknown[]): arr is Array<Record<string, unknown> &
   return arr.every((item) => isPlainObject(item) && typeof item.name === "string");
 }
 
-function fmtPath(parts: Array<string | number>): string {
-  let out = "";
-  for (const p of parts) {
-    if (typeof p === "number") {
-      out += `[${p}]`;
-    } else if (out === "") {
-      out = p;
-    } else {
-      out += `.${p}`;
-    }
-  }
-  return out;
-}
-
 function fmtPathWithName(parts: Array<string | number | { name: string }>): string {
   let out = "";
   for (const p of parts) {
@@ -178,5 +164,3 @@ export function formatDiff(changes: Change[]): string {
   }
   return `${lines.join("\n")}`;
 }
-
-export const __testables = { isNameKeyedList, fmtPath, pillarOf };
