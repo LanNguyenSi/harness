@@ -1,7 +1,6 @@
 import { defineConfig } from "vitest/config";
 
-// A small family of files (tests/policies/ledger-client.test.ts,
-// tests/probes/mcp.test.ts,
+// A small family of files (tests/probes/mcp.test.ts,
 // tests/cli/doctor-codex.test.ts, and
 // with their own per-test budgets
 // tests/scripts/memory-frontmatter-contract.test.ts)
@@ -21,8 +20,8 @@ import { defineConfig } from "vitest/config";
 //
 // This is a PROBABILISTIC mitigation, not a structural guarantee: this
 // file caps concurrency (attacks the "many competing workers" side of the
-// race); tests/policies/ledger-client.test.ts, tests/probes/mcp.test.ts
-// separately raise the family's own success-path timeout budgets (attacks
+// race); tests/probes/mcp.test.ts
+// separately raises the family's own success-path timeout budgets (attacks
 // the "budget too tight for cold-spawn latency" side — see the per-test
 // comments in those files, task T-002). A first pass shipping maxWorkers=6
 // alone looked green across 8 local runs, but an independent reviewer
@@ -99,8 +98,8 @@ export default defineConfig({
       // live in src/cli/index.ts (itself excluded above), moved there
       // verbatim by the CLI split; excluding exactly them keeps the gate
       // measuring what it measured before the move. Register files that
-      // existed before the move (register-audit-group.ts,
-      // register-operator-lifecycle.ts) stay measured.
+      // existed before the move (register-operator-lifecycle.ts) stay
+      // measured.
       exclude: [
         "src/**/index.ts",
         "src/**/types.ts",

@@ -16,8 +16,6 @@ import { parseManifest, parseManifestWithWarnings, type Manifest } from "../../s
 // The two manifests are intentionally different elsewhere:
 //   - tools.mcp commands (FULL_TEMPLATE uses published npm bins;
 //     full-manifest.yaml uses local Pandora checkout paths)
-//   - full-manifest.yaml carries an audit block that FULL_TEMPLATE
-//     intentionally omits.
 
 const __filename = fileURLToPath(import.meta.url);
 const REPO_ROOT = path.resolve(path.dirname(__filename), "..", "..");

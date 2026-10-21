@@ -1,5 +1,6 @@
-// Removed-key posture for the policy, workflow, review-template and doctor
-// keys and for `hooks[].bash_match` / `hooks[].path_match` (task 10e2ff0a).
+// Removed-key posture for the policy, workflow, review-template, doctor and
+// audit keys and for `hooks[].bash_match` / `hooks[].path_match` (tasks
+// 10e2ff0a and 82169840).
 //
 // The manifest load is shared by every hook, and the branch-protection hook
 // refuses every edit when it fails, so a machine whose manifest still carries
@@ -13,6 +14,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { PassThrough, Writable } from "node:stream";
 import { afterEach, describe, expect, it } from "vitest";
+import { add } from "../../src/cli/add/index.js";
 import { apply } from "../../src/cli/apply/index.js";
 import { generateSettings } from "../../src/cli/apply/generate-settings.js";
 import { doctor } from "../../src/cli/doctor/index.js";
@@ -74,7 +76,7 @@ function homeWith(where: Where, content: Record<string, unknown>): { home: strin
   return { home, opts: { homeDir: home, project: PROJECT } };
 }
 
-const KEYS = ["policies", "workflows", "review_templates", "doctor"] as const;
+const KEYS = ["policies", "workflows", "review_templates", "doctor", "audit"] as const;
 
 // Values that configure nothing. The strip is silent for them.
 const EMPTY_VALUES: Array<[string, unknown]> = [
@@ -100,7 +102,7 @@ const NON_EMPTY_VALUES: Array<[string, unknown]> = [
 ];
 
 describe("the removed-key table", () => {
-  it("lists policies, workflows, review_templates and doctor as whole keys that are silent when empty", () => {
+  it("lists policies, workflows, review_templates, doctor and audit as whole keys that are silent when empty", () => {
     for (const key of KEYS) {
       const entry = REMOVED_MANIFEST_PATHS.find((p) => p.path === key);
       expect(entry, key).toBeDefined();
@@ -108,6 +110,10 @@ describe("the removed-key table", () => {
       expect(entry!.removedIn).toBe("1.0.0");
       expect(entry!.reason.length).toBeGreaterThan(0);
     }
+  });
+
+  it("gives audit and doctor a silentWhen predicate for the old schema default shapes, and no other row", () => {
+    expect(REMOVED_MANIFEST_PATHS.filter((p) => p.silentWhen !== undefined).map((p) => p.path)).toEqual(["doctor", "audit"]);
   });
 
   it("lists exactly bash_match and path_match as removed hook fields", () => {
@@ -153,6 +159,105 @@ describe.each<Where>(["base", "project layer"])("a removed key in the %s", (wher
   });
 });
 
+// The shapes `audit` and `doctor` really took. Before the keys were removed,
+// `AuditSchema` and `DoctorSchema` defaulted to `{ redact: [] }` and `{
+// ignore_template_drift: [] }`, and `harness export` serialised the parsed
+// manifest, so every exported manifest carried both. Those two exact shapes
+// configure nothing and are stripped silently; a near miss still warns.
+describe.each<Where>(["base", "project layer"])("the old schema default shapes in the %s", (where) => {
+  describe.each<[string, string, string]>([
+    ["audit", "redact", "only the removed `harness session-export` read audit.redact"],
+    ["doctor", "ignore_template_drift", "its only setting, ignore_template_drift, has no reader"],
+  ])("%s", (key, inner, reason) => {
+    it(`{ ${inner}: [] } is stripped silently: the manifest loads, nothing warns, validate --strict passes`, () => {
+      const { opts } = homeWith(where, { [key]: { [inner]: [] } });
+      const loaded = loadManifest(opts);
+      expect(loaded.manifest).not.toHaveProperty(key);
+      expect(loaded.warnings).toEqual([]);
+      const lenient = validate({ ...opts, ...NOOP_PROBES });
+      expect(lenient.manifest).not.toBeNull();
+      expect(lenient.diagnostics.filter((d) => d.path === key)).toEqual([]);
+      const strict = validate({ ...opts, strict: true, ...NOOP_PROBES });
+      expect(strict.diagnostics.filter((d) => d.path === key)).toEqual([]);
+      expect(strict.errorCount).toBe(0);
+    });
+
+    it.each<[string, unknown]>([
+      ["a populated list", { [inner]: ["x"] }],
+      ["the default shape plus a key that never existed", { [inner]: [], other: 1 }],
+      ["a null value", { [inner]: null }],
+      ["an empty map as the value", { [inner]: {} }],
+      ["a key that never existed in place of the list", { other: [] }],
+    ])("%s still warns once, the manifest loads, and --strict fails", (_label, value) => {
+      const { opts } = homeWith(where, { [key]: value });
+      const loaded = loadManifest(opts);
+      expect(loaded.manifest).not.toHaveProperty(key);
+      const warned = loaded.warnings.filter((w) => w.path === key);
+      expect(warned).toHaveLength(1);
+      expect(warned[0]!.message).toContain(`removed in 1.0.0 and ignored (${reason}`);
+      expect(validate({ ...opts, ...NOOP_PROBES }).errorCount).toBe(0);
+      expect(validate({ ...opts, strict: true, ...NOOP_PROBES }).errorCount).toBe(1);
+    });
+  });
+});
+
+// The shapes `audit` held when it was a key: `redact` held regex and env-var rules.
+describe("the audit key with rules in it", () => {
+  it.each<[string, unknown]>([
+    ["a regex rule", { redact: [{ regex: "x" }] }],
+    ["an env-var rule", { redact: [{ env_var: "TOKEN" }] }],
+    ["several rules", { redact: [{ regex: "a", replacement: "b" }, { env_var: "KEY" }] }],
+  ])("%s warns once, the manifest loads, and --strict fails", (_label, value) => {
+    const { opts } = homeWith("base", { audit: value });
+    const loaded = loadManifest(opts);
+    expect(loaded.manifest).not.toHaveProperty("audit");
+    const warned = loaded.warnings.filter((w) => w.path === "audit");
+    expect(warned).toHaveLength(1);
+    expect(warned[0]!.message).toContain("removed in 1.0.0 and ignored (only the removed `harness session-export` read audit.redact)");
+    expect(validate({ ...opts, ...NOOP_PROBES }).errorCount).toBe(0);
+    expect(validate({ ...opts, strict: true, ...NOOP_PROBES }).errorCount).toBe(1);
+  });
+});
+
+// A caller that parses one source without merging (`harness add`, `harness
+// remove`, adopt, the .last-apply re-parse) reaches the strip through
+// `parseManifestWithWarnings` only.
+describe("the single-source parse strips audit", () => {
+  it("a manifest with audit rules parses, drops the key and warns once", () => {
+    const { manifest, warnings } = parseManifestWithWarnings({ version: 1, audit: { redact: [{ regex: "x" }] } });
+    expect(manifest).not.toHaveProperty("audit");
+    expect(warnings.filter((w) => w.path === "audit")).toHaveLength(1);
+    expect(warnings).toHaveLength(1);
+  });
+
+  it("the old default shape parses silently", () => {
+    const { manifest, warnings } = parseManifestWithWarnings({ version: 1, audit: { redact: [] }, doctor: { ignore_template_drift: [] } });
+    expect(manifest).not.toHaveProperty("audit");
+    expect(manifest).not.toHaveProperty("doctor");
+    expect(warnings).toEqual([]);
+  });
+});
+
+// `harness add` validates the proposed manifest through the single-source
+// parse, with no override merge: a manifest that still carries `audit:` must
+// not be refused there, or the operator could not add anything to it.
+describe("harness add on a manifest that still carries audit", () => {
+  it("adds the entry, leaves the file loadable, and the audit key is still ignored", async () => {
+    const { home, opts } = homeWith("base", { audit: { redact: [{ regex: "x" }] } });
+    const configPath = path.join(home, "harness.yaml");
+    const r = await add(
+      { type: "mcp", entry: { name: "added-server", command: "/usr/bin/true", health: { verb: "v", timeout_ms: 5000 } } },
+      { configPath, homeDir: home },
+    );
+    expect(r.applied).toBe(true);
+    expect(fs.readFileSync(configPath, "utf8")).toContain("added-server");
+    const loaded = loadManifest(opts);
+    expect(loaded.manifest).not.toHaveProperty("audit");
+    expect(loaded.manifest.tools.mcp.map((m) => m.name)).toContain("added-server");
+    expect(loaded.warnings.filter((w) => w.path === "audit")).toHaveLength(1);
+  });
+});
+
 // YAML-typed values have no own enumerable keys, like `{}`, but they configure
 // something, so they warn. Written as YAML text so the tags survive.
 describe("a YAML-typed value of a removed key warns", () => {
@@ -160,6 +265,7 @@ describe("a YAML-typed value of a removed key warns", () => {
     ["a !!set", "policies: !!set {a, b}"],
     ["an !!omap", "workflows: !!omap [ {a: 1} ]"],
     ["a !!timestamp", "doctor: !!timestamp 2001-12-14"],
+    ["a !!set", "audit: !!set {a, b}"],
   ])("%s", (_label, line) => {
     const home = tmpDir("harness-removed-keys-");
     fs.writeFileSync(path.join(home, "harness.yaml"), `version: 1\n${line}\n`, "utf8");
@@ -209,9 +315,10 @@ describe("the notes on the non-empty policies and workflows keys", () => {
     );
   });
 
-  it("review_templates and doctor carry the reason and no extra sentence", () => {
+  it("review_templates, doctor and audit carry the reason and no extra sentence", () => {
     expect(warningFor("review_templates", { t1: "x" })).toMatch(/delete it from the manifest$/);
     expect(warningFor("doctor", { ignore_template_drift: ["x"] })).toMatch(/delete it from the manifest$/);
+    expect(warningFor("audit", { redact: [{ regex: "x" }] })).toMatch(/delete it from the manifest$/);
   });
 });
 
@@ -393,6 +500,7 @@ describe("a layer shape the override merge cannot reconcile", () => {
     ["policies mixing named and unnamed entries", { policies: [{ name: "a" }] }, { policies: [{ name: "b" }, "bare"] }],
     ["policies, a plain list over a named one", { policies: [{ name: "a" }] }, { policies: ["plain"] }],
     ["workflows mixing named and unnamed entries", { workflows: [{ name: "a" }] }, { workflows: [{ name: "b" }, 3] }],
+    ["audit mixing named and unnamed entries", { audit: [{ name: "a" }] }, { audit: [{ name: "b" }, "bare"] }],
     ["policies with a nested producers list that mixes shapes", { policies: [{ name: "a", producers: [{ name: "p" }] }] }, { policies: [{ name: "a", producers: [{ name: "p" }, "bare"] }] }],
   ];
 
@@ -413,6 +521,7 @@ describe("the install and read commands on a manifest that carries every removed
     workflows: [{ name: "ship", steps: [{ kind: "merge" }] }],
     review_templates: { t: "x" },
     doctor: { ignore_template_drift: ["a"] },
+    audit: { redact: [{ regex: "x" }] },
     policy_packs: BRANCH_PROTECTION,
   };
 
@@ -431,6 +540,7 @@ describe("the install and read commands on a manifest that carries every removed
       "workflows",
       "review_templates",
       "doctor",
+      "audit",
       "hooks[0]",
       "hooks[1]",
       "hooks[2]",
@@ -444,7 +554,7 @@ describe("the install and read commands on a manifest that carries every removed
     const home = makeHome(EVERYTHING);
     const result = await apply({ configPath: path.join(home, "harness.yaml"), homeDir: home });
     expect(result.outcome).toBe("applied");
-    expect(result.warnings.filter((w) => /^(policies|workflows|review_templates|doctor|hooks\[\d+\]):/.test(w)).length).toBe(8);
+    expect(result.warnings.filter((w) => /^(policies|workflows|review_templates|doctor|audit|hooks\[\d+\]):/.test(w)).length).toBe(9);
   });
 
   it("export emits the manifest without the removed keys, and the warnings beside it", () => {
@@ -452,7 +562,7 @@ describe("the install and read commands on a manifest that carries every removed
     const r = exportManifest({ configPath: path.join(home, "harness.yaml"), json: true });
     const parsed = JSON.parse(r.output) as Record<string, unknown>;
     for (const key of KEYS) expect(parsed).not.toHaveProperty(key);
-    expect(r.warnings).toHaveLength(8);
+    expect(r.warnings).toHaveLength(9);
   });
 
   it("list still lists the hooks, with no bash_match column", () => {
@@ -509,8 +619,9 @@ describe.skipIf(!GIT_AVAILABLE)("branch-protection still decides on a manifest t
     workflows: [{ name: "a" }, "bare"],
     review_templates: ["not", "a", "map"],
     doctor: "not a map",
+    audit: { redact: [{ regex: "x" }, "bare", 5] },
   });
-  const emptyShapes = (): Record<string, unknown> => ({ policies: [], workflows: [], review_templates: {}, doctor: null });
+  const emptyShapes = (): Record<string, unknown> => ({ policies: [], workflows: [], review_templates: {}, doctor: null, audit: {} });
 
   it.each<[string, () => Record<string, unknown>]>([
     ["every key with a value", everyShape],
@@ -596,7 +707,7 @@ describe.skipIf(!GIT_AVAILABLE)("branch-protection on a machine with an empty ov
 });
 
 describe("a key that was never valid still fails the load", () => {
-  it.each([["policy"], ["workflow"], ["review_template"], ["doctors"]])("%s", (key) => {
+  it.each([["policy"], ["workflow"], ["review_template"], ["doctors"], ["audits"]])("%s", (key) => {
     const home = makeHome({ [key]: [] });
     expect(() => loadManifest({ homeDir: home })).toThrow(/Unrecognized key/i);
   });

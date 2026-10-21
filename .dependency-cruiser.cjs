@@ -4,6 +4,10 @@
 // to its right). The goal is catching the next reverse import, not a style
 // crusade (docs/CONTRIBUTING.md).
 //
+// src/policies was removed (task 82169840): the rules that name it below stay
+// as re-introduction guards, so a directory of that name cannot return and
+// reach upward unnoticed.
+//
 // The four de-facto SHARED UTILITIES that used to live inside layer dirs
 // (src/policies/duration.ts, src/policies/extract.ts,
 // src/runtime/ledger-record.ts, src/runtime/expand-home.ts) were relocated
@@ -44,14 +48,14 @@ module.exports = {
     },
     {
       name: "policies-no-upward-imports",
-      comment: "policies/ may use schema/ only",
+      comment: "Re-introduction guard (src/policies is removed): a policies/ directory would be a layer above schema/ and must use schema/ only",
       severity: "error",
       from: { path: "^src/policies" },
       to: { path: "^src/(runtime|policy-packs|cli|probes)" },
     },
     {
       name: "runtime-no-upward-imports",
-      comment: "runtime/ may use schema/ and policies/ only",
+      comment: "runtime/ must not reach policy-packs/cli/probes (it uses schema/ only now that src/policies is removed)",
       severity: "error",
       from: { path: "^src/runtime" },
       to: { path: "^src/(policy-packs|cli|probes)" },
@@ -69,7 +73,8 @@ module.exports = {
         "The branch-protection gate (its hook, its pack modules and the git " +
         "branch reader) asks git for the branch and nothing else (task " +
         "a4d8adc5): it must not import the understanding gate, the ledger " +
-        "client or writer (nor the src/policies barrel that re-exports it), " +
+        "client or writer (nor a src/policies barrel, removed with the " +
+        "ledger client in task 82169840 and kept as a re-introduction guard), " +
         "git-context (removed, task b5321c53; kept as a re-introduction " +
         "guard) or the pause machinery. Approval signing, pending " +
         "approvals and the pause machinery are removed; the kept gate must " +

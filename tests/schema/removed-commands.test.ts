@@ -186,6 +186,25 @@ describe("REMOVED_COMMANDS table (task f3f15290)", () => {
     // `harness explain` row, which must stay the LAST row of the table.
     expect(REMOVED_COMMANDS[REMOVED_COMMANDS.length - 1]?.command).toBe("harness explain");
   });
+
+  it("lists harness session-export as its own row, matched with its argument and flags, keeps the look-alikes out, and keeps harness explain the last row (task 82169840)", () => {
+    const row = REMOVED_COMMANDS.find((c) => c.command === "harness session-export");
+    expect(row).toBeDefined();
+    expect(row?.removedIn).toBe("1.0.0");
+    expect(row?.reason.length).toBeGreaterThan(0);
+    expect(invokesRemovedCommand("harness session-export")).toBe(row);
+    expect(invokesRemovedCommand("harness session-export abc")).toBe(row);
+    expect(invokesRemovedCommand("harness session-export abc --format jsonl -o out.jsonl")).toBe(row);
+    // Look-alikes: no space or hyphen boundary, and the neighbouring
+    // session-start row stays its own verb.
+    expect(invokesRemovedCommand("harness session-exports")).toBeUndefined();
+    expect(invokesRemovedCommand("harness session-start")?.command).toBe("harness session-start");
+    // The row sits after the audit row and before the `harness explain` row,
+    // which must stay the LAST row of the table.
+    const commands = REMOVED_COMMANDS.map((c) => c.command);
+    expect(commands.indexOf("harness session-export")).toBe(commands.indexOf("harness audit") + 1);
+    expect(commands[commands.length - 1]).toBe("harness explain");
+  });
 });
 
 describe("invokesRemovedCommand", () => {
