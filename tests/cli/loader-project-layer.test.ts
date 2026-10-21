@@ -393,7 +393,7 @@ describe("an override layer that is empty, comment-only, or not a mapping", () =
   });
 });
 
-// The CLI-side split the loader keeps (review M1): a layer root that is not
+// The CLI-side split the loader keeps: a layer root that is not
 // a mapping is a bad input and exits EX_NOINPUT, while a shape conflict at a
 // path (any other OverrideMergeError) is not an input problem and reaches
 // run()'s generic failure path (exit 70) with the merge error's own message,
@@ -401,7 +401,7 @@ describe("an override layer that is empty, comment-only, or not a mapping", () =
 // library. Pinned through run() with $HARNESS_HOME at the fixture home (the
 // binary's own env opt-in, set by src/cli/main.ts, so resolvePaths accepts
 // the no-configPath resolution; nothing outside tmpHome is read).
-describe("run(): a layer-root failure exits 66, a merge shape conflict exits 70 (review M1)", () => {
+describe("run(): a layer-root failure exits 66, a merge shape conflict exits 70", () => {
   let savedHomeEnv: string | undefined;
   let savedGenEnv: string | undefined;
 

@@ -105,6 +105,72 @@ describe("walkLinkChain: why the walk stops", () => {
       end: "dangling",
     });
   });
+
+  it("ends unreadable when a trailing separator names a link to a file: the directory the separator asked for is missing", () => {
+    const file = path.join(tmp, "plainfile");
+    fs.writeFileSync(file, "x");
+    const flink = path.join(tmp, "flink");
+    fs.symlinkSync(path.basename(file), flink);
+    const link = path.join(tmp, "L");
+    fs.symlinkSync("flink/", link);
+    expect(() => fs.readFileSync(link)).toThrow(/ENOTDIR/);
+    expect(walkLinkChain(link)).toEqual({ chain: [link, flink, file], end: "unreadable" });
+  });
+
+  it("ends unreadable when a trailing separator names a link to a link to a file", () => {
+    const file = path.join(tmp, "plainfile");
+    fs.writeFileSync(file, "x");
+    const flink = path.join(tmp, "flink");
+    fs.symlinkSync(path.basename(file), flink);
+    const fflink = path.join(tmp, "fflink");
+    fs.symlinkSync(path.basename(flink), fflink);
+    const link = path.join(tmp, "L");
+    fs.symlinkSync("fflink/", link);
+    expect(() => fs.readFileSync(link)).toThrow(/ENOTDIR/);
+    expect(walkLinkChain(link)).toEqual({ chain: [link, fflink, flink, file], end: "unreadable" });
+  });
+
+  it("walks a trailing separator over a link to a directory to that directory", () => {
+    const dir = path.join(tmp, "dir");
+    fs.mkdirSync(dir);
+    const dl = path.join(tmp, "dl");
+    fs.symlinkSync(path.basename(dir), dl);
+    const link = path.join(tmp, "L");
+    fs.symlinkSync("dl/", link);
+    expect(walkLinkChain(link)).toEqual({ chain: [link, dl, dir], end: "target" });
+  });
+
+  it("ends at the root for a link whose text is exactly `/`", () => {
+    const link = path.join(tmp, "root");
+    fs.symlinkSync("/", link);
+    expect(walkLinkChain(link)).toEqual({ chain: [link, path.sep], end: "target" });
+  });
+
+  it("strips every trailing separator: `realdir//` walks to the real directory, `flink//` still ends at the file it leads to", () => {
+    const realdir = path.join(tmp, "realdir");
+    fs.mkdirSync(realdir);
+    const dirLink = path.join(tmp, "rdlink");
+    fs.symlinkSync("realdir//", dirLink);
+    expect(walkLinkChain(dirLink)).toEqual({ chain: [dirLink, realdir], end: "target" });
+    const file = path.join(tmp, "plainfile");
+    fs.writeFileSync(file, "x");
+    const flink = path.join(tmp, "flink");
+    fs.symlinkSync(path.basename(file), flink);
+    const fileLink = path.join(tmp, "flink2");
+    fs.symlinkSync("flink//", fileLink);
+    // Not a walk that stopped at the slash spelling: the chain is the one the
+    // single-separator spelling gives.
+    expect(walkLinkChain(fileLink)).toEqual({ chain: [fileLink, flink, file], end: "unreadable" });
+  });
+
+  it("ends dangling for a trailing separator on an absent name", () => {
+    const link = path.join(tmp, "L");
+    fs.symlinkSync("gone/", link);
+    expect(walkLinkChain(link)).toEqual({
+      chain: [link, `${path.join(tmp, "gone")}${path.sep}`],
+      end: "dangling",
+    });
+  });
 });
 
 describe("walkLinkChain: where a hop leads", () => {
