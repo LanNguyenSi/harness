@@ -22,10 +22,11 @@ function tempHome(): string {
   return dir;
 }
 
-// No mcp/hooks/policies declared: errorCount 0. Still carries a
-// warningCount of 1 (no memory router configured), which is exactly the
-// fixture we want for "warnings alone keep exit 0" — this is not a
-// zero-diagnostics report, it is a report with a warning and no errors.
+// No mcp/hooks/policies declared: errorCount 0. Still carries at least
+// one warning (no memory router declared; the removed `doctor:` key also
+// warns), which is exactly the fixture we want for "warnings alone keep
+// exit 0": not a zero-diagnostics report, a report with warnings and no
+// errors.
 // The prose-exits-0 case below proves the warning through the --json path.
 function writeCleanManifest(home: string): string {
   const target = path.join(home, "harness.yaml");

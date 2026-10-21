@@ -77,7 +77,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 - Internal module `src/runtime/git-context.ts` removed with its tests (task b5321c53). Nothing on the hook or CLI path used it: branch-protection reads the branch through git. The runtime barrel no longer exports `resolveGitContext`, `deriveProjectName`, `isValidProjectName`, `resolveScopedProjectName` or their types; the package root exported none of them.
 
-- `harness doctor` no longer scans for rogue evidence-ledger directories; `--rm-rogue-ledgers` and `--yes` are removed (unknown options now) and `rogueLedgerDbs` leaves `doctor --json`; the literal-tilde cause was fixed earlier and `harness apply` refuses tilde values; remove leftovers by hand with `rm -rf '<dir>/~'`; no package-root export went away (task 8ad81de7).
+- `harness doctor` no longer scans for rogue evidence-ledger directories; `--rm-rogue-ledgers` and `--yes` are removed (unknown options now) and `rogueLedgerDbs` leaves `doctor --json`; the grounding ledger path is expanded to an absolute path and `harness apply` warns on a literal-tilde env value; remove leftovers by hand with `rm -rf '<dir>/~'`; the exported `doctor()` options and report types drop `rogueLedgerScanOptions` and `rogueLedgerDbs` (task 8ad81de7).
 
 ### Fixed
 
