@@ -1,3 +1,4 @@
+import { spawn } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -149,29 +150,39 @@ process.stdin.on("data", (d) => {
    */
 
   it("surfaces a verb-call timeout (server hangs after initialize)", async () => {
-    const script = makeScript(`#!/usr/bin/env node
-let buf = "";
-process.stdin.on("data", (d) => {
-  buf += d.toString();
-  let nl = buf.indexOf("\\n");
-  while (nl !== -1) {
-    const line = buf.slice(0, nl);
-    buf = buf.slice(nl + 1);
-    try {
-      const msg = JSON.parse(line);
-      if (msg.method === "initialize") {
-        process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: msg.id, result: { protocolVersion: "2024-11-05" } }) + "\\n");
-      }
-      // tools/call: deliberately do not respond; probe must time out.
-    } catch {}
-    nl = buf.indexOf("\\n");
-  }
-});
+    // The probe arms the SAME timeout_ms=250 for the initialize phase at
+    // spawn time (src/probes/mcp.ts, the init Promise.race), so anything
+    // that slows the child from spawn to its init answer races that timer
+    // and yields "initialize timed out after 250ms" instead of the asserted
+    // verb-phase message (the exact full-suite baseline failure). Two costs
+    // sat in that window: macOS validates a freshly written script file on
+    // its FIRST exec (measured 52-277 ms per fresh mkdtemp path; the second
+    // exec of the same path is 5-11 ms), and a node interpreter child adds
+    // 100-135 ms of startup. So the server is a POSIX sh script (warm exec,
+    // init answered in ~5 ms) and its exec is warmed on the exact path
+    // before the timed call: spawn it once, close stdin, let the read-EOF
+    // end it. What keeps the 250 ms budget is only what the test checks,
+    // the verb-phase timeout of the server that hangs after initialize.
+    const script = makeScript(`#!/bin/sh
+while IFS= read -r line; do
+  case "$line" in
+    *'"method":"initialize"'*)
+      printf '{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2024-11-05"}}\\n'
+      ;;
+  esac
+done
+# tools/call: deliberately do not respond; probe must time out.
 `);
+    const warm = spawn(script, { stdio: ["pipe", "ignore", "ignore"] });
+    warm.stdin.end();
+    await new Promise<void>((resolve, reject) => {
+      warm.once("exit", () => resolve());
+      warm.once("error", reject);
+    });
     const probe = new RealMcpProbe();
     const server: McpServer = {
       name: "lazy-mcp",
-      command: ["node", script],
+      command: [script],
       health: { verb: "ping", timeout_ms: 250 },
       enabled: true,
     };

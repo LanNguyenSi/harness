@@ -13,7 +13,7 @@ import { buildProgram } from "../../src/cli/index.js";
 import { STDIO_DRAIN_TIMEOUT_MS } from "../../src/cli/drain-stdio.js";
 import { loadManifest } from "../../src/cli/loader.js";
 import { BLOCK_TEXT_MAX_BYTES } from "../../src/runtime/bounded-text.js";
-import { GIT_READ_DEADLINE_MS, runPackHookBranchProtectionCli } from "../../src/cli/pack/hook-branch-protection.js";
+import { runPackHookBranchProtectionCli } from "../../src/cli/pack/hook-branch-protection.js";
 import { defaultUx } from "../../src/policy-packs/builtin/branch-protection.js";
 import { hasGitEntryAbove, readBranch, readBranchAt, readGitHead, type GitHeadAnswer, type GitHeadReader } from "../../src/runtime/git-branch.js";
 import { parseManifest, type Manifest } from "../../src/schema/index.js";
@@ -1136,35 +1136,57 @@ describe("branch-protection hook: git errors refuse (injected runner)", () => {
 });
 
 describe.skipIf(!GIT_AVAILABLE)("branch-protection hook: a patch with thousands of header lines stays within the bound, real git", () => {
-  const largePatch = (repo: string): Record<string, unknown> => {
+  const largePatch = (repo: string, headers: number): Record<string, unknown> => {
     let deep = repo;
     for (let i = 0; i < 20; i += 1) deep = path.join(deep, `d${i}`);
     fs.mkdirSync(deep, { recursive: true });
     const rel = path.relative(repo, deep);
-    const body = patchText(Array.from({ length: 6000 }, (_, i) => `*** Update File: ${rel}/f${i}.ts`));
+    const body = patchText(Array.from({ length: headers }, (_, i) => `*** Update File: ${rel}/f${i}.ts`));
     // The same patch in two fields: an argv array and raw_input.
     return { tool_name: "apply_patch", cwd: repo, tool_input: { command: ["apply_patch", body] }, raw_input: { command: body } };
   };
 
-  it.each(["claude-code", "codex"])("%s: 6000 header lines into a checkout on master are refused within the 3000 ms bound", async (runtime) => {
-    const repo = makeRepo("master");
-    const event = largePatch(repo);
+  const runTimed = async (repo: string, headers: number, opts: Parameters<typeof runHook>[1] = {}): Promise<{ run: Run; elapsed: number }> => {
     const started = Date.now();
-    const run = await runHook(event, { runtime });
-    const elapsed = Date.now() - started;
+    const run = await runHook(largePatch(repo, headers), opts);
+    return { run, elapsed: Date.now() - started };
+  };
+
+  // Two arms replace the old wall-clock < 3000 ms (the hook's own deadline
+  // value), which fired under load (3228 ms measured for the feature-branch
+  // row in a full-suite run; alone 166-193 ms) without stopping a realistic
+  // quadratic regression any sooner. Arm 1, the ratio, is load-independent:
+  // both runs share the git calls, the spawn cost and the load, so a linear
+  // work cost keeps the 6000-over-3000 ratio within (1.0, 2.0] on any host
+  // (measured: alone master 10/11 ms, feat/x 166/98 ms; worst 2.1 under 4x
+  // concurrent vitest). Quadratic work multiplies again between half size
+  // and full size and crosses the 3x bound (mutation check: a per-header
+  // prefix-Set rebuild in the patch-target loop failed arm 1 with 2244/622,
+  // arm 2 green). Arm 2, absolute at 12000 ms = 3.7x the worst run ever
+  // seen (3228) and 62x alone, is the load-tolerant backstop for
+  // constant-factor blowups that the ratio arm cannot see by construction
+  // (mutation check: dropping the shared-prefix memo of the physical
+  // resolution costs x17 work, 2336 ms alone, ratio still 2.0).
+  const withinRatioBound = (elapsed: number, baseline: number): void => {
+    expect(elapsed, `${elapsed} ms for 6000 headers, ${baseline} ms baseline for 3000`).toBeLessThan(baseline * 3 + 50);
+    expect(elapsed).toBeLessThan(12000);
+  };
+
+  it.each(["claude-code", "codex"])("%s: 6000 header lines into a checkout on master are refused within the half-size ratio bound", async (runtime) => {
+    const repo = makeRepo("master");
+    const { elapsed: baseline } = await runTimed(repo, 3000, { runtime });
+    const { run, elapsed } = await runTimed(repo, 6000, { runtime });
     expect(run.blocked).toBe(true);
     expect(run.diagnostic).toBe(`BLOCK: branch "master" of ${repo} is protected (master, main, develop)`);
-    expect(elapsed).toBeLessThan(GIT_READ_DEADLINE_MS);
+    withinRatioBound(elapsed, baseline);
   });
 
-  it("6000 header lines into a checkout on a feature branch are resolved and judged within the 3000 ms bound (allowed)", async () => {
+  it("6000 header lines into a checkout on a feature branch are resolved and judged within the half-size ratio bound (allowed)", async () => {
     const repo = makeRepo("feat/x");
-    const event = largePatch(repo);
-    const started = Date.now();
-    const run = await runHook(event);
-    const elapsed = Date.now() - started;
+    const { elapsed: baseline } = await runTimed(repo, 3000);
+    const { run, elapsed } = await runTimed(repo, 6000);
     expect(run.blocked, run.diagnostic).toBe(false);
-    expect(elapsed).toBeLessThan(GIT_READ_DEADLINE_MS);
+    withinRatioBound(elapsed, baseline);
   });
 });
 
