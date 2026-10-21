@@ -2,7 +2,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { parseProbedVersion, compareVersionFloor } from "../io/version-compare.js";
-import { isValidProjectName } from "../runtime/git-context.js";
+import { isValidProjectName } from "../io/project-name.js";
 import type { Manifest } from "../schema/index.js";
 
 export interface StaleMemory {
@@ -45,7 +45,7 @@ export interface MemoryReport {
    * a name is rejected precisely BECAUSE it escapes a path segment or
    * carries a control character, so this field can hold a newline or an
    * ANSI escape. Every site that renders or serializes it passes it
-   * through `sanitizeProjectForDisplay` (`src/runtime/git-context.ts`)
+   * through `sanitizeProjectForDisplay` (`src/io/project-name.ts`)
    * first. Nothing downstream of a name that was ACCEPTED needs the same
    * treatment: `isValidProjectName` rejects control characters at the
    * source, so an accepted name (and any path it was substituted into)

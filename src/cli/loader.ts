@@ -17,7 +17,7 @@ import {
 } from "../schema/index.js";
 import { readTextFileBoundedOrThrow } from "../io/read-regular-file.js";
 import { resolveHomeDir } from "../runtime/home-dir.js";
-import { isValidProjectName } from "../runtime/git-context.js";
+import { isValidProjectName } from "../io/project-name.js";
 import { EX_NOINPUT, HarnessExitError } from "./exit-codes.js";
 
 export interface LoaderOptions {
@@ -100,11 +100,11 @@ export function resolvePaths(opts: LoaderOptions = {}): ResolvedPaths {
   }
 
   // Defense in depth (task c88461c1, review round 3 residual; task
-  // `1c4eb3ea` of the batch-44 follow-up run): `deriveProjectName`
-  // (`src/runtime/git-context.ts`) already validates the name it
-  // returns with the SAME `isValidProjectName` guard at every one of
-  // its own exits, so a value reaching this sink through that helper
-  // is already safe. This check guards the sink itself, for an
+  // `1c4eb3ea` of the batch-44 follow-up run): the name's own
+  // derivation already validates the name it returns with the SAME
+  // `isValidProjectName` guard (`src/io/project-name.ts`) at every one
+  // of its own exits, so a value reaching this sink through that
+  // derivation is already safe. This check guards the sink itself, for an
   // `opts.project` that reaches `resolvePaths` from anywhere else (a
   // caller building `LoaderOptions` by hand, a future producer that
   // feeds an unvalidated string through `--project`), so a name like

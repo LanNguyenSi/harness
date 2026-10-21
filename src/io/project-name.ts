@@ -10,9 +10,9 @@
 // documents for `src/policies/duration.ts`, `src/policies/extract.ts`,
 // `src/runtime/ledger-record.ts` and `src/runtime/expand-home.ts`: a
 // utility needed below its original layer moves down rather than the
-// importing layer's boundary being relaxed. `src/runtime/git-context.ts`
-// re-exports both names so every existing consumer that imports them from
-// `../runtime/git-context.js` keeps working unchanged.
+// importing layer's boundary being relaxed. This module is the home of
+// both helpers: every consumer imports them from `src/io/project-name.ts`
+// directly.
 
 /**
  * Every C0 control character (U+0000 to U+001F, so NUL, LF, CR and ESC
@@ -68,8 +68,8 @@ const PROJECT_NAME_CONTROL_CHARS_GLOBAL = new RegExp(PROJECT_NAME_CONTROL_CHARS.
  * to occupy and against it carrying control characters anywhere
  * downstream.
  *
- * WHAT A REJECTION LOOKS LIKE. `deriveProjectName` (`src/runtime/git-
- * context.ts`) validates its own return value at every exit, so a
+ * WHAT A REJECTION LOOKS LIKE. `deriveProjectName` validates its own
+ * return value at every exit, so a
  * checkout directory whose basename contains a control character now
  * takes the same path a `".."` basename already took: the helper returns
  * `null`, no project override layer is looked up for that repository,
