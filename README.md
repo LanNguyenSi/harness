@@ -22,7 +22,7 @@ context.
 |------|-----------|
 | **manifest** | The one YAML file (`harness.yaml`) where you declare everything: tools, hooks, policy packs, memory. |
 | **apply** | `harness apply` renders the manifest into the config files the agent runtime actually reads. |
-| **evidence ledger** | An append-only log of facts an agent records during a session. `audit` / `session-export` replay it. |
+| **evidence ledger** | An append-only log of facts an agent records during a session. harness never reads it: it only points the grounding-mcp server at the ledger file (`EVIDENCE_LEDGER_DB`); read old rows with the evidence-ledger CLI (`ledger handoff --json`). |
 | **hook** | A script the agent runtime runs at a lifecycle event (session start, before every tool call, ...). How gates get wired in. |
 | **policy pack** | A bundle of hooks, instructions, and templates shipped under one name and enabled with a single manifest key. |
 
