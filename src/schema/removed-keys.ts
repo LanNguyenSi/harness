@@ -16,7 +16,10 @@
 // stripped without a warning: a manifest written before the removal often
 // carries an empty `policies: []`, and warning about a key that configures
 // nothing would only make `harness validate --strict` fail on it. A non-empty
-// value warns.
+// value warns. A path may also name the exact shape an older release wrote by
+// default (`silentWhen`): `harness export` serialised the parsed manifest, so
+// every exported manifest carried `audit: { redact: [] }` and `doctor: {
+// ignore_template_drift: [] }`, and those two shapes are stripped silently too.
 //
 // A removed per-hook field (REMOVED_HOOK_FIELDS below) is stripped from the
 // hook, which stays: `hooks[].bash_match` and `hooks[].path_match` were never
@@ -60,6 +63,15 @@ export interface RemovedManifestPath {
    * value, or a scalar, still warns.
    */
   silentWhenEmpty?: boolean;
+  /**
+   * Strip a value silently when this predicate returns true for it, in
+   * addition to `silentWhenEmpty`. For a shape an older release wrote by
+   * default into every exported manifest (`harness export` serialised the
+   * parsed manifest, schema defaults included): the shape configures nothing,
+   * but `isEmptyValue` does not cover it and must not be widened for other
+   * keys. Any other value of the path still warns.
+   */
+  silentWhen?: (stripped: unknown) => boolean;
 }
 
 /**
@@ -157,12 +169,14 @@ export const REMOVED_MANIFEST_PATHS: readonly RemovedManifestPath[] = [
     removedIn: "1.0.0",
     reason: "its only setting, ignore_template_drift, has no reader since the template drift check was removed",
     silentWhenEmpty: true,
+    silentWhen: (stripped) => isOnlyEmptyListKey(stripped, "ignore_template_drift"),
   },
   {
     path: "audit",
     removedIn: "1.0.0",
     reason: "only the removed `harness session-export` read audit.redact",
     silentWhenEmpty: true,
+    silentWhen: (stripped) => isOnlyEmptyListKey(stripped, "redact"),
   },
 ];
 
@@ -362,10 +376,25 @@ function isEmptyValue(v: unknown): boolean {
 }
 
 /**
+ * True for a prototype-plain object whose only own key is `key` and whose
+ * value is an empty array: the shape an old schema default serialised
+ * (`{ redact: [] }`). `{ redact: null }` is not that shape and warns: no
+ * release wrote it.
+ */
+function isOnlyEmptyListKey(v: unknown, key: string): boolean {
+  if (!isPlainObject(v)) return false;
+  const proto = Object.getPrototypeOf(v) as unknown;
+  if (proto !== Object.prototype && proto !== null) return false;
+  const keys = Object.keys(v);
+  const value = keys.length === 1 && keys[0] === key ? v[key] : undefined;
+  return Array.isArray(value) && value.length === 0;
+}
+
+/**
  * Strip every removed manifest path from a raw manifest (or one override
  * layer), one warning per path that was present, none for an empty value of a
- * `silentWhenEmpty` path. Pure: `raw` is not modified, and the same object is
- * returned when nothing was stripped.
+ * `silentWhenEmpty` path or a value its `silentWhen` accepts. Pure: `raw` is
+ * not modified, and the same object is returned when nothing was stripped.
  */
 export function stripRemovedManifestPaths(
   raw: unknown,
@@ -380,6 +409,7 @@ export function stripRemovedManifestPaths(
     if (!r.removed) continue;
     current = r.node;
     if (entry.silentWhenEmpty === true && isEmptyValue(stripped)) continue;
+    if (entry.silentWhen?.(stripped) === true) continue;
     const note = entry.note?.(stripped);
     warnings.push({
       path: entry.path,
