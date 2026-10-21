@@ -18,7 +18,6 @@ export function defaultVersionProbe(cmd: readonly string[]): string | null {
     return null;
   }
 }
-import type { RogueLedgerScanOptions } from "./doctor/rogue-ledger.js";
 import { EX_USAGE, HarnessExitError } from "./exit-codes.js";
 import { VERSION } from "../version.js";
 import { registerRemove } from "./remove/register.js";
@@ -34,14 +33,6 @@ export interface RunOptions {
   argv?: string[];
   stdout?: (s: string) => void;
   stderr?: (s: string) => void;
-  /**
-   * Test-injection knob for `harness doctor --rm-rogue-ledgers`. When set,
-   * both the initial scan (forwarded to `doctor()`) and the post-deletion
-   * re-scan use these options instead of the runtime `os.homedir()` /
-   * `process.cwd()` defaults. This makes the re-scan fully hermetic in unit
-   * tests without spawning real filesystem side-effects.
-   */
-  rogueLedgerScanOptions?: Partial<RogueLedgerScanOptions>;
 }
 
 export function buildProgram(opts: RunOptions = {}): Command {

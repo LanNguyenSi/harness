@@ -41,7 +41,6 @@ import {
   type RunOpencodeCheckOptions,
 } from "./opencode.js";
 import { checkNpmBinPath, type NpmExec } from "./npm-bin-path.js";
-import { scanForRogueLedgers, type RogueLedgerScanOptions } from "./rogue-ledger.js";
 import { buildClaudeMcpRegistration } from "./claude-mcp.js";
 import { buildHookLiveness, countHookLiveness, livenessRuntimes } from "./hook-liveness.js";
 import type { ClaudeMcpExec } from "../../io/claude-mcp.js";
@@ -79,12 +78,6 @@ export interface DoctorOptions extends LoaderOptions {
   codexCheckOptions?: Partial<RunCodexCheckOptions>;
   /** Test-injection knobs forwarded to the opencode target evaluator. */
   opencodeCheckOptions?: Partial<RunOpencodeCheckOptions>;
-  /**
-   * Test-injection knobs for the rogue-ledger scan. `homeDir` and `cwd`
-   * default to the runtime values resolved inside `doctor`; tests
-   * usually override both plus `fsInterface`.
-   */
-  rogueLedgerScanOptions?: Partial<RogueLedgerScanOptions>;
   /**
    * Test-injection knob for the hook-liveness check: the Codex config to
    * compare. Defaults to `~/.codex/config.toml` under the operator home.
@@ -728,7 +721,6 @@ function countDiagnostics(report: Omit<DoctorReport, "errorCount" | "warningCoun
     errorCount += opencodeCounts.errorCount;
     warningCount += opencodeCounts.warningCount;
   }
-  warningCount += report.rogueLedgerDbs.length;
   return { errorCount, warningCount };
 }
 
@@ -867,14 +859,6 @@ export async function doctor(opts: DoctorOptions = {}): Promise<DoctorReport> {
       : undefined;
   const manifestSec = manifestSection(manifest, postureWarnings);
 
-  const rogueLedgerDbs = scanForRogueLedgers({
-    homeDir: opts.rogueLedgerScanOptions?.homeDir ?? home,
-    cwd: opts.rogueLedgerScanOptions?.cwd ?? process.cwd(),
-    ...(opts.rogueLedgerScanOptions?.fsInterface !== undefined
-      ? { fsInterface: opts.rogueLedgerScanOptions.fsInterface }
-      : {}),
-  });
-
   const livenessTargets = livenessRuntimes(applyRuntime.runtime, opts.target);
   const hookLiveness =
     livenessTargets.length > 0
@@ -900,7 +884,6 @@ export async function doctor(opts: DoctorOptions = {}): Promise<DoctorReport> {
     packExpansionRuntime: packExpansionRuntimeReport(applyRuntime, lastApplyWarning),
     ...(grounding !== undefined ? { grounding } : {}),
     ...(claudeMcp !== undefined ? { claudeMcp } : {}),
-    rogueLedgerDbs,
     ...(npmGlobalBin !== undefined ? { npmGlobalBin } : {}),
   };
   if (opts.target === "codex") {

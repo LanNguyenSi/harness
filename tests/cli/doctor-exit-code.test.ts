@@ -22,21 +22,11 @@ function tempHome(): string {
   return dir;
 }
 
-// Mirrors doctor-rm-rogue-ledgers.test.ts's plantRogueLedger: seeds a
-// leftover `<parent>/~/.evidence-ledger/ledger.db` so scanForRogueLedgers
-// (and therefore deleteRogueLedgers) has an actual hit to act on.
-function plantRogueLedger(parent: string): { rogueDir: string } {
-  const rogueDir = path.join(parent, "~");
-  const dir = path.join(rogueDir, ".evidence-ledger");
-  fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(path.join(dir, "ledger.db"), "");
-  return { rogueDir };
-}
-
 // No mcp/hooks/policies declared: errorCount 0. Still carries a
 // warningCount of 1 (no memory router configured), which is exactly the
 // fixture we want for "warnings alone keep exit 0" — this is not a
 // zero-diagnostics report, it is a report with a warning and no errors.
+// The prose-exits-0 case below proves the warning through the --json path.
 function writeCleanManifest(home: string): string {
   const target = path.join(home, "harness.yaml");
   fs.writeFileSync(
@@ -87,7 +77,6 @@ describe("harness doctor — exit code wired to report.errorCount (task a07b379a
       argv: ["doctor", "--config", configPath, "--shallow"],
       stdout: (s) => { stdout += s; },
       stderr: (s) => { stderr += s; },
-      rogueLedgerScanOptions: { homeDir: home, cwd: home },
     });
     expect(code).toBe(1);
     // The prose report itself is still printed before the non-zero exit.
@@ -103,10 +92,23 @@ describe("harness doctor — exit code wired to report.errorCount (task a07b379a
       argv: ["doctor", "--config", configPath, "--shallow"],
       stdout: (s) => { stdout += s; },
       stderr: () => {},
-      rogueLedgerScanOptions: { homeDir: home, cwd: home },
     });
     expect(code).toBe(0);
     expect(stdout.length).toBeGreaterThan(0);
+    // Prove the fixture really carries a warning (same fixture, same
+    // report, read through the --json path), so this case keeps pinning
+    // "warnings alone exit 0" rather than "a report with nothing in it
+    // exits 0".
+    let jsonOut = "";
+    const jsonCode = await run({
+      argv: ["doctor", "--config", configPath, "--shallow", "--json"],
+      stdout: (s) => { jsonOut += s; },
+      stderr: () => {},
+    });
+    expect(jsonCode).toBe(0);
+    const parsed = JSON.parse(jsonOut) as { errorCount: number; warningCount: number };
+    expect(parsed.errorCount).toBe(0);
+    expect(parsed.warningCount).toBeGreaterThan(0);
   });
 
   it("--json: exits 1 when the report has errors, JSON still lands on stdout", async () => {
@@ -117,7 +119,6 @@ describe("harness doctor — exit code wired to report.errorCount (task a07b379a
       argv: ["doctor", "--config", configPath, "--shallow", "--json"],
       stdout: (s) => { stdout += s; },
       stderr: () => {},
-      rogueLedgerScanOptions: { homeDir: home, cwd: home },
     });
     expect(code).toBe(1);
     const parsed = JSON.parse(stdout) as { errorCount: number; warningCount: number };
@@ -132,49 +133,11 @@ describe("harness doctor — exit code wired to report.errorCount (task a07b379a
       argv: ["doctor", "--config", configPath, "--shallow", "--json"],
       stdout: (s) => { stdout += s; },
       stderr: () => {},
-      rogueLedgerScanOptions: { homeDir: home, cwd: home },
     });
     expect(code).toBe(0);
     const parsed = JSON.parse(stdout) as { errorCount: number; warningCount: number };
     expect(parsed.errorCount).toBe(0);
     expect(parsed.warningCount).toBeGreaterThanOrEqual(1);
-  });
-
-  it("--rm-rogue-ledgers: still exits 1 on the no-hits branch when the report has errors", async () => {
-    const home = tempHome();
-    const configPath = writeErroringManifest(home);
-    let stdout = "";
-    const code = await run({
-      argv: ["doctor", "--config", configPath, "--shallow", "--rm-rogue-ledgers", "--yes"],
-      stdout: (s) => { stdout += s; },
-      stderr: () => {},
-      rogueLedgerScanOptions: { homeDir: home, cwd: home },
-    });
-    expect(code).toBe(1);
-    // No rogue ledger was planted, so this exercises the `hits.length === 0`
-    // early-return branch (src/cli/register-inspect-group.ts), not the
-    // delete+rescan tail below.
-    expect(stdout).toContain("nothing to delete");
-  });
-
-  it("--rm-rogue-ledgers: exits 1 after an actual delete+rescan when the report also has errors", async () => {
-    const home = tempHome();
-    const configPath = writeErroringManifest(home);
-    const { rogueDir } = plantRogueLedger(home);
-    let stdout = "";
-    const code = await run({
-      argv: ["doctor", "--config", configPath, "--shallow", "--rm-rogue-ledgers", "--yes"],
-      stdout: (s) => { stdout += s; },
-      stderr: () => {},
-      rogueLedgerScanOptions: { homeDir: home, cwd: home },
-    });
-    expect(code).toBe(1);
-    // Proves this run went through the actual deletion + rescan path
-    // (src/cli/register-inspect-group.ts's failIfErrors), not the no-hits
-    // short-circuit above.
-    expect(stdout).toContain(`deleted: ${rogueDir}`);
-    expect(stdout).toContain("rogue evidence-ledger DBs remaining: 0");
-    expect(fs.existsSync(rogueDir)).toBe(false);
   });
 });
 
@@ -208,7 +171,6 @@ describe("harness doctor: hermetic spawn guard re-throw at the run() boundary (t
         argv: ["doctor", "--config", configPath],
         stdout: (s) => { stdout += s; },
         stderr: (s) => { stderr += s; },
-        rogueLedgerScanOptions: { homeDir: home, cwd: home },
       });
     } catch (err) {
       caught = err;
