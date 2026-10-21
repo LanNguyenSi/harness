@@ -38,7 +38,8 @@ and harness reads no ledger rows. As of 1.0.0 the loop ships with one
 caveat: the policy engine was removed, so the Enforce step no longer
 consults the Record step (the shipped branch-protection gate asks git,
 not the ledger), and `explain --trace` left Observe with it. The ledger
-itself is real: grounding-mcp still writes rows, and old `policy_decision` history is read with the evidence-ledger CLI.
+itself is real: grounding-mcp still writes rows, and old
+`policy_decision` history is read with the evidence-ledger CLI.
 
 ## Architecture overview
 
