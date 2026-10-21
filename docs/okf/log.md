@@ -2,6 +2,8 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-10-21T11:10:40Z, task b5321c53: re-verified `codex-adapter-parity-gaps.md` against the changed `docs/CLI.md` (only the `--project` name validation note changed: it no longer names the removed git-context module or a cwd-derived name) and re-stamped it. The doc's Codex adapter content lists `docs/CLI.md` as a source but does not cite that note.
+
 - 2026-10-21T11:10:00Z, task b5321c53: re-verified `evidence-ledger-trust-boundary.md` after the removal of `src/runtime/git-context.ts` and re-stamped it. The shared-reader paragraph no longer gives `packed-refs` a 32 MiB bound or lists git-context as an importer of `read-regular-file.ts` (no source reads a packed-refs file or any git file's content by path; only the Claude registry reader and the manifest loader import the reader).
 
 - 2026-10-21T11:01:12Z, task 2f4fbd61: re-verified `codex-adapter-parity-gaps.md` against the changed `src/cli/doctor/format.ts` and re-stamped it. Only the import of `sanitizeProjectForDisplay` changed (now from `src/io/project-name.ts`); `formatPackExpansionRuntimeSection`, which the doc cites, is unchanged, and no citation moved. Timestamp-only re-stamp.
