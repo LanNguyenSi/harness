@@ -1,23 +1,24 @@
+import { isPlainObject } from "../schema/removed-keys.js";
+
+/**
+ * The merge engine's domain error: a shape it cannot reconcile. `path`
+ * locates the failure inside the merged document; the empty path (a
+ * whole-document failure, e.g. a layer root that is not a mapping) keeps
+ * the message exactly as given, so the CLI can surface it verbatim.
+ */
 export class OverrideMergeError extends Error {
-  constructor(message: string, public readonly path: string[]) {
-    super(`override merge failed at ${formatPath(path)}: ${message}`);
+  constructor(message: string, public readonly path: string[] = []) {
+    super(path.length === 0 ? message : `override merge failed at ${formatPath(path)}: ${message}`);
     this.name = "OverrideMergeError";
   }
 }
 
 function formatPath(path: string[]): string {
-  return path.length === 0 ? "<root>" : path.join(".");
+  return path.join(".");
 }
 
 const TOMBSTONE: unique symbol = Symbol("override-tombstone");
 type Tombstone = typeof TOMBSTONE;
-
-function isPlainObject(v: unknown): v is Record<string, unknown> {
-  if (v === null || typeof v !== "object") return false;
-  if (Array.isArray(v)) return false;
-  const proto = Object.getPrototypeOf(v);
-  return proto === Object.prototype || proto === null;
-}
 
 function isNameKeyedEntry(v: unknown): v is Record<string, unknown> & { name: string } {
   return isPlainObject(v) && typeof v.name === "string" && v.name.length > 0;

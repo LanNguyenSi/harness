@@ -5,17 +5,10 @@ import * as path from "node:path";
 import { execFileSync, spawnSync } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-// The O_RDONLY/O_WRONLY/O_RDWR access-mode mask. Node's runtime
-// `fs.constants` carries `O_ACCMODE` (0o3) where the platform exports it,
-// but @types/node's `constants` interface does not declare the property, so
-// the two flag-mask assertions below (`flags & O_ACCMODE === O_RDONLY`) fail
-// `npm run typecheck:tests` on the direct `fs.constants.O_ACCMODE` access.
-// Read the SAME property through this narrow cast so the runtime expression
-// is byte-for-byte what it was: where the platform exports it the value is
-// the real mask; where it does not (e.g. node on macOS) it stays `undefined`
-// and the `&` coerces it to 0 exactly as before, leaving the assertion's
-// outcome unchanged. Only the static type is supplied here.
-const O_ACCMODE = (fs.constants as unknown as { O_ACCMODE: number }).O_ACCMODE;
+// The access-mode mask is 3 (0o3) on Linux and macOS; `fs.constants.O_ACCMODE`
+// is undefined on macOS, which would make `flags & O_ACCMODE` coerce to 0 and
+// the two assertions below vacuous, so use the literal mask.
+const O_ACCMODE = 3;
 
 // `vi.spyOn` cannot target `fs.readFileSync` directly: Node's builtin
 // module namespace is non-configurable in ESM ("Cannot redefine

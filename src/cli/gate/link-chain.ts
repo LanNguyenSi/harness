@@ -69,6 +69,13 @@ export function walkLinkChain(start: string): LinkChain {
       // The kernel's own lookup first: the native `realpath` of macOS walks
       // `file/..` back to the file's directory, where the kernel answers ENOTDIR.
       fs.statSync(path.dirname(raw));
+      if (raw.endsWith(path.sep)) {
+        // A trailing separator asks the kernel for a directory. `basename`
+        // below would drop it and walk the same-named file as a target,
+        // while the path as spelled answers ENOTDIR: stat the whole path so
+        // that lands as an unreadable end, like any other unreadable link.
+        fs.statSync(raw);
+      }
       next = path.join(fs.realpathSync.native(path.dirname(raw)), path.basename(raw));
     } catch (err) {
       chain.push(raw);

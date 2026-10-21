@@ -298,8 +298,17 @@ export function remapDiagnosticPath(path: string, maps: StrippedIndexMaps | unde
   return `policy_packs${m[1] !== undefined ? `[${mapped}]` : `.${mapped}`}${path.slice(m[0].length)}`;
 }
 
-function isPlainObject(v: unknown): v is Record<string, unknown> {
-  return typeof v === "object" && v !== null && !Array.isArray(v);
+/**
+ * A plain `{...}` mapping: not null, not an array, and with `Object.prototype`
+ * or no prototype at all. The one shared copy (the merge engine and the
+ * layer-root check were copies of this); YAML-parsed documents only ever
+ * carry such objects, arrays, and scalars, so the prototype check only
+ * excludes exotic values like a YAML timestamp's `Date`.
+ */
+export function isPlainObject(v: unknown): v is Record<string, unknown> {
+  if (v === null || typeof v !== "object" || Array.isArray(v)) return false;
+  const proto = Object.getPrototypeOf(v);
+  return proto === Object.prototype || proto === null;
 }
 
 /**

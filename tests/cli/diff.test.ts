@@ -412,6 +412,32 @@ tools:
     }
   });
 
+  it("names the layer file when a ref-side override layer root is not a mapping", () => {
+    const repo = newRepo();
+    writeAt(repo, "harness.yaml", plainBase);
+    writeAt(repo, "machines/h.harness.overrides.yaml", "42\n");
+    gitCommit(repo, "base + scalar layer");
+    try {
+      diff({
+        configPath: path.join(repo, "harness.yaml"),
+        since: "master",
+        homeDir: repo,
+        discriminator: DISCRIMINATOR,
+      });
+      expect.unreachable("diff should have thrown");
+    } catch (err) {
+      expect(err).toBeInstanceOf(HarnessExitError);
+      const e = err as HarnessExitError;
+      expect(e.exitCode).toBe(66);
+      expect(e.message).toContain('override merge at git ref "master"');
+      expect(e.message).toContain("must be a mapping");
+      expect(e.message).toContain("is a number");
+      // The ref-side label carries the file path, so the error names the
+      // file, not the bare words "override layer".
+      expect(e.message).toContain(path.join(repo, "machines", "h.harness.overrides.yaml"));
+    }
+  });
+
   it("does not fail the ref-side override merge on a removed key whose layer shape the merge cannot reconcile (task 10e2ff0a)", () => {
     const repo = newRepo();
     // A named policies list in the base and a layer that mixes named and

@@ -1658,6 +1658,39 @@ describe("interactive wizard — Custom path (task 31d2fbb5)", () => {
     expect(fs.existsSync(path.join(tmpHome, ".harness", "harness.yaml"))).toBe(false);
   });
 
+  it("passes the MCP picks to the dependency resolver: a missing MCP binary is surfaced", async () => {
+    fs.mkdirSync(path.join(tmpHome, ".claude"));
+    // An EMPTY PATH dir: every binary reads as missing, so the dep check
+    // for the picked agent-tasks MCP must surface its bridge on the
+    // wizard's dependency list (guards the { packs, mcps } hand-off at
+    // src/cli/init/interactive.ts:1616 — dropping mcps there empties the
+    // list and this test fails).
+    const emptyDepsPath = makeTmpRoot("harness-wizard-nodeps-");
+    const cap = captureStreams();
+    try {
+      const result = await runInteractive({
+        homeDir: tmpHome,
+        dependencyPathEnv: emptyDepsPath,
+        prompts: mockPrompts({
+          select: ["custom"],
+          checkbox: [[], ["agent-tasks"]],
+          confirm: [false], // decline the npm i -g offer; no install spawns
+        }),
+        stdout: cap.out,
+        stderr: cap.err,
+      });
+      expect(result.aborted).toBe(true);
+      expect(result.profile).toBe("custom");
+      expect(cap.stderr()).toContain('Profile "custom" depends on these binaries:');
+      expect(cap.stderr()).toContain("agent-tasks-mcp-bridge");
+      expect(cap.stderr()).toContain("@agent-tasks/mcp-bridge");
+      expect(cap.stderr()).toContain("Aborted: dependencies missing and install declined.");
+      expect(fs.existsSync(path.join(tmpHome, ".harness", "harness.yaml"))).toBe(false);
+    } finally {
+      fs.rmSync(emptyDepsPath, { recursive: true, force: true });
+    }
+  });
+
   it("composes a minimal-pick manifest that harness validate accepts (just the branch-protection pack)", async () => {
     fs.mkdirSync(path.join(tmpHome, ".claude"));
     const cap = captureStreams();

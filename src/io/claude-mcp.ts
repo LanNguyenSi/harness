@@ -428,7 +428,7 @@ export async function getMcpServer(name: string, opts: ClaudeMcpCallOptions = {}
   return { status: "not-found", raw: r.stderr.trim(), code: r.code };
 }
 
-export type ClaudeMcpConnectionStatus = "connected" | "failed" | "needs-authentication" | "unknown";
+export type ClaudeMcpConnectionStatus = "connected" | "failed" | "needs-authentication";
 
 export interface ClaudeMcpListEntry {
   name: string;
@@ -438,17 +438,20 @@ export interface ClaudeMcpListEntry {
   statusText: string;
 }
 
-function markerToStatus(marker: string): ClaudeMcpConnectionStatus {
-  switch (marker) {
-    case "✔":
-      return "connected";
-    case "✘":
-      return "failed";
-    case "!":
-      return "needs-authentication";
-    default:
-      return "unknown";
-  }
+// The marker glyphs `claude mcp list` prints, each mapped to its status.
+// This map is the single source of the marker set: LIST_LINE_RE below is
+// built from its keys, so no other glyph can reach `markerToStatus` and no
+// fallback status is needed.
+const MARKER_STATUS = {
+  "✔": "connected",
+  "✘": "failed",
+  "!": "needs-authentication",
+} as const;
+
+type ClaudeMcpMarker = keyof typeof MARKER_STATUS;
+
+function markerToStatus(marker: ClaudeMcpMarker): ClaudeMcpConnectionStatus {
+  return MARKER_STATUS[marker];
 }
 
 // `<name>: <command> <args...> - <marker> <statusText>`. Greedy `.+` for
@@ -457,7 +460,7 @@ function markerToStatus(marker: string): ClaudeMcpConnectionStatus {
 // `https://...`) may itself contain " - ". The name segment stops at the
 // first ": " (not just ":") so URLs like "https://..." — colon with no
 // following space — never get mistaken for the name/command boundary.
-const LIST_LINE_RE = /^(.+?): (.+) - (✔|✘|!) (.+)$/;
+const LIST_LINE_RE = new RegExp(`^(.+?): (.+) - (${Object.keys(MARKER_STATUS).join("|")}) (.+)$`);
 
 /**
  * Parse `claude mcp list` stdout. Lines that don't match the expected
@@ -480,7 +483,9 @@ export function parseClaudeMcpListOutput(stdout: string): ClaudeMcpListEntry[] {
     if (!m) continue;
     const name = (m[1] ?? "").trim();
     const commandLine = (m[2] ?? "").trim();
-    const marker = m[3] ?? "";
+    // The marker group of LIST_LINE_RE is built from MARKER_STATUS' keys,
+    // so a matched line always carries one of them.
+    const marker = m[3] as ClaudeMcpMarker;
     const statusText = (m[4] ?? "").trim();
     const tokens = commandLine.split(/\s+/).filter((t) => t.length > 0);
     entries.push({

@@ -51,6 +51,28 @@ describe("walkLinkChain: why the walk stops", () => {
       end: "unreadable",
     });
   });
+
+  it("treats a trailing separator as requiring a directory: a same-named file ends unreadable", () => {
+    const file = path.join(tmp, "plain");
+    fs.writeFileSync(file, "x");
+    const link = path.join(tmp, "slash.json");
+    fs.symlinkSync("plain/", link);
+    expect(() => fs.readFileSync(link)).toThrow(/ENOTDIR/);
+    // The text as written (separator kept), not the file `basename` would
+    // name after dropping it.
+    expect(walkLinkChain(link)).toEqual({
+      chain: [link, `${file}${path.sep}`],
+      end: "unreadable",
+    });
+  });
+
+  it("walks a trailing separator over a real directory to that directory", () => {
+    const dir = path.join(tmp, "d");
+    fs.mkdirSync(dir);
+    const link = path.join(tmp, "dlink");
+    fs.symlinkSync("d/", link);
+    expect(walkLinkChain(link)).toEqual({ chain: [link, dir], end: "target" });
+  });
 });
 
 describe("walkLinkChain: where a hop leads", () => {
