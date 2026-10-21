@@ -3,7 +3,7 @@ type: runbook
 title: "Kill switch: harness gate disable / enable"
 description: "harness's shipped operator kill switch: `harness gate disable` / `harness gate enable` edit the live runtime config with a reversible snapshot, `~/.claude/settings.json` for Claude Code (matching hook groups are removed) and, with `--runtime codex`, the harness-managed hook block of `~/.codex/config.toml` (a matching unit is neutralised in place so every other hook keeps its position and its trust); when to use it, exact flags, what is written, how restore works, hooks without a matcher, and the recovery recipes."
 tags: [runbook, gate-disable, kill-switch, operator]
-timestamp: 2026-10-21T13:02:22Z
+timestamp: 2026-10-21T13:28:46Z
 sources:
   - src/cli/gate/disable.ts
   - src/cli/gate/enable.ts
