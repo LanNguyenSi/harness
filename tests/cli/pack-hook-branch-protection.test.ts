@@ -1220,6 +1220,9 @@ describe.skipIf(!GIT_AVAILABLE)("branch-protection hook: a patch with thousands 
 // `new Set(iterable)` or a `Set.prototype.add`) and every resolution step of
 // the path walks (the bound is consulted once per step) is counted, for 3000
 // and for 6000 header lines, and the count must grow (nearly) linearly.
+// Scope: this pins Set-based dedupe and the walk-step count, not complexity in
+// general. A quadratic that bypasses Set (an indexOf or includes scan over a
+// growing array) adds no counted work and is not caught here.
 // The counters are installed for the measured run only: the global Set is
 // replaced by a counting subclass (a subclass, so `instanceof Set` and the
 // Set internal methods keep working for everything else running meanwhile)
@@ -1258,15 +1261,18 @@ describe("branch-protection hook: patch target resolution counts work, not time"
       vi.stubGlobal("Set", CountingSet);
       const run = await runHook(workEvent(dir, headers), { gitReader: reader, now: () => (steps += 1), gitDeadlineMs: 10_000_000 });
       expect(run.blocked, run.diagnostic).toBe(false);
+      // Floor: the resolution puts at least one element per header through a
+      // Set. A refactor away from Set fails here instead of leaving the ratio
+      // check to pass on the step count alone.
+      expect(setAdds, `${setAdds} Set insertions for ${headers} headers`).toBeGreaterThanOrEqual(headers);
       const counted = setAdds + steps;
-      expect(counted).toBeGreaterThan(0);
       return counted;
     } finally {
       vi.unstubAllGlobals();
     }
   };
 
-  it("target resolution work is counted: 6000 header lines cost at most 2.2x the work of 3000", async () => {
+  it("Set-based dedupe and resolution steps are counted: 6000 header lines cost at most 2.2x the work of 3000", async () => {
     const dir = tmpDir("harness-bp-work-");
     const small = await measureWork(dir, 3000);
     const large = await measureWork(dir, 6000);
