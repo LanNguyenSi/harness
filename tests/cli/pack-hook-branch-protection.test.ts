@@ -1212,6 +1212,74 @@ describe.skipIf(!GIT_AVAILABLE)("branch-protection hook: a patch with thousands 
   });
 });
 
+// Timing bounds are sanity checks only: a moderate quadratic (a per-header
+// Set built over the prefix of the header list) stays inside the ratio bound
+// above on an idle machine and is invisible to any timing bound a loaded one
+// tolerates. This describe counts work instead: while the hook resolves the
+// targets of a patch in process, every element that enters a Set (through a
+// `new Set(iterable)` or a `Set.prototype.add`) and every resolution step of
+// the path walks (the bound is consulted once per step) is counted, for 3000
+// and for 6000 header lines, and the count must grow (nearly) linearly.
+// The counters are installed for the measured run only: the global Set is
+// replaced by a counting subclass (a subclass, so `instanceof Set` and the
+// Set internal methods keep working for everything else running meanwhile)
+// and the hook's injected clock counts the walk steps; both are restored in
+// a finally. The event carries the patch text in `tool_input.input` (read by
+// the as-written judgment, so its per-header dedupe and directory walks run
+// per header) and in `raw_input.command` (a second copy found by the
+// physical judgment).
+describe("branch-protection hook: patch target resolution counts work, not time", () => {
+  const workEvent = (dir: string, headers: number): Record<string, unknown> => {
+    let deep = dir;
+    for (let i = 0; i < 20; i += 1) deep = path.join(deep, `d${i}`);
+    fs.mkdirSync(deep, { recursive: true });
+    const rel = path.relative(dir, deep);
+    const body = patchText(Array.from({ length: headers }, (_, i) => `*** Update File: ${rel}/f${i}.ts`));
+    return { tool_name: "apply_patch", cwd: dir, tool_input: { input: body }, raw_input: { command: body } };
+  };
+
+  const measureWork = async (dir: string, headers: number): Promise<number> => {
+    let setAdds = 0;
+    // No constructor of its own: the implicit one forwards the iterable to
+    // the Set constructor, which dispatches every element through `add`.
+    class CountingSet<T> extends Set<T> {
+      override add(value: T): this {
+        setAdds += 1;
+        return super.add(value);
+      }
+    }
+    // The resolution steps are counted through the hook's injected clock:
+    // the bound is consulted once per step of the two walks (a path, a
+    // component, a symlink hop), so the readings are the step count. The
+    // bound is lifted to a tick count no measured run can reach.
+    let steps = 0;
+    const reader = vi.fn<GitHeadReader>(async () => ({ kind: "exited", code: 0, stdout: "refs/heads/feat/x\n", stderr: "" }));
+    try {
+      vi.stubGlobal("Set", CountingSet);
+      const run = await runHook(workEvent(dir, headers), { gitReader: reader, now: () => (steps += 1), gitDeadlineMs: 10_000_000 });
+      expect(run.blocked, run.diagnostic).toBe(false);
+      const counted = setAdds + steps;
+      expect(counted).toBeGreaterThan(0);
+      return counted;
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  };
+
+  it("target resolution work is counted: 6000 header lines cost at most 2.2x the work of 3000", async () => {
+    const dir = tmpDir("harness-bp-work-");
+    const small = await measureWork(dir, 3000);
+    const large = await measureWork(dir, 6000);
+    // The linear resolution costs a constant amount of work per header, so
+    // the ratio of the counts is below 2 plus a constant overhead term
+    // (measured on the untouched source: about 2.0). The per-header prefix
+    // Set dedupe (about 700 ms at 6000 headers, inside every timing bound
+    // above) puts n^2/2 elements through Set and pushes the ratio to about
+    // 4 (measured under the mutant: about 3.9), on any machine at any load.
+    expect(large, `counted work: ${large} at 6000 headers, ${small} at 3000`).toBeLessThanOrEqual(small * 2.2);
+  });
+});
+
 // Every reader outcome against every tool shape, in both runtimes: the
 // verdict depends on the outcome alone, never on the shape, and every error
 // refuses. `dirs` counts the directories git is asked about on an allow:
