@@ -45,6 +45,7 @@ import {
   readGitHead,
   type BranchRead,
 } from "../../src/runtime/git-branch.js";
+import { gitEntryAboveOnFilesystem, outsideRepositoryFailureReason } from "../_helpers/git-entry-above.js";
 import { parseManifest } from "../../src/schema/index.js";
 
 const GIT_AVAILABLE = spawnSync("git", ["--version"], { stdio: "ignore" }).status === 0;
@@ -997,7 +998,15 @@ describe.skipIf(!GIT_AVAILABLE)("the branch-protection gate agrees with real git
     SHA = git(TEMPLATE, "rev-parse", "HEAD");
     supported.sha256 = probe("init", "-q", "--object-format=sha256");
     supported.reftable = probe("init", "-q", "--ref-format=reftable");
-    supported["no-repository-above-tmp"] = !hasGitEntryAbove(ROOT);
+    // The outside-repository rows decide their support with the independent
+    // filesystem walk, never with the walk under test: a walk that reports a
+    // repository everywhere must turn these rows into failures, not into
+    // skips. On CI (`CI=true`) the host is expected to keep no repository
+    // above the temp directory, so finding one fails the file with the
+    // reason there instead of skipping the rows quietly.
+    const gitAboveTmp = gitEntryAboveOnFilesystem(ROOT);
+    if (gitAboveTmp && process.env.CI === "true") throw new Error(outsideRepositoryFailureReason(ROOT));
+    supported["no-repository-above-tmp"] = !gitAboveTmp;
     const probeMain = copyRepo(path.join(ROOT, "probe-main"));
     supported["relative-worktree"] =
       spawnSync("git", ["worktree", "add", "-q", "--relative-paths", "--detach", path.join(ROOT, "probe-wt")], {
