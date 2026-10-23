@@ -27,6 +27,7 @@ import {
 import {
   GIT_ABOVE_TMP_REASON,
   gitEntryAboveOnFilesystem,
+  outsideRepositoryFailureReason,
   skipIfGitEntryAbove,
 } from "../_helpers/git-entry-above.js";
 
@@ -208,6 +209,20 @@ describe("hasGitEntryAbove", () => {
     expect(hasGitEntryAbove(locked)).toBe(true);
   });
 
+  // An ENOTDIR (a path component of `dir` is a regular file, so the lstat
+  // cannot descend) is a reason to keep walking upward, not an answer: the
+  // entry cannot be there, and no `.git` above the fresh temp directory
+  // means the walk must still answer `false`.
+  it("an lstat of .git failing with ENOTDIR lets the walk continue upward to a false answer", (ctx) => {
+    const root = tmpDir("harness-gb-enotdir-");
+    skipIfGitEntryAbove(ctx, root);
+    const file = path.join(root, "file");
+    fs.writeFileSync(file, "x\n");
+    const dir = path.join(file, "sub");
+    expect(() => fs.lstatSync(path.join(dir, ".git"))).toThrow(expect.objectContaining({ code: "ENOTDIR" }));
+    expect(hasGitEntryAbove(dir)).toBe(false);
+  });
+
   // The root-termination branch of the walk, pinned directly. `root` is a
   // fresh temp directory checked by the independent filesystem walk (never
   // by the function under test), so the case runs and asserts `false`
@@ -226,8 +241,11 @@ describe("hasGitEntryAbove", () => {
         ctx.skip(`${GIT_ABOVE_TMP_REASON} (opted out with HARNESS_ALLOW_GIT_ABOVE_TMP=1)`);
       }
       throw new Error(
-        `${GIT_ABOVE_TMP_REASON}: the root-termination case needs a temp directory with no .git above it; ` +
-          `run it outside a repository${process.env.CI === "true" ? "" : " or set HARNESS_ALLOW_GIT_ABOVE_TMP=1 to skip it"}`,
+        `${outsideRepositoryFailureReason(root)}${
+          process.env.CI === "true"
+            ? ""
+            : "; off CI this case may also be skipped with HARNESS_ALLOW_GIT_ABOVE_TMP=1"
+        }`,
       );
     }
     expect(hasGitEntryAbove(root)).toBe(false);

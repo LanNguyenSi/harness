@@ -8,16 +8,21 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { PassThrough, Readable, Writable } from "node:stream";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi, type TestContext } from "vitest";
 import { buildProgram } from "../../src/cli/index.js";
 import { STDIO_DRAIN_TIMEOUT_MS } from "../../src/cli/drain-stdio.js";
 import { loadManifest } from "../../src/cli/loader.js";
 import { BLOCK_TEXT_MAX_BYTES } from "../../src/runtime/bounded-text.js";
 import { runPackHookBranchProtectionCli } from "../../src/cli/pack/hook-branch-protection.js";
 import { defaultUx } from "../../src/policy-packs/builtin/branch-protection.js";
-import { hasGitEntryAbove, readBranch, readBranchAt, readGitHead, type GitHeadAnswer, type GitHeadReader } from "../../src/runtime/git-branch.js";
+import { readBranch, readBranchAt, readGitHead, type GitHeadAnswer, type GitHeadReader } from "../../src/runtime/git-branch.js";
 import { parseManifest, type Manifest } from "../../src/schema/index.js";
 import { goldenEnvelope } from "../_helpers/branch-protection-envelope.js";
+import {
+  gitEntryAboveOnFilesystem,
+  outsideRepositoryFailureReason,
+  skipIfGitEntryAbove,
+} from "../_helpers/git-entry-above.js";
 
 const GIT_AVAILABLE = spawnSync("git", ["--version"], { stdio: "ignore" }).status === 0;
 
@@ -395,9 +400,9 @@ describe.skipIf(!GIT_AVAILABLE)("branch-protection hook: apply_patch header line
 // symlink is judged by its own directory and by the directory it leads to.
 describe.skipIf(!GIT_AVAILABLE || process.platform === "win32")("branch-protection hook: paths are judged where they physically lead, real git", () => {
   /** A directory with no `.git` entry above it, or a visible skip. */
-  const outsideDir = (ctx: { skip: (note?: string) => void }): string => {
+  const outsideDir = (ctx: TestContext): string => {
     const dir = tmpDir("harness-bp-outside-");
-    if (hasGitEntryAbove(dir)) ctx.skip(`${dir} has a .git entry above it on this host`);
+    skipIfGitEntryAbove(ctx, dir);
     return dir;
   };
   const protectedSrc = (): { repo: string; src: string } => {
@@ -516,9 +521,9 @@ describe.skipIf(!GIT_AVAILABLE || process.platform === "win32")("branch-protecti
 // `<checkout>/lnk/../f.ts`, the path names the checkout on master.
 describe.skipIf(!GIT_AVAILABLE || process.platform === "win32")("branch-protection hook: paths are judged as written too, real git", () => {
   const RUNTIMES = ["claude-code", "codex"];
-  const layout = (ctx: { skip: (note?: string) => void }, branch = "master"): string => {
+  const layout = (ctx: TestContext, branch = "master"): string => {
     const outside = tmpDir("harness-bp-outside-");
-    if (hasGitEntryAbove(outside)) ctx.skip(`${outside} has a .git entry above it on this host`);
+    skipIfGitEntryAbove(ctx, outside);
     fs.mkdirSync(path.join(outside, "sub"));
     const repo = makeRepo(branch, { commit: true });
     fs.symlinkSync(path.join(outside, "sub"), path.join(repo, "lnk"));
@@ -586,7 +591,7 @@ describe.skipIf(!GIT_AVAILABLE)("branch-protection hook: allowed outcomes, real 
 
   it("a path outside every repository is allowed without spawning git", async (ctx) => {
     const outside = tmpDir("harness-bp-outside-");
-    if (hasGitEntryAbove(outside)) ctx.skip(`${outside} has a .git entry above it on this host`);
+    skipIfGitEntryAbove(ctx, outside);
     const reader = vi.fn<GitHeadReader>(async () => ({ kind: "exited", code: 0, stdout: "refs/heads/master\n", stderr: "" }));
     const protectedCwd = makeRepo("master");
     const run = await runHook(writeEvent(protectedCwd, path.join(outside, "memory", "note.md")), {
@@ -1251,10 +1256,17 @@ describe("branch-protection hook: the decision table (injected runner)", () => {
     { name: "Bash (no target path)", event: (d) => ({ tool_name: "Bash", cwd: d, tool_input: { command: "ls" } }), dirs: 1 },
   ];
   const rows = SHAPES.flatMap((shape) => OUTCOMES.map((outcome) => ({ shape, outcome })));
-  // The outside rows need a temporary directory with no `.git` above it;
-  // on a host whose temp directory sits inside a repository they are
-  // skipped visibly.
-  const TMP_HAS_REPO_ABOVE = hasGitEntryAbove(fs.realpathSync(os.tmpdir()));
+  // The outside rows need a temporary directory with no `.git` above it,
+  // decided by the independent filesystem walk, never by the walk under
+  // test: a walk that reports a repository everywhere must turn these rows
+  // into failures, not into skips. On a host whose temp directory sits
+  // inside a repository they are skipped visibly; on CI (`CI=true`), where
+  // no repository is expected above the temp directory, finding one fails
+  // the file with the reason instead of skipping them quietly.
+  const TMP_HAS_REPO_ABOVE = gitEntryAboveOnFilesystem(fs.realpathSync(os.tmpdir()));
+  if (TMP_HAS_REPO_ABOVE && process.env.CI === "true") {
+    throw new Error(outsideRepositoryFailureReason(fs.realpathSync(os.tmpdir())));
+  }
 
   describe.each(["claude-code", "codex"])("%s", (runtime) => {
     const inside = rows.filter((r) => r.outcome.answer !== "outside");
@@ -1385,7 +1397,7 @@ describe.skipIf(!GIT_AVAILABLE || process.platform === "win32")("branch-protecti
 describe.skipIf(!GIT_AVAILABLE || process.platform === "win32" || process.getuid?.() === 0)("branch-protection hook: a directory whose .git cannot be examined", () => {
   it("a Write into a directory that cannot be searched is refused with git's own message", async (ctx) => {
     const root = tmpDir("harness-bp-locked-");
-    if (hasGitEntryAbove(root)) ctx.skip(`${root} has a .git entry above it on this host`);
+    skipIfGitEntryAbove(ctx, root);
     const locked = path.join(root, "locked");
     fs.mkdirSync(locked);
     fs.chmodSync(locked, 0o600);
@@ -1667,7 +1679,7 @@ describe("branch-protection hook: the bound in each judgment, and a failing read
 
   it.for(RUNTIMES)("%s: the bound passing while the physical paths are resolved (headers in tool_input.command, cwd outside every repository) refuses before git is asked", async (runtime, ctx) => {
     const outside = tmpDir("harness-bp-outside-");
-    if (hasGitEntryAbove(outside)) ctx.skip(`${outside} has a .git entry above it on this host`);
+    skipIfGitEntryAbove(ctx, outside);
     const target = tmpDir("harness-bp-bound-");
     fs.mkdirSync(path.join(target, ".git"));
     const reader = vi.fn<GitHeadReader>(async () => ({ kind: "exited", code: 0, stdout: "refs/heads/feat/x\n", stderr: "" }));

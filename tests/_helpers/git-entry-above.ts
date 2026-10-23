@@ -12,6 +12,12 @@
 // Like the walk under test, an `lstat` that fails for a reason other than a
 // missing path counts as present: the case cannot show anything on such a
 // host, and git itself defers in the same situation.
+//
+// The skip policies are deliberately asymmetric: the root-termination case
+// in tests/runtime/git-branch.test.ts fails loudly off CI unless
+// HARNESS_ALLOW_GIT_ABOVE_TMP=1 opts out (its whole point is pinning the
+// root branch, so it never skips quietly), while the cases that decide a
+// skip with this helper skip off CI and fail only on CI (`CI=true`).
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { TestContext } from "vitest";
