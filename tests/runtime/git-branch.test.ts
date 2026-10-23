@@ -24,6 +24,12 @@ import {
   type GitHeadAnswer,
   type PathResolution,
 } from "../../src/runtime/git-branch.js";
+import {
+  GIT_ABOVE_TMP_REASON,
+  gitEntryAboveOnFilesystem,
+  outsideRepositoryFailureReason,
+  skipIfGitEntryAbove,
+} from "../_helpers/git-entry-above.js";
 
 const GIT_AVAILABLE = spawnSync("git", ["--version"], { stdio: "ignore" }).status === 0;
 const POSIX = process.platform !== "win32";
@@ -167,7 +173,7 @@ describe("hasGitEntryAbove", () => {
     const root = tmpDir("harness-gb-presence-");
     const deep = path.join(root, "a", "b");
     fs.mkdirSync(deep, { recursive: true });
-    if (hasGitEntryAbove(root)) ctx.skip("the host keeps a repository above the temp directory");
+    skipIfGitEntryAbove(ctx, root);
     expect(hasGitEntryAbove(deep)).toBe(false);
     fs.writeFileSync(path.join(root, "a", ".git"), "gitdir: nowhere\n");
     expect(hasGitEntryAbove(deep)).toBe(true);
@@ -185,7 +191,7 @@ describe("hasGitEntryAbove", () => {
   // whether a `.git` is there, so it counts as present and git decides.
   it.skipIf(!POSIX)("an lstat of .git failing with ELOOP counts as present", (ctx) => {
     const root = tmpDir("harness-gb-eloop-");
-    if (hasGitEntryAbove(root)) ctx.skip("the host keeps a repository above the temp directory");
+    skipIfGitEntryAbove(ctx, root);
     fs.symlinkSync("loop", path.join(root, "loop"));
     const dir = path.join(root, "loop", "sub");
     expect(() => fs.lstatSync(path.join(dir, ".git"))).toThrow(expect.objectContaining({ code: "ELOOP" }));
@@ -194,13 +200,55 @@ describe("hasGitEntryAbove", () => {
 
   it.skipIf(!POSIX || process.getuid?.() === 0)("an lstat of .git failing with EACCES counts as present", (ctx) => {
     const root = tmpDir("harness-gb-eacces-");
-    if (hasGitEntryAbove(root)) ctx.skip("the host keeps a repository above the temp directory");
+    skipIfGitEntryAbove(ctx, root);
     const locked = path.join(root, "locked");
     fs.mkdirSync(locked);
     fs.chmodSync(locked, 0o600);
     cleanups.push(() => fs.chmodSync(locked, 0o755));
     expect(() => fs.lstatSync(path.join(locked, ".git"))).toThrow(expect.objectContaining({ code: "EACCES" }));
     expect(hasGitEntryAbove(locked)).toBe(true);
+  });
+
+  // An ENOTDIR (a path component of `dir` is a regular file, so the lstat
+  // cannot descend) is a reason to keep walking upward, not an answer: the
+  // entry cannot be there, and no `.git` above the fresh temp directory
+  // means the walk must still answer `false`.
+  it("an lstat of .git failing with ENOTDIR lets the walk continue upward to a false answer", (ctx) => {
+    const root = tmpDir("harness-gb-enotdir-");
+    skipIfGitEntryAbove(ctx, root);
+    const file = path.join(root, "file");
+    fs.writeFileSync(file, "x\n");
+    const dir = path.join(file, "sub");
+    expect(() => fs.lstatSync(path.join(dir, ".git"))).toThrow(expect.objectContaining({ code: "ENOTDIR" }));
+    expect(hasGitEntryAbove(dir)).toBe(false);
+  });
+
+  // The root-termination branch of the walk, pinned directly. `root` is a
+  // fresh temp directory checked by the independent filesystem walk (never
+  // by the function under test), so the case runs and asserts `false`
+  // wherever nothing named `.git` sits above the temp directory.
+  //
+  // Policy chosen: this case never skips quietly. When the host keeps a
+  // `.git` above the temp directory the assertion cannot hold there (the
+  // walk is right to answer `true`), so the test fails loudly with the
+  // reason; only a host that opts out with HARNESS_ALLOW_GIT_ABOVE_TMP=1,
+  // off CI, may skip it. On CI (`CI=true`) there is no opt-out, so the root
+  // branch is never left unpinned by a hidden skip.
+  it("returns false at a fresh directory the independent walk finds no .git above", (ctx) => {
+    const root = tmpDir("harness-gb-root-");
+    if (gitEntryAboveOnFilesystem(root)) {
+      if (process.env.CI !== "true" && process.env.HARNESS_ALLOW_GIT_ABOVE_TMP === "1") {
+        ctx.skip(`${GIT_ABOVE_TMP_REASON} (opted out with HARNESS_ALLOW_GIT_ABOVE_TMP=1)`);
+      }
+      throw new Error(
+        `${outsideRepositoryFailureReason(root)}${
+          process.env.CI === "true"
+            ? ""
+            : "; off CI this case may also be skipped with HARNESS_ALLOW_GIT_ABOVE_TMP=1"
+        }`,
+      );
+    }
+    expect(hasGitEntryAbove(root)).toBe(false);
   });
 });
 
@@ -320,7 +368,7 @@ describe("nearestExistingDirectoryAsWritten", () => {
 describe("readBranchAt", () => {
   it.skipIf(!POSIX)("walks and asks git about the directory as given, not where a symlink in it leads", async (ctx) => {
     const root = tmpDir("harness-gb-at-");
-    if (hasGitEntryAbove(root)) ctx.skip("the host keeps a repository above the temp directory");
+    skipIfGitEntryAbove(ctx, root);
     const repo = path.join(root, "repo");
     fs.mkdirSync(path.join(repo, ".git"), { recursive: true });
     fs.mkdirSync(path.join(root, "outside"));
@@ -391,7 +439,7 @@ describe("readBranch", () => {
 
   it("does not call the reader outside every repository", async (ctx) => {
     const dir = tmpDir("harness-gb-outside-");
-    if (hasGitEntryAbove(dir)) ctx.skip("the host keeps a repository above the temp directory");
+    skipIfGitEntryAbove(ctx, dir);
     let called = false;
     const r = await readBranch(dir, {
       reader: async () => {
@@ -405,7 +453,7 @@ describe("readBranch", () => {
 
   it.skipIf(!POSIX)("a directory reached through a symlink is read where the symlink leads: the walk and git see the physical directory", async (ctx) => {
     const root = tmpDir("harness-gb-physical-");
-    if (hasGitEntryAbove(root)) ctx.skip("the host keeps a repository above the temp directory");
+    skipIfGitEntryAbove(ctx, root);
     const repo = path.join(root, "repo");
     fs.mkdirSync(path.join(repo, ".git"), { recursive: true });
     fs.mkdirSync(path.join(repo, "src"));
