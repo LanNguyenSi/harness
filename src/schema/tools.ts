@@ -15,7 +15,7 @@ export const McpServerSchema = z
   .object({
     name: z.string().min(1),
     command: CommandSchema,
-    env: z.record(z.string()).optional(),
+    env: z.record(z.string(), z.string()).optional(),
     health: McpHealthSchema.optional(),
     enabled: z.boolean().default(true),
     min_version: z
@@ -63,8 +63,8 @@ export const ToolsSchema = z
   .object({
     mcp: z.array(McpServerSchema).default([]),
     cli: z.array(CliToolSchema).default([]),
-    skills: SkillsSchema.default({}),
-    builtin: BuiltinSchema.default({}),
+    skills: SkillsSchema.prefault({}),
+    builtin: BuiltinSchema.prefault({}),
   })
   .strict()
   .superRefine((t, ctx) => {
@@ -76,7 +76,7 @@ export const ToolsSchema = z
       list.entries.forEach((e, i) => {
         if (seen.has(e.name)) {
           ctx.addIssue({
-            code: z.ZodIssueCode.custom,
+            code: "custom",
             path: [list.key, i, "name"],
             message: `duplicate ${list.key} entry name: ${e.name}`,
           });

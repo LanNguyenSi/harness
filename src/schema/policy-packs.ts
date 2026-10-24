@@ -42,7 +42,7 @@ export const PolicyPacksSchema = z.array(PolicyPackSchema).superRefine((packs, c
   packs.forEach((pack, i) => {
     if (seen.has(pack.name)) {
       ctx.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         path: [i, "name"],
         message: `duplicate policy_pack name: ${pack.name}`,
       });

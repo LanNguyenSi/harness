@@ -17,9 +17,9 @@ export const SUPPORTED_MANIFEST_VERSION = 1;
 export const ManifestSchema = z
   .object({
     version: z.literal(SUPPORTED_MANIFEST_VERSION),
-    grounding: GroundingSchema.default({}),
-    tools: ToolsSchema.default({}),
-    memory: MemorySchema.default({}),
+    grounding: GroundingSchema.prefault({}),
+    tools: ToolsSchema.prefault({}),
+    memory: MemorySchema.prefault({}),
     hooks: HooksSchema.default([]),
     policy_packs: PolicyPacksSchema.default([]),
   })
@@ -30,7 +30,7 @@ export type Manifest = z.infer<typeof ManifestSchema>;
 export class ManifestParseError extends Error {
   constructor(
     message: string,
-    public readonly issues: z.ZodIssue[],
+    public readonly issues: z.core.$ZodIssue[],
   ) {
     super(message);
     this.name = "ManifestParseError";
@@ -49,7 +49,7 @@ export class ManifestParseError extends Error {
  * error type stay identical, so exit codes and callers that branch on
  * issue structure are unaffected.
  */
-function friendlyVersionIssues(issues: z.ZodIssue[], raw: unknown): z.ZodIssue[] {
+function friendlyVersionIssues(issues: z.core.$ZodIssue[], raw: unknown): z.core.$ZodIssue[] {
   const declared =
     raw !== null && typeof raw === "object" && !Array.isArray(raw)
       ? (raw as Record<string, unknown>)["version"]
@@ -100,7 +100,7 @@ export function parseManifestWithWarnings(raw: unknown): ParsedManifest {
     // operator wrote, not the one the strict parse saw.
     const issues = friendlyVersionIssues(result.error.issues, raw).map((i) => ({
       ...i,
-      path: remapIssuePath(i.path, stripped.indexMaps),
+      path: remapIssuePath(i.path as ReadonlyArray<string | number>, stripped.indexMaps),
     }));
     const summary = issues
       .map((i) => `  ${i.path.join(".") || "<root>"}: ${i.message}`)

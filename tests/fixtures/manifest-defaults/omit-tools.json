@@ -1,0 +1,101 @@
+{
+  "input": {
+    "version": 1,
+    "grounding": {
+      "session": {
+        "auto_start": false
+      },
+      "evidence_ledger": {}
+    },
+    "memory": {
+      "directories": [
+        {
+          "path": "d",
+          "scope": "user"
+        }
+      ],
+      "retention": {
+        "staleness_days": 30
+      },
+      "scopes": {
+        "default": "user",
+        "allowed": [
+          "user",
+          "project"
+        ]
+      }
+    },
+    "hooks": [
+      {
+        "name": "h",
+        "event": "PreToolUse",
+        "command": "true",
+        "blocking": false
+      }
+    ],
+    "policy_packs": [
+      {
+        "name": "branch-protection"
+      }
+    ]
+  },
+  "parsed": {
+    "version": 1,
+    "grounding": {
+      "session": {
+        "auto_start": false,
+        "id_format": "gs-{repo}-{rand:8}"
+      },
+      "evidence_ledger": {
+        "path": "~/.evidence-ledger/ledger.db"
+      }
+    },
+    "tools": {
+      "mcp": [],
+      "cli": [],
+      "skills": {
+        "enabled": [],
+        "source_dirs": []
+      },
+      "builtin": {
+        "known": []
+      }
+    },
+    "memory": {
+      "directories": [
+        {
+          "path": "d",
+          "scope": "user"
+        }
+      ],
+      "retention": {
+        "staleness_days": 30,
+        "broken_refs": "warn"
+      },
+      "scopes": {
+        "default": "user",
+        "allowed": [
+          "user",
+          "project"
+        ]
+      }
+    },
+    "hooks": [
+      {
+        "name": "h",
+        "event": "PreToolUse",
+        "command": "true",
+        "blocking": false,
+        "budget_ms": 30000
+      }
+    ],
+    "policy_packs": [
+      {
+        "name": "branch-protection",
+        "source": "builtin",
+        "enabled": true,
+        "config": {}
+      }
+    ]
+  }
+}

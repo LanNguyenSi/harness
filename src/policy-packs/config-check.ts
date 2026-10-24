@@ -31,10 +31,12 @@ export interface PolicyPackConfigIssue {
   message: string;
   /**
    * Zod issue code preserved so downstream renderers can group by
-   * kind (`invalid_enum_value`, `unrecognized_keys`, ...). Stable since
-   * zod 3.x.
+   * kind (`invalid_value` for a bad enum value, `unrecognized_keys`,
+   * ...). Zod 4 renamed the enum-value code (`invalid_enum_value` in
+   * zod 3.x); no consumer branches on a specific code, only the code
+   * string travels to the diagnostics renderer.
    */
-  code: z.ZodIssueCode;
+  code: z.core.$ZodIssue["code"];
 }
 
 /**

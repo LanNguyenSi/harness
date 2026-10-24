@@ -54,8 +54,8 @@ export const MemorySchema = z
   .object({
     directories: z.array(MemoryDirectorySchema).default([]),
     router: MemoryRouterSchema.optional(),
-    retention: MemoryRetentionSchema.default({}),
-    scopes: MemoryScopesSchema.default({}),
+    retention: MemoryRetentionSchema.prefault({}),
+    scopes: MemoryScopesSchema.prefault({}),
   })
   .strict();
 

@@ -47,7 +47,7 @@ export function resolveBuiltin(
  */
 export function resolveBuiltinConfigSchema(
   packName: string,
-): z.ZodTypeAny | null {
+): z.ZodType | null {
   if (!isBuiltinPackName(packName)) return null;
   switch (packName as BuiltinPackName) {
     case BRANCH_PROTECTION:
