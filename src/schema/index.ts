@@ -17,9 +17,9 @@ export const SUPPORTED_MANIFEST_VERSION = 1;
 export const ManifestSchema = z
   .object({
     version: z.literal(SUPPORTED_MANIFEST_VERSION),
-    grounding: GroundingSchema.default({}),
-    tools: ToolsSchema.default({}),
-    memory: MemorySchema.default({}),
+    grounding: GroundingSchema.prefault({}),
+    tools: ToolsSchema.prefault({}),
+    memory: MemorySchema.prefault({}),
     hooks: HooksSchema.default([]),
     policy_packs: PolicyPacksSchema.default([]),
   })
@@ -27,10 +27,27 @@ export const ManifestSchema = z
 
 export type Manifest = z.infer<typeof ManifestSchema>;
 
+/**
+ * One manifest-validation issue, as published by `ManifestParseError`.
+ * Harness-owned so the public type names no zod: `path` is remapped to
+ * the manifest as written (`remapIssuePath`) and holds only the keys
+ * YAML/JSON data can carry (a string key, an array index); `code` is the
+ * zod issue code passed through as an opaque string, following zod's
+ * values (which changed in zod 4) without being a stable harness
+ * contract. An item carries exactly these three fields: the zod issue's
+ * per-code extras (`origin`, `values`, `keys`, ...) are dropped at the
+ * boundary in `parseManifestWithWarnings`.
+ */
+export interface ManifestIssue {
+  path: (string | number)[];
+  message: string;
+  code: string;
+}
+
 export class ManifestParseError extends Error {
   constructor(
     message: string,
-    public readonly issues: z.ZodIssue[],
+    public readonly issues: ManifestIssue[],
   ) {
     super(message);
     this.name = "ManifestParseError";
@@ -49,7 +66,7 @@ export class ManifestParseError extends Error {
  * error type stay identical, so exit codes and callers that branch on
  * issue structure are unaffected.
  */
-function friendlyVersionIssues(issues: z.ZodIssue[], raw: unknown): z.ZodIssue[] {
+function friendlyVersionIssues(issues: z.core.$ZodIssue[], raw: unknown): z.core.$ZodIssue[] {
   const declared =
     raw !== null && typeof raw === "object" && !Array.isArray(raw)
       ? (raw as Record<string, unknown>)["version"]
@@ -98,9 +115,15 @@ export function parseManifestWithWarnings(raw: unknown): ParsedManifest {
   if (!result.success) {
     // Dropping an entry re-indexes policy_packs[]: name the index the
     // operator wrote, not the one the strict parse saw.
-    const issues = friendlyVersionIssues(result.error.issues, raw).map((i) => ({
-      ...i,
-      path: remapIssuePath(i.path, stripped.indexMaps),
+    // Project each zod issue onto the published shape: exactly
+    // path/message/code, extras dropped. The `as` is not a widening:
+    // zod declares `path: PropertyKey[]`, but manifest data arrives from
+    // YAML/JSON, where every segment is a string key or an array index,
+    // and remapIssuePath returns `(string | number)[]`.
+    const issues: ManifestIssue[] = friendlyVersionIssues(result.error.issues, raw).map((i) => ({
+      path: remapIssuePath(i.path as ReadonlyArray<string | number>, stripped.indexMaps),
+      message: i.message,
+      code: i.code,
     }));
     const summary = issues
       .map((i) => `  ${i.path.join(".") || "<root>"}: ${i.message}`)

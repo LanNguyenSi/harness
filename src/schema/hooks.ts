@@ -66,7 +66,7 @@ export const HooksSchema = z.array(HookSchema).superRefine((hooks, ctx) => {
   hooks.forEach((h, i) => {
     if (seen.has(h.name)) {
       ctx.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         path: [i, "name"],
         message: `duplicate hook name: ${h.name}`,
       });
@@ -75,7 +75,7 @@ export const HooksSchema = z.array(HookSchema).superRefine((hooks, ctx) => {
     for (const prefix of RESERVED_HOOK_NAME_PREFIXES) {
       if (h.name.startsWith(prefix)) {
         ctx.addIssue({
-          code: z.ZodIssueCode.custom,
+          code: "custom",
           path: [i, "name"],
           message:
             `hook name "${h.name}" uses reserved prefix "${prefix}" ` +

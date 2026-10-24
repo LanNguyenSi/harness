@@ -38,8 +38,8 @@ export const EvidenceLedgerSchema = z
 
 export const GroundingSchema = z
   .object({
-    session: GroundingSessionSchema.default({}),
-    evidence_ledger: EvidenceLedgerSchema.default({}),
+    session: GroundingSessionSchema.prefault({}),
+    evidence_ledger: EvidenceLedgerSchema.prefault({}),
   })
   .strict();
 
