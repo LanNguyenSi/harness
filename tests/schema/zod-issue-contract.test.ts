@@ -9,13 +9,15 @@
 // text changed in zod 4 for a few built-in checks (invalid_type,
 // invalid_enum_value -> invalid_value, ...); nothing in the CLI pins that
 // text, so only paths, codes and the custom messages are asserted here.
-import { describe, expect, it } from "vitest";
+import { describe, expect, expectTypeOf, it } from "vitest";
 import { validateBeforeWrite } from "../../src/io/validate-before-write.js";
-import { ManifestParseError, parseManifest } from "../../src/schema/index.js";
+import {
+  ManifestParseError,
+  parseManifest,
+  type ManifestIssue,
+} from "../../src/schema/index.js";
 
-function issuesOf(
-  raw: unknown,
-): Array<{ path: readonly PropertyKey[]; code: string; message: string }> {
+function issuesOf(raw: unknown): ManifestIssue[] {
   try {
     parseManifest(raw);
   } catch (err) {
@@ -216,5 +218,52 @@ describe("ManifestParseError.issues - JSON wire shape", () => {
       expect(r.errors[0]?.path).toBe("<root>");
       expect(typeof r.errors[0]?.message).toBe("string");
     }
+  });
+
+  it("err.issues items carry exactly path/message/code (zod extras dropped at the boundary)", () => {
+    // Each input produces a zod 4 issue that carries an extra field on the
+    // raw issue object (unrecognized_keys: `keys`; invalid_type: `expected`;
+    // invalid_value from the version literal: `values`); parseManifestWith-
+    // Warnings must project them onto the published { path, message, code }.
+    const inputs = [
+      { version: 1, bogus_key: true },
+      { version: 1, memory: { retention: { staleness_days: "x" } } },
+      { version: 2 },
+    ];
+    let checked = 0;
+    for (const raw of inputs) {
+      try {
+        parseManifest(raw);
+        expect.unreachable(`expected parseManifest to reject ${JSON.stringify(raw)}`);
+      } catch (err) {
+        if (!(err instanceof ManifestParseError)) throw err;
+        expect(err.issues.length).toBeGreaterThan(0);
+        for (const issue of err.issues) {
+          expect(Object.keys(issue).sort()).toEqual(["code", "message", "path"]);
+          expect(Array.isArray(issue.path)).toBe(true);
+          checked += 1;
+        }
+      }
+    }
+    expect(checked).toBe(inputs.length);
+  });
+
+  it("ManifestParseError.issues is the harness-owned ManifestIssue type (type-level)", () => {
+    let issues: ManifestIssue[] = [];
+    try {
+      parseManifest({ version: 1, bogus_key: true });
+    } catch (err) {
+      if (err instanceof ManifestParseError) issues = err.issues;
+      else throw err;
+    }
+    // Static assertions (checked by `npm run typecheck:tests`, not at
+    // runtime): the published type is harness-owned, `path` is narrowed to
+    // what remapIssuePath returns (zod 4 declares `PropertyKey[]`), and
+    // `code` is an opaque string, not a zod issue-code union.
+    expectTypeOf(issues).toEqualTypeOf<ManifestIssue[]>();
+    expectTypeOf(issues[0]!.path).toEqualTypeOf<(string | number)[]>();
+    expectTypeOf(issues[0]!.message).toEqualTypeOf<string>();
+    expectTypeOf(issues[0]!.code).toEqualTypeOf<string>();
+    expect(issues).toHaveLength(1);
   });
 });
