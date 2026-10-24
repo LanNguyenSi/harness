@@ -2,6 +2,7 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-10-24T15:34:13Z, zod 3 -> 4 migration: re-verified `manifest-validation-scope.md` (sources `src/schema/index.ts`, `src/schema/tools.ts`: section defaults now use `.prefault({})` so the parsed manifest is unchanged, the strict gate, the duplicate-name superRefine and the removed-key strip read as before, cited lines 97 and 122 unchanged), `gate-kill-switch.md` (`src/schema/policy-packs.ts`: `enabled` default unchanged, only the custom issue code is written as a string) and `codex-adapter-parity-gaps.md` (`src/policy-packs/registry.ts`: a type name only); no claim changed, timestamps re-stamped.
 - 2026-10-21T13:43:07Z, task 804007ef: re-verified `codex-adapter-parity-gaps.md` after an em-dash fix in `docs/CLI.md`'s SINK GUARD section; no claim of the doc covers it; timestamp-only re-stamp.
 
 - 2026-10-21T13:28:45Z, task 82169840 (review round 1 fix): `src/schema/removed-keys.ts` gained the per-row `silentWhen` predicate (the old default shapes `audit: { redact: [] }` and `doctor: { ignore_template_drift: [] }` are stripped silently), shifting the REMOVED_COMMANDS rows: `gate-kill-switch.md`'s pause/resume citation re-pointed from 538-539 to 568-569 (anchor kept). `manifest-validation-scope.md` re-verified against the changed removed-keys.ts (its claims concern the add/remove gates, unchanged) and `codex-adapter-parity-gaps.md` against the reworded `docs/CLI.md` sentence (no claim covers it); timestamp-only re-stamps.
