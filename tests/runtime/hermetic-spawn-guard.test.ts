@@ -33,12 +33,12 @@ describe("assertNoRealSpawnInTests", () => {
   it("the thrown error names the binary and includes the caller's hint", () => {
     process.env.VITEST = "true";
     try {
-      assertNoRealSpawnInTests("npx orchestrator-workflow init", "Inject a fake `owInitSpawn` runner.");
+      assertNoRealSpawnInTests("npm i -g", "Inject a fake `installSpawn` runner.");
       throw new Error("expected assertNoRealSpawnInTests to throw");
     } catch (err) {
       expect(err).toBeInstanceOf(HermeticSpawnViolationError);
-      expect((err as Error).message).toContain('"npx orchestrator-workflow init"');
-      expect((err as Error).message).toContain("Inject a fake `owInitSpawn` runner.");
+      expect((err as Error).message).toContain('"npm i -g"');
+      expect((err as Error).message).toContain("Inject a fake `installSpawn` runner.");
     }
   });
 

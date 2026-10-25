@@ -1,32 +1,33 @@
 // Hermetic-spawn guard (task 54739002). Small, reusable primitive for
 // "real spawn" implementations that back a test-injectable runner (e.g.
-// `owInitSpawn` in src/cli/init/interactive.ts, and the sibling
+// the `installSpawn` option of the init wizard, which defaults to
+// `realSpawn` in src/cli/init/dependencies.ts, and the sibling
 // `realClaudeMcpExec` guard planned in task 0d80e969 for
 // src/io/claude-mcp.ts).
 //
 // Incident this guards against: PR #359 found a confirm-queue in
 // tests/cli/init-interactive.test.ts that fell through the trailing
-// orchestrator-workflow co-install prompt (no queued answer + no
-// injected `owInitSpawn`), which let a test silently run a REAL `npx
-// orchestrator-workflow init` against the checkout. The bug itself is
-// already fixed (the mock confirm queue now auto-declines on an
-// exhausted queue); this guard is defense-in-depth so any FUTURE gap of
-// the same shape (a new call site, a reordered prompt, a queue typo)
-// fails the test loudly instead of quietly spawning a real process. A
-// follow-up review (same task) found the same "injectable runner + real
-// default" shape unguarded at three more call sites; a sixth
-// (`realNpmExec` in src/cli/doctor/npm-bin-path.ts) was guarded later,
-// under task 325ace29. As of that task, the guarded `real*Spawn`/
-// `real*Exec` functions are:
+// co-install offer (no queued answer + no injected spawn runner),
+// which let a test silently run a REAL `npx` command against the
+// checkout. The bug itself is already fixed (the mock confirm queue
+// throws on an exhausted queue); this guard is defense-in-depth so any
+// FUTURE gap of the same shape (a new call site, a reordered prompt, a
+// queue typo) fails the test loudly instead of quietly spawning a real
+// process. A follow-up review (same task) found the same "injectable
+// runner + real default" shape unguarded at three more call sites; a
+// sixth (`realNpmExec` in src/cli/doctor/npm-bin-path.ts) was guarded
+// later, under task 325ace29. As of that task, the guarded
+// `real*Spawn`/`real*Exec` functions are:
 //   - `realClaudeMcpExec` (src/io/claude-mcp.ts)
 //   - `realSpawn` (src/cli/init/dependencies.ts)
 //   - `realProbeSpawn` (src/cli/init/agent-tasks-auth.ts)
 //   - `realLoginSpawn` (src/cli/init/agent-tasks-auth.ts)
-//   - `realOwInitSpawn` (src/cli/init/interactive.ts)
 //   - `realNpmExec` (src/cli/doctor/npm-bin-path.ts)
 // Three more (`realNodeVersionSpawn`, `realNpmGlobalsSpawn`,
 // `realCheckStaleBase`) guarded the session-start producers and were
-// removed with them in task f3f15290.
+// removed with them in task f3f15290. `realOwInitSpawn`
+// (src/cli/init/interactive.ts), the first guarded site, backed the
+// orchestrator-workflow offer and was removed with it in task 68dca91f.
 // Naming them here (instead of just a count) is deliberate (review
 // finding F5, task T-007): a bare count silently drifts every time a new
 // call site is added and nobody remembers to bump it. See the guard call
@@ -74,11 +75,10 @@
 // caller falls back to via `opts.someSpawn ?? realSomeSpawn`), BEFORE
 // touching `child_process`. It throws instead of returning so a caller
 // whose surrounding try/catch degrades ordinary spawn failures to a
-// warning (e.g. "OW is optional, warn and continue") does not
-// accidentally swallow a hermetic violation too — callers must
-// re-throw `HermeticSpawnViolationError` past any such catch (see
-// offerOrchestratorWorkflow in src/cli/init/interactive.ts for the
-// pattern).
+// warning does not accidentally swallow a hermetic violation too;
+// callers must re-throw `HermeticSpawnViolationError` past any such
+// catch (see the claude-code wiring catch in
+// src/cli/init/interactive.ts for the pattern).
 
 /**
  * Thrown by {@link assertNoRealSpawnInTests} when a real-spawn code path
@@ -119,9 +119,9 @@ let printedAllowRealSpawnWarning = false;
  * the disabled guard is visible rather than silent.
  *
  * @param binaryLabel human-readable name of what would be spawned (e.g.
- *   `"npx orchestrator-workflow init"`), used in the error message.
+ *   `"npm i -g"`), used in the error message.
  * @param hint one line telling the test author what to do instead (e.g.
- *   "inject a fake `owInitSpawn` runner").
+ *   "inject a fake `installSpawn` runner").
  */
 export function assertNoRealSpawnInTests(binaryLabel: string, hint: string): void {
   if (process.env.HARNESS_ALLOW_REAL_SPAWN === "1") {

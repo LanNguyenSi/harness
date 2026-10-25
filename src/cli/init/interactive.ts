@@ -24,9 +24,8 @@
 import { select, confirm, input, checkbox } from "@inquirer/prompts";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { spawn } from "node:child_process";
 import { resolveHomeDir } from "../../runtime/home-dir.js";
-import { assertNoRealSpawnInTests, HermeticSpawnViolationError } from "../../runtime/hermetic-spawn-guard.js";
+import { HermeticSpawnViolationError } from "../../runtime/hermetic-spawn-guard.js";
 import { EX_FAIL, HarnessExitError } from "../exit-codes.js";
 import {
   detect,
@@ -89,16 +88,7 @@ export interface InteractivePrompts {
   checkbox: typeof checkbox;
 }
 
-/**
- * Wire targets the wizard knows about. `claude-code` and `codex` map to
- * the runtimes `harness apply` already supports via this wizard.
- * `opencode`'s runtime adapter has SHIPPED (task f34eb233 --
- * `harness apply --runtime opencode` works standalone), but wiring
- * THIS wizard up to call it is tracked separately as installer v1.1
- * task c5287b80, not built here (MED-F3, batch18 fix-round). The
- * checkbox slot stays disabled and stable in the meantime so docs and
- * screenshots do not churn when that wizard wiring lands.
- */
+/** Wire targets the wizard knows about: claude-code and codex. opencode is wired by `harness apply --runtime opencode`, not by this wizard. */
 export type WireableRuntime = RuntimeName;
 export interface RuntimeApplyOutcome {
   runtime: WireableRuntime;
@@ -153,19 +143,6 @@ export interface RunInteractiveOptions {
    * gets the real CLI spawn (see `io/claude-mcp.ts`).
    */
   mcpExec?: ClaudeMcpExec;
-  /**
-   * Repo directory the orchestrator-workflow co-install offer scaffolds
-   * into when the operator accepts. Defaults to `process.cwd()` — the repo
-   * where `harness init` was invoked. Tests inject a tmp path and assert
-   * it reaches the spawn.
-   */
-  repoDir?: string;
-  /**
-   * Override the `npx orchestrator-workflow init` runner. Mirrors
-   * `installSpawn` / `installPackagesGlobally`'s injectable spawn so tests
-   * can fake success / non-zero exit / throw without touching the network.
-   */
-  owInitSpawn?: InstallOptions["spawn"];
   /**
    * Override the `npm prefix -g` runner used by `init()`'s post-write
    * bin-resolution check (task 325ace29). Mirrors `dependencyPathEnv`:
@@ -306,21 +283,6 @@ function readPriorLastApply(o: WireRuntimeOpts): LastApplyRecord | null {
 }
 
 async function wireRuntime(o: WireRuntimeOpts): Promise<RuntimeApplyOutcome> {
-  // Defensive: only claude-code and codex have WIZARD apply paths in
-  // v1. opencode's runtime adapter has already SHIPPED (task f34eb233,
-  // `harness apply --runtime opencode` works standalone) -- wiring THIS
-  // wizard up to call it is tracked separately as installer v1.1 task
-  // c5287b80, not built here (MED-F3, batch18 fix-round). The checkbox
-  // UI keeps "opencode" disabled, so this branch is unreachable through
-  // normal use; the guard fires if the disabled flag is ever removed
-  // without wiring the wizard path, instead of silently returning a
-  // half-built RuntimeApplyOutcome.
-  if (o.runtime !== "claude-code" && o.runtime !== "codex") {
-    throw new HarnessExitError(
-      `wireRuntime: ${o.runtime} is not a wizard-wirable runtime yet (adapter shipped in f34eb233; wizard wiring tracked in c5287b80)`,
-      EX_FAIL,
-    );
-  }
   if (o.runtime === "claude-code") {
     // D-107 / Reviewer-Finding 2 (task 363a6de0): capture `.last-apply`'s
     // manifest snapshot BEFORE apply() runs. apply() re-stamps
@@ -977,167 +939,6 @@ async function ensureAgentTasksAuth(
   return { aborted: false };
 }
 
-/**
- * Default runner for the orchestrator-workflow co-install. Mirrors
- * `dependencies.ts`'s `realSpawn`: streams the child's stderr to the
- * operator's terminal and resolves a structured `{ code, stderr }`
- * instead of rejecting. A spawn `error` (e.g. `npx`/node missing on
- * PATH) resolves `code: 1` rather than throwing, so the caller's
- * graceful-failure path handles a missing toolchain the same as a
- * non-zero exit.
- *
- * Hermetic guard (task 54739002): asserts BEFORE touching
- * `child_process` that we are not running under vitest without a test
- * having injected `owInitSpawn`. See
- * src/runtime/hermetic-spawn-guard.ts for why and the env signal used.
- * The thrown `HermeticSpawnViolationError` is re-thrown past the
- * caller's try/catch (which otherwise degrades a thrown runner to a
- * warning) — see the catch in offerOrchestratorWorkflow below.
- */
-function realOwInitSpawn(cmd: string, args: string[]): Promise<{ code: number; stderr: string }> {
-  assertNoRealSpawnInTests(
-    "npx orchestrator-workflow init",
-    "Inject a fake `owInitSpawn` runner in the test instead of exercising the real spawn path.",
-  );
-  return new Promise((resolve) => {
-    const child = spawn(cmd, args, { stdio: ["ignore", "inherit", "pipe"] });
-    let stderr = "";
-    child.stderr?.on("data", (chunk: Buffer) => {
-      const text = chunk.toString("utf8");
-      stderr += text;
-      process.stderr.write(text);
-    });
-    child.on("error", (err) => {
-      resolve({ code: 1, stderr: `${stderr}\n${(err as Error).message}` });
-    });
-    child.on("exit", (code) => {
-      resolve({ code: code ?? 1, stderr });
-    });
-  });
-}
-
-interface OfferOrchestratorWorkflowOpts {
-  prompts: InteractivePrompts;
-  stderr: (s: string) => void;
-  /** Repo to scaffold orchestrator-workflow into (the `init` target dir). */
-  repoDir: string;
-  /** Test-injectable runner; defaults to a real `npx` spawn. */
-  owInitSpawn?: InstallOptions["spawn"];
-}
-
-/**
- * Offer to co-install orchestrator-workflow (OW) into the repo after the
- * harness manifest is written. orchestrator-workflow is the delivery
- * workflow these manifests are designed alongside, so a fresh harness
- * offers to scaffold it into the same repo.
- *
- * Trade-off — why `npx orchestrator-workflow init --yes <repoDir>` rather
- * than the alternatives:
- *   - vs. `npm i -g orchestrator-workflow`: OW is a one-shot scaffolder,
- *     not a binary the manifest's hooks shell out to (contrast the
- *     PROFILE_DEPENDENCIES in dependencies.ts, which MUST stay on PATH).
- *     A global install would leave a stale package the operator has to
- *     remember to update; `npx` resolves and runs the LATEST published
- *     kit on demand, so the `.ai/runs/` layout always matches the current
- *     OW conventions.
- *   - vs. requiring OW to be already present: that would make a fresh
- *     `harness init` fail or nag. OW is OPTIONAL — harness offers it but
- *     never depends on it.
- *
- * Graceful by construction: a declined offer, a missing `npx`, no
- * network, or a non-zero exit only prints a warning plus the manual
- * command. harness init still succeeds — this function never aborts and
- * never mutates the wizard's result.
- */
-async function offerOrchestratorWorkflow(o: OfferOrchestratorWorkflowOpts): Promise<void> {
-  // Shared decline/skip warning. Used both when the operator explicitly
-  // declines the offer AND when they Ctrl-C at it (graceful skip below),
-  // so the two read identically. Leads with the same `⚠` glyph and
-  // 2-space continuation indent as the failure blocks further down, so
-  // all three OW operator-facing warnings are visually consistent.
-  const printDeclineWarning = (): void => {
-    o.stderr(
-      [
-        "",
-        "⚠ harness works best alongside orchestrator-workflow (run files under .ai/runs/).",
-        "  You can add it later with `npx orchestrator-workflow init`.",
-        "",
-      ].join("\n"),
-    );
-  };
-
-  let accept: boolean;
-  try {
-    accept = await o.prompts.confirm({
-      message:
-        "Set up orchestrator-workflow in this repo too? (recommended)",
-      default: true,
-    });
-  } catch (err) {
-    // This confirm is the LAST prompt of the wizard and sits AFTER the
-    // manifest has been written + wired, inside runInteractive's shared
-    // try/catch. A Ctrl-C here must NOT propagate to that outer handler:
-    // doing so would print the FALSE "no manifest written" abort and
-    // return `{aborted:true}`, discarding the already-successful
-    // tailResult (validateClean and all). OW is OPTIONAL, so treat a
-    // Ctrl-C / ExitPromptError at this trailing offer as a graceful skip:
-    // print the same decline warning and return normally, leaving
-    // runInteractive to return the unchanged successful tailResult. A
-    // non-abort throw still propagates (genuine bug, not an operator
-    // cancel).
-    if (isAbortError(err)) {
-      printDeclineWarning();
-      return;
-    }
-    throw err;
-  }
-  if (!accept) {
-    printDeclineWarning();
-    return;
-  }
-
-  o.stderr(`\nSetting up orchestrator-workflow: npx orchestrator-workflow init --yes ${o.repoDir}\n`);
-  const run = o.owInitSpawn ?? realOwInitSpawn;
-  let result: { code: number; stderr: string };
-  try {
-    result = await run("npx", ["orchestrator-workflow", "init", "--yes", o.repoDir]);
-  } catch (err) {
-    // Hermetic guard (task 54739002): a real-spawn violation under
-    // vitest is NOT an ordinary runner failure — it must propagate past
-    // this optional-and-warn handling and fail the test hard, so it is
-    // re-thrown here before the generic degrade-to-warning below runs.
-    if (err instanceof HermeticSpawnViolationError) throw err;
-    // A thrown runner (an injected spawn that rejects, or an unexpected
-    // throw) is treated exactly like a non-zero exit: OW is optional, so
-    // we warn and continue rather than failing harness init.
-    const message = err instanceof Error ? err.message : String(err);
-    o.stderr(
-      [
-        "",
-        `⚠ Could not run orchestrator-workflow init (${message}).`,
-        "  harness init succeeded; orchestrator-workflow is optional. Add it later with:",
-        "  npx orchestrator-workflow init",
-        "",
-      ].join("\n"),
-    );
-    return;
-  }
-
-  if (result.code === 0) {
-    o.stderr("✓ orchestrator-workflow set up; its .ai/ run files are in place.\n");
-    return;
-  }
-  o.stderr(
-    [
-      "",
-      `⚠ orchestrator-workflow init exited ${result.code}.`,
-      "  harness init succeeded; orchestrator-workflow is optional. Add it later with:",
-      "  npx orchestrator-workflow init",
-      "",
-    ].join("\n"),
-  );
-}
-
 export async function runInteractive(
   opts: RunInteractiveOptions = {},
 ): Promise<InteractiveResult> {
@@ -1348,21 +1149,6 @@ export async function runInteractive(
       opts,
     });
 
-    // orchestrator-workflow co-install offer. Only the NON-custom
-    // profiles reach here — the custom path returned via
-    // runCustomProfile() above — which is intentional: this is the
-    // install-coupling for the standard profiles. It runs after the
-    // manifest write + wire-now so the harness side is fully set up
-    // before we offer its companion run-file scaffolder. OW is OPTIONAL:
-    // offerOrchestratorWorkflow() never aborts and never mutates
-    // tailResult (see its trade-off + graceful-failure doc).
-    await offerOrchestratorWorkflow({
-      prompts,
-      stderr,
-      repoDir: opts.repoDir ?? process.cwd(),
-      ...(opts.owInitSpawn ? { owInitSpawn: opts.owInitSpawn } : {}),
-    });
-
     return tailResult;
   } catch (err) {
     // Defense-in-depth (task 54739002): a hermetic-spawn-guard violation
@@ -1457,7 +1243,7 @@ async function runPostInitTail(t: PostInitTailOpts): Promise<InteractiveResult> 
     "config.toml",
   );
 
-  const wireChoices: { name: string; value: WireableRuntime; checked: boolean; disabled?: string }[] = [
+  const wireChoices: { name: string; value: WireableRuntime; checked: boolean }[] = [
     {
       name: `claude-code  → merges into ${claudeSettingsPath}`,
       value: "claude-code",
@@ -1472,21 +1258,7 @@ async function runPostInitTail(t: PostInitTailOpts): Promise<InteractiveResult> 
 
   const selectedRuntimes = (await prompts.checkbox({
     message: "Wire harness into which runtimes now? (space to toggle, return to confirm; uncheck all to skip)",
-    choices: [
-      ...wireChoices,
-      // opencode's runtime adapter has SHIPPED (task f34eb233 --
-      // `harness apply --runtime opencode` works standalone); wiring
-      // THIS checkbox up to call it is tracked separately as installer
-      // v1.1 task c5287b80, not built here (MED-F3, batch18 fix-round).
-      // Listing it disabled keeps the slot stable so the wizard copy
-      // and screenshots do not churn when that wizard wiring lands.
-      {
-        name: "opencode     (adapter shipped, f34eb233 -- wizard wiring tracked in c5287b80)",
-        value: "opencode" as WireableRuntime,
-        checked: false,
-        disabled: "(adapter shipped; wizard wiring tracked in c5287b80)",
-      },
-    ],
+    choices: wireChoices,
   })) as WireableRuntime[];
 
   if (selectedRuntimes.length === 0) {

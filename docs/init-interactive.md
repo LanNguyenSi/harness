@@ -36,7 +36,7 @@ The wizard is one of three ways to bootstrap a manifest:
 
 8. **Validate.** After the write, the wizard runs `harness validate` and reports the error / warning counts and the per-diagnostic details. A non-zero error count makes the wizard exit `1` so CI scripts notice; the manifest stays on disk for inspection.
 
-9. **Runtime wire-now multiselect.** A checkbox prompt offers `claude-code` and `codex` (and a disabled `opencode` slot: the runtime adapter has shipped, `harness apply --runtime opencode` works standalone, but wiring this wizard's checkbox up to call it is tracked separately as task `c5287b80`). Whichever runtimes the probe found configured are pre-checked, so the common single-runtime case is one Enter press. For each ticked runtime:
+9. **Runtime wire-now multiselect.** A checkbox prompt offers `claude-code` and `codex` (`opencode` is not a wizard wire target: it is wired with `harness apply --runtime opencode`, never by this wizard). Whichever runtimes the probe found configured are pre-checked, so the common single-runtime case is one Enter press. For each ticked runtime:
    - `claude-code` → `harness apply --target ~/.claude/settings.json --merge` is run; the merge summary, `wired into …`, and `verify: …` lines print to stderr.
    - `codex` → `harness apply --runtime codex --install` writes `harness.generated/codex/config.toml`, then replaces only the marked harness-managed hook block in `~/.codex/config.toml`. Operator-owned model/auth/sandbox/MCP settings stay outside that block.
    - Unchecking everything skips wiring entirely; both manual fallback commands print so the operator can wire later by hand.
@@ -85,4 +85,3 @@ harness validate            # expect: no validation findings
 ## Limitations (will land later)
 
 - **Custom-profile per-field editing.** Whole packs / MCPs are pickable; field-level edits (e.g. tweaking a pack's `protectedBranches` config, an MCP entry's env block) still require hand-editing the YAML.
-- **Wizard wire-now for `opencode`.** The runtime adapter itself has shipped (task `f34eb233`): `harness apply --runtime opencode` works standalone. Only wiring the wizard's wire-now checkbox up to call it remains, tracked as task `c5287b80`; the checkbox stays disabled until then.

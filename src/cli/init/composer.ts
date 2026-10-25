@@ -7,9 +7,7 @@
 // (branch-protection) and four MCPs (agent-tasks,
 // grounding-mcp, memory-router — wired under memory.router, NOT
 // tools.mcp[] — and codebase-oracle). The composer emits no policies and
-// no hooks. The wizard's opencode wire-now slot is shown but not wireable
-// yet: its runtime adapter shipped (agent-tasks/f34eb233), and the wizard
-// wiring for it is tracked separately (task c5287b80).
+// no hooks.
 //
 // Design: build a plain object matching the Manifest schema, then
 // serialise via the `yaml` library. The shared `init()` path
@@ -38,7 +36,7 @@ export const COMPOSABLE_PACKS: ReadonlyArray<ComposableOption<CustomPackKey>> = 
     key: "branch-protection",
     label: "branch-protection",
     description:
-      "Block Write/Edit (claude-code) or apply_patch (codex) when git names a protected branch (master, main, develop) for the target, at the first source mutation. Complements the push-time gates at the LAST step. The way forward is a feature branch (`git checkout -b <feature>`).",
+      "Block Write/Edit (claude-code) or apply_patch (codex) when git names a protected branch (master, main, develop) for the target, at the first source mutation, in the editing session. The way forward is a feature branch (`git checkout -b <feature>`).",
   },
 ];
 
