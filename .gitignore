@@ -33,9 +33,6 @@ harness.generated/
 AGENTS.md
 CLAUDE.md
 
-# Dogfood smoke run artefacts — per-run transcripts, not committed
-dogfood/*/transcript/
-
 # Hermetic-spawn-allowlist test fixture directories (task 052f9d5b review
 # G6): tests/runtime/hermetic-spawn-allowlist*.test.ts write short-lived
 # fixture dirs directly under process.cwd() (the repo root), NOT

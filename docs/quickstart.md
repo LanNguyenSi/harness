@@ -4,8 +4,8 @@ From nothing to a Claude Code or Codex session that refuses to edit
 files on a protected branch, in about five minutes (Codex runs the new
 hook only once you trust it, see step 6). This is the bare command
 path. The longer operator walkthrough, [`for-humans.md`](for-humans.md),
-still starts from the wizard and the `solo` template, so the
-[note on the other templates](#a-note-on-the-other-templates-and-packs)
+starts from the wizard and the `solo` template, so the
+[note on the other templates](#a-note-on-the-other-templates)
 applies to it.
 
 The recommended setup is one policy pack:
@@ -123,19 +123,15 @@ The protected-branch list, the agent-facing message and the operator
 controls are documented in
 [`policy-packs/branch-protection.md`](policy-packs/branch-protection.md).
 
-## A note on the other templates and packs
+## A note on the other templates
 
-1.0.0 removed the reference policies (review, dogfood and deny
-policies), the understanding gate, and every other install-time gate
-except branch-protection. The `team` and `full` templates and the
-`harness init --interactive` wizard now add only MCP servers, the
-tool inventory and memory wiring on top of the `solo` baseline; no
-template ships policies or policy-intercept hooks. If you are reading
-a pre-1.0.0 walkthrough that expects those, this is the section that
-changed.
-
-The `post-merge-gate` pack is already removed: a manifest that still
-names it loads with a warning and the entry is ignored.
+The other templates build on this baseline: `solo` ships the memory
+router and this pack, `team` adds the agent-tasks MCP server and
+grounding-mcp, and `full` is the reference manifest (grounding, the
+tool inventory, memory and the pack). The `harness init --interactive`
+wizard offers the same three profiles plus a custom composer, and none
+of the four templates writes anything beyond grounding, the tool
+inventory, memory and pack entries.
 
 ## Next
 

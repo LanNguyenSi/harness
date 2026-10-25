@@ -50,8 +50,7 @@ Thanks for your interest. harness is a declarative control plane for agent harne
    `pull_request` CI run grades the whole branch, including review-round
    commits, so give each one a task id (or a skipped type) as you make it.
 
-4. For schema or hook changes, dogfood against the `dogfood/` examples and verify the gate behaviour does not regress.
-5. Open the PR with a clear summary, motivation, and test plan.
+4. Open the PR with a clear summary, motivation, and test plan.
 
 ## Dev Setup
 
@@ -71,7 +70,7 @@ Match the surrounding code. Prefer small, reviewable diffs.
 Two files describe the example manifest surface and must stay in sync:
 
 - `docs/examples/full-manifest.yaml`: canonical schema-coverage reference. Use this file as the source of truth when adding or editing an example policy_pack entry.
-- `src/cli/init/templates.ts` (`FULL_TEMPLATE`): the runnable manifest emitted by `harness init --template full`. Intentionally different on `tools.mcp` commands, hook commands, and the optional `audit` block, but its `policy_packs` section must mirror the reference.
+- `src/cli/init/templates.ts` (`FULL_TEMPLATE`): the runnable manifest emitted by `harness init --template full`. Intentionally different on `tools.mcp` commands and hook commands, but its `policy_packs` section must mirror the reference.
 
 The parity vitest `tests/cli/init-full-template-parity.test.ts` fails the build on drift in the `policy_packs` definitions, and on either manifest shipping `policies`, `hooks`, or a removed manifest key (`policies:`, `workflows:`, `review_templates:`, `doctor:`). If you add a policy pack entry to one file, add it to the other in the same PR.
 

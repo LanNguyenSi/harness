@@ -24,10 +24,6 @@ handling), see [`for-humans.md`](for-humans.md).
    in a repository whose default branches are protected, and read the
    deny message for the exact command to run.
 
-(The policy engine, its ledger-tag gates and the `workflows:` block
-that derived review-gate policies were removed in 1.0.0; nothing
-ships `policies:` or policy-intercept hooks any more.)
-
 ## Agent-facing block messages (`ux:` block)
 
 When a gate hook denies your tool call, a pack blocker renders the
@@ -79,8 +75,8 @@ literal so the agent can still read what was expected.
 ## CLI cheat sheet
 
 Everything in **read-only** is safe to call without side effects:
-the manifest is parsed, files are read, ledger queries are read-only,
-nothing is rendered or written. Use them freely from agent tooling.
+the manifest is parsed, files are read, nothing is rendered or
+written. Use them freely from agent tooling.
 
 **Mutating** verbs change files on disk. Reserve them for explicit
 operator-driven flows.
@@ -88,7 +84,7 @@ operator-driven flows.
 | Verb | Side effect | Notes |
 |------|------|------|
 | `describe` | read-only | effective merged manifest as YAML or JSON. `--pillar` filters. |
-| `list <category>` | read-only | flat row-per-entry table. categories: mcp, cli, skills, memories, hooks (`policies` and `workflows` were removed in 1.0.0). |
+| `list <category>` | read-only | flat row-per-entry table. categories: mcp, cli, skills, memories, hooks; any other name is a usage error. |
 | `validate` | read-only | schema + asset checks. `--check-lock` adds drift detection. |
 | `doctor` | read-only | health summary. `--shallow` skips MCP probes. |
 | `diff` | read-only | manifest vs git ref or `--since-apply` last-rendered output. |
@@ -104,15 +100,11 @@ operator-driven flows.
 | `doctor --target codex` | read-only | verifies Codex adapter wiring after `apply --runtime codex`. `--json` for machine-readable output. |
 | `doctor --target opencode` | read-only | verifies opencode adapter wiring after `apply --runtime opencode` (config artefact presence/banner + every projected MCP server's command resolves on PATH). `--json` for machine-readable output. |
 
-## Reading the ledger back
-
-harness reads no evidence-ledger rows any more: the `harness audit`
-policy-decision replay (task 0231f90f) and `harness session-export`
-(task 82169840) are removed. [`docs/CLI.md`](CLI.md) says how to read
-old `policy_decision:` rows with the evidence-ledger CLI.
-
 If a teammate asks "why did this gate fire", read the hook's stderr:
-the shipped gates decide at call time and say their reason there.
+the shipped gate decides at call time and says its reason there.
+harness itself reads no evidence-ledger rows; how to read old
+`policy_decision:` rows is in the removed section of
+[`docs/CLI.md`](CLI.md).
 
 ## Things you must NOT do as an agent
 
