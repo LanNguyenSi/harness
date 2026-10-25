@@ -138,17 +138,21 @@ export interface ApplyOptions {
    */
   force?: boolean;
   /**
-   * Phase 6 #6 — `--runtime <claude-code|codex>`. Selects which adapter
-   * shape policy-pack hooks expand into and which artefacts apply
-   * writes. When omitted, `target` implies `claude-code`; otherwise the
-   * runtime recorded in `.last-apply` by the previous apply is reused
-   * (inferred from its files map for a record that predates the field);
-   * with no recorded or inferable runtime it defaults to `claude-code`
-   * (settings.json output unchanged from previous releases). When set to `codex`, settings.json is NOT
+   * Phase 6 #6: `--runtime <claude-code|codex|opencode>`. Selects which
+   * adapter shape policy-pack hooks expand into and which artefacts
+   * apply writes. When omitted, `target` implies `claude-code`;
+   * otherwise the runtime recorded in `.last-apply` by the previous
+   * apply is reused (inferred from its files map for a record that
+   * predates the field); with no recorded or inferable runtime it
+   * defaults to `claude-code` (settings.json output unchanged from
+   * previous releases). When set to `codex`, settings.json is NOT
    * written; instead `harness.generated/codex/config.toml` carries the
-   * Codex adapter configuration. The two runtimes are mutually
-   * exclusive in a single apply for v1; cross-runtime applies are a
-   * future enhancement.
+   * Codex adapter configuration. When set to `opencode`, settings.json
+   * is likewise NOT written; instead
+   * `harness.generated/opencode/opencode.json` carries the opencode
+   * adapter configuration (see `generate-opencode-config.ts`). The
+   * runtimes are mutually exclusive in a single apply for v1;
+   * cross-runtime applies are a future enhancement.
    */
   runtime?: Runtime;
   /**

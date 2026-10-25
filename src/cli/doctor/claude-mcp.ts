@@ -6,8 +6,9 @@
 // module header for the full story and the verified CLI contract.
 //
 // Runtime gating (per the task spec): doctor has no clean per-runtime
-// concept to further scope this check on — `KNOWN_DOCTOR_TARGETS` (see
-// `types.ts`) only carries `codex` today, with no `claude-code` entry.
+// concept to further scope this check on: `KNOWN_DOCTOR_TARGETS` (see
+// `types.ts`) carries `codex` and `opencode` today, with no
+// `claude-code` entry.
 // The section therefore gates purely on `tools.mcp[]` being non-empty and
 // documents the "assumes Claude Code is the effective runtime" caveat in
 // its own rendered output (see `format.ts`'s `formatClaudeMcpSection`)

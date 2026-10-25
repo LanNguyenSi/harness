@@ -3,15 +3,16 @@
 // pack's agent-facing deny-message text no longer matches the shipped
 // template for that pack.
 //
-// Motivation (dogfood 2026-07-10, harness 0.40.0): the understanding-gate
-// deny message is entirely driven by `config.ux` when the operator has
-// declared one — the init templates (Solo/Team/Full/Custom) were fixed to
-// teach a new submission form, but that fix only reaches manifests
-// generated AFTER the fix landed. An operator who installed before the fix
-// has an on-disk `config.ux` that still teaches the old wording, and
-// nothing short of a hand-edit ever updated it: `harness apply` projects
-// the manifest OUT to settings.json, it never re-seeds pack config FROM
-// the shipped template back INTO the manifest.
+// Motivation (dogfood 2026-07-10, harness 0.40.0): an enabled builtin
+// pack's agent-facing deny message is entirely driven by its
+// `config.ux` when the operator has declared one. The shipped init
+// templates (Solo/Team/Full/Custom) pick up wording fixes over time,
+// but a fix only reaches manifests generated AFTER it landed. An
+// operator who installed before the fix keeps an on-disk `config.ux`
+// that still carries the old deny text, and nothing short of a
+// hand-edit ever updated it: `harness apply` projects the manifest OUT
+// to settings.json, it never re-seeds pack config FROM the shipped
+// template back INTO the manifest.
 //
 // This check is the read side of that gap (the warning); `harness pack
 // reseed <name>` (src/cli/pack/reseed.ts) is the opt-in write side. Both

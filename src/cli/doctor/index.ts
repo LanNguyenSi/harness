@@ -67,11 +67,12 @@ export interface DoctorOptions extends LoaderOptions {
   now?: Date;
   homeOverride?: string;
   /**
-   * Phase 6 #6 follow-up: when set to `codex`, run the harness-side
-   * codex adapter health checks in addition to the default suite.
-   * Future runtimes plug in here without restructuring the surface.
-   * Restricted to targets that have a wired adapter-health module
-   * (today: `codex`); see `KNOWN_DOCTOR_TARGETS`.
+   * Phase 6 #6 follow-up: when set to `codex` or `opencode`, run the
+   * harness-side adapter health checks for that target in addition to
+   * the default suite. Future runtimes plug in here without
+   * restructuring the surface. Restricted to targets that have a wired
+   * adapter-health module (today: `codex` and `opencode`); see
+   * `KNOWN_DOCTOR_TARGETS`.
    */
   target?: DoctorTarget;
   /** Test-injection knobs forwarded to the codex target evaluator. */
@@ -727,7 +728,7 @@ function countDiagnostics(report: Omit<DoctorReport, "errorCount" | "warningCoun
 export async function doctor(opts: DoctorOptions = {}): Promise<DoctorReport> {
   // PLAIN load (task c88461c1): every
   // check this report builds from `manifest` below -- MCP/CLI/hook
-  // probes, memory, policy packs, the risk gate,
+  // probes, memory, policy packs,
   // grounding, and everything else -- reads the base/machine/explicit-`--project` manifest only,
   // an explicit `opts.project` still wins outright but NOTHING is
   // derived from cwd here, so `doctor` reports the same manifest from any

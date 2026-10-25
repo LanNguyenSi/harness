@@ -1,107 +1,62 @@
-// Batch 18 / task f34eb233 -- opencode runtime adapter config generator.
+// Opencode runtime adapter config generator: `harness apply --runtime
+// opencode` (adapter shipped in task f34eb233). Writes
+// `harness.generated/opencode/opencode.json` instead of settings.json.
+// opencode MERGES multiple config sources by precedence (global
+// `~/.config/opencode/opencode.json`, `$OPENCODE_CONFIG`, a project
+// `opencode.json`, ...), and every one of those slots is operator-owned
+// or environment-selected, so this generator deliberately writes no
+// operator config: wiring the artefact in is an operator action (point
+// `$OPENCODE_CONFIG` at the generated file, or copy its `mcp` block
+// out). Those merge semantics drive the projection rules below.
 //
-// ADR-style adapter-mapping notes (verified 2026-08-18 against the
-// published opencode JSON Schema at https://opencode.ai/config.json, the
-// docs at https://opencode.ai/docs/config/ and https://opencode.ai/docs/plugins/,
-// and the real ~/.config/opencode/opencode.json + opencode.jsonc this
-// exploration ran against as a read-only reference; not modified by this
-// generator or by `harness apply`):
+// Projected: `$schema` (the published opencode config schema URL) and
+// `mcp`, built from `manifest.tools.mcp[]` via generate-settings.ts's
+// `buildDesiredMcpServers` (the single choke point the Claude Code and
+// Codex projections share, covering the grounding-mcp env projection
+// and the literal-tilde warning) and reshaped into opencode's native
+// `{type: "local", command, environment}` entries.
 //
-// Config location: opencode reads config from, in merge/precedence order
-// (later sources win, but every source is MERGED, not replaced):
-//   1. remote config from a `.well-known/opencode` endpoint
-//   2. global config: `~/.config/opencode/opencode.json`
-//   3. custom config: `$OPENCODE_CONFIG` (a path)
-//   4. project config: `opencode.json` in the project root
-//   5. `.opencode/` directories (agents, commands, plugins)
-//   6. inline config: `$OPENCODE_CONFIG_CONTENT`
-//   7. OS-managed config (macOS `/Library/Application Support/opencode/`,
-//      Linux `/etc/opencode/`, Windows `%ProgramData%\opencode`)
-// Every one of those slots is either operator-owned or environment/OS
-// selected; opencode does not auto-discover an extra "drop a file here"
-// directory the way a plugin/pack system might. That is exactly why this
-// generator does not attempt to install itself into any of them -- see
-// "What we deliberately do NOT do" below.
+// enabled:false -> a `tools.mcp[]` entry declared `enabled: false` is
+// emitted as a bare `{"enabled": false}` marker, NOT omitted: because
+// opencode merges config sources, an omitted key would not override an
+// active declaration for the same server name in another merged source
+// (e.g. the operator's own `~/.config/opencode/opencode.json`), while
+// the explicit marker makes the disablement actually win once merged.
 //
-// mcp -> PROJECTED. opencode's config.json has a native `mcp` block
-// ($defs.McpLocalConfig in the published schema: `{ type: "local",
-// command: string[], cwd?, environment?: Record<string,string>,
-// enabled?, timeout? }`). We reuse generate-settings.ts's
-// `buildDesiredMcpServers` (Claude Code's `{command, args, env}` shape,
-// already covering the grounding-mcp EVIDENCE_LEDGER_DB projection and
-// the literal-tilde env-value warning) and reshape the
-// result into opencode's `{type: "local", command: [...], environment}`
-// instead of hand-rolling a third copy of that logic that could drift
-// from the other two runtimes.
-//
-// enabled:false -> projected as a bare `{"enabled": false}` marker, NOT
-// omitted (LOW-F4, batch18 fix-round, task f34eb233 review; the
-// reviewer verified live against opencode 1.18.18 that a bare
-// `{"enabled": false}` entry -- no `type`/`command` -- is accepted).
-// `buildMcpServers` drops disabled entries entirely, which is fine for
-// Claude Code's settings.json (the only mcpServers source Claude Code
-// reads, so a dropped entry is equivalent to a disabled one) but wrong
-// for opencode: per the "Config location" list above, opencode MERGES
-// multiple config sources, so a server name this generator's output
-// simply omits does NOT override an `enabled: true` (or default-
-// enabled) declaration for the SAME name in another merged source
-// (e.g. the operator's own ~/.config/opencode/opencode.json) -- the
-// operator's intent to disable that server would silently not take
-// effect. Emitting the explicit marker instead makes the disablement
-// actually win once merged.
-//
-// hooks -> NOT PROJECTED (documented no-op, not a bug). opencode.json's
-// schema has NO declarative hook/event field of any kind (confirmed:
-// absent from https://opencode.ai/config.json). opencode's only
-// extensibility surface for tool-call interception is the JS/TS
-// `plugin` array (`@opencode-ai/plugin`; its event set includes
-// `tool.execute.before` / `tool.execute.after`, `session.*`,
-// `permission.asked`, ...) -- a code-authoring surface, not a
-// config-declared shell-command list like Claude Code's settings.json
-// `hooks` or Codex's `[[hooks.*]]` TOML. Building a harness -> opencode
-// plugin bridge that would let manifest hooks actually intercept tool
-// calls is explicitly out of this task's scope (opencode policy
-// enforcement / hook interception). So `manifest.hooks[]` and the
-// `memory.router` UserPromptSubmit-equivalent projection
-// (`generate-settings.ts#buildMemoryRouterHook`) are both left
-// unprojected here; a warning says so instead of silently dropping them.
-//
-// permission -> NOT PROJECTED (v1; documented follow-up). opencode does
-// have a native `permission` block (per-tool `ask`/`allow`/`deny`, with
-// a pattern-keyed object as an escape hatch) that is a genuine
-// PreToolUse-blocking equivalent -- but its shape (tool key -> pattern
-// -> action) is structurally inverted from the
-// `permissions.{allow,ask,deny}: string[]` pattern-DSL of Claude Code's
-// settings.json, and mapping one into the other is real, untested-by-this-task translation
-// work. `generate-codex-config.ts`'s header deferred the analogous
-// Codex sandbox-profile mapping for the same "keep v1 small" reason;
-// this adapter follows that precedent instead of inventing a rushed
-// pattern translator. No builtin pack contributes permissions, so there
-// is nothing to drop silently.
+// NOT projected (a warning is printed for each):
+//   - hooks: `manifest.hooks[]` and the `memory.router`
+//     UserPromptSubmit-equivalent projection
+//     (`generate-settings.ts#buildMemoryRouterHook`). opencode.json has
+//     no declarative hook/event field; its only tool-call interception
+//     surface is the JS/TS `plugin` array (a code-authoring surface),
+//     and a harness -> opencode plugin bridge is out of scope.
+//   - permission: opencode's native `permission` block (per-tool
+//     `ask`/`allow`/`deny`) is a genuine PreToolUse-blocking
+//     equivalent, but its tool -> pattern -> action shape is
+//     structurally inverted from the `permissions.{allow,ask,deny}`
+//     pattern DSL of Claude Code's settings.json, and mapping one into
+//     the other is real, untested work. `generate-codex-config.ts`'s
+//     header deferred the analogous Codex sandbox-profile mapping for
+//     the same "keep v1 small" reason; this adapter follows that
+//     precedent. No builtin pack contributes permissions, so nothing is
+//     dropped silently.
 //
 // Stable-output rules (load-bearing for byte-equivalent regeneration on
-// a no-op apply):
-//   - `mcp` server keys are in the order `buildMcpServers` already
-//     guarantees: ascending lexical by name.
-//   - No timestamps, hostnames, or other run-specific data.
+// a no-op apply): `mcp` server keys are ascending lexical by name, and
+// no timestamps, hostnames, or other run-specific data are emitted.
 //
-// What we deliberately do NOT do:
-//   - Merge into, or otherwise write, any operator-owned opencode config
-//     file (`~/.config/opencode/opencode.json`, a project `opencode.json`,
-//     or anything `$OPENCODE_CONFIG` points at). Unlike Codex's
-//     `--install` (a marked-block splice into `~/.codex/config.toml`),
-//     opencode already merges multiple config sources by precedence (see
-//     the location list above), and its config format is JSONC --
-//     comments and trailing commas are both allowed (the published
-//     schema sets `allowComments` / `allowTrailingCommas`), confirmed
-//     against the real machine-local `opencode.jsonc`. So wiring this
-//     artefact in is left as an operator action: point `$OPENCODE_CONFIG`
-//     at `harness.generated/opencode/opencode.json` directly, or copy the
-//     `mcp` block into an existing config. harness never touches
-//     `~/.config/opencode/` or a project `opencode.json` itself.
-//   - Map policy-pack hook commands into opencode plugin code (see
-//     "hooks" above) or opencode's `permission` block (see "permission"
-//     above).
+// What this generator deliberately does NOT do: merge into, or
+// otherwise write, any operator-owned opencode config (its format is
+// JSONC, so hand-editing or `$OPENCODE_CONFIG` wiring is always safe
+// for the operator; harness never touches `~/.config/opencode/` or a
+// project `opencode.json`), and map hook commands into plugin code or
+// `permission` entries (see "NOT projected" above).
+//
+// Header contract: the generated file's first line is
+// `OPENCODE_GENERATED_HEADER_LINE`, the banner `harness doctor --target
+// opencode` recognises a harness-generated artefact by. The emitted
+// `HEADER` block and that constant are pinned bytes: change them only
+// together with doctor's banner check and the tests that pin them.
 
 import type { Manifest } from "../../schema/index.js";
 import {
