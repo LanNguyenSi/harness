@@ -1,7 +1,7 @@
 {
   "name": "@lannguyensi/harness",
-  "version": "0.64.0",
-  "description": "Declarative control plane for agent harnesses — one YAML for grounding, tools, memory, and hooks.",
+  "version": "1.0.0",
+  "description": "Declarative control plane for agent harnesses: one YAML manifest for MCP servers, skills, memory and hooks, plus a branch-protection gate.",
   "license": "MIT",
   "homepage": "https://github.com/LanNguyenSi/harness",
   "repository": {
@@ -15,8 +15,7 @@
     "claude-code",
     "agent",
     "harness",
-    "policy",
-    "evidence-ledger",
+    "branch-protection",
     "mcp"
   ],
   "type": "module",
