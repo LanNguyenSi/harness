@@ -402,7 +402,7 @@ export async function runPackHookBranchProtectionCli(
   };
 
   // A read that timed out never received the whole event, so nothing can be
-  // judged: refuse (fail closed). This gate does not yield to a pause.
+  // judged: refuse (fail closed).
   const read = await readStdinChecked(opts.stdin ?? process.stdin);
   if (read.timedOut) {
     const reason =

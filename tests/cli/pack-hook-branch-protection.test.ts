@@ -1190,6 +1190,13 @@ describe.skipIf(!GIT_AVAILABLE)("branch-protection hook: a patch with thousands 
   // unblocked and the master row still naming the protected branch, which
   // a deadline trip would change long before any 12000 ms wall clock could
   // be reached.
+  // Each ratio row spawns the hook six times (min of 3 per size), and every
+  // run spawns git per header directory, so its wall time follows runner
+  // speed; the bound under test is the ratio, not the wall time. The
+  // default 5000 ms test timeout was hit on a slow CI runner, hence the
+  // explicit headroom.
+  const RATIO_TEST_TIMEOUT_MS = 30_000;
+
   const withinRatioBound = (elapsed: number, baseline: number): void => {
     expect(elapsed, `${elapsed} ms for 6000 headers, ${baseline} ms baseline for 3000`).toBeLessThan(baseline * 3 + 100);
   };
@@ -1201,7 +1208,7 @@ describe.skipIf(!GIT_AVAILABLE)("branch-protection hook: a patch with thousands 
     expect(run.blocked).toBe(true);
     expect(run.diagnostic).toBe(`BLOCK: branch "master" of ${repo} is protected (master, main, develop)`);
     withinRatioBound(elapsed, baseline);
-  });
+  }, RATIO_TEST_TIMEOUT_MS);
 
   it("6000 header lines into a checkout on a feature branch are resolved and judged within the half-size ratio bound (allowed)", async () => {
     const repo = makeRepo("feat/x");
@@ -1209,7 +1216,7 @@ describe.skipIf(!GIT_AVAILABLE)("branch-protection hook: a patch with thousands 
     const { run, elapsed } = await runTimedMinOf3(repo, 6000);
     expect(run.blocked, run.diagnostic).toBe(false);
     withinRatioBound(elapsed, baseline);
-  });
+  }, RATIO_TEST_TIMEOUT_MS);
 });
 
 // Timing bounds are sanity checks only: a moderate quadratic (a per-header

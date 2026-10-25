@@ -51,6 +51,8 @@ describe("init — minimal template", () => {
     const yaml = fs.readFileSync(manifestPath, "utf8");
     expect(yaml).toMatch(/^version: 1$/m);
     expect(yaml).toContain("# Bootstrapped by `harness init --template minimal`");
+    expect(yaml).toContain("#   grounding:  evidence-ledger path for grounding-mcp");
+    expect(yaml).not.toContain("claim-gate");
   });
 
   it("defaults to the minimal template when no flag is passed", async () => {

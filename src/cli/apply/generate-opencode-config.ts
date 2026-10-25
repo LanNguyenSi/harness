@@ -129,7 +129,7 @@ const HEADER = [
   "//     opencode.jsonc (opencode merges config sources by precedence;",
   "//     see https://opencode.ai/docs/config/).",
   "//",
-  "// Adapter mapping (full ADR in this generator's module header,",
+  "// Adapter mapping (rationale in this generator's module header,",
   "// src/cli/apply/generate-opencode-config.ts):",
   "//   mcp        -> projected below (opencode's native `mcp` block).",
   "//                 A manifest entry with `enabled: false` is emitted",

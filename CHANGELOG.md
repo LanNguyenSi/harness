@@ -13,6 +13,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- Generated text no longer names removed gates: the `harness init --template minimal` manifest header describes `grounding:` as the evidence-ledger path for grounding-mcp (it said claim-gate config), and the header of the generated `opencode.json` points at the generator's module header for the rationale (it called that an ADR). Comments and the `docs/examples/full-manifest.yaml` comments are worded the same way (task acb0698d).
+
 - `harness uninstall` and `harness migrate-home` describe `.understanding-gate/` as leftover state of the removed understanding gate, the `harness migrate-home` messages no longer advise regenerating `UNDERSTANDING_GATE_REPORT_DIR` (a leftover settings.json entry of it is unused and can be deleted), and the `harness init --probe` help names the Claude Code user-scope registry (`~/.claude.json`) the probe reads instead of settings.json. Inventories, moves and behavior are unchanged (task 666f9cda).
 
 - `harness apply --runtime opencode` words its hook warning around the consequence: it counts the hooks that are not projected, names them (the first three, then a count), says they do not run under opencode, and, when the branch-protection hook is among them, says edits on protected branches are NOT blocked under opencode. The `memory.router` warning is gone, since it fired on every apply whose manifest configures `memory.router` and only restated that opencode has no equivalent (task 1297978a).
