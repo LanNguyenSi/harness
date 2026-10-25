@@ -114,18 +114,18 @@ describe("generateCodexConfig", () => {
         version: 1,
         hooks: [
           {
-            name: "policy-intercept-shell",
+            name: "shell-guard",
             event: "PreToolUse",
             match: "Bash",
-            command: "harness policy intercept",
+            command: "echo shell-guard",
             blocking: "hard",
             budget_ms: 1000,
           },
           {
-            name: "policy-intercept-agent-tasks",
+            name: "mcp-guard",
             event: "PreToolUse",
             match: "mcp__agent-tasks__pull_requests_create",
-            command: "harness policy intercept",
+            command: "echo mcp-guard",
             blocking: "hard",
             budget_ms: 1000,
           },
@@ -140,28 +140,48 @@ describe("generateCodexConfig", () => {
       'matcher = "mcp__agent-tasks__pull_requests_create|mcp__agent-tasks__.pull_requests_create|mcp__agent_tasks__pull_requests_create|mcp__agent_tasks__.pull_requests_create"',
     );
     expect(content).toContain(
-      "# harness hook: policy-intercept-shell (budget_ms=1000)",
+      "# harness hook: shell-guard (budget_ms=1000)",
     );
-    // `harness policy intercept` is an ordinary command now: it is emitted
-    // verbatim, with no `--hook <name>` tag and the generic 1 s floor.
+    // An ordinary command is emitted verbatim: no `--hook <name>` tag and
+    // the generic 1 s floor.
     expect(content).toContain(
-      'hooks = [{ type = "command", command = "harness policy intercept", timeout = 1 }]',
+      'hooks = [{ type = "command", command = "echo shell-guard", timeout = 1 }]',
     );
     expect(content).not.toContain("--hook");
   });
 
-  it("emits a hook whose command is `harness policy intercept` verbatim, with the budget as its timeout", () => {
-    // The command is no longer special: a >=2000ms budget surfaces as its
-    // own seconds value and the command text carries no `--hook` tag.
+  it("keeps the hook-name comment on one line when the name carries a newline or a control byte", () => {
     const { content } = generateCodexConfig(
       parseManifest({
         version: 1,
         hooks: [
           {
-            name: "policy-intercept-shell",
+            name: "evil\n[[hooks.Stop]]\u0007x",
+            event: "PreToolUse",
+            command: "echo evil",
+            blocking: false,
+            budget_ms: 1000,
+          },
+        ],
+      }),
+    );
+    expect(content).toContain("# harness hook: evil [[hooks.Stop]] x (budget_ms=1000)");
+    expect(content).not.toMatch(/^\[\[hooks\.Stop\]\]/m);
+    expect(content).not.toContain("\u0007");
+  });
+
+  it("emits a hook whose command is `echo shell-guard` verbatim, with the budget as its timeout", () => {
+    // An ordinary command with a >=2000ms budget: the budget surfaces as
+    // its own seconds value and the command text carries no `--hook` tag.
+    const { content } = generateCodexConfig(
+      parseManifest({
+        version: 1,
+        hooks: [
+          {
+            name: "shell-guard",
             event: "PreToolUse",
             match: "Bash",
-            command: "harness policy intercept",
+            command: "echo shell-guard",
             blocking: "hard",
             budget_ms: 2000,
           },
@@ -169,53 +189,7 @@ describe("generateCodexConfig", () => {
       }),
     );
     expect(content).toContain(
-      'hooks = [{ type = "command", command = "harness policy intercept", timeout = 2 }]',
-    );
-    expect(content).not.toContain("--hook");
-  });
-
-  it("does NOT append --hook to any command", () => {
-    const { content } = generateCodexConfig(
-      parseManifest({
-        version: 1,
-        hooks: [
-          {
-            name: "memory-router-style",
-            event: "UserPromptSubmit",
-            command: "memory-router-user-prompt-submit",
-            blocking: false,
-            budget_ms: 5000,
-          },
-        ],
-      }),
-    );
-    expect(content).toContain(
-      'hooks = [{ type = "command", command = "memory-router-user-prompt-submit", timeout = 5 }]',
-    );
-    expect(content).not.toContain("--hook");
-  });
-
-  it("never appends --hook, whatever the hook name contains", () => {
-    // Hook.name is z.string().min(1); an exotic value ("space in name",
-    // "weird;name") must never reach the emitted command literal. The
-    // preceding TOML comment still names the hook.
-    const { content } = generateCodexConfig(
-      parseManifest({
-        version: 1,
-        hooks: [
-          {
-            name: "weird;name with space",
-            event: "PreToolUse",
-            match: "Bash",
-            command: "harness policy intercept",
-            blocking: "hard",
-            budget_ms: 1000,
-          },
-        ],
-      }),
-    );
-    expect(content).toContain(
-      'hooks = [{ type = "command", command = "harness policy intercept", timeout = 1 }]',
+      'hooks = [{ type = "command", command = "echo shell-guard", timeout = 2 }]',
     );
     expect(content).not.toContain("--hook");
   });
@@ -317,7 +291,7 @@ describe("generateCodexConfig", () => {
     expect(controlRe.test(commandLine!)).toBe(false);
   });
 
-  it("projects a hook that carries path_match or bash_match like one without them (removed keys, stripped at load; no projection warning any more)", () => {
+  it("pins the path_match/bash_match strip behaviour for Codex output (removed keys, stripped at load; no projection warning any more)", () => {
     const { warnings, content } = generateCodexConfig(
       parseManifest({
         version: 1,
@@ -339,7 +313,7 @@ describe("generateCodexConfig", () => {
     expect(content).not.toMatch(/path_match|bash_match/);
   });
 
-  it("projects memory.router into a user_prompt_submit hook (PR #203)", () => {
+  it("projects memory.router into a UserPromptSubmit hook (PR #203)", () => {
     // Codex parity with generate-settings.ts: per-prompt memory
     // augmentation must wire on both runtimes, otherwise a Codex
     // operator who uses memory-router would silently lose the feature.

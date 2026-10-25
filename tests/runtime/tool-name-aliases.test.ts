@@ -1,14 +1,13 @@
-// Unit tests for the three exported functions from
+// Unit tests for the two exported functions from
 // src/runtime/tool-name-aliases.ts.
 //
-// All three functions are pure (no I/O, no async), so no home-dir override
+// Both functions are pure (no I/O, no async), so no home-dir override
 // or subprocess is needed.
 
 import { describe, expect, it } from "vitest";
 import {
   expandCodexHookMatchPattern,
   expandToolNameAliases,
-  extractShellCommand,
 } from "../../src/runtime/tool-name-aliases.js";
 
 // ── expandToolNameAliases ─────────────────────────────────────────────────────
@@ -81,6 +80,15 @@ describe("expandToolNameAliases — MCP name variants", () => {
     expect(aliases).toContain("mcp__my_server__.my_tool");
   });
 
+  it("the single-separator dot form mcp__server.tool expands to the double-underscore and dot variants", () => {
+    const aliases = expandToolNameAliases("mcp__my-server.my_tool");
+    expect(aliases).toContain("mcp__my-server.my_tool");
+    expect(aliases).toContain("mcp__my-server__my_tool");
+    expect(aliases).toContain("mcp__my-server__.my_tool");
+    expect(aliases).toContain("mcp__my_server__my_tool");
+    expect(aliases).toContain("mcp__my_server__.my_tool");
+  });
+
   it("a plain mcp-prefixed name with neither __ nor . double-separator is not expanded (returned as-is)", () => {
     // This does not match any MCP regex, so it is treated as a plain tool.
     expect(expandToolNameAliases("mcp_invalid")).toEqual(["mcp_invalid"]);
@@ -147,102 +155,5 @@ describe("expandCodexHookMatchPattern — expansion", () => {
     const parts = result.split("|");
     expect(parts).toContain("mcp__my-server__my_tool");
     expect(parts).toContain("mcp__my_server__my_tool");
-  });
-});
-
-// ── extractShellCommand ───────────────────────────────────────────────────────
-
-describe("extractShellCommand", () => {
-  it("returns null for an empty event object", () => {
-    expect(extractShellCommand({})).toBeNull();
-  });
-
-  it("returns null when no candidate field has a command/cmd key", () => {
-    expect(extractShellCommand({ tool_input: { other: "value" } })).toBeNull();
-  });
-
-  it("extracts command from tool_input.command", () => {
-    expect(
-      extractShellCommand({ tool_input: { command: "git status" } }),
-    ).toBe("git status");
-  });
-
-  it("extracts cmd from tool_input.cmd (Codex alias)", () => {
-    expect(
-      extractShellCommand({ tool_input: { cmd: "ls -la" } }),
-    ).toBe("ls -la");
-  });
-
-  it("extracts command from raw_input.command", () => {
-    expect(
-      extractShellCommand({ raw_input: { command: "npm test" } }),
-    ).toBe("npm test");
-  });
-
-  it("extracts cmd from raw_input.cmd", () => {
-    expect(
-      extractShellCommand({ raw_input: { cmd: "cargo build" } }),
-    ).toBe("cargo build");
-  });
-
-  it("extracts command from input.command", () => {
-    expect(
-      extractShellCommand({ input: { command: "make" } }),
-    ).toBe("make");
-  });
-
-  it("extracts cmd from input.cmd", () => {
-    expect(
-      extractShellCommand({ input: { cmd: "pytest" } }),
-    ).toBe("pytest");
-  });
-
-  it("prefers tool_input over raw_input over input", () => {
-    expect(
-      extractShellCommand({
-        tool_input: { command: "first" },
-        raw_input: { command: "second" },
-        input: { command: "third" },
-      }),
-    ).toBe("first");
-  });
-
-  it("falls through to raw_input when tool_input has no command field", () => {
-    expect(
-      extractShellCommand({
-        tool_input: { other: "x" },
-        raw_input: { command: "second" },
-        input: { command: "third" },
-      }),
-    ).toBe("second");
-  });
-
-  it("falls through to input when neither tool_input nor raw_input has a command field", () => {
-    expect(
-      extractShellCommand({
-        tool_input: { other: "x" },
-        raw_input: { other: "y" },
-        input: { command: "third" },
-      }),
-    ).toBe("third");
-  });
-
-  it("returns null when command value is not a string", () => {
-    expect(extractShellCommand({ tool_input: { command: 42 } })).toBeNull();
-    expect(extractShellCommand({ tool_input: { command: null } })).toBeNull();
-    expect(extractShellCommand({ tool_input: { command: ["arr"] } })).toBeNull();
-  });
-
-  it("returns null when candidate field is not an object (null / primitive)", () => {
-    expect(extractShellCommand({ tool_input: null })).toBeNull();
-    expect(extractShellCommand({ tool_input: "string" })).toBeNull();
-    expect(extractShellCommand({ tool_input: 42 })).toBeNull();
-  });
-
-  it("cmd takes lower priority than command within the same candidate", () => {
-    // Within tool_input, command wins over cmd when both are present
-    expect(
-      extractShellCommand({ tool_input: { command: "git log", cmd: "git diff" } }),
-    ).toBe("git log");
   });
 });

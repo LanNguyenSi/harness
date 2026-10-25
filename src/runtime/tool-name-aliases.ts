@@ -3,7 +3,7 @@
 // set `expandToolNameAliases` expands tokens with, which
 // `expandCodexHookMatchPattern` applies to the tool-name tokens of Codex
 // hook matchers (emitted by `generate-codex-config.ts`).
-export const SHELL_ALIASES = [
+const SHELL_ALIASES = [
   "Bash",
   "shell",
   "exec_command",
@@ -70,18 +70,4 @@ export function expandCodexHookMatchPattern(match: string): string {
     for (const alias of expandToolNameAliases(token)) expanded.add(alias);
   }
   return [...expanded].join("|");
-}
-
-export function extractShellCommand(event: {
-  tool_input?: unknown;
-  raw_input?: unknown;
-  input?: unknown;
-}): string | null {
-  for (const candidate of [event.tool_input, event.raw_input, event.input]) {
-    if (!candidate || typeof candidate !== "object") continue;
-    const args = candidate as { command?: unknown; cmd?: unknown };
-    if (typeof args.command === "string") return args.command;
-    if (typeof args.cmd === "string") return args.cmd;
-  }
-  return null;
 }

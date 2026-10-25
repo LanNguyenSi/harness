@@ -44,8 +44,6 @@ export interface CodexTargetReport {
 export interface RunCodexCheckOptions {
   /** Manifest directory; the codex config is at <dir>/harness.generated/codex/config.toml. */
   manifestDir: string;
-  /** Retained for compat but ignored. */
-  cwd?: string;
   /** Override for $PATH lookup (test injection). */
   pathEnv?: string;
   /** Override for path existence + executable check (test injection). */

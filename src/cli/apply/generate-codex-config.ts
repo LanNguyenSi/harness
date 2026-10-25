@@ -104,27 +104,6 @@ function tomlString(s: string): string {
   return `"${escapeTomlString(s)}"`;
 }
 
-function eventKey(event: string): string {
-  // Codex 0.131.0's TOML schema uses protocol event names as table
-  // keys (for example [[hooks.PreToolUse]]), not the legacy lower-snake
-  // names harness emitted in the first Codex adapter. Unknown events
-  // pass through unchanged so future schema additions are not dropped.
-  switch (event) {
-    case "UserPromptSubmit":
-      return "UserPromptSubmit";
-    case "PreToolUse":
-      return "PreToolUse";
-    case "Stop":
-      return "Stop";
-    case "PostToolUse":
-      return "PostToolUse";
-    case "SessionStart":
-      return "SessionStart";
-    default:
-      return event;
-  }
-}
-
 function emitCommandHook(h: Hook): string {
   const fields = [
     `type = "command"`,
@@ -144,7 +123,9 @@ function tomlCommentText(s: string): string {
 function emitHook(h: Hook): string {
   const lines: string[] = [];
   lines.push(`# harness hook: ${tomlCommentText(h.name)} (budget_ms=${h.budget_ms})`);
-  lines.push(`[[hooks.${eventKey(h.event)}]]`);
+  // Codex 0.131.0's TOML schema uses the protocol event names as table
+  // keys (e.g. [[hooks.PreToolUse]]), so the manifest event is emitted as is.
+  lines.push(`[[hooks.${h.event}]]`);
   if (h.match !== undefined) {
     lines.push(`matcher = ${tomlString(expandCodexHookMatchPattern(h.match))}`);
   }

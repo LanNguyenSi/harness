@@ -29,10 +29,8 @@ export {
 export {
   CODEX_MANAGED_BEGIN,
   CODEX_MANAGED_END,
-  CODEX_MANAGED_SOURCE_PREFIX,
   defaultCodexConfigPath,
   planCodexConfigInstall,
-  validateCodexManagedConfig,
   writeCodexConfigInstall,
   type CodexConfigInstallPlan,
   type CodexConfigInstallResult,

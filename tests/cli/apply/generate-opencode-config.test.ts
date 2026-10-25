@@ -49,7 +49,7 @@ function canonicalManifest(extra: Record<string, unknown> = {}): Manifest {
         name: "policy-pack:branch-protection:pre-tool-use",
         event: "PreToolUse",
         match: "Bash",
-        command: "harness policy intercept",
+        command: "echo shell-guard",
         blocking: "hard",
         budget_ms: 5000,
       },
@@ -115,7 +115,7 @@ describe("generateOpencodeConfig", () => {
     const { content, warnings } = generateOpencodeConfig(canonicalManifest(), {
       homeDir: "/home/op",
     });
-    expect(content).not.toContain("harness policy intercept");
+    expect(content).not.toContain("echo shell-guard");
     expect(content).not.toContain("PreToolUse");
     expect(
       warnings.some(

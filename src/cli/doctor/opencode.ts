@@ -23,8 +23,9 @@ import {
 } from "../apply/generate-opencode-config.js";
 import type { Manifest } from "../../schema/index.js";
 import { countStatusDiagnostics, findOnPath } from "./codex.js";
+import type { DoctorCheckStatus } from "./target-checks.js";
 
-export type OpencodeCheckStatus = "ok" | "warn" | "error";
+export type OpencodeCheckStatus = DoctorCheckStatus;
 
 export interface OpencodeCheckEntry {
   name: string;

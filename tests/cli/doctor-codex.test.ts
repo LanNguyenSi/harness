@@ -74,7 +74,6 @@ describe("doctor --target codex", () => {
       codexCheckOptions: {
         manifestDir: home,
         harnessBinary: harnessBin,
-        cwd: home,
       },
     });
 
@@ -117,7 +116,6 @@ describe("doctor --target codex", () => {
       target: "codex",
       codexCheckOptions: {
         manifestDir: home,
-        cwd: home,
         // No harnessBinary override; with empty PATH the lookup fails.
       },
     });
@@ -150,7 +148,6 @@ describe("doctor --target codex", () => {
       codexCheckOptions: {
         manifestDir: home,
         harnessBinary: harnessBin,
-        cwd: home,
       },
     });
 
@@ -178,7 +175,6 @@ describe("doctor --target codex", () => {
       codexCheckOptions: {
         manifestDir: home,
         harnessBinary: harnessBin,
-        cwd: home,
       },
     });
 
@@ -225,7 +221,7 @@ describe("doctor --target codex hook commands calling removed verbs", () => {
       pathEnv: "",
       npmBinExec: STUB_NPM_BIN_EXEC_UNKNOWN,
       ...(target === "codex"
-        ? { target, codexCheckOptions: { manifestDir: home, harnessBinary: fakeHarnessBinary(home), cwd: home } }
+        ? { target, codexCheckOptions: { manifestDir: home, harnessBinary: fakeHarnessBinary(home) } }
         : {}),
     });
     return report;
