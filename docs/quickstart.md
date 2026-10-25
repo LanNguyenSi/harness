@@ -130,8 +130,8 @@ router and this pack, `team` adds the agent-tasks MCP server and
 grounding-mcp, and `full` is the reference manifest (grounding, the
 tool inventory, memory and the pack). The `harness init --interactive`
 wizard offers the same three profiles plus a custom composer, and none
-of the four templates writes anything beyond the tool inventory,
-memory and pack entries.
+of the four templates writes anything beyond grounding, the tool
+inventory, memory and pack entries.
 
 ## Next
 
