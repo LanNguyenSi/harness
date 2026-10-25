@@ -389,9 +389,9 @@ export function migrateHome(opts: MigrateHomeOptions = {}): MigrateHomeResult {
       return `keep the legacy ${safe(m.path)}: Claude Code uses it for its session transcripts`;
     }
     if (m.path === path.join(legacyPath, "machines")) {
-      return `keep the legacy ${safe(m.path)} while anything at or under ${safe(m.dst)} resolves through it`;
+      return `keep the legacy ${safe(m.path)} while anything under ${safe(newPath)} resolves through it`;
     }
-    return `the legacy ${safe(m.path)} can go once nothing at or under ${safe(m.dst)} resolves through it`;
+    return `the legacy ${safe(m.path)} can go once nothing under ${safe(newPath)} resolves through it`;
   };
   /**
    * Classify and print the symlinked layers. Called once per run, after
