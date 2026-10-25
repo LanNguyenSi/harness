@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -660,6 +661,37 @@ describe("migrateHome", () => {
         expect(err).toMatch(/ROLLBACK FAILED/);
         expect(err).not.toMatch(/harness now reads/);
       });
+
+      it("adds no such line when a move back fails after it moved and the run left no ~/.harness behind", () => {
+        const { legacy } = seedLayers();
+        const newHome = path.join(tmp, HARNESS_HOME_DIRNAME);
+        const stderr = bufferStream();
+        const result = migrateHome({
+          apply: true,
+          userHome: tmp,
+          stdout: bufferStream().stream,
+          stderr: stderr.stream,
+          move: (src, dst) => {
+            if (src.startsWith(newHome + path.sep)) {
+              // the move back happens, then reports a failure anyway
+              fs.renameSync(src, dst);
+              throw new Error("injected: move back reported failure after it moved");
+            }
+            if (src.includes(`${path.sep}projects${path.sep}`)) throw new Error("injected: project layer");
+            fs.renameSync(src, dst);
+          },
+        });
+        const err = stderr.read();
+        expect(result.outcome).toBe("partial");
+        expect(err).toContain(
+          `ROLLBACK FAILED: could not move ${path.join(newHome, machineRel)} back to ${path.join(legacy, machineRel)}: injected: move back reported failure after it moved`,
+        );
+        // every directory the run created was empty again and removed, ~/.harness included
+        expect(fs.existsSync(newHome)).toBe(false);
+        expect(fs.readFileSync(path.join(legacy, machineRel), "utf8")).toBe("version: 1\n# machine\n");
+        // harness still reads ~/.claude, so there is no stranded root to report
+        expect(err).not.toMatch(/harness now reads/);
+      });
     });
 
     it("treats a symlinked project directory whose layer already exists under ~/.harness as done", () => {
@@ -768,6 +800,39 @@ describe("migrateHome", () => {
         expect(result.manualDone).toEqual([]);
       });
 
+      it.skipIf(process.platform === "win32")(
+        "keeps the item open when the destination is a FIFO, and --apply still leaves it open",
+        (ctx) => {
+          const { legacy } = seedLayers();
+          const ext = path.join(tmp, "ext", "m.yaml");
+          fs.mkdirSync(path.dirname(ext), { recursive: true });
+          fs.writeFileSync(ext, "version: 1\n");
+          fs.rmSync(path.join(legacy, machineRel));
+          fs.symlinkSync(ext, path.join(legacy, machineRel));
+          const dst = path.join(tmp, HARNESS_HOME_DIRNAME, machineRel);
+          fs.mkdirSync(path.dirname(dst), { recursive: true });
+          try {
+            execFileSync("mkfifo", [dst]);
+          } catch {
+            ctx.skip("mkfifo is not available");
+          }
+          expect(fs.lstatSync(dst).isFIFO()).toBe(true);
+          const open = [`move by hand: ${path.join(legacy, machineRel)} (symlink to ${ext})`, notAFile(dst)];
+          const dry = run(false);
+          expect(dry.result.outcome).toBe("would-apply");
+          expect(dry.result.manual).toEqual(open);
+          expect(dry.result.manualDone).toEqual([]);
+          const applied = run(true);
+          expect(applied.result.outcome).toBe("applied");
+          // a non-empty `manual` after --apply is what makes the CLI exit non-zero
+          expect(applied.result.manual).toEqual(open);
+          expect(applied.result.manualDone).toEqual([]);
+          expect(applied.stderr).toContain(`harness migrate-home: ${notAFile(dst)}\n`);
+          expect(applied.stdout).not.toMatch(/already at/);
+          expect(fs.lstatSync(dst).isFIFO()).toBe(true);
+        },
+      );
+
       it("adds a line for each destination layer of a linked machines/ that does not resolve, and none for one that is missing", () => {
         const { legacy } = seedLayers();
         const real = path.join(tmp, "dotfiles", "machines");
@@ -840,6 +905,68 @@ describe("migrateHome", () => {
         `already at ${path.join(newHome, "projects")}; keep the legacy ${path.join(legacy, "projects")}: Claude Code uses it for its session transcripts`,
       ]);
       expect(stdout).not.toMatch(/remove the legacy/);
+    });
+
+    describe("a done destination that still resolves through the legacy link", () => {
+      const viaLegacy = (dst: string, legacyPath: string): string =>
+        `already at ${dst}, which still reads through the legacy ${legacyPath}; keep it, or replace ${dst} with a copy or a link to the real target`;
+
+      it("says so for a layer-file destination that links to the legacy layer link, absolute or relative, and never suggests removing it", () => {
+        const { legacy } = seedLayers();
+        const ext = path.join(tmp, "ext", "m.yaml");
+        fs.mkdirSync(path.dirname(ext), { recursive: true });
+        fs.writeFileSync(ext, "version: 1\n");
+        const legacyLink = path.join(legacy, machineRel);
+        fs.rmSync(legacyLink);
+        fs.symlinkSync(ext, legacyLink);
+        const dst = path.join(tmp, HARNESS_HOME_DIRNAME, machineRel);
+        fs.mkdirSync(path.dirname(dst), { recursive: true });
+        fs.symlinkSync(legacyLink, dst);
+        const { result, stdout, stderr } = run(true);
+        expect(result.outcome).toBe("applied");
+        // harness does read the layer through the chain, so the item is done
+        expect(result.manual).toEqual([]);
+        expect(result.manualDone).toEqual([viaLegacy(dst, legacyLink)]);
+        expect(stdout).toContain(`harness migrate-home: ${viaLegacy(dst, legacyLink)}\n`);
+        expect(stdout).not.toMatch(/remove the legacy/);
+        expect(stderr).not.toMatch(/move by hand/);
+        // a relative link to the legacy link reads through it too
+        fs.rmSync(dst);
+        fs.symlinkSync(path.relative(path.dirname(dst), legacyLink), dst);
+        expect(run(false).result.manualDone).toEqual([viaLegacy(dst, legacyLink)]);
+        // control: a link straight to the real file gets the plain note
+        fs.rmSync(dst);
+        fs.symlinkSync(ext, dst);
+        expect(run(false).result.manualDone).toEqual([
+          `already at ${dst}; remove the legacy ${legacyLink} when you no longer need it`,
+        ]);
+      });
+
+      it("says so for a ~/.harness/machines that links to the linked legacy machines/", () => {
+        const { legacy } = seedLayers();
+        const real = path.join(tmp, "dot", "machines");
+        fs.mkdirSync(real, { recursive: true });
+        fs.writeFileSync(path.join(real, "default.harness.overrides.yaml"), "version: 1\n");
+        const legacyMachines = path.join(legacy, "machines");
+        fs.rmSync(legacyMachines, { recursive: true });
+        fs.symlinkSync(real, legacyMachines);
+        expect(run(true).result.manual).toHaveLength(1);
+        const newMachines = path.join(tmp, HARNESS_HOME_DIRNAME, "machines");
+        fs.symlinkSync(legacyMachines, newMachines);
+        const { result, stdout } = run(true);
+        expect(result.outcome).toBe("no-op");
+        expect(result.manual).toEqual([]);
+        expect(result.manualDone).toEqual([viaLegacy(newMachines, legacyMachines)]);
+        expect(stdout).toContain(viaLegacy(newMachines, legacyMachines));
+        expect(stdout).not.toMatch(/harness no longer reads/);
+        // control: a link straight to the real directory gets the plain note
+        fs.rmSync(newMachines);
+        fs.symlinkSync(real, newMachines);
+        expect(run(false).result.manualDone).toEqual([
+          `already at ${newMachines}; harness no longer reads the legacy ${legacyMachines}`,
+        ]);
+        expect(fs.readdirSync(real)).toEqual(["default.harness.overrides.yaml"]);
+      });
     });
 
     it("keeps a symlinked machines/ open until every layer it holds exists under ~/.harness", () => {

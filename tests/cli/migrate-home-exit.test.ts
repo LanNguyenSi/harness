@@ -101,6 +101,24 @@ describe("harness migrate-home exit code", () => {
     expect(r.stderr).not.toMatch(/move by hand/);
   });
 
+  it("exits 0 and says to keep the legacy link when ~/.harness/machines links to the linked legacy machines/", () => {
+    const legacy = seed();
+    fs.rmSync(path.join(legacy, "machines"), { recursive: true });
+    const real = path.join(home, "dotfiles", "machines");
+    fs.mkdirSync(real, { recursive: true });
+    fs.writeFileSync(path.join(real, "default.harness.overrides.yaml"), "version: 1\n");
+    fs.symlinkSync(real, path.join(legacy, "machines"));
+    expect(cli(["migrate-home", "--apply"]).status).toBe(1);
+    fs.symlinkSync(path.join(legacy, "machines"), path.join(home, ".harness", "machines"));
+    const r = cli(["migrate-home", "--apply"]);
+    expect(r.status).toBe(0);
+    expect(r.stdout).toContain(
+      `already at ${path.join(home, ".harness", "machines")}, which still reads through the legacy ${path.join(legacy, "machines")}; keep it, or replace ${path.join(home, ".harness", "machines")} with a copy or a link to the real target\n`,
+    );
+    expect(r.stdout).not.toMatch(/harness no longer reads/);
+    expect(r.stderr).not.toMatch(/move by hand/);
+  });
+
   describe("a move-by-hand destination counts only when it resolves to a file", () => {
     const notAFile = /exists but does not resolve to a file/;
 
