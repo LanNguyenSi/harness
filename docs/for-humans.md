@@ -336,11 +336,9 @@ removed verbs is in the removed section of
 
 - [`docs/for-agents.md`](for-agents.md): how agents interact with the
   same harness instance and the gate messages.
-- [`docs/ARCHITECTURE.md`](ARCHITECTURE.md): the original design
-  (historical); [`docs/CLI.md`](CLI.md) is the current command
-  reference, including the manifest's top-level keys.
-- [`docs/ROADMAP.md`](ROADMAP.md): phases 1 through 7 with acceptance
-  criteria.
+- [`docs/ARCHITECTURE.md`](ARCHITECTURE.md): the architecture
+  reference; [`docs/CLI.md`](CLI.md) is the command reference,
+  including the manifest's top-level keys.
 - [`docs/VISION.md`](VISION.md): long-form positioning.
 - [`docs/examples/full-manifest.yaml`](examples/full-manifest.yaml): a
   manifest that exercises every field.

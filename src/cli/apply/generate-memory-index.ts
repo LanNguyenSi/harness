@@ -1,7 +1,6 @@
 // Generate `harness.generated/MEMORY.md`: the index that lists every memory
 // file the router would surface, derived from `memory.directories[]`. Memory
-// markdown files themselves stay user-owned (per ROADMAP non-goals); only
-// the index is generated.
+// markdown files themselves stay user-owned; only the index is generated.
 //
 // Output format mirrors the canonical hand-curated MEMORY.md convention:
 //

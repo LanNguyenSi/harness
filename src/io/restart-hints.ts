@@ -5,7 +5,8 @@
 // restart the session to pick up new hooks, etc. This module computes which
 // hints to print based on which manifest sections actually changed.
 //
-// Per ARCHITECTURE.md / ROADMAP Phase 3 acceptance:
+// Restart-hint selection, keyed on the manifest section that changed;
+// `harness apply --dry-run` prints these without writing (ARCHITECTURE.md overview):
 //   - mcp[]                changed → MCP-restart hint
 //   - memory.router.command changed → session-restart hint
 //   - hooks structure       changed → settings.json reload hint
