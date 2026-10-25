@@ -30,12 +30,12 @@
 // stops counting as open once every layer it holds resolves, following
 // links, to a regular file at its destination under `~/.harness/` (the
 // operator recreated it there), the way the loader reads layers: the
-// command then prints an `already at` line instead. When that destination
-// resolves through the legacy link itself (a link to the legacy link, or
-// to the linked legacy directory), the line says so and to keep the legacy
-// link or replace the destination, never to remove the link. A destination that
-// exists but does not resolve to a regular file (a dangling link, a
-// directory) keeps the item open with a line of its own.
+// command then prints an `already at` line instead. That line never
+// advises removing the legacy link without the caveat that nothing may
+// still read through it: the destination can itself be a link to the
+// legacy link. A destination that exists but does not resolve to a
+// regular file (a dangling link, a directory) keeps the item open with a
+// line of its own.
 //
 // The four top-level items are not covered by that rule: one that is
 // itself a symlink (say `harness.yaml` linked into a dotfiles checkout) is
@@ -379,15 +379,19 @@ export function migrateHome(opts: MigrateHomeOptions = {}): MigrateHomeResult {
     }
     return "";
   };
-  /** The `already at` advice: never suggest removing a whole legacy directory. */
+  /**
+   * The `already at` advice: never suggest removing a whole legacy
+   * directory, and never suggest removing a legacy link without the
+   * caveat, because the destination may itself be a link to it.
+   */
   const doneNote = (m: ManualItem): string => {
     if (m.path === path.join(legacyPath, "projects")) {
       return `keep the legacy ${safe(m.path)}: Claude Code uses it for its session transcripts`;
     }
     if (m.path === path.join(legacyPath, "machines")) {
-      return `harness no longer reads the legacy ${safe(m.path)}`;
+      return `harness reads ${safe(m.dst)}; keep the legacy ${safe(m.path)} if ${safe(m.dst)} links to it`;
     }
-    return `remove the legacy ${safe(m.path)} when you no longer need it`;
+    return `the legacy ${safe(m.path)} can go once nothing reads through it (check that ${safe(m.dst)} is not a link to it)`;
   };
   /**
    * Classify and print the symlinked layers. Called once per run, after
@@ -398,15 +402,7 @@ export function migrateHome(opts: MigrateHomeOptions = {}): MigrateHomeResult {
   const reportManual = (): void => {
     for (const m of layers.manual) {
       if (m.layers.every((p) => resolvesToFile(p))) {
-        // A destination that resolves through the legacy link itself (a
-        // link to that link, or to the linked directory) is read, but only
-        // while the legacy link stays: never suggest removing it then.
-        const viaLegacy = m.layers.some((p) => resolvesVia(p, m.path));
-        manualDone.push(
-          viaLegacy
-            ? `already at ${safe(m.dst)}, which still reads through the legacy ${safe(m.path)}; keep it, or replace ${safe(m.dst)} with a copy or a link to the real target`
-            : `already at ${safe(m.dst)}; ${doneNote(m)}`,
-        );
+        manualDone.push(`already at ${safe(m.dst)}; ${doneNote(m)}`);
         continue;
       }
       manual.push(`move by hand: ${safe(m.path)} (symlink to ${safe(m.target)}${movedTargetNote(m)})`);
@@ -639,68 +635,6 @@ function resolvesToFile(p: string): boolean {
   } catch {
     return false;
   }
-}
-
-/**
- * Whether resolving `p`, one component at a time the way the kernel
- * follows links, passes through `via` (and so through anything under it:
- * the walk visits every prefix of each path it resolves). Comparing real
- * paths cannot tell this apart from a destination that links straight to
- * the same file the legacy link names, so the walk checks every path it
- * visits instead. Only `lstat` and `readlink` are used, so nothing is
- * opened (a FIFO on the way never blocks); an unreadable step or a link
- * loop counts as not passing through.
- */
-function resolvesVia(p: string, via: string): boolean {
-  // `via` is itself a link: resolve only its parent, the walk visits
-  // paths whose earlier components are already resolved.
-  let viaParent = path.dirname(via);
-  try {
-    viaParent = fs.realpathSync(viaParent);
-  } catch {
-    /* keep the unresolved parent */
-  }
-  const viaResolved = path.join(viaParent, path.basename(via));
-  const sep = path.sep === "\\" ? /[\\/]+/ : /\/+/;
-  const parts = (s: string): string[] => s.split(sep).filter((c) => c !== "" && c !== ".");
-  const abs = path.resolve(p);
-  let cur = path.parse(abs).root;
-  const pending = parts(abs.slice(cur.length));
-  let links = 0;
-  while (pending.length > 0) {
-    const name = pending.shift() as string;
-    if (name === "..") {
-      cur = path.dirname(cur);
-      continue;
-    }
-    const next = path.join(cur, name);
-    if (next === viaResolved) return true;
-    let st: fs.Stats;
-    try {
-      st = fs.lstatSync(next);
-    } catch {
-      return false;
-    }
-    if (!st.isSymbolicLink()) {
-      cur = next;
-      continue;
-    }
-    if (++links > 40) return false;
-    let target: string;
-    try {
-      target = fs.readlinkSync(next);
-    } catch {
-      return false;
-    }
-    if (path.isAbsolute(target)) {
-      const root = path.parse(target).root;
-      cur = root;
-      pending.unshift(...parts(target.slice(root.length)));
-    } else {
-      pending.unshift(...parts(target));
-    }
-  }
-  return false;
 }
 
 function pathExists(p: string): boolean {

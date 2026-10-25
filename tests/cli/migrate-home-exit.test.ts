@@ -96,26 +96,11 @@ describe("harness migrate-home exit code", () => {
     fs.symlinkSync(real, path.join(home, ".harness", "machines"));
     const r = cli(["migrate-home", "--apply"]);
     expect(r.status).toBe(0);
-    expect(r.stdout).toMatch(/already at .*\.harness\/machines; harness no longer reads the legacy .*\.claude\/machines\n/);
-    expect(r.stdout).not.toMatch(/remove the legacy/);
-    expect(r.stderr).not.toMatch(/move by hand/);
-  });
-
-  it("exits 0 and says to keep the legacy link when ~/.harness/machines links to the linked legacy machines/", () => {
-    const legacy = seed();
-    fs.rmSync(path.join(legacy, "machines"), { recursive: true });
-    const real = path.join(home, "dotfiles", "machines");
-    fs.mkdirSync(real, { recursive: true });
-    fs.writeFileSync(path.join(real, "default.harness.overrides.yaml"), "version: 1\n");
-    fs.symlinkSync(real, path.join(legacy, "machines"));
-    expect(cli(["migrate-home", "--apply"]).status).toBe(1);
-    fs.symlinkSync(path.join(legacy, "machines"), path.join(home, ".harness", "machines"));
-    const r = cli(["migrate-home", "--apply"]);
-    expect(r.status).toBe(0);
+    const newMachines = path.join(home, ".harness", "machines");
     expect(r.stdout).toContain(
-      `already at ${path.join(home, ".harness", "machines")}, which still reads through the legacy ${path.join(legacy, "machines")}; keep it, or replace ${path.join(home, ".harness", "machines")} with a copy or a link to the real target\n`,
+      `already at ${newMachines}; harness reads ${newMachines}; keep the legacy ${path.join(legacy, "machines")} if ${newMachines} links to it\n`,
     );
-    expect(r.stdout).not.toMatch(/harness no longer reads/);
+    expect(r.stdout).not.toMatch(/remove the legacy/);
     expect(r.stderr).not.toMatch(/move by hand/);
   });
 
