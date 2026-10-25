@@ -3,7 +3,7 @@ type: runbook
 title: "Kill switch: harness gate disable / enable"
 description: "harness's shipped operator kill switch: `harness gate disable` / `harness gate enable` edit the live runtime config with a reversible snapshot, `~/.claude/settings.json` for Claude Code (matching hook groups are removed) and, with `--runtime codex`, the harness-managed hook block of `~/.codex/config.toml` (a matching unit is neutralised in place so every other hook keeps its position and its trust); when to use it, exact flags, what is written, how restore works, hooks without a matcher, and the recovery recipes."
 tags: [runbook, gate-disable, kill-switch, operator]
-timestamp: 2026-10-25T13:36:51Z
+timestamp: 2026-10-25T15:14:58Z
 sources:
   - src/cli/gate/disable.ts
   - src/cli/gate/enable.ts
@@ -26,7 +26,7 @@ sources:
 
 # Kill switch: `harness gate disable` / `harness gate enable`
 
-harness ships ONE operator kill switch: `harness gate disable` takes the hook groups or hook units whose matcher matches a substring out of the live runtime config with a reversible snapshot, and `harness gate enable` puts them back. `harness pause` and `harness resume` were removed in 1.0.0 (task 973163a4), and the gate verbs are their replacement: both are `REMOVED_COMMANDS` entries now, so a hook or `ux.run` line that still calls one is reported by validate, doctor and apply (`src/schema/removed-keys.ts:568-569#"the operator pause is removed"`).
+harness ships ONE operator kill switch: `harness gate disable` takes the hook groups or hook units whose matcher matches a substring out of the live runtime config with a reversible snapshot, and `harness gate enable` puts them back. `harness pause` and `harness resume` were removed in 1.0.0 (task 973163a4), and the gate verbs are their replacement: both are `REMOVED_COMMANDS` entries now, so a hook or `ux.run` line that still calls one is reported by validate, doctor and apply (`src/schema/removed-keys.ts:569-570#"the operator pause is removed"`).
 
 ## When to use this
 
