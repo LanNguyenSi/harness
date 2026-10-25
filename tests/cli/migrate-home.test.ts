@@ -342,5 +342,13 @@ describe("migrateHome", () => {
       expect(fs.existsSync(path.join(newHome, machineRel))).toBe(true);
       expect(fs.existsSync(path.join(newHome, projectRel))).toBe(true);
     });
+    it("never prunes the legacy root itself when a layer was its only content", () => {
+      const legacy = path.join(tmp, LEGACY_HARNESS_HOME_DIRNAME);
+      fs.mkdirSync(path.join(legacy, "machines"), { recursive: true });
+      fs.writeFileSync(path.join(legacy, machineRel), "version: 1\n");
+      const { result } = run(true);
+      expect(result.outcome).toBe("applied");
+      expect(fs.existsSync(path.join(legacy, MIGRATION_MARKER_BASENAME))).toBe(true);
+    });
   });
 });
