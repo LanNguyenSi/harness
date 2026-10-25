@@ -12,7 +12,8 @@ export function registerUninstall(
     .command("uninstall")
     .description(
       "Clean teardown of a harness installation. Inventories harness-owned " +
-        "state (manifest, lock, harness.generated/, .understanding-gate/ under " +
+        "state (manifest, lock, harness.generated/ and the leftover " +
+        ".understanding-gate/ of the removed gate under " +
         "the state root; hook groups and mcpServers in ~/.claude/settings.json) " +
         "and prints it. With --apply, backs up settings.json (reversible, with " +
         "a snapshot of what was removed) and then removes the inventory; the " +
@@ -68,7 +69,7 @@ export function registerUninstall(
           if (inv.manifestPath) stdout(`  manifest:  ${inv.manifestPath}\n`);
           if (inv.lockPath) stdout(`  lock:      ${inv.lockPath}\n`);
           if (inv.generatedDir) stdout(`  generated: ${inv.generatedDir}/\n`);
-          if (inv.gateStateDir) stdout(`  gate:      ${inv.gateStateDir}/ (understanding-gate state)\n`);
+          if (inv.gateStateDir) stdout(`  gate:      ${inv.gateStateDir}/ (leftover understanding-gate state)\n`);
           if (inv.hookGroups.length > 0) {
             stdout(`  hook groups in ${inv.settingsPath}:\n`);
             for (const g of inv.hookGroups) {

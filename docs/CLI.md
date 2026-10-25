@@ -56,7 +56,7 @@ A key, pack or command that a release removed does not fail the load (`src/schem
 
 `harness validate`, `harness doctor`, `harness apply` and `harness export` print these warnings, and `harness validate --strict` fails on them. A key that was never valid is not on the removed list and still fails the load.
 
-## Health, audit, and observability
+## Health and observability
 
 | Verb | One-liner |
 |------|-----------|

@@ -3,6 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { uninstall, UninstallError } from "../../../src/cli/uninstall/index.js";
+import { buildProgram } from "../../../src/cli/index.js";
 import { SNAPSHOT_MARKER_KEYS } from "../../../src/cli/uninstall/snapshot.js";
 import {
   BACKUP_INFIX,
@@ -642,6 +643,24 @@ describe("uninstall — gate state + state root (harness-discovery M2)", () => {
     if (r.mode !== "list") return;
     expect(r.inventory.stateDir).toBe(homeDir);
     expect(r.inventory.manifestPath).toBe(path.join(homeDir, "harness.yaml"));
+  });
+
+  it("dry-run listing prints the gate dir line with the leftover-state label", async () => {
+    fs.writeFileSync(path.join(homeDir, "harness.yaml"), "version: 1\n");
+    const gateDir = path.join(homeDir, ".understanding-gate");
+    fs.mkdirSync(gateDir, { recursive: true });
+
+    let out = "";
+    const program = buildProgram({
+      stdout: (s: string) => {
+        out += s;
+      },
+      stderr: () => {},
+    });
+    await program.parseAsync(["uninstall", "--home", homeDir, "--settings", settingsPath], {
+      from: "user",
+    });
+    expect(out).toContain(`  gate:      ${gateDir}/ (leftover understanding-gate state)\n`);
   });
 });
 

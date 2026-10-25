@@ -10,9 +10,9 @@ import { z } from "zod";
 //            path is writable and flags divergence from an operator env
 //            override.
 //
-//   RESERVED session.auto_start / session.id_format — no consumer yet;
-//            session-start derives ids from the runtime event, not from
-//            this format string.
+//   RESERVED session.auto_start / session.id_format — reserved keys that
+//            nothing reads; the session-start surface that could have
+//            consumed them is removed.
 //
 //   REMOVED  evidence_ledger.retention_days and policies_source (task
 //            a4d8adc5): reserved keys that never had a consumer. A manifest

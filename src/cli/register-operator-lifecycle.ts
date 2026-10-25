@@ -12,7 +12,8 @@ export function registerOperatorLifecycle(
       "Move harness operator-state from the legacy ~/.claude/ root to the runtime-neutral " +
         "~/.harness/ root introduced in v0.24.0. Dry-run by default; pass --apply to perform " +
         "the move. Re-running on already-migrated state is a no-op. Moves: harness.yaml, " +
-        "harness.generated/, .understanding-gate/, harness.lock. Does NOT touch settings.json " +
+        "harness.generated/, the leftover .understanding-gate/ of the removed " +
+        "gate, harness.lock. Does NOT touch settings.json " +
         "or any other ~/.claude/ contents.",
     )
     .option("--apply", "perform the move (default: dry-run report only)")

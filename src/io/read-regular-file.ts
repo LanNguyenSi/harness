@@ -2,7 +2,7 @@ import * as fs from "node:fs";
 
 /**
  * Result of a symlink-rejecting regular-file read. The kinds are deliberately
- * fine-grained because the gate readers need to keep their distinct deny
+ * fine-grained because the readers need to keep their distinct failure
  * details (missing vs symlink vs not-regular); every caller treats
  * `unreadable` (an oversized file included) as fail-closed.
  */
@@ -29,7 +29,7 @@ function lstatOrNull(filePath: string): fs.Stats | null {
 }
 
 /**
- * Open flags for the gate-marker read. `O_NOFOLLOW` makes the open itself
+ * Open flags for the reads in this module. `O_NOFOLLOW` makes the open itself
  * refuse a symbolic link at the final path component (`ELOOP`), so no
  * earlier `lstat` is needed for a swap to race. `O_NONBLOCK` keeps an open
  * of a FIFO with no writer from waiting for one: the open returns at once
@@ -42,17 +42,18 @@ function lstatOrNull(filePath: string): fs.Stats | null {
  */
 const O_NOFOLLOW: number | undefined = fs.constants.O_NOFOLLOW;
 const O_NONBLOCK: number = fs.constants.O_NONBLOCK ?? 0;
-/** A marker read must never make a terminal the process's controlling one. */
+/** A read here must never make a terminal the process's controlling one. */
 const O_NOCTTY: number = fs.constants.O_NOCTTY ?? 0;
 
 /**
- * The most bytes the gate-marker read will return. Every caller reads a small
- * JSON record (an approval or delegation marker, an in-flight record, a
- * verdict, a launcher report, one adoption ledger of entry ids). A file over the
+ * The most bytes a read returns by default. The current callers read small
+ * text records: the harness manifest and its override layers
+ * (`src/cli/loader.ts`) and, with a larger bound of their own, the Claude
+ * Code user-scope MCP registry (`src/io/claude-mcp.ts`). A file over the
  * cap is refused as `unreadable` (fail-closed in every caller) before any
- * byte is read: a sparse multi-gigabyte file at a marker path otherwise
- * takes the hook past its budget, which the runtime treats as an allow, the
- * same fail-open a FIFO used to cause.
+ * byte is read: a sparse multi-gigabyte file at one of these paths
+ * otherwise makes the caller wait on bytes it never asked for, the same
+ * stall a FIFO used to cause.
  */
 export const MAX_REGULAR_FILE_READ_BYTES = 1024 * 1024;
 
@@ -113,23 +114,23 @@ function classifyOpenFailure(
 }
 
 /**
- * Options of the readers below. They default to the gate-marker read's
- * behaviour (the 1 MiB cap, a symlink refused).
+ * Options of the readers below. They default to the strict read this module
+ * was built for (the 1 MiB cap, a symlink refused).
  */
 export interface BoundedReadOptions {
   /**
    * The most bytes the read returns; a file over it is refused as
-   * `unreadable` before any byte is read, exactly like the gate-marker
-   * read's cap. Defaults to {@link MAX_REGULAR_FILE_READ_BYTES}. A caller
-   * with a legitimately larger input (a packed-refs file, a kubeconfig, a
-   * Claude Code user registry) passes its own, larger bound and justifies
+   * `unreadable` before any byte is read, exactly like the default cap.
+   * Defaults to {@link MAX_REGULAR_FILE_READ_BYTES}. A caller
+   * with a legitimately larger input (the Claude Code user registry) passes
+   * its own, larger bound and justifies
    * it at the call site; there is deliberately no way to ask for no bound.
    */
   maxBytes?: number;
   /**
    * Follow a symbolic link at the path (the open drops `O_NOFOLLOW`). For a
-   * reader of a file the operator or git legitimately keeps behind a link
-   * (a dotfiles-managed manifest, a kubeconfig); it never weakens the
+   * reader of a file the operator legitimately keeps behind a link
+   * (a dotfiles-managed manifest); it never weakens the
    * rest: the type of the OPENED descriptor still decides, so a link to a
    * FIFO, a device or a directory is `not-regular` and never blocks.
    * Defaults to `false` (a link is refused as `symlink`).
