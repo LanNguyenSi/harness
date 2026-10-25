@@ -16,11 +16,14 @@ export function registerOperatorLifecycle(
         "gate, harness.lock, and the override layers file by file " +
         "(machines/<discriminator>.harness.overrides.yaml, " +
         "projects/<name>/harness.overrides.yaml; other files in those directories, " +
-        "e.g. Claude Code's session transcripts, stay). A layer behind a symlink " +
-        "(machines/, projects/ or projects/<name> being a link, or a layer link that " +
-        "would no longer resolve) is not moved: the command prints 'move by hand' lines " +
-        "and exits non-zero. A partial run also exits non-zero; fix the error and re-run " +
-        "--apply. Does NOT touch settings.json or any other ~/.claude/ contents.",
+        "e.g. Claude Code's session transcripts, stay). Symlinks are never moved: a layer " +
+        "file that is a link, and machines/, projects/ or projects/<name> being a link, are " +
+        "printed as 'move by hand: <path> (symlink to <target>)' and left untouched, and " +
+        "--apply then exits non-zero; once the layer exists under ~/.harness/ the line becomes " +
+        "an 'already at' note and no longer fails the run. A failure before harness.yaml " +
+        "moves undoes the run (nothing is changed) and exits non-zero; a failure after it " +
+        "leaves a partial state, says what is where and exits non-zero; fix the error and " +
+        "re-run --apply. Does NOT touch settings.json or any other ~/.claude/ contents.",
     )
     .option("--apply", "perform the move (default: dry-run report only)")
     .action(async (options: { apply?: boolean }) => {
@@ -28,9 +31,15 @@ export function registerOperatorLifecycle(
       if (result.outcome === "target-conflict") {
         throw new HarnessExitError("", EX_FAIL);
       }
+      if (result.outcome === "rolled-back") {
+        throw new HarnessExitError(
+          "migrate-home failed and undid its moves; nothing was changed. Fix the error above, then re-run `harness migrate-home --apply`.",
+          EX_FAIL,
+        );
+      }
       if (options.apply && result.outcome === "partial") {
         throw new HarnessExitError(
-          "migrate-home stopped part-way. Fix the error above, then re-run `harness migrate-home --apply` to finish.",
+          "migrate-home stopped part-way (see the lines above for what is where). Fix the error, then re-run `harness migrate-home --apply` to finish.",
           EX_FAIL,
         );
       }
