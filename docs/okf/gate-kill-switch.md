@@ -22,7 +22,6 @@ sources:
   - src/schema/policy-packs.ts
   - src/schema/removed-keys.ts
   - docs/policy-packs/branch-protection.md
-  - docs/runtime-reality-hook.md
 ---
 
 # Kill switch: `harness gate disable` / `harness gate enable`
@@ -86,7 +85,7 @@ Enable reads the one live snapshot taken for that config. Ownership is decided t
 
 ## Hooks without a matcher
 
-The matcher is a literal substring of the hook group's `matcher`, so a group WITHOUT a matcher cannot be targeted by `gate disable` on either runtime (`src/cli/gate/disable.ts:211-213#"if (m === null) return false;"`, `src/cli/gate/codex-disable.ts:114#"unit.matcher !== null"`). A manifest hook with no `match` projects exactly such a matcher-less group (`src/cli/apply/generate-settings.ts:13-13#"is omitted when the manifest hook has no"`), and the documented runtime-reality hook entry is declared without `match` (`docs/runtime-reality-hook.md:22-28#"harness pack hook runtime-reality"`). Switch such a hook off with its own switch (`RUNTIME_REALITY_DISABLE=1` for runtime-reality, `docs/runtime-reality-hook.md:77#"short-circuit the hook entirely"`), give the entry a `match` and re-run `harness apply`, or remove it from the manifest and re-run `harness apply`.
+The matcher is a literal substring of the hook group's `matcher`, so a group WITHOUT a matcher cannot be targeted by `gate disable` on either runtime (`src/cli/gate/disable.ts:211-213#"if (m === null) return false;"`, `src/cli/gate/codex-disable.ts:114#"unit.matcher !== null"`). A manifest hook entry declared without `match` projects exactly such a matcher-less group (`src/cli/apply/generate-settings.ts:13-13#"is omitted when the manifest hook has no"`). Switch such a hook off at its source (`enabled: false` on the pack that owns it, or delete the entry from the manifest), give the entry a `match` and re-run `harness apply`, or remove it from the manifest and re-run `harness apply`.
 
 ## Branch-protection
 

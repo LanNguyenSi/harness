@@ -93,7 +93,7 @@ jobs:
 
       - name: No shipped [Unreleased] pointer
         # scripts/check-shipped-unreleased-pointer.mjs - a shipped file
-        # (src/, README.md, scripts/runtime-reality-docker-probe.mjs;
+        # (src/, README.md;
         # CHANGELOG.md itself is deliberately excluded, see the script's
         # own header) must never cite CHANGELOG.md's [Unreleased] section,
         # which a release cut empties out from under it; cite the

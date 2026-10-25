@@ -66,7 +66,7 @@ describe("REMOVED_COMMANDS table (task f3f15290)", () => {
     expect(invokesRemovedCommand("harness delegate")?.command).toBe("harness delegate");
     expect(invokesRemovedCommand("harness delegate --task x")?.command).toBe("harness delegate");
     expect(invokesRemovedCommand("harness pack hook branch-protection")).toBeUndefined();
-    expect(invokesRemovedCommand("harness pack hook runtime-reality")).toBeUndefined();
+    expect(invokesRemovedCommand("harness pack hook runtime-reality")?.command).toBe("harness pack hook runtime-reality");
     expect(invokesRemovedCommand("harness approve understanding")?.command).toBe("harness approve understanding");
     expect(invokesRemovedCommand("harness gc")?.command).toBe("harness gc");
     expect(invokesRemovedCommand("harness pack upgrade")?.command).toBe("harness pack upgrade");

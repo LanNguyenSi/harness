@@ -52,7 +52,7 @@ A key, pack or command that a release removed does not fail the load (`src/schem
 - a removed manifest key (for example `grounding.policies_source` or `risk`, and since 1.0.0 `policies:`, `workflows:`, `review_templates:`, `doctor:` and `audit:`) is stripped with a warning (an empty value is stripped without one, and so are the shapes older exports wrote by default, `audit: { redact: [] }` and `doctor: { ignore_template_drift: [] }`);
 - a removed per-hook field (`bash_match`, `path_match`, removed in 1.0.0) is stripped from the hook, which is kept, with one warning per hook per source (the base manifest and each override layer that carries it, a layer's warning naming its file);
 - a removed pack name in `policy_packs[]` is ignored with a warning;
-- a hook or a pack config site that still calls a removed CLI command (for example `harness policy intercept` or `harness record`, both removed in 1.0.0) is reported with a warning.
+- a hook or a pack config site that still calls a removed CLI command (for example `harness policy intercept`, `harness record`, or `harness pack hook runtime-reality`, all removed in 1.0.0) is reported with a warning.
 
 `harness validate`, `harness doctor`, `harness apply` and `harness export` print these warnings, and `harness validate --strict` fails on them. A key that was never valid is not on the removed list and still fails the load.
 
@@ -76,7 +76,6 @@ These are called by Claude Code via `settings.json`; you usually do not run them
 | Verb | Called from |
 |------|-------------|
 | `harness pack hook branch-protection [--runtime claude-code\|codex]` | `PreToolUse` branch-guard for the protected branches (task `a4d8adc5`): asks git (`git -C <dir> symbolic-ref -q HEAD`) for the branch of every directory the call writes into and refuses when git names a protected branch (compared case-insensitively) or cannot answer; outside every repository and on a detached HEAD it allows. Claude Code gets a JSON deny envelope on stdout (exit 0), or exit 2 with the reason on stderr when the envelope cannot be written to stdout; `--runtime codex` exits 2 with the reason on stderr. See [`docs/policy-packs/branch-protection.md`](policy-packs/branch-protection.md). |
-| `harness pack hook runtime-reality` | `PreToolUse` drift gate (v0.31.0, opt-in): before destructive runtime commands, probes live process state and denies on critical drift against the expectations file. Fail-open on probe errors. See [`docs/runtime-reality-hook.md`](runtime-reality-hook.md). |
 
 ## Operator approvals
 
@@ -93,7 +92,7 @@ Removed in task `a4d8adc5`: `harness approve branch-protection` and `harness ses
 
 ## Environment variables
 
-Variables the `harness` binary reads. For the `RUNTIME_REALITY_*` variables of the runtime-reality hook see [`runtime-reality-hook.md`](runtime-reality-hook.md).
+Variables the `harness` binary reads.
 
 | Variable | Read by | Effect |
 |---|---|---|

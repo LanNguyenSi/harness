@@ -4,7 +4,7 @@ import { defineConfig } from "vitest/config";
 // tests/cli/doctor-codex.test.ts, and
 // with their own per-test budgets
 // tests/scripts/memory-frontmatter-contract.test.ts)
-// spawns real child processes (execa) and races their own
+// spawns real child processes (node:child_process) and races their own
 // spawn/init/exit/IPC latency against a fixed local test-timeout budget
 // (250-2000ms). With no pool/concurrency limits, vitest's default pool
 // ("forks") runs up to `cpus-1` file-workers concurrently; on a 12-core
