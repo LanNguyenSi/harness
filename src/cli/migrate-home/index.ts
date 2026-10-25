@@ -163,7 +163,7 @@ export function migrateHome(opts: MigrateHomeOptions = {}): MigrateHomeResult {
       stdout.write(`  ${path.join(legacyPath, m.basename)}\n`);
     }
     stdout.write(
-      "Re-run with --apply to perform the move. After moving, run `harness apply` to regenerate any embedded paths (e.g. UNDERSTANDING_GATE_REPORT_DIR in settings.json).\n",
+      "Re-run with --apply to perform the move. After moving, run `harness apply` to regenerate any embedded paths; a leftover UNDERSTANDING_GATE_REPORT_DIR entry in settings.json is unused and can be deleted.\n",
     );
     return { legacyPath, newPath, items, outcome: "would-apply" };
   }
@@ -230,7 +230,7 @@ export function migrateHome(opts: MigrateHomeOptions = {}): MigrateHomeResult {
     }
 
     stdout.write(
-      "Run `harness apply` to regenerate any embedded paths (e.g. UNDERSTANDING_GATE_REPORT_DIR in settings.json) and re-emit hook command strings against the new home dir.\n",
+      "Run `harness apply` to regenerate any embedded paths and re-emit hook command strings against the new home dir; a leftover UNDERSTANDING_GATE_REPORT_DIR entry in settings.json is unused and can be deleted.\n",
     );
     return {
       legacyPath,

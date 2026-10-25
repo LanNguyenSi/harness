@@ -73,10 +73,11 @@ const LOCK_BASENAME = "harness.lock";
 const SETTINGS_BASENAME = "settings.json";
 const PRE_HARNESS_BACKUP_PREFIX = "settings.json.pre-harness-";
 /**
- * Understanding-gate state planted next to the manifest: persisted
- * reports, parse-error logs, hypotheses.json. Written by the
- * understanding-gate Stop hook and `harness approve understanding`;
- * harness-owned, so uninstall removes it (harness-discovery M2).
+ * Leftover state of the removed understanding gate that old installs
+ * still carry next to the manifest: persisted reports, parse-error
+ * logs, hypotheses.json. It was written by the understanding-gate Stop
+ * hook and `harness approve understanding` (both removed); harness-
+ * owned, so uninstall removes it (harness-discovery M2).
  */
 const UNDERSTANDING_GATE_DIRNAME = ".understanding-gate";
 /**
@@ -131,7 +132,8 @@ export interface UninstallOptions {
   homeDir?: string;
   /**
    * Override for the harness state root holding harness.yaml,
-   * harness.lock, harness.generated/, and .understanding-gate/. Defaults
+   * harness.lock, harness.generated/, and the leftover
+   * .understanding-gate/ of the removed gate. Defaults
    * to the shared resolver (`~/.harness/`, legacy fallback `~/.claude/`,
    * `HARNESS_HOME` env honored). Before this option existed, uninstall
    * hardcoded `~/.claude/` and silently missed everything under
@@ -187,7 +189,8 @@ export interface UninstallInventory {
   lockPath: string | null;
   /** `<stateDir>/harness.generated/` when present, else null. */
   generatedDir: string | null;
-  /** `<stateDir>/.understanding-gate/` when present, else null. */
+  /** `<stateDir>/.understanding-gate/` (leftover state of the removed
+   *  understanding gate) when present, else null. */
   gateStateDir: string | null;
   /** Harness-owned hook groups currently in settings.json. */
   hookGroups: HookGroupRef[];
@@ -633,8 +636,9 @@ function buildInventory(opts: UninstallOptions): {
   const warningsEarly: string[] = [];
   // When the state root came from the shared resolver (real-binary path:
   // both overrides absent), probe the non-selected default root too. A
-  // half-migrated install carries residue in the other root (e.g.
-  // `~/.claude/.understanding-gate/` next to an active `~/.harness/`),
+  // half-migrated install carries residue in the other root (e.g. the
+  // leftover `~/.claude/.understanding-gate/` of the removed gate next
+  // to an active `~/.harness/`),
   // and silently tearing down only one root is how the M2 blindness
   // recurs in mirrored form.
   if (opts.stateDir === undefined && opts.homeDir === undefined) {
@@ -746,6 +750,8 @@ function removeFilesystemArtefacts(inventory: UninstallInventory): string[] {
       );
     }
   }
+  // Leftover state of the removed understanding gate; old installs
+  // still have the directory, so the teardown still removes it.
   if (inventory.gateStateDir !== null) {
     try {
       fs.rmSync(inventory.gateStateDir, { recursive: true, force: true });

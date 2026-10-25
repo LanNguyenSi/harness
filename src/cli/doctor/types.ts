@@ -142,7 +142,7 @@ export interface PolicyPackUnresolved {
  */
 export interface PolicyPackConfigIssue {
   name: string;
-  /** Dotted path inside `pack.config`, e.g. `mode`, `approval_lifecycle.mode`. */
+  /** Dotted path inside `pack.config`, e.g. `protected_branches`, `ux.cannot`. */
   configPath: string;
   message: string;
 }
