@@ -11,10 +11,11 @@
 // longer reads the `mcpServers` block in `~/.claude/settings.json`: Claude
 // Code never consumed that block at runtime (see io/claude-mcp.ts:1-9),
 // so `team`/`full` profile recognition (interactive.ts's
-// `detectionHasAgentTasks`) would otherwise key off dead state. Codex's
-// TOML parser lives in the v1.1 opencode-adapter task. The result is
-// still useful for Codex users: `runtimes[]` flags presence so the
-// wizard can pre-select.
+// `detectionHasAgentTasks`) would otherwise key off dead state. This probe
+// only flags Codex by presence; parsing its TOML lives in
+// `src/cli/apply/install-codex-config.ts` (smol-toml), not here. The
+// result is still useful for Codex users: `runtimes[]` flags presence so
+// the wizard can pre-select.
 
 import * as fs from "node:fs";
 import * as os from "node:os";

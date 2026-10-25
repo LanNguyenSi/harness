@@ -14,7 +14,7 @@
 // `RUNTIME_REALITY_PROBE_CMD`, parses its JSON `ActualProcessState[]`, and
 // injects it into the package handler.
 //
-// Failure mode mirrors the package and the understanding-gate pack hook:
+// Failure mode mirrors the package:
 // every load / parse / probe error degrades to ALLOW (exit 0). The only
 // deny path is a probe that actually produced actuals showing critical
 // drift (or the operator's explicit `RUNTIME_REALITY_*_BLOCK` escalations,

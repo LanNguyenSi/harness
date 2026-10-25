@@ -25,8 +25,9 @@
 //
 // Subdirectory names are unchanged from the v0.23.x layout: a fresh
 // `~/.harness/` install contains the same `harness.yaml`,
-// `harness.generated/`, `.understanding-gate/`, `harness.lock`
-// children that the legacy `~/.claude/` install would have. This
+// `harness.generated/`, `harness.lock` children that the legacy
+// `~/.claude/` install would have (a legacy `.understanding-gate/`
+// child is still handled by migrate-home and uninstall). This
 // keeps the migration `mv`-only and avoids cascading file-rename
 // churn across every test fixture.
 

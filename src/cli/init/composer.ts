@@ -7,8 +7,9 @@
 // (branch-protection) and four MCPs (agent-tasks,
 // grounding-mcp, memory-router — wired under memory.router, NOT
 // tools.mcp[] — and codebase-oracle). The composer emits no policies and
-// no hooks. The opencode pack stays disabled in the wire-now multiselect
-// until its runtime adapter (agent-tasks/f34eb233) lands.
+// no hooks. The wizard's opencode wire-now slot is shown but not wireable
+// yet: its runtime adapter shipped (agent-tasks/f34eb233), and the wizard
+// wiring for it is tracked separately (task c5287b80).
 //
 // Design: build a plain object matching the Manifest schema, then
 // serialise via the `yaml` library. The shared `init()` path

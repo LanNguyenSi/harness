@@ -310,8 +310,8 @@ export function buildDesiredMcpServers(
 }
 
 // Translate manifest `memory.router` into a synthetic UserPromptSubmit
-// hook so per-prompt context augmentation actually fires alongside the
-// understanding-gate hook. Returns null when memory.router is absent or
+// hook so per-prompt context augmentation actually fires on prompt
+// submit. Returns null when memory.router is absent or
 // `enabled: false`, in which case no entry lands in settings.json.
 //
 // Command joining: the schema accepts `command: string[]` (min 1). For
@@ -325,10 +325,9 @@ export function buildDesiredMcpServers(
 // avoid spaces in installed binary paths.
 //
 // Timeout: `memory.router` has no manifest-level budget_ms field, so we
-// pick 5000ms to match the existing `understanding-gate-claude-hook`
-// timeout. A per-prompt augmentation that visibly delays prompt-submit
-// would be hostile UX; 5s is generous for the router's typical
-// memory-file scan.
+// pick 5000ms for prompt-submit latency: a per-prompt augmentation that
+// visibly delays prompt-submit would be hostile UX, and 5s is generous
+// for the router's typical memory-file scan.
 export function buildMemoryRouterHook(manifest: Manifest): Hook | null {
   const router = manifest.memory.router;
   if (!router) return null;

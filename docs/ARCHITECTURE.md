@@ -316,7 +316,7 @@ Notes:
 
 ## 5. `hooks:` section
 
-> **Field note (1.0.0).** The `path_match` and `bash_match` hook fields below were removed in 1.0.0: a hook that still declares one loads with a warning that the field is ignored, and the field is stripped (a later override layer can still delete the hook itself). The table describes the pre-1.0.0 design.
+> **Field note (1.0.0).** The `path_match` and `bash_match` hook fields below were removed in 1.0.0: a hook that still declares one loads with a warning that the field is ignored, and the field is stripped (a later override layer can still delete the hook itself). The YAML example below still shows `path_match` from the pre-1.0.0 design; the field table no longer lists either field.
 
 Each hook is a shell command bound to a runtime event, with optional match pattern, blocking mode, and timeout budget. This is the surface that `harness apply` translates into `~/.claude/settings.json`'s `hooks` section in Phase 3.
 
@@ -354,19 +354,19 @@ Schema per entry:
 | `event` | enum | yes | one of `SessionStart` / `UserPromptSubmit` / `PreToolUse` / `PostToolUse` / `Stop` / `SubagentStart` / `SubagentStop` / `PreCompact` |
 | `command` | string | yes | shell command; executable path or script with args |
 | `match` | regex (JS flavour) | no | runtime-event-scoped filter; for `PreToolUse` / `PostToolUse` this matches the tool name (e.g. `"Write\|Edit"` or `"mcp__agent-tasks__.*"`) |
-| `path_match` | glob (minimatch) | no | not projected into the runtime config: `harness apply` writes no filter for it (and warns for Codex), so the hook fires on every call `match` selects; the referenced script must filter on the path itself |
-| `bash_match` | regex (JS flavour) | no | not projected into the runtime config, same as `path_match`: the referenced script must filter on the command string itself. A policy's `trigger.bash_match` is evaluated by `harness policy intercept` |
 | `blocking` | enum | yes | `false` / `soft` / `hard` |
 | `budget_ms` | integer | no (default 30000) | timeout before hook is killed |
 | `description` | string | no | surfaced by `harness describe` |
-| `min_version` | string | no | semver floor; `harness doctor` runs `version_command` and emits a `⚠ outdated` line when the parsed version is below this value. Requires `version_command` (validate rejects min_version alone): hook commands are arbitrary shell strings (`harness policy intercept`, `~/.claude/hooks/foo.sh`, etc.), so no useful default exists. |
+| `min_version` | string | no | semver floor; `harness doctor` runs `version_command` and emits a `⚠ outdated` line when the parsed version is below this value. Requires `version_command` (validate rejects min_version alone): hook commands are arbitrary shell strings (`harness pack hook branch-protection`, `~/.claude/hooks/foo.sh`, etc.), so no useful default exists. |
 | `version_command` | `string[]` | no | argv to spawn for the version probe; required when `min_version` is set. Point this at the **source-of-truth binary** whose version your `min_version` floor pins, not at a wrapper or launcher: if a `mytool-launcher` wrapper ships alongside the `mytool` CLI, use `[mytool, --version]`, not `[mytool-launcher, --version]`. |
+
+`path_match` and `bash_match` were removed; a manifest that still carries them loads with a warning and the field is ignored (task 10e2ff0a).
 
 Blocking semantics, three levels:
 
 - **`false`** (non-blocking): hook may inject `additionalContext` via stdout-JSON but the tool call always proceeds. Default choice when the hook's job is to inform.
 - **`soft`**: hook may warn; agent sees the warning but the tool call still proceeds. For patterns like "you probably shouldn't `rm -rf` here" that have legitimate exceptions.
-- **`hard`**: hook's non-zero exit or explicit `decision: "block"` (with `hookSpecificOutput.permissionDecision: "deny"` for PreToolUse, per Claude Code 2.1+) aborts the tool call. Reserved for cases where false positives are tolerable, e.g., review-evidence-gate, dogfood-trace-gate.
+- **`hard`**: hook's non-zero exit or explicit `decision: "block"` (with `hookSpecificOutput.permissionDecision: "deny"` for PreToolUse, per Claude Code 2.1+) aborts the tool call. Reserved for cases where false positives are tolerable, e.g., branch-protection.
 
 Pick the softest level that solves the problem. Hard-blocking is a commitment that false positives will not happen under reasonable inputs; if you're not sure, start at `soft` and promote.
 
