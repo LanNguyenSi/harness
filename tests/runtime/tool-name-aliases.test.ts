@@ -80,6 +80,15 @@ describe("expandToolNameAliases — MCP name variants", () => {
     expect(aliases).toContain("mcp__my_server__.my_tool");
   });
 
+  it("the single-separator dot form mcp__server.tool expands to the double-underscore and dot variants", () => {
+    const aliases = expandToolNameAliases("mcp__my-server.my_tool");
+    expect(aliases).toContain("mcp__my-server.my_tool");
+    expect(aliases).toContain("mcp__my-server__my_tool");
+    expect(aliases).toContain("mcp__my-server__.my_tool");
+    expect(aliases).toContain("mcp__my_server__my_tool");
+    expect(aliases).toContain("mcp__my_server__.my_tool");
+  });
+
   it("a plain mcp-prefixed name with neither __ nor . double-separator is not expanded (returned as-is)", () => {
     // This does not match any MCP regex, so it is treated as a plain tool.
     expect(expandToolNameAliases("mcp_invalid")).toEqual(["mcp_invalid"]);

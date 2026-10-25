@@ -125,7 +125,7 @@ describe("generateCodexConfig", () => {
             name: "mcp-guard",
             event: "PreToolUse",
             match: "mcp__agent-tasks__pull_requests_create",
-            command: "echo shell-guard",
+            command: "echo mcp-guard",
             blocking: "hard",
             budget_ms: 1000,
           },
@@ -150,9 +150,29 @@ describe("generateCodexConfig", () => {
     expect(content).not.toContain("--hook");
   });
 
+  it("keeps the hook-name comment on one line when the name carries a newline or a control byte", () => {
+    const { content } = generateCodexConfig(
+      parseManifest({
+        version: 1,
+        hooks: [
+          {
+            name: "evil\n[[hooks.Stop]]\u0007x",
+            event: "PreToolUse",
+            command: "echo evil",
+            blocking: false,
+            budget_ms: 1000,
+          },
+        ],
+      }),
+    );
+    expect(content).toContain("# harness hook: evil [[hooks.Stop]] x (budget_ms=1000)");
+    expect(content).not.toMatch(/^\[\[hooks\.Stop\]\]/m);
+    expect(content).not.toContain("\u0007");
+  });
+
   it("emits a hook whose command is `echo shell-guard` verbatim, with the budget as its timeout", () => {
-    // The command is no longer special: a >=2000ms budget surfaces as its
-    // own seconds value and the command text carries no `--hook` tag.
+    // An ordinary command with a >=2000ms budget: the budget surfaces as
+    // its own seconds value and the command text carries no `--hook` tag.
     const { content } = generateCodexConfig(
       parseManifest({
         version: 1,
