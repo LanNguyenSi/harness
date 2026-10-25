@@ -104,7 +104,7 @@ steps).
 
 ## Status
 
-The current release is `v1.0.0`. What shipped in each version is in
+The current release is `v1.0.1`. What shipped in each version is in
 [`CHANGELOG.md`](CHANGELOG.md).
 
 ## License
