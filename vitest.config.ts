@@ -107,7 +107,7 @@ export default defineConfig({
         "src/cli/register-inspect-group.ts",
         "src/cli/register-setup-group.ts",
         "src/cli/register-pack-group.ts",
-        "src/cli/register-gate-gc-group.ts",
+        "src/cli/register-gate-group.ts",
       ],
       reporter: ["text", "html"],
       thresholds: {
