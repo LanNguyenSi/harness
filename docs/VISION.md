@@ -50,7 +50,7 @@ A control plane is only useful if it stands on real primitives. `harness` is not
 
 [`agent-grounding`](https://github.com/LanNguyenSi/agent-grounding) is the most mature pillar. It contains:
 
-- `evidence-ledger`: a SQLite-backed record of facts, hypotheses, rejected hypotheses, and unknowns, tagged by session. Retention was recently added.
+- `evidence-ledger`: a SQLite-backed record of facts, hypotheses, rejected hypotheses, and unknowns, tagged by session. Retention is the ledger package's concern; harness does not manage it.
 - `claim-gate`: a policy engine that decides whether a claim of a given type (e.g. "this is the root cause") is allowed given the evidence collected so far.
 - `review-claim-gate`: a composite GitHub Action that reads the ledger and gates merges.
 - `grounding-mcp`: an MCP wrapper exposing the grounding primitives to the agent at runtime.
@@ -92,7 +92,7 @@ Given the three pillars plus hooks, what does a control plane add that is greate
 
 **Diff-over-time.** Knowing what changed between last session and this one is currently impossible. With a canonical representation of "the harness as configured", diffing is a file diff.
 
-The honest scope of this capability is layered. Phase 1 ships *manifest* diffs: what's declared in `harness.yaml` today vs. yesterday. *Asset* diffs (the contents of a hook script the manifest references; the SHA of an MCP entrypoint) are a Phase 3 concern that requires the lock file (`harness.lock`). A reader who interprets "diff-over-time" as "I'll know if `git-preflight.sh` changed under me" should know up front that this requires Phase 3, not Phase 1. Without that nuance, Phase 1's promise of a single source of truth is half-true: the manifest is canonical, the assets it references are not yet pinned. ARCHITECTURE §7 makes this layering explicit.
+The capability is layered. *Manifest* diffs show what `harness.yaml` declares today against an earlier state (`harness diff --since <ref>`, `harness diff --since-apply`). *Asset* diffs (the contents of a hook script the manifest references, an MCP entrypoint) rest on the lock file: `harness.lock` records a hash of each referenced asset, `harness apply` reports asset drift on every run, `harness validate --check-lock` surfaces it and `harness apply --strict-lock` refuses on it. ARCHITECTURE §7 describes the layering.
 
 **Dry-run.** Before a change lands, previewing it is straightforward: `harness apply --dry-run` prints the would-be diff and the restart hints without writing anything, and `harness diff --since-apply` shows what drifted since the last write. That is the difference between "edit and pray" and "edit, preview, commit".
 

@@ -6,7 +6,7 @@
 // hints to print based on which manifest sections actually changed.
 //
 // Restart-hint selection, keyed on the manifest section that changed;
-// `harness apply --dry-run` prints these without writing (ARCHITECTURE.md §9):
+// `harness apply --dry-run` prints these without writing (ARCHITECTURE.md overview):
 //   - mcp[]                changed → MCP-restart hint
 //   - memory.router.command changed → session-restart hint
 //   - hooks structure       changed → settings.json reload hint
