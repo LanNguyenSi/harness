@@ -10,21 +10,20 @@ hook scripts, per-project overrides. No single file answers "what can
 this agent do right now, and why is it set up that way?" `harness`
 puts all of it in one zod-validated YAML manifest you read, validate,
 and diff; generates the config the agent runtime loads from it; and at
-runtime blocks tool calls that violate the declared rules. The
-branch-protection gate asks git and records nothing. Most config tools
-describe what an agent is configured
-to use; `harness` decides what it is allowed to do, under the exact
-context.
+runtime blocks tool calls through one enforcing gate, branch-protection.
+The branch-protection gate asks git and records nothing. Most config
+tools describe what an agent is configured to use; `harness` decides what
+it is allowed to do, under the exact context.
 
 ## Key concepts
 
 | Term | What it is |
 |------|-----------|
-| **manifest** | The one YAML file (`harness.yaml`) where you declare everything: tools, hooks, policy packs, memory. |
+| **manifest** | The one YAML file (`harness.yaml`) where you declare everything: grounding, tools, memory, hooks, policy packs. |
 | **apply** | `harness apply` renders the manifest into the config files the agent runtime actually reads. |
-| **evidence ledger** | An append-only log of facts an agent records during a session. harness never reads it: it only points the grounding-mcp server at the ledger file (`EVIDENCE_LEDGER_DB`); read old rows with the evidence-ledger CLI (`ledger handoff --json`). |
+| **gate switch** | `harness gate disable` / `harness gate enable`: the operator kill switch. Disable removes the hook groups whose `matcher` substring-matches `--matcher <substring>` from `~/.claude/settings.json` (with `--runtime codex`, neutralises the matching units of the managed block in `~/.codex/config.toml`) and keeps a snapshot; enable restores them. |
 | **hook** | A script the agent runtime runs at a lifecycle event (session start, before every tool call, ...). How gates get wired in. |
-| **policy pack** | A bundle of hooks, instructions, and templates shipped under one name and enabled with a single manifest key. |
+| **policy pack** | A bundle of hooks and instructions shipped under one name and enabled with a single manifest key (`policy_packs[]`, via `harness pack add <name>`). |
 
 ## Quick start
 
@@ -47,16 +46,9 @@ step-by-step version, with what each command writes:
 [`docs/for-humans.md`](docs/for-humans.md) (it starts from the wizard
 and the `solo` template).
 
-The `solo`, `team` and `full` templates now ship the branch-protection
-pack (the understanding gate is no longer offered at install). The
-reference policies and the "pick reference policies" wizard step were
-removed in 1.0.0, so no template writes policies or policy-intercept
-hooks.
-
-The `post-merge-gate`, `solution-acceptance` and
-`understanding-before-execution` packs are removed, and so is the
-`permission_profiles` key the last of them consumed: a manifest that still
-names one loads with a warning and the entry is ignored.
+Upgrading? A manifest that still names a pack or key removed in 1.0.0
+loads with a warning and the entry is ignored; see
+[`docs/CLI.md#removed-keys-packs-and-commands`](docs/CLI.md#removed-keys-packs-and-commands).
 
 ## Usage
 
@@ -77,7 +69,7 @@ operator controls are documented in
 
 ## Documentation
 
-- [`docs/for-humans.md`](docs/for-humans.md): operator path, install through the first refusing gate, diagnostics cheat sheet (still starts from the wizard and the `solo` template; the Quick start note applies).
+- [`docs/for-humans.md`](docs/for-humans.md): operator path, install through the first refusing gate, diagnostics cheat sheet.
 - [`docs/for-agents.md`](docs/for-agents.md): agent integration contract, workflow lifecycle, CLI cheat sheet by side-effect class.
 - [`docs/quickstart.md`](docs/quickstart.md): five-minute bare-command path to the `branch-protection` gate.
 - [`docs/init-interactive.md`](docs/init-interactive.md): the `harness init --interactive` wizard, walkthrough and limitations.
@@ -85,17 +77,16 @@ operator controls are documented in
 - [`docs/policy-packs/README.md`](docs/policy-packs/README.md): the built-in policy pack (`branch-protection`).
 - [`docs/uninstall.md`](docs/uninstall.md): the single-command teardown, dry-run by default.
 - [`docs/examples/full-manifest.yaml`](docs/examples/full-manifest.yaml): a schema-coverage reference (not a runnable config; its header explains why).
-- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md): manifest schema, file layout, CLI surface (historical design intent; see its own note for the current shape).
+- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md): the architecture reference: manifest schema, file layout, CLI surface.
 - [`docs/VISION.md`](docs/VISION.md): why a declarative control plane, not more individual tools.
-- [`docs/ROADMAP.md`](docs/ROADMAP.md): the phase-by-phase plan and the acceptance criteria each phase shipped against.
 - [`CHANGELOG.md`](CHANGELOG.md): what shipped in each version.
 
 ### Related projects
 
-- [`agent-grounding`](https://github.com/LanNguyenSi/agent-grounding): evidence-ledger, claim-gate, review-claim-gate; `grounding-mcp` is the canonical client surface harness queries.
+- [`agent-grounding`](https://github.com/LanNguyenSi/agent-grounding): evidence-ledger and claim surfaces outside harness; `grounding-mcp` is the MCP server harness can register and point at the ledger path (`EVIDENCE_LEDGER_DB`), and harness itself queries nothing there.
 - [`agent-memory`](https://github.com/LanNguyenSi/agent-memory): the memory surfaces the control plane inventories.
 - [`agent-tasks`](https://github.com/LanNguyenSi/agent-tasks): MCP-registered task platform whose registration and health appear in `harness describe`.
-- [`agent-preflight`](https://github.com/LanNguyenSi/agent-preflight): standalone local preflight validator; harness no longer ships a preflight hook or policy that wires it (task `f3f15290`), but an operator can still call it directly or from a custom hook.
+- [`agent-preflight`](https://github.com/LanNguyenSi/agent-preflight): a standalone local preflight validator an operator can call directly or from a custom hook.
 - [`codebase-oracle`](https://github.com/LanNguyenSi/codebase-oracle): opt-in MCP for multi-repo RAG search; declare it with `harness add mcp codebase-oracle --command codebase-oracle,mcp`, then register it with Claude Code using the `claude mcp add-json` command `harness doctor` prints.
 - [`agent-dx`](https://github.com/LanNguyenSi/agent-dx): ships `git-batch-cli`, a day-to-day tool whose inventory appears in `harness describe`.
 
@@ -113,10 +104,8 @@ steps).
 
 ## Status
 
-The current release is `v0.64.0`. All seven planned phases have
-shipped; phase acceptance criteria are in
-[`docs/ROADMAP.md`](docs/ROADMAP.md), and what shipped in each version
-is in [`CHANGELOG.md`](CHANGELOG.md).
+The current release is `v0.64.0`. What shipped in each version is in
+[`CHANGELOG.md`](CHANGELOG.md).
 
 ## License
 

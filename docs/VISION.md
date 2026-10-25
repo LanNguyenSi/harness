@@ -56,9 +56,9 @@ A control plane is only useful if it stands on real primitives. `harness` is not
 - `grounding-mcp`: an MCP wrapper exposing the grounding primitives to the agent at runtime.
 - `grounding-sdk`: a library for other consumers.
 
-What's missing from the grounding pillar is not primitives but **wiring**. The policies in `claim-gate` are hardcoded; they should be configurable per project. Sessions must be started manually with `grounding_start`; they should begin automatically. Policy enforcement today is voluntary; the agent has to remember to invoke `claim-gate`. The enforcement mechanism exists; the deterministic triggering does not.
+What's missing from the grounding pillar is not primitives but **wiring**. An agent should not have to know the ledger path or remember to register `grounding-mcp`; the configuration carries both. That is exactly the part harness does: the manifest declares `grounding.evidence_ledger.path`, and `harness apply` projects it onto the `tools.mcp[grounding-mcp]` entry as `EVIDENCE_LEDGER_DB`. harness itself reads and writes nothing in the ledger.
 
-A control plane's job on this pillar is to take the primitives that exist and tell the harness: *when the agent attempts action X, require evidence of type Y; when session Z ends, archive its ledger*.
+The claim primitives stay where they are: claim gating is something the agent does through `grounding-mcp`, not something harness evaluates. Harness-side enforcement is one gate (branch-protection) plus the `harness gate disable` / `enable` kill switch; the rest of the control plane stays declarative.
 
 ### Tools
 
@@ -94,9 +94,9 @@ Given the three pillars plus hooks, what does a control plane add that is greate
 
 The honest scope of this capability is layered. Phase 1 ships *manifest* diffs: what's declared in `harness.yaml` today vs. yesterday. *Asset* diffs (the contents of a hook script the manifest references; the SHA of an MCP entrypoint) are a Phase 3 concern that requires the lock file (`harness.lock`). A reader who interprets "diff-over-time" as "I'll know if `git-preflight.sh` changed under me" should know up front that this requires Phase 3, not Phase 1. Without that nuance, Phase 1's promise of a single source of truth is half-true: the manifest is canonical, the assets it references are not yet pinned. ARCHITECTURE §7 makes this layering explicit.
 
-**Dry-run.** Before applying a change, simulating what it would do is straightforward if the effect of a configuration is computable. This is the hardest capability to build well, and the most valuable one long-term: it's the difference between "edit and pray" and "edit, preview, commit".
+**Dry-run.** Before a change lands, previewing it is straightforward: `harness apply --dry-run` prints the would-be diff and the restart hints without writing anything, and `harness diff --since-apply` shows what drifted since the last write. That is the difference between "edit and pray" and "edit, preview, commit".
 
-**Policies as data.** The rules we write in memory notes ("always review before merge", "always fetch before starting work in a repo", "never ship without dogfood") become machine-readable YAML entries that bind to hook triggers, rather than prose the agent might or might not act on. This is where the "system enforcement" theme joins the "control plane" theme.
+**One gate, one switch.** The rule that blocks is the branch-protection pack: a `PreToolUse` hook that asks git for the branch of each directory a tool call writes into and refuses on a protected branch or when git cannot answer. `harness gate disable` / `harness gate enable` is the operator kill switch over it. Everything else stays declarative: declare, validate, apply.
 
 ## 5. Positioning: what `harness` is and isn't
 
@@ -120,9 +120,9 @@ The following deliberately do not appear here. They belong in later documents an
 - The implementation language (Go, Node, Rust, ...).
 - The phased implementation plan and acceptance criteria per phase.
 
-`ARCHITECTURE.md` will address the first four. `ROADMAP.md` will address the last.
+`ARCHITECTURE.md`, the current architecture reference, addresses the first four; for the last there is no forward plan document, `CHANGELOG.md` records what shipped.
 
-§8 below defends the *sequencing choice* (introspection before enforcement) at the level of design-intent rather than prescribing what each phase contains. The actual phase contents stay in ROADMAP.
+§8 below defends the *sequencing choice* (introspection before enforcement) at the level of design-intent.
 
 ## 7. What readers should take away
 
@@ -132,18 +132,10 @@ If you read only this document, you should believe three things:
 2. The primitives needed to fix this already exist across `agent-grounding`, `agent-memory`, the MCP ecosystem, and Claude Code's hook surface. What is missing is the layer that makes them coherent.
 3. That layer is a declarative control plane with a single source of truth, read-first capabilities (describe, validate, diff), write-later capabilities (apply, generate), and a policy layer on top. It is additive to existing tools and deliberately limited in scope.
 
-Everything that follows in `ARCHITECTURE.md` and the phased roadmap is downstream of those three beliefs. If one of them is wrong, the downstream design is wrong, which is why it is worth putting this vision on paper before writing code.
+Everything that follows in `ARCHITECTURE.md` is downstream of those three beliefs. If one of them is wrong, the downstream design is wrong, which is why it is worth putting this vision on paper before writing code.
 
 ## 8. Why introspection comes before enforcement
 
-A natural critique of the phase ordering is: the founding incident on 2026-04-23 was an **enforcement** failure (no [`agent-preflight`](https://github.com/LanNguyenSi/agent-preflight) ran before stale-conclusions were drawn (the *check* exists, the deterministic trigger does not), but Phase 1 ships **introspection** (`describe`, `validate`, `doctor`). The thing harness was born to fix lands in Phase 4. Why not invert the order?
+A natural critique of a control plane that mostly observes is: legible configuration does not stop anything by itself. The answer is sequencing, not evasion. You cannot enforce a rule over a configuration surface you cannot read. Enforcement depends on knowing reliably what the configuration *is*: which manifest is in effect, which hooks are wired, which tools are healthy. If `harness validate` cannot catch a malformed manifest or a dead hook script reference, anything enforcing on top of it fires garbage, and every false positive becomes its own debugging incident. So the legible-configuration verbs (`describe`, `validate`, `doctor`, `diff`) are the floor, and enforcement is the wall built on top of it.
 
-Three reasons make introspection-first the right sequencing.
-
-**You cannot enforce policies on a configuration surface you cannot read.** A policy that says "block PR merges without a review-evidence ledger entry" depends on knowing reliably what the configuration *is*: which manifest is in effect, which hooks are wired, which tools are healthy, which session is current. If `harness validate` cannot catch a malformed manifest or a dead hook script reference, the enforcement layer fires garbage and the failure modes are worse than no enforcement at all. Phase 1 builds the floor. Phase 4 builds the wall on top of the floor.
-
-**The 2026-04-23 incident itself was visible to introspection** the moment introspection existed. The drift was detectable by `git status` (and the broader check is what `agent-preflight` already runs locally); the reason it wasn't caught is that nothing made the human or the agent invoke that check deterministically at the right moment. That is two problems: (a) "fire the existing check at the right moment", which is *the* deterministic-trigger problem of Phase 4 (a hook wrapping `preflight run` plus a policy that gates further work on its result), and (b) "make the check legible to humans on demand", which is `harness doctor` in Phase 1. Both matter. Doing (b) first means that when (a) lands, its diagnostics are already understandable; doing (a) first means policies fire against a system whose configuration is not yet legible, and every false positive becomes its own debugging incident.
-
-**Phase 1 has its own user-visible value, even without enforcement.** A worked example: today, an agent investigating a tasks's claims will discover a dead MCP server only by trying it; if `codebase-oracle` is broken the agent burns context on grep before noticing. With Phase 1's `harness doctor`, a single command surfaces "MCP `codebase-oracle` health verb timed out at 2026-04-27T17:42Z; expected `oracle_list_repos` to respond in 5000ms." That is real value, deliverable in Phase 1, independent of any policy enforcement. ARCHITECTURE Appendix D walks through what that output actually looks like.
-
-So: introspection first is a deliberate sequencing choice, not an evasion. The killer-test challenge ("can harness solve a real problem in 20 lines?") is answered in Phase 1 by `harness doctor` plus `validate`, not by a policy block. The policy layer is what makes the floor *deterministic*, but the floor itself is the legible-configuration capability, and that is what Phase 1 ships.
+The wall is deliberately one gate wide. The branch-protection pack blocks `Write`/`Edit` (Codex: `apply_patch`) when git names a protected branch for a directory the call writes into, or when git cannot answer, and `harness gate disable` / `harness gate enable` is the operator kill switch over it. Everything else harness does is declare, validate and apply. A single command like `harness doctor` already carries real value independent of any enforcement (it surfaces, for example, an MCP server whose health verb times out); the gate earns its keep where a rule must fire deterministically, and the floor makes that refusal debuggable.
