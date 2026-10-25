@@ -2372,6 +2372,45 @@ describe("interactive wizard — runtime multiselect (task 696f7560)", () => {
     expect(capturedRuntimeChoices.find((c) => c.value === "claude-code")?.checked).toBe(true);
     expect(capturedRuntimeChoices.find((c) => c.value === "codex")?.checked).toBe(false);
   });
+
+  it("pre-checks codex and leaves claude-code unchecked when only ~/.codex exists", async () => {
+    // The opposite probe state of the test above: codex has a ~/.codex
+    // (checked), claude-code is detected but has no ~/.claude (unchecked).
+    fs.mkdirSync(path.join(tmpHome, ".codex"));
+    let capturedRuntimeChoices: { name: string; value: string; checked: boolean }[] = [];
+    const cap = captureStreams();
+    const recordingCheckbox = (async (args: {
+      choices: { name: string; value: string; checked?: boolean }[];
+    }) => {
+      // The Solo path has exactly one checkbox: the runtime wire-now
+      // multiselect. Record its choices, select nothing.
+      capturedRuntimeChoices = args.choices.map((c) => ({
+        name: c.name,
+        value: c.value,
+        checked: c.checked === true,
+      }));
+      return [];
+    }) as unknown as InteractivePrompts["checkbox"];
+    const prompts: InteractivePrompts = {
+      select: (async () => "solo") as unknown as InteractivePrompts["select"],
+      confirm: (async () => true) as unknown as InteractivePrompts["confirm"],
+      input: (async () => "~/.claude/projects/{project}/memory") as unknown as InteractivePrompts["input"],
+      checkbox: recordingCheckbox,
+    };
+    const result = await runInteractive({
+      homeDir: tmpHome,
+      dependencyPathEnv: fakeDepsPath,
+      prompts,
+      stdout: cap.out,
+      stderr: cap.err,
+    });
+    expect(result.aborted).toBe(false);
+    expect(result.applies).toEqual([]); // empty selection → wiring skipped
+    expect(capturedRuntimeChoices.map((c) => c.value)).toEqual(["claude-code", "codex"]);
+    expect(JSON.stringify(capturedRuntimeChoices)).not.toContain("opencode");
+    expect(capturedRuntimeChoices.find((c) => c.value === "claude-code")?.checked).toBe(false);
+    expect(capturedRuntimeChoices.find((c) => c.value === "codex")?.checked).toBe(true);
+  });
 });
 
 describe("interactive wizard — Ctrl-C", () => {
@@ -2454,7 +2493,7 @@ describe("interactive wizard — hermetic spawn guard, claude-mcp path (task 0d8
     // runInteractive's outer catch (the top-level handler that otherwise
     // treats a caught error as either an `isAbortError` Ctrl-C or a
     // rethrow) then re-throws it again past every remaining intermediate
-    // handler, same as the other two guarded call sites above.
+    // handler, same as the agent-tasks probe call site above.
     fs.mkdirSync(path.join(tmpHome, ".claude"));
     const cap = captureStreams();
     let caught: unknown;

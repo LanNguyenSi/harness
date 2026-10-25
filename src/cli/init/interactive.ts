@@ -1243,7 +1243,7 @@ async function runPostInitTail(t: PostInitTailOpts): Promise<InteractiveResult> 
     "config.toml",
   );
 
-  const wireChoices: { name: string; value: WireableRuntime; checked: boolean; disabled?: string }[] = [
+  const wireChoices: { name: string; value: WireableRuntime; checked: boolean }[] = [
     {
       name: `claude-code  → merges into ${claudeSettingsPath}`,
       value: "claude-code",
@@ -1258,7 +1258,7 @@ async function runPostInitTail(t: PostInitTailOpts): Promise<InteractiveResult> 
 
   const selectedRuntimes = (await prompts.checkbox({
     message: "Wire harness into which runtimes now? (space to toggle, return to confirm; uncheck all to skip)",
-    choices: [...wireChoices],
+    choices: wireChoices,
   })) as WireableRuntime[];
 
   if (selectedRuntimes.length === 0) {

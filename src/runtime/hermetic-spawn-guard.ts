@@ -1,6 +1,7 @@
 // Hermetic-spawn guard (task 54739002). Small, reusable primitive for
 // "real spawn" implementations that back a test-injectable runner (e.g.
-// `installSpawn` in src/cli/init/dependencies.ts, and the sibling
+// the `installSpawn` option of the init wizard, which defaults to
+// `realSpawn` in src/cli/init/dependencies.ts, and the sibling
 // `realClaudeMcpExec` guard planned in task 0d80e969 for
 // src/io/claude-mcp.ts).
 //
@@ -24,7 +25,9 @@
 //   - `realNpmExec` (src/cli/doctor/npm-bin-path.ts)
 // Three more (`realNodeVersionSpawn`, `realNpmGlobalsSpawn`,
 // `realCheckStaleBase`) guarded the session-start producers and were
-// removed with them in task f3f15290.
+// removed with them in task f3f15290. `realOwInitSpawn`
+// (src/cli/init/interactive.ts), the first guarded site, backed the
+// orchestrator-workflow offer and was removed with it in task 68dca91f.
 // Naming them here (instead of just a count) is deliberate (review
 // finding F5, task T-007): a bare count silently drifts every time a new
 // call site is added and nobody remembers to bump it. See the guard call
