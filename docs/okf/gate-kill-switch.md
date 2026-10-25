@@ -85,7 +85,7 @@ Enable reads the one live snapshot taken for that config. Ownership is decided t
 
 ## Hooks without a matcher
 
-The matcher is a literal substring of the hook group's `matcher`, so a group WITHOUT a matcher cannot be targeted by `gate disable` on either runtime (`src/cli/gate/disable.ts:211-213#"if (m === null) return false;"`, `src/cli/gate/codex-disable.ts:114#"unit.matcher !== null"`). A manifest hook entry declared without `match` projects exactly such a matcher-less group (`src/cli/apply/generate-settings.ts:13-13#"is omitted when the manifest hook has no"`). Switch such a hook off at its source (`enabled: false` on the pack that owns it, or delete the entry from the manifest), give the entry a `match` and re-run `harness apply`, or remove it from the manifest and re-run `harness apply`.
+The matcher is a literal substring of the hook group's `matcher`, so a group WITHOUT a matcher cannot be targeted by `gate disable` on either runtime (`src/cli/gate/disable.ts:211-213#"if (m === null) return false;"`, `src/cli/gate/codex-disable.ts:114#"unit.matcher !== null"`). A manifest hook entry declared without `match` projects exactly such a matcher-less group (`src/cli/apply/generate-settings.ts:13-13#"is omitted when the manifest hook has no"`). Delete such an entry from the manifest, or give it a `match`, and re-run `harness apply`.
 
 ## Branch-protection
 

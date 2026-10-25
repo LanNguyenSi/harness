@@ -290,8 +290,8 @@ in between, enable refuses and names the way out, unless skipping the
 units already back rebuilds the pre-disable bytes (`--force` restores
 what is still off and keeps your edits). A hook
 whose manifest entry declares no `match` has no matcher to target;
-turn it off at its source (`enabled: false` on the pack that owns
-it, or delete the entry) or give the entry a `match` and re-apply.
+delete the entry from the manifest, or give it a `match`, and
+re-run `harness apply`.
 Branch-protection keeps refusing edits until you switch it off for real: to
 land an edit on a protected branch on purpose (a hotfix on `master`,
 for example), use the recipe above or

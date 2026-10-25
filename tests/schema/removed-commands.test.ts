@@ -66,10 +66,16 @@ describe("REMOVED_COMMANDS table (task f3f15290)", () => {
     expect(invokesRemovedCommand("harness delegate")?.command).toBe("harness delegate");
     expect(invokesRemovedCommand("harness delegate --task x")?.command).toBe("harness delegate");
     expect(invokesRemovedCommand("harness pack hook branch-protection")).toBeUndefined();
-    expect(invokesRemovedCommand("harness pack hook runtime-reality")?.command).toBe("harness pack hook runtime-reality");
     expect(invokesRemovedCommand("harness approve understanding")?.command).toBe("harness approve understanding");
     expect(invokesRemovedCommand("harness gc")?.command).toBe("harness gc");
     expect(invokesRemovedCommand("harness pack upgrade")?.command).toBe("harness pack upgrade");
+  });
+
+  it("lists the removed runtime-reality hook verb (task d30564d2)", () => {
+    expect(invokesRemovedCommand("harness pack hook runtime-reality")?.command).toBe("harness pack hook runtime-reality");
+    expect(invokesRemovedCommand("RUNTIME_REALITY_KEYWORD=x harness pack hook runtime-reality")?.command).toBe(
+      "harness pack hook runtime-reality",
+    );
   });
 
   it("lists the four removed Risk Gate debug verbs; harness explain was removed too, by a later entry (task 65807a1b, task bfe5efb4)", () => {
