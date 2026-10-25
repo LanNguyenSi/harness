@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **`harness migrate-home --apply` now moves the override layers too** (task `8dff6a6d`). It moved `harness.yaml`, `harness.lock`, `harness.generated/` and `.understanding-gate/` but left `machines/<discriminator>.harness.overrides.yaml` and `projects/<name>/harness.overrides.yaml` under `~/.claude/`, and the loader reads layers from the state root, so after the move `harness describe` silently lost every machine and project layer (reproduced with a scratch HOME). The layers move one file at a time, never as a directory, because `~/.claude/projects/` is also Claude Code's session-transcript directory; other files there are left alone and a layer directory emptied by the move is removed. A layer already present at the destination is reported as a `target-conflict` and nothing is moved. `docs/migration/v0.24.0-home-dir.md` and `docs/CLI.md` list the layers. Pinned by new cases in `tests/cli/migrate-home.test.ts` for each layer kind, the collision refusal, the untouched Claude Code files and the invalid-name skip.
+
 ## [1.0.0] - 2026-10-25
 
 1.0.0 is the removal release. harness is cut back to what it was always meant to be: one YAML manifest that wires MCP servers, skills, memory and hooks into Claude Code, Codex and (slimly) opencode, plus the `branch-protection` gate and its `harness gate disable` / `harness gate enable` kill switch. Everything else (the understanding gate, solution-acceptance, post-merge-gate, the Risk Gate, the policy engine, pause and approvals, the evidence-ledger client, smoke, session-start producers) is gone. A manifest or hook that still carries removed configuration keeps loading: removed keys, packs and commands warn and are ignored (`harness validate --strict` fails on them), so the branch-protection hook keeps deciding.

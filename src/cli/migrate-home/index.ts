@@ -10,6 +10,16 @@
 //   - `~/.claude/harness.generated/`        → `~/.harness/harness.generated/`
 //   - `~/.claude/.understanding-gate/`      → `~/.harness/.understanding-gate/`
 //   - `~/.claude/harness.lock`              → `~/.harness/harness.lock`
+//   - `~/.claude/machines/<d>.harness.overrides.yaml`
+//                                           → `~/.harness/machines/<d>.harness.overrides.yaml`
+//   - `~/.claude/projects/<p>/harness.overrides.yaml`
+//                                           → `~/.harness/projects/<p>/harness.overrides.yaml`
+//
+// Override layers move one file at a time, never as a directory:
+// `~/.claude/projects/` is also Claude Code's own session-transcript
+// directory, so only the harness-owned layer files are picked up and
+// everything else beside them stays put. The loader resolves layers under
+// the state root, so a layer left behind would silently stop applying.
 //
 // What is NOT touched (operator-owned, runtime config, not harness state):
 //   - `~/.claude/settings.json`             (Claude Code's runtime config)
@@ -41,6 +51,7 @@ import {
   HARNESS_HOME_DIRNAME,
   LEGACY_HARNESS_HOME_DIRNAME,
 } from "../../runtime/home-dir.js";
+import { isValidProjectName } from "../../io/project-name.js";
 import { EX_FAIL, HarnessExitError } from "../exit-codes.js";
 
 export const MIGRATION_MARKER_BASENAME = "MOVED_TO_~_DOT_HARNESS.txt";
@@ -58,6 +69,47 @@ const ITEMS: MigrateHomeItem[] = [
   { basename: ".understanding-gate", isDir: true },
   { basename: "harness.lock", isDir: false },
 ];
+
+const MACHINE_LAYER_SUFFIX = ".harness.overrides.yaml";
+const PROJECT_LAYER_BASENAME = "harness.overrides.yaml";
+
+/**
+ * Override-layer files under the legacy root, as forward-slash relative
+ * paths. Only regular files and symlinks qualify; a project directory
+ * whose name the loader would refuse is skipped.
+ */
+function discoverOverrideLayers(legacyPath: string): MigrateHomeItem[] {
+  const found: MigrateHomeItem[] = [];
+  const isLayerFile = (p: string): boolean => {
+    try {
+      const st = fs.lstatSync(p);
+      return st.isFile() || st.isSymbolicLink();
+    } catch {
+      return false;
+    }
+  };
+  const list = (dir: string): fs.Dirent[] => {
+    try {
+      return fs.readdirSync(dir, { withFileTypes: true }).sort((a, b) => (a.name < b.name ? -1 : 1));
+    } catch {
+      return [];
+    }
+  };
+  for (const e of list(path.join(legacyPath, "machines"))) {
+    if (e.name.endsWith(MACHINE_LAYER_SUFFIX) && e.name.length > MACHINE_LAYER_SUFFIX.length) {
+      if (isLayerFile(path.join(legacyPath, "machines", e.name))) {
+        found.push({ basename: `machines/${e.name}`, isDir: false });
+      }
+    }
+  }
+  for (const e of list(path.join(legacyPath, "projects"))) {
+    if (!e.isDirectory() || !isValidProjectName(e.name)) continue;
+    if (isLayerFile(path.join(legacyPath, "projects", e.name, PROJECT_LAYER_BASENAME))) {
+      found.push({ basename: `projects/${e.name}/${PROJECT_LAYER_BASENAME}`, isDir: false });
+    }
+  }
+  return found;
+}
 
 export interface MigrateHomeOptions {
   /** If true, perform the move; otherwise dry-run. */
@@ -113,7 +165,7 @@ export function migrateHome(opts: MigrateHomeOptions = {}): MigrateHomeResult {
   const apply = opts.apply === true;
 
   // Plan phase: classify each item by (legacy exists, new exists).
-  const items: MigrateHomeItemResult[] = ITEMS.map((it) => {
+  const items: MigrateHomeItemResult[] = [...ITEMS, ...discoverOverrideLayers(legacyPath)].map((it) => {
     const legacyItem = path.join(legacyPath, it.basename);
     const newItem = path.join(newPath, it.basename);
     const legacyExists = pathExists(legacyItem);
@@ -183,7 +235,9 @@ export function migrateHome(opts: MigrateHomeOptions = {}): MigrateHomeResult {
     const src = path.join(legacyPath, m.basename);
     const dst = path.join(newPath, m.basename);
     try {
+      fs.mkdirSync(path.dirname(dst), { recursive: true });
       moveSync(src, dst);
+      removeEmptyParents(src, legacyPath);
       m.action = "moved";
       stdout.write(`moved ${src} to ${dst}\n`);
     } catch (err) {
@@ -204,8 +258,8 @@ export function migrateHome(opts: MigrateHomeOptions = {}): MigrateHomeResult {
       const body = [
         `harness state was migrated to ${newPath} on ${new Date().toISOString()}.`,
         "",
-        "If you are looking for harness.yaml, harness.generated/, or .understanding-gate/,",
-        `they now live under ${newPath}.`,
+        "If you are looking for harness.yaml, harness.generated/, .understanding-gate/,",
+        `or the override layers (machines/, projects/), they now live under ${newPath}.`,
         "",
         "Files moved this run:",
         ...moved.map((m) => `  - ${m.basename}`),
@@ -244,6 +298,19 @@ export function migrateHome(opts: MigrateHomeOptions = {}): MigrateHomeResult {
   // No items actually moved despite plan saying we should — fell into
   // an error on the first item. Surface as partial.
   return { legacyPath, newPath, items, outcome: "partial" };
+}
+
+/** Remove now-empty directories above a moved layer file, stopping at the legacy root. */
+function removeEmptyParents(movedSrc: string, legacyPath: string): void {
+  let dir = path.dirname(movedSrc);
+  while (dir !== legacyPath && dir.startsWith(legacyPath + path.sep)) {
+    try {
+      fs.rmdirSync(dir);
+    } catch {
+      return; // not empty (e.g. Claude Code's own files): leave it
+    }
+    dir = path.dirname(dir);
+  }
 }
 
 function pathExists(p: string): boolean {

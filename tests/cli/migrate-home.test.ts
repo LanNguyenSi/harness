@@ -224,4 +224,123 @@ describe("migrateHome", () => {
     expect(fs.existsSync(path.join(newHome, "harness.generated"))).toBe(true);
     expect(fs.existsSync(path.join(newHome, ".understanding-gate"))).toBe(true);
   });
+  describe("override layers", () => {
+    const machineRel = path.join("machines", "default.harness.overrides.yaml");
+    const projectRel = path.join("projects", "acme", "harness.overrides.yaml");
+
+    function seedLayers(): { legacy: string } {
+      const { legacy } = seedLegacyState(tmp);
+      fs.mkdirSync(path.join(legacy, "machines"), { recursive: true });
+      fs.writeFileSync(path.join(legacy, machineRel), "version: 1\n# machine\n");
+      fs.mkdirSync(path.join(legacy, "projects", "acme"), { recursive: true });
+      fs.writeFileSync(path.join(legacy, projectRel), "version: 1\n# project\n");
+      return { legacy };
+    }
+
+    function run(apply: boolean) {
+      const stdout = bufferStream();
+      const stderr = bufferStream();
+      const result = migrateHome({
+        apply,
+        userHome: tmp,
+        stdout: stdout.stream,
+        stderr: stderr.stream,
+      });
+      return { result, stdout: stdout.read(), stderr: stderr.read() };
+    }
+
+    it("dry-run lists the machine and project layers and moves nothing", () => {
+      const { legacy } = seedLayers();
+      const { result, stdout } = run(false);
+      expect(result.outcome).toBe("would-apply");
+      expect(stdout).toContain(path.join(legacy, machineRel));
+      expect(stdout).toContain(path.join(legacy, projectRel));
+      expect(fs.existsSync(path.join(legacy, machineRel))).toBe(true);
+      expect(fs.existsSync(path.join(tmp, HARNESS_HOME_DIRNAME, machineRel))).toBe(false);
+    });
+
+    it("--apply moves a machine layer byte-for-byte and prunes the emptied machines/ dir", () => {
+      const { legacy } = seedLayers();
+      const { result } = run(true);
+      expect(result.outcome).toBe("applied");
+      const dst = path.join(tmp, HARNESS_HOME_DIRNAME, machineRel);
+      expect(fs.readFileSync(dst, "utf8")).toBe("version: 1\n# machine\n");
+      expect(fs.existsSync(path.join(legacy, machineRel))).toBe(false);
+      expect(fs.existsSync(path.join(legacy, "machines"))).toBe(false);
+    });
+
+    it("--apply moves a project layer byte-for-byte and prunes the emptied project dirs", () => {
+      const { legacy } = seedLayers();
+      const { result } = run(true);
+      expect(result.outcome).toBe("applied");
+      const dst = path.join(tmp, HARNESS_HOME_DIRNAME, projectRel);
+      expect(fs.readFileSync(dst, "utf8")).toBe("version: 1\n# project\n");
+      expect(fs.existsSync(path.join(legacy, "projects"))).toBe(false);
+    });
+
+    it("leaves Claude Code's own files under ~/.claude/projects/ and machines/ alone", () => {
+      const { legacy } = seedLayers();
+      const transcript = path.join(legacy, "projects", "acme", "session.jsonl");
+      fs.writeFileSync(transcript, "{}\n");
+      const otherProject = path.join(legacy, "projects", "-Users-me-repo");
+      fs.mkdirSync(otherProject, { recursive: true });
+      fs.writeFileSync(path.join(otherProject, "x.jsonl"), "{}\n");
+      fs.writeFileSync(path.join(legacy, "machines", "notes.txt"), "keep\n");
+      run(true);
+      expect(fs.existsSync(transcript)).toBe(true);
+      expect(fs.existsSync(path.join(otherProject, "x.jsonl"))).toBe(true);
+      expect(fs.existsSync(path.join(legacy, "machines", "notes.txt"))).toBe(true);
+      expect(fs.existsSync(path.join(tmp, HARNESS_HOME_DIRNAME, "projects", "-Users-me-repo"))).toBe(false);
+      expect(fs.existsSync(path.join(tmp, HARNESS_HOME_DIRNAME, projectRel))).toBe(true);
+    });
+
+    it("refuses to overwrite an existing machine layer at the new path and moves nothing", () => {
+      const { legacy } = seedLayers();
+      const dst = path.join(tmp, HARNESS_HOME_DIRNAME, machineRel);
+      fs.mkdirSync(path.dirname(dst), { recursive: true });
+      fs.writeFileSync(dst, "version: 1\n# existing\n");
+      const { result, stderr } = run(true);
+      expect(result.outcome).toBe("target-conflict");
+      expect(stderr).toMatch(/default\.harness\.overrides\.yaml.*refuse to overwrite/);
+      expect(fs.readFileSync(dst, "utf8")).toBe("version: 1\n# existing\n");
+      expect(fs.existsSync(path.join(legacy, machineRel))).toBe(true);
+      expect(fs.existsSync(path.join(legacy, "harness.yaml"))).toBe(true);
+    });
+
+    it("refuses to overwrite an existing project layer at the new path and moves nothing", () => {
+      const { legacy } = seedLayers();
+      const dst = path.join(tmp, HARNESS_HOME_DIRNAME, projectRel);
+      fs.mkdirSync(path.dirname(dst), { recursive: true });
+      fs.writeFileSync(dst, "version: 1\n# existing\n");
+      const { result, stderr } = run(true);
+      expect(result.outcome).toBe("target-conflict");
+      expect(stderr).toMatch(/harness\.overrides\.yaml.*refuse to overwrite/);
+      expect(fs.readFileSync(dst, "utf8")).toBe("version: 1\n# existing\n");
+      expect(fs.existsSync(path.join(legacy, projectRel))).toBe(true);
+    });
+
+    it("skips a project directory whose name the loader would refuse", () => {
+      const { legacy } = seedLayers();
+      const bad = path.join(legacy, "projects", "a\u0001b");
+      fs.mkdirSync(bad, { recursive: true });
+      fs.writeFileSync(path.join(bad, "harness.overrides.yaml"), "version: 1\n");
+      run(true);
+      expect(fs.existsSync(path.join(bad, "harness.overrides.yaml"))).toBe(true);
+    });
+
+    it("moves layers when no top-level item is left (layers-only partial re-run)", () => {
+      const { legacy } = seedLayers();
+      const newHome = path.join(tmp, HARNESS_HOME_DIRNAME);
+      fs.mkdirSync(newHome, { recursive: true });
+      for (const f of ["harness.yaml", "harness.lock"]) {
+        fs.renameSync(path.join(legacy, f), path.join(newHome, f));
+      }
+      fs.renameSync(path.join(legacy, "harness.generated"), path.join(newHome, "harness.generated"));
+      fs.renameSync(path.join(legacy, ".understanding-gate"), path.join(newHome, ".understanding-gate"));
+      const { result } = run(true);
+      expect(result.outcome).toBe("applied");
+      expect(fs.existsSync(path.join(newHome, machineRel))).toBe(true);
+      expect(fs.existsSync(path.join(newHome, projectRel))).toBe(true);
+    });
+  });
 });
