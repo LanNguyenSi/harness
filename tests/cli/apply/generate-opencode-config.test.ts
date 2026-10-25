@@ -160,6 +160,43 @@ describe("generateOpencodeConfig", () => {
     );
   });
 
+  it("names exactly three hooks without a remainder count", () => {
+    const hook = (name: string) => ({
+      name,
+      event: "PreToolUse",
+      match: "Bash",
+      command: "echo x",
+      blocking: "soft",
+      budget_ms: 5000,
+    });
+    const { warnings } = generateOpencodeConfig(
+      parseManifest({ version: 1, hooks: ["a", "b", "c"].map(hook) }),
+    );
+    expect(warnings).toContain(
+      "3 hook(s) not projected (a, b, c): opencode has no declarative hook wiring, so they do not run under opencode",
+    );
+  });
+
+  it("keeps the protected-branch sentence when the branch-protection hook is not among the named ones", () => {
+    const hook = (name: string) => ({
+      name,
+      event: "PreToolUse",
+      match: "Bash",
+      command: "echo x",
+      blocking: "soft",
+      budget_ms: 5000,
+    });
+    const { warnings } = generateOpencodeConfig(
+      parseManifest({
+        version: 1,
+        hooks: ["a", "b", "c", "policy-pack:branch-protection:pre-tool-use"].map(hook),
+      }),
+    );
+    expect(warnings).toContain(
+      "4 hook(s) not projected (a, b, c and 1 more): opencode has no declarative hook wiring, so they do not run under opencode; edits on protected branches are NOT blocked under opencode",
+    );
+  });
+
   it("does NOT project memory.router and prints no warning for it", () => {
     const { content, warnings } = generateOpencodeConfig(
       parseManifest({
@@ -174,21 +211,6 @@ describe("generateOpencodeConfig", () => {
     expect(warnings).toEqual([]);
   });
 
-  it("omits memory.router warning when enabled:false", () => {
-    const { warnings } = generateOpencodeConfig(
-      parseManifest({
-        version: 1,
-        memory: {
-          directories: [],
-          router: {
-            command: ["memory-router-user-prompt-submit"],
-            enabled: false,
-          },
-        },
-      }),
-    );
-    expect(warnings.some((w) => w.includes("memory.router"))).toBe(false);
-  });
 
   it("omits the `mcp` key entirely when there are no enabled MCP servers", () => {
     const { content, mcp } = generateOpencodeConfig(
