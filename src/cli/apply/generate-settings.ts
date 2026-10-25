@@ -26,8 +26,8 @@
 //     tool name) and are removed keys that the manifest load strips with a
 //     warning (src/schema/removed-keys.ts). A hook script filters on whatever
 //     it needs to by itself.
-//   - `blocking` is harness-internal: it tells `validate`/`doctor` how to
-//     classify a hook for soft/hard-failure reporting. Claude Code's
+//   - `blocking` is harness-internal: declared intent that `doctor`,
+//     `list` and `describe` display; nothing enforces it. Claude Code's
 //     settings.json has no documented equivalent (verified against the
 //     ecosystem as of 2026-04 — revisit if a runtime field appears), so
 //     it does NOT survive the projection.

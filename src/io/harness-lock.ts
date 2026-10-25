@@ -1,5 +1,5 @@
-// `harness.lock` writer + reader. See ARCHITECTURE.md §7 (drift handling) and
-// §10/lock-file bullet, and ROADMAP "Open decisions resolved here #3".
+// `harness.lock` writer + reader. See ARCHITECTURE.md §7 (the `harness.lock`
+// bullet and the "Drift handling on `apply`" subsection).
 //
 // Lock format is line-oriented JSON (NDJSON) for diff-friendliness:
 //   {"kind":"asset","path":"…","sha256":"…"}
