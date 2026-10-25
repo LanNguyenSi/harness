@@ -52,16 +52,13 @@ function mockPrompts(queue: {
     }) as unknown as InteractivePrompts["select"],
     confirm: (async () => {
       const v = confirmQ.shift();
-      // An exhausted confirm queue auto-declines (returns false). The
-      // only prompt every non-custom flow now reaches WITHOUT an explicit
-      // queued answer is the trailing orchestrator-workflow co-install
-      // offer (added with the OW install-coupling). Defaulting it to "no"
-      // keeps the pre-OW tests opt-out of OW without each needing a
-      // redundant trailing `false`, and means no test spawns a real
-      // `npx`. The OW-specific tests below queue the answer explicitly and
-      // inject `owInitSpawn`. select/input/checkbox stay strict (throw on
-      // empty) so a mis-ordered EARLIER prompt still fails loudly.
-      if (v === undefined) return false;
+      // An exhausted confirm queue throws, same as the select/input/
+      // checkbox queues below: a wizard prompt the test queued no answer
+      // for is a test bug. Auto-declining instead (the old behavior,
+      // which only existed for the removed trailing co-install offer)
+      // would let a re-introduced trailing prompt pass silently, so
+      // every test must queue exactly the confirms its flow consumes.
+      if (v === undefined) throw new Error("mockPrompts: confirm queue empty");
       return v;
     }) as unknown as InteractivePrompts["confirm"],
     input: (async () => {
@@ -611,11 +608,10 @@ describe("interactive wizard — MCP registration + settings.json migration (tas
         authProbeSpawn: async () => ({ code: 0, stderr: "ok (store: keychain)\n" }),
         prompts: mockPrompts({
           select: ["team"],
-          // Each run must queue EXACTLY the confirms its flow consumes so
-          // the trailing OW co-install offer always hits a dry queue
-          // (auto-decline — see the mockPrompts contract above). A
-          // leftover `true` here reaches that offer and spawns a real
-          // `npx orchestrator-workflow init`.
+          // Each run must queue EXACTLY the confirms its flow consumes:
+          // an exhausted confirm queue throws, and a leftover `true`
+          // would silently answer a prompt this flow no longer makes
+          // (see the mockPrompts contract above).
           confirm: confirms,
           checkbox: [["claude-code"]],
           input: ["~/.claude/projects/{project}/memory"],
@@ -638,10 +634,10 @@ describe("interactive wizard — MCP registration + settings.json migration (tas
     const registryBeforeSecondRun = fs.readFileSync(registryPath, "utf8");
 
     // Run 2: the registry now holds both servers, so detect() reads
-    // agent-tasks as wired and the proceed confirm does NOT fire — only
-    // the write confirmation consumes an answer. Queueing a second
-    // `true` here would leak into the OW co-install offer (real npx
-    // spawn; >5s on cold CI runners — run 29798137418).
+    // agent-tasks as wired and the proceed confirm does NOT fire: only
+    // the write confirmation consumes an answer, so exactly one answer
+    // is queued (a leftover one would point at a prompt this flow does
+    // not make; see the mockPrompts contract above).
     const second = await runOnce(true, [true]);
     // Ensure sees both servers already correctly registered (identical
     // spec on disk in the registry file) — zero exec calls at all.
@@ -2333,6 +2329,49 @@ describe("interactive wizard — runtime multiselect (task 696f7560)", () => {
     expect(fs.existsSync(path.join(tmpHome, ".harness", "harness.yaml"))).toBe(true);
     expect(fs.existsSync(path.join(tmpHome, ".claude", "settings.json"))).toBe(false);
   });
+
+  it("offers exactly the two wireable runtimes, each pre-checked from the probe", async () => {
+    // The wire-now checkbox must carry claude-code and codex only (no
+    // disabled placeholder slots for runtimes the wizard does not wire,
+    // e.g. opencode, which is wired by `harness apply --runtime
+    // opencode`), with each entry's pre-check following
+    // runtimeIsConfigured(): claude-code here has a ~/.claude (checked),
+    // codex has no ~/.codex (unchecked).
+    fs.mkdirSync(path.join(tmpHome, ".claude"));
+    let capturedRuntimeChoices: { name: string; value: string; checked: boolean }[] = [];
+    const cap = captureStreams();
+    const recordingCheckbox = (async (args: {
+      choices: { name: string; value: string; checked?: boolean }[];
+    }) => {
+      // The Solo path has exactly one checkbox: the runtime wire-now
+      // multiselect. Record its choices, select nothing.
+      capturedRuntimeChoices = args.choices.map((c) => ({
+        name: c.name,
+        value: c.value,
+        checked: c.checked === true,
+      }));
+      return [];
+    }) as unknown as InteractivePrompts["checkbox"];
+    const prompts: InteractivePrompts = {
+      select: (async () => "solo") as unknown as InteractivePrompts["select"],
+      confirm: (async () => true) as unknown as InteractivePrompts["confirm"],
+      input: (async () => "~/.claude/projects/{project}/memory") as unknown as InteractivePrompts["input"],
+      checkbox: recordingCheckbox,
+    };
+    const result = await runInteractive({
+      homeDir: tmpHome,
+      dependencyPathEnv: fakeDepsPath,
+      prompts,
+      stdout: cap.out,
+      stderr: cap.err,
+    });
+    expect(result.aborted).toBe(false);
+    expect(result.applies).toEqual([]); // empty selection → wiring skipped
+    expect(capturedRuntimeChoices.map((c) => c.value)).toEqual(["claude-code", "codex"]);
+    expect(JSON.stringify(capturedRuntimeChoices)).not.toContain("opencode");
+    expect(capturedRuntimeChoices.find((c) => c.value === "claude-code")?.checked).toBe(true);
+    expect(capturedRuntimeChoices.find((c) => c.value === "codex")?.checked).toBe(false);
+  });
 });
 
 describe("interactive wizard — Ctrl-C", () => {
@@ -2361,295 +2400,7 @@ describe("interactive wizard — Ctrl-C", () => {
   });
 });
 
-describe("interactive wizard — orchestrator-workflow co-install offer (task S5)", () => {
-  it("opt-in runs `npx orchestrator-workflow init --yes <repoDir>` via the injected spawn", async () => {
-    fs.mkdirSync(path.join(tmpHome, ".claude"));
-    const cap = captureStreams();
-    const owCalls: { cmd: string; args: string[] }[] = [];
-    const result = await runInteractive({
-      homeDir: tmpHome,
-      dependencyPathEnv: fakeDepsPath,
-      repoDir: "/tmp/the-repo-dir",
-      owInitSpawn: async (cmd: string, args: string[]) => {
-        owCalls.push({ cmd, args });
-        return { code: 0, stderr: "" };
-      },
-      prompts: mockPrompts({
-        select: ["solo"],
-        input: ["~/.claude/projects/{project}/memory"],
-        confirm: [
-          true, // write manifest
-          true, // YES, set up orchestrator-workflow
-        ],
-        checkbox: [[]], // skip runtime wiring
-      }),
-      stdout: cap.out,
-      stderr: cap.err,
-    });
-    expect(result.aborted).toBe(false);
-    expect(result.profile).toBe("solo");
-    // The spawn is invoked exactly once with the npx incantation and the
-    // wizard's repo dir as the init target.
-    expect(owCalls).toHaveLength(1);
-    expect(owCalls[0]?.cmd).toBe("npx");
-    expect(owCalls[0]?.args).toEqual([
-      "orchestrator-workflow",
-      "init",
-      "--yes",
-      "/tmp/the-repo-dir",
-    ]);
-    expect(cap.stderr()).toContain("orchestrator-workflow set up");
-  });
-
-  it("opt-out prints the alongside-workflow warning and does NOT spawn", async () => {
-    fs.mkdirSync(path.join(tmpHome, ".claude"));
-    const cap = captureStreams();
-    let spawned = false;
-    const result = await runInteractive({
-      homeDir: tmpHome,
-      dependencyPathEnv: fakeDepsPath,
-      repoDir: "/tmp/the-repo-dir",
-      owInitSpawn: async () => {
-        spawned = true;
-        return { code: 0, stderr: "" };
-      },
-      prompts: mockPrompts({
-        select: ["solo"],
-        input: ["~/.claude/projects/{project}/memory"],
-        confirm: [
-          true, // write manifest
-          false, // NO, decline orchestrator-workflow
-        ],
-        checkbox: [[]],
-      }),
-      stdout: cap.out,
-      stderr: cap.err,
-    });
-    expect(result.aborted).toBe(false);
-    expect(spawned).toBe(false);
-    // The decline warning explains the coupling and the manual recovery.
-    expect(cap.stderr()).toContain("harness works best alongside orchestrator-workflow");
-    expect(cap.stderr()).toContain("run files under .ai/runs/");
-    expect(cap.stderr()).toContain("npx orchestrator-workflow init");
-  });
-
-  it("opt-in with a non-zero exit STILL succeeds (graceful warning, init not aborted)", async () => {
-    fs.mkdirSync(path.join(tmpHome, ".claude"));
-    const cap = captureStreams();
-    const result = await runInteractive({
-      homeDir: tmpHome,
-      dependencyPathEnv: fakeDepsPath,
-      repoDir: "/tmp/the-repo-dir",
-      owInitSpawn: async () => ({ code: 1, stderr: "npx: not found\n" }),
-      prompts: mockPrompts({
-        select: ["solo"],
-        input: ["~/.claude/projects/{project}/memory"],
-        confirm: [true, true],
-        checkbox: [[]],
-      }),
-      stdout: cap.out,
-      stderr: cap.err,
-    });
-    // OW is optional: a failed co-install must not flip the result to
-    // aborted, and the harness manifest must remain written + validated.
-    expect(result.aborted).toBe(false);
-    expect(result.profile).toBe("solo");
-    expect(result.validateClean).toBe(true);
-    expect(fs.existsSync(path.join(tmpHome, ".harness", "harness.yaml"))).toBe(true);
-    expect(cap.stderr()).toContain("orchestrator-workflow init exited 1");
-    expect(cap.stderr()).toContain("npx orchestrator-workflow init");
-  });
-
-  it("opt-in where the spawn throws STILL succeeds (graceful warning, init not aborted)", async () => {
-    fs.mkdirSync(path.join(tmpHome, ".claude"));
-    const cap = captureStreams();
-    const result = await runInteractive({
-      homeDir: tmpHome,
-      dependencyPathEnv: fakeDepsPath,
-      repoDir: "/tmp/the-repo-dir",
-      owInitSpawn: async () => {
-        throw new Error("spawn ENOENT npx");
-      },
-      prompts: mockPrompts({
-        select: ["solo"],
-        input: ["~/.claude/projects/{project}/memory"],
-        confirm: [true, true],
-        checkbox: [[]],
-      }),
-      stdout: cap.out,
-      stderr: cap.err,
-    });
-    expect(result.aborted).toBe(false);
-    expect(result.validateClean).toBe(true);
-    expect(fs.existsSync(path.join(tmpHome, ".harness", "harness.yaml"))).toBe(true);
-    expect(cap.stderr()).toContain("Could not run orchestrator-workflow init");
-    expect(cap.stderr()).toContain("spawn ENOENT npx");
-  });
-
-  it("the Custom profile does NOT reach the orchestrator-workflow offer", async () => {
-    fs.mkdirSync(path.join(tmpHome, ".claude"));
-    const cap = captureStreams();
-    let spawned = false;
-    const result = await runInteractive({
-      homeDir: tmpHome,
-      dependencyPathEnv: fakeDepsPath,
-      repoDir: "/tmp/the-repo-dir",
-      owInitSpawn: async () => {
-        spawned = true;
-        return { code: 0, stderr: "" };
-      },
-      prompts: mockPrompts({
-        select: ["custom"],
-        checkbox: [
-          ["branch-protection"], // packs
-          [], // mcps
-          [], // wire-now skip
-        ],
-        input: ["~/.claude/projects/{project}/memory"],
-        confirm: [true], // confirm write only
-      }),
-      stdout: cap.out,
-      stderr: cap.err,
-    });
-    expect(result.aborted).toBe(false);
-    expect(result.profile).toBe("custom");
-    // Custom is intentionally excluded: no spawn, and neither the OW
-    // success line nor the decline warning is printed.
-    expect(spawned).toBe(false);
-    expect(cap.stderr()).not.toContain("harness works best alongside orchestrator-workflow");
-    expect(cap.stderr()).not.toContain("orchestrator-workflow set up");
-  });
-
-  it("Ctrl-C at the orchestrator-workflow offer is a graceful skip (init stays successful)", async () => {
-    // Regression: the OW confirm is the wizard's LAST prompt and runs
-    // AFTER the manifest is written + wired, inside runInteractive's shared
-    // try/catch. Pre-fix a Ctrl-C here propagated to the outer handler,
-    // which printed the FALSE "no manifest written" abort and returned
-    // {aborted:true}, discarding the already-successful tailResult. OW is
-    // optional, so a Ctrl-C at this trailing offer must be a graceful skip.
-    fs.mkdirSync(path.join(tmpHome, ".claude"));
-    const cap = captureStreams();
-    const exitErr = new Error("User force closed the prompt with 0 null");
-    exitErr.name = "ExitPromptError";
-    let confirmCalls = 0;
-    let owSpawned = false;
-    const result = await runInteractive({
-      homeDir: tmpHome,
-      dependencyPathEnv: fakeDepsPath,
-      repoDir: "/tmp/the-repo-dir",
-      owInitSpawn: async () => {
-        owSpawned = true;
-        return { code: 0, stderr: "" };
-      },
-      prompts: {
-        select: (async () => "solo") as unknown as InteractivePrompts["select"],
-        confirm: (async () => {
-          confirmCalls += 1;
-          // 1st confirm = "write harness.yaml?" → yes. 2nd confirm = the
-          // trailing OW offer → simulate Ctrl-C.
-          if (confirmCalls === 1) return true;
-          throw exitErr;
-        }) as unknown as InteractivePrompts["confirm"],
-        input: (async () => "~/.claude/projects/{project}/memory") as unknown as InteractivePrompts["input"],
-        checkbox: (async () => []) as unknown as InteractivePrompts["checkbox"],
-      },
-      stdout: cap.out,
-      stderr: cap.err,
-    });
-    // The load-bearing assertions: a Ctrl-C at the OPTIONAL trailing offer
-    // does NOT flip a successful init to aborted, and validateClean is
-    // preserved (not discarded by the outer abort handler).
-    expect(result.aborted).toBe(false);
-    expect(result.profile).toBe("solo");
-    expect(result.validateClean).toBe(true);
-    expect(fs.existsSync(path.join(tmpHome, ".harness", "harness.yaml"))).toBe(true);
-    // The Ctrl-C aborts BEFORE the spawn, so OW never runs.
-    expect(owSpawned).toBe(false);
-    // The FALSE "no manifest written" abort line must NOT appear.
-    expect(cap.stderr()).not.toContain("no manifest written");
-    // Instead the graceful decline/skip warning is printed.
-    expect(cap.stderr()).toContain("harness works best alongside orchestrator-workflow");
-  });
-
-  it("a non-solo profile (team) also reaches the OW offer and spawns on opt-in", async () => {
-    // The OW offer lives on the shared non-custom tail, so every named
-    // profile reaches it — not just Solo. Pin that for Team.
-    fs.mkdirSync(path.join(tmpHome, ".claude"));
-    const cap = captureStreams();
-    const owCalls: { cmd: string; args: string[] }[] = [];
-    const result = await runInteractive({
-      homeDir: tmpHome,
-      dependencyPathEnv: fakeDepsPath,
-      repoDir: "/tmp/the-repo-dir",
-      // Make the agent-tasks auth probe deterministic (ok) so no auth
-      // dialog interleaves with the queued confirms.
-      authProbeSpawn: async () => ({ code: 0, stderr: "ok (store: keychain)\n" }),
-      owInitSpawn: async (cmd: string, args: string[]) => {
-        owCalls.push({ cmd, args });
-        return { code: 0, stderr: "" };
-      },
-      prompts: mockPrompts({
-        select: ["team"],
-        input: ["~/.claude/projects/{project}/memory"],
-        confirm: [
-          true, // proceed despite missing agent-tasks in settings.json
-          true, // write manifest
-          true, // YES, set up orchestrator-workflow
-        ],
-        checkbox: [[]], // skip runtime wiring
-      }),
-      stdout: cap.out,
-      stderr: cap.err,
-    });
-    expect(result.aborted).toBe(false);
-    expect(result.profile).toBe("team");
-    expect(result.validateClean).toBe(true);
-    expect(owCalls).toHaveLength(1);
-    expect(owCalls[0]?.cmd).toBe("npx");
-    expect(owCalls[0]?.args).toEqual([
-      "orchestrator-workflow",
-      "init",
-      "--yes",
-      "/tmp/the-repo-dir",
-    ]);
-    expect(cap.stderr()).toContain("orchestrator-workflow set up");
-  });
-});
-
 describe("interactive wizard — hermetic spawn guard (task 54739002)", () => {
-  it("accepting the OW offer WITHOUT an injected owInitSpawn fails hard instead of silently spawning a real npx", async () => {
-    // Meta-test for the hermetic-spawn guard (src/runtime/hermetic-spawn-guard.ts).
-    // Deliberately does NOT inject `owInitSpawn`, so the offer falls
-    // through to the real `realOwInitSpawn()`. This drives the FULL
-    // runInteractive() -> offerOrchestratorWorkflow() path (not a direct
-    // call to realOwInitSpawn) so it also proves the violation survives
-    // offerOrchestratorWorkflow's try/catch around `run(...)`, which
-    // otherwise degrades a thrown runner to a mere warning (see "opt-in
-    // where the spawn throws STILL succeeds" above) — the exact catch
-    // that would have swallowed a non-dedicated guard error and made
-    // this guard silently toothless.
-    fs.mkdirSync(path.join(tmpHome, ".claude"));
-    const cap = captureStreams();
-    await expect(
-      runInteractive({
-        homeDir: tmpHome,
-        dependencyPathEnv: fakeDepsPath,
-        repoDir: "/tmp/the-repo-dir",
-        prompts: mockPrompts({
-          select: ["solo"],
-          input: ["~/.claude/projects/{project}/memory"],
-          confirm: [
-            true, // write manifest
-            true, // YES, set up orchestrator-workflow (no owInitSpawn injected!)
-          ],
-          checkbox: [[]],
-        }),
-        stdout: cap.out,
-        stderr: cap.err,
-      }),
-    ).rejects.toThrow(/Refusing to spawn a REAL "npx orchestrator-workflow init" process while running under vitest/);
-  });
-
   it("a Team-profile run WITHOUT an injected authProbeSpawn fails hard instead of silently spawning the real bridge status probe", async () => {
     // Meta-test for the hermetic-spawn guard on realProbeSpawn
     // (src/cli/init/agent-tasks-auth.ts). Deliberately does NOT inject
