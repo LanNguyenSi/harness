@@ -1,8 +1,6 @@
 // One idle-bounded stdin reader shared by every hook-style CLI entry that
 // parses an event JSON from stdin (`readStdinChecked` in
-// pack/hook-bootstrap.ts and the runtime-reality reader in
-// pack/hook-runtime-reality.ts). It also holds the shared stdin-timeout
-// refusal reason those PreToolUse gates emit when the read timed out.
+// pack/hook-bootstrap.ts).
 //
 // A hook pipes the event JSON and closes stdin at once, so a real pipe never
 // gets near the bound; it only bites when stdin is an open pipe or a TTY that
@@ -71,19 +69,4 @@ export async function readStdinBounded(
     stream.on("error", onError);
     arm();
   });
-}
-
-/**
- * The block reason a PreToolUse gate gives when its stdin read timed out. It
- * names the stdin timeout and the bound; the gate fails closed because an
- * event that did not finish arriving cannot be judged.
- */
-export function stdinTimeoutBlockReason(idleTimeoutMs: number): string {
-  return (
-    `stdin timeout: no complete event arrived and closed on stdin within ${idleTimeoutMs} ms, ` +
-    `so this gate cannot judge the tool call and refuses it (fail closed). ` +
-    `Retry the tool call. Operator override: set \`RUNTIME_REALITY_DISABLE=1\` for this hook, ` +
-    `or, when its manifest entry has a \`match\`, run \`harness gate disable --matcher <match>\` ` +
-    `(Codex: add \`--runtime codex\`).`
-  );
 }

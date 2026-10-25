@@ -18,7 +18,7 @@
 // empties it, not only after.
 //
 // SCOPE: mirrors package.json's `files` field (`dist`, `README.md`,
-// `CHANGELOG.md`, `LICENSE`, `scripts/runtime-reality-docker-probe.mjs`),
+// `CHANGELOG.md`, `LICENSE`),
 // with two deliberate departures:
 //   - `dist` is swapped for its SOURCE (`src/`): `tsconfig.json` does not
 //     set `removeComments`, so a comment in `src/**/*.ts` reaches
@@ -101,15 +101,13 @@ export function collectFiles(dir, out = []) {
 
 /**
  * The scanned file set: every file under `src/` (recursive; source of
- * the shipped `dist/`), plus `README.md` and
- * `scripts/runtime-reality-docker-probe.mjs` (the other shipped, scannable
- * `package.json` `files` entries - see the module header for why
+ * the shipped `dist/`) plus `README.md` (the other shipped, scannable
+ * `package.json` `files` entry - see the module header for why
  * `CHANGELOG.md` itself is deliberately excluded).
  */
 export function resolveScannedFiles(rootDir = REPO_ROOT) {
   const files = collectFiles(join(rootDir, "src"));
   files.push(join(rootDir, "README.md"));
-  files.push(join(rootDir, "scripts", "runtime-reality-docker-probe.mjs"));
   return files;
 }
 

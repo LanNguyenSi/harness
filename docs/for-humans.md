@@ -289,10 +289,9 @@ when the config is unchanged since the disable; if you edited the file
 in between, enable refuses and names the way out, unless skipping the
 units already back rebuilds the pre-disable bytes (`--force` restores
 what is still off and keeps your edits). A hook
-whose manifest entry declares no `match` (the documented
-runtime-reality hook entry, for example) has no matcher to target;
-switch it off with its own switch (`RUNTIME_REALITY_DISABLE=1` for
-runtime-reality) or give the entry a `match` and re-apply.
+whose manifest entry declares no `match` has no matcher to target;
+delete the entry from the manifest, or give it a `match`, and
+re-run `harness apply`.
 Branch-protection keeps refusing edits until you switch it off for real: to
 land an edit on a protected branch on purpose (a hotfix on `master`,
 for example), use the recipe above or

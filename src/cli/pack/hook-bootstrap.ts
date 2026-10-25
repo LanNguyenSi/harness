@@ -13,11 +13,6 @@
 //      byte-identical copies across hook modules before task
 //      a1348c89 extracted it here).
 //
-// Not used by:
-//   - hook-runtime-reality.ts: it keeps an `isTTY` guard in front of the
-//     same shared idle-bounded reader (`src/cli/bounded-stdin.ts`) and
-//     composes the read itself, which is a legitimately different contract.
-//
 // Per-hook decision logic, error envelopes, and early-return shapes stay local
 // to each hook. This module covers structural boilerplate only, not semantics.
 

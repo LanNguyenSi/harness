@@ -57,12 +57,12 @@
 // --- Residual exposure (task 052f9d5b review F3) ---
 // Allowlisting an INTERPRETER allowlists everything it can be told to
 // run: `sh` is INFRA-allowed below, and `sh -c <anything>` runs
-// `<anything>` with ZERO guard coverage from this hook — not
-// hypothetical, a live, executed code path today:
-// src/cli/pack/hook-runtime-reality.ts:97 runs `execFileSync("sh", ["-c",
-// cmd], ...)` against an operator-supplied command string, and
-// tests/cli/pack-hook-runtime-reality.test.ts exercises it with real
-// `cat`/`printf` grandchildren. The same applies to `node -e "<code>"`
+// `<anything>` with ZERO guard coverage from this hook, and the suite
+// itself still walks that path: tests/cli/gate/claude-gate-cli.test.ts
+// runs the `cp ... && mv ...` copy command it prints through
+// `execFileSync("sh", ["-c", cmd], ...)`, and
+// tests/runtime/hermetic-spawn-allowlist.test.ts spawns `sh -c` directly
+// to pin this entry. The same applies to `node -e "<code>"`
 // (INFRA-allowed `node`) and to any `fork()`'d or `spawn()`'d child in
 // general: this hook patches only THIS process's own `node:child_process`
 // module, so it has no visibility into what a child process, once
@@ -473,9 +473,10 @@ const INFRA: ReadonlyArray<{ name: string; reason: string }> = [
   // (measured 9 spawns) as an inline command wrapper — not a repo
   // binary, not test-authored.
   // CAVEAT (task 052f9d5b review F3): `sh -c "<cmd>"` runs arbitrary
-  // commands with zero guard coverage from this hook — see
-  // src/cli/pack/hook-runtime-reality.ts:97 for a live production call
-  // site that does exactly this against an operator-supplied string.
+  // commands with zero guard coverage from this hook, and the suite
+  // itself uses it that way, e.g. tests/cli/gate/claude-gate-cli.test.ts
+  // runs a `cp`/`mv` command string through `sh -c` to prove a printed
+  // command works as printed.
   { name: "sh", reason: "real system shell, invoked directly by a handful of tests (9 measured spawns)." },
   // patch: real system `patch`, used by tests/io/patch.test.ts to prove
   // a generated unified diff actually applies (round-trip check).

@@ -104,20 +104,18 @@ describe("resolveScannedFiles", () => {
     writeFileSync(join(dir, "src", "a.ts"), "export {};");
     writeFileSync(join(dir, "README.md"), "# readme\n");
     writeFileSync(join(dir, "CHANGELOG.md"), "# Changelog\n\n## [Unreleased]\n\nin this same Unreleased batch\n");
-    writeFileSync(join(dir, "scripts", "runtime-reality-docker-probe.mjs"), "export {};");
   });
 
   afterEach(() => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it("includes every src/ file plus README.md and the shipped docker-probe script, but NOT CHANGELOG.md", () => {
+  it("includes every src/ file plus README.md, but NOT CHANGELOG.md", () => {
     const files = resolveScannedFiles(dir).sort();
     expect(files).toEqual(
       [
         join(dir, "src", "a.ts"),
         join(dir, "README.md"),
-        join(dir, "scripts", "runtime-reality-docker-probe.mjs"),
       ].sort(),
     );
   });
@@ -145,7 +143,6 @@ describe("run", () => {
       join(dir, "CHANGELOG.md"),
       "# Changelog\n\n## [Unreleased]\n\n## [0.1.0] - 2026-01-01\n\nin this same Unreleased batch\n",
     );
-    writeFileSync(join(dir, "scripts", "runtime-reality-docker-probe.mjs"), "export {};");
     logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
     errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
   });
@@ -201,7 +198,6 @@ describe("main", () => {
     mkdirSync(join(dir, "scripts"), { recursive: true });
     writeFileSync(join(dir, "README.md"), "# readme\n");
     writeFileSync(join(dir, "CHANGELOG.md"), "# Changelog\n\n## [Unreleased]\n");
-    writeFileSync(join(dir, "scripts", "runtime-reality-docker-probe.mjs"), "export {};");
     logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
     errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
   });
@@ -263,7 +259,6 @@ describe("CLI spawn smoke test", () => {
       writeFileSync(join(dir, "src", "bad.ts"), "// see CHANGELOG.md's [Unreleased] entry for the fix\n");
       writeFileSync(join(dir, "README.md"), "# readme\n");
       writeFileSync(join(dir, "CHANGELOG.md"), "# Changelog\n\n## [Unreleased]\n");
-      writeFileSync(join(dir, "scripts", "runtime-reality-docker-probe.mjs"), "export {};");
 
       const threw = spawnExpectingFailure(process.execPath, [SCRIPT_PATH, dir], {
         cwd: REPO_ROOT,

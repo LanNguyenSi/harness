@@ -4,23 +4,7 @@ import { parse as parseYaml } from "yaml";
 import { SOLO_TEMPLATE, TEAM_TEMPLATE } from "../../src/cli/init/profiles.js";
 import { COMPOSABLE_MCPS, COMPOSABLE_PACKS, composeCustom } from "../../src/cli/init/composer.js";
 import { FULL_TEMPLATE } from "../../src/cli/init/templates.js";
-import { parseManifest, parseManifestWithWarnings } from "../../src/schema/index.js";
-
-// AC2 regression guard (task 9f10267e, follow-up to PR #333): the
-// runtime-reality hook must never ship as an active entry. An active
-// `runtime-reality` hook without RUNTIME_REALITY_KEYWORD + an expectations
-// file + RUNTIME_REALITY_PROBE_CMD degrades to a silent allow (a no-op that
-// looks like protection). FULL_TEMPLATE ships no hooks at all now (task
-// bcdcde36); this guard turns an edit that adds the hook red.
-describe("FULL_TEMPLATE: no active runtime-reality hook", () => {
-  it("declares no active runtime-reality hook", () => {
-    const m = parseManifest(parseYaml(FULL_TEMPLATE));
-    expect(
-      m.hooks.find((h) => h.name === "runtime-reality"),
-      "FULL_TEMPLATE must not carry runtime-reality; an active entry without its RUNTIME_REALITY_* env degrades to silent-allow",
-    ).toBeUndefined();
-  });
-});
+import { parseManifestWithWarnings } from "../../src/schema/index.js";
 
 // Task d834a065 pinned the `&` command boundary in every policy trigger the
 // templates and the composer emitted. The policy engine is gone and the

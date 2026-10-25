@@ -1,7 +1,6 @@
 import type { Command } from "commander";
 import { packAdd, packList, packRemove, packReseed } from "./pack/index.js";
 import { runPackHookBranchProtectionCli } from "./pack/hook-branch-protection.js";
-import { runPackHookRuntimeRealityCli } from "./pack/hook-runtime-reality.js";
 import { HarnessExitError } from "./exit-codes.js";
 
 export function registerPackGroup(
@@ -154,21 +153,6 @@ export function registerPackGroup(
       if (options.cwd) cliOpts.cwd = options.cwd;
       if (options.runtime !== undefined) cliOpts.runtime = options.runtime;
       const result = await runPackHookBranchProtectionCli(cliOpts);
-      if (result.exitCode !== 0) {
-        throw new HarnessExitError("", result.exitCode);
-      }
-    });
-
-  packHookCmd
-    .command("runtime-reality")
-    .description(
-      "PreToolUse drift gate: read tool-event JSON from stdin, run the operator-configured " +
-        "RUNTIME_REALITY_PROBE_CMD to capture actual runtime state, compare against the " +
-        "RUNTIME_REALITY_KEYWORD expectations file, and emit a deny envelope on critical drift. " +
-        "Env-driven (no manifest options); fail-open on any probe / load error.",
-    )
-    .action(async () => {
-      const result = await runPackHookRuntimeRealityCli();
       if (result.exitCode !== 0) {
         throw new HarnessExitError("", result.exitCode);
       }

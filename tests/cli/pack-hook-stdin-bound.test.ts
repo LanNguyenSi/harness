@@ -130,15 +130,11 @@ async function runHook(opts: {
     fs.writeFileSync(configPath, opts.manifest, "utf8");
     args.push("--config", configPath);
   }
-  // The host's own session ids and runtime-reality knobs must not steer the
-  // decision under test.
+  // The host's own session ids must not steer the decision under test.
   const env = { ...process.env };
   delete env["CLAUDE_CODE_SESSION_ID"];
   delete env["CLAUDE_SESSION_ID"];
   delete env["CODEX_SESSION_ID"];
-  for (const key of Object.keys(env)) {
-    if (key.startsWith("RUNTIME_REALITY_")) delete env[key];
-  }
   env["HARNESS_HOME"] = home;
   env["HOME"] = home;
 
@@ -258,7 +254,7 @@ interface Gate {
   extraArgs?: string[];
   /** Pack enabled in the manifest handed to the child; null for a verb that takes no config. */
   pack: string | null;
-  /** The block exit code: 0 with a stdout envelope, or 2 (codex stderr / runtime-reality deny). */
+  /** The block exit code: 0 with a stdout envelope, or 2 (codex stderr deny). */
   blockExit: 0 | 2;
   /** Where the block reason is written. */
   reasonOn: "stdout" | "stderr";
@@ -293,19 +289,6 @@ const GATES: Gate[] = [
         cwd: ctx.cwd,
         tool_name: "apply_patch",
         tool_input: { input: `*** Begin Patch\n*** Add File: ${path.join(ctx.cwd, "a.txt")}\n+x\n*** End Patch\n` },
-      }),
-  },
-  {
-    verb: "runtime-reality",
-    pack: null,
-    blockExit: 2,
-    reasonOn: "stdout",
-    event: (ctx) =>
-      JSON.stringify({
-        session_id: "stdin-bound-sess",
-        cwd: ctx.cwd,
-        tool_name: "Bash",
-        tool_input: { command: "docker compose up -d" },
       }),
   },
 ];
@@ -349,7 +332,7 @@ function expectTimeoutBlock(gate: Gate, r: ChildResult): void {
   expect(reasonText).toContain(BOUND_TEXT);
   if (gate.reasonOn === "stdout") {
     expect(r.stdout).toContain('"permissionDecision":"deny"');
-    if (gate.verb !== "runtime-reality") expect(r.stdout).toContain('"decision":"block"');
+    expect(r.stdout).toContain('"decision":"block"');
   } else {
     expect(r.stdout).toBe("");
   }
@@ -410,9 +393,7 @@ describe("pack hook stdin bound: every PreToolUse gate blocks on a timed-out rea
     );
   }
 
-  it("covers every PreToolUse gate verb the pack hook bootstrap reader serves, plus runtime-reality", () => {
-    expect([...new Set(GATES.map((g) => g.verb))].sort()).toEqual(
-      ["branch-protection", "runtime-reality"].sort(),
-    );
+  it("covers every PreToolUse gate verb the pack hook bootstrap reader serves", () => {
+    expect([...new Set(GATES.map((g) => g.verb))].sort()).toEqual(["branch-protection"]);
   });
 });

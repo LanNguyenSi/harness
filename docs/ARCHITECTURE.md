@@ -43,7 +43,7 @@ itself is real: grounding-mcp still writes rows, and old
 
 ## Architecture overview
 
-The harness operates across two planes: an authoring plane that merges YAML config files into an effective manifest and runs `harness apply` to emit runtime artifacts, and a runtime plane where hook commands judge each tool call. Today that is `harness pack hook branch-protection` asking git for the branch, plus the opt-in `harness pack hook runtime-reality`. (The original third judge, `harness policy intercept`, matched `policies[]` and checked their `requires:` against the grounding-mcp evidence ledger; the policy engine was removed in 1.0.0. The diagrams below show it as designed.)
+The harness operates across two planes: an authoring plane that merges YAML config files into an effective manifest and runs `harness apply` to emit runtime artifacts, and a runtime plane where hook commands judge each tool call. Today that is `harness pack hook branch-protection` asking git for the branch. (The original third judge, `harness policy intercept`, matched `policies[]` and checked their `requires:` against the grounding-mcp evidence ledger; the policy engine was removed in 1.0.0. The diagrams below show it as designed.)
 
 The first diagram shows the authoring plane and which hook command judges a tool call at runtime, with what each one consults.
 
@@ -68,13 +68,10 @@ flowchart TD
     GR[("grounding-mcp<br/>evidence ledger")]
     BP["harness pack hook branch-protection"]
     GIT["git -C dir symbolic-ref -q HEAD"]
-    RR["harness pack hook runtime-reality<br/>(opt-in)"]
-    PROBE["RUNTIME_REALITY_PROBE_CMD"]
 
     EVT -->|"policies[] hooks"| PI
     PI <-->|"ledger_summary, ledger_add"| GR
     EVT -->|"Write, Edit or apply_patch"| BP --> GIT
-    EVT -->|opt-in hook| RR --> PROBE
   end
 
   OUT -.->|"wired by<br/>--target or --install"| EVT
@@ -798,8 +795,6 @@ Dependencies (pinned in Phase 1):
 | `zod` | Runtime schema validation + TS types |
 | `yaml` | YAML parse/serialize with comment preservation (for `apply`) |
 | `commander` | CLI parsing |
-| `execa` | Process execution (MCP health checks, CLI version checks) |
-| `chalk` | Terminal colouring (matches existing CLI style) |
 | `better-sqlite3` | **Reserved / unused in v1.** Earlier drafts kept direct evidence-ledger reads as a fallback; the Phase 4 evaluator now goes through `grounding-mcp` (per ROADMAP Phase 4 §Library-side) so harness does not re-open the SQLite ledger directly. Row kept here so a future v2 reader sees the option was considered and rejected. |
 
 Language-service dependencies:
