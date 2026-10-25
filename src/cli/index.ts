@@ -26,7 +26,7 @@ import { registerOperatorLifecycle } from "./register-operator-lifecycle.js";
 import { registerInspectGroup } from "./register-inspect-group.js";
 import { registerSetupGroup } from "./register-setup-group.js";
 import { registerPackGroup } from "./register-pack-group.js";
-import { registerGateGcGroup } from "./register-gate-gc-group.js";
+import { registerGateGroup } from "./register-gate-group.js";
 
 export interface RunOptions {
   argv?: string[];
@@ -69,7 +69,7 @@ export function buildProgram(opts: RunOptions = {}): Command {
 
   registerPackGroup(program, { stdout, stderr });
 
-  registerGateGcGroup(program, { stdout, stderr });
+  registerGateGroup(program, { stdout, stderr });
 
   registerUninstall(program, { stdout, stderr });
 

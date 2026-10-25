@@ -33,7 +33,7 @@ function parseGateRuntime(
   return runtime;
 }
 
-export function registerGateGcGroup(
+export function registerGateGroup(
   program: Command,
   io: { stdout: (s: string) => void; stderr: (s: string) => void },
 ): void {

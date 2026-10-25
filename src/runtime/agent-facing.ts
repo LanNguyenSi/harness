@@ -4,15 +4,16 @@
 // the plain-language form the agent sees on block. This module is concerned
 // only with the user-facing surface.
 //
-// Output shape, verbatim:
+// Output shape, verbatim (the shipped branch-protection default `ux`,
+// with `${BRANCH}` resolved to `main`):
 //
-//   You cannot investigate this repository yet.
+//   You cannot edit files on protected branch main yet.
 //
 //   Required:
-//   - verified repository preflight
+//   - a checkout of a non-protected branch (current `main` is protected)
 //
 //   Run:
-//     harness preflight
+//     git checkout -b feat/<your-task>
 //
 // Three sections every time: state (what's blocked), requirement
 // (what's missing, in plain words, never "ledger entry for tag X"),
