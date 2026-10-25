@@ -111,42 +111,106 @@ describe("generateOpencodeConfig", () => {
     expect(agentTasksIdx).toBeLessThan(groundingIdx);
   });
 
-  it("does NOT project manifest hooks[] and warns instead", () => {
+  it("does NOT project manifest hooks[] and warns with count, name and consequence", () => {
     const { content, warnings } = generateOpencodeConfig(canonicalManifest(), {
       homeDir: "/home/op",
     });
     expect(content).not.toContain("echo shell-guard");
     expect(content).not.toContain("PreToolUse");
-    expect(
-      warnings.some(
-        (w) => w.includes("1 hook(s)") && w.includes("no declarative hook wiring"),
-      ),
-    ).toBe(true);
+    expect(warnings).toContain(
+      "1 hook(s) not projected (policy-pack:branch-protection:pre-tool-use): opencode has no declarative hook wiring, so they do not run under opencode; edits on protected branches are NOT blocked under opencode",
+    );
   });
 
-  it("does NOT project memory.router and warns instead", () => {
-    const { content, warnings } = generateOpencodeConfig(canonicalManifest(), {
-      homeDir: "/home/op",
+  it("omits the protected-branch sentence when no branch-protection hook is present", () => {
+    const hook = (name: string) => ({
+      name,
+      event: "PreToolUse",
+      match: "Bash",
+      command: "echo x",
+      blocking: "soft",
+      budget_ms: 5000,
     });
-    expect(content).not.toContain("memory-router-user-prompt-submit");
-    expect(warnings.some((w) => w.includes("memory.router"))).toBe(true);
+    const { warnings } = generateOpencodeConfig(
+      parseManifest({ version: 1, hooks: [hook("a"), hook("b")] }),
+    );
+    expect(warnings).toContain(
+      "2 hook(s) not projected (a, b): opencode has no declarative hook wiring, so they do not run under opencode",
+    );
+    expect(warnings.some((w) => w.includes("protected branches"))).toBe(false);
   });
 
-  it("omits memory.router warning when enabled:false", () => {
+  it("names the first hooks and counts the rest when there are many", () => {
+    const hook = (name: string) => ({
+      name,
+      event: "PreToolUse",
+      match: "Bash",
+      command: "echo x",
+      blocking: "soft",
+      budget_ms: 5000,
+    });
     const { warnings } = generateOpencodeConfig(
+      parseManifest({
+        version: 1,
+        hooks: ["a", "b", "c", "d", "e"].map(hook),
+      }),
+    );
+    expect(warnings).toContain(
+      "5 hook(s) not projected (a, b, c and 2 more): opencode has no declarative hook wiring, so they do not run under opencode",
+    );
+  });
+
+  it("names exactly three hooks without a remainder count", () => {
+    const hook = (name: string) => ({
+      name,
+      event: "PreToolUse",
+      match: "Bash",
+      command: "echo x",
+      blocking: "soft",
+      budget_ms: 5000,
+    });
+    const { warnings } = generateOpencodeConfig(
+      parseManifest({ version: 1, hooks: ["a", "b", "c"].map(hook) }),
+    );
+    expect(warnings).toContain(
+      "3 hook(s) not projected (a, b, c): opencode has no declarative hook wiring, so they do not run under opencode",
+    );
+  });
+
+  it("keeps the protected-branch sentence when the branch-protection hook is not among the named ones", () => {
+    const hook = (name: string) => ({
+      name,
+      event: "PreToolUse",
+      match: "Bash",
+      command: "echo x",
+      blocking: "soft",
+      budget_ms: 5000,
+    });
+    const { warnings } = generateOpencodeConfig(
+      parseManifest({
+        version: 1,
+        hooks: ["a", "b", "c", "policy-pack:branch-protection:pre-tool-use"].map(hook),
+      }),
+    );
+    expect(warnings).toContain(
+      "4 hook(s) not projected (a, b, c and 1 more): opencode has no declarative hook wiring, so they do not run under opencode; edits on protected branches are NOT blocked under opencode",
+    );
+  });
+
+  it("does NOT project memory.router and prints no warning for it", () => {
+    const { content, warnings } = generateOpencodeConfig(
       parseManifest({
         version: 1,
         memory: {
           directories: [],
-          router: {
-            command: ["memory-router-user-prompt-submit"],
-            enabled: false,
-          },
+          router: { command: ["memory-router-user-prompt-submit"] },
         },
       }),
     );
-    expect(warnings.some((w) => w.includes("memory.router"))).toBe(false);
+    expect(content).not.toContain("memory-router-user-prompt-submit");
+    expect(warnings).toEqual([]);
   });
+
 
   it("omits the `mcp` key entirely when there are no enabled MCP servers", () => {
     const { content, mcp } = generateOpencodeConfig(
