@@ -1,6 +1,6 @@
 # `harness init --interactive`
 
-Guided wizard that detects the operator's environment, picks a profile, and writes a starting `harness.yaml`. Composes the read-only detection from PR 1 (`--probe`) with the `solo` / `team` profile templates from PR 2.
+Guided wizard that detects the operator's environment, picks a profile, and writes a starting `harness.yaml`. It composes the read-only detection (`harness init --probe`) with the `solo` / `team` / `full` profile templates.
 
 The wizard is one of three ways to bootstrap a manifest:
 
@@ -18,9 +18,9 @@ The wizard is one of three ways to bootstrap a manifest:
 
 3. **Profile selection.** Four choices, with different external-account assumptions:
 
-    - **Solo** (no external accounts): `memory-router` + the `branch-protection` policy pack (Write/Edit refused on a protected branch). Single-operator baseline. Works against any PR workflow because it does not wire any PR-merge gate.
+    - **Solo** (no external accounts): `memory-router` + the `branch-protection` policy pack (Write/Edit refused on a protected branch). Single-operator baseline.
     - **Team** (requires an agent-tasks account, hosted or self-hosted): Solo + the `agent-tasks` MCP server + `grounding-mcp`.
-    - **Full** (requires agent-tasks + `gh` on PATH): Team + the reference tool inventory (the `gh` CLI entry, skills, version floors, min-version floors on the MCP entries). (The reference policies, their Bash-surface parallels and the `harness policy intercept` engine they ran through were removed in 1.0.0; no template writes policies or policy-intercept hooks.)
+    - **Full** (requires agent-tasks on PATH): Team + the reference tool inventory (the `gh` CLI entry, skills, version floors, min-version floors on the MCP entries).
     - **Custom (advanced)**: à-la-carte composer (see [Custom flow](#custom-flow) below). Pick discrete packs / MCPs; the wizard composes a validate-clean manifest from your selection.
 
 4. **Agent-tasks warning (Team / Full).** If you pick `team` or `full` but the probe did not find an `agent-tasks` entry in that user-scope registry, the wizard asks whether to proceed. The manifest will still be written, but two preconditions need to land before the bridge is usable: (a) `agent-tasks-mcp-bridge` on PATH and registered with Claude Code (`claude mcp add-json --scope user`), (b) a token in the OS keychain or `AGENT_TASKS_TOKEN` env. Default is `true` because the common case is "I am setting up everything from scratch and agent-tasks is about to land alongside this manifest". After the manifest write the wizard prints a reminder line with the `agent-tasks-mcp-bridge login` recovery path.
@@ -39,10 +39,10 @@ The wizard is one of three ways to bootstrap a manifest:
 9. **Runtime wire-now multiselect.** A checkbox prompt offers `claude-code` and `codex` (`opencode` is not a wizard wire target: it is wired with `harness apply --runtime opencode`, never by this wizard). Whichever runtimes the probe found configured are pre-checked, so the common single-runtime case is one Enter press. For each ticked runtime:
    - `claude-code` → `harness apply --target ~/.claude/settings.json --merge` is run; the merge summary, `wired into …`, and `verify: …` lines print to stderr.
    - `codex` → `harness apply --runtime codex --install` writes `harness.generated/codex/config.toml`, then replaces only the marked harness-managed hook block in `~/.codex/config.toml`. Operator-owned model/auth/sandbox/MCP settings stay outside that block.
-   - Unchecking everything skips wiring entirely; both manual fallback commands print so the operator can wire later by hand.
+   - Unchecking everything skips wiring entirely; the manual fallback commands print so the operator can wire later by hand.
    - Selecting both runtimes runs the two applies sequentially. `harness.generated/.last-apply` keeps the generated files of both runtimes, and `harness.lock` does not depend on the runtime: it hashes the manifest's assets and memory directories plus the `--target` settings file, which the Codex apply carries forward. No follow-up apply is needed.
 
-   Since v0.17.4, the `claude-code` wire-now branch passes `overwriteDrift: true` (auto-confirmed) to `apply`. This is the deliberate "start from scratch" intent of `init --interactive`: any pre-existing `~/.harness/harness.generated/settings.json` (legacy `~/.claude/harness.generated/settings.json`) that drifted out of the last-apply snapshot is overwritten by the freshly-rendered settings rather than refused with `outcome: "drift-refuse"`. Ad-hoc `harness apply` (outside the wizard) keeps the strict drift safeguard unchanged. If `targetWritten` still ends up false for any other reason, the wizard now prints a clear stderr message and a `recoveryHint` instead of leaving the operator with a "wired into …" line that never landed.
+   The `claude-code` wire-now branch passes `overwriteDrift: true` (auto-confirmed) to `apply`. This is the deliberate "start from scratch" intent of `init --interactive`: any pre-existing `~/.harness/harness.generated/settings.json` (legacy `~/.claude/harness.generated/settings.json`) that drifted out of the last-apply snapshot is overwritten by the freshly-rendered settings rather than refused with `outcome: "drift-refuse"`. Ad-hoc `harness apply` (outside the wizard) keeps the strict drift safeguard unchanged. If `targetWritten` still ends up false for any other reason, the wizard prints a clear stderr message and a `recoveryHint` instead of leaving the operator with a "wired into …" line that never landed.
 
 ### MCP registration
 
@@ -61,8 +61,6 @@ Custom is for power users who want a manifest narrower or wider than the named p
 
 1. **Policy packs**: pre-checked: none (settings.json carries no pack signal today). Surface: `branch-protection`.
 2. **MCP servers / routers**: pre-checked from `detect()`: any MCP name found in the user-scope registry (`~/.claude.json`) is ticked. Surface: `agent-tasks`, `grounding-mcp`, `memory-router` (wired under `memory.router`, not `tools.mcp[]`; the composer puts it in the right slot), and `codebase-oracle` (requires `ORACLE_SCAN_ROOT` + `OPENAI_API_KEY` env vars that the wizard does NOT prompt for; an advisory prints when ticked).
-
-(A third checkbox, "pick reference policies", existed until 1.0.0; it went with the policy engine, and the composer emits no policies.)
 
 Acceptance:
 

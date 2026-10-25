@@ -45,7 +45,7 @@
 // OUT OF SCOPE, deliberately. These are not
 // oversights; each would produce a false positive or scan something this
 // gate has no claim over:
-//   - `dogfood/`: captured terminal transcripts and their evidence files
+//   - Captured terminal transcripts and their evidence files: they
 //     carry REAL control bytes (ANSI escapes from the captured session).
 //     They are recordings of terminal output, not hand-written source,
 //     so a raw ESC there is the data, not a defect.

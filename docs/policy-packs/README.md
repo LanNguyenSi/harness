@@ -17,16 +17,7 @@ One pack ships today:
 
 - [`branch-protection`](branch-protection.md): blocks source mutations when git names a protected branch for the target directory, or cannot answer.
 
-The `understanding-before-execution` pack is removed. A manifest that still
-carries it, or the `permission_profiles` key it alone consumed, loads with a
-warning and the entry is ignored; `harness validate --strict` fails on it.
-Delete the entry (`harness pack remove --force understanding-before-execution`
-also drops the generated instructions file) and delete `permission_profiles`
-by hand, then re-run `harness apply` for each runtime. If any
-`harness apply --target <file>` (with `--merge`, `--force` or into a new
-file) wrote a `permissions` block into that file while a `permission_profile`
-was selected, also delete that block by hand: harness no longer generates or
-manages it, so a later `--merge` keeps it as an operator key.
+A manifest that still names a pack that has been removed, or a key such a pack alone consumed, loads with a warning and the entry is ignored (`harness validate --strict` fails on it); the removed list and what to delete are in the removed section of [`docs/CLI.md`](../CLI.md).
 
 Custom packs from `path:`, `npm:`, or `git:` sources are out of scope
 for v1; see each pack's own doc for the future-vocabulary contract.

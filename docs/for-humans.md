@@ -6,8 +6,8 @@ way you said it should. This doc is the path from "fresh checkout" to
 "my Claude Code session is gated by the rules I declared".
 
 For the agent's view of the same system (which CLI verbs are safe to
-call, how the gate messages read, how to read the ledger back), jump
-to [`for-agents.md`](for-agents.md).
+call and how the gate messages read), jump to
+[`for-agents.md`](for-agents.md).
 
 ## 30-second pitch
 
@@ -23,7 +23,7 @@ indexes, sibling assets) and records a sha256 of every output in
 ```mermaid
 flowchart LR
     yaml[harness.yaml]
-    overrides[per-project<br/>overrides]
+    overrides[per-machine and<br/>per-project overrides]
     apply[harness apply]
     settings[settings.json]
     memidx[MEMORY.md indexes]
@@ -31,7 +31,8 @@ flowchart LR
     cc[Claude Code session]
     bphook["harness pack hook branch-protection<br/>(hook command)"]
     memdirs[memory dirs]
-    ledger[(evidence-ledger)]
+    gate["harness gate disable / enable<br/>(operator kill switch)"]
+    git[(git)]
 
     yaml --> apply
     overrides --> apply
@@ -40,10 +41,10 @@ flowchart LR
     apply --> lock
     settings --> cc
     memidx --> cc
+    gate -->|"takes one hook group<br/>out and back"| settings
     cc <--> bphook
-    bphook -->|"asks git for<br/>the branch"| git[(git)]
+    bphook -->|"asks git for<br/>the branch"| git
     cc -. reads .-> memdirs
-    cc -. reads .-> ledger
 ```
 
 The manifest is the source of truth. Everything else is rendered. The
@@ -311,10 +312,10 @@ gate off for good, set `policy_packs[].enabled: false` on the pack
 (branch-protection) or remove the hook entry from the manifest, then
 re-apply. Persistent, diff-able, source-controlled.
 
-`harness pause` and `harness resume` were removed in 1.0.0 (task
-973163a4): both verbs are unknown now, and `harness gate disable` /
-`harness gate enable` are the operator off switch they used to
-complement.
+If you reach for `harness pause` or `harness resume`, those verbs are
+gone; the gate switches above are the off switch, and the full list of
+removed verbs is in the removed section of
+[`docs/CLI.md`](CLI.md#removed-keys-packs-and-commands).
 
 ## Diagnostics cheat-sheet
 
@@ -327,7 +328,6 @@ complement.
 | Schema issues, plus drift since last `apply` | `harness validate --check-lock` |
 | Health summary across all pillars (MCP probes, hook executability, memory dir state) | `harness doctor` |
 | What changed since I last ran `apply` | `harness diff --since-apply` |
-| Replay the historical policy decision rows (written pre-1.0.0) | removed (task 0231f90f); how to read old rows: [CLI.md](CLI.md) |
 | Take one hook group out of the live config (recovery / debug / incident), Claude Code | `harness gate disable --matcher <substring>` then `harness gate enable` |
 | Take one hook unit out of the live config (recovery / debug / incident), Codex | `harness gate disable --runtime codex --matcher <substring>` then `harness gate enable --runtime codex` |
 | Edit a protected branch on purpose (branch-protection off, from an operator shell) | see [Disable the gate](policy-packs/branch-protection.md#disable-the-gate-operator-only) |
@@ -335,7 +335,7 @@ complement.
 ## Where to read next
 
 - [`docs/for-agents.md`](for-agents.md): how agents interact with the
-  same harness instance, the gate messages, reading the ledger back.
+  same harness instance and the gate messages.
 - [`docs/ARCHITECTURE.md`](ARCHITECTURE.md): the original design
   (historical); [`docs/CLI.md`](CLI.md) is the current command
   reference, including the manifest's top-level keys.
