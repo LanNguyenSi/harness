@@ -21,14 +21,23 @@
 // everything else beside them stays put. The loader resolves layers under
 // the state root, so a layer left behind would silently stop applying.
 //
-// Symlinks are never moved. A layer file that is a symlink, a
-// `projects/<name>` directory that is a symlink, and `machines/` or
-// `projects/` being a symlink are reported as `move by hand: <path>
-// (symlink to <target>)` and left untouched; nothing inside a link target
-// is moved or removed. Such an item stops counting as open once every
-// layer it holds exists at its destination under `~/.harness/` (the
-// operator recreated it there): the command then prints an `already at`
-// line instead.
+// Symlinked override layers are never moved. A layer file that is a
+// symlink, a `projects/<name>` directory that is a symlink, and
+// `machines/` or `projects/` being a symlink are reported as `move by
+// hand: <path> (symlink to <target>)` and left untouched; nothing inside a
+// link target is moved or removed. When the link points into an item this
+// run moved, the line also says where that target now lives. Such an item
+// stops counting as open once every layer it holds resolves, following
+// links, to a regular file at its destination under `~/.harness/` (the
+// operator recreated it there), the way the loader reads layers: the
+// command then prints an `already at` line instead. A destination that
+// exists but does not resolve to a regular file (a dangling link, a
+// directory) keeps the item open with a line of its own.
+//
+// The four top-level items are not covered by that rule: one that is
+// itself a symlink (say `harness.yaml` linked into a dotfiles checkout) is
+// moved as a link, and a relative link target may then no longer resolve
+// from `~/.harness/`.
 //
 // What is NOT touched (operator-owned, runtime config, not harness state):
 //   - `~/.claude/settings.json`             (Claude Code's runtime config)
@@ -46,7 +55,10 @@
 //     created under `~/.harness/` (`~/.harness/` itself included) is
 //     removed, so nothing is changed and the outcome is `rolled-back`.
 //     A rollback step that fails is reported line by line, together with
-//     what now sits where, and the outcome is `partial`.
+//     what now sits where, and the outcome is `partial`. When its
+//     leftovers (items still under `~/.harness/`, or a `~/.harness/` this
+//     run created) leave harness reading a `~/.harness/` without
+//     `harness.yaml`, one more line says so and how to recover.
 //   - A move that fails after `harness.yaml` has moved is not rolled
 //     back: the outcome is `partial`, the command says what is under
 //     which root, and the recovery path is an explicit re-run of
@@ -100,7 +112,10 @@ interface ManualItem {
   target: string;
   /** Where it belongs under the new root. */
   dst: string;
-  /** The layer files that must exist under the new root for the item to be done. */
+  /**
+   * The layer files under the new root that must each resolve, following
+   * links, to a regular file for the item to be done.
+   */
   layers: string[];
 }
 
@@ -276,13 +291,17 @@ export interface MigrateHomeResult {
   /**
    * Open `move by hand` lines: symlinked layers (a layer file, a
    * `projects/<name>` directory, `machines/` or `projects/` being a link)
-   * that are not yet at their destination. A non-empty list means the
-   * migration is not complete even when `outcome` is `applied`.
+   * that are not yet at their destination, each followed by an `exists
+   * but does not resolve to a file` line for every destination layer that
+   * exists but is not a regular file once links are followed. A non-empty
+   * list means the migration is not complete even when `outcome` is
+   * `applied`.
    */
   manual: string[];
   /**
-   * `already at` lines: symlinked layers whose destination already
-   * exists. Informational; they do not keep the migration open.
+   * `already at` lines: symlinked layers whose every destination layer
+   * resolves to a regular file. Informational; they do not keep the
+   * migration open.
    */
   manualDone: string[];
   /** Path of the breadcrumb marker, present when anything stayed moved. */
@@ -312,15 +331,6 @@ export function migrateHome(opts: MigrateHomeOptions = {}): MigrateHomeResult {
   const layers = discoverOverrideLayers(legacyPath, newPath);
   const manual: string[] = [];
   const manualDone: string[] = [];
-  for (const m of layers.manual) {
-    if (m.layers.every((p) => pathExists(p))) {
-      manualDone.push(
-        `already at ${safe(m.dst)}; remove the legacy ${safe(m.path)} when you no longer need it`,
-      );
-    } else {
-      manual.push(`move by hand: ${safe(m.path)} (symlink to ${safe(m.target)})`);
-    }
-  }
   // Layers first: a layer failure must stop the run before harness.yaml
   // moves, so a failed run never leaves the manifest at the new root with
   // its layers stranded at the old one.
@@ -353,13 +363,60 @@ export function migrateHome(opts: MigrateHomeOptions = {}): MigrateHomeResult {
   const conflicts = items.filter((i) => i.action === "target-exists");
   const base = { legacyPath, newPath, items, manual, manualDone };
 
-  for (const line of manual) stderr.write(`harness migrate-home: ${line}\n`);
-  if (manual.length > 0) {
-    stderr.write(
-      `harness migrate-home: symlinked layers are never moved; recreate each \`move by hand\` item under ${newPath} (copy the file, or a new link to the same target), then re-run \`harness migrate-home --apply\`.\n`,
-    );
-  }
-  for (const line of manualDone) stdout.write(`harness migrate-home: ${line}\n`);
+  /** Where a link's target sits now when it lies inside an item this run moved. */
+  const movedTargetNote = (m: ManualItem): string => {
+    const target = path.resolve(path.dirname(m.path), m.target);
+    for (const it of items) {
+      if (it.action !== "moved") continue;
+      const from = path.join(legacyPath, it.basename);
+      if (target === from || target.startsWith(from + path.sep)) {
+        const now = path.join(newPath, it.basename, path.relative(from, target));
+        return `; that target now lives at ${safe(now)}`;
+      }
+    }
+    return "";
+  };
+  /** The `already at` advice: never suggest removing a whole legacy directory. */
+  const doneNote = (m: ManualItem): string => {
+    if (m.path === path.join(legacyPath, "projects")) {
+      return `keep the legacy ${safe(m.path)}: Claude Code uses it for its session transcripts`;
+    }
+    if (m.path === path.join(legacyPath, "machines")) {
+      return `harness no longer reads the legacy ${safe(m.path)}`;
+    }
+    return `remove the legacy ${safe(m.path)} when you no longer need it`;
+  };
+  /**
+   * Classify and print the symlinked layers. Called once per run, after
+   * any move, so a link whose target this run moved can say where it is.
+   * Done is decided the way the loader reads a layer: the destination
+   * must resolve, following links, to a regular file.
+   */
+  const reportManual = (): void => {
+    for (const m of layers.manual) {
+      if (m.layers.every((p) => resolvesToFile(p))) {
+        manualDone.push(`already at ${safe(m.dst)}; ${doneNote(m)}`);
+        continue;
+      }
+      manual.push(`move by hand: ${safe(m.path)} (symlink to ${safe(m.target)}${movedTargetNote(m)})`);
+      for (const p of m.layers) {
+        if (pathExists(p) && !resolvesToFile(p)) {
+          manual.push(
+            `${safe(p)} exists but does not resolve to a file, so harness cannot read it as a layer; replace it with the layer file or a link that resolves to it`,
+          );
+        }
+      }
+    }
+    for (const line of manual) stderr.write(`harness migrate-home: ${line}\n`);
+    if (manual.length > 0) {
+      stderr.write(
+        `harness migrate-home: symlinked layers are never moved; recreate each \`move by hand\` item under ${newPath} (copy the file, or a link that resolves to the same file), then re-run \`harness migrate-home --apply\`.\n`,
+      );
+    }
+    for (const line of manualDone) stdout.write(`harness migrate-home: ${line}\n`);
+  };
+
+  if (!apply || conflicts.length > 0 || movable.length === 0) reportManual();
 
   if (conflicts.length > 0) {
     for (const c of conflicts) {
@@ -403,6 +460,7 @@ export function migrateHome(opts: MigrateHomeOptions = {}): MigrateHomeResult {
   try {
     trackMkdir(newPath);
   } catch (err) {
+    reportManual();
     throw new HarnessExitError(
       `failed to create ${newPath}: ${(err as Error).message}`,
       EX_FAIL,
@@ -450,6 +508,7 @@ export function migrateHome(opts: MigrateHomeOptions = {}): MigrateHomeResult {
         failures.push(`could not remove ${dir}, which this run created: ${(err as Error).message}`);
       }
     }
+    reportManual();
     if (failures.length === 0) {
       stderr.write(
         `harness migrate-home: undid every move of this run; nothing was changed under ${legacyPath} or ${newPath}.\n`,
@@ -458,8 +517,10 @@ export function migrateHome(opts: MigrateHomeOptions = {}): MigrateHomeResult {
     }
     for (const f of failures) stderr.write(`harness migrate-home: ROLLBACK FAILED: ${f}\n`);
     reportWhere(stderr, items, legacyPath, newPath);
+    reportStrandedRoot(stderr, items, legacyPath, newPath, createdDirs.includes(newPath));
     return { ...base, outcome: "partial" };
   }
+  reportManual();
 
   // Prune legacy layer directories the moves emptied. Deferred until no
   // rollback can follow, so a rollback finds every legacy directory.
@@ -521,6 +582,32 @@ function reportWhere(
   }
 }
 
+/**
+ * After a rollback that could not undo every step: the resolver reads
+ * `~/.harness/` whenever it is a directory, and `harness.yaml` is still
+ * under the legacy root (a rollback runs only before it moves, and it was
+ * not at the new root before, or the run would have been a
+ * target-conflict), so harness finds no manifest until the operator
+ * recovers.
+ */
+function reportStrandedRoot(
+  stderr: NodeJS.WritableStream,
+  items: MigrateHomeItemResult[],
+  legacyPath: string,
+  newPath: string,
+  createdRoot: boolean,
+): void {
+  if (!pathIsDir(newPath)) return;
+  const atNew = items.filter((i) => i.action === "moved").map((i) => i.basename);
+  const steps: string[] = [];
+  if (atNew.length > 0) steps.push(`move ${atNew.join(", ")} from ${newPath} back to ${legacyPath}`);
+  if (createdRoot) steps.push(`remove ${newPath}, which this run created`);
+  if (steps.length === 0) return; // the run did not change which root harness reads
+  stderr.write(
+    `harness migrate-home: harness now reads ${newPath}, which has no harness.yaml, so it does not find your manifest under ${legacyPath}; to recover, ${steps.join(", then ")}, and re-run \`harness migrate-home --apply\`.\n`,
+  );
+}
+
 /** Remove now-empty directories above a moved layer file, stopping at the legacy root. */
 function removeEmptyParents(movedSrc: string, legacyPath: string): void {
   let dir = path.dirname(movedSrc);
@@ -531,6 +618,15 @@ function removeEmptyParents(movedSrc: string, legacyPath: string): void {
       return; // not empty (e.g. Claude Code's own files): leave it
     }
     dir = path.dirname(dir);
+  }
+}
+
+/** A layer the loader can read: the path resolves, following links, to a regular file. */
+function resolvesToFile(p: string): boolean {
+  try {
+    return fs.statSync(p).isFile();
+  } catch {
+    return false;
   }
 }
 

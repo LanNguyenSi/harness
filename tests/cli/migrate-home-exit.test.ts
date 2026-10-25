@@ -96,8 +96,80 @@ describe("harness migrate-home exit code", () => {
     fs.symlinkSync(real, path.join(home, ".harness", "machines"));
     const r = cli(["migrate-home", "--apply"]);
     expect(r.status).toBe(0);
-    expect(r.stdout).toMatch(/already at .*\.harness\/machines; remove the legacy .*\.claude\/machines when you no longer need it/);
+    expect(r.stdout).toMatch(/already at .*\.harness\/machines; harness no longer reads the legacy .*\.claude\/machines\n/);
+    expect(r.stdout).not.toMatch(/remove the legacy/);
     expect(r.stderr).not.toMatch(/move by hand/);
+  });
+
+  describe("a move-by-hand destination counts only when it resolves to a file", () => {
+    const notAFile = /exists but does not resolve to a file/;
+
+    it("keeps a layer open whose destination is a dangling link copied verbatim from a relative legacy link", () => {
+      const legacy = seed();
+      fs.mkdirSync(path.join(legacy, "shared"));
+      fs.writeFileSync(path.join(legacy, "shared", "m.yaml"), "version: 1\n");
+      const layer = path.join("machines", "default.harness.overrides.yaml");
+      fs.rmSync(path.join(legacy, layer));
+      fs.symlinkSync(path.join("..", "shared", "m.yaml"), path.join(legacy, layer));
+      expect(cli(["migrate-home", "--apply"]).status).toBe(1);
+      const dst = path.join(home, ".harness", layer);
+      fs.mkdirSync(path.dirname(dst), { recursive: true });
+      fs.symlinkSync(path.join("..", "shared", "m.yaml"), dst);
+      const open = cli(["migrate-home", "--apply"]);
+      expect(open.status).toBe(1);
+      expect(open.stderr).toContain(`${dst} exists but does not resolve to a file`);
+      expect(open.stdout).not.toMatch(/already at/);
+      // a link that resolves to the real file is done
+      fs.rmSync(dst);
+      fs.symlinkSync(path.join(legacy, "shared", "m.yaml"), dst);
+      const done = cli(["migrate-home", "--apply"]);
+      expect(done.status).toBe(0);
+      expect(done.stdout).toContain(`already at ${dst}`);
+    });
+
+    it("keeps a layer open whose destination links to its old target inside an item the run moved", () => {
+      const legacy = seed();
+      fs.mkdirSync(path.join(legacy, "harness.generated"));
+      fs.writeFileSync(path.join(legacy, "harness.generated", "p.yaml"), "version: 1\n");
+      fs.mkdirSync(path.join(legacy, "projects", "acme"), { recursive: true });
+      const layer = path.join("projects", "acme", "harness.overrides.yaml");
+      const oldTarget = path.join(legacy, "harness.generated", "p.yaml");
+      fs.symlinkSync(oldTarget, path.join(legacy, layer));
+      const first = cli(["migrate-home", "--apply"]);
+      expect(first.status).toBe(1);
+      const newTarget = path.join(home, ".harness", "harness.generated", "p.yaml");
+      expect(first.stderr).toContain(
+        `move by hand: ${path.join(legacy, layer)} (symlink to ${oldTarget}; that target now lives at ${newTarget})`,
+      );
+      // the operator recreates the same absolute link: it dangles, the run stays open
+      const dst = path.join(home, ".harness", layer);
+      fs.mkdirSync(path.dirname(dst), { recursive: true });
+      fs.symlinkSync(oldTarget, dst);
+      const open = cli(["migrate-home", "--apply"]);
+      expect(open.status).toBe(1);
+      expect(open.stderr).toContain(`${dst} exists but does not resolve to a file`);
+      // pointing it at the new location finishes the migration
+      fs.rmSync(dst);
+      fs.symlinkSync(newTarget, dst);
+      expect(cli(["migrate-home", "--apply"]).status).toBe(0);
+    });
+
+    it("keeps a layer open whose destination is a directory", () => {
+      const legacy = seed();
+      const ext = path.join(home, "ext", "m.yaml");
+      fs.mkdirSync(path.dirname(ext), { recursive: true });
+      fs.writeFileSync(ext, "version: 1\n");
+      const layer = path.join("machines", "default.harness.overrides.yaml");
+      fs.rmSync(path.join(legacy, layer));
+      fs.symlinkSync(ext, path.join(legacy, layer));
+      const dst = path.join(home, ".harness", layer);
+      fs.mkdirSync(dst, { recursive: true });
+      const r = cli(["migrate-home", "--apply"]);
+      expect(r.status).toBe(1);
+      expect(r.stderr).toMatch(notAFile);
+      expect(r.stderr).toContain(`${dst} exists but does not resolve to a file`);
+      expect(r.stdout).not.toMatch(/already at/);
+    });
   });
 
   describe.skipIf(process.getuid?.() === 0)("with an unwritable legacy directory", () => {
