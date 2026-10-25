@@ -42,9 +42,9 @@ hooks: []         # event-bound shell commands (section 5)
 policy_packs: []  # builtin packs such as branch-protection (section 6)
 ```
 
-Everything except `version` is optional and defaults to empty. The parse is strict: any other top-level key, and any typo inside a known section, fails it. A manifest that fails to parse makes every verb that loads it fail (exit 66; `harness validate` reports it as error diagnostics).
+Everything except `version` is optional and defaults to empty. The parse is strict: any other top-level key, and any typo inside a known section, fails it. The one exception is a pack's `config` block (section 6), which the load accepts as-is and `harness validate` checks against the pack's own schema. A manifest that fails to parse makes every verb that loads it fail (exit 66; `harness validate` reports it as error diagnostics).
 
-Keys, hook fields and pack names that releases removed are the one exception to strictness: they load, warn once, and are stripped before the parse (`src/schema/removed-keys.ts`). The `policies:` list, `workflows:` and `review_templates:` are removed keys among them; the module header names the full table. An empty value of such a key is stripped silently, and `harness validate --strict` fails on the warnings. This posture is deliberate: every hook loads the manifest and the branch-protection gate refuses every call when a load fails, so a manifest carrying a key a newer release removed must warn, not lock the machine out. Hooks or pack configs that still *call* a removed harness command parse fine but produce warnings naming each site, because `harness apply` would re-render a command that no longer exists.
+Keys, hook fields and pack names that releases removed are the one exception to strictness: they load, warn once, and are stripped before the parse (`src/schema/removed-keys.ts`). The `policies:` list, `workflows:` and `review_templates:` are removed keys among them; the module header names the full table. An empty value of some removed keys (for example `policies: []`) is stripped silently, and `harness validate --strict` fails on the warnings. This posture is deliberate: every hook loads the manifest and the branch-protection gate refuses every call when a load fails, so a manifest carrying a key a newer release removed must warn, not lock the machine out. Hooks or pack configs that still *call* a removed harness command parse fine but produce warnings naming each site, because `harness apply` would re-render a command that no longer exists.
 
 ## 2. grounding: section
 
@@ -83,7 +83,7 @@ tools:
       enabled: true
     - name: agent-tasks
       command: [node, ~/git/pandora/agent-tasks/mcp-server/dist/server.js]
-      enabled: false          # dropped from every generated runtime output
+      enabled: false          # dropped from generated runtime config (opencode: disabled marker)
   cli:
     - name: git-batch
       binary: git-batch
@@ -169,18 +169,18 @@ hooks:
 |---|---|---|---|
 | `name` | string | yes | unique within `hooks`; the `memory:` prefix is reserved for harness's synthetic projections |
 | `event` | enum | yes | `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `Stop`, `SubagentStart`, `SubagentStop`, `PreCompact` |
-| `command` | string | yes | shell command; `validate` checks existence and `+x` when the first token is a path |
+| `command` | string | yes | shell command; `validate` checks existence and `+x` when the first token is an absolute or `~/` path |
 | `match` | regex | no | tool-name filter for the tool events (e.g. `"Write\|Edit"`) |
-| `blocking` | `false` / `soft` / `hard` | yes | harness-side classification; see below |
+| `blocking` | `false` / `soft` / `hard` | yes | declared intent, recorded and shown; see below |
 | `budget_ms` | integer (default 30000) | no | timeout budget; projected in seconds |
 | `description` | string | no | surfaced by `harness describe` |
 | `min_version` + `version_command` | string + `string[]` | no | both or neither; doctor probes the floor. Hook commands are arbitrary shell, so there is no sensible default probe |
 
 `path_match` and `bash_match` were removed: a hook declaring one loads with a warning, the field is stripped and the hook stays.
 
-Blocking semantics: `false` means the hook may inform but never stops the call; `soft` means its warning is advisory; `hard` means a refusal aborts the tool call. Pick the softest level that solves the problem; hard-blocking is a commitment that false positives will not happen under reasonable inputs.
+Blocking semantics: `blocking` is the declared intent of a hook (`false`: informs only; `soft`: advisory warning; `hard`: a refusal aborts the tool call). harness records it and shows it in `harness doctor`, `harness list` and `harness describe`; it does not enforce it. Whether a hook actually blocks is decided by what the script returns under the runtime's hook contract, so a `blocking: false` hook that returns a deny still blocks. Declare the softest level that matches what the script does.
 
-Projection (`src/cli/apply/generate-settings.ts`, `src/cli/apply/generate-codex-config.ts`): for Claude Code, hooks become the settings.json `hooks` section, `{event: [{matcher?, hooks: [{type: "command", command, timeout}]}]}`, grouped by event and matcher in stable order, deduped by (command, timeout). `matcher` is omitted when the manifest hook has no `match`. `timeout` is always emitted, in seconds: `budget_ms / 1000` rounded up with a 1 s floor. `blocking` does not survive the projection (it drives validate/doctor classification, not the runtime). For Codex, each hook becomes a `[[hooks.<Event>]]` stanza with a `matcher` (tool-name aliases expanded) and an inline `{ type = "command", command = ..., timeout = ... }` entry; `harness apply --runtime codex --install` merges them into `~/.codex/config.toml` inside a marked harness-managed block that replaces only its own fences.
+Projection (`src/cli/apply/generate-settings.ts`, `src/cli/apply/generate-codex-config.ts`): for Claude Code, hooks become the settings.json `hooks` section, `{event: [{matcher?, hooks: [{type: "command", command, timeout}]}]}`, grouped by event and matcher in stable order, deduped by (command, timeout). `matcher` is omitted when the manifest hook has no `match`. `timeout` is always emitted, in seconds: `budget_ms / 1000` rounded up with a 1 s floor. `blocking` does not survive the projection (it is display metadata, not runtime behaviour). For Codex, each hook becomes a `[[hooks.<Event>]]` stanza with a `matcher` (tool-name aliases expanded) and an inline `{ type = "command", command = ..., timeout = ... }` entry; `harness apply --runtime codex --install` merges them into `~/.codex/config.toml` inside a marked harness-managed block that replaces only its own fences.
 
 ### Hook content is shell, by design
 
@@ -197,17 +197,17 @@ policy_packs:
     source: builtin
     enabled: true
     config:
-      protected_branches: [main, master, develop, release/*]
+      protected_branches: [main, master, develop, release]
 ```
 
-Entry fields (`src/schema/policy-packs.ts`): `name` (path-safe, unique), `source` (only `builtin` resolves in v1), `enabled` (default `true`), `description`, `config` (per-pack strict schema), and `min_version` (builtin packs ship inside harness, so a declared floor is reported as a warning, never enforced). Unknown sources and unknown builtin names are errors at validate and apply time; a pack name a release removed is stripped with a warning. `enabled: false` skips the pack at apply time entirely.
+Entry fields (`src/schema/policy-packs.ts`): `name` (path-safe, unique), `source` (only `builtin` resolves in v1), `enabled` (default `true`), `description`, `config` (per-pack schema, checked by `harness validate`), and `min_version` (builtin packs ship inside harness, so a declared floor is reported as a warning, never enforced). Unknown sources and unknown builtin names are errors at validate and apply time; a pack name a release removed is stripped with a warning. `enabled: false` skips the pack at apply time entirely.
 
 One builtin ships: **`branch-protection`** (`src/policy-packs/builtin/branch-protection.ts`; full behaviour in [`policy-packs/branch-protection.md`](policy-packs/branch-protection.md)). At apply time an enabled entry expands into:
 
 - one PreToolUse hook, `policy-pack:branch-protection:pre-tool-use`, `blocking: hard`, 5000 ms budget, matching `Write|Edit` (Claude Code) or `apply_patch` (Codex), running `harness pack hook branch-protection` (with `--runtime codex` on Codex);
 - `harness.generated/policy-packs/branch-protection/instructions.md`, the operator reference copy of what the pack does.
 
-The hook (`src/cli/pack/hook-branch-protection.ts`, `src/runtime/git-branch.ts`) judges each event twice, as-written and physically-resolved paths, and refuses unless both allow. For each directory the call writes into it does a presence walk for a `.git` entry and, when one exists above the directory, asks git `git -C <dir> symbolic-ref -q HEAD` with every `GIT_*` variable removed from the environment, bounded at 2000 ms per call and 3000 ms per event. Outcomes: git names a protected branch, refuse and tell the agent to branch off; git cannot answer (error, timeout, missing git, unexpected output), refuse naming git's first stderr line; no `.git` above the directory (outside every repository) or a detached HEAD, allow. A manifest that does not load refuses every call. Branch names compare case-insensitively against `config.protected_branches`, default `master`, `main`, `develop`.
+The hook (`src/cli/pack/hook-branch-protection.ts`, `src/runtime/git-branch.ts`) judges each event twice, as-written and physically-resolved paths, and refuses unless both allow. For each directory the call writes into it does a presence walk for a `.git` entry and, when one exists above the directory, asks git `git -C <dir> symbolic-ref -q HEAD` with every `GIT_*` variable removed from the environment, bounded at 2000 ms per call and 3000 ms per event. Outcomes: git names a protected branch, refuse and tell the agent to branch off; git cannot answer (error, timeout, missing git, unexpected output), refuse naming git's first stderr line; no `.git` above the directory (outside every repository) or a detached HEAD, allow. A manifest that does not load refuses every call. Branch names compare case-insensitively against `config.protected_branches`, default `master`, `main`, `develop`. Entries are exact branch names: there is no glob or prefix matching, so `release` protects only a branch named `release`.
 
 Manage entries with `harness pack add|remove|list|reseed`; toggle them with `enabled: false` plus a re-apply, or neutralise the wired hook groups at runtime with `harness gate disable` / `enable` (section 9).
 
@@ -260,7 +260,7 @@ Merge rules by value shape:
 | Scalar | the layer value replaces the base value |
 | Map | merged per key; layer keys win, base keys survive |
 | List of entries with `name` | merged by `name`; a matching layer entry patches the base entry key by key, a non-matching one is appended in layer order |
-| List without `name` | replaced wholesale; `[]` clears the list |
+| List without `name` | replaced wholesale |
 
 ```yaml
 # ~/.harness/projects/acme/harness.overrides.yaml: disable one MCP server
@@ -280,7 +280,8 @@ Edge cases:
 | `_delete: true` on a name-keyed entry | drops that entry from the effective manifest; omitting an entry never removes it |
 | Empty, comment-only or `null` layer file | skipped with a warning; the manifest loads as if absent |
 | Layer root is a scalar or list | the load fails naming the file (exit 66); a layer must be a mapping |
-| List mixing entries with and without `name` | the load fails with a merge error naming the path |
+| `[]` in a layer | clears the list, name-keyed lists included (`tools.mcp: []` drops every MCP server) |
+| List mixing entries with and without `name` | the load fails with a merge error naming the path (exit 70) |
 | Layer adds a name the base lacks | appended after the base entries |
 | Layer sets a key the base omitted | added |
 
@@ -323,7 +324,7 @@ BSD `sysexits.h` where applicable, extended with `1` where a linter-style failur
 | 64 | `EX_USAGE` | bad CLI arguments (unknown command or option, missing argument, impossible flag combination) |
 | 66 | `EX_NOINPUT` | the manifest or an override layer is missing, unreadable, not valid YAML, or fails the schema parse (`validate` reports parse failures as error diagnostics with exit 1 instead) |
 | 69 | `EX_UNAVAILABLE` | an external process harness spawned failed (e.g. `diff --since` git calls) |
-| 70 | `EX_SOFTWARE` | unexpected internal failure |
+| 70 | `EX_SOFTWARE` | unexpected internal failure; an override layer whose list shape conflicts with the base (section 8) currently exits 70 too |
 
 `harness pack hook branch-protection` follows its runtime contracts instead of sysexits: exit 0 with a JSON deny envelope blocks in Claude Code, exit 2 with the reason on stderr blocks in Codex.
 
@@ -381,9 +382,9 @@ tools:
       required: false             # merged by name into the base cli list
 
 policy_packs:
-  - name: branch-protection       # merged by name; branch set tightened
+  - name: branch-protection       # merged by name; branch set replaced
     config:
-      protected_branches: [main, release/*]
+      protected_branches: [main, release]
 ```
 
 A fuller reference manifest lives in [`examples/full-manifest.yaml`](examples/full-manifest.yaml).
