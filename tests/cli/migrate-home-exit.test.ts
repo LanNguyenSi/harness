@@ -98,7 +98,7 @@ describe("harness migrate-home exit code", () => {
     expect(r.status).toBe(0);
     const newMachines = path.join(home, ".harness", "machines");
     expect(r.stdout).toContain(
-      `already at ${newMachines}; harness reads ${newMachines}; keep the legacy ${path.join(legacy, "machines")} if ${newMachines} links to it\n`,
+      `already at ${newMachines}; keep the legacy ${path.join(legacy, "machines")} while anything at or under ${newMachines} resolves through it\n`,
     );
     expect(r.stdout).not.toMatch(/remove the legacy/);
     expect(r.stderr).not.toMatch(/move by hand/);

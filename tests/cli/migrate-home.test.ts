@@ -710,7 +710,7 @@ describe("migrateHome", () => {
       expect(again.result.outcome).toBe("no-op");
       expect(again.result.manual).toEqual([]);
       const newAcme = path.join(tmp, HARNESS_HOME_DIRNAME, "projects", "acme");
-      const done = `already at ${newAcme}; the legacy ${path.join(legacy, "projects", "acme")} can go once nothing reads through it (check that ${newAcme} is not a link to it)`;
+      const done = `already at ${newAcme}; the legacy ${path.join(legacy, "projects", "acme")} can go once nothing at or under ${newAcme} resolves through it`;
       expect(again.result.manualDone).toEqual([done]);
       expect(again.stdout).toContain(done);
       expect(again.stderr).not.toMatch(/move by hand/);
@@ -733,7 +733,7 @@ describe("migrateHome", () => {
       const { result } = run(false);
       expect(result.manual).toEqual([]);
       expect(result.manualDone).toEqual([
-        `already at ${dst}; the legacy ${path.join(legacy, machineRel)} can go once nothing reads through it (check that ${dst} is not a link to it)`,
+        `already at ${dst}; the legacy ${path.join(legacy, machineRel)} can go once nothing at or under ${dst} resolves through it`,
       ]);
       fs.rmSync(dst);
       expect(run(false).result.manual).toHaveLength(1);
@@ -902,10 +902,31 @@ describe("migrateHome", () => {
       const { result, stdout } = run(false);
       expect(result.manual).toEqual([]);
       expect(result.manualDone).toEqual([
-        `already at ${path.join(newHome, "machines")}; harness reads ${path.join(newHome, "machines")}; keep the legacy ${path.join(legacy, "machines")} if ${path.join(newHome, "machines")} links to it`,
+        `already at ${path.join(newHome, "machines")}; keep the legacy ${path.join(legacy, "machines")} while anything at or under ${path.join(newHome, "machines")} resolves through it`,
         `already at ${path.join(newHome, "projects")}; keep the legacy ${path.join(legacy, "projects")}: Claude Code uses it for its session transcripts`,
       ]);
       expect(stdout).not.toMatch(/remove the legacy/);
+    });
+
+    it("keeps the reads-through caveat when a real ~/.harness/machines holds a layer that links through the linked legacy machines/", () => {
+      const { legacy } = seedLayers();
+      const vol = path.join(tmp, "vol");
+      fs.mkdirSync(path.join(vol, "machines"), { recursive: true });
+      fs.writeFileSync(path.join(vol, "machines", "default.harness.overrides.yaml"), "version: 1\n");
+      fs.writeFileSync(path.join(vol, "machines", "mini.harness.overrides.yaml"), "version: 1\n");
+      fs.rmSync(path.join(legacy, "machines"), { recursive: true });
+      fs.symlinkSync(path.join(vol, "machines"), path.join(legacy, "machines"));
+      const newHome = path.join(tmp, HARNESS_HOME_DIRNAME);
+      const newMachines = path.join(newHome, "machines");
+      fs.mkdirSync(newMachines, { recursive: true });
+      fs.copyFileSync(path.join(vol, "machines", "mini.harness.overrides.yaml"), path.join(newMachines, "mini.harness.overrides.yaml"));
+      fs.symlinkSync(path.join(legacy, "machines", "default.harness.overrides.yaml"), path.join(newMachines, "default.harness.overrides.yaml"));
+      const { result, stdout } = run(false);
+      expect(result.manual).toEqual([]);
+      expect(result.manualDone).toContain(
+        `already at ${newMachines}; keep the legacy ${path.join(legacy, "machines")} while anything at or under ${newMachines} resolves through it`,
+      );
+      expect(stdout).not.toMatch(/remove the legacy|if [^ ]+ links to it/);
     });
 
     it("keeps a symlinked machines/ open until every layer it holds exists under ~/.harness", () => {
