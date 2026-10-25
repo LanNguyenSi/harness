@@ -327,7 +327,7 @@ describe("generateOpencodeConfig", () => {
         "//     opencode.jsonc (opencode merges config sources by precedence;\n" +
         "//     see https://opencode.ai/docs/config/).\n" +
         "//\n" +
-        "// Adapter mapping (full ADR in this generator's module header,\n" +
+        "// Adapter mapping (rationale in this generator's module header,\n" +
         "// src/cli/apply/generate-opencode-config.ts):\n" +
         "//   mcp        -> projected below (opencode's native `mcp` block).\n" +
         "//                 A manifest entry with `enabled: false` is emitted\n" +

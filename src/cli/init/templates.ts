@@ -5,7 +5,7 @@ export const MINIMAL_TEMPLATE = `# ~/.harness/harness.yaml (legacy: ~/.claude/ha
 # This is the empty-but-valid manifest. Run \`harness validate\` to confirm it
 # parses, then add entries under the top-level keys:
 #
-#   grounding:  evidence-ledger + claim-gate config (see docs/ARCHITECTURE.md §2)
+#   grounding:  evidence-ledger path for grounding-mcp (see docs/ARCHITECTURE.md §2)
 #   tools:      mcp / cli / skills / builtin inventory   (§3)
 #   memory:     directories, retention, scopes           (§4)
 #   hooks:      event-bound shell commands               (§5)

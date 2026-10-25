@@ -1,4 +1,4 @@
-# Reference manifest covering every field in ARCHITECTURE.md Appendix A.
+# Reference manifest covering every top-level manifest key (docs/CLI.md#manifest-reference).
 # Used as the schema-parser fixture for parseManifest() acceptance tests.
 #
 # NOT a runnable config. This file is a schema-coverage example that
@@ -87,9 +87,8 @@ policy_packs:
   # branch-protection (agent-tasks/2fdc5bbe, default-enabled since v0.17.2):
   # blocks Write/Edit (claude-code) or apply_patch (codex) when git names a
   # protected branch (default: master, main, develop) for the directory the
-  # call writes into, or cannot answer. Complements the push-time gates,
-  # which fire at the LAST reversible step; branch-protection fires at the
-  # FIRST source mutation. Set config.protected_branches to override the
+  # call writes into, or cannot answer, so it fires at the first source
+  # mutation. Set config.protected_branches to override the
   # default list, or set enabled: false if your workflow routinely edits
   # master directly. Full reference: docs/policy-packs/branch-protection.md.
   - name: branch-protection
