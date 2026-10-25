@@ -24,8 +24,9 @@
 // the explicit marker makes the disablement actually win once merged.
 // opencode accepts the bare marker without `type` or `command`.
 //
-// NOT projected (hooks and `memory.router` print a warning when present;
-// permission has no manifest source, so nothing is warned or dropped):
+// NOT projected (hooks print a warning when present; `memory.router` is
+// projected nowhere and prints no warning; permission has no manifest
+// source, so nothing is warned or dropped):
 //   - hooks: `manifest.hooks[]` and the `memory.router`
 //     UserPromptSubmit-equivalent projection
 //     (`generate-settings.ts#buildMemoryRouterHook`). opencode.json has
@@ -65,6 +66,11 @@ import {
   buildDesiredMcpServers,
   type SettingsMcpServer,
 } from "./generate-settings.js";
+
+/** Hooks named in the not-projected warning before it collapses to a count. */
+const MAX_NAMED_HOOKS = 3;
+/** Hook the branch-protection policy pack contributes. */
+const BRANCH_PROTECTION_HOOK_NAME = "policy-pack:branch-protection:pre-tool-use";
 
 /** opencode's native local-MCP-server shape (`$defs.McpLocalConfig`). */
 export interface OpencodeLocalMcpServer {
@@ -208,14 +214,17 @@ export function generateOpencodeConfig(
   }
 
   if (manifest.hooks.length > 0) {
+    const names = manifest.hooks.map((h) => h.name);
+    const shown = names.slice(0, MAX_NAMED_HOOKS).join(", ");
+    const more =
+      names.length > MAX_NAMED_HOOKS
+        ? ` and ${names.length - MAX_NAMED_HOOKS} more`
+        : "";
+    const protectedBranchNote = names.includes(BRANCH_PROTECTION_HOOK_NAME)
+      ? "; edits on protected branches are NOT blocked under opencode"
+      : "";
     warnings.push(
-      `manifest contributes ${manifest.hooks.length} hook(s); opencode has no declarative hook wiring (see this generator's header) and none were projected`,
-    );
-  }
-  const router = manifest.memory.router;
-  if (router && router.enabled !== false) {
-    warnings.push(
-      "memory.router is configured but not projected; opencode has no declarative UserPromptSubmit-equivalent (see this generator's header)",
+      `${names.length} hook(s) not projected (${shown}${more}): opencode has no declarative hook wiring, so they do not run under opencode${protectedBranchNote}`,
     );
   }
 

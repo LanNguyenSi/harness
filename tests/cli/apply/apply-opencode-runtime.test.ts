@@ -99,11 +99,9 @@ describe("apply --runtime opencode", () => {
     const config = fs.readFileSync(opencodePath, "utf8");
     expect(config).not.toContain("harness pack hook");
     expect(config).not.toContain("PreToolUse");
-    expect(
-      result.warnings.some(
-        (w) => w.includes("hook(s)") && w.includes("no declarative hook wiring"),
-      ),
-    ).toBe(true);
+    expect(result.warnings).toContain(
+      "1 hook(s) not projected (policy-pack:branch-protection:pre-tool-use): opencode has no declarative hook wiring, so they do not run under opencode; edits on protected branches are NOT blocked under opencode",
+    );
 
     // instructions.md still ships, but its CONTENT is runtime-specific
     // (HIGH-F1, batch18 fix-round, task f34eb233): before this fix,
@@ -112,8 +110,8 @@ describe("apply --runtime opencode", () => {
     // falsely claimed its hooks were "wired into the harness-managed
     // settings.json", even though nothing is wired for opencode (no
     // settings.json exists, and packExpansion.hooks is never projected
-    // into the opencode artefact -- asserted above via the "hook(s)...
-    // no declarative hook wiring" warning). The inert
+    // into the opencode artefact -- asserted above via the "not
+    // projected" hook warning). The inert
     // `instructions.length > 0` assertion this replaced would pass
     // whether or not that false claim was present.
     const instructions = fs.readFileSync(
