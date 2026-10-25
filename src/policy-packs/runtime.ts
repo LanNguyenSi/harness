@@ -16,8 +16,8 @@
 // there is nothing for a pack to emit commands for. Output of `harness
 // apply --runtime opencode` is `harness.generated/opencode/opencode.json`,
 // which projects `tools.mcp[]` only. See
-// `src/cli/apply/generate-opencode-config.ts`'s header for the full
-// adapter-mapping ADR (mcp projected, hooks and permission deferred).
+// `src/cli/apply/generate-opencode-config.ts`'s header for the
+// projection rules (mcp projected, hooks and permission not projected).
 
 export const KNOWN_RUNTIMES = ["claude-code", "codex", "opencode"] as const;
 export type Runtime = (typeof KNOWN_RUNTIMES)[number];

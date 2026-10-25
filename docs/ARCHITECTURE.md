@@ -316,7 +316,7 @@ Notes:
 
 ## 5. `hooks:` section
 
-> **Field note (1.0.0).** The `path_match` and `bash_match` hook fields below were removed in 1.0.0: a hook that still declares one loads with a warning that the field is ignored, and the field is stripped (a later override layer can still delete the hook itself). The table describes the pre-1.0.0 design.
+> **Field note (1.0.0).** The `path_match` and `bash_match` hook fields below were removed in 1.0.0: a hook that still declares one loads with a warning that the field is ignored, and the field is stripped (a later override layer can still delete the hook itself). The YAML example below still shows `path_match` from the pre-1.0.0 design; the field table no longer lists either field.
 
 Each hook is a shell command bound to a runtime event, with optional match pattern, blocking mode, and timeout budget. This is the surface that `harness apply` translates into `~/.claude/settings.json`'s `hooks` section in Phase 3.
 

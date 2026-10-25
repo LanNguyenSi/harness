@@ -22,8 +22,10 @@
 // active declaration for the same server name in another merged source
 // (e.g. the operator's own `~/.config/opencode/opencode.json`), while
 // the explicit marker makes the disablement actually win once merged.
+// opencode accepts the bare marker without `type` or `command`.
 //
-// NOT projected (a warning is printed for each):
+// NOT projected (hooks and `memory.router` print a warning when present;
+// permission has no manifest source, so nothing is warned or dropped):
 //   - hooks: `manifest.hooks[]` and the `memory.router`
 //     UserPromptSubmit-equivalent projection
 //     (`generate-settings.ts#buildMemoryRouterHook`). opencode.json has
@@ -46,10 +48,10 @@
 // no timestamps, hostnames, or other run-specific data are emitted.
 //
 // What this generator deliberately does NOT do: merge into, or
-// otherwise write, any operator-owned opencode config (its format is
-// JSONC, so hand-editing or `$OPENCODE_CONFIG` wiring is always safe
-// for the operator; harness never touches `~/.config/opencode/` or a
-// project `opencode.json`), and map hook commands into plugin code or
+// otherwise write, any operator-owned opencode config (harness never
+// touches `~/.config/opencode/` or a project `opencode.json`; opencode
+// reads JSONC, which is why the emitted `//` banner is valid config),
+// and map hook commands into plugin code or
 // `permission` entries (see "NOT projected" above).
 //
 // Header contract: the generated file's first line is
@@ -74,8 +76,8 @@ export interface OpencodeLocalMcpServer {
 /**
  * LOW-F4 (batch18 fix-round, task f34eb233 review): the marker projected
  * for a manifest `tools.mcp[]` entry declared `enabled: false`. See this
- * module's "enabled:false" header note for why a bare object -- no
- * `type`/`command` -- is emitted instead of omitting the key.
+ * module's "enabled:false" header note for why the key is not omitted
+ * and why a bare object (no `type`/`command`) is accepted.
  */
 export interface OpencodeDisabledMcpServer {
   enabled: false;
