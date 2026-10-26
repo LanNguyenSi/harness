@@ -342,7 +342,7 @@ export function migrateHome(opts: MigrateHomeOptions = {}): MigrateHomeResult {
   const stateRoot = envHomeElsewhere ? envHome : newPath;
   if (envHomeElsewhere) {
     stderr.write(
-      `harness migrate-home: HARNESS_HOME is set to ${safe(stateRoot)}, so harness reads layers under ${safe(stateRoot)}; this command moves into ${safe(newPath)}, so after the move set HARNESS_HOME to ${safe(newPath)} or unset it.\n`,
+      `harness migrate-home: HARNESS_HOME is set to ${safe(stateRoot)}; harness reads layers under ${safe(stateRoot)}; this command only moves ~/.claude items into ${safe(newPath)} and does not touch ${safe(stateRoot)}; point HARNESS_HOME at ${safe(newPath)} (or unset it) only if ${safe(newPath)} should become the live state root.\n`,
     );
   }
 

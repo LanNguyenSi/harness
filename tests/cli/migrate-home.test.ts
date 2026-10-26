@@ -81,12 +81,20 @@ function seedLegacyState(tmp: string): {
   return { legacy, manifestPath, generatedDir, reportsDir, lockPath };
 }
 
+// The code reads process.env[HARNESS_HOME_ENV], so a value inherited from
+// the invoking shell must not leak into any test here.
+let savedHarnessHomeEnv: string | undefined;
+
 beforeEach(() => {
   tmp = fs.mkdtempSync(path.join(os.tmpdir(), "harness-migrate-home-"));
+  savedHarnessHomeEnv = process.env[HARNESS_HOME_ENV];
+  delete process.env[HARNESS_HOME_ENV];
 });
 
 afterEach(() => {
   fs.rmSync(tmp, { recursive: true, force: true });
+  if (savedHarnessHomeEnv === undefined) delete process.env[HARNESS_HOME_ENV];
+  else process.env[HARNESS_HOME_ENV] = savedHarnessHomeEnv;
 });
 
 describe("migrateHome", () => {
@@ -1063,9 +1071,10 @@ describe("migrateHome", () => {
       const warn = err.split("\n").filter((line) => line.includes("HARNESS_HOME is set to"));
       expect(warn).toHaveLength(1);
       expect(err.split("\n")[0]).toContain("HARNESS_HOME is set to");
-      expect(warn[0]).toContain(`${other}, so harness reads layers under ${other}`);
-      expect(warn[0]).toContain(`this command moves into ${newHome}`);
-      expect(warn[0]).toContain(`set HARNESS_HOME to ${newHome} or unset it`);
+      expect(warn[0]).toContain(`harness reads layers under ${other}`);
+      expect(warn[0]).toContain(`this command only moves`);
+      expect(warn[0]).toContain(`into ${newHome} and does not touch ${other}`);
+      expect(warn[0]).toContain(`point HARNESS_HOME at ${newHome} (or unset it) only if ${newHome} should become the live state root`);
       expect(result.manualDone).toEqual([doneNote(other, legacyLayer, dst)]);
     });
   });
