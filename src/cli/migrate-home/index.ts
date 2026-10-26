@@ -83,6 +83,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import {
   HARNESS_HOME_DIRNAME,
+  HARNESS_HOME_ENV,
   LEGACY_HARNESS_HOME_DIRNAME,
 } from "../../runtime/home-dir.js";
 import { isValidProjectName, sanitizeProjectForDisplay } from "../../io/project-name.js";
@@ -330,6 +331,21 @@ export function migrateHome(opts: MigrateHomeOptions = {}): MigrateHomeResult {
   const apply = opts.apply === true;
   const move = opts.move ?? moveSync;
 
+  // The state root harness actually reads: $HARNESS_HOME wins when set.
+  // An empty value counts as unset, the way the loader treats it; the
+  // comparison resolves both sides so a trailing slash on an otherwise
+  // equal value is not read as a different root.
+  const envValue = process.env[HARNESS_HOME_ENV];
+  const envHome =
+    typeof envValue === "string" && envValue.length > 0 ? path.resolve(envValue) : null;
+  const envHomeElsewhere = envHome !== null && envHome !== path.resolve(newPath);
+  const stateRoot = envHomeElsewhere ? envHome : newPath;
+  if (envHomeElsewhere) {
+    stderr.write(
+      `harness migrate-home: HARNESS_HOME is set to ${safe(stateRoot)}; harness reads layers under ${safe(stateRoot)}; this command only moves ~/.claude items into ${safe(newPath)} and does not touch ${safe(stateRoot)}; point HARNESS_HOME at ${safe(newPath)} (or unset it) only if ${safe(newPath)} should become the live state root.\n`,
+    );
+  }
+
   // Plan phase: classify each item by (legacy exists, new exists).
   const layers = discoverOverrideLayers(legacyPath, newPath);
   const manual: string[] = [];
@@ -382,16 +398,18 @@ export function migrateHome(opts: MigrateHomeOptions = {}): MigrateHomeResult {
   /**
    * The `already at` advice: never suggest removing a whole legacy
    * directory, and never suggest removing a legacy link without the
-   * caveat, because the destination may itself be a link to it.
+   * caveat, because the destination may itself be a link to it. The
+   * root named is the state root harness reads, not necessarily the
+   * destination of this move.
    */
   const doneNote = (m: ManualItem): string => {
     if (m.path === path.join(legacyPath, "projects")) {
       return `keep the legacy ${safe(m.path)}: Claude Code uses it for its session transcripts`;
     }
     if (m.path === path.join(legacyPath, "machines")) {
-      return `keep the legacy ${safe(m.path)} while anything under ${safe(newPath)} resolves through it`;
+      return `keep the legacy ${safe(m.path)} while anything under ${safe(stateRoot)} resolves through it`;
     }
-    return `the legacy ${safe(m.path)} can go once nothing under ${safe(newPath)} resolves through it`;
+    return `the legacy ${safe(m.path)} can go once nothing under ${safe(stateRoot)} resolves through it`;
   };
   /**
    * Classify and print the symlinked layers. Called once per run, after
