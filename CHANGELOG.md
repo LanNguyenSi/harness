@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- `harness migrate-home` warns when `$HARNESS_HOME` points elsewhere, and its done notes now name the state root harness reads (task `3d15b671`). The command always moves into `~/.harness/`, but the loader reads override layers from `$HARNESS_HOME` when it is set, so an `already at` note naming `~/.harness` could point an operator who set `$HARNESS_HOME` at removing a legacy link that a layer under `$HARNESS_HOME` still resolved through. Before the plan the run now prints one warning line on stderr naming both roots: harness reads the `$HARNESS_HOME` path, this command moves into `<userHome>/.harness`, so set `HARNESS_HOME` to that path or unset it after the move. The done notes name the state root harness reads (`$HARNESS_HOME` when set, `<userHome>/.harness` otherwise). An empty `$HARNESS_HOME` counts as unset, and a value that resolves (via `path.resolve`) to the destination counts as equal, so a trailing slash alone does not trigger the warning. Exit codes are unchanged. Pinned by five cases in `tests/cli/migrate-home.test.ts` (unset, another directory, equal, trailing slash, empty string); `docs/migration/v0.24.0-home-dir.md` shows the notes with a `<state root>` placeholder.
+
 ## [1.0.1] - 2026-10-25
 
 ### Fixed

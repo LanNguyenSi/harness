@@ -10,6 +10,7 @@ import {
 } from "../../src/cli/migrate-home/index.js";
 import {
   HARNESS_HOME_DIRNAME,
+  HARNESS_HOME_ENV,
   LEGACY_HARNESS_HOME_DIRNAME,
 } from "../../src/runtime/home-dir.js";
 
@@ -975,6 +976,97 @@ describe("migrateHome", () => {
       const { result } = run(true);
       expect(result.outcome).toBe("applied");
       expect(fs.existsSync(path.join(legacy, MIGRATION_MARKER_BASENAME))).toBe(true);
+    });
+  });
+
+  describe("HARNESS_HOME and the state root the notes name", () => {
+    // $HARNESS_HOME (non-empty) wins over the destination: the loader
+    // reads layers under it, while this command always moves into
+    // <userHome>/.harness. One test per input combination; each pins
+    // whether the stderr warning line is printed and which root the
+    // `already at` done note names.
+    const layerRel = path.join("machines", "default.harness.overrides.yaml");
+    let savedHarnessHome: string | undefined;
+
+    beforeEach(() => {
+      savedHarnessHome = process.env[HARNESS_HOME_ENV];
+    });
+    afterEach(() => {
+      if (savedHarnessHome === undefined) delete process.env[HARNESS_HOME_ENV];
+      else process.env[HARNESS_HOME_ENV] = savedHarnessHome;
+    });
+
+    /** Legacy state with one machine layer that is a symlink whose
+     * destination already resolves to a file: its `already at` line is a
+     * doneNote, so the run reports it on stdout without moving anything. */
+    function seedDoneLayer(): { legacyLayer: string; dst: string } {
+      const { legacy } = seedLegacyState(tmp);
+      const ext = path.join(tmp, "ext", "m.yaml");
+      fs.mkdirSync(path.dirname(ext), { recursive: true });
+      fs.writeFileSync(ext, "version: 1\n");
+      fs.mkdirSync(path.join(legacy, "machines"), { recursive: true });
+      const legacyLayer = path.join(legacy, layerRel);
+      fs.symlinkSync(ext, legacyLayer);
+      const dst = path.join(tmp, HARNESS_HOME_DIRNAME, layerRel);
+      fs.mkdirSync(path.dirname(dst), { recursive: true });
+      fs.symlinkSync(ext, dst);
+      return { legacyLayer, dst };
+    }
+
+    function dryRun(): { result: ReturnType<typeof migrateHome>; out: string; err: string } {
+      const stdout = bufferStream();
+      const stderr = bufferStream();
+      const result = migrateHome({
+        userHome: tmp,
+        stdout: stdout.stream,
+        stderr: stderr.stream,
+      });
+      return { result, out: stdout.read(), err: stderr.read() };
+    }
+
+    const doneNote = (root: string, legacyLayer: string, dst: string): string =>
+      `already at ${dst}; the legacy ${legacyLayer} can go once nothing under ${root} resolves through it`;
+
+    function expectNoWarning(root: string): void {
+      const { legacyLayer, dst } = seedDoneLayer();
+      const { result, err } = dryRun();
+      expect(err).not.toContain(HARNESS_HOME_ENV);
+      expect(result.manualDone).toEqual([doneNote(root, legacyLayer, dst)]);
+    }
+
+    it("unset: no warning, the done note names <userHome>/.harness", () => {
+      delete process.env[HARNESS_HOME_ENV];
+      expectNoWarning(path.join(tmp, HARNESS_HOME_DIRNAME));
+    });
+
+    it("set to exactly <userHome>/.harness: no warning, the done note names it", () => {
+      process.env[HARNESS_HOME_ENV] = path.join(tmp, HARNESS_HOME_DIRNAME);
+      expectNoWarning(path.join(tmp, HARNESS_HOME_DIRNAME));
+    });
+
+    it("set to <userHome>/.harness/ with a trailing slash: counts as equal, no warning", () => {
+      process.env[HARNESS_HOME_ENV] = path.join(tmp, HARNESS_HOME_DIRNAME) + path.sep;
+      expectNoWarning(path.join(tmp, HARNESS_HOME_DIRNAME));
+    });
+
+    it("set to the empty string: counts as unset, no warning", () => {
+      process.env[HARNESS_HOME_ENV] = "";
+      expectNoWarning(path.join(tmp, HARNESS_HOME_DIRNAME));
+    });
+
+    it("set to another dir: HARNESS_HOME wins, one warning line names both roots, the done note names HARNESS_HOME", () => {
+      const other = path.join(tmp, "state");
+      const newHome = path.join(tmp, HARNESS_HOME_DIRNAME);
+      process.env[HARNESS_HOME_ENV] = other;
+      const { legacyLayer, dst } = seedDoneLayer();
+      const { result, err } = dryRun();
+      const warn = err.split("\n").filter((line) => line.includes("HARNESS_HOME is set to"));
+      expect(warn).toHaveLength(1);
+      expect(err.split("\n")[0]).toContain("HARNESS_HOME is set to");
+      expect(warn[0]).toContain(`${other}, so harness reads layers under ${other}`);
+      expect(warn[0]).toContain(`this command moves into ${newHome}`);
+      expect(warn[0]).toContain(`set HARNESS_HOME to ${newHome} or unset it`);
+      expect(result.manualDone).toEqual([doneNote(other, legacyLayer, dst)]);
     });
   });
 });
