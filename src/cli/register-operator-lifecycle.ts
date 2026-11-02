@@ -1,5 +1,5 @@
 import type { Command } from "commander";
-import { EX_FAIL, HarnessExitError } from "./exit-codes.js";
+import { EX_DATAERR, EX_FAIL, HarnessExitError } from "./exit-codes.js";
 import { migrateHome } from "./migrate-home/index.js";
 
 export function registerOperatorLifecycle(
@@ -22,8 +22,14 @@ export function registerOperatorLifecycle(
         "untouched, and --apply then exits non-zero; once the layer under ~/.harness/ " +
         "resolves, following links, to a regular file the line becomes an 'already at' note " +
         "and no longer fails the run. A top-level item that is itself a link (e.g. " +
-        "harness.yaml linked into a dotfiles checkout) is moved as a link, and a relative " +
-        "link target may then no longer resolve. A failure before harness.yaml " +
+        "harness.yaml linked into a dotfiles checkout) is never moved: unless its " +
+        "destination already exists, the run refuses before anything moves, names the " +
+        "item, its link target and the manual step (replace the link by the real file or " +
+        "directory, or move it to ~/.harness/ by hand), and --apply exits 65 (EX_DATAERR); " +
+        "the dry run reports the same refusal and exits 0. A linked top-level item whose " +
+        "destination already exists is a target-conflict like any other existing " +
+        "destination (exit 1, nothing moved), never a refusal to resolve by hand. A " +
+        "failure before harness.yaml " +
         "moves undoes the run (nothing is changed) and exits non-zero; a failure after it " +
         "leaves a partial state, says what is where and exits non-zero; fix the error and " +
         "re-run --apply. Does NOT touch settings.json or any other ~/.claude/ contents.",
@@ -33,6 +39,12 @@ export function registerOperatorLifecycle(
       const result = migrateHome({ ...(options.apply ? { apply: true } : {}) });
       if (result.outcome === "target-conflict") {
         throw new HarnessExitError("", EX_FAIL);
+      }
+      if (options.apply && result.outcome === "top-level-link") {
+        throw new HarnessExitError(
+          "migrate-home refuses to move a symlinked top-level item (see the lines above): replace each with the real file or directory, or move it to ~/.harness/ by hand, then re-run `harness migrate-home --apply`.",
+          EX_DATAERR,
+        );
       }
       if (result.outcome === "rolled-back") {
         throw new HarnessExitError(
