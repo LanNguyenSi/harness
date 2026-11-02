@@ -2,6 +2,10 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+## 2026-11-02
+
+- 2026-11-02T16:33:08Z, `docs/CLI.md` changed only in the `harness migrate-home` row (a top-level item that is a symlink is never moved: the run refuses before anything moves and `--apply` exits `65`). `codex-adapter-parity-gaps.md` lists the file as a source but states no claim about `migrate-home`, the exit codes or the home-dir move, and cites no `docs/CLI.md` line; re-read against the Codex adapter code paths it describes (no change in this range), no claim changed. Re-stamped. Checks: `npx okf-kit check docs/okf`, `npm run build && npm test`.
+
 ## 2026-10-25
 
 - 2026-10-25T20:12:03Z, task 8dff6a6d: `docs/CLI.md` changed again only in the `harness migrate-home` row (symlinked override layers are never moved, a move-by-hand item is done only when its destination resolves to a regular file, the note on where a moved link target now lives, top-level items that are links move as links, the recovery line after a failed rollback). Re-verified `codex-adapter-parity-gaps.md` against it: its claims about CLI.md (apply runtime reuse and inference, `--target` exclusivity, `pack remove --force` pruning, doctor pack-expansion runtime and hook liveness, gate flags) do not touch that row and are unchanged; the row was replaced in place, so no line moved; timestamp-only re-stamp.
