@@ -46,7 +46,14 @@
 // whole run before anything moves when any top-level item is a symlink
 // (dangling or not, relative or absolute target): the message names the
 // item, its link target and the manual step, `--apply` exits `EX_DATAERR`
-// and the dry run reports the same refusal and exits 0.
+// and the dry run reports the same refusal and exits 0. An item whose
+// destination already exists under `~/.harness/` is the one exception and
+// is not a refusal at all: "move it there by hand" would overwrite that
+// item (a `mv` of the link lands a self-link on the real manifest), so the
+// existing destination wins and the item goes through the ordinary
+// classification as the `target-conflict` it is, with the existing message
+// and exit codes. Refusal lines of the other linked items are still
+// printed, and the run still moves nothing.
 //
 // What is NOT touched (operator-owned, runtime config, not harness state):
 //   - `~/.claude/settings.json`             (Claude Code's runtime config)
@@ -136,7 +143,7 @@ interface LayerDiscovery {
   manual: ManualItem[];
 }
 
-/** A top-level item that is itself a symlink: the run refuses to move it. */
+/** A top-level item that is itself a symlink: never moved. */
 interface LinkedTopLevel {
   /** Basename under the legacy root. */
   basename: string;
@@ -146,6 +153,13 @@ interface LinkedTopLevel {
   target: string;
   /** Where it would have moved under the new root. */
   dst: string;
+  /**
+   * True when `dst` is already taken (its own lstat succeeds, so a dangling
+   * link at the destination counts). Such an item is not a link refusal:
+   * moving it by hand would overwrite what is there, so it is classified as
+   * the target conflict it is.
+   */
+  dstExists: boolean;
   /** True for the two directory items, so the advice names the right kind. */
   isDir: boolean;
 }
@@ -273,18 +287,21 @@ function pathIsDir(p: string): boolean {
 /**
  * The four top-level items that are themselves symlinks under the legacy
  * root. A dangling link counts (its own lstat succeeds); its target may be
- * relative or absolute.
+ * relative or absolute. `dstExists` tells the caller which of them can
+ * still be a refusal: the ones whose destination is free.
  */
 function linkedTopLevelItems(legacyPath: string, newPath: string): LinkedTopLevel[] {
   const linked: LinkedTopLevel[] = [];
   for (const it of ITEMS) {
     const p = path.join(legacyPath, it.basename);
     if (isSymlink(p)) {
+      const dst = path.join(newPath, it.basename);
       linked.push({
         basename: it.basename,
         path: p,
         target: linkTarget(p),
-        dst: path.join(newPath, it.basename),
+        dst,
+        dstExists: pathExists(dst),
         isDir: it.isDir,
       });
     }
@@ -292,11 +309,21 @@ function linkedTopLevelItems(legacyPath: string, newPath: string): LinkedTopLeve
   return linked;
 }
 
-/** The refusal line for one symlinked top-level item, naming the manual step. */
+/**
+ * The refusal line for one symlinked top-level item, naming the manual
+ * step. Only a relative target can break on the move, so only then is that
+ * the stated reason; an absolute target resolves from anywhere and the rule
+ * needs no justification beyond itself. The `move it to <dst> by hand`
+ * advice is safe because a caller passes only items whose destination is
+ * free.
+ */
 function topLevelLinkRefusal(tl: LinkedTopLevel, newPath: string): string {
   const kind = tl.isDir ? "directory" : "file";
+  const why = path.isAbsolute(tl.target)
+    ? "harness never moves a symlinked top-level item"
+    : `a symlinked top-level item is never moved, because a relative link target would no longer resolve under ${safe(newPath)}`;
   return (
-    `refuses to move ${safe(tl.path)} (symlink to ${safe(tl.target)}): a symlinked top-level item is never moved, because a relative link target would no longer resolve under ${safe(newPath)}. Replace ${safe(tl.path)} with the real ${kind}, or move it to ${safe(tl.dst)} by hand, then re-run \`harness migrate-home --apply\`.`
+    `refuses to move ${safe(tl.path)} (symlink to ${safe(tl.target)}): ${why}. Replace ${safe(tl.path)} with the real ${kind}, or move it to ${safe(tl.dst)} by hand, then re-run \`harness migrate-home --apply\`.`
   );
 }
 
@@ -333,12 +360,18 @@ export interface MigrateHomeResult {
    *     rollback could not undo every step; items are split across both
    *     roots and stderr says which is where.
    *   - `target-conflict`: a corresponding item already exists at the
-   *     new path; the run refuses to overwrite. Operator must resolve.
+   *     new path; the run refuses to overwrite. Operator must resolve. A
+   *     symlinked top-level item whose destination already exists lands
+   *     here, not in `top-level-link`, so the advice never points at a
+   *     taken path.
    *   - `top-level-link`: one of the four top-level items is itself a
-   *     symlink; the run refuses before anything moves (a relative link
-   *     target would dangle at the new root, and skipping only the link
-   *     would leave the new root without its manifest). `--apply` exits
-   *     `EX_DATAERR`; the dry run reports the same refusal and exits 0.
+   *     symlink whose destination is still free; the run refuses before
+   *     anything moves (a relative link target would dangle at the new
+   *     root, and skipping only the link would leave the new root without
+   *     its manifest). `--apply` exits `EX_DATAERR`; the dry run reports
+   *     the same refusal and exits 0. When such an item sits beside one
+   *     whose destination is taken, the conflict decides the outcome and
+   *     this is not reported, though the refusal lines are still printed.
    */
   outcome:
     | "no-op"
@@ -408,11 +441,21 @@ export function migrateHome(opts: MigrateHomeOptions = {}): MigrateHomeResult {
   // its manifest while moving it as-is dangles a relative target. The whole
   // run is refused before anything is read for a move. Reported on dry-run
   // too; the caller maps `--apply` to a non-zero exit code.
+  //
+  // An item whose destination is already taken is not part of this refusal,
+  // because the advice below would tell the operator to move the link onto
+  // the item that is already there (a `mv` of `~/.claude/harness.yaml`, a
+  // compat link into `~/.harness/harness.yaml`, onto that very file leaves
+  // a self-link where the manifest was). Such an item falls through to the
+  // (legacy, new) classification and gets the existing target-conflict
+  // outcome, message and exit codes; a linked item with a free destination
+  // still gets its refusal line, and the conflict decides the run.
   const linked = linkedTopLevelItems(legacyPath, newPath);
-  if (linked.length > 0) {
-    for (const tl of linked) {
-      stderr.write(`harness migrate-home: ${topLevelLinkRefusal(tl, newPath)}\n`);
-    }
+  const linkRefusals = linked.filter((tl) => !tl.dstExists);
+  for (const tl of linkRefusals) {
+    stderr.write(`harness migrate-home: ${topLevelLinkRefusal(tl, newPath)}\n`);
+  }
+  if (linkRefusals.length > 0 && linked.length === linkRefusals.length) {
     stderr.write(
       `harness migrate-home: nothing was moved; resolve every symlinked top-level item above, then re-run \`harness migrate-home --apply\`.\n`,
     );

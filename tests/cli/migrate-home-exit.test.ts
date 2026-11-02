@@ -79,6 +79,65 @@ describe("harness migrate-home exit code", () => {
     expect(tree(home)).toEqual(before);
   });
 
+  it("exits 1 on the dry run and on --apply when a symlinked top-level item's destination already exists (absolute target)", () => {
+    const legacy = path.join(home, ".claude");
+    const newRoot = path.join(home, ".harness");
+    fs.mkdirSync(legacy, { recursive: true });
+    fs.mkdirSync(newRoot, { recursive: true });
+    fs.writeFileSync(path.join(newRoot, "harness.yaml"), "version: 1\n");
+    fs.writeFileSync(path.join(legacy, "harness.lock"), "[]\n");
+    // the usual compat link: the legacy name points at the migrated file
+    fs.symlinkSync(path.join(newRoot, "harness.yaml"), path.join(legacy, "harness.yaml"));
+    const before = tree(home);
+    for (const args of [["migrate-home"], ["migrate-home", "--apply"]]) {
+      const r = cli(args);
+      expect(r.status).toBe(1);
+      expect(r.stderr).toContain(`${path.join(newRoot, "harness.yaml")} already present; refuse to overwrite`);
+      // never advice that moves the link onto the file that is already there
+      expect(r.stderr).not.toMatch(/move it to .* by hand/);
+      expect(r.stderr).not.toMatch(/refuses to move/);
+      expect(tree(home)).toEqual(before);
+    }
+  });
+
+  it("exits 1 on the dry run and on --apply when a symlinked top-level item's destination already exists (relative target)", () => {
+    const legacy = path.join(home, ".claude");
+    const newRoot = path.join(home, ".harness");
+    fs.mkdirSync(legacy, { recursive: true });
+    fs.mkdirSync(newRoot, { recursive: true });
+    fs.writeFileSync(path.join(newRoot, "harness.yaml"), "version: 1\n");
+    fs.writeFileSync(path.join(legacy, "harness.lock"), "[]\n");
+    fs.symlinkSync(path.join("..", ".harness", "harness.yaml"), path.join(legacy, "harness.yaml"));
+    const before = tree(home);
+    for (const args of [["migrate-home"], ["migrate-home", "--apply"]]) {
+      const r = cli(args);
+      expect(r.status).toBe(1);
+      expect(r.stderr).toContain(`${path.join(newRoot, "harness.yaml")} already present; refuse to overwrite`);
+      expect(r.stderr).not.toMatch(/move it to .* by hand/);
+      expect(r.stderr).not.toMatch(/refuses to move/);
+      expect(tree(home)).toEqual(before);
+    }
+  });
+
+  it("exits 1 (not 65) when a linked item with an existing destination sits beside a linked item with a free one", () => {
+    const legacy = path.join(home, ".claude");
+    const newRoot = path.join(home, ".harness");
+    fs.mkdirSync(legacy, { recursive: true });
+    fs.mkdirSync(newRoot, { recursive: true });
+    fs.writeFileSync(path.join(newRoot, "harness.yaml"), "version: 1\n");
+    fs.symlinkSync(path.join(newRoot, "harness.yaml"), path.join(legacy, "harness.yaml"));
+    fs.writeFileSync(path.join(legacy, "harness.real.lock"), "[]\n");
+    fs.symlinkSync("harness.real.lock", path.join(legacy, "harness.lock"));
+    const before = tree(home);
+    for (const args of [["migrate-home"], ["migrate-home", "--apply"]]) {
+      const r = cli(args);
+      expect(r.status).toBe(1);
+      expect(r.stderr).toContain("already present; refuse to overwrite");
+      expect(r.stderr).toMatch(/refuses to move .*harness\.lock/);
+      expect(tree(home)).toEqual(before);
+    }
+  });
+
   it("exits non-zero with a re-run hint when a layer move fails and is undone, and 0 after the fix", () => {
     const legacy = seed();
     fs.mkdirSync(path.join(home, ".harness"), { recursive: true });
