@@ -37,10 +37,16 @@
 // regular file (a dangling link, a directory) keeps the item open with a
 // line of its own.
 //
-// The four top-level items are not covered by that rule: one that is
-// itself a symlink (say `harness.yaml` linked into a dotfiles checkout) is
-// moved as a link, and a relative link target may then no longer resolve
-// from `~/.harness/`.
+// The four top-level items are not covered by that rule and are never
+// moved as links either: one that is itself a symlink (say `harness.yaml`
+// linked into a dotfiles checkout) would move as a link and a relative link
+// target would then no longer resolve from `~/.harness/`, while skipping
+// only the link would leave the new root without its manifest (the override
+// layers are discovered and moved first). So the plan phase refuses the
+// whole run before anything moves when any top-level item is a symlink
+// (dangling or not, relative or absolute target): the message names the
+// item, its link target and the manual step, `--apply` exits `EX_DATAERR`
+// and the dry run reports the same refusal and exits 0.
 //
 // What is NOT touched (operator-owned, runtime config, not harness state):
 //   - `~/.claude/settings.json`             (Claude Code's runtime config)
@@ -128,6 +134,20 @@ interface LayerDiscovery {
   items: MigrateHomeItem[];
   /** Symlinked layers the command leaves for the operator. */
   manual: ManualItem[];
+}
+
+/** A top-level item that is itself a symlink: the run refuses to move it. */
+interface LinkedTopLevel {
+  /** Basename under the legacy root. */
+  basename: string;
+  /** The symlink under the legacy root. */
+  path: string;
+  /** Its stored link target, or `?` when it cannot be read. */
+  target: string;
+  /** Where it would have moved under the new root. */
+  dst: string;
+  /** True for the two directory items, so the advice names the right kind. */
+  isDir: boolean;
 }
 
 /** Control characters in a path taken from disk never reach the terminal raw. */
@@ -250,6 +270,36 @@ function pathIsDir(p: string): boolean {
   }
 }
 
+/**
+ * The four top-level items that are themselves symlinks under the legacy
+ * root. A dangling link counts (its own lstat succeeds); its target may be
+ * relative or absolute.
+ */
+function linkedTopLevelItems(legacyPath: string, newPath: string): LinkedTopLevel[] {
+  const linked: LinkedTopLevel[] = [];
+  for (const it of ITEMS) {
+    const p = path.join(legacyPath, it.basename);
+    if (isSymlink(p)) {
+      linked.push({
+        basename: it.basename,
+        path: p,
+        target: linkTarget(p),
+        dst: path.join(newPath, it.basename),
+        isDir: it.isDir,
+      });
+    }
+  }
+  return linked;
+}
+
+/** The refusal line for one symlinked top-level item, naming the manual step. */
+function topLevelLinkRefusal(tl: LinkedTopLevel, newPath: string): string {
+  const kind = tl.isDir ? "directory" : "file";
+  return (
+    `refuses to move ${safe(tl.path)} (symlink to ${safe(tl.target)}): a symlinked top-level item is never moved, because a relative link target would no longer resolve under ${safe(newPath)}. Replace ${safe(tl.path)} with the real ${kind}, or move it to ${safe(tl.dst)} by hand, then re-run \`harness migrate-home --apply\`.`
+  );
+}
+
 export interface MigrateHomeOptions {
   /** If true, perform the move; otherwise dry-run. */
   apply?: boolean;
@@ -284,6 +334,11 @@ export interface MigrateHomeResult {
    *     roots and stderr says which is where.
    *   - `target-conflict`: a corresponding item already exists at the
    *     new path; the run refuses to overwrite. Operator must resolve.
+   *   - `top-level-link`: one of the four top-level items is itself a
+   *     symlink; the run refuses before anything moves (a relative link
+   *     target would dangle at the new root, and skipping only the link
+   *     would leave the new root without its manifest). `--apply` exits
+   *     `EX_DATAERR`; the dry run reports the same refusal and exits 0.
    */
   outcome:
     | "no-op"
@@ -291,7 +346,8 @@ export interface MigrateHomeResult {
     | "applied"
     | "rolled-back"
     | "partial"
-    | "target-conflict";
+    | "target-conflict"
+    | "top-level-link";
   /**
    * Open `move by hand` lines: symlinked layers (a layer file, a
    * `projects/<name>` directory, `machines/` or `projects/` being a link)
@@ -344,6 +400,30 @@ export function migrateHome(opts: MigrateHomeOptions = {}): MigrateHomeResult {
     stderr.write(
       `harness migrate-home: HARNESS_HOME is set to ${safe(stateRoot)}; harness reads layers under ${safe(stateRoot)}; this command only moves ~/.claude items into ${safe(newPath)} and does not touch ${safe(stateRoot)}; point HARNESS_HOME at ${safe(newPath)} (or unset it) only if ${safe(newPath)} should become the live state root.\n`,
     );
+  }
+
+  // Plan phase, first refusal: a symlinked top-level item is never moved
+  // (see the header comment), and the override layers are discovered and
+  // moved first, so skipping only the link would leave the new root without
+  // its manifest while moving it as-is dangles a relative target. The whole
+  // run is refused before anything is read for a move. Reported on dry-run
+  // too; the caller maps `--apply` to a non-zero exit code.
+  const linked = linkedTopLevelItems(legacyPath, newPath);
+  if (linked.length > 0) {
+    for (const tl of linked) {
+      stderr.write(`harness migrate-home: ${topLevelLinkRefusal(tl, newPath)}\n`);
+    }
+    stderr.write(
+      `harness migrate-home: nothing was moved; resolve every symlinked top-level item above, then re-run \`harness migrate-home --apply\`.\n`,
+    );
+    return {
+      legacyPath,
+      newPath,
+      items: [],
+      manual: [],
+      manualDone: [],
+      outcome: "top-level-link",
+    };
   }
 
   // Plan phase: classify each item by (legacy exists, new exists).
@@ -661,6 +741,24 @@ function pathExists(p: string): boolean {
     return true;
   } catch {
     return false;
+  }
+}
+
+/** True when the path itself is a symlink (its target need not resolve). */
+function isSymlink(p: string): boolean {
+  try {
+    return fs.lstatSync(p).isSymbolicLink();
+  } catch {
+    return false;
+  }
+}
+
+/** The stored target of a link, or `?` when it cannot be read. */
+function linkTarget(p: string): string {
+  try {
+    return fs.readlinkSync(p);
+  } catch {
+    return "?";
   }
 }
 

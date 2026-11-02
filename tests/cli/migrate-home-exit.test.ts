@@ -56,6 +56,29 @@ describe("harness migrate-home exit code", () => {
     expect(cli(["migrate-home", "--apply"]).status).toBe(0);
   });
 
+  it("exits 65 (EX_DATAERR) when a top-level item is a symlink, moves nothing, and the dry run reports it at exit 0", () => {
+    const legacy = path.join(home, ".claude");
+    fs.mkdirSync(legacy, { recursive: true });
+    fs.writeFileSync(path.join(legacy, "harness.real.yaml"), "version: 1\n");
+    fs.writeFileSync(path.join(legacy, "harness.lock"), "[]\n");
+    // a relative link that resolves under ~/.claude but would dangle under ~/.harness
+    fs.symlinkSync("harness.real.yaml", path.join(legacy, "harness.yaml"));
+    const before = tree(home);
+    const applied = cli(["migrate-home", "--apply"]);
+    expect(applied.status).toBe(65);
+    expect(applied.stderr).toContain("refuses to move");
+    expect(applied.stderr).toMatch(/harness\.yaml.*symlink to harness\.real\.yaml/);
+    expect(applied.stderr).toMatch(/nothing was moved/);
+    expect(tree(home)).toEqual(before);
+    expect(fs.existsSync(path.join(home, ".harness"))).toBe(false);
+    // the dry run reports the same refusal and exits 0
+    const dry = cli(["migrate-home"]);
+    expect(dry.status).toBe(0);
+    expect(dry.stderr).toContain("refuses to move");
+    expect(dry.stderr).toMatch(/harness\.yaml.*symlink to harness\.real\.yaml/);
+    expect(tree(home)).toEqual(before);
+  });
+
   it("exits non-zero with a re-run hint when a layer move fails and is undone, and 0 after the fix", () => {
     const legacy = seed();
     fs.mkdirSync(path.join(home, ".harness"), { recursive: true });

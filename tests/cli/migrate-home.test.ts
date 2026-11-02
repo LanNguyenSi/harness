@@ -987,6 +987,135 @@ describe("migrateHome", () => {
     });
   });
 
+  describe("a symlinked top-level item refuses the whole run before anything moves", () => {
+    // All four top-level items present as real files/dirs, so a run that
+    // merely skipped the link (instead of refusing) would visibly move the
+    // rest; the tests below assert it does not.
+    function seedTopLevel(): string {
+      const legacy = path.join(tmp, LEGACY_HARNESS_HOME_DIRNAME);
+      fs.mkdirSync(path.join(legacy, "harness.generated"), { recursive: true });
+      fs.writeFileSync(path.join(legacy, "harness.generated", "settings.json"), "{}\n");
+      fs.mkdirSync(path.join(legacy, ".understanding-gate", "reports"), { recursive: true });
+      fs.writeFileSync(path.join(legacy, ".understanding-gate", "reports", "rpt.json"), "{}\n");
+      fs.writeFileSync(path.join(legacy, "harness.yaml"), "version: 1\n");
+      fs.writeFileSync(path.join(legacy, "harness.lock"), "[]\n");
+      return legacy;
+    }
+
+    /** Replace one top-level item with a symlink to `target`. */
+    function linkTopLevel(legacy: string, basename: string, target: string, isDir: boolean): string {
+      const link = path.join(legacy, basename);
+      fs.rmSync(link, { recursive: isDir });
+      fs.symlinkSync(target, link);
+      return link;
+    }
+
+    function runMigrate(apply: boolean): { result: ReturnType<typeof migrateHome>; out: string; err: string } {
+      const stdout = bufferStream();
+      const stderr = bufferStream();
+      const result = migrateHome({
+        apply,
+        userHome: tmp,
+        stdout: stdout.stream,
+        stderr: stderr.stream,
+      });
+      return { result, out: stdout.read(), err: stderr.read() };
+    }
+
+    function expectRefused(err: string, link: string, target: string, kind: "file" | "directory"): void {
+      // names the item and its link target
+      expect(err).toContain(`refuses to move ${link} (symlink to ${target})`);
+      // names the manual step: replace the link, or move it by hand
+      expect(err).toContain(`Replace ${link} with the real ${kind}, or move it to`);
+      expect(err).toContain("by hand");
+      expect(err).toContain("nothing was moved");
+    }
+
+    it("refuses the X5 scenario (relative harness.yaml link), both trees unchanged, dry-run too", () => {
+      const legacy = seedTopLevel();
+      fs.writeFileSync(path.join(legacy, "harness.real.yaml"), "version: 1\n# real\n");
+      const link = linkTopLevel(legacy, "harness.yaml", "harness.real.yaml", false);
+      const before = snapshot(tmp);
+      const { result, err } = runMigrate(true);
+      expect(result.outcome).toBe("top-level-link");
+      expectRefused(err, link, "harness.real.yaml", "file");
+      expect(snapshot(tmp)).toEqual(before);
+      expect(fs.existsSync(path.join(tmp, HARNESS_HOME_DIRNAME))).toBe(false);
+      // the dry run reports the same refusal and changes nothing either
+      const dry = runMigrate(false);
+      expect(dry.result.outcome).toBe("top-level-link");
+      expect(dry.err).toContain(`refuses to move ${link} (symlink to harness.real.yaml)`);
+      expect(snapshot(tmp)).toEqual(before);
+    });
+
+    it("refuses the whole run when a real override layer could have moved (layers are found first)", () => {
+      const legacy = seedTopLevel();
+      const machineRel = path.join("machines", "default.harness.overrides.yaml");
+      fs.mkdirSync(path.join(legacy, "machines"), { recursive: true });
+      fs.writeFileSync(path.join(legacy, machineRel), "version: 1\n# machine\n");
+      const link = linkTopLevel(legacy, "harness.yaml", "harness.real.yaml", false);
+      const before = snapshot(tmp);
+      const { result, err } = runMigrate(true);
+      expect(result.outcome).toBe("top-level-link");
+      expect(err).toContain(`refuses to move ${link}`);
+      expect(snapshot(tmp)).toEqual(before);
+      // neither the layer nor any top-level item moved
+      expect(fs.existsSync(path.join(tmp, HARNESS_HOME_DIRNAME))).toBe(false);
+    });
+
+    it.each<[string, boolean, "file" | "directory"]>([
+      ["harness.yaml", false, "file"],
+      ["harness.lock", false, "file"],
+      ["harness.generated", true, "directory"],
+      [".understanding-gate", true, "directory"],
+    ])("refuses when %s is a symlink and moves none of the others", (basename, isDir, kind) => {
+      const legacy = seedTopLevel();
+      const ext = path.join(tmp, "dotfiles", basename);
+      if (isDir) fs.mkdirSync(ext, { recursive: true });
+      else {
+        fs.mkdirSync(path.dirname(ext), { recursive: true });
+        fs.writeFileSync(ext, "version: 1\n");
+      }
+      const link = linkTopLevel(legacy, basename, ext, isDir);
+      const before = snapshot(tmp);
+      const { result, err } = runMigrate(true);
+      expect(result.outcome).toBe("top-level-link");
+      expectRefused(err, link, ext, kind);
+      expect(snapshot(tmp)).toEqual(before);
+      for (const other of ["harness.yaml", "harness.lock", "harness.generated", ".understanding-gate"]) {
+        if (other === basename) continue;
+        expect(fs.existsSync(path.join(tmp, HARNESS_HOME_DIRNAME, other))).toBe(false);
+      }
+      expect(fs.lstatSync(link).isSymbolicLink()).toBe(true);
+    });
+
+    it("refuses a top-level link with an absolute target", () => {
+      const legacy = seedTopLevel();
+      const abs = path.join(tmp, "dotfiles", "harness.lock");
+      fs.mkdirSync(path.dirname(abs), { recursive: true });
+      fs.writeFileSync(abs, "[]\n");
+      const link = linkTopLevel(legacy, "harness.lock", abs, false);
+      expect(fs.readlinkSync(link)).toBe(abs);
+      const before = snapshot(tmp);
+      const { result, err } = runMigrate(true);
+      expect(result.outcome).toBe("top-level-link");
+      expectRefused(err, link, abs, "file");
+      expect(snapshot(tmp)).toEqual(before);
+    });
+
+    it("refuses a dangling top-level link whose target does not exist", () => {
+      const legacy = seedTopLevel();
+      const missing = path.join(tmp, "does", "not", "exist", "harness.yaml");
+      const link = linkTopLevel(legacy, "harness.yaml", missing, false);
+      expect(fs.existsSync(missing)).toBe(false);
+      const before = snapshot(tmp);
+      const { result, err } = runMigrate(true);
+      expect(result.outcome).toBe("top-level-link");
+      expectRefused(err, link, missing, "file");
+      expect(snapshot(tmp)).toEqual(before);
+    });
+  });
+
   describe("HARNESS_HOME and the state root the notes name", () => {
     // $HARNESS_HOME (non-empty) wins over the destination: the loader
     // reads layers under it, while this command always moves into
