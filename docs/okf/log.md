@@ -2,6 +2,14 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+## 2026-11-03
+
+- 2026-11-03T16:03:11Z, `gate disable` and `uninstall` now read `hooks` through `parseSettingsHooks` with the shared
+  `settingsHooksRefusal` helper in `src/cli/gate/snapshot.ts`. `gate-kill-switch.md`: 19 `src/cli/gate/disable.ts`
+  line citations re-pointed with the change, claims unchanged (same messages, absent hooks still mean no groups).
+  The earlier `src/cli/apply/generate-settings.ts` change (#755) touched comments only; no claim depends on it.
+  Re-stamped.
+
 ## 2026-11-02
 
 - 2026-11-02T16:33:08Z, `docs/CLI.md` changed only in the `harness migrate-home` row (a top-level item that is a symlink is never moved: the run refuses before anything moves and `--apply` exits `65`). `codex-adapter-parity-gaps.md` lists the file as a source but states no claim about `migrate-home`, the exit codes or the home-dir move, and cites no `docs/CLI.md` line; re-read against the Codex adapter code paths it describes (no change in this range), no claim changed. Re-stamped. Checks: `npx okf-kit check docs/okf`, `npm run build && npm test`.
