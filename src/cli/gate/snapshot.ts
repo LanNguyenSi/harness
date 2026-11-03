@@ -725,6 +725,23 @@ export type SettingsHooksParse =
   | { ok: false; reason: "hooks-not-object" }
   | { ok: false; reason: "event-not-array"; event: string };
 
+/** The two failure results of `parseSettingsHooks`, i.e. one readable shape less. */
+export type SettingsHooksFailure = Exclude<SettingsHooksParse, { ok: true }>;
+
+/**
+ * The sentence `gate disable` and `harness uninstall` put into their own error
+ * for an unreadable `hooks` shape: the field that is not an object, or the
+ * event whose groups are not an array. Each verb wraps it in its own error
+ * class; `gate enable` words the first one its own way, without the
+ * `refusing to operate` clause.
+ */
+export function settingsHooksRefusal(settingsPath: string, failure: SettingsHooksFailure): string {
+  if (failure.reason === "hooks-not-object") {
+    return `${settingsPath} \`hooks\` field is not an object; refusing to operate.`;
+  }
+  return `${settingsPath} \`hooks.${failure.event}\` is not an array; refusing to operate.`;
+}
+
 /**
  * The `hooks` of a parsed settings.json as the gate reads them: an array of
  * groups per event, each array copied, so a caller never mutates the parsed
@@ -734,8 +751,10 @@ export type SettingsHooksParse =
  * `event-not-array` naming the first event whose value is not an array.
  * `gate enable` turns the two reasons into its two refusal messages, and
  * `harness doctor` reads them the same way when it asks the gate what a
- * plain `gate enable` would do with the file it compares; the two never
- * re-implement the walk.
+ * plain `gate enable` would do with the file it compares. `gate disable` and
+ * `harness uninstall` map the same two reasons onto their own error classes
+ * and their own wording (both add `; refusing to operate.` to the
+ * not-an-object refusal); no caller re-implements the walk.
  */
 export function parseSettingsHooks(doc: Record<string, unknown>): SettingsHooksParse {
   const rawHooks = doc["hooks"];

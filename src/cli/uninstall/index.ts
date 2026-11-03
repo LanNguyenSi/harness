@@ -57,6 +57,7 @@ import {
 } from "../../io/claude-mcp.js";
 import { GENERATED_DIRNAME } from "../../io/generated-dir.js";
 import { resolveHomeDir as resolveHarnessStateRoot } from "../../runtime/home-dir.js";
+import { parseSettingsHooks, settingsHooksRefusal } from "../gate/snapshot.js";
 import {
   backupPath,
   looksLikeUninstallSnapshot,
@@ -343,15 +344,17 @@ function resolveSettingsPath(opts: UninstallOptions, homeDir: string): string {
 interface ParsedSettings {
   raw: string;
   obj: Record<string, unknown>;
-  hooks: Record<string, unknown[]> | null;
+  /** `hooks` block with each event's group array copied; no `hooks` key reads as no groups at all (the empty record). */
+  hooks: Record<string, unknown[]>;
   mcpServers: Record<string, unknown> | null;
 }
 
 /**
- * Read + parse settings.json. Refuses to operate on malformed shapes
- * (precedent: `gate/disable.ts`) so a broken file is surfaced rather
- * than silently overwritten with "something cleaner". Returns null when
- * the file simply doesn't exist (nothing to clean up; not an error).
+ * Read + parse settings.json. Refuses to operate on malformed shapes (the
+ * `hooks` field goes through the one shared `parseSettingsHooks` walk the gate
+ * and the doctor use) so a broken file is surfaced rather than silently
+ * overwritten with "something cleaner". Returns null when the file simply
+ * doesn't exist (nothing to clean up; not an error).
  */
 function readSettings(settingsPath: string): ParsedSettings | null {
   let raw: string;
@@ -377,25 +380,14 @@ function readSettings(settingsPath: string): ParsedSettings | null {
   }
   const obj = parsed as Record<string, unknown>;
 
-  let hooks: Record<string, unknown[]> | null = null;
-  const rawHooks = obj["hooks"];
-  if (rawHooks !== undefined) {
-    if (rawHooks === null || typeof rawHooks !== "object" || Array.isArray(rawHooks)) {
-      throw new UninstallError(
-        `${settingsPath} \`hooks\` field is not an object; refusing to operate.`,
-      );
-    }
-    const out: Record<string, unknown[]> = {};
-    for (const [event, groups] of Object.entries(rawHooks)) {
-      if (!Array.isArray(groups)) {
-        throw new UninstallError(
-          `${settingsPath} \`hooks.${event}\` is not an array; refusing to operate.`,
-        );
-      }
-      out[event] = groups;
-    }
-    hooks = out;
-  }
+  // One shared walk of the `hooks` field (the same parser `gate enable`,
+  // `gate disable` and the doctor read): a `hooks` key that is absent is its
+  // "no groups at all" case, which is all this verb ever made of it (no owned
+  // group to remove, so no rewrite of settings.json at all); the two failure
+  // reasons become this verb's own error with its own message.
+  const parsedHooks = parseSettingsHooks(obj);
+  if (!parsedHooks.ok) throw new UninstallError(settingsHooksRefusal(settingsPath, parsedHooks));
+  const hooks = parsedHooks.hooks;
 
   let mcpServers: Record<string, unknown> | null = null;
   const rawMcp = obj["mcpServers"];
@@ -520,10 +512,9 @@ function listPreHarnessBackups(settingsDir: string): string[] {
  * about so they can split them by hand if desired).
  */
 function collectOwnedHookGroups(
-  hooks: Record<string, unknown[]> | null,
+  hooks: Record<string, unknown[]>,
   warnings: string[],
 ): HookGroupRef[] {
-  if (hooks === null) return [];
   const out: HookGroupRef[] = [];
   for (const event of Object.keys(hooks).sort()) {
     const groups = hooks[event] ?? [];
@@ -662,7 +653,7 @@ function buildInventory(opts: UninstallOptions): {
 
   const parsed = readSettings(settingsPath);
   const warnings: string[] = [...warningsEarly];
-  const hookGroups = collectOwnedHookGroups(parsed?.hooks ?? null, warnings);
+  const hookGroups = collectOwnedHookGroups(parsed?.hooks ?? {}, warnings);
   const mcpServers = ownedMcpServerNames(parsed?.mcpServers ?? null, manifestPath);
   const preHarnessBackups = listPreHarnessBackups(path.dirname(settingsPath));
 
@@ -782,19 +773,17 @@ function writeSettingsWithRemovals(
     inventory.hookGroups.map((g) => `${g.event}\u0000${g.index}`),
   );
 
-  if (parsed.hooks !== null) {
-    for (const event of Object.keys(parsed.hooks).sort()) {
-      const groups = parsed.hooks[event] ?? [];
-      const kept: unknown[] = [];
-      groups.forEach((group, index) => {
-        if (ownedRefs.has(`${event}\u0000${index}`)) {
-          removedHookGroups.push({ event, index, group });
-        } else {
-          kept.push(group);
-        }
-      });
-      if (kept.length > 0) keptHooks[event] = kept;
-    }
+  for (const event of Object.keys(parsed.hooks).sort()) {
+    const groups = parsed.hooks[event] ?? [];
+    const kept: unknown[] = [];
+    groups.forEach((group, index) => {
+      if (ownedRefs.has(`${event}\u0000${index}`)) {
+        removedHookGroups.push({ event, index, group });
+      } else {
+        kept.push(group);
+      }
+    });
+    if (kept.length > 0) keptHooks[event] = kept;
   }
 
   const removedMcpServers: RemovedMcpServer[] = [];
@@ -867,15 +856,13 @@ function writeRestoreSnapshot(
   // Inventory the would-be removals so the snapshot still records what
   // was overwritten, even though the restore is wholesale.
   const removedHookGroups: RemovedHookGroup[] = [];
-  if (parsed.hooks !== null) {
-    for (const event of Object.keys(parsed.hooks).sort()) {
-      const groups = parsed.hooks[event] ?? [];
-      groups.forEach((group, index) => {
-        if (classifyHookGroup(group) === "owned") {
-          removedHookGroups.push({ event, index, group });
-        }
-      });
-    }
+  for (const event of Object.keys(parsed.hooks).sort()) {
+    const groups = parsed.hooks[event] ?? [];
+    groups.forEach((group, index) => {
+      if (classifyHookGroup(group) === "owned") {
+        removedHookGroups.push({ event, index, group });
+      }
+    });
   }
   const removedMcpServers: RemovedMcpServer[] = [];
   if (parsed.mcpServers !== null) {
