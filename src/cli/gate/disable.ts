@@ -42,6 +42,7 @@ import {
   listLiveSnapshots,
   type LiveSnapshot,
   missingLabel,
+  parseSettingsHooks,
   planRestore,
   readOnlyLinkTargetText,
   readOnlyWritablePlace,
@@ -49,6 +50,7 @@ import {
   resolveSettingsEntry,
   retireSnapshot,
   settingsFlag,
+  settingsHooksRefusal,
   settingsOwnEntry,
   sha256Hex,
   SNAPSHOT_VERSION,
@@ -124,8 +126,8 @@ function resolveSettingsPath(opts: GateDisableOptions): string {
 interface ParsedSettings {
   raw: string;
   obj: Record<string, unknown>;
-  /** `hooks` block, or null when the file has no `hooks` key. */
-  hooks: Record<string, unknown[]> | null;
+  /** `hooks` block with each event's group array copied; no `hooks` key reads as no groups at all (the empty record). */
+  hooks: Record<string, unknown[]>;
 }
 
 function readSettings(settingsPath: string): ParsedSettings {
@@ -153,25 +155,14 @@ function readSettings(settingsPath: string): ParsedSettings {
     throw new GateDisableError(`${settingsPath} is not a JSON object; refusing to operate.`);
   }
   const obj = parsed as Record<string, unknown>;
-  const rawHooks = obj["hooks"];
-  if (rawHooks === undefined) {
-    return { raw, obj, hooks: null };
-  }
-  if (rawHooks === null || typeof rawHooks !== "object" || Array.isArray(rawHooks)) {
-    throw new GateDisableError(
-      `${settingsPath} \`hooks\` field is not an object; refusing to operate.`,
-    );
-  }
-  const hooks: Record<string, unknown[]> = {};
-  for (const [event, groups] of Object.entries(rawHooks)) {
-    if (!Array.isArray(groups)) {
-      throw new GateDisableError(
-        `${settingsPath} \`hooks.${event}\` is not an array; refusing to operate.`,
-      );
-    }
-    hooks[event] = groups;
-  }
-  return { raw, obj, hooks };
+  // One shared walk of the `hooks` field (the same parser `gate enable` and the
+  // doctor read): a `hooks` key that is absent is its "no groups at all" case,
+  // which is all this verb ever made of it (no candidate to list, and a matcher
+  // that matches nothing); the two failure reasons become this verb's own error
+  // with its own message.
+  const parsedHooks = parseSettingsHooks(obj);
+  if (!parsedHooks.ok) throw new GateDisableError(settingsHooksRefusal(settingsPath, parsedHooks));
+  return { raw, obj, hooks: parsedHooks.hooks };
 }
 
 function summarizeGroup(group: unknown): string {
@@ -282,7 +273,7 @@ function readOnlyTargetError(
 export function gateDisable(opts: GateDisableOptions = {}): GateDisableResult {
   const settingsPath = resolveSettingsPath(opts);
   const parsed = readSettings(settingsPath);
-  const hooks = parsed.hooks ?? {};
+  const hooks = parsed.hooks;
   const allCandidates = collectCandidates(hooks);
 
   if (typeof opts.matcher !== "string" || opts.matcher.length === 0) {
@@ -533,7 +524,7 @@ function chooseSnapshot(
   for (const candidate of live) {
     const snap = candidate.snapshot;
     if (snap.settingsAfterSha256 === beforeSha) return { target: candidate, spent };
-    const plan = planRestore(parsed.hooks ?? {}, snap);
+    const plan = planRestore(parsed.hooks, snap);
     if (plan.restored.length === 0 && plan.changed.length === 0) {
       spent.push(candidate);
       continue;
