@@ -91,7 +91,7 @@
 // case. This is a documented convention, not union-grading across the
 // branch; a deliberately scoped decision, not an oversight.
 //
-// RENOVATE PULL REQUESTS — Renovate's commits (`fix(deps): update npm
+// RENOVATE PULL REQUESTS: Renovate's commits (`fix(deps): update npm
 // non-major`) carry no task id and no `(#NNN)` until the squash merge
 // appends it, so the PR check was red on every Renovate PR by
 // construction. The PR number is known in CI, though: on a `pull_request`
@@ -331,7 +331,7 @@ const HEX40 = /^[0-9a-f]{40}$/i;
 
 /**
  * The Renovate PR context from the CI environment, or null (no
- * relaxation) on anything missing or malformed — see RENOVATE PULL
+ * relaxation) on anything missing or malformed; see RENOVATE PULL
  * REQUESTS in the module header. Returns `{ prNumber, baseSha, headSha }`.
  */
 export function readRenovatePrContext(env) {

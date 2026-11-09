@@ -49,7 +49,9 @@ Thanks for your interest. harness is a declarative control plane for agent harne
    PR's own commits count as carrying the PR number from the event payload, so
    one `[Unreleased]` entry citing `#NNN` of that PR (added by hand on the
    Renovate branch, since Renovate cannot edit `CHANGELOG.md`) covers them;
-   other commits since the tag still need their own token. This
+   other commits since the tag still need their own token. The relaxation
+   goes by head branch name and commit range, not by commit author: any
+   commit pushed to a `renovate/*` branch counts. This
    applies to EVERY commit pushed to a
    branch under review, not just the eventual squash-merge subject — a
    `pull_request` CI run grades the whole branch, including review-round

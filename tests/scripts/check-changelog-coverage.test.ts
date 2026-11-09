@@ -602,6 +602,18 @@ describe("main with a Renovate pull-request context", () => {
     expect(process.exitCode).toBe(1);
   });
 
+  it.each(["pull_request_target", "workflow_dispatch", "merge_group"])(
+    "fails on a renovate payload under the %s event",
+    (eventName) => {
+      setup(CITES_765);
+      writeFileSync(eventPath, payload());
+
+      main(dir, env({ GITHUB_EVENT_NAME: eventName }));
+
+      expect(process.exitCode).toBe(1);
+    },
+  );
+
   it("fails on a renovate branch name alone, with no event file path", () => {
     setup(CITES_765);
 
