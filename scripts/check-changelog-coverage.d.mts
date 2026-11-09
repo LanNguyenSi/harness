@@ -39,6 +39,18 @@ export function commitType(subject: string): string | null;
 
 export function linkTokens(commit: CommitRecord): LinkTokens;
 
-export function classifyCommits(commits: CommitRecord[], coverageText: string | null): Classification;
+export interface RenovatePrContext {
+  prNumber: number;
+  baseSha: string;
+  headSha: string;
+}
 
-export function main(repoDir?: string): void;
+export function readRenovatePrContext(env: Record<string, string | undefined>): RenovatePrContext | null;
+
+export function classifyCommits(
+  commits: CommitRecord[],
+  coverageText: string | null,
+  prContext?: { prNumber: number; shas: Set<string> } | null,
+): Classification;
+
+export function main(repoDir?: string, env?: Record<string, string | undefined>): void;

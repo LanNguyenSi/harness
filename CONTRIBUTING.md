@@ -44,7 +44,14 @@ Thanks for your interest. harness is a declarative control plane for agent harne
    it in the commit's own message (e.g. `task 13919613`); if the commit's
    message does not already say that, cite its SHA or its PR number
    (`#NNN`) instead. A commit whose conventional-commit type is `chore`,
-   `ci`, `docs`, `refactor`, `style`, or `test` needs no entry. This
+   `ci`, `docs`, `refactor`, `style`, or `test` needs no entry. On a Renovate pull request
+   (head branch `renovate/*`, CI `pull_request` run, same-repository head) the
+   PR's own commits count as carrying the PR number from the event payload, so
+   one `[Unreleased]` entry citing `#NNN` of that PR (added by hand on the
+   Renovate branch, since Renovate cannot edit `CHANGELOG.md`) covers them;
+   other commits since the tag still need their own token. The relaxation
+   goes by head branch name and commit range, not by commit author: any
+   commit pushed to a `renovate/*` branch counts. This
    applies to EVERY commit pushed to a
    branch under review, not just the eventual squash-merge subject — a
    `pull_request` CI run grades the whole branch, including review-round
