@@ -91,6 +91,26 @@
 // case. This is a documented convention, not union-grading across the
 // branch; a deliberately scoped decision, not an oversight.
 //
+// RENOVATE PULL REQUESTS — Renovate's commits (`fix(deps): update npm
+// non-major`) carry no task id and no `(#NNN)` until the squash merge
+// appends it, so the PR check was red on every Renovate PR by
+// construction. The PR number is known in CI, though: on a `pull_request`
+// run whose head branch is `renovate/*`, the gate reads the event payload
+// (GITHUB_EVENT_PATH) and treats the commits of THAT PR, and only those,
+// as carrying `#<pr number>`. An `[Unreleased]` entry citing the PR number
+// then satisfies the gate on the PR and, because the squash-merge subject
+// gains the same `(#NNN)`, on master afterwards. Renovate cannot edit
+// CHANGELOG.md itself, so the entry is added by hand on the Renovate branch
+// (see CONTRIBUTING.md). The relaxation is fail closed: it applies only
+// when GITHUB_EVENT_NAME is `pull_request`, GITHUB_HEAD_REF and the
+// payload's head ref agree and start with `renovate/`, head and base repo
+// are the same repository (a fork cannot name its branch `renovate/x`),
+// the payload carries a positive integer PR number and 40-hex base and
+// head SHAs, and `git rev-list --no-merges base..head` succeeds. The PR's
+// commits are defined by that range, never by the branch name: any other
+// commit since the tag still needs its own token. Anything missing,
+// unreadable or malformed means no relaxation.
+//
 // SKIP CONVENTION — explicit and closed (no other escape hatch exists):
 // a commit whose conventional-commit TYPE is one of
 //   test, docs, ci, style, refactor, chore
@@ -274,8 +294,11 @@ export function linkTokens(commit) {
  * `[Unreleased]` section; the caller passes `extractCoverageText`'s
  * result). `uncovered` entries carry their tokens so the failure output
  * can show what was looked for.
+ *
+ * `prContext` (optional, from `readRenovatePrContext`) = `{ prNumber, shas }`
+ * adds `#<prNumber>` as a link token for commits whose sha is in `shas`.
  */
-export function classifyCommits(commits, coverageText) {
+export function classifyCommits(commits, coverageText, prContext = null) {
   const text = coverageText ?? "";
   const skipped = [];
   const covered = [];
@@ -287,6 +310,12 @@ export function classifyCommits(commits, coverageText) {
       continue;
     }
     const tokens = linkTokens(commit);
+    // A commit inside the Renovate PR's own range carries the PR number
+    // even though its subject does not (see RENOVATE PULL REQUESTS).
+    if (prContext !== null && prContext.shas.has(commit.sha)) {
+      const prToken = `#${prContext.prNumber}`;
+      if (!tokens.prNumbers.includes(prToken)) tokens.prNumbers.push(prToken);
+    }
     const hit =
       tokens.taskIds.some((t) => coverageHasHexId(text, t)) ||
       tokens.prNumbers.some((t) => coverageHasPrNumber(text, t)) ||
@@ -296,6 +325,39 @@ export function classifyCommits(commits, coverageText) {
     else uncovered.push({ ...commit, tokens });
   }
   return { skipped, covered, uncovered };
+}
+
+const HEX40 = /^[0-9a-f]{40}$/i;
+
+/**
+ * The Renovate PR context from the CI environment, or null (no
+ * relaxation) on anything missing or malformed — see RENOVATE PULL
+ * REQUESTS in the module header. Returns `{ prNumber, baseSha, headSha }`.
+ */
+export function readRenovatePrContext(env) {
+  if (env.GITHUB_EVENT_NAME !== "pull_request") return null;
+  const headRef = env.GITHUB_HEAD_REF;
+  if (typeof headRef !== "string" || !headRef.startsWith("renovate/")) return null;
+  const eventPath = env.GITHUB_EVENT_PATH;
+  if (typeof eventPath !== "string" || eventPath === "") return null;
+  let payload;
+  try {
+    payload = JSON.parse(readFileSync(eventPath, "utf8"));
+  } catch {
+    return null;
+  }
+  const pr = payload?.pull_request;
+  if (pr === null || typeof pr !== "object") return null;
+  if (!Number.isSafeInteger(pr.number) || pr.number <= 0) return null;
+  if (pr.head?.ref !== headRef) return null;
+  const headRepo = pr.head?.repo?.full_name;
+  const baseRepo = pr.base?.repo?.full_name;
+  if (typeof headRepo !== "string" || headRepo === "" || headRepo !== baseRepo) return null;
+  const baseSha = pr.base?.sha;
+  const headSha = pr.head?.sha;
+  if (typeof baseSha !== "string" || !HEX40.test(baseSha)) return null;
+  if (typeof headSha !== "string" || !HEX40.test(headSha)) return null;
+  return { prNumber: pr.number, baseSha, headSha };
 }
 
 function git(repoDir, args) {
@@ -309,7 +371,7 @@ function git(repoDir, args) {
   });
 }
 
-export function main(repoDir = process.cwd()) {
+export function main(repoDir = process.cwd(), env = process.env) {
   let lastTag;
   try {
     lastTag = git(repoDir, ["describe", "--tags", "--abbrev=0", "HEAD"]).trim();
@@ -349,7 +411,17 @@ export function main(repoDir = process.cwd()) {
   }
 
   const coverageText = extractCoverageText(changelog, lastTag);
-  const { skipped, covered, uncovered } = classifyCommits(commits, coverageText);
+  let prContext = null;
+  const renovate = readRenovatePrContext(env);
+  if (renovate !== null) {
+    try {
+      const raw = git(repoDir, ["rev-list", "--no-merges", `${renovate.baseSha}..${renovate.headSha}`]);
+      prContext = { prNumber: renovate.prNumber, shas: new Set(raw.split("\n").map((l) => l.trim()).filter((l) => l !== "")) };
+    } catch {
+      prContext = null; // range not readable: no relaxation (fail closed)
+    }
+  }
+  const { skipped, covered, uncovered } = classifyCommits(commits, coverageText, prContext);
 
   if (uncovered.length > 0) {
     console.error(`check-changelog-coverage: FAIL — ${uncovered.length} commit(s) since ${lastTag} without an [Unreleased] entry:`);
@@ -367,7 +439,9 @@ export function main(repoDir = process.cwd()) {
         "in that commit). " +
         "That adjacency is a property of the commit message, not of the changelog entry's wording, so rewording " +
         "the entry cannot create coverage for it. For a commit already pushed whose message lacks that adjacency, " +
-        "cite the commit's own SHA or the PR number (#NNN) in the changelog entry instead.",
+        "cite the commit's own SHA or the PR number (#NNN) in the changelog entry instead. " +
+        "On a Renovate pull request (head branch renovate/*, CI pull_request run) its commits count as carrying " +
+        "the PR number: add an [Unreleased] entry citing #NNN of that PR to the Renovate branch.",
     );
     process.exitCode = 1;
     return;

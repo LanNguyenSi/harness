@@ -276,6 +276,22 @@ describe("classifyCommits", () => {
   });
 });
 
+describe("classifyCommits with a PR context", () => {
+  it("adds #<pr> as a link token only for commits whose sha is in the PR range", () => {
+    const inPr = commit({ sha: "a".repeat(40), subject: "fix(deps): update npm non-major" });
+    const outside = commit({ sha: "b".repeat(40), subject: "fix(deps): update other" });
+    const r = classifyCommits([inPr, outside], "- bumps (#765)", { prNumber: 765, shas: new Set([inPr.sha]) });
+    expect(r.covered.map((c) => c.sha)).toEqual([inPr.sha]);
+    expect(r.uncovered.map((c) => c.sha)).toEqual([outside.sha]);
+  });
+
+  it("does not satisfy #76 from #765 in the text", () => {
+    const inPr = commit({ sha: "a".repeat(40), subject: "fix(deps): bump" });
+    const r = classifyCommits([inPr], "- bumps (#765)", { prNumber: 76, shas: new Set([inPr.sha]) });
+    expect(r.uncovered).toHaveLength(1);
+  });
+});
+
 // main() runs against small REAL fixture git repos (git is on the
 // hermetic-spawn allowlist for exactly this fixture-building purpose) and
 // inspects console output + process.exitCode, mirroring
@@ -457,6 +473,274 @@ describe("main", () => {
     expect(process.exitCode).toBe(1);
     const errorOutput = errorSpy.mock.calls.map((callArgs: unknown[]) => callArgs.join(" ")).join("\n");
     expect(errorOutput).toContain("no tag reachable");
+  });
+});
+
+// Renovate pull-request context: the PR's own commits (event payload
+// base..head) count as carrying `#<pr number>`; nothing else relaxes.
+describe("main with a Renovate pull-request context", () => {
+  let dir: string;
+  let eventDir: string;
+  let eventPath: string;
+  let baseSha: string;
+  let headSha: string;
+  let logSpy: ReturnType<typeof vi.spyOn>;
+  let errorSpy: ReturnType<typeof vi.spyOn>;
+
+  function git(...args: string[]): string {
+    return execFileSync("git", ["-C", dir, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+  }
+
+  function commitFile(subject: string): void {
+    writeFileSync(join(dir, "file.txt"), `${subject}\n${Math.random()}\n`);
+    git("add", "file.txt");
+    git("commit", "-q", "-m", subject);
+  }
+
+  // Layout: tag v0.1.0, optional base-side commits on master, then a
+  // renovate/deps branch with one Renovate-shaped commit. baseSha is the
+  // master tip the PR branched from, headSha the PR head.
+  function setup(changelog: string, masterCommits: string[] = []): void {
+    git("init", "-q", "-b", "master");
+    git("config", "user.email", "t@example.invalid");
+    git("config", "user.name", "t");
+    git("config", "core.hooksPath", "/dev/null");
+    git("config", "commit.gpgsign", "false");
+    git("config", "tag.gpgsign", "false");
+    writeFileSync(join(dir, "CHANGELOG.md"), changelog);
+    git("add", "CHANGELOG.md");
+    git("commit", "-q", "-m", "chore(release): v0.1.0");
+    git("tag", "v0.1.0");
+    for (const s of masterCommits) commitFile(s);
+    baseSha = git("rev-parse", "HEAD");
+    git("checkout", "-q", "-b", "renovate/deps");
+    commitFile("fix(deps): update npm non-major");
+    headSha = git("rev-parse", "HEAD");
+  }
+
+  type Pr = {
+    number?: unknown;
+    head?: { ref?: unknown; sha?: unknown; repo?: { full_name?: unknown } };
+    base?: { sha?: unknown; repo?: { full_name?: unknown } };
+  };
+
+  function payload(over: (pr: Pr) => void = () => {}): string {
+    const pr: Pr = {
+      number: 765,
+      head: { ref: "renovate/deps", sha: headSha, repo: { full_name: "o/r" } },
+      base: { sha: baseSha, repo: { full_name: "o/r" } },
+    };
+    over(pr);
+    return JSON.stringify({ pull_request: pr });
+  }
+
+  function env(over: Record<string, string | undefined> = {}): Record<string, string | undefined> {
+    return { GITHUB_EVENT_NAME: "pull_request", GITHUB_HEAD_REF: "renovate/deps", GITHUB_EVENT_PATH: eventPath, ...over };
+  }
+
+  function stderr(): string {
+    return errorSpy.mock.calls.map((callArgs: unknown[]) => callArgs.join(" ")).join("\n");
+  }
+
+  const CITES_765 = "## [Unreleased]\n\n### Changed\n- Dependency updates (#765)\n\n## [0.1.0]\n- base\n";
+  const CITES_NOTHING = "## [Unreleased]\n\n### Changed\n- unrelated (task `deadbee1`)\n\n## [0.1.0]\n- base\n";
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "harness-check-changelog-coverage-pr-"));
+    eventDir = mkdtempSync(join(tmpdir(), "harness-check-changelog-coverage-event-"));
+    eventPath = join(eventDir, "event.json");
+    logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+    rmSync(eventDir, { recursive: true, force: true });
+    logSpy.mockRestore();
+    errorSpy.mockRestore();
+    process.exitCode = undefined;
+  });
+
+  it("passes a tokenless Renovate commit when [Unreleased] cites the PR number", () => {
+    setup(CITES_765);
+    writeFileSync(eventPath, payload());
+
+    main(dir, env());
+
+    expect(process.exitCode).toBeUndefined();
+    expect(logSpy).toHaveBeenCalledWith(expect.stringContaining("check-changelog-coverage: OK"));
+  });
+
+  it("still fails when the PR context is valid but the changelog does not cite the PR number, and says what to add", () => {
+    setup(CITES_NOTHING);
+    writeFileSync(eventPath, payload());
+
+    main(dir, env());
+
+    expect(process.exitCode).toBe(1);
+    expect(stderr()).toContain("fix(deps): update npm non-major");
+    expect(stderr()).toContain("looked for #765");
+    expect(stderr()).toContain("Renovate pull request");
+  });
+
+  it("fails the same commit with no CI environment at all", () => {
+    setup(CITES_765);
+    writeFileSync(eventPath, payload());
+
+    main(dir, {});
+
+    expect(process.exitCode).toBe(1);
+    expect(stderr()).toContain("no task id / PR number / GHSA id");
+  });
+
+  it("fails on a renovate head ref outside PR context (push event)", () => {
+    setup(CITES_765);
+    writeFileSync(eventPath, payload());
+
+    main(dir, env({ GITHUB_EVENT_NAME: "push" }));
+
+    expect(process.exitCode).toBe(1);
+  });
+
+  it("fails on a renovate branch name alone, with no event file path", () => {
+    setup(CITES_765);
+
+    main(dir, env({ GITHUB_EVENT_PATH: undefined }));
+
+    expect(process.exitCode).toBe(1);
+  });
+
+  it("fails on a non-renovate PR branch even with a valid payload", () => {
+    setup(CITES_765);
+    writeFileSync(eventPath, payload((pr) => { pr.head!.ref = "feature/deps"; }));
+
+    main(dir, env({ GITHUB_HEAD_REF: "feature/deps" }));
+
+    expect(process.exitCode).toBe(1);
+  });
+
+  it("fails when the env head ref says renovate/ but the payload head ref differs", () => {
+    setup(CITES_765);
+    writeFileSync(eventPath, payload((pr) => { pr.head!.ref = "feature/deps"; }));
+
+    main(dir, env());
+
+    expect(process.exitCode).toBe(1);
+  });
+
+  it("fails when the env head ref is not renovate/ but the payload head ref is", () => {
+    setup(CITES_765);
+    writeFileSync(eventPath, payload());
+
+    main(dir, env({ GITHUB_HEAD_REF: "feature/deps" }));
+
+    expect(process.exitCode).toBe(1);
+  });
+
+  it("fails on a fork PR whose head repo differs from the base repo", () => {
+    setup(CITES_765);
+    writeFileSync(eventPath, payload((pr) => { pr.head!.repo!.full_name = "fork/r"; }));
+
+    main(dir, env());
+
+    expect(process.exitCode).toBe(1);
+  });
+
+  it("fails when the event file does not exist", () => {
+    setup(CITES_765);
+
+    main(dir, env());
+
+    expect(process.exitCode).toBe(1);
+  });
+
+  it("fails when the event file is not JSON", () => {
+    setup(CITES_765);
+    writeFileSync(eventPath, "{not json");
+
+    main(dir, env());
+
+    expect(process.exitCode).toBe(1);
+  });
+
+  it("fails when the payload has no pull_request object", () => {
+    setup(CITES_765);
+    writeFileSync(eventPath, JSON.stringify({ ref: "refs/heads/master" }));
+
+    main(dir, env());
+
+    expect(process.exitCode).toBe(1);
+  });
+
+  it.each([
+    ["number missing", (pr: Pr) => { delete pr.number; }],
+    ["number a string", (pr: Pr) => { pr.number = "765"; }],
+    ["number zero", (pr: Pr) => { pr.number = 0; }],
+    ["number fractional", (pr: Pr) => { pr.number = 7.5; }],
+    ["base sha missing", (pr: Pr) => { delete pr.base!.sha; }],
+    ["head sha missing", (pr: Pr) => { delete pr.head!.sha; }],
+    ["base sha not 40 hex", (pr: Pr) => { pr.base!.sha = "abc123"; }],
+    ["head sha not 40 hex", (pr: Pr) => { pr.head!.sha = "zzzz"; }],
+    ["repo names missing", (pr: Pr) => { delete pr.head!.repo; delete pr.base!.repo; }],
+  ])("fails when the payload is malformed: %s", (_label, mutate) => {
+    setup(CITES_765);
+    writeFileSync(eventPath, payload(mutate));
+
+    main(dir, env());
+
+    expect(process.exitCode).toBe(1);
+  });
+
+  it("fails when the base SHA is an abbreviation that git would still resolve", () => {
+    setup(CITES_765);
+    writeFileSync(eventPath, payload((pr) => { pr.base!.sha = baseSha.slice(0, 12); }));
+
+    main(dir, env());
+
+    expect(process.exitCode).toBe(1);
+  });
+
+  it("fails when the payload SHAs are well-formed but unknown to the repository (range unreadable)", () => {
+    setup(CITES_765);
+    writeFileSync(eventPath, payload((pr) => { pr.base!.sha = "1".repeat(40); }));
+
+    main(dir, env());
+
+    expect(process.exitCode).toBe(1);
+  });
+
+  it("does not relax a tokenless commit outside the PR range, while the PR's own commit passes", () => {
+    setup(CITES_765, ["fix: tokenless commit already on the base branch"]);
+    writeFileSync(eventPath, payload());
+
+    main(dir, env());
+
+    expect(process.exitCode).toBe(1);
+    expect(stderr()).toContain("1 commit(s)");
+    expect(stderr()).toContain("tokenless commit already on the base branch");
+    expect(stderr()).not.toContain("update npm non-major");
+  });
+
+  it("takes the PR range from the payload base SHA: naming the tag as base relaxes the base-side commit too", () => {
+    // The base-side commit is inside base..head when the payload names the
+    // tag as its base, so it is relaxed; with the real base it is not.
+    setup(CITES_765, ["fix: tokenless commit already on the base branch"]);
+    const tagSha = git("rev-parse", "v0.1.0");
+    writeFileSync(eventPath, payload((pr) => { pr.base!.sha = tagSha; }));
+
+    main(dir, env());
+
+    expect(process.exitCode).toBeUndefined();
+  });
+
+  it("a Renovate-shaped commit without a PR context stays uncovered while a commit with its own (#NNN) subject is covered", () => {
+    setup("## [Unreleased]\n\n- thing (#9)\n\n## [0.1.0]\n- base\n");
+    commitFile("fix: other thing (#9)");
+
+    main(dir, {});
+
+    expect(stderr()).toContain("update npm non-major");
+    expect(stderr()).not.toContain("other thing (#9)");
   });
 });
 
