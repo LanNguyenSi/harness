@@ -281,7 +281,14 @@ import * as path from "node:path";
 // reports 29 with that change (the pin was 31).
 // Lowered to 27 (task 82169840): removing `harness session-export` and the ledger
 // client; the check reports 27 with that change (the pin was 29).
-const MAX_CLONES = 27;
+// Raised to 31 for the jscpd 5.0.11 -> 5.4.2 tooling bump (Renovate PR #765),
+// with no source change: on unchanged master 5.0.11 reports 26 clones and
+// 5.4.2 reports 31. Verified by diffing both `duplicates[]` sets: 5.4.2
+// re-partitions the already-tolerated validate/lock/diff/write cluster
+// (`cli/add/index.ts`, `cli/remove/index.ts`, `cli/pack/{add,remove,reseed}.ts`)
+// into shorter windows, so it reports 5 more pairs inside that cluster and no
+// pair in any other file.
+const MAX_CLONES = 31;
 
 // Sets process.exitCode instead of calling process.exit so the caller's
 // finally-cleanup runs on every path (process.exit skips stack unwinding).
