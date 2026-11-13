@@ -213,6 +213,32 @@ describe("apply --target pre-overwrite backup", () => {
     expect(backupNames(tmpHome)).toEqual([]);
   });
 
+  it("generated files change but the target already matches: the target is not rewritten and gets no backup", async () => {
+    writeManifest();
+    const target = targetPath();
+    await apply({ homeDir: tmpHome, target, force: true, now: NOW });
+    // Only harness.generated/ changes: the manifest gains a memory directory,
+    // the hooks (and so the target's content) stay the same.
+    const memDir = path.join(tmpHome, "mem");
+    fs.mkdirSync(memDir);
+    fs.writeFileSync(path.join(memDir, "note.md"), "---\nname: note\ndescription: d\ntype: project\n---\nbody\n");
+    const manifest = {
+      version: 1,
+      tools: { mcp: [], cli: [], skills: { enabled: [], source_dirs: [] }, builtin: { known: [] } },
+      memory: { directories: [{ path: memDir, scope: "project" }] },
+      hooks: [{ name: "h", event: "SessionStart", command: "/h.sh", blocking: false, budget_ms: 30000 }],
+      policies: [],
+    };
+    fs.writeFileSync(path.join(tmpHome, "harness.yaml"), yamlStringify(manifest));
+    const before = fs.readFileSync(target, "utf8");
+    const r = await apply({ homeDir: tmpHome, target, force: true, now: NOW });
+    expect(r.outcome).toBe("applied");
+    expect(r.targetWritten).toBe(false);
+    expect(r.targetBackupPath).toBeUndefined();
+    expect(backupNames(tmpHome)).toEqual([]);
+    expect(fs.readFileSync(target, "utf8")).toBe(before);
+  });
+
   it("backup path occupied by a directory: apply errors naming the backup path, the target is not touched", async () => {
     writeManifest();
     const target = targetPath();

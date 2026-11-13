@@ -259,13 +259,12 @@ export interface ApplyResult {
    */
   targetMergeSummary?: string;
   /**
-   * Set when the target write happened over a file apply did not write
-   * itself: the path of the `<target>.bak.<timestamp>` copy taken before
-   * the overwrite (the gate's `backupPath` naming, `src/cli/gate/snapshot.ts`).
-   * Absent when no target was written, when the target was created (there
-   * was nothing to protect), when the target already held the bytes of the
-   * previous apply (the `target` sha recorded in `harness.lock` still
-   * matches), and on every refusal or dry-run path (nothing was written).
+   * Set when the apply changed an existing target: the path of the
+   * `<target>.bak.<timestamp>` copy taken before anything was written (the
+   * gate's `backupPath` naming, `src/cli/gate/snapshot.ts`). Absent when the
+   * target was created (there was nothing to protect), when it already held
+   * the bytes apply would write (no rewrite), and on every refusal or dry-run
+   * path (nothing was written).
    */
   targetBackupPath?: string;
   /** Present when --runtime codex --install was requested. */
