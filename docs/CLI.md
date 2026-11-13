@@ -94,7 +94,7 @@ Variables the `harness` binary reads.
 | Variable | Read by | Effect |
 |---|---|---|
 | `HARNESS_HOME` | every verb that resolves the state root | Pins the state root, ahead of `~/.harness/` and the legacy `~/.claude/`. |
-| `CLAUDE_CONFIG_DIR` | `harness init --interactive`, `harness doctor`, `harness adopt`, `harness uninstall` | Moves the Claude Code user-scope MCP registry these verbs read from `~/.claude.json` to `$CLAUDE_CONFIG_DIR/.claude.json`. |
+| `CLAUDE_CONFIG_DIR` | `harness init --interactive`, `harness init --probe`, `harness doctor`, `harness adopt`, `harness uninstall` | Moves the Claude Code user-scope MCP registry these verbs read from `~/.claude.json` to `$CLAUDE_CONFIG_DIR/.claude.json`. |
 
 `harness` itself reads neither `EVIDENCE_LEDGER_DB` nor `SOLUTION_VERDICT_SIGNING_KEY`: `harness apply` projects only `EVIDENCE_LEDGER_DB` onto the `tools.mcp[grounding-mcp]` server entry, which reads it. An operator-declared `env.EVIDENCE_LEDGER_DB` on that entry wins over the projection (`src/cli/apply/generate-settings.ts`), and any env the operator declares on an MCP entry passes through to the generated config unchanged.
 

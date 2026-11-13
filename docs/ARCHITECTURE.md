@@ -1,6 +1,6 @@
 # Architecture
 
-This document is the architecture reference for the shipped `harness` CLI 1.0.0: the manifest schema, the file layout, the CLI surface, the override rules and the one runtime gate. [`VISION.md`](VISION.md) established *why* a declarative control plane exists; this document describes *what* the tool is.
+This document is the architecture reference for the shipped `harness` CLI 1.x: the manifest schema, the file layout, the CLI surface, the override rules and the one runtime gate. [`VISION.md`](VISION.md) established *why* a declarative control plane exists; this document describes *what* the tool is.
 
 `harness` does two things. It composes one YAML manifest, plus its per-machine and per-project override layers, into runtime configuration for Claude Code, Codex and (minimally) opencode. And it ships one runtime gate, the branch-protection policy pack, which asks git for the branch of every directory a tool call writes into and refuses the call on a protected branch, on an unanswered query, or on an error.
 
