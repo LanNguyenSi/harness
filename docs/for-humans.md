@@ -154,7 +154,11 @@ prints under "Claude Code MCP Registration".
 
 If the target exists and you pass neither `--merge` nor `--force`,
 `apply` refuses with a clear hint instead of clobbering. `--force`
-overwrites with the generated content as-is (no merge).
+overwrites with the generated content as-is (no merge). Before
+overwriting an existing target that this apply is about to change, apply
+first copies the current file to `<target>.bak.<timestamp>` beside it,
+before anything else is written. A target that already holds exactly the
+bytes apply would write is not rewritten and gets no backup.
 
 `harness.lock` records the target path plus a sha256 of the merged
 output, so `harness validate --check-lock` flags out-of-band edits.

@@ -79,6 +79,7 @@ import {
   type CodexConfigInstallPlan,
   type CodexConfigInstallResult,
 } from "./install-codex-config.js";
+import { backupTargetBeforeOverwrite } from "./target-backup.js";
 
 export { GENERATED_DIRNAME };
 export const SETTINGS_BASENAME = "settings.json";
@@ -163,7 +164,7 @@ export interface ApplyOptions {
   installCodex?: boolean;
   /** Override the active Codex config path for --runtime codex --install. */
   codexConfigPath?: string;
-  /** Test-injectable clock for timestamped Codex config backups. */
+  /** Test-injectable clock for the timestamped Codex config and target backups. */
   now?: Date;
   /** Test-injectable confirmation prompt; defaults to a stdin readline. */
   prompt?: (message: string) => Promise<string>;
@@ -257,6 +258,15 @@ export interface ApplyResult {
    * Present when --merge succeeded against an existing target.
    */
   targetMergeSummary?: string;
+  /**
+   * Set when the apply changed an existing target: the path of the
+   * `<target>.bak.<timestamp>` copy taken before anything was written (the
+   * gate's `backupPath` naming, `src/cli/gate/snapshot.ts`). Absent when the
+   * target was created (there was nothing to protect), when it already held
+   * the bytes apply would write (no rewrite), and on every refusal or dry-run
+   * path (nothing was written).
+   */
+  targetBackupPath?: string;
   /** Present when --runtime codex --install was requested. */
   codexConfigInstall?: CodexConfigInstallOutcome;
   /** Adapter runtime this apply generated (or would generate) for. */
@@ -1223,6 +1233,21 @@ export async function apply(opts: ApplyOptions = {}): Promise<ApplyResult> {
     return result;
   }
 
+  // Back the target up BEFORE anything is written this run. When the
+  // target exists and this apply is about to change it, the current bytes
+  // go to `<target>.bak.<timestamp>` (see target-backup.ts); whatever the
+  // lock records, an overwrite that changes an existing target always
+  // leaves a copy. Doing this here, ahead of the harness.generated/
+  // writes, is what makes a backup failure cheap: the apply aborts with
+  // nothing touched, so after fixing the blocker the next apply sees the
+  // same state it saw now - no half-written tree to meet as drift. The
+  // target path, its pending content and the targetChanged decision are
+  // all already known; nothing the backup needs is computed below.
+  let targetBackupPath: string | undefined;
+  if (targetPath && targetContent !== undefined && targetChanged) {
+    targetBackupPath = backupTargetBeforeOverwrite(targetPath, opts.now ?? new Date());
+  }
+
   // Only write generated files if anything in harness.generated/ actually
   // changed. When the user passed --target on an otherwise-clean tree,
   // anyChanged may be false but targetChanged true: we still want to write
@@ -1255,6 +1280,11 @@ export async function apply(opts: ApplyOptions = {}): Promise<ApplyResult> {
   let targetWritten = false;
   if (targetPath && targetContent !== undefined && targetChanged) {
     fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+    // A target holding bytes a hand edit (or any earlier state) left behind
+    // was already copied to `<target>.bak.<timestamp>` above, before any
+    // write, so a hand-maintained hook group or a `--force` run never loses
+    // the file it replaces without a copy. A backup that could not be
+    // written aborted the apply before this point (see target-backup.ts).
     atomicWriteFile(targetPath, targetContent);
     targetWritten = true;
   }
@@ -1306,6 +1336,7 @@ export async function apply(opts: ApplyOptions = {}): Promise<ApplyResult> {
     // or already byte-identical.
     result.targetInSync = true;
     if (targetMergeSummary !== undefined) result.targetMergeSummary = targetMergeSummary;
+    if (targetBackupPath !== undefined) result.targetBackupPath = targetBackupPath;
   }
   return result;
 }

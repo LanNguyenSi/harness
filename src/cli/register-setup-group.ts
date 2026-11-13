@@ -605,6 +605,9 @@ export function registerSetupGroup(
               } else {
                 stdout(`wrote target: ${result.targetPath}\n`);
               }
+              if (result.targetBackupPath) {
+                stdout(`backup written to ${result.targetBackupPath}\n`);
+              }
             } else {
               // Idempotent re-apply: the merge was a no-op because the
               // target already held the merged content. Report it as
