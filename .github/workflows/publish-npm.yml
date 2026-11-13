@@ -12,7 +12,6 @@ on:
 
 permissions:
   contents: read
-  id-token: write
 
 # One publish per tag at a time. A running publish is never cancelled: a
 # half-finished `npm publish --provenance` can leave a version without its
@@ -29,6 +28,8 @@ jobs:
     # make the publish ship a commit the CI never tested.
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    permissions:
+      contents: read
     outputs:
       sha: ${{ steps.resolve.outputs.sha }}
       tag: ${{ steps.resolve.outputs.tag }}
@@ -84,6 +85,10 @@ jobs:
     needs: [resolve, ci]
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    # id-token: write is granted on this job only (npm Trusted Publishing).
+    permissions:
+      contents: read
+      id-token: write
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
@@ -134,7 +139,7 @@ jobs:
       - name: Upgrade npm for trusted publishing
         # npm Trusted Publishing (OIDC) needs npm >= 11.5.1; node 22 bundles
         # npm 10, so upgrade first. Auth comes from the GitHub OIDC token
-        # (permissions.id-token: write above) matched against the package's
+        # (permissions.id-token: write on this job) matched against the package's
         # Trusted Publisher entry on npmjs.com (repo LanNguyenSi/harness,
         # workflow publish-npm.yml) — no NPM_TOKEN secret involved.
         run: npm install -g npm@^11.5.1 --no-audit --no-fund
