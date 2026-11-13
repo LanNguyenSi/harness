@@ -14,15 +14,34 @@ permissions:
   contents: read
   id-token: write
 
+# One publish per tag at a time. A running publish is never cancelled: a
+# half-finished `npm publish --provenance` can leave a version without its
+# attestation, so a second run for the same tag queues behind it instead.
+concurrency:
+  group: publish-npm-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
 jobs:
+  ci:
+    name: CI
+    # The same full gates release.yml runs on a tag push. For a manual run the
+    # CI checks out the tag passed as `tag`, the commit the publish job builds.
+    uses: ./.github/workflows/ci.yml
+    with:
+      ref: ${{ inputs.tag || github.ref }}
+    permissions:
+      contents: read
+
   publish:
+    needs: ci
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           ref: ${{ inputs.tag || github.ref }}
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: 22
           cache: npm
@@ -70,13 +89,37 @@ jobs:
           version="${TAG#v}"
           pkg=$(node -p "require('./package.json').name")
 
+          # Read dist.attestations, retrying while it is empty: the registry can
+          # serve the version before its attestation is visible, and a single
+          # empty read would report a good version as unattested. Up to 5 reads,
+          # waiting 5, 10, 20 and 40 s between them. A read error returns 1 at
+          # once; an attestation that is still empty after the last read returns
+          # 0 with `attestations` empty, and the caller decides.
+          attestations=""
+          read_attestations() {
+            local spec="$1" try=1 max=5 wait=5
+            while true; do
+              if ! attestations=$(npm view "${spec}" dist.attestations 2>/dev/null); then
+                return 1
+              fi
+              if [ -n "${attestations}" ] || [ "${try}" -ge "${max}" ]; then
+                return 0
+              fi
+              echo "dist.attestations for ${spec} is empty (read ${try}/${max}); retrying in ${wait}s"
+              sleep "${wait}"
+              try=$((try + 1))
+              wait=$((wait * 2))
+            done
+          }
+
           # Idempotency: a re-run (workflow_dispatch, or "Re-run failed jobs")
           # can land on a version a prior attempt already published.
           if npm view "${pkg}@${version}" version > /dev/null 2>&1; then
             # The version is present, but a prior attempt may have landed the
             # tarball without its --provenance attestation, and a re-run cannot
-            # add one: apply the same attestation check as the retry loop below.
-            if ! attestations=$(npm view "${pkg}@${version}" dist.attestations 2>/dev/null); then
+            # add one: apply the same attestation check as the retry loop below
+            # (read_attestations waits out registry lag before giving up).
+            if ! read_attestations "${pkg}@${version}"; then
               echo "::error::could not read dist.attestations for ${pkg}@${version} (registry error); verify manually with npm view ${pkg}@${version} dist.attestations before deprecating anything." >&2
               exit 1
             fi
@@ -111,7 +154,7 @@ jobs:
               # once, fleet-wide: an empty dist.attestations here is an error,
               # not a warning, so a version published without provenance is
               # never announced green.
-              if ! attestations=$(npm view "${pkg}@${version}" dist.attestations 2>/dev/null); then
+              if ! read_attestations "${pkg}@${version}"; then
                 echo "::error::could not read dist.attestations for ${pkg}@${version} (registry error); verify manually with npm view ${pkg}@${version} dist.attestations before deprecating anything." >&2
                 exit 1
               fi

@@ -6,14 +6,22 @@ on:
   pull_request:
     branches: [master]
   workflow_call:
+    inputs:
+      ref:
+        description: "Git ref to check out. Empty keeps the caller's default (the pushed or merged commit)."
+        required: false
+        type: string
+        default: ""
 
 jobs:
   ci:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
 
     steps:
       - uses: actions/checkout@v5
         with:
+          ref: ${{ inputs.ref }}
           # Full history + tags: check:changelog-coverage compares
           # `git log <last-tag>..HEAD` against CHANGELOG.md's Unreleased
           # section, so it needs the tag and the commits since it.
