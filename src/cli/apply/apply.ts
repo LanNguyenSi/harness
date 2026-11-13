@@ -1234,6 +1234,21 @@ export async function apply(opts: ApplyOptions = {}): Promise<ApplyResult> {
     return result;
   }
 
+  // Back the target up BEFORE anything is written this run. When the
+  // target exists and this apply is about to change it, the current bytes
+  // go to `<target>.bak.<timestamp>` (see target-backup.ts); whatever the
+  // lock records, an overwrite that changes an existing target always
+  // leaves a copy. Doing this here, ahead of the harness.generated/
+  // writes, is what makes a backup failure cheap: the apply aborts with
+  // nothing touched, so after fixing the blocker the next apply sees the
+  // same state it saw now - no half-written tree to meet as drift. The
+  // target path, its pending content and the targetChanged decision are
+  // all already known; nothing the backup needs is computed below.
+  let targetBackupPath: string | undefined;
+  if (targetPath && targetContent !== undefined && targetChanged) {
+    targetBackupPath = backupTargetBeforeOverwrite(targetPath, opts.now ?? new Date());
+  }
+
   // Only write generated files if anything in harness.generated/ actually
   // changed. When the user passed --target on an otherwise-clean tree,
   // anyChanged may be false but targetChanged true: we still want to write
@@ -1264,17 +1279,13 @@ export async function apply(opts: ApplyOptions = {}): Promise<ApplyResult> {
   // target-write and lock-write produces a re-applyable state, not a
   // permanently-drifted lock).
   let targetWritten = false;
-  let targetBackupPath: string | undefined;
   if (targetPath && targetContent !== undefined && targetChanged) {
     fs.mkdirSync(path.dirname(targetPath), { recursive: true });
     // A target holding bytes a hand edit (or any earlier state) left behind
-    // is copied to `<target>.bak.<timestamp>` before the overwrite, so a
-    // hand-maintained hook group or a `--force` run never loses the file it
-    // replaces without a copy; a file still matching the sha this machinery
-    // recorded in harness.lock is apply's own write and is overwritten
-    // directly. A backup that cannot be written aborts here, before the
-    // target is touched (see target-backup.ts).
-    targetBackupPath = backupTargetBeforeOverwrite(targetPath, previousLock, opts.now ?? new Date());
+    // was already copied to `<target>.bak.<timestamp>` above, before any
+    // write, so a hand-maintained hook group or a `--force` run never loses
+    // the file it replaces without a copy. A backup that could not be
+    // written aborted the apply before this point (see target-backup.ts).
     atomicWriteFile(targetPath, targetContent);
     targetWritten = true;
   }

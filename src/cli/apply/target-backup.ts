@@ -3,23 +3,23 @@
 // `apply --target` writes an operator-owned file (today `settings.json`).
 // With `--merge` only the keys harness owns are replaced, but a
 // hand-maintained hook group is still lost by the rewrite, and `--force`
-// discards everything the file held. So before overwriting a target that
-// harness itself did not write last, apply copies the current bytes to
+// discards everything the file held. So whenever the target exists and
+// this apply is about to change it, apply copies the current bytes to
 // `<target>.bak.<timestamp>` first, beside the requested path, naming the
 // copy the same way `harness gate disable` names its settings backup
 // (`backupPath`, `src/cli/gate/snapshot.ts`).
 //
-// The skip condition is content-identity, not a flag: `harness.lock`
-// carries a `target` entry holding the sha256 of what the previous apply
-// wrote (the entry the target write keeps in step with the file, see the
-// comment above it in `apply.ts`). When the bytes now on disk hash to that
-// recorded sha, the file is still exactly what apply itself wrote, and the
-// overwrite loses nothing a backup could save. Every other state is
-// backed up (fail safe): a recorded sha that differs (a hand edit), no
-// record at all (a lock without a `target` entry, or no lock), a record
-// whose sha can be read but never matches (a corrupted lock line), a
-// record naming another path. A target that does not exist is created,
-// and with nothing to protect, no backup is written.
+// There is no content-based skip. The `target` sha in `harness.lock` is a
+// drift baseline, not a record of what apply wrote: a plain `harness
+// apply` without `--target` re-hashes the on-disk target into the lock
+// (the carry path in `appendTargetEntry`, `apply.ts`, and the no-changes
+// drift refresh), so after such a run a hand edit matches the record and
+// a "the lock already hashes these bytes" skip would let the next
+// `apply --target --merge` overwrite it without a copy. Every overwrite
+// that changes an existing target therefore leaves a copy, whatever the
+// lock says. A target that does not exist is created, and with nothing to
+// protect, no backup is written; a target that already holds exactly the
+// bytes apply would write is not rewritten at all and needs no backup.
 //
 // The copy is byte-for-byte and never follows a symlink into the backup
 // name: the destination is opened `O_WRONLY | O_CREAT | O_EXCL` (plus
@@ -34,51 +34,30 @@
 // a settings file can hold secrets and its target directory is typically
 // a dotfiles work tree an untracked copy would sit in.
 //
-// A backup that cannot be written aborts the apply before the target is
-// touched: the error names the backup path, and no partial state is
-// left, because this runs strictly before the target write.
+// A backup that cannot be written aborts the apply before anything is
+// written: the error names the backup path, and the caller runs this
+// before `harness.generated/` or the target is touched, so no partial
+// apply state is left. If the destination was created but the copy then
+// fails (a write or fsync error), the partial backup is removed before
+// the error is thrown: like `atomicWriteFile`, a failed write never
+// leaves a file the call created sitting around.
 
-import * as crypto from "node:crypto";
 import * as fs from "node:fs";
-import * as path from "node:path";
 import { ATOMIC_WRITE_TEMP_FLAGS } from "../../io/atomic-write.js";
-import type { LockEntry } from "../../io/harness-lock.js";
 import { backupPath } from "../gate/snapshot.js";
 import { EX_FAIL, HarnessExitError } from "../exit-codes.js";
 import { existingFileMode } from "./install-codex-config.js";
-
-/** Whether `harness.lock` holds a `target` entry for `targetPath` whose
- * recorded sha equals the sha of the bytes on disk now, i.e. the file is
- * still exactly what a previous apply wrote. `resolve` normalizes a
- * recorded spelling (a trailing separator, a `.` segment) before the
- * compare; any other difference in spelling is not this target's record
- * and decides for a backup, which is the fail-safe direction. */
-function harnessWroteTheseBytes(
-  lockEntries: readonly LockEntry[],
-  targetPath: string,
-  currentSha256: string,
-): boolean {
-  return lockEntries.some(
-    (e) => e.kind === "target" && path.resolve(e.path) === targetPath && e.sha256 === currentSha256,
-  );
-}
 
 /**
  * Copy the current target file aside before the apply overwrites it, and
  * return the backup path (`<target>.bak.<ISO>` beside `targetPath`, the
  * gate's `backupPath` format, stamped with the apply's injectable clock).
- * Returns `undefined` when no backup is due: nothing is on disk to
- * protect (absent path or dangling link: the write creates the file), or
- * the bytes on disk still equal what `harness.lock` records for this
- * target (harness wrote them itself). A backup write that fails throws
- * naming the backup path - the caller must run this before touching the
- * target, so a throw leaves the target untouched.
+ * Returns `undefined` only when nothing is on disk to protect (absent
+ * path or dangling link: the write creates the file). A backup write
+ * that fails throws naming the backup path - the caller must run this
+ * before touching anything, so a throw leaves the apply unwritten.
  */
-export function backupTargetBeforeOverwrite(
-  targetPath: string,
-  lockEntries: readonly LockEntry[] | null,
-  now: Date,
-): string | undefined {
+export function backupTargetBeforeOverwrite(targetPath: string, now: Date): string | undefined {
   let current: Buffer;
   try {
     current = fs.readFileSync(targetPath);
@@ -87,14 +66,14 @@ export function backupTargetBeforeOverwrite(
     if (code === "ENOENT" || code === "ENOTDIR") return undefined;
     throw new HarnessExitError(`harness apply: cannot read ${targetPath} to back it up before overwriting it (${(err as Error).message}); the target was not written`, EX_FAIL);
   }
-  const currentSha256 = crypto.createHash("sha256").update(current).digest("hex");
-  if (lockEntries !== null && harnessWroteTheseBytes(lockEntries, targetPath, currentSha256)) {
-    return undefined;
-  }
   const dest = backupPath(targetPath, now);
+  let created = false;
   try {
     const mode = existingFileMode(targetPath);
     const fd = fs.openSync(dest, ATOMIC_WRITE_TEMP_FLAGS, mode);
+    // O_EXCL means openSync just created `dest`; anything written into it
+    // from here on is ours to remove if the copy fails.
+    created = true;
     try {
       fs.writeFileSync(fd, current);
       fs.fsyncSync(fd);
@@ -102,6 +81,13 @@ export function backupTargetBeforeOverwrite(
       fs.closeSync(fd);
     }
   } catch (err) {
+    if (created) {
+      try {
+        fs.unlinkSync(dest);
+      } catch {
+        // Best effort: the abort error below is what the operator sees.
+      }
+    }
     throw new HarnessExitError(`harness apply: cannot write the target backup ${dest} (${(err as Error).message}); ${targetPath} was not written`, EX_FAIL);
   }
   return dest;
