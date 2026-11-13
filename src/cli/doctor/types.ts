@@ -231,6 +231,13 @@ export interface DoctorReport {
    * doctor / harness probes. See task 4ddd78ed.
    */
   npmGlobalBin?: NpmBinReport;
+  /**
+   * Present when a guarded blocking hook (branch-protection) is wired for a
+   * hook runtime: whether `harness` resolves on the PATH doctor sees. An
+   * error means the hook refuses every guarded tool call until the PATH is
+   * fixed. Independent of `npmGlobalBin`, which only knows the npm prefix.
+   */
+  harnessBinary?: HarnessBinaryReport;
   memory: MemoryReport;
   hooks: HookEntryReport[];
   /**
@@ -289,6 +296,14 @@ export interface DoctorReport {
 }
 
 export type { NpmBinReport } from "./npm-bin-path.js";
+
+/** Whether `harness` resolves on the PATH doctor sees; see `DoctorReport.harnessBinary`. */
+export interface HarnessBinaryReport {
+  status: "ok" | "error";
+  /** The resolved path; empty on error. */
+  resolved: string;
+  message: string;
+}
 export type {
   ClaudeMcpRegistrationSection,
   ClaudeMcpEntryReport,

@@ -51,6 +51,7 @@ import {
   KNOWN_DOCTOR_TARGETS,
   type CliEntryReport,
   type DoctorReport,
+  type HarnessBinaryReport,
   type DoctorTarget,
   type HookEntryReport,
   type ManifestSection,
@@ -706,7 +707,9 @@ function countDiagnostics(report: Omit<DoctorReport, "errorCount" | "warningCoun
     warningCount += report.claudeMcp.warnings.length;
   }
   if (report.npmGlobalBin?.status === "warn") warningCount++;
-  else if (report.npmGlobalBin?.status === "error") errorCount++;
+  // An escalated npm-bin finding is detail of the same problem the
+  // `harnessBinary` error counts, so it is not counted a second time.
+  if (report.harnessBinary?.status === "error") errorCount++;
   if (report.memory.routerExecutable && !report.memory.routerExecutable.exists) errorCount++;
   if (!report.memory.routerExecutable) warningCount++;
   if (report.memory.routerVersion?.status === "warn") warningCount++;
@@ -839,20 +842,36 @@ export async function doctor(opts: DoctorOptions = {}): Promise<DoctorReport> {
   const applyRuntime = selectRuntime(undefined, lastApplyRecord, false);
   const policyPacks = buildPolicyPacks(manifest, applyRuntime.runtime);
   // A blocking hook wrapped in the missing-binary guard blocks every guarded
-  // tool call while `harness` is not resolvable, so the PATH finding for the
-  // npm global bin directory is an error, not a warning, in that case.
+  // tool call while `harness` is not resolvable, so a `harness` that does not
+  // resolve on the PATH doctor sees is an error whatever the npm global bin
+  // directory says (an nvm switch can leave that directory on the PATH with
+  // `harness` installed under another prefix), and the npm-bin PATH finding
+  // becomes an error too as extra detail. Doctor checks its own PATH: an
+  // agent started from a different environment is not covered.
   // opencode wires no hooks, so only the hook runtimes count.
   const guardedHookInstalled =
     applyRuntime.runtime !== "opencode" &&
     [...manifest.hooks, ...expandPolicyPacks(manifest, applyRuntime.runtime).hooks].some((h) =>
       isGuardedHarnessCommand(h.command),
     );
+  const harnessPath = findOnPath("harness", opts.pathEnv ?? process.env.PATH ?? "", isExecutable);
+  const harnessBinary: HarnessBinaryReport | undefined = guardedHookInstalled
+    ? harnessPath !== null
+      ? { status: "ok", resolved: harnessPath, message: `resolved: ${harnessPath}` }
+      : {
+          status: "error",
+          resolved: "",
+          message:
+            "`harness` not found on the PATH doctor sees, and the branch-protection hook is installed: " +
+            "edits stay blocked (every Write/Edit is refused) until PATH is fixed. " +
+            "This checks doctor's own PATH; an agent started from a different environment is not covered.",
+        }
+    : undefined;
   const reportedNpmGlobalBin =
     npmGlobalBin !== undefined
       ? escalateForGuardedHook(npmGlobalBin, {
           guardedHookInstalled,
-          harnessResolves:
-            findOnPath("harness", opts.pathEnv ?? process.env.PATH ?? "", isExecutable) !== null,
+          harnessResolves: harnessPath !== null,
         })
       : undefined;
   const groundingServer =
@@ -906,6 +925,7 @@ export async function doctor(opts: DoctorOptions = {}): Promise<DoctorReport> {
     ...(grounding !== undefined ? { grounding } : {}),
     ...(claudeMcp !== undefined ? { claudeMcp } : {}),
     ...(reportedNpmGlobalBin !== undefined ? { npmGlobalBin: reportedNpmGlobalBin } : {}),
+    ...(harnessBinary !== undefined ? { harnessBinary } : {}),
   };
   if (opts.target === "codex") {
     const manifestDir = path.dirname(resolved.base);

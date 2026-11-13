@@ -9,12 +9,16 @@ import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { apply } from "../../src/cli/apply/index.js";
 import { doctor, format } from "../../src/cli/doctor/index.js";
-import { checkClaudeLiveHooks } from "../../src/cli/doctor/hook-liveness.js";
+import { checkClaudeLiveHooks, checkCodexLiveHooks } from "../../src/cli/doctor/hook-liveness.js";
 import {
   escalateForGuardedHook,
   type NpmBinReport,
 } from "../../src/cli/doctor/npm-bin-path.js";
 import { runCodexTargetChecks } from "../../src/cli/doctor/codex.js";
+import { gateDisable } from "../../src/cli/gate/disable.js";
+import { codexGateDisable } from "../../src/cli/gate/codex-disable.js";
+import { generateCodexConfig } from "../../src/cli/apply/generate-codex-config.js";
+import { planCodexConfigInstall, writeCodexConfigInstall } from "../../src/cli/apply/install-codex-config.js";
 import { generateSettings } from "../../src/cli/apply/generate-settings.js";
 import { expandPolicyPacks } from "../../src/policy-packs/index.js";
 import { guardedHarnessCommand } from "../../src/policy-packs/builtin/guarded-harness-command.js";
@@ -93,6 +97,8 @@ describe("doctor: the npm-global-bin PATH finding when branch-protection is inst
     // finding is the only difference between the two reports.
     const unescalated = await runDoctor(WITH_PACK, [dirWithHarness("other-bin")]);
     expect(unescalated.npmGlobalBin?.status).toBe("warn");
+    // One problem, one error: the escalated npm-bin line is detail of the
+    // harness-binary error and is not counted again.
     expect(guarded.errorCount).toBe(unescalated.errorCount + 1);
     expect(guarded.warningCount).toBe(unescalated.warningCount - 1);
   });
@@ -114,11 +120,59 @@ describe("doctor: the npm-global-bin PATH finding when branch-protection is inst
     expect(report.npmGlobalBin?.consequence).toBeUndefined();
   });
 
-  it("is ok when the bin dir is on the PATH", async () => {
+  it("is ok when the bin dir is on the PATH and harness is in it", async () => {
     const prefix = path.join(tmp, "prefix");
-    const report = await runDoctor(WITH_PACK, [path.join(prefix, "bin")], prefix);
+    const bin = dirWithHarness("prefix/bin");
+    const report = await runDoctor(WITH_PACK, [bin], prefix);
     expect(report.npmGlobalBin?.status).toBe("ok");
+    expect(report.harnessBinary).toEqual({ status: "ok", resolved: path.join(bin, "harness"), message: `resolved: ${path.join(bin, "harness")}` });
     expect(format(report)).not.toContain("npm global bin");
+    expect(format(report)).not.toContain("harness binary");
+  });
+
+  // The nvm switch the guard exists for: the active Node's npm bin directory is
+  // on the PATH, so the npm-bin check is ok, while harness was installed under
+  // another prefix and does not resolve.
+  it("is an error when the npm bin dir IS on the PATH but harness does not resolve", async () => {
+    const prefix = path.join(tmp, "prefix");
+    const bin = emptyDir("prefix/bin");
+    const report = await runDoctor(WITH_PACK, [bin], prefix);
+    expect(report.npmGlobalBin?.status).toBe("ok");
+    expect(report.harnessBinary?.status).toBe("error");
+    expect(report.harnessBinary?.message).toContain("edits stay blocked");
+    expect(report.harnessBinary?.message).toContain("doctor's own PATH");
+    const text = format(report);
+    expect(text).toContain("✗ harness binary: `harness` not found on the PATH doctor sees");
+    const resolving = await runDoctor(WITH_PACK, [dirWithHarness("prefix2/bin")], path.join(tmp, "prefix2"));
+    expect(report.errorCount).toBe(resolving.errorCount + 1);
+  });
+
+  it("is an error when npm itself is unavailable (unknown) and harness does not resolve", async () => {
+    const configPath = path.join(tmp, "harness.yaml");
+    fs.writeFileSync(configPath, WITH_PACK);
+    const report = await doctor({
+      configPath,
+      homeOverride: tmp,
+      mcpProbe: new NoMcp(),
+      versionProbe: () => null,
+      pathEnv: emptyDir("elsewhere"),
+      npmBinExec: async () => ({ code: 127, stdout: "", stderr: "npm: not found" }),
+    });
+    expect(report.npmGlobalBin?.status).toBe("unknown");
+    expect(report.harnessBinary?.status).toBe("error");
+  });
+
+  it("is also an error under --shallow, which skips only the npm spawn", async () => {
+    const configPath = path.join(tmp, "harness.yaml");
+    fs.writeFileSync(configPath, WITH_PACK);
+    const report = await doctor({ configPath, homeOverride: tmp, shallow: true, mcpProbe: new NoMcp(), versionProbe: () => null, pathEnv: emptyDir("elsewhere") });
+    expect(report.npmGlobalBin).toBeUndefined();
+    expect(report.harnessBinary?.status).toBe("error");
+  });
+
+  it("reports no harness binary entry when the pack is not installed or is disabled", async () => {
+    expect((await runDoctor(NO_PACK, [emptyDir("elsewhere")])).harnessBinary).toBeUndefined();
+    expect((await runDoctor(PACK_OFF, [emptyDir("elsewhere")])).harnessBinary).toBeUndefined();
   });
 
   it("is an error for a hand-declared guarded blocking hook too", async () => {
@@ -141,6 +195,7 @@ describe("doctor: the npm-global-bin PATH finding when branch-protection is inst
     await apply({ homeDir: tmp, configPath, runtime });
     const report = await runDoctor(WITH_PACK, [emptyDir("elsewhere")]);
     expect(report.npmGlobalBin?.status).toBe(expected);
+    expect(report.harnessBinary?.status).toBe(expected === "error" ? "error" : undefined);
   });
 
   it("an unknown npm result is not escalated (npm itself is missing; nothing to say about the bin dir)", () => {
@@ -192,6 +247,71 @@ describe("doctor: a settings.json that still holds the bare line", () => {
     fs.writeFileSync(settingsPath, JSON.stringify(generateSettings(withPack)));
     const fresh = checkClaudeLiveHooks(manifest, settingsPath);
     expect(fresh.entries.map((e) => `${e.kind}:${e.status}`)).toEqual(["present:ok"]);
+  });
+});
+
+describe("doctor: a gate-disabled bare line after an upgrade", () => {
+  it("is reported as disabled via the gate, not as missing (applying would re-arm a gate the operator turned off)", () => {
+    const configPath = path.join(tmp, "harness.yaml");
+    fs.writeFileSync(configPath, WITH_PACK);
+    const { manifest } = loadManifest({ configPath });
+    const settingsPath = path.join(tmp, "settings.json");
+    fs.writeFileSync(
+      settingsPath,
+      JSON.stringify({
+        hooks: {
+          PreToolUse: [{ matcher: "Write|Edit", hooks: [{ type: "command", command: "harness pack hook branch-protection", timeout: 5 }] }],
+        },
+      }),
+    );
+    gateDisable({ settingsPath, matcher: "Write|Edit" });
+    const r = checkClaudeLiveHooks(manifest, settingsPath);
+    expect(r.entries.map((e) => `${e.kind}:${e.status}`)).toEqual(["disabled:warn"]);
+    expect(r.entries[0]?.message).toContain("harness gate enable");
+    expect(r.entries[0]?.message).not.toContain("harness apply");
+  });
+
+  it("a disabled guarded line (the normal state after an upgrade) is reported as disabled too", () => {
+    const configPath = path.join(tmp, "harness.yaml");
+    fs.writeFileSync(configPath, WITH_PACK);
+    const { manifest } = loadManifest({ configPath });
+    const withPack = { ...manifest, hooks: [...manifest.hooks, ...expandPolicyPacks(manifest, "claude-code").hooks] };
+    const settingsPath = path.join(tmp, "settings.json");
+    fs.writeFileSync(settingsPath, JSON.stringify(generateSettings(withPack)));
+    gateDisable({ settingsPath, matcher: "Write|Edit" });
+    const r = checkClaudeLiveHooks(manifest, settingsPath);
+    expect(r.entries.map((e) => `${e.kind}:${e.status}`)).toEqual(["disabled:warn"]);
+  });
+
+  it("Codex: a gate-disabled unit whose snapshot holds the bare line is reported as disabled, not missing", () => {
+    const configPath = path.join(tmp, "harness.yaml");
+    fs.writeFileSync(configPath, WITH_PACK);
+    const { manifest } = loadManifest({ configPath });
+    const withPack = { ...manifest, hooks: [...manifest.hooks, ...expandPolicyPacks(manifest, "codex").hooks] };
+    const bare = generateCodexConfig(withPack)
+      .content.split(JSON.stringify(guardedHarnessCommand("pack hook branch-protection --runtime codex")))
+      .join(JSON.stringify("harness pack hook branch-protection --runtime codex"));
+    const codexPath = path.join(tmp, ".codex", "config.toml");
+    fs.mkdirSync(path.dirname(codexPath), { recursive: true });
+    writeCodexConfigInstall(planCodexConfigInstall({ configPath: codexPath, generatedPath: path.join(tmp, "g.toml"), generatedContent: bare }));
+    expect(fs.readFileSync(codexPath, "utf8")).toContain("harness pack hook branch-protection --runtime codex");
+    codexGateDisable({ configPath: codexPath, matcher: "apply_patch" });
+    const r = checkCodexLiveHooks(manifest, codexPath);
+    expect(r.entries.map((e) => `${e.kind}:${e.status}`)).toEqual(["disabled:warn"]);
+  });
+
+  it("a not-yet-reapplied bare line that is live (gate not disabled) still reports as differing", () => {
+    const configPath = path.join(tmp, "harness.yaml");
+    fs.writeFileSync(configPath, WITH_PACK);
+    const { manifest } = loadManifest({ configPath });
+    const settingsPath = path.join(tmp, "settings.json");
+    fs.writeFileSync(
+      settingsPath,
+      JSON.stringify({
+        hooks: { PreToolUse: [{ matcher: "Write|Edit", hooks: [{ type: "command", command: "harness pack hook branch-protection", timeout: 5 }] }] },
+      }),
+    );
+    expect(checkClaudeLiveHooks(manifest, settingsPath).entries.map((e) => `${e.kind}:${e.status}`)).toEqual(["differing:error"]);
   });
 });
 
