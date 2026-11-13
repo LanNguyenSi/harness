@@ -85,7 +85,7 @@ operator controls are documented in
 
 - [`agent-grounding`](https://github.com/LanNguyenSi/agent-grounding): evidence-ledger and claim surfaces outside harness; `grounding-mcp` is the MCP server harness can register and point at the ledger path (`EVIDENCE_LEDGER_DB`), and harness itself queries nothing there.
 - [`agent-memory`](https://github.com/LanNguyenSi/agent-memory): the memory surfaces the control plane inventories.
-- [`agent-tasks`](https://github.com/LanNguyenSi/agent-tasks): MCP-registered task platform whose registration and health appear in `harness describe`.
+- [`agent-tasks`](https://github.com/LanNguyenSi/agent-tasks): MCP-registered task platform whose registration and health appear in `harness doctor`.
 - [`agent-preflight`](https://github.com/LanNguyenSi/agent-preflight): a standalone local preflight validator an operator can call directly or from a custom hook.
 - [`codebase-oracle`](https://github.com/LanNguyenSi/codebase-oracle): opt-in MCP for multi-repo RAG search; declare it with `harness add mcp codebase-oracle --command codebase-oracle,mcp`, then register it with Claude Code using the `claude mcp add-json` command `harness doctor` prints.
 - [`agent-dx`](https://github.com/LanNguyenSi/agent-dx): ships `git-batch-cli`, a day-to-day tool whose inventory appears in `harness describe`.
