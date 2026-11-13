@@ -7,6 +7,11 @@ on:
 permissions:
   contents: write
 
+# One release per tag at a time; a running release is never cancelled.
+concurrency:
+  group: release-${{ github.ref_name }}
+  cancel-in-progress: false
+
 jobs:
   ci:
     name: CI
@@ -18,8 +23,9 @@ jobs:
     name: GitHub Release
     needs: ci
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
       - name: Extract version from tag
         id: version
@@ -104,7 +110,7 @@ jobs:
           echo "release_notes.md is ${size} characters (ceiling ${ceiling})."
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v3
+        uses: softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3 # v3.0.4
         with:
           name: v${{ steps.version.outputs.version }}
           body_path: release_notes.md
