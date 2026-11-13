@@ -2,6 +2,10 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+## 2026-11-13
+
+- 2026-11-13T08:07:15Z, `harness apply --target` now copies an existing target to `<target>.bak.<timestamp>` before an apply that changes it (#768); `docs/CLI.md` gained half a sentence on that copy in the `harness apply` row. Re-verified `codex-adapter-parity-gaps.md` against both: its `src/cli/apply/apply.ts` claims (runtime selection and reuse, the `--target` / `--runtime codex` exclusivity and its error, hook emission) are untouched by the backup code, and none of its claims depend on the apply row's backup wording; no claim changed. Re-stamped. Check: `npx okf-kit check docs/okf`.
+
 ## 2026-11-03
 
 - 2026-11-03T16:03:11Z, `gate disable` and `uninstall` now read `hooks` through `parseSettingsHooks` with the shared
