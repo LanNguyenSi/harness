@@ -56,6 +56,7 @@ import {
   type RemoveStatus,
 } from "../../io/claude-mcp.js";
 import { GENERATED_DIRNAME } from "../../io/generated-dir.js";
+import { asPlainHarnessCommand } from "../../policy-packs/builtin/guarded-harness-command.js";
 import { resolveHomeDir as resolveHarnessStateRoot } from "../../runtime/home-dir.js";
 import { parseSettingsHooks, settingsHooksRefusal } from "../gate/snapshot.js";
 import {
@@ -102,8 +103,9 @@ export const DEFAULT_OWNED_MCP_SERVERS = [
 ] as const;
 /**
  * Prefixes a hook command must start with for the group to count as
- * harness-owned. The bundled templates only ever emit `harness ...`
- * plain commands (resolved via PATH); operators who hand-wired hooks
+ * harness-owned. The bundled templates emit `harness ...` plain commands
+ * (resolved via PATH) or, for the blocking branch-protection hook, the
+ * guarded line that runs one (see `asPlainHarnessCommand`); operators who hand-wired hooks
  * with an absolute path to `dist/cli/main.js` or a non-PATH binary
  * will NOT be matched here and must clean those groups themselves.
  */
@@ -404,8 +406,11 @@ function readSettings(settingsPath: string): ParsedSettings | null {
 }
 
 function isHarnessOwnedCommand(command: string): boolean {
-  const trimmed = command.trim();
-  return HARNESS_COMMAND_PREFIXES.some((p) => trimmed.startsWith(p));
+  // The guarded line this release writes for a blocking hook and the bare
+  // `harness ...` line earlier releases wrote are both harness-owned, so an
+  // uninstall after an upgrade (or without one) removes either.
+  const plain = asPlainHarnessCommand(command);
+  return HARNESS_COMMAND_PREFIXES.some((p) => plain.startsWith(p));
 }
 
 /**

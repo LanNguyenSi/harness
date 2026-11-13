@@ -74,11 +74,14 @@ function formatManifestSection(report: DoctorReport): string[] {
 // checks already failed loudly.
 function formatEnvironmentSection(report: DoctorReport): string[] {
   const bin = report.npmGlobalBin;
-  if (!bin || bin.status !== "warn") return [];
+  if (!bin || (bin.status !== "warn" && bin.status !== "error")) return [];
   const out: string[] = ["", "Environment"];
   out.push(
-    `  ⚠ npm global bin (${bin.binDir}) is not on PATH`,
+    `  ${bin.status === "error" ? "✗" : "⚠"} npm global bin (${bin.binDir}) is not on PATH`,
     `      harness install commands wrote binaries here but your shell will not find them.`,
+  );
+  if (bin.consequence !== undefined) out.push(`      ${bin.consequence}`);
+  out.push(
     `      Add to your shell rc (e.g. ~/.bashrc, ~/.zshrc):  ${bin.pathPatchSuggestion}`,
   );
   return out;

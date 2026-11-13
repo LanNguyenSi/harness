@@ -5,6 +5,10 @@ import { GIT_READ_DEADLINE_MS } from "../../src/cli/pack/hook-branch-protection.
 import { hookTimeoutSeconds } from "../../src/cli/apply/generate-settings.js";
 import { resolve as resolveBranchProtection } from "../../src/policy-packs/builtin/branch-protection.js";
 import { KNOWN_RUNTIMES } from "../../src/policy-packs/runtime.js";
+import { MISSING_BINARY_REASON } from "../../src/policy-packs/builtin/guarded-harness-command.js";
+
+// The generated line, spelled out so the test does not move with the builder.
+const GUARD = `command -v harness >/dev/null 2>&1 || { echo "${MISSING_BINARY_REASON}" >&2; exit 2; }; exec harness`;
 
 function buildManifest(packs: unknown[]): ReturnType<typeof parseManifest> {
   return parseManifest({ version: 1, policy_packs: packs });
@@ -43,7 +47,7 @@ describe("branch-protection pack expansion", () => {
     const blocker = r.hooks.find((h) => h.event === "PreToolUse");
     expect(blocker?.blocking).toBe("hard");
     expect(blocker?.match).toBe("Write|Edit");
-    expect(blocker?.command).toBe("harness pack hook branch-protection");
+    expect(blocker?.command).toBe(`/bin/sh -c '${GUARD} pack hook branch-protection'`);
   });
 
   it("switches the PreToolUse match to apply_patch on codex, with the Codex block contract", () => {
@@ -52,7 +56,7 @@ describe("branch-protection pack expansion", () => {
     const blocker = r.hooks.find((h) => h.event === "PreToolUse");
     expect(blocker?.match).toBe("apply_patch");
     expect(blocker?.blocking).toBe("hard");
-    expect(blocker?.command).toBe("harness pack hook branch-protection --runtime codex");
+    expect(blocker?.command).toBe(`/bin/sh -c '${GUARD} pack hook branch-protection --runtime codex'`);
     expect(r.files[0]?.content).toContain("Codex contract: a refusal exits 2 with the reason on stderr.");
   });
 

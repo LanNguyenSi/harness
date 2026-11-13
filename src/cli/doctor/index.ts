@@ -21,6 +21,8 @@ import {
   GROUNDING_MCP_SERVER_NAME,
 } from "../apply/generate-settings.js";
 import { parsePackSource } from "../../policy-packs/source.js";
+import { expandPolicyPacks } from "../../policy-packs/expand.js";
+import { isGuardedHarnessCommand } from "../../policy-packs/builtin/guarded-harness-command.js";
 import { resolveBuiltin } from "../../policy-packs/registry.js";
 import { checkPolicyPackConfigs } from "../../policy-packs/config-check.js";
 import { checkPolicyPackVersions } from "../../policy-packs/version-check.js";
@@ -40,7 +42,7 @@ import {
   runOpencodeTargetChecks,
   type RunOpencodeCheckOptions,
 } from "./opencode.js";
-import { checkNpmBinPath, type NpmExec } from "./npm-bin-path.js";
+import { checkNpmBinPath, escalateForGuardedHook, type NpmExec } from "./npm-bin-path.js";
 import { buildClaudeMcpRegistration } from "./claude-mcp.js";
 import { buildHookLiveness, countHookLiveness, livenessRuntimes } from "./hook-liveness.js";
 import type { ClaudeMcpExec } from "../../io/claude-mcp.js";
@@ -704,6 +706,7 @@ function countDiagnostics(report: Omit<DoctorReport, "errorCount" | "warningCoun
     warningCount += report.claudeMcp.warnings.length;
   }
   if (report.npmGlobalBin?.status === "warn") warningCount++;
+  else if (report.npmGlobalBin?.status === "error") errorCount++;
   if (report.memory.routerExecutable && !report.memory.routerExecutable.exists) errorCount++;
   if (!report.memory.routerExecutable) warningCount++;
   if (report.memory.routerVersion?.status === "warn") warningCount++;
@@ -835,6 +838,23 @@ export async function doctor(opts: DoctorOptions = {}): Promise<DoctorReport> {
   }
   const applyRuntime = selectRuntime(undefined, lastApplyRecord, false);
   const policyPacks = buildPolicyPacks(manifest, applyRuntime.runtime);
+  // A blocking hook wrapped in the missing-binary guard blocks every guarded
+  // tool call while `harness` is not resolvable, so the PATH finding for the
+  // npm global bin directory is an error, not a warning, in that case.
+  // opencode wires no hooks, so only the hook runtimes count.
+  const guardedHookInstalled =
+    applyRuntime.runtime !== "opencode" &&
+    [...manifest.hooks, ...expandPolicyPacks(manifest, applyRuntime.runtime).hooks].some((h) =>
+      isGuardedHarnessCommand(h.command),
+    );
+  const reportedNpmGlobalBin =
+    npmGlobalBin !== undefined
+      ? escalateForGuardedHook(npmGlobalBin, {
+          guardedHookInstalled,
+          harnessResolves:
+            findOnPath("harness", opts.pathEnv ?? process.env.PATH ?? "", isExecutable) !== null,
+        })
+      : undefined;
   const groundingServer =
     manifest.tools.mcp.find(
       (m) => m.name === GROUNDING_MCP_SERVER_NAME && m.enabled !== false,
@@ -885,7 +905,7 @@ export async function doctor(opts: DoctorOptions = {}): Promise<DoctorReport> {
     packExpansionRuntime: packExpansionRuntimeReport(applyRuntime, lastApplyWarning),
     ...(grounding !== undefined ? { grounding } : {}),
     ...(claudeMcp !== undefined ? { claudeMcp } : {}),
-    ...(npmGlobalBin !== undefined ? { npmGlobalBin } : {}),
+    ...(reportedNpmGlobalBin !== undefined ? { npmGlobalBin: reportedNpmGlobalBin } : {}),
   };
   if (opts.target === "codex") {
     const manifestDir = path.dirname(resolved.base);

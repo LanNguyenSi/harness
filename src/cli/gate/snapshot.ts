@@ -21,6 +21,7 @@
 import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { unwrapGuardedHarnessCommand } from "../../policy-packs/builtin/guarded-harness-command.js";
 import { kernelEntry, walkLinkChain } from "./link-chain.js";
 import { shellQuote } from "../shell-quote.js";
 
@@ -549,13 +550,13 @@ export function missingLabel(entry: RemovedGroup): string {
 
 /**
  * JSON with the keys of every object sorted, so two groups compare equal
- * whatever order an editor or an apply wrote their keys in.
+ * whatever order an editor or an apply wrote their keys in; a hook `command` compares as the plain harness invocation it runs, so a bare line and its guarded line (`unwrapGuardedHarnessCommand`) are equal.
  */
 function canonicalJson(value: unknown): string {
-  return JSON.stringify(value, (_key, v: unknown) =>
+  return JSON.stringify(value, (key, v: unknown) =>
     v !== null && typeof v === "object" && !Array.isArray(v)
       ? Object.fromEntries(Object.entries(v as Record<string, unknown>).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)))
-      : v,
+      : key === "command" && typeof v === "string" ? (unwrapGuardedHarnessCommand(v) ?? v) : v,
   );
 }
 

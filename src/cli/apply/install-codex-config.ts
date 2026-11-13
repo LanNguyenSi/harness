@@ -3,6 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { parse as parseTomlDocument, TomlError } from "smol-toml";
 import { atomicWriteFile } from "../../io/atomic-write.js";
+import { asPlainHarnessCommand } from "../../policy-packs/builtin/guarded-harness-command.js";
 import { EX_FAIL, HarnessExitError } from "../exit-codes.js";
 // Import cycle: codex-snapshot.ts imports this module too. It is safe because
 // neither module touches the other's bindings at top level; they are used only
@@ -2105,7 +2106,7 @@ function assertKeptHookTablesAreOperatorOwned(
       );
     }
     const harnessShaped = commands.some(
-      (command) => freshCommands.has(command) || command.startsWith("harness "),
+      (command) => freshCommands.has(command) || asPlainHarnessCommand(command).startsWith("harness "),
     );
     if (!harnessShaped) continue;
     // harness writes every hook table as `[[hooks.<Event>]]`; a table spelled

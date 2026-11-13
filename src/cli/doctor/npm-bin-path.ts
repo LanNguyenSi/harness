@@ -13,6 +13,10 @@
 //   ok       bin dir resolves AND is in PATH
 //   warn     bin dir resolves AND is NOT in PATH (the actionable case)
 //   unknown  npm not on PATH, prefix command errored, or empty stdout
+// `error` is never returned here: doctor raises a `warn` to `error` through
+// `escalateForGuardedHook` when a guarded blocking hook is installed and the
+// `harness` binary does not resolve on the PATH either, because that hook
+// then blocks every guarded tool call until the PATH is fixed.
 //
 // The unknown branch is deliberately silent in the doctor output: if
 // npm itself is missing, every other dep check has already failed
@@ -24,13 +28,15 @@ import * as path from "node:path";
 import { assertNoRealSpawnInTests } from "../../runtime/hermetic-spawn-guard.js";
 
 export interface NpmBinReport {
-  status: "ok" | "warn" | "unknown";
+  status: "ok" | "warn" | "error" | "unknown";
   /** The resolved global bin dir (e.g. /home/lan/.nvm/.../v22.22.0/bin). Empty on unknown. */
   binDir: string;
   /** The PATH-patch line suggested when status === "warn". Empty otherwise. */
   pathPatchSuggestion: string;
-  /** Why we could not resolve, when status === "unknown". Empty on ok/warn. */
+  /** Why we could not resolve, when status === "unknown". Empty on ok/warn/error. */
   reason: string;
+  /** Present when status === "error": what the operator is facing and the way out. */
+  consequence?: string;
 }
 
 export interface NpmExec {
@@ -146,5 +152,35 @@ export async function checkNpmBinPath(opts: CheckNpmBinPathOptions = {}): Promis
     binDir,
     pathPatchSuggestion: `export PATH="${binDir}:$PATH"`,
     reason: "",
+  };
+}
+
+export interface GuardedHookEscalation {
+  /** A blocking hook wrapped in the missing-binary guard is wired (branch-protection enabled). */
+  guardedHookInstalled: boolean;
+  /** `harness` resolves to an executable on the PATH doctor was given. */
+  harnessResolves: boolean;
+}
+
+/**
+ * Raise the PATH `warn` to an `error` when it means a blocked agent. A
+ * guarded blocking hook (`guarded-harness-command.ts`) exits 2 when
+ * `harness` cannot be found, so with the npm global bin directory off the PATH
+ * and `harness` not resolvable some other way, every guarded tool call is
+ * refused until the PATH is fixed. Without such a hook the same finding stays
+ * a `warn`, and so does it when `harness` resolves through another directory.
+ * Any other status passes through unchanged.
+ */
+export function escalateForGuardedHook(
+  report: NpmBinReport,
+  ctx: GuardedHookEscalation,
+): NpmBinReport {
+  if (report.status !== "warn" || !ctx.guardedHookInstalled || ctx.harnessResolves) return report;
+  return {
+    ...report,
+    status: "error",
+    consequence:
+      "`harness` cannot be found on PATH and the branch-protection hook is installed: " +
+      "edits stay blocked (every Write/Edit is refused) until PATH is fixed.",
   };
 }
