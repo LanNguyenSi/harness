@@ -22,24 +22,82 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  resolve:
+    name: Resolve release commit
+    # Resolve the tag to a commit ONCE. CI and the publish job both use this
+    # SHA, not the tag name, so a tag moved while the run is in flight cannot
+    # make the publish ship a commit the CI never tested.
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      sha: ${{ steps.resolve.outputs.sha }}
+      tag: ${{ steps.resolve.outputs.tag }}
+    steps:
+      - name: Check out the default ref to fetch the tag from
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+
+      - name: Resolve tag to commit
+        id: resolve
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_TAG: ${{ inputs.tag }}
+          REF_NAME: ${{ github.ref_name }}
+          EVENT_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          if [ "${EVENT_NAME}" = "workflow_dispatch" ]; then
+            tag="${INPUT_TAG}"
+            case "${tag}" in
+              v[0-9]*) ;;
+              *) echo "::error::tag input must look like v1.2.3, got '${tag}'" >&2; exit 1 ;;
+            esac
+            if ! git check-ref-format "refs/tags/${tag}"; then
+              echo "::error::'${tag}' is not a valid tag name" >&2
+              exit 1
+            fi
+            # --force: the tag is read from the remote as it is now. ^{commit}
+            # dereferences an annotated tag to the commit it points at.
+            git fetch --force --no-tags origin "refs/tags/${tag}:refs/tags/${tag}"
+            sha=$(git rev-parse --verify "refs/tags/${tag}^{commit}")
+          else
+            tag="${REF_NAME}"
+            sha="${EVENT_SHA}"
+          fi
+          echo "Release ${tag} resolves to ${sha}"
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+          echo "sha=${sha}" >> "$GITHUB_OUTPUT"
+
   ci:
     name: CI
-    # The same full gates release.yml runs on a tag push. For a manual run the
-    # CI checks out the tag passed as `tag`, the commit the publish job builds.
+    needs: resolve
+    # The same full gates release.yml runs on a tag push, against the commit
+    # the resolve job pinned. A manual run uses this workflow file (and so the
+    # CI definition) from the branch it is dispatched from.
     uses: ./.github/workflows/ci.yml
     with:
-      ref: ${{ inputs.tag || github.ref }}
+      ref: ${{ needs.resolve.outputs.sha }}
     permissions:
       contents: read
 
   publish:
-    needs: ci
+    needs: [resolve, ci]
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
-          ref: ${{ inputs.tag || github.ref }}
+          ref: ${{ needs.resolve.outputs.sha }}
+
+      - name: Verify checkout is the resolved commit
+        env:
+          EXPECTED_SHA: ${{ needs.resolve.outputs.sha }}
+        run: |
+          actual=$(git rev-parse HEAD)
+          if [ "${actual}" != "${EXPECTED_SHA}" ]; then
+            echo "::error::checked out ${actual}, expected the resolved commit ${EXPECTED_SHA}" >&2
+            exit 1
+          fi
 
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
@@ -50,7 +108,7 @@ jobs:
       - name: Resolve release tag
         id: tag
         env:
-          RESOLVED_TAG: ${{ inputs.tag || github.ref_name }}
+          RESOLVED_TAG: ${{ needs.resolve.outputs.tag }}
         run: echo "name=${RESOLVED_TAG}" >> "$GITHUB_OUTPUT"
 
       - name: Install dependencies

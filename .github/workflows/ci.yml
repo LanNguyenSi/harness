@@ -19,7 +19,7 @@ jobs:
     timeout-minutes: 20
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           ref: ${{ inputs.ref }}
           # Full history + tags: check:changelog-coverage compares
@@ -27,7 +27,7 @@ jobs:
           # section, so it needs the tag and the commits since it.
           fetch-depth: 0
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           # 22 = active LTS, matching publish-npm.yml; node 20 went EOL
           # 2026-04 and dependency-cruiser 18 (check:boundaries) requires
