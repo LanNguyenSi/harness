@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- Release workflows: `publish-npm.yml` now runs the full reusable CI (`ci.yml`, which takes an optional `ref` input) before it publishes, so a tag push no longer reaches npm without the CI gates. A new first job resolves the tag to a commit once (annotated tags dereferenced) and both the CI and the publish checkout use that SHA, and the publish job fails if its checkout is not that commit, so a tag moved mid-run cannot publish an untested commit; `tests/scripts/release-workflows-structure.test.ts` pins this structure. Both `publish-npm.yml` and `release.yml` get a per-tag `concurrency` group that never cancels a running job and `timeout-minutes` on every job (`ci.yml` too); the `dist.attestations` read retries up to 5 times with 5/10/20/40 s backoff before it reports a missing attestation; and the checkout, setup-node and action-gh-release actions in these workflows and `ci.yml` are pinned to full commit SHAs with the version as a trailing comment.
+
 - Dependency updates (#765): patch and minor bumps of `@inquirer/prompts`, `@types/node`, `@vitest/coverage-v8`, `dependency-cruiser`, `jscpd`, `smol-toml`, `tsx`, `typescript`, `vitest` and `yaml`. jscpd 5.4.2 reports 31 clones on unchanged source where 5.0.11 reported 26 (the extra pairs all sit inside the tolerated validate/lock/diff/write cluster), so the duplication pin in `scripts/check-duplication.mjs` moves from 27 to 31.
 
 - Dependency updates: `renovate.json` extends the shared `github>LanNguyenSi/renovate-config` preset (weekly grouped patch/minor pull requests, 7-day minimum release age, no automerge, majors only through the Dependency Dashboard).
