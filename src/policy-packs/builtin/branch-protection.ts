@@ -24,6 +24,7 @@ import { PolicyUxSchema } from "../../schema/policy-ux.js";
 import type { Hook, PolicyPack, PolicyUx } from "../../schema/index.js";
 import { DEFAULT_RUNTIME, type Runtime } from "../runtime.js";
 import type { PackContribution, PackContributionFile } from "../types.js";
+import { guardedHarnessCommand } from "./guarded-harness-command.js";
 import {
   DEFAULT_PROTECTED_BRANCHES,
   PACK_NAME,
@@ -70,11 +71,16 @@ const HOOK_NAME_PREFIX = `policy-pack:${PACK_NAME}`;
 const PRE_TOOL_USE_MATCH_CLAUDE = "Write|Edit";
 const PRE_TOOL_USE_MATCH_CODEX = "apply_patch";
 
-const BLOCKER_COMMAND = "harness pack hook branch-protection";
+// The hook line is guarded (guarded-harness-command.ts): without it a
+// `harness` that is not on the agent's PATH exits 127, which both runtimes
+// read as a non-blocking hook error, so every Write/Edit would go through.
+// The guard turns that into a block (exit 2) with a reason on stderr.
+const BLOCKER_SUBCOMMAND = "pack hook branch-protection";
+const BLOCKER_COMMAND = guardedHarnessCommand(BLOCKER_SUBCOMMAND);
 // Codex reads a PreToolUse block as exit 2 with the reason on stderr, not as
 // the JSON envelope Claude Code reads, so the Codex command names its runtime
 // and the hook answers in that runtime's contract.
-const BLOCKER_COMMAND_CODEX = `${BLOCKER_COMMAND} --runtime codex`;
+const BLOCKER_COMMAND_CODEX = guardedHarnessCommand(`${BLOCKER_SUBCOMMAND} --runtime codex`);
 
 function buildHooks(runtime: Runtime): Hook[] {
   const isCodex = runtime === "codex";
@@ -140,8 +146,11 @@ compared case-insensitively.
 
 ${wiringSentence}
 
-\`PreToolUse\` blocker (\`${isCodex ? BLOCKER_COMMAND_CODEX : BLOCKER_COMMAND}\`, blocking: hard) on
-\`${blockerMatch}\`. For each directory the tool call writes into (the
+\`PreToolUse\` blocker (\`harness ${isCodex ? `${BLOCKER_SUBCOMMAND} --runtime codex` : BLOCKER_SUBCOMMAND}\`, blocking: hard) on
+\`${blockerMatch}\`. The hook line is wrapped in a guard: when \`harness\` cannot be found on the
+PATH the agent process sees, the line exits 2 with a reason on stderr and the call is refused
+(a bare missing command would exit 127, which the runtimes read as a non-blocking error and run
+the tool). For each directory the tool call writes into (the
 nearest existing directory of the target path, the paths named by an
 \`apply_patch\` body, or the session cwd for other tools) it asks git:
 \`git -C <dir> symbolic-ref -q HEAD\`, with every \`GIT_*\` variable removed

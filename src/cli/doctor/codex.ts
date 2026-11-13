@@ -15,6 +15,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { expandPolicyPacks } from "../../policy-packs/index.js";
+import { asPlainHarnessCommand } from "../../policy-packs/builtin/guarded-harness-command.js";
 import type { Hook, Manifest } from "../../schema/index.js";
 import { invokesRemovedCommand, removedCommandMessage } from "../../schema/removed-keys.js";
 import { countStatusDiagnostics, type DoctorCheckStatus } from "./target-checks.js";
@@ -241,11 +242,13 @@ export function checkHookCommands(
     // Bare `harness <subcommand>` form: any operator-authored hook that
     // calls into the harness binary lands here, not just pack-contributed
     // ones. The harness-binary check above is the upstream gate.
-    if (h.command.startsWith(HARNESS_COMMAND_PREFIX)) {
+    // The guarded line of a blocking hook is a harness subcommand too.
+    const plainCommand = asPlainHarnessCommand(h.command);
+    if (plainCommand.startsWith(HARNESS_COMMAND_PREFIX)) {
       out.push({
         name: `hook ${h.name}`,
         status: "ok",
-        message: `subcommand of harness: ${h.command}`,
+        message: `subcommand of harness: ${plainCommand}`,
       });
       continue;
     }

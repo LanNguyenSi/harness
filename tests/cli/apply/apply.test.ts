@@ -20,6 +20,7 @@ import {
 import { parseManifest } from "../../../src/schema/index.js";
 import { generateSettings } from "../../../src/cli/apply/generate-settings.js";
 import { parse as parseYaml } from "yaml";
+import { guardedHarnessCommand } from "../../../src/policy-packs/builtin/guarded-harness-command.js";
 import {
   LAST_APPLY_BASENAME,
   readLastApply,
@@ -1500,7 +1501,7 @@ describe("apply — policy_packs expansion (Phase 6 #2)", () => {
     );
     expect(preToolUseGroup).toBeDefined();
     expect(preToolUseGroup?.hooks.map((h) => h.command)).toContain(
-      "harness pack hook branch-protection",
+      guardedHarnessCommand("pack hook branch-protection"),
     );
   });
 
@@ -1530,7 +1531,7 @@ describe("apply — policy_packs expansion (Phase 6 #2)", () => {
         hooks: Record<string, Array<{ matcher?: string; hooks: Array<{ command: string }> }>>;
       };
       const commands = Object.values(settings.hooks).flatMap((groups) => groups.flatMap((g) => g.hooks.map((h) => h.command)));
-      expect(commands).toContain("harness pack hook branch-protection");
+      expect(commands).toContain(guardedHarnessCommand("pack hook branch-protection"));
       // Nothing was written under the tmpHome-anchored generated dir.
       expect(fs.existsSync(path.join(tmpHome, GENERATED_DIRNAME, SETTINGS_BASENAME))).toBe(false);
     } finally {

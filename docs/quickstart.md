@@ -67,7 +67,10 @@ harness apply --target ~/.claude/settings.json --merge
 
 This writes the pack's hooks into `settings.json`, among them a
 `PreToolUse` hook on `Write|Edit` that runs
-`harness pack hook branch-protection`. `--merge` replaces the `hooks`
+`harness pack hook branch-protection` behind a guard that blocks the
+call when `harness` is not on the agent's PATH or cannot run (see
+[`policy-packs/branch-protection.md`](policy-packs/branch-protection.md#missing-or-broken-harness-binary-path-drift)).
+`--merge` replaces the `hooks`
 key and preserves everything else in your `settings.json` (it only
 drops `mcpServers` entries an earlier harness release wrote there). Restart Claude Code so it reloads the
 file.

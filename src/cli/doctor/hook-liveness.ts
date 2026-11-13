@@ -35,6 +35,7 @@
  */
 import * as fs from "node:fs";
 import { parse as parseToml } from "smol-toml";
+import { asPlainHarnessCommand } from "../../policy-packs/builtin/guarded-harness-command.js";
 import { expandPolicyPacks } from "../../policy-packs/index.js";
 import type { Runtime } from "../../policy-packs/runtime.js";
 import type { Manifest } from "../../schema/index.js";
@@ -119,6 +120,12 @@ export interface LiveHookCheckOptions {
 }
 
 const keyId = (k: HookKey): string => JSON.stringify([k.event, k.matcher, k.command]);
+/**
+ * `keyId` with the command in its plain `harness ...` form, for matching a hook
+ * against the gate snapshot's removed groups: a snapshot taken while the group
+ * held the bare line still names the guarded line an upgrade generates.
+ */
+const plainKeyId = (k: HookKey): string => keyId({ ...k, command: asPlainHarnessCommand(k.command) });
 const slotId = (k: Pick<HookKey, "event" | "matcher">): string => JSON.stringify([k.event, k.matcher]);
 
 export function describeHook(k: HookKey): string {
@@ -302,7 +309,7 @@ export function checkClaudeLiveHooks(
       ),
     );
   }
-  const removedIds = new Set(removed.map(keyId));
+  const removedIds = new Set(removed.map(plainKeyId));
   // The gate does not read CLAUDE_CONFIG_DIR: any other file than its default needs --settings.
   const enable = `harness gate enable${settingsPath === opts.gateDefaultPath ? "" : ` ${settingsFlag(settingsPath)}`}`;
   // A disabled hook comes back with `gate enable` alone, or with `gate enable
@@ -315,10 +322,10 @@ export function checkClaudeLiveHooks(
     ...compare(
       expected,
       live,
-      (k) => removedIds.has(keyId(k)),
+      (k) => removedIds.has(plainKeyId(k)),
       (k) => {
         const head = `disabled via \`harness gate disable\`: ${describeHook(k)}; `;
-        const force = forceOf.get(keyId(k));
+        const force = forceOf.get(plainKeyId(k));
         if (force === undefined) return `${head}run \`${enable}\` to put it back`;
         // An edit since the disable is a fact about the file, true for every
         // hook; a changed group is a fact about the refusing snapshot's own
@@ -383,8 +390,8 @@ function claudeEnableForce(
     for (const named of [snapshot, ...live.map((s) => s.snapshot).filter((s) => s !== snapshot)]) {
       for (const r of named.removed) {
         for (const k of flattenHookTable({ [r.event]: [r.group] })) {
-          if (!out.has(keyId(k))) {
-            out.set(keyId(k), {
+          if (!out.has(plainKeyId(k))) {
+            out.set(plainKeyId(k), {
               reason,
               settingsBackupPath: snapshot.settingsBackupPath,
               removedByRefusing: named === snapshot,
@@ -449,7 +456,7 @@ export function checkCodexLiveHooks(
   if (ownSnapshots.length > 0) {
     disabledUnits.push(...restorableCodexUnits(read.text, configPath, ownSnapshots));
   }
-  const recordsOf = (k: HookKey): RestorableCodexUnit[] => disabledUnits.filter((d) => keyId(d.key) === keyId(k));
+  const recordsOf = (k: HookKey): RestorableCodexUnit[] => disabledUnits.filter((d) => plainKeyId(d.key) === plainKeyId(k));
   const enable = `harness gate enable --runtime codex${codexConfigFlag(namedPath)}`;
   const disabledMessage = (k: HookKey): string => {
     const head = `disabled via \`harness gate disable --runtime codex\`: ${describeHook(k)}; `;

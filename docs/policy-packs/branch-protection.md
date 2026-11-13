@@ -25,7 +25,7 @@ harness apply
 The pack contributes one hook: a **PreToolUse blocker**
 (`harness pack hook branch-protection`, `blocking: hard`, budget 5000 ms)
 on `Write|Edit` (claude-code) or `apply_patch` (codex, as
-`harness pack hook branch-protection --runtime codex`).
+`harness pack hook branch-protection --runtime codex`). The command written into the runtime config is a guarded line, not the bare command; see "Missing or broken `harness` binary" near the end of this page.
 
 On every call the blocker asks git for the branch (task `a4d8adc5`); it
 never reads git's files itself, and it keeps no ledger tag, session
@@ -274,6 +274,77 @@ producer.
 - A bare repository's own directory: it has no `.git` entry, so the
   presence walk counts it as outside every repository.
 
+## Missing or broken `harness` binary (PATH drift)
+
+The hook is started by the agent process, which resolves `harness`
+through its own PATH. When it cannot (the usual way: you switched Node
+with nvm, so the npm global bin directory that holds `harness` is no
+longer on the PATH the agent was started with), a bare hook command
+would fail with exit 127. A `harness` that is found but cannot start
+fails the same way: `#!/usr/bin/env node` with node off the PATH exits
+127, a bad interpreter or a module load error exits 1. Both Claude Code
+and Codex read only exit 2 on a `PreToolUse` hook as a block; any other
+non-zero exit is a non-blocking error and the tool call runs, which would
+leave every protected branch unguarded without a sign. So the generated
+hook line checks first, runs the hook, and answers the way a block does
+for everything that is not the hook's own answer:
+
+```sh
+/bin/sh -c 'command -v harness >/dev/null 2>&1 || { echo "harness not found on PATH: ..." >&2; exit 2; }; harness pack hook branch-protection; rc=$?; [ "$rc" -eq 0 ] || [ "$rc" -eq 2 ] || { echo "harness hook could not run (exit $rc), ..." >&2; exit 2; }; exit "$rc"'
+```
+
+- `harness` missing: exit 2, `harness not found on PATH: ...` on stderr.
+- The hook exits 0 (allow, or Claude Code's JSON deny envelope on stdout)
+  or 2 (its own block): passed through, with stdin and stdout untouched.
+- Any other exit (a crash, a signal, 127, 1): exit 2, `harness hook could
+  not run (exit N), ...` on stderr.
+
+The hook is a child of the shell, not `exec`ed, so a runtime that kills
+the hook at its timeout kills the shell and orphans the hook process. The
+orphan keeps the inherited pipes and runs to completion within its own
+bounds (about 3 s), so its stdout can still arrive after the shell was
+killed; only a block can be late, because the hook writes nothing to
+stdout when it allows. A timeout kill reads as an allow either way, which
+is why the hook bounds itself below its 5000 ms budget. The wrapper is `/bin/sh -c '...'` because Codex
+starts a hook with the user's `$SHELL`, which is not always POSIX; the
+quoted word is parsed the same way by every shell and the guard itself
+always runs under `sh`.
+
+While `harness` is missing or broken, every `Write`/`Edit` (or
+`apply_patch` on Codex) is refused, and the reason shown to the agent
+tells it to ask the operator and not to edit hook settings. Recovery is
+the operator's, and does not need a working `harness`: put `harness` back
+on the PATH of the process that starts the agent and restart the agent
+(`nvm use <the version harness was installed under>`, or add the npm
+global bin directory, `export PATH="$(npm prefix -g)/bin:$PATH"`, to your
+shell rc), or fix its Node. If that cannot be done now, from an editor or
+a shell that is not the guarded agent, remove the branch-protection group
+(event `PreToolUse`, matcher `Write|Edit`) from the settings file harness
+wrote (default `~/.claude/settings.json`; `CLAUDE_CONFIG_DIR`, a
+`harness apply --target` path or `--codex-config` move it) by hand, and
+for Codex the `apply_patch` hook table of the harness block in
+`~/.codex/config.toml`. That leaves the branch unguarded: once `harness`
+runs again, restore protection with `harness apply --target <that file>
+--merge` (Claude Code) or `harness apply --runtime codex --install`
+(Codex). `harness gate disable` is the supported switch once `harness`
+runs.
+
+`harness doctor` reports this state as an error when the pack is
+installed and `harness` does not resolve on the PATH doctor sees (a
+`harness binary` entry, whatever the npm prefix says, because an nvm
+switch can leave the active Node's npm bin directory on the PATH while
+`harness` lives under another prefix). Doctor checks its own PATH: an
+agent started from a different environment is not covered, and a
+`harness` that resolves but crashes is not found by it.
+
+An upgrade from a release that wrote the bare line needs `harness apply`
+again (`--target ... --merge` for Claude Code, `--runtime codex
+--install` for Codex): the apply replaces the old entry, it does not add
+a second one. Until then `harness doctor` shows the old line as a hook
+that differs from the generated one (or as disabled, when
+`harness gate disable` took it out), and `harness uninstall` and
+`harness gate enable` accept either spelling.
+
 ## Test fixtures
 
 - `tests/cli/pack-hook-branch-protection.test.ts`, the blocker against real git, the injected git runner and the per-runtime contract
@@ -283,3 +354,6 @@ producer.
 - `tests/cli/manifest-posture.test.ts`, removed manifest keys warn and are ignored
 - `tests/policy-packs/branch-protection-runtime.test.ts`, helpers
 - `tests/policy-packs/branch-protection-expand.test.ts`, pack expansion
+- `tests/policy-packs/guarded-harness-command.test.ts`, the guarded hook line run under `sh -c` with and without `harness` on the PATH
+- `tests/cli/guarded-hook-upgrade.test.ts`, upgrade, uninstall and gate enable over the bare and the guarded line
+- `tests/cli/doctor-guarded-hook-path.test.ts`, the doctor PATH finding as an error
