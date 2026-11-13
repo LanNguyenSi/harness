@@ -33,7 +33,11 @@ where `settings.json` itself lives:
   those names yourself; the dry-run lists them first.
 
 Any `settings.json.pre-harness-<TS>` copies you made yourself before
-installing (harness never writes one) are listed but never deleted. Your own hook groups and your own
+installing (harness never writes that name) are listed but never deleted.
+`harness apply --target` writes its own backups,
+`settings.json.bak.<TS>`, beside a target before overwriting a file it
+did not write itself (see `docs/for-humans.md`); `harness uninstall`
+lists only the `pre-harness` copies, never those. Your own hook groups and your own
 memory notes are left alone. See
 [`migration/v0.24.0-home-dir.md`](migration/v0.24.0-home-dir.md) for the
 state-root move that split these two locations.

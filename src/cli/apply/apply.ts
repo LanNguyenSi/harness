@@ -79,6 +79,7 @@ import {
   type CodexConfigInstallPlan,
   type CodexConfigInstallResult,
 } from "./install-codex-config.js";
+import { backupTargetBeforeOverwrite } from "./target-backup.js";
 
 export { GENERATED_DIRNAME };
 export const SETTINGS_BASENAME = "settings.json";
@@ -163,7 +164,7 @@ export interface ApplyOptions {
   installCodex?: boolean;
   /** Override the active Codex config path for --runtime codex --install. */
   codexConfigPath?: string;
-  /** Test-injectable clock for timestamped Codex config backups. */
+  /** Test-injectable clock for the timestamped Codex config and target backups. */
   now?: Date;
   /** Test-injectable confirmation prompt; defaults to a stdin readline. */
   prompt?: (message: string) => Promise<string>;
@@ -257,6 +258,16 @@ export interface ApplyResult {
    * Present when --merge succeeded against an existing target.
    */
   targetMergeSummary?: string;
+  /**
+   * Set when the target write happened over a file apply did not write
+   * itself: the path of the `<target>.bak.<timestamp>` copy taken before
+   * the overwrite (the gate's `backupPath` naming, `src/cli/gate/snapshot.ts`).
+   * Absent when no target was written, when the target was created (there
+   * was nothing to protect), when the target already held the bytes of the
+   * previous apply (the `target` sha recorded in `harness.lock` still
+   * matches), and on every refusal or dry-run path (nothing was written).
+   */
+  targetBackupPath?: string;
   /** Present when --runtime codex --install was requested. */
   codexConfigInstall?: CodexConfigInstallOutcome;
   /** Adapter runtime this apply generated (or would generate) for. */
@@ -1253,8 +1264,17 @@ export async function apply(opts: ApplyOptions = {}): Promise<ApplyResult> {
   // target-write and lock-write produces a re-applyable state, not a
   // permanently-drifted lock).
   let targetWritten = false;
+  let targetBackupPath: string | undefined;
   if (targetPath && targetContent !== undefined && targetChanged) {
     fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+    // A target holding bytes a hand edit (or any earlier state) left behind
+    // is copied to `<target>.bak.<timestamp>` before the overwrite, so a
+    // hand-maintained hook group or a `--force` run never loses the file it
+    // replaces without a copy; a file still matching the sha this machinery
+    // recorded in harness.lock is apply's own write and is overwritten
+    // directly. A backup that cannot be written aborts here, before the
+    // target is touched (see target-backup.ts).
+    targetBackupPath = backupTargetBeforeOverwrite(targetPath, previousLock, opts.now ?? new Date());
     atomicWriteFile(targetPath, targetContent);
     targetWritten = true;
   }
@@ -1306,6 +1326,7 @@ export async function apply(opts: ApplyOptions = {}): Promise<ApplyResult> {
     // or already byte-identical.
     result.targetInSync = true;
     if (targetMergeSummary !== undefined) result.targetMergeSummary = targetMergeSummary;
+    if (targetBackupPath !== undefined) result.targetBackupPath = targetBackupPath;
   }
   return result;
 }
