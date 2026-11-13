@@ -16,6 +16,7 @@ import {
 } from "../../src/cli/doctor/npm-bin-path.js";
 import { runCodexTargetChecks } from "../../src/cli/doctor/codex.js";
 import { gateDisable } from "../../src/cli/gate/disable.js";
+import { gateEnable } from "../../src/cli/gate/enable.js";
 import { codexGateDisable } from "../../src/cli/gate/codex-disable.js";
 import { generateCodexConfig } from "../../src/cli/apply/generate-codex-config.js";
 import { planCodexConfigInstall, writeCodexConfigInstall } from "../../src/cli/apply/install-codex-config.js";
@@ -298,6 +299,41 @@ describe("doctor: a gate-disabled bare line after an upgrade", () => {
     codexGateDisable({ configPath: codexPath, matcher: "apply_patch" });
     const r = checkCodexLiveHooks(manifest, codexPath);
     expect(r.entries.map((e) => `${e.kind}:${e.status}`)).toEqual(["disabled:warn"]);
+  });
+
+  // The --force advice is keyed by the same plain command as the disabled
+  // check: a snapshot holding the bare line and an expected guarded line must
+  // still get the advice the gate itself would need.
+  it.each([
+    { name: "settings.json edited since the disable", edit: (s: Record<string, unknown>) => { s["theme"] = "dark"; } },
+    {
+      name: "a changed group in the slot of the removed one",
+      edit: (s: Record<string, unknown>) => {
+        s["hooks"] = {
+          PreToolUse: [{ matcher: "Write|Edit", hooks: [{ type: "command", command: "other-guard check" }] }],
+        };
+      },
+    },
+  ])("a gate-disabled bare line with a guarded line expected, $name: the warning names --force", ({ edit }) => {
+    const configPath = path.join(tmp, "harness.yaml");
+    fs.writeFileSync(configPath, WITH_PACK);
+    const { manifest } = loadManifest({ configPath });
+    const settingsPath = path.join(tmp, "settings.json");
+    fs.writeFileSync(
+      settingsPath,
+      JSON.stringify({
+        hooks: { PreToolUse: [{ matcher: "Write|Edit", hooks: [{ type: "command", command: "harness pack hook branch-protection", timeout: 5 }] }] },
+      }),
+    );
+    gateDisable({ settingsPath, matcher: "Write|Edit" });
+    const edited = JSON.parse(fs.readFileSync(settingsPath, "utf8")) as Record<string, unknown>;
+    edit(edited);
+    fs.writeFileSync(settingsPath, `${JSON.stringify(edited, null, 2)}\n`);
+    const r = checkClaudeLiveHooks(manifest, settingsPath, { gateDefaultPath: settingsPath });
+    const disabled = r.entries.find((e) => e.kind === "disabled");
+    expect(disabled?.message).toContain("run `harness gate enable --force` to put it back");
+    // The gate agrees: the plain call refuses.
+    expect(() => gateEnable({ settingsPath })).toThrow();
   });
 
   it("a not-yet-reapplied bare line that is live (gate not disabled) still reports as differing", () => {

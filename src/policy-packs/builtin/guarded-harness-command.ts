@@ -21,9 +21,12 @@
 // a signal, 127, a load error) becomes exit 2 with a reason. stdin and stdout
 // are inherited, so the hook sees the event and writes its envelope exactly as
 // before. The difference from `exec`: when the runtime kills the hook at its
-// timeout it kills the shell, and the hook process may outlive it for the few
-// milliseconds it needs to notice the closed pipes; a timeout kill is read as
-// an allow either way, which is why the hook bounds itself below its budget.
+// timeout it kills the shell, and the hook process is orphaned. It keeps the
+// inherited pipes and runs to completion within its own bounds (about 3 s),
+// so its stdout can still arrive after the shell was killed; only a block can
+// be late, because the hook writes nothing to stdout when it allows. A
+// timeout kill is read as an allow either way, which is why the hook bounds
+// itself below its budget.
 //
 // It is wrapped in `/bin/sh -c '...'` because the runtimes do not all start a
 // hook with a POSIX shell: Codex runs the command with the user's `$SHELL -c`
@@ -36,15 +39,20 @@
 /** The command word every guarded line runs and the PATH lookup targets. */
 const HARNESS_BINARY = "harness";
 
+// Both reasons are shown to the guarded agent as the block reason. They state
+// the diagnosis and send the agent to the operator; they must never tell the
+// agent how to switch the gate off (disabling is operator-only, from an
+// un-hooked shell), so the hand-removal recovery lives in the docs only.
+
 /** What the guard writes to stderr when the binary is missing. No quote, `$` or backslash. */
 export const MISSING_BINARY_REASON =
   "harness not found on PATH: branch protection cannot run, so this tool call is blocked. " +
-  "Fix PATH (for example nvm use the Node version harness was installed under, or add the npm global bin directory) and retry, or remove the hook entry from the settings file by hand.";
+  "Ask the operator to fix the harness install or PATH; do not edit hook settings yourself.";
 
 /** What the guard writes to stderr when the hook ended with a code other than 0 or 2. `$rc` is expanded by sh. */
 export const COULD_NOT_RUN_REASON =
   "harness hook could not run (exit $rc), so this tool call is blocked. " +
-  "Fix the harness install or its Node, or remove the hook entry from the settings file by hand.";
+  "Ask the operator to fix the harness install or PATH; do not edit hook settings yourself.";
 
 /**
  * The line a blocking harness hook runs. `subcommand` is everything after the

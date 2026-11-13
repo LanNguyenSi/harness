@@ -193,6 +193,30 @@ describe("the guarded line, executed with sh -c", () => {
   });
 });
 
+describe("the reasons shown to the guarded agent", () => {
+  // They are the block reason the agent reads. They must send it to the
+  // operator and never explain how to switch the gate off.
+  it.each([
+    ["missing binary", MISSING_BINARY_REASON],
+    ["could not run", COULD_NOT_RUN_REASON],
+  ])("%s: names the diagnosis and the operator, and does not mention editing, removing or disabling hook settings", (_name, reason) => {
+    expect(reason).toContain("Ask the operator");
+    const withoutProhibition = reason.replace("do not edit hook settings yourself", "");
+    expect(withoutProhibition).not.toMatch(/\b(edit|remove|delete|disable|rm|settings\.json|config\.toml|by hand)\b/i);
+    expect(withoutProhibition).not.toMatch(/\bsettings\b/i);
+  });
+
+  it("the stderr of a real run carries those reasons, not a recovery recipe", () => {
+    const empty = path.join(tmp, "empty");
+    fs.mkdirSync(empty);
+    const missing = runLine(claudeBlockerCommand(), [empty], "{}");
+    expect(missing.stderr).toContain("Ask the operator to fix the harness install or PATH; do not edit hook settings yourself.");
+    const broken = runLine(claudeBlockerCommand(), [stubHarnessDir(127)], "{}");
+    expect(broken.stderr).toContain("Ask the operator to fix the harness install or PATH; do not edit hook settings yourself.");
+    expect(broken.stderr).not.toMatch(/remove|by hand/i);
+  });
+});
+
 describe("recognising the guarded line and the bare line", () => {
   const bare = "harness pack hook branch-protection";
 

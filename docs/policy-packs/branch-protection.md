@@ -300,25 +300,34 @@ for everything that is not the hook's own answer:
   not run (exit N), ...` on stderr.
 
 The hook is a child of the shell, not `exec`ed, so a runtime that kills
-the hook at its timeout kills the shell and the hook process can outlive
-it by the few milliseconds it needs to notice its closed pipes; a timeout
-kill reads as an allow either way, which is why the hook bounds itself
-below its 5000 ms budget. The wrapper is `/bin/sh -c '...'` because Codex
+the hook at its timeout kills the shell and orphans the hook process. The
+orphan keeps the inherited pipes and runs to completion within its own
+bounds (about 3 s), so its stdout can still arrive after the shell was
+killed; only a block can be late, because the hook writes nothing to
+stdout when it allows. A timeout kill reads as an allow either way, which
+is why the hook bounds itself below its 5000 ms budget. The wrapper is `/bin/sh -c '...'` because Codex
 starts a hook with the user's `$SHELL`, which is not always POSIX; the
 quoted word is parsed the same way by every shell and the guard itself
 always runs under `sh`.
 
 While `harness` is missing or broken, every `Write`/`Edit` (or
-`apply_patch` on Codex) is refused. To recover without a working
-`harness`: put `harness` back on the PATH of the process that starts the
-agent and restart the agent (`nvm use <the version harness was installed
-under>`, or add the npm global bin directory,
-`export PATH="$(npm prefix -g)/bin:$PATH"`, to your shell rc), or fix its
-Node; or, from an editor or a shell that is not the guarded agent, remove
-the branch-protection group (event `PreToolUse`, matcher `Write|Edit`)
-from `~/.claude/settings.json` by hand, and for Codex the `apply_patch`
-hook table of the harness block in `~/.codex/config.toml`. `harness gate
-disable` is the supported switch once `harness` runs.
+`apply_patch` on Codex) is refused, and the reason shown to the agent
+tells it to ask the operator and not to edit hook settings. Recovery is
+the operator's, and does not need a working `harness`: put `harness` back
+on the PATH of the process that starts the agent and restart the agent
+(`nvm use <the version harness was installed under>`, or add the npm
+global bin directory, `export PATH="$(npm prefix -g)/bin:$PATH"`, to your
+shell rc), or fix its Node. If that cannot be done now, from an editor or
+a shell that is not the guarded agent, remove the branch-protection group
+(event `PreToolUse`, matcher `Write|Edit`) from the settings file harness
+wrote (default `~/.claude/settings.json`; `CLAUDE_CONFIG_DIR`, a
+`harness apply --target` path or `--codex-config` move it) by hand, and
+for Codex the `apply_patch` hook table of the harness block in
+`~/.codex/config.toml`. That leaves the branch unguarded: once `harness`
+runs again, restore protection with `harness apply --target <that file>
+--merge` (Claude Code) or `harness apply --runtime codex --install`
+(Codex). `harness gate disable` is the supported switch once `harness`
+runs.
 
 `harness doctor` reports this state as an error when the pack is
 installed and `harness` does not resolve on the PATH doctor sees (a
