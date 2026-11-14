@@ -814,7 +814,7 @@ function moveSync(src: string, dst: string): void {
     if (e.code !== "EXDEV") throw err;
   }
   // Cross-filesystem fallback: recursive copy then delete. fs.cpSync
-  // is in Node 16.7+; harness requires Node 18+ per package.json.
+  // is in Node 16.7+, below every Node version harness supports.
   fs.cpSync(src, dst, { recursive: true });
   fs.rmSync(src, { recursive: true, force: true });
 }

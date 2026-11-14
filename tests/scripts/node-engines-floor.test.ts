@@ -23,7 +23,12 @@ describe("supported Node floor", () => {
 
   it("README states the same floor as package.json", () => {
     const readme = readFileSync(join(REPO_ROOT, "README.md"), "utf8");
-    expect(readme).toContain(`Node ${ENGINES_NODE.replace(/>=/, "")} or newer`);
-    expect(readme).not.toMatch(/Node 20/);
+    const floor = ENGINES_NODE.replace(/>=/, "");
+    expect(readme).toContain(`Node ${floor} or newer`);
+    // Every "Node N or newer" floor sentence names the same N; other mentions
+    // of an older Node (an EOL note, say) are fine.
+    const floors = [...readme.matchAll(/Node (\d+) or newer/g)].map((m) => m[1]);
+    expect(floors.length).toBeGreaterThan(0);
+    expect(new Set(floors)).toEqual(new Set([floor]));
   });
 });
