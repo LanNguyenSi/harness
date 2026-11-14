@@ -331,7 +331,7 @@ BSD `sysexits.h` where applicable, extended with `1` where a linter-style failur
 
 ## 10. Implementation stack
 
-Node 20+ (`engines.node: ">=20"`), TypeScript, ESM. `tsc` builds `dist/`; the `harness` bin is `dist/cli/main.js`.
+Node 22+ (`engines.node: ">=22"`), TypeScript, ESM. `tsc` builds `dist/`; the `harness` bin is `dist/cli/main.js`.
 
 | Dependency | Purpose |
 |---|---|

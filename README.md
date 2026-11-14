@@ -28,7 +28,7 @@ it is allowed to do, under the exact context.
 ## Quick start
 
 ```bash
-npm i -g @lannguyensi/harness                            # Node 20 or newer
+npm i -g @lannguyensi/harness                            # Node 22 or newer
 harness init                                             # minimal manifest, no policies
 harness pack add branch-protection                       # the one recommended pack
 harness validate

@@ -57,7 +57,7 @@ the rendered files have drifted from what the manifest currently says.
 npm i -g @lannguyensi/harness
 ```
 
-The CLI binary is `harness`. Node 20 or newer required.
+The CLI binary is `harness`. Node 22 or newer required.
 
 ## First-time setup (recommended)
 

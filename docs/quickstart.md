@@ -19,7 +19,7 @@ branches before its first edit.
 ## 1. Install
 
 ```bash
-npm i -g @lannguyensi/harness   # Node 20 or newer
+npm i -g @lannguyensi/harness   # Node 22 or newer
 ```
 
 The generated hooks call `harness` by name, so the binary has to be on
