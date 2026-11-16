@@ -63,8 +63,8 @@
     "@types/node": "^22.20.5",
     "@types/proper-lockfile": "^4.1.4",
     "@vitest/coverage-v8": "^4.1.12",
-    "dependency-cruiser": "18.7.1",
-    "jscpd": "5.4.2",
+    "dependency-cruiser": "18.7.2",
+    "jscpd": "5.4.3",
     "tsx": "^4.23.15",
     "typescript": "^5.9.3",
     "vitest": "^4.1.12"
