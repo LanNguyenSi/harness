@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [2.0.0] - 2026-11-17
+
 ### Changed
 
 - **Breaking:** the supported Node floor is now 22 (`engines.node` is `>=22`). Node 20 went EOL in 2026-04 and was never tested in CI: both CI and npm publishing run on Node 22 only, and `dependency-cruiser` 18 (`check:boundaries`) requires `^22||^24||>=26`. An install on Node 20 now gets npm's engine warning, or an error with `engine-strict`. `README.md`, `docs/for-humans.md`, `docs/quickstart.md` and `docs/ARCHITECTURE.md` state the new floor, and `tests/scripts/node-engines-floor.test.ts` pins that `engines.node` and the README sentence agree (task `daff2f10`).
