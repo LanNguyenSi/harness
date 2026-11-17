@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [2.0.0] - 2026-11-17
 
+### Upgrade notes
+
+- Node 22 or newer is required (`engines.node` is `>=22`); Node 20 hosts get an engine warning, or an error with `engine-strict`.
+- Re-run `harness apply` for each wired runtime after upgrading: until then `harness doctor` reports the old branch-protection hook line as differing and exits 1, and a missing or broken `harness` binary now blocks guarded edits instead of letting them through.
+- `harness apply --target <file>` now writes a `<file>.bak.<timestamp>` backup before it changes the target.
+- `harness migrate-home --apply` refuses a symlinked top-level item with exit 65 instead of moving it.
+- `docs/ARCHITECTURE.md` now names the shipped `harness` CLI 2.x.
+
 ### Changed
 
 - **Breaking:** the supported Node floor is now 22 (`engines.node` is `>=22`). Node 20 went EOL in 2026-04 and was never tested in CI: both CI and npm publishing run on Node 22 only, and `dependency-cruiser` 18 (`check:boundaries`) requires `^22||^24||>=26`. An install on Node 20 now gets npm's engine warning, or an error with `engine-strict`. `README.md`, `docs/for-humans.md`, `docs/quickstart.md` and `docs/ARCHITECTURE.md` state the new floor, and `tests/scripts/node-engines-floor.test.ts` pins that `engines.node` and the README sentence agree (task `daff2f10`).
