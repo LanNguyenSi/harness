@@ -47,9 +47,9 @@ export const LIVE_SNAPSHOT_PREFIXES: readonly string[] = ["harness.gate-disable.
 
 const RETIRED_SNAPSHOT_SUFFIXES: readonly string[] = [".restored.json", ".superseded.json"];
 
-/** `2026-10-12T11-36-46.953Z`: an ISO time with `:` as `-` (gate disable, apply backups, snapshots). */
+/** `2000-01-02T03-04-05.678Z`: an ISO time with `:` as `-` (gate disable, apply backups, snapshots). */
 const GATE_STAMP = /^(\d{4}-\d{2}-\d{2})T(\d{2})-(\d{2})-(\d{2})\.(\d{3})Z$/;
-/** `2026-10-25T18-46-41-186Z`: an ISO time with `:` and `.` as `-` (Codex install backups). */
+/** `2000-01-02T03-04-05-678Z`: an ISO time with `:` and `.` as `-` (Codex install backups). */
 const INSTALL_STAMP = /^(\d{4}-\d{2}-\d{2})T(\d{2})-(\d{2})-(\d{2})-(\d{3})Z$/;
 
 export type DatedBackupKind = "bak" | "harness-backup";
@@ -116,6 +116,14 @@ function isMissing(err: unknown): boolean {
   return code === "ENOENT" || code === "ENOTDIR";
 }
 
+/** `name` inside `dir`, spelled the way the directory was listed. `path.join`
+ * folds `..` lexically, so for `dir` = `link/..` it would name another
+ * directory than the one `readdirSync` read; concatenation leaves the
+ * spelling to the kernel. */
+function entryIn(dir: string, name: string): string {
+  return dir.endsWith(path.sep) ? `${dir}${name}` : `${dir}${path.sep}${name}`;
+}
+
 /** The regular files of `dir` that `stampOf` accepts, newest first. A
  * symlink, a directory or anything unstat-able is left out. */
 function collect(dir: string, stampOf: (name: string) => number | null, warn: (m: string) => void): Candidate[] | null {
@@ -131,7 +139,7 @@ function collect(dir: string, stampOf: (name: string) => number | null, warn: (m
     const ms = stampOf(name);
     if (ms === null) continue;
     try {
-      const st = fs.lstatSync(path.join(dir, name));
+      const st = fs.lstatSync(entryIn(dir, name));
       if (!st.isFile()) continue;
       found.push({ name, stampMs: ms, mtimeMs: st.mtimeMs });
     } catch {
@@ -153,7 +161,7 @@ function removeBeyond(
   const removed: string[] = [];
   for (const c of sorted.slice(Math.max(keep, 0))) {
     if (isProtected(c.name)) continue;
-    const full = path.join(dir, c.name);
+    const full = entryIn(dir, c.name);
     try {
       fs.unlinkSync(full);
       removed.push(full);
@@ -201,7 +209,17 @@ function referencedBackupNames(dir: string, warn: (m: string) => void): Set<stri
     if (!name.endsWith(".json")) continue;
     if (!LIVE_SNAPSHOT_PREFIXES.some((p) => name.startsWith(p))) continue;
     if (RETIRED_SNAPSHOT_SUFFIXES.some((s) => name.endsWith(s))) continue;
-    const full = path.join(dir, name);
+    const full = entryIn(dir, name);
+    // Only a regular file is read: a FIFO would block the read, and a
+    // directory or a dangling link would block pruning for good. Such an
+    // entry is no snapshot, and `listSnapshots` skips it the same way: it
+    // `stat`s too, so a link to a regular file still counts as a live
+    // snapshot here and its backups stay.
+    try {
+      if (!fs.statSync(full).isFile()) continue;
+    } catch {
+      continue;
+    }
     let parsed: unknown;
     try {
       parsed = JSON.parse(fs.readFileSync(full, "utf8"));

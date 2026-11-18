@@ -10,10 +10,11 @@
 // snapshot, refuses to restore over a settings.json the operator has edited
 // since unless the result is exactly the pre-disable file (`--force`
 // overrides), writes the removed groups back into place and then retires the
-// snapshot (renamed to `*.restored.json`, kept for audit, never applied
-// again). A removed group counts as back only when the file holds an
-// unchanged copy of it; a group that merely shares its event and matcher is
-// taken for it only under `--force`.
+// snapshot (renamed to `*.restored.json`, never applied again; the newest 5
+// retired snapshots stay for audit, see `../retention.ts`). A removed group
+// counts as back only when the file holds an unchanged copy of it; a group
+// that merely shares its event and matcher is taken for it only under
+// `--force`.
 //
 // The format is intentionally narrow: no compression, no transform, just
 // the literal JSON groups as they were read out of settings.json.
@@ -249,13 +250,13 @@ export function readSnapshot(filePath: string): SnapshotReadOk | SnapshotReadErr
   return { ok: true, snapshot: obj as unknown as GateDisableSnapshot };
 }
 
-/** The name a snapshot is renamed to once retired. The file stays for audit. */
+/** The name a snapshot is renamed to once retired. The file stays for audit (the newest 5, see `../retention.ts`). */
 export function retiredSnapshotPath(snapPath: string): string {
   return `${snapPath.slice(0, -SNAPSHOT_BASENAME_SUFFIX.length)}${RETIRED_SNAPSHOT_SUFFIX}`;
 }
 
 /**
- * Retire `snapPath` as superseded (rename it, keep it for audit) and return
+ * Retire `snapPath` as superseded (rename it, keep it for audit, newest 5) and return
  * the new path: its groups were merged into a snapshot beside the file they
  * were removed from, so it is not restored and never offered again.
  */
@@ -266,7 +267,7 @@ export function supersedeSnapshot(snapPath: string): string {
   return to;
 }
 
-/** Retire `snapPath` (rename it, keep it for audit) and return the new path. */
+/** Retire `snapPath` (rename it, keep it for audit, newest 5) and return the new path. */
 export function retireSnapshot(snapPath: string): string {
   const to = retiredSnapshotPath(snapPath);
   fs.renameSync(snapPath, to);

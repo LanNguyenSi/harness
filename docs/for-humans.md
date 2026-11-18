@@ -301,7 +301,8 @@ directory), the retired Codex snapshots
 and the `<config>.harness-backup-<stamp>` copies of the Codex install,
 each counted per file. The order is the timestamp in the file name,
 not the file's mtime. A live (unretired) snapshot is never removed, and
-neither is a backup a live snapshot names (its `settingsBackupPath` or
+neither is the backup the same command just wrote, even when a clock that
+runs behind stamped it older than five existing ones, nor a backup a live snapshot names (its `settingsBackupPath` or
 `configBackupPath`, or the same field of a merge): while one live snapshot
 cannot be read, no backup is removed at all. Only files whose names match a
 pattern exactly are touched, symlinks are skipped, and a pruning error is a

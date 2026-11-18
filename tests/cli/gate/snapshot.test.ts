@@ -651,6 +651,18 @@ describe("retention on retire", () => {
     expect(names().filter((n) => n.startsWith("settings.local.json.bak."))).toHaveLength(8);
   });
 
+  it("prunes the backups of the file the snapshot names, not of settings.json", () => {
+    for (let n = 1; n <= 7; n++) {
+      fs.writeFileSync(path.join(tmp, `settings.local.json.bak.${day(n)}`), "{}");
+      bak(n);
+    }
+    retireSnapshot(live(8, { settingsPath: path.join(tmp, "settings.local.json") }));
+    expect(names().filter((n) => n.startsWith("settings.local.json.bak."))).toEqual(
+      [3, 4, 5, 6, 7].map((n) => `settings.local.json.bak.${day(n)}`),
+    );
+    expect(bakNames()).toHaveLength(7);
+  });
+
   it("a snapshot that cannot be read still retires, and only the retired snapshots are pruned", () => {
     for (let n = 1; n <= 8; n++) {
       fs.writeFileSync(path.join(tmp, `${SNAPSHOT_BASENAME_PREFIX}${day(n)}.restored.json`), "{}");

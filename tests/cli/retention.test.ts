@@ -16,6 +16,7 @@ import {
 } from "../../src/cli/retention.js";
 import { CODEX_SNAPSHOT_BASENAME_PREFIX } from "../../src/cli/gate/codex-snapshot.js";
 import { SNAPSHOT_BASENAME_PREFIX } from "../../src/cli/gate/snapshot.js";
+import { type ChildRun, distUrl, expectBounded, mkfifo, runChild } from "../_helpers/fifo-child.js";
 
 let dir: string;
 
@@ -398,6 +399,109 @@ describe.each([
       pruneDatedBackups(file(), kind, { warn });
       expect(names()).not.toContain(backupName(1));
     });
+  });
+});
+
+describe("entries that are not regular files never block pruning", () => {
+  const kind = "bak" as const;
+  const backupName = (d: number): string => `settings.json.bak.${gateStamp(d)}`;
+  const file = (): string => path.join(dir, "settings.json");
+  const snapName = (d: number): string => `${LIVE_SNAPSHOT_PREFIXES[0]}${gateStamp(d)}.json`;
+  function seed(): void {
+    for (let d = 1; d <= 8; d++) touch(backupName(d));
+  }
+  function expectPruned(): void {
+    expect(names().filter((n) => n.startsWith("settings.json.bak."))).toHaveLength(5);
+  }
+
+  it("a directory named like a live snapshot is skipped", () => {
+    seed();
+    fs.mkdirSync(path.join(dir, snapName(9)));
+    pruneDatedBackups(file(), kind, { warn });
+    expectPruned();
+    expect(warnings).toEqual([]);
+  });
+
+  it("a dangling link named like a live snapshot is skipped", () => {
+    seed();
+    fs.symlinkSync(path.join(dir, "gone.json"), path.join(dir, snapName(9)));
+    pruneDatedBackups(file(), kind, { warn });
+    expectPruned();
+    expect(warnings).toEqual([]);
+  });
+
+  it("a link to a regular live snapshot still counts: the backup it names stays", () => {
+    seed();
+    const real = path.join(dir, "elsewhere.json.txt");
+    fs.writeFileSync(real, JSON.stringify({ settingsBackupPath: path.join(dir, backupName(1)) }));
+    fs.symlinkSync(real, path.join(dir, snapName(9)));
+    pruneDatedBackups(file(), kind, { warn });
+    expect(names()).toContain(backupName(1));
+  });
+
+  // The prune runs in a child under a kill timeout (needs `dist/`, like the
+  // other FIFO tests): a read of the FIFO would block it for good, and a
+  // blocked in-process read would hang the whole worker.
+  const pruneInChild = (): ChildRun =>
+    runChild(
+      `import(${JSON.stringify(distUrl("cli/retention.js"))}).then((m) => {` +
+        `console.log(JSON.stringify(m.pruneDatedBackups(process.argv[1], "bak", { warn: () => {} })));});`,
+      [file()],
+    );
+
+  it("a FIFO named like a live snapshot is not opened, so pruning returns", () => {
+    seed();
+    mkfifo(path.join(dir, snapName(9)));
+    const run = pruneInChild();
+    expectBounded(run);
+    expect(run.value).toHaveLength(3);
+    expectPruned();
+  });
+
+  it("control: the same child prunes beside a regular live snapshot", () => {
+    seed();
+    touch(snapName(9), JSON.stringify({ settingsBackupPath: path.join(dir, backupName(1)) }));
+    const run = pruneInChild();
+    expectBounded(run);
+    expect(run.value).toHaveLength(2);
+    expect(names()).toContain(backupName(1));
+  });
+});
+
+describe("a directory spelled through a link and `..`", () => {
+  it("lists, reads and removes in the directory the kernel reaches, not the folded one", () => {
+    const real = path.join(dir, "real", "sub");
+    fs.mkdirSync(real, { recursive: true });
+    const work = path.join(dir, "work");
+    fs.mkdirSync(work);
+    fs.symlinkSync(real, path.join(work, "a"));
+    // `work/a/..` is `real` for the kernel and `work` for a lexical reading.
+    const kernelDir = path.join(dir, "real");
+    for (let d = 1; d <= 7; d++) {
+      fs.writeFileSync(path.join(kernelDir, `settings.json.bak.${gateStamp(d)}`), "kernel");
+      fs.writeFileSync(path.join(work, `settings.json.bak.${gateStamp(d)}`), "lexical");
+    }
+    const removed = pruneDatedBackups(`${work}/a/../settings.json`, "bak", { warn });
+    expect(removed).toHaveLength(2);
+    expect(fs.readdirSync(work).filter((n) => n.includes(".bak."))).toHaveLength(7);
+    expect(fs.readdirSync(kernelDir).filter((n) => n.includes(".bak."))).toHaveLength(5);
+    expect(warnings).toEqual([]);
+  });
+
+  it("does the same for retired snapshots", () => {
+    const real = path.join(dir, "real", "sub");
+    fs.mkdirSync(real, { recursive: true });
+    const work = path.join(dir, "work");
+    fs.mkdirSync(work);
+    fs.symlinkSync(real, path.join(work, "a"));
+    const kernelDir = path.join(dir, "real");
+    for (let d = 1; d <= 7; d++) {
+      fs.writeFileSync(path.join(kernelDir, `${SNAPSHOT_BASENAME_PREFIX}${gateStamp(d)}.restored.json`), "kernel");
+      fs.writeFileSync(path.join(work, `${SNAPSHOT_BASENAME_PREFIX}${gateStamp(d)}.restored.json`), "lexical");
+    }
+    pruneRetiredSnapshots(`${work}/a/..`, SNAPSHOT_BASENAME_PREFIX, { warn });
+    expect(fs.readdirSync(work).filter((n) => n.endsWith(".restored.json"))).toHaveLength(7);
+    expect(fs.readdirSync(kernelDir).filter((n) => n.endsWith(".restored.json"))).toHaveLength(5);
   });
 });
 

@@ -18,8 +18,8 @@
 // (`readSnapshot` rejects version 3). Once `gate enable` has applied a
 // snapshot, or found it applied or superseded, it renames the file to
 // `*.restored.json` or `*.superseded.json`, and so does a `gate disable` that
-// finds the live snapshot spent: the file stays for audit,
-// `listCodexSnapshots` never offers it again.
+// finds the live snapshot spent: the file stays for audit (the newest 5 of
+// them, see `../retention.ts`), `listCodexSnapshots` never offers it again.
 
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -196,8 +196,9 @@ export function codexSnapshotPath(requestedPath: string, now: Date): string {
   );
 }
 
-/** The name a snapshot is renamed to once retired. The file stays for audit;
- * `listCodexSnapshots` never offers it again. */
+/** The name a snapshot is renamed to once retired. The file stays for audit
+ * (the newest 5 retired ones, see `../retention.ts`); `listCodexSnapshots`
+ * never offers it again. */
 export function retiredCodexSnapshotPath(snapPath: string, why: CodexSnapshotRetirement): string {
   return `${snapPath.slice(0, snapPath.length - SNAPSHOT_BASENAME_SUFFIX.length)}.${why}${SNAPSHOT_BASENAME_SUFFIX}`;
 }
@@ -215,13 +216,17 @@ export interface CodexRetiredSnapshot {
 }
 
 /** Renames a live snapshot to its retired name and returns that name; the
- * file stays for audit. A failed rename surfaces as `makeError`: `context`
- * (what the call has done so far) and the move-aside step. */
+ * file stays for audit (the newest 5 retired ones, see `../retention.ts`). A
+ * failed rename surfaces as `makeError`: `context` (what the call has done so
+ * far) and the move-aside step. `keep` lists files the caller wrote in this
+ * operation (its backup): retention never removes them, whatever their
+ * stamp's age. */
 export function retireCodexSnapshot(
   snapPath: string,
   why: CodexSnapshotRetirement,
   makeError: (message: string) => Error,
   context = "",
+  keep: readonly string[] = [],
 ): string {
   const to = retiredCodexSnapshotPath(snapPath, why);
   try {
@@ -232,7 +237,7 @@ export function retireCodexSnapshot(
         "directory by hand so it is never applied again, then run the command again.",
     );
   }
-  pruneAfterRetire(to);
+  pruneAfterRetire(to, keep);
   return to;
 }
 
@@ -240,16 +245,16 @@ export function retireCodexSnapshot(
  * Retention after a Codex snapshot was retired (see `../retention.ts`): keep
  * the newest few retired Codex snapshots in its directory, and the newest few
  * `<config>.bak.<stamp>` and `<config>.harness-backup-<stamp>` backups of the
- * config it was taken for. The file just retired stays. Best effort: never
- * throws, the retire has already happened.
+ * config it was taken for. The file just retired and every path in `keep`
+ * stay. Best effort: never throws, the retire has already happened.
  */
-function pruneAfterRetire(retired: string): void {
+function pruneAfterRetire(retired: string, keep: readonly string[]): void {
   const dir = path.dirname(retired);
   pruneRetiredSnapshots(dir, CODEX_SNAPSHOT_BASENAME_PREFIX, { exclude: [retired] });
   const target = snapshotTargetName(retired);
   if (target === null) return;
-  pruneDatedBackups(path.join(dir, target), "bak");
-  pruneDatedBackups(path.join(dir, target), "harness-backup");
+  pruneDatedBackups(path.join(dir, target), "bak", { exclude: keep });
+  pruneDatedBackups(path.join(dir, target), "harness-backup", { exclude: keep });
 }
 
 /** The ways out of a live snapshot that no gate command can apply. */

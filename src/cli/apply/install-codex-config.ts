@@ -2455,7 +2455,13 @@ export function writeCodexConfigInstall(
   for (const snapPath of snapshots.matched) {
     try {
       superseded.push(
-        retireCodexSnapshot(snapPath, "superseded", (m) => new Error(m), "the config was installed, but "),
+        retireCodexSnapshot(
+          snapPath,
+          "superseded",
+          (m) => new Error(m),
+          "the config was installed, but ",
+          result.backupPath !== undefined ? [result.backupPath] : [],
+        ),
       );
     } catch (err) {
       warnings.push((err as Error).message);
