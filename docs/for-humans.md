@@ -288,6 +288,26 @@ backup sit beside that file (in a dotfiles repository they show up in its
 working tree, so ignore `harness.gate-disable.*` and `*.bak.*` there). On
 Codex a snapshot of another config beside it keeps `gate enable`
 non-zero and is named with the `--config` that restores it.
+Retired snapshots and dated backups do not pile up: harness keeps the
+newest 5 of each family and removes the older ones, right after it
+retires a snapshot (`gate enable`, or a `gate disable` or install that
+retires a spent one) and after `harness apply` writes a backup. The
+families are the retired Claude snapshots
+(`harness.gate-disable.<stamp>.restored.json` or `.superseded.json`, counted per
+directory), the retired Codex snapshots
+(`harness.gate-disable-codex.<stamp>.restored.json` or `.superseded.json`, per directory), the
+`<file>.bak.<stamp>` backups of each settings or config file (from
+`gate disable`, `gate enable --runtime codex` and `harness apply --target`),
+and the `<config>.harness-backup-<stamp>` copies of the Codex install,
+each counted per file. The order is the timestamp in the file name,
+not the file's mtime. A live (unretired) snapshot is never removed, and
+neither is a backup a live snapshot names (its `settingsBackupPath` or
+`configBackupPath`, or the same field of a merge): while one live snapshot
+cannot be read, no backup is removed at all. Only files whose names match a
+pattern exactly are touched, symlinks are skipped, and a pruning error is a
+warning, never a failed gate command or apply. Other files you keep beside
+the config (`settings.json.bak`, `*.pre-harness-*`, `*.bak.uninstall.*`) are
+not harness's to remove and stay.
 See [`docs/okf/gate-kill-switch.md`](okf/gate-kill-switch.md). On
 Codex the restore is byte for byte
 when the config is unchanged since the disable; if you edited the file

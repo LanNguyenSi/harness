@@ -2410,3 +2410,70 @@ function reinstallThrough(target: string, now: Date, shellGuardCommand: string, 
   );
   return fs.readFileSync(fs.realpathSync(target), "utf8");
 }
+
+describe("codex gate disable and enable cycles: retention", () => {
+  const at = (n: number): Date => new Date(Date.UTC(2026, 10, n, 10, 0, 0, 0));
+  const dir = (): string => path.dirname(configPath);
+  const names = (): string[] => fs.readdirSync(dir()).sort();
+
+  it("keeps the newest 5 retired snapshots and 5 gate backups across cycles, and a live pair is never removed", () => {
+    const original = installConfig(configPath);
+    for (let n = 1; n <= 8; n++) {
+      expect(codexGateDisable({ configPath, matcher: "apply_patch", now: at(n) }).mode).toBe("remove");
+      expect(codexGateEnable({ configPath, now: new Date(at(n).getTime() + 3_600_000) }).mode).toBe("restored");
+    }
+    const retired = names().filter((f) => f.endsWith(".restored.json"));
+    expect(retired.map((f) => f.slice(CODEX_SNAPSHOT_BASENAME_PREFIX.length, CODEX_SNAPSHOT_BASENAME_PREFIX.length + 10))).toEqual([
+      "2026-11-04",
+      "2026-11-05",
+      "2026-11-06",
+      "2026-11-07",
+      "2026-11-08",
+    ]);
+    const gateBackups = names().filter((f) => f.startsWith("config.toml.bak."));
+    expect(gateBackups).toHaveLength(5);
+    // Day 8 (disable and enable), day 7 (both) and the day 6 enable are the newest five of sixteen.
+    expect(gateBackups.every((f) => f >= "config.toml.bak.2026-11-06T11")).toBe(true);
+    // The install backup written by installConfig is its own family: one file, never counted here.
+    expect(names().filter((f) => f.includes(".harness-backup-"))).toHaveLength(1);
+    expect(fs.readFileSync(configPath, "utf8")).toBe(original);
+
+    // A live snapshot beside the old retired ones is untouched and still restores.
+    const d = codexGateDisable({ configPath, matcher: "apply_patch", now: at(30) });
+    if (d.mode !== "remove") throw new Error("expected remove");
+    expect(fs.existsSync(d.snapshotPath)).toBe(true);
+    expect(fs.existsSync(d.backupPath)).toBe(true);
+    expect(codexGateEnable({ configPath, now: at(31) }).mode).toBe("restored");
+    expect(fs.readFileSync(configPath, "utf8")).toBe(original);
+  });
+
+  it("retiring a snapshot also prunes the install backups of its config, and keeps the newest", () => {
+    installConfig(configPath);
+    const old = (d: number): string => `${configPath}.harness-backup-2026-01-0${d}T10-00-00-000Z`;
+    for (let d = 1; d <= 6; d++) fs.writeFileSync(old(d), "old");
+    codexGateDisable({ configPath, matcher: "apply_patch", now: at(1) });
+    // Seven install backups now sit beside the config; nothing prunes them until a snapshot is retired.
+    expect(names().filter((f) => f.includes(".harness-backup-"))).toHaveLength(7);
+    codexGateEnable({ configPath, now: at(2) });
+    const left = names().filter((f) => f.includes(".harness-backup-"));
+    expect(left).toHaveLength(5);
+    expect(fs.existsSync(old(1))).toBe(false);
+    expect(fs.existsSync(old(2))).toBe(false);
+    expect(fs.existsSync(old(6))).toBe(true);
+    // installConfig's own backup (2026-10-01) is newer than every seeded one and stays.
+    expect(left.some((f) => f.includes("2026-10-01"))).toBe(true);
+  });
+
+  it("an install keeps the newest 5 install backups and the gate backup a live snapshot names", () => {
+    installConfig(configPath);
+    const d = codexGateDisable({ configPath, matcher: "apply_patch", now: at(1) });
+    if (d.mode !== "remove") throw new Error("expected remove");
+    for (let n = 10; n <= 17; n++) fs.writeFileSync(`${configPath}.harness-backup-${at(n).toISOString().replace(/[:.]/g, "-")}`, "old");
+    // asLegacyInstall leaves the live snapshot alone: the install does not retire it.
+    reinstall(configPath, at(20));
+    const installs = names().filter((f) => f.includes(".harness-backup-"));
+    expect(installs).toHaveLength(5);
+    expect(fs.existsSync(d.backupPath)).toBe(true);
+    expect(fs.existsSync(d.snapshotPath)).toBe(true);
+  });
+});

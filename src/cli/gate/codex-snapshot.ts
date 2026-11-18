@@ -32,6 +32,7 @@ import {
 } from "../apply/install-codex-config.js";
 import { kernelEntry, linkChain } from "./link-chain.js";
 import { shellQuote } from "../shell-quote.js";
+import { pruneDatedBackups, pruneRetiredSnapshots, snapshotTargetName } from "../retention.js";
 import { listSnapshots, namesSameEntry, SNAPSHOT_BASENAME_SUFFIX, snapshotFieldProblem } from "./snapshot.js";
 
 export const CODEX_SNAPSHOT_BASENAME_PREFIX = "harness.gate-disable-codex.";
@@ -231,7 +232,24 @@ export function retireCodexSnapshot(
         "directory by hand so it is never applied again, then run the command again.",
     );
   }
+  pruneAfterRetire(to);
   return to;
+}
+
+/**
+ * Retention after a Codex snapshot was retired (see `../retention.ts`): keep
+ * the newest few retired Codex snapshots in its directory, and the newest few
+ * `<config>.bak.<stamp>` and `<config>.harness-backup-<stamp>` backups of the
+ * config it was taken for. The file just retired stays. Best effort: never
+ * throws, the retire has already happened.
+ */
+function pruneAfterRetire(retired: string): void {
+  const dir = path.dirname(retired);
+  pruneRetiredSnapshots(dir, CODEX_SNAPSHOT_BASENAME_PREFIX, { exclude: [retired] });
+  const target = snapshotTargetName(retired);
+  if (target === null) return;
+  pruneDatedBackups(path.join(dir, target), "bak");
+  pruneDatedBackups(path.join(dir, target), "harness-backup");
 }
 
 /** The ways out of a live snapshot that no gate command can apply. */

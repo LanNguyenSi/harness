@@ -24,6 +24,7 @@ import * as path from "node:path";
 import { unwrapGuardedHarnessCommand } from "../../policy-packs/builtin/guarded-harness-command.js";
 import { kernelEntry, walkLinkChain } from "./link-chain.js";
 import { shellQuote } from "../shell-quote.js";
+import { pruneDatedBackups, pruneRetiredSnapshots, snapshotTargetName } from "../retention.js";
 
 export const SNAPSHOT_BASENAME_PREFIX = "harness.gate-disable.";
 export const SNAPSHOT_BASENAME_SUFFIX = ".json";
@@ -261,6 +262,7 @@ export function retiredSnapshotPath(snapPath: string): string {
 export function supersedeSnapshot(snapPath: string): string {
   const to = `${snapPath.slice(0, -SNAPSHOT_BASENAME_SUFFIX.length)}${SUPERSEDED_SNAPSHOT_SUFFIX}`;
   fs.renameSync(snapPath, to);
+  pruneAfterRetire(to);
   return to;
 }
 
@@ -268,7 +270,22 @@ export function supersedeSnapshot(snapPath: string): string {
 export function retireSnapshot(snapPath: string): string {
   const to = retiredSnapshotPath(snapPath);
   fs.renameSync(snapPath, to);
+  pruneAfterRetire(to);
   return to;
+}
+
+/**
+ * Retention after a snapshot was retired (see `../retention.ts`): keep the
+ * newest few retired snapshots in its directory and the newest few dated
+ * `<settings>.bak.<stamp>` backups of the file it was taken for, which no
+ * live snapshot needs once this one is retired. The file just retired stays.
+ * Best effort: never throws, the retire has already happened.
+ */
+function pruneAfterRetire(retired: string): void {
+  const dir = path.dirname(retired);
+  pruneRetiredSnapshots(dir, SNAPSHOT_BASENAME_PREFIX, { exclude: [retired] });
+  const target = snapshotTargetName(retired);
+  if (target !== null) pruneDatedBackups(path.join(dir, target), "bak");
 }
 
 export interface LiveSnapshot {

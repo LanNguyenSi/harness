@@ -4,7 +4,7 @@ import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { gateDisable } from "../../../src/cli/gate/disable.js";
 import { gateEnable, GateEnableError } from "../../../src/cli/gate/enable.js";
-import { sha256Hex } from "../../../src/cli/gate/snapshot.js";
+import { retireSnapshot, sha256Hex } from "../../../src/cli/gate/snapshot.js";
 import {
   downgradeToVersion1,
   liveSnapshotNames,
@@ -695,5 +695,90 @@ describe("gateEnable: which snapshots count", () => {
     expect(gateEnable({ settingsPath }).mode).toBe("no-snapshots");
     expect(fs.readFileSync(settingsPath, "utf8")).toBe(before);
     expect(liveSnapshotNames(settingsPath)).toHaveLength(1);
+  });
+});
+
+describe("gate disable and enable cycles: retention", () => {
+  const at = (n: number): Date => new Date(Date.UTC(2026, 2, n, 10, 0, 0, 0));
+  const names = (): string[] => fs.readdirSync(tmp).sort();
+
+  function seed(): string {
+    writeSettings({
+      hooks: {
+        PreToolUse: [
+          { matcher: "Bash", hooks: [{ command: "intercept" }] },
+          { matcher: "Edit|Write|Bash", hooks: [{ command: "blocker" }] },
+        ],
+      },
+    });
+    return fs.readFileSync(settingsPath, "utf8");
+  }
+
+  it("keeps the newest 5 retired snapshots and 5 backups across many cycles, and the live pair is never removed", () => {
+    const original = seed();
+    for (let n = 1; n <= 9; n++) {
+      gateDisable({ settingsPath, matcher: "Edit|Write|Bash", now: at(n) });
+      expect(gateEnable({ settingsPath }).mode).toBe("restored");
+    }
+    const retired = names().filter((f) => f.endsWith(".restored.json"));
+    const backups = names().filter((f) => f.startsWith("settings.json.bak."));
+    // Nine cycles left 9 of each; the newest 5 stay.
+    expect(retired.map((f) => f.slice("harness.gate-disable.".length, "harness.gate-disable.2026-03-0X".length))).toEqual([
+      "2026-03-05",
+      "2026-03-06",
+      "2026-03-07",
+      "2026-03-08",
+      "2026-03-09",
+    ]);
+    expect(backups.map((f) => f.slice("settings.json.bak.".length, "settings.json.bak.2026-03-0X".length))).toEqual([
+      "2026-03-05",
+      "2026-03-06",
+      "2026-03-07",
+      "2026-03-08",
+      "2026-03-09",
+    ]);
+    expect(fs.readFileSync(settingsPath, "utf8")).toBe(original);
+
+    // A live pair beside old retired files: the next enable still restores byte for byte.
+    gateDisable({ settingsPath, matcher: "Edit|Write|Bash", now: at(20) });
+    const live = liveSnapshotNames(settingsPath);
+    expect(live).toHaveLength(1);
+    const snap = JSON.parse(fs.readFileSync(path.join(tmp, live[0]!), "utf8")) as { settingsBackupPath: string };
+    expect(fs.existsSync(snap.settingsBackupPath)).toBe(true);
+    expect(gateEnable({ settingsPath }).mode).toBe("restored");
+    expect(fs.readFileSync(settingsPath, "utf8")).toBe(original);
+  });
+
+  it("a disable whose snapshot and backup are older than every retired file keeps both while another retire prunes", () => {
+    const original = seed();
+    // Eight retired pairs from later days sit beside the file.
+    for (let n = 10; n <= 17; n++) {
+      fs.writeFileSync(path.join(tmp, `harness.gate-disable.${at(n).toISOString().replace(/:/g, "-")}.restored.json`), "{}");
+      fs.writeFileSync(path.join(tmp, `settings.json.bak.${at(n).toISOString().replace(/:/g, "-")}`), "{}");
+    }
+    gateDisable({ settingsPath, matcher: "Edit|Write|Bash", now: at(1) });
+    const [liveName] = liveSnapshotNames(settingsPath);
+    const snap = JSON.parse(fs.readFileSync(path.join(tmp, liveName!), "utf8")) as { settingsBackupPath: string };
+    // The snapshot and its backup are the oldest files by name. Retiring another snapshot of
+    // the same file prunes the directory; the live pair stays.
+    const other = path.join(tmp, `harness.gate-disable.${at(2).toISOString().replace(/:/g, "-")}.json`);
+    fs.writeFileSync(
+      other,
+      JSON.stringify({
+        version: 2,
+        createdAt: "x",
+        settingsPath,
+        settingsBackupPath: path.join(tmp, "elsewhere"),
+        settingsBeforeSha256: "a",
+        settingsAfterSha256: "b",
+        filter: {},
+        removed: [],
+      }),
+    );
+    retireSnapshot(other);
+    expect(names()).toContain(liveName);
+    expect(fs.existsSync(snap.settingsBackupPath)).toBe(true);
+    expect(gateEnable({ settingsPath }).mode).toBe("restored");
+    expect(fs.readFileSync(settingsPath, "utf8")).toBe(original);
   });
 });
