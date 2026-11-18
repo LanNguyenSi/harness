@@ -17,6 +17,7 @@ import {
 } from "../gate/codex-snapshot.js";
 import { kernelEntry, linkChain, walkLinkChain } from "../gate/link-chain.js";
 import { namesSameEntry, sha256Hex } from "../gate/snapshot.js";
+import { pruneDatedBackups } from "../retention.js";
 
 export const CODEX_MANAGED_SOURCE_PREFIX = "# Harness Codex hook wiring.";
 export const CODEX_MANAGED_BEGIN = "# BEGIN harness-managed codex hooks";
@@ -2454,13 +2455,27 @@ export function writeCodexConfigInstall(
   for (const snapPath of snapshots.matched) {
     try {
       superseded.push(
-        retireCodexSnapshot(snapPath, "superseded", (m) => new Error(m), "the config was installed, but "),
+        retireCodexSnapshot(
+          snapPath,
+          "superseded",
+          (m) => new Error(m),
+          "the config was installed, but ",
+          result.backupPath !== undefined ? [result.backupPath] : [],
+        ),
       );
     } catch (err) {
       warnings.push((err as Error).message);
     }
   }
   if (superseded.length > 0) result.supersededSnapshots = superseded;
+  // Retention (`../retention.ts`): after the supersede loop, so a snapshot
+  // this install just retired no longer protects the backup it names.
+  if (result.backupPath !== undefined) {
+    pruneDatedBackups(plan.linkPath ?? plan.configPath, "harness-backup", {
+      exclude: [result.backupPath],
+      warn: (m) => warnings.push(m),
+    });
+  }
   if (warnings.length > 0) {
     result.snapshotWarnings = warnings;
   }

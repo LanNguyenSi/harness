@@ -3,10 +3,11 @@
 // There is one live `harness.gate-disable.*.json` per settings.json (a
 // second disable merges into it). Enable puts every removed group back at
 // its recorded index and atomically rewrites settings.json, then retires the
-// snapshot (renamed to `*.restored.json`, kept for audit, never applied
-// again). A group the file already holds unchanged is never spliced in a
-// second time. A group with the same event and matcher but other content may
-// be another hook that shares the matcher, so enable refuses while there is
+// snapshot (renamed to `*.restored.json`, never applied again; the newest 5
+// retired snapshots stay for audit, see `../retention.ts`). A group the file
+// already holds unchanged is never spliced in a second time. A group with the
+// same event and matcher but other content may be another hook that shares
+// the matcher, so enable refuses while there is
 // one and names both groups' commands; `--force` takes it as back. When
 // settings.json has been edited since the snapshot was taken (the recorded
 // `settingsAfterSha256` no longer matches the on-disk content), the groups

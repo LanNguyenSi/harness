@@ -382,3 +382,56 @@ describe("apply --target backup: CLI output", () => {
     expect(backupNames(tmpHome)).toHaveLength(1);
   });
 });
+
+describe("apply --target backup: retention", () => {
+  const day = (n: number): Date => new Date(Date.UTC(2026, 2, n, 8, 0, 0, 0));
+  const stampOf = (n: number): string => day(n).toISOString().replace(/:/g, "-");
+  const backupOf = (target: string, n: number): string => `${target}.bak.${stampOf(n)}`;
+
+  /** Overwrite the target `count` times, one day apart, each time with other bytes to protect. */
+  async function overwrite(target: string, from: number, count: number): Promise<void> {
+    for (let n = from; n < from + count; n++) {
+      fs.writeFileSync(target, `${JSON.stringify({ hand: n })}\n`);
+      const r = await apply({ homeDir: tmpHome, target, force: true, now: day(n) });
+      expect(r.targetBackupPath).toBe(backupOf(target, n));
+    }
+  }
+
+  it("keeps the newest 5 backups of the target and removes the older ones", async () => {
+    writeManifest();
+    const target = targetPath();
+    await apply({ homeDir: tmpHome, target });
+    await overwrite(target, 1, 7);
+    expect(backupNames(tmpHome).sort()).toEqual([3, 4, 5, 6, 7].map((n) => path.basename(backupOf(target, n))));
+    // The newest backup holds the bytes the last overwrite replaced.
+    expect(fs.readFileSync(backupOf(target, 7), "utf8")).toBe(`${JSON.stringify({ hand: 7 })}\n`);
+  });
+
+  it("keeps a backup a live gate snapshot names, and leaves other targets' backups alone", async () => {
+    writeManifest();
+    const target = targetPath();
+    await apply({ homeDir: tmpHome, target });
+    await overwrite(target, 1, 1);
+    fs.writeFileSync(
+      path.join(tmpHome, "harness.gate-disable.2026-03-01T09-00-00.000Z.json"),
+      JSON.stringify({ version: 2, settingsPath: target, settingsBackupPath: backupOf(target, 1) }),
+    );
+    const sibling = path.join(tmpHome, `other.json.bak.${stampOf(1)}`);
+    fs.writeFileSync(sibling, "x");
+    await overwrite(target, 2, 7);
+    expect(fs.existsSync(backupOf(target, 1))).toBe(true);
+    expect(fs.existsSync(backupOf(target, 2))).toBe(false);
+    expect(fs.existsSync(sibling)).toBe(true);
+    expect(backupNames(tmpHome).filter((n) => n.startsWith("settings.local.json.bak."))).toHaveLength(6);
+  });
+
+  it("an older backup than the one just written stays when the clock is behind, and the apply still succeeds", async () => {
+    writeManifest();
+    const target = targetPath();
+    await apply({ homeDir: tmpHome, target });
+    await overwrite(target, 10, 6);
+    // A clock set back: the new backup is older than all five kept; it is the apply's own file and stays.
+    await overwrite(target, 1, 1);
+    expect(fs.existsSync(backupOf(target, 1))).toBe(true);
+  });
+});

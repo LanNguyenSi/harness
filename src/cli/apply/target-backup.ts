@@ -41,10 +41,16 @@
 // fails (a write or fsync error), the partial backup is removed before
 // the error is thrown: like `atomicWriteFile`, a failed write never
 // leaves a file the call created sitting around.
+//
+// Retention: once the copy is written, only the newest few `<target>.bak.*`
+// files of that target stay (`RETENTION_KEEP`, `src/cli/retention.ts`); a
+// backup a live gate snapshot names is never removed. A prune that fails
+// never fails the apply.
 
 import * as fs from "node:fs";
 import { ATOMIC_WRITE_TEMP_FLAGS } from "../../io/atomic-write.js";
 import { backupPath } from "../gate/snapshot.js";
+import { pruneDatedBackups } from "../retention.js";
 import { EX_FAIL, HarnessExitError } from "../exit-codes.js";
 import { existingFileMode } from "./install-codex-config.js";
 
@@ -90,5 +96,8 @@ export function backupTargetBeforeOverwrite(targetPath: string, now: Date): stri
     }
     throw new HarnessExitError(`harness apply: cannot write the target backup ${dest} (${(err as Error).message}); ${targetPath} was not written`, EX_FAIL);
   }
+  // The copy is on disk: keep the newest few backups of this target and
+  // remove the older ones (`../retention.ts`). Best effort, never throws.
+  pruneDatedBackups(targetPath, "bak", { exclude: [dest] });
   return dest;
 }

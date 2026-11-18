@@ -23,6 +23,7 @@ import {
   readSnapshot,
   retireSnapshot,
   retiredSnapshotPath,
+  supersedeSnapshot,
   sha256Hex,
   SNAPSHOT_BASENAME_PREFIX,
   SNAPSHOT_BASENAME_SUFFIX,
@@ -583,5 +584,101 @@ describe("claudeEnableRefusal", () => {
     expect(plan.restored).toHaveLength(1);
     expect(plan.changed).toEqual([]);
     expect(claudeEnableRefusal(sha256Hex(beforeText), before, plan, snapshot)).toBeNull();
+  });
+});
+
+describe("retention on retire", () => {
+  const day = (n: number): string => `2026-03-${String(n).padStart(2, "0")}T10-00-00.000Z`;
+  const settings = () => path.join(tmp, "settings.json");
+  function live(n: number, overrides: Partial<GateDisableSnapshot> = {}): string {
+    const full = path.join(tmp, `${SNAPSHOT_BASENAME_PREFIX}${day(n)}${SNAPSHOT_BASENAME_SUFFIX}`);
+    fs.writeFileSync(
+      full,
+      JSON.stringify(validSnapshot({ settingsPath: settings(), settingsBackupPath: path.join(tmp, `settings.json.bak.${day(n)}`), ...overrides })),
+    );
+    return full;
+  }
+  function bak(n: number): string {
+    const full = path.join(tmp, `settings.json.bak.${day(n)}`);
+    fs.writeFileSync(full, "{}");
+    return full;
+  }
+  const names = (): string[] => fs.readdirSync(tmp).sort();
+  const retiredNames = (): string[] => names().filter((n) => n.endsWith(".restored.json") || n.endsWith(".superseded.json"));
+  const bakNames = (): string[] => names().filter((n) => n.startsWith("settings.json.bak."));
+
+  it("keeps the newest 5 retired snapshots and the newest 5 settings backups", () => {
+    for (let n = 1; n <= 7; n++) bak(n);
+    for (let n = 1; n <= 6; n++) fs.writeFileSync(path.join(tmp, `${SNAPSHOT_BASENAME_PREFIX}${day(n)}.restored.json`), "{}");
+    retireSnapshot(live(7));
+    // 6 earlier + the one just retired = 7 retired snapshots, 5 stay; 7 backups, 5 stay.
+    expect(retiredNames()).toEqual([3, 4, 5, 6, 7].map((n) => `${SNAPSHOT_BASENAME_PREFIX}${day(n)}.restored.json`));
+    expect(bakNames()).toEqual([3, 4, 5, 6, 7].map((n) => `settings.json.bak.${day(n)}`));
+  });
+
+  it("supersedeSnapshot prunes the retired snapshots the same way", () => {
+    for (let n = 1; n <= 6; n++) fs.writeFileSync(path.join(tmp, `${SNAPSHOT_BASENAME_PREFIX}${day(n)}.superseded.json`), "{}");
+    supersedeSnapshot(live(7));
+    expect(retiredNames()).toHaveLength(5);
+    expect(retiredNames()).not.toContain(`${SNAPSHOT_BASENAME_PREFIX}${day(1)}.superseded.json`);
+  });
+
+  it("never removes a live snapshot or the backup it names, even when both are the oldest", () => {
+    const oldLive = live(1);
+    const oldBak = bak(1);
+    for (let n = 10; n <= 17; n++) {
+      fs.writeFileSync(path.join(tmp, `${SNAPSHOT_BASENAME_PREFIX}${day(n)}.restored.json`), "{}");
+      bak(n);
+    }
+    // A second live snapshot of the same file is retired; the first stays live.
+    retireSnapshot(live(2, { settingsBackupPath: path.join(tmp, "settings.json.bak.elsewhere") }));
+    expect(fs.existsSync(oldLive)).toBe(true);
+    expect(fs.existsSync(oldBak)).toBe(true);
+    // The newest 5 (days 13..17) plus the snapshot just retired, which is never pruned.
+    expect(retiredNames()).toHaveLength(6);
+    expect(bakNames()).toEqual(["1", "13", "14", "15", "16", "17"].map((n) => `settings.json.bak.${day(Number(n))}`));
+  });
+
+  it("keeps the file it just retired even when its stamp is the oldest", () => {
+    for (let n = 10; n <= 16; n++) fs.writeFileSync(path.join(tmp, `${SNAPSHOT_BASENAME_PREFIX}${day(n)}.restored.json`), "{}");
+    const retired = retireSnapshot(live(1));
+    expect(fs.existsSync(retired)).toBe(true);
+  });
+
+  it("does not prune the backups of a file another snapshot was taken for", () => {
+    for (let n = 1; n <= 8; n++) fs.writeFileSync(path.join(tmp, `settings.local.json.bak.${day(n)}`), "{}");
+    retireSnapshot(live(9));
+    expect(names().filter((n) => n.startsWith("settings.local.json.bak."))).toHaveLength(8);
+  });
+
+  it("prunes the backups of the file the snapshot names, not of settings.json", () => {
+    for (let n = 1; n <= 7; n++) {
+      fs.writeFileSync(path.join(tmp, `settings.local.json.bak.${day(n)}`), "{}");
+      bak(n);
+    }
+    retireSnapshot(live(8, { settingsPath: path.join(tmp, "settings.local.json") }));
+    expect(names().filter((n) => n.startsWith("settings.local.json.bak."))).toEqual(
+      [3, 4, 5, 6, 7].map((n) => `settings.local.json.bak.${day(n)}`),
+    );
+    expect(bakNames()).toHaveLength(7);
+  });
+
+  it("a snapshot that cannot be read still retires, and only the retired snapshots are pruned", () => {
+    for (let n = 1; n <= 8; n++) {
+      fs.writeFileSync(path.join(tmp, `${SNAPSHOT_BASENAME_PREFIX}${day(n)}.restored.json`), "{}");
+      bak(n);
+    }
+    const junk = path.join(tmp, `${SNAPSHOT_BASENAME_PREFIX}${day(9)}.json`);
+    fs.writeFileSync(junk, "not json");
+    const to = retireSnapshot(junk);
+    expect(fs.existsSync(to)).toBe(true);
+    expect(retiredNames()).toHaveLength(5);
+    expect(bakNames()).toHaveLength(8);
+  });
+
+  it("a retire failure still throws and prunes nothing", () => {
+    for (let n = 1; n <= 8; n++) fs.writeFileSync(path.join(tmp, `${SNAPSHOT_BASENAME_PREFIX}${day(n)}.restored.json`), "{}");
+    expect(() => retireSnapshot(path.join(tmp, `${SNAPSHOT_BASENAME_PREFIX}${day(99)}.json`))).toThrow();
+    expect(retiredNames()).toHaveLength(8);
   });
 });

@@ -185,7 +185,13 @@ export function codexGateEnable(opts: CodexGateEnableOptions = {}): CodexGateEna
   let retired: CodexRetiredSnapshot | null = null;
   if (retire !== null) {
     const done = backup !== undefined ? `restored ${restoredCount} hook unit(s) into ${requestedPath}, but ` : "";
-    const to = retireCodexSnapshot(live.path, retire.why, (m) => new GateEnableError(m), done);
+    const to = retireCodexSnapshot(
+      live.path,
+      retire.why,
+      (m) => new GateEnableError(m),
+      done,
+      backup !== undefined ? [backup] : [],
+    );
     retired = { from: live.path, to, ...retire };
   }
   const base = {
