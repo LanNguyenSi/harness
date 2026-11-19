@@ -265,6 +265,22 @@ harness gate disable --runtime codex --matcher apply_patch  # Codex hook units
 harness gate enable  --runtime codex
 ```
 
+Which file the verbs edit: `harness apply --target <file>` writes the
+hook groups into `<file>`, so `gate disable` and `gate enable` must be
+pointed at that same file with `--settings`:
+
+```bash
+# Wired with: harness apply --target .claude/settings.local.json
+harness gate disable --matcher 'Write|Edit' --settings .claude/settings.local.json
+harness gate enable  --settings .claude/settings.local.json
+```
+
+Without `--settings` the verbs edit only `~/.claude/settings.json`: a
+`--matcher` run there reports `no hook groups matched` (or removes a
+user-scope group that carries the same matcher, if one exists, or
+reports `settings file not found` when that file does not exist)
+while the project-scope block stays live and keeps refusing.
+
 On Claude Code the verb removes the matching hook groups from
 `~/.claude/settings.json`, keeping a backup and a reversible snapshot;
 `harness gate enable` puts the groups back. With `--runtime codex` it
@@ -353,7 +369,7 @@ removed verbs is in the removed section of
 | Schema issues, plus drift since last `apply` | `harness validate --check-lock` |
 | Health summary across all pillars (MCP probes, hook executability, memory dir state) | `harness doctor` |
 | What changed since I last ran `apply` | `harness diff --since-apply` |
-| Take one hook group out of the live config (recovery / debug / incident), Claude Code | `harness gate disable --matcher <substring>` then `harness gate enable` |
+| Take one hook group out of the live config (recovery / debug / incident), Claude Code | `harness gate disable --matcher <substring>` then `harness gate enable`; if the wiring came from `apply --target <file>`, add `--settings <file>` to both (e.g. `--settings .claude/settings.local.json`) |
 | Take one hook unit out of the live config (recovery / debug / incident), Codex | `harness gate disable --runtime codex --matcher <substring>` then `harness gate enable --runtime codex` |
 | Edit a protected branch on purpose (branch-protection off, from an operator shell) | see [Disable the gate](policy-packs/branch-protection.md#disable-the-gate-operator-only) |
 

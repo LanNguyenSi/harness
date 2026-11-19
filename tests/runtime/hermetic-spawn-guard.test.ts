@@ -42,6 +42,17 @@ describe("assertNoRealSpawnInTests", () => {
     }
   });
 
+  it("the thrown error names the HARNESS_ALLOW_REAL_SPAWN=1 escape hatch for a real invocation", () => {
+    process.env.VITEST = "true";
+    try {
+      assertNoRealSpawnInTests("npm i -g", "Inject a fake `installSpawn` runner.");
+      throw new Error("expected assertNoRealSpawnInTests to throw");
+    } catch (err) {
+      expect(err).toBeInstanceOf(HermeticSpawnViolationError);
+      expect((err as Error).message).toContain("HARNESS_ALLOW_REAL_SPAWN=1");
+    }
+  });
+
   it("is a no-op when VITEST is NOT set (production behavior)", () => {
     delete process.env.VITEST;
     expect(() => assertNoRealSpawnInTests("the-real-thing", "Inject a fake runner instead.")).not.toThrow();

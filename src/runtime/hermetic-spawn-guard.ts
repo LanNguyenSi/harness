@@ -91,7 +91,8 @@ export class HermeticSpawnViolationError extends Error {
   constructor(binaryLabel: string, hint: string) {
     super(
       `Refusing to spawn a REAL "${binaryLabel}" process while running under vitest ` +
-        `(process.env.VITEST is set). ${hint}`,
+        `(process.env.VITEST is set). ${hint} ` +
+        `If this is a real (non-test) invocation, set HARNESS_ALLOW_REAL_SPAWN=1 to allow it.`,
     );
     this.name = "HermeticSpawnViolationError";
   }
