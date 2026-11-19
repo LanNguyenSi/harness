@@ -175,6 +175,21 @@ jobs:
             done
           }
 
+          # dist_tag_for <version>: npm >= 11.5.1 refuses (a) a prerelease
+          # publish without an explicit --tag and (b) implicitly applying
+          # `latest` to a version below the highest published stable one. A
+          # prerelease (a '-' prerelease part, e.g. 2.1.0-rc.1) therefore
+          # publishes under `next`. Only the part before the first '+' is
+          # tested, so a '-' inside '+build' metadata (2.1.0+build-5) is not
+          # a prerelease; a stable version prints nothing and gets no --tag
+          # at all, so npm keeps its own guard against moving `latest`
+          # backwards.
+          dist_tag_for() {
+            case "${1%%+*}" in
+              *-*) echo next ;;
+            esac
+          }
+
           # Idempotency: a re-run (workflow_dispatch, or "Re-run failed jobs")
           # can land on a version a prior attempt already published.
           if npm view "${pkg}@${version}" version > /dev/null 2>&1; then
@@ -202,10 +217,22 @@ jobs:
           # the registry (a version without the attestation is an error).
           max=3
           attempt=1
+          dist_tag=$(dist_tag_for "${version}")
+          if [ -n "${dist_tag}" ]; then
+            echo "Publishing ${pkg}@${version} under the ${dist_tag} dist-tag (prerelease); promoting it to latest is a manual npm dist-tag add by the maintainer."
+          fi
           while true; do
             echo "npm publish attempt ${attempt}/${max}"
-            if npm publish --access public --provenance; then
-              echo "::notice::Published ${pkg}@${version} on attempt ${attempt}."
+            # Prerelease versions must name a tag explicitly (npm >= 11.5.1
+            # refuses them otherwise) and land on `next`; stable versions get
+            # no --tag so npm's "latest never moves backwards" guard stays on.
+            if [ -z "${dist_tag}" ]; then
+              if npm publish --access public --provenance; then
+                echo "::notice::Published ${pkg}@${version} on attempt ${attempt}."
+                exit 0
+              fi
+            elif npm publish --access public --provenance --tag "${dist_tag}"; then
+              echo "::notice::Published ${pkg}@${version} under ${dist_tag} on attempt ${attempt}."
               exit 0
             fi
             # A failed --provenance publish can still have landed the tarball;
