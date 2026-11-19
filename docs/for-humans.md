@@ -277,8 +277,9 @@ harness gate enable  --settings .claude/settings.local.json
 
 Without `--settings` the verbs edit only `~/.claude/settings.json`: a
 `--matcher` run there reports `no hook groups matched` (or removes a
-user-scope group that carries the same matcher, if one exists) while
-the project-scope block stays live and keeps refusing.
+user-scope group that carries the same matcher, if one exists, or
+reports `settings file not found` when that file does not exist)
+while the project-scope block stays live and keeps refusing.
 
 On Claude Code the verb removes the matching hook groups from
 `~/.claude/settings.json`, keeping a backup and a reversible snapshot;
