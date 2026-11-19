@@ -99,16 +99,21 @@ describe("publish-npm.yml", () => {
     });
 
     // Each version is its own case: stable (no tag), a bare prerelease,
-    // a prerelease with build metadata, and build metadata alone. The
-    // replay spawns `sh` (on the suite's spawn allowlist; `bash` is not):
-    // the snippet is POSIX sh, which is exactly what runs it identically
-    // under the workflow's bash -e on the runner and under macOS /bin/sh
-    // (a bash) here, so the derivation is shell-checked, not mocked.
+    // a prerelease with build metadata, build metadata alone, a hyphen
+    // inside build metadata (stable: semver says prerelease null), and a
+    // prerelease plus such metadata. The replay spawns `sh` (on the
+    // suite's spawn allowlist; `bash` is not): the snippet is POSIX sh,
+    // which runs it identically under the workflow's bash on the runner
+    // and under /bin/sh here and in CI (a bash on macOS, dash on the
+    // Linux CI runner), so the derivation is shell-checked, not mocked.
     it.each([
       ["2.1.0", ""],
       ["2.1.0-rc.1", "next"],
       ["2.1.0-beta.0+build.5", "next"],
       ["2.1.0+build.5", ""],
+      ["2.1.0+build-5", ""],
+      ["2.1.0+sha.ab-cd", ""],
+      ["2.1.0-rc.1+sha.ab-cd", "next"],
     ])("dist_tag_for %s under sh returns %s", (version, expected) => {
       const fn = fnMatch?.[0] ?? "dist_tag_for() { :; }";
       const r = spawnSync("sh", ["-c", `${fn}\ndist_tag_for "${version}"`], { encoding: "utf8" });
@@ -124,6 +129,15 @@ describe("publish-npm.yml", () => {
       // The stable branch is the bare publish: no --tag at all, so npm keeps
       // its guard against moving `latest` backwards.
       expect(publishRun).toMatch(/^ +if npm publish --access public --provenance; then$/m);
+    });
+
+    // Single assignment: a fallback like `dist_tag=${dist_tag:-next}`
+    // after the derivation, or `dist_tag=next` before the retry loop,
+    // would silently route stable publishes under `next`, and no other
+    // test in this file sees the value the publish branches on.
+    it("the Publish step assigns dist_tag exactly once, from dist_tag_for", () => {
+      expect(publishRun.match(/\bdist_tag=/g) ?? []).toHaveLength(1);
+      expect(publishRun).toContain('dist_tag=$(dist_tag_for "${version}")');
     });
 
     it("no npm publish anywhere in the workflow carries --tag latest", () => {

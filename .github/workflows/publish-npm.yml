@@ -178,12 +178,14 @@ jobs:
           # dist_tag_for <version>: npm >= 11.5.1 refuses (a) a prerelease
           # publish without an explicit --tag and (b) implicitly applying
           # `latest` to a version below the highest published stable one. A
-          # prerelease (a '-' prerelease part, e.g. 2.1.0-rc.1; a bare
-          # '+build' metadata suffix is not a prerelease) therefore publishes
-          # under `next`; a stable version prints nothing and gets no --tag at
-          # all, so npm keeps its own guard against moving `latest` backwards.
+          # prerelease (a '-' prerelease part, e.g. 2.1.0-rc.1) therefore
+          # publishes under `next`. Only the part before the first '+' is
+          # tested, so a '-' inside '+build' metadata (2.1.0+build-5) is not
+          # a prerelease; a stable version prints nothing and gets no --tag
+          # at all, so npm keeps its own guard against moving `latest`
+          # backwards.
           dist_tag_for() {
-            case "$1" in
+            case "${1%%+*}" in
               *-*) echo next ;;
             esac
           }
