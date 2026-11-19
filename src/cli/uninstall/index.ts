@@ -254,6 +254,12 @@ export interface UninstallInventory {
    * Detection only: uninstall never edits that file.
    */
   codexBlockPresent: boolean;
+  /**
+   * True when the block carries its BEGIN fence line. False with
+   * `codexBlockPresent` true means only the `Generated source` line was
+   * found (the removal step is worded for that layout).
+   */
+  codexBlockFenced: boolean;
   /** Soft notices (e.g. project-local `~/.claude.json` registers grounding-mcp). */
   warnings: string[];
 }
@@ -390,22 +396,29 @@ function resolveCodexConfigPath(opts: UninstallOptions): string | null {
  * failure is a warning, never a throw, because the teardown must not fail
  * on a file it does not own.
  */
-function probeCodexBlock(configPath: string, warnings: string[]): boolean {
+function probeCodexBlock(
+  configPath: string,
+  warnings: string[],
+): { present: boolean; fenced: boolean } {
   let text: string;
   try {
     text = fs.readFileSync(configPath, "utf8");
   } catch (err) {
     const code = (err as NodeJS.ErrnoException).code;
-    if (code === "ENOENT" || code === "ENOTDIR") return false;
+    if (code === "ENOENT" || code === "ENOTDIR") return { present: false, fenced: false };
     warnings.push(
       `could not read ${configPath}: check it for a harness-managed block by hand (${code ?? (err as Error).message})`,
     );
-    return false;
+    return { present: false, fenced: false };
   }
-  return text.split(/\r?\n/).some((line) => {
+  let fenced = false;
+  let sourceLine = false;
+  for (const line of text.split(/\r?\n/)) {
     const t = line.trim();
-    return t.startsWith(CODEX_MANAGED_BEGIN) || t.startsWith(CODEX_MANAGED_SOURCE_PREFIX);
-  });
+    if (t.startsWith(CODEX_MANAGED_BEGIN)) fenced = true;
+    else if (t.startsWith(CODEX_MANAGED_SOURCE_PREFIX)) sourceLine = true;
+  }
+  return { present: fenced || sourceLine, fenced };
 }
 
 /**
@@ -413,9 +426,18 @@ function probeCodexBlock(configPath: string, warnings: string[]): boolean {
  * managed block. Printed before the `npm uninstall -g` hint: with the
  * binary gone, the guarded hook line blocks every `apply_patch`.
  */
-export function codexRemovalStep(configPath: string): string {
+export function codexRemovalStep(configPath: string, fenced = true): string {
+  const head = `Codex: ${configPath} still holds the harness-managed hook block (uninstall does not edit that file).\n`;
+  if (!fenced) {
+    return (
+      head +
+      `  Only the \`${CODEX_MANAGED_SOURCE_PREFIX} Generated source: ...\` line was found, with no \`${CODEX_MANAGED_BEGIN}\` fence.\n` +
+      `  Before \`npm uninstall -g @lannguyensi/harness\`, delete that line and the harness hook tables (\`[[hooks.<Event>]]\`)\n` +
+      `  that follow it, keep any hook tables you wrote yourself, then restart Codex.\n`
+    );
+  }
   return (
-    `Codex: ${configPath} still holds the harness-managed hook block (uninstall does not edit that file).\n` +
+    head +
     `  Before \`npm uninstall -g @lannguyensi/harness\`, delete the \`${CODEX_MANAGED_SOURCE_PREFIX} Generated source: ...\` line\n` +
     `  and every line from \`${CODEX_MANAGED_BEGIN}\` through \`${CODEX_MANAGED_END}\`, then restart Codex.\n`
   );
@@ -799,6 +821,7 @@ function buildInventory(opts: UninstallOptions): {
 
   const codexConfigPath = resolveCodexConfigPath(opts);
   let codexBlockPresent = false;
+  let codexBlockFenced = false;
   if (codexConfigPath === null) {
     warnings.push(
       "skipped the Codex hook block check: no --codex-config or --home override, so this run can't " +
@@ -806,7 +829,10 @@ function buildInventory(opts: UninstallOptions): {
         "the real harness binary) set HARNESS_ALLOW_REAL_GENERATED_DIR=1.",
     );
   } else {
-    codexBlockPresent = probeCodexBlock(codexConfigPath, warnings);
+    ({ present: codexBlockPresent, fenced: codexBlockFenced } = probeCodexBlock(
+      codexConfigPath,
+      warnings,
+    ));
   }
 
   return {
@@ -826,6 +852,7 @@ function buildInventory(opts: UninstallOptions): {
       mcpRegistryReadError,
       codexConfigPath,
       codexBlockPresent,
+      codexBlockFenced,
       warnings,
     },
     parsed,

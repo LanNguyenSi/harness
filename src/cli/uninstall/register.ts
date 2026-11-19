@@ -73,7 +73,11 @@ export function registerUninstall(
             for (const w of inv.warnings) stderr(`warning: ${w}\n`);
             return;
           }
-          stdout(`harness install under ${rootsLabel}:\n`);
+          stdout(
+            nothingElse
+              ? `no harness install found under ${rootsLabel}; Codex residue:\n`
+              : `harness install under ${rootsLabel}:\n`,
+          );
           if (inv.manifestPath) stdout(`  manifest:  ${inv.manifestPath}\n`);
           if (inv.lockPath) stdout(`  lock:      ${inv.lockPath}\n`);
           if (inv.generatedDir) stdout(`  generated: ${inv.generatedDir}/\n`);
@@ -102,7 +106,7 @@ export function registerUninstall(
             );
           }
           if (inv.codexBlockPresent && inv.codexConfigPath !== null) {
-            stdout(`\n${codexRemovalStep(inv.codexConfigPath)}`);
+            stdout(`\n${codexRemovalStep(inv.codexConfigPath, inv.codexBlockFenced)}`);
           }
           if (nothingElse) {
             stdout(`\nNothing else to remove; --apply does not touch the Codex config. This is a dry-run.\n`);
@@ -125,7 +129,7 @@ export function registerUninstall(
             for (const r of result.mcpRegistryRemovals) stdout(`  ${r.name}: ${r.status}\n`);
           }
           if (inv.codexBlockPresent && inv.codexConfigPath !== null) {
-            stdout(`\n${codexRemovalStep(inv.codexConfigPath)}`);
+            stdout(`\n${codexRemovalStep(inv.codexConfigPath, inv.codexBlockFenced)}`);
           }
           stdout(
             `\nTo finish: \`npm uninstall -g @lannguyensi/harness\` (uninstall does not touch the npm install).\n`,
@@ -186,11 +190,11 @@ export function registerUninstall(
               : `${inv.stateDir} (state) + ${inv.homeDir} (settings)`;
           stdout(`no harness install found under ${rootsLabel}; nothing to remove.\n`);
           if (inv.codexBlockPresent && inv.codexConfigPath !== null) {
-            stdout(`\n${codexRemovalStep(inv.codexConfigPath)}`);
+            stdout(`\n${codexRemovalStep(inv.codexConfigPath, inv.codexBlockFenced)}`);
           }
         } else {
           if (inv.codexBlockPresent && inv.codexConfigPath !== null) {
-            stdout(`\n${codexRemovalStep(inv.codexConfigPath)}`);
+            stdout(`\n${codexRemovalStep(inv.codexConfigPath, inv.codexBlockFenced)}`);
           }
           stdout(
             `\nTo finish: \`npm uninstall -g @lannguyensi/harness\` (uninstall does not touch the npm install).\n`,

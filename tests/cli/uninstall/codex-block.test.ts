@@ -184,6 +184,29 @@ describe("uninstall codex hook block: file states", () => {
     expect(inv.codexBlockPresent).toBe(true);
   });
 
+  it("matches a BEGIN line that carries trailing text (prefix match, not equality)", async () => {
+    write(derivedCodex, `${CODEX_MANAGED_BEGIN} (edited)\n`);
+    const inv = await inventoryOf({ homeDir });
+    expect(inv.codexBlockPresent).toBe(true);
+    expect(inv.codexBlockFenced).toBe(true);
+  });
+
+  it("a regular file where the .codex directory should be (ENOTDIR): no block, no warning", async () => {
+    write(path.join(tmp, ".codex"), "not a directory\n");
+    const inv = await inventoryOf({ homeDir });
+    expect(inv.codexBlockPresent).toBe(false);
+    expect(inv.warnings.filter((w) => /codex/i.test(w))).toEqual([]);
+  });
+
+  it("reports the layout: fenced with a BEGIN line, not fenced with only the source line", async () => {
+    write(derivedCodex, BLOCK);
+    expect((await inventoryOf({ homeDir })).codexBlockFenced).toBe(true);
+    write(derivedCodex, `${CODEX_MANAGED_SOURCE_PREFIX} Generated source: /x.toml\n`);
+    const inv = await inventoryOf({ homeDir });
+    expect(inv.codexBlockPresent).toBe(true);
+    expect(inv.codexBlockFenced).toBe(false);
+  });
+
   it("matches an indented marker line and CRLF line endings", async () => {
     write(derivedCodex, `model = "x"\r\n   ${CODEX_MANAGED_BEGIN}  \r\n`);
     const inv = await inventoryOf({ homeDir });
@@ -277,12 +300,35 @@ describe("uninstall codex hook block: CLI output", () => {
     expect(out).toContain(`\`${CODEX_MANAGED_BEGIN}\` through \`${CODEX_MANAGED_END}\``);
     expect(out).toContain("then restart Codex");
     expect(out).toContain("Pass --apply to remove the above. This is a dry-run.");
+    expect(out).toContain("harness install under");
+    expect(out).toContain("through");
+    expect(out).toContain(CODEX_MANAGED_END);
+  });
+
+  it("dry-run with only the source line words the step for that layout, without the BEGIN-through-END range", async () => {
+    write(derivedCodex, `${CODEX_MANAGED_SOURCE_PREFIX} Generated source: /x.toml\n`);
+    const { out } = await runCli(["--home", homeDir, "--settings", settingsPath]);
+    expect(out).toContain(`Only the \`${CODEX_MANAGED_SOURCE_PREFIX} Generated source: ...\` line was found`);
+    expect(out).toContain("keep any hook tables you wrote yourself");
+    expect(out).not.toContain(CODEX_MANAGED_END);
+    expect(out).not.toContain("through");
+  });
+
+  it("--apply with only the source line uses the same wording", async () => {
+    write(derivedCodex, `${CODEX_MANAGED_SOURCE_PREFIX} Generated source: /x.toml\n`);
+    fs.writeFileSync(path.join(homeDir, "harness.yaml"), "version: 1\n");
+    const { out } = await runCli(["--apply", "--home", homeDir, "--settings", settingsPath]);
+    expect(out).toContain("keep any hook tables you wrote yourself");
+    expect(out).not.toContain(CODEX_MANAGED_END);
   });
 
   it("dry-run shows the block even when nothing else is installed", async () => {
     write(derivedCodex, BLOCK);
     const { out } = await runCli(["--home", homeDir, "--settings", settingsPath]);
     expect(out).not.toContain("nothing to do");
+    expect(out).toContain("no harness install found under");
+    expect(out).toContain("; Codex residue:");
+    expect(out).not.toMatch(/^harness install under/m);
     expect(out).toContain(`Codex: ${derivedCodex} still holds the harness-managed hook block`);
     expect(out).toContain("This is a dry-run.");
     expect(out).not.toContain("Pass --apply to remove the above");
