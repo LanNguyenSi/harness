@@ -14,11 +14,17 @@
 // A new memory file or a content change produces exactly one diff line per
 // affected directory.
 //
-// Stat errors during asset/memory-dir collection are treated as "not present"
-// and silently omitted from the lock. This means a permission-denied path
-// (EACCES) will not appear in the lock; that is intentional today (most stat
-// failures are ENOENT in practice), but a future revision may choose to
-// surface EACCES as a diagnostic.
+// A path that is not there (ENOENT, ENOTDIR) is silently omitted from the
+// lock: a manifest may name an asset that has not been installed yet. Any
+// other stat or read failure (EACCES, EPERM, ELOOP, ...) on an asset, a skill
+// SKILL.md candidate or a memory directory (or a file inside one) also
+// leaves the entry out, but is reported as a warning naming the path and the
+// error code, so the missing entry (and the drift detection that goes with
+// it) is not silent. `buildLockEntriesWithWarnings` returns those warnings;
+// `harness apply` prints them. The lock format carries no marker for such a
+// path: an older release's `parseLock` rejects an unknown entry kind, so the
+// warning is the only signal. A memory directory holding one unreadable file
+// is left out as a whole, since its hash would otherwise cover a partial view.
 //
 // `mcp[]` and `memory.router` entries with `enabled: false` are skipped: per
 // ARCHITECTURE §3, disabled MCP entries are removed from the generated
@@ -220,9 +226,33 @@ function isInterpreter(token: string): boolean {
   return KNOWN_INTERPRETERS.has(path.basename(token));
 }
 
+// ENOENT / ENOTDIR: the path is simply not there. Everything else is a path
+// that exists (or may exist) but cannot be examined.
+function isAbsentError(err: unknown): boolean {
+  const code = (err as NodeJS.ErrnoException | null)?.code;
+  return code === "ENOENT" || code === "ENOTDIR";
+}
+
+function errorCode(err: unknown): string {
+  const code = (err as NodeJS.ErrnoException | null)?.code;
+  return typeof code === "string" && code !== "" ? code : "UNKNOWN";
+}
+
+function pushWarning(warnings: string[], message: string): void {
+  if (!warnings.includes(message)) warnings.push(message);
+}
+
+function warnUnreadable(warnings: string[], p: string, err: unknown): void {
+  pushWarning(
+    warnings,
+    `${LOCK_BASENAME}: cannot read ${p} (${errorCode(err)}); it is not drift-checked until readable`,
+  );
+}
+
 export function collectManifestAssetPaths(
   manifest: Manifest,
   opts: BuildLockOptions = {},
+  warnings: string[] = [],
 ): string[] {
   const seen = new Set<string>();
   const out: string[] = [];
@@ -234,7 +264,8 @@ export function collectManifestAssetPaths(
     let isFile = false;
     try {
       isFile = fs.statSync(expanded).isFile();
-    } catch {
+    } catch (err) {
+      if (!isAbsentError(err)) warnUnreadable(warnings, expanded, err);
       return;
     }
     if (!isFile) return;
@@ -266,8 +297,10 @@ export function collectManifestAssetPaths(
           consider(candidate);
           break;
         }
-      } catch {
-        // try next source_dir
+      } catch (err) {
+        // try next source_dir; a candidate that exists but cannot be
+        // examined is reported rather than skipped silently.
+        if (!isAbsentError(err)) warnUnreadable(warnings, candidate, err);
       }
     }
   }
@@ -275,14 +308,34 @@ export function collectManifestAssetPaths(
   return out;
 }
 
+export interface BuildLockResult {
+  entries: LockEntry[];
+  /** One line per path that could not be read and so is not in `entries`. */
+  warnings: string[];
+}
+
 export function buildLockEntries(
   manifest: Manifest,
   opts: BuildLockOptions = {},
 ): LockEntry[] {
-  const entries: LockEntry[] = [];
+  return buildLockEntriesWithWarnings(manifest, opts).entries;
+}
 
-  for (const absPath of collectManifestAssetPaths(manifest, opts)) {
-    entries.push(computeAssetEntry(absPath));
+export function buildLockEntriesWithWarnings(
+  manifest: Manifest,
+  opts: BuildLockOptions = {},
+): BuildLockResult {
+  const entries: LockEntry[] = [];
+  const warnings: string[] = [];
+
+  for (const absPath of collectManifestAssetPaths(manifest, opts, warnings)) {
+    try {
+      entries.push(computeAssetEntry(absPath));
+    } catch (err) {
+      // Listed by stat but unreadable (a mode-000 file): without this catch
+      // the read error would abort the whole apply.
+      if (!isAbsentError(err)) warnUnreadable(warnings, absPath, err);
+    }
   }
 
   for (const dir of manifest.memory.directories) {
@@ -303,12 +356,26 @@ export function buildLockEntries(
     let isDir = false;
     try {
       isDir = fs.statSync(resolved).isDirectory();
-    } catch {
-      // skip missing dirs
+    } catch (err) {
+      // a missing dir is skipped silently; any other failure is reported
+      if (!isAbsentError(err)) warnUnreadable(warnings, resolved, err);
     }
     if (!isDir) continue;
-    entries.push(computeMemoryDirEntry(resolved));
+    try {
+      entries.push(computeMemoryDirEntry(resolved));
+    } catch (err) {
+      if (isAbsentError(err)) continue;
+      const failed = (err as NodeJS.ErrnoException).path;
+      if (typeof failed === "string" && failed !== resolved) {
+        pushWarning(
+          warnings,
+          `${LOCK_BASENAME}: cannot read ${failed} (${errorCode(err)}); memory directory ${resolved} is not drift-checked until readable`,
+        );
+      } else {
+        warnUnreadable(warnings, resolved, err);
+      }
+    }
   }
 
-  return entries;
+  return { entries, warnings };
 }
