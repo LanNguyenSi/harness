@@ -10,6 +10,7 @@ import { parse } from "yaml";
 
 type Step = {
   name?: string;
+  id?: string;
   uses?: string;
   if?: string;
   env?: Record<string, string>;
@@ -151,6 +152,65 @@ describe("publish-npm.yml", () => {
         }
       }
     });
+
+    // Every successful publish must end the step right there: without the
+    // `exit 0` a published version falls through to the failure-handling
+    // tail of the retry loop (sleep 5, npm view, attestation read). The
+    // publish-npm.yml file itself is not changed by this, the pin is
+    // test-only: each publish-success branch is an `if`/`elif` whose body
+    // is exactly the ::notice::Published echo and the exit 0.
+    it("each npm publish success branch ends with its Published notice and exit 0", () => {
+      expect(publishRun).toMatch(
+        /if npm publish --access public --provenance; then\n\s*echo "::notice::Published \$\{pkg\}@\$\{version\} on attempt \$\{attempt\}\."\n\s*exit 0\n/,
+      );
+      expect(publishRun).toMatch(
+        /elif npm publish --access public --provenance --tag "\$\{dist_tag\}"; then\n\s*echo "::notice::Published \$\{pkg\}@\$\{version\} under \$\{dist_tag\} on attempt \$\{attempt\}\."\n\s*exit 0\n/,
+      );
+    });
+  });
+});
+
+describe("release.yml", () => {
+  const wf = load("release.yml");
+  const steps = wf.jobs.release?.steps ?? [];
+  const versionStep = steps.find((s) => s.id === "version") as Step;
+  const releaseStep = steps.find((s) => s.uses?.startsWith("softprops/action-gh-release@")) as Step;
+
+  it("the version step derives prerelease from an env-bound tag and exports it", () => {
+    expect(versionStep.env?.TAG_NAME).toBe("${{ github.ref_name }}");
+    // The tag reaches the script only as an environment variable: a `${{ }}`
+    // spliced into the run script would make the tag value script-syntax.
+    expect(versionStep.run ?? "").not.toContain("${{");
+    expect(versionStep.run).toContain('echo "version=${version}" >> "$GITHUB_OUTPUT"');
+    expect(versionStep.run).toContain('echo "prerelease=${prerelease}" >> "$GITHUB_OUTPUT"');
+  });
+
+  it("the release step passes the version step's prerelease output to the action", () => {
+    expect(releaseStep.with?.prerelease).toBe("${{ steps.version.outputs.prerelease }}");
+  });
+
+  // The version step's classification: the `case` block replayed under a
+  // real `sh` (on the suite's spawn allowlist; `bash` is not) with the v
+  // stripped in the harness (the step's own strip line is pinned above),
+  // the same rule dist_tag_for applies on the publish side, so the two
+  // derivations cannot silently drift apart. The snippet is POSIX sh.
+  const classifyMatch = (versionStep.run ?? "").match(/case "\$\{version[^"]*\}" in\n[\s\S]*?\nesac/);
+
+  it("the version step carries the prerelease case block and strips the v prefix", () => {
+    expect(classifyMatch, "classification block in the version step").not.toBeNull();
+    expect(versionStep.run).toContain('version="${TAG_NAME#v}"');
+  });
+
+  it.each([
+    ["v2.1.0", "false"],
+    ["v2.1.0-rc.1", "true"],
+    ["v2.1.0+build-5", "false"],
+  ])("the version step classifies %s under sh as prerelease=%s", (tag, expected) => {
+    const block = classifyMatch?.[0] ?? 'case "${version}" in\n *) prerelease=unset ;;\nesac';
+    const r = spawnSync("sh", ["-c", `TAG_NAME="${tag}"\nversion="\${TAG_NAME#v}"\n${block}\nprintf '%s' "\${prerelease}"`], { encoding: "utf8" });
+    expect(r.stderr).toBe("");
+    expect(r.status).toBe(0);
+    expect(r.stdout).toBe(expected);
   });
 });
 

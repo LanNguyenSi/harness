@@ -29,7 +29,23 @@ jobs:
 
       - name: Extract version from tag
         id: version
-        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+        # TAG_NAME comes in via `env:` (as in the steps below): an `env:`-bound
+        # `${{ }}` becomes a plain environment variable, so the tag value is
+        # shell-data, never spliced into the script's syntax.
+        env:
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          version="${TAG_NAME#v}"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          # prerelease flag for the release step below, with the same rule as
+          # dist_tag_for in publish-npm.yml's Publish step: only the part
+          # before the first '+' is tested, so a '-' inside '+build' metadata
+          # (2.1.0+build-5) is not a prerelease.
+          case "${version%%+*}" in
+            *-*) prerelease=true ;;
+            *) prerelease=false ;;
+          esac
+          echo "prerelease=${prerelease}" >> "$GITHUB_OUTPUT"
 
       - name: Extract changelog for this version
         id: changelog
@@ -115,3 +131,4 @@ jobs:
           name: v${{ steps.version.outputs.version }}
           body_path: release_notes.md
           generate_release_notes: false
+          prerelease: ${{ steps.version.outputs.prerelease }}
