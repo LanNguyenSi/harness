@@ -148,7 +148,7 @@ function buildRefManifest(
 export function diff(opts: DiffOptions): DiffResult {
   if (!opts.since) {
     throw new HarnessExitError(
-      "harness diff requires --since <ref>; --since-apply lands in Phase 3",
+      "harness diff requires --since <ref> or --since-apply",
       EX_USAGE,
     );
   }
