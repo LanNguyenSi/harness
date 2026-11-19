@@ -1,7 +1,7 @@
 import type { Command } from "commander";
 import * as fs from "node:fs";
 import { EX_FAIL, HarnessExitError } from "../exit-codes.js";
-import { uninstall, UninstallError } from "./index.js";
+import { codexBlockWarning, codexRemovalStep, uninstall, UninstallError } from "./index.js";
 
 export function registerUninstall(
   program: Command,
@@ -36,18 +36,23 @@ export function registerUninstall(
       "override the harness state root (default: ~/.harness/, legacy fallback ~/.claude/)",
     )
     .option("--settings <path>", "override ~/.claude/settings.json")
-    .action(async (options: { apply?: boolean; restoreFrom?: string; home?: string; state?: string; settings?: string }) => {
+    .option(
+      "--codex-config <path>",
+      "Codex config to check (read-only) for the harness-managed hook block (default: ~/.codex/config.toml next to --home; uninstall never edits it)",
+    )
+    .action(async (options: { apply?: boolean; restoreFrom?: string; home?: string; state?: string; settings?: string; codexConfig?: string }) => {
       const cliOpts: Parameters<typeof uninstall>[0] = {};
       if (options.apply) cliOpts.apply = true;
       if (options.restoreFrom) cliOpts.restoreFrom = options.restoreFrom;
       if (options.home) cliOpts.homeDir = options.home;
       if (options.state) cliOpts.stateDir = options.state;
       if (options.settings) cliOpts.settingsPath = options.settings;
+      if (options.codexConfig) cliOpts.codexConfigPath = options.codexConfig;
       try {
         const result = await uninstall(cliOpts);
         const inv = result.inventory;
         if (result.mode === "list") {
-          const nothing =
+          const nothingElse =
             inv.manifestPath === null &&
             inv.lockPath === null &&
             inv.generatedDir === null &&
@@ -56,6 +61,9 @@ export function registerUninstall(
             inv.mcpServers.length === 0 &&
             inv.mcpRegistryServers.length === 0 &&
             inv.preHarnessBackups.length === 0;
+          // A Codex-only residue still counts: the listing is the only place
+          // the operator learns about the block before `npm uninstall -g`.
+          const nothing = nothingElse && !inv.codexBlockPresent;
           const rootsLabel =
             inv.stateDir === inv.homeDir
               ? inv.homeDir
@@ -65,7 +73,11 @@ export function registerUninstall(
             for (const w of inv.warnings) stderr(`warning: ${w}\n`);
             return;
           }
-          stdout(`harness install under ${rootsLabel}:\n`);
+          stdout(
+            nothingElse
+              ? `no harness install found under ${rootsLabel}; Codex residue:\n`
+              : `harness install under ${rootsLabel}:\n`,
+          );
           if (inv.manifestPath) stdout(`  manifest:  ${inv.manifestPath}\n`);
           if (inv.lockPath) stdout(`  lock:      ${inv.lockPath}\n`);
           if (inv.generatedDir) stdout(`  generated: ${inv.generatedDir}/\n`);
@@ -93,7 +105,14 @@ export function registerUninstall(
               `\n  Restore from one of these with: harness uninstall --restore-from <path>\n`,
             );
           }
-          stdout(`\nPass --apply to remove the above. This is a dry-run.\n`);
+          if (inv.codexBlockPresent && inv.codexConfigPath !== null) {
+            stdout(`\n${codexRemovalStep(inv.codexConfigPath, inv.codexBlockFenced)}`);
+          }
+          if (nothingElse) {
+            stdout(`\nNothing else to remove; --apply does not touch the Codex config. This is a dry-run.\n`);
+          } else {
+            stdout(`\nPass --apply to remove the above. This is a dry-run.\n`);
+          }
           for (const w of inv.warnings) stderr(`warning: ${w}\n`);
           return;
         }
@@ -109,10 +128,16 @@ export function registerUninstall(
             stdout(`claude mcp remove (user scope, ${inv.mcpRegistryPath}):\n`);
             for (const r of result.mcpRegistryRemovals) stdout(`  ${r.name}: ${r.status}\n`);
           }
+          if (inv.codexBlockPresent && inv.codexConfigPath !== null) {
+            stdout(`\n${codexRemovalStep(inv.codexConfigPath, inv.codexBlockFenced)}`);
+          }
           stdout(
             `\nTo finish: \`npm uninstall -g @lannguyensi/harness\` (uninstall does not touch the npm install).\n`,
           );
           for (const w of inv.warnings) stderr(`warning: ${w}\n`);
+          if (inv.codexBlockPresent && inv.codexConfigPath !== null) {
+            stderr(`warning: ${codexBlockWarning(inv.codexConfigPath)}\n`);
+          }
           return;
         }
         // apply
@@ -164,12 +189,21 @@ export function registerUninstall(
               ? inv.homeDir
               : `${inv.stateDir} (state) + ${inv.homeDir} (settings)`;
           stdout(`no harness install found under ${rootsLabel}; nothing to remove.\n`);
+          if (inv.codexBlockPresent && inv.codexConfigPath !== null) {
+            stdout(`\n${codexRemovalStep(inv.codexConfigPath, inv.codexBlockFenced)}`);
+          }
         } else {
+          if (inv.codexBlockPresent && inv.codexConfigPath !== null) {
+            stdout(`\n${codexRemovalStep(inv.codexConfigPath, inv.codexBlockFenced)}`);
+          }
           stdout(
             `\nTo finish: \`npm uninstall -g @lannguyensi/harness\` (uninstall does not touch the npm install).\n`,
           );
         }
         for (const w of inv.warnings) stderr(`warning: ${w}\n`);
+        if (inv.codexBlockPresent && inv.codexConfigPath !== null) {
+          stderr(`warning: ${codexBlockWarning(inv.codexConfigPath)}\n`);
+        }
       } catch (err) {
         if (err instanceof UninstallError) {
           throw new HarnessExitError(err.message, EX_FAIL);
