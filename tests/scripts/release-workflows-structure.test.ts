@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -83,6 +84,59 @@ describe("publish-npm.yml", () => {
     for (const step of publish.steps ?? []) {
       expect(step.if, `step ${step.name ?? step.uses}`).toBeUndefined();
     }
+  });
+
+  // Prerelease dist-tag derivation: npm >= 11.5.1 refuses a prerelease
+  // publish without an explicit --tag, and refuses to implicitly apply
+  // `latest` to a version below the highest published stable one. So a
+  // prerelease must name `next` and a stable version must name no tag.
+  describe("prerelease dist-tag derivation", () => {
+    const publishRun = publish.steps?.find((s) => s.name === "Publish")?.run ?? "";
+    const fnMatch = publishRun.match(/dist_tag_for\(\) \{[\s\S]*?\n\s*\}/);
+
+    it("the Publish step defines the dist_tag_for shell function", () => {
+      expect(fnMatch, "dist_tag_for function in the Publish step").not.toBeNull();
+    });
+
+    // Each version is its own case: stable (no tag), a bare prerelease,
+    // a prerelease with build metadata, and build metadata alone. The
+    // replay spawns `sh` (on the suite's spawn allowlist; `bash` is not):
+    // the snippet is POSIX sh, which is exactly what runs it identically
+    // under the workflow's bash -e on the runner and under macOS /bin/sh
+    // (a bash) here, so the derivation is shell-checked, not mocked.
+    it.each([
+      ["2.1.0", ""],
+      ["2.1.0-rc.1", "next"],
+      ["2.1.0-beta.0+build.5", "next"],
+      ["2.1.0+build.5", ""],
+    ])("dist_tag_for %s under sh returns %s", (version, expected) => {
+      const fn = fnMatch?.[0] ?? "dist_tag_for() { :; }";
+      const r = spawnSync("sh", ["-c", `${fn}\ndist_tag_for "${version}"`], { encoding: "utf8" });
+      expect(r.stderr).toBe("");
+      expect(r.status).toBe(0);
+      expect(r.stdout.trim()).toBe(expected);
+    });
+
+    it("the Publish step derives dist_tag from the version and branches on it", () => {
+      expect(publishRun).toContain('dist_tag=$(dist_tag_for "${version}")');
+      expect(publishRun).toContain('if [ -z "${dist_tag}" ]; then');
+      expect(publishRun).toContain('npm publish --access public --provenance --tag "${dist_tag}"');
+      // The stable branch is the bare publish: no --tag at all, so npm keeps
+      // its guard against moving `latest` backwards.
+      expect(publishRun).toMatch(/^ +if npm publish --access public --provenance; then$/m);
+    });
+
+    it("no npm publish anywhere in the workflow carries --tag latest", () => {
+      for (const [jobName, job] of Object.entries(wf.jobs)) {
+        for (const step of job.steps ?? []) {
+          for (const line of (step.run ?? "").split("\n")) {
+            if (line.includes("npm publish")) {
+              expect(line, `job ${jobName} step ${step.name ?? step.uses}`).not.toMatch(/--tag\s+latest/);
+            }
+          }
+        }
+      }
+    });
   });
 });
 
